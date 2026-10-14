@@ -29,6 +29,7 @@
 
 #include "stdtypes.h"
 
+#include <string>
 #include <vector>
 
 namespace SKOutlinePolicy
@@ -136,6 +137,66 @@ namespace SKOutlinePolicy
 
     // Every part loaded at its top LOD and nothing changed for settle_seconds.
     bool settled(bool all_top_lod, F64 since_change, F64 settle_seconds);
+
+    // An axis-aligned box in metres.
+    struct Box
+    {
+        F32 min[3] = { 0.f, 0.f, 0.f };
+        F32 max[3] = { 0.f, 0.f, 0.f };
+    };
+
+    // A crew member's worn linkset, measured in the vehicle root's frame.
+    struct CrewPiece
+    {
+        Box box;                       // the attachment's bounds
+        Box root;                      // the vehicle root linkset's bounds
+        F32 wearer[3] = { 0.f, 0.f, 0.f };
+        bool hud = false;
+        bool avatar_center = false;    // worn on the avatar centre point
+        bool temp = false;             // a temporary attachment
+        bool name_affinity = false;    // its name shares the vehicle's vendor tag or product word
+    };
+
+    struct CrewLimits
+    {
+        F32 personal_reach = 2.f;      // metres from the wearer that personal attachments stay within
+        F32 root_share = 0.5f;         // plan span against the root's that makes a piece vehicle-sized
+    };
+
+    enum class CrewVerdict : U8
+    {
+        NOT_LAYER, // a HUD, or nothing makes it the vehicle's
+        PERSONAL,  // stays within reach of its wearer
+        LAYER,
+    };
+
+    // A worn piece is part of the vehicle when it reaches past its wearer and is vehicle-sized, sits on the avatar
+    // centre, or carries a supporting sign (the vehicle's name, a temporary attachment).
+    CrewVerdict crewVerdict(const CrewPiece& piece, const CrewLimits& limits = CrewLimits());
+
+    // How far a box reaches from a point: its furthest corner.
+    F32 reach(const Box& box, const F32 point[3]);
+
+    // A near-zero-thickness plane with only alpha-blended or masked faces, such as a pilot's outline aid.
+    bool isThinPlane(F32 sx, F32 sy, F32 sz, bool alpha_faces, F32 max_thickness = 0.02f, F32 min_ratio = 50.f);
+
+    // A layer covering so few cells it cannot be told from noise.
+    bool isSpeck(S32 covered_cells, S32 max_cells = 2);
+
+    // A plan-view rectangle in the vehicle root's frame.
+    struct Rect
+    {
+        F32 x0 = 0.f, y0 = 0.f, x1 = 0.f, y1 = 0.f;
+    };
+
+    // The share of a's area inside b.
+    F32 insideFraction(const Rect& a, const Rect& b);
+
+    // A layer that is the smaller and lies at least `inside` within another contributes nothing.
+    bool mergedInto(const Rect& a, S32 covered_a, const Rect& b, S32 covered_b, F32 inside = 0.9f);
+
+    // Two object names share a vendor tag ("[Chaos]") or a distinctive product word ("Hydra").
+    bool nameAffinity(const std::string& a, const std::string& b);
 }
 
 #endif // SK_SKOUTLINEPOLICY_H

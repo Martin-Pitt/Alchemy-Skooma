@@ -770,50 +770,80 @@ void SKNetMap::drawVehicles()
     }
     static LLCachedControl<bool> glyphs(gSavedSettings, "SKMapVehicleGlyphs", true);
     const std::vector<SKMapPeople::Vehicle>& vehicles = SKMapPeople::instance().vehicles();
-    // The base layer of a vehicle's captured glyph, when it has one with an image.
-    auto base_layer = [&](const SKMapPeople::Vehicle& v) -> const SKOutlineLayer* {
+    // A layer the map can draw: an image with a non-empty rect.
+    auto drawable = [](const SKOutlineLayer& layer) {
+        return layer.texture && layer.x1 > layer.x0 && layer.y1 > layer.y0;
+    };
+    // A vehicle's captured glyph, when its base layer has an image.
+    auto glyph_of = [&](const SKMapPeople::Vehicle& v) -> const SKMapVehicleGlyphs::Glyph* {
         const SKMapVehicleGlyphs::Glyph* glyph = glyphs ? SKMapVehicleGlyphs::glyphFor(v.mRoot) : nullptr;
         if (!glyph || glyph->layers.empty())
         {
             return nullptr;
         }
-        const SKOutlineLayer& layer = glyph->layers.front();
-        if (layer.pose_source != SKOutlineLayer::PoseSource::ROOT || !layer.texture || layer.x1 <= layer.x0 || layer.y1 <= layer.y0)
-        {
-            return nullptr;
-        }
-        return &layer;
+        const SKOutlineLayer& base = glyph->layers.front();
+        return base.pose_source == SKOutlineLayer::PoseSource::ROOT && drawable(base) ? glyph : nullptr;
     };
 
-    // Glyphs: the atlas cell at the live pose, its coverage tinting the hull colour (premultiplied).
-    std::vector<const SKOutlineLayer*> layers(vehicles.size(), nullptr);
+    // Glyphs: every layer's atlas cell at its live pose, its coverage tinting the hull colour (premultiplied).
+    std::vector<bool> drew(vehicles.size(), false);
     for (size_t i = 0; i < vehicles.size(); ++i)
     {
         const SKMapPeople::Vehicle& v = vehicles[i];
-        const SKOutlineLayer* layer = base_layer(v);
-        layers[i] = layer;
-        if (!layer)
+        const SKMapVehicleGlyphs::Glyph* glyph = glyph_of(v);
+        if (!glyph)
         {
             continue;
         }
-        auto at = [&](F32 x, F32 y) {
-            const LLVector3 p = LLVector3(x, y, 0.f) * v.mRot;
-            return mView.toWidget(v.mPos + LLVector3d(p.mV[VX], p.mV[VY], 0.0));
-        };
-        const LLVector2 corner[4] = { at(layer->x0, layer->y0), at(layer->x1, layer->y0), at(layer->x1, layer->y1), at(layer->x0, layer->y1) };
-        const F32 uv[4][2] = { { layer->u0, layer->v0 }, { layer->u1, layer->v0 }, { layer->u1, layer->v1 }, { layer->u0, layer->v1 } };
+        drew[i] = true;
+        const LLViewerObject* root = gObjectList.findObject(v.mRoot);
         const bool ally = v.mLook == skmap::VehicleLook::ALLY;
         const bool neutral = v.mLook == skmap::VehicleLook::NEUTRAL;
-        gGL.getTextureSlot(0)->bindManual(ALTextureSlot::TT_TEXTURE, layer->texture, 0);
         gGL.blendFunc(LLRender::BF_ONE, LLRender::BF_ONE_MINUS_SOURCE_ALPHA);
         skmapdraw::colour(ally ? skmap::palette::VEH_ALLY_HULL : neutral ? skmap::palette::VEH_NEUTRAL_HULL : skmap::palette::VEH_CIVIL_HULL);
-        gGL.begin(LLRender::TRIANGLES);
-        for (S32 k : { 0, 1, 2, 0, 2, 3 })
+        for (const SKOutlineLayer& layer : glyph->layers)
         {
-            gGL.texCoord2f(uv[k][0], uv[k][1]);
-            gGL.vertex2f(corner[k].mV[VX], corner[k].mV[VY]);
+            if (!drawable(layer))
+            {
+                continue;
+            }
+            // The layer frame in the root's frame, plan view: a yaw and an x/y offset.
+            LLVector3 rel_pos;
+            LLQuaternion rel_rot;
+            if (layer.pose_source == SKOutlineLayer::PoseSource::CREW_ATTACHMENT)
+            {
+                const LLViewerObject* attachment = root ? gObjectList.findObject(layer.pose_id) : nullptr;
+                if (attachment && !attachment->isDead() && attachment->mDrawable.notNull())
+                {
+                    const LLQuaternion root_inv = ~root->getRenderRotation();
+                    rel_pos = (attachment->getRenderPosition() - root->getRenderPosition()) * root_inv;
+                    rel_rot = attachment->getRenderRotation() * root_inv;
+                }
+                else
+                {
+                    rel_pos = layer.rel_pos;
+                    rel_rot = layer.rel_rot;
+                }
+            }
+            const LLVector3 fwd = LLVector3::x_axis * rel_rot;
+            const F32 yaw = atan2f(fwd.mV[VY], fwd.mV[VX]);
+            const F32 cy = cosf(yaw), sy = sinf(yaw);
+            auto at = [&](F32 x, F32 y) {
+                const LLVector3 in_root(x * cy - y * sy + rel_pos.mV[VX], x * sy + y * cy + rel_pos.mV[VY], 0.f);
+                const LLVector3 p = in_root * v.mRot;
+                return mView.toWidget(v.mPos + LLVector3d(p.mV[VX], p.mV[VY], 0.0));
+            };
+            const LLVector2 corner[4] = { at(layer.x0, layer.y0), at(layer.x1, layer.y0), at(layer.x1, layer.y1), at(layer.x0, layer.y1) };
+            const F32 uv[4][2] = { { layer.u0, layer.v0 }, { layer.u1, layer.v0 }, { layer.u1, layer.v1 }, { layer.u0, layer.v1 } };
+            gGL.getTextureSlot(0)->bindManual(ALTextureSlot::TT_TEXTURE, layer.texture, 0);
+            gGL.begin(LLRender::TRIANGLES);
+            for (S32 k : { 0, 1, 2, 0, 2, 3 })
+            {
+                gGL.texCoord2f(uv[k][0], uv[k][1]);
+                gGL.vertex2f(corner[k].mV[VX], corner[k].mV[VY]);
+            }
+            gGL.end();
         }
-        gGL.end();
         gGL.setSceneBlendType(LLRender::BT_ALPHA);
         gGL.getTextureSlot(0)->unbind();
     }
@@ -829,7 +859,7 @@ void SKNetMap::drawVehicles()
         };
         const bool ally = v.mLook == skmap::VehicleLook::ALLY;
         const bool neutral = v.mLook == skmap::VehicleLook::NEUTRAL;
-        if (!layers[i])
+        if (!drew[i])
         {
             const LLVector2 a = at(v.mMin.mV[VX], v.mMin.mV[VY]), b = at(v.mMax.mV[VX], v.mMin.mV[VY]);
             const LLVector2 c = at(v.mMax.mV[VX], v.mMax.mV[VY]), d = at(v.mMin.mV[VX], v.mMax.mV[VY]);

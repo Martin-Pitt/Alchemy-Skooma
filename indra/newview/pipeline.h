@@ -140,7 +140,9 @@ public:
     //  specific_attachment - specific attachment to profile, or nullptr to profile entire avatar
     void generateImpostor(LLVOAvatar* avatar, bool preview_avatar = false, bool for_profile = false, LLViewerObject* specific_attachment = nullptr);
     // <SK:Nexii> outline capture: depth-only coverage of one spatial bridge into the bound target; returns the draws made.
-    U32 skRenderOutlineCoverage(LLSpatialBridge* bridge, const LLMatrix4a& view, const LLMatrix4a& proj, LLCamera& camera, F32 alpha_cutoff);
+    // skip, when set, leaves out the draw infos it returns true for.
+    U32 skRenderOutlineCoverage(LLSpatialBridge* bridge, const LLMatrix4a& view, const LLMatrix4a& proj, LLCamera& camera, F32 alpha_cutoff,
+                                const std::function<bool(const LLDrawInfo*)>& skip = nullptr);
     // </SK:Nexii>
 
     void bindScreenToTexture();

@@ -171,4 +171,102 @@ namespace tut
         ensure("too soon", !settled(true, 1.0, 2.0));
         ensure("low LOD", !settled(false, 30.0, 2.0));
     }
+
+    namespace
+    {
+        Box box(F32 x0, F32 y0, F32 z0, F32 x1, F32 y1, F32 z1)
+        {
+            Box b;
+            b.min[0] = x0; b.min[1] = y0; b.min[2] = z0;
+            b.max[0] = x1; b.max[1] = y1; b.max[2] = z1;
+            return b;
+        }
+
+        CrewPiece piece(const Box& worn, const Box& root, F32 wx, F32 wy, F32 wz)
+        {
+            CrewPiece p;
+            p.box = worn;
+            p.root = root;
+            p.wearer[0] = wx; p.wearer[1] = wy; p.wearer[2] = wz;
+            return p;
+        }
+    }
+
+    // The samples: a Stingray airframe, the Hydra's body, a 3 m gun on its driver, a helper cube and a rifle.
+    template<> template<>
+    void skoutlinepolicy_object::test<10>()
+    {
+        const Box stingray_root = box(-1.f, -1.f, -0.5f, 1.f, 1.f, 0.5f);
+        CrewPiece airframe = piece(box(-6.5f, -5.f, -1.f, 6.5f, 5.f, 1.f), stingray_root, 0.f, 0.f, 0.f);
+        airframe.avatar_center = true;
+        airframe.temp = true;
+        ensure("Stingray airframe", crewVerdict(airframe) == CrewVerdict::LAYER);
+
+        const Box hydra_root = box(-4.f, -3.f, -1.f, 4.f, 3.f, 1.f);
+        const CrewPiece body = piece(box(-4.2f, -3.f, -1.f, 4.3f, 3.f, 1.5f), hydra_root, 0.5f, 0.f, 0.5f);
+        ensure("Hydra body is vehicle-sized", crewVerdict(body) == CrewVerdict::LAYER);
+
+        CrewPiece gun = piece(box(-0.5f, -0.6f, 0.8f, 2.5f, 0.6f, 2.8f), hydra_root, 0.5f, 0.f, 0.5f);
+        ensure("an anonymous gun", crewVerdict(gun) == CrewVerdict::NOT_LAYER);
+        gun.temp = true;
+        ensure("a temp gun", crewVerdict(gun) == CrewVerdict::LAYER);
+        gun.temp = false;
+        gun.name_affinity = true;
+        ensure("a gun named after the vehicle", crewVerdict(gun) == CrewVerdict::LAYER);
+
+        CrewPiece helper = piece(box(-0.01f, -0.01f, -0.01f, 0.01f, 0.01f, 0.01f), hydra_root, 0.f, 0.f, 0.f);
+        helper.temp = true;
+        helper.avatar_center = true;
+        ensure("helper cube", crewVerdict(helper) == CrewVerdict::PERSONAL);
+
+        CrewPiece rifle = piece(box(-0.2f, 0.2f, 0.f, 1.2f, 0.4f, 0.3f), hydra_root, 0.f, 0.f, 0.f);
+        rifle.name_affinity = true;
+        ensure("worn rifle", crewVerdict(rifle) == CrewVerdict::PERSONAL);
+
+        CrewPiece hud = airframe;
+        hud.hud = true;
+        ensure("HUD", crewVerdict(hud) == CrewVerdict::NOT_LAYER);
+
+        ensure_approximately_equals("reach", reach(box(0.f, 0.f, 0.f, 3.f, 4.f, 0.f), helper.wearer), 5.f, 16);
+    }
+
+    // The Stingray's 10.46 m outline plane goes; a thin opaque wing and a translucent canopy stay.
+    template<> template<>
+    void skoutlinepolicy_object::test<11>()
+    {
+        ensure("outline plane", isThinPlane(10.46f, 10.46f, 0.01f, true));
+        ensure("opaque sheet", !isThinPlane(10.46f, 10.46f, 0.01f, false));
+        ensure("canopy", !isThinPlane(2.f, 1.5f, 0.8f, true));
+        ensure("small decal", !isThinPlane(0.3f, 0.3f, 0.01f, true));
+        ensure("speck", isSpeck(2));
+        ensure("not a speck", !isSpeck(3));
+    }
+
+    // A small layer inside a larger one is merged away; one that sticks out stays.
+    template<> template<>
+    void skoutlinepolicy_object::test<12>()
+    {
+        const Rect hull { -4.f, -3.f, 4.f, 3.f };
+        const Rect seat { -1.f, -1.f, 1.f, 1.f };
+        const Rect barrel { 2.f, -0.3f, 6.f, 0.3f };
+        ensure_approximately_equals("inside", insideFraction(seat, hull), 1.f, 16);
+        ensure_approximately_equals("half", insideFraction(barrel, hull), 0.5f, 16);
+        ensure("merged", mergedInto(seat, 100, hull, 5000));
+        ensure("sticks out", !mergedInto(barrel, 100, hull, 5000));
+        ensure("larger is kept", !mergedInto(seat, 6000, hull, 5000));
+        ensure("empty", insideFraction(Rect(), hull) == 0.f);
+    }
+
+    // Vendor tags and product words tie worn parts to the vehicle.
+    template<> template<>
+    void skoutlinepolicy_object::test<13>()
+    {
+        ensure("tag", nameAffinity("[Chaos] Hydra Base LBA", "[Chaos] Hydra Flak Turret v.3.02"));
+        ensure("tag case", nameAffinity("[CHAOS] Something", "[chaos] other"));
+        ensure("product word", nameAffinity("Stingray MK2 seat", "stingray airframe"));
+        ensure("generic words", !nameAffinity("Tank Body Base", "Turret Body"));
+        ensure("unrelated", !nameAffinity("[Chaos] Hydra Base LBA", "Cubitar Stack"));
+        ensure("defaults", !nameAffinity("Object", "Object"));
+        ensure("empty", !nameAffinity("", ""));
+    }
 }

@@ -30,10 +30,12 @@
 
 #include "llagent.h"
 #include "llbutton.h"
+#include "lldate.h"
 #include "lldir.h"
 #include "llrender2dutils.h"
 #include "llselectmgr.h"
 #include "lltextbox.h"
+#include "llviewercontrol.h"
 #include "llviewerobject.h"
 #include "llvoavatarself.h"
 #include "skoutlinecapture.h"
@@ -81,7 +83,15 @@ void SKFloaterOutlineCapture::captureSeat()
 
 void SKFloaterOutlineCapture::dumpAtlas()
 {
-    const std::string path = gDirUtilp->getExpandedFilename(LL_PATH_LOGS, "sk_outline_atlas.png");
+    // Each dump keeps its own name, so a series of them can be compared.
+    static LLCachedControl<std::string> folder(gSavedSettings, "SKOutlineCaptureDumpFolder", "");
+    const std::string name = "sk_outline_atlas_" + LLDate::now().toHTTPDateString("%Y%m%d-%H%M%S") + ".png";
+    std::string dir = folder();
+    if (dir.empty() || !LLFile::isdir(dir))
+    {
+        dir = gDirUtilp->getExpandedFilename(LL_PATH_LOGS, "");
+    }
+    const std::string path = gDirUtilp->add(dir, name);
     const bool ok = SKOutlineCapture::instance().dumpAtlas(path);
     LL_INFOS("SKOutline") << (ok ? "wrote " : "could not write ") << path << LL_ENDL;
 }
