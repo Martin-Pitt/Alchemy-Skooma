@@ -83,6 +83,10 @@ public:
         U32 mSpacesAll = 0;
     };
     const Stats& stats() const { return mStats; }
+
+    /// Someone's storey against the plan as drawn: 0 outdoors or in a drawn space, else +1 above or -1 below,
+    /// by their storey's floor against the viewer's storey (or their building's ground storey) in the same building.
+    S32 storeyOffset(const skmap::plan::Whereabouts& w) const;
     std::vector<std::string> statsLines() const;
 
 private:
@@ -127,6 +131,8 @@ private:
     skmap::plan::Options mOptions;
     skmap::plan::Selection mSelection;
     LLVector3d mFrameOrigin;
+    S32 mShownViewer = -1;          ///< the viewer's space the shown selection was made for
+    skmap::plan::Whereabouts mViewerAt;
 
     // The frame the composite covers, plan-local metres.
     LLVector2 mFrameMin;

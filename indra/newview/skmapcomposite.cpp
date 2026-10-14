@@ -849,6 +849,7 @@ void SKMapComposite::land()
     const std::shared_ptr<Job> job = std::move(mJob);
     mData = job->mData;
     mSelection = std::move(job->mSelection);
+    mShownViewer = spaceIndex(*mData, job->mViewer);
     mOptions = job->mOptions;
     sLayout = std::move(job->mLayout);
     glBindVertexArray(mVao);
@@ -989,20 +990,23 @@ void SKMapComposite::draw(const skmap::MapView& view, const Overlay* overlay)
         mHasKey = true;
     }
     nav.requestAir("minimap", gmin, gmax);     // ruling 13: the plan's spaces and walls read the air of every tile it shows
-    // The room and storey are the avatar's while the camera follows it, else what the camera looks at; a focus over no floor falls back to the avatar.
+    // Where the viewer is: the air gap holding the avatar while the camera follows it, else the camera's focus; a focus
+    // with neither air nor navmesh under it falls back to the avatar. Only an indoor gap's space is a current storey.
     const bool on_avatar = SKNetMap::followsAvatar();
-    LLVector3d focus = on_avatar ? gAgent.getPositionGlobal() : gAgentCamera.getFocusGlobal();
+    const LLVector3d focus = on_avatar ? gAgent.getPositionGlobal() : gAgentCamera.getFocusGlobal();
+    Whereabouts where = whereabouts(focus);
     F32 vz = static_cast<F32>(focus.mdV[VZ]);
-    if (!nav.floorUnder(focus, sknav::AgentClass::AVATAR, vz))
+    if (!where.mFound && !on_avatar)
     {
-        focus = gAgent.getPositionGlobal();
-        vz = static_cast<F32>(focus.mdV[VZ]);
-        nav.floorUnder(focus, sknav::AgentClass::AVATAR, vz);
+        vz = static_cast<F32>(gAgent.getPositionGlobal().mdV[VZ]);
+        where = whereabouts(gAgent.getPositionGlobal());
     }
+    vz = where.mFound ? where.mFloor : vz;
+    mViewerAt = where;
     Want want;
     want.mDataKey = mDataKey;
     want.mOrigin = want_origin;
-    want.mViewer = viewerSpaceRef(focus);
+    want.mViewer = where.mSpace;
     want.mOptions = opts;
     want.mMpp = mpp;
     // One job at a time: inputs that move while one runs are taken by the next, so a burst of changes costs one build.
@@ -1142,4 +1146,39 @@ std::vector<std::string> SKMapComposite::statsLines() const
     const F32 thread_ms = mStats.mGatherMs + mStats.mSelectMs + mStats.mGeometryMs;
     return { llformat("plan main %.2f ms, thread %.1f ms (%u jobs)", main_ms, thread_ms, mStats.mJobs),
              llformat("plan %u tris, %u/%u spaces, %u px", mStats.mTriangles, mStats.mSpaces, mStats.mSpacesAll, mStats.mSide) };
+}
+
+S32 SKMapComposite::storeyOffset(const skmap::plan::Whereabouts& w) const
+{
+    using namespace skmap::plan;
+    if (!w.mFound || !mData)
+    {
+        return 0;
+    }
+    const Data& d = *mData;
+    const S32 s = spaceIndex(d, w.mSpace);
+    // Outdoors, or in a space the plan draws, is on what is drawn.
+    if (!d.indoor(s) || mSelection.has(s))
+    {
+        return 0;
+    }
+    const S32 st = d.mSpaces[s].mStorey;
+    // Against the viewer's storey in the same building, else the building's ground storey, else the viewer's floor.
+    S32 ref = -1;
+    const U64 b = d.mSpaces[s].mBuilding;
+    const S32 vs = d.indoor(mShownViewer) ? mShownViewer : -1;
+    if (vs >= 0 && b && d.mSpaces[vs].mBuilding == b)
+    {
+        ref = d.mSpaces[vs].mStorey;
+    }
+    else if (b)
+    {
+        const auto it = d.mGroundStorey.find(b);
+        ref = it != d.mGroundStorey.end() ? it->second : -1;
+    }
+    if (st >= 0 && ref >= 0 && st != ref)
+    {
+        return d.mStoreyFloor[st] > d.mStoreyFloor[ref] ? 1 : -1;
+    }
+    return w.mFloor >= mViewerAt.mFloor ? 1 : -1;
 }

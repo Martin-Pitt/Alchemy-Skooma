@@ -864,10 +864,21 @@ void SKNetMap::collectDots()
     const F32 pad = llclamp(static_cast<F32>(padding), 0.f, 3.f);
     mDots.clear();
     const std::vector<SKMapPeople::Person>& people = SKMapPeople::instance().people();
+    // Each person's storey against the plan as drawn: off it when their air gap is in an indoor space the plan leaves out.
+    mFloorOf.resize(people.size());
+    for (size_t i = 0; i < people.size(); ++i)
+    {
+        const S32 off = people[i].mFloor == skmap::FloorRelation::UNKNOWN || !mPlan ? 0 : mPlan->storeyOffset(people[i].mWhere);
+        mFloorOf[i] = people[i].mFloor == skmap::FloorRelation::UNKNOWN ? skmap::FloorRelation::UNKNOWN
+                    : off > 0                                            ? skmap::FloorRelation::ABOVE
+                    : off < 0                                            ? skmap::FloorRelation::BELOW
+                                                                         : skmap::FloorRelation::SAME;
+    }
     for (size_t i = 0; i < people.size(); ++i)
     {
         const SKMapPeople::Person& p = people[i];
-        const bool chevron = chevrons && (p.mFloor == skmap::FloorRelation::ABOVE || p.mFloor == skmap::FloorRelation::BELOW);
+        const skmap::FloorRelation floor = mFloorOf[i];
+        const bool chevron = chevrons && (floor == skmap::FloorRelation::ABOVE || floor == skmap::FloorRelation::BELOW);
         const bool coded = labels && !p.mCode.empty();
         const F32 text_w = coded ? codeFont()->getWidthF32(p.mCode) : 0.f;
         const F32 radius = llmax(skmap::markerRadius(chevron, coded, static_cast<U32>(p.mCode.size()), text_w, px, pad),
@@ -908,7 +919,8 @@ void SKNetMap::drawPeople()
         const SKMapPeople::Person& p = people[d.mPerson];
         const LLVector2 at = d.mPos;
         const F32 radius = d.mRadius;
-        const bool chevron = chevrons && (p.mFloor == skmap::FloorRelation::ABOVE || p.mFloor == skmap::FloorRelation::BELOW);
+        const skmap::FloorRelation floor = d.mPerson < mFloorOf.size() ? mFloorOf[d.mPerson] : skmap::FloorRelation::SAME;
+        const bool chevron = chevrons && (floor == skmap::FloorRelation::ABOVE || floor == skmap::FloorRelation::BELOW);
         // Allies in combat are cyan; everyone else keeps the general colours.
         const bool ally_coded = p.mVisibility == skmap::Visibility::DOT_CODED;
         if (ally_coded)
@@ -934,7 +946,7 @@ void SKNetMap::drawPeople()
             // Upright whatever the rotation: up for the floor above, down for the one below.
             const F32 half = llmin(radius - skmap::palette::CHEVRON_STROKE_PX, FONT_PX * 0.3f);
             const F32 dy = half * 0.55f;
-            const F32 sign = p.mFloor == skmap::FloorRelation::ABOVE ? 1.f : -1.f;
+            const F32 sign = floor == skmap::FloorRelation::ABOVE ? 1.f : -1.f;
             skmapdraw::colour(skmap::palette::CODE_INK);
             const LLVector2 left = at + LLVector2(-half, -sign * dy), apex = at + LLVector2(0.f, sign * dy), right = at + LLVector2(half, -sign * dy);
             skmapdraw::line(left, apex, skmap::palette::CHEVRON_STROKE_PX);
@@ -961,7 +973,8 @@ void SKNetMap::drawPeopleCodes()
             continue;
         }
         const SKMapPeople::Person& p = people[d.mPerson];
-        const bool chevron = chevrons && (p.mFloor == skmap::FloorRelation::ABOVE || p.mFloor == skmap::FloorRelation::BELOW);
+        const skmap::FloorRelation floor = d.mPerson < mFloorOf.size() ? mFloorOf[d.mPerson] : skmap::FloorRelation::SAME;
+        const bool chevron = chevrons && (floor == skmap::FloorRelation::ABOVE || floor == skmap::FloorRelation::BELOW);
         // The chevron replaces the code on the dot; the tag keeps it.
         if (chevron || p.mVisibility != skmap::Visibility::DOT_CODED || p.mCode.empty())
         {
@@ -1098,15 +1111,16 @@ void SKNetMap::updateHover()
         }
         else
         {
-            for (const SKMapPeople::Person& p : people)
+            for (size_t i = 0; i < people.size(); ++i)
             {
-                if (p.mId != t.mId)
+                if (people[i].mId != t.mId)
                 {
                     continue;
                 }
-                detail = p.mFloor == skmap::FloorRelation::ABOVE   ? mFloorAboveLabel
-                       : p.mFloor == skmap::FloorRelation::BELOW   ? mFloorBelowLabel
-                       : p.mFloor == skmap::FloorRelation::UNKNOWN ? mFloorUnknownLabel
+                const skmap::FloorRelation floor = i < mFloorOf.size() ? mFloorOf[i] : people[i].mFloor;
+                detail = floor == skmap::FloorRelation::ABOVE   ? mFloorAboveLabel
+                       : floor == skmap::FloorRelation::BELOW   ? mFloorBelowLabel
+                       : floor == skmap::FloorRelation::UNKNOWN ? mFloorUnknownLabel
                                                                     : std::string();
                 break;
             }

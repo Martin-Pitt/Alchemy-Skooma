@@ -584,6 +584,13 @@ Selection skmap::plan::select(const Data& d, S32 vs, const Options& opts)
     std::vector<U8> ground_why(ns, 0);
     std::vector<U32> no_storey, roof_gaps;
     const Overlap mode = opts.mOverlap;
+    // Outdoors (or nowhere) there is no current storey: the plan is the ground and the buildings by the overlap mode,
+    // with nothing highlighted or dimmed. Only an indoor space switches the map to its building's storey.
+    if (!d.indoor(vs))
+    {
+        vs = -1;
+    }
+    const bool outdoors = vs < 0;
     U32 viewer_mesh = U32_MAX;
     if (vs >= 0)
     {
@@ -605,17 +612,17 @@ Selection skmap::plan::select(const Data& d, S32 vs, const Options& opts)
     }
     // Off the ground level (or off every space), the ground outside under the plan (ruling 9); other region meshes'
     // ground always, as each region is its own build.
-    if (opts.mOutside != Outside::NONE || sel.mOnGround)
+    if (opts.mOutside != Outside::NONE || sel.mOnGround || outdoors)
     {
         for (const auto& e : storeyFilter(d, d.mGroundOrder, -1, mode))
         {
             const bool own = d.mSpaces[e.first].mMesh == viewer_mesh;
-            if ((own && sel.mOnGround) || sel.has(e.first) || (!own && !sel.mOnGround && opts.mOutside == Outside::NONE))
+            if ((own && sel.mOnGround) || sel.has(e.first) || (!outdoors && !own && !sel.mOnGround && opts.mOutside == Outside::NONE))
             {
                 continue;
             }
             sel.set(e.first, 0.f);
-            ground_why[e.first] = own || !sel.mOnGround;
+            ground_why[e.first] = !outdoors && (own || !sel.mOnGround);
         }
     }
     // Mode c: every other building's roofs, higher covering lower by its storeys' floor order. Modes a/b: a building with
@@ -1755,12 +1762,34 @@ DataPtr skmap::plan::assemble(const Snapshot& snap)
     return d;
 }
 
-skmap::plan::SpaceRef skmap::plan::viewerSpaceRef(const LLVector3d& pos)
+skmap::plan::Whereabouts skmap::plan::whereabouts(const LLVector3d& pos)
 {
-    SpaceRef out;
-    if (!SKNavMesh::instance().spaceAt(pos, out.mMesh, out.mId))
+    Whereabouts out;
+    if (!SKNavMesh::instanceExists())
     {
-        out = SpaceRef();
+        return out;
+    }
+    const SKNavMesh& nav = SKNavMesh::instance();
+    const SKNavWorldViewPtr world = nav.view();
+    SKNavWorldView::SpaceId id;
+    sknav::Enclosure gap;
+    if (world && world->airGapAt(pos, id, gap))
+    {
+        out.mFound = true;
+        out.mSpace.mMesh = id.mMesh;
+        out.mSpace.mId = id.mId;
+        out.mIndoor = gap.mBucket == sknav::EnclosureBucket::INDOORS;
+        out.mFloor = gap.mFloor;
+        return out;
+    }
+    // No air here yet: the navmesh's own floor.
+    if (nav.floorUnder(pos, sknav::AgentClass::AVATAR, out.mFloor))
+    {
+        out.mFound = true;
+        if (!nav.spaceAt(pos, out.mSpace.mMesh, out.mSpace.mId))
+        {
+            out.mSpace = SpaceRef();
+        }
     }
     return out;
 }

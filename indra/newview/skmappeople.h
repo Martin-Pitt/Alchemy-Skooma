@@ -37,6 +37,7 @@
 #include "skmappolicy.h"
 #include "skmapview.h"
 #include "sknavwalls.h"
+#include "skmapplan.h"
 #include "skoutlinecapture.h"
 
 #include <deque>
@@ -77,7 +78,8 @@ public:
         LLUUID mSeatRoot;
         bool mFriend = false;
         LLColor4 mColour;                   ///< the general dot colour
-        skmap::FloorRelation mFloor = skmap::FloorRelation::SAME;
+        skmap::FloorRelation mFloor = skmap::FloorRelation::SAME;   ///< UNKNOWN with no height; the map sets the rest
+        skmap::plan::Whereabouts mWhere;    ///< their air gap's space and floor
         bool mAlly = false;
         skmap::Visibility mVisibility = skmap::Visibility::DOT;
         std::string mCode;                  ///< the ally's code in combat, else empty
@@ -164,18 +166,6 @@ private:
     void loadFactions();
 
     std::vector<Person> mPeople;
-    /// The navmesh floor under a position: its height and storey, read from the walkable poly nearest it.
-    struct NavFloor
-    {
-        bool mFound = false;
-        F32 mZ = 0.f;
-        LLUUID mMesh;
-        S32 mStorey = -1;
-    };
-    NavFloor navFloor(const LLVector3d& pos) const;
-    /// Each person's last floor read and where it was read, dropped when the navmesh moves.
-    std::map<LLUUID, std::pair<LLVector3d, NavFloor>> mFloors;
-    U64 mFloorsRevision = 0;
     F64 mLastDrawn = -1.0e9;
     sknav::Cover mCoverAhead = sknav::Cover::NONE;
     F64 mCoverAt = -1.0e9;

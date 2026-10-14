@@ -277,8 +277,16 @@ namespace plan
         bool operator==(const SpaceRef& o) const { return mMesh == o.mMesh && mId == o.mId; }
         bool operator!=(const SpaceRef& o) const { return !(*this == o); }
     };
-    /// The space under a global position (SKNavMesh::spaceAt). Main thread.
-    SpaceRef viewerSpaceRef(const LLVector3d& pos);
+    /// Where a global position is: the air gap holding it (SKNavWorldView::airGapAt) with its space, bucket and floor;
+    /// with no air there, the navmesh's floor and space under it. Main thread.
+    struct Whereabouts
+    {
+        bool mFound = false;
+        SpaceRef mSpace;            ///< mId 0 for a gap in no space
+        bool mIndoor = false;       ///< the gap's bucket
+        F32 mFloor = 0.f;           ///< global
+    };
+    Whereabouts whereabouts(const LLVector3d& pos);
     /// A space as a Data index, -1 for none. Any thread.
     S32 spaceIndex(const Data& data, const SpaceRef& ref);
 }

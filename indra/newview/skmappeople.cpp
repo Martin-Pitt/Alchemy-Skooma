@@ -53,13 +53,7 @@ namespace
 {
     constexpr F64 DRAWN_RECENTLY_S = 2.0;
     constexpr F64 COARSE_CEILING_M = 1020.0;   ///< coarse locations stop telling heights here
-    constexpr F64 CAMERA_STOREY_ABOVE_M = 4.0; ///< a camera this far over the agent's floor has left its storey
-    constexpr F64 CAMERA_STOREY_BELOW_M = 1.0; ///< or this far under it
-    constexpr F64 CAMERA_EYE_M = 1.0;          ///< an avatar's position sits about this far under its eyes
     constexpr F32 PEOPLE_REACH_M = 1024.f;
-    constexpr F64 FLOOR_SAME_M = 2.0;          ///< navmesh floors closer than this are one floor
-    constexpr F64 FLOOR_RAW_M = 2.5;           ///< raw heights closer than this are one floor
-    constexpr F64 FLOOR_REREAD_M = 0.25;       ///< a person moved this far has their floor read again
 }
 
 SKMapPeople::SKMapPeople()
@@ -548,27 +542,6 @@ void SKMapPeople::updateCandidates()
                       << mCandidates.size() << " ally groups" << LL_ENDL;
 }
 
-SKMapPeople::NavFloor SKMapPeople::navFloor(const LLVector3d& pos) const
-{
-    NavFloor out;
-    if (!SKNavMesh::instanceExists())
-    {
-        return out;
-    }
-    const SKNavMesh& nav = SKNavMesh::instance();
-    out.mFound = nav.floorUnder(pos, sknav::AgentClass::AVATAR, out.mZ, &out.mMesh);
-    if (out.mFound)
-    {
-        LLUUID mesh;
-        S32 storey = -1;
-        if (nav.storeyAt(pos, mesh, storey) && mesh == out.mMesh)
-        {
-            out.mStorey = storey;
-        }
-    }
-    return out;
-}
-
 void SKMapPeople::gatherPeople()
 {
     LL_PROFILE_ZONE_SCOPED;
@@ -579,27 +552,6 @@ void SKMapPeople::gatherPeople()
     std::vector<LLVector3d> positions;
     LLWorld::getInstance()->getAvatars(&ids, &positions, agent, PEOPLE_REACH_M);
 
-    // Floors from the navmesh where it has one, the raw height difference otherwise.
-    const U64 revision = SKNavMesh::instanceExists() ? SKNavMesh::instance().revision() : 0;
-    if (revision != mFloorsRevision)
-    {
-        mFloors.clear();
-        mFloorsRevision = revision;
-    }
-    if (mFloors.size() > 2 * ids.size() + 64)
-    {
-        mFloors.clear();    // people who left
-    }
-    // Floors are told from the camera: the agent's floor while the camera is on its storey, the camera's own otherwise.
-    const LLVector3d camera = gAgentCamera.getCameraPositionGlobal();
-    LLVector3d reference_pos = agent;
-    NavFloor reference = navFloor(agent);
-    const F64 eye_above = camera.mdV[VZ] - (reference.mFound ? reference.mZ : agent.mdV[VZ]);
-    if (eye_above < -CAMERA_STOREY_BELOW_M || eye_above > CAMERA_STOREY_ABOVE_M)
-    {
-        reference_pos = camera - LLVector3d(0.0, 0.0, CAMERA_EYE_M);
-        reference = navFloor(reference_pos);
-    }
     // The probe sees loaded avatars nearest first, so the nearest are asked about first.
     if (mCombat)
     {
@@ -675,25 +627,8 @@ void SKMapPeople::gatherPeople()
         }
         else
         {
-            // The floor under them, read again only once they move.
-            auto it = mFloors.find(p.mId);
-            if (it == mFloors.end() || dist_vec_squared(it->second.first, p.mPos) > FLOOR_REREAD_M * FLOOR_REREAD_M)
-            {
-                it = mFloors.insert_or_assign(p.mId, std::make_pair(p.mPos, navFloor(p.mPos))).first;
-            }
-            const NavFloor& floor = it->second.second;
-            F64 dz = p.mPos.mdV[VZ] - reference_pos.mdV[VZ];
-            F64 band = FLOOR_RAW_M;
-            if (floor.mFound && reference.mFound)
-            {
-                dz = floor.mZ - reference.mZ;
-                band = FLOOR_SAME_M;
-                if (floor.mStorey >= 0 && floor.mStorey == reference.mStorey && floor.mMesh == reference.mMesh)
-                {
-                    dz = 0.0;
-                }
-            }
-            p.mFloor = dz >= band ? skmap::FloorRelation::ABOVE : dz <= -band ? skmap::FloorRelation::BELOW : skmap::FloorRelation::SAME;
+            // Their air gap, space and storey, the viewer's way; the map compares them with what it draws.
+            p.mWhere = skmap::plan::whereabouts(p.mPos);
         }
         if (avatar_colours)
         {

@@ -35,6 +35,7 @@
 
 #include "skmaplabels.h"
 #include "skmappalette.h"
+#include "skmappeople.h"
 #include "skmappolicy.h"
 #include "skmapview.h"
 
@@ -178,6 +179,7 @@ private:
     std::unique_ptr<SKMapComposite> mPlan;
     std::unique_ptr<SKMapParcels> mParcels;
     std::vector<DrawnDot> mDots;
+    std::vector<skmap::FloorRelation> mFloorOf;    ///< per person of SKMapPeople::people(), set by collectDots
     std::vector<skmap::EventRing::Draw> mEventDraws;   ///< reused each frame
     bool mHovered = false;
     bool mChrome = false;
