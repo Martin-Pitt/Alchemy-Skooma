@@ -4795,7 +4795,7 @@ void LLViewerWindow::returnEmptyPicks()
 }
 
 // Performs the GL object/land pick.
-LLPickInfo LLViewerWindow::pickImmediate(S32 x, S32 y_from_bot, bool pick_transparent, bool pick_rigged, bool pick_particle, bool pick_unselectable, bool pick_reflection_probe)
+LLPickInfo LLViewerWindow::pickImmediate(S32 x, S32 y_from_bot, bool pick_transparent, bool pick_rigged, bool pick_particle, bool pick_unselectable, bool pick_reflection_probe, bool pick_focus)
 {
     static LLCachedControl<bool> select_invisible_objects(gSavedSettings, "SelectInvisibleObjects");
     bool in_build_mode = LLFloaterReg::instanceVisible("build");
@@ -4809,6 +4809,7 @@ LLPickInfo LLViewerWindow::pickImmediate(S32 x, S32 y_from_bot, bool pick_transp
     // shortcut queueing in mPicks and just update mLastPick in place
     MASK key_mask = gKeyboard->currentMask(true);
     mLastPick = LLPickInfo(LLCoordGL(x, y_from_bot), key_mask, pick_transparent, pick_rigged, pick_particle, pick_reflection_probe, true, false, NULL);
+    mLastPick.mPickFocus = pick_focus; // <SK:Nexii> Alt-cam zoom to cursor picks as far as the camera sees
     mLastPick.fetchResults();
 
     return mLastPick;

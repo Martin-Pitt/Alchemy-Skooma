@@ -2424,7 +2424,8 @@ bool LLAgentCamera::cameraZoomToCursor(F32 clicks)
     }
 
     LLPickInfo pick = gViewerWindow->pickImmediate(gViewerWindow->getCurrentMouseX(), gViewerWindow->getCurrentMouseY(),
-                                                   false /*pick_transparent*/, false /*pick_rigged*/);
+                                                   false /*pick_transparent*/, false /*pick_rigged*/, false /*pick_particle*/,
+                                                   true /*pick_unselectable*/, false /*pick_reflection_probe*/, true /*pick_focus*/);
     LLViewerObject* hit_obj = pick.getObject();
     if ((!hit_obj && pick.mPosGlobal.isExactlyZero()) || (hit_obj && hit_obj->isHUDAttachment()))
     {

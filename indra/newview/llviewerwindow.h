@@ -442,7 +442,7 @@ public:
                                 bool pick_unselectable = false,
                                 bool pick_reflection_probes = false,
                                 bool pick_focus = false);
-    LLPickInfo      pickImmediate(S32 x, S32 y, bool pick_transparent, bool pick_rigged = false, bool pick_particle = false, bool pick_unselectable = true, bool pick_reflection_probe = false);
+    LLPickInfo      pickImmediate(S32 x, S32 y, bool pick_transparent, bool pick_rigged = false, bool pick_particle = false, bool pick_unselectable = true, bool pick_reflection_probe = false, bool pick_focus = false);
     LLHUDIcon* cursorIntersectIcon(S32 mouse_x, S32 mouse_y, F32 depth,
                                            LLVector4a* intersection);
 
