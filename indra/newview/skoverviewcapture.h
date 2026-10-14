@@ -60,6 +60,8 @@ public:
     /// Called once a frame after the world has rendered, before the UI.
     static void onFrame();
     static void cleanupGL();
+    /// Called after renderFinalize, before the HUD and UI: draws the tactical overview over the finished frame.
+    static void onComposite();
     /// The tactical view takes the wheel for its distance; false when it is off.
     static bool handleScrollWheel(F32 clicks);
     /// The tactical overview key: held, it shows the view until released; tapped, it latches it until the next tap.
@@ -95,6 +97,7 @@ private:
     U32 render(LLRenderTarget& capture, LLRenderTarget& resolved, const Shot& shot);
     bool captureMap();
     void tactical();
+    void composite();
     void readTimer();
 
     SKOverviewCensus mCensus;
@@ -109,6 +112,10 @@ private:
     bool mTiming = false;
     bool mValid = false;
     bool mDemanding = false;
+    LLMatrix4a mTacticalView;
+    LLMatrix4a mTacticalProj;
+    S32 mTacticalViewport[4] = {};
+    bool mTacticalReady = false;
 };
 
 #endif // SK_OVERVIEWCAPTURE_H

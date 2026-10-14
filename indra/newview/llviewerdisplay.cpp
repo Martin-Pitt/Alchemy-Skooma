@@ -1526,6 +1526,7 @@ void render_ui(F32 zoom_factor, int subfield)
 
     // apply gamma correction and post effects
     gPipeline.renderFinalize();
+    SKOverviewCapture::onComposite(); // <SK:Nexii> tactical overview: over the finished frame, under HUD and UI
 
     {
         LLGLState::checkStates();

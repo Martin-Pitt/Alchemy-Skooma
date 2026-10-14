@@ -12457,10 +12457,16 @@ U32 LLPipeline::skRenderOverview(const LLMatrix4a& view, const LLMatrix4a& proj,
     LLVertexBuffer::unbind();
 
     // The cut as an eye-space plane for the clip program: keep z <= cut_z.
-    LLMatrix4a inverse_view;
-    inverse_view.setInverse(view);
-    LLVector4a clip_plane;
-    inverse_view.transform4(LLVector4a(0.f, 0.f, -1.f, cut_z), clip_plane);
+    // Built from the view's rotation and translation rather than a matrix product, whose transpose is easy to get wrong:
+    // in eye space n_e = R (0, 0, -1) and w = cut_z - n_e . t, so n_e . p_eye + w = cut_z - z_world.
+    LLVector4a down, normal_eye, origin_eye;
+    down.set(0.f, 0.f, -1.f, 0.f);
+    view.rotate(down, normal_eye);
+    LLVector4a zero;
+    zero.clear();
+    view.affineTransform(zero, origin_eye);
+    const F32 plane_w = cut_z - normal_eye.dot3(origin_eye).getF32();
+    LLVector4a clip_plane(normal_eye.getF32ptr()[0], normal_eye.getF32ptr()[1], normal_eye.getF32ptr()[2], plane_w);
     auto bind_clip = [&](U8 code)
     {
         gClipProgram.bind();

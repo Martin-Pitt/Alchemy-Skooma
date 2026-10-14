@@ -243,6 +243,7 @@ bool SKOverviewCapture::ensureShaders()
         sResolve.mShaderFiles.push_back(std::make_pair("skooma/overviewResolveF.glsl", GL_FRAGMENT_SHADER));
         sResolve.mShaderLevel = 1;
         ok = sResolve.createShader();
+        LL_INFOS_ONCE("SKOverview") << "overview resolve shader " << (ok ? "loaded" : "FAILED") << LL_ENDL;
     }
     if (ok && !sComposite.mProgramObject)
     {
@@ -253,6 +254,7 @@ bool SKOverviewCapture::ensureShaders()
         sComposite.mShaderFiles.push_back(std::make_pair("skooma/overviewCompositeF.glsl", GL_FRAGMENT_SHADER));
         sComposite.mShaderLevel = 1;
         ok = sComposite.createShader();
+        LL_INFOS_ONCE("SKOverview") << "overview composite shader " << (ok ? "loaded" : "FAILED") << LL_ENDL;
     }
     if (ok && !sQueries[0])
     {
@@ -276,6 +278,10 @@ bool SKOverviewCapture::ensureGL(LLRenderTarget& capture, LLRenderTarget& resolv
               capture.allocate(w, h, GL_RGBA8, true, false, ALTextureSlot::TT_TEXTURE, LLRenderTarget::MIPS_NONE,
                                LLRenderTarget::DEPTH_FMT_32F);
     ok = ok && (resolved.isComplete() || resolved.allocate(w, h, GL_RGBA8));
+    if (!ok)
+    {
+        LL_WARNS_ONCE("SKOverview") << "overview target " << w << "x" << h << " did not allocate" << LL_ENDL;
+    }
     ok = ok && ensureShaders();
     if (!ok)
     {
@@ -330,8 +336,12 @@ void SKOverviewCapture::frame()
 {
     if (gCubeSnapshot || !LLPipeline::sRenderDeferred || !gPipeline.shadersLoaded() || !gAgent.getRegion())
     {
+        LL_INFOS_ONCE("SKOverview") << "overview waits: cube snapshot " << gCubeSnapshot << ", deferred "
+                                    << LLPipeline::sRenderDeferred << ", shaders " << gPipeline.shadersLoaded() << ", region "
+                                    << (gAgent.getRegion() != nullptr) << LL_ENDL;
         return;
     }
+    LL_INFOS_ONCE("SKOverview") << "overview running" << LL_ENDL;
     updateDemand(true);
     readTimer();
     {
@@ -419,8 +429,12 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
         glViewport(0, 0, w, h);
         GLfloat clear_colour[4];
         glGetFloatv(GL_COLOR_CLEAR_VALUE, clear_colour);
+        GLfloat clear_depth = 1.f;
+        glGetFloatv(GL_DEPTH_CLEAR_VALUE, &clear_depth);
         glClearColor(0.f, 0.f, 0.f, 0.f);
+        glClearDepth(al_window_far()); // the cleared depth must be the far plane of the current convention
         capture.clear();
+        glClearDepth(clear_depth);
         glClearColor(clear_colour[0], clear_colour[1], clear_colour[2], clear_colour[3]);
         draws = gPipeline.skRenderOverview(shot.mView, shot.mProj, cull, shot.mCut, ghost, census);
         capture.flush();
@@ -549,10 +563,15 @@ void SKOverviewCapture::tactical()
     LL_PROFILE_ZONE_SCOPED;
     static LLCachedControl<F32> distance_setting(gSavedSettings, "SKTacticalDistance", 60.f);
     static LLCachedControl<F32> pitch_setting(gSavedSettings, "SKTacticalPitch", 55.f);
-    static LLCachedControl<F32> tilt_setting(gSavedSettings, "SKTacticalTiltShift", 4.f);
     const S32 vx = gGLViewport[0], vy = gGLViewport[1], vw = gGLViewport[2], vh = gGLViewport[3];
-    if (vw < 16 || vh < 16 || !ensureGL(sTacticalCapture, sTacticalResolved, vw, vh))
+    if (vw < 16 || vh < 16)
     {
+        LL_WARNS_ONCE("SKOverview") << "tactical overview skipped: world viewport " << vw << "x" << vh << LL_ENDL;
+        return;
+    }
+    if (!ensureGL(sTacticalCapture, sTacticalResolved, vw, vh))
+    {
+        LL_WARNS_ONCE("SKOverview") << "tactical overview skipped: targets or shaders unavailable" << LL_ENDL;
         return;
     }
 
@@ -606,6 +625,53 @@ void SKOverviewCapture::tactical()
         render(sTacticalCapture, sTacticalResolved, shot);
     }
 
+    mTacticalView = shot.mView;
+    mTacticalProj = shot.mProj;
+    mTacticalViewport[0] = vx;
+    mTacticalViewport[1] = vy;
+    mTacticalViewport[2] = vw;
+    mTacticalViewport[3] = vh;
+    mTacticalReady = true;
+    LL_INFOS_ONCE("SKOverview") << "tactical overview rendered " << vw << "x" << vh << ", census tris " << mCensus.triangles()
+                                << LL_ENDL;
+}
+
+
+// The tactical overview over the finished frame: after renderFinalize, which would otherwise paint the world over it.
+void SKOverviewCapture::onComposite()
+{
+    static LLCachedControl<bool> tactical_on(gSavedSettings, "SKTacticalOverview", false);
+    if (!tactical_on || !instanceExists())
+    {
+        return;
+    }
+    instance().composite();
+}
+
+void SKOverviewCapture::composite()
+{
+    if (!mTacticalReady || !sComposite.mProgramObject || !sTacticalResolved.isComplete())
+    {
+        LL_WARNS_ONCE("SKOverview") << "tactical composite skipped: rendered " << mTacticalReady << ", shader "
+                                    << (sComposite.mProgramObject != 0) << ", target " << sTacticalResolved.isComplete()
+                                    << LL_ENDL;
+        return;
+    }
+    mTacticalReady = false;
+    LL_PROFILE_ZONE_SCOPED;
+    static LLCachedControl<F32> tilt_setting(gSavedSettings, "SKTacticalTiltShift", 4.f);
+    const S32 vx = mTacticalViewport[0], vy = mTacticalViewport[1], vw = mTacticalViewport[2], vh = mTacticalViewport[3];
+    if (LLRenderTarget* bound = LLRenderTarget::getCurrentBoundTarget())
+    {
+        LL_WARNS_ONCE("SKOverview") << "tactical composite found a render target still bound after renderFinalize ("
+                                    << bound->getWidth() << "x" << bound->getHeight() << "); drawing into it" << LL_ENDL;
+    }
+    else
+    {
+        glBindFramebuffer(GL_FRAMEBUFFER, 0); // the window's back buffer
+    }
+    LLGLDisable scissor(GL_SCISSOR_TEST);
+    gGL.setColorMask(true, true);
     {
         LL_PROFILE_ZONE_NAMED("sk tactical composite");
         glViewport(vx, vy, vw, vh);
@@ -630,7 +696,7 @@ void SKOverviewCapture::tactical()
         // Avatars as dots, the agent white; vehicles are left to the census's vehicle class.
         LL_PROFILE_ZONE_NAMED("sk tactical dots");
         LLMatrix4a vp;
-        vp.setMul(shot.mView, shot.mProj);
+        vp.setMul(mTacticalView, mTacticalProj);
         gGL.matrixMode(LLRender::MM_PROJECTION);
         gGL.pushMatrix();
         gGL.loadIdentity();
@@ -675,4 +741,6 @@ void SKOverviewCapture::tactical()
         gGL.popMatrix();
         gGLLastMatrix = NULL;
     }
+    glViewport(gGLViewport[0], gGLViewport[1], gGLViewport[2], gGLViewport[3]);
+    LL_INFOS_ONCE("SKOverview") << "tactical overview composited at " << vx << "," << vy << " " << vw << "x" << vh << LL_ENDL;
 }
