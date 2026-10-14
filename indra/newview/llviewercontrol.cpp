@@ -457,7 +457,7 @@ static bool handleLegacyPrimSplitsChanged(const LLSD& newvalue)
         LLVolume* volume = volobjp->getVolume();
         if (volume && volume->isUnique())
         {
-            // A selected prim's own volume is not in the manager.
+            // A unique volume (local mesh, NO_LOD) is not in the manager.
             volume->setDirty();
             volume->regen();
         }

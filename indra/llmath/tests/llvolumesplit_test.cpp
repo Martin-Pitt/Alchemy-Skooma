@@ -462,4 +462,70 @@ namespace tut
                   << " identical pairs not merged" << std::endl;
         ensure("some LODs merge", merged > 0);
     }
+
+    // Sculpts, meshes and flexible paths never merge; circle-path extras and the legacy splits merge only identical meshes.
+    template<> template<>
+    void object::test<7>()
+    {
+        const F32 detail_low = LLVolumeLODGroup::getVolumeScaleFromDetail(0);
+        const F32 detail_next = LLVolumeLODGroup::getVolumeScaleFromDetail(1);
+        {
+            LLVolumeParams params;
+            params.setType(LL_PCODE_PROFILE_SQUARE, LL_PCODE_PATH_LINE);
+            params.setSculptID(LLUUID::generateNewID(), LL_SCULPT_TYPE_SPHERE);
+            ensure("sculpt", !LLVolume::isSameMesh(params, detail_low, detail_next));
+            params.setSculptID(LLUUID::generateNewID(), LL_SCULPT_TYPE_MESH);
+            ensure("mesh", !LLVolume::isSameMesh(params, detail_low, detail_next));
+        }
+        {
+            LLVolumeParams params;
+            params.setType(LL_PCODE_PROFILE_SQUARE, LL_PCODE_PATH_FLEXIBLE);
+            ensure("flexible", !LLVolume::isSameMesh(params, detail_low, detail_next));
+        }
+
+        struct Extra { const char* name; U8 profile; U8 path; F32 revolutions; F32 skew; F32 radius_offset; F32 taper; F32 shear; bool legacy; };
+        const Extra extras[] = {
+            { "revolutions", LL_PCODE_PROFILE_SQUARE, LL_PCODE_PATH_CIRCLE, 2.f, 0.f, 0.f, 0.f, 0.f, false },
+            { "skew", LL_PCODE_PROFILE_CIRCLE, LL_PCODE_PATH_CIRCLE, 1.f, 0.3f, 0.f, 0.f, 0.f, false },
+            { "radius offset", LL_PCODE_PROFILE_EQUALTRI, LL_PCODE_PATH_CIRCLE2, 1.f, 0.f, 0.2f, 0.f, 0.f, false },
+            { "circle taper and shear", LL_PCODE_PROFILE_SQUARE, LL_PCODE_PATH_CIRCLE, 1.f, 0.f, 0.f, 0.3f, 0.2f, false },
+            { "legacy box", LL_PCODE_PROFILE_SQUARE, LL_PCODE_PATH_LINE, 1.f, 0.f, 0.f, 0.f, 0.f, true },
+            { "legacy prism", LL_PCODE_PROFILE_RIGHTTRI, LL_PCODE_PATH_LINE, 1.f, 0.f, 0.f, 0.f, 0.f, true },
+        };
+        for (const Extra& extra : extras)
+        {
+            LLVolumeParams params;
+            params.setType(extra.profile, extra.path);
+            params.setBeginAndEndS(0.f, 1.f);
+            params.setBeginAndEndT(0.f, 1.f);
+            params.setRatio(1.f, 1.f);
+            params.setRevolutions(extra.revolutions);
+            params.setSkew(extra.skew);
+            params.setRadiusOffset(extra.radius_offset);
+            params.setTaper(extra.taper, extra.taper);
+            params.setShear(extra.shear, extra.shear);
+
+            LLVolume::sSplitFlatSides = extra.legacy;
+            LLVolumeLODGroup group(params);
+            LLPointer<LLVolume> volumes[LLVolumeLODGroup::NUM_LODS];
+            for (S32 lod = 0; lod < LLVolumeLODGroup::NUM_LODS; ++lod)
+            {
+                volumes[lod] = new LLVolume(params, LLVolumeLODGroup::getVolumeScaleFromDetail(lod), false, true);
+            }
+            for (S32 a = 0; a < LLVolumeLODGroup::NUM_LODS; ++a)
+            for (S32 b = a + 1; b < LLVolumeLODGroup::NUM_LODS; ++b)
+            {
+                if (group.getCanonicalLOD(a) == group.getCanonicalLOD(b))
+                {
+                    ensure(std::string(extra.name) + " lods " + std::to_string(a) + "," + std::to_string(b) + ": merged LODs differ",
+                           same_faces(volumes[a], volumes[b]));
+                }
+            }
+            if (extra.legacy)
+            {
+                ensure(std::string(extra.name) + ": legacy splits keep the top LOD apart", group.getCanonicalLOD(3) == 3);
+            }
+            LLVolume::sSplitFlatSides = false;
+        }
+    }
 }
