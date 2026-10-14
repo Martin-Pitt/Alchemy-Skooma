@@ -759,25 +759,75 @@ void SKNetMap::drawVehicles()
     {
         return;
     }
-    gGL.begin(LLRender::TRIANGLES);
-    for (const SKMapPeople::Vehicle& v : SKMapPeople::instance().vehicles())
-    {
-        if (SKMapVehicleGlyphs::glyphFor(v.mRoot))
+    static LLCachedControl<bool> glyphs(gSavedSettings, "SKMapVehicleGlyphs", true);
+    const std::vector<SKMapPeople::Vehicle>& vehicles = SKMapPeople::instance().vehicles();
+    // The base layer of a vehicle's captured glyph, when it has one with an image.
+    auto base_layer = [&](const SKMapPeople::Vehicle& v) -> const SKOutlineLayer* {
+        const SKMapVehicleGlyphs::Glyph* glyph = glyphs ? SKMapVehicleGlyphs::glyphFor(v.mRoot) : nullptr;
+        if (!glyph || glyph->layers.empty())
         {
-            continue;   // no glyph is drawn yet; the seam is for the outline capture
+            return nullptr;
         }
-        // The linkset's box at its live heading: hull, and a nose tick at its front.
+        const SKOutlineLayer& layer = glyph->layers.front();
+        if (layer.pose_source != SKOutlineLayer::PoseSource::ROOT || !layer.texture || layer.x1 <= layer.x0 || layer.y1 <= layer.y0)
+        {
+            return nullptr;
+        }
+        return &layer;
+    };
+
+    // Glyphs: the atlas cell at the live pose, its coverage tinting the hull colour (premultiplied).
+    std::vector<const SKOutlineLayer*> layers(vehicles.size(), nullptr);
+    for (size_t i = 0; i < vehicles.size(); ++i)
+    {
+        const SKMapPeople::Vehicle& v = vehicles[i];
+        const SKOutlineLayer* layer = base_layer(v);
+        layers[i] = layer;
+        if (!layer)
+        {
+            continue;
+        }
         auto at = [&](F32 x, F32 y) {
             const LLVector3 p = LLVector3(x, y, 0.f) * v.mRot;
             return mView.toWidget(v.mPos + LLVector3d(p.mV[VX], p.mV[VY], 0.0));
         };
-        const LLVector2 a = at(v.mMin.mV[VX], v.mMin.mV[VY]), b = at(v.mMax.mV[VX], v.mMin.mV[VY]);
-        const LLVector2 c = at(v.mMax.mV[VX], v.mMax.mV[VY]), d = at(v.mMin.mV[VX], v.mMax.mV[VY]);
+        const LLVector2 corner[4] = { at(layer->x0, layer->y0), at(layer->x1, layer->y0), at(layer->x1, layer->y1), at(layer->x0, layer->y1) };
+        const F32 uv[4][2] = { { layer->u0, layer->v0 }, { layer->u1, layer->v0 }, { layer->u1, layer->v1 }, { layer->u0, layer->v1 } };
         const bool ally = v.mLook == skmap::VehicleLook::ALLY;
         const bool neutral = v.mLook == skmap::VehicleLook::NEUTRAL;
+        gGL.getTextureSlot(0)->bindManual(ALTextureSlot::TT_TEXTURE, layer->texture, 0);
+        gGL.blendFunc(LLRender::BF_ONE, LLRender::BF_ONE_MINUS_SOURCE_ALPHA);
         skmapdraw::colour(ally ? skmap::palette::VEH_ALLY_HULL : neutral ? skmap::palette::VEH_NEUTRAL_HULL : skmap::palette::VEH_CIVIL_HULL);
-        skmapdraw::triangle(a, b, c);
-        skmapdraw::triangle(a, c, d);
+        gGL.begin(LLRender::TRIANGLES);
+        for (S32 k : { 0, 1, 2, 0, 2, 3 })
+        {
+            gGL.texCoord2f(uv[k][0], uv[k][1]);
+            gGL.vertex2f(corner[k].mV[VX], corner[k].mV[VY]);
+        }
+        gGL.end();
+        gGL.setSceneBlendType(LLRender::BT_ALPHA);
+        gGL.getTextureSlot(0)->unbind();
+    }
+
+    gGL.begin(LLRender::TRIANGLES);
+    for (size_t i = 0; i < vehicles.size(); ++i)
+    {
+        const SKMapPeople::Vehicle& v = vehicles[i];
+        // The linkset's box at its live heading, unless its glyph drew: hull, and a nose tick at its front.
+        auto at = [&](F32 x, F32 y) {
+            const LLVector3 p = LLVector3(x, y, 0.f) * v.mRot;
+            return mView.toWidget(v.mPos + LLVector3d(p.mV[VX], p.mV[VY], 0.0));
+        };
+        const bool ally = v.mLook == skmap::VehicleLook::ALLY;
+        const bool neutral = v.mLook == skmap::VehicleLook::NEUTRAL;
+        if (!layers[i])
+        {
+            const LLVector2 a = at(v.mMin.mV[VX], v.mMin.mV[VY]), b = at(v.mMax.mV[VX], v.mMin.mV[VY]);
+            const LLVector2 c = at(v.mMax.mV[VX], v.mMax.mV[VY]), d = at(v.mMin.mV[VX], v.mMax.mV[VY]);
+            skmapdraw::colour(ally ? skmap::palette::VEH_ALLY_HULL : neutral ? skmap::palette::VEH_NEUTRAL_HULL : skmap::palette::VEH_CIVIL_HULL);
+            skmapdraw::triangle(a, b, c);
+            skmapdraw::triangle(a, c, d);
+        }
         const F32 mid_y = (v.mMin.mV[VY] + v.mMax.mV[VY]) * 0.5f;
         const F32 length = v.mMax.mV[VX] - v.mMin.mV[VX];
         skmapdraw::colour(ally ? skmap::palette::VEH_ALLY_TOP : neutral ? skmap::palette::VEH_NEUTRAL_TOP : skmap::palette::VEH_CIVIL_TOP);

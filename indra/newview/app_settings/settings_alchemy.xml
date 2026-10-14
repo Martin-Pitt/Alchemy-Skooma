@@ -5356,6 +5356,17 @@
             <key>Value</key>
             <integer>190</integer>
         </map>
+        <key>SKMapVehicleGlyphs</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw driven vehicles on the mini-map as their captured outline glyphs, falling back to their box until one is captured.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
         <key>SKMapLayerVehicles</key>
         <map>
             <key>Comment</key>

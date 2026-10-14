@@ -37,6 +37,7 @@
 #include "skmappolicy.h"
 #include "skmapview.h"
 #include "sknavwalls.h"
+#include "skoutlinecapture.h"
 
 #include <deque>
 #include <map>
@@ -48,13 +49,13 @@ namespace skmap
     enum class FloorRelation : U8 { SAME, ABOVE, BELOW, UNKNOWN };
 }
 
-/// A vehicle's captured outline, keyed by its root. A seam for the outline capture module.
+/// A vehicle's captured outline, keyed by its root: the outline capture's glyph.
 class SKMapVehicleGlyphs
 {
 public:
-    struct Glyph;
-    /// The outline captured for a vehicle, or null: none are captured yet, so the box draws.
-    static const Glyph* glyphFor(const LLUUID& root) { return nullptr; }
+    using Glyph = SKOutlineGlyph;
+    /// The glyph of a vehicle, asking for a capture; null until its first render, valid until the next frame.
+    static const Glyph* glyphFor(const LLUUID& root) { return SKOutlineCapture::glyphFor(root); }
 };
 
 /// Main thread only. Does nothing while no map has drawn for a couple of seconds.
