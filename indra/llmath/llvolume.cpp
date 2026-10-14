@@ -1955,6 +1955,7 @@ LLProfile::~LLProfile()
 
 
 S32 LLVolume::sNumMeshPoints = 0;
+bool LLVolume::sSplitFlatSides = false; // <SK:Nexii> Prim split toggle
 
 LLVolume::LLVolume(const LLVolumeParams &params, const F32 detail, const bool generate_single_face, const bool is_unique)
     : mParams(params)
@@ -2045,7 +2046,7 @@ bool LLVolume::generate()
     if (mParams.getPathParams().getCurveType() == LL_PCODE_PATH_LINE &&
         (mParams.getPathParams().getScale().mV[0] != 1.0f ||
          mParams.getPathParams().getScale().mV[1] != 1.0f ||
-         mParams.getPathParams().getTwistBegin() == mParams.getPathParams().getTwist()) && // <SK:Nexii> Untwisted flat sides need no split under per-pixel lighting
+         (!sSplitFlatSides && mParams.getPathParams().getTwistBegin() == mParams.getPathParams().getTwist())) && // <SK:Nexii> Untwisted flat sides need no split under per-pixel lighting
         (mParams.getProfileParams().getCurveType() == LL_PCODE_PROFILE_SQUARE ||
          mParams.getProfileParams().getCurveType() == LL_PCODE_PROFILE_ISOTRI ||
          mParams.getProfileParams().getCurveType() == LL_PCODE_PROFILE_EQUALTRI ||

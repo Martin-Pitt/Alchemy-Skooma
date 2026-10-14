@@ -1071,6 +1071,7 @@ public:
 
     bool isFaceMaskValid(LLFaceID face_mask);
     static S32 sNumMeshPoints;
+    static bool sSplitFlatSides; // <SK:Nexii> Restores the legacy edge splits on untwisted flat-sided prims, for comparison
 
     friend std::ostream& operator<<(std::ostream &s, const LLVolume &volume);
     friend std::ostream& operator<<(std::ostream &s, const LLVolume *volumep);      // HACK to bypass Windoze confusion over

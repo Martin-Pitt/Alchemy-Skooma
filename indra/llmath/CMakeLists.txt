@@ -126,6 +126,7 @@ if(AL_BUILD_TESTS)
     llmatrix3a
     llmatrix4a
     llvector4a
+    llvolumesplit
   )
     al_add_test(${test} PROJECT llmath LIBRARIES llmath llcommon)
   endforeach()
