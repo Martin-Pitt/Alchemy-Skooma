@@ -29,17 +29,22 @@
 
 #include "llsingleton.h"
 #include "lluuid.h"
+#include "llquaternion.h"
+#include "v3math.h"
 #include "skoutlinepolicy.h"
 
 #include <functional>
 #include <memory>
+#include <string>
 #include <unordered_map>
 #include <vector>
+
+class LLViewerObject;
 
 // One drawable layer of a glyph: a coverage image in the atlas and where it sits in its own frame.
 struct SKOutlineLayer
 {
-    // What the consumer poses the layer by, live: the vehicle root, or (later) a crew attachment's root.
+    // What the consumer poses the layer by, live: the vehicle root, or a crew attachment's root.
     enum class PoseSource : U8
     {
         ROOT,
@@ -54,6 +59,13 @@ struct SKOutlineLayer
     F32 x0 = 0.f, y0 = 0.f, x1 = 0.f, y1 = 0.f;
     F32 cell = 0.f;        // metres per atlas texel
     bool coarsened = false; // the layer was too long for its slot at the resolution ceiling
+    // The pose source's frame in the vehicle root's frame when the layer was rendered (identity for the base), for a
+    // consumer that has no live pose of the attachment: a point p in the layer frame is at p * rel_rot + rel_pos.
+    LLVector3 rel_pos;
+    LLQuaternion rel_rot;
+    S32 attachment_point = 0; // the crew attachment's point
+    LLUUID wearer;            // the crew member wearing it
+    S32 covered_cells = -1;   // cells with any coverage, once the GPU has counted them
 };
 
 struct SKOutlineGlyph
@@ -67,10 +79,11 @@ struct SKOutlineGlyph
 // Renders a plan-view coverage glyph of each requested vehicle on the GPU, at first sight and again when it
 // changes or moves, under a per-frame budget. No readback: consumers draw straight from the atlas.
 //
-// v1 renders the base layer only (the root linkset). Crew attachment layers come next: they are found from
-// the avatars seated on the root and its children, each rendered in its own attachment frame as a further
-// layer with PoseSource::CREW_ATTACHMENT (see gatherLayers). A signed distance field of each layer would be
-// built by the resolve pass, after the coverage average.
+// The base layer is the root linkset. Crew layers are the worn linksets of the avatars seated on the root and its
+// children that belong to the vehicle (SKOutlinePolicy::crewVerdict), each rendered in its own attachment frame
+// with PoseSource::CREW_ATTACHMENT. A crew layer is shown once the GPU has counted its cells: specks and layers
+// lying inside a larger one are left out. A signed distance field of each layer would be built by the resolve
+// pass, after the coverage average.
 class SKOutlineCapture : public LLSingleton<SKOutlineCapture>
 {
     LLSINGLETON(SKOutlineCapture);
@@ -88,6 +101,9 @@ public:
 
     // Runs the queue; called once per frame after the world render, before the UI, never on snapshots.
     static void onFrame();
+
+    // An object's name from an ObjectPropertiesFamily reply, which ties a worn part to its vehicle.
+    static void onObjectName(const LLUUID& id, const std::string& name);
 
     // The atlas goes with the GL context; every capture renders again once it is back.
     static void cleanupGL();
@@ -131,7 +147,12 @@ private:
     bool ensureGL();
     bool render(Entry& entry);
 
+    void updateCrew(Entry& entry, LLViewerObject* root, F64 now);
+    void readCounts();
+
     std::unordered_map<LLUUID, std::unique_ptr<Entry>> mEntries;
+    std::unordered_map<LLUUID, std::string> mNames;   // names of vehicle roots and worn parts, as they arrive
+    std::unordered_map<LLUUID, F64> mNameRequests;    // when a name was asked for
     SKOutlinePolicy::SlotAtlas mAtlas;
     SKOutlinePolicy::FrameBudget mBudget;
     F64 mLastFrameMs = 0.0;

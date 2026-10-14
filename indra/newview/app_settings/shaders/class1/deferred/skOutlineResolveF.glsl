@@ -31,6 +31,7 @@ out vec4 frag_color;
 uniform sampler2D depthMap;
 uniform ivec4 sk_slot;        // the slot's lower-left texel in the atlas, then the layer's cols and rows
 uniform float sk_clear_depth; // what the capture target was cleared to: no surface
+uniform int sk_count;         // 1 to count covered cells: uncovered ones are discarded and nothing is written
 
 in vec2 vary_fragcoord;
 
@@ -47,6 +48,10 @@ void main()
     {
         ivec2 s = cell * 2;
         c = 0.25 * (covered(s) + covered(s + ivec2(1, 0)) + covered(s + ivec2(0, 1)) + covered(s + ivec2(1, 1)));
+    }
+    if (sk_count != 0 && c == 0.0)
+    {
+        discard;
     }
     frag_color = vec4(c);
 }
