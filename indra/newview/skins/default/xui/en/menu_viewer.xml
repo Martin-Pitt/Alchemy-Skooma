@@ -3588,6 +3588,18 @@ function="World.EnvPreset"
          label="Render Tests"
          name="Render Tests"
          tear_off="true">
+            <!-- <SK:Nexii> tactical overview: the census and a ghost of the world from a tilted camera -->
+            <menu_item_check
+             label="Tactical Overview"
+             name="SK Tactical Overview">
+                <menu_item_check.on_check
+                 function="CheckControl"
+                 parameter="SKTacticalOverview" />
+                <menu_item_check.on_click
+                 function="ToggleControl"
+                 parameter="SKTacticalOverview" />
+            </menu_item_check>
+            <!-- </SK:Nexii> -->
             <!-- <SK:Nexii> outline capture: the atlas and per-capture stats, behind SKOutlineCaptureDebug -->
             <menu_item_check
              label="Outline Capture Runtime"
