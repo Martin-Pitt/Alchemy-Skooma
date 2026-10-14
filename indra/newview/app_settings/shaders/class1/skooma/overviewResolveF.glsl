@@ -106,6 +106,20 @@ void main()
     vec3 pos;
     if (!surfaceAt(p, pos))
     {
+        // Nothing drawn: the view ray meets the water plane, or nothing.
+        vec2 ndc_xy = (vec2(p) + 0.5) / vec2(gSize) * 2.0 - 1.0;
+        float near_ndc = sk_zo > 0.5 ? 1.0 : -1.0;
+        vec4 a = sk_inv_vp * vec4(ndc_xy, near_ndc, 1.0);
+        vec4 b = sk_inv_vp * vec4(ndc_xy, near_ndc * 0.5, 1.0);
+        vec3 ra = a.xyz / a.w;
+        vec3 rb = b.xyz / b.w;
+        float dz = rb.z - ra.z;
+        float t = abs(dz) > 1e-6 ? (sk_water_z - ra.z) / dz : -1.0;
+        if (t > 0.0 && sk_water_z < sk_cut)
+        {
+            frag_color = vec4(mix(sk_water_shallow, sk_water_deep, 0.6), 0.85);
+            return;
+        }
         frag_color = vec4(0.0);
         return;
     }
@@ -204,7 +218,7 @@ void main()
     // Faces turn to a light from the north-west and above, so walls read in the tilted view.
     c *= mix(0.72, 1.08, clamp(dot(n, normalize(LIGHT)) * 0.5 + 0.5, 0.0, 1.0));
 
-    if (pos.z < sk_water_z && (flat_kind || code == CODE_NONE))
+    if (pos.z < sk_water_z)
     {
         float t = clamp((sk_water_z - pos.z) / sk_water_depth, 0.0, 1.0);
         vec3 w = mix(sk_water_shallow, sk_water_deep, t);
