@@ -29,7 +29,9 @@
 #include "skoutlinepolicy.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <set>
 
 namespace SKOutlinePolicy
 {
@@ -203,5 +205,149 @@ namespace SKOutlinePolicy
     bool settled(bool all_top_lod, F64 since_change, F64 settle_seconds)
     {
         return all_top_lod && since_change >= settle_seconds;
+    }
+
+    F32 reach(const Box& box, const F32 point[3])
+    {
+        F32 d2 = 0.f;
+        for (S32 k = 0; k < 3; ++k)
+        {
+            const F32 d = std::max(std::fabs(box.min[k] - point[k]), std::fabs(box.max[k] - point[k]));
+            d2 += d * d;
+        }
+        return std::sqrt(d2);
+    }
+
+    namespace
+    {
+        F32 planSpan(const Box& b)
+        {
+            return std::max(b.max[0] - b.min[0], b.max[1] - b.min[1]);
+        }
+    }
+
+    CrewVerdict crewVerdict(const CrewPiece& piece, const CrewLimits& limits)
+    {
+        if (piece.hud)
+        {
+            return CrewVerdict::NOT_LAYER;
+        }
+        if (reach(piece.box, piece.wearer) <= limits.personal_reach)
+        {
+            return CrewVerdict::PERSONAL;
+        }
+        const F32 root_span = planSpan(piece.root);
+        if (root_span > 0.f && planSpan(piece.box) >= limits.root_share * root_span)
+        {
+            return CrewVerdict::LAYER;
+        }
+        if (piece.avatar_center || piece.name_affinity || piece.temp)
+        {
+            return CrewVerdict::LAYER;
+        }
+        return CrewVerdict::NOT_LAYER;
+    }
+
+    bool isThinPlane(F32 sx, F32 sy, F32 sz, bool alpha_faces, F32 max_thickness, F32 min_ratio)
+    {
+        const F32 lo = std::min({ sx, sy, sz });
+        const F32 hi = std::max({ sx, sy, sz });
+        return alpha_faces && lo <= max_thickness && hi >= min_ratio * std::max(lo, 1.0e-6f);
+    }
+
+    bool isSpeck(S32 covered_cells, S32 max_cells)
+    {
+        return covered_cells <= max_cells;
+    }
+
+    F32 insideFraction(const Rect& a, const Rect& b)
+    {
+        const F32 area = (a.x1 - a.x0) * (a.y1 - a.y0);
+        if (!(area > 0.f))
+        {
+            return 0.f;
+        }
+        const F32 w = std::min(a.x1, b.x1) - std::max(a.x0, b.x0);
+        const F32 h = std::min(a.y1, b.y1) - std::max(a.y0, b.y0);
+        return w > 0.f && h > 0.f ? w * h / area : 0.f;
+    }
+
+    bool mergedInto(const Rect& a, S32 covered_a, const Rect& b, S32 covered_b, F32 inside)
+    {
+        return covered_a < covered_b && insideFraction(a, b) >= inside;
+    }
+
+    namespace
+    {
+        std::string lower(std::string s)
+        {
+            for (char& c : s)
+            {
+                c = (char)std::tolower((unsigned char)c);
+            }
+            return s;
+        }
+
+        // The bracketed tag a vendor leads its names with, if any.
+        std::string vendorTag(const std::string& name)
+        {
+            const size_t open = name.find_first_of("[(");
+            if (open == std::string::npos || name.find_first_not_of(" \t") != open)
+            {
+                return std::string();
+            }
+            const size_t close = name.find_first_of("])", open + 1);
+            if (close == std::string::npos || close == open + 1)
+            {
+                return std::string();
+            }
+            return lower(name.substr(open + 1, close - open - 1));
+        }
+
+        // Words of four or more letters that name a product rather than a part or a version.
+        std::set<std::string> productWords(const std::string& name)
+        {
+            static const std::set<std::string> generic = { "base", "body", "turret", "main", "seat", "root", "vehicle", "tank",
+                                                           "flak", "hull", "gun", "guns", "cannon", "weapon", "object", "primitive",
+                                                           "mesh", "attachment", "copy", "final", "version", "with", "edition",
+                                                           "full", "temp", "pilot", "driver", "gunner", "crew", "left", "right",
+                                                           "front", "rear", "parts", "part", "physics", "visual", "kit" };
+            std::set<std::string> words;
+            std::string word;
+            const std::string tag = vendorTag(name);
+            for (size_t i = 0; i <= name.size(); ++i)
+            {
+                const char c = i < name.size() ? name[i] : ' ';
+                if (std::isalpha((unsigned char)c))
+                {
+                    word.push_back((char)std::tolower((unsigned char)c));
+                    continue;
+                }
+                if (word.size() >= 4 && word != tag && !generic.count(word))
+                {
+                    words.insert(word);
+                }
+                word.clear();
+            }
+            return words;
+        }
+    }
+
+    bool nameAffinity(const std::string& a, const std::string& b)
+    {
+        const std::string tag = vendorTag(a);
+        if (!tag.empty() && tag == vendorTag(b))
+        {
+            return true;
+        }
+        const std::set<std::string> wa = productWords(a);
+        for (const std::string& w : productWords(b))
+        {
+            if (wa.count(w))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 }
