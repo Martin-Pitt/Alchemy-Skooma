@@ -118,6 +118,7 @@
 #include "llviewershadermgr.h"
 #include "skoutlinecapture.h" // <SK:Nexii> outline capture
 #include "skoverviewcapture.h" // <SK:Nexii> overview capture
+#include "skoverviewcensus.h" // <SK:Nexii> overview capture: class codes
 #include "llviewerstats.h"
 #include "llviewerjoystick.h"
 #include "llviewerdisplay.h"
@@ -12400,8 +12401,9 @@ U32 LLPipeline::skRenderOutlineCoverage(LLSpatialBridge* bridge, const LLMatrix4
 }
 // </SK:Nexii>
 
-// <SK:Nexii> overview capture: the shadow programs from a top-down ortho camera, one colour channel a class.
-U32 LLPipeline::skRenderOverview(const LLMatrix4a& view, const LLMatrix4a& proj, LLCamera& camera)
+// <SK:Nexii> overview capture: the world under a cut plane, one class code a pass in R, invisible faces flagged in B.
+U32 LLPipeline::skRenderOverview(const LLMatrix4a& view, const LLMatrix4a& proj, LLCamera& camera, F32 cut_z, bool ghost,
+                                 const std::function<void()>& census)
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_PIPELINE;
     LL_PROFILE_GPU_ZONE("skRenderOverview");
@@ -12454,14 +12456,26 @@ U32 LLPipeline::skRenderOverview(const LLMatrix4a& view, const LLMatrix4a& proj,
     gGL.getTextureSlot(0)->unbind();
     LLVertexBuffer::unbind();
 
+    // The cut as an eye-space plane for the clip program: keep z <= cut_z.
+    LLMatrix4a inverse_view;
+    inverse_view.setInverse(view);
+    LLVector4a clip_plane;
+    inverse_view.transform4(LLVector4a(0.f, 0.f, -1.f, cut_z), clip_plane);
+    auto bind_clip = [&](U8 code)
+    {
+        gClipProgram.bind();
+        glUniform4fv(glGetUniformLocation(gClipProgram.mProgramObject, "clip_plane"), 1, clip_plane.getF32ptr());
+        gGL.diffuseColor4f(code / 255.f, 0.f, 1.f, 1.f);
+    };
+
     // Double-sided: a plane seen from below still has a top.
     LLGLDisable cull_face(GL_CULL_FACE);
     U32 draws = 0;
-    const U32 target_width = LLRenderTarget::sCurResX;
     {
         LL_PROFILE_ZONE_NAMED_CATEGORY_PIPELINE("sk overview terrain");
         LLGLDepthTest depth(GL_TRUE, GL_TRUE, GL_LESS);
         gGL.setColorMask(true, false, false, false);
+        // The terrain's shadow program writes white; the clear left R at 0, so white is code 255, read as terrain.
         for (LLDrawPool* pool : mPools)
         {
             if (pool->getType() != LLDrawPool::POOL_TERRAIN || !hasRenderType(pool->getType()))
@@ -12480,87 +12494,78 @@ U32 LLPipeline::skRenderOverview(const LLMatrix4a& view, const LLMatrix4a& proj,
             ++draws;
         }
     }
+    static const U32 solid_types[] = { LLRenderPass::PASS_SIMPLE,        LLRenderPass::PASS_FULLBRIGHT,
+                                       LLRenderPass::PASS_SHINY,         LLRenderPass::PASS_BUMP,
+                                       LLRenderPass::PASS_FULLBRIGHT_SHINY, LLRenderPass::PASS_MATERIAL,
+                                       LLRenderPass::PASS_SPECMAP,       LLRenderPass::PASS_NORMMAP,
+                                       LLRenderPass::PASS_NORMSPEC,      LLRenderPass::PASS_MATERIAL_ALPHA_EMISSIVE,
+                                       LLRenderPass::PASS_SPECMAP_EMISSIVE, LLRenderPass::PASS_NORMMAP_EMISSIVE,
+                                       LLRenderPass::PASS_NORMSPEC_EMISSIVE, LLRenderPass::PASS_ALPHA_MASK,
+                                       LLRenderPass::PASS_FULLBRIGHT_ALPHA_MASK, LLRenderPass::PASS_NORMSPEC_MASK,
+                                       LLRenderPass::PASS_MATERIAL_ALPHA_MASK, LLRenderPass::PASS_SPECMAP_MASK,
+                                       LLRenderPass::PASS_NORMMAP_MASK };
+    if (ghost)
     {
+        // Masked parts draw whole: the ghost is a tint, so a cut-out leaf reading as its card costs nothing.
         LL_PROFILE_ZONE_NAMED_CATEGORY_PIPELINE("sk overview objects");
         LLGLDepthTest depth(GL_TRUE, GL_TRUE, GL_LESS);
-        gGL.setColorMask(false, true, false, false);
-        static const U32 types[] = { LLRenderPass::PASS_SIMPLE,        LLRenderPass::PASS_FULLBRIGHT,
-                                     LLRenderPass::PASS_SHINY,         LLRenderPass::PASS_BUMP,
-                                     LLRenderPass::PASS_FULLBRIGHT_SHINY, LLRenderPass::PASS_MATERIAL,
-                                     LLRenderPass::PASS_MATERIAL_ALPHA_EMISSIVE, LLRenderPass::PASS_SPECMAP,
-                                     LLRenderPass::PASS_SPECMAP_EMISSIVE, LLRenderPass::PASS_NORMMAP,
-                                     LLRenderPass::PASS_NORMMAP_EMISSIVE, LLRenderPass::PASS_NORMSPEC,
-                                     LLRenderPass::PASS_NORMSPEC_EMISSIVE };
-        gDeferredShadowProgram.bind();
-        gGL.diffuseColor4f(1, 1, 1, 1);
-        for (U32 type : types)
-        {
-            renderObjects(type, false, false, false);
-        }
-        renderGLTFObjects(LLRenderPass::PASS_GLTF_PBR, false, false);
-
-        const S32 sun_up = 1;
-        gDeferredShadowAlphaMaskProgram.bind();
-        LLGLSLShader::sCurBoundShaderPtr->uniform1i(LLShaderMgr::SUN_UP_FACTOR, sun_up);
-        LLGLSLShader::sCurBoundShaderPtr->uniform1f(LLShaderMgr::DEFERRED_SHADOW_TARGET_WIDTH, (F32)target_width);
-        renderMaskedObjects(LLRenderPass::PASS_ALPHA_MASK, true, true, false);
-        renderAlphaObjects(false);
-        gDeferredShadowFullbrightAlphaMaskProgram.bind();
-        LLGLSLShader::sCurBoundShaderPtr->uniform1i(LLShaderMgr::SUN_UP_FACTOR, sun_up);
-        LLGLSLShader::sCurBoundShaderPtr->uniform1f(LLShaderMgr::DEFERRED_SHADOW_TARGET_WIDTH, (F32)target_width);
-        renderFullbrightMaskedObjects(LLRenderPass::PASS_FULLBRIGHT_ALPHA_MASK, true, true, false);
-        gDeferredTreeShadowProgram.bind();
-        LLGLSLShader::sCurBoundShaderPtr->setMinimumAlpha(ALPHA_BLEND_CUTOFF);
-        renderMaskedObjects(LLRenderPass::PASS_NORMSPEC_MASK, true, false, false);
-        renderMaskedObjects(LLRenderPass::PASS_MATERIAL_ALPHA_MASK, true, false, false);
-        renderMaskedObjects(LLRenderPass::PASS_SPECMAP_MASK, true, false, false);
-        renderMaskedObjects(LLRenderPass::PASS_NORMMAP_MASK, true, false, false);
-        gDeferredShadowGLTFAlphaMaskProgram.bind();
-        LLGLSLShader::sCurBoundShaderPtr->uniform1i(LLShaderMgr::SUN_UP_FACTOR, sun_up);
-        LLGLSLShader::sCurBoundShaderPtr->uniform1f(LLShaderMgr::DEFERRED_SHADOW_TARGET_WIDTH, (F32)target_width);
-        gGL.loadMatrix(view);
-        gGLLastMatrix = NULL;
-        mAlphaMaskPool->pushGLTFBatches(LLRenderPass::PASS_GLTF_PBR_ALPHA_MASK);
-    }
-    {
-        // Section: where the top surface is a back face the cut went through a solid, so that texel is wall, not the
-        // solid's underside; the walls' sides are edge-on from above and would draw nothing.
-        LL_PROFILE_ZONE_NAMED_CATEGORY_PIPELINE("sk overview section");
-        LLGLDepthTest depth(GL_TRUE, GL_FALSE, GL_LEQUAL);
-        LLGLEnable cull_back(GL_CULL_FACE);
-        glCullFace(GL_FRONT);
-        gGL.setColorMask(false, false, false, true);
-        gDeferredShadowProgram.bind();
-        static const U32 solid_types[] = { LLRenderPass::PASS_SIMPLE, LLRenderPass::PASS_FULLBRIGHT, LLRenderPass::PASS_SHINY,
-                                           LLRenderPass::PASS_BUMP, LLRenderPass::PASS_FULLBRIGHT_SHINY,
-                                           LLRenderPass::PASS_MATERIAL, LLRenderPass::PASS_SPECMAP,
-                                           LLRenderPass::PASS_NORMMAP, LLRenderPass::PASS_NORMSPEC };
+        gGL.setColorMask(true, false, false, false);
+        bind_clip(skoverview::CODE_GHOST);
         for (U32 type : solid_types)
         {
             renderObjects(type, false, false, false);
         }
         renderGLTFObjects(LLRenderPass::PASS_GLTF_PBR, false, false);
+        gGL.loadMatrix(view);
+        gGLLastMatrix = NULL;
+        mAlphaMaskPool->pushGLTFBatches(LLRenderPass::PASS_GLTF_PBR_ALPHA_MASK);
+    }
+    if (ghost)
+    {
+        // Section: where the nearest surface is a back face the cut went through a solid; its sides would otherwise
+        // be edge-on from above and draw nothing.
+        LL_PROFILE_ZONE_NAMED_CATEGORY_PIPELINE("sk overview section");
+        LLGLDepthTest depth(GL_TRUE, GL_FALSE, GL_LEQUAL);
+        LLGLEnable cull_back(GL_CULL_FACE);
+        glCullFace(GL_FRONT);
+        gGL.setColorMask(true, false, false, false);
+        bind_clip(skoverview::CODE_GHOST_SECTION);
+        for (U32 i = 0; i < 9; ++i)
+        {
+            renderObjects(solid_types[i], false, false, false);
+        }
+        renderGLTFObjects(LLRenderPass::PASS_GLTF_PBR, false, false);
         glCullFace(GL_BACK);
     }
+    if (census)
+    {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_PIPELINE("sk overview census");
+        gGL.setColorMask(true, false, false, false);
+        bind_clip(skoverview::CODE_NONE);
+        census();
+        gGL.loadMatrix(view);
+        gGLLastMatrix = NULL;
+    }
+    if (ghost)
     {
         // Invisible faces tint what is under them and hide nothing: no depth write, equal depth passes.
         LL_PROFILE_ZONE_NAMED_CATEGORY_PIPELINE("sk overview invisible");
         LLGLDepthTest depth(GL_TRUE, GL_FALSE, GL_LEQUAL);
         gGL.setColorMask(false, false, true, false);
-        gDeferredShadowProgram.bind();
+        bind_clip(skoverview::CODE_NONE);
         renderObjects(LLRenderPass::PASS_INVISIBLE, false, false, false);
         renderObjects(LLRenderPass::PASS_ALPHA_INVISIBLE, false, false, false);
-    }
 
-    for (U32 type = 0; type < LLRenderPass::NUM_RENDER_TYPES; ++type)
-    {
-        for (LLCullResult::drawinfo_iterator i = result.beginRenderMap(type); i != result.endRenderMap(type); ++i)
+        for (U32 type = 0; type < LLRenderPass::NUM_RENDER_TYPES; ++type)
         {
-            ++draws;
+            for (LLCullResult::drawinfo_iterator i = result.beginRenderMap(type); i != result.endRenderMap(type); ++i)
+            {
+                ++draws;
+            }
         }
     }
 
-    gDeferredShadowProgram.unbind();
+    gClipProgram.unbind();
     gGL.setColorMask(true, true);
     gGL.matrixMode(LLRender::MM_PROJECTION);
     gGL.popMatrix();

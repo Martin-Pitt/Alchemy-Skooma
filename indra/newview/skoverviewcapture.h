@@ -1,6 +1,7 @@
 /**
  * @file skoverviewcapture.h
- * @brief A top-down render of the agent's region, shaded as a map, for the mini-map's base layer.
+ * @brief The overview: the census as styled shapes over a ghost of the rendered world, for the mini-map's base and
+ *        the tactical view.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Alchemy Viewer Source Code
@@ -25,14 +26,21 @@
 #ifndef SK_OVERVIEWCAPTURE_H
 #define SK_OVERVIEWCAPTURE_H
 
+#include "llcamera.h"
+#include "llmatrix4a.h"
 #include "llsingleton.h"
+#include "skoverviewcensus.h"
 #include "v3dmath.h"
 
 #include <string>
 
-// Renders the agent's region from straight above with the depth-only shadow programs, cut at the agent's height plus
-// SKOverviewCutHeight, then resolves depth and a class per texel (terrain, object, invisible) into an RGBA8 map
-// coloured by height relative to the agent. Re-captured every SKOverviewRefresh seconds while SKMapCaptureBase is on.
+class LLRenderTarget;
+
+// Renders terrain, the rendered world (the ghost, SKOverviewGhost) and the census's shapes below a cut plane at the
+// navmesh floor under the agent plus SKOverviewCutHeight, each writing a class code, then resolves depth and codes
+// into an RGBA8 map. Two shots share the passes: the straight-down map of the agent's region for the mini-map
+// (SKMapCaptureBase, every SKOverviewRefresh seconds) and the tactical view (SKTacticalOverview), a tilted orbit
+// camera around the agent drawn over the main view every frame.
 class SKOverviewCapture : public LLSingleton<SKOverviewCapture>
 {
     LLSINGLETON(SKOverviewCapture);
@@ -45,12 +53,15 @@ public:
         F32 cpu_ms = 0.f;    // cull, sort, draw submission and resolve on the CPU
         F32 gpu_ms = -1.f;   // capture and resolve on the GPU, from the previous capture's timer query
         U32 draws = 0;       // draw infos sorted for the capture, plus the terrain pool
+        U32 census_tris = 0;
         U32 captures = 0;
     };
 
     /// Called once a frame after the world has rendered, before the UI.
     static void onFrame();
     static void cleanupGL();
+    /// The tactical view takes the wheel for its distance; false when it is off.
+    static bool handleScrollWheel(F32 clicks);
 
     /// The resolved map, 0 until the first capture; it covers the region at originGlobal() by regionWidth() metres.
     U32 texture() const;
@@ -59,12 +70,30 @@ public:
     const Stats& stats() const { return mStats; }
 
 private:
+    struct Shot
+    {
+        LLMatrix4a mView;
+        LLMatrix4a mProj;
+        LLCamera mCull;
+        LLVector3 mEye;     // agent space
+        F32 mCut = 0.f;     // agent-space z
+        F32 mFloor = 0.f;   // the height colours are relative to
+        bool mTopDown = false;
+    };
+
     void frame();
-    bool ensureGL(S32 res);
+    void updateDemand(bool wanted);
+    /// The floor under the agent from the navmesh and the cut above it, or the agent's height and the old offset.
+    void cutHeights(F32& floor_z, F32& cut_z) const;
+    bool ensureGL(LLRenderTarget& capture, LLRenderTarget& resolved, S32 w, S32 h);
+    bool ensureShaders();
     void releaseGL();
-    bool capture();
+    U32 render(LLRenderTarget& capture, LLRenderTarget& resolved, const Shot& shot);
+    bool captureMap();
+    void tactical();
     void readTimer();
 
+    SKOverviewCensus mCensus;
     LLVector3d mOrigin;
     F32 mWidth = 0.f;
     F64 mLastCapture = -1.0;
@@ -75,6 +104,7 @@ private:
     bool mGLFailed = false;
     bool mTiming = false;
     bool mValid = false;
+    bool mDemanding = false;
 };
 
 #endif // SK_OVERVIEWCAPTURE_H

@@ -21,18 +21,22 @@
  * $/LicenseInfo$
  */
 
-// Overview capture: top-down depth and a class per texel to a map coloured by height relative to the agent.
-// Albedo is never read. Floors near the agent's level are bright, storeys below darken, tops between the agent's
-// knee and the cut are cover (half, then full), edges are drawn where the height jumps, floors darken beside taller
-// neighbours, solids the cut goes through are full cover, and invisible faces are hatched over whatever is under them.
+// Overview: depth and a class code per texel to a map, from straight above or from a tilted camera. Albedo is never
+// read. The census layer is styled by its class (floor, wall, cover, ramp, door, ladder, vehicle, section); the ghost
+// layer (rendered geometry) is a faint tint with outlines; terrain is green. Floors are shaded by height relative to
+// the agent, outlines come from depth and normal breaks and class changes, invisible faces are hatched.
 
 out vec4 frag_color;
 
 uniform sampler2D depthMap;
-uniform sampler2D classMap;     // R terrain, G object, B invisible on top, A a solid cut through (back face on top)
-uniform vec4 sk_depth;          // window depth at the near (cut) and far planes, then their heights
-uniform float sk_mpp;           // metres per texel
-uniform float sk_agent_z;
+uniform sampler2D classMap;     // R class code (skoverviewcensus.h), B an invisible face on top
+uniform mat4 sk_inv_vp;         // window to world: inverse of projection times view
+uniform float sk_zo;            // 1 when window depth is NDC depth (zero-to-one), 0 for minus-one-to-one
+uniform float sk_far_depth;     // the cleared depth: no surface
+uniform vec3 sk_eye;
+uniform float sk_top_down;      // 1 for the straight-down map: tops of ghost geometry by height read as cover
+uniform float sk_agent_z;       // the floor the agent stands on
+uniform float sk_cut;
 uniform float sk_water_z;
 uniform float sk_water_depth;
 uniform vec3 sk_floor;
@@ -42,106 +46,217 @@ uniform vec3 sk_water_deep;
 uniform vec3 sk_wall_full;
 uniform vec3 sk_wall_half;
 uniform vec3 sk_invisible;
+uniform vec3 sk_door;
+uniform vec3 sk_ladder;
+uniform vec3 sk_vehicle;
+uniform vec3 sk_ghost;
 
-const float NO_SURFACE = -1.0e6;
-const float HALF_COVER_M = 0.5;   // the gold's low cut above the floor
-const float FULL_COVER_M = 1.5;   // and its high cut
-const float EDGE_M = 0.35;        // a height jump this large is an edge
+const int CODE_NONE = 0;
+const int CODE_GHOST = 2;
+const int CODE_GHOST_SECTION = 3;
+const int CODE_FLOOR = 16;
+const int CODE_WALL = 17;
+const int CODE_COVER = 18;
+const int CODE_RAMP = 19;
+const int CODE_DOOR = 20;
+const int CODE_LADDER = 21;
+const int CODE_VEHICLE = 22;
+const int CODE_SECTION = 23;
+const int CODE_TERRAIN = 255;
+
+const float HALF_COVER_M = 0.5;
+const float FULL_COVER_M = 1.5;
 const float CONTOUR_M = 2.0;
+const vec3 INK = vec3(0.06, 0.07, 0.08);
+const vec3 LIGHT = vec3(-0.35, -0.55, 0.76);
 
 ivec2 gSize;
 
-float heightAt(ivec2 p)
+bool surfaceAt(ivec2 p, out vec3 pos)
 {
     p = clamp(p, ivec2(0), gSize - 1);
     float d = texelFetch(depthMap, p, 0).r;
-    if (d == sk_depth.y)
+    if (d == sk_far_depth)
     {
-        return NO_SURFACE;
+        pos = vec3(0.0);
+        return false;
     }
-    // A solid the cut goes through stands to the cut.
-    vec4 cls = texelFetch(classMap, p, 0);
-    if (cls.g > 0.5 && cls.a > 0.5)
-    {
-        return sk_depth.z;
-    }
-    return mix(sk_depth.z, sk_depth.w, (d - sk_depth.x) / (sk_depth.y - sk_depth.x));
+    vec2 uv = (vec2(p) + 0.5) / vec2(gSize);
+    vec4 ndc = vec4(uv * 2.0 - 1.0, mix(d * 2.0 - 1.0, d, sk_zo), 1.0);
+    vec4 w = sk_inv_vp * ndc;
+    pos = w.xyz / w.w;
+    return true;
+}
+
+int codeAt(ivec2 p)
+{
+    p = clamp(p, ivec2(0), gSize - 1);
+    return int(texelFetch(classMap, p, 0).r * 255.0 + 0.5);
+}
+
+bool isCensus(int code)
+{
+    return code >= CODE_FLOOR && code <= CODE_SECTION;
 }
 
 void main()
 {
     gSize = textureSize(depthMap, 0);
     ivec2 p = ivec2(gl_FragCoord.xy);
-    float z = heightAt(p);
-    if (z == NO_SURFACE)
+    vec3 pos;
+    if (!surfaceAt(p, pos))
     {
         frag_color = vec4(0.0);
         return;
     }
     vec4 cls = texelFetch(classMap, p, 0);
-    bool object = cls.g > 0.5;
-    bool terrain = !object && cls.r > 0.5;
+    int code = int(cls.r * 255.0 + 0.5);
     bool invisible = cls.b > 0.5;
-    float rel = z - sk_agent_z;
+    float rel = pos.z - sk_agent_z;
 
-    // Base: terrain green, object floors grey, water over anything below its surface.
-    vec3 c = terrain ? sk_terrain : sk_floor;
-    float a = 0.72;
-    if (rel > FULL_COVER_M)
+    // The normal from the nearer neighbour on each axis, so a silhouette does not bend it.
+    vec3 px0, px1, py0, py1;
+    bool hx0 = surfaceAt(p - ivec2(1, 0), px0), hx1 = surfaceAt(p + ivec2(1, 0), px1);
+    bool hy0 = surfaceAt(p - ivec2(0, 1), py0), hy1 = surfaceAt(p + ivec2(0, 1), py1);
+    vec3 dx0 = hx0 ? pos - px0 : vec3(1e6), dx1 = hx1 ? px1 - pos : vec3(1e6);
+    vec3 dy0 = hy0 ? pos - py0 : vec3(1e6), dy1 = hy1 ? py1 - pos : vec3(1e6);
+    vec3 dx = dot(dx0, dx0) < dot(dx1, dx1) ? dx0 : dx1;
+    vec3 dy = dot(dy0, dy0) < dot(dy1, dy1) ? dy0 : dy1;
+    vec3 n = cross(dx, dy);
+    n = dot(n, n) > 1e-12 && dot(dx, dx) < 1e5 && dot(dy, dy) < 1e5 ? normalize(n) : vec3(0.0, 0.0, 1.0);
+    if (dot(n, sk_eye - pos) < 0.0)
     {
-        c = sk_wall_full;
-        a = 0.9;
+        n = -n;
     }
-    else if (rel > HALF_COVER_M)
+
+    vec3 c;
+    float a;
+    bool flat_kind = false;
+    if (code == CODE_TERRAIN)
+    {
+        c = sk_terrain;
+        a = 0.72;
+        flat_kind = true;
+    }
+    else if (code == CODE_FLOOR || code == CODE_RAMP)
+    {
+        c = code == CODE_RAMP ? mix(sk_floor, sk_wall_half, 0.35) : sk_floor;
+        a = 0.85;
+        flat_kind = true;
+    }
+    else if (code == CODE_WALL || code == CODE_SECTION)
+    {
+        c = code == CODE_SECTION ? sk_wall_full * 0.85 : sk_wall_full;
+        a = 0.92;
+    }
+    else if (code == CODE_COVER)
     {
         c = sk_wall_half;
-        a = 0.85;
+        a = 0.9;
+    }
+    else if (code == CODE_DOOR)
+    {
+        c = sk_door;
+        a = 0.95;
+    }
+    else if (code == CODE_LADDER)
+    {
+        c = sk_ladder;
+        a = 0.95;
+    }
+    else if (code == CODE_VEHICLE)
+    {
+        c = sk_vehicle;
+        a = 0.92;
     }
     else
     {
-        // Storeys below fade darker, a little per metre, as the floorplan's ramp gradient does.
+        // Ghost: rendered geometry the census does not hold. Straight down, its tops by height read as cover as they
+        // always have; tilted, it is a faint tint and its outlines.
+        c = sk_ghost;
+        a = code == CODE_GHOST_SECTION ? 0.4 : 0.22;
+        if (sk_top_down > 0.5)
+        {
+            if (code == CODE_GHOST_SECTION || rel > FULL_COVER_M)
+            {
+                c = sk_wall_full;
+                a = 0.6;
+            }
+            else if (rel > HALF_COVER_M)
+            {
+                c = sk_wall_half;
+                a = 0.55;
+            }
+            else
+            {
+                c = sk_floor;
+                a = 0.45;
+                flat_kind = true;
+            }
+        }
+    }
+
+    // Floors by height: storeys below fade darker, a little per metre.
+    if (flat_kind)
+    {
         c *= clamp(1.0 + rel * 0.04, 0.45, 1.15);
     }
-    if (z < sk_water_z)
+    // Faces turn to a light from the north-west and above, so walls read in the tilted view.
+    c *= mix(0.72, 1.08, clamp(dot(n, normalize(LIGHT)) * 0.5 + 0.5, 0.0, 1.0));
+
+    if (pos.z < sk_water_z && (flat_kind || code == CODE_NONE))
     {
-        float t = clamp((sk_water_z - z) / sk_water_depth, 0.0, 1.0);
+        float t = clamp((sk_water_z - pos.z) / sk_water_depth, 0.0, 1.0);
         vec3 w = mix(sk_water_shallow, sk_water_deep, t);
         c = mix(c, w, mix(0.55, 0.85, t));
     }
-
-    // Edges and wall shading from the height field around the texel.
-    float r = max(1.0, 0.25 / sk_mpp);
-    float step_max = 0.0;
-    float above = 0.0;
-    for (int i = 0; i < 8; ++i)
-    {
-        float ang = float(i) * 0.785398;
-        ivec2 o = ivec2(round(vec2(cos(ang), sin(ang)) * r));
-        float n = heightAt(p + o);
-        float dz = (n == NO_SURFACE) ? 10.0 : n - z;
-        step_max = max(step_max, abs(dz));
-        // Taller neighbours a little further out shade the floor beside them.
-        float n2 = heightAt(p + o * 3);
-        float dz2 = (n2 == NO_SURFACE) ? 0.0 : n2 - z;
-        above += clamp(dz2 / 2.0, 0.0, 1.0);
-    }
-    if (rel <= HALF_COVER_M)
-    {
-        c *= 1.0 - 0.35 * (above / 8.0);
-    }
-    if (terrain && floor(z / CONTOUR_M) != floor(heightAt(p + ivec2(1, 0)) / CONTOUR_M))
+    if (code == CODE_TERRAIN && floor(pos.z / CONTOUR_M) != floor((hx1 ? px1.z : pos.z) / CONTOUR_M))
     {
         c = mix(c, vec3(0.85, 0.88, 0.80), 0.3);
     }
-    if (step_max > EDGE_M)
+
+    // Outlines: a neighbour off this texel's plane by more than its footprint allows, a crease, or a class change.
+    float dist = length(sk_eye - pos);
+    float tol = 0.12 + 0.012 * dist;
+    float edge = 0.0;
+    bool census_here = isCensus(code);
+    for (int i = 0; i < 4; ++i)
     {
-        c = mix(c, vec3(0.08, 0.09, 0.10), 0.6);
-        a = max(a, 0.9);
+        ivec2 o = i == 0 ? ivec2(1, 0) : i == 1 ? ivec2(-1, 0) : i == 2 ? ivec2(0, 1) : ivec2(0, -1);
+        vec3 q;
+        if (!surfaceAt(p + o, q))
+        {
+            edge = 1.0;
+            continue;
+        }
+        if (abs(dot(q - pos, n)) > tol)
+        {
+            edge = max(edge, 1.0);
+        }
+        int qc = codeAt(p + o);
+        if (qc != code && (census_here || isCensus(qc)))
+        {
+            edge = max(edge, 0.7);
+        }
+    }
+    if (edge > 0.0)
+    {
+        if (census_here || code == CODE_TERRAIN)
+        {
+            c = mix(c, INK, 0.6 * edge);
+            a = max(a, 0.9);
+        }
+        else
+        {
+            // The ghost is its outlines: light lines over the dark.
+            c = mix(c, sk_ghost * 1.2, 0.8 * edge);
+            a = max(a, 0.65 * edge);
+        }
     }
     if (invisible && mod(gl_FragCoord.x + gl_FragCoord.y, 6.0) < 2.0)
     {
         c = sk_invisible;
         a = 0.9;
     }
-    frag_color = vec4(c, a);
+    frag_color = vec4(clamp(c, 0.0, 1.0), a);
 }

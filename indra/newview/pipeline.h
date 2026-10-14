@@ -144,8 +144,9 @@ public:
     U32 skRenderOutlineCoverage(LLSpatialBridge* bridge, const LLMatrix4a& view, const LLMatrix4a& proj, LLCamera& camera, F32 alpha_cutoff,
                                 const std::function<bool(const LLDrawInfo*)>& skip = nullptr);
     // </SK:Nexii>
-    // <SK:Nexii> overview capture: the world from above, depth-only, with terrain, objects and invisible faces flagged in R, G and B; returns the draws made.
-    U32 skRenderOverview(const LLMatrix4a& view, const LLMatrix4a& proj, LLCamera& camera);
+    // <SK:Nexii> overview capture: terrain, then rendered geometry when ghost, then census() under the clip program, all below cut_z, a class code per pass in R; returns the draws made.
+    U32 skRenderOverview(const LLMatrix4a& view, const LLMatrix4a& proj, LLCamera& camera, F32 cut_z, bool ghost,
+                         const std::function<void()>& census);
     // </SK:Nexii>
 
     void bindScreenToTexture();

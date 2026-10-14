@@ -5318,7 +5318,7 @@
         <key>SKOverviewCutHeight</key>
         <map>
             <key>Comment</key>
-            <string>Metres above the agent where the top-down capture cuts the world, so ceilings and roofs above do not hide the floor.</string>
+            <string>Metres above the navmesh floor under the agent (or above the agent where there is no mesh) where the overview cuts the world, so ceilings and roofs above do not hide the floor.</string>
             <key>Persist</key>
             <integer>1</integer>
             <key>Type</key>
@@ -5347,6 +5347,61 @@
             <string>U32</string>
             <key>Value</key>
             <integer>1024</integer>
+        </map>
+        <key>SKOverviewGhost</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw the rendered world under the census in the overview as a faint tint with outlines.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKTacticalOverview</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw the overview into the main view from a tilted orbit camera around the agent.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKTacticalDistance</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres from the agent to the tactical overview's camera; the mouse wheel changes it.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>60.0</real>
+        </map>
+        <key>SKTacticalPitch</key>
+        <map>
+            <key>Comment</key>
+            <string>Degrees the tactical overview's camera looks down from the horizon.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>55.0</real>
+        </map>
+        <key>SKTacticalTiltShift</key>
+        <map>
+            <key>Comment</key>
+            <string>Pixels of blur at the top and bottom edges of the tactical overview, 0 for none.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>4.0</real>
         </map>
         <!-- </SK:Nexii> -->
         <key>SKMapLayerFloorplan</key>
