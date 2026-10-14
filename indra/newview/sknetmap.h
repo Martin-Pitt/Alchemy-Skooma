@@ -138,6 +138,8 @@ private:
     /// The view for this frame: the agent plus the pan, the zoom, the rotation.
     void updateView();
     void drawPlan();
+    /// The top-down capture as the base, in place of terrain, objects and floorplan; false when it is off or not ready.
+    bool drawCaptureBase(F32 alpha);
     void drawTerrain();
     void drawSelf();
     void drawSelfExtras();
