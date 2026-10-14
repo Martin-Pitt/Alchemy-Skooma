@@ -141,6 +141,55 @@ bool SKNavWorldView::spaceAt(const LLVector3d& pos, SpaceId& out) const
     return true;
 }
 
+bool SKNavWorldView::airGapAt(const LLVector3d& pos, SpaceId& space, Enclosure& gap) const
+{
+    const Mesh* best = nullptr;
+    Enclosure found;
+    for (const Mesh& m : mMeshes)
+    {
+        if (!m.mProduct || pos.mdV[VX] < m.mMin.mdV[VX] || pos.mdV[VY] < m.mMin.mdV[VY] || pos.mdV[VX] >= m.mMax.mdV[VX] ||
+            pos.mdV[VY] >= m.mMax.mdV[VY])
+        {
+            continue;
+        }
+        const LLVector3 local(pos - m.mOrigin);
+        Enclosure e;
+        const bool held = m.mProduct->enclosureAt(local, e);
+        if (!held || (!e.mSpaceId && e.mBucket == EnclosureBucket::INDOORS))
+        {
+            // Below the solid (or the spaceless pocket) holding the point: the highest gap in a space whose ceiling is under it.
+            bool below = false;
+            m.mProduct->gapsAt(local.mV[VX], local.mV[VY], [&](const Enclosure& g) {
+                if (g.mSpaceId && g.mCeiling <= local.mV[VZ] && (!below || g.mFloor > e.mFloor))
+                {
+                    e = g;
+                    below = true;
+                }
+            });
+            if (!below && !held)
+            {
+                continue;
+            }
+        }
+        e.mFloor += static_cast<F32>(m.mOrigin.mdV[VZ]);
+        e.mCeiling += e.mCeiling > 1e29f ? 0.f : static_cast<F32>(m.mOrigin.mdV[VZ]);
+        const bool known = e.mBucket != EnclosureBucket::UNKNOWN, had = best && found.mBucket != EnclosureBucket::UNKNOWN;
+        if (!best || (known && !had) || (known == had && e.mFloor > found.mFloor))
+        {
+            found = e;
+            best = &m;
+        }
+    }
+    if (!best)
+    {
+        return false;
+    }
+    gap = found;
+    space.mMesh = best->mId;
+    space.mId = found.mSpaceId;
+    return true;
+}
+
 const Space* SKNavWorldView::space(const SpaceId& id, const Mesh** mesh_out) const
 {
     for (const Mesh& m : mMeshes)

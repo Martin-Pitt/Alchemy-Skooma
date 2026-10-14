@@ -84,6 +84,10 @@ public:
 
     /// The space holding pos, as enclosureAt finds its gap; false in none.
     bool spaceAt(const LLVector3d& pos, SpaceId& out) const;
+    /// Where a point is: the air gap holding it, over every mesh as enclosureAt chooses. Inside solid, or in an
+    /// indoor gap in no space, the nearest gap in a space below it in the column. The gap's floor and ceiling are
+    /// global; space.mId is 0 when the gap is in no space. False where no mesh has a gap there.
+    bool airGapAt(const LLVector3d& pos, SpaceId& space, sknav::Enclosure& gap) const;
     /// A space by id, or null. Its positions are relative to its mesh's origin.
     const sknav::Space* space(const SpaceId& id, const Mesh** mesh_out = nullptr) const;
     /// Spaces whose box, and portals whose centre, meet the global box.
