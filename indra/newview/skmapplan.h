@@ -88,7 +88,6 @@ namespace plan
     struct Flight
     {
         bool mStair = true;         ///< else a ramp
-        S32 mTreads = -1;           ///< -1 for a smooth wedge
         LLVector3 mBottom[2];       ///< the flight record's end edges
         LLVector3 mTop[2];
         std::vector<U32> mPolys;

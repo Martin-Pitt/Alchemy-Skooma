@@ -32,16 +32,6 @@ namespace skmap
 {
     namespace
     {
-        S32 floorDiv(S32 a, S32 b)
-        {
-            S32 q = a / b;
-            if ((a % b != 0) && ((a < 0) != (b < 0)))
-            {
-                --q;
-            }
-            return q;
-        }
-
         F64 snapDown(F64 v, F64 step)
         {
             return std::floor(v / step) * step;
@@ -50,74 +40,6 @@ namespace skmap
         F64 snapUp(F64 v, F64 step)
         {
             return std::ceil(v / step) * step;
-        }
-    }
-
-    F32 tierTexel(S32 tier)
-    {
-        return std::ldexp(1.f, tier - 5);
-    }
-
-    F64 tierCellSize(S32 tier)
-    {
-        return static_cast<F64>(CELL_TEXELS) * static_cast<F64>(tierTexel(tier));
-    }
-
-    S32 chooseTier(F32 mpp, S32 current)
-    {
-        const F32 target = llmax(mpp, 1e-6f) * 0.5f;
-        if (current >= TIER_MIN && current <= TIER_MAX)
-        {
-            const F32 texel = tierTexel(current);
-            if (target / (2.f * TIER_HYSTERESIS) < texel && texel <= TIER_HYSTERESIS * target)
-            {
-                return current;
-            }
-        }
-        // The coarsest tier whose texel is no larger than the target.
-        const S32 tier = static_cast<S32>(std::floor(5.f + std::log2(target) + 1e-6f));
-        return llclamp(tier, TIER_MIN, TIER_MAX);
-    }
-
-    LLVector3d CellId::minCorner() const
-    {
-        const F64 size = tierCellSize(mTier);
-        return LLVector3d(mX * size, mY * size, 0.0);
-    }
-
-    LLVector3d CellId::maxCorner() const
-    {
-        const F64 size = tierCellSize(mTier);
-        return LLVector3d((mX + 1) * size, (mY + 1) * size, 0.0);
-    }
-
-    CellId CellId::ancestor(S32 tier) const
-    {
-        if (tier <= mTier)
-        {
-            return *this;
-        }
-        const S32 scale = 1 << (tier - mTier);
-        return { tier, floorDiv(mX, scale), floorDiv(mY, scale) };
-    }
-
-    CellId cellAt(S32 tier, F64 x, F64 y)
-    {
-        const F64 size = tierCellSize(tier);
-        return { tier, static_cast<S32>(std::floor(x / size)), static_cast<S32>(std::floor(y / size)) };
-    }
-
-    void cellsInBox(S32 tier, const LLVector3d& min, const LLVector3d& max, std::vector<CellId>& out)
-    {
-        out.clear();
-        const CellId lo = cellAt(tier, min.mdV[VX], min.mdV[VY]);
-        const CellId hi = cellAt(tier, max.mdV[VX], max.mdV[VY]);
-        for (S32 y = lo.mY; y <= hi.mY; ++y)
-        {
-            for (S32 x = lo.mX; x <= hi.mX; ++x)
-            {
-                out.push_back({ tier, x, y });
-            }
         }
     }
 
@@ -139,29 +61,9 @@ namespace skmap
         max.set(snapUp(x1, ANALYSIS_SNAP_M), snapUp(y1, ANALYSIS_SNAP_M), 1.0e5);
     }
 
-    LLVector3d analysisOrigin(const LLVector3d& min, const LLVector3d* last)
-    {
-        if (last && std::fabs(min.mdV[VX] - last->mdV[VX]) <= ANALYSIS_ORIGIN_DRIFT_M
-            && std::fabs(min.mdV[VY] - last->mdV[VY]) <= ANALYSIS_ORIGIN_DRIFT_M)
-        {
-            return LLVector3d(last->mdV[VX], last->mdV[VY], 0.0);
-        }
-        return LLVector3d(min.mdV[VX], min.mdV[VY], 0.0);
-    }
-
     F32 zoomByNotches(F32 span, F32 notches)
     {
         return llclamp(span * std::pow(ZOOM_STEP, notches), ZOOM_MIN_M, ZOOM_MAX_M);
-    }
-
-    S32 zoomBucket(F32 mpp)
-    {
-        return static_cast<S32>(std::floor(std::log(llmax(mpp, 1e-6f)) / std::log(ZOOM_STEP) + 0.5f));
-    }
-
-    F32 bucketMpp(S32 bucket)
-    {
-        return std::pow(ZOOM_STEP, static_cast<F32>(bucket));
     }
 
     void MapView::set(const LLVector3d& centre, F32 span, F32 rotation, F32 width, F32 height)

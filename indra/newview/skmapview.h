@@ -1,6 +1,6 @@
 /**
  * @file skmapview.h
- * @brief The mini-map's view transform, bake tiers, cells and analysis box: pure maths, no viewer state.
+ * @brief The mini-map's view transform, and analysis box: pure maths, no viewer state.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Alchemy Viewer Source Code
@@ -36,69 +36,21 @@ namespace skmap
     constexpr F32 ZOOM_MIN_M = 4.f;         ///< the shortest span the map shows
     constexpr F32 ZOOM_MAX_M = 2048.f;     ///< eight regions; the floorplan reaches only its analysis box, region tiles beyond
     constexpr F32 ZOOM_DEFAULT_M = 128.f;
-    constexpr F32 ZOOM_STEP = 1.1f;         ///< per wheel notch, and the ribbon bucket ratio
-
-    constexpr S32 TIER_MIN = 0;
-    constexpr S32 TIER_MAX = 6;
-    constexpr S32 CELL_TEXELS = 256;
-    constexpr F32 TIER_HYSTERESIS = 1.15f;
+    constexpr F32 ZOOM_STEP = 1.1f;         ///< per wheel notch
 
     constexpr F64 ANALYSIS_SNAP_M = 64.0;
     constexpr F64 ANALYSIS_MARGIN_M = 32.0;
     constexpr F64 ANALYSIS_REACH_M = 256.0; ///< half the widest span along the short side
     constexpr F64 ANALYSIS_JOIN_M = 256.0;  ///< the agent shares the box only while this close to the map centre in plan
-    /// The scene origin stays while the box's minimum is this close to it on each axis: the box's scene-local metres
-    /// then stay under 1664, a 2:1 map's 1408 m box plus the drift, in the binade that box already reaches (1/8192 m).
-    constexpr F64 ANALYSIS_ORIGIN_DRIFT_M = 256.0;
 
-    /// A tier's texel in metres: 1/32 m at tier 0 to 2 m at tier 6.
-    F32 tierTexel(S32 tier);
-    /// A tier's cell side in metres: 256 texels, 8 m to 512 m.
-    F64 tierCellSize(S32 tier);
-
-    /// The tier for a map scale, keeping the current one inside a 15% margin either way.
-    /// mpp is metres per screen pixel; the target texel is half of it.
-    S32 chooseTier(F32 mpp, S32 current);
-
-    /// One bake cell on the global grid of its tier.
-    struct CellId
-    {
-        S32 mTier = 0;
-        S32 mX = 0;
-        S32 mY = 0;
-        bool operator==(const CellId& o) const { return mTier == o.mTier && mX == o.mX && mY == o.mY; }
-        bool operator!=(const CellId& o) const { return !(*this == o); }
-        bool operator<(const CellId& o) const
-        {
-            return mTier != o.mTier ? mTier < o.mTier : mX != o.mX ? mX < o.mX : mY < o.mY;
-        }
-        LLVector3d minCorner() const;
-        LLVector3d maxCorner() const;
-        /// The cell of a coarser tier that holds this one.
-        CellId ancestor(S32 tier) const;
-    };
-
-    /// The cell of a tier holding a global position.
-    CellId cellAt(S32 tier, F64 x, F64 y);
-    /// Every cell of the tier that meets the global box, row by row.
-    void cellsInBox(S32 tier, const LLVector3d& min, const LLVector3d& max, std::vector<CellId>& out);
-
-    /// The box the scene is analysed over: the agent and the map centre, each with the widest
+    /// The box the map holds the navmesh over: the agent and the map centre, each with the widest
     /// view and a margin around it, snapped outward to 64 m. It depends on the two positions and
     /// the widget's aspect only, never on the zoom.
     void analysisBox(const LLVector3d& agent, const LLVector3d& centre, F32 long_side_px, F32 short_side_px, LLVector3d& min,
                      LLVector3d& max);
 
-    /// Where a box's scene-local metres start: the last scene's origin while the box's minimum stays within
-    /// ANALYSIS_ORIGIN_DRIFT_M of it, else the minimum, z 0. A re-snap that keeps the origin keeps every unchanged
-    /// polygon's local coordinates to the bit, so the next build can take what they made from the last one.
-    LLVector3d analysisOrigin(const LLVector3d& min, const LLVector3d* last);
-
     /// A span after wheel notches, ×1.1 each, clamped to 4..2048 m. Positive notches zoom out.
     F32 zoomByNotches(F32 span, F32 notches);
-    /// The ×1.1 bucket a scale falls in, and back: ribbons are rebuilt only when it moves.
-    S32 zoomBucket(F32 mpp);
-    F32 bucketMpp(S32 bucket);
 
     /// Global metres to widget pixels and back. Pixels are GL style, origin bottom left; the
     /// map centre sits in the middle of the widget. Rotation turns the world counter-clockwise

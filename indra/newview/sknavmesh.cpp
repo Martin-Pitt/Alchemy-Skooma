@@ -3422,7 +3422,7 @@ bool SKNavMesh::storeyAt(const LLVector3d& pos, LLUUID& mesh_out, S32& storey_ou
     {
         return false;
     }
-    const StoreyProductPtr st = storeys(mesh->mId);
+    const StoreyProductPtr st = storeysLatest(mesh->mId);
     const SpaceQueryFilter filter([this](const dtMeshTile* t) { return polySpaces(t); });
     const dtPolyRef ref = nearestPoly(*mesh->mQuery[c], mesh->mOrigin, pos, filter);
     storey_out = st && ref ? st->storeyOfPoly(static_cast<U64>(ref)) : -1;

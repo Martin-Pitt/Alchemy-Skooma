@@ -168,7 +168,8 @@ public:
     /// A mesh's storeys over its published polys, rebuilt after a publish; null for no mesh.
     /// Positions in it are relative to the mesh's origin.
     sknav::StoreyProductPtr storeys(const LLUUID& mesh) const;
-    /// The storey under a global position, by index into storeys(mesh_out); false on a flight or off the mesh.
+    /// The storey under a global position, by index into storeysLatest(mesh_out); false on a flight, off the mesh
+    /// or before its storeys are first built. Never builds on this thread.
     bool storeyAt(const LLVector3d& pos, LLUUID& mesh_out, S32& storey_out) const;
     /// AVATAR's wall runs (sknavwallruns.h) of every tile meeting the box, mesh-local, with
     /// the mesh origin they are relative to, the tile's key and its polys' storeys' mesh.

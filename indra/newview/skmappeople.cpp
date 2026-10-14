@@ -45,7 +45,6 @@
 #include "pipeline.h"
 #include "lljoint.h"
 #include "skmappalette.h"
-#include "skmapscene.h"
 #include "sknetmap.h"
 #include "sknavmesh.h"
 #include "skworldcensus.h"
@@ -58,6 +57,9 @@ namespace
     constexpr F64 CAMERA_STOREY_BELOW_M = 1.0; ///< or this far under it
     constexpr F64 CAMERA_EYE_M = 1.0;          ///< an avatar's position sits about this far under its eyes
     constexpr F32 PEOPLE_REACH_M = 1024.f;
+    constexpr F64 FLOOR_SAME_M = 2.0;          ///< navmesh floors closer than this are one floor
+    constexpr F64 FLOOR_RAW_M = 2.5;           ///< raw heights closer than this are one floor
+    constexpr F64 FLOOR_REREAD_M = 0.25;       ///< a person moved this far has their floor read again
 }
 
 SKMapPeople::SKMapPeople()
@@ -546,6 +548,27 @@ void SKMapPeople::updateCandidates()
                       << mCandidates.size() << " ally groups" << LL_ENDL;
 }
 
+SKMapPeople::NavFloor SKMapPeople::navFloor(const LLVector3d& pos) const
+{
+    NavFloor out;
+    if (!SKNavMesh::instanceExists())
+    {
+        return out;
+    }
+    const SKNavMesh& nav = SKNavMesh::instance();
+    out.mFound = nav.floorUnder(pos, sknav::AgentClass::AVATAR, out.mZ, &out.mMesh);
+    if (out.mFound)
+    {
+        LLUUID mesh;
+        S32 storey = -1;
+        if (nav.storeyAt(pos, mesh, storey) && mesh == out.mMesh)
+        {
+            out.mStorey = storey;
+        }
+    }
+    return out;
+}
+
 void SKMapPeople::gatherPeople()
 {
     LL_PROFILE_ZONE_SCOPED;
@@ -556,33 +579,26 @@ void SKMapPeople::gatherPeople()
     std::vector<LLVector3d> positions;
     LLWorld::getInstance()->getAvatars(&ids, &positions, agent, PEOPLE_REACH_M);
 
-    // Floors from the scene when there is one; the raw height difference otherwise.
-    const skmap::ScenePtr scene = SKMapScene::instanceExists() ? SKMapScene::instance().scene() : nullptr;
+    // Floors from the navmesh where it has one, the raw height difference otherwise.
+    const U64 revision = SKNavMesh::instanceExists() ? SKNavMesh::instance().revision() : 0;
+    if (revision != mFloorsRevision)
+    {
+        mFloors.clear();
+        mFloorsRevision = revision;
+    }
+    if (mFloors.size() > 2 * ids.size() + 64)
+    {
+        mFloors.clear();    // people who left
+    }
     // Floors are told from the camera: the agent's floor while the camera is on its storey, the camera's own otherwise.
     const LLVector3d camera = gAgentCamera.getCameraPositionGlobal();
-    const bool scene_floor = scene && SKMapScene::instance().agentFloorCurrent();
-    skmap::AgentFloor reference;
-    if (scene_floor)
-    {
-        reference = SKMapScene::instance().agentFloor();
-    }
-    else
-    {
-        reference.mPos = agent;
-    }
+    LLVector3d reference_pos = agent;
+    NavFloor reference = navFloor(agent);
     const F64 eye_above = camera.mdV[VZ] - (reference.mFound ? reference.mZ : agent.mdV[VZ]);
     if (eye_above < -CAMERA_STOREY_BELOW_M || eye_above > CAMERA_STOREY_ABOVE_M)
     {
-        reference = skmap::AgentFloor();
-        reference.mPos = camera - LLVector3d(0.0, 0.0, CAMERA_EYE_M);
-        reference.mFloorPos = reference.mPos;
-        if (scene_floor)
-        {
-            const skmap::FloorHit hit = skmap::floorAt(*scene, camera, 2.5f, 0.5f);
-            reference.mFound = hit.mFound;
-            reference.mLayer = hit.mLayer;
-            reference.mZ = hit.mZ;
-        }
+        reference_pos = camera - LLVector3d(0.0, 0.0, CAMERA_EYE_M);
+        reference = navFloor(reference_pos);
     }
     // The probe sees loaded avatars nearest first, so the nearest are asked about first.
     if (mCombat)
@@ -657,16 +673,27 @@ void SKMapPeople::gatherPeople()
         {
             p.mFloor = skmap::FloorRelation::UNKNOWN;
         }
-        else if (scene_floor)
-        {
-            p.mFloor = skmap::floorRelation(*scene, reference, p.mPos, true);
-        }
         else
         {
-            const F64 dz = p.mPos.mdV[VZ] - reference.mPos.mdV[VZ];
-            p.mFloor = dz >= skmap::FLOOR_RAW_M ? skmap::FloorRelation::ABOVE
-                     : dz <= -skmap::FLOOR_RAW_M ? skmap::FloorRelation::BELOW
-                                                 : skmap::FloorRelation::SAME;
+            // The floor under them, read again only once they move.
+            auto it = mFloors.find(p.mId);
+            if (it == mFloors.end() || dist_vec_squared(it->second.first, p.mPos) > FLOOR_REREAD_M * FLOOR_REREAD_M)
+            {
+                it = mFloors.insert_or_assign(p.mId, std::make_pair(p.mPos, navFloor(p.mPos))).first;
+            }
+            const NavFloor& floor = it->second.second;
+            F64 dz = p.mPos.mdV[VZ] - reference_pos.mdV[VZ];
+            F64 band = FLOOR_RAW_M;
+            if (floor.mFound && reference.mFound)
+            {
+                dz = floor.mZ - reference.mZ;
+                band = FLOOR_SAME_M;
+                if (floor.mStorey >= 0 && floor.mStorey == reference.mStorey && floor.mMesh == reference.mMesh)
+                {
+                    dz = 0.0;
+                }
+            }
+            p.mFloor = dz >= band ? skmap::FloorRelation::ABOVE : dz <= -band ? skmap::FloorRelation::BELOW : skmap::FloorRelation::SAME;
         }
         if (avatar_colours)
         {
