@@ -142,6 +142,8 @@ private:
     void drawSelf();
     void drawSelfExtras();
     void drawPeople();
+    /// Chevrons on the edge pointing to people off the map, on a circle of radius mEdgeCircle when it is set.
+    void drawEdgeChevrons();
     /// The allies' codes on their dots, drawn after the classic matrix block as all text is.
     void drawPeopleCodes();
     void drawVehicles();
@@ -180,6 +182,7 @@ private:
     std::unique_ptr<SKMapParcels> mParcels;
     std::vector<DrawnDot> mDots;
     std::vector<skmap::FloorRelation> mFloorOf;    ///< per person of SKMapPeople::people(), set by collectDots
+    F32 mEdgeCircle = 0.f;      ///< the mouselook overlay's visible radius, 0 for the floater's rectangle
     std::vector<skmap::EventRing::Draw> mEventDraws;   ///< reused each frame
     bool mHovered = false;
     bool mChrome = false;

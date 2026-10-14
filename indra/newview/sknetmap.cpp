@@ -328,6 +328,8 @@ void SKNetMap::draw()
     {
         LLLocalClipRect clip(getLocalRect());
         drawPeople();
+        mEdgeCircle = 0.f;
+        drawEdgeChevrons();
         drawTracking();
         drawNorth();
         drawChromeFrame();
@@ -385,6 +387,13 @@ void SKNetMap::drawOverlay(OverlayLayer layer, F32 span, F32 rotation, F32 side,
             drawVehicles();
             collectDots();
             drawPeople();
+            {
+                // Inside the overlay's outer fade, where a marker still shows at about two thirds.
+                static LLCachedControl<F32> outer_fade(gSavedSettings, "SKMapMLOuterFade", 0.38f);
+                mEdgeCircle = side * 0.45f * (1.f - llclamp(static_cast<F32>(outer_fade), 0.05f, 1.f) * 0.65f);
+                drawEdgeChevrons();
+                mEdgeCircle = 0.f;
+            }
             break;
         case OverlayLayer::SELF:
             drawSelf();
@@ -951,6 +960,123 @@ void SKNetMap::drawPeople()
             const LLVector2 left = at + LLVector2(-half, -sign * dy), apex = at + LLVector2(0.f, sign * dy), right = at + LLVector2(half, -sign * dy);
             skmapdraw::line(left, apex, skmap::palette::CHEVRON_STROKE_PX);
             skmapdraw::line(apex, right, skmap::palette::CHEVRON_STROKE_PX);
+        }
+    }
+    gGL.end();
+}
+
+void SKNetMap::drawEdgeChevrons()
+{
+    static LLCachedControl<bool> show(gSavedSettings, "SKMapEdgeChevrons", true);
+    if (!show)
+    {
+        return;
+    }
+    using namespace skmap::palette;
+    const LLVector2 mid(mView.width() * 0.5f, mView.height() * 0.5f);
+    const F32 ppm = llmax(mView.pixelsPerMetre(), 1e-4f);
+    const F32 half_x = mid.mV[VX] - EDGE_CHEVRON_INSET_PX, half_y = mid.mV[VY] - EDGE_CHEVRON_INSET_PX;
+    const F32 circle = mEdgeCircle - EDGE_CHEVRON_INSET_PX;
+    if (half_x <= 0.f || half_y <= 0.f || (mEdgeCircle > 0.f && circle <= 0.f))
+    {
+        return;
+    }
+
+    struct Edge
+    {
+        LLVector2 mAt;          ///< on the inset edge
+        LLVector2 mDir;         ///< unit, from the centre towards the person
+        F32 mAngle;
+        F32 mBeyondPx;          ///< how far past the edge the person is
+        F32 mAlpha;
+        LLColor4 mColour;
+    };
+    std::vector<Edge> edges;
+    for (const SKMapPeople::Person& p : SKMapPeople::instance().people())
+    {
+        const LLVector2 at = mView.toWidget(p.mPos);
+        LLVector2 dir = at - mid;
+        const F32 dist = dir.normVec();
+        if (dist < 1e-3f)
+        {
+            continue;
+        }
+        // Where the line from the centre meets the map's inset shape; nobody still on the map.
+        F32 reach = circle;
+        if (mEdgeCircle > 0.f)
+        {
+            if (dist <= mEdgeCircle)
+            {
+                continue;
+            }
+        }
+        else
+        {
+            if (at.mV[VX] >= 0.f && at.mV[VY] >= 0.f && at.mV[VX] <= mView.width() && at.mV[VY] <= mView.height())
+            {
+                continue;
+            }
+            reach = F32_MAX;
+            if (std::fabs(dir.mV[VX]) > 1e-6f)
+            {
+                reach = llmin(reach, half_x / std::fabs(dir.mV[VX]));
+            }
+            if (std::fabs(dir.mV[VY]) > 1e-6f)
+            {
+                reach = llmin(reach, half_y / std::fabs(dir.mV[VY]));
+            }
+        }
+        const F32 beyond = llmax(0.f, dist - reach);
+        const F32 fade = llclamp(beyond / ppm / EDGE_CHEVRON_FADE_M, 0.f, 1.f);
+        // Allies in combat are cyan, as their dots are.
+        const LLColor4 colour = p.mVisibility == skmap::Visibility::DOT_CODED ? LLColor4(DOT_COMBAT.mR, DOT_COMBAT.mG, DOT_COMBAT.mB, 1.f)
+                                                                              : LLColor4(p.mColour.mV[0], p.mColour.mV[1], p.mColour.mV[2], 1.f);
+        edges.push_back({ mid + dir * reach, dir, std::atan2(dir.mV[VY], dir.mV[VX]), beyond, 1.f - (1.f - EDGE_CHEVRON_FADE_MIN) * fade, colour });
+    }
+    if (edges.empty())
+    {
+        return;
+    }
+
+    // Round the edge in order; neighbours closer than the cluster spacing stack, the nearest person outermost.
+    std::sort(edges.begin(), edges.end(), [](const Edge& a, const Edge& b) { return a.mAngle < b.mAngle; });
+    std::vector<std::vector<size_t>> clusters;
+    for (size_t i = 0; i < edges.size(); ++i)
+    {
+        if (!clusters.empty() && dist_vec(edges[clusters.back().front()].mAt, edges[i].mAt) < EDGE_CHEVRON_CLUSTER_PX)
+        {
+            clusters.back().push_back(i);
+        }
+        else
+        {
+            clusters.push_back({ i });
+        }
+    }
+    if (clusters.size() > 1 && dist_vec(edges[clusters.front().front()].mAt, edges[clusters.back().front()].mAt) < EDGE_CHEVRON_CLUSTER_PX)
+    {
+        clusters.front().insert(clusters.front().end(), clusters.back().begin(), clusters.back().end());
+        clusters.pop_back();
+    }
+
+    gGL.begin(LLRender::TRIANGLES);
+    for (std::vector<size_t>& cluster : clusters)
+    {
+        std::sort(cluster.begin(), cluster.end(), [&edges](size_t a, size_t b) { return edges[a].mBeyondPx < edges[b].mBeyondPx; });
+        const Edge& lead = edges[cluster.front()];
+        const LLVector2 across(-lead.mDir.mV[VY], lead.mDir.mV[VX]);
+        const S32 stack = llmin(static_cast<S32>(cluster.size()), EDGE_CHEVRON_MAX_STACK);
+        for (S32 k = stack - 1; k >= 0; --k)
+        {
+            const Edge& e = edges[cluster[k]];
+            const LLVector2 tip = lead.mAt - lead.mDir * (EDGE_CHEVRON_STACK_PX * k);
+            const LLVector2 back = tip - lead.mDir * EDGE_CHEVRON_DEPTH_PX;
+            const LLVector2 left = back + across * EDGE_CHEVRON_HALF_PX, right = back - across * EDGE_CHEVRON_HALF_PX;
+            skmapdraw::colour(EDGE_CHEVRON_CASING, e.mAlpha);
+            skmapdraw::line(left, tip, EDGE_CHEVRON_CASING_PX);
+            skmapdraw::line(tip, right, EDGE_CHEVRON_CASING_PX);
+            gGL.color4f(e.mColour.mV[0], e.mColour.mV[1], e.mColour.mV[2], e.mAlpha);
+            skmapdraw::line(left, tip, EDGE_CHEVRON_STROKE_PX);
+            skmapdraw::line(tip, right, EDGE_CHEVRON_STROKE_PX);
         }
     }
     gGL.end();
