@@ -35,6 +35,7 @@
 #include "llviewercontrol.h"
 #include "llvertexbuffer.h"
 #include "llviewerregion.h"
+#include "llvoavatarself.h"
 #include "skmaprecorder.h"
 #include "skmapview.h"
 #include "sknavmesh.h"
@@ -780,6 +781,7 @@ struct SKMapComposite::Job
     SnapshotPtr mSnap;
     DataPtr mData;
     SpaceRef mViewer;
+    bool mStanding = false;
     Options mOptions;
     F32 mMpp = 0.f;
     // Out.
@@ -879,7 +881,7 @@ struct SKMapComposite::Job
             }
         }
         t.reset();
-        mSelection = select(*mData, spaceIndex(*mData, mViewer), mOptions);
+        mSelection = select(*mData, spaceIndex(*mData, mViewer), mOptions, mStanding);
         mSelectMs = t.getElapsedTimeF32() * 1000.f;
         t.reset();
         Geometry geom;
@@ -942,6 +944,7 @@ void SKMapComposite::post(const Want& want, const LLVector3d& gmin, const LLVect
         job->mData = mData;
     }
     job->mViewer = want.mViewer;
+    job->mStanding = want.mStanding;
     job->mOptions = want.mOptions;
     job->mMpp = want.mMpp;
     if (mRecord && SKMapRecorder::isRecording())
@@ -1351,27 +1354,42 @@ void SKMapComposite::draw(const skmap::MapView& view, const Overlay* overlay)
     // Where the viewer is: the air gap holding the avatar while the camera follows it, else the camera's focus; a focus
     // with neither air nor navmesh under it falls back to the avatar. Only an indoor gap's space is a current storey.
     const bool on_avatar = SKNetMap::followsAvatar();
-    const LLVector3d focus = on_avatar ? gAgent.getPositionGlobal() : gAgentCamera.getFocusGlobal();
+    LLVector3d focus = on_avatar ? gAgent.getPositionGlobal() : gAgentCamera.getFocusGlobal();
     Whereabouts where = whereabouts(focus);
     F32 vz = static_cast<F32>(focus.mdV[VZ]);
+    bool avatar_point = on_avatar;
     if (!where.mFound && !on_avatar)
     {
-        vz = static_cast<F32>(gAgent.getPositionGlobal().mdV[VZ]);
-        where = whereabouts(gAgent.getPositionGlobal());
+        focus = gAgent.getPositionGlobal();
+        vz = static_cast<F32>(focus.mdV[VZ]);
+        where = whereabouts(focus);
+        avatar_point = true;
     }
     vz = where.mFound ? where.mFloor : vz;
+    // Standing on the gap's floor, not flying over it: the point lies in the gap, no higher above its floor than the
+    // avatar is tall (the agent's position is inside its body, which is the navmesh avatar class's height), and the
+    // avatar, when it is the point, is not flying. A focus point has no flying state; the same body height decides it.
+    bool standing = false;
+    if (where.mFound && isAgentAvatarValid())
+    {
+        const F64 z = focus.mdV[VZ];
+        const F64 above = z - where.mFloor;
+        standing = (!avatar_point || !gAgent.getFlying()) && above >= 0.0 && z < where.mCeiling &&
+                   above <= gAgentAvatarp->mBodySize.mV[VZ];
+    }
     mViewerAt = where;
     Want want;
     want.mDataKey = mDataKey;
     want.mOrigin = want_origin;
     want.mViewer = where.mSpace;
+    want.mStanding = standing;
     want.mOptions = opts;
     want.mMpp = mpp;
     // One job at a time: inputs that move while one runs are taken by the next, so a burst of changes costs one build.
     if (!mJob)
     {
         const bool new_data = !mHasPosted || want.mDataKey != mPosted.mDataKey || (want.mOrigin - mPosted.mOrigin).lengthSquared() > 0.0;
-        if (new_data || want.mViewer != mPosted.mViewer || !(want.mOptions == mPosted.mOptions) || want.mMpp != mPosted.mMpp)
+        if (new_data || want.mViewer != mPosted.mViewer || want.mStanding != mPosted.mStanding || !(want.mOptions == mPosted.mOptions) || want.mMpp != mPosted.mMpp)
         {
             post(want, gmin, gmax, new_data);
         }

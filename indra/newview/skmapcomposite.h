@@ -108,6 +108,7 @@ private:
         U64 mDataKey = 0;
         LLVector3d mOrigin;
         skmap::plan::SpaceRef mViewer;
+        bool mStanding = false;     ///< the viewer stands on its gap's floor rather than flying over it
         skmap::plan::Options mOptions;
         F32 mMpp = 0.f;
     };

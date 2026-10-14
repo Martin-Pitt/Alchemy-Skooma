@@ -206,8 +206,10 @@ namespace plan
         void set(U32 s, F32 r);
     };
 
-    /// The viewer's space (-1 off every space) and which mesh it stands in.
-    Selection select(const Data& data, S32 viewer_space, const Options& opts);
+    /// The viewer's space (-1 off every space) and which mesh it stands in. Standing on an outdoor space off the ground
+    /// level (a deck or balcony), the plan adds that space's outdoor set and the storeys its DOOR and OPENING portals
+    /// lead into, as the ground does with its street entrances.
+    Selection select(const Data& data, S32 viewer_space, const Options& opts, bool standing = false);
 
     /// One vertex of every composite pass: position, colour, then per-pass parameters.
     struct Vertex
@@ -311,6 +313,7 @@ namespace plan
         SpaceRef mSpace;            ///< mId 0 for a gap in no space
         bool mIndoor = false;       ///< the gap's bucket
         F32 mFloor = 0.f;           ///< global
+        F32 mCeiling = 1e30f;       ///< global; 1e30 under open sky or without air
     };
     Whereabouts whereabouts(const LLVector3d& pos);
     /// A space as a Data index, -1 for none. Any thread.

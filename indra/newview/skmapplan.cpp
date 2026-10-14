@@ -36,6 +36,7 @@
 
 #include <cmath>
 #include <map>
+#include <set>
 #include <unordered_set>
 
 using namespace skmap::plan;
@@ -574,7 +575,7 @@ namespace
     }
 }
 
-Selection skmap::plan::select(const Data& d, S32 vs, const Options& opts)
+Selection skmap::plan::select(const Data& d, S32 vs, const Options& opts, bool standing)
 {
     LL_PROFILE_ZONE_NAMED("SKMapPlan.Select");
     Selection sel;
@@ -584,6 +585,9 @@ Selection skmap::plan::select(const Data& d, S32 vs, const Options& opts)
     std::vector<U8> ground_why(ns, 0);
     std::vector<U32> no_storey, roof_gaps;
     const Overlap mode = opts.mOverlap;
+    // Standing on an outdoor space the ground level does not hold: a raised deck or balcony.
+    const bool open_air = vs >= 0 && (d.mSpaces[vs].mBucket == Bucket::OUTDOORS || d.mSpaces[vs].mBucket == Bucket::SHELTERED);
+    const S32 deck = standing && open_air && !d.mGround[vs] ? vs : -1;
     // Outdoors (or nowhere) there is no current storey: the plan is the ground and the buildings by the overlap mode,
     // with nothing highlighted or dimmed. Only an indoor space switches the map to its building's storey.
     if (!d.indoor(vs))
@@ -625,6 +629,63 @@ Selection skmap::plan::select(const Data& d, S32 vs, const Options& opts)
             ground_why[e.first] = !outdoors && (own || !sel.mOnGround);
         }
     }
+    // On a deck: its outdoor set, and through its DOOR and OPENING portals each indoor room's storey, drawn as a street
+    // entrance's storey is (owner ruling 2026-10-14); the deck stays outdoors, so nothing is highlighted or dimmed.
+    std::vector<U64> entered;
+    const auto isEntered = [&](U64 b) { return std::find(entered.begin(), entered.end(), b) != entered.end(); };
+    if (deck >= 0)
+    {
+        std::vector<U8> seen(ns, 0);
+        std::vector<U32> q{ static_cast<U32>(deck) }, open{ static_cast<U32>(deck) };
+        seen[deck] = 1;
+        while (!q.empty())
+        {
+            const U32 c = q.back();
+            q.pop_back();
+            for (U32 n : d.mAdj[c])
+            {
+                if (!seen[n] && !d.indoor(n))
+                {
+                    seen[n] = 1;
+                    open.push_back(n);
+                    q.push_back(n);
+                }
+            }
+        }
+        std::set<std::pair<U64, S32>> storeys;
+        for (U32 s : open)
+        {
+            sel.set(s, 1.f);
+            for (U32 pi : d.mSpaces[s].mPortals)
+            {
+                const Portal& p = d.mPortals[pi];
+                const S32 room = p.mSpaces[0] == static_cast<S32>(s) ? p.mSpaces[1] : p.mSpaces[0];
+                if ((p.mKind != PortalKind::DOOR && p.mKind != PortalKind::OPENING) || !d.indoor(room) || seen[room])
+                {
+                    continue;
+                }
+                seen[room] = 1;
+                const U64 b = d.mSpaces[room].mBuilding;
+                const S32 st = d.mSpaces[room].mStorey;
+                sel.set(room, 1.f);
+                if (b && !isEntered(b))
+                {
+                    entered.push_back(b);
+                }
+                if (st < 0 || !storeys.insert({ b, st }).second)
+                {
+                    continue;
+                }
+                for (U32 m : flood(d, room))
+                {
+                    if (d.indoor(m) && d.mSpaces[m].mBuilding == b && d.mSpaces[m].mStorey == st)
+                    {
+                        sel.set(m, 1.f);
+                    }
+                }
+            }
+        }
+    }
     // Mode c: every other building's roofs, higher covering lower by its storeys' floor order. Modes a/b: a building with
     // no entrance shows its roofs under the ground plan.
     const U64 vb = vs >= 0 ? d.mSpaces[vs].mBuilding : 0;
@@ -632,7 +693,7 @@ Selection skmap::plan::select(const Data& d, S32 vs, const Options& opts)
     {
         const U64 b = br.first;
         const bool closed = mode != Overlap::ROOFS && std::find(d.mNoEntry.begin(), d.mNoEntry.end(), b) != d.mNoEntry.end();
-        if ((vs >= 0 && b == vb) || (mode != Overlap::ROOFS && !closed))
+        if ((vs >= 0 && b == vb) || isEntered(b) || (mode != Overlap::ROOFS && !closed))
         {
             continue;
         }
@@ -757,7 +818,7 @@ Selection skmap::plan::select(const Data& d, S32 vs, const Options& opts)
         std::vector<U8> in(d.mPolys.size(), 0);
         for (const auto& br : d.mRoofsOf)
         {
-            if (vs >= 0 && br.first == vb)
+            if ((vs >= 0 && br.first == vb) || isEntered(br.first))
             {
                 continue;
             }
@@ -1812,6 +1873,7 @@ skmap::plan::Whereabouts skmap::plan::whereabouts(const LLVector3d& pos)
         out.mSpace.mId = id.mId;
         out.mIndoor = gap.mBucket == sknav::EnclosureBucket::INDOORS;
         out.mFloor = gap.mFloor;
+        out.mCeiling = gap.mCeiling;
         return out;
     }
     // No air here yet: the navmesh's own floor.
