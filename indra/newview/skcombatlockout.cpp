@@ -107,7 +107,7 @@ namespace
 
         for (U32 type : LOCKED_RENDER_TYPES)
         {
-            sRenderTypes[type] = gPipeline.hasRenderType(type);
+            sRenderTypes[type] = gPipeline.isRenderTypeEnabled(type);
             if (!sRenderTypes[type])
             {
                 gPipeline.setRenderTypeMask(type, LLPipeline::END_RENDER_TYPES);
@@ -250,5 +250,5 @@ bool SKCombatLockout::hasRenderType(U32 type)
     {
         return sRenderTypes[type];
     }
-    return gPipeline.hasRenderType(type);
+    return gPipeline.isRenderTypeEnabled(type);
 }
