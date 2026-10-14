@@ -797,6 +797,8 @@ void LLKeyConflictHandler::generatePlaceholders(ESourceMode load_mode)
         // First person view doesn't support camera controls
         // Note: might be better idea to just load these from control_table_contents_camera.xml
         // or to pass from floaterpreferences when it loads said file
+        // <SK:Nexii> combat/ots: camera actions stay bindable in first person, unbound by default
+        /*
         registerTemporaryControl("look_up");
         registerTemporaryControl("look_down");
         registerTemporaryControl("move_forward");
@@ -813,6 +815,8 @@ void LLKeyConflictHandler::generatePlaceholders(ESourceMode load_mode)
         registerTemporaryControl("pan_out");
         registerTemporaryControl("spin_around_ccw");
         registerTemporaryControl("spin_around_cw");
+        */
+        // </SK:Nexii>
 
         // control_table_contents_editing.xml
         registerTemporaryControl("edit_avatar_spin_ccw");
