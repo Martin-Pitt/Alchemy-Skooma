@@ -2044,7 +2044,8 @@ bool LLVolume::generate()
 
     if (mParams.getPathParams().getCurveType() == LL_PCODE_PATH_LINE &&
         (mParams.getPathParams().getScale().mV[0] != 1.0f ||
-         mParams.getPathParams().getScale().mV[1] != 1.0f) &&
+         mParams.getPathParams().getScale().mV[1] != 1.0f ||
+         mParams.getPathParams().getTwistBegin() == mParams.getPathParams().getTwist()) && // <SK:Nexii> Untwisted flat sides need no split under per-pixel lighting
         (mParams.getProfileParams().getCurveType() == LL_PCODE_PROFILE_SQUARE ||
          mParams.getProfileParams().getCurveType() == LL_PCODE_PROFILE_ISOTRI ||
          mParams.getProfileParams().getCurveType() == LL_PCODE_PROFILE_EQUALTRI ||
