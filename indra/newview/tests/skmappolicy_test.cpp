@@ -399,5 +399,8 @@ namespace tut
         ensure("a hit restarts it", e.update(true, false, 301.0));
         ensure("held from the hit", e.update(true, false, 539.0));
         ensure("and ends", !e.update(true, false, 540.0));
+        ensure("engaged again", e.update(true, true, 600.0));
+        e.disengage();
+        ensure("a teleport away ends it", !e.update(true, false, 601.0));
     }
 }

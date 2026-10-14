@@ -71,10 +71,14 @@ void SKMapPeople::initSingleton()
     ALObjectPropertiesCache::instance();
     LLGroupMgr::instance();
     gIdleCallbacks.addFunction(&SKMapPeople::onIdle, nullptr);
-    // Every probe record goes with a teleport.
-    mTeleportConnection = LLViewerParcelMgr::getInstance()->setTeleportFinishedCallback([this](const LLVector3d&, const bool&) {
+    // Every probe record goes with a teleport, and combat with one to another region.
+    mTeleportConnection = LLViewerParcelMgr::getInstance()->setTeleportFinishedCallback([this](const LLVector3d&, const bool& local) {
         mResolver.forgetRecords();
         mCodes.clear();
+        if (!local)
+        {
+            mEngagement.disengage();
+        }
     });
 }
 

@@ -50,7 +50,8 @@ namespace skmap
     constexpr F64 ENGAGEMENT_HOLD_S = 240.0;
 
     /// Combat on damage land is earned: mouselook there, or a hit to or from the user, holds it
-    /// for ENGAGEMENT_HOLD_S. Leaving damage land suspends it but does not reset the hold.
+    /// for ENGAGEMENT_HOLD_S. Leaving damage land suspends it but does not reset the hold; a
+    /// teleport to another region does. The user starts in peace.
     class Engagement
     {
     public:
@@ -58,6 +59,8 @@ namespace skmap
         bool update(bool damage_land, bool mouselook, F64 now);
         /// A hit to or from the user.
         void engage(F64 now) { mLast = now; }
+        /// Ends the hold; the next update returns to peace.
+        void disengage() { mLast = -1.0e9; }
         bool combat() const { return mCombat; }
         /// When combat last started or ended, for the brief notice; negative before any change.
         F64 changedAt() const { return mChanged; }
