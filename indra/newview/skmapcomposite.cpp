@@ -25,6 +25,7 @@
 #include "llviewerprecompiledheaders.h"
 
 #include "skmapcomposite.h"
+#include "sknetmap.h"
 
 #include "llagent.h"
 #include "llagentcamera.h"
@@ -989,7 +990,7 @@ void SKMapComposite::draw(const skmap::MapView& view, const Overlay* overlay)
     }
     nav.requestAir("minimap", gmin, gmax);     // ruling 13: the plan's spaces and walls read the air of every tile it shows
     // The room and storey are the avatar's while the camera follows it, else what the camera looks at; a focus over no floor falls back to the avatar.
-    const bool on_avatar = gAgentCamera.cameraMouselook() || gAgentCamera.getFocusOnAvatar();
+    const bool on_avatar = SKNetMap::followsAvatar();
     LLVector3d focus = on_avatar ? gAgent.getPositionGlobal() : gAgentCamera.getFocusGlobal();
     F32 vz = static_cast<F32>(focus.mdV[VZ]);
     if (!nav.floorUnder(focus, sknav::AgentClass::AVATAR, vz))

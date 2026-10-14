@@ -51,6 +51,7 @@
 #include "lltracker.h"
 #include "llviewercamera.h"
 #include "llviewercontrol.h"
+#include "llviewerjoystick.h"
 #include "llviewerobjectlist.h"
 #include "llviewerregion.h"
 #include "llviewertexture.h"
@@ -262,10 +263,16 @@ void SKNetMap::updateView()
     mView.set(centre, span, rotation, static_cast<F32>(getRect().getWidth()), static_cast<F32>(getRect().getHeight()));
 }
 
+// The camera follows the avatar unless an alt-cam or the flycam has taken it away.
+bool SKNetMap::followsAvatar()
+{
+    return gAgentCamera.cameraMouselook() || (gAgentCamera.getFocusOnAvatar() && !LLViewerJoystick::getInstance()->getOverrideCamera());
+}
+
 // The avatar while the camera follows it, so a shoulder offset does not shift the map; the camera once detached.
 LLVector3d SKNetMap::anchorGlobal()
 {
-    return gAgentCamera.getFocusOnAvatar() ? gAgent.getPositionGlobal() : gAgentCamera.getCameraPositionGlobal();
+    return followsAvatar() ? gAgent.getPositionGlobal() : gAgentCamera.getCameraPositionGlobal();
 }
 
 void SKNetMap::recentre()

@@ -116,6 +116,7 @@ public:
     static void addEvent(const SKCombatEvent& event);
     /// Ease the pan back to the agent over a quarter second.
     void recentre();
+    static bool followsAvatar();
     static LLVector3d anchorGlobal();
     bool isPanned() const { return mPan.lengthSquared() > 1e-4f; }
 
