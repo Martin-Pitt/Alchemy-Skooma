@@ -58,6 +58,8 @@ public:
     LLVolume* refLOD(const S32 detail);
     bool derefLOD(LLVolume *volumep);
     S32 getNumRefs() const { return mRefs; }
+    void regenPrims(); // <SK:Nexii> Prim edge splits: regenerate every cached LOD of a plain prim
+    S32 getCanonicalLOD(S32 lod); // <SK:Nexii> Prim edge splits: the lowest LOD that builds the same mesh
 
     const LLVolumeParams* getVolumeParams() const { return &mVolumeParams; };
 
@@ -73,6 +75,7 @@ protected:
     static F32 mDetailThresholds[NUM_LODS];
     static F32 mDetailScales[NUM_LODS];
     S32     mAccessCount[NUM_LODS];
+    S32     mCanonicalLOD[NUM_LODS]; // <SK:Nexii> Prim edge splits: -1 until worked out
 };
 
 class LLVolumeMgr
@@ -91,6 +94,7 @@ public:
     virtual void unrefVolume(LLVolume *volumep);
 
     void dump();
+    void regenPrims(); // <SK:Nexii> Prim edge splits: regenerate every cached plain prim volume
 
     // manually call this for mutex magic
     void useMutex();

@@ -2041,19 +2041,7 @@ bool LLVolume::generate()
     // Split is a parameter to LLProfile::generate that tesselates edges on the profile
     // to prevent lighting and texture interpolation errors on triangles that are
     // stretched due to twisting or scaling on the path.
-    S32 split = (S32) ((mDetail)*0.66f);
-
-    if (mParams.getPathParams().getCurveType() == LL_PCODE_PATH_LINE &&
-        (mParams.getPathParams().getScale().mV[0] != 1.0f ||
-         mParams.getPathParams().getScale().mV[1] != 1.0f ||
-         (!sSplitFlatSides && mParams.getPathParams().getTwistBegin() == mParams.getPathParams().getTwist())) && // <SK:Nexii> Untwisted flat sides need no split under per-pixel lighting
-        (mParams.getProfileParams().getCurveType() == LL_PCODE_PROFILE_SQUARE ||
-         mParams.getProfileParams().getCurveType() == LL_PCODE_PROFILE_ISOTRI ||
-         mParams.getProfileParams().getCurveType() == LL_PCODE_PROFILE_EQUALTRI ||
-         mParams.getProfileParams().getCurveType() == LL_PCODE_PROFILE_RIGHTTRI))
-    {
-        split = 0;
-    }
+    S32 split = getProfileSplit(mParams, mDetail); // <SK:Nexii> Prim edge splits: shared with getCanonicalLOD
 
     mLODScaleBias.setVec(0.5f, 0.5f, 0.5f);
 
@@ -3757,6 +3745,86 @@ bool LLVolumeParams::validate(U8 prof_curve, F32 prof_begin, F32 prof_end, F32 h
     }
     return true;
 }
+
+// <SK:Nexii> Prim edge splits
+// static
+S32 LLVolume::getProfileSplit(const LLVolumeParams& params, F32 detail)
+{
+    S32 split = (S32) (detail*0.66f);
+
+    // Flat sides need no split under per-pixel lighting unless twist curves them; tapered ones never had it.
+    const LLPathParams& path = params.getPathParams();
+    const bool untwisted = !sSplitFlatSides && path.getTwistBegin() == path.getTwist();
+    if (path.getCurveType() == LL_PCODE_PATH_LINE &&
+        (path.getScale().mV[0] != 1.0f ||
+         path.getScale().mV[1] != 1.0f ||
+         untwisted) &&
+        (params.getProfileParams().getCurveType() == LL_PCODE_PROFILE_SQUARE ||
+         params.getProfileParams().getCurveType() == LL_PCODE_PROFILE_ISOTRI ||
+         params.getProfileParams().getCurveType() == LL_PCODE_PROFILE_EQUALTRI ||
+         params.getProfileParams().getCurveType() == LL_PCODE_PROFILE_RIGHTTRI))
+    {
+        split = 0;
+    }
+    return split;
+}
+
+// static
+bool LLVolume::isSameMesh(const LLVolumeParams& params, F32 detail_a, F32 detail_b)
+{
+    if (detail_a == detail_b)
+    {
+        return true;
+    }
+    // Sculpts and meshes take their resolution or asset from the detail, and a flexible path is driven by its object.
+    if (params.isSculpt() || params.getPathParams().getCurveType() == LL_PCODE_PATH_FLEXIBLE)
+    {
+        return false;
+    }
+
+    // A prim mesh is a function of its path and profile alone, so generate both at each detail and compare.
+    const F32 details[2] = { detail_a, detail_b };
+    LLPath paths[2];
+    LLProfile* profiles[2] = { new LLProfile(), new LLProfile() };
+    for (S32 i = 0; i < 2; ++i)
+    {
+        S32 split = getProfileSplit(params, details[i]);
+        paths[i].generate(params.getPathParams(), details[i], split);
+        profiles[i]->generate(params.getProfileParams(), paths[i].isOpen(), details[i], split);
+    }
+
+    bool same = paths[0].isOpen() == paths[1].isOpen() &&
+                paths[0].mPath.size() == paths[1].mPath.size() &&
+                profiles[0]->mProfile.size() == profiles[1]->mProfile.size() &&
+                profiles[0]->mFaces.size() == profiles[1]->mFaces.size() &&
+                profiles[0]->isOpen() == profiles[1]->isOpen() &&
+                profiles[0]->isConcave() == profiles[1]->isConcave() &&
+                profiles[0]->getTotal() == profiles[1]->getTotal() &&
+                profiles[0]->getTotalOut() == profiles[1]->getTotalOut();
+    for (S32 i = 0; same && i < (S32)paths[0].mPath.size(); ++i)
+    {
+        const LLPath::PathPt& a = paths[0].mPath[i];
+        const LLPath::PathPt& b = paths[1].mPath[i];
+        same = !memcmp(&a.mRot, &b.mRot, sizeof(a.mRot)) && !memcmp(&a.mPos, &b.mPos, sizeof(a.mPos)) &&
+               !memcmp(&a.mScale, &b.mScale, sizeof(a.mScale)) && a.mTexT == b.mTexT;
+    }
+    for (S32 i = 0; same && i < (S32)profiles[0]->mProfile.size(); ++i)
+    {
+        same = !memcmp(&profiles[0]->mProfile[i], &profiles[1]->mProfile[i], sizeof(LLVector4a));
+    }
+    for (size_t i = 0; same && i < profiles[0]->mFaces.size(); ++i)
+    {
+        const LLProfile::Face& a = profiles[0]->mFaces[i];
+        const LLProfile::Face& b = profiles[1]->mFaces[i];
+        same = a.mIndex == b.mIndex && a.mCount == b.mCount && a.mScaleU == b.mScaleU && a.mCap == b.mCap &&
+               a.mFlat == b.mFlat && a.mFaceID == b.mFaceID;
+    }
+
+    delete profiles[0];
+    delete profiles[1];
+    return same;
+}
+// </SK:Nexii>
 
 void LLVolume::getLoDTriangleCounts(const LLVolumeParams& params, S32* counts)
 { //attempt to approximate the number of triangles that will result from generating a volume LoD set for the

@@ -1688,9 +1688,13 @@ bool LLVOVolume::calcLOD()
     if (cur_detail != mLOD)
     {
         mAppAngle = ll_round((F32) atan2( mDrawable->getRadius(), mDrawable->mDistanceWRTCamera) * RAD_TO_DEG, 0.01f);
-        mLOD = cur_detail;
 
-        return true;
+        // <SK:Nexii> Prim edge splits: a LOD that builds the same mesh keeps the volume and skips the rebuild.
+        LLVolumeLODGroup* group = getVolume() ? LLPrimitive::getVolumeManager()->getGroup(getVolume()->getParams()) : nullptr;
+        bool same_mesh = group && group->getCanonicalLOD(cur_detail) == group->getCanonicalLOD(mLOD);
+        mLOD = cur_detail;
+        return !same_mesh;
+        // </SK:Nexii>
     }
 
     return false;

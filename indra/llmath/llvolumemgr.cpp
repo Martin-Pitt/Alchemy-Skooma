@@ -211,6 +211,57 @@ void LLVolumeMgr::dump()
     LL_INFOS() << "Average usage of LODs " << avg << LL_ENDL;
 }
 
+// <SK:Nexii> Prim edge splits: regenerate cached prim volumes, in use or not, after a tessellation rule changes.
+void LLVolumeMgr::regenPrims()
+{
+    if (mDataMutex)
+    {
+        mDataMutex->lock();
+    }
+    for (auto& [params, volgroupp] : mVolumeLODGroups)
+    {
+        volgroupp->regenPrims();
+    }
+    if (mDataMutex)
+    {
+        mDataMutex->unlock();
+    }
+}
+
+void LLVolumeLODGroup::regenPrims()
+{
+    // Sculpts and meshes are not built from the path and profile, and flexible paths are driven by their object.
+    if (mVolumeParams.isSculpt() || mVolumeParams.getPathParams().getCurveType() == LL_PCODE_PATH_FLEXIBLE)
+    {
+        return;
+    }
+    std::fill(std::begin(mCanonicalLOD), std::end(mCanonicalLOD), -1);
+    for (LLPointer<LLVolume>& volume : mVolumeLODs)
+    {
+        if (volume.notNull())
+        {
+            volume->setDirty();
+            volume->regen();
+        }
+    }
+}
+
+S32 LLVolumeLODGroup::getCanonicalLOD(S32 lod)
+{
+    llassert(lod >= 0 && lod < NUM_LODS);
+    if (mCanonicalLOD[lod] < 0)
+    {
+        S32 canonical = lod;
+        while (canonical > 0 && LLVolume::isSameMesh(mVolumeParams, mDetailScales[canonical - 1], mDetailScales[lod]))
+        {
+            --canonical;
+        }
+        mCanonicalLOD[lod] = canonical;
+    }
+    return mCanonicalLOD[lod];
+}
+// </SK:Nexii>
+
 void LLVolumeMgr::useMutex()
 {
     if (!mDataMutex)
@@ -254,6 +305,7 @@ LLVolumeLODGroup::LLVolumeLODGroup(const LLVolumeParams &params)
     {
         mLODRefs[i] = 0;
         mAccessCount[i] = 0;
+        mCanonicalLOD[i] = -1; // <SK:Nexii> Prim edge splits
     }
 }
 

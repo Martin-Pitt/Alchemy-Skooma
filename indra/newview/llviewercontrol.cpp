@@ -94,6 +94,7 @@
 #include "llvisualeffect.h"
 #include "llviewerobjectlist.h" // <SK:Nexii> Prim split toggle
 #include "llvovolume.h" // <SK:Nexii> Prim split toggle
+#include "llvolumemgr.h" // <SK:Nexii> Prim split toggle
 #include "rlvactions.h"
 #include "rlvcommon.h"
 // [/RLVa:KB]
@@ -442,7 +443,9 @@ static bool handleLegacyPrimSplitsChanged(const LLSD& newvalue)
 {
     LLVolume::sSplitFlatSides = newvalue.asBoolean();
 
-    std::unordered_set<LLVolume*> regenerated;
+    // Every cached LOD, so a later LOD switch does not bring back the other tessellation.
+    LLPrimitive::getVolumeManager()->regenPrims();
+
     for (S32 i = 0; i < gObjectList.getNumObjects(); ++i)
     {
         LLViewerObject* objectp = gObjectList.getObject(i);
@@ -452,11 +455,13 @@ static bool handleLegacyPrimSplitsChanged(const LLSD& newvalue)
         }
         LLVOVolume* volobjp = static_cast<LLVOVolume*>(objectp);
         LLVolume* volume = volobjp->getVolume();
-        if (volume && regenerated.insert(volume).second)
+        if (volume && volume->isUnique())
         {
+            // A selected prim's own volume is not in the manager.
             volume->setDirty();
             volume->regen();
         }
+        // A LOD change rebuilds the spatial group, which resizes every face's buffers; a plain geometry rebuild would not.
         volobjp->forceLOD(volobjp->getLOD());
     }
     return true;

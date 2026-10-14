@@ -3,8 +3,8 @@
  * @brief  Untwisted flat-sided prims without profile splits match the split geometry
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
- * Second Life Viewer Source Code
- * Copyright (C) 2026, Linden Research, Inc.
+ * Alchemy Viewer Source Code
+ * Copyright (C) 2026, Martin Pitt
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -19,8 +19,6 @@
  * You should have received a copy of the GNU Lesser General Public
  * License along with this library; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
- *
- * Linden Research, Inc., 945 Battery Street, San Francisco, CA  94111  USA
  * $/LicenseInfo$
  */
 
@@ -29,6 +27,7 @@
 #include "../test/lltut.h"
 
 #include "../llvolume.h"
+#include "../llvolumemgr.h"
 #include "../v3dmath.h"
 
 #include <sstream>
@@ -147,10 +146,10 @@ namespace
         return {};
     }
 
-    LLPointer<LLVolume> make(const LLVolumeParams& params, bool split)
+    LLPointer<LLVolume> make(const LLVolumeParams& params, bool split, F32 detail = 4.f)
     {
         LLVolume::sSplitFlatSides = split;
-        LLPointer<LLVolume> volume = new LLVolume(params, 4.f, false, true);
+        LLPointer<LLVolume> volume = new LLVolume(params, detail, false, true);
         LLVolume::sSplitFlatSides = false;
         return volume;
     }
@@ -163,6 +162,28 @@ namespace
             count += volume->getVolumeFace(f).mNumIndices / 3;
         }
         return count;
+    }
+
+    bool same_faces(const LLVolume* a, const LLVolume* b)
+    {
+        if (a->getNumVolumeFaces() != b->getNumVolumeFaces())
+        {
+            return false;
+        }
+        for (S32 f = 0; f < a->getNumVolumeFaces(); ++f)
+        {
+            const LLVolumeFace& fa = a->getVolumeFace(f);
+            const LLVolumeFace& fb = b->getVolumeFace(f);
+            if (fa.mID != fb.mID || fa.mNumVertices != fb.mNumVertices || fa.mNumIndices != fb.mNumIndices ||
+                memcmp(fa.mPositions, fb.mPositions, sizeof(LLVector4a) * fa.mNumVertices) ||
+                memcmp(fa.mNormals, fb.mNormals, sizeof(LLVector4a) * fa.mNumVertices) ||
+                memcmp(fa.mTexCoords, fb.mTexCoords, sizeof(LLVector2) * fa.mNumVertices) ||
+                memcmp(fa.mIndices, fb.mIndices, sizeof(U16) * fa.mNumIndices))
+            {
+                return false;
+            }
+        }
+        return true;
     }
 }
 
@@ -183,7 +204,8 @@ namespace
 
 namespace tut
 {
-    // Every combination of the line path's parameters on every flat-sided profile and hole.
+    // Every combination of the line path's parameters on every flat-sided profile and hole, at both split details.
+    // Top size and taper are left out: a top size other than 1 was never split, and a line path ignores taper.
     template<> template<>
     void object::test<1>()
     {
@@ -193,8 +215,8 @@ namespace tut
         const F32 profile_cuts[][2] = { { 0.f, 1.f }, { 0.125f, 0.8f }, { 0.3f, 0.45f } };
         const F32 path_cuts[][2] = { { 0.f, 1.f }, { 0.2f, 0.7f } };
         const F32 shears[][2] = { { 0.f, 0.f }, { 0.3f, -0.2f } };
-        const F32 tapers[][2] = { { 0.f, 0.f }, { 0.25f, -0.4f } };
-        const F32 ratios[][2] = { { 1.f, 1.f }, { 0.5f, 1.f }, { 0.f, 0.f } };
+        const F32 twists[] = { 0.f, 0.5f, -0.3f }; // begin and end equal: turned, not twisted
+        const F32 details[] = { 2.5f, 4.f };
 
         S32 cases = 0, split_tris = 0, plain_tris = 0;
         for (U8 profile : profiles)
@@ -203,8 +225,8 @@ namespace tut
         for (auto& pcut : profile_cuts)
         for (auto& cut : path_cuts)
         for (auto& shear : shears)
-        for (auto& taper : tapers)
-        for (auto& ratio : ratios)
+        for (F32 twist : twists)
+        for (F32 detail : details)
         {
             if (hollow == 0.f && hole != LL_PCODE_HOLE_SAME)
             {
@@ -216,16 +238,20 @@ namespace tut
             params.setBeginAndEndT(cut[0], cut[1]);
             params.setHollow(hollow);
             params.setShear(shear[0], shear[1]);
-            params.setTaper(taper[0], taper[1]);
-            params.setRatio(ratio[0], ratio[1]);
+            params.setRatio(1.f, 1.f);
+            params.setTwistBegin(twist);
+            params.setTwistEnd(twist);
 
-            LLPointer<LLVolume> split = make(params, true);
-            LLPointer<LLVolume> plain = make(params, false);
+            LLPointer<LLVolume> split = make(params, true, detail);
+            LLPointer<LLVolume> plain = make(params, false, detail);
 
             std::ostringstream what;
             what << "profile " << (S32)profile << " hole " << (S32)hole << " hollow " << hollow << " cut " << pcut[0] << "-"
-                 << pcut[1] << " path " << cut[0] << "-" << cut[1] << " shear " << shear[0] << "," << shear[1] << " taper "
-                 << taper[0] << "," << taper[1] << " ratio " << ratio[0] << "," << ratio[1];
+                 << pcut[1] << " path " << cut[0] << "-" << cut[1] << " shear " << shear[0] << "," << shear[1] << " twist "
+                 << twist << " detail " << detail;
+            ensure(what.str() + ": more triangles, " + std::to_string(triangle_count(plain)) + " vs " +
+                       std::to_string(triangle_count(split)),
+                   triangle_count(plain) <= triangle_count(split));
 
             ensure_equals(what.str() + ": face count", plain->getNumVolumeFaces(), split->getNumVolumeFaces());
             for (S32 f = 0; f < split->getNumVolumeFaces(); ++f)
@@ -238,11 +264,6 @@ namespace tut
 
                 std::vector<Tri> st = triangles(sf), pt = triangles(pf);
                 ensure_approximately_equals_range((face.str() + ": area").c_str(), area(pt), area(st), 1e-4f);
-                if (area(pt) < 1e-6f)
-                {
-                    // A cap collapsed to a point by a zero top size has no surface to compare.
-                    continue;
-                }
                 std::string err = covers(sf, pt, true);
                 ensure(face.str() + ": split onto plain: " + err, err.empty());
                 err = covers(pf, st, true);
@@ -259,17 +280,32 @@ namespace tut
         ensure("fewer triangles", plain_tris < split_tris);
     }
 
-    // A twisted prim keeps its splits.
+    // A twisted prim keeps its splits, down to a twist of one network step (0.01).
     template<> template<>
     void object::test<2>()
     {
-        LLVolumeParams params;
-        params.setType(LL_PCODE_PROFILE_SQUARE, LL_PCODE_PATH_LINE);
-        params.setBeginAndEndS(0.f, 1.f);
-        params.setBeginAndEndT(0.f, 1.f);
-        params.setRatio(1.f, 1.f);
-        params.setTwistEnd(0.5f);
-        ensure_equals("twisted box", triangle_count(make(params, false)), triangle_count(make(params, true)));
+        const U8 profiles[] = { LL_PCODE_PROFILE_SQUARE, LL_PCODE_PROFILE_EQUALTRI };
+        const F32 twists[] = { 0.5f, 0.01f };
+        const F32 details[] = { 2.5f, 4.f };
+        for (U8 profile : profiles)
+        for (F32 twist : twists)
+        for (F32 detail : details)
+        {
+            LLVolumeParams params;
+            params.setType(profile, LL_PCODE_PATH_LINE);
+            params.setBeginAndEndS(0.f, 1.f);
+            params.setBeginAndEndT(0.f, 1.f);
+            params.setRatio(1.f, 1.f);
+            LLPointer<LLVolume> untwisted = make(params, false, detail);
+            params.setTwistBegin(0.f);
+            params.setTwistEnd(twist);
+
+            std::ostringstream what;
+            what << "profile " << (S32)profile << " twist " << twist << " detail " << detail;
+            S32 tris = triangle_count(make(params, false, detail));
+            ensure_equals(what.str() + ": same as legacy", tris, triangle_count(make(params, true, detail)));
+            ensure(what.str() + ": still split", tris > triangle_count(untwisted));
+        }
     }
 
     // A plain box is two triangles a side.
@@ -320,12 +356,14 @@ namespace tut
     {
         const F32 hollows[] = { 0.f, 0.5f };
         const F32 cut_ends[] = { 1.f, 0.75f };
+        const U8 profiles[] = { LL_PCODE_PROFILE_SQUARE, LL_PCODE_PROFILE_EQUALTRI, LL_PCODE_PROFILE_RIGHTTRI };
         for (bool from_split : { true, false })
+        for (U8 profile : profiles)
         for (F32 hollow : hollows)
         for (F32 cut_end : cut_ends)
         {
             LLVolumeParams params;
-            params.setType(LL_PCODE_PROFILE_SQUARE, LL_PCODE_PATH_LINE);
+            params.setType(profile, LL_PCODE_PATH_LINE);
             params.setBeginAndEndS(0.f, cut_end);
             params.setBeginAndEndT(0.f, 1.f);
             params.setRatio(1.f, 1.f);
@@ -339,7 +377,7 @@ namespace tut
             LLPointer<LLVolume> fresh = make(params, !from_split);
 
             std::ostringstream what;
-            what << (from_split ? "split to plain" : "plain to split") << " hollow " << hollow << " cut " << cut_end;
+            what << (from_split ? "split to plain" : "plain to split") << " profile " << (S32)profile << " hollow " << hollow << " cut " << cut_end;
             ensure_equals(what.str() + ": face count", volume->getNumVolumeFaces(), fresh->getNumVolumeFaces());
             for (S32 f = 0; f < fresh->getNumVolumeFaces(); ++f)
             {
@@ -357,5 +395,71 @@ namespace tut
                 ensure(face.str() + ": " + err, err.empty());
             }
         }
+    }
+
+    // LODs the group calls equivalent build byte-identical meshes, across every path and profile type.
+    template<> template<>
+    void object::test<6>()
+    {
+        const U8 profiles[] = { LL_PCODE_PROFILE_CIRCLE, LL_PCODE_PROFILE_SQUARE, LL_PCODE_PROFILE_ISOTRI,
+                                LL_PCODE_PROFILE_EQUALTRI, LL_PCODE_PROFILE_RIGHTTRI, LL_PCODE_PROFILE_CIRCLE_HALF };
+        const U8 holes[] = { LL_PCODE_HOLE_SAME, LL_PCODE_HOLE_CIRCLE };
+        const F32 hollows[] = { 0.f, 0.5f };
+        const U8 paths[] = { LL_PCODE_PATH_LINE, LL_PCODE_PATH_CIRCLE, LL_PCODE_PATH_CIRCLE2 };
+        const F32 twists[][2] = { { 0.f, 0.f }, { 0.4f, 0.4f }, { 0.f, 0.3f } };
+        const F32 ratios[] = { 1.f, 0.5f };
+        const F32 cut_ends[] = { 1.f, 0.6f };
+
+        S32 groups = 0, merged = 0, missed = 0;
+        for (U8 profile : profiles)
+        for (U8 hole : holes)
+        for (F32 hollow : hollows)
+        for (U8 path : paths)
+        for (auto& twist : twists)
+        for (F32 ratio : ratios)
+        for (F32 cut_end : cut_ends)
+        {
+            if (hollow == 0.f && hole != LL_PCODE_HOLE_SAME)
+            {
+                continue;
+            }
+            LLVolumeParams params;
+            params.setType(profile | hole, path);
+            params.setBeginAndEndS(0.f, cut_end);
+            params.setBeginAndEndT(0.f, 1.f);
+            params.setHollow(hollow);
+            params.setRatio(ratio, ratio);
+            params.setTwistBegin(twist[0]);
+            params.setTwistEnd(twist[1]);
+
+            LLVolumeLODGroup group(params);
+            LLPointer<LLVolume> volumes[LLVolumeLODGroup::NUM_LODS];
+            for (S32 lod = 0; lod < LLVolumeLODGroup::NUM_LODS; ++lod)
+            {
+                volumes[lod] = new LLVolume(params, LLVolumeLODGroup::getVolumeScaleFromDetail(lod), false, true);
+            }
+            for (S32 a = 0; a < LLVolumeLODGroup::NUM_LODS; ++a)
+            for (S32 b = a + 1; b < LLVolumeLODGroup::NUM_LODS; ++b)
+            {
+                bool identical = same_faces(volumes[a], volumes[b]);
+                if (group.getCanonicalLOD(a) == group.getCanonicalLOD(b))
+                {
+                    std::ostringstream what;
+                    what << "profile " << (S32)profile << " hole " << (S32)hole << " hollow " << hollow << " path " << (S32)path
+                         << " twist " << twist[0] << "," << twist[1] << " ratio " << ratio << " cut " << cut_end << " lods " << a
+                         << "," << b;
+                    ensure(what.str() + ": merged LODs differ", identical);
+                    ++merged;
+                }
+                else if (identical)
+                {
+                    ++missed;
+                }
+            }
+            ++groups;
+        }
+        std::cout << "\nLLVolumeSplit: " << groups << " shapes, " << merged << " LOD pairs merged, " << missed
+                  << " identical pairs not merged" << std::endl;
+        ensure("some LODs merge", merged > 0);
     }
 }

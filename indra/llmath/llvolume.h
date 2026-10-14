@@ -1046,6 +1046,10 @@ public:
 
 
     static void getLoDTriangleCounts(const LLVolumeParams& params, S32* counts);
+    // <SK:Nexii> Prim edge splits: the split generate() uses, and whether two details build the same prim mesh
+    static S32 getProfileSplit(const LLVolumeParams& params, F32 detail);
+    static bool isSameMesh(const LLVolumeParams& params, F32 detail_a, F32 detail_b);
+    // </SK:Nexii>
 
     S32 getNumTriangles(S32* vcount = nullptr) const;
 
