@@ -117,7 +117,7 @@ void main()
         float t = abs(dz) > 1e-6 ? (sk_water_z - ra.z) / dz : -1.0;
         if (t > 0.0 && sk_water_z < sk_cut)
         {
-            frag_color = vec4(mix(sk_water_shallow, sk_water_deep, 0.6), 0.85);
+            frag_color = vec4(sk_water_deep, 0.85);
             return;
         }
         frag_color = vec4(0.0);
@@ -220,9 +220,12 @@ void main()
 
     if (pos.z < sk_water_z)
     {
-        float t = clamp((sk_water_z - pos.z) / sk_water_depth, 0.0, 1.0);
+        // Shallow over geometry, deep at depth, ending on the open water's colour; walls fade over a short band.
+        float fade = flat_kind ? sk_water_depth : 1.0;
+        float t = clamp((sk_water_z - pos.z) / fade, 0.0, 1.0);
         vec3 w = mix(sk_water_shallow, sk_water_deep, t);
-        c = mix(c, w, mix(0.55, 0.85, t));
+        c = mix(c, w, mix(0.55, 1.0, t));
+        a = mix(a, 0.85, t);
     }
     if (code == CODE_TERRAIN && floor(pos.z / CONTOUR_M) != floor((hx1 ? px1.z : pos.z) / CONTOUR_M))
     {
