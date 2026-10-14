@@ -71,6 +71,17 @@ namespace skmap
         constexpr F32 HEADING_BASE_PX = 1.5f;       ///< its base beyond the dot
         constexpr F32 HEADING_HALF_PX = 2.5f;
         constexpr F32 CHEVRON_STROKE_PX = 1.4f;
+        constexpr F32 EDGE_CHEVRON_INSET_PX = 6.f;       ///< off-map people's chevrons stop this far inside the edge
+        constexpr F32 EDGE_CHEVRON_HALF_PX = 4.f;        ///< half the chevron's width across its direction
+        constexpr F32 EDGE_CHEVRON_DEPTH_PX = 3.5f;      ///< its tip ahead of its arms
+        constexpr F32 EDGE_CHEVRON_STROKE_PX = 1.6f;
+        constexpr F32 EDGE_CHEVRON_CASING_PX = 3.2f;
+        constexpr PaletteColour EDGE_CHEVRON_CASING = rgba8(0x000000a0);
+        constexpr F32 EDGE_CHEVRON_STACK_PX = 3.f;       ///< step inwards between the chevrons of a cluster
+        constexpr S32 EDGE_CHEVRON_MAX_STACK = 3;
+        constexpr F32 EDGE_CHEVRON_CLUSTER_PX = 10.f;    ///< chevrons closer than this along the edge stack as one
+        constexpr F32 EDGE_CHEVRON_FADE_M = 128.f;       ///< this far past the edge a chevron is at its faintest
+        constexpr F32 EDGE_CHEVRON_FADE_MIN = 0.45f;
 
         // Vehicles.
         constexpr PaletteColour VEH_CIVIL_HULL = rgba8(0x4f9a5aff);
