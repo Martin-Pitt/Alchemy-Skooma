@@ -3586,6 +3586,18 @@ function="World.EnvPreset"
                  function="ToggleControl"
                  parameter="CameraOffset" />
             </menu_item_check>
+            <!-- <SK:Nexii> Prim split toggle -->
+            <menu_item_check
+             label="Legacy Prim Edge Splits"
+             name="Legacy Prim Edge Splits">
+                <menu_item_check.on_check
+                 function="CheckControl"
+                 parameter="SKRenderLegacyPrimSplits" />
+                <menu_item_check.on_click
+                 function="ToggleControl"
+                 parameter="SKRenderLegacyPrimSplits" />
+            </menu_item_check>
+            <!-- </SK:Nexii> -->
             <menu_item_check
              label="Randomize Framerate"
              name="Randomize Framerate">
