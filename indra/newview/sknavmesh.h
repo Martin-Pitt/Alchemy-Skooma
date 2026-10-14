@@ -82,6 +82,21 @@ public:
     void tileContentKeysIn(const LLUUID& mesh, const LLVector3d& min, const LLVector3d& max, std::vector<U64>& out) const;
     /// A hash of what a mesh's map products (polys, storeys, wall runs) meeting the box are built from.
     U64 mapInputsKey(const LLUUID& mesh, const LLVector3d& min, const LLVector3d& max) const;
+    /// What mapInputsKey mixes, part by part, so the map recorder can say which part moved.
+    struct MapInputParts
+    {
+        static constexpr S32 MESH_FIELDS = 3;   ///< stamp answers, stamp rooms, storeys
+        static constexpr S32 TILE_FIELDS = 9;   ///< content, detour, air, poly spaces, portals, segments, links, flights, wall runs
+        U64 mMesh[MESH_FIELDS] = {};
+        struct Tile
+        {
+            sknav::TileKey mKey;
+            LLVector3d mMin, mMax;
+            U64 mField[TILE_FIELDS] = {};
+        };
+        std::vector<Tile> mTiles;
+    };
+    void mapInputsParts(const LLUUID& mesh, const LLVector3d& min, const LLVector3d& max, MapInputParts& out) const;
     /// Whether a terrain mesh has a published AVATAR tile meeting the box.
     bool terrainTilesIn(const LLUUID& mesh, const LLVector3d& min, const LLVector3d& max) const;
     /// Whether anything meeting the global box is still on its way: a tile
@@ -612,6 +627,8 @@ private:
     static bool changedRecord(const std::vector<sknav::RecordPtr>& before, const std::vector<sknav::RecordPtr>& after, LLVector3d& out);
     /// A rising blip for a tile that was just built, coloured by why.
     void tileBlip(const Mesh& mesh, const Tile& tile) const;
+    /// Moves mRevision, telling the map recorder why.
+    void bumpRevision(const char* why);
     void schedule();
     /// What a tile is built from, gathered on the main thread; false while its land is not sampled.
     bool prepareInput(const Mesh& mesh, const sknav::TileKey& key, Tile& tile, std::shared_ptr<sknav::TileBuildInput>& input,

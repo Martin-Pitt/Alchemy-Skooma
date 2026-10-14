@@ -38,6 +38,7 @@
 #include "sknavmesh.h"
 #include "sknavoverlay.h"
 #include "sknavpalette.h"
+#include "skmaprecorder.h"
 #include "skworldcensus.h"
 #include "workqueue.h"
 
@@ -645,6 +646,10 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
             // Slabs are built over detailed air: when the cache evicts some, they go with it.
             if (evicted > state.mEvicted && state.mWind)
             {
+                if (SKMapRecorder::isRecording())
+                {
+                    SKMapRecorder::Line("wind.drop").mesh(state.mId).box(state.mMin, state.mMax).num("evicted", evicted);
+                }
                 state.mWind.reset();
                 state.windStale(now);
                 mViewDirty = true;
@@ -652,6 +657,13 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
             state.mEvicted = evicted;
             if (state.mAirSignature != sig || state.mDoorSignature != doors)
             {
+                if (SKMapRecorder::isRecording())
+                {
+                    const bool air = state.mAirSignature != sig, door = state.mDoorSignature != doors;
+                    SKMapRecorder::Line("rooms.dirty").mesh(mesh.mId).box(lo, hi).str("why", air && door ? "air+doors" : air ? "air" : "doors")
+                        .flag("published", state.mProduct != nullptr).flag("in_flight", state.mInFlight).flag("was_dirty", state.mDirty)
+                        .num("evicted", evicted);
+                }
                 state.mAirSignature = sig;
                 state.mDoorSignature = doors;
                 state.mMin = lo;
@@ -675,6 +687,10 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
         {
             if (!seen.count(it->first))
             {
+                if (SKMapRecorder::isRecording())
+                {
+                    SKMapRecorder::Line("rooms.drop").mesh(it->first).box(it->second.mMin, it->second.mMax);
+                }
                 if (it->second.mLatest)
                 {
                     it->second.mLatest->store(~0ull);   // cancel anything in flight
@@ -724,6 +740,10 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
                 state.mDirty = false;
                 if (state.mProduct)
                 {
+                    if (SKMapRecorder::isRecording())
+                    {
+                        SKMapRecorder::Line("rooms.clear").mesh(state.mId).box(state.mMin, state.mMax);
+                    }
                     state.mProduct.reset();
                     state.mRooms.reset();
                     state.mWind.reset();
@@ -749,6 +769,10 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
             if (!away)
             {
                 post(state, navmesh);
+            }
+            else if (SKMapRecorder::isRecording())
+            {
+                SKMapRecorder::Line("rooms.await_detail").mesh(state.mId).box(state.mMin, state.mMax);
             }
         }
     }
@@ -791,6 +815,11 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
             // Only a refresh gives way, and only to a better tier's first publication.
             if (roomsPreemptible(state.schedule(), first))
             {
+                if (SKMapRecorder::isRecording())
+                {
+                    SKMapRecorder::Line("rooms.preempt").mesh(state.mId).box(state.mMin, state.mMax).num("prio", state.mPriority)
+                        .num("by_prio", first.mPriority);
+                }
                 state.mLatest->store(++state.mGeneration);
                 if (!state.mDirty)
                 {
@@ -801,6 +830,10 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
             // So do slabs: only a refresh, to a better tier's first rooms; slabs a mesh has none of are never held back.
             if (state.mWindInFlight && state.mWind && first.mPriority < state.mPriority && state.mWindLatest)
             {
+                if (SKMapRecorder::isRecording())
+                {
+                    SKMapRecorder::Line("wind.preempt").mesh(state.mId).box(state.mMin, state.mMax);
+                }
                 state.mWindLatest->store(++state.mWindGeneration);
                 state.windStale(now);
             }
@@ -915,6 +948,17 @@ void SKNavRooms::post(MeshState& state, const SKNavMesh& navmesh)
     });
     if (posted)
     {
+        if (SKMapRecorder::isRecording())
+        {
+            // A first publication, a settled refresh, or a refresh the bounded wait forced through churn.
+            static LLCachedControl<U32> settle_ms(gSavedSettings, "SKNavRoomsSettleMs", 500);
+            const F64 now = state.mLastPosted;
+            const char* why = !state.mProduct ? "first" : (now - state.mChanged < settle_ms / 1000.0 ? "churn" : "refresh");
+            SKMapRecorder::Line("rooms.start").mesh(state.mId).box(state.mMin, state.mMax).str("why", why).num("prio", state.mPriority)
+                .real("waited", now - state.mDirtySince).real("quiet", now - state.mChanged).num("gen", static_cast<S64>(state.mGeneration))
+                .num("tiles", static_cast<S64>(input->mTiles.size())).num("kept", static_cast<S64>(input->mKept.size()))
+                .num("reruns", state.mReruns);
+        }
         state.mDirty = false;
         state.mInFlight = true;
     }
@@ -985,12 +1029,20 @@ void SKNavRooms::finish(const std::shared_ptr<Job>& job)
     if (state.mLatest != job->mLatest)
     {
         ++mCancelled;
+        if (SKMapRecorder::isRecording())
+        {
+            SKMapRecorder::Line("rooms.cancel").mesh(state.mId).box(state.mMin, state.mMax).str("why", "readded");
+        }
         return;
     }
     state.mInFlight = false;
     if (job->mCancelled || !job->mSpaces || !job->mSpaces->done())
     {
         ++mCancelled;
+        if (SKMapRecorder::isRecording())
+        {
+            SKMapRecorder::Line("rooms.cancel").mesh(state.mId).box(state.mMin, state.mMax).str("why", "preempted");
+        }
         return;     // preempted: the state is dirty again and posts anew
     }
     // Air that moved while it ran left the state dirty: this lands now, and the refresh follows.
@@ -1009,6 +1061,12 @@ void SKNavRooms::finish(const std::shared_ptr<Job>& job)
         mLastSpaceStageMs[s] = job->mSpaces->stageMillis(s);
     }
     const bool moved = !state.mProduct || state.mProduct->mSummary != product->mSummary;
+    if (SKMapRecorder::isRecording())
+    {
+        SKMapRecorder::Line("rooms.publish").mesh(state.mId).box(state.mMin, state.mMax).flag("first", !state.mProduct).flag("moved", moved)
+            .flag("still_dirty", state.mDirty).num("gen", static_cast<S64>(job->mGeneration)).real("ms", mLastMs + mLastSpacesMs)
+            .real("wall_ms", mLastWallMs);
+    }
     state.mProduct = product;
     state.mRooms = job->mSpaces->product();
     // Only answers that moved, or none yet, are worth a new set of slabs.
@@ -1029,6 +1087,10 @@ void SKNavRooms::finish(const std::shared_ptr<Job>& job)
         {
             ++o.mReruns;
             o.mDirty = true;
+            if (SKMapRecorder::isRecording())
+            {
+                SKMapRecorder::Line("rooms.rerun").mesh(o.mId).box(o.mMin, o.mMax).mesh("by", state.mId).num("reruns", o.mReruns);
+            }
         }
     }
 }
@@ -1064,6 +1126,10 @@ void SKNavRooms::postWind(MeshState& state)
     });
     if (posted)
     {
+        if (SKMapRecorder::isRecording())
+        {
+            SKMapRecorder::Line("wind.start").mesh(state.mId).box(state.mMin, state.mMax).flag("first", state.mWind == nullptr);
+        }
         state.mWindDirty = false;
         state.mWindInFlight = true;
     }
@@ -1120,6 +1186,10 @@ void SKNavRooms::finishWind(const std::shared_ptr<WindJob>& job)
     state.mWindInFlight = false;
     if (job->mCancelled || state.mWindGeneration != job->mGeneration || !job->mPass->done())
     {
+        if (SKMapRecorder::isRecording())
+        {
+            SKMapRecorder::Line("wind.cancel").mesh(state.mId).box(state.mMin, state.mMax);
+        }
         return;     // preempted: it runs again once the better tier has had the thread
     }
     // Slabs over the rooms it read land even if newer rooms have landed since: those set it stale again.
@@ -1129,6 +1199,10 @@ void SKNavRooms::finishWind(const std::shared_ptr<WindJob>& job)
     mLastWindBytes = product->bytes();
     state.mWind = product;
     mViewDirty = true;
+    if (SKMapRecorder::isRecording())
+    {
+        SKMapRecorder::Line("wind.publish").mesh(state.mId).box(state.mMin, state.mMax).real("ms", product->mMillis);
+    }
 }
 
 
@@ -1137,6 +1211,10 @@ void SKNavRooms::rebuildView()
     mViewDirty = false;
     auto view = std::make_shared<SKNavWorldView>();
     view->mRevision = ++mViewRevision;
+    if (SKMapRecorder::isRecording())
+    {
+        SKMapRecorder::Line("view.rebuild").num("rev", static_cast<S64>(mViewRevision));
+    }
     view->mSky = mSky;
     for (const auto& entry : mMeshes)
     {
