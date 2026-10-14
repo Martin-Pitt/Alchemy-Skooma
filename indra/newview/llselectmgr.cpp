@@ -102,9 +102,9 @@
 // [/RLVa:KB]
 #include "llglheaders.h"
 #include "llinventoryobserver.h"
+#include "skoutlinecapture.h" // <SK:Nexii> outline capture
 #include "lllocalmesh.h"
 #include "llscripteditorws.h"
-#include "skoutlinecapture.h" // <SK:Nexii> outline capture
 
 LLViewerObject* getSelectedParentObject(LLViewerObject *object) ;
 
