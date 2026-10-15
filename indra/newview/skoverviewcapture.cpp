@@ -54,6 +54,7 @@
 #include "llvertexbuffer.h"
 #include "llviewercamera.h"
 #include "llviewercontrol.h"
+#include "llsurface.h"
 #include "llviewerregion.h"
 #include "llviewershadermgr.h"
 #include "llvoavatar.h"
@@ -99,7 +100,9 @@ namespace
     const F32 TACTICAL_MIN_M = 8.f;
     const F32 TACTICAL_MAX_M = 400.f;
     const F64 TACTICAL_TAP_S = 0.2;
-    const F32 OPEN_CUT_ABOVE_M = 200.f; // an uncut map's ceiling above the agent's cut: roofs in, skyboxes out
+    const F32 LEVEL_BELOW_M = 4.f;  // another region's map keeps the clusters reaching this far below the agent's floor
+    const F32 LEVEL_ABOVE_M = 8.f;  // and this far above it
+    const F32 ON_GROUND_M = 8.f;    // an agent's floor this close to the land is at ground level
 
     void uniformColour(GLint prog, const char* name, const skmap::PaletteColour& c)
     {
@@ -111,6 +114,7 @@ namespace
 struct SKOverviewCapture::RegionMap
 {
     U64 mHandle = 0;
+    LLViewerRegion* mRegion = nullptr; // this frame's, set before any capture
     LLRenderTarget mResolved; // the map, RGBA8
     LLVector3d mOrigin;
     F32 mWidth = 0.f;
@@ -706,6 +710,22 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
             inverse_view.setInverse(shot.mView);
             const F32* m = inverse_view.getF32ptr();
             const F32 eye_to_world[9] = { m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10] };
+            // A class's range whole, or only the groups the shot's level keeps.
+            auto drawClass = [&shot](const SKOverviewCensus::Batch& batch, U32 c)
+            {
+                if (shot.mLevel.mAll)
+                {
+                    batch.mBuffer->drawArrays(LLRender::TRIANGLES, batch.mStart[c], batch.mStart[c + 1] - batch.mStart[c]);
+                    return;
+                }
+                for (const SKOverviewCensus::Group& group : batch.mGroups)
+                {
+                    if (group.mCount[c] && shot.mLevel.keeps(group))
+                    {
+                        batch.mBuffer->drawArrays(LLRender::TRIANGLES, group.mStart[c], group.mCount[c]);
+                    }
+                }
+            };
             sGeom.bind();
             glUniform4fv(glGetUniformLocation(sGeom.mProgramObject, "clip_plane"), 1, plane);
             glUniformMatrix3fv(glGetUniformLocation(sGeom.mProgramObject, "sk_eye_to_world"), 1, GL_FALSE, eye_to_world);
@@ -738,7 +758,7 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
                         // cover over wall over the rest, by a class's own depth offset rather than draw order.
                         static const F32 PRIORITY[skoverview::NUM_CENSUS_CLASSES] = { 8.f, 2.f, 4.f, 6.f, 1.f, 1.f, 1.f, 0.f, 0.f };
                         gGL.setPolygonOffset(-1.f, -4.f - PRIORITY[c]);
-                        batch.mBuffer->drawArrays(LLRender::TRIANGLES, batch.mStart[c], count);
+                        drawClass(batch, c);
                     }
                 }
                 glCullFace(GL_BACK);
@@ -762,7 +782,7 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
                     gGLLastMatrix = NULL;
                     batch.mBuffer->setBuffer();
                     gGL.diffuseColor4f(0.f, 0.f, 1.f, 1.f);
-                    batch.mBuffer->drawArrays(LLRender::TRIANGLES, start, count);
+                    drawClass(batch, skoverview::INVISIBLE);
                 }
                 gGL.setColorMask(true, false, false, false);
             }
@@ -835,9 +855,9 @@ void SKOverviewCapture::captureMaps(F64 now)
     static LLCachedControl<F32> refresh(gSavedSettings, "SKOverviewRefresh", 1.f);
     static LLCachedControl<F32> near_refresh(gSavedSettings, "SKOverviewNeighbourRefresh", 5.f);
     static LLCachedControl<F32> far_refresh(gSavedSettings, "SKOverviewFarRefresh", 30.f);
-    RegionMap* due = nullptr;
-    LLViewerRegion* due_region = nullptr;
-    F64 most_overdue = 0.0;
+    static LLCachedControl<F32> slot(gSavedSettings, "SKOverviewQueueInterval", 0.25f);
+    RegionMap* missing = nullptr;
+    LLViewerRegion* missing_region = nullptr;
     for (LLViewerRegion* region : regions)
     {
         auto it = std::find_if(mMaps.begin(), mMaps.end(),
@@ -849,6 +869,7 @@ void SKOverviewCapture::captureMaps(F64 now)
             it = std::prev(mMaps.end());
         }
         RegionMap& map = **it;
+        map.mRegion = region;
         map.mRing = ringOf(region);
         if (map.mRing == 0)
         {
@@ -863,21 +884,49 @@ void SKOverviewCapture::captureMaps(F64 now)
             }
             continue;
         }
-        // Neighbours every few seconds, regions further off much less often the further they are; a region never
-        // taken, or still showing the cut it had as the agent's, first, nearest first.
-        const F64 period = map.mRing == 1 ? llmax((F32)near_refresh, 0.1f) : llmax((F32)far_refresh, 1.f) * (map.mRing - 1);
-        const F64 overdue = (map.mLast < 0.0 || map.mCut) ? 1.0e9 / map.mRing : (now - map.mLast) / period;
-        if (overdue >= 1.0 && overdue > most_overdue)
+        // A region with no map yet, or still showing the cut it had as the agent's, goes first, nearest first.
+        if ((map.mLast < 0.0 || map.mCut) && (!missing || map.mRing < missing->mRing))
         {
-            most_overdue = overdue;
-            due = &map;
-            due_region = region;
+            missing = &map;
+            missing_region = region;
         }
     }
-    // One region other than the agent's a frame, so a ring coming into view does not cost a burst.
-    if (due && captureMap(*due, due_region, false))
+    if (missing)
     {
-        due->mLast = now;
+        // One a frame, so a ring coming into view does not cost a burst.
+        if (captureMap(*missing, missing_region, false))
+        {
+            missing->mLast = now;
+        }
+        return;
+    }
+    if (now < mNextSlot || mMaps.empty())
+    {
+        return;
+    }
+    // The rest take turns: one capture a slot, round robin from where the last turn stopped, each region only once
+    // its own period has passed: neighbours every few seconds, regions further off much less often.
+    const size_t n = mMaps.size();
+    for (size_t step = 0; step < n; ++step)
+    {
+        const size_t at = (mCursor + step) % n;
+        RegionMap& map = *mMaps[at];
+        if (map.mRing == 0 || !map.mRegion)
+        {
+            continue;
+        }
+        const F64 period = map.mRing == 1 ? llmax((F32)near_refresh, 0.1f) : llmax((F32)far_refresh, 1.f) * (map.mRing - 1);
+        if (now - map.mLast < period)
+        {
+            continue;
+        }
+        mCursor = (at + 1) % n;
+        mNextSlot = now + llmax((F32)slot, 0.f);
+        if (captureMap(map, map.mRegion, false))
+        {
+            map.mLast = now;
+        }
+        return;
     }
 }
 
@@ -897,13 +946,22 @@ bool SKOverviewCapture::captureMap(RegionMap& map, LLViewerRegion* region, bool 
     const LLVector3 origin = region->getOriginAgent();
     F32 floor_z, cut_z;
     cutHeights(gAgent.getPositionGlobal(), gAgent.getPositionAgent().mV[VZ], floor_z, cut_z);
-    // Only the agent's own region is cut at its storey; the others show their roofs.
-    const F32 top = agent ? cut_z : cut_z + OPEN_CUT_ABOVE_M;
+    Shot shot;
+    // The agent's own region is cut at its storey. The others are not cut: they keep only the clusters at the agent's
+    // level, the ground's when the agent is on it, and show them whole, roofs and all.
+    if (!agent)
+    {
+        const F32 land = LLWorld::getInstance()->resolveLandHeightGlobal(gAgent.getPositionGlobal());
+        shot.mLevel.mAll = false;
+        shot.mLevel.mGround = floor_z - land <= ON_GROUND_M;
+        shot.mLevel.mLo = floor_z - LEVEL_BELOW_M;
+        shot.mLevel.mHi = floor_z + LEVEL_ABOVE_M;
+    }
+    const F32 top = agent ? cut_z : llmax(mCensus.levelTop(shot.mLevel, cut_z), region->getLand().getMaxZ()) + 1.f;
     const F32 bottom = llmin(top - 64.f, -32.f);
     const LLVector3 centre(origin.mV[VX] + width * 0.5f, origin.mV[VY] + width * 0.5f, top);
 
     // Straight down, east to the right and north up; the ortho near plane at the eye is the cut as well.
-    Shot shot;
     LLVector4a eye4, dir4, up4;
     eye4.load3(centre.mV);
     dir4.set(0.f, 0.f, -1.f, 0.f);

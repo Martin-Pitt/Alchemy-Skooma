@@ -66,6 +66,7 @@ namespace skoverview
     constexpr F32 WALL_NZ = 0.5f;       ///< steeper than 60 degrees is wall
     constexpr F32 COVER_TOP_M = 1.6f;   ///< a part no taller than this is cover, not wall
     constexpr F32 INVISIBLE_WALL_M = 64.f; ///< a fully transparent part larger than this on any axis is no wall
+    constexpr F32 GROUND_BASE_M = 4.f;  ///< a cluster whose base is no higher than this above the land stands on it
 
     U8 codeOf(CensusClass cls);
 
@@ -85,12 +86,39 @@ namespace skoverview
 class SKOverviewCensus
 {
 public:
+    /// A cluster's triangles within a batch (or a part's, outside any cluster), and the heights they span.
+    struct Group
+    {
+        F32 mMinZ = 0.f;        ///< global z, which is agent z too
+        F32 mMaxZ = 0.f;
+        bool mGround = false;   ///< its base is on the land under it
+        U32 mStart[skoverview::NUM_CENSUS_CLASSES] = {}; ///< its vertex range within each class's
+        U32 mCount[skoverview::NUM_CENSUS_CLASSES] = {};
+    };
+
     struct Batch
     {
         LLVector3d mOrigin;     ///< region origin, global; vertices are region-local
         LLPointer<LLVertexBuffer> mBuffer;
         U32 mStart[skoverview::NUM_CENSUS_CLASSES + 1] = {}; ///< vertex ranges per class
+        std::vector<Group> mGroups;
     };
+
+    /// Which groups a shot draws: all of them, or the ground's and those at the agent's level.
+    struct Level
+    {
+        bool mAll = true;
+        bool mGround = false;   ///< the agent is at ground level: groups standing on the land are kept
+        F32 mLo = 0.f;          ///< groups overlapping these heights are kept
+        F32 mHi = 0.f;
+
+        bool keeps(const Group& group) const
+        {
+            return mAll || (mGround && group.mGround) || (group.mMaxZ >= mLo && group.mMinZ <= mHi);
+        }
+    };
+    /// The top of what a level keeps, at least floor; for a shot's near plane.
+    F32 levelTop(const Level& level, F32 floor) const;
 
     SKOverviewCensus();
     ~SKOverviewCensus();

@@ -5348,10 +5348,21 @@
             <key>Value</key>
             <real>384.0</real>
         </map>
+        <key>SKOverviewQueueInterval</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds between captures of regions other than the agent's, which take turns round robin; a region with no capture yet is taken at once.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.25</real>
+        </map>
         <key>SKOverviewNeighbourRefresh</key>
         <map>
             <key>Comment</key>
-            <string>Seconds between top-down captures of a region touching the agent's; these are not cut, so roofs show.</string>
+            <string>Seconds between top-down captures of a region touching the agent's; it is not cut, but keeps only the clusters at the agent's level, the ground's when the agent is on it.</string>
             <key>Persist</key>
             <integer>1</integer>
             <key>Type</key>

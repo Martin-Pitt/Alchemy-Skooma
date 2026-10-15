@@ -112,6 +112,7 @@ private:
         F32 mCut = 0.f;     // agent-space z
         F32 mFloor = 0.f;   // the height colours are relative to
         F32 mWater = 0.f;   // the water surface's height
+        SKOverviewCensus::Level mLevel; // the census groups it draws
         LLVector4 mRegion;  // the region styled as the agent's: min x, min y, max x, max y, agent space
         bool mTopDown = false;
     };
@@ -156,6 +157,8 @@ private:
     bool mMoversDrawn = false;
     F32 mTacticalDistance = 0.f;
     std::vector<std::unique_ptr<RegionMap>> mMaps;
+    size_t mCursor = 0;     // where the next round-robin turn starts in mMaps
+    F64 mNextSlot = 0.0;    // when the next turn may capture
     Stats mStats;
     F32 mDemandRange = 0.f;
     bool mGLFailed = false;
