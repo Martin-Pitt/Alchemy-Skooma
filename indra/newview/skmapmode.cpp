@@ -297,6 +297,12 @@ void SKMapMode::recentre()
     {
         return;
     }
+    // The flycam drives the camera itself, so it is turned off before the map can move it.
+    if (LLViewerJoystick::getInstance()->getOverrideCamera())
+    {
+        LLViewerJoystick::getInstance()->toggleFlycam();
+        LLViewerJoystick::getInstance()->setCameraNeedsUpdate(true); // the flycam's view no longer holds the camera
+    }
     const LLVector3d agent = gAgent.getPositionGlobal();
     const LLVector3d focus = gAgentCamera.getFocusGlobal();
     const LLVector3d offset(agent.mdV[VX] - focus.mdV[VX], agent.mdV[VY] - focus.mdV[VY], 0.0);
