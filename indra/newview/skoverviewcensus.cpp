@@ -30,6 +30,7 @@
 #include "llimagegl.h"
 #include "llmaterial.h"
 #include "llvertexbuffer.h"
+#include "llviewercontrol.h"
 #include "llviewerregion.h"
 #include "llworld.h"
 #include "llvovolume.h"
@@ -43,6 +44,7 @@
 #include "llviewertexture.h"
 #include "llgltfmaterial.h"
 
+#include <algorithm>
 #include <cmath>
 #include <map>
 #include <set>
@@ -279,6 +281,16 @@ bool SKOverviewCensus::update()
     }
     const bool recheck = mUnknownLook && now >= mRecheckAt;
     const bool sculpts_due = now >= mSculptsAt;
+    // The surrounds are looked at least often: large rendered-only parts anywhere in the loaded regions.
+    static LLCachedControl<F32> surrounds_every(gSavedSettings, "SKOverviewSurroundsRefresh", 15.f);
+    const bool surrounds_due = now >= mSurroundsAt;
+    if (surrounds_due)
+    {
+        mSurroundsAt = now + llmax((F32)surrounds_every, 1.f);
+        const U64 before = mSurroundsSig;
+        gatherSurrounds(*snap);
+        mRecordsChanged |= mSurroundsSig != before;
+    }
     if (!mRecordsChanged && !recheck && !sculpts_due && !mBatches.empty())
     {
         return true;
@@ -296,15 +308,7 @@ bool SKOverviewCensus::update()
     };
     // Sculpted parts draw from what is rendered, over land and void alike: a megasculpt's physics is a poor stand-in
     // for the ground it shows, and a phantom one has no physics record at all. Their census records are not drawn.
-    struct Sculpt
-    {
-        LLUUID mPart;
-        LLVector3d mOrigin;             ///< its region's origin, global; triangles are region-local
-        std::vector<LLVector3> mTris;
-        F32 mHeight = 0.f;
-        skoverview::CensusClass mFixed = skoverview::NUM_CENSUS_CLASSES;
-    };
-    std::vector<Sculpt> sculpts;
+    std::vector<RenderedPart> sculpts;
     std::set<LLUUID> sculpted;
     for (S32 i = 0; i < gObjectList.getNumObjects(); ++i)
     {
@@ -332,7 +336,7 @@ bool SKOverviewCensus::update()
         {
             continue;
         }
-        Sculpt sc;
+        RenderedPart sc;
         sc.mPart = volume->getID();
         sc.mOrigin = volume->getRegion()->getOriginGlobal();
         const LLVector3 region_agent = volume->getRegion()->getOriginAgent();
@@ -365,6 +369,17 @@ bool SKOverviewCensus::update()
             ((U64)(S64)std::llround(centre.mdV[VZ] * 64.0) << 42));
         sculpts.push_back(std::move(sc));
     }
+
+    // The surrounds the near look did not already take.
+    for (const RenderedPart& part : mSurrounds)
+    {
+        if (std::none_of(sculpts.begin(), sculpts.end(),
+                         [&part](const RenderedPart& sc) { return sc.mPart == part.mPart; }))
+        {
+            sculpts.push_back(part);
+        }
+    }
+    mix(mSurroundsSig);
 
     std::vector<const sknav::Record*> kept;
     std::vector<U8> fixed_classes;
@@ -473,7 +488,7 @@ bool SKOverviewCensus::update()
         U8 fixed_class = skoverview::NUM_CENSUS_CLASSES;
         if (is_sculpt)
         {
-            const Sculpt& sc = sculpts[i - kept.size()];
+            const RenderedPart& sc = sculpts[i - kept.size()];
             tris = sc.mTris;
             part_height = sc.mHeight;
             fixed_class = sc.mFixed;
@@ -614,4 +629,74 @@ F32 SKOverviewCensus::levelTop(const Level& level, F32 floor) const
         }
     }
     return top;
+}
+
+void SKOverviewCensus::gatherSurrounds(const SKCensusSnapshot& snap)
+{
+    LL_PROFILE_ZONE_SCOPED;
+    // Large parts the census holds no shape for (megasculpts, phantom or physics-less meshes and megaprims) are
+    // drawn from what is rendered, wherever they are in the loaded regions, so the map shows the land they make.
+    std::set<LLUUID> recorded;
+    for (const sknav::RecordPtr& rec : snap.mRecords)
+    {
+        if (rec)
+        {
+            recorded.insert(rec->mPart);
+        }
+    }
+    mSurrounds.clear();
+    U64 sig = 1469598103934665603ull;
+    for (S32 i = 0; i < gObjectList.getNumObjects(); ++i)
+    {
+        LLVOVolume* volume = dynamic_cast<LLVOVolume*>(gObjectList.getObject(i));
+        if (!volume || volume->isDead() || volume->isAttachment() || volume->isAvatar() || !volume->getRegion() ||
+            !volume->getVolume() || volume->getAvatar())
+        {
+            continue;
+        }
+        const LLVector3 scale = volume->getScale();
+        if (llmax(scale.mV[VX], llmax(scale.mV[VY], scale.mV[VZ])) < skoverview::SURROUND_MIN_M)
+        {
+            continue;
+        }
+        const bool sculpt = volume->isSculpted() && !volume->isMesh();
+        if (!sculpt && recorded.count(volume->getID()))
+        {
+            continue;
+        }
+        if (volume->isSculpted() && volume->getVolume()->getSculptLevel() != 0)
+        {
+            continue; // its map or mesh has not loaded: a placeholder, not its shape
+        }
+        if (partSeen(volume->getID(), nullptr) != Seen::VISIBLE)
+        {
+            continue;
+        }
+        SKShapeGeometry geom;
+        if (!skRenderShapeGeometry(volume, geom))
+        {
+            continue;
+        }
+        RenderedPart part;
+        part.mPart = volume->getID();
+        part.mOrigin = volume->getRegion()->getOriginGlobal();
+        const LLVector3 region_agent = volume->getRegion()->getOriginAgent();
+        part.mTris.reserve(geom.mTriangles.size());
+        F32 lo = 1e30f, hi = -1e30f;
+        for (const LLVector3& v : geom.mTriangles)
+        {
+            const LLVector3 local = volume->volumePositionToAgent(v) - region_agent;
+            lo = llmin(lo, local.mV[VZ]);
+            hi = llmax(hi, local.mV[VZ]);
+            part.mTris.push_back(local);
+        }
+        part.mHeight = hi - lo;
+        const LLVector3d centre = volume->getPositionGlobal();
+        sig = (sig ^ part.mPart.getCRC32()) * 1099511628211ull;
+        sig = (sig ^ (U64)part.mTris.size()) * 1099511628211ull;
+        sig = (sig ^ ((U64)(S64)std::llround(centre.mdV[VX] * 64.0) ^ ((U64)(S64)std::llround(centre.mdV[VY] * 64.0) << 21) ^
+                      ((U64)(S64)std::llround(centre.mdV[VZ] * 64.0) << 42))) * 1099511628211ull;
+        mSurrounds.push_back(std::move(part));
+    }
+    mSurroundsSig = sig;
 }
