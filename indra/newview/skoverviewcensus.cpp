@@ -48,6 +48,8 @@
 
 namespace skoverview
 {
+    const size_t MAX_BATCH_VERTICES = 16u * 1024u * 1024u;
+
     U8 codeOf(CensusClass cls)
     {
         static const U8 codes[NUM_CENSUS_CLASSES] = { CODE_FLOOR, CODE_WALL,   CODE_COVER,       CODE_RAMP,
@@ -440,6 +442,10 @@ bool SKOverviewCensus::update()
             const LLVector3& a = tris[t];
             const LLVector3& b = tris[t + 1];
             const LLVector3& c = tris[t + 2];
+            if (!a.isFinite() || !b.isFinite() || !c.isFinite())
+            {
+                continue;
+            }
             LLVector3 n = (b - a) % (c - a);
             const F32 len = n.length();
             if (len <= 1.0e-8f)
@@ -461,37 +467,52 @@ bool SKOverviewCensus::update()
     for (auto& entry : regions)
     {
         Bins& bins = entry.second;
-        U32 total = 0;
+        size_t total = 0;
         for (const auto& v : bins.mClass)
         {
-            total += (U32)v.size();
+            total += v.size();
         }
         if (!total)
         {
             continue;
         }
+        // A buffer's byte size is a U32 of 16-byte vertices: far beyond anything a region holds, but a runaway
+        // source must not wrap it into a short buffer.
+        if (total > skoverview::MAX_BATCH_VERTICES)
+        {
+            LL_WARNS("SKOverview") << "census batch of " << total << " vertices over the " << skoverview::MAX_BATCH_VERTICES
+                                   << " limit; region left out" << LL_ENDL;
+            continue;
+        }
         Batch batch;
         batch.mOrigin = bins.mOrigin;
         batch.mBuffer = new LLVertexBuffer(LLVertexBuffer::MAP_VERTEX);
-        if (!batch.mBuffer->allocateBuffer(total, 0))
+        if (!batch.mBuffer->allocateBuffer((U32)total, 0))
         {
             LL_WARNS("SKOverview") << "census buffer of " << total << " vertices could not be allocated" << LL_ENDL;
             continue;
         }
         LLStrider<LLVector3> verts;
-        if (!batch.mBuffer->getVertexStrider(verts))
+        if (!batch.mBuffer->getVertexStrider(verts) || !verts.get() || batch.mBuffer->getNumVerts() < (U32)total)
         {
+            LL_WARNS("SKOverview") << "census batch of " << total << " vertices could not be mapped (buffer holds "
+                                   << batch.mBuffer->getNumVerts() << ")" << LL_ENDL;
             continue;
         }
+        // Never past what was allocated, whatever the bins hold.
         U32 at = 0;
         for (U32 c = 0; c < skoverview::NUM_CENSUS_CLASSES; ++c)
         {
             batch.mStart[c] = at;
             for (const LLVector3& p : bins.mClass[c])
             {
+                if (at >= (U32)total)
+                {
+                    break;
+                }
                 *verts++ = p;
+                ++at;
             }
-            at += (U32)bins.mClass[c].size();
         }
         batch.mStart[skoverview::NUM_CENSUS_CLASSES] = at;
         batch.mBuffer->unmapBuffer();
