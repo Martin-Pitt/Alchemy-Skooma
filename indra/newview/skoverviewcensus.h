@@ -108,6 +108,9 @@ private:
     U64 mSignature = 0;
     bool mUnknownLook = false;  ///< some part's faces or images were not loaded at the last build
     F64 mRecheckAt = 0.0;
+    U64 mRecordsKey = 0;        ///< the census records' identities at the last look
+    bool mRecordsChanged = true;
+    F64 mSculptsAt = 0.0;       ///< when the live sculpts are looked at again
     std::shared_ptr<const struct SKCensusSnapshot> mSnapshot;
     U32 mTriangles = 0;
 };
