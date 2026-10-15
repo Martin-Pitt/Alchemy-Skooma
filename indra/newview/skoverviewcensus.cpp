@@ -261,15 +261,31 @@ bool SKOverviewCensus::update()
     {
         return !mBatches.empty();
     }
-    // Parts whose look was not known yet are asked again every couple of seconds, not only at the next scan.
+    // Work only on change. The census rescans every few frames, but a part it did not see change keeps its record
+    // object, so the records' identities say whether anything moved. Parts whose look was not known yet are asked
+    // again every couple of seconds, and sculpts (which have no record when phantom) every few.
     const F64 now = LLFrameTimer::getUptimeSeconds().value();
-    if (snap->mStamp == mStamp && !(mUnknownLook && now >= mRecheckAt))
+    if (snap->mStamp != mStamp)
     {
-        return !mBatches.empty();
+        mStamp = snap->mStamp;
+        U64 records = 1469598103934665603ull;
+        for (const sknav::RecordPtr& rec : snap->mRecords)
+        {
+            records = (records ^ (U64)(uintptr_t)rec.get()) * 1099511628211ull;
+        }
+        mRecordsChanged |= records != mRecordsKey;
+        mRecordsKey = records;
     }
-    mStamp = snap->mStamp;
+    const bool recheck = mUnknownLook && now >= mRecheckAt;
+    const bool sculpts_due = now >= mSculptsAt;
+    if (!mRecordsChanged && !recheck && !sculpts_due && !mBatches.empty())
+    {
+        return true;
+    }
+    mRecordsChanged = false;
     mUnknownLook = false;
     mRecheckAt = now + 2.0;
+    mSculptsAt = now + 5.0;
 
     // A new scan most often holds the same parts where they were: rebuild only when the geometry moved.
     U64 sig = 1469598103934665603ull;
