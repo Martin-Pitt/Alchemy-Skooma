@@ -12539,7 +12539,7 @@ U32 LLPipeline::skRenderOverview(const LLMatrix4a& view, const LLMatrix4a& proj,
                 }
                 continue;
             }
-            mSimplePool->pushBatch(*info, false, false);
+            mSimplePool->pushBatch(*info, true, false);
         }
         gGL.loadMatrix(LLViewerCamera::getCurrent().getModelview());
         gGLLastMatrix = NULL;
