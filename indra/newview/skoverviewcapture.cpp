@@ -86,6 +86,7 @@ namespace
     GLuint sQueries[2] = { 0, 0 };
 
     const F32 CENSUS_RANGE_M = 128.f;
+    const size_t SK_MAX_TERRITORY = 16;       // regions styled as inside, at most (the resolve's array)
     const F32 AVATAR_HALF_HEIGHT_M = 0.9f;     // an avatar's position over its feet, near enough
     const F32 MARKER_RADIUS_M = 0.35f;         // the avatar marker's cylinder at true size
     const F32 MARKER_HEIGHT_M = 1.8f;
@@ -273,7 +274,16 @@ void SKOverviewCapture::updateDemand(bool wanted)
     // The region maps want the census over the agent's neighbours as well; the tactical view only around it.
     static LLCachedControl<bool> maps(gSavedSettings, "SKMapCaptureBase", false);
     static LLCachedControl<F32> maps_range(gSavedSettings, "SKOverviewCensusRange", 384.f);
-    const F32 range = maps ? llmax((F32)maps_range, CENSUS_RANGE_M) : CENSUS_RANGE_M;
+    F32 range = maps ? llmax((F32)maps_range, CENSUS_RANGE_M) : CENSUS_RANGE_M;
+    // The tactical view shows the neighbours too: the census reaches as far as it looks, in 64 m steps so a zoom
+    // does not restart the demand every frame.
+    static LLCachedControl<bool> tactical(gSavedSettings, "SKTacticalOverview", false);
+    static LLCachedControl<F32> tactical_distance(gSavedSettings, "SKTacticalDistance", 60.f);
+    if (tactical)
+    {
+        const F32 reach = llclamp((F32)tactical_distance, TACTICAL_MIN_M, TACTICAL_MAX_M) + CENSUS_RANGE_M;
+        range = llmax(range, std::ceil(reach / 64.f) * 64.f);
+    }
     if (wanted == mDemanding && (!wanted || range == mDemandRange))
     {
         return;
@@ -540,7 +550,16 @@ void SKOverviewCapture::resolve(LLRenderTarget& capture, LLRenderTarget& resolve
         uniformColour(prog, "sk_invisible", skmap::palette::DROP_EDGE);
         static LLCachedControl<U32> debug_view(gSavedSettings, "SKOverviewDebugView", 0);
         glUniform1i(glGetUniformLocation(prog, "sk_debug_view"), (GLint)(U32)debug_view);
-        glUniform4fv(glGetUniformLocation(prog, "sk_region"), 1, shot.mRegion.mV);
+        {
+            // The territory: the regions styled as inside, at most SK_MAX_TERRITORY of them.
+            std::vector<LLVector4> rects = shot.mTerritory.empty() ? std::vector<LLVector4>{ shot.mRegion } : shot.mTerritory;
+            if (rects.size() > SK_MAX_TERRITORY)
+            {
+                rects.resize(SK_MAX_TERRITORY);
+            }
+            glUniform4fv(glGetUniformLocation(prog, "sk_regions"), (GLsizei)rects.size(), rects.front().mV);
+            glUniform1i(glGetUniformLocation(prog, "sk_region_count"), (GLint)rects.size());
+        }
         gPipeline.mScreenTriangleVB->setBuffer();
         gPipeline.mScreenTriangleVB->drawArrays(LLRender::TRIANGLES, 0, 3);
         gGL.getTextureSlot(1)->unbind();
@@ -1010,6 +1029,18 @@ void SKOverviewCapture::tactical()
         shot.mWater = region->getWaterHeight();
         shot.mRegion = LLVector4(region_min.mV[VX], region_min.mV[VY], region_min.mV[VX] + region_width,
                                  region_min.mV[VY] + region_width);
+        // Every connected region is territory: the agent's first, then its neighbours.
+        shot.mTerritory.push_back(shot.mRegion);
+        for (LLViewerRegion* other : LLWorld::getInstance()->getRegionList())
+        {
+            if (other == region || shot.mTerritory.size() >= SK_MAX_TERRITORY)
+            {
+                continue;
+            }
+            const LLVector3 o = other->getOriginAgent();
+            const F32 w = other->getWidth();
+            shot.mTerritory.push_back(LLVector4(o.mV[VX], o.mV[VY], o.mV[VX] + w, o.mV[VY] + w));
+        }
     }
     shot.mTopDown = false;
     shot.mCull = *LLViewerCamera::getInstance();

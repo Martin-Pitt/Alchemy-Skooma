@@ -114,6 +114,7 @@ private:
         F32 mWater = 0.f;   // the water surface's height
         SKOverviewCensus::Level mLevel; // the census groups it draws
         LLVector4 mRegion;  // the region styled as the agent's: min x, min y, max x, max y, agent space
+        std::vector<LLVector4> mTerritory;  // the regions styled as inside, same form; empty means mRegion alone
         bool mTopDown = false;
     };
     /// A region's top-down map and when it was last taken.

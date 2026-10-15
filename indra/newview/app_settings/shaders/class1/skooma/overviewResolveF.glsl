@@ -40,7 +40,8 @@ uniform float sk_agent_z;       // the floor the agent stands on
 uniform float sk_cut;
 uniform float sk_water_z;
 uniform float sk_water_depth;
-uniform vec4 sk_region;         // the agent's region: min x, min y, max x, max y
+uniform vec4 sk_regions[16];   // the territory: the regions styled as inside, min x, min y, max x, max y
+uniform int sk_region_count;
 uniform vec3 sk_invisible;
 uniform int sk_debug_view;      // SKOverviewDebugView
 
@@ -137,25 +138,76 @@ float luma(vec3 c)
     return dot(c, vec3(0.299, 0.587, 0.114));
 }
 
-// Inside the region, outside it dimmed and greyed over a faint grid, and the region's edge as a glowing stroke.
+bool inRect(vec2 p, vec4 r)
+{
+    return p.x >= r.x && p.y >= r.y && p.x <= r.z && p.y <= r.w;
+}
+
+bool inTerritory(vec2 p)
+{
+    for (int i = 0; i < sk_region_count; ++i)
+    {
+        if (inRect(p, sk_regions[i]))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Inside the territory (every connected region), outside it dimmed and greyed over a faint grid. The territory's
+// outer edge is a glowing stroke; edges between its regions are a dashed line.
 vec3 regionStyle(vec3 c, vec3 pos, float px_m)
 {
-    vec2 lo = pos.xy - sk_region.xy;
-    vec2 hi = sk_region.zw - pos.xy;
-    float inside = min(min(lo.x, lo.y), min(hi.x, hi.y)); // metres to the edge, negative outside
-    if (inside < 0.0)
+    vec2 p = pos.xy;
+    int k = -1;
+    for (int i = 0; i < sk_region_count; ++i)
+    {
+        if (inRect(p, sk_regions[i]))
+        {
+            k = i;
+            break;
+        }
+    }
+    float outer = 1.0e9;    // metres to the territory's outer edge
+    float inner_m = 1.0e9;  // metres to an edge between two of its regions
+    float along = 0.0;      // position along that edge, for the dashes
+    if (k >= 0)
+    {
+        vec4 r = sk_regions[k];
+        const float STEP = 0.5;
+        float dl = p.x - r.x, dr = r.z - p.x, db = p.y - r.y, dt = r.w - p.y;
+        bool ol = !inTerritory(vec2(r.x - STEP, p.y)), or_ = !inTerritory(vec2(r.z + STEP, p.y));
+        bool ob = !inTerritory(vec2(p.x, r.y - STEP)), ot = !inTerritory(vec2(p.x, r.w + STEP));
+        if (ol) outer = min(outer, dl); else if (dl < inner_m) { inner_m = dl; along = p.y; }
+        if (or_) outer = min(outer, dr); else if (dr < inner_m) { inner_m = dr; along = p.y; }
+        if (ob) outer = min(outer, db); else if (db < inner_m) { inner_m = db; along = p.x; }
+        if (ot) outer = min(outer, dt); else if (dt < inner_m) { inner_m = dt; along = p.x; }
+    }
+    else
     {
         c = mix(vec3(luma(c)), c, 0.35) * OUTSIDE_DIM;
-        vec2 g = abs(fract(pos.xy / GRID_M + 0.5) - 0.5) * GRID_M;
+        vec2 g = abs(fract(p / GRID_M + 0.5) - 0.5) * GRID_M;
         float line = 1.0 - smoothstep(0.0, max(px_m * 1.2, 0.08), min(g.x, g.y));
         c += vec3(0.05, 0.07, 0.10) * line;
+        for (int i = 0; i < sk_region_count; ++i)
+        {
+            vec4 r = sk_regions[i];
+            outer = min(outer, length(max(max(r.xy - p, p - r.zw), vec2(0.0))));
+        }
     }
-    float d = abs(inside) / max(px_m, 1e-3);   // pixels to the edge
+    float d = outer / max(px_m, 1e-3);   // pixels to the outer edge
     float stroke = 1.0 - smoothstep(1.5, 2.5, d);
     float glow = exp(-d / 6.0) * 0.35;
-    float inner = (inside > 0.0 && d > 2.5 && d < 3.5) ? 1.0 : 0.0;
+    float dark = (k >= 0 && d > 2.5 && d < 3.5) ? 1.0 : 0.0;
     c = mix(c, EDGE, max(stroke, glow));
-    c = mix(c, VOID, inner * 0.6);
+    c = mix(c, VOID, dark * 0.6);
+    // Between two regions of the territory: a thin dashed line, 4 m on, 4 m off.
+    float di = inner_m / max(px_m, 1e-3);
+    if (di < 1.2 && mod(along, 8.0) < 4.0)
+    {
+        c = mix(c, EDGE, 0.55);
+    }
     return c;
 }
 
