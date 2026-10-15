@@ -105,16 +105,6 @@ target_link_libraries(sknavmesh PRIVATE al::flags PUBLIC llmath llcommon ll::rec
 
 target_precompile_headers(sknavmesh REUSE_FROM llprecompiled)
 
-# The tests ported to Catch2 so far, one binary for the library.
-if(AL_BUILD_TESTS)
-  al_add_test_binary(
-    sknavmesh_tests
-    PROJECT sknavmesh
-    SOURCES tests/sknavcensusio_test.cpp
-    LIBRARIES sknavmesh llcommon
-  )
-endif()
-
 # TUT tests, kept registered until they are ported to Catch2.
 if(AL_BUILD_TESTS AND COMMAND al_add_test)
   al_add_test(sknavasync PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
@@ -145,4 +135,14 @@ if(AL_BUILD_TESTS AND COMMAND al_add_test)
   al_add_test(sknavstamp PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavwind PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_bench(spacesdraw PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
+endif()
+
+# The tests ported to Catch2 so far, one binary for the library.
+if(AL_BUILD_TESTS)
+  al_add_test_binary(
+    sknavmesh_tests
+    PROJECT sknavmesh
+    SOURCES tests/sknavcensusio_test.cpp
+    LIBRARIES sknavmesh llcommon
+  )
 endif()
