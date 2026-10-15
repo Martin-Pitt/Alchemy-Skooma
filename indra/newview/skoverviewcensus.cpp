@@ -73,25 +73,6 @@ namespace skoverview
         return !rec.mDynamic && !(rec.mExclude & sknav::EXCLUDE_SOLID);
     }
 
-    bool encloses(const LLVector3d& min, const LLVector3d& max, const std::vector<LLVector3d>& points)
-    {
-        const LLVector3d size = max - min;
-        const S32 large = (size.mdV[VX] > ENCLOSURE_M) + (size.mdV[VY] > ENCLOSURE_M) + (size.mdV[VZ] > ENCLOSURE_M);
-        if (large < 2)
-        {
-            return false;
-        }
-        for (const LLVector3d& p : points)
-        {
-            if (p.mdV[VX] >= min.mdV[VX] && p.mdV[VX] <= max.mdV[VX] && p.mdV[VY] >= min.mdV[VY] && p.mdV[VY] <= max.mdV[VY] &&
-                p.mdV[VZ] >= min.mdV[VZ] && p.mdV[VZ] <= max.mdV[VZ])
-            {
-                return true;
-            }
-        }
-        return false;
-    }
-
     CensusClass classifyTriangle(F32 nz, F32 part_height)
     {
         const F32 a = std::fabs(nz);
@@ -170,7 +151,7 @@ namespace
     }
 }
 
-bool SKOverviewCensus::update(const std::vector<LLVector3d>& viewpoints)
+bool SKOverviewCensus::update()
 {
     if (!SKWorldCensus::instanceExists())
     {
@@ -181,21 +162,11 @@ bool SKOverviewCensus::update(const std::vector<LLVector3d>& viewpoints)
     {
         return !mBatches.empty();
     }
-    // Which of the scan's large parts hold a viewpoint now: moving into or out of one rebuilds as a new scan does.
-    U64 enclosed = 1469598103934665603ull;
-    for (const sknav::RecordPtr& rec : snap->mRecords)
-    {
-        if (rec && skoverview::encloses(rec->mMin, rec->mMax, viewpoints))
-        {
-            enclosed = (enclosed ^ rec->mPart.getCRC32()) * 1099511628211ull;
-        }
-    }
-    if (snap->mStamp == mStamp && enclosed == mEnclosed)
+    if (snap->mStamp == mStamp)
     {
         return !mBatches.empty();
     }
     mStamp = snap->mStamp;
-    mEnclosed = enclosed;
 
     // A new scan most often holds the same parts where they were: rebuild only when the geometry moved.
     U64 sig = 1469598103934665603ull;
@@ -209,7 +180,7 @@ bool SKOverviewCensus::update(const std::vector<LLVector3d>& viewpoints)
     for (const sknav::RecordPtr& rec : snap->mRecords)
     {
         skoverview::CensusClass fixed;
-        if (!rec || !skoverview::keepRecord(*rec, fixed) || skoverview::encloses(rec->mMin, rec->mMax, viewpoints))
+        if (!rec || !skoverview::keepRecord(*rec, fixed))
         {
             continue;
         }

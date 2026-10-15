@@ -104,8 +104,6 @@ private:
 
     void frame();
     void updateDemand(bool wanted);
-    /// The agent, the main camera and the tactical centre: enclosures around any are left out of the overview.
-    std::vector<LLVector3d> viewpointsGlobal() const;
     /// Caps Lock is taken from the OS while the tactical action is bound to it and the world has the keyboard.
     static void updateCapsLockCapture();
     /// The floor under the agent from the navmesh and the cut above it, or the agent's height and the old offset.

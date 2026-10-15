@@ -384,7 +384,7 @@ void SKOverviewCapture::frame()
     readTimer();
     {
         LL_PROFILE_ZONE_NAMED("sk overview census update");
-        mCensus.update(viewpointsGlobal());
+        mCensus.update();
     }
 
     static LLCachedControl<bool> enabled(gSavedSettings, "SKMapCaptureBase", false);
@@ -497,12 +497,7 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
         capture.clear();
         glClearDepth(clear_depth);
         glClearColor(clear_colour[0], clear_colour[1], clear_colour[2], clear_colour[3]);
-        std::vector<LLVector3> viewpoints;
-        for (const LLVector3d& p : viewpointsGlobal())
-        {
-            viewpoints.push_back(gAgent.getPosAgentFromGlobal(p));
-        }
-        draws = gPipeline.skRenderOverview(shot.mView, shot.mProj, cull, shot.mCut, ghost, census, viewpoints);
+        draws = gPipeline.skRenderOverview(shot.mView, shot.mProj, cull, shot.mCut, ghost, census);
         capture.flush();
     }
 
@@ -711,19 +706,6 @@ void SKOverviewCapture::tactical()
 
 
 // The tactical overview over the finished frame: after renderFinalize, which would otherwise paint the world over it.
-std::vector<LLVector3d> SKOverviewCapture::viewpointsGlobal() const
-{
-    // Where the view is: the agent, the main camera, and the tactical orbit's centre.
-    std::vector<LLVector3d> points;
-    points.push_back(gAgent.getPositionGlobal());
-    points.push_back(gAgent.getPosGlobalFromAgent(LLViewerCamera::getInstance()->getOrigin()));
-    if (!mTacticalCentre.isExactlyZero())
-    {
-        points.push_back(gAgent.getPosGlobalFromAgent(mTacticalCentre));
-    }
-    return points;
-}
-
 bool SKOverviewCapture::tacticalShown()
 {
     return instanceExists() && instance().mLastCompositeFrame == LLFrameTimer::getFrameCount();

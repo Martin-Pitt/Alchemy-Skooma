@@ -146,7 +146,7 @@ public:
     // </SK:Nexii>
     // <SK:Nexii> overview capture: terrain, then rendered geometry when ghost, then census() under the clip program, all below cut_z, a class code per pass in R; returns the draws made.
     U32 skRenderOverview(const LLMatrix4a& view, const LLMatrix4a& proj, LLCamera& camera, F32 cut_z, bool ghost,
-                         const std::function<void()>& census, const std::vector<LLVector3>& viewpoints = {});
+                         const std::function<void()>& census);
     // </SK:Nexii>
 
     void bindScreenToTexture();

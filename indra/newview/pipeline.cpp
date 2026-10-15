@@ -12410,7 +12410,7 @@ U32 LLPipeline::skRenderOutlineCoverage(LLSpatialBridge* bridge, const LLMatrix4
 
 // <SK:Nexii> overview capture: the world under a cut plane, one class code a pass in R, invisible faces flagged in B.
 U32 LLPipeline::skRenderOverview(const LLMatrix4a& view, const LLMatrix4a& proj, LLCamera& camera, F32 cut_z, bool ghost,
-                                 const std::function<void()>& census, const std::vector<LLVector3>& viewpoints)
+                                 const std::function<void()>& census)
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_PIPELINE;
     LL_PROFILE_GPU_ZONE("skRenderOverview");
@@ -12520,61 +12520,6 @@ U32 LLPipeline::skRenderOverview(const LLMatrix4a& view, const LLMatrix4a& proj,
                                        LLRenderPass::PASS_FULLBRIGHT_ALPHA_MASK, LLRenderPass::PASS_NORMSPEC_MASK,
                                        LLRenderPass::PASS_MATERIAL_ALPHA_MASK, LLRenderPass::PASS_SPECMAP_MASK,
                                        LLRenderPass::PASS_NORMMAP_MASK };
-    // Enclosures (sim shells, sky boxes, domes): octree groups whose objects span more than 64 m on two axes around a
-    // viewpoint can only occlude, so their draw infos stay out of the ghost.
-    std::set<const LLDrawInfo*> enclosure;
-    if (ghost && !viewpoints.empty())
-    {
-        for (LLCullResult::sg_iterator i = result.beginVisibleGroups(); i != result.endVisibleGroups(); ++i)
-        {
-            LLSpatialGroup* group = *i;
-            const LLVector4a* ext = group->getObjectExtents();
-            LLVector4a size;
-            size.setSub(ext[1], ext[0]);
-            const S32 large = (size[0] > 64.f) + (size[1] > 64.f) + (size[2] > 64.f);
-            if (large < 2)
-            {
-                continue;
-            }
-            bool inside = false;
-            for (const LLVector3& p : viewpoints)
-            {
-                inside |= p.mV[VX] >= ext[0][0] && p.mV[VX] <= ext[1][0] && p.mV[VY] >= ext[0][1] && p.mV[VY] <= ext[1][1] &&
-                          p.mV[VZ] >= ext[0][2] && p.mV[VZ] <= ext[1][2];
-            }
-            if (!inside)
-            {
-                continue;
-            }
-            for (const auto& entry : group->mDrawMap)
-            {
-                for (const LLPointer<LLDrawInfo>& info : entry.second)
-                {
-                    enclosure.insert(info.get());
-                }
-            }
-        }
-    }
-    auto render_ghost = [&](U32 type)
-    {
-        if (enclosure.empty())
-        {
-            renderObjects(type, false, false, false);
-            return;
-        }
-        gGL.loadMatrix(LLViewerCamera::getCurrent().getModelview());
-        gGLLastMatrix = NULL;
-        for (LLCullResult::drawinfo_iterator i = result.beginRenderMap(type); i != result.endRenderMap(type); ++i)
-        {
-            if (!enclosure.count(*i))
-            {
-                mSimplePool->pushBatch(**i, false, false);
-            }
-        }
-        gGL.loadMatrix(LLViewerCamera::getCurrent().getModelview());
-        gGLLastMatrix = NULL;
-    };
-
     if (ghost)
     {
         // Masked parts draw whole: the ghost is a tint, so a cut-out leaf reading as its card costs nothing.
@@ -12584,7 +12529,7 @@ U32 LLPipeline::skRenderOverview(const LLMatrix4a& view, const LLMatrix4a& proj,
         bind_clip(skoverview::CODE_GHOST);
         for (U32 type : solid_types)
         {
-            render_ghost(type);
+            renderObjects(type, false, false, false);
         }
         renderGLTFObjects(LLRenderPass::PASS_GLTF_PBR, false, false);
         gGL.loadMatrix(view);
@@ -12603,7 +12548,7 @@ U32 LLPipeline::skRenderOverview(const LLMatrix4a& view, const LLMatrix4a& proj,
         bind_clip(skoverview::CODE_GHOST_SECTION);
         for (U32 i = 0; i < 9; ++i)
         {
-            render_ghost(solid_types[i]);
+            renderObjects(solid_types[i], false, false, false);
         }
         renderGLTFObjects(LLRenderPass::PASS_GLTF_PBR, false, false);
         glCullFace(GL_BACK);
