@@ -118,6 +118,7 @@ private:
     LLVector3d mPanView;            ///< the viewer camera's origin at the drag's start, which the cursor rays leave from
     LLVector3d mPanFocus;
     LLVector3d mPanGrabbed;
+    skworldmap::CursorBasis mPanBasis; ///< the camera the drag started from, which every cursor ray is cast through
 
     LLHandle<LLView> mInput;
     LLHandle<LLView> mOverlay;

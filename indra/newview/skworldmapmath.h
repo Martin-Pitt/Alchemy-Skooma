@@ -52,6 +52,26 @@ namespace skworldmap
     /// False when that ray does not meet the ground.
     bool panOffset(const LLVector3d& eye, const LLVector3d& dir, const LLVector3d& grabbed, LLVector3d& offset, F64 ground_z = GROUND_Z);
 
+    /// The camera as a drag found it: a cursor ray is cast through this, never the live camera, so a pan
+    /// cannot feed back into itself.
+    struct CursorBasis
+    {
+        LLVector3d mAt, mLeft, mUp;
+        F64 mFocal = 1.0;   ///< pixels from the eye to the screen, half the view height over tan(fov / 2)
+        F64 mCenterX = 0.0; ///< the world view centre, in the same pixels as the cursor
+        F64 mCenterY = 0.0;
+    };
+
+    /// The unit ray under cursor pixel (x, y), as LLViewerWindow::mouseDirectionGlobal casts it.
+    LLVector3d cursorRay(const CursorBasis& basis, F64 x, F64 y);
+
+    /// The shallowest a pan ray may dip below the horizon (sine of about one degree): nearer the horizon a
+    /// pixel of cursor is kilometres of ground.
+    constexpr F64 PAN_MIN_DIP = 0.02;
+
+    /// `dir` tilted down to at least `min_dip`, keeping its heading.
+    LLVector3d clampDip(const LLVector3d& dir, F64 min_dip = PAN_MIN_DIP);
+
     /// A view for tile selection: the eye, its heading and pitch, the vertical field of view and the screen.
     struct View
     {

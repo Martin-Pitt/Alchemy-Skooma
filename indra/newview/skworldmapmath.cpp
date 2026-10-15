@@ -134,6 +134,28 @@ bool panOffset(const LLVector3d& eye, const LLVector3d& dir, const LLVector3d& g
     return true;
 }
 
+LLVector3d cursorRay(const CursorBasis& basis, F64 x, F64 y)
+{
+    LLVector3d ray = basis.mFocal * basis.mAt - (x - basis.mCenterX) * basis.mLeft + (y - basis.mCenterY) * basis.mUp;
+    ray.normalize();
+    return ray;
+}
+
+LLVector3d clampDip(const LLVector3d& dir, F64 min_dip)
+{
+    if (dir.mdV[VZ] <= -min_dip)
+    {
+        return dir;
+    }
+    const F64 flat = std::sqrt(dir.mdV[VX] * dir.mdV[VX] + dir.mdV[VY] * dir.mdV[VY]);
+    if (flat <= 0.0)
+    {
+        return LLVector3d(0.0, 0.0, -1.0);
+    }
+    const F64 across = std::sqrt(1.0 - min_dip * min_dip) / flat;
+    return LLVector3d(dir.mdV[VX] * across, dir.mdV[VY] * across, -min_dip);
+}
+
 std::vector<SelectedTile> selectTiles(const View& view, const TileSelectParams& params)
 {
     const std::array<Plane, 5> planes = frustumPlanes(view);

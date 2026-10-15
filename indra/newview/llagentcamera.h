@@ -202,6 +202,7 @@ public:
     void            setAnimationDuration(F32 seconds);
     void            startCameraAnimation();
     void            stopCameraAnimation();
+    void            skipCameraSmoothing(); // <SK:Nexii> 3D world map: a pan moves the camera rigidly
 private:
     LLFrameTimer    mAnimationTimer;    // Seconds that transition animation has been active
     F32             mAnimationDuration; // In seconds

@@ -171,4 +171,71 @@ namespace
         CHECK((shown[0] == 3 && shown[1] == 8 && shown[2] == 1)); // nearest first within budget
     }
 
+    // A cursor ray is cast through the drag's frozen camera, as the viewer casts it through the live one.
+    TEST_CASE("skworldmapmath: a cursor ray at the view centre is the look axis, and leans with the cursor", "[skworldmapmath]")
+    {
+        CursorBasis b;
+        b.mAt = LLVector3d(1.0, 0.0, 0.0);
+        b.mLeft = LLVector3d(0.0, 1.0, 0.0);
+        b.mUp = LLVector3d(0.0, 0.0, 1.0);
+        b.mFocal = 500.0;
+        b.mCenterX = 960.0;
+        b.mCenterY = 540.0;
+        CHECK((cursorRay(b, 960.0, 540.0) - b.mAt).magVec() < 1.0e-12);
+        const LLVector3d right = cursorRay(b, 1460.0, 540.0); // 45 degrees to the right, away from left
+        CHECK(std::fabs(right.mdV[VX] - std::sqrt(0.5)) < 1.0e-12);
+        CHECK(std::fabs(right.mdV[VY] + std::sqrt(0.5)) < 1.0e-12);
+    }
+
+    // Near the horizon a pixel is kilometres of ground, so a pan ray never dips less than PAN_MIN_DIP.
+    TEST_CASE("skworldmapmath: clampDip keeps the heading and holds the dip", "[skworldmapmath]")
+    {
+        const LLVector3d steep(0.0, 0.6, -0.8);
+        CHECK((clampDip(steep) - steep).magVec() == 0.0);
+        const LLVector3d level = clampDip(LLVector3d(0.6, 0.8, 0.0));
+        CHECK(std::fabs(level.mdV[VZ] + PAN_MIN_DIP) < 1.0e-12);
+        CHECK(std::fabs(level.magVec() - 1.0) < 1.0e-12);
+        CHECK(std::fabs(level.mdV[VX] * 0.8 - level.mdV[VY] * 0.6) < 1.0e-12);
+        CHECK((clampDip(LLVector3d(0.0, 0.0, 1.0)) - LLVector3d(0.0, 0.0, -1.0)).magVec() == 0.0);
+    }
+
+    // A drag solved through its frozen camera keeps the grabbed point exactly under the cursor, whatever
+    // order the cursor visits in and however often: the answer depends on the cursor alone.
+    TEST_CASE("skworldmapmath: a drag is rigid and does not depend on its history", "[skworldmapmath]")
+    {
+        const LLVector3d eye(256000.0, 256000.0, GROUND_Z + 800.0);
+        const LLVector3d at = lookDirection(30.0 * DEG, -40.0 * DEG);
+        LLVector3d left = LLVector3d(0.0, 0.0, 1.0) % at;
+        left.normalize();
+        CursorBasis b;
+        b.mAt = at;
+        b.mLeft = left;
+        b.mUp = at % left;
+        b.mFocal = 540.0 / std::tan(22.5 * DEG);
+        b.mCenterX = 960.0;
+        b.mCenterY = 540.0;
+        LLVector3d grabbed;
+        REQUIRE(groundHit(eye, cursorRay(b, 700.0, 400.0), grabbed));
+        const F64 path[][2] = { { 710.0, 405.0 }, { 1500.0, 900.0 }, { 3.0, 2.0 }, { 710.0, 405.0 }, { 1900.0, 1070.0 } };
+        LLVector3d first;
+        for (size_t i = 0; i < 5; ++i)
+        {
+            const LLVector3d ray = clampDip(cursorRay(b, path[i][0], path[i][1]));
+            LLVector3d offset;
+            REQUIRE(panOffset(eye, ray, grabbed, offset));
+            CHECK(offset.mdV[VZ] == 0.0);
+            LLVector3d under;
+            REQUIRE(groundHit(eye + offset, ray, under));
+            CHECK((under - grabbed).magVec() < 1.0e-6);
+            if (i == 0)
+            {
+                first = offset;
+            }
+            else if (i == 3)
+            {
+                CHECK((offset - first).magVec() == 0.0);
+            }
+        }
+    }
+
 } // namespace

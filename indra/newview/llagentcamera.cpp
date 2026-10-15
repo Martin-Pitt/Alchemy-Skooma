@@ -2764,6 +2764,14 @@ void LLAgentCamera::stopCameraAnimation()
     mCameraAnimating = false;
 }
 
+// <SK:Nexii> 3D world map: the next update puts the camera on its target, as LL's own pans do.
+void LLAgentCamera::skipCameraSmoothing()
+{
+    mCameraSmoothingStop = true;
+    mCameraSmoothingLastPositionGlobal = calcCameraPositionTargetGlobal();
+}
+// </SK:Nexii>
+
 void LLAgentCamera::clearFocusObject()
 {
     if (mFocusObject.notNull())

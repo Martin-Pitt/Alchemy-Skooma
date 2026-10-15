@@ -309,25 +309,37 @@ bool SKMapMode::beginPan(S32 x, S32 y)
     {
         return false;
     }
+    // The camera as drawn now: its eye, its axes and its screen. The pan never reads the live camera
+    // again, so a camera still settling cannot shake it.
+    const LLViewerCamera* view = LLViewerCamera::getInstance();
+    mPanView = gAgent.getPosGlobalFromAgent(view->getOrigin());
     mPanEye = gAgentCamera.getCameraPositionGlobal();
-    mPanView = gAgent.getPosGlobalFromAgent(LLViewerCamera::getInstance()->getOrigin());
     mPanFocus = gAgentCamera.getFocusGlobal();
+    mPanBasis.mAt.setVec(view->getAtAxis());
+    mPanBasis.mLeft.setVec(view->getLeftAxis());
+    mPanBasis.mUp.setVec(view->getUpAxis());
+    const LLRect world = gViewerWindow->getWorldViewRectScaled();
+    mPanBasis.mFocal = (world.getHeight() * 0.5) / std::tan(view->getView() * 0.5);
+    mPanBasis.mCenterX = world.getCenterX();
+    mPanBasis.mCenterY = world.getCenterY();
     mPanning = true;
     return true;
 }
 
 void SKMapMode::pan(S32 x, S32 y)
 {
-    // Solved from the drag's start, not step by step, so it never drifts. The camera only translates,
-    // so the cursor's direction is the same from any point of the drag.
+    // Solved whole from the drag's start each time, never step by step, so it cannot drift or feed back.
     LLVector3d offset;
-    if (!mPanning || !panOffset(mPanView, LLVector3d(gViewerWindow->mouseDirectionGlobal(x, y)), mPanGrabbed, offset))
+    if (!mPanning || !panOffset(mPanView, clampDip(cursorRay(mPanBasis, x, y)), mPanGrabbed, offset))
     {
         return;
     }
+    // Eye and focus move as one, by the same offset from where the drag began, and without smoothing:
+    // the camera lands exactly where the solve put it.
     gAgentCamera.setFocusOnAvatar(false, false);
-    gAgentCamera.setCameraPosAndFocusGlobal(mPanEye + offset, mPanFocus + offset, LLUUID::null);
+    gAgentCamera.setCameraPosAndFocusGlobal(mPanView + offset, mPanView + (mPanFocus - mPanEye) + offset, LLUUID::null);
     gAgentCamera.stopCameraAnimation();
+    gAgentCamera.skipCameraSmoothing();
 }
 
 // static
