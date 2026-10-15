@@ -995,6 +995,7 @@ namespace
 
     const Fixture* const FIXTURES[] = { &cube_fixture, &multi_submesh_odd_fixture, &empty_submesh_rescales_fixture, &jumps_wide_leaves_fixture, &no_mopp_fixture };
 
+    constexpr F64 ROOT_SCALE = 65536.0 * 254.0;
     constexpr S16 OPEN_LO = std::numeric_limits<S16>::min();
     constexpr S16 OPEN_HI = std::numeric_limits<S16>::max();
 
@@ -1367,15 +1368,60 @@ namespace
         SKHavokError error;
         SKHavokLimits limits;
         limits.mMaxLeaves = 10;
-        CHECK_FALSE(skWalkMopp(code.data(), code.size(), origin, 1.0, tree, limits, error));
+        CHECK_FALSE(skWalkMopp(code.data(), code.size(), origin, ROOT_SCALE, tree, limits, error));
         CHECK(error.mWhat.find("leaf budget") != std::string::npos);
         limits = SKHavokLimits();
         limits.mMaxConstraints = 100;
-        CHECK_FALSE(skWalkMopp(code.data(), code.size(), origin, 1.0, tree, limits, error));
+        CHECK_FALSE(skWalkMopp(code.data(), code.size(), origin, ROOT_SCALE, tree, limits, error));
         CHECK(error.mWhat.find("constraint budget") != std::string::npos);
         limits = SKHavokLimits();
         limits.mMaxCodeBytes = code.size() - 1;
-        CHECK_FALSE(skWalkMopp(code.data(), code.size(), origin, 1.0, tree, limits, error));
+        CHECK_FALSE(skWalkMopp(code.data(), code.size(), origin, ROOT_SCALE, tree, limits, error));
+        limits = SKHavokLimits();
+        limits.mMaxWalkBytes = code.size() + 4096;
+        CHECK_FALSE(skWalkMopp(code.data(), code.size(), origin, ROOT_SCALE, tree, limits, error));
+        CHECK(error.mWhat.find("memory budget") != std::string::npos);
+        CHECK(tree.mLeaves.empty());
+        CHECK(skWalkMopp(code.data(), code.size(), origin, ROOT_SCALE, tree, SKHavokLimits(), error));
+    }
+
+    TEST_CASE("skmeshhavok: rescales and scales that leave the representable range are refused", "[skmeshhavok]")
+    {
+        // 256 nested rescales by 16 would take the frame factor to infinity.
+        std::vector<U8> code;
+        for (S32 i = 0; i < 256; ++i)
+        {
+            code.insert(code.end(), { 0x04, 0x00, 0x00, 0x00 });
+        }
+        code.insert(code.end(), { 0x26, 0x00, 0xFF, 0x30 });
+        SKMoppTree tree;
+        SKHavokError error;
+        CHECK_FALSE(parse_code(code, tree, error));
+        CHECK(error.mWhat.find("rescale") != std::string::npos);
+        CHECK(error.mOffset == 16);
+
+        const F64 origin[3] = { 0.0, 0.0, 0.0 };
+        const U8 leaf[] = { 0x30 };
+        CHECK_FALSE(skWalkMopp(leaf, 1, origin, 1.0e-300, tree, SKHavokLimits(), error));
+        CHECK_FALSE(skWalkMopp(leaf, 1, origin, 1.0, tree, SKHavokLimits(), error));
+        CHECK(skWalkMopp(leaf, 1, origin, 100.0, tree, SKHavokLimits(), error));
+        for (const SKMoppLeaf& l : tree.mLeaves)
+        {
+            for (S32 i = 0; i < 3; ++i)
+            {
+                CHECK(std::isfinite(l.mMin.mV[i]));
+                CHECK(std::isfinite(l.mMax.mV[i]));
+            }
+        }
+    }
+
+    TEST_CASE("skmeshhavok: crossed bounds on a path are refused", "[skmeshhavok]")
+    {
+        SKMoppTree tree;
+        SKHavokError error;
+        CHECK_FALSE(parse_code({ 0x26, 0xC8, 0x64, 0x30 }, tree, error));
+        CHECK(error.mOffset == 3);
+        CHECK_FALSE(parse_code({ 0x10, 0x10, 0x20, 0x01, 0x26, 0x20, 0x30, 0x30, 0x30 }, tree, error));
     }
 
     TEST_CASE("skmeshhavok: an inflated section over its limit is refused", "[skmeshhavok]")
@@ -1428,19 +1474,42 @@ namespace
         CHECK(skParseMeshHavok(reinterpret_cast<const U8*>(packed.data()), packed.size(), havok, SKHavokLimits(), error));
     }
 
-    TEST_CASE("skmeshhavok: a leaf naming no triangle fails the mapping", "[skmeshhavok]")
+    TEST_CASE("skmeshhavok: leaves map only when they name every triangle once", "[skmeshhavok]")
     {
         SKMoppTree tree;
         SKHavokError error;
-        REQUIRE(parse_code({ 0x0B, 0x00, 0x20, 0x00, 0x00, 0x30 }, tree, error));
+        // Keys 0, 1 << 20 and 2 << 20: the first triangle of three non-empty submeshes.
+        REQUIRE(parse_code({ 0x0B, 0x00, 0x00, 0x00, 0x00, 0x20, 0x80, 0x01, 0x30, 0x20, 0x80, 0x06,
+                             0x0B, 0x00, 0x10, 0x00, 0x00, 0x30, 0x0B, 0x00, 0x20, 0x00, 0x00, 0x30 },
+                           tree, error));
         std::vector<SKMoppTriangleRef> refs;
-        // Key names the third non-empty submesh; there are two.
-        CHECK_FALSE(skMapMoppLeaves(tree, { 4, 0, 4 }, refs, error));
+        REQUIRE(skMapMoppLeaves(tree, { 1, 0, 1, 0, 1 }, refs, error));
+        REQUIRE(refs.size() == 3);
+        CHECK(refs[2].mSubmesh == 4);
+        CHECK(refs[2].mGlobal == 2);
+        // A key past the non-empty submeshes, a triangle with no leaf, a triangle with two.
+        CHECK_FALSE(skMapMoppLeaves(tree, { 1, 0, 2 }, refs, error));
         CHECK(refs.empty());
-        CHECK(skMapMoppLeaves(tree, { 4, 0, 4, 0, 1 }, refs, error));
-        REQUIRE(refs.size() == 1);
-        CHECK(refs[0].mSubmesh == 4);
-        CHECK(refs[0].mGlobal == 8);
+        CHECK_FALSE(skMapMoppLeaves(tree, { 1, 0, 1, 0, 2 }, refs, error));
+        REQUIRE(parse_code({ 0x20, 0x80, 0x00, 0x30 }, tree, error));
+        CHECK_FALSE(skMapMoppLeaves(tree, { 2 }, refs, error));
+        CHECK(error.mWhat.find("twice") != std::string::npos);
+    }
+
+    TEST_CASE("skmeshhavok: malformed or oversized WeldingData fails the block", "[skmeshhavok]")
+    {
+        LLSD section = fixture_section(cube_fixture);
+        SKMeshHavok havok;
+        SKHavokError error;
+        section["WeldingData"] = LLSD::Binary(5, 0);
+        CHECK_FALSE(skParseMeshHavok(section, havok, SKHavokLimits(), error));
+        section["WeldingData"] = LLSD::Binary(64, 0);
+        SKHavokLimits limits;
+        limits.mMaxTriangles = 31;
+        CHECK_FALSE(skParseMeshHavok(section, havok, limits, error));
+        CHECK(error.mWhat.find("limit") != std::string::npos);
+        limits.mMaxTriangles = 32;
+        CHECK(skParseMeshHavok(section, havok, limits, error));
     }
 
     TEST_CASE("skmeshhavok: physics_mesh with an index past its vertices is refused", "[skmeshhavok]")
@@ -1457,6 +1526,22 @@ namespace
         section[0]["TriangleList"] = LLSD::Binary(6, 0);
         CHECK(skParsePhysicsMesh(section, mesh, SKHavokLimits(), error));
         section[0]["PositionDomain"]["Max"][1] = std::numeric_limits<F64>::quiet_NaN();
+        CHECK_FALSE(skParsePhysicsMesh(section, mesh, SKHavokLimits(), error));
+        section[0]["PositionDomain"]["Max"][1] = 0.5;
+
+        // Strides, empty triangle lists and empty entries other than {NoGeometry: true}.
+        section[0]["TriangleList"] = LLSD::Binary(7, 0);
+        CHECK_FALSE(skParsePhysicsMesh(section, mesh, SKHavokLimits(), error));
+        section[0]["TriangleList"] = LLSD::Binary();
+        CHECK_FALSE(skParsePhysicsMesh(section, mesh, SKHavokLimits(), error));
+        section[0]["TriangleList"] = LLSD::Binary(6, 0);
+        LLSD empty;
+        empty["NoGeometry"] = true;
+        section.append(empty);
+        CHECK(skParsePhysicsMesh(section, mesh, SKHavokLimits(), error));
+        section[1]["NoGeometry"] = false;
+        CHECK_FALSE(skParsePhysicsMesh(section, mesh, SKHavokLimits(), error));
+        section[1] = 3;
         CHECK_FALSE(skParsePhysicsMesh(section, mesh, SKHavokLimits(), error));
     }
 }

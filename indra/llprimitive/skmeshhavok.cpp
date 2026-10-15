@@ -208,6 +208,14 @@ U32 SKMoppTree::getHalfSpaces(const SKMoppConstraint& constraint, SKMoppHalfSpac
         h.mNormal[2] = -a[2];
         h.mDistance = b - constraint.mLo;
     }
+    for (U32 i = 0; i < count; ++i)
+    {
+        if (!std::isfinite(out[i].mNormal[0]) || !std::isfinite(out[i].mNormal[1]) || !std::isfinite(out[i].mNormal[2])
+            || !std::isfinite(out[i].mDistance))
+        {
+            return 0;
+        }
+    }
     return count;
 }
 
@@ -251,8 +259,8 @@ std::vector<U32> SKPhysicsMesh::getTriangleCounts() const
     return counts;
 }
 
-bool skWalkMopp(const U8* code, size_t length, const F64 origin[3], F64 scale, SKMoppTree& out,
-                const SKHavokLimits& limits, SKHavokError& error)
+static bool walk_mopp(const U8* code, size_t length, const F64 origin[3], F64 scale, SKMoppTree& out,
+                      const SKHavokLimits& limits, SKHavokError& error)
 {
     out.mFrames.clear();
     out.mConstraints.clear();
@@ -265,7 +273,8 @@ bool skWalkMopp(const U8* code, size_t length, const F64 origin[3], F64 scale, S
         }
         out.mOrigin[i] = origin[i];
     }
-    if (!std::isfinite(scale) || scale <= 0.0 || scale > 1.0e15)
+    // The root box, 255 units of 65536 / scale, has to stay a representable size in the mesh frame.
+    if (!std::isfinite(scale) || scale <= 0.0 || scale > 1.0e15 || ROOT_RANGE * 255.0 / scale > MAX_ABS_VALUE)
     {
         return fail(error, "MoppInfo scale is out of range", 0);
     }
@@ -286,6 +295,11 @@ bool skWalkMopp(const U8* code, size_t length, const F64 origin[3], F64 scale, S
 
     // A well-formed tree reads each byte once; anything visiting more is a DAG or a loop.
     U64 budget = (U64)length * 2 + 16;
+    auto walk_bytes = [&]()
+    {
+        return (U64)length + out.mConstraints.size() * sizeof(SKMoppConstraint) + out.mFrames.size() * sizeof(SKMoppFrame)
+               + out.mLeaves.size() * sizeof(SKMoppLeaf) + stack.size() * sizeof(WalkState);
+    };
 
     auto add_constraint = [&](WalkState& state, U8 opcode, U8 kind, S32 lo, S32 hi) -> bool
     {
@@ -321,6 +335,10 @@ bool skWalkMopp(const U8* code, size_t length, const F64 origin[3], F64 scale, S
             if (budget-- == 0)
             {
                 return fail(error, "MoppData walk is over its step budget", pos);
+            }
+            if (walk_bytes() > limits.mMaxWalkBytes)
+            {
+                return fail(error, "MoppData walk is over its memory budget", pos);
             }
             if (pos >= length)
             {
@@ -368,6 +386,10 @@ bool skWalkMopp(const U8* code, size_t length, const F64 origin[3], F64 scale, S
                     frame.mOffset[i] = parent.mOffset[i] + u8(1 + i) / parent.mFactor;
                 }
                 frame.mFactor = parent.mFactor * (F64)(1u << op);
+                if (frame.mFactor > limits.mMaxFrameFactor)
+                {
+                    return fail(error, "MOPP rescale is out of range", pos);
+                }
                 out.mFrames.push_back(frame);
                 state.mFrame = (U32)out.mFrames.size() - 1;
                 state.mPos += 4;
@@ -471,8 +493,12 @@ bool skWalkMopp(const U8* code, size_t length, const F64 origin[3], F64 scale, S
                 const F64 step = ROOT_RANGE / scale;
                 for (S32 i = 0; i < 3; ++i)
                 {
+                    if (state.mMin[i] > state.mMax[i])
+                    {
+                        return fail(error, "MOPP leaf bounds are empty", pos);
+                    }
                     leaf.mMin.mV[i] = (F32)(origin[i] + state.mMin[i] * step);
-                    leaf.mMax.mV[i] = (F32)(origin[i] + llmax(state.mMin[i], state.mMax[i]) * step);
+                    leaf.mMax.mV[i] = (F32)(origin[i] + state.mMax[i] * step);
                 }
                 out.mLeaves.push_back(leaf);
                 break;
@@ -486,7 +512,39 @@ bool skWalkMopp(const U8* code, size_t length, const F64 origin[3], F64 scale, S
     return true;
 }
 
-bool skInflateLLSD(const U8* data, size_t size, LLSD& out, const SKHavokLimits& limits, SKHavokError& error)
+// Runs body, turning any exception into a failure: nothing may escape onto the thread that called.
+template <typename BODY>
+static bool guarded(SKHavokError& error, BODY&& body)
+{
+    try
+    {
+        return body();
+    }
+    catch (const std::bad_alloc&)
+    {
+        error.mOutOfMemory = true;
+        return fail(error, "out of memory", error.mOffset);
+    }
+    catch (...)
+    {
+        return fail(error, "unexpected exception", error.mOffset);
+    }
+}
+
+bool skWalkMopp(const U8* code, size_t length, const F64 origin[3], F64 scale, SKMoppTree& out,
+                const SKHavokLimits& limits, SKHavokError& error)
+{
+    const bool ok = guarded(error, [&]() { return walk_mopp(code, length, origin, scale, out, limits, error); });
+    if (!ok)
+    {
+        out.mFrames.clear();
+        out.mConstraints.clear();
+        out.mLeaves.clear();
+    }
+    return ok;
+}
+
+static bool inflate_llsd(const U8* data, size_t size, LLSD& out, const SKHavokLimits& limits, SKHavokError& error)
 {
     out.clear();
     if (!data || size == 0)
@@ -541,6 +599,7 @@ bool skInflateLLSD(const U8* data, size_t size, LLSD& out, const SKHavokLimits& 
     catch (const std::bad_alloc&)
     {
         inflateEnd(&stream);
+        error.mOutOfMemory = true;
         return fail(error, "out of memory inflating section", size - stream.avail_in);
     }
     inflateEnd(&stream);
@@ -554,7 +613,7 @@ bool skInflateLLSD(const U8* data, size_t size, LLSD& out, const SKHavokLimits& 
     return true;
 }
 
-bool skParseMeshHavok(const LLSD& section, SKMeshHavok& out, const SKHavokLimits& limits, SKHavokError& error)
+static bool parse_mesh_havok(const LLSD& section, SKMeshHavok& out, const SKHavokLimits& limits, SKHavokError& error)
 {
     out = SKMeshHavok();
     if (!section.isMap())
@@ -566,12 +625,19 @@ bool skParseMeshHavok(const LLSD& section, SKMeshHavok& out, const SKHavokLimits
     read_mass_props(section["MeshDecompMassProps"], out.mMeshDecompMassProps);
 
     const LLSD& welding = section["WeldingData"];
-    if (welding.isBinary())
+    if (section.has("WeldingData"))
     {
+        if (!welding.isBinary() || welding.asBinary().size() % 2)
+        {
+            return fail(error, "WeldingData is malformed", 0);
+        }
         const LLSD::Binary& bytes = welding.asBinary();
         // 2 bytes a triangle, of which only the first half is filled.
         const U64 triangles = bytes.size() / 2;
-        if (triangles <= limits.mMaxTriangles)
+        if (triangles > limits.mMaxTriangles)
+        {
+            return fail(error, "WeldingData is over the size limit", 0);
+        }
         {
             out.mWelding.mTriangles = (U32)triangles;
             const size_t codes = (size_t)(triangles / 2);
@@ -602,37 +668,18 @@ bool skParseMeshHavok(const LLSD& section, SKMeshHavok& out, const SKHavokLimits
         }
         const LLSD::Binary& code = mopp["MoppData"].asBinary();
         out.mMopp.mBuildType = mopp["BuildType"].asInteger();
-        try
-        {
-            if (!skWalkMopp(code.data(), code.size(), info, info[3], out.mMopp, limits, error))
-            {
-                out.mMopp = SKMoppTree();
-                return false;
-            }
-            out.mMopp.mCode = code;
-        }
-        catch (const std::bad_alloc&)
+        if (!walk_mopp(code.data(), code.size(), info, info[3], out.mMopp, limits, error))
         {
             out.mMopp = SKMoppTree();
-            return fail(error, "out of memory walking MOPP", 0);
+            return false;
         }
+        out.mMopp.mCode = code;
         out.mHasMopp = true;
     }
     return true;
 }
 
-bool skParseMeshHavok(const U8* compressed, size_t size, SKMeshHavok& out, const SKHavokLimits& limits,
-                      SKHavokError& error)
-{
-    LLSD section;
-    if (!skInflateLLSD(compressed, size, section, limits, error))
-    {
-        return false;
-    }
-    return skParseMeshHavok(section, out, limits, error);
-}
-
-bool skParsePhysicsMesh(const LLSD& section, SKPhysicsMesh& out, const SKHavokLimits& limits, SKHavokError& error)
+static bool parse_physics_mesh(const LLSD& section, SKPhysicsMesh& out, const SKHavokLimits& limits, SKHavokError& error)
 {
     out = SKPhysicsMesh();
     if (!section.isArray())
@@ -650,8 +697,17 @@ bool skParsePhysicsMesh(const LLSD& section, SKPhysicsMesh& out, const SKHavokLi
     {
         const LLSD& entry = section[s];
         SKPhysicsMeshSubmesh& submesh = out.mSubmeshes[s];
-        if (!entry.isMap() || entry.has("NoGeometry"))
+        if (!entry.isMap())
         {
+            return fail(error, "physics_mesh entry is not a map", s);
+        }
+        if (entry.has("NoGeometry"))
+        {
+            // Every empty entry in the corpus is exactly this.
+            if (!entry["NoGeometry"].isBoolean() || !entry["NoGeometry"].asBoolean())
+            {
+                return fail(error, "physics_mesh NoGeometry is malformed", s);
+            }
             continue;
         }
         const LLSD& position = entry["Position"];
@@ -673,6 +729,11 @@ bool skParsePhysicsMesh(const LLSD& section, SKPhysicsMesh& out, const SKHavokLi
         }
         const LLSD::Binary& pos = position.asBinary();
         const LLSD::Binary& idx = indices.asBinary();
+        // An entry with geometry but no triangle would shift the leaf keys' submesh numbering.
+        if (pos.size() % 6 || idx.size() % 6 || idx.empty())
+        {
+            return fail(error, "physics_mesh buffers are malformed", s);
+        }
         const U64 vertex_count = pos.size() / 6;
         const U64 triangle_count = idx.size() / 6;
         vertices += vertex_count;
@@ -704,8 +765,8 @@ bool skParsePhysicsMesh(const LLSD& section, SKPhysicsMesh& out, const SKHavokLi
     return true;
 }
 
-bool skMapMoppLeaves(const SKMoppTree& tree, const std::vector<U32>& submesh_triangles,
-                     std::vector<SKMoppTriangleRef>& out, SKHavokError& error)
+static bool map_mopp_leaves(const SKMoppTree& tree, const std::vector<U32>& submesh_triangles,
+                            std::vector<SKMoppTriangleRef>& out, SKHavokError& error)
 {
     out.clear();
     std::vector<U32> nonempty;
@@ -720,6 +781,12 @@ bool skMapMoppLeaves(const SKMoppTree& tree, const std::vector<U32>& submesh_tri
         }
         total += submesh_triangles[s];
     }
+    // Each triangle has exactly one leaf (corpus 4244/4244); anything else draws a partial surface.
+    if (tree.mLeaves.size() != total)
+    {
+        return fail(error, "MOPP leaves do not cover physics_mesh", 0);
+    }
+    std::vector<bool> seen((size_t)total, false);
     out.reserve(tree.mLeaves.size());
     for (const SKMoppLeaf& leaf : tree.mLeaves)
     {
@@ -734,7 +801,61 @@ bool skMapMoppLeaves(const SKMoppTree& tree, const std::vector<U32>& submesh_tri
         ref.mSubmesh = nonempty[shape];
         ref.mTriangle = triangle;
         ref.mGlobal = first[shape] + triangle;
+        if (seen[(size_t)ref.mGlobal])
+        {
+            out.clear();
+            return fail(error, "MOPP names a triangle twice", leaf.mPosition);
+        }
+        seen[(size_t)ref.mGlobal] = true;
         out.push_back(ref);
     }
     return true;
+}
+
+bool skInflateLLSD(const U8* data, size_t size, LLSD& out, const SKHavokLimits& limits, SKHavokError& error)
+{
+    const bool ok = guarded(error, [&]() { return inflate_llsd(data, size, out, limits, error); });
+    if (!ok)
+    {
+        out.clear();
+    }
+    return ok;
+}
+
+bool skParseMeshHavok(const LLSD& section, SKMeshHavok& out, const SKHavokLimits& limits, SKHavokError& error)
+{
+    const bool ok = guarded(error, [&]() { return parse_mesh_havok(section, out, limits, error); });
+    if (!ok)
+    {
+        out = SKMeshHavok();
+    }
+    return ok;
+}
+
+bool skParseMeshHavok(const U8* compressed, size_t size, SKMeshHavok& out, const SKHavokLimits& limits,
+                      SKHavokError& error)
+{
+    LLSD section;
+    return skInflateLLSD(compressed, size, section, limits, error) && skParseMeshHavok(section, out, limits, error);
+}
+
+bool skParsePhysicsMesh(const LLSD& section, SKPhysicsMesh& out, const SKHavokLimits& limits, SKHavokError& error)
+{
+    const bool ok = guarded(error, [&]() { return parse_physics_mesh(section, out, limits, error); });
+    if (!ok)
+    {
+        out = SKPhysicsMesh();
+    }
+    return ok;
+}
+
+bool skMapMoppLeaves(const SKMoppTree& tree, const std::vector<U32>& submesh_triangles,
+                     std::vector<SKMoppTriangleRef>& out, SKHavokError& error)
+{
+    const bool ok = guarded(error, [&]() { return map_mopp_leaves(tree, submesh_triangles, out, error); });
+    if (!ok)
+    {
+        out.clear();
+    }
+    return ok;
 }

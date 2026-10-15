@@ -35,6 +35,8 @@ struct SKHavokLimits
     U32 mMaxLeaves = 1u << 21;
     U32 mMaxConstraints = 1u << 23;
     U32 mMaxFrames = 1u << 20;
+    size_t mMaxWalkBytes = 64 * 1024 * 1024; // everything a MOPP walk holds at once, the code's copy included
+    F64 mMaxFrameFactor = 65536.0;           // composed rescales; the corpus reaches 128
     U32 mMaxSubmeshes = 4096;
     U64 mMaxVertices = 1u << 22;
     U64 mMaxTriangles = 1u << 22;
@@ -44,6 +46,7 @@ struct SKHavokError
 {
     std::string mWhat;
     U64 mOffset = 0; // byte offset into the input that was being read
+    bool mOutOfMemory = false; // the input may be fine; worth trying again later
 };
 
 // HullMassProps or MeshDecompMassProps: inertia is row-major, about the CoM, for unit mass.
@@ -139,7 +142,7 @@ struct SKMeshHavok
     SKMoppTree mMopp;
 };
 
-// physics_mesh in file order, empty entries kept empty.
+// physics_mesh in file order; a {NoGeometry: true} entry is kept, empty.
 struct SKPhysicsMeshSubmesh
 {
     std::vector<LLVector3> mPositions;
@@ -169,6 +172,7 @@ bool skParseMeshHavok(const U8* compressed, size_t size, SKMeshHavok& out, const
 bool skParsePhysicsMesh(const LLSD& section, SKPhysicsMesh& out, const SKHavokLimits& limits, SKHavokError& error);
 
 // Each leaf's triangle, keys indexing the non-empty submeshes; submesh_triangles is per physics_mesh entry.
+// Fails unless every triangle has exactly one leaf.
 bool skMapMoppLeaves(const SKMoppTree& tree, const std::vector<U32>& submesh_triangles,
                      std::vector<SKMoppTriangleRef>& out, SKHavokError& error);
 
