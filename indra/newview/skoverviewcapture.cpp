@@ -86,6 +86,8 @@ namespace
     GLuint sQueries[2] = { 0, 0 };
 
     const F32 CENSUS_RANGE_M = 128.f;
+    const F32 TACTICAL_MIN_PITCH = 20.f * DEG_TO_RAD;   // alt-cam tilts the tactical camera no flatter than this
+    const F32 TACTICAL_MAX_PITCH = 89.f * DEG_TO_RAD;   // nor past straight down
     const F32 AVATAR_HALF_HEIGHT_M = 0.9f;     // an avatar's position over its feet, near enough
     const F32 MARKER_RADIUS_M = 0.35f;         // the avatar marker's cylinder at true size
     const F32 MARKER_HEIGHT_M = 1.8f;
@@ -448,6 +450,88 @@ namespace
         LLViewerRegion* region = LLWorld::getInstance()->getRegionFromPosGlobal(pos);
         region = region ? region : gAgent.getRegion();
         return region ? region->getWaterHeight() : -1.0e6f;
+    }
+}
+
+bool SKOverviewCapture::tacticalMouseDown(S32 x, S32 y, MASK mask)
+{
+    if (!tacticalShown() || !(mask & MASK_ALT))
+    {
+        return false;
+    }
+    SKOverviewCapture& self = instance();
+    if (!self.mTacticalCam.mActive)
+    {
+        // Take over from where the overview was looking.
+        self.mTacticalCam.mActive = true;
+        self.mTacticalCam.mFocus = gAgent.getPosGlobalFromAgent(self.mTacticalTarget);
+        self.mTacticalCam.mYaw = self.mTacticalYaw;
+        self.mTacticalCam.mPitch = self.mTacticalPitch;
+    }
+    self.mTacticalDragging = true;
+    self.mTacticalDragged = false;
+    return true;
+}
+
+bool SKOverviewCapture::tacticalMouseDrag(S32 dx, S32 dy, MASK mask)
+{
+    if (!instanceExists() || !instance().mTacticalDragging)
+    {
+        return false;
+    }
+    SKOverviewCapture& self = instance();
+    if (dx == 0 && dy == 0)
+    {
+        return true;
+    }
+    self.mTacticalDragged = true;
+    static LLCachedControl<F32> distance_setting(gSavedSettings, "SKTacticalDistance", 60.f);
+    if (mask & MASK_CONTROL)
+    {
+        // Pan: the focus slides along the ground, as far as the cursor moves at the focus's distance.
+        const F32 metres_per_px = llclamp((F32)distance_setting, TACTICAL_MIN_M, TACTICAL_MAX_M) * 0.002f;
+        const LLVector3 forward(std::cos(self.mTacticalCam.mYaw), std::sin(self.mTacticalCam.mYaw), 0.f);
+        const LLVector3 right(forward.mV[VY], -forward.mV[VX], 0.f);
+        const LLVector3 move = (right * (F32)-dx + forward * (F32)-dy) * metres_per_px;
+        self.mTacticalCam.mFocus += LLVector3d(move);
+    }
+    else
+    {
+        // Orbit and tilt.
+        self.mTacticalCam.mYaw -= dx * 0.008f;
+        self.mTacticalCam.mPitch = llclamp(self.mTacticalCam.mPitch - dy * 0.006f, TACTICAL_MIN_PITCH, TACTICAL_MAX_PITCH);
+    }
+    return true;
+}
+
+bool SKOverviewCapture::tacticalMouseUp(S32 x, S32 y, MASK mask)
+{
+    if (!instanceExists() || !instance().mTacticalDragging)
+    {
+        return false;
+    }
+    SKOverviewCapture& self = instance();
+    self.mTacticalDragging = false;
+    if (!self.mTacticalDragged)
+    {
+        // A click without a drag: focus on the ground under the cursor.
+        const LLVector2 scale = gViewerWindow->getDisplayScale();
+        const LLVector2 at(x * scale.mV[VX] - self.mTacticalViewport[0], y * scale.mV[VY] - self.mTacticalViewport[1]);
+        LLVector3d world;
+        if (self.groundAt(at, world))
+        {
+            self.mTacticalCam.mFocus = world;
+        }
+    }
+    return true;
+}
+
+void SKOverviewCapture::resetTacticalCamera()
+{
+    if (instanceExists())
+    {
+        instance().mTacticalCam = TacticalCamera();
+        instance().mTacticalDragging = false;
     }
 }
 
@@ -980,8 +1064,18 @@ void SKOverviewCapture::tactical()
     {
         heading.setVec(1.f, 0.f, 0.f);
     }
+    F32 pitch = llclamp((F32)pitch_setting, 5.f, 90.f) * DEG_TO_RAD;
+    if (mTacticalCam.mActive)
+    {
+        // Alt-cam has taken the tactical camera: its own focus, heading and tilt.
+        target = gAgent.getPosAgentFromGlobal(mTacticalCam.mFocus);
+        heading.setVec(std::cos(mTacticalCam.mYaw), std::sin(mTacticalCam.mYaw), 0.f);
+        pitch = mTacticalCam.mPitch;
+    }
+    mTacticalTarget = target;
+    mTacticalYaw = std::atan2(heading.mV[VY], heading.mV[VX]);
+    mTacticalPitch = pitch;
     const F32 distance = llclamp((F32)distance_setting, TACTICAL_MIN_M, TACTICAL_MAX_M);
-    const F32 pitch = llclamp((F32)pitch_setting, 5.f, 90.f) * DEG_TO_RAD;
     const F32 pitch_safe = llmin(pitch, 89.5f * DEG_TO_RAD);
     const LLVector3 eye = target - heading * (distance * std::cos(pitch_safe)) + LLVector3(0.f, 0.f, distance * std::sin(pitch_safe));
     LLVector3 dir = target - eye;

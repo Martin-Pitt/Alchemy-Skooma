@@ -26,6 +26,7 @@
 
 #include "llviewerprecompiledheaders.h"
 #include "llagentcamera.h"
+#include "skoverviewcapture.h" // <SK:Nexii> tactical overview
 
 #include "pipeline.h"
 
@@ -293,6 +294,7 @@ LLAgentCamera::~LLAgentCamera()
 //-----------------------------------------------------------------------------
 void LLAgentCamera::resetView(bool reset_camera, bool change_camera)
 {
+    SKOverviewCapture::resetTacticalCamera(); // <SK:Nexii> tactical overview: the camera reset returns it to the avatar
     if (gDisconnected)
     {
         return;
