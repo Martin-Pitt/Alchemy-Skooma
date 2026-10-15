@@ -55,6 +55,11 @@ const int CODE_VEHICLE = 22;
 const int CODE_SECTION = 23;
 const int CODE_PLACEHOLDER = 24;
 const int CODE_MOVER = 25;
+const int CODE_VEH_CIVIL = 26;
+const int CODE_VEH_ALLY = 27;
+const int CODE_VEH_NEUTRAL = 28;
+const vec3 VEH_ALLY = vec3(0.31, 0.62, 0.67);      // the mini-map's allied vehicle hull (VEH_ALLY_HULL)
+const vec3 VEH_NEUTRAL = vec3(0.55, 0.58, 0.61);   // and neutral (VEH_NEUTRAL_HULL)
 const vec3 MOVER_GREEN = vec3(0.31, 0.60, 0.35);   // the mini-map's civilian vehicle hull (VEH_CIVIL_HULL)
 const int CODE_TERRAIN = 255;
 
@@ -263,9 +268,17 @@ void main()
     {
         c = SLATE_WALL * 1.12;
     }
-    else if (code == CODE_MOVER)
+    else if (code == CODE_MOVER || code == CODE_VEH_CIVIL)
     {
         c = MOVER_GREEN;
+    }
+    else if (code == CODE_VEH_ALLY)
+    {
+        c = VEH_ALLY;
+    }
+    else if (code == CODE_VEH_NEUTRAL)
+    {
+        c = VEH_NEUTRAL;
     }
     else if (code == CODE_PLACEHOLDER)
     {

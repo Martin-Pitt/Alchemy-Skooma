@@ -31,26 +31,28 @@
 #include "skmappeople.h"
 
 #include <map>
+#include <set>
 #include <vector>
 
 class LLVertexBuffer;
+class LLViewerObject;
 class LLVolume;
 
 /// What moves: physical objects, objects the census saw move (keyframed motion among them), elevator cars, and
 /// vehicles. The static census leaves them all out. Vehicles are the mini-map's own (SKMapPeople) plus any moving
-/// linkset someone sits on or that sits on click, with the mini-map's look rules; the overview draws them as their
-/// captured outline. Every other mover is drawn from its rendered faces at its live pose, whole, never cut by the
-/// floor cut. Main thread only.
+/// linkset someone sits on or that sits on click, with the mini-map's look rules. Every mover, vehicles included, is
+/// drawn from its rendered faces at its live pose and true size, whole, never cut by the floor cut; vehicles in the
+/// mini-map's hull colour for their look. Main thread only.
 class SKOverviewMovers
 {
 public:
     SKOverviewMovers();
     ~SKOverviewMovers();
 
-    /// Who moves and where, this frame. True when any non-vehicle mover is to be drawn.
+    /// Who moves and where, this frame. True when anything is to be drawn.
     bool update();
-    /// Draws every non-vehicle mover part with the bound geometry program, loading view * model for each; the
-    /// caller has set the target, the class code (diffuse colour) and the state.
+    /// Draws every mover part with the bound geometry program, setting each part's class code (diffuse colour) and
+    /// loading view * model; the caller has set the target and the state.
     void draw(const LLMatrix4a& view) const;
     /// The vehicles, live, with their looks; hidden ones are left out.
     const std::vector<SKMapPeople::Vehicle>& vehicles() const { return mVehicles; }
@@ -67,7 +69,10 @@ private:
     {
         LLUUID mId;
         LLMatrix4a mModel;      ///< volume space to agent space
+        U8 mCode = 0;           ///< the class code it draws with (skoverviewcensus.h)
     };
+    /// Adds a linkset's parts at their live pose.
+    void addParts(LLViewerObject* root, U8 code, std::set<LLUUID>& live);
 
     std::map<LLUUID, Mesh> mMeshes;
     std::vector<Part> mParts;

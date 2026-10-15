@@ -34,6 +34,7 @@
 #include "llvovolume.h"
 #include "skmappolicy.h"
 #include "skphysicsshape.h"
+#include "skoverviewcensus.h"
 #include "skworldcensus.h"
 
 #include <set>
@@ -169,7 +170,33 @@ bool SKOverviewMovers::update()
             }
             continue;
         }
-        // Everything else draws from its rendered faces, part by part.
+        addParts(root, skoverview::CODE_MOVER, live);
+    }
+    // Vehicles draw the same way, in their look's colour.
+    for (const SKMapPeople::Vehicle& v : mVehicles)
+    {
+        LLViewerObject* root = gObjectList.findObject(v.mRoot);
+        if (!root || root->isDead())
+        {
+            continue;
+        }
+        const U8 code = v.mLook == skmap::VehicleLook::ALLY      ? (U8)skoverview::CODE_VEH_ALLY
+                      : v.mLook == skmap::VehicleLook::NEUTRAL   ? (U8)skoverview::CODE_VEH_NEUTRAL
+                                                                 : (U8)skoverview::CODE_VEH_CIVIL;
+        addParts(root, code, live);
+    }
+    // Meshes of parts no longer moving go.
+    for (auto it = mMeshes.begin(); it != mMeshes.end();)
+    {
+        it = live.count(it->first) ? std::next(it) : mMeshes.erase(it);
+    }
+    return !mParts.empty();
+}
+
+void SKOverviewMovers::addParts(LLViewerObject* root, U8 code, std::set<LLUUID>& live)
+{
+    {
+        // Drawn from its rendered faces, part by part.
         std::vector<LLViewerObject*> parts{ root };
         for (const LLPointer<LLViewerObject>& child : root->getChildren())
         {
@@ -210,16 +237,10 @@ bool SKOverviewMovers::update()
             live.insert(volume->getID());
             if (mesh.mBuffer.notNull())
             {
-                mParts.push_back({ volume->getID(), modelOf(volume) });
+                mParts.push_back({ volume->getID(), modelOf(volume), code });
             }
         }
     }
-    // Meshes of parts no longer moving go.
-    for (auto it = mMeshes.begin(); it != mMeshes.end();)
-    {
-        it = live.count(it->first) ? std::next(it) : mMeshes.erase(it);
-    }
-    return !mParts.empty();
 }
 
 void SKOverviewMovers::draw(const LLMatrix4a& view) const
@@ -232,6 +253,7 @@ void SKOverviewMovers::draw(const LLMatrix4a& view) const
         {
             continue;
         }
+        gGL.diffuseColor4f((F32)part.mCode / 255.f, 0.f, 0.f, 1.f);
         gGL.loadMatrix(view);
         gGL.multMatrix(part.mModel);
         gGL.syncMatrices();

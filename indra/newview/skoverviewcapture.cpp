@@ -98,9 +98,6 @@ namespace
     const F32 HEADING_BASE_PER_RADIUS = 0.25f; // its 6 px dot, as fractions of the body's radius beyond it
     const F32 HEADING_HALF_PER_RADIUS = 0.42f;
     const F32 HEADING_THICK_PER_RADIUS = 0.3f; // and extruded this thick
-    const F32 VEHICLE_EXAGGERATION = 2.5f;     // a vehicle's outline at this many times its size when far
-    const F32 VEHICLE_TRUE_SIZE_M = 40.f;      // tactical camera distance up to which vehicles are true size
-    const F32 VEHICLE_EXAGGERATED_M = 200.f;   // and from which they are fully exaggerated
     const F32 TACTICAL_NEAR_M = 0.5f;
     const F32 TACTICAL_MIN_M = 8.f;
     const F32 TACTICAL_MAX_M = 400.f;
@@ -592,7 +589,6 @@ void SKOverviewCapture::drawMovers(const Shot& shot)
         sGeom.bind();
         glUniform4fv(glGetUniformLocation(sGeom.mProgramObject, "clip_plane"), 1, no_cut);
         glUniformMatrix3fv(glGetUniformLocation(sGeom.mProgramObject, "sk_eye_to_world"), 1, GL_FALSE, eye_to_world);
-        gGL.diffuseColor4f((F32)skoverview::CODE_MOVER / 255.f, 0.f, 0.f, 1.f);
         LLGLDepthTest depth(GL_TRUE, GL_TRUE, GL_LEQUAL);
         LLGLDisable cull_face(GL_CULL_FACE);
         gGL.setColorMask(true, true, false, true);
@@ -607,78 +603,6 @@ void SKOverviewCapture::drawMovers(const Shot& shot)
     gGLLastMatrix = NULL;
     sTacticalWork.flush();
     resolve(sTacticalWork, sTacticalResolved, shot);
-}
-
-void SKOverviewCapture::drawVehicles(F32 distance)
-{
-    const std::vector<SKMapPeople::Vehicle>& vehicles = mMovers.vehicles();
-    if (vehicles.empty())
-    {
-        return;
-    }
-    LL_PROFILE_ZONE_SCOPED;
-    // Vehicles only, exaggerated as the camera pulls back so they stay readable: true size near, up to the factor far.
-    const F32 t = llclamp((distance - VEHICLE_TRUE_SIZE_M) / (VEHICLE_EXAGGERATED_M - VEHICLE_TRUE_SIZE_M), 0.f, 1.f);
-    const F32 scale = 1.f + (VEHICLE_EXAGGERATION - 1.f) * t * t * (3.f - 2.f * t);
-    gGL.matrixMode(LLRender::MM_PROJECTION);
-    gGL.pushMatrix();
-    gGL.loadMatrix(mTacticalProj);
-    gGL.matrixMode(LLRender::MM_MODELVIEW);
-    gGL.pushMatrix();
-    gGL.loadMatrix(mTacticalView);
-    gGLLastMatrix = NULL;
-    LLGLDepthTest depth(GL_FALSE, GL_FALSE);
-    LLGLEnable blend(GL_BLEND);
-    LLGLDisable cull_face(GL_CULL_FACE);
-    gUIProgram.bind();
-    std::vector<skmapdraw::GlyphQuad> quads;
-    for (const SKMapPeople::Vehicle& v : vehicles)
-    {
-        const LLVector3 at = gAgent.getPosAgentFromGlobal(v.mPos);
-        if (skmapdraw::vehicleGlyphQuads(v, quads))
-        {
-            // The captured outline, coverage tinting the hull colour (premultiplied), on the ground at its heading.
-            gGL.blendFunc(LLRender::BF_ONE, LLRender::BF_ONE_MINUS_SOURCE_ALPHA);
-            skmapdraw::colour(skmapdraw::vehicleHull(v.mLook));
-            for (const skmapdraw::GlyphQuad& q : quads)
-            {
-                gGL.getTextureSlot(0)->bindManual(ALTextureSlot::TT_TEXTURE, q.mTexture, 0);
-                gGL.begin(LLRender::TRIANGLES);
-                for (S32 k : { 0, 1, 2, 0, 2, 3 })
-                {
-                    gGL.texCoord2f(q.mUV[k][0], q.mUV[k][1]);
-                    gGL.vertex3f(at.mV[VX] + q.mCorner[k].mV[VX] * scale, at.mV[VY] + q.mCorner[k].mV[VY] * scale, at.mV[VZ]);
-                }
-                gGL.end();
-            }
-            gGL.flush();
-            gGL.setSceneBlendType(LLRender::BT_ALPHA);
-            continue;
-        }
-        // No outline yet: the linkset's box at its heading, as the mini-map draws it.
-        gGL.getTextureSlot(0)->unbind();
-        skmapdraw::colour(skmapdraw::vehicleHull(v.mLook));
-        auto corner = [&](F32 x, F32 y) {
-            const LLVector3 p = LLVector3(x * scale, y * scale, 0.f) * v.mRot;
-            return LLVector3(at.mV[VX] + p.mV[VX], at.mV[VY] + p.mV[VY], at.mV[VZ]);
-        };
-        const LLVector3 c[4] = { corner(v.mMin.mV[VX], v.mMin.mV[VY]), corner(v.mMax.mV[VX], v.mMin.mV[VY]),
-                                 corner(v.mMax.mV[VX], v.mMax.mV[VY]), corner(v.mMin.mV[VX], v.mMax.mV[VY]) };
-        gGL.begin(LLRender::TRIANGLES);
-        for (S32 k : { 0, 1, 2, 0, 2, 3 })
-        {
-            gGL.vertex3fv(c[k].mV);
-        }
-        gGL.end();
-        gGL.flush();
-    }
-    gGL.getTextureSlot(0)->unbind();
-    gUIProgram.unbind();
-    gGL.matrixMode(LLRender::MM_PROJECTION);
-    gGL.popMatrix();
-    gGL.matrixMode(LLRender::MM_MODELVIEW);
-    gGL.popMatrix();
-    gGLLastMatrix = NULL;
 }
 
 U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved, const Shot& shot, bool resolve_now)
@@ -1562,8 +1486,6 @@ void SKOverviewCapture::composite()
         gGL.getTextureSlot(0)->unbind();
         sComposite.unbind();
     }
-
-    drawVehicles(mTacticalDistance);
 
     {
         // The mini-map's own markers and visibility rules (SKMapPeople, skmapdraw::personMarker), at a constant pixel

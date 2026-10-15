@@ -57,6 +57,9 @@ namespace skoverview
         CODE_SECTION = 23,      ///< census: a solid the cut went through
         CODE_PLACEHOLDER = 24,  ///< census: a box the region's object cache knows of, not yet the object
         CODE_MOVER = 25,        ///< a physical or moving object at its live pose, drawn whole
+        CODE_VEH_CIVIL = 26,    ///< a vehicle at its live pose, the mini-map's civilian hull
+        CODE_VEH_ALLY = 27,     ///< an allied vehicle
+        CODE_VEH_NEUTRAL = 28,  ///< a vehicle neither civilian nor allied
     };
 
     /// The census classes, in vertex buffer order.

@@ -135,8 +135,6 @@ private:
     void resolve(LLRenderTarget& capture, LLRenderTarget& resolved, const Shot& shot);
     /// The movers over a copy of the static capture, then resolved: the static capture is not redone for them.
     void drawMovers(const Shot& shot);
-    /// The vehicles as their captured outlines on the ground, over the composited overview.
-    void drawVehicles(F32 distance);
     /// The avatar markers as lit 3D cylinders with a heading wedge, hidden by the census (a faint silhouette where
     /// they are), at a minimum size on screen; fills the marks and labels' anchors with each cylinder's projected top.
     template <typename Project>
