@@ -157,6 +157,7 @@
 #include "rlvactions.h"
 #include "rlvhandler.h"
 #include "rlvlocks.h"
+#include "skmotionrecorder.h" // <SK:Nexii> motion recorder
 // [/RLVa:KB]
 
 using namespace LLAvatarAppearanceDefines;
@@ -11036,6 +11037,10 @@ void initialize_menus()
     enable.add("EnableSelectInPathfindingCharacters", boost::bind(&enable_object_select_in_pathfinding_characters));
     enable.add("Advanced.EnableErrorOSException", boost::bind(&enable_os_exception));
     enable.add("EnableTerrainLocalPaintMap", boost::bind(&enable_terrain_local_paintmap));
+    // <SK:Nexii> motion recorder
+    commit.add("Advanced.ToggleMotionRecord", boost::bind(&SKMotionRecorder::toggle));
+    enable.add("Advanced.CheckMotionRecord", boost::bind(&SKMotionRecorder::isRecording));
+    // </SK:Nexii>
 
     view_listener_t::addMenu(new LLFloaterVisible(), "FloaterVisible");
     view_listener_t::addMenu(new LLShowSidetrayPanel(), "ShowSidetrayPanel");

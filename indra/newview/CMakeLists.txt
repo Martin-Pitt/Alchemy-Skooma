@@ -1016,6 +1016,9 @@ if(AL_BUILD_VIEWER)
     skworldmapmath.cpp # <SK:Nexii> 3D world map
     skworldmapscene.cpp # <SK:Nexii> 3D world map
     skworldmaptiles.cpp # <SK:Nexii> 3D world map
+    # <SK:Nexii> motion recorder
+    skmotionrecorder.cpp
+    # </SK:Nexii>
   )
 
   set(
@@ -1911,6 +1914,9 @@ if(AL_BUILD_VIEWER)
     skworldmapmath.h # <SK:Nexii> 3D world map
     skworldmapscene.h # <SK:Nexii> 3D world map
     skworldmaptiles.h # <SK:Nexii> 3D world map
+    # <SK:Nexii> motion recorder
+    skmotionrecorder.h
+    # </SK:Nexii>
   )
 
   # <SK:Nexii> SKNetMap mini-map sources

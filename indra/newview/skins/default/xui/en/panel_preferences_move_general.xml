@@ -67,6 +67,20 @@
       width="237"
       top_pad="0"
     />
+    <!-- <SK:Nexii> Alt-cam zoom to cursor -->
+    <check_box
+      control_name="SKCameraZoomToCursor"
+      follows="left|top"
+      height="25"
+      label="Mouse wheel zooms toward the cursor in alt-cam."
+      tool_tip="Zoom toward or away from the point under the mouse, refocusing on it, instead of straight toward the camera's focus point."
+      layout="topleft"
+      left_delta="0"
+      name="camera_zoom_to_cursor"
+      width="237"
+      top_pad="0"
+    />
+    <!-- </SK:Nexii> -->
   <text
   follows="left|top"
   type="string"

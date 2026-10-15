@@ -100,6 +100,7 @@
 #include "llvisualeffect.h"
 #include "rlvactions.h"
 #include "rlvlocks.h"
+#include "skmotionrecorder.h" // <SK:Nexii> motion recorder
 // [/RLVa:KB]
 
 
@@ -834,9 +835,13 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
         {
             LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("Update Geom");
             const F32 max_geom_update_time = llmin(0.005f*10.f*gFrameIntervalSeconds.value(), 0.005f); // 50 ms/second update time, max 5ms/frame
+            // <SK:Nexii> motion recorder
+            const U64 sk_start = SKMotionRecorder::isRecording() ? SKMotionRecorder::now() : 0;
+            // </SK:Nexii>
             gPipeline.createObjects(max_geom_update_time);
             gPipeline.processPartitionQ();
             gPipeline.updateGeom(max_geom_update_time);
+            SKMotionRecorder::stageEnd(SKMotionRecorder::STAGE_GEOM, sk_start); // <SK:Nexii> motion recorder
             stop_glerror();
         }
 
@@ -1731,7 +1736,11 @@ void swap()
     LL_PROFILE_GPU_ZONE("swap");
     if (gDisplaySwapBuffers)
     {
+        // <SK:Nexii> motion recorder
+        const U64 sk_start = SKMotionRecorder::isRecording() ? SKMotionRecorder::now() : 0;
+        // </SK:Nexii>
         gViewerWindow->getWindow()->swapBuffers();
+        SKMotionRecorder::stageEnd(SKMotionRecorder::STAGE_SWAP, sk_start); // <SK:Nexii> motion recorder
     }
     gDisplaySwapBuffers = true;
 }

@@ -700,6 +700,7 @@ public:
 
     friend class LLViewerObjectList;
     friend class LLViewerMediaList;
+    friend class SKMotionRecorder; // <SK:Nexii> motion recorder
 
 public:
     LLViewerTexture* getBakedTextureForMagicId(const LLUUID& id);
@@ -938,6 +939,9 @@ protected:
 private:
     void setNameValueList(const std::string& list);     // clears nv pairs and then individually adds \n separated NV pairs from \0 terminated string
     void deleteTEImages(); // correctly deletes list of images
+    // <SK:Nexii> clamped velocity recovery
+    void skRecoverClampedVelocity(const LLVector3& new_pos);
+    // </SK:Nexii>
 
 protected:
 
@@ -951,6 +955,14 @@ protected:
     TPACKETID       mLatestRecvPacketID;            // Latest time stamp on message from simulator
     F64SecondsImplicit mRegionCrossExpire;      // frame time we detected region crossing in + wait time
     ALMotionPredictor mMotionPredictor;         // this object's own update rate, and what to do with it
+    // <SK:Nexii> clamped velocity recovery
+    LLVector3       mSKLastRawPos;                  // previous terse update's decoded position
+    F64             mSKLastRawSecs = 0.0;           // frame time it arrived; 0 when there is none
+    LLViewerRegion* mSKLastRawRegion = nullptr;
+    F32             mSKRawSpeedEWMA = 0.f;          // observed speed for the fallback; 0 when unknown
+    LLVector3       mSKRecoveredVel;                // velocity used after recovery, before ping
+    U8              mSKRecoverMethod = 0;           // 0 none, 1 ratio, 2 fallback, 3 skipped-clamped
+    // </SK:Nexii>
 
     // extra data sent from the sim...currently only used for tree species info
     U8* mData;
