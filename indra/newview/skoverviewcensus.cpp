@@ -31,6 +31,7 @@
 #include "llmaterial.h"
 #include "llvertexbuffer.h"
 #include "llviewerregion.h"
+#include "llworld.h"
 #include "llvovolume.h"
 #include "skphysicsshape.h"
 #include "sknavbuild.h"
@@ -414,6 +415,32 @@ bool SKOverviewCensus::update()
             ((U64)(S64)std::llround(rec->mMin.mdV[VZ] * 64.0) << 42));
         mix((U64)rec->mFeature | ((U64)rec->mExclude << 8));
     }
+    // Each part draws with its cluster, so a shot can keep the clusters at a level; a part in none is its own group.
+    std::map<const sknav::Record*, U32> cluster_of;
+    const U32 clusters = (U32)snap->mClusters.mClusters.size();
+    for (U32 c = 0; c < clusters; ++c)
+    {
+        for (const sknav::RecordPtr& rec : snap->mClusters.mClusters[c]->mRecords)
+        {
+            cluster_of[rec.get()] = c;
+        }
+    }
+    auto groupOf = [&](size_t i) -> U32
+    {
+        if (i < kept.size())
+        {
+            const auto it = cluster_of.find(kept[i]);
+            if (it != cluster_of.end())
+            {
+                return it->second;
+            }
+        }
+        return clusters + (U32)i;
+    };
+    for (size_t i = 0; i < kept.size(); ++i)
+    {
+        mix(groupOf(i));
+    }
     if (sig == mSignature && !mBatches.empty())
     {
         return true;
@@ -421,11 +448,17 @@ bool SKOverviewCensus::update()
     mSignature = sig;
     LL_PROFILE_ZONE_NAMED("sk overview census upload");
 
-    // Per region, per class, region-local triangles.
+    // Per region, per class, per group, region-local triangles; and each group's bounds.
+    struct Bounds
+    {
+        LLVector3 mMin{ 1e30f, 1e30f, 1e30f };
+        LLVector3 mMax{ -1e30f, -1e30f, -1e30f };
+    };
     struct Bins
     {
         LLVector3d mOrigin;
-        std::vector<LLVector3> mClass[skoverview::NUM_CENSUS_CLASSES];
+        std::map<U32, std::vector<LLVector3>> mClass[skoverview::NUM_CENSUS_CLASSES];
+        std::map<U32, Bounds> mBounds;
     };
     std::map<std::pair<S64, S64>, Bins> regions;
     std::vector<LLVector3> tris;
@@ -471,7 +504,13 @@ bool SKOverviewCensus::update()
             const skoverview::CensusClass cls = fixed_class < skoverview::NUM_CENSUS_CLASSES
                                                     ? (skoverview::CensusClass)fixed_class
                                                     : skoverview::classifyTriangle(n.mV[VZ] / len, part_height);
-            std::vector<LLVector3>& out = bins.mClass[cls];
+            const U32 group = groupOf(i);
+            Bounds& bounds = bins.mBounds[group];
+            for (const LLVector3* v : { &a, &b, &c })
+            {
+                update_min_max(bounds.mMin, bounds.mMax, *v);
+            }
+            std::vector<LLVector3>& out = bins.mClass[cls][group];
             out.push_back(a);
             out.push_back(b);
             out.push_back(c);
@@ -484,9 +523,12 @@ bool SKOverviewCensus::update()
     {
         Bins& bins = entry.second;
         size_t total = 0;
-        for (const auto& v : bins.mClass)
+        for (const auto& groups : bins.mClass)
         {
-            total += v.size();
+            for (const auto& g : groups)
+            {
+                total += g.second.size();
+            }
         }
         if (!total)
         {
@@ -516,18 +558,37 @@ bool SKOverviewCensus::update()
             continue;
         }
         // Never past what was allocated, whatever the bins hold.
+        std::map<U32, size_t> group_index;
+        for (const auto& b : bins.mBounds)
+        {
+            group_index[b.first] = batch.mGroups.size();
+            Group group;
+            group.mMinZ = b.second.mMin.mV[VZ];
+            group.mMaxZ = b.second.mMax.mV[VZ];
+            // On the ground when its base is no higher above the land under its middle than a step or two.
+            const LLVector3d middle = bins.mOrigin + LLVector3d((b.second.mMin.mV[VX] + b.second.mMax.mV[VX]) * 0.5,
+                                                                (b.second.mMin.mV[VY] + b.second.mMax.mV[VY]) * 0.5, 0.0);
+            group.mGround = group.mMinZ <= LLWorld::getInstance()->resolveLandHeightGlobal(middle) + skoverview::GROUND_BASE_M;
+            batch.mGroups.push_back(group);
+        }
         U32 at = 0;
         for (U32 c = 0; c < skoverview::NUM_CENSUS_CLASSES; ++c)
         {
             batch.mStart[c] = at;
-            for (const LLVector3& p : bins.mClass[c])
+            for (const auto& g : bins.mClass[c])
             {
-                if (at >= (U32)total)
+                Group& group = batch.mGroups[group_index[g.first]];
+                group.mStart[c] = at;
+                for (const LLVector3& p : g.second)
                 {
-                    break;
+                    if (at >= (U32)total)
+                    {
+                        break;
+                    }
+                    *verts++ = p;
+                    ++at;
                 }
-                *verts++ = p;
-                ++at;
+                group.mCount[c] = at - group.mStart[c];
             }
         }
         batch.mStart[skoverview::NUM_CENSUS_CLASSES] = at;
@@ -537,4 +598,20 @@ bool SKOverviewCensus::update()
     }
     LL_DEBUGS("SKOverview") << "census upload: " << mBatches.size() << " regions, " << mTriangles << " triangles" << LL_ENDL;
     return !mBatches.empty();
+}
+
+F32 SKOverviewCensus::levelTop(const Level& level, F32 floor) const
+{
+    F32 top = floor;
+    for (const Batch& batch : mBatches)
+    {
+        for (const Group& group : batch.mGroups)
+        {
+            if (level.keeps(group))
+            {
+                top = llmax(top, group.mMaxZ);
+            }
+        }
+    }
+    return top;
 }
