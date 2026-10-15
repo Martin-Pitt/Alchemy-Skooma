@@ -193,6 +193,77 @@ namespace skmapdraw
                                    llclamp(static_cast<F32>(padding), 0.f, 3.f));
     }
 
+    bool vehicleGlyphQuads(const SKMapPeople::Vehicle& v, std::vector<GlyphQuad>& out)
+    {
+        static LLCachedControl<bool> glyphs(gSavedSettings, "SKMapVehicleGlyphs", true);
+        out.clear();
+        auto drawable = [](const SKOutlineLayer& layer) { return layer.texture && layer.x1 > layer.x0 && layer.y1 > layer.y0; };
+        const SKMapVehicleGlyphs::Glyph* glyph = glyphs ? SKMapVehicleGlyphs::glyphFor(v.mRoot) : nullptr;
+        if (!glyph || glyph->layers.empty() || glyph->layers.front().pose_source != SKOutlineLayer::PoseSource::ROOT ||
+            !drawable(glyph->layers.front()))
+        {
+            return false;
+        }
+        const LLViewerObject* root = gObjectList.findObject(v.mRoot);
+        for (const SKOutlineLayer& layer : glyph->layers)
+        {
+            if (!drawable(layer))
+            {
+                continue;
+            }
+            // The layer frame in the root's frame, plan view: a yaw and an x/y offset.
+            LLVector3 rel_pos;
+            LLQuaternion rel_rot;
+            if (layer.pose_source == SKOutlineLayer::PoseSource::CREW_ATTACHMENT)
+            {
+                const LLViewerObject* attachment = root ? gObjectList.findObject(layer.pose_id) : nullptr;
+                if (attachment && !attachment->isDead() && attachment->mDrawable.notNull())
+                {
+                    const LLQuaternion root_inv = ~root->getRenderRotation();
+                    rel_pos = (attachment->getRenderPosition() - root->getRenderPosition()) * root_inv;
+                    rel_rot = attachment->getRenderRotation() * root_inv;
+                }
+                else
+                {
+                    rel_pos = layer.rel_pos;
+                    rel_rot = layer.rel_rot;
+                }
+            }
+            const LLVector3 fwd = LLVector3::x_axis * rel_rot;
+            const F32 yaw = atan2f(fwd.mV[VY], fwd.mV[VX]);
+            const F32 cy = cosf(yaw), sy = sinf(yaw);
+            auto at = [&](F32 x, F32 y) {
+                const LLVector3 in_root(x * cy - y * sy + rel_pos.mV[VX], x * sy + y * cy + rel_pos.mV[VY], 0.f);
+                const LLVector3 p = in_root * v.mRot;
+                return LLVector2(p.mV[VX], p.mV[VY]);
+            };
+            GlyphQuad q;
+            q.mTexture = layer.texture;
+            q.mCorner[0] = at(layer.x0, layer.y0);
+            q.mCorner[1] = at(layer.x1, layer.y0);
+            q.mCorner[2] = at(layer.x1, layer.y1);
+            q.mCorner[3] = at(layer.x0, layer.y1);
+            const F32 uv[4][2] = { { layer.u0, layer.v0 }, { layer.u1, layer.v0 }, { layer.u1, layer.v1 }, { layer.u0, layer.v1 } };
+            memcpy(q.mUV, uv, sizeof(uv));
+            out.push_back(q);
+        }
+        return !out.empty();
+    }
+
+    const skmap::PaletteColour& vehicleHull(skmap::VehicleLook look)
+    {
+        return look == skmap::VehicleLook::ALLY      ? skmap::palette::VEH_ALLY_HULL
+             : look == skmap::VehicleLook::NEUTRAL   ? skmap::palette::VEH_NEUTRAL_HULL
+                                                     : skmap::palette::VEH_CIVIL_HULL;
+    }
+
+    const skmap::PaletteColour& vehicleTop(skmap::VehicleLook look)
+    {
+        return look == skmap::VehicleLook::ALLY      ? skmap::palette::VEH_ALLY_TOP
+             : look == skmap::VehicleLook::NEUTRAL   ? skmap::palette::VEH_NEUTRAL_TOP
+                                                     : skmap::palette::VEH_CIVIL_TOP;
+    }
+
     LLViewerTexture* shadowSprite()
     {
         if (sShadowSprite.isNull())
@@ -858,79 +929,29 @@ void SKNetMap::drawVehicles()
     {
         return;
     }
-    static LLCachedControl<bool> glyphs(gSavedSettings, "SKMapVehicleGlyphs", true);
     const std::vector<SKMapPeople::Vehicle>& vehicles = SKMapPeople::instance().vehicles();
-    // A layer the map can draw: an image with a non-empty rect.
-    auto drawable = [](const SKOutlineLayer& layer) {
-        return layer.texture && layer.x1 > layer.x0 && layer.y1 > layer.y0;
-    };
-    // A vehicle's captured glyph, when its base layer has an image.
-    auto glyph_of = [&](const SKMapPeople::Vehicle& v) -> const SKMapVehicleGlyphs::Glyph* {
-        const SKMapVehicleGlyphs::Glyph* glyph = glyphs ? SKMapVehicleGlyphs::glyphFor(v.mRoot) : nullptr;
-        if (!glyph || glyph->layers.empty())
-        {
-            return nullptr;
-        }
-        const SKOutlineLayer& base = glyph->layers.front();
-        return base.pose_source == SKOutlineLayer::PoseSource::ROOT && drawable(base) ? glyph : nullptr;
-    };
-
     // Glyphs: every layer's atlas cell at its live pose, its coverage tinting the hull colour (premultiplied).
     std::vector<bool> drew(vehicles.size(), false);
+    std::vector<skmapdraw::GlyphQuad> quads;
     for (size_t i = 0; i < vehicles.size(); ++i)
     {
         const SKMapPeople::Vehicle& v = vehicles[i];
-        const SKMapVehicleGlyphs::Glyph* glyph = glyph_of(v);
-        if (!glyph)
+        if (!skmapdraw::vehicleGlyphQuads(v, quads))
         {
             continue;
         }
         drew[i] = true;
-        const LLViewerObject* root = gObjectList.findObject(v.mRoot);
-        const bool ally = v.mLook == skmap::VehicleLook::ALLY;
-        const bool neutral = v.mLook == skmap::VehicleLook::NEUTRAL;
         gGL.blendFunc(LLRender::BF_ONE, LLRender::BF_ONE_MINUS_SOURCE_ALPHA);
-        skmapdraw::colour(ally ? skmap::palette::VEH_ALLY_HULL : neutral ? skmap::palette::VEH_NEUTRAL_HULL : skmap::palette::VEH_CIVIL_HULL);
-        for (const SKOutlineLayer& layer : glyph->layers)
+        skmapdraw::colour(skmapdraw::vehicleHull(v.mLook));
+        for (const skmapdraw::GlyphQuad& q : quads)
         {
-            if (!drawable(layer))
-            {
-                continue;
-            }
-            // The layer frame in the root's frame, plan view: a yaw and an x/y offset.
-            LLVector3 rel_pos;
-            LLQuaternion rel_rot;
-            if (layer.pose_source == SKOutlineLayer::PoseSource::CREW_ATTACHMENT)
-            {
-                const LLViewerObject* attachment = root ? gObjectList.findObject(layer.pose_id) : nullptr;
-                if (attachment && !attachment->isDead() && attachment->mDrawable.notNull())
-                {
-                    const LLQuaternion root_inv = ~root->getRenderRotation();
-                    rel_pos = (attachment->getRenderPosition() - root->getRenderPosition()) * root_inv;
-                    rel_rot = attachment->getRenderRotation() * root_inv;
-                }
-                else
-                {
-                    rel_pos = layer.rel_pos;
-                    rel_rot = layer.rel_rot;
-                }
-            }
-            const LLVector3 fwd = LLVector3::x_axis * rel_rot;
-            const F32 yaw = atan2f(fwd.mV[VY], fwd.mV[VX]);
-            const F32 cy = cosf(yaw), sy = sinf(yaw);
-            auto at = [&](F32 x, F32 y) {
-                const LLVector3 in_root(x * cy - y * sy + rel_pos.mV[VX], x * sy + y * cy + rel_pos.mV[VY], 0.f);
-                const LLVector3 p = in_root * v.mRot;
-                return mView.toWidget(v.mPos + LLVector3d(p.mV[VX], p.mV[VY], 0.0));
-            };
-            const LLVector2 corner[4] = { at(layer.x0, layer.y0), at(layer.x1, layer.y0), at(layer.x1, layer.y1), at(layer.x0, layer.y1) };
-            const F32 uv[4][2] = { { layer.u0, layer.v0 }, { layer.u1, layer.v0 }, { layer.u1, layer.v1 }, { layer.u0, layer.v1 } };
-            gGL.getTextureSlot(0)->bindManual(ALTextureSlot::TT_TEXTURE, layer.texture, 0);
+            gGL.getTextureSlot(0)->bindManual(ALTextureSlot::TT_TEXTURE, q.mTexture, 0);
             gGL.begin(LLRender::TRIANGLES);
             for (S32 k : { 0, 1, 2, 0, 2, 3 })
             {
-                gGL.texCoord2f(uv[k][0], uv[k][1]);
-                gGL.vertex2f(corner[k].mV[VX], corner[k].mV[VY]);
+                const LLVector2 at = mView.toWidget(v.mPos + LLVector3d(q.mCorner[k].mV[VX], q.mCorner[k].mV[VY], 0.0));
+                gGL.texCoord2f(q.mUV[k][0], q.mUV[k][1]);
+                gGL.vertex2f(at.mV[VX], at.mV[VY]);
             }
             gGL.end();
         }
@@ -947,19 +968,17 @@ void SKNetMap::drawVehicles()
             const LLVector3 p = LLVector3(x, y, 0.f) * v.mRot;
             return mView.toWidget(v.mPos + LLVector3d(p.mV[VX], p.mV[VY], 0.0));
         };
-        const bool ally = v.mLook == skmap::VehicleLook::ALLY;
-        const bool neutral = v.mLook == skmap::VehicleLook::NEUTRAL;
         if (!drew[i])
         {
             const LLVector2 a = at(v.mMin.mV[VX], v.mMin.mV[VY]), b = at(v.mMax.mV[VX], v.mMin.mV[VY]);
             const LLVector2 c = at(v.mMax.mV[VX], v.mMax.mV[VY]), d = at(v.mMin.mV[VX], v.mMax.mV[VY]);
-            skmapdraw::colour(ally ? skmap::palette::VEH_ALLY_HULL : neutral ? skmap::palette::VEH_NEUTRAL_HULL : skmap::palette::VEH_CIVIL_HULL);
+            skmapdraw::colour(skmapdraw::vehicleHull(v.mLook));
             skmapdraw::triangle(a, b, c);
             skmapdraw::triangle(a, c, d);
         }
         const F32 mid_y = (v.mMin.mV[VY] + v.mMax.mV[VY]) * 0.5f;
         const F32 length = v.mMax.mV[VX] - v.mMin.mV[VX];
-        skmapdraw::colour(ally ? skmap::palette::VEH_ALLY_TOP : neutral ? skmap::palette::VEH_NEUTRAL_TOP : skmap::palette::VEH_CIVIL_TOP);
+        skmapdraw::colour(skmapdraw::vehicleTop(v.mLook));
         skmapdraw::line(at(v.mMax.mV[VX] - length * 0.25f, mid_y), at(v.mMax.mV[VX], mid_y), 2.f);
     }
     gGL.end();

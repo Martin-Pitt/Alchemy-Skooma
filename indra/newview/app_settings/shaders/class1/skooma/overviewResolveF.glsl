@@ -54,6 +54,8 @@ const int CODE_LADDER = 21;
 const int CODE_VEHICLE = 22;
 const int CODE_SECTION = 23;
 const int CODE_PLACEHOLDER = 24;
+const int CODE_MOVER = 25;
+const vec3 MOVER_GREEN = vec3(0.31, 0.60, 0.35);   // the mini-map's civilian vehicle hull (VEH_CIVIL_HULL)
 const int CODE_TERRAIN = 255;
 
 // The style's knobs.
@@ -260,6 +262,10 @@ void main()
     else if (code == CODE_LADDER)
     {
         c = SLATE_WALL * 1.12;
+    }
+    else if (code == CODE_MOVER)
+    {
+        c = MOVER_GREEN;
     }
     else if (code == CODE_PLACEHOLDER)
     {

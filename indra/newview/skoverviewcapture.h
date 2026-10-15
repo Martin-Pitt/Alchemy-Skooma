@@ -34,6 +34,7 @@
 #include "v2math.h"
 #include "skmaplabels.h"
 #include "skoverviewcensus.h"
+#include "skoverviewmovers.h"
 #include "v3dmath.h"
 #include "v4math.h"
 
@@ -128,7 +129,13 @@ private:
     bool ensureGL(LLRenderTarget& capture, LLRenderTarget& resolved, S32 w, S32 h);
     bool ensureShaders();
     void releaseGL();
-    U32 render(LLRenderTarget& capture, LLRenderTarget& resolved, const Shot& shot);
+    U32 render(LLRenderTarget& capture, LLRenderTarget& resolved, const Shot& shot, bool resolve_now = true);
+    /// The capture's depth and class codes to the styled map.
+    void resolve(LLRenderTarget& capture, LLRenderTarget& resolved, const Shot& shot);
+    /// The movers over a copy of the static capture, then resolved: the static capture is not redone for them.
+    void drawMovers(const Shot& shot);
+    /// The vehicles as their captured outlines on the ground, over the composited overview.
+    void drawVehicles(F32 distance);
     /// Captures the region maps that are due: the agent's on its timer, then the most overdue other one.
     void captureMaps(F64 now);
     bool captureMap(RegionMap& map, LLViewerRegion* region, bool agent);
@@ -140,6 +147,9 @@ private:
     void readTimer();
 
     SKOverviewCensus mCensus;
+    SKOverviewMovers mMovers;
+    bool mMoversDrawn = false;
+    F32 mTacticalDistance = 0.f;
     std::vector<std::unique_ptr<RegionMap>> mMaps;
     Stats mStats;
     F32 mDemandRange = 0.f;
