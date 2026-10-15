@@ -7405,7 +7405,7 @@ void LLViewerObject::skNudge(const LLVector3& step)
     if (!step.isExactlyZero())
     {
         setPositionRegion(getPositionRegion() + step);
-        setChanged(MOVED | SILHOUETTE);
+        setChanged(MOVED);
     }
 }
 // </SK:Nexii>
