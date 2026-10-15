@@ -29,6 +29,7 @@
 // File includes
 #include "lltoolfocus.h"
 #include "skoverviewcapture.h" // <SK:Nexii> tactical overview
+#include "skmapmode.h" // <SK:Nexii> 3D world map
 
 // Library includes
 #include "v3math.h"
@@ -169,6 +170,20 @@ void LLToolCamera::pickCallback(const LLPickInfo& pick_info)
     camera->mMouseDownY = pick_info.mMousePt.mY;
 
     gViewerWindow->moveCursorToCenter();
+
+    // <SK:Nexii> 3D world map: alt-click focuses on the map's ground, not on the hidden world.
+    if (SKMapMode::isOpen())
+    {
+        LLVector3d ground;
+        camera->mValidClickPoint = SKMapMode::instance().groundUnderCursor(pick_info.mMousePt.mX, pick_info.mMousePt.mY, ground);
+        if (camera->mValidClickPoint)
+        {
+            gAgentCamera.setFocusOnAvatar(false, ANIMATE);
+            gAgentCamera.setFocusGlobal(ground);
+        }
+        return;
+    }
+    // </SK:Nexii>
 
     // Potentially recenter if click outside rectangle
     LLViewerObject* hit_obj = pick_info.getObject();

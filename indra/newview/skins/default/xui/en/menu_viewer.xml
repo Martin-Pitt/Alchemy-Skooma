@@ -799,6 +799,17 @@
              function="Floater.Toggle"
              parameter="world_map" />
         </menu_item_check>
+        <!-- <SK:Nexii> 3D world map -->
+        <menu_item_check
+         label="3D world map"
+         name="World Map 3D"
+         shortcut="control|alt|M">
+            <menu_item_check.on_check
+             function="WorldMap3D.IsOpen" />
+            <menu_item_check.on_click
+             function="WorldMap3D.Toggle" />
+        </menu_item_check>
+        <!-- </SK:Nexii> -->
             <menu_item_check
          label="Mini-map"
          name="Mini-Map"
@@ -1837,6 +1848,15 @@ function="World.EnvPreset"
                      control="RenderHiddenSelections" />
                     <menu_item_check.on_click
                      function="Tools.ShowHiddenSelection" />
+                </menu_item_check>
+                <menu_item_check
+                 label="Show Selection Wireframe"
+                 name="Show Selection Wireframe">
+                    <menu_item_check.on_check
+                     control="AlchemySelectionWireframe" />
+                    <menu_item_check.on_click
+                     function="ToggleControl"
+                     parameter="AlchemySelectionWireframe" />
                 </menu_item_check>
                 <menu_item_check
                  label="Show Light Radius for Selection"
@@ -4183,6 +4203,16 @@ function="World.EnvPreset"
                 <menu_item_check.on_click
                  function="Advanced.HandleAttachedLightParticles"
                  parameter="RenderAttachedParticles" />
+            </menu_item_check>
+            <menu_item_check
+             label="Hover Glow Objects"
+             name="Hover Glow Objects">
+                <menu_item_check.on_check
+                 function="CheckControl"
+                 parameter="RenderHoverGlowEnable" />
+                <menu_item_check.on_click
+                 function="ToggleControl"
+                 parameter="RenderHoverGlowEnable" />
             </menu_item_check>
             <menu_item_check
               label="Render Avatar Cloth"

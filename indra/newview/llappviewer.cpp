@@ -211,6 +211,7 @@
 #include "lltracker.h"
 #include "llviewerparcelmgr.h"
 #include "llworldmapview.h"
+#include "skmapmode.h" // <SK:Nexii> 3D world map
 
 #include "lldebugview.h"
 #include "llconsole.h"
@@ -1623,7 +1624,7 @@ bool LLAppViewer::doFrame()
                     LL_PROFILE_ZONE_NAMED_CATEGORY_APP("df Snapshot");
                     pingMainloopTimeout("Main:Snapshot");
                     // <SK:Nexii> tactical overview: no probe faces (each a full scene and shadow render) under it
-                    if (!SKOverviewCapture::worldHidden())
+                    if (!SKOverviewCapture::worldHidden() && !SKMapMode::isOpen()) // <SK:Nexii> 3D world map: nor under the map
                     // </SK:Nexii>
                     gPipeline.mReflectionMapManager.update();
                     LLFloaterSnapshot::update(); // take snapshots
@@ -1647,7 +1648,6 @@ bool LLAppViewer::doFrame()
 
         // Sleep and run background threads
         {
-            //LL_RECORD_BLOCK_TIME(SLEEP2);
             LL_PROFILE_ZONE_WARN("Sleep2");
 
             // yield some time to the os based on command line option
@@ -1958,6 +1958,13 @@ bool LLAppViewer::cleanup()
     {
         LLWorldMap::getInstance()->reset(); // release any images
     }
+
+    // <SK:Nexii> 3D world map: its tiles and targets go while the texture list and GL are still up.
+    if (SKMapMode::instanceExists())
+    {
+        SKMapMode::getInstance()->shutdown();
+    }
+    // </SK:Nexii>
 
     LLCalc::cleanUp();
 
@@ -5627,7 +5634,7 @@ void LLAppViewer::idle()
 
     if (!gDisconnected)
     {
-        LL_PROFILE_ZONE_NAMED_CATEGORY_NETWORK("network"); //LL_RECORD_BLOCK_TIME(FTM_NETWORK);
+        LL_PROFILE_ZONE_NAMED_CATEGORY_NETWORK("network");
         // Update spaceserver timeinfo
         // In integer microseconds: a U64 time plus F32 seconds is an F32 sum, which rounds a
         // count of microseconds this large to far more than a frame.
@@ -5742,8 +5749,6 @@ void LLAppViewer::idle()
     if (!mQuitRequested)  //MAINT-4243
 #endif
     {
-//      LL_RECORD_BLOCK_TIME(FTM_IDLE_CB);
-
         // Do event notifications if necessary.  Yes, we may want to move this elsewhere.
         gEventNotifier.update();
 
@@ -5908,7 +5913,7 @@ void LLAppViewer::idle()
     //
 
     {
-        LL_PROFILE_ZONE_NAMED_CATEGORY_APP("world update"); //LL_RECORD_BLOCK_TIME(FTM_WORLD_UPDATE);
+        LL_PROFILE_ZONE_NAMED_CATEGORY_APP("world update");
         gPipeline.updateMove();
     }
     // <SK:Nexii> navmesh: the census scans after objects moved, the mesh follows the census
@@ -5952,7 +5957,7 @@ void LLAppViewer::idle()
     LLAvatarRenderInfoAccountant::getInstance()->idle();
 
     {
-        LL_PROFILE_ZONE_NAMED_CATEGORY_APP("audio update"); //LL_RECORD_BLOCK_TIME(FTM_AUDIO_UPDATE);
+        LL_PROFILE_ZONE_NAMED_CATEGORY_APP("audio update");
 
         if (gAudiop)
         {
