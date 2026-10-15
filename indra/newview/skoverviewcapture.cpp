@@ -1213,26 +1213,32 @@ void SKOverviewCapture::drawMarkers3D(const Project& project, S32 vw, S32 vh, st
         size_t mPerson = (size_t)-1;
         LLUUID mId;
         bool mCoarse = false;   // known only from the region's coarse locations: no rotation, a coarse height
-        F32 mHeight = 0.f;      // the avatar's own body height when known, else the default
+        F32 mHeight = 0.f;      // the avatar's own height when known, else the default
+        F32 mRadius = 0.f;      // half the larger of its x and y size when known, else in proportion to the height
     };
-    // A loaded avatar's own size: feet from its pelvis (the seat when sitting) and its body height.
+    // A loaded avatar's own size, as the sim has it: getScale() is the agent size from its object update (what
+    // llGetAgentSize reports), its box centred on the avatar's position, so its base is the floor the sim stands it
+    // on. The position is the object's, not the render position, which carries the hover offset. Sitting keeps the
+    // same size. Only when no size has come is the shape's body height used, on its pelvis-to-foot.
     auto sized = [](Marker& m, const LLUUID& id)
     {
         LLViewerObject* object = gObjectList.findObject(id);
         LLVOAvatar* avatar = object && object->isAvatar() ? static_cast<LLVOAvatar*>(object) : nullptr;
-        if (!avatar || avatar->isDead() || avatar->mBodySize.mV[VZ] <= 0.1f)
+        if (!avatar || avatar->isDead())
         {
             return;
         }
-        const LLVector3 pelvis = avatar->getRenderPosition();
-        if (avatar->isSitting())
+        const LLVector3 size = avatar->getScale();
+        const LLVector3 centre = avatar->getPositionAgent();
+        if (size.mV[VZ] > 0.1f)
         {
-            m.mFloor = pelvis;
-            m.mHeight = avatar->mBodySize.mV[VZ] * 0.5f;
+            m.mFloor = centre - LLVector3(0.f, 0.f, size.mV[VZ] * 0.5f);
+            m.mHeight = size.mV[VZ];
+            m.mRadius = llmax(size.mV[VX], size.mV[VY]) * 0.5f;
         }
-        else
+        else if (avatar->mBodySize.mV[VZ] > 0.1f)
         {
-            m.mFloor = pelvis - LLVector3(0.f, 0.f, avatar->getPelvisToFoot());
+            m.mFloor = avatar->getRenderPosition() - LLVector3(0.f, 0.f, avatar->getPelvisToFoot());
             m.mHeight = avatar->mBodySize.mV[VZ];
         }
     };
@@ -1342,7 +1348,7 @@ void SKOverviewCapture::drawMarkers3D(const Project& project, S32 vw, S32 vh, st
         const F32 scale = ppm > 1e-3f ? llclamp(MARKER_MIN_RADIUS_PX / (MARKER_RADIUS_M * ppm), 1.f, MARKER_MAX_SCALE) : 1.f;
         // A known body sets the height, the radius in proportion; the minimum on-screen size still holds.
         const F32 body = m.mHeight > 0.f ? m.mHeight / MARKER_HEIGHT_M : 1.f;
-        const F32 r = MARKER_RADIUS_M * body * scale;
+        const F32 r = (m.mRadius > 0.f ? m.mRadius : MARKER_RADIUS_M * body) * scale;
         const F32 h = (m.mCoarse ? MARKER_COARSE_HEIGHT_M : MARKER_HEIGHT_M) * body * scale;
         const LLVector3 top_c = m.mFloor + LLVector3(0.f, 0.f, h);
         for (S32 k = 0; k < MARKER_SIDES; ++k)
