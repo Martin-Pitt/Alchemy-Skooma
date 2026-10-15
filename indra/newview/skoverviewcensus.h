@@ -26,6 +26,7 @@
 #define SK_OVERVIEWCENSUS_H
 
 #include "llpointer.h"
+#include "lluuid.h"
 #include "v3dmath.h"
 #include "v3math.h"
 
@@ -68,6 +69,9 @@ namespace skoverview
 
     U8 codeOf(CensusClass cls);
 
+    /// The default transparent texture or an old invisiprim texture: nobody sees a face drawn with one.
+    bool transparentTexture(const LLUUID& id);
+
     /// Whether the overview draws a record at all, and the class of its parts that is not per triangle (door, ladder,
     /// vehicle); NUM_CENSUS_CLASSES when each triangle is classed by its slope.
     bool keepRecord(const sknav::Record& rec, CensusClass& fixed);
@@ -101,6 +105,8 @@ private:
     std::vector<Batch> mBatches;
     U64 mStamp = 0;
     U64 mSignature = 0;
+    bool mUnknownLook = false;  ///< some part's faces or images were not loaded at the last build
+    F64 mRecheckAt = 0.0;
     std::shared_ptr<const struct SKCensusSnapshot> mSnapshot;
     U32 mTriangles = 0;
 };

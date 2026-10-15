@@ -26,6 +26,9 @@
 
 #include "skoverviewcensus.h"
 
+#include "llframetimer.h"
+#include "llimagegl.h"
+#include "llmaterial.h"
 #include "llvertexbuffer.h"
 #include "sknavbuild.h"
 #include "sknavtypes.h"
@@ -38,6 +41,7 @@
 
 #include <cmath>
 #include <map>
+#include <set>
 
 namespace skoverview
 {
@@ -103,9 +107,8 @@ void SKOverviewCensus::release()
     mTriangles = 0;
 }
 
-namespace
+namespace skoverview
 {
-    // Textures nobody sees through to: the default transparent texture and the old invisiprim pair.
     bool transparentTexture(const LLUUID& id)
     {
         static const LLUUID transparent("8dcd4a48-2d37-4909-9f78-f7a9eb4ef903");
@@ -113,41 +116,127 @@ namespace
         static const LLUUID invisiprim_b("e97cf410-8e61-7005-ec06-629eba4cd1fb");
         return id == transparent || id == invisiprim_a || id == invisiprim_b;
     }
+}
 
-    // A face is invisible at alpha 0, with a transparent or invisiprim texture at any alpha, or as a PBR face with
-    // base colour alpha 0 or a transparent base colour texture under blend or mask. A part is when all its faces are.
-    bool fullyTransparent(const LLUUID& part)
+namespace
+{
+    using skoverview::transparentTexture;
+
+    enum class Seen : U8 { VISIBLE, INVISIBLE, UNKNOWN };
+
+    // Whether the viewer draws a face so anyone sees it, from its own render inputs: colour alpha 0, an alpha-only
+    // image (the invisiprim path), the default transparent or an invisiprim texture, an image whose alpha never rises
+    // above the pick mask's threshold (32/255, below any mask cutoff), or a PBR base colour that is fully transparent.
+    // UNKNOWN while the object, its face or its image is not loaded: never a verdict from data still on its way.
+    Seen faceSeen(LLViewerObject* object, U8 i, std::string& detail)
+    {
+        const LLTextureEntry* te = object->getTE(i);
+        if (!te)
+        {
+            detail = "no texture entry";
+            return Seen::UNKNOWN;
+        }
+        const F32 alpha = te->getColor().mV[VALPHA];
+        detail = llformat("alpha %.3f texture %s", alpha, te->getID().asString().c_str());
+        const LLMaterial* material = te->getMaterialParams().get();
+        if (material)
+        {
+            detail += llformat(" material %s alpha mode %d cutoff %d", te->getMaterialID().asString().c_str(),
+                               (S32)material->getDiffuseAlphaMode(), (S32)material->getAlphaMaskCutoff());
+        }
+        if (const LLGLTFMaterial* pbr = te->getGLTFRenderMaterial())
+        {
+            detail += llformat(" PBR base alpha %.3f mode %d", pbr->mBaseColor.mV[VALPHA], (S32)pbr->mAlphaMode);
+            if (pbr->mBaseColor.mV[VALPHA] <= 0.004f ||
+                (pbr->mAlphaMode != LLGLTFMaterial::ALPHA_MODE_OPAQUE &&
+                 transparentTexture(pbr->mTextureId[LLGLTFMaterial::GLTF_TEXTURE_INFO_BASE_COLOR])))
+            {
+                detail += " -> invisible (PBR)";
+                return Seen::INVISIBLE;
+            }
+            detail += " -> visible (PBR)";
+            return Seen::VISIBLE;
+        }
+        if (alpha <= 0.004f)
+        {
+            detail += " -> invisible (alpha 0)";
+            return Seen::INVISIBLE;
+        }
+        if (transparentTexture(te->getID()))
+        {
+            detail += " -> invisible (transparent texture)";
+            return Seen::INVISIBLE;
+        }
+        LLViewerTexture* image = object->getTEImage(i);
+        LLImageGL* gl = image ? image->getGLTexture() : nullptr;
+        if (!gl || !gl->getHasGLTexture())
+        {
+            detail += " image not loaded -> unknown";
+            return Seen::UNKNOWN;
+        }
+        detail += llformat(" components %d alpha-only %d mask %d", (S32)gl->getComponents(), gl->isAlphaOnly() ? 1 : 0,
+                           gl->getIsAlphaMask() ? 1 : 0);
+        if (gl->isAlphaOnly())
+        {
+            detail += " -> invisible (alpha-only image)";
+            return Seen::INVISIBLE;
+        }
+        if (gl->getComponents() == 4)
+        {
+            // The pick mask holds a bit per cell for alpha above 32/255; none set means nothing shows at any cutoff.
+            bool any = false;
+            for (S32 y = 0; y < 16 && !any; ++y)
+            {
+                for (S32 x = 0; x < 16 && !any; ++x)
+                {
+                    any = gl->getMask(LLVector2((x + 0.5f) / 16.f, (y + 0.5f) / 16.f));
+                }
+            }
+            if (!any)
+            {
+                detail += " -> invisible (alpha below the mask threshold everywhere)";
+                return Seen::INVISIBLE;
+            }
+        }
+        detail += " -> visible";
+        return Seen::VISIBLE;
+    }
+
+    // A part is invisible when every face is; UNKNOWN while any face is still unknown and none is visible.
+    Seen partSeen(const LLUUID& part, std::string* report)
     {
         LLViewerObject* object = gObjectList.findObject(part);
         if (!object || object->getNumTEs() == 0)
         {
-            return false;
+            if (report)
+            {
+                *report = object ? "no faces" : "object not loaded";
+            }
+            return Seen::UNKNOWN;
         }
+        Seen seen = Seen::INVISIBLE;
         for (U8 i = 0; i < object->getNumTEs(); ++i)
         {
-            const LLTextureEntry* te = object->getTE(i);
-            if (!te)
+            std::string detail;
+            const Seen face = faceSeen(object, i, detail);
+            if (report)
             {
-                return false;
+                *report += llformat("%s[face %d: %s]", report->empty() ? "" : " ", i, detail.c_str());
             }
-            bool invisible = te->getColor().mV[VALPHA] <= 0.004f || transparentTexture(te->getID());
-            if (!invisible)
+            if (face == Seen::VISIBLE)
             {
-                const LLViewerTexture* image = object->getTEImage(i);
-                invisible = image && image->isAlphaOnly();
+                seen = Seen::VISIBLE;
+                if (!report)
+                {
+                    break;
+                }
             }
-            if (const LLGLTFMaterial* pbr = te->getGLTFRenderMaterial())
+            else if (face == Seen::UNKNOWN && seen == Seen::INVISIBLE)
             {
-                invisible = pbr->mBaseColor.mV[VALPHA] <= 0.004f ||
-                            (pbr->mAlphaMode != LLGLTFMaterial::ALPHA_MODE_OPAQUE &&
-                             transparentTexture(pbr->mTextureId[LLGLTFMaterial::GLTF_TEXTURE_INFO_BASE_COLOR]));
-            }
-            if (!invisible)
-            {
-                return false;
+                seen = Seen::UNKNOWN;
             }
         }
-        return true;
+        return seen;
     }
 }
 
@@ -162,11 +251,15 @@ bool SKOverviewCensus::update()
     {
         return !mBatches.empty();
     }
-    if (snap->mStamp == mStamp)
+    // Parts whose look was not known yet are asked again every couple of seconds, not only at the next scan.
+    const F64 now = LLFrameTimer::getUptimeSeconds().value();
+    if (snap->mStamp == mStamp && !(mUnknownLook && now >= mRecheckAt))
     {
         return !mBatches.empty();
     }
     mStamp = snap->mStamp;
+    mUnknownLook = false;
+    mRecheckAt = now + 2.0;
 
     // A new scan most often holds the same parts where they were: rebuild only when the geometry moved.
     U64 sig = 1469598103934665603ull;
@@ -184,7 +277,25 @@ bool SKOverviewCensus::update()
         {
             continue;
         }
-        const bool transparent = fullyTransparent(rec->mPart);
+        const LLVector3d extent = rec->mMax - rec->mMin;
+        const bool large = llmax(extent.mdV[VX], llmax(extent.mdV[VY], extent.mdV[VZ])) > skoverview::INVISIBLE_WALL_M;
+        std::string report;
+        const Seen seen = partSeen(rec->mPart, large ? &report : nullptr);
+        mUnknownLook |= seen == Seen::UNKNOWN;
+        const bool transparent = seen == Seen::INVISIBLE;
+        if (large)
+        {
+            // Once per part and verdict: the large ones are those that cover the view when misjudged.
+            static std::map<LLUUID, Seen> logged;
+            auto it = logged.find(rec->mPart);
+            if (it == logged.end() || it->second != seen)
+            {
+                logged[rec->mPart] = seen;
+                LL_INFOS("SKOverview") << "large census part " << rec->mPart << " " << extent << " m: "
+                                       << (seen == Seen::INVISIBLE ? "invisible, dropped" : seen == Seen::VISIBLE ? "visible, drawn" : "not known yet, drawn")
+                                       << " " << report << LL_ENDL;
+            }
+        }
         mix(transparent ? 0x7a11u : 0x0u);
         if (transparent)
         {
