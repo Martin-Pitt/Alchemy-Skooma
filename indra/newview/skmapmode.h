@@ -100,7 +100,7 @@ private:
         LLVector3d mPosition;       ///< relative to the agent when mFocusOnAvatar, else global
         LLVector3d mFocus;          ///< likewise
         LLUUID mFocusObject;
-        LLVector3d mViewOffset;     ///< the viewer camera from the agent, for agent updates and the ears
+        LLVector3d mViewOffset;     ///< the viewer camera, relative like mPosition, for agent updates and the ears
         LLVector3 mAt, mLeft, mUp;
     };
 

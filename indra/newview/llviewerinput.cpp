@@ -1707,7 +1707,7 @@ bool LLViewerInput::scanKey(const std::vector<LLKeyboardBinding> &binding,
     {
         if (binding[i].mKey == key)
         {
-            if (SKMapMode::blocksAction(binding[i].mFunctionName) && !key_up) // <SK:Nexii> 3D world map: the avatar stays put; a release still stops it
+            if (SKMapMode::blocksAction(binding[i].mFunctionName) && !(key_up && !key_down && !key_level)) // <SK:Nexii> 3D world map: the avatar stays put; only a release passes, to stop it
             {
                 continue;
             }

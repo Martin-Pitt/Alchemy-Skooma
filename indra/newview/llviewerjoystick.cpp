@@ -921,7 +921,10 @@ void LLViewerJoystick::moveObjects(bool reset)
 // -----------------------------------------------------------------------------
 void LLViewerJoystick::moveAvatar(bool reset)
 {
-    if (SKMapMode::isOpen()) return; // <SK:Nexii> 3D world map: the avatar stays put while the map is open
+    if (SKMapMode::isOpen()) // <SK:Nexii> 3D world map: the avatar stays put while the map is open
+    {
+        return;
+    }
     if (!gFocusMgr.getAppHasFocus() || mDriverState != JDS_INITIALIZED
         || !gSavedSettings.getBOOL("JoystickEnabled") || !gSavedSettings.getBOOL("JoystickAvatarEnabled"))
     {

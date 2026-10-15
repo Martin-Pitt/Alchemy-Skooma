@@ -170,7 +170,7 @@ bool SKMapMode::open()
     LLViewerObject* focus_object = gAgentCamera.getFocusObject();
     mWorld.mFocusObject = focus_object ? focus_object->getID() : LLUUID::null;
     const LLViewerCamera* view = LLViewerCamera::getInstance();
-    mWorld.mViewOffset = gAgent.getPosGlobalFromAgent(view->getOrigin()) - agent;
+    mWorld.mViewOffset = gAgent.getPosGlobalFromAgent(view->getOrigin()) - follow;
     mWorld.mAt = view->getAtAxis();
     mWorld.mLeft = view->getLeftAxis();
     mWorld.mUp = view->getUpAxis();
@@ -364,7 +364,7 @@ bool SKMapMode::worldCamera(LLVector3d& position_global, LLVector3& at, LLVector
         return false;
     }
     const WorldCamera& world = getInstance()->mWorld;
-    position_global = gAgent.getPositionGlobal() + world.mViewOffset;
+    position_global = (world.mFocusOnAvatar ? gAgent.getPositionGlobal() : LLVector3d::zero) + world.mViewOffset;
     at = world.mAt;
     left = world.mLeft;
     up = world.mUp;
