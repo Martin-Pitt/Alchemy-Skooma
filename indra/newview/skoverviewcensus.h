@@ -66,7 +66,6 @@ namespace skoverview
     constexpr F32 WALL_NZ = 0.5f;       ///< steeper than 60 degrees is wall
     constexpr F32 COVER_TOP_M = 1.6f;   ///< a part no taller than this is cover, not wall
     constexpr F32 INVISIBLE_WALL_M = 64.f; ///< a fully transparent part larger than this on any axis is no wall
-    constexpr F32 SURROUND_MIN_M = 32.f; ///< a rendered-only part this large on any axis is drawn wherever it is
     constexpr F32 GROUND_BASE_M = 4.f;  ///< a cluster whose base is no higher than this above the land stands on it
 
     U8 codeOf(CensusClass cls);

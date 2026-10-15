@@ -631,11 +631,30 @@ F32 SKOverviewCensus::levelTop(const Level& level, F32 floor) const
     return top;
 }
 
+namespace
+{
+    // Whether a part reaching this far from its centre crosses into the void: no region under one of its sides.
+    bool reachesVoid(const LLVector3d& centre, F32 reach)
+    {
+        static const F64 SIDES[4][2] = { { 1.0, 0.0 }, { -1.0, 0.0 }, { 0.0, 1.0 }, { 0.0, -1.0 } };
+        for (const auto& side : SIDES)
+        {
+            const LLVector3d at = centre + LLVector3d(side[0] * reach, side[1] * reach, 0.0);
+            if (!LLWorld::getInstance()->getRegionFromPosGlobal(at))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+}
+
 void SKOverviewCensus::gatherSurrounds(const SKCensusSnapshot& snap)
 {
     LL_PROFILE_ZONE_SCOPED;
-    // Large parts the census holds no shape for (megasculpts, phantom or physics-less meshes and megaprims) are
-    // drawn from what is rendered, wherever they are in the loaded regions, so the map shows the land they make.
+    // Mega parts, at least a region on some axis or reaching into the void, that the census holds no shape for
+    // (megasculpts, phantom or physics-less meshes and megaprims) are drawn from what is rendered, wherever they are
+    // in the loaded regions, so the map shows the land they make.
     std::set<LLUUID> recorded;
     for (const sknav::RecordPtr& rec : snap.mRecords)
     {
@@ -655,7 +674,8 @@ void SKOverviewCensus::gatherSurrounds(const SKCensusSnapshot& snap)
             continue;
         }
         const LLVector3 scale = volume->getScale();
-        if (llmax(scale.mV[VX], llmax(scale.mV[VY], scale.mV[VZ])) < skoverview::SURROUND_MIN_M)
+        const F32 size = llmax(scale.mV[VX], llmax(scale.mV[VY], scale.mV[VZ]));
+        if (size < volume->getRegion()->getWidth() && !reachesVoid(volume->getPositionGlobal(), size * 0.5f))
         {
             continue;
         }

@@ -5351,7 +5351,7 @@
         <key>SKOverviewSurroundsRefresh</key>
         <map>
             <key>Comment</key>
-            <string>Seconds between looks for large parts the census holds no shape for (megasculpts, phantom meshes and megaprims) anywhere in the loaded regions; the overview draws them from their rendered geometry.</string>
+            <string>Seconds between looks for parts at least a region on some axis, or reaching into the void, that the census holds no shape for (megasculpts, phantom meshes and megaprims) anywhere in the loaded regions; the overview draws them from their rendered geometry.</string>
             <key>Persist</key>
             <integer>1</integer>
             <key>Type</key>
