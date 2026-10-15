@@ -24,7 +24,7 @@
 
 #include "linden_common.h"
 
-#include "../test/lltut.h"
+#include <catch2/catch_test_macros.hpp>
 
 #include "../skworldmapmath.h"
 
@@ -66,48 +66,39 @@ namespace
     }
 } // namespace
 
-namespace tut
+namespace
 {
-    struct skworldmapmath_data
-    {
-    };
-    typedef test_group<skworldmapmath_data> skworldmapmath_group;
-    typedef skworldmapmath_group::object skworldmapmath_object;
-    tut::skworldmapmath_group skworldmapmath_test("skworldmapmath");
 
     // A pan keeps the grabbed ground point under the cursor, and never moves the camera up or down.
-    template<> template<>
-    void skworldmapmath_object::test<1>()
+    TEST_CASE("skworldmapmath: A pan keeps the grabbed ground point under the cursor, and never moves the camera up or down", "[skworldmapmath]")
     {
         const LLVector3d eye(1000.0, 2000.0, GROUND_Z + 500.0);
         LLVector3d dir(0.3, 0.5, -0.8);
         dir.normalize();
         LLVector3d hit;
-        ensure("hits", groundHit(eye, dir, hit));
-        ensure("on the plane", std::fabs(hit.mdV[VZ] - GROUND_Z) < 1.0e-9);
+        CHECK(groundHit(eye, dir, hit)); // hits
+        CHECK(std::fabs(hit.mdV[VZ] - GROUND_Z) < 1.0e-9); // on the plane
         const LLVector3d grabbed(1500.0, 2500.0, GROUND_Z);
         LLVector3d offset;
-        ensure("offset", panOffset(eye, dir, grabbed, offset));
-        ensure("flat", offset.mdV[VZ] == 0.0);
+        CHECK(panOffset(eye, dir, grabbed, offset)); // offset
+        CHECK(offset.mdV[VZ] == 0.0); // flat
         LLVector3d moved_hit;
         groundHit(eye + offset, dir, moved_hit);
-        ensure("grabbed point under the cursor", (moved_hit - grabbed).magVec() < 1.0e-6);
+        CHECK((moved_hit - grabbed).magVec() < 1.0e-6); // grabbed point under the cursor
     }
 
     // A ray at or above the horizon never meets the ground.
-    template<> template<>
-    void skworldmapmath_object::test<2>()
+    TEST_CASE("skworldmapmath: A ray at or above the horizon never meets the ground", "[skworldmapmath]")
     {
         LLVector3d hit, offset;
-        ensure("level", !groundHit(LLVector3d(0.0, 0.0, 100.0), LLVector3d(1.0, 0.0, 0.0), hit));
-        ensure("up", !groundHit(LLVector3d(0.0, 0.0, 100.0), LLVector3d(0.0, 0.6, 0.8), hit));
-        ensure("below the plane looking down", !groundHit(LLVector3d(0.0, 0.0, GROUND_Z - 5.0), LLVector3d(0.0, 0.0, -1.0), hit));
-        ensure("no pan", !panOffset(LLVector3d(0.0, 0.0, 100.0), LLVector3d(1.0, 0.0, 0.0), LLVector3d(), offset));
+        CHECK(!groundHit(LLVector3d(0.0, 0.0, 100.0), LLVector3d(1.0, 0.0, 0.0), hit)); // level
+        CHECK(!groundHit(LLVector3d(0.0, 0.0, 100.0), LLVector3d(0.0, 0.6, 0.8), hit)); // up
+        CHECK(!groundHit(LLVector3d(0.0, 0.0, GROUND_Z - 5.0), LLVector3d(0.0, 0.0, -1.0), hit)); // below the plane looking down
+        CHECK(!panOffset(LLVector3d(0.0, 0.0, 100.0), LLVector3d(1.0, 0.0, 0.0), LLVector3d(), offset)); // no pan
     }
 
     // Straight down, the level under the camera rises with height (Python reference: 1, 1, 2, 6).
-    template<> template<>
-    void skworldmapmath_object::test<3>()
+    TEST_CASE("skworldmapmath: Straight down, the level under the camera rises with height (Python reference: 1, 1, 2, 6)", "[skworldmapmath]")
     {
         const std::pair<F64, S32> expect[] = { { 300.0, 1 }, { 1000.0, 1 }, { 5000.0, 2 }, { 50000.0, 6 } };
         const std::pair<F64, size_t> counts[] = { { 300.0, 3 }, { 1000.0, 35 }, { 5000.0, 85 }, { 50000.0, 60 } };
@@ -116,18 +107,17 @@ namespace tut
             const LLVector3d eye(256128.0, 256128.0, GROUND_Z + expect[i].first);
             const std::vector<SelectedTile> tiles = selectTiles(viewAt(eye, 0.0, -90.0 * DEG + 1.0e-6));
             const SelectedTile* under = tileUnder(tiles, eye.mdV[VX], eye.mdV[VY]);
-            ensure("a tile under the camera", under != nullptr);
-            ensure_equals("level under camera", under->mKey.mLevel, expect[i].second);
-            ensure_equals("tile count", tiles.size(), counts[i].second);
+            REQUIRE(under != nullptr); // a tile under the camera
+            CHECK(under->mKey.mLevel == expect[i].second); // level under camera
+            CHECK(tiles.size() == counts[i].second); // tile count
         }
     }
 
     // A tilted view: levels coarsen with distance, the tiles never overlap, and the counts match the reference.
-    template<> template<>
-    void skworldmapmath_object::test<4>()
+    TEST_CASE("skworldmapmath: A tilted view: levels coarsen with distance, the tiles never overlap, and the counts match the reference", "[skworldmapmath]")
     {
         const std::vector<SelectedTile> tiles = selectTiles(viewAt(LLVector3d(256000.0, 256000.0, GROUND_Z + 800.0), 90.0 * DEG, -25.0 * DEG));
-        ensure_equals("total", tiles.size(), (size_t)268);
+        CHECK(tiles.size() == (size_t)268); // total
         std::map<S32, size_t> per_level;
         std::map<S32, F64> nearest;
         std::set<std::pair<S32, S32>> cells;
@@ -141,47 +131,44 @@ namespace tut
             {
                 for (S32 j = 0; j < n; ++j)
                 {
-                    ensure("no overlap", cells.insert({ t.mKey.mGridX + i, t.mKey.mGridY + j }).second);
+                    CHECK(cells.insert({ t.mKey.mGridX + i, t.mKey.mGridY + j }).second); // no overlap
                 }
             }
         }
-        ensure_equals("level 1", per_level[1], (size_t)84);
-        ensure_equals("level 2", per_level[2], (size_t)74);
-        ensure_equals("level 3", per_level[3], (size_t)66);
-        ensure_equals("level 4", per_level[4], (size_t)44);
-        ensure("coarser is farther", nearest[1] < nearest[2] && nearest[2] < nearest[3] && nearest[3] < nearest[4]);
+        CHECK(per_level[1] == (size_t)84); // level 1
+        CHECK(per_level[2] == (size_t)74); // level 2
+        CHECK(per_level[3] == (size_t)66); // level 3
+        CHECK(per_level[4] == (size_t)44); // level 4
+        CHECK((nearest[1] < nearest[2] && nearest[2] < nearest[3] && nearest[3] < nearest[4])); // coarser is farther
     }
 
     // The cap holds, and splitting stops before it rather than past it.
-    template<> template<>
-    void skworldmapmath_object::test<5>()
+    TEST_CASE("skworldmapmath: The cap holds, and splitting stops before it rather than past it", "[skworldmapmath]")
     {
         TileSelectParams p;
         p.mCap = 40;
         const std::vector<SelectedTile> tiles = selectTiles(viewAt(LLVector3d(256000.0, 256000.0, GROUND_Z + 800.0), 90.0 * DEG, -25.0 * DEG), p);
-        ensure("capped", tiles.size() <= 40 && tiles.size() > 30);
+        CHECK((tiles.size() <= 40 && tiles.size() > 30)); // capped
     }
 
     // An ancestor and the part of its texture a finer tile covers.
-    template<> template<>
-    void skworldmapmath_object::test<6>()
+    TEST_CASE("skworldmapmath: An ancestor and the part of its texture a finer tile covers", "[skworldmapmath]")
     {
         F32 uv[4];
         const TileKey a = ancestor({ 1, 1001, 1003 }, 2, uv);
-        ensure("key", a == TileKey{ 3, 1000, 1000 });
-        ensure("uv", uv[0] == 0.25f && uv[1] == 0.75f && uv[2] == 0.5f && uv[3] == 1.0f);
+        CHECK((a == TileKey{ 3, 1000, 1000 })); // key
+        CHECK((uv[0] == 0.25f && uv[1] == 0.75f && uv[2] == 0.5f && uv[3] == 1.0f)); // uv
     }
 
     // Stacks grow up the screen from straight above, along world up when tilted, and keep to the budget.
-    template<> template<>
-    void skworldmapmath_object::test<7>()
+    TEST_CASE("skworldmapmath: Stacks grow up the screen from straight above, along world up when tilted, and keep to the budget", "[skworldmapmath]")
     {
         const LLVector2 top = stackDirection(LLVector3d(0.0, 0.0, 1.0));
-        ensure("top-down is screen up", top.mV[VX] == 0.f && top.mV[VY] == 1.f);
+        CHECK((top.mV[VX] == 0.f && top.mV[VY] == 1.f)); // top-down is screen up
         const LLVector2 side = stackDirection(LLVector3d(0.6, 0.0, 0.8));
-        ensure("tilted follows world up", side.mV[VX] > 0.99f);
+        CHECK(side.mV[VX] > 0.99f); // tilted follows world up
         const std::vector<S32> shown = stackBudget({ 5.0, 1.0, 9.0 }, { 3, 10, 4 }, 8, 12);
-        ensure("nearest first within budget", shown[0] == 3 && shown[1] == 8 && shown[2] == 1);
+        CHECK((shown[0] == 3 && shown[1] == 8 && shown[2] == 1)); // nearest first within budget
     }
 
-} // namespace tut
+} // namespace
