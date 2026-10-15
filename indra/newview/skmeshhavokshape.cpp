@@ -22,6 +22,9 @@
 #include "skmeshhavokshape.h"
 
 #include "llframetimer.h"
+#include "llmeshrepository.h"
+#include "llrender.h"
+#include "llvertexbuffer.h"
 #include "skmeshhavok.h"
 
 namespace
@@ -82,6 +85,19 @@ SKPhysicsHavokResult skBuildPhysicsHavokShape(const U8* mesh, size_t mesh_size, 
     }
     out = shape;
     return SKPhysicsHavokResult::OK;
+}
+
+bool skRenderPhysicsHavok(const LLUUID& mesh_id, const LLColor4& color)
+{
+    const std::shared_ptr<const SKPhysicsHavokShape> shape = gMeshRepo.getPhysicsHavok(mesh_id);
+    if (!shape || !shape->mHasMopp || shape->mTriangles.empty())
+    {
+        return false;
+    }
+    gGL.getTextureSlot(0)->unbind();
+    gGL.diffuseColor4fv(color.mV);
+    LLVertexBuffer::drawArrays(LLRender::TRIANGLES, shape->mTriangles);
+    return true;
 }
 
 std::shared_ptr<const SKPhysicsHavokShape> SKPhysicsHavokCache::get(const LLUUID& mesh_id)

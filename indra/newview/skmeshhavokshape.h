@@ -59,6 +59,12 @@ struct SKPhysicsHavokDelivery
 SKPhysicsHavokResult skBuildPhysicsHavokShape(const U8* mesh, size_t mesh_size, const U8* havok, size_t havok_size,
                                               std::shared_ptr<const SKPhysicsHavokShape>& out, std::string& error);
 
+class LLColor4;
+
+// Main thread: draws the simulator's triangles of a mesh with a MOPP under the current matrix.
+// False while they are absent or the mesh has no MOPP, for the caller to draw as before.
+bool skRenderPhysicsHavok(const LLUUID& mesh_id, const LLColor4& color);
+
 // Main thread only: shapes by mesh, least recently used dropped first, failures retried after a delay.
 class SKPhysicsHavokCache
 {
