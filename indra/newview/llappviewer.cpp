@@ -210,6 +210,7 @@
 #include "lltracker.h"
 #include "llviewerparcelmgr.h"
 #include "llworldmapview.h"
+#include "skmapmode.h" // <SK:Nexii> 3D world map
 
 #include "lldebugview.h"
 #include "llconsole.h"
@@ -1952,6 +1953,13 @@ bool LLAppViewer::cleanup()
     {
         LLWorldMap::getInstance()->reset(); // release any images
     }
+
+    // <SK:Nexii> 3D world map: its tiles and targets go while the texture list and GL are still up.
+    if (SKMapMode::instanceExists())
+    {
+        SKMapMode::getInstance()->shutdown();
+    }
+    // </SK:Nexii>
 
     LLCalc::cleanUp();
 

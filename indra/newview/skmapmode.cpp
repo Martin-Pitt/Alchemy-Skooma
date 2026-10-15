@@ -240,7 +240,11 @@ void SKMapMode::close()
     mOpen = false;
 
     // The world camera exactly as it was; a camera that followed the avatar follows it again from
-    // the same offset.
+    // the same offset. A mouselook entered on the map is left first.
+    if (gAgentCamera.cameraMouselook() && !mWorld.mMouselook)
+    {
+        gAgentCamera.changeCameraToDefault();
+    }
     gAgentCamera.setCameraPosAndFocusGlobal(mWorld.mPosition, mWorld.mFocus, mWorld.mFocusObject);
     if (mWorld.mFocusOnAvatar)
     {
@@ -252,6 +256,30 @@ void SKMapMode::close()
         gAgentCamera.changeCameraToMouselook(false);
     }
     LL_INFOS("WorldMap") << "map mode closed" << LL_ENDL;
+}
+
+void SKMapMode::shutdown()
+{
+    // No idle loop runs from here on, so the views go now rather than later.
+    for (LLHandle<LLView>* handle : { &mInput, &mOverlay })
+    {
+        if (LLView* view = handle->get())
+        {
+            if (gFocusMgr.getMouseCapture() == view)
+            {
+                gFocusMgr.setMouseCapture(nullptr);
+            }
+            if (view->getParent())
+            {
+                view->getParent()->removeChild(view);
+            }
+            delete view;
+        }
+        *handle = LLHandle<LLView>();
+    }
+    mPanning = false;
+    mOpen = false;
+    mScene.shutdown();
 }
 
 void SKMapMode::recentre()

@@ -58,6 +58,9 @@ public:
     /// Gives back the targets and lowers the tiles' priority; called when the map closes.
     void release();
 
+    /// Also lets go of every tile; called at viewer shutdown, before the texture list and GL go.
+    void shutdown();
+
     /// What covers a region instead of its map tile. Not owned; null asks for map tiles only.
     void setSurfaceSource(SKWorldMapSurfaceSource* source) { mSurfaces = source; }
 

@@ -534,3 +534,9 @@ void SKWorldMapScene::release()
     mPolled.clear();
     mSelected.clear();
 }
+
+void SKWorldMapScene::shutdown()
+{
+    release();
+    mTiles.clear();
+}

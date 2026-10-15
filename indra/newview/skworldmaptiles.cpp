@@ -66,6 +66,7 @@ bool SKWorldMapTiles::resolve(const SelectedTile& tile, F64 now, Draw& out)
         {
             e->mLastUsed = now;
             e->mImage->setBoostLevel(LLGLTexture::BOOST_MAP_VISIBLE);
+            e->mBoosted = true;
             out.mTexture = e->mImage.get();
             std::copy(uv, uv + 4, out.mUV);
             return true;
@@ -105,11 +106,9 @@ void SKWorldMapTiles::update(F64 now)
             if (e->mImage.notNull() && !e->mMissing && !e->mImage->hasGLTexture())
             {
                 e->mImage->setBoostLevel(LLGLTexture::BOOST_MAP_VISIBLE);
+                e->mBoosted = true;
             }
-            if (!(e->mMissing && now - e->mRequested > MISSING_RETRY))
-            {
-                continue;
-            }
+            continue;
         }
         if (mInFlight >= MAX_IN_FLIGHT)
         {
@@ -121,16 +120,18 @@ void SKWorldMapTiles::update(F64 now)
         fresh.mRequested = now;
         fresh.mLastUsed = now;
         fresh.mMissing = false;
+        fresh.mBoosted = true;
         ++mInFlight;
     }
     mWanted.clear();
 
-    // Tiles out of view fall back to the ordinary priority; past the budget the oldest go.
+    // Tiles that left the view fall back to the ordinary priority once; past the budget the oldest go.
     for (auto& [key, e] : mTiles)
     {
-        if (e.mImage.notNull() && e.mLastUsed < now)
+        if (e.mBoosted && e.mLastUsed < now)
         {
             e.mImage->setBoostLevel(LLGLTexture::BOOST_NONE);
+            e.mBoosted = false;
         }
     }
     if (mTiles.size() > static_cast<size_t>(MAX_KEPT))
@@ -154,9 +155,10 @@ void SKWorldMapTiles::dropPriorities()
 {
     for (auto& [key, e] : mTiles)
     {
-        if (e.mImage.notNull())
+        if (e.mBoosted)
         {
             e.mImage->setBoostLevel(LLGLTexture::BOOST_NONE);
+            e.mBoosted = false;
         }
     }
 }

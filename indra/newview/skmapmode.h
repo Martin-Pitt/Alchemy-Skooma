@@ -55,6 +55,10 @@ public:
     bool open();
     void close();
 
+    /// Drops the map's views, targets and tiles without touching the camera; called at viewer
+    /// shutdown, while GL and the texture list are still up.
+    void shutdown();
+
     /// Moves the camera and its focus across the map until the focus is over the agent.
     void recentre();
 

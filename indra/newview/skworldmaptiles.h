@@ -53,7 +53,6 @@ public:
     static constexpr S32 MAX_IN_FLIGHT = 24;
     static constexpr S32 MAX_KEPT = 1536;           ///< tiles kept after they leave the view, least recently used dropped
     static constexpr F64 FETCH_TIMEOUT = 30.0;      ///< seconds before a fetch stops counting against the cap
-    static constexpr F64 MISSING_RETRY = 600.0;     ///< seconds before a missing tile (open water, no region) is asked for again
 
     struct Draw
     {
@@ -68,7 +67,7 @@ public:
     /// Starts this frame's fetches, nearest wanted tile first, and drops the oldest unused tiles.
     void update(F64 now);
 
-    /// Lowers every tile's priority while the map is closed.
+    /// Lowers the priority of the tiles this map raised, once the map closes.
     void dropPriorities();
 
     void clear();
@@ -82,7 +81,8 @@ private:
         LLPointer<LLViewerFetchedTexture> mImage;
         F64 mRequested = 0.0;
         F64 mLastUsed = 0.0;
-        bool mMissing = false;
+        bool mMissing = false;      ///< open water or no region; kept for the session, as the texture list keeps the URL's missing texture
+        bool mBoosted = false;      ///< raised by this map, so only this map lowers it
     };
 
     bool isReady(const Entry& e) const;
