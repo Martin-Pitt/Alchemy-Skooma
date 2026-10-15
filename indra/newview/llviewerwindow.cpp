@@ -2762,9 +2762,6 @@ void LLViewerWindow::shutdownGL()
 
     LL_INFOS() << "All textures and llimagegl images are destroyed!" << LL_ENDL ;
 
-    LL_INFOS() << "Cleaning up select manager" << LL_ENDL;
-    LLSelectMgr::getInstance()->cleanup();
-
     LL_INFOS() << "Stopping GL during shutdown" << LL_ENDL;
     stopGL();
     stop_glerror();
@@ -3034,10 +3031,7 @@ void LLViewerWindow::draw()
 
     //S32 screen_x, screen_y;
 
-    if (!LLPipeline::RenderUIBuffer)
-    {
-        LLView::sDirtyRect = getWindowRectScaled();
-    }
+    LLView::sDirtyRect = getWindowRectScaled();
 
     // HACK for timecode debugging
     if (gSavedSettings.getBOOL("DisplayTimecode"))
@@ -4521,7 +4515,7 @@ void LLViewerWindow::renderSelections( bool for_gl_pick, bool pick_parcel_walls,
     if (!for_hud && !for_gl_pick)
     {
         // Call this once and only once
-        LLSelectMgr::getInstance()->updateSilhouettes();
+        LLSelectMgr::getInstance()->updateHighlightedObjects();
     }
 
     // <FS:Beq> render the poser manipulator guides
@@ -4542,12 +4536,19 @@ void LLViewerWindow::renderSelections( bool for_gl_pick, bool pick_parcel_walls,
         {
             LLViewerParcelMgr::getInstance()->renderParcelCollision();
         }
+        return;
     }
-    else if (( for_hud && selection->getSelectType() == SELECT_TYPE_HUD) ||
-             (!for_hud && selection->getSelectType() != SELECT_TYPE_HUD))
+
+    // The world's outlines every frame, for what the pointer is over glows in the world wherever the selection is;
+    // the HUD's while the selection is on it.
+    if (!for_hud || selection->getSelectType() == SELECT_TYPE_HUD)
     {
         LLSelectMgr::getInstance()->renderSilhouettes(for_hud);
+    }
 
+    if (( for_hud && selection->getSelectType() == SELECT_TYPE_HUD) ||
+        (!for_hud && selection->getSelectType() != SELECT_TYPE_HUD))
+    {
         stop_glerror();
 
         // setup HUD render
