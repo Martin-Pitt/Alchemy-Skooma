@@ -78,10 +78,19 @@ namespace
     LLRenderTarget sTacticalWork;   // the static capture copied, with the movers drawn over it
     LLGLSLShader sResolve;
     LLGLSLShader sComposite;
-    LLGLSLShader sGeom;       // the census: class code and the face's own normal
+    LLGLSLShader sGeom;
+    LLGLSLShader sMarker;     // the tactical avatar markers, depth-tested by hand       // the census: class code and the face's own normal
     GLuint sQueries[2] = { 0, 0 };
 
     const F32 CENSUS_RANGE_M = 128.f;
+    const F32 AVATAR_HALF_HEIGHT_M = 0.9f;     // an avatar's position over its feet, near enough
+    const F32 MARKER_RADIUS_M = 0.35f;         // the avatar marker's cylinder at true size
+    const F32 MARKER_HEIGHT_M = 1.8f;
+    const F32 MARKER_COARSE_HEIGHT_M = 0.5f;   // a coarse-only avatar: a short plain puck, no heading
+    const F32 MARKER_MIN_RADIUS_PX = 6.f;      // never smaller than this on screen
+    const F32 MARKER_MAX_SCALE = 8.f;          // nor grown past this
+    const S32 MARKER_SIDES = 16;
+    const F32 MARKER_GHOST_ALPHA = 0.3f;       // its silhouette where the census hides it
     const F32 VEHICLE_EXAGGERATION = 2.5f;     // a vehicle's outline at this many times its size when far
     const F32 VEHICLE_TRUE_SIZE_M = 40.f;      // tactical camera distance up to which vehicles are true size
     const F32 VEHICLE_EXAGGERATED_M = 200.f;   // and from which they are fully exaggerated
@@ -223,6 +232,7 @@ void SKOverviewCapture::cleanupGL()
     sResolve.unload();
     sComposite.unload();
     sGeom.unload();
+    sMarker.unload();
 }
 
 void SKOverviewCapture::releaseGL()
@@ -236,6 +246,7 @@ void SKOverviewCapture::releaseGL()
     sResolve.unload();
     sComposite.unload();
     sGeom.unload();
+    sMarker.unload();
     if (sQueries[0])
     {
         glDeleteQueries(2, sQueries);
@@ -333,6 +344,17 @@ bool SKOverviewCapture::ensureShaders()
         sGeom.mShaderLevel = 1;
         ok = sGeom.createShader();
         LL_INFOS_ONCE("SKOverview") << "overview geometry shader " << (ok ? "loaded" : "FAILED") << LL_ENDL;
+    }
+    if (ok && !sMarker.mProgramObject)
+    {
+        sMarker.mName = "SK Overview Marker";
+        sMarker.mShaderFiles.clear();
+        sMarker.clearPermutations();
+        sMarker.mShaderFiles.push_back(std::make_pair("skooma/overviewMarkerV.glsl", GL_VERTEX_SHADER));
+        sMarker.mShaderFiles.push_back(std::make_pair("skooma/overviewMarkerF.glsl", GL_FRAGMENT_SHADER));
+        sMarker.mShaderLevel = 1;
+        ok = sMarker.createShader();
+        LL_INFOS_ONCE("SKOverview") << "overview marker shader " << (ok ? "loaded" : "FAILED") << LL_ENDL;
     }
     if (ok && !sQueries[0])
     {
@@ -1043,6 +1065,7 @@ void SKOverviewCapture::tactical()
         {
             ++mCost.mReuses;
         }
+        mSceneDepth = movers ? &sTacticalWork : &sTacticalCapture;
         if (movers)
         {
             drawMovers(shot);
@@ -1169,6 +1192,175 @@ void SKOverviewCapture::onComposite()
     instance().composite();
 }
 
+
+template <typename Project>
+void SKOverviewCapture::drawMarkers3D(const Project& project, S32 vw, S32 vh, std::vector<std::pair<size_t, LLVector2>>& drawn)
+{
+    LL_PROFILE_ZONE_NAMED("sk tactical markers 3d");
+    const std::vector<SKMapPeople::Person>& people = SKMapPeople::instance().people();
+    LLMatrix4a inverse_view;
+    inverse_view.setInverse(mTacticalView);
+    const LLVector3 eye(inverse_view.getF32ptr()[12], inverse_view.getF32ptr()[13], inverse_view.getF32ptr()[14]);
+    const LLVector3 light = LLVector3(-0.45f, 0.45f, 0.77f) / LLVector3(-0.45f, 0.45f, 0.77f).length();
+
+    struct Marker
+    {
+        LLVector3 mFloor;   // agent space, the avatar's feet
+        F32 mHeading = 0.f;
+        bool mHasHeading = false;
+        LLColor4 mColour;
+        size_t mPerson = (size_t)-1;
+        LLUUID mId;
+        bool mCoarse = false;   // known only from the region's coarse locations: no rotation, a coarse height
+    };
+    std::vector<Marker> markers;
+    for (size_t i = 0; i < people.size(); ++i)
+    {
+        const SKMapPeople::Person& p = people[i];
+        Marker m;
+        // Tiers by what is known (SKMapPeople's own flags): the avatar object (live position and rotation), or only a
+        // coarse location, whose height may be the capped value, in which case it stands on the land under it.
+        m.mCoarse = !p.mLoaded;
+        LLVector3d where = p.mPos;
+        if (!p.mZKnown)
+        {
+            where.mdV[VZ] = LLWorld::getInstance()->resolveLandHeightGlobal(where) + AVATAR_HALF_HEIGHT_M;
+        }
+        m.mFloor = gAgent.getPosAgentFromGlobal(where) - LLVector3(0.f, 0.f, AVATAR_HALF_HEIGHT_M);
+        m.mHeading = p.mHeading;
+        m.mHasHeading = p.mHasHeading && !m.mCoarse;
+        const skmap::PaletteColour& coded = skmap::palette::DOT_COMBAT;
+        m.mColour = p.mVisibility == skmap::Visibility::DOT_CODED ? LLColor4(coded.mR, coded.mG, coded.mB, 1.f)
+                                                                  : LLColor4(p.mColour.mV[0], p.mColour.mV[1], p.mColour.mV[2], 1.f);
+        if (m.mCoarse)
+        {
+            m.mColour = LLColor4(m.mColour.mV[0] * 0.7f, m.mColour.mV[1] * 0.7f, m.mColour.mV[2] * 0.7f, 0.85f);
+        }
+        m.mPerson = i;
+        m.mId = p.mId;
+        markers.push_back(m);
+    }
+    if (isAgentAvatarValid())
+    {
+        Marker m;
+        m.mFloor = gAgent.getPositionAgent() - LLVector3(0.f, 0.f, AVATAR_HALF_HEIGHT_M);
+        const LLVector3 fwd = gAgent.getAtAxis();
+        m.mHeading = std::atan2(fwd.mV[VY], fwd.mV[VX]);
+        m.mHasHeading = true;
+        const skmap::PaletteColour& self = skmap::palette::SELF_DOT;
+        m.mColour = LLColor4(self.mR, self.mG, self.mB, 1.f);
+        markers.push_back(m);
+    }
+    if (markers.empty() || !sMarker.mProgramObject || !mSceneDepth || !mSceneDepth->isComplete())
+    {
+        return;
+    }
+
+    gGL.matrixMode(LLRender::MM_PROJECTION);
+    gGL.pushMatrix();
+    gGL.loadMatrix(mTacticalProj);
+    gGL.matrixMode(LLRender::MM_MODELVIEW);
+    gGL.pushMatrix();
+    gGL.loadMatrix(mTacticalView);
+    gGLLastMatrix = NULL;
+    LLGLDepthTest depth(GL_FALSE, GL_FALSE);
+    LLGLEnable blend(GL_BLEND);
+    gGL.setSceneBlendType(LLRender::BT_ALPHA);
+    LLGLDisable cull_face(GL_CULL_FACE);
+    sMarker.bind();
+    gGL.getTextureSlot(0)->bindManual(ALTextureSlot::TT_TEXTURE, mSceneDepth->getDepth(), gGL.getSampler(ALSamplers::PointClamp));
+    glUniform1i(glGetUniformLocation(sMarker.mProgramObject, "sceneDepth"), 0);
+    glUniform4f(glGetUniformLocation(sMarker.mProgramObject, "sk_viewport"), (F32)mTacticalViewport[0], (F32)mTacticalViewport[1],
+                (F32)vw, (F32)vh);
+    glUniform1f(glGetUniformLocation(sMarker.mProgramObject, "sk_zo"), LLRender::sReverseZ ? 1.f : 0.f);
+    glUniform1f(glGetUniformLocation(sMarker.mProgramObject, "sk_ghost_alpha"), MARKER_GHOST_ALPHA);
+
+    gGL.begin(LLRender::TRIANGLES);
+    // A triangle facing the camera, lit by the overview's key light; those facing away are left out (no depth buffer).
+    auto tri = [&](const LLVector3& a, const LLVector3& b, const LLVector3& c, const LLColor4& colour)
+    {
+        LLVector3 n = (b - a) % (c - a);
+        if (n.normVec() < 1e-8f)
+        {
+            return;
+        }
+        if (n * (eye - a) < 0.f)
+        {
+            return;
+        }
+        const F32 shade = 0.45f + 0.55f * llmax(n * light, 0.f);
+        gGL.color4f(colour.mV[0] * shade, colour.mV[1] * shade, colour.mV[2] * shade, colour.mV[3]);
+        gGL.vertex3fv(a.mV);
+        gGL.vertex3fv(b.mV);
+        gGL.vertex3fv(c.mV);
+    };
+    for (const Marker& m : markers)
+    {
+        // At least MARKER_MIN_RADIUS_PX across on screen, growing as the camera pulls back, never past MARKER_MAX_SCALE.
+        LLVector2 at0, atx, aty;
+        if (!project(m.mFloor, at0))
+        {
+            continue;
+        }
+        F32 ppm = 0.f;
+        if (project(m.mFloor + LLVector3::x_axis, atx))
+        {
+            ppm = llmax(ppm, (atx - at0).length());
+        }
+        if (project(m.mFloor + LLVector3::y_axis, aty))
+        {
+            ppm = llmax(ppm, (aty - at0).length());
+        }
+        const F32 scale = ppm > 1e-3f ? llclamp(MARKER_MIN_RADIUS_PX / (MARKER_RADIUS_M * ppm), 1.f, MARKER_MAX_SCALE) : 1.f;
+        const F32 r = MARKER_RADIUS_M * scale;
+        const F32 h = (m.mCoarse ? MARKER_COARSE_HEIGHT_M : MARKER_HEIGHT_M) * scale;
+        const LLVector3 top_c = m.mFloor + LLVector3(0.f, 0.f, h);
+        for (S32 k = 0; k < MARKER_SIDES; ++k)
+        {
+            const F32 a0 = F_TWO_PI * k / MARKER_SIDES, a1 = F_TWO_PI * (k + 1) / MARKER_SIDES;
+            const LLVector3 d0(std::cos(a0) * r, std::sin(a0) * r, 0.f), d1(std::cos(a1) * r, std::sin(a1) * r, 0.f);
+            const LLVector3 b0 = m.mFloor + d0, b1 = m.mFloor + d1, t0 = top_c + d0, t1 = top_c + d1;
+            tri(b0, b1, t1, m.mColour);
+            tri(b0, t1, t0, m.mColour);
+            tri(top_c, t0, t1, m.mColour);
+        }
+        if (m.mHasHeading)
+        {
+            // A wedge on the top, pointing along the heading, brighter than the body.
+            const LLVector3 ahead(std::cos(m.mHeading), std::sin(m.mHeading), 0.f);
+            const LLVector3 across(-ahead.mV[VY], ahead.mV[VX], 0.f);
+            const LLVector3 lift(0.f, 0.f, 0.03f * scale);
+            const LLVector3 tip = top_c + lift + ahead * (r * 1.7f);
+            const LLVector3 back = top_c + lift - ahead * (r * 0.35f);
+            const LLColor4 bright(llmin(1.f, m.mColour.mV[0] * 1.25f + 0.1f), llmin(1.f, m.mColour.mV[1] * 1.25f + 0.1f),
+                                  llmin(1.f, m.mColour.mV[2] * 1.25f + 0.1f), 1.f);
+            tri(back + across * (r * 0.75f), tip, back - across * (r * 0.75f), bright);
+            tri(back - across * (r * 0.75f), tip, back + across * (r * 0.75f), bright);
+        }
+        // Labels, hover, picks and menus take the projected top of the cylinder.
+        LLVector2 top;
+        if (project(top_c, top))
+        {
+            if (m.mPerson != (size_t)-1)
+            {
+                mTacticalMarks.push_back({ m.mId, top });
+                drawn.emplace_back(m.mPerson, top);
+            }
+        }
+    }
+    gGL.end();
+    gGL.flush();
+    gGL.getTextureSlot(0)->unbind();
+    sMarker.unbind();
+    gGL.matrixMode(LLRender::MM_PROJECTION);
+    gGL.popMatrix();
+    gGL.matrixMode(LLRender::MM_MODELVIEW);
+    gGL.popMatrix();
+    gGLLastMatrix = NULL;
+    // The 2D pass the caller resumes in.
+    gUIProgram.bind();
+}
+
 void SKOverviewCapture::composite()
 {
     if (!mTacticalReady || !sComposite.mProgramObject || !sTacticalResolved.isComplete())
@@ -1268,45 +1460,7 @@ void SKOverviewCapture::composite()
         SKMapPeople::instance().noteDrawn(centre - LLVector3d(reach, reach, reach), centre + LLVector3d(reach, reach, reach));
         mTacticalMarks.clear();
         std::vector<std::pair<size_t, LLVector2>> drawn;
-        const std::vector<SKMapPeople::Person>& people = SKMapPeople::instance().people();
-        gGL.begin(LLRender::TRIANGLES);
-        for (size_t i = 0; i < people.size(); ++i)
-        {
-            const SKMapPeople::Person& p = people[i];
-            const LLVector3 pos = gAgent.getPosAgentFromGlobal(p.mPos);
-            LLVector2 at, ahead;
-            if (!project(pos, at))
-            {
-                continue;
-            }
-            const bool has_ahead = p.mHasHeading && ground_ahead(pos, at, p.mHeading, ahead);
-            const F32 radius = skmapdraw::markerRadius(p, skmap::FloorRelation::SAME);
-            skmapdraw::personMarker(p, at, radius, has_ahead ? &ahead : nullptr, skmap::FloorRelation::SAME, px);
-            mTacticalMarks.push_back({ p.mId, at });
-            drawn.emplace_back(i, at);
-        }
-        if (isAgentAvatarValid())
-        {
-            // The agent: white, its heading the body's facing.
-            const LLVector3 pos = gAgent.getPositionAgent();
-            LLVector2 at, ahead;
-            if (project(pos, at))
-            {
-                const LLVector3 fwd = gAgent.getAtAxis();
-                const F32 radius = skmapdraw::plainMarkerRadius(skmap::FloorRelation::SAME);
-                skmapdraw::colour(skmap::palette::SELF_DOT);
-                if (ground_ahead(pos, at, std::atan2(fwd.mV[VY], fwd.mV[VX]), ahead))
-                {
-                    const LLVector2 across(-ahead.mV[VY], ahead.mV[VX]);
-                    const LLVector2 base = at + ahead * (radius + skmap::palette::HEADING_BASE_PX);
-                    skmapdraw::triangle(at + ahead * (radius + skmap::palette::HEADING_TIP_PX),
-                                        base + across * skmap::palette::HEADING_HALF_PX,
-                                        base - across * skmap::palette::HEADING_HALF_PX);
-                }
-                skmapdraw::disc(at, radius);
-            }
-        }
-        gGL.end();
+        drawMarkers3D(project, vw, vh, drawn);
         gGL.flush();
         drawTacticalLabels(drawn, vw, vh);
         gGL.flush();

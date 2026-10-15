@@ -136,6 +136,10 @@ private:
     void drawMovers(const Shot& shot);
     /// The vehicles as their captured outlines on the ground, over the composited overview.
     void drawVehicles(F32 distance);
+    /// The avatar markers as lit 3D cylinders with a heading wedge, hidden by the census (a faint silhouette where
+    /// they are), at a minimum size on screen; fills the marks and labels' anchors with each cylinder's projected top.
+    template <typename Project>
+    void drawMarkers3D(const Project& project, S32 vw, S32 vh, std::vector<std::pair<size_t, LLVector2>>& drawn);
     /// Captures the region maps that are due: the agent's on its timer, then the most overdue other one.
     void captureMaps(F64 now);
     bool captureMap(RegionMap& map, LLViewerRegion* region, bool agent);
@@ -148,6 +152,7 @@ private:
 
     SKOverviewCensus mCensus;
     SKOverviewMovers mMovers;
+    LLRenderTarget* mSceneDepth = nullptr;   ///< the capture whose depth this frame's markers test against
     bool mMoversDrawn = false;
     F32 mTacticalDistance = 0.f;
     std::vector<std::unique_ptr<RegionMap>> mMaps;
