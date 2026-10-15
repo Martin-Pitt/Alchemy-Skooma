@@ -142,12 +142,24 @@ void render_ui_3d();
 void render_ui_2d();
 void render_disconnected_background();
 
-// <SK:Nexii> 3D world map: a map frame keeps the image updates of a world frame, then draws the map and the UI.
+// <SK:Nexii> 3D world map: a map frame keeps a world frame's object and image work, so nothing piles up
+// for close, and draws the map and the UI in place of the world.
 static bool sSKMapFrame = false;
 
-static void sk_display_map()
+static void sk_display_map(bool rebuild)
 {
     LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("World Map Frame");
+    LLHUDManager::getInstance()->updateEffects();
+    LLHUDObject::updateAll();
+    const F32 max_geom_update_time = llmin(0.005f * 10.f * gFrameIntervalSeconds.value(), 0.005f);
+    gPipeline.createObjects(max_geom_update_time);
+    gPipeline.processPartitionQ();
+    gPipeline.updateGeom(max_geom_update_time);
+    gPipeline.updateGL();
+    if (rebuild)
+    {
+        gPipeline.rebuildPools();
+    }
     LLViewerTexture::updateClass();
     gBumpImageList.updateImages();
     const F32 max_image_decode_time = llclamp(0.050f * gFrameIntervalSeconds.value(), 0.002f, 0.005f);
@@ -767,7 +779,7 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
         else if (!for_snapshot)
         {
             sk_map_frame = true;
-            sk_display_map();
+            sk_display_map(rebuild);
         }
     }
     // </SK:Nexii>
