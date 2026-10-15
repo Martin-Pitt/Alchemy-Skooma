@@ -352,6 +352,7 @@ U32     LLPipeline::sGradeBypassMask = 0;
 static LLPipelineListener sPipelineListener;
 
 static LLCullResult* sCull = NULL;
+static bool sSkOverviewCull = false; // <SK:Nexii> overview capture: set while its cull leaves avatars out
 
 void validate_framebuffer_object();
 
@@ -3514,6 +3515,12 @@ void LLPipeline::markVisible(LLDrawable *drawablep, LLCamera& camera)
             if (root && //  // this test may not be needed, see above
                     root->getVObj()->isAttachment())
             {
+                // <SK:Nexii> overview capture: attachments are part of the avatar, which markers replace.
+                if (sSkOverviewCull)
+                {
+                    return;
+                }
+                // </SK:Nexii>
                 LLDrawable* rootparent = root->getParent();
                 if (rootparent) // this IS sometimes NULL
                 {
@@ -12428,9 +12435,10 @@ U32 LLPipeline::skRenderOverview(const LLMatrix4a& view, const LLMatrix4a& proj,
     } restore;
 
     pushRenderTypeMask();
+    // Avatars are left out: the markers stand for them; animesh stays, as world objects the census also keeps.
     clearRenderTypeMask(RENDER_TYPE_SKY, RENDER_TYPE_WL_SKY, RENDER_TYPE_GRASS, RENDER_TYPE_TREE, RENDER_TYPE_VOIDWATER,
                         RENDER_TYPE_WATER, RENDER_TYPE_PASS_GRASS, RENDER_TYPE_HUD, RENDER_TYPE_PARTICLES, RENDER_TYPE_CLOUDS,
-                        RENDER_TYPE_HUD_PARTICLES, END_RENDER_TYPES);
+                        RENDER_TYPE_HUD_PARTICLES, RENDER_TYPE_AVATAR, END_RENDER_TYPES);
 
     // The coverage camera's id: a non-world camera never updates LOD, so parts keep the LOD the agent's own view chose.
     LLViewerCamera::sCurCameraID = LLViewerCamera::CAMERA_SK_COVERAGE;
@@ -12442,8 +12450,10 @@ U32 LLPipeline::skRenderOverview(const LLMatrix4a& view, const LLMatrix4a& proj,
     static LLCullResult result;
     {
         LL_PROFILE_ZONE_NAMED_CATEGORY_PIPELINE("sk overview cull");
+        sSkOverviewCull = true;
         updateCull(camera, result);
         stateSort(camera, result);
+        sSkOverviewCull = false;
     }
 
     gGL.matrixMode(LLRender::MM_PROJECTION);
