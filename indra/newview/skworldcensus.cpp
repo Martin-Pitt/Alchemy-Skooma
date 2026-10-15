@@ -26,6 +26,8 @@
 
 #include "skworldcensus.h"
 
+#include "llframetimer.h"
+
 #include "sknavoverlay.h"
 #include "sknavpalette.h"
 
@@ -322,9 +324,20 @@ void SKWorldCensus::update()
     }
 
     static LLCachedControl<F32> budget(gSavedSettings, "SKNavCensusBudgetMS", 3.f);
+    constexpr F64 SLOW_SCAN_INTERVAL_S = 1.0;
+    constexpr F32 SLOW_SLICE_MS = 1.f;
 
     if (!mScan.mActive)
     {
+        // Slow cadence: the next scan waits until a second after the last began.
+        if (mSlow && LLFrameTimer::getUptimeSeconds().value() - mLastScanBegun < SLOW_SCAN_INTERVAL_S)
+        {
+            if (mRolesWanted)
+            {
+                requestRoles();
+            }
+            return;
+        }
         beginScan();
     }
     else if (!sameRegions(mScan.mRegions))
@@ -332,7 +345,8 @@ void SKWorldCensus::update()
         abandonScan();
         beginScan();
     }
-    continueScan(llmax(0.1f, static_cast<F32>(budget)));
+    const F32 slice = llmax(0.1f, static_cast<F32>(budget));
+    continueScan(mSlow ? llmin(slice, SLOW_SLICE_MS) : slice);
 
     if (mRolesWanted)
     {
@@ -375,6 +389,8 @@ void SKWorldCensus::beginScan()
     gatherCached();
     mScan.mElapsedMs = 0.f;
     mScan.mActive = true;
+    mLastScanBegun = LLFrameTimer::getUptimeSeconds().value();
+    ++mScansBegun;
 }
 
 void SKWorldCensus::abandonScan()

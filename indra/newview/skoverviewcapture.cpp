@@ -98,6 +98,12 @@ SKOverviewCapture::~SKOverviewCapture() = default;
 void SKOverviewCapture::onFrame()
 {
     updateCapsLockCapture();
+    // The world census runs slowly only while the overview hides the world (navmesh freshness matters little then),
+    // and back at its normal cadence the frame it closes.
+    if (SKWorldCensus::instanceExists())
+    {
+        SKWorldCensus::instance().setSlowCadence(worldHidden());
+    }
     static LLCachedControl<bool> enabled(gSavedSettings, "SKMapCaptureBase", false);
     static LLCachedControl<bool> tactical(gSavedSettings, "SKTacticalOverview", false);
     if (!enabled && !tactical)
@@ -1024,16 +1030,21 @@ void SKOverviewCapture::composite()
     const F64 now = LLFrameTimer::getUptimeSeconds().value();
     if (now - mCost.mSince >= 1.0)
     {
+        const bool census_slow = SKWorldCensus::instanceExists() && SKWorldCensus::instance().slowCadence();
+        const U32 scans_now = SKWorldCensus::instanceExists() ? SKWorldCensus::instance().scansBegun() : 0;
+        const U32 census_scans = scans_now - mCost.mScansAtStart;
         if (mCost.mSince > 0.0 && mCost.mFrames)
         {
             const F32 n = (F32)mCost.mFrames;
             LL_INFOS("SKOverviewCost") << "tactical per frame over " << mCost.mFrames << " frames: capture "
                                        << mCost.mCaptureMs / n << " ms, resolve " << mCost.mResolveMs / n << " ms, composite+markers "
                                        << mCost.mCompositeMs / n << " ms; rendered " << mCost.mRenders << ", reused " << mCost.mReuses
-                                       << ", world hidden " << (worldHidden() ? 1 : 0) << LL_ENDL;
+                                       << ", world hidden " << (worldHidden() ? 1 : 0) << "; census "
+                                       << (census_slow ? "slow" : "normal") << ", scans " << census_scans << LL_ENDL;
         }
         mCost = Cost();
         mCost.mSince = now;
+        mCost.mScansAtStart = scans_now;
     }
     glViewport(gGLViewport[0], gGLViewport[1], gGLViewport[2], gGLViewport[3]);
     LL_INFOS_ONCE("SKOverview") << "tactical overview composited at " << vx << "," << vy << " " << vw << "x" << vh << LL_ENDL;

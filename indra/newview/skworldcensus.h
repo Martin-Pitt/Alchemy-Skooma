@@ -102,6 +102,13 @@ public:
 
     /// Consumers say they need the census; the scan runs while any is registered.
     void addDemand(const std::string& who, F32 range_m);
+
+    /// A slow cadence while nothing needs the census fresh (the tactical overview covers the view): a new scan at
+    /// most once a second, and at most SLOW_SLICE_MS of scanning a frame. Snapshots still publish whole.
+    void setSlowCadence(bool slow) { mSlow = slow; }
+    bool slowCadence() const { return mSlow; }
+    /// Scans begun so far, for a cost line.
+    U32 scansBegun() const { return mScansBegun; }
     void removeDemand(const std::string& who);
 
     /// Record and cluster boxes in world, from the pipeline's debug pass.
@@ -244,6 +251,9 @@ private:
     bool mRolesWanted = false;
     U32 mRolesRequestId = 0;
     F64 mLastLog = 0.f;
+    bool mSlow = false;
+    F64 mLastScanBegun = -1.0e9;
+    U32 mScansBegun = 0;
 };
 
 #endif // SK_WORLDCENSUS_H
