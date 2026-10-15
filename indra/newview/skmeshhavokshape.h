@@ -17,6 +17,7 @@
  * $/LicenseInfo$
  */
 
+
 #ifndef SK_SKMESHHAVOKSHAPE_H
 #define SK_SKMESHHAVOKSHAPE_H
 
@@ -29,6 +30,8 @@
 #include <memory>
 #include <string>
 #include <vector>
+
+class LLColor4;
 
 // What the physics display draws for one mesh.
 class SKPhysicsHavokShape
@@ -45,7 +48,8 @@ enum class SKPhysicsHavokResult
 {
     OK,
     ABSENT,    // no section, 404 or unreadable: will not change on retry soon
-    TRANSIENT, // network trouble: worth asking again shortly
+    TRANSIENT, // network trouble or out of memory: worth asking again shortly
+    NEED_MESH, // the block has a MOPP and physics_mesh is not cached yet
 };
 
 struct SKPhysicsHavokDelivery
@@ -55,44 +59,63 @@ struct SKPhysicsHavokDelivery
     SKPhysicsHavokResult mResult = SKPhysicsHavokResult::ABSENT;
 };
 
-// Builds the shape from the compressed physics_mesh and physics_havok sections; physics_mesh may be absent.
+// Builds the shape from the compressed physics_havok section and, for a MOPP, the compressed physics_mesh
+// (null when it is not to hand). havok_valid says whether the section itself parsed. Never throws.
 SKPhysicsHavokResult skBuildPhysicsHavokShape(const U8* mesh, size_t mesh_size, const U8* havok, size_t havok_size,
-                                              std::shared_ptr<const SKPhysicsHavokShape>& out, std::string& error);
-
-class LLColor4;
+                                              std::shared_ptr<const SKPhysicsHavokShape>& out, bool& havok_valid,
+                                              std::string& error);
 
 // Main thread: draws the simulator's triangles of a mesh with a MOPP under the current matrix.
 // False while they are absent or the mesh has no MOPP, for the caller to draw as before.
 bool skRenderPhysicsHavok(const LLUUID& mesh_id, const LLColor4& color);
 
-// Main thread only: shapes by mesh, least recently used dropped first, failures retried after a delay.
+// Main thread only, like the rest of LLMeshRepository's maps: shapes by mesh.
+// A mesh being fetched is never evicted and never asked for twice; only finished entries count
+// against the bound and are dropped least recently used first, never one asked for in the last frame.
+// Failures are asked again after a delay.
 class SKPhysicsHavokCache
 {
 public:
     // Null until the shape has arrived; the first ask queues a request.
     std::shared_ptr<const SKPhysicsHavokShape> get(const LLUUID& mesh_id);
     void takeRequests(std::vector<LLUUID>& out);
+    // Meshes whose physics_mesh the physics-shape fetch should bring into the cache.
+    void takeMeshRequests(std::vector<LLUUID>& out);
     void deliver(const SKPhysicsHavokDelivery& delivery);
     void clear();
 
     static constexpr size_t MAX_ENTRIES = 2048;
+    static constexpr size_t MAX_PENDING = 1024;
     static constexpr size_t MAX_BYTES = 64 * 1024 * 1024;
 
 private:
-    struct Entry
+    enum class EState
     {
-        std::shared_ptr<const SKPhysicsHavokShape> mShape;
-        F64 mRetryAt = 0.0; // for an entry with no shape: when to ask again
-        size_t mBytes = 0;
-        std::list<LLUUID>::iterator mUse;
+        PENDING,
+        READY,
+        FAILED,
     };
 
-    void touch(Entry& entry);
+    struct Entry
+    {
+        EState mState = EState::PENDING;
+        std::shared_ptr<const SKPhysicsHavokShape> mShape;
+        F64 mRetryAt = 0.0;
+        U32 mMeshWaits = 0;
+        U32 mLastFrame = 0;
+        size_t mBytes = 0;
+        std::list<LLUUID>::iterator mUse; // valid unless pending
+    };
+
+    void request(const LLUUID& mesh_id, Entry& entry);
+    void finish(const LLUUID& mesh_id, Entry& entry);
     void evict();
 
     boost::unordered_map<LLUUID, Entry> mEntries;
-    std::list<LLUUID> mUse; // most recent first
+    std::list<LLUUID> mUse; // finished entries, most recent first
     std::vector<LLUUID> mRequests;
+    std::vector<LLUUID> mMeshRequests;
+    size_t mPending = 0;
     size_t mBytes = 0;
 };
 

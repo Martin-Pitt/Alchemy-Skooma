@@ -703,10 +703,12 @@ public:
     bool decompositionReceived(const LLUUID& mesh_id, U8* data, S32 data_size);
     EMeshProcessingResult physicsShapeReceived(const LLUUID& mesh_id, U8* data, S32 data_size);
     // <SK:Nexii> physics_havok block
-    // data holds both sections; each offset is relative to data, a size of 0 meaning absent.
-    SKPhysicsHavokResult physicsHavokReceived(const LLUUID& mesh_id, const U8* data, S32 data_size, S32 mesh_offset,
-                                              S32 mesh_size, S32 havok_offset, S32 havok_size);
+    // Builds and delivers the shape; havok_valid says whether the section itself was readable.
+    SKPhysicsHavokResult physicsHavokReceived(const LLUUID& mesh_id, const U8* data, S32 data_size, bool from_cache,
+                                              bool& havok_valid);
     void physicsHavokFailed(const LLUUID& mesh_id, SKPhysicsHavokResult result);
+    // physics_mesh as the physics-shape fetch cached it; false while it is not on disk.
+    bool readCachedPhysicsMesh(const LLUUID& mesh_id, std::vector<U8>& out);
     // </SK:Nexii>
     bool hasHeader(const LLUUID& mesh_id) const;
 
@@ -730,7 +732,7 @@ public:
     bool fetchMeshPhysicsShape(const LLUUID& mesh_id);
 
     // <SK:Nexii> physics_havok block
-    // Send request for the physics_havok section and the physics_mesh it indexes; false while there is no header.
+    // Send request for the physics_havok section; false while there is no header.
     bool fetchMeshPhysicsHavok(const LLUUID& mesh_id);
     // </SK:Nexii>
 
