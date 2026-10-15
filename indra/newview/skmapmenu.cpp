@@ -40,12 +40,14 @@
 #include "roles_constants.h"
 #include "skmapparcelfacts.h"
 #include "llavataractions.h"
+#include "llavatarnamecache.h"
 #include "llfloatersidepanelcontainer.h"
 #include "llfloaterworldmap.h"
 #include "lltracker.h"
 #include "llviewermenu.h"
 #include "llviewerparcelmgr.h"
 #include "rlvactions.h"
+#include "rlvcommon.h"
 #include "llviewercontrol.h"
 #include "skmappeople.h"
 #include "sknetmap.h"
@@ -266,7 +268,34 @@ void SKMapMenu::personItems(std::vector<SKPopupPaneSpec>& panes, S32 pane, const
 }
 
 // static
-LLHandle<SKPopupPanes> SKMapMenu::open(SKNetMap* map, S32 x, S32 y, const LLVector3d& world, const std::vector<Person>& people)
+std::vector<SKMapMenu::Person> SKMapMenu::freeze(const std::vector<LLUUID>& ids)
+{
+    std::vector<Person> people;
+    for (const LLUUID& id : ids)
+    {
+        Person person;
+        person.mId = id;
+        person.mNameHidden = !RlvActions::canShowName(RlvActions::SNC_DEFAULT, id);
+        LLAvatarName av_name;
+        if (LLAvatarNameCache::get(id, &av_name))
+        {
+            person.mLabel = person.mNameHidden ? RlvStrings::getAnonym(av_name) : av_name.getDisplayName();
+        }
+        for (const SKMapPeople::Person& p : SKMapPeople::instance().people())
+        {
+            if (p.mId == id)
+            {
+                person.mPos = p.mPos;
+                break;
+            }
+        }
+        people.push_back(person);
+    }
+    return people;
+}
+
+// static
+LLHandle<SKPopupPanes> SKMapMenu::open(LLView* spawner, S32 x, S32 y, const LLVector3d& world, const std::vector<Person>& people)
 {
     std::vector<SKPopupPaneSpec> panes;
     SKPopupPaneSpec spec;
@@ -308,15 +337,18 @@ LLHandle<SKPopupPanes> SKMapMenu::open(SKNetMap* map, S32 x, S32 y, const LLVect
                                  },
                                  true, location));
     spec.mItems.push_back(action(label("stop_tracking"), []() { LLTracker::stopTracking(false); }, true, LLTracker::isTracking(nullptr)));
-    LLHandle<LLView> handle = map->getHandle();
-    spec.mItems.push_back(action(label("recenter"),
-                                 [handle]() {
-                                     if (SKNetMap* m = dynamic_cast<SKNetMap*>(handle.get()))
-                                     {
-                                         m->recentre();
-                                     }
-                                 },
-                                 true, map->isPanned()));
+    if (SKNetMap* map = dynamic_cast<SKNetMap*>(spawner))
+    {
+        LLHandle<LLView> handle = map->getHandle();
+        spec.mItems.push_back(action(label("recenter"),
+                                     [handle]() {
+                                         if (SKNetMap* m = dynamic_cast<SKNetMap*>(handle.get()))
+                                         {
+                                             m->recentre();
+                                         }
+                                     },
+                                     true, map->isPanned()));
+    }
     spec.mItems.push_back(separator());
     spec.mItems.push_back(action(label("settings"), []() { LLFloaterReg::showInstance("sk_map_settings"); }));
     panes.push_back(spec);
@@ -351,7 +383,7 @@ LLHandle<SKPopupPanes> SKMapMenu::open(SKNetMap* map, S32 x, S32 y, const LLVect
         }
     }
     applyGates(panes, *gates);
-    LLHandle<SKPopupPanes> shown = SKPopupPanes::show(map, x, y, std::move(panes));
+    LLHandle<SKPopupPanes> shown = SKPopupPanes::show(spawner, x, y, std::move(panes));
     if (SKPopupPanes* view = shown.get())
     {
         // Only the Moderate rows change while open: "checking" turns enabled or goes.
