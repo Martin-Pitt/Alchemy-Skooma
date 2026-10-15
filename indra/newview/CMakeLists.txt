@@ -997,6 +997,7 @@ if(AL_BUILD_VIEWER)
     rlvinventory.cpp
     rlvlocks.cpp
     rlvui.cpp
+    skmeshhavokshape.cpp # <SK:Nexii> physics_havok block
   )
 
   set(
@@ -1873,6 +1874,7 @@ if(AL_BUILD_VIEWER)
     rlvlocks.h
     rlvmodifiers.h
     rlvui.h
+    skmeshhavokshape.h # <SK:Nexii> physics_havok block
     roles_constants.h
   )
 

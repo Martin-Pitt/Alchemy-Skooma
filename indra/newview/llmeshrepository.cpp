@@ -28,6 +28,7 @@
 
 #include "llhttpconstants.h"
 #include "llmeshrepository.h"
+#include "skmeshhavok.h" // <SK:Nexii> physics_havok block
 
 #include "llagent.h"
 #include "llappviewer.h"
@@ -273,11 +274,13 @@
 //     mLODReqQ                 mMutex        rw.repo.mMutex, rw.pool.mMutex, ro.main.mMutex
 //     mDecompositionRequests   mMutex        rw.repo.mMutex, rw.main.mMutex
 //     mPhysicsShapeRequests    mMutex        rw.repo.mMutex, rw.main.mMutex
+//     mPhysicsHavokRequests    mMutex        rw.repo.mMutex, rw.main.mMutex   <SK:Nexii> physics_havok block
 //     mSkinInfoQ               mLoadedMutex  rw.repo.mLoadedMutex, rw.pool.mLoadedMutex,
 //                                            rw.main.mLoadedMutex
 //     mSkinUnavailableQ        mLoadedMutex  "
 //     mDecompositionQ          mLoadedMutex  "
 //     mPhysicsQ                mLoadedMutex  "
+//     mPhysicsHavokQ           mLoadedMutex  "   <SK:Nexii> physics_havok block
 //     mUnavailableQ            mLoadedMutex  "
 //     mLoadedQ                 mLoadedMutex  "
 //     mPendingLOD              mPendingMutex rw.repo.mPendingMutex, rw.any.mPendingMutex
@@ -860,6 +863,39 @@ public:
     LLUUID mMeshID;
 };
 
+// <SK:Nexii> physics_havok block
+// Subclass for one byte range holding the physics_havok section and the physics_mesh it indexes.
+//
+// Thread:  repo
+class SKMeshPhysicsHavokHandler : public LLMeshHandlerBase
+{
+public:
+    LOG_CLASS(SKMeshPhysicsHavokHandler);
+    SKMeshPhysicsHavokHandler(const LLUUID& id, U32 offset, U32 requested_bytes, S32 mesh_offset, S32 mesh_size,
+                              S32 havok_offset, S32 havok_size)
+        : LLMeshHandlerBase(offset, requested_bytes),
+          mMeshID(id),
+          mMeshOffset(mesh_offset),
+          mMeshSize(mesh_size),
+          mHavokOffset(havok_offset),
+          mHavokSize(havok_size)
+    {}
+
+    SKMeshPhysicsHavokHandler(const SKMeshPhysicsHavokHandler&) = delete;
+    SKMeshPhysicsHavokHandler& operator=(const SKMeshPhysicsHavokHandler&) = delete;
+
+    void processData(LLCore::BufferArray* body, S32 body_offset, U8* data, S32 data_size) override;
+    void processFailure(LLCore::HttpStatus status) override;
+
+    LLUUID mMeshID;
+    // Relative to the start of the range.
+    S32 mMeshOffset;
+    S32 mMeshSize;
+    S32 mHavokOffset;
+    S32 mHavokSize;
+};
+// </SK:Nexii>
+
 
 void log_upload_error(
     LLCore::HttpStatus status,
@@ -1324,6 +1360,48 @@ void LLMeshRepoThread::run()
                     mPhysicsShapeRequests.insert(incomplete.begin(), incomplete.end());
                 }
             }
+
+            // <SK:Nexii> physics_havok block
+            {
+                std::set<UUIDBasedRequest> incomplete;
+                while (mHttpRequestSet.size() < sRequestHighWater)
+                {
+                    mMutex->lock();
+                    std::set<UUIDBasedRequest>::iterator iter = mPhysicsHavokRequests.begin();
+                    if (iter == mPhysicsHavokRequests.end())
+                    {
+                        mMutex->unlock();
+                        break;
+                    }
+                    UUIDBasedRequest req = *iter;
+                    mPhysicsHavokRequests.erase(iter);
+                    mMutex->unlock();
+                    if (req.isDelayed())
+                    {
+                        incomplete.insert(req);
+                    }
+                    else if (!fetchMeshPhysicsHavok(req.mId))
+                    {
+                        if (req.canRetry())
+                        {
+                            req.updateTime();
+                            incomplete.insert(req);
+                        }
+                        else
+                        {
+                            LL_DEBUGS(LOG_MESH) << "mPhysicsHavokRequests failed: " << req.mId << LL_ENDL;
+                            physicsHavokFailed(req.mId, SKPhysicsHavokResult::TRANSIENT);
+                        }
+                    }
+                }
+
+                if (!incomplete.empty())
+                {
+                    LLMutexLock locker(mMutex);
+                    mPhysicsHavokRequests.insert(incomplete.begin(), incomplete.end());
+                }
+            }
+            // </SK:Nexii>
         }
 
         // For dev purposes only.  A dynamic change could make this false
@@ -1382,6 +1460,15 @@ void LLMeshRepoThread::loadMeshPhysicsShape(const LLUUID& mesh_id)
     LLMutexLock lock(mMutex);
     mPhysicsShapeRequests.insert(UUIDBasedRequest(mesh_id));
 }
+
+// <SK:Nexii> physics_havok block
+// Mutex:  acquires mMutex
+void LLMeshRepoThread::loadMeshPhysicsHavok(const LLUUID& mesh_id)
+{
+    LLMutexLock lock(mMutex);
+    mPhysicsHavokRequests.insert(UUIDBasedRequest(mesh_id));
+}
+// </SK:Nexii>
 
 void LLMeshRepoThread::lockAndLoadMeshLOD(const LLVolumeParams& mesh_params, S32 lod)
 {
@@ -1963,6 +2050,164 @@ bool LLMeshRepoThread::fetchMeshPhysicsShape(const LLUUID& mesh_id)
     return ret;
 }
 
+// <SK:Nexii> physics_havok block
+bool LLMeshRepoThread::fetchMeshPhysicsHavok(const LLUUID& mesh_id)
+{
+    LL_PROFILE_ZONE_SCOPED;
+    if (!mHeaderMutex)
+    {
+        return false;
+    }
+
+    S64 header_size = 0;
+    S32 version = 0;
+    S64 mesh_offset = -1;
+    S64 mesh_size = 0;
+    S64 havok_offset = -1;
+    S64 havok_size = 0;
+    bool in_cache = false;
+    {
+        LLMutexLock lock(mHeaderMutex);
+        auto header_it = mMeshHeader.find(mesh_id);
+        if (header_it == mMeshHeader.end())
+        {
+            return false;
+        }
+        const LLMeshHeader& header = header_it->second;
+        header_size = header.mHeaderSize;
+        version = header.mVersion;
+        mesh_offset = header.mPhysicsMeshOffset;
+        mesh_size = header.mPhysicsMeshSize;
+        havok_offset = header.mPhysicsHavokOffset;
+        havok_size = header.mPhysicsHavokSize;
+        in_cache = header.mPhysicsHavokInCache && (mesh_size <= 0 || header.mPhysicsMeshInCache);
+    }
+
+    ++LLMeshRepository::sMeshRequestCount;
+
+    const S64 max_section = (S64)SKHavokLimits().mMaxCompressedBytes;
+    if (header_size <= 0 || version > MAX_MESH_VERSION || havok_offset < 0 || havok_size <= 0 || havok_size > max_section)
+    {
+        physicsHavokFailed(mesh_id, SKPhysicsHavokResult::ABSENT);
+        return true;
+    }
+
+    // One range over both sections, which sit near each other at the end of the asset.
+    S64 begin = havok_offset;
+    S64 end = havok_offset + havok_size;
+    const bool with_mesh = mesh_offset >= 0 && mesh_size > 0 && mesh_size <= max_section;
+    if (with_mesh)
+    {
+        begin = llmin(begin, mesh_offset);
+        end = llmax(end, mesh_offset + mesh_size);
+    }
+    const S64 span = end - begin;
+    const S64 offset = header_size + begin;
+    if (span > 2 * max_section || offset + span + CACHE_PREAMBLE_SIZE > (S64)S32_MAX)
+    {
+        physicsHavokFailed(mesh_id, SKPhysicsHavokResult::ABSENT);
+        return true;
+    }
+    const S32 rel_mesh = with_mesh ? (S32)(mesh_offset - begin) : 0;
+    const S32 rel_mesh_size = with_mesh ? (S32)mesh_size : 0;
+    const S32 rel_havok = (S32)(havok_offset - begin);
+
+    if (in_cache)
+    {
+        const S32 disk_offset = (S32)offset + CACHE_PREAMBLE_SIZE;
+        LLFileSystem file(mesh_id, LLAssetType::AT_MESH);
+        if (file.getSize() >= disk_offset + span)
+        {
+            U8* buffer = getDiskCacheBuffer((S32)span);
+            if (!buffer)
+            {
+                physicsHavokFailed(mesh_id, SKPhysicsHavokResult::TRANSIENT);
+                return true;
+            }
+            file.seek(disk_offset);
+            file.read(buffer, (S32)span);
+
+            // A reserved block not yet written reads as zeros.
+            bool zero = true;
+            for (S64 i = 0; i < llmin(havok_size, (S64)1024) && zero; ++i)
+            {
+                zero = buffer[rel_havok + i] == 0;
+            }
+            if (!zero)
+            {
+                LLMeshRepository::sCacheBytesRead += (S32)span;
+                ++LLMeshRepository::sCacheReads;
+                if (physicsHavokReceived(mesh_id, buffer, (S32)span, rel_mesh, rel_mesh_size, rel_havok, (S32)havok_size)
+                    == SKPhysicsHavokResult::OK)
+                {
+                    return true;
+                }
+            }
+        }
+    }
+
+    std::string http_url;
+    constructUrl(mesh_id, &http_url);
+    if (http_url.empty())
+    {
+        return false;
+    }
+
+    auto handler = std::make_shared<SKMeshPhysicsHavokHandler>(mesh_id, (U32)offset, (U32)span, rel_mesh, rel_mesh_size,
+                                                               rel_havok, (S32)havok_size);
+    LLCore::HttpHandle handle = getByteRange(http_url, (size_t)offset, (size_t)span, handler);
+    if (LLCORE_HTTP_HANDLE_INVALID == handle)
+    {
+        LL_WARNS(LOG_MESH) << "HTTP GET request failed for physics_havok on mesh " << mesh_id << ".  Reason:  "
+                           << mHttpStatus.toString() << " (" << mHttpStatus.toTerseString() << ")" << LL_ENDL;
+        return false;
+    }
+    handler->mHttpHandle = handle;
+    mHttpRequestSet.insert(handler);
+    return true;
+}
+
+SKPhysicsHavokResult LLMeshRepoThread::physicsHavokReceived(const LLUUID& mesh_id, const U8* data, S32 data_size,
+                                                            S32 mesh_offset, S32 mesh_size, S32 havok_offset,
+                                                            S32 havok_size)
+{
+    LL_PROFILE_ZONE_SCOPED;
+    SKPhysicsHavokDelivery delivery;
+    delivery.mMeshID = mesh_id;
+    if (!data || mesh_offset < 0 || mesh_size < 0 || havok_offset < 0 || havok_size <= 0
+        || (S64)mesh_offset + mesh_size > data_size || (S64)havok_offset + havok_size > data_size)
+    {
+        delivery.mResult = SKPhysicsHavokResult::ABSENT;
+    }
+    else
+    {
+        std::string error;
+        delivery.mResult = skBuildPhysicsHavokShape(mesh_size > 0 ? data + mesh_offset : nullptr, mesh_size,
+                                                    data + havok_offset, havok_size, delivery.mShape, error);
+        if (delivery.mResult != SKPhysicsHavokResult::OK)
+        {
+            LL_WARNS(LOG_MESH) << "physics_havok for mesh " << mesh_id << " is unreadable: " << error << LL_ENDL;
+        }
+    }
+
+    const SKPhysicsHavokResult result = delivery.mResult;
+    {
+        LLMutexLock lock(mLoadedMutex);
+        mPhysicsHavokQ.push_back(std::move(delivery));
+    }
+    return result;
+}
+
+void LLMeshRepoThread::physicsHavokFailed(const LLUUID& mesh_id, SKPhysicsHavokResult result)
+{
+    SKPhysicsHavokDelivery delivery;
+    delivery.mMeshID = mesh_id;
+    delivery.mResult = result;
+    LLMutexLock lock(mLoadedMutex);
+    mPhysicsHavokQ.push_back(std::move(delivery));
+}
+// </SK:Nexii>
+
 //static
 void LLMeshRepoThread::incActiveLODRequests()
 {
@@ -2363,6 +2608,13 @@ EMeshProcessingResult LLMeshRepoThread::headerReceived(const LLVolumeParams& mes
                 {
                     header.mPhysicsMeshInCache = true;
                 }
+                // <SK:Nexii> physics_havok block
+                if (header.mPhysicsHavokSize > 0 && header.mPhysicsHavokOffset >= 0
+                    && (S64)header_size + header.mPhysicsHavokOffset + header.mPhysicsHavokSize < data_size)
+                {
+                    header.mPhysicsHavokInCache = true;
+                }
+                // </SK:Nexii>
                 for (S32 i = 0; i < LLModel::NUM_LODS; ++i)
                 {
                     if (lod_size[i] > 0 && header_size + lod_offset[i] + lod_size[i] < data_size)
@@ -3504,6 +3756,7 @@ void LLMeshRepoThread::notifyLoadedMeshes()
     std::deque<UUIDBasedRequest> skin_info_unavail_q;
     std::list<std::unique_ptr<LLModel::Decomposition>> decomp_q;
     std::list<std::unique_ptr<LLModel::Decomposition>> physics_q;
+    std::deque<SKPhysicsHavokDelivery> havok_q; // <SK:Nexii> physics_havok block
 
     // Claim everything in one acquisition. Every producer holds mLoadedMutex only long
     // enough to push, so blocking here is cheap -- and unlike the trylock this replaces,
@@ -3518,6 +3771,7 @@ void LLMeshRepoThread::notifyLoadedMeshes()
         skin_info_unavail_q.swap(mSkinUnavailableQ);
         decomp_q.swap(mDecompositionQ);
         physics_q.swap(mPhysicsQ);
+        havok_q.swap(mPhysicsHavokQ); // <SK:Nexii> physics_havok block
     }
 
     const bool update_metrics = !loaded_queue.empty() || !unavail_queue.empty();
@@ -3529,6 +3783,13 @@ void LLMeshRepoThread::notifyLoadedMeshes()
         gMeshRepo.mHeaderCache.publish(published.first, published.second);
         gMeshRepo.noteSkinInfoPending(published.first, published.second);
     }
+
+    // <SK:Nexii> physics_havok block
+    for (const SKPhysicsHavokDelivery& delivery : havok_q)
+    {
+        gMeshRepo.mPhysicsHavok.deliver(delivery);
+    }
+    // </SK:Nexii>
 
     // Process the elements free of the lock.
     //
@@ -3906,6 +4167,18 @@ void LLMeshHeaderHandler::processData(LLCore::BufferArray * /* body */, S32 /* b
             // just in case skin info or decomposition is at the end of the file (which it shouldn't be)
             lod_bytes = llmax(lod_bytes, header.mSkinOffset+header.mSkinSize);
             lod_bytes = llmax(lod_bytes, header.mPhysicsConvexOffset + header.mPhysicsConvexSize);
+
+            // <SK:Nexii> physics_havok block
+            // It is the last section; one claiming to lie far past the others reserves nothing.
+            {
+                const S64 havok_end = (S64)header.mPhysicsHavokOffset + header.mPhysicsHavokSize;
+                if (header.mPhysicsHavokOffset >= 0 && header.mPhysicsHavokSize > 0
+                    && havok_end - lod_bytes <= (S64)SKHavokLimits().mMaxCompressedBytes)
+                {
+                    lod_bytes = (S32)llmax((S64)lod_bytes, havok_end);
+                }
+            }
+            // </SK:Nexii>
 
             // Do not unlock mutex untill we are done with LLSD.
             // LLSD is smart and can work like smart pointer, is not thread safe.
@@ -4375,6 +4648,76 @@ void LLMeshPhysicsShapeHandler::processData(LLCore::BufferArray * /* body */, S3
         // *TODO:  Mark mesh unavailable on error
     }
 }
+
+// <SK:Nexii> physics_havok block
+void SKMeshPhysicsHavokHandler::processFailure(LLCore::HttpStatus status)
+{
+    const bool absent = status == LLCore::HttpStatus(HTTP_NOT_FOUND);
+    LL_WARNS(LOG_MESH) << "Error fetching physics_havok for mesh " << mMeshID << ": " << status.toString() << " ("
+                       << status.toTerseString() << ")" << LL_ENDL;
+    gMeshRepo.mThread->physicsHavokFailed(mMeshID,
+                                          absent ? SKPhysicsHavokResult::ABSENT : SKPhysicsHavokResult::TRANSIENT);
+}
+
+void SKMeshPhysicsHavokHandler::processData(LLCore::BufferArray* /* body */, S32 /* body_offset */, U8* data,
+                                            S32 data_size)
+{
+    LL_PROFILE_ZONE_SCOPED;
+    // See LLMeshLODHandler::processLod(): only data_size bytes of `data` are real.
+    if (!data || data_size < (S32)mRequestedBytes)
+    {
+        LL_WARNS(LOG_MESH) << "physics_havok for mesh " << mMeshID << " delivered " << data_size << " of "
+                           << mRequestedBytes << " requested bytes" << LL_ENDL;
+        gMeshRepo.mThread->physicsHavokFailed(mMeshID, SKPhysicsHavokResult::TRANSIENT);
+        return;
+    }
+
+    const SKPhysicsHavokResult result = gMeshRepo.mThread->physicsHavokReceived(
+        mMeshID, data, (S32)mRequestedBytes, mMeshOffset, mMeshSize, mHavokOffset, mHavokSize);
+    if (result != SKPhysicsHavokResult::OK)
+    {
+        return;
+    }
+
+    // Cache files written before this section was reserved are too short and refetch it each session.
+    LLFileSystem file(mMeshID, LLAssetType::AT_MESH, LLFileSystem::READ_WRITE);
+    const S32 offset = (S32)mOffset + CACHE_PREAMBLE_SIZE;
+    const S32 size = (S32)mRequestedBytes;
+    if (file.getSize() < offset + size)
+    {
+        return;
+    }
+
+    S32 header_bytes = 0;
+    U32 flags = 0;
+    {
+        LLMutexLock lock(gMeshRepo.mThread->mHeaderMutex);
+        auto header_it = gMeshRepo.mThread->mMeshHeader.find(mMeshID);
+        if (header_it == gMeshRepo.mThread->mMeshHeader.end())
+        {
+            return;
+        }
+        LLMeshHeader& header = header_it->second;
+        if (header.mPhysicsHavokInCache && (mMeshSize == 0 || header.mPhysicsMeshInCache))
+        {
+            return;
+        }
+        header.mPhysicsHavokInCache = true;
+        if (mMeshSize > 0)
+        {
+            header.mPhysicsMeshInCache = true;
+        }
+        header_bytes = header.mHeaderSize;
+        flags = header.getFlags();
+    }
+
+    LLMeshRepository::sCacheBytesWritten += size;
+    ++LLMeshRepository::sCacheWrites;
+    write_preamble(file, header_bytes, flags);
+    file.seek(offset, 0);
+    file.write(data, size);
+}
+// </SK:Nexii>
 
 LLMeshRepository::LLMeshRepository()
 : mUploadNotifyMutex(NULL),
@@ -5073,6 +5416,17 @@ void LLMeshRepository::notifyLoadedMeshes()
         physics_batch.pop();
     }
 
+    // <SK:Nexii> physics_havok block
+    {
+        std::vector<LLUUID> havok_batch;
+        mPhysicsHavok.takeRequests(havok_batch);
+        for (const LLUUID& mesh_id : havok_batch)
+        {
+            mThread->loadMeshPhysicsHavok(mesh_id);
+        }
+    }
+    // </SK:Nexii>
+
     mThread->wake();
 }
 
@@ -5407,6 +5761,18 @@ void LLMeshRepository::fetchPhysicsShape(const LLUUID& mesh_id)
         }
     }
 }
+
+// <SK:Nexii> physics_havok block
+std::shared_ptr<const SKPhysicsHavokShape> LLMeshRepository::getPhysicsHavok(const LLUUID& mesh_id)
+{
+    // Local mesh previews have no simulator-side section.
+    if (mesh_id.isNull() || (LLLocalMeshMgr::instanceExists() && LLLocalMeshMgr::getInstance()->isLocal(mesh_id)))
+    {
+        return nullptr;
+    }
+    return mPhysicsHavok.get(mesh_id);
+}
+// </SK:Nexii>
 
 LLModel::Decomposition* LLMeshRepository::getDecomposition(const LLUUID& mesh_id)
 {
