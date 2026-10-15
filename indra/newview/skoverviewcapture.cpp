@@ -705,6 +705,14 @@ void SKOverviewCapture::tactical()
 
 
 // The tactical overview over the finished frame: after renderFinalize, which would otherwise paint the world over it.
+bool SKOverviewCapture::worldHidden()
+{
+    // The overview was composited last frame (or this one) and is still on: it will cover the world view again, opaque.
+    static LLCachedControl<bool> tactical_on(gSavedSettings, "SKTacticalOverview", false);
+    return tactical_on && !gCubeSnapshot && instanceExists() &&
+           instance().mLastCompositeFrame + 1 >= LLFrameTimer::getFrameCount();
+}
+
 bool SKOverviewCapture::tacticalShown()
 {
     return instanceExists() && instance().mLastCompositeFrame == LLFrameTimer::getFrameCount();

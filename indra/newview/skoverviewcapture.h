@@ -75,6 +75,8 @@ public:
     static void onComposite();
     /// Whether the tactical overview covers the world view this frame: world-space name tags and hover text stay off it.
     static bool tacticalShown();
+    /// Whether the main view's world can go unrendered this frame: the overview is on and covered it last frame.
+    static bool worldHidden();
 
     /// A world right-click at the root view's (x, y): opens the mini-map's menus on the overview; false when it is off.
     static bool handleRightClick(S32 x, S32 y);
