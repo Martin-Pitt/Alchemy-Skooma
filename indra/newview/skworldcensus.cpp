@@ -26,6 +26,8 @@
 
 #include "skworldcensus.h"
 
+#include "llframetimer.h"
+
 #include "sknavoverlay.h"
 #include "sknavpalette.h"
 
@@ -322,9 +324,20 @@ void SKWorldCensus::update()
     }
 
     static LLCachedControl<F32> budget(gSavedSettings, "SKNavCensusBudgetMS", 3.f);
+    constexpr F64 SLOW_SCAN_INTERVAL_S = 1.0;
+    constexpr F32 SLOW_SLICE_MS = 1.f;
 
     if (!mScan.mActive)
     {
+        // Slow cadence: the next scan waits until a second after the last began.
+        if (mSlow && LLFrameTimer::getUptimeSeconds().value() - mLastScanBegun < SLOW_SCAN_INTERVAL_S)
+        {
+            if (mRolesWanted)
+            {
+                requestRoles();
+            }
+            return;
+        }
         beginScan();
     }
     else if (!sameRegions(mScan.mRegions))
@@ -332,7 +345,8 @@ void SKWorldCensus::update()
         abandonScan();
         beginScan();
     }
-    continueScan(llmax(0.1f, static_cast<F32>(budget)));
+    const F32 slice = llmax(0.1f, static_cast<F32>(budget));
+    continueScan(mSlow ? llmin(slice, SLOW_SLICE_MS) : slice);
 
     if (mRolesWanted)
     {
@@ -375,6 +389,8 @@ void SKWorldCensus::beginScan()
     gatherCached();
     mScan.mElapsedMs = 0.f;
     mScan.mActive = true;
+    mLastScanBegun = LLFrameTimer::getUptimeSeconds().value();
+    ++mScansBegun;
 }
 
 void SKWorldCensus::abandonScan()
@@ -442,8 +458,14 @@ void SKWorldCensus::finishScan()
     done->mStats.mRecords = static_cast<U32>(done->mRecords.size());
     done->mStats.mRolesKnown = static_cast<U32>(mRoles.size());
     timer.reset();
-    gatherCrew();
-    classify(*done);
+    {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - finish crew");
+        gatherCrew();
+    }
+    {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - finish classify");
+        classify(*done);
+    }
     done->mStats.mFeatureMs = timer.getElapsedTimeF32() * 1000.f;
 
     // Parts and roots not seen for a minute leave the caches, and a root's
@@ -565,6 +587,7 @@ bool SKWorldCensus::isSurround(LLViewerObject* root, const LLVector3d& mn, const
 
 void SKWorldCensus::visit(LLViewerObject* object)
 {
+    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - visit");
     SKCensusSnapshot& snap = *mScan.mPending;
     snap.mStats.mObjectsSeen++;
 
@@ -960,6 +983,7 @@ void SKWorldCensus::visitCached(const CachedPart& part)
 sknav::RecordPtr SKWorldCensus::record(LLVOVolume* volume, LLViewerObject* root, sknav::Role role, bool dynamic, U64 signature,
                                        const LLVector3& pos, const LLQuaternion& rot, sknav::FeatureKind feature, U8 exclude)
 {
+    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - shape");
     // An unloaded sculpt is a placeholder sphere stretched over its whole
     // scale; a megasculpty's would floor the region, so it waits for level 0.
     if (volume->isSculpted() && !volume->isMesh() && (!volume->getVolume() || volume->getVolume()->getSculptLevel() != 0))

@@ -176,6 +176,7 @@ private:
         U32 mFrames = 0;
         U32 mRenders = 0;
         U32 mReuses = 0;
+        U32 mScansAtStart = 0;
     } mCost;
     struct TacticalMark
     {
