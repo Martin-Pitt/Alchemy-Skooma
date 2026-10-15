@@ -174,7 +174,7 @@ SKNavMesh::~SKNavMesh()
 
 bool SKNavMesh::overlayActive()
 {
-    static LLCachedControl<bool> enabled(gSavedSettings, "SKNavMeshEnabled", true);
+    static LLCachedControl<bool> enabled(gSavedSettings, "SKNavMeshEnabled", false);
     if (!enabled)
     {
         return false;
@@ -194,7 +194,7 @@ bool SKNavMesh::overlayActive()
 
 bool SKNavMesh::wanted() const
 {
-    static LLCachedControl<bool> enabled(gSavedSettings, "SKNavMeshEnabled", true);
+    static LLCachedControl<bool> enabled(gSavedSettings, "SKNavMeshEnabled", false);
     static LLCachedControl<bool> always(gSavedSettings, "SKNavMeshAlways", false);
     return enabled && (always || overlayActive() || probesDemanded() || !mConsumers.empty());
 }
@@ -4540,6 +4540,10 @@ U32 SKNavMesh::stampsUnsettled() const
 
 std::string SKNavMesh::exportAll()
 {
+    if (!gSavedSettings.getBOOL("SKNavMeshEnabled"))
+    {
+        return "the navmesh is off";
+    }
     const U32 waiting = stampsUnsettled();
     if (waiting)
     {

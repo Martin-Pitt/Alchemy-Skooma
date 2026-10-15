@@ -224,13 +224,16 @@ void SKWorldCensus::removeDemand(const std::string& who)
 
 bool SKWorldCensus::wanted() const
 {
-    static LLCachedControl<bool> enabled(gSavedSettings, "SKNavMeshEnabled", true);
+    static LLCachedControl<bool> enabled(gSavedSettings, "SKWorldCensusEnabled", true);
     static LLCachedControl<bool> always(gSavedSettings, "SKNavCensusAlways", false);
+    static LLCachedControl<bool> show(gSavedSettings, "SKNavOverlayCensus", false);
+    static LLCachedControl<bool> show_features(gSavedSettings, "SKNavOverlayFeatures", false);
     if (!enabled)
     {
         return false;
     }
-    return always || !mDemands.empty() || gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_NAVMESH);
+    // The census overlays draw without the navmesh, so they bring the census themselves.
+    return always || show || show_features || !mDemands.empty() || gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_NAVMESH);
 }
 
 F64 SKWorldCensus::range() const
