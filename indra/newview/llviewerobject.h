@@ -350,6 +350,10 @@ public:
     // long as the prim turns on its own.
     const LLQuaternion& getRotationSim() const { return mPreviousRotation; }
     // </SK:Nexii>
+    // <SK:Nexii> tactical overview and minimap: the simulator's last rotation in the region frame, carried on by the
+    // angular velocity it sent for as long as motion is predicted, unsmoothed, as the sim's physics has it now.
+    LLQuaternion skPredictedRotationRegion() const;
+    // </SK:Nexii>
     const LLQuaternion getRenderRotation() const;
     virtual const LLMatrix4a& getRenderMatrix() const;
 

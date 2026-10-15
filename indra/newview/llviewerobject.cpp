@@ -4888,6 +4888,28 @@ const LLQuaternion LLViewerObject::getRotationRegion() const
     return global_rotation;
 }
 
+// <SK:Nexii> tactical overview and minimap: the sim's rotation, extrapolated like other physics updates
+LLQuaternion LLViewerObject::skPredictedRotationRegion() const
+{
+    LLQuaternion rotation = getRotationSim();
+    const LLVector3& omega = getAngularVelocity();
+    const F32 speed = omega.magVec();
+    if (speed > 1e-4f)
+    {
+        const F32 dilation = mRegionp ? mRegionp->getTimeDilation() : 1.f;
+        const F64 age = LLFrameTimer::getUptimeSeconds() - mLastMessageUpdateSecs.value();
+        const F32 dt = llclamp((F32)age, 0.f, sPredictionTuning.mMaxTime) * dilation;
+        rotation = rotation * LLQuaternion(speed * dt, omega / speed);
+        rotation.normalize();
+    }
+    if (!((LLXform*)this)->isRoot())
+    {
+        rotation = rotation * getParent()->getRotation();
+    }
+    return rotation;
+}
+// </SK:Nexii>
+
 const LLQuaternion LLViewerObject::getRotationEdit() const
 {
     LLQuaternion global_rotation = getRotation();

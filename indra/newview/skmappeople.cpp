@@ -619,7 +619,8 @@ void SKMapPeople::gatherPeople()
         {
             p.mLoaded = true;
             p.mPos = avatar->getPositionGlobal();
-            const LLVector3 forward = LLVector3::x_axis * avatar->getRenderRotation();
+            // Ours is the body rotation we send; anyone else's is the sim's, extrapolated, not the drawn body's.
+            const LLVector3 forward = LLVector3::x_axis * (avatar->isSelf() ? avatar->getRenderRotation() : avatar->skPredictedRotationRegion());
             p.mHeading = std::atan2(forward.mV[VY], forward.mV[VX]);
             p.mHasHeading = true;
             p.mSitting = avatar->isSitting();

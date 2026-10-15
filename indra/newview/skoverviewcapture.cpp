@@ -1304,10 +1304,10 @@ void SKOverviewCapture::drawMarkers3D(const Project& project, S32 vw, S32 vh, st
             m.mFloor = centre - LLVector3(0.f, 0.f, size.mV[VZ] * 0.5f);
             m.mHeight = size.mV[VZ];
             m.mRadius = llmax(size.mV[VX], size.mV[VY]) * 0.5f;
-            // The census's physics shape for its pose, about its position, turned as the avatar is.
+            // The census's physics shape for its pose, about its position, turned as the sim has the avatar.
             m.mHasShape = true;
             m.mCentre = centre;
-            m.mRotation = avatar->getRenderRotation();
+            m.mRotation = avatar->isSelf() ? avatar->getRenderRotation() : avatar->skPredictedRotationRegion();
             m.mPose = skcensus::avatarPose(avatar);
         }
         else if (avatar->mBodySize.mV[VZ] > 0.1f)
