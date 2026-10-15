@@ -66,6 +66,7 @@ namespace skoverview
     constexpr F32 WALL_NZ = 0.5f;       ///< steeper than 60 degrees is wall
     constexpr F32 COVER_TOP_M = 1.6f;   ///< a part no taller than this is cover, not wall
     constexpr F32 INVISIBLE_WALL_M = 64.f; ///< a fully transparent part larger than this on any axis is no wall
+    constexpr F32 SURROUND_MIN_M = 32.f; ///< a rendered-only part this large on any axis is drawn wherever it is
     constexpr F32 GROUND_BASE_M = 4.f;  ///< a cluster whose base is no higher than this above the land stands on it
 
     U8 codeOf(CensusClass cls);
@@ -132,7 +133,21 @@ public:
     void release();
 
 private:
+    /// A part drawn from its rendered geometry rather than a census record.
+    struct RenderedPart
+    {
+        LLUUID mPart;
+        LLVector3d mOrigin;             ///< its region's origin, global; triangles are region-local
+        std::vector<LLVector3> mTris;
+        F32 mHeight = 0.f;
+        skoverview::CensusClass mFixed = skoverview::NUM_CENSUS_CLASSES;
+    };
+    void gatherSurrounds(const struct SKCensusSnapshot& snap);
+
     std::vector<Batch> mBatches;
+    std::vector<RenderedPart> mSurrounds;
+    U64 mSurroundsSig = 0;
+    F64 mSurroundsAt = 0.0;     ///< when the surrounds are looked at again
     U64 mStamp = 0;
     U64 mSignature = 0;
     bool mUnknownLook = false;  ///< some part's faces or images were not loaded at the last build

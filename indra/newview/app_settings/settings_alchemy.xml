@@ -5348,6 +5348,17 @@
             <key>Value</key>
             <real>384.0</real>
         </map>
+        <key>SKOverviewSurroundsRefresh</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds between looks for large parts the census holds no shape for (megasculpts, phantom meshes and megaprims) anywhere in the loaded regions; the overview draws them from their rendered geometry.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>15.0</real>
+        </map>
         <key>SKOverviewQueueInterval</key>
         <map>
             <key>Comment</key>
