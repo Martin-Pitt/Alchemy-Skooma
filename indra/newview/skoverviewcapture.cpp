@@ -75,12 +75,16 @@ namespace
     LLRenderTarget sCaptureFar;   // and for regions further off, at a quarter
     LLRenderTarget sTacticalCapture;
     LLRenderTarget sTacticalResolved;
+    LLRenderTarget sTacticalWork;   // the static capture copied, with the movers drawn over it
     LLGLSLShader sResolve;
     LLGLSLShader sComposite;
     LLGLSLShader sGeom;       // the census: class code and the face's own normal
     GLuint sQueries[2] = { 0, 0 };
 
     const F32 CENSUS_RANGE_M = 128.f;
+    const F32 VEHICLE_EXAGGERATION = 2.5f;     // a vehicle's outline at this many times its size when far
+    const F32 VEHICLE_TRUE_SIZE_M = 40.f;      // tactical camera distance up to which vehicles are true size
+    const F32 VEHICLE_EXAGGERATED_M = 200.f;   // and from which they are fully exaggerated
     const F32 TACTICAL_NEAR_M = 0.5f;
     const F32 TACTICAL_MIN_M = 8.f;
     const F32 TACTICAL_MAX_M = 400.f;
@@ -215,6 +219,7 @@ void SKOverviewCapture::cleanupGL()
     sCaptureFar.release();
     sTacticalCapture.release();
     sTacticalResolved.release();
+    sTacticalWork.release();
     sResolve.unload();
     sComposite.unload();
     sGeom.unload();
@@ -227,6 +232,7 @@ void SKOverviewCapture::releaseGL()
     sCaptureFar.release();
     sTacticalCapture.release();
     sTacticalResolved.release();
+    sTacticalWork.release();
     sResolve.unload();
     sComposite.unload();
     sGeom.unload();
@@ -473,7 +479,177 @@ void SKOverviewCapture::frame()
     }
 }
 
-U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved, const Shot& shot)
+void SKOverviewCapture::resolve(LLRenderTarget& capture, LLRenderTarget& resolved, const Shot& shot)
+{
+    const S32 w = capture.getWidth();
+    const S32 h = capture.getHeight();
+    {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_PIPELINE("sk overview resolve");
+        LL_PROFILE_GPU_ZONE("sk overview resolve");
+        LLTimer timer;
+        resolved.bindTarget();
+        glViewport(0, 0, w, h);
+        LLGLDepthTest depth(GL_FALSE, GL_FALSE);
+        LLGLDisable blend(GL_BLEND);
+        LLGLDisable cull_face(GL_CULL_FACE);
+        sResolve.bind();
+        const GLint prog = sResolve.mProgramObject;
+        gGL.getTextureSlot(0)->bindManual(ALTextureSlot::TT_TEXTURE, capture.getDepth(), gGL.getSampler(ALSamplers::PointClamp));
+        gGL.getTextureSlot(1)->bindManual(ALTextureSlot::TT_TEXTURE, capture.getTexture(), gGL.getSampler(ALSamplers::PointClamp));
+        glUniform1i(glGetUniformLocation(prog, "depthMap"), 0);
+        glUniform1i(glGetUniformLocation(prog, "classMap"), 1);
+        LLMatrix4a inv_vp;
+        inv_vp.setMul(shot.mView, shot.mProj);
+        inv_vp.invert();
+        glUniformMatrix4fv(glGetUniformLocation(prog, "sk_inv_vp"), 1, GL_FALSE, inv_vp.getF32ptr());
+        glUniform1f(glGetUniformLocation(prog, "sk_zo"), LLRender::sReverseZ ? 1.f : 0.f);
+        glUniform1f(glGetUniformLocation(prog, "sk_far_depth"), al_window_far());
+        glUniform3f(glGetUniformLocation(prog, "sk_eye"), shot.mEye.mV[VX], shot.mEye.mV[VY], shot.mEye.mV[VZ]);
+        glUniform1f(glGetUniformLocation(prog, "sk_top_down"), shot.mTopDown ? 1.f : 0.f);
+        glUniform1f(glGetUniformLocation(prog, "sk_agent_z"), shot.mFloor);
+        glUniform1f(glGetUniformLocation(prog, "sk_cut"), shot.mCut);
+        glUniform1f(glGetUniformLocation(prog, "sk_water_z"), shot.mWater);
+        glUniform1f(glGetUniformLocation(prog, "sk_water_depth"), skmap::palette::WATER_DEPTH_M);
+        uniformColour(prog, "sk_invisible", skmap::palette::DROP_EDGE);
+        static LLCachedControl<U32> debug_view(gSavedSettings, "SKOverviewDebugView", 0);
+        glUniform1i(glGetUniformLocation(prog, "sk_debug_view"), (GLint)(U32)debug_view);
+        glUniform4fv(glGetUniformLocation(prog, "sk_region"), 1, shot.mRegion.mV);
+        gPipeline.mScreenTriangleVB->setBuffer();
+        gPipeline.mScreenTriangleVB->drawArrays(LLRender::TRIANGLES, 0, 3);
+        gGL.getTextureSlot(1)->unbind();
+        gGL.getTextureSlot(0)->unbind();
+        sResolve.unbind();
+        resolved.flush();
+        mCost.mResolveMs += timer.getElapsedTimeF32() * 1000.f;
+    }
+
+    glViewport(gGLViewport[0], gGLViewport[1], gGLViewport[2], gGLViewport[3]);
+}
+
+void SKOverviewCapture::drawMovers(const Shot& shot)
+{
+    LL_PROFILE_ZONE_SCOPED;
+    const S32 w = sTacticalCapture.getWidth();
+    const S32 h = sTacticalCapture.getHeight();
+    if (!sTacticalWork.isComplete() || (S32)sTacticalWork.getWidth() != w || (S32)sTacticalWork.getHeight() != h)
+    {
+        sTacticalWork.release();
+        if (!sTacticalWork.allocate(w, h, GL_RGBA8, true, false, ALTextureSlot::TT_TEXTURE, LLRenderTarget::MIPS_NONE,
+                                    LLRenderTarget::DEPTH_FMT_32F))
+        {
+            LL_WARNS_ONCE("SKOverview") << "tactical mover target did not allocate" << LL_ENDL;
+            return;
+        }
+    }
+    sTacticalWork.copyContents(sTacticalCapture, 0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+
+    sTacticalWork.bindTarget();
+    glViewport(0, 0, w, h);
+    gGL.matrixMode(LLRender::MM_PROJECTION);
+    gGL.pushMatrix();
+    gGL.loadMatrix(shot.mProj);
+    gGL.matrixMode(LLRender::MM_MODELVIEW);
+    gGL.pushMatrix();
+    {
+        // Whole: no cut plane, and the class code that styles them green.
+        LLMatrix4a inverse_view;
+        inverse_view.setInverse(shot.mView);
+        const F32* m = inverse_view.getF32ptr();
+        const F32 eye_to_world[9] = { m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10] };
+        const F32 no_cut[4] = { 0.f, 0.f, 0.f, 1.f };
+        sGeom.bind();
+        glUniform4fv(glGetUniformLocation(sGeom.mProgramObject, "clip_plane"), 1, no_cut);
+        glUniformMatrix3fv(glGetUniformLocation(sGeom.mProgramObject, "sk_eye_to_world"), 1, GL_FALSE, eye_to_world);
+        gGL.diffuseColor4f((F32)skoverview::CODE_MOVER / 255.f, 0.f, 0.f, 1.f);
+        LLGLDepthTest depth(GL_TRUE, GL_TRUE, GL_LEQUAL);
+        LLGLDisable cull_face(GL_CULL_FACE);
+        gGL.setColorMask(true, true, false, true);
+        mMovers.draw(shot.mView);
+        gGL.setColorMask(true, true);
+        sGeom.unbind();
+    }
+    gGL.matrixMode(LLRender::MM_PROJECTION);
+    gGL.popMatrix();
+    gGL.matrixMode(LLRender::MM_MODELVIEW);
+    gGL.popMatrix();
+    gGLLastMatrix = NULL;
+    sTacticalWork.flush();
+    resolve(sTacticalWork, sTacticalResolved, shot);
+}
+
+void SKOverviewCapture::drawVehicles(F32 distance)
+{
+    const std::vector<SKMapPeople::Vehicle>& vehicles = mMovers.vehicles();
+    if (vehicles.empty())
+    {
+        return;
+    }
+    LL_PROFILE_ZONE_SCOPED;
+    // Vehicles only, exaggerated as the camera pulls back so they stay readable: true size near, up to the factor far.
+    const F32 t = llclamp((distance - VEHICLE_TRUE_SIZE_M) / (VEHICLE_EXAGGERATED_M - VEHICLE_TRUE_SIZE_M), 0.f, 1.f);
+    const F32 scale = 1.f + (VEHICLE_EXAGGERATION - 1.f) * t * t * (3.f - 2.f * t);
+    gGL.matrixMode(LLRender::MM_PROJECTION);
+    gGL.pushMatrix();
+    gGL.loadMatrix(mTacticalProj);
+    gGL.matrixMode(LLRender::MM_MODELVIEW);
+    gGL.pushMatrix();
+    gGL.loadMatrix(mTacticalView);
+    gGLLastMatrix = NULL;
+    LLGLDepthTest depth(GL_FALSE, GL_FALSE);
+    LLGLEnable blend(GL_BLEND);
+    LLGLDisable cull_face(GL_CULL_FACE);
+    gUIProgram.bind();
+    std::vector<skmapdraw::GlyphQuad> quads;
+    for (const SKMapPeople::Vehicle& v : vehicles)
+    {
+        const LLVector3 at = gAgent.getPosAgentFromGlobal(v.mPos);
+        if (skmapdraw::vehicleGlyphQuads(v, quads))
+        {
+            // The captured outline, coverage tinting the hull colour (premultiplied), on the ground at its heading.
+            gGL.blendFunc(LLRender::BF_ONE, LLRender::BF_ONE_MINUS_SOURCE_ALPHA);
+            skmapdraw::colour(skmapdraw::vehicleHull(v.mLook));
+            for (const skmapdraw::GlyphQuad& q : quads)
+            {
+                gGL.getTextureSlot(0)->bindManual(ALTextureSlot::TT_TEXTURE, q.mTexture, 0);
+                gGL.begin(LLRender::TRIANGLES);
+                for (S32 k : { 0, 1, 2, 0, 2, 3 })
+                {
+                    gGL.texCoord2f(q.mUV[k][0], q.mUV[k][1]);
+                    gGL.vertex3f(at.mV[VX] + q.mCorner[k].mV[VX] * scale, at.mV[VY] + q.mCorner[k].mV[VY] * scale, at.mV[VZ]);
+                }
+                gGL.end();
+            }
+            gGL.flush();
+            gGL.setSceneBlendType(LLRender::BT_ALPHA);
+            continue;
+        }
+        // No outline yet: the linkset's box at its heading, as the mini-map draws it.
+        gGL.getTextureSlot(0)->unbind();
+        skmapdraw::colour(skmapdraw::vehicleHull(v.mLook));
+        auto corner = [&](F32 x, F32 y) {
+            const LLVector3 p = LLVector3(x * scale, y * scale, 0.f) * v.mRot;
+            return LLVector3(at.mV[VX] + p.mV[VX], at.mV[VY] + p.mV[VY], at.mV[VZ]);
+        };
+        const LLVector3 c[4] = { corner(v.mMin.mV[VX], v.mMin.mV[VY]), corner(v.mMax.mV[VX], v.mMin.mV[VY]),
+                                 corner(v.mMax.mV[VX], v.mMax.mV[VY]), corner(v.mMin.mV[VX], v.mMax.mV[VY]) };
+        gGL.begin(LLRender::TRIANGLES);
+        for (S32 k : { 0, 1, 2, 0, 2, 3 })
+        {
+            gGL.vertex3fv(c[k].mV);
+        }
+        gGL.end();
+        gGL.flush();
+    }
+    gGL.getTextureSlot(0)->unbind();
+    gUIProgram.unbind();
+    gGL.matrixMode(LLRender::MM_PROJECTION);
+    gGL.popMatrix();
+    gGL.matrixMode(LLRender::MM_MODELVIEW);
+    gGL.popMatrix();
+    gGLLastMatrix = NULL;
+}
+
+U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved, const Shot& shot, bool resolve_now)
 {
     const S32 w = capture.getWidth();
     const S32 h = capture.getHeight();
@@ -592,44 +768,9 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
         mCost.mCaptureMs += timer.getElapsedTimeF32() * 1000.f;
     }
 
+    if (resolve_now)
     {
-        LL_PROFILE_ZONE_NAMED_CATEGORY_PIPELINE("sk overview resolve");
-        LL_PROFILE_GPU_ZONE("sk overview resolve");
-        LLTimer timer;
-        resolved.bindTarget();
-        glViewport(0, 0, w, h);
-        LLGLDepthTest depth(GL_FALSE, GL_FALSE);
-        LLGLDisable blend(GL_BLEND);
-        LLGLDisable cull_face(GL_CULL_FACE);
-        sResolve.bind();
-        const GLint prog = sResolve.mProgramObject;
-        gGL.getTextureSlot(0)->bindManual(ALTextureSlot::TT_TEXTURE, capture.getDepth(), gGL.getSampler(ALSamplers::PointClamp));
-        gGL.getTextureSlot(1)->bindManual(ALTextureSlot::TT_TEXTURE, capture.getTexture(), gGL.getSampler(ALSamplers::PointClamp));
-        glUniform1i(glGetUniformLocation(prog, "depthMap"), 0);
-        glUniform1i(glGetUniformLocation(prog, "classMap"), 1);
-        LLMatrix4a inv_vp;
-        inv_vp.setMul(shot.mView, shot.mProj);
-        inv_vp.invert();
-        glUniformMatrix4fv(glGetUniformLocation(prog, "sk_inv_vp"), 1, GL_FALSE, inv_vp.getF32ptr());
-        glUniform1f(glGetUniformLocation(prog, "sk_zo"), LLRender::sReverseZ ? 1.f : 0.f);
-        glUniform1f(glGetUniformLocation(prog, "sk_far_depth"), al_window_far());
-        glUniform3f(glGetUniformLocation(prog, "sk_eye"), shot.mEye.mV[VX], shot.mEye.mV[VY], shot.mEye.mV[VZ]);
-        glUniform1f(glGetUniformLocation(prog, "sk_top_down"), shot.mTopDown ? 1.f : 0.f);
-        glUniform1f(glGetUniformLocation(prog, "sk_agent_z"), shot.mFloor);
-        glUniform1f(glGetUniformLocation(prog, "sk_cut"), shot.mCut);
-        glUniform1f(glGetUniformLocation(prog, "sk_water_z"), shot.mWater);
-        glUniform1f(glGetUniformLocation(prog, "sk_water_depth"), skmap::palette::WATER_DEPTH_M);
-        uniformColour(prog, "sk_invisible", skmap::palette::DROP_EDGE);
-        static LLCachedControl<U32> debug_view(gSavedSettings, "SKOverviewDebugView", 0);
-        glUniform1i(glGetUniformLocation(prog, "sk_debug_view"), (GLint)(U32)debug_view);
-        glUniform4fv(glGetUniformLocation(prog, "sk_region"), 1, shot.mRegion.mV);
-        gPipeline.mScreenTriangleVB->setBuffer();
-        gPipeline.mScreenTriangleVB->drawArrays(LLRender::TRIANGLES, 0, 3);
-        gGL.getTextureSlot(1)->unbind();
-        gGL.getTextureSlot(0)->unbind();
-        sResolve.unbind();
-        resolved.flush();
-        mCost.mResolveMs += timer.getElapsedTimeF32() * 1000.f;
+        resolve(capture, resolved, shot);
     }
 
     memcpy(gGLViewport, saved_viewport, sizeof(saved_viewport));
@@ -881,10 +1022,12 @@ void SKOverviewCapture::tactical()
                           at_axis * mTacticalKey.mDir > 0.999999f && fov == mTacticalKey.mFov && vw == mTacticalKey.mWidth &&
                           vh == mTacticalKey.mHeight && std::fabs(cut_z - mTacticalKey.mCut) < 1e-3f &&
                           mCensus.signature() == mTacticalKey.mCensus && gAgent.getRegion() == mTacticalKey.mRegion;
+        // Movers draw over a copy of the static capture each frame; the static capture itself is redone only on change.
+        const bool movers = mMovers.update();
         if (!same)
         {
             LL_PROFILE_ZONE_NAMED("sk tactical render");
-            render(sTacticalCapture, sTacticalResolved, shot);
+            render(sTacticalCapture, sTacticalResolved, shot, !movers);
             mTacticalKey.mValid = true;
             mTacticalKey.mEye = eye;
             mTacticalKey.mDir = at_axis;
@@ -900,12 +1043,22 @@ void SKOverviewCapture::tactical()
         {
             ++mCost.mReuses;
         }
+        if (movers)
+        {
+            drawMovers(shot);
+        }
+        else if (mMoversDrawn && same)
+        {
+            resolve(sTacticalCapture, sTacticalResolved, shot); // the last mover left: the static map again
+        }
+        mMoversDrawn = movers;
     }
 
     mTacticalView = shot.mView;
     mTacticalProj = shot.mProj;
     mTacticalCentre = target;
     mTacticalReach = distance + CENSUS_RANGE_M;
+    mTacticalDistance = distance;
     mTacticalViewport[0] = vx;
     mTacticalViewport[1] = vy;
     mTacticalViewport[2] = vw;
@@ -1060,6 +1213,8 @@ void SKOverviewCapture::composite()
         gGL.getTextureSlot(0)->unbind();
         sComposite.unbind();
     }
+
+    drawVehicles(mTacticalDistance);
 
     {
         // The mini-map's own markers and visibility rules (SKMapPeople, skmapdraw::personMarker), at a constant pixel

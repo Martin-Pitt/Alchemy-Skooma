@@ -259,6 +259,20 @@ namespace skmapdraw
                       skmap::FloorRelation floor, F32 font_px);
     /// A marker's radius in pixels for a person drawn without a code label.
     F32 plainMarkerRadius(skmap::FloorRelation floor);
+    /// One layer of a vehicle's captured outline as a ground quad: its atlas texture, its corners as plan offsets in
+    /// metres from the vehicle's live position (x east, y north), in the order of uv.
+    struct GlyphQuad
+    {
+        U32 mTexture = 0;
+        LLVector2 mCorner[4];
+        F32 mUV[4][2];
+    };
+    /// The vehicle's glyph layers at their live pose; false when it has no drawable glyph (SKMapVehicleGlyphs off,
+    /// none captured yet, or its base layer is not posed by the root).
+    bool vehicleGlyphQuads(const SKMapPeople::Vehicle& v, std::vector<GlyphQuad>& out);
+    /// A vehicle's hull and top colours by its look, as the mini-map draws them.
+    const skmap::PaletteColour& vehicleHull(skmap::VehicleLook look);
+    const skmap::PaletteColour& vehicleTop(skmap::VehicleLook look);
 }
 
 #endif // SK_NETMAP_H

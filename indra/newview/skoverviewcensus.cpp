@@ -71,7 +71,7 @@ namespace skoverview
             case sknav::FeatureKind::DOOR: fixed = DOOR; return true;
             case sknav::FeatureKind::LADDER: fixed = LADDER; return true;
             case sknav::FeatureKind::VEHICLE:
-            case sknav::FeatureKind::ELEVATOR: fixed = VEHICLE; return true;
+            case sknav::FeatureKind::ELEVATOR: return false; // drawn live, at their current pose (skoverviewmovers.h)
             default: break;
         }
         if (rec.mExclude & sknav::EXCLUDE_AVATAR)
