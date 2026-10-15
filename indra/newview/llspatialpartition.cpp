@@ -2322,9 +2322,13 @@ void renderPhysicsShape(LLDrawable* drawable, LLVOVolume* volume, bool wireframe
         LLUUID mesh_id = volume->getVolume()->getParams().getSculptID();
         LLModel::Decomposition* decomp = gMeshRepo.getDecomposition(mesh_id);
 
-        // <SK:Nexii> physics_havok block: the simulator's own triangles when it has sent them
-        if (skRenderPhysicsHavok(mesh_id, color))
+        // <SK:Nexii> physics_havok block
+        // The simulator's MOPP triangles for a mesh without decomposition hulls. With hulls, which
+        // shape it collides with is not established, so they keep today's drawing.
+        const bool havok_drawn = decomp && decomp->mHull.empty() && skRenderPhysicsHavok(mesh_id, color);
+        if (havok_drawn)
         {
+            // Drawn.
         }
         else if (decomp)
         // </SK:Nexii>
