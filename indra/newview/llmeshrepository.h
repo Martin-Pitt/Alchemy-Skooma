@@ -1031,12 +1031,13 @@ public:
     LLModel::Decomposition* getDecomposition(const LLUUID& mesh_id);
     void fetchPhysicsShape(const LLUUID& mesh_id);
     bool hasPhysicsShape(const LLUUID& mesh_id);
+    bool hasSkinInfo(const LLUUID& mesh_id);
+    bool hasHeader(const LLUUID& mesh_id) const;
+
     // <SK:Nexii> physics_havok block
     // The simulator's collision triangles; null until fetched, the first ask queues the fetch.
     std::shared_ptr<const SKPhysicsHavokShape> getPhysicsHavok(const LLUUID& mesh_id);
     // </SK:Nexii>
-    bool hasSkinInfo(const LLUUID& mesh_id);
-    bool hasHeader(const LLUUID& mesh_id) const;
 
     void buildHull(const LLVolumeParams& params, S32 detail);
     void buildPhysicsMesh(LLModel::Decomposition& decomp);
