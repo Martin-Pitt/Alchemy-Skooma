@@ -34,6 +34,10 @@
 #include "llworld.h"
 #include "sknetmap.h"
 #include "skmappeople.h"
+#include "skmaplabels.h"
+#include "skmapmenu.h"
+#include "llrootview.h"
+#include "skpopuppanes.h"
 #include "llfocusmgr.h"
 #include "llkeyboard.h"
 #include "llviewerinput.h"
@@ -58,6 +62,7 @@
 #include "skmappalette.h"
 #include "skworldcensus.h"
 
+#include <algorithm>
 #include <cmath>
 
 extern bool gCubeSnapshot;
@@ -680,6 +685,82 @@ void SKOverviewCapture::tactical()
 bool SKOverviewCapture::tacticalShown()
 {
     return instanceExists() && instance().mLastCompositeFrame == LLFrameTimer::getFrameCount();
+}
+
+// static
+bool SKOverviewCapture::handleRightClick(S32 x, S32 y)
+{
+    // Input runs at the top of the frame after the one that composited.
+    return instanceExists() && instance().mLastCompositeFrame + 1 >= LLFrameTimer::getFrameCount() && instance().rightClick(x, y);
+}
+
+bool SKOverviewCapture::rightClick(S32 x, S32 y)
+{
+    const LLVector2 scale = gViewerWindow->getDisplayScale();
+    const LLVector2 at(x * scale.mV[VX] - mTacticalViewport[0], y * scale.mV[VY] - mTacticalViewport[1]);
+    if (at.mV[VX] < 0.f || at.mV[VY] < 0.f || at.mV[VX] >= mTacticalViewport[2] || at.mV[VY] >= mTacticalViewport[3])
+    {
+        return false;
+    }
+    // The mini-map's pick: every marker within its hover radius, nearest first.
+    const F32 radius = skmap::HOVER_ENTER_PX * llmax(scale.mV[VX], scale.mV[VY]);
+    std::vector<std::pair<F32, LLUUID>> near_click;
+    for (const TacticalMark& mark : mTacticalMarks)
+    {
+        const F32 dist = dist_vec(mark.mAt, at);
+        if (dist <= radius)
+        {
+            near_click.emplace_back(dist, mark.mId);
+        }
+    }
+    std::sort(near_click.begin(), near_click.end());
+    std::vector<LLUUID> ids;
+    for (const auto& n : near_click)
+    {
+        ids.push_back(n.second);
+    }
+    LLVector3d world;
+    if (!groundAt(at, world))
+    {
+        world = gAgent.getPosGlobalFromAgent(mTacticalCentre);
+    }
+    if (SKPopupPanes* old = mPopup.get())
+    {
+        old->closeAll();
+    }
+    mPopup = SKMapMenu::open(gViewerWindow->getRootView(), x, y, world, SKMapMenu::freeze(ids));
+    return true;
+}
+
+bool SKOverviewCapture::groundAt(const LLVector2& at, LLVector3d& world) const
+{
+    LLMatrix4a vp, inv_vp, inv_view;
+    vp.setMul(mTacticalView, mTacticalProj);
+    if (!inv_vp.setInverse(vp) || !inv_view.setInverse(mTacticalView))
+    {
+        return false;
+    }
+    LLVector4a origin, eye, ndc, far_pt;
+    origin.set(0.f, 0.f, 0.f, 1.f);
+    inv_view.transform4(origin, eye);
+    ndc.set(at.mV[VX] / mTacticalViewport[2] * 2.f - 1.f, at.mV[VY] / mTacticalViewport[3] * 2.f - 1.f, 0.5f, 1.f);
+    inv_vp.transform4(ndc, far_pt);
+    const F32* e = eye.getF32ptr();
+    const F32* f = far_pt.getF32ptr();
+    if (std::fabs(e[3]) < 1e-6f || std::fabs(f[3]) < 1e-6f)
+    {
+        return false;
+    }
+    const LLVector3 from(e[0] / e[3], e[1] / e[3], e[2] / e[3]);
+    const LLVector3 dir = LLVector3(f[0] / f[3], f[1] / f[3], f[2] / f[3]) - from;
+    const F32 plane_z = mTacticalCentre.mV[VZ];
+    if (dir.mV[VZ] > -1e-6f || from.mV[VZ] < plane_z)
+    {
+        return false;
+    }
+    const F32 t = (plane_z - from.mV[VZ]) / dir.mV[VZ];
+    world = gAgent.getPosGlobalFromAgent(from + dir * t);
+    return true;
 }
 
 void SKOverviewCapture::onComposite()

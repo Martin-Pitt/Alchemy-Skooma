@@ -27,6 +27,7 @@
 #define SK_OVERVIEWCAPTURE_H
 
 #include "llcamera.h"
+#include "llhandle.h"
 #include "llmatrix4a.h"
 #include "llsingleton.h"
 #include "lluuid.h"
@@ -37,6 +38,7 @@
 #include <string>
 
 class LLRenderTarget;
+class SKPopupPanes;
 
 // Renders terrain, the rendered world (the ghost, SKOverviewGhost) and the census's shapes below a cut plane at the
 // navmesh floor under the agent plus SKOverviewCutHeight, each writing a class code, then resolves depth and codes
@@ -66,6 +68,9 @@ public:
     static void onComposite();
     /// Whether the tactical overview covers the world view this frame: world-space name tags and hover text stay off it.
     static bool tacticalShown();
+
+    /// A world right-click at the root view's (x, y): opens the mini-map's menus on the overview; false when it is off.
+    static bool handleRightClick(S32 x, S32 y);
 
     /// The tactical view takes the wheel for its distance; false when it is off.
     static bool handleScrollWheel(F32 clicks);
@@ -105,6 +110,9 @@ private:
     bool captureMap();
     void tactical();
     void composite();
+    bool rightClick(S32 x, S32 y);
+    /// The ground plane at the tactical centre's height under an overview pixel, through the tactical camera.
+    bool groundAt(const LLVector2& at, LLVector3d& world) const;
     void readTimer();
 
     SKOverviewCensus mCensus;
@@ -132,6 +140,7 @@ private:
         LLVector2 mAt;      // overview pixels
     };
     std::vector<TacticalMark> mTacticalMarks;  // the markers drawn last frame, for picks
+    LLHandle<SKPopupPanes> mPopup;
 
 };
 
