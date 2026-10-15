@@ -94,6 +94,10 @@ namespace
     const F32 MARKER_MAX_SCALE = 8.f;          // nor grown past this
     const S32 MARKER_SIDES = 16;
     const F32 MARKER_GHOST_ALPHA = 0.3f;       // its silhouette where the census hides it
+    const F32 HEADING_TIP_PER_RADIUS = 1.f;    // the minimap's heading triangle (skmap::palette::HEADING_*_PX) over
+    const F32 HEADING_BASE_PER_RADIUS = 0.25f; // its 6 px dot, as fractions of the body's radius beyond it
+    const F32 HEADING_HALF_PER_RADIUS = 0.42f;
+    const F32 HEADING_THICK_PER_RADIUS = 0.3f; // and extruded this thick
     const F32 VEHICLE_EXAGGERATION = 2.5f;     // a vehicle's outline at this many times its size when far
     const F32 VEHICLE_TRUE_SIZE_M = 40.f;      // tactical camera distance up to which vehicles are true size
     const F32 VEHICLE_EXAGGERATED_M = 200.f;   // and from which they are fully exaggerated
@@ -1278,9 +1282,8 @@ void SKOverviewCapture::drawMarkers3D(const Project& project, S32 vw, S32 vh, st
         LLVector3 mCentre;      // agent space, the avatar's position: the shape's origin
         LLQuaternion mRotation;
         skcensus::AvatarPose mPose = skcensus::AvatarPose::STANDING;
-        bool mHasLook = false;  // where its head faces, from its head joint
+        bool mHasHead = false;  // its head joint, the height the heading wedge is drawn at
         LLVector3 mHead;
-        LLVector3 mLook;
     };
     // A loaded avatar's own size, as the sim has it: getScale() is the agent size from its object update (what
     // llGetAgentSize reports), its box centred on the avatar's position, so its base is the floor the sim stands it
@@ -1315,8 +1318,7 @@ void SKOverviewCapture::drawMarkers3D(const Project& project, S32 vw, S32 vh, st
         if (avatar->mHeadp)
         {
             m.mHead = avatar->mHeadp->getWorldPosition();
-            m.mLook = LLVector3::x_axis * avatar->mHeadp->getWorldRotation();
-            m.mHasLook = m.mLook.normVec() > 1e-3f;
+            m.mHasHead = true;
         }
     };
     std::vector<Marker> markers;
@@ -1457,22 +1459,29 @@ void SKOverviewCapture::drawMarkers3D(const Project& project, S32 vw, S32 vh, st
                 tri(top_c, t0, t1, m.mColour);
             }
         }
-        if (m.mHasShape && !m.mCoarse && m.mHasLook)
+        if (m.mHasShape && !m.mCoarse && m.mHasHead && m.mHasHeading)
         {
-            // A wedge out of the head along its facing, flat and upright both, so it reads from above and from the side.
-            const LLVector3 from = m.mCentre + (m.mHead - m.mCentre) * scale;
-            LLVector3 across = m.mLook % LLVector3::z_axis;
-            if (across.normVec() < 1e-3f)
+            // The minimap's heading wedge as a flat slab: a solid triangle just clear of the body at head height, along
+            // the body's heading, in the minimap's proportions to the body's radius.
             {
-                across = LLVector3::y_axis * m.mRotation;
+                const LLVector3 ahead(std::cos(m.mHeading), std::sin(m.mHeading), 0.f);
+                const LLVector3 across(-ahead.mV[VY], ahead.mV[VX], 0.f);
+                const LLVector3 from(m.mCentre.mV[VX], m.mCentre.mV[VY], m.mCentre.mV[VZ] + (m.mHead.mV[VZ] - m.mCentre.mV[VZ]) * scale);
+                const F32 body_r = m.mRadius * scale;
+                const LLVector3 tip = from + ahead * (body_r * (1.f + HEADING_TIP_PER_RADIUS));
+                const LLVector3 base = from + ahead * (body_r * (1.f + HEADING_BASE_PER_RADIUS));
+                const LLVector3 l = base + across * (body_r * HEADING_HALF_PER_RADIUS);
+                const LLVector3 rr = base - across * (body_r * HEADING_HALF_PER_RADIUS);
+                const LLVector3 up(0.f, 0.f, body_r * HEADING_THICK_PER_RADIUS * 0.5f);
+                tri(tip + up, l + up, rr + up, m.mColour);
+                tri(tip - up, rr - up, l - up, m.mColour);
+                tri(tip - up, l - up, l + up, m.mColour);
+                tri(tip - up, l + up, tip + up, m.mColour);
+                tri(rr - up, tip - up, tip + up, m.mColour);
+                tri(rr - up, tip + up, rr + up, m.mColour);
+                tri(l - up, rr - up, rr + up, m.mColour);
+                tri(l - up, rr + up, l + up, m.mColour);
             }
-            const LLVector3 up = across % m.mLook;
-            const LLVector3 tip = from + m.mLook * (0.6f * scale);
-            const F32 w = 0.15f * scale;
-            tri(from + across * w, tip, from - across * w, bright);
-            tri(from - across * w, tip, from + across * w, bright);
-            tri(from + up * w, tip, from - up * w, bright);
-            tri(from - up * w, tip, from + up * w, bright);
         }
         else if (m.mHasHeading)
         {
