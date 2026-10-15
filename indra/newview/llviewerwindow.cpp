@@ -1170,6 +1170,13 @@ bool LLViewerWindow::handleAnyMouseClick(LLWindow *window, LLCoordGL pos, MASK m
             }
     }
 
+    // <SK:Nexii> Tactical overview: world right-clicks open the mini-map's menus on it.
+    if (down && clicktype == CLICK_RIGHT && !gDisconnected && SKOverviewCapture::handleRightClick(x, y))
+    {
+        return true;
+    }
+    // </SK:Nexii>
+
     // Do not allow tool manager to handle mouseclicks if we have disconnected
     if(!gDisconnected && LLToolMgr::getInstance()->getCurrentTool()->handleAnyMouseClick( x, y, mask, clicktype, down ) )
     {

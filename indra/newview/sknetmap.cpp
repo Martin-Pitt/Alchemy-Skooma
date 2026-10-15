@@ -1799,27 +1799,7 @@ bool SKNetMap::handleRightMouseDown(S32 x, S32 y, MASK mask)
             ids.push_back(n.second);
         }
     }
-    std::vector<SKMapMenu::Person> people;
-    for (const LLUUID& id : ids)
-    {
-        SKMapMenu::Person person;
-        person.mId = id;
-        person.mNameHidden = !RlvActions::canShowName(RlvActions::SNC_DEFAULT, id);
-        LLAvatarName av_name;
-        if (LLAvatarNameCache::get(id, &av_name))
-        {
-            person.mLabel = person.mNameHidden ? RlvStrings::getAnonym(av_name) : av_name.getDisplayName();
-        }
-        for (const SKMapPeople::Person& p : SKMapPeople::instance().people())
-        {
-            if (p.mId == id)
-            {
-                person.mPos = p.mPos;
-                break;
-            }
-        }
-        people.push_back(person);
-    }
+    const std::vector<SKMapMenu::Person> people = SKMapMenu::freeze(ids);
     mHover.suppress(click);
     mLabels.clear();
     mTagTexts.clear();

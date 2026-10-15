@@ -35,7 +35,7 @@
 #include <string>
 #include <vector>
 
-class SKNetMap;
+class LLView;
 class SKPopupPanes;
 struct SKPopupItem;
 struct SKPopupPaneSpec;
@@ -53,9 +53,12 @@ public:
         bool mNameHidden = false;
     };
 
-    /// Open the map pane at the widget point (x, y), and the people pane beside it when anyone
-    /// was frozen.
-    static LLHandle<SKPopupPanes> open(SKNetMap* map, S32 x, S32 y, const LLVector3d& world, const std::vector<Person>& people);
+    /// Freeze the people by id, in order, as they are now.
+    static std::vector<Person> freeze(const std::vector<LLUUID>& ids);
+
+    /// Open the map pane at the spawner's point (x, y), and the people pane beside it when anyone
+    /// was frozen; a mini-map spawner also gets Recentre.
+    static LLHandle<SKPopupPanes> open(LLView* spawner, S32 x, S32 y, const LLVector3d& world, const std::vector<Person>& people);
 
     /// A label from panel_sk_map_popup.xml.
     static std::string label(const std::string& name);
