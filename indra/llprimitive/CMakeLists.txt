@@ -20,6 +20,7 @@ target_sources(
     lltreeparams.cpp
     llvolumemessage.cpp
     material_codes.cpp
+    skmeshhavok.cpp # <SK:Nexii> physics_havok block
   PUBLIC
     FILE_SET HEADERS
       FILES
@@ -43,6 +44,7 @@ target_sources(
         llvolumemessage.h
         material_codes.h
         object_flags.h
+        skmeshhavok.h # <SK:Nexii> physics_havok block
 )
 
 target_link_libraries(
@@ -57,8 +59,26 @@ target_precompile_headers(llprimitive REUSE_FROM llprecompiled)
 
 # add unit tests
 if(AL_BUILD_TESTS)
-  foreach(test llmediaentry llgltfmaterial llmaterialid llmaterial)
-    al_add_test(${test} UNIT PROJECT llprimitive)
-  endforeach()
-  al_add_test(llprimitive UNIT PROJECT llprimitive LIBRARIES llmessage)
+  # llgltfmaterial_test.cpp is the one file that defines tinygltf's and stb's
+  # implementations, which the library leaves to the viewer.
+  al_add_test_binary(
+    llprimitive_tests
+    PROJECT llprimitive
+    SOURCES
+      tests/llgltfmaterial_test.cpp
+      tests/llmaterial_test.cpp
+      tests/llmaterialid_test.cpp
+      tests/llmediaentry_test.cpp
+      tests/skmeshhavok_test.cpp # <SK:Nexii> physics_havok block
+    LIBRARIES llprimitive
+  )
+  # This one stubs LLMaterialID and LLPrimTextureList, which the library
+  # defines, so it compiles the one file it tests instead of linking it.
+  al_add_test_binary(
+    llprimitive_test
+    PROJECT llprimitive
+    SOURCES tests/llprimitive_test.cpp
+    UNIT llprimitive.cpp
+    LIBRARIES llmessage llmath llcommon
+  )
 endif()
