@@ -96,7 +96,7 @@ bool surfaceAt(ivec2 p, out vec3 pos)
     return true;
 }
 
-vec3 octDecode(vec2 e)
+vec3 skOctDecode(vec2 e)
 {
     e = e * 2.0 - 1.0;
     vec3 n = vec3(e, 1.0 - abs(e.x) - abs(e.y));
@@ -117,7 +117,7 @@ bool geomNormal(ivec2 p, out vec3 n)
         n = vec3(0.0, 0.0, 1.0);
         return false;
     }
-    n = octDecode(vec2(cls.g, cls.a));
+    n = skOctDecode(vec2(cls.g, cls.a));
     return true;
 }
 

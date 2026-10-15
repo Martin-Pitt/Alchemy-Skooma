@@ -33,7 +33,7 @@ uniform mat3 sk_eye_to_world;
 
 in vec3 vary_position;
 
-vec2 octEncode(vec3 n)
+vec2 skOctEncode(vec3 n)
 {
     n /= abs(n.x) + abs(n.y) + abs(n.z);
     vec2 e = n.z >= 0.0 ? n.xy : (1.0 - abs(n.yx)) * vec2(n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0);
@@ -49,6 +49,6 @@ void main()
     vec3 n_eye = normalize(cross(dFdx(vary_position), dFdy(vary_position)));
     vec3 n = normalize(sk_eye_to_world * n_eye);
     // 0 in both channels means "no normal" (terrain); a real one is kept off it.
-    vec2 e = clamp(octEncode(n), 1.0 / 255.0, 1.0);
+    vec2 e = clamp(skOctEncode(n), 1.0 / 255.0, 1.0);
     frag_color = vec4(color.r, e.x, color.b, e.y);
 }
