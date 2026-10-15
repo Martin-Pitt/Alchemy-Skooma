@@ -172,10 +172,21 @@ SKNavMesh::~SKNavMesh()
 {
 }
 
+bool SKNavMesh::airEnabled()
+{
+    static LLCachedControl<bool> air(gSavedSettings, "SKAirCellsEnabled", true);
+    return air || polysEnabled();
+}
+
+bool SKNavMesh::polysEnabled()
+{
+    static LLCachedControl<bool> polys(gSavedSettings, "SKNavMeshEnabled", false);
+    return polys;
+}
+
 bool SKNavMesh::overlayActive()
 {
-    static LLCachedControl<bool> enabled(gSavedSettings, "SKNavMeshEnabled", false);
-    if (!enabled)
+    if (!airEnabled())
     {
         return false;
     }
@@ -194,9 +205,8 @@ bool SKNavMesh::overlayActive()
 
 bool SKNavMesh::wanted() const
 {
-    static LLCachedControl<bool> enabled(gSavedSettings, "SKNavMeshEnabled", false);
     static LLCachedControl<bool> always(gSavedSettings, "SKNavMeshAlways", false);
-    return enabled && (always || overlayActive() || probesDemanded() || !mConsumers.empty());
+    return airEnabled() && (always || overlayActive() || probesDemanded() || !mConsumers.empty());
 }
 
 void SKNavMesh::addDemand(const std::string& who)
@@ -1626,6 +1636,7 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
     const U32 generation = mesh.mGeneration;
     const U64 signature = tile.mSignature;
     const std::shared_ptr<TileDiskCache> cache = diskCache();
+    const bool polys = polysEnabled();
     // A stored product Detour refused last time is built afresh, and overwritten.
     const bool skip_load = tile.mDiskRefused;
     tile.mDiskRefused = false;
@@ -1647,7 +1658,7 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
     };
     const bool posted = main_queue->postTo(
         workers,
-        [input, records, cache, skip_load]()
+        [input, records, cache, skip_load, polys]()
         {
             LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - build tile worker");
             // A pool drains its queue before it joins, so work left at logout skips itself.
@@ -1686,7 +1697,11 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
             {
                 out->mRasterMs = result.mMillis;
                 result.mStatus = TileBuildResult::SUCCESS;
-                if (awaitsStamp(result))
+                if (!polys)
+                {
+                    // Air only: the raster stage is the whole build, and nothing stamps it.
+                }
+                else if (awaitsStamp(result))
                 {
                     // Its polygons wait for the spaces over its air.
                     out->mRaster = std::move(raster);
@@ -1697,7 +1712,8 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
                     polygoniseTile(*input, *raster, result);
                 }
             }
-            if (cache && result.mStatus != TileBuildResult::FAILED)
+            // A tile left without the polygons it would have had is not the product the cache keys.
+            if (cache && result.mStatus != TileBuildResult::FAILED && (polys || awaitsStamp(result)))
             {
                 cache->store(content_key, packTileProduct(result, content_key));
             }
@@ -1812,14 +1828,19 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
         {
             tile.mStaticAt = LLTimer::getTotalSeconds();
         }
-        tile.mStampDue = true;
-        mesh.mStampScan = true;
+        tile.mStampDue = mPolysOn;
+        mesh.mStampScan = mesh.mStampScan || mPolysOn;
+        if (!mPolysOn)
+        {
+            tile.mStaticAt = 0.0;
+            tile.mRaster.reset();
+        }
         tileBlip(mesh, tile);
         mRevision++;                // new air: the spaces over it are cut again
         return;
     }
     bool kept = false;
-    for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
+    for (S32 cls = 0; cls < NUM_CLASSES && mPolysOn; ++cls)
     {
         if (!mesh.mNav[cls] && result->mData[cls].empty())
         {
@@ -1949,6 +1970,22 @@ void SKNavMesh::stampTiles()
     for (const auto& entry : ordered)
     {
         Mesh& mesh = *entry.second;
+        if (!mPolysOn)
+        {
+            // Air only: no polygons to stamp, so nothing waits on a stamp or holds a raster for one.
+            for (auto& t : mesh.mTiles)
+            {
+                Tile& tile = t.second;
+                if (!tile.mStampInFlight)
+                {
+                    tile.mStampDue = false;
+                    tile.mStaticAt = 0.0;
+                    tile.mRaster.reset();
+                }
+            }
+            mesh.mStampScan = false;
+            continue;
+        }
         EnclosureProductPtr enc;
         RoomsProductPtr rooms;
         if (!mRooms->landed(mesh.mId, enc, rooms))
@@ -2544,6 +2581,20 @@ void SKNavMesh::update()
     if (!want || !LLWorld::instanceExists() || !gAgent.getRegion())
     {
         return;
+    }
+    // Turning the polygons on or off builds every mesh again under the new rule.
+    if (polysEnabled() != mPolysOn)
+    {
+        mPolysOn = polysEnabled();
+        for (auto& entry : mMeshes)
+        {
+            dropSlots(*entry.second);
+            std::shared_ptr<Mesh> retired(std::move(entry.second));
+            retireOn(workerQueue(), std::move(retired));
+        }
+        mMeshes.clear();
+        mRevision++;
+        mCensusStamp = 0;
     }
 
     SKCensusSnapshotPtr snap = census.snapshot();
@@ -4540,7 +4591,7 @@ U32 SKNavMesh::stampsUnsettled() const
 
 std::string SKNavMesh::exportAll()
 {
-    if (!gSavedSettings.getBOOL("SKNavMeshEnabled"))
+    if (!polysEnabled())
     {
         return "the navmesh is off";
     }
