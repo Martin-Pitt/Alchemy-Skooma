@@ -34,6 +34,25 @@
 
 using namespace skworldmap;
 
+void SKWorldMapTiles::Entry::raise()
+{
+    if (!mBoosted)
+    {
+        mPriorBoost = mImage->getBoostLevel();
+        mImage->setBoostLevel(llmax(mPriorBoost, (S32)LLGLTexture::BOOST_MAP_VISIBLE));
+        mBoosted = true;
+    }
+}
+
+void SKWorldMapTiles::Entry::lower()
+{
+    if (mBoosted)
+    {
+        mImage->setBoostLevel(mPriorBoost);
+        mBoosted = false;
+    }
+}
+
 bool SKWorldMapTiles::isReady(const Entry& e) const
 {
     return e.mImage.notNull() && !e.mMissing && e.mImage->hasGLTexture();
@@ -65,8 +84,7 @@ bool SKWorldMapTiles::resolve(const SelectedTile& tile, F64 now, Draw& out)
         if (isReady(*e))
         {
             e->mLastUsed = now;
-            e->mImage->setBoostLevel(LLGLTexture::BOOST_MAP_VISIBLE);
-            e->mBoosted = true;
+            e->raise();
             out.mTexture = e->mImage.get();
             std::copy(uv, uv + 4, out.mUV);
             return true;
@@ -93,7 +111,7 @@ void SKWorldMapTiles::update(F64 now)
                 // Given up on: forgotten, so a later frame that still wants it asks again under the cap.
                 if (e.mBoosted)
                 {
-                    e.mImage->setBoostLevel(LLGLTexture::BOOST_NONE);
+                    e.lower();
                 }
                 it = mTiles.erase(it);
                 continue;
@@ -113,8 +131,7 @@ void SKWorldMapTiles::update(F64 now)
             e->mLastUsed = now;
             if (e->mImage.notNull() && !e->mMissing && !e->mBoosted && !e->mImage->hasGLTexture())
             {
-                e->mImage->setBoostLevel(LLGLTexture::BOOST_MAP_VISIBLE);
-                e->mBoosted = true;
+                e->raise();
             }
             continue;
         }
@@ -124,11 +141,10 @@ void SKWorldMapTiles::update(F64 now)
         }
         Entry& fresh = mTiles[t.mKey];
         fresh.mImage = LLWorldMipmap::loadObjectsTile(t.mKey.mGridX, t.mKey.mGridY, t.mKey.mLevel);
-        fresh.mImage->setBoostLevel(LLGLTexture::BOOST_MAP_VISIBLE);
+        fresh.raise();
         fresh.mRequested = now;
         fresh.mLastUsed = now;
         fresh.mMissing = false;
-        fresh.mBoosted = true;
         ++mInFlight;
     }
     mWanted.clear();
@@ -138,8 +154,7 @@ void SKWorldMapTiles::update(F64 now)
     {
         if (e.mBoosted && e.mLastUsed < now)
         {
-            e.mImage->setBoostLevel(LLGLTexture::BOOST_NONE);
-            e.mBoosted = false;
+            e.lower();
         }
     }
     if (mTiles.size() > static_cast<size_t>(MAX_KEPT))
@@ -157,7 +172,7 @@ void SKWorldMapTiles::update(F64 now)
             Entry* e = find(by_age[i].second);
             if (e && e->mBoosted)
             {
-                e->mImage->setBoostLevel(LLGLTexture::BOOST_NONE);
+                e->lower();
             }
             mTiles.erase(by_age[i].second);
         }
@@ -170,8 +185,7 @@ void SKWorldMapTiles::dropPriorities()
     {
         if (e.mBoosted)
         {
-            e.mImage->setBoostLevel(LLGLTexture::BOOST_NONE);
-            e.mBoosted = false;
+            e.lower();
         }
     }
 }

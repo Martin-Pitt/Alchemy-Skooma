@@ -83,6 +83,10 @@ private:
         F64 mLastUsed = 0.0;
         bool mMissing = false;      ///< open water or no region; kept for the session, as the texture list keeps the URL's missing texture
         bool mBoosted = false;      ///< raised by this map, so only this map lowers it
+        S32 mPriorBoost = 0;        ///< the level before this map raised it, e.g. the 2D map's, put back on lowering
+
+        void raise();
+        void lower();
     };
 
     bool isReady(const Entry& e) const;
