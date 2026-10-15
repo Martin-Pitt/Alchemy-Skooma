@@ -34,6 +34,7 @@
 #include "llworld.h"
 #include "sknetmap.h"
 #include "skmappeople.h"
+#include "skcensusavatarshape.h"
 #include "skmaplabels.h"
 #include "skmapmenu.h"
 #include "llrootview.h"
@@ -1215,6 +1216,13 @@ void SKOverviewCapture::drawMarkers3D(const Project& project, S32 vw, S32 vh, st
         bool mCoarse = false;   // known only from the region's coarse locations: no rotation, a coarse height
         F32 mHeight = 0.f;      // the avatar's own height when known, else the default
         F32 mRadius = 0.f;      // half the larger of its x and y size when known, else in proportion to the height
+        bool mHasShape = false; // drawn as its physics shape, from its agent size, pose and rotation
+        LLVector3 mCentre;      // agent space, the avatar's position: the shape's origin
+        LLQuaternion mRotation;
+        skcensus::AvatarPose mPose = skcensus::AvatarPose::STANDING;
+        bool mHasLook = false;  // where its head faces, from its head joint
+        LLVector3 mHead;
+        LLVector3 mLook;
     };
     // A loaded avatar's own size, as the sim has it: getScale() is the agent size from its object update (what
     // llGetAgentSize reports), its box centred on the avatar's position, so its base is the floor the sim stands it
@@ -1235,11 +1243,22 @@ void SKOverviewCapture::drawMarkers3D(const Project& project, S32 vw, S32 vh, st
             m.mFloor = centre - LLVector3(0.f, 0.f, size.mV[VZ] * 0.5f);
             m.mHeight = size.mV[VZ];
             m.mRadius = llmax(size.mV[VX], size.mV[VY]) * 0.5f;
+            // The census's physics shape for its pose, about its position, turned as the avatar is.
+            m.mHasShape = true;
+            m.mCentre = centre;
+            m.mRotation = avatar->getRenderRotation();
+            m.mPose = skcensus::avatarPose(avatar);
         }
         else if (avatar->mBodySize.mV[VZ] > 0.1f)
         {
             m.mFloor = avatar->getRenderPosition() - LLVector3(0.f, 0.f, avatar->getPelvisToFoot());
             m.mHeight = avatar->mBodySize.mV[VZ];
+        }
+        if (avatar->mHeadp)
+        {
+            m.mHead = avatar->mHeadp->getWorldPosition();
+            m.mLook = LLVector3::x_axis * avatar->mHeadp->getWorldRotation();
+            m.mHasLook = m.mLook.normVec() > 1e-3f;
         }
     };
     std::vector<Marker> markers;
@@ -1350,17 +1369,54 @@ void SKOverviewCapture::drawMarkers3D(const Project& project, S32 vw, S32 vh, st
         const F32 body = m.mHeight > 0.f ? m.mHeight / MARKER_HEIGHT_M : 1.f;
         const F32 r = (m.mRadius > 0.f ? m.mRadius : MARKER_RADIUS_M * body) * scale;
         const F32 h = (m.mCoarse ? MARKER_COARSE_HEIGHT_M : MARKER_HEIGHT_M) * body * scale;
-        const LLVector3 top_c = m.mFloor + LLVector3(0.f, 0.f, h);
-        for (S32 k = 0; k < MARKER_SIDES; ++k)
+        const LLColor4 bright(llmin(1.f, m.mColour.mV[0] * 1.25f + 0.1f), llmin(1.f, m.mColour.mV[1] * 1.25f + 0.1f),
+                              llmin(1.f, m.mColour.mV[2] * 1.25f + 0.1f), 1.f);
+        LLVector3 top_c = m.mFloor + LLVector3(0.f, 0.f, h);
+        if (m.mHasShape && !m.mCoarse)
         {
-            const F32 a0 = F_TWO_PI * k / MARKER_SIDES, a1 = F_TWO_PI * (k + 1) / MARKER_SIDES;
-            const LLVector3 d0(std::cos(a0) * r, std::sin(a0) * r, 0.f), d1(std::cos(a1) * r, std::sin(a1) * r, 0.f);
-            const LLVector3 b0 = m.mFloor + d0, b1 = m.mFloor + d1, t0 = top_c + d0, t1 = top_c + d1;
-            tri(b0, b1, t1, m.mColour);
-            tri(b0, t1, t0, m.mColour);
-            tri(top_c, t0, t1, m.mColour);
+            // The avatar's own physics shape, grown about its position only as far as the minimum on-screen size asks.
+            const std::vector<LLVector3>& shape = skcensus::avatarShape(m.mPose, m.mHeight);
+            F32 top_z = -F32_MAX;
+            for (size_t v = 0; v + 2 < shape.size(); v += 3)
+            {
+                const LLVector3 a = m.mCentre + (shape[v] * scale) * m.mRotation;
+                const LLVector3 b = m.mCentre + (shape[v + 1] * scale) * m.mRotation;
+                const LLVector3 c = m.mCentre + (shape[v + 2] * scale) * m.mRotation;
+                tri(a, b, c, m.mColour);
+                top_z = llmax(top_z, llmax(a.mV[VZ], llmax(b.mV[VZ], c.mV[VZ])));
+            }
+            top_c = LLVector3(m.mCentre.mV[VX], m.mCentre.mV[VY], top_z);
         }
-        if (m.mHasHeading)
+        else
+        {
+            for (S32 k = 0; k < MARKER_SIDES; ++k)
+            {
+                const F32 a0 = F_TWO_PI * k / MARKER_SIDES, a1 = F_TWO_PI * (k + 1) / MARKER_SIDES;
+                const LLVector3 d0(std::cos(a0) * r, std::sin(a0) * r, 0.f), d1(std::cos(a1) * r, std::sin(a1) * r, 0.f);
+                const LLVector3 b0 = m.mFloor + d0, b1 = m.mFloor + d1, t0 = top_c + d0, t1 = top_c + d1;
+                tri(b0, b1, t1, m.mColour);
+                tri(b0, t1, t0, m.mColour);
+                tri(top_c, t0, t1, m.mColour);
+            }
+        }
+        if (m.mHasShape && !m.mCoarse && m.mHasLook)
+        {
+            // A wedge out of the head along its facing, flat and upright both, so it reads from above and from the side.
+            const LLVector3 from = m.mCentre + (m.mHead - m.mCentre) * scale;
+            LLVector3 across = m.mLook % LLVector3::z_axis;
+            if (across.normVec() < 1e-3f)
+            {
+                across = LLVector3::y_axis * m.mRotation;
+            }
+            const LLVector3 up = across % m.mLook;
+            const LLVector3 tip = from + m.mLook * (0.6f * scale);
+            const F32 w = 0.15f * scale;
+            tri(from + across * w, tip, from - across * w, bright);
+            tri(from - across * w, tip, from + across * w, bright);
+            tri(from + up * w, tip, from - up * w, bright);
+            tri(from - up * w, tip, from + up * w, bright);
+        }
+        else if (m.mHasHeading)
         {
             // A wedge on the top, pointing along the heading, brighter than the body.
             const LLVector3 ahead(std::cos(m.mHeading), std::sin(m.mHeading), 0.f);
@@ -1368,12 +1424,10 @@ void SKOverviewCapture::drawMarkers3D(const Project& project, S32 vw, S32 vh, st
             const LLVector3 lift(0.f, 0.f, 0.03f * scale);
             const LLVector3 tip = top_c + lift + ahead * (r * 1.7f);
             const LLVector3 back = top_c + lift - ahead * (r * 0.35f);
-            const LLColor4 bright(llmin(1.f, m.mColour.mV[0] * 1.25f + 0.1f), llmin(1.f, m.mColour.mV[1] * 1.25f + 0.1f),
-                                  llmin(1.f, m.mColour.mV[2] * 1.25f + 0.1f), 1.f);
             tri(back + across * (r * 0.75f), tip, back - across * (r * 0.75f), bright);
             tri(back - across * (r * 0.75f), tip, back + across * (r * 0.75f), bright);
         }
-        // Labels, hover, picks and menus take the projected top of the cylinder.
+        // Labels, hover, picks and menus take the projected top of the marker.
         LLVector2 top;
         if (project(top_c, top))
         {
