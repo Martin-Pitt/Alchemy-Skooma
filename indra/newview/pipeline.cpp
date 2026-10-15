@@ -12520,6 +12520,31 @@ U32 LLPipeline::skRenderOverview(const LLMatrix4a& view, const LLMatrix4a& proj,
                                        LLRenderPass::PASS_FULLBRIGHT_ALPHA_MASK, LLRenderPass::PASS_NORMSPEC_MASK,
                                        LLRenderPass::PASS_MATERIAL_ALPHA_MASK, LLRenderPass::PASS_SPECMAP_MASK,
                                        LLRenderPass::PASS_NORMMAP_MASK };
+    // Every ghost pass skips draws with the default transparent or an invisiprim texture: such a face is masked or
+    // blended away in the world (alpha 1 with the transparent texture lands in the alpha-mask passes), but the ghost
+    // draws masks whole and would show it solid.
+    auto render_ghost = [&](U32 type)
+    {
+        gGL.loadMatrix(LLViewerCamera::getCurrent().getModelview());
+        gGLLastMatrix = NULL;
+        for (LLCullResult::drawinfo_iterator i = result.beginRenderMap(type); i != result.endRenderMap(type); ++i)
+        {
+            LLDrawInfo* info = *i;
+            if (info->mTexture.notNull() && skoverview::transparentTexture(info->mTexture->getID()))
+            {
+                static std::set<LLUUID> logged;
+                if (logged.insert(info->mTexture->getID()).second)
+                {
+                    LL_INFOS("SKOverview") << "ghost skips draws with texture " << info->mTexture->getID() << LL_ENDL;
+                }
+                continue;
+            }
+            mSimplePool->pushBatch(*info, false, false);
+        }
+        gGL.loadMatrix(LLViewerCamera::getCurrent().getModelview());
+        gGLLastMatrix = NULL;
+    };
+
     if (ghost)
     {
         // Masked parts draw whole: the ghost is a tint, so a cut-out leaf reading as its card costs nothing.
@@ -12529,7 +12554,7 @@ U32 LLPipeline::skRenderOverview(const LLMatrix4a& view, const LLMatrix4a& proj,
         bind_clip(skoverview::CODE_GHOST);
         for (U32 type : solid_types)
         {
-            renderObjects(type, false, false, false);
+            render_ghost(type);
         }
         renderGLTFObjects(LLRenderPass::PASS_GLTF_PBR, false, false);
         gGL.loadMatrix(view);
@@ -12548,7 +12573,7 @@ U32 LLPipeline::skRenderOverview(const LLMatrix4a& view, const LLMatrix4a& proj,
         bind_clip(skoverview::CODE_GHOST_SECTION);
         for (U32 i = 0; i < 9; ++i)
         {
-            renderObjects(solid_types[i], false, false, false);
+            render_ghost(solid_types[i]);
         }
         renderGLTFObjects(LLRenderPass::PASS_GLTF_PBR, false, false);
         glCullFace(GL_BACK);
