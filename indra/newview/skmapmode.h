@@ -50,6 +50,8 @@ class SKMapMode : public LLSingleton<SKMapMode>
 public:
     /// True while the map replaces the world. Cheap enough for every frame.
     static bool isOpen();
+    /// RLVa holds the map shut: it hides the world map or locks the camera.
+    static bool rlvRestricted();
     /// How much faster the flycam translates from `eye`: its height above the map over a person's
     /// scale while the map is open, so it crosses regions low down and the grid high up; 1 otherwise.
     static F64 flycamScale(const LLVector3d& eye);

@@ -768,11 +768,11 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
     gPipeline.resetFrameStats();    // Reset per-frame statistics.
 
     // <SK:Nexii> 3D world map: map mode draws the map in place of the world, as the disconnected
-    // screen does above; a teleport, a disconnect, logging out or a GL restore closes it.
+    // screen does above; a teleport, a disconnect, logging out, a GL restore or RLVa closes it.
     bool sk_map_frame = false;
     if (SKMapMode::isOpen())
     {
-        if (gTeleportDisplay || gDisconnected || gRestoreGL || LLApp::isExiting() || LLAppViewer::instance()->logoutRequestSent())
+        if (gTeleportDisplay || gDisconnected || gRestoreGL || LLApp::isExiting() || LLAppViewer::instance()->logoutRequestSent() || SKMapMode::rlvRestricted())
         {
             SKMapMode::instance().close();
         }

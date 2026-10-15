@@ -39,6 +39,8 @@
 #include "llviewerjoystick.h"
 #include "llviewerobject.h"
 #include "llviewerwindow.h"
+#include "rlvactions.h"
+#include "rlvhandler.h"
 
 #include <cmath>
 #include <unordered_set>
@@ -141,6 +143,18 @@ F64 SKMapMode::flycamScale(const LLVector3d& eye)
     return isOpen() ? flycamHeightScale(eye.mdV[VZ]) : 1.0;
 }
 
+// static
+bool SKMapMode::rlvRestricted()
+{
+    if (!RlvActions::isRlvEnabled())
+    {
+        return false;
+    }
+    return gRlvHandler.hasBehaviour(RLV_BHVR_SHOWWORLDMAP) || gRlvHandler.hasBehaviour(RLV_BHVR_SETCAM_UNLOCK)
+        || gRlvHandler.hasBehaviour(RLV_BHVR_SETCAM) || gRlvHandler.hasBehaviour(RLV_BHVR_SETCAM_FOCUS)
+        || RlvActions::isCameraDistanceClamped() || RlvActions::isCameraPresetLocked();
+}
+
 void SKMapMode::toggle()
 {
     if (mOpen)
@@ -159,7 +173,7 @@ bool SKMapMode::open()
     {
         return true;
     }
-    if (LLStartUp::getStartupState() < STATE_STARTED || !gViewerWindow || !gAgentCamera.isInitialized())
+    if (LLStartUp::getStartupState() < STATE_STARTED || !gViewerWindow || !gAgentCamera.isInitialized() || rlvRestricted())
     {
         return false;
     }
