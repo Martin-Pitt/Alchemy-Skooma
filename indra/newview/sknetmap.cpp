@@ -479,34 +479,36 @@ bool SKNetMap::drawCaptureBase(F32 alpha)
     {
         return false;
     }
-    const SKOverviewCapture& capture = SKOverviewCapture::instance();
-    const U32 texture = capture.texture();
-    if (!texture)
+    const std::vector<SKOverviewCapture::Tile> tiles = SKOverviewCapture::instance().tiles();
+    if (tiles.empty())
     {
         return false;
     }
-    const LLVector3d origin = capture.originGlobal();
-    const F64 w = capture.regionWidth();
-    const LLVector2 sw = mView.toWidget(origin);
-    const LLVector2 se = mView.toWidget(origin + LLVector3d(w, 0.0, 0.0));
-    const LLVector2 ne = mView.toWidget(origin + LLVector3d(w, w, 0.0));
-    const LLVector2 nw = mView.toWidget(origin + LLVector3d(0.0, w, 0.0));
-    gGL.getTextureSlot(0)->bindManual(ALTextureSlot::TT_TEXTURE, texture, gGL.getSampler(ALSamplers::BilinearClamp));
     gGL.color4f(1.f, 1.f, 1.f, llclamp(alpha, 0.f, 1.f));
-    gGL.begin(LLRender::TRIANGLES);
-    gGL.texCoord2f(0.f, 0.f);
-    gGL.vertex2f(sw.mV[VX], sw.mV[VY]);
-    gGL.texCoord2f(1.f, 0.f);
-    gGL.vertex2f(se.mV[VX], se.mV[VY]);
-    gGL.texCoord2f(1.f, 1.f);
-    gGL.vertex2f(ne.mV[VX], ne.mV[VY]);
-    gGL.texCoord2f(0.f, 0.f);
-    gGL.vertex2f(sw.mV[VX], sw.mV[VY]);
-    gGL.texCoord2f(1.f, 1.f);
-    gGL.vertex2f(ne.mV[VX], ne.mV[VY]);
-    gGL.texCoord2f(0.f, 1.f);
-    gGL.vertex2f(nw.mV[VX], nw.mV[VY]);
-    gGL.end();
+    for (const SKOverviewCapture::Tile& tile : tiles)
+    {
+        const LLVector3d origin = tile.mOrigin;
+        const F64 w = tile.mWidth;
+        const LLVector2 sw = mView.toWidget(origin);
+        const LLVector2 se = mView.toWidget(origin + LLVector3d(w, 0.0, 0.0));
+        const LLVector2 ne = mView.toWidget(origin + LLVector3d(w, w, 0.0));
+        const LLVector2 nw = mView.toWidget(origin + LLVector3d(0.0, w, 0.0));
+        gGL.getTextureSlot(0)->bindManual(ALTextureSlot::TT_TEXTURE, tile.mTexture, gGL.getSampler(ALSamplers::BilinearClamp));
+        gGL.begin(LLRender::TRIANGLES);
+        gGL.texCoord2f(0.f, 0.f);
+        gGL.vertex2f(sw.mV[VX], sw.mV[VY]);
+        gGL.texCoord2f(1.f, 0.f);
+        gGL.vertex2f(se.mV[VX], se.mV[VY]);
+        gGL.texCoord2f(1.f, 1.f);
+        gGL.vertex2f(ne.mV[VX], ne.mV[VY]);
+        gGL.texCoord2f(0.f, 0.f);
+        gGL.vertex2f(sw.mV[VX], sw.mV[VY]);
+        gGL.texCoord2f(1.f, 1.f);
+        gGL.vertex2f(ne.mV[VX], ne.mV[VY]);
+        gGL.texCoord2f(0.f, 1.f);
+        gGL.vertex2f(nw.mV[VX], nw.mV[VY]);
+        gGL.end();
+    }
     gGL.getTextureSlot(0)->unbind();
     return true;
 }
