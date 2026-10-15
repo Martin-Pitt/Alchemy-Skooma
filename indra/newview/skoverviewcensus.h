@@ -55,10 +55,11 @@ namespace skoverview
         CODE_LADDER = 21,
         CODE_VEHICLE = 22,
         CODE_SECTION = 23,      ///< census: a solid the cut went through
+        CODE_PLACEHOLDER = 24,  ///< census: a box the region's object cache knows of, not yet the object
     };
 
     /// The census classes, in vertex buffer order.
-    enum CensusClass : U8 { FLOOR, WALL, COVER, RAMP, DOOR, LADDER, VEHICLE, INVISIBLE, NUM_CENSUS_CLASSES };
+    enum CensusClass : U8 { FLOOR, WALL, COVER, RAMP, DOOR, LADDER, VEHICLE, PLACEHOLDER, INVISIBLE, NUM_CENSUS_CLASSES };
 
     constexpr F32 FLOOR_NZ = 0.866f;    ///< steeper than 30 degrees is no longer floor
     constexpr F32 WALL_NZ = 0.5f;       ///< steeper than 60 degrees is wall

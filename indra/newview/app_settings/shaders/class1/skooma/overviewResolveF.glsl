@@ -42,6 +42,7 @@ uniform float sk_water_z;
 uniform float sk_water_depth;
 uniform vec4 sk_region;         // the agent's region: min x, min y, max x, max y
 uniform vec3 sk_invisible;
+uniform int sk_debug_view;      // SKOverviewDebugView
 
 const int CODE_NONE = 0;
 const int CODE_FLOOR = 16;
@@ -52,6 +53,7 @@ const int CODE_DOOR = 20;
 const int CODE_LADDER = 21;
 const int CODE_VEHICLE = 22;
 const int CODE_SECTION = 23;
+const int CODE_PLACEHOLDER = 24;
 const int CODE_TERRAIN = 255;
 
 // The style's knobs.
@@ -226,6 +228,10 @@ void main()
     {
         c = SLATE_WALL * 1.12;
     }
+    else if (code == CODE_PLACEHOLDER)
+    {
+        c = SLATE_WALL * 0.9;
+    }
     else if (code == CODE_VEHICLE)
     {
         c = mix(SLATE_TOP, SLATE_WALL, 0.3);
@@ -258,6 +264,8 @@ void main()
         occ += clamp(dot(v, n) / (len + 0.05), 0.0, 1.0) * (1.0 - smoothstep(1.0, 3.0, len));
     }
     float ao = 1.0 - AO_STRENGTH * occ / 10.0;
+    float debug_crease = 0.0;
+    float debug_cut = 0.0;
     c *= (0.42 + 0.5 * key + 0.28 * sky) * ao;
 
     // A faint crease where faces meet, and the top edge of a wall the cut went through.
@@ -271,9 +279,11 @@ void main()
             crease = 1.0 - abs(dot(m, n));
         }
         c *= 1.0 - 0.25 * smoothstep(0.25, 0.6, crease);
+        debug_crease = smoothstep(0.25, 0.6, crease);
         if ((code == CODE_WALL || code == CODE_COVER || code == CODE_SECTION) && sk_cut - pos.z < max(0.12, px_m * 1.5))
         {
             c = SLATE_TOP * 1.1;
+            debug_cut = 1.0;
         }
     }
 
@@ -293,4 +303,34 @@ void main()
     c = regionStyle(c, pos, px_m);
     c = distanceFade(c, pos);
     frag_color = vec4(clamp(c, 0.0, 1.0), a);
+
+    // Debug views (SKOverviewDebugView), opaque, replacing the styled colour.
+    if (sk_debug_view == 1)
+    {
+        vec3 k = code == CODE_TERRAIN     ? vec3(0.1, 0.5, 0.1)
+               : code == CODE_FLOOR       ? vec3(0.6, 0.6, 0.6)
+               : code == CODE_WALL        ? vec3(0.9, 0.2, 0.2)
+               : code == CODE_COVER       ? vec3(1.0, 0.6, 0.1)
+               : code == CODE_RAMP        ? vec3(0.9, 0.9, 0.2)
+               : code == CODE_DOOR        ? vec3(0.6, 0.3, 1.0)
+               : code == CODE_LADDER      ? vec3(0.2, 1.0, 1.0)
+               : code == CODE_VEHICLE     ? vec3(0.2, 0.4, 1.0)
+               : code == CODE_SECTION     ? vec3(0.5, 0.0, 0.0)
+               : code == CODE_PLACEHOLDER ? vec3(1.0, 0.0, 1.0)
+                                          : vec3(1.0, 1.0, 1.0);
+        frag_color = vec4(invisible && mod(gl_FragCoord.x + gl_FragCoord.y, 4.0) < 2.0 ? vec3(0.0) : k, 1.0);
+    }
+    else if (sk_debug_view == 2)
+    {
+        float band = fract(length(pos - sk_eye) / 2.0);
+        frag_color = vec4(vec3(band), 1.0);
+    }
+    else if (sk_debug_view == 3)
+    {
+        frag_color = vec4(n * 0.5 + 0.5, 1.0);
+    }
+    else if (sk_debug_view == 4)
+    {
+        frag_color = vec4(clamp(AO_STRENGTH * occ / 10.0 * 2.0, 0.0, 1.0), debug_crease, debug_cut, 1.0);
+    }
 }

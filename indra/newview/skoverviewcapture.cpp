@@ -531,6 +531,8 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
         glUniform1f(glGetUniformLocation(prog, "sk_water_z"), region->getWaterHeight());
         glUniform1f(glGetUniformLocation(prog, "sk_water_depth"), skmap::palette::WATER_DEPTH_M);
         uniformColour(prog, "sk_invisible", skmap::palette::DROP_EDGE);
+        static LLCachedControl<U32> debug_view(gSavedSettings, "SKOverviewDebugView", 0);
+        glUniform1i(glGetUniformLocation(prog, "sk_debug_view"), (GLint)(U32)debug_view);
         const LLVector3 region_min = region->getOriginAgent();
         const F32 region_width = region->getWidth();
         glUniform4f(glGetUniformLocation(prog, "sk_region"), region_min.mV[VX], region_min.mV[VY],

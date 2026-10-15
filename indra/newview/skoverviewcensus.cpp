@@ -50,8 +50,9 @@ namespace skoverview
 {
     U8 codeOf(CensusClass cls)
     {
-        static const U8 codes[NUM_CENSUS_CLASSES] = { CODE_FLOOR, CODE_WALL,   CODE_COVER,   CODE_RAMP,
-                                                      CODE_DOOR,  CODE_LADDER, CODE_VEHICLE, CODE_NONE };
+        static const U8 codes[NUM_CENSUS_CLASSES] = { CODE_FLOOR, CODE_WALL,   CODE_COVER,       CODE_RAMP,
+                                                      CODE_DOOR,  CODE_LADDER, CODE_VEHICLE,     CODE_PLACEHOLDER,
+                                                      CODE_NONE };
         return cls < NUM_CENSUS_CLASSES ? codes[cls] : CODE_NONE;
     }
 
@@ -75,6 +76,10 @@ namespace skoverview
         {
             fixed = DOOR; // door leaves are the only parts left out of the avatar class alone
             return true;
+        }
+        if (rec.mProvenance == sknav::Provenance::BOX)
+        {
+            fixed = PLACEHOLDER; // only its bounds are known: its own code, so the debug view can tell it apart
         }
         // Movers' census poses are a scan old; the markers show who is where.
         return !rec.mDynamic && !(rec.mExclude & sknav::EXCLUDE_SOLID);
