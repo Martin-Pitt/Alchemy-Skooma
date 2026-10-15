@@ -963,7 +963,7 @@ void SKNetMap::drawVehicles()
     gGL.end();
 }
 
-const LLFontGL* SKNetMap::codeFont()
+const LLFontGL* skmapdraw::codeFont()
 {
     static LLCachedControl<U32> font_px(gSavedSettings, "SKMapMarkerFontPx", 8);
     static U32 made_for = 0;
@@ -981,14 +981,146 @@ const LLFontGL* SKNetMap::codeFont()
     return font;
 }
 
-void SKNetMap::collectDots()
+F32 skmapdraw::markerRadius(const SKMapPeople::Person& p, skmap::FloorRelation floor)
 {
     static LLCachedControl<bool> chevrons(gSavedSettings, "SKMapFloorChevrons", true);
     static LLCachedControl<bool> labels(gSavedSettings, "SKMapMarkerLabels", true);
     static LLCachedControl<U32> font_px(gSavedSettings, "SKMapMarkerFontPx", 8);
     static LLCachedControl<F32> padding(gSavedSettings, "SKMapMarkerPaddingPx", 0.5f);
-    const F32 px = llclamp(static_cast<F32>(font_px), 8.f, 11.f);
-    const F32 pad = llclamp(static_cast<F32>(padding), 0.f, 3.f);
+    const bool chevron = chevrons && (floor == skmap::FloorRelation::ABOVE || floor == skmap::FloorRelation::BELOW);
+    const bool coded = labels && !p.mCode.empty();
+    const F32 text_w = coded ? codeFont()->getWidthF32(p.mCode) : 0.f;
+    return skmap::markerRadius(chevron, coded, static_cast<U32>(p.mCode.size()), text_w, llclamp(static_cast<F32>(font_px), 8.f, 11.f),
+                               llclamp(static_cast<F32>(padding), 0.f, 3.f));
+}
+
+void skmapdraw::personCode(const SKMapPeople::Person& p, const LLVector2& at, skmap::FloorRelation floor)
+{
+    static LLCachedControl<bool> chevrons(gSavedSettings, "SKMapFloorChevrons", true);
+    static LLCachedControl<bool> labels(gSavedSettings, "SKMapMarkerLabels", true);
+    const bool chevron = chevrons && (floor == skmap::FloorRelation::ABOVE || floor == skmap::FloorRelation::BELOW);
+    // The chevron replaces the code on the dot; the tag keeps it.
+    if (!labels || chevron || p.mVisibility != skmap::Visibility::DOT_CODED || p.mCode.empty())
+    {
+        return;
+    }
+    const LLColor4 ink(skmap::palette::CODE_INK.mR, skmap::palette::CODE_INK.mG, skmap::palette::CODE_INK.mB, 1.f);
+    codeFont()->renderUTF8(p.mCode, 0, at.mV[VX], at.mV[VY], ink, LLFontGL::HCENTER, LLFontGL::VCENTER, LLFontGL::NORMAL,
+                           LLFontGL::NO_SHADOW);
+}
+
+std::vector<skmapdraw::TagText> skmapdraw::tagTexts(const std::vector<LLUUID>& members,
+                                                    const std::function<skmap::FloorRelation(const LLUUID&)>& floor_of,
+                                                    const FloorLabels& floors, F32 widest)
+{
+    static LLCachedControl<bool> code_labels(gSavedSettings, "SKMapMarkerLabels", true);
+    const LLFontGL* font = LLFontGL::getFontSansSerifSmall();
+    const F32 text_room = llmax(8.f, widest - 2.f * skmap::palette::TAG_PAD_X_PX);
+    auto fit = [&](const std::string& text, F32 room) {
+        if (font->getWidthF32(text) <= room)
+        {
+            return text;
+        }
+        // Cut with an ellipsis.
+        const std::string ellipsis = "\xe2\x80\xa6";
+        std::string cut = text;
+        while (!cut.empty() && font->getWidthF32(cut + ellipsis) > room)
+        {
+            // Drop one whole UTF-8 character: its continuation bytes, then its lead.
+            while (!cut.empty() && (static_cast<U8>(cut.back()) & 0xC0) == 0x80)
+            {
+                cut.pop_back();
+            }
+            if (!cut.empty())
+            {
+                cut.pop_back();
+            }
+        }
+        return cut + ellipsis;
+    };
+
+    std::vector<TagText> texts;
+    std::map<std::string, S32> name_counts;
+    for (const LLUUID& id : members)
+    {
+        TagText t;
+        t.mId = id;
+        LLAvatarName av_name;
+        if (LLAvatarNameCache::get(id, &av_name))
+        {
+            t.mName = RlvActions::canShowName(RlvActions::SNC_DEFAULT, id) ? av_name.getDisplayName() : RlvStrings::getAnonym(av_name);
+            t.mDetail = av_name.getUserName();
+        }
+        else
+        {
+            t.mName = LLTrans::getString("LoadingData");
+        }
+        name_counts[t.mName]++;
+        texts.push_back(t);
+    }
+    const std::vector<SKMapPeople::Person>& people = SKMapPeople::instance().people();
+    for (TagText& t : texts)
+    {
+        // In combat the tag leads with the ally's code, as the dot shows it.
+        for (const SKMapPeople::Person& p : people)
+        {
+            if (p.mId == t.mId && code_labels)
+            {
+                t.mCode = p.mCode;
+                break;
+            }
+        }
+        // A second line only when there is something to say: two people sharing a name show
+        // their usernames, else the floor they are on.
+        const bool shared = name_counts[t.mName] > 1 && RlvActions::canShowName(RlvActions::SNC_DEFAULT, t.mId);
+        std::string detail;
+        if (shared)
+        {
+            detail = t.mDetail;
+        }
+        else
+        {
+            const skmap::FloorRelation floor = floor_of(t.mId);
+            detail = floor == skmap::FloorRelation::ABOVE   ? floors.mAbove
+                   : floor == skmap::FloorRelation::BELOW   ? floors.mBelow
+                   : floor == skmap::FloorRelation::UNKNOWN ? floors.mUnknown
+                                                            : std::string();
+        }
+        const F32 code_w = t.mCode.empty() ? 0.f : font->getWidthF32(t.mCode) + skmap::palette::TAG_CODE_GAP_PX;
+        t.mName = fit(t.mName, text_room - code_w);
+        t.mDetail = detail.empty() ? std::string() : fit(detail, text_room);
+        const F32 text_w = llmax(code_w + font->getWidthF32(t.mName), t.mDetail.empty() ? 0.f : font->getWidthF32(t.mDetail));
+        t.mWidth = std::ceil(text_w + 2.f * skmap::palette::TAG_PAD_X_PX);
+        t.mHeight = std::ceil(font->getLineHeight() * (t.mDetail.empty() ? 1.f : 2.f) + 2.f * skmap::palette::TAG_PAD_Y_PX);
+    }
+    return texts;
+}
+
+void skmapdraw::drawTag(const LLRect& r, const TagText& t)
+{
+    const LLFontGL* font = LLFontGL::getFontSansSerifSmall();
+    const LLColor4 bg(skmap::palette::TAG_BG.mR, skmap::palette::TAG_BG.mG, skmap::palette::TAG_BG.mB, skmap::palette::TAG_BG.mA);
+    const LLColor4 text(skmap::palette::TAG_TEXT.mR, skmap::palette::TAG_TEXT.mG, skmap::palette::TAG_TEXT.mB, 1.f);
+    const LLColor4 code(skmap::palette::TAG_CODE.mR, skmap::palette::TAG_CODE.mG, skmap::palette::TAG_CODE.mB, 1.f);
+    const LLColor4 detail(skmap::palette::TAG_DETAIL.mR, skmap::palette::TAG_DETAIL.mG, skmap::palette::TAG_DETAIL.mB, 1.f);
+    gl_rect_2d(r, bg, true);
+    F32 x = r.mLeft + skmap::palette::TAG_PAD_X_PX;
+    const F32 y = r.mTop - skmap::palette::TAG_PAD_Y_PX;
+    if (!t.mCode.empty())
+    {
+        font->renderUTF8(t.mCode, 0, x, y, code, LLFontGL::LEFT, LLFontGL::TOP, LLFontGL::NORMAL, LLFontGL::NO_SHADOW);
+        x += font->getWidthF32(t.mCode) + skmap::palette::TAG_CODE_GAP_PX;
+    }
+    font->renderUTF8(t.mName, 0, x, y, text, LLFontGL::LEFT, LLFontGL::TOP, LLFontGL::NORMAL, LLFontGL::NO_SHADOW);
+    if (!t.mDetail.empty())
+    {
+        font->renderUTF8(t.mDetail, 0, r.mLeft + skmap::palette::TAG_PAD_X_PX, y - font->getLineHeight(), detail, LLFontGL::LEFT,
+                         LLFontGL::TOP, LLFontGL::NORMAL, LLFontGL::NO_SHADOW);
+    }
+}
+
+void SKNetMap::collectDots()
+{
     mDots.clear();
     const std::vector<SKMapPeople::Person>& people = SKMapPeople::instance().people();
     // Each person's storey against the plan as drawn: off it when their air gap is in an indoor space the plan leaves out.
@@ -1005,11 +1137,7 @@ void SKNetMap::collectDots()
     {
         const SKMapPeople::Person& p = people[i];
         const skmap::FloorRelation floor = mFloorOf[i];
-        const bool chevron = chevrons && (floor == skmap::FloorRelation::ABOVE || floor == skmap::FloorRelation::BELOW);
-        const bool coded = labels && !p.mCode.empty();
-        const F32 text_w = coded ? codeFont()->getWidthF32(p.mCode) : 0.f;
-        const F32 radius = llmax(skmap::markerRadius(chevron, coded, static_cast<U32>(p.mCode.size()), text_w, px, pad),
-                                 footprintRadius(gObjectList.findObject(p.mId), mView.pixelsPerMetre()));
+        const F32 radius = llmax(skmapdraw::markerRadius(p, floor), footprintRadius(gObjectList.findObject(p.mId), mView.pixelsPerMetre()));
         const LLVector2 at = mView.toWidget(p.mPos);
         // Only dots the clip leaves some of: hover, tags and picks never name an unseen one.
         if (at.mV[VX] < -radius || at.mV[VY] < -radius || at.mV[VX] > mView.width() + radius || at.mV[VY] > mView.height() + radius)
@@ -1177,31 +1305,14 @@ void SKNetMap::drawEdgeChevrons()
 
 void SKNetMap::drawPeopleCodes()
 {
-    static LLCachedControl<bool> chevrons(gSavedSettings, "SKMapFloorChevrons", true);
-    static LLCachedControl<bool> labels(gSavedSettings, "SKMapMarkerLabels", true);
-    if (!labels)
-    {
-        return;
-    }
-    const LLColor4 ink(skmap::palette::CODE_INK.mR, skmap::palette::CODE_INK.mG, skmap::palette::CODE_INK.mB, 1.f);
     const std::vector<SKMapPeople::Person>& people = SKMapPeople::instance().people();
     for (const DrawnDot& d : mDots)
     {
-        if (d.mPerson >= people.size())
+        if (d.mPerson < people.size())
         {
-            continue;
+            skmapdraw::personCode(people[d.mPerson], d.mPos,
+                                  d.mPerson < mFloorOf.size() ? mFloorOf[d.mPerson] : skmap::FloorRelation::SAME);
         }
-        const SKMapPeople::Person& p = people[d.mPerson];
-        const skmap::FloorRelation floor = d.mPerson < mFloorOf.size() ? mFloorOf[d.mPerson] : skmap::FloorRelation::SAME;
-        const bool chevron = chevrons && (floor == skmap::FloorRelation::ABOVE || floor == skmap::FloorRelation::BELOW);
-        // The chevron replaces the code on the dot; the tag keeps it.
-        if (chevron || p.mVisibility != skmap::Visibility::DOT_CODED || p.mCode.empty())
-        {
-            continue;
-        }
-        const LLVector2 at = d.mPos;
-        codeFont()->renderUTF8(p.mCode, 0, at.mV[VX], at.mV[VY], ink, LLFontGL::HCENTER, LLFontGL::VCENTER, LLFontGL::NORMAL,
-                               LLFontGL::NO_SHADOW);
     }
 }
 
@@ -1262,96 +1373,19 @@ void SKNetMap::updateHover()
     const LLRect screen = calcScreenRect();
     auto down = [&](const LLVector2& local) { return LLVector2(screen.mLeft + local.mV[VX], win_h - (screen.mBottom + local.mV[VY])); };
 
-    const LLFontGL* font = LLFontGL::getFontSansSerifSmall();
-    const F32 widest = skmap::tagMaxWidth(win_w, static_cast<F32>(max_width));
-    const F32 text_room = llmax(8.f, widest - 2.f * skmap::palette::TAG_PAD_X_PX);
-    auto fit = [&](const std::string& text, F32 room) {
-        if (font->getWidthF32(text) <= room)
-        {
-            return text;
-        }
-        // Cut with an ellipsis.
-        const std::string ellipsis = "\xe2\x80\xa6";
-        std::string cut = text;
-        while (!cut.empty() && font->getWidthF32(cut + ellipsis) > room)
-        {
-            // Drop one whole UTF-8 character: its continuation bytes, then its lead.
-            while (!cut.empty() && (static_cast<U8>(cut.back()) & 0xC0) == 0x80)
-            {
-                cut.pop_back();
-            }
-            if (!cut.empty())
-            {
-                cut.pop_back();
-            }
-        }
-        return cut + ellipsis;
-    };
-
-    std::vector<TagText> texts;
-    std::map<std::string, S32> name_counts;
-    for (const LLUUID& id : mHover.members())
-    {
-        TagText t;
-        t.mId = id;
-        LLAvatarName av_name;
-        if (LLAvatarNameCache::get(id, &av_name))
-        {
-            t.mName = RlvActions::canShowName(RlvActions::SNC_DEFAULT, id) ? av_name.getDisplayName() : RlvStrings::getAnonym(av_name);
-            t.mDetail = av_name.getUserName();
-        }
-        else
-        {
-            t.mName = LLTrans::getString("LoadingData");
-        }
-        name_counts[t.mName]++;
-        texts.push_back(t);
-    }
+    const skmapdraw::FloorLabels floors{ mFloorAboveLabel, mFloorBelowLabel, mFloorUnknownLabel };
     const std::vector<SKMapPeople::Person>& people = SKMapPeople::instance().people();
-    static LLCachedControl<bool> code_labels(gSavedSettings, "SKMapMarkerLabels", true);
-    for (TagText& t : texts)
-    {
-        // In combat the tag leads with the ally's code, as the dot shows it.
-        for (const SKMapPeople::Person& p : people)
+    auto floor_of = [&](const LLUUID& id) {
+        for (size_t i = 0; i < people.size(); ++i)
         {
-            if (p.mId == t.mId && code_labels)
+            if (people[i].mId == id)
             {
-                t.mCode = p.mCode;
-                break;
+                return i < mFloorOf.size() ? mFloorOf[i] : people[i].mFloor;
             }
         }
-        // A second line only when there is something to say: two people sharing a name show
-        // their usernames, else the floor they are on.
-        const bool shared = name_counts[t.mName] > 1 && RlvActions::canShowName(RlvActions::SNC_DEFAULT, t.mId);
-        std::string detail;
-        if (shared)
-        {
-            detail = t.mDetail;
-        }
-        else
-        {
-            for (size_t i = 0; i < people.size(); ++i)
-            {
-                if (people[i].mId != t.mId)
-                {
-                    continue;
-                }
-                const skmap::FloorRelation floor = i < mFloorOf.size() ? mFloorOf[i] : people[i].mFloor;
-                detail = floor == skmap::FloorRelation::ABOVE   ? mFloorAboveLabel
-                       : floor == skmap::FloorRelation::BELOW   ? mFloorBelowLabel
-                       : floor == skmap::FloorRelation::UNKNOWN ? mFloorUnknownLabel
-                                                                    : std::string();
-                break;
-            }
-        }
-        const F32 code_w = t.mCode.empty() ? 0.f : font->getWidthF32(t.mCode) + skmap::palette::TAG_CODE_GAP_PX;
-        t.mName = fit(t.mName, text_room - code_w);
-        t.mDetail = detail.empty() ? std::string() : fit(detail, text_room);
-        const F32 text_w = llmax(code_w + font->getWidthF32(t.mName), t.mDetail.empty() ? 0.f : font->getWidthF32(t.mDetail));
-        t.mWidth = std::ceil(text_w + 2.f * skmap::palette::TAG_PAD_X_PX);
-        t.mHeight = std::ceil(font->getLineHeight() * (t.mDetail.empty() ? 1.f : 2.f) + 2.f * skmap::palette::TAG_PAD_Y_PX);
-    }
-    mTagTexts.swap(texts);
+        return skmap::FloorRelation::SAME;
+    };
+    mTagTexts = skmapdraw::tagTexts(mHover.members(), floor_of, floors, skmap::tagMaxWidth(win_w, static_cast<F32>(max_width)));
 
     skmap::LabelLayout::Input in;
     in.mPointer = down(pointer);
@@ -1411,11 +1445,6 @@ void SKNetMap::drawConnectors()
 
 void SKNetMap::drawTags()
 {
-    const LLFontGL* font = LLFontGL::getFontSansSerifSmall();
-    const LLColor4 bg(skmap::palette::TAG_BG.mR, skmap::palette::TAG_BG.mG, skmap::palette::TAG_BG.mB, skmap::palette::TAG_BG.mA);
-    const LLColor4 text(skmap::palette::TAG_TEXT.mR, skmap::palette::TAG_TEXT.mG, skmap::palette::TAG_TEXT.mB, 1.f);
-    const LLColor4 code(skmap::palette::TAG_CODE.mR, skmap::palette::TAG_CODE.mG, skmap::palette::TAG_CODE.mB, 1.f);
-    const LLColor4 detail(skmap::palette::TAG_DETAIL.mR, skmap::palette::TAG_DETAIL.mG, skmap::palette::TAG_DETAIL.mB, 1.f);
     for (const skmap::LabelLayout::Tag& tag : mLabels.tags())
     {
         const TagText* t = nullptr;
@@ -1431,21 +1460,7 @@ void SKNetMap::drawTags()
         {
             continue;
         }
-        const LLRect r = tagRect(tag);
-        gl_rect_2d(r, bg, true);
-        F32 x = r.mLeft + skmap::palette::TAG_PAD_X_PX;
-        const F32 y = r.mTop - skmap::palette::TAG_PAD_Y_PX;
-        if (!t->mCode.empty())
-        {
-            font->renderUTF8(t->mCode, 0, x, y, code, LLFontGL::LEFT, LLFontGL::TOP, LLFontGL::NORMAL, LLFontGL::NO_SHADOW);
-            x += font->getWidthF32(t->mCode) + skmap::palette::TAG_CODE_GAP_PX;
-        }
-        font->renderUTF8(t->mName, 0, x, y, text, LLFontGL::LEFT, LLFontGL::TOP, LLFontGL::NORMAL, LLFontGL::NO_SHADOW);
-        if (!t->mDetail.empty())
-        {
-            font->renderUTF8(t->mDetail, 0, r.mLeft + skmap::palette::TAG_PAD_X_PX, y - font->getLineHeight(), detail, LLFontGL::LEFT,
-                             LLFontGL::TOP, LLFontGL::NORMAL, LLFontGL::NO_SHADOW);
-        }
+        skmapdraw::drawTag(tagRect(tag), *t);
     }
 }
 

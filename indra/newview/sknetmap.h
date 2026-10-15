@@ -30,6 +30,7 @@
 #include "lluuid.h"
 
 #include <boost/signals2.hpp>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -45,6 +46,40 @@ class SKMapComposite;
 class SKMapObjects;
 class SKMapParcels;
 class SKPopupPanes;
+
+/// Labels shared by every view that draws the mini-map's people: the codes on their markers and the hover nametags.
+namespace skmapdraw
+{
+    /// What one nametag says.
+    struct TagText
+    {
+        LLUUID mId;
+        std::string mCode;
+        std::string mName;
+        std::string mDetail;
+        F32 mWidth = 0.f;
+        F32 mHeight = 0.f;
+    };
+    /// The second line a tag gives someone on another floor or an unknown one.
+    struct FloorLabels
+    {
+        std::string mAbove;
+        std::string mBelow;
+        std::string mUnknown;
+    };
+
+    /// The font the markers' codes are drawn in, at SKMapMarkerFontPx.
+    const LLFontGL* codeFont();
+    /// A marker's radius in pixels, grown to hold the person's code when SKMapMarkerLabels shows it.
+    F32 markerRadius(const SKMapPeople::Person& p, skmap::FloorRelation floor);
+    /// The person's code centred on their marker when it shows there, in the current UI space; outside any batch.
+    void personCode(const SKMapPeople::Person& p, const LLVector2& at, skmap::FloorRelation floor);
+    /// The tags for the hovered people in hover order, each at most widest pixels; floor_of gives a member's storey.
+    std::vector<TagText> tagTexts(const std::vector<LLUUID>& members, const std::function<skmap::FloorRelation(const LLUUID&)>& floor_of,
+                                  const FloorLabels& floors, F32 widest);
+    /// One nametag in rect r, in the current UI space.
+    void drawTag(const LLRect& r, const TagText& t);
+}
 
 class SKNetMap : public LLUICtrl
 {
@@ -153,8 +188,6 @@ private:
     void drawEvents();
     void drawFiringLines();
     void drawProjectiles();
-    /// The font the dots' codes are drawn in, at SKMapMarkerFontPx.
-    static const LLFontGL* codeFont();
     void drawTracking();
     void drawTrackingAt(const LLVector3d& pos, const LLColor4& colour);
     void drawNorth();
@@ -191,16 +224,7 @@ private:
     skmap::HoverSet mHover;
     skmap::LabelLayout mLabels;
     bool mEscDown = false;
-    /// What each shown tag says, in hover order.
-    struct TagText
-    {
-        LLUUID mId;
-        std::string mCode;
-        std::string mName;
-        std::string mDetail;
-        F32 mWidth = 0.f;
-        F32 mHeight = 0.f;
-    };
+    using TagText = skmapdraw::TagText;
     std::vector<TagText> mTagTexts;
     LLHandle<SKPopupPanes> mPopup;
     LLVector3d mPopupWorldPos;
