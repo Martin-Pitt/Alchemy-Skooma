@@ -70,8 +70,9 @@ extern bool gCubeSnapshot;
 
 namespace
 {
-    LLRenderTarget sCapture;  // depth, and a class code in R (skoverview::Code), an invisible face in B
-    LLRenderTarget sResolved; // the map, RGBA8
+    LLRenderTarget sCapture;      // depth, and a class code in R (skoverview::Code), an invisible face in B
+    LLRenderTarget sCaptureNear;  // the same for the agent's neighbours, at half the resolution
+    LLRenderTarget sCaptureFar;   // and for regions further off, at a quarter
     LLRenderTarget sTacticalCapture;
     LLRenderTarget sTacticalResolved;
     LLGLSLShader sResolve;
@@ -84,6 +85,7 @@ namespace
     const F32 TACTICAL_MIN_M = 8.f;
     const F32 TACTICAL_MAX_M = 400.f;
     const F64 TACTICAL_TAP_S = 0.2;
+    const F32 OPEN_CUT_ABOVE_M = 200.f; // an uncut map's ceiling above the agent's cut: roofs in, skyboxes out
 
     void uniformColour(GLint prog, const char* name, const skmap::PaletteColour& c)
     {
@@ -91,6 +93,18 @@ namespace
     }
 
 }
+
+struct SKOverviewCapture::RegionMap
+{
+    U64 mHandle = 0;
+    LLRenderTarget mResolved; // the map, RGBA8
+    LLVector3d mOrigin;
+    F32 mWidth = 0.f;
+    F64 mLast = -1.0;
+    U32 mRing = 0;            // 0 the agent's region, 1 a neighbour, more the further off
+    bool mCut = false;        // whether it was taken through the agent's cut
+    bool mValid = false;
+};
 
 SKOverviewCapture::SKOverviewCapture() = default;
 SKOverviewCapture::~SKOverviewCapture() = default;
@@ -191,7 +205,8 @@ void SKOverviewCapture::cleanupGL()
         return;
     }
     sCapture.release();
-    sResolved.release();
+    sCaptureNear.release();
+    sCaptureFar.release();
     sTacticalCapture.release();
     sTacticalResolved.release();
     sResolve.unload();
@@ -202,7 +217,8 @@ void SKOverviewCapture::cleanupGL()
 void SKOverviewCapture::releaseGL()
 {
     sCapture.release();
-    sResolved.release();
+    sCaptureNear.release();
+    sCaptureFar.release();
     sTacticalCapture.release();
     sTacticalResolved.release();
     sResolve.unload();
@@ -214,21 +230,30 @@ void SKOverviewCapture::releaseGL()
         sQueries[0] = sQueries[1] = 0;
     }
     mCensus.release();
+    mMaps.clear();
     mTacticalKey.mValid = false;
     mTiming = false;
-    mValid = false;
     mGLFailed = false;
 }
 
 void SKOverviewCapture::updateDemand(bool wanted)
 {
-    if (wanted == mDemanding || !SKWorldCensus::instanceExists())
+    if (!SKWorldCensus::instanceExists())
+    {
+        return;
+    }
+    // The region maps want the census over the agent's neighbours as well; the tactical view only around it.
+    static LLCachedControl<bool> maps(gSavedSettings, "SKMapCaptureBase", false);
+    static LLCachedControl<F32> maps_range(gSavedSettings, "SKOverviewCensusRange", 384.f);
+    const F32 range = maps ? llmax((F32)maps_range, CENSUS_RANGE_M) : CENSUS_RANGE_M;
+    if (wanted == mDemanding && (!wanted || range == mDemandRange))
     {
         return;
     }
     if (wanted)
     {
-        SKWorldCensus::instance().addDemand("overview", CENSUS_RANGE_M);
+        SKWorldCensus::instance().addDemand("overview", range);
+        mDemandRange = range;
     }
     else
     {
@@ -237,9 +262,28 @@ void SKOverviewCapture::updateDemand(bool wanted)
     mDemanding = wanted;
 }
 
-U32 SKOverviewCapture::texture() const
+std::vector<SKOverviewCapture::Tile> SKOverviewCapture::tiles() const
 {
-    return mValid && sResolved.isComplete() ? sResolved.getTexture() : 0;
+    std::vector<Tile> out;
+    const RegionMap* agent = nullptr;
+    for (const std::unique_ptr<RegionMap>& map : mMaps)
+    {
+        if (!map->mValid || !map->mResolved.isComplete())
+        {
+            continue;
+        }
+        if (map->mRing == 0)
+        {
+            agent = map.get();
+            continue;
+        }
+        out.push_back({ map->mResolved.getTexture(), map->mOrigin, map->mWidth });
+    }
+    if (agent)
+    {
+        out.push_back({ agent->mResolved.getTexture(), agent->mOrigin, agent->mWidth });
+    }
+    return out;
 }
 
 bool SKOverviewCapture::ensureShaders()
@@ -294,6 +338,9 @@ bool SKOverviewCapture::ensureGL(LLRenderTarget& capture, LLRenderTarget& resolv
     if (capture.isComplete() && ((S32)capture.getWidth() != w || (S32)capture.getHeight() != h))
     {
         capture.release();
+    }
+    if (resolved.isComplete() && ((S32)resolved.getWidth() != w || (S32)resolved.getHeight() != h))
+    {
         resolved.release();
     }
     bool ok = capture.isComplete() ||
@@ -406,12 +453,13 @@ void SKOverviewCapture::frame()
 
     static LLCachedControl<bool> enabled(gSavedSettings, "SKMapCaptureBase", false);
     static LLCachedControl<bool> tactical_on(gSavedSettings, "SKTacticalOverview", false);
-    static LLCachedControl<F32> refresh(gSavedSettings, "SKOverviewRefresh", 1.f);
-    const F64 now = LLFrameTimer::getUptimeSeconds().value();
-    if (enabled && (mLastCapture < 0.0 || now - mLastCapture >= llmax((F32)refresh, 0.05f)))
+    if (enabled)
     {
-        mLastCapture = now;
-        captureMap();
+        captureMaps(LLFrameTimer::getUptimeSeconds().value());
+    }
+    else
+    {
+        mMaps.clear();
     }
     if (tactical_on)
     {
@@ -423,8 +471,6 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
 {
     const S32 w = capture.getWidth();
     const S32 h = capture.getHeight();
-    LLViewerRegion* region = gAgent.getRegion();
-
     S32 saved_viewport[4];
     memcpy(saved_viewport, gGLViewport, sizeof(saved_viewport));
     const U32 saved_res_x = LLRenderTarget::sCurResX;
@@ -565,15 +611,12 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
         glUniform1f(glGetUniformLocation(prog, "sk_top_down"), shot.mTopDown ? 1.f : 0.f);
         glUniform1f(glGetUniformLocation(prog, "sk_agent_z"), shot.mFloor);
         glUniform1f(glGetUniformLocation(prog, "sk_cut"), shot.mCut);
-        glUniform1f(glGetUniformLocation(prog, "sk_water_z"), region->getWaterHeight());
+        glUniform1f(glGetUniformLocation(prog, "sk_water_z"), shot.mWater);
         glUniform1f(glGetUniformLocation(prog, "sk_water_depth"), skmap::palette::WATER_DEPTH_M);
         uniformColour(prog, "sk_invisible", skmap::palette::DROP_EDGE);
         static LLCachedControl<U32> debug_view(gSavedSettings, "SKOverviewDebugView", 0);
         glUniform1i(glGetUniformLocation(prog, "sk_debug_view"), (GLint)(U32)debug_view);
-        const LLVector3 region_min = region->getOriginAgent();
-        const F32 region_width = region->getWidth();
-        glUniform4f(glGetUniformLocation(prog, "sk_region"), region_min.mV[VX], region_min.mV[VY],
-                    region_min.mV[VX] + region_width, region_min.mV[VY] + region_width);
+        glUniform4fv(glGetUniformLocation(prog, "sk_region"), 1, shot.mRegion.mV);
         gPipeline.mScreenTriangleVB->setBuffer();
         gPipeline.mScreenTriangleVB->drawArrays(LLRender::TRIANGLES, 0, 3);
         gGL.getTextureSlot(1)->unbind();
@@ -590,21 +633,102 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
     return draws;
 }
 
-bool SKOverviewCapture::captureMap()
+void SKOverviewCapture::captureMaps(F64 now)
+{
+    LLViewerRegion* agent_region = gAgent.getRegion();
+    const auto& regions = LLWorld::getInstance()->getRegionList();
+    // Regions that left the world take their maps with them.
+    mMaps.erase(std::remove_if(mMaps.begin(), mMaps.end(),
+                               [&regions](const std::unique_ptr<RegionMap>& map)
+                               {
+                                   return std::none_of(regions.begin(), regions.end(), [&map](LLViewerRegion* r)
+                                                       { return r->getHandle() == map->mHandle; });
+                               }),
+                 mMaps.end());
+
+    // A region's ring: 0 the agent's, 1 one touching it, then one more per region width of gap between them.
+    const LLVector3d agent_min = agent_region->getOriginGlobal();
+    const F64 agent_w = agent_region->getWidth();
+    auto ringOf = [&](LLViewerRegion* region) -> U32
+    {
+        if (region == agent_region)
+        {
+            return 0;
+        }
+        const LLVector3d min = region->getOriginGlobal();
+        const F64 w = region->getWidth();
+        const F64 gap_x = llmax(min.mdV[VX] - (agent_min.mdV[VX] + agent_w), agent_min.mdV[VX] - (min.mdV[VX] + w), 0.0);
+        const F64 gap_y = llmax(min.mdV[VY] - (agent_min.mdV[VY] + agent_w), agent_min.mdV[VY] - (min.mdV[VY] + w), 0.0);
+        return 1 + (U32)(llmax(gap_x, gap_y) / llmax(agent_w, 1.0) + 0.001);
+    };
+
+    static LLCachedControl<F32> refresh(gSavedSettings, "SKOverviewRefresh", 1.f);
+    static LLCachedControl<F32> near_refresh(gSavedSettings, "SKOverviewNeighbourRefresh", 5.f);
+    static LLCachedControl<F32> far_refresh(gSavedSettings, "SKOverviewFarRefresh", 30.f);
+    RegionMap* due = nullptr;
+    LLViewerRegion* due_region = nullptr;
+    F64 most_overdue = 0.0;
+    for (LLViewerRegion* region : regions)
+    {
+        auto it = std::find_if(mMaps.begin(), mMaps.end(),
+                               [region](const std::unique_ptr<RegionMap>& map) { return map->mHandle == region->getHandle(); });
+        if (it == mMaps.end())
+        {
+            mMaps.push_back(std::make_unique<RegionMap>());
+            mMaps.back()->mHandle = region->getHandle();
+            it = std::prev(mMaps.end());
+        }
+        RegionMap& map = **it;
+        map.mRing = ringOf(region);
+        if (map.mRing == 0)
+        {
+            // The agent's region on its own timer, and at once when the agent has just crossed into it uncut.
+            if (map.mLast < 0.0 || !map.mCut || now - map.mLast >= llmax((F32)refresh, 0.05f))
+            {
+                if (!captureMap(map, region, true))
+                {
+                    return; // a GL failure releases the maps
+                }
+                map.mLast = now;
+            }
+            continue;
+        }
+        // Neighbours every few seconds, regions further off much less often the further they are; a region never
+        // taken, or still showing the cut it had as the agent's, first, nearest first.
+        const F64 period = map.mRing == 1 ? llmax((F32)near_refresh, 0.1f) : llmax((F32)far_refresh, 1.f) * (map.mRing - 1);
+        const F64 overdue = (map.mLast < 0.0 || map.mCut) ? 1.0e9 / map.mRing : (now - map.mLast) / period;
+        if (overdue >= 1.0 && overdue > most_overdue)
+        {
+            most_overdue = overdue;
+            due = &map;
+            due_region = region;
+        }
+    }
+    // One region other than the agent's a frame, so a ring coming into view does not cost a burst.
+    if (due && captureMap(*due, due_region, false))
+    {
+        due->mLast = now;
+    }
+}
+
+bool SKOverviewCapture::captureMap(RegionMap& map, LLViewerRegion* region, bool agent)
 {
     static LLCachedControl<U32> res_setting(gSavedSettings, "SKOverviewResolution", 1024);
-    const S32 res = llclamp((S32)(U32)res_setting, 64, 4096);
-    if (!ensureGL(sCapture, sResolved, res, res))
+    const S32 full = llclamp((S32)(U32)res_setting, 64, 4096);
+    const S32 res = agent ? full : llmax(full >> (map.mRing == 1 ? 1 : 2), 64);
+    LLRenderTarget& capture = agent ? sCapture : map.mRing == 1 ? sCaptureNear : sCaptureFar;
+    if (!ensureGL(capture, map.mResolved, res, res))
     {
         return false;
     }
 
     LLTimer cpu_timer;
-    LLViewerRegion* region = gAgent.getRegion();
     const F32 width = region->getWidth();
     const LLVector3 origin = region->getOriginAgent();
-    F32 floor_z, top;
-    cutHeights(gAgent.getPositionGlobal(), gAgent.getPositionAgent().mV[VZ], floor_z, top);
+    F32 floor_z, cut_z;
+    cutHeights(gAgent.getPositionGlobal(), gAgent.getPositionAgent().mV[VZ], floor_z, cut_z);
+    // Only the agent's own region is cut at its storey; the others show their roofs.
+    const F32 top = agent ? cut_z : cut_z + OPEN_CUT_ABOVE_M;
     const F32 bottom = llmin(top - 64.f, -32.f);
     const LLVector3 centre(origin.mV[VX] + width * 0.5f, origin.mV[VY] + width * 0.5f, top);
 
@@ -620,6 +744,10 @@ bool SKOverviewCapture::captureMap()
     shot.mEye = centre + LLVector3(0.f, 0.f, 1000.f); // far above: outline tolerance as for a distant camera
     shot.mCut = top;
     shot.mFloor = floor_z;
+    shot.mWater = region->getWaterHeight();
+    // Another region is neither dimmed as outside the agent's nor edged as it is: its rectangle is unbounded.
+    shot.mRegion = agent ? LLVector4(origin.mV[VX], origin.mV[VY], origin.mV[VX] + width, origin.mV[VY] + width)
+                         : LLVector4(-1.0e6f, -1.0e6f, 1.0e6f, 1.0e6f);
     shot.mTopDown = true;
 
     // The cull camera: ortho planes for the partitions, and a perspective far enough above to hold the region for
@@ -637,28 +765,30 @@ bool SKOverviewCapture::captureMap()
     shot.mCull.setModelview(shot.mView);
     shot.mCull.setProjection(shot.mProj);
 
-    if (!mTiming)
+    const bool time = agent && !mTiming;
+    if (time)
     {
         glQueryCounter(sQueries[0], GL_TIMESTAMP);
     }
-    const U32 draws = render(sCapture, sResolved, shot);
-    if (!mTiming)
+    const U32 draws = render(capture, map.mResolved, shot);
+    if (time)
     {
         glQueryCounter(sQueries[1], GL_TIMESTAMP);
         mTiming = true;
     }
 
-    mOrigin = region->getOriginGlobal();
-    mWidth = width;
-    mAgentZ = floor_z;
-    mTop = top;
-    mBottom = bottom;
-    mValid = true;
-    mStats.resolution = res;
-    mStats.draws = draws;
-    mStats.census_tris = mCensus.triangles();
-    mStats.cpu_ms = cpu_timer.getElapsedTimeF32() * 1000.f;
-    ++mStats.captures;
+    map.mOrigin = region->getOriginGlobal();
+    map.mWidth = width;
+    map.mCut = agent;
+    map.mValid = true;
+    if (agent)
+    {
+        mStats.resolution = res;
+        mStats.draws = draws;
+        mStats.census_tris = mCensus.triangles();
+        mStats.cpu_ms = cpu_timer.getElapsedTimeF32() * 1000.f;
+        ++mStats.captures;
+    }
     return true;
 }
 
@@ -718,6 +848,14 @@ void SKOverviewCapture::tactical()
     shot.mEye = eye;
     shot.mCut = cut_z;
     shot.mFloor = floor_z;
+    {
+        LLViewerRegion* region = gAgent.getRegion();
+        const LLVector3 region_min = region->getOriginAgent();
+        const F32 region_width = region->getWidth();
+        shot.mWater = region->getWaterHeight();
+        shot.mRegion = LLVector4(region_min.mV[VX], region_min.mV[VY], region_min.mV[VX] + region_width,
+                                 region_min.mV[VY] + region_width);
+    }
     shot.mTopDown = false;
     shot.mCull = *LLViewerCamera::getInstance();
     shot.mCull.setView(fov);

@@ -5329,13 +5329,46 @@
         <key>SKOverviewRefresh</key>
         <map>
             <key>Comment</key>
-            <string>Seconds between top-down captures of the region.</string>
+            <string>Seconds between top-down captures of the agent's region.</string>
             <key>Persist</key>
             <integer>1</integer>
             <key>Type</key>
             <string>F32</string>
             <key>Value</key>
             <real>1.0</real>
+        </map>
+        <key>SKOverviewCensusRange</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres around the agent the census covers for the mini-map's region maps, so the neighbouring regions show their buildings.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>384.0</real>
+        </map>
+        <key>SKOverviewNeighbourRefresh</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds between top-down captures of a region touching the agent's; these are not cut, so roofs show.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>5.0</real>
+        </map>
+        <key>SKOverviewFarRefresh</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds between top-down captures of a region one region width beyond the neighbours, multiplied for each further width.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>30.0</real>
         </map>
         <key>SKOverviewResolution</key>
         <map>

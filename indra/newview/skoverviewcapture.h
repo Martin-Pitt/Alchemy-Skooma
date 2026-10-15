@@ -35,12 +35,15 @@
 #include "skmaplabels.h"
 #include "skoverviewcensus.h"
 #include "v3dmath.h"
+#include "v4math.h"
 
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
 class LLRenderTarget;
+class LLViewerRegion;
 namespace skmapdraw
 {
     struct TagText;
@@ -49,8 +52,9 @@ class SKPopupPanes;
 
 // Renders terrain and the census's shapes below a cut plane at the
 // navmesh floor under the agent plus SKOverviewCutHeight, each writing a class code, then resolves depth and codes
-// into an RGBA8 map. Two shots share the passes: the straight-down map of the agent's region for the mini-map
-// (SKMapCaptureBase, every SKOverviewRefresh seconds) and the tactical view (SKTacticalOverview), a tilted orbit
+// into an RGBA8 map. Two kinds of shot share the passes: straight-down maps of every connected region for the mini-map
+// (SKMapCaptureBase; the agent's region cut, every SKOverviewRefresh seconds, its neighbours uncut and less often,
+// regions further off rarer still) and the tactical view (SKTacticalOverview), a tilted orbit
 // camera around the agent drawn over the main view every frame.
 class SKOverviewCapture : public LLSingleton<SKOverviewCapture>
 {
@@ -86,10 +90,15 @@ public:
     /// The tactical overview key: held, it shows the view until released; tapped, it latches it until the next tap.
     static void handleTacticalKey(bool down);
 
-    /// The resolved map, 0 until the first capture; it covers the region at originGlobal() by regionWidth() metres.
-    U32 texture() const;
-    const LLVector3d& originGlobal() const { return mOrigin; }
-    F32 regionWidth() const { return mWidth; }
+    /// A region's resolved map: it covers the region at mOrigin by mWidth metres.
+    struct Tile
+    {
+        U32 mTexture = 0;
+        LLVector3d mOrigin;
+        F32 mWidth = 0.f;
+    };
+    /// The captured regions' maps, the agent's last so it draws over its neighbours' edges.
+    std::vector<Tile> tiles() const;
     const Stats& stats() const { return mStats; }
 
 private:
@@ -101,8 +110,12 @@ private:
         LLVector3 mEye;     // agent space
         F32 mCut = 0.f;     // agent-space z
         F32 mFloor = 0.f;   // the height colours are relative to
+        F32 mWater = 0.f;   // the water surface's height
+        LLVector4 mRegion;  // the region styled as the agent's: min x, min y, max x, max y, agent space
         bool mTopDown = false;
     };
+    /// A region's top-down map and when it was last taken.
+    struct RegionMap;
 
     void frame();
     void updateDemand(bool wanted);
@@ -116,7 +129,9 @@ private:
     bool ensureShaders();
     void releaseGL();
     U32 render(LLRenderTarget& capture, LLRenderTarget& resolved, const Shot& shot);
-    bool captureMap();
+    /// Captures the region maps that are due: the agent's on its timer, then the most overdue other one.
+    void captureMaps(F64 now);
+    bool captureMap(RegionMap& map, LLViewerRegion* region, bool agent);
     void tactical();
     void composite();
     bool rightClick(S32 x, S32 y);
@@ -125,16 +140,11 @@ private:
     void readTimer();
 
     SKOverviewCensus mCensus;
-    LLVector3d mOrigin;
-    F32 mWidth = 0.f;
-    F64 mLastCapture = -1.0;
-    F32 mAgentZ = 0.f;
-    F32 mTop = 0.f;
-    F32 mBottom = 0.f;
+    std::vector<std::unique_ptr<RegionMap>> mMaps;
     Stats mStats;
+    F32 mDemandRange = 0.f;
     bool mGLFailed = false;
     bool mTiming = false;
-    bool mValid = false;
     bool mDemanding = false;
     LLMatrix4a mTacticalView;
     LLMatrix4a mTacticalProj;
