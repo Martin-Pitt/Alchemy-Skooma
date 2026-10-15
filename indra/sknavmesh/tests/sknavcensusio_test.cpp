@@ -127,6 +127,7 @@ namespace
         a->mMax.set(256007.0, 255752.0, 9.5);
         auto b = std::make_shared<Record>(*a);
         b->mPart = id(5);
+        b->mProvenance = Provenance::SIM;
         auto hull = std::make_shared<Record>();
         hull->mRoot = id(6);
         hull->mPart = id(6);
