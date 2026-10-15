@@ -31,12 +31,19 @@
 #include "llsingleton.h"
 #include "lluuid.h"
 #include "v2math.h"
+#include "skmaplabels.h"
 #include "skoverviewcensus.h"
 #include "v3dmath.h"
 
 #include <string>
+#include <utility>
+#include <vector>
 
 class LLRenderTarget;
+namespace skmapdraw
+{
+    struct TagText;
+}
 
 // Renders terrain, the rendered world (the ghost, SKOverviewGhost) and the census's shapes below a cut plane at the
 // navmesh floor under the agent plus SKOverviewCutHeight, each writing a class code, then resolves depth and codes
@@ -132,6 +139,12 @@ private:
         LLVector2 mAt;      // overview pixels
     };
     std::vector<TacticalMark> mTacticalMarks;  // the markers drawn last frame, for picks
+    // The mini-map's hover nametags, laid out in UI pixels over the overview.
+    void drawTacticalLabels(const std::vector<std::pair<size_t, LLVector2>>& drawn, S32 vw, S32 vh);
+    skmap::HoverSet mTacticalHover;
+    skmap::LabelLayout mTacticalLabels;
+    std::vector<skmapdraw::TagText> mTacticalTagTexts;
+    bool mTacticalEscDown = false;
 
 };
 

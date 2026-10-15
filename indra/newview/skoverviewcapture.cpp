@@ -40,6 +40,7 @@
 #include "llviewerwindow.h"
 #include "llwindow.h"
 #include "llcharacter.h"
+#include "llfontgl.h"
 #include "llframetimer.h"
 #include "llgl.h"
 #include "llglslshader.h"
@@ -787,9 +788,12 @@ void SKOverviewCapture::composite()
         const F64 reach = mTacticalReach;
         SKMapPeople::instance().noteDrawn(centre - LLVector3d(reach, reach, reach), centre + LLVector3d(reach, reach, reach));
         mTacticalMarks.clear();
+        std::vector<std::pair<size_t, LLVector2>> drawn;
+        const std::vector<SKMapPeople::Person>& people = SKMapPeople::instance().people();
         gGL.begin(LLRender::TRIANGLES);
-        for (const SKMapPeople::Person& p : SKMapPeople::instance().people())
+        for (size_t i = 0; i < people.size(); ++i)
         {
+            const SKMapPeople::Person& p = people[i];
             const LLVector3 pos = gAgent.getPosAgentFromGlobal(p.mPos);
             LLVector2 at, ahead;
             if (!project(pos, at))
@@ -797,9 +801,10 @@ void SKOverviewCapture::composite()
                 continue;
             }
             const bool has_ahead = p.mHasHeading && ground_ahead(pos, at, p.mHeading, ahead);
-            const F32 radius = skmapdraw::plainMarkerRadius(skmap::FloorRelation::SAME);
+            const F32 radius = skmapdraw::markerRadius(p, skmap::FloorRelation::SAME);
             skmapdraw::personMarker(p, at, radius, has_ahead ? &ahead : nullptr, skmap::FloorRelation::SAME, px);
             mTacticalMarks.push_back({ p.mId, at });
+            drawn.emplace_back(i, at);
         }
         if (isAgentAvatarValid())
         {
@@ -824,6 +829,7 @@ void SKOverviewCapture::composite()
         }
         gGL.end();
         gGL.flush();
+        drawTacticalLabels(drawn, vw, vh);
         gGL.flush();
         gUIProgram.unbind();
         gGL.matrixMode(LLRender::MM_PROJECTION);
@@ -835,4 +841,130 @@ void SKOverviewCapture::composite()
     mLastCompositeFrame = LLFrameTimer::getFrameCount();
     glViewport(gGLViewport[0], gGLViewport[1], gGLViewport[2], gGLViewport[3]);
     LL_INFOS_ONCE("SKOverview") << "tactical overview composited at " << vx << "," << vy << " " << vw << "x" << vh << LL_ENDL;
+}
+
+void SKOverviewCapture::drawTacticalLabels(const std::vector<std::pair<size_t, LLVector2>>& drawn, S32 vw, S32 vh)
+{
+    static LLCachedControl<F32> enter(gSavedSettings, "SKMapHoverEnterPx", skmap::HOVER_ENTER_PX);
+    static LLCachedControl<F32> exit(gSavedSettings, "SKMapHoverExitPx", skmap::HOVER_EXIT_PX);
+    static LLCachedControl<U32> max_width(gSavedSettings, "SKMapNametagMaxWidth", 190);
+    LL_PROFILE_ZONE_NAMED("sk tactical labels");
+    // Labels work in UI pixels, as on the mini-map, so they keep its sizes under any display scale.
+    const LLVector2 scale(LLFontGL::sScaleX, LLFontGL::sScaleY);
+    const F32 ui_w = vw / scale.mV[VX], ui_h = vh / scale.mV[VY];
+    auto ui = [&](const LLVector2& px) { return LLVector2(px.mV[VX] / scale.mV[VX], px.mV[VY] / scale.mV[VY]); };
+    auto down = [&](const LLVector2& at) { return LLVector2(at.mV[VX], ui_h - at.mV[VY]); };
+    const std::vector<SKMapPeople::Person>& people = SKMapPeople::instance().people();
+
+    const LLFontGL::UIOrigin origin = LLFontGL::sCurOrigin;
+    const F32 depth = LLFontGL::sCurDepth, cur_sx = LLFontGL::sCurScaleX, cur_sy = LLFontGL::sCurScaleY;
+    LLFontGL::sCurOrigin.set(0.f, 0.f);
+    LLFontGL::sCurDepth = 0.f;
+    LLFontGL::sCurScaleX = LLFontGL::sCurScaleY = 1.f;
+    gGL.pushUIMatrix();
+    gGL.loadUIIdentity();
+    gGL.scaleUI(scale.mV[VX], scale.mV[VY], 1.f);
+
+    for (const auto& [index, at] : drawn)
+    {
+        if (index < people.size())
+        {
+            skmapdraw::personCode(people[index], ui(at), skmap::FloorRelation::SAME);
+        }
+    }
+
+    // Who is under the pointer, by the mini-map's hover rules.
+    const LLVector2 pointer(static_cast<F32>(gViewerWindow->getCurrentMouseX()) - mTacticalViewport[0] / scale.mV[VX],
+                            static_cast<F32>(gViewerWindow->getCurrentMouseY()) - mTacticalViewport[1] / scale.mV[VY]);
+    mTacticalHover.notePointer(pointer);
+    const bool esc = gKeyboard && gKeyboard->getKeyDown(KEY_ESCAPE);
+    if (esc && !mTacticalEscDown && !mTacticalHover.empty())
+    {
+        mTacticalHover.suppress(pointer);
+    }
+    mTacticalEscDown = esc;
+    std::vector<skmap::HoverDot> dots;
+    for (const auto& [index, at] : drawn)
+    {
+        if (index < people.size())
+        {
+            dots.push_back({ people[index].mId, ui(at) });
+        }
+    }
+    if (gFocusMgr.getMouseCapture() || mTacticalHover.suppressed())
+    {
+        mTacticalHover.clear();
+    }
+    else
+    {
+        mTacticalHover.update(dots, pointer, enter, exit);
+    }
+    if (mTacticalHover.empty())
+    {
+        mTacticalLabels.clear();
+        mTacticalTagTexts.clear();
+    }
+    else
+    {
+        auto same_floor = [](const LLUUID&) { return skmap::FloorRelation::SAME; };
+        mTacticalTagTexts = skmapdraw::tagTexts(mTacticalHover.members(), same_floor, skmapdraw::FloorLabels(),
+                                                skmap::tagMaxWidth(ui_w, static_cast<F32>(max_width)));
+        skmap::LabelLayout::Input in;
+        in.mPointer = down(pointer);
+        in.mWidth = ui_w;
+        in.mHeight = ui_h;
+        for (const skmapdraw::TagText& t : mTacticalTagTexts)
+        {
+            for (const skmap::HoverDot& d : dots)
+            {
+                if (d.mId == t.mId)
+                {
+                    in.mMembers.push_back({ t.mId, down(d.mPos), t.mWidth, t.mHeight });
+                    break;
+                }
+            }
+        }
+        for (const skmap::HoverDot& d : dots)
+        {
+            const LLVector2 p = down(d.mPos);
+            in.mObstacles.push_back({ p.mV[VX] - 5.0, p.mV[VY] - 5.0, 10.0, 10.0 });
+        }
+        mTacticalLabels.update(in, LLFrameTimer::getFrameDeltaTimeF32());
+    }
+
+    // Connectors, then the tags over them.
+    gGL.getTextureSlot(0)->unbind();
+    gGL.begin(LLRender::TRIANGLES);
+    skmapdraw::colour(skmap::palette::CONNECTOR);
+    for (const skmap::LabelLayout::Tag& tag : mTacticalLabels.tags())
+    {
+        for (const skmap::HoverDot& d : dots)
+        {
+            if (d.mId == tag.mId)
+            {
+                const LLVector2 end = skmap::LabelLayout::connectorEnd(tag, down(d.mPos));
+                skmapdraw::line(d.mPos, down(end), 1.f);
+                break;
+            }
+        }
+    }
+    gGL.end();
+    for (const skmap::LabelLayout::Tag& tag : mTacticalLabels.tags())
+    {
+        for (const skmapdraw::TagText& t : mTacticalTagTexts)
+        {
+            if (t.mId == tag.mId)
+            {
+                const S32 left = ll_round(static_cast<F32>(tag.mX)), top = ll_round(ui_h - static_cast<F32>(tag.mY));
+                skmapdraw::drawTag(LLRect(left, top, left + ll_round(static_cast<F32>(tag.mW)), top - ll_round(static_cast<F32>(tag.mH))), t);
+                break;
+            }
+        }
+    }
+
+    gGL.popUIMatrix();
+    LLFontGL::sCurOrigin = origin;
+    LLFontGL::sCurDepth = depth;
+    LLFontGL::sCurScaleX = cur_sx;
+    LLFontGL::sCurScaleY = cur_sy;
 }
