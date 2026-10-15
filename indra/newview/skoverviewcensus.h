@@ -97,6 +97,8 @@ public:
     bool update();
     const std::vector<Batch>& batches() const { return mBatches; }
     U32 triangles() const { return mTriangles; }
+    /// Moves whenever the buffers are rebuilt.
+    U64 signature() const { return mSignature; }
     void release();
 
 private:

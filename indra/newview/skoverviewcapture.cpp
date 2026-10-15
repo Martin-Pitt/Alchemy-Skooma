@@ -211,6 +211,7 @@ void SKOverviewCapture::releaseGL()
         sQueries[0] = sQueries[1] = 0;
     }
     mCensus.release();
+    mTacticalKey.mValid = false;
     mTiming = false;
     mValid = false;
     mGLFailed = false;
@@ -485,6 +486,7 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
     U32 draws = 0;
     {
         LL_PROFILE_ZONE_NAMED_CATEGORY_PIPELINE("sk overview capture");
+        LLTimer timer;
         capture.bindTarget();
         glViewport(0, 0, w, h);
         GLfloat clear_colour[4];
@@ -498,11 +500,13 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
         glClearColor(clear_colour[0], clear_colour[1], clear_colour[2], clear_colour[3]);
         draws = gPipeline.skRenderOverview(shot.mView, shot.mProj, cull, shot.mCut, census);
         capture.flush();
+        mCost.mCaptureMs += timer.getElapsedTimeF32() * 1000.f;
     }
 
     {
         LL_PROFILE_ZONE_NAMED_CATEGORY_PIPELINE("sk overview resolve");
         LL_PROFILE_GPU_ZONE("sk overview resolve");
+        LLTimer timer;
         resolved.bindTarget();
         glViewport(0, 0, w, h);
         LLGLDepthTest depth(GL_FALSE, GL_FALSE);
@@ -537,6 +541,7 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
         gGL.getTextureSlot(0)->unbind();
         sResolve.unbind();
         resolved.flush();
+        mCost.mResolveMs += timer.getElapsedTimeF32() * 1000.f;
     }
 
     memcpy(gGLViewport, saved_viewport, sizeof(saved_viewport));
@@ -686,8 +691,32 @@ void SKOverviewCapture::tactical()
     shot.mCull.setProjection(shot.mProj);
 
     {
-        LL_PROFILE_ZONE_NAMED("sk tactical render");
-        render(sTacticalCapture, sTacticalResolved, shot);
+        // Captured again only when what it shows changed: the camera beyond a small epsilon, the cut, the census
+        // buffers, the region or the view's size. Otherwise last frame's image is composited again.
+        const LLVector3 at_axis = dir;
+        const bool same = mTacticalKey.mValid && (eye - mTacticalKey.mEye).magVecSquared() < 1e-4f &&
+                          at_axis * mTacticalKey.mDir > 0.999999f && fov == mTacticalKey.mFov && vw == mTacticalKey.mWidth &&
+                          vh == mTacticalKey.mHeight && std::fabs(cut_z - mTacticalKey.mCut) < 1e-3f &&
+                          mCensus.signature() == mTacticalKey.mCensus && gAgent.getRegion() == mTacticalKey.mRegion;
+        if (!same)
+        {
+            LL_PROFILE_ZONE_NAMED("sk tactical render");
+            render(sTacticalCapture, sTacticalResolved, shot);
+            mTacticalKey.mValid = true;
+            mTacticalKey.mEye = eye;
+            mTacticalKey.mDir = at_axis;
+            mTacticalKey.mFov = fov;
+            mTacticalKey.mWidth = vw;
+            mTacticalKey.mHeight = vh;
+            mTacticalKey.mCut = cut_z;
+            mTacticalKey.mCensus = mCensus.signature();
+            mTacticalKey.mRegion = gAgent.getRegion();
+            ++mCost.mRenders;
+        }
+        else
+        {
+            ++mCost.mReuses;
+        }
     }
 
     mTacticalView = shot.mView;
@@ -828,6 +857,7 @@ void SKOverviewCapture::composite()
     }
     LLGLDisable scissor(GL_SCISSOR_TEST);
     gGL.setColorMask(true, true);
+    LLTimer composite_timer;
     {
         LL_PROFILE_ZONE_NAMED("sk tactical composite");
         glViewport(vx, vy, vw, vh);
@@ -950,6 +980,22 @@ void SKOverviewCapture::composite()
         gGLLastMatrix = NULL;
     }
     mLastCompositeFrame = LLFrameTimer::getFrameCount();
+    mCost.mCompositeMs += composite_timer.getElapsedTimeF32() * 1000.f;
+    ++mCost.mFrames;
+    const F64 now = LLFrameTimer::getUptimeSeconds().value();
+    if (now - mCost.mSince >= 1.0)
+    {
+        if (mCost.mSince > 0.0 && mCost.mFrames)
+        {
+            const F32 n = (F32)mCost.mFrames;
+            LL_INFOS("SKOverviewCost") << "tactical per frame over " << mCost.mFrames << " frames: capture "
+                                       << mCost.mCaptureMs / n << " ms, resolve " << mCost.mResolveMs / n << " ms, composite+markers "
+                                       << mCost.mCompositeMs / n << " ms; rendered " << mCost.mRenders << ", reused " << mCost.mReuses
+                                       << ", world hidden " << (worldHidden() ? 1 : 0) << LL_ENDL;
+        }
+        mCost = Cost();
+        mCost.mSince = now;
+    }
     glViewport(gGLViewport[0], gGLViewport[1], gGLViewport[2], gGLViewport[3]);
     LL_INFOS_ONCE("SKOverview") << "tactical overview composited at " << vx << "," << vy << " " << vw << "x" << vh << LL_ENDL;
 }

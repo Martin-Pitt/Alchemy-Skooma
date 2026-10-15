@@ -143,6 +143,30 @@ private:
     LLVector3 mTacticalCentre;   // agent space
     F32 mTacticalReach = 0.f;
     U32 mLastCompositeFrame = 0;
+    /// What the last tactical capture showed: the same again reuses its image.
+    struct TacticalKey
+    {
+        bool mValid = false;
+        LLVector3 mEye;
+        LLVector3 mDir;
+        F32 mFov = 0.f;
+        S32 mWidth = 0;
+        S32 mHeight = 0;
+        F32 mCut = 0.f;
+        U64 mCensus = 0;
+        const void* mRegion = nullptr;
+    } mTacticalKey;
+    /// CPU time of the tactical view, summed over a second and logged.
+    struct Cost
+    {
+        F64 mSince = 0.0;
+        F32 mCaptureMs = 0.f;
+        F32 mResolveMs = 0.f;
+        F32 mCompositeMs = 0.f;
+        U32 mFrames = 0;
+        U32 mRenders = 0;
+        U32 mReuses = 0;
+    } mCost;
     struct TacticalMark
     {
         LLUUID mId;
