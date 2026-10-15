@@ -50,6 +50,9 @@ class SKMapMode : public LLSingleton<SKMapMode>
 public:
     /// True while the map replaces the world. Cheap enough for every frame.
     static bool isOpen();
+    /// How much faster the flycam translates from `eye`: its height above the map over a person's
+    /// scale while the map is open, so it crosses regions low down and the grid high up; 1 otherwise.
+    static F64 flycamScale(const LLVector3d& eye);
 
     void toggle();
     bool open();

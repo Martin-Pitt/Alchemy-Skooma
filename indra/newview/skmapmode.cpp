@@ -135,6 +135,12 @@ bool SKMapMode::isOpen()
     return instanceExists() && getInstance()->mOpen;
 }
 
+// static
+F64 SKMapMode::flycamScale(const LLVector3d& eye)
+{
+    return isOpen() ? flycamHeightScale(eye.mdV[VZ]) : 1.0;
+}
+
 void SKMapMode::toggle()
 {
     if (mOpen)

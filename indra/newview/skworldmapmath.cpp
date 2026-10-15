@@ -156,6 +156,11 @@ LLVector3d clampDip(const LLVector3d& dir, F64 min_dip)
     return LLVector3d(dir.mdV[VX] * across, dir.mdV[VY] * across, -min_dip);
 }
 
+F64 flycamHeightScale(F64 eye_z, F64 ground_z)
+{
+    return std::max(1.0, (eye_z - ground_z) / FLYCAM_REFERENCE_HEIGHT);
+}
+
 std::vector<SelectedTile> selectTiles(const View& view, const TileSelectParams& params)
 {
     const std::array<Plane, 5> planes = frustumPlanes(view);

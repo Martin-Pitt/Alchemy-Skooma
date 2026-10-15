@@ -72,6 +72,13 @@ namespace skworldmap
     /// `dir` tilted down to at least `min_dip`, keeping its heading.
     LLVector3d clampDip(const LLVector3d& dir, F64 min_dip = PAN_MIN_DIP);
 
+    /// The height the flycam's own speeds are tuned for: a person's scale.
+    constexpr F64 FLYCAM_REFERENCE_HEIGHT = 10.0;
+
+    /// The flycam's speed multiplier at height `eye_z`: its height above the ground over the reference,
+    /// never below 1.
+    F64 flycamHeightScale(F64 eye_z, F64 ground_z = GROUND_Z);
+
     /// A view for tile selection: the eye, its heading and pitch, the vertical field of view and the screen.
     struct View
     {

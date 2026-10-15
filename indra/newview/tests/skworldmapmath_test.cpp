@@ -238,4 +238,13 @@ namespace
         }
     }
 
+    // The flycam on the map runs at its own speed near the ground and faster with height, never slower.
+    TEST_CASE("skworldmapmath: the flycam scales with height above the ground", "[skworldmapmath]")
+    {
+        CHECK(flycamHeightScale(GROUND_Z - 50.0) == 1.0);
+        CHECK(flycamHeightScale(GROUND_Z + 5.0) == 1.0);
+        CHECK(flycamHeightScale(GROUND_Z + 1500.0) == 150.0);
+        CHECK(flycamHeightScale(GROUND_Z + 50000.0) == 5000.0);
+    }
+
 } // namespace
