@@ -57,6 +57,7 @@
 #include "llviewerregion.h"
 #include "llviewershadermgr.h"
 #include "llvoavatar.h"
+#include "llviewerobjectlist.h"
 #include "pipeline.h"
 #include "sknavbuild.h"
 #include "sknavmesh.h"
@@ -1212,6 +1213,28 @@ void SKOverviewCapture::drawMarkers3D(const Project& project, S32 vw, S32 vh, st
         size_t mPerson = (size_t)-1;
         LLUUID mId;
         bool mCoarse = false;   // known only from the region's coarse locations: no rotation, a coarse height
+        F32 mHeight = 0.f;      // the avatar's own body height when known, else the default
+    };
+    // A loaded avatar's own size: feet from its pelvis (the seat when sitting) and its body height.
+    auto sized = [](Marker& m, const LLUUID& id)
+    {
+        LLViewerObject* object = gObjectList.findObject(id);
+        LLVOAvatar* avatar = object && object->isAvatar() ? static_cast<LLVOAvatar*>(object) : nullptr;
+        if (!avatar || avatar->isDead() || avatar->mBodySize.mV[VZ] <= 0.1f)
+        {
+            return;
+        }
+        const LLVector3 pelvis = avatar->getRenderPosition();
+        if (avatar->isSitting())
+        {
+            m.mFloor = pelvis;
+            m.mHeight = avatar->mBodySize.mV[VZ] * 0.5f;
+        }
+        else
+        {
+            m.mFloor = pelvis - LLVector3(0.f, 0.f, avatar->getPelvisToFoot());
+            m.mHeight = avatar->mBodySize.mV[VZ];
+        }
     };
     std::vector<Marker> markers;
     for (size_t i = 0; i < people.size(); ++i)
@@ -1236,6 +1259,10 @@ void SKOverviewCapture::drawMarkers3D(const Project& project, S32 vw, S32 vh, st
         {
             m.mColour = LLColor4(m.mColour.mV[0] * 0.7f, m.mColour.mV[1] * 0.7f, m.mColour.mV[2] * 0.7f, 0.85f);
         }
+        else
+        {
+            sized(m, p.mId);
+        }
         m.mPerson = i;
         m.mId = p.mId;
         markers.push_back(m);
@@ -1244,6 +1271,7 @@ void SKOverviewCapture::drawMarkers3D(const Project& project, S32 vw, S32 vh, st
     {
         Marker m;
         m.mFloor = gAgent.getPositionAgent() - LLVector3(0.f, 0.f, AVATAR_HALF_HEIGHT_M);
+        sized(m, gAgent.getID());
         const LLVector3 fwd = gAgent.getAtAxis();
         m.mHeading = std::atan2(fwd.mV[VY], fwd.mV[VX]);
         m.mHasHeading = true;
@@ -1312,8 +1340,10 @@ void SKOverviewCapture::drawMarkers3D(const Project& project, S32 vw, S32 vh, st
             ppm = llmax(ppm, (aty - at0).length());
         }
         const F32 scale = ppm > 1e-3f ? llclamp(MARKER_MIN_RADIUS_PX / (MARKER_RADIUS_M * ppm), 1.f, MARKER_MAX_SCALE) : 1.f;
-        const F32 r = MARKER_RADIUS_M * scale;
-        const F32 h = (m.mCoarse ? MARKER_COARSE_HEIGHT_M : MARKER_HEIGHT_M) * scale;
+        // A known body sets the height, the radius in proportion; the minimum on-screen size still holds.
+        const F32 body = m.mHeight > 0.f ? m.mHeight / MARKER_HEIGHT_M : 1.f;
+        const F32 r = MARKER_RADIUS_M * body * scale;
+        const F32 h = (m.mCoarse ? MARKER_COARSE_HEIGHT_M : MARKER_HEIGHT_M) * body * scale;
         const LLVector3 top_c = m.mFloor + LLVector3(0.f, 0.f, h);
         for (S32 k = 0; k < MARKER_SIDES; ++k)
         {
