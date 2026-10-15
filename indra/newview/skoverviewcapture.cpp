@@ -568,7 +568,10 @@ void SKOverviewCapture::drawMovers(const Shot& shot)
             return;
         }
     }
-    sTacticalWork.copyContents(sTacticalCapture, 0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+    {
+        LLGLDisable scissor(GL_SCISSOR_TEST); // a blit is scissored too
+        sTacticalWork.copyContents(sTacticalCapture, 0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+    }
 
     sTacticalWork.bindTarget();
     glViewport(0, 0, w, h);
@@ -730,7 +733,15 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
         glGetFloatv(GL_DEPTH_CLEAR_VALUE, &clear_depth);
         glClearColor(0.f, 0.f, 0.f, 0.f);
         glClearDepth(al_window_far()); // the cleared depth must be the far plane of the current convention
-        capture.clear();
+        {
+            // A clear obeys the write masks: whatever pass ran last could have left them on one channel, and the
+            // terrain writes only R, so its texels kept the last capture's normals (G, A) and invisible flag (B)
+            // and smeared as the camera turned. Every channel and the depth are cleared, every capture.
+            LLGLDepthTest depth_write(GL_TRUE, GL_TRUE, GL_ALWAYS);
+            LLGLDisable scissor(GL_SCISSOR_TEST); // and a scissor left on would clear only part of it
+            gGL.setColorMask(true, true);
+            capture.clear();
+        }
         glClearDepth(clear_depth);
         glClearColor(clear_colour[0], clear_colour[1], clear_colour[2], clear_colour[3]);
         draws = gPipeline.skRenderOverview(shot.mView, shot.mProj, cull, shot.mCut, census);
@@ -1026,7 +1037,8 @@ void SKOverviewCapture::tactical()
         // Captured again only when what it shows changed: the camera beyond a small epsilon, the cut, the census
         // buffers, the region or the view's size. Otherwise last frame's image is composited again.
         const LLVector3 at_axis = dir;
-        const bool same = mTacticalKey.mValid && (eye - mTacticalKey.mEye).magVecSquared() < 1e-4f &&
+        static LLCachedControl<bool> force(gSavedSettings, "SKOverviewForceRecapture", false);
+        const bool same = !force && mTacticalKey.mValid && (eye - mTacticalKey.mEye).magVecSquared() < 1e-4f &&
                           at_axis * mTacticalKey.mDir > 0.999999f && fov == mTacticalKey.mFov && vw == mTacticalKey.mWidth &&
                           vh == mTacticalKey.mHeight && std::fabs(cut_z - mTacticalKey.mCut) < 1e-3f &&
                           mCensus.signature() == mTacticalKey.mCensus && gAgent.getRegion() == mTacticalKey.mRegion;

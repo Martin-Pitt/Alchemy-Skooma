@@ -5436,6 +5436,17 @@
             <key>Value</key>
             <real>55.0</real>
         </map>
+        <key>SKOverviewForceRecapture</key>
+        <map>
+            <key>Comment</key>
+            <string>Debug: capture the tactical overview again every frame instead of only when what it shows changed.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
         <key>SKOverviewDebugView</key>
         <map>
             <key>Comment</key>
