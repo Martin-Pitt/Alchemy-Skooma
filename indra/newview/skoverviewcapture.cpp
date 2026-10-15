@@ -340,16 +340,18 @@ void SKOverviewCapture::readTimer()
 void SKOverviewCapture::cutHeights(const LLVector3d& at, F32 fallback_z, F32& floor_z, F32& cut_z) const
 {
     static LLCachedControl<F32> cut(gSavedSettings, "SKOverviewCutHeight", 2.5f);
-    F32 nav_floor = 0.f;
-    if (SKNavMesh::instanceExists() && SKNavMesh::instance().floorUnder(at, sknav::AgentClass::AVATAR, nav_floor))
+    // The avatar's feet are the floor; the navmesh only refines it, since its nearest mesh can be the ground under a street.
+    F32 feet = fallback_z;
+    if (isAgentAvatarValid())
     {
-        // Global and agent heights are the same number.
-        floor_z = nav_floor;
-        cut_z = nav_floor + (F32)cut;
-        return;
+        feet = gAgentAvatarp->getPositionAgent().mV[VZ] - gAgentAvatarp->getPelvisToFoot();
     }
-    floor_z = fallback_z;
-    cut_z = fallback_z + (F32)cut;
+    F32 nav_floor = 0.f;
+    const bool near_feet = SKNavMesh::instanceExists() &&
+                           SKNavMesh::instance().floorUnder(at, sknav::AgentClass::AVATAR, nav_floor) &&
+                           nav_floor > feet - 0.75f && nav_floor < feet + 0.5f;
+    floor_z = near_feet ? nav_floor : feet;
+    cut_z = floor_z + (F32)cut;
 }
 
 namespace
