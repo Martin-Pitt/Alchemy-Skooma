@@ -161,12 +161,16 @@ bool SKMapMode::open()
     // The world camera as it is now; mouselook is left so the map has a cursor.
     mWorld.mMouselook = gAgentCamera.cameraMouselook();
     mWorld.mFocusOnAvatar = gAgentCamera.getFocusOnAvatar();
-    mWorld.mPosition = gAgentCamera.getCameraPositionGlobal();
-    mWorld.mFocus = gAgentCamera.getFocusGlobal();
+    // A camera that follows the avatar is kept relative to it, so it follows it again on close and the
+    // sim's camera moves with the agent while the map is open.
+    const LLVector3d agent = gAgent.getPositionGlobal();
+    const LLVector3d follow = mWorld.mFocusOnAvatar ? agent : LLVector3d::zero;
+    mWorld.mPosition = gAgentCamera.getCameraPositionGlobal() - follow;
+    mWorld.mFocus = gAgentCamera.getFocusGlobal() - follow;
     LLViewerObject* focus_object = gAgentCamera.getFocusObject();
     mWorld.mFocusObject = focus_object ? focus_object->getID() : LLUUID::null;
     const LLViewerCamera* view = LLViewerCamera::getInstance();
-    mWorld.mViewOrigin = gAgent.getPosGlobalFromAgent(view->getOrigin());
+    mWorld.mViewOffset = gAgent.getPosGlobalFromAgent(view->getOrigin()) - agent;
     mWorld.mAt = view->getAtAxis();
     mWorld.mLeft = view->getLeftAxis();
     mWorld.mUp = view->getUpAxis();
@@ -174,6 +178,7 @@ bool SKMapMode::open()
     {
         gAgentCamera.changeCameraToDefault();
     }
+    gAgent.stopAutoPilot();
 
     mOpenSignal();
     mOpen = true;
@@ -240,15 +245,12 @@ void SKMapMode::close()
     mOpen = false;
 
     // The world camera exactly as it was; a camera that followed the avatar follows it again from
-    // the same offset. A mouselook entered on the map is left first.
-    if (gAgentCamera.cameraMouselook() && !mWorld.mMouselook)
-    {
-        gAgentCamera.changeCameraToDefault();
-    }
-    gAgentCamera.setCameraPosAndFocusGlobal(mWorld.mPosition, mWorld.mFocus, mWorld.mFocusObject);
+    // the same offset, wherever the avatar is now, without turning it.
+    const LLVector3d follow = mWorld.mFocusOnAvatar ? gAgent.getPositionGlobal() : LLVector3d::zero;
+    gAgentCamera.setCameraPosAndFocusGlobal(mWorld.mPosition + follow, mWorld.mFocus + follow, mWorld.mFocusObject);
     if (mWorld.mFocusOnAvatar)
     {
-        gAgentCamera.setFocusOnAvatar(true, false);
+        gAgentCamera.setFocusOnAvatar(true, false, false);
     }
     gAgentCamera.stopCameraAnimation();
     if (mWorld.mMouselook)
@@ -308,6 +310,7 @@ bool SKMapMode::beginPan(S32 x, S32 y)
         return false;
     }
     mPanEye = gAgentCamera.getCameraPositionGlobal();
+    mPanView = gAgent.getPosGlobalFromAgent(LLViewerCamera::getInstance()->getOrigin());
     mPanFocus = gAgentCamera.getFocusGlobal();
     mPanning = true;
     return true;
@@ -318,7 +321,7 @@ void SKMapMode::pan(S32 x, S32 y)
     // Solved from the drag's start, not step by step, so it never drifts. The camera only translates,
     // so the cursor's direction is the same from any point of the drag.
     LLVector3d offset;
-    if (!mPanning || !panOffset(mPanEye, LLVector3d(gViewerWindow->mouseDirectionGlobal(x, y)), mPanGrabbed, offset))
+    if (!mPanning || !panOffset(mPanView, LLVector3d(gViewerWindow->mouseDirectionGlobal(x, y)), mPanGrabbed, offset))
     {
         return;
     }
@@ -346,11 +349,26 @@ void SKMapMode::worldCameraForUpdate(LLVector3& position_agent, LLVector3& at, L
     {
         return;
     }
+    LLVector3d position;
+    if (worldCamera(position, at, left, up))
+    {
+        position_agent = gAgent.getPosAgentFromGlobal(position);
+    }
+}
+
+// static
+bool SKMapMode::worldCamera(LLVector3d& position_global, LLVector3& at, LLVector3& left, LLVector3& up)
+{
+    if (!isOpen())
+    {
+        return false;
+    }
     const WorldCamera& world = getInstance()->mWorld;
-    position_agent = gAgent.getPosAgentFromGlobal(world.mViewOrigin);
+    position_global = gAgent.getPositionGlobal() + world.mViewOffset;
     at = world.mAt;
     left = world.mLeft;
     up = world.mUp;
+    return true;
 }
 
 SKWorldMapFrame SKMapMode::frame() const

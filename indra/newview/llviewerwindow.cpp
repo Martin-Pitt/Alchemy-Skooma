@@ -26,6 +26,7 @@
 
 #include "llviewerprecompiledheaders.h"
 #include "llviewerwindow.h"
+#include "skmapmode.h" // <SK:Nexii> 3D world map
 
 
 // system library includes
@@ -5488,7 +5489,7 @@ bool LLViewerWindow::thumbnailSnapshot(LLImageRaw *raw, S32 preview_width, S32 p
 bool LLViewerWindow::rawSnapshot(LLImageRaw *raw, S32 image_width, S32 image_height,
     bool keep_window_aspect, bool is_texture, bool show_ui, bool show_hud, bool do_rebuild, bool no_post, bool show_balance, LLSnapshotModel::ESnapshotLayerType type, S32 max_size)
 {
-    if (!raw)
+    if (!raw || SKMapMode::isOpen()) // <SK:Nexii> 3D world map: the world is not drawn while the map is open
     {
         return false;
     }
@@ -5909,6 +5910,10 @@ bool LLViewerWindow::rawSnapshot(LLImageRaw *raw, S32 image_width, S32 image_hei
 bool LLViewerWindow::simpleSnapshot(LLImageRaw* raw, S32 image_width, S32 image_height, const int num_render_passes)
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_APP;
+    if (SKMapMode::isOpen()) // <SK:Nexii> 3D world map: the world is not drawn while the map is open
+    {
+        return false;
+    }
     gDisplaySwapBuffers = false;
 
     glClear(GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT); // stencil buffer is deprecated | GL_STENCIL_BUFFER_BIT);

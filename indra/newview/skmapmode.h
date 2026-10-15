@@ -81,6 +81,10 @@ public:
     /// so the interest list stays where the agent is. Leaves the arguments alone otherwise.
     static void worldCameraForUpdate(LLVector3& position_agent, LLVector3& at, LLVector3& left, LLVector3& up);
 
+    /// The world camera while the map is open, carried along with the agent, for whatever listens or
+    /// reports from the camera (agent updates, audio, voice). False, arguments untouched, when closed.
+    static bool worldCamera(LLVector3d& position_global, LLVector3& at, LLVector3& left, LLVector3& up);
+
     /// Fired as the map opens, while the last world frame is still in the targets: where a live
     /// impostor of the current region can be captured.
     typedef boost::signals2::signal<void()> open_signal_t;
@@ -93,10 +97,10 @@ private:
     {
         bool mMouselook = false;
         bool mFocusOnAvatar = true;
-        LLVector3d mPosition;
-        LLVector3d mFocus;
+        LLVector3d mPosition;       ///< relative to the agent when mFocusOnAvatar, else global
+        LLVector3d mFocus;          ///< likewise
         LLUUID mFocusObject;
-        LLVector3d mViewOrigin;     ///< the viewer camera, for agent updates
+        LLVector3d mViewOffset;     ///< the viewer camera from the agent, for agent updates and the ears
         LLVector3 mAt, mLeft, mUp;
     };
 
@@ -111,6 +115,7 @@ private:
 
     bool mPanning = false;
     LLVector3d mPanEye;
+    LLVector3d mPanView;            ///< the viewer camera's origin at the drag's start, which the cursor rays leave from
     LLVector3d mPanFocus;
     LLVector3d mPanGrabbed;
 

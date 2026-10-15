@@ -29,6 +29,8 @@
 
 #include "llagent.h"
 
+#include "skmapmode.h" // <SK:Nexii> 3D world map
+
 #include "pipeline.h"
 
 #include "llagentaccess.h"
@@ -705,6 +707,7 @@ void LLAgent::ageChat()
 //-----------------------------------------------------------------------------
 void LLAgent::moveAt(S32 direction, bool reset)
 {
+    if (SKMapMode::isOpen() && direction) return; // <SK:Nexii> 3D world map: the avatar stays put while the map is open
     mMoveTimer.reset();
     LLFirstUse::notMoving(false);
 
@@ -733,6 +736,7 @@ void LLAgent::moveAt(S32 direction, bool reset)
 //-----------------------------------------------------------------------------
 void LLAgent::moveAtNudge(S32 direction)
 {
+    if (SKMapMode::isOpen() && direction) return; // <SK:Nexii> 3D world map: the avatar stays put while the map is open
     mMoveTimer.reset();
     LLFirstUse::notMoving(false);
 
@@ -758,6 +762,7 @@ void LLAgent::moveAtNudge(S32 direction)
 //-----------------------------------------------------------------------------
 void LLAgent::moveLeft(S32 direction)
 {
+    if (SKMapMode::isOpen() && direction) return; // <SK:Nexii> 3D world map: the avatar stays put while the map is open
     mMoveTimer.reset();
     LLFirstUse::notMoving(false);
 
@@ -783,6 +788,7 @@ void LLAgent::moveLeft(S32 direction)
 //-----------------------------------------------------------------------------
 void LLAgent::moveLeftNudge(S32 direction)
 {
+    if (SKMapMode::isOpen() && direction) return; // <SK:Nexii> 3D world map: the avatar stays put while the map is open
     mMoveTimer.reset();
     LLFirstUse::notMoving(false);
 
@@ -808,6 +814,7 @@ void LLAgent::moveLeftNudge(S32 direction)
 //-----------------------------------------------------------------------------
 void LLAgent::moveUp(S32 direction)
 {
+    if (SKMapMode::isOpen() && direction) return; // <SK:Nexii> 3D world map: the avatar stays put while the map is open
 // [RLVa:KB] - Checked: RLVa-2.2 (@jump)
     if ( (!RlvActions::canJump()) && (direction > 0) && (!getFlying()) )
     {
@@ -848,6 +855,7 @@ void LLAgent::moveUp(S32 direction)
 //-----------------------------------------------------------------------------
 void LLAgent::moveYaw(F32 mag, bool reset_view)
 {
+    if (SKMapMode::isOpen() && mag != 0.f) return; // <SK:Nexii> 3D world map: the avatar stays put while the map is open
     gAgentCamera.setYawKey(mag);
 
     if (mag > 0)
@@ -1740,6 +1748,7 @@ void LLAgent::startAutoPilotGlobal(
     F32 rot_threshold,
     bool allow_flying)
 {
+    if (SKMapMode::isOpen() && true) return; // <SK:Nexii> 3D world map: the avatar stays put while the map is open
     if (!isAgentAvatarValid())
     {
         return;
@@ -1865,6 +1874,7 @@ void LLAgent::setAutoPilotTargetGlobal(const LLVector3d &target_global)
 //-----------------------------------------------------------------------------
 void LLAgent::startFollowPilot(const LLUUID &leader_id, bool allow_flying, F32 stop_distance)
 {
+    if (SKMapMode::isOpen() && true) return; // <SK:Nexii> 3D world map: the avatar stays put while the map is open
     mLeaderID = leader_id;
     if ( mLeaderID.isNull() ) return;
 

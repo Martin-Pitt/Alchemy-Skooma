@@ -1009,10 +1009,10 @@ if(AL_BUILD_VIEWER)
     rlvinventory.cpp
     rlvlocks.cpp
     rlvui.cpp
-    skmapmode.cpp
-    skworldmapmath.cpp
-    skworldmapscene.cpp
-    skworldmaptiles.cpp
+    skmapmode.cpp # <SK:Nexii> 3D world map
+    skworldmapmath.cpp # <SK:Nexii> 3D world map
+    skworldmapscene.cpp # <SK:Nexii> 3D world map
+    skworldmaptiles.cpp # <SK:Nexii> 3D world map
   )
 
   set(
@@ -1887,10 +1887,10 @@ if(AL_BUILD_VIEWER)
     rlvmodifiers.h
     rlvui.h
     roles_constants.h
-    skmapmode.h
-    skworldmapmath.h
-    skworldmapscene.h
-    skworldmaptiles.h
+    skmapmode.h # <SK:Nexii> 3D world map
+    skworldmapmath.h # <SK:Nexii> 3D world map
+    skworldmapscene.h # <SK:Nexii> 3D world map
+    skworldmaptiles.h # <SK:Nexii> 3D world map
   )
 
   # Discord rich presence, over the SDK from the private registry.
@@ -2535,7 +2535,7 @@ if(AL_BUILD_TESTS)
     llvocache
     lutcube
     noise
-    skworldmapmath
+    skworldmapmath # <SK:Nexii> 3D world map
   )
     al_add_test(${test} UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
   endforeach()

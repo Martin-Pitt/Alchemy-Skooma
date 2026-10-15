@@ -39,6 +39,7 @@
 #include "llwindow.h"
 #include "llagent.h"
 #include "llagentcamera.h"
+#include "skmapmode.h" // <SK:Nexii> 3D world map
 #include "llfocusmgr.h"
 
 #if LL_WINDOWS
@@ -920,6 +921,7 @@ void LLViewerJoystick::moveObjects(bool reset)
 // -----------------------------------------------------------------------------
 void LLViewerJoystick::moveAvatar(bool reset)
 {
+    if (SKMapMode::isOpen()) return; // <SK:Nexii> 3D world map: the avatar stays put while the map is open
     if (!gFocusMgr.getAppHasFocus() || mDriverState != JDS_INITIALIZED
         || !gSavedSettings.getBOOL("JoystickEnabled") || !gSavedSettings.getBOOL("JoystickAvatarEnabled"))
     {

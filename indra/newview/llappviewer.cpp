@@ -1620,6 +1620,7 @@ bool LLAppViewer::doFrame()
                     LLPerfStats::RecordSceneTime T(LLPerfStats::StatType_t::RENDER_IDLE);
                     LL_PROFILE_ZONE_NAMED_CATEGORY_APP("df Snapshot");
                     pingMainloopTimeout("Main:Snapshot");
+                    if (!SKMapMode::isOpen()) // <SK:Nexii> 3D world map: no probe faces (each a full scene render) under the map
                     gPipeline.mReflectionMapManager.update();
                     LLFloaterSnapshot::update(); // take snapshots
                     LLFloaterSimpleSnapshot::update();

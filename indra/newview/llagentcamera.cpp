@@ -2398,7 +2398,8 @@ void LLAgentCamera::changeCameraToMouselook(bool animate)
 // [RLVa:KB] - Checked: RLVa-2.0.0
         || ( (RlvActions::isRlvEnabled()) && (!RlvActions::canChangeToMouselook()) )
 // [/RLVa:KB]
-        || LLViewerJoystick::getInstance()->getOverrideCamera())
+        || LLViewerJoystick::getInstance()->getOverrideCamera()
+        || SKMapMode::isOpen()) // <SK:Nexii> 3D world map: no mouselook over the map
     {
         return;
     }

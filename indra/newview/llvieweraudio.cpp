@@ -46,6 +46,7 @@
 #include "llviewermessage.h"
 
 #include "llstreamingaudio.h"
+#include "skmapmode.h" // <SK:Nexii> 3D world map
 
 /////////////////////////////////////////////////////////
 const U32 FMODEX_DECODE_BUFFER_SIZE = 1000; // in milliseconds
@@ -518,6 +519,16 @@ void audio_update_listener()
             ear_position = gAgent.getPositionGlobal();
             break;
         }
+        // <SK:Nexii> 3D world map: the ears stay at the world camera while the map moves the viewer's.
+        LLVector3 listener_at = LLViewerCamera::getInstance()->getAtAxis();
+        LLVector3 listener_up = LLViewerCamera::getInstance()->getUpAxis();
+        LLVector3d map_ear;
+        LLVector3 map_left;
+        if (SKMapMode::worldCamera(map_ear, listener_at, map_left, listener_up) && mEarLocation != 1)
+        {
+            ear_position = map_ear;
+        }
+        // </SK:Nexii>
         LLVector3d lpos_global = ear_position;
         LLVector3 lpos_global_f;
         lpos_global_f.setVec(lpos_global);
@@ -526,8 +537,8 @@ void audio_update_listener()
                              // LLViewerCamera::getInstance()VelocitySmoothed,
                              // LLVector3::zero,
                              gAgent.getVelocity(),    // !!! *TODO: need to replace this with smoothed velocity!
-                             LLViewerCamera::getInstance()->getUpAxis(),
-                             LLViewerCamera::getInstance()->getAtAxis());
+                             listener_up, // <SK:Nexii> 3D world map
+                             listener_at); // <SK:Nexii> 3D world map
     }
 }
 

@@ -79,20 +79,28 @@ void SKWorldMapTiles::update(F64 now)
 {
     // Settle what is in flight: arrived, missing, or given up on.
     mInFlight = 0;
-    for (auto& [key, e] : mTiles)
+    for (auto it = mTiles.begin(); it != mTiles.end();)
     {
-        if (e.mImage.isNull())
-        {
-            continue;
-        }
-        if (!e.mMissing && e.mImage->isMissingAsset())
+        Entry& e = it->second;
+        if (e.mImage.notNull() && !e.mMissing && e.mImage->isMissingAsset())
         {
             e.mMissing = true;
         }
-        if (!e.mMissing && !e.mImage->hasGLTexture() && now - e.mRequested < FETCH_TIMEOUT)
+        if (e.mImage.notNull() && !e.mMissing && !e.mImage->hasGLTexture())
         {
+            if (now - e.mRequested >= FETCH_TIMEOUT)
+            {
+                // Given up on: forgotten, so a later frame that still wants it asks again under the cap.
+                if (e.mBoosted)
+                {
+                    e.mImage->setBoostLevel(LLGLTexture::BOOST_NONE);
+                }
+                it = mTiles.erase(it);
+                continue;
+            }
             ++mInFlight;
         }
+        ++it;
     }
 
     // Start the nearest wanted tiles first, up to the cap.
@@ -103,7 +111,7 @@ void SKWorldMapTiles::update(F64 now)
         if (e)
         {
             e->mLastUsed = now;
-            if (e->mImage.notNull() && !e->mMissing && !e->mImage->hasGLTexture())
+            if (e->mImage.notNull() && !e->mMissing && !e->mBoosted && !e->mImage->hasGLTexture())
             {
                 e->mImage->setBoostLevel(LLGLTexture::BOOST_MAP_VISIBLE);
                 e->mBoosted = true;
@@ -146,6 +154,11 @@ void SKWorldMapTiles::update(F64 now)
         std::nth_element(by_age.begin(), by_age.begin() + drop, by_age.end());
         for (size_t i = 0; i < drop; ++i)
         {
+            Entry* e = find(by_age[i].second);
+            if (e && e->mBoosted)
+            {
+                e->mImage->setBoostLevel(LLGLTexture::BOOST_NONE);
+            }
             mTiles.erase(by_age[i].second);
         }
     }
