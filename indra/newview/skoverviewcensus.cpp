@@ -30,6 +30,11 @@
 #include "sknavbuild.h"
 #include "sknavtypes.h"
 #include "skworldcensus.h"
+#include "lltextureentry.h"
+#include "llviewerobject.h"
+#include "llviewerobjectlist.h"
+#include "llviewertexture.h"
+#include "llgltfmaterial.h"
 
 #include <cmath>
 #include <map>
@@ -38,8 +43,8 @@ namespace skoverview
 {
     U8 codeOf(CensusClass cls)
     {
-        static const U8 codes[NUM_CENSUS_CLASSES] = { CODE_FLOOR, CODE_WALL,   CODE_COVER,  CODE_RAMP,
-                                                      CODE_DOOR,  CODE_LADDER, CODE_VEHICLE };
+        static const U8 codes[NUM_CENSUS_CLASSES] = { CODE_FLOOR, CODE_WALL,   CODE_COVER,   CODE_RAMP,
+                                                      CODE_DOOR,  CODE_LADDER, CODE_VEHICLE, CODE_NONE };
         return cls < NUM_CENSUS_CLASSES ? codes[cls] : CODE_NONE;
     }
 
@@ -66,6 +71,25 @@ namespace skoverview
         }
         // Movers' census poses are a scan old; the ghost layer has them where they are.
         return !rec.mDynamic && !(rec.mExclude & sknav::EXCLUDE_SOLID);
+    }
+
+    bool encloses(const LLVector3d& min, const LLVector3d& max, const std::vector<LLVector3d>& points)
+    {
+        const LLVector3d size = max - min;
+        const S32 large = (size.mdV[VX] > ENCLOSURE_M) + (size.mdV[VY] > ENCLOSURE_M) + (size.mdV[VZ] > ENCLOSURE_M);
+        if (large < 2)
+        {
+            return false;
+        }
+        for (const LLVector3d& p : points)
+        {
+            if (p.mdV[VX] >= min.mdV[VX] && p.mdV[VX] <= max.mdV[VX] && p.mdV[VY] >= min.mdV[VY] && p.mdV[VY] <= max.mdV[VY] &&
+                p.mdV[VZ] >= min.mdV[VZ] && p.mdV[VZ] <= max.mdV[VZ])
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     CensusClass classifyTriangle(F32 nz, F32 part_height)
@@ -98,18 +122,80 @@ void SKOverviewCensus::release()
     mTriangles = 0;
 }
 
-bool SKOverviewCensus::update()
+namespace
+{
+    // Textures nobody sees through to: the default transparent texture and the old invisiprim pair.
+    bool transparentTexture(const LLUUID& id)
+    {
+        static const LLUUID transparent("8dcd4a48-2d37-4909-9f78-f7a9eb4ef903");
+        static const LLUUID invisiprim_a("38b86f85-2575-52a9-a531-23108d8da837");
+        static const LLUUID invisiprim_b("e97cf410-8e61-7005-ec06-629eba4cd1fb");
+        return id == transparent || id == invisiprim_a || id == invisiprim_b;
+    }
+
+    // A face is invisible at alpha 0, with a transparent or invisiprim texture at any alpha, or as a PBR face with
+    // base colour alpha 0 or a transparent base colour texture under blend or mask. A part is when all its faces are.
+    bool fullyTransparent(const LLUUID& part)
+    {
+        LLViewerObject* object = gObjectList.findObject(part);
+        if (!object || object->getNumTEs() == 0)
+        {
+            return false;
+        }
+        for (U8 i = 0; i < object->getNumTEs(); ++i)
+        {
+            const LLTextureEntry* te = object->getTE(i);
+            if (!te)
+            {
+                return false;
+            }
+            bool invisible = te->getColor().mV[VALPHA] <= 0.004f || transparentTexture(te->getID());
+            if (!invisible)
+            {
+                const LLViewerTexture* image = object->getTEImage(i);
+                invisible = image && image->isAlphaOnly();
+            }
+            if (const LLGLTFMaterial* pbr = te->getGLTFRenderMaterial())
+            {
+                invisible = pbr->mBaseColor.mV[VALPHA] <= 0.004f ||
+                            (pbr->mAlphaMode != LLGLTFMaterial::ALPHA_MODE_OPAQUE &&
+                             transparentTexture(pbr->mTextureId[LLGLTFMaterial::GLTF_TEXTURE_INFO_BASE_COLOR]));
+            }
+            if (!invisible)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+}
+
+bool SKOverviewCensus::update(const std::vector<LLVector3d>& viewpoints)
 {
     if (!SKWorldCensus::instanceExists())
     {
         return !mBatches.empty();
     }
     SKCensusSnapshotPtr snap = SKWorldCensus::instance().snapshot();
-    if (!snap || snap->mStamp == mStamp)
+    if (!snap)
+    {
+        return !mBatches.empty();
+    }
+    // Which of the scan's large parts hold a viewpoint now: moving into or out of one rebuilds as a new scan does.
+    U64 enclosed = 1469598103934665603ull;
+    for (const sknav::RecordPtr& rec : snap->mRecords)
+    {
+        if (rec && skoverview::encloses(rec->mMin, rec->mMax, viewpoints))
+        {
+            enclosed = (enclosed ^ rec->mPart.getCRC32()) * 1099511628211ull;
+        }
+    }
+    if (snap->mStamp == mStamp && enclosed == mEnclosed)
     {
         return !mBatches.empty();
     }
     mStamp = snap->mStamp;
+    mEnclosed = enclosed;
 
     // A new scan most often holds the same parts where they were: rebuild only when the geometry moved.
     U64 sig = 1469598103934665603ull;
@@ -123,9 +209,22 @@ bool SKOverviewCensus::update()
     for (const sknav::RecordPtr& rec : snap->mRecords)
     {
         skoverview::CensusClass fixed;
-        if (!rec || !skoverview::keepRecord(*rec, fixed))
+        if (!rec || !skoverview::keepRecord(*rec, fixed) || skoverview::encloses(rec->mMin, rec->mMax, viewpoints))
         {
             continue;
+        }
+        const bool transparent = fullyTransparent(rec->mPart);
+        mix(transparent ? 0x7a11u : 0x0u);
+        if (transparent)
+        {
+            // Small, a plausible invisible wall: hatched. Larger: an invisible shell nobody plays against.
+            const LLVector3d size = rec->mMax - rec->mMin;
+            if (size.mdV[VX] > skoverview::INVISIBLE_WALL_M || size.mdV[VY] > skoverview::INVISIBLE_WALL_M ||
+                size.mdV[VZ] > skoverview::INVISIBLE_WALL_M)
+            {
+                continue;
+            }
+            fixed = skoverview::INVISIBLE;
         }
         kept.push_back(rec.get());
         fixed_classes.push_back(fixed);

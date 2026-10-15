@@ -29,6 +29,7 @@
 #include "v3dmath.h"
 #include "v3math.h"
 
+#include <memory>
 #include <vector>
 
 class LLVertexBuffer;
@@ -58,11 +59,16 @@ namespace skoverview
     };
 
     /// The census classes, in vertex buffer order.
-    enum CensusClass : U8 { FLOOR, WALL, COVER, RAMP, DOOR, LADDER, VEHICLE, NUM_CENSUS_CLASSES };
+    enum CensusClass : U8 { FLOOR, WALL, COVER, RAMP, DOOR, LADDER, VEHICLE, INVISIBLE, NUM_CENSUS_CLASSES };
 
     constexpr F32 FLOOR_NZ = 0.866f;    ///< steeper than 30 degrees is no longer floor
     constexpr F32 WALL_NZ = 0.5f;       ///< steeper than 60 degrees is wall
     constexpr F32 COVER_TOP_M = 1.6f;   ///< a part no taller than this is cover, not wall
+    constexpr F32 ENCLOSURE_M = 64.f;   ///< a part this large on two axes, around the viewpoint, is an enclosure
+    constexpr F32 INVISIBLE_WALL_M = 64.f; ///< a fully transparent part larger than this on any axis is no wall
+
+    /// Whether a box this large on two axes holds any of the points: a sim enclosure, sky box or dome the view is in.
+    bool encloses(const LLVector3d& min, const LLVector3d& max, const std::vector<LLVector3d>& points);
 
     U8 codeOf(CensusClass cls);
 
@@ -90,7 +96,8 @@ public:
     ~SKOverviewCensus();
 
     /// Rebuilds the buffers when the census's geometry changed; true when there is anything to draw.
-    bool update();
+    /// The points the view is at (agent, camera, the overview's centre): parts enclosing any are left out.
+    bool update(const std::vector<LLVector3d>& viewpoints);
     const std::vector<Batch>& batches() const { return mBatches; }
     U32 triangles() const { return mTriangles; }
     void release();
@@ -99,6 +106,8 @@ private:
     std::vector<Batch> mBatches;
     U64 mStamp = 0;
     U64 mSignature = 0;
+    U64 mEnclosed = 0;  ///< which large parts enclosed a viewpoint at the last build
+    std::shared_ptr<const struct SKCensusSnapshot> mSnapshot;
     U32 mTriangles = 0;
 };
 

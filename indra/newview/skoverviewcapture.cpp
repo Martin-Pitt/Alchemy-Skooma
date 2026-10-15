@@ -384,7 +384,7 @@ void SKOverviewCapture::frame()
     readTimer();
     {
         LL_PROFILE_ZONE_NAMED("sk overview census update");
-        mCensus.update();
+        mCensus.update(viewpointsGlobal());
     }
 
     static LLCachedControl<bool> enabled(gSavedSettings, "SKMapCaptureBase", false);
@@ -445,7 +445,7 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
                     for (U32 c = 0; c < skoverview::NUM_CENSUS_CLASSES; ++c)
                     {
                         const U32 count = batch.mStart[c + 1] - batch.mStart[c];
-                        if (!count)
+                        if (!count || c == skoverview::INVISIBLE)
                         {
                             continue;
                         }
@@ -455,6 +455,29 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
                     }
                 }
                 glCullFace(GL_BACK);
+            }
+            {
+                // Transparent parts small enough to be invisible walls: the ghost's hatch flag, hiding nothing.
+                LLGLDepthTest depth(GL_TRUE, GL_FALSE, GL_LEQUAL);
+                LLGLDisable cull_face(GL_CULL_FACE);
+                gGL.setColorMask(false, false, true, false);
+                for (const SKOverviewCensus::Batch& batch : batches)
+                {
+                    const U32 start = batch.mStart[skoverview::INVISIBLE];
+                    const U32 count = batch.mStart[skoverview::INVISIBLE + 1] - start;
+                    if (!count)
+                    {
+                        continue;
+                    }
+                    const LLVector3 offset_agent = gAgent.getPosAgentFromGlobal(batch.mOrigin);
+                    gGL.loadMatrix(shot.mView);
+                    gGL.translatef(offset_agent.mV[VX], offset_agent.mV[VY], offset_agent.mV[VZ]);
+                    gGLLastMatrix = NULL;
+                    batch.mBuffer->setBuffer();
+                    gGL.diffuseColor4f(0.f, 0.f, 1.f, 1.f);
+                    batch.mBuffer->drawArrays(LLRender::TRIANGLES, start, count);
+                }
+                gGL.setColorMask(true, false, false, false);
             }
             gGL.setPolygonOffset(0.f, 0.f);
         };
@@ -474,7 +497,12 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
         capture.clear();
         glClearDepth(clear_depth);
         glClearColor(clear_colour[0], clear_colour[1], clear_colour[2], clear_colour[3]);
-        draws = gPipeline.skRenderOverview(shot.mView, shot.mProj, cull, shot.mCut, ghost, census);
+        std::vector<LLVector3> viewpoints;
+        for (const LLVector3d& p : viewpointsGlobal())
+        {
+            viewpoints.push_back(gAgent.getPosAgentFromGlobal(p));
+        }
+        draws = gPipeline.skRenderOverview(shot.mView, shot.mProj, cull, shot.mCut, ghost, census, viewpoints);
         capture.flush();
     }
 
@@ -683,6 +711,19 @@ void SKOverviewCapture::tactical()
 
 
 // The tactical overview over the finished frame: after renderFinalize, which would otherwise paint the world over it.
+std::vector<LLVector3d> SKOverviewCapture::viewpointsGlobal() const
+{
+    // Where the view is: the agent, the main camera, and the tactical orbit's centre.
+    std::vector<LLVector3d> points;
+    points.push_back(gAgent.getPositionGlobal());
+    points.push_back(gAgent.getPosGlobalFromAgent(LLViewerCamera::getInstance()->getOrigin()));
+    if (!mTacticalCentre.isExactlyZero())
+    {
+        points.push_back(gAgent.getPosGlobalFromAgent(mTacticalCentre));
+    }
+    return points;
+}
+
 bool SKOverviewCapture::tacticalShown()
 {
     return instanceExists() && instance().mLastCompositeFrame == LLFrameTimer::getFrameCount();
