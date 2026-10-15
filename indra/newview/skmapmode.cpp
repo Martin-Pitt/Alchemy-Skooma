@@ -201,7 +201,8 @@ bool SKMapMode::open()
     p.name = "world_map_3d_input";
     p.rect = gViewerWindow->getWorldViewRectScaled();
     p.follows.flags = FOLLOWS_ALL;
-    p.mouse_opaque = true;
+    // Not opaque: an opaque view swallows what it declines, and alt-cam and the wheel must reach the tools.
+    p.mouse_opaque = false;
     SKWorldMapInputView* input = new SKWorldMapInputView(p);
     root->addChild(input);
     mInput = input->getHandle();
