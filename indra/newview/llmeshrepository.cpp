@@ -2629,6 +2629,12 @@ bool LLMeshRepoThread::decompositionReceived(const LLUUID& mesh_id, U8* data, S3
         }
     }
 
+    // <SK:Nexii> Navmesh census and physics-shape render: the sim stretches the
+    // hulls to the object's box, so decode their domain to it, not to Min/Max.
+    decomp.erase("Min");
+    decomp.erase("Max");
+    // </SK:Nexii>
+
     {
         auto d = std::make_unique<LLModel::Decomposition>(decomp);
         d->mMeshID = mesh_id;
@@ -2699,6 +2705,29 @@ EMeshProcessingResult LLMeshRepoThread::physicsShapeReceived(const LLUUID& mesh_
                 // Report the same "no physics shape" result as an asset that carries none.
                 d->mPhysicsShapeMesh.clear();
             }
+            // <SK:Nexii> Navmesh census and physics-shape render: the sim stretches the
+            // physics mesh to the object's box, so map its bounds onto -0.5..0.5.
+            else if (!pos.empty())
+            {
+                LLVector3 lo = pos[0];
+                LLVector3 hi = pos[0];
+                for (const LLVector3& p : pos)
+                {
+                    update_min_max(lo, hi, p);
+                }
+                for (LLVector3& p : pos)
+                {
+                    for (S32 k = 0; k < 3; ++k)
+                    {
+                        const F32 range = hi.mV[k] - lo.mV[k];
+                        if (range > 1e-6f)
+                        {
+                            p.mV[k] = (p.mV[k] - lo.mV[k]) / range - 0.5f;
+                        }
+                    }
+                }
+            }
+            // </SK:Nexii>
         }
     }
 
