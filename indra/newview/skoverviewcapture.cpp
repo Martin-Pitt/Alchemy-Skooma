@@ -76,6 +76,7 @@ namespace
     LLRenderTarget sTacticalResolved;
     LLGLSLShader sResolve;
     LLGLSLShader sComposite;
+    LLGLSLShader sGeom;       // the census: class code and the face's own normal
     GLuint sQueries[2] = { 0, 0 };
 
     const F32 CENSUS_RANGE_M = 128.f;
@@ -195,6 +196,7 @@ void SKOverviewCapture::cleanupGL()
     sTacticalResolved.release();
     sResolve.unload();
     sComposite.unload();
+    sGeom.unload();
 }
 
 void SKOverviewCapture::releaseGL()
@@ -205,6 +207,7 @@ void SKOverviewCapture::releaseGL()
     sTacticalResolved.release();
     sResolve.unload();
     sComposite.unload();
+    sGeom.unload();
     if (sQueries[0])
     {
         glDeleteQueries(2, sQueries);
@@ -263,6 +266,17 @@ bool SKOverviewCapture::ensureShaders()
         sComposite.mShaderLevel = 1;
         ok = sComposite.createShader();
         LL_INFOS_ONCE("SKOverview") << "overview composite shader " << (ok ? "loaded" : "FAILED") << LL_ENDL;
+    }
+    if (ok && !sGeom.mProgramObject)
+    {
+        sGeom.mName = "SK Overview Geometry";
+        sGeom.mShaderFiles.clear();
+        sGeom.clearPermutations();
+        sGeom.mShaderFiles.push_back(std::make_pair("skooma/overviewGeomV.glsl", GL_VERTEX_SHADER));
+        sGeom.mShaderFiles.push_back(std::make_pair("skooma/overviewGeomF.glsl", GL_FRAGMENT_SHADER));
+        sGeom.mShaderLevel = 1;
+        ok = sGeom.createShader();
+        LL_INFOS_ONCE("SKOverview") << "overview geometry shader " << (ok ? "loaded" : "FAILED") << LL_ENDL;
     }
     if (ok && !sQueries[0])
     {
@@ -427,6 +441,22 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
     {
         census = [&batches, &shot]()
         {
+            // The census writes its class code and the triangle's own normal (G, A), so flush parts never crease.
+            LLVector4a down, normal_eye, origin_eye, zero;
+            down.set(0.f, 0.f, -1.f, 0.f);
+            shot.mView.rotate(down, normal_eye);
+            zero.clear();
+            shot.mView.affineTransform(zero, origin_eye);
+            const F32 plane[4] = { normal_eye.getF32ptr()[0], normal_eye.getF32ptr()[1], normal_eye.getF32ptr()[2],
+                                   shot.mCut - normal_eye.dot3(origin_eye).getF32() };
+            LLMatrix4a inverse_view;
+            inverse_view.setInverse(shot.mView);
+            const F32* m = inverse_view.getF32ptr();
+            const F32 eye_to_world[9] = { m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10] };
+            sGeom.bind();
+            glUniform4fv(glGetUniformLocation(sGeom.mProgramObject, "clip_plane"), 1, plane);
+            glUniformMatrix3fv(glGetUniformLocation(sGeom.mProgramObject, "sk_eye_to_world"), 1, GL_FALSE, eye_to_world);
+            gGL.setColorMask(true, true, false, true);
             LLGLEnable offset(GL_POLYGON_OFFSET_FILL);
             gGL.setPolygonOffset(-1.f, -4.f);
             for (S32 pass = 0; pass < 2; ++pass)
@@ -484,6 +514,7 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
                 gGL.setColorMask(true, false, false, false);
             }
             gGL.setPolygonOffset(0.f, 0.f);
+            sGeom.unbind();
         };
     }
 

@@ -30,7 +30,7 @@
 out vec4 frag_color;
 
 uniform sampler2D depthMap;
-uniform sampler2D classMap;     // R class code (skoverviewcensus.h), B an invisible face on top
+uniform sampler2D classMap;     // R class code (skoverviewcensus.h), B an invisible face on top, G and A the census face normal
 uniform mat4 sk_inv_vp;         // window to world: inverse of projection times view
 uniform float sk_zo;            // 1 when window depth is NDC depth (zero-to-one), 0 for minus-one-to-one
 uniform float sk_far_depth;     // the cleared depth: no surface
@@ -91,6 +91,31 @@ bool surfaceAt(ivec2 p, out vec3 pos)
     vec4 ndc = vec4(uv * 2.0 - 1.0, mix(d * 2.0 - 1.0, d, sk_zo), 1.0);
     vec4 w = sk_inv_vp * ndc;
     pos = w.xyz / w.w;
+    return true;
+}
+
+vec3 octDecode(vec2 e)
+{
+    e = e * 2.0 - 1.0;
+    vec3 n = vec3(e, 1.0 - abs(e.x) - abs(e.y));
+    if (n.z < 0.0)
+    {
+        n.xy = (1.0 - abs(n.yx)) * vec2(n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0);
+    }
+    return normalize(n);
+}
+
+// The face normal the census wrote at p, false where none was (terrain, nothing).
+bool geomNormal(ivec2 p, out vec3 n)
+{
+    p = clamp(p, ivec2(0), gSize - 1);
+    vec4 cls = texelFetch(classMap, p, 0);
+    if (cls.g == 0.0 && cls.a == 0.0)
+    {
+        n = vec3(0.0, 0.0, 1.0);
+        return false;
+    }
+    n = octDecode(vec2(cls.g, cls.a));
     return true;
 }
 
@@ -182,6 +207,10 @@ void main()
     float rel = pos.z - sk_agent_z;
     float px_m = pixelMetres(pos);
 
+    // The census's own face normals (classMap G, A); none (0, 0) for terrain, whose normal comes from depth.
+    vec3 gn = vec3(0.0);
+    bool has_gn = geomNormal(p, gn);
+
     // The normal from the nearer neighbour on each axis, so a silhouette does not bend it.
     vec3 px0, px1, py0, py1;
     bool hx0 = surfaceAt(p - ivec2(1, 0), px0), hx1 = surfaceAt(p + ivec2(1, 0), px1);
@@ -192,6 +221,10 @@ void main()
     vec3 dy = dot(dy0, dy0) < dot(dy1, dy1) ? dy0 : dy1;
     vec3 n = cross(dx, dy);
     n = dot(n, n) > 1e-12 && dot(dx, dx) < 1e5 && dot(dy, dy) < 1e5 ? normalize(n) : vec3(0.0, 0.0, 1.0);
+    if (has_gn)
+    {
+        n = gn;
+    }
     if (dot(n, sk_eye - pos) < 0.0)
     {
         n = -n;
@@ -280,7 +313,13 @@ void main()
         float crease = 0.0;
         // A crease is where two faces meet: both neighbours on the surface (no step), the faces turned apart. Flush or
         // overlapping coplanar parts differ only in depth noise, which never makes one.
-        if (hx1 && hy1 && abs(dot(px1 - pos, n)) < coplanar_m * 4.0 && abs(dot(py1 - pos, n)) < coplanar_m * 4.0)
+        vec3 gx, gy;
+        if (has_gn && geomNormal(p + ivec2(1, 0), gx) && geomNormal(p + ivec2(0, 1), gy))
+        {
+            // Where faces meet, from the faces' own normals: flush or overlapping parts on one plane share theirs.
+            crease = 1.0 - min(abs(dot(gx, gn)), abs(dot(gy, gn)));
+        }
+        else if (hx1 && hy1 && abs(dot(px1 - pos, n)) < coplanar_m * 4.0 && abs(dot(py1 - pos, n)) < coplanar_m * 4.0)
         {
             vec3 m = normalize(cross(px1 - pos, py1 - pos) + vec3(1e-6));
             crease = 1.0 - abs(dot(m, n));
