@@ -31,10 +31,12 @@
 #include "llcallbacklist.h"
 #include "llframetimer.h"
 #include "llgroupmgr.h"
+#include "llviewercontrol.h"
 #include "llworld.h"
 #include "skmapview.h"
 #include "sknavmesh.h"
 #include "sknetmap.h"
+#include "skworldcensus.h"
 
 #include <cmath>
 
