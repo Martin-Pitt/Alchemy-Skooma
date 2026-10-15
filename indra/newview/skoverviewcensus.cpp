@@ -30,6 +30,9 @@
 #include "llimagegl.h"
 #include "llmaterial.h"
 #include "llvertexbuffer.h"
+#include "llviewerregion.h"
+#include "llvovolume.h"
+#include "skphysicsshape.h"
 #include "sknavbuild.h"
 #include "sknavtypes.h"
 #include "skworldcensus.h"
@@ -267,13 +270,85 @@ bool SKOverviewCensus::update()
     {
         sig ^= v + 0x9e3779b97f4a7c15ull + (sig << 6) + (sig >> 2);
     };
+    // Sculpted parts draw from what is rendered, over land and void alike: a megasculpt's physics is a poor stand-in
+    // for the ground it shows, and a phantom one has no physics record at all. Their census records are not drawn.
+    struct Sculpt
+    {
+        LLUUID mPart;
+        LLVector3d mOrigin;             ///< its region's origin, global; triangles are region-local
+        std::vector<LLVector3> mTris;
+        F32 mHeight = 0.f;
+        skoverview::CensusClass mFixed = skoverview::NUM_CENSUS_CLASSES;
+    };
+    std::vector<Sculpt> sculpts;
+    std::set<LLUUID> sculpted;
+    for (S32 i = 0; i < gObjectList.getNumObjects(); ++i)
+    {
+        LLVOVolume* volume = dynamic_cast<LLVOVolume*>(gObjectList.getObject(i));
+        if (!volume || volume->isDead() || volume->isAttachment() || volume->isMesh() || !volume->isSculpted() ||
+            !volume->getRegion() || !volume->getVolume())
+        {
+            continue;
+        }
+        sculpted.insert(volume->getID());
+        // A sculpt whose map has not loaded is a stretched placeholder sphere: nothing until it has.
+        if (volume->getVolume()->getSculptLevel() != 0)
+        {
+            mUnknownLook = true;
+            continue;
+        }
+        const LLVector3d centre = volume->getPositionGlobal();
+        const F64 reach = snap->mRange + volume->getScale().magVec();
+        if ((centre - snap->mCenter).magVec() > reach && (centre - snap->mCamera).magVec() > reach)
+        {
+            continue;
+        }
+        SKShapeGeometry geom;
+        if (!skRenderShapeGeometry(volume, geom))
+        {
+            continue;
+        }
+        Sculpt sc;
+        sc.mPart = volume->getID();
+        sc.mOrigin = volume->getRegion()->getOriginGlobal();
+        const LLVector3 region_agent = volume->getRegion()->getOriginAgent();
+        sc.mTris.reserve(geom.mTriangles.size());
+        F32 lo = 1e30f, hi = -1e30f;
+        for (const LLVector3& v : geom.mTriangles)
+        {
+            const LLVector3 local = volume->volumePositionToAgent(v) - region_agent;
+            lo = llmin(lo, local.mV[VZ]);
+            hi = llmax(hi, local.mV[VZ]);
+            sc.mTris.push_back(local);
+        }
+        sc.mHeight = hi - lo;
+        const LLVector3 scale = volume->getScale();
+        const bool large = llmax(scale.mV[VX], llmax(scale.mV[VY], scale.mV[VZ])) > skoverview::INVISIBLE_WALL_M;
+        const Seen seen = partSeen(sc.mPart, nullptr);
+        mUnknownLook |= seen == Seen::UNKNOWN;
+        if (seen == Seen::INVISIBLE)
+        {
+            if (large)
+            {
+                continue;
+            }
+            sc.mFixed = skoverview::INVISIBLE;
+        }
+        mix(sc.mPart.getCRC32());
+        mix(seen == Seen::INVISIBLE ? 0x7a11u : 0x0u);
+        mix((U64)sc.mTris.size());
+        mix((U64)(S64)std::llround(centre.mdV[VX] * 64.0) ^ ((U64)(S64)std::llround(centre.mdV[VY] * 64.0) << 21) ^
+            ((U64)(S64)std::llround(centre.mdV[VZ] * 64.0) << 42));
+        sculpts.push_back(std::move(sc));
+    }
+
     std::vector<const sknav::Record*> kept;
     std::vector<U8> fixed_classes;
     kept.reserve(snap->mRecords.size());
     for (const sknav::RecordPtr& rec : snap->mRecords)
     {
         skoverview::CensusClass fixed;
-        if (!rec || !skoverview::keepRecord(*rec, fixed))
+        if (!rec || !skoverview::keepRecord(*rec, fixed) || sculpted.count(rec->mPart))
         {
             continue;
         }
@@ -331,15 +406,30 @@ bool SKOverviewCensus::update()
     };
     std::map<std::pair<S64, S64>, Bins> regions;
     std::vector<LLVector3> tris;
-    for (size_t i = 0; i < kept.size(); ++i)
+    for (size_t i = 0; i < kept.size() + sculpts.size(); ++i)
     {
-        const sknav::Record& rec = *kept[i];
-        const std::pair<S64, S64> key((S64)std::llround(rec.mOrigin.mdV[VX]), (S64)std::llround(rec.mOrigin.mdV[VY]));
+        const bool is_sculpt = i >= kept.size();
+        const LLVector3d origin = is_sculpt ? sculpts[i - kept.size()].mOrigin : kept[i]->mOrigin;
+        const std::pair<S64, S64> key((S64)std::llround(origin.mdV[VX]), (S64)std::llround(origin.mdV[VY]));
         Bins& bins = regions[key];
-        bins.mOrigin = rec.mOrigin;
-        tris.clear();
-        sknav::emitRecord(rec, rec.mOrigin, tris);
-        const F32 part_height = (F32)(rec.mMax.mdV[VZ] - rec.mMin.mdV[VZ]);
+        bins.mOrigin = origin;
+        F32 part_height = 0.f;
+        U8 fixed_class = skoverview::NUM_CENSUS_CLASSES;
+        if (is_sculpt)
+        {
+            const Sculpt& sc = sculpts[i - kept.size()];
+            tris = sc.mTris;
+            part_height = sc.mHeight;
+            fixed_class = sc.mFixed;
+        }
+        else
+        {
+            const sknav::Record& rec = *kept[i];
+            tris.clear();
+            sknav::emitRecord(rec, rec.mOrigin, tris);
+            part_height = (F32)(rec.mMax.mdV[VZ] - rec.mMin.mdV[VZ]);
+            fixed_class = fixed_classes[i];
+        }
         for (size_t t = 0; t + 2 < tris.size(); t += 3)
         {
             const LLVector3& a = tris[t];
@@ -351,8 +441,8 @@ bool SKOverviewCensus::update()
             {
                 continue;
             }
-            const skoverview::CensusClass cls = fixed_classes[i] < skoverview::NUM_CENSUS_CLASSES
-                                                    ? (skoverview::CensusClass)fixed_classes[i]
+            const skoverview::CensusClass cls = fixed_class < skoverview::NUM_CENSUS_CLASSES
+                                                    ? (skoverview::CensusClass)fixed_class
                                                     : skoverview::classifyTriangle(n.mV[VZ] / len, part_height);
             std::vector<LLVector3>& out = bins.mClass[cls];
             out.push_back(a);
