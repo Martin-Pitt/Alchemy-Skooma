@@ -183,8 +183,8 @@ namespace
         b.mCenterY = 540.0;
         CHECK((cursorRay(b, 960.0, 540.0) - b.mAt).magVec() < 1.0e-12);
         const LLVector3d right = cursorRay(b, 1460.0, 540.0); // 45 degrees to the right, away from left
-        CHECK(std::fabs(right.mdV[VX] - std::sqrt(0.5)) < 1.0e-12);
-        CHECK(std::fabs(right.mdV[VY] + std::sqrt(0.5)) < 1.0e-12);
+        CHECK(std::fabs(right.mdV[VX] - std::sqrt(0.5)) < 1.0e-6); // normalize() works in F32 precision
+        CHECK(std::fabs(right.mdV[VY] + std::sqrt(0.5)) < 1.0e-6);
     }
 
     // Near the horizon a pixel is kilometres of ground, so a pan ray never dips less than PAN_MIN_DIP.
