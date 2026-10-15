@@ -1,6 +1,6 @@
 /**
  * @file skoverviewcapture.h
- * @brief The overview: the census as styled shapes over a ghost of the rendered world, for the mini-map's base and
+ * @brief The overview: the census as styled shapes over the terrain, for the mini-map's base and
  *        the tactical view.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
@@ -47,7 +47,7 @@ namespace skmapdraw
 }
 class SKPopupPanes;
 
-// Renders terrain, the rendered world (the ghost, SKOverviewGhost) and the census's shapes below a cut plane at the
+// Renders terrain and the census's shapes below a cut plane at the
 // navmesh floor under the agent plus SKOverviewCutHeight, each writing a class code, then resolves depth and codes
 // into an RGBA8 map. Two shots share the passes: the straight-down map of the agent's region for the mini-map
 // (SKMapCaptureBase, every SKOverviewRefresh seconds) and the tactical view (SKTacticalOverview), a tilted orbit

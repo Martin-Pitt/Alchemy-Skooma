@@ -47,8 +47,6 @@ namespace skoverview
     {
         CODE_NONE = 0,
         CODE_TERRAIN = 255,     ///< the region's land: its shadow program writes white
-        CODE_GHOST = 2,         ///< rendered geometry, front face on top
-        CODE_GHOST_SECTION = 3, ///< rendered geometry the cut went through
         CODE_FLOOR = 16,        ///< census: walkable slope, facing up or down
         CODE_WALL = 17,         ///< census: steep faces of parts taller than cover
         CODE_COVER = 18,        ///< census: steep faces of parts no taller than COVER_TOP_M

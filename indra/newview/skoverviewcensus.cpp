@@ -76,7 +76,7 @@ namespace skoverview
             fixed = DOOR; // door leaves are the only parts left out of the avatar class alone
             return true;
         }
-        // Movers' census poses are a scan old; the ghost layer has them where they are.
+        // Movers' census poses are a scan old; the markers show who is where.
         return !rec.mDynamic && !(rec.mExclude & sknav::EXCLUDE_SOLID);
     }
 

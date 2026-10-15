@@ -35,7 +35,7 @@ uniform mat4 sk_inv_vp;         // window to world: inverse of projection times 
 uniform float sk_zo;            // 1 when window depth is NDC depth (zero-to-one), 0 for minus-one-to-one
 uniform float sk_far_depth;     // the cleared depth: no surface
 uniform vec3 sk_eye;
-uniform float sk_top_down;      // 1 for the straight-down map: no distance fade, ghost tops by height
+uniform float sk_top_down;      // 1 for the straight-down map: no distance fade
 uniform float sk_agent_z;       // the floor the agent stands on
 uniform float sk_cut;
 uniform float sk_water_z;
@@ -44,8 +44,6 @@ uniform vec4 sk_region;         // the agent's region: min x, min y, max x, max 
 uniform vec3 sk_invisible;
 
 const int CODE_NONE = 0;
-const int CODE_GHOST = 2;
-const int CODE_GHOST_SECTION = 3;
 const int CODE_FLOOR = 16;
 const int CODE_WALL = 17;
 const int CODE_COVER = 18;
@@ -70,14 +68,11 @@ const vec3 LIGHT = vec3(-0.45, 0.45, 0.77);         // from the north-west and a
 const float GROUND_LIFT = 1.45;
 const float ROOF_M = 5.0;                          // a floor this far above the agent's is roof-bright
 const float HEIGHT_GAIN = 0.045;                    // brightness per metre above the agent's floor
-const float GHOST_VALUE = 0.55;
 const float AO_STRENGTH = 0.65;
 const float FADE_START_M = 90.0;
 const float FADE_END_M = 260.0;
 const float OUTSIDE_DIM = 0.45;
 const float GRID_M = 8.0;
-const float HALF_COVER_M = 0.5;
-const float FULL_COVER_M = 1.5;
 
 ivec2 gSize;
 
@@ -237,14 +232,8 @@ void main()
     }
     else
     {
-        // Ghost: rendered geometry the census does not hold, the same hue darker and flatter.
-        c = mix(GROUND, SLATE_WALL, GHOST_VALUE);
-        a = code == CODE_GHOST_SECTION ? 0.7 : 0.6;
-        if (sk_top_down > 0.5 && (code == CODE_GHOST_SECTION || rel > HALF_COVER_M))
-        {
-            c = rel > FULL_COVER_M || code == CODE_GHOST_SECTION ? SLATE_WALL : SLATE_WALL * 0.85;
-            a = 0.75;
-        }
+        // Nothing the overview draws writes another code; mark it plainly if one turns up.
+        c = SLATE_WALL;
     }
 
     // Height reads as brightness: above the agent's floor lighter, below darker.

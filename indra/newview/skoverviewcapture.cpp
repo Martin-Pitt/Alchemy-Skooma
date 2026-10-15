@@ -1,6 +1,6 @@
 /**
  * @file skoverviewcapture.cpp
- * @brief The overview: the census as styled shapes over a ghost of the rendered world, for the mini-map's base and
+ * @brief The overview: the census as styled shapes over the terrain, for the mini-map's base and
  *        the tactical view.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
@@ -404,7 +404,6 @@ void SKOverviewCapture::frame()
 
 U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved, const Shot& shot)
 {
-    static LLCachedControl<bool> ghost(gSavedSettings, "SKOverviewGhost", true);
     const S32 w = capture.getWidth();
     const S32 h = capture.getHeight();
     LLViewerRegion* region = gAgent.getRegion();
@@ -420,7 +419,7 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
     LLCamera cull = shot.mCull;
     LLViewerCamera::updateFrustumPlanes(cull, false, false, true);
 
-    // The census, region by region, a class a range, nearer than the ghost where they coincide.
+    // The census, region by region, a class a range, nearer than the terrain where they coincide.
     const std::vector<SKOverviewCensus::Batch>& batches = mCensus.batches();
     std::function<void()> census;
     if (!batches.empty())
@@ -457,7 +456,7 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
                 glCullFace(GL_BACK);
             }
             {
-                // Transparent parts small enough to be invisible walls: the ghost's hatch flag, hiding nothing.
+                // Transparent parts small enough to be invisible walls: the hatch flag, hiding nothing.
                 LLGLDepthTest depth(GL_TRUE, GL_FALSE, GL_LEQUAL);
                 LLGLDisable cull_face(GL_CULL_FACE);
                 gGL.setColorMask(false, false, true, false);
@@ -497,7 +496,7 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
         capture.clear();
         glClearDepth(clear_depth);
         glClearColor(clear_colour[0], clear_colour[1], clear_colour[2], clear_colour[3]);
-        draws = gPipeline.skRenderOverview(shot.mView, shot.mProj, cull, shot.mCut, ghost, census);
+        draws = gPipeline.skRenderOverview(shot.mView, shot.mProj, cull, shot.mCut, census);
         capture.flush();
     }
 

@@ -5348,17 +5348,6 @@
             <key>Value</key>
             <integer>1024</integer>
         </map>
-        <key>SKOverviewGhost</key>
-        <map>
-            <key>Comment</key>
-            <string>Draw the rendered world under the census in the overview as a faint tint with outlines.</string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>Boolean</string>
-            <key>Value</key>
-            <integer>1</integer>
-        </map>
         <key>SKTacticalOverview</key>
         <map>
             <key>Comment</key>

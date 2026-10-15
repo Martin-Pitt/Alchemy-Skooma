@@ -12409,7 +12409,7 @@ U32 LLPipeline::skRenderOutlineCoverage(LLSpatialBridge* bridge, const LLMatrix4
 // </SK:Nexii>
 
 // <SK:Nexii> overview capture: the world under a cut plane, one class code a pass in R, invisible faces flagged in B.
-U32 LLPipeline::skRenderOverview(const LLMatrix4a& view, const LLMatrix4a& proj, LLCamera& camera, F32 cut_z, bool ghost,
+U32 LLPipeline::skRenderOverview(const LLMatrix4a& view, const LLMatrix4a& proj, LLCamera& camera, F32 cut_z,
                                  const std::function<void()>& census)
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_PIPELINE;
@@ -12435,10 +12435,8 @@ U32 LLPipeline::skRenderOverview(const LLMatrix4a& view, const LLMatrix4a& proj,
     } restore;
 
     pushRenderTypeMask();
-    // Avatars are left out: the markers stand for them; animesh stays, as world objects the census also keeps.
-    clearRenderTypeMask(RENDER_TYPE_SKY, RENDER_TYPE_WL_SKY, RENDER_TYPE_GRASS, RENDER_TYPE_TREE, RENDER_TYPE_VOIDWATER,
-                        RENDER_TYPE_WATER, RENDER_TYPE_PASS_GRASS, RENDER_TYPE_HUD, RENDER_TYPE_PARTICLES, RENDER_TYPE_CLOUDS,
-                        RENDER_TYPE_HUD_PARTICLES, RENDER_TYPE_AVATAR, END_RENDER_TYPES);
+    // Terrain is the only rendered layer: the census draws everything else, so the cull and sort see terrain alone.
+    andRenderTypeMask(RENDER_TYPE_TERRAIN, END_RENDER_TYPES);
 
     // The coverage camera's id: a non-world camera never updates LOD, so parts keep the LOD the agent's own view chose.
     LLViewerCamera::sCurCameraID = LLViewerCamera::CAMERA_SK_COVERAGE;
@@ -12510,74 +12508,6 @@ U32 LLPipeline::skRenderOverview(const LLMatrix4a& view, const LLMatrix4a& proj,
             ++draws;
         }
     }
-    static const U32 solid_types[] = { LLRenderPass::PASS_SIMPLE,        LLRenderPass::PASS_FULLBRIGHT,
-                                       LLRenderPass::PASS_SHINY,         LLRenderPass::PASS_BUMP,
-                                       LLRenderPass::PASS_FULLBRIGHT_SHINY, LLRenderPass::PASS_MATERIAL,
-                                       LLRenderPass::PASS_SPECMAP,       LLRenderPass::PASS_NORMMAP,
-                                       LLRenderPass::PASS_NORMSPEC,      LLRenderPass::PASS_MATERIAL_ALPHA_EMISSIVE,
-                                       LLRenderPass::PASS_SPECMAP_EMISSIVE, LLRenderPass::PASS_NORMMAP_EMISSIVE,
-                                       LLRenderPass::PASS_NORMSPEC_EMISSIVE, LLRenderPass::PASS_ALPHA_MASK,
-                                       LLRenderPass::PASS_FULLBRIGHT_ALPHA_MASK, LLRenderPass::PASS_NORMSPEC_MASK,
-                                       LLRenderPass::PASS_MATERIAL_ALPHA_MASK, LLRenderPass::PASS_SPECMAP_MASK,
-                                       LLRenderPass::PASS_NORMMAP_MASK };
-    // Every ghost pass skips draws with the default transparent or an invisiprim texture: such a face is masked or
-    // blended away in the world (alpha 1 with the transparent texture lands in the alpha-mask passes), but the ghost
-    // draws masks whole and would show it solid.
-    auto render_ghost = [&](U32 type)
-    {
-        gGL.loadMatrix(LLViewerCamera::getCurrent().getModelview());
-        gGLLastMatrix = NULL;
-        for (LLCullResult::drawinfo_iterator i = result.beginRenderMap(type); i != result.endRenderMap(type); ++i)
-        {
-            LLDrawInfo* info = *i;
-            if (info->mTexture.notNull() && skoverview::transparentTexture(info->mTexture->getID()))
-            {
-                static std::set<LLUUID> logged;
-                if (logged.insert(info->mTexture->getID()).second)
-                {
-                    LL_INFOS("SKOverview") << "ghost skips draws with texture " << info->mTexture->getID() << LL_ENDL;
-                }
-                continue;
-            }
-            mSimplePool->pushBatch(*info, false, false);
-        }
-        gGL.loadMatrix(LLViewerCamera::getCurrent().getModelview());
-        gGLLastMatrix = NULL;
-    };
-
-    if (ghost)
-    {
-        // Masked parts draw whole: the ghost is a tint, so a cut-out leaf reading as its card costs nothing.
-        LL_PROFILE_ZONE_NAMED_CATEGORY_PIPELINE("sk overview objects");
-        LLGLDepthTest depth(GL_TRUE, GL_TRUE, GL_LESS);
-        gGL.setColorMask(true, false, false, false);
-        bind_clip(skoverview::CODE_GHOST);
-        for (U32 type : solid_types)
-        {
-            render_ghost(type);
-        }
-        renderGLTFObjects(LLRenderPass::PASS_GLTF_PBR, false, false);
-        gGL.loadMatrix(view);
-        gGLLastMatrix = NULL;
-        mAlphaMaskPool->pushGLTFBatches(LLRenderPass::PASS_GLTF_PBR_ALPHA_MASK);
-    }
-    if (ghost)
-    {
-        // Section: where the nearest surface is a back face the cut went through a solid; its sides would otherwise
-        // be edge-on from above and draw nothing.
-        LL_PROFILE_ZONE_NAMED_CATEGORY_PIPELINE("sk overview section");
-        LLGLDepthTest depth(GL_TRUE, GL_FALSE, GL_LEQUAL);
-        LLGLEnable cull_back(GL_CULL_FACE);
-        glCullFace(GL_FRONT);
-        gGL.setColorMask(true, false, false, false);
-        bind_clip(skoverview::CODE_GHOST_SECTION);
-        for (U32 i = 0; i < 9; ++i)
-        {
-            render_ghost(solid_types[i]);
-        }
-        renderGLTFObjects(LLRenderPass::PASS_GLTF_PBR, false, false);
-        glCullFace(GL_BACK);
-    }
     if (census)
     {
         LL_PROFILE_ZONE_NAMED_CATEGORY_PIPELINE("sk overview census");
@@ -12587,25 +12517,6 @@ U32 LLPipeline::skRenderOverview(const LLMatrix4a& view, const LLMatrix4a& proj,
         gGL.loadMatrix(view);
         gGLLastMatrix = NULL;
     }
-    if (ghost)
-    {
-        // Invisible faces tint what is under them and hide nothing: no depth write, equal depth passes.
-        LL_PROFILE_ZONE_NAMED_CATEGORY_PIPELINE("sk overview invisible");
-        LLGLDepthTest depth(GL_TRUE, GL_FALSE, GL_LEQUAL);
-        gGL.setColorMask(false, false, true, false);
-        bind_clip(skoverview::CODE_NONE);
-        renderObjects(LLRenderPass::PASS_INVISIBLE, false, false, false);
-        renderObjects(LLRenderPass::PASS_ALPHA_INVISIBLE, false, false, false);
-
-        for (U32 type = 0; type < LLRenderPass::NUM_RENDER_TYPES; ++type)
-        {
-            for (LLCullResult::drawinfo_iterator i = result.beginRenderMap(type); i != result.endRenderMap(type); ++i)
-            {
-                ++draws;
-            }
-        }
-    }
-
     gClipProgram.unbind();
     gGL.setColorMask(true, true);
     gGL.matrixMode(LLRender::MM_PROJECTION);
