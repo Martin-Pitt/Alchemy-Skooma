@@ -141,6 +141,7 @@ if(AL_BUILD_TESTS)
 
   # <SK:Nexii> Develop's TUT tests, kept registered until they are ported to Catch2: LLAddBuildTest.cmake (al_add_test) is gone upstream
   if(COMMAND al_add_test)
+    al_add_test(llvolumesplit PROJECT llmath LIBRARIES llmath llcommon)
     al_add_test(llvolume PROJECT llmath LIBRARIES llmath llcommon)
   endif()
   # </SK:Nexii>

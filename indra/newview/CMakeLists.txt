@@ -2592,41 +2592,6 @@ if(AL_BUILD_TESTS)
   target_link_libraries(newview_test_viewertexture PRIVATE al::flags llui ${test_libs})
   set_target_properties(newview_test_viewertexture PROPERTIES FOLDER "Tests/${test_project}")
 
-  # <SK:Nexii> Develop's TUT tests, kept registered until they are ported to Catch2: LLAddBuildTest.cmake (al_add_test) is gone upstream
-  if(COMMAND al_add_test)
-    # The recastnavigation port links and runs: a floor, a block, a path round it.
-    al_add_test(sknavrecast PROJECT ${test_project} LIBRARIES ll::recast)
-    al_add_test(sknavpolys UNIT PROJECT ${test_project} LIBRARIES sknavmesh ${test_libs})
-    al_add_test(skmapview UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
-    al_add_test(skmapgeom UNIT PROJECT ${test_project} SOURCES skmapview.cpp LIBRARIES sknavmesh ${test_libs})
-    al_add_test(
-      skmapraster
-      UNIT
-      PROJECT ${test_project}
-      SOURCES skmapgeom.cpp skmapview.cpp
-      LIBRARIES sknavmesh ${test_libs}
-    )
-    al_add_test(
-      skmapribbons
-      UNIT
-      PROJECT ${test_project}
-      SOURCES skmapgeom.cpp skmapview.cpp
-      LIBRARIES sknavmesh ${test_libs}
-    )
-    al_add_test(skmaplabels UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
-    al_add_test(skmapmarkers UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
-    al_add_test(
-      skmapallies
-      UNIT
-      PROJECT ${test_project}
-      LIBRARIES ${test_libs}
-      DEFINES "SKMAP_APP_SETTINGS=\"${CMAKE_CURRENT_SOURCE_DIR}/app_settings\""
-    )
-    al_add_test(skmappolicy UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
-    al_add_test(skpopuplayout UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
-  endif()
-  # </SK:Nexii>
-
   # The viewer's own code, in one binary, each test file run in a process of
   # its own. There is no library of the viewer to link, so each file of it a
   # test needs is compiled here, once. The UI is up before the first case,
@@ -2795,6 +2760,26 @@ if(AL_BUILD_TESTS)
       "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
       "AL_LSL_DEFINITIONS_DIR=\"${LSL_DEFINITIONS_DIR}\""
   )
+
+  # <SK:Nexii> The navmesh map's TUT tests, kept registered until they are ported to Catch2
+  if(COMMAND al_add_test)
+    al_add_test(skmapgeom UNIT PROJECT ${test_project} SOURCES skmapview.cpp LIBRARIES sknavmesh ${test_libs})
+    al_add_test(
+      skmapraster
+      UNIT
+      PROJECT ${test_project}
+      SOURCES skmapgeom.cpp skmapview.cpp
+      LIBRARIES sknavmesh ${test_libs}
+    )
+    al_add_test(
+      skmapribbons
+      UNIT
+      PROJECT ${test_project}
+      SOURCES skmapgeom.cpp skmapview.cpp
+      LIBRARIES sknavmesh ${test_libs}
+    )
+  endif()
+  # </SK:Nexii>
 
   # The selection outline's id and edge passes, and the window's depth under
   # the HUD, the viewer's own shader files read from the source tree, on
