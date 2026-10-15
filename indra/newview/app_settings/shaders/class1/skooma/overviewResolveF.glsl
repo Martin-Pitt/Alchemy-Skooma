@@ -245,6 +245,9 @@ void main()
     // Height reads as brightness: above the agent's floor lighter, below darker.
     c *= clamp(1.0 + rel * HEIGHT_GAIN, 0.5, 1.3);
 
+    // How far off a plane two samples of one surface can sit from depth precision and coplanar overlaps alone.
+    float coplanar_m = 0.02 + 0.002 * length(sk_eye - pos);
+
     // Key light, sky ambient and occlusion.
     float key = max(dot(n, normalize(LIGHT)), 0.0);
     float sky = n.z * 0.5 + 0.5;
@@ -261,7 +264,9 @@ void main()
         }
         vec3 v = q - pos;
         float len = length(v);
-        occ += clamp(dot(v, n) / (len + 0.05), 0.0, 1.0) * (1.0 - smoothstep(1.0, 3.0, len));
+        // Only geometry standing off this surface occludes: coplanar neighbours within depth precision never do.
+        float rise = dot(v, n) - coplanar_m;
+        occ += clamp(rise / (len + 0.05), 0.0, 1.0) * (1.0 - smoothstep(1.0, 3.0, len));
     }
     float ao = 1.0 - AO_STRENGTH * occ / 10.0;
     float debug_crease = 0.0;
@@ -273,7 +278,9 @@ void main()
     {
         vec3 nb;
         float crease = 0.0;
-        if (hx1 && hy1)
+        // A crease is where two faces meet: both neighbours on the surface (no step), the faces turned apart. Flush or
+        // overlapping coplanar parts differ only in depth noise, which never makes one.
+        if (hx1 && hy1 && abs(dot(px1 - pos, n)) < coplanar_m * 4.0 && abs(dot(py1 - pos, n)) < coplanar_m * 4.0)
         {
             vec3 m = normalize(cross(px1 - pos, py1 - pos) + vec3(1e-6));
             crease = 1.0 - abs(dot(m, n));

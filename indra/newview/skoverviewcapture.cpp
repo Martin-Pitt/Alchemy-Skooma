@@ -451,6 +451,10 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
                         }
                         const U8 code = pass == 0 ? skoverview::codeOf((skoverview::CensusClass)c) : (U8)skoverview::CODE_SECTION;
                         gGL.diffuseColor4f(code / 255.f, 0.f, 1.f, 1.f);
+                        // Coplanar parts of different classes resolve the same way every frame: floor over ramp over
+                        // cover over wall over the rest, by a class's own depth offset rather than draw order.
+                        static const F32 PRIORITY[skoverview::NUM_CENSUS_CLASSES] = { 8.f, 2.f, 4.f, 6.f, 1.f, 1.f, 1.f, 0.f, 0.f };
+                        gGL.setPolygonOffset(-1.f, -4.f - PRIORITY[c]);
                         batch.mBuffer->drawArrays(LLRender::TRIANGLES, batch.mStart[c], count);
                     }
                 }
