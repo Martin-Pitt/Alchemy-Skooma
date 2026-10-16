@@ -340,6 +340,7 @@ bool SKOverviewCensus::update()
         sc.mPart = volume->getID();
         sc.mOrigin = volume->getRegion()->getOriginGlobal();
         sc.mAnchor = volume->getRootEdit()->getPositionGlobal();
+        sc.mRoot = volume->getRootEdit()->getID();
         const LLVector3 region_agent = volume->getRegion()->getOriginAgent();
         sc.mTris.reserve(geom.mTriangles.size());
         F32 lo = 1e30f, hi = -1e30f;
@@ -452,7 +453,9 @@ bool SKOverviewCensus::update()
             ((U64)(S64)std::llround(rec->mMin.mdV[VZ] * 64.0) << 42));
         mix((U64)rec->mFeature | ((U64)rec->mExclude << 8));
     }
-    // Each part draws with its cluster, so a shot can keep the clusters at a level; a part in none is its own group.
+    // Each linkset is a group, so the tactical cut can take a building's linksets and leave its neighbours whole: a
+    // cluster joins whatever touches, often a whole block. A level still keeps whole clusters, by the heights of the
+    // cluster a linkset is in.
     std::map<const sknav::Record*, U32> cluster_of;
     const U32 clusters = (U32)snap->mClusters.mClusters.size();
     for (U32 c = 0; c < clusters; ++c)
@@ -462,40 +465,48 @@ bool SKOverviewCensus::update()
             cluster_of[rec.get()] = c;
         }
     }
-    auto groupOf = [&](size_t i) -> U32
+    std::map<LLUUID, U32> linkset_ids;
+    std::vector<LLUUID> roots;
+    std::vector<U32> group_of(kept.size() + sculpts.size());
+    std::map<U32, U32> group_cluster;
+    for (size_t i = 0; i < group_of.size(); ++i)
     {
+        const LLUUID root = i >= kept.size() ? sculpts[i - kept.size()].mRoot
+                                             : kept[i]->mRoot.notNull() ? kept[i]->mRoot : kept[i]->mPart;
+        const auto ins = linkset_ids.emplace(root, (U32)linkset_ids.size());
+        if (ins.second)
+        {
+            roots.push_back(root);
+        }
+        group_of[i] = ins.first->second;
         if (i < kept.size())
         {
             const auto it = cluster_of.find(kept[i]);
             if (it != cluster_of.end())
             {
-                return it->second;
+                group_cluster.emplace(group_of[i], it->second);
             }
         }
-        return clusters + (U32)i;
-    };
+    }
+    auto groupOf = [&](size_t i) -> U32 { return group_of[i]; };
     for (size_t i = 0; i < kept.size(); ++i)
     {
         mix(groupOf(i));
+        const auto cluster = group_cluster.find(groupOf(i));
+        mix(cluster != group_cluster.end() ? cluster->second : 0xffffffffu);
     }
     // Which land is connected decides what of a surround is in the void.
     for (const LLViewerRegion* region : LLWorld::getInstance()->getRegionList())
     {
         mix(region->getHandle());
     }
-    // Where each group is, for whose region it is in: a cluster's middle, else its linkset root's position, so a
-    // building straddling a border is one group with one answer.
+    // Where each linkset is, for whose region it is in: its root's position, so a linkset straddling a border has
+    // one answer.
     auto anchorOf = [&](size_t i) -> LLVector3d
     {
         if (i >= kept.size())
         {
             return sculpts[i - kept.size()].mAnchor;
-        }
-        const auto it = cluster_of.find(kept[i]);
-        if (it != cluster_of.end())
-        {
-            const sknav::Cluster& cluster = *snap->mClusters.mClusters[it->second];
-            return (cluster.mMin + cluster.mMax) * 0.5;
         }
         const LLViewerObject* root = gObjectList.findObject(kept[i]->mRoot);
         return root && !root->isDead() ? root->getPositionGlobal() : (kept[i]->mMin + kept[i]->mMax) * 0.5;
@@ -631,11 +642,20 @@ bool SKOverviewCensus::update()
             Group group;
             group.mMinZ = b.second.mMin.mV[VZ];
             group.mMaxZ = b.second.mMax.mV[VZ];
-            // On the ground when its base is no higher above the land under its middle than a step or two.
-            const LLVector3d middle = bins.mOrigin + LLVector3d((b.second.mMin.mV[VX] + b.second.mMax.mV[VX]) * 0.5,
-                                                                (b.second.mMin.mV[VY] + b.second.mMax.mV[VY]) * 0.5, 0.0);
+            LLVector3d middle = bins.mOrigin + LLVector3d((b.second.mMin.mV[VX] + b.second.mMax.mV[VX]) * 0.5,
+                                                          (b.second.mMin.mV[VY] + b.second.mMax.mV[VY]) * 0.5, 0.0);
+            const auto cluster = group_cluster.find(b.first);
+            if (cluster != group_cluster.end())
+            {
+                const sknav::Cluster& c = *snap->mClusters.mClusters[cluster->second];
+                group.mMinZ = (F32)c.mMin.mdV[VZ];
+                group.mMaxZ = (F32)c.mMax.mdV[VZ];
+                middle = LLVector3d((c.mMin.mdV[VX] + c.mMax.mdV[VX]) * 0.5, (c.mMin.mdV[VY] + c.mMax.mdV[VY]) * 0.5, 0.0);
+            }
+            // On the ground when its cluster's base is no higher above the land under its middle than a step or two.
             group.mGround = group.mMinZ <= LLWorld::getInstance()->resolveLandHeightGlobal(middle) + skoverview::GROUND_BASE_M;
             group.mId = b.first;
+            group.mRoot = b.first < roots.size() ? roots[b.first] : LLUUID::null;
             group.mMin = bins.mOrigin + LLVector3d(b.second.mMin);
             group.mMax = bins.mOrigin + LLVector3d(b.second.mMax);
             const auto anchor = group_anchor.find(b.first);
@@ -772,6 +792,7 @@ void SKOverviewCensus::gatherSurrounds(const SKCensusSnapshot& snap)
         part.mPart = volume->getID();
         part.mOrigin = volume->getRegion()->getOriginGlobal();
         part.mAnchor = volume->getRootEdit()->getPositionGlobal();
+        part.mRoot = volume->getRootEdit()->getID();
         const LLVector3 region_agent = volume->getRegion()->getOriginAgent();
         part.mTris.reserve(geom.mTriangles.size());
         F32 lo = 1e30f, hi = -1e30f;
@@ -796,12 +817,13 @@ void SKOverviewCensus::gatherSurrounds(const SKCensusSnapshot& snap)
 void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<Occupant>& occupants)
 {
     LL_PROFILE_ZONE_SCOPED;
-    // A cluster spans batches when it crosses a border: its bounds over all of them.
+    // A linkset spans batches when it crosses a border: its bounds over all of them.
     struct Extent
     {
         LLVector3d mMin{ 1e30, 1e30, 1e30 };
         LLVector3d mMax{ -1e30, -1e30, -1e30 };
         bool mCuttable = false;
+        LLUUID mRoot;
     };
     std::map<U32, Extent> extents;
     for (const Batch& batch : mBatches)
@@ -815,37 +837,58 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
                 e.mMax.mdV[i] = llmax(e.mMax.mdV[i], group.mMax.mdV[i]);
             }
             e.mCuttable = !group.mNeverCut && region && region->pointInRegionGlobal(group.mAnchor);
+            e.mRoot = group.mRoot;
         }
     }
-    // An occupant's building: the smallest cluster or part, in the region, whose bounds hold their floor with
-    // something above it. A building with several occupants is cut at the highest of their cuts.
-    const F64 SLACK_M = 0.5;
+    // An occupant's building: every linkset in the region whose bounds hold their column and rise above their floor,
+    // so a roof or an upper storey that is its own linkset goes with the walls. The agent's is cut at the agent's
+    // level whoever else is in it; another's at the highest of its occupants' cuts.
+    const F64 SLACK_M = 0.1;
+    const F64 ABOVE_M = 0.5;
     std::map<U32, F32> cut_of;
+    std::map<U32, std::string> why;
+    std::vector<const Occupant*> ordered;
     for (const Occupant& occupant : occupants)
     {
-        const LLVector3d& p = occupant.mFloor;
-        U32 best = 0;
-        F64 best_area = -1.0;
+        if (occupant.mSelf)
+        {
+            ordered.insert(ordered.begin(), &occupant);
+        }
+        else
+        {
+            ordered.push_back(&occupant);
+        }
+    }
+    std::set<U32> agent_building;
+    for (const Occupant* occupant : ordered)
+    {
+        const LLVector3d& p = occupant->mFloor;
         for (const auto& entry : extents)
         {
             const Extent& e = entry.second;
             if (!e.mCuttable || p.mdV[VX] < e.mMin.mdV[VX] - SLACK_M || p.mdV[VX] > e.mMax.mdV[VX] + SLACK_M ||
                 p.mdV[VY] < e.mMin.mdV[VY] - SLACK_M || p.mdV[VY] > e.mMax.mdV[VY] + SLACK_M ||
-                p.mdV[VZ] < e.mMin.mdV[VZ] - SLACK_M || p.mdV[VZ] + SLACK_M > e.mMax.mdV[VZ])
+                e.mMax.mdV[VZ] < p.mdV[VZ] + ABOVE_M)
             {
                 continue;
             }
-            const F64 area = (e.mMax.mdV[VX] - e.mMin.mdV[VX]) * (e.mMax.mdV[VY] - e.mMin.mdV[VY]);
-            if (best_area < 0.0 || area < best_area)
+            if (occupant->mSelf)
             {
-                best = entry.first;
-                best_area = area;
+                agent_building.insert(entry.first);
+                cut_of[entry.first] = occupant->mCut;
+                why[entry.first] = "agent";
+                continue;
             }
-        }
-        if (best_area >= 0.0)
-        {
-            auto it = cut_of.find(best);
-            cut_of[best] = it == cut_of.end() ? occupant.mCut : llmax(it->second, occupant.mCut);
+            if (agent_building.count(entry.first))
+            {
+                continue;
+            }
+            auto it = cut_of.find(entry.first);
+            if (it == cut_of.end() || occupant->mCut > it->second)
+            {
+                cut_of[entry.first] = occupant->mCut;
+                why[entry.first] = "occupant " + occupant->mId.asString();
+            }
         }
     }
     std::vector<std::pair<U32, F32>> cuts(cut_of.begin(), cut_of.end());
@@ -856,6 +899,16 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
     mCuts = std::move(cuts);
     mCutSignature = mSignature;
     ++mCutStamp;
+    {
+        std::string list;
+        for (const auto& cut : cut_of)
+        {
+            const Extent& e = extents[cut.first];
+            list += llformat("%s linkset %s at z %.2f (%s, top %.2f)", list.empty() ? "" : ";",
+                             e.mRoot.asString().c_str(), cut.second, why[cut.first].c_str(), e.mMax.mdV[VZ]);
+        }
+        LL_INFOS("SKOverview") << "tactical cut: " << (list.empty() ? std::string("nothing cut") : list) << LL_ENDL;
+    }
     for (const Batch& batch : mBatches)
     {
         const U32 total = batch.mStart[skoverview::NUM_CENSUS_CLASSES];

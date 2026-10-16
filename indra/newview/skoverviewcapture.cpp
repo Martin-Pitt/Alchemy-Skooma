@@ -1234,6 +1234,8 @@ void SKOverviewCapture::tactical()
             SKOverviewCensus::Occupant self;
             self.mFloor = gAgent.getPosGlobalFromAgent(LLVector3(gAgent.getPositionAgent().mV[VX], gAgent.getPositionAgent().mV[VY], floor_z));
             self.mCut = cut_z;
+            self.mId = gAgent.getID();
+            self.mSelf = true;
             occupants.push_back(self);
             for (const SKMapPeople::Person& p : SKMapPeople::instance().people())
             {
@@ -1242,6 +1244,7 @@ void SKOverviewCapture::tactical()
                     continue;
                 }
                 SKOverviewCensus::Occupant o;
+                o.mId = p.mId;
                 o.mFloor = p.mPos;
                 o.mFloor.mdV[VZ] = p.mWhere.mFound ? (F64)p.mWhere.mFloor : p.mPos.mdV[VZ] - AVATAR_HALF_HEIGHT_M;
                 o.mCut = (F32)o.mFloor.mdV[VZ] + (F32)cut_height;

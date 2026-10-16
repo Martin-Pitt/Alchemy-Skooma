@@ -91,16 +91,17 @@ namespace skoverview
 class SKOverviewCensus
 {
 public:
-    /// A cluster's triangles within a batch (or a part's, outside any cluster), and the heights they span.
+    /// A linkset's triangles within a batch, and the heights its cluster spans.
     struct Group
     {
-        F32 mMinZ = 0.f;        ///< global z, which is agent z too
+        F32 mMinZ = 0.f;        ///< global z, which is agent z too: its cluster's, so a level keeps whole clusters
         F32 mMaxZ = 0.f;
-        bool mGround = false;   ///< its base is on the land under it
-        U32 mId = 0;            ///< its cluster or part, the same in every batch it spans
-        LLVector3d mAnchor;     ///< global; the cluster's middle or the linkset root's position, which says whose region it is in
+        bool mGround = false;   ///< its cluster's base is on the land under it
+        U32 mId = 0;            ///< its linkset, the same in every batch it spans
+        LLUUID mRoot;           ///< the linkset's root
+        LLVector3d mAnchor;     ///< global; the linkset root's position, which says whose region it is in
         bool mNeverCut = false; ///< a surround in the void: always whole
-        LLVector3d mMin;        ///< global bounds of its triangles in this batch
+        LLVector3d mMin;        ///< global bounds of its own triangles in this batch
         LLVector3d mMax;
         U32 mStart[skoverview::NUM_CENSUS_CLASSES] = {}; ///< its vertex range within each class's
         U32 mCount[skoverview::NUM_CENSUS_CLASSES] = {};
@@ -139,12 +140,16 @@ public:
     /// Someone the tactical cut is taken for: the building whose parts' bounds hold their floor is cut at mCut.
     struct Occupant
     {
+        LLUUID mId;             ///< who, for the log
+        bool mSelf = false;     ///< the agent: their building is cut at their level, whoever else is in it
         LLVector3d mFloor;      ///< global, their feet on their floor
         F32 mCut = 0.f;         ///< agent z
     };
-    /// Writes each vertex's cut height for the tactical view: in the given region, a building holding an occupant is
-    /// cut at its highest occupant's cut; everything else, there and elsewhere, is drawn whole. Rewrites the cut
-    /// attribute only when the result changed; cutStamp() moves when it does.
+    /// Writes each vertex's cut height for the tactical view. In the given region an occupant's building is every
+    /// linkset over their floor, whose bounds hold their column and rise above it, however many linksets make it:
+    /// the agent's is cut at the agent's level, another's at its highest occupant's. Every other part, there and
+    /// elsewhere, is drawn whole. Rewrites the cut attribute only when the result changed, and logs it then;
+    /// cutStamp() moves when it does.
     void applyCut(const LLViewerRegion* region, const std::vector<Occupant>& occupants);
     U64 cutStamp() const { return mCutStamp; }
     const std::vector<Batch>& batches() const { return mBatches; }
@@ -160,6 +165,7 @@ private:
         LLUUID mPart;
         LLVector3d mOrigin;             ///< its region's origin, global; triangles are region-local
         LLVector3d mAnchor;             ///< its linkset root's position, global
+        LLUUID mRoot;
         std::vector<LLVector3> mTris;
         F32 mHeight = 0.f;
         skoverview::CensusClass mFixed = skoverview::NUM_CENSUS_CLASSES;
