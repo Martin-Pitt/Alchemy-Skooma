@@ -642,7 +642,7 @@ void SKOverviewCapture::resolve(LLRenderTarget& capture, LLRenderTarget& resolve
         glUniform1f(glGetUniformLocation(prog, "sk_far_depth"), al_window_far());
         glUniform3f(glGetUniformLocation(prog, "sk_eye"), shot.mEye.mV[VX], shot.mEye.mV[VY], shot.mEye.mV[VZ]);
         glUniform1f(glGetUniformLocation(prog, "sk_top_down"), shot.mTopDown ? 1.f : 0.f);
-        glUniform1f(glGetUniformLocation(prog, "sk_agent_z"), shot.mFloor);
+        glUniform3f(glGetUniformLocation(prog, "sk_focus"), shot.mFocus.mV[VX], shot.mFocus.mV[VY], shot.mFocus.mV[VZ]);
         glUniform1f(glGetUniformLocation(prog, "sk_cut_flag"), shot.mPartCuts ? 1.f : 0.f);
         glUniform1f(glGetUniformLocation(prog, "sk_cut"), shot.mCut);
         glUniform1f(glGetUniformLocation(prog, "sk_water_z"), shot.mWater);
@@ -1032,7 +1032,7 @@ bool SKOverviewCapture::captureMap(RegionMap& map, LLViewerRegion* region, bool 
     shot.mProj = al_ortho(-half, half, -half, half, 0.f, top - bottom);
     shot.mEye = centre + LLVector3(0.f, 0.f, 1000.f); // far above: outline tolerance as for a distant camera
     shot.mCut = top;
-    shot.mFloor = floor_z;
+    shot.mFocus = LLVector3(centre.mV[VX], centre.mV[VY], floor_z);
     shot.mWater = region->getWaterHeight();
     // Another region is neither dimmed as outside the agent's nor edged as it is: its rectangle is unbounded.
     shot.mRegion = agent ? LLVector4(origin.mV[VX], origin.mV[VY], origin.mV[VX] + width, origin.mV[VY] + width)
@@ -1146,7 +1146,7 @@ void SKOverviewCapture::tactical()
     shot.mProj = al_perspective(fov, aspect, TACTICAL_NEAR_M, far_m);
     shot.mEye = eye;
     shot.mCut = cut_z;
-    shot.mFloor = floor_z;
+    shot.mFocus = target;
     shot.mPartCuts = true;
     {
         LLViewerRegion* region = gAgent.getRegion();
