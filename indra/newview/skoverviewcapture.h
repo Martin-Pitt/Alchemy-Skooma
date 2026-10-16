@@ -117,6 +117,8 @@ public:
     /// The captured regions' maps, the agent's last so it draws over its neighbours' edges.
     std::vector<Tile> tiles() const;
     const Stats& stats() const { return mStats; }
+    /// The census the overview draws, with the cut it last worked out.
+    const SKOverviewCensus& census() const { return mCensus; }
 
 private:
     struct Shot

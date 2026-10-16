@@ -26,6 +26,8 @@
 
 #include "skworldcensus.h"
 
+#include <set>
+
 #include "llframetimer.h"
 
 #include "sknavoverlay.h"
@@ -1360,8 +1362,17 @@ void SKWorldCensus::renderDebug()
 {
     static LLCachedControl<bool> show(gSavedSettings, "SKNavOverlayCensus", false);
     static LLCachedControl<bool> show_features(gSavedSettings, "SKNavOverlayFeatures", false);
+    static LLCachedControl<bool> show_clusters(gSavedSettings, "SKNavOverlayClusters", false);
     SKCensusSnapshotPtr snap = mSnapshot;
-    if ((!show && !show_features) || !snap)
+    if (!show_clusters || !snap)
+    {
+        for (auto& label : mClusterLabels)
+        {
+            label.second->markDead();
+        }
+        mClusterLabels.clear();
+    }
+    if ((!show && !show_features && !show_clusters) || !snap)
     {
         return;
     }
@@ -1456,6 +1467,10 @@ void SKWorldCensus::renderDebug()
             }
         }
     }
+    if (show_clusters)
+    {
+        renderClusters(*snap, geom, camera, reach);
+    }
     if (geom.empty())
     {
         return;
@@ -1469,4 +1484,77 @@ void SKWorldCensus::renderDebug()
         geom.draw();
     }
     SKNavOverlayGeom::unbindShader();
+}
+
+bool SKWorldCensus::grounded(const LLVector3d& min, const LLVector3d& max)
+{
+    const F64 GROUND_BASE_M = 4.0;
+    const LLVector3d middle((min.mdV[VX] + max.mdV[VX]) * 0.5, (min.mdV[VY] + max.mdV[VY]) * 0.5, 0.0);
+    return min.mdV[VZ] <= LLWorld::getInstance()->resolveLandHeightGlobal(middle) + GROUND_BASE_M;
+}
+
+void SKWorldCensus::renderClusters(const SKCensusSnapshot& snap, SKNavOverlayGeom& geom, const LLVector3d& camera, F64 reach)
+{
+    LL_PROFILE_ZONE_SCOPED;
+    const F64 now = LLFrameTimer::getUptimeSeconds().value();
+    const bool relabel = now - mClusterLabelsAt >= 0.5;
+    if (relabel)
+    {
+        mClusterLabelsAt = now;
+    }
+    std::set<LLUUID> labelled;
+    for (const ClusterPtr& c : snap.mClusters.mClusters)
+    {
+        if (dist_vec_squared2D((c->mMin + c->mMax) * 0.5, camera) > reach * reach)
+        {
+            continue;
+        }
+        const bool selected = c->mId == mSelectedCluster;
+        const U32 h = static_cast<U32>(mix(SEED, c->mId.mData[0] | (c->mId.mData[1] << 8) | (c->mId.mData[2] << 16)));
+        LLColor4 color(0.3f + 0.7f * ((h & 255) / 255.f), 0.3f + 0.7f * (((h >> 8) & 255) / 255.f),
+                       0.3f + 0.7f * (((h >> 16) & 255) / 255.f), 0.9f);
+        if (selected)
+        {
+            color = LLColor4::white;
+        }
+        geom.box(gAgent.getPosAgentFromGlobal(c->mMin), gAgent.getPosAgentFromGlobal(c->mMax), color);
+        // Its parts in its colour, fainter, so neighbouring structures read apart.
+        LLColor4 part = color;
+        part.mV[VALPHA] = selected ? 0.8f : 0.45f;
+        std::set<LLUUID> roots;
+        for (const RecordPtr& r : c->mRecords)
+        {
+            geom.box(gAgent.getPosAgentFromGlobal(r->mMin), gAgent.getPosAgentFromGlobal(r->mMax), part);
+            roots.insert(r->mRoot.notNull() ? r->mRoot : r->mPart);
+        }
+        labelled.insert(c->mId);
+        LLPointer<LLHUDText>& label = mClusterLabels[c->mId];
+        const bool fresh = label.isNull();
+        if (fresh)
+        {
+            label = (LLHUDText*)LLHUDObject::addHUDObject(LLHUDObject::LL_HUD_TEXT);
+            label->setDoFade(false);
+            label->setZCompare(false);
+        }
+        if (relabel || fresh)
+        {
+            label->setPositionGlobal(LLVector3d((c->mMin.mdV[VX] + c->mMax.mdV[VX]) * 0.5, (c->mMin.mdV[VY] + c->mMax.mdV[VY]) * 0.5,
+                                                c->mMax.mdV[VZ] + 0.5));
+            label->setColor(color);
+            label->setString(llformat("%s, %zu linkset%s", grounded(c->mMin, c->mMax) ? "grounded" : "floating", roots.size(),
+                                      roots.size() == 1 ? "" : "s"));
+        }
+    }
+    for (auto it = mClusterLabels.begin(); it != mClusterLabels.end();)
+    {
+        if (!labelled.count(it->first))
+        {
+            it->second->markDead();
+            it = mClusterLabels.erase(it);
+        }
+        else
+        {
+            ++it;
+        }
+    }
 }

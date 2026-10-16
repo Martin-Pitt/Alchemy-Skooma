@@ -50,8 +50,11 @@ public:
 private:
     void onToggleOverlay();
     void onTogglePhysicsShapes();
+    /// The clusters tab's list: the clusters near the camera and how the overview cuts them.
+    void refreshClusters();
 
     LLFrameTimer mRefresh;
+    LLFrameTimer mClustersRefresh;
 };
 
 #endif // SK_FLOATERNAVMESH_H

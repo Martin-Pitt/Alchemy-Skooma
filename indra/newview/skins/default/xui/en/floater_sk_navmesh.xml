@@ -534,5 +534,44 @@
              label="Annotate the navmesh..."
              tool_tip="Mark in the world where the navmesh is wrong. Both exports above carry the marks" />
         </panel>
+        <panel
+         follows="all"
+         height="571"
+         label="Clusters"
+         layout="topleft"
+         left="0"
+         name="nav_tab_clusters"
+         top="0"
+         width="312">
+            <check_box
+             height="19"
+             label="Draw clusters"
+             layout="topleft"
+             follows="left|top"
+             left="8"
+             name="show_clusters"
+             control_name="SKNavOverlayClusters"
+             tool_tip="Each census cluster in the world in its own colour, its parts tinted, with whether it stands on the land and how many linksets it holds. Draws without the navmesh surface"
+             top="6"
+             width="292" />
+            <scroll_list
+             follows="all"
+             layout="topleft"
+             left="8"
+             top_pad="6"
+             height="530"
+             width="296"
+             draw_heading="true"
+             multi_select="false"
+             name="cluster_list"
+             tool_tip="The clusters within twice the overlay range, nearest first. Selecting one highlights it in the world">
+                <scroll_list.columns name="id" label="Cluster" width="62" />
+                <scroll_list.columns name="state" label="Ground" width="52" />
+                <scroll_list.columns name="linksets" label="Sets" width="34" />
+                <scroll_list.columns name="bottom" label="Base" width="40" />
+                <scroll_list.columns name="top" label="Top" width="40" />
+                <scroll_list.columns name="cut" label="Cut" />
+            </scroll_list>
+        </panel>
     </tab_container>
 </floater>

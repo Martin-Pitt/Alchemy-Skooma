@@ -25,6 +25,7 @@
 #ifndef SK_WORLDCENSUS_H
 #define SK_WORLDCENSUS_H
 
+#include "llhudtext.h"
 #include "llsingleton.h"
 #include "llviewerobject.h"
 #include "sknavcluster.h"
@@ -116,6 +117,13 @@ public:
     /// Record and cluster boxes in world, from the pipeline's debug pass.
     void renderDebug();
 
+    /// Whether a structure with these bounds stands on the land: its base no higher than a step or two over the land
+    /// under its middle. A floating one (a skybox) does not.
+    static bool grounded(const LLVector3d& min, const LLVector3d& max);
+    /// The cluster the nav console selected, which the clusters overlay highlights; null for none.
+    void selectCluster(const LLUUID& id) { mSelectedCluster = id; }
+    const LLUUID& selectedCluster() const { return mSelectedCluster; }
+
     /// The sim's navmesh role for a linkset, when the region has told us.
     sknav::NavRole roleOf(const LLUUID& root) const;
 
@@ -150,6 +158,12 @@ public:
     std::string statsLine() const;
 
 private:
+    /// The clusters overlay: each cluster in its own colour, its parts tinted, a label over it.
+    void renderClusters(const SKCensusSnapshot& snap, class SKNavOverlayGeom& geom, const LLVector3d& camera, F64 reach);
+    LLUUID mSelectedCluster;
+    std::map<LLUUID, LLPointer<LLHUDText>> mClusterLabels;
+    F64 mClusterLabelsAt = 0.0;
+
     struct PartCache
     {
         U64 mSignature = 0;

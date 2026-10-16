@@ -6386,6 +6386,17 @@
             <key>Value</key>
             <integer>1</integer>
         </map>
+        <key>SKNavOverlayClusters</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw each census cluster in its own colour, its parts tinted and a label over it, in the navmesh overlay.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
         <key>SKNavOverlayCensus</key>
         <map>
             <key>Comment</key>
