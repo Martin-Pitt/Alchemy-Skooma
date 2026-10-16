@@ -118,6 +118,7 @@ private:
         LLVector3 mEye;     // agent space
         F32 mCut = 0.f;     // agent-space z
         F32 mFloor = 0.f;   // the height colours are relative to
+        F32 mLevelTop = 0.f; // the agent's cut height, the brightest the height colours go
         F32 mWater = 0.f;   // the water surface's height
         SKOverviewCensus::Level mLevel; // the census groups it draws
         LLVector4 mRegion;  // the region styled as the agent's: min x, min y, max x, max y, agent space

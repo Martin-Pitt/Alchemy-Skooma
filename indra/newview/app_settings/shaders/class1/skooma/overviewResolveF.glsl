@@ -37,6 +37,7 @@ uniform float sk_far_depth;     // the cleared depth: no surface
 uniform vec3 sk_eye;
 uniform float sk_top_down;      // 1 for the straight-down map: no distance fade
 uniform float sk_agent_z;       // the floor the agent stands on
+uniform float sk_level_top;     // the agent's cut height: nothing is shaded brighter than its level's top
 uniform float sk_cut;
 uniform float sk_water_z;
 uniform float sk_water_depth;
@@ -263,7 +264,8 @@ void main()
     vec4 cls = texelFetch(classMap, p, 0);
     int code = int(cls.r * 255.0 + 0.5);
     bool invisible = cls.b > 0.5;
-    float rel = pos.z - sk_agent_z;
+    // Uncut geometry above the agent's level (another region's roofs) shades as that level's top, not ever lighter.
+    float rel = min(pos.z, sk_level_top) - sk_agent_z;
     float px_m = pixelMetres(pos);
 
     // The census's own face normals (classMap G, A); none (0, 0) for terrain, whose normal comes from depth.
