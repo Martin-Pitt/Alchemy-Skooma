@@ -30,9 +30,18 @@
 in vec3 position;
 
 out vec3 vary_position;
+#ifdef SK_CUT_ATTRIBUTE
+in float weight;        // the height this vertex's part is cut at, agent z
+out float vary_cut_z;
+out float vary_z;
+#endif
 
 void main()
 {
     vary_position = (modelview_matrix * vec4(position.xyz, 1.0)).xyz;
     gl_Position = modelview_projection_matrix * vec4(position.xyz, 1.0);
+#ifdef SK_CUT_ATTRIBUTE
+    vary_cut_z = weight;
+    vary_z = position.z; // region-local z is agent z
+#endif
 }

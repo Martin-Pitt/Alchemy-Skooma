@@ -35,8 +35,9 @@ uniform mat4 sk_inv_vp;         // window to world: inverse of projection times 
 uniform float sk_zo;            // 1 when window depth is NDC depth (zero-to-one), 0 for minus-one-to-one
 uniform float sk_far_depth;     // the cleared depth: no surface
 uniform vec3 sk_eye;
-uniform float sk_top_down;      // 1 for the straight-down map: no distance fade
 uniform float sk_agent_z;       // the floor the agent stands on
+uniform float sk_cut_flag;      // 1: each part carries its own cut, flagged in B where it caps; 0: the one cut at sk_cut
+uniform float sk_top_down;      // 1 for the straight-down map: no distance fade
 uniform float sk_cut;
 uniform float sk_water_z;
 uniform float sk_water_depth;
@@ -263,6 +264,7 @@ void main()
     vec4 cls = texelFetch(classMap, p, 0);
     int code = int(cls.r * 255.0 + 0.5);
     bool invisible = cls.b > 0.5;
+    bool capped = cls.b > 0.1 && cls.b < 0.5;
     float rel = pos.z - sk_agent_z;
     float px_m = pixelMetres(pos);
 
@@ -397,7 +399,8 @@ void main()
         }
         c *= 1.0 - 0.25 * smoothstep(0.25, 0.6, crease);
         debug_crease = smoothstep(0.25, 0.6, crease);
-        if ((code == CODE_WALL || code == CODE_COVER || code == CODE_SECTION) && sk_cut - pos.z < max(0.12, px_m * 1.5))
+        if ((code == CODE_WALL || code == CODE_COVER || code == CODE_SECTION) &&
+            (sk_cut_flag > 0.5 ? capped : sk_cut - pos.z < max(0.12, px_m * 1.5)))
         {
             c = SLATE_TOP * 1.1;
             debug_cut = 1.0;

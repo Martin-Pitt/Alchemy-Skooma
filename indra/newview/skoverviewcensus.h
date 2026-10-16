@@ -34,6 +34,7 @@
 #include <vector>
 
 class LLVertexBuffer;
+class LLViewerRegion;
 
 namespace sknav
 {
@@ -70,6 +71,7 @@ namespace skoverview
     constexpr F32 COVER_TOP_M = 1.6f;   ///< a part no taller than this is cover, not wall
     constexpr F32 INVISIBLE_WALL_M = 64.f; ///< a fully transparent part larger than this on any axis is no wall
     constexpr F32 GROUND_BASE_M = 4.f;  ///< a cluster whose base is no higher than this above the land stands on it
+    constexpr F32 NO_CUT = 1.0e30f;     ///< the per-vertex cut height of a part drawn whole
 
     U8 codeOf(CensusClass cls);
 
@@ -95,6 +97,9 @@ public:
         F32 mMinZ = 0.f;        ///< global z, which is agent z too
         F32 mMaxZ = 0.f;
         bool mGround = false;   ///< its base is on the land under it
+        U32 mId = 0;            ///< its cluster or part, the same in every batch it spans
+        LLVector3d mAnchor;     ///< global; the cluster's middle or the linkset root's position, which says whose region it is in
+        bool mNeverCut = false; ///< a surround in the void: always whole
         U32 mStart[skoverview::NUM_CENSUS_CLASSES] = {}; ///< its vertex range within each class's
         U32 mCount[skoverview::NUM_CENSUS_CLASSES] = {};
     };
@@ -128,6 +133,18 @@ public:
 
     /// Rebuilds the buffers when the census's geometry changed; true when there is anything to draw.
     bool update();
+
+    /// Someone the tactical cut is taken for: the building whose parts' bounds hold their floor is cut at mCut.
+    struct Occupant
+    {
+        LLVector3d mFloor;      ///< global, their feet on their floor
+        F32 mCut = 0.f;         ///< agent z
+    };
+    /// Writes each vertex's cut height for the tactical view: in the given region, a building holding an occupant is
+    /// cut at its highest occupant's cut; everything else, there and elsewhere, is drawn whole. Rewrites the cut
+    /// attribute only when the result changed; cutStamp() moves when it does.
+    void applyCut(const LLViewerRegion* region, const std::vector<Occupant>& occupants);
+    U64 cutStamp() const { return mCutStamp; }
     const std::vector<Batch>& batches() const { return mBatches; }
     U32 triangles() const { return mTriangles; }
     /// Moves whenever the buffers are rebuilt.
@@ -140,6 +157,7 @@ private:
     {
         LLUUID mPart;
         LLVector3d mOrigin;             ///< its region's origin, global; triangles are region-local
+        LLVector3d mAnchor;             ///< its linkset root's position, global
         std::vector<LLVector3> mTris;
         F32 mHeight = 0.f;
         skoverview::CensusClass mFixed = skoverview::NUM_CENSUS_CLASSES;
@@ -159,6 +177,9 @@ private:
     F64 mSculptsAt = 0.0;       ///< when the live sculpts are looked at again
     std::shared_ptr<const struct SKCensusSnapshot> mSnapshot;
     U32 mTriangles = 0;
+    std::vector<std::pair<U32, F32>> mCuts; ///< the clusters and parts cut at the last applyCut, and their heights
+    U64 mCutSignature = 0;      ///< the buffers' signature the cut attribute was written for
+    U64 mCutStamp = 0;
 };
 
 #endif // SK_OVERVIEWCENSUS_H

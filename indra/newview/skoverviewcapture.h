@@ -118,6 +118,7 @@ private:
         LLVector3 mEye;     // agent space
         F32 mCut = 0.f;     // agent-space z
         F32 mFloor = 0.f;   // the height colours are relative to
+        bool mPartCuts = false; // each census part is cut at its own height (the tactical view), not at mCut
         F32 mWater = 0.f;   // the water surface's height
         SKOverviewCensus::Level mLevel; // the census groups it draws
         LLVector4 mRegion;  // the region styled as the agent's: min x, min y, max x, max y, agent space
@@ -202,6 +203,7 @@ private:
         S32 mHeight = 0;
         F32 mCut = 0.f;
         U64 mCensus = 0;
+        U64 mCutStamp = 0;
         const void* mRegion = nullptr;
     } mTacticalKey;
     /// CPU time of the tactical view, summed over a second and logged.
