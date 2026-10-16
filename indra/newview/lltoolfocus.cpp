@@ -116,15 +116,34 @@ void LLToolCamera::handleDeselect()
     }
 }
 
+// <SK:Nexii> tactical overview: the camera tool's moves go to the overview's camera while it covers the world
+namespace
+{
+    void skOrbitAround(F32 radians)
+    {
+        SKOverviewCapture::tacticalShown() ? SKOverviewCapture::tacticalOrbitAround(radians) : gAgentCamera.cameraOrbitAround(radians);
+    }
+    void skOrbitOver(F32 radians)
+    {
+        SKOverviewCapture::tacticalShown() ? SKOverviewCapture::tacticalOrbitOver(radians) : gAgentCamera.cameraOrbitOver(radians);
+    }
+    void skZoomIn(F32 fraction)
+    {
+        SKOverviewCapture::tacticalShown() ? SKOverviewCapture::tacticalZoomIn(fraction) : gAgentCamera.cameraZoomIn(fraction);
+    }
+    void skPanLeft(F32 metres)
+    {
+        SKOverviewCapture::tacticalShown() ? SKOverviewCapture::tacticalPanLeft(metres) : gAgentCamera.cameraPanLeft(metres);
+    }
+    void skPanUp(F32 metres)
+    {
+        SKOverviewCapture::tacticalShown() ? SKOverviewCapture::tacticalPanUp(metres) : gAgentCamera.cameraPanUp(metres);
+    }
+}
+// </SK:Nexii>
+
 bool LLToolCamera::handleMouseDown(S32 x, S32 y, MASK mask)
 {
-    // <SK:Nexii> tactical overview: alt-cam drives the overview's camera while it covers the world
-    if (SKOverviewCapture::tacticalMouseDown(x, y, mask))
-    {
-        setMouseCapture(true);
-        return true;
-    }
-    // </SK:Nexii>
     // Ensure a mouseup
     setMouseCapture(true);
 
@@ -152,6 +171,17 @@ bool LLToolCamera::handleMouseDown(S32 x, S32 y, MASK mask)
 
     gViewerWindow->hideCursor();
 
+    // <SK:Nexii> tactical overview: the click focuses on the overview's ground, not on the hidden world
+    if (SKOverviewCapture::tacticalShown())
+    {
+        mClickPickPending = false;
+        mMouseDownX = x;
+        mMouseDownY = y;
+        mValidClickPoint = SKOverviewCapture::tacticalFocusAt(x, y);
+        gViewerWindow->moveCursorToCenter();
+        return true;
+    }
+    // </SK:Nexii>
     gViewerWindow->pickAsync(x, y, mask, pickCallback, /*bool pick_transparent*/ false, /*bool pick_rigged*/ false, /*bool pick_unselectable*/ true, /*bool pick_reflection_probes*/ false, /*bool pick_focus*/ true);
 
     return true;
@@ -310,13 +340,6 @@ void LLToolCamera::releaseMouse()
 
 bool LLToolCamera::handleMouseUp(S32 x, S32 y, MASK mask)
 {
-    // <SK:Nexii> tactical overview: the end of an alt-cam click or drag on it
-    if (SKOverviewCapture::tacticalMouseUp(x, y, mask))
-    {
-        setMouseCapture(false);
-        return true;
-    }
-    // </SK:Nexii>
     // Claim that we're mousing up somewhere
     mMouseUpX = x;
     mMouseUpY = y;
@@ -369,13 +392,6 @@ bool LLToolCamera::handleMouseUp(S32 x, S32 y, MASK mask)
 
 bool LLToolCamera::handleHover(S32 x, S32 y, MASK mask)
 {
-    // <SK:Nexii> tactical overview: an alt-cam drag orbits, tilts or pans it
-    if (hasMouseCapture() &&
-        SKOverviewCapture::tacticalMouseDrag(gViewerWindow->getCurrentMouseDX(), gViewerWindow->getCurrentMouseDY(), mask))
-    {
-        return true;
-    }
-    // </SK:Nexii>
     if (gViewerWindow->getRightMouseDown())
     {
         agent_push_forward(KEYSTATE_LEVEL);
@@ -421,12 +437,12 @@ bool LLToolCamera::handleHover(S32 x, S32 y, MASK mask)
 
                 if (dx != 0)
                 {
-                    gAgentCamera.cameraOrbitAround( -dx * RADIANS_PER_PIXEL );
+                    skOrbitAround( -dx * RADIANS_PER_PIXEL ); // <SK:Nexii> tactical overview
                 }
 
                 if (dy != 0)
                 {
-                    gAgentCamera.cameraOrbitOver( -dy * RADIANS_PER_PIXEL );
+                    skOrbitOver( -dy * RADIANS_PER_PIXEL ); // <SK:Nexii> tactical overview
                 }
 
                 gViewerWindow->moveCursorToCenter();
@@ -443,18 +459,24 @@ bool LLToolCamera::handleHover(S32 x, S32 y, MASK mask)
                 LLVector3d camera_to_focus = gAgentCamera.getCameraPositionGlobal();
                 camera_to_focus -= gAgentCamera.getFocusGlobal();
                 F32 dist = (F32) camera_to_focus.normVec();
+                // <SK:Nexii> tactical overview: the overview's camera distance while it covers the world
+                if (SKOverviewCapture::tacticalShown())
+                {
+                    dist = SKOverviewCapture::tacticalFocusDistance();
+                }
+                // </SK:Nexii>
 
                 // Fudge factor for pan
                 F32 meters_per_pixel = 3.f * dist / gViewerWindow->getWorldViewWidthScaled();
 
                 if (dx != 0)
                 {
-                    gAgentCamera.cameraPanLeft( dx * meters_per_pixel );
+                    skPanLeft( dx * meters_per_pixel ); // <SK:Nexii> tactical overview
                 }
 
                 if (dy != 0)
                 {
-                    gAgentCamera.cameraPanUp( -dy * meters_per_pixel );
+                    skPanUp( -dy * meters_per_pixel ); // <SK:Nexii> tactical overview
                 }
 
                 gViewerWindow->moveCursorToCenter();
@@ -471,7 +493,7 @@ bool LLToolCamera::handleHover(S32 x, S32 y, MASK mask)
 
                 if (dx != 0)
                 {
-                    gAgentCamera.cameraOrbitAround( -dx * RADIANS_PER_PIXEL );
+                    skOrbitAround( -dx * RADIANS_PER_PIXEL ); // <SK:Nexii> tactical overview
                 }
 
                 const F32 IN_FACTOR = 0.99f;
@@ -480,11 +502,11 @@ bool LLToolCamera::handleHover(S32 x, S32 y, MASK mask)
                 {
                     if (mMouseSteering)
                     {
-                        gAgentCamera.cameraOrbitOver( -dy * RADIANS_PER_PIXEL );
+                        skOrbitOver( -dy * RADIANS_PER_PIXEL ); // <SK:Nexii> tactical overview
                     }
                     else
                     {
-                        gAgentCamera.cameraZoomIn((F32)pow( IN_FACTOR, dy ) );
+                        skZoomIn((F32)pow( IN_FACTOR, dy ) ); // <SK:Nexii> tactical overview
                     }
                 }
 

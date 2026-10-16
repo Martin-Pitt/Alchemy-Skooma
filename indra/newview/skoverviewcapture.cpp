@@ -27,6 +27,8 @@
 
 #include "skoverviewcapture.h"
 
+#include "llsmoothstep.h"
+
 #include "llagent.h"
 #include "llvoavatarself.h"
 #include "llagentcamera.h"
@@ -194,6 +196,11 @@ bool SKOverviewCapture::handleScrollWheel(F32 clicks)
     }
     const F32 distance = gSavedSettings.getF32("SKTacticalDistance");
     gSavedSettings.setF32("SKTacticalDistance", llclamp(distance * std::pow(1.15f, clicks), TACTICAL_MIN_M, TACTICAL_MAX_M));
+    if (instanceExists() && instance().mTacticalCam.mActive)
+    {
+        TacticalCamera& cam = instance().mTacticalCam;
+        cam.mDistance = llclamp(cam.mDistance * std::pow(1.15f, clicks), TACTICAL_MIN_M, TACTICAL_MAX_M);
+    }
     return true;
 }
 
@@ -463,77 +470,88 @@ namespace
     }
 }
 
-bool SKOverviewCapture::tacticalMouseDown(S32 x, S32 y, MASK mask)
+void SKOverviewCapture::takeTacticalCamera()
 {
-    if (!tacticalShown() || !(mask & MASK_ALT))
+    if (!mTacticalCam.mActive)
+    {
+        static LLCachedControl<F32> distance_setting(gSavedSettings, "SKTacticalDistance", 60.f);
+        mTacticalCam.mActive = true;
+        mTacticalCam.mFocus = gAgent.getPosGlobalFromAgent(mTacticalTarget);
+        mTacticalCam.mYaw = mTacticalYaw;
+        mTacticalCam.mPitch = mTacticalPitch;
+        mTacticalCam.mDistance = llclamp((F32)distance_setting, TACTICAL_MIN_M, TACTICAL_MAX_M);
+    }
+}
+
+bool SKOverviewCapture::tacticalFocusAt(S32 x, S32 y)
+{
+    if (!tacticalShown())
     {
         return false;
     }
     SKOverviewCapture& self = instance();
-    if (!self.mTacticalCam.mActive)
+    const LLVector2 scale = gViewerWindow->getDisplayScale();
+    const LLVector2 at(x * scale.mV[VX] - self.mTacticalViewport[0], y * scale.mV[VY] - self.mTacticalViewport[1]);
+    LLVector3d world;
+    if (!self.groundAt(at, world))
     {
-        // Take over from where the overview was looking.
-        self.mTacticalCam.mActive = true;
-        self.mTacticalCam.mFocus = gAgent.getPosGlobalFromAgent(self.mTacticalTarget);
-        self.mTacticalCam.mYaw = self.mTacticalYaw;
-        self.mTacticalCam.mPitch = self.mTacticalPitch;
+        return false;
     }
-    self.mTacticalDragging = true;
-    self.mTacticalDragged = false;
+    self.takeTacticalCamera();
+    TacticalCamera& cam = self.mTacticalCam;
+    const F64 ANIM_EPSILON_SQUARED = 0.0001;
+    if ((world - cam.mFocus).magVecSquared() > ANIM_EPSILON_SQUARED)
+    {
+        // LLAgentCamera::startCameraAnimation and setAnimationDuration: from where it is now, over ZoomTime, never
+        // cutting short an ease already under way.
+        const F32 duration = gSavedSettings.getF32("ZoomTime");
+        cam.mAnimDuration = cam.mAnimating ? llmax(duration, cam.mAnimDuration - cam.mAnimTimer.getElapsedTimeF32().value()) : duration;
+        cam.mStartEye = self.mTacticalEyeGlobal;
+        cam.mStartFocus = self.mTacticalFocusGlobal;
+        cam.mAnimTimer.reset();
+        cam.mAnimating = true;
+    }
+    cam.mFocus = world;
     return true;
 }
 
-bool SKOverviewCapture::tacticalMouseDrag(S32 dx, S32 dy, MASK mask)
+void SKOverviewCapture::tacticalOrbitAround(F32 radians)
 {
-    if (!instanceExists() || !instance().mTacticalDragging)
-    {
-        return false;
-    }
-    SKOverviewCapture& self = instance();
-    if (dx == 0 && dy == 0)
-    {
-        return true;
-    }
-    self.mTacticalDragged = true;
-    static LLCachedControl<F32> distance_setting(gSavedSettings, "SKTacticalDistance", 60.f);
-    if (mask & MASK_CONTROL)
-    {
-        // Pan: the focus slides along the ground, as far as the cursor moves at the focus's distance.
-        const F32 metres_per_px = llclamp((F32)distance_setting, TACTICAL_MIN_M, TACTICAL_MAX_M) * 0.002f;
-        const LLVector3 forward(std::cos(self.mTacticalCam.mYaw), std::sin(self.mTacticalCam.mYaw), 0.f);
-        const LLVector3 right(forward.mV[VY], -forward.mV[VX], 0.f);
-        const LLVector3 move = (right * (F32)-dx + forward * (F32)-dy) * metres_per_px;
-        self.mTacticalCam.mFocus += LLVector3d(move);
-    }
-    else
-    {
-        // Orbit and tilt.
-        self.mTacticalCam.mYaw -= dx * 0.008f;
-        self.mTacticalCam.mPitch = llclamp(self.mTacticalCam.mPitch - dy * 0.006f, TACTICAL_MIN_PITCH, TACTICAL_MAX_PITCH);
-    }
-    return true;
+    instance().takeTacticalCamera();
+    instance().mTacticalCam.mYaw += radians;
 }
 
-bool SKOverviewCapture::tacticalMouseUp(S32 x, S32 y, MASK mask)
+void SKOverviewCapture::tacticalOrbitOver(F32 radians)
 {
-    if (!instanceExists() || !instance().mTacticalDragging)
-    {
-        return false;
-    }
     SKOverviewCapture& self = instance();
-    self.mTacticalDragging = false;
-    if (!self.mTacticalDragged)
-    {
-        // A click without a drag: focus on the ground under the cursor.
-        const LLVector2 scale = gViewerWindow->getDisplayScale();
-        const LLVector2 at(x * scale.mV[VX] - self.mTacticalViewport[0], y * scale.mV[VY] - self.mTacticalViewport[1]);
-        LLVector3d world;
-        if (self.groundAt(at, world))
-        {
-            self.mTacticalCam.mFocus = world;
-        }
-    }
-    return true;
+    self.takeTacticalCamera();
+    self.mTacticalCam.mPitch = llclamp(self.mTacticalCam.mPitch + radians, TACTICAL_MIN_PITCH, TACTICAL_MAX_PITCH);
+}
+
+void SKOverviewCapture::tacticalZoomIn(F32 fraction)
+{
+    SKOverviewCapture& self = instance();
+    self.takeTacticalCamera();
+    self.mTacticalCam.mDistance = llclamp(self.mTacticalCam.mDistance * fraction, TACTICAL_MIN_M, TACTICAL_MAX_M);
+}
+
+void SKOverviewCapture::tacticalPanLeft(F32 metres)
+{
+    SKOverviewCapture& self = instance();
+    self.takeTacticalCamera();
+    self.mTacticalCam.mFocus += LLVector3d(self.mTacticalLeft * metres);
+}
+
+void SKOverviewCapture::tacticalPanUp(F32 metres)
+{
+    SKOverviewCapture& self = instance();
+    self.takeTacticalCamera();
+    self.mTacticalCam.mFocus += LLVector3d(self.mTacticalUp * metres);
+}
+
+F32 SKOverviewCapture::tacticalFocusDistance()
+{
+    return instanceExists() ? (F32)(instance().mTacticalEyeGlobal - instance().mTacticalFocusGlobal).magVec() : 0.f;
 }
 
 void SKOverviewCapture::resetTacticalCamera()
@@ -541,7 +559,6 @@ void SKOverviewCapture::resetTacticalCamera()
     if (instanceExists())
     {
         instance().mTacticalCam = TacticalCamera();
-        instance().mTacticalDragging = false;
     }
 }
 
@@ -1105,14 +1122,33 @@ void SKOverviewCapture::tactical()
     mTacticalTarget = target;
     mTacticalYaw = std::atan2(heading.mV[VY], heading.mV[VX]);
     mTacticalPitch = pitch;
-    const F32 distance = llclamp((F32)distance_setting, TACTICAL_MIN_M, TACTICAL_MAX_M);
+    const F32 distance = mTacticalCam.mActive ? mTacticalCam.mDistance : llclamp((F32)distance_setting, TACTICAL_MIN_M, TACTICAL_MAX_M);
     const F32 pitch_safe = llmin(pitch, 89.5f * DEG_TO_RAD);
-    const LLVector3 eye = target - heading * (distance * std::cos(pitch_safe)) + LLVector3(0.f, 0.f, distance * std::sin(pitch_safe));
+    LLVector3 eye = target - heading * (distance * std::cos(pitch_safe)) + LLVector3(0.f, 0.f, distance * std::sin(pitch_safe));
+    if (mTacticalCam.mAnimating)
+    {
+        // An alt+click's ease, as LLAgentCamera::updateCamera: linear in time, smoothstepped, eye and focus together.
+        const F32 fraction = mTacticalCam.mAnimDuration > 0.f ? mTacticalCam.mAnimTimer.getElapsedTimeF32().value() / mTacticalCam.mAnimDuration : 1.f;
+        if (fraction < 1.f)
+        {
+            const F32 smooth = llsmoothstep(0.f, 1.f, fraction);
+            eye = lerp(gAgent.getPosAgentFromGlobal(mTacticalCam.mStartEye), eye, smooth);
+            target = lerp(gAgent.getPosAgentFromGlobal(mTacticalCam.mStartFocus), target, smooth);
+        }
+        else
+        {
+            mTacticalCam.mAnimating = false;
+        }
+    }
+    mTacticalEyeGlobal = gAgent.getPosGlobalFromAgent(eye);
+    mTacticalFocusGlobal = gAgent.getPosGlobalFromAgent(target);
     LLVector3 dir = target - eye;
     dir.normVec();
     LLVector3 left = LLVector3::z_axis % dir;
     left.normVec();
     const LLVector3 up = dir % left;
+    mTacticalLeft = left;
+    mTacticalUp = up;
 
     Shot shot;
     LLVector4a eye4, dir4, up4;
