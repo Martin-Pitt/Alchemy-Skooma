@@ -39,7 +39,9 @@
 class SKModalMode
 {
 public:
-    virtual ~SKModalMode() = default;
+    /// A mode destroyed while registered or claimed is forgotten, and the world camera comes back if it
+    /// held the last claim.
+    virtual ~SKModalMode();
 
     /// For the log.
     virtual const char* getModalName() const = 0;
@@ -92,9 +94,9 @@ public:
     void registerMode(SKModalMode* mode);
     void unregisterMode(SKModalMode* mode);
 
-    /// Covers the world with `mode`. The first claim snapshots the world camera, leaves mouselook and
-    /// stops the autopilot. Claiming again changes the priority. False when the view cannot be claimed
-    /// or the mode's own RLVa restriction holds it shut.
+    /// Covers the world with `mode`, registering it. The first claim snapshots the world camera, leaves
+    /// mouselook and stops the autopilot. Claiming again changes the priority. False, any existing claim
+    /// left as it was, when the view cannot be claimed or the mode's own RLVa restriction holds it shut.
     bool claim(SKModalMode* mode, S32 priority);
     /// The last release puts the world camera back as it was, following the agent again if it did.
     void release(SKModalMode* mode);
@@ -126,6 +128,10 @@ public:
     static void worldCameraForUpdate(LLVector3& position_agent, LLVector3& at, LLVector3& left, LLVector3& up);
 
 private:
+    friend class SKModalMode;
+    /// Drops a mode being destroyed without calling into it.
+    void forget(SKModalMode* mode);
+
     struct WorldCamera
     {
         bool mMouselook = false;
