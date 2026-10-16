@@ -1647,13 +1647,14 @@ void render_ui(F32 zoom_factor, int subfield)
     }
 
     // apply gamma correction and post effects
-    // <SK:Nexii> 3D world map: the map has already drawn its frame; tactical overview: no post under it
-    if (!sSKMapFrame && (gSnapshot || !SKOverviewCapture::worldHidden()))
-    // </SK:Nexii>
+    if (!sSKMapFrame && (gSnapshot || !SKOverviewCapture::worldHidden())) // <SK:Nexii> tactical overview: no post under it; 3D world map: the map has already drawn its frame
     {
         gPipeline.renderFinalize();
     }
-    SKOverviewCapture::onComposite(); // <SK:Nexii> tactical overview: over the finished frame, under HUD and UI
+    if (!sSKMapFrame) // <SK:Nexii> 3D world map
+    {
+        SKOverviewCapture::onComposite(); // <SK:Nexii> tactical overview: over the finished frame, under HUD and UI
+    }
 
     {
         LLGLState::checkStates();
@@ -1708,9 +1709,7 @@ void render_ui(F32 zoom_factor, int subfield)
         if (render_ui)
         {
             LL_PROFILE_ZONE_NAMED_CATEGORY_UI("UI 2D");
-            // <SK:Nexii> 3D world map and tactical overview: hover text and name tags belong to the world
-            if (!sSKMapFrame && !SKOverviewCapture::tacticalShown())
-            // </SK:Nexii>
+            if (!SKOverviewCapture::tacticalShown() && !sSKMapFrame) // <SK:Nexii> tactical overview, 3D world map: no world name tags or hover text over either
             {
                 LLHUDObject::renderAll();
             }

@@ -1013,13 +1013,13 @@ if(AL_BUILD_VIEWER)
     rlvinventory.cpp
     rlvlocks.cpp
     rlvui.cpp
+    # <SK:Nexii> motion recorder
+    skmotionrecorder.cpp
+    # </SK:Nexii>
     skmapmode.cpp # <SK:Nexii> 3D world map
     skworldmapmath.cpp # <SK:Nexii> 3D world map
     skworldmapscene.cpp # <SK:Nexii> 3D world map
     skworldmaptiles.cpp # <SK:Nexii> 3D world map
-    # <SK:Nexii> motion recorder
-    skmotionrecorder.cpp
-    # </SK:Nexii>
   )
 
   set(
@@ -1912,13 +1912,13 @@ if(AL_BUILD_VIEWER)
     rlvmodifiers.h
     rlvui.h
     roles_constants.h
+    # <SK:Nexii> motion recorder
+    skmotionrecorder.h
+    # </SK:Nexii>
     skmapmode.h # <SK:Nexii> 3D world map
     skworldmapmath.h # <SK:Nexii> 3D world map
     skworldmapscene.h # <SK:Nexii> 3D world map
     skworldmaptiles.h # <SK:Nexii> 3D world map
-    # <SK:Nexii> motion recorder
-    skmotionrecorder.h
-    # </SK:Nexii>
   )
 
   # <SK:Nexii> SKNetMap mini-map sources
