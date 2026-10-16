@@ -32,6 +32,8 @@
 #include "sknavtypes.h"
 #include "threadpool_fwd.h"
 
+class SKPhysicsHavokShape;
+
 #include <future>
 #include <map>
 #include <memory>
@@ -153,6 +155,9 @@ private:
         U64 mSignature = 0;
         sknav::RecordPtr mRecord;
         sknav::RecordPtr mPhysics;  ///< a surround's physics shape, beside its rendered one
+        /// The simulator's triangles once they arrived, held so the repository dropping them does not rebuild the record.
+        std::shared_ptr<const SKPhysicsHavokShape> mSim;
+        LLUUID mSimMesh;
         F64 mLastSeen = 0.f;
     };
 
@@ -212,7 +217,8 @@ private:
     bool isSurround(LLViewerObject* root, const LLVector3d& mn, const LLVector3d& mx) const;
     /// One record from one part, at the sim-side transform the caller signed.
     sknav::RecordPtr record(LLVOVolume* volume, LLViewerObject* root, sknav::Role role, bool dynamic, U64 signature,
-                            const LLVector3& pos, const LLQuaternion& rot, sknav::FeatureKind feature, U8 exclude);
+                            const LLVector3& pos, const LLQuaternion& rot, sknav::FeatureKind feature, U8 exclude,
+                            const std::shared_ptr<const SKPhysicsHavokShape>& sim);
     /// Who is sitting on what, into the session history.
     void gatherCrew();
     /// The feature rules over the finished scan's parts; the part kinds they

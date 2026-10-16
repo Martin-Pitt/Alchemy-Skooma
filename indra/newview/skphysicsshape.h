@@ -28,9 +28,11 @@
 #include "llphysicsshapebuilderutil.h"
 #include "sknavtypes.h"
 
+#include <memory>
 #include <vector>
 
 class LLVOVolume;
+class SKPhysicsHavokShape;
 
 /// The decision: the object's physics type and the shape specification the
 /// physics engine would build from it.
@@ -72,7 +74,16 @@ struct SKShapeGeometry
 /// The physics geometry for a classified shape. Asks the mesh repository for
 /// what is missing exactly as the overlay does. False while it is missing and
 /// when there is nothing to emit: nothing stands in for a fetch.
-bool skPhysicsShapeGeometry(LLVOVolume* volume, const SKPhysicsShape& shape, SKShapeGeometry& out);
+/// sim: the simulator's triangles from skPhysicsShapeSimTriangles, used in
+/// place of the physics mesh when given; null keeps the uploaded shapes.
+bool skPhysicsShapeGeometry(LLVOVolume* volume, const SKPhysicsShape& shape, SKShapeGeometry& out,
+                            const std::shared_ptr<const SKPhysicsHavokShape>& sim = nullptr);
+
+/// The triangles the simulator kept for a Prim-type mesh that collides as its
+/// physics mesh and has no decomposition hulls, asking for them the first
+/// time. Null for any other volume, while they are on their way, and when the
+/// asset has none (too few triangles, absent section, failed fetch).
+std::shared_ptr<const SKPhysicsHavokShape> skPhysicsShapeSimTriangles(LLVOVolume* volume);
 
 /// The rendered geometry: the volume's faces at whatever LOD is loaded, with
 /// provenance RENDER. What sim surrounds contribute to the weather class.

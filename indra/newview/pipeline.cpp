@@ -10667,9 +10667,10 @@ void LLPipeline::renderFinalize()
     // <SK:Nexii> navmesh census overlay: record and cluster boxes
     // A layer of the navmesh debug pass can be on without the surface itself,
     // so ask the pass rather than the mask alone.
+    // The census draws its own layers, so they show with the navmesh off.
+    SKWorldCensus::instance().renderDebug();
     if (SKNavMesh::overlayActive())
     {
-        SKWorldCensus::instance().renderDebug();
         SKNavMesh::instance().renderDebug();
     }
     // </SK:Nexii>

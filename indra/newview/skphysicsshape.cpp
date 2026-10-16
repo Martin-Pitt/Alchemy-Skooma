@@ -31,6 +31,7 @@
 #include "llvolume.h"
 #include "llvolumemgr.h"
 #include "llvovolume.h"
+#include "skmeshhavokshape.h"
 
 #include <algorithm>
 
@@ -100,7 +101,30 @@ bool skPhysicsShapeClassify(LLVOVolume* volume, SKPhysicsShape& out)
     return true;
 }
 
-bool skPhysicsShapeGeometry(LLVOVolume* volume, const SKPhysicsShape& shape, SKShapeGeometry& out)
+std::shared_ptr<const SKPhysicsHavokShape> skPhysicsShapeSimTriangles(LLVOVolume* volume)
+{
+    if (!volume || !volume->isMesh() || !volume->getVolume() || volume->getPhysicsShapeType() != LLViewerObject::PHYSICS_SHAPE_PRIM)
+    {
+        return nullptr;
+    }
+    const LLUUID& mesh_id = volume->getVolume()->getParams().getSculptID();
+    // Only where the physics mesh is the shape: with hulls, which the sim
+    // collides with then is still open, so those keep the hull path.
+    const LLModel::Decomposition* decomp = gMeshRepo.getDecomposition(mesh_id);
+    if (gMeshRepo.physicsMeshSize(mesh_id) <= 0 || !decomp || !decomp->mHull.empty())
+    {
+        return nullptr;
+    }
+    std::shared_ptr<const SKPhysicsHavokShape> sim = gMeshRepo.getPhysicsHavok(mesh_id);
+    if (!sim || !sim->mHasMopp || sim->mTriangles.size() < 3)
+    {
+        return nullptr;
+    }
+    return sim;
+}
+
+bool skPhysicsShapeGeometry(LLVOVolume* volume, const SKPhysicsShape& shape, SKShapeGeometry& out,
+                            const std::shared_ptr<const SKPhysicsHavokShape>& sim)
 {
     out.mTriangles.clear();
     out.mShape = sknav::Shape::TRIANGLES;
@@ -142,6 +166,14 @@ bool skPhysicsShapeGeometry(LLVOVolume* volume, const SKPhysicsShape& shape, SKS
                 if (physics_mesh > 0)
                 {
                     gMeshRepo.fetchPhysicsShape(params.getSculptID());
+                    // What the simulator built from the physics mesh is what it collides with.
+                    if (sim && decomp && decomp->mHull.empty())
+                    {
+                        appendSoup(sim->mTriangles, out.mTriangles);
+                        out.mProvenance = sknav::Provenance::SIM;
+                        out.mSolid = false;
+                        break;
+                    }
                     if (!decomp || decomp->mPhysicsShapeMesh.empty())
                     {
                         return false;   // the physics mesh is on its way

@@ -169,6 +169,11 @@ public:
     /// build follows it too, so a layer draws whether or not the surface is.
     static bool overlayActive();
 
+    /// The tile pass runs for its air (SKAirCellsEnabled) or its polygons (SKNavMeshEnabled).
+    static bool airEnabled();
+    /// Whether tiles go on to polygons and Detour; off, the raster stage's air, walls and rooms are all that is built.
+    static bool polysEnabled();
+
     /// The floor under a global position within the class's reach: the nearest
     /// walkable polygon's height. Cluster meshes at the position first, then
     /// the region's terrain.
@@ -734,6 +739,7 @@ private:
     Stats mStats;
     F64 mLastLog = 0.f;
     bool mDemanding = false;
+    bool mPolysOn = false;      ///< polysEnabled() the meshes were built under
     sknav::SkyMap mSkyMap;
     std::map<U64, sknav::TileAirPtr> mSkyTiles;     ///< what each contributor last gave the sky map
     U64 mSkyRevision = 0;

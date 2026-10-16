@@ -58,6 +58,7 @@ namespace sknav
         BOX,        ///< a placeholder while the asset is still fetching
         RENDER,     ///< the rendered volume faces (surrounds)
         BASE_HULL,  ///< the single base hull, when there is no decomposition
+        SIM,        ///< the triangles the simulator kept for a mesh (its physics_havok section)
     };
 
     /// The sim's navmesh role for a linkset, when known.

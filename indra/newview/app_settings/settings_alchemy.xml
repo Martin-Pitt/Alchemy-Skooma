@@ -6042,7 +6042,29 @@
         <key>SKNavMeshEnabled</key>
         <map>
             <key>Comment</key>
-            <string>Build a client-side navmesh from the objects around the agent.</string>
+            <string>Build navmesh polygons and Detour tiles over the air cells; off, only the air cells are built.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKAirCellsEnabled</key>
+        <map>
+            <key>Comment</key>
+            <string>Build the air cells, rooms and enclosure from the census around the agent, with or without the navmesh.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKWorldCensusEnabled</key>
+        <map>
+            <key>Comment</key>
+            <string>Scan the objects around the agent into the world census the mini-map, probes and navmesh read.</string>
             <key>Persist</key>
             <integer>1</integer>
             <key>Type</key>

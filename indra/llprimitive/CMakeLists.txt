@@ -20,6 +20,7 @@ target_sources(
     lltreeparams.cpp
     llvolumemessage.cpp
     material_codes.cpp
+    skmeshhavok.cpp # <SK:Nexii> physics_havok block
   PUBLIC
     FILE_SET HEADERS
       FILES
@@ -43,6 +44,7 @@ target_sources(
         llvolumemessage.h
         material_codes.h
         object_flags.h
+        skmeshhavok.h # <SK:Nexii> physics_havok block
 )
 
 target_link_libraries(
@@ -67,6 +69,7 @@ if(AL_BUILD_TESTS)
       tests/llmaterial_test.cpp
       tests/llmaterialid_test.cpp
       tests/llmediaentry_test.cpp
+      tests/skmeshhavok_test.cpp # <SK:Nexii> physics_havok block
     LIBRARIES llprimitive
   )
   # This one stubs LLMaterialID and LLPrimTextureList, which the library

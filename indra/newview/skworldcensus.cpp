@@ -226,13 +226,16 @@ void SKWorldCensus::removeDemand(const std::string& who)
 
 bool SKWorldCensus::wanted() const
 {
-    static LLCachedControl<bool> enabled(gSavedSettings, "SKNavMeshEnabled", true);
+    static LLCachedControl<bool> enabled(gSavedSettings, "SKWorldCensusEnabled", true);
     static LLCachedControl<bool> always(gSavedSettings, "SKNavCensusAlways", false);
+    static LLCachedControl<bool> show(gSavedSettings, "SKNavOverlayCensus", false);
+    static LLCachedControl<bool> show_features(gSavedSettings, "SKNavOverlayFeatures", false);
     if (!enabled)
     {
         return false;
     }
-    return always || !mDemands.empty() || gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_NAVMESH);
+    // The census overlays draw without the navmesh, so they bring the census themselves.
+    return always || show || show_features || !mDemands.empty() || gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_NAVMESH);
 }
 
 F64 SKWorldCensus::range() const
@@ -765,6 +768,18 @@ void SKWorldCensus::visit(LLViewerObject* object)
         {
             const LLModel::Decomposition* decomp = gMeshRepo.getDecomposition(sculpt);
             sig = mix(sig, decomp ? 1 + decomp->mMesh.size() * 4 + decomp->mPhysicsShapeMesh.mPositions.size() + decomp->mBaseHullMesh.mPositions.size() : 0);
+            // The simulator's triangles arriving replace the physics mesh once, and stay held after.
+            PartCache& held = mParts[object->getID()];
+            if (held.mSimMesh != sculpt || object->getPhysicsShapeType() != LLViewerObject::PHYSICS_SHAPE_PRIM)
+            {
+                held.mSim.reset();
+                held.mSimMesh = sculpt;
+            }
+            if (!held.mSim && (!surround || (hasPhysics && !phantom)))
+            {
+                held.mSim = skPhysicsShapeSimTriangles(volume);
+            }
+            sig = mix(sig, held.mSim ? 1 + held.mSim->mTriangles.size() : 0);
         }
         // A sculpt's texture arriving replaces the stretched placeholder, so
         // its level has to move the signature or the placeholder never leaves.
@@ -798,7 +813,7 @@ void SKWorldCensus::visit(LLViewerObject* object)
     else
     {
         rec = record(volume, root, surround ? Role::SURROUND : Role::NAV, dynamic, record_sig, sim_pos, sim_rot, feature.mKind,
-                     feature.mExclude);
+                     feature.mExclude, cache.mSim);
         if (!rec)
         {
             return;
@@ -841,7 +856,7 @@ void SKWorldCensus::visit(LLViewerObject* object)
     {
         if (!fresh || !cache.mPhysics)
         {
-            cache.mPhysics = record(volume, root, Role::NAV, dynamic, record_sig, sim_pos, sim_rot, feature.mKind, feature.mExclude);
+            cache.mPhysics = record(volume, root, Role::NAV, dynamic, record_sig, sim_pos, sim_rot, feature.mKind, feature.mExclude, cache.mSim);
         }
         if (cache.mPhysics)
         {
@@ -981,7 +996,8 @@ void SKWorldCensus::visitCached(const CachedPart& part)
 }
 
 sknav::RecordPtr SKWorldCensus::record(LLVOVolume* volume, LLViewerObject* root, sknav::Role role, bool dynamic, U64 signature,
-                                       const LLVector3& pos, const LLQuaternion& rot, sknav::FeatureKind feature, U8 exclude)
+                                       const LLVector3& pos, const LLQuaternion& rot, sknav::FeatureKind feature, U8 exclude,
+                                       const std::shared_ptr<const SKPhysicsHavokShape>& sim)
 {
     LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - shape");
     // An unloaded sculpt is a placeholder sphere stretched over its whole
@@ -999,7 +1015,7 @@ sknav::RecordPtr SKWorldCensus::record(LLVOVolume* volume, LLViewerObject* root,
     else
     {
         SKPhysicsShape shape;
-        ok = skPhysicsShapeClassify(volume, shape) && skPhysicsShapeGeometry(volume, shape, geom);
+        ok = skPhysicsShapeClassify(volume, shape) && skPhysicsShapeGeometry(volume, shape, geom, sim);
     }
     if (!ok)
     {
@@ -1385,6 +1401,7 @@ void SKWorldCensus::renderDebug()
                 case Provenance::BOX: swatch = SKNavSwatch::SHAPE_BOX; break;
                 case Provenance::RENDER: swatch = SKNavSwatch::SHAPE_RENDER; break;
                 case Provenance::BASE_HULL: swatch = SKNavSwatch::SHAPE_HULL; break;
+                case Provenance::SIM: swatch = SKNavSwatch::SHAPE_EXACT; break;
             }
         }
         geom.box(gAgent.getPosAgentFromGlobal(r->mMin), gAgent.getPosAgentFromGlobal(r->mMax), skNavSwatchColor(swatch));

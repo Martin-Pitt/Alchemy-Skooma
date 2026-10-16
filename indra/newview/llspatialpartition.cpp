@@ -56,6 +56,7 @@
 #include "llviewershadermgr.h"
 #include "llcontrolavatar.h"
 #include "lltoolmgr.h"
+#include "skmeshhavokshape.h" // <SK:Nexii> physics_havok block
 
 extern bool gShiftFrame;
 
@@ -2322,7 +2323,16 @@ void renderPhysicsShape(LLDrawable* drawable, LLVOVolume* volume, bool wireframe
         LLUUID mesh_id = volume->getVolume()->getParams().getSculptID();
         LLModel::Decomposition* decomp = gMeshRepo.getDecomposition(mesh_id);
 
-        if (decomp)
+        // <SK:Nexii> physics_havok block
+        // The simulator's MOPP triangles for a mesh without decomposition hulls. With hulls, which
+        // shape it collides with is not established, so they keep today's drawing.
+        const bool havok_drawn = decomp && decomp->mHull.empty() && skRenderPhysicsHavok(mesh_id, color);
+        if (havok_drawn)
+        {
+            // Drawn.
+        }
+        else if (decomp)
+        // </SK:Nexii>
         { //render a physics based mesh
 
             gGL.getTextureSlot(0)->unbind();
