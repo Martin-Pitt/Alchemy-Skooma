@@ -150,4 +150,5 @@ private:
     skmodalview::Claims mClaims;
     std::vector<SKModalMode*> mModes;
     WorldCamera mWorld;
+    bool mClosingAll = false; ///< no mode is handed the top while every mode is closing
 };
