@@ -98,7 +98,6 @@ private:
     void removeViews();
 
     bool mOpen = false;
-    bool mOpenSignalPending = false; ///< opened under another mode: the open signal waits for the top
     bool mHasMapCamera = false;     ///< the map camera has been set once, so later opens resume it
     LLVector3d mMapPosition;
     LLVector3d mMapFocus;

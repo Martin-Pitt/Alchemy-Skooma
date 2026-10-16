@@ -177,9 +177,8 @@ bool SKMapMode::open()
         return false;
     }
 
-    // The open signal captures the world, so it fires only once the map is the view on top.
-    mOpenSignalPending = SKModalView::top() != this;
-    if (!mOpenSignalPending)
+    // The open signal captures the last world frame, which exists only when no other mode covered it.
+    if (SKModalView::top() == this)
     {
         mOpenSignal();
     }
@@ -254,12 +253,14 @@ void SKMapMode::close()
     {
         return;
     }
-    mMapPosition = gAgentCamera.getCameraPositionGlobal();
-    mMapFocus = gAgentCamera.getFocusGlobal();
+    if (SKModalView::top() == this) // under another mode the map kept its camera in onTopChanged
+    {
+        mMapPosition = gAgentCamera.getCameraPositionGlobal();
+        mMapFocus = gAgentCamera.getFocusGlobal();
+    }
     removeViews();
     mScene.release();
     mOpen = false;
-    mOpenSignalPending = false;
     // The world camera goes back as it was when the last modal view closes.
     SKModalView::instance().release(this);
     LL_INFOS("WorldMap") << "map mode closed" << LL_ENDL;
@@ -290,11 +291,6 @@ void SKMapMode::onTopChanged(bool on_top)
     mPanning = false;
     if (on_top)
     {
-        if (mOpenSignalPending)
-        {
-            mOpenSignalPending = false;
-            mOpenSignal();
-        }
         gAgentCamera.setFocusOnAvatar(false, false);
         gAgentCamera.setCameraPosAndFocusGlobal(mMapPosition, mMapFocus, LLUUID::null);
     }
