@@ -34,6 +34,7 @@
 #include "lluuid.h"
 #include "v2math.h"
 #include "skmaplabels.h"
+#include "skmapplan.h"
 #include "skoverviewcensus.h"
 #include "skoverviewmovers.h"
 #include "v3dmath.h"
@@ -203,6 +204,9 @@ private:
     } mTacticalCam;
     /// Takes the tactical camera over from where the overview was looking.
     void takeTacticalCamera();
+    /// An enclosed room's floor polys' bounds, global, cached a few seconds.
+    std::vector<std::pair<LLVector3d, LLVector3d>> roomOf(const skmap::plan::SpaceRef& space);
+    std::map<std::pair<LLUUID, U32>, std::pair<F64, std::vector<std::pair<LLVector3d, LLVector3d>>>> mRooms;
     LLVector3d mTacticalEyeGlobal;  // the last frame's eye and focus, where an ease starts from
     LLVector3d mTacticalFocusGlobal;
     LLVector3 mTacticalLeft;        // the last frame's camera axes, for panning

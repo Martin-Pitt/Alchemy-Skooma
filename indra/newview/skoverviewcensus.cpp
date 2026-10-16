@@ -681,6 +681,7 @@ bool SKOverviewCensus::update()
                         break;
                     }
                     *verts++ = p;
+                    batch.mPositions.push_back(p);
                     ++at;
                 }
                 group.mCount[c] = at - group.mStart[c];
@@ -814,16 +815,85 @@ void SKOverviewCensus::gatherSurrounds(const SKCensusSnapshot& snap)
     mSurroundsSig = sig;
 }
 
-void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<Occupant>& occupants)
+namespace
+{
+    // Whether the segment from p to q crosses the triangle (a, b, c), short of q (Moller-Trumbore).
+    bool segmentHits(const LLVector3& p, const LLVector3& q, const LLVector3& a, const LLVector3& b, const LLVector3& c)
+    {
+        const LLVector3 d = q - p;
+        const LLVector3 e1 = b - a;
+        const LLVector3 e2 = c - a;
+        const LLVector3 h = d % e2;
+        const F32 det = e1 * h;
+        if (std::fabs(det) < 1.0e-9f)
+        {
+            return false;
+        }
+        const F32 inv = 1.f / det;
+        const LLVector3 s = p - a;
+        const F32 u = (s * h) * inv;
+        if (u < 0.f || u > 1.f)
+        {
+            return false;
+        }
+        const LLVector3 qv = s % e1;
+        const F32 v = (d * qv) * inv;
+        if (v < 0.f || u + v > 1.f)
+        {
+            return false;
+        }
+        const F32 t = (e2 * qv) * inv;
+        return t > 1.0e-4f && t < 0.999f;
+    }
+
+    // Whether the segment from p to q meets the box (slab test).
+    bool segmentMeetsBox(const LLVector3d& p, const LLVector3d& q, const LLVector3d& lo, const LLVector3d& hi)
+    {
+        F64 t0 = 0.0, t1 = 1.0;
+        for (S32 k = 0; k < 3; ++k)
+        {
+            const F64 d = q.mdV[k] - p.mdV[k];
+            if (std::fabs(d) < 1.0e-12)
+            {
+                if (p.mdV[k] < lo.mdV[k] || p.mdV[k] > hi.mdV[k])
+                {
+                    return false;
+                }
+                continue;
+            }
+            F64 a = (lo.mdV[k] - p.mdV[k]) / d;
+            F64 b = (hi.mdV[k] - p.mdV[k]) / d;
+            if (a > b)
+            {
+                std::swap(a, b);
+            }
+            t0 = llmax(t0, a);
+            t1 = llmin(t1, b);
+            if (t0 > t1)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+}
+
+void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<Occupant>& occupants, const LLVector3d& eye, U64 key)
 {
     LL_PROFILE_ZONE_SCOPED;
-    // A linkset spans batches when it crosses a border: its bounds over all of them.
+    if (key == mCutKey && mCutSignature == mSignature)
+    {
+        return;
+    }
+    mCutKey = key;
+    // A linkset spans batches when it crosses a border: its bounds over all of them, and where its triangles are.
     struct Extent
     {
         LLVector3d mMin{ 1e30, 1e30, 1e30 };
         LLVector3d mMax{ -1e30, -1e30, -1e30 };
         bool mCuttable = false;
         LLUUID mRoot;
+        std::vector<std::pair<const Batch*, const Group*>> mParts;
     };
     std::map<U32, Extent> extents;
     for (const Batch& batch : mBatches)
@@ -838,15 +908,65 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
             }
             e.mCuttable = !group.mNeverCut && region && region->pointInRegionGlobal(group.mAnchor);
             e.mRoot = group.mRoot;
+            e.mParts.emplace_back(&batch, &group);
         }
     }
-    // An occupant's building: every linkset in the region whose bounds hold their column and rise above their floor,
-    // so a roof or an upper storey that is its own linkset goes with the walls. The agent's is cut at the agent's
-    // level whoever else is in it; another's at the highest of its occupants' cuts.
-    const F64 SLACK_M = 0.1;
-    const F64 ABOVE_M = 0.5;
+    // Whether a linkset's own triangles (not its hatched invisible ones) block the segment.
+    auto blocks = [](const Extent& e, const LLVector3d& p, const LLVector3d& q)
+    {
+        for (const auto& part : e.mParts)
+        {
+            const Batch& batch = *part.first;
+            const LLVector3 a(p - batch.mOrigin);
+            const LLVector3 b(q - batch.mOrigin);
+            for (U32 c = 0; c < skoverview::NUM_CENSUS_CLASSES; ++c)
+            {
+                if (c == skoverview::INVISIBLE)
+                {
+                    continue;
+                }
+                const U32 end = llmin(part.second->mStart[c] + part.second->mCount[c], (U32)batch.mPositions.size());
+                for (U32 v = part.second->mStart[c]; v + 2 < end; v += 3)
+                {
+                    if (segmentHits(a, b, batch.mPositions[v], batch.mPositions[v + 1], batch.mPositions[v + 2]))
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    };
+
+    const F64 SLACK_M = 0.1;    // column: how far outside a linkset's bounds still counts as under it
+    const F64 WALL_M = 0.75;    // room: how far past its floor a bounding wall can stand
+    const F64 ABOVE_M = 0.5;    // what rises less than this over the floor bounds nothing
     std::map<U32, F32> cut_of;
     std::map<U32, std::string> why;
+    std::set<U32> for_agent;
+    auto mark = [&](U32 id, const Occupant& occupant, const char* rule)
+    {
+        const std::string who = occupant.mSelf ? std::string("agent") : "occupant " + occupant.mId.asString();
+        if (occupant.mSelf)
+        {
+            if (for_agent.insert(id).second)
+            {
+                cut_of[id] = occupant.mCut;
+                why[id] = who + " " + rule;
+            }
+            return;
+        }
+        if (for_agent.count(id))
+        {
+            return;
+        }
+        auto it = cut_of.find(id);
+        if (it == cut_of.end() || occupant.mCut > it->second)
+        {
+            cut_of[id] = occupant.mCut;
+            why[id] = who + " " + rule;
+        }
+    };
     std::vector<const Occupant*> ordered;
     for (const Occupant& occupant : occupants)
     {
@@ -859,35 +979,45 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
             ordered.push_back(&occupant);
         }
     }
-    std::set<U32> agent_building;
     for (const Occupant* occupant : ordered)
     {
         const LLVector3d& p = occupant->mFloor;
         for (const auto& entry : extents)
         {
             const Extent& e = entry.second;
-            if (!e.mCuttable || p.mdV[VX] < e.mMin.mdV[VX] - SLACK_M || p.mdV[VX] > e.mMax.mdV[VX] + SLACK_M ||
-                p.mdV[VY] < e.mMin.mdV[VY] - SLACK_M || p.mdV[VY] > e.mMax.mdV[VY] + SLACK_M ||
-                e.mMax.mdV[VZ] < p.mdV[VZ] + ABOVE_M)
+            if (!e.mCuttable || e.mMax.mdV[VZ] < p.mdV[VZ] + ABOVE_M)
             {
                 continue;
             }
-            if (occupant->mSelf)
+            if (!occupant->mRoom.empty())
             {
-                agent_building.insert(entry.first);
-                cut_of[entry.first] = occupant->mCut;
-                why[entry.first] = "agent";
-                continue;
+                // The room's building: whatever stands round its floor or over it.
+                for (const auto& box : occupant->mRoom)
+                {
+                    if (e.mMax.mdV[VX] >= box.first.mdV[VX] - WALL_M && e.mMin.mdV[VX] <= box.second.mdV[VX] + WALL_M &&
+                        e.mMax.mdV[VY] >= box.first.mdV[VY] - WALL_M && e.mMin.mdV[VY] <= box.second.mdV[VY] + WALL_M)
+                    {
+                        mark(entry.first, *occupant, "room");
+                        break;
+                    }
+                }
             }
-            if (agent_building.count(entry.first))
+            else if (p.mdV[VX] >= e.mMin.mdV[VX] - SLACK_M && p.mdV[VX] <= e.mMax.mdV[VX] + SLACK_M &&
+                     p.mdV[VY] >= e.mMin.mdV[VY] - SLACK_M && p.mdV[VY] <= e.mMax.mdV[VY] + SLACK_M)
             {
-                continue;
+                mark(entry.first, *occupant, "column");
             }
-            auto it = cut_of.find(entry.first);
-            if (it == cut_of.end() || occupant->mCut > it->second)
+        }
+        // Whatever hides them from the eye.
+        for (const LLVector3d& target : occupant->mSight)
+        {
+            for (const auto& entry : extents)
             {
-                cut_of[entry.first] = occupant->mCut;
-                why[entry.first] = "occupant " + occupant->mId.asString();
+                const Extent& e = entry.second;
+                if (e.mCuttable && segmentMeetsBox(eye, target, e.mMin, e.mMax) && blocks(e, eye, target))
+                {
+                    mark(entry.first, *occupant, "line-of-sight");
+                }
             }
         }
     }

@@ -1102,6 +1102,45 @@ bool SKOverviewCapture::captureMap(RegionMap& map, LLViewerRegion* region, bool 
     return true;
 }
 
+std::vector<std::pair<LLVector3d, LLVector3d>> SKOverviewCapture::roomOf(const skmap::plan::SpaceRef& space)
+{
+    // A room's floor polys' bounds, from the navmesh; kept a few seconds, since people stand in the same rooms.
+    const F64 now = LLFrameTimer::getUptimeSeconds().value();
+    const auto key = std::make_pair(space.mMesh, space.mId);
+    auto it = mRooms.find(key);
+    if (it != mRooms.end() && now - it->second.first < 5.0)
+    {
+        return it->second.second;
+    }
+    std::vector<std::pair<LLVector3d, LLVector3d>> boxes;
+    if (SKNavMesh::instanceExists())
+    {
+        SKNavMesh::instance().spacePolys(space.mMesh, space.mId, [&boxes](const std::vector<LLVector3d>& outline)
+        {
+            if (outline.empty())
+            {
+                return;
+            }
+            LLVector3d lo = outline.front(), hi = outline.front();
+            for (const LLVector3d& v : outline)
+            {
+                for (S32 k = 0; k < 3; ++k)
+                {
+                    lo.mdV[k] = llmin(lo.mdV[k], v.mdV[k]);
+                    hi.mdV[k] = llmax(hi.mdV[k], v.mdV[k]);
+                }
+            }
+            boxes.emplace_back(lo, hi);
+        });
+    }
+    if (mRooms.size() > 256)
+    {
+        mRooms.clear();
+    }
+    mRooms[key] = std::make_pair(now, boxes);
+    return boxes;
+}
+
 void SKOverviewCapture::tactical()
 {
     LL_PROFILE_ZONE_SCOPED;
@@ -1231,26 +1270,53 @@ void SKOverviewCapture::tactical()
         {
             static LLCachedControl<F32> cut_height(gSavedSettings, "SKOverviewCutHeight", 2.5f);
             std::vector<SKOverviewCensus::Occupant> occupants;
-            SKOverviewCensus::Occupant self;
-            self.mFloor = gAgent.getPosGlobalFromAgent(LLVector3(gAgent.getPositionAgent().mV[VX], gAgent.getPositionAgent().mV[VY], floor_z));
-            self.mCut = cut_z;
-            self.mId = gAgent.getID();
-            self.mSelf = true;
-            occupants.push_back(self);
+            // The inputs, coarsely: the cut is worked out again only once the eye or someone has moved a little.
+            U64 key = 1469598103934665603ull;
+            auto mix = [&key](U64 v) { key = (key ^ v) * 1099511628211ull; };
+            auto mixPos = [&mix](const LLVector3d& p)
+            {
+                for (S32 k = 0; k < 3; ++k)
+                {
+                    mix((U64)(S64)std::llround(p.mdV[k] * 4.0));
+                }
+            };
+            auto addPerson = [&](const LLUUID& id, bool self, const LLVector3d& floor, F32 cut, const skmap::plan::Whereabouts& where)
+            {
+                SKOverviewCensus::Occupant o;
+                o.mId = id;
+                o.mSelf = self;
+                o.mFloor = floor;
+                o.mCut = cut;
+                for (F64 up : { 0.3, 1.0, 1.7 })
+                {
+                    o.mSight.push_back(floor + LLVector3d(0.0, 0.0, up));
+                }
+                if (where.mFound && where.mIndoor && where.mSpace.mId)
+                {
+                    o.mRoom = roomOf(where.mSpace);
+                }
+                mixPos(floor);
+                mix(id.getCRC32());
+                mix(where.mIndoor ? where.mSpace.mId : 0u);
+                occupants.push_back(std::move(o));
+            };
+            const LLVector3d agent_floor = gAgent.getPosGlobalFromAgent(
+                LLVector3(gAgent.getPositionAgent().mV[VX], gAgent.getPositionAgent().mV[VY], floor_z));
+            addPerson(gAgent.getID(), true, agent_floor, cut_z, skmap::plan::whereabouts(gAgent.getPositionGlobal()));
             for (const SKMapPeople::Person& p : SKMapPeople::instance().people())
             {
                 if (p.mVisibility == skmap::Visibility::HIDDEN || !p.mZKnown)
                 {
                     continue;
                 }
-                SKOverviewCensus::Occupant o;
-                o.mId = p.mId;
-                o.mFloor = p.mPos;
-                o.mFloor.mdV[VZ] = p.mWhere.mFound ? (F64)p.mWhere.mFloor : p.mPos.mdV[VZ] - AVATAR_HALF_HEIGHT_M;
-                o.mCut = (F32)o.mFloor.mdV[VZ] + (F32)cut_height;
-                occupants.push_back(o);
+                LLVector3d floor = p.mPos;
+                floor.mdV[VZ] = p.mWhere.mFound ? (F64)p.mWhere.mFloor : p.mPos.mdV[VZ] - AVATAR_HALF_HEIGHT_M;
+                addPerson(p.mId, false, floor, (F32)floor.mdV[VZ] + (F32)cut_height, p.mWhere);
             }
-            mCensus.applyCut(gAgent.getRegion(), occupants);
+            const LLVector3d eye_global = gAgent.getPosGlobalFromAgent(eye);
+            mixPos(eye_global);
+            mix(gAgent.getRegion() ? gAgent.getRegion()->getHandle() : 0);
+            mCensus.applyCut(gAgent.getRegion(), occupants, eye_global, key);
         }
         const bool same = !force && mTacticalKey.mValid && (eye - mTacticalKey.mEye).magVecSquared() < 1e-4f &&
                           at_axis * mTacticalKey.mDir > 0.999999f && fov == mTacticalKey.mFov && vw == mTacticalKey.mWidth &&

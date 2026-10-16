@@ -113,6 +113,7 @@ public:
         LLPointer<LLVertexBuffer> mBuffer;
         U32 mStart[skoverview::NUM_CENSUS_CLASSES + 1] = {}; ///< vertex ranges per class
         std::vector<Group> mGroups;
+        std::vector<LLVector3> mPositions; ///< the buffer's positions, region-local, for the cut's sight lines
     };
 
     /// Which groups a shot draws: all of them, or the ground's and those at the agent's level.
@@ -141,16 +142,22 @@ public:
     struct Occupant
     {
         LLUUID mId;             ///< who, for the log
-        bool mSelf = false;     ///< the agent: their building is cut at their level, whoever else is in it
+        bool mSelf = false;     ///< the agent: what is cut for them is cut at their level, whoever else needs it
         LLVector3d mFloor;      ///< global, their feet on their floor
         F32 mCut = 0.f;         ///< agent z
+        std::vector<LLVector3d> mSight;     ///< global points on them the tactical eye should see: feet, chest, head
+        /// The enclosed room they are in, from the air: its floor polys' bounds, global; empty outdoors or unknown.
+        std::vector<std::pair<LLVector3d, LLVector3d>> mRoom;
     };
-    /// Writes each vertex's cut height for the tactical view. In the given region an occupant's building is every
-    /// linkset over their floor, whose bounds hold their column and rise above it, however many linksets make it:
-    /// the agent's is cut at the agent's level, another's at its highest occupant's. Every other part, there and
-    /// elsewhere, is drawn whole. Rewrites the cut attribute only when the result changed, and logs it then;
+    /// Writes each vertex's cut height for the tactical view, for the linksets in the given region:
+    /// - room: every linkset bounding an occupant's enclosed room (walls round its floor, floors above, the roof);
+    /// - column: outdoors or with no room known, every linkset whose bounds hold their column and rise above it;
+    /// - line of sight: every linkset whose triangles block the eye's sight of their feet, chest or head.
+    /// The agent's are cut at the agent's level, whoever else needs them; another's at the highest of its
+    /// occupants'. Every other part, there and elsewhere, is drawn whole. key says when the eye or the people moved:
+    /// the same key and buffers do nothing. Rewrites the attribute only when the result changed, and logs it then;
     /// cutStamp() moves when it does.
-    void applyCut(const LLViewerRegion* region, const std::vector<Occupant>& occupants);
+    void applyCut(const LLViewerRegion* region, const std::vector<Occupant>& occupants, const LLVector3d& eye, U64 key);
     U64 cutStamp() const { return mCutStamp; }
     const std::vector<Batch>& batches() const { return mBatches; }
     U32 triangles() const { return mTriangles; }
@@ -188,6 +195,7 @@ private:
     std::vector<std::pair<U32, F32>> mCuts; ///< the clusters and parts cut at the last applyCut, and their heights
     U64 mCutSignature = 0;      ///< the buffers' signature the cut attribute was written for
     U64 mCutStamp = 0;
+    U64 mCutKey = 0;            ///< the inputs the last applyCut was worked from
 };
 
 #endif // SK_OVERVIEWCENSUS_H
