@@ -31,6 +31,8 @@
 #include "v3math.h"
 
 #include <memory>
+#include <string>
+#include <map>
 #include <set>
 #include <vector>
 
@@ -73,6 +75,7 @@ namespace skoverview
     constexpr F32 INVISIBLE_WALL_M = 64.f; ///< a fully transparent part larger than this on any axis is no wall
     constexpr F32 GROUND_BASE_M = 4.f;  ///< a cluster whose base is no higher than this above the land stands on it
     constexpr F32 NO_CUT = 1.0e30f;     ///< the per-vertex cut height of a part drawn whole
+    constexpr F32 HIDDEN = -1.0e30f;    ///< the per-vertex cut height of a part not drawn at all
 
     U8 codeOf(CensusClass cls);
 
@@ -162,6 +165,8 @@ public:
     /// cutStamp() moves when it does.
     void applyCut(const LLViewerRegion* region, const std::vector<Occupant>& occupants, const LLVector3d& eye, U64 key);
     U64 cutStamp() const { return mCutStamp; }
+    /// A linkset's cut at the last applyCut, by its root: its height (HIDDEN when hidden) and why; false when whole.
+    bool cutOf(const LLUUID& root, F32& height, std::string& why) const;
     const std::vector<Batch>& batches() const { return mBatches; }
     U32 triangles() const { return mTriangles; }
     /// Moves whenever the buffers are rebuilt.
@@ -200,6 +205,7 @@ private:
     U64 mCutStamp = 0;
     U64 mCutKey = 0;            ///< the inputs the last applyCut was worked from
     std::string mCutLogged;     ///< the cut linksets and reasons last logged
+    std::map<LLUUID, std::pair<F32, std::string>> mCutRoots; ///< the last applyCut's cuts by linkset root
 };
 
 #endif // SK_OVERVIEWCENSUS_H

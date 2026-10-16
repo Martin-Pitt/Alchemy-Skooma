@@ -450,7 +450,7 @@ void main()
     }
     else if (sk_debug_view == 5)
     {
-        // Each part's own cut (SKOverviewCensus::applyCut): blue whole, banded by its cut height every 4 m when cut,
+        // Each part's own cut (SKOverviewCensus::applyCut): blue whole, magenta hidden, banded by its cut height every 4 m when cut,
         // red where the cap flag is set, grey terrain.
         vec3 k;
         if (code == CODE_TERRAIN)
@@ -460,6 +460,10 @@ void main()
         else if (cls.g > 0.75)
         {
             k = vec3(0.15, 0.35, 0.9);
+        }
+        else if (cls.g < 0.375)
+        {
+            k = vec3(0.85, 0.2, 0.85); // hidden: a floating cluster above the agent's level
         }
         else
         {

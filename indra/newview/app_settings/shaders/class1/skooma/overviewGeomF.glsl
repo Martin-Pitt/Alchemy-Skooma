@@ -52,9 +52,10 @@ void main()
         discard;
     }
 #ifdef SK_CUT_ATTRIBUTE
-    if (vary_z > vary_cut_z)
+    // Above its own part's cut; a hidden part (cut far below anything) only shows in debug view 5.
+    if (vary_z > vary_cut_z && !(sk_debug_cut == 1 && vary_cut_z < -1.0e29))
     {
-        discard; // above its own part's cut
+        discard;
     }
 #endif
     vec3 n_eye = normalize(cross(dFdx(vary_position), dFdy(vary_position)));
@@ -72,9 +73,10 @@ void main()
 #ifdef SK_CUT_ATTRIBUTE
     if (sk_debug_cut == 1)
     {
-        // G 1 for a part drawn whole, 0.5 for one with a finite cut; A the cut height in 4 m bands.
+        // G 1 for a part drawn whole, 0.25 for a hidden one, 0.5 for one with a finite cut; A the cut height in 4 m bands.
         bool whole = vary_cut_z >= 1.0e29;
-        e = vec2(whole ? 1.0 : 0.5, whole ? 0.0 : fract(vary_cut_z / 4.0));
+        bool hidden = vary_cut_z <= -1.0e29;
+        e = vec2(whole ? 1.0 : hidden ? 0.25 : 0.5, whole || hidden ? 0.0 : fract(vary_cut_z / 4.0));
     }
 #endif
     frag_color = vec4(color.r, e.x, flag, e.y);

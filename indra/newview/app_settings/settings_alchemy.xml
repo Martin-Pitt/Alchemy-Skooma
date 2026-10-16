@@ -5621,7 +5621,7 @@
         <key>SKOverviewDebugView</key>
         <map>
             <key>Comment</key>
-            <string>Overview debug view: 0 off, 1 class codes as flat colours, 2 distance in 2 m bands, 3 normals, 4 which shading term fired (red occlusion, green crease, blue cut edge), 5 each part's own cut in the tactical view (blue whole, hue by cut height in 4 m bands, red the cut edge).</string>
+            <string>Overview debug view: 0 off, 1 class codes as flat colours, 2 distance in 2 m bands, 3 normals, 4 which shading term fired (red occlusion, green crease, blue cut edge), 5 each part's own cut in the tactical view (blue whole, magenta hidden, hue by cut height in 4 m bands, red the cut edge).</string>
             <key>Persist</key>
             <integer>0</integer>
             <key>Type</key>

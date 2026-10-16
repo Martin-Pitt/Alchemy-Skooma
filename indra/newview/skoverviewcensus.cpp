@@ -922,6 +922,8 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
         LLVector3d mMax{ -1e30, -1e30, -1e30 };
         bool mCuttable = false;
         LLUUID mRoot;
+        bool mGround = false;   // in a cluster standing on the land
+        F64 mBottom = 1e30;     // its cluster's base
         std::vector<std::pair<const Batch*, const Group*>> mParts;
     };
     std::map<U32, Extent> extents;
@@ -937,6 +939,8 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
             }
             e.mCuttable = !group.mNeverCut && region && region->pointInRegionGlobal(group.mAnchor);
             e.mRoot = group.mRoot;
+            e.mGround |= group.mGround;
+            e.mBottom = llmin(e.mBottom, (F64)group.mMinZ);
             e.mParts.emplace_back(&batch, &group);
         }
     }
@@ -1169,6 +1173,25 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
             }
         }
     }
+    // A floating cluster (a skybox) wholly above the agent's level would roof the view of the ground: hidden, unless
+    // someone in it already had it cut. The agent's own skybox is the agent's building, cut as any other.
+    F32 agent_cut = skoverview::NO_CUT;
+    for (const Occupant& occupant : occupants)
+    {
+        if (occupant.mSelf)
+        {
+            agent_cut = occupant.mCut;
+        }
+    }
+    for (const auto& entry : extents)
+    {
+        const Extent& e = entry.second;
+        if (!e.mGround && e.mBottom > agent_cut && !cut_of.count(entry.first))
+        {
+            cut_of[entry.first] = skoverview::HIDDEN;
+            why[entry.first] = "hidden floating";
+        }
+    }
     std::vector<std::pair<U32, F32>> cuts(cut_of.begin(), cut_of.end());
     if (cuts == mCuts && mCutSignature == mSignature)
     {
@@ -1177,6 +1200,11 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
     mCuts = std::move(cuts);
     mCutSignature = mSignature;
     ++mCutStamp;
+    mCutRoots.clear();
+    for (const auto& cut : cut_of)
+    {
+        mCutRoots[extents[cut.first].mRoot] = std::make_pair(cut.second, why[cut.first]);
+    }
     {
         // Logged when which linksets are cut, or why, changes; not when someone's floor shifts a little.
         std::string what;
@@ -1222,4 +1250,16 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
         }
         batch.mBuffer->unmapBuffer();
     }
+}
+
+bool SKOverviewCensus::cutOf(const LLUUID& root, F32& height, std::string& why) const
+{
+    const auto it = mCutRoots.find(root);
+    if (it == mCutRoots.end())
+    {
+        return false;
+    }
+    height = it->second.first;
+    why = it->second.second;
+    return true;
 }
