@@ -205,6 +205,9 @@ private:
     } mTacticalCam;
     /// Takes the tactical camera over from where the overview was looking.
     void takeTacticalCamera();
+    /// Works out the per-building cut (SKOverviewCensus::applyCut) for the agent and the people the overview marks;
+    /// eye is the tactical camera's, agent space, for line of sight, or null for the top-down map.
+    void updateCut(const LLVector3* eye);
     /// An enclosed room's floor polys' bounds, global, cached a few seconds.
     /// The enclosed room around a floor point, flooded through the indoor air at that floor: rows of its air cells'
     /// bounds, global; empty when the point is not indoors. Rooms are kept a few seconds and reused while the point
