@@ -60,6 +60,8 @@ public:
     // SKModalMode
     const char* getModalName() const override { return "world map"; }
     void closeModal() override { close(); }
+    /// Under another mode the map keeps its camera and hides its input; on top again it takes both back.
+    void onTopChanged(bool on_top) override;
     void shutdownModal() override { shutdown(); }
     void renderModal(const LLRect& world_rect_raw) override { render(world_rect_raw); }
     bool pickGround(S32 x, S32 y, LLVector3d& ground) const override { return groundUnderCursor(x, y, ground); }

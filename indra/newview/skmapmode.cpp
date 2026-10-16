@@ -246,6 +246,36 @@ void SKMapMode::close()
     LL_INFOS("WorldMap") << "map mode closed" << LL_ENDL;
 }
 
+void SKMapMode::onTopChanged(bool on_top)
+{
+    if (!mOpen)
+    {
+        return;
+    }
+    if (!on_top)
+    {
+        mMapPosition = gAgentCamera.getCameraPositionGlobal();
+        mMapFocus = gAgentCamera.getFocusGlobal();
+    }
+    for (const LLHandle<LLView>& handle : { mInput, mOverlay })
+    {
+        if (LLView* view = handle.get())
+        {
+            if (!on_top && gFocusMgr.getMouseCapture() == view)
+            {
+                gFocusMgr.setMouseCapture(nullptr);
+            }
+            view->setVisible(on_top);
+        }
+    }
+    mPanning = false;
+    if (on_top)
+    {
+        gAgentCamera.setFocusOnAvatar(false, false);
+        gAgentCamera.setCameraPosAndFocusGlobal(mMapPosition, mMapFocus, LLUUID::null);
+    }
+}
+
 void SKMapMode::shutdown()
 {
     // No idle loop runs from here on, so the views go now rather than later.
