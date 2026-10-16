@@ -448,6 +448,30 @@ void main()
         float band = fract(length(pos - sk_eye) / 2.0);
         frag_color = vec4(vec3(band), 1.0);
     }
+    else if (sk_debug_view == 5)
+    {
+        // Each part's own cut (SKOverviewCensus::applyCut): blue whole, banded by its cut height every 4 m when cut,
+        // red where the cap flag is set, grey terrain.
+        vec3 k;
+        if (code == CODE_TERRAIN)
+        {
+            k = vec3(0.3);
+        }
+        else if (cls.g > 0.75)
+        {
+            k = vec3(0.15, 0.35, 0.9);
+        }
+        else
+        {
+            float h = cls.a * 6.0;
+            k = clamp(vec3(abs(h - 3.0) - 1.0, 2.0 - abs(h - 2.0), 2.0 - abs(h - 4.0)), 0.0, 1.0);
+        }
+        if (capped)
+        {
+            k = vec3(1.0, 0.1, 0.1);
+        }
+        frag_color = vec4(k, 1.0);
+    }
     else if (sk_debug_view == 3)
     {
         frag_color = vec4(n * 0.5 + 0.5, 1.0);

@@ -30,6 +30,7 @@ out vec4 frag_color;
 uniform vec4 color;             // R: the class code / 255
 uniform vec4 clip_plane;        // eye space; keep dot(p, xyz) + w >= 0
 uniform mat3 sk_eye_to_world;
+uniform int sk_debug_cut;       // 1: G and A carry the part's cut height for debug view 5, not its normal
 
 in vec3 vary_position;
 #ifdef SK_CUT_ATTRIBUTE
@@ -66,6 +67,14 @@ void main()
     if (vary_cut_z < 1.0e29 && vary_cut_z - vary_z < max(0.12, fwidth(vary_z) * 1.5))
     {
         flag = max(flag, 0.25);
+    }
+#endif
+#ifdef SK_CUT_ATTRIBUTE
+    if (sk_debug_cut == 1)
+    {
+        // G 1 for a part drawn whole, 0.5 for one with a finite cut; A the cut height in 4 m bands.
+        bool whole = vary_cut_z >= 1.0e29;
+        e = vec2(whole ? 1.0 : 0.5, whole ? 0.0 : fract(vary_cut_z / 4.0));
     }
 #endif
     frag_color = vec4(color.r, e.x, flag, e.y);

@@ -799,6 +799,8 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
             geom.bind();
             glUniform4fv(glGetUniformLocation(geom.mProgramObject, "clip_plane"), 1, shot.mPartCuts ? no_cut : plane);
             glUniformMatrix3fv(glGetUniformLocation(geom.mProgramObject, "sk_eye_to_world"), 1, GL_FALSE, eye_to_world);
+            static LLCachedControl<U32> debug_view(gSavedSettings, "SKOverviewDebugView", 0);
+            glUniform1i(glGetUniformLocation(geom.mProgramObject, "sk_debug_cut"), shot.mPartCuts && debug_view == 5 ? 1 : 0);
             // B carries a cut part's cap flag; the invisible pass after it raises it to 1 where it draws.
             gGL.setColorMask(true, true, shot.mPartCuts, true);
             LLGLEnable offset(GL_POLYGON_OFFSET_FILL);
@@ -1223,6 +1225,7 @@ void SKOverviewCapture::tactical()
         // buffers, the region or the view's size. Otherwise last frame's image is composited again.
         const LLVector3 at_axis = dir;
         static LLCachedControl<bool> force(gSavedSettings, "SKOverviewForceRecapture", false);
+        static LLCachedControl<U32> tactical_debug_view(gSavedSettings, "SKOverviewDebugView", 0);
         // Cut by building: the agent's own at its level, and each other building in its region that holds someone
         // the overview draws a marker for at its highest occupant's level; the rest, and other regions, whole.
         {
@@ -1250,7 +1253,8 @@ void SKOverviewCapture::tactical()
                           at_axis * mTacticalKey.mDir > 0.999999f && fov == mTacticalKey.mFov && vw == mTacticalKey.mWidth &&
                           vh == mTacticalKey.mHeight && std::fabs(cut_z - mTacticalKey.mCut) < 1e-3f &&
                           mCensus.signature() == mTacticalKey.mCensus &&
-                          mCensus.cutStamp() == mTacticalKey.mCutStamp && gAgent.getRegion() == mTacticalKey.mRegion;
+                          mCensus.cutStamp() == mTacticalKey.mCutStamp && gAgent.getRegion() == mTacticalKey.mRegion &&
+                          (U32)tactical_debug_view == mTacticalKey.mDebugView;
         // Movers draw over a copy of the static capture each frame; the static capture itself is redone only on change.
         const bool movers = mMovers.update();
         if (!same)
@@ -1266,6 +1270,7 @@ void SKOverviewCapture::tactical()
             mTacticalKey.mCut = cut_z;
             mTacticalKey.mCensus = mCensus.signature();
             mTacticalKey.mCutStamp = mCensus.cutStamp();
+            mTacticalKey.mDebugView = tactical_debug_view;
             mTacticalKey.mRegion = gAgent.getRegion();
             ++mCost.mRenders;
         }

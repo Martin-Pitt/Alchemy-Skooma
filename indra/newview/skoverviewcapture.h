@@ -223,6 +223,7 @@ private:
         F32 mCut = 0.f;
         U64 mCensus = 0;
         U64 mCutStamp = 0;
+        U32 mDebugView = 0;
         const void* mRegion = nullptr;
     } mTacticalKey;
     /// CPU time of the tactical view, summed over a second and logged.
