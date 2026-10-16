@@ -43,6 +43,7 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <set>
 #include <vector>
 
 class LLRenderTarget;
@@ -205,8 +206,18 @@ private:
     /// Takes the tactical camera over from where the overview was looking.
     void takeTacticalCamera();
     /// An enclosed room's floor polys' bounds, global, cached a few seconds.
-    std::vector<std::pair<LLVector3d, LLVector3d>> roomOf(const skmap::plan::SpaceRef& space);
-    std::map<std::pair<LLUUID, U32>, std::pair<F64, std::vector<std::pair<LLVector3d, LLVector3d>>>> mRooms;
+    /// The enclosed room around a floor point, flooded through the indoor air at that floor: rows of its air cells'
+    /// bounds, global; empty when the point is not indoors. Rooms are kept a few seconds and reused while the point
+    /// stays in one.
+    std::vector<std::pair<LLVector3d, LLVector3d>> roomAt(const LLVector3d& floor);
+    struct Room
+    {
+        F64 mAt = 0.0;
+        F64 mFloor = 0.0;
+        std::set<std::pair<S32, S32>> mCells;   // on the ROOM_CELL_M lattice
+        std::vector<std::pair<LLVector3d, LLVector3d>> mRows;
+    };
+    std::vector<Room> mRooms;
     LLVector3d mTacticalEyeGlobal;  // the last frame's eye and focus, where an ease starts from
     LLVector3d mTacticalFocusGlobal;
     LLVector3 mTacticalLeft;        // the last frame's camera axes, for panning

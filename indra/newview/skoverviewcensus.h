@@ -146,7 +146,7 @@ public:
         LLVector3d mFloor;      ///< global, their feet on their floor
         F32 mCut = 0.f;         ///< agent z
         std::vector<LLVector3d> mSight;     ///< global points on them the tactical eye should see: feet, chest, head
-        /// The enclosed room they are in, from the air: its floor polys' bounds, global; empty outdoors or unknown.
+        /// The enclosed room they are in, flooded through the indoor air: rows of its cells' bounds, global; empty outdoors.
         std::vector<std::pair<LLVector3d, LLVector3d>> mRoom;
     };
     /// Writes each vertex's cut height for the tactical view, for the linksets in the given region:
@@ -196,6 +196,7 @@ private:
     U64 mCutSignature = 0;      ///< the buffers' signature the cut attribute was written for
     U64 mCutStamp = 0;
     U64 mCutKey = 0;            ///< the inputs the last applyCut was worked from
+    std::string mCutLogged;     ///< the cut linksets and reasons last logged
 };
 
 #endif // SK_OVERVIEWCENSUS_H

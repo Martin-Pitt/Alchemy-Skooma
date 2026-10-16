@@ -1030,14 +1030,21 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
     mCutSignature = mSignature;
     ++mCutStamp;
     {
+        // Logged when which linksets are cut, or why, changes; not when someone's floor shifts a little.
+        std::string what;
         std::string list;
         for (const auto& cut : cut_of)
         {
             const Extent& e = extents[cut.first];
+            what += e.mRoot.asString() + why[cut.first] + ";";
             list += llformat("%s linkset %s at z %.2f (%s, top %.2f)", list.empty() ? "" : ";",
                              e.mRoot.asString().c_str(), cut.second, why[cut.first].c_str(), e.mMax.mdV[VZ]);
         }
-        LL_INFOS("SKOverview") << "tactical cut: " << (list.empty() ? std::string("nothing cut") : list) << LL_ENDL;
+        if (what != mCutLogged)
+        {
+            mCutLogged = what;
+            LL_INFOS("SKOverview") << "tactical cut: " << (list.empty() ? std::string("nothing cut") : list) << LL_ENDL;
+        }
     }
     for (const Batch& batch : mBatches)
     {
