@@ -40,6 +40,14 @@
 
 using namespace skmodalview;
 
+SKModalMode::~SKModalMode()
+{
+    if (SKModalView::instanceExists())
+    {
+        SKModalView::getInstance()->forget(this);
+    }
+}
+
 SKModalView::SKModalView() = default;
 
 SKModalView::~SKModalView() = default;
@@ -92,6 +100,21 @@ void SKModalView::unregisterMode(SKModalMode* mode)
     release(mode);
 }
 
+void SKModalView::forget(SKModalMode* mode)
+{
+    mModes.erase(std::remove(mModes.begin(), mModes.end(), mode), mModes.end());
+    SKModalMode* before = top();
+    if (!mClaims.release(mode))
+    {
+        return;
+    }
+    notifyTopChange(before, mode);
+    if (mClaims.empty())
+    {
+        restoreWorldCamera();
+    }
+}
+
 void SKModalView::notifyTopChange(SKModalMode* before, const SKModalMode* except)
 {
     SKModalMode* after = top();
@@ -115,16 +138,17 @@ bool SKModalView::claim(SKModalMode* mode, S32 priority)
     {
         return false;
     }
+    if (!canClaim() || mode->rlvRestricted())
+    {
+        return false;
+    }
+    registerMode(mode);
     SKModalMode* before = top();
     if (mClaims.holds(mode))
     {
         mClaims.claim(mode, priority);
         notifyTopChange(before, nullptr);
         return true;
-    }
-    if (!canClaim() || mode->rlvRestricted())
-    {
-        return false;
     }
     if (mClaims.empty())
     {
