@@ -87,6 +87,8 @@ namespace
 
     const F32 CENSUS_RANGE_M = 128.f;
     const size_t SK_MAX_TERRITORY = 16;       // regions styled as inside, at most (the resolve's array)
+    const F32 TACTICAL_MIN_PITCH = 20.f * DEG_TO_RAD;   // alt-cam tilts the tactical camera no flatter than this
+    const F32 TACTICAL_MAX_PITCH = 89.f * DEG_TO_RAD;   // nor past straight down
     const F32 AVATAR_HALF_HEIGHT_M = 0.9f;     // an avatar's position over its feet, near enough
     const F32 MARKER_RADIUS_M = 0.35f;         // the avatar marker's cylinder at true size
     const F32 MARKER_HEIGHT_M = 1.8f;
@@ -461,6 +463,88 @@ namespace
     }
 }
 
+bool SKOverviewCapture::tacticalMouseDown(S32 x, S32 y, MASK mask)
+{
+    if (!tacticalShown() || !(mask & MASK_ALT))
+    {
+        return false;
+    }
+    SKOverviewCapture& self = instance();
+    if (!self.mTacticalCam.mActive)
+    {
+        // Take over from where the overview was looking.
+        self.mTacticalCam.mActive = true;
+        self.mTacticalCam.mFocus = gAgent.getPosGlobalFromAgent(self.mTacticalTarget);
+        self.mTacticalCam.mYaw = self.mTacticalYaw;
+        self.mTacticalCam.mPitch = self.mTacticalPitch;
+    }
+    self.mTacticalDragging = true;
+    self.mTacticalDragged = false;
+    return true;
+}
+
+bool SKOverviewCapture::tacticalMouseDrag(S32 dx, S32 dy, MASK mask)
+{
+    if (!instanceExists() || !instance().mTacticalDragging)
+    {
+        return false;
+    }
+    SKOverviewCapture& self = instance();
+    if (dx == 0 && dy == 0)
+    {
+        return true;
+    }
+    self.mTacticalDragged = true;
+    static LLCachedControl<F32> distance_setting(gSavedSettings, "SKTacticalDistance", 60.f);
+    if (mask & MASK_CONTROL)
+    {
+        // Pan: the focus slides along the ground, as far as the cursor moves at the focus's distance.
+        const F32 metres_per_px = llclamp((F32)distance_setting, TACTICAL_MIN_M, TACTICAL_MAX_M) * 0.002f;
+        const LLVector3 forward(std::cos(self.mTacticalCam.mYaw), std::sin(self.mTacticalCam.mYaw), 0.f);
+        const LLVector3 right(forward.mV[VY], -forward.mV[VX], 0.f);
+        const LLVector3 move = (right * (F32)-dx + forward * (F32)-dy) * metres_per_px;
+        self.mTacticalCam.mFocus += LLVector3d(move);
+    }
+    else
+    {
+        // Orbit and tilt.
+        self.mTacticalCam.mYaw -= dx * 0.008f;
+        self.mTacticalCam.mPitch = llclamp(self.mTacticalCam.mPitch - dy * 0.006f, TACTICAL_MIN_PITCH, TACTICAL_MAX_PITCH);
+    }
+    return true;
+}
+
+bool SKOverviewCapture::tacticalMouseUp(S32 x, S32 y, MASK mask)
+{
+    if (!instanceExists() || !instance().mTacticalDragging)
+    {
+        return false;
+    }
+    SKOverviewCapture& self = instance();
+    self.mTacticalDragging = false;
+    if (!self.mTacticalDragged)
+    {
+        // A click without a drag: focus on the ground under the cursor.
+        const LLVector2 scale = gViewerWindow->getDisplayScale();
+        const LLVector2 at(x * scale.mV[VX] - self.mTacticalViewport[0], y * scale.mV[VY] - self.mTacticalViewport[1]);
+        LLVector3d world;
+        if (self.groundAt(at, world))
+        {
+            self.mTacticalCam.mFocus = world;
+        }
+    }
+    return true;
+}
+
+void SKOverviewCapture::resetTacticalCamera()
+{
+    if (instanceExists())
+    {
+        instance().mTacticalCam = TacticalCamera();
+        instance().mTacticalDragging = false;
+    }
+}
+
 void SKOverviewCapture::tacticalCentre(LLVector3d& centre) const
 {
     // Follow: the avatar. Alt-cam: the camera's focus target. Flycam: the surface under the camera.
@@ -587,7 +671,10 @@ void SKOverviewCapture::drawMovers(const Shot& shot)
             return;
         }
     }
-    sTacticalWork.copyContents(sTacticalCapture, 0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+    {
+        LLGLDisable scissor(GL_SCISSOR_TEST); // a blit is scissored too
+        sTacticalWork.copyContents(sTacticalCapture, 0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+    }
 
     sTacticalWork.bindTarget();
     glViewport(0, 0, w, h);
@@ -749,7 +836,15 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
         glGetFloatv(GL_DEPTH_CLEAR_VALUE, &clear_depth);
         glClearColor(0.f, 0.f, 0.f, 0.f);
         glClearDepth(al_window_far()); // the cleared depth must be the far plane of the current convention
-        capture.clear();
+        {
+            // A clear obeys the write masks: whatever pass ran last could have left them on one channel, and the
+            // terrain writes only R, so its texels kept the last capture's normals (G, A) and invisible flag (B)
+            // and smeared as the camera turned. Every channel and the depth are cleared, every capture.
+            LLGLDepthTest depth_write(GL_TRUE, GL_TRUE, GL_ALWAYS);
+            LLGLDisable scissor(GL_SCISSOR_TEST); // and a scissor left on would clear only part of it
+            gGL.setColorMask(true, true);
+            capture.clear();
+        }
         glClearDepth(clear_depth);
         glClearColor(clear_colour[0], clear_colour[1], clear_colour[2], clear_colour[3]);
         draws = gPipeline.skRenderOverview(shot.mView, shot.mProj, cull, shot.mCut, census);
@@ -999,8 +1094,18 @@ void SKOverviewCapture::tactical()
     {
         heading.setVec(1.f, 0.f, 0.f);
     }
+    F32 pitch = llclamp((F32)pitch_setting, 5.f, 90.f) * DEG_TO_RAD;
+    if (mTacticalCam.mActive)
+    {
+        // Alt-cam has taken the tactical camera: its own focus, heading and tilt.
+        target = gAgent.getPosAgentFromGlobal(mTacticalCam.mFocus);
+        heading.setVec(std::cos(mTacticalCam.mYaw), std::sin(mTacticalCam.mYaw), 0.f);
+        pitch = mTacticalCam.mPitch;
+    }
+    mTacticalTarget = target;
+    mTacticalYaw = std::atan2(heading.mV[VY], heading.mV[VX]);
+    mTacticalPitch = pitch;
     const F32 distance = llclamp((F32)distance_setting, TACTICAL_MIN_M, TACTICAL_MAX_M);
-    const F32 pitch = llclamp((F32)pitch_setting, 5.f, 90.f) * DEG_TO_RAD;
     const F32 pitch_safe = llmin(pitch, 89.5f * DEG_TO_RAD);
     const LLVector3 eye = target - heading * (distance * std::cos(pitch_safe)) + LLVector3(0.f, 0.f, distance * std::sin(pitch_safe));
     LLVector3 dir = target - eye;
@@ -1057,7 +1162,8 @@ void SKOverviewCapture::tactical()
         // Captured again only when what it shows changed: the camera beyond a small epsilon, the cut, the census
         // buffers, the region or the view's size. Otherwise last frame's image is composited again.
         const LLVector3 at_axis = dir;
-        const bool same = mTacticalKey.mValid && (eye - mTacticalKey.mEye).magVecSquared() < 1e-4f &&
+        static LLCachedControl<bool> force(gSavedSettings, "SKOverviewForceRecapture", false);
+        const bool same = !force && mTacticalKey.mValid && (eye - mTacticalKey.mEye).magVecSquared() < 1e-4f &&
                           at_axis * mTacticalKey.mDir > 0.999999f && fov == mTacticalKey.mFov && vw == mTacticalKey.mWidth &&
                           vh == mTacticalKey.mHeight && std::fabs(cut_z - mTacticalKey.mCut) < 1e-3f &&
                           mCensus.signature() == mTacticalKey.mCensus && gAgent.getRegion() == mTacticalKey.mRegion;

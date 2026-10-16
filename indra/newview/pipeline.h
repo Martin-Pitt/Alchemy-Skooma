@@ -922,9 +922,6 @@ public:
     LLRenderTarget          mFXAAMap;
     LLRenderTarget          mSMAABlendBuffer;
 
-    // render ui to buffer target
-    LLRenderTarget          mUIScreen;
-
     // downres scratch space for GPU downscaling of textures
     LLRenderTarget          mDownResMap;
 
@@ -1345,7 +1342,6 @@ public:
 // [SL:KB] - Patch: Settings-RenderResolutionMultiplier | Checked: Catznip-5.4
     static F32 RenderResolutionMultiplier;
 // [/SL:KB]
-    static bool RenderUIBuffer;
     static S32 RenderShadowDetail;
     static S32 RenderShadowSplits;
     static bool RenderDeferredSSAO;

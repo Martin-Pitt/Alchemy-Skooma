@@ -72,6 +72,7 @@
 #include "stringize.h"
 
 #include "llwebrtc.h"
+#include "skmapmode.h" // <SK:Nexii> 3D world map
 
 #include <simdjson.h>
 
@@ -1203,6 +1204,15 @@ void LLWebRTCVoiceClient::updatePosition(void)
             default:
                 earPosition = region->getPosGlobalFromRegion(LLViewerCamera::getInstance()->getOrigin());
                 earRot      = LLViewerCamera::getInstance()->getQuaternion();
+                // <SK:Nexii> 3D world map: the ears stay at the world camera while the map moves the viewer's.
+                {
+                    LLVector3 at, left, up;
+                    if (SKMapMode::worldCamera(earPosition, at, left, up))
+                    {
+                        earRot = LLCoordFrame(LLVector3::zero, at, left, up).getQuaternion();
+                    }
+                }
+                // </SK:Nexii>
                 break;
 
             case earLocAvatar:

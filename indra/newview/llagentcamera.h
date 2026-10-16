@@ -153,7 +153,6 @@ public:
     F32             getCameraMinOffGround();        // Minimum height off ground for this mode, meters
     void            setCameraCollidePlane(const LLVector4 &plane) { mCameraCollidePlane = plane; }
     bool            calcCameraMinDistance(F32 &obj_min_distance);
-    F32             getCurrentCameraBuildOffset() const { return (F32)mCameraFocusOffset.length(); }
     void            clearCameraLag() { mCameraLag.clearVec(); }
     const LLVector3& getCameraUpVector() const { return mCameraUpVector; }
 private:
@@ -203,6 +202,7 @@ public:
     void            setAnimationDuration(F32 seconds);
     void            startCameraAnimation();
     void            stopCameraAnimation();
+    void            skipCameraSmoothing(); // <SK:Nexii> 3D world map: a pan moves the camera rigidly
 private:
     LLFrameTimer    mAnimationTimer;    // Seconds that transition animation has been active
     F32             mAnimationDuration; // In seconds
@@ -219,6 +219,9 @@ public:
     bool            getFocusOnAvatar() const        { return mFocusOnAvatar; }
     LLPointer<LLViewerObject>&  getFocusObject()    { return mFocusObject; }
     F32             getFocusObjectDist() const      { return mFocusObjectDist; }
+    // <SK:Nexii> motion recorder
+    const LLVector3& getFocusObjectOffset() const   { return mFocusObjectOffset; }
+    // </SK:Nexii>
     void            updateFocusOffset();
     void            validateFocusObject();
     void            setFocusGlobal(const LLPickInfo& pick);
@@ -230,6 +233,11 @@ public:
     void            setAllowChangeToFollow(bool focus)  { mAllowChangeToFollow = focus; }
     void            setObjectTracking(bool track)   { mTrackFocusObject = track; }
     const LLVector3d &getFocusGlobal() const        { return mFocusGlobal; }
+    // <SK:Nexii> camera follow
+    // The focus target before the follower's smoothing, for the motion recorder.
+    LLVector3d      getSKFollowRawFocusGlobal() const { return mSKFollowActive ? mSKFollowRaw : mFocusGlobal; }
+    void            resetSKFollow()                  { mSKFollowValid = false; mSKFollowActive = false; }
+    // </SK:Nexii>
     const LLVector3d &getFocusTargetGlobal() const  { return mFocusTargetGlobal; }
 private:
     LLVector3d      mCameraFocusOffset;             // Offset from focus point in build mode
@@ -242,6 +250,15 @@ private:
     F32             mFocusObjectDist;
     LLVector3       mFocusObjectOffset;
     bool            mTrackFocusObject;
+    // <SK:Nexii> camera follow
+    LLVector3d      smoothSKFollow(const LLVector3d& raw);
+    LLVector3d      mSKFollowPos;
+    LLVector3d      mSKFollowRaw;                   // Unsmoothed object position plus offset
+    F64             mSKFollowSecs = 0.0;
+    LLUUID          mSKFollowObjectId;
+    bool            mSKFollowValid = false;
+    bool            mSKFollowActive = false;
+    // </SK:Nexii>
 
     //--------------------------------------------------------------------
     // Lookat / Pointat
@@ -283,6 +300,7 @@ public:
     //--------------------------------------------------------------------
 public:
     void            handleScrollWheel(F32 clicks);                          // Mousewheel driven zoom
+    bool            cameraZoomToCursor(F32 clicks);                         // <SK:Nexii> Alt-cam wheel zoom about the point under the cursor
     void            cameraZoomIn(const F32 factor);                         // Zoom in by fraction of current distance
     F32             getCameraZoomFraction(bool get_third_person = false);   // Get camera zoom as fraction of minimum and maximum zoom
     void            setCameraZoomFraction(F32 fraction);                    // Set camera zoom as fraction of minimum and maximum zoom

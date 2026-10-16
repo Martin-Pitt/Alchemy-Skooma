@@ -88,6 +88,13 @@ public:
 
     /// The tactical view takes the wheel for its distance; false when it is off.
     static bool handleScrollWheel(F32 clicks);
+    /// The camera tool's alt-cam input while the overview is shown: alt+click focuses the ground under the cursor,
+    /// alt+drag orbits and tilts, alt+ctrl+drag pans. True when the overview took it (the world camera is left be).
+    static bool tacticalMouseDown(S32 x, S32 y, MASK mask);
+    static bool tacticalMouseDrag(S32 dx, S32 dy, MASK mask);
+    static bool tacticalMouseUp(S32 x, S32 y, MASK mask);
+    /// The camera reset (Escape): the tactical camera follows the avatar again.
+    static void resetTacticalCamera();
     /// The tactical overview key: held, it shows the view until released; tapped, it latches it until the next tap.
     static void handleTacticalKey(bool down);
 
@@ -170,6 +177,20 @@ private:
     LLVector3 mTacticalCentre;   // agent space
     F32 mTacticalReach = 0.f;
     U32 mLastCompositeFrame = 0;
+    /// The tactical camera's own state once alt-cam input has moved it; inactive, it follows as before.
+    struct TacticalCamera
+    {
+        bool mActive = false;
+        LLVector3d mFocus;
+        F32 mYaw = 0.f;     // radians, the heading the camera looks along
+        F32 mPitch = 0.f;   // radians below the horizon
+    } mTacticalCam;
+    /// The last tactical camera, so input can start from it.
+    LLVector3 mTacticalTarget;
+    F32 mTacticalYaw = 0.f;
+    F32 mTacticalPitch = 0.f;
+    bool mTacticalDragging = false;
+    bool mTacticalDragged = false;
     /// What the last tactical capture showed: the same again reuses its image.
     struct TacticalKey
     {

@@ -799,6 +799,17 @@
              function="Floater.Toggle"
              parameter="world_map" />
         </menu_item_check>
+        <!-- <SK:Nexii> 3D world map -->
+        <menu_item_check
+         label="3D world map"
+         name="World Map 3D"
+         shortcut="control|alt|M">
+            <menu_item_check.on_check
+             function="WorldMap3D.IsOpen" />
+            <menu_item_check.on_click
+             function="WorldMap3D.Toggle" />
+        </menu_item_check>
+        <!-- </SK:Nexii> -->
             <menu_item_check
          label="Mini-map"
          name="Mini-Map"
@@ -1837,6 +1848,15 @@ function="World.EnvPreset"
                      control="RenderHiddenSelections" />
                     <menu_item_check.on_click
                      function="Tools.ShowHiddenSelection" />
+                </menu_item_check>
+                <menu_item_check
+                 label="Show Selection Wireframe"
+                 name="Show Selection Wireframe">
+                    <menu_item_check.on_check
+                     control="AlchemySelectionWireframe" />
+                    <menu_item_check.on_click
+                     function="ToggleControl"
+                     parameter="AlchemySelectionWireframe" />
                 </menu_item_check>
                 <menu_item_check
                  label="Show Light Radius for Selection"
@@ -4185,6 +4205,16 @@ function="World.EnvPreset"
                  parameter="RenderAttachedParticles" />
             </menu_item_check>
             <menu_item_check
+             label="Hover Glow Objects"
+             name="Hover Glow Objects">
+                <menu_item_check.on_check
+                 function="CheckControl"
+                 parameter="RenderHoverGlowEnable" />
+                <menu_item_check.on_click
+                 function="ToggleControl"
+                 parameter="RenderHoverGlowEnable" />
+            </menu_item_check>
+            <menu_item_check
               label="Render Avatar Cloth"
              name="Render Avatar Cloth">
                 <menu_item_check.on_check
@@ -4320,6 +4350,40 @@ function="World.EnvPreset"
                  function="ToggleControl"
                  parameter="PingInterpolate" />
             </menu_item_check>
+            <!-- <SK:Nexii> clamped velocity recovery -->
+            <menu_item_check
+             label="Recover Clamped Velocities"
+             name="Recover Clamped Velocities">
+                <menu_item_check.on_check
+                 function="CheckControl"
+                 parameter="SKMotionRecoverClampedVelocity" />
+                <menu_item_check.on_click
+                 function="ToggleControl"
+                 parameter="SKMotionRecoverClampedVelocity" />
+            </menu_item_check>
+            <!-- </SK:Nexii> -->
+            <!-- <SK:Nexii> camera follow -->
+            <menu_item_check
+             label="Smooth Camera Follow"
+             name="Smooth Camera Follow">
+                <menu_item_check.on_check
+                 function="CheckControl"
+                 parameter="SKCameraFollowEnabled" />
+                <menu_item_check.on_click
+                 function="ToggleControl"
+                 parameter="SKCameraFollowEnabled" />
+            </menu_item_check>
+            <!-- </SK:Nexii> -->
+            <!-- <SK:Nexii> motion recorder -->
+            <menu_item_check
+             label="Record Object Motion"
+             name="Record Object Motion">
+                <menu_item_check.on_check
+                 function="Advanced.CheckMotionRecord" />
+                <menu_item_check.on_click
+                 function="Advanced.ToggleMotionRecord" />
+            </menu_item_check>
+            <!-- </SK:Nexii> -->
 
             <menu_item_separator/>
 

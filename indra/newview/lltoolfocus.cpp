@@ -28,6 +28,8 @@
 
 // File includes
 #include "lltoolfocus.h"
+#include "skoverviewcapture.h" // <SK:Nexii> tactical overview
+#include "skmapmode.h" // <SK:Nexii> 3D world map
 
 // Library includes
 #include "v3math.h"
@@ -116,6 +118,13 @@ void LLToolCamera::handleDeselect()
 
 bool LLToolCamera::handleMouseDown(S32 x, S32 y, MASK mask)
 {
+    // <SK:Nexii> tactical overview: alt-cam drives the overview's camera while it covers the world
+    if (SKOverviewCapture::tacticalMouseDown(x, y, mask))
+    {
+        setMouseCapture(true);
+        return true;
+    }
+    // </SK:Nexii>
     // Ensure a mouseup
     setMouseCapture(true);
 
@@ -143,7 +152,7 @@ bool LLToolCamera::handleMouseDown(S32 x, S32 y, MASK mask)
 
     gViewerWindow->hideCursor();
 
-    gViewerWindow->pickAsync(x, y, mask, pickCallback, /*bool pick_transparent*/ false, /*bool pick_rigged*/ false, /*bool pick_unselectable*/ true);
+    gViewerWindow->pickAsync(x, y, mask, pickCallback, /*bool pick_transparent*/ false, /*bool pick_rigged*/ false, /*bool pick_unselectable*/ true, /*bool pick_reflection_probes*/ false, /*bool pick_focus*/ true);
 
     return true;
 }
@@ -161,6 +170,20 @@ void LLToolCamera::pickCallback(const LLPickInfo& pick_info)
     camera->mMouseDownY = pick_info.mMousePt.mY;
 
     gViewerWindow->moveCursorToCenter();
+
+    // <SK:Nexii> 3D world map: alt-click focuses on the map's ground, not on the hidden world.
+    if (SKMapMode::isOpen())
+    {
+        LLVector3d ground;
+        camera->mValidClickPoint = SKMapMode::instance().groundUnderCursor(pick_info.mMousePt.mX, pick_info.mMousePt.mY, ground);
+        if (camera->mValidClickPoint)
+        {
+            gAgentCamera.setFocusOnAvatar(false, ANIMATE);
+            gAgentCamera.setFocusGlobal(ground);
+        }
+        return;
+    }
+    // </SK:Nexii>
 
     // Potentially recenter if click outside rectangle
     LLViewerObject* hit_obj = pick_info.getObject();
@@ -287,6 +310,13 @@ void LLToolCamera::releaseMouse()
 
 bool LLToolCamera::handleMouseUp(S32 x, S32 y, MASK mask)
 {
+    // <SK:Nexii> tactical overview: the end of an alt-cam click or drag on it
+    if (SKOverviewCapture::tacticalMouseUp(x, y, mask))
+    {
+        setMouseCapture(false);
+        return true;
+    }
+    // </SK:Nexii>
     // Claim that we're mousing up somewhere
     mMouseUpX = x;
     mMouseUpY = y;
@@ -339,6 +369,13 @@ bool LLToolCamera::handleMouseUp(S32 x, S32 y, MASK mask)
 
 bool LLToolCamera::handleHover(S32 x, S32 y, MASK mask)
 {
+    // <SK:Nexii> tactical overview: an alt-cam drag orbits, tilts or pans it
+    if (hasMouseCapture() &&
+        SKOverviewCapture::tacticalMouseDrag(gViewerWindow->getCurrentMouseDX(), gViewerWindow->getCurrentMouseDY(), mask))
+    {
+        return true;
+    }
+    // </SK:Nexii>
     if (gViewerWindow->getRightMouseDown())
     {
         agent_push_forward(KEYSTATE_LEVEL);
