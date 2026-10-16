@@ -730,29 +730,6 @@ void SKNetMap::drawSelfExtras()
 {
     static LLCachedControl<bool> chat_rings(gSavedSettings, "SKMapLayerChatRings", false);
     const LLVector2 self = mView.toWidget(gAgent.getPositionGlobal());
-    const sknav::Cover cover = SKMapPeople::instance().coverAhead();
-    if (cover != sknav::Cover::NONE)
-    {
-        // An arc in front of the dot, in the colour of the cover a wall ahead gives.
-        const LLVector3 at = LLViewerCamera::getInstance()->getAtAxis();
-        LLVector2 ahead = mView.toWidgetOffset(at.mV[VX], at.mV[VY]);
-        if (ahead.normVec() > 1e-6f)
-        {
-            const F32 heading = std::atan2(ahead.mV[VY], ahead.mV[VX]);
-            const F32 r = skmap::palette::COVER_AHEAD_OFFSET_PX;
-            const F32 half = skmap::palette::COVER_AHEAD_PX / r;
-            gGL.begin(LLRender::TRIANGLES);
-            skmapdraw::colour(cover == sknav::Cover::FULL ? skmap::palette::COVER_AHEAD_FULL : skmap::palette::COVER_AHEAD_HALF);
-            const S32 steps = 8;
-            for (S32 i = 0; i < steps; ++i)
-            {
-                const F32 a0 = heading - half + 2.f * half * i / steps, a1 = heading - half + 2.f * half * (i + 1) / steps;
-                skmapdraw::line(self + LLVector2(std::cos(a0), std::sin(a0)) * r, self + LLVector2(std::cos(a1), std::sin(a1)) * r,
-                                cover == sknav::Cover::FULL ? skmap::palette::COVER_FULL_PX : skmap::palette::COVER_HALF_PX);
-            }
-            gGL.end();
-        }
-    }
     if (chat_rings)
     {
         // The classic map's three rings.

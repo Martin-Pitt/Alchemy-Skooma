@@ -143,8 +143,6 @@ public:
 
     /// The user's ally groups: the active group's faction, or the group alone.
     const std::set<LLUUID>& candidates() const { return mCandidates; }
-    /// The cover a wall ahead of the agent along the camera gives, at 10 Hz; NONE when off.
-    sknav::Cover coverAhead() const { return mCoverAhead; }
 
     /// A map drew this frame with this view: the idle work runs while one has, recently.
     void noteDrawn(const skmap::MapView& view);
@@ -157,7 +155,6 @@ public:
 private:
     void idle();
     void gatherPeople();
-    void updateCoverAhead();
     void gatherVehicles();
     void updateCombat();
     void updateFiringLines();
@@ -169,8 +166,6 @@ private:
 
     std::vector<Person> mPeople;
     F64 mLastDrawn = -1.0e9;
-    sknav::Cover mCoverAhead = sknav::Cover::NONE;
-    F64 mCoverAt = -1.0e9;
     std::vector<Vehicle> mVehicles;
     /// Seat roots of everyone near, shown or not: whether a vehicle is crewed, and by an ally.
     std::map<LLUUID, std::pair<bool, bool>> mSeats;

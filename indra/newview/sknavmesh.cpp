@@ -4265,53 +4265,6 @@ void SKNavMesh::findExits(FeatureSpan& span) const
     }
 }
 
-bool SKNavMesh::coverAt(const LLVector3d& pos, const LLVector3& dir, AgentClass cls, F32 eye_height,
-                        Cover& cover_out, F32& height_out, F32 reach) const
-{
-    static LLCachedControl<F32> climb(gSavedSettings, "SKNavClimb", 0.75f);
-    static LLCachedControl<F32> peek(gSavedSettings, "SKNavCoverPeek", 0.15f);
-    LLVector3 heading(dir.mV[VX], dir.mV[VY], 0.f);
-    if (heading.normVec() < 0.5f)
-    {
-        return false;
-    }
-    const LLVector3d box(reach, reach, reach);
-    F32 best = -1.f;
-    F32 bestDistance = reach;
-    segmentsIn(pos - box, pos + box, cls, [&](const LLVector3d& a, const LLVector3d& b, EdgeKind kind, F32 value) {
-        if (kind != EdgeKind::WALL)
-        {
-            return;
-        }
-        // The nearest point of the segment, and only if it lies ahead.
-        const LLVector3d ab64 = b - a, ap64 = pos - a;
-        const LLVector3 ab(static_cast<F32>(ab64.mdV[VX]), static_cast<F32>(ab64.mdV[VY]), 0.f);
-        const LLVector3 ap(static_cast<F32>(ap64.mdV[VX]), static_cast<F32>(ap64.mdV[VY]), 0.f);
-        const F32 len2 = ab.magVecSquared();
-        const F32 t = len2 > 0.f ? llclamp(ab * ap / len2, 0.f, 1.f) : 0.f;
-        LLVector3 to = ab * t - ap;
-        to.mV[VZ] = 0.f;
-        const F32 distance = to.normVec();
-        if (distance > reach)
-        {
-            return;
-        }
-        // Ahead at all, and nearer than anything found so far.
-        if (to * heading > 0.5f && distance < bestDistance)
-        {
-            bestDistance = distance;
-            best = value;
-        }
-    });
-    if (best < 0.f)
-    {
-        return false;
-    }
-    height_out = best;
-    cover_out = coverClass(best, eye_height, climb, peek);
-    return true;
-}
-
 std::string SKNavMesh::markUnderCamera()
 {
     if (!gViewerWindow)

@@ -197,10 +197,6 @@ namespace skmap
         // Overlays drawn live.
         constexpr F32 TERRAIN_ALPHA = 0.6f;
         constexpr F32 TERRAIN_GREY = 0.75f;
-        constexpr PaletteColour COVER_AHEAD_FULL = COVER_FULL;
-        constexpr PaletteColour COVER_AHEAD_HALF = COVER_HALF;
-        constexpr F32 COVER_AHEAD_PX = 6.f;
-        constexpr F32 COVER_AHEAD_OFFSET_PX = 10.f;
         constexpr F32 FIRING_ALPHA_NEAR = 0.20f;
         constexpr F32 FIRING_ALPHA_FAR = 0.05f;
         constexpr F32 FIRING_REACH_M = 64.f;

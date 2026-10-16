@@ -96,16 +96,6 @@
              name="sk_compass_ring"
              top_pad="5"
              width="308" />
-            <check_box
-             control_name="SKMapCoverAhead"
-             follows="left|top"
-             height="16"
-             label="Cover ahead of you"
-             layout="topleft"
-             left="8"
-             name="sk_cover_ahead"
-             top_pad="5"
-             width="308" />
         </panel>
         <panel
          follows="all"

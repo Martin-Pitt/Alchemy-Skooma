@@ -251,11 +251,6 @@ public:
     typedef std::function<void(const sknav::DoorEntity& door)> DoorFn;
     void doorsIn(const LLVector3d& min, const LLVector3d& max, const DoorFn& fn) const;
 
-    /// The cover a segment ahead of this position gives someone of that eye
-    /// height, and how tall it is. False when nothing is within reach.
-    bool coverAt(const LLVector3d& pos, const LLVector3& dir, sknav::AgentClass cls, F32 eye_height,
-                 sknav::Cover& cover_out, F32& height_out, F32 reach = 1.f) const;
-
     /// No solid of any published tile's air starts above pos within reach:
     /// the region sky map, which forgets a roof as soon as its tile does.
     bool skyOpenAt(const LLVector3d& pos, F32 reach = 50.f) const { return mSkyMap.skyOpenAt(pos, reach); }
