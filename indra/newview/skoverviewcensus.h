@@ -100,6 +100,8 @@ public:
         U32 mId = 0;            ///< its cluster or part, the same in every batch it spans
         LLVector3d mAnchor;     ///< global; the cluster's middle or the linkset root's position, which says whose region it is in
         bool mNeverCut = false; ///< a surround in the void: always whole
+        LLVector3d mMin;        ///< global bounds of its triangles in this batch
+        LLVector3d mMax;
         U32 mStart[skoverview::NUM_CENSUS_CLASSES] = {}; ///< its vertex range within each class's
         U32 mCount[skoverview::NUM_CENSUS_CLASSES] = {};
     };

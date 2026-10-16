@@ -809,8 +809,11 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
         for (const Group& group : batch.mGroups)
         {
             Extent& e = extents[group.mId];
-            update_min_max(e.mMin, e.mMax, group.mMin);
-            update_min_max(e.mMin, e.mMax, group.mMax);
+            for (S32 i = 0; i < 3; ++i)
+            {
+                e.mMin.mdV[i] = llmin(e.mMin.mdV[i], group.mMin.mdV[i]);
+                e.mMax.mdV[i] = llmax(e.mMax.mdV[i], group.mMax.mdV[i]);
+            }
             e.mCuttable = !group.mNeverCut && region && region->pointInRegionGlobal(group.mAnchor);
         }
     }
