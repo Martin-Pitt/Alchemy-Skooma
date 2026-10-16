@@ -35,8 +35,9 @@ uniform mat4 sk_inv_vp;         // window to world: inverse of projection times 
 uniform float sk_zo;            // 1 when window depth is NDC depth (zero-to-one), 0 for minus-one-to-one
 uniform float sk_far_depth;     // the cleared depth: no surface
 uniform vec3 sk_eye;
+uniform vec3 sk_focus;          // what the view is centred on: the orbit's focus, or a top-down capture's centre
+uniform float sk_cut_flag;      // 1: each part carries its own cut, flagged in B where it caps; 0: the one cut at sk_cut
 uniform float sk_top_down;      // 1 for the straight-down map: no distance fade
-uniform float sk_agent_z;       // the floor the agent stands on
 uniform float sk_cut;
 uniform float sk_water_z;
 uniform float sk_water_depth;
@@ -77,7 +78,7 @@ const vec3 EDGE = vec3(0.86, 0.90, 0.95);
 const vec3 LIGHT = vec3(-0.45, 0.45, 0.77);         // from the north-west and above
 const float GROUND_LIFT = 1.45;
 const float ROOF_M = 5.0;                          // a floor this far above the agent's is roof-bright
-const float HEIGHT_GAIN = 0.045;                    // brightness per metre above the agent's floor
+const float HEIGHT_GAIN = 0.045;                    // brightness per metre above the focus
 const float AO_STRENGTH = 0.65;
 const float FADE_START_M = 90.0;
 const float FADE_END_M = 260.0;
@@ -230,7 +231,7 @@ vec3 distanceFade(vec3 c, vec3 pos)
     {
         return c;
     }
-    float f = smoothstep(FADE_START_M, FADE_END_M, length(pos.xy - sk_eye.xy));
+    float f = smoothstep(FADE_START_M, FADE_END_M, length(pos.xy - sk_focus.xy));
     return mix(c, VOID, f * 0.75);
 }
 
@@ -263,7 +264,8 @@ void main()
     vec4 cls = texelFetch(classMap, p, 0);
     int code = int(cls.r * 255.0 + 0.5);
     bool invisible = cls.b > 0.5;
-    float rel = pos.z - sk_agent_z;
+    bool capped = cls.b > 0.1 && cls.b < 0.5;
+    float rel = pos.z - sk_focus.z;
     float px_m = pixelMetres(pos);
 
     // The census's own face normals (classMap G, A); none (0, 0) for terrain, whose normal comes from depth.
@@ -346,7 +348,7 @@ void main()
         c = SLATE_WALL;
     }
 
-    // Height reads as brightness: above the agent's floor lighter, below darker.
+    // Height reads as brightness: above the focus lighter, below darker.
     c *= clamp(1.0 + rel * HEIGHT_GAIN, 0.5, 1.3);
 
     // How far off a plane two samples of one surface can sit from depth precision and coplanar overlaps alone.
@@ -397,7 +399,8 @@ void main()
         }
         c *= 1.0 - 0.25 * smoothstep(0.25, 0.6, crease);
         debug_crease = smoothstep(0.25, 0.6, crease);
-        if ((code == CODE_WALL || code == CODE_COVER || code == CODE_SECTION) && sk_cut - pos.z < max(0.12, px_m * 1.5))
+        if ((code == CODE_WALL || code == CODE_COVER || code == CODE_SECTION) &&
+            (sk_cut_flag > 0.5 ? capped : sk_cut - pos.z < max(0.12, px_m * 1.5)))
         {
             c = SLATE_TOP * 1.1;
             debug_cut = 1.0;

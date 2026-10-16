@@ -339,6 +339,7 @@ bool SKOverviewCensus::update()
         RenderedPart sc;
         sc.mPart = volume->getID();
         sc.mOrigin = volume->getRegion()->getOriginGlobal();
+        sc.mAnchor = volume->getRootEdit()->getPositionGlobal();
         const LLVector3 region_agent = volume->getRegion()->getOriginAgent();
         sc.mTris.reserve(geom.mTriangles.size());
         F32 lo = 1e30f, hi = -1e30f;
@@ -383,11 +384,31 @@ bool SKOverviewCensus::update()
 
     std::vector<const sknav::Record*> kept;
     std::vector<U8> fixed_classes;
+    std::vector<bool> void_only;   // a surround record: only its triangles over no connected region are drawn
     kept.reserve(snap->mRecords.size());
     for (const sknav::RecordPtr& rec : snap->mRecords)
     {
         skoverview::CensusClass fixed;
-        if (!rec || !skoverview::keepRecord(*rec, fixed) || sculpted.count(rec->mPart))
+        if (!rec || sculpted.count(rec->mPart))
+        {
+            continue;
+        }
+        if (rec->mRole == sknav::Role::SURROUND)
+        {
+            // A sim surround's rendered shape, in the void only: over land a phantom megasculpt would roof the region.
+            if (std::any_of(sculpts.begin(), sculpts.end(), [&rec](const RenderedPart& sc) { return sc.mPart == rec->mPart; }) ||
+                partSeen(rec->mPart, nullptr) == Seen::INVISIBLE)
+            {
+                continue;
+            }
+            kept.push_back(rec.get());
+            fixed_classes.push_back(skoverview::NUM_CENSUS_CLASSES);
+            void_only.push_back(true);
+            mix(rec->mSignature);
+            mix(rec->mPart.getCRC32());
+            continue;
+        }
+        if (!skoverview::keepRecord(*rec, fixed))
         {
             continue;
         }
@@ -424,6 +445,7 @@ bool SKOverviewCensus::update()
         }
         kept.push_back(rec.get());
         fixed_classes.push_back(fixed);
+        void_only.push_back(false);
         mix(rec->mSignature);
         mix(rec->mPart.getCRC32());
         mix((U64)(S64)std::llround(rec->mMin.mdV[VX] * 64.0) ^ ((U64)(S64)std::llround(rec->mMin.mdV[VY] * 64.0) << 21) ^
@@ -456,6 +478,29 @@ bool SKOverviewCensus::update()
     {
         mix(groupOf(i));
     }
+    // Which land is connected decides what of a surround is in the void.
+    for (const LLViewerRegion* region : LLWorld::getInstance()->getRegionList())
+    {
+        mix(region->getHandle());
+    }
+    // Where each group is, for whose region it is in: a cluster's middle, else its linkset root's position, so a
+    // building straddling a border is one group with one answer.
+    auto anchorOf = [&](size_t i) -> LLVector3d
+    {
+        if (i >= kept.size())
+        {
+            return sculpts[i - kept.size()].mAnchor;
+        }
+        const auto it = cluster_of.find(kept[i]);
+        if (it != cluster_of.end())
+        {
+            const sknav::Cluster& cluster = *snap->mClusters.mClusters[it->second];
+            return (cluster.mMin + cluster.mMax) * 0.5;
+        }
+        const LLViewerObject* root = gObjectList.findObject(kept[i]->mRoot);
+        return root && !root->isDead() ? root->getPositionGlobal() : (kept[i]->mMin + kept[i]->mMax) * 0.5;
+    };
+    std::map<U32, std::pair<LLVector3d, bool>> group_anchor;
     if (sig == mSignature && !mBatches.empty())
     {
         return true;
@@ -501,6 +546,8 @@ bool SKOverviewCensus::update()
             part_height = (F32)(rec.mMax.mdV[VZ] - rec.mMin.mdV[VZ]);
             fixed_class = fixed_classes[i];
         }
+        const bool in_void_only = i < kept.size() && void_only[i];
+        group_anchor.emplace(groupOf(i), std::make_pair(anchorOf(i), in_void_only));
         for (size_t t = 0; t + 2 < tris.size(); t += 3)
         {
             const LLVector3& a = tris[t];
@@ -513,6 +560,10 @@ bool SKOverviewCensus::update()
             LLVector3 n = (b - a) % (c - a);
             const F32 len = n.length();
             if (len <= 1.0e-8f)
+            {
+                continue;
+            }
+            if (in_void_only && LLWorld::getInstance()->getRegionFromPosGlobal(origin + LLVector3d((a + b + c) / 3.f)))
             {
                 continue;
             }
@@ -559,7 +610,7 @@ bool SKOverviewCensus::update()
         }
         Batch batch;
         batch.mOrigin = bins.mOrigin;
-        batch.mBuffer = new LLVertexBuffer(LLVertexBuffer::MAP_VERTEX);
+        batch.mBuffer = new LLVertexBuffer(LLVertexBuffer::MAP_VERTEX | LLVertexBuffer::MAP_WEIGHT); // weight: the cut height
         if (!batch.mBuffer->allocateBuffer((U32)total, 0))
         {
             LL_WARNS("SKOverview") << "census buffer of " << total << " vertices could not be allocated" << LL_ENDL;
@@ -584,6 +635,15 @@ bool SKOverviewCensus::update()
             const LLVector3d middle = bins.mOrigin + LLVector3d((b.second.mMin.mV[VX] + b.second.mMax.mV[VX]) * 0.5,
                                                                 (b.second.mMin.mV[VY] + b.second.mMax.mV[VY]) * 0.5, 0.0);
             group.mGround = group.mMinZ <= LLWorld::getInstance()->resolveLandHeightGlobal(middle) + skoverview::GROUND_BASE_M;
+            group.mId = b.first;
+            group.mMin = bins.mOrigin + LLVector3d(b.second.mMin);
+            group.mMax = bins.mOrigin + LLVector3d(b.second.mMax);
+            const auto anchor = group_anchor.find(b.first);
+            if (anchor != group_anchor.end())
+            {
+                group.mAnchor = anchor->second.first;
+                group.mNeverCut = anchor->second.second;
+            }
             batch.mGroups.push_back(group);
         }
         U32 at = 0;
@@ -607,10 +667,21 @@ bool SKOverviewCensus::update()
             }
         }
         batch.mStart[skoverview::NUM_CENSUS_CLASSES] = at;
+        LLStrider<F32> cuts;
+        if (batch.mBuffer->getWeightStrider(cuts) && cuts.get())
+        {
+            for (U32 v = 0; v < (U32)total; ++v)
+            {
+                *cuts++ = skoverview::NO_CUT;
+            }
+        }
         batch.mBuffer->unmapBuffer();
         mTriangles += at / 3;
         mBatches.push_back(std::move(batch));
     }
+    mCuts.clear();
+    mCutSignature = 0;
+    ++mCutStamp;
     LL_DEBUGS("SKOverview") << "census upload: " << mBatches.size() << " regions, " << mTriangles << " triangles" << LL_ENDL;
     return !mBatches.empty();
 }
@@ -700,6 +771,7 @@ void SKOverviewCensus::gatherSurrounds(const SKCensusSnapshot& snap)
         RenderedPart part;
         part.mPart = volume->getID();
         part.mOrigin = volume->getRegion()->getOriginGlobal();
+        part.mAnchor = volume->getRootEdit()->getPositionGlobal();
         const LLVector3 region_agent = volume->getRegion()->getOriginAgent();
         part.mTris.reserve(geom.mTriangles.size());
         F32 lo = 1e30f, hi = -1e30f;
@@ -719,4 +791,94 @@ void SKOverviewCensus::gatherSurrounds(const SKCensusSnapshot& snap)
         mSurrounds.push_back(std::move(part));
     }
     mSurroundsSig = sig;
+}
+
+void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<Occupant>& occupants)
+{
+    LL_PROFILE_ZONE_SCOPED;
+    // A cluster spans batches when it crosses a border: its bounds over all of them.
+    struct Extent
+    {
+        LLVector3d mMin{ 1e30, 1e30, 1e30 };
+        LLVector3d mMax{ -1e30, -1e30, -1e30 };
+        bool mCuttable = false;
+    };
+    std::map<U32, Extent> extents;
+    for (const Batch& batch : mBatches)
+    {
+        for (const Group& group : batch.mGroups)
+        {
+            Extent& e = extents[group.mId];
+            update_min_max(e.mMin, e.mMax, group.mMin);
+            update_min_max(e.mMin, e.mMax, group.mMax);
+            e.mCuttable = !group.mNeverCut && region && region->pointInRegionGlobal(group.mAnchor);
+        }
+    }
+    // An occupant's building: the smallest cluster or part, in the region, whose bounds hold their floor with
+    // something above it. A building with several occupants is cut at the highest of their cuts.
+    const F64 SLACK_M = 0.5;
+    std::map<U32, F32> cut_of;
+    for (const Occupant& occupant : occupants)
+    {
+        const LLVector3d& p = occupant.mFloor;
+        U32 best = 0;
+        F64 best_area = -1.0;
+        for (const auto& entry : extents)
+        {
+            const Extent& e = entry.second;
+            if (!e.mCuttable || p.mdV[VX] < e.mMin.mdV[VX] - SLACK_M || p.mdV[VX] > e.mMax.mdV[VX] + SLACK_M ||
+                p.mdV[VY] < e.mMin.mdV[VY] - SLACK_M || p.mdV[VY] > e.mMax.mdV[VY] + SLACK_M ||
+                p.mdV[VZ] < e.mMin.mdV[VZ] - SLACK_M || p.mdV[VZ] + SLACK_M > e.mMax.mdV[VZ])
+            {
+                continue;
+            }
+            const F64 area = (e.mMax.mdV[VX] - e.mMin.mdV[VX]) * (e.mMax.mdV[VY] - e.mMin.mdV[VY]);
+            if (best_area < 0.0 || area < best_area)
+            {
+                best = entry.first;
+                best_area = area;
+            }
+        }
+        if (best_area >= 0.0)
+        {
+            auto it = cut_of.find(best);
+            cut_of[best] = it == cut_of.end() ? occupant.mCut : llmax(it->second, occupant.mCut);
+        }
+    }
+    std::vector<std::pair<U32, F32>> cuts(cut_of.begin(), cut_of.end());
+    if (cuts == mCuts && mCutSignature == mSignature)
+    {
+        return;
+    }
+    mCuts = std::move(cuts);
+    mCutSignature = mSignature;
+    ++mCutStamp;
+    for (const Batch& batch : mBatches)
+    {
+        const U32 total = batch.mStart[skoverview::NUM_CENSUS_CLASSES];
+        LLStrider<F32> strider;
+        if (!total || !batch.mBuffer->getWeightStrider(strider) || !strider.get())
+        {
+            continue;
+        }
+        std::vector<F32> values(total, skoverview::NO_CUT);
+        for (const Group& group : batch.mGroups)
+        {
+            const auto it = cut_of.find(group.mId);
+            if (it == cut_of.end())
+            {
+                continue;
+            }
+            for (U32 c = 0; c < skoverview::NUM_CENSUS_CLASSES; ++c)
+            {
+                const U32 end = llmin(group.mStart[c] + group.mCount[c], total);
+                std::fill(values.begin() + llmin(group.mStart[c], end), values.begin() + end, it->second);
+            }
+        }
+        for (F32 v : values)
+        {
+            *strider++ = v;
+        }
+        batch.mBuffer->unmapBuffer();
+    }
 }
