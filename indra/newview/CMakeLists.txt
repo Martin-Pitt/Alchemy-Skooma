@@ -997,6 +997,7 @@ if(AL_BUILD_VIEWER)
     rlvinventory.cpp
     rlvlocks.cpp
     rlvui.cpp
+    skmodalviewmath.cpp # <SK:Nexii> modal view
   )
 
   set(
@@ -1874,6 +1875,7 @@ if(AL_BUILD_VIEWER)
     rlvmodifiers.h
     rlvui.h
     roles_constants.h
+    skmodalviewmath.h # <SK:Nexii> modal view
   )
 
   # Discord rich presence, over the SDK from the private registry.
@@ -2589,6 +2591,7 @@ if(AL_BUILD_TESTS)
       tests/llvocache_test.cpp
       tests/lutcube_test.cpp
       tests/noise_test.cpp
+      tests/skmodalviewmath_test.cpp # <SK:Nexii> modal view
     UNIT
       alagentlocationformat.cpp
       alchattimestamp.cpp
@@ -2664,6 +2667,7 @@ if(AL_BUILD_TESTS)
       llviewercontrollistener.cpp
       lutcube.cpp
       noise.cpp
+      skmodalviewmath.cpp # <SK:Nexii> modal view
     LIBRARIES llui alscript ll::slua llxml ${test_libs}
     SUPPORT
       newview_test_fakes
