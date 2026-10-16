@@ -29,7 +29,7 @@
 
 #include "llagent.h"
 
-#include "skmapmode.h" // <SK:Nexii> 3D world map
+#include "skmodalview.h" // <SK:Nexii> modal view
 
 #include "pipeline.h"
 
@@ -707,7 +707,7 @@ void LLAgent::ageChat()
 //-----------------------------------------------------------------------------
 void LLAgent::moveAt(S32 direction, bool reset)
 {
-    if (SKMapMode::isOpen() && direction) // <SK:Nexii> 3D world map: the avatar stays put while the map is open
+    if (SKModalView::worldCovered() && direction) // <SK:Nexii> modal view: the avatar stays put while the world is covered
     {
         return;
     }
@@ -739,7 +739,7 @@ void LLAgent::moveAt(S32 direction, bool reset)
 //-----------------------------------------------------------------------------
 void LLAgent::moveAtNudge(S32 direction)
 {
-    if (SKMapMode::isOpen() && direction) // <SK:Nexii> 3D world map: the avatar stays put while the map is open
+    if (SKModalView::worldCovered() && direction) // <SK:Nexii> modal view: the avatar stays put while the world is covered
     {
         return;
     }
@@ -768,7 +768,7 @@ void LLAgent::moveAtNudge(S32 direction)
 //-----------------------------------------------------------------------------
 void LLAgent::moveLeft(S32 direction)
 {
-    if (SKMapMode::isOpen() && direction) // <SK:Nexii> 3D world map: the avatar stays put while the map is open
+    if (SKModalView::worldCovered() && direction) // <SK:Nexii> modal view: the avatar stays put while the world is covered
     {
         return;
     }
@@ -797,7 +797,7 @@ void LLAgent::moveLeft(S32 direction)
 //-----------------------------------------------------------------------------
 void LLAgent::moveLeftNudge(S32 direction)
 {
-    if (SKMapMode::isOpen() && direction) // <SK:Nexii> 3D world map: the avatar stays put while the map is open
+    if (SKModalView::worldCovered() && direction) // <SK:Nexii> modal view: the avatar stays put while the world is covered
     {
         return;
     }
@@ -826,7 +826,7 @@ void LLAgent::moveLeftNudge(S32 direction)
 //-----------------------------------------------------------------------------
 void LLAgent::moveUp(S32 direction)
 {
-    if (SKMapMode::isOpen() && direction) // <SK:Nexii> 3D world map: the avatar stays put while the map is open
+    if (SKModalView::worldCovered() && direction) // <SK:Nexii> modal view: the avatar stays put while the world is covered
     {
         return;
     }
@@ -870,7 +870,7 @@ void LLAgent::moveUp(S32 direction)
 //-----------------------------------------------------------------------------
 void LLAgent::moveYaw(F32 mag, bool reset_view)
 {
-    if (SKMapMode::isOpen() && mag != 0.f) // <SK:Nexii> 3D world map: the avatar stays put while the map is open
+    if (SKModalView::worldCovered() && mag != 0.f) // <SK:Nexii> modal view: the avatar stays put while the world is covered
     {
         return;
     }
@@ -905,7 +905,7 @@ void LLAgent::moveYaw(F32 mag, bool reset_view)
 //-----------------------------------------------------------------------------
 void LLAgent::movePitch(F32 mag)
 {
-    if (SKMapMode::isOpen() && mag != 0.f) // <SK:Nexii> 3D world map: the avatar stays put while the map is open
+    if (SKModalView::worldCovered() && mag != 0.f) // <SK:Nexii> modal view: the avatar stays put while the world is covered
     {
         return;
     }
@@ -1770,7 +1770,7 @@ void LLAgent::startAutoPilotGlobal(
     F32 rot_threshold,
     bool allow_flying)
 {
-    if (SKMapMode::isOpen()) // <SK:Nexii> 3D world map: the avatar stays put while the map is open
+    if (SKModalView::worldCovered()) // <SK:Nexii> modal view: the avatar stays put while the world is covered
     {
         if (finish_callback)
         {
@@ -1903,7 +1903,7 @@ void LLAgent::setAutoPilotTargetGlobal(const LLVector3d &target_global)
 //-----------------------------------------------------------------------------
 void LLAgent::startFollowPilot(const LLUUID &leader_id, bool allow_flying, F32 stop_distance)
 {
-    if (SKMapMode::isOpen()) // <SK:Nexii> 3D world map: the avatar stays put while the map is open
+    if (SKModalView::worldCovered()) // <SK:Nexii> modal view: the avatar stays put while the world is covered
     {
         return;
     }

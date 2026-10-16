@@ -139,6 +139,7 @@
 #include "llworld.h"
 #include "llworldmap.h"
 #include "pipeline.h"
+#include "skmodalview.h" // <SK:Nexii> modal view
 #include "skmapmode.h" // <SK:Nexii> 3D world map
 #include "llviewerjoystick.h"
 #include "llfloatercamera.h"
@@ -4836,10 +4837,10 @@ void reset_view_final(bool proceed);
 
 void handle_reset_view()
 {
-    // <SK:Nexii> 3D world map: Esc, Reset View's shortcut, leaves the map rather than resetting the camera.
-    if (SKMapMode::isOpen())
+    // <SK:Nexii> modal view: Esc, Reset View's shortcut, closes the modal view on top rather than resetting the camera.
+    if (SKModalView::worldCovered())
     {
-        SKMapMode::instance().close();
+        SKModalView::instance().closeTop();
         return;
     }
     // </SK:Nexii>
