@@ -190,8 +190,13 @@ bool SKMapMode::open()
         mMapPosition = mMapFocus - lookDirection(yaw, -START_ELEVATION) * START_DISTANCE;
         mHasMapCamera = true;
     }
-    gAgentCamera.setFocusOnAvatar(false, false);
-    gAgentCamera.setCameraPosAndFocusGlobal(mMapPosition, mMapFocus, LLUUID::null);
+    // Under a mode already on top the map waits, camera and input alike, for onTopChanged.
+    const bool on_top = SKModalView::top() == this;
+    if (on_top)
+    {
+        gAgentCamera.setFocusOnAvatar(false, false);
+        gAgentCamera.setCameraPosAndFocusGlobal(mMapPosition, mMapFocus, LLUUID::null);
+    }
 
     LLRootView* root = gViewerWindow->getRootView();
     LLView::Params p;
@@ -216,6 +221,14 @@ bool SKMapMode::open()
         mOverlay = overlay->getHandle();
     }
     root->sendChildToBack(input);
+    if (!on_top)
+    {
+        input->setVisible(false);
+        if (overlay)
+        {
+            overlay->setVisible(false);
+        }
+    }
 
     LL_INFOS("WorldMap") << "map mode opened" << LL_ENDL;
     return true;
