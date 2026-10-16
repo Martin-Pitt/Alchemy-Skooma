@@ -31,6 +31,7 @@
 #include "v3math.h"
 
 #include <memory>
+#include <set>
 #include <vector>
 
 class LLVertexBuffer;
@@ -146,8 +147,10 @@ public:
         LLVector3d mFloor;      ///< global, their feet on their floor
         F32 mCut = 0.f;         ///< agent z
         std::vector<LLVector3d> mSight;     ///< global points on them the tactical eye should see: feet, chest, head
-        /// The enclosed room they are in, flooded through the indoor air: rows of its cells' bounds, global; empty outdoors.
-        std::vector<std::pair<LLVector3d, LLVector3d>> mRoom;
+        /// The enclosed room they are in, flooded through the indoor air: its cells on the mRoomCellM lattice
+        /// (global x and y over the cell size, floored); null outdoors.
+        std::shared_ptr<const std::set<std::pair<S32, S32>>> mRoomCells;
+        F32 mRoomCellM = 0.5f;
     };
     /// Writes each vertex's cut height for the tactical view, for the linksets in the given region:
     /// - room: every linkset bounding an occupant's enclosed room (walls round its floor, floors above, the roof);

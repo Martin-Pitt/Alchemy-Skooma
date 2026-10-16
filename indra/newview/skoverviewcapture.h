@@ -209,16 +209,15 @@ private:
     /// eye is the tactical camera's, agent space, for line of sight, or null for the top-down map.
     void updateCut(const LLVector3* eye);
     /// An enclosed room's floor polys' bounds, global, cached a few seconds.
-    /// The enclosed room around a floor point, flooded through the indoor air at that floor: rows of its air cells'
-    /// bounds, global; empty when the point is not indoors. Rooms are kept a few seconds and reused while the point
-    /// stays in one.
-    std::vector<std::pair<LLVector3d, LLVector3d>> roomAt(const LLVector3d& floor);
+    /// The enclosed room around a floor point, flooded through the indoor air at that floor: its air cells on the
+    /// ROOM_CELL_M lattice; null when the point is not indoors. Rooms are kept a few seconds and reused while the
+    /// point stays in one.
+    std::shared_ptr<const std::set<std::pair<S32, S32>>> roomAt(const LLVector3d& floor);
     struct Room
     {
         F64 mAt = 0.0;
         F64 mFloor = 0.0;
-        std::set<std::pair<S32, S32>> mCells;   // on the ROOM_CELL_M lattice
-        std::vector<std::pair<LLVector3d, LLVector3d>> mRows;
+        std::shared_ptr<std::set<std::pair<S32, S32>>> mCells;
     };
     std::vector<Room> mRooms;
     LLVector3d mTacticalEyeGlobal;  // the last frame's eye and focus, where an ease starts from

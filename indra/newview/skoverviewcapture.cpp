@@ -104,6 +104,7 @@ namespace
     const F32 HEADING_HALF_PER_RADIUS = 0.42f;
     const F32 HEADING_THICK_PER_RADIUS = 0.3f; // and extruded this thick
     const F32 TACTICAL_NEAR_M = 0.5f;
+    const F64 ROOM_CELL_M = 0.5;    // the lattice a room is flooded through the air on
     const F32 TACTICAL_MIN_M = 8.f;
     const F32 TACTICAL_MAX_M = 400.f;
     const F64 TACTICAL_TAP_S = 0.2;
@@ -1128,11 +1129,10 @@ bool SKOverviewCapture::captureMap(RegionMap& map, LLViewerRegion* region, bool 
     return true;
 }
 
-std::vector<std::pair<LLVector3d, LLVector3d>> SKOverviewCapture::roomAt(const LLVector3d& floor)
+std::shared_ptr<const std::set<std::pair<S32, S32>>> SKOverviewCapture::roomAt(const LLVector3d& floor)
 {
     LL_PROFILE_ZONE_SCOPED;
     // The air's rooms need no navmesh: flood the indoor air gaps whose floor is this one, out from the point.
-    const F64 ROOM_CELL_M = 0.5;
     const F64 SAME_FLOOR_M = 0.6;
     const S32 MAX_CELLS = 16384;
     const F64 now = LLFrameTimer::getUptimeSeconds().value();
@@ -1140,9 +1140,9 @@ std::vector<std::pair<LLVector3d, LLVector3d>> SKOverviewCapture::roomAt(const L
     mRooms.erase(std::remove_if(mRooms.begin(), mRooms.end(), [now](const Room& r) { return now - r.mAt > 5.0; }), mRooms.end());
     for (const Room& room : mRooms)
     {
-        if (std::fabs(room.mFloor - floor.mdV[VZ]) < SAME_FLOOR_M && room.mCells.count(start))
+        if (std::fabs(room.mFloor - floor.mdV[VZ]) < SAME_FLOOR_M && room.mCells->count(start))
         {
-            return room.mRows;
+            return room.mCells;
         }
     }
     const SKNavWorldViewPtr world = SKNavMesh::instanceExists() ? SKNavMesh::instance().view() : nullptr;
@@ -1168,11 +1168,12 @@ std::vector<std::pair<LLVector3d, LLVector3d>> SKOverviewCapture::roomAt(const L
         return {};
     }
     Room room;
+    room.mCells = std::make_shared<std::set<std::pair<S32, S32>>>();
     room.mAt = now;
     room.mFloor = floor.mdV[VZ];
     std::vector<std::pair<S32, S32>> todo{ start };
-    room.mCells.insert(start);
-    while (!todo.empty() && (S32)room.mCells.size() < MAX_CELLS)
+    room.mCells->insert(start);
+    while (!todo.empty() && (S32)room.mCells->size() < MAX_CELLS)
     {
         const std::pair<S32, S32> cell = todo.back();
         todo.pop_back();
@@ -1181,30 +1182,15 @@ std::vector<std::pair<LLVector3d, LLVector3d>> SKOverviewCapture::roomAt(const L
         {
             const std::pair<S32, S32> next(cell.first + step[0], cell.second + step[1]);
             F64 gap_floor = 0.0;
-            if (!room.mCells.count(next) && indoorAt(next, gap_floor))
+            if (!room.mCells->count(next) && indoorAt(next, gap_floor))
             {
-                room.mCells.insert(next);
+                room.mCells->insert(next);
                 todo.push_back(next);
             }
         }
     }
-    // Rows of cells as boxes, so the cut tests a few dozen boxes, not every cell.
-    for (auto it = room.mCells.begin(); it != room.mCells.end();)
-    {
-        const S32 x = it->first;
-        const S32 y0 = it->second;
-        S32 y1 = y0;
-        ++it;
-        while (it != room.mCells.end() && it->first == x && it->second == y1 + 1)
-        {
-            y1 = it->second;
-            ++it;
-        }
-        room.mRows.emplace_back(LLVector3d(x * ROOM_CELL_M, y0 * ROOM_CELL_M, floor.mdV[VZ]),
-                                LLVector3d((x + 1) * ROOM_CELL_M, (y1 + 1) * ROOM_CELL_M, floor.mdV[VZ]));
-    }
     mRooms.push_back(room);
-    return room.mRows;
+    return room.mCells;
 }
 
 void SKOverviewCapture::updateCut(const LLVector3* eye)
@@ -1243,11 +1229,12 @@ void SKOverviewCapture::updateCut(const LLVector3* eye)
         }
         if (where.mFound && where.mIndoor)
         {
-            o.mRoom = roomAt(floor);
+            o.mRoomCells = roomAt(floor);
+            o.mRoomCellM = (F32)ROOM_CELL_M;
         }
         mixPos(floor);
         mix(id.getCRC32());
-        mix(o.mRoom.size());
+        mix(o.mRoomCells ? o.mRoomCells->size() : 0);
         occupants.push_back(std::move(o));
     };
     const LLVector3d agent_floor = gAgent.getPosGlobalFromAgent(

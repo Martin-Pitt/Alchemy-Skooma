@@ -45,9 +45,11 @@
 #include "llgltfmaterial.h"
 
 #include <algorithm>
+#include <climits>
 #include <cmath>
 #include <map>
 #include <set>
+#include <unordered_set>
 
 namespace skoverview
 {
@@ -846,6 +848,33 @@ namespace
         return t > 1.0e-4f && t < 0.999f;
     }
 
+    // The distance in plan from p to the triangle (a, b, c): 0 inside it; a wall's edge-on triangle is its segment.
+    F32 planDistance(const LLVector2& p, const LLVector3& a3, const LLVector3& b3, const LLVector3& c3)
+    {
+        const LLVector2 a(a3.mV[VX], a3.mV[VY]), b(b3.mV[VX], b3.mV[VY]), c(c3.mV[VX], c3.mV[VY]);
+        auto cross = [](const LLVector2& o, const LLVector2& u, const LLVector2& v)
+        {
+            return (u.mV[VX] - o.mV[VX]) * (v.mV[VY] - o.mV[VY]) - (u.mV[VY] - o.mV[VY]) * (v.mV[VX] - o.mV[VX]);
+        };
+        const F32 area = cross(a, b, c);
+        if (std::fabs(area) > 1.0e-6f)
+        {
+            const F32 s0 = cross(a, b, p) / area, s1 = cross(b, c, p) / area, s2 = cross(c, a, p) / area;
+            if (s0 >= 0.f && s1 >= 0.f && s2 >= 0.f)
+            {
+                return 0.f;
+            }
+        }
+        auto segment = [&p](const LLVector2& u, const LLVector2& v)
+        {
+            const LLVector2 d = v - u;
+            const F32 len2 = d * d;
+            const F32 t = len2 > 0.f ? llclamp(((p - u) * d) / len2, 0.f, 1.f) : 0.f;
+            return (u + d * t - p).length();
+        };
+        return llmin(segment(a, b), llmin(segment(b, c), segment(c, a)));
+    }
+
     // Whether the segment from p to q meets the box (slab test).
     bool segmentMeetsBox(const LLVector3d& p, const LLVector3d& q, const LLVector3d& lo, const LLVector3d& hi)
     {
@@ -939,7 +968,6 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
     };
 
     const F64 SLACK_M = 0.1;    // column: how far outside a linkset's bounds still counts as under it
-    const F64 WALL_M = 0.75;    // room: how far past its floor a bounding wall can stand
     const F64 ABOVE_M = 0.5;    // what rises less than this over the floor bounds nothing
     std::map<U32, F32> cut_of;
     std::map<U32, std::string> why;
@@ -979,9 +1007,125 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
             ordered.push_back(&occupant);
         }
     }
+    // Whether a linkset has a triangle above p's floor whose plan footprint holds p (within the slack): it stands
+    // over them, not merely its box.
+    auto overColumn = [&](const Extent& e, const LLVector3d& p) -> bool
+    {
+        for (const auto& part : e.mParts)
+        {
+            const Batch& batch = *part.first;
+            const LLVector3 local(p - batch.mOrigin);
+            const LLVector2 at(local.mV[VX], local.mV[VY]);
+            for (U32 c = 0; c < skoverview::NUM_CENSUS_CLASSES; ++c)
+            {
+                if (c == skoverview::INVISIBLE)
+                {
+                    continue;
+                }
+                const U32 end = llmin(part.second->mStart[c] + part.second->mCount[c], (U32)batch.mPositions.size());
+                for (U32 v = part.second->mStart[c]; v + 2 < end; v += 3)
+                {
+                    const LLVector3& a = batch.mPositions[v];
+                    const LLVector3& b = batch.mPositions[v + 1];
+                    const LLVector3& d = batch.mPositions[v + 2];
+                    if (llmax(a.mV[VZ], llmax(b.mV[VZ], d.mV[VZ])) >= local.mV[VZ] + ABOVE_M &&
+                        planDistance(at, a, b, d) <= SLACK_M)
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    };
+    // Whether a linkset has a triangle above the floor whose plan footprint comes within a cell of one of the room's
+    // dilated cells; how says which (wall or cover) and the cell, for the log.
+    std::unordered_set<U64> dilated;
+    LLVector3d room_min, room_max;
+    auto cellKey = [](S32 x, S32 y) { return ((U64)(U32)x << 32) | (U64)(U32)y; };
+    auto touchesRoom = [&](const Extent& e, const Occupant& occupant, const std::unordered_set<U64>& cells, F64 cell_m,
+                           std::string& how) -> bool
+    {
+        const F32 reach = (F32)(cell_m * 0.7072);
+        for (const auto& part : e.mParts)
+        {
+            const Batch& batch = *part.first;
+            const F32 floor_local = (F32)(occupant.mFloor.mdV[VZ] - batch.mOrigin.mdV[VZ]);
+            for (U32 c = 0; c < skoverview::NUM_CENSUS_CLASSES; ++c)
+            {
+                if (c == skoverview::INVISIBLE)
+                {
+                    continue;
+                }
+                const U32 end = llmin(part.second->mStart[c] + part.second->mCount[c], (U32)batch.mPositions.size());
+                for (U32 v = part.second->mStart[c]; v + 2 < end; v += 3)
+                {
+                    const LLVector3& a = batch.mPositions[v];
+                    const LLVector3& b = batch.mPositions[v + 1];
+                    const LLVector3& d = batch.mPositions[v + 2];
+                    if (llmax(a.mV[VZ], llmax(b.mV[VZ], d.mV[VZ])) < floor_local + ABOVE_M)
+                    {
+                        continue;
+                    }
+                    // The cells under the triangle's plan box, as far as the room has any.
+                    const F64 lo_x = batch.mOrigin.mdV[VX] + llmin(a.mV[VX], llmin(b.mV[VX], d.mV[VX]));
+                    const F64 hi_x = batch.mOrigin.mdV[VX] + llmax(a.mV[VX], llmax(b.mV[VX], d.mV[VX]));
+                    const F64 lo_y = batch.mOrigin.mdV[VY] + llmin(a.mV[VY], llmin(b.mV[VY], d.mV[VY]));
+                    const F64 hi_y = batch.mOrigin.mdV[VY] + llmax(a.mV[VY], llmax(b.mV[VY], d.mV[VY]));
+                    const S32 x0 = (S32)std::floor(llmax(lo_x, room_min.mdV[VX]) / cell_m);
+                    const S32 x1 = (S32)std::floor(llmin(hi_x, room_max.mdV[VX]) / cell_m);
+                    const S32 y0 = (S32)std::floor(llmax(lo_y, room_min.mdV[VY]) / cell_m);
+                    const S32 y1 = (S32)std::floor(llmin(hi_y, room_max.mdV[VY]) / cell_m);
+                    for (S32 x = x0; x <= x1; ++x)
+                    {
+                        for (S32 y = y0; y <= y1; ++y)
+                        {
+                            if (!cells.count(cellKey(x, y)))
+                            {
+                                continue;
+                            }
+                            const LLVector2 centre((F32)((x + 0.5) * cell_m - batch.mOrigin.mdV[VX]),
+                                                   (F32)((y + 0.5) * cell_m - batch.mOrigin.mdV[VY]));
+                            if (planDistance(centre, a, b, d) <= reach)
+                            {
+                                const LLVector3 n = (b - a) % (d - a);
+                                const bool wall = n.length() > 0.f && std::fabs(n.mV[VZ]) < 0.5f * n.length();
+                                how = llformat("%s at cell %d,%d", wall ? "wall" : "cover", x, y);
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return false;
+    };
     for (const Occupant* occupant : ordered)
     {
         const LLVector3d& p = occupant->mFloor;
+        dilated.clear();
+        if (occupant->mRoomCells && !occupant->mRoomCells->empty())
+        {
+            // The room's cells grown by one, so a wall standing just past its last cell of air still touches it.
+            S32 min_x = INT_MAX, min_y = INT_MAX, max_x = INT_MIN, max_y = INT_MIN;
+            for (const auto& cell : *occupant->mRoomCells)
+            {
+                for (S32 dx = -1; dx <= 1; ++dx)
+                {
+                    for (S32 dy = -1; dy <= 1; ++dy)
+                    {
+                        dilated.insert(cellKey(cell.first + dx, cell.second + dy));
+                    }
+                }
+                min_x = llmin(min_x, cell.first - 1);
+                min_y = llmin(min_y, cell.second - 1);
+                max_x = llmax(max_x, cell.first + 1);
+                max_y = llmax(max_y, cell.second + 1);
+            }
+            const F64 cell_m = occupant->mRoomCellM;
+            room_min.setVec(min_x * cell_m, min_y * cell_m, 0.0);
+            room_max.setVec((max_x + 1) * cell_m, (max_y + 1) * cell_m, 0.0);
+        }
         for (const auto& entry : extents)
         {
             const Extent& e = entry.second;
@@ -989,21 +1133,25 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
             {
                 continue;
             }
-            if (!occupant->mRoom.empty())
+            if (occupant->mRoomCells && !dilated.empty())
             {
-                // The room's building: whatever stands round its floor or over it.
-                for (const auto& box : occupant->mRoom)
+                // The room's building, by its geometry: a linkset whose triangles above the floor come within a cell of
+                // the room's own cells, standing round them (walls) or over them (floors above, the roof).
+                const F64 cell_m = occupant->mRoomCellM;
+                if (e.mMax.mdV[VX] < room_min.mdV[VX] || e.mMin.mdV[VX] > room_max.mdV[VX] ||
+                    e.mMax.mdV[VY] < room_min.mdV[VY] || e.mMin.mdV[VY] > room_max.mdV[VY])
                 {
-                    if (e.mMax.mdV[VX] >= box.first.mdV[VX] - WALL_M && e.mMin.mdV[VX] <= box.second.mdV[VX] + WALL_M &&
-                        e.mMax.mdV[VY] >= box.first.mdV[VY] - WALL_M && e.mMin.mdV[VY] <= box.second.mdV[VY] + WALL_M)
-                    {
-                        mark(entry.first, *occupant, "room");
-                        break;
-                    }
+                    continue; // its box is nowhere near the room's
+                }
+                std::string how;
+                if (touchesRoom(e, *occupant, dilated, cell_m, how))
+                {
+                    mark(entry.first, *occupant, ("room " + how).c_str());
                 }
             }
             else if (p.mdV[VX] >= e.mMin.mdV[VX] - SLACK_M && p.mdV[VX] <= e.mMax.mdV[VX] + SLACK_M &&
-                     p.mdV[VY] >= e.mMin.mdV[VY] - SLACK_M && p.mdV[VY] <= e.mMax.mdV[VY] + SLACK_M)
+                     p.mdV[VY] >= e.mMin.mdV[VY] - SLACK_M && p.mdV[VY] <= e.mMax.mdV[VY] + SLACK_M &&
+                     overColumn(e, p))
             {
                 mark(entry.first, *occupant, "column");
             }
