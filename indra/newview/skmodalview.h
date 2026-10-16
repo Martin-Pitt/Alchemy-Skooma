@@ -43,9 +43,13 @@ public:
 
     /// For the log.
     virtual const char* getModalName() const = 0;
-    /// Closes the mode, which releases its claim. Asked on Escape, teleport, disconnect, logout,
-    /// GL restore and RLVa restrictions.
+    /// Closes the mode, which saves whatever it keeps of its own camera and then releases its claim,
+    /// since the last release puts the world camera back. Asked on Escape, teleport, disconnect,
+    /// logout, GL restore and RLVa restrictions.
     virtual void closeModal() = 0;
+    /// Another mode came over this one (false), or left it on top again (true). Not called for the
+    /// mode's own claim or release. A covered mode hides its input and keeps its camera for later.
+    virtual void onTopChanged(bool on_top) {}
     /// Drops the mode's views and GL resources at viewer shutdown, without touching the camera.
     virtual void shutdownModal() {}
     /// Draws the mode over the world view's rectangle (raw pixels), in place of the world.
@@ -89,7 +93,8 @@ public:
     void unregisterMode(SKModalMode* mode);
 
     /// Covers the world with `mode`. The first claim snapshots the world camera, leaves mouselook and
-    /// stops the autopilot. Claiming again changes the priority. False when the view cannot be claimed.
+    /// stops the autopilot. Claiming again changes the priority. False when the view cannot be claimed
+    /// or the mode's own RLVa restriction holds it shut.
     bool claim(SKModalMode* mode, S32 priority);
     /// The last release puts the world camera back as it was, following the agent again if it did.
     void release(SKModalMode* mode);
@@ -132,6 +137,7 @@ private:
         LLVector3 mAt, mLeft, mUp;
     };
 
+    void notifyTopChange(SKModalMode* before, const SKModalMode* except);
     void snapshotWorldCamera();
     void restoreWorldCamera();
 

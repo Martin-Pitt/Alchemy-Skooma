@@ -89,7 +89,24 @@ void SKModalView::registerMode(SKModalMode* mode)
 void SKModalView::unregisterMode(SKModalMode* mode)
 {
     mModes.erase(std::remove(mModes.begin(), mModes.end(), mode), mModes.end());
-    mClaims.release(mode);
+    release(mode);
+}
+
+void SKModalView::notifyTopChange(SKModalMode* before, const SKModalMode* except)
+{
+    SKModalMode* after = top();
+    if (!before || !after || before == after)
+    {
+        return;
+    }
+    if (before != except && mClaims.holds(before))
+    {
+        before->onTopChanged(false);
+    }
+    if (after != except)
+    {
+        after->onTopChanged(true);
+    }
 }
 
 bool SKModalView::claim(SKModalMode* mode, S32 priority)
@@ -98,12 +115,14 @@ bool SKModalView::claim(SKModalMode* mode, S32 priority)
     {
         return false;
     }
+    SKModalMode* before = top();
     if (mClaims.holds(mode))
     {
         mClaims.claim(mode, priority);
+        notifyTopChange(before, nullptr);
         return true;
     }
-    if (!canClaim())
+    if (!canClaim() || mode->rlvRestricted())
     {
         return false;
     }
@@ -112,16 +131,19 @@ bool SKModalView::claim(SKModalMode* mode, S32 priority)
         snapshotWorldCamera();
     }
     mClaims.claim(mode, priority);
+    notifyTopChange(before, mode);
     LL_INFOS("ModalView") << mode->getModalName() << " covers the world" << LL_ENDL;
     return true;
 }
 
 void SKModalView::release(SKModalMode* mode)
 {
+    SKModalMode* before = top();
     if (!mClaims.release(mode))
     {
         return;
     }
+    notifyTopChange(before, mode);
     LL_INFOS("ModalView") << mode->getModalName() << " released the world" << LL_ENDL;
     if (mClaims.empty())
     {
@@ -184,6 +206,10 @@ void SKModalView::closeAll()
 {
     for (const void* key : mClaims.ordered())
     {
+        if (!mClaims.holds(key))
+        {
+            continue; // an earlier close took it with it
+        }
         SKModalMode* mode = static_cast<SKModalMode*>(const_cast<void*>(key));
         mode->closeModal();
         release(mode);
@@ -200,6 +226,10 @@ bool SKModalView::closeIfNeeded(bool leaving_world)
     const bool camera_locked = rlvCameraLocked();
     for (const void* key : mClaims.ordered())
     {
+        if (!mClaims.holds(key))
+        {
+            continue; // an earlier close took it with it
+        }
         SKModalMode* mode = static_cast<SKModalMode*>(const_cast<void*>(key));
         if (camera_locked || mode->rlvRestricted())
         {
