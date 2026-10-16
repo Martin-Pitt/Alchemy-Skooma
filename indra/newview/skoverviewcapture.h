@@ -30,6 +30,7 @@
 #include "llhandle.h"
 #include "llmatrix4a.h"
 #include "llsingleton.h"
+#include "lltimer.h"
 #include "lluuid.h"
 #include "v2math.h"
 #include "skmaplabels.h"
@@ -88,11 +89,17 @@ public:
 
     /// The tactical view takes the wheel for its distance; false when it is off.
     static bool handleScrollWheel(F32 clicks);
-    /// The camera tool's alt-cam input while the overview is shown: alt+click focuses the ground under the cursor,
-    /// alt+drag orbits and tilts, alt+ctrl+drag pans. True when the overview took it (the world camera is left be).
-    static bool tacticalMouseDown(S32 x, S32 y, MASK mask);
-    static bool tacticalMouseDrag(S32 dx, S32 dy, MASK mask);
-    static bool tacticalMouseUp(S32 x, S32 y, MASK mask);
+    /// LLToolCamera's moves, applied to the tactical camera while the overview is shown, with LLAgentCamera's
+    /// meanings: the camera tool computes them as it does for the world camera and only the target differs.
+    /// Focuses on the ground under the window point (x, y), easing there as alt+click does; false on none.
+    static bool tacticalFocusAt(S32 x, S32 y);
+    static void tacticalOrbitAround(F32 radians);
+    static void tacticalOrbitOver(F32 radians);
+    static void tacticalZoomIn(F32 fraction);
+    static void tacticalPanLeft(F32 metres);
+    static void tacticalPanUp(F32 metres);
+    /// The distance from the tactical camera to its focus.
+    static F32 tacticalFocusDistance();
     /// The camera reset (Escape): the tactical camera follows the avatar again.
     static void resetTacticalCamera();
     /// The tactical overview key: held, it shows the view until released; tapped, it latches it until the next tap.
@@ -117,7 +124,8 @@ private:
         LLCamera mCull;
         LLVector3 mEye;     // agent space
         F32 mCut = 0.f;     // agent-space z
-        F32 mFloor = 0.f;   // the height colours are relative to
+        LLVector3 mFocus;   // agent space: what the view centres on; distance fade and height colours are relative to it
+        bool mPartCuts = false; // each census part is cut at its own height (the tactical view), not at mCut
         F32 mLevelTop = 0.f; // the agent's cut height, the brightest the height colours go
         F32 mWater = 0.f;   // the water surface's height
         SKOverviewCensus::Level mLevel; // the census groups it draws
@@ -185,13 +193,24 @@ private:
         LLVector3d mFocus;
         F32 mYaw = 0.f;     // radians, the heading the camera looks along
         F32 mPitch = 0.f;   // radians below the horizon
+        F32 mDistance = 0.f;
+        // An alt+click's ease onto the new focus, as LLAgentCamera::startCameraAnimation: ZoomTime, smoothstepped.
+        bool mAnimating = false;
+        LLVector3d mStartEye;
+        LLVector3d mStartFocus;
+        LLTimer mAnimTimer;
+        F32 mAnimDuration = 0.f;
     } mTacticalCam;
+    /// Takes the tactical camera over from where the overview was looking.
+    void takeTacticalCamera();
+    LLVector3d mTacticalEyeGlobal;  // the last frame's eye and focus, where an ease starts from
+    LLVector3d mTacticalFocusGlobal;
+    LLVector3 mTacticalLeft;        // the last frame's camera axes, for panning
+    LLVector3 mTacticalUp;
     /// The last tactical camera, so input can start from it.
     LLVector3 mTacticalTarget;
     F32 mTacticalYaw = 0.f;
     F32 mTacticalPitch = 0.f;
-    bool mTacticalDragging = false;
-    bool mTacticalDragged = false;
     /// What the last tactical capture showed: the same again reuses its image.
     struct TacticalKey
     {
@@ -203,6 +222,7 @@ private:
         S32 mHeight = 0;
         F32 mCut = 0.f;
         U64 mCensus = 0;
+        U64 mCutStamp = 0;
         const void* mRegion = nullptr;
     } mTacticalKey;
     /// CPU time of the tactical view, summed over a second and logged.
