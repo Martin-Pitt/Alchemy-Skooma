@@ -35,7 +35,6 @@
 #include "llflexibleobject.h"
 #include "llviewercontrol.h"
 #include "lldatapacker.h"
-#include "llfasttimer.h"
 #include "llfloaterreg.h"
 #include "llfontgl.h"
 #include "llframetimer.h"
@@ -93,7 +92,6 @@
 #include "llvosurfacepatch.h"
 #include "llvotree.h"
 #include "llvovolume.h"
-#include "llvowater.h"
 #include "llworld.h"
 #include "llui.h"
 #include "pipeline.h"
@@ -165,8 +163,6 @@ LLViewerObject *LLViewerObject::createObject(const LLUUID &id, const LLPCode pco
     if (gNonInteractive
         && pcode != LL_PCODE_LEGACY_AVATAR
         && pcode != LL_VO_SURFACE_PATCH
-        && pcode != LL_VO_WATER
-        && pcode != LL_VO_VOID_WATER
         && pcode != LL_VO_WL_SKY
         && pcode != LL_VO_SKY
         && pcode != LL_VO_PART_GROUP
@@ -236,10 +232,6 @@ LLViewerObject *LLViewerObject::createObject(const LLUUID &id, const LLPCode pco
       res = new LLVOSurfacePatch(id, pcode, regionp); break;
     case LL_VO_SKY:
       res = new LLVOSky(id, pcode, regionp); break;
-    case LL_VO_VOID_WATER:
-        res = new LLVOVoidWater(id, pcode, regionp); break;
-    case LL_VO_WATER:
-        res = new LLVOWater(id, pcode, regionp); break;
     case LL_VO_PART_GROUP:
       res = new LLVOPartGroup(id, pcode, regionp); break;
     case LL_VO_HUD_PART_GROUP:
@@ -631,7 +623,6 @@ void LLViewerObject::initVOClasses()
     LLVOTree::initClass();
     LL_INFOS() << "Viewer Object size: " << sizeof(LLViewerObject) << LL_ENDL;
     LLVOGrass::initClass();
-    LLVOWater::initClass();
     LLVOVolume::initClass();
 
     initObjectDataMap();
@@ -640,7 +631,6 @@ void LLViewerObject::initVOClasses()
 void LLViewerObject::cleanupVOClasses()
 {
     SUBSYSTEM_CLEANUP(LLVOGrass);
-    SUBSYSTEM_CLEANUP(LLVOWater);
     SUBSYSTEM_CLEANUP(LLVOTree);
     SUBSYSTEM_CLEANUP(LLVOAvatar);
     SUBSYSTEM_CLEANUP(LLVOVolume);
@@ -1627,7 +1617,7 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
                     mHudText = temp_string;
                     mHudTextColor = LLColor4(coloru);
 
-                    setChanged(MOVED | SILHOUETTE);
+                    setChanged(MOVED);
                 }
                 else
                 {
@@ -2172,7 +2162,7 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
                     // Show particles, icon and HUD
                     hideExtraDisplayItems( false );
 
-                    setChanged(MOVED | SILHOUETTE);
+                    setChanged(MOVED);
                 }
                 else
                 {
@@ -2312,8 +2302,8 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
                     }
                     cur_parentp->removeChild(this);
                     sent_parentp->addChild(this);
-                    setChanged(MOVED | SILHOUETTE);
-                    sent_parentp->setChanged(MOVED | SILHOUETTE);
+                    setChanged(MOVED);
+                    sent_parentp->setChanged(MOVED);
                     if (sent_parentp->mDrawable.notNull())
                     {
                         gPipeline.markMoved(sent_parentp->mDrawable, false); // undamped
@@ -2347,7 +2337,7 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
 
                         cur_parentp->removeChild(this);
 
-                        setChanged(MOVED | SILHOUETTE);
+                        setChanged(MOVED);
 
                         if (mDrawable.notNull())
                         {
@@ -2414,7 +2404,7 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
     // Set the change flags for scale
     if (new_scale != getScale())
     {
-        setChanged(SCALED | SILHOUETTE);
+        setChanged(SCALED);
         setScale(new_scale);  // Must follow setting permYouOwner()
     }
 
@@ -2491,7 +2481,7 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
             gAgent.rotate(new_rot);
             gAgentCamera.resetView();
         }
-        setChanged(ROTATED | SILHOUETTE);
+        setChanged(ROTATED);
     }
 
     if ( gShowObjectUpdates )
@@ -2735,7 +2725,7 @@ void LLViewerObject::interpolateLinearMotion(const F64SecondsImplicit& frame_tim
             setVelocity(vel + accel*dt);
 
             // for objects that are spinning but not translating, make sure to flag them as having moved
-            setChanged(MOVED | SILHOUETTE);
+            setChanged(MOVED);
         }
     }
     else if (!accel.isExactlyZero() || !vel.isExactlyZero())        // object is moving
@@ -2911,7 +2901,7 @@ void LLViewerObject::interpolateLinearMotion(const F64SecondsImplicit& frame_tim
         }
 
         // for objects that are spinning but not translating, make sure to flag them as having moved
-        setChanged(MOVED | SILHOUETTE);
+        setChanged(MOVED);
     }
 
     // Update the last time we did anything
@@ -5002,7 +4992,7 @@ void LLViewerObject::setPosition(const LLVector3 &pos, bool damped)
 {
     if (getPosition() != pos)
     {
-        setChanged(TRANSLATED | SILHOUETTE);
+        setChanged(TRANSLATED);
     }
 
     LLXform::setPosition(pos);
@@ -5045,7 +5035,7 @@ void LLViewerObject::setPositionGlobal(const LLVector3d &pos_global, bool damped
             // LLViewerObject version of setPosition?
             LLVector3 old_pos = mDrawable->mXform.getParent()->getPosition();
             mDrawable->mXform.getParent()->setPosition(old_pos + delta_pos);
-            setChanged(TRANSLATED | SILHOUETTE);
+            setChanged(TRANSLATED);
         }
         if (mParent && ((LLViewerObject*)mParent)->isAvatar())
         {
@@ -7297,7 +7287,7 @@ void LLViewerObject::setRegion(LLViewerRegion *regionp)
         mControlAvatar->setRegion(regionp);
     }
 
-    setChanged(MOVED | SILHOUETTE);
+    setChanged(MOVED);
     updateDrawable(false);
 }
 
@@ -7461,7 +7451,7 @@ void LLViewerObject::applyAngularVelocity(F32 dt)
         new_rot.normalize();
         setRotation(new_rot);
 
-        setChanged(MOVED | SILHOUETTE);
+        setChanged(MOVED);
     }
 }
 
