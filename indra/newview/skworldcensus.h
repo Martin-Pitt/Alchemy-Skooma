@@ -159,6 +159,9 @@ private:
         LLVector3d mPosition;
         LLQuaternion mRotation;     ///< baseline together with mPosition
         F64 mMovedAt = -1.f;        ///< last time the root was seen somewhere else
+        F64 mBurstStart = -1.f;     ///< when its current or last burst of moves began
+        std::vector<F64> mBursts;   ///< when each recent burst began, oldest first
+        F64 mMoverUntil = -1.f;     ///< it moves by habit until then
         F64 mLastSeen = 0.f;
         bool mKnown = false;
     };

@@ -5802,7 +5802,7 @@
         <key>SKNavSettleSeconds</key>
         <map>
             <key>Comment</key>
-            <string>Seconds an object must stay still before the navmesh treats it as landscape.</string>
+            <string>Seconds a mover (one seen moving in repeated or sustained bursts) must stay still before the navmesh treats it as landscape; a one-off move is landscape at once.</string>
             <key>Persist</key>
             <integer>1</integer>
             <key>Type</key>

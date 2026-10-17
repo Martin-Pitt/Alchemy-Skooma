@@ -67,6 +67,12 @@ namespace
     const F32 MOVED_EPSILON = 0.01f;
     const F32 MOVED_ANGLE = 2.f * DEG_TO_RAD;
     const F32 HISTORY_KEEP_SECONDS = 600.f;
+    // A mover is told by its habits, not by one move: moves this close are one burst,
+    const F64 BURST_GAP_SECONDS = 2.0;
+    // and this many bursts in the window, or one burst lasting this long, make it a mover for the window.
+    const size_t MOVER_BURSTS = 3;
+    const F64 MOVER_WINDOW_SECONDS = 120.0;
+    const F64 MOVER_CONTINUOUS_SECONDS = 3.0;
 
     // The share of a part's faces that can be seen through: a pane of glass
     // is solid to the sim and told apart from a door only here.
@@ -516,7 +522,21 @@ bool SKWorldCensus::classifyRest(LLViewerObject* root, const LLVector3d& pos, co
     {
         if (rest.mKnown)
         {
-            rest.mMovedAt = gFrameTimeSeconds;
+            const F64 now = gFrameTimeSeconds;
+            if (rest.mMovedAt < 0.f || now - rest.mMovedAt > BURST_GAP_SECONDS)
+            {
+                rest.mBurstStart = now;
+                rest.mBursts.push_back(now);
+            }
+            while (!rest.mBursts.empty() && now - rest.mBursts.front() > MOVER_WINDOW_SECONDS)
+            {
+                rest.mBursts.erase(rest.mBursts.begin());
+            }
+            if (rest.mBursts.size() >= MOVER_BURSTS || now - rest.mBurstStart >= MOVER_CONTINUOUS_SECONDS)
+            {
+                rest.mMoverUntil = now + MOVER_WINDOW_SECONDS;
+            }
+            rest.mMovedAt = now;
             RootHistory& history = mHistory[root->getID()];
             history.mEverMoved = true;
             history.mTravel += static_cast<F32>(shifted);
@@ -530,7 +550,8 @@ bool SKWorldCensus::classifyRest(LLViewerObject* root, const LLVector3d& pos, co
     {
         it->second.mLastSeen = gFrameTimeSeconds;
     }
-    return rest.mMovedAt >= 0.f && gFrameTimeSeconds - rest.mMovedAt < settle;
+    // A one-off move, an edit or a rez, is landscape at once where it now stands; only a mover waits out the settle.
+    return gFrameTimeSeconds < rest.mMoverUntil && rest.mMovedAt >= 0.f && gFrameTimeSeconds - rest.mMovedAt < settle;
 }
 
 bool SKWorldCensus::isSurround(LLViewerObject* root, const LLVector3d& mn, const LLVector3d& mx) const
