@@ -160,8 +160,8 @@ typedef std::shared_ptr<const SKNavWind> SKNavWindPtr;
 /// mesh at a time, each in 20 ms chunks so a better tier can preempt it. A
 /// pass mends the last answers where their air stands, and air that moves
 /// while one runs is mended next, on top of what it lands; its spaces are
-/// kept when no gap's bucket, flags or air moved. Meshes that touch read each other's answers one generation late, and a
-/// mesh whose answers moved re-runs its neighbours, at most three times.
+/// kept when no air, door or answer the spaces pass reads moved. Meshes
+/// that touch read each other's answers one generation late, and a mesh whose answers moved re-runs its neighbours, at most three times.
 /// Main thread only, besides the view it hands out.
 class SKNavRooms
 {

@@ -668,13 +668,21 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
             {
                 LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknr - doors and lifts");
                 const LLVector3d dlo(lo.mdV[VX], lo.mdV[VY], -1e9), dhi(hi.mdV[VX], hi.mdV[VY], 1e9);
+                // Every field the spaces pass reads of a door (doorSpans): kept spaces stand only while all of them do.
                 navmesh.doorsIn(dlo, dhi, [&doors](const DoorEntity& d) {
-                    doors = mix(mix(mixF64(mixF64(mix(doors, d.mId.getCRC32()), d.mPlanePoint.mdV[VX]), d.mPlanePoint.mdV[VY]), d.mPlaneKnown),
-                                static_cast<U64>(d.mWidth * 100.f));
+                    doors = mix(mix(doors, d.mId.getCRC32()), d.mPlaneKnown ? 1 : 0);
+                    for (S32 k = 0; k < 3; ++k)
+                    {
+                        doors = mixF64(mixF64(mixF64(mixF64(doors, d.mMin.mdV[k]), d.mMax.mdV[k]), d.mPlanePoint.mdV[k]), d.mNormal.mV[k]);
+                    }
+                    doors = mixF64(mixF64(mixF64(doors, d.mWidth), d.mHeight), d.mSill);
                 });
                 for (const auto& lift : lifts(dlo, dhi))
                 {
-                    doors = mixF64(mixF64(doors, lift.first.mdV[VX]), lift.second.mdV[VY]);
+                    for (S32 k = 0; k < 3; ++k)
+                    {
+                        doors = mixF64(mixF64(doors, lift.first.mdV[k]), lift.second.mdV[k]);
+                    }
                 }
             }
             // Slabs are built over detailed air: when the cache evicts some, they go with it.
@@ -848,6 +856,7 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
             if (roomsPreemptible(state.schedule(), first))
             {
                 state.mLatest->store(++state.mGeneration);
+                state.mPending.add(state.mPosted);
                 if (!state.mDirty)
                 {
                     state.mDirtySince = now;
@@ -1014,7 +1023,7 @@ void SKNavRooms::runChunk(const std::shared_ptr<Job>& job, const std::weak_ptr<b
         }
         if (!job->mSpaces)
         {
-            // The air and every gap's bucket and flags the last spaces were cut from stand: so do they.
+            // The air, doors and every answer the last spaces were cut from stand: so do they.
             if (job->mPreviousRooms && job->mPass->repaired() && !job->mPass->layoutMoved())
             {
                 carrySpaces(*job->mPass->takeProduct(), *job->mPreviousProduct);
@@ -1112,6 +1121,14 @@ void SKNavRooms::finish(const std::shared_ptr<Job>& job)
         {
             ++o.mReruns;
             o.mDirty = true;
+            // It settles where the two meet, which is where this one's answers reach it.
+            LLVector3d lo, hi;
+            for (S32 k = 0; k < 2; ++k)
+            {
+                lo.mdV[k] = llmax(state.mMin.mdV[k], o.mMin.mdV[k]) - 1.0;
+                hi.mdV[k] = llmin(state.mMax.mdV[k], o.mMax.mdV[k]) + 1.0;
+            }
+            o.mPending.add(lo, hi);
         }
     }
 }
