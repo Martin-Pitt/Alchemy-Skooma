@@ -462,6 +462,10 @@ void SKWorldCensus::finishScan()
     {
         it = (gFrameTimeSeconds - it->second.mLastSeen > HISTORY_KEEP_SECONDS) ? mLeaves.erase(it) : std::next(it);
     }
+    for (auto it = mDoorways.begin(); it != mDoorways.end();)
+    {
+        it = mLeaves.count(it->first) ? std::next(it) : mDoorways.erase(it);
+    }
     for (auto it = mParts.begin(); it != mParts.end();)
     {
         it = (gFrameTimeSeconds - it->second.mLastSeen > 60.f) ? mParts.erase(it) : std::next(it);
@@ -617,6 +621,22 @@ void SKWorldCensus::visit(LLViewerObject* object)
     LLVector3 sim_pos;
     LLQuaternion sim_rot;
     simRegionTransform(object, sim_pos, sim_rot);
+    // A door leaf whose doorway is established is recorded shut wherever it
+    // swings, so opening a door re-signs no tile and refloods no air.
+    bool held_shut = false;
+    if (const auto lit = mLeaves.find(object->getID()); lit != mLeaves.end())
+    {
+        const U64 handle = object->getRegion()->getHandle();
+        mLeafTransforms[object->getID()] = { sim_pos, sim_rot, handle };
+        const auto dit = mDoorways.find(object->getID());
+        FeaturePart doorway;
+        if (dit != mDoorways.end() && dit->second.mRegion == handle && establishedDoorway(lit->second, doorway))
+        {
+            sim_pos = dit->second.mPos;
+            sim_rot = dit->second.mRot;
+            held_shut = true;
+        }
+    }
     // Its own extent, not its centre: that is the whole point of a surround.
     // A rotated box, not the scale's magnitude smeared over x and y: a tall
     // thin tower is not a wide one, and smearing it calls an ordinary
@@ -664,7 +684,7 @@ void SKWorldCensus::visit(LLViewerObject* object)
         feature = fit->second;
     }
     const bool excluded = (feature.mExclude & EXCLUDE_ALL) == EXCLUDE_ALL;
-    const bool dynamic = moving && !excluded;
+    const bool dynamic = moving && !excluded && !held_shut;
 
     // Phantom stays out unless the sim says it is an exclusion volume; a
     // surround stays in whatever its flags, as its rendered shape.
@@ -1221,9 +1241,15 @@ void SKWorldCensus::classify(SKCensusSnapshot& snap)
     {
         if (leaves.count(p.mPart) || mLeaves.count(p.mPart))
         {
-            observeLeaf(mLeaves[p.mPart], p, static_cast<F32>(gFrameTimeSeconds.value()));
+            LeafHistory& history = mLeaves[p.mPart];
+            observeLeaf(history, p, static_cast<F32>(gFrameTimeSeconds.value()));
+            if (const auto tit = mLeafTransforms.find(p.mPart); tit != mLeafTransforms.end() && atEstablishedDoorway(history))
+            {
+                mDoorways[p.mPart] = tit->second;
+            }
         }
     }
+    mLeafTransforms.clear();
     snap.mDoors = buildDoorEntities(snap.mFeatures, mScan.mFeatureParts, roots, &mLeaves);
 
     // What the next scan records each part with, and what stays with a root

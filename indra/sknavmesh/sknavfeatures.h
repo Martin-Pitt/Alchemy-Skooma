@@ -168,8 +168,19 @@ namespace sknav
 
     /// The pose that stands for the doorway: the current one for a leaf that
     /// has never moved, else the rest it has spent longest at. False while it
-    /// moves or before any rest is known.
+    /// moves or before any rest is known, unless the doorway is established.
     bool doorwayPose(const LeafHistory& history, FeaturePart& out);
+
+    /// Seconds a leaf must have rested at one pose before that pose is its
+    /// doorway for good: a swing then changes nothing built over it.
+    constexpr F32 DOORWAY_ESTABLISHED_SECONDS = 10.f;
+
+    /// The rest the leaf has spent longest at, once it has spent at least
+    /// DOORWAY_ESTABLISHED_SECONDS there; false before, moving or not.
+    bool establishedDoorway(const LeafHistory& history, FeaturePart& out);
+
+    /// Whether the leaf's last look found it still at its established doorway.
+    bool atEstablishedDoorway(const LeafHistory& history, F32 tolerance = 0.02f);
 
     typedef std::unordered_map<LLUUID, LeafHistory> LeafHistories;
 

@@ -664,13 +664,14 @@ namespace tut
     }
 
     // A leaf seen open briefly and then shut keeps the shut plane, even when
-    // looked at while open; while it swings the plane is not known.
+    // looked at while open; while it swings, before its doorway is
+    // established, the plane is not known.
     template<> template<>
     void sknavfeatures_object::test<22>()
     {
         LeafHistories h;
         F32 t = 0.f;
-        for (; t <= 10.f; t += 1.f)
+        for (; t <= 5.f; t += 1.f)
         {
             observeLeaf(h[id(1)], shutLeaf(1), t);
         }
@@ -816,5 +817,26 @@ namespace tut
         a.mFaceCover = faceCover(a, { slab(2, 0.1, 0.9, 0, 0.15, 1.9, 2.5) }, params);
         b.mFaceCover = faceCover(b, { slab(1, 0, 0, 0, 0.05, 1.0, 2.5) }, params);
         ensure("an edge's overlap leaves the face open", a.mFaceCover <= params.mFaceClear && b.mFaceCover <= params.mFaceClear);
+    }
+
+    // A leaf that has rested shut long enough keeps its shut plane through a
+    // swing, so opening the door moves nothing built over the doorway.
+    template<> template<>
+    void sknavfeatures_object::test<28>()
+    {
+        LeafHistories h;
+        F32 t = 0.f;
+        for (; t <= DOORWAY_ESTABLISHED_SECONDS; t += 1.f)
+        {
+            observeLeaf(h[id(1)], shutLeaf(1), t);
+        }
+        ensure("shut and established", atEstablishedDoorway(h[id(1)]));
+        const std::vector<DoorEntity> shut = doorsNow({ shutLeaf(1) }, h);
+        observeLeaf(h[id(1)], openLeaf(1), t);
+        ensure("swinging: no longer at it", !atEstablishedDoorway(h[id(1)]));
+        const std::vector<DoorEntity> d = doorsNow({ openLeaf(1) }, h);
+        ensure("swinging: plane still known", d.size() == 1 && d[0].mPlaneKnown);
+        ensure("the same doorway", shut.size() == 1 && d[0].mPlanePoint == shut[0].mPlanePoint && d[0].mWidth == shut[0].mWidth
+                                       && d[0].mMin == shut[0].mMin && d[0].mMax == shut[0].mMax);
     }
 }

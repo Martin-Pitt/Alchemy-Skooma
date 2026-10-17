@@ -1158,8 +1158,34 @@ namespace sknav
         history.mLastSeen = now;
     }
 
+    bool establishedDoorway(const LeafHistory& history, FeaturePart& out)
+    {
+        if (!history.mSeen || history.mRests.empty())
+        {
+            return false;
+        }
+        const size_t i = std::max_element(history.mDwell.begin(), history.mDwell.end()) - history.mDwell.begin();
+        if (history.mDwell[i] < DOORWAY_ESTABLISHED_SECONDS)
+        {
+            return false;
+        }
+        out = history.mRests[i];
+        return true;
+    }
+
+    bool atEstablishedDoorway(const LeafHistory& history, F32 tolerance)
+    {
+        FeaturePart doorway;
+        return !history.mMoving && establishedDoorway(history, doorway) && samePose(history.mLast, doorway, tolerance);
+    }
+
     bool doorwayPose(const LeafHistory& history, FeaturePart& out)
     {
+        // A swing through an established doorway keeps it.
+        if (history.mMoving && establishedDoorway(history, out))
+        {
+            return true;
+        }
         if (!history.mSeen || history.mMoving || history.mRests.empty())
         {
             return false;

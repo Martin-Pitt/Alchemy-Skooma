@@ -243,6 +243,17 @@ private:
     std::unordered_map<LLUUID, PartFeature> mPartFeatures;
     /// Where each door leaf has rested this session, and the door id it was given.
     sknav::LeafHistories mLeaves;
+    /// The sim transform each leaf with an established doorway was last seen
+    /// at it with: what its record is built from while it swings.
+    struct LeafTransform
+    {
+        LLVector3 mPos;
+        LLQuaternion mRot;
+        U64 mRegion = 0;
+    };
+    std::unordered_map<LLUUID, LeafTransform> mDoorways;
+    /// This scan's sim transform of every leaf, kept until the scan finishes.
+    std::unordered_map<LLUUID, LeafTransform> mLeafTransforms;
     std::map<std::string, F32> mDemands;
     U64 mStamp = 0;
     F64 mRolesRequestedAt = -1.f;
