@@ -26,6 +26,7 @@
 
 #pragma once
 
+#include "alquerypool.h"
 #include "llcubemaparray.h"
 #include "llmemory.h"
 
@@ -99,6 +100,13 @@ public:
 
     // perform occlusion query/readback
     void doOcclusion(const LLVector4a& eye);
+
+    // In view, and the query out forgotten unread: what it says was asked of a view this state no longer follows.
+    void clearOcclusion()
+    {
+        mOccluded       = false;
+        mOcclusionQuery = {};
+    }
 
     // return false if this probe isn't currently relevant (for example, disabled due to graphics preferences)
     bool isRelevant() const;
@@ -183,8 +191,8 @@ public:
     bool mLinkedRelevant = false;
     // </SK:Nexii>
 
-    // occlusion culling state
-    GLuint mOcclusionQuery = 0;
+    // occlusion culling state: the last query of gGL's pool, and what the last one read said
+    ALQueryTicket mOcclusionQuery;
     bool mOccluded = false;
 
     ProbeType mType;

@@ -104,6 +104,7 @@
         "freetype"
       ]
     },
+    "pocketfft",
     "pugixml",
     "recastnavigation",
     "re2",
@@ -147,7 +148,6 @@
     "simdjson",
     "simdutf",
     "slua",
-    "tailslide",
     "tinyexr",
     "tinygltf",
     "v-hacd",
@@ -267,6 +267,17 @@
             "wer"
           ],
           "platform": "windows"
+        }
+      ]
+    },
+    "tests": {
+      "description": "Build the unit tests, on Catch2",
+      "dependencies": [
+        {
+          "name": "catch2",
+          "features": [
+            "thread-safe-assertions"
+          ]
         }
       ]
     },
