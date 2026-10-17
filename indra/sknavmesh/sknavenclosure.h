@@ -135,6 +135,7 @@ namespace sknav
 
     /// One mesh's answers. Positions are mesh-local.
     struct SkyMemo;
+    struct EnclosureMemo;
 
     struct EnclosureProduct
     {
@@ -150,6 +151,8 @@ namespace sknav
         std::vector<U32> mSpaceIds;            ///< per space the spaces pass cut, its id
         /// Each tile's sky reads, kept while its air and the sky map blocks they read stand.
         std::shared_ptr<const SkyMemo> mSkyMemo;
+        /// Each tile's graph and raw distances, what the next pass repairs rather than redoes.
+        std::shared_ptr<const EnclosureMemo> mMemo;
 
         const TileEnclosure* tile(const TileKey& key) const;
         /// The gap holding pos: detail where the tile has it, else coarse.
@@ -211,11 +214,22 @@ namespace sknav
         /// The product before anyone shares it, for the spaces pass to write
         /// each gap's space into.
         std::shared_ptr<EnclosureProduct> takeProduct();
+        /// Whether it repaired the previous answers rather than starting over.
+        bool repaired() const;
+        /// Tiles whose answers it worked out again, rather than kept.
+        U32 tilesAnswered() const;
+        /// Whether any tile's air, or any gap's bucket or flags, moved from the
+        /// previous answers: false means the previous spaces still stand.
+        bool layoutMoved() const;
 
     private:
         struct State;
         std::unique_ptr<State> mState;
     };
+
+    /// Copy the previous answers' spaces into a product over the same air, for
+    /// when the spaces pass is skipped.
+    void carrySpaces(EnclosureProduct& product, const EnclosureProduct& previous);
 
     /// Everything at once, for tests and tools.
     EnclosureProductPtr computeEnclosure(std::shared_ptr<const EnclosureInput> input);

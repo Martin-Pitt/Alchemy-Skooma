@@ -5922,7 +5922,7 @@
             <key>Type</key>
             <string>U32</string>
             <key>Value</key>
-            <integer>500</integer>
+            <integer>100</integer>
         </map>
         <key>SKNavBuildsInFlight</key>
         <map>
@@ -6237,7 +6237,7 @@
             <key>Type</key>
             <string>U32</string>
             <key>Value</key>
-            <integer>3000</integer>
+            <integer>100</integer>
         </map>
         <key>SKNavOverlayWind</key>
         <map>
