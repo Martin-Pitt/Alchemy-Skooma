@@ -32,18 +32,15 @@
 #include "llfocusmgr.h"
 #include "llpanel.h"
 #include "llrootview.h"
-#include "llstartup.h"
 #include "lluictrlfactory.h"
 #include "lltimer.h"
 #include "llviewercamera.h"
 #include "llviewerjoystick.h"
-#include "llviewerobject.h"
 #include "llviewerwindow.h"
 #include "rlvactions.h"
 #include "rlvhandler.h"
 
 #include <cmath>
-#include <unordered_set>
 
 using namespace skworldmap;
 
@@ -127,9 +124,18 @@ namespace
     }
 } // namespace
 
-SKMapMode::SKMapMode() = default;
+SKMapMode::SKMapMode()
+{
+    SKModalView::instance().registerMode(this);
+}
 
-SKMapMode::~SKMapMode() = default;
+SKMapMode::~SKMapMode()
+{
+    if (SKModalView::instanceExists())
+    {
+        SKModalView::getInstance()->unregisterMode(this);
+    }
+}
 
 // static
 bool SKMapMode::isOpen()
@@ -137,22 +143,14 @@ bool SKMapMode::isOpen()
     return instanceExists() && getInstance()->mOpen;
 }
 
-// static
-F64 SKMapMode::flycamScale(const LLVector3d& eye)
+F64 SKMapMode::flycamScale(const LLVector3d& eye) const
 {
-    return isOpen() ? flycamHeightScale(eye.mdV[VZ]) : 1.0;
+    return flycamHeightScale(eye.mdV[VZ]);
 }
 
-// static
-bool SKMapMode::rlvRestricted()
+bool SKMapMode::rlvRestricted() const
 {
-    if (!RlvActions::isRlvEnabled())
-    {
-        return false;
-    }
-    return gRlvHandler.hasBehaviour(RLV_BHVR_SHOWWORLDMAP) || gRlvHandler.hasBehaviour(RLV_BHVR_SETCAM_UNLOCK)
-        || gRlvHandler.hasBehaviour(RLV_BHVR_SETCAM) || gRlvHandler.hasBehaviour(RLV_BHVR_SETCAM_FOCUS)
-        || RlvActions::isCameraDistanceClamped() || RlvActions::isCameraPresetLocked();
+    return RlvActions::isRlvEnabled() && gRlvHandler.hasBehaviour(RLV_BHVR_SHOWWORLDMAP);
 }
 
 void SKMapMode::toggle()
@@ -173,48 +171,36 @@ bool SKMapMode::open()
     {
         return true;
     }
-    if (LLStartUp::getStartupState() < STATE_STARTED || !gViewerWindow || !gAgentCamera.isInitialized() || rlvRestricted())
+    // The modal view snapshots the world camera, leaves mouselook and stops the autopilot.
+    if (rlvRestricted() || !SKModalView::instance().claim(this, SKModalView::PRIORITY_MAP))
     {
         return false;
     }
 
-    // The world camera as it is now; mouselook is left so the map has a cursor.
-    mWorld.mMouselook = gAgentCamera.cameraMouselook();
-    mWorld.mFocusOnAvatar = gAgentCamera.getFocusOnAvatar();
-    // A camera that follows the avatar is kept relative to it, so it follows it again on close and the
-    // sim's camera moves with the agent while the map is open.
-    const LLVector3d agent = gAgent.getPositionGlobal();
-    const LLVector3d follow = mWorld.mFocusOnAvatar ? agent : LLVector3d::zero;
-    mWorld.mPosition = gAgentCamera.getCameraPositionGlobal() - follow;
-    mWorld.mFocus = gAgentCamera.getFocusGlobal() - follow;
-    LLViewerObject* focus_object = gAgentCamera.getFocusObject();
-    mWorld.mFocusObject = focus_object ? focus_object->getID() : LLUUID::null;
-    const LLViewerCamera* view = LLViewerCamera::getInstance();
-    mWorld.mViewOffset = gAgent.getPosGlobalFromAgent(view->getOrigin()) - follow;
-    mWorld.mAt = view->getAtAxis();
-    mWorld.mLeft = view->getLeftAxis();
-    mWorld.mUp = view->getUpAxis();
-    if (mWorld.mMouselook)
+    // The open signal captures the last world frame, which exists only when no other mode covered it.
+    if (SKModalView::top() == this)
     {
-        gAgentCamera.changeCameraToDefault();
+        mOpenSignal();
     }
-    gAgent.stopAutoPilot();
-
-    mOpenSignal();
     mOpen = true;
 
     if (!mHasMapCamera)
     {
         // Above the agent, looking the way the world camera did.
-        const LLVector3 at = view->getAtAxis();
+        const LLVector3 at = LLViewerCamera::getInstance()->getAtAxis();
         const F64 yaw = (std::fabs(at.mV[VX]) + std::fabs(at.mV[VY]) > 1.0e-3f) ? std::atan2(at.mV[VY], at.mV[VX]) : 0.0;
         mMapFocus = gAgent.getPositionGlobal();
         mMapFocus.mdV[VZ] = GROUND_Z;
         mMapPosition = mMapFocus - lookDirection(yaw, -START_ELEVATION) * START_DISTANCE;
         mHasMapCamera = true;
     }
-    gAgentCamera.setFocusOnAvatar(false, false);
-    gAgentCamera.setCameraPosAndFocusGlobal(mMapPosition, mMapFocus, LLUUID::null);
+    // Under a mode already on top the map waits, camera and input alike, for onTopChanged.
+    const bool on_top = SKModalView::top() == this;
+    if (on_top)
+    {
+        gAgentCamera.setFocusOnAvatar(false, false);
+        gAgentCamera.setCameraPosAndFocusGlobal(mMapPosition, mMapFocus, LLUUID::null);
+    }
 
     LLRootView* root = gViewerWindow->getRootView();
     LLView::Params p;
@@ -239,6 +225,14 @@ bool SKMapMode::open()
         mOverlay = overlay->getHandle();
     }
     root->sendChildToBack(input);
+    if (!on_top)
+    {
+        input->setVisible(false);
+        if (overlay)
+        {
+            overlay->setVisible(false);
+        }
+    }
 
     LL_INFOS("WorldMap") << "map mode opened" << LL_ENDL;
     return true;
@@ -259,26 +253,47 @@ void SKMapMode::close()
     {
         return;
     }
-    mMapPosition = gAgentCamera.getCameraPositionGlobal();
-    mMapFocus = gAgentCamera.getFocusGlobal();
+    if (SKModalView::top() == this) // under another mode the map kept its camera in onTopChanged
+    {
+        mMapPosition = gAgentCamera.getCameraPositionGlobal();
+        mMapFocus = gAgentCamera.getFocusGlobal();
+    }
     removeViews();
     mScene.release();
     mOpen = false;
-
-    // The world camera exactly as it was; a camera that followed the avatar follows it again from
-    // the same offset, wherever the avatar is now, without turning it.
-    const LLVector3d follow = mWorld.mFocusOnAvatar ? gAgent.getPositionGlobal() : LLVector3d::zero;
-    gAgentCamera.setCameraPosAndFocusGlobal(mWorld.mPosition + follow, mWorld.mFocus + follow, mWorld.mFocusObject);
-    if (mWorld.mFocusOnAvatar)
-    {
-        gAgentCamera.setFocusOnAvatar(true, false, false);
-    }
-    gAgentCamera.stopCameraAnimation();
-    if (mWorld.mMouselook)
-    {
-        gAgentCamera.changeCameraToMouselook(false);
-    }
+    // The world camera goes back as it was when the last modal view closes.
+    SKModalView::instance().release(this);
     LL_INFOS("WorldMap") << "map mode closed" << LL_ENDL;
+}
+
+void SKMapMode::onTopChanged(bool on_top)
+{
+    if (!mOpen)
+    {
+        return;
+    }
+    if (!on_top)
+    {
+        mMapPosition = gAgentCamera.getCameraPositionGlobal();
+        mMapFocus = gAgentCamera.getFocusGlobal();
+    }
+    for (const LLHandle<LLView>& handle : { mInput, mOverlay })
+    {
+        if (LLView* view = handle.get())
+        {
+            if (!on_top && gFocusMgr.getMouseCapture() == view)
+            {
+                gFocusMgr.setMouseCapture(nullptr);
+            }
+            view->setVisible(on_top);
+        }
+    }
+    mPanning = false;
+    if (on_top)
+    {
+        gAgentCamera.setFocusOnAvatar(false, false);
+        gAgentCamera.setCameraPosAndFocusGlobal(mMapPosition, mMapFocus, LLUUID::null);
+    }
 }
 
 void SKMapMode::shutdown()
@@ -367,47 +382,6 @@ void SKMapMode::pan(S32 x, S32 y)
     gAgentCamera.setCameraPosAndFocusGlobal(mPanView + offset, mPanView + (mPanFocus - mPanEye) + offset, LLUUID::null);
     gAgentCamera.stopCameraAnimation();
     gAgentCamera.skipCameraSmoothing();
-}
-
-// static
-bool SKMapMode::blocksAction(const std::string& function_name)
-{
-    static const std::unordered_set<std::string> avatar_actions = {
-        "jump", "push_down", "push_forward", "push_backward", "look_up", "look_down", "toggle_fly",
-        "turn_left", "turn_right", "slide_left", "slide_right", "stop_moving", "run_forward",
-        "run_backward", "run_left", "run_right", "toggle_run", "toggle_down", "toggle_sit",
-        "teleport_to", "walk_to",
-    };
-    return isOpen() && avatar_actions.count(function_name) > 0;
-}
-
-// static
-void SKMapMode::worldCameraForUpdate(LLVector3& position_agent, LLVector3& at, LLVector3& left, LLVector3& up)
-{
-    if (!isOpen())
-    {
-        return;
-    }
-    LLVector3d position;
-    if (worldCamera(position, at, left, up))
-    {
-        position_agent = gAgent.getPosAgentFromGlobal(position);
-    }
-}
-
-// static
-bool SKMapMode::worldCamera(LLVector3d& position_global, LLVector3& at, LLVector3& left, LLVector3& up)
-{
-    if (!isOpen())
-    {
-        return false;
-    }
-    const WorldCamera& world = getInstance()->mWorld;
-    position_global = (world.mFocusOnAvatar ? gAgent.getPositionGlobal() : LLVector3d::zero) + world.mViewOffset;
-    at = world.mAt;
-    left = world.mLeft;
-    up = world.mUp;
-    return true;
 }
 
 SKWorldMapFrame SKMapMode::frame() const

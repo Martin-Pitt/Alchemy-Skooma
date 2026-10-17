@@ -26,7 +26,7 @@
 
 #include "llhandle.h"
 #include "llsingleton.h"
-#include "lluuid.h"
+#include "skmodalview.h"
 #include "v3dmath.h"
 #include "v3math.h"
 #include "skworldmapscene.h"
@@ -36,13 +36,11 @@
 
 class LLView;
 
-/// While map mode is open the display loop draws the map instead of the world, the way it draws the
-/// progress screen while teleporting. The map is drawn from the viewer's own camera, so alt-cam, the
-/// Camera Controls floater, the flycam, the scroll wheel and the camera key bindings move it as they
-/// move the camera in-world; the camera's distance constraints are lifted while it is open. The
-/// world camera is snapshotted on open and put back on close, and the map camera is kept for the
-/// next time. The agent stays in the region: its updates keep flowing, carrying the world camera.
-class SKMapMode : public LLSingleton<SKMapMode>
+/// Map mode is a modal view: while it is open the display loop draws the map instead of the world. The
+/// map is drawn from the viewer's own camera, so alt-cam, the Camera Controls floater, the flycam, the
+/// scroll wheel and the camera key bindings move it as they move the camera in-world. The modal view
+/// snapshots the world camera and puts it back; the map camera is kept here for the next time.
+class SKMapMode : public LLSingleton<SKMapMode>, public SKModalMode
 {
     LLSINGLETON(SKMapMode);
     ~SKMapMode();
@@ -50,11 +48,6 @@ class SKMapMode : public LLSingleton<SKMapMode>
 public:
     /// True while the map replaces the world. Cheap enough for every frame.
     static bool isOpen();
-    /// RLVa holds the map shut: it hides the world map or locks the camera.
-    static bool rlvRestricted();
-    /// How much faster the flycam translates from `eye`: its height above the map over a person's
-    /// scale while the map is open, so it crosses regions low down and the grid high up; 1 otherwise.
-    static F64 flycamScale(const LLVector3d& eye);
 
     void toggle();
     bool open();
@@ -63,6 +56,20 @@ public:
     /// Drops the map's views, targets and tiles without touching the camera; called at viewer
     /// shutdown, while GL and the texture list are still up.
     void shutdown();
+
+    // SKModalMode
+    const char* getModalName() const override { return "world map"; }
+    void closeModal() override { close(); }
+    /// Under another mode the map keeps its camera and hides its input; on top again it takes both back.
+    void onTopChanged(bool on_top) override;
+    void shutdownModal() override { shutdown(); }
+    void renderModal(const LLRect& world_rect_raw) override { render(world_rect_raw); }
+    bool pickGround(S32 x, S32 y, LLVector3d& ground) const override { return groundUnderCursor(x, y, ground); }
+    /// The flycam's height above the map over a person's scale, so it crosses regions low down and the
+    /// grid high up.
+    F64 flycamScale(const LLVector3d& eye) const override;
+    /// RLVa hides the world map; the camera locks are the modal view's.
+    bool rlvRestricted() const override;
 
     /// Moves the camera and its focus across the map until the focus is over the agent.
     void recentre();
@@ -79,17 +86,6 @@ public:
     void pan(S32 x, S32 y);
     void endPan() { mPanning = false; }
 
-    /// Key and mouse bindings that move the avatar, which do nothing while the map is open.
-    static bool blocksAction(const std::string& function_name);
-
-    /// The camera the sim is told about in agent updates: the world camera while the map is open,
-    /// so the interest list stays where the agent is. Leaves the arguments alone otherwise.
-    static void worldCameraForUpdate(LLVector3& position_agent, LLVector3& at, LLVector3& left, LLVector3& up);
-
-    /// The world camera while the map is open, carried along with the agent, for whatever listens or
-    /// reports from the camera (agent updates, audio, voice). False, arguments untouched, when closed.
-    static bool worldCamera(LLVector3d& position_global, LLVector3& at, LLVector3& left, LLVector3& up);
-
     /// Fired as the map opens, while the last world frame is still in the targets: where a live
     /// impostor of the current region can be captured.
     typedef boost::signals2::signal<void()> open_signal_t;
@@ -98,17 +94,6 @@ public:
     SKWorldMapScene& scene() { return mScene; }
 
 private:
-    struct WorldCamera
-    {
-        bool mMouselook = false;
-        bool mFocusOnAvatar = true;
-        LLVector3d mPosition;       ///< relative to the agent when mFocusOnAvatar, else global
-        LLVector3d mFocus;          ///< likewise
-        LLUUID mFocusObject;
-        LLVector3d mViewOffset;     ///< the viewer camera, relative like mPosition, for agent updates and the ears
-        LLVector3 mAt, mLeft, mUp;
-    };
-
     SKWorldMapFrame frame() const;
     void removeViews();
 
@@ -116,7 +101,6 @@ private:
     bool mHasMapCamera = false;     ///< the map camera has been set once, so later opens resume it
     LLVector3d mMapPosition;
     LLVector3d mMapFocus;
-    WorldCamera mWorld;
 
     bool mPanning = false;
     LLVector3d mPanEye;

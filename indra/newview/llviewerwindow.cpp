@@ -27,7 +27,7 @@
 #include "llviewerprecompiledheaders.h"
 #include "llviewerwindow.h"
 #include "skoverviewcapture.h" // <SK:Nexii> tactical overview
-#include "skmapmode.h" // <SK:Nexii> 3D world map
+#include "skmodalview.h" // <SK:Nexii> modal view
 
 
 // system library includes
@@ -5542,7 +5542,7 @@ bool LLViewerWindow::rawSnapshot(LLImageRaw *raw, S32 image_width, S32 image_hei
     bool keep_window_aspect, bool is_texture, bool show_ui, bool show_hud, bool do_rebuild, bool no_post, bool show_balance, LLSnapshotModel::ESnapshotLayerType type, S32 max_size,
     const ALSnapshotCutout* cutout, bool* cutout_drawn)
 {
-    if (!raw || SKMapMode::isOpen()) // <SK:Nexii> 3D world map: the world is not drawn while the map is open
+    if (!raw || SKModalView::worldCovered()) // <SK:Nexii> modal view: the world is not drawn while covered
     {
         return false;
     }
@@ -6064,7 +6064,7 @@ bool LLViewerWindow::rawSnapshot(LLImageRaw *raw, S32 image_width, S32 image_hei
 bool LLViewerWindow::simpleSnapshot(LLImageRaw* raw, S32 image_width, S32 image_height, const int num_render_passes)
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_APP;
-    if (SKMapMode::isOpen()) // <SK:Nexii> 3D world map: the world is not drawn while the map is open
+    if (SKModalView::worldCovered()) // <SK:Nexii> modal view: the world is not drawn while covered
     {
         return false;
     }

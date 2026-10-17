@@ -90,7 +90,7 @@
 #include "pipeline.h"
 #include "skoutlinecapture.h" // <SK:Nexii> outline capture
 #include "skoverviewcapture.h" // <SK:Nexii> overview capture
-#include "skmapmode.h" // <SK:Nexii> 3D world map
+#include "skmodalview.h" // <SK:Nexii> modal view
 
 #include <filesystem>
 #include <iomanip>
@@ -144,13 +144,13 @@ void render_ui_3d();
 void render_ui_2d();
 void render_disconnected_background();
 
-// <SK:Nexii> 3D world map: a map frame keeps a world frame's object and image work, so nothing piles up
-// for close, and draws the map and the UI in place of the world.
-static bool sSKMapFrame = false;
+// <SK:Nexii> modal view: a modal frame keeps a world frame's object and image work, so nothing piles up
+// for close, and draws the top modal view and the UI in place of the world.
+static bool sSKModalFrame = false;
 
-static void sk_display_map(bool rebuild)
+static void sk_display_modal(bool rebuild)
 {
-    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("World Map Frame");
+    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("Modal View Frame");
     LLHUDManager::getInstance()->updateEffects();
     LLHUDObject::updateAll();
     const F32 max_geom_update_time = llmin(0.005f * 10.f * gFrameIntervalSeconds.value(), 0.005f);
@@ -171,11 +171,11 @@ static void sk_display_map(bool rebuild)
     gGL.setColorMask(true, true);
     glClearColor(0.f, 0.f, 0.f, 0.f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    SKMapMode::instance().render(gViewerWindow->getWorldViewRectRaw());
+    SKModalView::instance().render(gViewerWindow->getWorldViewRectRaw());
 
-    sSKMapFrame = true;
+    sSKModalFrame = true;
     render_ui();
-    sSKMapFrame = false;
+    sSKModalFrame = false;
     swap();
 }
 // </SK:Nexii>
@@ -763,24 +763,21 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
 
     gPipeline.resetFrameStats();    // Reset per-frame statistics.
 
-    // <SK:Nexii> 3D world map: map mode draws the map in place of the world, as the disconnected
-    // screen does above; a teleport, a disconnect, logging out, a GL restore or RLVa closes it.
-    bool sk_map_frame = false;
-    if (SKMapMode::isOpen())
+    // <SK:Nexii> modal view: a modal view draws in place of the world, as the disconnected screen does
+    // above; a teleport, a disconnect, logging out, a GL restore or RLVa closes it.
+    bool sk_modal_frame = false;
+    if (SKModalView::worldCovered())
     {
-        if (gTeleportDisplay || gDisconnected || gRestoreGL || LLApp::isExiting() || LLAppViewer::instance()->logoutRequestSent() || SKMapMode::rlvRestricted())
+        const bool leaving_world = gTeleportDisplay || gDisconnected || gRestoreGL || LLApp::isExiting() || LLAppViewer::instance()->logoutRequestSent();
+        if (SKModalView::instance().closeIfNeeded(leaving_world) && !for_snapshot)
         {
-            SKMapMode::instance().close();
-        }
-        else if (!for_snapshot)
-        {
-            sk_map_frame = true;
-            sk_display_map(rebuild);
+            sk_modal_frame = true;
+            sk_display_modal(rebuild);
         }
     }
     // </SK:Nexii>
 
-    if (!gDisconnected && !sk_map_frame && !LLApp::isExiting()) // <SK:Nexii> 3D world map: no world in a map frame
+    if (!gDisconnected && !sk_modal_frame && !LLApp::isExiting()) // <SK:Nexii> modal view: no world in a modal frame
     {
         // The water's field around the main camera, before the mirrors, the shadow fit and the probes read it.
         gPipeline.mWaterSurface.update();
@@ -1650,7 +1647,7 @@ void render_ui(F32 zoom_factor, int subfield)
     }
 
     // apply gamma correction and post effects
-    if (!sSKMapFrame && (gSnapshot || !SKOverviewCapture::worldHidden())) // <SK:Nexii> tactical overview: no post under it; 3D world map: the map has already drawn its frame
+    if (!sSKModalFrame && (gSnapshot || !SKOverviewCapture::worldHidden())) // <SK:Nexii> tactical overview: no post under it; modal view: the modal view has already drawn its frame
     {
         gPipeline.renderFinalize();
     }
@@ -1683,7 +1680,7 @@ static void render_ui_over_world()
 
 
         LL_PROFILE_ZONE_NAMED_CATEGORY_UI("HUD");
-        if (!sSKMapFrame) // <SK:Nexii> 3D world map: no world overlays over the map
+        if (!sSKModalFrame) // <SK:Nexii> modal view: no world overlays over a modal view
         {
             render_hud_elements();
         }
@@ -1694,7 +1691,7 @@ static void render_ui_over_world()
             LLVfxManager::instance().runEffect(EVisualEffect::RlvOverlay);
         }
 // [/RLVa:KB]
-        if (!sSKMapFrame) // <SK:Nexii> 3D world map: no HUD attachments over the map
+        if (!sSKModalFrame) // <SK:Nexii> modal view: no HUD attachments over a modal view
         {
             render_hud_attachments();
         }
@@ -1731,7 +1728,7 @@ static void render_ui_over_world()
         if (render_ui)
         {
             LL_PROFILE_ZONE_NAMED_CATEGORY_UI("UI 2D");
-            if (!SKOverviewCapture::tacticalShown() && !sSKMapFrame) // <SK:Nexii> tactical overview, 3D world map: no world name tags or hover text over either
+            if (!SKOverviewCapture::tacticalShown() && !sSKModalFrame) // <SK:Nexii> tactical overview, modal view: no world name tags or hover text over either
             {
                 LLHUDObject::renderAll();
             }
@@ -1830,7 +1827,7 @@ void draw_axes()
 
 void render_ui_3d()
 {
-    if (sSKMapFrame) // <SK:Nexii> 3D world map: the world's 3D UI belongs to the world camera
+    if (sSKModalFrame) // <SK:Nexii> modal view: the world's 3D UI belongs to the world camera
     {
         return;
     }

@@ -39,7 +39,7 @@
 #include "llwindow.h"
 #include "llagent.h"
 #include "llagentcamera.h"
-#include "skmapmode.h" // <SK:Nexii> 3D world map
+#include "skmodalview.h" // <SK:Nexii> modal view
 #include "llfocusmgr.h"
 
 #if LL_WINDOWS
@@ -921,7 +921,7 @@ void LLViewerJoystick::moveObjects(bool reset)
 // -----------------------------------------------------------------------------
 void LLViewerJoystick::moveAvatar(bool reset)
 {
-    if (SKMapMode::isOpen()) // <SK:Nexii> 3D world map: the avatar stays put while the map is open
+    if (SKModalView::worldCovered()) // <SK:Nexii> modal view: the avatar stays put while the world is covered
     {
         return;
     }
@@ -1299,7 +1299,7 @@ void LLViewerJoystick::moveFlycam(bool reset)
         }
     }
 
-    sFlycamPosition += LLVector3d(sDelta[VX], sDelta[VY], sDelta[VZ]) * sFlycamRotation * SKMapMode::flycamScale(sFlycamPosition); // <SK:Nexii> 3D world map
+    sFlycamPosition += LLVector3d(sDelta[VX], sDelta[VY], sDelta[VZ]) * sFlycamRotation * SKModalView::flycamScale(sFlycamPosition); // <SK:Nexii> modal view
 
     LLMatrix3 rot_mat(sDelta[3], sDelta[4], sDelta[5]);
     sFlycamRotation = LLQuaternion(rot_mat)*sFlycamRotation;

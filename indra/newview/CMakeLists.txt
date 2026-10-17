@@ -1023,6 +1023,8 @@ if(AL_BUILD_VIEWER)
     # <SK:Nexii> motion recorder
     skmotionrecorder.cpp
     # </SK:Nexii>
+    skmodalview.cpp # <SK:Nexii> modal view
+    skmodalviewmath.cpp # <SK:Nexii> modal view
     skmapmode.cpp # <SK:Nexii> 3D world map
     skworldmapmath.cpp # <SK:Nexii> 3D world map
     skworldmapscene.cpp # <SK:Nexii> 3D world map
@@ -1930,6 +1932,8 @@ if(AL_BUILD_VIEWER)
     # <SK:Nexii> motion recorder
     skmotionrecorder.h
     # </SK:Nexii>
+    skmodalview.h # <SK:Nexii> modal view
+    skmodalviewmath.h # <SK:Nexii> modal view
     skmapmode.h # <SK:Nexii> 3D world map
     skworldmapmath.h # <SK:Nexii> 3D world map
     skworldmapscene.h # <SK:Nexii> 3D world map
@@ -2726,6 +2730,7 @@ if(AL_BUILD_TESTS)
       tests/llvocache_test.cpp
       tests/lutcube_test.cpp
       tests/noise_test.cpp
+      tests/skmodalviewmath_test.cpp # <SK:Nexii> modal view
       tests/skworldmapmath_test.cpp # <SK:Nexii> 3D world map
       tests/skoutlinepolicy_test.cpp # <SK:Nexii> outline capture
     UNIT
@@ -2806,6 +2811,7 @@ if(AL_BUILD_TESTS)
       llviewercontrollistener.cpp
       lutcube.cpp
       noise.cpp
+      skmodalviewmath.cpp # <SK:Nexii> modal view
       skworldmapmath.cpp # <SK:Nexii> 3D world map
       skoutlinepolicy.cpp # <SK:Nexii> outline capture
     LIBRARIES llui alscript ll::slua llxml ll::pocketfft ${test_libs}
