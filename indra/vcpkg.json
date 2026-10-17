@@ -104,6 +104,7 @@
         "freetype"
       ]
     },
+    "pocketfft",
     "pugixml",
     "recastnavigation",
     "re2",
