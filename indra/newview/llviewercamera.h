@@ -131,9 +131,6 @@ public:
     // getFar() stays the draw distance.
     void setProjectionFar(F32 projection_far) { mProjectionFar = projection_far; }
     F32 getProjectionFar() const { return mProjectionFar; }
-    // Whether the main view's projection is infinite; unlike getProjectionFar(), probe captures never change it.
-    void setMainViewInfinite(bool infinite) { mMainViewInfinite = infinite; }
-    bool isMainViewInfinite() const { return mMainViewInfinite; }
     // <SK:Nexii> render/vertical-reach: how far above and below the camera scenery is drawn this view; 0 when to the draw distance.
     void setVerticalReach(F32 vertical_reach) { mVerticalReach = vertical_reach; }
     F32 getVerticalReach() const { return mVerticalReach; }
@@ -159,7 +156,6 @@ protected:
     F32                 mZoomFactor;
     S16                 mZoomSubregion;
     F32                 mProjectionFar = FINITE_PROJECTION_FAR;
-    bool                mMainViewInfinite = false;
     F32                 mVerticalReach = 0.f; // <SK:Nexii> render/vertical-reach
 
 public:
