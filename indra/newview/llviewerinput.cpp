@@ -693,8 +693,7 @@ bool start_chat( EKeystate s )
     if (KEYSTATE_DOWN != s) return true;
 
     // start chat
-    static LLCachedControl<bool> sChatInWindow(gSavedSettings, "AlchemyNearbyChatInput", true);
-    if (!sChatInWindow)
+    if (!ALChatBar::shouldUseChatBar())
     {
         LLFloaterIMNearbyChat::startChat(nullptr);
     }
@@ -711,8 +710,7 @@ bool start_gesture( EKeystate s )
     if (KEYSTATE_UP == s &&
         ! (focus_ctrlp && focus_ctrlp->acceptsTextInput()))
     {
-        static LLCachedControl<bool> sChatInWindow(gSavedSettings, "AlchemyNearbyChatInput", true);
-        if (!sChatInWindow)
+        if (!ALChatBar::shouldUseChatBar())
         {
             if ((LLFloaterReg::getTypedInstance<LLFloaterIMNearbyChat>("nearby_chat"))->getCurrentChat().empty())
             {
