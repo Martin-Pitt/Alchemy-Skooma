@@ -77,26 +77,6 @@ namespace
                     shape->mTriangles.push_back(submesh.mPositions[submesh.mIndices[ref.mTriangle * 3 + v]]);
                 }
             }
-
-            // The simulator fits the physics mesh's bounds to the object's box, each axis on its own: the same block
-            // comes back for an upload at any scale, and its MOPP origin is the physics mesh's lowest corner.
-            LLVector3 lo(F32_MAX, F32_MAX, F32_MAX);
-            LLVector3 hi(-F32_MAX, -F32_MAX, -F32_MAX);
-            for (const SKPhysicsMeshSubmesh& submesh : physics_mesh.mSubmeshes)
-            {
-                for (const LLVector3& p : submesh.mPositions)
-                {
-                    update_min_max(lo, hi, p);
-                }
-            }
-            for (LLVector3& p : shape->mTriangles)
-            {
-                for (S32 k = 0; k < 3; ++k)
-                {
-                    const F32 range = hi.mV[k] - lo.mV[k];
-                    p.mV[k] = range > 1e-6f ? (p.mV[k] - lo.mV[k]) / range - 0.5f : 0.f;
-                }
-            }
             shape->mHasMopp = true;
         }
         out = shape;
