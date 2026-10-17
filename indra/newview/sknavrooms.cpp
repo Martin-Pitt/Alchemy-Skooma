@@ -874,7 +874,7 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
 
     // Wind follows the rooms: a mesh whose spaces landed builds its slabs next, on the rooms it has.
     // Churn delays only a refresh, and only boundedly; a mesh with no slabs builds them at once.
-    static LLCachedControl<U32> wind_settle_ms(gSavedSettings, "SKNavWindSettleMs", 100);
+    static LLCachedControl<U32> wind_settle_ms(gSavedSettings, "SKNavWindSettleMs", 1000);
     for (auto& entry : mMeshes)
     {
         MeshState& state = entry.second;
