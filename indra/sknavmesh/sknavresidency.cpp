@@ -61,6 +61,7 @@ namespace sknav
     {
         auto out = std::make_shared<EnclosureProduct>(product);
         out->mSkyMemo.reset();      // it holds the airs it read: they must be free to go
+        out->mMemo.reset();
         for (TileEnclosure& t : out->mTiles)
         {
             if (const auto it = swap.find(t.mKey); it != swap.end())
