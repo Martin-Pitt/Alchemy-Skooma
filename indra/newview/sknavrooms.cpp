@@ -589,7 +589,7 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
         return;
     }
     LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknr - update");
-    static LLCachedControl<U32> settle_ms(gSavedSettings, "SKNavRoomsSettleMs", 500);
+    static LLCachedControl<U32> settle_ms(gSavedSettings, "SKNavRoomsSettleMs", 100);
     const F64 now = LLTimer::getTotalSeconds();
 
     // A publish moves the navmesh's revision; only then can a mesh's air have moved.
@@ -810,7 +810,7 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
 
     // Wind follows the rooms: a mesh whose spaces landed builds its slabs next, on the rooms it has.
     // Churn delays only a refresh, and only boundedly; a mesh with no slabs builds them at once.
-    static LLCachedControl<U32> wind_settle_ms(gSavedSettings, "SKNavWindSettleMs", 3000);
+    static LLCachedControl<U32> wind_settle_ms(gSavedSettings, "SKNavWindSettleMs", 100);
     for (auto& entry : mMeshes)
     {
         MeshState& state = entry.second;
