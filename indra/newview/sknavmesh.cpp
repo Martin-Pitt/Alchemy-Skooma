@@ -213,7 +213,7 @@ bool SKNavMesh::overlayActive()
     // in the way of what they are for.
     return gSavedSettings.getBOOL("SKNavOverlayWalls") || gSavedSettings.getBOOL("SKNavOverlayFaces") || gSavedSettings.getBOOL("SKNavOverlayRunoff")
         || gSavedSettings.getBOOL("SKNavOverlayCensus") || gSavedSettings.getBOOL("SKNavOverlayFeatures")
-        || gSavedSettings.getU32("SKNavOverlayEnclosure") != 0 || gSavedSettings.getBOOL("SKNavOverlaySpaces")
+        || gSavedSettings.getBOOL("SKNavOverlaySpaces")
         || gSavedSettings.getBOOL("SKNavOverlayWind") || gSavedSettings.getU32("SKNavOverlayAir") != 0;
 }
 
@@ -5683,7 +5683,6 @@ void SKNavMesh::refreshOverlay()
     static LLCachedControl<bool> show_walls(gSavedSettings, "SKNavOverlayWalls", true);
     static LLCachedControl<bool> show_faces(gSavedSettings, "SKNavOverlayFaces", false);
     static LLCachedControl<bool> show_links(gSavedSettings, "SKNavOverlayLinks", true);
-    static LLCachedControl<U32> show_enclosure(gSavedSettings, "SKNavOverlayEnclosure", 0);
     static LLCachedControl<bool> show_spaces(gSavedSettings, "SKNavOverlaySpaces", false);
     static LLCachedControl<bool> show_wind(gSavedSettings, "SKNavOverlayWind", false);
     static LLCachedControl<F32> wind_heading(gSavedSettings, "SKNavOverlayWindHeading", -1.f);
@@ -5750,8 +5749,7 @@ void SKNavMesh::refreshOverlay()
     key = mixF32(key, static_cast<F32>(peek));
     key = mixF32(key, eye);
     key = mix(key, mHasMark ? 1ull : 0ull);
-    key = mix(key, static_cast<U64>(show_enclosure));
-    key = mix(key, show_enclosure || show_spaces ? mRooms->revision() : 0ull);
+    key = mix(key, show_spaces ? mRooms->revision() : 0ull);
     key = mix(key, show_spaces ? 1ull : 0ull);
     // The spaces layer greys the portals an annotation has crossed out, so
     // it re-gathers when the marks move.
@@ -5774,20 +5772,9 @@ void SKNavMesh::refreshOverlay()
     key = mix(key, static_cast<U64>(show_air));
     if (show_air)
     {
-        static LLCachedControl<U32> air_source(gSavedSettings, "SKNavOverlayAirSource", 0);
-        static LLCachedControl<F32> air_slice(gSavedSettings, "SKNavOverlayAirSlice", 0.f);
-        static LLCachedControl<bool> air_slice_camera(gSavedSettings, "SKNavOverlayAirSliceCamera", false);
         static LLCachedControl<U32> air_budget(gSavedSettings, "SKNavOverlayAirBudget", 1000000);
-        key = mix(key, static_cast<U64>(air_source));
-        key = mixF32(key, air_slice);
-        key = mix(key, air_slice_camera ? 1ull : 0ull);
         key = mix(key, static_cast<U64>(air_budget));
         key = mix(key, mRooms->revision());
-        // The agent's feet in quarter metres, so the slice follows it up a stair.
-        if (air_slice > 0.f && !air_slice_camera)
-        {
-            key = mix(key, static_cast<U64>(std::llround(gAgent.getPositionGlobal().mdV[VZ] * 4.0)));
-        }
     }
     if (mHasMark)
     {
@@ -5815,8 +5802,6 @@ void SKNavMesh::refreshOverlay()
     // where the camera is now; the fade waits for upload() and bakes there.
     mOverlay.setEdgeWidth(llclamp(static_cast<F32>(edge_width), 1.f, 8.f), camera_agent, fov_y, viewport_height);
     mOverlay.setFade(camera_agent, static_cast<F32>(reach), static_cast<F32>(reach * 0.8));
-    // Floors tinted by how enclosed their air is; a layer of its own, like the walls.
-    mRooms->gatherOverlay(mOverlay, camera, reach, show_enclosure, opaque);
     if (show_spaces)
     {
         const SKNavAnnotator& annotator = SKNavAnnotator::instance();
