@@ -306,12 +306,6 @@ namespace sknav
                         ok = sink.quad(c[0], c[1], c[2], c[3], withAlpha(spaceColour(id), (id ? 0.55f : 0.25f) * dim));
                         break;
                     }
-                    case AirDebugMode::INDOOR:
-                    {
-                        const LLColor4 colour = in.mGapColour ? in.mGapColour[i] : LLColor4(0.5f, 0.5f, 0.5f, 1.f);
-                        ok = sink.quad(c[0], c[1], c[2], c[3], withAlpha(colour, 0.55f * dim));
-                        break;
-                    }
                     case AirDebugMode::CLEARANCE:
                         ok = sink.quad(c[0], c[1], c[2], c[3], withAlpha(airClearColour(g.mClear), 0.55f * dim));
                         break;

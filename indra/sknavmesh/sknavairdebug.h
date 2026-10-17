@@ -43,8 +43,7 @@ namespace sknav
         STAMP = 4,      ///< AVATAR polygons by the space they were stamped with; drawn by the viewer, not here
         CLEARANCE = 5,  ///< floors by chamfer clearance
         FACES = 6,      ///< true wall faces over the cell edges they correct
-        INDOOR = 7,     ///< floors by how indoors their gap is; the colours are the viewer's
-        COUNT = 8
+        COUNT = 7
     };
 
     /// Where the gathered geometry goes. Each call returns false once the
@@ -69,7 +68,6 @@ namespace sknav
         S32 mClimb = 6;                 ///< height units within which a neighbour's floor or ceiling is the same
         F32 mOpenTick = 0.5f;           ///< metres an open gap's tick stands over its floor
         const U32* mGapSpace = nullptr; ///< per gap of the air, its space id, 0 for none; the space mode's colours
-        const LLColor4* mGapColour = nullptr; ///< per gap of the air, the indoor mode's colour; grey for none
     };
 
     struct AirDebugStats

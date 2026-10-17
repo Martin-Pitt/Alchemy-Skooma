@@ -184,6 +184,10 @@ public:
     bool settlingIn(const LLVector3d& min, const LLVector3d& max) const;
     std::string statsLine() const;
 
+    /// Tint the floor of every gap near the camera by e (mode 1) or by bucket
+    /// (mode 2), from the coarse answers. Agent coordinates.
+    void gatherOverlay(SKNavOverlayGeom& geom, const LLVector3d& camera, F64 reach, U32 mode, bool opaque) const;
+
     /// Fill each space's floor near the camera in a colour of its own, from
     /// the coarse answers, and draw its portals: doors red, stairs lime,
     /// openings cyan, dashed without a lintel. Agent coordinates. Portals

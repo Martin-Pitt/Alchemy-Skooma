@@ -164,6 +164,21 @@
              tool_tip="Colour the edges where tiles meet by whether Detour joined them to the next tile. Part of the surface, so it needs Draw the navmesh"
              top_pad="4"
              width="292" />
+            <combo_box
+             control_name="SKNavOverlayEnclosure"
+             follows="left|top"
+             height="20"
+             label="Enclosure"
+             layout="topleft"
+             left="8"
+             name="overlay_enclosure"
+             tool_tip="Tint the floors by how enclosed their air is, from the rooms pass: blue outdoors, amber sheltered, red indoors, grey where nothing answered. By e shades between them"
+             top_pad="6"
+             width="292">
+                <combo_box.item label="Enclosure: off" value="0" name="enclosure_off" />
+                <combo_box.item label="Enclosure: by indoorness (e)" value="1" name="enclosure_e" />
+                <combo_box.item label="Enclosure: by bucket" value="2" name="enclosure_bucket" />
+            </combo_box>
             <check_box
              height="19"
              label="Spaces and portals"
@@ -221,8 +236,49 @@
                 <combo_box.item label="Air: polygons by stamped space" value="4" name="air_stamp" />
                 <combo_box.item label="Air: clearance" value="5" name="air_clearance" />
                 <combo_box.item label="Air: wall face offsets" value="6" name="air_faces" />
-                <combo_box.item label="Air: floors by indoorness" value="7" name="air_indoor" />
             </combo_box>
+            <combo_box
+             control_name="SKNavOverlayAirSource"
+             follows="left|top"
+             height="20"
+             layout="topleft"
+             left="24"
+             name="overlay_air_source"
+             tool_tip="Which tiles' air to draw. Far tiles carry coarse air: dimmer, and framed in violet"
+             top_pad="4"
+             width="276">
+                <combo_box.item label="Detail and coarse air" value="0" name="air_both" />
+                <combo_box.item label="Detail air only" value="1" name="air_detail" />
+                <combo_box.item label="Coarse air only" value="2" name="air_coarse" />
+            </combo_box>
+            <slider
+             control_name="SKNavOverlayAirSlice"
+             decimal_digits="1"
+             follows="left|top"
+             height="20"
+             increment="0.5"
+             initial_value="0"
+             label="Slice (m)"
+             label_width="80"
+             layout="topleft"
+             left="24"
+             max_val="20"
+             min_val="0"
+             name="overlay_air_slice"
+             tool_tip="Draw only the air whose floor is within this many metres of your floor, so storeys do not stack. 0 draws every floor"
+             top_pad="4"
+             width="276" />
+            <check_box
+             height="19"
+             label="Slice at the camera's floor"
+             layout="topleft"
+             follows="left|top"
+             left="24"
+             name="overlay_air_slice_camera"
+             control_name="SKNavOverlayAirSliceCamera"
+             tool_tip="Centre the slice on the floor under the camera rather than under your avatar"
+             top_pad="4"
+             width="276" />
             <check_box
              height="19"
              label="X-ray vision"
