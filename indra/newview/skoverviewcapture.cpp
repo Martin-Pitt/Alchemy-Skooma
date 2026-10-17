@@ -1141,45 +1141,45 @@ bool SKOverviewCapture::captureMap(RegionMap& map, LLViewerRegion* region, bool 
 std::shared_ptr<const std::set<std::pair<S32, S32>>> SKOverviewCapture::roomAt(const LLVector3d& floor)
 {
     LL_PROFILE_ZONE_SCOPED;
-    // The air's rooms need no navmesh: flood the indoor air gaps whose floor is this one, out from the point.
+    // The air's rooms need no navmesh: flood the indoor air gaps whose floor is the point's gap's, out from the point.
     const F64 SAME_FLOOR_M = 0.6;
     const S32 MAX_CELLS = 16384;
     const F64 now = LLFrameTimer::getUptimeSeconds().value();
     const std::pair<S32, S32> start((S32)std::floor(floor.mdV[VX] / ROOM_CELL_M), (S32)std::floor(floor.mdV[VY] / ROOM_CELL_M));
     mRooms.erase(std::remove_if(mRooms.begin(), mRooms.end(), [now](const Room& r) { return now - r.mAt > 5.0; }), mRooms.end());
-    for (const Room& room : mRooms)
-    {
-        if (std::fabs(room.mFloor - floor.mdV[VZ]) < SAME_FLOOR_M && room.mCells->count(start))
-        {
-            return room.mCells;
-        }
-    }
     const SKNavWorldViewPtr world = SKNavMesh::instanceExists() ? SKNavMesh::instance().view() : nullptr;
     if (!world)
     {
         return {};
     }
-    auto indoorAt = [&](const std::pair<S32, S32>& cell, F64& gap_floor)
-    {
-        const LLVector3d at((cell.first + 0.5) * ROOM_CELL_M, (cell.second + 0.5) * ROOM_CELL_M, floor.mdV[VZ] + 1.0);
-        SKNavWorldView::SpaceId id;
-        sknav::Enclosure gap;
-        if (!world->airGapAt(at, id, gap) || gap.mBucket != sknav::EnclosureBucket::INDOORS)
-        {
-            return false;
-        }
-        gap_floor = gap.mFloor;
-        return std::fabs(gap.mFloor - floor.mdV[VZ]) < SAME_FLOOR_M;
-    };
-    F64 start_floor = 0.0;
-    if (!indoorAt(start, start_floor))
+    // The room's floor is the floor of the air column the point is in, not the point's own height.
+    SKNavWorldView::SpaceId start_id;
+    sknav::Enclosure start_gap;
+    if (!world->airGapAt(LLVector3d(floor.mdV[VX], floor.mdV[VY], floor.mdV[VZ] + 0.3), start_id, start_gap) ||
+        start_gap.mBucket != sknav::EnclosureBucket::INDOORS)
     {
         return {};
     }
+    const F64 start_floor = start_gap.mFloor;
+    for (const Room& room : mRooms)
+    {
+        if (std::fabs(room.mFloor - start_floor) < SAME_FLOOR_M && room.mCells->count(start))
+        {
+            return room.mCells;
+        }
+    }
+    auto indoorAt = [&](const std::pair<S32, S32>& cell)
+    {
+        const LLVector3d at((cell.first + 0.5) * ROOM_CELL_M, (cell.second + 0.5) * ROOM_CELL_M, start_floor + 1.0);
+        SKNavWorldView::SpaceId id;
+        sknav::Enclosure gap;
+        return world->airGapAt(at, id, gap) && gap.mBucket == sknav::EnclosureBucket::INDOORS &&
+               std::fabs(gap.mFloor - start_floor) < SAME_FLOOR_M;
+    };
     Room room;
     room.mCells = std::make_shared<std::set<std::pair<S32, S32>>>();
     room.mAt = now;
-    room.mFloor = floor.mdV[VZ];
+    room.mFloor = start_floor;
     std::vector<std::pair<S32, S32>> todo{ start };
     room.mCells->insert(start);
     while (!todo.empty() && (S32)room.mCells->size() < MAX_CELLS)
@@ -1190,8 +1190,7 @@ std::shared_ptr<const std::set<std::pair<S32, S32>>> SKOverviewCapture::roomAt(c
         for (const auto& step : STEPS)
         {
             const std::pair<S32, S32> next(cell.first + step[0], cell.second + step[1]);
-            F64 gap_floor = 0.0;
-            if (!room.mCells->count(next) && indoorAt(next, gap_floor))
+            if (!room.mCells->count(next) && indoorAt(next))
             {
                 room.mCells->insert(next);
                 todo.push_back(next);
