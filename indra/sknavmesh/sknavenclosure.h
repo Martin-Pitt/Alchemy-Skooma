@@ -140,6 +140,7 @@ namespace sknav
     struct EnclosureProduct
     {
         U64 mGeneration = 0;
+        U64 mSerial = 0;                       ///< unique to this product and never reused, unlike its address
         std::vector<TileEnclosure> mTiles;     ///< sorted by key
         U32 mGapCount = 0;
         U32 mUnknownGaps = 0;
@@ -218,14 +219,17 @@ namespace sknav
         bool repaired() const;
         /// Tiles whose answers it worked out again, rather than kept.
         U32 tilesAnswered() const;
-        /// Whether any tile's air, or any gap's bucket or flags, moved from the
-        /// previous answers: false means the previous spaces still stand.
+        /// Whether any tile's air, or any answer the spaces pass reads, moved
+        /// from the previous answers: false means the previous spaces still stand.
         bool layoutMoved() const;
 
     private:
         struct State;
         std::unique_ptr<State> mState;
     };
+
+    /// A serial no other enclosure product has had.
+    U64 nextEnclosureSerial();
 
     /// Copy the previous answers' spaces into a product over the same air, for
     /// when the spaces pass is skipped.

@@ -27,9 +27,12 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "sknavtestscene.h"
+#include "../sknavresidency.h"
+#include "../sknavwind.h"
 
 #include "llstring.h"
 
+#include <chrono>
 #include <cstdio>
 #include <iostream>
 #include <sstream>
@@ -190,6 +193,45 @@ namespace
         return k;
     }
 
+    /// One landing as the viewer makes it: spaces cut again, or kept when the repair says the layout stands.
+    struct Landed
+    {
+        EnclosureProductPtr mEnclosure;
+        RoomsProductPtr mRooms;
+        bool mKept = false;
+        std::string mFresh;         ///< what a fresh spaces pass gives over the same answers
+    };
+
+    Landed land(const std::shared_ptr<const EnclosureInput>& in, const RoomsProductPtr& previous)
+    {
+        EnclosurePass pass(in);
+        while (!pass.step(1u << 30))
+        {
+        }
+        auto rooms_in = std::make_shared<RoomsInput>();
+        rooms_in->mGeneration = in->mGeneration;
+        rooms_in->mMeshKey = 42;
+        rooms_in->mMeshOrigin = in->mMeshOrigin;
+        rooms_in->mPrevious = previous;
+        auto fresh_enc = std::make_shared<EnclosureProduct>(*pass.product());
+        const RoomsProductPtr fresh = computeSpaces(rooms_in, fresh_enc);
+        Landed l;
+        l.mFresh = dumpRooms(*fresh_enc, *fresh);
+        std::shared_ptr<EnclosureProduct> product = pass.takeProduct();
+        if (previous && pass.repaired() && !pass.layoutMoved())
+        {
+            carrySpaces(*product, *in->mPrevious);
+            l.mRooms = previous;
+            l.mKept = true;
+        }
+        else
+        {
+            l.mRooms = computeSpaces(rooms_in, product);
+        }
+        l.mEnclosure = product;
+        return l;
+    }
+
     /// Two rooms with a door between them and one out, across the seam of two tiles.
     Scene building()
     {
@@ -209,11 +251,12 @@ namespace
         return s;
     }
 
-    void editSequence(bool sky)
+    void editSequence(bool sky, bool sealed = true)
     {
-        const std::string tag = sky ? "with sky: " : "no sky: ";
+        const std::string tag = std::string(sky ? "with sky: " : "no sky: ") + (sealed ? "" : "unsealed: ");
         Scene s = building();
         auto in = s.input(2);
+        in->mParams.mSealedIndoors = sealed;
         if (sky)
         {
             s.addSky(*in);
@@ -276,6 +319,40 @@ namespace
         in = edited(*in, open, { key(0, 1) }, r.mProduct, sky);
         r = check(tag + "tile added", in);
 
+        // And loses it for good.
+        {
+            auto less = std::make_shared<EnclosureInput>(*in);
+            less->mPrevious = r.mProduct;
+            less->mTiles.erase(std::remove_if(less->mTiles.begin(), less->mTiles.end(), [](const EnclosureInput::Tile& t) { return t.mKey == key(0, 1); }),
+                               less->mTiles.end());
+            if (sky)
+            {
+                open.addSky(*less);
+            }
+            r = check(tag + "tile removed", less);
+            in = less;
+        }
+
+        // The sky map moves over air that stands: a canopy over the yard north of the building.
+        if (sky)
+        {
+            Scene canopy = open;
+            canopy.box(10.f, 14.f, 20.f, 20.f, 5.f, 5.25f);
+            auto shaded = std::make_shared<EnclosureInput>(*in);
+            shaded->mPrevious = r.mProduct;
+            canopy.addSky(*shaded);
+            r = check(tag + "sky map moved over standing air", shaded);
+            in = shaded;
+        }
+
+        // Other params: the memo is no use, and the pass starts over.
+        {
+            auto other = std::make_shared<EnclosureInput>(*in);
+            other->mPrevious = r.mProduct;
+            other->mParams.mSkyDecayM = 3.f;
+            check(tag + "params changed", other, false);
+        }
+
         // A room sealed with only a window, whole in tile 0.
         Scene windowed = open;
         windowed.box(2.f, 5.f, 2.25f, 6.f, 0.f, 1.f, false);
@@ -290,7 +367,7 @@ namespace
         east.wall(17.75f, 6.f, 18.f, 10.f);
         east.box(17.75f, 5.f, 18.f, 6.f, 2.2f, 3.f, false);
         in = edited(*in, east, { key(0, 0), key(1, 0) }, r.mProduct, sky);
-        r = check(tag + "east door made", in);
+        r = check(tag + "east door made", in, false);   // both tiles' air is new
         Scene east_shut = east;
         east_shut.box(2.f, 5.f, 2.25f, 6.f, 0.f, 2.2f, false);
         in = edited(*in, east_shut, { key(0, 0) }, r.mProduct, sky);
@@ -307,6 +384,26 @@ namespace
     TEST_CASE("sknavenclosurerepair: the same changes repair to what a full pass gives under a sky map", "[sknavenclosurerepair]")
     {
         editSequence(true);
+    }
+
+    TEST_CASE("sknavenclosurerepair: the same changes repair to what a full pass gives with sealed floors left unknown", "[sknavenclosurerepair]")
+    {
+        editSequence(false, false);
+        editSequence(true, false);
+    }
+
+    TEST_CASE("sknavenclosurerepair: two changed tiles meeting at a seam beside a standing one repair to what a full pass gives", "[sknavenclosurerepair]")
+    {
+        Scene s = building();
+        auto in = s.input(3);
+        s.addSky(*in);
+        const Run first = check("three tiles: first publication", in, false);
+        Scene both = s;
+        both.box(2.f, 5.f, 2.25f, 6.f, 0.f, 2.2f, false);
+        both.box(9.875f, 5.f, 10.125f, 6.f, 0.f, 2.2f, false);
+        auto in1 = edited(*in, both, { key(0, 0), key(1, 0) }, first.mProduct, true);
+        const Run r = check("three tiles: both doors shut", in1);
+        CHECK(r.mAnswered >= 2u);
     }
 
     TEST_CASE("sknavenclosurerepair: a neighbouring mesh's change repairs a mesh whose air stands to what a full pass gives", "[sknavenclosurerepair]")
@@ -333,6 +430,22 @@ namespace
         in_a1->mPrevious = ra.mProduct;
         in_a1->mNeighbours[0].mProduct = b1.mProduct;
         ra = check("B roofed", in_a1);
+
+        // B moved only in its origin, then swapped to other air by residency: A reads it again.
+        {
+            auto moved = std::make_shared<EnclosureInput>(*in_a1);
+            moved->mPrevious = ra.mProduct;
+            moved->mNeighbours[0].mMeshOrigin = LLVector3d(0.0, 0.0, 0.5);
+            ra = check("B's origin moved", moved);
+            auto swapped = std::make_shared<EnclosureInput>(*in_a1);
+            swapped->mPrevious = ra.mProduct;
+            AirSwap swap;
+            swap[key(2, 0)] = in_b1->mTiles[0].mAir;
+            swapped->mNeighbours[0].mProduct = withTileAir(*b1.mProduct, swap);
+            CHECK(swapped->mNeighbours[0].mProduct->mSerial != b1.mProduct->mSerial);
+            ra = check("B swapped by residency", swapped);
+            in_a1 = swapped;
+        }
 
         // B gone: A's edge opens again.
         auto in_a2 = std::make_shared<EnclosureInput>(*in_a1);
@@ -389,6 +502,24 @@ namespace
         line("door shut, repair", shut_run);
         line("door open, full", full_open);
         line("door open, repair", open_run);
+        // What follows a landing: the spaces cut again, and the wind slabs built on them.
+        {
+            auto rooms_in = std::make_shared<RoomsInput>();
+            rooms_in->mMeshKey = 42;
+            auto enc = std::make_shared<EnclosureProduct>(*open_run.mProduct);
+            const auto t0 = std::chrono::steady_clock::now();
+            const RoomsProductPtr rooms = computeSpaces(rooms_in, enc);
+            const auto t1 = std::chrono::steady_clock::now();
+            auto wind_in = std::make_shared<WindInput>();
+            wind_in->mEnclosure = enc;
+            wind_in->mRooms = rooms;
+            wind_in->mBands = defaultWindBands();
+            const WindProductPtr wind = computeWind(wind_in);
+            const auto t2 = std::chrono::steady_clock::now();
+            o << "spaces pass: " << llformat("%.2f", std::chrono::duration<F64, std::milli>(t1 - t0).count()) << " ms; wind slabs: "
+              << llformat("%.2f", std::chrono::duration<F64, std::milli>(t2 - t1).count()) << " ms for " << llformat("%.2f", (wind ? wind->bytes() : 0) / 1048576.0)
+              << " MB\n";
+        }
         std::cout << o.str();
         const std::string out = LLStringUtil::getenv("SKNAV_REPAIR_TIMES");
         if (!out.empty())
@@ -401,5 +532,41 @@ namespace
         }
         CHECK(shut_run.mAnswered < 9);
         CHECK(open_run.mAnswered < 9);
+    }
+
+    TEST_CASE("sknavenclosurerepair: spaces kept by a repair are what a fresh spaces pass cuts and any moved answer cuts them again", "[sknavenclosurerepair]")
+    {
+        // A beside B; A's east edge is roofed, and lit from B's open sky until B is roofed too, which moves e there without moving A's air.
+        Scene a = building();
+        a.box(32.f, 0.f, 40.f, 32.f, 3.f, 3.25f);
+        Scene b;
+        b.mGround[0] = 64.f;
+        Scene roofed = b;
+        roofed.box(64.f, 0.f, 72.f, 32.f, 3.f, 3.25f);
+        auto in_b = std::make_shared<EnclosureInput>();
+        in_b->mTiles.push_back({ key(2, 0), b.tile(2, 0), 0 });
+        const Run b0 = run(in_b);
+        const Run b1 = run(edited(*in_b, roofed, { key(2, 0) }, b0.mProduct, false));
+
+        auto in = a.input(2);
+        in->mNeighbours.push_back({ LLVector3d(), b0.mProduct });
+        Landed l = land(in, nullptr);
+        CHECK(l.mFresh == dumpRooms(*l.mEnclosure, *l.mRooms));
+
+        // Nothing moved: the spaces are kept, and are what a fresh pass cuts.
+        auto same = std::make_shared<EnclosureInput>(*in);
+        same->mPrevious = l.mEnclosure;
+        Landed k = land(same, l.mRooms);
+        CHECK(k.mKept);
+        CHECK(k.mFresh == dumpRooms(*k.mEnclosure, *k.mRooms));
+
+        // B roofed: e moves at A's edge, so the spaces are cut again.
+        auto shaded = std::make_shared<EnclosureInput>(*same);
+        shaded->mPrevious = k.mEnclosure;
+        shaded->mNeighbours[0].mProduct = b1.mProduct;
+        Landed m = land(shaded, k.mRooms);
+        CHECK(dump(*m.mEnclosure) != dump(*k.mEnclosure));
+        CHECK(!m.mKept);
+        CHECK(m.mFresh == dumpRooms(*m.mEnclosure, *m.mRooms));
     }
 }

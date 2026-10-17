@@ -28,6 +28,7 @@
 #include "sknavprofile.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <climits>
 #include <cmath>
@@ -609,6 +610,7 @@ namespace sknav
         const EnclosureInput& in = *mInput;
         mProduct = std::make_shared<EnclosureProduct>();
         mProduct->mGeneration = in.mGeneration;
+        mProduct->mSerial = nextEnclosureSerial();
         F32 unit = 0.125f, cell = 0.125f;
         U32 nodes = 0;
         mBase.reserve(in.mTiles.size() + 1);
@@ -671,8 +673,7 @@ namespace sknav
         U64 neighbours = SEED;
         for (const EnclosureInput::Neighbour& nb : in.mNeighbours)
         {
-            neighbours = mix(neighbours, reinterpret_cast<uintptr_t>(nb.mProduct.get()));
-            neighbours = mix(neighbours, nb.mProduct ? nb.mProduct->mGeneration : 0);
+            neighbours = mix(neighbours, nb.mProduct ? nb.mProduct->mSerial : 0);
             for (S32 k = 0; k < 3; ++k)
             {
                 neighbours = mixF64(neighbours, nb.mMeshOrigin.mdV[k]);
@@ -1617,7 +1618,7 @@ namespace sknav
         std::vector<EnclosureMemo::Tile>().swap(mNewTiles);
         mProduct->mMemo = memo;
 
-        // Whether the spaces cut from the last answers still stand: the same air, and every gap's bucket and flags.
+        // Whether the spaces cut from the last answers still stand: the same air, and every answer the spaces pass reads.
         mLayoutMoved = !mRepair;
         if (mRepair)
         {
@@ -1627,6 +1628,14 @@ namespace sknav
                 bare += prev.mAir ? 0 : 1;
             }
             mLayoutMoved = in.mPrevious->mTiles.size() - bare != in.mTiles.size() || bare != in.mKept.size();
+            const auto same_gap = [](const GapEnclosure& x, const GapEnclosure& y) {
+                return x.mS == y.mS && x.mE == y.mE && x.mD == y.mD && x.mBucket == y.mBucket && x.mFlags == y.mFlags && x.mCover == y.mCover &&
+                       x.mOpen == y.mOpen;
+            };
+            const auto same_coarse = [](const CoarseGap& x, const CoarseGap& y) {
+                return x.mFloor == y.mFloor && x.mCeiling == y.mCeiling && x.mS == y.mS && x.mE == y.mE && x.mD == y.mD && x.mFlags == y.mFlags &&
+                       x.mOpen == y.mOpen && x.mBucket == y.mBucket;
+            };
             for (size_t t = 0; t < in.mTiles.size() && !mLayoutMoved; ++t)
             {
                 if (!mOld[t])
@@ -1640,15 +1649,9 @@ namespace sknav
                 }
                 const TileEnclosure& now = mProduct->mTiles[t];
                 const TileEnclosure& prev = *in.mPrevious->tile(now.mKey);
-                for (size_t g = 0; g < now.mGaps.size() && !mLayoutMoved; ++g)
-                {
-                    mLayoutMoved = now.mGaps[g].mBucket != prev.mGaps[g].mBucket || now.mGaps[g].mFlags != prev.mGaps[g].mFlags;
-                }
-                mLayoutMoved = mLayoutMoved || now.mCoarse.mGaps.size() != prev.mCoarse.mGaps.size();
-                for (size_t g = 0; g < now.mCoarse.mGaps.size() && !mLayoutMoved; ++g)
-                {
-                    mLayoutMoved = now.mCoarse.mGaps[g].mBucket != prev.mCoarse.mGaps[g].mBucket || now.mCoarse.mGaps[g].mFlags != prev.mCoarse.mGaps[g].mFlags;
-                }
+                mLayoutMoved = !std::equal(now.mGaps.begin(), now.mGaps.end(), prev.mGaps.begin(), prev.mGaps.end(), same_gap) ||
+                               now.mCoarse.mStart != prev.mCoarse.mStart ||
+                               !std::equal(now.mCoarse.mGaps.begin(), now.mCoarse.mGaps.end(), prev.mCoarse.mGaps.begin(), prev.mCoarse.mGaps.end(), same_coarse);
             }
         }
     }
@@ -2272,6 +2275,12 @@ namespace sknav
     std::shared_ptr<EnclosureProduct> EnclosurePass::takeProduct()
     {
         return done() ? mState->mProduct : nullptr;
+    }
+
+    U64 nextEnclosureSerial()
+    {
+        static std::atomic<U64> serial{ 0 };
+        return ++serial;
     }
 
     bool EnclosurePass::repaired() const
