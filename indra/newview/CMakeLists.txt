@@ -141,11 +141,14 @@ if(AL_BUILD_VIEWER)
     alchattimestamp.cpp
     alcheatcodes.cpp
     alclassifieditem.cpp
+    alcolorpopover.cpp
     alcolorwheelctrl.cpp
     alcolorwheelmodel.cpp
     alcurveeditorctrl.cpp
     alcurvemodel.cpp
+    alcutoutimage.cpp
     aldaycyclelandmarks.cpp
+    aldepthpyramid.cpp
     alderenderlist.cpp
     aldroptarget.cpp
     alfarplane.cpp
@@ -167,7 +170,9 @@ if(AL_BUILD_VIEWER)
     alfloatersceneexplorerfilters.cpp
     alfloaterscopes.cpp
     alfloatertransactionlog.cpp
+    alrenderisolation.cpp
     alsceneexplorerpredicate.cpp
+    alsnapshotcutout.cpp
     alscopedata.cpp
     alscriptanalysis.cpp
     alscriptanalysislane.cpp
@@ -247,6 +252,9 @@ if(AL_BUILD_VIEWER)
     alscriptweightspane.cpp
     alscriptworkspace.cpp
     alterrainsurfacemaps.cpp
+    alwaterfield.cpp
+    alwaterheightbake.cpp
+    alwatersurface.cpp
     alfloaterscriptstudio.cpp
     alfloaterwebprofile.cpp
     alfloaterxuilibrary.cpp
@@ -968,7 +976,6 @@ if(AL_BUILD_VIEWER)
     llvosurfacepatch.cpp
     llvotree.cpp
     llvovolume.cpp
-    llvowater.cpp
     llvowlsky.cpp
     llwearableitemslist.cpp
     llwearablelist.cpp
@@ -1027,11 +1034,14 @@ if(AL_BUILD_VIEWER)
     alchatcommand.h
     alchattimestamp.h
     alclassifieditem.h
+    alcolorpopover.h
     alcolorwheelctrl.h
     alcolorwheelmodel.h
     alcurveeditorctrl.h
     alcurvemodel.h
+    alcutoutimage.h
     aldaycyclelandmarks.h
+    aldepthpyramid.h
     alderenderlist.h
     aldroptarget.h
     alfarplane.h
@@ -1053,7 +1063,9 @@ if(AL_BUILD_VIEWER)
     alfloatersceneexplorerfilters.h
     alfloaterscopes.h
     alfloatertransactionlog.h
+    alrenderisolation.h
     alsceneexplorerpredicate.h
+    alsnapshotcutout.h
     alscopedata.h
     alscriptanalysis.h
     alscriptanalysislane.h
@@ -1140,6 +1152,10 @@ if(AL_BUILD_VIEWER)
     alscriptweightspane.h
     alscriptworkspace.h
     alterrainsurfacemaps.h
+    alwaterfield.h
+    alwaterheightbake.h
+    alwaterstencil.h
+    alwatersurface.h
     altexturetable.h
     alfloaterscriptstudio.h
     alfloaterwebprofile.h
@@ -1857,7 +1873,6 @@ if(AL_BUILD_VIEWER)
     llvosurfacepatch.h
     llvotree.h
     llvovolume.h
-    llvowater.h
     llvowlsky.h
     llwearableitemslist.h
     llwearablelist.h
@@ -2211,6 +2226,7 @@ if(AL_BUILD_VIEWER)
       ll::nvapi
       ll::tinygltf
       ll::tinyexr
+      ll::pocketfft
       ll::minizip
       ll::pugixml
       ll::recast
@@ -2592,6 +2608,41 @@ if(AL_BUILD_TESTS)
   target_link_libraries(newview_test_viewertexture PRIVATE al::flags llui ${test_libs})
   set_target_properties(newview_test_viewertexture PROPERTIES FOLDER "Tests/${test_project}")
 
+  # <SK:Nexii> Develop's TUT tests, kept registered until they are ported to Catch2: LLAddBuildTest.cmake (al_add_test) is gone upstream
+  if(COMMAND al_add_test)
+    # The recastnavigation port links and runs: a floor, a block, a path round it.
+    al_add_test(sknavrecast PROJECT ${test_project} LIBRARIES ll::recast)
+    al_add_test(sknavpolys UNIT PROJECT ${test_project} LIBRARIES sknavmesh ${test_libs})
+    al_add_test(skmapview UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
+    al_add_test(skmapgeom UNIT PROJECT ${test_project} SOURCES skmapview.cpp LIBRARIES sknavmesh ${test_libs})
+    al_add_test(
+      skmapraster
+      UNIT
+      PROJECT ${test_project}
+      SOURCES skmapgeom.cpp skmapview.cpp
+      LIBRARIES sknavmesh ${test_libs}
+    )
+    al_add_test(
+      skmapribbons
+      UNIT
+      PROJECT ${test_project}
+      SOURCES skmapgeom.cpp skmapview.cpp
+      LIBRARIES sknavmesh ${test_libs}
+    )
+    al_add_test(skmaplabels UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
+    al_add_test(skmapmarkers UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
+    al_add_test(
+      skmapallies
+      UNIT
+      PROJECT ${test_project}
+      LIBRARIES ${test_libs}
+      DEFINES "SKMAP_APP_SETTINGS=\"${CMAKE_CURRENT_SOURCE_DIR}/app_settings\""
+    )
+    al_add_test(skmappolicy UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
+    al_add_test(skpopuplayout UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
+  endif()
+  # </SK:Nexii>
+
   # The viewer's own code, in one binary, each test file run in a process of
   # its own. There is no library of the viewer to link, so each file of it a
   # test needs is compiled here, once. The UI is up before the first case,
@@ -2605,6 +2656,7 @@ if(AL_BUILD_TESTS)
       tests/alcolorwheelmodel_test.cpp
       tests/alcrashreporter_test.cpp
       tests/alcurvemodel_test.cpp
+      tests/alcutoutimage_test.cpp
       tests/aldaycyclelandmarks_test.cpp
       tests/alfarplane_test.cpp
       tests/alfeedback_test.cpp
@@ -2662,6 +2714,8 @@ if(AL_BUILD_TESTS)
       tests/alscriptweightspane_test.cpp
       tests/alterrainsurfacemaps_test.cpp
       tests/altexturetable_test.cpp
+      tests/alwaterfield_test.cpp
+      tests/alwaterheightbake_test.cpp
       tests/alwhitebalancesolver_test.cpp
       tests/cppfeatures_test.cpp
       tests/llagentaccess_test.cpp
@@ -2678,6 +2732,7 @@ if(AL_BUILD_TESTS)
       alcolorwheelmodel.cpp
       alcrashreporter.cpp
       alcurvemodel.cpp
+      alcutoutimage.cpp
       aldaycyclelandmarks.cpp
       alfarplane.cpp
       alfeedback.cpp
@@ -2739,6 +2794,8 @@ if(AL_BUILD_TESTS)
       alscripttheme.cpp
       alscripttypes.cpp
       alscriptweightspane.cpp
+      alwaterfield.cpp
+      alwaterheightbake.cpp
       alwhitebalancesolver.cpp
       llagentaccess.cpp
       llhttpretrypolicy.cpp
@@ -2747,7 +2804,7 @@ if(AL_BUILD_TESTS)
       llviewercontrollistener.cpp
       lutcube.cpp
       noise.cpp
-    LIBRARIES llui alscript ll::slua llxml ${test_libs}
+    LIBRARIES llui alscript ll::slua llxml ll::pocketfft ${test_libs}
     SUPPORT
       newview_test_fakes
       newview_test_settings
@@ -2781,14 +2838,20 @@ if(AL_BUILD_TESTS)
   endif()
   # </SK:Nexii>
 
-  # The selection outline's id and edge passes, and the window's depth under
-  # the HUD, the viewer's own shader files read from the source tree, on
-  # llrender's shared hidden window.
+  # The selection outline's id and edge passes, the window's depth under the
+  # HUD, and the water surface's draws over the cells the field lays out, with
+  # the cull and the depth pyramid it reads and the waves displaced by heights
+  # the bake integrates from a normal map: the viewer's own shader files read
+  # from the source tree, on llrender's shared hidden window.
   al_add_test_binary(
     newview_gl_tests
     PROJECT ${test_project}
-    SOURCES tests/alhuddepth_gl_test.cpp tests/alselectionoutline_gl_test.cpp
-    LIBRARIES llrender
+    SOURCES
+      tests/alhuddepth_gl_test.cpp
+      tests/alselectionoutline_gl_test.cpp
+      tests/alwatersurface_gl_test.cpp
+    UNIT aldepthpyramid.cpp alwaterfield.cpp alwaterheightbake.cpp
+    LIBRARIES llrender ll::pocketfft
     SUPPORT llrender_test_checks llcommon_test_checks
     INCLUDES ${INDRA_SOURCE_DIR}/llprimitive
     DEFINES "AL_TEST_SHADER_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/app_settings/shaders\""
