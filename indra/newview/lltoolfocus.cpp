@@ -121,23 +121,23 @@ namespace
 {
     void skOrbitAround(F32 radians)
     {
-        SKOverviewCapture::tacticalShown() ? SKOverviewCapture::tacticalOrbitAround(radians) : gAgentCamera.cameraOrbitAround(radians);
+        SKOverviewCapture::tacticalTakesInput() ? SKOverviewCapture::tacticalOrbitAround(radians) : gAgentCamera.cameraOrbitAround(radians);
     }
     void skOrbitOver(F32 radians)
     {
-        SKOverviewCapture::tacticalShown() ? SKOverviewCapture::tacticalOrbitOver(radians) : gAgentCamera.cameraOrbitOver(radians);
+        SKOverviewCapture::tacticalTakesInput() ? SKOverviewCapture::tacticalOrbitOver(radians) : gAgentCamera.cameraOrbitOver(radians);
     }
     void skZoomIn(F32 fraction)
     {
-        SKOverviewCapture::tacticalShown() ? SKOverviewCapture::tacticalZoomIn(fraction) : gAgentCamera.cameraZoomIn(fraction);
+        SKOverviewCapture::tacticalTakesInput() ? SKOverviewCapture::tacticalZoomIn(fraction) : gAgentCamera.cameraZoomIn(fraction);
     }
     void skPanLeft(F32 metres)
     {
-        SKOverviewCapture::tacticalShown() ? SKOverviewCapture::tacticalPanLeft(metres) : gAgentCamera.cameraPanLeft(metres);
+        SKOverviewCapture::tacticalTakesInput() ? SKOverviewCapture::tacticalPanLeft(metres) : gAgentCamera.cameraPanLeft(metres);
     }
     void skPanUp(F32 metres)
     {
-        SKOverviewCapture::tacticalShown() ? SKOverviewCapture::tacticalPanUp(metres) : gAgentCamera.cameraPanUp(metres);
+        SKOverviewCapture::tacticalTakesInput() ? SKOverviewCapture::tacticalPanUp(metres) : gAgentCamera.cameraPanUp(metres);
     }
 }
 // </SK:Nexii>
@@ -172,7 +172,7 @@ bool LLToolCamera::handleMouseDown(S32 x, S32 y, MASK mask)
     gViewerWindow->hideCursor();
 
     // <SK:Nexii> tactical overview: the click focuses on the overview's ground, not on the hidden world
-    if (SKOverviewCapture::tacticalShown())
+    if (SKOverviewCapture::tacticalTakesInput())
     {
         mClickPickPending = false;
         mMouseDownX = x;
@@ -460,7 +460,7 @@ bool LLToolCamera::handleHover(S32 x, S32 y, MASK mask)
                 camera_to_focus -= gAgentCamera.getFocusGlobal();
                 F32 dist = (F32) camera_to_focus.normVec();
                 // <SK:Nexii> tactical overview: the overview's camera distance while it covers the world
-                if (SKOverviewCapture::tacticalShown())
+                if (SKOverviewCapture::tacticalTakesInput())
                 {
                     dist = SKOverviewCapture::tacticalFocusDistance();
                 }

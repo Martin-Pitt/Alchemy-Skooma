@@ -512,7 +512,7 @@ void SKOverviewCapture::takeTacticalCamera()
 
 bool SKOverviewCapture::tacticalFocusAt(S32 x, S32 y)
 {
-    if (!tacticalShown())
+    if (!tacticalTakesInput())
     {
         return false;
     }
@@ -1458,6 +1458,11 @@ bool SKOverviewCapture::worldHidden()
 bool SKOverviewCapture::tacticalShown()
 {
     return instanceExists() && instance().mLastCompositeFrame == LLFrameTimer::getFrameCount();
+}
+
+bool SKOverviewCapture::tacticalTakesInput()
+{
+    return instanceExists() && instance().mLastCompositeFrame + 1 >= LLFrameTimer::getFrameCount();
 }
 
 // static

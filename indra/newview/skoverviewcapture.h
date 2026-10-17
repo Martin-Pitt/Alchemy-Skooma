@@ -83,6 +83,8 @@ public:
     static void onComposite();
     /// Whether the tactical overview covers the world view this frame: world-space name tags and hover text stay off it.
     static bool tacticalShown();
+    /// Whether input this frame lands on the overview: input runs at the top of the frame after the one that composited.
+    static bool tacticalTakesInput();
     /// Whether the main view's world can go unrendered this frame: the overview is on and covered it last frame.
     static bool worldHidden();
 
