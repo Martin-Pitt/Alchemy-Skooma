@@ -129,7 +129,6 @@ public:
 
     // release any GL state
     void cleanup();
-    void cleanupQueryPool();
 
     // maintain reflection probes
     void update();
@@ -214,10 +213,6 @@ public:
     U32 probeCount();
     U32 probeMemory();
 
-    // glDeleteQueries is expensive, so we maintain a pool of queries
-    GLuint allocateQuery();
-    void recycleQuery(GLuint query);
-
 private:
     friend class LLPipeline;
     friend class LLHeroProbeManager;
@@ -246,8 +241,6 @@ private:
 
     // bind UBO used for rendering
     void setUniforms();
-
-    std::deque<GLuint>                                    mQueryPool;
 
     // render target for cube snapshots
     // used to generate mipmaps without doing a copy-to-texture
