@@ -66,6 +66,10 @@ struct SKNavRooms::Job
     std::unique_ptr<EnclosurePass> mPass;
     std::shared_ptr<const RoomsInput> mRoomsInput;
     std::unique_ptr<SpacesPass> mSpaces;        ///< once the enclosure pass is done
+    EnclosureProductPtr mPreviousProduct;       ///< the answers the landed spaces were cut from
+    RoomsProductPtr mPreviousRooms;             ///< those spaces, while the doors they were cut with stand
+    U64 mDoorSignature = 0;
+    bool mSpacesKept = false;                   ///< the layout stood, and so did the last spaces
     std::chrono::steady_clock::time_point mPosted;
     bool mCancelled = false;
 };
@@ -320,13 +324,41 @@ namespace
     }
 }
 
+void SKNavRooms::SettleBox::add(const LLVector3d& min, const LLVector3d& max)
+{
+    for (S32 k = 0; k < 2; ++k)
+    {
+        mMin.mdV[k] = llmin(mMin.mdV[k], min.mdV[k]);
+        mMax.mdV[k] = llmax(mMax.mdV[k], max.mdV[k]);
+    }
+}
+
+void SKNavRooms::SettleBox::add(const SettleBox& other)
+{
+    mAll = mAll || other.mAll;
+    add(other.mMin, other.mMax);
+}
+
+bool SKNavRooms::SettleBox::meets(const LLVector3d& min, const LLVector3d& max) const
+{
+    // Past this a moved gap's sky reads zero, so its floods mostly stop moving answers; depth can carry further, but rarely does.
+    constexpr F64 REACH_M = 16.0;
+    return mMin.mdV[VX] - REACH_M <= max.mdV[VX] && min.mdV[VX] <= mMax.mdV[VX] + REACH_M && mMin.mdV[VY] - REACH_M <= max.mdV[VY] &&
+           min.mdV[VY] <= mMax.mdV[VY] + REACH_M;
+}
+
 bool SKNavRooms::settlingIn(const LLVector3d& min, const LLVector3d& max) const
 {
     for (const auto& m : mMeshes)
     {
         const MeshState& s = m.second;
-        if ((s.mDirty || s.mInFlight) && overlapsXY(s.mMin, s.mMax, min, max) &&
-            s.mMin.mdV[VZ] <= max.mdV[VZ] && min.mdV[VZ] <= s.mMax.mdV[VZ])
+        if (!(s.mDirty || s.mInFlight) || !overlapsXY(s.mMin, s.mMax, min, max) || s.mMin.mdV[VZ] > max.mdV[VZ] || min.mdV[VZ] > s.mMax.mdV[VZ])
+        {
+            continue;
+        }
+        // A first publication settles the whole mesh; a repair only around what moved.
+        if (!s.mProduct || (s.mDirty && (s.mPending.mAll || s.mPending.meets(min, max))) ||
+            (s.mInFlight && (s.mPosted.mAll || s.mPosted.meets(min, max))))
         {
             return true;
         }
@@ -605,6 +637,7 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
             U64 sig = SEED;
             U32 evicted = 0;
             LLVector3d lo(1e300, 1e300, 0.0), hi(-1e300, -1e300, 0.0);
+            std::map<TileKey, std::pair<U64, std::pair<LLVector3d, LLVector3d>>> tile_air;
             for (const auto& t : mesh.mTiles)
             {
                 // Air on disk for a settled mesh is still its air: the same id comes back with it.
@@ -613,6 +646,7 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
                     evicted += t.second.mAirCoarse ? 1 : 0;
                     continue;
                 }
+                tile_air.emplace(t.first, std::make_pair(t.second.mAirId, std::make_pair(t.second.mMin, t.second.mMax)));
                 sig = mix(mix(sig, (static_cast<U64>(static_cast<U32>(t.first.mX)) << 32) | static_cast<U32>(t.first.mY)), t.second.mAirId);
                 lo.mdV[VX] = llmin(lo.mdV[VX], t.second.mMin.mdV[VX]);
                 lo.mdV[VY] = llmin(lo.mdV[VY], t.second.mMin.mdV[VY]);
@@ -653,6 +687,26 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
             state.mEvicted = evicted;
             if (state.mAirSignature != sig || state.mDoorSignature != doors)
             {
+                // Only the tiles whose air came, went or changed are settling; doors alone may move anything.
+                bool moved = false;
+                for (const auto& t : tile_air)
+                {
+                    const auto it = state.mTileAir.find(t.first);
+                    if (it == state.mTileAir.end() || it->second.first != t.second.first)
+                    {
+                        state.mPending.add(t.second.second.first, t.second.second.second);
+                        moved = true;
+                    }
+                }
+                for (const auto& t : state.mTileAir)
+                {
+                    if (!tile_air.count(t.first))
+                    {
+                        state.mPending.add(t.second.second.first, t.second.second.second);
+                        moved = true;
+                    }
+                }
+                state.mPending.mAll = state.mPending.mAll || !moved;
                 state.mAirSignature = sig;
                 state.mDoorSignature = doors;
                 state.mMin = lo;
@@ -668,9 +722,10 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
                 {
                     state.mLatest = std::make_shared<std::atomic<U64>>(0);
                 }
-                // A pass in flight is not cancelled: it lands on the air it read, and the next one refreshes it.
+                // A pass in flight is not cancelled: it lands on the air it read, and the next one mends what it landed.
                 ++state.mGeneration;
             }
+            state.mTileAir.swap(tile_air);
         }
         for (auto it = mMeshes.begin(); it != mMeshes.end();)
         {
@@ -905,6 +960,12 @@ void SKNavRooms::post(MeshState& state, const SKNavMesh& navmesh)
     navmesh.doorsIn(dlo, dhi, [&rooms](const DoorEntity& d) { rooms->mDoors.push_back(d); });
     rooms->mLifts = lifts(dlo, dhi);
     job->mRoomsInput = rooms;
+    job->mDoorSignature = state.mDoorSignature;
+    if (state.mRooms && state.mRoomsDoorSignature == state.mDoorSignature)
+    {
+        job->mPreviousProduct = state.mProduct;
+        job->mPreviousRooms = state.mRooms;
+    }
     job->mPosted = std::chrono::steady_clock::now();
     std::weak_ptr<bool> alive = mAlive;
     const LL::WorkQueue::ptr_t queue = LL::WorkQueue::getInstance(QUEUE_NAME);
@@ -918,6 +979,8 @@ void SKNavRooms::post(MeshState& state, const SKNavMesh& navmesh)
     {
         state.mDirty = false;
         state.mInFlight = true;
+        state.mPosted = state.mPending;
+        state.mPending = SettleBox();
     }
 }
 
@@ -945,8 +1008,19 @@ void SKNavRooms::runChunk(const std::shared_ptr<Job>& job, const std::weak_ptr<b
             job->mPass->step(CHUNK_STEP);
             return false;
         }
+        if (job->mSpacesKept)
+        {
+            return true;
+        }
         if (!job->mSpaces)
         {
+            // The air and every gap's bucket and flags the last spaces were cut from stand: so do they.
+            if (job->mPreviousRooms && job->mPass->repaired() && !job->mPass->layoutMoved())
+            {
+                carrySpaces(*job->mPass->takeProduct(), *job->mPreviousProduct);
+                job->mSpacesKept = true;
+                return true;
+            }
             job->mSpaces = std::make_unique<SpacesPass>(job->mRoomsInput, job->mPass->takeProduct());
         }
         return job->mSpaces->step(CHUNK_STEP);
@@ -989,11 +1063,15 @@ void SKNavRooms::finish(const std::shared_ptr<Job>& job)
         return;
     }
     state.mInFlight = false;
-    if (job->mCancelled || !job->mSpaces || !job->mSpaces->done())
+    if (job->mCancelled || !(job->mSpacesKept || (job->mSpaces && job->mSpaces->done())))
     {
         ++mCancelled;
-        return;     // preempted: the state is dirty again and posts anew
+        // Preempted: the state is dirty again and posts anew, over what this one would have settled.
+        state.mPending.add(state.mPosted);
+        state.mPosted = SettleBox();
+        return;
     }
+    state.mPosted = SettleBox();
     // Air that moved while it ran left the state dirty: this lands now, and the refresh follows.
 
     const EnclosureProductPtr product = job->mPass->product();
@@ -1004,14 +1082,18 @@ void SKNavRooms::finish(const std::shared_ptr<Job>& job)
     {
         mLastStageMs[s] = job->mPass->stageMillis(s);
     }
-    mLastSpacesMs = job->mSpaces->product()->mMillis;
+    mRepairs += job->mPass->repaired() ? 1 : 0;
+    mSpacesKept += job->mSpacesKept ? 1 : 0;
+    mLastAnswered = job->mPass->tilesAnswered();
+    mLastSpacesMs = job->mSpacesKept ? 0.f : job->mSpaces->product()->mMillis;
     for (S32 s = 0; s < SpacesPass::NUM_STAGES; ++s)
     {
-        mLastSpaceStageMs[s] = job->mSpaces->stageMillis(s);
+        mLastSpaceStageMs[s] = job->mSpacesKept ? 0.f : job->mSpaces->stageMillis(s);
     }
     const bool moved = !state.mProduct || state.mProduct->mSummary != product->mSummary;
     state.mProduct = product;
-    state.mRooms = job->mSpaces->product();
+    state.mRooms = job->mSpacesKept ? job->mPreviousRooms : job->mSpaces->product();
+    state.mRoomsDoorSignature = job->mDoorSignature;
     // Only answers that moved, or none yet, are worth a new set of slabs.
     if (moved || !state.mWind)
     {
@@ -1195,8 +1277,8 @@ std::string SKNavRooms::statsLine() const
             wind_bytes += entry.second.mWind->bytes();
         }
     }
-    return llformat("enclosure: %u meshes, %u passes (%u dropped, %u running), last %.0f ms on the thread (%s), %.0f ms posted to landed, unknown %.1f%% and sealed %.1f%% of %llu gaps; %u spaces and %u portals, last %.0f ms (%s); wind slabs over %u meshes, %.1f MB, %u builds, last %.0f ms for %.1f MB",
-                    meshes, mPasses, mCancelled, in_flight, mLastMs, stages.c_str(), mLastWallMs,
+    return llformat("enclosure: %u meshes, %u passes (%u repairs, %u keeping their spaces, %u dropped, %u running), last %.0f ms on the thread (%s, %u tiles answered), %.0f ms posted to landed, unknown %.1f%% and sealed %.1f%% of %llu gaps; %u spaces and %u portals, last %.0f ms (%s); wind slabs over %u meshes, %.1f MB, %u builds, last %.0f ms for %.1f MB",
+                    meshes, mPasses, mRepairs, mSpacesKept, mCancelled, in_flight, mLastMs, stages.c_str(), mLastAnswered, mLastWallMs,
                     gaps ? 100.0 * unknown / gaps : 0.0, gaps ? 100.0 * sealed / gaps : 0.0, static_cast<unsigned long long>(gaps), spaces,
                     portals, mLastSpacesMs, space_stages.c_str(), winds, wind_bytes / 1048576.0, mWindPasses, mLastWindMs,
                     mLastWindBytes / 1048576.0);
