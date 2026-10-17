@@ -1354,6 +1354,39 @@ function="World.EnvPreset"
 -->    
     
     </menu>
+    <!-- <SK:Nexii> Combat menu: combat features and their options -->
+    <menu
+     create_jump_keys="true"
+     label="Combat"
+     name="Combat"
+     tear_off="true"
+     visible="true">
+      <menu_item_check
+       label="Tactical Overview"
+       name="SK Tactical Overview">
+        <menu_item_check.on_check
+         function="CheckControl"
+         parameter="SKTacticalOverview" />
+        <menu_item_check.on_click
+         function="ToggleControl"
+         parameter="SKTacticalOverview" />
+      </menu_item_check>
+      <menu_item_call
+       label="Tactical Overview Options..."
+       name="sk_tactical_options">
+        <menu_item_call.on_click
+         function="Floater.ToggleOrBringToFront"
+         parameter="sk_tactical_options" />
+      </menu_item_call>
+      <menu_item_call
+       label="Mini-map Options..."
+       name="sk_map_settings">
+        <menu_item_call.on_click
+         function="Floater.ToggleOrBringToFront"
+         parameter="sk_map_settings" />
+      </menu_item_call>
+    </menu>
+    <!-- </SK:Nexii> -->
     <menu
      create_jump_keys="true"
      label="Build"
@@ -3758,18 +3791,6 @@ function="World.EnvPreset"
          label="Render Tests"
          name="Render Tests"
          tear_off="true">
-            <!-- <SK:Nexii> tactical overview: the census and a ghost of the world from a tilted camera -->
-            <menu_item_check
-             label="Tactical Overview"
-             name="SK Tactical Overview">
-                <menu_item_check.on_check
-                 function="CheckControl"
-                 parameter="SKTacticalOverview" />
-                <menu_item_check.on_click
-                 function="ToggleControl"
-                 parameter="SKTacticalOverview" />
-            </menu_item_check>
-            <!-- </SK:Nexii> -->
             <!-- <SK:Nexii> outline capture: the atlas and per-capture stats, behind SKOutlineCaptureDebug -->
             <menu_item_check
              label="Outline Capture Runtime"

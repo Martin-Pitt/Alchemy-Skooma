@@ -1965,6 +1965,7 @@ if(AL_BUILD_VIEWER)
     skmapparcelfacts.cpp
     skmapallyresolver.cpp
     skfloatermapsettings.cpp
+    skfloatertacticaloptions.cpp
     skoverviewcapture.cpp
     skoverviewcensus.cpp
     skoverviewmovers.cpp
@@ -1997,6 +1998,7 @@ if(AL_BUILD_VIEWER)
     skmapparcelfacts.h
     skmapallyresolver.h
     skfloatermapsettings.h
+    skfloatertacticaloptions.h
   )
   # </SK:Nexii>
 

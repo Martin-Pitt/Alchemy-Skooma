@@ -188,6 +188,10 @@ private:
     void closeTactical();
     /// Puts the viewer camera at the overview's settings: tilted over the agent, looking the way the camera did.
     void placeTacticalCamera(bool over_other_mode);
+    /// Battlefield mode: a fixed north-up camera over the region's centre, far enough to fit it in the window.
+    void placeBattlefieldCamera();
+    /// Puts the viewer camera there at once, without the ease LLAgentCamera gives a focus change.
+    void setTacticalCamera(const LLVector3d& eye, const LLVector3d& focus);
     /// Works out the per-building cut (SKOverviewCensus::applyCut) for the agent and the people the overview marks;
     /// eye is the tactical camera's, agent space, for line of sight, or null for the top-down map.
     void updateCut(const LLVector3* eye);

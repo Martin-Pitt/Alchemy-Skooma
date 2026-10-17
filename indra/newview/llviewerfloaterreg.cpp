@@ -52,6 +52,7 @@
 #include "skfloaternavmesh.h" // <SK:Nexii> navmesh console
 #include "skfloatermap.h" // <SK:Nexii> SKNetMap mini-map
 #include "skfloatermapsettings.h" // <SK:Nexii> SKNetMap settings
+#include "skfloatertacticaloptions.h" // <SK:Nexii> tactical overview options
 #include "alfloaterregiontracker.h"
 #include "alfloatertransactionlog.h"
 #include "alfloaterwebprofile.h"
@@ -604,6 +605,7 @@ void LLViewerFloaterReg::registerFloaters()
     LLFloaterReg::add("lightbox", "floater_lightbox_settings.xml", (LLFloaterBuildFunc) &LLFloaterReg::build<ALFloaterLightBox>);
     LLFloaterReg::add("scopes", "floater_scopes.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<ALFloaterScopes>);
     LLFloaterReg::add("sk_map_settings", "floater_sk_map_settings.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SKFloaterMapSettings>); // <SK:Nexii> SKNetMap settings
+    LLFloaterReg::add("sk_tactical_options", "floater_sk_tactical_options.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SKFloaterTacticalOptions>); // <SK:Nexii> tactical overview options
     // <SK:Nexii> navmesh console: overlay switches and status
     LLFloaterReg::add("sk_navmesh", "floater_sk_navmesh.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SKFloaterNavMesh>);
     // <SK:Nexii> navmesh annotations: marks placed in the world and their capture export

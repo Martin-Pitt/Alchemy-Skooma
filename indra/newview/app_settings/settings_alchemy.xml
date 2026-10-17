@@ -5832,6 +5832,28 @@
             <key>Value</key>
             <real>60.0</real>
         </map>
+        <key>SKTacticalCameraMode</key>
+        <map>
+            <key>Comment</key>
+            <string>Tactical overview camera: 0 battlefield, a fixed north-up view fitting the region; 1 follow, the orbit over the agent.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKTacticalBattlefieldNeighbours</key>
+        <map>
+            <key>Comment</key>
+            <string>The battlefield camera fits the agent's region and the connected regions that touch it, not the region alone.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
         <key>SKTacticalPitch</key>
         <map>
             <key>Comment</key>

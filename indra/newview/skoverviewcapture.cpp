@@ -107,6 +107,16 @@ namespace
     const F64 ROOM_CELL_M = 0.5;    // the lattice a room is flooded through the air on
     const F32 TACTICAL_MIN_M = 8.f;
     const F32 TACTICAL_MAX_M = 400.f;
+    const F32 BATTLEFIELD_MAX_M = 4096.f;
+    const F32 BATTLEFIELD_PITCH_DEG = 89.f;  // short of straight down, so the camera keeps a heading to put north up
+    const F32 BATTLEFIELD_MARGIN = 1.05f;
+
+    /// SKTacticalCameraMode: a fixed north-up view fitting the battlefield, or the orbit that follows the agent.
+    bool battlefieldCamera()
+    {
+        static LLCachedControl<U32> mode(gSavedSettings, "SKTacticalCameraMode", 0);
+        return mode == 0;
+    }
     const F64 TACTICAL_TAP_S = 0.2;
     const F32 LEVEL_BELOW_M = 4.f;  // another region's map keeps the clusters reaching this far below the agent's floor
     const F32 LEVEL_ABOVE_M = 8.f;  // and this far above it
@@ -292,7 +302,7 @@ void SKOverviewCapture::updateDemand(bool wanted)
     {
         // Open, the camera's own distance, which alt-cam and the wheel change.
         const F32 distance = mTacticalOpen && mTacticalDistance > 0.f ? mTacticalDistance : (F32)tactical_distance;
-        const F32 reach = llclamp(distance, TACTICAL_MIN_M, TACTICAL_MAX_M) + CENSUS_RANGE_M;
+        const F32 reach = llclamp(distance, TACTICAL_MIN_M, battlefieldCamera() ? BATTLEFIELD_MAX_M : TACTICAL_MAX_M) + CENSUS_RANGE_M;
         range = llmax(range, std::ceil(reach / 64.f) * 64.f);
     }
     if (wanted == mDemanding && (!wanted || range == mDemandRange))
@@ -504,6 +514,16 @@ void SKOverviewCapture::syncTactical()
         // A change made while another mode covers the world, when no world frame runs onFrame.
         connected = true;
         gSavedSettings.getControl("SKTacticalOverview")->getSignal()->connect([](LLControlVariable*, const LLSD&, const LLSD&) { syncTactical(); });
+        // A new camera mode moves an open overview's camera at once.
+        auto replace = [](LLControlVariable*, const LLSD&, const LLSD&)
+        {
+            if (instanceExists() && instance().mTacticalOpen && SKModalView::top() == &instance())
+            {
+                instance().placeTacticalCamera(false);
+            }
+        };
+        gSavedSettings.getControl("SKTacticalCameraMode")->getSignal()->connect(replace);
+        gSavedSettings.getControl("SKTacticalBattlefieldNeighbours")->getSignal()->connect(replace);
     }
     if (tactical == (instanceExists() && instance().mTacticalOpen))
     {
@@ -545,7 +565,7 @@ void SKOverviewCapture::closeTactical()
     {
         return;
     }
-    if (SKModalView::top() == this)
+    if (SKModalView::top() == this && !battlefieldCamera())
     {
         // The next open starts as far out as this one ended.
         const F32 distance = (F32)(gAgentCamera.getCameraPositionGlobal() - gAgentCamera.getFocusGlobal()).magVec();
@@ -577,6 +597,11 @@ void SKOverviewCapture::onTopChanged(bool on_top)
 
 void SKOverviewCapture::placeTacticalCamera(bool over_other_mode)
 {
+    if (battlefieldCamera())
+    {
+        placeBattlefieldCamera();
+        return;
+    }
     static LLCachedControl<F32> distance_setting(gSavedSettings, "SKTacticalDistance", 60.f);
     static LLCachedControl<F32> pitch_setting(gSavedSettings, "SKTacticalPitch", 55.f);
     // Over the agent's floor when the camera follows it or another mode had moved it; else what alt-cam looked at.
@@ -597,8 +622,67 @@ void SKOverviewCapture::placeTacticalCamera(bool over_other_mode)
     const F32 pitch = llclamp((F32)pitch_setting, 5.f, 89.5f) * DEG_TO_RAD;
     const F32 distance = llclamp((F32)distance_setting, TACTICAL_MIN_M, TACTICAL_MAX_M);
     const LLVector3d eye = focus - LLVector3d(heading * (distance * std::cos(pitch))) + LLVector3d(0.0, 0.0, distance * std::sin(pitch));
+    setTacticalCamera(eye, focus);
+}
+
+void SKOverviewCapture::setTacticalCamera(const LLVector3d& eye, const LLVector3d& focus)
+{
+    // Snapped, not eased, so the overview can be flicked on and off for bearings.
     gAgentCamera.setFocusOnAvatar(false, false);
     gAgentCamera.setCameraPosAndFocusGlobal(eye, focus, LLUUID::null);
+    gAgentCamera.stopCameraAnimation();
+    gAgentCamera.skipCameraSmoothing();
+}
+
+void SKOverviewCapture::placeBattlefieldCamera()
+{
+    static LLCachedControl<bool> neighbours(gSavedSettings, "SKTacticalBattlefieldNeighbours", false);
+    LLViewerRegion* region = gAgent.getRegion();
+    if (!region)
+    {
+        return;
+    }
+    // The agent's region, and with SKTacticalBattlefieldNeighbours the connected regions that touch it.
+    const LLVector3d origin = region->getOriginGlobal();
+    const F64 width = region->getWidth();
+    LLVector3d lo = origin;
+    LLVector3d hi = origin + LLVector3d(width, width, 0.0);
+    if (neighbours)
+    {
+        const LLVector3d own_lo = lo;
+        const LLVector3d own_hi = hi;
+        for (LLViewerRegion* other : LLWorld::getInstance()->getRegionList())
+        {
+            const LLVector3d o = other->getOriginGlobal();
+            const F64 w = other->getWidth();
+            if (other == region || o.mdV[VX] > own_hi.mdV[VX] || o.mdV[VX] + w < own_lo.mdV[VX] || o.mdV[VY] > own_hi.mdV[VY] ||
+                o.mdV[VY] + w < own_lo.mdV[VY])
+            {
+                continue;
+            }
+            lo.mdV[VX] = llmin(lo.mdV[VX], o.mdV[VX]);
+            lo.mdV[VY] = llmin(lo.mdV[VY], o.mdV[VY]);
+            hi.mdV[VX] = llmax(hi.mdV[VX], o.mdV[VX] + w);
+            hi.mdV[VY] = llmax(hi.mdV[VY], o.mdV[VY] + w);
+        }
+    }
+    F32 floor_z, cut_z;
+    cutHeights(gAgent.getPositionGlobal(), gAgent.getPositionAgent().mV[VZ], floor_z, cut_z);
+    const LLVector3d floor = gAgent.getPosGlobalFromAgent(LLVector3(0.f, 0.f, floor_z));
+    const LLVector3d focus((lo.mdV[VX] + hi.mdV[VX]) * 0.5, (lo.mdV[VY] + hi.mdV[VY]) * 0.5, floor.mdV[VZ]);
+    // Far enough that both half extents fit the vertical field of view and the window's aspect.
+    const LLViewerCamera* camera = LLViewerCamera::getInstance();
+    const LLRect world = gViewerWindow->getWorldViewRectRaw();
+    const F32 aspect = world.getHeight() > 0 ? (F32)world.getWidth() / (F32)world.getHeight() : camera->getAspect();
+    const F32 tan_half = std::tan(camera->getView() * 0.5f);
+    const F32 half_x = (F32)(hi.mdV[VX] - lo.mdV[VX]) * 0.5f;
+    const F32 half_y = (F32)(hi.mdV[VY] - lo.mdV[VY]) * 0.5f;
+    const F32 distance = llclamp(llmax(half_y / tan_half, half_x / (tan_half * aspect)) * BATTLEFIELD_MARGIN, TACTICAL_MIN_M,
+                                 BATTLEFIELD_MAX_M);
+    const F32 pitch = BATTLEFIELD_PITCH_DEG * DEG_TO_RAD;
+    const LLVector3d north(0.0, 1.0, 0.0);
+    const LLVector3d eye = focus - north * (distance * std::cos(pitch)) + LLVector3d(0.0, 0.0, distance * std::sin(pitch));
+    setTacticalCamera(eye, focus);
 }
 
 void SKOverviewCapture::renderModal(const LLRect& world_rect_raw)

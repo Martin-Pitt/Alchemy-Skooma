@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+<floater
+ can_resize="false"
+ height="200"
+ layout="topleft"
+ name="sk_tactical_options"
+ save_rect="true"
+ single_instance="true"
+ title="Tactical Overview Options"
+ width="300">
+    <check_box
+     control_name="SKTacticalOverview"
+     follows="left|top"
+     height="16"
+     label="Show the tactical overview"
+     layout="topleft"
+     left="10"
+     name="sk_tactical_shown"
+     top="28"
+     width="280" />
+    <text
+     follows="left|top"
+     height="16"
+     layout="topleft"
+     left="10"
+     name="sk_tactical_camera_label"
+     top_pad="10"
+     width="280">
+        Camera:
+    </text>
+    <radio_group
+     control_name="SKTacticalCameraMode"
+     follows="left|top"
+     height="40"
+     layout="topleft"
+     left="20"
+     name="sk_tactical_camera_mode"
+     top_pad="2"
+     width="270">
+        <radio_item
+         height="18"
+         label="Battlefield: north up, fitted to the region"
+         layout="topleft"
+         left="0"
+         name="sk_tactical_battlefield"
+         top="0"
+         value="0"
+         width="270" />
+        <radio_item
+         height="18"
+         label="Follow: tilted behind the avatar"
+         layout="topleft"
+         left="0"
+         name="sk_tactical_follow"
+         top_pad="2"
+         value="1"
+         width="270" />
+    </radio_group>
+    <check_box
+     control_name="SKTacticalBattlefieldNeighbours"
+     follows="left|top"
+     height="16"
+     label="Battlefield includes neighbouring regions"
+     layout="topleft"
+     left="10"
+     name="sk_tactical_neighbours"
+     top_pad="8"
+     width="280" />
+    <slider
+     control_name="SKTacticalPitch"
+     decimal_digits="0"
+     follows="left|top"
+     height="18"
+     increment="1"
+     initial_value="55"
+     label="Follow tilt"
+     label_width="90"
+     layout="topleft"
+     left="10"
+     max_val="89"
+     min_val="5"
+     name="sk_tactical_pitch"
+     top_pad="8"
+     width="270" />
+    <slider
+     control_name="SKTacticalTiltShift"
+     decimal_digits="1"
+     follows="left|top"
+     height="18"
+     increment="0.5"
+     initial_value="4"
+     label="Edge blur"
+     label_width="90"
+     layout="topleft"
+     left="10"
+     max_val="16"
+     min_val="0"
+     name="sk_tactical_tiltshift"
+     top_pad="6"
+     width="270" />
+</floater>

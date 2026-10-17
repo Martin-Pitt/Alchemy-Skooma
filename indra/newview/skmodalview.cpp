@@ -211,6 +211,7 @@ void SKModalView::restoreWorldCamera()
         gAgentCamera.setFocusOnAvatar(true, false, false);
     }
     gAgentCamera.stopCameraAnimation();
+    gAgentCamera.skipCameraSmoothing();
     if (mWorld.mMouselook)
     {
         gAgentCamera.changeCameraToMouselook(false);
