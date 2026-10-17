@@ -27,7 +27,6 @@
 #include "llviewerprecompiledheaders.h"
 
 #include "llappviewer.h"
-#include "skoverviewcapture.h" // <SK:Nexii> tactical overview
 
 #include "alcrashreporter.h"
 
@@ -1633,7 +1632,7 @@ bool LLAppViewer::doFrame()
                     LLPerfStats::RecordSceneTime T(LLPerfStats::StatType_t::RENDER_IDLE);
                     LL_PROFILE_ZONE_NAMED_CATEGORY_APP("df Snapshot");
                     pingMainloopTimeout("Main:Snapshot");
-                    if (!SKOverviewCapture::worldHidden() && !SKModalView::worldCovered()) // <SK:Nexii> tactical overview, modal view: no probe faces (each a full scene render) under either
+                    if (!SKModalView::worldCovered()) // <SK:Nexii> modal view: no probe faces (each a full scene render) under a modal view
                     gPipeline.mReflectionMapManager.update();
                     LLFloaterSnapshot::update(); // take snapshots
                     LLFloaterSimpleSnapshot::update();

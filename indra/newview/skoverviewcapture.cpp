@@ -68,6 +68,8 @@
 #include "sknavrooms.h"
 #include "skmappalette.h"
 #include "skworldcensus.h"
+#include "skworldmapmath.h"
+#include "llstartup.h"
 
 #include <algorithm>
 #include <cmath>
@@ -91,8 +93,6 @@ namespace
 
     const F32 CENSUS_RANGE_M = 128.f;
     const size_t SK_MAX_TERRITORY = 16;       // regions styled as inside, at most (the resolve's array)
-    const F32 TACTICAL_MIN_PITCH = 20.f * DEG_TO_RAD;   // alt-cam tilts the tactical camera no flatter than this
-    const F32 TACTICAL_MAX_PITCH = 89.f * DEG_TO_RAD;   // nor past straight down
     const F32 AVATAR_HALF_HEIGHT_M = 0.9f;     // an avatar's position over its feet, near enough
     const F32 MARKER_RADIUS_M = 0.35f;         // the avatar marker's cylinder at true size
     const F32 MARKER_HEIGHT_M = 1.8f;
@@ -133,17 +133,28 @@ struct SKOverviewCapture::RegionMap
     bool mValid = false;
 };
 
-SKOverviewCapture::SKOverviewCapture() = default;
-SKOverviewCapture::~SKOverviewCapture() = default;
+SKOverviewCapture::SKOverviewCapture()
+{
+    SKModalView::instance().registerMode(this);
+}
+
+SKOverviewCapture::~SKOverviewCapture()
+{
+    if (SKModalView::instanceExists())
+    {
+        SKModalView::getInstance()->unregisterMode(this);
+    }
+}
 
 void SKOverviewCapture::onFrame()
 {
     updateCapsLockCapture();
+    syncTactical();
     // The world census runs slowly only while the overview hides the world (navmesh freshness matters little then),
     // and back at its normal cadence the frame it closes.
     if (SKWorldCensus::instanceExists())
     {
-        SKWorldCensus::instance().setSlowCadence(worldHidden());
+        SKWorldCensus::instance().setSlowCadence(tacticalShown());
     }
     static LLCachedControl<bool> enabled(gSavedSettings, "SKMapCaptureBase", false);
     static LLCachedControl<bool> tactical(gSavedSettings, "SKTacticalOverview", false);
@@ -189,23 +200,6 @@ void SKOverviewCapture::updateCapsLockCapture()
     {
         window->skSetCapsLockCapture(want);
     }
-}
-
-bool SKOverviewCapture::handleScrollWheel(F32 clicks)
-{
-    static LLCachedControl<bool> tactical(gSavedSettings, "SKTacticalOverview", false);
-    if (!tactical || clicks == 0.f)
-    {
-        return false;
-    }
-    const F32 distance = gSavedSettings.getF32("SKTacticalDistance");
-    gSavedSettings.setF32("SKTacticalDistance", llclamp(distance * std::pow(1.15f, clicks), TACTICAL_MIN_M, TACTICAL_MAX_M));
-    if (instanceExists() && instance().mTacticalCam.mActive)
-    {
-        TacticalCamera& cam = instance().mTacticalCam;
-        cam.mDistance = llclamp(cam.mDistance * std::pow(1.15f, clicks), TACTICAL_MIN_M, TACTICAL_MAX_M);
-    }
-    return true;
 }
 
 void SKOverviewCapture::handleTacticalKey(bool down)
@@ -296,7 +290,9 @@ void SKOverviewCapture::updateDemand(bool wanted)
     static LLCachedControl<F32> tactical_distance(gSavedSettings, "SKTacticalDistance", 60.f);
     if (tactical)
     {
-        const F32 reach = llclamp((F32)tactical_distance, TACTICAL_MIN_M, TACTICAL_MAX_M) + CENSUS_RANGE_M;
+        // Open, the camera's own distance, which alt-cam and the wheel change.
+        const F32 distance = mTacticalOpen && mTacticalDistance > 0.f ? mTacticalDistance : (F32)tactical_distance;
+        const F32 reach = llclamp(distance, TACTICAL_MIN_M, TACTICAL_MAX_M) + CENSUS_RANGE_M;
         range = llmax(range, std::ceil(reach / 64.f) * 64.f);
     }
     if (wanted == mDemanding && (!wanted || range == mDemandRange))
@@ -497,96 +493,136 @@ namespace
     }
 }
 
-void SKOverviewCapture::takeTacticalCamera()
+// static
+void SKOverviewCapture::syncTactical()
 {
-    if (!mTacticalCam.mActive)
+    // The setting is the switch, from the key, the menu or anywhere else; the modal view follows it.
+    static LLCachedControl<bool> tactical(gSavedSettings, "SKTacticalOverview", false);
+    static bool connected = false;
+    if (!connected)
     {
-        static LLCachedControl<F32> distance_setting(gSavedSettings, "SKTacticalDistance", 60.f);
-        mTacticalCam.mActive = true;
-        mTacticalCam.mFocus = gAgent.getPosGlobalFromAgent(mTacticalTarget);
-        mTacticalCam.mYaw = mTacticalYaw;
-        mTacticalCam.mPitch = mTacticalPitch;
-        mTacticalCam.mDistance = llclamp((F32)distance_setting, TACTICAL_MIN_M, TACTICAL_MAX_M);
+        // A change made while another mode covers the world, when no world frame runs onFrame.
+        connected = true;
+        gSavedSettings.getControl("SKTacticalOverview")->getSignal()->connect([](LLControlVariable*, const LLSD&, const LLSD&) { syncTactical(); });
+    }
+    if (tactical == (instanceExists() && instance().mTacticalOpen))
+    {
+        return;
+    }
+    if (tactical)
+    {
+        instance().openTactical();
+    }
+    else
+    {
+        instance().closeTactical();
     }
 }
 
-bool SKOverviewCapture::tacticalFocusAt(S32 x, S32 y)
+void SKOverviewCapture::openTactical()
 {
-    if (!tacticalTakesInput())
+    const bool over_other_mode = SKModalView::worldCovered();
+    if (!SKModalView::instance().claim(this, SKModalView::PRIORITY_TACTICAL_OVERVIEW))
     {
-        return false;
+        // Logged in, only RLVa holds the view shut: the switch goes off rather than open later by surprise.
+        if (LLStartUp::getStartupState() >= STATE_STARTED)
+        {
+            gSavedSettings.setBOOL("SKTacticalOverview", false);
+        }
+        return;
     }
-    SKOverviewCapture& self = instance();
+    mTacticalOpen = true;
+    mTacticalKey.mValid = false;
+    if (SKModalView::top() == this)
+    {
+        placeTacticalCamera(over_other_mode);
+    }
+}
+
+void SKOverviewCapture::closeTactical()
+{
+    if (!mTacticalOpen)
+    {
+        return;
+    }
+    if (SKModalView::top() == this)
+    {
+        // The next open starts as far out as this one ended.
+        const F32 distance = (F32)(gAgentCamera.getCameraPositionGlobal() - gAgentCamera.getFocusGlobal()).magVec();
+        gSavedSettings.setF32("SKTacticalDistance", llclamp(distance, TACTICAL_MIN_M, TACTICAL_MAX_M));
+    }
+    mTacticalOpen = false;
+    mTacticalReady = false;
+    if (SKPopupPanes* popup = mPopup.get())
+    {
+        popup->closeAll();
+    }
+    // The last release puts the world camera back; a map under the overview takes its own back.
+    SKModalView::instance().release(this);
+}
+
+void SKOverviewCapture::closeModal()
+{
+    gSavedSettings.setBOOL("SKTacticalOverview", false);
+    closeTactical();
+}
+
+void SKOverviewCapture::onTopChanged(bool on_top)
+{
+    if (on_top && mTacticalOpen)
+    {
+        placeTacticalCamera(false);
+    }
+}
+
+void SKOverviewCapture::placeTacticalCamera(bool over_other_mode)
+{
+    static LLCachedControl<F32> distance_setting(gSavedSettings, "SKTacticalDistance", 60.f);
+    static LLCachedControl<F32> pitch_setting(gSavedSettings, "SKTacticalPitch", 55.f);
+    // Over the agent's floor when the camera follows it or another mode had moved it; else what alt-cam looked at.
+    LLVector3d focus;
+    tacticalCentre(focus);
+    if (over_other_mode || gAgentCamera.getFocusOnAvatar())
+    {
+        F32 floor_z, cut_z;
+        cutHeights(gAgent.getPositionGlobal(), gAgent.getPositionAgent().mV[VZ], floor_z, cut_z);
+        focus = gAgent.getPosGlobalFromAgent(LLVector3(gAgent.getPositionAgent().mV[VX], gAgent.getPositionAgent().mV[VY], floor_z));
+    }
+    LLVector3 heading = LLViewerCamera::getInstance()->getAtAxis();
+    heading.mV[VZ] = 0.f;
+    if (heading.normVec() < 1.0e-3f)
+    {
+        heading.setVec(1.f, 0.f, 0.f);
+    }
+    const F32 pitch = llclamp((F32)pitch_setting, 5.f, 89.5f) * DEG_TO_RAD;
+    const F32 distance = llclamp((F32)distance_setting, TACTICAL_MIN_M, TACTICAL_MAX_M);
+    const LLVector3d eye = focus - LLVector3d(heading * (distance * std::cos(pitch))) + LLVector3d(0.0, 0.0, distance * std::sin(pitch));
+    gAgentCamera.setFocusOnAvatar(false, false);
+    gAgentCamera.setCameraPosAndFocusGlobal(eye, focus, LLUUID::null);
+}
+
+void SKOverviewCapture::renderModal(const LLRect& world_rect_raw)
+{
+    // The display loop skips the world, and with it the overview's per-frame work: the maps, the census and the view.
+    updateCapsLockCapture();
+    static LLCachedControl<bool> enabled(gSavedSettings, "SKMapCaptureBase", false);
+    if (enabled || mTacticalOpen)
+    {
+        frame();
+    }
+    composite();
+}
+
+bool SKOverviewCapture::pickGround(S32 x, S32 y, LLVector3d& ground) const
+{
     const LLVector2 scale = gViewerWindow->getDisplayScale();
-    const LLVector2 at(x * scale.mV[VX] - self.mTacticalViewport[0], y * scale.mV[VY] - self.mTacticalViewport[1]);
-    LLVector3d world;
-    if (!self.groundAt(at, world))
-    {
-        return false;
-    }
-    self.takeTacticalCamera();
-    TacticalCamera& cam = self.mTacticalCam;
-    const F64 ANIM_EPSILON_SQUARED = 0.0001;
-    if ((world - cam.mFocus).magVecSquared() > ANIM_EPSILON_SQUARED)
-    {
-        // LLAgentCamera::startCameraAnimation and setAnimationDuration: from where it is now, over ZoomTime, never
-        // cutting short an ease already under way.
-        const F32 duration = gSavedSettings.getF32("ZoomTime");
-        cam.mAnimDuration = cam.mAnimating ? llmax(duration, cam.mAnimDuration - cam.mAnimTimer.getElapsedTimeF32().value()) : duration;
-        cam.mStartEye = self.mTacticalEyeGlobal;
-        cam.mStartFocus = self.mTacticalFocusGlobal;
-        cam.mAnimTimer.reset();
-        cam.mAnimating = true;
-    }
-    cam.mFocus = world;
-    return true;
+    const LLVector2 at(x * scale.mV[VX] - mTacticalViewport[0], y * scale.mV[VY] - mTacticalViewport[1]);
+    return groundAt(at, ground);
 }
 
-void SKOverviewCapture::tacticalOrbitAround(F32 radians)
+F64 SKOverviewCapture::flycamScale(const LLVector3d& eye) const
 {
-    instance().takeTacticalCamera();
-    instance().mTacticalCam.mYaw += radians;
-}
-
-void SKOverviewCapture::tacticalOrbitOver(F32 radians)
-{
-    SKOverviewCapture& self = instance();
-    self.takeTacticalCamera();
-    self.mTacticalCam.mPitch = llclamp(self.mTacticalCam.mPitch + radians, TACTICAL_MIN_PITCH, TACTICAL_MAX_PITCH);
-}
-
-void SKOverviewCapture::tacticalZoomIn(F32 fraction)
-{
-    SKOverviewCapture& self = instance();
-    self.takeTacticalCamera();
-    self.mTacticalCam.mDistance = llclamp(self.mTacticalCam.mDistance * fraction, TACTICAL_MIN_M, TACTICAL_MAX_M);
-}
-
-void SKOverviewCapture::tacticalPanLeft(F32 metres)
-{
-    SKOverviewCapture& self = instance();
-    self.takeTacticalCamera();
-    self.mTacticalCam.mFocus += LLVector3d(self.mTacticalLeft * metres);
-}
-
-void SKOverviewCapture::tacticalPanUp(F32 metres)
-{
-    SKOverviewCapture& self = instance();
-    self.takeTacticalCamera();
-    self.mTacticalCam.mFocus += LLVector3d(self.mTacticalUp * metres);
-}
-
-F32 SKOverviewCapture::tacticalFocusDistance()
-{
-    return instanceExists() ? (F32)(instance().mTacticalEyeGlobal - instance().mTacticalFocusGlobal).magVec() : 0.f;
-}
-
-void SKOverviewCapture::resetTacticalCamera()
-{
-    if (instanceExists())
-    {
-        instance().mTacticalCam = TacticalCamera();
-    }
+    return skworldmap::flycamHeightScale(eye.mdV[VZ], gAgent.getPositionGlobal().mdV[VZ]);
 }
 
 void SKOverviewCapture::tacticalCentre(LLVector3d& centre) const
@@ -642,7 +678,7 @@ void SKOverviewCapture::frame()
     {
         mMaps.clear();
     }
-    if (tactical_on)
+    if (tactical_on && tacticalShown())
     {
         tactical();
     }
@@ -1268,8 +1304,6 @@ void SKOverviewCapture::updateCut(const LLVector3* eye)
 void SKOverviewCapture::tactical()
 {
     LL_PROFILE_ZONE_SCOPED;
-    static LLCachedControl<F32> distance_setting(gSavedSettings, "SKTacticalDistance", 60.f);
-    static LLCachedControl<F32> pitch_setting(gSavedSettings, "SKTacticalPitch", 55.f);
     const S32 vx = gGLViewport[0], vy = gGLViewport[1], vw = gGLViewport[2], vh = gGLViewport[3];
     if (vw < 16 || vh < 16)
     {
@@ -1282,60 +1316,21 @@ void SKOverviewCapture::tactical()
         return;
     }
 
-    // Orbit the centre the camera follows at the main camera's heading; the cut and the shading stay the avatar's.
-    LLVector3d centre;
-    tacticalCentre(centre);
+    // The viewer's own camera, which alt-cam moves; the cut and the shading stay the avatar's.
     F32 floor_z, cut_z;
     cutHeights(gAgent.getPositionGlobal(), gAgent.getPositionAgent().mV[VZ], floor_z, cut_z);
-    LLVector3 target = gAgent.getPosAgentFromGlobal(centre);
-    if (gAgentCamera.getFocusOnAvatar() && !LLViewerJoystick::getInstance()->getOverrideCamera())
+    const LLViewerCamera* camera = LLViewerCamera::getInstance();
+    const LLVector3 eye = camera->getOrigin();
+    const LLVector3 dir = camera->getAtAxis();
+    const LLVector3 left = camera->getLeftAxis();
+    const LLVector3 up = camera->getUpAxis();
+    LLVector3d centre = gAgentCamera.getFocusGlobal();
+    if (LLViewerJoystick::getInstance()->getOverrideCamera())
     {
-        target.mV[VZ] = floor_z;
+        tacticalCentre(centre); // the flycam leaves the focus behind: the surface under it
     }
-    LLVector3 heading = LLViewerCamera::getInstance()->getAtAxis();
-    heading.mV[VZ] = 0.f;
-    if (heading.normVec() < 1.0e-3f)
-    {
-        heading.setVec(1.f, 0.f, 0.f);
-    }
-    F32 pitch = llclamp((F32)pitch_setting, 5.f, 90.f) * DEG_TO_RAD;
-    if (mTacticalCam.mActive)
-    {
-        // Alt-cam has taken the tactical camera: its own focus, heading and tilt.
-        target = gAgent.getPosAgentFromGlobal(mTacticalCam.mFocus);
-        heading.setVec(std::cos(mTacticalCam.mYaw), std::sin(mTacticalCam.mYaw), 0.f);
-        pitch = mTacticalCam.mPitch;
-    }
-    mTacticalTarget = target;
-    mTacticalYaw = std::atan2(heading.mV[VY], heading.mV[VX]);
-    mTacticalPitch = pitch;
-    const F32 distance = mTacticalCam.mActive ? mTacticalCam.mDistance : llclamp((F32)distance_setting, TACTICAL_MIN_M, TACTICAL_MAX_M);
-    const F32 pitch_safe = llmin(pitch, 89.5f * DEG_TO_RAD);
-    LLVector3 eye = target - heading * (distance * std::cos(pitch_safe)) + LLVector3(0.f, 0.f, distance * std::sin(pitch_safe));
-    if (mTacticalCam.mAnimating)
-    {
-        // An alt+click's ease, as LLAgentCamera::updateCamera: linear in time, smoothstepped, eye and focus together.
-        const F32 fraction = mTacticalCam.mAnimDuration > 0.f ? mTacticalCam.mAnimTimer.getElapsedTimeF32().value() / mTacticalCam.mAnimDuration : 1.f;
-        if (fraction < 1.f)
-        {
-            const F32 smooth = llsmoothstep(0.f, 1.f, fraction);
-            eye = lerp(gAgent.getPosAgentFromGlobal(mTacticalCam.mStartEye), eye, smooth);
-            target = lerp(gAgent.getPosAgentFromGlobal(mTacticalCam.mStartFocus), target, smooth);
-        }
-        else
-        {
-            mTacticalCam.mAnimating = false;
-        }
-    }
-    mTacticalEyeGlobal = gAgent.getPosGlobalFromAgent(eye);
-    mTacticalFocusGlobal = gAgent.getPosGlobalFromAgent(target);
-    LLVector3 dir = target - eye;
-    dir.normVec();
-    LLVector3 left = LLVector3::z_axis % dir;
-    left.normVec();
-    const LLVector3 up = dir % left;
-    mTacticalLeft = left;
-    mTacticalUp = up;
+    const LLVector3 target = gAgent.getPosAgentFromGlobal(centre);
+    const F32 distance = llmax(dist_vec(eye, target), TACTICAL_MIN_M);
 
     Shot shot;
     LLVector4a eye4, dir4, up4;
@@ -1343,7 +1338,7 @@ void SKOverviewCapture::tactical()
     dir4.load3(dir.mV);
     up4.load3(up.mV);
     shot.mView = LLMatrix4a::lookDir(eye4, dir4, up4);
-    const F32 fov = LLViewerCamera::getInstance()->getView();
+    const F32 fov = camera->getView();
     const F32 aspect = (F32)vw / (F32)vh;
     const F32 far_m = distance + 2.f * CENSUS_RANGE_M;
     shot.mProj = al_perspective(fov, aspect, TACTICAL_NEAR_M, far_m);
@@ -1373,7 +1368,7 @@ void SKOverviewCapture::tactical()
         }
     }
     shot.mTopDown = false;
-    shot.mCull = *LLViewerCamera::getInstance();
+    shot.mCull = *camera;
     shot.mCull.setView(fov);
     shot.mCull.setAspect(aspect);
     shot.mCull.setNear(TACTICAL_NEAR_M);
@@ -1446,30 +1441,15 @@ void SKOverviewCapture::tactical()
 }
 
 
-// The tactical overview over the finished frame: after renderFinalize, which would otherwise paint the world over it.
-bool SKOverviewCapture::worldHidden()
-{
-    // The overview was composited last frame (or this one) and is still on: it will cover the world view again, opaque.
-    static LLCachedControl<bool> tactical_on(gSavedSettings, "SKTacticalOverview", false);
-    return tactical_on && !gCubeSnapshot && instanceExists() &&
-           instance().mLastCompositeFrame + 1 >= LLFrameTimer::getFrameCount();
-}
-
 bool SKOverviewCapture::tacticalShown()
 {
-    return instanceExists() && instance().mLastCompositeFrame == LLFrameTimer::getFrameCount();
-}
-
-bool SKOverviewCapture::tacticalTakesInput()
-{
-    return instanceExists() && instance().mLastCompositeFrame + 1 >= LLFrameTimer::getFrameCount();
+    return instanceExists() && instance().mTacticalOpen && SKModalView::top() == &instance();
 }
 
 // static
 bool SKOverviewCapture::handleRightClick(S32 x, S32 y)
 {
-    // Input runs at the top of the frame after the one that composited.
-    return instanceExists() && instance().mLastCompositeFrame + 1 >= LLFrameTimer::getFrameCount() && instance().rightClick(x, y);
+    return tacticalShown() && instance().rightClick(x, y);
 }
 
 bool SKOverviewCapture::rightClick(S32 x, S32 y)
@@ -1540,17 +1520,6 @@ bool SKOverviewCapture::groundAt(const LLVector2& at, LLVector3d& world) const
     world = gAgent.getPosGlobalFromAgent(from + dir * t);
     return true;
 }
-
-void SKOverviewCapture::onComposite()
-{
-    static LLCachedControl<bool> tactical_on(gSavedSettings, "SKTacticalOverview", false);
-    if (!tactical_on || !instanceExists())
-    {
-        return;
-    }
-    instance().composite();
-}
-
 
 template <typename Project>
 void SKOverviewCapture::drawMarkers3D(const Project& project, S32 vw, S32 vh, std::vector<std::pair<size_t, LLVector2>>& drawn)
@@ -1911,7 +1880,6 @@ void SKOverviewCapture::composite()
         gGL.popMatrix();
         gGLLastMatrix = NULL;
     }
-    mLastCompositeFrame = LLFrameTimer::getFrameCount();
     mCost.mCompositeMs += composite_timer.getElapsedTimeF32() * 1000.f;
     ++mCost.mFrames;
     const F64 now = LLFrameTimer::getUptimeSeconds().value();
@@ -1926,7 +1894,7 @@ void SKOverviewCapture::composite()
             LL_INFOS("SKOverviewCost") << "tactical per frame over " << mCost.mFrames << " frames: capture "
                                        << mCost.mCaptureMs / n << " ms, resolve " << mCost.mResolveMs / n << " ms, composite+markers "
                                        << mCost.mCompositeMs / n << " ms; rendered " << mCost.mRenders << ", reused " << mCost.mReuses
-                                       << ", world hidden " << (worldHidden() ? 1 : 0) << "; census "
+                                       << "; census "
                                        << (census_slow ? "slow" : "normal") << ", scans " << census_scans << LL_ENDL;
         }
         mCost = Cost();

@@ -34,6 +34,7 @@
 #include "lluuid.h"
 #include "v2math.h"
 #include "skmaplabels.h"
+#include "skmodalview.h"
 #include "skmapplan.h"
 #include "skoverviewcensus.h"
 #include "skoverviewmovers.h"
@@ -58,9 +59,9 @@ class SKPopupPanes;
 // navmesh floor under the agent plus SKOverviewCutHeight, each writing a class code, then resolves depth and codes
 // into an RGBA8 map. Two kinds of shot share the passes: straight-down maps of every connected region for the mini-map
 // (SKMapCaptureBase; the agent's region cut, every SKOverviewRefresh seconds, its neighbours uncut and less often,
-// regions further off rarer still) and the tactical view (SKTacticalOverview), a tilted orbit
-// camera around the agent drawn over the main view every frame.
-class SKOverviewCapture : public LLSingleton<SKOverviewCapture>
+// regions further off rarer still) and the tactical view (SKTacticalOverview), a modal view drawn from the viewer's
+// own camera, which it tilts over the agent as it opens, so alt-cam and the wheel move it as they move the world camera.
+class SKOverviewCapture : public LLSingleton<SKOverviewCapture>, public SKModalMode
 {
     LLSINGLETON(SKOverviewCapture);
     ~SKOverviewCapture() override;
@@ -79,33 +80,12 @@ public:
     /// Called once a frame after the world has rendered, before the UI.
     static void onFrame();
     static void cleanupGL();
-    /// Called after renderFinalize, before the HUD and UI: draws the tactical overview over the finished frame.
-    static void onComposite();
-    /// Whether the tactical overview covers the world view this frame: world-space name tags and hover text stay off it.
+    /// Whether the tactical overview is the modal view on top, drawn in place of the world.
     static bool tacticalShown();
-    /// Whether input this frame lands on the overview: input runs at the top of the frame after the one that composited.
-    static bool tacticalTakesInput();
-    /// Whether the main view's world can go unrendered this frame: the overview is on and covered it last frame.
-    static bool worldHidden();
 
     /// A world right-click at the root view's (x, y): opens the mini-map's menus on the overview; false when it is off.
     static bool handleRightClick(S32 x, S32 y);
 
-    /// The tactical view takes the wheel for its distance; false when it is off.
-    static bool handleScrollWheel(F32 clicks);
-    /// LLToolCamera's moves, applied to the tactical camera while the overview is shown, with LLAgentCamera's
-    /// meanings: the camera tool computes them as it does for the world camera and only the target differs.
-    /// Focuses on the ground under the window point (x, y), easing there as alt+click does; false on none.
-    static bool tacticalFocusAt(S32 x, S32 y);
-    static void tacticalOrbitAround(F32 radians);
-    static void tacticalOrbitOver(F32 radians);
-    static void tacticalZoomIn(F32 fraction);
-    static void tacticalPanLeft(F32 metres);
-    static void tacticalPanUp(F32 metres);
-    /// The distance from the tactical camera to its focus.
-    static F32 tacticalFocusDistance();
-    /// The camera reset (Escape): the tactical camera follows the avatar again.
-    static void resetTacticalCamera();
     /// The tactical overview key: held, it shows the view until released; tapped, it latches it until the next tap.
     static void handleTacticalKey(bool down);
 
@@ -121,6 +101,16 @@ public:
     const Stats& stats() const { return mStats; }
     /// The census the overview draws, with the cut it last worked out.
     const SKOverviewCensus& census() const { return mCensus; }
+
+    // SKModalMode
+    const char* getModalName() const override { return "tactical overview"; }
+    /// Escape, a teleport or RLVa turn the overview off.
+    void closeModal() override;
+    void onTopChanged(bool on_top) override;
+    void renderModal(const LLRect& world_rect_raw) override;
+    bool pickGround(S32 x, S32 y, LLVector3d& ground) const override;
+    /// The flycam's height above the agent over a person's scale, so it crosses the view quickly from high up.
+    F64 flycamScale(const LLVector3d& eye) const override;
 
 private:
     struct Shot
@@ -191,24 +181,13 @@ private:
     bool mTacticalReady = false;
     LLVector3 mTacticalCentre;   // agent space
     F32 mTacticalReach = 0.f;
-    U32 mLastCompositeFrame = 0;
-    /// The tactical camera's own state once alt-cam input has moved it; inactive, it follows as before.
-    struct TacticalCamera
-    {
-        bool mActive = false;
-        LLVector3d mFocus;
-        F32 mYaw = 0.f;     // radians, the heading the camera looks along
-        F32 mPitch = 0.f;   // radians below the horizon
-        F32 mDistance = 0.f;
-        // An alt+click's ease onto the new focus, as LLAgentCamera::startCameraAnimation: ZoomTime, smoothstepped.
-        bool mAnimating = false;
-        LLVector3d mStartEye;
-        LLVector3d mStartFocus;
-        LLTimer mAnimTimer;
-        F32 mAnimDuration = 0.f;
-    } mTacticalCam;
-    /// Takes the tactical camera over from where the overview was looking.
-    void takeTacticalCamera();
+    bool mTacticalOpen = false;     ///< claims the modal view
+    /// Claims or releases the modal view to match SKTacticalOverview.
+    static void syncTactical();
+    void openTactical();
+    void closeTactical();
+    /// Puts the viewer camera at the overview's settings: tilted over the agent, looking the way the camera did.
+    void placeTacticalCamera(bool over_other_mode);
     /// Works out the per-building cut (SKOverviewCensus::applyCut) for the agent and the people the overview marks;
     /// eye is the tactical camera's, agent space, for line of sight, or null for the top-down map.
     void updateCut(const LLVector3* eye);
@@ -224,14 +203,6 @@ private:
         std::shared_ptr<std::set<std::pair<S32, S32>>> mCells;
     };
     std::vector<Room> mRooms;
-    LLVector3d mTacticalEyeGlobal;  // the last frame's eye and focus, where an ease starts from
-    LLVector3d mTacticalFocusGlobal;
-    LLVector3 mTacticalLeft;        // the last frame's camera axes, for panning
-    LLVector3 mTacticalUp;
-    /// The last tactical camera, so input can start from it.
-    LLVector3 mTacticalTarget;
-    F32 mTacticalYaw = 0.f;
-    F32 mTacticalPitch = 0.f;
     /// What the last tactical capture showed: the same again reuses its image.
     struct TacticalKey
     {

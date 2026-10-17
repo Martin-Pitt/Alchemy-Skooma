@@ -783,11 +783,8 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
         gPipeline.mWaterSurface.update();
 
         // Render mirrors and associated hero probes before we render the rest of the scene.
-        // <SK:Nexii> tactical overview: while it covers the world view the world is not rendered under it
-        const bool sk_world_hidden = !for_snapshot && SKOverviewCapture::worldHidden();
-        // </SK:Nexii>
         // This ensures the scene state in the hero probes are exactly the same as the rest of the scene before we render it.
-        if (gPipeline.RenderMirrors && !gSnapshot && !sk_world_hidden) // <SK:Nexii> tactical overview
+        if (gPipeline.RenderMirrors && !gSnapshot)
         {
             LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("Update hero probes");
             LL_PROFILE_GPU_ZONE("hero manager")
@@ -867,13 +864,6 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
         static LLCullResult result;
         LLViewerCamera::sCurCameraID = LLViewerCamera::CAMERA_WORLD;
         LLPipeline::sUnderWaterRender = LLViewerCamera::getInstance()->cameraUnderWater();
-        // <SK:Nexii> tactical overview: nothing is culled for a world that is not drawn
-        if (sk_world_hidden)
-        {
-            result.clear();
-        }
-        else
-        // </SK:Nexii>
         gPipeline.updateCull(*LLViewerCamera::getInstance(), result);
         stop_glerror();
 
@@ -894,7 +884,7 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
 
             LLGLState::checkStates();
 
-            if (!for_snapshot && !sk_world_hidden) // <SK:Nexii> tactical overview: no shadows or impostors under it
+            if (!for_snapshot)
             {
                 if (gFrameCount > 1 && !for_snapshot)
                 { //for some reason, ATI 4800 series will error out if you
@@ -1069,7 +1059,7 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
         LLAppViewer::instance()->pingMainloopTimeout("Display:RenderGeom");
 
         if (!(LLAppViewer::instance()->logoutRequestSent() && LLAppViewer::instance()->hasSavedFinalSnapshot())
-                && !gRestoreGL && !sk_world_hidden) // <SK:Nexii> tactical overview: no world geometry under it
+                && !gRestoreGL)
         {
             LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("display - 5")
             LLViewerCamera::sCurCameraID = LLViewerCamera::CAMERA_WORLD;
@@ -1115,7 +1105,7 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
         LLRenderTarget &rt = (gPipeline.sRenderDeferred ? gPipeline.mRT->deferredScreen : gPipeline.mRT->screen);
         rt.flush();
 
-        if (LLPipeline::sRenderDeferred && !sk_world_hidden) // <SK:Nexii> tactical overview: no lighting under it
+        if (LLPipeline::sRenderDeferred)
         {
             gPipeline.renderDeferredLighting();
         }
@@ -1647,13 +1637,9 @@ void render_ui(F32 zoom_factor, int subfield)
     }
 
     // apply gamma correction and post effects
-    if (!sSKModalFrame && (gSnapshot || !SKOverviewCapture::worldHidden())) // <SK:Nexii> tactical overview: no post under it; modal view: the modal view has already drawn its frame
+    if (!sSKModalFrame) // <SK:Nexii> modal view: the modal view has already drawn its frame
     {
         gPipeline.renderFinalize();
-    }
-    if (!sSKMapFrame) // <SK:Nexii> 3D world map
-    {
-        SKOverviewCapture::onComposite(); // <SK:Nexii> tactical overview: over the finished frame, under HUD and UI
     }
 
     // A cutout frame is its subject and nothing else. Nothing drawn over the
@@ -1728,7 +1714,7 @@ static void render_ui_over_world()
         if (render_ui)
         {
             LL_PROFILE_ZONE_NAMED_CATEGORY_UI("UI 2D");
-            if (!SKOverviewCapture::tacticalShown() && !sSKModalFrame) // <SK:Nexii> tactical overview, modal view: no world name tags or hover text over either
+            if (!sSKModalFrame) // <SK:Nexii> modal view: hover text and name tags belong to the world
             {
                 LLHUDObject::renderAll();
             }

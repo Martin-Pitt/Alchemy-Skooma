@@ -3617,13 +3617,6 @@ void LLViewerWindow::handleScrollWheel(LLScrollDelta delta)
         LL_INFOS("Window") << "Scroll Wheel not handled by view" << LL_ENDL;
     }
 
-    // <SK:Nexii> tactical overview: the wheel sets its camera distance while it is shown
-    if (top_ctrl == 0 && SKOverviewCapture::handleScrollWheel(delta.mPrecise))
-    {
-        return;
-    }
-    // </SK:Nexii>
-
     // Zoom the camera in and out behavior
 
     if(top_ctrl == 0
