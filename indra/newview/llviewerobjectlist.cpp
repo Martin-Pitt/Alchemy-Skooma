@@ -956,6 +956,7 @@ void LLViewerObjectList::update(LLAgent &agent)
     mNumAvatars = 0;
 
     {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("vol - copy active"); // <SK:Nexii> sub-zones for the profiler
         for (std::vector<LLPointer<LLViewerObject> >::iterator active_iter = mActiveObjects.begin();
             active_iter != mActiveObjects.end(); active_iter++)
         {
@@ -1056,8 +1057,14 @@ void LLViewerObjectList::update(LLAgent &agent)
 
 
 
-    fetchObjectCosts();
-    fetchPhysicsFlags();
+    { // <SK:Nexii> sub-zones for the profiler
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("vol - fetch costs");
+        fetchObjectCosts();
+    }
+    {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("vol - fetch physics flags");
+        fetchPhysicsFlags();
+    } // </SK:Nexii>
 
     // update max computed render cost
     LLVOVolume::updateRenderComplexity();
@@ -1066,6 +1073,7 @@ void LLViewerObjectList::update(LLAgent &agent)
     // don't factor frames that were paused into the stats
     if (! mWasPaused)
     {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("vol - frame stats"); // <SK:Nexii> sub-zones for the profiler
         LLViewerStats::getInstance()->updateFrameStats(F64Seconds(gFrameIntervalSeconds.value()));
     }
     mWasPaused = mAgentPaused;
