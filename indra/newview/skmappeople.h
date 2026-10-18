@@ -36,6 +36,8 @@
 #include "skmapmarkers.h"
 #include "skmappolicy.h"
 #include "skmapview.h"
+
+class LLVOAvatar;
 #include "sknavwalls.h"
 #include "skmapplan.h"
 #include "skoutlinecapture.h"
@@ -71,6 +73,7 @@ public:
         LLUUID mId;
         LLVector3d mPos;
         bool mLoaded = false;               ///< a full object, not a coarse location
+        F64 mFeetZ = 0.0;                   ///< global; the sim's box bottom when loaded, else 0.9 m under a coarse location
         bool mZKnown = true;                ///< false when both it and the camera sit at the coarse ceiling
         bool mHasHeading = false;
         F32 mHeading = 0.f;                 ///< radians from east, counter-clockwise
@@ -84,6 +87,9 @@ public:
         skmap::Visibility mVisibility = skmap::Visibility::DOT;
         std::string mCode;                  ///< the ally's code in combat, else empty
     };
+
+    /// The bottom of an avatar's physical box as the sim sends it (object scale), global Z.
+    static F64 feetZ(LLVOAvatar* avatar);
 
     void initSingleton() override;
     void cleanupSingleton() override;
