@@ -239,7 +239,7 @@ namespace
         out.mS = s / 255.f;
         out.mE = e / 255.f;
         out.mO = o / 255.f;
-        out.mD = d == ENCLOSURE_D_UNKNOWN ? 0.f : d * ENCLOSURE_D_UNIT_M;
+        out.mD = d == ENCLOSURE_D_UNKNOWN ? ENCLOSURE_D_UNKNOWN_M : d * ENCLOSURE_D_UNIT_M;
         out.mBucket = static_cast<EnclosureBucket>(bucket);
         out.mSpace = space;
         out.mFloor = t.mOrigin.mV[VZ] + floor * t.mUnit;
@@ -1178,7 +1178,7 @@ namespace sknav
                                     const F32 d = -p.mSkyDecayM * std::log(e.mS);
                                     sky.emplace_back(static_cast<U32>(std::lround(d / mHalfCellM)) + probes[k].mCost, n);
                                 }
-                                if ((mNodeFlags[n] & NODE_WALK) && e.mBucket != EnclosureBucket::UNKNOWN && !e.mSealed &&
+                                if ((mNodeFlags[n] & NODE_WALK) && e.mBucket != EnclosureBucket::UNKNOWN && e.depthKnown() && !e.mSealed &&
                                     std::abs(floor - nb_floor) <= p.mClimbM)
                                 {
                                     walk.emplace_back(static_cast<U32>(std::lround(e.mD / mHalfCellM)) + probes[k].mCost, n);

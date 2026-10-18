@@ -29,7 +29,9 @@
 #include "sknavskymap.h"
 #include "sknavtypes.h"
 
+#include <cmath>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <vector>
 
@@ -62,6 +64,7 @@ namespace sknav
     constexpr U8 ENCLOSURE_D_UNKNOWN = 0xff;
     constexpr F32 ENCLOSURE_D_UNIT_M = 0.25f;
     constexpr U8 ENCLOSURE_D_DEEP = ENCLOSURE_D_UNKNOWN - 1;   ///< the cap, what a sealed gap reads
+    constexpr F32 ENCLOSURE_D_UNKNOWN_M = std::numeric_limits<F32>::quiet_NaN(); ///< Enclosure::mD with no walk to the outside
     constexpr U8 ENCLOSURE_SEALED = 1 << 0;                     ///< reached from a sealed floor, not from outside
     constexpr U8 ENCLOSURE_CANOPY = 1 << 1;                     ///< roofed but open at the sides: capped at SHELTERED
 
@@ -102,11 +105,11 @@ namespace sknav
         std::vector<CoarseGap> mGaps;
     };
 
-    /// A read at a point: all zero and UNKNOWN when there is no answer.
+    /// A read at a point: UNKNOWN, D unknown and the rest zero when there is no answer.
     struct Enclosure
     {
         F32 mS = 0.f;
-        F32 mD = 0.f;
+        F32 mD = ENCLOSURE_D_UNKNOWN_M; ///< metres walked to the outside, NaN when unknown
         F32 mE = 0.f;
         F32 mO = 0.f;               ///< side openness
         EnclosureBucket mBucket = EnclosureBucket::UNKNOWN;
@@ -116,6 +119,8 @@ namespace sknav
         bool mCanopy = false;       ///< SHELTERED rather than INDOORS because roofed but open at the sides
         F32 mFloor = 0.f;           ///< the gap's, in the frame the read was asked in
         F32 mCeiling = 0.f;         ///< a very large number when open
+
+        bool depthKnown() const { return !std::isnan(mD); }
     };
 
     struct TileEnclosure

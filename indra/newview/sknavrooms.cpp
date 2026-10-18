@@ -274,7 +274,7 @@ void SKNavWorldView::raster(const LLVector3d& min, const LLVector3d& max, F32 re
                 {
                     case Channel::S: v = e.mS; break;
                     case Channel::E: v = known ? e.mE : std::numeric_limits<F32>::quiet_NaN(); break;
-                    case Channel::D: v = known ? e.mD : std::numeric_limits<F32>::quiet_NaN(); break;
+                    case Channel::D: v = known && e.depthKnown() ? e.mD : std::numeric_limits<F32>::quiet_NaN(); break;
                     default: v = e.mFloor; break;
                 }
                 best = e.mFloor;
@@ -522,6 +522,7 @@ void SKNavRooms::gatherWind(SKNavOverlayGeom& geom, const LLVector3d& camera, F6
     const F32 rad = windHeadingDeg(heading) * DEG_TO_RAD;
     const LLVector2 along(std::cos(rad), std::sin(rad));
     const LLColor4 calm(0.15f, 0.2f, 0.9f, 0.9f), stream(0.1f, 0.9f, 0.9f, 0.9f), gust(1.f, 0.9f, 0.1f, 0.9f);
+    const LLColor4 unknown(0.5f, 0.5f, 0.5f, 0.9f);   ///< calm because nothing is known of the air there
     const F64 reach2 = reach * reach;
     constexpr S32 STRIDE = 4;       // an arrow every 2 m
     for (const SKNavWorldView::Mesh& m : mView->meshes())
@@ -548,7 +549,7 @@ void SKNavRooms::gatherWind(SKNavOverlayGeom& geom, const LLVector3d& camera, F6
                     continue;
                 }
                 const F32 f = c.factor();
-                LLColor4 color = f < 1.f ? lerp(calm, stream, f) : lerp(stream, gust, llmin(f - 1.f, 1.f));
+                LLColor4 color = (c.mFlags & WindCell::UNKNOWN) ? unknown : f < 1.f ? lerp(calm, stream, f) : lerp(stream, gust, llmin(f - 1.f, 1.f));
                 if (opaque)
                 {
                     color.mV[VALPHA] = 1.f;

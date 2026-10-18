@@ -602,9 +602,11 @@ namespace tut
         const SkyMap snapshot = live;
         live.remove(1);
         live.set(2, LLVector3d(32.0, 0.0, 0.0), roof);
-        ensure("the live map forgot the roof", live.skyOpenAt(LLVector3d(5.0, 5.0, 1.0)));
-        ensure("the snapshot kept it", !snapshot.skyOpenAt(LLVector3d(5.0, 5.0, 1.0)));
-        ensure("and never saw the new one", snapshot.skyOpenAt(LLVector3d(37.0, 5.0, 1.0)));
+        F64 top = 0.0;
+        ensure("the live map forgot the roof", !live.topAt(5.0, 5.0, top));
+        ensure("and no longer knows that air", !live.skyOpenAt(LLVector3d(5.0, 5.0, 1.0)));
+        ensure("the snapshot kept it", !snapshot.skyOpenAt(LLVector3d(5.0, 5.0, 1.0)) && snapshot.topAt(5.0, 5.0, top));
+        ensure("and never saw the new one", !snapshot.topAt(37.0, 5.0, top) && live.topAt(37.0, 5.0, top));
         ensure_equals("cells", snapshot.cells(), static_cast<size_t>(32 * 32));
     }
 }
@@ -738,5 +740,28 @@ namespace tut
         }
         ensure("some gaps read a partial roof", read > 0);
         ensure_equals("gaps whose sky moved", differ, 0u);
+    }
+}
+
+namespace tut
+{
+    template<> template<>
+    void sknavenclosure_object::test<19>()
+    {
+        set_test_name("a gap with no walk to the outside reads its depth unknown, and so does no answer");
+        ensure("no answer has no depth", !Enclosure().depthKnown());
+
+        Scene s;
+        s.box(4.f, 4.f, 12.f, 12.f, 0.f, 2.f, false);
+        s.box(4.f, 4.f, 12.f, 12.f, 4.f, 4.5f, false);
+        s.box(4.f, 4.f, 12.f, 4.5f, 2.f, 4.f, false);
+        s.box(4.f, 11.5f, 12.f, 12.f, 2.f, 4.f, false);
+        s.box(4.f, 4.f, 4.5f, 12.f, 2.f, 4.f, false);
+        s.box(11.5f, 4.f, 12.f, 12.f, 2.f, 4.f, false);
+        const EnclosureProductPtr p = computeEnclosure(s.input(1));
+        const Enclosure e = at(p, 8.f, 8.f, 3.f);
+        ensure("UNKNOWN", e.mBucket == EnclosureBucket::UNKNOWN);
+        ensure("depth unknown", !e.depthKnown());
+        ensure("the field outside has a depth", at(p, 20.f, 20.f).depthKnown());
     }
 }
