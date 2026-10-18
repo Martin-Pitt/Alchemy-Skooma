@@ -5854,7 +5854,7 @@
             <key>Type</key>
             <string>F32</string>
             <key>Value</key>
-            <real>128.0</real>
+            <real>300.0</real>
         </map>
         <!-- <SK:Nexii> Navmesh air residency: settled air on disk, whole-cluster detail -->
         <key>SKNavAirSpill</key>

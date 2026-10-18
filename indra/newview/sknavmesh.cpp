@@ -230,7 +230,7 @@ bool SKNavMesh::probesDemanded()
 
 bool SKNavMesh::inAirRadius(const Tile& tile) const
 {
-    static LLCachedControl<F32> radius(gSavedSettings, "SKNavAirRadius", 128.f);
+    static LLCachedControl<F32> radius(gSavedSettings, "SKNavAirRadius", 300.f);
     const LLVector3d camera = gAgent.getPosGlobalFromAgent(LLViewerCamera::getInstance()->getOrigin());
     const F64 dx = llmax(tile.mMin.mdV[VX] - camera.mdV[VX], 0.0, camera.mdV[VX] - tile.mMax.mdV[VX]);
     const F64 dy = llmax(tile.mMin.mdV[VY] - camera.mdV[VY], 0.0, camera.mdV[VY] - tile.mMax.mdV[VY]);
@@ -369,7 +369,7 @@ std::shared_ptr<TileDiskCache> SKNavMesh::diskCache()
 void SKNavMesh::evictAir()
 {
     static LLCachedControl<U32> budget_mb(gSavedSettings, "SKNavAirBudgetMB", 512);
-    static LLCachedControl<F32> radius(gSavedSettings, "SKNavAirRadius", 128.f);
+    static LLCachedControl<F32> radius(gSavedSettings, "SKNavAirRadius", 300.f);
     auto workers = workerQueue();
     if (mEvictionJob.valid())
     {
@@ -4715,7 +4715,7 @@ std::string SKNavMesh::exportCensus() const
     {
         return "no census yet";
     }
-    static LLCachedControl<F32> air_radius(gSavedSettings, "SKNavAirRadius", 128.f);
+    static LLCachedControl<F32> air_radius(gSavedSettings, "SKNavAirRadius", 300.f);
     static LLCachedControl<F32> gap(gSavedSettings, "SKNavClusterGap", 0.5f);
     static LLCachedControl<F32> grounded_margin(gSavedSettings, "SKNavGroundedMargin", 5.f);
     static LLCachedControl<F32> void_margin(gSavedSettings, "SKNavVoidMargin", 256.f);
