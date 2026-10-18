@@ -93,7 +93,7 @@ std::string SKMapMenu::label(const std::string& name)
     if (!loaded)
     {
         loaded = true;
-        static const char* NAMES[] = { "ping", "about_land", "place_profile", "world_map", "stop_tracking", "recenter", "settings",
+        static const char* NAMES[] = { "ping", "about_land", "place_profile", "world_map", "stop_tracking", "recenter", "settings", "tactical_settings",
                                        "view_profile", "cam", "im", "offer_teleport", "request_teleport", "teleport_to", "block",
                                        "unblock", "derender", "report", "moderate", "freeze", "parcel_eject", "estate_kick",
                                        "estate_teleport_home", "estate_ban", "checking", "more" };
@@ -350,7 +350,15 @@ LLHandle<SKPopupPanes> SKMapMenu::open(LLView* spawner, S32 x, S32 y, const LLVe
                                      true, map->isPanned()));
     }
     spec.mItems.push_back(separator());
-    spec.mItems.push_back(action(label("settings"), []() { LLFloaterReg::showInstance("sk_map_settings"); }));
+    // The tactical overview opens its own options; the mini-map its own.
+    if (dynamic_cast<SKNetMap*>(spawner))
+    {
+        spec.mItems.push_back(action(label("settings"), []() { LLFloaterReg::showInstance("sk_map_settings"); }));
+    }
+    else
+    {
+        spec.mItems.push_back(action(label("tactical_settings"), []() { LLFloaterReg::showInstance("sk_tactical_options"); }));
+    }
     panes.push_back(spec);
 
     auto gates = std::make_shared<std::vector<Gate>>();
