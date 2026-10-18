@@ -79,6 +79,7 @@ namespace skoverview
     constexpr F32 WALL_NZ = 0.5f;       ///< steeper than 60 degrees is wall
     constexpr F32 COVER_TOP_M = 1.6f;   ///< a part no taller than this is cover, not wall
     constexpr F32 INVISIBLE_WALL_M = 64.f; ///< a barrier, or an invisible part not yet judged, larger than this on any axis is no wall
+    constexpr U32 COVER_RETRIES = 8;     ///< a candidate not settled after this many attempts stops forcing rechecks
     constexpr U32 COVER_EXTRACTS_PER_BUILD = 64; ///< visible parts whose top LOD is copied for the overlap test, at most, a build
     constexpr F32 GROUND_BASE_M = 4.f;  ///< a cluster whose base is no higher than this above the land stands on it
     constexpr F32 NO_CUT = 1.0e30f;     ///< the per-vertex cut height of a part drawn whole
@@ -217,7 +218,8 @@ private:
     struct CoverInput
     {
         bool mTest = false;     ///< an invisible part, judged by the overlap test
-        bool mPending = false;  ///< a top LOD, a face's look or the part's own range is not settled: no barrier yet
+        bool mPending = false;  ///< a candidate's top LOD or a face's look is not settled: no barrier yet
+        bool mRetry = false;    ///< and is worth asking again at the recheck
         U64 mKey = 0;           ///< its candidates' geometry and looks
         std::vector<std::shared_ptr<const CoverGeom>> mGeoms;
     };
@@ -226,10 +228,18 @@ private:
                              const struct SKCensusSnapshot& snap, U32& budget);
     struct CoverEntry
     {
-        U64 mKey = 0;
-        U32 mPass = 0;
-        bool mPending = false;
-        std::shared_ptr<const CoverGeom> mGeom; ///< null when it shows nothing
+        U64 mKey = 0;           ///< its geometry and look, as the verdicts are keyed
+        U64 mGeomKey = 0;       ///< its shape and placement
+        U64 mLookKey = 0;       ///< its faces' inputs
+        U32 mPass = ~0u;        ///< the pass it was last worked in
+        U32 mTries = 0;         ///< attempts since it last settled or changed
+        bool mGeomPending = true; ///< its top LOD is not copied yet
+        bool mLookPending = false; ///< a face's look is not known yet
+        bool mInRange = false;  ///< near enough the scan to copy its top LOD
+        LLVector3d mOrigin;
+        std::shared_ptr<const std::vector<LLVector3>> mRaw; ///< every face's triangles, region-local
+        std::vector<U32> mStarts;   ///< each face's first vertex in mRaw
+        std::shared_ptr<const CoverGeom> mGeom; ///< the visible faces' triangles; null when it shows nothing
     };
     std::unordered_map<LLUUID, CoverEntry> mCoverGeom;
     struct CoverCandidate
