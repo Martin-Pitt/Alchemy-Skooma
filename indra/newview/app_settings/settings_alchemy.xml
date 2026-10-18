@@ -5856,6 +5856,17 @@
             <key>Value</key>
             <real>300.0</real>
         </map>
+        <key>SKNavAirAgentRadius</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres around the agent within which navmesh tiles build their air eagerly, wherever the camera is.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>30.0</real>
+        </map>
         <!-- <SK:Nexii> Navmesh air residency: settled air on disk, whole-cluster detail -->
         <key>SKNavAirSpill</key>
         <map>

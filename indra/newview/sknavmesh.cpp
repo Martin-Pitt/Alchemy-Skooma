@@ -231,10 +231,19 @@ bool SKNavMesh::probesDemanded()
 bool SKNavMesh::inAirRadius(const Tile& tile) const
 {
     static LLCachedControl<F32> radius(gSavedSettings, "SKNavAirRadius", 300.f);
-    const LLVector3d camera = gAgent.getPosGlobalFromAgent(LLViewerCamera::getInstance()->getOrigin());
-    const F64 dx = llmax(tile.mMin.mdV[VX] - camera.mdV[VX], 0.0, camera.mdV[VX] - tile.mMax.mdV[VX]);
-    const F64 dy = llmax(tile.mMin.mdV[VY] - camera.mdV[VY], 0.0, camera.mdV[VY] - tile.mMax.mdV[VY]);
-    if (dx * dx + dy * dy <= static_cast<F64>(radius) * radius)
+    static LLCachedControl<F32> agent_radius(gSavedSettings, "SKNavAirAgentRadius", 30.f);
+    auto closeTo = [&tile](const LLVector3d& point, F64 r)
+    {
+        const F64 dx = llmax(tile.mMin.mdV[VX] - point.mdV[VX], 0.0, point.mdV[VX] - tile.mMax.mdV[VX]);
+        const F64 dy = llmax(tile.mMin.mdV[VY] - point.mdV[VY], 0.0, point.mdV[VY] - tile.mMax.mdV[VY]);
+        return dx * dx + dy * dy <= r * r;
+    };
+    if (closeTo(gAgent.getPosGlobalFromAgent(LLViewerCamera::getInstance()->getOrigin()), radius))
+    {
+        return true;
+    }
+    // Fine air follows the agent as well as the camera.
+    if (closeTo(gAgent.getPositionGlobal(), agent_radius))
     {
         return true;
     }
