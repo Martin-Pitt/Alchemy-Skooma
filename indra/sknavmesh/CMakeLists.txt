@@ -21,6 +21,7 @@ target_sources(
     sknavexport.cpp
     sknavfaceoffsets.cpp
     sknavfeatures.cpp
+    sknavfloors.cpp
     sknavflightends.cpp
     sknavflights.cpp
     sknavlayout.cpp
@@ -59,6 +60,7 @@ target_sources(
         sknavexport.h
         sknavfaceoffsets.h
         sknavfeatures.h
+        sknavfloors.h
         sknavflightends.h
         sknavflights.h
         sknavlayout.h
@@ -145,6 +147,7 @@ if(AL_BUILD_TESTS)
       tests/sknavcensusio_test.cpp
       tests/sknavenclosurerepair_test.cpp
       tests/sknavfeatures_test.cpp
+      tests/sknavfloors_test.cpp
     BENCH_SOURCES tests/sknavfeatures_bench.cpp
     LIBRARIES sknavmesh llcommon
   )
