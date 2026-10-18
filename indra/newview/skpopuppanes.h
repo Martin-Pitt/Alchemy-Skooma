@@ -55,7 +55,7 @@ struct SKPopupPaneSpec
 };
 
 /// Root panes open at once, the second beside the first; a row can open a child pane beside its
-/// own. Held by the menu holder above the floaters and registered as a popup, so a click
+/// own, all growing towards the window's centre from the click. Held by the menu holder above the floaters and registered as a popup, so a click
 /// anywhere else closes everything; it takes keyboard focus while open and gives it back.
 class SKPopupPanes : public LLPanel
 {
@@ -100,6 +100,7 @@ private:
     std::vector<bool> mPlaced;
     std::vector<F32> mAnchor;               ///< per child pane, its opener row's top when placed, unscrolled
     std::vector<F32> mScroll;               ///< per pane, pixels scrolled down
+    sk::PopupFacing mFacing;                ///< towards the window's centre from the click
     F32 mWindowW = 0.f;
     F32 mWindowH = 0.f;
     std::function<void(std::vector<SKPopupPaneSpec>&)> mRefresh;
