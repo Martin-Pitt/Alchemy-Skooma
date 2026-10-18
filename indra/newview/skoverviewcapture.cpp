@@ -1159,10 +1159,12 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
                 glCullFace(GL_BACK);
             }
             {
-                // Transparent parts small enough to be invisible walls: the hatch flag, hiding nothing.
+                // Barriers, already drawn as their class: the hatch flag over them, hiding nothing, offset past every
+                // class's own so it passes over the copy it lies on.
                 LLGLDepthTest depth(GL_TRUE, GL_FALSE, GL_LEQUAL);
                 LLGLDisable cull_face(GL_CULL_FACE);
                 gGL.setColorMask(false, false, true, false);
+                gGL.setPolygonOffset(-1.f, -16.f);
                 for (const SKOverviewCensus::Batch& batch : batches)
                 {
                     const U32 start = batch.mStart[skoverview::INVISIBLE];
