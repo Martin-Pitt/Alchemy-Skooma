@@ -80,52 +80,57 @@ namespace sk
         return r;
     }
 
-    PopupRect PopupLayout::placeFirst(F32 x, F32 y, F32 w, F32 h, F32 window_w, F32 window_h)
+    PopupRect PopupLayout::placeFirst(F32 x, F32 y, F32 w, F32 h, PopupFacing facing, F32 window_w, F32 window_h)
     {
-        return clamp({ x + GAP, y + GAP, w, h }, window_w, window_h);
+        return clamp({ facing.mRight ? x + GAP : x - GAP - w, facing.mDown ? y + GAP : y - GAP - h, w, h }, window_w, window_h);
     }
 
-    PopupRect PopupLayout::placeBeside(const PopupRect& first, F32 w, F32 h, F32 window_w, F32 window_h)
+    PopupRect PopupLayout::placeBeside(const PopupRect& first, F32 w, F32 h, PopupFacing facing, F32 window_w, F32 window_h)
     {
-        PopupRect r { first.mX, first.mY, w, h };
-        if (first.mX - SIDE >= EDGE)
+        PopupRect r { 0.f, facing.mDown ? first.mY : first.bottom() - h, w, h };
+        const F32 right = first.right() + GAP;
+        const F32 left = first.mX - GAP - w;
+        const bool right_fits = right + w <= window_w - EDGE;
+        const bool left_fits = left >= EDGE;
+        if (right_fits && (facing.mRight || !left_fits))
         {
-            r.mX = first.mX - SIDE;
+            r.mX = right;
         }
-        else if (first.mX + 2.f * SIDE - GAP <= window_w - EDGE)
+        else if (left_fits)
         {
-            r.mX = first.mX + SIDE;
+            r.mX = left;
         }
         else
         {
-            r.mY = first.bottom() + GAP;
+            // Too narrow for two side by side: stack them the facing way.
+            r.mX = first.mX;
+            r.mY = facing.mDown ? first.bottom() + GAP : first.mY - GAP - h;
         }
         return clamp(r, window_w, window_h);
     }
 
-    PopupRect PopupLayout::placeChild(const PopupRect& parent, F32 row_top, F32 w, F32 h, const std::vector<PopupRect>& other_roots,
-                                      F32 window_w, F32 window_h)
+    PopupRect PopupLayout::placeChild(const PopupRect& parent, F32 row_top, F32 row_h, F32 w, F32 h, PopupFacing facing,
+                                      const std::vector<PopupRect>& other_roots, F32 window_w, F32 window_h)
     {
-        PopupRect r { parent.mX - w - 2.f, row_top, w, h };
-        if (r.mX < EDGE)
+        PopupRect r { 0.f, facing.mDown ? row_top : row_top + row_h - h, w, h };
+        const F32 sides[2] = { facing.mRight ? parent.right() + CHILD_GAP : parent.mX - CHILD_GAP - w,
+                               facing.mRight ? parent.mX - CHILD_GAP - w : parent.right() + CHILD_GAP };
+        r.mX = sides[0];
+        for (F32 x : sides)
         {
-            r.mX = parent.right() + 2.f;
-        }
-        bool covers = false;
-        for (const PopupRect& root : other_roots)
-        {
-            covers = covers || r.overlaps(root);
-        }
-        if (covers)
-        {
-            // Neither side is free: open below the whole group.
-            F32 lowest = parent.bottom();
+            PopupRect c = r;
+            c.mX = x;
+            c = clamp(c, window_w, window_h);
+            bool covers = c.mX != x;
             for (const PopupRect& root : other_roots)
             {
-                lowest = llmax(lowest, root.bottom());
+                covers = covers || c.overlaps(root);
             }
-            r.mX = parent.mX;
-            r.mY = lowest + GAP;
+            if (!covers)
+            {
+                r.mX = x;
+                break;
+            }
         }
         return clamp(r, window_w, window_h);
     }

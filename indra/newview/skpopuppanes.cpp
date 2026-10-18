@@ -82,6 +82,7 @@ LLHandle<SKPopupPanes> SKPopupPanes::show(LLView* spawner, S32 x, S32 y, std::ve
     spawner->localPointToScreen(x, y, &sx, &sy);
     const F32 w = sk::PopupLayout::paneWidth(view->mWindowW);
     const F32 down = view->mWindowH - static_cast<F32>(sy);
+    view->mFacing = sk::PopupFacing::towardsCentre(static_cast<F32>(sx), down, view->mWindowW, view->mWindowH);
     S32 placed_roots = 0;
     for (size_t i = 0; i < view->mSpecs.size(); ++i)
     {
@@ -92,13 +93,13 @@ LLHandle<SKPopupPanes> SKPopupPanes::show(LLView* spawner, S32 x, S32 y, std::ve
         const F32 h = sk::PopupLayout::paneHeight(nav[i].mRows, view->mWindowH);
         if (placed_roots == 0)
         {
-            view->mRects[i] = sk::PopupLayout::placeFirst(static_cast<F32>(sx), down, w, h, view->mWindowW, view->mWindowH);
+            view->mRects[i] = sk::PopupLayout::placeFirst(static_cast<F32>(sx), down, w, h, view->mFacing, view->mWindowW, view->mWindowH);
         }
         else
         {
             // Beside the first; any further root goes below the one before it.
             const sk::PopupRect& first = view->mRects[0];
-            view->mRects[i] = placed_roots == 1 ? sk::PopupLayout::placeBeside(first, w, h, view->mWindowW, view->mWindowH)
+            view->mRects[i] = placed_roots == 1 ? sk::PopupLayout::placeBeside(first, w, h, view->mFacing, view->mWindowW, view->mWindowH)
                                                 : sk::PopupLayout::clamp({ first.mX, view->mRects[i - 1].bottom() + sk::PopupLayout::GAP, w, h },
                                                                          view->mWindowW, view->mWindowH);
         }
@@ -188,8 +189,11 @@ void SKPopupPanes::layout()
                 others.push_back(mRects[j]);
             }
         }
-        mRects[i] = sk::PopupLayout::placeChild(mRects[parent], row_top, w, sk::PopupLayout::paneHeight(panes[i].mRows, mWindowH), others,
-                                                mWindowW, mWindowH);
+        const S32 opener = panes[i].mOpener;
+        const F32 row_h = opener >= 0 && opener < static_cast<S32>(panes[parent].mRows.size())
+                              ? sk::PopupLayout::rowHeight(panes[parent].mRows[opener]) : sk::PopupLayout::ROW;
+        mRects[i] = sk::PopupLayout::placeChild(mRects[parent], row_top, row_h, w, sk::PopupLayout::paneHeight(panes[i].mRows, mWindowH),
+                                                mFacing, others, mWindowW, mWindowH);
         mPlaced[i] = true;
         if (!moved)
         {
