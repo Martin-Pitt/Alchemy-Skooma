@@ -6014,7 +6014,7 @@
         <key>SKMapRegionMargin</key>
         <map>
             <key>Comment</key>
-            <string>In region view, how much of the neighbouring regions shows on each side, as a fraction of the region width (0.05 to 0.2).</string>
+            <string>In region view, how much of the neighbouring regions shows on each side, as a fraction of the region width (0.05 to 1, a whole region); sides with no region show none.</string>
             <key>Persist</key>
             <integer>1</integer>
             <key>Type</key>
