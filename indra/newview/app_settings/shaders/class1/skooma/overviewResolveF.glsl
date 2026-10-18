@@ -262,10 +262,15 @@ vec3 distanceFade(vec3 c, vec3 pos)
 }
 
 // Diagonal stripes in the frame of world up on screen, not the window's, so a rolling camera leaves them still.
-bool hatchAt(float pitch, float width)
+// Returns the pixel's coverage, box filtered across the stripe, so a pitch off the pixel grid does not beat into moire.
+float hatchAt(float pitch, float width)
 {
     vec2 q = vec2(dot(gl_FragCoord.xy, vec2(sk_screen_up.y, -sk_screen_up.x)), dot(gl_FragCoord.xy, sk_screen_up));
-    return mod(q.x + q.y, pitch) < width;
+    float s = (q.x + q.y) * 0.70710678;
+    float p = pitch * 0.70710678;
+    float w = width * 0.70710678;
+    float d = abs(mod(s - 0.5 * w + 0.5 * p, p) - 0.5 * p);
+    return clamp(0.5 * w + 0.5 - d, 0.0, 1.0);
 }
 
 void main()
@@ -460,11 +465,9 @@ void main()
         c = mix(c, mix(WATER_SHORE, WATER_DEEP, t), mix(0.6, 1.0, t));
         a = mix(a, 0.85, t);
     }
-    if (invisible && hatchAt(6.0, 2.0))
-    {
-        c = mix(c, sk_invisible, 0.6);
-        a = max(a, 0.85);
-    }
+    float hatch = invisible ? hatchAt(6.0, 2.0) : 0.0;
+    c = mix(c, sk_invisible, 0.6 * hatch);
+    a = mix(a, max(a, 0.85), hatch);
     c = regionStyle(c, pos, px_m);
     c = distanceFade(c, pos);
     frag_color = vec4(clamp(c, 0.0, 1.0), a);
@@ -483,7 +486,7 @@ void main()
                : code == CODE_SECTION     ? vec3(0.5, 0.0, 0.0)
                : code == CODE_PLACEHOLDER ? vec3(1.0, 0.0, 1.0)
                                           : vec3(1.0, 1.0, 1.0);
-        frag_color = vec4(invisible && hatchAt(4.0, 2.0) ? vec3(0.0) : k, 1.0);
+        frag_color = vec4(invisible && hatchAt(4.0, 2.0) > 0.5 ? vec3(0.0) : k, 1.0);
     }
     else if (sk_debug_view == 2)
     {
