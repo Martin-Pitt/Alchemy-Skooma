@@ -5755,6 +5755,17 @@
             <key>Value</key>
             <integer>1</integer>
         </map>
+        <key>SKTacticalDissolveReach</key>
+        <map>
+            <key>Comment</key>
+            <string>Furthest distance in metres from the tactical camera at which someone standing in outdoor air gets a see-through dissolve.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>64.0</real>
+        </map>
         <key>SKTacticalDissolveRadius</key>
         <map>
             <key>Comment</key>

@@ -1635,10 +1635,22 @@ U64 SKOverviewCapture::tacticalDissolve(Shot& shot, S32 w, S32 h)
     std::map<LLUUID, LLVector3> wanted;
     if (enabled)
     {
+        // Only close up, and only for someone in outdoor air: indoors the building's cut already shows them.
+        static LLCachedControl<F32> reach(gSavedSettings, "SKTacticalDissolveReach", 64.f);
+        const LLVector3 eye = gAgentCamera.getCameraPositionAgent();
+        const F64 seen_at = LLFrameTimer::getUptimeSeconds().value();
+        auto want = [&](const LLUUID& id, const LLVector3& feet)
+        {
+            if (dist_vec(eye, feet + LLVector3(0.f, 0.f, 0.9f)) <= (F32)reach &&
+                outdoorsAt(id, gAgent.getPosGlobalFromAgent(feet), seen_at))
+            {
+                wanted[id] = feet;
+            }
+        };
         // Anchored to the feet as they stand, as the markers are, never the floor under them.
         LLVector3 self = gAgent.getPositionAgent();
         self.mV[VZ] = isAgentAvatarValid() ? (F32)SKMapPeople::feetZ(gAgentAvatarp) : self.mV[VZ] - AVATAR_HALF_HEIGHT_M;
-        wanted[gAgent.getID()] = self;
+        want(gAgent.getID(), self);
         for (const SKMapPeople::Person& p : SKMapPeople::instance().people())
         {
             if (p.mVisibility == skmap::Visibility::HIDDEN || !p.mZKnown)
@@ -1647,7 +1659,7 @@ U64 SKOverviewCapture::tacticalDissolve(Shot& shot, S32 w, S32 h)
             }
             LLVector3 floor = gAgent.getPosAgentFromGlobal(p.mPos);
             floor.mV[VZ] = (F32)p.mFeetZ; // global z is agent z
-            wanted[p.mId] = floor;
+            want(p.mId, floor);
         }
     }
     for (const auto& want : wanted)
