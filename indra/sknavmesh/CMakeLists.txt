@@ -120,7 +120,6 @@ if(AL_BUILD_TESTS AND COMMAND al_add_test)
   al_add_test(sknavroomsschedule PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavwallruns PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavfaceoffsets PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
-  al_add_test(sknavfeatures PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavflights PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavtilecache PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavprobecache PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
@@ -142,7 +141,10 @@ if(AL_BUILD_TESTS)
   al_add_test_binary(
     sknavmesh_tests
     PROJECT sknavmesh
-    SOURCES tests/sknavcensusio_test.cpp tests/sknavenclosurerepair_test.cpp
+    SOURCES
+      tests/sknavcensusio_test.cpp
+      tests/sknavenclosurerepair_test.cpp
+      tests/sknavfeatures_test.cpp
     LIBRARIES sknavmesh llcommon
   )
 endif()

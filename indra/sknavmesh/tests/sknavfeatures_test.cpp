@@ -24,7 +24,9 @@
 
 #include "linden_common.h"
 
-#include "../test/lltut.h"
+#include "llmath.h"
+
+#include <catch2/catch_test_macros.hpp>
 
 #include "../sknavfeatures.h"
 
@@ -120,18 +122,40 @@ namespace
     {
         return std::find(f.mParts.begin(), f.mParts.end(), id(n)) != f.mParts.end();
     }
+
+    void ensure(const char* what, bool ok)
+    {
+        INFO(what);
+        CHECK(ok);
+    }
+
+    template<typename A, typename B>
+    void ensure_equals(const char* what, const A& actual, const B& expected)
+    {
+        INFO(what);
+        CHECK(actual == static_cast<A>(expected));
+    }
+
+    void ensure_distance(const char* what, F64 actual, F64 expected, F64 tolerance)
+    {
+        INFO(what);
+        CAPTURE(actual, expected);
+        CHECK(std::fabs(actual - expected) <= tolerance);
+    }
+
+    void ensure_approximately_equals(const char* what, F32 actual, F32 expected, U32 frac_bits)
+    {
+        INFO(what);
+        CAPTURE(actual, expected);
+        CHECK(is_approx_equal_fraction(actual, expected, frac_bits));
+    }
 }
 
-namespace tut
+namespace
 {
-    struct sknavfeatures_data {};
-    typedef test_group<sknavfeatures_data> sknavfeatures_group;
-    typedef sknavfeatures_group::object sknavfeatures_object;
-    tut::sknavfeatures_group g("sknavfeatures");
 
     // A thin upright panel is a door only with something to say for it.
-    template<> template<>
-    void sknavfeatures_object::test<1>()
+    TEST_CASE("sknavfeatures: a thin upright panel is a door only with something to say for it", "[sknavfeatures]")
     {
         FeaturePart door = part(1, 1, 0, 0, 0, 0.125, 1.06, 3.0);
         door.mName = "Door";
@@ -147,8 +171,7 @@ namespace tut
 
     // Two leaves side by side in one plane are one double door; a leaf in a
     // parallel wall a metre away is a door of its own.
-    template<> template<>
-    void sknavfeatures_object::test<2>()
+    TEST_CASE("sknavfeatures: two leaves side by side in one plane are one double door", "[sknavfeatures]")
     {
         FeaturePart left = part(1, 1, 0, 0, 0, 0.125, 1.06, 3.0);
         FeaturePart right = part(1, 2, 0, 1.06, 0, 0.125, 2.12, 3.0);
@@ -165,8 +188,7 @@ namespace tut
     // The torus ladder: two pieces in a named linkset, two stacked above them
     // in an unnamed one, all on one footprint, union to one span. A record
     // beside it and the landing deck its top meets stay out.
-    template<> template<>
-    void sknavfeatures_object::test<3>()
+    TEST_CASE("sknavfeatures: the torus ladder", "[sknavfeatures]")
     {
         const std::vector<FeaturePart> parts = {
             part(1, 1, 103.8, 52.5, 2986.3, 104.1, 53.6, 2991.1),
@@ -195,8 +217,7 @@ namespace tut
 
     // Three landing doors stacked on one line make a shaft; a scripted car
     // named as an elevator in its column makes it work.
-    template<> template<>
-    void sknavfeatures_object::test<4>()
+    TEST_CASE("sknavfeatures: three landing doors stacked on one line make a shaft", "[sknavfeatures]")
     {
         std::vector<FeaturePart> parts;
         std::vector<FeatureRoot> roots;
@@ -239,8 +260,7 @@ namespace tut
 
     // Sat on and moved is a vehicle, and damageable by its description or
     // its hover text; sat on and never moved is a seat.
-    template<> template<>
-    void sknavfeatures_object::test<5>()
+    TEST_CASE("sknavfeatures: sat on and moved is a vehicle and damageable by its description or its hover text", "[sknavfeatures]")
     {
         const std::vector<FeaturePart> parts = { part(1, 1, 0, 0, 0, 6, 10, 3), part(2, 2, 20, 0, 0, 21, 1, 1) };
         FeatureRoot tank = root(1);
@@ -272,8 +292,7 @@ namespace tut
     }
 
     // Health in hover text: two numbers around a slash, and nothing else.
-    template<> template<>
-    void sknavfeatures_object::test<6>()
+    TEST_CASE("sknavfeatures: health in hover text", "[sknavfeatures]")
     {
         ensure("47/50", hoverShowsHealth("47/50"));
         ensure("HP 47 / 50", hoverShowsHealth("HP 47 / 50"));
@@ -287,8 +306,7 @@ namespace tut
 
     // A door needs a door's width and real evidence: a name, or two of its
     // own script, touch and motion. A scripted root alone is never enough.
-    template<> template<>
-    void sknavfeatures_object::test<7>()
+    TEST_CASE("sknavfeatures: a door needs a door's width and real evidence", "[sknavfeatures]")
     {
         auto isDoor = [](FeaturePart p, FeatureRoot r) {
             p.mRoot = r.mRoot;
@@ -324,8 +342,7 @@ namespace tut
 
     // A pane mostly seen through is never a door, whatever its evidence and
     // with no name to call it a window.
-    template<> template<>
-    void sknavfeatures_object::test<8>()
+    TEST_CASE("sknavfeatures: a pane mostly seen through is never a door whatever its evidence and with no name to call it a window", "[sknavfeatures]")
     {
         FeaturePart pane = part(1, 1, 0, 0, 0, 0.018, 1.98, 3.15);
         pane.mScripted = pane.mTouch = true;
@@ -337,8 +354,7 @@ namespace tut
 
     // Crewed is a vehicle only once it has travelled or is physical: a swing
     // turns and a sofa gets nudged, and both stay seats.
-    template<> template<>
-    void sknavfeatures_object::test<9>()
+    TEST_CASE("sknavfeatures: crewed is a vehicle only once it has travelled or is physical", "[sknavfeatures]")
     {
         const std::vector<FeaturePart> parts = { part(1, 1, 0, 0, 0, 2, 2, 2) };
         FeatureRoot swing = root(1);
@@ -356,8 +372,7 @@ namespace tut
 
     // A working shaft's height is its door stack's wherever the car is, so
     // the span holds still while the car rides.
-    template<> template<>
-    void sknavfeatures_object::test<10>()
+    TEST_CASE("sknavfeatures: a working shaft's height is its door stack's wherever the car is so the span holds still while the car rides", "[sknavfeatures]")
     {
         std::vector<FeaturePart> parts;
         std::vector<FeatureRoot> roots;
@@ -386,8 +401,7 @@ namespace tut
 
     // A named linkset's pieces join only where they meet, and a car's name is
     // matched as a word.
-    template<> template<>
-    void sknavfeatures_object::test<11>()
+    TEST_CASE("sknavfeatures: a named linkset's pieces join only where they meet and a car's name is matched as a word", "[sknavfeatures]")
     {
         const std::vector<FeaturePart> parts = {
             part(1, 1, 0.0, 0.0, 0.0, 0.3, 0.6, 4.0),
@@ -420,8 +434,7 @@ namespace tut
 
     // Someone riding a car named as an elevator up a storey does not make it
     // a vehicle: it stays the shaft's car.
-    template<> template<>
-    void sknavfeatures_object::test<12>()
+    TEST_CASE("sknavfeatures: someone riding a car named as an elevator up a storey does not make it a vehicle", "[sknavfeatures]")
     {
         std::vector<FeaturePart> parts;
         std::vector<FeatureRoot> roots;
@@ -447,8 +460,7 @@ namespace tut
 
     // A linkset's name holding "door" is not a door by itself: not inside
     // another word, and as a word only with one more sign of its own.
-    template<> template<>
-    void sknavfeatures_object::test<13>()
+    TEST_CASE("sknavfeatures: a linkset's name holding \"door\" is not a door by itself", "[sknavfeatures]")
     {
         auto isDoor = [](FeaturePart p, FeatureRoot r) {
             p.mRoot = r.mRoot;
@@ -467,8 +479,7 @@ namespace tut
 
     // A lone piece of a build named for a ladder is a ladder only if it is
     // shaped like one; a wall there joins floors to nothing.
-    template<> template<>
-    void sknavfeatures_object::test<14>()
+    TEST_CASE("sknavfeatures: a lone piece of a build named for a ladder is a ladder only if it is shaped like one", "[sknavfeatures]")
     {
         const FeaturePart wall = part(1, 1, 10.0, 10.0, 20.0, 10.3, 18.0, 24.0);
         const FeaturePart rungs = part(1, 2, 30.0, 10.0, 20.0, 30.3, 10.6, 24.0);
@@ -480,8 +491,7 @@ namespace tut
 
     // Twin shafts 3 m apart: with one stack's leaves slid open its box reaches
     // the other car, and each shaft still takes its own, the nearer one.
-    template<> template<>
-    void sknavfeatures_object::test<15>()
+    TEST_CASE("sknavfeatures: twin shafts 3 m apart", "[sknavfeatures]")
     {
         std::vector<FeaturePart> parts;
         std::vector<FeatureRoot> roots;
@@ -522,8 +532,7 @@ namespace tut
 
     // A vehicle seen once stays one: parked non-physical with no travel on
     // record, it does not fall back to a seat.
-    template<> template<>
-    void sknavfeatures_object::test<16>()
+    TEST_CASE("sknavfeatures: a vehicle seen once stays one", "[sknavfeatures]")
     {
         FeatureRoot boat = root(1);
         boat.mEverCrewed = true;
@@ -536,8 +545,7 @@ namespace tut
 
     // A house root nudged is no evidence for its child panels: they stay walls,
     // while a root that is itself a panel is moved by its own motion.
-    template<> template<>
-    void sknavfeatures_object::test<17>()
+    TEST_CASE("sknavfeatures: a house root nudged is no evidence for its child panels", "[sknavfeatures]")
     {
         FeatureRoot house = root(1);
         house.mEverMoved = true;
@@ -555,8 +563,7 @@ namespace tut
 
     // Landing linksets named "Elevator Door" still give leaves and a shaft,
     // and a thin panel named as a lift nearer the line is never the car.
-    template<> template<>
-    void sknavfeatures_object::test<18>()
+    TEST_CASE("sknavfeatures: landing linksets named \"Elevator Door\" still give leaves and a shaft and a thin panel named as a lift nearer the line is never the car", "[sknavfeatures]")
     {
         std::vector<FeaturePart> parts;
         std::vector<FeatureRoot> roots;
@@ -584,8 +591,7 @@ namespace tut
     }
 
     // A single door's entity: its leaf, the opening's size and the sill.
-    template<> template<>
-    void sknavfeatures_object::test<19>()
+    TEST_CASE("sknavfeatures: a single door's entity", "[sknavfeatures]")
     {
         FeaturePart door = part(1, 7, 10.0, 20.0, 30.0, 10.125, 21.0, 33.0);
         door.mName = "Door";
@@ -607,8 +613,7 @@ namespace tut
     }
 
     // A coplanar double door is one entity with both leaves, as wide as both.
-    template<> template<>
-    void sknavfeatures_object::test<20>()
+    TEST_CASE("sknavfeatures: a coplanar double door is one entity with both leaves as wide as both", "[sknavfeatures]")
     {
         FeaturePart left = part(1, 1, 0, 0, 0, 0.125, 1.06, 3.0);
         FeaturePart right = part(1, 2, 0, 1.06, 0, 0.125, 2.12, 3.0);
@@ -624,8 +629,7 @@ namespace tut
     }
 
     // The id, leaves and normal hold whatever order the parts come in.
-    template<> template<>
-    void sknavfeatures_object::test<21>()
+    TEST_CASE("sknavfeatures: the id leaves and normal hold whatever order the parts come in", "[sknavfeatures]")
     {
         FeaturePart left = part(1, 9, 0, 0, 0, 0.125, 1.06, 3.0);
         FeaturePart right = part(1, 4, 0, 1.06, 0, 0.125, 2.12, 3.0);
@@ -666,8 +670,7 @@ namespace tut
     // A leaf seen open briefly and then shut keeps the shut plane, even when
     // looked at while open; while it swings, before its doorway is
     // established, the plane is not known.
-    template<> template<>
-    void sknavfeatures_object::test<22>()
+    TEST_CASE("sknavfeatures: a leaf seen open briefly and then shut keeps the shut plane even when looked at while open", "[sknavfeatures]")
     {
         LeafHistories h;
         F32 t = 0.f;
@@ -690,8 +693,7 @@ namespace tut
 
     // A double door with one leaf standing open is still one cut: one plane
     // and the width of both leaves shut.
-    template<> template<>
-    void sknavfeatures_object::test<23>()
+    TEST_CASE("sknavfeatures: a double door with one leaf standing open is still one cut", "[sknavfeatures]")
     {
         LeafHistories h;
         for (F32 t = 0.f; t <= 10.f; t += 1.f)
@@ -718,8 +720,7 @@ namespace tut
     }
 
     // A double door keeps its id while one leaf drops out and comes back.
-    template<> template<>
-    void sknavfeatures_object::test<24>()
+    TEST_CASE("sknavfeatures: a double door keeps its id while one leaf drops out and comes back", "[sknavfeatures]")
     {
         LeafHistories h;
         std::vector<DoorEntity> d = doorsNow({ shutLeaf(9), shutLeaf(4, 1.06) }, h);
@@ -732,8 +733,7 @@ namespace tut
 
     // The classifier sees a double door with one leaf standing open as two
     // doors; their rest poses make it one doorway again, under the pair's id.
-    template<> template<>
-    void sknavfeatures_object::test<25>()
+    TEST_CASE("sknavfeatures: the classifier sees a double door with one leaf standing open as two doors", "[sknavfeatures]")
     {
         LeafHistories h;
         std::vector<DoorEntity> d = doorsNow({ shutLeaf(1), shutLeaf(2, 1.06) }, h);
@@ -762,8 +762,7 @@ namespace tut
 
     // Script and touch with both faces open is a door; with a face unmeasured
     // it is not, and with something flat against a face it is mounted there.
-    template<> template<>
-    void sknavfeatures_object::test<26>()
+    TEST_CASE("sknavfeatures: script and touch with both faces open is a door", "[sknavfeatures]")
     {
         FeaturePart leaf = part(1, 1, 0, 0, 0, 0.125, 1.06, 3.0);
         leaf.mScripted = leaf.mTouch = true;
@@ -801,8 +800,7 @@ namespace tut
     // A mattress against a headboard's lower half and a second board flat on
     // its face, as a bed's layered boards are: the boards are not leaves.
     // Bypass leaves overlapping only at an edge still are.
-    template<> template<>
-    void sknavfeatures_object::test<27>()
+    TEST_CASE("sknavfeatures: a mattress against a headboard's lower half and a second board flat on its face as a bed's layered boards are", "[sknavfeatures]")
     {
         const FeatureParams params;
         FeaturePart board = part(1, 1, 0, 0, 0, 0.3, 3.0, 2.1);
@@ -821,8 +819,7 @@ namespace tut
 
     // A leaf that has rested shut long enough keeps its shut plane through a
     // swing, so opening the door moves nothing built over the doorway.
-    template<> template<>
-    void sknavfeatures_object::test<28>()
+    TEST_CASE("sknavfeatures: a leaf that has rested shut long enough keeps its shut plane through a swing so opening the door moves nothing built over the doorway", "[sknavfeatures]")
     {
         LeafHistories h;
         F32 t = 0.f;
