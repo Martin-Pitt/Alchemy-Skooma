@@ -5854,6 +5854,39 @@
             <key>Value</key>
             <integer>0</integer>
         </map>
+        <key>SKTacticalDissolve</key>
+        <map>
+            <key>Comment</key>
+            <string>Dissolves a circle through whatever stands between the tactical overview's eye and the agent or a marked person.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKTacticalDissolveRadius</key>
+        <map>
+            <key>Comment</key>
+            <string>Radius of the tactical overview's see-through circle, as a multiple of the person's height on screen.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>1.25</real>
+        </map>
+        <key>SKTacticalDissolveSoftness</key>
+        <map>
+            <key>Comment</key>
+            <string>Fraction of the see-through circle's radius its dithered edge fades over.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.25</real>
+        </map>
         <key>SKTacticalPitch</key>
         <map>
             <key>Comment</key>

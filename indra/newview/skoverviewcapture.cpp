@@ -94,6 +94,7 @@ namespace
 
     const F32 CENSUS_RANGE_M = 128.f;
     const size_t SK_MAX_TERRITORY = 16;       // regions styled as inside, at most (the resolve's array)
+    const size_t SK_MAX_DISSOLVE = 16;        // see-through circles, at most (overviewGeomF.glsl's array)
     const F32 AVATAR_HALF_HEIGHT_M = 0.9f;     // an avatar's position over its feet, near enough
     const F32 MARKER_RADIUS_M = 0.35f;         // the avatar marker's cylinder at true size
     const F32 MARKER_HEIGHT_M = 1.8f;
@@ -938,6 +939,19 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
             glUniformMatrix3fv(glGetUniformLocation(geom.mProgramObject, "sk_eye_to_world"), 1, GL_FALSE, eye_to_world);
             static LLCachedControl<U32> debug_view(gSavedSettings, "SKOverviewDebugView", 0);
             glUniform1i(glGetUniformLocation(geom.mProgramObject, "sk_debug_cut"), shot.mPartCuts && debug_view == 5 ? 1 : 0);
+            if (shot.mPartCuts)
+            {
+                const GLint prog = geom.mProgramObject;
+                static LLCachedControl<F32> soft(gSavedSettings, "SKTacticalDissolveSoftness", 0.25f);
+                const GLsizei n = (GLsizei)llmin(shot.mDissolve.size(), (size_t)SK_MAX_DISSOLVE);
+                glUniform1i(glGetUniformLocation(prog, "sk_dissolve_count"), n);
+                glUniform1f(glGetUniformLocation(prog, "sk_dissolve_soft"), llclamp((F32)soft, 0.f, 1.f));
+                if (n)
+                {
+                    glUniform4fv(glGetUniformLocation(prog, "sk_dissolve"), n, shot.mDissolve.front().mV);
+                    glUniform1fv(glGetUniformLocation(prog, "sk_dissolve_floor"), n, shot.mDissolveFloor.data());
+                }
+            }
             // B carries a cut part's cap flag; the invisible pass after it raises it to 1 where it draws.
             gGL.setColorMask(true, true, shot.mPartCuts, true);
             LLGLEnable offset(GL_POLYGON_OFFSET_FILL);
@@ -1386,6 +1400,116 @@ void SKOverviewCapture::updateCut(const LLVector3* eye)
     mCensus.applyCut(gAgent.getRegion(), occupants, eye_global, key);
 }
 
+U64 SKOverviewCapture::tacticalDissolve(Shot& shot, S32 w, S32 h)
+{
+    LL_PROFILE_ZONE_SCOPED;
+    static LLCachedControl<bool> enabled(gSavedSettings, "SKTacticalDissolve", true);
+    static LLCachedControl<F32> radius_scale(gSavedSettings, "SKTacticalDissolveRadius", 1.25f);
+    const F32 MIN_PX = 40.f;
+    const F32 MAX_PX = 320.f;
+    const F32 EASE_S = 0.2f;
+    const F64 now = LLFrameTimer::getUptimeSeconds().value();
+    const F32 step = mDissolveTime < 0.0 ? 1.f : llclamp((F32)(now - mDissolveTime) / EASE_S, 0.f, 1.f);
+    mDissolveTime = now;
+
+    // Who wants one: the agent, and everyone the overview marks.
+    std::map<LLUUID, LLVector3> wanted;
+    if (enabled)
+    {
+        F32 floor_z, cut_z;
+        cutHeights(gAgent.getPositionGlobal(), gAgent.getPositionAgent().mV[VZ], floor_z, cut_z);
+        const LLVector3 self = gAgent.getPositionAgent();
+        wanted[gAgent.getID()] = LLVector3(self.mV[VX], self.mV[VY], floor_z);
+        for (const SKMapPeople::Person& p : SKMapPeople::instance().people())
+        {
+            if (p.mVisibility == skmap::Visibility::HIDDEN || !p.mZKnown)
+            {
+                continue;
+            }
+            LLVector3 floor = gAgent.getPosAgentFromGlobal(p.mPos);
+            floor.mV[VZ] = p.mWhere.mFound ? (F32)p.mWhere.mFloor : floor.mV[VZ] - AVATAR_HALF_HEIGHT_M; // global z is agent z
+            wanted[p.mId] = floor;
+        }
+    }
+    for (const auto& want : wanted)
+    {
+        Dissolve& d = mDissolves[want.first];
+        d.mFloor = want.second;
+        d.mSelf = want.first == gAgent.getID();
+    }
+    for (auto it = mDissolves.begin(); it != mDissolves.end();)
+    {
+        const bool open = wanted.count(it->first) > 0;
+        it->second.mAmount = llclamp(it->second.mAmount + (open ? step : -step), 0.f, 1.f);
+        it = !open && it->second.mAmount <= 0.f ? mDissolves.erase(it) : std::next(it);
+    }
+
+    // Projected into the capture: in front of the eye and near the screen only; the agent first, then the nearest.
+    LLMatrix4a vp;
+    vp.setMul(shot.mView, shot.mProj);
+    struct Circle
+    {
+        F32 mOrder;
+        LLVector4 mAt;
+        F32 mFloor;
+    };
+    std::vector<Circle> circles;
+    for (const auto& entry : mDissolves)
+    {
+        const Dissolve& d = entry.second;
+        auto project = [&](const LLVector3& p, LLVector4a& clip, LLVector4a& eye_p)
+        {
+            LLVector4a at;
+            at.set(p.mV[VX], p.mV[VY], p.mV[VZ], 1.f);
+            vp.transform4(at, clip);
+            shot.mView.affineTransform(at, eye_p);
+        };
+        LLVector4a feet_clip, head_clip, chest_clip, chest_eye, unused;
+        project(d.mFloor, feet_clip, unused);
+        project(d.mFloor + LLVector3(0.f, 0.f, 1.8f), head_clip, unused);
+        project(d.mFloor + LLVector3(0.f, 0.f, 0.9f), chest_clip, chest_eye);
+        const F32 cw = chest_clip.getF32ptr()[3];
+        if (cw <= TACTICAL_NEAR_M || feet_clip.getF32ptr()[3] <= 0.f || head_clip.getF32ptr()[3] <= 0.f)
+        {
+            continue;
+        }
+        auto window = [w, h](const LLVector4a& c)
+        {
+            const F32* f = c.getF32ptr();
+            return LLVector2((f[0] / f[3] * 0.5f + 0.5f) * w, (f[1] / f[3] * 0.5f + 0.5f) * h);
+        };
+        const LLVector2 centre = window(chest_clip);
+        const F32 tall = dist_vec(window(feet_clip), window(head_clip));
+        const F32 radius = llclamp(tall * (F32)radius_scale, MIN_PX, MAX_PX) * d.mAmount * d.mAmount * (3.f - 2.f * d.mAmount);
+        if (radius < 1.f || centre.mV[VX] < -radius || centre.mV[VY] < -radius || centre.mV[VX] > w + radius ||
+            centre.mV[VY] > h + radius)
+        {
+            continue;
+        }
+        circles.push_back({ d.mSelf ? -1.f : cw, LLVector4(centre.mV[VX], centre.mV[VY], -chest_eye.getF32ptr()[2], radius),
+                            d.mFloor.mV[VZ] });
+    }
+    std::sort(circles.begin(), circles.end(), [](const Circle& a, const Circle& b) { return a.mOrder < b.mOrder; });
+    if (circles.size() > SK_MAX_DISSOLVE)
+    {
+        circles.resize(SK_MAX_DISSOLVE);
+    }
+    // The key moves with a pixel, a decimetre of depth or a pixel of radius: the capture is redone only then.
+    U64 key = 1469598103934665603ull;
+    auto mix = [&key](S64 v) { key = (key ^ (U64)v) * 1099511628211ull; };
+    for (const Circle& c : circles)
+    {
+        shot.mDissolve.push_back(c.mAt);
+        shot.mDissolveFloor.push_back(c.mFloor);
+        mix(std::llround(c.mAt.mV[0]));
+        mix(std::llround(c.mAt.mV[1]));
+        mix(std::llround(c.mAt.mV[2] * 10.f));
+        mix(std::llround(c.mAt.mV[3]));
+        mix(std::llround(c.mFloor * 10.f));
+    }
+    return key;
+}
+
 void SKOverviewCapture::tactical()
 {
     LL_PROFILE_ZONE_SCOPED;
@@ -1481,12 +1605,13 @@ void SKOverviewCapture::tactical()
         static LLCachedControl<bool> force(gSavedSettings, "SKOverviewForceRecapture", false);
         static LLCachedControl<U32> tactical_debug_view(gSavedSettings, "SKOverviewDebugView", 0);
         updateCut(&eye);
+        const U64 dissolve_key = tacticalDissolve(shot, vw, vh);
         const bool same = !force && mTacticalKey.mValid && (eye - mTacticalKey.mEye).magVecSquared() < 1e-4f &&
                           at_axis * mTacticalKey.mDir > 0.999999f && fov == mTacticalKey.mFov && vw == mTacticalKey.mWidth &&
                           vh == mTacticalKey.mHeight && std::fabs(cut_z - mTacticalKey.mCut) < 1e-3f &&
                           mCensus.signature() == mTacticalKey.mCensus &&
                           mCensus.cutStamp() == mTacticalKey.mCutStamp && gAgent.getRegion() == mTacticalKey.mRegion &&
-                          (U32)tactical_debug_view == mTacticalKey.mDebugView;
+                          (U32)tactical_debug_view == mTacticalKey.mDebugView && dissolve_key == mTacticalKey.mDissolve;
         // Movers draw over a copy of the static capture each frame; the static capture itself is redone only on change.
         const bool movers = mMovers.update();
         if (!same)
@@ -1503,6 +1628,7 @@ void SKOverviewCapture::tactical()
             mTacticalKey.mCensus = mCensus.signature();
             mTacticalKey.mCutStamp = mCensus.cutStamp();
             mTacticalKey.mDebugView = tactical_debug_view;
+            mTacticalKey.mDissolve = dissolve_key;
             mTacticalKey.mRegion = gAgent.getRegion();
             ++mCost.mRenders;
         }

@@ -41,6 +41,7 @@
 #include "v3dmath.h"
 #include "v4math.h"
 
+#include <map>
 #include <memory>
 #include <string>
 #include <utility>
@@ -129,6 +130,8 @@ private:
         LLVector4 mRegion;  // the region styled as the agent's: min x, min y, max x, max y, agent space
         std::vector<LLVector4> mTerritory;  // the regions styled as inside, same form; empty means mRegion alone
         bool mTopDown = false;
+        std::vector<LLVector4> mDissolve;   // the see-through circles: window x, y, eye depth, radius in pixels
+        std::vector<F32> mDissolveFloor;    // each one's floor, agent z
     };
     /// A region's top-down map and when it was last taken.
     struct RegionMap;
@@ -184,6 +187,17 @@ private:
     F32 mTacticalReach = 0.f;
     F32 mTacticalShadeZ = 0.f;      ///< agent-space z the height colours are relative to: the agent's floor, eased
     F64 mTacticalShadeTime = -1.0;  ///< when it was last eased; negative until the first shot
+    /// A person's see-through circle on the tactical view, eased in and out so it never pops.
+    struct Dissolve
+    {
+        LLVector3 mFloor;       ///< agent space, their feet
+        F32 mAmount = 0.f;      ///< 0 closed, 1 open
+        bool mSelf = false;
+    };
+    std::map<LLUUID, Dissolve> mDissolves;
+    F64 mDissolveTime = -1.0;
+    /// Fills the shot's see-through circles round the agent and the people the overview marks; the key of what it drew.
+    U64 tacticalDissolve(Shot& shot, S32 w, S32 h);
     bool mTacticalOpen = false;     ///< claims the modal view
     /// Claims or releases the modal view to match SKTacticalOverview.
     static void syncTactical();
@@ -223,6 +237,7 @@ private:
         U64 mCensus = 0;
         U64 mCutStamp = 0;
         U32 mDebugView = 0;
+        U64 mDissolve = 0;
         const void* mRegion = nullptr;
     } mTacticalKey;
     /// CPU time of the tactical view, summed over a second and logged.

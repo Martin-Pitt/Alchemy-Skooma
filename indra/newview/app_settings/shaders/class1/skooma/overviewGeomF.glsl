@@ -36,6 +36,37 @@ in vec3 vary_position;
 #ifdef SK_CUT_ATTRIBUTE
 in float vary_cut_z;
 in float vary_z;
+
+#define SK_MAX_DISSOLVE 16
+uniform int sk_dissolve_count;
+uniform vec4 sk_dissolve[SK_MAX_DISSOLVE];       // window x, y in pixels, eye depth in metres, radius in pixels
+uniform float sk_dissolve_floor[SK_MAX_DISSOLVE]; // their floor, agent z: nothing at or under it is dissolved
+uniform float sk_dissolve_soft;                   // the fraction of the radius the edge fades over
+
+// Whether the see-through round someone takes this fragment: nearer the eye than them, within their circle on screen,
+// dithered on a 4x4 Bayer pattern across the circle's soft rim.
+bool skDissolved()
+{
+    const float BAYER[16] = float[16](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
+    ivec2 cell = ivec2(gl_FragCoord.xy) & 3;
+    float threshold = (BAYER[cell.y * 4 + cell.x] + 0.5) / 16.0;
+    float depth = -vary_position.z;
+    for (int i = 0; i < sk_dissolve_count; ++i)
+    {
+        vec4 d = sk_dissolve[i];
+        if (d.w <= 0.0 || depth > d.z - 0.6 || vary_z <= sk_dissolve_floor[i] + 0.15)
+        {
+            continue;
+        }
+        float r = length(gl_FragCoord.xy - d.xy) / d.w;
+        float keep = smoothstep(1.0 - max(sk_dissolve_soft, 1.0e-3), 1.0, r);
+        if (keep < threshold)
+        {
+            return true;
+        }
+    }
+    return false;
+}
 #endif
 
 vec2 skOctEncode(vec3 n)
@@ -54,6 +85,10 @@ void main()
 #ifdef SK_CUT_ATTRIBUTE
     // Above its own part's cut; a hidden part (cut far below anything) only shows in debug view 5.
     if (vary_z > vary_cut_z && !(sk_debug_cut == 1 && vary_cut_z < -1.0e29))
+    {
+        discard;
+    }
+    if (sk_dissolve_count > 0 && skDissolved())
     {
         discard;
     }

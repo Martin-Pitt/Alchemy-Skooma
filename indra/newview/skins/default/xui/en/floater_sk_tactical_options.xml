@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes" ?>
 <floater
  can_resize="false"
- height="200"
+ height="270"
  layout="topleft"
  name="sk_tactical_options"
  save_rect="true"
@@ -96,6 +96,48 @@
      max_val="16"
      min_val="0"
      name="sk_tactical_tiltshift"
+     top_pad="6"
+     width="270" />
+    <check_box
+     control_name="SKTacticalDissolve"
+     follows="left|top"
+     height="16"
+     label="See through what stands in front of people"
+     layout="topleft"
+     left="10"
+     name="sk_tactical_dissolve"
+     top_pad="10"
+     width="280" />
+    <slider
+     control_name="SKTacticalDissolveRadius"
+     decimal_digits="2"
+     follows="left|top"
+     height="18"
+     increment="0.05"
+     initial_value="1.25"
+     label="See-through size"
+     label_width="90"
+     layout="topleft"
+     left="10"
+     max_val="3"
+     min_val="0.5"
+     name="sk_tactical_dissolve_radius"
+     top_pad="6"
+     width="270" />
+    <slider
+     control_name="SKTacticalDissolveSoftness"
+     decimal_digits="2"
+     follows="left|top"
+     height="18"
+     increment="0.05"
+     initial_value="0.25"
+     label="Edge softness"
+     label_width="90"
+     layout="topleft"
+     left="10"
+     max_val="1"
+     min_val="0"
+     name="sk_tactical_dissolve_softness"
      top_pad="6"
      width="270" />
 </floater>
