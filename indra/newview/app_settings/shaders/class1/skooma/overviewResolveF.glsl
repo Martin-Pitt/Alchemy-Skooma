@@ -79,11 +79,12 @@ const vec3 DOOR_TINT = vec3(0.62, 0.55, 0.74);
 const vec3 EDGE = vec3(0.86, 0.90, 0.95);
 const vec3 LIGHT = vec3(-0.45, 0.45, 0.77);         // from the north-west and above
 const float GROUND_LIFT = 1.45;
-const float ROOF_M = 5.0;                          // a floor this far above the agent's is roof-bright
-const float HEIGHT_GAIN = 0.045;                    // brightness per metre above the focus
+const float ROOF_M = 10.0;                         // a floor this far above the agent's is roof-bright
+const float HEIGHT_GAIN = 0.0225;                   // brightness per metre above the focus
 const float AO_STRENGTH = 0.65;
 const float FADE_START_M = 90.0;
 const float FADE_END_M = 260.0;
+const float FADE_REF_M = 60.0;                      // the orbit distance the fade radii are set for; further out they grow with it
 const float OUTSIDE_DIM = 0.45;
 const float GRID_M = 8.0;
 const int MASK_RAMPS = 1;
@@ -254,7 +255,8 @@ vec3 distanceFade(vec3 c, vec3 pos)
     {
         return c;
     }
-    float f = smoothstep(FADE_START_M, FADE_END_M, length(pos.xy - sk_focus.xy));
+    float zoom = max(length(sk_eye - sk_focus) / FADE_REF_M, 1.0);
+    float f = smoothstep(FADE_START_M * zoom, FADE_END_M * zoom, length(pos.xy - sk_focus.xy));
     return mix(c, VOID, f * 0.75);
 }
 
@@ -328,7 +330,7 @@ void main()
     else if (code == CODE_FLOOR || code == CODE_RAMP)
     {
         // Ground at the agent's level is the dark play area; floors and roofs above it rise to the light slate.
-        c = mix(GROUND * GROUND_LIFT, SLATE_TOP, smoothstep(0.5, ROOF_M, rel));
+        c = mix(GROUND * GROUND_LIFT, SLATE_TOP, smoothstep(1.0, ROOF_M, rel));
         c = code == CODE_RAMP && layerOn(MASK_RAMPS) ? mix(c, layerHighlit(MASK_RAMPS) ? RAMP_TINT : SLATE_WALL, 0.3) : c;
     }
     else if (code == CODE_WALL || code == CODE_SECTION)
