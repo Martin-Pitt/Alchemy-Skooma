@@ -3719,6 +3719,7 @@ void send_agent_update(bool force_send, bool send_reliable)
 
     static F32 last_draw_disatance_step = 1024;
     F32 memory_limited_draw_distance = gAgentCamera.mDrawDistance;
+    SKModalView::tacticalInterestFar(memory_limited_draw_distance); // <SK:Nexii> tactical overview: a wider Far while it steers the interest list
     const F32 mem_factor = LLMemory::getSystemMemoryBudgetFactor();
     if (mem_factor > 1.f)
     {
