@@ -118,7 +118,7 @@ bool SKToolMapPan::handleHover(S32 x, S32 y, MASK mask)
     if (passingMode())
     {
         LLToolPie::getInstance()->handleHover(x, y, mask);
-        if (gViewerWindow->getWindow()->getCursor() != UI_CURSOR_ARROW)
+        if (gViewerWindow->getWindow()->getNextCursor() != UI_CURSOR_ARROW)
         {
             return true;
         }
