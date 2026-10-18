@@ -113,8 +113,11 @@ namespace
     const F32 TACTICAL_MIN_M = 8.f;
     const F32 TACTICAL_MAX_M = 400.f;
     const F32 BATTLEFIELD_MAX_M = 4096.f;
-    const F32 BATTLEFIELD_PITCH_DEG = 89.f;  // short of straight down, so the camera keeps a heading to put north up
+    const F32 BATTLEFIELD_PITCH_DEG = 89.f;  // the untilted battlefield: short of straight down, so the camera keeps a heading to put north up
     const F32 BATTLEFIELD_MARGIN = 1.05f;
+    const F32 CYLINDER_FADE_S = 0.15f;  // a marker's crossfade between its body and its zoomed-out cylinder
+    const size_t MAX_BADGES = 64;           // coded people badged on the tactical view at most, nearest first
+    const F32 BADGE_LIFT_PX = 2.f;          // a badge's gap above its marker's top
 
     /// SKTacticalCameraMode: a fixed north-up view fitting the battlefield, or the orbit that follows the agent.
     bool battlefieldCamera()
@@ -375,7 +378,17 @@ void SKOverviewCapture::updateDemand(bool wanted)
     {
         // Open, the camera's own distance, which alt-cam and the wheel change.
         const F32 distance = mTacticalOpen && mTacticalDistance > 0.f ? mTacticalDistance : (F32)tactical_distance;
-        const F32 reach = llclamp(distance, TACTICAL_MIN_M, battlefieldCamera() ? BATTLEFIELD_MAX_M : TACTICAL_MAX_M) + CENSUS_RANGE_M;
+        F32 reach = llclamp(distance, TACTICAL_MIN_M, battlefieldCamera() ? BATTLEFIELD_MAX_M : TACTICAL_MAX_M) + CENSUS_RANGE_M;
+        LLVector3d lo, hi;
+        if (battlefieldCamera() && battlefieldBounds(lo, hi))
+        {
+            // Battlefield shows its area and no more: the census reaches the area's farthest corner, not the camera's
+            // height, which a tilt or a wide area takes to kilometres.
+            const LLVector3d agent = gAgent.getPositionGlobal();
+            const F64 dx = llmax(std::fabs(lo.mdV[VX] - agent.mdV[VX]), std::fabs(hi.mdV[VX] - agent.mdV[VX]));
+            const F64 dy = llmax(std::fabs(lo.mdV[VY] - agent.mdV[VY]), std::fabs(hi.mdV[VY] - agent.mdV[VY]));
+            reach = llmin(reach, (F32)std::sqrt(dx * dx + dy * dy));
+        }
         range = llmax(range, std::ceil(reach / 64.f) * 64.f);
     }
     if (wanted == mDemanding && (!wanted || range == mDemandRange))
@@ -609,6 +622,14 @@ void SKOverviewCapture::syncTactical()
         };
         gSavedSettings.getControl("SKTacticalCameraMode")->getSignal()->connect(replace);
         gSavedSettings.getControl("SKTacticalBattlefieldNeighbours")->getSignal()->connect(replace);
+        auto tilt = [](LLControlVariable*, const LLSD&, const LLSD&)
+        {
+            if (battlefieldCamera() && instanceExists() && instance().mTacticalOpen && SKModalView::top() == &instance())
+            {
+                instance().placeBattlefieldCamera();
+            }
+        };
+        gSavedSettings.getControl("SKTacticalBattlefieldPitch")->getSignal()->connect(tilt);
     }
     if (tactical == (instanceExists() && instance().mTacticalOpen))
     {
@@ -766,16 +787,28 @@ void SKOverviewCapture::placeBattlefieldCamera()
     cutHeights(gAgent.getPositionGlobal(), gAgent.getPositionAgent().mV[VZ], floor_z, cut_z);
     const LLVector3d floor = gAgent.getPosGlobalFromAgent(LLVector3(0.f, 0.f, floor_z));
     const LLVector3d focus((lo.mdV[VX] + hi.mdV[VX]) * 0.5, (lo.mdV[VY] + hi.mdV[VY]) * 0.5, floor.mdV[VZ]);
-    // Far enough that both half extents fit the vertical field of view and the window's aspect.
+    // North up, tilted to look north from the south; far enough that every corner of the area lies in the frustum,
+    // which a tilt turns into a trapezoid on the ground.
+    static LLCachedControl<F32> pitch_setting(gSavedSettings, "SKTacticalBattlefieldPitch", BATTLEFIELD_PITCH_DEG);
     const LLViewerCamera* camera = LLViewerCamera::getInstance();
     const LLRect world = gViewerWindow->getWorldViewRectRaw();
     const F32 aspect = world.getHeight() > 0 ? (F32)world.getWidth() / (F32)world.getHeight() : camera->getAspect();
     const F32 tan_half = std::tan(camera->getView() * 0.5f);
-    const F32 half_x = (F32)(hi.mdV[VX] - lo.mdV[VX]) * 0.5f;
-    const F32 half_y = (F32)(hi.mdV[VY] - lo.mdV[VY]) * 0.5f;
-    const F32 distance = llclamp(llmax(half_y / tan_half, half_x / (tan_half * aspect)) * BATTLEFIELD_MARGIN, TACTICAL_MIN_M,
-                                 BATTLEFIELD_MAX_M);
-    const F32 pitch = BATTLEFIELD_PITCH_DEG * DEG_TO_RAD;
+    const F32 pitch = llclamp((F32)pitch_setting, 5.f, BATTLEFIELD_PITCH_DEG) * DEG_TO_RAD;
+    const LLVector3 forward(0.f, std::cos(pitch), -std::sin(pitch));
+    const LLVector3 up(0.f, std::sin(pitch), std::cos(pitch));
+    const F32 half_x = (F32)(hi.mdV[VX] - lo.mdV[VX]) * 0.5f * BATTLEFIELD_MARGIN;
+    const F32 half_y = (F32)(hi.mdV[VY] - lo.mdV[VY]) * 0.5f * BATTLEFIELD_MARGIN;
+    F32 fit = 0.f;
+    for (S32 corner = 0; corner < 4; ++corner)
+    {
+        // A corner a from the focus sits at depth a.forward + d before an eye d back along forward, so it fits once
+        // d covers its offsets across and up over the half-angle tangents.
+        const LLVector3 a((corner & 1) ? half_x : -half_x, (corner & 2) ? half_y : -half_y, 0.f);
+        const F32 depth = a * forward;
+        fit = llmax(fit, llmax(std::fabs(a.mV[VX]) / (tan_half * aspect), std::fabs(a * up) / tan_half) - depth);
+    }
+    const F32 distance = llclamp(fit, TACTICAL_MIN_M, BATTLEFIELD_MAX_M);
     const LLVector3d north(0.0, 1.0, 0.0);
     const LLVector3d eye = focus - north * (distance * std::cos(pitch)) + LLVector3d(0.0, 0.0, distance * std::sin(pitch));
     setTacticalCamera(eye, focus);
@@ -2228,9 +2261,19 @@ void SKOverviewCapture::drawMarkers3D(const Project& project, S32 vw, S32 vh, st
         gGL.vertex3fv(b.mV);
         gGL.vertex3fv(c.mV);
     };
+    // Zoomed out past SKTacticalCylinderPixelsPerMetre the bodies give way to cylinders, crossfaded, which grow to
+    // keep SKTacticalCylinderMinRadiusPx on screen up to SKTacticalCylinderMaxRadiusM so a crowd stays apart.
+    static LLCachedControl<F32> swap_ppm(gSavedSettings, "SKTacticalCylinderPixelsPerMetre", 6.f);
+    static LLCachedControl<F32> min_px(gSavedSettings, "SKTacticalCylinderMinRadiusPx", 4.f);
+    static LLCachedControl<F32> max_radius(gSavedSettings, "SKTacticalCylinderMaxRadiusM", 2.f);
+    const F64 now = LLFrameTimer::getUptimeSeconds().value();
+    const F32 fade_step = mMarkerFadeTime < 0.0 ? 1.f : (F32)(now - mMarkerFadeTime) / CYLINDER_FADE_S;
+    mMarkerFadeTime = now;
+    std::map<LLUUID, F32> blends;
+    const LLVector3 sideways = LLViewerCamera::getInstance()->getLeftAxis();
+    auto faded = [](const LLColor4& c, F32 a) { return LLColor4(c.mV[0], c.mV[1], c.mV[2], c.mV[3] * a); };
     for (const Marker& m : markers)
     {
-        // True size at every zoom: the sim's agent size, never grown for the screen.
         LLVector2 at0;
         if (!project(m.mFloor, at0))
         {
@@ -2238,14 +2281,28 @@ void SKOverviewCapture::drawMarkers3D(const Project& project, S32 vw, S32 vh, st
         }
         // A known body sets the height, the radius in proportion.
         const F32 body = m.mHeight > 0.f ? m.mHeight / MARKER_HEIGHT_M : 1.f;
-        const F32 r = (m.mRadius > 0.f ? m.mRadius : MARKER_RADIUS_M * body);
-        const F32 h = (m.mCoarse ? MARKER_COARSE_HEIGHT_M : MARKER_HEIGHT_M) * body;
+        const F32 true_r = (m.mRadius > 0.f ? m.mRadius : MARKER_RADIUS_M * body);
+        const F32 true_h = (m.mCoarse ? MARKER_COARSE_HEIGHT_M : MARKER_HEIGHT_M) * body;
+        LLVector2 side;
+        const F32 ppm = project(m.mFloor + sideways, side) ? (side - at0).length() : 0.f;
+        const bool has_body = m.mHasShape && !m.mCoarse;
+        // Hysteresis as well as the fade: a cylinder turns back into a body only a fifth past the threshold.
+        const auto known = mCylinderBlend.find(m.mId);
+        F32 blend = known != mCylinderBlend.end() ? known->second : (ppm < swap_ppm ? 1.f : 0.f);
+        const bool small = ppm < swap_ppm * (blend > 0.5f ? 1.2f : 1.f);
+        blend = has_body ? llclamp(blend + (small ? fade_step : -fade_step), 0.f, 1.f) : 1.f;
+        blends[m.mId] = blend;
+        const F32 grow = small && ppm > 1e-4f ? llclamp(min_px / (ppm * true_r), 1.f, llmax(1.f, max_radius / true_r)) : 1.f;
+        const F32 r = true_r * grow;
+        const F32 h = true_h * grow;
         const LLColor4 bright(llmin(1.f, m.mColour.mV[0] * 1.25f + 0.1f), llmin(1.f, m.mColour.mV[1] * 1.25f + 0.1f),
-                              llmin(1.f, m.mColour.mV[2] * 1.25f + 0.1f), 1.f);
-        LLVector3 top_c = m.mFloor + LLVector3(0.f, 0.f, h);
-        if (m.mHasShape && !m.mCoarse)
+                              llmin(1.f, m.mColour.mV[2] * 1.25f + 0.1f), blend);
+        const LLVector3 cylinder_top = m.mFloor + LLVector3(0.f, 0.f, h);
+        LLVector3 top_c = cylinder_top;
+        if (has_body && blend < 1.f)
         {
-            // The avatar's own physics shape, about its position.
+            // The avatar's own physics shape, about its position, at true size.
+            const LLColor4 colour = faded(m.mColour, 1.f - blend);
             const std::vector<LLVector3>& shape = skcensus::avatarShape(m.mPose, m.mHeight);
             F32 top_z = -F32_MAX;
             for (size_t v = 0; v + 2 < shape.size(); v += 3)
@@ -2253,57 +2310,59 @@ void SKOverviewCapture::drawMarkers3D(const Project& project, S32 vw, S32 vh, st
                 const LLVector3 a = m.mCentre + shape[v] * m.mRotation;
                 const LLVector3 b = m.mCentre + shape[v + 1] * m.mRotation;
                 const LLVector3 c = m.mCentre + shape[v + 2] * m.mRotation;
-                tri(a, b, c, m.mColour);
+                tri(a, b, c, colour);
                 top_z = llmax(top_z, llmax(a.mV[VZ], llmax(b.mV[VZ], c.mV[VZ])));
             }
-            top_c = LLVector3(m.mCentre.mV[VX], m.mCentre.mV[VY], top_z);
-        }
-        else
-        {
-            for (S32 k = 0; k < MARKER_SIDES; ++k)
+            if (blend < 0.5f)
             {
-                const F32 a0 = F_TWO_PI * k / MARKER_SIDES, a1 = F_TWO_PI * (k + 1) / MARKER_SIDES;
-                const LLVector3 d0(std::cos(a0) * r, std::sin(a0) * r, 0.f), d1(std::cos(a1) * r, std::sin(a1) * r, 0.f);
-                const LLVector3 b0 = m.mFloor + d0, b1 = m.mFloor + d1, t0 = top_c + d0, t1 = top_c + d1;
-                tri(b0, b1, t1, m.mColour);
-                tri(b0, t1, t0, m.mColour);
-                tri(top_c, t0, t1, m.mColour);
+                top_c = LLVector3(m.mCentre.mV[VX], m.mCentre.mV[VY], top_z);
             }
-        }
-        if (m.mHasShape && !m.mCoarse && m.mHasHeading)
-        {
-            // The minimap's heading wedge as a flat slab: a solid triangle just clear of the body, its top flush with the drawn shape's, along
-            // the body's heading, in the minimap's proportions to the body's radius.
+            if (m.mHasHeading)
             {
+                // The minimap's heading wedge as a flat slab: a solid triangle just clear of the body, its top flush
+                // with the shape's, along the body's heading, in the minimap's proportions to the body's radius.
                 const LLVector3 ahead(std::cos(m.mHeading), std::sin(m.mHeading), 0.f);
                 const LLVector3 across(-ahead.mV[VY], ahead.mV[VX], 0.f);
                 const F32 body_r = m.mRadius;
-                const LLVector3 from(top_c.mV[VX], top_c.mV[VY], top_c.mV[VZ] - body_r * HEADING_THICK_PER_RADIUS * 0.5f);
+                const LLVector3 from(m.mCentre.mV[VX], m.mCentre.mV[VY], top_z - body_r * HEADING_THICK_PER_RADIUS * 0.5f);
                 const LLVector3 tip = from + ahead * (body_r * (1.f + HEADING_TIP_PER_RADIUS));
                 const LLVector3 base = from + ahead * (body_r * (1.f + HEADING_BASE_PER_RADIUS));
                 const LLVector3 l = base + across * (body_r * HEADING_HALF_PER_RADIUS);
                 const LLVector3 rr = base - across * (body_r * HEADING_HALF_PER_RADIUS);
                 const LLVector3 up(0.f, 0.f, body_r * HEADING_THICK_PER_RADIUS * 0.5f);
-                tri(tip + up, l + up, rr + up, m.mColour);
-                tri(tip - up, rr - up, l - up, m.mColour);
-                tri(tip - up, l - up, l + up, m.mColour);
-                tri(tip - up, l + up, tip + up, m.mColour);
-                tri(rr - up, tip - up, tip + up, m.mColour);
-                tri(rr - up, tip + up, rr + up, m.mColour);
-                tri(l - up, rr - up, rr + up, m.mColour);
-                tri(l - up, rr + up, l + up, m.mColour);
+                tri(tip + up, l + up, rr + up, colour);
+                tri(tip - up, rr - up, l - up, colour);
+                tri(tip - up, l - up, l + up, colour);
+                tri(tip - up, l + up, tip + up, colour);
+                tri(rr - up, tip - up, tip + up, colour);
+                tri(rr - up, tip + up, rr + up, colour);
+                tri(l - up, rr - up, rr + up, colour);
+                tri(l - up, rr + up, l + up, colour);
             }
         }
-        else if (m.mHasHeading)
+        if (blend > 0.f)
         {
-            // A wedge on the top, pointing along the heading, brighter than the body.
-            const LLVector3 ahead(std::cos(m.mHeading), std::sin(m.mHeading), 0.f);
-            const LLVector3 across(-ahead.mV[VY], ahead.mV[VX], 0.f);
-            const LLVector3 lift(0.f, 0.f, 0.03f);
-            const LLVector3 tip = top_c + lift + ahead * (r * 1.7f);
-            const LLVector3 back = top_c + lift - ahead * (r * 0.35f);
-            tri(back + across * (r * 0.75f), tip, back - across * (r * 0.75f), bright);
-            tri(back - across * (r * 0.75f), tip, back + across * (r * 0.75f), bright);
+            const LLColor4 colour = faded(m.mColour, blend);
+            for (S32 k = 0; k < MARKER_SIDES; ++k)
+            {
+                const F32 a0 = F_TWO_PI * k / MARKER_SIDES, a1 = F_TWO_PI * (k + 1) / MARKER_SIDES;
+                const LLVector3 d0(std::cos(a0) * r, std::sin(a0) * r, 0.f), d1(std::cos(a1) * r, std::sin(a1) * r, 0.f);
+                const LLVector3 b0 = m.mFloor + d0, b1 = m.mFloor + d1, t0 = cylinder_top + d0, t1 = cylinder_top + d1;
+                tri(b0, b1, t1, colour);
+                tri(b0, t1, t0, colour);
+                tri(cylinder_top, t0, t1, colour);
+            }
+            if (m.mHasHeading)
+            {
+                // A wedge on the top, pointing along the heading, brighter than the body.
+                const LLVector3 ahead(std::cos(m.mHeading), std::sin(m.mHeading), 0.f);
+                const LLVector3 across(-ahead.mV[VY], ahead.mV[VX], 0.f);
+                const LLVector3 lift(0.f, 0.f, 0.03f * grow);
+                const LLVector3 tip = cylinder_top + lift + ahead * (r * 1.7f);
+                const LLVector3 back = cylinder_top + lift - ahead * (r * 0.35f);
+                tri(back + across * (r * 0.75f), tip, back - across * (r * 0.75f), bright);
+                tri(back - across * (r * 0.75f), tip, back + across * (r * 0.75f), bright);
+            }
         }
         // Labels, hover, picks and menus take the projected top of the marker.
         LLVector2 top;
@@ -2316,6 +2375,7 @@ void SKOverviewCapture::drawMarkers3D(const Project& project, S32 vw, S32 vh, st
             }
         }
     }
+    mCylinderBlend.swap(blends);
     gGL.end();
     gGL.flush();
     gGL.getTextureSlot(0)->unbind();
@@ -2590,11 +2650,46 @@ void SKOverviewCapture::drawTacticalLabels(const std::vector<std::pair<size_t, L
     gGL.loadUIIdentity();
     gGL.scaleUI(scale.mV[VX], scale.mV[VY], 1.f);
 
-    for (size_t i = 0; i < drawn.size(); ++i)
     {
-        if (drawn[i].first < people.size() && !tagged[i])
+        // Coded people carry the mini-map's badge, a fixed size over their marker's top whatever the zoom; nearest the
+        // camera first, a badge mostly covering one already placed is left out, and the nearest draws on top.
+        const LLVector3 camera = LLViewerCamera::getInstance()->getOrigin();
+        std::vector<std::pair<F32, size_t>> coded;
+        for (size_t i = 0; i < drawn.size(); ++i)
         {
-            skmapdraw::personCode(people[drawn[i].first], ui(drawn[i].second), skmap::FloorRelation::SAME);
+            const size_t person = drawn[i].first;
+            if (person < people.size() && !tagged[i] && people[person].mVisibility == skmap::Visibility::DOT_CODED &&
+                !people[person].mCode.empty())
+            {
+                coded.emplace_back((gAgent.getPosAgentFromGlobal(people[person].mPos) - camera).lengthSquared(), i);
+            }
+        }
+        std::sort(coded.begin(), coded.end());
+        std::vector<std::pair<size_t, LLVector2>> badges;
+        std::vector<std::pair<LLVector2, F32>> placed;
+        for (const auto& [dist, i] : coded)
+        {
+            if (badges.size() >= MAX_BADGES)
+            {
+                break;
+            }
+            const SKMapPeople::Person& p = people[drawn[i].first];
+            const F32 radius = skmapdraw::markerRadius(p, skmap::FloorRelation::SAME);
+            const LLVector2 at = ui(drawn[i].second) + LLVector2(0.f, radius + BADGE_LIFT_PX);
+            bool covered = false;
+            for (const auto& [other, other_r] : placed)
+            {
+                covered = covered || (other - at).length() < llmax(radius, other_r);
+            }
+            if (!covered)
+            {
+                placed.emplace_back(at, radius);
+                badges.emplace_back(drawn[i].first, at);
+            }
+        }
+        for (auto it = badges.rbegin(); it != badges.rend(); ++it)
+        {
+            skmapdraw::personBadge(people[it->first], it->second);
         }
     }
 
