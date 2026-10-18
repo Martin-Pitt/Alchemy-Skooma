@@ -262,8 +262,8 @@ void SKOverviewCapture::onFrame()
     {
         SKWorldCensus::instance().setSlowCadence(tacticalShown());
     }
-    static LLCachedControl<bool> tactical(gSavedSettings, "SKTacticalOverview", false);
-    if (!mapsWanted() && !tactical)
+    // The setting alone draws nothing: the census is kept only for maps or an open tactical overview.
+    if (!mapsWanted() && !tacticalShown())
     {
         if (instanceExists())
         {
@@ -883,12 +883,13 @@ void SKOverviewCapture::frame()
     LL_INFOS_ONCE("SKOverview") << "overview running" << LL_ENDL;
     updateDemand(true);
     readTimer();
+    static LLCachedControl<bool> tactical_on(gSavedSettings, "SKTacticalOverview", false);
+    if (mapsWanted() || (tactical_on && tacticalShown()))
     {
         LL_PROFILE_ZONE_NAMED("sk overview census update");
         mCensus.update();
     }
 
-    static LLCachedControl<bool> tactical_on(gSavedSettings, "SKTacticalOverview", false);
     if (mapsWanted())
     {
         if (!tacticalShown())
