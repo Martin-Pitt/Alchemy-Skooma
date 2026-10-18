@@ -485,15 +485,15 @@ void SKNetMap::updateView()
 
     if (regionMode())
     {
-        // North up over the agent's region, its whole width and a margin of the neighbours around it.
-        static LLCachedControl<F32> margin(gSavedSettings, "SKMapRegionMargin", 0.1f);
+        // North up over the agent's region, its whole width and a margin into each connected neighbour.
         const LLViewerRegion* region = gAgent.getRegion();
         if (region->getHandle() != mRegionHandle)
         {
             mRegionHandle = region->getHandle();
             refitRegion();
         }
-        const F32 fit = region->getWidth() * (1.f + 2.f * llclamp((F32)margin, 0.05f, 0.2f));
+        F32 fit = 0.f;
+        regionFit(region, &fit);
         const LLVector3d centre = viewAnchor() + LLVector3d(mPan.mV[VX], mPan.mV[VY], 0.0);
         mView.set(centre, mRegionSpan > 0.f ? mRegionSpan : fit, 0.f, static_cast<F32>(getRect().getWidth()),
                   static_cast<F32>(getRect().getHeight()));
@@ -539,8 +539,35 @@ LLVector3d SKNetMap::viewAnchor() const
     {
         return anchorGlobal();
     }
-    const F64 half = region->getWidth() * 0.5;
-    return region->getOriginGlobal() + LLVector3d(half, half, 0.0);
+    return regionFit(region, nullptr);
+}
+
+// static
+LLVector3d SKNetMap::regionFit(const LLViewerRegion* region, F32* span)
+{
+    static LLCachedControl<F32> margin(gSavedSettings, "SKMapRegionMargin", 0.1f);
+    const F64 width = region->getWidth();
+    const F64 reach = width * llclamp((F32)margin, 0.05f, 1.f);
+    const LLVector3d origin = region->getOriginGlobal();
+    LLWorld* world = LLWorld::getInstance();
+    LLVector3d centre = origin;
+    F64 extent = width;
+    for (S32 axis : { VX, VY })
+    {
+        // Probe just past the middle of each edge; a side with no region keeps its edge.
+        LLVector3d probe = origin + LLVector3d(width * 0.5, width * 0.5, 0.0);
+        probe.mdV[axis] = origin.mdV[axis] - 1.0;
+        const F64 lo = world->getRegionFromPosGlobal(probe) ? origin.mdV[axis] - reach : origin.mdV[axis];
+        probe.mdV[axis] = origin.mdV[axis] + width + 1.0;
+        const F64 hi = world->getRegionFromPosGlobal(probe) ? origin.mdV[axis] + width + reach : origin.mdV[axis] + width;
+        centre.mdV[axis] = (lo + hi) * 0.5;
+        extent = llmax(extent, hi - lo);
+    }
+    if (span)
+    {
+        *span = static_cast<F32>(extent);
+    }
+    return centre;
 }
 
 void SKNetMap::refitRegion()

@@ -42,6 +42,7 @@
 #include "skmapview.h"
 
 class LLFontGL;
+class LLViewerRegion;
 class LLViewerTexture;
 class SKMapParcels;
 class SKPopupPanes;
@@ -233,6 +234,8 @@ private:
     skmap::MapView mView;
     /// What the view centres on: the agent's region's centre in region mode, else anchorGlobal().
     LLVector3d viewAnchor() const;
+    /// Region mode's fit: the region and SKMapRegionMargin into each connected neighbour; returns its centre.
+    static LLVector3d regionFit(const LLViewerRegion* region, F32* span);
     /// Region mode's fitted view again: no pan, no zoom of its own.
     void refitRegion();
     /// Whether region mode's view has been zoomed or panned away from its fit.
