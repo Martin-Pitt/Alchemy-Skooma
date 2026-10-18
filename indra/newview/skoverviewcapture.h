@@ -189,7 +189,8 @@ private:
     LLMatrix4a mTacticalView;
     LLMatrix4a mTacticalProj;
     S32 mTacticalViewport[4] = {};
-    bool mTacticalReady = false;
+    bool mTacticalReady = false;    ///< rendered this frame, for the composite
+    bool mTacticalPickable = false; ///< the tactical view and viewport are a shown frame's, for clicks
     LLVector3 mTacticalCentre;   // agent space
     F32 mTacticalReach = 0.f;
     F32 mTacticalShadeZ = 0.f;      ///< agent-space z the height colours are relative to: the agent's floor, eased

@@ -146,6 +146,19 @@ namespace
     const F32 PAN_THRESHOLD_PX = 4.f;   // a press that moves less than this is a click
     const F64 PAN_MARGIN_M = 64.0;      // how far past the battlefield the view's focus may be dragged
 
+    /// Why a press or drag did not pan, with SKOverviewPanDebug, once a second at most.
+    void panTrace(const char* why)
+    {
+        static LLCachedControl<bool> debug(gSavedSettings, "SKOverviewPanDebug", false);
+        static F64 last = -1.0;
+        const F64 now = LLFrameTimer::getUptimeSeconds().value();
+        if (debug && now - last >= 1.0)
+        {
+            last = now;
+            LL_INFOS("SKOverviewPan") << why << LL_ENDL;
+        }
+    }
+
     /// The ray through a viewport pixel of a camera, agent space.
     bool cursorRay(const LLMatrix4a& view, const LLMatrix4a& proj, const S32 viewport[4], const LLVector2& at, LLVector3& from,
                    LLVector3& dir)
@@ -645,6 +658,7 @@ void SKOverviewCapture::closeTactical()
     }
     mTacticalOpen = false;
     mTacticalReady = false;
+    mTacticalPickable = false;
     if (SKPopupPanes* popup = mPopup.get())
     {
         popup->closeAll();
@@ -1767,6 +1781,7 @@ void SKOverviewCapture::tactical()
     mTacticalViewport[2] = vw;
     mTacticalViewport[3] = vh;
     mTacticalReady = true;
+    mTacticalPickable = true;
     LL_INFOS_ONCE("SKOverview") << "tactical overview rendered " << vw << "x" << vh << ", census tris " << mCensus.triangles()
                                 << LL_ENDL;
 }
@@ -1887,26 +1902,37 @@ bool SKOverviewCapture::leftClick(S32 x, S32 y, MASK mask, bool down)
     if (down)
     {
         // Modified presses keep their tools: alt-cam orbits, ctrl and shift select.
-        if (mask != MASK_NONE || !mTacticalReady)
+        // The composite clears mTacticalReady every frame, so a click between frames tests mTacticalPickable.
+        if (mask != MASK_NONE)
         {
+            panTrace("press ignored: modifier held");
+            return false;
+        }
+        if (!mTacticalPickable)
+        {
+            panTrace("press ignored: no tactical frame shown yet");
             return false;
         }
         const LLVector2 scale = gViewerWindow->getDisplayScale();
         const LLVector2 at(x * scale.mV[VX] - mTacticalViewport[0], y * scale.mV[VY] - mTacticalViewport[1]);
         if (at.mV[VX] < 0.f || at.mV[VY] < 0.f || at.mV[VX] >= mTacticalViewport[2] || at.mV[VY] >= mTacticalViewport[3])
         {
+            panTrace("press ignored: outside the tactical viewport");
             return false;
         }
         LLVector3 from, dir;
         if (!cursorRay(mTacticalView, mTacticalProj, mTacticalViewport, at, from, dir) || dir.mV[VZ] > -1e-6f)
         {
+            panTrace("press ignored: the cursor's ray does not point down");
             return false;
         }
         LLVector3d grab_global;
         if (!groundAt(at, grab_global))
         {
+            panTrace("press ignored: no ground under the cursor");
             return false;
         }
+        panTrace("press grabbed the ground");
         const LLVector3 grab = gAgent.getPosAgentFromGlobal(grab_global);
         mPan = Pan();
         mPan.mPending = true;
@@ -1947,7 +1973,8 @@ void SKOverviewCapture::updatePan()
     }
     if (!tacticalShown() || !gViewerWindow->getLeftMouseDown())
     {
-        mPan = Pan(); // the release went elsewhere
+        panTrace(tacticalShown() ? "drag dropped: the release went elsewhere" : "drag dropped: the overview closed");
+        mPan = Pan();
         return;
     }
     const LLCoordGL mouse = gViewerWindow->getCurrentMouse();
@@ -1968,6 +1995,7 @@ void SKOverviewCapture::updatePan()
     LLVector3 from, dir, q;
     if (!cursorRay(mPan.mView, mPan.mProj, mPan.mViewport, at, from, dir) || !rayPlane(from, dir, mPan.mGrab.mV[VZ], q))
     {
+        panTrace("drag step skipped: the cursor's ray misses the grab's plane");
         return;
     }
     LLVector3d focus = mPan.mFocus + LLVector3d(mPan.mGrab.mV[VX] - q.mV[VX], mPan.mGrab.mV[VY] - q.mV[VY], 0.0);

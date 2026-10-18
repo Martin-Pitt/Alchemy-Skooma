@@ -5733,6 +5733,17 @@
             <key>Value</key>
             <real>0.25</real>
         </map>
+        <key>SKOverviewPanDebug</key>
+        <map>
+            <key>Comment</key>
+            <string>Log why a left press or drag on the tactical overview did not pan it (SKOverviewPan).</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
         <key>SKTacticalPitch</key>
         <map>
             <key>Comment</key>
