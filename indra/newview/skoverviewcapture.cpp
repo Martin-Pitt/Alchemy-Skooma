@@ -71,6 +71,8 @@
 #include "skworldcensus.h"
 #include "skworldmapmath.h"
 #include "llstartup.h"
+#include "lltool.h"
+#include "lltoolmgr.h"
 
 #include <algorithm>
 #include <cmath>
@@ -127,6 +129,51 @@ namespace
     void uniformColour(GLint prog, const char* name, const skmap::PaletteColour& c)
     {
         glUniform3f(glGetUniformLocation(prog, name), c.mR, c.mG, c.mB);
+    }
+
+    const F32 PAN_THRESHOLD_PX = 4.f;   // a press that moves less than this is a click
+    const F64 PAN_MARGIN_M = 64.0;      // how far past the battlefield the view's focus may be dragged
+
+    /// The ray through a viewport pixel of a camera, agent space.
+    bool cursorRay(const LLMatrix4a& view, const LLMatrix4a& proj, const S32 viewport[4], const LLVector2& at, LLVector3& from,
+                   LLVector3& dir)
+    {
+        LLMatrix4a vp, inv_vp, inv_view;
+        vp.setMul(view, proj);
+        if (viewport[2] <= 0 || viewport[3] <= 0 || !inv_vp.setInverse(vp) || !inv_view.setInverse(view))
+        {
+            return false;
+        }
+        LLVector4a origin, eye, ndc, far_pt;
+        origin.set(0.f, 0.f, 0.f, 1.f);
+        inv_view.transform4(origin, eye);
+        ndc.set(at.mV[VX] / viewport[2] * 2.f - 1.f, at.mV[VY] / viewport[3] * 2.f - 1.f, 0.5f, 1.f);
+        inv_vp.transform4(ndc, far_pt);
+        const F32* e = eye.getF32ptr();
+        const F32* f = far_pt.getF32ptr();
+        if (std::fabs(e[3]) < 1e-6f || std::fabs(f[3]) < 1e-6f)
+        {
+            return false;
+        }
+        from.set(e[0] / e[3], e[1] / e[3], e[2] / e[3]);
+        dir = LLVector3(f[0] / f[3], f[1] / f[3], f[2] / f[3]) - from;
+        return dir.normVec() > 1e-6f;
+    }
+
+    /// Where a ray meets the plane z = plane_z ahead of it.
+    bool rayPlane(const LLVector3& from, const LLVector3& dir, F32 plane_z, LLVector3& hit)
+    {
+        if (std::fabs(dir.mV[VZ]) < 1e-6f)
+        {
+            return false;
+        }
+        const F32 t = (plane_z - from.mV[VZ]) / dir.mV[VZ];
+        if (t <= 0.f)
+        {
+            return false;
+        }
+        hit = from + dir * t;
+        return true;
     }
 
 }
@@ -636,19 +683,19 @@ void SKOverviewCapture::setTacticalCamera(const LLVector3d& eye, const LLVector3
     gAgentCamera.skipCameraSmoothing();
 }
 
-void SKOverviewCapture::placeBattlefieldCamera()
+bool SKOverviewCapture::battlefieldBounds(LLVector3d& lo, LLVector3d& hi) const
 {
     static LLCachedControl<bool> neighbours(gSavedSettings, "SKTacticalBattlefieldNeighbours", false);
     LLViewerRegion* region = gAgent.getRegion();
     if (!region)
     {
-        return;
+        return false;
     }
     // The agent's region, and with SKTacticalBattlefieldNeighbours the connected regions that touch it.
     const LLVector3d origin = region->getOriginGlobal();
     const F64 width = region->getWidth();
-    LLVector3d lo = origin;
-    LLVector3d hi = origin + LLVector3d(width, width, 0.0);
+    lo = origin;
+    hi = origin + LLVector3d(width, width, 0.0);
     if (neighbours)
     {
         const LLVector3d own_lo = lo;
@@ -667,6 +714,16 @@ void SKOverviewCapture::placeBattlefieldCamera()
             hi.mdV[VX] = llmax(hi.mdV[VX], o.mdV[VX] + w);
             hi.mdV[VY] = llmax(hi.mdV[VY], o.mdV[VY] + w);
         }
+    }
+    return true;
+}
+
+void SKOverviewCapture::placeBattlefieldCamera()
+{
+    LLVector3d lo, hi;
+    if (!battlefieldBounds(lo, hi))
+    {
+        return;
     }
     F32 floor_z, cut_z;
     cutHeights(gAgent.getPositionGlobal(), gAgent.getPositionAgent().mV[VZ], floor_z, cut_z);
@@ -691,6 +748,7 @@ void SKOverviewCapture::renderModal(const LLRect& world_rect_raw)
 {
     // The display loop skips the world, and with it the overview's per-frame work: the maps, the census and the view.
     updateCapsLockCapture();
+    updatePan();
     static LLCachedControl<bool> enabled(gSavedSettings, "SKMapCaptureBase", false);
     if (enabled || mTacticalOpen)
     {
@@ -1734,33 +1792,165 @@ bool SKOverviewCapture::rightClick(S32 x, S32 y)
 
 bool SKOverviewCapture::groundAt(const LLVector2& at, LLVector3d& world) const
 {
-    LLMatrix4a vp, inv_vp, inv_view;
-    vp.setMul(mTacticalView, mTacticalProj);
-    if (!inv_vp.setInverse(vp) || !inv_view.setInverse(mTacticalView))
+    // The tactical camera's ray through the pixel, against what the view draws: the census as cut, then the terrain,
+    // then the agent's floor plane.
+    LLVector3 from, dir;
+    if (!cursorRay(mTacticalView, mTacticalProj, mTacticalViewport, at, from, dir))
     {
         return false;
     }
-    LLVector4a origin, eye, ndc, far_pt;
-    origin.set(0.f, 0.f, 0.f, 1.f);
-    inv_view.transform4(origin, eye);
-    ndc.set(at.mV[VX] / mTacticalViewport[2] * 2.f - 1.f, at.mV[VY] / mTacticalViewport[3] * 2.f - 1.f, 0.5f, 1.f);
-    inv_vp.transform4(ndc, far_pt);
-    const F32* e = eye.getF32ptr();
-    const F32* f = far_pt.getF32ptr();
-    if (std::fabs(e[3]) < 1e-6f || std::fabs(f[3]) < 1e-6f)
+    const F32 PICK_RANGE_M = 4096.f;
+    const LLVector3d origin = gAgent.getPosGlobalFromAgent(from);
+    if (mCensus.raycast(origin, dir, PICK_RANGE_M, world))
+    {
+        return true;
+    }
+    LLVector4a start, end, hit;
+    start.load3(from.mV);
+    LLVector3 far_pt = from + dir * PICK_RANGE_M;
+    end.load3(far_pt.mV);
+    bool land = false;
+    for (LLViewerRegion* region : LLWorld::getInstance()->getRegionList())
+    {
+        LLSpatialPartition* part = region->getSpatialPartition(LLViewerRegion::PARTITION_TERRAIN);
+        S32 face = -1;
+        if (part && part->lineSegmentIntersect(start, end, false, false, true, false, &face, &hit))
+        {
+            end = hit; // the next region's test only looks nearer
+            land = true;
+        }
+    }
+    if (land)
+    {
+        world = gAgent.getPosGlobalFromAgent(LLVector3(end.getF32ptr()));
+        return true;
+    }
+    F32 floor_z, cut_z;
+    cutHeights(gAgent.getPositionGlobal(), gAgent.getPositionAgent().mV[VZ], floor_z, cut_z);
+    LLVector3 plane_hit;
+    if (!rayPlane(from, dir, floor_z, plane_hit))
     {
         return false;
     }
-    const LLVector3 from(e[0] / e[3], e[1] / e[3], e[2] / e[3]);
-    const LLVector3 dir = LLVector3(f[0] / f[3], f[1] / f[3], f[2] / f[3]) - from;
-    const F32 plane_z = mTacticalCentre.mV[VZ];
-    if (dir.mV[VZ] > -1e-6f || from.mV[VZ] < plane_z)
-    {
-        return false;
-    }
-    const F32 t = (plane_z - from.mV[VZ]) / dir.mV[VZ];
-    world = gAgent.getPosGlobalFromAgent(from + dir * t);
+    world = gAgent.getPosGlobalFromAgent(plane_hit);
     return true;
+}
+
+// static
+bool SKOverviewCapture::handleLeftClick(S32 x, S32 y, MASK mask, bool down)
+{
+    if (!instanceExists())
+    {
+        return false;
+    }
+    SKOverviewCapture& self = instance();
+    if (!down && self.mPan.mPending)
+    {
+        return self.leftClick(x, y, mask, down); // a release ends the drag even if the overview closed under it
+    }
+    return tacticalShown() && self.leftClick(x, y, mask, down);
+}
+
+bool SKOverviewCapture::leftClick(S32 x, S32 y, MASK mask, bool down)
+{
+    if (down)
+    {
+        // Modified presses keep their tools: alt-cam orbits, ctrl and shift select.
+        if (mask != MASK_NONE || !mTacticalReady)
+        {
+            return false;
+        }
+        const LLVector2 scale = gViewerWindow->getDisplayScale();
+        const LLVector2 at(x * scale.mV[VX] - mTacticalViewport[0], y * scale.mV[VY] - mTacticalViewport[1]);
+        if (at.mV[VX] < 0.f || at.mV[VY] < 0.f || at.mV[VX] >= mTacticalViewport[2] || at.mV[VY] >= mTacticalViewport[3])
+        {
+            return false;
+        }
+        LLVector3 from, dir;
+        if (!cursorRay(mTacticalView, mTacticalProj, mTacticalViewport, at, from, dir) || dir.mV[VZ] > -1e-6f)
+        {
+            return false;
+        }
+        LLVector3d grab_global;
+        if (!groundAt(at, grab_global))
+        {
+            return false;
+        }
+        const LLVector3 grab = gAgent.getPosAgentFromGlobal(grab_global);
+        mPan = Pan();
+        mPan.mPending = true;
+        mPan.mDownX = x;
+        mPan.mDownY = y;
+        mPan.mMask = mask;
+        mPan.mGrab = grab;
+        mPan.mView = mTacticalView;
+        mPan.mProj = mTacticalProj;
+        std::copy(std::begin(mTacticalViewport), std::end(mTacticalViewport), mPan.mViewport);
+        mPan.mEye = gAgentCamera.getCameraPositionGlobal();
+        mPan.mFocus = gAgentCamera.getFocusGlobal();
+        return true;
+    }
+    if (!mPan.mPending)
+    {
+        return false;
+    }
+    const Pan press = mPan;
+    mPan = Pan();
+    if (!press.mActive && tacticalShown())
+    {
+        // Not a drag: the tool gets the click it would have had.
+        LLTool* tool = LLToolMgr::getInstance()->getCurrentTool();
+        if (tool && tool->handleAnyMouseClick(press.mDownX, press.mDownY, press.mMask, CLICK_LEFT, true))
+        {
+            tool->handleAnyMouseClick(x, y, mask, CLICK_LEFT, false);
+        }
+    }
+    return true;
+}
+
+void SKOverviewCapture::updatePan()
+{
+    if (!mPan.mPending)
+    {
+        return;
+    }
+    if (!tacticalShown() || !gViewerWindow->getLeftMouseDown())
+    {
+        mPan = Pan(); // the release went elsewhere
+        return;
+    }
+    const LLCoordGL mouse = gViewerWindow->getCurrentMouse();
+    const LLVector2 scale = gViewerWindow->getDisplayScale();
+    if (!mPan.mActive)
+    {
+        const F32 dx = (F32)(mouse.mX - mPan.mDownX) * scale.mV[VX];
+        const F32 dy = (F32)(mouse.mY - mPan.mDownY) * scale.mV[VY];
+        if (dx * dx + dy * dy < PAN_THRESHOLD_PX * PAN_THRESHOLD_PX)
+        {
+            return;
+        }
+        mPan.mActive = true;
+    }
+    // The camera only translates, so the press's ray through the cursor meets the grab's plane at Q and P - Q puts P
+    // back under the cursor; nothing is picked again while dragging.
+    const LLVector2 at(mouse.mX * scale.mV[VX] - mPan.mViewport[0], mouse.mY * scale.mV[VY] - mPan.mViewport[1]);
+    LLVector3 from, dir, q;
+    if (!cursorRay(mPan.mView, mPan.mProj, mPan.mViewport, at, from, dir) || !rayPlane(from, dir, mPan.mGrab.mV[VZ], q))
+    {
+        return;
+    }
+    LLVector3d focus = mPan.mFocus + LLVector3d(mPan.mGrab.mV[VX] - q.mV[VX], mPan.mGrab.mV[VY] - q.mV[VY], 0.0);
+    LLVector3d lo, hi;
+    if (battlefieldBounds(lo, hi))
+    {
+        for (S32 i = VX; i <= VY; ++i)
+        {
+            const F64 min_v = llmin(lo.mdV[i] - PAN_MARGIN_M, mPan.mFocus.mdV[i]);
+            const F64 max_v = llmax(hi.mdV[i] + PAN_MARGIN_M, mPan.mFocus.mdV[i]);
+            focus.mdV[i] = llclamp(focus.mdV[i], min_v, max_v);
+        }
+    }
+    setTacticalCamera(mPan.mEye + (focus - mPan.mFocus), focus);
 }
 
 template <typename Project>

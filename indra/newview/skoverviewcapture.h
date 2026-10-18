@@ -87,6 +87,8 @@ public:
 
     /// A world right-click at the root view's (x, y): opens the mini-map's menus on the overview; false when it is off.
     static bool handleRightClick(S32 x, S32 y);
+    /// A world left button at the root view's (x, y): a drag pans the overview, a click is passed on to the tool.
+    static bool handleLeftClick(S32 x, S32 y, MASK mask, bool down);
 
     /// The tactical overview key: held, it shows the view until released; tapped, it latches it until the next tap.
     static void handleTacticalKey(bool down);
@@ -162,7 +164,7 @@ private:
     void tactical();
     void composite();
     bool rightClick(S32 x, S32 y);
-    /// The ground plane at the tactical centre's height under an overview pixel, through the tactical camera.
+    /// What the overview draws under a pixel, by the tactical camera's ray: the census as cut, terrain, else the agent's floor plane.
     bool groundAt(const LLVector2& at, LLVector3d& world) const;
     void readTimer();
 
@@ -209,6 +211,26 @@ private:
     void placeBattlefieldCamera();
     /// Puts the viewer camera there at once, without the ease LLAgentCamera gives a focus change.
     void setTacticalCamera(const LLVector3d& eye, const LLVector3d& focus);
+    /// The agent's region, and with SKTacticalBattlefieldNeighbours the connected regions touching it, global.
+    bool battlefieldBounds(LLVector3d& lo, LLVector3d& hi) const;
+    /// A left-button drag over the overview: the ground point grabbed at the press stays under the cursor.
+    struct Pan
+    {
+        bool mPending = false;  // the button is down over the overview
+        bool mActive = false;   // and has moved past the drag threshold
+        S32 mDownX = 0;         // the press, root view coordinates
+        S32 mDownY = 0;
+        MASK mMask = 0;
+        LLVector3 mGrab;        // agent space
+        LLMatrix4a mView;       // the tactical camera at the press
+        LLMatrix4a mProj;
+        S32 mViewport[4] = {};
+        LLVector3d mEye;
+        LLVector3d mFocus;
+    } mPan;
+    bool leftClick(S32 x, S32 y, MASK mask, bool down);
+    /// Moves the camera for the cursor while a pan is under way; called each frame.
+    void updatePan();
     /// Works out the per-building cut (SKOverviewCensus::applyCut) for the agent and the people the overview marks.
     void updateCut();
     /// An enclosed room's floor polys' bounds, global, cached a few seconds.
