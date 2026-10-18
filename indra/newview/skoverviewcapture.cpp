@@ -96,7 +96,7 @@ namespace
 
     const F32 CENSUS_RANGE_M = 128.f;
     const size_t SK_MAX_TERRITORY = 16;       // regions styled as inside, at most (the resolve's array)
-    const F32 AVATAR_HALF_HEIGHT_M = 0.9f;     // an avatar's position over its feet, near enough
+    const F32 AVATAR_HALF_HEIGHT_M = 0.9f;     // a coarse-only avatar's position over its feet, having no box from the sim
     const F32 MARKER_RADIUS_M = 0.35f;         // the avatar marker's cylinder at true size
     const F32 MARKER_HEIGHT_M = 1.8f;
     const F32 MARKER_COARSE_HEIGHT_M = 0.5f;   // a coarse-only avatar: a short plain puck, no heading
@@ -521,7 +521,7 @@ void SKOverviewCapture::cutHeights(const LLVector3d& at, F32 fallback_z, F32& fl
     F32 feet = fallback_z;
     if (isAgentAvatarValid())
     {
-        feet = gAgentAvatarp->getPositionAgent().mV[VZ] - gAgentAvatarp->getPelvisToFoot();
+        feet = gAgentAvatarp->getPositionAgent().mV[VZ] - 0.5f * gAgentAvatarp->getScale().mV[VZ];
     }
     F32 nav_floor = 0.f;
     const bool near_feet = SKNavMesh::instanceExists() &&
@@ -1432,7 +1432,7 @@ void SKOverviewCapture::updateCut(const LLVector3* eye)
     LLVector3d agent_feet = agent_floor; // the feet as they stand, which a hop lifts off the floor
     if (isAgentAvatarValid())
     {
-        agent_feet.mdV[VZ] = gAgentAvatarp->getPositionGlobal().mdV[VZ] - gAgentAvatarp->getPelvisToFoot();
+        agent_feet.mdV[VZ] = SKMapPeople::feetZ(gAgentAvatarp);
     }
     addPerson(gAgent.getID(), true, agent_floor, agent_feet, cut_z, skmap::plan::whereabouts(gAgent.getPositionGlobal()));
     for (const SKMapPeople::Person& p : SKMapPeople::instance().people())
@@ -1442,9 +1442,9 @@ void SKOverviewCapture::updateCut(const LLVector3* eye)
             continue;
         }
         LLVector3d floor = p.mPos;
-        floor.mdV[VZ] = p.mWhere.mFound ? (F64)p.mWhere.mFloor : p.mPos.mdV[VZ] - AVATAR_HALF_HEIGHT_M;
+        floor.mdV[VZ] = p.mWhere.mFound ? (F64)p.mWhere.mFloor : p.mFeetZ;
         LLVector3d feet = p.mPos;
-        feet.mdV[VZ] -= AVATAR_HALF_HEIGHT_M;
+        feet.mdV[VZ] = p.mFeetZ;
         addPerson(p.mId, false, floor, feet, (F32)floor.mdV[VZ] + (F32)cut_height, p.mWhere);
     }
     const LLVector3d eye_global = eye ? gAgent.getPosGlobalFromAgent(*eye) : LLVector3d();
@@ -1894,7 +1894,7 @@ void SKOverviewCapture::drawMarkers3D(const Project& project, S32 vw, S32 vh, st
         {
             where.mdV[VZ] = LLWorld::getInstance()->resolveLandHeightGlobal(where) + AVATAR_HALF_HEIGHT_M;
         }
-        m.mFloor = gAgent.getPosAgentFromGlobal(where) - LLVector3(0.f, 0.f, AVATAR_HALF_HEIGHT_M);
+        m.mFloor = gAgent.getPosAgentFromGlobal(where) - LLVector3(0.f, 0.f, (F32)(p.mPos.mdV[VZ] - p.mFeetZ));
         m.mHeading = p.mHeading;
         m.mHasHeading = p.mHasHeading && !m.mCoarse;
         const skmap::PaletteColour& coded = skmap::palette::DOT_COMBAT;
@@ -1915,7 +1915,7 @@ void SKOverviewCapture::drawMarkers3D(const Project& project, S32 vw, S32 vh, st
     if (isAgentAvatarValid())
     {
         Marker m;
-        m.mFloor = gAgent.getPositionAgent() - LLVector3(0.f, 0.f, AVATAR_HALF_HEIGHT_M);
+        m.mFloor = gAgent.getPosAgentFromGlobal(LLVector3d(gAgent.getPositionGlobal().mdV[VX], gAgent.getPositionGlobal().mdV[VY], SKMapPeople::feetZ(gAgentAvatarp)));
         sized(m, gAgent.getID());
         const LLVector3 fwd = gAgent.getAtAxis();
         m.mHeading = std::atan2(fwd.mV[VY], fwd.mV[VX]);

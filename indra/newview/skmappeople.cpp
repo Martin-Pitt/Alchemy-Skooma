@@ -64,6 +64,13 @@ SKMapPeople::~SKMapPeople()
 {
 }
 
+// static
+F64 SKMapPeople::feetZ(LLVOAvatar* avatar)
+{
+    // Avatars stand upright, so the box's half height is all of it.
+    return avatar->getPositionGlobal().mdV[VZ] - 0.5 * (F64)avatar->getScale().mV[VZ];
+}
+
 void SKMapPeople::initSingleton()
 {
     // Taking these here makes them outlive us at teardown.
@@ -627,6 +634,7 @@ void SKMapPeople::gatherPeople()
         {
             p.mLoaded = true;
             p.mPos = avatar->getPositionGlobal();
+            p.mFeetZ = feetZ(avatar);
             // Ours is the body rotation we send; anyone else's is the sim's, extrapolated, not the drawn body's.
             const LLVector3 forward = LLVector3::x_axis * (avatar->isSelf() ? avatar->getRenderRotation() : avatar->skPredictedRotationRegion());
             p.mHeading = std::atan2(forward.mV[VY], forward.mV[VX]);
@@ -639,6 +647,11 @@ void SKMapPeople::gatherPeople()
                     p.mSeatRoot = seat->getRootEdit()->getID();
                 }
             }
+        }
+        if (!p.mLoaded)
+        {
+            // Only a coarse location, out of draw range: no box, so an average avatar's half height.
+            p.mFeetZ = p.mPos.mdV[VZ] - 0.9;
         }
         // A coarse location past the ceiling has no height, unless the camera is below it.
         p.mZKnown = p.mLoaded || !(p.mPos.mdV[VZ] >= COARSE_CEILING_M && camera_z >= COARSE_CEILING_M);
