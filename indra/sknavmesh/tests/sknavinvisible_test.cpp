@@ -125,7 +125,7 @@ TEST_CASE("sknavinvisible: a box against a mesh wall, a little off and turned, s
 {
     const InvisibleResult r = judge(box({ 5.f, 0.12f, 1.5f }, 3.f, { 5.f, 0.1f, 1.5f }), wall(0.f, 10.f, 0.f, 0.f, 3.f));
     CHECK(r.mVerdict == InvisibleVerdict::STAND_IN);
-    expectShares(r, { 0.f, 0.f, 0.999f, 0.652f, 0.f, 0.f });
+    expectShares(r, { 0.f, 0.f, 0.728f, 0.271f, 0.f, 0.f });
 }
 
 TEST_CASE("sknavinvisible: a box with nothing on it is a barrier", "[sknavinvisible]")
@@ -187,6 +187,58 @@ TEST_CASE("sknavinvisible: parts too fine to judge are left unjudged", "[sknavin
     CHECK(invisibleVerdict(part, {}, params).mVerdict == InvisibleVerdict::UNJUDGED);
     const Tris speck = box({ 0.f, 0.f, 0.f }, 0.f, { 0.05f, 0.05f, 0.05f });
     CHECK(invisibleVerdict(speck, {}, InvisibleParams()).mVerdict == InvisibleVerdict::UNJUDGED);
+}
+
+TEST_CASE("sknavinvisible: a low block and a kerb on a mesh floor are barriers", "[sknavinvisible]")
+{
+    const Tris floor = floorQuad(0.f, 10.f, 0.f, 10.f, 0.f);
+    const InvisibleResult block = judge(box({ 5.f, 5.f, 0.45f }, 0.f, { 1.f, 1.f, 0.45f }), floor);
+    CHECK(block.mVerdict == InvisibleVerdict::BARRIER);
+    expectShares(block, { 0.f, 0.f, 0.f, 0.f, 1.f, 0.f });
+    const InvisibleResult kerb = judge(box({ 5.f, 5.f, 0.15f }, 0.f, { 2.f, 0.25f, 0.15f }), floor);
+    CHECK(kerb.mVerdict == InvisibleVerdict::BARRIER);
+    expectShares(kerb, { 0.f, 0.f, 0.f, 0.f, 1.f, 0.f });
+}
+
+TEST_CASE("sknavinvisible: opposite faces that do not overlap share no cover", "[sknavinvisible]")
+{
+    Tris part = box({ 2.f, 2.f, 0.1f }, 0.f, { 2.f, 2.f, 0.1f });
+    const Tris upper = box({ 8.f, 2.f, 0.3f }, 0.f, { 2.f, 2.f, 0.1f });
+    part.insert(part.end(), upper.begin(), upper.end());
+    const InvisibleResult r = judge(part, floorQuad(6.f, 10.f, 0.f, 4.f, 0.2f));
+    CHECK(r.mVerdict == InvisibleVerdict::BARRIER);
+    expectShares(r, { 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 1.f, 1.f });
+}
+
+TEST_CASE("sknavinvisible: faces under the minimum area are left out", "[sknavinvisible]")
+{
+    const InvisibleResult r = judge(box({ 2.f, 0.1f, 1.5f }, 0.f, { 2.f, 0.005f, 1.5f }), wall(0.f, 4.f, 0.f, 0.f, 3.f));
+    CHECK(r.mVerdict == InvisibleVerdict::STAND_IN);
+    expectShares(r, { -1.f, -1.f, 1.f, 0.f, -1.f, -1.f });
+}
+
+TEST_CASE("sknavinvisible: duplicate spans cover once, and an offset span lands where it is placed", "[sknavinvisible]")
+{
+    const Tris part = box({ 5.f, 5.f, 1.5f }, 0.f, { 4.f, 0.1f, 1.5f });
+    const Tris floor = floorQuad(0.f, 10.f, 0.f, 10.f, 0.f);
+    const InvisibleResult once = invisibleVerdict(part, { { floor.data(), floor.size() } }, InvisibleParams());
+    const InvisibleResult twice =
+        invisibleVerdict(part, { { floor.data(), floor.size() }, { floor.data(), floor.size() } }, InvisibleParams());
+    REQUIRE(once.mShares.size() == twice.mShares.size());
+    for (size_t i = 0; i < once.mShares.size(); ++i)
+    {
+        CHECK(once.mShares[i] == twice.mShares[i]);
+    }
+    // The floor as a neighbour region holds it, 256 m west, brought into the part's frame by the span's offset.
+    const Tris west = floorQuad(-256.f, -246.f, 0.f, 10.f, 0.f);
+    InvisibleSpan shifted{ west.data(), west.size() };
+    shifted.mOffset.set(256.f, 0.f, 0.f);
+    const InvisibleResult moved = invisibleVerdict(part, { shifted }, InvisibleParams());
+    REQUIRE(moved.mShares.size() == once.mShares.size());
+    for (size_t i = 0; i < once.mShares.size(); ++i)
+    {
+        CHECK(moved.mShares[i] == once.mShares[i]);
+    }
 }
 
 // The oracle's sweep, printed for diffing against oracle_sweep.csv: sknavmesh_tests "[.sweep]".

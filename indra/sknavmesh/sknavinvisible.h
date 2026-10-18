@@ -38,6 +38,8 @@ namespace sknav
         F32 mSlabMin = 0.3f;        ///< and lies within the face's slab: this much either side of its plane at least,
         F32 mSlabPad = 0.1f;        ///< this much more than the part's half thickness along the normal,
         F32 mSlabMax = 1.f;         ///< and never more than this
+        F32 mSlabEpsilon = 1e-4f;   ///< the slab's boundary counts as inside it
+        F32 mShareThinRatio = 0.25f; ///< a face takes its opposite's cover only across a slab this thin for its size
         F32 mCoveredShare = 0.5f;   ///< a part covered this much (all faces, or its steep ones) is a stand-in
         F32 mMinFaceArea = 0.05f;   ///< smaller faces (a buried slab's edges) are left out of the verdict
         F32 mSteepNz = 0.5f;        ///< a face whose normal's |z| is below this is steep, wall-like
@@ -45,6 +47,7 @@ namespace sknav
         F32 mCoplanarD = 0.01f;     ///< and this close in plane offset are one face
         S32 mMask = 32;             ///< each face's coverage mask is this many cells a side
         U32 mMaxPartTris = 4096;    ///< parts with more triangles are not judged
+        U32 mMaxFaces = 64;         ///< only this many of a part's largest faces are judged
     };
 
     /// A coplanar group of a part's triangles, in a frame on its plane.
@@ -56,6 +59,7 @@ namespace sknav
         LLVector3 mV;
         F32 mMinU = 0.f, mMaxU = 0.f, mMinV = 0.f, mMaxV = 0.f;
         F32 mHalf = 0.f;            ///< the part's half thickness along the normal
+        F32 mOut = 1.f;             ///< 1 when the normal points away from the part's middle, else -1
         F32 mArea = 0.f;
         std::vector<U32> mTris;     ///< the part's triangles in it, by index
     };
@@ -65,6 +69,7 @@ namespace sknav
     {
         const LLVector3* mVerts = nullptr;
         size_t mCount = 0;          ///< vertices
+        LLVector3 mOffset;          ///< added to every vertex: a neighbour region's into the part's frame
     };
 
     enum class InvisibleVerdict : U8
@@ -90,8 +95,8 @@ namespace sknav
     F32 invisibleFaceCover(const InvisibleFace& face, const std::vector<LLVector3>& tris,
                            const std::vector<InvisibleSpan>& visible, const InvisibleParams& params);
 
-    /// A part is a barrier when both its faces and its steep faces are covered less than mCoveredShare; a slab stands
-    /// for the surface on either side, so a face takes its opposite face's share when that is more.
+    /// A part is a barrier when both its faces and its steep faces are covered less than mCoveredShare. A thin slab
+    /// stands for the surface on either side, so a face takes the share of an opposite face across it when that is more.
     InvisibleResult invisibleVerdict(const std::vector<LLVector3>& tris, const std::vector<InvisibleSpan>& visible,
                                      const InvisibleParams& params);
 }
