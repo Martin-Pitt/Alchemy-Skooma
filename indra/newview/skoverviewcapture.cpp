@@ -1428,7 +1428,18 @@ void SKOverviewCapture::tactical()
     shot.mProj = al_perspective(fov, aspect, TACTICAL_NEAR_M, far_m);
     shot.mEye = eye;
     shot.mCut = cut_z;
-    shot.mFocus = target;
+    // The fade follows the focus, but the height colours stay on the agent's floor, eased so a climb or teleport never flickers.
+    const F64 now = LLFrameTimer::getUptimeSeconds().value();
+    if (mTacticalShadeTime < 0.0 || now - mTacticalShadeTime > 1.0)
+    {
+        mTacticalShadeZ = floor_z;
+    }
+    else
+    {
+        mTacticalShadeZ += (floor_z - mTacticalShadeZ) * (F32)(1.0 - std::exp(-(now - mTacticalShadeTime) / 0.25));
+    }
+    mTacticalShadeTime = now;
+    shot.mFocus = LLVector3(target.mV[VX], target.mV[VY], mTacticalShadeZ);
     shot.mPartCuts = true;
     shot.mLevelTop = cut_z;
     {

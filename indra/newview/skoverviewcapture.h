@@ -181,6 +181,8 @@ private:
     bool mTacticalReady = false;
     LLVector3 mTacticalCentre;   // agent space
     F32 mTacticalReach = 0.f;
+    F32 mTacticalShadeZ = 0.f;      ///< agent-space z the height colours are relative to: the agent's floor, eased
+    F64 mTacticalShadeTime = -1.0;  ///< when it was last eased; negative until the first shot
     bool mTacticalOpen = false;     ///< claims the modal view
     /// Claims or releases the modal view to match SKTacticalOverview.
     static void syncTactical();
