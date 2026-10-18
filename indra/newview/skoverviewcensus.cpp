@@ -122,17 +122,17 @@ SKOverviewCensus::SKOverviewCensus() = default;
 SKOverviewCensus::~SKOverviewCensus()
 {
     release();
-}
-
-void SKOverviewCensus::release()
-{
-    // A build in flight is for buffers no longer wanted: the pool is joined and its result never lands.
-    ++mGeneration;
     if (mWorkers)
     {
         mWorkers->close();
         mWorkers.reset();
     }
+}
+
+void SKOverviewCensus::release()
+{
+    // A build in flight is for buffers no longer wanted: its result never lands, and the pool stays for the next.
+    ++mGeneration;
     mJob = {};
     mBuilt = false;
     mExtents.clear();
@@ -576,8 +576,8 @@ bool SKOverviewCensus::update()
         const LLVector3 pos = volume->getPositionRegion();
         const LLQuaternion rot = volume->getRotationRegion();
         const LLVector3 scale = volume->getScale();
-        U64 key = skoverview::scramble((U64)(uintptr_t)lod ^ ((U64)(U8)lod->getSculptLevel() << 56) ^
-                                       ((U64)params.getSculptType() << 48));
+        // Not the volume itself: a LOD switch replaces it and the top-LOD shape does not change with it.
+        U64 key = skoverview::scramble(((U64)(U8)lod->getSculptLevel() << 56) ^ ((U64)params.getSculptType() << 48));
         key = skoverview::scramble(key ^ hash_value(params.getSculptID()) ^ volume->getRegion()->getHandle());
         for (S32 a = 0; a < 3; ++a)
         {
