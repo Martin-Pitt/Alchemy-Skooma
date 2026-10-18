@@ -62,9 +62,24 @@ namespace skmap
         F32 mHold = CODE_HOLD_S;
     };
 
-    /// The study's marker radius: a floor chevron and a one-character code fill a disc of half
-    /// the font plus the padding; an uncoded dot is 3 px; a longer code grows to fit its text.
-    F32 markerRadius(bool chevron, bool coded, U32 code_length, F32 text_width, F32 font_px, F32 padding_px);
+    /// How a floor difference draws on a dot: how many chevrons, how steep (rise over half width) and how thick.
+    struct ChevronStyle
+    {
+        U8 mCount = 0;
+        F32 mSteep = 0.55f;
+        F32 mStroke = 0.f;
+    };
+    /// The chevrons for a floor difference of abs_delta metres: none under bands[0], one from it, two from
+    /// bands[1], three from bands[2]; steepness and stroke grow from bands[3] to bands[4] and hold past it.
+    /// A band set below the one before it is raised to it.
+    ChevronStyle chevronStyle(F32 abs_delta, const F32 bands[5], F32 base_stroke_px);
+    /// The gap between stacked chevrons' strokes.
+    F32 chevronGap(F32 stroke_px, F32 font_px);
+
+    /// The study's marker radius: one floor chevron and a one-character code fill a disc of half
+    /// the font plus the padding, and each further chevron adds its gap; an uncoded dot is 3 px;
+    /// a longer code grows to fit its text.
+    F32 markerRadius(U8 chevrons, F32 chevron_stroke_px, bool coded, U32 code_length, F32 text_width, F32 font_px, F32 padding_px);
 }
 
 #endif // SK_MAPMARKERS_H

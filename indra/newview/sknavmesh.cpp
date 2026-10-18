@@ -3028,28 +3028,6 @@ namespace
     }
 }
 
-bool SKNavMesh::spaceAt(const LLVector3d& pos, LLUUID& mesh_out, U32& space_out) const
-{
-    F32 z = 0.f;
-    Mesh* mesh = meshAt(pos, AgentClass::AVATAR, z);
-    const S32 c = static_cast<S32>(AgentClass::AVATAR);
-    if (!mesh || !mesh->mQuery[c])
-    {
-        return false;
-    }
-    const SpaceQueryFilter filter([this](const dtMeshTile* t) { return polySpaces(t); });
-    const dtPolyRef ref = nearestPoly(*mesh->mQuery[c], mesh->mOrigin, pos, filter);
-    const dtMeshTile* tile = nullptr;
-    const dtPoly* poly = nullptr;
-    if (!ref || !dtStatusSucceed(mesh->mNav[c]->getTileAndPolyByRef(ref, &tile, &poly)))
-    {
-        return false;
-    }
-    space_out = polySpace(tile, static_cast<U32>(poly - tile->polys));
-    mesh_out = mesh->mId;
-    return space_out != 0;
-}
-
 void SKNavMesh::spacePolys(const LLUUID& mesh_id, U32 space, const OutlineFn& fn) const
 {
     const auto it = mMeshes.find(mesh_id);

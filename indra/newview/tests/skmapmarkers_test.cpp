@@ -24,7 +24,7 @@
 
 #include "linden_common.h"
 
-#include "../test/lltut.h"
+#include <catch2/catch_test_macros.hpp>
 
 #include "../skmapmarkers.h"
 
@@ -41,73 +41,103 @@ namespace
     }
 }
 
-namespace tut
+
+TEST_CASE("1-9, A-Z, then AA", "[skmapmarkers]")
 {
-    struct skmapmarkers_data {};
-    typedef test_group<skmapmarkers_data> skmapmarkers_group;
-    typedef skmapmarkers_group::object skmapmarkers_object;
-    tut::skmapmarkers_group g("skmapmarkers");
+    CHECK((skmap::codeString(0)) == (std::string("1")));
+    CHECK((skmap::codeString(8)) == (std::string("9")));
+    CHECK((skmap::codeString(9)) == (std::string("A")));
+    CHECK((skmap::codeString(34)) == (std::string("Z")));
+    CHECK((skmap::codeString(35)) == (std::string("AA")));
+    CHECK((skmap::codeString(36)) == (std::string("AB")));
+    CHECK((skmap::codeString(60)) == (std::string("AZ")));
+    CHECK((skmap::codeString(61)) == (std::string("BA")));
+}
 
-    // 1-9, A-Z, then AA.
-    template<> template<>
-    void skmapmarkers_object::test<1>()
+TEST_CASE("The lowest free index; a code holds for the whole hold, then is reused lowest first", "[skmapmarkers]")
+{
+    skmap::MarkerCodes codes;
+    codes.setHold(120.f);
+    CHECK((codes.codeFor(idOf(0), 0.0)) == (0u));
+    CHECK((codes.codeFor(idOf(1), 0.0)) == (1u));
+    CHECK((codes.codeFor(idOf(2), 0.0)) == (2u));
+    // The first two go out of sight; the third stays.
+    for (F64 t = 1.0; t <= 119.0; t += 1.0)
     {
-        ensure_equals("0", skmap::codeString(0), std::string("1"));
-        ensure_equals("8", skmap::codeString(8), std::string("9"));
-        ensure_equals("9", skmap::codeString(9), std::string("A"));
-        ensure_equals("34", skmap::codeString(34), std::string("Z"));
-        ensure_equals("35", skmap::codeString(35), std::string("AA"));
-        ensure_equals("36", skmap::codeString(36), std::string("AB"));
-        ensure_equals("60", skmap::codeString(60), std::string("AZ"));
-        ensure_equals("61", skmap::codeString(61), std::string("BA"));
+        codes.codeFor(idOf(2), t);
     }
+    CHECK((codes.codeFor(idOf(3), 119.5)) == (3u));
+    CHECK((codes.has(idOf(0)) && codes.has(idOf(1))));
+    codes.codeFor(idOf(2), 121.0);
+    codes.codeFor(idOf(3), 121.0);
+    CHECK((codes.codeFor(idOf(4), 121.0)) == (0u));
+    CHECK((codes.codeFor(idOf(5), 121.0)) == (1u));
+    CHECK((!codes.has(idOf(0)) && !codes.has(idOf(1))));
+}
 
-    // The lowest free index; a code holds for the whole hold, then is reused lowest first.
-    template<> template<>
-    void skmapmarkers_object::test<2>()
+TEST_CASE("A code is stable while others come and go", "[skmapmarkers]")
+{
+    skmap::MarkerCodes codes;
+    codes.setHold(5.f);
+    const U32 mine = codes.codeFor(idOf(7), 0.0);
+    for (S32 i = 0; i < 40; ++i)
     {
-        skmap::MarkerCodes codes;
-        codes.setHold(120.f);
-        ensure_equals("first", codes.codeFor(idOf(0), 0.0), 0u);
-        ensure_equals("second", codes.codeFor(idOf(1), 0.0), 1u);
-        ensure_equals("third", codes.codeFor(idOf(2), 0.0), 2u);
-        // The first two go out of sight; the third stays.
-        for (F64 t = 1.0; t <= 119.0; t += 1.0)
-        {
-            codes.codeFor(idOf(2), t);
-        }
-        ensure_equals("still held at 119 s", codes.codeFor(idOf(3), 119.5), 3u);
-        ensure("held", codes.has(idOf(0)) && codes.has(idOf(1)));
-        codes.codeFor(idOf(2), 121.0);
-        codes.codeFor(idOf(3), 121.0);
-        ensure_equals("released, lowest first", codes.codeFor(idOf(4), 121.0), 0u);
-        ensure_equals("then the next", codes.codeFor(idOf(5), 121.0), 1u);
-        ensure("the old holders lost theirs", !codes.has(idOf(0)) && !codes.has(idOf(1)));
+        codes.codeFor(idOf(100 + i), i * 2.0);
+        CHECK((codes.codeFor(idOf(7), i * 2.0)) == (mine));
     }
+}
 
-    // A code is stable while others come and go.
-    template<> template<>
-    void skmapmarkers_object::test<3>()
-    {
-        skmap::MarkerCodes codes;
-        codes.setHold(5.f);
-        const U32 mine = codes.codeFor(idOf(7), 0.0);
-        for (S32 i = 0; i < 40; ++i)
-        {
-            codes.codeFor(idOf(100 + i), i * 2.0);
-            ensure_equals("stable", codes.codeFor(idOf(7), i * 2.0), mine);
-        }
-    }
+TEST_CASE("The marker radius, all four cases, and stacked chevrons", "[skmapmarkers]")
+{
+    CHECK((skmap::markerRadius(0, 1.4f, false, 0, 0.f, 8.f, 0.5f)) == (3.f));
+    CHECK((skmap::markerRadius(1, 1.4f, true, 2, 20.f, 8.f, 0.5f)) == (4.5f));
+    CHECK((skmap::markerRadius(0, 1.4f, true, 1, 5.f, 8.f, 0.5f)) == (4.5f));
+    const F32 wide = skmap::markerRadius(0, 1.4f, true, 2, 12.f, 8.f, 0.5f);
+    CHECK(std::fabs(wide - (std::hypot(6.f, 8.f * 0.36f) + 0.5f)) < 1e-5f);
+    CHECK(skmap::markerRadius(0, 1.4f, true, 2, 1.f, 8.f, 0.5f) == 4.5f);
+    const F32 gap = 1.4f + 8.f * 0.12f;
+    CHECK(std::fabs(skmap::markerRadius(2, 1.4f, false, 0, 0.f, 8.f, 0.5f) - (4.5f + gap)) < 1e-5f);
+    CHECK(std::fabs(skmap::markerRadius(3, 1.4f, false, 0, 0.f, 8.f, 0.5f) - (4.5f + 2.f * gap)) < 1e-5f);
+}
 
-    // The marker radius, all four cases.
-    template<> template<>
-    void skmapmarkers_object::test<4>()
+TEST_CASE("Chevron count, steepness and stroke follow the floor bands", "[skmapmarkers]")
+{
+    const F32 bands[5] = { 2.5f, 6.f, 12.f, 24.f, 48.f };
+    CHECK(skmap::chevronStyle(0.f, bands, 1.4f).mCount == 0);
+    CHECK(skmap::chevronStyle(2.49f, bands, 1.4f).mCount == 0);
+    CHECK(skmap::chevronStyle(2.5f, bands, 1.4f).mCount == 1);
+    CHECK(skmap::chevronStyle(5.99f, bands, 1.4f).mCount == 1);
+    CHECK(skmap::chevronStyle(6.f, bands, 1.4f).mCount == 2);
+    CHECK(skmap::chevronStyle(11.99f, bands, 1.4f).mCount == 2);
+    CHECK(skmap::chevronStyle(12.f, bands, 1.4f).mCount == 3);
+    CHECK(skmap::chevronStyle(500.f, bands, 1.4f).mCount == 3);
+
+    const skmap::ChevronStyle flat = skmap::chevronStyle(24.f, bands, 1.4f);
+    CHECK(std::fabs(flat.mSteep - 0.55f) < 1e-6f);
+    CHECK(std::fabs(flat.mStroke - 1.4f) < 1e-6f);
+    const skmap::ChevronStyle mid = skmap::chevronStyle(36.f, bands, 1.4f);
+    CHECK(std::fabs(mid.mSteep - (0.55f + 0.35f * 0.5f)) < 1e-6f);
+    CHECK(std::fabs(mid.mStroke - 1.4f * 1.3f) < 1e-6f);
+    const skmap::ChevronStyle steep = skmap::chevronStyle(48.f, bands, 1.4f);
+    CHECK(std::fabs(steep.mSteep - 0.9f) < 1e-6f);
+    CHECK(std::fabs(steep.mStroke - 1.4f * 1.6f) < 1e-6f);
+    const skmap::ChevronStyle past = skmap::chevronStyle(1000.f, bands, 1.4f);
+    CHECK(past.mSteep == steep.mSteep);
+    CHECK(past.mStroke == steep.mStroke);
+}
+
+TEST_CASE("Inverted chevron bands cannot invert the count", "[skmapmarkers]")
+{
+    // The second band set under the first is raised to it: 2.5 m gives straight to two chevrons.
+    const F32 bands[5] = { 2.5f, 1.f, 12.f, 6.f, 3.f };
+    CHECK(skmap::chevronStyle(2.f, bands, 1.4f).mCount == 0);
+    CHECK(skmap::chevronStyle(2.5f, bands, 1.4f).mCount == 2);
+    CHECK(skmap::chevronStyle(12.f, bands, 1.4f).mCount == 3);
+    // Bands 4 and 5 collapse onto band 3: past it everything is at its steepest.
+    CHECK(std::fabs(skmap::chevronStyle(11.f, bands, 1.4f).mSteep - 0.55f) < 1e-6f);
+    CHECK(std::fabs(skmap::chevronStyle(12.f, bands, 1.4f).mSteep - 0.9f) < 1e-6f);
+    for (F32 d = 0.f; d < 60.f; d += 0.25f)
     {
-        ensure_equals("chevron", skmap::markerRadius(true, true, 2, 20.f, 8.f, 0.5f), 4.5f);
-        ensure_equals("uncoded", skmap::markerRadius(false, false, 0, 0.f, 8.f, 0.5f), 3.f);
-        ensure_equals("one character", skmap::markerRadius(false, true, 1, 5.f, 8.f, 0.5f), 4.5f);
-        const F32 wide = skmap::markerRadius(false, true, 2, 12.f, 8.f, 0.5f);
-        ensure("two characters grow", std::fabs(wide - (std::hypot(6.f, 8.f * 0.36f) + 0.5f)) < 1e-5f);
-        ensure("never under the single", skmap::markerRadius(false, true, 2, 1.f, 8.f, 0.5f) == 4.5f);
+        CHECK(skmap::chevronStyle(d, bands, 1.4f).mCount <= skmap::chevronStyle(d + 0.25f, bands, 1.4f).mCount);
     }
 }

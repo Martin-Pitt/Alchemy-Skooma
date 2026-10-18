@@ -179,9 +179,6 @@ public:
     /// the region's terrain.
     bool floorUnder(const LLVector3d& pos, sknav::AgentClass cls, F32& z_out, LLUUID* mesh_out = nullptr) const;
 
-    /// The space under a global position: the nearest walkable poly's, within
-    /// the class's reach; false over no stamped poly.
-    bool spaceAt(const LLVector3d& pos, LLUUID& mesh_out, U32& space_out) const;
     /// Every stamped poly of a space, its outline global.
     typedef std::function<void(const std::vector<LLVector3d>& outline)> OutlineFn;
     void spacePolys(const LLUUID& mesh, U32 space, const OutlineFn& fn) const;
