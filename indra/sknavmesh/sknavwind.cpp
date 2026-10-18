@@ -448,6 +448,14 @@ namespace sknav
                 {
                     fl |= WindCell::INDOORS;
                 }
+                else if (ge.mBucket == static_cast<U8>(EnclosureBucket::UNKNOWN))
+                {
+                    fl |= WindCell::UNKNOWN;
+                }
+            }
+            else
+            {
+                fl |= WindCell::UNKNOWN;
             }
         }
 
@@ -495,7 +503,7 @@ namespace sknav
             for (size_t k = 0; k < spaces; ++k)
             {
                 const Space& s = rooms->mSpaces[k];
-                if (s.mBucket == EnclosureBucket::INDOORS || s.mSMean <= params.mCourtS || !walled[k] ||
+                if (s.mBucket == EnclosureBucket::INDOORS || s.mBucket == EnclosureBucket::UNKNOWN || s.mSMean <= params.mCourtS || !walled[k] ||
                     walled[k] < params.mCourtL * edge[k] || cells[k] * cell * cell < params.mCourtAreaM2)
                 {
                     continue;
@@ -666,7 +674,7 @@ namespace sknav
                 up /= static_cast<F32>(std::size(params.mUpwindM));
                 F32 v = lee[i] * std::clamp(up / std::max(width[i], 0.25f), params.mVenturiMin, params.mVenturiMax);
                 LLVector2 deflect;
-                if (c.mFlags & WindCell::INDOORS)
+                if (c.mFlags & (WindCell::INDOORS | WindCell::UNKNOWN))
                 {
                     v = 0.f;
                 }
