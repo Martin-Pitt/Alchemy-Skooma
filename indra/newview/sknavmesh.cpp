@@ -4380,6 +4380,43 @@ std::string SKNavMesh::markUnderCamera()
         }
     }
 
+    // The air the mark stands in, and every gap in its column, as the enclosure pass answered them.
+    if (const std::shared_ptr<const SKNavWorldView> world = this->view())
+    {
+        static const char* buckets[] = { "outdoors", "sheltered", "indoors", "unknown" };
+        auto bucket = [](sknav::EnclosureBucket b) { return buckets[std::min<size_t>(static_cast<size_t>(b), 3)]; };
+        auto ceiling = [](F32 c) { return c > 1e29f ? std::string("open") : llformat("%.2f", c); };
+        sknav::Enclosure gap;
+        if (world->enclosureAt(mMark, gap))
+        {
+            SKNavWorldView::SpaceId space;
+            const bool in_space = world->spaceAt(mMark, space);
+            out << "air gap " << llformat("%.2f", gap.mFloor) << ".." << ceiling(gap.mCeiling) << " " << bucket(gap.mBucket)
+                << " S " << llformat("%.2f", gap.mS) << " E " << llformat("%.2f", gap.mE) << " D "
+                << (gap.depthKnown() ? llformat("%.2f", gap.mD) : std::string("unknown"));
+            if (in_space)
+            {
+                out << " space " << space.mMesh << ":" << space.mId;
+            }
+            out << (gap.mSealed ? " sealed" : "") << (gap.mCanopy ? " canopy" : "") << "\n";
+        }
+        else
+        {
+            out << "no air gap\n";
+        }
+        S32 total = 0;
+        world->gapsAt(mMark, [&](const sknav::Enclosure& g) {
+            if (total++ < 8)
+            {
+                out << "  column gap " << llformat("%.2f", g.mFloor) << ":" << ceiling(g.mCeiling) << ":" << bucket(g.mBucket) << "\n";
+            }
+        });
+        if (total > 8)
+        {
+            out << "  ... and " << (total - 8) << " more gaps\n";
+        }
+    }
+
     // The polygon each class actually has here, with its corners: a shape that
     // reads as degenerate on screen is one to measure rather than squint at.
     for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
