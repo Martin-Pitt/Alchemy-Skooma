@@ -5645,6 +5645,39 @@
             <key>Value</key>
             <integer>1024</integer>
         </map>
+        <key>SKTacticalInterestFarCap</key>
+        <map>
+            <key>Comment</key>
+            <string>The most the tactical overview raises the interest list range to, in metres; a draw distance at or above it is sent unchanged.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>1024.0</real>
+        </map>
+        <key>SKTacticalInterestFarScale</key>
+        <map>
+            <key>Comment</key>
+            <string>How much the tactical overview widens the draw distance it sends the sim while it steers the interest list.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>1.5</real>
+        </map>
+        <key>SKTacticalSendCamera</key>
+        <map>
+            <key>Comment</key>
+            <string>While the tactical overview is shown, tell the sim its camera, a wider range and whole-region updates, so the battlefield around it is sent.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
         <key>SKTacticalOverview</key>
         <map>
             <key>Comment</key>

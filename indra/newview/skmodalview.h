@@ -133,8 +133,14 @@ public:
     /// The camera the sim is told about in agent updates: the world camera while covered, so the
     /// interest list stays where the agent is. Leaves the arguments alone otherwise.
     static void worldCameraForUpdate(LLVector3& position_agent, LLVector3& at, LLVector3& left, LLVector3& up);
+    /// While the tactical overview is shown, raises the agent update's Far by SKTacticalInterestFarScale up to SKTacticalInterestFarCap.
+    static void tacticalInterestFar(F32& draw_m);
 
 private:
+    /// The tactical overview is shown and SKTacticalSendCamera has its camera steer the interest list.
+    static bool tacticalInterest();
+    static void updateTacticalInterestMode(bool tactical);
+
     friend class SKModalMode;
     /// Drops a mode being destroyed without calling into it.
     void forget(SKModalMode* mode);
