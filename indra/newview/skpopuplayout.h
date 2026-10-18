@@ -55,8 +55,16 @@ namespace sk
         bool actionable() const { return mVisible && mEnabled && mKind == Kind::ACTION; }
     };
 
-    /// Where panes go: the root pane beside the click, a second root pane beside it, a child
-    /// pane beside the pane that opens it, everything 8 px inside the window.
+    /// Which way the panes grow: towards the window's centre from the click.
+    struct PopupFacing
+    {
+        bool mRight = true;
+        bool mDown = true;
+        static PopupFacing towardsCentre(F32 x, F32 y, F32 window_w, F32 window_h) { return { x < 0.5f * window_w, y < 0.5f * window_h }; }
+    };
+
+    /// Where panes go: the root pane off the click, a second root pane beside it, a child pane
+    /// beside the row that opens it, each growing the facing way, everything 8 px inside the window.
     class PopupLayout
     {
     public:
@@ -66,7 +74,7 @@ namespace sk
         static constexpr F32 SEPARATOR = 9.f;
         static constexpr F32 EDGE = 8.f;
         static constexpr F32 GAP = 4.f;
-        static constexpr F32 SIDE = 178.f;      ///< a pane's width and the gap to its neighbour
+        static constexpr F32 CHILD_GAP = 2.f;
 
         static F32 paneWidth(F32 window_w);
         /// The rows' own height, padding included.
@@ -78,14 +86,15 @@ namespace sk
         static F32 rowHeight(const PopupRow& row);
 
         static PopupRect clamp(PopupRect r, F32 window_w, F32 window_h);
-        /// The first root pane, its corner 4 px off the click.
-        static PopupRect placeFirst(F32 x, F32 y, F32 w, F32 h, F32 window_w, F32 window_h);
-        /// A second root pane beside the first: left if there is room, else right, else below.
-        static PopupRect placeBeside(const PopupRect& first, F32 w, F32 h, F32 window_w, F32 window_h);
-        /// A child pane level with its row: left of its parent, else right; below every root pane
-        /// when it would cover a root pane other than its parent.
-        static PopupRect placeChild(const PopupRect& parent, F32 row_top, F32 w, F32 h, const std::vector<PopupRect>& other_roots,
-                                    F32 window_w, F32 window_h);
+        /// The first root pane, its near corner 4 px off the click on the facing side.
+        static PopupRect placeFirst(F32 x, F32 y, F32 w, F32 h, PopupFacing facing, F32 window_w, F32 window_h);
+        /// A second root pane beside the first on the facing side, else the other, else above or below it.
+        static PopupRect placeBeside(const PopupRect& first, F32 w, F32 h, PopupFacing facing, F32 window_w, F32 window_h);
+        /// A child pane beside its opener row, as a menu's submenu: the facing side, flipped when it
+        /// leaves the window or covers another root pane; top on the row's top facing down, bottom on
+        /// its bottom facing up; shifted only vertically to stay inside.
+        static PopupRect placeChild(const PopupRect& parent, F32 row_top, F32 row_h, F32 w, F32 h, PopupFacing facing,
+                                    const std::vector<PopupRect>& other_roots, F32 window_w, F32 window_h);
     };
 
     enum class PopupKey { UP, DOWN, HOME, END, LEFT, RIGHT, ENTER, SPACE, ESCAPE };
