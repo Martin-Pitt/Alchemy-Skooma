@@ -105,6 +105,14 @@ namespace skoverview
         }
         return part_height <= COVER_TOP_M ? COVER : WALL;
     }
+
+    // splitmix64's finaliser: hashes summed after it do not cancel as raw ones would.
+    static U64 scramble(U64 h)
+    {
+        h = (h ^ (h >> 30)) * 0xbf58476d1ce4e5b9ull;
+        h = (h ^ (h >> 27)) * 0x94d049bb133111ebull;
+        return h ^ (h >> 31);
+    }
 }
 
 SKOverviewCensus::SKOverviewCensus() = default;
@@ -273,10 +281,11 @@ bool SKOverviewCensus::update()
     if (snap->mStamp != mStamp)
     {
         mStamp = snap->mStamp;
-        U64 records = 1469598103934665603ull;
+        // A sum, blind to order: the records follow the object list, which reorders whenever an object comes or goes.
+        U64 records = 0;
         for (const sknav::RecordPtr& rec : snap->mRecords)
         {
-            records = (records ^ (U64)(uintptr_t)rec.get()) * 1099511628211ull;
+            records += skoverview::scramble((U64)(uintptr_t)rec.get());
         }
         mRecordsChanged |= records != mRecordsKey;
         mRecordsKey = records;
@@ -302,11 +311,18 @@ bool SKOverviewCensus::update()
     mRecheckAt = now + 2.0;
     mSculptsAt = now + 5.0;
 
-    // A new scan most often holds the same parts where they were: rebuild only when the geometry moved.
-    U64 sig = 1469598103934665603ull;
-    auto mix = [&sig](U64 v)
+    // A new scan most often holds the same parts where they were: rebuild only when the geometry moved. Each part
+    // hashes on its own and the parts sum, so the object list's order, which churns, never reads as a change.
+    U64 sig = 0;
+    U64 entry = 0;
+    auto mix = [&entry](U64 v)
     {
-        sig ^= v + 0x9e3779b97f4a7c15ull + (sig << 6) + (sig >> 2);
+        entry ^= v + 0x9e3779b97f4a7c15ull + (entry << 6) + (entry >> 2);
+    };
+    auto endEntry = [&sig, &entry]()
+    {
+        sig += skoverview::scramble(entry);
+        entry = 0;
     };
     // Sculpted parts draw from what is rendered, over land and void alike: a megasculpt's physics is a poor stand-in
     // for the ground it shows, and a phantom one has no physics record at all. Their census records are not drawn.
@@ -371,6 +387,7 @@ bool SKOverviewCensus::update()
         mix((U64)sc.mTris.size());
         mix((U64)(S64)std::llround(centre.mdV[VX] * 64.0) ^ ((U64)(S64)std::llround(centre.mdV[VY] * 64.0) << 21) ^
             ((U64)(S64)std::llround(centre.mdV[VZ] * 64.0) << 42));
+        endEntry();
         sculpts.push_back(std::move(sc));
     }
 
@@ -384,6 +401,7 @@ bool SKOverviewCensus::update()
         }
     }
     mix(mSurroundsSig);
+    endEntry();
 
     std::vector<const sknav::Record*> kept;
     std::vector<U8> fixed_classes;
@@ -409,6 +427,7 @@ bool SKOverviewCensus::update()
             void_only.push_back(true);
             mix(rec->mSignature);
             mix(rec->mPart.getCRC32());
+            endEntry();
             continue;
         }
         if (!skoverview::keepRecord(*rec, fixed))
@@ -417,8 +436,7 @@ bool SKOverviewCensus::update()
         }
         const LLVector3d extent = rec->mMax - rec->mMin;
         const bool large = llmax(extent.mdV[VX], llmax(extent.mdV[VY], extent.mdV[VZ])) > skoverview::INVISIBLE_WALL_M;
-        std::string report;
-        const Seen seen = partSeen(rec->mPart, large ? &report : nullptr);
+        const Seen seen = partSeen(rec->mPart, nullptr);
         mUnknownLook |= seen == Seen::UNKNOWN;
         const bool transparent = seen == Seen::INVISIBLE;
         if (large)
@@ -429,6 +447,8 @@ bool SKOverviewCensus::update()
             if (it == logged.end() || it->second != seen)
             {
                 logged[rec->mPart] = seen;
+                std::string report; // only when logged: formatting every face of every large part each pass is not free
+                partSeen(rec->mPart, &report);
                 LL_INFOS("SKOverview") << "large census part " << rec->mPart << " " << extent << " m: "
                                        << (seen == Seen::INVISIBLE ? "invisible, dropped" : seen == Seen::VISIBLE ? "visible, drawn" : "not known yet, drawn")
                                        << " " << report << LL_ENDL;
@@ -454,6 +474,7 @@ bool SKOverviewCensus::update()
         mix((U64)(S64)std::llround(rec->mMin.mdV[VX] * 64.0) ^ ((U64)(S64)std::llround(rec->mMin.mdV[VY] * 64.0) << 21) ^
             ((U64)(S64)std::llround(rec->mMin.mdV[VZ] * 64.0) << 42));
         mix((U64)rec->mFeature | ((U64)rec->mExclude << 8));
+        endEntry();
     }
     // Each linkset is a group, so the tactical cut can take a building's linksets and leave its neighbours whole: a
     // cluster joins whatever touches, often a whole block. A level still keeps whole clusters, by the heights of the
@@ -491,16 +512,30 @@ bool SKOverviewCensus::update()
         }
     }
     auto groupOf = [&](size_t i) -> U32 { return group_of[i]; };
+    // A part's linkset and its cluster's extent, never their indices: those follow the records' order.
+    auto rounded = [](const LLVector3d& v)
+    {
+        return (U64)(S64)std::llround(v.mdV[VX] * 64.0) ^ ((U64)(S64)std::llround(v.mdV[VY] * 64.0) << 21) ^
+               ((U64)(S64)std::llround(v.mdV[VZ] * 64.0) << 42);
+    };
     for (size_t i = 0; i < kept.size(); ++i)
     {
-        mix(groupOf(i));
+        mix(kept[i]->mPart.getCRC32());
+        mix(roots[groupOf(i)].getCRC32());
         const auto cluster = group_cluster.find(groupOf(i));
-        mix(cluster != group_cluster.end() ? cluster->second : 0xffffffffu);
+        if (cluster != group_cluster.end())
+        {
+            const sknav::Cluster& c = *snap->mClusters.mClusters[cluster->second];
+            mix(rounded(c.mMin));
+            mix(rounded(c.mMax));
+        }
+        endEntry();
     }
     // Which land is connected decides what of a surround is in the void.
     for (const LLViewerRegion* region : LLWorld::getInstance()->getRegionList())
     {
         mix(region->getHandle());
+        endEntry();
     }
     // Where each linkset is, for whose region it is in: its root's position, so a linkset straddling a border has
     // one answer.
@@ -758,7 +793,7 @@ void SKOverviewCensus::gatherSurrounds(const SKCensusSnapshot& snap)
         }
     }
     mSurrounds.clear();
-    U64 sig = 1469598103934665603ull;
+    U64 sig = 0; // summed per part: the object list's order churns
     for (S32 i = 0; i < gObjectList.getNumObjects(); ++i)
     {
         LLVOVolume* volume = dynamic_cast<LLVOVolume*>(gObjectList.getObject(i));
@@ -808,10 +843,12 @@ void SKOverviewCensus::gatherSurrounds(const SKCensusSnapshot& snap)
         }
         part.mHeight = hi - lo;
         const LLVector3d centre = volume->getPositionGlobal();
-        sig = (sig ^ part.mPart.getCRC32()) * 1099511628211ull;
-        sig = (sig ^ (U64)part.mTris.size()) * 1099511628211ull;
-        sig = (sig ^ ((U64)(S64)std::llround(centre.mdV[VX] * 64.0) ^ ((U64)(S64)std::llround(centre.mdV[VY] * 64.0) << 21) ^
-                      ((U64)(S64)std::llround(centre.mdV[VZ] * 64.0) << 42))) * 1099511628211ull;
+        U64 h = 1469598103934665603ull;
+        h = (h ^ part.mPart.getCRC32()) * 1099511628211ull;
+        h = (h ^ (U64)part.mTris.size()) * 1099511628211ull;
+        h = (h ^ ((U64)(S64)std::llround(centre.mdV[VX] * 64.0) ^ ((U64)(S64)std::llround(centre.mdV[VY] * 64.0) << 21) ^
+                  ((U64)(S64)std::llround(centre.mdV[VZ] * 64.0) << 42))) * 1099511628211ull;
+        sig += skoverview::scramble(h);
         mSurrounds.push_back(std::move(part));
     }
     mSurroundsSig = sig;
