@@ -99,10 +99,7 @@ namespace
     const size_t SK_MAX_TERRITORY = 16;       // regions styled as inside, at most (the resolve's array)
     const size_t SK_MAX_DISSOLVE = 16;        // see-through circles, at most (overviewGeomF.glsl's array)
     const F32 AVATAR_HALF_HEIGHT_M = 0.9f;     // a coarse-only avatar's position over its feet, having no box from the sim
-    const F32 MARKER_RADIUS_M = 0.35f;         // the avatar marker's cylinder at true size
-    const F32 MARKER_HEIGHT_M = 1.8f;
-    const F32 MARKER_COARSE_HEIGHT_M = 0.5f;   // a coarse-only avatar: a short plain puck, no heading
-    const S32 MARKER_SIDES = 16;
+    const F32 MARKER_HALO_PX = 1.5f;           // the dark ring that sets a flat marker off bright geometry
     const F32 MARKER_GHOST_ALPHA = 0.3f;       // its silhouette where the census hides it
     const F32 HEADING_TIP_PER_RADIUS = 1.f;    // the minimap's heading triangle (skmap::palette::HEADING_*_PX) over
     const F32 HEADING_BASE_PER_RADIUS = 0.25f; // its 6 px dot, as fractions of the body's radius beyond it
@@ -115,7 +112,7 @@ namespace
     const F32 BATTLEFIELD_MAX_M = 4096.f;
     const F32 BATTLEFIELD_PITCH_DEG = 89.f;  // the untilted battlefield: short of straight down, so the camera keeps a heading to put north up
     const F32 BATTLEFIELD_MARGIN = 1.05f;
-    const F32 CYLINDER_FADE_S = 0.15f;  // a marker's crossfade between its body and its zoomed-out cylinder
+    const F32 FLAT_FADE_S = 0.15f;  // a marker's crossfade between its body and its zoomed-out flat marker
     const size_t MAX_BADGES = 64;           // coded people badged on the tactical view at most, nearest first
     const F32 BADGE_LIFT_PX = 2.f;          // a badge's gap above its marker's top
 
@@ -2270,17 +2267,23 @@ void SKOverviewCapture::drawMarkers3D(const Project& project, S32 vw, S32 vh, st
         gGL.vertex3fv(b.mV);
         gGL.vertex3fv(c.mV);
     };
-    // Zoomed out past SKTacticalCylinderPixelsPerMetre the bodies give way to cylinders, crossfaded, which grow to
-    // keep SKTacticalCylinderMinRadiusPx on screen up to SKTacticalCylinderMaxRadiusM so a crowd stays apart.
-    static LLCachedControl<F32> swap_ppm(gSavedSettings, "SKTacticalCylinderPixelsPerMetre", 6.f);
-    static LLCachedControl<F32> min_px(gSavedSettings, "SKTacticalCylinderMinRadiusPx", 4.f);
-    static LLCachedControl<F32> max_radius(gSavedSettings, "SKTacticalCylinderMaxRadiusM", 2.f);
+    // Zoomed out past SKTacticalFlatMarkerPixelsPerMetre the bodies give way, crossfaded, to the mini-map's own flat
+    // markers at its constant pixel size, drawn over everything so they read as easily as on the mini-map.
+    static LLCachedControl<F32> swap_ppm(gSavedSettings, "SKTacticalFlatMarkerPixelsPerMetre", 10.f);
     const F64 now = LLFrameTimer::getUptimeSeconds().value();
-    const F32 fade_step = mMarkerFadeTime < 0.0 ? 1.f : (F32)(now - mMarkerFadeTime) / CYLINDER_FADE_S;
+    const F32 fade_step = mMarkerFadeTime < 0.0 ? 1.f : (F32)(now - mMarkerFadeTime) / FLAT_FADE_S;
     mMarkerFadeTime = now;
     std::map<LLUUID, F32> blends;
     const LLVector3 sideways = LLViewerCamera::getInstance()->getLeftAxis();
     auto faded = [](const LLColor4& c, F32 a) { return LLColor4(c.mV[0], c.mV[1], c.mV[2], c.mV[3] * a); };
+    struct Flat
+    {
+        size_t mPerson = (size_t)-1;   // none for the agent's own
+        LLVector2 mAt;
+        LLVector2 mAhead;
+        bool mHasAhead = false;
+    };
+    std::vector<Flat> flats;
     for (const Marker& m : markers)
     {
         LLVector2 at0;
@@ -2288,26 +2291,16 @@ void SKOverviewCapture::drawMarkers3D(const Project& project, S32 vw, S32 vh, st
         {
             continue;
         }
-        // A known body sets the height, the radius in proportion.
-        const F32 body = m.mHeight > 0.f ? m.mHeight / MARKER_HEIGHT_M : 1.f;
-        const F32 true_r = (m.mRadius > 0.f ? m.mRadius : MARKER_RADIUS_M * body);
-        const F32 true_h = (m.mCoarse ? MARKER_COARSE_HEIGHT_M : MARKER_HEIGHT_M) * body;
         LLVector2 side;
         const F32 ppm = project(m.mFloor + sideways, side) ? (side - at0).length() : 0.f;
         const bool has_body = m.mHasShape && !m.mCoarse;
-        // Hysteresis as well as the fade: a cylinder turns back into a body only a fifth past the threshold.
-        const auto known = mCylinderBlend.find(m.mId);
-        F32 blend = known != mCylinderBlend.end() ? known->second : (ppm < swap_ppm ? 1.f : 0.f);
+        // Hysteresis as well as the fade: a flat marker turns back into a body only a fifth past the threshold.
+        const auto known = mFlatBlend.find(m.mId);
+        F32 blend = known != mFlatBlend.end() ? known->second : (ppm < swap_ppm ? 1.f : 0.f);
         const bool small = ppm < swap_ppm * (blend > 0.5f ? 1.2f : 1.f);
         blend = has_body ? llclamp(blend + (small ? fade_step : -fade_step), 0.f, 1.f) : 1.f;
         blends[m.mId] = blend;
-        const F32 grow = small && ppm > 1e-4f ? llclamp(min_px / (ppm * true_r), 1.f, llmax(1.f, max_radius / true_r)) : 1.f;
-        const F32 r = true_r * grow;
-        const F32 h = true_h * grow;
-        const LLColor4 bright(llmin(1.f, m.mColour.mV[0] * 1.25f + 0.1f), llmin(1.f, m.mColour.mV[1] * 1.25f + 0.1f),
-                              llmin(1.f, m.mColour.mV[2] * 1.25f + 0.1f), blend);
-        const LLVector3 cylinder_top = m.mFloor + LLVector3(0.f, 0.f, h);
-        LLVector3 top_c = cylinder_top;
+        LLVector3 top_c = m.mFloor;
         if (has_body && blend < 1.f)
         {
             // The avatar's own physics shape, about its position, at true size.
@@ -2349,33 +2342,31 @@ void SKOverviewCapture::drawMarkers3D(const Project& project, S32 vw, S32 vh, st
                 tri(l - up, rr + up, l + up, colour);
             }
         }
-        if (blend > 0.f)
-        {
-            const LLColor4 colour = faded(m.mColour, blend);
-            for (S32 k = 0; k < MARKER_SIDES; ++k)
-            {
-                const F32 a0 = F_TWO_PI * k / MARKER_SIDES, a1 = F_TWO_PI * (k + 1) / MARKER_SIDES;
-                const LLVector3 d0(std::cos(a0) * r, std::sin(a0) * r, 0.f), d1(std::cos(a1) * r, std::sin(a1) * r, 0.f);
-                const LLVector3 b0 = m.mFloor + d0, b1 = m.mFloor + d1, t0 = cylinder_top + d0, t1 = cylinder_top + d1;
-                tri(b0, b1, t1, colour);
-                tri(b0, t1, t0, colour);
-                tri(cylinder_top, t0, t1, colour);
-            }
-            if (m.mHasHeading)
-            {
-                // A wedge on the top, pointing along the heading, brighter than the body.
-                const LLVector3 ahead(std::cos(m.mHeading), std::sin(m.mHeading), 0.f);
-                const LLVector3 across(-ahead.mV[VY], ahead.mV[VX], 0.f);
-                const LLVector3 lift(0.f, 0.f, 0.03f * grow);
-                const LLVector3 tip = cylinder_top + lift + ahead * (r * 1.7f);
-                const LLVector3 back = cylinder_top + lift - ahead * (r * 0.35f);
-                tri(back + across * (r * 0.75f), tip, back - across * (r * 0.75f), bright);
-                tri(back - across * (r * 0.75f), tip, back + across * (r * 0.75f), bright);
-            }
-        }
-        // Labels, hover, picks and menus take the projected top of the marker.
+        // Labels, hover, picks and menus take the projected top of the marker, or the flat marker's top edge.
         LLVector2 top;
-        if (project(top_c, top))
+        bool placed = false;
+        if (blend >= 0.5f)
+        {
+            Flat f;
+            f.mPerson = m.mPerson;
+            f.mAt = at0;
+            LLVector2 tip;
+            if (m.mHasHeading && project(m.mFloor + LLVector3(std::cos(m.mHeading), std::sin(m.mHeading), 0.f), tip))
+            {
+                f.mAhead = tip - at0;
+                f.mHasAhead = f.mAhead.normVec() > 1e-4f;
+            }
+            flats.push_back(f);
+            const F32 radius = m.mPerson != (size_t)-1 ? skmapdraw::markerRadius(people[m.mPerson], skmap::FloorRelation::SAME)
+                                                       : skmap::palette::SELF_DOT_RADIUS_PX;
+            top = at0 + LLVector2(0.f, radius);
+            placed = true;
+        }
+        else
+        {
+            placed = project(top_c, top);
+        }
+        if (placed)
         {
             if (m.mPerson != (size_t)-1)
             {
@@ -2384,7 +2375,7 @@ void SKOverviewCapture::drawMarkers3D(const Project& project, S32 vw, S32 vh, st
             }
         }
     }
-    mCylinderBlend.swap(blends);
+    mFlatBlend.swap(blends);
     gGL.end();
     gGL.flush();
     gGL.getTextureSlot(0)->unbind();
@@ -2394,8 +2385,54 @@ void SKOverviewCapture::drawMarkers3D(const Project& project, S32 vw, S32 vh, st
     gGL.matrixMode(LLRender::MM_MODELVIEW);
     gGL.popMatrix();
     gGLLastMatrix = NULL;
-    // The 2D pass the caller resumes in.
+    // The 2D pass the caller resumes in, where the flat markers draw as the mini-map draws them.
     gUIProgram.bind();
+    if (flats.empty())
+    {
+        return;
+    }
+    static LLCachedControl<U32> font_px(gSavedSettings, "SKMapMarkerFontPx", 8);
+    const F32 px = llclamp(static_cast<F32>(font_px), 8.f, 11.f);
+    auto radius_of = [&](const Flat& f)
+    {
+        return f.mPerson != (size_t)-1 ? skmapdraw::markerRadius(people[f.mPerson], skmap::FloorRelation::SAME)
+                                       : skmap::palette::SELF_DOT_RADIUS_PX;
+    };
+    for (const Flat& f : flats)
+    {
+        skmapdraw::shadow(f.mAt, radius_of(f));
+    }
+    gGL.getTextureSlot(0)->unbind();
+    gGL.begin(LLRender::TRIANGLES);
+    for (const Flat& f : flats)
+    {
+        const F32 radius = radius_of(f);
+        skmapdraw::colour(skmap::palette::CODE_INK);
+        skmapdraw::disc(f.mAt, radius + MARKER_HALO_PX);
+        if (f.mPerson != (size_t)-1)
+        {
+            skmapdraw::personMarker(people[f.mPerson], f.mAt, radius, f.mHasAhead ? &f.mAhead : nullptr,
+                                    skmap::FloorRelation::SAME, 0.f, px);
+            continue;
+        }
+        skmapdraw::colour(skmap::palette::SELF_DOT);
+        if (f.mHasAhead)
+        {
+            const LLVector2 across(-f.mAhead.mV[VY], f.mAhead.mV[VX]);
+            const LLVector2 base = f.mAt + f.mAhead * (radius + skmap::palette::HEADING_BASE_PX);
+            skmapdraw::triangle(f.mAt + f.mAhead * (radius + skmap::palette::HEADING_TIP_PX),
+                                base + across * skmap::palette::HEADING_HALF_PX, base - across * skmap::palette::HEADING_HALF_PX);
+        }
+        skmapdraw::disc(f.mAt, radius);
+    }
+    gGL.end();
+    for (const Flat& f : flats)
+    {
+        if (f.mPerson != (size_t)-1)
+        {
+            skmapdraw::personCode(people[f.mPerson], f.mAt, skmap::FloorRelation::SAME);
+        }
+    }
 }
 
 void SKOverviewCapture::composite()

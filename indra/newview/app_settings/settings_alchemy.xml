@@ -5922,38 +5922,16 @@
             <key>Value</key>
             <integer>0</integer>
         </map>
-        <key>SKTacticalCylinderPixelsPerMetre</key>
+        <key>SKTacticalFlatMarkerPixelsPerMetre</key>
         <map>
             <key>Comment</key>
-            <string>On the tactical overview, an avatar shown at fewer screen pixels per metre than this is drawn as a cylinder instead of its body (Battlefield is about 4).</string>
+            <string>On the tactical overview, an avatar shown at fewer screen pixels per metre than this is drawn as the mini-map's flat marker instead of its body (Battlefield is about 4).</string>
             <key>Persist</key>
             <integer>1</integer>
             <key>Type</key>
             <string>F32</string>
             <key>Value</key>
-            <real>6.0</real>
-        </map>
-        <key>SKTacticalCylinderMinRadiusPx</key>
-        <map>
-            <key>Comment</key>
-            <string>On the tactical overview, the screen radius a zoomed-out avatar cylinder grows to keep, up to SKTacticalCylinderMaxRadiusM.</string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>F32</string>
-            <key>Value</key>
-            <real>4.0</real>
-        </map>
-        <key>SKTacticalCylinderMaxRadiusM</key>
-        <map>
-            <key>Comment</key>
-            <string>On the tactical overview, the largest radius in metres a zoomed-out avatar cylinder grows to, so a crowd does not merge into one blob.</string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>F32</string>
-            <key>Value</key>
-            <real>2.0</real>
+            <real>10.0</real>
         </map>
         <key>SKTacticalNametagPixelsPerMetre</key>
         <map>
