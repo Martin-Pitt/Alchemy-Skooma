@@ -49,61 +49,15 @@ namespace
     constexpr F64 START_DISTANCE = 1500.0;
     constexpr F64 START_ELEVATION = 50.0 * 3.141592653589793 / 180.0;
 
-    /// Behind every other view, over the world view: a plain left-drag pans the map, and plain clicks
-    /// and right-clicks go nowhere, so nothing reaches the hidden world. Alt and Ctrl clicks fall through
-    /// to the camera tool and the wheel to the camera's zoom, exactly as in-world.
+    /// Behind every other view, over the world view: right-clicks go nowhere, so nothing reaches the
+    /// hidden world. The left button falls through to SKToolMapPan, the wheel to the camera's zoom.
     class SKWorldMapInputView : public LLView
     {
     public:
         explicit SKWorldMapInputView(const LLView::Params& p) : LLView(p) {}
 
-        bool handleMouseDown(S32 x, S32 y, MASK mask) override
-        {
-            if (mask & (MASK_ALT | MASK_CONTROL))
-            {
-                return false;
-            }
-            S32 sx, sy;
-            localPointToScreen(x, y, &sx, &sy);
-            if (SKMapMode::instance().beginPan(sx, sy))
-            {
-                gFocusMgr.setMouseCapture(this);
-            }
-            return true;
-        }
-
-        bool handleHover(S32 x, S32 y, MASK mask) override
-        {
-            if (hasMouseCapture())
-            {
-                S32 sx, sy;
-                localPointToScreen(x, y, &sx, &sy);
-                SKMapMode::instance().pan(sx, sy);
-                gViewerWindow->setCursor(UI_CURSOR_TOOLPAN);
-                return true;
-            }
-            if (mask & (MASK_ALT | MASK_CONTROL))
-            {
-                return false;
-            }
-            gViewerWindow->setCursor(UI_CURSOR_ARROW);
-            return true;
-        }
-
-        bool handleMouseUp(S32 x, S32 y, MASK mask) override
-        {
-            if (hasMouseCapture())
-            {
-                gFocusMgr.setMouseCapture(nullptr);
-                return true;
-            }
-            return !(mask & (MASK_ALT | MASK_CONTROL));
-        }
-
-        bool handleDoubleClick(S32 x, S32 y, MASK mask) override { return !(mask & (MASK_ALT | MASK_CONTROL)); }
         bool handleRightMouseDown(S32 x, S32 y, MASK mask) override { return true; }
         bool handleRightMouseUp(S32 x, S32 y, MASK mask) override { return true; }
-        void onMouseCaptureLost() override { SKMapMode::instance().endPan(); }
     };
 
     void deleteLater(const LLHandle<LLView>& handle)
