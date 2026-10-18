@@ -221,12 +221,54 @@ private:
         F64 mAt = 0.0;          ///< when it was last seen under them
     };
     std::map<LLUUID, Standing> mStanding;   ///< who stands on a roof, held through a hop
+    /// Why a linkset is cut, put into words only when logged or asked for.
+    struct Reason
+    {
+        const char* mFixed = nullptr;   ///< a rule of no one's, or null
+        LLUUID mWho;
+        bool mSelf = false;
+        std::string mRule;
+        bool mReleasing = false;
+        std::string text() const;
+    };
     struct Release
     {
         F32 mCut = 0.f;         ///< the cut applied
-        std::string mWhy;
+        Reason mWhy;
         F64 mSince = -1.0;      ///< when a relaxing decision first came, or -1
     };
+    /// A linkset over every batch it spans: its bounds and where its triangles are. Built with the buffers.
+    struct Extent
+    {
+        LLVector3d mMin{ 1e30, 1e30, 1e30 };
+        LLVector3d mMax{ -1e30, -1e30, -1e30 };
+        LLVector3d mAnchor;
+        bool mNeverCut = false;
+        bool mCuttable = false; ///< its anchor is in the cut's region
+        LLUUID mRoot;
+        bool mGround = false;   ///< in a cluster standing on the land
+        F64 mBottom = 1e30;     ///< its cluster's base
+        std::vector<std::pair<const Batch*, const Group*>> mParts;
+    };
+    std::map<U32, Extent> mExtents;
+    U64 mExtentsSignature = 0;  ///< the buffers' signature mExtents was built for
+    bool mExtentsBuilt = false;
+    U64 mExtentsRegion = ~0ull; ///< the region handle mCuttable was worked for
+    /// One person's own share of the cut, kept while they stay put: the surface under them and what their room or
+    /// column takes. Most people are still in any one frame.
+    struct OccupantCut
+    {
+        bool mRoofValid = false;
+        U64 mRoofKey = 0;
+        U32 mBest = 0;
+        F64 mBestZ = -1e30;
+        bool mCovered = false;
+        bool mMarksValid = false;
+        U64 mMarksKey = 0;
+        std::vector<std::pair<U32, std::string>> mMarks; ///< linkset and rule
+        bool mSeen = false;
+    };
+    std::map<LLUUID, OccupantCut> mOccupantCuts;
     std::map<LLUUID, Release> mRelease;     ///< applied cuts by linkset root, relaxed only once the relaxing holds
 };
 

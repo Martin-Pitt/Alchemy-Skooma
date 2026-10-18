@@ -124,6 +124,9 @@ SKOverviewCensus::~SKOverviewCensus()
 
 void SKOverviewCensus::release()
 {
+    mExtents.clear();
+    mExtentsBuilt = false;
+    mOccupantCuts.clear();
     mBatches.clear();
     mStamp = 0;
     mSignature = 0;
@@ -884,6 +887,13 @@ namespace
     }
 }
 
+std::string SKOverviewCensus::Reason::text() const
+{
+    std::string out = mFixed ? std::string(mFixed)
+                             : (mSelf ? std::string("agent") : "occupant " + mWho.asString()) + " " + mRule;
+    return mReleasing ? out + " (releasing)" : out;
+}
+
 void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<Occupant>& occupants, U64 key)
 {
     LL_PROFILE_ZONE_SCOPED;
@@ -892,35 +902,53 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
         return;
     }
     mCutKey = key;
-    // A linkset spans batches when it crosses a border: its bounds over all of them, and where its triangles are.
-    struct Extent
+    if (!mExtentsBuilt || mExtentsSignature != mSignature)
     {
-        LLVector3d mMin{ 1e30, 1e30, 1e30 };
-        LLVector3d mMax{ -1e30, -1e30, -1e30 };
-        bool mCuttable = false;
-        LLUUID mRoot;
-        bool mGround = false;   // in a cluster standing on the land
-        F64 mBottom = 1e30;     // its cluster's base
-        std::vector<std::pair<const Batch*, const Group*>> mParts;
-    };
-    std::map<U32, Extent> extents;
-    for (const Batch& batch : mBatches)
-    {
-        for (const Group& group : batch.mGroups)
+        LL_PROFILE_ZONE_NAMED("sk cut extents");
+        // A linkset spans batches when it crosses a border: its bounds over all of them, and where its triangles are.
+        mExtents.clear();
+        mOccupantCuts.clear();
+        for (const Batch& batch : mBatches)
         {
-            Extent& e = extents[group.mId];
-            for (S32 i = 0; i < 3; ++i)
+            for (const Group& group : batch.mGroups)
             {
-                e.mMin.mdV[i] = llmin(e.mMin.mdV[i], group.mMin.mdV[i]);
-                e.mMax.mdV[i] = llmax(e.mMax.mdV[i], group.mMax.mdV[i]);
+                Extent& e = mExtents[group.mId];
+                for (S32 i = 0; i < 3; ++i)
+                {
+                    e.mMin.mdV[i] = llmin(e.mMin.mdV[i], group.mMin.mdV[i]);
+                    e.mMax.mdV[i] = llmax(e.mMax.mdV[i], group.mMax.mdV[i]);
+                }
+                e.mAnchor = group.mAnchor;
+                e.mNeverCut = group.mNeverCut;
+                e.mRoot = group.mRoot;
+                e.mGround |= group.mGround;
+                e.mBottom = llmin(e.mBottom, (F64)group.mMinZ);
+                e.mParts.emplace_back(&batch, &group);
             }
-            e.mCuttable = !group.mNeverCut && region && region->pointInRegionGlobal(group.mAnchor);
-            e.mRoot = group.mRoot;
-            e.mGround |= group.mGround;
-            e.mBottom = llmin(e.mBottom, (F64)group.mMinZ);
-            e.mParts.emplace_back(&batch, &group);
         }
+        mExtentsSignature = mSignature;
+        mExtentsBuilt = true;
+        mExtentsRegion = ~0ull;
     }
+    const U64 region_handle = region ? region->getHandle() : 0;
+    if (mExtentsRegion != region_handle)
+    {
+        for (auto& entry : mExtents)
+        {
+            Extent& e = entry.second;
+            e.mCuttable = !e.mNeverCut && region && region->pointInRegionGlobal(e.mAnchor);
+        }
+        mExtentsRegion = region_handle;
+        mOccupantCuts.clear();
+    }
+    const std::map<U32, Extent>& extents = mExtents;
+    for (auto& entry : mOccupantCuts)
+    {
+        entry.second.mSeen = false;
+    }
+    // A person's own work is kept while they stay within a quarter metre, as the key the caller gives is.
+    auto quantise = [](U64& k, F64 v) { k = (k ^ (U64)(S64)std::llround(v * 4.0)) * 1099511628211ull; };
+
     const F64 SLACK_M = 0.1;    // column: how far outside a linkset's bounds still counts as under it
     const F64 ABOVE_M = 0.5;    // what rises less than this over the floor bounds nothing
     const F64 OVERHEAD_M = 1.0; // a floating cluster whose base is this far over an occupant's cut is out of their space
@@ -929,20 +957,33 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
         return !e.mGround && e.mBottom > occupant.mCut + OVERHEAD_M;
     };
     std::map<U32, F32> cut_of;
-    std::map<U32, std::string> why;
+    std::map<U32, Reason> why;
     std::set<U32> for_agent;
     std::map<U32, F32> priority_of;
     std::set<U32> agent_under;  // linksets standing over the agent, whose cut no one on their roof overrides
-    auto mark = [&](U32 id, const Occupant& occupant, const char* rule)
+    auto reasonOf = [](const Occupant& occupant, const std::string& rule)
     {
-        const std::string who = occupant.mSelf ? std::string("agent") : "occupant " + occupant.mId.asString();
+        Reason r;
+        r.mWho = occupant.mId;
+        r.mSelf = occupant.mSelf;
+        r.mRule = rule;
+        return r;
+    };
+    auto fixedReason = [](const char* rule)
+    {
+        Reason r;
+        r.mFixed = rule;
+        return r;
+    };
+    auto mark = [&](U32 id, const Occupant& occupant, const std::string& rule)
+    {
         if (occupant.mSelf)
         {
             agent_under.insert(id);
             if (for_agent.insert(id).second)
             {
                 cut_of[id] = occupant.mCut;
-                why[id] = who + " " + rule;
+                why[id] = reasonOf(occupant, rule);
             }
             return;
         }
@@ -955,7 +996,7 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
         {
             cut_of[id] = occupant.mCut;
             priority_of[id] = occupant.mPriority;
-            why[id] = who + " " + rule;
+            why[id] = reasonOf(occupant, rule);
         }
     };
     std::vector<Occupant> people(occupants);
@@ -1059,66 +1100,84 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
     };
     std::map<U32, F32> roof_of;     // linkset -> the highest cut of those standing on its roof
     bool holding = false;
-    for (Occupant& occupant : people)
     {
-        const LLVector3d& feet = occupant.mFeet;
-        U32 best = 0;
-        F64 best_z = -1e30;
-        bool best_covered = false;
-        for (const auto& entry : extents)
+        LL_PROFILE_ZONE_NAMED("sk cut roofs");
+        for (Occupant& occupant : people)
         {
-            const Extent& e = entry.second;
-            if (!e.mCuttable || feet.mdV[VX] < e.mMin.mdV[VX] || feet.mdV[VX] > e.mMax.mdV[VX] ||
-                feet.mdV[VY] < e.mMin.mdV[VY] || feet.mdV[VY] > e.mMax.mdV[VY] ||
-                feet.mdV[VZ] < e.mMin.mdV[VZ] - STAND_ABOVE_M || feet.mdV[VZ] > e.mMax.mdV[VZ] + STAND_BELOW_M)
+            const LLVector3d& feet = occupant.mFeet;
+            OccupantCut& cache = mOccupantCuts[occupant.mId];
+            cache.mSeen = true;
+            U64 roof_key = 1469598103934665603ull;
+            for (S32 i = 0; i < 3; ++i)
             {
-                continue;
+                quantise(roof_key, feet.mdV[i]);
             }
-            F64 z = 0.0;
-            bool covered = false;
-            if (standsOn(e, feet, z, covered) && z > best_z)
+            if (!cache.mRoofValid || cache.mRoofKey != roof_key)
             {
-                best = entry.first;
-                best_z = z;
-                best_covered = covered;
-            }
-        }
-        U32 roof = 0;
-        F64 roof_z = 0.0;
-        const bool on_surface = best_z > -1e29;
-        const auto held = mStanding.find(occupant.mId);
-        if (on_surface && !best_covered)
-        {
-            roof = best;
-            roof_z = best_z;
-            mStanding[occupant.mId] = { extents[best].mRoot, best_z, now };
-        }
-        else if (!on_surface && held != mStanding.end() && now - held->second.mAt < HOLD_S)
-        {
-            // Off every surface, in a hop: the roof they left is kept a moment longer.
-            for (const auto& entry : extents)
-            {
-                if (entry.second.mRoot == held->second.mRoot && entry.second.mCuttable)
+                cache.mBest = 0;
+                cache.mBestZ = -1e30;
+                cache.mCovered = false;
+                for (const auto& entry : extents)
                 {
-                    roof = entry.first;
-                    roof_z = held->second.mZ;
-                    holding = true;
-                    break;
+                    const Extent& e = entry.second;
+                    if (!e.mCuttable || feet.mdV[VX] < e.mMin.mdV[VX] || feet.mdV[VX] > e.mMax.mdV[VX] ||
+                        feet.mdV[VY] < e.mMin.mdV[VY] || feet.mdV[VY] > e.mMax.mdV[VY] ||
+                        feet.mdV[VZ] < e.mMin.mdV[VZ] - STAND_ABOVE_M || feet.mdV[VZ] > e.mMax.mdV[VZ] + STAND_BELOW_M)
+                    {
+                        continue;
+                    }
+                    F64 z = 0.0;
+                    bool covered = false;
+                    if (standsOn(e, feet, z, covered) && z > cache.mBestZ)
+                    {
+                        cache.mBest = entry.first;
+                        cache.mBestZ = z;
+                        cache.mCovered = covered;
+                    }
+                }
+                cache.mRoofKey = roof_key;
+                cache.mRoofValid = true;
+            }
+            const U32 best = cache.mBest;
+            const F64 best_z = cache.mBestZ;
+            const bool best_covered = cache.mCovered;
+            U32 roof = 0;
+            F64 roof_z = 0.0;
+            const bool on_surface = best_z > -1e29;
+            const auto held = mStanding.find(occupant.mId);
+            if (on_surface && !best_covered)
+            {
+                roof = best;
+                roof_z = best_z;
+                mStanding[occupant.mId] = { extents.at(best).mRoot, best_z, now };
+            }
+            else if (!on_surface && held != mStanding.end() && now - held->second.mAt < HOLD_S)
+            {
+                // Off every surface, in a hop: the roof they left is kept a moment longer.
+                for (const auto& entry : extents)
+                {
+                    if (entry.second.mRoot == held->second.mRoot && entry.second.mCuttable)
+                    {
+                        roof = entry.first;
+                        roof_z = held->second.mZ;
+                        holding = true;
+                        break;
+                    }
                 }
             }
-        }
-        else if (held != mStanding.end())
-        {
-            mStanding.erase(held);
-        }
-        if (roof)
-        {
-            const F64 above = occupant.mCut - occupant.mFloor.mdV[VZ];
-            occupant.mFloor.setVec(feet.mdV[VX], feet.mdV[VY], roof_z);
-            occupant.mCut = (F32)(roof_z + above);
-            occupant.mRoomCells.reset();
-            const auto it = roof_of.find(roof);
-            roof_of[roof] = it == roof_of.end() ? occupant.mCut : llmax(it->second, occupant.mCut);
+            else if (held != mStanding.end())
+            {
+                mStanding.erase(held);
+            }
+            if (roof)
+            {
+                const F64 above = occupant.mCut - occupant.mFloor.mdV[VZ];
+                occupant.mFloor.setVec(feet.mdV[VX], feet.mdV[VY], roof_z);
+                occupant.mCut = (F32)(roof_z + above);
+                occupant.mRoomCells.reset();
+                const auto it = roof_of.find(roof);
+                roof_of[roof] = it == roof_of.end() ? occupant.mCut : llmax(it->second, occupant.mCut);
+            }
         }
     }
     for (auto it = mStanding.begin(); it != mStanding.end();)
@@ -1187,235 +1246,282 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
         }
         return false;
     };
-    for (const Occupant* occupant : ordered)
     {
-        if (occupant->mOutdoors)
+        LL_PROFILE_ZONE_NAMED("sk cut marks");
+        static const std::string COLUMN("column");
+        for (const Occupant* occupant : ordered)
         {
-            continue;
-        }
-        const LLVector3d& p = occupant->mFloor;
-        dilated.clear();
-        if (occupant->mRoomCells && !occupant->mRoomCells->empty())
-        {
-            // The room's cells grown by one, so a wall standing just past its last cell of air still touches it.
-            S32 min_x = INT_MAX, min_y = INT_MAX, max_x = INT_MIN, max_y = INT_MIN;
-            for (const auto& cell : *occupant->mRoomCells)
+            if (occupant->mOutdoors)
             {
-                for (S32 dx = -1; dx <= 1; ++dx)
+                continue;
+            }
+            const LLVector3d& p = occupant->mFloor;
+            OccupantCut& cache = mOccupantCuts[occupant->mId];
+            cache.mSeen = true;
+            // What their room or column takes depends on their floor, their cut and their room's cells alone.
+            U64 marks_key = 1469598103934665603ull;
+            for (S32 i = 0; i < 3; ++i)
+            {
+                quantise(marks_key, p.mdV[i]);
+            }
+            quantise(marks_key, occupant->mCut);
+            quantise(marks_key, occupant->mRoomCellM);
+            if (occupant->mRoomCells)
+            {
+                U64 cells = 0;
+                for (const auto& cell : *occupant->mRoomCells)
                 {
-                    for (S32 dy = -1; dy <= 1; ++dy)
+                    cells += skoverview::scramble(cellKey(cell.first, cell.second));
+                }
+                marks_key = (marks_key ^ cells) * 1099511628211ull;
+                marks_key = (marks_key ^ (U64)occupant->mRoomCells->size()) * 1099511628211ull;
+            }
+            if (!cache.mMarksValid || cache.mMarksKey != marks_key)
+            {
+                cache.mMarks.clear();
+                dilated.clear();
+                if (occupant->mRoomCells && !occupant->mRoomCells->empty())
+                {
+                    // The room's cells grown by one, so a wall standing just past its last cell of air still touches it.
+                    S32 min_x = INT_MAX, min_y = INT_MAX, max_x = INT_MIN, max_y = INT_MIN;
+                    for (const auto& cell : *occupant->mRoomCells)
                     {
-                        dilated.insert(cellKey(cell.first + dx, cell.second + dy));
+                        for (S32 dx = -1; dx <= 1; ++dx)
+                        {
+                            for (S32 dy = -1; dy <= 1; ++dy)
+                            {
+                                dilated.insert(cellKey(cell.first + dx, cell.second + dy));
+                            }
+                        }
+                        min_x = llmin(min_x, cell.first - 1);
+                        min_y = llmin(min_y, cell.second - 1);
+                        max_x = llmax(max_x, cell.first + 1);
+                        max_y = llmax(max_y, cell.second + 1);
+                    }
+                    const F64 cell_m = occupant->mRoomCellM;
+                    room_min.setVec(min_x * cell_m, min_y * cell_m, 0.0);
+                    room_max.setVec((max_x + 1) * cell_m, (max_y + 1) * cell_m, 0.0);
+                }
+                for (const auto& entry : extents)
+                {
+                    const Extent& e = entry.second;
+                    if (!e.mCuttable || e.mMax.mdV[VZ] < p.mdV[VZ] + ABOVE_M || overhead(e, *occupant))
+                    {
+                        continue;
+                    }
+                    if (occupant->mRoomCells && !dilated.empty())
+                    {
+                        // The room's building, by its geometry: a linkset whose triangles above the floor come within a
+                        // cell of the room's own cells, standing round them (walls) or over them (floors above, the roof).
+                        const F64 cell_m = occupant->mRoomCellM;
+                        if (e.mMax.mdV[VX] < room_min.mdV[VX] || e.mMin.mdV[VX] > room_max.mdV[VX] ||
+                            e.mMax.mdV[VY] < room_min.mdV[VY] || e.mMin.mdV[VY] > room_max.mdV[VY])
+                        {
+                            continue; // its box is nowhere near the room's
+                        }
+                        std::string how;
+                        if (touchesRoom(e, *occupant, dilated, cell_m, how))
+                        {
+                            cache.mMarks.emplace_back(entry.first, "room " + how);
+                        }
+                    }
+                    else if (p.mdV[VX] >= e.mMin.mdV[VX] - SLACK_M && p.mdV[VX] <= e.mMax.mdV[VX] + SLACK_M &&
+                             p.mdV[VY] >= e.mMin.mdV[VY] - SLACK_M && p.mdV[VY] <= e.mMax.mdV[VY] + SLACK_M &&
+                             overColumn(e, p))
+                    {
+                        cache.mMarks.emplace_back(entry.first, COLUMN);
                     }
                 }
-                min_x = llmin(min_x, cell.first - 1);
-                min_y = llmin(min_y, cell.second - 1);
-                max_x = llmax(max_x, cell.first + 1);
-                max_y = llmax(max_y, cell.second + 1);
+                cache.mMarksKey = marks_key;
+                cache.mMarksValid = true;
             }
-            const F64 cell_m = occupant->mRoomCellM;
-            room_min.setVec(min_x * cell_m, min_y * cell_m, 0.0);
-            room_max.setVec((max_x + 1) * cell_m, (max_y + 1) * cell_m, 0.0);
+            for (const auto& m : cache.mMarks)
+            {
+                mark(m.first, *occupant, m.second);
+            }
         }
+    }
+    for (auto it = mOccupantCuts.begin(); it != mOccupantCuts.end();)
+    {
+        it = it->second.mSeen ? std::next(it) : mOccupantCuts.erase(it);
+    }
+    {
+        LL_PROFILE_ZONE_NAMED("sk cut resolve");
+        F32 agent_cut = skoverview::NO_CUT;
+        for (const Occupant& occupant : people)
+        {
+            if (occupant.mSelf)
+            {
+                agent_cut = occupant.mCut;
+            }
+        }
+        // A roof someone stands on is kept up to their level, unless the agent is under it or it floats over the agent.
+        std::set<U32> kept;
+        for (const auto& roof : roof_of)
+        {
+            const Extent& roofed = extents.at(roof.first);
+            if (agent_under.count(roof.first) || (!roofed.mGround && roofed.mBottom > agent_cut + OVERHEAD_M))
+            {
+                continue;
+            }
+            kept.insert(roof.first);
+            auto it = cut_of.find(roof.first);
+            if (it != cut_of.end() && it->second < roof.second)
+            {
+                it->second = roof.second;
+                why[roof.first] = fixedReason("kept for someone on its roof");
+            }
+        }
+        if (holding)
+        {
+            mCutKey = 0; // worked again until the hold runs out
+        }
+        // A floating cluster (a skybox) wholly above the agent's level would roof the view of the ground: hidden, unless
+        // someone in it already had it cut. The agent's own skybox is the agent's building, cut as any other.
         for (const auto& entry : extents)
         {
             const Extent& e = entry.second;
-            if (!e.mCuttable || e.mMax.mdV[VZ] < p.mdV[VZ] + ABOVE_M || overhead(e, *occupant))
+            if (!e.mGround && e.mBottom > agent_cut && !cut_of.count(entry.first) && !kept.count(entry.first))
+            {
+                cut_of[entry.first] = skoverview::HIDDEN;
+                why[entry.first] = fixedReason("hidden floating");
+            }
+        }
+        // A cut or hidden linkset is uncut or shown only once that has held a moment: one evaluation's dropout no longer
+        // flashes it.
+        static LLCachedControl<F32> release_s(gSavedSettings, "SKOverviewCutReleaseSeconds", 0.5f);
+        std::map<LLUUID, F32> wanted;
+        for (const auto& entry : extents)
+        {
+            const auto it = cut_of.find(entry.first);
+            const F32 v = it == cut_of.end() ? skoverview::NO_CUT : it->second;
+            const auto w = wanted.emplace(entry.second.mRoot, v);
+            w.first->second = llmin(w.first->second, v);
+        }
+        bool releasing = false;
+        for (auto it = mRelease.begin(); it != mRelease.end();)
+        {
+            const auto w = wanted.find(it->first);
+            Release& r = it->second;
+            const F32 v = w == wanted.end() ? skoverview::NO_CUT : w->second;
+            const bool relaxes = (r.mCut == skoverview::HIDDEN && v != skoverview::HIDDEN) || v == skoverview::NO_CUT;
+            if (w == wanted.end() || !relaxes)
+            {
+                r.mSince = -1.0;
+            }
+            else if (r.mSince < 0.0)
+            {
+                r.mSince = now;
+            }
+            if (w == wanted.end() || !relaxes || now - r.mSince >= release_s)
+            {
+                if (v == skoverview::NO_CUT)
+                {
+                    it = mRelease.erase(it);
+                    continue;
+                }
+                r.mCut = v;
+                r.mSince = -1.0;
+            }
+            else
+            {
+                releasing = true;
+            }
+            ++it;
+        }
+        for (const auto& w : wanted)
+        {
+            if (w.second != skoverview::NO_CUT && !mRelease.count(w.first))
+            {
+                mRelease[w.first].mCut = w.second;
+            }
+        }
+        for (const auto& entry : extents)
+        {
+            const auto r = mRelease.find(entry.second.mRoot);
+            if (r == mRelease.end())
             {
                 continue;
             }
-            if (occupant->mRoomCells && !dilated.empty())
+            if (r->second.mSince >= 0.0)
             {
-                // The room's building, by its geometry: a linkset whose triangles above the floor come within a cell of
-                // the room's own cells, standing round them (walls) or over them (floors above, the roof).
-                const F64 cell_m = occupant->mRoomCellM;
-                if (e.mMax.mdV[VX] < room_min.mdV[VX] || e.mMin.mdV[VX] > room_max.mdV[VX] ||
-                    e.mMax.mdV[VY] < room_min.mdV[VY] || e.mMin.mdV[VY] > room_max.mdV[VY])
-                {
-                    continue; // its box is nowhere near the room's
-                }
-                std::string how;
-                if (touchesRoom(e, *occupant, dilated, cell_m, how))
-                {
-                    mark(entry.first, *occupant, ("room " + how).c_str());
-                }
+                cut_of[entry.first] = r->second.mCut;
+                Reason held = r->second.mWhy;
+                held.mReleasing = true;
+                why[entry.first] = std::move(held);
             }
-            else if (p.mdV[VX] >= e.mMin.mdV[VX] - SLACK_M && p.mdV[VX] <= e.mMax.mdV[VX] + SLACK_M &&
-                     p.mdV[VY] >= e.mMin.mdV[VY] - SLACK_M && p.mdV[VY] <= e.mMax.mdV[VY] + SLACK_M &&
-                     overColumn(e, p))
+            else if (cut_of.count(entry.first))
             {
-                mark(entry.first, *occupant, "column");
+                r->second.mWhy = why[entry.first];
             }
         }
-    }
-    F32 agent_cut = skoverview::NO_CUT;
-    for (const Occupant& occupant : people)
-    {
-        if (occupant.mSelf)
+        if (releasing)
         {
-            agent_cut = occupant.mCut;
+            mCutKey = 0; // worked again until the release holds
         }
-    }
-    // A roof someone stands on is kept up to their level, unless the agent is under it or it floats over the agent.
-    std::set<U32> kept;
-    for (const auto& roof : roof_of)
-    {
-        const Extent& roofed = extents[roof.first];
-        if (agent_under.count(roof.first) || (!roofed.mGround && roofed.mBottom > agent_cut + OVERHEAD_M))
-        {
-            continue;
-        }
-        kept.insert(roof.first);
-        auto it = cut_of.find(roof.first);
-        if (it != cut_of.end() && it->second < roof.second)
-        {
-            it->second = roof.second;
-            why[roof.first] = "kept for someone on its roof";
-        }
-    }
-    if (holding)
-    {
-        mCutKey = 0; // worked again until the hold runs out
-    }
-    // A floating cluster (a skybox) wholly above the agent's level would roof the view of the ground: hidden, unless
-    // someone in it already had it cut. The agent's own skybox is the agent's building, cut as any other.
-    for (const auto& entry : extents)
-    {
-        const Extent& e = entry.second;
-        if (!e.mGround && e.mBottom > agent_cut && !cut_of.count(entry.first) && !kept.count(entry.first))
-        {
-            cut_of[entry.first] = skoverview::HIDDEN;
-            why[entry.first] = "hidden floating";
-        }
-    }
-    // A cut or hidden linkset is uncut or shown only once that has held a moment: one evaluation's dropout no longer flashes it.
-    static LLCachedControl<F32> release_s(gSavedSettings, "SKOverviewCutReleaseSeconds", 0.5f);
-    std::map<LLUUID, F32> wanted;
-    for (const auto& entry : extents)
-    {
-        const auto it = cut_of.find(entry.first);
-        const F32 v = it == cut_of.end() ? skoverview::NO_CUT : it->second;
-        const auto w = wanted.emplace(entry.second.mRoot, v);
-        w.first->second = llmin(w.first->second, v);
-    }
-    bool releasing = false;
-    for (auto it = mRelease.begin(); it != mRelease.end();)
-    {
-        const auto w = wanted.find(it->first);
-        Release& r = it->second;
-        const F32 v = w == wanted.end() ? skoverview::NO_CUT : w->second;
-        const bool relaxes = (r.mCut == skoverview::HIDDEN && v != skoverview::HIDDEN) || v == skoverview::NO_CUT;
-        if (w == wanted.end() || !relaxes)
-        {
-            r.mSince = -1.0;
-        }
-        else if (r.mSince < 0.0)
-        {
-            r.mSince = now;
-        }
-        if (w == wanted.end() || !relaxes || now - r.mSince >= release_s)
-        {
-            if (v == skoverview::NO_CUT)
-            {
-                it = mRelease.erase(it);
-                continue;
-            }
-            r.mCut = v;
-            r.mSince = -1.0;
-        }
-        else
-        {
-            releasing = true;
-        }
-        ++it;
-    }
-    for (const auto& w : wanted)
-    {
-        if (w.second != skoverview::NO_CUT && !mRelease.count(w.first))
-        {
-            mRelease[w.first].mCut = w.second;
-        }
-    }
-    for (const auto& entry : extents)
-    {
-        const auto r = mRelease.find(entry.second.mRoot);
-        if (r == mRelease.end())
-        {
-            continue;
-        }
-        if (r->second.mSince >= 0.0)
-        {
-            cut_of[entry.first] = r->second.mCut;
-            why[entry.first] = r->second.mWhy + " (releasing)";
-        }
-        else if (cut_of.count(entry.first))
-        {
-            r->second.mWhy = why[entry.first];
-        }
-    }
-    if (releasing)
-    {
-        mCutKey = 0; // worked again until the release holds
     }
     std::vector<std::pair<U32, F32>> cuts(cut_of.begin(), cut_of.end());
     if (cuts == mCuts && mCutSignature == mSignature)
     {
         return;
     }
-    mCuts = std::move(cuts);
-    mCutSignature = mSignature;
-    ++mCutStamp;
-    mCutRoots.clear();
-    for (const auto& cut : cut_of)
     {
-        mCutRoots[extents[cut.first].mRoot] = std::make_pair(cut.second, why[cut.first]);
-    }
-    {
-        // A count per reason, logged when it changes: the full list ran to hundreds of kilobytes a line zoomed out,
-        // and the debug console wrapped every one of them each frame.
-        std::map<std::string, U32> reasons;
+        LL_PROFILE_ZONE_NAMED("sk cut write");
+        mCuts = std::move(cuts);
+        mCutSignature = mSignature;
+        ++mCutStamp;
+        mCutRoots.clear();
         for (const auto& cut : cut_of)
         {
-            ++reasons[why[cut.first]];
+            mCutRoots[extents.at(cut.first).mRoot] = std::make_pair(cut.second, why[cut.first].text());
         }
-        std::string what;
-        for (const auto& [reason, count] : reasons)
         {
-            what += llformat("%s%u %s", what.empty() ? "" : ", ", count, reason.c_str());
+            // A count per reason, logged when it changes: the full list ran to hundreds of kilobytes a line zoomed out,
+            // and the debug console wrapped every one of them each frame.
+            std::map<std::string, U32> reasons;
+            for (const auto& root : mCutRoots)
+            {
+                ++reasons[root.second.second];
+            }
+            std::string what;
+            for (const auto& [reason, count] : reasons)
+            {
+                what += llformat("%s%u %s", what.empty() ? "" : ", ", count, reason.c_str());
+            }
+            if (what != mCutLogged)
+            {
+                mCutLogged = what;
+                LL_DEBUGS("SKOverview") << "tactical cut: " << (what.empty() ? std::string("nothing cut") : what) << LL_ENDL;
+            }
         }
-        if (what != mCutLogged)
+        for (const Batch& batch : mBatches)
         {
-            mCutLogged = what;
-            LL_DEBUGS("SKOverview") << "tactical cut: " << (what.empty() ? std::string("nothing cut") : what) << LL_ENDL;
-        }
-    }
-    for (const Batch& batch : mBatches)
-    {
-        const U32 total = batch.mStart[skoverview::NUM_CENSUS_CLASSES];
-        LLStrider<F32> strider;
-        if (!total || !batch.mBuffer->getWeightStrider(strider) || !strider.get())
-        {
-            continue;
-        }
-        std::vector<F32> values(total, skoverview::NO_CUT);
-        for (const Group& group : batch.mGroups)
-        {
-            const auto it = cut_of.find(group.mId);
-            if (it == cut_of.end())
+            const U32 total = batch.mStart[skoverview::NUM_CENSUS_CLASSES];
+            LLStrider<F32> strider;
+            if (!total || !batch.mBuffer->getWeightStrider(strider) || !strider.get())
             {
                 continue;
             }
-            for (U32 c = 0; c < skoverview::NUM_CENSUS_CLASSES; ++c)
+            std::vector<F32> values(total, skoverview::NO_CUT);
+            for (const Group& group : batch.mGroups)
             {
-                const U32 end = llmin(group.mStart[c] + group.mCount[c], total);
-                std::fill(values.begin() + llmin(group.mStart[c], end), values.begin() + end, it->second);
+                const auto it = cut_of.find(group.mId);
+                if (it == cut_of.end())
+                {
+                    continue;
+                }
+                for (U32 c = 0; c < skoverview::NUM_CENSUS_CLASSES; ++c)
+                {
+                    const U32 end = llmin(group.mStart[c] + group.mCount[c], total);
+                    std::fill(values.begin() + llmin(group.mStart[c], end), values.begin() + end, it->second);
+                }
             }
+            for (F32 v : values)
+            {
+                *strider++ = v;
+            }
+            batch.mBuffer->unmapBuffer();
         }
-        for (F32 v : values)
-        {
-            *strider++ = v;
-        }
-        batch.mBuffer->unmapBuffer();
     }
 }
 
