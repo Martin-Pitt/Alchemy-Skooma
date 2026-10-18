@@ -258,17 +258,19 @@ namespace sk
             }
             return moved ? Result::MOVED : Result::NONE;
         }
-        // A plain row closes the children its pane has open.
+        // A plain row closes the children its pane has open, and says so: the panes' bounds shrink.
+        bool closed = false;
         for (S32 i = 0; i < static_cast<S32>(mPanes.size()); ++i)
         {
             if (mPanes[i].mParent == pane && mPanes[i].mOpen)
             {
                 close(i);
+                closed = true;
                 mPane = pane;
                 mRow = row;
             }
         }
-        return moved ? Result::MOVED : Result::NONE;
+        return closed ? Result::CLOSED_CHILD : moved ? Result::MOVED : Result::NONE;
     }
 
     PopupNav::Result PopupNav::key(PopupKey key)

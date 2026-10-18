@@ -196,8 +196,8 @@ namespace tut
         ensure("opens", nav.hover(1, 0) == PopupNav::Result::OPENED && nav.panes()[2].mOpen);
         nav.hover(1, 1);
         ensure("the sibling shuts", nav.panes()[3].mOpen && !nav.panes()[2].mOpen);
-        nav.hover(1, 2);
-        ensure("a plain row shuts it", !nav.panes()[3].mOpen);
+        ensure("a plain row shuts it, and says so", nav.hover(1, 2) == PopupNav::Result::CLOSED_CHILD && !nav.panes()[3].mOpen);
+        ensure("nothing more to shut", nav.hover(1, 2) == PopupNav::Result::NONE);
         nav.hover(1, 0);
         nav.hover(2, 0);
         ensure("in the child", nav.activePane() == 2 && nav.panes()[2].mOpen);

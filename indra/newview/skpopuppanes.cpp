@@ -320,6 +320,8 @@ void SKPopupPanes::draw()
         return;
     }
     mDrawnFrame = frame;
+    // The parent placed us at our rect before draw; a layout here that moves it is undone for this frame.
+    const LLRect before = getRect();
     if (mRefresh)
     {
         mRefresh(mSpecs);
@@ -330,6 +332,14 @@ void SKPopupPanes::draw()
         }
         mNav.refresh(rows);
         layout();
+    }
+    const F32 shift_x = static_cast<F32>(before.mLeft - getRect().mLeft);
+    const F32 shift_y = static_cast<F32>(before.mBottom - getRect().mBottom);
+    const bool shifted = shift_x != 0.f || shift_y != 0.f;
+    if (shifted)
+    {
+        gGL.pushUIMatrix();
+        gGL.translateUI(shift_x, shift_y, 0.f);
     }
 
     static LLUIColor bg_colour = LLUIColorTable::instance().getColor("MenuDefaultBgColor");
@@ -385,6 +395,10 @@ void SKPopupPanes::draw()
                              LLFontGL::NO_SHADOW, S32_MAX, room, nullptr, true);
         }
     }
+    if (shifted)
+    {
+        gGL.popUIMatrix();
+    }
 }
 
 bool SKPopupPanes::handleKeyHere(KEY key, MASK mask)
@@ -433,9 +447,13 @@ bool SKPopupPanes::handleHover(S32 x, S32 y, MASK mask)
     {
         return false;
     }
-    if (row >= 0 && mNav.hover(pane, row) == sk::PopupNav::Result::OPENED)
+    if (row >= 0)
     {
-        layout();
+        const sk::PopupNav::Result result = mNav.hover(pane, row);
+        if (result == sk::PopupNav::Result::OPENED || result == sk::PopupNav::Result::CLOSED_CHILD)
+        {
+            layout();
+        }
     }
     gViewerWindow->setCursor(UI_CURSOR_ARROW);
     return true;
