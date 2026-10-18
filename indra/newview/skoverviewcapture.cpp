@@ -1972,8 +1972,6 @@ void SKOverviewCapture::drawMarkers3D(const Project& project, S32 vw, S32 vh, st
         LLVector3 mCentre;      // agent space, the avatar's position: the shape's origin
         LLQuaternion mRotation;
         skcensus::AvatarPose mPose = skcensus::AvatarPose::STANDING;
-        bool mHasHead = false;  // its head joint, the height the heading wedge is drawn at
-        LLVector3 mHead;
     };
     // A loaded avatar's own size, as the sim has it: getScale() is the agent size from its object update (what
     // llGetAgentSize reports), its box centred on the avatar's position, so its base is the floor the sim stands it
@@ -2004,11 +2002,6 @@ void SKOverviewCapture::drawMarkers3D(const Project& project, S32 vw, S32 vh, st
         {
             m.mFloor = avatar->getRenderPosition() - LLVector3(0.f, 0.f, avatar->getPelvisToFoot());
             m.mHeight = avatar->mBodySize.mV[VZ];
-        }
-        if (avatar->mHeadp)
-        {
-            m.mHead = avatar->mHeadp->getWorldPosition();
-            m.mHasHead = true;
         }
     };
     std::vector<Marker> markers;
@@ -2139,15 +2132,15 @@ void SKOverviewCapture::drawMarkers3D(const Project& project, S32 vw, S32 vh, st
                 tri(top_c, t0, t1, m.mColour);
             }
         }
-        if (m.mHasShape && !m.mCoarse && m.mHasHead && m.mHasHeading)
+        if (m.mHasShape && !m.mCoarse && m.mHasHeading)
         {
-            // The minimap's heading wedge as a flat slab: a solid triangle just clear of the body at head height, along
+            // The minimap's heading wedge as a flat slab: a solid triangle just clear of the body, its top flush with the drawn shape's, along
             // the body's heading, in the minimap's proportions to the body's radius.
             {
                 const LLVector3 ahead(std::cos(m.mHeading), std::sin(m.mHeading), 0.f);
                 const LLVector3 across(-ahead.mV[VY], ahead.mV[VX], 0.f);
-                const LLVector3 from(m.mCentre.mV[VX], m.mCentre.mV[VY], m.mCentre.mV[VZ] + (m.mHead.mV[VZ] - m.mCentre.mV[VZ]));
                 const F32 body_r = m.mRadius;
+                const LLVector3 from(top_c.mV[VX], top_c.mV[VY], top_c.mV[VZ] - body_r * HEADING_THICK_PER_RADIUS * 0.5f);
                 const LLVector3 tip = from + ahead * (body_r * (1.f + HEADING_TIP_PER_RADIUS));
                 const LLVector3 base = from + ahead * (body_r * (1.f + HEADING_BASE_PER_RADIUS));
                 const LLVector3 l = base + across * (body_r * HEADING_HALF_PER_RADIUS);
