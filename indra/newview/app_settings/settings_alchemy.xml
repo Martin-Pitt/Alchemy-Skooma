@@ -6243,13 +6243,134 @@
         <key>SKMapLayerProjectiles</key>
         <map>
             <key>Comment</key>
-            <string>Draw fast physical objects on the mini-map as streaks and thrown ones as dots.</string>
+            <string>Draw fast physical objects on the mini-map and tactical overview as streaks along their flight, the prim's own length.</string>
             <key>Persist</key>
             <integer>1</integer>
             <key>Type</key>
             <string>Boolean</string>
             <key>Value</key>
-            <integer>0</integer>
+            <integer>1</integer>
+        </map>
+        <key>SKMapTrailMinSpeed</key>
+        <map>
+            <key>Comment</key>
+            <string>Speed in metres per second from which any object leaves a trail on the tactical overview.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>80.0</real>
+        </map>
+        <key>SKMapTrailMaxSpeed</key>
+        <map>
+            <key>Comment</key>
+            <string>Speed in metres per second at which a tactical overview trail is at its longest and strongest.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>200.0</real>
+        </map>
+        <key>SKMapTrailAlphaSlow</key>
+        <map>
+            <key>Comment</key>
+            <string>Opacity at the head of a trail at the slowest trail speed.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.05</real>
+        </map>
+        <key>SKMapTrailAlphaFast</key>
+        <map>
+            <key>Comment</key>
+            <string>Opacity at the head of a trail at the fastest trail speed.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.35</real>
+        </map>
+        <key>SKMapTrailLifeSlow</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds a trail reaches back at the slowest trail speed.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.02</real>
+        </map>
+        <key>SKMapTrailLifeFast</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds a trail reaches back at the fastest trail speed.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.08</real>
+        </map>
+        <key>SKMapProjectileMinSpeed</key>
+        <map>
+            <key>Comment</key>
+            <string>Speed in metres per second from which a small physical object is drawn as a projectile.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>20.0</real>
+        </map>
+        <key>SKMapProjectileMaxSize</key>
+        <map>
+            <key>Comment</key>
+            <string>Largest size, the length of its scale in metres, a projectile may have.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>3.0</real>
+        </map>
+        <key>SKMapProjectileMinLengthPx</key>
+        <map>
+            <key>Comment</key>
+            <string>Shortest a projectile streak is drawn, in pixels.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>10.0</real>
+        </map>
+        <key>SKMapProjectileMinWidthPx</key>
+        <map>
+            <key>Comment</key>
+            <string>Thinnest a projectile streak is drawn, in pixels.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>2.0</real>
+        </map>
+        <key>SKMapProjectileMaxWidthPx</key>
+        <map>
+            <key>Comment</key>
+            <string>Thickest a projectile streak is drawn, in pixels.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>5.0</real>
         </map>
         <!-- <SK:Nexii> SKNetMap mini-map section cut -->
         <!-- </SK:Nexii> -->

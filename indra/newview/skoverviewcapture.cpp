@@ -1399,19 +1399,21 @@ void SKOverviewCapture::updateCut(const LLVector3* eye)
             mix((U64)(S64)std::llround(p.mdV[k] * 4.0));
         }
     };
-    auto addPerson = [&](const LLUUID& id, bool self, const LLVector3d& floor, F32 cut, const skmap::plan::Whereabouts& where)
+    auto addPerson = [&](const LLUUID& id, bool self, const LLVector3d& floor, const LLVector3d& feet, F32 cut,
+                         const skmap::plan::Whereabouts& where)
     {
         SKOverviewCensus::Occupant o;
         o.mId = id;
         o.mSelf = self;
         o.mFloor = floor;
+        o.mFeet = feet;
         o.mCut = cut;
         // Line of sight only for a perspective eye: straight down, only roofs stand between, and the rooms take those.
         if (eye)
         {
             for (F64 up : { 0.3, 1.0, 1.7 })
             {
-                o.mSight.push_back(floor + LLVector3d(0.0, 0.0, up));
+                o.mSight.push_back(feet + LLVector3d(0.0, 0.0, up));
             }
         }
         if (where.mFound && where.mIndoor)
@@ -1420,13 +1422,19 @@ void SKOverviewCapture::updateCut(const LLVector3* eye)
             o.mRoomCellM = (F32)ROOM_CELL_M;
         }
         mixPos(floor);
+        mixPos(feet);
         mix(id.getCRC32());
         mix(o.mRoomCells ? o.mRoomCells->size() : 0);
         occupants.push_back(std::move(o));
     };
     const LLVector3d agent_floor = gAgent.getPosGlobalFromAgent(
         LLVector3(gAgent.getPositionAgent().mV[VX], gAgent.getPositionAgent().mV[VY], floor_z));
-    addPerson(gAgent.getID(), true, agent_floor, cut_z, skmap::plan::whereabouts(gAgent.getPositionGlobal()));
+    LLVector3d agent_feet = agent_floor; // the feet as they stand, which a hop lifts off the floor
+    if (isAgentAvatarValid())
+    {
+        agent_feet.mdV[VZ] = gAgentAvatarp->getPositionGlobal().mdV[VZ] - gAgentAvatarp->getPelvisToFoot();
+    }
+    addPerson(gAgent.getID(), true, agent_floor, agent_feet, cut_z, skmap::plan::whereabouts(gAgent.getPositionGlobal()));
     for (const SKMapPeople::Person& p : SKMapPeople::instance().people())
     {
         if (p.mVisibility == skmap::Visibility::HIDDEN || !p.mZKnown)
@@ -1435,7 +1443,9 @@ void SKOverviewCapture::updateCut(const LLVector3* eye)
         }
         LLVector3d floor = p.mPos;
         floor.mdV[VZ] = p.mWhere.mFound ? (F64)p.mWhere.mFloor : p.mPos.mdV[VZ] - AVATAR_HALF_HEIGHT_M;
-        addPerson(p.mId, false, floor, (F32)floor.mdV[VZ] + (F32)cut_height, p.mWhere);
+        LLVector3d feet = p.mPos;
+        feet.mdV[VZ] -= AVATAR_HALF_HEIGHT_M;
+        addPerson(p.mId, false, floor, feet, (F32)floor.mdV[VZ] + (F32)cut_height, p.mWhere);
     }
     const LLVector3d eye_global = eye ? gAgent.getPosGlobalFromAgent(*eye) : LLVector3d();
     mixPos(eye_global);
@@ -2157,6 +2167,74 @@ void SKOverviewCapture::composite()
         std::vector<std::pair<size_t, LLVector2>> drawn;
         drawMarkers3D(project, vw, vh, drawn);
         gGL.flush();
+        {
+            // Projectiles over the markers, as on the mini-map: a streak the prim's length, fading to its tail.
+            std::map<LLUUID, LLColor4> shooters;
+            for (const SKMapPeople::Person& person : SKMapPeople::instance().people())
+            {
+                shooters[person.mId] = person.mColour;
+            }
+            const LLColor4 plain = LLColor4(skmap::palette::PROJECTILE.mR, skmap::palette::PROJECTILE.mG, skmap::palette::PROJECTILE.mB,
+                                            skmap::palette::PROJECTILE.mA);
+            gGL.begin(LLRender::TRIANGLES);
+            // Fast movers' recent path, faded from the head's opacity to clear at the oldest point.
+            static LLCachedControl<F32> trail_px(gSavedSettings, "SKMapProjectileMinWidthPx", 2.f);
+            const F64 now = LLFrameTimer::getUptimeSeconds().value();
+            for (const auto& entry : SKMapPeople::instance().fastTrails())
+            {
+                const SKMapPeople::FastTrail& trail = entry.second;
+                const auto& pts = trail.mPoints;
+                const F32 half = llmax(static_cast<F32>(trail_px), 0.5f) * 0.5f;
+                for (size_t i = 0; i + 1 < pts.size(); ++i)
+                {
+                    LLVector2 a, b;
+                    if (!project(gAgent.getPosAgentFromGlobal(pts[i].second), a) ||
+                        !project(gAgent.getPosAgentFromGlobal(pts[i + 1].second), b))
+                    {
+                        continue;
+                    }
+                    LLVector2 d = a - b;
+                    if (d.normVec() < 1e-4f)
+                    {
+                        continue;
+                    }
+                    const F32 life = llmax(trail.mLife, 1e-3f);
+                    const F32 alpha_a = trail.mAlpha * (1.f - llclamp(static_cast<F32>(now - pts[i].first) / life, 0.f, 1.f));
+                    const F32 alpha_b = trail.mAlpha * (1.f - llclamp(static_cast<F32>(now - pts[i + 1].first) / life, 0.f, 1.f));
+                    const LLVector2 n(-d.mV[VY] * half, d.mV[VX] * half);
+                    auto at = [&](const LLVector2& v, F32 alpha)
+                    {
+                        gGL.color4f(plain.mV[VRED], plain.mV[VGREEN], plain.mV[VBLUE], alpha);
+                        gGL.vertex2f(v.mV[VX], v.mV[VY]);
+                    };
+                    at(b - n, alpha_b);
+                    at(a - n, alpha_a);
+                    at(a + n, alpha_a);
+                    at(b - n, alpha_b);
+                    at(a + n, alpha_a);
+                    at(b + n, alpha_b);
+                }
+            }
+            for (const SKMapPeople::Projectile& p : SKMapPeople::instance().projectiles())
+            {
+                const LLVector3 head_agent = gAgent.getPosAgentFromGlobal(p.mPos);
+                LLVector2 head, back;
+                if (!project(head_agent, head) || !project(head_agent - p.mDir, back))
+                {
+                    continue;
+                }
+                LLVector2 dir = head - back;
+                const F32 ppm = dir.normVec();
+                if (ppm < 1e-4f)
+                {
+                    continue;
+                }
+                const auto found = p.mShooter.notNull() ? shooters.find(p.mShooter) : shooters.end();
+                skmapdraw::projectile(head, dir, p.mLength * ppm, p.mWidth * ppm, found != shooters.end() ? found->second : plain);
+            }
+            gGL.end();
+            gGL.flush();
+        }
         // Avatars shown large enough carry their in-world name tag, the one LLVOAvatar keeps, in place of the marker label.
         static LLCachedControl<F32> tag_ppm(gSavedSettings, "SKTacticalNametagPixelsPerMetre", 8.f);
         const std::vector<SKMapPeople::Person>& people = SKMapPeople::instance().people();
