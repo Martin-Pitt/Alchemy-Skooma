@@ -36,6 +36,7 @@
 #include "lldir.h"
 #include "llfile.h"
 #include "llviewercamera.h"
+#include "llviewerjoystick.h"
 #include "llviewerparcelmgr.h"
 #include "llviewercontrol.h"
 #include "llvoavatarself.h"
@@ -655,6 +656,12 @@ void SKMapPeople::gatherPeople()
     // The agent is skipped below, so its own feet, the reference for everyone's height, are read here.
     mSelfFeetKnown = isAgentAvatarValid();
     mSelfFeet = mSelfFeetKnown ? feetZ(gAgentAvatarp) : 0.0;
+    if (mSelfFeetKnown && (!gAgentCamera.getFocusOnAvatar() || LLViewerJoystick::getInstance()->getOverrideCamera()))
+    {
+        // Alt-cam or flycam: heights are read from where the camera is, as though standing there at eye height.
+        const F64 eye = llmax(gAgentAvatarp->mBodySize.mV[VZ], 1.f) * 0.93;
+        mSelfFeet = gAgentCamera.getCameraPositionGlobal().mdV[VZ] - eye;
+    }
     static LLCachedControl<F32> floor_band(gSavedSettings, "SKMapFloorChevronBand1", 8.f);
     for (size_t i = 0; i < ids.size(); ++i)
     {
