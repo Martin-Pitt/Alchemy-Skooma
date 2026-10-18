@@ -49,6 +49,7 @@
 
 class LLRenderTarget;
 class LLViewerRegion;
+class LLVOAvatar;
 namespace skmapdraw
 {
     struct TagText;
@@ -181,6 +182,8 @@ private:
     bool mTacticalReady = false;
     LLVector3 mTacticalCentre;   // agent space
     F32 mTacticalReach = 0.f;
+    F32 mTacticalShadeZ = 0.f;      ///< agent-space z the height colours are relative to: the agent's floor, eased
+    F64 mTacticalShadeTime = -1.0;  ///< when it was last eased; negative until the first shot
     bool mTacticalOpen = false;     ///< claims the modal view
     /// Claims or releases the modal view to match SKTacticalOverview.
     static void syncTactical();
@@ -241,7 +244,9 @@ private:
     };
     std::vector<TacticalMark> mTacticalMarks;  // the markers drawn last frame, for picks
     // The mini-map's hover nametags, laid out in UI pixels over the overview.
-    void drawTacticalLabels(const std::vector<std::pair<size_t, LLVector2>>& drawn, S32 vw, S32 vh);
+    /// tagged runs alongside drawn: an avatar there shows its own name tag instead of the marker label.
+    void drawTacticalLabels(const std::vector<std::pair<size_t, LLVector2>>& drawn, const std::vector<LLVOAvatar*>& tagged,
+                            S32 vw, S32 vh);
     skmap::HoverSet mTacticalHover;
     skmap::LabelLayout mTacticalLabels;
     std::vector<skmapdraw::TagText> mTacticalTagTexts;

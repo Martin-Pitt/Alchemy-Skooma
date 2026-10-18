@@ -61,6 +61,7 @@
 #include "llviewerregion.h"
 #include "llviewershadermgr.h"
 #include "llvoavatar.h"
+#include "llhudnametag.h"
 #include "llviewerobjectlist.h"
 #include "pipeline.h"
 #include "sknavbuild.h"
@@ -1428,7 +1429,18 @@ void SKOverviewCapture::tactical()
     shot.mProj = al_perspective(fov, aspect, TACTICAL_NEAR_M, far_m);
     shot.mEye = eye;
     shot.mCut = cut_z;
-    shot.mFocus = target;
+    // The fade follows the focus, but the height colours stay on the agent's floor, eased so a climb or teleport never flickers.
+    const F64 now = LLFrameTimer::getUptimeSeconds().value();
+    if (mTacticalShadeTime < 0.0 || now - mTacticalShadeTime > 1.0)
+    {
+        mTacticalShadeZ = floor_z;
+    }
+    else
+    {
+        mTacticalShadeZ += (floor_z - mTacticalShadeZ) * (F32)(1.0 - std::exp(-(now - mTacticalShadeTime) / 0.25));
+    }
+    mTacticalShadeTime = now;
+    shot.mFocus = LLVector3(target.mV[VX], target.mV[VY], mTacticalShadeZ);
     shot.mPartCuts = true;
     shot.mLevelTop = cut_z;
     {
@@ -2023,7 +2035,27 @@ void SKOverviewCapture::composite()
             gGL.end();
             gGL.flush();
         }
-        drawTacticalLabels(drawn, vw, vh);
+        // Avatars shown large enough carry their in-world name tag, the one LLVOAvatar keeps, in place of the marker label.
+        static LLCachedControl<F32> tag_ppm(gSavedSettings, "SKTacticalNametagPixelsPerMetre", 8.f);
+        const std::vector<SKMapPeople::Person>& people = SKMapPeople::instance().people();
+        const LLVector3 across = LLViewerCamera::getInstance()->getLeftAxis();
+        std::vector<LLVOAvatar*> tagged(drawn.size(), nullptr);
+        for (size_t i = 0; i < drawn.size(); ++i)
+        {
+            if (drawn[i].first >= people.size())
+            {
+                continue;
+            }
+            LLViewerObject* obj = gObjectList.findObject(people[drawn[i].first].mId);
+            LLVOAvatar* av = obj && obj->isAvatar() && !obj->isDead() ? static_cast<LLVOAvatar*>(obj) : nullptr;
+            LLVector2 a, b;
+            if (av && av->mNameText.notNull() && project(av->getPositionAgent(), a) && project(av->getPositionAgent() + across, b)
+                && (a - b).length() >= tag_ppm)
+            {
+                tagged[i] = av;
+            }
+        }
+        drawTacticalLabels(drawn, tagged, vw, vh);
         gGL.flush();
         gUIProgram.unbind();
         gGL.matrixMode(LLRender::MM_PROJECTION);
@@ -2057,7 +2089,8 @@ void SKOverviewCapture::composite()
     LL_INFOS_ONCE("SKOverview") << "tactical overview composited at " << vx << "," << vy << " " << vw << "x" << vh << LL_ENDL;
 }
 
-void SKOverviewCapture::drawTacticalLabels(const std::vector<std::pair<size_t, LLVector2>>& drawn, S32 vw, S32 vh)
+void SKOverviewCapture::drawTacticalLabels(const std::vector<std::pair<size_t, LLVector2>>& drawn,
+                                           const std::vector<LLVOAvatar*>& tagged, S32 vw, S32 vh)
 {
     static LLCachedControl<F32> enter(gSavedSettings, "SKMapHoverEnterPx", skmap::HOVER_ENTER_PX);
     static LLCachedControl<F32> exit(gSavedSettings, "SKMapHoverExitPx", skmap::HOVER_EXIT_PX);
@@ -2079,11 +2112,11 @@ void SKOverviewCapture::drawTacticalLabels(const std::vector<std::pair<size_t, L
     gGL.loadUIIdentity();
     gGL.scaleUI(scale.mV[VX], scale.mV[VY], 1.f);
 
-    for (const auto& [index, at] : drawn)
+    for (size_t i = 0; i < drawn.size(); ++i)
     {
-        if (index < people.size())
+        if (drawn[i].first < people.size() && !tagged[i])
         {
-            skmapdraw::personCode(people[index], ui(at), skmap::FloorRelation::SAME);
+            skmapdraw::personCode(people[drawn[i].first], ui(drawn[i].second), skmap::FloorRelation::SAME);
         }
     }
 
@@ -2098,11 +2131,11 @@ void SKOverviewCapture::drawTacticalLabels(const std::vector<std::pair<size_t, L
     }
     mTacticalEscDown = esc;
     std::vector<skmap::HoverDot> dots;
-    for (const auto& [index, at] : drawn)
+    for (size_t i = 0; i < drawn.size(); ++i)
     {
-        if (index < people.size())
+        if (drawn[i].first < people.size() && !tagged[i])
         {
-            dots.push_back({ people[index].mId, ui(at) });
+            dots.push_back({ people[drawn[i].first].mId, ui(drawn[i].second) });
         }
     }
     if (gFocusMgr.getMouseCapture() || mTacticalHover.suppressed())
@@ -2174,6 +2207,23 @@ void SKOverviewCapture::drawTacticalLabels(const std::vector<std::pair<size_t, L
                 break;
             }
         }
+    }
+
+    // The in-world tags, nearest the camera last so it draws on top, just above each marker's projected top.
+    std::vector<std::pair<F32, size_t>> order;
+    const LLVector3 eye = LLViewerCamera::getInstance()->getOrigin();
+    for (size_t i = 0; i < drawn.size(); ++i)
+    {
+        if (tagged[i])
+        {
+            order.emplace_back((tagged[i]->getPositionAgent() - eye).lengthSquared(), i);
+        }
+    }
+    std::sort(order.begin(), order.end(), [](const auto& l, const auto& r) { return l.first > r.first; });
+    for (const auto& [dist, i] : order)
+    {
+        const LLVector2 at = ui(drawn[i].second);
+        tagged[i]->mNameText->drawFlat(at.mV[VX], at.mV[VY] + 6.f);
     }
 
     gGL.popUIMatrix();
