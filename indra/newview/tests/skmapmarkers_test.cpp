@@ -87,7 +87,7 @@ TEST_CASE("A code is stable while others come and go", "[skmapmarkers]")
     }
 }
 
-TEST_CASE("The marker radius, all four cases, and stacked chevrons", "[skmapmarkers]")
+TEST_CASE("The marker radius, all four cases, and any chevron band", "[skmapmarkers]")
 {
     CHECK((skmap::markerRadius(0, 1.4f, false, 0, 0.f, 8.f, 0.5f)) == (3.f));
     CHECK((skmap::markerRadius(1, 1.4f, true, 2, 20.f, 8.f, 0.5f)) == (4.5f));
@@ -95,9 +95,8 @@ TEST_CASE("The marker radius, all four cases, and stacked chevrons", "[skmapmark
     const F32 wide = skmap::markerRadius(0, 1.4f, true, 2, 12.f, 8.f, 0.5f);
     CHECK(std::fabs(wide - (std::hypot(6.f, 8.f * 0.36f) + 0.5f)) < 1e-5f);
     CHECK(skmap::markerRadius(0, 1.4f, true, 2, 1.f, 8.f, 0.5f) == 4.5f);
-    const F32 gap = 1.4f + 8.f * 0.12f;
-    CHECK(std::fabs(skmap::markerRadius(2, 1.4f, false, 0, 0.f, 8.f, 0.5f) - (4.5f + gap)) < 1e-5f);
-    CHECK(std::fabs(skmap::markerRadius(3, 1.4f, false, 0, 0.f, 8.f, 0.5f) - (4.5f + 2.f * gap)) < 1e-5f);
+    CHECK(skmap::markerRadius(2, 1.4f, false, 0, 0.f, 8.f, 0.5f) == 4.5f);
+    CHECK(skmap::markerRadius(3, 1.4f, false, 0, 0.f, 8.f, 0.5f) == 4.5f);
 }
 
 TEST_CASE("Chevron count, steepness and stroke follow the floor bands", "[skmapmarkers]")

@@ -281,19 +281,17 @@ namespace skmapdraw
         disc(at, radius);
         if (chevrons.mCount > 0)
         {
-            // Upright whatever the rotation: up for floors above, down for those below; more and steeper the further.
-            const F32 half = llmin(radius - chevrons.mStroke, font_px * 0.3f);
-            const F32 dy = half * chevrons.mSteep;
+            // One chevron, upright whatever the rotation: up for floors above, down for those below; each further
+            // band makes it bolder and steeper rather than stacking another, which crowds the dot unreadably.
+            const F32 extra = (F32)(chevrons.mCount - 1);
+            const F32 stroke = chevrons.mStroke * (1.f + 0.3f * extra);
+            const F32 half = llmin(radius - stroke, font_px * 0.3f);
+            const F32 dy = half * llmin(chevrons.mSteep + 0.15f * extra, 1.1f);
             const F32 sign = floor == skmap::FloorRelation::ABOVE ? 1.f : -1.f;
-            const F32 gap = skmap::chevronGap(chevrons.mStroke, font_px);
             colour(skmap::palette::CODE_INK);
-            for (U8 k = 0; k < chevrons.mCount; ++k)
-            {
-                const LLVector2 c = at + LLVector2(0.f, (k - (chevrons.mCount - 1) * 0.5f) * gap);
-                const LLVector2 left = c + LLVector2(-half, -sign * dy), apex = c + LLVector2(0.f, sign * dy), right = c + LLVector2(half, -sign * dy);
-                line(left, apex, chevrons.mStroke);
-                line(apex, right, chevrons.mStroke);
-            }
+            const LLVector2 left = at + LLVector2(-half, -sign * dy), apex = at + LLVector2(0.f, sign * dy), right = at + LLVector2(half, -sign * dy);
+            line(left, apex, stroke);
+            line(apex, right, stroke);
         }
     }
 

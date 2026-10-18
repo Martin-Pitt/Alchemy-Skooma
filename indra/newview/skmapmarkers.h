@@ -73,12 +73,9 @@ namespace skmap
     /// bands[1], three from bands[2]; steepness and stroke grow from bands[3] to bands[4] and hold past it.
     /// A band set below the one before it is raised to it.
     ChevronStyle chevronStyle(F32 abs_delta, const F32 bands[5], F32 base_stroke_px);
-    /// The gap between stacked chevrons' strokes.
-    F32 chevronGap(F32 stroke_px, F32 font_px);
 
-    /// The study's marker radius: one floor chevron and a one-character code fill a disc of half
-    /// the font plus the padding, and each further chevron adds its gap; an uncoded dot is 3 px;
-    /// a longer code grows to fit its text.
+    /// The study's marker radius: a floor chevron (one, however many bands) and a one-character code
+    /// fill a disc of half the font plus the padding; an uncoded dot is 3 px; a longer code grows to fit its text.
     F32 markerRadius(U8 chevrons, F32 chevron_stroke_px, bool coded, U32 code_length, F32 text_width, F32 font_px, F32 padding_px);
 }
 

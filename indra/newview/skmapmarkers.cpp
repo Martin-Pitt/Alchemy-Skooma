@@ -104,17 +104,12 @@ namespace skmap
         return style;
     }
 
-    F32 chevronGap(F32 stroke_px, F32 font_px)
-    {
-        return stroke_px + font_px * 0.12f;
-    }
-
     F32 markerRadius(U8 chevrons, F32 chevron_stroke_px, bool coded, U32 code_length, F32 text_width, F32 font_px, F32 padding_px)
     {
         const F32 single = font_px * 0.5f + padding_px;
         if (chevrons > 0)
         {
-            return single + (chevrons - 1) * chevronGap(chevron_stroke_px, font_px);
+            return single;
         }
         if (!coded)
         {
