@@ -164,8 +164,8 @@ private:
     void resolve(LLRenderTarget& capture, LLRenderTarget& resolved, const Shot& shot);
     /// The movers over a copy of the static capture, then resolved: the static capture is not redone for them.
     void drawMovers(const Shot& shot);
-    /// The avatar markers as lit 3D cylinders with a heading wedge, hidden by the census (a faint silhouette where
-    /// they are), at a minimum size on screen; fills the marks and labels' anchors with each cylinder's projected top.
+    /// The avatar markers as their lit physics shapes, hidden by the census (a faint silhouette where they are), giving
+    /// way zoomed out to the mini-map's flat markers; fills the marks and labels' anchors with each marker's top.
     template <typename Project>
     void drawMarkers3D(const Project& project, S32 vw, S32 vh, std::vector<std::pair<size_t, LLVector2>>& drawn);
     /// Captures the region maps that are due: the agent's on its timer, then the most overdue other one.
@@ -297,7 +297,7 @@ private:
         LLUUID mId;
         LLVector2 mAt;      // overview pixels
     };
-    std::map<LLUUID, F32> mCylinderBlend;   // each marker's crossfade from its body (0) to its cylinder (1)
+    std::map<LLUUID, F32> mFlatBlend;       // each marker's crossfade from its body (0) to its flat marker (1)
     F64 mMarkerFadeTime = -1.0;
     std::vector<TacticalMark> mTacticalMarks;  // the markers drawn last frame, for picks
     // The mini-map's hover nametags, laid out in UI pixels over the overview.
