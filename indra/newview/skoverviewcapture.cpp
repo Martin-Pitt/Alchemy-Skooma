@@ -365,7 +365,17 @@ void SKOverviewCapture::updateDemand(bool wanted)
     {
         // Open, the camera's own distance, which alt-cam and the wheel change.
         const F32 distance = mTacticalOpen && mTacticalDistance > 0.f ? mTacticalDistance : (F32)tactical_distance;
-        const F32 reach = llclamp(distance, TACTICAL_MIN_M, battlefieldCamera() ? BATTLEFIELD_MAX_M : TACTICAL_MAX_M) + CENSUS_RANGE_M;
+        F32 reach = llclamp(distance, TACTICAL_MIN_M, battlefieldCamera() ? BATTLEFIELD_MAX_M : TACTICAL_MAX_M) + CENSUS_RANGE_M;
+        LLVector3d lo, hi;
+        if (battlefieldCamera() && battlefieldBounds(lo, hi))
+        {
+            // Battlefield shows its area and no more: the census reaches the area's farthest corner, not the camera's
+            // height, which a tilt or a wide area takes to kilometres.
+            const LLVector3d agent = gAgent.getPositionGlobal();
+            const F64 dx = llmax(std::fabs(lo.mdV[VX] - agent.mdV[VX]), std::fabs(hi.mdV[VX] - agent.mdV[VX]));
+            const F64 dy = llmax(std::fabs(lo.mdV[VY] - agent.mdV[VY]), std::fabs(hi.mdV[VY] - agent.mdV[VY]));
+            reach = llmin(reach, (F32)std::sqrt(dx * dx + dy * dy));
+        }
         range = llmax(range, std::ceil(reach / 64.f) * 64.f);
     }
     if (wanted == mDemanding && (!wanted || range == mDemandRange))
