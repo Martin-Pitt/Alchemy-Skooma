@@ -73,7 +73,7 @@
      height="18"
      increment="1"
      initial_value="55"
-     label="Follow tilt"
+     label="Tilt"
      label_width="90"
      layout="topleft"
      left="10"

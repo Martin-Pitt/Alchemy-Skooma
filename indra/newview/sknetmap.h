@@ -72,6 +72,9 @@ namespace skmapdraw
     F32 markerRadius(const SKMapPeople::Person& p, skmap::FloorRelation floor);
     /// The person's code centred on their marker when it shows there, in the current UI space; outside any batch.
     void personCode(const SKMapPeople::Person& p, const LLVector2& at, skmap::FloorRelation floor);
+    /// The mini-map's marker for a person with its code, at its mini-map size over a dark halo and shadow, in the
+    /// current UI space; outside any batch. For views whose own marker of the person can be too small to carry it.
+    void personBadge(const SKMapPeople::Person& p, const LLVector2& at);
     /// The tags for the hovered people in hover order, each at most widest pixels; floor_of gives a member's storey.
     std::vector<TagText> tagTexts(const std::vector<LLUUID>& members, const std::function<skmap::FloorRelation(const LLUUID&)>& floor_of,
                                   const FloorLabels& floors, F32 widest);

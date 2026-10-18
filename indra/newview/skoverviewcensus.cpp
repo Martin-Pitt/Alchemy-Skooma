@@ -1334,20 +1334,22 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
         mCutRoots[extents[cut.first].mRoot] = std::make_pair(cut.second, why[cut.first]);
     }
     {
-        // Logged when which linksets are cut, or why, changes; not when someone's floor shifts a little.
-        std::string what;
-        std::string list;
+        // A count per reason, logged when it changes: the full list ran to hundreds of kilobytes a line zoomed out,
+        // and the debug console wrapped every one of them each frame.
+        std::map<std::string, U32> reasons;
         for (const auto& cut : cut_of)
         {
-            const Extent& e = extents[cut.first];
-            what += e.mRoot.asString() + why[cut.first] + ";";
-            list += llformat("%s linkset %s at z %.2f (%s, top %.2f)", list.empty() ? "" : ";",
-                             e.mRoot.asString().c_str(), cut.second, why[cut.first].c_str(), e.mMax.mdV[VZ]);
+            ++reasons[why[cut.first]];
+        }
+        std::string what;
+        for (const auto& [reason, count] : reasons)
+        {
+            what += llformat("%s%u %s", what.empty() ? "" : ", ", count, reason.c_str());
         }
         if (what != mCutLogged)
         {
             mCutLogged = what;
-            LL_INFOS("SKOverview") << "tactical cut: " << (list.empty() ? std::string("nothing cut") : list) << LL_ENDL;
+            LL_DEBUGS("SKOverview") << "tactical cut: " << (what.empty() ? std::string("nothing cut") : what) << LL_ENDL;
         }
     }
     for (const Batch& batch : mBatches)

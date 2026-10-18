@@ -44,5 +44,6 @@ void SKFloaterTacticalOptions::refreshMode()
 {
     const bool battlefield = gSavedSettings.getU32("SKTacticalCameraMode") == 0;
     getChildView("sk_tactical_neighbours")->setEnabled(battlefield);
-    getChildView("sk_tactical_pitch")->setEnabled(!battlefield);
+    // One tilt slider, for whichever camera is chosen.
+    getChild<LLUICtrl>("sk_tactical_pitch")->setControlName(battlefield ? "SKTacticalBattlefieldPitch" : "SKTacticalPitch");
 }

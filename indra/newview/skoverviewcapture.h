@@ -290,6 +290,8 @@ private:
         LLUUID mId;
         LLVector2 mAt;      // overview pixels
     };
+    std::map<LLUUID, F32> mCylinderBlend;   // each marker's crossfade from its body (0) to its cylinder (1)
+    F64 mMarkerFadeTime = -1.0;
     std::vector<TacticalMark> mTacticalMarks;  // the markers drawn last frame, for picks
     // The mini-map's hover nametags, laid out in UI pixels over the overview.
     /// tagged runs alongside drawn: an avatar there shows its own name tag instead of the marker label.
