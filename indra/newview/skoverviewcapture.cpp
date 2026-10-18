@@ -146,7 +146,29 @@ namespace
         glUniform3f(glGetUniformLocation(prog, name), c.mR, c.mG, c.mB);
     }
 
-    const F64 PAN_MARGIN_M = 64.0;      // how far past the battlefield the view's focus may be dragged
+    const F64 PAN_MARGIN_M = 512.0;     // how far past the battlefield the view's focus may be dragged
+
+    /// The step a pan may take: zoom-to-cursor leaves the focus at whatever depth it picked, so the limit holds the
+    /// ground at the view's centre, on the agent's level, within the margin, and never pulls it back from outside.
+    LLVector3d clampedPanStep(const LLVector3d& eye, const LLVector3d& focus, const LLVector3d& step, const LLVector3d& lo,
+                              const LLVector3d& hi)
+    {
+        const LLVector3d dir = focus - eye;
+        LLVector3d centre = focus;
+        const F64 t = std::fabs(dir.mdV[VZ]) > 1.0e-6 ? (gAgent.getPositionGlobal().mdV[VZ] - eye.mdV[VZ]) / dir.mdV[VZ] : -1.0;
+        if (t > 0.0)
+        {
+            centre = eye + dir * t;
+        }
+        LLVector3d clamped = step;
+        for (S32 i = VX; i <= VY; ++i)
+        {
+            const F64 min_v = llmin(lo.mdV[i] - PAN_MARGIN_M, centre.mdV[i]);
+            const F64 max_v = llmax(hi.mdV[i] + PAN_MARGIN_M, centre.mdV[i]);
+            clamped.mdV[i] = llclamp(centre.mdV[i] + step.mdV[i], min_v, max_v) - centre.mdV[i];
+        }
+        return clamped;
+    }
 
     /// Why a press or drag did not pan, with SKOverviewPanDebug, once a second at most.
     void panTrace(const char* why)
@@ -2038,18 +2060,13 @@ void SKOverviewCapture::pan(S32 x, S32 y)
         panTrace("drag step skipped: the cursor's ray misses the grab's plane");
         return;
     }
-    LLVector3d focus = mPan.mFocus + LLVector3d(mPan.mGrab.mV[VX] - q.mV[VX], mPan.mGrab.mV[VY] - q.mV[VY], 0.0);
+    LLVector3d step(mPan.mGrab.mV[VX] - q.mV[VX], mPan.mGrab.mV[VY] - q.mV[VY], 0.0);
     LLVector3d lo, hi;
     if (battlefieldBounds(lo, hi))
     {
-        for (S32 i = VX; i <= VY; ++i)
-        {
-            const F64 min_v = llmin(lo.mdV[i] - PAN_MARGIN_M, mPan.mFocus.mdV[i]);
-            const F64 max_v = llmax(hi.mdV[i] + PAN_MARGIN_M, mPan.mFocus.mdV[i]);
-            focus.mdV[i] = llclamp(focus.mdV[i], min_v, max_v);
-        }
+        step = clampedPanStep(mPan.mEye, mPan.mFocus, step, lo, hi);
     }
-    setTacticalCamera(mPan.mEye + (focus - mPan.mFocus), focus);
+    setTacticalCamera(mPan.mEye + step, mPan.mFocus + step);
 }
 
 // static
@@ -2113,18 +2130,13 @@ void SKOverviewCapture::applyKeyPan()
     const F32 ground_width = 2.f * distance * std::tan(camera->getView() * camera->getAspect() * 0.5f);
     const F32 metres = ground_width * llmax((F32)speed_setting, 0.f) * (fast ? 3.f : 1.f) * llmin(gFrameIntervalSeconds.value(), 0.1f);
 
-    LLVector3d moved = focus + LLVector3d(dir * metres);
+    LLVector3d step(dir * metres);
     LLVector3d lo, hi;
     if (battlefieldBounds(lo, hi))
     {
-        for (S32 i = VX; i <= VY; ++i)
-        {
-            const F64 min_v = llmin(lo.mdV[i] - PAN_MARGIN_M, focus.mdV[i]);
-            const F64 max_v = llmax(hi.mdV[i] + PAN_MARGIN_M, focus.mdV[i]);
-            moved.mdV[i] = llclamp(moved.mdV[i], min_v, max_v);
-        }
+        step = clampedPanStep(eye, focus, step, lo, hi);
     }
-    setTacticalCamera(eye + (moved - focus), moved);
+    setTacticalCamera(eye + step, focus + step);
 }
 
 template <typename Project>
