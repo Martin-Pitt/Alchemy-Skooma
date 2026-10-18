@@ -725,15 +725,12 @@ void SKWorldCensus::visit(LLViewerObject* object)
     sig = mix(sig, static_cast<U64>(feature.mKind));
     sig = mix(sig, feature.mExclude);
     sig = mix(sig, object->isPhysicsShapeUnknown());
-    // Only a surround is built from the rendered volume, so only a surround
-    // depends on the loaded LOD. Mixing it in for everything else re-signs
-    // records as the camera moves and rebuilds their tiles for nothing, which
-    // is what leaves tiles in flight while you walk. The display volume's face
-    // count and the hull the physics-shapes overlay caches on it are the same
-    // trap and are not what any shape is built from; the build reads a fixed
-    // detail or the decomposition instead (skphysicsshape.cpp).
-    const bool from_render = surround;
-    sig = mix(sig, from_render ? volume->getLOD() : 0);
+    // No shape depends on the loaded LOD: a surround is built from the top LOD
+    // (skCensusRenderGeometry), the rest from a fixed detail or the
+    // decomposition. Mixing the LOD in re-signs records as the camera moves and
+    // rebuilds their tiles for nothing, which is what leaves tiles in flight
+    // while you walk; the display volume's face count and the hull the
+    // physics-shapes overlay caches on it are the same trap.
     {
         const LLVolume* v = volume->getVolume();
         sig = mixF64(sig, object->getRegion()->getOriginGlobal().mdV[VX]);
@@ -1012,7 +1009,7 @@ sknav::RecordPtr SKWorldCensus::record(LLVOVolume* volume, LLViewerObject* root,
     bool ok = false;
     if (role == Role::SURROUND)
     {
-        ok = skRenderShapeGeometry(volume, geom);
+        ok = skCensusRenderGeometry(volume, geom);
     }
     else
     {

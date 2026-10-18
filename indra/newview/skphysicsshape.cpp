@@ -339,3 +339,52 @@ bool skRenderShapeGeometry(LLVOVolume* volume, SKShapeGeometry& out)
     appendFaces(v, out.mTriangles);
     return !out.mTriangles.empty();
 }
+
+bool skCensusRenderGeometry(LLVOVolume* volume, SKShapeGeometry& out)
+{
+    out.mTriangles.clear();
+    out.mShape = sknav::Shape::TRIANGLES;
+    out.mProvenance = sknav::Provenance::RENDER;
+    out.mSolid = false;
+    if (!volume->getVolume())
+    {
+        return false;
+    }
+    const LLVolumeParams& params = volume->getVolume()->getParams();
+    const S32 top = LLVolumeLODGroup::NUM_LODS - 1;
+    LLVolume* v = LLPrimitive::sVolumeManager->refVolume(params, top);
+    if (!v)
+    {
+        return false;
+    }
+    if (volume->isMesh())
+    {
+        // The top LOD, asked for once and shared by every object of the mesh: until it arrives nothing stands in.
+        if (!v->isMeshAssetLoaded())
+        {
+            gMeshRepo.loadMesh(volume, params, top);
+        }
+        else
+        {
+            appendFaces(v, out.mTriangles);
+        }
+    }
+    else if (volume->isSculpted())
+    {
+        // The shared top-detail sculpt is shaped only once something draws it at that detail; the loaded one meanwhile.
+        if (v->getSculptLevel() == 0)
+        {
+            appendFaces(v, out.mTriangles);
+        }
+        else if (volume->getVolume()->getSculptLevel() == 0)
+        {
+            appendFaces(volume->getVolume(), out.mTriangles);
+        }
+    }
+    else
+    {
+        appendFaces(v, out.mTriangles);
+    }
+    LLPrimitive::sVolumeManager->unrefVolume(v);
+    return !out.mTriangles.empty();
+}

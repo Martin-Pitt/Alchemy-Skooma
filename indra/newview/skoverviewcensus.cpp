@@ -470,7 +470,7 @@ bool SKOverviewCensus::update()
             continue;
         }
         SKShapeGeometry geom;
-        if (!skRenderShapeGeometry(volume, geom))
+        if (!skCensusRenderGeometry(volume, geom))
         {
             continue;
         }
@@ -952,7 +952,7 @@ void SKOverviewCensus::gatherSurrounds(const SKCensusSnapshot& snap)
             continue;
         }
         SKShapeGeometry geom;
-        if (!skRenderShapeGeometry(volume, geom))
+        if (!skCensusRenderGeometry(volume, geom))
         {
             continue;
         }

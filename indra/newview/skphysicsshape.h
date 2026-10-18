@@ -89,4 +89,9 @@ std::shared_ptr<const SKPhysicsHavokShape> skPhysicsShapeSimTriangles(LLVOVolume
 /// provenance RENDER. What sim surrounds contribute to the weather class.
 bool skRenderShapeGeometry(LLVOVolume* volume, SKShapeGeometry& out);
 
+/// The rendered geometry at the top LOD whatever is drawn, so the census never moves with the camera: a prim's
+/// top-detail faces, a sculpt's once shaped at that detail (the loaded one until then), a mesh's top LOD, asked for
+/// and false until it arrives. Provenance RENDER.
+bool skCensusRenderGeometry(LLVOVolume* volume, SKShapeGeometry& out);
+
 #endif // SK_PHYSICSSHAPE_H
