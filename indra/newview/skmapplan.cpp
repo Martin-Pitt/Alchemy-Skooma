@@ -1855,8 +1855,10 @@ DataPtr skmap::plan::assemble(const Snapshot& snap)
     return d;
 }
 
-skmap::plan::Whereabouts skmap::plan::whereabouts(const LLVector3d& pos)
+skmap::plan::Whereabouts skmap::plan::whereabouts(const LLVector3d& feet)
 {
+    const F64 LIFT_M = 0.3;
+    const F64 FLOOR_NEAR_M = 1.0;
     Whereabouts out;
     if (!SKNavMesh::instanceExists())
     {
@@ -1864,14 +1866,16 @@ skmap::plan::Whereabouts skmap::plan::whereabouts(const LLVector3d& pos)
     }
     const SKNavMesh& nav = SKNavMesh::instance();
     const SKNavWorldViewPtr world = nav.view();
+    const LLVector3d pos(feet.mdV[VX], feet.mdV[VY], feet.mdV[VZ] + LIFT_M);
     SKNavWorldView::SpaceId id;
     sknav::Enclosure gap;
-    if (world && world->airGapAt(pos, id, gap))
+    if (world && world->airGapAt(pos, id, gap) && std::fabs(gap.mFloor - feet.mdV[VZ]) <= FLOOR_NEAR_M)
     {
         out.mFound = true;
         out.mSpace.mMesh = id.mMesh;
         out.mSpace.mId = id.mId;
-        out.mIndoor = gap.mBucket == sknav::EnclosureBucket::INDOORS;
+        out.mBucket = bucketOf(gap.mBucket);
+        out.mIndoor = out.mBucket == Bucket::INDOORS;
         out.mFloor = gap.mFloor;
         out.mCeiling = gap.mCeiling;
         return out;

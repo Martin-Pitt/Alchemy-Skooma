@@ -311,11 +311,14 @@ namespace plan
     {
         bool mFound = false;
         SpaceRef mSpace;            ///< mId 0 for a gap in no space
-        bool mIndoor = false;       ///< the gap's bucket
+        bool mIndoor = false;       ///< mBucket is INDOORS
+        Bucket mBucket = Bucket::UNKNOWN; ///< the gap's bucket; UNKNOWN without air, or where the air read is not theirs
         F32 mFloor = 0.f;           ///< global
         F32 mCeiling = 1e30f;       ///< global; 1e30 under open sky or without air
     };
-    Whereabouts whereabouts(const LLVector3d& pos);
+    /// Where someone standing with their feet at feet is: the air just over the feet, whose floor must lie near them,
+    /// since a foot sunk into a roof reads the room under it; else the navmesh's floor, its bucket UNKNOWN.
+    Whereabouts whereabouts(const LLVector3d& feet);
     /// A space as a Data index, -1 for none. Any thread.
     S32 spaceIndex(const Data& data, const SpaceRef& ref);
 }
