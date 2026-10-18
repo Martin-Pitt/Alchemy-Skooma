@@ -134,10 +134,31 @@ void SKOverviewCensus::release()
     mTriangles = 0;
 }
 
+bool SKOverviewCensus::isRestless(const LLUUID& part) const
+{
+    const auto it = mRestless.find(part);
+    return it != mRestless.end() && it->second.mOn;
+}
+
+std::vector<LLUUID> SKOverviewCensus::restlessParts() const
+{
+    // Void surrounds stay in the buffers, signed by identity: their rendered shape is no mover's.
+    std::vector<LLUUID> parts;
+    for (const auto& r : mRestless)
+    {
+        if (r.second.mOn && !r.second.mSurround)
+        {
+            parts.push_back(r.first);
+        }
+    }
+    return parts;
+}
+
 void SKOverviewCensus::logChurn(std::vector<std::pair<U64, std::pair<char, LLUUID>>>& entries)
 {
     // What came and went since the last rebuild, by kind (S sculpt, U surrounds, V void surround, R record, C a part's
     // linkset and cluster, L land): a part both gone and come is one that changed.
+    const F64 now = LLFrameTimer::getUptimeSeconds().value();
     std::sort(entries.begin(), entries.end());
     std::vector<std::pair<U64, std::pair<char, LLUUID>>> gone, came;
     std::set_difference(mLastEntries.begin(), mLastEntries.end(), entries.begin(), entries.end(), std::back_inserter(gone));
@@ -161,6 +182,21 @@ void SKOverviewCensus::logChurn(std::vector<std::pair<U64, std::pair<char, LLUUI
         ++came_n[c.second.first];
         if (went.count(c.second))
         {
+            // A part changed again within the window turns restless: drawn live, out of the static buffers.
+            const char kind = c.second.first;
+            if ((kind == 'R' || kind == 'S' || kind == 'V') && c.second.second.notNull())
+            {
+                Restless& r = mRestless[c.second.second];
+                r.mChanges = now - r.mLast <= RESTLESS_WINDOW_S ? r.mChanges + 1 : 1;
+                r.mLast = now;
+                r.mSurround = kind == 'V';
+                if (!r.mOn && r.mChanges >= 2)
+                {
+                    r.mOn = true;
+                    LL_INFOS("SKOverview") << "census part " << c.second.second << " (" << kind
+                                           << ") is restless: drawn live until it holds still" << LL_ENDL;
+                }
+            }
             ++changed_n[c.second.first];
             std::vector<LLUUID>& ids = changed[c.second.first];
             if (ids.size() < 4)
@@ -341,6 +377,10 @@ bool SKOverviewCensus::update()
         U64 records = 0;
         for (const sknav::RecordPtr& rec : snap->mRecords)
         {
+            if (rec && isRestless(rec->mPart))
+            {
+                continue; // re-signed every scan: watched at the passes the rest call for, not a reason for one
+            }
             records += skoverview::scramble((U64)(uintptr_t)rec.get());
         }
         mRecordsChanged |= records != mRecordsKey;
@@ -366,6 +406,12 @@ bool SKOverviewCensus::update()
     mUnknownLook = false;
     mRecheckAt = now + 2.0;
     mSculptsAt = now + 5.0;
+    // A restless part that has held still a while rejoins the census.
+    for (auto it = mRestless.begin(); it != mRestless.end();)
+    {
+        const bool settled = now - it->second.mLast > (it->second.mOn ? RESTLESS_SETTLE_S : RESTLESS_WINDOW_S);
+        it = settled ? mRestless.erase(it) : std::next(it);
+    }
 
     // A new scan most often holds the same parts where they were: rebuild only when the geometry moved. Each part
     // hashes on its own and the parts sum, so the object list's order, which churns, never reads as a change.
@@ -377,12 +423,26 @@ bool SKOverviewCensus::update()
     };
     // Each entry's kind and part as well, so a rebuild can say what moved.
     std::vector<std::pair<U64, std::pair<char, LLUUID>>> entries;
-    auto endEntry = [&sig, &entry, &entries](char kind, const LLUUID& part)
+    // A restless part is signed by who it is alone, so its changes rebuild nothing; true for one.
+    auto endEntry = [&sig, &entry, &entries, now, this](char kind, const LLUUID& part) -> bool
     {
-        const U64 h = skoverview::scramble(entry);
+        U64 h = skoverview::scramble(entry);
+        entry = 0;
+        bool restless = false;
+        const auto it = part.notNull() ? mRestless.find(part) : mRestless.end();
+        if (it != mRestless.end() && it->second.mOn)
+        {
+            if (h != it->second.mHash)
+            {
+                it->second.mHash = h;
+                it->second.mLast = now;
+            }
+            h = skoverview::scramble(((U64)(U8)kind << 32) ^ part.getCRC32());
+            restless = true;
+        }
         sig += h;
         entries.push_back({ h, { kind, part } });
-        entry = 0;
+        return restless;
     };
     // Sculpted parts draw from what is rendered, over land and void alike: a megasculpt's physics is a poor stand-in
     // for the ground it shows, and a phantom one has no physics record at all. Their census records are not drawn.
@@ -447,7 +507,10 @@ bool SKOverviewCensus::update()
         mix((U64)sc.mTris.size());
         mix((U64)(S64)std::llround(centre.mdV[VX] * 64.0) ^ ((U64)(S64)std::llround(centre.mdV[VY] * 64.0) << 21) ^
             ((U64)(S64)std::llround(centre.mdV[VZ] * 64.0) << 42));
-        endEntry('S', sc.mPart);
+        if (endEntry('S', sc.mPart))
+        {
+            continue; // drawn live by the movers
+        }
         sculpts.push_back(std::move(sc));
     }
 
@@ -534,7 +597,13 @@ bool SKOverviewCensus::update()
         mix((U64)(S64)std::llround(rec->mMin.mdV[VX] * 64.0) ^ ((U64)(S64)std::llround(rec->mMin.mdV[VY] * 64.0) << 21) ^
             ((U64)(S64)std::llround(rec->mMin.mdV[VZ] * 64.0) << 42));
         mix((U64)rec->mFeature | ((U64)rec->mExclude << 8));
-        endEntry('R', rec->mPart);
+        if (endEntry('R', rec->mPart))
+        {
+            // Drawn live by the movers.
+            kept.pop_back();
+            fixed_classes.pop_back();
+            void_only.pop_back();
+        }
     }
     // Each linkset is a group, so the tactical cut can take a building's linksets and leave its neighbours whole: a
     // cluster joins whatever touches, often a whole block. A level still keeps whole clusters, by the heights of the

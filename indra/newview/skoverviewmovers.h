@@ -51,6 +51,8 @@ public:
 
     /// Who moves and where, this frame. True when anything is to be drawn.
     bool update();
+    /// Single parts to draw live as well: those the census found restless (SKOverviewCensus::restlessParts).
+    void setLoose(std::vector<LLUUID> parts) { mLoose = std::move(parts); }
     /// Draws every mover part with the bound geometry program, setting each part's class code (diffuse colour) and
     /// loading view * model; the caller has set the target and the state.
     void draw(const LLMatrix4a& view) const;
@@ -73,6 +75,9 @@ private:
     };
     /// Adds a linkset's parts at their live pose.
     void addParts(LLViewerObject* root, U8 code, std::set<LLUUID>& live);
+    /// Adds one part at its live pose, once.
+    void addPart(LLViewerObject* object, U8 code, std::set<LLUUID>& live);
+    std::vector<LLUUID> mLoose;
 
     std::map<LLUUID, Mesh> mMeshes;
     std::vector<Part> mParts;

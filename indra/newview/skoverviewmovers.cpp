@@ -185,6 +185,15 @@ bool SKOverviewMovers::update()
                                                                  : (U8)skoverview::CODE_VEH_CIVIL;
         addParts(root, code, live);
     }
+    // Parts the census found restless, each on its own: a door that keeps opening, not its whole building.
+    for (const LLUUID& id : mLoose)
+    {
+        LLViewerObject* object = gObjectList.findObject(id);
+        if (object && !object->isDead())
+        {
+            addPart(object, skoverview::CODE_MOVER, live);
+        }
+    }
     // Meshes of parts no longer moving go.
     for (auto it = mMeshes.begin(); it != mMeshes.end();)
     {
@@ -195,51 +204,50 @@ bool SKOverviewMovers::update()
 
 void SKOverviewMovers::addParts(LLViewerObject* root, U8 code, std::set<LLUUID>& live)
 {
+    // Drawn from its rendered faces, part by part.
+    addPart(root, code, live);
+    for (const LLPointer<LLViewerObject>& child : root->getChildren())
     {
-        // Drawn from its rendered faces, part by part.
-        std::vector<LLViewerObject*> parts{ root };
-        for (const LLPointer<LLViewerObject>& child : root->getChildren())
+        if (!child->isAvatar())
         {
-            if (!child->isAvatar())
-            {
-                parts.push_back(child.get());
-            }
+            addPart(child.get(), code, live);
         }
-        for (LLViewerObject* object : parts)
+    }
+}
+
+void SKOverviewMovers::addPart(LLViewerObject* object, U8 code, std::set<LLUUID>& live)
+{
+    LLVOVolume* volume = dynamic_cast<LLVOVolume*>(object);
+    if (!volume || !volume->getVolume() || live.count(volume->getID()))
+    {
+        return;
+    }
+    Mesh& mesh = mMeshes[volume->getID()];
+    if (mesh.mVolume != volume->getVolume())
+    {
+        mesh = Mesh();
+        mesh.mVolume = volume->getVolume();
+        SKShapeGeometry geom;
+        if (skRenderShapeGeometry(volume, geom) && !geom.mTriangles.empty())
         {
-            LLVOVolume* volume = dynamic_cast<LLVOVolume*>(object);
-            if (!volume || !volume->getVolume())
+            LLPointer<LLVertexBuffer> buffer = new LLVertexBuffer(LLVertexBuffer::MAP_VERTEX);
+            LLStrider<LLVector3> verts;
+            if (buffer->allocateBuffer((U32)geom.mTriangles.size(), 0) && buffer->getVertexStrider(verts) && verts.get())
             {
-                continue;
-            }
-            Mesh& mesh = mMeshes[volume->getID()];
-            if (mesh.mVolume != volume->getVolume())
-            {
-                mesh = Mesh();
-                mesh.mVolume = volume->getVolume();
-                SKShapeGeometry geom;
-                if (skRenderShapeGeometry(volume, geom) && !geom.mTriangles.empty())
+                for (const LLVector3& p : geom.mTriangles)
                 {
-                    LLPointer<LLVertexBuffer> buffer = new LLVertexBuffer(LLVertexBuffer::MAP_VERTEX);
-                    LLStrider<LLVector3> verts;
-                    if (buffer->allocateBuffer((U32)geom.mTriangles.size(), 0) && buffer->getVertexStrider(verts) && verts.get())
-                    {
-                        for (const LLVector3& p : geom.mTriangles)
-                        {
-                            *verts++ = p;
-                        }
-                        buffer->unmapBuffer();
-                        mesh.mBuffer = buffer;
-                        mesh.mCount = (U32)geom.mTriangles.size();
-                    }
+                    *verts++ = p;
                 }
-            }
-            live.insert(volume->getID());
-            if (mesh.mBuffer.notNull())
-            {
-                mParts.push_back({ volume->getID(), modelOf(volume), code });
+                buffer->unmapBuffer();
+                mesh.mBuffer = buffer;
+                mesh.mCount = (U32)geom.mTriangles.size();
             }
         }
+    }
+    live.insert(volume->getID());
+    if (mesh.mBuffer.notNull())
+    {
+        mParts.push_back({ volume->getID(), modelOf(volume), code });
     }
 }
 
