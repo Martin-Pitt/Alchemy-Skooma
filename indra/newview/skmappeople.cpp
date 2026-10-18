@@ -655,7 +655,7 @@ void SKMapPeople::gatherPeople()
     // The agent is skipped below, so its own feet, the reference for everyone's height, are read here.
     mSelfFeetKnown = isAgentAvatarValid();
     mSelfFeet = mSelfFeetKnown ? feetZ(gAgentAvatarp) : 0.0;
-    static LLCachedControl<F32> floor_band(gSavedSettings, "SKMapFloorChevronBand1", 2.5f);
+    static LLCachedControl<F32> floor_band(gSavedSettings, "SKMapFloorChevronBand1", 8.f);
     for (size_t i = 0; i < ids.size(); ++i)
     {
         if (ids[i] == gAgent.getID())
