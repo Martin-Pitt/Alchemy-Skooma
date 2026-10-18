@@ -446,7 +446,9 @@ bool skCensusRenderFaces(LLVOVolume* volume, std::vector<LLVector3>& tris, std::
         }
         else if (volume->getVolume()->getSculptLevel() == 0)
         {
+            // The loaded detail stands in meanwhile; still pending, so no verdict made from it is final.
             appendFacesSplit(volume->getVolume(), tris, face_starts);
+            pending = true;
         }
         else
         {

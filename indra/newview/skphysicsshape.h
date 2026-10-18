@@ -95,7 +95,8 @@ bool skRenderShapeGeometry(LLVOVolume* volume, SKShapeGeometry& out);
 bool skCensusRenderGeometry(LLVOVolume* volume, SKShapeGeometry& out);
 
 /// skCensusRenderGeometry's triangles in volume space with each volume face's first vertex in face_starts (face i is
-/// texture entry i): false while the top LOD is on its way (a sculpt's map, a mesh's asset) and when there is none.
+/// texture entry i): false while the top LOD is on its way (a sculpt's map, a mesh's asset) and when there is none;
+/// a sculpt not yet shaped at the top detail gives its loaded detail, still pending.
 /// pending says which.
 bool skCensusRenderFaces(LLVOVolume* volume, std::vector<LLVector3>& tris, std::vector<U32>& face_starts, bool& pending);
 
