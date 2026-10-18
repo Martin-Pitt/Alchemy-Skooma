@@ -1062,6 +1062,20 @@ void skmapdraw::personCode(const SKMapPeople::Person& p, const LLVector2& at, sk
                            LLFontGL::NO_SHADOW);
 }
 
+void skmapdraw::personBadge(const SKMapPeople::Person& p, const LLVector2& at)
+{
+    static LLCachedControl<U32> font_px(gSavedSettings, "SKMapMarkerFontPx", 8);
+    const F32 HALO_PX = 1.5f;  // the dark ring that sets it off bright geometry
+    const F32 radius = markerRadius(p, skmap::FloorRelation::SAME);
+    shadow(at, radius);
+    gGL.begin(LLRender::TRIANGLES);
+    colour(skmap::palette::CODE_INK);
+    disc(at, radius + HALO_PX);
+    personMarker(p, at, radius, nullptr, skmap::FloorRelation::SAME, llclamp(static_cast<F32>(font_px), 8.f, 11.f));
+    gGL.end();
+    personCode(p, at, skmap::FloorRelation::SAME);
+}
+
 std::vector<skmapdraw::TagText> skmapdraw::tagTexts(const std::vector<LLUUID>& members,
                                                     const std::function<skmap::FloorRelation(const LLUUID&)>& floor_of,
                                                     const FloorLabels& floors, F32 widest)

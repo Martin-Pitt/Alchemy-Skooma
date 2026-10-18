@@ -115,6 +115,8 @@ namespace
     const F32 BATTLEFIELD_PITCH_DEG = 89.f;  // the untilted battlefield: short of straight down, so the camera keeps a heading to put north up
     const F32 BATTLEFIELD_MARGIN = 1.05f;
     const F32 CYLINDER_FADE_S = 0.15f;  // a marker's crossfade between its body and its zoomed-out cylinder
+    const size_t MAX_BADGES = 64;           // coded people badged on the tactical view at most, nearest first
+    const F32 BADGE_LIFT_PX = 2.f;          // a badge's gap above its marker's top
 
     /// SKTacticalCameraMode: a fixed north-up view fitting the battlefield, or the orbit that follows the agent.
     bool battlefieldCamera()
@@ -2527,11 +2529,46 @@ void SKOverviewCapture::drawTacticalLabels(const std::vector<std::pair<size_t, L
     gGL.loadUIIdentity();
     gGL.scaleUI(scale.mV[VX], scale.mV[VY], 1.f);
 
-    for (size_t i = 0; i < drawn.size(); ++i)
     {
-        if (drawn[i].first < people.size() && !tagged[i])
+        // Coded people carry the mini-map's badge, a fixed size over their marker's top whatever the zoom; nearest the
+        // camera first, a badge mostly covering one already placed is left out, and the nearest draws on top.
+        const LLVector3 camera = LLViewerCamera::getInstance()->getOrigin();
+        std::vector<std::pair<F32, size_t>> coded;
+        for (size_t i = 0; i < drawn.size(); ++i)
         {
-            skmapdraw::personCode(people[drawn[i].first], ui(drawn[i].second), skmap::FloorRelation::SAME);
+            const size_t person = drawn[i].first;
+            if (person < people.size() && !tagged[i] && people[person].mVisibility == skmap::Visibility::DOT_CODED &&
+                !people[person].mCode.empty())
+            {
+                coded.emplace_back((gAgent.getPosAgentFromGlobal(people[person].mPos) - camera).lengthSquared(), i);
+            }
+        }
+        std::sort(coded.begin(), coded.end());
+        std::vector<std::pair<size_t, LLVector2>> badges;
+        std::vector<std::pair<LLVector2, F32>> placed;
+        for (const auto& [dist, i] : coded)
+        {
+            if (badges.size() >= MAX_BADGES)
+            {
+                break;
+            }
+            const SKMapPeople::Person& p = people[drawn[i].first];
+            const F32 radius = skmapdraw::markerRadius(p, skmap::FloorRelation::SAME);
+            const LLVector2 at = ui(drawn[i].second) + LLVector2(0.f, radius + BADGE_LIFT_PX);
+            bool covered = false;
+            for (const auto& [other, other_r] : placed)
+            {
+                covered = covered || (other - at).length() < llmax(radius, other_r);
+            }
+            if (!covered)
+            {
+                placed.emplace_back(at, radius);
+                badges.emplace_back(drawn[i].first, at);
+            }
+        }
+        for (auto it = badges.rbegin(); it != badges.rend(); ++it)
+        {
+            skmapdraw::personBadge(people[it->first], it->second);
         }
     }
 
