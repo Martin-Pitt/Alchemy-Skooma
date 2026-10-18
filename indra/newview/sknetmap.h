@@ -35,6 +35,7 @@
 #include <vector>
 
 #include "skmaplabels.h"
+#include "skmapmarkers.h"
 #include "skmappalette.h"
 #include "skmappeople.h"
 #include "skmappolicy.h"
@@ -69,9 +70,9 @@ namespace skmapdraw
     /// The font the markers' codes are drawn in, at SKMapMarkerFontPx.
     const LLFontGL* codeFont();
     /// A marker's radius in pixels, grown to hold the person's code when SKMapMarkerLabels shows it.
-    F32 markerRadius(const SKMapPeople::Person& p, skmap::FloorRelation floor);
+    F32 markerRadius(const SKMapPeople::Person& p, skmap::FloorRelation floor, F32 floor_delta = 0.f);
     /// The person's code centred on their marker when it shows there, in the current UI space; outside any batch.
-    void personCode(const SKMapPeople::Person& p, const LLVector2& at, skmap::FloorRelation floor);
+    void personCode(const SKMapPeople::Person& p, const LLVector2& at, skmap::FloorRelation floor, F32 floor_delta = 0.f);
     /// The mini-map's marker for a person with its code, at its mini-map size over a dark halo and shadow, in the
     /// current UI space; outside any batch. For views whose own marker of the person can be too small to carry it.
     void personBadge(const SKMapPeople::Person& p, const LLVector2& at);
@@ -212,6 +213,7 @@ private:
     std::unique_ptr<SKMapParcels> mParcels;
     std::vector<DrawnDot> mDots;
     std::vector<skmap::FloorRelation> mFloorOf;    ///< per person of SKMapPeople::people(), set by collectDots
+    std::vector<F32> mFloorDeltaOf;                ///< their floor minus the agent's, m, beside mFloorOf
     F32 mEdgeCircle = 0.f;      ///< the mouselook overlay's visible radius, 0 for the floater's rectangle
     std::vector<skmap::EventRing::Draw> mEventDraws;   ///< reused each frame
     bool mHovered = false;
@@ -266,9 +268,12 @@ namespace skmapdraw
     /// One person's marker inside a TRIANGLES batch: a disc in their colour (cyan for coded allies in combat), the
     /// heading triangle along ahead (a unit vector in the same space; none when null) and the floor chevron.
     void personMarker(const SKMapPeople::Person& p, const LLVector2& at, F32 radius, const LLVector2* ahead,
-                      skmap::FloorRelation floor, F32 font_px);
+                      skmap::FloorRelation floor, F32 floor_delta, F32 font_px);
     /// A marker's radius in pixels for a person drawn without a code label.
-    F32 plainMarkerRadius(skmap::FloorRelation floor);
+    F32 plainMarkerRadius(skmap::FloorRelation floor, F32 floor_delta);
+    /// The chevrons a dot carries for its floor relation and floor difference in metres, by the
+    /// SKMapFloorChevronBand settings; none when SKMapFloorChevrons is off or the floor is the same.
+    skmap::ChevronStyle floorChevrons(skmap::FloorRelation floor, F32 floor_delta);
     /// One layer of a vehicle's captured outline as a ground quad: its atlas texture, its corners as plan offsets in
     /// metres from the vehicle's live position (x east, y north), in the order of uv.
     struct GlyphQuad

@@ -89,12 +89,32 @@ namespace skmap
         mUsed.clear();
     }
 
-    F32 markerRadius(bool chevron, bool coded, U32 code_length, F32 text_width, F32 font_px, F32 padding_px)
+    ChevronStyle chevronStyle(F32 abs_delta, const F32 bands[5], F32 base_stroke_px)
+    {
+        F32 b[5];
+        for (S32 i = 0; i < 5; ++i)
+        {
+            b[i] = i ? llmax(bands[i], b[i - 1]) : bands[i];
+        }
+        ChevronStyle style;
+        style.mCount = abs_delta < b[0] ? 0 : (abs_delta < b[1] ? 1 : (abs_delta < b[2] ? 2 : 3));
+        const F32 t = b[4] > b[3] ? llclamp((abs_delta - b[3]) / (b[4] - b[3]), 0.f, 1.f) : (abs_delta >= b[3] ? 1.f : 0.f);
+        style.mSteep = 0.55f + 0.35f * t;
+        style.mStroke = base_stroke_px * (1.f + 0.6f * t);
+        return style;
+    }
+
+    F32 chevronGap(F32 stroke_px, F32 font_px)
+    {
+        return stroke_px + font_px * 0.12f;
+    }
+
+    F32 markerRadius(U8 chevrons, F32 chevron_stroke_px, bool coded, U32 code_length, F32 text_width, F32 font_px, F32 padding_px)
     {
         const F32 single = font_px * 0.5f + padding_px;
-        if (chevron)
+        if (chevrons > 0)
         {
-            return single;
+            return single + (chevrons - 1) * chevronGap(chevron_stroke_px, font_px);
         }
         if (!coded)
         {

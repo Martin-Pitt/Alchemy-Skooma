@@ -2733,6 +2733,7 @@ if(AL_BUILD_TESTS)
       tests/skmodalviewmath_test.cpp # <SK:Nexii> modal view
       tests/skworldmapmath_test.cpp # <SK:Nexii> 3D world map
       tests/skoutlinepolicy_test.cpp # <SK:Nexii> outline capture
+      tests/skmapmarkers_test.cpp # <SK:Nexii> mini-map markers
     UNIT
       alagentlocationformat.cpp
       alchattimestamp.cpp
@@ -2814,6 +2815,7 @@ if(AL_BUILD_TESTS)
       skmodalviewmath.cpp # <SK:Nexii> modal view
       skworldmapmath.cpp # <SK:Nexii> 3D world map
       skoutlinepolicy.cpp # <SK:Nexii> outline capture
+      skmapmarkers.cpp # <SK:Nexii> mini-map markers
     LIBRARIES llui alscript ll::slua llxml ll::pocketfft ${test_libs}
     SUPPORT
       newview_test_fakes

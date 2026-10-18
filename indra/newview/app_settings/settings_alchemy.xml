@@ -5387,6 +5387,63 @@
             <key>Value</key>
             <integer>1</integer>
         </map>
+        <!-- <SK:Nexii> mini-map floor chevron bands -->
+        <key>SKMapFloorChevronBand1</key>
+        <map>
+            <key>Comment</key>
+            <string>Floor difference in metres from which a mini-map dot shows one chevron, and from which it counts as above or below yours.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>2.5</real>
+        </map>
+        <key>SKMapFloorChevronBand2</key>
+        <map>
+            <key>Comment</key>
+            <string>Floor difference in metres from which a mini-map dot shows two chevrons.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>6.0</real>
+        </map>
+        <key>SKMapFloorChevronBand3</key>
+        <map>
+            <key>Comment</key>
+            <string>Floor difference in metres from which a mini-map dot shows three chevrons.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>12.0</real>
+        </map>
+        <key>SKMapFloorChevronBand4</key>
+        <map>
+            <key>Comment</key>
+            <string>Floor difference in metres from which a mini-map dot shows three chevrons that start to grow steeper and thicker.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>24.0</real>
+        </map>
+        <key>SKMapFloorChevronBand5</key>
+        <map>
+            <key>Comment</key>
+            <string>Floor difference in metres from which a mini-map dot shows its steepest and thickest chevrons.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>48.0</real>
+        </map>
+        <!-- </SK:Nexii> -->
         <key>SKMapLayerChatRings</key>
         <map>
             <key>Comment</key>
