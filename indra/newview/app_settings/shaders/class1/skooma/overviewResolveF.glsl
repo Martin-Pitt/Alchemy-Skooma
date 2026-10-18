@@ -37,6 +37,7 @@ uniform float sk_far_depth;     // the cleared depth: no surface
 uniform vec3 sk_eye;
 uniform vec3 sk_focus;          // what the view is centred on: the orbit's focus, or a top-down capture's centre
 uniform float sk_cut_flag;      // 1: each part carries its own cut, flagged in B where it caps; 0: the one cut at sk_cut
+uniform vec2 sk_screen_up;      // world up on screen, unit: the hatch is laid in its frame so it does not roll
 uniform float sk_top_down;      // 1 for the straight-down map: no distance fade
 uniform float sk_level_top;     // the agent's cut height: nothing is shaded brighter than its level's top
 uniform float sk_cut;
@@ -260,6 +261,13 @@ vec3 distanceFade(vec3 c, vec3 pos)
     return mix(c, VOID, f * 0.75);
 }
 
+// Diagonal stripes in the frame of world up on screen, not the window's, so a rolling camera leaves them still.
+bool hatchAt(float pitch, float width)
+{
+    vec2 q = vec2(dot(gl_FragCoord.xy, vec2(sk_screen_up.y, -sk_screen_up.x)), dot(gl_FragCoord.xy, sk_screen_up));
+    return mod(q.x + q.y, pitch) < width;
+}
+
 void main()
 {
     gSize = textureSize(depthMap, 0);
@@ -452,7 +460,7 @@ void main()
         c = mix(c, mix(WATER_SHORE, WATER_DEEP, t), mix(0.6, 1.0, t));
         a = mix(a, 0.85, t);
     }
-    if (invisible && mod(gl_FragCoord.x + gl_FragCoord.y, 6.0) < 2.0)
+    if (invisible && hatchAt(6.0, 2.0))
     {
         c = mix(c, sk_invisible, 0.6);
         a = max(a, 0.85);
@@ -475,7 +483,7 @@ void main()
                : code == CODE_SECTION     ? vec3(0.5, 0.0, 0.0)
                : code == CODE_PLACEHOLDER ? vec3(1.0, 0.0, 1.0)
                                           : vec3(1.0, 1.0, 1.0);
-        frag_color = vec4(invisible && mod(gl_FragCoord.x + gl_FragCoord.y, 4.0) < 2.0 ? vec3(0.0) : k, 1.0);
+        frag_color = vec4(invisible && hatchAt(4.0, 2.0) ? vec3(0.0) : k, 1.0);
     }
     else if (sk_debug_view == 2)
     {

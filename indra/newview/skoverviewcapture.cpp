@@ -934,6 +934,17 @@ void SKOverviewCapture::resolve(LLRenderTarget& capture, LLRenderTarget& resolve
         glUniform1f(glGetUniformLocation(prog, "sk_far_depth"), al_window_far());
         glUniform3f(glGetUniformLocation(prog, "sk_eye"), shot.mEye.mV[VX], shot.mEye.mV[VY], shot.mEye.mV[VZ]);
         glUniform1f(glGetUniformLocation(prog, "sk_top_down"), shot.mTopDown ? 1.f : 0.f);
+        {
+            // World up on screen (world north looking straight down), so the hatch keeps its angle when the camera rolls.
+            LLVector4a up;
+            shot.mView.rotate(LLVector4a(0.f, 0.f, 1.f), up);
+            if (up[0] * up[0] + up[1] * up[1] < 0.01f)
+            {
+                shot.mView.rotate(LLVector4a(0.f, 1.f, 0.f), up);
+            }
+            const F32 len = llmax(sqrtf(up[0] * up[0] + up[1] * up[1]), 1e-6f);
+            glUniform2f(glGetUniformLocation(prog, "sk_screen_up"), up[0] / len, up[1] / len);
+        }
         glUniform3f(glGetUniformLocation(prog, "sk_focus"), shot.mFocus.mV[VX], shot.mFocus.mV[VY], shot.mFocus.mV[VZ]);
         glUniform1f(glGetUniformLocation(prog, "sk_cut_flag"), shot.mPartCuts ? 1.f : 0.f);
         glUniform1f(glGetUniformLocation(prog, "sk_level_top"), shot.mLevelTop);
