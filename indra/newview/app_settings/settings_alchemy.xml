@@ -5887,6 +5887,17 @@
             <key>Value</key>
             <integer>0</integer>
         </map>
+        <key>SKTacticalNametagPixelsPerMetre</key>
+        <map>
+            <key>Comment</key>
+            <string>On the tactical overview, an avatar shown at this many screen pixels per metre or more gets its in-world name tag instead of the compact marker label; 0 always shows the tags.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>8.0</real>
+        </map>
         <key>SKTacticalTiltShift</key>
         <map>
             <key>Comment</key>
