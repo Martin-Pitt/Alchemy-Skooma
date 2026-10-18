@@ -2727,13 +2727,20 @@ void SKOverviewCapture::drawTacticalLabels(const std::vector<std::pair<size_t, L
 
     {
         // Coded people carry the mini-map's badge, a fixed size over their marker's top whatever the zoom; nearest the
-        // camera first, a badge mostly covering one already placed is left out, and the nearest draws on top.
+        // camera first, a badge mostly covering one already placed is left out, and the nearest draws on top. A flat
+        // marker carries its code itself, so it takes no badge.
         const LLVector3 camera = LLViewerCamera::getInstance()->getOrigin();
         std::vector<std::pair<F32, size_t>> coded;
         for (size_t i = 0; i < drawn.size(); ++i)
         {
             const size_t person = drawn[i].first;
-            if (person < people.size() && !tagged[i] && people[person].mVisibility == skmap::Visibility::DOT_CODED &&
+            if (person >= people.size())
+            {
+                continue;
+            }
+            const auto blend = mFlatBlend.find(people[person].mId);
+            const bool flat = blend != mFlatBlend.end() && blend->second >= 0.5f;
+            if (!flat && !tagged[i] && people[person].mVisibility == skmap::Visibility::DOT_CODED &&
                 !people[person].mCode.empty())
             {
                 coded.emplace_back((gAgent.getPosAgentFromGlobal(people[person].mPos) - camera).lengthSquared(), i);
