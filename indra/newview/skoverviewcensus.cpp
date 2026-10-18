@@ -894,6 +894,7 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
     std::map<U32, F32> cut_of;
     std::map<U32, std::string> why;
     std::set<U32> for_agent;
+    std::map<U32, F32> priority_of;
     std::set<U32> agent_under;  // linksets standing over the agent, whose cut no one on their roof overrides
     auto mark = [&](U32 id, const Occupant& occupant, const char* rule)
     {
@@ -913,9 +914,10 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
             return;
         }
         auto it = cut_of.find(id);
-        if (it == cut_of.end() || occupant.mCut > it->second)
+        if (it == cut_of.end() || occupant.mPriority > priority_of[id])
         {
             cut_of[id] = occupant.mCut;
+            priority_of[id] = occupant.mPriority;
             why[id] = who + " " + rule;
         }
     };

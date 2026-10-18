@@ -155,6 +155,7 @@ public:
         std::shared_ptr<const std::set<std::pair<S32, S32>>> mRoomCells;
         F32 mRoomCellM = 0.5f;
         bool mOutdoors = false; ///< in outdoor air by the enclosure: no room or column is cut for them
+        F32 mPriority = 0.f;    ///< among others sharing a building, the highest priority's storey is cut for
     };
     /// Writes each vertex's cut height for the tactical view, for the linksets in the given region:
     /// - room: every linkset bounding an occupant's enclosed room (walls round its floor, floors above, the roof);
@@ -163,8 +164,8 @@ public:
     /// - on a roof: a linkset someone stands on with none of it over them is cut no lower than their level, nor hidden,
     ///   unless the agent is under it; held a second after they leave it.
     /// What hides someone from the tactical eye is not cut here: its shader dissolves it round them.
-    /// The agent's are cut at the agent's level, whoever else needs them; another's at the highest of its
-    /// occupants'. Every other part, there and elsewhere, is drawn whole. key says when the eye or the people moved:
+    /// The agent's are cut at the agent's level, whoever else needs them; another's at the level of its
+    /// occupant of highest mPriority. Every other part, there and elsewhere, is drawn whole. key says when the eye or the people moved:
     /// the same key and buffers do nothing. Rewrites the attribute only when the result changed, and logs it then;
     /// cutStamp() moves when it does.
     void applyCut(const LLViewerRegion* region, const std::vector<Occupant>& occupants, U64 key);

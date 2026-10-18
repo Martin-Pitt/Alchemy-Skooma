@@ -1513,6 +1513,8 @@ void SKOverviewCapture::updateCut()
     static LLCachedControl<F32> cut_height(gSavedSettings, "SKOverviewCutHeight", 2.5f);
     std::vector<SKOverviewCensus::Occupant> occupants;
     const F64 now = LLFrameTimer::getUptimeSeconds().value();
+    LLVector3d centre;
+    tacticalCentre(centre);
     // The inputs, coarsely: the cut is worked out again only once the eye or someone has moved a little.
     U64 key = 1469598103934665603ull;
     auto mix = [&key](U64 v) { key = (key ^ v) * 1099511628211ull; };
@@ -1532,6 +1534,12 @@ void SKOverviewCapture::updateCut()
         o.mFloor = floor;
         o.mFeet = feet;
         o.mCut = cut;
+        if (where.mFound && where.mIndoor && where.mCeiling < 1e29f)
+        {
+            // Indoors the storey's own air bounds the cut: just under its ceiling, so the floor above is gone.
+            o.mCut = llmax(where.mCeiling - 0.1f, (F32)floor.mdV[VZ] + 1.8f);
+        }
+        o.mPriority = -(F32)dist_vec(feet, centre);
         o.mOutdoors = outdoorsAt(id, feet, now);
         if (!o.mOutdoors && where.mFound && where.mIndoor)
         {
@@ -1540,6 +1548,7 @@ void SKOverviewCapture::updateCut()
         }
         mixPos(floor);
         mixPos(feet);
+        mix((U64)(S64)std::llround(o.mCut * 4.f));
         mix(id.getCRC32());
         mix(o.mOutdoors);
         mix(o.mRoomCells ? o.mRoomCells->size() : 0);
@@ -1552,7 +1561,7 @@ void SKOverviewCapture::updateCut()
     {
         agent_feet.mdV[VZ] = SKMapPeople::feetZ(gAgentAvatarp);
     }
-    addPerson(gAgent.getID(), true, agent_floor, agent_feet, cut_z, skmap::plan::whereabouts(gAgent.getPositionGlobal()));
+    addPerson(gAgent.getID(), true, agent_floor, agent_feet, cut_z, skmap::plan::whereabouts(agent_feet));
     for (const SKMapPeople::Person& p : SKMapPeople::instance().people())
     {
         if (p.mVisibility == skmap::Visibility::HIDDEN || !p.mZKnown)
@@ -1569,6 +1578,7 @@ void SKOverviewCapture::updateCut()
     {
         it = now - it->second.mSeen > 10.0 ? mOutdoors.erase(it) : std::next(it);
     }
+    mixPos(centre);
     mix(gAgent.getRegion() ? gAgent.getRegion()->getHandle() : 0);
     mCensus.applyCut(gAgent.getRegion(), occupants, key);
 }
