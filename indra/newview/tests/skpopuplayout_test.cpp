@@ -68,13 +68,18 @@ namespace tut
     typedef skpopuplayout_group::object skpopuplayout_object;
     tut::skpopuplayout_group g("skpopuplayout");
 
-    // The root pane's corner sits 4 px off the click; widths and heights follow the window.
+    // The root pane's near corner sits 4 px off the click, growing towards the centre.
     template<> template<>
     void skpopuplayout_object::test<1>()
     {
-        const PopupRect r = PopupLayout::placeFirst(600.f, 300.f, 174.f, 100.f, 1280.f, 720.f);
+        const PopupFacing rd { true, true };
+        PopupRect r = PopupLayout::placeFirst(600.f, 300.f, 174.f, 100.f, rd, 1280.f, 720.f);
         ensure_equals("x", r.mX, 604.f);
         ensure_equals("y", r.mY, 304.f);
+        r = PopupLayout::placeFirst(1000.f, 600.f, 174.f, 100.f, { false, false }, 1280.f, 720.f);
+        ensure("left and up", r.right() == 996.f && r.bottom() == 596.f);
+        const PopupFacing f = PopupFacing::towardsCentre(100.f, 600.f, 1280.f, 720.f);
+        ensure("facing", f.mRight && !f.mDown);
         ensure_equals("width", PopupLayout::paneWidth(1280.f), 174.f);
         ensure_equals("narrow width", PopupLayout::paneWidth(150.f), 134.f);
         const std::vector<PopupRow> rows = { heading(), action(), separator(), action() };
@@ -87,61 +92,64 @@ namespace tut
         {
             for (F32 y : { -50.f, 0.f, 300.f, 715.f })
             {
-                ensure("clamped", inside(PopupLayout::placeFirst(x, y, 174.f, 200.f, 1280.f, 720.f), 1280.f, 720.f));
+                const PopupFacing c = PopupFacing::towardsCentre(x, y, 1280.f, 720.f);
+                ensure("clamped", inside(PopupLayout::placeFirst(x, y, 174.f, 200.f, c, 1280.f, 720.f), 1280.f, 720.f));
             }
         }
     }
 
-    // The second root pane: left of the first, else right, else below; the study's openContext.
+    // The second root pane: the facing side, else the other, else stacked the facing way.
     template<> template<>
     void skpopuplayout_object::test<2>()
     {
-        // Room on the left.
-        PopupRect first = PopupLayout::placeFirst(600.f, 300.f, 174.f, 150.f, 1280.f, 720.f);
-        PopupRect beside = PopupLayout::placeBeside(first, 174.f, 100.f, 1280.f, 720.f);
-        ensure("left", beside.mX == first.mX - 178.f && beside.mY == first.mY);
-        // Against the left edge: right.
-        first = PopupLayout::placeFirst(50.f, 300.f, 174.f, 150.f, 1280.f, 720.f);
-        beside = PopupLayout::placeBeside(first, 174.f, 100.f, 1280.f, 720.f);
-        ensure("right", beside.mX == first.mX + 178.f && beside.mY == first.mY);
-        // Against the right edge the first pane is pushed in and the second still goes left.
-        first = PopupLayout::placeFirst(1270.f, 300.f, 174.f, 150.f, 1280.f, 720.f);
-        ensure_equals("pushed in", first.mX, 1098.f);
-        beside = PopupLayout::placeBeside(first, 174.f, 100.f, 1280.f, 720.f);
-        ensure_equals("left of it", beside.mX, 920.f);
+        const PopupFacing rd { true, true };
+        PopupRect first = PopupLayout::placeFirst(50.f, 300.f, 174.f, 150.f, rd, 1280.f, 720.f);
+        PopupRect beside = PopupLayout::placeBeside(first, 174.f, 100.f, rd, 1280.f, 720.f);
+        ensure("right", beside.mX == first.right() + 4.f && beside.mY == first.mY);
+        const PopupFacing lu { false, false };
+        first = PopupLayout::placeFirst(1200.f, 600.f, 174.f, 150.f, lu, 1280.f, 720.f);
+        beside = PopupLayout::placeBeside(first, 174.f, 100.f, lu, 1280.f, 720.f);
+        ensure("left, bottoms level", beside.right() == first.mX - 4.f && beside.bottom() == first.bottom());
+        // Facing right with no room there: left.
+        first = { 1090.f, 300.f, 174.f, 150.f };
+        beside = PopupLayout::placeBeside(first, 174.f, 100.f, rd, 1280.f, 720.f);
+        ensure_equals("flipped left", beside.mX, 1090.f - 178.f);
         // A window too narrow for two: below.
-        first = PopupLayout::placeFirst(50.f, 100.f, 174.f, 150.f, 300.f, 720.f);
-        beside = PopupLayout::placeBeside(first, 174.f, 100.f, 300.f, 720.f);
+        first = PopupLayout::placeFirst(50.f, 100.f, 174.f, 150.f, rd, 300.f, 720.f);
+        beside = PopupLayout::placeBeside(first, 174.f, 100.f, rd, 300.f, 720.f);
         ensure("below", beside.mX == first.mX && beside.mY == first.bottom() + 4.f);
-        // Near the bottom, below is clamped back in.
-        first = PopupLayout::placeFirst(50.f, 600.f, 174.f, 150.f, 300.f, 720.f);
-        beside = PopupLayout::placeBeside(first, 174.f, 100.f, 300.f, 720.f);
+        first = PopupLayout::placeFirst(50.f, 600.f, 174.f, 150.f, rd, 300.f, 720.f);
+        beside = PopupLayout::placeBeside(first, 174.f, 100.f, rd, 300.f, 720.f);
         ensure("inside", inside(beside, 300.f, 720.f));
     }
 
-    // A child pane: left of its parent, else right, else under the root group; the study's
-    // openPerson and openModerate.
+    // A child pane sits beside its opener row like a submenu, never detached below the group.
     template<> template<>
     void skpopuplayout_object::test<3>()
     {
-        // People pane left of the map pane: a person pane goes left of the people pane.
-        const PopupRect map = PopupLayout::placeFirst(600.f, 300.f, 174.f, 200.f, 1280.f, 720.f);
-        const PopupRect people = PopupLayout::placeBeside(map, 174.f, 120.f, 1280.f, 720.f);
-        PopupRect person = PopupLayout::placeChild(people, people.mY + 26.f, 174.f, 250.f, { map }, 1280.f, 720.f);
-        ensure("left of its parent", person.mX == people.mX - 176.f && person.mY == people.mY + 26.f);
+        // The screenshot case: click at the top left, map then people to the right, person beside its row.
+        const PopupFacing rd = PopupFacing::towardsCentre(40.f, 20.f, 1280.f, 720.f);
+        const PopupRect map = PopupLayout::placeFirst(40.f, 20.f, 174.f, 120.f, rd, 1280.f, 720.f);
+        const PopupRect people = PopupLayout::placeBeside(map, 174.f, 118.f, rd, 1280.f, 720.f);
+        const F32 row = people.mY + 26.f;
+        PopupRect person = PopupLayout::placeChild(people, row, 22.f, 174.f, 250.f, rd, { map }, 1280.f, 720.f);
+        ensure("right of its row", person.mX == people.right() + 2.f && person.mY == row);
 
-        // Map pane at the left edge, people to its right: the person pane would cover the map
-        // pane on the left, so it goes under both.
-        const PopupRect map2 = PopupLayout::placeFirst(20.f, 100.f, 174.f, 200.f, 1280.f, 720.f);
-        const PopupRect people2 = PopupLayout::placeBeside(map2, 174.f, 120.f, 1280.f, 720.f);
-        person = PopupLayout::placeChild(people2, people2.mY + 4.f, 174.f, 250.f, { map2 }, 1280.f, 720.f);
-        ensure("under the group", person.mX == people2.mX && person.mY == llmax(map2.bottom(), people2.bottom()) + 4.f);
+        // Bottom right, facing left and up: left of the people pane, bottom on the row's bottom.
+        const PopupFacing lu = PopupFacing::towardsCentre(1200.f, 700.f, 1280.f, 720.f);
+        const PopupRect map2 = PopupLayout::placeFirst(1200.f, 700.f, 174.f, 120.f, lu, 1280.f, 720.f);
+        const PopupRect people2 = PopupLayout::placeBeside(map2, 174.f, 118.f, lu, 1280.f, 720.f);
+        const F32 row2 = people2.mY + 48.f;
+        person = PopupLayout::placeChild(people2, row2, 22.f, 174.f, 250.f, lu, { map2 }, 1280.f, 720.f);
+        ensure("left, bottom on the row", person.right() == people2.mX - 2.f && person.bottom() == row2 + 22.f);
 
-        // No room on the left of a pane at the edge, and nothing on the right: right.
-        const PopupRect lone = PopupLayout::placeFirst(0.f, 100.f, 174.f, 200.f, 1280.f, 720.f);
-        const PopupRect moderate = PopupLayout::placeChild(lone, lone.mY + 50.f, 174.f, 130.f, {}, 1280.f, 720.f);
-        ensure("right of its parent", moderate.mX == lone.right() + 2.f && moderate.mY == lone.mY + 50.f);
-        ensure("inside", inside(moderate, 1280.f, 720.f));
+        // No room on the facing side: the other side, level with the row.
+        const PopupRect edge { 1098.f, 100.f, 174.f, 200.f };
+        PopupRect moderate = PopupLayout::placeChild(edge, 150.f, 22.f, 174.f, 130.f, rd, {}, 1280.f, 720.f);
+        ensure("flipped left", moderate.mX == edge.mX - 176.f && moderate.mY == 150.f);
+        // Too tall below the row: shifted up, not sideways.
+        moderate = PopupLayout::placeChild(edge, 650.f, 22.f, 174.f, 130.f, lu, {}, 1280.f, 720.f);
+        ensure("shifted inside", moderate.mX == edge.mX - 176.f && inside(moderate, 1280.f, 720.f));
     }
 
     // Keys: Up and Down wrap and skip what cannot be chosen; Home and End; Right opens a pane
