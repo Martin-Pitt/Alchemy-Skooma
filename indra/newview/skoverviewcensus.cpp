@@ -1249,6 +1249,75 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
             why[entry.first] = "hidden floating";
         }
     }
+    // A cut or hidden linkset is uncut or shown only once that has held a moment: one evaluation's dropout no longer flashes it.
+    static LLCachedControl<F32> release_s(gSavedSettings, "SKOverviewCutReleaseSeconds", 0.5f);
+    std::map<LLUUID, F32> wanted;
+    for (const auto& entry : extents)
+    {
+        const auto it = cut_of.find(entry.first);
+        const F32 v = it == cut_of.end() ? skoverview::NO_CUT : it->second;
+        const auto w = wanted.emplace(entry.second.mRoot, v);
+        w.first->second = llmin(w.first->second, v);
+    }
+    bool releasing = false;
+    for (auto it = mRelease.begin(); it != mRelease.end();)
+    {
+        const auto w = wanted.find(it->first);
+        Release& r = it->second;
+        const F32 v = w == wanted.end() ? skoverview::NO_CUT : w->second;
+        const bool relaxes = (r.mCut == skoverview::HIDDEN && v != skoverview::HIDDEN) || v == skoverview::NO_CUT;
+        if (w == wanted.end() || !relaxes)
+        {
+            r.mSince = -1.0;
+        }
+        else if (r.mSince < 0.0)
+        {
+            r.mSince = now;
+        }
+        if (w == wanted.end() || !relaxes || now - r.mSince >= release_s)
+        {
+            if (v == skoverview::NO_CUT)
+            {
+                it = mRelease.erase(it);
+                continue;
+            }
+            r.mCut = v;
+            r.mSince = -1.0;
+        }
+        else
+        {
+            releasing = true;
+        }
+        ++it;
+    }
+    for (const auto& w : wanted)
+    {
+        if (w.second != skoverview::NO_CUT && !mRelease.count(w.first))
+        {
+            mRelease[w.first].mCut = w.second;
+        }
+    }
+    for (const auto& entry : extents)
+    {
+        const auto r = mRelease.find(entry.second.mRoot);
+        if (r == mRelease.end())
+        {
+            continue;
+        }
+        if (r->second.mSince >= 0.0)
+        {
+            cut_of[entry.first] = r->second.mCut;
+            why[entry.first] = r->second.mWhy + " (releasing)";
+        }
+        else if (cut_of.count(entry.first))
+        {
+            r->second.mWhy = why[entry.first];
+        }
+    }
+    if (releasing)
+    {
+        mCutKey = 0; // worked again until the release holds
+    }
     std::vector<std::pair<U32, F32>> cuts(cut_of.begin(), cut_of.end());
     if (cuts == mCuts && mCutSignature == mSignature)
     {

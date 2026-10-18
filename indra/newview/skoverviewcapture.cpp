@@ -1420,10 +1420,11 @@ std::shared_ptr<const std::set<std::pair<S32, S32>>> SKOverviewCapture::roomAt(c
         return {};
     }
     const F64 start_floor = start_gap.mFloor;
-    for (const Room& room : mRooms)
+    for (Room& room : mRooms)
     {
         if (std::fabs(room.mFloor - start_floor) < SAME_FLOOR_M && room.mCells->count(start))
         {
+            room.mAt = now; // a room in use stays cached, not flooded afresh every few seconds
             return room.mCells;
         }
     }

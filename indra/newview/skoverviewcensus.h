@@ -220,6 +220,13 @@ private:
         F64 mAt = 0.0;          ///< when it was last seen under them
     };
     std::map<LLUUID, Standing> mStanding;   ///< who stands on a roof, held through a hop
+    struct Release
+    {
+        F32 mCut = 0.f;         ///< the cut applied
+        std::string mWhy;
+        F64 mSince = -1.0;      ///< when a relaxing decision first came, or -1
+    };
+    std::map<LLUUID, Release> mRelease;     ///< applied cuts by linkset root, relaxed only once the relaxing holds
 };
 
 #endif // SK_OVERVIEWCENSUS_H
