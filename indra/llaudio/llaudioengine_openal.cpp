@@ -983,6 +983,10 @@ bool LLAudioChannelOpenAL::updateBuffer()
               mCurrentSourcep->isLoop() ? AL_TRUE : AL_FALSE);
         alSourcef(mALSource, AL_ROLLOFF_FACTOR,
               gAudiop->mListenerp->getRolloffFactor());
+        // <SK:Nexii> Reverb send: the presets' room rolloff is 0, so without this every source reaches the reverb unattenuated by distance.
+        alSourcef(mALSource, AL_ROOM_ROLLOFF_FACTOR,
+              gAudiop->mListenerp->getRolloffFactor());
+        // </SK:Nexii>
     }
 
     return true;
