@@ -142,6 +142,7 @@ if(AL_BUILD_TESTS)
     sknavmesh_tests
     PROJECT sknavmesh
     SOURCES
+      tests/sknavairunknown_test.cpp
       tests/sknavcensusio_test.cpp
       tests/sknavenclosurerepair_test.cpp
       tests/sknavfeatures_test.cpp

@@ -288,7 +288,7 @@ namespace sknav_test
     }
 
     /// Two 8 x 8 m rooms sharing a wall at x = 10, roofed, with a door out of the west one.
-    Scene twoRooms()
+    inline Scene twoRooms()
     {
         Scene s;
         s.wall(2.f, 2.f, 18.f, 2.25f);
