@@ -76,6 +76,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <unordered_map>
 
 extern bool gCubeSnapshot;
@@ -108,7 +109,7 @@ namespace
     const F32 TACTICAL_NEAR_M = 0.5f;
     const F64 ROOM_CELL_M = 0.5;    // the lattice a room is flooded through the air on
     const F32 TACTICAL_MIN_M = 8.f;
-    const F32 TACTICAL_MAX_M = 400.f;
+    const F32 TACTICAL_MAX_M = 4096.f;
     const F32 BATTLEFIELD_MAX_M = 4096.f;
     const F32 BATTLEFIELD_PITCH_DEG = 89.f;  // the untilted battlefield: short of straight down, so the camera keeps a heading to put north up
     const F32 BATTLEFIELD_MARGIN = 1.05f;
@@ -1793,8 +1794,11 @@ void SKOverviewCapture::tactical()
     shot.mView = LLMatrix4a::lookDir(eye4, dir4, up4);
     const F32 fov = camera->getView();
     const F32 aspect = (F32)vw / (F32)vh;
-    const F32 far_m = distance + 2.f * CENSUS_RANGE_M;
-    shot.mProj = al_perspective(fov, aspect, TACTICAL_NEAR_M, far_m);
+    // The cull reaches past the focus by the draw distance, so the surrounds stay whole however far out it zooms;
+    // under reverse-Z the projection clips nothing far.
+    const F32 far_m = distance + llmax(camera->getFar(), 2.f * CENSUS_RANGE_M);
+    shot.mProj = al_perspective(fov, aspect, TACTICAL_NEAR_M,
+                                LLRender::sReverseZ ? std::numeric_limits<F32>::infinity() : far_m);
     shot.mEye = eye;
     shot.mCut = cut_z;
     // The fade follows the focus, but the height colours stay on the agent's floor, eased so a climb or teleport never flickers.
