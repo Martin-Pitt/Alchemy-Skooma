@@ -312,6 +312,8 @@ namespace
                 const U16 floor = airFloorUnits(column.floorAt(*t->mAir, k, ix, iy));
                 Enclosure out;
                 fillEnclosure(*t, floor, g.mCeiling, e.mS, e.mE, e.mD, e.mOpen, e.mBucket, e.mSpace, e.mFlags, out);
+                out.mFine = true;
+                out.mAvatarFloor = (g.mFlags & AirGap::AVATAR_FLOOR) != 0;
                 spaceId(p, out);
                 fn(out, floor, g.mCeiling, *t);
             }
