@@ -27,9 +27,11 @@
 
 #include "llpointer.h"
 #include "lluuid.h"
+#include "threadpool_fwd.h"
 #include "v3dmath.h"
 #include "v3math.h"
 
+#include <future>
 #include <memory>
 #include <string>
 #include <map>
@@ -201,6 +203,45 @@ private:
         skoverview::CensusClass mFixed = skoverview::NUM_CENSUS_CLASSES;
     };
     void gatherSurrounds(const struct SKCensusSnapshot& snap);
+    /// What a build needs, as values: the worker never touches viewer objects, the world, settings or GL.
+    struct Job
+    {
+        std::shared_ptr<const struct SKCensusSnapshot> mSnapshot; ///< owns the records and clusters below
+        U64 mSignature = 0;
+        U32 mGeneration = 0;
+        std::vector<const sknav::Record*> mKept;
+        std::vector<U8> mFixed;
+        std::vector<bool> mVoidOnly;
+        std::vector<RenderedPart> mSculpts;
+        std::vector<U32> mGroupOf;      ///< per kept record then sculpt, its linkset's group
+        std::vector<LLUUID> mRoots;     ///< per group
+        std::map<U32, U32> mGroupCluster;
+        std::vector<std::pair<LLVector3d, bool>> mAnchors; ///< per group: its root's position, and void-only
+        std::vector<std::pair<LLVector3d, F64>> mRegions;  ///< connected regions' origins and widths
+    };
+    /// A build's batches, short of their buffers and of whether each group stands on the land.
+    struct Built
+    {
+        struct Region
+        {
+            LLVector3d mOrigin;
+            std::vector<LLVector3> mPositions;  ///< by class, then group
+            U32 mStart[skoverview::NUM_CENSUS_CLASSES + 1] = {};
+            std::vector<Group> mGroups;
+            std::vector<LLVector3d> mMiddles;   ///< per group, where the land under it is looked up
+        };
+        U64 mSignature = 0;
+        U32 mGeneration = 0;
+        std::vector<Region> mRegions;
+        std::vector<size_t> mOversized;         ///< vertex counts of regions left out
+    };
+    static std::shared_ptr<Built> buildBatches(const Job& job);
+    /// Uploads a build and replaces every batch with it, in this frame.
+    void swapIn(Built& built);
+    std::unique_ptr<LL::ThreadPool> mWorkers;
+    std::future<std::shared_ptr<Built>> mJob;
+    U32 mGeneration = 0;    ///< moves at release(), so a build begun before it never lands
+    bool mBuilt = false;    ///< a build has landed since the last release()
     /// A part's look, kept per part while its object and faces' inputs stay the same.
     skoverview::Seen seenOf(const LLUUID& part);
     /// Drops the verdicts of parts no pass asked about since the last prune.
