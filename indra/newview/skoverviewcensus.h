@@ -154,10 +154,12 @@ public:
         /// (global x and y over the cell size, floored); null outdoors.
         std::shared_ptr<const std::set<std::pair<S32, S32>>> mRoomCells;
         F32 mRoomCellM = 0.5f;
+        bool mOutdoors = false; ///< in outdoor air by the enclosure: no room or column is cut for them
     };
     /// Writes each vertex's cut height for the tactical view, for the linksets in the given region:
     /// - room: every linkset bounding an occupant's enclosed room (walls round its floor, floors above, the roof);
-    /// - column: outdoors or with no room known, every linkset whose bounds hold their column and rise above it;
+    /// - none for an occupant in outdoor air (on a roof, in the street);
+    /// - column: with no room known, every linkset whose bounds hold their column and rise above it;
     /// - on a roof: a linkset someone stands on with none of it over them is cut no lower than their level, nor hidden,
     ///   unless the agent is under it; held a second after they leave it.
     /// What hides someone from the tactical eye is not cut here: its shader dissolves it round them.

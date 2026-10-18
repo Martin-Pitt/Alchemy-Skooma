@@ -1460,6 +1460,48 @@ std::shared_ptr<const std::set<std::pair<S32, S32>>> SKOverviewCapture::roomAt(c
     return room.mCells;
 }
 
+bool SKOverviewCapture::outdoorsAt(const LLUUID& id, const LLVector3d& feet, F64 now)
+{
+    const F64 HOLD_S = 0.75;
+    // The air the body stands in, not airGapAt's fallback to the room under a solid a sunk foot is in.
+    bool out = false;
+    const SKNavWorldViewPtr world = SKNavMesh::instanceExists() ? SKNavMesh::instance().view() : nullptr;
+    if (world)
+    {
+        for (F64 lift : { 0.3, 0.8, 1.3 })
+        {
+            sknav::Enclosure gap;
+            if (world->enclosureAt(LLVector3d(feet.mdV[VX], feet.mdV[VY], feet.mdV[VZ] + lift), gap) &&
+                gap.mBucket != sknav::EnclosureBucket::UNKNOWN)
+            {
+                out = gap.mBucket == sknav::EnclosureBucket::OUTDOORS;
+                break;
+            }
+        }
+    }
+    auto inserted = mOutdoors.emplace(id, Outdoors());
+    Outdoors& held = inserted.first->second;
+    held.mSeen = now;
+    if (inserted.second)
+    {
+        held.mOut = out;
+    }
+    else if (out == held.mOut)
+    {
+        held.mSince = -1.0;
+    }
+    else if (held.mSince < 0.0)
+    {
+        held.mSince = now;
+    }
+    else if (now - held.mSince >= HOLD_S)
+    {
+        held.mOut = out;
+        held.mSince = -1.0;
+    }
+    return held.mOut;
+}
+
 void SKOverviewCapture::updateCut()
 {
     // Cut by building, for every view that draws the census: the agent's own at its level, and each other building
@@ -1469,6 +1511,7 @@ void SKOverviewCapture::updateCut()
     cutHeights(gAgent.getPositionGlobal(), gAgent.getPositionAgent().mV[VZ], floor_z, cut_z);
     static LLCachedControl<F32> cut_height(gSavedSettings, "SKOverviewCutHeight", 2.5f);
     std::vector<SKOverviewCensus::Occupant> occupants;
+    const F64 now = LLFrameTimer::getUptimeSeconds().value();
     // The inputs, coarsely: the cut is worked out again only once the eye or someone has moved a little.
     U64 key = 1469598103934665603ull;
     auto mix = [&key](U64 v) { key = (key ^ v) * 1099511628211ull; };
@@ -1488,7 +1531,8 @@ void SKOverviewCapture::updateCut()
         o.mFloor = floor;
         o.mFeet = feet;
         o.mCut = cut;
-        if (where.mFound && where.mIndoor)
+        o.mOutdoors = outdoorsAt(id, feet, now);
+        if (!o.mOutdoors && where.mFound && where.mIndoor)
         {
             o.mRoomCells = roomAt(floor);
             o.mRoomCellM = (F32)ROOM_CELL_M;
@@ -1496,6 +1540,7 @@ void SKOverviewCapture::updateCut()
         mixPos(floor);
         mixPos(feet);
         mix(id.getCRC32());
+        mix(o.mOutdoors);
         mix(o.mRoomCells ? o.mRoomCells->size() : 0);
         occupants.push_back(std::move(o));
     };
@@ -1518,6 +1563,10 @@ void SKOverviewCapture::updateCut()
         LLVector3d feet = p.mPos;
         feet.mdV[VZ] = p.mFeetZ;
         addPerson(p.mId, false, floor, feet, (F32)floor.mdV[VZ] + (F32)cut_height, p.mWhere);
+    }
+    for (auto it = mOutdoors.begin(); it != mOutdoors.end();)
+    {
+        it = now - it->second.mSeen > 10.0 ? mOutdoors.erase(it) : std::next(it);
     }
     mix(gAgent.getRegion() ? gAgent.getRegion()->getHandle() : 0);
     mCensus.applyCut(gAgent.getRegion(), occupants, key);

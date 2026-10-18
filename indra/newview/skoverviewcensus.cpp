@@ -1150,6 +1150,10 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
     };
     for (const Occupant* occupant : ordered)
     {
+        if (occupant->mOutdoors)
+        {
+            continue;
+        }
         const LLVector3d& p = occupant->mFloor;
         dilated.clear();
         if (occupant->mRoomCells && !occupant->mRoomCells->empty())
