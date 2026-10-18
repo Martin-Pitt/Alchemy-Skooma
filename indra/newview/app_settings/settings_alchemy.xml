@@ -6199,24 +6199,79 @@
         <key>SKMapProjectileMinSpeed</key>
         <map>
             <key>Comment</key>
-            <string>Speed in metres per second from which a small physical object is drawn as a projectile.</string>
+            <string>Speed in metres per second from which a moving physical object or needle is drawn as a projectile; low enough for a lobbed grenade, above an avatar's run.</string>
             <key>Persist</key>
             <integer>1</integer>
             <key>Type</key>
             <string>F32</string>
             <key>Value</key>
-            <real>20.0</real>
+            <real>8.0</real>
         </map>
-        <key>SKMapProjectileMaxSize</key>
+        <key>SKMapProjectileMaxLength</key>
         <map>
             <key>Comment</key>
-            <string>Largest size, the length of its scale in metres, a projectile may have.</string>
+            <string>Longest side in metres a moving physical object may have to be drawn as a projectile, so vehicles and debris do not count.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>10.0</real>
+        </map>
+        <key>SKMapProjectileBulletSize</key>
+        <map>
+            <key>Comment</key>
+            <string>Longest side in metres up to which a fast projectile is drawn as a bullet streak rather than its footprint.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.5</real>
+        </map>
+        <key>SKMapProjectileBulletSpeed</key>
+        <map>
+            <key>Comment</key>
+            <string>Speed in metres per second from which a small projectile is drawn as a bullet streak rather than its footprint.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>40.0</real>
+        </map>
+        <key>SKMapProjectileMinFootprintPx</key>
+        <map>
+            <key>Comment</key>
+            <string>Smallest size in pixels of a non-bullet projectile's footprint, so a grenade stays visible.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>4.0</real>
+        </map>
+        <key>SKMapProjectileNeedleLength</key>
+        <map>
+            <key>Comment</key>
+            <string>Shortest longest side in metres of a needle-shaped moving object drawn as a projectile, physical or not.</string>
             <key>Persist</key>
             <integer>1</integer>
             <key>Type</key>
             <string>F32</string>
             <key>Value</key>
             <real>3.0</real>
+        </map>
+        <key>SKMapProjectileNeedleThickness</key>
+        <map>
+            <key>Comment</key>
+            <string>Largest of the two shorter sides in metres of a needle-shaped moving object drawn as a projectile.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.2</real>
         </map>
         <key>SKMapProjectileMinLengthPx</key>
         <map>

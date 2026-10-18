@@ -137,7 +137,7 @@ public:
     };
     const std::map<LLUUID, FiringLine>& firingLines() const { return mFiring; }
 
-    /// Fast physical objects in view, gathered every frame from the live object list.
+    /// Moving physical objects and needles in view, vehicles excluded, gathered every frame from the live object list.
     struct Projectile
     {
         LLVector3d mPos;                    ///< the head
@@ -145,6 +145,12 @@ public:
         F32 mLength = 0.f;                  ///< the prim's extent along its direction of travel, metres
         F32 mWidth = 0.f;                   ///< the prim's extent across it, metres
         LLUUID mShooter;                    ///< who it was traced back to, null when nobody fits
+        LLVector3 mScale;                   ///< the prim's scale, for a footprint
+        LLQuaternion mRot;                  ///< the prim's rotation, region frame
+        F32 mSpeed = 0.f;
+        bool mBullet = true;                ///< a needle or a small fast shot, drawn as a streak; otherwise its footprint
+        /// The box's eight corners, global.
+        void corners(LLVector3d* out) const;
     };
     const std::vector<Projectile>& projectiles() const { return mProjectiles; }
 

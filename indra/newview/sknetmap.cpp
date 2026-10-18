@@ -156,6 +156,71 @@ namespace skmapdraw
         streak(head - dir * length, head, width, colour);
     }
 
+    void projectileFootprint(const LLVector2* corners, const LLVector2& dir, F32 tail_px, const LLColor4& colour)
+    {
+        static LLCachedControl<F32> min_px(gSavedSettings, "SKMapProjectileMinFootprintPx", 4.f);
+        LLVector2 centre;
+        for (S32 i = 0; i < 8; ++i)
+        {
+            centre += corners[i] * 0.125f;
+        }
+        F32 extent = 0.f;
+        for (S32 i = 0; i < 8; ++i)
+        {
+            extent = llmax(extent, (corners[i] - centre).length());
+        }
+        const F32 grow = extent > 1e-4f ? llmax(1.f, llmax(static_cast<F32>(min_px), 1.f) * 0.5f / extent) : 0.f;
+        if (grow <= 0.f)
+        {
+            gGL.color4fv(colour.mV);
+            disc(centre, llmax(static_cast<F32>(min_px), 1.f) * 0.5f, 8);
+            return;
+        }
+        // Gift wrap over the eight corners, the box's outline seen from the view.
+        LLVector2 pts[8];
+        S32 start = 0;
+        for (S32 i = 0; i < 8; ++i)
+        {
+            pts[i] = centre + (corners[i] - centre) * grow;
+            if (pts[i].mV[VX] < pts[start].mV[VX] || (pts[i].mV[VX] == pts[start].mV[VX] && pts[i].mV[VY] < pts[start].mV[VY]))
+            {
+                start = i;
+            }
+        }
+        LLVector2 hull[9];
+        S32 count = 0;
+        S32 at = start;
+        do
+        {
+            hull[count++] = pts[at];
+            S32 next = (at + 1) % 8;
+            for (S32 i = 0; i < 8; ++i)
+            {
+                const LLVector2 a = pts[next] - pts[at], b = pts[i] - pts[at];
+                const F32 cross = a.mV[VX] * b.mV[VY] - a.mV[VY] * b.mV[VX];
+                if (cross < 0.f || (cross == 0.f && b.lengthSquared() > a.lengthSquared()))
+                {
+                    next = i;
+                }
+            }
+            at = next;
+        } while (at != start && count < 8);
+        if (tail_px > 1.f)
+        {
+            streak(centre - dir * (tail_px + extent * grow), centre, llmax(extent * grow, 1.f), LLColor4(colour.mV[VRED], colour.mV[VGREEN], colour.mV[VBLUE], colour.mV[VALPHA] * 0.3f));
+        }
+        gGL.color4fv(colour.mV);
+        if (count < 3)
+        {
+            disc(centre, extent * grow, 8);
+            return;
+        }
+        for (S32 i = 1; i + 1 < count; ++i)
+        {
+            triangle(hull[0], hull[i], hull[i + 1]);
+        }
+    }
+
     void disc(const LLVector2& centre, F32 radius, S32 steps)
     {
         for (S32 i = 0; i < steps; ++i)
@@ -929,6 +994,18 @@ void SKNetMap::drawProjectiles()
             // Flying straight at the view: only its cross-section shows.
             gGL.color4fv(c.mV);
             skmapdraw::disc(head, 1.5f, 8);
+            continue;
+        }
+        if (!p.mBullet)
+        {
+            LLVector3d box[8];
+            p.corners(box);
+            LLVector2 corners[8];
+            for (S32 k = 0; k < 8; ++k)
+            {
+                corners[k] = mView.toWidget(box[k]);
+            }
+            skmapdraw::projectileFootprint(corners, dir, llmin(p.mSpeed * 0.15f, 6.f) * ppm, c);
             continue;
         }
         skmapdraw::projectile(head, dir, p.mLength * ppm, p.mWidth * mView.pixelsPerMetre(), c);

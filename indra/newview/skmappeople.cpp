@@ -357,8 +357,12 @@ void SKMapPeople::updateProjectiles()
 {
     LL_PROFILE_ZONE_SCOPED;
     static LLCachedControl<bool> show(gSavedSettings, "SKMapLayerProjectiles", true);
-    static LLCachedControl<F32> fast_speed(gSavedSettings, "SKMapProjectileMinSpeed", 20.f);
-    static LLCachedControl<F32> max_size(gSavedSettings, "SKMapProjectileMaxSize", 3.f);
+    static LLCachedControl<F32> fast_speed(gSavedSettings, "SKMapProjectileMinSpeed", 8.f);
+    static LLCachedControl<F32> max_length(gSavedSettings, "SKMapProjectileMaxLength", 10.f);
+    static LLCachedControl<F32> bullet_size(gSavedSettings, "SKMapProjectileBulletSize", 0.5f);
+    static LLCachedControl<F32> bullet_speed(gSavedSettings, "SKMapProjectileBulletSpeed", 40.f);
+    static LLCachedControl<F32> needle_length(gSavedSettings, "SKMapProjectileNeedleLength", 3.f);
+    static LLCachedControl<F32> needle_thickness(gSavedSettings, "SKMapProjectileNeedleThickness", 0.2f);
     if (!show)
     {
         mProjectiles.clear();
@@ -427,15 +431,33 @@ void SKMapPeople::updateProjectiles()
             }
         }
         const LLVector3 scale = object->getScale();
-        if (!object->flagUsePhysics() || speed < llmax(static_cast<F32>(fast_speed), 0.5f) || scale.length() > static_cast<F32>(max_size))
+        if (speed < llmax(static_cast<F32>(fast_speed), 0.5f))
+        {
+            continue;
+        }
+        // Any physical munition-sized object, or a needle: long and thin, the shape combat bullets take, physical or not.
+        const F32 longest = llmax(scale.mV[VX], llmax(scale.mV[VY], scale.mV[VZ]));
+        const F32 shortest = llmin(scale.mV[VX], llmin(scale.mV[VY], scale.mV[VZ]));
+        const F32 middle = scale.mV[VX] + scale.mV[VY] + scale.mV[VZ] - longest - shortest;
+        const bool needle = longest >= static_cast<F32>(needle_length) && middle <= static_cast<F32>(needle_thickness);
+        if (!needle && (!object->flagUsePhysics() || longest > static_cast<F32>(max_length)))
+        {
+            continue;
+        }
+        // What the map draws as a vehicle is never also a shot.
+        if (std::find(mVehicleRoots.begin(), mVehicleRoots.end(), object->getID()) != mVehicleRoots.end())
         {
             continue;
         }
         Projectile p;
         p.mPos = pos;
         p.mDir = velocity / speed;
+        p.mSpeed = speed;
+        p.mBullet = needle || (longest <= static_cast<F32>(bullet_size) && speed >= static_cast<F32>(bullet_speed));
+        p.mScale = scale;
         // The box's extent along and across the direction of travel, from its scale and rotation.
         const LLQuaternion rot = object->getRotationRegion();
+        p.mRot = rot;
         const LLVector3 axes[3] = { LLVector3::x_axis * rot, LLVector3::y_axis * rot, LLVector3::z_axis * rot };
         F32 across = 0.f;
         for (S32 k = 0; k < 3; ++k)
@@ -454,6 +476,17 @@ void SKMapPeople::updateProjectiles()
     mProjectiles.swap(found);
     mFastTrails.swap(trails);
     mShooters.swap(shooters);
+}
+
+void SKMapPeople::Projectile::corners(LLVector3d* out) const
+{
+    const LLVector3 axes[3] = { LLVector3::x_axis * mRot * (mScale.mV[VX] * 0.5f), LLVector3::y_axis * mRot * (mScale.mV[VY] * 0.5f),
+                                LLVector3::z_axis * mRot * (mScale.mV[VZ] * 0.5f) };
+    for (S32 i = 0; i < 8; ++i)
+    {
+        const LLVector3 o = axes[0] * ((i & 1) ? 1.f : -1.f) + axes[1] * ((i & 2) ? 1.f : -1.f) + axes[2] * ((i & 4) ? 1.f : -1.f);
+        out[i] = mPos + LLVector3d(o);
+    }
 }
 
 void SKMapPeople::updateTrails(F64 now)

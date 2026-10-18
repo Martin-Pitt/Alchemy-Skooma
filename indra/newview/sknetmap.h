@@ -252,6 +252,8 @@ namespace skmapdraw
     void streak(const LLVector2& tail, const LLVector2& head, F32 width, const LLColor4& colour);
     /// A projectile's streak in widget pixels: its physical length and width, held within the settings' pixel limits.
     void projectile(const LLVector2& head, const LLVector2& dir, F32 length_px, F32 width_px, const LLColor4& colour);
+    /// A non-bullet projectile: the hull of its box's projected corners, grown to the settings' minimum, with a faint tail behind it.
+    void projectileFootprint(const LLVector2* corners, const LLVector2& dir, F32 tail_px, const LLColor4& colour);
     void disc(const LLVector2& centre, F32 radius, S32 steps = 16);
     void ring(const LLVector2& centre, F32 radius, F32 width, S32 steps = 32);
     /// The soft gaussian marker shadow, generated once.

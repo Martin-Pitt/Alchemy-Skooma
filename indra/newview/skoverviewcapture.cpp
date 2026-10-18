@@ -2413,7 +2413,24 @@ void SKOverviewCapture::composite()
                     continue;
                 }
                 const auto found = p.mShooter.notNull() ? shooters.find(p.mShooter) : shooters.end();
-                skmapdraw::projectile(head, dir, p.mLength * ppm, p.mWidth * ppm, found != shooters.end() ? found->second : plain);
+                const LLColor4& colour = found != shooters.end() ? found->second : plain;
+                if (!p.mBullet)
+                {
+                    LLVector3d box[8];
+                    p.corners(box);
+                    LLVector2 corners[8];
+                    bool seen = true;
+                    for (S32 k = 0; k < 8 && seen; ++k)
+                    {
+                        seen = project(gAgent.getPosAgentFromGlobal(box[k]), corners[k]);
+                    }
+                    if (seen)
+                    {
+                        skmapdraw::projectileFootprint(corners, dir, llmin(p.mSpeed * 0.15f, 6.f) * ppm, colour);
+                    }
+                    continue;
+                }
+                skmapdraw::projectile(head, dir, p.mLength * ppm, p.mWidth * ppm, colour);
             }
             gGL.end();
             gGL.flush();
