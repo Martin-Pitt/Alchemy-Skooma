@@ -32,6 +32,8 @@
 #include "llviewercamera.h"
 #include "llviewerobject.h"
 #include "llviewerwindow.h"
+#include "llviewerregion.h"
+#include "skoverviewcapture.h"
 #include "rlvactions.h"
 #include "rlvhandler.h"
 
@@ -328,9 +330,69 @@ bool SKModalView::worldCamera(LLVector3d& position_global, LLVector3& at, LLVect
 // static
 void SKModalView::worldCameraForUpdate(LLVector3& position_agent, LLVector3& at, LLVector3& left, LLVector3& up)
 {
+    const bool tactical = tacticalInterest();
+    updateTacticalInterestMode(tactical);
+    if (tactical)
+    {
+        // The tactical overview's camera, so the sim sends what is around the battlefield rather than the agent.
+        const LLVector3d eye = gAgentCamera.getCameraPositionGlobal();
+        LLVector3 look(gAgentCamera.getFocusGlobal() - eye);
+        if (look.normalize() > F_APPROXIMATELY_ZERO)
+        {
+            LLVector3 side = LLVector3::z_axis % look;
+            if (side.normalize() <= F_APPROXIMATELY_ZERO)
+            {
+                side = LLVector3::y_axis_neg % look;
+                side.normalize();
+            }
+            position_agent = gAgent.getPosAgentFromGlobal(eye);
+            at = look;
+            left = side;
+            up = look % side;
+            return;
+        }
+    }
     LLVector3d position;
     if (worldCamera(position, at, left, up))
     {
         position_agent = gAgent.getPosAgentFromGlobal(position);
+    }
+}
+
+// static
+bool SKModalView::tacticalInterest()
+{
+    static LLCachedControl<bool> send_camera(gSavedSettings, "SKTacticalSendCamera", true);
+    return send_camera && SKOverviewCapture::tacticalShown();
+}
+
+// static
+void SKModalView::tacticalInterestFar(F32& draw_m)
+{
+    static LLCachedControl<F32> scale(gSavedSettings, "SKTacticalInterestFarScale", 1.5f);
+    static LLCachedControl<F32> cap(gSavedSettings, "SKTacticalInterestFarCap", 1024.f);
+    if (tacticalInterest() && draw_m < cap)
+    {
+        draw_m = llmin(draw_m * llmax((F32)scale, 1.f), (F32)cap);
+    }
+}
+
+// static
+void SKModalView::updateTacticalInterestMode(bool tactical)
+{
+    // Whole regions while the overview is open, through the region's interest list capability; back on close.
+    static bool raised = false;
+    if (tactical && !raised && gAgent.getInterestListMode() != IL_MODE_360)
+    {
+        raised = true;
+        gAgent.changeInterestListMode(IL_MODE_360);
+    }
+    else if (!tactical && raised)
+    {
+        raised = false;
+        if (gAgent.getInterestListMode() == IL_MODE_360)
+        {
+            gAgent.changeInterestListMode(IL_MODE_DEFAULT);
+        }
     }
 }

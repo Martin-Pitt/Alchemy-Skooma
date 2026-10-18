@@ -72,7 +72,6 @@
 #include "skworldmapmath.h"
 #include "llstartup.h"
 #include "lltool.h"
-#include "lltoolmgr.h"
 
 #include <algorithm>
 #include <cmath>
@@ -146,8 +145,20 @@ namespace
         glUniform3f(glGetUniformLocation(prog, name), c.mR, c.mG, c.mB);
     }
 
-    const F32 PAN_THRESHOLD_PX = 4.f;   // a press that moves less than this is a click
     const F64 PAN_MARGIN_M = 64.0;      // how far past the battlefield the view's focus may be dragged
+
+    /// Why a press or drag did not pan, with SKOverviewPanDebug, once a second at most.
+    void panTrace(const char* why)
+    {
+        static LLCachedControl<bool> debug(gSavedSettings, "SKOverviewPanDebug", false);
+        static F64 last = -1.0;
+        const F64 now = LLFrameTimer::getUptimeSeconds().value();
+        if (debug && now - last >= 1.0)
+        {
+            last = now;
+            LL_INFOS("SKOverviewPan") << why << LL_ENDL;
+        }
+    }
 
     /// The ray through a viewport pixel of a camera, agent space.
     bool cursorRay(const LLMatrix4a& view, const LLMatrix4a& proj, const S32 viewport[4], const LLVector2& at, LLVector3& from,
@@ -666,6 +677,7 @@ void SKOverviewCapture::closeTactical()
     }
     mTacticalOpen = false;
     mTacticalReady = false;
+    mTacticalPickable = false;
     if (SKPopupPanes* popup = mPopup.get())
     {
         popup->closeAll();
@@ -804,7 +816,6 @@ void SKOverviewCapture::renderModal(const LLRect& world_rect_raw)
 {
     // The display loop skips the world, and with it the overview's per-frame work: the maps, the census and the view.
     updateCapsLockCapture();
-    updatePan();
     if (mapsWanted() || mTacticalOpen)
     {
         frame();
@@ -1439,10 +1450,11 @@ std::shared_ptr<const std::set<std::pair<S32, S32>>> SKOverviewCapture::roomAt(c
         return {};
     }
     const F64 start_floor = start_gap.mFloor;
-    for (const Room& room : mRooms)
+    for (Room& room : mRooms)
     {
         if (std::fabs(room.mFloor - start_floor) < SAME_FLOOR_M && room.mCells->count(start))
         {
+            room.mAt = now; // a room in use stays cached, not flooded afresh every few seconds
             return room.mCells;
         }
     }
@@ -1479,6 +1491,48 @@ std::shared_ptr<const std::set<std::pair<S32, S32>>> SKOverviewCapture::roomAt(c
     return room.mCells;
 }
 
+bool SKOverviewCapture::outdoorsAt(const LLUUID& id, const LLVector3d& feet, F64 now)
+{
+    const F64 HOLD_S = 0.75;
+    // The air the body stands in, not airGapAt's fallback to the room under a solid a sunk foot is in.
+    bool out = false;
+    const SKNavWorldViewPtr world = SKNavMesh::instanceExists() ? SKNavMesh::instance().view() : nullptr;
+    if (world)
+    {
+        for (F64 lift : { 0.3, 0.8, 1.3 })
+        {
+            sknav::Enclosure gap;
+            if (world->enclosureAt(LLVector3d(feet.mdV[VX], feet.mdV[VY], feet.mdV[VZ] + lift), gap) &&
+                gap.mBucket != sknav::EnclosureBucket::UNKNOWN)
+            {
+                out = gap.mBucket == sknav::EnclosureBucket::OUTDOORS;
+                break;
+            }
+        }
+    }
+    auto inserted = mOutdoors.emplace(id, Outdoors());
+    Outdoors& held = inserted.first->second;
+    held.mSeen = now;
+    if (inserted.second)
+    {
+        held.mOut = out;
+    }
+    else if (out == held.mOut)
+    {
+        held.mSince = -1.0;
+    }
+    else if (held.mSince < 0.0)
+    {
+        held.mSince = now;
+    }
+    else if (now - held.mSince >= HOLD_S)
+    {
+        held.mOut = out;
+        held.mSince = -1.0;
+    }
+    return held.mOut;
+}
+
 void SKOverviewCapture::updateCut()
 {
     // Cut by building, for every view that draws the census: the agent's own at its level, and each other building
@@ -1488,6 +1542,9 @@ void SKOverviewCapture::updateCut()
     cutHeights(gAgent.getPositionGlobal(), gAgent.getPositionAgent().mV[VZ], floor_z, cut_z);
     static LLCachedControl<F32> cut_height(gSavedSettings, "SKOverviewCutHeight", 2.5f);
     std::vector<SKOverviewCensus::Occupant> occupants;
+    const F64 now = LLFrameTimer::getUptimeSeconds().value();
+    LLVector3d centre;
+    tacticalCentre(centre);
     // The inputs, coarsely: the cut is worked out again only once the eye or someone has moved a little.
     U64 key = 1469598103934665603ull;
     auto mix = [&key](U64 v) { key = (key ^ v) * 1099511628211ull; };
@@ -1507,14 +1564,23 @@ void SKOverviewCapture::updateCut()
         o.mFloor = floor;
         o.mFeet = feet;
         o.mCut = cut;
-        if (where.mFound && where.mIndoor)
+        if (where.mFound && where.mIndoor && where.mCeiling < 1e29f)
+        {
+            // Indoors the storey's own air bounds the cut: just under its ceiling, so the floor above is gone.
+            o.mCut = llmax(where.mCeiling - 0.1f, (F32)floor.mdV[VZ] + 1.8f);
+        }
+        o.mPriority = -(F32)dist_vec(feet, centre);
+        o.mOutdoors = outdoorsAt(id, feet, now);
+        if (!o.mOutdoors && where.mFound && where.mIndoor)
         {
             o.mRoomCells = roomAt(floor);
             o.mRoomCellM = (F32)ROOM_CELL_M;
         }
         mixPos(floor);
         mixPos(feet);
+        mix((U64)(S64)std::llround(o.mCut * 4.f));
         mix(id.getCRC32());
+        mix(o.mOutdoors);
         mix(o.mRoomCells ? o.mRoomCells->size() : 0);
         occupants.push_back(std::move(o));
     };
@@ -1525,7 +1591,7 @@ void SKOverviewCapture::updateCut()
     {
         agent_feet.mdV[VZ] = SKMapPeople::feetZ(gAgentAvatarp);
     }
-    addPerson(gAgent.getID(), true, agent_floor, agent_feet, cut_z, skmap::plan::whereabouts(gAgent.getPositionGlobal()));
+    addPerson(gAgent.getID(), true, agent_floor, agent_feet, cut_z, skmap::plan::whereabouts(agent_feet));
     for (const SKMapPeople::Person& p : SKMapPeople::instance().people())
     {
         if (p.mVisibility == skmap::Visibility::HIDDEN || !p.mZKnown)
@@ -1538,6 +1604,11 @@ void SKOverviewCapture::updateCut()
         feet.mdV[VZ] = p.mFeetZ;
         addPerson(p.mId, false, floor, feet, (F32)floor.mdV[VZ] + (F32)cut_height, p.mWhere);
     }
+    for (auto it = mOutdoors.begin(); it != mOutdoors.end();)
+    {
+        it = now - it->second.mSeen > 10.0 ? mOutdoors.erase(it) : std::next(it);
+    }
+    mixPos(centre);
     mix(gAgent.getRegion() ? gAgent.getRegion()->getHandle() : 0);
     mCensus.applyCut(gAgent.getRegion(), occupants, key);
 }
@@ -1558,10 +1629,10 @@ U64 SKOverviewCapture::tacticalDissolve(Shot& shot, S32 w, S32 h)
     std::map<LLUUID, LLVector3> wanted;
     if (enabled)
     {
-        F32 floor_z, cut_z;
-        cutHeights(gAgent.getPositionGlobal(), gAgent.getPositionAgent().mV[VZ], floor_z, cut_z);
-        const LLVector3 self = gAgent.getPositionAgent();
-        wanted[gAgent.getID()] = LLVector3(self.mV[VX], self.mV[VY], floor_z);
+        // Anchored to the feet as they stand, as the markers are, never the floor under them.
+        LLVector3 self = gAgent.getPositionAgent();
+        self.mV[VZ] = isAgentAvatarValid() ? (F32)SKMapPeople::feetZ(gAgentAvatarp) : self.mV[VZ] - AVATAR_HALF_HEIGHT_M;
+        wanted[gAgent.getID()] = self;
         for (const SKMapPeople::Person& p : SKMapPeople::instance().people())
         {
             if (p.mVisibility == skmap::Visibility::HIDDEN || !p.mZKnown)
@@ -1569,7 +1640,7 @@ U64 SKOverviewCapture::tacticalDissolve(Shot& shot, S32 w, S32 h)
                 continue;
             }
             LLVector3 floor = gAgent.getPosAgentFromGlobal(p.mPos);
-            floor.mV[VZ] = p.mWhere.mFound ? (F32)p.mWhere.mFloor : floor.mV[VZ] - AVATAR_HALF_HEIGHT_M; // global z is agent z
+            floor.mV[VZ] = (F32)p.mFeetZ; // global z is agent z
             wanted[p.mId] = floor;
         }
     }
@@ -1800,6 +1871,7 @@ void SKOverviewCapture::tactical()
     mTacticalViewport[2] = vw;
     mTacticalViewport[3] = vh;
     mTacticalReady = true;
+    mTacticalPickable = true;
     LL_INFOS_ONCE("SKOverview") << "tactical overview rendered " << vw << "x" << vh << ", census tris " << mCensus.triangles()
                                 << LL_ENDL;
 }
@@ -1900,107 +1972,58 @@ bool SKOverviewCapture::groundAt(const LLVector2& at, LLVector3d& world) const
     return true;
 }
 
-// static
-bool SKOverviewCapture::handleLeftClick(S32 x, S32 y, MASK mask, bool down)
+bool SKOverviewCapture::beginPan(S32 x, S32 y)
 {
-    if (!instanceExists())
+    // The composite clears mTacticalReady every frame, so a press between frames tests mTacticalPickable.
+    if (!tacticalShown() || !mTacticalPickable)
     {
+        panTrace("press ignored: no tactical frame shown yet");
         return false;
     }
-    SKOverviewCapture& self = instance();
-    if (!down && self.mPan.mPending)
+    const LLVector2 scale = gViewerWindow->getDisplayScale();
+    const LLVector2 at(x * scale.mV[VX] - mTacticalViewport[0], y * scale.mV[VY] - mTacticalViewport[1]);
+    if (at.mV[VX] < 0.f || at.mV[VY] < 0.f || at.mV[VX] >= mTacticalViewport[2] || at.mV[VY] >= mTacticalViewport[3])
     {
-        return self.leftClick(x, y, mask, down); // a release ends the drag even if the overview closed under it
-    }
-    return tacticalShown() && self.leftClick(x, y, mask, down);
-}
-
-bool SKOverviewCapture::leftClick(S32 x, S32 y, MASK mask, bool down)
-{
-    if (down)
-    {
-        // Modified presses keep their tools: alt-cam orbits, ctrl and shift select.
-        if (mask != MASK_NONE || !mTacticalReady)
-        {
-            return false;
-        }
-        const LLVector2 scale = gViewerWindow->getDisplayScale();
-        const LLVector2 at(x * scale.mV[VX] - mTacticalViewport[0], y * scale.mV[VY] - mTacticalViewport[1]);
-        if (at.mV[VX] < 0.f || at.mV[VY] < 0.f || at.mV[VX] >= mTacticalViewport[2] || at.mV[VY] >= mTacticalViewport[3])
-        {
-            return false;
-        }
-        LLVector3 from, dir;
-        if (!cursorRay(mTacticalView, mTacticalProj, mTacticalViewport, at, from, dir) || dir.mV[VZ] > -1e-6f)
-        {
-            return false;
-        }
-        LLVector3d grab_global;
-        if (!groundAt(at, grab_global))
-        {
-            return false;
-        }
-        const LLVector3 grab = gAgent.getPosAgentFromGlobal(grab_global);
-        mPan = Pan();
-        mPan.mPending = true;
-        mPan.mDownX = x;
-        mPan.mDownY = y;
-        mPan.mMask = mask;
-        mPan.mGrab = grab;
-        mPan.mView = mTacticalView;
-        mPan.mProj = mTacticalProj;
-        std::copy(std::begin(mTacticalViewport), std::end(mTacticalViewport), mPan.mViewport);
-        mPan.mEye = gAgentCamera.getCameraPositionGlobal();
-        mPan.mFocus = gAgentCamera.getFocusGlobal();
-        return true;
-    }
-    if (!mPan.mPending)
-    {
+        panTrace("press ignored: outside the tactical viewport");
         return false;
     }
-    const Pan press = mPan;
+    LLVector3 from, dir;
+    if (!cursorRay(mTacticalView, mTacticalProj, mTacticalViewport, at, from, dir) || dir.mV[VZ] > -1e-6f)
+    {
+        panTrace("press ignored: the cursor's ray does not point down");
+        return false;
+    }
+    LLVector3d grab_global;
+    if (!groundAt(at, grab_global))
+    {
+        panTrace("press ignored: no ground under the cursor");
+        return false;
+    }
     mPan = Pan();
-    if (!press.mActive && tacticalShown())
-    {
-        // Not a drag: the tool gets the click it would have had.
-        LLTool* tool = LLToolMgr::getInstance()->getCurrentTool();
-        if (tool && tool->handleAnyMouseClick(press.mDownX, press.mDownY, press.mMask, CLICK_LEFT, true))
-        {
-            tool->handleAnyMouseClick(x, y, mask, CLICK_LEFT, false);
-        }
-    }
+    mPan.mActive = true;
+    mPan.mGrab = gAgent.getPosAgentFromGlobal(grab_global);
+    mPan.mView = mTacticalView;
+    mPan.mProj = mTacticalProj;
+    std::copy(std::begin(mTacticalViewport), std::end(mTacticalViewport), mPan.mViewport);
+    mPan.mEye = gAgentCamera.getCameraPositionGlobal();
+    mPan.mFocus = gAgentCamera.getFocusGlobal();
     return true;
 }
 
-void SKOverviewCapture::updatePan()
+void SKOverviewCapture::pan(S32 x, S32 y)
 {
-    if (!mPan.mPending)
-    {
-        return;
-    }
-    if (!tacticalShown() || !gViewerWindow->getLeftMouseDown())
-    {
-        mPan = Pan(); // the release went elsewhere
-        return;
-    }
-    const LLCoordGL mouse = gViewerWindow->getCurrentMouse();
-    const LLVector2 scale = gViewerWindow->getDisplayScale();
     if (!mPan.mActive)
     {
-        const F32 dx = (F32)(mouse.mX - mPan.mDownX) * scale.mV[VX];
-        const F32 dy = (F32)(mouse.mY - mPan.mDownY) * scale.mV[VY];
-        if (dx * dx + dy * dy < PAN_THRESHOLD_PX * PAN_THRESHOLD_PX)
-        {
-            return;
-        }
-        mPan.mActive = true;
+        return;
     }
     // The camera only translates, so the press's ray through the cursor meets the grab's plane at Q and P - Q puts P
     // back under the cursor; nothing is picked again while dragging.
-    const LLVector2 at(mouse.mX * scale.mV[VX] - mPan.mViewport[0], mouse.mY * scale.mV[VY] - mPan.mViewport[1]);
+    const LLVector2 scale = gViewerWindow->getDisplayScale();
+    const LLVector2 at(x * scale.mV[VX] - mPan.mViewport[0], y * scale.mV[VY] - mPan.mViewport[1]);
     LLVector3 from, dir, q;
     if (!cursorRay(mPan.mView, mPan.mProj, mPan.mViewport, at, from, dir) || !rayPlane(from, dir, mPan.mGrab.mV[VZ], q))
     {
+        panTrace("drag step skipped: the cursor's ray misses the grab's plane");
         return;
     }
     LLVector3d focus = mPan.mFocus + LLVector3d(mPan.mGrab.mV[VX] - q.mV[VX], mPan.mGrab.mV[VY] - q.mV[VY], 0.0);
@@ -2042,8 +2065,6 @@ void SKOverviewCapture::drawMarkers3D(const Project& project, S32 vw, S32 vh, st
         LLVector3 mCentre;      // agent space, the avatar's position: the shape's origin
         LLQuaternion mRotation;
         skcensus::AvatarPose mPose = skcensus::AvatarPose::STANDING;
-        bool mHasHead = false;  // its head joint, the height the heading wedge is drawn at
-        LLVector3 mHead;
     };
     // A loaded avatar's own size, as the sim has it: getScale() is the agent size from its object update (what
     // llGetAgentSize reports), its box centred on the avatar's position, so its base is the floor the sim stands it
@@ -2074,11 +2095,6 @@ void SKOverviewCapture::drawMarkers3D(const Project& project, S32 vw, S32 vh, st
         {
             m.mFloor = avatar->getRenderPosition() - LLVector3(0.f, 0.f, avatar->getPelvisToFoot());
             m.mHeight = avatar->mBodySize.mV[VZ];
-        }
-        if (avatar->mHeadp)
-        {
-            m.mHead = avatar->mHeadp->getWorldPosition();
-            m.mHasHead = true;
         }
     };
     std::vector<Marker> markers;
@@ -2223,14 +2239,14 @@ void SKOverviewCapture::drawMarkers3D(const Project& project, S32 vw, S32 vh, st
             {
                 top_c = LLVector3(m.mCentre.mV[VX], m.mCentre.mV[VY], top_z);
             }
-            if (m.mHasHead && m.mHasHeading)
+            if (m.mHasHeading)
             {
-                // The minimap's heading wedge as a flat slab: a solid triangle just clear of the body at head height,
-                // along the body's heading, in the minimap's proportions to the body's radius.
+                // The minimap's heading wedge as a flat slab: a solid triangle just clear of the body, its top flush
+                // with the shape's, along the body's heading, in the minimap's proportions to the body's radius.
                 const LLVector3 ahead(std::cos(m.mHeading), std::sin(m.mHeading), 0.f);
                 const LLVector3 across(-ahead.mV[VY], ahead.mV[VX], 0.f);
-                const LLVector3 from(m.mCentre.mV[VX], m.mCentre.mV[VY], m.mHead.mV[VZ]);
                 const F32 body_r = m.mRadius;
+                const LLVector3 from(m.mCentre.mV[VX], m.mCentre.mV[VY], top_z - body_r * HEADING_THICK_PER_RADIUS * 0.5f);
                 const LLVector3 tip = from + ahead * (body_r * (1.f + HEADING_TIP_PER_RADIUS));
                 const LLVector3 base = from + ahead * (body_r * (1.f + HEADING_BASE_PER_RADIUS));
                 const LLVector3 l = base + across * (body_r * HEADING_HALF_PER_RADIUS);

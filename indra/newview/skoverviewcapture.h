@@ -87,8 +87,6 @@ public:
 
     /// A world right-click at the root view's (x, y): opens the mini-map's menus on the overview; false when it is off.
     static bool handleRightClick(S32 x, S32 y);
-    /// A world left button at the root view's (x, y): a drag pans the overview, a click is passed on to the tool.
-    static bool handleLeftClick(S32 x, S32 y, MASK mask, bool down);
 
     /// The tactical overview key: held, it shows the view until released; tapped, it latches it until the next tap.
     static void handleTacticalKey(bool down);
@@ -117,6 +115,12 @@ public:
     void onTopChanged(bool on_top) override;
     void renderModal(const LLRect& world_rect_raw) override;
     bool pickGround(S32 x, S32 y, LLVector3d& ground) const override;
+    /// SKToolMapPan's drag: the ground point grabbed at the press stays under the cursor.
+    bool beginPan(S32 x, S32 y) override;
+    void pan(S32 x, S32 y) override;
+    void endPan() override { mPan = Pan(); }
+    /// Clicks reach the pie, which picks the people and objects the overview draws.
+    bool passesClicks() const override { return true; }
     /// The flycam's height above the agent over a person's scale, so it crosses the view quickly from high up.
     F64 flycamScale(const LLVector3d& eye) const override;
 
@@ -189,7 +193,8 @@ private:
     LLMatrix4a mTacticalView;
     LLMatrix4a mTacticalProj;
     S32 mTacticalViewport[4] = {};
-    bool mTacticalReady = false;
+    bool mTacticalReady = false;    ///< rendered this frame, for the composite
+    bool mTacticalPickable = false; ///< the tactical view and viewport are a shown frame's, for clicks
     LLVector3 mTacticalCentre;   // agent space
     F32 mTacticalReach = 0.f;
     F32 mTacticalShadeZ = 0.f;      ///< agent-space z the height colours are relative to: the agent's floor, eased
@@ -218,14 +223,10 @@ private:
     void setTacticalCamera(const LLVector3d& eye, const LLVector3d& focus);
     /// The agent's region, and with SKTacticalBattlefieldNeighbours the connected regions touching it, global.
     bool battlefieldBounds(LLVector3d& lo, LLVector3d& hi) const;
-    /// A left-button drag over the overview: the ground point grabbed at the press stays under the cursor.
+    /// A drag over the overview, from the press SKToolMapPan began it with.
     struct Pan
     {
-        bool mPending = false;  // the button is down over the overview
-        bool mActive = false;   // and has moved past the drag threshold
-        S32 mDownX = 0;         // the press, root view coordinates
-        S32 mDownY = 0;
-        MASK mMask = 0;
+        bool mActive = false;
         LLVector3 mGrab;        // agent space
         LLMatrix4a mView;       // the tactical camera at the press
         LLMatrix4a mProj;
@@ -233,9 +234,6 @@ private:
         LLVector3d mEye;
         LLVector3d mFocus;
     } mPan;
-    bool leftClick(S32 x, S32 y, MASK mask, bool down);
-    /// Moves the camera for the cursor while a pan is under way; called each frame.
-    void updatePan();
     /// Works out the per-building cut (SKOverviewCensus::applyCut) for the agent and the people the overview marks.
     void updateCut();
     /// An enclosed room's floor polys' bounds, global, cached a few seconds.
@@ -250,6 +248,15 @@ private:
         std::shared_ptr<std::set<std::pair<S32, S32>>> mCells;
     };
     std::vector<Room> mRooms;
+    /// Whether someone stands in outdoor air, which cuts nothing for them, held through a doorway's flicker.
+    bool outdoorsAt(const LLUUID& id, const LLVector3d& feet, F64 now);
+    struct Outdoors
+    {
+        bool mOut = false;      ///< the held answer
+        F64 mSince = -1.0;      ///< when the air first read otherwise, or -1
+        F64 mSeen = 0.0;
+    };
+    std::map<LLUUID, Outdoors> mOutdoors;
     /// What the last tactical capture showed: the same again reuses its image.
     struct TacticalKey
     {

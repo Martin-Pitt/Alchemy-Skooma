@@ -59,6 +59,13 @@ public:
     /// The mode's ground under a point of the world view (scaled UI coordinates), where an alt-click
     /// focuses the camera. False when the point hits nothing.
     virtual bool pickGround(S32 x, S32 y, LLVector3d& ground) const { return false; }
+    /// A plain left press at (x, y), scaled UI coordinates: grabs the ground there for a drag, false when it
+    /// hits nothing. pan() moves the camera so the grabbed point stays under the cursor; endPan() lets go.
+    virtual bool beginPan(S32 x, S32 y) { return false; }
+    virtual void pan(S32 x, S32 y) {}
+    virtual void endPan() {}
+    /// Whether plain clicks that are not drags reach the world's tool, which picks what the mode draws.
+    virtual bool passesClicks() const { return false; }
     /// How much faster the flycam translates from `eye` while the mode is on top.
     virtual F64 flycamScale(const LLVector3d& eye) const { return 1.0; }
     /// RLVa restrictions of the mode's own, on top of the camera locks every mode honours.
@@ -126,8 +133,14 @@ public:
     /// The camera the sim is told about in agent updates: the world camera while covered, so the
     /// interest list stays where the agent is. Leaves the arguments alone otherwise.
     static void worldCameraForUpdate(LLVector3& position_agent, LLVector3& at, LLVector3& left, LLVector3& up);
+    /// While the tactical overview is shown, raises the agent update's Far by SKTacticalInterestFarScale up to SKTacticalInterestFarCap.
+    static void tacticalInterestFar(F32& draw_m);
 
 private:
+    /// The tactical overview is shown and SKTacticalSendCamera has its camera steer the interest list.
+    static bool tacticalInterest();
+    static void updateTacticalInterestMode(bool tactical);
+
     friend class SKModalMode;
     /// Drops a mode being destroyed without calling into it.
     void forget(SKModalMode* mode);
