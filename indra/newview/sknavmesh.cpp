@@ -31,6 +31,7 @@
 #include "sknavannotator.h"
 #include "sknavcensusio.h"
 #include "sknavexport.h"
+#include "sknavfloors.h"
 #include "sknavlayout.h"
 #include "sknavoverlay.h"
 #include "sknavpalette.h"
@@ -1841,6 +1842,7 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
             tile.mStaticAt = 0.0;
             tile.mRaster.reset();
         }
+        markSpansDirty(tile);
         tileBlip(mesh, tile);
         mRevision++;                // new air: the spaces over it are cut again
         return;
@@ -1925,17 +1927,7 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
         tile.mBuilt = 0;            // scheduled again, and built rather than loaded
         tile.mDiskRefused = true;
     }
-    // The floors beside a ladder or a shaft may have moved with the tile.
-    for (auto& region : mFeatureLinks)
-    {
-        for (auto& entry : region.second)
-        {
-            if (overlapsXY(entry.second.mMin, entry.second.mMax, tile.mMin, tile.mMax))
-            {
-                entry.second.mDirty = true;
-            }
-        }
-    }
+    markSpansDirty(tile);
     tileBlip(mesh, tile);
     mRevision++;                    // a published tile is one the overlay redraws
 }
@@ -2392,16 +2384,7 @@ void SKNavMesh::publishStamped(const LLUUID& mesh_id, U32 generation, const Tile
     {
         tile.mRaster.reset();
     }
-    for (auto& region : mFeatureLinks)
-    {
-        for (auto& entry : region.second)
-        {
-            if (overlapsXY(entry.second.mMin, entry.second.mMax, tile.mMin, tile.mMax))
-            {
-                entry.second.mDirty = true;
-            }
-        }
-    }
+    markSpansDirty(tile);
     tileBlip(mesh, tile);
     mRevision++;
 }
@@ -3741,6 +3724,21 @@ void SKNavMesh::syncFeatureLinks(const SKCensusSnapshotPtr& snap)
     }
 }
 
+void SKNavMesh::markSpansDirty(const Tile& tile)
+{
+    // The floors beside a ladder or a shaft may have moved with the tile.
+    for (auto& region : mFeatureLinks)
+    {
+        for (auto& entry : region.second)
+        {
+            if (overlapsXY(entry.second.mMin, entry.second.mMax, tile.mMin, tile.mMax))
+            {
+                entry.second.mDirty = true;
+            }
+        }
+    }
+}
+
 void SKNavMesh::findExits(FeatureSpan& span) const
 {
     TileBuildInput probe;
@@ -3750,6 +3748,7 @@ void SKNavMesh::findExits(FeatureSpan& span) const
     // probed round the span's plan an agent's radius out, every half metre.
     const F64 above = 1.25;
     const F64 step = 0.5;
+    const std::shared_ptr<const SKNavWorldView> view = mPolysOn ? nullptr : this->view();
     for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
     {
         span.mExits[cls].clear();
@@ -3761,14 +3760,26 @@ void SKNavMesh::findExits(FeatureSpan& span) const
         const F64 xm = (x0 + x1) * 0.5, ym = (y0 + y1) * 0.5;
         const LLVector3d ring[8] = { LLVector3d(x0, y0, 0), LLVector3d(xm, y0, 0), LLVector3d(x1, y0, 0), LLVector3d(x1, ym, 0),
                                      LLVector3d(x1, y1, 0), LLVector3d(xm, y1, 0), LLVector3d(x0, y1, 0), LLVector3d(x0, ym, 0) };
+        // With polys off the floors are the air's, each ring point's column read once.
+        std::vector<sknav::Enclosure> columns[8];
+        if (!mPolysOn && view)
+        {
+            for (size_t k = 0; k < 8; ++k)
+            {
+                view->gapsAt(ring[k], [&columns, k](const sknav::Enclosure& e) { columns[k].push_back(e); });
+            }
+        }
         std::vector<LLVector3d> found;
         for (F64 z = span.mMin.mdV[VZ]; z <= span.mMax.mdV[VZ] + above; z += step)
         {
-            for (const LLVector3d& at : ring)
+            for (size_t k = 0; k < 8; ++k)
             {
+                const LLVector3d& at = ring[k];
                 F32 floor = 0.f;
                 const LLVector3d p(at.mdV[VX], at.mdV[VY], z);
-                if (floorUnder(p, static_cast<AgentClass>(cls), floor) && std::fabs(floor - z) <= climb
+                const bool has = mPolysOn ? floorUnder(p, static_cast<AgentClass>(cls), floor)
+                                          : sknav::pickFloor(columns[k], static_cast<F32>(z - climb), static_cast<F32>(z + climb), floor);
+                if (has && std::fabs(floor - z) <= climb
                     && floor >= span.mMin.mdV[VZ] - climb && floor <= span.mMax.mdV[VZ] + above)
                 {
                     found.emplace_back(at.mdV[VX], at.mdV[VY], floor);
