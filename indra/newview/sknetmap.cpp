@@ -245,11 +245,11 @@ namespace skmapdraw
     skmap::ChevronStyle floorChevrons(skmap::FloorRelation floor, F32 floor_delta)
     {
         static LLCachedControl<bool> chevrons(gSavedSettings, "SKMapFloorChevrons", true);
-        static LLCachedControl<F32> band1(gSavedSettings, "SKMapFloorChevronBand1", 2.5f);
-        static LLCachedControl<F32> band2(gSavedSettings, "SKMapFloorChevronBand2", 6.f);
-        static LLCachedControl<F32> band3(gSavedSettings, "SKMapFloorChevronBand3", 12.f);
-        static LLCachedControl<F32> band4(gSavedSettings, "SKMapFloorChevronBand4", 24.f);
-        static LLCachedControl<F32> band5(gSavedSettings, "SKMapFloorChevronBand5", 48.f);
+        static LLCachedControl<F32> band1(gSavedSettings, "SKMapFloorChevronBand1", 8.f);
+        static LLCachedControl<F32> band2(gSavedSettings, "SKMapFloorChevronBand2", 16.f);
+        static LLCachedControl<F32> band3(gSavedSettings, "SKMapFloorChevronBand3", 32.f);
+        static LLCachedControl<F32> band4(gSavedSettings, "SKMapFloorChevronBand4", 64.f);
+        static LLCachedControl<F32> band5(gSavedSettings, "SKMapFloorChevronBand5", 128.f);
         if (!chevrons || (floor != skmap::FloorRelation::ABOVE && floor != skmap::FloorRelation::BELOW))
         {
             return skmap::ChevronStyle();
