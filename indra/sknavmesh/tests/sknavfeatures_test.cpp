@@ -32,6 +32,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <random>
 
 namespace
 {
@@ -835,5 +836,204 @@ namespace
         ensure("swinging: plane still known", d.size() == 1 && d[0].mPlaneKnown);
         ensure("the same doorway", shut.size() == 1 && d[0].mPlanePoint == shut[0].mPlanePoint && d[0].mWidth == shut[0].mWidth
                                        && d[0].mMin == shut[0].mMin && d[0].mMax == shut[0].mMax);
+    }
+
+    // A record region-placed as the census makes them: global box, local geometry.
+    const LLVector3d ORIGIN(256000.0, 256256.0, 0.0);
+
+    RecordPtr placed(U32 n, const LLVector3d& centre, const LLVector3& half, F32 turn, bool triangles)
+    {
+        auto r = std::make_shared<Record>();
+        r->mPart = id(n);
+        r->mRoot = id(n);
+        r->mOrigin = ORIGIN;
+        r->mCenter = LLVector3(centre - ORIGIN);
+        r->mHalf = half;
+        r->mAxes[0].set(std::cos(turn), std::sin(turn), 0.f);
+        r->mAxes[1].set(-std::sin(turn), std::cos(turn), 0.f);
+        r->mAxes[2].set(0.f, 0.f, 1.f);
+        r->mShape = Shape::BOX;
+        LLVector3 span;
+        for (S32 k = 0; k < 3; ++k)
+        {
+            for (S32 j = 0; j < 3; ++j)
+            {
+                span.mV[j] += std::fabs(r->mAxes[k].mV[j]) * half.mV[k];
+            }
+        }
+        r->mMin = centre - LLVector3d(span);
+        r->mMax = centre + LLVector3d(span);
+        if (triangles)
+        {
+            auto c = [&](S32 i) {
+                return r->mCenter + r->mAxes[0] * (i & 1 ? half.mV[0] : -half.mV[0]) + r->mAxes[1] * (i & 2 ? half.mV[1] : -half.mV[1])
+                    + r->mAxes[2] * (i & 4 ? half.mV[2] : -half.mV[2]);
+            };
+            const S32 quads[6][4] = { { 0, 2, 6, 4 }, { 1, 5, 7, 3 }, { 0, 4, 5, 1 }, { 2, 3, 7, 6 }, { 0, 1, 3, 2 }, { 4, 6, 7, 5 } };
+            auto tris = std::make_shared<std::vector<LLVector3>>();
+            for (const auto& q : quads)
+            {
+                for (S32 k : { q[0], q[1], q[2], q[0], q[2], q[3] })
+                {
+                    tris->push_back(c(k));
+                }
+            }
+            r->mTriangles = tris;
+            r->mShape = Shape::TRIANGLES;
+        }
+        return r;
+    }
+
+    // A leaf turned about z, its box the turned box's.
+    FeaturePart turnedLeaf(U32 n, const LLVector3d& centre, F32 width, F32 thick, F32 height, F32 turn)
+    {
+        FeaturePart p;
+        p.mPart = id(n);
+        p.mRoot = id(n);
+        p.mCenter = centre;
+        p.mAxes[0].set(std::cos(turn), std::sin(turn), 0.f);
+        p.mAxes[1].set(-std::sin(turn), std::cos(turn), 0.f);
+        p.mAxes[2].set(0.f, 0.f, 1.f);
+        p.mHalf.set(thick * 0.5f, width * 0.5f, height * 0.5f);
+        LLVector3 span;
+        for (S32 k = 0; k < 3; ++k)
+        {
+            for (S32 j = 0; j < 3; ++j)
+            {
+                span.mV[j] += std::fabs(p.mAxes[k].mV[j]) * p.mHalf.mV[k];
+            }
+        }
+        p.mMin = centre - LLVector3d(span);
+        p.mMax = centre + LLVector3d(span);
+        return p;
+    }
+
+    // Leaves among walls, frames and clutter close enough to touch them, some
+    // of it triangles, some of it larger than the index buckets.
+    struct CoverScene
+    {
+        std::vector<RecordPtr> mRecords;
+        std::vector<FeaturePart> mLeaves;
+    };
+
+    CoverScene coverScene(U32 seed)
+    {
+        std::mt19937 rng(seed);
+        std::uniform_real_distribution<F32> u(0.f, 1.f);
+        CoverScene s;
+        U32 n = 1;
+        for (S32 i = 0; i < 120; ++i)
+        {
+            const LLVector3d c = ORIGIN + LLVector3d(20.0 + u(rng) * 60.0, 20.0 + u(rng) * 60.0, 22.25 + 1.6);
+            const F32 turn = u(rng) < 0.5f ? 0.f : u(rng) * F_TWO_PI;
+            const FeaturePart leaf = turnedLeaf(n++, c, 0.6f + u(rng) * 1.5f, 0.02f + u(rng) * 0.3f, 2.1f + u(rng), turn);
+            s.mLeaves.push_back(leaf);
+            // Up to three things by its faces, near enough to cover them or not.
+            for (S32 k = 0; k < i % 4; ++k)
+            {
+                const F32 side = u(rng) < 0.5f ? -1.f : 1.f;
+                const F32 off = leaf.mHalf.mV[0] + u(rng) * 0.5f;
+                const LLVector3d at = c + LLVector3d(leaf.mAxes[0] * (side * off) + leaf.mAxes[1] * ((u(rng) - 0.5f) * 2.f));
+                const LLVector3 half(0.05f + u(rng) * 0.3f, 0.2f + u(rng), 0.5f + u(rng) * 1.5f);
+                const F32 skew = u(rng) < 0.7f ? 0.f : u(rng);
+                s.mRecords.push_back(placed(n++, at, half, turn + skew, u(rng) < 0.5f));
+            }
+        }
+        // A megaprim floor under it all and a region-long wall.
+        s.mRecords.push_back(placed(n++, ORIGIN + LLVector3d(128.0, 128.0, 22.0), LLVector3(128.f, 128.f, 0.2f), 0.f, true));
+        s.mRecords.push_back(placed(n++, ORIGIN + LLVector3d(50.0, 128.0, 23.0), LLVector3(0.1f, 128.f, 3.f), 0.f, false));
+        s.mRecords.push_back(nullptr);
+        std::shuffle(s.mRecords.begin(), s.mRecords.end(), rng);
+        return s;
+    }
+
+    TEST_CASE("sknavfeatures: a record index query holds every record whose plan meets the box in record order", "[sknavfeatures]")
+    {
+        const CoverScene s = coverScene(1);
+        const RecordIndex index(s.mRecords, 4.0);
+        std::mt19937 rng(2);
+        std::uniform_real_distribution<F64> u(0.0, 1.0);
+        std::vector<const RecordPtr*> found;
+        for (S32 q = 0; q < 200; ++q)
+        {
+            const LLVector3d mn = ORIGIN + LLVector3d(u(rng) * 100.0, u(rng) * 100.0, 0.0);
+            const LLVector3d mx = mn + LLVector3d(u(rng) * 6.0, u(rng) * 6.0, 50.0);
+            index.query(mn, mx, found);
+            CHECK(std::is_sorted(found.begin(), found.end()));
+            CHECK(std::adjacent_find(found.begin(), found.end()) == found.end());
+            for (const RecordPtr& r : s.mRecords)
+            {
+                if (r && r->mMin.mdV[VX] <= mx.mdV[VX] && mn.mdV[VX] <= r->mMax.mdV[VX] && r->mMin.mdV[VY] <= mx.mdV[VY]
+                    && mn.mdV[VY] <= r->mMax.mdV[VY])
+                {
+                    CHECK(std::find(found.begin(), found.end(), &r) != found.end());
+                }
+            }
+        }
+    }
+
+    TEST_CASE("sknavfeatures: face cover over the index is the walk over every record", "[sknavfeatures]")
+    {
+        const FeatureParams params;
+        for (U32 seed = 1; seed <= 4; ++seed)
+        {
+            const CoverScene s = coverScene(seed);
+            const RecordIndex index(s.mRecords);
+            S32 covered = 0, open = 0;
+            for (const FeaturePart& leaf : s.mLeaves)
+            {
+                const F32 walked = faceCover(leaf, s.mRecords, params);
+                CAPTURE(seed, walked);
+                CHECK(faceCover(leaf, index, params) == walked);
+                covered += walked > 0.f ? 1 : 0;
+                open += walked == 0.f ? 1 : 0;
+            }
+            // The scene exercises both answers, not only one.
+            CHECK(covered > 10);
+            CHECK(open > 0);
+        }
+    }
+
+    TEST_CASE("sknavfeatures: the face cover cache casts again only when the leaf its neighbours or the parameters change", "[sknavfeatures]")
+    {
+        FeatureParams params;
+        const FeaturePart leaf = part(1, 1, 0, 0, 0, 0.125, 1.06, 3.0);
+        std::vector<RecordPtr> records = { slab(6, 0.125, -2, 0, 0.425, 3, 4, true), slab(7, 40, 40, 0, 41, 41, 3) };
+        FaceCoverCache cache;
+        const F32 first = cache.measure(leaf, RecordIndex(records), params);
+        CHECK(first > 0.95f);
+        CHECK(cache.mMisses == 1);
+
+        // Nothing changed, or only something far off: the answer kept.
+        CHECK(cache.measure(leaf, RecordIndex(records), params) == first);
+        records[1] = slab(7, 40, 40, 0, 42, 42, 3);
+        CHECK(cache.measure(leaf, RecordIndex(records), params) == first);
+        CHECK(cache.mHits == 2);
+
+        // The wall rebuilt, even as it was: a new record is cast against.
+        records[0] = slab(6, 0.125, -2, 0, 0.425, 3, 4, true);
+        CHECK(cache.measure(leaf, RecordIndex(records), params) == first);
+        CHECK(cache.mMisses == 2);
+
+        // The wall taken away, the leaf moved, a parameter changed.
+        records[0] = slab(6, 5, -2, 0, 5.3, 3, 4, true);
+        CHECK(cache.measure(leaf, RecordIndex(records), params) == 0.f);
+        const FeaturePart moved = part(1, 1, 4.9, 0, 0, 5.025, 1.06, 3.0);
+        CHECK(cache.measure(moved, RecordIndex(records), params) == faceCover(moved, records, params));
+        params.mFaceReach = 0.01f;
+        CHECK(cache.measure(moved, RecordIndex(records), params) == faceCover(moved, records, params));
+        CHECK(cache.mMisses == 5);
+        CHECK(cache.mHits == 2);
+
+        // A part not measured between two prunes is forgotten.
+        CHECK(cache.size() == 1);
+        cache.prune();
+        CHECK(cache.size() == 1);
+        cache.prune();
+        CHECK(cache.size() == 0);
+
+        // Not door-shaped: never cast, never kept.
+        CHECK(cache.measure(part(2, 2, 0, 0, 0, 1, 1, 1), RecordIndex(records), params) < 0.f);
+        CHECK(cache.size() == 0);
     }
 }

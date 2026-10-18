@@ -257,6 +257,8 @@ private:
     std::unordered_map<LLUUID, LeafTransform> mDoorways;
     /// This scan's sim transform of every leaf, kept until the scan finishes.
     std::unordered_map<LLUUID, LeafTransform> mLeafTransforms;
+    /// Each door-shaped part's face cover, cast again only when it or its neighbours change.
+    sknav::FaceCoverCache mFaceCover;
     std::map<std::string, F32> mDemands;
     U64 mStamp = 0;
     F64 mRolesRequestedAt = -1.f;

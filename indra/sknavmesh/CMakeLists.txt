@@ -145,6 +145,7 @@ if(AL_BUILD_TESTS)
       tests/sknavcensusio_test.cpp
       tests/sknavenclosurerepair_test.cpp
       tests/sknavfeatures_test.cpp
+    BENCH_SOURCES tests/sknavfeatures_bench.cpp
     LIBRARIES sknavmesh llcommon
   )
 endif()

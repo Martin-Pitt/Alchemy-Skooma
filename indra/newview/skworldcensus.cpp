@@ -1134,7 +1134,11 @@ void SKWorldCensus::classify(SKCensusSnapshot& snap)
     std::vector<LLUUID> ids;
     for (const FeaturePart& p : mScan.mFeatureParts)
     {
-        ids.push_back(p.mRoot);
+        // A linkset's parts come together, so most repeats are dropped before the sort.
+        if (ids.empty() || ids.back() != p.mRoot)
+        {
+            ids.push_back(p.mRoot);
+        }
     }
     for (const auto& entry : mHistory)
     {
@@ -1244,13 +1248,15 @@ void SKWorldCensus::classify(SKCensusSnapshot& snap)
     // Only a door-shaped part with something to say for it is worth the rays.
     {
         LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - classify face cover");
+        const sknav::RecordIndex index(snap.mRecords);
         for (FeaturePart& p : mScan.mFeatureParts)
         {
             if ((p.mScripted || p.mTouch || !p.mName.empty()) && doorShaped(p, params))
             {
-                p.mFaceCover = faceCover(p, snap.mRecords, params);
+                p.mFaceCover = mFaceCover.measure(p, index, params);
             }
         }
+        mFaceCover.prune();
     }
     {
         LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - classify features");
