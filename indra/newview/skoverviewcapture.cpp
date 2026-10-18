@@ -828,6 +828,25 @@ void SKOverviewCapture::resolve(LLRenderTarget& capture, LLRenderTarget& resolve
     glViewport(gGLViewport[0], gGLViewport[1], gGLViewport[2], gGLViewport[3]);
 }
 
+namespace
+{
+    // The census's hard ceiling, SKOverviewMaxAbove over the agent's floor, as an eye-space plane: a skybox kilometres up
+    // never roofs the view, whatever its base or the cut rules make of it.
+    void uniformCeiling(GLint prog, const LLMatrix4a& view)
+    {
+        static LLCachedControl<F32> max_above(gSavedSettings, "SKOverviewMaxAbove", 500.f);
+        const F32 ceiling = gAgent.getPositionAgent().mV[VZ] - AVATAR_HALF_HEIGHT_M + llmax((F32)max_above, 1.f);
+        LLVector4a up, normal_eye, origin_eye, zero;
+        up.set(0.f, 0.f, -1.f, 0.f);
+        view.rotate(up, normal_eye);
+        zero.clear();
+        view.affineTransform(zero, origin_eye);
+        const F32 plane[4] = { normal_eye.getF32ptr()[0], normal_eye.getF32ptr()[1], normal_eye.getF32ptr()[2],
+                               ceiling - normal_eye.dot3(origin_eye).getF32() };
+        glUniform4fv(glGetUniformLocation(prog, "sk_ceiling"), 1, plane);
+    }
+}
+
 void SKOverviewCapture::drawMovers(const Shot& shot)
 {
     LL_PROFILE_ZONE_SCOPED;
@@ -865,6 +884,7 @@ void SKOverviewCapture::drawMovers(const Shot& shot)
         sGeom.bind();
         glUniform4fv(glGetUniformLocation(sGeom.mProgramObject, "clip_plane"), 1, no_cut);
         glUniformMatrix3fv(glGetUniformLocation(sGeom.mProgramObject, "sk_eye_to_world"), 1, GL_FALSE, eye_to_world);
+        uniformCeiling(sGeom.mProgramObject, shot.mView);
         LLGLDepthTest depth(GL_TRUE, GL_TRUE, GL_LEQUAL);
         LLGLDisable cull_face(GL_CULL_FACE);
         gGL.setColorMask(true, true, false, true);
@@ -937,6 +957,7 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
             geom.bind();
             glUniform4fv(glGetUniformLocation(geom.mProgramObject, "clip_plane"), 1, shot.mPartCuts ? no_cut : plane);
             glUniformMatrix3fv(glGetUniformLocation(geom.mProgramObject, "sk_eye_to_world"), 1, GL_FALSE, eye_to_world);
+            uniformCeiling(geom.mProgramObject, shot.mView);
             static LLCachedControl<U32> debug_view(gSavedSettings, "SKOverviewDebugView", 0);
             glUniform1i(glGetUniformLocation(geom.mProgramObject, "sk_debug_cut"), shot.mPartCuts && debug_view == 5 ? 1 : 0);
             if (shot.mPartCuts)

@@ -29,6 +29,7 @@ out vec4 frag_color;
 
 uniform vec4 color;             // R: the class code / 255
 uniform vec4 clip_plane;        // eye space; keep dot(p, xyz) + w >= 0
+uniform vec4 sk_ceiling;        // eye space, the same form: nothing this far over the agent's floor is drawn
 uniform mat3 sk_eye_to_world;
 uniform int sk_debug_cut;       // 1: G and A carry the part's cut height for debug view 5, not its normal
 
@@ -78,7 +79,7 @@ vec2 skOctEncode(vec3 n)
 
 void main()
 {
-    if (dot(vary_position, clip_plane.xyz) + clip_plane.w < 0.0)
+    if (dot(vary_position, clip_plane.xyz) + clip_plane.w < 0.0 || dot(vary_position, sk_ceiling.xyz) + sk_ceiling.w < 0.0)
     {
         discard;
     }

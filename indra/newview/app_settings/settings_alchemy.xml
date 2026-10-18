@@ -5854,6 +5854,17 @@
             <key>Value</key>
             <integer>0</integer>
         </map>
+        <key>SKOverviewMaxAbove</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres over the agent's floor above which the mini-map and tactical overview never draw census geometry.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>500.0</real>
+        </map>
         <key>SKTacticalDissolve</key>
         <map>
             <key>Comment</key>
