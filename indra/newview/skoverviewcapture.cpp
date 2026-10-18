@@ -125,7 +125,6 @@ namespace
         static LLCachedControl<U32> mode(gSavedSettings, "SKTacticalCameraMode", 0);
         return mode == 0;
     }
-    const F64 TACTICAL_TAP_S = 0.2;
     const F64 MAPS_WANTED_S = 2.0;  // the region maps keep capturing this long after a map last drew them
     F64 sMapsWantedAt = -1.0;
 
@@ -291,12 +290,15 @@ void SKOverviewCapture::updateCapsLockCapture()
 void SKOverviewCapture::handleTacticalKey(bool down)
 {
     static F64 pressed_at = -1.0;
+    static U32 pressed_frame = 0;
     static bool latched = false;
     static bool closing = false;
+    static LLCachedControl<F32> tap_s(gSavedSettings, "SKTacticalTapSeconds", 0.35f);
     const F64 now = LLFrameTimer::getTotalSeconds();
     if (down)
     {
         pressed_at = now;
+        pressed_frame = LLFrameTimer::getFrameCount();
         closing = latched;
         latched = false;
         gSavedSettings.setBOOL("SKTacticalOverview", !closing);
@@ -307,7 +309,8 @@ void SKOverviewCapture::handleTacticalKey(bool down)
         closing = false;
         return;
     }
-    if (now - pressed_at < TACTICAL_TAP_S)
+    // A release within a couple of frames is a tap however long they took: opening the view stalls a frame.
+    if (now - pressed_at < (F64)tap_s || LLFrameTimer::getFrameCount() - pressed_frame <= 2)
     {
         latched = true;
         return;

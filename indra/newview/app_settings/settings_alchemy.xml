@@ -5810,6 +5810,17 @@
             <key>Value</key>
             <real>0.5</real>
         </map>
+        <key>SKTacticalTapSeconds</key>
+        <map>
+            <key>Comment</key>
+            <string>A tactical overview key press released within this many seconds, or within two frames, is a tap that latches the view open; longer is a hold that closes it on release.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.35</real>
+        </map>
         <key>SKTacticalPitch</key>
         <map>
             <key>Comment</key>
