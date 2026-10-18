@@ -30,6 +30,7 @@
 #include "llsmoothstep.h"
 
 #include "llagent.h"
+#include "llappviewer.h"
 #include "llvoavatarself.h"
 #include "llagentcamera.h"
 #include "llviewerjoystick.h"
@@ -75,6 +76,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <unordered_map>
 
 extern bool gCubeSnapshot;
 
@@ -783,6 +785,7 @@ void SKOverviewCapture::renderModal(const LLRect& world_rect_raw)
 {
     // The display loop skips the world, and with it the overview's per-frame work: the maps, the census and the view.
     updateCapsLockCapture();
+    applyKeyPan();
     if (mapsWanted() || mTacticalOpen)
     {
         frame();
@@ -2005,6 +2008,81 @@ void SKOverviewCapture::pan(S32 x, S32 y)
         }
     }
     setTacticalCamera(mPan.mEye + (focus - mPan.mFocus), focus);
+}
+
+// static
+bool SKOverviewCapture::handleKeyPan(const std::string& action, bool fast)
+{
+    static const std::unordered_map<std::string, std::pair<F32, F32>> steps = {
+        {"push_forward", {1.f, 0.f}}, {"run_forward", {1.f, 0.f}},   {"push_backward", {-1.f, 0.f}}, {"run_backward", {-1.f, 0.f}},
+        {"slide_left", {0.f, 1.f}},   {"turn_left", {0.f, 1.f}},     {"run_left", {0.f, 1.f}},       {"slide_right", {0.f, -1.f}},
+        {"turn_right", {0.f, -1.f}},  {"run_right", {0.f, -1.f}},
+    };
+    if (!tacticalShown())
+    {
+        return false;
+    }
+    const auto it = steps.find(action);
+    if (it == steps.end())
+    {
+        return false;
+    }
+    // Several keys bound to one direction count once.
+    SKOverviewCapture& self = instance();
+    self.mKeyForward = llclamp(self.mKeyForward + it->second.first, -1.f, 1.f);
+    self.mKeyLeft = llclamp(self.mKeyLeft + it->second.second, -1.f, 1.f);
+    self.mKeyFast |= fast || action.compare(0, 4, "run_") == 0;
+    return true;
+}
+
+void SKOverviewCapture::applyKeyPan()
+{
+    const F32 forward_step = mKeyForward;
+    const F32 left_step = mKeyLeft;
+    const bool fast = mKeyFast;
+    mKeyForward = mKeyLeft = 0.f;
+    mKeyFast = false;
+    if ((forward_step == 0.f && left_step == 0.f) || mPan.mActive || !tacticalShown())
+    {
+        return;
+    }
+    // Screen-up on the ground from the live camera; looking straight down, its up axis is screen-up.
+    const LLViewerCamera* camera = LLViewerCamera::getInstance();
+    LLVector3 forward = camera->getAtAxis();
+    forward.mV[VZ] = 0.f;
+    if (forward.normVec() < 0.05f)
+    {
+        forward = camera->getUpAxis();
+        forward.mV[VZ] = 0.f;
+        if (forward.normVec() < 1.0e-3f)
+        {
+            return;
+        }
+    }
+    const LLVector3 left(-forward.mV[VY], forward.mV[VX], 0.f);
+    LLVector3 dir = forward * forward_step + left * left_step;
+    dir.normVec();
+
+    // A fraction of the visible ground's width a second, so it feels the same at any zoom.
+    static LLCachedControl<F32> speed_setting(gSavedSettings, "SKTacticalKeyPanSpeed", 0.5f);
+    const LLVector3d eye = gAgentCamera.getCameraPositionGlobal();
+    const LLVector3d focus = gAgentCamera.getFocusGlobal();
+    const F32 distance = llmax((F32)(eye - focus).magVec(), 1.f);
+    const F32 ground_width = 2.f * distance * std::tan(camera->getView() * camera->getAspect() * 0.5f);
+    const F32 metres = ground_width * llmax((F32)speed_setting, 0.f) * (fast ? 3.f : 1.f) * llmin(gFrameIntervalSeconds.value(), 0.1f);
+
+    LLVector3d moved = focus + LLVector3d(dir * metres);
+    LLVector3d lo, hi;
+    if (battlefieldBounds(lo, hi))
+    {
+        for (S32 i = VX; i <= VY; ++i)
+        {
+            const F64 min_v = llmin(lo.mdV[i] - PAN_MARGIN_M, focus.mdV[i]);
+            const F64 max_v = llmax(hi.mdV[i] + PAN_MARGIN_M, focus.mdV[i]);
+            moved.mdV[i] = llclamp(moved.mdV[i], min_v, max_v);
+        }
+    }
+    setTacticalCamera(eye + (moved - focus), moved);
 }
 
 template <typename Project>

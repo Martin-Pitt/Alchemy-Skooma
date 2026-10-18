@@ -5788,6 +5788,17 @@
             <key>Value</key>
             <integer>0</integer>
         </map>
+        <key>SKTacticalKeyPanSpeed</key>
+        <map>
+            <key>Comment</key>
+            <string>How fast the movement keys pan the tactical overview, in widths of the visible ground a second; Shift or a run binding triples it.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.5</real>
+        </map>
         <key>SKTacticalPitch</key>
         <map>
             <key>Comment</key>

@@ -1718,6 +1718,13 @@ bool LLViewerInput::scanKey(const std::vector<LLKeyboardBinding> &binding,
     {
         if (binding[i].mKey == key)
         {
+            // <SK:Nexii> tactical overview: held movement keys pan the map instead of moving the avatar
+            if ((key_down || key_level) && (binding[i].mMask & mask) == binding[i].mMask &&
+                SKOverviewCapture::handleKeyPan(binding[i].mFunctionName, (mask & MASK_SHIFT) != 0))
+            {
+                continue;
+            }
+            // </SK:Nexii>
             if (SKModalView::blocksAction(binding[i].mFunctionName) && !(key_up && !key_down && !key_level)) // <SK:Nexii> modal view: the avatar stays put; only a release passes, to stop it
             {
                 continue;

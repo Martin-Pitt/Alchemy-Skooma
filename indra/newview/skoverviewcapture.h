@@ -90,6 +90,8 @@ public:
 
     /// The tactical overview key: held, it shows the view until released; tapped, it latches it until the next tap.
     static void handleTacticalKey(bool down);
+    /// A held movement binding while the overview is shown: it pans the map on the ground instead of moving the avatar.
+    static bool handleKeyPan(const std::string& action, bool fast);
 
     /// A map drew the region maps this frame: they are captured while one keeps asking.
     static void noteMapsWanted();
@@ -234,6 +236,11 @@ private:
         LLVector3d mEye;
         LLVector3d mFocus;
     } mPan;
+    /// The movement keys held this frame, as forward and left steps on the ground, applied and cleared each frame.
+    void applyKeyPan();
+    F32 mKeyForward = 0.f;
+    F32 mKeyLeft = 0.f;
+    bool mKeyFast = false;
     /// Works out the per-building cut (SKOverviewCensus::applyCut) for the agent and the people the overview marks.
     void updateCut();
     /// An enclosed room's floor polys' bounds, global, cached a few seconds.
