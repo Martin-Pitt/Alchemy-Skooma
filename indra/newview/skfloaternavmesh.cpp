@@ -26,6 +26,7 @@
 
 #include "skfloaternavmesh.h"
 
+#include "llcombobox.h"
 #include "llfloaterreg.h"
 #include "lluictrl.h"
 #include "llviewercontrol.h"
@@ -102,6 +103,8 @@ void SKFloaterNavMesh::draw()
         }
         getChild<LLUICtrl>("mesh_status")->setValue(mesh_line);
         getChild<LLUICtrl>("overlay_wind_heading")->setEnabled(gSavedSettings.getBOOL("SKNavOverlayWind"));
+        // The stamped polygons exist only with polys on; a stored choice of them is left alone and draws nothing.
+        getChild<LLComboBox>("overlay_air")->setEnabledByValue(LLSD(4), SKNavMesh::polysEnabled());
         getChild<LLUICtrl>("census_status")->setValue(SKWorldCensus::instance().statsLine());
         if (SKNavMesh::instanceExists() && !SKNavMesh::instance().exportStatus().empty())
         {
