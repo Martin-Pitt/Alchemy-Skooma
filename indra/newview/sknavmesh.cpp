@@ -1251,19 +1251,7 @@ bool SKNavMesh::grounded(const Cluster& cluster) const
     }
     // The highest ground under the cluster's footprint: a structure on a slope
     // stands on the high side of it.
-    LLWorld* world = LLWorld::getInstance();
-    const LLVector3d corners[5] = {
-        cluster.mMin,
-        LLVector3d(cluster.mMax.mdV[VX], cluster.mMin.mdV[VY], 0.0),
-        LLVector3d(cluster.mMin.mdV[VX], cluster.mMax.mdV[VY], 0.0),
-        cluster.mMax,
-        (cluster.mMin + cluster.mMax) * 0.5,
-    };
-    F32 land = -1e9f;
-    for (const LLVector3d& corner : corners)
-    {
-        land = llmax(land, static_cast<F32>(world->resolveLandHeightGlobal(corner)));
-    }
+    const F32 land = SKWorldCensus::landUnder(cluster.mMin, cluster.mMax);
     return static_cast<F32>(cluster.mMin.mdV[VZ]) - land <= margin;
 }
 
