@@ -7240,9 +7240,6 @@ void LLViewerObject::skRecoverClampedVelocity(const LLVector3& new_pos)
     }
 
     const LLVector3 vel = getVelocity();
-    mSKRecoveredVel = vel;
-    mSKRecoverMethod = 0;
-
     bool clamped[3];
     bool any_clamped = false;
     for (S32 i = 0; i < 3; ++i)
@@ -7250,12 +7247,7 @@ void LLViewerObject::skRecoverClampedVelocity(const LLVector3& new_pos)
         clamped[i] = fabsf(vel.mV[i]) >= VEL_CLAMP;
         any_clamped |= clamped[i];
     }
-    if (!any_clamped)
-    {
-        return;
-    }
-    mSKRecoverMethod = 3;
-    if (!have_prev)
+    if (!any_clamped || !have_prev)
     {
         return;
     }
@@ -7306,21 +7298,18 @@ void LLViewerObject::skRecoverClampedVelocity(const LLVector3& new_pos)
         if (ratio >= reported - 1e-3f && ratio <= 2000.f)
         {
             speed = ratio;
-            mSKRecoverMethod = 1;
         }
     }
-    if (mSKRecoverMethod != 1 && mSKRawSpeedEWMA > 0.f)
+    if (speed <= 0.f && mSKRawSpeedEWMA > 0.f)
     {
         speed = llmax(mSKRawSpeedEWMA, reported);
-        mSKRecoverMethod = 2;
     }
-    if (mSKRecoverMethod == 3)
+    if (speed <= 0.f)
     {
         return;
     }
 
-    mSKRecoveredVel = dir * speed;
-    setVelocity(mSKRecoveredVel);
+    setVelocity(dir * speed);
 }
 // </SK:Nexii>
 

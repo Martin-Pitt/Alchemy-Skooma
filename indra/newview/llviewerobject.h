@@ -945,8 +945,6 @@ protected:
     F64             mSKLastRawSecs = 0.0;           // frame time it arrived; 0 when there is none
     LLViewerRegion* mSKLastRawRegion = nullptr;
     F32             mSKRawSpeedEWMA = 0.f;          // observed speed for the fallback; 0 when unknown
-    LLVector3       mSKRecoveredVel;                // velocity used after recovery, before ping
-    U8              mSKRecoverMethod = 0;           // 0 none, 1 ratio, 2 fallback, 3 skipped-clamped
     // </SK:Nexii>
 
     // extra data sent from the sim...currently only used for tree species info
