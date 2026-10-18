@@ -976,11 +976,16 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
     std::map<U32, F32> cut_of;
     std::map<U32, std::string> why;
     std::set<U32> for_agent;
+    std::set<U32> agent_under;  // linksets standing over the agent, whose cut no one on their roof overrides
     auto mark = [&](U32 id, const Occupant& occupant, const char* rule)
     {
         const std::string who = occupant.mSelf ? std::string("agent") : "occupant " + occupant.mId.asString();
         if (occupant.mSelf)
         {
+            if (std::string(rule) != "line-of-sight")
+            {
+                agent_under.insert(id);
+            }
             if (for_agent.insert(id).second)
             {
                 cut_of[id] = occupant.mCut;
@@ -999,8 +1004,9 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
             why[id] = who + " " + rule;
         }
     };
+    std::vector<Occupant> people(occupants);
     std::vector<const Occupant*> ordered;
-    for (const Occupant& occupant : occupants)
+    for (const Occupant& occupant : people)
     {
         if (occupant.mSelf)
         {
@@ -1042,6 +1048,129 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
         }
         return false;
     };
+    // Who stands on a roof: the highest upward-facing surface under their feet, of a linkset with nothing over them.
+    const F64 STAND_BELOW_M = 0.6;  // how far under the feet a surface still bears them
+    const F64 STAND_ABOVE_M = 0.4;  // how far over them, for a sunk or estimated foot
+    const F64 HOLD_S = 1.0;         // a roof stays kept this long after its stander leaves it, through a hop
+    const F64 now = LLFrameTimer::getUptimeSeconds().value();
+    auto heightAt = [](const LLVector2& at, const LLVector3& a, const LLVector3& b, const LLVector3& d, F32& z) -> bool
+    {
+        const LLVector3 n = (b - a) % (d - a);
+        if (std::fabs(n.mV[VZ]) < 0.5f * n.length() || planDistance(at, a, b, d) > 0.f)
+        {
+            return false; // a wall, or not under the point
+        }
+        z = a.mV[VZ] - (n.mV[VX] * (at.mV[VX] - a.mV[VX]) + n.mV[VY] * (at.mV[VY] - a.mV[VY])) / n.mV[VZ];
+        return true;
+    };
+    // The highest surface of the linkset under the feet within the bearing band, and whether any of it covers them.
+    auto standsOn = [&](const Extent& e, const LLVector3d& feet, F64& surface, bool& covered) -> bool
+    {
+        bool found = false;
+        bool cover = false;
+        for (const auto& part : e.mParts)
+        {
+            const Batch& batch = *part.first;
+            const LLVector3 local(feet - batch.mOrigin);
+            const LLVector2 at(local.mV[VX], local.mV[VY]);
+            for (U32 c = 0; c < skoverview::NUM_CENSUS_CLASSES; ++c)
+            {
+                if (c == skoverview::INVISIBLE)
+                {
+                    continue;
+                }
+                const U32 end = llmin(part.second->mStart[c] + part.second->mCount[c], (U32)batch.mPositions.size());
+                for (U32 v = part.second->mStart[c]; v + 2 < end; v += 3)
+                {
+                    F32 z = 0.f;
+                    if (!heightAt(at, batch.mPositions[v], batch.mPositions[v + 1], batch.mPositions[v + 2], z))
+                    {
+                        continue;
+                    }
+                    if (z >= local.mV[VZ] - STAND_BELOW_M && z <= local.mV[VZ] + STAND_ABOVE_M)
+                    {
+                        const F64 global_z = batch.mOrigin.mdV[VZ] + z;
+                        surface = found ? llmax(surface, global_z) : global_z;
+                        found = true;
+                    }
+                    else if (z > local.mV[VZ] + STAND_ABOVE_M)
+                    {
+                        cover = true;
+                    }
+                }
+            }
+        }
+        covered = cover;
+        return found;
+    };
+    std::map<U32, F32> roof_of;     // linkset -> the highest cut of those standing on its roof
+    bool holding = false;
+    for (Occupant& occupant : people)
+    {
+        const LLVector3d& feet = occupant.mFeet;
+        U32 best = 0;
+        F64 best_z = -1e30;
+        bool best_covered = false;
+        for (const auto& entry : extents)
+        {
+            const Extent& e = entry.second;
+            if (!e.mCuttable || feet.mdV[VX] < e.mMin.mdV[VX] || feet.mdV[VX] > e.mMax.mdV[VX] ||
+                feet.mdV[VY] < e.mMin.mdV[VY] || feet.mdV[VY] > e.mMax.mdV[VY] ||
+                feet.mdV[VZ] < e.mMin.mdV[VZ] - STAND_ABOVE_M || feet.mdV[VZ] > e.mMax.mdV[VZ] + STAND_BELOW_M)
+            {
+                continue;
+            }
+            F64 z = 0.0;
+            bool covered = false;
+            if (standsOn(e, feet, z, covered) && z > best_z)
+            {
+                best = entry.first;
+                best_z = z;
+                best_covered = covered;
+            }
+        }
+        U32 roof = 0;
+        F64 roof_z = 0.0;
+        const bool on_surface = best_z > -1e29;
+        const auto held = mStanding.find(occupant.mId);
+        if (on_surface && !best_covered)
+        {
+            roof = best;
+            roof_z = best_z;
+            mStanding[occupant.mId] = { extents[best].mRoot, best_z, now };
+        }
+        else if (!on_surface && held != mStanding.end() && now - held->second.mAt < HOLD_S)
+        {
+            // Off every surface, in a hop: the roof they left is kept a moment longer.
+            for (const auto& entry : extents)
+            {
+                if (entry.second.mRoot == held->second.mRoot && entry.second.mCuttable)
+                {
+                    roof = entry.first;
+                    roof_z = held->second.mZ;
+                    holding = true;
+                    break;
+                }
+            }
+        }
+        else if (held != mStanding.end())
+        {
+            mStanding.erase(held);
+        }
+        if (roof)
+        {
+            const F64 above = occupant.mCut - occupant.mFloor.mdV[VZ];
+            occupant.mFloor.setVec(feet.mdV[VX], feet.mdV[VY], roof_z);
+            occupant.mCut = (F32)(roof_z + above);
+            occupant.mRoomCells.reset();
+            const auto it = roof_of.find(roof);
+            roof_of[roof] = it == roof_of.end() ? occupant.mCut : llmax(it->second, occupant.mCut);
+        }
+    }
+    for (auto it = mStanding.begin(); it != mStanding.end();)
+    {
+        it = now - it->second.mAt >= HOLD_S ? mStanding.erase(it) : std::next(it);
+    }
     // Whether a linkset has a triangle above the floor whose plan footprint comes within a cell of one of the room's
     // dilated cells; how says which (wall or cover) and the cell, for the log.
     std::unordered_set<U64> dilated;
@@ -1173,10 +1302,30 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
             }
         }
     }
+    // A roof someone stands on is kept up to their level, unless the agent is under it.
+    std::set<U32> kept;
+    for (const auto& roof : roof_of)
+    {
+        if (agent_under.count(roof.first))
+        {
+            continue;
+        }
+        kept.insert(roof.first);
+        auto it = cut_of.find(roof.first);
+        if (it != cut_of.end() && it->second < roof.second)
+        {
+            it->second = roof.second;
+            why[roof.first] = "kept for someone on its roof";
+        }
+    }
+    if (holding)
+    {
+        mCutKey = 0; // worked again until the hold runs out
+    }
     // A floating cluster (a skybox) wholly above the agent's level would roof the view of the ground: hidden, unless
     // someone in it already had it cut. The agent's own skybox is the agent's building, cut as any other.
     F32 agent_cut = skoverview::NO_CUT;
-    for (const Occupant& occupant : occupants)
+    for (const Occupant& occupant : people)
     {
         if (occupant.mSelf)
         {
@@ -1186,7 +1335,7 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
     for (const auto& entry : extents)
     {
         const Extent& e = entry.second;
-        if (!e.mGround && e.mBottom > agent_cut && !cut_of.count(entry.first))
+        if (!e.mGround && e.mBottom > agent_cut && !cut_of.count(entry.first) && !kept.count(entry.first))
         {
             cut_of[entry.first] = skoverview::HIDDEN;
             why[entry.first] = "hidden floating";

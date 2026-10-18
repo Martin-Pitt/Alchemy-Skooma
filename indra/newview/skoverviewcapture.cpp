@@ -1340,19 +1340,21 @@ void SKOverviewCapture::updateCut(const LLVector3* eye)
             mix((U64)(S64)std::llround(p.mdV[k] * 4.0));
         }
     };
-    auto addPerson = [&](const LLUUID& id, bool self, const LLVector3d& floor, F32 cut, const skmap::plan::Whereabouts& where)
+    auto addPerson = [&](const LLUUID& id, bool self, const LLVector3d& floor, const LLVector3d& feet, F32 cut,
+                         const skmap::plan::Whereabouts& where)
     {
         SKOverviewCensus::Occupant o;
         o.mId = id;
         o.mSelf = self;
         o.mFloor = floor;
+        o.mFeet = feet;
         o.mCut = cut;
         // Line of sight only for a perspective eye: straight down, only roofs stand between, and the rooms take those.
         if (eye)
         {
             for (F64 up : { 0.3, 1.0, 1.7 })
             {
-                o.mSight.push_back(floor + LLVector3d(0.0, 0.0, up));
+                o.mSight.push_back(feet + LLVector3d(0.0, 0.0, up));
             }
         }
         if (where.mFound && where.mIndoor)
@@ -1361,13 +1363,19 @@ void SKOverviewCapture::updateCut(const LLVector3* eye)
             o.mRoomCellM = (F32)ROOM_CELL_M;
         }
         mixPos(floor);
+        mixPos(feet);
         mix(id.getCRC32());
         mix(o.mRoomCells ? o.mRoomCells->size() : 0);
         occupants.push_back(std::move(o));
     };
     const LLVector3d agent_floor = gAgent.getPosGlobalFromAgent(
         LLVector3(gAgent.getPositionAgent().mV[VX], gAgent.getPositionAgent().mV[VY], floor_z));
-    addPerson(gAgent.getID(), true, agent_floor, cut_z, skmap::plan::whereabouts(gAgent.getPositionGlobal()));
+    LLVector3d agent_feet = agent_floor; // the feet as they stand, which a hop lifts off the floor
+    if (isAgentAvatarValid())
+    {
+        agent_feet.mdV[VZ] = gAgentAvatarp->getPositionGlobal().mdV[VZ] - gAgentAvatarp->getPelvisToFoot();
+    }
+    addPerson(gAgent.getID(), true, agent_floor, agent_feet, cut_z, skmap::plan::whereabouts(gAgent.getPositionGlobal()));
     for (const SKMapPeople::Person& p : SKMapPeople::instance().people())
     {
         if (p.mVisibility == skmap::Visibility::HIDDEN || !p.mZKnown)
@@ -1376,7 +1384,9 @@ void SKOverviewCapture::updateCut(const LLVector3* eye)
         }
         LLVector3d floor = p.mPos;
         floor.mdV[VZ] = p.mWhere.mFound ? (F64)p.mWhere.mFloor : p.mPos.mdV[VZ] - AVATAR_HALF_HEIGHT_M;
-        addPerson(p.mId, false, floor, (F32)floor.mdV[VZ] + (F32)cut_height, p.mWhere);
+        LLVector3d feet = p.mPos;
+        feet.mdV[VZ] -= AVATAR_HALF_HEIGHT_M;
+        addPerson(p.mId, false, floor, feet, (F32)floor.mdV[VZ] + (F32)cut_height, p.mWhere);
     }
     const LLVector3d eye_global = eye ? gAgent.getPosGlobalFromAgent(*eye) : LLVector3d();
     mixPos(eye_global);
