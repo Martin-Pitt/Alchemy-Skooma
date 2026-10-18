@@ -973,6 +973,11 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
 
     const F64 SLACK_M = 0.1;    // column: how far outside a linkset's bounds still counts as under it
     const F64 ABOVE_M = 0.5;    // what rises less than this over the floor bounds nothing
+    const F64 OVERHEAD_M = 1.0; // a floating cluster whose base is this far over an occupant's cut is out of their space
+    auto overhead = [&](const Extent& e, const Occupant& occupant)
+    {
+        return !e.mGround && e.mBottom > occupant.mCut + OVERHEAD_M;
+    };
     std::map<U32, F32> cut_of;
     std::map<U32, std::string> why;
     std::set<U32> for_agent;
@@ -1262,7 +1267,7 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
         for (const auto& entry : extents)
         {
             const Extent& e = entry.second;
-            if (!e.mCuttable || e.mMax.mdV[VZ] < p.mdV[VZ] + ABOVE_M)
+            if (!e.mCuttable || e.mMax.mdV[VZ] < p.mdV[VZ] + ABOVE_M || overhead(e, *occupant))
             {
                 continue;
             }
@@ -1295,18 +1300,28 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
             for (const auto& entry : extents)
             {
                 const Extent& e = entry.second;
-                if (e.mCuttable && segmentMeetsBox(eye, target, e.mMin, e.mMax) && blocks(e, eye, target))
+                if (e.mCuttable && !overhead(e, *occupant) && segmentMeetsBox(eye, target, e.mMin, e.mMax) &&
+                    blocks(e, eye, target))
                 {
                     mark(entry.first, *occupant, "line-of-sight");
                 }
             }
         }
     }
-    // A roof someone stands on is kept up to their level, unless the agent is under it.
+    F32 agent_cut = skoverview::NO_CUT;
+    for (const Occupant& occupant : people)
+    {
+        if (occupant.mSelf)
+        {
+            agent_cut = occupant.mCut;
+        }
+    }
+    // A roof someone stands on is kept up to their level, unless the agent is under it or it floats over the agent.
     std::set<U32> kept;
     for (const auto& roof : roof_of)
     {
-        if (agent_under.count(roof.first))
+        const Extent& roofed = extents[roof.first];
+        if (agent_under.count(roof.first) || (!roofed.mGround && roofed.mBottom > agent_cut + OVERHEAD_M))
         {
             continue;
         }
@@ -1324,14 +1339,6 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
     }
     // A floating cluster (a skybox) wholly above the agent's level would roof the view of the ground: hidden, unless
     // someone in it already had it cut. The agent's own skybox is the agent's building, cut as any other.
-    F32 agent_cut = skoverview::NO_CUT;
-    for (const Occupant& occupant : people)
-    {
-        if (occupant.mSelf)
-        {
-            agent_cut = occupant.mCut;
-        }
-    }
     for (const auto& entry : extents)
     {
         const Extent& e = entry.second;
