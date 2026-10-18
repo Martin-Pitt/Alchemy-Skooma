@@ -305,20 +305,28 @@ namespace plan
         bool operator==(const SpaceRef& o) const { return mMesh == o.mMesh && mId == o.mId; }
         bool operator!=(const SpaceRef& o) const { return !(*this == o); }
     };
-    /// Where a global position is: the air gap holding it (SKNavWorldView::airGapAt) with its space, bucket and floor;
-    /// with no air there, the navmesh's floor and space under it. Main thread.
+    /// Where a global position is: the fine air gap holding it (SKNavWorldView::airGapAt) with its space, bucket,
+    /// floor and building. Main thread.
     struct Whereabouts
     {
         bool mFound = false;
         SpaceRef mSpace;            ///< mId 0 for a gap in no space
         bool mIndoor = false;       ///< mBucket is INDOORS
-        Bucket mBucket = Bucket::UNKNOWN; ///< the gap's bucket; UNKNOWN without air, or where the air read is not theirs
+        Bucket mBucket = Bucket::UNKNOWN; ///< the gap's bucket; never UNKNOWN when mFound
         F32 mFloor = 0.f;           ///< global
-        F32 mCeiling = 1e30f;       ///< global; 1e30 under open sky or without air
+        F32 mCeiling = 1e30f;       ///< global; 1e30 under open sky
+        bool mFine = false;         ///< read from detail air; always true when mFound
+        U32 mBuilding = 0;          ///< the space's building, 0 in none
+        bool mRoof = false;         ///< the space is a building's roof
     };
-    /// Where someone standing with their feet at feet is: the air just over the feet, whose floor must lie near them,
-    /// since a foot sunk into a roof reads the room under it; else the navmesh's floor, its bucket UNKNOWN.
-    Whereabouts whereabouts(const LLVector3d& feet);
+    /// Where someone standing with their feet at feet is: the air just over the feet, which must be fine, known
+    /// and floored within band_below under to band_above over the feet, since a foot sunk into a roof reads the
+    /// room under it. Not found otherwise: coarse air, an unloaded region or unsettled rooms give no guess.
+    Whereabouts whereabouts(const LLVector3d& feet, F32 band_below = 1.0f, F32 band_above = 1.0f);
+    /// The floor under the agent standing at at with its feet at feet: the navmesh's when polygons are built
+    /// and it lies near the feet, else a known fine air gap's floored at or just under the feet, else, off the
+    /// floor in a jump or a fall, an indoor fine gap's up to 4 m under them. False with no answer. Main thread.
+    bool agentFloor(const LLVector3d& at, F64 feet, F32& floor_out);
     /// A space as a Data index, -1 for none. Any thread.
     S32 spaceIndex(const Data& data, const SpaceRef& ref);
 }

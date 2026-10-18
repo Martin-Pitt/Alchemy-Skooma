@@ -576,20 +576,8 @@ void SKOverviewCapture::cutHeights(const LLVector3d& at, F32 fallback_z, F32& fl
     {
         feet = gAgentAvatarp->getPositionAgent().mV[VZ] - 0.5f * gAgentAvatarp->getScale().mV[VZ];
     }
-    F32 nav_floor = 0.f;
-    const bool near_feet = SKNavMesh::instanceExists() &&
-                           SKNavMesh::instance().floorUnder(at, sknav::AgentClass::AVATAR, nav_floor) &&
-                           nav_floor > feet - 0.75f && nav_floor < feet + 0.5f;
-    floor_z = near_feet ? nav_floor : feet;
-    // Off the floor, in a jump or a fall, the indoor air gap the feet are in still knows the floor under them.
-    const SKNavWorldViewPtr world = (!near_feet && SKNavMesh::instanceExists()) ? SKNavMesh::instance().view() : nullptr;
-    SKNavWorldView::SpaceId space;
-    sknav::Enclosure gap;
-    if (world && world->airGapAt(LLVector3d(at.mdV[VX], at.mdV[VY], feet + 0.3), space, gap) &&
-        gap.mBucket == sknav::EnclosureBucket::INDOORS && gap.mFloor <= feet + 0.1 && gap.mFloor > feet - 4.0)
-    {
-        floor_z = (F32)gap.mFloor;
-    }
+    F32 floor = 0.f;
+    floor_z = skmap::plan::agentFloor(at, feet, floor) ? floor : feet;
     cut_z = floor_z + (F32)cut;
 }
 

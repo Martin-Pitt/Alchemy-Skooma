@@ -1855,41 +1855,72 @@ DataPtr skmap::plan::assemble(const Snapshot& snap)
     return d;
 }
 
-skmap::plan::Whereabouts skmap::plan::whereabouts(const LLVector3d& feet)
+skmap::plan::Whereabouts skmap::plan::whereabouts(const LLVector3d& feet, F32 band_below, F32 band_above)
 {
     const F64 LIFT_M = 0.3;
-    const F64 FLOOR_NEAR_M = 1.0;
     Whereabouts out;
     if (!SKNavMesh::instanceExists())
     {
         return out;
     }
-    const SKNavMesh& nav = SKNavMesh::instance();
-    const SKNavWorldViewPtr world = nav.view();
+    const SKNavWorldViewPtr world = SKNavMesh::instance().view();
     const LLVector3d pos(feet.mdV[VX], feet.mdV[VY], feet.mdV[VZ] + LIFT_M);
     SKNavWorldView::SpaceId id;
     sknav::Enclosure gap;
-    if (world && world->airGapAt(pos, id, gap) && std::fabs(gap.mFloor - feet.mdV[VZ]) <= FLOOR_NEAR_M)
+    // The band holds even here: airGapAt can answer from the gap below.
+    if (!world || !world->airGapAt(pos, id, gap) || gap.mBucket == sknav::EnclosureBucket::UNKNOWN || !gap.mFine ||
+        gap.mFloor < feet.mdV[VZ] - band_below || gap.mFloor > feet.mdV[VZ] + band_above)
     {
-        out.mFound = true;
-        out.mSpace.mMesh = id.mMesh;
-        out.mSpace.mId = id.mId;
-        out.mBucket = bucketOf(gap.mBucket);
-        out.mIndoor = out.mBucket == Bucket::INDOORS;
-        out.mFloor = gap.mFloor;
-        out.mCeiling = gap.mCeiling;
         return out;
     }
-    // No air here yet: the navmesh's own floor.
-    if (nav.floorUnder(pos, sknav::AgentClass::AVATAR, out.mFloor))
+    out.mFound = true;
+    out.mSpace.mMesh = id.mMesh;
+    out.mSpace.mId = id.mId;
+    out.mBucket = bucketOf(gap.mBucket);
+    out.mIndoor = out.mBucket == Bucket::INDOORS;
+    out.mFloor = gap.mFloor;
+    out.mCeiling = gap.mCeiling;
+    out.mFine = true;
+    if (const sknav::Space* space = id.mId ? world->space(id) : nullptr)
     {
-        out.mFound = true;
-        if (!nav.spaceAt(pos, out.mSpace.mMesh, out.mSpace.mId))
-        {
-            out.mSpace = SpaceRef();
-        }
+        out.mBuilding = space->mBuilding;
+        out.mRoof = space->mRoof;
     }
     return out;
+}
+
+bool skmap::plan::agentFloor(const LLVector3d& at, F64 feet, F32& floor_out)
+{
+    if (!SKNavMesh::instanceExists())
+    {
+        return false;
+    }
+    const SKNavMesh& nav = SKNavMesh::instance();
+    F32 nav_floor = 0.f;
+    // The navmesh only refines the feet, since its nearest mesh can be the ground under a street.
+    if (SKNavMesh::polysEnabled() && nav.floorUnder(at, sknav::AgentClass::AVATAR, nav_floor) && nav_floor > feet - 0.75 &&
+        nav_floor < feet + 0.5)
+    {
+        floor_out = nav_floor;
+        return true;
+    }
+    const SKNavWorldViewPtr world = nav.view();
+    SKNavWorldView::SpaceId space;
+    sknav::Enclosure gap;
+    if (!world || !world->airGapAt(LLVector3d(at.mdV[VX], at.mdV[VY], feet + 0.3), space, gap) ||
+        gap.mBucket == sknav::EnclosureBucket::UNKNOWN || !gap.mFine || gap.mFloor > feet + 0.1)
+    {
+        return false;
+    }
+    // Off the floor, in a jump or a fall, only an indoor gap still knows the floor under the feet.
+    const bool standing = gap.mFloor >= feet - 0.75;
+    const bool airborne = gap.mBucket == sknav::EnclosureBucket::INDOORS && gap.mFloor > feet - 4.0;
+    if (!standing && !airborne)
+    {
+        return false;
+    }
+    floor_out = (F32)gap.mFloor;
+    return true;
 }
 
 skmap::plan::SnapshotStats skmap::plan::stats(const Snapshot& snap)
