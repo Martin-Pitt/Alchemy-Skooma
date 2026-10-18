@@ -1488,6 +1488,12 @@ std::shared_ptr<const std::set<std::pair<S32, S32>>> SKOverviewCapture::roomAt(c
 bool SKOverviewCapture::outdoorsAt(const LLUUID& id, const LLVector3d& feet, F64 now)
 {
     const F64 HOLD_S = 0.75;
+    // The cut and the dissolve both ask each frame; the second asks the same and must not step the hold again.
+    const auto seen = mOutdoors.find(id);
+    if (seen != mOutdoors.end() && seen->second.mSeen == now)
+    {
+        return seen->second.mOut;
+    }
     // The air the body stands in, not airGapAt's fallback to the room under a solid a sunk foot is in.
     bool out = false;
     const SKNavWorldViewPtr world = SKNavMesh::instanceExists() ? SKNavMesh::instance().view() : nullptr;
