@@ -1861,6 +1861,7 @@ void SKOverviewCapture::tactical()
                           mCensus.cutStamp() == mTacticalKey.mCutStamp && gAgent.getRegion() == mTacticalKey.mRegion &&
                           (U32)tactical_debug_view == mTacticalKey.mDebugView && dissolve_key == mTacticalKey.mDissolve;
         // Movers draw over a copy of the static capture each frame; the static capture itself is redone only on change.
+        mMovers.setLoose(mCensus.restlessParts());
         const bool movers = mMovers.update();
         if (!same)
         {

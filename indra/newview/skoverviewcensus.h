@@ -177,6 +177,9 @@ public:
     bool raycast(const LLVector3d& origin, const LLVector3& dir, F32 max_m, LLVector3d& hit) const;
     const std::vector<Batch>& batches() const { return mBatches; }
     U32 triangles() const { return mTriangles; }
+    /// Parts that keep changing (a scripted door, a target on a track), left out of the static buffers for the movers
+    /// to draw live: each change would otherwise rebuild every region's buffers.
+    std::vector<LLUUID> restlessParts() const;
     /// Moves whenever the buffers are rebuilt.
     U64 signature() const { return mSignature; }
     void release();
@@ -197,6 +200,18 @@ private:
     /// Logs which signature entries came and went since the last rebuild; sorts entries and keeps them.
     void logChurn(std::vector<std::pair<U64, std::pair<char, LLUUID>>>& entries);
     std::vector<std::pair<U64, std::pair<char, LLUUID>>> mLastEntries;
+    static constexpr F64 RESTLESS_WINDOW_S = 20.0;  ///< a second change within this turns a part restless
+    static constexpr F64 RESTLESS_SETTLE_S = 30.0;  ///< a restless part unchanged this long rejoins the census
+    struct Restless
+    {
+        F64 mLast = 0.0;        ///< when it last changed
+        U32 mChanges = 0;
+        bool mOn = false;
+        bool mSurround = false; ///< a void surround: kept in the buffers, only its changes ignored
+        U64 mHash = 0;          ///< its entry when last seen, to tell when it holds still
+    };
+    std::map<LLUUID, Restless> mRestless;
+    bool isRestless(const LLUUID& part) const;
 
     std::vector<Batch> mBatches;
     std::vector<RenderedPart> mSurrounds;
