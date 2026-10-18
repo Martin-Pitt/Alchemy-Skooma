@@ -1166,6 +1166,11 @@ bool LLViewerWindow::handleAnyMouseClick(LLWindow *window, LLCoordGL pos, MASK m
     {
         return true;
     }
+    // Tactical overview: a left drag pans it; a plain click is handed to the tool on release.
+    if (clicktype == CLICK_LEFT && !gDisconnected && SKOverviewCapture::handleLeftClick(x, y, mask, down))
+    {
+        return true;
+    }
     // </SK:Nexii>
 
     // Do not allow tool manager to handle mouseclicks if we have disconnected
