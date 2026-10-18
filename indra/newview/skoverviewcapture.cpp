@@ -1539,10 +1539,10 @@ U64 SKOverviewCapture::tacticalDissolve(Shot& shot, S32 w, S32 h)
     std::map<LLUUID, LLVector3> wanted;
     if (enabled)
     {
-        F32 floor_z, cut_z;
-        cutHeights(gAgent.getPositionGlobal(), gAgent.getPositionAgent().mV[VZ], floor_z, cut_z);
-        const LLVector3 self = gAgent.getPositionAgent();
-        wanted[gAgent.getID()] = LLVector3(self.mV[VX], self.mV[VY], floor_z);
+        // Anchored to the feet as they stand, as the markers are, never the floor under them.
+        LLVector3 self = gAgent.getPositionAgent();
+        self.mV[VZ] = isAgentAvatarValid() ? (F32)SKMapPeople::feetZ(gAgentAvatarp) : self.mV[VZ] - AVATAR_HALF_HEIGHT_M;
+        wanted[gAgent.getID()] = self;
         for (const SKMapPeople::Person& p : SKMapPeople::instance().people())
         {
             if (p.mVisibility == skmap::Visibility::HIDDEN || !p.mZKnown)
@@ -1550,7 +1550,7 @@ U64 SKOverviewCapture::tacticalDissolve(Shot& shot, S32 w, S32 h)
                 continue;
             }
             LLVector3 floor = gAgent.getPosAgentFromGlobal(p.mPos);
-            floor.mV[VZ] = p.mWhere.mFound ? (F32)p.mWhere.mFloor : floor.mV[VZ] - AVATAR_HALF_HEIGHT_M; // global z is agent z
+            floor.mV[VZ] = (F32)p.mFeetZ; // global z is agent z
             wanted[p.mId] = floor;
         }
     }
