@@ -248,6 +248,15 @@ private:
         std::shared_ptr<std::set<std::pair<S32, S32>>> mCells;
     };
     std::vector<Room> mRooms;
+    /// Whether someone stands in outdoor air, which cuts nothing for them, held through a doorway's flicker.
+    bool outdoorsAt(const LLUUID& id, const LLVector3d& feet, F64 now);
+    struct Outdoors
+    {
+        bool mOut = false;      ///< the held answer
+        F64 mSince = -1.0;      ///< when the air first read otherwise, or -1
+        F64 mSeen = 0.0;
+    };
+    std::map<LLUUID, Outdoors> mOutdoors;
     /// What the last tactical capture showed: the same again reuses its image.
     struct TacticalKey
     {

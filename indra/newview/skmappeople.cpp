@@ -662,7 +662,7 @@ void SKMapPeople::gatherPeople()
         else
         {
             // Their air gap, space and storey, the viewer's way; the map compares them with what it draws.
-            p.mWhere = skmap::plan::whereabouts(p.mPos);
+            p.mWhere = skmap::plan::whereabouts(LLVector3d(p.mPos.mdV[VX], p.mPos.mdV[VY], p.mFeetZ));
         }
         if (avatar_colours)
         {
