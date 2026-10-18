@@ -194,6 +194,9 @@ private:
         skoverview::CensusClass mFixed = skoverview::NUM_CENSUS_CLASSES;
     };
     void gatherSurrounds(const struct SKCensusSnapshot& snap);
+    /// Logs which signature entries came and went since the last rebuild; sorts entries and keeps them.
+    void logChurn(std::vector<std::pair<U64, std::pair<char, LLUUID>>>& entries);
+    std::vector<std::pair<U64, std::pair<char, LLUUID>>> mLastEntries;
 
     std::vector<Batch> mBatches;
     std::vector<RenderedPart> mSurrounds;
@@ -251,6 +254,8 @@ private:
         std::vector<std::pair<const Batch*, const Group*>> mParts;
     };
     std::map<U32, Extent> mExtents;
+    std::map<LLUUID, U32> mRootExtent;  ///< each linkset root's extent
+    std::vector<U32> mFloating;         ///< the extents not standing on the land
     U64 mExtentsSignature = 0;  ///< the buffers' signature mExtents was built for
     bool mExtentsBuilt = false;
     U64 mExtentsRegion = ~0ull; ///< the region handle mCuttable was worked for

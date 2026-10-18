@@ -47,6 +47,7 @@
 #include <algorithm>
 #include <climits>
 #include <cmath>
+#include <iterator>
 #include <map>
 #include <set>
 #include <unordered_set>
@@ -131,6 +132,58 @@ void SKOverviewCensus::release()
     mStamp = 0;
     mSignature = 0;
     mTriangles = 0;
+}
+
+void SKOverviewCensus::logChurn(std::vector<std::pair<U64, std::pair<char, LLUUID>>>& entries)
+{
+    // What came and went since the last rebuild, by kind (S sculpt, U surrounds, V void surround, R record, C a part's
+    // linkset and cluster, L land): a part both gone and come is one that changed.
+    std::sort(entries.begin(), entries.end());
+    std::vector<std::pair<U64, std::pair<char, LLUUID>>> gone, came;
+    std::set_difference(mLastEntries.begin(), mLastEntries.end(), entries.begin(), entries.end(), std::back_inserter(gone));
+    std::set_difference(entries.begin(), entries.end(), mLastEntries.begin(), mLastEntries.end(), std::back_inserter(came));
+    const bool first = mLastEntries.empty();
+    mLastEntries = entries;
+    if (first)
+    {
+        return;
+    }
+    std::map<char, U32> gone_n, came_n, changed_n;
+    std::map<char, std::vector<LLUUID>> changed;
+    std::set<std::pair<char, LLUUID>> went;
+    for (const auto& g : gone)
+    {
+        ++gone_n[g.second.first];
+        went.insert(g.second);
+    }
+    for (const auto& c : came)
+    {
+        ++came_n[c.second.first];
+        if (went.count(c.second))
+        {
+            ++changed_n[c.second.first];
+            std::vector<LLUUID>& ids = changed[c.second.first];
+            if (ids.size() < 4)
+            {
+                ids.push_back(c.second.second);
+            }
+        }
+    }
+    std::string what;
+    for (const char kind : { 'S', 'U', 'V', 'R', 'C', 'L' })
+    {
+        if (!gone_n[kind] && !came_n[kind])
+        {
+            continue;
+        }
+        what += llformat(" %c -%u +%u (%u changed", kind, gone_n[kind], came_n[kind], changed_n[kind]);
+        for (const LLUUID& id : changed[kind])
+        {
+            what += " " + id.asString();
+        }
+        what += ")";
+    }
+    LL_INFOS("SKOverview") << "census rebuild of " << entries.size() << " entries:" << what << LL_ENDL;
 }
 
 namespace skoverview
@@ -322,9 +375,13 @@ bool SKOverviewCensus::update()
     {
         entry ^= v + 0x9e3779b97f4a7c15ull + (entry << 6) + (entry >> 2);
     };
-    auto endEntry = [&sig, &entry]()
+    // Each entry's kind and part as well, so a rebuild can say what moved.
+    std::vector<std::pair<U64, std::pair<char, LLUUID>>> entries;
+    auto endEntry = [&sig, &entry, &entries](char kind, const LLUUID& part)
     {
-        sig += skoverview::scramble(entry);
+        const U64 h = skoverview::scramble(entry);
+        sig += h;
+        entries.push_back({ h, { kind, part } });
         entry = 0;
     };
     // Sculpted parts draw from what is rendered, over land and void alike: a megasculpt's physics is a poor stand-in
@@ -390,7 +447,7 @@ bool SKOverviewCensus::update()
         mix((U64)sc.mTris.size());
         mix((U64)(S64)std::llround(centre.mdV[VX] * 64.0) ^ ((U64)(S64)std::llround(centre.mdV[VY] * 64.0) << 21) ^
             ((U64)(S64)std::llround(centre.mdV[VZ] * 64.0) << 42));
-        endEntry();
+        endEntry('S', sc.mPart);
         sculpts.push_back(std::move(sc));
     }
 
@@ -404,7 +461,7 @@ bool SKOverviewCensus::update()
         }
     }
     mix(mSurroundsSig);
-    endEntry();
+    endEntry('U', LLUUID::null);
 
     std::vector<const sknav::Record*> kept;
     std::vector<U8> fixed_classes;
@@ -430,7 +487,7 @@ bool SKOverviewCensus::update()
             void_only.push_back(true);
             mix(rec->mSignature);
             mix(rec->mPart.getCRC32());
-            endEntry();
+            endEntry('V', rec->mPart);
             continue;
         }
         if (!skoverview::keepRecord(*rec, fixed))
@@ -477,7 +534,7 @@ bool SKOverviewCensus::update()
         mix((U64)(S64)std::llround(rec->mMin.mdV[VX] * 64.0) ^ ((U64)(S64)std::llround(rec->mMin.mdV[VY] * 64.0) << 21) ^
             ((U64)(S64)std::llround(rec->mMin.mdV[VZ] * 64.0) << 42));
         mix((U64)rec->mFeature | ((U64)rec->mExclude << 8));
-        endEntry();
+        endEntry('R', rec->mPart);
     }
     // Each linkset is a group, so the tactical cut can take a building's linksets and leave its neighbours whole: a
     // cluster joins whatever touches, often a whole block. A level still keeps whole clusters, by the heights of the
@@ -532,13 +589,13 @@ bool SKOverviewCensus::update()
             mix(rounded(c.mMin));
             mix(rounded(c.mMax));
         }
-        endEntry();
+        endEntry('C', kept[i]->mPart);
     }
     // Which land is connected decides what of a surround is in the void.
     for (const LLViewerRegion* region : LLWorld::getInstance()->getRegionList())
     {
         mix(region->getHandle());
-        endEntry();
+        endEntry('L', LLUUID::null);
     }
     // Where each linkset is, for whose region it is in: its root's position, so a linkset straddling a border has
     // one answer.
@@ -557,6 +614,7 @@ bool SKOverviewCensus::update()
         return true;
     }
     mSignature = sig;
+    logChurn(entries);
     LL_PROFILE_ZONE_NAMED("sk overview census upload");
 
     // Per region, per class, per group, region-local triangles; and each group's bounds.
@@ -924,6 +982,16 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
                 e.mGround |= group.mGround;
                 e.mBottom = llmin(e.mBottom, (F64)group.mMinZ);
                 e.mParts.emplace_back(&batch, &group);
+            }
+        }
+        mRootExtent.clear();
+        mFloating.clear();
+        for (const auto& entry : mExtents)
+        {
+            mRootExtent[entry.second.mRoot] = entry.first;
+            if (!entry.second.mGround)
+            {
+                mFloating.push_back(entry.first);
             }
         }
         mExtentsSignature = mSignature;
@@ -1378,34 +1446,34 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
         }
         // A floating cluster (a skybox) wholly above the agent's level would roof the view of the ground: hidden, unless
         // someone in it already had it cut. The agent's own skybox is the agent's building, cut as any other.
-        for (const auto& entry : extents)
+        for (const U32 id : mFloating)
         {
-            const Extent& e = entry.second;
-            if (!e.mGround && e.mBottom > agent_cut && !cut_of.count(entry.first) && !kept.count(entry.first))
+            const Extent& e = extents.at(id);
+            if (e.mBottom > agent_cut && !cut_of.count(id) && !kept.count(id))
             {
-                cut_of[entry.first] = skoverview::HIDDEN;
-                why[entry.first] = fixedReason("hidden floating");
+                cut_of[id] = skoverview::HIDDEN;
+                why[id] = fixedReason("hidden floating");
             }
         }
         // A cut or hidden linkset is uncut or shown only once that has held a moment: one evaluation's dropout no longer
         // flashes it.
         static LLCachedControl<F32> release_s(gSavedSettings, "SKOverviewCutReleaseSeconds", 0.5f);
+        // Only the cut linksets want anything; a root with no linkset left is gone.
         std::map<LLUUID, F32> wanted;
-        for (const auto& entry : extents)
+        for (const auto& cut : cut_of)
         {
-            const auto it = cut_of.find(entry.first);
-            const F32 v = it == cut_of.end() ? skoverview::NO_CUT : it->second;
-            const auto w = wanted.emplace(entry.second.mRoot, v);
-            w.first->second = llmin(w.first->second, v);
+            const auto w = wanted.emplace(extents.at(cut.first).mRoot, cut.second);
+            w.first->second = llmin(w.first->second, cut.second);
         }
         bool releasing = false;
         for (auto it = mRelease.begin(); it != mRelease.end();)
         {
+            const bool present = mRootExtent.count(it->first) > 0;
             const auto w = wanted.find(it->first);
             Release& r = it->second;
             const F32 v = w == wanted.end() ? skoverview::NO_CUT : w->second;
             const bool relaxes = (r.mCut == skoverview::HIDDEN && v != skoverview::HIDDEN) || v == skoverview::NO_CUT;
-            if (w == wanted.end() || !relaxes)
+            if (!present || !relaxes)
             {
                 r.mSince = -1.0;
             }
@@ -1413,7 +1481,7 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
             {
                 r.mSince = now;
             }
-            if (w == wanted.end() || !relaxes || now - r.mSince >= release_s)
+            if (!present || !relaxes || now - r.mSince >= release_s)
             {
                 if (v == skoverview::NO_CUT)
                 {
@@ -1436,23 +1504,24 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
                 mRelease[w.first].mCut = w.second;
             }
         }
-        for (const auto& entry : extents)
+        for (auto& r : mRelease)
         {
-            const auto r = mRelease.find(entry.second.mRoot);
-            if (r == mRelease.end())
+            const auto found = mRootExtent.find(r.first);
+            if (found == mRootExtent.end())
             {
                 continue;
             }
-            if (r->second.mSince >= 0.0)
+            const U32 id = found->second;
+            if (r.second.mSince >= 0.0)
             {
-                cut_of[entry.first] = r->second.mCut;
-                Reason held = r->second.mWhy;
+                cut_of[id] = r.second.mCut;
+                Reason held = r.second.mWhy;
                 held.mReleasing = true;
-                why[entry.first] = std::move(held);
+                why[id] = std::move(held);
             }
-            else if (cut_of.count(entry.first))
+            else if (cut_of.count(id))
             {
-                r->second.mWhy = why[entry.first];
+                r.second.mWhy = why[id];
             }
         }
         if (releasing)
