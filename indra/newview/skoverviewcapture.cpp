@@ -1977,6 +1977,74 @@ void SKOverviewCapture::composite()
         std::vector<std::pair<size_t, LLVector2>> drawn;
         drawMarkers3D(project, vw, vh, drawn);
         gGL.flush();
+        {
+            // Projectiles over the markers, as on the mini-map: a streak the prim's length, fading to its tail.
+            std::map<LLUUID, LLColor4> shooters;
+            for (const SKMapPeople::Person& person : SKMapPeople::instance().people())
+            {
+                shooters[person.mId] = person.mColour;
+            }
+            const LLColor4 plain = LLColor4(skmap::palette::PROJECTILE.mR, skmap::palette::PROJECTILE.mG, skmap::palette::PROJECTILE.mB,
+                                            skmap::palette::PROJECTILE.mA);
+            gGL.begin(LLRender::TRIANGLES);
+            // Fast movers' recent path, faded from the head's opacity to clear at the oldest point.
+            static LLCachedControl<F32> trail_px(gSavedSettings, "SKMapProjectileMinWidthPx", 2.f);
+            const F64 now = LLFrameTimer::getUptimeSeconds().value();
+            for (const auto& entry : SKMapPeople::instance().fastTrails())
+            {
+                const SKMapPeople::FastTrail& trail = entry.second;
+                const auto& pts = trail.mPoints;
+                const F32 half = llmax(static_cast<F32>(trail_px), 0.5f) * 0.5f;
+                for (size_t i = 0; i + 1 < pts.size(); ++i)
+                {
+                    LLVector2 a, b;
+                    if (!project(gAgent.getPosAgentFromGlobal(pts[i].second), a) ||
+                        !project(gAgent.getPosAgentFromGlobal(pts[i + 1].second), b))
+                    {
+                        continue;
+                    }
+                    LLVector2 d = a - b;
+                    if (d.normVec() < 1e-4f)
+                    {
+                        continue;
+                    }
+                    const F32 life = llmax(trail.mLife, 1e-3f);
+                    const F32 alpha_a = trail.mAlpha * (1.f - llclamp(static_cast<F32>(now - pts[i].first) / life, 0.f, 1.f));
+                    const F32 alpha_b = trail.mAlpha * (1.f - llclamp(static_cast<F32>(now - pts[i + 1].first) / life, 0.f, 1.f));
+                    const LLVector2 n(-d.mV[VY] * half, d.mV[VX] * half);
+                    auto at = [&](const LLVector2& v, F32 alpha)
+                    {
+                        gGL.color4f(plain.mV[VRED], plain.mV[VGREEN], plain.mV[VBLUE], alpha);
+                        gGL.vertex2f(v.mV[VX], v.mV[VY]);
+                    };
+                    at(b - n, alpha_b);
+                    at(a - n, alpha_a);
+                    at(a + n, alpha_a);
+                    at(b - n, alpha_b);
+                    at(a + n, alpha_a);
+                    at(b + n, alpha_b);
+                }
+            }
+            for (const SKMapPeople::Projectile& p : SKMapPeople::instance().projectiles())
+            {
+                const LLVector3 head_agent = gAgent.getPosAgentFromGlobal(p.mPos);
+                LLVector2 head, back;
+                if (!project(head_agent, head) || !project(head_agent - p.mDir, back))
+                {
+                    continue;
+                }
+                LLVector2 dir = head - back;
+                const F32 ppm = dir.normVec();
+                if (ppm < 1e-4f)
+                {
+                    continue;
+                }
+                const auto found = p.mShooter.notNull() ? shooters.find(p.mShooter) : shooters.end();
+                skmapdraw::projectile(head, dir, p.mLength * ppm, p.mWidth * ppm, found != shooters.end() ? found->second : plain);
+            }
+            gGL.end();
+            gGL.flush();
+        }
         // Avatars shown large enough carry their in-world name tag, the one LLVOAvatar keeps, in place of the marker label.
         static LLCachedControl<F32> tag_ppm(gSavedSettings, "SKTacticalNametagPixelsPerMetre", 8.f);
         const std::vector<SKMapPeople::Person>& people = SKMapPeople::instance().people();
