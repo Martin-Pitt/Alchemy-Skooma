@@ -26,7 +26,6 @@
 
 #include "sknetmap.h"
 
-#include "skmapcomposite.h"
 #include "skoverviewcapture.h"
 
 #include "llfloaterreg.h"
@@ -68,12 +67,13 @@
 #include "rlvactions.h"
 #include "rlvcommon.h"
 #include "skmapmarkers.h"
-#include "skmapobjects.h"
 #include "skmapparcels.h"
 #include "skmappeople.h"
+#include "alavatargroups.h"
 #include "skmapmenu.h"
 #include "skmapscene.h"
 #include "skpopuppanes.h"
+#include "skworldcensus.h"
 
 static LLDefaultChildRegistry::Register<SKNetMap> r("sk_net_map");
 
@@ -337,7 +337,6 @@ namespace skmapdraw
 
 SKNetMap::SKNetMap(const Params& p)
     : LLUICtrl(p),
-      mObjects(std::make_unique<SKMapObjects>()),
       mParcels(std::make_unique<SKMapParcels>()),
       mFloorAboveLabel(p.floor_above_label),
       mFloorBelowLabel(p.floor_below_label),
@@ -426,12 +425,12 @@ void SKNetMap::draw()
         LLLocalClipRect clip(getLocalRect());
         gGL.getTextureSlot(0)->unbind();
         drawChromeTint();
-        if (!drawCaptureBase(1.f))
+        static LLCachedControl<bool> floorplan(gSavedSettings, "SKMapLayerFloorplan", true);
+        if (floorplan)
         {
-            drawTerrain();
-            drawObjects();
-            drawPlan();
+            drawCaptureBase(1.f);
         }
+        drawElevators();
         mParcels->draw(mView);
         drawEvents();
         drawPings();
@@ -472,7 +471,7 @@ void SKNetMap::draw()
     LLUICtrl::draw();
 }
 
-void SKNetMap::drawOverlay(OverlayLayer layer, F32 span, F32 rotation, F32 side, F32 lines, F32 surface)
+void SKNetMap::drawOverlay(OverlayLayer layer, F32 span, F32 rotation, F32 side, F32 surface)
 {
     if (!LLWorld::instanceExists() || !gAgent.getRegion())
     {
@@ -482,21 +481,15 @@ void SKNetMap::drawOverlay(OverlayLayer layer, F32 span, F32 rotation, F32 side,
     {
         case OverlayLayer::PLAN:
         {
-            static LLCachedControl<bool> show(gSavedSettings, "SKMapLayerFloorplan", true);
+            static LLCachedControl<bool> show(gSavedSettings, "SKMapMLFloorplan", true);
             mView.set(anchorGlobal(), span, rotation, side, side);
             SKMapPeople::instance().noteDrawn(mView);
             SKMapScene::instance().noteDrawn(*this);
-            if (show && !drawCaptureBase(surface))
+            if (show)
             {
-                if (!mPlan)
-                {
-                    mPlan = std::make_unique<SKMapComposite>();
-                }
-                SKMapComposite::Overlay overlay;
-                overlay.mLines = lines;
-                overlay.mSurface = surface;
-                mPlan->draw(mView, &overlay);
+                drawCaptureBase(surface);
             }
+            drawElevators();
             break;
         }
         case OverlayLayer::MARKERS:
@@ -521,32 +514,10 @@ void SKNetMap::drawOverlay(OverlayLayer layer, F32 span, F32 rotation, F32 side,
     }
 }
 
-void SKNetMap::releaseGL()
-{
-    if (mPlan)
-    {
-        mPlan->release();
-    }
-}
-
-void SKNetMap::drawPlan()
-{
-    static LLCachedControl<bool> show(gSavedSettings, "SKMapLayerFloorplan", true);
-    if (!show)
-    {
-        return;
-    }
-    if (!mPlan)
-    {
-        mPlan = std::make_unique<SKMapComposite>();
-    }
-    mPlan->draw(mView);
-}
-
 bool SKNetMap::drawCaptureBase(F32 alpha)
 {
-    static LLCachedControl<bool> enabled(gSavedSettings, "SKMapCaptureBase", false);
-    if (!enabled || !SKOverviewCapture::instanceExists())
+    SKOverviewCapture::noteMapsWanted();
+    if (!SKOverviewCapture::instanceExists())
     {
         return false;
     }
@@ -584,62 +555,63 @@ bool SKNetMap::drawCaptureBase(F32 alpha)
     return true;
 }
 
-void SKNetMap::drawTerrain()
+void SKNetMap::drawElevators()
 {
-    static LLCachedControl<bool> show(gSavedSettings, "SKMapLayerTerrain", true);
-    if (!show)
+    static LLCachedControl<bool> show(gSavedSettings, "SKMapLayerElevators", false);
+    if (!show || !SKWorldCensus::instanceExists())
     {
         return;
     }
-    for (LLViewerRegion* region : LLWorld::getInstance()->getRegionList())
+    const SKCensusSnapshotPtr snap = SKWorldCensus::instance().snapshot();
+    if (!snap)
     {
-        const LLVector3d origin = region->getOriginGlobal();
-        const F64 w = region->getWidth();
-        const LLVector2 sw = mView.toWidget(origin);
-        const LLVector2 se = mView.toWidget(origin + LLVector3d(w, 0.0, 0.0));
-        const LLVector2 ne = mView.toWidget(origin + LLVector3d(w, w, 0.0));
-        const LLVector2 nw = mView.toWidget(origin + LLVector3d(0.0, w, 0.0));
-        const F32 grey = skmap::palette::TERRAIN_GREY;
-        // Dead regions keep the classic map's red tint.
-        const LLColor4 tint = region->isAlive() ? LLColor4(grey, grey, grey, skmap::palette::TERRAIN_ALPHA)
-                                                : LLColor4(grey, grey * 0.5f, grey * 0.5f, skmap::palette::TERRAIN_ALPHA);
-        gGL.getTextureSlot(0)->bindSampled(region->getLand().getSTexture(), ALSamplers::BilinearClamp);
-        gGL.color4fv(tint.mV);
-        gGL.begin(LLRender::TRIANGLES);
-        gGL.texCoord2f(0.f, 0.f);
-        gGL.vertex2f(sw.mV[VX], sw.mV[VY]);
-        gGL.texCoord2f(1.f, 0.f);
-        gGL.vertex2f(se.mV[VX], se.mV[VY]);
-        gGL.texCoord2f(1.f, 1.f);
-        gGL.vertex2f(ne.mV[VX], ne.mV[VY]);
-        gGL.texCoord2f(0.f, 0.f);
-        gGL.vertex2f(sw.mV[VX], sw.mV[VY]);
-        gGL.texCoord2f(1.f, 1.f);
-        gGL.vertex2f(ne.mV[VX], ne.mV[VY]);
-        gGL.texCoord2f(0.f, 1.f);
-        gGL.vertex2f(nw.mV[VX], nw.mV[VY]);
-        gGL.end();
+        return;
     }
+    // Each car's linkset bounds at its live pose: the census only says which roots are elevators.
     gGL.getTextureSlot(0)->unbind();
-}
-
-void SKNetMap::drawObjects()
-{
-    static LLCachedControl<U32> mode(gSavedSettings, "SKMapLayerObjects", 1);
-    if (mode == 0)
+    gGL.begin(LLRender::TRIANGLES);
+    skmapdraw::colour(skmap::palette::ELEVATOR);
+    for (const sknav::Feature& feature : snap->mFeatures)
     {
-        mObjects->release();
-        return;
+        if (feature.mKind != sknav::FeatureKind::ELEVATOR)
+        {
+            continue;
+        }
+        for (const LLUUID& id : feature.mRoots)
+        {
+            LLViewerObject* root = gObjectList.findObject(id);
+            if (!root || root->isDead())
+            {
+                continue;
+            }
+            LLVector3 lo(F32_MAX, F32_MAX, F32_MAX), hi(-F32_MAX, -F32_MAX, -F32_MAX);
+            auto grow = [&lo, &hi](LLViewerObject* part)
+            {
+                const LLBBox box = part->getBoundingBoxAgent();
+                const LLVector3 bmin = box.getMinAgent(), bmax = box.getMaxAgent();
+                for (S32 k = 0; k < 3; ++k)
+                {
+                    lo.mV[k] = llmin(lo.mV[k], bmin.mV[k]);
+                    hi.mV[k] = llmax(hi.mV[k], bmax.mV[k]);
+                }
+            };
+            grow(root);
+            for (LLViewerObject* child : root->getChildren())
+            {
+                grow(child);
+            }
+            const LLVector2 a = mView.toWidget(gAgent.getPosGlobalFromAgent(LLVector3(lo.mV[VX], lo.mV[VY], 0.f)));
+            const LLVector2 b = mView.toWidget(gAgent.getPosGlobalFromAgent(LLVector3(hi.mV[VX], lo.mV[VY], 0.f)));
+            const LLVector2 c = mView.toWidget(gAgent.getPosGlobalFromAgent(LLVector3(hi.mV[VX], hi.mV[VY], 0.f)));
+            const LLVector2 d = mView.toWidget(gAgent.getPosGlobalFromAgent(LLVector3(lo.mV[VX], hi.mV[VY], 0.f)));
+            const F32 w = skmap::palette::ELEVATOR_PX;
+            skmapdraw::line(a, b, w);
+            skmapdraw::line(b, c, w);
+            skmapdraw::line(c, d, w);
+            skmapdraw::line(d, a, w);
+        }
     }
-    mObjects->update(mView, SKMapPeople::instance().combat());
-    if (mode >= 2)
-    {
-        mObjects->draw(mView, nullptr);
-        return;
-    }
-    // Only in the 32 m cells with no published navmesh tile.
-    const SKMapScene& scene = SKMapScene::instance();
-    mObjects->draw(mView, [&scene](S32 x, S32 y) { return scene.built(x, y); });
+    gGL.end();
 }
 
 void SKNetMap::drawSelf()
@@ -696,7 +668,18 @@ void SKNetMap::drawSelf()
     const F32 dot_radius = llmax(skmap::palette::SELF_DOT_RADIUS_PX, footprintRadius(gAgentAvatarp, mView.pixelsPerMetre()));
     skmapdraw::shadow(dot, dot_radius);
     gGL.begin(LLRender::TRIANGLES);
-    skmapdraw::colour(skmap::palette::SELF_DOT);
+    static LLCachedControl<bool> avatar_colours(gSavedSettings, "SKMapAvatarColors", true);
+    if (avatar_colours && !SKMapPeople::instance().combat())
+    {
+        // Preferences > Colors' own minimap colour (MapAvatarSelfColor), as the others' dots take theirs.
+        const skmap::PaletteColour& c = skmap::palette::SELF_DOT;
+        const LLColor4 self = ALAvatarGroups::instance().getAvatarColor(gAgentID, LLColor4(c.mR, c.mG, c.mB, c.mA), ALAvatarGroups::COLOR_MINIMAP);
+        gGL.color4f(self.mV[VRED], self.mV[VGREEN], self.mV[VBLUE], c.mA);
+    }
+    else
+    {
+        skmapdraw::colour(skmap::palette::SELF_DOT);
+    }
     skmapdraw::disc(dot, dot_radius);
     if (off_map)
     {
@@ -1121,15 +1104,10 @@ void SKNetMap::collectDots()
 {
     mDots.clear();
     const std::vector<SKMapPeople::Person>& people = SKMapPeople::instance().people();
-    // Each person's storey against the plan as drawn: off it when their air gap is in an indoor space the plan leaves out.
     mFloorOf.resize(people.size());
     for (size_t i = 0; i < people.size(); ++i)
     {
-        const S32 off = people[i].mFloor == skmap::FloorRelation::UNKNOWN || !mPlan ? 0 : mPlan->storeyOffset(people[i].mWhere);
-        mFloorOf[i] = people[i].mFloor == skmap::FloorRelation::UNKNOWN ? skmap::FloorRelation::UNKNOWN
-                    : off > 0                                            ? skmap::FloorRelation::ABOVE
-                    : off < 0                                            ? skmap::FloorRelation::BELOW
-                                                                         : skmap::FloorRelation::SAME;
+        mFloorOf[i] = people[i].mFloor;
     }
     for (size_t i = 0; i < people.size(); ++i)
     {
@@ -1587,12 +1565,11 @@ void SKNetMap::drawReadout()
     }
     std::vector<std::string> lines;
     lines.push_back(llformat("draw %.2f ms", mDrawMs));
-    if (mPlan)
+    if (SKOverviewCapture::instanceExists())
     {
-        for (const std::string& line : mPlan->statsLines())
-        {
-            lines.push_back(line);
-        }
+        const SKOverviewCapture::Stats& stats = SKOverviewCapture::instance().stats();
+        lines.push_back(llformat("capture %d px, %.2f ms cpu, %.2f ms gpu, %u captures", stats.resolution, stats.cpu_ms, stats.gpu_ms,
+                                 stats.captures));
     }
     lines.push_back(llformat("navmesh %u tiles built", SKMapScene::instance().builtTiles()));
     const SKMapAllyResolver& resolver = SKMapPeople::instance().resolver();

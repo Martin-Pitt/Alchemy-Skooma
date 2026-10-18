@@ -10,39 +10,9 @@
  single_instance="true"
  title="Minimap Settings"
  width="340">
-    <button
-     follows="left|top"
-     height="23"
-     label="Combat"
-     layout="topleft"
-     left="8"
-     name="sk_preset_combat"
-     tool_tip="Cover, stairs, doors, vehicles and firing lines; no contours or parcels"
-     top="30"
-     width="88" />
-    <button
-     follows="left|top"
-     height="23"
-     label="Explore"
-     layout="topleft"
-     left_pad="5"
-     name="sk_preset_explore"
-     tool_tip="Everything for finding your way, with parcels and contours"
-     top_delta="0"
-     width="88" />
-    <button
-     follows="left|top"
-     height="23"
-     label="Minimal"
-     layout="topleft"
-     left_pad="5"
-     name="sk_preset_minimal"
-     tool_tip="The floorplan and little else"
-     top_delta="0"
-     width="88" />
     <tab_container
      follows="all"
-     height="405"
+     height="436"
      layout="topleft"
      left="4"
      name="sk_map_settings_tabs"
@@ -50,10 +20,10 @@
      tab_max_width="80"
      tab_min_width="40"
      tab_position="top"
-     top="61">
+     top="30">
         <panel
          follows="all"
-         height="381"
+         height="412"
          label="View"
          layout="topleft"
          left="0"
@@ -99,7 +69,7 @@
         </panel>
         <panel
          follows="all"
-         height="381"
+         height="412"
          label="Layers"
          layout="topleft"
          left="0"
@@ -114,27 +84,8 @@
              layout="topleft"
              left="8"
              name="sk_layer_floorplan"
+             tool_tip="The captured map of buildings and land under the mini-map"
              top="8"
-             width="308" />
-            <check_box
-             control_name="SKMapLayerCover"
-             follows="left|top"
-             height="16"
-             label="Cover, ledges and drops"
-             layout="topleft"
-             left="8"
-             name="sk_layer_cover"
-             top_pad="5"
-             width="308" />
-            <check_box
-             control_name="SKMapLayerDoors"
-             follows="left|top"
-             height="16"
-             label="Doors, ladders, elevators"
-             layout="topleft"
-             left="8"
-             name="sk_layer_doors"
-             top_pad="5"
              width="308" />
             <check_box
              control_name="SKMapLayerStairs"
@@ -147,6 +98,38 @@
              top_pad="5"
              width="308" />
             <check_box
+             control_name="SKMapLayerDoors"
+             follows="left|top"
+             height="16"
+             label="Doors"
+             layout="topleft"
+             left="8"
+             name="sk_layer_doors"
+             top_pad="5"
+             width="308" />
+            <check_box
+             control_name="SKMapLayerLadders"
+             follows="left|top"
+             height="16"
+             label="Ladders"
+             layout="topleft"
+             left="8"
+             name="sk_layer_ladders"
+             tool_tip="Ladders in their own colour"
+             top_pad="5"
+             width="308" />
+            <check_box
+             control_name="SKMapLayerElevators"
+             follows="left|top"
+             height="16"
+             label="Elevators"
+             layout="topleft"
+             left="8"
+             name="sk_layer_elevators"
+             tool_tip="Elevator cars outlined where they are now"
+             top_pad="5"
+             width="308" />
+            <check_box
              control_name="SKMapLayerContours"
              follows="left|top"
              height="16"
@@ -156,58 +139,6 @@
              name="sk_layer_contours"
              top_pad="5"
              width="308" />
-            <check_box
-             control_name="SKMapLayerVoid"
-             follows="left|top"
-             height="16"
-             label="Region edges"
-             layout="topleft"
-             left="8"
-             name="sk_layer_void"
-             top_pad="5"
-             width="308" />
-            <check_box
-             control_name="SKMapLayerTerrain"
-             follows="left|top"
-             height="16"
-             label="Terrain tiles"
-             layout="topleft"
-             left="8"
-             name="sk_layer_terrain"
-             top_pad="5"
-             width="308" />
-            <text
-             follows="left|top"
-             height="16"
-             layout="topleft"
-             left="8"
-             name="sk_layer_objects_label"
-             top_pad="5"
-             width="100">
-                Object dots
-            </text>
-            <combo_box
-             control_name="SKMapLayerObjects"
-             follows="left|top"
-             height="23"
-             layout="topleft"
-             left_pad="5"
-             name="sk_layer_objects"
-             top_delta="-4"
-             width="150">
-                <combo_box.item
-                 label="Never"
-                 name="sk_layer_objects_0"
-                 value="0" />
-                <combo_box.item
-                 label="Without floorplan"
-                 name="sk_layer_objects_1"
-                 value="1" />
-                <combo_box.item
-                 label="Always"
-                 name="sk_layer_objects_2"
-                 value="2" />
-            </combo_box>
             <check_box
              control_name="SKMapLayerParcels"
              follows="left|top"
@@ -281,7 +212,7 @@
         </panel>
         <panel
          follows="all"
-         height="381"
+         height="412"
          label="People"
          layout="topleft"
          left="0"
@@ -321,7 +252,7 @@
         </panel>
         <panel
          follows="all"
-         height="381"
+         height="412"
          label="Combat"
          layout="topleft"
          left="0"
@@ -425,7 +356,7 @@
         </panel>
         <panel
          follows="all"
-         height="381"
+         height="412"
          label="Automap"
          layout="topleft"
          left="0"
@@ -443,6 +374,18 @@
              tool_tip="The mini-map drawn faintly over the world while in mouselook"
              top="8"
              width="308" />
+            <check_box
+             control_name="SKMapMLFloorplan"
+             enabled_control="SKMapMLEnable"
+             follows="left|top"
+             height="16"
+             label="Floorplan"
+             layout="topleft"
+             left="8"
+             name="sk_ml_floorplan"
+             tool_tip="Off leaves only people, vehicles and projectiles"
+             top_pad="5"
+             width="308" />
             <slider
              enabled_control="SKMapMLEnable"
              control_name="SKMapMLSize"
@@ -457,23 +400,6 @@
              max_val="1.2"
              min_val="0.3"
              name="sk_ml_size"
-             text_width="40"
-             top_pad="5"
-             width="308" />
-            <slider
-             enabled_control="SKMapMLEnable"
-             control_name="SKMapMLLineStrength"
-             decimal_digits="2"
-             follows="left|top|right"
-             height="16"
-             increment="0.05"
-             label="Line strength"
-             label_width="110"
-             layout="topleft"
-             left="8"
-             max_val="1"
-             min_val="0"
-             name="sk_ml_lines"
              text_width="40"
              top_pad="5"
              width="308" />
@@ -559,7 +485,7 @@
         </panel>
         <panel
          follows="all"
-         height="381"
+         height="412"
          label="Advanced"
          layout="topleft"
          left="0"
@@ -595,126 +521,6 @@
              left="8"
              name="sk_map_record"
              tool_tip="Records why the map and the navmesh under it update, until unticked."
-             top_pad="5"
-             width="308" />
-            <combo_box
-             control_name="SKMapPlanOverlap"
-             follows="left|top"
-             height="20"
-             layout="topleft"
-             left="8"
-             name="sk_plan_overlap"
-             top_pad="5"
-             width="308">
-                <combo_box.item
-                 label="Buildings: ground storey and street rooms"
-                 name="sk_plan_overlap_0"
-                 value="0" />
-                <combo_box.item
-                 label="Buildings: ground storey only"
-                 name="sk_plan_overlap_1"
-                 value="1" />
-                <combo_box.item
-                 label="Buildings: roofs"
-                 name="sk_plan_overlap_2"
-                 value="2" />
-            </combo_box>
-            <combo_box
-             control_name="SKMapPlanOutside"
-             follows="left|top"
-             height="20"
-             layout="topleft"
-             left="8"
-             name="sk_plan_outside"
-             top_pad="5"
-             width="308">
-                <combo_box.item
-                 label="Outside when upstairs: full"
-                 name="sk_plan_outside_0"
-                 value="0" />
-                <combo_box.item
-                 label="Outside when upstairs: dimmed"
-                 name="sk_plan_outside_1"
-                 value="1" />
-                <combo_box.item
-                 label="Outside when upstairs: hidden"
-                 name="sk_plan_outside_2"
-                 value="2" />
-            </combo_box>
-            <combo_box
-             control_name="SKMapPlanMSAA"
-             follows="left|top"
-             height="20"
-             layout="topleft"
-             left="8"
-             name="sk_plan_msaa"
-             top_pad="5"
-             width="308">
-                <combo_box.item
-                 label="Plan antialiasing: off"
-                 name="sk_plan_msaa_0"
-                 value="0" />
-                <combo_box.item
-                 label="Plan antialiasing: 2x"
-                 name="sk_plan_msaa_2"
-                 value="2" />
-                <combo_box.item
-                 label="Plan antialiasing: 4x"
-                 name="sk_plan_msaa_4"
-                 value="4" />
-                <combo_box.item
-                 label="Plan antialiasing: 8x"
-                 name="sk_plan_msaa_8"
-                 value="8" />
-            </combo_box>
-            <check_box
-             control_name="SKMapPlanGaps"
-             follows="left|top"
-             height="16"
-             label="Hatch navmesh gaps"
-             layout="topleft"
-             left="8"
-             name="sk_plan_gaps"
-             top_pad="5"
-             width="308" />
-            <check_box
-             control_name="SKMapPlanLedges"
-             follows="left|top"
-             height="16"
-             label="Ledge lines"
-             layout="topleft"
-             left="8"
-             name="sk_plan_ledges"
-             top_pad="5"
-             width="308" />
-            <check_box
-             control_name="SKMapPlanOtherLevel"
-             follows="left|top"
-             height="16"
-             label="Other levels, muted"
-             layout="topleft"
-             left="8"
-             name="sk_plan_other"
-             top_pad="5"
-             width="308" />
-            <check_box
-             control_name="SKMapPlanRoofOutlines"
-             follows="left|top"
-             height="16"
-             label="Roof outlines"
-             layout="topleft"
-             left="8"
-             name="sk_plan_roofs"
-             top_pad="5"
-             width="308" />
-            <check_box
-             control_name="SKMapPlanTerrain"
-             follows="left|top"
-             height="16"
-             label="Land under the plan"
-             layout="topleft"
-             left="8"
-             name="sk_plan_terrain"
              top_pad="5"
              width="308" />
             <slider

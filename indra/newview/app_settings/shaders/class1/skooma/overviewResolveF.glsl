@@ -46,6 +46,7 @@ uniform vec4 sk_regions[16];   // the territory: the regions styled as inside, m
 uniform int sk_region_count;
 uniform vec3 sk_invisible;
 uniform int sk_debug_view;      // SKOverviewDebugView
+uniform int sk_class_mask;      // the mini-map's opt-in layers, -1 for the tactical view's own style
 
 const int CODE_NONE = 0;
 const int CODE_FLOOR = 16;
@@ -85,6 +86,27 @@ const float FADE_START_M = 90.0;
 const float FADE_END_M = 260.0;
 const float OUTSIDE_DIM = 0.45;
 const float GRID_M = 8.0;
+const int MASK_RAMPS = 1;
+const int MASK_DOORS = 2;
+const int MASK_LADDERS = 4;
+const int MASK_CONTOURS = 8;
+const vec3 RAMP_TINT = vec3(0.78, 0.70, 0.36);
+const vec3 LADDER_TINT = vec3(0.36, 0.76, 0.80);
+const vec3 CONTOUR = vec3(0.85, 0.88, 0.80);
+const float CONTOUR_STEP_M = 0.5;
+const float TERRAIN_CONTOUR_STEP_M = 2.0;
+
+// Whether a mini-map layer is on; the tactical view keeps every class as styled.
+bool layerOn(int bit)
+{
+    return sk_class_mask < 0 || (sk_class_mask & bit) != 0;
+}
+
+// Whether the mini-map highlights a layer beyond the tactical view's styling.
+bool layerHighlit(int bit)
+{
+    return sk_class_mask >= 0 && (sk_class_mask & bit) != 0;
+}
 
 ivec2 gSize;
 
@@ -307,7 +329,7 @@ void main()
     {
         // Ground at the agent's level is the dark play area; floors and roofs above it rise to the light slate.
         c = mix(GROUND * GROUND_LIFT, SLATE_TOP, smoothstep(0.5, ROOF_M, rel));
-        c = code == CODE_RAMP ? mix(c, SLATE_WALL, 0.3) : c;
+        c = code == CODE_RAMP && layerOn(MASK_RAMPS) ? mix(c, layerHighlit(MASK_RAMPS) ? RAMP_TINT : SLATE_WALL, 0.3) : c;
     }
     else if (code == CODE_WALL || code == CODE_SECTION)
     {
@@ -319,11 +341,11 @@ void main()
     }
     else if (code == CODE_DOOR)
     {
-        c = mix(SLATE_WALL, DOOR_TINT, 0.45);
+        c = layerOn(MASK_DOORS) ? mix(SLATE_WALL, DOOR_TINT, layerHighlit(MASK_DOORS) ? 0.7 : 0.45) : SLATE_WALL;
     }
     else if (code == CODE_LADDER)
     {
-        c = SLATE_WALL * 1.12;
+        c = layerHighlit(MASK_LADDERS) ? mix(SLATE_WALL, LADDER_TINT, 0.6) : layerOn(MASK_LADDERS) ? SLATE_WALL * 1.12 : SLATE_WALL;
     }
     else if (code == CODE_MOVER || code == CODE_VEH_CIVIL)
     {
@@ -408,6 +430,16 @@ void main()
             c = SLATE_TOP * 1.1;
             debug_cut = 1.0;
         }
+    }
+
+    if (layerHighlit(MASK_CONTOURS) && (code == CODE_FLOOR || code == CODE_RAMP || code == CODE_TERRAIN))
+    {
+        // A contour where a height step falls between this texel and its east or north neighbour on the same surface.
+        float step_m = code == CODE_TERRAIN ? TERRAIN_CONTOUR_STEP_M : CONTOUR_STEP_M;
+        float band = floor(pos.z / step_m);
+        bool line = (hx1 && codeAt(p + ivec2(1, 0)) == code && abs(px1.z - pos.z) < step_m && floor(px1.z / step_m) != band) ||
+                    (hy1 && codeAt(p + ivec2(0, 1)) == code && abs(py1.z - pos.z) < step_m && floor(py1.z / step_m) != band);
+        c = line ? mix(c, CONTOUR, 0.3) : c;
     }
 
     if (pos.z < sk_water_z)

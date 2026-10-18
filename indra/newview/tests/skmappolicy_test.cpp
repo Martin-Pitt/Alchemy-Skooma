@@ -1,6 +1,6 @@
 /**
  * @file skmappolicy_test.cpp
- * @brief Mini-map rules: visibility, events, seeding, the Moderate gate, parcel facts, presets.
+ * @brief Mini-map rules: visibility, events, the Moderate gate, parcel facts.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Alchemy Viewer Source Code
@@ -147,35 +147,6 @@ namespace tut
     }
 
     // Seeding from the classic map.
-    template<> template<>
-    void skmappolicy_object::test<3>()
-    {
-        LLSD classic;
-        classic["MiniMapScale"] = 128.0;
-        classic["MiniMapRotate"] = true;
-        classic["MiniMapAutoCenter"] = false;
-        classic["MiniMapShowPropertyLines"] = true;
-        classic["AlchemyMiniMapForSaleParcels"] = true;
-        classic["AlchemyMiniMapCollisionParcels"] = false;
-        classic["AlchemyMinimapChatRings"] = true;
-        classic["AlchemyMinimapRenderObjects"] = false;
-        const LLSD seeded = seedFromClassic(classic, 200.f);
-        ensure("128 at 200 px is 400 m", std::fabs(seeded["SKMapZoomMeters"].asReal() - 400.0) < 1e-6);
-        ensure("rotate is not seeded: the map always turns", !seeded.has("SKMapRotate"));
-        ensure("auto-centre", !seeded["SKMapAutoCenter"].asBoolean());
-        ensure("parcels", seeded["SKMapLayerParcels"].asBoolean() && seeded["SKMapLayerParcelsForSale"].asBoolean());
-        ensure("collision", !seeded["SKMapLayerParcelsCollision"].asBoolean());
-        ensure("chat rings", seeded["SKMapLayerChatRings"].asBoolean());
-        ensure_equals("objects off", seeded["SKMapLayerObjects"].asInteger(), 0);
-        classic["MiniMapScale"] = 8.0;
-        classic["AlchemyMinimapRenderObjects"] = true;
-        const LLSD again = seedFromClassic(classic, 200.f);
-        ensure("clamped at 2048", std::fabs(again["SKMapZoomMeters"].asReal() - 2048.0) < 1e-6);
-        ensure_equals("objects where no floorplan", again["SKMapLayerObjects"].asInteger(), 1);
-        ensure("idempotent", llsd_equals(seedFromClassic(classic, 200.f), again));
-        ensure("a key missing stays missing", !seedFromClassic(LLSD::emptyMap(), 200.f).has("SKMapAutoCenter"));
-    }
-
     // The Moderate gate, every branch.
     template<> template<>
     void skmappolicy_object::test<4>()
@@ -339,44 +310,6 @@ namespace tut
         ensure_equals("steps down", nextMapParcelSeq(-60000), -60001);
         ensure_equals("wraps", nextMapParcelSeq(-69999), -60000);
         ensure_equals("out of band starts at the first", nextMapParcelSeq(5), -60000);
-    }
-
-    // Presets write only their own keys.
-    template<> template<>
-    void skmappolicy_object::test<9>()
-    {
-        auto keys = [](Preset p) {
-            std::set<std::string> out;
-            for (const auto& kv : presetValues(p))
-            {
-                out.insert(kv.first);
-            }
-            return out;
-        };
-        const std::set<std::string> common = { "SKMapLayerCover", "SKMapLayerStairs", "SKMapLayerContours", "SKMapLayerDoors",
-                                               "SKMapLayerParcels", "SKMapLayerParcelsForSale", "SKMapLayerParcelsCollision",
-                                               "SKMapLayerChatRings", "SKMapLayerVehicles",
-                                               "SKMapLayerFiringLines", "SKMapLayerProjectiles", "SKMapLayerObjects" };
-        ensure("combat", keys(Preset::COMBAT) == common);
-        ensure("explore", keys(Preset::EXPLORE) == common);
-        std::set<std::string> minimal = common;
-        minimal.insert("SKMapLayerFloorplan");
-        ensure("minimal", keys(Preset::MINIMAL) == minimal);
-        for (const auto& kv : presetValues(Preset::COMBAT))
-        {
-            if (kv.first == "SKMapLayerContours")
-            {
-                ensure("combat drops contours", !kv.second.asBoolean());
-            }
-            if (kv.first == "SKMapLayerFiringLines")
-            {
-                ensure("combat keeps firing lines", kv.second.asBoolean());
-            }
-            if (kv.first == "SKMapLayerProjectiles")
-            {
-                ensure("combat shows projectiles", kv.second.asBoolean());
-            }
-        }
     }
 
     // Damage land is combat only while engaged, held 240 s past the last engagement.

@@ -39,7 +39,6 @@ public:
     ~SKFloaterMap() override;
 
     bool postBuild() override;
-    void onOpen(const LLSD& key) override;
     void draw() override;
     void setMinimized(bool minimize) override;
     bool handleDoubleClick(S32 x, S32 y, MASK mask) override;
@@ -55,8 +54,6 @@ protected:
     void updateTitleButtons() override;
 
 private:
-    /// Carry the classic map's settings over, once.
-    void seed();
     /// Whether the border, tint, grip and buttons show this frame.
     bool chromeWanted() const;
     /// The cog sits just left of the leftmost base button the floater shows.

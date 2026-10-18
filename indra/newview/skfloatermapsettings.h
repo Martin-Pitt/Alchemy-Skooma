@@ -1,6 +1,6 @@
 /**
  * @file skfloatermapsettings.h
- * @brief The mini-map's settings: presets and every SKMap switch, bound to its setting.
+ * @brief The mini-map's settings: every SKMap switch, bound to its setting.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Alchemy Viewer Source Code
@@ -27,8 +27,6 @@
 
 #include "llfloater.h"
 
-#include "skmappolicy.h"
-
 class SKFloaterMapSettings : public LLFloater
 {
 public:
@@ -41,7 +39,6 @@ public:
     void onOpen(const LLSD& key) override;
 
 private:
-    void applyPreset(skmap::Preset preset);
     /// Beside the map: to its left if there is room, else to its right.
     void placeBesideMap();
 

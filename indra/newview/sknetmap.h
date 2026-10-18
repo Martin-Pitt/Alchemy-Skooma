@@ -42,8 +42,6 @@
 
 class LLFontGL;
 class LLViewerTexture;
-class SKMapComposite;
-class SKMapObjects;
 class SKMapParcels;
 class SKPopupPanes;
 
@@ -140,9 +138,7 @@ public:
     };
     /// Draw one layer around the camera, span metres across a side px square; PLAN sets the view first and the
     /// next draw() puts the widget's own view back.
-    void drawOverlay(OverlayLayer layer, F32 span, F32 rotation, F32 side, F32 lines, F32 surface);
-    /// Free the plan's GL objects; they are made again on the next draw.
-    void releaseGL();
+    void drawOverlay(OverlayLayer layer, F32 span, F32 rotation, F32 side, F32 surface);
 
     /// Told of every ping the user places on a map, for whatever will carry it to allies.
     typedef boost::signals2::signal<void(const LLVector3d&)> ping_signal_t;
@@ -156,8 +152,6 @@ public:
     static LLVector3d anchorGlobal();
     bool isPanned() const { return mPan.lengthSquared() > 1e-4f; }
 
-    /// The widget's short side in pixels, for seeding the zoom from the classic scale.
-    F32 shortSide() const { return static_cast<F32>(llmin(getRect().getWidth(), getRect().getHeight())); }
 
     /// A person's dot as drawn this frame, in widget pixels.
     struct DrawnDot
@@ -172,10 +166,10 @@ public:
 private:
     /// The view for this frame: the agent plus the pan, the zoom, the rotation.
     void updateView();
-    void drawPlan();
-    /// The top-down capture as the base, in place of terrain, objects and floorplan; false when it is off or not ready.
+    /// The top-down capture as the base; false before the first capture.
     bool drawCaptureBase(F32 alpha);
-    void drawTerrain();
+    /// Elevator cars outlined at their live pose (SKMapLayerElevators).
+    void drawElevators();
     void drawSelf();
     void drawSelfExtras();
     void drawPeople();
@@ -210,10 +204,6 @@ private:
     /// Within a few pixels of the open panes, where the tooltip keeps out of their way.
     bool mouseNearPanes() const;
 
-    void drawObjects();
-
-    std::unique_ptr<SKMapObjects> mObjects;
-    std::unique_ptr<SKMapComposite> mPlan;
     std::unique_ptr<SKMapParcels> mParcels;
     std::vector<DrawnDot> mDots;
     std::vector<skmap::FloorRelation> mFloorOf;    ///< per person of SKMapPeople::people(), set by collectDots

@@ -1946,7 +1946,6 @@ if(AL_BUILD_VIEWER)
     sknavpolys.cpp
     skmapview.cpp
     skmapplan.cpp
-    skmapcomposite.cpp
     skmaplabels.cpp
     skmapmarkers.cpp
     skmapallies.cpp
@@ -1955,7 +1954,6 @@ if(AL_BUILD_VIEWER)
     skmapml.cpp
     skfloatermap.cpp
     skmappeople.cpp
-    skmapobjects.cpp
     skmapparcels.cpp
     skmapscene.cpp
     skmaprecorder.cpp
@@ -1975,7 +1973,6 @@ if(AL_BUILD_VIEWER)
     sknavpolys.h
     skmapview.h
     skmapplan.h
-    skmapcomposite.h
     skmappalette.h
     skmaplabels.h
     skmapmarkers.h
@@ -1985,7 +1982,6 @@ if(AL_BUILD_VIEWER)
     skmapml.h
     skfloatermap.h
     skmappeople.h
-    skmapobjects.h
     skmapparcels.h
     skmapscene.h
     skmaprecorder.h

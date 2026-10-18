@@ -61,42 +61,6 @@ bool SKFloaterMap::postBuild()
     return true;
 }
 
-void SKFloaterMap::onOpen(const LLSD& key)
-{
-    LLFloater::onOpen(key);
-    // Here, not in postBuild: the saved rect, which sizes the map, is applied in between.
-    seed();
-}
-
-void SKFloaterMap::seed()
-{
-    if (gSavedSettings.getBOOL("SKMapSeeded") || !mMap)
-    {
-        return;
-    }
-    static const char* CLASSIC[] = { "MiniMapScale", "MiniMapRotate", "MiniMapAutoCenter", "MiniMapShowPropertyLines",
-                                     "AlchemyMiniMapForSaleParcels", "AlchemyMiniMapCollisionParcels", "AlchemyMinimapChatRings",
-                                     "AlchemyMinimapRenderObjects" };
-    LLSD classic = LLSD::emptyMap();
-    for (const char* name : CLASSIC)
-    {
-        if (LLControlVariable* control = gSavedSettings.getControl(name))
-        {
-            classic[name] = control->getValue();
-        }
-    }
-    const LLSD seeded = skmap::seedFromClassic(classic, mMap->shortSide());
-    for (LLSD::map_const_iterator it = seeded.beginMap(); it != seeded.endMap(); ++it)
-    {
-        if (LLControlVariable* control = gSavedSettings.getControl(it->first))
-        {
-            control->setValue(it->second);
-        }
-    }
-    gSavedSettings.setBOOL("SKMapSeeded", true);
-    LL_INFOS("SKMap") << "seeded the mini-map from the classic map's settings" << LL_ENDL;
-}
-
 void SKFloaterMap::updateTitleButtons()
 {
     LLFloater::updateTitleButtons();

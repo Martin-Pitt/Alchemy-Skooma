@@ -58,7 +58,7 @@ class SKPopupPanes;
 // Renders terrain and the census's shapes below a cut plane at the
 // navmesh floor under the agent plus SKOverviewCutHeight, each writing a class code, then resolves depth and codes
 // into an RGBA8 map. Two kinds of shot share the passes: straight-down maps of every connected region for the mini-map
-// (SKMapCaptureBase; the agent's region cut, every SKOverviewRefresh seconds, its neighbours uncut and less often,
+// (while a map draws them; the agent's region cut, every SKOverviewRefresh seconds, its neighbours uncut and less often,
 // regions further off rarer still) and the tactical view (SKTacticalOverview), a modal view drawn from the viewer's
 // own camera, which it tilts over the agent as it opens, so alt-cam and the wheel move it as they move the world camera.
 class SKOverviewCapture : public LLSingleton<SKOverviewCapture>, public SKModalMode
@@ -88,6 +88,10 @@ public:
 
     /// The tactical overview key: held, it shows the view until released; tapped, it latches it until the next tap.
     static void handleTacticalKey(bool down);
+
+    /// A map drew the region maps this frame: they are captured while one keeps asking.
+    static void noteMapsWanted();
+    static bool mapsWanted();
 
     /// A region's resolved map: it covers the region at mOrigin by mWidth metres.
     struct Tile
@@ -172,6 +176,7 @@ private:
     F64 mNextSlot = 0.0;    // when the next turn may capture
     Stats mStats;
     F32 mDemandRange = 0.f;
+    U32 mClassMask = 0;     // the layers the region maps were last styled with
     bool mGLFailed = false;
     bool mTiming = false;
     bool mDemanding = false;

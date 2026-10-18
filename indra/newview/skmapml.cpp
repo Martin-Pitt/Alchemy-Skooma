@@ -254,7 +254,6 @@ void main()
         static LLCachedControl<F32> span(gSavedSettings, "SKMapZoomMeters", skmap::ZOOM_DEFAULT_M);
         static LLCachedControl<bool> rotate(gSavedSettings, "SKMapMLRotate", false);
         static LLCachedControl<F32> size(gSavedSettings, "SKMapMLSize", 0.8f);
-        static LLCachedControl<F32> lines(gSavedSettings, "SKMapMLLineStrength", 0.8f);
         static LLCachedControl<F32> surface(gSavedSettings, "SKMapMLSurfaceOpacity", 0.2f);
         static LLCachedControl<F32> centre_fade(gSavedSettings, "SKMapMLCentreFade", 0.18f);
         static LLCachedControl<F32> self_fade(gSavedSettings, "SKMapMLSelfFadePx", 28.f);
@@ -373,8 +372,7 @@ void main()
             const SKNetMap::OverlayLayer layer = mode == 0 ? SKNetMap::OverlayLayer::PLAN
                                                  : mode == 1 ? SKNetMap::OverlayLayer::MARKERS
                                                              : SKNetMap::OverlayLayer::SELF;
-            map->drawOverlay(layer, metres, rotation, side_ui, llclamp(static_cast<F32>(lines), 0.f, 1.f),
-                             llclamp(static_cast<F32>(surface), 0.f, 1.f));
+            map->drawOverlay(layer, metres, rotation, side_ui, llclamp(static_cast<F32>(surface), 0.f, 1.f));
             gGL.flush();
             s.mTarget.flush();
             glBindFramebuffer(GL_DRAW_FRAMEBUFFER, draw_fbo);
@@ -421,14 +419,6 @@ void SKMapML::draw()
 // static
 void SKMapML::cleanup()
 {
-    // The corner map's plan holds the overlay's blit too; a restarted context rebuilds both.
-    if (SKFloaterMap* floater = LLFloaterReg::findTypedInstance<SKFloaterMap>("mini_map"))
-    {
-        if (SKNetMap* map = floater->map())
-        {
-            map->releaseGL();
-        }
-    }
     if (sState && sState->mIdleAdded)
     {
         gIdleCallbacks.deleteFunction(onIdle, nullptr);

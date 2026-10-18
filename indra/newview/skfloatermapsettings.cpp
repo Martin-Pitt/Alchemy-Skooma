@@ -1,6 +1,6 @@
 /**
  * @file skfloatermapsettings.cpp
- * @brief The mini-map's settings: presets and every SKMap switch, bound to its setting.
+ * @brief The mini-map's settings: every SKMap switch, bound to its setting.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Alchemy Viewer Source Code
@@ -38,9 +38,6 @@ SKFloaterMapSettings::SKFloaterMapSettings(const LLSD& key)
 
 bool SKFloaterMapSettings::postBuild()
 {
-    getChild<LLButton>("sk_preset_combat")->setCommitCallback([this](LLUICtrl*, const LLSD&) { applyPreset(skmap::Preset::COMBAT); });
-    getChild<LLButton>("sk_preset_explore")->setCommitCallback([this](LLUICtrl*, const LLSD&) { applyPreset(skmap::Preset::EXPLORE); });
-    getChild<LLButton>("sk_preset_minimal")->setCommitCallback([this](LLUICtrl*, const LLSD&) { applyPreset(skmap::Preset::MINIMAL); });
     mHadSavedRect = !mRectControl.empty() && getControlGroup()->getRect(mRectControl).notEmpty();
     return true;
 }
@@ -52,18 +49,6 @@ void SKFloaterMapSettings::onOpen(const LLSD& key)
         placeBesideMap();
     }
     mPlaced = true;
-}
-
-void SKFloaterMapSettings::applyPreset(skmap::Preset preset)
-{
-    // The bound controls follow their settings, so writing the settings is enough.
-    for (const auto& [name, value] : skmap::presetValues(preset))
-    {
-        if (LLControlVariable* control = gSavedSettings.getControl(name))
-        {
-            control->setValue(value);
-        }
-    }
 }
 
 void SKFloaterMapSettings::placeBesideMap()

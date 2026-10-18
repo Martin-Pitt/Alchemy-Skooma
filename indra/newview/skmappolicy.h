@@ -1,6 +1,6 @@
 /**
  * @file skmappolicy.h
- * @brief Mini-map rules: who is drawn, combat events, classic seeding, the Moderate gate and presets.
+ * @brief Mini-map rules: who is drawn, combat events and the Moderate gate.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Alchemy Viewer Source Code
@@ -103,10 +103,6 @@ namespace skmap
 
     constexpr F32 EVENT_ICON_FADE_S = 0.2f;
 
-    /// The classic map's settings to the new ones, once. Keys missing from classic are left
-    /// out; the zoom is the metres the classic scale showed across the widget's short side.
-    LLSD seedFromClassic(const LLSD& classic, F32 widget_short_px);
-
     // The Moderate gate. Only certain powers show; nothing is ever enabled on a guess.
     enum class ParcelClass : U8 { SELF, GROUP, OTHER };
     enum class FactsState : U8 { NONE, PENDING, KNOWN, FAILED };
@@ -182,10 +178,6 @@ namespace skmap
     bool isMapParcelSeq(S32 id);
     /// The next id: one down, wrapping from the last to the first.
     S32 nextMapParcelSeq(S32 previous);
-
-    enum class Preset : U8 { COMBAT, EXPLORE, MINIMAL };
-    /// The settings a preset writes, and only those.
-    std::vector<std::pair<std::string, LLSD>> presetValues(Preset preset);
 }
 
 #endif // SK_MAPPOLICY_H

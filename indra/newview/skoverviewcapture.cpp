@@ -118,6 +118,18 @@ namespace
         return mode == 0;
     }
     const F64 TACTICAL_TAP_S = 0.2;
+    const F64 MAPS_WANTED_S = 2.0;  // the region maps keep capturing this long after a map last drew them
+    F64 sMapsWantedAt = -1.0;
+
+    /// The mini-map's opt-in layers the region maps style (overviewResolveF.glsl's MASK_*); the tactical view ignores them.
+    U32 mapClassMask()
+    {
+        static LLCachedControl<bool> stairs(gSavedSettings, "SKMapLayerStairs", false);
+        static LLCachedControl<bool> doors(gSavedSettings, "SKMapLayerDoors", false);
+        static LLCachedControl<bool> ladders(gSavedSettings, "SKMapLayerLadders", false);
+        static LLCachedControl<bool> contours(gSavedSettings, "SKMapLayerContours", false);
+        return (stairs ? 1u : 0u) | (doors ? 2u : 0u) | (ladders ? 4u : 0u) | (contours ? 8u : 0u);
+    }
     const F32 LEVEL_BELOW_M = 4.f;  // another region's map keeps the clusters reaching this far below the agent's floor
     const F32 LEVEL_ABOVE_M = 8.f;  // and this far above it
     const F32 ON_GROUND_M = 8.f;    // an agent's floor this close to the land is at ground level
@@ -166,9 +178,8 @@ void SKOverviewCapture::onFrame()
     {
         SKWorldCensus::instance().setSlowCadence(tacticalShown());
     }
-    static LLCachedControl<bool> enabled(gSavedSettings, "SKMapCaptureBase", false);
     static LLCachedControl<bool> tactical(gSavedSettings, "SKTacticalOverview", false);
-    if (!enabled && !tactical)
+    if (!mapsWanted() && !tactical)
     {
         if (instanceExists())
         {
@@ -291,7 +302,7 @@ void SKOverviewCapture::updateDemand(bool wanted)
         return;
     }
     // The region maps want the census over the agent's neighbours as well; the tactical view only around it.
-    static LLCachedControl<bool> maps(gSavedSettings, "SKMapCaptureBase", false);
+    const bool maps = mapsWanted();
     static LLCachedControl<F32> maps_range(gSavedSettings, "SKOverviewCensusRange", 384.f);
     F32 range = maps ? llmax((F32)maps_range, CENSUS_RANGE_M) : CENSUS_RANGE_M;
     // The tactical view shows the neighbours too: the census reaches as far as it looks, in 64 m steps so a zoom
@@ -319,6 +330,18 @@ void SKOverviewCapture::updateDemand(bool wanted)
         SKWorldCensus::instance().removeDemand("overview");
     }
     mDemanding = wanted;
+}
+
+// static
+void SKOverviewCapture::noteMapsWanted()
+{
+    sMapsWantedAt = LLFrameTimer::getUptimeSeconds().value();
+}
+
+// static
+bool SKOverviewCapture::mapsWanted()
+{
+    return sMapsWantedAt >= 0.0 && LLFrameTimer::getUptimeSeconds().value() - sMapsWantedAt < MAPS_WANTED_S;
 }
 
 std::vector<SKOverviewCapture::Tile> SKOverviewCapture::tiles() const
@@ -689,8 +712,7 @@ void SKOverviewCapture::renderModal(const LLRect& world_rect_raw)
 {
     // The display loop skips the world, and with it the overview's per-frame work: the maps, the census and the view.
     updateCapsLockCapture();
-    static LLCachedControl<bool> enabled(gSavedSettings, "SKMapCaptureBase", false);
-    if (enabled || mTacticalOpen)
+    if (mapsWanted() || mTacticalOpen)
     {
         frame();
     }
@@ -748,9 +770,8 @@ void SKOverviewCapture::frame()
         mCensus.update();
     }
 
-    static LLCachedControl<bool> enabled(gSavedSettings, "SKMapCaptureBase", false);
     static LLCachedControl<bool> tactical_on(gSavedSettings, "SKTacticalOverview", false);
-    if (enabled)
+    if (mapsWanted())
     {
         if (!tacticalShown())
         {
@@ -804,6 +825,7 @@ void SKOverviewCapture::resolve(LLRenderTarget& capture, LLRenderTarget& resolve
         uniformColour(prog, "sk_invisible", skmap::palette::DROP_EDGE);
         static LLCachedControl<U32> debug_view(gSavedSettings, "SKOverviewDebugView", 0);
         glUniform1i(glGetUniformLocation(prog, "sk_debug_view"), (GLint)(U32)debug_view);
+        glUniform1i(glGetUniformLocation(prog, "sk_class_mask"), shot.mTopDown ? (GLint)mapClassMask() : -1);
         {
             // The territory: the regions styled as inside, at most SK_MAX_TERRITORY of them.
             std::vector<LLVector4> rects = shot.mTerritory.empty() ? std::vector<LLVector4>{ shot.mRegion } : shot.mTerritory;
@@ -1069,6 +1091,15 @@ void SKOverviewCapture::captureMaps(F64 now)
         return 1 + (U32)(llmax(gap_x, gap_y) / llmax(agent_w, 1.0) + 0.001);
     };
 
+    // A layer switched on or off restyles every map, nearest first.
+    if (mapClassMask() != mClassMask)
+    {
+        mClassMask = mapClassMask();
+        for (std::unique_ptr<RegionMap>& map : mMaps)
+        {
+            map->mLast = -1.0;
+        }
+    }
     static LLCachedControl<F32> refresh(gSavedSettings, "SKOverviewRefresh", 1.f);
     static LLCachedControl<F32> near_refresh(gSavedSettings, "SKOverviewNeighbourRefresh", 5.f);
     static LLCachedControl<F32> far_refresh(gSavedSettings, "SKOverviewFarRefresh", 30.f);

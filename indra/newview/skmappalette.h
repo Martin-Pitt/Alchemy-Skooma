@@ -174,6 +174,8 @@ namespace skmap
         constexpr F32 OVERHANG_ON_PX = 2.f;
         constexpr F32 OVERHANG_OFF_PX = 3.f;
         constexpr PaletteColour DOOR = withAlpha(rgba8(0xb48cf0ff), 0.95f);   ///< lavender: no wall, floor, people or drop colour
+        constexpr PaletteColour ELEVATOR = withAlpha(rgba8(0x5cc2ccff), 0.9f);   ///< an elevator car's outline
+        constexpr F32 ELEVATOR_PX = 1.5f;
         constexpr F32 DOOR_SHUT_PX = 3.f;           ///< walls' baked edges are 0.65-1.7 px
         constexpr F32 DOOR_LEAF_PX = 2.f;
         constexpr F32 DOOR_JAMB_PX = 2.f;

@@ -1,6 +1,6 @@
 /**
  * @file skmappolicy.cpp
- * @brief Mini-map rules: who is drawn, combat events, classic seeding, the Moderate gate and presets.
+ * @brief Mini-map rules: who is drawn, combat events and the Moderate gate.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Alchemy Viewer Source Code
@@ -112,35 +112,6 @@ namespace skmap
                 out.push_back(d);
             }
         }
-    }
-
-    LLSD seedFromClassic(const LLSD& classic, F32 widget_short_px)
-    {
-        LLSD out = LLSD::emptyMap();
-        if (classic.has("MiniMapScale") && classic["MiniMapScale"].asReal() > 0.0)
-        {
-            const F64 metres = 256.0 * widget_short_px / classic["MiniMapScale"].asReal();
-            out["SKMapZoomMeters"] = llclamp(metres, 4.0, 2048.0);
-        }
-        static const char* TOGGLES[][2] = {
-            { "MiniMapAutoCenter", "SKMapAutoCenter" },
-            { "MiniMapShowPropertyLines", "SKMapLayerParcels" },
-            { "AlchemyMiniMapForSaleParcels", "SKMapLayerParcelsForSale" },
-            { "AlchemyMiniMapCollisionParcels", "SKMapLayerParcelsCollision" },
-            { "AlchemyMinimapChatRings", "SKMapLayerChatRings" },
-        };
-        for (const auto& toggle : TOGGLES)
-        {
-            if (classic.has(toggle[0]))
-            {
-                out[toggle[1]] = classic[toggle[0]].asBoolean();
-            }
-        }
-        if (classic.has("AlchemyMinimapRenderObjects"))
-        {
-            out["SKMapLayerObjects"] = classic["AlchemyMinimapRenderObjects"].asBoolean() ? 1 : 0;
-        }
-        return out;
     }
 
     bool estatePower(bool agent_owns_region, bool agent_manages_estate, bool target_owns_region)
@@ -260,35 +231,5 @@ namespace skmap
             return MAP_PARCEL_SEQ_FIRST;
         }
         return previous - 1;
-    }
-
-    std::vector<std::pair<std::string, LLSD>> presetValues(Preset preset)
-    {
-        switch (preset)
-        {
-            case Preset::COMBAT:
-                return { { "SKMapLayerCover", true },           { "SKMapLayerStairs", true },
-                         { "SKMapLayerContours", false },       { "SKMapLayerDoors", true },
-                         { "SKMapLayerParcels", false },        { "SKMapLayerParcelsForSale", false },
-                         { "SKMapLayerParcelsCollision", false }, { "SKMapLayerChatRings", false },
-                         { "SKMapLayerVehicles", true },        { "SKMapLayerFiringLines", true },
-                         { "SKMapLayerProjectiles", true },     { "SKMapLayerObjects", 1 } };
-            case Preset::EXPLORE:
-                return { { "SKMapLayerCover", true },           { "SKMapLayerStairs", true },
-                         { "SKMapLayerContours", true },        { "SKMapLayerDoors", true },
-                         { "SKMapLayerParcels", true },         { "SKMapLayerParcelsForSale", true },
-                         { "SKMapLayerParcelsCollision", false }, { "SKMapLayerChatRings", false },
-                         { "SKMapLayerVehicles", true },        { "SKMapLayerFiringLines", false },
-                         { "SKMapLayerProjectiles", false },    { "SKMapLayerObjects", 1 } };
-            case Preset::MINIMAL:
-            default:
-                return { { "SKMapLayerFloorplan", true },       { "SKMapLayerCover", false },
-                         { "SKMapLayerStairs", false },         { "SKMapLayerContours", false },
-                         { "SKMapLayerDoors", false },          { "SKMapLayerParcels", false },
-                         { "SKMapLayerParcelsForSale", false }, { "SKMapLayerParcelsCollision", false },
-                         { "SKMapLayerChatRings", false },      { "SKMapLayerVehicles", false },
-                         { "SKMapLayerFiringLines", false },    { "SKMapLayerProjectiles", false },
-                         { "SKMapLayerObjects", 0 } };
-        }
     }
 }
