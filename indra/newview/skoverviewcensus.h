@@ -34,6 +34,7 @@
 #include <string>
 #include <map>
 #include <set>
+#include <unordered_map>
 #include <vector>
 
 class LLVertexBuffer;
@@ -65,6 +66,9 @@ namespace skoverview
         CODE_VEH_ALLY = 27,     ///< an allied vehicle
         CODE_VEH_NEUTRAL = 28,  ///< a vehicle neither civilian nor allied
     };
+
+    /// Whether anyone sees a part's faces; UNKNOWN while its object, a face or an image is not loaded.
+    enum class Seen : U8 { VISIBLE, INVISIBLE, UNKNOWN };
 
     /// The census classes, in vertex buffer order.
     enum CensusClass : U8 { FLOOR, WALL, COVER, RAMP, DOOR, LADDER, VEHICLE, PLACEHOLDER, INVISIBLE, NUM_CENSUS_CLASSES };
@@ -192,11 +196,35 @@ private:
         LLVector3d mOrigin;             ///< its region's origin, global; triangles are region-local
         LLVector3d mAnchor;             ///< its linkset root's position, global
         LLUUID mRoot;
-        std::vector<LLVector3> mTris;
+        std::shared_ptr<const std::vector<LLVector3>> mTris; ///< shared with the cache it came from; never null
         F32 mHeight = 0.f;
         skoverview::CensusClass mFixed = skoverview::NUM_CENSUS_CLASSES;
     };
     void gatherSurrounds(const struct SKCensusSnapshot& snap);
+    /// A part's look, kept per part while its object and faces' inputs stay the same.
+    skoverview::Seen seenOf(const LLUUID& part);
+    /// Drops the verdicts of parts no pass asked about since the last prune.
+    void pruneSeen();
+    struct SeenEntry
+    {
+        U64 mKey = 0;
+        U32 mPass = 0;
+        skoverview::Seen mSeen = skoverview::Seen::UNKNOWN;
+    };
+    static constexpr U32 SEEN_REVERIFY_PASSES = 32; ///< each kept verdict is worked again once in this many passes
+    std::unordered_map<LLUUID, SeenEntry> mSeen;
+    U32 mSeenPass = 0;
+    /// A sculpt's region-local triangles, kept while its volume, map and placement stay the same.
+    struct SculptEntry
+    {
+        U64 mKey = 0;
+        U32 mPass = 0;
+        bool mValid = false;    ///< it had geometry
+        std::shared_ptr<const std::vector<LLVector3>> mTris;
+        F32 mHeight = 0.f;
+    };
+    std::unordered_map<LLUUID, SculptEntry> mSculptGeom;
+    std::vector<LLUUID> mSculptCandidates;  ///< the sculpted volumes the last full object list walk found
     /// Logs which signature entries came and went since the last rebuild; sorts entries and keeps them.
     void logChurn(std::vector<std::pair<U64, std::pair<char, LLUUID>>>& entries);
     std::vector<std::pair<U64, std::pair<char, LLUUID>>> mLastEntries;

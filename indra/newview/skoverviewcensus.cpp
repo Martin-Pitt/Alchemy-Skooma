@@ -236,8 +236,7 @@ namespace skoverview
 namespace
 {
     using skoverview::transparentTexture;
-
-    enum class Seen : U8 { VISIBLE, INVISIBLE, UNKNOWN };
+    using skoverview::Seen;
 
     // Whether the viewer draws a face so anyone sees it, from its own render inputs: colour alpha 0, an alpha-only
     // image (the invisiprim path), the default transparent or an invisiprim texture, an image whose alpha never rises
@@ -353,6 +352,67 @@ namespace
         }
         return seen;
     }
+
+    // What a part's verdict is worked from, short of the image's own pixels: its object and each face's inputs.
+    U64 lookKey(LLViewerObject* object)
+    {
+        U64 h = skoverview::scramble((U64)(uintptr_t)object ^ ((U64)object->getNumTEs() << 56));
+        for (U8 i = 0; i < object->getNumTEs(); ++i)
+        {
+            const LLTextureEntry* te = object->getTE(i);
+            if (!te)
+            {
+                h = skoverview::scramble(h ^ 0x51u);
+                continue;
+            }
+            U32 alpha = 0;
+            const F32 a = te->getColor().mV[VALPHA];
+            memcpy(&alpha, &a, sizeof(alpha));
+            h = skoverview::scramble(h ^ hash_value(te->getID()));
+            h = skoverview::scramble(h ^ hash_value(te->getMaterialID()) ^ ((U64)alpha << 32));
+            h = skoverview::scramble(h ^ (U64)(uintptr_t)te->getGLTFRenderMaterial());
+        }
+        return h;
+    }
+}
+
+skoverview::Seen SKOverviewCensus::seenOf(const LLUUID& part)
+{
+    // Only verdicts are kept, never "not known yet"; a few kept ones are worked again each pass in case a face's image
+    // changed under the same inputs.
+    LLViewerObject* object = gObjectList.findObject(part);
+    if (!object || object->getNumTEs() == 0)
+    {
+        return Seen::UNKNOWN;
+    }
+    const U64 key = lookKey(object);
+    const auto it = mSeen.find(part);
+    if (it != mSeen.end() && it->second.mKey == key &&
+        (hash_value(part) + mSeenPass) % SEEN_REVERIFY_PASSES != 0)
+    {
+        it->second.mPass = mSeenPass;
+        return it->second.mSeen;
+    }
+    const Seen seen = partSeen(part, nullptr);
+    if (seen == Seen::UNKNOWN)
+    {
+        if (it != mSeen.end())
+        {
+            mSeen.erase(it);
+        }
+        return seen;
+    }
+    mSeen[part] = { key, mSeenPass, seen };
+    return seen;
+}
+
+void SKOverviewCensus::pruneSeen()
+{
+    for (auto it = mSeen.begin(); it != mSeen.end();)
+    {
+        it = it->second.mPass != mSeenPass ? mSeen.erase(it) : std::next(it);
+    }
+    ++mSeenPass;
 }
 
 bool SKOverviewCensus::update()
@@ -447,12 +507,29 @@ bool SKOverviewCensus::update()
     // Sculpted parts draw from what is rendered, over land and void alike: a megasculpt's physics is a poor stand-in
     // for the ground it shows, and a phantom one has no physics record at all. Their census records are not drawn.
     std::vector<RenderedPart> sculpts;
-    std::set<LLUUID> sculpted;
-    for (S32 i = 0; i < gObjectList.getNumObjects(); ++i)
+    std::unordered_set<LLUUID> sculpted;
+    auto isSculpt = [](const LLVOVolume* volume)
     {
-        LLVOVolume* volume = dynamic_cast<LLVOVolume*>(gObjectList.getObject(i));
-        if (!volume || volume->isDead() || volume->isAttachment() || volume->isMesh() || !volume->isSculpted() ||
-            !volume->getRegion() || !volume->getVolume())
+        return volume && !volume->isDead() && !volume->isAttachment() && !volume->isMesh() && volume->isSculpted() &&
+               volume->getRegion() && volume->getVolume();
+    };
+    // The whole object list is walked for sculpts only every few seconds; between, the ones it found are looked at.
+    if (sculpts_due)
+    {
+        mSculptCandidates.clear();
+        for (S32 i = 0; i < gObjectList.getNumObjects(); ++i)
+        {
+            const LLVOVolume* volume = dynamic_cast<LLVOVolume*>(gObjectList.getObject(i));
+            if (isSculpt(volume))
+            {
+                mSculptCandidates.push_back(volume->getID());
+            }
+        }
+    }
+    for (const LLUUID& candidate : mSculptCandidates)
+    {
+        LLVOVolume* volume = dynamic_cast<LLVOVolume*>(gObjectList.findObject(candidate));
+        if (!isSculpt(volume))
         {
             continue;
         }
@@ -469,8 +546,49 @@ bool SKOverviewCensus::update()
         {
             continue;
         }
-        SKShapeGeometry geom;
-        if (!skCensusRenderGeometry(volume, geom))
+        // Its triangles are worked again only when what they come from moved: the volume (recycled, so with its map
+        // and level), its placement in its region to 1/64 m, and the region.
+        const LLVolume* lod = volume->getVolume();
+        const LLVolumeParams& params = lod->getParams();
+        const LLVector3 pos = volume->getPositionRegion();
+        const LLQuaternion rot = volume->getRotationRegion();
+        const LLVector3 scale = volume->getScale();
+        U64 key = skoverview::scramble((U64)(uintptr_t)lod ^ ((U64)(U8)lod->getSculptLevel() << 56) ^
+                                       ((U64)params.getSculptType() << 48));
+        key = skoverview::scramble(key ^ hash_value(params.getSculptID()) ^ volume->getRegion()->getHandle());
+        for (S32 a = 0; a < 3; ++a)
+        {
+            key = skoverview::scramble(key ^ (U64)(S64)std::llround(pos.mV[a] * 64.f) ^
+                                       ((U64)(S64)std::llround(scale.mV[a] * 64.f) << 24) ^
+                                       ((U64)(S64)std::llround(rot.mQ[a] * 4096.f) << 48));
+        }
+        key = skoverview::scramble(key ^ (U64)(S64)std::llround(rot.mQ[VW] * 4096.f));
+        SculptEntry& cached = mSculptGeom[candidate];
+        cached.mPass = mSeenPass;
+        if (cached.mKey != key)
+        {
+            cached.mKey = key;
+            cached.mTris.reset();
+            SKShapeGeometry geom;
+            cached.mValid = skCensusRenderGeometry(volume, geom);
+            if (cached.mValid)
+            {
+                const LLVector3 region_agent = volume->getRegion()->getOriginAgent();
+                auto tris = std::make_shared<std::vector<LLVector3>>();
+                tris->reserve(geom.mTriangles.size());
+                F32 lo = 1e30f, hi = -1e30f;
+                for (const LLVector3& v : geom.mTriangles)
+                {
+                    const LLVector3 local = volume->volumePositionToAgent(v) - region_agent;
+                    lo = llmin(lo, local.mV[VZ]);
+                    hi = llmax(hi, local.mV[VZ]);
+                    tris->push_back(local);
+                }
+                cached.mHeight = hi - lo;
+                cached.mTris = std::move(tris);
+            }
+        }
+        if (!cached.mValid)
         {
             continue;
         }
@@ -479,20 +597,10 @@ bool SKOverviewCensus::update()
         sc.mOrigin = volume->getRegion()->getOriginGlobal();
         sc.mAnchor = volume->getRootEdit()->getPositionGlobal();
         sc.mRoot = volume->getRootEdit()->getID();
-        const LLVector3 region_agent = volume->getRegion()->getOriginAgent();
-        sc.mTris.reserve(geom.mTriangles.size());
-        F32 lo = 1e30f, hi = -1e30f;
-        for (const LLVector3& v : geom.mTriangles)
-        {
-            const LLVector3 local = volume->volumePositionToAgent(v) - region_agent;
-            lo = llmin(lo, local.mV[VZ]);
-            hi = llmax(hi, local.mV[VZ]);
-            sc.mTris.push_back(local);
-        }
-        sc.mHeight = hi - lo;
-        const LLVector3 scale = volume->getScale();
+        sc.mTris = cached.mTris;
+        sc.mHeight = cached.mHeight;
         const bool large = llmax(scale.mV[VX], llmax(scale.mV[VY], scale.mV[VZ])) > skoverview::INVISIBLE_WALL_M;
-        const Seen seen = partSeen(sc.mPart, nullptr);
+        const Seen seen = seenOf(sc.mPart);
         mUnknownLook |= seen == Seen::UNKNOWN;
         if (seen == Seen::INVISIBLE)
         {
@@ -504,7 +612,7 @@ bool SKOverviewCensus::update()
         }
         mix(sc.mPart.getCRC32());
         mix(seen == Seen::INVISIBLE ? 0x7a11u : 0x0u);
-        mix((U64)sc.mTris.size());
+        mix((U64)sc.mTris->size());
         mix((U64)(S64)std::llround(centre.mdV[VX] * 64.0) ^ ((U64)(S64)std::llround(centre.mdV[VY] * 64.0) << 21) ^
             ((U64)(S64)std::llround(centre.mdV[VZ] * 64.0) << 42));
         if (endEntry('S', sc.mPart))
@@ -513,12 +621,20 @@ bool SKOverviewCensus::update()
         }
         sculpts.push_back(std::move(sc));
     }
+    for (auto it = mSculptGeom.begin(); it != mSculptGeom.end();)
+    {
+        it = it->second.mPass != mSeenPass ? mSculptGeom.erase(it) : std::next(it);
+    }
 
     // The surrounds the near look did not already take.
+    std::unordered_set<LLUUID> rendered;
+    for (const RenderedPart& sc : sculpts)
+    {
+        rendered.insert(sc.mPart);
+    }
     for (const RenderedPart& part : mSurrounds)
     {
-        if (std::none_of(sculpts.begin(), sculpts.end(),
-                         [&part](const RenderedPart& sc) { return sc.mPart == part.mPart; }))
+        if (rendered.insert(part.mPart).second)
         {
             sculpts.push_back(part);
         }
@@ -540,8 +656,7 @@ bool SKOverviewCensus::update()
         if (rec->mRole == sknav::Role::SURROUND)
         {
             // A sim surround's rendered shape, in the void only: over land a phantom megasculpt would roof the region.
-            if (std::any_of(sculpts.begin(), sculpts.end(), [&rec](const RenderedPart& sc) { return sc.mPart == rec->mPart; }) ||
-                partSeen(rec->mPart, nullptr) == Seen::INVISIBLE)
+            if (rendered.count(rec->mPart) || seenOf(rec->mPart) == Seen::INVISIBLE)
             {
                 continue;
             }
@@ -559,7 +674,7 @@ bool SKOverviewCensus::update()
         }
         const LLVector3d extent = rec->mMax - rec->mMin;
         const bool large = llmax(extent.mdV[VX], llmax(extent.mdV[VY], extent.mdV[VZ])) > skoverview::INVISIBLE_WALL_M;
-        const Seen seen = partSeen(rec->mPart, nullptr);
+        const Seen seen = seenOf(rec->mPart);
         mUnknownLook |= seen == Seen::UNKNOWN;
         const bool transparent = seen == Seen::INVISIBLE;
         if (large)
@@ -605,10 +720,12 @@ bool SKOverviewCensus::update()
             void_only.pop_back();
         }
     }
+    pruneSeen();
     // Each linkset is a group, so the tactical cut can take a building's linksets and leave its neighbours whole: a
     // cluster joins whatever touches, often a whole block. A level still keeps whole clusters, by the heights of the
     // cluster a linkset is in.
-    std::map<const sknav::Record*, U32> cluster_of;
+    std::unordered_map<const sknav::Record*, U32> cluster_of;
+    cluster_of.reserve(snap->mRecords.size());
     const U32 clusters = (U32)snap->mClusters.mClusters.size();
     for (U32 c = 0; c < clusters; ++c)
     {
@@ -617,7 +734,7 @@ bool SKOverviewCensus::update()
             cluster_of[rec.get()] = c;
         }
     }
-    std::map<LLUUID, U32> linkset_ids;
+    std::unordered_map<LLUUID, U32> linkset_ids;
     std::vector<LLUUID> roots;
     std::vector<U32> group_of(kept.size() + sculpts.size());
     std::map<U32, U32> group_cluster;
@@ -712,7 +829,7 @@ bool SKOverviewCensus::update()
         if (is_sculpt)
         {
             const RenderedPart& sc = sculpts[i - kept.size()];
-            tris = sc.mTris;
+            tris = *sc.mTris;
             part_height = sc.mHeight;
             fixed_class = sc.mFixed;
         }
@@ -725,7 +842,10 @@ bool SKOverviewCensus::update()
             fixed_class = fixed_classes[i];
         }
         const bool in_void_only = i < kept.size() && void_only[i];
-        group_anchor.emplace(groupOf(i), std::make_pair(anchorOf(i), in_void_only));
+        if (!group_anchor.count(groupOf(i)))
+        {
+            group_anchor.emplace(groupOf(i), std::make_pair(anchorOf(i), in_void_only)); // once per linkset
+        }
         for (size_t t = 0; t + 2 < tris.size(); t += 3)
         {
             const LLVector3& a = tris[t];
@@ -947,7 +1067,7 @@ void SKOverviewCensus::gatherSurrounds(const SKCensusSnapshot& snap)
         {
             continue; // its map or mesh has not loaded: a placeholder, not its shape
         }
-        if (partSeen(volume->getID(), nullptr) != Seen::VISIBLE)
+        if (seenOf(volume->getID()) != Seen::VISIBLE)
         {
             continue;
         }
@@ -962,20 +1082,22 @@ void SKOverviewCensus::gatherSurrounds(const SKCensusSnapshot& snap)
         part.mAnchor = volume->getRootEdit()->getPositionGlobal();
         part.mRoot = volume->getRootEdit()->getID();
         const LLVector3 region_agent = volume->getRegion()->getOriginAgent();
-        part.mTris.reserve(geom.mTriangles.size());
+        auto tris = std::make_shared<std::vector<LLVector3>>();
+        tris->reserve(geom.mTriangles.size());
         F32 lo = 1e30f, hi = -1e30f;
         for (const LLVector3& v : geom.mTriangles)
         {
             const LLVector3 local = volume->volumePositionToAgent(v) - region_agent;
             lo = llmin(lo, local.mV[VZ]);
             hi = llmax(hi, local.mV[VZ]);
-            part.mTris.push_back(local);
+            tris->push_back(local);
         }
         part.mHeight = hi - lo;
+        part.mTris = std::move(tris);
         const LLVector3d centre = volume->getPositionGlobal();
         U64 h = 1469598103934665603ull;
         h = (h ^ part.mPart.getCRC32()) * 1099511628211ull;
-        h = (h ^ (U64)part.mTris.size()) * 1099511628211ull;
+        h = (h ^ (U64)part.mTris->size()) * 1099511628211ull;
         h = (h ^ ((U64)(S64)std::llround(centre.mdV[VX] * 64.0) ^ ((U64)(S64)std::llround(centre.mdV[VY] * 64.0) << 21) ^
                   ((U64)(S64)std::llround(centre.mdV[VZ] * 64.0) << 42))) * 1099511628211ull;
         sig += skoverview::scramble(h);
