@@ -155,8 +155,10 @@ public:
     void recentre();
     static bool followsAvatar();
     static LLVector3d anchorGlobal();
-    /// SKMapViewMode is region: north up over the agent's region, fitted with SKMapRegionMargin around it.
+    /// SKMapViewMode is region: north up over the camera's region, fitted with SKMapRegionMargin around it.
     static bool regionMode();
+    /// The region under the camera, or the nearest one while it is out in the void.
+    static const LLViewerRegion* viewRegion();
     bool isPanned() const { return mPan.lengthSquared() > 1e-4f; }
 
 

@@ -485,8 +485,8 @@ void SKNetMap::updateView()
 
     if (regionMode())
     {
-        // North up over the agent's region, its whole width and a margin into each connected neighbour.
-        const LLViewerRegion* region = gAgent.getRegion();
+        // North up over the camera's region, its whole width and a margin into each connected neighbour.
+        const LLViewerRegion* region = viewRegion();
         if (region->getHandle() != mRegionHandle)
         {
             mRegionHandle = region->getHandle();
@@ -534,12 +534,40 @@ bool SKNetMap::regionMode()
 
 LLVector3d SKNetMap::viewAnchor() const
 {
-    const LLViewerRegion* region = regionMode() ? gAgent.getRegion() : nullptr;
+    const LLViewerRegion* region = regionMode() ? viewRegion() : nullptr;
     if (!region)
     {
         return anchorGlobal();
     }
     return regionFit(region, nullptr);
+}
+
+// static
+const LLViewerRegion* SKNetMap::viewRegion()
+{
+    const LLVector3d camera = gAgentCamera.getCameraPositionGlobal();
+    LLWorld* world = LLWorld::getInstance();
+    if (const LLViewerRegion* under = world->getRegionFromPosGlobal(camera))
+    {
+        return under;
+    }
+    const LLViewerRegion* nearest = gAgent.getRegion();
+    F64 best = F64_MAX;
+    for (const LLViewerRegion* region : world->getRegionList())
+    {
+        // Distance from the camera to the region's square, flat.
+        const LLVector3d origin = region->getOriginGlobal();
+        const F64 width = region->getWidth();
+        const F64 dx = llmax(origin.mdV[VX] - camera.mdV[VX], 0.0, camera.mdV[VX] - origin.mdV[VX] - width);
+        const F64 dy = llmax(origin.mdV[VY] - camera.mdV[VY], 0.0, camera.mdV[VY] - origin.mdV[VY] - width);
+        const F64 d = dx * dx + dy * dy;
+        if (d < best)
+        {
+            best = d;
+            nearest = region;
+        }
+    }
+    return nearest;
 }
 
 // static
