@@ -38,6 +38,12 @@ SKFloaterMapSettings::SKFloaterMapSettings(const LLSD& key)
 
 bool SKFloaterMapSettings::postBuild()
 {
+    // Region view is north up and fitted: the zoom and the ease back do not apply, the margin only does there.
+    if (LLControlVariable* mode = gSavedSettings.getControl("SKMapViewMode"))
+    {
+        mModeConnection = mode->getSignal()->connect([this](LLControlVariable*, const LLSD&, const LLSD&) { updateModeControls(); });
+    }
+    updateModeControls();
     mHadSavedRect = !mRectControl.empty() && getControlGroup()->getRect(mRectControl).notEmpty();
     return true;
 }
@@ -49,6 +55,14 @@ void SKFloaterMapSettings::onOpen(const LLSD& key)
         placeBesideMap();
     }
     mPlaced = true;
+}
+
+void SKFloaterMapSettings::updateModeControls()
+{
+    const bool region = gSavedSettings.getU32("SKMapViewMode") == 1;
+    getChild<LLUICtrl>("sk_auto_center")->setEnabled(!region);
+    getChild<LLUICtrl>("sk_zoom_meters")->setEnabled(!region);
+    getChild<LLUICtrl>("sk_region_margin")->setEnabled(region);
 }
 
 void SKFloaterMapSettings::placeBesideMap()

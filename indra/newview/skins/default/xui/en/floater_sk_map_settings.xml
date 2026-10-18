@@ -30,6 +30,51 @@
          name="sk_tab_view"
          top="0"
          width="332">
+            <text
+             follows="left|top"
+             height="16"
+             layout="topleft"
+             left="8"
+             name="sk_view_mode_label"
+             top="10"
+             width="105">
+                View
+            </text>
+            <combo_box
+             control_name="SKMapViewMode"
+             follows="left|top"
+             height="23"
+             layout="topleft"
+             left_pad="5"
+             name="sk_view_mode"
+             top_delta="-4"
+             width="198">
+                <combo_box.item
+                 label="Follow, turning with the camera"
+                 name="sk_view_mode_follow"
+                 value="0" />
+                <combo_box.item
+                 label="Region, north up"
+                 name="sk_view_mode_region"
+                 value="1" />
+            </combo_box>
+            <slider
+             control_name="SKMapRegionMargin"
+             decimal_digits="2"
+             follows="left|top|right"
+             height="16"
+             increment="0.01"
+             label="Region margin"
+             label_width="110"
+             layout="topleft"
+             left="8"
+             max_val="0.2"
+             min_val="0.05"
+             name="sk_region_margin"
+             text_width="40"
+             tool_tip="How much of the neighbouring regions shows around the region, as a fraction of its width"
+             top_pad="5"
+             width="308" />
             <slider
              control_name="SKMapZoomMeters"
              decimal_digits="0"
@@ -44,7 +89,7 @@
              min_val="4"
              name="sk_zoom_meters"
              text_width="40"
-             top="8"
+             top_pad="5"
              width="308" />
             <check_box
              control_name="SKMapAutoCenter"

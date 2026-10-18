@@ -39,11 +39,14 @@ public:
     void onOpen(const LLSD& key) override;
 
 private:
+    /// Greys out what the view mode leaves unused.
+    void updateModeControls();
     /// Beside the map: to its left if there is room, else to its right.
     void placeBesideMap();
 
     bool mHadSavedRect = false;
     bool mPlaced = false;
+    boost::signals2::scoped_connection mModeConnection;
 };
 
 #endif // SK_FLOATERMAPSETTINGS_H

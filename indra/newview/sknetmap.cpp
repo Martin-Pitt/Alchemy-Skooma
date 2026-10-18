@@ -372,6 +372,29 @@ void SKNetMap::updateView()
         }
     }
 
+    if (regionMode())
+    {
+        // North up over the agent's region, its whole width and a margin of the neighbours around it.
+        static LLCachedControl<F32> margin(gSavedSettings, "SKMapRegionMargin", 0.1f);
+        const LLViewerRegion* region = gAgent.getRegion();
+        if (region->getHandle() != mRegionHandle)
+        {
+            mRegionHandle = region->getHandle();
+            refitRegion();
+        }
+        const F32 fit = region->getWidth() * (1.f + 2.f * llclamp((F32)margin, 0.05f, 0.2f));
+        const LLVector3d centre = viewAnchor() + LLVector3d(mPan.mV[VX], mPan.mV[VY], 0.0);
+        mView.set(centre, mRegionSpan > 0.f ? mRegionSpan : fit, 0.f, static_cast<F32>(getRect().getWidth()),
+                  static_cast<F32>(getRect().getHeight()));
+        return;
+    }
+    if (mRegionHandle)
+    {
+        // Leaving region mode drops its pan and zoom.
+        refitRegion();
+        mRegionHandle = 0;
+    }
+
     // The map centres on its anchor and turns so the camera's facing is up.
     const LLVector3 at = LLViewerCamera::getInstance()->getAtAxis();
     const F32 rotation = skmap::MapView::rotationForHeading(std::atan2(at.mV[VY], at.mV[VX]));
@@ -389,6 +412,31 @@ bool SKNetMap::followsAvatar()
 LLVector3d SKNetMap::anchorGlobal()
 {
     return followsAvatar() ? gAgent.getPositionGlobal() : gAgentCamera.getCameraPositionGlobal();
+}
+
+// static
+bool SKNetMap::regionMode()
+{
+    static LLCachedControl<U32> mode(gSavedSettings, "SKMapViewMode", 0);
+    return mode == 1;
+}
+
+LLVector3d SKNetMap::viewAnchor() const
+{
+    const LLViewerRegion* region = regionMode() ? gAgent.getRegion() : nullptr;
+    if (!region)
+    {
+        return anchorGlobal();
+    }
+    const F64 half = region->getWidth() * 0.5;
+    return region->getOriginGlobal() + LLVector3d(half, half, 0.0);
+}
+
+void SKNetMap::refitRegion()
+{
+    mPan.setZero();
+    mEaseStart = -1.0;
+    mRegionSpan = 0.f;
 }
 
 void SKNetMap::recentre()
@@ -1808,7 +1856,12 @@ void SKNetMap::onPanesClosed()
 
 bool SKNetMap::handleScrollWheel(S32 x, S32 y, LLScrollDelta delta)
 {
-    // Positive clicks zoom out, as the classic map.
+    // Positive clicks zoom out, as the classic map; region mode's zoom lasts until it refits.
+    if (regionMode())
+    {
+        mRegionSpan = skmap::zoomByNotches(mView.span(), delta.mPrecise);
+        return true;
+    }
     const F32 span = skmap::zoomByNotches(gSavedSettings.getF32("SKMapZoomMeters"), delta.mPrecise);
     gSavedSettings.setF32("SKMapZoomMeters", span);
     return true;
@@ -1843,7 +1896,7 @@ bool SKNetMap::handleMouseUp(S32 x, S32 y, MASK mask)
         LLUI::getInstance()->setMousePositionLocal(this, local_x, local_y);
         mPanning = false;
         static LLCachedControl<bool> auto_centre(gSavedSettings, "SKMapAutoCenter", true);
-        if (auto_centre)
+        if (auto_centre && !regionMode())
         {
             recentre();
         }
@@ -1869,7 +1922,7 @@ bool SKNetMap::handleHover(S32 x, S32 y, MASK mask)
             const F32 dy = static_cast<F32>(gViewerWindow->getCurrentMouseDY());
             const LLVector3d now = mView.toGlobal(mView.width() * 0.5f - dx, mView.height() * 0.5f - dy);
             // Relative to the anchor, as updateView centres the map on it.
-            const LLVector3d eye = anchorGlobal();
+            const LLVector3d eye = viewAnchor();
             mPan.set(static_cast<F32>(now.mdV[VX] - eye.mdV[VX]), static_cast<F32>(now.mdV[VY] - eye.mdV[VY]));
             mView.set(eye + LLVector3d(mPan.mV[VX], mPan.mV[VY], 0.0), mView.span(), mView.rotation(), mView.width(), mView.height());
             gViewerWindow->moveCursorToCenter();
@@ -1881,6 +1934,12 @@ bool SKNetMap::handleHover(S32 x, S32 y, MASK mask)
 
 bool SKNetMap::handleDoubleClick(S32 x, S32 y, MASK mask)
 {
+    // In region mode a double click first brings a zoomed or panned view back to the fit.
+    if (regionMode() && regionAdjusted())
+    {
+        refitRegion();
+        return true;
+    }
     const LLVector3d pos_global = mView.toGlobal(static_cast<F32>(x), static_cast<F32>(y));
     const bool teleport = gSavedSettings.getBOOL("DoubleClickTeleport");
     const bool world_map = gSavedSettings.getBOOL("DoubleClickShowWorldMap");
