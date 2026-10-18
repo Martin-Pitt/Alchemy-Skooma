@@ -1148,105 +1148,114 @@ void SKWorldCensus::classify(SKCensusSnapshot& snap)
 
     std::vector<FeatureRoot> roots;
     roots.reserve(ids.size());
-    for (const LLUUID& id : ids)
     {
-        LLViewerObject* object = gObjectList.findObject(id);
-        if (!object || object->isDead())
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - classify roots");
+        for (const LLUUID& id : ids)
         {
-            continue;
-        }
-        FeatureRoot r;
-        r.mRoot = id;
-        // The linkset reply first, the property cache where the reply has
-        // nothing; a name neither has is simply not known.
-        if (const LinksetFacts* facts = linksetFactsOf(id))
-        {
-            r.mName = facts->mName;
-            r.mDescription = facts->mDescription;
-            if (facts->mScriptedKnown)
+            LLViewerObject* object = gObjectList.findObject(id);
+            if (!object || object->isDead())
             {
-                r.mScripted = facts->mScripted ? TriState::YES : TriState::NO;
+                continue;
             }
-        }
-        if (r.mName.empty() || r.mDescription.empty())
-        {
-            if (const ALObjectPropertiesCache::ServerProps* props = ALObjectPropertiesCache::instance().get(id))
+            FeatureRoot r;
+            r.mRoot = id;
+            // The linkset reply first, the property cache where the reply has
+            // nothing; a name neither has is simply not known.
+            if (const LinksetFacts* facts = linksetFactsOf(id))
             {
-                if (r.mName.empty())
+                r.mName = facts->mName;
+                r.mDescription = facts->mDescription;
+                if (facts->mScriptedKnown)
                 {
-                    r.mName = props->mName;
-                }
-                if (r.mDescription.empty())
-                {
-                    r.mDescription = props->mDescription;
+                    r.mScripted = facts->mScripted ? TriState::YES : TriState::NO;
                 }
             }
-        }
-        if (r.mScripted == TriState::UNKNOWN && object->flagScripted())
-        {
-            r.mScripted = TriState::YES;
-        }
-        r.mHover = object->mHudText;
-        r.mPhysical = object->flagUsePhysics();
-        if (const auto h = mHistory.find(id); h != mHistory.end())
-        {
-            RootHistory& history = h->second;
-            r.mEverMoved = history.mEverMoved;
-            r.mTravel = history.mTravel;
-            r.mEverCrewed = history.mEverCrewed;
-            r.mWorkingElevator = history.mWorkingElevator;
-            // A physical root never passes the gate, so its travel stays
-            // nil; latched here it stays a vehicle once parked non-physical.
-            if (r.mEverCrewed && (r.mPhysical || r.mTravel > params.mVehicleTravel))
+            if (r.mName.empty() || r.mDescription.empty())
             {
-                history.mVehicle = true;
-            }
-            r.mEverVehicle = history.mVehicle;
-        }
-        if (r.mEverCrewed && object->getRegion())
-        {
-            // The linkset's own box, and how far its bottom is off the floor.
-            LLVector3 lo(1e9f, 1e9f, 1e9f), hi(-1e9f, -1e9f, -1e9f);
-            std::vector<LLViewerObject*> prims { object };
-            for (const LLPointer<LLViewerObject>& child : object->getChildren())
-            {
-                if (!child->isAvatar())
+                if (const ALObjectPropertiesCache::ServerProps* props = ALObjectPropertiesCache::instance().get(id))
                 {
-                    prims.push_back(child.get());
+                    if (r.mName.empty())
+                    {
+                        r.mName = props->mName;
+                    }
+                    if (r.mDescription.empty())
+                    {
+                        r.mDescription = props->mDescription;
+                    }
                 }
             }
-            for (LLViewerObject* prim : prims)
+            if (r.mScripted == TriState::UNKNOWN && object->flagScripted())
             {
-                const LLBBox box = prim->getBoundingBoxAgent();
-                update_min_max(lo, hi, box.getMinAgent());
-                update_min_max(lo, hi, box.getMaxAgent());
+                r.mScripted = TriState::YES;
             }
-            r.mHasBounds = true;
-            r.mMin = gAgent.getPosGlobalFromAgent(lo);
-            r.mMax = gAgent.getPosGlobalFromAgent(hi);
-            LLVector3d foot = (r.mMin + r.mMax) * 0.5;
-            foot.mdV[VZ] = r.mMin.mdV[VZ];
-            F32 floor = LLWorld::getInstance()->resolveLandHeightGlobal(foot);
-            F32 built = 0.f;
-            if (SKNavMesh::instanceExists() && SKNavMesh::instance().floorUnder(foot, AgentClass::AVATAR, built)
-                && built <= foot.mdV[VZ] + 0.5)
+            r.mHover = object->mHudText;
+            r.mPhysical = object->flagUsePhysics();
+            if (const auto h = mHistory.find(id); h != mHistory.end())
             {
-                floor = llmax(floor, built);
+                RootHistory& history = h->second;
+                r.mEverMoved = history.mEverMoved;
+                r.mTravel = history.mTravel;
+                r.mEverCrewed = history.mEverCrewed;
+                r.mWorkingElevator = history.mWorkingElevator;
+                // A physical root never passes the gate, so its travel stays
+                // nil; latched here it stays a vehicle once parked non-physical.
+                if (r.mEverCrewed && (r.mPhysical || r.mTravel > params.mVehicleTravel))
+                {
+                    history.mVehicle = true;
+                }
+                r.mEverVehicle = history.mVehicle;
             }
-            r.mClearance = static_cast<F32>(foot.mdV[VZ]) - floor;
+            if (r.mEverCrewed && object->getRegion())
+            {
+                // The linkset's own box, and how far its bottom is off the floor.
+                LLVector3 lo(1e9f, 1e9f, 1e9f), hi(-1e9f, -1e9f, -1e9f);
+                std::vector<LLViewerObject*> prims { object };
+                for (const LLPointer<LLViewerObject>& child : object->getChildren())
+                {
+                    if (!child->isAvatar())
+                    {
+                        prims.push_back(child.get());
+                    }
+                }
+                for (LLViewerObject* prim : prims)
+                {
+                    const LLBBox box = prim->getBoundingBoxAgent();
+                    update_min_max(lo, hi, box.getMinAgent());
+                    update_min_max(lo, hi, box.getMaxAgent());
+                }
+                r.mHasBounds = true;
+                r.mMin = gAgent.getPosGlobalFromAgent(lo);
+                r.mMax = gAgent.getPosGlobalFromAgent(hi);
+                LLVector3d foot = (r.mMin + r.mMax) * 0.5;
+                foot.mdV[VZ] = r.mMin.mdV[VZ];
+                F32 floor = LLWorld::getInstance()->resolveLandHeightGlobal(foot);
+                F32 built = 0.f;
+                if (SKNavMesh::instanceExists() && SKNavMesh::instance().floorUnder(foot, AgentClass::AVATAR, built)
+                    && built <= foot.mdV[VZ] + 0.5)
+                {
+                    floor = llmax(floor, built);
+                }
+                r.mClearance = static_cast<F32>(foot.mdV[VZ]) - floor;
+            }
+            roots.push_back(std::move(r));
         }
-        roots.push_back(std::move(r));
     }
 
     // Only a door-shaped part with something to say for it is worth the rays.
-    for (FeaturePart& p : mScan.mFeatureParts)
     {
-        if ((p.mScripted || p.mTouch || !p.mName.empty()) && doorShaped(p, params))
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - classify face cover");
+        for (FeaturePart& p : mScan.mFeatureParts)
         {
-            p.mFaceCover = faceCover(p, snap.mRecords, params);
+            if ((p.mScripted || p.mTouch || !p.mName.empty()) && doorShaped(p, params))
+            {
+                p.mFaceCover = faceCover(p, snap.mRecords, params);
+            }
         }
     }
-    snap.mFeatures = classifyFeatures(mScan.mFeatureParts, roots, params);
+    {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - classify features");
+        snap.mFeatures = classifyFeatures(mScan.mFeatureParts, roots, params);
+    }
     snap.mStats.mFeatures = static_cast<U32>(snap.mFeatures.size());
     // A leaf is watched from the scan it is first a door, and stays watched
     // while it swings, when the rules may not call it one.
@@ -1271,7 +1280,10 @@ void SKWorldCensus::classify(SKCensusSnapshot& snap)
         }
     }
     mLeafTransforms.clear();
-    snap.mDoors = buildDoorEntities(snap.mFeatures, mScan.mFeatureParts, roots, &mLeaves);
+    {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - classify doors");
+        snap.mDoors = buildDoorEntities(snap.mFeatures, mScan.mFeatureParts, roots, &mLeaves);
+    }
 
     // What the next scan records each part with, and what stays with a root
     // for the session: a vehicle stays one, a working car stays working.
