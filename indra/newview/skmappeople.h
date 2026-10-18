@@ -83,7 +83,7 @@ public:
         LLColor4 mColour;                   ///< the general dot colour
         skmap::FloorRelation mFloor = skmap::FloorRelation::SAME;   ///< UNKNOWN with no height; ABOVE or BELOW past SKMapFloorChevronBand1
         skmap::plan::Whereabouts mWhere;    ///< their air gap's space and floor
-        F32 mFloorDelta = 0.f;              ///< their floor minus yours, m; meaningful only when mFloorKnown
+        F32 mFloorDelta = 0.f;              ///< their feet minus yours, m; meaningful only when mFloorKnown
         bool mFloorKnown = false;
         bool mAlly = false;
         skmap::Visibility mVisibility = skmap::Visibility::DOT;
@@ -194,8 +194,8 @@ private:
     /// Seat roots of everyone near, shown or not: whether a vehicle is crewed, and by an ally.
     std::map<LLUUID, std::pair<bool, bool>> mSeats;
     bool mCombat = false;
-    bool mSelfFloorKnown = false;           ///< this update found the agent's own floor
-    F32 mSelfFloor = 0.f;                   ///< global; the reference for everyone's floor difference
+    bool mSelfFeetKnown = false;            ///< the agent's avatar is valid this update
+    F64 mSelfFeet = 0.0;                    ///< global feet height, the reference for the chevrons
     skmap::Engagement mEngagement;
     SKMapAllyResolver mResolver;
     skmap::FactionTable mFactions;

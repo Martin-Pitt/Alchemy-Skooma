@@ -652,8 +652,9 @@ void SKMapPeople::gatherPeople()
             mSeats[seat->getRootEdit()->getID()] = { true, true };
         }
     }
-    // The agent is skipped below, so its own floor, the reference for everyone's, is read here.
-    mSelfFloorKnown = isAgentAvatarValid() && skmap::plan::agentFloor(gAgent.getPositionGlobal(), feetZ(gAgentAvatarp), mSelfFloor);
+    // The agent is skipped below, so its own feet, the reference for everyone's height, are read here.
+    mSelfFeetKnown = isAgentAvatarValid();
+    mSelfFeet = mSelfFeetKnown ? feetZ(gAgentAvatarp) : 0.0;
     static LLCachedControl<F32> floor_band(gSavedSettings, "SKMapFloorChevronBand1", 2.5f);
     for (size_t i = 0; i < ids.size(); ++i)
     {
@@ -701,11 +702,11 @@ void SKMapPeople::gatherPeople()
             // A coarse location's height is rough, so its floor may lie further from the guessed feet.
             const F32 band = p.mLoaded ? 1.0f : 2.0f;
             p.mWhere = skmap::plan::whereabouts(LLVector3d(p.mPos.mdV[VX], p.mPos.mdV[VY], p.mFeetZ), band, band);
-            // Only two fine floors give a storey; without either, the dot keeps the plain look.
-            p.mFloorKnown = mSelfFloorKnown && p.mWhere.mFound;
+            // The chevrons show plain height difference, feet to feet; floors are not needed.
+            p.mFloorKnown = mSelfFeetKnown;
             if (p.mFloorKnown)
             {
-                p.mFloorDelta = p.mWhere.mFloor - mSelfFloor;
+                p.mFloorDelta = static_cast<F32>(p.mFeetZ - mSelfFeet);
                 p.mFloor = p.mFloorDelta > floor_band    ? skmap::FloorRelation::ABOVE
                            : p.mFloorDelta < -floor_band ? skmap::FloorRelation::BELOW
                                                          : skmap::FloorRelation::SAME;
