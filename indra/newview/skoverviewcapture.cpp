@@ -112,7 +112,7 @@ namespace
     const F32 TACTICAL_MIN_M = 8.f;
     const F32 TACTICAL_MAX_M = 400.f;
     const F32 BATTLEFIELD_MAX_M = 4096.f;
-    const F32 BATTLEFIELD_PITCH_DEG = 89.f;  // short of straight down, so the camera keeps a heading to put north up
+    const F32 BATTLEFIELD_PITCH_DEG = 89.f;  // the untilted battlefield: short of straight down, so the camera keeps a heading to put north up
     const F32 BATTLEFIELD_MARGIN = 1.05f;
 
     /// SKTacticalCameraMode: a fixed north-up view fitting the battlefield, or the orbit that follows the agent.
@@ -596,6 +596,14 @@ void SKOverviewCapture::syncTactical()
         };
         gSavedSettings.getControl("SKTacticalCameraMode")->getSignal()->connect(replace);
         gSavedSettings.getControl("SKTacticalBattlefieldNeighbours")->getSignal()->connect(replace);
+        auto tilt = [](LLControlVariable*, const LLSD&, const LLSD&)
+        {
+            if (battlefieldCamera() && instanceExists() && instance().mTacticalOpen && SKModalView::top() == &instance())
+            {
+                instance().placeBattlefieldCamera();
+            }
+        };
+        gSavedSettings.getControl("SKTacticalBattlefieldPitch")->getSignal()->connect(tilt);
     }
     if (tactical == (instanceExists() && instance().mTacticalOpen))
     {
@@ -752,16 +760,28 @@ void SKOverviewCapture::placeBattlefieldCamera()
     cutHeights(gAgent.getPositionGlobal(), gAgent.getPositionAgent().mV[VZ], floor_z, cut_z);
     const LLVector3d floor = gAgent.getPosGlobalFromAgent(LLVector3(0.f, 0.f, floor_z));
     const LLVector3d focus((lo.mdV[VX] + hi.mdV[VX]) * 0.5, (lo.mdV[VY] + hi.mdV[VY]) * 0.5, floor.mdV[VZ]);
-    // Far enough that both half extents fit the vertical field of view and the window's aspect.
+    // North up, tilted to look north from the south; far enough that every corner of the area lies in the frustum,
+    // which a tilt turns into a trapezoid on the ground.
+    static LLCachedControl<F32> pitch_setting(gSavedSettings, "SKTacticalBattlefieldPitch", BATTLEFIELD_PITCH_DEG);
     const LLViewerCamera* camera = LLViewerCamera::getInstance();
     const LLRect world = gViewerWindow->getWorldViewRectRaw();
     const F32 aspect = world.getHeight() > 0 ? (F32)world.getWidth() / (F32)world.getHeight() : camera->getAspect();
     const F32 tan_half = std::tan(camera->getView() * 0.5f);
-    const F32 half_x = (F32)(hi.mdV[VX] - lo.mdV[VX]) * 0.5f;
-    const F32 half_y = (F32)(hi.mdV[VY] - lo.mdV[VY]) * 0.5f;
-    const F32 distance = llclamp(llmax(half_y / tan_half, half_x / (tan_half * aspect)) * BATTLEFIELD_MARGIN, TACTICAL_MIN_M,
-                                 BATTLEFIELD_MAX_M);
-    const F32 pitch = BATTLEFIELD_PITCH_DEG * DEG_TO_RAD;
+    const F32 pitch = llclamp((F32)pitch_setting, 5.f, BATTLEFIELD_PITCH_DEG) * DEG_TO_RAD;
+    const LLVector3 forward(0.f, std::cos(pitch), -std::sin(pitch));
+    const LLVector3 up(0.f, std::sin(pitch), std::cos(pitch));
+    const F32 half_x = (F32)(hi.mdV[VX] - lo.mdV[VX]) * 0.5f * BATTLEFIELD_MARGIN;
+    const F32 half_y = (F32)(hi.mdV[VY] - lo.mdV[VY]) * 0.5f * BATTLEFIELD_MARGIN;
+    F32 fit = 0.f;
+    for (S32 corner = 0; corner < 4; ++corner)
+    {
+        // A corner a from the focus sits at depth a.forward + d before an eye d back along forward, so it fits once
+        // d covers its offsets across and up over the half-angle tangents.
+        const LLVector3 a((corner & 1) ? half_x : -half_x, (corner & 2) ? half_y : -half_y, 0.f);
+        const F32 depth = a * forward;
+        fit = llmax(fit, llmax(std::fabs(a.mV[VX]) / (tan_half * aspect), std::fabs(a * up) / tan_half) - depth);
+    }
+    const F32 distance = llclamp(fit, TACTICAL_MIN_M, BATTLEFIELD_MAX_M);
     const LLVector3d north(0.0, 1.0, 0.0);
     const LLVector3d eye = focus - north * (distance * std::cos(pitch)) + LLVector3d(0.0, 0.0, distance * std::sin(pitch));
     setTacticalCamera(eye, focus);

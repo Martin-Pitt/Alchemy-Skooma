@@ -5733,6 +5733,17 @@
             <key>Value</key>
             <real>0.25</real>
         </map>
+        <key>SKTacticalBattlefieldPitch</key>
+        <map>
+            <key>Comment</key>
+            <string>Degrees the tactical overview's Battlefield camera looks down from the horizon, north up from the south of the area; 89 is straight down.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>89.0</real>
+        </map>
         <key>SKTacticalPitch</key>
         <map>
             <key>Comment</key>
