@@ -248,6 +248,10 @@ namespace skmapdraw
     void colour(const skmap::PaletteColour& c, F32 alpha = 1.f);
     void triangle(const LLVector2& a, const LLVector2& b, const LLVector2& c);
     void line(const LLVector2& a, const LLVector2& b, F32 width);
+    /// A thick segment fading from opaque at the head to clear at the tail.
+    void streak(const LLVector2& tail, const LLVector2& head, F32 width, const LLColor4& colour);
+    /// A projectile's streak in widget pixels: its physical length and width, held within the settings' pixel limits.
+    void projectile(const LLVector2& head, const LLVector2& dir, F32 length_px, F32 width_px, const LLColor4& colour);
     void disc(const LLVector2& centre, F32 radius, S32 steps = 16);
     void ring(const LLVector2& centre, F32 radius, F32 width, S32 steps = 32);
     /// The soft gaussian marker shadow, generated once.

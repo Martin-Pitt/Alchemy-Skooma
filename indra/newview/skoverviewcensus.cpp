@@ -819,35 +819,6 @@ void SKOverviewCensus::gatherSurrounds(const SKCensusSnapshot& snap)
 
 namespace
 {
-    // Whether the segment from p to q crosses the triangle (a, b, c), short of q (Moller-Trumbore).
-    bool segmentHits(const LLVector3& p, const LLVector3& q, const LLVector3& a, const LLVector3& b, const LLVector3& c)
-    {
-        const LLVector3 d = q - p;
-        const LLVector3 e1 = b - a;
-        const LLVector3 e2 = c - a;
-        const LLVector3 h = d % e2;
-        const F32 det = e1 * h;
-        if (std::fabs(det) < 1.0e-9f)
-        {
-            return false;
-        }
-        const F32 inv = 1.f / det;
-        const LLVector3 s = p - a;
-        const F32 u = (s * h) * inv;
-        if (u < 0.f || u > 1.f)
-        {
-            return false;
-        }
-        const LLVector3 qv = s % e1;
-        const F32 v = (d * qv) * inv;
-        if (v < 0.f || u + v > 1.f)
-        {
-            return false;
-        }
-        const F32 t = (e2 * qv) * inv;
-        return t > 1.0e-4f && t < 0.999f;
-    }
-
     // The distance in plan from p to the triangle (a, b, c): 0 inside it; a wall's edge-on triangle is its segment.
     F32 planDistance(const LLVector2& p, const LLVector3& a3, const LLVector3& b3, const LLVector3& c3)
     {
@@ -874,40 +845,9 @@ namespace
         };
         return llmin(segment(a, b), llmin(segment(b, c), segment(c, a)));
     }
-
-    // Whether the segment from p to q meets the box (slab test).
-    bool segmentMeetsBox(const LLVector3d& p, const LLVector3d& q, const LLVector3d& lo, const LLVector3d& hi)
-    {
-        F64 t0 = 0.0, t1 = 1.0;
-        for (S32 k = 0; k < 3; ++k)
-        {
-            const F64 d = q.mdV[k] - p.mdV[k];
-            if (std::fabs(d) < 1.0e-12)
-            {
-                if (p.mdV[k] < lo.mdV[k] || p.mdV[k] > hi.mdV[k])
-                {
-                    return false;
-                }
-                continue;
-            }
-            F64 a = (lo.mdV[k] - p.mdV[k]) / d;
-            F64 b = (hi.mdV[k] - p.mdV[k]) / d;
-            if (a > b)
-            {
-                std::swap(a, b);
-            }
-            t0 = llmax(t0, a);
-            t1 = llmin(t1, b);
-            if (t0 > t1)
-            {
-                return false;
-            }
-        }
-        return true;
-    }
 }
 
-void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<Occupant>& occupants, const LLVector3d& eye, U64 key)
+void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<Occupant>& occupants, U64 key)
 {
     LL_PROFILE_ZONE_SCOPED;
     if (key == mCutKey && mCutSignature == mSignature)
@@ -944,43 +884,23 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
             e.mParts.emplace_back(&batch, &group);
         }
     }
-    // Whether a linkset's own triangles (not its hatched invisible ones) block the segment.
-    auto blocks = [](const Extent& e, const LLVector3d& p, const LLVector3d& q)
-    {
-        for (const auto& part : e.mParts)
-        {
-            const Batch& batch = *part.first;
-            const LLVector3 a(p - batch.mOrigin);
-            const LLVector3 b(q - batch.mOrigin);
-            for (U32 c = 0; c < skoverview::NUM_CENSUS_CLASSES; ++c)
-            {
-                if (c == skoverview::INVISIBLE)
-                {
-                    continue;
-                }
-                const U32 end = llmin(part.second->mStart[c] + part.second->mCount[c], (U32)batch.mPositions.size());
-                for (U32 v = part.second->mStart[c]; v + 2 < end; v += 3)
-                {
-                    if (segmentHits(a, b, batch.mPositions[v], batch.mPositions[v + 1], batch.mPositions[v + 2]))
-                    {
-                        return true;
-                    }
-                }
-            }
-        }
-        return false;
-    };
-
     const F64 SLACK_M = 0.1;    // column: how far outside a linkset's bounds still counts as under it
     const F64 ABOVE_M = 0.5;    // what rises less than this over the floor bounds nothing
+    const F64 OVERHEAD_M = 1.0; // a floating cluster whose base is this far over an occupant's cut is out of their space
+    auto overhead = [&](const Extent& e, const Occupant& occupant)
+    {
+        return !e.mGround && e.mBottom > occupant.mCut + OVERHEAD_M;
+    };
     std::map<U32, F32> cut_of;
     std::map<U32, std::string> why;
     std::set<U32> for_agent;
+    std::set<U32> agent_under;  // linksets standing over the agent, whose cut no one on their roof overrides
     auto mark = [&](U32 id, const Occupant& occupant, const char* rule)
     {
         const std::string who = occupant.mSelf ? std::string("agent") : "occupant " + occupant.mId.asString();
         if (occupant.mSelf)
         {
+            agent_under.insert(id);
             if (for_agent.insert(id).second)
             {
                 cut_of[id] = occupant.mCut;
@@ -999,8 +919,9 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
             why[id] = who + " " + rule;
         }
     };
+    std::vector<Occupant> people(occupants);
     std::vector<const Occupant*> ordered;
-    for (const Occupant& occupant : occupants)
+    for (const Occupant& occupant : people)
     {
         if (occupant.mSelf)
         {
@@ -1042,6 +963,129 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
         }
         return false;
     };
+    // Who stands on a roof: the highest upward-facing surface under their feet, of a linkset with nothing over them.
+    const F64 STAND_BELOW_M = 0.6;  // how far under the feet a surface still bears them
+    const F64 STAND_ABOVE_M = 0.4;  // how far over them, for a sunk or estimated foot
+    const F64 HOLD_S = 1.0;         // a roof stays kept this long after its stander leaves it, through a hop
+    const F64 now = LLFrameTimer::getUptimeSeconds().value();
+    auto heightAt = [](const LLVector2& at, const LLVector3& a, const LLVector3& b, const LLVector3& d, F32& z) -> bool
+    {
+        const LLVector3 n = (b - a) % (d - a);
+        if (std::fabs(n.mV[VZ]) < 0.5f * n.length() || planDistance(at, a, b, d) > 0.f)
+        {
+            return false; // a wall, or not under the point
+        }
+        z = a.mV[VZ] - (n.mV[VX] * (at.mV[VX] - a.mV[VX]) + n.mV[VY] * (at.mV[VY] - a.mV[VY])) / n.mV[VZ];
+        return true;
+    };
+    // The highest surface of the linkset under the feet within the bearing band, and whether any of it covers them.
+    auto standsOn = [&](const Extent& e, const LLVector3d& feet, F64& surface, bool& covered) -> bool
+    {
+        bool found = false;
+        bool cover = false;
+        for (const auto& part : e.mParts)
+        {
+            const Batch& batch = *part.first;
+            const LLVector3 local(feet - batch.mOrigin);
+            const LLVector2 at(local.mV[VX], local.mV[VY]);
+            for (U32 c = 0; c < skoverview::NUM_CENSUS_CLASSES; ++c)
+            {
+                if (c == skoverview::INVISIBLE)
+                {
+                    continue;
+                }
+                const U32 end = llmin(part.second->mStart[c] + part.second->mCount[c], (U32)batch.mPositions.size());
+                for (U32 v = part.second->mStart[c]; v + 2 < end; v += 3)
+                {
+                    F32 z = 0.f;
+                    if (!heightAt(at, batch.mPositions[v], batch.mPositions[v + 1], batch.mPositions[v + 2], z))
+                    {
+                        continue;
+                    }
+                    if (z >= local.mV[VZ] - STAND_BELOW_M && z <= local.mV[VZ] + STAND_ABOVE_M)
+                    {
+                        const F64 global_z = batch.mOrigin.mdV[VZ] + z;
+                        surface = found ? llmax(surface, global_z) : global_z;
+                        found = true;
+                    }
+                    else if (z > local.mV[VZ] + STAND_ABOVE_M)
+                    {
+                        cover = true;
+                    }
+                }
+            }
+        }
+        covered = cover;
+        return found;
+    };
+    std::map<U32, F32> roof_of;     // linkset -> the highest cut of those standing on its roof
+    bool holding = false;
+    for (Occupant& occupant : people)
+    {
+        const LLVector3d& feet = occupant.mFeet;
+        U32 best = 0;
+        F64 best_z = -1e30;
+        bool best_covered = false;
+        for (const auto& entry : extents)
+        {
+            const Extent& e = entry.second;
+            if (!e.mCuttable || feet.mdV[VX] < e.mMin.mdV[VX] || feet.mdV[VX] > e.mMax.mdV[VX] ||
+                feet.mdV[VY] < e.mMin.mdV[VY] || feet.mdV[VY] > e.mMax.mdV[VY] ||
+                feet.mdV[VZ] < e.mMin.mdV[VZ] - STAND_ABOVE_M || feet.mdV[VZ] > e.mMax.mdV[VZ] + STAND_BELOW_M)
+            {
+                continue;
+            }
+            F64 z = 0.0;
+            bool covered = false;
+            if (standsOn(e, feet, z, covered) && z > best_z)
+            {
+                best = entry.first;
+                best_z = z;
+                best_covered = covered;
+            }
+        }
+        U32 roof = 0;
+        F64 roof_z = 0.0;
+        const bool on_surface = best_z > -1e29;
+        const auto held = mStanding.find(occupant.mId);
+        if (on_surface && !best_covered)
+        {
+            roof = best;
+            roof_z = best_z;
+            mStanding[occupant.mId] = { extents[best].mRoot, best_z, now };
+        }
+        else if (!on_surface && held != mStanding.end() && now - held->second.mAt < HOLD_S)
+        {
+            // Off every surface, in a hop: the roof they left is kept a moment longer.
+            for (const auto& entry : extents)
+            {
+                if (entry.second.mRoot == held->second.mRoot && entry.second.mCuttable)
+                {
+                    roof = entry.first;
+                    roof_z = held->second.mZ;
+                    holding = true;
+                    break;
+                }
+            }
+        }
+        else if (held != mStanding.end())
+        {
+            mStanding.erase(held);
+        }
+        if (roof)
+        {
+            const F64 above = occupant.mCut - occupant.mFloor.mdV[VZ];
+            occupant.mFloor.setVec(feet.mdV[VX], feet.mdV[VY], roof_z);
+            occupant.mCut = (F32)(roof_z + above);
+            occupant.mRoomCells.reset();
+            const auto it = roof_of.find(roof);
+            roof_of[roof] = it == roof_of.end() ? occupant.mCut : llmax(it->second, occupant.mCut);
+        }
+    }
+    for (auto it = mStanding.begin(); it != mStanding.end();)
+    {
+        it = now - it->second.mAt >= HOLD_S ? mStanding.erase(it) : std::next(it);
+    }
     // Whether a linkset has a triangle above the floor whose plan footprint comes within a cell of one of the room's
     // dilated cells; how says which (wall or cover) and the cell, for the log.
     std::unordered_set<U64> dilated;
@@ -1133,7 +1177,7 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
         for (const auto& entry : extents)
         {
             const Extent& e = entry.second;
-            if (!e.mCuttable || e.mMax.mdV[VZ] < p.mdV[VZ] + ABOVE_M)
+            if (!e.mCuttable || e.mMax.mdV[VZ] < p.mdV[VZ] + ABOVE_M || overhead(e, *occupant))
             {
                 continue;
             }
@@ -1160,33 +1204,42 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
                 mark(entry.first, *occupant, "column");
             }
         }
-        // Whatever hides them from the eye.
-        for (const LLVector3d& target : occupant->mSight)
-        {
-            for (const auto& entry : extents)
-            {
-                const Extent& e = entry.second;
-                if (e.mCuttable && segmentMeetsBox(eye, target, e.mMin, e.mMax) && blocks(e, eye, target))
-                {
-                    mark(entry.first, *occupant, "line-of-sight");
-                }
-            }
-        }
     }
-    // A floating cluster (a skybox) wholly above the agent's level would roof the view of the ground: hidden, unless
-    // someone in it already had it cut. The agent's own skybox is the agent's building, cut as any other.
     F32 agent_cut = skoverview::NO_CUT;
-    for (const Occupant& occupant : occupants)
+    for (const Occupant& occupant : people)
     {
         if (occupant.mSelf)
         {
             agent_cut = occupant.mCut;
         }
     }
+    // A roof someone stands on is kept up to their level, unless the agent is under it or it floats over the agent.
+    std::set<U32> kept;
+    for (const auto& roof : roof_of)
+    {
+        const Extent& roofed = extents[roof.first];
+        if (agent_under.count(roof.first) || (!roofed.mGround && roofed.mBottom > agent_cut + OVERHEAD_M))
+        {
+            continue;
+        }
+        kept.insert(roof.first);
+        auto it = cut_of.find(roof.first);
+        if (it != cut_of.end() && it->second < roof.second)
+        {
+            it->second = roof.second;
+            why[roof.first] = "kept for someone on its roof";
+        }
+    }
+    if (holding)
+    {
+        mCutKey = 0; // worked again until the hold runs out
+    }
+    // A floating cluster (a skybox) wholly above the agent's level would roof the view of the ground: hidden, unless
+    // someone in it already had it cut. The agent's own skybox is the agent's building, cut as any other.
     for (const auto& entry : extents)
     {
         const Extent& e = entry.second;
-        if (!e.mGround && e.mBottom > agent_cut && !cut_of.count(entry.first))
+        if (!e.mGround && e.mBottom > agent_cut && !cut_of.count(entry.first) && !kept.count(entry.first))
         {
             cut_of[entry.first] = skoverview::HIDDEN;
             why[entry.first] = "hidden floating";
@@ -1250,6 +1303,95 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
         }
         batch.mBuffer->unmapBuffer();
     }
+}
+
+bool SKOverviewCensus::raycast(const LLVector3d& origin, const LLVector3& dir, F32 max_m, LLVector3d& hit) const
+{
+    F32 best = max_m;
+    bool found = false;
+    for (const Batch& batch : mBatches)
+    {
+        const LLVector3 from(origin - batch.mOrigin);
+        const U32 total = (U32)batch.mPositions.size();
+        for (const Group& group : batch.mGroups)
+        {
+            // The group's bounds first, by the slab test.
+            const LLVector3 lo(group.mMin - batch.mOrigin);
+            const LLVector3 hi(group.mMax - batch.mOrigin);
+            F32 t_lo = 0.f;
+            F32 t_hi = best;
+            bool miss = false;
+            for (S32 i = 0; i < 3 && !miss; ++i)
+            {
+                if (std::fabs(dir.mV[i]) < 1e-9f)
+                {
+                    miss = from.mV[i] < lo.mV[i] || from.mV[i] > hi.mV[i];
+                    continue;
+                }
+                const F32 a = (lo.mV[i] - from.mV[i]) / dir.mV[i];
+                const F32 b = (hi.mV[i] - from.mV[i]) / dir.mV[i];
+                t_lo = llmax(t_lo, llmin(a, b));
+                t_hi = llmin(t_hi, llmax(a, b));
+                miss = t_lo > t_hi;
+            }
+            if (miss)
+            {
+                continue;
+            }
+            F32 cut = skoverview::NO_CUT;
+            std::string why;
+            if (cutOf(group.mRoot, cut, why) && cut <= skoverview::HIDDEN * 0.5f)
+            {
+                continue;
+            }
+            // Cuts are agent z, which is global z; positions are region-local.
+            const F32 cut_local = cut >= skoverview::NO_CUT * 0.5f ? cut : cut - (F32)batch.mOrigin.mdV[VZ];
+            for (U32 c = 0; c < skoverview::NUM_CENSUS_CLASSES; ++c)
+            {
+                if (c == skoverview::INVISIBLE)
+                {
+                    continue;
+                }
+                const U32 end = llmin(group.mStart[c] + group.mCount[c], total);
+                for (U32 v = group.mStart[c]; v + 2 < end; v += 3)
+                {
+                    // Moller-Trumbore, either face, as the view draws both.
+                    const LLVector3& p0 = batch.mPositions[v];
+                    const LLVector3 e1 = batch.mPositions[v + 1] - p0;
+                    const LLVector3 e2 = batch.mPositions[v + 2] - p0;
+                    const LLVector3 pv = dir % e2;
+                    const F32 det = e1 * pv;
+                    if (std::fabs(det) < 1e-12f)
+                    {
+                        continue;
+                    }
+                    const F32 inv = 1.f / det;
+                    const LLVector3 tv = from - p0;
+                    const F32 u = (tv * pv) * inv;
+                    if (u < 0.f || u > 1.f)
+                    {
+                        continue;
+                    }
+                    const LLVector3 qv = tv % e1;
+                    const F32 w = (dir * qv) * inv;
+                    const F32 t = (e2 * qv) * inv;
+                    if (w < 0.f || u + w > 1.f || t <= 0.f || t >= best)
+                    {
+                        continue;
+                    }
+                    // Above its part's cut nothing is drawn, so the ray goes on through it.
+                    if ((from + dir * t).mV[VZ] > cut_local)
+                    {
+                        continue;
+                    }
+                    best = t;
+                    found = true;
+                    hit = origin + LLVector3d(dir * t);
+                }
+            }
+        }
+    }
+    return found;
 }
 
 bool SKOverviewCensus::cutOf(const LLUUID& root, F32& height, std::string& why) const

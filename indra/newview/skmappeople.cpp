@@ -64,6 +64,13 @@ SKMapPeople::~SKMapPeople()
 {
 }
 
+// static
+F64 SKMapPeople::feetZ(LLVOAvatar* avatar)
+{
+    // Avatars stand upright, so the box's half height is all of it.
+    return avatar->getPositionGlobal().mdV[VZ] - 0.5 * (F64)avatar->getScale().mV[VZ];
+}
+
 void SKMapPeople::initSingleton()
 {
     // Taking these here makes them outlive us at teardown.
@@ -349,29 +356,44 @@ void SKMapPeople::updateFiringLines()
 void SKMapPeople::updateProjectiles()
 {
     LL_PROFILE_ZONE_SCOPED;
-    static LLCachedControl<bool> show(gSavedSettings, "SKMapLayerProjectiles", false);
+    static LLCachedControl<bool> show(gSavedSettings, "SKMapLayerProjectiles", true);
+    static LLCachedControl<F32> fast_speed(gSavedSettings, "SKMapProjectileMinSpeed", 20.f);
+    static LLCachedControl<F32> max_size(gSavedSettings, "SKMapProjectileMaxSize", 3.f);
     if (!show)
     {
         mProjectiles.clear();
-        mLastObjectPos.clear();
+        mFastTrails.clear();
         mTrails.clear();
         mShooters.clear();
         return;
     }
     const F64 now = LLFrameTimer::getUptimeSeconds().value();
-    if (now - mProjectilesAt < 0.1)
+    // Avatar trails for tracing shooters keep their own cadence; the shots themselves are gathered every frame.
+    if (now - mProjectilesAt >= 0.1)
     {
-        return;
+        mProjectilesAt = now;
+        updateTrails(now);
     }
-    mProjectilesAt = now;
-    updateTrails(now);
+    static LLCachedControl<F32> trail_slow(gSavedSettings, "SKMapTrailMinSpeed", 80.f);
+    static LLCachedControl<F32> trail_fast(gSavedSettings, "SKMapTrailMaxSpeed", 200.f);
+    static LLCachedControl<F32> alpha_slow(gSavedSettings, "SKMapTrailAlphaSlow", 0.05f);
+    static LLCachedControl<F32> alpha_fast(gSavedSettings, "SKMapTrailAlphaFast", 0.35f);
+    static LLCachedControl<F32> life_slow(gSavedSettings, "SKMapTrailLifeSlow", 0.02f);
+    static LLCachedControl<F32> life_fast(gSavedSettings, "SKMapTrailLifeFast", 0.08f);
     std::vector<Projectile> found;
-    std::map<LLUUID, LLVector3d> seen;
     std::map<LLUUID, LLUUID> shooters;
-    for (const LLPointer<LLViewerObject>& ptr : gObjectList.getMapObjects())
+    std::map<LLUUID, FastTrail> trails;
+    // The whole object list: the map objects hold only large or owned prims, so a bullet never reached it.
+    for (S32 i = 0, n = gObjectList.getNumObjects(); i < n; ++i)
     {
-        LLViewerObject* object = ptr.get();
-        if (!object || object->isDead() || !object->isRoot() || object->isAttachment() || !object->flagUsePhysics())
+        LLViewerObject* object = gObjectList.getObject(i);
+        if (!object || object->isDead() || !object->isRoot() || object->isAttachment() || object->isAvatar())
+        {
+            continue;
+        }
+        const LLVector3 velocity = object->getVelocity();
+        const F32 speed = velocity.length();
+        if (speed < llmin(llmax(static_cast<F32>(fast_speed), 0.5f), static_cast<F32>(trail_slow)))
         {
             continue;
         }
@@ -380,35 +402,57 @@ void SKMapPeople::updateProjectiles()
         {
             continue;
         }
-        const F32 speed = object->getVelocity().length();
-        const F32 size = object->getScale().length();
-        Projectile p;
-        p.mPos = pos;
-        if (speed > 20.f)
+        if (speed >= static_cast<F32>(trail_slow))
         {
-            // A streak over the last tenth of a second.
-            p.mFast = true;
-            const LLVector3 back = object->getVelocity() * -0.1f;
-            p.mTail = pos + LLVector3d(back);
+            // Any fast object keeps a short history, longer and stronger the faster it goes.
+            const F32 t = llclamp((speed - trail_slow) / llmax(static_cast<F32>(trail_fast - trail_slow), 1.f), 0.f, 1.f);
+            FastTrail& trail = trails[object->getID()];
+            trail.mAlpha = lerp(static_cast<F32>(alpha_slow), static_cast<F32>(alpha_fast), t);
+            trail.mLife = lerp(static_cast<F32>(life_slow), static_cast<F32>(life_fast), t);
+            trail.mPoints.emplace_back(now, pos);
+            const auto old = mFastTrails.find(object->getID());
+            if (old != mFastTrails.end())
+            {
+                for (const auto& point : old->second.mPoints)
+                {
+                    if (now - point.first > trail.mLife)
+                    {
+                        break;
+                    }
+                    if (point.first < now)
+                    {
+                        trail.mPoints.push_back(point);
+                    }
+                }
+            }
         }
-        else if (size >= 0.05f && size <= 0.6f && speed > 1.f)
-        {
-            const auto last = mLastObjectPos.find(object->getID());
-            p.mTail = last != mLastObjectPos.end() ? last->second : pos;
-        }
-        else
+        const LLVector3 scale = object->getScale();
+        if (!object->flagUsePhysics() || speed < llmax(static_cast<F32>(fast_speed), 0.5f) || scale.length() > static_cast<F32>(max_size))
         {
             continue;
         }
+        Projectile p;
+        p.mPos = pos;
+        p.mDir = velocity / speed;
+        // The box's extent along and across the direction of travel, from its scale and rotation.
+        const LLQuaternion rot = object->getRotationRegion();
+        const LLVector3 axes[3] = { LLVector3::x_axis * rot, LLVector3::y_axis * rot, LLVector3::z_axis * rot };
+        F32 across = 0.f;
+        for (S32 k = 0; k < 3; ++k)
+        {
+            const F32 along = std::fabs(axes[k] * p.mDir);
+            p.mLength += along * scale.mV[k];
+            across = llmax(across, std::sqrt(llmax(0.f, 1.f - along * along)) * scale.mV[k]);
+        }
+        p.mWidth = across;
         // Traced once, when first seen, while the trails still hold where everyone was.
         const auto traced = mShooters.find(object->getID());
-        p.mShooter = traced != mShooters.end() ? traced->second : traceShooter(pos, object->getVelocity());
+        p.mShooter = traced != mShooters.end() ? traced->second : traceShooter(pos, velocity);
         shooters[object->getID()] = p.mShooter;
-        seen[object->getID()] = pos;
         found.push_back(p);
     }
     mProjectiles.swap(found);
-    mLastObjectPos.swap(seen);
+    mFastTrails.swap(trails);
     mShooters.swap(shooters);
 }
 
@@ -590,6 +634,7 @@ void SKMapPeople::gatherPeople()
         {
             p.mLoaded = true;
             p.mPos = avatar->getPositionGlobal();
+            p.mFeetZ = feetZ(avatar);
             // Ours is the body rotation we send; anyone else's is the sim's, extrapolated, not the drawn body's.
             const LLVector3 forward = LLVector3::x_axis * (avatar->isSelf() ? avatar->getRenderRotation() : avatar->skPredictedRotationRegion());
             p.mHeading = std::atan2(forward.mV[VY], forward.mV[VX]);
@@ -602,6 +647,11 @@ void SKMapPeople::gatherPeople()
                     p.mSeatRoot = seat->getRootEdit()->getID();
                 }
             }
+        }
+        if (!p.mLoaded)
+        {
+            // Only a coarse location, out of draw range: no box, so an average avatar's half height.
+            p.mFeetZ = p.mPos.mdV[VZ] - 0.9;
         }
         // A coarse location past the ceiling has no height, unless the camera is below it.
         p.mZKnown = p.mLoaded || !(p.mPos.mdV[VZ] >= COARSE_CEILING_M && camera_z >= COARSE_CEILING_M);

@@ -41,6 +41,7 @@
 #include "v3dmath.h"
 #include "v4math.h"
 
+#include <map>
 #include <memory>
 #include <string>
 #include <utility>
@@ -49,6 +50,7 @@
 
 class LLRenderTarget;
 class LLViewerRegion;
+class LLVOAvatar;
 namespace skmapdraw
 {
     struct TagText;
@@ -85,6 +87,8 @@ public:
 
     /// A world right-click at the root view's (x, y): opens the mini-map's menus on the overview; false when it is off.
     static bool handleRightClick(S32 x, S32 y);
+    /// A world left button at the root view's (x, y): a drag pans the overview, a click is passed on to the tool.
+    static bool handleLeftClick(S32 x, S32 y, MASK mask, bool down);
 
     /// The tactical overview key: held, it shows the view until released; tapped, it latches it until the next tap.
     static void handleTacticalKey(bool down);
@@ -132,6 +136,8 @@ private:
         LLVector4 mRegion;  // the region styled as the agent's: min x, min y, max x, max y, agent space
         std::vector<LLVector4> mTerritory;  // the regions styled as inside, same form; empty means mRegion alone
         bool mTopDown = false;
+        std::vector<LLVector4> mDissolve;   // the see-through circles: window x, y, eye depth, radius in pixels
+        std::vector<F32> mDissolveFloor;    // each one's floor, agent z
     };
     /// A region's top-down map and when it was last taken.
     struct RegionMap;
@@ -162,7 +168,7 @@ private:
     void tactical();
     void composite();
     bool rightClick(S32 x, S32 y);
-    /// The ground plane at the tactical centre's height under an overview pixel, through the tactical camera.
+    /// What the overview draws under a pixel, by the tactical camera's ray: the census as cut, terrain, else the agent's floor plane.
     bool groundAt(const LLVector2& at, LLVector3d& world) const;
     void readTimer();
 
@@ -186,6 +192,19 @@ private:
     bool mTacticalReady = false;
     LLVector3 mTacticalCentre;   // agent space
     F32 mTacticalReach = 0.f;
+    F32 mTacticalShadeZ = 0.f;      ///< agent-space z the height colours are relative to: the agent's floor, eased
+    F64 mTacticalShadeTime = -1.0;  ///< when it was last eased; negative until the first shot
+    /// A person's see-through circle on the tactical view, eased in and out so it never pops.
+    struct Dissolve
+    {
+        LLVector3 mFloor;       ///< agent space, their feet
+        F32 mAmount = 0.f;      ///< 0 closed, 1 open
+        bool mSelf = false;
+    };
+    std::map<LLUUID, Dissolve> mDissolves;
+    F64 mDissolveTime = -1.0;
+    /// Fills the shot's see-through circles round the agent and the people the overview marks; the key of what it drew.
+    U64 tacticalDissolve(Shot& shot, S32 w, S32 h);
     bool mTacticalOpen = false;     ///< claims the modal view
     /// Claims or releases the modal view to match SKTacticalOverview.
     static void syncTactical();
@@ -197,9 +216,28 @@ private:
     void placeBattlefieldCamera();
     /// Puts the viewer camera there at once, without the ease LLAgentCamera gives a focus change.
     void setTacticalCamera(const LLVector3d& eye, const LLVector3d& focus);
-    /// Works out the per-building cut (SKOverviewCensus::applyCut) for the agent and the people the overview marks;
-    /// eye is the tactical camera's, agent space, for line of sight, or null for the top-down map.
-    void updateCut(const LLVector3* eye);
+    /// The agent's region, and with SKTacticalBattlefieldNeighbours the connected regions touching it, global.
+    bool battlefieldBounds(LLVector3d& lo, LLVector3d& hi) const;
+    /// A left-button drag over the overview: the ground point grabbed at the press stays under the cursor.
+    struct Pan
+    {
+        bool mPending = false;  // the button is down over the overview
+        bool mActive = false;   // and has moved past the drag threshold
+        S32 mDownX = 0;         // the press, root view coordinates
+        S32 mDownY = 0;
+        MASK mMask = 0;
+        LLVector3 mGrab;        // agent space
+        LLMatrix4a mView;       // the tactical camera at the press
+        LLMatrix4a mProj;
+        S32 mViewport[4] = {};
+        LLVector3d mEye;
+        LLVector3d mFocus;
+    } mPan;
+    bool leftClick(S32 x, S32 y, MASK mask, bool down);
+    /// Moves the camera for the cursor while a pan is under way; called each frame.
+    void updatePan();
+    /// Works out the per-building cut (SKOverviewCensus::applyCut) for the agent and the people the overview marks.
+    void updateCut();
     /// An enclosed room's floor polys' bounds, global, cached a few seconds.
     /// The enclosed room around a floor point, flooded through the indoor air at that floor: its air cells on the
     /// ROOM_CELL_M lattice; null when the point is not indoors. Rooms are kept a few seconds and reused while the
@@ -225,6 +263,7 @@ private:
         U64 mCensus = 0;
         U64 mCutStamp = 0;
         U32 mDebugView = 0;
+        U64 mDissolve = 0;
         const void* mRegion = nullptr;
     } mTacticalKey;
     /// CPU time of the tactical view, summed over a second and logged.
@@ -246,7 +285,9 @@ private:
     };
     std::vector<TacticalMark> mTacticalMarks;  // the markers drawn last frame, for picks
     // The mini-map's hover nametags, laid out in UI pixels over the overview.
-    void drawTacticalLabels(const std::vector<std::pair<size_t, LLVector2>>& drawn, S32 vw, S32 vh);
+    /// tagged runs alongside drawn: an avatar there shows its own name tag instead of the marker label.
+    void drawTacticalLabels(const std::vector<std::pair<size_t, LLVector2>>& drawn, const std::vector<LLVOAvatar*>& tagged,
+                            S32 vw, S32 vh);
     skmap::HoverSet mTacticalHover;
     skmap::LabelLayout mTacticalLabels;
     std::vector<skmapdraw::TagText> mTacticalTagTexts;

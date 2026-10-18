@@ -148,8 +148,8 @@ public:
         LLUUID mId;             ///< who, for the log
         bool mSelf = false;     ///< the agent: what is cut for them is cut at their level, whoever else needs it
         LLVector3d mFloor;      ///< global, their feet on their floor
+        LLVector3d mFeet;       ///< global, their feet as the avatar stands, for the surface they stand on
         F32 mCut = 0.f;         ///< agent z
-        std::vector<LLVector3d> mSight;     ///< global points on them the tactical eye should see: feet, chest, head
         /// The enclosed room they are in, flooded through the indoor air: its cells on the mRoomCellM lattice
         /// (global x and y over the cell size, floored); null outdoors.
         std::shared_ptr<const std::set<std::pair<S32, S32>>> mRoomCells;
@@ -158,15 +158,20 @@ public:
     /// Writes each vertex's cut height for the tactical view, for the linksets in the given region:
     /// - room: every linkset bounding an occupant's enclosed room (walls round its floor, floors above, the roof);
     /// - column: outdoors or with no room known, every linkset whose bounds hold their column and rise above it;
-    /// - line of sight: every linkset whose triangles block the eye's sight of their feet, chest or head.
+    /// - on a roof: a linkset someone stands on with none of it over them is cut no lower than their level, nor hidden,
+    ///   unless the agent is under it; held a second after they leave it.
+    /// What hides someone from the tactical eye is not cut here: its shader dissolves it round them.
     /// The agent's are cut at the agent's level, whoever else needs them; another's at the highest of its
     /// occupants'. Every other part, there and elsewhere, is drawn whole. key says when the eye or the people moved:
     /// the same key and buffers do nothing. Rewrites the attribute only when the result changed, and logs it then;
     /// cutStamp() moves when it does.
-    void applyCut(const LLViewerRegion* region, const std::vector<Occupant>& occupants, const LLVector3d& eye, U64 key);
+    void applyCut(const LLViewerRegion* region, const std::vector<Occupant>& occupants, U64 key);
     U64 cutStamp() const { return mCutStamp; }
     /// A linkset's cut at the last applyCut, by its root: its height (HIDDEN when hidden) and why; false when whole.
     bool cutOf(const LLUUID& root, F32& height, std::string& why) const;
+    /// The nearest census triangle along a ray as the tactical view draws it, global: invisible parts, hidden linksets
+    /// and whatever lies above its linkset's last cut are passed through. False when nothing is hit within max_m.
+    bool raycast(const LLVector3d& origin, const LLVector3& dir, F32 max_m, LLVector3d& hit) const;
     const std::vector<Batch>& batches() const { return mBatches; }
     U32 triangles() const { return mTriangles; }
     /// Moves whenever the buffers are rebuilt.
@@ -206,6 +211,13 @@ private:
     U64 mCutKey = 0;            ///< the inputs the last applyCut was worked from
     std::string mCutLogged;     ///< the cut linksets and reasons last logged
     std::map<LLUUID, std::pair<F32, std::string>> mCutRoots; ///< the last applyCut's cuts by linkset root
+    struct Standing
+    {
+        LLUUID mRoot;           ///< the linkset stood on
+        F64 mZ = 0.0;           ///< the surface's height under the feet
+        F64 mAt = 0.0;          ///< when it was last seen under them
+    };
+    std::map<LLUUID, Standing> mStanding;   ///< who stands on a roof, held through a hop
 };
 
 #endif // SK_OVERVIEWCENSUS_H

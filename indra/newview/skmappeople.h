@@ -36,6 +36,8 @@
 #include "skmapmarkers.h"
 #include "skmappolicy.h"
 #include "skmapview.h"
+
+class LLVOAvatar;
 #include "sknavwalls.h"
 #include "skmapplan.h"
 #include "skoutlinecapture.h"
@@ -71,6 +73,7 @@ public:
         LLUUID mId;
         LLVector3d mPos;
         bool mLoaded = false;               ///< a full object, not a coarse location
+        F64 mFeetZ = 0.0;                   ///< global; the sim's box bottom when loaded, else 0.9 m under a coarse location
         bool mZKnown = true;                ///< false when both it and the camera sit at the coarse ceiling
         bool mHasHeading = false;
         F32 mHeading = 0.f;                 ///< radians from east, counter-clockwise
@@ -84,6 +87,9 @@ public:
         skmap::Visibility mVisibility = skmap::Visibility::DOT;
         std::string mCode;                  ///< the ally's code in combat, else empty
     };
+
+    /// The bottom of an avatar's physical box as the sim sends it (object scale), global Z.
+    static F64 feetZ(LLVOAvatar* avatar);
 
     void initSingleton() override;
     void cleanupSingleton() override;
@@ -131,15 +137,25 @@ public:
     };
     const std::map<LLUUID, FiringLine>& firingLines() const { return mFiring; }
 
-    /// Fast physical objects in view, opt-in.
+    /// Fast physical objects in view, gathered every frame from the live object list.
     struct Projectile
     {
-        LLVector3d mPos;
-        LLVector3d mTail;                   ///< where it was a tenth of a second ago
-        bool mFast = false;                 ///< a streak, not a thrown dot
+        LLVector3d mPos;                    ///< the head
+        LLVector3 mDir;                     ///< unit direction of travel
+        F32 mLength = 0.f;                  ///< the prim's extent along its direction of travel, metres
+        F32 mWidth = 0.f;                   ///< the prim's extent across it, metres
         LLUUID mShooter;                    ///< who it was traced back to, null when nobody fits
     };
     const std::vector<Projectile>& projectiles() const { return mProjectiles; }
+
+    /// Any object moving fast enough, with where it has been over its trail's lifetime, newest first.
+    struct FastTrail
+    {
+        std::vector<std::pair<F64, LLVector3d>> mPoints;
+        F32 mAlpha = 0.f;                   ///< opacity at the head
+        F32 mLife = 0.f;                    ///< seconds the trail reaches back
+    };
+    const std::map<LLUUID, FastTrail>& fastTrails() const { return mFastTrails; }
 
     /// The user's ally groups: the active group's faction, or the group alone.
     const std::set<LLUUID>& candidates() const { return mCandidates; }
@@ -183,7 +199,7 @@ private:
     std::map<LLUUID, FiringLine> mFiring;
     F64 mRayAllowance = 0.0;            ///< seconds of ray time earned and not yet spent
     std::vector<Projectile> mProjectiles;
-    std::map<LLUUID, LLVector3d> mLastObjectPos;
+    std::map<LLUUID, FastTrail> mFastTrails;
     /// Every nearby avatar's recent positions, oldest first, to trace shots back to; never drawn.
     std::map<LLUUID, std::deque<std::pair<F64, LLVector3d>>> mTrails;
     std::map<LLUUID, LLUUID> mShooters;  ///< shots already traced, by object

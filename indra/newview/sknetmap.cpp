@@ -127,6 +127,35 @@ namespace skmapdraw
         triangle(a - n, b + n, a + n);
     }
 
+    void streak(const LLVector2& tail, const LLVector2& head, F32 width, const LLColor4& colour)
+    {
+        LLVector2 d = head - tail;
+        if (d.normVec() < 1e-4f)
+        {
+            return;
+        }
+        const LLVector2 n(-d.mV[VY] * width * 0.5f, d.mV[VX] * width * 0.5f);
+        const LLVector2 t0 = tail - n, t1 = tail + n, h0 = head - n, h1 = head + n;
+        auto at = [&](const LLVector2& v, F32 alpha)
+        {
+            gGL.color4f(colour.mV[VRED], colour.mV[VGREEN], colour.mV[VBLUE], colour.mV[VALPHA] * alpha);
+            gGL.vertex2f(v.mV[VX], v.mV[VY]);
+        };
+        at(t0, 0.f); at(h0, 1.f); at(h1, 1.f);
+        at(t0, 0.f); at(h1, 1.f); at(t1, 0.f);
+    }
+
+    void projectile(const LLVector2& head, const LLVector2& dir, F32 length_px, F32 width_px, const LLColor4& colour)
+    {
+        static LLCachedControl<F32> min_len(gSavedSettings, "SKMapProjectileMinLengthPx", 10.f);
+        static LLCachedControl<F32> min_w(gSavedSettings, "SKMapProjectileMinWidthPx", 2.f);
+        static LLCachedControl<F32> max_w(gSavedSettings, "SKMapProjectileMaxWidthPx", 5.f);
+        const F32 lo = llmax(static_cast<F32>(min_w), 0.5f);
+        const F32 width = llclamp(width_px, lo, llmax(lo, static_cast<F32>(max_w)));
+        const F32 length = llmax(length_px, static_cast<F32>(min_len));
+        streak(head - dir * length, head, width, colour);
+    }
+
     void disc(const LLVector2& centre, F32 radius, S32 steps)
     {
         for (S32 i = 0; i < steps; ++i)
@@ -892,22 +921,17 @@ void SKNetMap::drawProjectiles()
         const auto shooter = p.mShooter.notNull() ? drawn.find(p.mShooter) : drawn.end();
         const LLColor4 c = shooter != drawn.end() ? shooter->second : plain;
         const LLVector2 head = mView.toWidget(p.mPos);
-        if (p.mFast)
+        // One metre back along the flight gives both the direction and the scale on screen.
+        LLVector2 dir = head - mView.toWidget(p.mPos - LLVector3d(p.mDir));
+        const F32 ppm = dir.normVec();
+        if (ppm < 0.05f * mView.pixelsPerMetre() || ppm < 1e-4f)
         {
-            // A streak and a bright head.
-            gGL.color4f(c.mV[VRED], c.mV[VGREEN], c.mV[VBLUE], 0.5f);
-            skmapdraw::line(mView.toWidget(p.mTail), head, 1.f);
+            // Flying straight at the view: only its cross-section shows.
             gGL.color4fv(c.mV);
             skmapdraw::disc(head, 1.5f, 8);
+            continue;
         }
-        else
-        {
-            // A thrown object: a dot and a ring.
-            gGL.color4fv(c.mV);
-            skmapdraw::disc(head, 1.5f, 8);
-            gGL.color4f(c.mV[VRED], c.mV[VGREEN], c.mV[VBLUE], 0.6f);
-            skmapdraw::ring(head, 4.f, 1.f, 16);
-        }
+        skmapdraw::projectile(head, dir, p.mLength * ppm, p.mWidth * mView.pixelsPerMetre(), c);
     }
     gGL.end();
 }
