@@ -209,9 +209,8 @@ private:
     void placeBattlefieldCamera();
     /// Puts the viewer camera there at once, without the ease LLAgentCamera gives a focus change.
     void setTacticalCamera(const LLVector3d& eye, const LLVector3d& focus);
-    /// Works out the per-building cut (SKOverviewCensus::applyCut) for the agent and the people the overview marks;
-    /// eye is the tactical camera's, agent space, for line of sight, or null for the top-down map.
-    void updateCut(const LLVector3* eye);
+    /// Works out the per-building cut (SKOverviewCensus::applyCut) for the agent and the people the overview marks.
+    void updateCut();
     /// An enclosed room's floor polys' bounds, global, cached a few seconds.
     /// The enclosed room around a floor point, flooded through the indoor air at that floor: its air cells on the
     /// ROOM_CELL_M lattice; null when the point is not indoors. Rooms are kept a few seconds and reused while the

@@ -756,7 +756,7 @@ void SKOverviewCapture::frame()
     {
         if (!tacticalShown())
         {
-            updateCut(nullptr);
+            updateCut();
         }
         captureMaps(LLFrameTimer::getUptimeSeconds().value());
     }
@@ -1336,11 +1336,11 @@ std::shared_ptr<const std::set<std::pair<S32, S32>>> SKOverviewCapture::roomAt(c
     return room.mCells;
 }
 
-void SKOverviewCapture::updateCut(const LLVector3* eye)
+void SKOverviewCapture::updateCut()
 {
     // Cut by building, for every view that draws the census: the agent's own at its level, and each other building
     // in its region that holds someone the overview draws a marker for at its highest occupant's level; the rest,
-    // and other regions, whole. With a perspective eye, whatever hides someone from it as well.
+    // and other regions, whole. What stands between the tactical eye and someone is dissolved round them instead.
     F32 floor_z, cut_z;
     cutHeights(gAgent.getPositionGlobal(), gAgent.getPositionAgent().mV[VZ], floor_z, cut_z);
     static LLCachedControl<F32> cut_height(gSavedSettings, "SKOverviewCutHeight", 2.5f);
@@ -1364,14 +1364,6 @@ void SKOverviewCapture::updateCut(const LLVector3* eye)
         o.mFloor = floor;
         o.mFeet = feet;
         o.mCut = cut;
-        // Line of sight only for a perspective eye: straight down, only roofs stand between, and the rooms take those.
-        if (eye)
-        {
-            for (F64 up : { 0.3, 1.0, 1.7 })
-            {
-                o.mSight.push_back(feet + LLVector3d(0.0, 0.0, up));
-            }
-        }
         if (where.mFound && where.mIndoor)
         {
             o.mRoomCells = roomAt(floor);
@@ -1403,11 +1395,8 @@ void SKOverviewCapture::updateCut(const LLVector3* eye)
         feet.mdV[VZ] -= AVATAR_HALF_HEIGHT_M;
         addPerson(p.mId, false, floor, feet, (F32)floor.mdV[VZ] + (F32)cut_height, p.mWhere);
     }
-    const LLVector3d eye_global = eye ? gAgent.getPosGlobalFromAgent(*eye) : LLVector3d();
-    mixPos(eye_global);
-    mix(eye ? 1u : 0u);
     mix(gAgent.getRegion() ? gAgent.getRegion()->getHandle() : 0);
-    mCensus.applyCut(gAgent.getRegion(), occupants, eye_global, key);
+    mCensus.applyCut(gAgent.getRegion(), occupants, key);
 }
 
 U64 SKOverviewCapture::tacticalDissolve(Shot& shot, S32 w, S32 h)
@@ -1614,7 +1603,7 @@ void SKOverviewCapture::tactical()
         const LLVector3 at_axis = dir;
         static LLCachedControl<bool> force(gSavedSettings, "SKOverviewForceRecapture", false);
         static LLCachedControl<U32> tactical_debug_view(gSavedSettings, "SKOverviewDebugView", 0);
-        updateCut(&eye);
+        updateCut();
         const U64 dissolve_key = tacticalDissolve(shot, vw, vh);
         const bool same = !force && mTacticalKey.mValid && (eye - mTacticalKey.mEye).magVecSquared() < 1e-4f &&
                           at_axis * mTacticalKey.mDir > 0.999999f && fov == mTacticalKey.mFov && vw == mTacticalKey.mWidth &&

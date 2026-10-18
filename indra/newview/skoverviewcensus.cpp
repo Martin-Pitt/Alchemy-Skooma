@@ -819,35 +819,6 @@ void SKOverviewCensus::gatherSurrounds(const SKCensusSnapshot& snap)
 
 namespace
 {
-    // Whether the segment from p to q crosses the triangle (a, b, c), short of q (Moller-Trumbore).
-    bool segmentHits(const LLVector3& p, const LLVector3& q, const LLVector3& a, const LLVector3& b, const LLVector3& c)
-    {
-        const LLVector3 d = q - p;
-        const LLVector3 e1 = b - a;
-        const LLVector3 e2 = c - a;
-        const LLVector3 h = d % e2;
-        const F32 det = e1 * h;
-        if (std::fabs(det) < 1.0e-9f)
-        {
-            return false;
-        }
-        const F32 inv = 1.f / det;
-        const LLVector3 s = p - a;
-        const F32 u = (s * h) * inv;
-        if (u < 0.f || u > 1.f)
-        {
-            return false;
-        }
-        const LLVector3 qv = s % e1;
-        const F32 v = (d * qv) * inv;
-        if (v < 0.f || u + v > 1.f)
-        {
-            return false;
-        }
-        const F32 t = (e2 * qv) * inv;
-        return t > 1.0e-4f && t < 0.999f;
-    }
-
     // The distance in plan from p to the triangle (a, b, c): 0 inside it; a wall's edge-on triangle is its segment.
     F32 planDistance(const LLVector2& p, const LLVector3& a3, const LLVector3& b3, const LLVector3& c3)
     {
@@ -874,40 +845,9 @@ namespace
         };
         return llmin(segment(a, b), llmin(segment(b, c), segment(c, a)));
     }
-
-    // Whether the segment from p to q meets the box (slab test).
-    bool segmentMeetsBox(const LLVector3d& p, const LLVector3d& q, const LLVector3d& lo, const LLVector3d& hi)
-    {
-        F64 t0 = 0.0, t1 = 1.0;
-        for (S32 k = 0; k < 3; ++k)
-        {
-            const F64 d = q.mdV[k] - p.mdV[k];
-            if (std::fabs(d) < 1.0e-12)
-            {
-                if (p.mdV[k] < lo.mdV[k] || p.mdV[k] > hi.mdV[k])
-                {
-                    return false;
-                }
-                continue;
-            }
-            F64 a = (lo.mdV[k] - p.mdV[k]) / d;
-            F64 b = (hi.mdV[k] - p.mdV[k]) / d;
-            if (a > b)
-            {
-                std::swap(a, b);
-            }
-            t0 = llmax(t0, a);
-            t1 = llmin(t1, b);
-            if (t0 > t1)
-            {
-                return false;
-            }
-        }
-        return true;
-    }
 }
 
-void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<Occupant>& occupants, const LLVector3d& eye, U64 key)
+void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<Occupant>& occupants, U64 key)
 {
     LL_PROFILE_ZONE_SCOPED;
     if (key == mCutKey && mCutSignature == mSignature)
@@ -944,33 +884,6 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
             e.mParts.emplace_back(&batch, &group);
         }
     }
-    // Whether a linkset's own triangles (not its hatched invisible ones) block the segment.
-    auto blocks = [](const Extent& e, const LLVector3d& p, const LLVector3d& q)
-    {
-        for (const auto& part : e.mParts)
-        {
-            const Batch& batch = *part.first;
-            const LLVector3 a(p - batch.mOrigin);
-            const LLVector3 b(q - batch.mOrigin);
-            for (U32 c = 0; c < skoverview::NUM_CENSUS_CLASSES; ++c)
-            {
-                if (c == skoverview::INVISIBLE)
-                {
-                    continue;
-                }
-                const U32 end = llmin(part.second->mStart[c] + part.second->mCount[c], (U32)batch.mPositions.size());
-                for (U32 v = part.second->mStart[c]; v + 2 < end; v += 3)
-                {
-                    if (segmentHits(a, b, batch.mPositions[v], batch.mPositions[v + 1], batch.mPositions[v + 2]))
-                    {
-                        return true;
-                    }
-                }
-            }
-        }
-        return false;
-    };
-
     const F64 SLACK_M = 0.1;    // column: how far outside a linkset's bounds still counts as under it
     const F64 ABOVE_M = 0.5;    // what rises less than this over the floor bounds nothing
     const F64 OVERHEAD_M = 1.0; // a floating cluster whose base is this far over an occupant's cut is out of their space
@@ -987,10 +900,7 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
         const std::string who = occupant.mSelf ? std::string("agent") : "occupant " + occupant.mId.asString();
         if (occupant.mSelf)
         {
-            if (std::string(rule) != "line-of-sight")
-            {
-                agent_under.insert(id);
-            }
+            agent_under.insert(id);
             if (for_agent.insert(id).second)
             {
                 cut_of[id] = occupant.mCut;
@@ -1292,19 +1202,6 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
                      overColumn(e, p))
             {
                 mark(entry.first, *occupant, "column");
-            }
-        }
-        // Whatever hides them from the eye.
-        for (const LLVector3d& target : occupant->mSight)
-        {
-            for (const auto& entry : extents)
-            {
-                const Extent& e = entry.second;
-                if (e.mCuttable && !overhead(e, *occupant) && segmentMeetsBox(eye, target, e.mMin, e.mMax) &&
-                    blocks(e, eye, target))
-                {
-                    mark(entry.first, *occupant, "line-of-sight");
-                }
             }
         }
     }

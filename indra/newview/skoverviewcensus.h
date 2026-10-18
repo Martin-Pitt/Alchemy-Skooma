@@ -150,7 +150,6 @@ public:
         LLVector3d mFloor;      ///< global, their feet on their floor
         LLVector3d mFeet;       ///< global, their feet as the avatar stands, for the surface they stand on
         F32 mCut = 0.f;         ///< agent z
-        std::vector<LLVector3d> mSight;     ///< global points on them the tactical eye should see: feet, chest, head
         /// The enclosed room they are in, flooded through the indoor air: its cells on the mRoomCellM lattice
         /// (global x and y over the cell size, floored); null outdoors.
         std::shared_ptr<const std::set<std::pair<S32, S32>>> mRoomCells;
@@ -159,14 +158,14 @@ public:
     /// Writes each vertex's cut height for the tactical view, for the linksets in the given region:
     /// - room: every linkset bounding an occupant's enclosed room (walls round its floor, floors above, the roof);
     /// - column: outdoors or with no room known, every linkset whose bounds hold their column and rise above it;
-    /// - line of sight: every linkset whose triangles block the eye's sight of their feet, chest or head.
     /// - on a roof: a linkset someone stands on with none of it over them is cut no lower than their level, nor hidden,
     ///   unless the agent is under it; held a second after they leave it.
+    /// What hides someone from the tactical eye is not cut here: its shader dissolves it round them.
     /// The agent's are cut at the agent's level, whoever else needs them; another's at the highest of its
     /// occupants'. Every other part, there and elsewhere, is drawn whole. key says when the eye or the people moved:
     /// the same key and buffers do nothing. Rewrites the attribute only when the result changed, and logs it then;
     /// cutStamp() moves when it does.
-    void applyCut(const LLViewerRegion* region, const std::vector<Occupant>& occupants, const LLVector3d& eye, U64 key);
+    void applyCut(const LLViewerRegion* region, const std::vector<Occupant>& occupants, U64 key);
     U64 cutStamp() const { return mCutStamp; }
     /// A linkset's cut at the last applyCut, by its root: its height (HIDDEN when hidden) and why; false when whole.
     bool cutOf(const LLUUID& root, F32& height, std::string& why) const;
