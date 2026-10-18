@@ -1252,6 +1252,95 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
     }
 }
 
+bool SKOverviewCensus::raycast(const LLVector3d& origin, const LLVector3& dir, F32 max_m, LLVector3d& hit) const
+{
+    F32 best = max_m;
+    bool found = false;
+    for (const Batch& batch : mBatches)
+    {
+        const LLVector3 from(origin - batch.mOrigin);
+        const U32 total = (U32)batch.mPositions.size();
+        for (const Group& group : batch.mGroups)
+        {
+            // The group's bounds first, by the slab test.
+            const LLVector3 lo(group.mMin - batch.mOrigin);
+            const LLVector3 hi(group.mMax - batch.mOrigin);
+            F32 t_lo = 0.f;
+            F32 t_hi = best;
+            bool miss = false;
+            for (S32 i = 0; i < 3 && !miss; ++i)
+            {
+                if (std::fabs(dir.mV[i]) < 1e-9f)
+                {
+                    miss = from.mV[i] < lo.mV[i] || from.mV[i] > hi.mV[i];
+                    continue;
+                }
+                const F32 a = (lo.mV[i] - from.mV[i]) / dir.mV[i];
+                const F32 b = (hi.mV[i] - from.mV[i]) / dir.mV[i];
+                t_lo = llmax(t_lo, llmin(a, b));
+                t_hi = llmin(t_hi, llmax(a, b));
+                miss = t_lo > t_hi;
+            }
+            if (miss)
+            {
+                continue;
+            }
+            F32 cut = skoverview::NO_CUT;
+            std::string why;
+            if (cutOf(group.mRoot, cut, why) && cut <= skoverview::HIDDEN * 0.5f)
+            {
+                continue;
+            }
+            // Cuts are agent z, which is global z; positions are region-local.
+            const F32 cut_local = cut >= skoverview::NO_CUT * 0.5f ? cut : cut - (F32)batch.mOrigin.mdV[VZ];
+            for (U32 c = 0; c < skoverview::NUM_CENSUS_CLASSES; ++c)
+            {
+                if (c == skoverview::INVISIBLE)
+                {
+                    continue;
+                }
+                const U32 end = llmin(group.mStart[c] + group.mCount[c], total);
+                for (U32 v = group.mStart[c]; v + 2 < end; v += 3)
+                {
+                    // Moller-Trumbore, either face, as the view draws both.
+                    const LLVector3& p0 = batch.mPositions[v];
+                    const LLVector3 e1 = batch.mPositions[v + 1] - p0;
+                    const LLVector3 e2 = batch.mPositions[v + 2] - p0;
+                    const LLVector3 pv = dir % e2;
+                    const F32 det = e1 * pv;
+                    if (std::fabs(det) < 1e-12f)
+                    {
+                        continue;
+                    }
+                    const F32 inv = 1.f / det;
+                    const LLVector3 tv = from - p0;
+                    const F32 u = (tv * pv) * inv;
+                    if (u < 0.f || u > 1.f)
+                    {
+                        continue;
+                    }
+                    const LLVector3 qv = tv % e1;
+                    const F32 w = (dir * qv) * inv;
+                    const F32 t = (e2 * qv) * inv;
+                    if (w < 0.f || u + w > 1.f || t <= 0.f || t >= best)
+                    {
+                        continue;
+                    }
+                    // Above its part's cut nothing is drawn, so the ray goes on through it.
+                    if ((from + dir * t).mV[VZ] > cut_local)
+                    {
+                        continue;
+                    }
+                    best = t;
+                    found = true;
+                    hit = origin + LLVector3d(dir * t);
+                }
+            }
+        }
+    }
+    return found;
+}
+
 bool SKOverviewCensus::cutOf(const LLUUID& root, F32& height, std::string& why) const
 {
     const auto it = mCutRoots.find(root);

@@ -161,7 +161,7 @@ private:
     void tactical();
     void composite();
     bool rightClick(S32 x, S32 y);
-    /// The ground plane at the tactical centre's height under an overview pixel, through the tactical camera.
+    /// What the overview draws under a pixel, by the tactical camera's ray: the census as cut, terrain, else the agent's floor plane.
     bool groundAt(const LLVector2& at, LLVector3d& world) const;
     void readTimer();
 

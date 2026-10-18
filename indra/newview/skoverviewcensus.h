@@ -167,6 +167,9 @@ public:
     U64 cutStamp() const { return mCutStamp; }
     /// A linkset's cut at the last applyCut, by its root: its height (HIDDEN when hidden) and why; false when whole.
     bool cutOf(const LLUUID& root, F32& height, std::string& why) const;
+    /// The nearest census triangle along a ray as the tactical view draws it, global: invisible parts, hidden linksets
+    /// and whatever lies above its linkset's last cut are passed through. False when nothing is hit within max_m.
+    bool raycast(const LLVector3d& origin, const LLVector3& dir, F32 max_m, LLVector3d& hit) const;
     const std::vector<Batch>& batches() const { return mBatches; }
     U32 triangles() const { return mTriangles; }
     /// Moves whenever the buffers are rebuilt.

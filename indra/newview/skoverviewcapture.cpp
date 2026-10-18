@@ -1646,13 +1646,47 @@ bool SKOverviewCapture::rightClick(S32 x, S32 y)
 
 bool SKOverviewCapture::groundAt(const LLVector2& at, LLVector3d& world) const
 {
-    LLVector3 from, dir, hit;
-    if (!cursorRay(mTacticalView, mTacticalProj, mTacticalViewport, at, from, dir) || dir.mV[VZ] > -1e-6f ||
-        from.mV[VZ] < mTacticalCentre.mV[VZ] || !rayPlane(from, dir, mTacticalCentre.mV[VZ], hit))
+    // The tactical camera's ray through the pixel, against what the view draws: the census as cut, then the terrain,
+    // then the agent's floor plane.
+    LLVector3 from, dir;
+    if (!cursorRay(mTacticalView, mTacticalProj, mTacticalViewport, at, from, dir))
     {
         return false;
     }
-    world = gAgent.getPosGlobalFromAgent(hit);
+    const F32 PICK_RANGE_M = 4096.f;
+    const LLVector3d origin = gAgent.getPosGlobalFromAgent(from);
+    if (mCensus.raycast(origin, dir, PICK_RANGE_M, world))
+    {
+        return true;
+    }
+    LLVector4a start, end, hit;
+    start.load3(from.mV);
+    LLVector3 far_pt = from + dir * PICK_RANGE_M;
+    end.load3(far_pt.mV);
+    bool land = false;
+    for (LLViewerRegion* region : LLWorld::getInstance()->getRegionList())
+    {
+        LLSpatialPartition* part = region->getSpatialPartition(LLViewerRegion::PARTITION_TERRAIN);
+        S32 face = -1;
+        if (part && part->lineSegmentIntersect(start, end, false, false, true, false, &face, &hit))
+        {
+            end = hit; // the next region's test only looks nearer
+            land = true;
+        }
+    }
+    if (land)
+    {
+        world = gAgent.getPosGlobalFromAgent(LLVector3(end.getF32ptr()));
+        return true;
+    }
+    F32 floor_z, cut_z;
+    cutHeights(gAgent.getPositionGlobal(), gAgent.getPositionAgent().mV[VZ], floor_z, cut_z);
+    LLVector3 plane_hit;
+    if (!rayPlane(from, dir, floor_z, plane_hit))
+    {
+        return false;
+    }
+    world = gAgent.getPosGlobalFromAgent(plane_hit);
     return true;
 }
 
@@ -1691,28 +1725,12 @@ bool SKOverviewCapture::leftClick(S32 x, S32 y, MASK mask, bool down)
         {
             return false;
         }
-        // The grabbed point: the scene under the cursor below the cut, else the floor plane under the agent.
-        F32 floor_z, cut_z;
-        cutHeights(gAgent.getPositionGlobal(), gAgent.getPositionAgent().mV[VZ], floor_z, cut_z);
-        LLVector3 start = from;
-        if (start.mV[VZ] > cut_z)
-        {
-            rayPlane(from, dir, cut_z, start);
-        }
-        LLVector3 grab;
-        LLVector4a seg_start, seg_end, hit;
-        seg_start.load3(start.mV);
-        const LLVector3 end = start + dir * 4096.f;
-        seg_end.load3(end.mV);
-        S32 face = -1;
-        if (gPipeline.lineSegmentIntersectInWorld(seg_start, seg_end, false, false, true, false, &face, &hit))
-        {
-            grab.set(hit.getF32ptr());
-        }
-        else if (!rayPlane(from, dir, floor_z, grab))
+        LLVector3d grab_global;
+        if (!groundAt(at, grab_global))
         {
             return false;
         }
+        const LLVector3 grab = gAgent.getPosAgentFromGlobal(grab_global);
         mPan = Pan();
         mPan.mPending = true;
         mPan.mDownX = x;
