@@ -228,15 +228,24 @@ bool SKNavMesh::probesDemanded()
     return room_probes && probe_level >= 3 && LLPipeline::sReflectionProbesEnabled;
 }
 
+namespace
+{
+    // Squared XY distance from a point to a box, 0 inside it.
+    F64 distanceXYSquared(const LLVector3d& lo, const LLVector3d& hi, const LLVector3d& point)
+    {
+        const F64 dx = llmax(lo.mdV[VX] - point.mdV[VX], 0.0, point.mdV[VX] - hi.mdV[VX]);
+        const F64 dy = llmax(lo.mdV[VY] - point.mdV[VY], 0.0, point.mdV[VY] - hi.mdV[VY]);
+        return dx * dx + dy * dy;
+    }
+}
+
 bool SKNavMesh::inAirRadius(const Tile& tile) const
 {
     static LLCachedControl<F32> radius(gSavedSettings, "SKNavAirRadius", 300.f);
     static LLCachedControl<F32> agent_radius(gSavedSettings, "SKNavAirAgentRadius", 30.f);
     auto closeTo = [&tile](const LLVector3d& point, F64 r)
     {
-        const F64 dx = llmax(tile.mMin.mdV[VX] - point.mdV[VX], 0.0, point.mdV[VX] - tile.mMax.mdV[VX]);
-        const F64 dy = llmax(tile.mMin.mdV[VY] - point.mdV[VY], 0.0, point.mdV[VY] - tile.mMax.mdV[VY]);
-        return dx * dx + dy * dy <= r * r;
+        return distanceXYSquared(tile.mMin, tile.mMax, point) <= r * r;
     };
     if (closeTo(gAgent.getPosGlobalFromAgent(LLViewerCamera::getInstance()->getOrigin()), radius))
     {
@@ -443,13 +452,13 @@ void SKNavMesh::evictAir()
     }
     if (!mEvictionScan) mEvictionScan = std::make_shared<std::vector<AirCandidate>>();
     const LLVector3d camera = gAgent.getPosGlobalFromAgent(LLViewerCamera::getInstance()->getOrigin());
+    const LLVector3d agent = gAgent.getPositionGlobal();
     const F64 dt = llclamp(static_cast<F64>(gFrameIntervalSeconds), 0.0, 1.0);
     if (!mEvictionScanReady && !scanTiles(mEvictionCursor, 0.001f, [&](Mesh& mesh, const TileKey& key, Tile& tile)
         {
             if ((!tile.mAir && !tile.mRaster) || tile.mInFlight) return;
-            const F64 dx = llmax(tile.mMin.mdV[VX] - camera.mdV[VX], 0.0, camera.mdV[VX] - tile.mMax.mdV[VX]);
-            const F64 dy = llmax(tile.mMin.mdV[VY] - camera.mdV[VY], 0.0, camera.mdV[VY] - tile.mMax.mdV[VY]);
-            const F64 distance = std::sqrt(dx * dx + dy * dy);
+            // The nearer of the camera and the agent, so the agent's disc keeps what inAirRadius holds.
+            const F64 distance = std::sqrt(llmin(distanceXYSquared(tile.mMin, tile.mMax, camera), distanceXYSquared(tile.mMin, tile.mMax, agent)));
             if (tile.mRaster)
             {
                 mRasterScan.push_back({mesh.mId, mesh.mGeneration, key, tile.mRaster, tile.mRaster->bytes(), distance, meshPriority(mesh)});
