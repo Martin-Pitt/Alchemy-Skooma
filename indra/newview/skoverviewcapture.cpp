@@ -114,6 +114,7 @@ namespace
     const F32 BATTLEFIELD_MAX_M = 4096.f;
     const F32 BATTLEFIELD_PITCH_DEG = 89.f;  // the untilted battlefield: short of straight down, so the camera keeps a heading to put north up
     const F32 BATTLEFIELD_MARGIN = 1.05f;
+    const F32 CYLINDER_FADE_S = 0.15f;  // a marker's crossfade between its body and its zoomed-out cylinder
 
     /// SKTacticalCameraMode: a fixed north-up view fitting the battlefield, or the orbit that follows the agent.
     bool battlefieldCamera()
@@ -2154,9 +2155,19 @@ void SKOverviewCapture::drawMarkers3D(const Project& project, S32 vw, S32 vh, st
         gGL.vertex3fv(b.mV);
         gGL.vertex3fv(c.mV);
     };
+    // Zoomed out past SKTacticalCylinderPixelsPerMetre the bodies give way to cylinders, crossfaded, which grow to
+    // keep SKTacticalCylinderMinRadiusPx on screen up to SKTacticalCylinderMaxRadiusM so a crowd stays apart.
+    static LLCachedControl<F32> swap_ppm(gSavedSettings, "SKTacticalCylinderPixelsPerMetre", 6.f);
+    static LLCachedControl<F32> min_px(gSavedSettings, "SKTacticalCylinderMinRadiusPx", 4.f);
+    static LLCachedControl<F32> max_radius(gSavedSettings, "SKTacticalCylinderMaxRadiusM", 2.f);
+    const F64 now = LLFrameTimer::getUptimeSeconds().value();
+    const F32 fade_step = mMarkerFadeTime < 0.0 ? 1.f : (F32)(now - mMarkerFadeTime) / CYLINDER_FADE_S;
+    mMarkerFadeTime = now;
+    std::map<LLUUID, F32> blends;
+    const LLVector3 sideways = LLViewerCamera::getInstance()->getLeftAxis();
+    auto faded = [](const LLColor4& c, F32 a) { return LLColor4(c.mV[0], c.mV[1], c.mV[2], c.mV[3] * a); };
     for (const Marker& m : markers)
     {
-        // True size at every zoom: the sim's agent size, never grown for the screen.
         LLVector2 at0;
         if (!project(m.mFloor, at0))
         {
@@ -2164,14 +2175,28 @@ void SKOverviewCapture::drawMarkers3D(const Project& project, S32 vw, S32 vh, st
         }
         // A known body sets the height, the radius in proportion.
         const F32 body = m.mHeight > 0.f ? m.mHeight / MARKER_HEIGHT_M : 1.f;
-        const F32 r = (m.mRadius > 0.f ? m.mRadius : MARKER_RADIUS_M * body);
-        const F32 h = (m.mCoarse ? MARKER_COARSE_HEIGHT_M : MARKER_HEIGHT_M) * body;
+        const F32 true_r = (m.mRadius > 0.f ? m.mRadius : MARKER_RADIUS_M * body);
+        const F32 true_h = (m.mCoarse ? MARKER_COARSE_HEIGHT_M : MARKER_HEIGHT_M) * body;
+        LLVector2 side;
+        const F32 ppm = project(m.mFloor + sideways, side) ? (side - at0).length() : 0.f;
+        const bool has_body = m.mHasShape && !m.mCoarse;
+        // Hysteresis as well as the fade: a cylinder turns back into a body only a fifth past the threshold.
+        const auto known = mCylinderBlend.find(m.mId);
+        F32 blend = known != mCylinderBlend.end() ? known->second : (ppm < swap_ppm ? 1.f : 0.f);
+        const bool small = ppm < swap_ppm * (blend > 0.5f ? 1.2f : 1.f);
+        blend = has_body ? llclamp(blend + (small ? fade_step : -fade_step), 0.f, 1.f) : 1.f;
+        blends[m.mId] = blend;
+        const F32 grow = small && ppm > 1e-4f ? llclamp(min_px / (ppm * true_r), 1.f, llmax(1.f, max_radius / true_r)) : 1.f;
+        const F32 r = true_r * grow;
+        const F32 h = true_h * grow;
         const LLColor4 bright(llmin(1.f, m.mColour.mV[0] * 1.25f + 0.1f), llmin(1.f, m.mColour.mV[1] * 1.25f + 0.1f),
-                              llmin(1.f, m.mColour.mV[2] * 1.25f + 0.1f), 1.f);
-        LLVector3 top_c = m.mFloor + LLVector3(0.f, 0.f, h);
-        if (m.mHasShape && !m.mCoarse)
+                              llmin(1.f, m.mColour.mV[2] * 1.25f + 0.1f), blend);
+        const LLVector3 cylinder_top = m.mFloor + LLVector3(0.f, 0.f, h);
+        LLVector3 top_c = cylinder_top;
+        if (has_body && blend < 1.f)
         {
-            // The avatar's own physics shape, about its position.
+            // The avatar's own physics shape, about its position, at true size.
+            const LLColor4 colour = faded(m.mColour, 1.f - blend);
             const std::vector<LLVector3>& shape = skcensus::avatarShape(m.mPose, m.mHeight);
             F32 top_z = -F32_MAX;
             for (size_t v = 0; v + 2 < shape.size(); v += 3)
@@ -2179,57 +2204,59 @@ void SKOverviewCapture::drawMarkers3D(const Project& project, S32 vw, S32 vh, st
                 const LLVector3 a = m.mCentre + shape[v] * m.mRotation;
                 const LLVector3 b = m.mCentre + shape[v + 1] * m.mRotation;
                 const LLVector3 c = m.mCentre + shape[v + 2] * m.mRotation;
-                tri(a, b, c, m.mColour);
+                tri(a, b, c, colour);
                 top_z = llmax(top_z, llmax(a.mV[VZ], llmax(b.mV[VZ], c.mV[VZ])));
             }
-            top_c = LLVector3(m.mCentre.mV[VX], m.mCentre.mV[VY], top_z);
-        }
-        else
-        {
-            for (S32 k = 0; k < MARKER_SIDES; ++k)
+            if (blend < 0.5f)
             {
-                const F32 a0 = F_TWO_PI * k / MARKER_SIDES, a1 = F_TWO_PI * (k + 1) / MARKER_SIDES;
-                const LLVector3 d0(std::cos(a0) * r, std::sin(a0) * r, 0.f), d1(std::cos(a1) * r, std::sin(a1) * r, 0.f);
-                const LLVector3 b0 = m.mFloor + d0, b1 = m.mFloor + d1, t0 = top_c + d0, t1 = top_c + d1;
-                tri(b0, b1, t1, m.mColour);
-                tri(b0, t1, t0, m.mColour);
-                tri(top_c, t0, t1, m.mColour);
+                top_c = LLVector3(m.mCentre.mV[VX], m.mCentre.mV[VY], top_z);
             }
-        }
-        if (m.mHasShape && !m.mCoarse && m.mHasHead && m.mHasHeading)
-        {
-            // The minimap's heading wedge as a flat slab: a solid triangle just clear of the body at head height, along
-            // the body's heading, in the minimap's proportions to the body's radius.
+            if (m.mHasHead && m.mHasHeading)
             {
+                // The minimap's heading wedge as a flat slab: a solid triangle just clear of the body at head height,
+                // along the body's heading, in the minimap's proportions to the body's radius.
                 const LLVector3 ahead(std::cos(m.mHeading), std::sin(m.mHeading), 0.f);
                 const LLVector3 across(-ahead.mV[VY], ahead.mV[VX], 0.f);
-                const LLVector3 from(m.mCentre.mV[VX], m.mCentre.mV[VY], m.mCentre.mV[VZ] + (m.mHead.mV[VZ] - m.mCentre.mV[VZ]));
+                const LLVector3 from(m.mCentre.mV[VX], m.mCentre.mV[VY], m.mHead.mV[VZ]);
                 const F32 body_r = m.mRadius;
                 const LLVector3 tip = from + ahead * (body_r * (1.f + HEADING_TIP_PER_RADIUS));
                 const LLVector3 base = from + ahead * (body_r * (1.f + HEADING_BASE_PER_RADIUS));
                 const LLVector3 l = base + across * (body_r * HEADING_HALF_PER_RADIUS);
                 const LLVector3 rr = base - across * (body_r * HEADING_HALF_PER_RADIUS);
                 const LLVector3 up(0.f, 0.f, body_r * HEADING_THICK_PER_RADIUS * 0.5f);
-                tri(tip + up, l + up, rr + up, m.mColour);
-                tri(tip - up, rr - up, l - up, m.mColour);
-                tri(tip - up, l - up, l + up, m.mColour);
-                tri(tip - up, l + up, tip + up, m.mColour);
-                tri(rr - up, tip - up, tip + up, m.mColour);
-                tri(rr - up, tip + up, rr + up, m.mColour);
-                tri(l - up, rr - up, rr + up, m.mColour);
-                tri(l - up, rr + up, l + up, m.mColour);
+                tri(tip + up, l + up, rr + up, colour);
+                tri(tip - up, rr - up, l - up, colour);
+                tri(tip - up, l - up, l + up, colour);
+                tri(tip - up, l + up, tip + up, colour);
+                tri(rr - up, tip - up, tip + up, colour);
+                tri(rr - up, tip + up, rr + up, colour);
+                tri(l - up, rr - up, rr + up, colour);
+                tri(l - up, rr + up, l + up, colour);
             }
         }
-        else if (m.mHasHeading)
+        if (blend > 0.f)
         {
-            // A wedge on the top, pointing along the heading, brighter than the body.
-            const LLVector3 ahead(std::cos(m.mHeading), std::sin(m.mHeading), 0.f);
-            const LLVector3 across(-ahead.mV[VY], ahead.mV[VX], 0.f);
-            const LLVector3 lift(0.f, 0.f, 0.03f);
-            const LLVector3 tip = top_c + lift + ahead * (r * 1.7f);
-            const LLVector3 back = top_c + lift - ahead * (r * 0.35f);
-            tri(back + across * (r * 0.75f), tip, back - across * (r * 0.75f), bright);
-            tri(back - across * (r * 0.75f), tip, back + across * (r * 0.75f), bright);
+            const LLColor4 colour = faded(m.mColour, blend);
+            for (S32 k = 0; k < MARKER_SIDES; ++k)
+            {
+                const F32 a0 = F_TWO_PI * k / MARKER_SIDES, a1 = F_TWO_PI * (k + 1) / MARKER_SIDES;
+                const LLVector3 d0(std::cos(a0) * r, std::sin(a0) * r, 0.f), d1(std::cos(a1) * r, std::sin(a1) * r, 0.f);
+                const LLVector3 b0 = m.mFloor + d0, b1 = m.mFloor + d1, t0 = cylinder_top + d0, t1 = cylinder_top + d1;
+                tri(b0, b1, t1, colour);
+                tri(b0, t1, t0, colour);
+                tri(cylinder_top, t0, t1, colour);
+            }
+            if (m.mHasHeading)
+            {
+                // A wedge on the top, pointing along the heading, brighter than the body.
+                const LLVector3 ahead(std::cos(m.mHeading), std::sin(m.mHeading), 0.f);
+                const LLVector3 across(-ahead.mV[VY], ahead.mV[VX], 0.f);
+                const LLVector3 lift(0.f, 0.f, 0.03f * grow);
+                const LLVector3 tip = cylinder_top + lift + ahead * (r * 1.7f);
+                const LLVector3 back = cylinder_top + lift - ahead * (r * 0.35f);
+                tri(back + across * (r * 0.75f), tip, back - across * (r * 0.75f), bright);
+                tri(back - across * (r * 0.75f), tip, back + across * (r * 0.75f), bright);
+            }
         }
         // Labels, hover, picks and menus take the projected top of the marker.
         LLVector2 top;
@@ -2242,6 +2269,7 @@ void SKOverviewCapture::drawMarkers3D(const Project& project, S32 vw, S32 vh, st
             }
         }
     }
+    mCylinderBlend.swap(blends);
     gGL.end();
     gGL.flush();
     gGL.getTextureSlot(0)->unbind();
