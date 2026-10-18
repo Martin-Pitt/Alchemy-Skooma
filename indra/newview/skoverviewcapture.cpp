@@ -72,7 +72,6 @@
 #include "skworldmapmath.h"
 #include "llstartup.h"
 #include "lltool.h"
-#include "lltoolmgr.h"
 
 #include <algorithm>
 #include <cmath>
@@ -143,7 +142,6 @@ namespace
         glUniform3f(glGetUniformLocation(prog, name), c.mR, c.mG, c.mB);
     }
 
-    const F32 PAN_THRESHOLD_PX = 4.f;   // a press that moves less than this is a click
     const F64 PAN_MARGIN_M = 64.0;      // how far past the battlefield the view's focus may be dragged
 
     /// Why a press or drag did not pan, with SKOverviewPanDebug, once a second at most.
@@ -785,7 +783,6 @@ void SKOverviewCapture::renderModal(const LLRect& world_rect_raw)
 {
     // The display loop skips the world, and with it the overview's per-frame work: the maps, the census and the view.
     updateCapsLockCapture();
-    updatePan();
     if (mapsWanted() || mTacticalOpen)
     {
         frame();
@@ -1882,116 +1879,54 @@ bool SKOverviewCapture::groundAt(const LLVector2& at, LLVector3d& world) const
     return true;
 }
 
-// static
-bool SKOverviewCapture::handleLeftClick(S32 x, S32 y, MASK mask, bool down)
+bool SKOverviewCapture::beginPan(S32 x, S32 y)
 {
-    if (!instanceExists())
+    // The composite clears mTacticalReady every frame, so a press between frames tests mTacticalPickable.
+    if (!tacticalShown() || !mTacticalPickable)
     {
+        panTrace("press ignored: no tactical frame shown yet");
         return false;
     }
-    SKOverviewCapture& self = instance();
-    if (!down && self.mPan.mPending)
+    const LLVector2 scale = gViewerWindow->getDisplayScale();
+    const LLVector2 at(x * scale.mV[VX] - mTacticalViewport[0], y * scale.mV[VY] - mTacticalViewport[1]);
+    if (at.mV[VX] < 0.f || at.mV[VY] < 0.f || at.mV[VX] >= mTacticalViewport[2] || at.mV[VY] >= mTacticalViewport[3])
     {
-        return self.leftClick(x, y, mask, down); // a release ends the drag even if the overview closed under it
-    }
-    return tacticalShown() && self.leftClick(x, y, mask, down);
-}
-
-bool SKOverviewCapture::leftClick(S32 x, S32 y, MASK mask, bool down)
-{
-    if (down)
-    {
-        // Modified presses keep their tools: alt-cam orbits, ctrl and shift select.
-        // The composite clears mTacticalReady every frame, so a click between frames tests mTacticalPickable.
-        if (mask != MASK_NONE)
-        {
-            panTrace("press ignored: modifier held");
-            return false;
-        }
-        if (!mTacticalPickable)
-        {
-            panTrace("press ignored: no tactical frame shown yet");
-            return false;
-        }
-        const LLVector2 scale = gViewerWindow->getDisplayScale();
-        const LLVector2 at(x * scale.mV[VX] - mTacticalViewport[0], y * scale.mV[VY] - mTacticalViewport[1]);
-        if (at.mV[VX] < 0.f || at.mV[VY] < 0.f || at.mV[VX] >= mTacticalViewport[2] || at.mV[VY] >= mTacticalViewport[3])
-        {
-            panTrace("press ignored: outside the tactical viewport");
-            return false;
-        }
-        LLVector3 from, dir;
-        if (!cursorRay(mTacticalView, mTacticalProj, mTacticalViewport, at, from, dir) || dir.mV[VZ] > -1e-6f)
-        {
-            panTrace("press ignored: the cursor's ray does not point down");
-            return false;
-        }
-        LLVector3d grab_global;
-        if (!groundAt(at, grab_global))
-        {
-            panTrace("press ignored: no ground under the cursor");
-            return false;
-        }
-        panTrace("press grabbed the ground");
-        const LLVector3 grab = gAgent.getPosAgentFromGlobal(grab_global);
-        mPan = Pan();
-        mPan.mPending = true;
-        mPan.mDownX = x;
-        mPan.mDownY = y;
-        mPan.mMask = mask;
-        mPan.mGrab = grab;
-        mPan.mView = mTacticalView;
-        mPan.mProj = mTacticalProj;
-        std::copy(std::begin(mTacticalViewport), std::end(mTacticalViewport), mPan.mViewport);
-        mPan.mEye = gAgentCamera.getCameraPositionGlobal();
-        mPan.mFocus = gAgentCamera.getFocusGlobal();
-        return true;
-    }
-    if (!mPan.mPending)
-    {
+        panTrace("press ignored: outside the tactical viewport");
         return false;
     }
-    const Pan press = mPan;
+    LLVector3 from, dir;
+    if (!cursorRay(mTacticalView, mTacticalProj, mTacticalViewport, at, from, dir) || dir.mV[VZ] > -1e-6f)
+    {
+        panTrace("press ignored: the cursor's ray does not point down");
+        return false;
+    }
+    LLVector3d grab_global;
+    if (!groundAt(at, grab_global))
+    {
+        panTrace("press ignored: no ground under the cursor");
+        return false;
+    }
     mPan = Pan();
-    if (!press.mActive && tacticalShown())
-    {
-        // Not a drag: the tool gets the click it would have had.
-        LLTool* tool = LLToolMgr::getInstance()->getCurrentTool();
-        if (tool && tool->handleAnyMouseClick(press.mDownX, press.mDownY, press.mMask, CLICK_LEFT, true))
-        {
-            tool->handleAnyMouseClick(x, y, mask, CLICK_LEFT, false);
-        }
-    }
+    mPan.mActive = true;
+    mPan.mGrab = gAgent.getPosAgentFromGlobal(grab_global);
+    mPan.mView = mTacticalView;
+    mPan.mProj = mTacticalProj;
+    std::copy(std::begin(mTacticalViewport), std::end(mTacticalViewport), mPan.mViewport);
+    mPan.mEye = gAgentCamera.getCameraPositionGlobal();
+    mPan.mFocus = gAgentCamera.getFocusGlobal();
     return true;
 }
 
-void SKOverviewCapture::updatePan()
+void SKOverviewCapture::pan(S32 x, S32 y)
 {
-    if (!mPan.mPending)
-    {
-        return;
-    }
-    if (!tacticalShown() || !gViewerWindow->getLeftMouseDown())
-    {
-        panTrace(tacticalShown() ? "drag dropped: the release went elsewhere" : "drag dropped: the overview closed");
-        mPan = Pan();
-        return;
-    }
-    const LLCoordGL mouse = gViewerWindow->getCurrentMouse();
-    const LLVector2 scale = gViewerWindow->getDisplayScale();
     if (!mPan.mActive)
     {
-        const F32 dx = (F32)(mouse.mX - mPan.mDownX) * scale.mV[VX];
-        const F32 dy = (F32)(mouse.mY - mPan.mDownY) * scale.mV[VY];
-        if (dx * dx + dy * dy < PAN_THRESHOLD_PX * PAN_THRESHOLD_PX)
-        {
-            return;
-        }
-        mPan.mActive = true;
+        return;
     }
     // The camera only translates, so the press's ray through the cursor meets the grab's plane at Q and P - Q puts P
     // back under the cursor; nothing is picked again while dragging.
-    const LLVector2 at(mouse.mX * scale.mV[VX] - mPan.mViewport[0], mouse.mY * scale.mV[VY] - mPan.mViewport[1]);
+    const LLVector2 scale = gViewerWindow->getDisplayScale();
+    const LLVector2 at(x * scale.mV[VX] - mPan.mViewport[0], y * scale.mV[VY] - mPan.mViewport[1]);
     LLVector3 from, dir, q;
     if (!cursorRay(mPan.mView, mPan.mProj, mPan.mViewport, at, from, dir) || !rayPlane(from, dir, mPan.mGrab.mV[VZ], q))
     {
