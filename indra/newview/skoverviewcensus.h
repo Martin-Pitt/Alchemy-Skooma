@@ -348,8 +348,11 @@ private:
     std::unordered_map<LLUUID, SculptEntry> mSculptGeom;
     std::vector<LLUUID> mSculptCandidates;  ///< the sculpted volumes the last full object list walk found
     /// Logs which signature entries came and went since the last rebuild; sorts entries and keeps them.
-    void logChurn(std::vector<std::pair<U64, std::pair<char, LLUUID>>>& entries);
+    /// and turns parts that moved twice within the window restless, from their shape and place alone (moves).
+    void logChurn(std::vector<std::pair<U64, std::pair<char, LLUUID>>>& entries,
+                  std::vector<std::pair<U64, std::pair<char, LLUUID>>>& moves);
     std::vector<std::pair<U64, std::pair<char, LLUUID>>> mLastEntries;
+    std::vector<std::pair<U64, std::pair<char, LLUUID>>> mLastMoves;
     static constexpr F64 RESTLESS_WINDOW_S = 20.0;  ///< a second change within this turns a part restless
     static constexpr F64 RESTLESS_SETTLE_S = 30.0;  ///< a restless part unchanged this long rejoins the census
     struct Restless
@@ -358,7 +361,7 @@ private:
         U32 mChanges = 0;
         bool mOn = false;
         bool mSurround = false; ///< a void surround: kept in the buffers, only its changes ignored
-        U64 mHash = 0;          ///< its entry when last seen, to tell when it holds still
+        U64 mHash = 0;          ///< its shape and place when last seen, to tell when it holds still
     };
     std::map<LLUUID, Restless> mRestless;
     bool isRestless(const LLUUID& part) const;

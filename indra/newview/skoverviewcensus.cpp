@@ -166,7 +166,8 @@ std::vector<LLUUID> SKOverviewCensus::restlessParts() const
     return parts;
 }
 
-void SKOverviewCensus::logChurn(std::vector<std::pair<U64, std::pair<char, LLUUID>>>& entries)
+void SKOverviewCensus::logChurn(std::vector<std::pair<U64, std::pair<char, LLUUID>>>& entries,
+                                std::vector<std::pair<U64, std::pair<char, LLUUID>>>& moves)
 {
     // What came and went since the last rebuild, by kind (S sculpt, U surrounds, V void surround, R record, C a part's
     // linkset and cluster, L land): a part both gone and come is one that changed.
@@ -177,9 +178,38 @@ void SKOverviewCensus::logChurn(std::vector<std::pair<U64, std::pair<char, LLUUI
     std::set_difference(entries.begin(), entries.end(), mLastEntries.begin(), mLastEntries.end(), std::back_inserter(came));
     const bool first = mLastEntries.empty();
     mLastEntries = entries;
+    // Restlessness is judged on shape and place alone: an invisible part's look and cover churn as its neighbours load.
+    std::sort(moves.begin(), moves.end());
+    std::vector<std::pair<U64, std::pair<char, LLUUID>>> moved_from, moved_to;
+    std::set_difference(mLastMoves.begin(), mLastMoves.end(), moves.begin(), moves.end(), std::back_inserter(moved_from));
+    std::set_difference(moves.begin(), moves.end(), mLastMoves.begin(), mLastMoves.end(), std::back_inserter(moved_to));
+    mLastMoves = moves;
     if (first)
     {
         return;
+    }
+    std::set<std::pair<char, LLUUID>> moved;
+    for (const auto& g : moved_from)
+    {
+        moved.insert(g.second);
+    }
+    for (const auto& c : moved_to)
+    {
+        // A part moved again within the window turns restless: drawn live, out of the static buffers.
+        const char kind = c.second.first;
+        if ((kind == 'R' || kind == 'S' || kind == 'V') && c.second.second.notNull() && moved.count(c.second))
+        {
+            Restless& r = mRestless[c.second.second];
+            r.mChanges = now - r.mLast <= RESTLESS_WINDOW_S ? r.mChanges + 1 : 1;
+            r.mLast = now;
+            r.mSurround = kind == 'V';
+            if (!r.mOn && r.mChanges >= 2)
+            {
+                r.mOn = true;
+                LL_INFOS("SKOverview") << "census part " << c.second.second << " (" << kind
+                                       << ") is restless: drawn live until it holds still" << LL_ENDL;
+            }
+        }
     }
     std::map<char, U32> gone_n, came_n, changed_n;
     std::map<char, std::vector<LLUUID>> changed;
@@ -194,21 +224,6 @@ void SKOverviewCensus::logChurn(std::vector<std::pair<U64, std::pair<char, LLUUI
         ++came_n[c.second.first];
         if (went.count(c.second))
         {
-            // A part changed again within the window turns restless: drawn live, out of the static buffers.
-            const char kind = c.second.first;
-            if ((kind == 'R' || kind == 'S' || kind == 'V') && c.second.second.notNull())
-            {
-                Restless& r = mRestless[c.second.second];
-                r.mChanges = now - r.mLast <= RESTLESS_WINDOW_S ? r.mChanges + 1 : 1;
-                r.mLast = now;
-                r.mSurround = kind == 'V';
-                if (!r.mOn && r.mChanges >= 2)
-                {
-                    r.mOn = true;
-                    LL_INFOS("SKOverview") << "census part " << c.second.second << " (" << kind
-                                           << ") is restless: drawn live until it holds still" << LL_ENDL;
-                }
-            }
             ++changed_n[c.second.first];
             std::vector<LLUUID>& ids = changed[c.second.first];
             if (ids.size() < 4)
@@ -699,24 +714,33 @@ bool SKOverviewCensus::update()
     // hashes on its own and the parts sum, so the object list's order, which churns, never reads as a change.
     U64 sig = 0;
     U64 entry = 0;
-    auto mix = [&entry](U64 v)
+    U64 motion = 0; // the entry without its look and cover, which change while the part stays put
+    auto mixLook = [&entry](U64 v)
     {
         entry ^= v + 0x9e3779b97f4a7c15ull + (entry << 6) + (entry >> 2);
     };
+    auto mix = [&motion, &mixLook](U64 v)
+    {
+        mixLook(v);
+        motion ^= v + 0x9e3779b97f4a7c15ull + (motion << 6) + (motion >> 2);
+    };
     // Each entry's kind and part as well, so a rebuild can say what moved.
     std::vector<std::pair<U64, std::pair<char, LLUUID>>> entries;
+    std::vector<std::pair<U64, std::pair<char, LLUUID>>> moves;
     // A restless part is signed by who it is alone, so its changes rebuild nothing; true for one.
-    auto endEntry = [&sig, &entry, &entries, now, this](char kind, const LLUUID& part) -> bool
+    auto endEntry = [&sig, &entry, &motion, &entries, &moves, now, this](char kind, const LLUUID& part) -> bool
     {
         U64 h = skoverview::scramble(entry);
-        entry = 0;
+        const U64 m = skoverview::scramble(motion);
+        entry = motion = 0;
+        moves.push_back({ m, { kind, part } });
         bool restless = false;
         const auto it = part.notNull() ? mRestless.find(part) : mRestless.end();
         if (it != mRestless.end() && it->second.mOn)
         {
-            if (h != it->second.mHash)
+            if (m != it->second.mHash)
             {
-                it->second.mHash = h;
+                it->second.mHash = m;
                 it->second.mLast = now;
             }
             h = skoverview::scramble(((U64)(U8)kind << 32) ^ part.getCRC32());
@@ -864,7 +888,7 @@ bool SKOverviewCensus::update()
             mUnknownLook |= cover.mRetry;
         }
         mix(sc.mPart.getCRC32());
-        mix(seen == Seen::INVISIBLE ? 0x7a11u ^ cover.mKey ^ (cover.mPending ? 0x9e11u : 0x0u) : 0x0u);
+        mixLook(seen == Seen::INVISIBLE ? 0x7a11u ^ cover.mKey ^ (cover.mPending ? 0x9e11u : 0x0u) : 0x0u);
         mix((U64)sc.mTris->size());
         mix((U64)(S64)std::llround(centre.mdV[VX] * 64.0) ^ ((U64)(S64)std::llround(centre.mdV[VY] * 64.0) << 21) ^
             ((U64)(S64)std::llround(centre.mdV[VZ] * 64.0) << 42));
@@ -921,7 +945,7 @@ bool SKOverviewCensus::update()
             {
                 cover = coverInputFor(rec->mPart, rec->mMin, rec->mMax, *snap, cover_budget);
                 mUnknownLook |= cover.mRetry;
-                mix(0x7a11u ^ cover.mKey ^ (cover.mPending ? 0x9e11u : 0x0u));
+                mixLook(0x7a11u ^ cover.mKey ^ (cover.mPending ? 0x9e11u : 0x0u));
             }
             kept.push_back(rec.get());
             fixed_classes.push_back(skoverview::NUM_CENSUS_CLASSES);
@@ -963,7 +987,7 @@ bool SKOverviewCensus::update()
             cover = coverInputFor(rec->mPart, rec->mMin, rec->mMax, *snap, cover_budget);
             mUnknownLook |= cover.mRetry;
         }
-        mix(transparent ? 0x7a11u ^ cover.mKey ^ (cover.mPending ? 0x9e11u : 0x0u) : 0x0u);
+        mixLook(transparent ? 0x7a11u ^ cover.mKey ^ (cover.mPending ? 0x9e11u : 0x0u) : 0x0u);
         kept.push_back(rec.get());
         fixed_classes.push_back(fixed);
         void_only.push_back(false);
@@ -1053,7 +1077,7 @@ bool SKOverviewCensus::update()
     {
         return !mBatches.empty();
     }
-    logChurn(entries);
+    logChurn(entries, moves);
 
     // The worker gets values only: what is drawn, whose linkset each part is and where, and the regions' squares.
     auto job = std::make_shared<Job>();
