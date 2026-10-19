@@ -342,6 +342,7 @@ TEST_CASE("buckets hold within the hysteresis of their edge", "[sknavenclosure]"
             g.mBucket = static_cast<U8>(EnclosureBucket::INDOORS);
         }
     }
+    previous->mMemo.reset();    // forged buckets: a repair would keep them over standing air
     in->mPrevious = previous;
     const EnclosureProductPtr second = computeEnclosure(in);
     U32 held = 0, left = 0;
