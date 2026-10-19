@@ -67,6 +67,10 @@ struct SKNavRooms::Job
     std::unique_ptr<EnclosurePass> mPass;
     std::shared_ptr<const RoomsInput> mRoomsInput;
     std::unique_ptr<SpacesPass> mSpaces;        ///< once the enclosure pass is done
+    EnclosureProductPtr mPreviousProduct;       ///< the answers the landed spaces were cut from
+    RoomsProductPtr mPreviousRooms;             ///< those spaces, while the doors they were cut with stand
+    U64 mDoorSignature = 0;
+    bool mSpacesKept = false;                   ///< the layout stood, and so did the last spaces
     std::chrono::steady_clock::time_point mPosted;
     bool mCancelled = false;
 };
@@ -320,7 +324,7 @@ void SKNavWorldView::raster(const LLVector3d& min, const LLVector3d& max, F32 re
                 {
                     case Channel::S: v = e.mS; break;
                     case Channel::E: v = known ? e.mE : std::numeric_limits<F32>::quiet_NaN(); break;
-                    case Channel::D: v = known ? e.mD : std::numeric_limits<F32>::quiet_NaN(); break;
+                    case Channel::D: v = known && e.depthKnown() ? e.mD : std::numeric_limits<F32>::quiet_NaN(); break;
                     default: v = e.mFloor; break;
                 }
                 best = e.mFloor;
@@ -370,13 +374,41 @@ namespace
     }
 }
 
+void SKNavRooms::SettleBox::add(const LLVector3d& min, const LLVector3d& max)
+{
+    for (S32 k = 0; k < 2; ++k)
+    {
+        mMin.mdV[k] = llmin(mMin.mdV[k], min.mdV[k]);
+        mMax.mdV[k] = llmax(mMax.mdV[k], max.mdV[k]);
+    }
+}
+
+void SKNavRooms::SettleBox::add(const SettleBox& other)
+{
+    mAll = mAll || other.mAll;
+    add(other.mMin, other.mMax);
+}
+
+bool SKNavRooms::SettleBox::meets(const LLVector3d& min, const LLVector3d& max) const
+{
+    // Past this a moved gap's sky reads zero, so its floods mostly stop moving answers; depth can carry further, but rarely does.
+    constexpr F64 REACH_M = 16.0;
+    return mMin.mdV[VX] - REACH_M <= max.mdV[VX] && min.mdV[VX] <= mMax.mdV[VX] + REACH_M && mMin.mdV[VY] - REACH_M <= max.mdV[VY] &&
+           min.mdV[VY] <= mMax.mdV[VY] + REACH_M;
+}
+
 bool SKNavRooms::settlingIn(const LLVector3d& min, const LLVector3d& max) const
 {
     for (const auto& m : mMeshes)
     {
         const MeshState& s = m.second;
-        if ((s.mDirty || s.mInFlight) && overlapsXY(s.mMin, s.mMax, min, max) &&
-            s.mMin.mdV[VZ] <= max.mdV[VZ] && min.mdV[VZ] <= s.mMax.mdV[VZ])
+        if (!(s.mDirty || s.mInFlight) || !overlapsXY(s.mMin, s.mMax, min, max) || s.mMin.mdV[VZ] > max.mdV[VZ] || min.mdV[VZ] > s.mMax.mdV[VZ])
+        {
+            continue;
+        }
+        // A first publication settles the whole mesh; a repair only around what moved.
+        if (!s.mProduct || (s.mDirty && (s.mPending.mAll || s.mPending.meets(min, max))) ||
+            (s.mInFlight && (s.mPosted.mAll || s.mPosted.meets(min, max))))
         {
             return true;
         }
@@ -540,6 +572,7 @@ void SKNavRooms::gatherWind(SKNavOverlayGeom& geom, const LLVector3d& camera, F6
     const F32 rad = windHeadingDeg(heading) * DEG_TO_RAD;
     const LLVector2 along(std::cos(rad), std::sin(rad));
     const LLColor4 calm(0.15f, 0.2f, 0.9f, 0.9f), stream(0.1f, 0.9f, 0.9f, 0.9f), gust(1.f, 0.9f, 0.1f, 0.9f);
+    const LLColor4 unknown(0.5f, 0.5f, 0.5f, 0.9f);   ///< calm because nothing is known of the air there
     const F64 reach2 = reach * reach;
     constexpr S32 STRIDE = 4;       // an arrow every 2 m
     for (const SKNavWorldView::Mesh& m : mView->meshes())
@@ -566,7 +599,7 @@ void SKNavRooms::gatherWind(SKNavOverlayGeom& geom, const LLVector3d& camera, F6
                     continue;
                 }
                 const F32 f = c.factor();
-                LLColor4 color = f < 1.f ? lerp(calm, stream, f) : lerp(stream, gust, llmin(f - 1.f, 1.f));
+                LLColor4 color = (c.mFlags & WindCell::UNKNOWN) ? unknown : f < 1.f ? lerp(calm, stream, f) : lerp(stream, gust, llmin(f - 1.f, 1.f));
                 if (opaque)
                 {
                     color.mV[VALPHA] = 1.f;
@@ -639,7 +672,7 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
         return;
     }
     LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknr - update");
-    static LLCachedControl<U32> settle_ms(gSavedSettings, "SKNavRoomsSettleMs", 500);
+    static LLCachedControl<U32> settle_ms(gSavedSettings, "SKNavRoomsSettleMs", 100);
     const F64 now = LLTimer::getTotalSeconds();
 
     // A publish moves the navmesh's revision; only then can a mesh's air have moved.
@@ -655,6 +688,7 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
             U64 sig = SEED;
             U32 evicted = 0;
             LLVector3d lo(1e300, 1e300, 0.0), hi(-1e300, -1e300, 0.0);
+            std::map<TileKey, std::pair<U64, std::pair<LLVector3d, LLVector3d>>> tile_air;
             for (const auto& t : mesh.mTiles)
             {
                 // Air on disk for a settled mesh is still its air: the same id comes back with it.
@@ -663,6 +697,7 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
                     evicted += t.second.mAirCoarse ? 1 : 0;
                     continue;
                 }
+                tile_air.emplace(t.first, std::make_pair(t.second.mAirId, std::make_pair(t.second.mMin, t.second.mMax)));
                 sig = mix(mix(sig, (static_cast<U64>(static_cast<U32>(t.first.mX)) << 32) | static_cast<U32>(t.first.mY)), t.second.mAirId);
                 lo.mdV[VX] = llmin(lo.mdV[VX], t.second.mMin.mdV[VX]);
                 lo.mdV[VY] = llmin(lo.mdV[VY], t.second.mMin.mdV[VY]);
@@ -684,13 +719,21 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
             {
                 LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknr - doors and lifts");
                 const LLVector3d dlo(lo.mdV[VX], lo.mdV[VY], -1e9), dhi(hi.mdV[VX], hi.mdV[VY], 1e9);
+                // Every field the spaces pass reads of a door (doorSpans): kept spaces stand only while all of them do.
                 navmesh.doorsIn(dlo, dhi, [&doors](const DoorEntity& d) {
-                    doors = mix(mix(mixF64(mixF64(mix(doors, d.mId.getCRC32()), d.mPlanePoint.mdV[VX]), d.mPlanePoint.mdV[VY]), d.mPlaneKnown),
-                                static_cast<U64>(d.mWidth * 100.f));
+                    doors = mix(mix(doors, d.mId.getCRC32()), d.mPlaneKnown ? 1 : 0);
+                    for (S32 k = 0; k < 3; ++k)
+                    {
+                        doors = mixF64(mixF64(mixF64(mixF64(doors, d.mMin.mdV[k]), d.mMax.mdV[k]), d.mPlanePoint.mdV[k]), d.mNormal.mV[k]);
+                    }
+                    doors = mixF64(mixF64(mixF64(doors, d.mWidth), d.mHeight), d.mSill);
                 });
                 for (const auto& lift : lifts(dlo, dhi))
                 {
-                    doors = mixF64(mixF64(doors, lift.first.mdV[VX]), lift.second.mdV[VY]);
+                    for (S32 k = 0; k < 3; ++k)
+                    {
+                        doors = mixF64(mixF64(doors, lift.first.mdV[k]), lift.second.mdV[k]);
+                    }
                 }
             }
             // Slabs are built over detailed air: when the cache evicts some, they go with it.
@@ -707,6 +750,26 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
             state.mEvicted = evicted;
             if (state.mAirSignature != sig || state.mDoorSignature != doors)
             {
+                // Only the tiles whose air came, went or changed are settling; doors alone may move anything.
+                bool moved = false;
+                for (const auto& t : tile_air)
+                {
+                    const auto it = state.mTileAir.find(t.first);
+                    if (it == state.mTileAir.end() || it->second.first != t.second.first)
+                    {
+                        state.mPending.add(t.second.second.first, t.second.second.second);
+                        moved = true;
+                    }
+                }
+                for (const auto& t : state.mTileAir)
+                {
+                    if (!tile_air.count(t.first))
+                    {
+                        state.mPending.add(t.second.second.first, t.second.second.second);
+                        moved = true;
+                    }
+                }
+                state.mPending.mAll = state.mPending.mAll || !moved;
                 if (SKMapRecorder::isRecording())
                 {
                     const bool air = state.mAirSignature != sig, door = state.mDoorSignature != doors;
@@ -729,9 +792,10 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
                 {
                     state.mLatest = std::make_shared<std::atomic<U64>>(0);
                 }
-                // A pass in flight is not cancelled: it lands on the air it read, and the next one refreshes it.
+                // A pass in flight is not cancelled: it lands on the air it read, and the next one mends what it landed.
                 ++state.mGeneration;
             }
+            state.mTileAir.swap(tile_air);
         }
         for (auto it = mMeshes.begin(); it != mMeshes.end();)
         {
@@ -871,6 +935,7 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
                         .num("by_prio", first.mPriority);
                 }
                 state.mLatest->store(++state.mGeneration);
+                state.mPending.add(state.mPosted);
                 if (!state.mDirty)
                 {
                     state.mDirtySince = now;
@@ -892,7 +957,7 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
 
     // Wind follows the rooms: a mesh whose spaces landed builds its slabs next, on the rooms it has.
     // Churn delays only a refresh, and only boundedly; a mesh with no slabs builds them at once.
-    static LLCachedControl<U32> wind_settle_ms(gSavedSettings, "SKNavWindSettleMs", 3000);
+    static LLCachedControl<U32> wind_settle_ms(gSavedSettings, "SKNavWindSettleMs", 1000);
     for (auto& entry : mMeshes)
     {
         MeshState& state = entry.second;
@@ -987,6 +1052,12 @@ void SKNavRooms::post(MeshState& state, const SKNavMesh& navmesh)
     navmesh.doorsIn(dlo, dhi, [&rooms](const DoorEntity& d) { rooms->mDoors.push_back(d); });
     rooms->mLifts = lifts(dlo, dhi);
     job->mRoomsInput = rooms;
+    job->mDoorSignature = state.mDoorSignature;
+    if (state.mRooms && state.mRoomsDoorSignature == state.mDoorSignature)
+    {
+        job->mPreviousProduct = state.mProduct;
+        job->mPreviousRooms = state.mRooms;
+    }
     job->mPosted = std::chrono::steady_clock::now();
     std::weak_ptr<bool> alive = mAlive;
     const LL::WorkQueue::ptr_t queue = LL::WorkQueue::getInstance(QUEUE_NAME);
@@ -1001,7 +1072,7 @@ void SKNavRooms::post(MeshState& state, const SKNavMesh& navmesh)
         if (SKMapRecorder::isRecording())
         {
             // A first publication, a settled refresh, or a refresh the bounded wait forced through churn.
-            static LLCachedControl<U32> settle_ms(gSavedSettings, "SKNavRoomsSettleMs", 500);
+            static LLCachedControl<U32> settle_ms(gSavedSettings, "SKNavRoomsSettleMs", 100);
             const F64 now = state.mLastPosted;
             const char* why = !state.mProduct ? "first" : (now - state.mChanged < settle_ms / 1000.0 ? "churn" : "refresh");
             SKMapRecorder::Line("rooms.start").mesh(state.mId).box(state.mMin, state.mMax).str("why", why).num("prio", state.mPriority)
@@ -1011,6 +1082,8 @@ void SKNavRooms::post(MeshState& state, const SKNavMesh& navmesh)
         }
         state.mDirty = false;
         state.mInFlight = true;
+        state.mPosted = state.mPending;
+        state.mPending = SettleBox();
     }
 }
 
@@ -1038,8 +1111,19 @@ void SKNavRooms::runChunk(const std::shared_ptr<Job>& job, const std::weak_ptr<b
             job->mPass->step(CHUNK_STEP);
             return false;
         }
+        if (job->mSpacesKept)
+        {
+            return true;
+        }
         if (!job->mSpaces)
         {
+            // The air, doors and every answer the last spaces were cut from stand: so do they.
+            if (job->mPreviousRooms && job->mPass->repaired() && !job->mPass->layoutMoved())
+            {
+                carrySpaces(*job->mPass->takeProduct(), *job->mPreviousProduct);
+                job->mSpacesKept = true;
+                return true;
+            }
             job->mSpaces = std::make_unique<SpacesPass>(job->mRoomsInput, job->mPass->takeProduct());
         }
         return job->mSpaces->step(CHUNK_STEP);
@@ -1086,15 +1170,19 @@ void SKNavRooms::finish(const std::shared_ptr<Job>& job)
         return;
     }
     state.mInFlight = false;
-    if (job->mCancelled || !job->mSpaces || !job->mSpaces->done())
+    if (job->mCancelled || !(job->mSpacesKept || (job->mSpaces && job->mSpaces->done())))
     {
         ++mCancelled;
         if (SKMapRecorder::isRecording())
         {
             SKMapRecorder::Line("rooms.cancel").mesh(state.mId).box(state.mMin, state.mMax).str("why", "preempted");
         }
-        return;     // preempted: the state is dirty again and posts anew
+        // Preempted: the state is dirty again and posts anew, over what this one would have settled.
+        state.mPending.add(state.mPosted);
+        state.mPosted = SettleBox();
+        return;
     }
+    state.mPosted = SettleBox();
     // Air that moved while it ran left the state dirty: this lands now, and the refresh follows.
 
     const EnclosureProductPtr product = job->mPass->product();
@@ -1105,10 +1193,13 @@ void SKNavRooms::finish(const std::shared_ptr<Job>& job)
     {
         mLastStageMs[s] = job->mPass->stageMillis(s);
     }
-    mLastSpacesMs = job->mSpaces->product()->mMillis;
+    mRepairs += job->mPass->repaired() ? 1 : 0;
+    mSpacesKept += job->mSpacesKept ? 1 : 0;
+    mLastAnswered = job->mPass->tilesAnswered();
+    mLastSpacesMs = job->mSpacesKept ? 0.f : job->mSpaces->product()->mMillis;
     for (S32 s = 0; s < SpacesPass::NUM_STAGES; ++s)
     {
-        mLastSpaceStageMs[s] = job->mSpaces->stageMillis(s);
+        mLastSpaceStageMs[s] = job->mSpacesKept ? 0.f : job->mSpaces->stageMillis(s);
     }
     const bool moved = !state.mProduct || state.mProduct->mSummary != product->mSummary;
     if (SKMapRecorder::isRecording())
@@ -1118,7 +1209,8 @@ void SKNavRooms::finish(const std::shared_ptr<Job>& job)
             .real("wall_ms", mLastWallMs);
     }
     state.mProduct = product;
-    state.mRooms = job->mSpaces->product();
+    state.mRooms = job->mSpacesKept ? job->mPreviousRooms : job->mSpaces->product();
+    state.mRoomsDoorSignature = job->mDoorSignature;
     // Only answers that moved, or none yet, are worth a new set of slabs.
     if (moved || !state.mWind)
     {
@@ -1141,6 +1233,14 @@ void SKNavRooms::finish(const std::shared_ptr<Job>& job)
             {
                 SKMapRecorder::Line("rooms.rerun").mesh(o.mId).box(o.mMin, o.mMax).mesh("by", state.mId).num("reruns", o.mReruns);
             }
+            // It settles where the two meet, which is where this one's answers reach it.
+            LLVector3d lo, hi;
+            for (S32 k = 0; k < 2; ++k)
+            {
+                lo.mdV[k] = llmax(state.mMin.mdV[k], o.mMin.mdV[k]) - 1.0;
+                hi.mdV[k] = llmin(state.mMax.mdV[k], o.mMax.mdV[k]) + 1.0;
+            }
+            o.mPending.add(lo, hi);
         }
     }
 }
@@ -1322,81 +1422,11 @@ std::string SKNavRooms::statsLine() const
             wind_bytes += entry.second.mWind->bytes();
         }
     }
-    return llformat("enclosure: %u meshes, %u passes (%u dropped, %u running), last %.0f ms on the thread (%s), %.0f ms posted to landed, unknown %.1f%% and sealed %.1f%% of %llu gaps; %u spaces and %u portals, last %.0f ms (%s); wind slabs over %u meshes, %.1f MB, %u builds, last %.0f ms for %.1f MB",
-                    meshes, mPasses, mCancelled, in_flight, mLastMs, stages.c_str(), mLastWallMs,
+    return llformat("enclosure: %u meshes, %u passes (%u repairs, %u keeping their spaces, %u dropped, %u running), last %.0f ms on the thread (%s, %u tiles answered), %.0f ms posted to landed, unknown %.1f%% and sealed %.1f%% of %llu gaps; %u spaces and %u portals, last %.0f ms (%s); wind slabs over %u meshes, %.1f MB, %u builds, last %.0f ms for %.1f MB",
+                    meshes, mPasses, mRepairs, mSpacesKept, mCancelled, in_flight, mLastMs, stages.c_str(), mLastAnswered, mLastWallMs,
                     gaps ? 100.0 * unknown / gaps : 0.0, gaps ? 100.0 * sealed / gaps : 0.0, static_cast<unsigned long long>(gaps), spaces,
                     portals, mLastSpacesMs, space_stages.c_str(), winds, wind_bytes / 1048576.0, mWindPasses, mLastWindMs,
                     mLastWindBytes / 1048576.0);
-}
-
-void SKNavRooms::gatherOverlay(SKNavOverlayGeom& geom, const LLVector3d& camera, F64 reach, U32 mode, bool opaque) const
-{
-    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("rooms - gather overlay");
-    if (!mView || mode == 0)
-    {
-        return;
-    }
-    const LLColor4& outdoors = skNavSwatchColor(SKNavSwatch::ENCLOSURE_OUTDOORS);
-    const LLColor4& sheltered = skNavSwatchColor(SKNavSwatch::ENCLOSURE_SHELTERED);
-    const LLColor4& indoors = skNavSwatchColor(SKNavSwatch::ENCLOSURE_INDOORS);
-    const LLColor4& unknown = skNavSwatchColor(SKNavSwatch::ENCLOSURE_UNKNOWN);
-    const F64 reach2 = reach * reach;
-    for (const SKNavWorldView::Mesh& m : mView->meshes())
-    {
-        for (const TileEnclosure& t : m.mProduct->mTiles)
-        {
-            const CoarseAir& c = t.mCoarse;
-            const F64 side = c.mCells * t.mCell;
-            const LLVector3d tile_min = m.mOrigin + LLVector3d(t.mOrigin);
-            const LLVector3d tile_centre = tile_min + LLVector3d(t.mWidth * t.mCell * 0.5, t.mHeight * t.mCell * 0.5, 0.0);
-            const F64 half = t.mWidth * t.mCell * 0.75;
-            if (dist_vec_squared2D(tile_centre, camera) > (reach + half) * (reach + half))
-            {
-                continue;
-            }
-            for (S32 cy = 0; cy < c.mHeight; ++cy)
-            {
-                for (S32 cx = 0; cx < c.mWidth; ++cx)
-                {
-                    const LLVector3d corner = tile_min + LLVector3d(cx * side, cy * side, 0.0);
-                    if (dist_vec_squared2D(corner + LLVector3d(side * 0.5, side * 0.5, 0.0), camera) > reach2)
-                    {
-                        continue;
-                    }
-                    const S32 cell = cx + cy * c.mWidth;
-                    for (U32 i = c.mStart[cell]; i < c.mStart[cell + 1]; ++i)
-                    {
-                        const CoarseGap& g = c.mGaps[i];
-                        LLColor4 color;
-                        if (g.mD == ENCLOSURE_D_UNKNOWN)
-                        {
-                            color = unknown;
-                        }
-                        else if (mode == 1)
-                        {
-                            const F32 e = g.mE / 255.f;
-                            color = e < 0.5f ? lerp(outdoors, sheltered, e * 2.f) : lerp(sheltered, indoors, e * 2.f - 1.f);
-                        }
-                        else
-                        {
-                            const EnclosureBucket b = static_cast<EnclosureBucket>(g.mBucket);
-                            color = b == EnclosureBucket::OUTDOORS ? outdoors : (b == EnclosureBucket::INDOORS ? indoors : sheltered);
-                        }
-                        if (opaque)
-                        {
-                            color.mV[VALPHA] = 1.f;
-                        }
-                        const F64 z = corner.mdV[VZ] + g.mFloor * t.mUnit + 0.05;
-                        const F32 inset = static_cast<F32>(side * 0.04);
-                        const LLVector3 a = gAgent.getPosAgentFromGlobal(LLVector3d(corner.mdV[VX], corner.mdV[VY], z)) + LLVector3(inset, inset, 0.f);
-                        const F32 s = static_cast<F32>(side) - 2.f * inset;
-                        geom.tri(a, a + LLVector3(s, 0.f, 0.f), a + LLVector3(s, s, 0.f), color);
-                        geom.tri(a, a + LLVector3(s, s, 0.f), a + LLVector3(0.f, s, 0.f), color);
-                    }
-                }
-            }
-        }
-    }
 }
 
 void SKNavRooms::gatherSpaces(SKNavOverlayGeom& geom, const LLVector3d& camera, F64 reach, bool opaque,

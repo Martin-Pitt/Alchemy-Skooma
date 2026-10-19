@@ -21,6 +21,7 @@ target_sources(
     sknavexport.cpp
     sknavfaceoffsets.cpp
     sknavfeatures.cpp
+    sknavfloors.cpp
     sknavflightends.cpp
     sknavflights.cpp
     sknavinvisible.cpp
@@ -60,6 +61,7 @@ target_sources(
         sknavexport.h
         sknavfaceoffsets.h
         sknavfeatures.h
+        sknavfloors.h
         sknavflightends.h
         sknavflights.h
         sknavinvisible.h
@@ -121,7 +123,6 @@ if(AL_BUILD_TESTS AND COMMAND al_add_test)
   al_add_test(sknavroomsschedule PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavwallruns PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavfaceoffsets PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
-  al_add_test(sknavfeatures PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavflights PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavtilecache PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavprobecache PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
@@ -143,7 +144,15 @@ if(AL_BUILD_TESTS)
   al_add_test_binary(
     sknavmesh_tests
     PROJECT sknavmesh
-    SOURCES tests/sknavcensusio_test.cpp tests/sknavenclosure_test.cpp tests/sknavinvisible_test.cpp
+    SOURCES
+      tests/sknavairunknown_test.cpp
+      tests/sknavcensusio_test.cpp
+      tests/sknavenclosure_test.cpp
+      tests/sknavenclosurerepair_test.cpp
+      tests/sknavfeatures_test.cpp
+      tests/sknavfloors_test.cpp
+      tests/sknavinvisible_test.cpp
+    BENCH_SOURCES tests/sknavfeatures_bench.cpp
     LIBRARIES sknavmesh llcommon
   )
 endif()

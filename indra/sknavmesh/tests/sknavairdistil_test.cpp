@@ -454,6 +454,7 @@ namespace tut
         const LLVector3d under(1000.5, 2000.5, 31.5), beside(1001.5, 2000.5, 31.5), over(1000.5, 2000.5, 36.0);
         ensure("under the roof is covered", !sky.skyOpenAt(under));
         ensure("beside it is open", sky.skyOpenAt(beside));
+        ensure("outside every tile is not open", !sky.skyOpenAt(LLVector3d(1010.5, 2000.5, 31.5)));
         ensure("above the roof is open", sky.skyOpenAt(over));
         ensure("inside the roof is not", !sky.skyOpenAt(LLVector3d(1000.5, 2000.5, 35.2)));
         ensure("beyond reach is open", sky.skyOpenAt(under - LLVector3d(0, 0, 60.0), 50.f));
@@ -474,6 +475,7 @@ namespace tut
         ensure("a deleted roof is forgotten", sky.skyOpenAt(under));
         ensure("changes are versioned", sky.version() > v);
         sky.remove(7);
+        ensure("an unpublished tile is not open", !sky.skyOpenAt(beside));
         ensure_equals("nothing left", sky.cells(), static_cast<size_t>(0));
     }
 

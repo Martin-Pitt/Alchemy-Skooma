@@ -27,6 +27,7 @@
 
 #include "sknavtypes.h"
 
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -127,6 +128,59 @@ namespace sknav
     /// Negative for a part that is not door-shaped.
     F32 faceCover(const FeaturePart& leaf, const std::vector<RecordPtr>& records, const FeatureParams& params);
 
+    /// Records bucketed on a plan grid, so a part's neighbours are found
+    /// without walking the whole census. Holds pointers into the vector it
+    /// was built from, which must outlive it unchanged.
+    class RecordIndex
+    {
+    public:
+        explicit RecordIndex(const std::vector<RecordPtr>& records, F64 cell = 8.0);
+
+        /// Every record whose box may meet the plan of mn..mx, in record order.
+        void query(const LLVector3d& mn, const LLVector3d& mx, std::vector<const RecordPtr*>& out) const;
+
+    private:
+        const std::vector<RecordPtr>& mRecords;
+        F64 mCell;
+        std::unordered_map<U64, std::vector<U32>> mCells;
+        std::vector<U32> mLarge;    ///< records spanning too many cells to bucket
+    };
+
+    /// faceCover over an index: the same answer, with the neighbours found
+    /// by the grid and only the triangles near the leaf cast against.
+    F32 faceCover(const FeaturePart& leaf, const RecordIndex& index, const FeatureParams& params);
+
+    /// faceCover kept per part from one scan to the next: a leaf whose pose,
+    /// parameters and neighbouring records are all as they were is not cast again.
+    class FaceCoverCache
+    {
+    public:
+        F32 measure(const FeaturePart& leaf, const RecordIndex& index, const FeatureParams& params);
+
+        /// Forgets the parts not measured since the last prune.
+        void prune();
+
+        size_t size() const { return mEntries.size(); }
+        U32 mHits = 0;
+        U32 mMisses = 0;
+
+    private:
+        struct Entry
+        {
+            LLVector3d mMin;
+            LLVector3d mMax;
+            LLVector3d mCenter;
+            LLVector3 mAxes[3];
+            LLVector3 mHalf;
+            FeatureParams mParams;
+            std::vector<RecordPtr> mNearby;     ///< held, so a pointer is never reused while it keys an entry
+            F32 mCover = -1.f;
+            bool mUsed = false;
+        };
+        std::unordered_map<LLUUID, Entry> mEntries;
+        std::vector<const RecordPtr*> mScratch;
+    };
+
     /// One doorway as the rooms and the map see it: plain values, no viewer
     /// types. Positions are global.
     struct DoorEntity
@@ -168,8 +222,19 @@ namespace sknav
 
     /// The pose that stands for the doorway: the current one for a leaf that
     /// has never moved, else the rest it has spent longest at. False while it
-    /// moves or before any rest is known.
+    /// moves or before any rest is known, unless the doorway is established.
     bool doorwayPose(const LeafHistory& history, FeaturePart& out);
+
+    /// Seconds a leaf must have rested at one pose before that pose is its
+    /// doorway for good: a swing then changes nothing built over it.
+    constexpr F32 DOORWAY_ESTABLISHED_SECONDS = 10.f;
+
+    /// The rest the leaf has spent longest at, once it has spent at least
+    /// DOORWAY_ESTABLISHED_SECONDS there; false before, moving or not.
+    bool establishedDoorway(const LeafHistory& history, FeaturePart& out);
+
+    /// Whether the leaf's last look found it still at its established doorway.
+    bool atEstablishedDoorway(const LeafHistory& history, F32 tolerance = 0.02f);
 
     typedef std::unordered_map<LLUUID, LeafHistory> LeafHistories;
 

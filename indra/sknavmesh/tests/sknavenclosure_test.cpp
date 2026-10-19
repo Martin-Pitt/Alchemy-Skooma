@@ -558,9 +558,11 @@ TEST_CASE("a sky map copy is a snapshot: later changes to the original leave it 
     const SkyMap snapshot = live;
     live.remove(1);
     live.set(2, LLVector3d(32.0, 0.0, 0.0), roof);
-    CHECK(live.skyOpenAt(LLVector3d(5.0, 5.0, 1.0)));
-    CHECK(!snapshot.skyOpenAt(LLVector3d(5.0, 5.0, 1.0)));
-    CHECK(snapshot.skyOpenAt(LLVector3d(37.0, 5.0, 1.0)));
+    F64 top = 0.0;
+    CHECK(!live.topAt(5.0, 5.0, top));
+    CHECK(!live.skyOpenAt(LLVector3d(5.0, 5.0, 1.0)));     // and no longer knows that air
+    CHECK((!snapshot.skyOpenAt(LLVector3d(5.0, 5.0, 1.0)) && snapshot.topAt(5.0, 5.0, top)));
+    CHECK((!snapshot.topAt(37.0, 5.0, top) && live.topAt(37.0, 5.0, top)));
     CHECK((snapshot.cells()) == (static_cast<size_t>(32 * 32)));
 }
 

@@ -6522,7 +6522,7 @@
         <key>SKNavSettleSeconds</key>
         <map>
             <key>Comment</key>
-            <string>Seconds an object must stay still before the navmesh treats it as landscape.</string>
+            <string>Seconds a mover (one seen moving in repeated or sustained bursts) must stay still before the navmesh treats it as landscape; a one-off move is landscape at once.</string>
             <key>Persist</key>
             <integer>1</integer>
             <key>Type</key>
@@ -6574,7 +6574,18 @@
             <key>Type</key>
             <string>F32</string>
             <key>Value</key>
-            <real>128.0</real>
+            <real>300.0</real>
+        </map>
+        <key>SKNavAirAgentRadius</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres around the agent within which navmesh tiles build their air eagerly, wherever the camera is.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>30.0</real>
         </map>
         <!-- <SK:Nexii> Navmesh air residency: settled air on disk, whole-cluster detail -->
         <key>SKNavAirSpill</key>
@@ -6642,7 +6653,7 @@
             <key>Type</key>
             <string>U32</string>
             <key>Value</key>
-            <integer>500</integer>
+            <integer>100</integer>
         </map>
         <key>SKNavBuildsInFlight</key>
         <map>
@@ -6848,44 +6859,11 @@
         <key>SKNavOverlayAir</key>
         <map>
             <key>Comment</key>
-            <string>Draw the navmesh's air as floors and edges: 0 off, 1 quadtree leaves by level, 2 gaps by flags with ceilings and the walls and steps between them, 3 gap floors by space, 4 AVATAR polygons by the space they were stamped with, 5 clearance, 6 the walls' true faces from the face offsets.</string>
+            <string>Draw the navmesh's air as floors and edges: 0 off, 1 quadtree leaves by level, 2 gaps by flags with ceilings and the walls and steps between them, 3 gap floors by space, 4 AVATAR polygons by the space they were stamped with, 5 clearance, 6 the walls' true faces from the face offsets, 7 gap floors by indoorness (blue outdoors, amber sheltered, red indoors, grey unanswered).</string>
             <key>Persist</key>
             <integer>1</integer>
             <key>Type</key>
             <string>U32</string>
-            <key>Value</key>
-            <integer>0</integer>
-        </map>
-        <key>SKNavOverlayAirSource</key>
-        <map>
-            <key>Comment</key>
-            <string>Which tiles' air the air overlay draws: 0 detail and coarse (far tiles dimmer, framed in violet), 1 detail only, 2 coarse only.</string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>U32</string>
-            <key>Value</key>
-            <integer>0</integer>
-        </map>
-        <key>SKNavOverlayAirSlice</key>
-        <map>
-            <key>Comment</key>
-            <string>Draw only the air whose floor lies within this many metres of the agent's floor (or the camera's, with SKNavOverlayAirSliceCamera), so storeys do not stack. 0 draws every floor.</string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>F32</string>
-            <key>Value</key>
-            <real>0</real>
-        </map>
-        <key>SKNavOverlayAirSliceCamera</key>
-        <map>
-            <key>Comment</key>
-            <string>Centre the air overlay's height slice on the floor under the camera rather than the agent's.</string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>Boolean</string>
             <key>Value</key>
             <integer>0</integer>
         </map>
@@ -6902,17 +6880,6 @@
         </map>
         <!-- </SK:Nexii> -->
         <!-- <SK:Nexii> Navmesh features overlay -->
-        <key>SKNavOverlayEnclosure</key>
-        <map>
-            <key>Comment</key>
-            <string>Tint the floors of the navmesh's air by how enclosed they are: 0 off, 1 by indoorness e, 2 by bucket (outdoors, sheltered, indoors; grey where nothing answered).</string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>U32</string>
-            <key>Value</key>
-            <integer>0</integer>
-        </map>
         <key>SKNavOverlaySpaces</key>
         <map>
             <key>Comment</key>
@@ -7012,7 +6979,7 @@
             <key>Type</key>
             <string>U32</string>
             <key>Value</key>
-            <integer>3000</integer>
+            <integer>1000</integer>
         </map>
         <key>SKNavOverlayWind</key>
         <map>
