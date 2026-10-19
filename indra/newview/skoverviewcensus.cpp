@@ -1440,32 +1440,49 @@ void SKOverviewCensus::swapIn(Built& built)
         const U32 total = (U32)region.mPositions.size();
         Batch batch;
         batch.mOrigin = region.mOrigin;
-        batch.mBuffer = new LLVertexBuffer(LLVertexBuffer::MAP_VERTEX | LLVertexBuffer::MAP_WEIGHT); // weight: the cut height
-        if (!batch.mBuffer->allocateBuffer(total, 0))
+        // A region whose triangles are the same keeps its buffer: a rebuild moves a few linksets, and uploading every
+        // region's tens of megabytes again stalled the frame for tens of milliseconds.
+        const auto same = std::find_if(mBatches.begin(), mBatches.end(),
+                                       [&](const Batch& old)
+                                       {
+                                           return old.mBuffer && old.mOrigin == region.mOrigin && old.mPositions == region.mPositions;
+                                       });
+        if (same != mBatches.end())
         {
-            LL_WARNS("SKOverview") << "census buffer of " << total << " vertices could not be allocated" << LL_ENDL;
-            continue;
+            LL_PROFILE_ZONE_NAMED("sk census keep buffer");
+            batch.mBuffer = std::move(same->mBuffer);
+            batch.mCutValues = std::move(same->mCutValues);
         }
-        LLStrider<LLVector3> verts;
-        if (!batch.mBuffer->getVertexStrider(verts) || !verts.get() || batch.mBuffer->getNumVerts() < total)
+        else
         {
-            LL_WARNS("SKOverview") << "census batch of " << total << " vertices could not be mapped (buffer holds "
-                                   << batch.mBuffer->getNumVerts() << ")" << LL_ENDL;
-            continue;
-        }
-        for (const LLVector3& p : region.mPositions)
-        {
-            *verts++ = p;
-        }
-        LLStrider<F32> cuts;
-        if (batch.mBuffer->getWeightStrider(cuts) && cuts.get())
-        {
-            for (U32 v = 0; v < total; ++v)
+            LL_PROFILE_ZONE_NAMED("sk census upload buffer");
+            batch.mBuffer = new LLVertexBuffer(LLVertexBuffer::MAP_VERTEX | LLVertexBuffer::MAP_WEIGHT); // weight: the cut height
+            if (!batch.mBuffer->allocateBuffer(total, 0))
             {
-                *cuts++ = skoverview::NO_CUT;
+                LL_WARNS("SKOverview") << "census buffer of " << total << " vertices could not be allocated" << LL_ENDL;
+                continue;
             }
+            LLStrider<LLVector3> verts;
+            if (!batch.mBuffer->getVertexStrider(verts) || !verts.get() || batch.mBuffer->getNumVerts() < total)
+            {
+                LL_WARNS("SKOverview") << "census batch of " << total << " vertices could not be mapped (buffer holds "
+                                       << batch.mBuffer->getNumVerts() << ")" << LL_ENDL;
+                continue;
+            }
+            for (const LLVector3& p : region.mPositions)
+            {
+                *verts++ = p;
+            }
+            LLStrider<F32> cuts;
+            if (batch.mBuffer->getWeightStrider(cuts) && cuts.get())
+            {
+                for (U32 v = 0; v < total; ++v)
+                {
+                    *cuts++ = skoverview::NO_CUT;
+                }
+            }
+            batch.mBuffer->unmapBuffer();
         }
-        batch.mBuffer->unmapBuffer();
         // On the ground when its cluster's base is no higher above the highest land under its footprint than a step or two.
         for (size_t g = 0; g < region.mGroups.size(); ++g)
         {
@@ -2286,11 +2303,10 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
                 LL_DEBUGS("SKOverview") << "tactical cut: " << (what.empty() ? std::string("nothing cut") : what) << LL_ENDL;
             }
         }
-        for (const Batch& batch : mBatches)
+        for (Batch& batch : mBatches)
         {
             const U32 total = batch.mStart[skoverview::NUM_CENSUS_CLASSES];
-            LLStrider<F32> strider;
-            if (!total || !batch.mBuffer->getWeightStrider(strider) || !strider.get())
+            if (!total)
             {
                 continue;
             }
@@ -2308,11 +2324,33 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
                     std::fill(values.begin() + llmin(group.mStart[c], end), values.begin() + end, it->second);
                 }
             }
-            for (F32 v : values)
+            // Only the span that changed is written: a cut moves a building or two, not the region.
+            U32 lo = total;
+            U32 hi = 0;
+            for (U32 v = 0; v < total; ++v)
             {
-                *strider++ = v;
+                const F32 held = v < batch.mCutValues.size() ? batch.mCutValues[v] : skoverview::NO_CUT;
+                if (values[v] != held)
+                {
+                    lo = llmin(lo, v);
+                    hi = v + 1;
+                }
+            }
+            if (lo >= hi)
+            {
+                continue;
+            }
+            LLStrider<F32> strider;
+            if (!batch.mBuffer->getWeightStrider(strider, lo, (S32)(hi - lo)) || !strider.get())
+            {
+                continue;
+            }
+            for (U32 v = lo; v < hi; ++v)
+            {
+                *strider++ = values[v];
             }
             batch.mBuffer->unmapBuffer();
+            batch.mCutValues = std::move(values);
         }
     }
 }
