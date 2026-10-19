@@ -109,6 +109,21 @@ namespace sk
         return clamp(r, window_w, window_h);
     }
 
+    PopupFacing PopupLayout::facingFrom(F32 x, F32 y, F32 w, F32 h, F32 window_w, F32 window_h)
+    {
+        return { x + GAP + w <= window_w - EDGE || x - GAP - w < EDGE, y + GAP + h <= window_h - EDGE || y - GAP - h < EDGE };
+    }
+
+    PopupRect PopupLayout::placeOpposite(F32 x, const PopupRect& first, F32 w, F32 h, PopupFacing facing, F32 window_w, F32 window_h)
+    {
+        const F32 left = facing.mRight ? x - GAP - w : x + GAP;
+        if (left < EDGE || left + w > window_w - EDGE)
+        {
+            return placeBeside(first, w, h, facing, window_w, window_h);
+        }
+        return clamp({ left, facing.mDown ? first.mY : first.bottom() - h, w, h }, window_w, window_h);
+    }
+
     PopupRect PopupLayout::placeChild(const PopupRect& parent, F32 row_top, F32 row_h, F32 w, F32 h, PopupFacing facing,
                                       const std::vector<PopupRect>& other_roots, F32 window_w, F32 window_h)
     {

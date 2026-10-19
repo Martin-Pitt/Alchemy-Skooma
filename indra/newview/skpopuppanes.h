@@ -100,7 +100,7 @@ private:
     std::vector<bool> mPlaced;
     std::vector<F32> mAnchor;               ///< per child pane, its opener row's top when placed, unscrolled
     std::vector<F32> mScroll;               ///< per pane, pixels scrolled down
-    sk::PopupFacing mFacing;                ///< towards the window's centre from the click
+    sk::PopupFacing mFacing;                ///< right and down from the click, flipped where the first pane does not fit
     F32 mWindowW = 0.f;
     F32 mWindowH = 0.f;
     std::function<void(std::vector<SKPopupPaneSpec>&)> mRefresh;

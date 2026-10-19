@@ -55,7 +55,7 @@ namespace sk
         bool actionable() const { return mVisible && mEnabled && mKind == Kind::ACTION; }
     };
 
-    /// Which way the panes grow: towards the window's centre from the click.
+    /// Which way the panes grow from the click.
     struct PopupFacing
     {
         bool mRight = true;
@@ -90,6 +90,10 @@ namespace sk
         static PopupRect placeFirst(F32 x, F32 y, F32 w, F32 h, PopupFacing facing, F32 window_w, F32 window_h);
         /// A second root pane beside the first on the facing side, else the other, else above or below it.
         static PopupRect placeBeside(const PopupRect& first, F32 w, F32 h, PopupFacing facing, F32 window_w, F32 window_h);
+        /// Right of and below the click, each flipped only when a w x h pane does not fit that way.
+        static PopupFacing facingFrom(F32 x, F32 y, F32 w, F32 h, F32 window_w, F32 window_h);
+        /// A second root pane across the click from the first, level with it; beside the first when it does not fit.
+        static PopupRect placeOpposite(F32 x, const PopupRect& first, F32 w, F32 h, PopupFacing facing, F32 window_w, F32 window_h);
         /// A child pane beside its opener row, as a menu's submenu: the facing side, flipped when it
         /// leaves the window or covers another root pane; top on the row's top facing down, bottom on
         /// its bottom facing up; shifted only vertically to stay inside.

@@ -82,7 +82,9 @@ LLHandle<SKPopupPanes> SKPopupPanes::show(LLView* spawner, S32 x, S32 y, std::ve
     spawner->localPointToScreen(x, y, &sx, &sy);
     const F32 w = sk::PopupLayout::paneWidth(view->mWindowW);
     const F32 down = view->mWindowH - static_cast<F32>(sy);
-    view->mFacing = sk::PopupFacing::towardsCentre(static_cast<F32>(sx), down, view->mWindowW, view->mWindowH);
+    // The first root pane always opens right and down of the click, the second left of it, unless they do not fit.
+    view->mFacing = sk::PopupLayout::facingFrom(static_cast<F32>(sx), down, w, sk::PopupLayout::paneHeight(nav[0].mRows, view->mWindowH),
+                                                view->mWindowW, view->mWindowH);
     S32 placed_roots = 0;
     for (size_t i = 0; i < view->mSpecs.size(); ++i)
     {
@@ -97,9 +99,9 @@ LLHandle<SKPopupPanes> SKPopupPanes::show(LLView* spawner, S32 x, S32 y, std::ve
         }
         else
         {
-            // Beside the first; any further root goes below the one before it.
+            // Across the click from the first; any further root goes below the one before it.
             const sk::PopupRect& first = view->mRects[0];
-            view->mRects[i] = placed_roots == 1 ? sk::PopupLayout::placeBeside(first, w, h, view->mFacing, view->mWindowW, view->mWindowH)
+            view->mRects[i] = placed_roots == 1 ? sk::PopupLayout::placeOpposite(static_cast<F32>(sx), first, w, h, view->mFacing, view->mWindowW, view->mWindowH)
                                                 : sk::PopupLayout::clamp({ first.mX, view->mRects[i - 1].bottom() + sk::PopupLayout::GAP, w, h },
                                                                          view->mWindowW, view->mWindowH);
         }

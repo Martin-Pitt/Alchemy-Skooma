@@ -211,4 +211,30 @@ namespace tut
         ensure("in the child", nav.activePane() == 2 && nav.panes()[2].mOpen);
         ensure("headings and separators are never active", PopupNav::step({ heading(), separator() }, -1, 1) == -1);
     }
+    // The map pane opens right and down of the click and the people pane left of it, wherever the click is, unless one does not fit.
+    template<> template<>
+    void skpopuplayout_object::test<6>()
+    {
+        for (F32 x : { 300.f, 640.f, 1000.f })
+        {
+            const PopupFacing f = PopupLayout::facingFrom(x, 200.f, 174.f, 120.f, 1280.f, 720.f);
+            ensure("right and down", f.mRight && f.mDown);
+            const PopupRect map = PopupLayout::placeFirst(x, 200.f, 174.f, 120.f, f, 1280.f, 720.f);
+            const PopupRect people = PopupLayout::placeOpposite(x, map, 174.f, 118.f, f, 1280.f, 720.f);
+            ensure("map right", map.mX == x + 4.f && map.mY == 204.f);
+            ensure("people left", people.right() == x - 4.f && people.mY == map.mY);
+        }
+        // Near the bottom right: both flip.
+        const PopupFacing lu = PopupLayout::facingFrom(1200.f, 700.f, 174.f, 120.f, 1280.f, 720.f);
+        ensure("flipped", !lu.mRight && !lu.mDown);
+        const PopupRect map = PopupLayout::placeFirst(1200.f, 700.f, 174.f, 120.f, lu, 1280.f, 720.f);
+        const PopupRect people = PopupLayout::placeOpposite(1200.f, map, 174.f, 118.f, lu, 1280.f, 720.f);
+        ensure("map left", map.right() == 1196.f);
+        ensure("people beside it", people.right() == map.mX - 4.f && inside(people, 1280.f, 720.f));
+        // Near the left edge: no room left of the click, so people go right of the map.
+        const PopupFacing rd = PopupLayout::facingFrom(40.f, 200.f, 174.f, 120.f, 1280.f, 720.f);
+        const PopupRect map2 = PopupLayout::placeFirst(40.f, 200.f, 174.f, 120.f, rd, 1280.f, 720.f);
+        const PopupRect people2 = PopupLayout::placeOpposite(40.f, map2, 174.f, 118.f, rd, 1280.f, 720.f);
+        ensure("people right of map", people2.mX == map2.right() + 4.f);
+    }
 }
