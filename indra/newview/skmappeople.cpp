@@ -268,14 +268,16 @@ void SKMapPeople::addPing(const LLVector3d& pos)
 namespace
 {
 // Where an avatar aims: its mouselook LookAt when it sends one, else the sim's body rotation; never the animated head.
-LLVector3 aimDirection(LLVOAvatar* avatar, const LLVector3& eye, const std::map<LLUUID, LLVector3>& mouselook)
+LLVector3 aimDirection(LLVOAvatar* avatar, const LLVector3& eye, const std::map<LLUUID, LLVector3>& mouselook, bool& precise)
 {
+    precise = false;
     const auto it = mouselook.find(avatar->getID());
     if (it != mouselook.end())
     {
         LLVector3 dir = it->second - eye;
         if (dir.normVec() > 0.01f)
         {
+            precise = true;
             return dir;
         }
     }
@@ -345,7 +347,7 @@ void SKMapPeople::updateFiringLines()
             if (LLJoint* head = avatar ? avatar->getJoint("mHead") : nullptr)
             {
                 const LLVector3 from = head->getWorldPosition();
-                const LLVector3 dir = aimDirection(avatar, from, mouselook);
+                const LLVector3 dir = aimDirection(avatar, from, mouselook, line.mPrecise);
                 line.mFrom = gAgent.getPosGlobalFromAgent(from);
                 line.mTo = gAgent.getPosGlobalFromAgent(from + dir * line.mLength);
             }
@@ -375,7 +377,8 @@ void SKMapPeople::updateFiringLines()
         ++rays;
         const F64 ray_start = LLFrameTimer::getTotalSeconds();
         const LLVector3 from = head->getWorldPosition();
-        const LLVector3 dir = aimDirection(avatar, from, mouselook);
+        bool precise = false;
+        const LLVector3 dir = aimDirection(avatar, from, mouselook, precise);
         const LLVector3 to = from + dir * skmap::palette::FIRING_REACH_M;
         LLVector4a start, end, hit;
         // Past the head, so the shooter's own attachments are not what the ray finds.
@@ -393,6 +396,7 @@ void SKMapPeople::updateFiringLines()
         line.mTo = gAgent.getPosGlobalFromAgent(stop);
         line.mLength = dist_vec(from, stop);
         line.mCast = now;
+        line.mPrecise = precise;
     }
     mFiring.swap(kept);
 }
