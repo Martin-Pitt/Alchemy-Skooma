@@ -154,6 +154,8 @@ bool SKMapMode::open()
     {
         gAgentCamera.setFocusOnAvatar(false, false);
         gAgentCamera.setCameraPosAndFocusGlobal(mMapPosition, mMapFocus, LLUUID::null);
+        // Warped up from the world camera, so the map opens over where the view came from.
+        gAgentCamera.startCameraWarp(SKCameraWarp::WORLD_MAP);
     }
 
     LLRootView* root = gViewerWindow->getRootView();
