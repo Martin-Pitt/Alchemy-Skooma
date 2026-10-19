@@ -95,6 +95,9 @@ class SKWorldCensus : public LLSingleton<SKWorldCensus>
     void cleanupSingleton() override;
 
 public:
+    /// The highest land under a box's plan corners and middle, -1e9 with no world.
+    static F32 landUnder(const LLVector3d& min, const LLVector3d& max);
+
     /// Once per frame after objects have moved. Does nothing unless the
     /// navmesh is enabled and something wants a census (a demand, or the overlay).
     void update();

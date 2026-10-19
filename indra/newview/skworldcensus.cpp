@@ -52,7 +52,9 @@
 #include "pipeline.h"
 #include "skcaptureexport.h"
 #include "sknavmarkobjects.h"
+#include "sknavfloors.h"
 #include "sknavmesh.h"
+#include "sknavrooms.h"
 #include "skphysicsshape.h"
 #include "threadpool.h"
 
@@ -269,6 +271,16 @@ const SKWorldCensus::RootHistory* SKWorldCensus::historyOf(const LLUUID& root) c
 {
     const auto it = mHistory.find(root);
     return it == mHistory.end() ? nullptr : &it->second;
+}
+
+F32 SKWorldCensus::landUnder(const LLVector3d& min, const LLVector3d& max)
+{
+    if (!LLWorld::instanceExists())
+    {
+        return -1e9f;
+    }
+    LLWorld* world = LLWorld::getInstance();
+    return sknav::footprintMax(min, max, [world](const LLVector3d& p) { return static_cast<F32>(world->resolveLandHeightGlobal(p)); });
 }
 
 std::vector<U64> SKWorldCensus::regionHandles()
@@ -1232,12 +1244,29 @@ void SKWorldCensus::classify(SKCensusSnapshot& snap)
                 r.mMax = gAgent.getPosGlobalFromAgent(hi);
                 LLVector3d foot = (r.mMin + r.mMax) * 0.5;
                 foot.mdV[VZ] = r.mMin.mdV[VZ];
-                F32 floor = LLWorld::getInstance()->resolveLandHeightGlobal(foot);
+                F32 floor = landUnder(r.mMin, r.mMax);
+                // The built floor is read at the foot only: the navmesh's when it has polys, else the air's.
                 F32 built = 0.f;
-                if (SKNavMesh::instanceExists() && SKNavMesh::instance().floorUnder(foot, AgentClass::AVATAR, built)
-                    && built <= foot.mdV[VZ] + 0.5)
+                const F32 reach = static_cast<F32>(foot.mdV[VZ]) + 0.5f;
+                if (SKNavMesh::instanceExists())
                 {
-                    floor = llmax(floor, built);
+                    const SKNavMesh& nav = SKNavMesh::instance();
+                    if (SKNavMesh::polysEnabled())
+                    {
+                        if (nav.floorUnder(foot, AgentClass::AVATAR, built) && built <= reach)
+                        {
+                            floor = llmax(floor, built);
+                        }
+                    }
+                    else if (const auto view = nav.view())
+                    {
+                        std::vector<sknav::Enclosure> gaps;
+                        view->gapsAt(foot, [&gaps](const sknav::Enclosure& e) { gaps.push_back(e); });
+                        if (sknav::pickFloor(gaps, -1e9f, reach, built))
+                        {
+                            floor = llmax(floor, built);
+                        }
+                    }
                 }
                 r.mClearance = static_cast<F32>(foot.mdV[VZ]) - floor;
             }

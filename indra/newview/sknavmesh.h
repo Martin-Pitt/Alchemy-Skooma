@@ -677,6 +677,8 @@ private:
     /// and find the exits of any span a published tile has touched.
     void syncFeatureLinks(const SKCensusSnapshotPtr& snap);
     void findExits(FeatureSpan& span) const;
+    /// Marks the feature spans over a tile to find their exits again.
+    void markSpansDirty(const Tile& tile);
     /// Every published tile whose footprint meets the box, with its mesh.
     void forEachTileIn(const LLVector3d& min, const LLVector3d& max, const std::function<void(const Mesh&, const Tile&)>& fn) const;
     /// A tile's wall runs as of this revision, null without a Detour tile, stamp or air.

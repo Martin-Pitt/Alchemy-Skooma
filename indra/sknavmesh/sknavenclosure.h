@@ -117,6 +117,8 @@ namespace sknav
         U32 mSpaceId = 0;           ///< that space's id, stable within its mesh
         bool mSealed = false;       ///< INDOORS because no way in was found, D at its cap
         bool mCanopy = false;       ///< SHELTERED rather than INDOORS because roofed but open at the sides
+        bool mFine = false;         ///< answered from detail air finer than the coarse cell
+        bool mAvatarFloor = false;  ///< AVATAR walks the solid under it; fine air only
         F32 mFloor = 0.f;           ///< the gap's, in the frame the read was asked in
         F32 mCeiling = 0.f;         ///< a very large number when open
 

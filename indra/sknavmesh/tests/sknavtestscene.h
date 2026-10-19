@@ -59,6 +59,7 @@ namespace sknav_test
         std::vector<Solid> mSolids;
         F32 mGround[4] = { -1e9f, -1e9f, 1e9f, 1e9f };     ///< where the ground is: x0, y0, x1, y1
         F32 mShift = 0.f;                                   ///< every solid moved this far along x
+        bool mAvatarFloors = false;                         ///< walkable tops marked as AVATAR's floors, as a build marks them
 
         void box(F32 x0, F32 y0, F32 x1, F32 y1, F32 z0, F32 z1, bool walk = true, bool flight = false)
         {
@@ -140,6 +141,10 @@ namespace sknav_test
                         if (merged[i].mTerrain)
                         {
                             gap.mFlags |= static_cast<U8>(AREA_GROUND << AirGap::AREA_SHIFT);
+                        }
+                        if (mAvatarFloors && merged[i].mWalk)
+                        {
+                            gap.mFlags |= AirGap::AVATAR_FLOOR;
                         }
                         if (merged[i].mFlight && merged[i].mWalk)
                         {
