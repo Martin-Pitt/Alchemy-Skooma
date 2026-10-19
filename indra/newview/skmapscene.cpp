@@ -1,6 +1,6 @@
 /**
  * @file skmapscene.cpp
- * @brief The mini-map's hold on the navmesh: its demand while a map draws, and which tiles it has built.
+ * @brief The mini-map's hold on the navmesh: its demand while a map draws.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Alchemy Viewer Source Code
@@ -33,7 +33,6 @@
 #include "llgroupmgr.h"
 #include "llviewercontrol.h"
 #include "llworld.h"
-#include "skmapview.h"
 #include "sknavmesh.h"
 #include "sknetmap.h"
 #include "skworldcensus.h"
@@ -43,9 +42,6 @@
 namespace
 {
     constexpr F64 DRAWN_RECENTLY_S = 2.0;
-    constexpr F64 BUILT_EVERY_S = 0.25;
-    constexpr F64 CARRY_TILE_S = 10.0;     ///< a tile being rebuilt is unpublished for a moment
-    constexpr F64 LATTICE_M = 32.0;        ///< the navmesh's tile size
     const char* DEMAND = "sknetmap";
 }
 
@@ -70,15 +66,11 @@ void SKMapScene::cleanupSingleton()
 {
     gIdleCallbacks.deleteFunction(&SKMapScene::onIdle, nullptr);
     updateDemand(false);
-    mBuilt.clear();
 }
 
-void SKMapScene::noteDrawn(const SKNetMap& map)
+void SKMapScene::noteDrawn(const SKNetMap&)
 {
     mLastDrawn = LLFrameTimer::getUptimeSeconds().value();
-    mMapCentre = map.view().centre();
-    mMapLong = map.view().longSide();
-    mMapShort = map.view().shortSide();
 }
 
 bool SKMapScene::active() const
@@ -126,39 +118,4 @@ void SKMapScene::idle()
 {
     const bool want = active() && LLWorld::instanceExists() && gAgent.getRegion();
     updateDemand(want);
-    if (want)
-    {
-        updateBuilt();
-    }
-}
-
-void SKMapScene::updateBuilt()
-{
-    const F64 now = LLFrameTimer::getUptimeSeconds().value();
-    LLVector3d min, max;
-    skmap::analysisBox(gAgent.getPositionGlobal(), mMapCentre, mMapLong, mMapShort, min, max);
-    const SKNavMesh& navmesh = SKNavMesh::instance();
-    const bool moved = navmesh.revision() != mBuiltRevision || min != mBuiltMin || max != mBuiltMax;
-    if (!moved && now - mBuiltAt < CARRY_TILE_S)
-    {
-        return;
-    }
-    if (moved && now - mBuiltAt < BUILT_EVERY_S)
-    {
-        return;
-    }
-    LL_PROFILE_ZONE_SCOPED;
-    mBuiltRevision = navmesh.revision();
-    mBuiltMin = min;
-    mBuiltMax = max;
-    mBuiltAt = now;
-    // Tiles sit on the lattice: a published tile's footprint is exactly its cell.
-    navmesh.polysIn(min, max, sknav::AgentClass::AVATAR, [this, now](const SKNavMesh::PolyTile& tile) {
-        mBuilt[{ static_cast<S32>(std::floor((tile.mMin.mdV[VX] + 1.0) / LATTICE_M)),
-                 static_cast<S32>(std::floor((tile.mMin.mdV[VY] + 1.0) / LATTICE_M)) }] = now;
-    });
-    for (auto it = mBuilt.begin(); it != mBuilt.end();)
-    {
-        it = now - it->second > CARRY_TILE_S ? mBuilt.erase(it) : std::next(it);
-    }
 }
