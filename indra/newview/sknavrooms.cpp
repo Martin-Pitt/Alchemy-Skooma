@@ -86,114 +86,111 @@ struct SKNavRooms::WindJob
 
 // ---------------------------------------------------------------- the view
 
-bool SKNavWorldView::enclosureAt(const LLVector3d& pos, Enclosure& out) const
+void SKNavWorldView::columnAt(const LLVector3d& xy, AirColumn& out) const
 {
-    bool found = false;
+    LL_PROFILE_ZONE_SCOPED;
+    out.mXY = xy;
+    size_t n = 0;   // the vectors are reused, since the point reads call this per point
     for (const Mesh& m : mMeshes)
     {
-        if (!m.mProduct || pos.mdV[VX] < m.mMin.mdV[VX] || pos.mdV[VY] < m.mMin.mdV[VY] || pos.mdV[VX] >= m.mMax.mdV[VX] ||
-            pos.mdV[VY] >= m.mMax.mdV[VY])
+        if (!m.mProduct || xy.mdV[VX] < m.mMin.mdV[VX] || xy.mdV[VY] < m.mMin.mdV[VY] || xy.mdV[VX] >= m.mMax.mdV[VX] ||
+            xy.mdV[VY] >= m.mMax.mdV[VY])
         {
             continue;
         }
-        Enclosure e;
-        if (!m.mProduct->enclosureAt(LLVector3(pos - m.mOrigin), e))
+        if (n == out.mMeshes.size())
         {
-            continue;
+            out.mMeshes.emplace_back();
         }
-        e.mFloor += static_cast<F32>(m.mOrigin.mdV[VZ]);
-        e.mCeiling += e.mCeiling > 1e29f ? 0.f : static_cast<F32>(m.mOrigin.mdV[VZ]);
-        const bool known = e.mBucket != EnclosureBucket::UNKNOWN, had = found && out.mBucket != EnclosureBucket::UNKNOWN;
-        if (!found || (known && !had) || (known == had && e.mFloor > out.mFloor))
-        {
-            out = e;
-            found = true;
-        }
+        AirColumn::MeshColumn& c = out.mMeshes[n];
+        c.mId = m.mId;
+        c.mOrigin = m.mOrigin;
+        const LLVector3 local(xy - m.mOrigin);
+        m.mProduct->columnAt(local.mV[VX], local.mV[VY], c.mGaps);
+        n += c.mGaps.empty() ? 0 : 1;
     }
-    return found;
+    out.mMeshes.resize(n);
+}
+
+namespace
+{
+    // Across meshes an answer beats UNKNOWN, then the higher floor; each read is global already.
+    template <typename READ>
+    const SKNavWorldView::AirColumn::MeshColumn* pickMesh(const SKNavWorldView::AirColumn& column, F64 z, Enclosure& out, READ read)
+    {
+        const SKNavWorldView::AirColumn::MeshColumn* best = nullptr;
+        for (const SKNavWorldView::AirColumn::MeshColumn& m : column.mMeshes)
+        {
+            Enclosure e;
+            if (!read(m.mGaps, static_cast<F32>(z - m.mOrigin.mdV[VZ]), e))
+            {
+                continue;
+            }
+            e.mFloor += static_cast<F32>(m.mOrigin.mdV[VZ]);
+            e.mCeiling += e.mCeiling > 1e29f ? 0.f : static_cast<F32>(m.mOrigin.mdV[VZ]);
+            const bool known = e.mBucket != EnclosureBucket::UNKNOWN, had = best && out.mBucket != EnclosureBucket::UNKNOWN;
+            if (!best || (known && !had) || (known == had && e.mFloor > out.mFloor))
+            {
+                out = e;
+                best = &m;
+            }
+        }
+        return best;
+    }
+}
+
+bool SKNavWorldView::AirColumn::enclosureAt(F64 z, Enclosure& out, LLUUID* mesh_out) const
+{
+    const MeshColumn* m = pickMesh(*this, z, out, &sknav::columnEnclosureAt);
+    if (m && mesh_out)
+    {
+        *mesh_out = m->mId;
+    }
+    return m != nullptr;
+}
+
+bool SKNavWorldView::AirColumn::airGapAt(F64 z, SpaceId& space, Enclosure& gap) const
+{
+    Enclosure found;
+    const MeshColumn* m = pickMesh(*this, z, found, &sknav::columnAirGapAt);
+    if (!m)
+    {
+        return false;
+    }
+    gap = found;
+    space.mMesh = m->mId;
+    space.mId = found.mSpaceId;
+    return true;
+}
+
+bool SKNavWorldView::enclosureAt(const LLVector3d& pos, Enclosure& out) const
+{
+    thread_local AirColumn column;
+    columnAt(pos, column);
+    return column.enclosureAt(pos.mdV[VZ], out);
 }
 
 bool SKNavWorldView::spaceAt(const LLVector3d& pos, SpaceId& out) const
 {
     // The gap enclosureAt would answer from, and its mesh.
-    const Mesh* best = nullptr;
+    thread_local AirColumn column;
+    columnAt(pos, column);
     Enclosure found;
-    for (const Mesh& m : mMeshes)
-    {
-        if (!m.mProduct || pos.mdV[VX] < m.mMin.mdV[VX] || pos.mdV[VY] < m.mMin.mdV[VY] || pos.mdV[VX] >= m.mMax.mdV[VX] ||
-            pos.mdV[VY] >= m.mMax.mdV[VY])
-        {
-            continue;
-        }
-        Enclosure e;
-        if (!m.mProduct->enclosureAt(LLVector3(pos - m.mOrigin), e))
-        {
-            continue;
-        }
-        e.mFloor += static_cast<F32>(m.mOrigin.mdV[VZ]);
-        const bool known = e.mBucket != EnclosureBucket::UNKNOWN, had = best && found.mBucket != EnclosureBucket::UNKNOWN;
-        if (!best || (known && !had) || (known == had && e.mFloor > found.mFloor))
-        {
-            found = e;
-            best = &m;
-        }
-    }
-    if (!best || !found.mSpaceId)
+    LLUUID mesh;
+    if (!column.enclosureAt(pos.mdV[VZ], found, &mesh) || !found.mSpaceId)
     {
         return false;
     }
-    out.mMesh = best->mId;
+    out.mMesh = mesh;
     out.mId = found.mSpaceId;
     return true;
 }
 
 bool SKNavWorldView::airGapAt(const LLVector3d& pos, SpaceId& space, Enclosure& gap) const
 {
-    const Mesh* best = nullptr;
-    Enclosure found;
-    for (const Mesh& m : mMeshes)
-    {
-        if (!m.mProduct || pos.mdV[VX] < m.mMin.mdV[VX] || pos.mdV[VY] < m.mMin.mdV[VY] || pos.mdV[VX] >= m.mMax.mdV[VX] ||
-            pos.mdV[VY] >= m.mMax.mdV[VY])
-        {
-            continue;
-        }
-        const LLVector3 local(pos - m.mOrigin);
-        Enclosure e;
-        const bool held = m.mProduct->enclosureAt(local, e);
-        if (!held || (!e.mSpaceId && e.mBucket == EnclosureBucket::INDOORS))
-        {
-            // Below the solid (or the spaceless pocket) holding the point: the highest gap in a space whose ceiling is under it.
-            bool below = false;
-            m.mProduct->gapsAt(local.mV[VX], local.mV[VY], [&](const Enclosure& g) {
-                if (g.mSpaceId && g.mCeiling <= local.mV[VZ] && (!below || g.mFloor > e.mFloor))
-                {
-                    e = g;
-                    below = true;
-                }
-            });
-            if (!below && !held)
-            {
-                continue;
-            }
-        }
-        e.mFloor += static_cast<F32>(m.mOrigin.mdV[VZ]);
-        e.mCeiling += e.mCeiling > 1e29f ? 0.f : static_cast<F32>(m.mOrigin.mdV[VZ]);
-        const bool known = e.mBucket != EnclosureBucket::UNKNOWN, had = best && found.mBucket != EnclosureBucket::UNKNOWN;
-        if (!best || (known && !had) || (known == had && e.mFloor > found.mFloor))
-        {
-            found = e;
-            best = &m;
-        }
-    }
-    if (!best)
-    {
-        return false;
-    }
-    gap = found;
-    space.mMesh = best->mId;
-    space.mId = found.mSpaceId;
-    return true;
+    thread_local AirColumn column;
+    columnAt(pos, column);
+    return column.airGapAt(pos.mdV[VZ], space, gap);
 }
 
 const Space* SKNavWorldView::space(const SpaceId& id, const Mesh** mesh_out) const

@@ -75,6 +75,24 @@ public:
     typedef std::function<void(const Mesh& mesh, const sknav::Space& space)> SpaceFn;
     typedef std::function<void(const Mesh& mesh, const sknav::Portal& portal)> PortalFn;
 
+    /// Every mesh's gaps over one point, read once so many heights can be asked of it.
+    struct AirColumn
+    {
+        struct MeshColumn
+        {
+            LLUUID mId;
+            LLVector3d mOrigin;
+            sknav::GapColumn mGaps;
+        };
+        LLVector3d mXY;
+        std::vector<MeshColumn> mMeshes;
+
+        /// SKNavWorldView::enclosureAt at height z over the column's point, with the answering mesh.
+        bool enclosureAt(F64 z, sknav::Enclosure& out, LLUUID* mesh_out = nullptr) const;
+        /// SKNavWorldView::airGapAt at height z over the column's point.
+        bool airGapAt(F64 z, SpaceId& space, sknav::Enclosure& gap) const;
+    };
+
     /// Moves whenever a mesh's answers change.
     U64 revision() const { return mRevision; }
 
@@ -98,6 +116,9 @@ public:
     /// The top of the highest solid over a point, from the sky map; false
     /// when nothing stands there.
     bool topOfWorld(const LLVector3d& xy, F64& top) const;
+
+    /// The column over a point's plan, which enclosureAt, spaceAt and airGapAt read.
+    void columnAt(const LLVector3d& xy, AirColumn& out) const;
 
     /// Every gap over a point, per mesh and lowest first.
     void gapsAt(const LLVector3d& xy, const std::function<void(const sknav::Enclosure&)>& fn) const;

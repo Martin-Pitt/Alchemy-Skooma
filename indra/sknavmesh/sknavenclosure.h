@@ -125,6 +125,24 @@ namespace sknav
         bool depthKnown() const { return !std::isnan(mD); }
     };
 
+    /// One gap of a column read, with the height units enclosureAt tests it in.
+    struct ColumnGap
+    {
+        Enclosure mGap;             ///< as gapsAt hands it out
+        U16 mFloor = 0;             ///< in the tile's units over its origin
+        U16 mCeiling = 0;           ///< AIR_CEILING_OPEN when open
+        F32 mOriginZ = 0.f;
+        F32 mUnit = 0.f;
+    };
+    typedef std::vector<ColumnGap> GapColumn;
+
+    /// Whether a gap holds a height in its product's frame: the one test every point read applies.
+    bool gapHolds(F32 local_z, U16 floor, U16 ceiling, F32 origin_z, F32 unit);
+    /// The first gap of a column holding local_z, as EnclosureProduct::enclosureAt picks it.
+    bool columnEnclosureAt(const GapColumn& column, F32 local_z, Enclosure& out);
+    /// columnEnclosureAt, but under a solid or in a spaceless indoor pocket the highest gap in a space below it.
+    bool columnAirGapAt(const GapColumn& column, F32 local_z, Enclosure& out);
+
     struct TileEnclosure
     {
         TileKey mKey;
@@ -167,6 +185,8 @@ namespace sknav
         bool enclosureAt(const LLVector3& pos, Enclosure& out) const;
         /// Every gap over (x, y), lowest first, with its answer.
         void gapsAt(F32 x, F32 y, const std::function<void(const Enclosure&)>& fn) const;
+        /// gapsAt with each gap's units, so a caller can read many heights from one column.
+        void columnAt(F32 x, F32 y, GapColumn& out) const;
         size_t bytes() const;
     };
     typedef std::shared_ptr<const EnclosureProduct> EnclosureProductPtr;

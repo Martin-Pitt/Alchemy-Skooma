@@ -400,8 +400,7 @@ namespace sknav
             {
                 return;
             }
-            const F32 z = (pos.mV[VZ] - t.mOrigin.mV[VZ]) / t.mUnit;
-            if (z >= floor - FLOOR_SLACK && (ceiling == AIR_CEILING_OPEN || z < ceiling))
+            if (gapHolds(pos.mV[VZ], floor, ceiling, t.mOrigin.mV[VZ], t.mUnit))
             {
                 out = e;
                 found = true;
@@ -415,6 +414,56 @@ namespace sknav
         visitGaps(*this, x, y, [&](const Enclosure& e, U16, U16, const TileEnclosure&) { fn(e); });
     }
 
+    void EnclosureProduct::columnAt(F32 x, F32 y, GapColumn& out) const
+    {
+        out.clear();
+        visitGaps(*this, x, y, [&](const Enclosure& e, U16 floor, U16 ceiling, const TileEnclosure& t) {
+            out.push_back({ e, floor, ceiling, t.mOrigin.mV[VZ], t.mUnit });
+        });
+    }
+
+    bool gapHolds(F32 local_z, U16 floor, U16 ceiling, F32 origin_z, F32 unit)
+    {
+        const F32 z = (local_z - origin_z) / unit;
+        return z >= floor - FLOOR_SLACK && (ceiling == AIR_CEILING_OPEN || z < ceiling);
+    }
+
+    bool columnEnclosureAt(const GapColumn& column, F32 local_z, Enclosure& out)
+    {
+        for (const ColumnGap& g : column)
+        {
+            if (gapHolds(local_z, g.mFloor, g.mCeiling, g.mOriginZ, g.mUnit))
+            {
+                out = g.mGap;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool columnAirGapAt(const GapColumn& column, F32 local_z, Enclosure& out)
+    {
+        Enclosure e;
+        const bool held = columnEnclosureAt(column, local_z, e);
+        if (!held || (!e.mSpaceId && e.mBucket == EnclosureBucket::INDOORS))
+        {
+            bool below = false;
+            for (const ColumnGap& g : column)
+            {
+                if (g.mGap.mSpaceId && g.mGap.mCeiling <= local_z && (!below || g.mGap.mFloor > e.mFloor))
+                {
+                    e = g.mGap;
+                    below = true;
+                }
+            }
+            if (!below && !held)
+            {
+                return false;
+            }
+        }
+        out = e;
+        return true;
+    }
 
     struct SkyMemo
     {
