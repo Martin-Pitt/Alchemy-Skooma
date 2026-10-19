@@ -1580,8 +1580,7 @@ void SKWorldCensus::renderDebug()
 bool SKWorldCensus::grounded(const LLVector3d& min, const LLVector3d& max)
 {
     const F64 GROUND_BASE_M = 4.0;
-    const LLVector3d middle((min.mdV[VX] + max.mdV[VX]) * 0.5, (min.mdV[VY] + max.mdV[VY]) * 0.5, 0.0);
-    return min.mdV[VZ] <= LLWorld::getInstance()->resolveLandHeightGlobal(middle) + GROUND_BASE_M;
+    return min.mdV[VZ] <= landUnder(min, max) + GROUND_BASE_M;
 }
 
 void SKWorldCensus::renderClusters(const SKCensusSnapshot& snap, SKNavOverlayGeom& geom, const LLVector3d& camera, F64 reach)

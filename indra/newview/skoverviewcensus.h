@@ -293,7 +293,7 @@ private:
             std::vector<LLVector3> mPositions;  ///< by class, then group
             U32 mStart[skoverview::NUM_CENSUS_CLASSES + 1] = {};
             std::vector<Group> mGroups;
-            std::vector<LLVector3d> mMiddles;   ///< per group, where the land under it is looked up
+            std::vector<std::pair<LLVector3d, LLVector3d>> mFootprints;  ///< per group, the box the land under it is read over
             std::vector<U8> mInvisible;         ///< per triangle, as Batch's
         };
         /// What the overlap test made of the invisible parts, for the log.
