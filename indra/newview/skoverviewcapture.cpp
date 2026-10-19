@@ -2069,8 +2069,18 @@ bool SKOverviewCapture::groundAt(const LLVector2& at, LLVector3d& world) const
     return true;
 }
 
+bool SKOverviewCapture::canPan() const
+{
+    return !LLViewerJoystick::getInstance()->getOverrideCamera();
+}
+
 bool SKOverviewCapture::beginPan(S32 x, S32 y)
 {
+    if (!canPan())
+    {
+        panTrace("press ignored: the flycam holds the camera");
+        return false;
+    }
     // The composite clears mTacticalReady every frame, so a press between frames tests mTacticalPickable.
     if (!tacticalShown() || !mTacticalPickable)
     {

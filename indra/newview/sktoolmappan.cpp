@@ -123,7 +123,8 @@ bool SKToolMapPan::handleHover(S32 x, S32 y, MASK mask)
             return true;
         }
     }
-    gViewerWindow->setCursor(UI_CURSOR_TOOLPAN);
+    SKModalMode* mode = SKModalView::top();
+    gViewerWindow->setCursor(mode && !mode->canPan() ? UI_CURSOR_ARROW : UI_CURSOR_TOOLPAN);
     return true;
 }
 

@@ -121,6 +121,8 @@ public:
     bool beginPan(S32 x, S32 y) override;
     void pan(S32 x, S32 y) override;
     void endPan() override { mPan = Pan(); }
+    /// The flycam holds the camera, so a drag cannot move it.
+    bool canPan() const override;
     /// Clicks reach the pie, which picks the people and objects the overview draws.
     bool passesClicks() const override { return true; }
     /// The flycam's height above the agent over a person's scale, so it crosses the view quickly from high up.
