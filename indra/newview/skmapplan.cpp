@@ -1323,6 +1323,27 @@ namespace
         }
     }
 
+    // airGapAt, but its stand-in from a space below only within a metre of the feet: further down it is another
+    // storey's, and the gap holding the point answers instead.
+    bool airGapNear(const SKNavWorldView::AirColumn& column, F64 feet, F64 z, SKNavWorldView::SpaceId& space, sknav::Enclosure& gap)
+    {
+        if (!column.airGapAt(z, space, gap))
+        {
+            return false;
+        }
+        if (gap.mFloor < feet - 1.0)
+        {
+            LLUUID mesh;
+            if (!column.enclosureAt(z, gap, &mesh))
+            {
+                return false;
+            }
+            space.mMesh = mesh;
+            space.mId = gap.mSpaceId;
+        }
+        return true;
+    }
+
     /// The region meshes meeting the box, by the view's meshes: those whose tiles are the region's own.
     template <typename Fn> void forRegionMeshes(const LLVector3d& min, const LLVector3d& max, const Fn& fn)
     {
@@ -1875,7 +1896,7 @@ skmap::plan::Whereabouts skmap::plan::whereabouts(const SKNavWorldView& world, c
     SKNavWorldView::SpaceId id;
     sknav::Enclosure gap;
     // The band holds even here: airGapAt can answer from the gap below.
-    if (!column.airGapAt(feet.mdV[VZ] + LIFT_M, id, gap) || gap.mBucket == sknav::EnclosureBucket::UNKNOWN || !gap.mFine ||
+    if (!airGapNear(column, feet.mdV[VZ], feet.mdV[VZ] + LIFT_M, id, gap) || gap.mBucket == sknav::EnclosureBucket::UNKNOWN || !gap.mFine ||
         gap.mFloor < feet.mdV[VZ] - band_below || gap.mFloor > feet.mdV[VZ] + band_above)
     {
         return out;
@@ -1927,14 +1948,19 @@ bool skmap::plan::agentFloor(const LLVector3d& at, F64 feet, F32& floor_out)
     const SKNavWorldViewPtr world = nav.view();
     SKNavWorldView::SpaceId space;
     sknav::Enclosure gap;
-    if (!world || !world->airGapAt(LLVector3d(at.mdV[VX], at.mdV[VY], feet + 0.3), space, gap) ||
+    SKNavWorldView::AirColumn column;
+    if (world)
+    {
+        world->columnAt(at, column);
+    }
+    if (!world || !airGapNear(column, feet, feet + 0.3, space, gap) ||
         gap.mBucket == sknav::EnclosureBucket::UNKNOWN || !gap.mFine || gap.mFloor > feet + 0.1)
     {
         return false;
     }
     // Off the floor, in a jump or a fall, only an indoor gap still knows the floor under the feet.
     const bool standing = gap.mFloor >= feet - 0.75;
-    const bool airborne = gap.mBucket == sknav::EnclosureBucket::INDOORS && gap.mFloor > feet - 4.0;
+    const bool airborne = gap.mBucket == sknav::EnclosureBucket::INDOORS && gap.mFloor > feet - 1.0;
     if (!standing && !airborne)
     {
         return false;

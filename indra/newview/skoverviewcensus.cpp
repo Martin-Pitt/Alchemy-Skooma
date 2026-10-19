@@ -1939,6 +1939,26 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
                         cache.mCovered = covered;
                     }
                 }
+                // A surface is a roof only with nothing over the feet, of any linkset: a storey's slab is often one
+                // linkset and the storey above it another. Skyboxes floating out of their space do not count.
+                for (const auto& entry : extents)
+                {
+                    const Extent& e = entry.second;
+                    if (cache.mCovered || cache.mBestZ <= -1e29)
+                    {
+                        break;
+                    }
+                    if (entry.first == cache.mBest || feet.mdV[VX] < e.mMin.mdV[VX] || feet.mdV[VX] > e.mMax.mdV[VX] ||
+                        feet.mdV[VY] < e.mMin.mdV[VY] || feet.mdV[VY] > e.mMax.mdV[VY] || e.mMax.mdV[VZ] <= feet.mdV[VZ] + STAND_ABOVE_M ||
+                        (!e.mGround && e.mBottom > feet.mdV[VZ] + OVERHEAD_M))
+                    {
+                        continue;
+                    }
+                    F64 z = 0.0;
+                    bool covered = false;
+                    standsOn(e, feet, z, covered);
+                    cache.mCovered = covered;
+                }
                 cache.mRoofKey = roof_key;
                 cache.mRoofValid = true;
             }

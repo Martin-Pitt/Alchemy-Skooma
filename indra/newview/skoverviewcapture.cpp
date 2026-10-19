@@ -1472,8 +1472,19 @@ std::shared_ptr<const std::set<std::pair<S32, S32>>> SKOverviewCapture::roomAt(c
     // The room's floor is the floor of the air column the point is in, not the point's own height.
     SKNavWorldView::SpaceId start_id;
     sknav::Enclosure start_gap;
-    if (!world->airGapAt(LLVector3d(floor.mdV[VX], floor.mdV[VY], floor.mdV[VZ] + 0.3), start_id, start_gap) ||
-        start_gap.mBucket != sknav::EnclosureBucket::INDOORS)
+    // The gap of a space below stands in only within a metre: further down it is another storey's (a spaceless pocket).
+    SKNavWorldView::AirColumn start_column;
+    world->columnAt(floor, start_column);
+    bool start_found = start_column.airGapAt(floor.mdV[VZ] + 0.3, start_id, start_gap);
+    if (start_found && start_gap.mFloor < floor.mdV[VZ] - 1.0)
+    {
+        LLUUID mesh;
+        start_found = start_column.enclosureAt(floor.mdV[VZ] + 0.3, start_gap, &mesh);
+        start_id.mMesh = mesh;
+        start_id.mId = start_gap.mSpaceId;
+    }
+    if (!start_found ||
+        (start_gap.mBucket != sknav::EnclosureBucket::INDOORS && start_gap.mBucket != sknav::EnclosureBucket::SHELTERED))
     {
         return {};
     }
@@ -1494,7 +1505,7 @@ std::shared_ptr<const std::set<std::pair<S32, S32>>> SKOverviewCapture::roomAt(c
         const LLVector3d at((cell.first + 0.5) * ROOM_CELL_M, (cell.second + 0.5) * ROOM_CELL_M, start_floor + 1.0);
         SKNavWorldView::SpaceId id;
         sknav::Enclosure gap;
-        return world->airGapAt(at, id, gap) && gap.mBucket == sknav::EnclosureBucket::INDOORS &&
+        return world->airGapAt(at, id, gap) && (gap.mBucket == sknav::EnclosureBucket::INDOORS || gap.mBucket == sknav::EnclosureBucket::SHELTERED) &&
                std::fabs(gap.mFloor - start_floor) < SAME_FLOOR_M;
     };
     Room room;
@@ -1635,14 +1646,14 @@ void SKOverviewCapture::updateCut()
         o.mFloor = floor;
         o.mFeet = feet;
         o.mCut = cut;
-        if (where.mFound && where.mIndoor && where.mCeiling < 1e29f)
+        if (where.mFound && (where.mIndoor || where.mBucket == skmap::plan::Bucket::SHELTERED) && where.mCeiling < 1e29f)
         {
             // Indoors the storey's own air bounds the cut: just under its ceiling, so the floor above is gone.
-            o.mCut = llmax(where.mCeiling - 0.1f, (F32)floor.mdV[VZ] + 1.8f);
+            o.mCut = where.mCeiling - 0.1f; // floor + 2.5 stands when the ceiling is unknown
         }
         o.mPriority = -(F32)dist_vec(feet, centre);
         o.mOutdoors = outdoorsAt(id, feet, now);
-        if (!o.mOutdoors && where.mFound && where.mIndoor)
+        if (!o.mOutdoors && where.mFound && (where.mIndoor || where.mBucket == skmap::plan::Bucket::SHELTERED))
         {
             o.mRoomCells = roomAt(floor);
             o.mRoomCellM = (F32)ROOM_CELL_M;
