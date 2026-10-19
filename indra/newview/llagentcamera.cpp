@@ -1457,6 +1457,12 @@ void LLAgentCamera::updateCamera()
 
             // ...adjust position for animation
             F32 smooth_fraction_of_animation = llsmoothstep(0.0f, 1.0f, fraction_of_animation);
+            // <SK:Nexii> camera warp: a warp cuts the cruise out of a long move (skcamerawarp.h).
+            if (mCameraWarping)
+            {
+                smooth_fraction_of_animation = SKCameraWarp::fraction(mWarpProfile, time, (F32)(camera_target_global - mAnimationCameraStartGlobal).magVec());
+            }
+            // </SK:Nexii>
             camera_pos_global = lerp(mAnimationCameraStartGlobal, camera_target_global, smooth_fraction_of_animation);
             mFocusGlobal = lerp(mAnimationFocusStartGlobal, focus_target_global, smooth_fraction_of_animation);
         }
@@ -1493,6 +1499,7 @@ void LLAgentCamera::updateCamera()
         // This turns off smoothing while editing. -MG
         bool in_build_mode = LLToolMgr::getInstance()->inBuildMode();
         mCameraSmoothingStop = mCameraSmoothingStop || in_build_mode;
+        mCameraSmoothingStop = mCameraSmoothingStop || (mCameraAnimating && mCameraWarping); // <SK:Nexii> camera warp: smoothing would smear the cut
 
         if (cameraThirdPerson() && !mCameraSmoothingStop)
         {
@@ -2874,7 +2881,18 @@ void LLAgentCamera::startCameraAnimation()
     setAnimationDuration(gSavedSettings.getF32("ZoomTime"));
     mAnimationTimer.reset();
     mCameraAnimating = true;
+    mCameraWarping = false; // <SK:Nexii> camera warp
 }
+
+// <SK:Nexii> camera warp: restarts the animation from where the camera is, as a warp.
+void LLAgentCamera::startCameraWarp(const SKCameraWarp::Profile& profile)
+{
+    startCameraAnimation();
+    mAnimationDuration = profile.duration();
+    mWarpProfile = profile;
+    mCameraWarping = true;
+}
+// </SK:Nexii>
 
 //-----------------------------------------------------------------------------
 // stopCameraAnimation()
