@@ -2372,15 +2372,38 @@ void SKOverviewCapture::drawMarkers3D(const Project& project, S32 vw, S32 vh, st
         bool mHasAhead = false;
     };
     std::vector<Flat> flats;
+    // Where a point lands in the window, off it or not; false only behind the camera.
+    LLMatrix4a vp;
+    vp.setMul(mTacticalView, mTacticalProj);
+    auto screen = [&](const LLVector3& agent_pos, LLVector2& out) -> bool
+    {
+        LLVector4a p, clip;
+        p.set(agent_pos.mV[VX], agent_pos.mV[VY], agent_pos.mV[VZ], 1.f);
+        vp.transform4(p, clip);
+        const F32 w = clip.getF32ptr()[3];
+        if (w <= 1e-4f)
+        {
+            return false;
+        }
+        out.set((clip.getF32ptr()[0] / w * 0.5f + 0.5f) * vw, (clip.getF32ptr()[1] / w * 0.5f + 0.5f) * vh);
+        return true;
+    };
     for (const Marker& m : markers)
     {
-        LLVector2 at0;
-        if (!project(m.mFloor, at0))
+        // Kept while any of it, feet to head, is near the window, so feet just off its edge leave the body drawn.
+        LLVector2 at0, head;
+        if (!screen(m.mFloor, at0) || !screen(m.mFloor + LLVector3(0.f, 0.f, m.mHeight > 0.f ? m.mHeight : 2.f), head))
+        {
+            continue;
+        }
+        const F32 margin = 32.f;
+        if (llmax(at0.mV[VX], head.mV[VX]) < -margin || llmax(at0.mV[VY], head.mV[VY]) < -margin ||
+            llmin(at0.mV[VX], head.mV[VX]) > vw + margin || llmin(at0.mV[VY], head.mV[VY]) > vh + margin)
         {
             continue;
         }
         LLVector2 side;
-        const F32 ppm = project(m.mFloor + sideways, side) ? (side - at0).length() : 0.f;
+        const F32 ppm = screen(m.mFloor + sideways, side) ? (side - at0).length() : 0.f;
         const bool has_body = m.mHasShape && !m.mCoarse;
         // Hysteresis as well as the fade: a flat marker turns back into a body only a fifth past the threshold.
         const auto known = mFlatBlend.find(m.mId);
@@ -2439,7 +2462,7 @@ void SKOverviewCapture::drawMarkers3D(const Project& project, S32 vw, S32 vh, st
             f.mPerson = m.mPerson;
             f.mAt = at0;
             LLVector2 tip;
-            if (m.mHasHeading && project(m.mFloor + LLVector3(std::cos(m.mHeading), std::sin(m.mHeading), 0.f), tip))
+            if (m.mHasHeading && screen(m.mFloor + LLVector3(std::cos(m.mHeading), std::sin(m.mHeading), 0.f), tip))
             {
                 f.mAhead = tip - at0;
                 f.mHasAhead = f.mAhead.normVec() > 1e-4f;
