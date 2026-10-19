@@ -136,6 +136,7 @@ public:
         LLVector3d mTo;
         F32 mLength = 0.f; ///< the last ray's reach, kept while the aim follows the head every idle
         F64 mCast = -1.0e9;
+        bool mPrecise = false; ///< aimed by a mouselook LookAt, not only the body's facing
     };
     const std::map<LLUUID, FiringLine>& firingLines() const { return mFiring; }
 

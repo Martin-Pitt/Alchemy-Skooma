@@ -2646,6 +2646,57 @@ void SKOverviewCapture::composite()
         drawMarkers3D(project, vw, vh, drawn);
         gGL.flush();
         {
+            // Only a mouselook LookAt is precise enough to draw here; a body's facing is the mini-map's rough hint.
+            auto clip_project = [&](const LLVector3& agent_pos, LLVector2& out) -> bool
+            {
+                LLVector4a p, clip;
+                p.set(agent_pos.mV[VX], agent_pos.mV[VY], agent_pos.mV[VZ], 1.f);
+                vp.transform4(p, clip);
+                const F32 w = clip.getF32ptr()[3];
+                if (w <= 1e-4f)
+                {
+                    return false;
+                }
+                out.set((clip.getF32ptr()[0] / w * 0.5f + 0.5f) * vw, (clip.getF32ptr()[1] / w * 0.5f + 0.5f) * vh);
+                return true;
+            };
+            gGL.begin(LLRender::TRIANGLES);
+            for (const auto& entry : SKMapPeople::instance().firingLines())
+            {
+                const SKMapPeople::FiringLine& line = entry.second;
+                LLVector2 a, b;
+                if (!line.mPrecise || !clip_project(gAgent.getPosAgentFromGlobal(line.mFrom), a) ||
+                    !clip_project(gAgent.getPosAgentFromGlobal(line.mTo), b))
+                {
+                    continue;
+                }
+                LLVector2 d = b - a;
+                if (d.normVec() < 1e-3f)
+                {
+                    continue;
+                }
+                // The mini-map's line, brighter at the shooter and fainter over its reach.
+                const F32 reach = static_cast<F32>(dist_vec(line.mFrom, line.mTo)) / skmap::palette::FIRING_REACH_M;
+                const LLColor4 near_c(1.f, 1.f, 1.f, skmap::palette::FIRING_ALPHA_NEAR);
+                const LLColor4 far_c(1.f, 1.f, 1.f,
+                                     lerp(skmap::palette::FIRING_ALPHA_NEAR, skmap::palette::FIRING_ALPHA_FAR, llclamp(reach, 0.f, 1.f)));
+                const LLVector2 n(-d.mV[VY] * 0.5f, d.mV[VX] * 0.5f);
+                gGL.color4fv(near_c.mV);
+                gGL.vertex2f((a - n).mV[VX], (a - n).mV[VY]);
+                gGL.color4fv(far_c.mV);
+                gGL.vertex2f((b - n).mV[VX], (b - n).mV[VY]);
+                gGL.vertex2f((b + n).mV[VX], (b + n).mV[VY]);
+                gGL.color4fv(near_c.mV);
+                gGL.vertex2f((a - n).mV[VX], (a - n).mV[VY]);
+                gGL.color4fv(far_c.mV);
+                gGL.vertex2f((b + n).mV[VX], (b + n).mV[VY]);
+                gGL.color4fv(near_c.mV);
+                gGL.vertex2f((a + n).mV[VX], (a + n).mV[VY]);
+            }
+            gGL.end();
+            gGL.flush();
+        }
+        {
             // Projectiles over the markers, as on the mini-map: a streak the prim's length, fading to its tail.
             std::map<LLUUID, LLColor4> shooters;
             for (const SKMapPeople::Person& person : SKMapPeople::instance().people())
