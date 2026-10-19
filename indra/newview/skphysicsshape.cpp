@@ -101,6 +101,107 @@ bool skPhysicsShapeClassify(LLVOVolume* volume, SKPhysicsShape& out)
     return true;
 }
 
+namespace
+{
+    // Relative weights in the order Havok's collision work grows: analytic
+    // shapes first, a hull by its vertices, a triangle mesh by its triangles.
+    constexpr F32 SPHERE_COST = 1.f;
+    constexpr F32 BOX_COST = 1.5f;
+    constexpr F32 CYLINDER_COST = 2.5f;
+    constexpr F32 HULL_BASE_COST = 3.f;
+    constexpr F32 HULL_VERTICES_PER_COST = 16.f;
+    constexpr S32 HULL_UNKNOWN_VERTICES = 32;
+    constexpr F32 MESH_BASE_COST = 4.f;
+    constexpr F32 MESH_TRIANGLE_COST = 0.05f;
+
+    F32 hullCost(S32 vertices)
+    {
+        return HULL_BASE_COST + llclamp(vertices, 4, 256) / HULL_VERTICES_PER_COST;
+    }
+
+    // Small triangles packed densely cost more per triangle than a few large ones.
+    F32 meshCost(size_t triangles, const LLVector3& scale)
+    {
+        const F32 area = llmax(2.f * (scale[0] * scale[1] + scale[1] * scale[2] + scale[2] * scale[0]), 0.01f);
+        const F32 density = (F32)triangles / area;
+        return MESH_BASE_COST + MESH_TRIANGLE_COST * (F32)triangles * (1.f + log2f(1.f + density));
+    }
+
+    F32 primHullCost(LLVOVolume* volume)
+    {
+        LLVolume* phys = LLPrimitive::sVolumeManager->refVolume(volume->getVolume()->getParams(), physicsDetail(volume->getScale()));
+        const S32 points = phys && phys->mHullPoints ? phys->mNumHullPoints : HULL_UNKNOWN_VERTICES;
+        LLPrimitive::sVolumeManager->unrefVolume(phys);
+        return hullCost(points);
+    }
+
+    F32 baseHullCost(const LLModel::Decomposition* decomp)
+    {
+        return hullCost(decomp && !decomp->mBaseHull.empty() ? (S32)decomp->mBaseHull.size() : HULL_UNKNOWN_VERTICES);
+    }
+}
+
+F32 skPhysicsShapeCost(LLVOVolume* volume, const SKPhysicsShape& shape)
+{
+    const LLVector3 scale = volume->getScale();
+    Spec spec = shape.mSpec;
+    switch (spec.getType())
+    {
+        case Spec::SPHERE:
+            return SPHERE_COST;
+        case Spec::BOX:
+            return BOX_COST;
+        case Spec::CYLINDER:
+            return CYLINDER_COST;
+        case Spec::PRIM_MESH:
+        {
+            LLVolume* phys = LLPrimitive::sVolumeManager->refVolume(volume->getVolume()->getParams(), physicsDetail(scale));
+            size_t triangles = 0;
+            for (S32 f = 0; phys && f < phys->getNumVolumeFaces(); ++f)
+            {
+                triangles += phys->getVolumeFace(f).mNumIndices / 3;
+            }
+            LLPrimitive::sVolumeManager->unrefVolume(phys);
+            return meshCost(triangles, scale);
+        }
+        case Spec::USER_MESH:
+        {
+            const LLUUID& mesh_id = volume->getVolume()->getParams().getSculptID();
+            const LLModel::Decomposition* decomp = gMeshRepo.getDecomposition(mesh_id);
+            if (std::shared_ptr<const SKPhysicsHavokShape> sim = skPhysicsShapeSimTriangles(volume))
+            {
+                return meshCost(sim->mTriangles.size() / 3, scale);
+            }
+            if (decomp && !decomp->mPhysicsShapeMesh.empty())
+            {
+                return meshCost(decomp->mPhysicsShapeMesh.mPositions.size() / 3, scale);
+            }
+            if (decomp && !decomp->mHull.empty())
+            {
+                F32 cost = 0.f;
+                for (const LLModel::hull& hull : decomp->mHull)
+                {
+                    cost += hullCost((S32)hull.size());
+                }
+                return cost;
+            }
+            return baseHullCost(decomp);
+        }
+        default: // USER_CONVEX, PRIM_CONVEX, SCULPT
+            if (volume->isMesh())
+            {
+                return baseHullCost(gMeshRepo.getDecomposition(volume->getVolume()->getParams().getSculptID()));
+            }
+            return primHullCost(volume);
+    }
+}
+
+F32 skPhysicsShapeCostFraction(F32 cost)
+{
+    // Logarithmic over [1, 1000], so every shape type gets its own band of the ramp.
+    return llclamp(log10f(llmax(cost, 1.f)) / 3.f, 0.f, 1.f);
+}
+
 std::shared_ptr<const SKPhysicsHavokShape> skPhysicsShapeSimTriangles(LLVOVolume* volume)
 {
     if (!volume || !volume->isMesh() || !volume->getVolume() || volume->getPhysicsShapeType() != LLViewerObject::PHYSICS_SHAPE_PRIM)
