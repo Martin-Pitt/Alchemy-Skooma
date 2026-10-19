@@ -1358,15 +1358,14 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildBatches(const Jo
             Group group;
             group.mMinZ = b.second.mMin.mV[VZ];
             group.mMaxZ = b.second.mMax.mV[VZ];
-            LLVector3d middle = bins.mOrigin + LLVector3d((b.second.mMin.mV[VX] + b.second.mMax.mV[VX]) * 0.5,
-                                                          (b.second.mMin.mV[VY] + b.second.mMax.mV[VY]) * 0.5, 0.0);
+            std::pair<LLVector3d, LLVector3d> footprint(bins.mOrigin + LLVector3d(b.second.mMin), bins.mOrigin + LLVector3d(b.second.mMax));
             const auto cluster = job.mGroupCluster.find(b.first);
             if (cluster != job.mGroupCluster.end())
             {
                 const sknav::Cluster& c = *job.mSnapshot->mClusters.mClusters[cluster->second];
                 group.mMinZ = (F32)c.mMin.mdV[VZ];
                 group.mMaxZ = (F32)c.mMax.mdV[VZ];
-                middle = LLVector3d((c.mMin.mdV[VX] + c.mMax.mdV[VX]) * 0.5, (c.mMin.mdV[VY] + c.mMax.mdV[VY]) * 0.5, 0.0);
+                footprint = { c.mMin, c.mMax };
             }
             group.mId = b.first;
             group.mRoot = b.first < job.mRoots.size() ? job.mRoots[b.first] : LLUUID::null;
@@ -1378,7 +1377,7 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildBatches(const Jo
                 group.mNeverCut = job.mAnchors[b.first].second;
             }
             region.mGroups.push_back(group);
-            region.mMiddles.push_back(middle);
+            region.mFootprints.push_back(footprint);
         }
         U32 at = 0;
         for (U32 c = 0; c < skoverview::NUM_CENSUS_CLASSES; ++c)
@@ -1443,11 +1442,11 @@ void SKOverviewCensus::swapIn(Built& built)
             }
         }
         batch.mBuffer->unmapBuffer();
-        // On the ground when its cluster's base is no higher above the land under its middle than a step or two.
+        // On the ground when its cluster's base is no higher above the highest land under its footprint than a step or two.
         for (size_t g = 0; g < region.mGroups.size(); ++g)
         {
             Group& group = region.mGroups[g];
-            group.mGround = group.mMinZ <= LLWorld::getInstance()->resolveLandHeightGlobal(region.mMiddles[g]) +
+            group.mGround = group.mMinZ <= SKWorldCensus::landUnder(region.mFootprints[g].first, region.mFootprints[g].second) +
                                                skoverview::GROUND_BASE_M;
         }
         std::copy(std::begin(region.mStart), std::end(region.mStart), std::begin(batch.mStart));

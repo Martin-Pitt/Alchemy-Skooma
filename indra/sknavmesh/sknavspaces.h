@@ -148,6 +148,11 @@ namespace sknav
         F32 mZ = 0.f;
     };
 
+    constexpr F32 RASTER_XY_M = 0.5f;      ///< a Space::mRaster cell's side
+    constexpr F32 RASTER_Z_M = 1.f;        ///< and its height band
+    /// A Space::mRaster key's cell: its minimum corner, mZ the bottom of its band.
+    PlanCell rasterCell(U64 key);
+
     /// One straight run of a plan's boundary, from one cell corner to
     /// another, the plan's cells on its left, at the floor z it ran along.
     struct PlanEdge

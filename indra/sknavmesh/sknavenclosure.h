@@ -29,7 +29,9 @@
 #include "sknavskymap.h"
 #include "sknavtypes.h"
 
+#include <cmath>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <vector>
 
@@ -62,6 +64,7 @@ namespace sknav
     constexpr U8 ENCLOSURE_D_UNKNOWN = 0xff;
     constexpr F32 ENCLOSURE_D_UNIT_M = 0.25f;
     constexpr U8 ENCLOSURE_D_DEEP = ENCLOSURE_D_UNKNOWN - 1;   ///< the cap, what a sealed gap reads
+    constexpr F32 ENCLOSURE_D_UNKNOWN_M = std::numeric_limits<F32>::quiet_NaN(); ///< Enclosure::mD with no walk to the outside
     constexpr U8 ENCLOSURE_SEALED = 1 << 0;                     ///< reached from a sealed floor, not from outside
     constexpr U8 ENCLOSURE_CANOPY = 1 << 1;                     ///< roofed but open at the sides: capped at SHELTERED
 
@@ -102,11 +105,11 @@ namespace sknav
         std::vector<CoarseGap> mGaps;
     };
 
-    /// A read at a point: all zero and UNKNOWN when there is no answer.
+    /// A read at a point: UNKNOWN, D unknown and the rest zero when there is no answer.
     struct Enclosure
     {
         F32 mS = 0.f;
-        F32 mD = 0.f;
+        F32 mD = ENCLOSURE_D_UNKNOWN_M; ///< metres walked to the outside, NaN when unknown
         F32 mE = 0.f;
         F32 mO = 0.f;               ///< side openness
         EnclosureBucket mBucket = EnclosureBucket::UNKNOWN;
@@ -115,9 +118,30 @@ namespace sknav
         bool mSealed = false;       ///< INDOORS because no way in was found, D at its cap
         bool mCanopy = false;       ///< SHELTERED rather than INDOORS because roofed but open at the sides
         bool mFine = false;         ///< answered from detail air finer than the coarse cell
+        bool mAvatarFloor = false;  ///< AVATAR walks the solid under it; fine air only
         F32 mFloor = 0.f;           ///< the gap's, in the frame the read was asked in
         F32 mCeiling = 0.f;         ///< a very large number when open
+
+        bool depthKnown() const { return !std::isnan(mD); }
     };
+
+    /// One gap of a column read, with the height units enclosureAt tests it in.
+    struct ColumnGap
+    {
+        Enclosure mGap;             ///< as gapsAt hands it out
+        U16 mFloor = 0;             ///< in the tile's units over its origin
+        U16 mCeiling = 0;           ///< AIR_CEILING_OPEN when open
+        F32 mOriginZ = 0.f;
+        F32 mUnit = 0.f;
+    };
+    typedef std::vector<ColumnGap> GapColumn;
+
+    /// Whether a gap holds a height in its product's frame: the one test every point read applies.
+    bool gapHolds(F32 local_z, U16 floor, U16 ceiling, F32 origin_z, F32 unit);
+    /// The first gap of a column holding local_z, as EnclosureProduct::enclosureAt picks it.
+    bool columnEnclosureAt(const GapColumn& column, F32 local_z, Enclosure& out);
+    /// columnEnclosureAt, but under a solid or in a spaceless indoor pocket the highest gap in a space below it.
+    bool columnAirGapAt(const GapColumn& column, F32 local_z, Enclosure& out);
 
     struct TileEnclosure
     {
@@ -136,10 +160,12 @@ namespace sknav
 
     /// One mesh's answers. Positions are mesh-local.
     struct SkyMemo;
+    struct EnclosureMemo;
 
     struct EnclosureProduct
     {
         U64 mGeneration = 0;
+        U64 mSerial = 0;                       ///< unique to this product and never reused, unlike its address
         std::vector<TileEnclosure> mTiles;     ///< sorted by key
         U32 mGapCount = 0;
         U32 mUnknownGaps = 0;
@@ -151,12 +177,16 @@ namespace sknav
         std::vector<U32> mSpaceIds;            ///< per space the spaces pass cut, its id
         /// Each tile's sky reads, kept while its air and the sky map blocks they read stand.
         std::shared_ptr<const SkyMemo> mSkyMemo;
+        /// Each tile's graph and raw distances, what the next pass repairs rather than redoes.
+        std::shared_ptr<const EnclosureMemo> mMemo;
 
         const TileEnclosure* tile(const TileKey& key) const;
         /// The gap holding pos: detail where the tile has it, else coarse.
         bool enclosureAt(const LLVector3& pos, Enclosure& out) const;
         /// Every gap over (x, y), lowest first, with its answer.
         void gapsAt(F32 x, F32 y, const std::function<void(const Enclosure&)>& fn) const;
+        /// gapsAt with each gap's units, so a caller can read many heights from one column.
+        void columnAt(F32 x, F32 y, GapColumn& out) const;
         size_t bytes() const;
     };
     typedef std::shared_ptr<const EnclosureProduct> EnclosureProductPtr;
@@ -212,11 +242,25 @@ namespace sknav
         /// The product before anyone shares it, for the spaces pass to write
         /// each gap's space into.
         std::shared_ptr<EnclosureProduct> takeProduct();
+        /// Whether it repaired the previous answers rather than starting over.
+        bool repaired() const;
+        /// Tiles whose answers it worked out again, rather than kept.
+        U32 tilesAnswered() const;
+        /// Whether any tile's air, or any answer the spaces pass reads, moved
+        /// from the previous answers: false means the previous spaces still stand.
+        bool layoutMoved() const;
 
     private:
         struct State;
         std::unique_ptr<State> mState;
     };
+
+    /// A serial no other enclosure product has had.
+    U64 nextEnclosureSerial();
+
+    /// Copy the previous answers' spaces into a product over the same air, for
+    /// when the spaces pass is skipped.
+    void carrySpaces(EnclosureProduct& product, const EnclosureProduct& previous);
 
     /// Everything at once, for tests and tools.
     EnclosureProductPtr computeEnclosure(std::shared_ptr<const EnclosureInput> input);

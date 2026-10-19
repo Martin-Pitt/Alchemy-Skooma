@@ -1808,7 +1808,6 @@ void SKNetMap::drawReadout()
         lines.push_back(llformat("capture %d px, %.2f ms cpu, %.2f ms gpu, %u captures", stats.resolution, stats.cpu_ms, stats.gpu_ms,
                                  stats.captures));
     }
-    lines.push_back(llformat("navmesh %u tiles built", SKMapScene::instance().builtTiles()));
     const SKMapAllyResolver& resolver = SKMapPeople::instance().resolver();
     lines.push_back(llformat("probes %u in flight, %u queued", resolver.probesInFlight(), resolver.probesQueued()));
     const LLFontGL* font = LLFontGL::getFontMonospace();

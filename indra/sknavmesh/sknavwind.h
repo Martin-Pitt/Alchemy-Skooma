@@ -83,6 +83,7 @@ namespace sknav
             INDOORS = 1 << 2,
             COURTYARD = 1 << 3,
             DRAUGHT = 1 << 4,       ///< near a portal between sides that differ in S
+            UNKNOWN = 1 << 5,       ///< air whose enclosure has no answer, held calm
         };
         U8 mFactor = 0;             ///< speed in WIND_FACTOR_UNIT
         S8 mDeflect[2] = { 0, 0 };  ///< in WIND_DEFLECT_UNIT, x and y

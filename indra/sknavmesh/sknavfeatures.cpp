@@ -281,6 +281,183 @@ namespace
         return false;
     }
 
+    // A uuid as two words, for sorting by id without LLUUID's byte compare.
+    typedef std::pair<U64, U64> IdKey;
+
+    IdKey idKey(const LLUUID& id)
+    {
+        IdKey k;
+        std::memcpy(&k.first, id.mData, 8);
+        std::memcpy(&k.second, id.mData + 8, 8);
+        return k;
+    }
+
+    // Where a leaf's face rays run: its axes, and the box its neighbours are looked for in.
+    struct CoverFrame
+    {
+        S32 mUp = 0;
+        S32 mThin = 0;
+        S32 mWide = 0;
+        LLVector3d mMin;
+        LLVector3d mMax;
+    };
+
+    bool coverFrame(const FeaturePart& leaf, const FeatureParams& params, CoverFrame& f)
+    {
+        LLVector3 flat;
+        F32 thickness = 0.f;
+        if (!thinPanel(leaf, params, flat, thickness))
+        {
+            return false;
+        }
+        for (S32 k = 0; k < 3; ++k)
+        {
+            if (std::fabs(leaf.mAxes[k].mV[VZ]) >= 0.95f)
+            {
+                f.mUp = k;
+            }
+        }
+        const S32 a = (f.mUp + 1) % 3, b = (f.mUp + 2) % 3;
+        f.mThin = leaf.mHalf.mV[a] <= leaf.mHalf.mV[b] ? a : b;
+        f.mWide = f.mThin == a ? b : a;
+        const F64 reach = params.mFaceReach + leaf.mHalf.mV[f.mThin];
+        const LLVector3d grow_by(reach, reach, reach);
+        f.mMin = leaf.mMin - grow_by;
+        f.mMax = leaf.mMax + grow_by;
+        return true;
+    }
+
+    // The records faceCover casts against, by the same test it applies, in record order.
+    void nearbyRecords(const FeaturePart& leaf, const CoverFrame& f, const RecordIndex& index, std::vector<const RecordPtr*>& out)
+    {
+        index.query(f.mMin, f.mMax, out);
+        out.erase(std::remove_if(out.begin(), out.end(),
+                                 [&](const RecordPtr* p) {
+                                     const RecordPtr& r = *p;
+                                     return !(r && r->mPart != leaf.mPart && r->mRole == Role::NAV
+                                              && overlapsPlan(f.mMin, f.mMax, r->mMin, r->mMax) && r->mMin.mdV[VZ] <= f.mMax.mdV[VZ]
+                                              && r->mMax.mdV[VZ] >= f.mMin.mdV[VZ]);
+                                 }),
+                  out.end());
+    }
+
+    // The rays of faceCover, cast against only the triangles whose boxes
+    // meet the box every ray stays in: a ray cannot hit one that does not.
+    F32 castCover(const FeaturePart& leaf, const CoverFrame& f, const std::vector<const RecordPtr*>& nearby, const FeatureParams& params)
+    {
+        if (nearby.empty())
+        {
+            return 0.f;
+        }
+        const S32 up = f.mUp, thin = f.mThin, wide = f.mWide;
+        const LLVector3 n = leaf.mAxes[thin];
+        const S32 GRID = 8;
+        const F32 edge = 0.1f, sill = 0.15f, inset = std::min(0.01f, leaf.mHalf.mV[thin]);
+        const F32 ray = params.mFaceReach + inset;
+
+        // The leaf's own box, every ray's length and a margin for rounding around it.
+        LLVector3d span;
+        for (S32 k = 0; k < 3; ++k)
+        {
+            for (S32 j = 0; j < 3; ++j)
+            {
+                span.mdV[j] += std::fabs(leaf.mAxes[k].mV[j]) * leaf.mHalf.mV[k];
+            }
+        }
+        const F64 pad = ray + 0.05;
+        const LLVector3d lo = leaf.mCenter - span - LLVector3d(pad, pad, pad);
+        const LLVector3d hi = leaf.mCenter + span + LLVector3d(pad, pad, pad);
+
+        struct Target
+        {
+            const Record* mRecord;
+            size_t mFirst;
+            size_t mEnd;
+        };
+        std::vector<Target> targets;
+        std::vector<LLVector3> tris;
+        for (const RecordPtr* p : nearby)
+        {
+            const Record& r = **p;
+            if (r.mShape != Shape::TRIANGLES)
+            {
+                targets.push_back({ &r, 0, 0 });
+                continue;
+            }
+            if (!r.mTriangles)
+            {
+                continue;
+            }
+            const LLVector3 llo(lo - r.mOrigin), lhi(hi - r.mOrigin);
+            const size_t first = tris.size();
+            const std::vector<LLVector3>& t = *r.mTriangles;
+            for (size_t i = 0; i + 2 < t.size(); i += 3)
+            {
+                bool apart = false;
+                for (S32 k = 0; k < 3 && !apart; ++k)
+                {
+                    const F32 tmin = std::min(t[i].mV[k], std::min(t[i + 1].mV[k], t[i + 2].mV[k]));
+                    const F32 tmax = std::max(t[i].mV[k], std::max(t[i + 1].mV[k], t[i + 2].mV[k]));
+                    apart = tmax < llo.mV[k] || tmin > lhi.mV[k];
+                }
+                if (!apart)
+                {
+                    tris.insert(tris.end(), { t[i], t[i + 1], t[i + 2] });
+                }
+            }
+            if (tris.size() > first)
+            {
+                targets.push_back({ &r, first, tris.size() });
+            }
+        }
+        if (targets.empty())
+        {
+            return 0.f;
+        }
+
+        const F32 hw = std::max(0.f, leaf.mHalf.mV[wide] - edge);
+        const F32 low = -leaf.mHalf.mV[up] + sill, high = leaf.mHalf.mV[up] - edge;
+        F32 worst = 0.f;
+        for (const F32 side : { 1.f, -1.f })
+        {
+            const LLVector3 d = n * side;
+            S32 hit = 0;
+            for (S32 i = 0; i < GRID; ++i)
+            {
+                for (S32 j = 0; j < GRID; ++j)
+                {
+                    const F32 w = -hw + 2.f * hw * (i + 0.5f) / GRID;
+                    const F32 h = low + (high - low) * (j + 0.5f) / GRID;
+                    const LLVector3 off = d * (leaf.mHalf.mV[thin] - inset) + leaf.mAxes[wide] * w + leaf.mAxes[up] * h;
+                    const LLVector3d origin = leaf.mCenter + LLVector3d(off);
+                    for (const Target& t : targets)
+                    {
+                        const LLVector3 o(origin - t.mRecord->mOrigin);
+                        bool struck = false;
+                        if (t.mRecord->mShape != Shape::TRIANGLES)
+                        {
+                            struck = rayHitsBox(o, d, *t.mRecord, ray);
+                        }
+                        else
+                        {
+                            for (size_t k = t.mFirst; k < t.mEnd && !struck; k += 3)
+                            {
+                                struck = rayHitsTriangle(o, d, tris[k], tris[k + 1], tris[k + 2], ray);
+                            }
+                        }
+                        if (struck)
+                        {
+                            ++hit;
+                            break;
+                        }
+                    }
+                }
+            }
+            worst = std::max(worst, static_cast<F32>(hit) / (GRID * GRID));
+        }
+        return worst;
+    }
+
     // Two poses of one leaf are one when its centre and every half axis,
     // and so every corner, lie within the tolerance.
     bool samePose(const FeaturePart& a, const FeaturePart& b, F32 tolerance)
@@ -482,27 +659,195 @@ namespace sknav
         return worst;
     }
 
+    RecordIndex::RecordIndex(const std::vector<RecordPtr>& records, F64 cell) : mRecords(records), mCell(cell)
+    {
+        // A record spanning more cells than this is checked by every query instead.
+        const S64 MAX_CELLS = 64;
+        for (size_t i = 0; i < records.size(); ++i)
+        {
+            const RecordPtr& r = records[i];
+            if (!r)
+            {
+                continue;
+            }
+            const S64 x0 = static_cast<S64>(std::floor(r->mMin.mdV[VX] / mCell)), x1 = static_cast<S64>(std::floor(r->mMax.mdV[VX] / mCell));
+            const S64 y0 = static_cast<S64>(std::floor(r->mMin.mdV[VY] / mCell)), y1 = static_cast<S64>(std::floor(r->mMax.mdV[VY] / mCell));
+            if (x1 < x0 || y1 < y0 || (x1 - x0 + 1) * (y1 - y0 + 1) > MAX_CELLS)
+            {
+                mLarge.push_back(static_cast<U32>(i));
+                continue;
+            }
+            for (S64 x = x0; x <= x1; ++x)
+            {
+                for (S64 y = y0; y <= y1; ++y)
+                {
+                    mCells[(static_cast<U64>(static_cast<U32>(x)) << 32) | static_cast<U32>(y)].push_back(static_cast<U32>(i));
+                }
+            }
+        }
+    }
+
+    void RecordIndex::query(const LLVector3d& mn, const LLVector3d& mx, std::vector<const RecordPtr*>& out) const
+    {
+        std::vector<U32> found = mLarge;
+        const S64 x0 = static_cast<S64>(std::floor(mn.mdV[VX] / mCell)), x1 = static_cast<S64>(std::floor(mx.mdV[VX] / mCell));
+        const S64 y0 = static_cast<S64>(std::floor(mn.mdV[VY] / mCell)), y1 = static_cast<S64>(std::floor(mx.mdV[VY] / mCell));
+        for (S64 x = x0; x <= x1; ++x)
+        {
+            for (S64 y = y0; y <= y1; ++y)
+            {
+                const auto it = mCells.find((static_cast<U64>(static_cast<U32>(x)) << 32) | static_cast<U32>(y));
+                if (it != mCells.end())
+                {
+                    found.insert(found.end(), it->second.begin(), it->second.end());
+                }
+            }
+        }
+        std::sort(found.begin(), found.end());
+        found.erase(std::unique(found.begin(), found.end()), found.end());
+        out.clear();
+        for (U32 i : found)
+        {
+            out.push_back(&mRecords[i]);
+        }
+    }
+
+    F32 faceCover(const FeaturePart& leaf, const RecordIndex& index, const FeatureParams& params)
+    {
+        CoverFrame f;
+        if (!coverFrame(leaf, params, f))
+        {
+            return -1.f;
+        }
+        std::vector<const RecordPtr*> nearby;
+        nearbyRecords(leaf, f, index, nearby);
+        return castCover(leaf, f, nearby, params);
+    }
+
+    F32 FaceCoverCache::measure(const FeaturePart& leaf, const RecordIndex& index, const FeatureParams& params)
+    {
+        CoverFrame f;
+        if (!coverFrame(leaf, params, f))
+        {
+            return -1.f;
+        }
+        nearbyRecords(leaf, f, index, mScratch);
+        // The cast does not care in what order its records come.
+        std::sort(mScratch.begin(), mScratch.end(), [](const RecordPtr* a, const RecordPtr* b) { return a->get() < b->get(); });
+
+        Entry& e = mEntries[leaf.mPart];
+        bool same = e.mCover >= 0.f && e.mMin == leaf.mMin && e.mMax == leaf.mMax && e.mCenter == leaf.mCenter && e.mHalf == leaf.mHalf
+            && e.mAxes[0] == leaf.mAxes[0] && e.mAxes[1] == leaf.mAxes[1] && e.mAxes[2] == leaf.mAxes[2]
+            && std::memcmp(&e.mParams, &params, sizeof(FeatureParams)) == 0 && e.mNearby.size() == mScratch.size();
+        for (size_t i = 0; same && i < mScratch.size(); ++i)
+        {
+            same = e.mNearby[i].get() == mScratch[i]->get();
+        }
+        e.mUsed = true;
+        if (same)
+        {
+            ++mHits;
+            return e.mCover;
+        }
+        ++mMisses;
+        e.mMin = leaf.mMin;
+        e.mMax = leaf.mMax;
+        e.mCenter = leaf.mCenter;
+        e.mHalf = leaf.mHalf;
+        for (S32 k = 0; k < 3; ++k)
+        {
+            e.mAxes[k] = leaf.mAxes[k];
+        }
+        e.mParams = params;
+        e.mNearby.clear();
+        for (const RecordPtr* p : mScratch)
+        {
+            e.mNearby.push_back(*p);
+        }
+        e.mCover = castCover(leaf, f, mScratch, params);
+        return e.mCover;
+    }
+
+    void FaceCoverCache::prune()
+    {
+        for (auto it = mEntries.begin(); it != mEntries.end();)
+        {
+            if (!it->second.mUsed)
+            {
+                it = mEntries.erase(it);
+            }
+            else
+            {
+                it->second.mUsed = false;
+                ++it;
+            }
+        }
+    }
+
     std::vector<Feature> classifyFeatures(const std::vector<FeaturePart>& parts, const std::vector<FeatureRoot>& roots,
                                           const FeatureParams& params)
     {
         std::vector<Feature> out;
-        std::unordered_map<LLUUID, const FeatureRoot*> root_of;
-        for (const FeatureRoot& r : roots)
+        // Parts sorted by root, each root's in part order, so a root's loop
+        // does not walk every part; and each part's root facts, the last
+        // given for its id.
+        std::vector<std::pair<IdKey, S32>> part_keys(parts.size());
+        for (size_t i = 0; i < parts.size(); ++i)
         {
-            root_of[r.mRoot] = &r;
+            part_keys[i] = { idKey(parts[i].mRoot), static_cast<S32>(i) };
         }
-        auto rootFacts = [&](const LLUUID& id) -> const FeatureRoot* {
-            const auto it = root_of.find(id);
-            return it == root_of.end() ? nullptr : it->second;
+        std::sort(part_keys.begin(), part_keys.end());
+        std::vector<std::pair<IdKey, S32>> root_keys(roots.size());
+        for (size_t i = 0; i < roots.size(); ++i)
+        {
+            root_keys[i] = { idKey(roots[i].mRoot), static_cast<S32>(i) };
+        }
+        std::sort(root_keys.begin(), root_keys.end());
+        std::vector<S32> by_root(parts.size());
+        std::vector<const FeatureRoot*> root_at(parts.size(), nullptr);
+        for (size_t k = 0, r = 0; k < part_keys.size(); ++k)
+        {
+            by_root[k] = part_keys[k].second;
+            const IdKey& id = part_keys[k].first;
+            while (r < root_keys.size() && root_keys[r].first < id)
+            {
+                ++r;
+            }
+            for (size_t last = r; last < root_keys.size() && root_keys[last].first == id; ++last)
+            {
+                root_at[by_root[k]] = &roots[root_keys[last].second];
+            }
+        }
+        struct PartRange
+        {
+            std::vector<S32>::const_iterator mBegin, mEnd;
+            std::vector<S32>::const_iterator begin() const { return mBegin; }
+            std::vector<S32>::const_iterator end() const { return mEnd; }
+        };
+        auto partsOf = [&](const LLUUID& root) {
+            const IdKey id = idKey(root);
+            const auto lo = std::lower_bound(part_keys.cbegin(), part_keys.cend(), std::make_pair(id, S32(-1)));
+            auto hi = lo;
+            while (hi != part_keys.cend() && hi->first == id)
+            {
+                ++hi;
+            }
+            return PartRange { by_root.cbegin() + (lo - part_keys.cbegin()), by_root.cbegin() + (hi - part_keys.cbegin()) };
         };
         std::vector<bool> claimed(parts.size(), false);
 
         // A root named as an elevator's car is never a door or a vehicle,
         // whoever rides it; whether it is a car is settled by the shaft below.
         // An Elevator Door is a landing's leaf, and a ForkLift no lift.
-        auto carName = [](const FeatureRoot* r) {
-            return r && !containsWordNoCase(r->mName, "door")
-                && (containsWordNoCase(r->mName, "elevator") || containsWordNoCase(r->mName, "lift", false));
+        std::vector<bool> car_named(roots.size());
+        for (size_t i = 0; i < roots.size(); ++i)
+        {
+            const std::string& name = roots[i].mName;
+            car_named[i] = !containsWordNoCase(name, "door")
+                && (containsWordNoCase(name, "elevator") || containsWordNoCase(name, "lift", false));
+        }
+        auto carName = [&](const FeatureRoot* r) {
+            return r && car_named[r - roots.data()];
         };
 
         // Vehicles and seats: a linkset someone has sat on this session. Whether
@@ -525,15 +870,12 @@ namespace sknav
                 grow(f.mMin, f.mMax, r.mMin, r.mMax, true);
                 first = false;
             }
-            for (size_t i = 0; i < parts.size(); ++i)
+            for (const S32 i : partsOf(r.mRoot))
             {
-                if (parts[i].mRoot == r.mRoot)
-                {
-                    claimed[i] = true;
-                    f.mParts.push_back(parts[i].mPart);
-                    grow(f.mMin, f.mMax, parts[i].mMin, parts[i].mMax, first);
-                    first = false;
-                }
+                claimed[i] = true;
+                f.mParts.push_back(parts[i].mPart);
+                grow(f.mMin, f.mMax, parts[i].mMin, parts[i].mMax, first);
+                first = false;
             }
             f.mEvidence = travelled ? llformat("crewed, travelled %.0f m", r.mTravel)
                         : r.mPhysical   ? std::string("crewed, physical")
@@ -564,7 +906,7 @@ namespace sknav
             std::vector<S32> named;
             for (size_t i = 0; i < parts.size(); ++i)
             {
-                const FeatureRoot* r = rootFacts(parts[i].mRoot);
+                const FeatureRoot* r = root_at[i];
                 if (!claimed[i] && r && containsNoCase(r->mName, "ladder"))
                 {
                     named.push_back(static_cast<S32>(i));
@@ -592,6 +934,63 @@ namespace sknav
                         }
                     }
                 }
+                // Unclaimed parts on a plan grid: a stacked piece shares plan
+                // with its member, so only the cells under the member hold one.
+                const F64 CELL = 16.0;
+                const S64 MAX_CELLS = 64;
+                auto cellOf = [&](F64 v) { return static_cast<S64>(std::floor(v / CELL)); };
+                auto keyOf = [](S64 x, S64 y) { return (static_cast<U64>(static_cast<U32>(x)) << 32) | static_cast<U32>(y); };
+                std::vector<std::pair<U64, S32>> grid;     // sorted by cell, then part
+                std::vector<S32> large;
+                for (size_t j = 0; j < parts.size(); ++j)
+                {
+                    if (claimed[j])
+                    {
+                        continue;
+                    }
+                    const FeaturePart& p = parts[j];
+                    const S64 x0 = cellOf(p.mMin.mdV[VX]), x1 = cellOf(p.mMax.mdV[VX]), y0 = cellOf(p.mMin.mdV[VY]), y1 = cellOf(p.mMax.mdV[VY]);
+                    if (x1 < x0 || y1 < y0 || (x1 - x0 + 1) * (y1 - y0 + 1) > MAX_CELLS)
+                    {
+                        large.push_back(static_cast<S32>(j));
+                        continue;
+                    }
+                    for (S64 x = x0; x <= x1; ++x)
+                    {
+                        for (S64 y = y0; y <= y1; ++y)
+                        {
+                            grid.emplace_back(keyOf(x, y), static_cast<S32>(j));
+                        }
+                    }
+                }
+                std::sort(grid.begin(), grid.end());
+                std::vector<S32> around;
+                auto nearOf = [&](const FeaturePart& p) {
+                    around = large;
+                    const S64 x0 = cellOf(p.mMin.mdV[VX]), x1 = cellOf(p.mMax.mdV[VX]), y0 = cellOf(p.mMin.mdV[VY]), y1 = cellOf(p.mMax.mdV[VY]);
+                    if (x1 < x0 || y1 < y0 || (x1 - x0 + 1) * (y1 - y0 + 1) > MAX_CELLS)
+                    {
+                        // A member too large to look up by cell is checked against every part.
+                        around.resize(parts.size());
+                        std::iota(around.begin(), around.end(), 0);
+                        return;
+                    }
+                    for (S64 x = x0; x <= x1; ++x)
+                    {
+                        for (S64 y = y0; y <= y1; ++y)
+                        {
+                            const U64 key = keyOf(x, y);
+                            for (auto it = std::lower_bound(grid.begin(), grid.end(), std::make_pair(key, S32(-1)));
+                                 it != grid.end() && it->first == key; ++it)
+                            {
+                                around.push_back(it->second);
+                            }
+                        }
+                    }
+                    std::sort(around.begin(), around.end());
+                    around.erase(std::unique(around.begin(), around.end()), around.end());
+                };
+
                 // Grow until nothing more joins: a piece stacked on a piece
                 // stacked on the named one is still the same ladder.
                 std::vector<S32> members = named;
@@ -601,8 +1000,10 @@ namespace sknav
                     const size_t count = members.size();
                     for (size_t m = 0; m < count; ++m)
                     {
-                        for (size_t j = 0; j < parts.size(); ++j)
+                        nearOf(parts[members[m]]);
+                        for (const S32 jj : around)
                         {
+                            const size_t j = static_cast<size_t>(jj);
                             if (claimed[j] || static_cast<S32>(j) == members[m] || !stacked(parts[members[m]], parts[j], params))
                             {
                                 continue;
@@ -677,7 +1078,7 @@ namespace sknav
         for (size_t i = 0; i < parts.size(); ++i)
         {
             const FeaturePart& p = parts[i];
-            const FeatureRoot* r = rootFacts(p.mRoot);
+            const FeatureRoot* r = root_at[i];
             LLVector3 normal;
             F32 thickness = 0.f;
             if (claimed[i] || carName(r) || p.mSeeThrough > 0.5f || !thinPanel(p, params, normal, thickness))
@@ -749,11 +1150,21 @@ namespace sknav
         }
 
         // Two leaves side by side in one plane, touching, are one double door.
+        // Swept along x, since a pair's boxes overlap there; each pair is
+        // still tested in leaf order, as the test is not symmetric.
         Groups pairs(leaves.size());
-        for (size_t a = 0; a < leaves.size(); ++a)
+        std::vector<S32> along_x(leaves.size());
+        std::iota(along_x.begin(), along_x.end(), 0);
+        std::sort(along_x.begin(), along_x.end(), [&](S32 u, S32 v) {
+            return parts[leaves[u].mPart].mMin.mdV[VX] < parts[leaves[v].mPart].mMin.mdV[VX];
+        });
+        for (size_t u = 0; u < along_x.size(); ++u)
         {
-            for (size_t b = a + 1; b < leaves.size(); ++b)
+            const F64 reach = parts[leaves[along_x[u]].mPart].mMax.mdV[VX] + 0.06;
+            for (size_t v = u + 1; v < along_x.size() && parts[leaves[along_x[v]].mPart].mMin.mdV[VX] <= reach; ++v)
             {
+                const size_t a = static_cast<size_t>(std::min(along_x[u], along_x[v]));
+                const size_t b = static_cast<size_t>(std::max(along_x[u], along_x[v]));
                 if (sideBySide(parts[leaves[a].mPart], leaves[a].mNormal, leaves[a].mThickness, parts[leaves[b].mPart],
                                leaves[b].mNormal, leaves[b].mThickness))
                 {
@@ -790,11 +1201,19 @@ namespace sknav
         const size_t door_count = out.size() - first_door;
 
         // Shafts: doors stacked on one vertical line, a storey or more apart.
+        // Swept along x, since stacked doors' centres are close there.
         Groups stacks(door_count);
-        for (size_t a = 0; a < door_count; ++a)
+        std::vector<S32> doors_x(door_count);
+        std::iota(doors_x.begin(), doors_x.end(), 0);
+        auto centreX = [&](S32 k) { return (out[first_door + k].mMin.mdV[VX] + out[first_door + k].mMax.mdV[VX]) * 0.5; };
+        std::sort(doors_x.begin(), doors_x.end(), [&](S32 u, S32 v) { return centreX(u) < centreX(v); });
+        for (size_t u = 0; u < doors_x.size(); ++u)
         {
-            for (size_t b = a + 1; b < door_count; ++b)
+            const F64 reach = centreX(doors_x[u]) + params.mDoorLine + 1e-3;
+            for (size_t v = u + 1; v < doors_x.size() && centreX(doors_x[v]) <= reach; ++v)
             {
+                const size_t a = static_cast<size_t>(std::min(doors_x[u], doors_x[v]));
+                const size_t b = static_cast<size_t>(std::max(doors_x[u], doors_x[v]));
                 const Feature& da = out[first_door + a];
                 const Feature& db = out[first_door + b];
                 if (std::fabs(da.mNormal * db.mNormal) < 0.98f)
@@ -856,9 +1275,9 @@ namespace sknav
                 bool scripted = r.mScripted == TriState::YES || r.mWorkingElevator;
                 LLVector3d bmin = r.mMin, bmax = r.mMax;
                 bool have = r.mHasBounds;
-                for (size_t i = 0; i < parts.size(); ++i)
+                for (const S32 i : partsOf(r.mRoot))
                 {
-                    if (parts[i].mRoot == r.mRoot && !claimed[i])
+                    if (!claimed[i])
                     {
                         mine.push_back(static_cast<S32>(i));
                         scripted = scripted || parts[i].mScripted;
@@ -924,15 +1343,41 @@ namespace sknav
     std::vector<DoorEntity> buildDoorEntities(const std::vector<Feature>& features, const std::vector<FeaturePart>& parts,
                                               const std::vector<FeatureRoot>& roots, LeafHistories* histories)
     {
+        // Only the doors' leaves and their roots are looked up, so only they are kept.
         std::unordered_map<LLUUID, const FeaturePart*> part_of;
-        for (const FeaturePart& p : parts)
+        for (const Feature& f : features)
         {
-            part_of[p.mPart] = &p;
+            if (f.mKind == FeatureKind::DOOR)
+            {
+                for (const LLUUID& id : f.mParts)
+                {
+                    part_of.emplace(id, nullptr);
+                }
+            }
         }
         std::unordered_map<LLUUID, const FeatureRoot*> root_of;
+        for (const FeaturePart& p : parts)
+        {
+            if (const auto it = part_of.find(p.mPart); it != part_of.end())
+            {
+                it->second = &p;
+                root_of.emplace(p.mRoot, nullptr);
+            }
+        }
+        for (auto it = part_of.begin(); it != part_of.end();)
+        {
+            it = it->second ? std::next(it) : part_of.erase(it);
+        }
         for (const FeatureRoot& r : roots)
         {
-            root_of[r.mRoot] = &r;
+            if (const auto it = root_of.find(r.mRoot); it != root_of.end())
+            {
+                it->second = &r;
+            }
+        }
+        for (auto it = root_of.begin(); it != root_of.end();)
+        {
+            it = it->second ? std::next(it) : root_of.erase(it);
         }
 
         // The classifier pairs leaves as they stand, so a double door with a
@@ -968,15 +1413,27 @@ namespace sknav
             }
             doors.push_back(f);
         }
+        // Swept along x as the classifier pairs them, each pair still tested in leaf order.
         Groups joined(doors.size());
+        std::vector<LLVector3> axis(rest_of.size());
+        std::vector<F32> thick(rest_of.size());
+        std::vector<S32> along_x(rest_of.size());
         for (size_t a = 0; a < rest_of.size(); ++a)
         {
-            for (size_t b = a + 1; b < rest_of.size(); ++b)
+            axis[a] = thinAxis(rest_of[a]);
+            thick[a] = 2.f * std::min(rest_of[a].mHalf.mV[0], std::min(rest_of[a].mHalf.mV[1], rest_of[a].mHalf.mV[2]));
+            along_x[a] = static_cast<S32>(a);
+        }
+        std::sort(along_x.begin(), along_x.end(), [&](S32 u, S32 v) { return rest_of[u].mMin.mdV[VX] < rest_of[v].mMin.mdV[VX]; });
+        for (size_t u = 0; u < along_x.size(); ++u)
+        {
+            const F64 reach = rest_of[along_x[u]].mMax.mdV[VX] + 0.06;
+            for (size_t v = u + 1; v < along_x.size() && rest_of[along_x[v]].mMin.mdV[VX] <= reach; ++v)
             {
-                const LLVector3 na = thinAxis(rest_of[a]), nb = thinAxis(rest_of[b]);
-                if (door_of_leaf[a] != door_of_leaf[b] && !na.isExactlyZero() && !nb.isExactlyZero()
-                    && sideBySide(rest_of[a], na, 2.f * std::min(rest_of[a].mHalf.mV[0], std::min(rest_of[a].mHalf.mV[1], rest_of[a].mHalf.mV[2])),
-                                  rest_of[b], nb, 2.f * std::min(rest_of[b].mHalf.mV[0], std::min(rest_of[b].mHalf.mV[1], rest_of[b].mHalf.mV[2]))))
+                const size_t a = static_cast<size_t>(std::min(along_x[u], along_x[v]));
+                const size_t b = static_cast<size_t>(std::max(along_x[u], along_x[v]));
+                if (door_of_leaf[a] != door_of_leaf[b] && !axis[a].isExactlyZero() && !axis[b].isExactlyZero()
+                    && sideBySide(rest_of[a], axis[a], thick[a], rest_of[b], axis[b], thick[b]))
                 {
                     joined.unite(door_of_leaf[a], door_of_leaf[b]);
                 }
@@ -1158,8 +1615,34 @@ namespace sknav
         history.mLastSeen = now;
     }
 
+    bool establishedDoorway(const LeafHistory& history, FeaturePart& out)
+    {
+        if (!history.mSeen || history.mRests.empty())
+        {
+            return false;
+        }
+        const size_t i = std::max_element(history.mDwell.begin(), history.mDwell.end()) - history.mDwell.begin();
+        if (history.mDwell[i] < DOORWAY_ESTABLISHED_SECONDS)
+        {
+            return false;
+        }
+        out = history.mRests[i];
+        return true;
+    }
+
+    bool atEstablishedDoorway(const LeafHistory& history, F32 tolerance)
+    {
+        FeaturePart doorway;
+        return !history.mMoving && establishedDoorway(history, doorway) && samePose(history.mLast, doorway, tolerance);
+    }
+
     bool doorwayPose(const LeafHistory& history, FeaturePart& out)
     {
+        // A swing through an established doorway keeps it.
+        if (history.mMoving && establishedDoorway(history, out))
+        {
+            return true;
+        }
         if (!history.mSeen || history.mMoving || history.mRests.empty())
         {
             return false;

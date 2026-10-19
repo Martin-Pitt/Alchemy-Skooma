@@ -252,6 +252,8 @@ private:
     {
         F64 mAt = 0.0;
         F64 mFloor = 0.0;
+        U64 mRevision = 0;      ///< the world view's, so a rebuilt or teleported-from room is flooded afresh
+        U64 mRegion = 0;
         std::shared_ptr<std::set<std::pair<S32, S32>>> mCells;
     };
     std::vector<Room> mRooms;
@@ -264,6 +266,16 @@ private:
         F64 mSeen = 0.0;
     };
     std::map<LLUUID, Outdoors> mOutdoors;
+    /// Someone's air column, read once a frame for the cut, the dissolve and their whereabouts; null with no air.
+    const SKNavWorldView::AirColumn* columnOf(const SKNavWorldViewPtr& world, const LLUUID& id, const LLVector3d& feet, F64 now);
+    struct HeldColumn
+    {
+        F64 mAt = -1.0;
+        U64 mRevision = 0;
+        LLVector3d mXY;
+        SKNavWorldView::AirColumn mColumn;
+    };
+    std::map<LLUUID, HeldColumn> mColumns;
     /// What the last tactical capture showed: the same again reuses its image.
     struct TacticalKey
     {

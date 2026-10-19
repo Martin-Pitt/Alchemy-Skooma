@@ -31,6 +31,7 @@
 #include "sknavannotator.h"
 #include "sknavcensusio.h"
 #include "sknavexport.h"
+#include "sknavfloors.h"
 #include "sknavlayout.h"
 #include "sknavoverlay.h"
 #include "sknavpalette.h"
@@ -213,7 +214,7 @@ bool SKNavMesh::overlayActive()
     // in the way of what they are for.
     return gSavedSettings.getBOOL("SKNavOverlayWalls") || gSavedSettings.getBOOL("SKNavOverlayFaces") || gSavedSettings.getBOOL("SKNavOverlayRunoff")
         || gSavedSettings.getBOOL("SKNavOverlayCensus") || gSavedSettings.getBOOL("SKNavOverlayFeatures")
-        || gSavedSettings.getU32("SKNavOverlayEnclosure") != 0 || gSavedSettings.getBOOL("SKNavOverlaySpaces")
+        || gSavedSettings.getBOOL("SKNavOverlaySpaces")
         || gSavedSettings.getBOOL("SKNavOverlayWind") || gSavedSettings.getU32("SKNavOverlayAir") != 0;
 }
 
@@ -242,13 +243,31 @@ bool SKNavMesh::probesDemanded()
     return room_probes && probe_level >= 3 && LLPipeline::sReflectionProbesEnabled;
 }
 
+namespace
+{
+    // Squared XY distance from a point to a box, 0 inside it.
+    F64 distanceXYSquared(const LLVector3d& lo, const LLVector3d& hi, const LLVector3d& point)
+    {
+        const F64 dx = llmax(lo.mdV[VX] - point.mdV[VX], 0.0, point.mdV[VX] - hi.mdV[VX]);
+        const F64 dy = llmax(lo.mdV[VY] - point.mdV[VY], 0.0, point.mdV[VY] - hi.mdV[VY]);
+        return dx * dx + dy * dy;
+    }
+}
+
 bool SKNavMesh::inAirRadius(const Tile& tile) const
 {
-    static LLCachedControl<F32> radius(gSavedSettings, "SKNavAirRadius", 128.f);
-    const LLVector3d camera = gAgent.getPosGlobalFromAgent(LLViewerCamera::getInstance()->getOrigin());
-    const F64 dx = llmax(tile.mMin.mdV[VX] - camera.mdV[VX], 0.0, camera.mdV[VX] - tile.mMax.mdV[VX]);
-    const F64 dy = llmax(tile.mMin.mdV[VY] - camera.mdV[VY], 0.0, camera.mdV[VY] - tile.mMax.mdV[VY]);
-    if (dx * dx + dy * dy <= static_cast<F64>(radius) * radius)
+    static LLCachedControl<F32> radius(gSavedSettings, "SKNavAirRadius", 300.f);
+    static LLCachedControl<F32> agent_radius(gSavedSettings, "SKNavAirAgentRadius", 30.f);
+    auto closeTo = [&tile](const LLVector3d& point, F64 r)
+    {
+        return distanceXYSquared(tile.mMin, tile.mMax, point) <= r * r;
+    };
+    if (closeTo(gAgent.getPosGlobalFromAgent(LLViewerCamera::getInstance()->getOrigin()), radius))
+    {
+        return true;
+    }
+    // Fine air follows the agent as well as the camera.
+    if (closeTo(gAgent.getPositionGlobal(), agent_radius))
     {
         return true;
     }
@@ -397,7 +416,7 @@ std::shared_ptr<TileDiskCache> SKNavMesh::diskCache()
 void SKNavMesh::evictAir()
 {
     static LLCachedControl<U32> budget_mb(gSavedSettings, "SKNavAirBudgetMB", 512);
-    static LLCachedControl<F32> radius(gSavedSettings, "SKNavAirRadius", 128.f);
+    static LLCachedControl<F32> radius(gSavedSettings, "SKNavAirRadius", 300.f);
     auto workers = workerQueue();
     if (mEvictionJob.valid())
     {
@@ -466,13 +485,13 @@ void SKNavMesh::evictAir()
     }
     if (!mEvictionScan) mEvictionScan = std::make_shared<std::vector<AirCandidate>>();
     const LLVector3d camera = gAgent.getPosGlobalFromAgent(LLViewerCamera::getInstance()->getOrigin());
+    const LLVector3d agent = gAgent.getPositionGlobal();
     const F64 dt = llclamp(static_cast<F64>(gFrameIntervalSeconds), 0.0, 1.0);
     if (!mEvictionScanReady && !scanTiles(mEvictionCursor, 0.001f, [&](Mesh& mesh, const TileKey& key, Tile& tile)
         {
             if ((!tile.mAir && !tile.mRaster) || tile.mInFlight) return;
-            const F64 dx = llmax(tile.mMin.mdV[VX] - camera.mdV[VX], 0.0, camera.mdV[VX] - tile.mMax.mdV[VX]);
-            const F64 dy = llmax(tile.mMin.mdV[VY] - camera.mdV[VY], 0.0, camera.mdV[VY] - tile.mMax.mdV[VY]);
-            const F64 distance = std::sqrt(dx * dx + dy * dy);
+            // The nearer of the camera and the agent, so the agent's disc keeps what inAirRadius holds.
+            const F64 distance = std::sqrt(llmin(distanceXYSquared(tile.mMin, tile.mMax, camera), distanceXYSquared(tile.mMin, tile.mMax, agent)));
             if (tile.mRaster)
             {
                 mRasterScan.push_back({mesh.mId, mesh.mGeneration, key, tile.mRaster, tile.mRaster->bytes(), distance, meshPriority(mesh)});
@@ -1277,19 +1296,7 @@ bool SKNavMesh::grounded(const Cluster& cluster) const
     }
     // The highest ground under the cluster's footprint: a structure on a slope
     // stands on the high side of it.
-    LLWorld* world = LLWorld::getInstance();
-    const LLVector3d corners[5] = {
-        cluster.mMin,
-        LLVector3d(cluster.mMax.mdV[VX], cluster.mMin.mdV[VY], 0.0),
-        LLVector3d(cluster.mMin.mdV[VX], cluster.mMax.mdV[VY], 0.0),
-        cluster.mMax,
-        (cluster.mMin + cluster.mMax) * 0.5,
-    };
-    F32 land = -1e9f;
-    for (const LLVector3d& corner : corners)
-    {
-        land = llmax(land, static_cast<F32>(world->resolveLandHeightGlobal(corner)));
-    }
+    const F32 land = SKWorldCensus::landUnder(cluster.mMin, cluster.mMax);
     return static_cast<F32>(cluster.mMin.mdV[VZ]) - land <= margin;
 }
 
@@ -1904,6 +1911,7 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
             tile.mStaticAt = 0.0;
             tile.mRaster.reset();
         }
+        markSpansDirty(tile);
         tileBlip(mesh, tile);
         if (SKMapRecorder::isRecording())
         {
@@ -1997,17 +2005,7 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
         tile.mBuilt = 0;            // scheduled again, and built rather than loaded
         tile.mDiskRefused = true;
     }
-    // The floors beside a ladder or a shaft may have moved with the tile.
-    for (auto& region : mFeatureLinks)
-    {
-        for (auto& entry : region.second)
-        {
-            if (overlapsXY(entry.second.mMin, entry.second.mMax, tile.mMin, tile.mMax))
-            {
-                entry.second.mDirty = true;
-            }
-        }
-    }
+    markSpansDirty(tile);
     tileBlip(mesh, tile);
     if (SKMapRecorder::isRecording())
     {
@@ -2497,16 +2495,7 @@ void SKNavMesh::publishStamped(const LLUUID& mesh_id, U32 generation, const Tile
     {
         tile.mRaster.reset();
     }
-    for (auto& region : mFeatureLinks)
-    {
-        for (auto& entry : region.second)
-        {
-            if (overlapsXY(entry.second.mMin, entry.second.mMax, tile.mMin, tile.mMax))
-            {
-                entry.second.mDirty = true;
-            }
-        }
-    }
+    markSpansDirty(tile);
     tileBlip(mesh, tile);
     if (SKMapRecorder::isRecording())
     {
@@ -4192,6 +4181,21 @@ void SKNavMesh::syncFeatureLinks(const SKCensusSnapshotPtr& snap)
     }
 }
 
+void SKNavMesh::markSpansDirty(const Tile& tile)
+{
+    // The floors beside a ladder or a shaft may have moved with the tile.
+    for (auto& region : mFeatureLinks)
+    {
+        for (auto& entry : region.second)
+        {
+            if (overlapsXY(entry.second.mMin, entry.second.mMax, tile.mMin, tile.mMax))
+            {
+                entry.second.mDirty = true;
+            }
+        }
+    }
+}
+
 void SKNavMesh::findExits(FeatureSpan& span) const
 {
     TileBuildInput probe;
@@ -4201,6 +4205,7 @@ void SKNavMesh::findExits(FeatureSpan& span) const
     // probed round the span's plan an agent's radius out, every half metre.
     const F64 above = 1.25;
     const F64 step = 0.5;
+    const std::shared_ptr<const SKNavWorldView> view = mPolysOn ? nullptr : this->view();
     for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
     {
         span.mExits[cls].clear();
@@ -4212,14 +4217,26 @@ void SKNavMesh::findExits(FeatureSpan& span) const
         const F64 xm = (x0 + x1) * 0.5, ym = (y0 + y1) * 0.5;
         const LLVector3d ring[8] = { LLVector3d(x0, y0, 0), LLVector3d(xm, y0, 0), LLVector3d(x1, y0, 0), LLVector3d(x1, ym, 0),
                                      LLVector3d(x1, y1, 0), LLVector3d(xm, y1, 0), LLVector3d(x0, y1, 0), LLVector3d(x0, ym, 0) };
+        // With polys off the floors are the air's, each ring point's column read once.
+        std::vector<sknav::Enclosure> columns[8];
+        if (!mPolysOn && view)
+        {
+            for (size_t k = 0; k < 8; ++k)
+            {
+                view->gapsAt(ring[k], [&columns, k](const sknav::Enclosure& e) { columns[k].push_back(e); });
+            }
+        }
         std::vector<LLVector3d> found;
         for (F64 z = span.mMin.mdV[VZ]; z <= span.mMax.mdV[VZ] + above; z += step)
         {
-            for (const LLVector3d& at : ring)
+            for (size_t k = 0; k < 8; ++k)
             {
+                const LLVector3d& at = ring[k];
                 F32 floor = 0.f;
                 const LLVector3d p(at.mdV[VX], at.mdV[VY], z);
-                if (floorUnder(p, static_cast<AgentClass>(cls), floor) && std::fabs(floor - z) <= climb
+                const bool has = mPolysOn ? floorUnder(p, static_cast<AgentClass>(cls), floor)
+                                          : sknav::pickFloor(columns[k], static_cast<F32>(z - climb), static_cast<F32>(z + climb), floor);
+                if (has && std::fabs(floor - z) <= climb
                     && floor >= span.mMin.mdV[VZ] - climb && floor <= span.mMax.mdV[VZ] + above)
                 {
                     found.emplace_back(at.mdV[VX], at.mdV[VY], floor);
@@ -4772,6 +4789,43 @@ std::string SKNavMesh::markUnderCamera()
         }
     }
 
+    // The air the mark stands in, and every gap in its column, as the enclosure pass answered them.
+    if (const std::shared_ptr<const SKNavWorldView> world = this->view())
+    {
+        static const char* buckets[] = { "outdoors", "sheltered", "indoors", "unknown" };
+        auto bucket = [](sknav::EnclosureBucket b) { return buckets[std::min<size_t>(static_cast<size_t>(b), 3)]; };
+        auto ceiling = [](F32 c) { return c > 1e29f ? std::string("open") : llformat("%.2f", c); };
+        sknav::Enclosure gap;
+        if (world->enclosureAt(mMark, gap))
+        {
+            SKNavWorldView::SpaceId space;
+            const bool in_space = world->spaceAt(mMark, space);
+            out << "air gap " << llformat("%.2f", gap.mFloor) << ".." << ceiling(gap.mCeiling) << " " << bucket(gap.mBucket)
+                << " S " << llformat("%.2f", gap.mS) << " E " << llformat("%.2f", gap.mE) << " D "
+                << (gap.depthKnown() ? llformat("%.2f", gap.mD) : std::string("unknown"));
+            if (in_space)
+            {
+                out << " space " << space.mMesh << ":" << space.mId;
+            }
+            out << (gap.mSealed ? " sealed" : "") << (gap.mCanopy ? " canopy" : "") << "\n";
+        }
+        else
+        {
+            out << "no air gap\n";
+        }
+        S32 total = 0;
+        world->gapsAt(mMark, [&](const sknav::Enclosure& g) {
+            if (total++ < 8)
+            {
+                out << "  column gap " << llformat("%.2f", g.mFloor) << ":" << ceiling(g.mCeiling) << ":" << bucket(g.mBucket) << "\n";
+            }
+        });
+        if (total > 8)
+        {
+            out << "  ... and " << (total - 8) << " more gaps\n";
+        }
+    }
+
     // The polygon each class actually has here, with its corners: a shape that
     // reads as degenerate on screen is one to measure rather than squint at.
     for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
@@ -5125,7 +5179,7 @@ std::string SKNavMesh::exportCensus() const
     {
         return "no census yet";
     }
-    static LLCachedControl<F32> air_radius(gSavedSettings, "SKNavAirRadius", 128.f);
+    static LLCachedControl<F32> air_radius(gSavedSettings, "SKNavAirRadius", 300.f);
     static LLCachedControl<F32> gap(gSavedSettings, "SKNavClusterGap", 0.5f);
     static LLCachedControl<F32> grounded_margin(gSavedSettings, "SKNavGroundedMargin", 5.f);
     static LLCachedControl<F32> void_margin(gSavedSettings, "SKNavVoidMargin", 256.f);
@@ -5661,7 +5715,6 @@ void SKNavMesh::refreshOverlay()
     static LLCachedControl<bool> show_walls(gSavedSettings, "SKNavOverlayWalls", true);
     static LLCachedControl<bool> show_faces(gSavedSettings, "SKNavOverlayFaces", false);
     static LLCachedControl<bool> show_links(gSavedSettings, "SKNavOverlayLinks", true);
-    static LLCachedControl<U32> show_enclosure(gSavedSettings, "SKNavOverlayEnclosure", 0);
     static LLCachedControl<bool> show_spaces(gSavedSettings, "SKNavOverlaySpaces", false);
     static LLCachedControl<bool> show_wind(gSavedSettings, "SKNavOverlayWind", false);
     static LLCachedControl<F32> wind_heading(gSavedSettings, "SKNavOverlayWindHeading", -1.f);
@@ -5728,8 +5781,7 @@ void SKNavMesh::refreshOverlay()
     key = mixF32(key, static_cast<F32>(peek));
     key = mixF32(key, eye);
     key = mix(key, mHasMark ? 1ull : 0ull);
-    key = mix(key, static_cast<U64>(show_enclosure));
-    key = mix(key, show_enclosure || show_spaces ? mRooms->revision() : 0ull);
+    key = mix(key, show_spaces ? mRooms->revision() : 0ull);
     key = mix(key, show_spaces ? 1ull : 0ull);
     // The spaces layer greys the portals an annotation has crossed out, so
     // it re-gathers when the marks move.
@@ -5752,20 +5804,9 @@ void SKNavMesh::refreshOverlay()
     key = mix(key, static_cast<U64>(show_air));
     if (show_air)
     {
-        static LLCachedControl<U32> air_source(gSavedSettings, "SKNavOverlayAirSource", 0);
-        static LLCachedControl<F32> air_slice(gSavedSettings, "SKNavOverlayAirSlice", 0.f);
-        static LLCachedControl<bool> air_slice_camera(gSavedSettings, "SKNavOverlayAirSliceCamera", false);
         static LLCachedControl<U32> air_budget(gSavedSettings, "SKNavOverlayAirBudget", 1000000);
-        key = mix(key, static_cast<U64>(air_source));
-        key = mixF32(key, air_slice);
-        key = mix(key, air_slice_camera ? 1ull : 0ull);
         key = mix(key, static_cast<U64>(air_budget));
         key = mix(key, mRooms->revision());
-        // The agent's feet in quarter metres, so the slice follows it up a stair.
-        if (air_slice > 0.f && !air_slice_camera)
-        {
-            key = mix(key, static_cast<U64>(std::llround(gAgent.getPositionGlobal().mdV[VZ] * 4.0)));
-        }
     }
     if (mHasMark)
     {
@@ -5793,8 +5834,6 @@ void SKNavMesh::refreshOverlay()
     // where the camera is now; the fade waits for upload() and bakes there.
     mOverlay.setEdgeWidth(llclamp(static_cast<F32>(edge_width), 1.f, 8.f), camera_agent, fov_y, viewport_height);
     mOverlay.setFade(camera_agent, static_cast<F32>(reach), static_cast<F32>(reach * 0.8));
-    // Floors tinted by how enclosed their air is; a layer of its own, like the walls.
-    mRooms->gatherOverlay(mOverlay, camera, reach, show_enclosure, opaque);
     if (show_spaces)
     {
         const SKNavAnnotator& annotator = SKNavAnnotator::instance();

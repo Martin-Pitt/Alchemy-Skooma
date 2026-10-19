@@ -90,6 +90,7 @@ namespace sknav
 
     void SkyMap::drop(U64 contributor)
     {
+        mCoverage.erase(contributor);
         const auto it = mContributors.find(contributor);
         if (it == mContributors.end())
         {
@@ -154,6 +155,11 @@ namespace sknav
         {
             mContributors[contributor] = touched;
         }
+        if (air.mTopWidth > 0 && air.mTopHeight > 0)
+        {
+            mCoverage[contributor] = { tile_min.mdV[VX], tile_min.mdV[VY], tile_min.mdV[VX] + air.mTopWidth * metres,
+                                       tile_min.mdV[VY] + air.mTopHeight * metres };
+        }
         ++mVersion;
     }
 
@@ -166,12 +172,24 @@ namespace sknav
         }
     }
 
+    bool SkyMap::covers(F64 x, F64 y) const
+    {
+        for (const auto& [contributor, f] : mCoverage)
+        {
+            if (x >= f.mX0 && x < f.mX1 && y >= f.mY0 && y < f.mY1)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     bool SkyMap::skyOpenAt(const LLVector3d& pos, F32 reach) const
     {
         const std::vector<Interval>* cell = find(static_cast<S64>(std::floor(pos.mdV[VX])), static_cast<S64>(std::floor(pos.mdV[VY])));
         if (!cell)
         {
-            return true;
+            return covers(pos.mdV[VX], pos.mdV[VY]);
         }
         for (const Interval& i : *cell)
         {
@@ -450,6 +468,7 @@ namespace sknav
         {
             n += sizeof(c) + 16 + c.second->capacity() * sizeof(U64);
         }
+        n += mCoverage.size() * (sizeof(U64) + sizeof(Footprint) + 16);
         return n;
     }
 }

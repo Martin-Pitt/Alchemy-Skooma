@@ -393,4 +393,33 @@ namespace tut
             }
         }
     }
+
+    template<> template<>
+    void sknavwind_object::test<13>()
+    {
+        set_test_name("air whose enclosure is UNKNOWN is calm and never a courtyard");
+        // The closed room of test 4 with sealing off: no way in, so its air has no answer.
+        Scene s;
+        s.wall(4.f, 4.f, 16.f, 4.25f);
+        s.wall(4.f, 15.75f, 16.f, 16.f);
+        s.wall(4.f, 4.f, 4.25f, 16.f);
+        s.wall(15.75f, 4.f, 16.f, 16.f);
+        s.box(4.f, 4.f, 16.f, 16.f, 3.f, 3.25f);
+        auto in = s.input(1);
+        in->mParams.mSealedIndoors = false;
+        const Wind w(in);
+        Enclosure e;
+        ensure("the room's air is UNKNOWN", w.mEnc->enclosureAt(LLVector3(10.f, 10.f, 0.5f), e) && e.mBucket == EnclosureBucket::UNKNOWN);
+        for (F32 heading : { 0.f, 135.f })
+        {
+            const WindSlabPtr slab = w.slab(heading);
+            const U8 f = flags(slab, 10.f, 10.f);
+            ensure("flagged UNKNOWN", (f & WindCell::UNKNOWN) != 0);
+            ensure("not INDOORS", (f & WindCell::INDOORS) == 0);
+            ensure("no courtyard", (f & WindCell::COURTYARD) == 0);
+            ensure("calm", factor(slab, 10.f, 10.f) < 0.1f);
+            ensure("windy outside", factor(slab, 25.f, 25.f) > 0.5f);
+            ensure("outside is known", (flags(slab, 25.f, 25.f) & WindCell::UNKNOWN) == 0);
+        }
+    }
 }

@@ -1857,18 +1857,25 @@ DataPtr skmap::plan::assemble(const Snapshot& snap)
 
 skmap::plan::Whereabouts skmap::plan::whereabouts(const LLVector3d& feet, F32 band_below, F32 band_above)
 {
+    const SKNavWorldViewPtr world = SKNavMesh::instanceExists() ? SKNavMesh::instance().view() : nullptr;
+    if (!world)
+    {
+        return {};
+    }
+    SKNavWorldView::AirColumn column;
+    world->columnAt(feet, column);
+    return whereabouts(*world, column, feet, band_below, band_above);
+}
+
+skmap::plan::Whereabouts skmap::plan::whereabouts(const SKNavWorldView& world, const SKNavWorldView::AirColumn& column,
+                                                  const LLVector3d& feet, F32 band_below, F32 band_above)
+{
     const F64 LIFT_M = 0.3;
     Whereabouts out;
-    if (!SKNavMesh::instanceExists())
-    {
-        return out;
-    }
-    const SKNavWorldViewPtr world = SKNavMesh::instance().view();
-    const LLVector3d pos(feet.mdV[VX], feet.mdV[VY], feet.mdV[VZ] + LIFT_M);
     SKNavWorldView::SpaceId id;
     sknav::Enclosure gap;
     // The band holds even here: airGapAt can answer from the gap below.
-    if (!world || !world->airGapAt(pos, id, gap) || gap.mBucket == sknav::EnclosureBucket::UNKNOWN || !gap.mFine ||
+    if (!column.airGapAt(feet.mdV[VZ] + LIFT_M, id, gap) || gap.mBucket == sknav::EnclosureBucket::UNKNOWN || !gap.mFine ||
         gap.mFloor < feet.mdV[VZ] - band_below || gap.mFloor > feet.mdV[VZ] + band_above)
     {
         return out;
@@ -1881,12 +1888,25 @@ skmap::plan::Whereabouts skmap::plan::whereabouts(const LLVector3d& feet, F32 ba
     out.mFloor = gap.mFloor;
     out.mCeiling = gap.mCeiling;
     out.mFine = true;
-    if (const sknav::Space* space = id.mId ? world->space(id) : nullptr)
+    if (const sknav::Space* space = id.mId ? world.space(id) : nullptr)
     {
         out.mBuilding = space->mBuilding;
         out.mRoof = space->mRoof;
     }
     return out;
+}
+
+bool skmap::plan::outdoorsIn(const SKNavWorldView::AirColumn& column, const LLVector3d& feet)
+{
+    for (F64 lift : { 0.3, 0.8, 1.3 })
+    {
+        sknav::Enclosure gap;
+        if (column.enclosureAt(feet.mdV[VZ] + lift, gap) && gap.mBucket != sknav::EnclosureBucket::UNKNOWN)
+        {
+            return gap.mBucket == sknav::EnclosureBucket::OUTDOORS;
+        }
+    }
+    return false;
 }
 
 bool skmap::plan::agentFloor(const LLVector3d& at, F64 feet, F32& floor_out)

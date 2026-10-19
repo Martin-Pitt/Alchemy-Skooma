@@ -26,10 +26,6 @@
 #define SK_MAPSCENE_H
 
 #include "llsingleton.h"
-#include "v3dmath.h"
-
-#include <map>
-#include <utility>
 
 class SKNetMap;
 
@@ -43,32 +39,18 @@ public:
     void initSingleton() override;
     void cleanupSingleton() override;
 
-    /// A map drew this frame: hold the navmesh demand, and follow its centre and shape.
+    /// A map drew this frame: hold the navmesh demand.
     void noteDrawn(const SKNetMap& map);
     bool active() const;
-
-    /// Whether a navmesh tile (a 32 m lattice cell) is published, or was within the last few seconds.
-    bool built(S32 x, S32 y) const { return mBuilt.count({ x, y }) > 0; }
-    U32 builtTiles() const { return static_cast<U32>(mBuilt.size()); }
 
     static void onIdle(void*);
 
 private:
     void idle();
     void updateDemand(bool want);
-    void updateBuilt();
 
     bool mDemanding = false;
     F64 mLastDrawn = -1.0e9;
-    LLVector3d mMapCentre;
-    F32 mMapLong = 200.f;
-    F32 mMapShort = 200.f;
-
-    /// Each built tile's lattice cell and when it was last seen published, carried while the navmesh rebuilds it.
-    std::map<std::pair<S32, S32>, F64> mBuilt;
-    U64 mBuiltRevision = 0;
-    LLVector3d mBuiltMin, mBuiltMax;
-    F64 mBuiltAt = -1.0e9;
 };
 
 #endif // SK_MAPSCENE_H

@@ -342,6 +342,7 @@ TEST_CASE("buckets hold within the hysteresis of their edge", "[sknavenclosure]"
             g.mBucket = static_cast<U8>(EnclosureBucket::INDOORS);
         }
     }
+    previous->mMemo.reset();    // forged buckets: a repair would keep them over standing air
     in->mPrevious = previous;
     const EnclosureProductPtr second = computeEnclosure(in);
     U32 held = 0, left = 0;
@@ -558,9 +559,11 @@ TEST_CASE("a sky map copy is a snapshot: later changes to the original leave it 
     const SkyMap snapshot = live;
     live.remove(1);
     live.set(2, LLVector3d(32.0, 0.0, 0.0), roof);
-    CHECK(live.skyOpenAt(LLVector3d(5.0, 5.0, 1.0)));
-    CHECK(!snapshot.skyOpenAt(LLVector3d(5.0, 5.0, 1.0)));
-    CHECK(snapshot.skyOpenAt(LLVector3d(37.0, 5.0, 1.0)));
+    F64 top = 0.0;
+    CHECK(!live.topAt(5.0, 5.0, top));
+    CHECK(!live.skyOpenAt(LLVector3d(5.0, 5.0, 1.0)));     // and no longer knows that air
+    CHECK((!snapshot.skyOpenAt(LLVector3d(5.0, 5.0, 1.0)) && snapshot.topAt(5.0, 5.0, top)));
+    CHECK((!snapshot.topAt(37.0, 5.0, top) && live.topAt(37.0, 5.0, top)));
     CHECK((snapshot.cells()) == (static_cast<size_t>(32 * 32)));
 }
 
@@ -705,4 +708,128 @@ TEST_CASE("only detail air finer than the coarse cell reads as fine", "[sknavenc
     const Enclosure coarse = at(computeEnclosure(past.input(1)), 10.f, 10.f);
     CHECK(coarse.mBucket != EnclosureBucket::UNKNOWN);
     CHECK(!coarse.mFine);
+}
+
+namespace
+{
+    bool sameRead(const Enclosure& a, const Enclosure& b)
+    {
+        return a.mBucket == b.mBucket && a.mSpace == b.mSpace && a.mSpaceId == b.mSpaceId && a.mFloor == b.mFloor &&
+               a.mCeiling == b.mCeiling && a.mFine == b.mFine;
+    }
+
+    /// airGapAt's per-mesh rule as the world view had it, over enclosureAt and gapsAt.
+    bool referenceAirGap(const EnclosureProduct& p, const LLVector3& local, Enclosure& out)
+    {
+        Enclosure e;
+        const bool held = p.enclosureAt(local, e);
+        if (!held || (!e.mSpaceId && e.mBucket == EnclosureBucket::INDOORS))
+        {
+            bool below = false;
+            p.gapsAt(local.mV[VX], local.mV[VY], [&](const Enclosure& g) {
+                if (g.mSpaceId && g.mCeiling <= local.mV[VZ] && (!below || g.mFloor > e.mFloor))
+                {
+                    e = g;
+                    below = true;
+                }
+            });
+            if (!below && !held)
+            {
+                return false;
+            }
+        }
+        out = e;
+        return true;
+    }
+
+    /// Every 0.25 m over the box's plan, every 0.05 m up, and just either side of each gap's floor slack and ceiling.
+    U32 sweepAgreement(const EnclosureProduct& p, F32 x0, F32 y0, F32 x1, F32 y1)
+    {
+        U32 heights = 0;
+        GapColumn column;
+        for (F32 x = x0; x < x1; x += 0.25f)
+        {
+            for (F32 y = y0; y < y1; y += 0.25f)
+            {
+                p.columnAt(x, y, column);
+                std::vector<F32> zs;
+                for (F32 z = -1.5f; z < 12.f; z += 0.05f)
+                {
+                    zs.push_back(z);
+                }
+                for (const ColumnGap& g : column)
+                {
+                    for (F32 d : { -1e-3f, 0.f, 1e-3f })
+                    {
+                        zs.push_back(g.mOriginZ + (g.mFloor - 2) * g.mUnit + d);
+                        if (g.mCeiling != AIR_CEILING_OPEN)
+                        {
+                            zs.push_back(g.mOriginZ + g.mCeiling * g.mUnit + d);
+                        }
+                    }
+                }
+                for (F32 z : zs)
+                {
+                    Enclosure want, got;
+                    const bool found = p.enclosureAt(LLVector3(x, y, z), want);
+                    REQUIRE(columnEnclosureAt(column, z, got) == found);
+                    if (found)
+                    {
+                        REQUIRE(sameRead(want, got));
+                    }
+                    const bool air = referenceAirGap(p, LLVector3(x, y, z), want);
+                    REQUIRE(columnAirGapAt(column, z, got) == air);
+                    if (air)
+                    {
+                        REQUIRE(sameRead(want, got));
+                    }
+                    ++heights;
+                }
+            }
+        }
+        return heights;
+    }
+}
+
+TEST_CASE("a column read answers every height as enclosureAt and airGapAt do, from detail and from coarse air", "[sknavenclosure]")
+{
+    // A sealed storey over an open arcade, a desk on it, an open-roofed room beside it, and a roofed room in the next tile.
+    Scene s;
+    s.box(8.f, 8.f, 24.f, 24.f, 4.f, 5.f);
+    s.box(8.f, 8.f, 24.f, 8.5f, 5.f, 8.f, false);
+    s.box(8.f, 23.5f, 24.f, 24.f, 5.f, 8.f, false);
+    s.box(8.f, 8.f, 8.5f, 24.f, 5.f, 8.f, false);
+    s.box(23.5f, 8.f, 24.f, 24.f, 5.f, 8.f, false);
+    s.box(8.f, 8.f, 24.f, 24.f, 8.f, 8.25f);
+    s.box(9.f, 9.f, 11.f, 10.f, 5.75f, 6.f, false);
+    s.box(2.f, 26.f, 6.f, 26.5f, 0.f, 2.f, false);
+    s.room(36.f, 4.f, 48.f, 16.f);
+    s.mSolids.back().mZ0 = 3.f;
+    auto in = s.input(2);
+    const EnclosureProductPtr first = computeEnclosure(in);
+    CHECK(sweepAgreement(*first, 6.f, 6.f, 26.f, 28.f) > 0);
+    CHECK(sweepAgreement(*first, 34.f, 2.f, 50.f, 18.f) > 0);
+
+    // Spaces as a spaces pass would write them, some gaps in none, so the fallback under a solid has gaps to find.
+    auto spaced = std::make_shared<EnclosureProduct>(*first);
+    spaced->mSpaceIds = { 11, 12 };
+    for (TileEnclosure& t : spaced->mTiles)
+    {
+        for (size_t i = 0; i < t.mGaps.size(); ++i)
+        {
+            t.mGaps[i].mSpace = static_cast<U16>(i % 3);
+        }
+    }
+    CHECK(sweepAgreement(*spaced, 6.f, 6.f, 26.f, 28.f) > 0);
+
+    // Tile 1's detail goes, so its reads come from the coarse product.
+    in->mPrevious = first;
+    in->mKept.push_back(*first->tile(in->mTiles[1].mKey));
+    in->mTiles.pop_back();
+    const EnclosureProductPtr second = computeEnclosure(in);
+    GapColumn column;
+    second->columnAt(46.f, 14.f, column);
+    REQUIRE(!column.empty());
+    CHECK(!column.front().mGap.mFine);
+    CHECK(sweepAgreement(*second, 34.f, 2.f, 50.f, 18.f) > 0);
 }

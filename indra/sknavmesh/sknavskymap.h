@@ -59,9 +59,10 @@ namespace sknav
         /// of the tile, its z where the air's height 0 is.
         void set(U64 contributor, const LLVector3d& tile_min, const TileAir& air);
         void remove(U64 contributor);
-        bool has(U64 contributor) const { return mContributors.count(contributor) != 0; }
+        bool has(U64 contributor) const { return mCoverage.count(contributor) != 0; }
 
         /// No solid starts above pos within reach metres, and pos is not inside one.
+        /// False outside every contributor's footprint: air nobody published is not open.
         bool skyOpenAt(const LLVector3d& pos, F32 reach = 50.f) const;
         /// No solid but ignore's starts above pos within reach: a tile's own
         /// air already knows what stands over it.
@@ -111,6 +112,13 @@ namespace sknav
 
         std::unordered_map<U64, std::shared_ptr<Block>> mBlocks;
         std::unordered_map<U64, std::shared_ptr<const std::vector<U64>>> mContributors;   ///< the cells each contributor touches
+        /// Each contributor's footprint in global x and y, so a column no tile has seen reads unknown.
+        struct Footprint
+        {
+            F64 mX0, mY0, mX1, mY1;
+        };
+        bool covers(F64 x, F64 y) const;
+        std::unordered_map<U64, Footprint> mCoverage;
         size_t mCellCount = 0;
         U64 mVersion = 0;
     };

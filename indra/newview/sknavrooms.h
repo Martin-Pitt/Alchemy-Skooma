@@ -75,6 +75,24 @@ public:
     typedef std::function<void(const Mesh& mesh, const sknav::Space& space)> SpaceFn;
     typedef std::function<void(const Mesh& mesh, const sknav::Portal& portal)> PortalFn;
 
+    /// Every mesh's gaps over one point, read once so many heights can be asked of it.
+    struct AirColumn
+    {
+        struct MeshColumn
+        {
+            LLUUID mId;
+            LLVector3d mOrigin;
+            sknav::GapColumn mGaps;
+        };
+        LLVector3d mXY;
+        std::vector<MeshColumn> mMeshes;
+
+        /// SKNavWorldView::enclosureAt at height z over the column's point, with the answering mesh.
+        bool enclosureAt(F64 z, sknav::Enclosure& out, LLUUID* mesh_out = nullptr) const;
+        /// SKNavWorldView::airGapAt at height z over the column's point.
+        bool airGapAt(F64 z, SpaceId& space, sknav::Enclosure& gap) const;
+    };
+
     /// Moves whenever a mesh's answers change.
     U64 revision() const { return mRevision; }
 
@@ -98,6 +116,9 @@ public:
     /// The top of the highest solid over a point, from the sky map; false
     /// when nothing stands there.
     bool topOfWorld(const LLVector3d& xy, F64& top) const;
+
+    /// The column over a point's plan, which enclosureAt, spaceAt and airGapAt read.
+    void columnAt(const LLVector3d& xy, AirColumn& out) const;
 
     /// Every gap over a point, per mesh and lowest first.
     void gapsAt(const LLVector3d& xy, const std::function<void(const sknav::Enclosure&)>& fn) const;
@@ -161,9 +182,11 @@ typedef std::shared_ptr<const SKNavWind> SKNavWindPtr;
 /// Schedules the enclosure pass. A mesh whose air changed is marked dirty,
 /// and once it has been quiet for SKNavRoomsSettleMs its tiles' air and the
 /// sky map are snapshotted and handed to a queue of its own, one pass per
-/// mesh at a time, each in 20 ms chunks so a newer generation can cancel it.
-/// Meshes that touch read each other's answers one generation late, and a
-/// mesh whose answers moved re-runs its neighbours, at most three times.
+/// mesh at a time, each in 20 ms chunks so a better tier can preempt it. A
+/// pass mends the last answers where their air stands, and air that moves
+/// while one runs is mended next, on top of what it lands; its spaces are
+/// kept when no air, door or answer the spaces pass reads moved. Meshes
+/// that touch read each other's answers one generation late, and a mesh whose answers moved re-runs its neighbours, at most three times.
 /// Main thread only, besides the view it hands out.
 class SKNavRooms
 {
@@ -183,10 +206,6 @@ public:
     /// Whether a mesh meeting the global box has a pass pending or running.
     bool settlingIn(const LLVector3d& min, const LLVector3d& max) const;
     std::string statsLine() const;
-
-    /// Tint the floor of every gap near the camera by e (mode 1) or by bucket
-    /// (mode 2), from the coarse answers. Agent coordinates.
-    void gatherOverlay(SKNavOverlayGeom& geom, const LLVector3d& camera, F64 reach, U32 mode, bool opaque) const;
 
     /// Fill each space's floor near the camera in a colour of its own, from
     /// the coarse answers, and draw its portals: doors red, stairs lime,
@@ -220,6 +239,18 @@ public:
 private:
     struct Job;
     struct WindJob;
+    /// Where a mesh's answers may still move: the plan of the tiles that changed, or all of it.
+    struct SettleBox
+    {
+        LLVector3d mMin = LLVector3d(1e300, 1e300, 0.0);
+        LLVector3d mMax = LLVector3d(-1e300, -1e300, 0.0);
+        bool mAll = false;
+
+        void add(const LLVector3d& min, const LLVector3d& max);
+        void add(const SettleBox& other);
+        /// Whether it meets a global box, within the reach a repair's floods can move answers.
+        bool meets(const LLVector3d& min, const LLVector3d& max) const;
+    };
     struct MeshState
     {
         LLUUID mId;
@@ -228,6 +259,10 @@ private:
         LLVector3d mMax;
         U64 mAirSignature = 0;
         U64 mDoorSignature = 0;             ///< the doors and lifts over it
+        U64 mRoomsDoorSignature = 0;        ///< the doors and lifts its landed spaces were cut with
+        std::map<sknav::TileKey, std::pair<U64, std::pair<LLVector3d, LLVector3d>>> mTileAir;   ///< per tile its air id and plan, as last seen
+        SettleBox mPending;                 ///< what moved since the last post
+        SettleBox mPosted;                  ///< what the pass in flight answers again
         bool mDirty = false;
         bool mInFlight = false;
         F64 mChanged = 0.0;                 ///< when its air last moved
@@ -298,6 +333,9 @@ private:
     F32 mLastSpaceStageMs[sknav::SpacesPass::NUM_STAGES] = {};
     U32 mPasses = 0;
     U32 mCancelled = 0;
+    U32 mRepairs = 0;                       ///< passes that mended the last answers
+    U32 mSpacesKept = 0;                    ///< of which kept the last spaces
+    U32 mLastAnswered = 0;                  ///< tiles the last pass answered again
     F32 mLastWindMs = 0.f;
     size_t mLastWindBytes = 0;
     U32 mWindPasses = 0;

@@ -107,7 +107,7 @@ namespace
     const F32 HEADING_HALF_PER_RADIUS = 0.42f;
     const F32 HEADING_THICK_PER_RADIUS = 0.3f; // and extruded this thick
     const F32 TACTICAL_NEAR_M = 0.5f;
-    const F64 ROOM_CELL_M = 0.5;    // the lattice a room is flooded through the air on
+    constexpr F64 ROOM_CELL_M = 0.5;    // the lattice a room is flooded through the air on
     const F32 TACTICAL_MIN_M = 8.f;
     const F32 TACTICAL_MAX_M = 4096.f;
     const F32 BATTLEFIELD_MAX_M = 4096.f;
@@ -1478,9 +1478,12 @@ std::shared_ptr<const std::set<std::pair<S32, S32>>> SKOverviewCapture::roomAt(c
         return {};
     }
     const F64 start_floor = start_gap.mFloor;
+    const LLViewerRegion* at_region = LLWorld::getInstance()->getRegionFromPosGlobal(floor);
+    const U64 region = at_region ? at_region->getHandle() : 0;
     for (Room& room : mRooms)
     {
-        if (std::fabs(room.mFloor - start_floor) < SAME_FLOOR_M && room.mCells->count(start))
+        if (room.mRevision == world->revision() && room.mRegion == region && std::fabs(room.mFloor - start_floor) < SAME_FLOOR_M &&
+            room.mCells->count(start))
         {
             room.mAt = now; // a room in use stays cached, not flooded afresh every few seconds
             return room.mCells;
@@ -1498,8 +1501,35 @@ std::shared_ptr<const std::set<std::pair<S32, S32>>> SKOverviewCapture::roomAt(c
     room.mCells = std::make_shared<std::set<std::pair<S32, S32>>>();
     room.mAt = now;
     room.mFloor = start_floor;
+    room.mRevision = world->revision();
+    room.mRegion = region;
     std::vector<std::pair<S32, S32>> todo{ start };
     room.mCells->insert(start);
+    // The space the point is in already holds the room's floor cells: they seed the flood, which then only
+    // walks its edge and on through portals. Its raster cells are ROOM_CELL_M square on the same lattice.
+    static_assert(sknav::RASTER_XY_M == ROOM_CELL_M, "the space raster and the room lattice must share cells");
+    const SKNavWorldView::Mesh* mesh = nullptr;
+    const sknav::Space* space = start_id.mId ? world->space(start_id, &mesh) : nullptr;
+    if (space && mesh && !space->mFrozen)
+    {
+        for (const auto& r : space->mRaster)
+        {
+            const sknav::PlanCell c = sknav::rasterCell(r.first);
+            const F64 z0 = mesh->mOrigin.mdV[VZ] + c.mZ;
+            if (start_floor < z0 - SAME_FLOOR_M || start_floor >= z0 + sknav::RASTER_Z_M + SAME_FLOOR_M ||
+                (S32)room.mCells->size() >= MAX_CELLS)
+            {
+                continue;
+            }
+            // The cell's middle, so a mesh origin off the lattice by rounding still lands in the right cell.
+            const std::pair<S32, S32> cell((S32)std::floor((mesh->mOrigin.mdV[VX] + c.mX + 0.5 * ROOM_CELL_M) / ROOM_CELL_M),
+                                           (S32)std::floor((mesh->mOrigin.mdV[VY] + c.mY + 0.5 * ROOM_CELL_M) / ROOM_CELL_M));
+            if (room.mCells->insert(cell).second)
+            {
+                todo.push_back(cell);
+            }
+        }
+    }
     while (!todo.empty() && (S32)room.mCells->size() < MAX_CELLS)
     {
         const std::pair<S32, S32> cell = todo.back();
@@ -1528,22 +1558,9 @@ bool SKOverviewCapture::outdoorsAt(const LLUUID& id, const LLVector3d& feet, F64
     {
         return seen->second.mOut;
     }
-    // The air the body stands in, not airGapAt's fallback to the room under a solid a sunk foot is in.
-    bool out = false;
     const SKNavWorldViewPtr world = SKNavMesh::instanceExists() ? SKNavMesh::instance().view() : nullptr;
-    if (world)
-    {
-        for (F64 lift : { 0.3, 0.8, 1.3 })
-        {
-            sknav::Enclosure gap;
-            if (world->enclosureAt(LLVector3d(feet.mdV[VX], feet.mdV[VY], feet.mdV[VZ] + lift), gap) &&
-                gap.mBucket != sknav::EnclosureBucket::UNKNOWN)
-            {
-                out = gap.mBucket == sknav::EnclosureBucket::OUTDOORS;
-                break;
-            }
-        }
-    }
+    const SKNavWorldView::AirColumn* column = columnOf(world, id, feet, now);
+    const bool out = column && skmap::plan::outdoorsIn(*column, feet);
     auto inserted = mOutdoors.emplace(id, Outdoors());
     Outdoors& held = inserted.first->second;
     held.mSeen = now;
@@ -1565,6 +1582,26 @@ bool SKOverviewCapture::outdoorsAt(const LLUUID& id, const LLVector3d& feet, F64
         held.mSince = -1.0;
     }
     return held.mOut;
+}
+
+const SKNavWorldView::AirColumn* SKOverviewCapture::columnOf(const SKNavWorldViewPtr& world, const LLUUID& id,
+                                                             const LLVector3d& feet, F64 now)
+{
+    if (!world)
+    {
+        return nullptr;
+    }
+    HeldColumn& held = mColumns[id];
+    // The dissolve passes the feet back through agent coordinates, so the plan matches to a millimetre, not exactly.
+    if (held.mAt != now || held.mRevision != world->revision() || std::fabs(held.mXY.mdV[VX] - feet.mdV[VX]) > 1e-3 ||
+        std::fabs(held.mXY.mdV[VY] - feet.mdV[VY]) > 1e-3)
+    {
+        held.mAt = now;
+        held.mRevision = world->revision();
+        held.mXY = feet;
+        world->columnAt(feet, held.mColumn);
+    }
+    return &held.mColumn;
 }
 
 void SKOverviewCapture::updateCut()
@@ -1625,7 +1662,13 @@ void SKOverviewCapture::updateCut()
     {
         agent_feet.mdV[VZ] = SKMapPeople::feetZ(gAgentAvatarp);
     }
-    addPerson(gAgent.getID(), true, agent_floor, agent_feet, cut_z, skmap::plan::whereabouts(agent_feet));
+    skmap::plan::Whereabouts agent_where;
+    const SKNavWorldViewPtr world = SKNavMesh::instanceExists() ? SKNavMesh::instance().view() : nullptr;
+    if (const SKNavWorldView::AirColumn* column = columnOf(world, gAgent.getID(), agent_feet, now))
+    {
+        agent_where = skmap::plan::whereabouts(*world, *column, agent_feet);
+    }
+    addPerson(gAgent.getID(), true, agent_floor, agent_feet, cut_z, agent_where);
     for (const SKMapPeople::Person& p : SKMapPeople::instance().people())
     {
         if (p.mVisibility == skmap::Visibility::HIDDEN || !p.mZKnown)
@@ -1641,6 +1684,10 @@ void SKOverviewCapture::updateCut()
     for (auto it = mOutdoors.begin(); it != mOutdoors.end();)
     {
         it = now - it->second.mSeen > 10.0 ? mOutdoors.erase(it) : std::next(it);
+    }
+    for (auto it = mColumns.begin(); it != mColumns.end();)
+    {
+        it = now - it->second.mAt > 10.0 ? mColumns.erase(it) : std::next(it);
     }
     mixPos(centre);
     mix(gAgent.getRegion() ? gAgent.getRegion()->getHandle() : 0);
