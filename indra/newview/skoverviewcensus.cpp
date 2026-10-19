@@ -1102,6 +1102,9 @@ bool SKOverviewCensus::update()
         const U32 group = job->mGroupOf[i];
         if (anchored[group])
         {
+            // A linkset is whole only when all of it is a surround in the void: a part's physics record beside its
+            // surround record is land.
+            job->mAnchors[group].second = job->mAnchors[group].second && i < job->mKept.size() && job->mVoidOnly[i];
             continue; // once per linkset
         }
         anchored[group] = true;
