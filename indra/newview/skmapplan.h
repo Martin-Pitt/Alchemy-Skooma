@@ -30,6 +30,7 @@
 #include "v2math.h"
 #include "v3math.h"
 #include "lluuid.h"
+#include "sknavrooms.h"
 
 #include <algorithm>
 #include <cmath>
@@ -323,6 +324,12 @@ namespace plan
     /// and floored within band_below under to band_above over the feet, since a foot sunk into a roof reads the
     /// room under it. Not found otherwise: coarse air, an unloaded region or unsettled rooms give no guess.
     Whereabouts whereabouts(const LLVector3d& feet, F32 band_below = 1.0f, F32 band_above = 1.0f);
+    /// whereabouts judged from a column already read at the feet's plan, in world.
+    Whereabouts whereabouts(const SKNavWorldView& world, const SKNavWorldView::AirColumn& column, const LLVector3d& feet,
+                            F32 band_below = 1.0f, F32 band_above = 1.0f);
+    /// Whether the body standing at feet is in outdoor air: the first known gap 0.3, 0.8 or 1.3 m over the feet,
+    /// as enclosureAt reads them, so a sunk foot does not read the room under it. UNKNOWN is never outdoors.
+    bool outdoorsIn(const SKNavWorldView::AirColumn& column, const LLVector3d& feet);
     /// The floor under the agent standing at at with its feet at feet: the navmesh's when polygons are built
     /// and it lies near the feet, else a known fine air gap's floored at or just under the feet, else, off the
     /// floor in a jump or a fall, an indoor fine gap's up to 4 m under them. False with no answer. Main thread.
