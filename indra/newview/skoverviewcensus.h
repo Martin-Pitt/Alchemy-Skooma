@@ -129,6 +129,8 @@ public:
         /// Per triangle: an invisible part's that does not stand in for visible geometry, passed through by the cut
         /// and the raycast as invisible parts always were.
         std::vector<U8> mInvisible;
+        /// The cut heights the buffer holds, per vertex; empty while every one is NO_CUT.
+        std::vector<F32> mCutValues;
     };
 
     /// Which groups a shot draws: all of them, or the ground's and those at the agent's level.
