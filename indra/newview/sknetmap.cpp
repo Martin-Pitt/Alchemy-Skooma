@@ -81,6 +81,8 @@ namespace
 {
     constexpr S32 MOUSE_DRAG_SLOP = 2;
     constexpr F64 RECENTRE_S = 0.25;
+    // SKMapRegionMargin's range, as the settings slider has it, and one wheel notch of it.
+    constexpr F32 REGION_MARGIN_MIN = 0.05f, REGION_MARGIN_MAX = 1.f, REGION_MARGIN_NOTCH = 0.05f;
 
     LLPointer<LLViewerTexture> sShadowSprite;
 
@@ -495,13 +497,13 @@ void SKNetMap::updateView()
         F32 fit = 0.f;
         regionFit(region, &fit);
         const LLVector3d centre = viewAnchor() + LLVector3d(mPan.mV[VX], mPan.mV[VY], 0.0);
-        mView.set(centre, mRegionSpan > 0.f ? mRegionSpan : fit, 0.f, static_cast<F32>(getRect().getWidth()),
+        mView.set(centre, fit, 0.f, static_cast<F32>(getRect().getWidth()),
                   static_cast<F32>(getRect().getHeight()));
         return;
     }
     if (mRegionHandle)
     {
-        // Leaving region mode drops its pan and zoom.
+        // Leaving region mode drops its pan.
         refitRegion();
         mRegionHandle = 0;
     }
@@ -575,7 +577,7 @@ LLVector3d SKNetMap::regionFit(const LLViewerRegion* region, F32* span)
 {
     static LLCachedControl<F32> margin(gSavedSettings, "SKMapRegionMargin", 0.1f);
     const F64 width = region->getWidth();
-    const F64 reach = width * llclamp((F32)margin, 0.05f, 1.f);
+    const F64 reach = width * llclamp((F32)margin, REGION_MARGIN_MIN, REGION_MARGIN_MAX);
     const LLVector3d origin = region->getOriginGlobal();
     LLWorld* world = LLWorld::getInstance();
     LLVector3d centre = origin;
@@ -602,7 +604,6 @@ void SKNetMap::refitRegion()
 {
     mPan.setZero();
     mEaseStart = -1.0;
-    mRegionSpan = 0.f;
 }
 
 void SKNetMap::recentre()
@@ -2044,10 +2045,11 @@ void SKNetMap::onPanesClosed()
 
 bool SKNetMap::handleScrollWheel(S32 x, S32 y, LLScrollDelta delta)
 {
-    // Positive clicks zoom out, as the classic map; region mode's zoom lasts until it refits.
+    // Positive clicks zoom out, as the classic map; in region mode they widen the region margin.
     if (regionMode())
     {
-        mRegionSpan = skmap::zoomByNotches(mView.span(), delta.mPrecise);
+        const F32 margin = gSavedSettings.getF32("SKMapRegionMargin") + REGION_MARGIN_NOTCH * delta.mPrecise;
+        gSavedSettings.setF32("SKMapRegionMargin", llclamp(margin, REGION_MARGIN_MIN, REGION_MARGIN_MAX));
         return true;
     }
     const F32 span = skmap::zoomByNotches(gSavedSettings.getF32("SKMapZoomMeters"), delta.mPrecise);
@@ -2122,7 +2124,7 @@ bool SKNetMap::handleHover(S32 x, S32 y, MASK mask)
 
 bool SKNetMap::handleDoubleClick(S32 x, S32 y, MASK mask)
 {
-    // In region mode a double click first brings a zoomed or panned view back to the fit.
+    // In region mode a double click first brings a panned view back to the fit.
     if (regionMode() && regionAdjusted())
     {
         refitRegion();

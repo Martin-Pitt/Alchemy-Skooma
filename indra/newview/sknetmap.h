@@ -238,14 +238,13 @@ private:
     LLVector3d viewAnchor() const;
     /// Region mode's fit: the region and SKMapRegionMargin into each connected neighbour; returns its centre.
     static LLVector3d regionFit(const LLViewerRegion* region, F32* span);
-    /// Region mode's fitted view again: no pan, no zoom of its own.
+    /// Region mode's fitted view again: no pan.
     void refitRegion();
-    /// Whether region mode's view has been zoomed or panned away from its fit.
-    bool regionAdjusted() const { return mRegionSpan > 0.f || isPanned(); }
+    /// Whether region mode's view has been panned away from its fit.
+    bool regionAdjusted() const { return isPanned(); }
 
     LLVector2 mPan;                     ///< metres east and north of the anchor
     U64 mRegionHandle = 0;              ///< the region region mode last fitted
-    F32 mRegionSpan = 0.f;              ///< region mode's wheel zoom, 0 for the fit
     LLVector2 mEaseFrom;
     F64 mEaseStart = -1.0;
     bool mPanning = false;
