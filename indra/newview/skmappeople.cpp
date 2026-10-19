@@ -32,6 +32,8 @@
 #include "llagentcamera.h"
 #include "llavataractions.h"
 #include "llcallbacklist.h"
+#include "llhudeffectlookat.h"
+#include "llhudmanager.h"
 #include "llgroupmgr.h"
 #include "lldir.h"
 #include "llfile.h"
@@ -263,6 +265,46 @@ void SKMapPeople::addPing(const LLVector3d& pos)
     SKNetMap::firePing(pos);
 }
 
+namespace
+{
+// Where an avatar aims: its mouselook LookAt when it sends one, else the sim's body rotation; never the animated head.
+LLVector3 aimDirection(LLVOAvatar* avatar, const LLVector3& eye, const std::map<LLUUID, LLVector3>& mouselook)
+{
+    const auto it = mouselook.find(avatar->getID());
+    if (it != mouselook.end())
+    {
+        LLVector3 dir = it->second - eye;
+        if (dir.normVec() > 0.01f)
+        {
+            return dir;
+        }
+    }
+    return LLVector3::x_axis * (avatar->isSelf() ? avatar->getRenderRotation() : avatar->skPredictedRotationRegion());
+}
+
+// Each avatar's mouselook LookAt target, in agent space.
+std::map<LLUUID, LLVector3> mouselookTargets()
+{
+    std::map<LLUUID, LLVector3> targets;
+    for (const LLPointer<LLHUDEffect>& effect : LLHUDManager::instance().getEffects())
+    {
+        if (effect.isNull() || effect->isDead() || effect->getType() != LLHUDObject::LL_HUD_EFFECT_LOOKAT)
+        {
+            continue;
+        }
+        LLHUDEffectLookAt* look = static_cast<LLHUDEffectLookAt*>(effect.get());
+        LLVOAvatar* source = dynamic_cast<LLVOAvatar*>(look->getSourceObject());
+        if (!source || source->isDead() || look->getLookAtType() != LOOKAT_TARGET_MOUSELOOK || !source->mHeadp)
+        {
+            continue;
+        }
+        // The effect keeps its target relative to the head it was worked from.
+        targets[source->getID()] = look->getTargetPos() + source->mHeadp->getWorldPosition();
+    }
+    return targets;
+}
+} // namespace
+
 void SKMapPeople::updateFiringLines()
 {
     LL_PROFILE_ZONE_SCOPED;
@@ -284,6 +326,7 @@ void SKMapPeople::updateFiringLines()
     mRayAllowance = llmin(mRayAllowance + RAY_BUDGET_S, RAY_BURST_S);
     // Only for people the map draws: in combat, allies; a hidden avatar's aim must not leak.
     std::map<LLUUID, FiringLine> kept;
+    const std::map<LLUUID, LLVector3> mouselook = mouselookTargets();
     std::vector<std::pair<F64, const Person*>> due;
     for (const Person& p : mPeople)
     {
@@ -296,13 +339,13 @@ void SKMapPeople::updateFiringLines()
         const auto it = mFiring.find(p.mId);
         if (it != mFiring.end())
         {
-            // The aim is cheap and follows the head every idle; only the reach waits for a ray.
+            // The aim is cheap and follows every idle; only the reach waits for a ray.
             FiringLine line = it->second;
             LLVOAvatar* avatar = dynamic_cast<LLVOAvatar*>(gObjectList.findObject(p.mId));
             if (LLJoint* head = avatar ? avatar->getJoint("mHead") : nullptr)
             {
                 const LLVector3 from = head->getWorldPosition();
-                const LLVector3 dir = LLVector3::x_axis * head->getWorldRotation();
+                const LLVector3 dir = aimDirection(avatar, from, mouselook);
                 line.mFrom = gAgent.getPosGlobalFromAgent(from);
                 line.mTo = gAgent.getPosGlobalFromAgent(from + dir * line.mLength);
             }
@@ -332,7 +375,7 @@ void SKMapPeople::updateFiringLines()
         ++rays;
         const F64 ray_start = LLFrameTimer::getTotalSeconds();
         const LLVector3 from = head->getWorldPosition();
-        const LLVector3 dir = LLVector3::x_axis * head->getWorldRotation();
+        const LLVector3 dir = aimDirection(avatar, from, mouselook);
         const LLVector3 to = from + dir * skmap::palette::FIRING_REACH_M;
         LLVector4a start, end, hit;
         // Past the head, so the shooter's own attachments are not what the ray finds.
