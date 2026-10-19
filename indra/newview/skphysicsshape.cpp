@@ -73,6 +73,24 @@ namespace
         }
     }
 
+    void appendFacesSplit(const LLVolume* volume, std::vector<LLVector3>& out, std::vector<U32>& starts)
+    {
+        for (S32 f = 0; f < volume->getNumVolumeFaces(); ++f)
+        {
+            starts.push_back((U32)out.size());
+            const LLVolumeFace& face = volume->getVolumeFace(f);
+            if (!face.mPositions || !face.mIndices)
+            {
+                continue;
+            }
+            out.reserve(out.size() + face.mNumIndices);
+            for (S32 i = 0; i < face.mNumIndices; ++i)
+            {
+                out.emplace_back(face.mPositions[face.mIndices[i]].getF32ptr());
+            }
+        }
+    }
+
     void appendSoup(const std::vector<LLVector3>& positions, std::vector<LLVector3>& out)
     {
         // A PhysicsMesh is three positions per triangle already.
@@ -387,4 +405,60 @@ bool skCensusRenderGeometry(LLVOVolume* volume, SKShapeGeometry& out)
     }
     LLPrimitive::sVolumeManager->unrefVolume(v);
     return !out.mTriangles.empty();
+}
+
+bool skCensusRenderFaces(LLVOVolume* volume, std::vector<LLVector3>& tris, std::vector<U32>& face_starts, bool& pending)
+{
+    tris.clear();
+    face_starts.clear();
+    pending = false;
+    if (!volume->getVolume())
+    {
+        pending = true;
+        return false;
+    }
+    const LLVolumeParams& params = volume->getVolume()->getParams();
+    const S32 top = LLVolumeLODGroup::NUM_LODS - 1;
+    LLVolume* v = LLPrimitive::sVolumeManager->refVolume(params, top);
+    if (!v)
+    {
+        pending = true;
+        return false;
+    }
+    if (volume->isMesh())
+    {
+        // Only the top LOD: a lower one is often a crude stand-in, and a verdict from it is never final.
+        if (!v->isMeshAssetLoaded())
+        {
+            gMeshRepo.loadMesh(volume, params, top);
+            pending = true;
+        }
+        else
+        {
+            appendFacesSplit(v, tris, face_starts);
+        }
+    }
+    else if (volume->isSculpted())
+    {
+        if (v->getSculptLevel() == 0)
+        {
+            appendFacesSplit(v, tris, face_starts);
+        }
+        else if (volume->getVolume()->getSculptLevel() == 0)
+        {
+            // The loaded detail stands in meanwhile; still pending, so no verdict made from it is final.
+            appendFacesSplit(volume->getVolume(), tris, face_starts);
+            pending = true;
+        }
+        else
+        {
+            pending = true;
+        }
+    }
+    else
+    {
+        appendFacesSplit(v, tris, face_starts);
+    }
+    LLPrimitive::sVolumeManager->unrefVolume(v);
+    return !tris.empty();
 }

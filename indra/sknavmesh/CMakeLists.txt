@@ -23,6 +23,7 @@ target_sources(
     sknavfeatures.cpp
     sknavflightends.cpp
     sknavflights.cpp
+    sknavinvisible.cpp
     sknavlayout.cpp
     sknavprobecache.cpp
     sknavprobes.cpp
@@ -61,6 +62,7 @@ target_sources(
         sknavfeatures.h
         sknavflightends.h
         sknavflights.h
+        sknavinvisible.h
         sknavlayout.h
         sknavprobecache.h
         sknavprobes.h
@@ -141,9 +143,7 @@ if(AL_BUILD_TESTS)
   al_add_test_binary(
     sknavmesh_tests
     PROJECT sknavmesh
-    SOURCES
-      tests/sknavcensusio_test.cpp
-      tests/sknavenclosure_test.cpp
+    SOURCES tests/sknavcensusio_test.cpp tests/sknavenclosure_test.cpp tests/sknavinvisible_test.cpp
     LIBRARIES sknavmesh llcommon
   )
 endif()
