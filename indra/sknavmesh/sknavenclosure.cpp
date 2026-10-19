@@ -25,6 +25,7 @@
 #include "linden_common.h"
 
 #include "sknavenclosure.h"
+#include "sknavbuild.h"
 #include "sknavprofile.h"
 
 #include <algorithm>
@@ -312,9 +313,9 @@ namespace
                 const U16 floor = airFloorUnits(column.floorAt(*t->mAir, k, ix, iy));
                 Enclosure out;
                 fillEnclosure(*t, floor, g.mCeiling, e.mS, e.mE, e.mD, e.mOpen, e.mBucket, e.mSpace, e.mFlags, out);
-                out.mFine = true;
-                out.mAvatarFloor = (g.mFlags & AirGap::AVATAR_FLOOR) != 0;
                 spaceId(p, out);
+                out.mFine = t->mCell < COARSE_AIR_M;
+                out.mAvatarFloor = (g.mFlags & AirGap::AVATAR_FLOOR) != 0;
                 fn(out, floor, g.mCeiling, *t);
             }
             return;
