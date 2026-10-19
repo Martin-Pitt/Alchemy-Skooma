@@ -34,6 +34,10 @@
 #include "alavataractions.h"
 #include "alderenderlist.h"
 #include "llagent.h"
+#include "llagentcamera.h"
+#include "llviewercamera.h"
+#include "llviewerobjectlist.h"
+#include "pipeline.h"
 #include "llparcel.h"
 #include "llviewerregion.h"
 #include "llworld.h"
@@ -57,6 +61,82 @@
 
 namespace
 {
+    // Frames an avatar as the third-person camera frames the agent: the rear-view offset's distance and pitch,
+    // behind the avatar's facing, turned round it until the line of sight is clear.
+    void camOnAvatar(const LLUUID& id)
+    {
+        LLViewerObject* avatar = gObjectList.findObject(id);
+        if (!avatar || !avatar->isAvatar())
+        {
+            handle_zoom_to_object(id);
+            return;
+        }
+
+        const LLVector3 eye = gAgentCamera.getCameraOffsetInitial() * gAgentCamera.getCameraOffsetScale();
+        const LLVector3 look = LLVector3(gAgentCamera.getFocusOffsetInitial());
+        const F32 back = llmax(0.5f, look.mV[VX] - eye.mV[VX]);
+        const F32 up = eye.mV[VZ] - look.mV[VZ];
+
+        const LLVector3 focus = avatar->getRenderPosition() + LLVector3(0.f, 0.f, look.mV[VZ]);
+        LLVector3 facing = LLVector3::x_axis * avatar->getRenderRotation();
+        facing.mV[VZ] = 0.f;
+        if (facing.normVec() < 0.01f)
+        {
+            facing = LLVector3::x_axis;
+        }
+
+        // The ray starts clear of the avatar and its attachments, and stops short of the camera's near plane.
+        constexpr F32 SELF_CLEARANCE = 0.75f;
+        constexpr F32 WALL_CLEARANCE = 0.3f;
+        constexpr S32 YAW_STEPS = 12;
+
+        LLVector3 best_cam;
+        F32 best_clear = -1.f;
+        for (S32 step = 0; step < YAW_STEPS && best_clear < 1.f; ++step)
+        {
+            // 0, +30, -30, +60, -60, ... 180 degrees round from behind.
+            const S32 k = (step + 1) / 2;
+            const F32 yaw = (step % 2 ? 1.f : -1.f) * k * F_TWO_PI / YAW_STEPS;
+            const LLVector3 dir = -facing * LLQuaternion(yaw, LLVector3::z_axis);
+            LLVector3 offset = dir * back + LLVector3(0.f, 0.f, up);
+            const F32 length = offset.normVec();
+            const LLVector3 cam = focus + offset * length;
+
+            if (cam.mV[VZ] < LLWorld::getInstance()->resolveLandHeightAgent(cam) + WALL_CLEARANCE)
+            {
+                continue;
+            }
+
+            LLVector4a start, end, hit;
+            start.load3((focus + offset * SELF_CLEARANCE).mV);
+            end.load3(cam.mV);
+            F32 reach = length;
+            if (length > SELF_CLEARANCE &&
+                gPipeline.lineSegmentIntersectInWorld(start, end, false, false, true, false, nullptr, &hit))
+            {
+                reach = (LLVector3(hit.getF32ptr()) - focus).length() - WALL_CLEARANCE;
+            }
+
+            const F32 clear = reach / length;
+            if (clear > best_clear)
+            {
+                best_clear = clear;
+                best_cam = focus + offset * llmax(reach, SELF_CLEARANCE);
+            }
+        }
+
+        if (best_clear < 0.f)
+        {
+            // Every side is under the ground: look down from above.
+            best_cam = focus + LLVector3(0.f, 0.f, back + up);
+        }
+
+        // A jump across the region warps rather than sweeping the camera through everything between.
+        gAgentCamera.setFocusOnAvatar(false, ANIMATE);
+        gAgentCamera.setCameraPosAndFocusGlobal(gAgent.getPosGlobalFromAgent(best_cam), gAgent.getPosGlobalFromAgent(focus), id);
+        gAgentCamera.startCameraWarp(SKCameraWarp::AVATAR);
+    }
+
     SKPopupItem action(const std::string& label, std::function<void()> fn, bool enabled = true, bool visible = true)
     {
         SKPopupItem item;
@@ -220,7 +300,7 @@ void SKMapMenu::personItems(std::vector<SKPopupPaneSpec>& panes, S32 pane, const
     // Each check runs once, now; the rows do not change while open.
     std::vector<SKPopupItem>& items = panes[pane].mItems;
     items.push_back(action(label("view_profile"), [id]() { LLAvatarActions::showProfile(id); }, named));
-    items.push_back(action(label("cam"), [id]() { ALAvatarActions::zoomIn(id); }, ALAvatarActions::canZoomIn(id)));
+    items.push_back(action(label("cam"), [id]() { camOnAvatar(id); }, ALAvatarActions::canZoomIn(id)));
     items.push_back(action(label("im"), [id]() { LLAvatarActions::startIM(id); }, named));
     items.push_back(separator());
     items.push_back(action(label("offer_teleport"), [id]() { LLAvatarActions::offerTeleport(id); }, named && LLAvatarActions::canOfferTeleport(id)));
