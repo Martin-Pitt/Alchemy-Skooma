@@ -34,6 +34,8 @@ namespace skmap
 {
     constexpr F32 HOVER_ENTER_PX = 10.f;
     constexpr F32 HOVER_EXIT_PX = 12.f;
+    constexpr F32 PICK_PX = 16.f;          // right-click reach on the mini-map
+    constexpr F32 TACTICAL_PICK_PX = 64.f; // and on the tactical overview, a much larger view
     constexpr F32 TAG_GAP_PX = 2.f;
     constexpr F32 TAG_EASE_S = 0.2f;
     constexpr F32 TAG_MAX_WIDTH_PX = 190.f;

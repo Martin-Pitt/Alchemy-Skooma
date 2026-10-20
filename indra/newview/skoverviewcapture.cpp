@@ -2084,8 +2084,8 @@ bool SKOverviewCapture::rightClick(S32 x, S32 y)
     {
         return false;
     }
-    // The mini-map's pick: every marker within its hover radius, nearest first.
-    const F32 radius = skmap::HOVER_ENTER_PX * llmax(scale.mV[VX], scale.mV[VY]);
+    // The mini-map's pick: every marker within the tactical pick radius, nearest first.
+    const F32 radius = skmap::TACTICAL_PICK_PX * llmax(scale.mV[VX], scale.mV[VY]);
     std::vector<std::pair<F32, LLUUID>> near_click;
     for (const TacticalMark& mark : mTacticalMarks)
     {
