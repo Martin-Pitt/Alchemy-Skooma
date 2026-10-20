@@ -93,6 +93,10 @@ bool skPhysicsShapeGeometry(LLVOVolume* volume, const SKPhysicsShape& shape, SKS
 /// asset has none (too few triangles, absent section, failed fetch).
 std::shared_ptr<const SKPhysicsHavokShape> skPhysicsShapeSimTriangles(LLVOVolume* volume);
 
+/// A mesh under 0.5 m on any axis never collides as its physics mesh: the sim
+/// uses its hulls, or its single hull without them, whatever the type says.
+bool skPhysicsMeshTooSmallForTriangles(LLVOVolume* volume);
+
 /// The rendered geometry: the volume's faces at whatever LOD is loaded, with
 /// provenance RENDER. What sim surrounds contribute to the weather class.
 bool skRenderShapeGeometry(LLVOVolume* volume, SKShapeGeometry& out);

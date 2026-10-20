@@ -172,7 +172,7 @@ F32 skPhysicsShapeCost(LLVOVolume* volume, const SKPhysicsShape& shape)
             {
                 return meshCost(sim->mTriangles.size() / 3, scale);
             }
-            if (decomp && !decomp->mPhysicsShapeMesh.empty())
+            if (decomp && !decomp->mPhysicsShapeMesh.empty() && !skPhysicsMeshTooSmallForTriangles(volume))
             {
                 return meshCost(decomp->mPhysicsShapeMesh.mPositions.size() / 3, scale);
             }
@@ -202,9 +202,17 @@ F32 skPhysicsShapeCostFraction(F32 cost)
     return llclamp(log10f(llmax(cost, 1.f)) / 3.f, 0.f, 1.f);
 }
 
+bool skPhysicsMeshTooSmallForTriangles(LLVOVolume* volume)
+{
+    // The server charges every such mesh a hull's cost, triangles or not.
+    const LLVector3 scale = volume->getScale();
+    return volume->isMesh() && llmin(scale[VX], scale[VY], scale[VZ]) < SHAPE_BUILDER_USER_MESH_CONVEXIFICATION_SIZE;
+}
+
 std::shared_ptr<const SKPhysicsHavokShape> skPhysicsShapeSimTriangles(LLVOVolume* volume)
 {
-    if (!volume || !volume->isMesh() || !volume->getVolume() || volume->getPhysicsShapeType() != LLViewerObject::PHYSICS_SHAPE_PRIM)
+    if (!volume || !volume->isMesh() || !volume->getVolume() || volume->getPhysicsShapeType() != LLViewerObject::PHYSICS_SHAPE_PRIM
+        || skPhysicsMeshTooSmallForTriangles(volume))
     {
         return nullptr;
     }
@@ -264,7 +272,7 @@ bool skPhysicsShapeGeometry(LLVOVolume* volume, const SKPhysicsShape& shape, SKS
                 {
                     return false;   // header on its way: which shape it collides as is unknown
                 }
-                if (physics_mesh > 0)
+                if (physics_mesh > 0 && !skPhysicsMeshTooSmallForTriangles(volume))
                 {
                     gMeshRepo.fetchPhysicsShape(params.getSculptID());
                     // What the simulator built from the physics mesh is what it collides with.
