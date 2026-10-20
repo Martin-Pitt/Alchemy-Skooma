@@ -1300,6 +1300,42 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildBatches(const Jo
                : hatch                                       ? stats.mBarriers
                                                              : stats.mUnknown);
         }
+        // A part with an edge not shared by an even count of its triangles is open (single-sided planes, often a cheap
+        // triangle-mesh physics shape): it has no inside, so the cut draws its edge but no section fill.
+        bool open = false;
+        {
+            auto vertexKey = [](const LLVector3& v)
+            {
+                return skoverview::scramble((U64)(S64)std::llround(v.mV[VX] * 1000.f) ^
+                                            ((U64)(S64)std::llround(v.mV[VY] * 1000.f) << 21) ^
+                                            ((U64)(S64)std::llround(v.mV[VZ] * 1000.f) << 42));
+            };
+            std::unordered_map<U64, U32> edges;
+            edges.reserve(source->size());
+            for (size_t t = 0; t + 2 < source->size(); t += 3)
+            {
+                const U64 k[3] = { vertexKey((*source)[t]), vertexKey((*source)[t + 1]), vertexKey((*source)[t + 2]) };
+                if (k[0] == k[1] || k[1] == k[2] || k[0] == k[2])
+                {
+                    continue; // degenerate, skipped below as well
+                }
+                for (S32 e = 0; e < 3; ++e)
+                {
+                    const U64 lo = llmin(k[e], k[(e + 1) % 3]);
+                    const U64 hi = llmax(k[e], k[(e + 1) % 3]);
+                    ++edges[skoverview::scramble(lo ^ skoverview::scramble(hi))];
+                }
+            }
+            for (const auto& edge : edges)
+            {
+                if (edge.second & 1)
+                {
+                    open = true;
+                    break;
+                }
+            }
+        }
+        const U8 tri_flags = (pass_through ? skoverview::TRI_PASS_THROUGH : 0) | (open ? skoverview::TRI_OPEN : 0);
         for (size_t t = 0; t + 2 < source->size(); t += 3)
         {
             const LLVector3& a = (*source)[t];
@@ -1331,7 +1367,7 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildBatches(const Jo
             out.push_back(a);
             out.push_back(b);
             out.push_back(c);
-            bins.mInvisible[cls][group].push_back(pass_through ? 1 : 0);
+            bins.mInvisible[cls][group].push_back(tri_flags);
             if (hatch)
             {
                 // The same triangle again in the invisible range: the capture's overlay pass hatches it.
@@ -1339,7 +1375,7 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildBatches(const Jo
                 over.push_back(a);
                 over.push_back(b);
                 over.push_back(c);
-                bins.mInvisible[skoverview::INVISIBLE][group].push_back(1);
+                bins.mInvisible[skoverview::INVISIBLE][group].push_back(tri_flags | skoverview::TRI_PASS_THROUGH);
             }
         }
     }
@@ -1512,7 +1548,8 @@ void SKOverviewCensus::swapIn(Built& built)
         const auto same = std::find_if(mBatches.begin(), mBatches.end(),
                                        [&](const Batch& old)
                                        {
-                                           return old.mBuffer && old.mOrigin == region.mOrigin && old.mPositions == region.mPositions;
+                                           return old.mBuffer && old.mOrigin == region.mOrigin && old.mPositions == region.mPositions &&
+                                                  old.mInvisible == region.mInvisible;
                                        });
         if (same != mBatches.end())
         {
@@ -1523,7 +1560,7 @@ void SKOverviewCensus::swapIn(Built& built)
         else
         {
             LL_PROFILE_ZONE_NAMED("sk census upload buffer");
-            batch.mBuffer = new LLVertexBuffer(LLVertexBuffer::MAP_VERTEX | LLVertexBuffer::MAP_WEIGHT); // weight: the cut height
+            batch.mBuffer = new LLVertexBuffer(LLVertexBuffer::MAP_VERTEX | LLVertexBuffer::MAP_WEIGHT | LLVertexBuffer::MAP_TEXCOORD0); // weight: the cut height; texcoord0.x: an open part's
             if (!batch.mBuffer->allocateBuffer(total, 0))
             {
                 LL_WARNS("SKOverview") << "census buffer of " << total << " vertices could not be allocated" << LL_ENDL;
@@ -1546,6 +1583,15 @@ void SKOverviewCensus::swapIn(Built& built)
                 for (U32 v = 0; v < total; ++v)
                 {
                     *cuts++ = skoverview::NO_CUT;
+                }
+            }
+            LLStrider<LLVector2> open;
+            if (batch.mBuffer->getTexCoord0Strider(open) && open.get())
+            {
+                for (U32 v = 0; v < total; ++v)
+                {
+                    const bool is_open = v / 3 < region.mInvisible.size() && (region.mInvisible[v / 3] & skoverview::TRI_OPEN);
+                    *open++ = LLVector2(is_open ? 1.f : 0.f, 0.f);
                 }
             }
             batch.mBuffer->unmapBuffer();
@@ -1893,7 +1939,7 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
                 const U32 end = llmin(part.second->mStart[c] + part.second->mCount[c], (U32)batch.mPositions.size());
                 for (U32 v = part.second->mStart[c]; v + 2 < end; v += 3)
                 {
-                    if (v / 3 < batch.mInvisible.size() && batch.mInvisible[v / 3])
+                    if (v / 3 < batch.mInvisible.size() && (batch.mInvisible[v / 3] & skoverview::TRI_PASS_THROUGH))
                     {
                         continue;
                     }
@@ -1944,7 +1990,7 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
                 const U32 end = llmin(part.second->mStart[c] + part.second->mCount[c], (U32)batch.mPositions.size());
                 for (U32 v = part.second->mStart[c]; v + 2 < end; v += 3)
                 {
-                    if (v / 3 < batch.mInvisible.size() && batch.mInvisible[v / 3])
+                    if (v / 3 < batch.mInvisible.size() && (batch.mInvisible[v / 3] & skoverview::TRI_PASS_THROUGH))
                     {
                         continue;
                     }
@@ -2097,7 +2143,7 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
                 const U32 end = llmin(part.second->mStart[c] + part.second->mCount[c], (U32)batch.mPositions.size());
                 for (U32 v = part.second->mStart[c]; v + 2 < end; v += 3)
                 {
-                    if (v / 3 < batch.mInvisible.size() && batch.mInvisible[v / 3])
+                    if (v / 3 < batch.mInvisible.size() && (batch.mInvisible[v / 3] & skoverview::TRI_PASS_THROUGH))
                     {
                         continue;
                     }
@@ -2494,7 +2540,7 @@ bool SKOverviewCensus::raycast(const LLVector3d& origin, const LLVector3& dir, F
                 const U32 end = llmin(group.mStart[c] + group.mCount[c], total);
                 for (U32 v = group.mStart[c]; v + 2 < end; v += 3)
                 {
-                    if (v / 3 < batch.mInvisible.size() && batch.mInvisible[v / 3])
+                    if (v / 3 < batch.mInvisible.size() && (batch.mInvisible[v / 3] & skoverview::TRI_PASS_THROUGH))
                     {
                         continue;
                     }

@@ -84,6 +84,8 @@ namespace skoverview
     constexpr F32 GROUND_BASE_M = 4.f;  ///< a cluster whose base is no higher than this above the land stands on it
     constexpr F32 NO_CUT = 1.0e30f;     ///< the per-vertex cut height of a part drawn whole
     constexpr F32 HIDDEN = -1.0e30f;    ///< the per-vertex cut height of a part not drawn at all
+    constexpr U8 TRI_PASS_THROUGH = 1;  ///< a triangle's flag: an invisible part's the cut and raycasts pass through
+    constexpr U8 TRI_OPEN = 2;          ///< a triangle's flag: its part has open edges, so has no inside to section
 
     U8 codeOf(CensusClass cls);
 
@@ -127,7 +129,7 @@ public:
         std::vector<Group> mGroups;
         std::vector<LLVector3> mPositions; ///< the buffer's positions, region-local, for the cut's sight lines
         /// Per triangle: an invisible part's that does not stand in for visible geometry, passed through by the cut
-        /// and the raycast as invisible parts always were.
+        /// and the raycast as invisible parts always were (TRI_PASS_THROUGH), and whether its part is open (TRI_OPEN).
         std::vector<U8> mInvisible;
         /// The cut heights the buffer holds, per vertex; empty while every one is NO_CUT.
         std::vector<F32> mCutValues;

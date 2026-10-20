@@ -41,6 +41,7 @@ uniform int sk_cap_pass;        // 0 front faces, 1 back faces of uncut parts, 2
 in float weight;        // the height this vertex's part is cut at, agent z
 out float vary_cut_z;
 out float vary_z;
+in vec2 texcoord0;      // x: 1 for an open part's triangle, which has no inside to section
 #endif
 
 void main()
@@ -54,9 +55,9 @@ void main()
     vary_z = position.z; // region-local z is agent z
     // Above its own part's cut; a hidden part (cut far below anything) only shows in debug view 5.
     gl_ClipDistance[2] = (sk_debug_cut == 1 && weight < -1.0e29) ? 1.0 : weight - position.z;
-    // A cut part's back faces are its section, drawn by passes 2 and 3 only; an uncut part's by pass 1. A part's
-    // vertices share its cut, so the sign is the triangle's.
-    float cut_part = weight < 1.0e29 ? 1.0 : -1.0;
+    // A cut part's back faces are its section, drawn by passes 2 and 3 only; an uncut or open part's by pass 1.
+    // A part's vertices share its cut and its openness, so the sign is the triangle's.
+    float cut_part = (weight < 1.0e29 && texcoord0.x < 0.5) ? 1.0 : -1.0;
     gl_ClipDistance[3] = sk_cap_pass == 0 ? 1.0 : sk_cap_pass == 1 ? -cut_part : cut_part;
 #else
     gl_ClipDistance[2] = 1.0;
