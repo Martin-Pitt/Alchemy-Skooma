@@ -126,18 +126,12 @@ namespace
         return llmax(llmin(scale[VX], scale[VY], scale[VZ]), 0.01f);
     }
 
-    // An uploaded physics mesh: about linear in triangles, dearer as the object thins.
+    // A triangle mesh, uploaded or a prim's: about linear in triangles, dearer as the object thins.
+    // Prims are not fitted to the server, whose prim weight is dominated by a scale penalty
+    // that says little about Havok's collision work.
     F32 meshCost(size_t triangles, const LLVector3& scale)
     {
         return llmax(MESH_MIN_COST, 0.0335f * powf((F32)triangles, 1.05f) * powf(smallestAxis(scale), -0.35f));
-    }
-
-    // A prim collided as its triangles; the fit is looser (within about x1.7).
-    F32 primMeshCost(size_t triangles, const LLVector3& scale)
-    {
-        const F32 smallest = smallestAxis(scale);
-        const F32 rest = llmax(scale[VX] * scale[VY] * scale[VZ] / smallest, 0.0001f);
-        return llmax(MESH_MIN_COST, 0.075f * powf((F32)triangles, 0.85f) * powf(smallest, -0.55f) * powf(rest, 0.12f));
     }
 
     F32 primHullCost(LLVOVolume* volume)
@@ -175,7 +169,7 @@ F32 skPhysicsShapeCost(LLVOVolume* volume, const SKPhysicsShape& shape)
                 triangles += phys->getVolumeFace(f).mNumIndices / 3;
             }
             LLPrimitive::sVolumeManager->unrefVolume(phys);
-            return primMeshCost(triangles, scale);
+            return meshCost(triangles, scale);
         }
         case Spec::USER_MESH:
         {
