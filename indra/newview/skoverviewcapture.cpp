@@ -95,6 +95,8 @@ namespace
     LLGLSLShader sGeom;
     LLGLSLShader sGeomCut;    // the census with a cut height per vertex, for the tactical view
     LLGLSLShader sGeomCutDissolve;  // the same with the see-through circles, the only permutation that discards
+    LLGLSLShader sGeomCapLift;      // the cut census's section pass, the only permutation that writes depth
+    LLGLSLShader sGeomCapLiftDissolve;
     LLGLSLShader sMarker;     // the tactical avatar markers, depth-tested by hand       // the census: class code and the face's own normal
 
     const F32 CENSUS_RANGE_M = 128.f;
@@ -168,7 +170,6 @@ namespace
     const LLStaticHashedString SK_CEILING("sk_ceiling");
     const LLStaticHashedString SK_EYE_TO_WORLD("sk_eye_to_world");
     const LLStaticHashedString SK_DEBUG_CUT("sk_debug_cut");
-    const LLStaticHashedString SK_ZERO_TO_ONE("sk_zero_to_one");
     const LLStaticHashedString SK_CAP_PASS("sk_cap_pass");
     const LLStaticHashedString SK_DISSOLVE_COUNT("sk_dissolve_count");
     const LLStaticHashedString SK_DISSOLVE_SOFT("sk_dissolve_soft");
@@ -507,6 +508,10 @@ namespace
             { &sGeomCut, "SK Overview Geometry Cut", "skooma/overviewGeomV.glsl", "skooma/overviewGeomF.glsl", { "SK_CUT_ATTRIBUTE" } },
             { &sGeomCutDissolve, "SK Overview Geometry Cut Dissolve", "skooma/overviewGeomV.glsl", "skooma/overviewGeomF.glsl",
               { "SK_CUT_ATTRIBUTE", "SK_DISSOLVE" } },
+            { &sGeomCapLift, "SK Overview Geometry Cap Lift", "skooma/overviewGeomV.glsl", "skooma/overviewGeomF.glsl",
+              { "SK_CUT_ATTRIBUTE", "SK_CAP_LIFT" } },
+            { &sGeomCapLiftDissolve, "SK Overview Geometry Cap Lift Dissolve", "skooma/overviewGeomV.glsl",
+              "skooma/overviewGeomF.glsl", { "SK_CUT_ATTRIBUTE", "SK_CAP_LIFT", "SK_DISSOLVE" } },
             { &sMarker, "SK Overview Marker", "skooma/overviewMarkerV.glsl", "skooma/overviewMarkerF.glsl", {} },
         };
     }
@@ -1169,6 +1174,8 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
             // Circles bind the one permutation that discards; without them every pass keeps early depth.
             const bool dissolve = shot.mPartCuts && !shot.mDissolve.empty();
             LLGLSLShader& geom = !shot.mPartCuts ? sGeom : dissolve ? sGeomCutDissolve : sGeomCut;
+            // The section pass alone writes depth, lifting each fragment onto its part's cut.
+            LLGLSLShader& lift = dissolve ? sGeomCapLiftDissolve : sGeomCapLift;
             LLMatrix4a inverse_view;
             inverse_view.setInverse(shot.mView);
             const F32* m = inverse_view.getF32ptr();
@@ -1204,7 +1211,6 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
                 uniformCeiling(prog, shot.mView);
                 static LLCachedControl<U32> debug_view(gSavedSettings, "SKOverviewDebugView", 0);
                 glUniform1i(prog.getUniformLocation(SK_DEBUG_CUT), shot.mPartCuts && debug_view == 5 ? 1 : 0);
-                glUniform1f(prog.getUniformLocation(SK_ZERO_TO_ONE), LLRender::sReverseZ ? 1.f : 0.f);
                 const GLsizei n = (GLsizei)llmin(shot.mDissolve.size(), (size_t)SK_MAX_DISSOLVE);
                 if (dissolve && n)
                 {
@@ -1243,7 +1249,7 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
             }
             for (S32 pass : passes)
             {
-                bindGeom(geom);
+                bindGeom(pass == CAP_FILL ? lift : geom);
                 glUniform1i(bound->getUniformLocation(SK_CAP_PASS), pass);
                 const bool parity = pass == CAP_PARITY;
                 LLGLDepthTest depth(GL_TRUE, pass == CAP_FRONT || pass == CAP_FILL ? GL_TRUE : GL_FALSE,

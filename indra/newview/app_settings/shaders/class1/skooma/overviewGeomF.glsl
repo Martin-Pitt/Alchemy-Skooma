@@ -26,6 +26,21 @@
 // normal whatever their depth differs by. Nothing above the cut plane, or its part's own cut height, is drawn: the
 // vertex stage clips it (overviewGeomV.glsl). Only SK_DISSOLVE discards, and only SK_CAP_LIFT writes gl_FragDepth.
 
+#ifdef SK_CAP_LIFT
+// The lift only moves a fragment nearer, which keeps early depth where the context can be told so; a 4.1 context
+// without the extension builds without the qualifier.
+#if __VERSION__ < 420 && defined(GL_ARB_conservative_depth)
+#extension GL_ARB_conservative_depth : enable
+#endif
+#if __VERSION__ >= 420 || defined(GL_ARB_conservative_depth)
+#ifdef REVERSE_Z
+layout(depth_greater) out float gl_FragDepth;
+#else
+layout(depth_less) out float gl_FragDepth;
+#endif
+#endif
+#endif
+
 out vec4 frag_color;
 
 uniform vec4 color;             // R: the class code / 255
@@ -34,12 +49,12 @@ uniform int sk_debug_cut;       // 1: G and A carry the part's cut height for de
 
 in vec3 vary_position;
 #ifdef SK_CUT_ATTRIBUTE
+#ifdef SK_CAP_LIFT
 // Shared matrix stack + derived matrices, spliced from
 // class1/deferred/matricesBlock.glsl and bound at UB_MATRICES.
 //[ENGINE_BLOCK Matrices]
+#endif
 
-uniform float sk_zero_to_one;   // 1 where clip control maps depth 0..1 (reverse-Z)
-uniform int sk_cap_pass;        // 0 front faces, 1 back faces of uncut parts, 2 cut parts' faces counted in stencil, 3 their section
 in float vary_cut_z;
 in float vary_z;
 
@@ -95,11 +110,12 @@ void main()
     vec3 n_eye = normalize(cross(dFdx(vary_position), dFdy(vary_position)));
     vec3 n = normalize(sk_eye_to_world * n_eye);
     bool cap = false;
-#ifdef SK_CUT_ATTRIBUTE
-    // A back face seen through a part's cut is inside the solid: it stands for the section, so it moves up its view
-    // ray onto the cut plane, above any floor that runs through the solid under it. The stencil keeps it to where that
-    // ray is inside a cut solid, not behind the outside of one.
-    if (sk_cap_pass == 3 && !gl_FrontFacing)
+#ifdef SK_CAP_LIFT
+    // Pass 3: a back face seen through a part's cut is inside the solid: it stands for the section, so it moves up its
+    // view ray onto the cut plane, above any floor that runs through the solid under it. The stencil keeps it to where
+    // that ray is inside a cut solid, not behind the outside of one.
+    float depth = gl_FragCoord.z;
+    if (!gl_FrontFacing)
     {
         vec3 up = vec3(0.0, 0.0, 1.0) * sk_eye_to_world;
         bool ortho = projection_matrix[3][3] > 0.5;
@@ -111,15 +127,18 @@ void main()
             float t = (vary_cut_z - vary_z + dot(up, vary_position - o)) / denom;
             vec4 clip = projection_matrix * vec4(o + t * d, 1.0);
             float ndc = clip.z / clip.w;
-            gl_FragDepth = clamp(sk_zero_to_one > 0.5 ? ndc : ndc * 0.5 + 0.5, 0.0, 1.0);
+            // Never farther than the face, as the qualifier promises: with the eye under the cut the lift would push
+            // the fragment away, and the section stays on the back face, where the stencil already confines it.
+#ifdef REVERSE_Z
+            depth = max(clamp(ndc, 0.0, 1.0), gl_FragCoord.z);
+#else
+            depth = min(clamp(ndc * 0.5 + 0.5, 0.0, 1.0), gl_FragCoord.z);
+#endif
             n = vec3(0.0, 0.0, 1.0);
             cap = true;
         }
     }
-    if (!cap)
-    {
-        gl_FragDepth = gl_FragCoord.z;
-    }
+    gl_FragDepth = depth;
 #endif
     // 0 in both channels means "no normal" (terrain); a real one is kept off it.
     vec2 e = clamp(skOctEncode(n), 1.0 / 255.0, 1.0);
