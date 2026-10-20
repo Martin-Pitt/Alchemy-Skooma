@@ -35,6 +35,11 @@ uniform int sk_debug_cut;       // 1: G and A carry the part's cut height for de
 
 in vec3 vary_position;
 #ifdef SK_CUT_ATTRIBUTE
+// Shared matrix stack + derived matrices, spliced from
+// class1/deferred/matricesBlock.glsl and bound at UB_MATRICES.
+//[ENGINE_BLOCK Matrices]
+
+uniform float sk_zero_to_one;   // 1 where clip control maps depth 0..1 (reverse-Z)
 in float vary_cut_z;
 in float vary_z;
 
@@ -96,12 +101,38 @@ void main()
 #endif
     vec3 n_eye = normalize(cross(dFdx(vary_position), dFdy(vary_position)));
     vec3 n = normalize(sk_eye_to_world * n_eye);
+    bool cap = false;
+#ifdef SK_CUT_ATTRIBUTE
+    // A back face seen through a part's cut is inside the solid: it stands for the section, so it moves up its view
+    // ray onto the cut plane, above any floor that runs through the solid under it.
+    if (!gl_FrontFacing && vary_cut_z < 1.0e29)
+    {
+        vec3 up = vec3(0.0, 0.0, 1.0) * sk_eye_to_world;
+        bool ortho = projection_matrix[3][3] > 0.5;
+        vec3 o = ortho ? vary_position : vec3(0.0);
+        vec3 d = ortho ? vec3(0.0, 0.0, -1.0) : vary_position;
+        float denom = dot(up, d);
+        if (abs(denom) > 1.0e-6)
+        {
+            float t = (vary_cut_z - vary_z + dot(up, vary_position - o)) / denom;
+            vec4 clip = projection_matrix * vec4(o + t * d, 1.0);
+            float ndc = clip.z / clip.w;
+            gl_FragDepth = clamp(sk_zero_to_one > 0.5 ? ndc : ndc * 0.5 + 0.5, 0.0, 1.0);
+            n = vec3(0.0, 0.0, 1.0);
+            cap = true;
+        }
+    }
+    if (!cap)
+    {
+        gl_FragDepth = gl_FragCoord.z;
+    }
+#endif
     // 0 in both channels means "no normal" (terrain); a real one is kept off it.
     vec2 e = clamp(skOctEncode(n), 1.0 / 255.0, 1.0);
     float flag = color.b;
 #ifdef SK_CUT_ATTRIBUTE
     // B: 1 an invisible face, 0.25 a cut part's band just under its own cut, which the resolve caps.
-    if (vary_cut_z < 1.0e29 && vary_cut_z - vary_z < max(0.12, fwidth(vary_z) * 1.5))
+    if (cap || (vary_cut_z < 1.0e29 && vary_cut_z - vary_z < max(0.12, fwidth(vary_z) * 1.5)))
     {
         flag = max(flag, 0.25);
     }

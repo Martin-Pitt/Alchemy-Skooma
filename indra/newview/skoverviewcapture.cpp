@@ -1137,6 +1137,7 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
             uniformCeiling(geom.mProgramObject, shot.mView);
             static LLCachedControl<U32> debug_view(gSavedSettings, "SKOverviewDebugView", 0);
             glUniform1i(glGetUniformLocation(geom.mProgramObject, "sk_debug_cut"), shot.mPartCuts && debug_view == 5 ? 1 : 0);
+            glUniform1f(glGetUniformLocation(geom.mProgramObject, "sk_zero_to_one"), LLRender::sReverseZ ? 1.f : 0.f);
             if (shot.mPartCuts)
             {
                 const GLint prog = geom.mProgramObject;
@@ -1156,8 +1157,9 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
             gGL.setPolygonOffset(-1.f, -4.f);
             for (S32 pass = 0; pass < 2; ++pass)
             {
-                // Front: every face, depth written; back: inside a solid the cut went through.
-                LLGLDepthTest depth(GL_TRUE, pass == 0 ? GL_TRUE : GL_FALSE, GL_LEQUAL);
+                // Front: every face; back: inside a solid the cut went through, which the cut shader lifts onto the cut
+                // plane as its section, so it writes depth too.
+                LLGLDepthTest depth(GL_TRUE, pass == 0 || shot.mPartCuts ? GL_TRUE : GL_FALSE, GL_LEQUAL);
                 LLGLState cull_face(GL_CULL_FACE, pass == 1);
                 glCullFace(pass == 1 ? GL_FRONT : GL_BACK);
                 for (const SKOverviewCensus::Batch& batch : batches)
