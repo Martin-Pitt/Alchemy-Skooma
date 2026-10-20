@@ -995,6 +995,32 @@ void LLVertexBuffer::drawArrays(U32 mode, U32 first, U32 count) const
     LLRender::sDrawElements += count;
 }
 
+// <SK:Nexii> combat/minimap: several ranges of the bound buffer in one call
+void LLVertexBuffer::multiDrawArrays(U32 mode, const GLint* first, const GLsizei* count, GLsizei draw_count) const
+{
+    llassert(validate_bound_samplers());
+    llassert(mGLBuffer == sGLRenderBuffer);
+    llassert(mGLIndices == sGLRenderIndices);
+    if (draw_count <= 0)
+    {
+        return;
+    }
+    U32 total = 0;
+    for (GLsizei i = 0; i < draw_count; ++i)
+    {
+        llassert(first[i] >= 0 && count[i] >= 0 && (U32)first[i] + (U32)count[i] <= mNumVerts);
+        total += (U32)count[i];
+    }
+
+    gGL.syncMatrices();
+    STOP_GLERROR;
+    glMultiDrawArrays(sGLMode[mode], first, count, draw_count);
+    STOP_GLERROR;
+    ++LLRender::sDrawCalls;
+    LLRender::sDrawElements += total;
+}
+// </SK:Nexii>
+
 //static
 void LLVertexBuffer::initClass(LLWindow* window)
 {

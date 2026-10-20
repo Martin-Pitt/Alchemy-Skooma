@@ -59,6 +59,9 @@ public:
     void draw(const LLMatrix4a& view) const;
     /// The window rect, w by h pixels, the parts' boxes project to, clamped; false when none is in front of the eye.
     bool screenBounds(const LLMatrix4a& view, const LLMatrix4a& proj, S32 w, S32 h, LLRect& rect) const;
+    /// The window rect, w by h pixels, an agent-space box projects to through view_proj, clamped; the whole view for a
+    /// box across the eye's plane, false for one wholly behind it.
+    static bool screenRectOf(const LLMatrix4a& view_proj, const LLVector4a& lo, const LLVector4a& hi, S32 w, S32 h, LLRect& rect);
     /// The vehicles, live, with their looks; hidden ones are left out.
     const std::vector<SKMapPeople::Vehicle>& vehicles() const { return mVehicles; }
     void release();

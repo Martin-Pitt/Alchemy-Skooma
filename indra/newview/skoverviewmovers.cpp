@@ -273,62 +273,39 @@ void SKOverviewMovers::addPart(LLViewerObject* object, U8 code, std::set<LLUUID>
     }
 }
 
-bool SKOverviewMovers::screenBounds(const LLMatrix4a& view, const LLMatrix4a& proj, S32 w, S32 h, LLRect& rect) const
+// static
+bool SKOverviewMovers::screenRectOf(const LLMatrix4a& view_proj, const LLVector4a& lo, const LLVector4a& hi, S32 w, S32 h,
+                                    LLRect& rect)
 {
-    LLMatrix4a vp;
-    vp.setMul(view, proj);
+    U32 behind = 0;
     F32 x0 = F32_MAX, y0 = F32_MAX, x1 = -F32_MAX, y1 = -F32_MAX;
-    for (const Part& part : mParts)
+    for (U32 corner = 0; corner < 8; ++corner)
     {
-        const LLVector4a& lo = part.mExtents[0];
-        const LLVector4a& hi = part.mExtents[1];
-        if (!lo.lessEqual(hi).areAllSet(LLVector4Logical::MASK_XYZ))
+        LLVector4a at, clip;
+        at.set(corner & 1 ? hi[0] : lo[0], corner & 2 ? hi[1] : lo[1], corner & 4 ? hi[2] : lo[2], 1.f);
+        view_proj.transform4(at, clip);
+        const F32* c = clip.getF32ptr();
+        if (c[3] <= 1.0e-4f)
         {
-            // No box: the whole view, so nothing it draws is left out of the rect.
-            x0 = y0 = 0.f;
-            x1 = (F32)w;
-            y1 = (F32)h;
-            break;
-        }
-        U32 behind = 0;
-        F32 px0 = F32_MAX, py0 = F32_MAX, px1 = -F32_MAX, py1 = -F32_MAX;
-        for (U32 corner = 0; corner < 8; ++corner)
-        {
-            LLVector4a at, clip;
-            at.set(corner & 1 ? hi[0] : lo[0], corner & 2 ? hi[1] : lo[1], corner & 4 ? hi[2] : lo[2], 1.f);
-            vp.transform4(at, clip);
-            const F32* c = clip.getF32ptr();
-            if (c[3] <= 1.0e-4f)
-            {
-                ++behind;
-                continue;
-            }
-            const F32 x = (c[0] / c[3] * 0.5f + 0.5f) * w;
-            const F32 y = (c[1] / c[3] * 0.5f + 0.5f) * h;
-            px0 = llmin(px0, x);
-            py0 = llmin(py0, y);
-            px1 = llmax(px1, x);
-            py1 = llmax(py1, y);
-        }
-        if (behind == 8)
-        {
+            ++behind;
             continue;
         }
-        if (behind)
-        {
-            // Straddling the eye's plane, a box projects without bound: the whole view.
-            px0 = py0 = 0.f;
-            px1 = (F32)w;
-            py1 = (F32)h;
-        }
-        x0 = llmin(x0, px0);
-        y0 = llmin(y0, py0);
-        x1 = llmax(x1, px1);
-        y1 = llmax(y1, py1);
+        const F32 x = (c[0] / c[3] * 0.5f + 0.5f) * w;
+        const F32 y = (c[1] / c[3] * 0.5f + 0.5f) * h;
+        x0 = llmin(x0, x);
+        y0 = llmin(y0, y);
+        x1 = llmax(x1, x);
+        y1 = llmax(y1, y);
     }
-    if (x0 > x1 || y0 > y1)
+    if (behind == 8)
     {
         return false;
+    }
+    if (behind)
+    {
+        // Straddling the eye's plane, a box projects without bound: the whole view.
+        rect = LLRect(0, h, w, 0);
+        return true;
     }
     // A pixel's margin for the raster's rounding.
     rect.mLeft = llclamp((S32)std::floor(x0) - 1, 0, w);
@@ -336,6 +313,36 @@ bool SKOverviewMovers::screenBounds(const LLMatrix4a& view, const LLMatrix4a& pr
     rect.mRight = llclamp((S32)std::ceil(x1) + 1, 0, w);
     rect.mTop = llclamp((S32)std::ceil(y1) + 1, 0, h);
     return rect.notEmpty();
+}
+
+bool SKOverviewMovers::screenBounds(const LLMatrix4a& view, const LLMatrix4a& proj, S32 w, S32 h, LLRect& rect) const
+{
+    LLMatrix4a vp;
+    vp.setMul(view, proj);
+    bool any = false;
+    for (const Part& part : mParts)
+    {
+        LLRect part_rect;
+        if (!part.mExtents[0].lessEqual(part.mExtents[1]).areAllSet(LLVector4Logical::MASK_XYZ))
+        {
+            // No box: the whole view, so nothing it draws is left out of the rect.
+            part_rect = LLRect(0, h, w, 0);
+        }
+        else if (!screenRectOf(vp, part.mExtents[0], part.mExtents[1], w, h, part_rect))
+        {
+            continue;
+        }
+        if (any)
+        {
+            rect.unionWith(part_rect);
+        }
+        else
+        {
+            rect = part_rect;
+            any = true;
+        }
+    }
+    return any && rect.notEmpty();
 }
 
 void SKOverviewMovers::draw(const LLMatrix4a& view) const

@@ -76,6 +76,7 @@
 #include "lltool.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <unordered_map>
@@ -1281,12 +1282,84 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
     LLCamera cull = shot.mCull;
     LLViewerCamera::updateFrustumPlanes(cull, false, false, true);
 
-    // The census, region by region, a class a range, nearer than the terrain where they coincide.
+    // The census, region by region, a class a multi-draw, nearer than the terrain where they coincide.
     const std::vector<SKOverviewCensus::Batch>& batches = mCensus.batches();
+    // Each class's groups the shot sees, merged into ranges: in the frustum, on the level the shot keeps, and with a
+    // patch, on screen inside it. A class's groups tile its range, so with all of them kept it is one range, as before.
+    struct Ranges
+    {
+        std::vector<GLint> mFirst;
+        std::vector<GLsizei> mCount;
+    };
+    std::vector<std::array<Ranges, skoverview::NUM_CENSUS_CLASSES>> ranges(batches.size());
+    {
+        LL_PROFILE_ZONE_NAMED("sk overview cull groups");
+        LLMatrix4a view_proj;
+        view_proj.setMul(shot.mView, shot.mProj);
+        std::vector<std::pair<U32, U32>> spans;
+        std::vector<bool> kept;
+        for (size_t b = 0; b < batches.size(); ++b)
+        {
+            const SKOverviewCensus::Batch& batch = batches[b];
+            kept.assign(batch.mGroups.size(), false);
+            for (size_t g = 0; g < batch.mGroups.size(); ++g)
+            {
+                const SKOverviewCensus::Group& group = batch.mGroups[g];
+                if (!shot.mLevel.keeps(group))
+                {
+                    continue;
+                }
+                const LLVector3 lo_agent = gAgent.getPosAgentFromGlobal(group.mMin);
+                const LLVector3 hi_agent = gAgent.getPosAgentFromGlobal(group.mMax);
+                LLVector4a lo, hi, centre, half;
+                lo.load3(lo_agent.mV);
+                hi.load3(hi_agent.mV);
+                centre.setAdd(lo, hi);
+                centre.mul(0.5f);
+                half.setSub(hi, lo);
+                half.mul(0.5f);
+                if (!cull.AABBInFrustumNoFarClip(centre, half))
+                {
+                    continue;
+                }
+                LLRect on_screen;
+                if (patch && !(SKOverviewMovers::screenRectOf(view_proj, lo, hi, w, h, on_screen) && on_screen.overlaps(*patch)))
+                {
+                    continue;
+                }
+                kept[g] = true;
+            }
+            for (U32 c = 0; c < skoverview::NUM_CENSUS_CLASSES; ++c)
+            {
+                spans.clear();
+                for (size_t g = 0; g < batch.mGroups.size(); ++g)
+                {
+                    if (kept[g] && batch.mGroups[g].mCount[c])
+                    {
+                        spans.emplace_back(batch.mGroups[g].mStart[c], batch.mGroups[g].mCount[c]);
+                    }
+                }
+                std::sort(spans.begin(), spans.end());
+                Ranges& out = ranges[b][c];
+                for (const std::pair<U32, U32>& span : spans)
+                {
+                    if (!out.mFirst.empty() && (U32)(out.mFirst.back() + out.mCount.back()) == span.first)
+                    {
+                        out.mCount.back() += (GLsizei)span.second;
+                    }
+                    else
+                    {
+                        out.mFirst.push_back((GLint)span.first);
+                        out.mCount.push_back((GLsizei)span.second);
+                    }
+                }
+            }
+        }
+    }
     std::function<void()> census;
     if (!batches.empty())
     {
-        census = [&batches, &shot, patch]()
+        census = [&batches, &ranges, &shot, patch]()
         {
             // The census writes its class code and the triangle's own normal (G, A), so flush parts never crease.
             LLVector4a down, normal_eye, origin_eye, zero;
@@ -1307,21 +1380,12 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
             inverse_view.setInverse(shot.mView);
             const F32* m = inverse_view.getF32ptr();
             const F32 eye_to_world[9] = { m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10] };
-            // A class's range whole, or only the groups the shot's level keeps.
-            auto drawClass = [&shot](const SKOverviewCensus::Batch& batch, U32 c)
+            // A class's kept ranges in one call.
+            auto drawClass = [&batches, &ranges](const SKOverviewCensus::Batch& batch, U32 c)
             {
-                if (shot.mLevel.mAll)
-                {
-                    batch.mBuffer->drawArrays(LLRender::TRIANGLES, batch.mStart[c], batch.mStart[c + 1] - batch.mStart[c]);
-                    return;
-                }
-                for (const SKOverviewCensus::Group& group : batch.mGroups)
-                {
-                    if (group.mCount[c] && shot.mLevel.keeps(group))
-                    {
-                        batch.mBuffer->drawArrays(LLRender::TRIANGLES, group.mStart[c], group.mCount[c]);
-                    }
-                }
+                const Ranges& kept = ranges[&batch - batches.data()][c];
+                batch.mBuffer->multiDrawArrays(LLRender::TRIANGLES, kept.mFirst.data(), kept.mCount.data(),
+                                               (GLsizei)kept.mFirst.size());
             };
             // Binds a geometry program with the shot's uniforms; the cap pass is set per pass.
             LLGLSLShader* bound = nullptr;
