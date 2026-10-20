@@ -1368,16 +1368,8 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildBatches(const Jo
         {
             continue;
         }
-        // A buffer's byte size is a U32 of 16-byte vertices: far beyond anything a region holds, but a runaway
-        // source must not wrap it into a short buffer.
-        if (total > skoverview::MAX_BATCH_VERTICES)
-        {
-            built->mOversized.push_back(total);
-            continue;
-        }
         Built::Region region;
         region.mOrigin = bins.mOrigin;
-        region.mPositions.reserve(total);
         std::map<U32, size_t> group_index;
         for (const auto& b : bins.mBounds)
         {
@@ -1406,23 +1398,95 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildBatches(const Jo
             region.mGroups.push_back(group);
             region.mFootprints.push_back(footprint);
         }
-        U32 at = 0;
+        // A buffer holds at most MAX_BATCH_VERTICES, so a larger region is laid out over several batches with the
+        // same origin, each a class-ordered run of whole groups where they fit and pieces of a group where one does not.
+        const size_t limit = skoverview::MAX_BATCH_VERTICES - skoverview::MAX_BATCH_VERTICES % 3;
+        const Built::Region blank = region;
+        Built::Region piece = blank;
+        std::vector<bool> present(piece.mGroups.size(), false);
+        size_t pieces = 0;
+        U32 cls = 0;
+        auto openClasses = [&](U32 upto)
+        {
+            for (; cls <= upto; ++cls)
+            {
+                piece.mStart[cls] = (U32)piece.mPositions.size();
+            }
+        };
+        auto finish = [&]()
+        {
+            openClasses(skoverview::NUM_CENSUS_CLASSES);
+            if (piece.mPositions.empty())
+            {
+                return;
+            }
+            Built::Region done = blank;
+            done.mPositions = std::move(piece.mPositions);
+            done.mInvisible = std::move(piece.mInvisible);
+            std::copy(std::begin(piece.mStart), std::end(piece.mStart), std::begin(done.mStart));
+            done.mGroups.clear();
+            done.mFootprints.clear();
+            for (size_t i = 0; i < present.size(); ++i)
+            {
+                if (!present[i])
+                {
+                    continue;
+                }
+                Group group = piece.mGroups[i];
+                if (total > limit)
+                {
+                    // Its bounds in this batch alone.
+                    LLVector3 lo(1e30f, 1e30f, 1e30f), hi(-1e30f, -1e30f, -1e30f);
+                    for (U32 c = 0; c < skoverview::NUM_CENSUS_CLASSES; ++c)
+                    {
+                        for (U32 v = group.mStart[c]; v < group.mStart[c] + group.mCount[c]; ++v)
+                        {
+                            update_min_max(lo, hi, done.mPositions[v]);
+                        }
+                    }
+                    group.mMin = bins.mOrigin + LLVector3d(lo);
+                    group.mMax = bins.mOrigin + LLVector3d(hi);
+                }
+                done.mGroups.push_back(group);
+                done.mFootprints.push_back(blank.mFootprints[i]);
+            }
+            built->mRegions.push_back(std::move(done));
+            ++pieces;
+            piece = blank;
+            present.assign(present.size(), false);
+            cls = 0;
+        };
+        piece.mPositions.reserve(llmin(total, limit));
         for (U32 c = 0; c < skoverview::NUM_CENSUS_CLASSES; ++c)
         {
-            region.mStart[c] = at;
             for (const auto& g : bins.mClass[c])
             {
-                Group& group = region.mGroups[group_index[g.first]];
-                group.mStart[c] = at;
-                region.mPositions.insert(region.mPositions.end(), g.second.begin(), g.second.end());
+                const size_t index = group_index[g.first];
                 const std::vector<U8>& flags = bins.mInvisible[c][g.first];
-                region.mInvisible.insert(region.mInvisible.end(), flags.begin(), flags.end());
-                at += (U32)g.second.size();
-                group.mCount[c] = at - group.mStart[c];
+                size_t from = 0;
+                while (from < g.second.size())
+                {
+                    if (piece.mPositions.size() + (g.second.size() - from) > limit && !piece.mPositions.empty())
+                    {
+                        finish();
+                    }
+                    const size_t take = llmin(g.second.size() - from, limit - piece.mPositions.size());
+                    openClasses(c);
+                    Group& group = piece.mGroups[index];
+                    group.mStart[c] = (U32)piece.mPositions.size();
+                    group.mCount[c] = (U32)take;
+                    present[index] = true;
+                    piece.mPositions.insert(piece.mPositions.end(), g.second.begin() + from, g.second.begin() + from + take);
+                    piece.mInvisible.insert(piece.mInvisible.end(), flags.begin() + from / 3, flags.begin() + (from + take) / 3);
+                    from += take;
+                }
             }
         }
-        region.mStart[skoverview::NUM_CENSUS_CLASSES] = at;
-        built->mRegions.push_back(std::move(region));
+        finish();
+        if (pieces > 1)
+        {
+            built->mSplit.emplace_back(total, pieces);
+        }
     }
     return built;
 }
@@ -1430,10 +1494,10 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildBatches(const Jo
 void SKOverviewCensus::swapIn(Built& built)
 {
     LL_PROFILE_ZONE_SCOPED;
-    for (size_t total : built.mOversized)
+    for (const auto& split : built.mSplit)
     {
-        LL_WARNS("SKOverview") << "census batch of " << total << " vertices over the " << skoverview::MAX_BATCH_VERTICES
-                               << " limit; region left out" << LL_ENDL;
+        LL_INFOS("SKOverview") << "census region of " << split.first << " vertices split into " << split.second
+                               << " batches of at most " << skoverview::MAX_BATCH_VERTICES << LL_ENDL;
     }
     // Every region of a build lands in the same frame, as one census.
     std::vector<Batch> batches;

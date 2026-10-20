@@ -316,7 +316,7 @@ private:
         U64 mSignature = 0;
         U32 mGeneration = 0;
         std::vector<Region> mRegions;
-        std::vector<size_t> mOversized;         ///< vertex counts of regions left out
+        std::vector<std::pair<size_t, size_t>> mSplit; ///< regions over one batch: their vertices and batch count
     };
     static std::shared_ptr<Built> buildBatches(const Job& job);
     /// Uploads a build and replaces every batch with it, in this frame.
