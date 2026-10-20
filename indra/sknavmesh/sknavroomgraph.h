@@ -37,7 +37,8 @@ namespace sknav
 {
     struct RoomGraphParams
     {
-        F32 mSillSlackM = 0.6f;         ///< a joining portal's sill lies within both spaces' floor bands, widened by this
+        /// A joining portal's sill lies within both spaces' floor bands, widened by this: past the climb the pass links floors across.
+        F32 mSillSlackM = SpaceParams().mClimbM + 0.125f;
         U32 mMaxMaskCells = 1u << 20;   ///< a footprint box holding more cells than this keeps no mask
     };
 

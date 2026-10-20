@@ -263,6 +263,33 @@ namespace
         }
     }
 
+    TEST_CASE("sknavroomgraph: a lintelled doorway onto a step the pass climbs is one room", "[sknavroomgraph]")
+    {
+        Scene s = splitRooms();
+        s.box(10.f, 5.5f, 10.25f, 6.5f, 2.2f, 3.f, false);
+        s.box(10.f, 2.25f, 17.75f, 9.75f, 0.f, 0.7f);
+        const Result r = run(s.input(1));
+        const U32 west = r.at(6.f, 6.f), east = r.at(14.f, 6.f, 1.2f);
+        REQUIRE(west != ~0u);
+        REQUIRE(east != ~0u);
+        REQUIRE(west != east);
+        CHECK(r.space(east).mFloorMin - r.space(west).mFloorMax > 0.6f);
+        const U32 cut = portalBetween(r, west, east);
+        REQUIRE(cut != ~0u);
+        CHECK(r.mRooms->mPortals[cut].mKind == PortalKind::OPENING);
+        const RoomGraphPtr g = buildRoomGraph(*r.mRooms);
+        const Room* room = g->ofSpace(west);
+        REQUIRE(room != nullptr);
+        CHECK(g->ofSpace(east) == room);
+        CHECK(room->mSpaces.size() == 2);
+
+        // A slack below the step, as the guard first had, splits the storey.
+        RoomGraphParams tight;
+        tight.mSillSlackM = 0.6f;
+        const RoomGraphPtr apart = buildRoomGraph(*r.mRooms, tight);
+        CHECK(apart->ofSpace(west) != apart->ofSpace(east));
+    }
+
     TEST_CASE("sknavroomgraph: a stair joins no storey", "[sknavroomgraph]")
     {
         const Result r = run(stairHouse().input(1), stairDoor());
