@@ -56,9 +56,12 @@ namespace
     constexpr F32 LIFT_STACK_M = 0.5f;      ///< a census shaft thinner than this is a stack of doors, not the shaft beside it
     constexpr F32 OPEN_MIN_S = 0.25f;       ///< unroofed air seeing this much sky is never indoors
     constexpr F32 OPEN_MAX_COVER = 0.05f;
+    constexpr F64 ROOF_MIN_M2 = 2.0;        ///< a smaller patch of floor no space steps onto stays in none
+    constexpr F64 ROOF_OPEN_SHARE = 0.5;    ///< a roof's floor this much under open sky
+    constexpr F64 ROOF_COVER_SHARE = 0.5;   ///< and this much over roofed floors
+    constexpr F32 ROOF_COVERS_SHARE = 0.25f;    ///< a roof covers a space it lies over this much of
     constexpr F32 UNDER_FLIGHT_SHARE = 0.3f;    ///< a space this much under an outdoor flight's air is sheltered by it
     constexpr F32 UNDER_FLIGHT_REACH_M = 2.f;   ///< and opens onto ground this far off across low headroom
-    constexpr F32 CARRY_SLAB_M = 2.f;       ///< air over a solid this thin joins the space below it
     constexpr F32 RASTER_XY_M = 0.5f;
     constexpr F32 RASTER_Z_M = 1.f;
     constexpr U32 STAIR_RUN_EDGES = 3;
@@ -511,7 +514,7 @@ namespace sknav
         size_t n = sizeof(RoomsProduct) + mPortals.capacity() * sizeof(Portal) + mApart.capacity() * sizeof(SeedLink);
         for (const Space& s : mSpaces)
         {
-            n += sizeof(Space) + s.mPortals.capacity() * sizeof(U32) + s.mRaster.capacity() * sizeof(std::pair<U64, U32>);
+            n += sizeof(Space) + (s.mPortals.capacity() + s.mCovers.capacity() + s.mCoverM2.capacity()) * sizeof(U32) + s.mRaster.capacity() * sizeof(std::pair<U64, U32>);
         }
         for (const RoomsTile& t : mTiles)
         {
@@ -4864,30 +4867,12 @@ namespace sknav
                 }
             }
         }
-        for (auto& gaps : lifts)
-        {
-            std::sort(gaps.begin(), gaps.end());
-            gaps.erase(std::unique(gaps.begin(), gaps.end()), gaps.end());
-            // A shaft two doors found is one lift.
-            gaps.erase(std::remove_if(gaps.begin(), gaps.end(), [&](const std::pair<U32, U32>& tg) {
-                           const U32 s = mGapSpace[tg.first][tg.second];
-                           return !s || out[s - 1].mLift;
-                       }),
-                       gaps.end());
-            if (gaps.empty())
-            {
-                continue;
-            }
-            const U32 id = static_cast<U32>(out.size());
-            out.emplace_back();
-            Space& sp = out.back();
-            sp.mLift = true;
-            sp.mBucket = EnclosureBucket::INDOORS;
-            sp.mL = 1.f;
+        // A new space of these gaps: its floor, volume, ceilings and raster; old gets the spaces they leave.
+        const auto takeGaps = [&](U32 id, const std::vector<std::pair<U32, U32>>& gaps, std::set<U32>& old) {
+            Space& sp = out[id];
             F64 w = 0.0, sx = 0.0, sy = 0.0, s = 0.0, e = 0.0, known = 0.0, vol = 0.0, cv = 0.0, ceil_sum = 0.0, ceil_area = 0.0;
             F32 lo = 1e30f, hi = -1e30f, ceil_lo = 1e30f, ceil_hi = -1e30f;
             std::map<U64, U32> raster;
-            std::set<U32> old;
             for (const auto& tg : gaps)
             {
                 const TileAir& a = air(tg.first);
@@ -4972,6 +4957,29 @@ namespace sknav
                     out[o].mFloorArea = std::max(0.f, out[o].mFloorArea - sp.mFloorArea);
                 }
             }
+        };
+        for (auto& gaps : lifts)
+        {
+            std::sort(gaps.begin(), gaps.end());
+            gaps.erase(std::unique(gaps.begin(), gaps.end()), gaps.end());
+            // A shaft two doors found is one lift.
+            gaps.erase(std::remove_if(gaps.begin(), gaps.end(), [&](const std::pair<U32, U32>& tg) {
+                           const U32 s = mGapSpace[tg.first][tg.second];
+                           return !s || out[s - 1].mLift;
+                       }),
+                       gaps.end());
+            if (gaps.empty())
+            {
+                continue;
+            }
+            const U32 id = static_cast<U32>(out.size());
+            out.emplace_back();
+            Space& sp = out.back();
+            sp.mLift = true;
+            sp.mBucket = EnclosureBucket::INDOORS;
+            sp.mL = 1.f;
+            std::set<U32> old;
+            takeGaps(id, gaps, old);
             // The doors into it now open onto it.
             const LLVector2 centre(sp.mCentre.mV[VX], sp.mCentre.mV[VY]);
             for (Portal& q : mPortals)
@@ -4989,9 +4997,8 @@ namespace sknav
         }
 
         // Air over no avatar floor, furniture tops, seats and roofs, joins the
-        // space around it, or else the one below across a thin solid; a floor
-        // on a solid thicker than that is a level of its own.
-        const S32 slab = static_cast<S32>(std::lround(CARRY_SLAB_M / mUnit));
+        // space it steps onto; never the one below across a solid, which no
+        // one walks to from there.
         std::vector<std::vector<U32>> leaf_of(mTiles.size());
         for (U32 t = 0; t < mTiles.size(); ++t)
         {
@@ -5101,30 +5108,130 @@ namespace sknav
             }
         };
         spread();
-        for (U32 t = 0; t < mTiles.size(); ++t)
-        {
+
+        // Roofs: floors open to the sky over a building's roofed floors. A gap's
+        // cells each look down their column for the first gap in a space; the
+        // air's indoor or sheltered bucket there makes the cell cover that space.
+        const F64 cell_m2 = static_cast<F64>(mCell) * mCell;
+        AirColumn below;
+        const auto coverOf = [&](U32 t, U32 g, F64& open, F64& covered, std::map<U32, F64>& covers) {
             const TileAir& a = air(t);
-            std::vector<U32>& gs = mGapSpace[t];
-            AirColumn col;
-            for (S32 iy = 0; iy < a.mHeight; ++iy)
+            if (ceilOf(t, a.mGaps[g]) < OPEN_TOP)
             {
-                for (S32 ix = 0; ix < a.mWidth; ++ix)
+                return;
+            }
+            const AirLeaf& leaf = a.mLeaves[leaf_of[t][g]];
+            const S32 n = 1 << leaf.mLevel;
+            const TileEnclosure& te = mEnc->mTiles[mTiles[t].mEnc];
+            for (S32 iy = leaf.mY; iy < leaf.mY + n && iy < a.mHeight; ++iy)
+            {
+                for (S32 ix = leaf.mX; ix < leaf.mX + n && ix < a.mWidth; ++ix)
                 {
-                    column(t, ix, iy, col);
-                    U32 below = 0;
-                    for (U32 i = 0; i < col.mCount; ++i)
+                    open += cell_m2;
+                    column(t, ix, iy, below);
+                    U32 k = 0;
+                    while (k < below.mCount && below.mGap[k] != g)
                     {
-                        U32& s = gs[col.mGap[i]];
-                        if (!s && below && floorAt(t, col, i, ix, iy) - ceilOf(t, a.mGaps[col.mGap[i - 1]]) <= slab)
+                        ++k;
+                    }
+                    while (k-- > 0 && k < below.mCount)
+                    {
+                        const U32 s = mGapSpace[t][below.mGap[k]];
+                        if (s)
                         {
-                            s = below;
+                            if (const EnclosureBucket bk = static_cast<EnclosureBucket>(te.mGaps[below.mGap[k]].mBucket); bk == EnclosureBucket::INDOORS || bk == EnclosureBucket::SHELTERED)
+                            {
+                                covered += cell_m2;
+                                covers[s - 1] += cell_m2;
+                            }
+                            break;
                         }
-                        below = s;
                     }
                 }
             }
+        };
+        const auto keepCover = [&](Space& sp, F64 covered, const std::map<U32, F64>& covers) {
+            sp.mOverRoofed = sp.mFloorArea > 0.f ? static_cast<F32>(covered / sp.mFloorArea) : 0.f;
+            sp.mCovers.clear();
+            sp.mCoverM2.clear();
+            for (const auto& c : covers)
+            {
+                sp.mCovers.push_back(c.first);
+                sp.mCoverM2.push_back(static_cast<F32>(c.second));
+            }
+        };
+        {
+            // The spaces standing now, any of which may be a roof once its bucket is known.
+            const size_t standing = out.size();
+            std::vector<F64> open(standing, 0.0), covered(standing, 0.0);
+            std::vector<std::map<U32, F64>> covers(standing);
+            for (U32 t = 0; t < mTiles.size(); ++t)
+            {
+                const TileAir& a = air(t);
+                for (U32 g = 0; g < a.mGaps.size(); ++g)
+                {
+                    const U32 s = mGapSpace[t][g];
+                    if (s && s <= standing && floorGap(t, a.mGaps[g]))
+                    {
+                        coverOf(t, g, open[s - 1], covered[s - 1], covers[s - 1]);
+                    }
+                }
+            }
+            for (size_t s = 0; s < standing; ++s)
+            {
+                covers[s].erase(static_cast<U32>(s));
+                keepCover(out[s], covered[s], covers[s]);
+            }
+
+            // Floors no space steps onto: each joined set of them is a roof when open and over indoor floors enough.
+            std::vector<std::vector<U8>> seen(mTiles.size());
+            for (U32 t = 0; t < mTiles.size(); ++t)
+            {
+                seen[t].assign(air(t).mGaps.size(), 0);
+            }
+            for (U32 t0 = 0; t0 < mTiles.size(); ++t0)
+            {
+                for (U32 g0 = 0; g0 < air(t0).mGaps.size(); ++g0)
+                {
+                    if (seen[t0][g0] || mGapSpace[t0][g0] || !floorGap(t0, air(t0).mGaps[g0]))
+                    {
+                        continue;
+                    }
+                    std::vector<std::pair<U32, U32>> gaps(1, { t0, g0 });
+                    seen[t0][g0] = 1;
+                    for (size_t head = 0; head < gaps.size(); ++head)
+                    {
+                        around(gaps[head].first, gaps[head].second, [&](U32 u, U32 o) {
+                            if (!seen[u][o] && !mGapSpace[u][o])
+                            {
+                                seen[u][o] = 1;
+                                gaps.emplace_back(u, o);
+                            }
+                        });
+                    }
+                    F64 area = 0.0, open_m2 = 0.0, covered_m2 = 0.0;
+                    std::map<U32, F64> over;
+                    for (const auto& tg : gaps)
+                    {
+                        const AirLeaf& leaf = air(tg.first).mLeaves[leaf_of[tg.first][tg.second]];
+                        area += cell_m2 * (1 << leaf.mLevel) * (1 << leaf.mLevel);
+                        coverOf(tg.first, tg.second, open_m2, covered_m2, over);
+                    }
+                    if (area < ROOF_MIN_M2 || open_m2 < ROOF_OPEN_SHARE * area || covered_m2 < ROOF_COVER_SHARE * area)
+                    {
+                        continue;
+                    }
+                    std::sort(gaps.begin(), gaps.end());
+                    const U32 id = static_cast<U32>(out.size());
+                    out.emplace_back();
+                    out.back().mRoof = true;
+                    out.back().mBucket = EnclosureBucket::OUTDOORS;
+                    std::set<U32> old;
+                    takeGaps(id, gaps, old);
+                    keepCover(out.back(), covered_m2, over);
+                }
+            }
         }
-        spread();
 
         // Bounds over every gap a space holds, now that all have joined.
         for (U32 t = 0; t < mTiles.size(); ++t)
@@ -5339,6 +5446,78 @@ namespace sknav
             if (sp.mBucket == EnclosureBucket::INDOORS && sp.mCoverMean <= OPEN_MAX_COVER && sp.mSMean > OPEN_MIN_S)
             {
                 sp.mBucket = EnclosureBucket::SHELTERED;
+            }
+            // A roof is outdoors; so is an outdoor floor over indoor ones, and that makes it a roof.
+            sp.mRoof = sp.mRoof || (sp.mBucket == EnclosureBucket::OUTDOORS && sp.mOverRoofed >= ROOF_COVER_SHARE);
+            if (sp.mRoof)
+            {
+                sp.mBucket = EnclosureBucket::OUTDOORS;
+            }
+        }
+
+        // Buildings: indoor spaces joined by a portal, and every roofed space a roof covers with the roof.
+        {
+            UnionFind uf;
+            uf.reset(out.size());
+            const auto indoor = [&](U32 s) { return s < out.size() && out[s].mBucket == EnclosureBucket::INDOORS; };
+            const auto roofed = [&](U32 s) { return indoor(s) || (s < out.size() && out[s].mBucket == EnclosureBucket::SHELTERED); };
+            for (const Portal& q : mProduct->mPortals)
+            {
+                if (indoor(q.mSpaces[0]) && indoor(q.mSpaces[1]))
+                {
+                    uf.unite(q.mSpaces[0], q.mSpaces[1]);
+                }
+            }
+            std::vector<U8> member(out.size(), 0);
+            for (U32 s = 0; s < out.size(); ++s)
+            {
+                member[s] = indoor(s) ? 1 : 0;
+                Space& sp = out[s];
+                if (sp.mRoof)
+                {
+                    // A roof covers the roofed space it lies most over, and those it lies over a quarter of: an eave over a street joins nothing.
+                    size_t keep = 0, most = sp.mCovers.size();
+                    for (size_t k = 0; k < sp.mCovers.size() && k < sp.mCoverM2.size(); ++k)
+                    {
+                        if (roofed(sp.mCovers[k]) && (most == sp.mCovers.size() || sp.mCoverM2[k] > sp.mCoverM2[most]))
+                        {
+                            most = k;
+                        }
+                    }
+                    for (size_t k = 0; k < sp.mCovers.size() && k < sp.mCoverM2.size(); ++k)
+                    {
+                        const U32 c = sp.mCovers[k];
+                        if (roofed(c) && (k == most || sp.mCoverM2[k] >= ROOF_COVERS_SHARE * out[c].mFloorArea))
+                        {
+                            sp.mCovers[keep] = c;
+                            sp.mCoverM2[keep++] = sp.mCoverM2[k];
+                            uf.unite(s, c);
+                        }
+                    }
+                    sp.mCovers.resize(keep);
+                    sp.mCoverM2.resize(keep);
+                }
+            }
+            for (U32 s = 0; s < out.size(); ++s)
+            {
+                for (const U32 c : out[s].mRoof ? out[s].mCovers : std::vector<U32>())
+                {
+                    member[c] = 1;
+                }
+            }
+            std::unordered_map<U32, U32> least;
+            for (U32 s = 0; s < out.size(); ++s)
+            {
+                if (member[s])
+                {
+                    auto it = least.emplace(uf.find(s), out[s].mId).first;
+                    it->second = std::min(it->second, out[s].mId);
+                }
+            }
+            for (U32 s = 0; s < out.size(); ++s)
+            {
+                const auto it = least.find(uf.find(s));
+                out[s].mBuilding = (member[s] || out[s].mRoof) && it != least.end() ? it->second : 0;
             }
         }
 

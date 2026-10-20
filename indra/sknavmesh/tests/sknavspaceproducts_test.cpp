@@ -120,6 +120,26 @@ namespace
         return in;
     }
 
+    /// Open ground, a 3 m deck east of x = 16, and a 60 degree face 6 m wide climbing +x onto it, unstepped.
+    TileBuildInput deckAndClimb()
+    {
+        TileBuildInput in = tileInput();
+        in.mRecords.push_back(box(16.f, 4.f, 0.f, 26.f, 14.f, 3.f));
+        const F32 c = 0.5f, s = 0.8660254f, half_run = 1.7320508f, half_depth = 0.5f;
+        auto r = std::make_shared<Record>(*box(0.f, 0.f, 0.f, 1.f, 1.f, 1.f));
+        r->mAxes[0].set(c, 0.f, s);
+        r->mAxes[1].set(0.f, 1.f, 0.f);
+        r->mAxes[2].set(-s, 0.f, c);
+        r->mHalf.set(half_run, 3.f, half_depth);
+        // The top face runs from the ground at x = 16 - 2 half_run c to the deck's edge at x = 16, z = 3.
+        r->mCenter = LLVector3(16.f - half_run * c, 9.f, 3.f - half_run * s) - r->mAxes[2] * half_depth;
+        r->mMin.set(r->mCenter.mV[VX] - 1.3f, 6.f, r->mCenter.mV[VZ] - 1.8f);
+        r->mMax.set(r->mCenter.mV[VX] + 1.3f, 12.f, r->mCenter.mV[VZ] + 1.8f);
+        in.mRecords.push_back(r);
+        in.mParams[0].mSlope = 74.f;    // AVATAR's, so the face is walkable
+        return in;
+    }
+
     /// A tile rasterised, its spaces cut, stamped, polygonised and bound, its Detour tile in a mesh.
     struct Built
     {
@@ -322,6 +342,7 @@ namespace tut
         ensure_equals("one connector", by_flight.mConnectors.size(), static_cast<size_t>(1));
         const StoreyConnector& c = by_flight.mConnectors[0];
         ensure("the flight's", c.mFlight == flights[0].mKey && !c.mPortals);
+        ensure("a stair, not a climb", c.mKind == ConnectorKind::STAIR && by_flight.mClimbLinks.empty());
         ensure("at its ends", dist_vec(c.mEnd[0], flights[0].mBottom) < 1e-4f && dist_vec(c.mEnd[1], flights[0].mTop) < 1e-4f);
         ensure("between the ground's storey and the deck's", static_cast<S32>(c.mStorey[0]) == sg && static_cast<S32>(c.mStorey[1]) == sd);
 
@@ -346,10 +367,31 @@ namespace tut
         ensure_equals("the same storey", sw, se);
         ensure("no flight, no connector", st.mConnectors.empty());
 
-        // A floor under the least storey area that no flight reaches makes none.
+        // A floor under the least storey area that a space holds is still a storey, and every spaced poly has one.
         StoreyProduct small;
         buildStoreys(*b.mNav, b.polySpace(), *b.mRooms, small, nullptr, 1e6f);
-        ensure("no storey", small.mStoreys.empty() && small.mPolyStorey.empty() && small.storeyOf(west) < 0);
+        ensure("the rooms keep their storey", small.storeyOf(west) >= 0 && small.storeyOf(east) >= 0);
+        const dtNavMesh& nav = *b.mNav;
+        U32 spaced = 0, homeless = 0;
+        for (S32 t = 0; t < nav.getMaxTiles(); ++t)
+        {
+            const dtMeshTile* tile = nav.getTile(t);
+            for (S32 p = 0; tile && tile->header && p < tile->header->polyCount; ++p)
+            {
+                if (b.polySpace()(tile, static_cast<U32>(p)))
+                {
+                    ++spaced;
+                    homeless += small.storeyOfPoly(static_cast<U64>(nav.getPolyRefBase(tile) | static_cast<dtPolyRef>(p))) < 0 ? 1 : 0;
+                }
+            }
+        }
+        ensure("spaced polys", spaced > 0);
+        ensure_equals("every spaced poly has a storey", homeless, 0u);
+
+        // A scrap in no space that no flight reaches makes none.
+        StoreyProduct none;
+        buildStoreys(*b.mNav, [](const dtMeshTile*, U32) { return 0u; }, *b.mRooms, none, nullptr, 1e6f);
+        ensure("no storey", none.mStoreys.empty() && none.mPolyStorey.empty());
     }
 
     template<> template<>
@@ -404,5 +446,185 @@ namespace tut
             ensure(llformat("part at %.2f,%.2f inside the room", p.mOrigin.mV[VX], p.mOrigin.mV[VY]),
                    p.mOrigin.mV[VX] > 2.25f && p.mOrigin.mV[VX] < 10.f && p.mOrigin.mV[VY] > 2.25f && p.mOrigin.mV[VY] < 9.75f);
         }
+    }
+
+    template<> template<>
+    void sknavspaceproducts_object::test<6>()
+    {
+        set_test_name("a climb joins the ground's storey to the deck's at its own ends, kind CLIMB, and links their spaces when it splits them");
+        Built b(deckAndClimb(), {});
+        const std::vector<Flight>& flights = b.mPolys.mFlights[0];
+        const Flight* climb = nullptr;
+        for (const Flight& f : flights)
+        {
+            std::cout << "  flight kind " << static_cast<S32>(f.mKind) << " " << f.mBottom << " -> " << f.mTop << " polys " << f.mPolys.size() << std::endl;
+            climb = f.mKind == ConnectorKind::CLIMB ? &f : climb;
+        }
+        ensure("the face is a climb", climb != nullptr);
+        const PolyFlightFn flight_of = [&flights](const dtMeshTile*, U32 p) -> const Flight* {
+            for (const Flight& f : flights)
+            {
+                if (std::find(f.mPolys.begin(), f.mPolys.end(), static_cast<U16>(p)) != f.mPolys.end())
+                {
+                    return &f;
+                }
+            }
+            return nullptr;
+        };
+        StoreyProduct st;
+        buildStoreys(*b.mNav, b.polySpace(), *b.mRooms, st, flight_of);
+        const S32 sg = b.storeyAt(st, 5.f, 20.f, 0.f), sd = b.storeyAt(st, 21.f, 9.f, 3.f);
+        ensure("ground and deck are two storeys", sg >= 0 && sd >= 0 && sg != sd);
+        U32 joined = 0;
+        for (const StoreyConnector& c : st.mConnectors)
+        {
+            std::cout << "  connector " << c.mStorey[0] << "-" << c.mStorey[1] << " kind " << static_cast<S32>(c.mKind) << std::endl;
+            if (static_cast<S32>(c.mStorey[0]) == sg && static_cast<S32>(c.mStorey[1]) == sd && c.mFlight == climb->mKey)
+            {
+                ++joined;
+                ensure("kind CLIMB", c.mKind == ConnectorKind::CLIMB);
+                ensure("at the climb's own ends", dist_vec(c.mEnd[0], climb->mBottom) < 1e-4f && dist_vec(c.mEnd[1], climb->mTop) < 1e-4f);
+            }
+        }
+        ensure_equals("one connector for the climb", joined, 1u);
+
+        const U32 ground = b.spaceAt(13.f, 9.f, 0.f), deck = b.spaceAt(18.f, 9.f, 3.f);
+        std::cout << "  spaces ground " << ground << " deck " << deck << ", " << st.mClimbLinks.size() << " climb links" << std::endl;
+        ensure("both ends in spaces", ground && deck);
+        if (ground != deck)
+        {
+            ensure_equals("one climb link", st.mClimbLinks.size(), static_cast<size_t>(1));
+            const ClimbLink& l = st.mClimbLinks[0];
+            ensure("foot space first, then the top's", l.mSpace[0] == ground && l.mSpace[1] == deck);
+            ensure("the climb's", l.mFlight == climb->mKey);
+            ensure("found by either space", st.climbLinksOf(ground).size() == 1 && st.climbLinksOf(deck).size() == 1);
+        }
+        else
+        {
+            ensure("one space needs no link", st.mClimbLinks.empty());
+        }
+
+        // Its polys shared with a flight that lands nowhere: the climb's own ends still join the storeys.
+        Flight other;
+        other.mKey = climb->mKey + 1;
+        other.mBottom = other.mTop = LLVector3(5.f, 20.f, 0.f);
+        const PolyFlightFn shared = [&](const dtMeshTile* t, U32 p) -> const Flight* {
+            const Flight* f = flight_of(t, p);
+            return f == climb && p != climb->mPolys[0] ? &other : f;
+        };
+        StoreyProduct mixed;
+        buildStoreys(*b.mNav, b.polySpace(), *b.mRooms, mixed, shared);
+        U32 by_ends = 0;
+        for (const StoreyConnector& c : mixed.mConnectors)
+        {
+            by_ends += c.mFlight == climb->mKey && c.mKind == ConnectorKind::CLIMB && static_cast<S32>(c.mStorey[0]) == sg && static_cast<S32>(c.mStorey[1]) == sd ? 1 : 0;
+        }
+        ensure_equals("joined by the climb's own ends", by_ends, 1u);
+
+        // The deck a space of its own: the climb links the two, foot first.
+        const PolySpaceFn base_space = b.polySpace();
+        const dtMeshTile* dt = static_cast<const dtNavMesh*>(b.mNav)->getTileAt(0, 0, 0);
+        const U32 deck_id = ground + 1;
+        const PolySpaceFn split = [&](const dtMeshTile* t, U32 p) -> U32 {
+            const dtPoly& poly = dt->polys[p];
+            return fromRecast(&dt->verts[poly.verts[0] * 3]).mV[VZ] > 2.5f && fromRecast(&dt->verts[poly.verts[1] * 3]).mV[VZ] > 2.5f ? deck_id : base_space(t, p);
+        };
+        StoreyProduct apart;
+        buildStoreys(*b.mNav, split, *b.mRooms, apart, flight_of);
+        ensure_equals("one climb link", apart.mClimbLinks.size(), static_cast<size_t>(1));
+        const ClimbLink& l = apart.mClimbLinks[0];
+        ensure("foot space first, then the top's", l.mSpace[0] == ground && l.mSpace[1] == deck_id);
+        ensure("the climb's, at its ends", l.mFlight == climb->mKey && dist_vec(l.mFoot, climb->mBottom) < 1e-4f && dist_vec(l.mTop, climb->mTop) < 1e-4f);
+        ensure("found by either space", apart.climbLinksOf(ground).size() == 1 && apart.climbLinksOf(deck_id).size() == 1 && apart.climbLinksOf(7u).empty());
+    }
+
+    template<> template<>
+    void sknavspaceproducts_object::test<7>()
+    {
+        set_test_name("a flight's ends meet the ground's polys at its foot and the deck's at its head, none of its own");
+        Built b(deckAndStair(), {});
+        const std::vector<Flight>& flights = b.mPolys.mFlights[0];
+        ensure_equals("one flight", flights.size(), static_cast<size_t>(1));
+        const Flight& f = flights[0];
+        const PolyFlightFn flight_of = [&f](const dtMeshTile*, U32 p) -> const Flight* {
+            return std::find(f.mPolys.begin(), f.mPolys.end(), static_cast<U16>(p)) != f.mPolys.end() ? &f : nullptr;
+        };
+        StoreyProduct st;
+        buildStoreys(*b.mNav, b.polySpace(), *b.mRooms, st, flight_of, 10.f, { &f });
+        const FlightEnds* fe = st.flightEnds(f.mKey);
+        ensure("its ends", fe != nullptr);
+        const dtNavMesh& nav = *b.mNav;
+        for (S32 e = 0; e < 2; ++e)
+        {
+            ensure(llformat("end %d meets polys", e), !fe->mPolys[e].empty() && fe->mGap[e] == EndGap::NONE);
+            for (const U64 ref : fe->mPolys[e])
+            {
+                const dtMeshTile* t = nullptr;
+                const dtPoly* p = nullptr;
+                ensure("a poly", dtStatusSucceed(nav.getTileAndPolyByRef(static_cast<dtPolyRef>(ref), &t, &p)));
+                const U32 ip = static_cast<U32>(p - t->polys);
+                ensure("not the flight's own", !flight_of(t, ip));
+                F32 lo = 1e30f, hi = -1e30f;
+                for (S32 v = 0; v < p->vertCount; ++v)
+                {
+                    lo = std::min(lo, fromRecast(&t->verts[p->verts[v] * 3]).mV[VZ]);
+                    hi = std::max(hi, fromRecast(&t->verts[p->verts[v] * 3]).mV[VZ]);
+                }
+                const F32 z = e == 0 ? f.mBottom.mV[VZ] : f.mTop.mV[VZ];
+                ensure(llformat("end %d at its height: %.2f..%.2f for %.2f", e, lo, hi, z), lo <= z + FLIGHT_END_DZ_M && hi >= z - FLIGHT_END_DZ_M);
+            }
+        }
+        const S32 sg = b.storeyAt(st, 5.f, 20.f, 0.f), sd = b.storeyAt(st, 21.f, 9.f, 3.f);
+        ensure("their storeys", fe->mStorey[0] == sg && fe->mStorey[1] == sd);
+
+        // An end edge drawn up the run, short of its floor, still meets it across the links of the flight's own polys.
+        Flight shy = f;
+        LLVector3 up = f.mTop - f.mBottom;
+        up.mV[VZ] = 0.f;
+        up.normVec();
+        shy.mBottomA += up * 0.6f;
+        shy.mBottomB += up * 0.6f;
+        std::vector<FlightEnds> shy_ends;
+        flightEnds(nav, { &shy }, [&f, &shy](const dtMeshTile* t, U32 p) -> const Flight* {
+            return std::find(f.mPolys.begin(), f.mPolys.end(), static_cast<U16>(p)) != f.mPolys.end() ? &shy : nullptr;
+        }, shy_ends);
+        ensure("linked at its foot", shy_ends.size() == 1 && !shy_ends[0].mPolys[0].empty());
+
+        // Without polys of its own its ends still meet the floors; with no floor there either, an end says it was eroded.
+        Flight bare = f;
+        bare.mKey ^= 1;
+        bare.mPolys.clear();
+        std::vector<FlightEnds> ends;
+        flightEnds(nav, { &bare }, nullptr, ends);
+        ensure("bare, still meeting the floors", ends.size() == 1 && !ends[0].mPolys[0].empty() && !ends[0].mPolys[1].empty());
+        for (LLVector3* v : { &bare.mBottom, &bare.mTop, &bare.mBottomA, &bare.mBottomB, &bare.mTopA, &bare.mTopB })
+        {
+            v->mV[VZ] += 20.f;
+        }
+        flightEnds(nav, { &bare }, nullptr, ends);
+        ensure("in the air, eroded", ends.size() == 1 && ends[0].mGap[0] == EndGap::ERODED && ends[0].mGap[1] == EndGap::ERODED);
+    }
+
+    template<> template<>
+    void sknavspaceproducts_object::test<8>()
+    {
+        set_test_name("two spaces whose polys share an edge with no portal between them get a seam portal there, none where a portal stands");
+        std::vector<DoorEntity> doors;
+        Built b(twoRoomsDoor(doors), doors);
+        const U32 west = b.spaceAt(6.f, 6.f, 0.25f), east = b.spaceAt(14.f, 6.f, 0.25f);
+        ensure("two rooms", west && east && west != east);
+        StoreyProduct with;
+        buildStoreys(*b.mNav, b.polySpace(), *b.mRooms, with);
+        ensure("the door joins them already: no seam", with.mSeamPortals.empty());
+        // The same polys with the door's portal gone.
+        RoomsProduct bare(*b.mRooms);
+        bare.mPortals.clear();
+        StoreyProduct seam;
+        buildStoreys(*b.mNav, b.polySpace(), bare, seam);
+        ensure_equals("one seam portal", seam.mSeamPortals.size(), size_t(1));
+        const SeamPortal& sp = seam.mSeamPortals.front();
+        ensure("between the rooms", sp.mSpace[0] == std::min(west, east) && sp.mSpace[1] == std::max(west, east));
+        ensure("in the doorway", std::fabs(sp.mCentre.mV[VX] - 10.f) < 0.75f && sp.mLength > 0.3f);
+        ensure("no flight, so no stair", sp.mKind != SeamPortal::STAIR);
     }
 }

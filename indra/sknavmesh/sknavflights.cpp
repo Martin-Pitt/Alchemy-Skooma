@@ -480,7 +480,8 @@ namespace
     constexpr F64 PLANAR = 0.92;            ///< a slope group whose normals agree less than this is furniture
     constexpr F64 TURN_DEG = 30.0;          ///< joined slopes whose runs differ more are two flights
     constexpr F64 JOIN_DZ = 0.5;
-    constexpr F64 MIN_WIDTH_M = 0.9;        ///< narrower is a rail or a wall top
+    constexpr F64 JOIN_SLOPE_DEG = 20.0;    ///< slope groups steeper or gentler than each other by more are two flights
+    constexpr F64 MIN_WIDTH_M = 0.8;        ///< narrower is a rail or a wall top; a ship's stair is 0.88 m
     constexpr F64 MIN_AREA_M2 = 1.5;        ///< without a name, smaller is a prop
     constexpr F64 MAX_AREA_UNCUED_M2 = 100.0;   ///< and bigger is a roof or a hillside
     constexpr F64 MAX_RUN_M = 12.0;
@@ -491,12 +492,101 @@ namespace
     constexpr F64 LEVEL_DZ = 0.3;
     constexpr F64 FLOOR_MIN_M2 = 4.0;       ///< without a name, a smaller floor at an end is a prop top
     constexpr F64 MIN_RISE_UNCUED_M = 1.0;  ///< without a name or treads, a smaller climb is a step
-    constexpr F64 MAX_GRADE_DEG = 52.0;     ///< steeper is a wall, a ladder or furniture
-    constexpr F64 MAX_RISER_M = 0.4;        ///< treads further apart than this are platforms
+    constexpr F64 FLAT_FACE_DEG = 10.0;     ///< a steep unstepped flight's faces lie this close to its plane
+    constexpr F64 FLAT_FACE_SHARE = 0.9;    ///< over this share of its area, so a few stray facets do not fail it
+    constexpr F64 STAIR_LIKE_WIDTH_M = 1.5; ///< a wedge this narrow, decked at both ends and a storey high, is a stair however steep
+    constexpr F64 STAIR_LIKE_SHARE = 0.7;   ///< and its face is this much of its record's walkable area
+    constexpr F64 RECORD_SPREAD_MAX = 3.0;  ///< in a record no bigger in plan than this many faces
+    constexpr F64 CLIMB_FACE_M2 = 7.0;      ///< a climb's face is this big
+    constexpr F64 CLIMB_SHARE = 0.3;        ///< or this much of its own record
+    constexpr F64 CLIMB_SHARED_FACE_M2 = 4.0;   ///< and this big
+    constexpr F64 STAIR_LIKE_RISE_MIN_M = 1.2;
+    constexpr F64 STAIR_LIKE_RISE_MAX_M = 2.5;
     constexpr F64 MAX_GOING_M = 0.6;        ///< and deeper than this, seating
     constexpr F64 MIN_RUN_M = 0.5;
     constexpr F64 BURIED_DZ = 0.1;          ///< a floor this far above a flight's slope covers it
     constexpr F64 EXPOSED_STEP_M = 0.1;     ///< where a sunk flight comes out of its floor, found to this
+
+    constexpr F64 TREAD_CLEAR_M = 0.05;     ///< a tread lies this far clear of both floors
+    constexpr F64 TREAD_BELOW_M = 0.6;      ///< and at most this far under the flight's plane, as steps under a ramp do
+    constexpr F64 TREAD_ABOVE_M = 0.35;     ///< or over it, as a step's back half does
+    constexpr F64 TREAD_SPLIT_M = 0.04;     ///< level faces further apart in height are two treads
+    constexpr F64 TREAD_MIN_M2 = 0.05;      ///< a tread has at least this much level face
+    constexpr F64 TREAD_RISER_SPREAD = 2.5; ///< no riser between treads is taller than this many times the median
+
+    /// Treads between two floors: the distinct heights of the level faces over a flight's footprint, near its plane, when they step evenly.
+    S32 countTreads(const Partitioner& P, const std::vector<LLVector2>& hull, const F32 plane[3], F64 zb, F64 zt, F64 climb)
+    {
+        if (hull.size() < 3)
+        {
+            return 0;
+        }
+        F64 x0 = 1e30, y0 = 1e30, x1 = -1e30, y1 = -1e30;
+        for (const LLVector2& v : hull)
+        {
+            x0 = std::min<F64>(x0, v.mV[0]);
+            y0 = std::min<F64>(y0, v.mV[1]);
+            x1 = std::max<F64>(x1, v.mV[0]);
+            y1 = std::max<F64>(y1, v.mV[1]);
+        }
+        const F64 lo = std::min(zb, zt) + TREAD_CLEAR_M, hi = std::max(zb, zt) - TREAD_CLEAR_M;
+        std::vector<std::pair<F64, F64>> level;
+        for (S32 t = 0; t < P.ntris(); ++t)
+        {
+            const V3& c = P.mC[t];
+            if (!P.mValid[t] || !P.mLevel[t] || c.z <= lo || c.z >= hi || c.x < x0 || c.x > x1 || c.y < y0 || c.y > y1)
+            {
+                continue;
+            }
+            const F64 dz = c.z - (plane[0] * c.x + plane[1] * c.y + plane[2]);
+            if (dz < -TREAD_BELOW_M || dz > TREAD_ABOVE_M)
+            {
+                continue;
+            }
+            bool inside = true;
+            for (size_t i = 0; i < hull.size() && inside; ++i)
+            {
+                const LLVector2 &a = hull[i], &b = hull[(i + 1) % hull.size()];
+                inside = (b.mV[0] - a.mV[0]) * (c.y - a.mV[1]) - (b.mV[1] - a.mV[1]) * (c.x - a.mV[0]) >= -1e-6;
+            }
+            if (inside)
+            {
+                level.emplace_back(c.z, P.mArea[t]);
+            }
+        }
+        std::sort(level.begin(), level.end());
+        std::vector<F64> heights = { lo - TREAD_CLEAR_M };
+        F64 area = 0, sum = 0, last = -1e30;
+        for (size_t i = 0; i <= level.size(); ++i)
+        {
+            if (i == level.size() || level[i].first - last > TREAD_SPLIT_M)
+            {
+                if (area >= TREAD_MIN_M2)
+                {
+                    heights.push_back(sum / area);
+                }
+                area = sum = 0;
+            }
+            if (i < level.size())
+            {
+                area += level[i].second;
+                sum += level[i].first * level[i].second;
+                last = level[i].first;
+            }
+        }
+        heights.push_back(hi + TREAD_CLEAR_M);
+        // Steps climb the whole rise in risers a foot can take, none much taller than the rest; stray level faces on a wedge do not.
+        std::vector<F64> risers;
+        for (size_t i = 1; i < heights.size(); ++i)
+        {
+            risers.push_back(heights[i] - heights[i - 1]);
+        }
+        std::vector<F64> sorted = risers;
+        std::sort(sorted.begin(), sorted.end());
+        const F64 median = sorted[sorted.size() / 2], tallest = sorted.back();
+        const S32 treads = static_cast<S32>(heights.size()) - 2;
+        return treads > 0 && median <= climb && tallest <= TREAD_RISER_SPREAD * median ? treads : 0;
+    }
 
     /// Height of walkable triangle t at a point in plan: over it, or within NEAR_XY of an edge.
     bool nearZ(const Partitioner& P, S32 t, F64 px, F64 py, F64& z)
@@ -585,6 +675,29 @@ namespace
         return true;
     }
 
+    /// Whether FLAT_FACE_SHARE of the area faces within FLAT_FACE_DEG of the area-weighted mean.
+    bool flatFace(const Partitioner& P, const std::vector<S32>& tris)
+    {
+        V3 m;
+        for (const S32 t : tris)
+        {
+            m = { m.x + P.mN[t].x * P.mArea[t], m.y + P.mN[t].y * P.mArea[t], m.z + P.mN[t].z * P.mArea[t] };
+        }
+        const F64 l = std::sqrt(m.x * m.x + m.y * m.y + m.z * m.z);
+        if (l <= 0)
+        {
+            return false;
+        }
+        const F64 cos_flat = std::cos(FLAT_FACE_DEG * DEG_TO_RAD);
+        F64 flat = 0, all = 0;
+        for (const S32 t : tris)
+        {
+            all += P.mArea[t];
+            flat += (P.mN[t].x * m.x + P.mN[t].y * m.y + P.mN[t].z * m.z) / l >= cos_flat ? P.mArea[t] : 0.0;
+        }
+        return flat >= FLAT_FACE_SHARE * all;
+    }
+
     /// For a chain of level treads: the plan direction height rises along, fitted over the treads' centroids.
     bool risesAlong(const Partitioner& P, const std::vector<S32>& groups, const std::vector<std::vector<S32>>& tris_of, F64& ux, F64& uy)
     {
@@ -661,8 +774,33 @@ namespace
     /// clipped to its floors' heights; the floors just past each end only say
     /// that it connects two of them.
     void buildConnectors(Partitioner& P, const std::vector<S32>& grp, const std::vector<U8>& kind, S32 ngroups, const std::vector<U8>& codes,
-                         const std::vector<U8>& cues, std::vector<Flight>& flights)
+                         const std::vector<U8>& cues, const std::vector<S32>& sources, const std::vector<std::pair<S32, S32>>& level_links,
+                         F64 max_grade_deg, std::vector<Flight>& flights)
     {
+        // Per source record: its walkable area facing up, and its extent in plan.
+        S32 nsources = 0;
+        for (const S32 s : sources)
+        {
+            nsources = std::max(nsources, s + 1);
+        }
+        std::vector<F64> source_walk(nsources, 0.0), sx0(nsources, 1e30), sy0(nsources, 1e30), sx1(nsources, -1e30), sy1(nsources, -1e30);
+        for (S32 t = 0; t < static_cast<S32>(sources.size()) && t < P.ntris(); ++t)
+        {
+            const S32 s = sources[t];
+            if (s < 0 || !P.mValid[t])
+            {
+                continue;
+            }
+            source_walk[s] += P.mWalk[t] ? P.mArea[t] : 0.0;
+            for (S32 c = 0; c < 3; ++c)
+            {
+                const V3& v = P.mV[P.mT[t * 3 + c]];
+                sx0[s] = std::min(sx0[s], v.x);
+                sy0[s] = std::min(sy0[s], v.y);
+                sx1[s] = std::max(sx1[s], v.x);
+                sy1[s] = std::max(sy1[s], v.y);
+            }
+        }
         const S32 n = P.ntris();
         std::vector<std::vector<S32>> tris_of(ngroups);
         std::vector<F64> area(ngroups, 0.0);
@@ -680,7 +818,7 @@ namespace
             }
         }
         std::vector<U8> cand(ngroups, 0), has_dir(ngroups, 0);
-        std::vector<F64> dir_x(ngroups, 0.0), dir_y(ngroups, 0.0);
+        std::vector<F64> dir_x(ngroups, 0.0), dir_y(ngroups, 0.0), slope_deg(ngroups, 0.0), own_rise(ngroups, 0.0);
         bool any = false;
         for (S32 g = 0; g < ngroups; ++g)
         {
@@ -692,19 +830,27 @@ namespace
             const F64 mz = mean[g].z / a;
             const F64 deg = std::acos(std::min(1.0, mz)) * RAD_TO_DEG;
             const F64 planar = std::sqrt(mean[g].x * mean[g].x + mean[g].y * mean[g].y + mean[g].z * mean[g].z) / a;
-            const bool slope = kind[g] == SLOPE_GROUP && deg >= MIN_SLOPE_DEG && planar >= PLANAR && !(deg < FLOORISH_DEG && area[g] > FLOORISH_M2);
-            F64 x0 = 1e30, y0 = 1e30, x1 = -1e30, y1 = -1e30;
+            F64 x0 = 1e30, y0 = 1e30, x1 = -1e30, y1 = -1e30, z0 = 1e30, z1 = -1e30;
+            bool named = false;
             for (const S32 t : tris_of[g])
             {
+                named = named || (t < static_cast<S32>(cues.size()) && (cues[t] == CUE_STAIR || cues[t] == CUE_RAMP));
                 for (S32 c = 0; c < 3; ++c)
                 {
                     const V3& v = P.mV[P.mT[t * 3 + c]];
                     x0 = std::min(x0, v.x);
                     y0 = std::min(y0, v.y);
+                    z0 = std::min(z0, v.z);
                     x1 = std::max(x1, v.x);
                     y1 = std::max(y1, v.y);
+                    z1 = std::max(z1, v.z);
                 }
             }
+            slope_deg[g] = deg;
+            own_rise[g] = z1 - z0;
+            // a slope that climbs less than a step, unnamed, is a hull skirt or a prop's bevel
+            const bool slope = kind[g] == SLOPE_GROUP && deg >= MIN_SLOPE_DEG && planar >= PLANAR && !(deg < FLOORISH_DEG && area[g] > FLOORISH_M2) &&
+                               (own_rise[g] >= P.mClimb || named);
             // a tread is shallow: a deeper level group is a landing
             const bool tread = kind[g] == TREAD_GROUP && area[g] <= TREAD_MAX_M2 && std::min(x1 - x0, y1 - y0) <= MAX_GOING_M;
             cand[g] = slope || tread;
@@ -767,6 +913,12 @@ namespace
                         {
                             continue;
                         }
+                        // a low or much gentler slope beside a steep one is not part of its flight
+                        if (kind[g] == SLOPE_GROUP && kind[o] == SLOPE_GROUP &&
+                            (std::fabs(slope_deg[g] - slope_deg[o]) > JOIN_SLOPE_DEG || std::min(own_rise[g], own_rise[o]) < FLIGHT_MIN_RISE_M))
+                        {
+                            continue;
+                        }
                         if ((has_dir[g] && has_dir[o] && dir_x[g] * dir_x[o] + dir_y[g] * dir_y[o] < cos_turn) || turns(find(g), find(o)))
                         {
                             continue;
@@ -786,6 +938,33 @@ namespace
             {
                 units[find(g)].push_back(g);
             }
+        }
+
+        // The deck each floor group belongs to: floor groups joined where one steps level onto the next.
+        std::vector<S32> deck(ngroups);
+        for (S32 g = 0; g < ngroups; ++g)
+        {
+            deck[g] = g;
+        }
+        const auto deck_of = [&](S32 g) {
+            while (deck[g] != g)
+            {
+                g = deck[g] = deck[deck[g]];
+            }
+            return g;
+        };
+        for (const auto& [a, b] : level_links)
+        {
+            if (a >= 0 && b >= 0 && !cand[a] && !cand[b] && deck_of(a) != deck_of(b))
+            {
+                const S32 ra = deck_of(a), rb = deck_of(b);
+                deck[std::max(ra, rb)] = std::min(ra, rb);
+            }
+        }
+        std::vector<F64> deck_area(ngroups, 0.0);
+        for (S32 g = 0; g < ngroups; ++g)
+        {
+            deck_area[deck_of(g)] += area[g];
         }
 
         std::vector<S32> beyond;
@@ -1007,7 +1186,7 @@ namespace
             std::sort(gaps.begin(), gaps.end());
             const F64 riser = gaps.empty() ? 1e9 : gaps[gaps.size() / 2];
             const F64 going = (s1 - s0) / std::max<F64>(treads, 1);
-            const bool stepped = treads >= 2 && riser <= MAX_RISER_M && going <= MAX_GOING_M;
+            const bool stepped = treads >= 2 && riser <= P.mClimb && going <= MAX_GOING_M;
 
             const F64 rise = ftz - fbz;
             // clip each end to where the run reaches its floor's height
@@ -1020,30 +1199,85 @@ namespace
             }
             const F64 run = st - sb;
             const F64 grade = std::atan2(rise, std::max(run, 1e-6)) * RAD_TO_DEG;
+            // A floor outside the partitioned area is ground, never a prop top; inside, it is the whole deck.
+            const auto floor_area = [&](S32 f) { return P.mPart[tris_of[f][0]] ? deck_area[deck_of(f)] : 1e30; };
+            const bool decked = floor_area(fb) >= FLOOR_MIN_M2 && floor_area(ft) >= FLOOR_MIN_M2;
+            // narrow, a storey high, from deck to deck: a ship's stair simplified to a wedge
+            // The record most of the face comes from: how much of its walkable area the face is, and how much bigger it is in plan.
+            F64 face_share = 1.0, record_spread = 1.0, face_area = 0.0;
+            {
+                const std::vector<S32>& face = sloped.empty() ? all : sloped;
+                std::map<S32, F64> by_source;
+                F64 fx0 = 1e30, fy0 = 1e30, fx1 = -1e30, fy1 = -1e30;
+                for (const S32 t : face)
+                {
+                    face_area += P.mArea[t];
+                    if (t < static_cast<S32>(sources.size()) && sources[t] >= 0)
+                    {
+                        by_source[sources[t]] += P.mArea[t];
+                    }
+                    for (S32 c = 0; c < 3; ++c)
+                    {
+                        const V3& v = P.mV[P.mT[t * 3 + c]];
+                        fx0 = std::min(fx0, v.x);
+                        fy0 = std::min(fy0, v.y);
+                        fx1 = std::max(fx1, v.x);
+                        fy1 = std::max(fy1, v.y);
+                    }
+                }
+                S32 rec = -1;
+                for (const auto& [s, a] : by_source)
+                {
+                    rec = rec < 0 || a > by_source[rec] ? s : rec;
+                }
+                if (rec >= 0)
+                {
+                    face_share = by_source[rec] / std::max(source_walk[rec], 1e-9);
+                    record_spread = std::max(0.0, sx1[rec] - sx0[rec]) * std::max(0.0, sy1[rec] - sy0[rec]) /
+                                    std::max(std::max(0.01, fx1 - fx0) * std::max(0.01, fy1 - fy0), 1e-6);
+                }
+            }
+            const bool own_record = face_share >= STAIR_LIKE_SHARE && record_spread <= RECORD_SPREAD_MAX;
+            const bool stair_like = decked && own_record && width <= STAIR_LIKE_WIDTH_M && rise >= STAIR_LIKE_RISE_MIN_M && rise <= STAIR_LIKE_RISE_MAX_M;
+            // a climb is a large flat face, or the face its own record is mostly made of: not one facet of a rock
+            const bool climbable = face_area >= CLIMB_FACE_M2 ||
+                                   (face_share >= CLIMB_SHARE && record_spread <= RECORD_SPREAD_MAX && face_area >= CLIMB_SHARED_FACE_M2);
             Flight fl;
-            if (cue != CUE_NONE)
+            if (stepped)
+            {
+                fl.mKind = ConnectorKind::STAIR;
+                fl.mRule = cue != CUE_NONE ? ConnectorRule::NAME : ConnectorRule::TREADS;
+            }
+            else if (grade > CLIMB_GRADE_DEG)
+            {
+                fl.mKind = stair_like ? ConnectorKind::STAIR : ConnectorKind::CLIMB;
+                fl.mRule = ConnectorRule::GRADE;
+            }
+            else if (cue != CUE_NONE)
             {
                 fl.mKind = cue == CUE_STAIR ? ConnectorKind::STAIR : ConnectorKind::RAMP;
                 fl.mRule = ConnectorRule::NAME;
-            }
-            else if (stepped)
-            {
-                fl.mKind = ConnectorKind::STAIR;
-                fl.mRule = ConnectorRule::TREADS;
             }
             else
             {
                 fl.mKind = grade > STAIR_GRADE_DEG ? ConnectorKind::STAIR : ConnectorKind::RAMP;
                 fl.mRule = ConnectorRule::GRADE;
             }
-            const bool cued = fl.mRule != ConnectorRule::GRADE;
-            // A floor outside the partitioned area is ground, never a prop top.
-            const auto floor_area = [&](S32 f) { return P.mPart[tris_of[f][0]] ? area[f] : 1e30; };
-            if (cue == CUE_NONE && (floor_area(fb) < FLOOR_MIN_M2 || floor_area(ft) < FLOOR_MIN_M2))
+            const bool cued = fl.mRule != ConnectorRule::GRADE || cue != CUE_NONE;
+            if (fl.mKind == ConnectorKind::CLIMB && !climbable)
             {
                 continue;
             }
-            if (rise < FLIGHT_MIN_RISE_M || (rise < MIN_RISE_UNCUED_M && !cued) || run < MIN_RUN_M || grade > MAX_GRADE_DEG ||
+            if (cue == CUE_NONE && !decked)
+            {
+                continue;
+            }
+            // An unstepped flight steeper than a ramp is one flat face: a curved column is not.
+            if (!stepped && grade > STAIR_GRADE_DEG && !flatFace(P, sloped.empty() ? all : sloped))
+            {
+                continue;
+            }
+            if (rise < FLIGHT_MIN_RISE_M || (rise < MIN_RISE_UNCUED_M && !cued) || run < MIN_RUN_M || (grade > max_grade_deg && !stepped) ||
                 width < MIN_WIDTH_M || s1 - s0 > MAX_RUN_M || (!cued && (unit_area < MIN_AREA_M2 || unit_area > MAX_AREA_UNCUED_M2)) ||
                 (sloped.empty() && treads >= 2 && !stepped && cue == CUE_NONE))
             {
@@ -1066,6 +1300,9 @@ namespace
             fl.mZMax = static_cast<F32>(ftz);
             fl.mFootprint = hull(plan);
             fl.mTreads = treads;
+            const S32 counted = countTreads(P, fl.mFootprint, fl.mPlane, fbz, ftz, P.mClimb);
+            fl.mTreadCount = static_cast<S16>(counted > 0 ? std::min(counted, 999) : treads > 0 ? treads : -1);
+            fl.mDecked = decked;
             fl.mCodes = member_codes;
             U64 key = 1469598103934665603ull;
             for (const F32 v : { fl.mBottom.mV[VX], fl.mBottom.mV[VY], fl.mBottom.mV[VZ], fl.mTop.mV[VX], fl.mTop.mV[VY], fl.mTop.mV[VZ] })
@@ -1081,8 +1318,8 @@ namespace
 namespace sknav
 {
     SlopePartition partitionSlopes(const std::vector<LLVector3>& verts, const std::vector<S32>& tris, const std::vector<U8>& areas,
-                                   const std::vector<U8>& two_sided, U8 partitioned_area, F32 climb, S32 max_codes,
-                                   const std::vector<U8>& cues)
+                                   const std::vector<U8>& two_sided, U8 partitioned_area, F32 climb, F32 walk_slope_deg, S32 max_codes,
+                                   const std::vector<U8>& cues, const std::vector<S32>& sources)
     {
         SlopePartition out;
         Partitioner P;
@@ -1147,7 +1384,7 @@ namespace sknav
 
         // risers: the probe again, across the boundaries of the final groups
         std::vector<std::vector<Riser>> risers(ngroups);
-        std::vector<std::pair<S32, S32>> touching;
+        std::vector<std::pair<S32, S32>> touching, level_links;
         P.boundaries(g_of, edges);
         for (const Boundary& e : edges)
         {
@@ -1158,6 +1395,10 @@ namespace sknav
                 continue;
             }
             touching.emplace_back(grp[e.mTri], grp[u]);
+            if (std::fabs(dz) <= LEVEL_DZ)
+            {
+                level_links.emplace_back(grp[e.mTri], grp[u]);
+            }
             if (std::fabs(dz) >= SEAM_DZ)
             {
                 // Seen from both sides: a stair of overlapping prims has each
@@ -1372,7 +1613,7 @@ namespace sknav
         }
 
         // 4. connectors: slope and tread groups that step off onto a floor at each end
-        buildConnectors(P, grp, kind, ngroups, out.mCodes, cues, out.mFlights);
+        buildConnectors(P, grp, kind, ngroups, out.mCodes, cues, sources, level_links, walk_slope_deg, out.mFlights);
         return out;
     }
 
@@ -1402,7 +1643,14 @@ namespace sknav
                 }
             }
         }
-        flights.erase(std::remove_if(flights.begin(), flights.end(), [](const Flight& f) { return f.mPolys.empty(); }), flights.end());
+        for (Flight& f : flights)
+        {
+            // only a narrow steep stair between decks is worth keeping bare
+            const F32 width = (f.mBottomB - f.mBottomA).length();
+            const bool steep = f.mRise > std::tan(STAIR_GRADE_DEG * DEG_TO_RAD) * f.mRun;
+            f.mEroded = f.mEroded && f.mPolys.empty() && f.mKind == ConnectorKind::STAIR && f.mDecked && steep && width <= STAIR_LIKE_WIDTH_M;
+        }
+        flights.erase(std::remove_if(flights.begin(), flights.end(), [](const Flight& f) { return f.mPolys.empty() && !f.mEroded; }), flights.end());
     }
 
     void fitFlightEdges(std::vector<Flight>& flights, const std::vector<std::vector<LLVector3>>& polys, F32 radius, const LLVector2& lo,
@@ -1494,11 +1742,29 @@ namespace sknav
         return false;
     }
 
+    bool flightHome(const rcCompactHeightfield& chf, S32 border, const Flight& flight)
+    {
+        if (flight.mFootprint.empty())
+        {
+            return false;
+        }
+        LLVector2 mid;
+        for (const LLVector2& p : flight.mFootprint)
+        {
+            mid += p / static_cast<F32>(flight.mFootprint.size());
+        }
+        // Recast x is SL y, Recast z SL x.
+        const F32 x0 = chf.bmin[2] + border * chf.cs, x1 = chf.bmin[2] + (chf.height - border) * chf.cs;
+        const F32 y0 = chf.bmin[0] + border * chf.cs, y1 = chf.bmin[0] + (chf.width - border) * chf.cs;
+        return mid.mV[VX] >= x0 && mid.mV[VX] < x1 && mid.mV[VY] >= y0 && mid.mV[VY] < y1;
+    }
+
     void markFlights(AirGrid& grid, const std::vector<Flight>& flights)
     {
         for (const Flight& f : flights)
         {
-            if (f.mFootprint.size() < 3)
+            // a climb links levels through the mesh alone, with no stair portal
+            if (f.mFootprint.size() < 3 || f.mKind == ConnectorKind::CLIMB)
             {
                 continue;
             }

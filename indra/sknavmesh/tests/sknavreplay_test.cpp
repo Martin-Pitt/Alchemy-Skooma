@@ -512,6 +512,8 @@ namespace tut
         options.mStamp = LLStringUtil::getenv("SKNAV_REPLAY_STAMP") != "0";
         options.mCoarseAir = LLStringUtil::getenv("SKNAV_REPLAY_COARSE") != "0";
         options.mKeepRasters = !LLStringUtil::getenv("SKNAV_REPLAY_EDITS").empty();
+        // SKNAV_REPLAY_FINE=1 builds the fine air over the narrow openings and measures it.
+        options.mFineAir = LLStringUtil::getenv("SKNAV_REPLAY_FINE") == "1";
         // SKNAV_REPLAY_FACE_OFFSETS=0 leaves faces at their cell boundaries; SKNAV_REPLAY_FACE_TRACE=n traces every n-th face for the oracle.
         options.mFaceOffsets = LLStringUtil::getenv("SKNAV_REPLAY_FACE_OFFSETS") != "0";
         options.mAlignWallEdges = LLStringUtil::getenv("SKNAV_REPLAY_ALIGN_EDGES") != "0";
@@ -556,6 +558,65 @@ namespace tut
             // SKNAV_REPLAY_STATS: the measurements; SKNAV_REPLAY_EDITS names "record op" lines to rebuild with.
             std::ofstream measure(dir + "replay-measure.json", std::ios::binary);
             writeReplayStats(measure, c, r);
+            const std::string fine_tiles = LLStringUtil::getenv("SKNAV_FINE_DUMP_TILES");
+            if (!fine_tiles.empty())
+            {
+                std::ofstream fd(dir + "fine-dump.jsonl", std::ios::binary);
+                std::istringstream list(fine_tiles);
+                std::string item;
+                while (std::getline(list, item, ';'))
+                {
+                    S32 m = 0, tx = 0, ty = 0;
+                    if (sscanf(item.c_str(), "%d,%d,%d", &m, &tx, &ty) != 3 || m >= static_cast<S32>(r.mMeshes.size()))
+                    {
+                        continue;
+                    }
+                    const auto it = r.mMeshes[m]->mTiles.find(TileKey{ tx, ty });
+                    if (it == r.mMeshes[m]->mTiles.end() || !it->second.mResult || !it->second.mResult->mAir || !it->second.mResult->mFineAir)
+                    {
+                        continue;
+                    }
+                    const TileAir& air = *it->second.mResult->mAir;
+                    const FineAir& fa = *it->second.mResult->mFineAir;
+                    fd << "{\"mesh\":" << m << ",\"x\":" << tx << ",\"y\":" << ty << ",\"cell\":" << air.mCell << ",\"unit\":" << air.mUnit
+                       << ",\"origin\":[" << air.mOrigin.mV[0] << ',' << air.mOrigin.mV[1] << ',' << air.mOrigin.mV[2] << "],\"w\":" << air.mWidth
+                       << ",\"h\":" << air.mHeight << ",\"coarse\":[";
+                    bool first = true;
+                    for (S32 iy = 0; iy < air.mHeight; ++iy)
+                    {
+                        for (S32 ix = 0; ix < air.mWidth; ++ix)
+                        {
+                            const S32 leaf = findLeafByKey(air, ix, iy);
+                            if (leaf < 0)
+                            {
+                                continue;
+                            }
+                            const AirLeaf& l = air.mLeaves[leaf];
+                            fd << (first ? "" : ",") << '[' << ix << ',' << iy;
+                            for (U32 g = 0; g < l.mGapCount; ++g)
+                            {
+                                const AirGap& gap = air.mGaps[l.mFirstGap + g];
+                                fd << ',' << gap.mFloor << ',' << gap.mCeiling << ',' << static_cast<S32>(gap.mFlags);
+                            }
+                            fd << ']';
+                            first = false;
+                        }
+                    }
+                    fd << "],\"fine\":[";
+                    for (size_t i = 0; i < fa.mLeaves.size(); ++i)
+                    {
+                        const FineLeaf& l = fa.mLeaves[i];
+                        fd << (i ? "," : "") << '[' << l.mX << ',' << l.mY;
+                        for (U32 g = 0; g < l.mGapCount; ++g)
+                        {
+                            const FineGap& gap = fa.mGaps[l.mFirstGap + g];
+                            fd << ',' << gap.mFloor << ',' << gap.mCeiling << ',' << static_cast<S32>(gap.mFlags);
+                        }
+                        fd << ']';
+                    }
+                    fd << "]}\n";
+                }
+            }
             if (options.mFaceTraceEvery > 0)
             {
                 std::ofstream trace(dir + "face-trace.json", std::ios::binary);
@@ -692,7 +753,7 @@ namespace tut
                     const auto it = std::lower_bound(in.mRootCues.begin(), in.mRootCues.end(), std::make_pair(roots[i], U8(0)));
                     cues[i] = it != in.mRootCues.end() && it->first == roots[i] ? it->second : static_cast<U8>(CUE_NONE);
                 }
-                const SlopePartition p = partitionSlopes(verts, idx, areas, two, AREA_OBJECT, in.mParams[0].mClimb, 63, cues);
+                const SlopePartition p = partitionSlopes(verts, idx, areas, two, AREA_OBJECT, in.mParams[0].mClimb, in.mParams[0].mSlope, 63, cues);
                 out << "tile " << key.mX << ' ' << key.mY << ' ' << in.mMeshOrigin.mdV[VX] << ' ' << in.mMeshOrigin.mdV[VY] << ' '
                     << in.mMeshOrigin.mdV[VZ] << ' ' << in.mTileX * in.mTileSize << ' ' << in.mTileY * in.mTileSize << ' ' << in.mTileSize << '\n';
                 for (size_t i = 0; i < areas.size(); ++i)

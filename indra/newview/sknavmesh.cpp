@@ -937,7 +937,7 @@ U64 SKNavMesh::terrainSignature(const LLVector3d& tile_min, const LLVector3d& ti
                 const LLSurfacePatch* patch = land.getPatch(x, y);
                 if (patch)
                 {
-                    h = mix(h, patch->getLastUpdateTime());
+                    h = mix(h, static_cast<U64>(patch->getUpdateCount()));
                     h = mixF32(h, patch->getMinZ());
                     h = mixF32(h, patch->getMaxZ());
                 }
@@ -963,7 +963,7 @@ U64 SKNavMesh::landStamp(LLViewerRegion& region) const
             const LLSurfacePatch* patch = land.getPatch(x, y);
             if (patch)
             {
-                h = mix(h, patch->getLastUpdateTime());
+                h = mix(h, static_cast<U64>(patch->getUpdateCount()));
                 h = mixF32(h, patch->getMinZ());
                 h = mixF32(h, patch->getMaxZ());
             }
@@ -2325,7 +2325,7 @@ void SKNavMesh::update()
     }
     // On a new census, and once a second besides: the land patches change
     // without the census noticing, and a region mesh is built from both.
-    static F32 last = -1.f;
+    static F64 last = -1.0;
     if (snap->mStamp != mCensusStamp || gFrameTimeSeconds - last > 1.f)
     {
         mCensusStamp = snap->mStamp;
@@ -2690,16 +2690,77 @@ StoreyProductPtr SKNavMesh::storeys(const LLUUID& mesh_id) const
             }
         }
     }
+    std::vector<const Flight*> all;
+    for (const auto& entry : mesh.mTiles)
+    {
+        if (entry.second.mFlights[c])
+        {
+            for (const Flight& f : *entry.second.mFlights[c])
+            {
+                all.push_back(&f);
+            }
+        }
+    }
     auto out = std::make_shared<StoreyProduct>();
     static const RoomsProduct no_rooms;
     buildStoreys(*mesh.mNav[c], [this](const dtMeshTile* t, U32 p) { return polySpace(t, p); }, mesh.mStampRooms ? *mesh.mStampRooms : no_rooms, *out,
                  [&flights](const dtMeshTile* t, U32 p) -> const Flight* {
                      const auto f = t && t->header ? flights.find(t->header->userId) : flights.end();
                      return f != flights.end() && p < f->second.size() ? f->second[p] : nullptr;
-                 });
+                 },
+                 10.f, all);
     mesh.mStoreys = out;
     mesh.mStoreysAt = mRevision;
     return out;
+}
+
+std::vector<ClimbLink> SKNavMesh::climbLinks(const LLUUID& mesh, U32 space) const
+{
+    std::vector<ClimbLink> out;
+    if (const StoreyProductPtr st = storeys(mesh))
+    {
+        for (const U32 i : st->climbLinksOf(space))
+        {
+            out.push_back(st->mClimbLinks[i]);
+        }
+    }
+    return out;
+}
+
+void SKNavMesh::gatherClimbLinks(const LLVector3d& camera, F64 reach, bool opaque)
+{
+    // Each climb link as an arrow from the climb's foot to its top, lifted over the face it climbs.
+    LLColor4 color = skNavSwatchColor(SKNavSwatch::SPACE_CLIMB);
+    if (opaque)
+    {
+        color.mV[VALPHA] = 1.f;
+    }
+    const F64 reach2 = reach * reach;
+    for (const auto& entry : mMeshes)
+    {
+        const StoreyProductPtr st = storeys(entry.first);
+        for (const ClimbLink& l : st ? st->mClimbLinks : std::vector<ClimbLink>())
+        {
+            const LLVector3d foot = entry.second->mOrigin + LLVector3d(l.mFoot) + LLVector3d(0.0, 0.0, 0.3);
+            const LLVector3d top = entry.second->mOrigin + LLVector3d(l.mTop) + LLVector3d(0.0, 0.0, 0.3);
+            if (dist_vec_squared2D((foot + top) * 0.5, camera) > reach2)
+            {
+                continue;
+            }
+            const LLVector3 a = gAgent.getPosAgentFromGlobal(foot), b = gAgent.getPosAgentFromGlobal(top);
+            mOverlay.edge(a, b, color);
+            LLVector3 dir = b - a;
+            const F32 len = dir.normVec();
+            LLVector3 side(-dir.mV[VY], dir.mV[VX], 0.f);
+            if (len < 0.1f || side.normVec() < 1e-3f)
+            {
+                continue;
+            }
+            const F32 head = llmin(0.5f, len * 0.3f);
+            mOverlay.edge(b, b - dir * head + side * head * 0.5f, color);
+            mOverlay.edge(b, b - dir * head - side * head * 0.5f, color);
+        }
+    }
 }
 
 bool SKNavMesh::storeyAt(const LLVector3d& pos, LLUUID& mesh_out, S32& storey_out) const
@@ -2799,6 +2860,69 @@ void SKNavMesh::forEachTileIn(const LLVector3d& min, const LLVector3d& max, cons
     }
     LL_PROFILE_ZONE_NUM(mMeshes.size());
     LL_PROFILE_ZONE_NUM(tiles_seen);
+}
+
+std::shared_ptr<const std::vector<WallRun>> SKNavMesh::tileWallRuns(const Mesh& mesh, const TileKey& key, const Tile& tile) const
+{
+    if (tile.mWallRuns && tile.mWallRunsAt == mRevision)
+    {
+        return tile.mWallRuns;
+    }
+    const S32 c = static_cast<S32>(AgentClass::AVATAR);
+    const dtNavMesh* nav = mesh.mNav[c];
+    const dtMeshTile* dt = nav ? nav->getTileAt(key.mY, key.mX, 0) : nullptr;
+    if (!dt || !dt->header || !tile.mPolySpace || !tile.mAir || !mesh.mStampEnc)
+    {
+        return nullptr;
+    }
+    LL_PROFILE_ZONE_SCOPED;
+    // The tile's air and its neighbours', each with the gaps' spaces the stamp was bound to.
+    const EnclosureProductPtr enc = mesh.mStampEnc;
+    std::vector<WallAir> around;
+    for (S32 dy = -1; dy <= 1; ++dy)
+    {
+        for (S32 dx = -1; dx <= 1; ++dx)
+        {
+            const auto it = mesh.mTiles.find(TileKey{ key.mX + dx, key.mY + dy });
+            if (it != mesh.mTiles.end() && it->second.mAir)
+            {
+                around.push_back({ it->second.mAir, enc->tile(it->first) });
+            }
+        }
+    }
+    const WallAirReader reader(std::move(around), [enc](U16 s) { return s <= enc->mSpaceIds.size() ? enc->mSpaceIds[s - 1] : 0u; });
+    TileBuildInput params;
+    fillParams(params);
+    WallRunParams wp;
+    wp.mRadius = params.mParams[c].mRadius;
+    wp.mClimb = params.mParams[c].mClimb;
+    wp.mHeight = params.mParams[c].mHeight;
+    auto runs = std::make_shared<std::vector<WallRun>>();
+    buildWallRuns(*dt, *tile.mPolySpace, reader, wp, *runs);
+    tile.mWallRuns = runs;
+    tile.mWallRunsAt = mRevision;
+    return runs;
+}
+
+void SKNavMesh::wallRunsIn(const LLVector3d& min, const LLVector3d& max, const WallRunFn& fn) const
+{
+    for (const auto& entry : mMeshes)
+    {
+        const Mesh& mesh = *entry.second;
+        visitTilesIn(mesh.mTiles, mesh.mOrigin, min, max, [&](const TileKey& key, const Tile& tile) {
+            if (!tile.mBuilt || !overlapsXY(tile.mMin, tile.mMax, min, max))
+            {
+                return;
+            }
+            if (const auto runs = tileWallRuns(mesh, key, tile))
+            {
+                for (const WallRun& r : *runs)
+                {
+                    fn(mesh.mOrigin, mesh.mId, key, r);
+                }
+            }
+        });
+    }
 }
 
 void SKNavMesh::polysIn(const LLVector3d& min, const LLVector3d& max, AgentClass cls, const PolyTileFn& fn) const
@@ -3906,6 +4030,10 @@ void SKNavMesh::writeTile(std::ostream& file, const Mesh& mesh, const TileKey& k
     }
     out.mStamp = tile.mStampGeom.get();
     out.mBinding = tile.mBinding.get();
+    const auto runs = tileWallRuns(mesh, key, tile);
+    out.mWallRuns = runs.get();
+    const StoreyProductPtr st = storeys(mesh.mId);
+    out.mStoreys = st.get();
     writeExportTile(file, mesh.mOrigin, out, counts);
 }
 
@@ -4059,7 +4187,12 @@ std::string SKNavMesh::exportAll() const
             writeTile(file, mesh, t.first, t.second, counts);
         }
         file << ']';
-        mRooms->writeSpaces(file, mesh.mId);
+        const StoreyProductPtr st = storeys(mesh.mId);
+        mRooms->writeSpaces(file, mesh.mId, st.get());
+        if (st)
+        {
+            writeExportStoreys(file, mesh.mOrigin, *st);
+        }
         file << '}';
     }
     file << ']';
@@ -4779,6 +4912,7 @@ void SKNavMesh::refreshOverlay()
                              [&annotator](const LLUUID& mesh, U32 space_a, U32 space_b, const LLVector3d& centre) {
                                  return annotator.portalCrossed(mesh, space_a, space_b, centre);
                              });
+        gatherClimbLinks(camera, reach, opaque);
     }
     if (show_air)
     {

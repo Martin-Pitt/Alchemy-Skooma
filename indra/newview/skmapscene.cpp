@@ -115,7 +115,7 @@ void SKMapScene::cleanupSingleton()
 
 void SKMapScene::noteDrawn(const SKNetMap& map)
 {
-    mLastDrawn = LLFrameTimer::getElapsedSeconds();
+    mLastDrawn = LLFrameTimer::getUptimeSeconds().value();
     mMapCentre = map.view().centre();
     mMapLong = map.view().longSide();
     mMapShort = map.view().shortSide();
@@ -123,7 +123,7 @@ void SKMapScene::noteDrawn(const SKNetMap& map)
 
 bool SKMapScene::active() const
 {
-    return LLFrameTimer::getElapsedSeconds() - mLastDrawn < DRAWN_RECENTLY_S;
+    return LLFrameTimer::getUptimeSeconds().value() - mLastDrawn < DRAWN_RECENTLY_S;
 }
 
 bool SKMapScene::built(S32 x, S32 y) const
@@ -212,7 +212,7 @@ void SKMapScene::maybePost()
     {
         return;
     }
-    const F64 now = LLFrameTimer::getElapsedSeconds();
+    const F64 now = LLFrameTimer::getUptimeSeconds().value();
     const SKNavMesh::Stats& nav = SKNavMesh::instance().stats();
     const F64 every = (nav.mQueued + nav.mInFlight) > 0 ? POST_BUILDING_S : POST_EVERY_S;
     if (now - mLastPost < every)
@@ -529,7 +529,7 @@ void SKMapScene::uploadBakes()
 {
     static LLCachedControl<U32> per_frame(gSavedSettings, "SKMapBakeUploadsPerFrame", 2);
     mStats.mUploads = 0;
-    const F64 now = LLFrameTimer::getElapsedSeconds();
+    const F64 now = LLFrameTimer::getUptimeSeconds().value();
     while (!mUploads.empty() && mStats.mUploads < per_frame)
     {
         BakeResult& r = mUploads.front();
@@ -719,7 +719,7 @@ void SKMapScene::drawFloorplan(const skmap::MapView& view)
     view.visibleBox(lo, hi);
     std::vector<skmap::CellId> cells;
     skmap::cellsInBox(mTier, lo, hi, cells);
-    const F64 now = LLFrameTimer::getElapsedSeconds();
+    const F64 now = LLFrameTimer::getUptimeSeconds().value();
     const LLVector3d centre = view.centre();
     uploadRibbons();
     const skmap::RibbonParams ribbon_params = ribbonParams(view);
@@ -922,7 +922,7 @@ void SKMapScene::drawRibbons(const skmap::MapView& view, S32 layer, const skmap:
     }
     const U64 marks = ribbonIdentity(layer);
     const U64 key = ribbonKey(marks, params);
-    const F64 now = LLFrameTimer::getElapsedSeconds();
+    const F64 now = LLFrameTimer::getUptimeSeconds().value();
     auto it = mRibbons.find(key);
     if (it == mRibbons.end())
     {
@@ -997,7 +997,7 @@ void SKMapScene::postRibbons()
 
 void SKMapScene::uploadRibbons()
 {
-    const F64 now = LLFrameTimer::getElapsedSeconds();
+    const F64 now = LLFrameTimer::getUptimeSeconds().value();
     while (!mRibbonUploads.empty())
     {
         const RibbonResult& r = mRibbonUploads.front();

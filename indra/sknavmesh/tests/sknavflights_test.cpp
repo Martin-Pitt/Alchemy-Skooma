@@ -44,18 +44,22 @@ namespace
     using namespace sknav;
 
     const U8 OBJECT = 2;
+    const F32 WALK_SLOPE_DEG = 74.f;    ///< AVATAR's slope, confirmed in-world
 
     /// A triangle soup as the oracle builds its fixtures, SL axes.
     struct Soup
     {
         std::vector<LLVector3> mV;
         std::vector<S32> mT;
+        std::vector<S32> mS;    ///< per triangle, the record it came from
+        S32 mSource = -1;
 
         void tri(const LLVector3& a, const LLVector3& b, const LLVector3& c)
         {
             const S32 n = static_cast<S32>(mV.size());
             mV.insert(mV.end(), { a, b, c });
             mT.insert(mT.end(), { n, n + 1, n + 2 });
+            mS.push_back(mSource);
         }
         void quad(const LLVector3& a, const LLVector3& b, const LLVector3& c, const LLVector3& d)
         {
@@ -105,23 +109,24 @@ namespace
                 for (S32 i = 0; i < nx; ++i)
                 {
                     mT.insert(mT.end(), { idx(i, j), idx(i + 1, j), idx(i + 1, j + 1), idx(i, j), idx(i + 1, j + 1), idx(i, j + 1) });
+                    mS.insert(mS.end(), { mSource, mSource });
                 }
             }
         }
 
-        /// Walkable by the live 74 degree slope, as the oracle marks it.
-        SlopePartition partition(F32 climb = 0.75f) const
+        /// Walkable by the live 74 degree slope, as the oracle marks it; or marked at the air's steeper slope, as the build does.
+        SlopePartition partition(F32 climb = 0.75f, F32 marked_deg = WALK_SLOPE_DEG) const
         {
             const size_t n = mT.size() / 3;
             std::vector<U8> areas(n, 0), two(n, 0);
-            const F32 up = std::cos(74.f * DEG_TO_RAD);
+            const F32 up = std::cos(marked_deg * DEG_TO_RAD);
             for (size_t t = 0; t < n; ++t)
             {
                 LLVector3 nn = (mV[mT[t * 3 + 1]] - mV[mT[t * 3]]) % (mV[mT[t * 3 + 2]] - mV[mT[t * 3]]);
                 nn.normVec();
                 areas[t] = nn.mV[VZ] >= up ? OBJECT : 0;
             }
-            return partitionSlopes(mV, mT, areas, two, OBJECT, climb);
+            return partitionSlopes(mV, mT, areas, two, OBJECT, climb, WALK_SLOPE_DEG, 63, {}, mSource >= 0 || !mS.empty() ? mS : std::vector<S32>());
         }
     };
 
@@ -381,7 +386,7 @@ namespace tut
             nn.normVec();
             areas[t] = nn.mV[VZ] > 0.5f ? (t < objects ? OBJECT : 1) : 0;
         }
-        const SlopePartition p = partitionSlopes(s.mV, s.mT, areas, two, OBJECT, 0.75f);
+        const SlopePartition p = partitionSlopes(s.mV, s.mT, areas, two, OBJECT, 0.75f, WALK_SLOPE_DEG);
         for (size_t c = 2; c < p.mReal.size(); ++c)
         {
             ensure("code order is area order", p.mReal[c] >= p.mReal[c - 1]);
@@ -579,7 +584,7 @@ namespace tut
             nn.normVec();
             areas[t] = nn.mV[VZ] > 0.5f ? (t < objects ? OBJECT : 3) : 0;
         }
-        const SlopePartition p = partitionSlopes(s.mV, s.mT, areas, two, OBJECT, 0.75f, 3);
+        const SlopePartition p = partitionSlopes(s.mV, s.mT, areas, two, OBJECT, 0.75f, WALK_SLOPE_DEG, 3);
         ensure_equals("two codes and null", p.mReal.size(), 3u);
         for (size_t t = 0; t < n; ++t)
         {
@@ -1031,5 +1036,281 @@ namespace tut
         flights = { f };
         fitFlightEdges(flights, polys, 0.3f, LLVector2(0.f, 0.f), LLVector2(32.f, 11.f));
         ensure("cut side kept, other side fitted", std::fabs(flights[0].mBottomB.mV[VY] - 13.f) < 1e-3f && std::fabs(flights[0].mBottomA.mV[VY] - 8.7f) < 1e-3f);
+    }
+    template<> template<>
+    void sknavflights_object::test<29>()
+    {
+        set_test_name("two stair wedges with a low hull skirt between them are two narrow flights, not one across the skirt");
+        // The galleon: 49 degree wedges up to a quarterdeck, and a 12 degree skirt 6 m wide rising 0.43 m between them.
+        Soup s;
+        s.box(-6, -4, -0.5f, 0, 4, 0);
+        s.box(1.45f, -4, 0, 6, 4, 1.68f);
+        for (const F32 y : { -3.f, 2.f })
+        {
+            s.quad(LLVector3(0, y, 0), LLVector3(1.45f, y, 1.68f), LLVector3(1.45f, y + 0.88f, 1.68f), LLVector3(0, y + 0.88f, 0));
+        }
+        s.quad(LLVector3(-0.5f, -3.f, 0.01f), LLVector3(1.44f, -3.f, 0.44f), LLVector3(1.44f, 3.f, 0.44f), LLVector3(-0.5f, 3.f, 0.01f));
+        const SlopePartition p = s.partition();
+        ensure_equals("flights", p.mFlights.size(), 2u);
+        for (const Flight& f : p.mFlights)
+        {
+            ensure(llformat("as wide as a wedge: %.2f", (f.mBottomB - f.mBottomA).length()), std::fabs((f.mBottomB - f.mBottomA).length() - 0.88f) < 0.1f);
+            ensure(llformat("up the wedge: rise %.2f run %.2f", f.mRise, f.mRun), std::fabs(f.mRise - 1.68f) < 0.1f && std::fabs(f.mRun - 1.45f) < 0.2f);
+        }
+    }
+
+    template<> template<>
+    void sknavflights_object::test<30>()
+    {
+        set_test_name("a gentle ramp climbing a metre stays a ramp, beside a steep stair it does not join");
+        Soup s = ramp(7.f, 1.f);
+        s.quad(LLVector3(0, 0.75f, 0), LLVector3(1.2f, 0.75f, 1.f), LLVector3(1.2f, 1.95f, 1.f), LLVector3(0, 1.95f, 0));
+        s.box(1.2f, 0.75f, 0, 7.f, 2.f, 1.f);
+        const SlopePartition p = s.partition();
+        ensure_equals("flights", p.mFlights.size(), 2u);
+        bool ramp_found = false;
+        for (const Flight& f : p.mFlights)
+        {
+            ramp_found = ramp_found || (f.mKind == ConnectorKind::RAMP && std::fabs(f.mRun - 7.f) < 0.3f && std::fabs((f.mBottomB - f.mBottomA).length() - 1.5f) < 0.15f);
+        }
+        ensure("the ramp, at its own width and run", ramp_found);
+    }
+
+    template<> template<>
+    void sknavflights_object::test<31>()
+    {
+        set_test_name("a 60 degree wedge is a flight and a 78 degree face is a wall, at AVATAR's 74 degree slope");
+        const SlopePartition sixty = ramp(2.4f / std::tan(60.f * DEG_TO_RAD), 2.4f).partition(0.75f, TOP_SLOPE_DEG);
+        ensure_equals("the 60 degree wedge", sixty.mFlights.size(), 1u);
+        const F32 grade = std::atan2(sixty.mFlights[0].mRise, sixty.mFlights[0].mRun) * RAD_TO_DEG;
+        ensure(llformat("at its grade: %.1f", grade), std::fabs(grade - 60.f) < 3.f);
+        const SlopePartition steep = ramp(3.f / std::tan(78.f * DEG_TO_RAD), 3.f).partition(0.75f, TOP_SLOPE_DEG);
+        ensure_equals("the 78 degree face", steep.mFlights.size(), 0u);
+    }
+
+    template<> template<>
+    void sknavflights_object::test<32>()
+    {
+        set_test_name("a stair landing on a deck of small hull pieces at slightly different heights lands on the whole deck");
+        Soup s;
+        s.box(-4, -2, -0.5f, 0, 2, 0);
+        s.quad(LLVector3(0, -0.75f, 0), LLVector3(2.5f, -0.75f, 1.5f), LLVector3(2.5f, 0.75f, 1.5f), LLVector3(0, 0.75f, 0));
+        // nine 1.4 m pieces, each under the 4 m2 a floor needs, alternating 5 cm apart
+        for (S32 i = 0; i < 3; ++i)
+        {
+            for (S32 j = 0; j < 3; ++j)
+            {
+                const F32 x = 2.5f + i * 1.4f, y = -2.1f + j * 1.4f;
+                s.box(x, y, 0.f, x + 1.4f, y + 1.4f, 1.5f + ((i + j) % 2) * 0.05f);
+            }
+        }
+        const SlopePartition p = s.partition();
+        ensure_equals("flights", p.mFlights.size(), 1u);
+        ensure(llformat("up onto the deck: rise %.2f", p.mFlights[0].mRise), std::fabs(p.mFlights[0].mRise - 1.5f) < 0.1f);
+    }
+
+    template<> template<>
+    void sknavflights_object::test<33>()
+    {
+        set_test_name("a narrow stair erosion leaves no polygon on keeps its record, marked eroded, linking its floors");
+        TileBuildInput in = stairTile();
+        in.mParams[0].mSlope = WALK_SLOPE_DEG;
+        // six steps 0.88 m wide between two walls: the 0.3 m radius erodes them all away
+        for (S32 k = 1; k <= 6; ++k)
+        {
+            in.mRecords.push_back(boxRecord(10.f + (k - 1) * 0.3f, 15.56f, 0.f, 10.f + k * 0.3f, 16.44f, k * 0.25f));
+        }
+        in.mRecords.push_back(boxRecord(10.f, 14.f, 0.f, 11.8f, 15.56f, 3.5f));
+        in.mRecords.push_back(boxRecord(10.f, 16.44f, 0.f, 11.8f, 18.f, 3.5f));
+        in.mRecords.push_back(boxRecord(11.8f, 12.f, 0.f, 16.f, 20.f, 1.5f));
+        const TileBuildResult r = buildTile(in);
+        ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
+        const S32 w = static_cast<S32>(AgentClass::AVATAR);
+        ensure_equals("one flight", r.mFlights[w].size(), 1u);
+        const Flight& f = r.mFlights[w][0];
+        ensure("no polys", f.mPolys.empty());
+        ensure("eroded", f.mEroded);
+        ensure(llformat("from the ground to the landing: %.2f to %.2f", f.mBottom.mV[VZ], f.mTop.mV[VZ]),
+               std::fabs(f.mBottom.mV[VZ]) < 0.2f && std::fabs(f.mTop.mV[VZ] - 1.5f) < 0.2f);
+    }
+
+    template<> template<>
+    void sknavflights_object::test<34>()
+    {
+        set_test_name("stepped stairs are judged by riser against the climb, whatever their grade");
+        const SlopePartition p = straight(6, 0.5f, 0.12f).partition(0.75f, TOP_SLOPE_DEG);
+        ensure_equals("flights", p.mFlights.size(), 1u);
+        const F32 grade = std::atan2(p.mFlights[0].mRise, p.mFlights[0].mRun) * RAD_TO_DEG;
+        ensure(llformat("steeper than the slope: %.1f", grade), grade > WALK_SLOPE_DEG);
+        ensure("a stair by its treads", p.mFlights[0].mRule == ConnectorRule::TREADS);
+        ensure_equals("risers past the climb are platforms", straight(6, 0.8f, 0.3f).partition(0.75f, TOP_SLOPE_DEG).mFlights.size(), 0u);
+    }
+
+    /// A slope up +x from a floor to a deck, half_width either side, with a lateral bow of z += bow * y * y.
+    Soup wedge(F32 deg, F32 rise, F32 half_width, F32 bow = 0.f)
+    {
+        Soup s;
+        const F32 run = rise / std::tan(deg * DEG_TO_RAD);
+        s.box(-4, -4, -0.5f, 0, 4, 0);
+        s.grid(0.f, -half_width, run, half_width, std::min(run, half_width) / 8.f, [&](F32 x, F32 y) { return x / run * rise + bow * y * y; });
+        s.box(run, -4, 0, run + 4, 4, rise);
+        return s;
+    }
+
+    template<> template<>
+    void sknavflights_object::test<35>()
+    {
+        set_test_name("a curved column face at 60 degrees is no flight; flat, it is a climb");
+        ensure_equals("curved", wedge(60.f, 3.f, 1.f, 0.23f).partition(0.75f, TOP_SLOPE_DEG).mFlights.size(), 0u);
+        const SlopePartition flat = wedge(60.f, 3.f, 1.f).partition(0.75f, TOP_SLOPE_DEG);
+        ensure_equals("flat", flat.mFlights.size(), 1u);
+    }
+
+    template<> template<>
+    void sknavflights_object::test<36>()
+    {
+        set_test_name("a flat 60 degree cliff between decks is a climb, not a stair");
+        const SlopePartition p = wedge(60.f, 3.f, 2.f).partition(0.75f, TOP_SLOPE_DEG);
+        ensure_equals("flights", p.mFlights.size(), 1u);
+        ensure("a climb", p.mFlights[0].mKind == ConnectorKind::CLIMB);
+    }
+
+    template<> template<>
+    void sknavflights_object::test<37>()
+    {
+        set_test_name("a 0.88 m wedge just past 52 degrees between decks is a stair: a ship's stair");
+        const SlopePartition p = wedge(52.5f, 1.8f, 0.44f).partition(0.75f, TOP_SLOPE_DEG);
+        ensure_equals("flights", p.mFlights.size(), 1u);
+        ensure("a stair", p.mFlights[0].mKind == ConnectorKind::STAIR);
+    }
+
+    template<> template<>
+    void sknavflights_object::test<38>()
+    {
+        set_test_name("a polygon-less flight is kept only narrow, steep and decked at both ends");
+        Flight f;
+        f.mBottomA = LLVector3(0.f, -0.44f, 0.f);
+        f.mBottomB = LLVector3(0.f, 0.44f, 0.f);
+        f.mRise = 1.8f;
+        f.mRun = 1.4f;
+        f.mEroded = true;
+        f.mDecked = true;
+        f.mCodes = { 5 };
+        std::vector<Flight> flights = { f };
+        mapFlightPolys(flights, {}, {}, 0.75f);
+        ensure_equals("a ship's stair stays", flights.size(), 1u);
+        f.mDecked = false;
+        flights = { f };
+        mapFlightPolys(flights, {}, {}, 0.75f);
+        ensure_equals("a stray strip with no decks goes", flights.size(), 0u);
+        f.mDecked = true;
+        f.mBottomB = LLVector3(0.f, 3.f, 0.f);
+        flights = { f };
+        mapFlightPolys(flights, {}, {}, 0.75f);
+        ensure_equals("a wide one goes", flights.size(), 0u);
+    }
+
+    /// A slope between decks, its own record or one facet of a big lumpy one.
+    Soup facet(F32 deg, F32 rise, F32 half_width, bool own)
+    {
+        Soup s;
+        const F32 run = rise / std::tan(deg * DEG_TO_RAD);
+        s.mSource = 1;
+        s.box(-4, -4, -0.5f, 0, 4, 0);
+        s.mSource = 2;
+        s.box(run, -4, 0, run + 4, 4, rise);
+        s.mSource = 0;
+        s.quad(LLVector3(0, -half_width, 0), LLVector3(run, -half_width, rise), LLVector3(run, half_width, rise), LLVector3(0, half_width, 0));
+        if (!own)
+        {
+            // the rest of the rock: many walkable facets well away, spread wide in plan
+            s.grid(-12.f, 8.f, 12.f, 20.f, 1.f, [](F32 x, F32 y) { return 0.3f * std::sin(x) * std::cos(y); });
+        }
+        return s;
+    }
+
+    template<> template<>
+    void sknavflights_object::test<39>()
+    {
+        set_test_name("a narrow steep wedge is a stair only as its own record: one facet of a rock is not");
+        const SlopePartition own = facet(56.f, 1.8f, 0.44f, true).partition(0.75f, TOP_SLOPE_DEG);
+        ensure_equals("own record", own.mFlights.size(), 1u);
+        ensure("a stair", own.mFlights[0].mKind == ConnectorKind::STAIR);
+        ensure_equals("a rock's facet", facet(56.f, 1.8f, 0.44f, false).partition(0.75f, TOP_SLOPE_DEG).mFlights.size(), 0u);
+    }
+
+    template<> template<>
+    void sknavflights_object::test<40>()
+    {
+        set_test_name("a small steep facet of a rock is no climb; as its own record, or large, it is");
+        const SlopePartition own = facet(60.f, 2.5f, 1.f, true).partition(0.75f, TOP_SLOPE_DEG);
+        ensure_equals("own record", own.mFlights.size(), 1u);
+        ensure("a climb", own.mFlights[0].mKind == ConnectorKind::CLIMB);
+        ensure_equals("a rock's facet", facet(60.f, 2.5f, 1.f, false).partition(0.75f, TOP_SLOPE_DEG).mFlights.size(), 0u);
+        const SlopePartition big = facet(60.f, 3.f, 2.f, false).partition(0.75f, TOP_SLOPE_DEG);
+        ensure_equals("a large flat face of a rock", big.mFlights.size(), 1u);
+    }
+
+    template<> template<>
+    void sknavflights_object::test<41>()
+    {
+        set_test_name("a polygon-less climb is dropped: only stairs are kept bare");
+        Flight f;
+        f.mBottomA = LLVector3(0.f, -0.44f, 0.f);
+        f.mBottomB = LLVector3(0.f, 0.44f, 0.f);
+        f.mRise = 2.f;
+        f.mRun = 1.f;
+        f.mEroded = true;
+        f.mDecked = true;
+        f.mKind = ConnectorKind::CLIMB;
+        std::vector<Flight> flights = { f };
+        mapFlightPolys(flights, {}, {}, 0.75f);
+        ensure_equals("dropped", flights.size(), 0u);
+    }
+
+    template<> template<>
+    void sknavflights_object::test<42>()
+    {
+        set_test_name("a 9-step stair counts 9 treads, and so do its steps under a ramp laid over them");
+        const SlopePartition p = straight(9).partition();
+        ensure_equals("flights", p.mFlights.size(), 1u);
+        ensure_equals("treads", static_cast<S32>(p.mFlights[0].mTreadCount), 9);
+        Soup covered = straight(9);
+        const F32 top = 10 * 0.25f, run = 9 * 0.3f;
+        covered.quad(LLVector3(0, -0.75f, 0), LLVector3(run, -0.75f, top), LLVector3(run, 0.75f, top), LLVector3(0, 0.75f, 0));
+        const SlopePartition c = covered.partition();
+        ensure("a flight under the ramp", !c.mFlights.empty());
+        for (const Flight& f : c.mFlights)
+        {
+            ensure_equals("the steps under it", static_cast<S32>(f.mTreadCount), 9);
+        }
+        // With the steps unwalkable under it the ramp alone is the flight, with no tread groups: the faces still count them.
+        const size_t n = covered.mT.size() / 3, steps0 = 12, steps1 = 12 + 9 * 12;
+        std::vector<U8> areas(n, 0), two(n, 0);
+        for (size_t t = 0; t < n; ++t)
+        {
+            LLVector3 nn = (covered.mV[covered.mT[t * 3 + 1]] - covered.mV[covered.mT[t * 3]]) % (covered.mV[covered.mT[t * 3 + 2]] - covered.mV[covered.mT[t * 3]]);
+            nn.normVec();
+            areas[t] = (t < steps0 || t >= steps1) && nn.mV[VZ] >= std::cos(WALK_SLOPE_DEG * DEG_TO_RAD) ? OBJECT : 0;
+        }
+        const SlopePartition r = partitionSlopes(covered.mV, covered.mT, areas, two, OBJECT, 0.75f, WALK_SLOPE_DEG);
+        ensure_equals("the ramp", r.mFlights.size(), 1u);
+        ensure_equals("no tread groups", static_cast<S32>(r.mFlights[0].mTreads), 0);
+        ensure_equals("nine treads under it", static_cast<S32>(r.mFlights[0].mTreadCount), 9);
+    }
+
+    template<> template<>
+    void sknavflights_object::test<43>()
+    {
+        set_test_name("a smooth wedge has no treads to count: unknown, not none");
+        const SlopePartition p = ramp().partition();
+        ensure_equals("flights", p.mFlights.size(), 1u);
+        ensure_equals("smooth", static_cast<S32>(p.mFlights[0].mTreadCount), -1);
+        // A stray level face under the wedge is no stair: one riser of a metre is no step.
+        Soup stray = ramp();
+        stray.box(1.8f, -0.25f, 0.f, 2.3f, 0.25f, 0.45f);
+        const SlopePartition q = stray.partition();
+        ensure_equals("still one flight", q.mFlights.size(), 1u);
+        ensure_equals("still smooth", static_cast<S32>(q.mFlights[0].mTreadCount), -1);
     }
 }

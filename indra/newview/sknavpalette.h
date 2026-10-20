@@ -63,6 +63,7 @@ enum class SKNavSwatch : S32
     PORTAL_OPENING,         ///< any other opening; dashed without a lintel
     PORTAL_LINK,            ///< a drawn connection from a flight's foot to an exit
     PORTAL_DANGLING,        ///< a flight's lone end, with no exit at the other
+    SPACE_CLIMB,            ///< a climb joining the spaces at its foot and its top
     COUNT
 };
 

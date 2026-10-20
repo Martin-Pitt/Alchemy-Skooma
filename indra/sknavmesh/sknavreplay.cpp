@@ -118,6 +118,7 @@ namespace sknav
                 input.mAir = false;
                 input.mCoarseAir = options.mCoarseAir && options.mStamp;
             }
+            input.mFineAir = options.mFineAir && input.mAir;
         }
 
         /// A Detour tile into a mesh's navmesh, which the navmesh then owns.
@@ -769,12 +770,77 @@ namespace sknav
             if (const dtNavMesh* nav = mesh.mNav[static_cast<S32>(AgentClass::AVATAR)]; nav && mesh.mRooms)
             {
                 const Clock::time_point s0 = Clock::now();
+                std::vector<const Flight*> all;
+                for (const auto& t : mesh.mTiles)
+                {
+                    if (t.second.mResult->mStatus != TileBuildResult::FAILED)
+                    {
+                        for (const Flight& f : t.second.mResult->mFlights[static_cast<S32>(AgentClass::AVATAR)])
+                        {
+                            all.push_back(&f);
+                        }
+                    }
+                }
                 buildStoreys(*nav, [&mesh](const dtMeshTile* tile, U32 poly) { return mesh.polySpace(tile, poly); }, *mesh.mRooms, mesh.mStoreys,
-                             [&mesh](const dtMeshTile* tile, U32 poly) { return mesh.polyFlight(tile, poly); });
+                             [&mesh](const dtMeshTile* tile, U32 poly) { return mesh.polyFlight(tile, poly); }, 10.f, all);
                 storeys_ms += since(s0);
             }
         }
         out.mStages.emplace_back("storeys", storeys_ms);
+
+        // Each stamped tile's wall runs, read over its own air and its neighbours'.
+        const Clock::time_point w0 = Clock::now();
+        for (auto& m : out.mMeshes)
+        {
+            ReplayMesh& mesh = *m;
+            const dtNavMesh* nav = mesh.mNav[static_cast<S32>(AgentClass::AVATAR)];
+            if (!nav || !mesh.mEnclosure)
+            {
+                continue;
+            }
+            const EnclosureProduct& enc = *mesh.mEnclosure;
+            ClassParams ap;
+            for (const auto& t : mesh.mTiles)
+            {
+                if (t.second.mInput)
+                {
+                    ap = t.second.mInput->mParams[static_cast<S32>(AgentClass::AVATAR)];
+                    break;
+                }
+            }
+            WallRunParams wp;
+            wp.mRadius = ap.mRadius;
+            wp.mClimb = ap.mClimb;
+            wp.mHeight = ap.mHeight;
+            for (auto& [key, tile] : mesh.mTiles)
+            {
+                const dtMeshTile* dt = nav->getTileAt(key.mY, key.mX, 0);
+                if (!dt || !dt->header || !tile.mBinding || !tile.mResult || !tile.mResult->mAir)
+                {
+                    continue;
+                }
+                std::vector<WallAir> around;
+                for (S32 dy = -1; dy <= 1; ++dy)
+                {
+                    for (S32 dx = -1; dx <= 1; ++dx)
+                    {
+                        const auto it = mesh.mTiles.find(TileKey{ key.mX + dx, key.mY + dy });
+                        if (it != mesh.mTiles.end() && it->second.mResult && it->second.mResult->mAir)
+                        {
+                            const TileAirPtr& a = it->second.mResult->mAir;
+                            around.push_back({ a, enc.tile(it->first) });
+                        }
+                    }
+                }
+                const WallAirReader reader(std::move(around), [&enc](U16 s) { return s <= enc.mSpaceIds.size() ? enc.mSpaceIds[s - 1] : 0u; });
+                const auto it = mesh.mSlotSpaces.find(dt->header->userId);
+                static const std::vector<U32> NONE;
+                auto runs = std::make_shared<std::vector<WallRun>>();
+                buildWallRuns(*dt, it != mesh.mSlotSpaces.end() ? it->second : NONE, reader, wp, *runs, &out.mWallRuns);
+                tile.mWallRuns = runs;
+            }
+        }
+        out.mStages.emplace_back("walls", since(w0));
     }
 
     ReplayRoomsAgain replayRoomsAgain(const CensusFile& census, const ReplayResult& result, size_t mesh_index, const std::map<TileKey, TileAirPtr>& air)
@@ -891,6 +957,8 @@ namespace sknav
                     }
                     tile.mStamp = &r.mStamp;
                     tile.mBinding = t.second.mBinding.get();
+                    tile.mWallRuns = t.second.mWallRuns.get();
+                    tile.mStoreys = &mesh.mStoreys;
                 }
                 for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
                 {
@@ -903,7 +971,8 @@ namespace sknav
             file << ']';
             if (mesh.mRooms)
             {
-                writeExportSpaces(file, mesh.mOrigin, *mesh.mRooms, mesh.mWind.get());
+                writeExportSpaces(file, mesh.mOrigin, *mesh.mRooms, mesh.mWind.get(), &mesh.mStoreys);
+                writeExportStoreys(file, mesh.mOrigin, mesh.mStoreys);
             }
             file << '}';
         }

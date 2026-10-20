@@ -973,7 +973,7 @@ namespace tut
     template<> template<>
     void sknavrooms_object::test<26>()
     {
-        set_test_name("a roof joins the room under it across a thin slab, not across a thick one, and every space's bounds hold its gaps");
+        set_test_name("a roof never joins the room under it, thin slab or thick, and every space's bounds hold its gaps");
         Scene s = twoRooms();
         // A solid block beside the rooms, its top flush with their roof, and a
         // tower over a small room whose roof lies 4 m of solid above its ceiling.
@@ -988,8 +988,9 @@ namespace tut
         const Space* west = r.at(6.f, 6.f);
         const Space* tower = r.at(27.f, 5.f);
         ensure("rooms found", west && tower);
-        ensure("the thin roof is the room's", r.at(6.f, 6.f, 3.5f) == west);
-        ensure("the roof over the block joins the roof beside it", r.at(20.f, 6.f, 3.5f) == r.at(16.f, 6.f, 3.5f) && r.at(20.f, 6.f, 3.5f));
+        ensure("the thin roof is not the room's", r.at(6.f, 6.f, 3.5f) != west);
+        const Space* roof = r.at(16.f, 6.f, 3.5f);
+        ensure("a roof no one walks onto is a roof of its own, over the block and the rooms", roof && roof->mRoof && r.at(20.f, 6.f, 3.5f) == roof);
         ensure("the tower's top is not the room 4 m below", r.at(27.f, 5.f, 7.5f) != tower);
         ensure_equals("no gap outside its space's bounds", r.outOfBounds(), 0u);
     }
@@ -1988,5 +1989,29 @@ template<> template<>
         const Space* ca = c.at(13.25f, 11.25f);
         const Space* cb = c.at(13.25f, 14.f);
         ensure("census lifts" + info(c), ca && cb && ca != cb && ca->mLift && cb->mLift);
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<55>()
+    {
+        set_test_name("a rooftop and the roof of its stair hut are both roofs, linked to the building under them");
+        Scene s = twoRooms();
+        // A hut on the rooftop with a door onto it, its own roof 2.75 m up.
+        s.box(12.f, 4.f, 16.f, 4.25f, 3.25f, 6.f, false);
+        s.box(12.f, 7.75f, 16.f, 8.f, 3.25f, 6.f, false);
+        s.box(15.75f, 4.f, 16.f, 8.f, 3.25f, 6.f, false);
+        s.box(12.f, 4.f, 12.25f, 5.5f, 3.25f, 6.f, false);
+        s.box(12.f, 6.5f, 12.25f, 8.f, 3.25f, 6.f, false);
+        s.box(12.f, 5.5f, 12.25f, 6.5f, 5.45f, 6.f, false);
+        s.box(12.f, 4.f, 16.f, 8.f, 6.f, 6.25f);
+        const Result r = run(s.input(1));
+        const Space* west = r.at(6.f, 6.f);
+        const Space* top = r.at(6.f, 6.f, 3.75f);
+        const Space* hut = r.at(14.f, 6.f, 6.75f);
+        ensure("the room, the rooftop and the hut's roof" + info(r), west && top && hut && top != west && hut != top);
+        ensure("the rooftop is a roof, outdoors", top->mRoof && top->mBucket == EnclosureBucket::OUTDOORS);
+        ensure("the hut's roof is a roof, outdoors", hut->mRoof && hut->mBucket == EnclosureBucket::OUTDOORS);
+        ensure("the rooftop covers the rooms", std::find(top->mCovers.begin(), top->mCovers.end(), r.index(west)) != top->mCovers.end());
+        ensure("both in the building under them", west->mBuilding && top->mBuilding == west->mBuilding && hut->mBuilding == west->mBuilding);
     }
 }

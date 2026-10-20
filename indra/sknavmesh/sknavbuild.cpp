@@ -124,8 +124,9 @@ namespace
         std::vector<U8> mAreas;       // per triangle, the Area of its source
         std::vector<U8> mTwoSided;    // per triangle, walkable from either side
         std::vector<U8> mCues;        // per triangle, its object's NameCue
+        std::vector<S32> mSources;    // per triangle, the record it came from
 
-        void add(const std::vector<LLVector3>& tris, U8 area, F32 water, bool two_sided, U8 cue = CUE_NONE)
+        void add(const std::vector<LLVector3>& tris, U8 area, F32 water, bool two_sided, U8 cue = CUE_NONE, S32 source = -1)
         {
             const size_t base = mVerts.size() / 3;
             for (size_t i = 0; i + 2 < tris.size(); i += 3)
@@ -151,6 +152,7 @@ namespace
                 mAreas.push_back(under && area == AREA_GROUND ? AREA_SUBMERGED : area);
                 mTwoSided.push_back(two_sided);
                 mCues.push_back(cue);
+                mSources.push_back(source);
             }
         }
         S32 nverts() const { return static_cast<S32>(mVerts.size() / 3); }
@@ -198,6 +200,7 @@ namespace
             out.mAreas.push_back(soup.mAreas[t]);
             out.mTwoSided.push_back(soup.mTwoSided[t]);
             out.mCues.push_back(soup.mCues[t]);
+            out.mSources.push_back(soup.mSources[t]);
         }
         for (const auto& range : solids)
         {
@@ -1627,7 +1630,8 @@ namespace sknav
                 const S32 before = soup.ntris();
                 const auto cue = std::lower_bound(input.mRootCues.begin(), input.mRootCues.end(), std::make_pair(r->mRoot, U8(0)));
                 soup.add(tris, AREA_OBJECT, input.mTerrain.mWater, hull,
-                         cue != input.mRootCues.end() && cue->first == r->mRoot ? cue->second : static_cast<U8>(CUE_NONE));
+                         cue != input.mRootCues.end() && cue->first == r->mRoot ? cue->second : static_cast<U8>(CUE_NONE),
+                         static_cast<S32>(&r - input.mRecords.data()));
                 out.mRuns.push_back({ r, { before, soup.ntris() } });
                 if (r->mExclude && soup.ntris() > before)
                 {
@@ -1846,7 +1850,7 @@ namespace sknav
                     {
                         sl[v] = fromRecast(&part.mVerts[v * 3]);
                     }
-                    slopes = partitionSlopes(sl, part.mTris, walkable, part.mTwoSided, AREA_OBJECT, ap.mClimb, PARTITION_MAX_CODES, part.mCues);
+                    slopes = partitionSlopes(sl, part.mTris, walkable, part.mTwoSided, AREA_OBJECT, ap.mClimb, ap.mSlope, PARTITION_MAX_CODES, part.mCues, part.mSources);
                     shiftFlightCodes(slopes);
                     // Back onto the raster's triangles, the left-out ones coded by area alone.
                     main_codes.assign(main_soup->ntris(), 0);
@@ -1985,6 +1989,107 @@ namespace sknav
                 same = same && sameParams(a.mParams[c], b.mParams[c]) && a.mEdges[c] == b.mEdges[c] && a.mDropMax[c] == b.mDropMax[c];
             }
             return same;
+        }
+
+        /// The air at half the grid's cell over the candidate blocks of the tile's air, each window rasterised on its own.
+        FineAirPtr fineAirOf(const TileBuildInput& input, const rcConfig& grid, const RasterSource& source, const ClassParams& tp,
+                             const std::vector<U8>& real, const AirGrid& tile_air, TileBuildStats* stats)
+        {
+            const auto started = std::chrono::steady_clock::now();
+            const auto since = [](std::chrono::steady_clock::time_point t) {
+                return std::chrono::duration<F64, std::milli>(std::chrono::steady_clock::now() - t).count();
+            };
+            const S32 overlap = static_cast<S32>(std::ceil(0.5f / grid.ch));
+            const std::vector<U8> blocks = fineCandidates(tile_air, grid.walkableClimb, overlap);
+            const std::vector<FineWindow> windows = fineWindows(blocks, tile_air.mWidth, tile_air.mHeight);
+            if (stats)
+            {
+                stats->mFine.mBlocks = static_cast<U32>(blocks.size());
+                stats->mFine.mCandidates = static_cast<U32>(std::count(blocks.begin(), blocks.end(), 1));
+            }
+            if (windows.empty())
+            {
+                return nullptr;
+            }
+            auto air = std::make_shared<FineAir>();
+            air->mCell = grid.cs * 0.5f;
+            air->mUnit = grid.ch * 0.5f;
+            const S32 pad = static_cast<S32>(std::ceil(FINE_PAD_M / air->mCell - 1e-4f));
+            const S32 climb = static_cast<S32>(std::floor(tp.mClimb / air->mUnit));
+            const S32 fine_overlap = static_cast<S32>(std::ceil(0.5f / air->mUnit));
+            const S32 min_gap = static_cast<S32>(std::ceil(input.mAirMinGap / air->mUnit));
+            StageClock clock(nullptr);
+            U32 skipped = 0;
+            F64 compare_ms = 0.0;
+            for (const FineWindow& w : windows)
+            {
+                // Recast x runs along SL y and z along SL x; the tile proper starts borderSize cells into the grid.
+                rcConfig cfg = grid;
+                cfg.cs = air->mCell;
+                cfg.ch = air->mUnit;
+                cfg.borderSize = pad;
+                cfg.width = 2 * (w.mY1 - w.mY0) + 2 * pad;
+                cfg.height = 2 * (w.mX1 - w.mX0) + 2 * pad;
+                cfg.bmin[0] = grid.bmin[0] + (grid.borderSize + w.mY0) * grid.cs - pad * cfg.cs;
+                cfg.bmin[2] = grid.bmin[2] + (grid.borderSize + w.mX0) * grid.cs - pad * cfg.cs;
+                cfg.bmax[0] = cfg.bmin[0] + cfg.width * cfg.cs;
+                cfg.bmax[2] = cfg.bmin[2] + cfg.height * cfg.cs;
+                if ((cfg.bmax[1] - cfg.bmin[1]) / cfg.ch > RC_SPAN_MAX_HEIGHT)
+                {
+                    ++skipped;
+                    continue;
+                }
+                const auto raster_started = std::chrono::steady_clock::now();
+                HeightfieldPtr hf(makeHeightfield(cfg));
+                if (!hf || !rasterisePasses(*hf, source, CellRect{ 1, 1, cfg.width - 1, cfg.height - 1 }, climb, clock))
+                {
+                    ++skipped;
+                    continue;
+                }
+                addBridges(*hf, findBridges(*hf, climb, 1), climb);
+                cullUnderground(*hf, input.mTerrain);
+                filterSpans(*hf, tp, cfg.ch, cfg.cs);
+                if (stats)
+                {
+                    stats->mFine.mRasterMs += since(raster_started);
+                }
+                AirGrid padded, fine;
+                extractAir(*hf, 0, padded, real.data());
+                foldSlivers(padded, min_gap);
+                computeClearance(padded, climb, fine_overlap);
+                cropAir(padded, pad, fine);
+                air->mWindows.push_back(w);
+                appendFineLeaves(fine, 2 * w.mX0, 2 * w.mY0, blocks, tile_air.mWidth, *air);
+                if (stats)
+                {
+                    const auto compare_started = std::chrono::steady_clock::now();
+                    FineCompare c;
+                    compareFineAir(tile_air, fine, w, blocks, grid.walkableClimb, overlap, climb, fine_overlap, c);
+                    TileBuildStats::Fine& f = stats->mFine;
+                    f.mWindowCells += static_cast<U32>((w.mX1 - w.mX0) * (w.mY1 - w.mY0));
+                    f.mCoarseLinks += c.mCoarseLinks;
+                    f.mClosed += c.mClosed;
+                    f.mClosedSeparating += c.mClosedSeparating;
+                    f.mFineLinks += c.mFineLinks;
+                    f.mOpened += c.mOpened;
+                    f.mOpenedSeparating += c.mOpenedSeparating;
+                    f.mFineGaps += c.mFineGaps;
+                    f.mNewGaps += c.mNewGaps;
+                    f.mNewWalkable += c.mNewWalkable;
+                    compare_ms += since(compare_started);
+                }
+            }
+            sortFineLeaves(*air);
+            if (stats)
+            {
+                stats->mFine.mWindows = static_cast<U32>(air->mWindows.size());
+                stats->mFine.mLeaves = static_cast<U32>(air->mLeaves.size());
+                stats->mFine.mGaps = static_cast<U32>(air->mGaps.size());
+                stats->mFine.mBytes = air->bytes();
+                stats->mFine.mSkipped = skipped;
+                stats->mFine.mMs = since(started) - compare_ms;
+            }
+            return air;
         }
 
         TileAirPtr coarseAirOf(const TileBuildInput& input, const TileSoup& ts);
@@ -2346,6 +2451,8 @@ namespace sknav
             for (size_t f = 0; f < flights.size(); ++f)
             {
                 standing[f] = flightSurvives(*mem.chf, cfg.borderSize, flights[f], ap.mClimb);
+                // The tile a flight sits in keeps it even if no poly comes of it, so it still joins its floors.
+                flights[f].mEroded = flightHome(*mem.chf, cfg.borderSize, flights[f]);
             }
             AirGrid fine;
             if (input.mAir)
@@ -2354,7 +2461,7 @@ namespace sknav
                 std::vector<Flight> marked;
                 for (size_t f = 0; f < flights.size(); ++f)
                 {
-                    if (standing[f])
+                    if (standing[f] || flights[f].mEroded)
                     {
                         marked.push_back(flights[f]);
                     }
@@ -2374,6 +2481,10 @@ namespace sknav
                     }
                 }
                 top_clock.lap(ClassBuildStats::AIR);
+                if (input.mFineAir && result.mAir)
+                {
+                    result.mFineAir = fineAirOf(input, grid, source, tp, real, fine, stats);
+                }
                 clock.restart();
             }
             // Where the air's floors end over a drop, and the run-off down them.

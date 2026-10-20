@@ -750,7 +750,22 @@ namespace sknav
                     << ",\"edge_oblique\":" << st.mEdgeAlign.mOblique << ",\"edge_moved\":" << st.mEdgeAlign.mMovedEdges
                     << ",\"edge_moved_verts\":" << st.mEdgeAlign.mMovedVerts << ",\"edge_dropped\":" << st.mEdgeAlign.mDropped << ",\"edge_err_before\":" << st.mEdgeAlign.mErrBefore
                     << ",\"edge_err_after\":" << st.mEdgeAlign.mErrAfter << ",\"face_true_sum\":" << fo.mTrueSum << ",\"face_residual_sum\":" << fo.mResidualSum;
-                out << '}';
+                const TileBuildStats::Fine& f = st.mFine;
+                out << ",\"fine\":{\"blocks\":" << f.mBlocks << ",\"candidates\":" << f.mCandidates << ",\"windows\":" << f.mWindows
+                    << ",\"window_cells\":" << f.mWindowCells << ",\"skipped\":" << f.mSkipped << ",\"ms\":" << f.mMs << ",\"raster_ms\":" << f.mRasterMs
+                    << ",\"leaves\":" << f.mLeaves << ",\"gaps\":" << f.mGaps << ",\"bytes\":" << f.mBytes << ",\"coarse_links\":" << f.mCoarseLinks
+                    << ",\"closed\":" << f.mClosed << ",\"closed_separating\":" << f.mClosedSeparating << ",\"fine_links\":" << f.mFineLinks
+                    << ",\"opened\":" << f.mOpened << ",\"opened_separating\":" << f.mOpenedSeparating << ",\"fine_gaps\":" << f.mFineGaps
+                    << ",\"new_gaps\":" << f.mNewGaps << ",\"new_walkable\":" << f.mNewWalkable << ",\"rects\":[";
+                if (r.mFineAir)
+                {
+                    for (size_t i = 0; i < r.mFineAir->mWindows.size(); ++i)
+                    {
+                        const FineWindow& w = r.mFineAir->mWindows[i];
+                        out << (i ? "," : "") << '[' << w.mX0 << ',' << w.mY0 << ',' << w.mX1 << ',' << w.mY1 << ']';
+                    }
+                }
+                out << "]}}";
             }
         }
         out << "\n],\"meshes\":[";
@@ -933,7 +948,7 @@ namespace sknav
                 const StoreyConnector& c = st.mConnectors[k];
                 const LLVector3d a = mesh.mOrigin + LLVector3d(c.mEnd[0]), b = mesh.mOrigin + LLVector3d(c.mEnd[1]);
                 out << (k ? "," : "") << "{\"storeys\":[" << c.mStorey[0] << ',' << c.mStorey[1] << "],\"space\":" << c.mSpace
-                    << ",\"portals\":" << (c.mPortals ? 1 : 0) << ",\"flight\":" << (c.mFlight ? 1 : 0) << ",\"a\":[" << a.mdV[VX] << ',' << a.mdV[VY] << ',' << a.mdV[VZ] << "],\"b\":["
+                    << ",\"portals\":" << (c.mPortals ? 1 : 0) << ",\"flight\":" << (c.mFlight ? 1 : 0) << ",\"kind\":" << static_cast<S32>(c.mKind) << ",\"a\":[" << a.mdV[VX] << ',' << a.mdV[VY] << ',' << a.mdV[VZ] << "],\"b\":["
                     << b.mdV[VX] << ',' << b.mdV[VY] << ',' << b.mdV[VZ] << "]}";
             }
             // Each tile's polys' storeys, -1 on a flight, for the pictures.
@@ -983,7 +998,14 @@ namespace sknav
         }
         out << "],\"walls\":{\"segments\":" << seg_n << ",\"segments_two_spaces\":" << seg_two << ",\"segments_same_space\":" << seg_same
             << ",\"segments_one_side\":" << seg_one << ",\"faces\":" << face_n << ",\"faces_two_spaces\":" << face_two
-            << ",\"faces_same_space\":" << face_same << ",\"faces_one_side\":" << face_one << "}";
+            << ",\"faces_same_space\":" << face_same << ",\"faces_one_side\":" << face_one;
+        const WallRunStats& wr = result.mWallRuns;
+        out << ",\"runs\":{\"edges\":" << wr.mEdges << ",\"mixed_edges\":" << wr.mMixedEdges;
+        for (S32 c = 0; c < 3; ++c)
+        {
+            out << ",\"" << wallClassName(static_cast<WallClass>(c)) << "\":[" << wr.mRuns[c] << ',' << wr.mMetres[c] << ']';
+        }
+        out << "}}";
 
         // findAirLeaf over random cells of every tile with air.
         out << ",\"air_leaf_ns\":[";

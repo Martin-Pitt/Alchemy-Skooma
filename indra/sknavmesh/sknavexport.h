@@ -28,7 +28,9 @@
 #include "sknavbuild.h"
 #include "sknavenclosure.h"
 #include "sknavfeatures.h"
+#include "sknavspaceproducts.h"
 #include "sknavspaces.h"
+#include "sknavwallruns.h"
 #include "sknavwind.h"
 
 #include <iosfwd>
@@ -50,6 +52,7 @@ namespace sknav
         U32 mAirs = 0;
         U32 mFeatures = 0;
         U32 mDoors = 0;
+        U32 mWallRuns = 0;
     };
 
     /// What one tile has published, by reference: anything null is left out.
@@ -72,6 +75,9 @@ namespace sknav
         /// AVATAR's stamp and what binds it to the spaces, when its polys were stamped.
         const TileStampGeom* mStamp = nullptr;
         const TileBinding* mBinding = nullptr;
+        /// AVATAR's wall runs over those polys, and the mesh's storeys they stand in, from the same build.
+        const std::vector<WallRun>* mWallRuns = nullptr;
+        const StoreyProduct* mStoreys = nullptr;
     };
 
     /// The Recast area a Detour poly's flags stand for.
@@ -85,7 +91,10 @@ namespace sknav
     /// A tile's per-gap answers as a JSON member, leading comma included.
     void writeExportEnclosure(std::ostream& file, U64 generation, const TileEnclosure& tile);
     /// A mesh's spaces, portals and wind slabs as JSON members, leading comma included, global.
-    void writeExportSpaces(std::ostream& file, const LLVector3d& origin, const RoomsProduct& rooms, const WindProduct* wind);
+    void writeExportSpaces(std::ostream& file, const LLVector3d& origin, const RoomsProduct& rooms, const WindProduct* wind,
+                           const StoreyProduct* storeys = nullptr);
+    /// A mesh's storeys and their connectors as JSON members, leading comma included, global.
+    void writeExportStoreys(std::ostream& file, const LLVector3d& origin, const StoreyProduct& storeys);
     /// One door as a JSON object; names are escaped.
     void writeExportDoor(std::ostream& file, const DoorEntity& door);
     /// One feature as a JSON object, with its span's exits and links per class when it has one.

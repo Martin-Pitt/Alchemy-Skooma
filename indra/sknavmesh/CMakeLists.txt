@@ -12,6 +12,7 @@ target_sources(
     sknavair.cpp
     sknavairdebug.cpp
     sknavairdistil.cpp
+    sknavairfine.cpp
     sknavannotate.cpp
     sknavbuild.cpp
     sknavcensusio.cpp
@@ -20,6 +21,7 @@ target_sources(
     sknavexport.cpp
     sknavfaceoffsets.cpp
     sknavfeatures.cpp
+    sknavflightends.cpp
     sknavflights.cpp
     sknavlayout.cpp
     sknavprobecache.cpp
@@ -34,6 +36,7 @@ target_sources(
     sknavstairalign.cpp
     sknavstamp.cpp
     sknavtilecache.cpp
+    sknavwallruns.cpp
     sknavwalls.cpp
     sknavwind.cpp
 )
@@ -46,6 +49,7 @@ target_sources(
         sknavair.h
         sknavairdebug.h
         sknavairdistil.h
+        sknavairfine.h
         sknavannotate.h
         sknavbuild.h
         sknavbuildstats.h
@@ -55,6 +59,7 @@ target_sources(
         sknavexport.h
         sknavfaceoffsets.h
         sknavfeatures.h
+        sknavflightends.h
         sknavflights.h
         sknavlayout.h
         sknavprobecache.h
@@ -70,6 +75,7 @@ target_sources(
         sknavstamp.h
         sknavtilecache.h
         sknavtypes.h
+        sknavwallruns.h
         sknavwalls.h
         sknavwind.h
 )
@@ -102,12 +108,14 @@ if(AL_BUILD_TESTS)
   al_add_test(sknavair PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavairdebug PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavairdistil PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
+  al_add_test(sknavairfine PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavannotate PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavenclosure PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavcensusio PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavcluster PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavbuild PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavwalls PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
+  al_add_test(sknavwallruns PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavfaceoffsets PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavfeatures PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavflights PROJECT sknavmesh LIBRARIES sknavmesh llcommon)

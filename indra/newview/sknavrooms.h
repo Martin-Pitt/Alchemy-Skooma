@@ -28,6 +28,7 @@
 #include "lluuid.h"
 #include "sknavenclosure.h"
 #include "sknavresidency.h"
+#include "sknavspaceproducts.h"
 #include "sknavspaces.h"
 #include "sknavwind.h"
 #include "threadpool.h"
@@ -200,7 +201,7 @@ public:
     /// this air, with the generation of the pass that gave them; else null.
     const sknav::TileEnclosure* enclosureTile(const LLUUID& mesh, const sknav::TileKey& key, const sknav::TileAirPtr& air, U64& generation) const;
     /// A mesh's spaces, portals and wind slabs as JSON members, leading comma included, global.
-    void writeSpaces(std::ostream& file, const LLUUID& mesh) const;
+    void writeSpaces(std::ostream& file, const LLUUID& mesh, const sknav::StoreyProduct* storeys = nullptr) const;
     /// The products of a mesh's last landed pass, for its tiles' stamps; false when none has landed.
     bool landed(const LLUUID& mesh, sknav::EnclosureProductPtr& enclosure, sknav::RoomsProductPtr& rooms) const;
     /// Whether a mesh's spaces, or its wind slabs, are still to land over its air.

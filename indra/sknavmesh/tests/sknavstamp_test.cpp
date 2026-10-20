@@ -41,6 +41,7 @@
 #include "DetourNavMesh.h"
 #include "DetourNavMeshQuery.h"
 #include "Recast.h"
+#include "RecastAlloc.h"
 
 #include <algorithm>
 #include <cmath>
@@ -815,5 +816,158 @@ namespace tut
         ensure_equals("every span as the rule reads it", differ, 0u);
         ensure_equals("every threshold span counted", st.mDoorSpans, doors);
         ensure("both sides of the slanted doors and the first of the overlapping pair", seen.count(1) && seen.count(2) && seen.count(3) && seen.count(4));
+    }
+
+    template<> template<>
+    void sknavstamp_object::test<11>()
+    {
+        set_test_name("each portal edge carries its portal's index into the mesh's portals, the portal its key names");
+        std::vector<DoorEntity> doors;
+        const Stamped s(twoRoomsDoor(doors), doors);
+        // A portal on another mesh, first in the list, is in no tile's stamp, so the tile's portals and the mesh's are numbered apart.
+        auto rooms = std::make_shared<RoomsProduct>(*s.mRooms);
+        Portal other = rooms->mPortals.front();
+        other.mCrossMesh = true;
+        rooms->mPortals.insert(rooms->mPortals.begin(), other);
+        TileStampInput input;
+        stampInput(*s.mResult.mAir, *s.mEnc->tile(TileKey{ 0, 0 }), *rooms, LLVector3(0.f, 0.f, -1.f), LLVector3(32.f, 32.f, 8.f), input);
+        TileBinding b;
+        bindStamp(s.mPolys.mStamp, input, s.mEnc->tile(TileKey{ 0, 0 }), *rooms, b);
+        ensure("portal edges", !b.mPortalKeys.empty());
+        ensure_equals("an index per edge", b.mPortalIndex.size(), b.mPortalKeys.size());
+        for (size_t e = 0; e < b.mPortalIndex.size(); ++e)
+        {
+            const U32 i = b.mPortalIndex[e];
+            ensure("an index past the other mesh's", i > 0 && i < rooms->mPortals.size());
+            const Portal& p = rooms->mPortals[i];
+            ensure("the keyed portal", portalKey(rooms->mSpaces[p.mSpaces[0]].mId, rooms->mSpaces[p.mSpaces[1]].mId, static_cast<U8>(p.mKind), p.mCentre) ==
+                                           b.mPortalKeys[e]);
+        }
+    }
+
+    template<> template<>
+    void sknavstamp_object::test<12>()
+    {
+        set_test_name("an indoor floor under a roof keeps its space when Recast retriangulates its poly across regions");
+        // Two storeys of 8 by 8 cells: a room's floor (top 4) in space 0, a roof (top 24) in none, outside every region.
+        rcContext ctx(false);
+        rcHeightfield* hf = rcAllocHeightfield();
+        const F32 cs = 0.25f, bmin[3] = { 0.f, 0.f, 0.f }, bmax[3] = { 2.f, 10.f, 2.f };
+        ensure("heightfield", rcCreateHeightfield(&ctx, *hf, 8, 8, bmin, bmax, cs, cs));
+        for (S32 z = 0; z < 8; ++z)
+        {
+            for (S32 x = 0; x < 8; ++x)
+            {
+                rcAddSpan(&ctx, *hf, x, z, 0, 4, AREA_CODE_BASE, 1);
+                rcAddSpan(&ctx, *hf, x, z, 20, 24, AREA_CODE_BASE, 1);
+            }
+        }
+        rcCompactHeightfield* raw = rcAllocCompactHeightfield();
+        ensure("compact", rcBuildCompactHeightfield(&ctx, 8, 1, *hf, *raw));
+        rcFreeHeightField(hf);
+        const ChfPtr chf(raw);
+        std::vector<U32> gaps(chf->spanCount, SPAN_NO_GAP);
+        TileStamp st;
+        st.mSpanComponent.assign(chf->spanCount, STAMP_NONE);
+        st.mComponentColour = { 1 };
+        for (S32 i = 0; i < chf->spanCount; ++i)
+        {
+            const bool floor = chf->spans[i].y < 10;
+            chf->spans[i].reg = floor ? 1 : 0;
+            gaps[i] = floor ? 0u : 1u;
+            st.mSpanComponent[i] = floor ? 0 : STAMP_NONE;
+        }
+        TileStampInput in;
+        in.mGapComponent = { 0, STAMP_NONE };
+        in.mComponentSpace = { 7 };
+
+        // One quad over the floor, its region RC_MULTIPLE_REGS as Recast leaves a poly retriangulated across regions.
+        rcPolyMesh* pm = rcAllocPolyMesh();
+        pm->nvp = 6;
+        pm->nverts = 4;
+        pm->npolys = 1;
+        pm->maxpolys = 1;
+        pm->cs = cs;
+        pm->ch = cs;
+        rcVcopy(pm->bmin, bmin);
+        rcVcopy(pm->bmax, bmax);
+        pm->verts = static_cast<unsigned short*>(rcAlloc(sizeof(unsigned short) * 12, RC_ALLOC_PERM));
+        const unsigned short verts[12] = { 0, 4, 0, 0, 4, 8, 8, 4, 8, 8, 4, 0 };
+        std::copy(verts, verts + 12, pm->verts);
+        pm->polys = static_cast<unsigned short*>(rcAlloc(sizeof(unsigned short) * 12, RC_ALLOC_PERM));
+        std::fill(pm->polys, pm->polys + 12, RC_MESH_NULL_IDX);
+        for (unsigned short k = 0; k < 4; ++k)
+        {
+            pm->polys[k] = k;
+        }
+        pm->regs = static_cast<unsigned short*>(rcAlloc(sizeof(unsigned short), RC_ALLOC_PERM));
+        pm->regs[0] = RC_MULTIPLE_REGS;
+        pm->flags = static_cast<unsigned short*>(rcAlloc(sizeof(unsigned short), RC_ALLOC_PERM));
+        pm->flags[0] = 1;
+        pm->areas = static_cast<unsigned char*>(rcAlloc(1, RC_ALLOC_PERM));
+        pm->areas[0] = AREA_CODE_BASE;
+        TileStampGeom geom;
+        stampGeometry(*pm, *chf, 0, gaps, in, st, geom);
+        rcFreePolyMesh(pm);
+        ensure_equals("the floor's poly is in the room's space", geom.mPolyComponent[0], 0);
+        ensure_equals("and stands in the floor's gap, not the roof's", geom.mPolyGap[0], 0u);
+    }
+
+    template<> template<>
+    void sknavstamp_object::test<13>()
+    {
+        set_test_name("a poly in no space that shares an edge with a spaced poly takes its neighbour's space");
+        const ChfPtr chf = floorOf(16, 8, [](S32, S32) { return AREA_CODE_BASE; });
+        std::vector<U32> gaps(chf->spanCount, 0u);
+        TileStamp st;
+        st.mSpanComponent.assign(chf->spanCount, STAMP_NONE);
+        st.mComponentColour = { 1 };
+        for (S32 z = 0; z < 8; ++z)
+        {
+            for (S32 x = 0; x < 16; ++x)
+            {
+                const S32 i = spanAt(*chf, x, z);
+                chf->spans[i].reg = 1;
+                st.mSpanComponent[i] = x < 8 ? 0 : STAMP_NONE;
+            }
+        }
+        TileStampInput in;
+        in.mGapComponent = { 0 };
+        in.mComponentSpace = { 3 };
+        // Two quads, west over the spaced half, east over the unspaced half, sharing the edge at x = 8.
+        rcPolyMesh* pm = rcAllocPolyMesh();
+        pm->nvp = 6;
+        pm->nverts = 6;
+        pm->npolys = 2;
+        pm->maxpolys = 2;
+        pm->cs = 0.25f;
+        pm->ch = 0.25f;
+        rcVcopy(pm->bmin, chf->bmin);
+        rcVcopy(pm->bmax, chf->bmax);
+        const unsigned short verts[18] = { 0, 4, 0, 0, 4, 8, 8, 4, 8, 8, 4, 0, 16, 4, 8, 16, 4, 0 };
+        pm->verts = static_cast<unsigned short*>(rcAlloc(sizeof(verts), RC_ALLOC_PERM));
+        std::copy(verts, verts + 18, pm->verts);
+        pm->polys = static_cast<unsigned short*>(rcAlloc(sizeof(unsigned short) * 24, RC_ALLOC_PERM));
+        std::fill(pm->polys, pm->polys + 24, RC_MESH_NULL_IDX);
+        const unsigned short a[4] = { 0, 1, 2, 3 }, b[4] = { 3, 2, 4, 5 };
+        for (S32 k = 0; k < 4; ++k)
+        {
+            pm->polys[k] = a[k];
+            pm->polys[12 + k] = b[k];
+        }
+        pm->polys[6 + 2] = 1;   // west's edge 2-3 is east's
+        pm->polys[12 + 6 + 0] = 0;
+        pm->regs = static_cast<unsigned short*>(rcAlloc(sizeof(unsigned short) * 2, RC_ALLOC_PERM));
+        pm->regs[0] = pm->regs[1] = 1;
+        pm->flags = static_cast<unsigned short*>(rcAlloc(sizeof(unsigned short) * 2, RC_ALLOC_PERM));
+        pm->flags[0] = pm->flags[1] = 1;
+        pm->areas = static_cast<unsigned char*>(rcAlloc(2, RC_ALLOC_PERM));
+        pm->areas[0] = pm->areas[1] = AREA_CODE_BASE;
+        TileStampGeom geom;
+        stampGeometry(*pm, *chf, 0, gaps, in, st, geom);
+        rcFreePolyMesh(pm);
+        ensure_equals("the west poly is spaced", geom.mPolyComponent[0], 0);
+        ensure_equals("the east poly took its neighbour's space", geom.mPolyComponent[1], 0);
+        ensure_equals("one joined", geom.mJoinedPolys, 1u);
     }
 }

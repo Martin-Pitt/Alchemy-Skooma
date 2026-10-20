@@ -34,6 +34,7 @@
 #include "DetourNavMesh.h"
 
 #include <ostream>
+#include <unordered_map>
 
 namespace sknav
 {
@@ -73,6 +74,8 @@ namespace sknav
         file << ",\"classes\":[\"avatar\"]";
         file << ",\"edgeKinds\":[\"open\",\"wall\",\"ledge\",\"overhang\"]";
         file << ",\"linkKinds\":[\"drop\",\"ladder\",\"elevator\"]";
+        file << ",\"wallClasses\":[\"none\",\"hatched\",\"solid\"],\"covers\":[\"none\",\"half\",\"full\"],\"wallPlanes\":[" << WALL_LOW_PLANE_M << ','
+             << WALL_HIGH_PLANE_M << ']';
         file << ",\"areas\":[\"none\",\"ground\",\"object\",\"submerged\",\"drop\",\"5\",\"6\",\"7\"]";
         file << ",\"meshes\":[";
     }
@@ -236,10 +239,19 @@ namespace sknav
                         file << ',';
                     }
                     first = false;
-                    static const char* const KINDS[] = { "stair", "ramp" };
+                    static const char* const KINDS[] = { "stair", "ramp", "climb" };
                     static const char* const RULES[] = { "name", "treads", "grade" };
                     file << "{\"key\":\"" << std::hex << f.mKey << std::dec << "\",\"kind\":\"" << KINDS[static_cast<S32>(f.mKind)]
-                         << "\",\"rule\":\"" << RULES[static_cast<S32>(f.mRule)] << "\",\"treads\":" << static_cast<S32>(f.mTreads)
+                         << "\",\"rule\":\"" << RULES[static_cast<S32>(f.mRule)] << "\",\"treads\":";
+                    if (f.mTreadCount >= 0)
+                    {
+                        file << f.mTreadCount;
+                    }
+                    else
+                    {
+                        file << "null";
+                    }
+                    file << ",\"tread_groups\":" << static_cast<S32>(f.mTreads) << ",\"eroded\":" << (f.mEroded ? "true" : "false")
                          << ",\"rise\":" << f.mRise << ",\"run\":" << f.mRun << ",\"plane\":[" << f.mPlane[0] << ',' << f.mPlane[1] << ','
                          << mesh_origin.mdV[VZ] + f.mPlane[2] - f.mPlane[0] * mesh_origin.mdV[VX] - f.mPlane[1] * mesh_origin.mdV[VY]
                          << "],\"bottom\":";
@@ -265,7 +277,28 @@ namespace sknav
                     {
                         file << (i ? "," : "") << f.mPolys[i];
                     }
-                    file << "]}";
+                    file << ']';
+                    // The ground polys each end meets, as [tile x, tile y, poly], with their storeys and why an end has none.
+                    if (const FlightEnds* fe = tile.mStoreys && nav ? tile.mStoreys->flightEnds(f.mKey) : nullptr)
+                    {
+                        file << ",\"end_polys\":[";
+                        for (S32 e = 0; e < 2; ++e)
+                        {
+                            file << (e ? ",[" : "[");
+                            for (size_t i = 0; i < fe->mPolys[e].size(); ++i)
+                            {
+                                unsigned int salt = 0, it = 0, ip = 0;
+                                nav->decodePolyId(static_cast<dtPolyRef>(fe->mPolys[e][i]), salt, it, ip);
+                                const dtMeshTile* et = nav->getTile(static_cast<int>(it));
+                                const S32 kx = et && et->header ? et->header->y : 0, ky = et && et->header ? et->header->x : 0;
+                                file << (i ? "," : "") << '[' << kx << ',' << ky << ',' << ip << ']';
+                            }
+                            file << ']';
+                        }
+                        file << "],\"end_storeys\":[" << fe->mStorey[0] << ',' << fe->mStorey[1] << "],\"end_gaps\":[\"" << endGapName(fe->mGap[0]) << "\",\""
+                             << endGapName(fe->mGap[1]) << "\"]";
+                    }
+                    file << '}';
                 }
             }
             file << ']';
@@ -284,8 +317,11 @@ namespace sknav
                 for (size_t e = 0; e < g.mPortalEdges.size(); ++e)
                 {
                     const StampPortalEdge& pe = g.mPortalEdges[e];
-                    file << (e ? "," : "") << '[' << pe.mPoly << ',' << static_cast<S32>(pe.mEdge) << ',' << static_cast<S32>(pe.mSide) << ",\""
-                         << std::hex << (e < b.mPortalKeys.size() ? b.mPortalKeys[e] : 0) << std::dec << "\"]";
+                    // The portal's index into the mesh's portals (-1 for none), then its key.
+                    const U32 pi = e < b.mPortalIndex.size() ? b.mPortalIndex[e] : NO_PORTAL;
+                    file << (e ? "," : "") << '[' << pe.mPoly << ',' << static_cast<S32>(pe.mEdge) << ',' << static_cast<S32>(pe.mSide) << ','
+                         << (pi == NO_PORTAL ? -1 : static_cast<S64>(pi)) << ",\"" << std::hex << (e < b.mPortalKeys.size() ? b.mPortalKeys[e] : 0) << std::dec
+                         << "\"]";
                 }
                 file << "],\"flight_polys\":[";
                 bool first = true;
@@ -301,6 +337,43 @@ namespace sknav
                     }
                 }
                 file << ']';
+                if (tile.mStoreys && dt && dt->header)
+                {
+                    // Each poly's storey by index into the mesh's storeys, -1 on a flight or none.
+                    const dtPolyRef base = nav->getPolyRefBase(dt);
+                    file << ",\"poly_storey\":[";
+                    for (size_t p = 0; p < g.mPolyComponent.size(); ++p)
+                    {
+                        file << (p ? "," : "") << tile.mStoreys->storeyOfPoly(static_cast<U64>(base | static_cast<dtPolyRef>(p)));
+                    }
+                    file << ']';
+                }
+                if (tile.mWallRuns)
+                {
+                    static const char* const COVERS[] = { "none", "half", "full" };
+                    file << ",\"walls\":[";
+                    for (size_t i = 0; i < tile.mWallRuns->size(); ++i)
+                    {
+                        const WallRun& w = (*tile.mWallRuns)[i];
+                        file << (i ? "," : "") << "{\"line\":[";
+                        for (size_t k = 0; k < w.mLine.size(); ++k)
+                        {
+                            file << (k ? "," : "");
+                            writeVec3d(file, mesh_origin + LLVector3d(w.mLine[k]));
+                        }
+                        file << "],\"class\":\"" << wallClassName(w.mClass) << "\",\"low\":" << (w.mLow ? "true" : "false") << ",\"high\":"
+                             << (w.mHigh ? "true" : "false") << ",\"top\":[" << w.mTopMin << ',' << w.mTopMax << "],\"face\":" << w.mFace << ",\"far\":" << w.mFar << ",\"depth\":" << w.mDepth
+                             << ",\"thick\":" << (w.mThick ? "true" : "false")
+                             << ",\"floor\":" << mesh_origin.mdV[VZ] + w.mFloorZ << ",\"polys\":[";
+                        for (size_t k = 0; k < w.mPolys.size(); ++k)
+                        {
+                            file << (k ? "," : "") << w.mPolys[k];
+                        }
+                        file << "],\"space\":" << w.mSpace << ",\"across\":" << w.mAcross << ",\"cover\":\"" << COVERS[static_cast<S32>(w.mCover)] << "\"}";
+                        ++counts.mWallRuns;
+                    }
+                    file << ']';
+                }
             }
             file << '}';
         }
@@ -329,7 +402,7 @@ namespace sknav
              << LLBase64::encode(blob.data(), blob.size()) << "\"}";
     }
 
-    void writeExportSpaces(std::ostream& file, const LLVector3d& origin, const RoomsProduct& rooms, const WindProduct* wind)
+    void writeExportSpaces(std::ostream& file, const LLVector3d& origin, const RoomsProduct& rooms, const WindProduct* wind, const StoreyProduct* storeys)
     {
         static const char* buckets[] = { "outdoors", "sheltered", "indoors", "unknown" };
         auto vec = [&file](const LLVector3d& v) { file << '[' << v.mdV[VX] << ',' << v.mdV[VY] << ',' << v.mdV[VZ] << ']'; };
@@ -350,7 +423,13 @@ namespace sknav
                  << s.mFloorMin + oz << ',' << s.mFloorMax + oz << "],\"elongation\":" << s.mElongation << ",\"S\":" << s.mSMean << ",\"cover\":" << s.mCoverMean << ",\"O\":" << s.mSideOpenMean << ",\"e\":["
                  << s.mEMin << ',' << s.mEMean << ',' << s.mEMax << "],\"L\":" << s.mL << ",\"unknown\":" << s.mUnknown
                  << ",\"lift\":" << (s.mLift ? "true" : "false") << ",\"flight\":" << (s.mFlight ? "true" : "false") << ",\"under_flight\":" << (s.mUnderFlight ? "true" : "false")
-                 << ",\"frozen\":" << (s.mFrozen ? "true" : "false") << ",\"portals\":[";
+                 << ",\"frozen\":" << (s.mFrozen ? "true" : "false") << ",\"roof\":" << (s.mRoof ? "true" : "false") << ",\"over_roofed\":" << s.mOverRoofed
+                 << ",\"building\":" << s.mBuilding << ",\"covers\":[";
+            for (size_t k = 0; s.mRoof && k < s.mCovers.size(); ++k)
+            {
+                file << (k ? "," : "") << (s.mCovers[k] < rooms.mSpaces.size() ? rooms.mSpaces[s.mCovers[k]].mId : 0u);
+            }
+            file << "],\"portals\":[";
             for (size_t k = 0; k < s.mPortals.size(); ++k)
             {
                 file << (k ? "," : "") << s.mPortals[k];
@@ -371,7 +450,48 @@ namespace sknav
                  << ",\"walled\":" << (p.walled() ? "true" : "false") << ",\"cues\":" << static_cast<S32>(p.mCues) << ",\"door\":\"" << p.mDoor
                  << "\"}";
         }
+        // Seam portals after the cut ones, marked seam, with the same fields where they have them.
+        if (storeys && !storeys->mSeamPortals.empty())
+        {
+            std::unordered_map<U32, size_t> index_of;
+            for (size_t i = 0; i < rooms.mSpaces.size(); ++i)
+            {
+                index_of[rooms.mSpaces[i].mId] = i;
+            }
+            static const char* const SEAM_KINDS[] = { "door", "stair", "opening", "adjacent" };
+            bool first = rooms.mPortals.empty();
+            for (const SeamPortal& sp : storeys->mSeamPortals)
+            {
+                const auto a = index_of.find(sp.mSpace[0]), b = index_of.find(sp.mSpace[1]);
+                if (a == index_of.end() || b == index_of.end())
+                {
+                    continue;
+                }
+                file << (first ? "" : ",") << "{\"kind\":\"" << SEAM_KINDS[static_cast<S32>(sp.mKind)] << "\",\"spaces\":[" << a->second << ',' << b->second
+                     << "],\"a\":";
+                vec(origin + LLVector3d(sp.mA));
+                file << ",\"b\":";
+                vec(origin + LLVector3d(sp.mB));
+                file << ",\"width\":" << dist_vec(sp.mA, sp.mB) << ",\"length\":" << sp.mLength << ",\"seam\":true}";
+                first = false;
+            }
+        }
         file << ']';
+        if (storeys)
+        {
+            // Climb links: two space ids and the climb's key, its ends only to place a draw.
+            file << ",\"climb_links\":[";
+            for (size_t i = 0; i < storeys->mClimbLinks.size(); ++i)
+            {
+                const ClimbLink& l = storeys->mClimbLinks[i];
+                file << (i ? "," : "") << "{\"spaces\":[" << l.mSpace[0] << ',' << l.mSpace[1] << "],\"flight\":\"" << std::hex << l.mFlight << std::dec << "\",\"foot\":";
+                vec(origin + LLVector3d(l.mFoot));
+                file << ",\"top\":";
+                vec(origin + LLVector3d(l.mTop));
+                file << '}';
+            }
+            file << ']';
+        }
         if (wind && !wind->mSlabs.empty())
         {
             // Per band its heights, per slab its cells: factor, deflection x and y, flags, a byte each.
@@ -404,6 +524,39 @@ namespace sknav
             }
             file << "]}";
         }
+    }
+
+    void writeExportStoreys(std::ostream& file, const LLVector3d& origin, const StoreyProduct& storeys)
+    {
+        file << ",\"storeys\":[";
+        for (size_t i = 0; i < storeys.mStoreys.size(); ++i)
+        {
+            const Storey& s = storeys.mStoreys[i];
+            file << (i ? "," : "") << "{\"index\":" << i << ",\"id\":" << s.mId << ",\"floor\":" << origin.mdV[VZ] + s.mFloorZ << ",\"area\":" << s.mArea
+                 << ",\"min\":";
+            writeVec3d(file, origin + LLVector3d(s.mMin));
+            file << ",\"max\":";
+            writeVec3d(file, origin + LLVector3d(s.mMax));
+            file << ",\"spaces\":[";
+            for (size_t k = 0; k < s.mSpaces.size(); ++k)
+            {
+                file << (k ? "," : "") << s.mSpaces[k];
+            }
+            file << "]}";
+        }
+        static const char* const KINDS[] = { "stair", "ramp", "climb" };
+        file << "],\"storey_connectors\":[";
+        for (size_t i = 0; i < storeys.mConnectors.size(); ++i)
+        {
+            const StoreyConnector& c = storeys.mConnectors[i];
+            file << (i ? "," : "") << "{\"storeys\":[" << c.mStorey[0] << ',' << c.mStorey[1] << "],\"space\":" << c.mSpace << ",\"ends\":[";
+            writeVec3d(file, origin + LLVector3d(c.mEnd[0]));
+            file << ',';
+            writeVec3d(file, origin + LLVector3d(c.mEnd[1]));
+            file << "],\"flight\":\"" << std::hex << c.mFlight << std::dec << "\",\"portals\":" << (c.mPortals ? "true" : "false") << ",\"kind\":\""
+                 << KINDS[static_cast<S32>(c.mKind)] << "\"}";
+        }
+        file << ']';
     }
 
     void writeExportDoor(std::ostream& file, const DoorEntity& d)

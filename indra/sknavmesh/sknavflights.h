@@ -40,11 +40,12 @@ namespace sknav
     constexpr F32 SLOPE_TURN_DEG = 30.f;    ///< the crease angle: neighbours further apart are different slopes
     constexpr F32 SLOPE_REACH_M = 0.75f;    ///< a level group shallower than this between two risers is a tread
     constexpr F32 FLIGHT_MIN_RISE_M = 0.5f; ///< a connector climbs at least this
+    constexpr F32 CLIMB_GRADE_DEG = 52.f;   ///< an unstepped flight steeper than this is a climb, not a stair, unless it is stair-like
     constexpr F32 STAIR_GRADE_DEG = 22.f;   ///< without a name or treads, steeper is a stair: walkways stay under it, stairs simplified to a slope do not
 
     enum SlopeGroupKind : U8 { SLOPE_GROUP, LANDING_GROUP, TREAD_GROUP };
 
-    enum class ConnectorKind : U8 { STAIR, RAMP };
+    enum class ConnectorKind : U8 { STAIR, RAMP, CLIMB };
     enum class ConnectorRule : U8 { NAME, TREADS, GRADE };     ///< what told stair from ramp
     enum NameCue : U8 { CUE_NONE = 0, CUE_STAIR = 1, CUE_RAMP = 2 };
 
@@ -68,6 +69,9 @@ namespace sknav
         ConnectorKind mKind = ConnectorKind::STAIR;
         ConnectorRule mRule = ConnectorRule::GRADE;
         U8 mTreads = 0;                     ///< tread groups among its groups
+        S16 mTreadCount = -1;               ///< treads between its floors, from the level faces over its footprint, else its tread groups; -1 for a smooth wedge
+        bool mDecked = false;               ///< lands on a deck of floor area at both ends
+        bool mEroded = false;               ///< no poly in its home tile, eroded or merged away; it still links its floors
         std::vector<U8> mCodes;             ///< the area codes its groups rasterise as
         std::vector<U16> mPolys;            ///< the tile's polys the flight produced
     };
@@ -94,17 +98,19 @@ namespace sknav
     /// regions, the rest keep one code per area. A two-sided triangle is
     /// walkable whichever way it faces. Codes run from 1 to below max_codes;
     /// every area keeps one of its own however many colours want one.
-    /// cues holds a NameCue per triangle from its object's name, or is empty.
+    /// cues holds a NameCue per triangle from its object's name, or is empty;
+    /// sources the record each triangle came from, or is empty.
+    /// A flight steeper than walk_slope_deg is a wall unless its treads step by no more than climb.
     SlopePartition partitionSlopes(const std::vector<LLVector3>& verts, const std::vector<S32>& tris, const std::vector<U8>& areas,
-                                   const std::vector<U8>& two_sided, U8 partitioned_area, F32 climb, S32 max_codes = 63,
-                                   const std::vector<U8>& cues = {});
+                                   const std::vector<U8>& two_sided, U8 partitioned_area, F32 climb, F32 walk_slope_deg, S32 max_codes = 63,
+                                   const std::vector<U8>& cues = {}, const std::vector<S32>& sources = {});
 
     /// The NameCue an object's name and description give: stair words, else ramp.
     U8 nameCue(const std::string& name, const std::string& description);
 
     /// Give each flight the polys that its codes produced over its footprint.
     /// centroids and codes are per poly, in the poly mesh's order; flights
-    /// that got none are dropped.
+    /// that got none are dropped unless eroded.
     void mapFlightPolys(std::vector<Flight>& flights, const std::vector<LLVector3>& centroids, const std::vector<U8>& codes, F32 climb);
 
     /// Narrow each flight's ends to the walkable treads: the lateral extent of
@@ -119,6 +125,9 @@ namespace sknav
     /// inside its footprint, within climb of its heights. The air marks the
     /// flights that do, before any polys exist.
     bool flightSurvives(const rcCompactHeightfield& chf, S32 border, const Flight& flight, F32 climb);
+
+    /// Whether the middle of a flight's footprint lies on the tile proper, so the tile is the one that keeps it.
+    bool flightHome(const rcCompactHeightfield& chf, S32 border, const Flight& flight);
 
     /// Mark FLIGHT on the walkable gaps a flight stands for: inside
     /// its footprint, with the floor on its plane. The grid and the flights
