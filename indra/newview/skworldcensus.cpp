@@ -879,18 +879,23 @@ void SKWorldCensus::visit(LLViewerObject* object)
         cache.mSignature = sig;
     }
     take(snap, rec);
-    if (object->isPhysicsShapeUnknown())
+    // Only a mesh has its type asked for above; a prim's stays unknown until someone edits it.
+    if (volume->isMesh())
     {
-        snap.mStats.mPhysicsUnknown++;
-        mUnknownSince.try_emplace(object->getID(), gFrameTimeSeconds);
-    }
-    else if (const auto since = mUnknownSince.find(object->getID()); since != mUnknownSince.end())
-    {
-        const F64 waited = gFrameTimeSeconds - since->second;
-        mKnownAfterCount++;
-        mKnownAfterSumS += waited;
-        mKnownAfterMaxS = std::max(mKnownAfterMaxS, waited);
-        mUnknownSince.erase(since);
+        snap.mStats.mPhysicsMeshes++;
+        if (object->isPhysicsShapeUnknown())
+        {
+            snap.mStats.mPhysicsUnknown++;
+            mUnknownSince.try_emplace(object->getID(), gFrameTimeSeconds);
+        }
+        else if (const auto since = mUnknownSince.find(object->getID()); since != mUnknownSince.end())
+        {
+            const F64 waited = gFrameTimeSeconds - since->second;
+            mKnownAfterCount++;
+            mKnownAfterSumS += waited;
+            mKnownAfterMaxS = std::max(mKnownAfterMaxS, waited);
+            mUnknownSince.erase(since);
+        }
     }
 
     if (!surround)
@@ -1464,8 +1469,8 @@ std::string SKWorldCensus::statsLine() const
                     static_cast<unsigned long long>(mSnapshot->mStamp), s.mObjectsSeen, s.mRecords, s.mCached, s.mDynamic, s.mSurround,
                     s.mPlaceholders, s.mFromObjectCache, s.mTiny, s.mTriangles, s.mRolesKnown, s.mFeatures, mSnapshot->mClusters.mClusters.size(), largest, s.mScanMs, s.mClusterMs,
                     s.mFeatureMs) +
-           llformat("; physics unknown %u / %u, known after mean %.1f s, max %.1f s over %u parts", s.mPhysicsUnknown, s.mRecords,
-                    mKnownAfterCount ? mKnownAfterSumS / mKnownAfterCount : 0.0, mKnownAfterMaxS, mKnownAfterCount);
+           llformat("; physics unknown %u / %u meshes, known after mean %.1f s, max %.1f s over %u parts", s.mPhysicsUnknown,
+                    s.mPhysicsMeshes, mKnownAfterCount ? mKnownAfterSumS / mKnownAfterCount : 0.0, mKnownAfterMaxS, mKnownAfterCount);
 }
 
 void SKWorldCensus::renderDebug()
