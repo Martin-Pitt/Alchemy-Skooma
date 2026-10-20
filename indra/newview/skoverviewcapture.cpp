@@ -41,6 +41,7 @@
 #include "skcensusavatarshape.h"
 #include "skmaplabels.h"
 #include "skmapmenu.h"
+#include "skoverviewprograms.h"
 #include "llrootview.h"
 #include "skpopuppanes.h"
 #include "llfocusmgr.h"
@@ -537,32 +538,10 @@ std::vector<SKOverviewCapture::Tile> SKOverviewCapture::tiles() const
 
 namespace
 {
-    /// One of the overview's programs: its stage files and the defines it is built with.
-    struct OverviewProgram
-    {
-        LLGLSLShader* mShader;
-        const char* mName;
-        const char* mVertex;
-        const char* mFragment;
-        std::vector<const char*> mDefines;
-    };
-
-    std::vector<OverviewProgram> overviewPrograms()
-    {
-        return {
-            { &sResolve, "SK Overview Resolve", "deferred/postDeferredNoTCV.glsl", "skooma/overviewResolveF.glsl", {} },
-            { &sComposite, "SK Overview Composite", "deferred/postDeferredNoTCV.glsl", "skooma/overviewCompositeF.glsl", {} },
-            { &sGeom, "SK Overview Geometry", "skooma/overviewGeomV.glsl", "skooma/overviewGeomF.glsl", {} },
-            { &sGeomCut, "SK Overview Geometry Cut", "skooma/overviewGeomV.glsl", "skooma/overviewGeomF.glsl", { "SK_CUT_ATTRIBUTE" } },
-            { &sGeomCutDissolve, "SK Overview Geometry Cut Dissolve", "skooma/overviewGeomV.glsl", "skooma/overviewGeomF.glsl",
-              { "SK_CUT_ATTRIBUTE", "SK_DISSOLVE" } },
-            { &sGeomCapLift, "SK Overview Geometry Cap Lift", "skooma/overviewGeomV.glsl", "skooma/overviewGeomF.glsl",
-              { "SK_CUT_ATTRIBUTE", "SK_CAP_LIFT" } },
-            { &sGeomCapLiftDissolve, "SK Overview Geometry Cap Lift Dissolve", "skooma/overviewGeomV.glsl",
-              "skooma/overviewGeomF.glsl", { "SK_CUT_ATTRIBUTE", "SK_CAP_LIFT", "SK_DISSOLVE" } },
-            { &sMarker, "SK Overview Marker", "skooma/overviewMarkerV.glsl", "skooma/overviewMarkerF.glsl", {} },
-        };
-    }
+    /// The program each of skoverview::PROGRAMS builds, in its order.
+    LLGLSLShader* const OVERVIEW_SHADERS[] = { &sResolve,     &sComposite,           &sGeom,  &sGeomCut, &sGeomCutDissolve,
+                                               &sGeomCapLift, &sGeomCapLiftDissolve, &sMarker };
+    static_assert(sizeof(OVERVIEW_SHADERS) / sizeof(OVERVIEW_SHADERS[0]) == skoverview::PROGRAM_COUNT);
 }
 
 // static
@@ -570,9 +549,10 @@ bool SKOverviewCapture::loadShaders(S32 level)
 {
     unloadShaders();
     bool ok = true;
-    for (const OverviewProgram& program : overviewPrograms())
+    for (size_t i = 0; i < skoverview::PROGRAM_COUNT; ++i)
     {
-        LLGLSLShader& shader = *program.mShader;
+        const skoverview::ProgramSpec& program = skoverview::PROGRAMS[i];
+        LLGLSLShader& shader = *OVERVIEW_SHADERS[i];
         shader.mName = program.mName;
         shader.mShaderFiles.clear();
         shader.mShaderFiles.push_back(std::make_pair(program.mVertex, GL_VERTEX_SHADER));
@@ -581,7 +561,10 @@ bool SKOverviewCapture::loadShaders(S32 level)
         shader.clearPermutations();
         for (const char* define : program.mDefines)
         {
-            shader.addPermutation(define, "1");
+            if (define)
+            {
+                shader.addPermutation(define, "1");
+            }
         }
         if (!shader.createShader())
         {
@@ -610,19 +593,19 @@ bool SKOverviewCapture::loadShaders(S32 level)
 // static
 void SKOverviewCapture::unloadShaders()
 {
-    for (const OverviewProgram& program : overviewPrograms())
+    for (LLGLSLShader* shader : OVERVIEW_SHADERS)
     {
-        program.mShader->unload();
+        shader->unload();
     }
 }
 
 bool SKOverviewCapture::ensureShaders()
 {
-    for (const OverviewProgram& program : overviewPrograms())
+    for (size_t i = 0; i < skoverview::PROGRAM_COUNT; ++i)
     {
-        if (!program.mShader->isComplete())
+        if (!OVERVIEW_SHADERS[i]->isComplete())
         {
-            LL_WARNS_ONCE("SKOverview") << "overview program " << program.mName << " is not loaded" << LL_ENDL;
+            LL_WARNS_ONCE("SKOverview") << "overview program " << skoverview::PROGRAMS[i].mName << " is not loaded" << LL_ENDL;
             return false;
         }
     }

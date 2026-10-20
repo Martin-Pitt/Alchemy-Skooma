@@ -1991,6 +1991,7 @@ if(AL_BUILD_VIEWER)
     skoverviewcapture.h
     skoverviewcensus.h
     skoverviewmovers.h
+    skoverviewprograms.h
     skpopuppanes.h
     skmapmenu.h
     skmapparcelfacts.h

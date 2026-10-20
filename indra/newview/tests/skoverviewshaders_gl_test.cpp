@@ -31,7 +31,9 @@
 #include "llglstates.h"
 #include "llrender.h"
 #include "llshadermgr.h"
+#include "llvertexbuffer.h"
 
+#include "../skoverviewprograms.h"
 #include "../../llrender/tests/llheadlessgl_fixture.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -42,32 +44,8 @@
 
 namespace
 {
-    // The programs SKOverviewCapture::loadShaders builds, as it builds them.
-    struct Program
-    {
-        const char* mName;
-        const char* mVertex;
-        const char* mFragment;
-        std::vector<const char*> mDefines;
-    };
-
-    const std::vector<Program>& programs()
-    {
-        static const std::vector<Program> list = {
-            { "SK Overview Resolve", "deferred/postDeferredNoTCV.glsl", "skooma/overviewResolveF.glsl", {} },
-            { "SK Overview Composite", "deferred/postDeferredNoTCV.glsl", "skooma/overviewCompositeF.glsl", {} },
-            { "SK Overview Geometry", "skooma/overviewGeomV.glsl", "skooma/overviewGeomF.glsl", {} },
-            { "SK Overview Geometry Cut", "skooma/overviewGeomV.glsl", "skooma/overviewGeomF.glsl", { "SK_CUT_ATTRIBUTE" } },
-            { "SK Overview Geometry Cap Lift", "skooma/overviewGeomV.glsl", "skooma/overviewGeomF.glsl",
-              { "SK_CUT_ATTRIBUTE", "SK_CAP_LIFT" } },
-            { "SK Overview Geometry Cut Dissolve", "skooma/overviewGeomV.glsl", "skooma/overviewGeomF.glsl",
-              { "SK_CUT_ATTRIBUTE", "SK_DISSOLVE" } },
-            { "SK Overview Geometry Cap Lift Dissolve", "skooma/overviewGeomV.glsl", "skooma/overviewGeomF.glsl",
-              { "SK_CUT_ATTRIBUTE", "SK_CAP_LIFT", "SK_DISSOLVE" } },
-            { "SK Overview Marker", "skooma/overviewMarkerV.glsl", "skooma/overviewMarkerF.glsl", {} },
-        };
-        return list;
-    }
+    // The programs SKOverviewCapture::loadShaders builds, from the table it builds them from.
+    using Program = skoverview::ProgramSpec;
 
     struct skoverviewshaders_data
     {
@@ -140,7 +118,10 @@ namespace
             mProgram.clearPermutations();
             for (const char* define : program.mDefines)
             {
-                mProgram.addPermutation(define, "1");
+                if (define)
+                {
+                    mProgram.addPermutation(define, "1");
+                }
             }
             return mProgram.createShader();
         }
@@ -168,7 +149,7 @@ namespace
         {
             setConvention(reverse);
             loadSharedObjects();
-            for (const Program& program : programs())
+            for (const Program& program : skoverview::PROGRAMS)
             {
                 CAPTURE(reverse, program.mName);
                 REQUIRE(build(program));
@@ -177,7 +158,7 @@ namespace
         }
     }
 
-    // The geometry programs keep the uniforms the overview sets by name, so a rename in one stage is caught here.
+    // The geometry programs keep the uniforms the overview sets by name and the attributes it feeds, so a rename is caught here.
     TEST_CASE_METHOD(skoverviewshaders_data, "SKOverviewShaders: the cut permutations keep their per-pass uniforms",
                      "[SKOverviewShaders]")
     {
@@ -186,7 +167,7 @@ namespace
         static const LLStaticHashedString CAP_PASS("sk_cap_pass");
         static const LLStaticHashedString DISSOLVE("sk_dissolve");
         loadSharedObjects();
-        for (const Program& program : programs())
+        for (const Program& program : skoverview::PROGRAMS)
         {
             if (std::string(program.mVertex) != "skooma/overviewGeomV.glsl")
             {
@@ -199,11 +180,13 @@ namespace
             bool cut = false, dissolve = false;
             for (const char* define : program.mDefines)
             {
-                cut = cut || std::string(define) == "SK_CUT_ATTRIBUTE";
-                dissolve = dissolve || std::string(define) == "SK_DISSOLVE";
+                cut = cut || (define && std::string(define) == "SK_CUT_ATTRIBUTE");
+                dissolve = dissolve || (define && std::string(define) == "SK_DISSOLVE");
             }
             CHECK((mProgram.getUniformLocation(CAP_PASS) >= 0) == cut);
             CHECK((mProgram.getUniformLocation(DISSOLVE) >= 0) == dissolve);
+            // The census buffer carries texcoord0 for this: an open part's flag, which the cap pass's sign reads.
+            CHECK(((mProgram.mAttributeMask & LLVertexBuffer::MAP_TEXCOORD0) != 0) == cut);
         }
     }
 }
