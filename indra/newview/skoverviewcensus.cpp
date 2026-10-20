@@ -1258,7 +1258,9 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildBatches(const Jo
                     span.mOffset = LLVector3(geom->mOrigin - origin);
                     spans.push_back(span);
                 }
+                const auto verdict_began = std::chrono::steady_clock::now();
                 const sknav::InvisibleResult result = sknav::invisibleVerdict(*source, spans, cover_params);
+                stats.mVerdictSeconds += std::chrono::duration<F64>(std::chrono::steady_clock::now() - verdict_began).count();
                 judged.mKey = part_key;
                 judged.mVerdict = (U8)result.mVerdict;
                 judged.mSteepM2 = result.mSteepArea;
@@ -1347,7 +1349,7 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildBatches(const Jo
     {
         job.mVerdicts->mByPart = std::move(verdicts);
     }
-    stats.mSeconds = std::chrono::duration<F64>(std::chrono::steady_clock::now() - cover_began).count();
+    stats.mBuildSeconds = std::chrono::duration<F64>(std::chrono::steady_clock::now() - cover_began).count();
 
     auto built = std::make_shared<Built>();
     built->mSignature = job.mSignature;
@@ -1593,7 +1595,8 @@ void SKOverviewCensus::swapIn(Built& built)
                 where += (where.empty() ? "" : ", ") + region->getName();
             }
             LL_INFOS("SKOverview") << "census cover in " << where << ": " << counts << ", " << c.mJudged << " judged in "
-                                   << llformat("%.2f ms", c.mSeconds * 1000.0) << LL_ENDL;
+                                   << llformat("%.2f ms of verdicts, build %.2f ms", c.mVerdictSeconds * 1000.0,
+                                               c.mBuildSeconds * 1000.0) << LL_ENDL;
         }
     }
 }

@@ -310,7 +310,8 @@ private:
             U32 mFacesCovered = 0;
             U32 mFacesBare = 0;
             F32 mHatchedSteepM2 = 0.f;
-            F64 mSeconds = 0.0;
+            F64 mVerdictSeconds = 0.0; ///< in the verdicts of the judged parts
+            F64 mBuildSeconds = 0.0;   ///< in the whole per-part loop
         };
         CoverStats mCover;
         U64 mSignature = 0;
