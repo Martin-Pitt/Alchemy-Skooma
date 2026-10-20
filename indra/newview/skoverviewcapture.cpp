@@ -351,11 +351,6 @@ void SKOverviewCapture::cleanupGL()
     sTacticalCapture.release();
     sTacticalResolved.release();
     sTacticalWork.release();
-    sResolve.unload();
-    sComposite.unload();
-    sGeom.unload();
-    sGeomCut.unload();
-    sMarker.unload();
 }
 
 void SKOverviewCapture::releaseGL()
@@ -366,11 +361,6 @@ void SKOverviewCapture::releaseGL()
     sTacticalCapture.release();
     sTacticalResolved.release();
     sTacticalWork.release();
-    sResolve.unload();
-    sComposite.unload();
-    sGeom.unload();
-    sGeomCut.unload();
-    sMarker.unload();
     mSpans.clear();
     mCensus.release();
     mMaps.clear();
@@ -461,66 +451,92 @@ std::vector<SKOverviewCapture::Tile> SKOverviewCapture::tiles() const
     return out;
 }
 
-bool SKOverviewCapture::ensureShaders()
+namespace
 {
+    /// One of the overview's programs: its stage files and the defines it is built with.
+    struct OverviewProgram
+    {
+        LLGLSLShader* mShader;
+        const char* mName;
+        const char* mVertex;
+        const char* mFragment;
+        std::vector<const char*> mDefines;
+    };
+
+    std::vector<OverviewProgram> overviewPrograms()
+    {
+        return {
+            { &sResolve, "SK Overview Resolve", "deferred/postDeferredNoTCV.glsl", "skooma/overviewResolveF.glsl", {} },
+            { &sComposite, "SK Overview Composite", "deferred/postDeferredNoTCV.glsl", "skooma/overviewCompositeF.glsl", {} },
+            { &sGeom, "SK Overview Geometry", "skooma/overviewGeomV.glsl", "skooma/overviewGeomF.glsl", {} },
+            { &sGeomCut, "SK Overview Geometry Cut", "skooma/overviewGeomV.glsl", "skooma/overviewGeomF.glsl", { "SK_CUT_ATTRIBUTE" } },
+            { &sMarker, "SK Overview Marker", "skooma/overviewMarkerV.glsl", "skooma/overviewMarkerF.glsl", {} },
+        };
+    }
+}
+
+// static
+bool SKOverviewCapture::loadShaders(S32 level)
+{
+    unloadShaders();
     bool ok = true;
-    if (!sResolve.mProgramObject)
+    for (const OverviewProgram& program : overviewPrograms())
     {
-        sResolve.mName = "SK Overview Resolve";
-        sResolve.mShaderFiles.clear();
-        sResolve.clearPermutations();
-        sResolve.mShaderFiles.push_back(std::make_pair("deferred/postDeferredNoTCV.glsl", GL_VERTEX_SHADER));
-        sResolve.mShaderFiles.push_back(std::make_pair("skooma/overviewResolveF.glsl", GL_FRAGMENT_SHADER));
-        sResolve.mShaderLevel = 1;
-        ok = sResolve.createShader();
-        LL_INFOS_ONCE("SKOverview") << "overview resolve shader " << (ok ? "loaded" : "FAILED") << LL_ENDL;
+        LLGLSLShader& shader = *program.mShader;
+        shader.mName = program.mName;
+        shader.mShaderFiles.clear();
+        shader.mShaderFiles.push_back(std::make_pair(program.mVertex, GL_VERTEX_SHADER));
+        shader.mShaderFiles.push_back(std::make_pair(program.mFragment, GL_FRAGMENT_SHADER));
+        shader.mShaderLevel = llmax(level, 1);
+        shader.clearPermutations();
+        for (const char* define : program.mDefines)
+        {
+            shader.addPermutation(define, "1");
+        }
+        if (!shader.createShader())
+        {
+            LL_WARNS("Shader") << "The overview's program " << program.mName << " did not build; the overview is off until the "
+                                  "shaders are reloaded"
+                               << LL_ENDL;
+            ok = false;
+            break;
+        }
     }
-    if (ok && !sComposite.mProgramObject)
+    if (ok)
     {
-        sComposite.mName = "SK Overview Composite";
-        sComposite.mShaderFiles.clear();
-        sComposite.clearPermutations();
-        sComposite.mShaderFiles.push_back(std::make_pair("deferred/postDeferredNoTCV.glsl", GL_VERTEX_SHADER));
-        sComposite.mShaderFiles.push_back(std::make_pair("skooma/overviewCompositeF.glsl", GL_FRAGMENT_SHADER));
-        sComposite.mShaderLevel = 1;
-        ok = sComposite.createShader();
-        LL_INFOS_ONCE("SKOverview") << "overview composite shader " << (ok ? "loaded" : "FAILED") << LL_ENDL;
+        LL_INFOS("SKOverview") << "overview shaders loaded" << LL_ENDL;
     }
-    if (ok && !sGeom.mProgramObject)
+    else
     {
-        sGeom.mName = "SK Overview Geometry";
-        sGeom.mShaderFiles.clear();
-        sGeom.clearPermutations();
-        sGeom.mShaderFiles.push_back(std::make_pair("skooma/overviewGeomV.glsl", GL_VERTEX_SHADER));
-        sGeom.mShaderFiles.push_back(std::make_pair("skooma/overviewGeomF.glsl", GL_FRAGMENT_SHADER));
-        sGeom.mShaderLevel = 1;
-        ok = sGeom.createShader();
-        LL_INFOS_ONCE("SKOverview") << "overview geometry shader " << (ok ? "loaded" : "FAILED") << LL_ENDL;
+        unloadShaders();
     }
-    if (ok && !sGeomCut.mProgramObject)
+    if (instanceExists())
     {
-        sGeomCut.mName = "SK Overview Geometry Cut";
-        sGeomCut.mShaderFiles.clear();
-        sGeomCut.clearPermutations();
-        sGeomCut.addPermutation("SK_CUT_ATTRIBUTE", "1");
-        sGeomCut.mShaderFiles.push_back(std::make_pair("skooma/overviewGeomV.glsl", GL_VERTEX_SHADER));
-        sGeomCut.mShaderFiles.push_back(std::make_pair("skooma/overviewGeomF.glsl", GL_FRAGMENT_SHADER));
-        sGeomCut.mShaderLevel = 1;
-        ok = sGeomCut.createShader();
-        LL_INFOS_ONCE("SKOverview") << "overview cut geometry shader " << (ok ? "loaded" : "FAILED") << LL_ENDL;
-    }
-    if (ok && !sMarker.mProgramObject)
-    {
-        sMarker.mName = "SK Overview Marker";
-        sMarker.mShaderFiles.clear();
-        sMarker.clearPermutations();
-        sMarker.mShaderFiles.push_back(std::make_pair("skooma/overviewMarkerV.glsl", GL_VERTEX_SHADER));
-        sMarker.mShaderFiles.push_back(std::make_pair("skooma/overviewMarkerF.glsl", GL_FRAGMENT_SHADER));
-        sMarker.mShaderLevel = 1;
-        ok = sMarker.createShader();
-        LL_INFOS_ONCE("SKOverview") << "overview marker shader " << (ok ? "loaded" : "FAILED") << LL_ENDL;
+        instance().mGLFailed = false;
     }
     return ok;
+}
+
+// static
+void SKOverviewCapture::unloadShaders()
+{
+    for (const OverviewProgram& program : overviewPrograms())
+    {
+        program.mShader->unload();
+    }
+}
+
+bool SKOverviewCapture::ensureShaders()
+{
+    for (const OverviewProgram& program : overviewPrograms())
+    {
+        if (!program.mShader->isComplete())
+        {
+            LL_WARNS_ONCE("SKOverview") << "overview program " << program.mName << " is not loaded" << LL_ENDL;
+            return false;
+        }
+    }
+    return true;
 }
 
 bool SKOverviewCapture::ensureGL(LLRenderTarget& capture, LLRenderTarget& resolved, S32 w, S32 h)
@@ -548,8 +564,8 @@ bool SKOverviewCapture::ensureGL(LLRenderTarget& capture, LLRenderTarget& resolv
     ok = ok && ensureShaders();
     if (!ok)
     {
-        LL_WARNS("SKOverview") << "Overview could not allocate its targets or load its shaders; it is off until the GL "
-                                  "context is rebuilt"
+        LL_WARNS("SKOverview") << "Overview could not allocate its targets or find its shaders; it is off until the shaders "
+                                  "are reloaded or the GL context is rebuilt"
                                << LL_ENDL;
         mGLFailed = true;
         releaseGL();

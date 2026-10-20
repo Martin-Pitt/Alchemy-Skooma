@@ -87,6 +87,9 @@ public:
     /// Called once a frame after the world has rendered, before the UI.
     static void onFrame();
     static void cleanupGL();
+    /// Builds the overview's programs, from LLViewerShaderMgr; a failure leaves the overview off until the next load.
+    static bool loadShaders(S32 level);
+    static void unloadShaders();
     /// Whether the tactical overview is the modal view on top, drawn in place of the world.
     static bool tacticalShown();
 
@@ -166,6 +169,7 @@ private:
     /// What the tactical orbit centres on: the avatar, the alt-cam focus target, or the surface under a flycam.
     void tacticalCentre(LLVector3d& centre) const;
     bool ensureGL(LLRenderTarget& capture, LLRenderTarget& resolved, S32 w, S32 h);
+    /// Whether every program loadShaders() builds is there; it builds nothing.
     bool ensureShaders();
     void releaseGL();
     U32 render(LLRenderTarget& capture, LLRenderTarget& resolved, const Shot& shot, bool resolve_now = true);
