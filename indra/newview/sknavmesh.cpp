@@ -825,7 +825,7 @@ bool SKNavMesh::changedRecord(const std::vector<RecordPtr>& before, const std::v
 
 void SKNavMesh::tileBlip(const Mesh& mesh, const Tile& tile) const
 {
-    static LLCachedControl<bool> show(gSavedSettings, "SKNavOverlayUpdates", true);
+    static LLCachedControl<bool> show(gSavedSettings, "SKNavOverlayUpdates", false);
     if (!show || tile.mCause == CAUSE_NONE)
     {
         return;
