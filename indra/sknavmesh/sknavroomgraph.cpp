@@ -149,6 +149,10 @@ namespace sknav
                     {
                         continue;
                     }
+                    if (p.mSpaces[0] != s && p.mSpaces[1] != s)
+                    {
+                        continue;
+                    }
                     const U32 n = p.mSpaces[0] == s ? p.mSpaces[1] : p.mSpaces[0];
                     if (component[n] != ~0u || !roomMember(spaces[n]) || ramp(spaces[n]) || !onFloor(spaces[s], p.mSill) ||
                         !onFloor(spaces[n], p.mSill))
