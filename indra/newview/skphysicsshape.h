@@ -47,9 +47,9 @@ struct SKPhysicsShape
 /// so the physics-shape overlay and the census cannot disagree.
 bool skPhysicsShapeClassify(LLVOVolume* volume, SKPhysicsShape& out);
 
-/// A relative estimate of what the shape costs the physics engine, from about 1
-/// (a sphere) up through hulls by vertex count to triangle meshes by triangle
-/// count and density. For the overlay's heatmap, not a measured Havok cost.
+/// An estimate of the server's physics weight for the shape, fitted to
+/// GetObjectCost: 0.1 for analytic shapes, hulls by vertex count, triangle
+/// meshes by triangle count and thinness. For the overlay's heatmap.
 F32 skPhysicsShapeCost(LLVOVolume* volume, const SKPhysicsShape& shape);
 
 /// @p cost on the heatmap's ramp, 0 to 1, logarithmic.

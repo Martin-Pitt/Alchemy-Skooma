@@ -103,36 +103,49 @@ bool skPhysicsShapeClassify(LLVOVolume* volume, SKPhysicsShape& out)
 
 namespace
 {
-    // Relative weights in the order Havok's collision work grows: analytic
-    // shapes first, a hull by its vertices, a triangle mesh by its triangles.
-    constexpr F32 SPHERE_COST = 1.f;
-    constexpr F32 BOX_COST = 1.5f;
-    constexpr F32 CYLINDER_COST = 2.5f;
-    constexpr F32 HULL_BASE_COST = 3.f;
-    constexpr F32 HULL_VERTICES_PER_COST = 16.f;
-    constexpr S32 HULL_UNKNOWN_VERTICES = 32;
-    constexpr F32 MESH_BASE_COST = 4.f;
-    constexpr F32 MESH_TRIANGLE_COST = 0.05f;
+    // Fitted to the server's physics weight (GetObjectCost) over 24k objects.
+    // The server charges every analytic shape 0.1; the steps keep Havok's order.
+    constexpr F32 SPHERE_COST = 0.1f;
+    constexpr F32 BOX_COST = 0.11f;
+    constexpr F32 CYLINDER_COST = 0.13f;
+    constexpr F32 HULL_VERTEX_COST = 0.05f;
+    constexpr F32 HULL_MIN_COST = 0.2f;
+    constexpr S32 HULL_UNKNOWN_VERTICES = 7;
+    constexpr F32 PRIM_HULL_BASE_COST = 0.28f;
+    constexpr F32 PRIM_HULL_VERTEX_COST = 0.01f;
+    constexpr S32 PRIM_HULL_UNKNOWN_VERTICES = 8;
+    constexpr F32 MESH_MIN_COST = 0.5f;
 
     F32 hullCost(S32 vertices)
     {
-        return HULL_BASE_COST + llclamp(vertices, 4, 256) / HULL_VERTICES_PER_COST;
+        return llmax(HULL_MIN_COST, HULL_VERTEX_COST * (F32)vertices);
     }
 
-    // Small triangles packed densely cost more per triangle than a few large ones.
+    F32 smallestAxis(const LLVector3& scale)
+    {
+        return llmax(llmin(scale[VX], scale[VY], scale[VZ]), 0.01f);
+    }
+
+    // An uploaded physics mesh: about linear in triangles, dearer as the object thins.
     F32 meshCost(size_t triangles, const LLVector3& scale)
     {
-        const F32 area = llmax(2.f * (scale[0] * scale[1] + scale[1] * scale[2] + scale[2] * scale[0]), 0.01f);
-        const F32 density = (F32)triangles / area;
-        return MESH_BASE_COST + MESH_TRIANGLE_COST * (F32)triangles * (1.f + log2f(1.f + density));
+        return llmax(MESH_MIN_COST, 0.0335f * powf((F32)triangles, 1.05f) * powf(smallestAxis(scale), -0.35f));
+    }
+
+    // A prim collided as its triangles; the fit is looser (within about x1.7).
+    F32 primMeshCost(size_t triangles, const LLVector3& scale)
+    {
+        const F32 smallest = smallestAxis(scale);
+        const F32 rest = llmax(scale[VX] * scale[VY] * scale[VZ] / smallest, 0.0001f);
+        return llmax(MESH_MIN_COST, 0.075f * powf((F32)triangles, 0.85f) * powf(smallest, -0.55f) * powf(rest, 0.12f));
     }
 
     F32 primHullCost(LLVOVolume* volume)
     {
         LLVolume* phys = LLPrimitive::sVolumeManager->refVolume(volume->getVolume()->getParams(), physicsDetail(volume->getScale()));
-        const S32 points = phys && phys->mHullPoints ? phys->mNumHullPoints : HULL_UNKNOWN_VERTICES;
+        const S32 points = phys && phys->mHullPoints ? phys->mNumHullPoints : PRIM_HULL_UNKNOWN_VERTICES;
         LLPrimitive::sVolumeManager->unrefVolume(phys);
-        return hullCost(points);
+        return PRIM_HULL_BASE_COST + PRIM_HULL_VERTEX_COST * (F32)points;
     }
 
     F32 baseHullCost(const LLModel::Decomposition* decomp)
@@ -162,7 +175,7 @@ F32 skPhysicsShapeCost(LLVOVolume* volume, const SKPhysicsShape& shape)
                 triangles += phys->getVolumeFace(f).mNumIndices / 3;
             }
             LLPrimitive::sVolumeManager->unrefVolume(phys);
-            return meshCost(triangles, scale);
+            return primMeshCost(triangles, scale);
         }
         case Spec::USER_MESH:
         {
@@ -198,8 +211,8 @@ F32 skPhysicsShapeCost(LLVOVolume* volume, const SKPhysicsShape& shape)
 
 F32 skPhysicsShapeCostFraction(F32 cost)
 {
-    // Logarithmic over [1, 1000], so every shape type gets its own band of the ramp.
-    return llclamp(log10f(llmax(cost, 1.f)) / 3.f, 0.f, 1.f);
+    // Logarithmic over [0.1, 100] physics weight: analytic shapes at the bottom, hulls low, meshes above.
+    return llclamp(log10f(llmax(cost, 0.1f) / 0.1f) / 3.f, 0.f, 1.f);
 }
 
 bool skPhysicsMeshTooSmallForTriangles(LLVOVolume* volume)
