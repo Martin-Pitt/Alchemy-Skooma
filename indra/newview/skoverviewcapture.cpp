@@ -2148,16 +2148,24 @@ U64 SKOverviewCapture::tacticalDissolve(Shot& shot, S32 w, S32 h, LLRect& rect)
     {
         shot.mDissolve.push_back(c.mAt);
         shot.mDissolveFloor.push_back(c.mFloor);
-        mix(std::llround(c.mAt.mV[0]));
-        mix(std::llround(c.mAt.mV[1]));
+        const S32 cx = (S32)std::llround(c.mAt.mV[0]);
+        const S32 cy = (S32)std::llround(c.mAt.mV[1]);
+        const S32 cr = (S32)std::llround(c.mAt.mV[3]);
+        mix(cx);
+        mix(cy);
         mix(std::llround(c.mAt.mV[2] * 10.f));
-        mix(std::llround(c.mAt.mV[3]));
+        mix(cr);
         mix(std::llround(c.mFloor * 10.f));
-        const F32 r = c.mAt.mV[3] + 1.f;
-        LLRect square((S32)std::floor(c.mAt.mV[0] - r), (S32)std::ceil(c.mAt.mV[1] + r), (S32)std::ceil(c.mAt.mV[0] + r),
-                      (S32)std::floor(c.mAt.mV[1] - r));
+        // Built from the key's own rounding, a pixel wider for it, so the rect cannot move without the key.
+        const S32 r = cr + 2;
+        LLRect square(cx - r, cy + r, cx + r, cy - r);
         square.intersectWith(LLRect(0, h, w, 0));
         rect = rectUnion(rect, square);
+    }
+    if (!circles.empty())
+    {
+        static LLCachedControl<F32> soft(gSavedSettings, "SKTacticalDissolveSoftness", 0.25f);
+        mix(std::llround(llclamp((F32)soft, 0.f, 1.f) * 1000.f));
     }
     return key;
 }
