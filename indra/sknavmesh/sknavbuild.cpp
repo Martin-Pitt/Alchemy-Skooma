@@ -31,6 +31,7 @@
 #include "DetourNavMeshBuilder.h"
 #include "Recast.h"
 #include "RecastAlloc.h"
+#include "llapp.h"
 #include "sknavfaceoffsets.h"
 #include "sknavflights.h"
 #include "sknavlayout.h"
@@ -1608,6 +1609,88 @@ namespace sknav
             const std::vector<std::pair<S32, S32>>& mainSolids() const { return mFiltered ? mSolidSolids : mSolids; }
         };
 
+        /// The plan the tile's passes read, mesh-local: the tile padded by the widest of them.
+        struct TileReach
+        {
+            F32 mX0, mY0, mX1, mY1;
+
+            explicit TileReach(const TileBuildInput& input)
+            {
+                const S32 avatar = static_cast<S32>(AgentClass::AVATAR);
+                const S32 border = std::max(borderCells(input.mParams[avatar].mRadius, input.mCell), input.mAirPad);
+                const F32 pad = std::max({ FLIGHT_REACH_M, AIR_PAD_M, border * input.mCell }) + input.mCell;
+                mX0 = input.mTileX * input.mTileSize - pad;
+                mY0 = input.mTileY * input.mTileSize - pad;
+                mX1 = (input.mTileX + 1) * input.mTileSize + pad;
+                mY1 = (input.mTileY + 1) * input.mTileSize + pad;
+            }
+
+            bool overlaps(const LLVector3* p, size_t n) const
+            {
+                F32 x0 = FLT_MAX, y0 = FLT_MAX, x1 = -FLT_MAX, y1 = -FLT_MAX;
+                for (size_t i = 0; i < n; ++i)
+                {
+                    x0 = std::min(x0, p[i].mV[VX]);
+                    y0 = std::min(y0, p[i].mV[VY]);
+                    x1 = std::max(x1, p[i].mV[VX]);
+                    y1 = std::max(y1, p[i].mV[VY]);
+                }
+                return x1 >= mX0 && x0 <= mX1 && y1 >= mY0 && y0 <= mY1;
+            }
+        };
+
+        /// Drops what lies wholly outside the reach. A record is not clipped to
+        /// its tile, so a big mesh would otherwise bring every triangle it has
+        /// to every tile it touches. A solid's fill counts crossings of its
+        /// whole surface, so a body is kept or dropped whole; bodies gets the
+        /// triangle count of each kept one, and stays empty for a non-solid.
+        void clipToReach(const Record& r, const TileReach& reach, std::vector<LLVector3>& tris, std::vector<S32>& bodies)
+        {
+            bodies.clear();
+            size_t kept = 0;
+            const auto keep = [&](size_t from, size_t count) {
+                if (from != kept)
+                {
+                    std::copy(tris.begin() + from, tris.begin() + from + count, tris.begin() + kept);
+                }
+                kept += count;
+            };
+            if (r.mSolid)
+            {
+                const S32 total = static_cast<S32>(tris.size() / 3);
+                S32 pieces = 0;
+                for (const S32 count : r.mConvexTris)
+                {
+                    pieces += count;
+                }
+                // Bodies not told apart arrive as one range and are one closed surface.
+                const std::vector<S32> whole{ total };
+                const std::vector<S32>& counts = r.mConvexTris.size() > 1 && pieces == total ? r.mConvexTris : whole;
+                size_t at = 0;
+                for (const S32 count : counts)
+                {
+                    const size_t n = static_cast<size_t>(count) * 3;
+                    if (count > 0 && reach.overlaps(&tris[at], n))
+                    {
+                        keep(at, n);
+                        bodies.push_back(count);
+                    }
+                    at += n;
+                }
+            }
+            else
+            {
+                for (size_t at = 0; at + 2 < tris.size(); at += 3)
+                {
+                    if (reach.overlaps(&tris[at], 3))
+                    {
+                        keep(at, 3);
+                    }
+                }
+            }
+            tris.resize(kept);
+        }
+
         /// The soup of a tile and its partition; false when it holds no triangle.
         bool soupTile(const TileBuildInput& input, TileBuildResult& result, TileBuildStats* stats, std::chrono::steady_clock::time_point started,
                       TileSoup& out)
@@ -1617,6 +1700,8 @@ namespace sknav
             std::vector<LLVector3> tris;
             std::vector<std::pair<S32, S32>>& solids = out.mSolids;
             std::vector<Excluded>& excluded = out.mExcluded;
+            const TileReach reach(input);
+            std::vector<S32> bodies;
             for (const RecordPtr& r : input.mRecords)
             {
                 if (!r)
@@ -1628,6 +1713,11 @@ namespace sknav
                 const bool hull = r->mProvenance == Provenance::HULL || r->mProvenance == Provenance::BASE_HULL;
                 tris.clear();
                 emitRecord(*r, input.mMeshOrigin, tris);
+                clipToReach(*r, reach, tris, bodies);
+                if (tris.empty())
+                {
+                    continue;
+                }
                 const S32 before = soup.ntris();
                 const auto cue = std::lower_bound(input.mRootCues.begin(), input.mRootCues.end(), std::make_pair(r->mRoot, U8(0)));
                 soup.add(tris, AREA_OBJECT, input.mTerrain.mWater, hull,
@@ -1642,26 +1732,11 @@ namespace sknav
                 // four crossings and fill none of the middle. Fill each body on
                 // its own. A record whose bodies are not told apart arrives as one
                 // range and is filled as one closed surface.
-                S32 pieces = 0;
-                for (const S32 count : r->mConvexTris)
+                S32 at = before;
+                for (const S32 count : bodies)
                 {
-                    pieces += count;
-                }
-                if (r->mSolid && r->mConvexTris.size() > 1 && pieces == soup.ntris() - before)
-                {
-                    S32 at = before;
-                    for (const S32 count : r->mConvexTris)
-                    {
-                        if (count > 0)
-                        {
-                            solids.emplace_back(at, at + count);
-                        }
-                        at += count;
-                    }
-                }
-                else if (r->mSolid)
-                {
-                    solids.emplace_back(before, soup.ntris());
+                    solids.emplace_back(at, at + count);
+                    at += count;
                 }
             }
             // An exclusion volume is a cut, not a shape: its triangles never enter
@@ -2514,7 +2589,12 @@ namespace sknav
         // An empty tile has no air to keep, which is an answer too.
         result.mAirBuilt = input.mAir;
         TileSoup ts;
-        return soupTile(input, result, stats, started, ts) ? rasteriseSoup(input, ts, result, stats, started) : nullptr;
+        // A tile left at logout stops between its stages: the pool drains before it joins.
+        if (!soupTile(input, result, stats, started, ts) || LLApp::isExiting())
+        {
+            return nullptr;
+        }
+        return rasteriseSoup(input, ts, result, stats, started);
     }
 
     void polygoniseTile(const TileBuildInput& input, const TileRaster& raster, TileBuildResult& result, TileBuildStats* stats,
