@@ -28,8 +28,8 @@
 #include "llmath.h"
 
 // The move ramps up to a top speed, jumps to its braking distance short of the target, and brakes to a stop.
-// Speed eases in and out (smoothstep), so each phase covers half its time at top speed; a trip shorter than
-// the two phases together lowers the top speed instead, and has no cut.
+// Speed eases in and out (smoothstep), or with mPower as a power curve from rest that creeps away and slams up to
+// speed; a trip shorter than the two phases together lowers the top speed instead, and has no cut.
 namespace SKCameraWarp
 {
     struct Profile
@@ -37,6 +37,10 @@ namespace SKCameraWarp
         F32 mRampSeconds;
         F32 mBrakeSeconds;
         F32 mTopSpeed; // metres per second
+        F32 mPower = 0.f; // speed goes as u^mPower over a phase; 0 is smoothstep
+
+        // The phase's mean speed as a fraction of the top speed.
+        constexpr F32 meanSpeed() const { return mPower > 0.f ? 1.f / (mPower + 1.f) : 0.5f; }
 
         constexpr F32 duration() const { return mRampSeconds + mBrakeSeconds; }
     };
@@ -44,14 +48,18 @@ namespace SKCameraWarp
     /// The mini-map's Cam onto an avatar.
     constexpr Profile AVATAR{ 0.35f, 0.5f, 80.f };
     /// Into the 3D world map, from the world camera up to the map's.
-    constexpr Profile WORLD_MAP{ 0.45f, 0.75f, 600.f };
+    constexpr Profile WORLD_MAP{ 0.9f, 1.1f, 4000.f, 5.f };
     /// Into the tactical overview; a key still held at the cut makes it a hold, which snaps.
     constexpr Profile TACTICAL{ 0.25f, 0.25f, 150.f };
 
     // Distance covered at u of a phase that eases from rest to unit speed, in units of the phase's length times speed.
-    inline F32 eased(F32 u)
+    inline F32 eased(const Profile& p, F32 u)
     {
         u = llclamp(u, 0.f, 1.f);
+        if (p.mPower > 0.f)
+        {
+            return std::pow(u, p.mPower + 1.f) / (p.mPower + 1.f);
+        }
         return u * u * u - 0.5f * u * u * u * u;
     }
 
@@ -62,12 +70,12 @@ namespace SKCameraWarp
         {
             return 1.f;
         }
-        const F32 speed = llmin(p.mTopSpeed, length / (0.5f * p.duration()));
+        const F32 speed = llmin(p.mTopSpeed, length / (p.meanSpeed() * p.duration()));
         if (seconds < p.mRampSeconds)
         {
-            return speed * p.mRampSeconds * eased(seconds / p.mRampSeconds) / length;
+            return speed * p.mRampSeconds * eased(p, seconds / p.mRampSeconds) / length;
         }
-        const F32 left = speed * p.mBrakeSeconds * eased((p.duration() - seconds) / p.mBrakeSeconds);
+        const F32 left = speed * p.mBrakeSeconds * eased(p, (p.duration() - seconds) / p.mBrakeSeconds);
         return 1.f - left / length;
     }
 }

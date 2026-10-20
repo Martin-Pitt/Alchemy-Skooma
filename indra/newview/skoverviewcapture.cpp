@@ -695,7 +695,7 @@ void SKOverviewCapture::openTactical()
     if (SKModalView::top() == this)
     {
         placeTacticalCamera(over_other_mode);
-        if (sWarpOnOpen && !battlefieldCamera())
+        if (sWarpOnOpen)
         {
             gAgentCamera.startCameraWarp(SKCameraWarp::TACTICAL);
         }
