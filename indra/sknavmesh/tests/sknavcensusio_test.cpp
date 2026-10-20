@@ -24,12 +24,12 @@
 
 #include "linden_common.h"
 
-#include "../test/lltut.h"
-
 #include "../sknavcensusio.h"
 #include "../sknavtilecache.h"
 
 #include "llstring.h"
+
+#include <catch2/catch_test_macros.hpp>
 
 #include <chrono>
 #include <iostream>
@@ -127,6 +127,7 @@ namespace
         a->mMax.set(256007.0, 255752.0, 9.5);
         auto b = std::make_shared<Record>(*a);
         b->mPart = id(5);
+        b->mProvenance = Provenance::SIM;
         auto hull = std::make_shared<Record>();
         hull->mRoot = id(6);
         hull->mPart = id(6);
@@ -216,8 +217,14 @@ namespace
         writeCensus(out, c);
         CensusFile back;
         std::string error;
-        tut::ensure("read back: " + error, readCensus(out.str(), back, &error));
+        INFO(error);
+        REQUIRE(readCensus(out.str(), back, &error));
         return back;
+    }
+
+    std::string currentVersion()
+    {
+        return "\"version\":" + std::to_string(CENSUS_FORMAT_VERSION);
     }
 
     /// A tile's input from the census's params and every record, as a build would take it.
@@ -229,80 +236,66 @@ namespace
     }
 }
 
-namespace tut
+namespace
 {
-    struct sknavcensusio_data {};
-    typedef test_group<sknavcensusio_data> sknavcensusio_group;
-    typedef sknavcensusio_group::object sknavcensusio_object;
-    tut::sknavcensusio_group g("sknavcensusio");
-
-    template<> template<>
-    void sknavcensusio_object::test<1>()
+    TEST_CASE("sknavcensusio: every record field and every build parameter survives the file", "[sknavcensusio]")
     {
-        set_test_name("every record field and every build parameter survives the file");
         const CensusFile c = sample();
         const CensusFile back = roundTrip(c);
-        ensure_equals("records", back.mRecords.size(), c.mRecords.size());
+        CHECK(back.mRecords.size() == c.mRecords.size());
         for (size_t i = 0; i < c.mRecords.size(); ++i)
         {
-            ensure("record " + std::to_string(i), sameRecord(*c.mRecords[i], *back.mRecords[i]));
-            ensure_equals("content key " + std::to_string(i), recordContentKey(*back.mRecords[i]), recordContentKey(*c.mRecords[i]));
+            INFO("record " + std::to_string(i));
+            CHECK(sameRecord(*c.mRecords[i], *back.mRecords[i]));
+            INFO("content key " + std::to_string(i));
+            CHECK(recordContentKey(*back.mRecords[i]) == recordContentKey(*c.mRecords[i]));
         }
-        ensure("a shared soup stays shared", back.mRecords[1]->mTriangles == back.mRecords[2]->mTriangles);
+        CHECK(back.mRecords[1]->mTriangles == back.mRecords[2]->mTriangles);
         // The tile key covers every parameter a build reads: equal keys, equal builds.
-        ensure_equals("tile key", tileContentKey(asInput(back)), tileContentKey(asInput(c)));
-        ensure_equals("walk head", back.mEnclosure.mWalkHeadM, c.mEnclosure.mWalkHeadM);
-        ensure_equals("sealed", back.mEnclosure.mSealedIndoors, c.mEnclosure.mSealedIndoors);
-        ensure_equals("gap", back.mClusterGap, c.mClusterGap);
-        ensure_equals("air radius", back.mAirRadius, c.mAirRadius);
-        ensure("the raster's floors", back.mParams.mTopParams.mHeight == 0.625f && back.mParams.mTopParams.mSlope == 88.f);
-        ensure("run-off", back.mParams.mRunoff && back.mParams.mRunoffMax == 20.f);
-        ensure_equals("void margin", back.mVoidMargin, c.mVoidMargin);
-        ensure("camera", back.mCamera == c.mCamera);
-        ensure_equals("stamp", back.mStamp, c.mStamp);
+        CHECK(tileContentKey(asInput(back)) == tileContentKey(asInput(c)));
+        CHECK(back.mEnclosure.mWalkHeadM == c.mEnclosure.mWalkHeadM);
+        CHECK(back.mEnclosure.mSealedIndoors == c.mEnclosure.mSealedIndoors);
+        CHECK(back.mClusterGap == c.mClusterGap);
+        CHECK(back.mAirRadius == c.mAirRadius);
+        CHECK((back.mParams.mTopParams.mHeight == 0.625f && back.mParams.mTopParams.mSlope == 88.f));
+        CHECK((back.mParams.mRunoff && back.mParams.mRunoffMax == 20.f));
+        CHECK(back.mVoidMargin == c.mVoidMargin);
+        CHECK(back.mCamera == c.mCamera);
+        CHECK(back.mStamp == c.mStamp);
     }
 
-    template<> template<>
-    void sknavcensusio_object::test<2>()
+    TEST_CASE("sknavcensusio: regions clusters features doors and spans survive the file", "[sknavcensusio]")
     {
-        set_test_name("regions, clusters, features, doors and spans survive the file");
         const CensusFile c = sample();
         const CensusFile back = roundTrip(c);
-        ensure_equals("regions", back.mRegions.size(), 1u);
+        CHECK(back.mRegions.size() == 1u);
         const CensusRegion& r = back.mRegions[0];
-        ensure("id", r.mId == c.mRegions[0].mId);
-        ensure_equals("handle", r.mHandle, c.mRegions[0].mHandle);
-        ensure_equals("name", r.mName, c.mRegions[0].mName);
-        ensure("samples", r.mZ == c.mRegions[0].mZ);
-        ensure_equals("phase", r.mPhase, 0.625f);
-        ensure_equals("land", r.mLandMax, 40.25f);
+        CHECK(r.mId == c.mRegions[0].mId);
+        CHECK(r.mHandle == c.mRegions[0].mHandle);
+        CHECK(r.mName == c.mRegions[0].mName);
+        CHECK(r.mZ == c.mRegions[0].mZ);
+        CHECK(r.mPhase == 0.625f);
+        CHECK(r.mLandMax == 40.25f);
 
-        ensure_equals("clusters", back.mClusters.size(), 1u);
-        ensure("members", back.mClusters[0].mRecords == c.mClusters[0].mRecords && back.mClusters[0].mGrounded);
+        CHECK(back.mClusters.size() == 1u);
+        CHECK((back.mClusters[0].mRecords == c.mClusters[0].mRecords && back.mClusters[0].mGrounded));
 
-        ensure_equals("features", back.mFeatures.size(), 1u);
+        CHECK(back.mFeatures.size() == 1u);
         const Feature& f = back.mFeatures[0];
-        ensure("feature", f.mKind == FeatureKind::ELEVATOR && f.mParts == c.mFeatures[0].mParts && f.mRoots == c.mFeatures[0].mRoots &&
-                              f.mDoors == c.mFeatures[0].mDoors && f.mWorking && f.mEvidence == c.mFeatures[0].mEvidence && f.mTop == 60.0);
+        CHECK((f.mKind == FeatureKind::ELEVATOR && f.mParts == c.mFeatures[0].mParts && f.mRoots == c.mFeatures[0].mRoots && f.mDoors == c.mFeatures[0].mDoors && f.mWorking && f.mEvidence == c.mFeatures[0].mEvidence && f.mTop == 60.0));
 
-        ensure_equals("doors", back.mDoors.size(), 1u);
+        CHECK(back.mDoors.size() == 1u);
         const DoorEntity& d = back.mDoors[0];
         const DoorEntity& o = c.mDoors[0];
-        ensure("door", d.mId == o.mId && d.mRegion == o.mRegion && d.mMin == o.mMin && d.mMax == o.mMax && d.mPlanePoint == o.mPlanePoint &&
-                           d.mPlaneKnown == o.mPlaneKnown && d.mNormal == o.mNormal && d.mWidth == o.mWidth && d.mHeight == o.mHeight &&
-                           d.mSill == o.mSill && d.mDouble == o.mDouble && d.mLeaves == o.mLeaves && d.mConfidence == o.mConfidence &&
-                           d.mDamageable == o.mDamageable && d.mName == o.mName);
+        CHECK((d.mId == o.mId && d.mRegion == o.mRegion && d.mMin == o.mMin && d.mMax == o.mMax && d.mPlanePoint == o.mPlanePoint && d.mPlaneKnown == o.mPlaneKnown && d.mNormal == o.mNormal && d.mWidth == o.mWidth && d.mHeight == o.mHeight && d.mSill == o.mSill && d.mDouble == o.mDouble && d.mLeaves == o.mLeaves && d.mConfidence == o.mConfidence && d.mDamageable == o.mDamageable && d.mName == o.mName));
 
-        ensure_equals("spans", back.mSpans.size(), 1u);
+        CHECK(back.mSpans.size() == 1u);
         const CensusSpan& s = back.mSpans[0];
-        ensure("span", s.mId == c.mSpans[0].mId && s.mKind == LinkKind::ELEVATOR && s.mExits[0] == c.mSpans[0].mExits[0] &&
-                           s.mLinks[0] == c.mSpans[0].mLinks[0]);
+        CHECK((s.mId == c.mSpans[0].mId && s.mKind == LinkKind::ELEVATOR && s.mExits[0] == c.mSpans[0].mExits[0] && s.mLinks[0] == c.mSpans[0].mLinks[0]));
     }
 
-    template<> template<>
-    void sknavcensusio_object::test<3>()
+    TEST_CASE("sknavcensusio: a terrain window reads the region's samples where the viewer would and the void past it", "[sknavcensusio]")
     {
-        set_test_name("a terrain window reads the region's samples where the viewer would, and the void past it");
         CensusFile c = sample();
         const CensusRegion& r = c.mRegions[0];
         // Pad 2.375 puts the window's samples at 0.625 past each metre, the region's phase.
@@ -310,21 +303,19 @@ namespace tut
         const LLVector3d tmin(256000.0, 255744.0, 0.0), tmax(256032.0, 255776.0, 0.0);
         TerrainWindow t;
         censusTerrain(c, mesh_origin, tmin, tmax, 2.375f, t);
-        ensure_equals("width", t.mWidth, 38);
-        ensure_equals("origin", t.mOrigin.mV[VX], -2.375f);
+        CHECK(t.mWidth == 38);
+        CHECK(t.mOrigin.mV[VX] == -2.375f);
         // Sample (3, 4) is at region-local (0.625, 1.625): the region's (0, 1).
-        ensure_equals("inside", t.mZ[4 * 38 + 3], r.mZ[1 * 256 + 0]);
-        ensure_equals("past the edge is the void", t.mZ[0], -1000.f);
-        ensure_equals("water", t.mWater, 20.f);
+        CHECK(t.mZ[4 * 38 + 3] == r.mZ[1 * 256 + 0]);
+        CHECK(t.mZ[0] == -1000.f);
+        CHECK(t.mWater == 20.f);
         TerrainWindow off;
         censusTerrain(c, mesh_origin, tmin - LLVector3d(512.0, 0.0, 0.0), tmax - LLVector3d(512.0, 0.0, 0.0), 2.375f, off);
-        ensure("no region, no window", off.mWidth == 0 && off.mZ.empty());
+        CHECK((off.mWidth == 0 && off.mZ.empty()));
     }
 
-    template<> template<>
-    void sknavcensusio_object::test<4>()
+    TEST_CASE("sknavcensusio: a file of another format or a damaged blob is refused", "[sknavcensusio]")
     {
-        set_test_name("a file of another format or a damaged blob is refused");
         std::ostringstream out;
         writeCensus(out, sample());
         std::string text = out.str();
@@ -332,17 +323,15 @@ namespace tut
         std::string error;
         std::string other = text;
         other.replace(other.find("sknav-census"), 12, "sknav-export");
-        ensure("another format", !readCensus(other, back, &error));
+        CHECK(!readCensus(other, back, &error));
         std::string cut = text;
         const size_t blob = cut.find("\"blob\":\"") + 8;
         cut.erase(blob, 8);
-        ensure("a short records blob", !readCensus(cut, back, &error));
+        CHECK(!readCensus(cut, back, &error));
     }
 
-    template<> template<>
-    void sknavcensusio_object::test<5>()
+    TEST_CASE("sknavcensusio: what writing a large census costs when asked", "[sknavcensusio][.]")
     {
-        set_test_name("what writing a large census costs, when asked");
         if (LLStringUtil::getenv("SKNAV_CENSUS_BENCH").empty())
         {
             return;
@@ -375,10 +364,8 @@ namespace tut
         std::cout << "writeCensus: " << ms << " ms for " << out.str().size() / (1024.0 * 1024.0) << " MB" << std::endl;
     }
 
-    template<> template<>
-    void sknavcensusio_object::test<6>()
+    TEST_CASE("sknavcensusio: the session's marks are written with their region and the file still reads", "[sknavcensusio]")
     {
-        set_test_name("the session's marks are written with their region, and the file still reads");
         CensusFile c = sample();
         Mark m;
         m.mId = 7;
@@ -388,18 +375,16 @@ namespace tut
         std::ostringstream out;
         writeCensus(out, c);
         const std::string text = out.str();
-        ensure("marks block", text.find("\"marks\":[{\"id\":7,\"kind\":\"point\",\"type\":\"split\"") != std::string::npos);
-        ensure("located", text.find("\"region\":\"Test \\\"Quoted\\\" Region\",\"regionGrid\":[1000,999],\"local\":[100.5,56.25,25]") !=
-                              std::string::npos);
+        CHECK(text.find("\"marks\":[{\"id\":7,\"kind\":\"point\",\"type\":\"split\"") != std::string::npos);
+        CHECK(text.find("\"region\":\"Test \\\"Quoted\\\" Region\",\"regionGrid\":[1000,999],\"local\":[100.5,56.25,25]") != std::string::npos);
         CensusFile back;
         std::string error;
-        ensure("reads: " + error, readCensus(text, back, &error));
+        INFO("reads: " + error);
+        CHECK(readCensus(text, back, &error));
     }
 
-    template<> template<>
-    void sknavcensusio_object::test<7>()
+    TEST_CASE("sknavcensusio: the root table survives the file descriptions are capped and clusters are labelled by their roots", "[sknavcensusio]")
     {
-        set_test_name("the root table survives the file, descriptions are capped, and clusters are labelled by their roots");
         CensusFile c = sample();
         CensusRoot hotel;
         hotel.mId = id(1);
@@ -425,42 +410,39 @@ namespace tut
         all.mRecords = { 0, 1, 2, 3 };
         c.mClusters.push_back(all);
 
-        ensure_equals("label", clusterLabel(c, c.mClusters[1]), std::string("Ship (+2)"));
-        ensure_equals("single root", clusterLabel(c, c.mClusters[0]), std::string("Hotel \"lobby\"\n (+1)"));
+        CHECK(clusterLabel(c, c.mClusters[1]) == std::string("Ship (+2)"));
+        CHECK(clusterLabel(c, c.mClusters[0]) == std::string("Hotel \"lobby\"\n (+1)"));
         const std::vector<RootShare> top = dominantRoots(c, c.mClusters[1], 2);
-        ensure("dominant", top.size() == 2 && top[0].mId == id(3) && top[0].mParts == 2 && top[1].mId == id(1));
+        CHECK((top.size() == 2 && top[0].mId == id(3) && top[0].mParts == 2 && top[1].mId == id(1)));
 
         std::ostringstream out;
         writeCensus(out, c);
         const std::string text = out.str();
-        ensure("label written", text.find("\"label\":\"Ship (+2)\",\"top_roots\":[{\"id\":\"" + id(3).asString() + "\",\"parts\":2,\"name\":\"Ship\"}") !=
-                                    std::string::npos);
+        CHECK(text.find("\"label\":\"Ship (+2)\",\"top_roots\":[{\"id\":\"" + id(3).asString() + "\",\"parts\":2,\"name\":\"Ship\"}") != std::string::npos);
         CensusFile back;
         std::string error;
-        ensure("reads: " + error, readCensus(text, back, &error));
-        ensure_equals("roots", back.mRoots.size(), 3u);
+        INFO("reads: " + error);
+        CHECK(readCensus(text, back, &error));
+        CHECK(back.mRoots.size() == 3u);
         const CensusRoot& h = back.mRoots[0];
-        ensure("hotel", h.mId == hotel.mId && h.mName == hotel.mName && h.mDescription == "short" && h.mScriptedKnown && h.mScripted &&
-                            h.mSource == NameSource::LINKSET);
+        CHECK((h.mId == hotel.mId && h.mName == hotel.mName && h.mDescription == "short" && h.mScriptedKnown && h.mScripted && h.mSource == NameSource::LINKSET));
         const CensusRoot& s = back.mRoots[1];
-        ensure_equals("capped", s.mDescription.size(), ROOT_DESCRIPTION_MAX);
-        ensure("ship", s.mName == "Ship" && s.mDescription == ship.mDescription.substr(0, 256) && !s.mScriptedKnown &&
-                           s.mSource == NameSource::PROPERTIES);
-        ensure("unknown", back.mRoots[2].mId == id(6) && back.mRoots[2].mSource == NameSource::NONE && !back.mRoots[2].mScriptedKnown);
-        ensure_equals("odd cut", capDescription(std::string(255, 'a') + "\xc3\xa9").size(), 255u);
+        CHECK(s.mDescription.size() == ROOT_DESCRIPTION_MAX);
+        CHECK((s.mName == "Ship" && s.mDescription == ship.mDescription.substr(0, 256) && !s.mScriptedKnown && s.mSource == NameSource::PROPERTIES));
+        CHECK((back.mRoots[2].mId == id(6) && back.mRoots[2].mSource == NameSource::NONE && !back.mRoots[2].mScriptedKnown));
+        CHECK(capDescription(std::string(255, 'a') + "\xc3\xa9").size() == 255u);
 
         // A version 1 file has no root table and still reads.
         std::string old = text;
-        old.replace(old.find("\"version\":4"), 11, "\"version\":1");
+        old.replace(old.find(currentVersion()), 11, "\"version\":1");
         old.erase(old.find(",\"roots\":"), old.find(",\"features\":") - old.find(",\"roots\":"));
-        ensure("version 1 reads: " + error, readCensus(old, back, &error));
-        ensure("no roots", back.mRoots.empty() && back.mRecords.size() == c.mRecords.size());
+        INFO("version 1 reads: " + error);
+        CHECK(readCensus(old, back, &error));
+        CHECK((back.mRoots.empty() && back.mRecords.size() == c.mRecords.size()));
     }
 
-    template<> template<>
-    void sknavcensusio_object::test<8>()
+    TEST_CASE("sknavcensusio: every probe kind survives the file boxes with their rotation and scale and a version 2 file reads without probes", "[sknavcensusio]")
     {
-        set_test_name("every probe kind survives the file, boxes with their rotation and scale, and a version 2 file reads without probes");
         CensusFile c = sample();
         for (U8 k = 0; k < static_cast<U8>(ProbeKind::COUNT); ++k)
         {
@@ -484,32 +466,61 @@ namespace tut
         const std::string text = out.str();
         CensusFile back;
         std::string error;
-        ensure("reads: " + error, readCensus(text, back, &error));
-        ensure_equals("probes", back.mProbes.size(), c.mProbes.size());
+        INFO("reads: " + error);
+        CHECK(readCensus(text, back, &error));
+        CHECK(back.mProbes.size() == c.mProbes.size());
         for (size_t i = 0; i < c.mProbes.size(); ++i)
         {
             const CensusProbe& a = c.mProbes[i];
             const CensusProbe& b = back.mProbes[i];
             const std::string what = probeKindName(a.mKind);
-            ensure(what, b.mKind == a.mKind && b.mObject == a.mObject && b.mOrigin == a.mOrigin && b.mRadius == a.mRadius &&
-                             b.mPriority == a.mPriority && b.mRelevant == a.mRelevant && b.mSuppressed == a.mSuppressed &&
-                             b.mInsideManual == a.mInsideManual && b.mResident == a.mResident);
+            INFO(what);
+            CHECK((b.mKind == a.mKind && b.mObject == a.mObject && b.mOrigin == a.mOrigin && b.mRadius == a.mRadius && b.mPriority == a.mPriority && b.mRelevant == a.mRelevant && b.mSuppressed == a.mSuppressed && b.mInsideManual == a.mInsideManual && b.mResident == a.mResident));
             const bool box = a.mKind == ProbeKind::PLACED_BOX || a.mKind == ProbeKind::NAV_BOX;
             if (box)
             {
-                ensure(what + " box", b.mRotation == a.mRotation && b.mScale == a.mScale);
+                INFO(what + " box");
+                CHECK((b.mRotation == a.mRotation && b.mScale == a.mScale));
             }
             else
             {
-                ensure(what + " no box", b.mRotation == LLQuaternion::DEFAULT && b.mScale == LLVector3::zero);
+                INFO(what + " no box");
+                CHECK((b.mRotation == LLQuaternion::DEFAULT && b.mScale == LLVector3::zero));
             }
         }
 
         // A version 2 file has no probes and still reads.
         std::string old = text;
-        old.replace(old.find("\"version\":4"), 11, "\"version\":2");
+        old.replace(old.find(currentVersion()), 11, "\"version\":2");
         old.erase(old.find(",\"probes\":"), old.find(",\"features\":") - old.find(",\"probes\":"));
-        ensure("version 2 reads: " + error, readCensus(old, back, &error));
-        ensure("no probes", back.mProbes.empty() && back.mRecords.size() == c.mRecords.size());
+        INFO("version 2 reads: " + error);
+        CHECK(readCensus(old, back, &error));
+        CHECK((back.mProbes.empty() && back.mRecords.size() == c.mRecords.size()));
+    }
+
+    TEST_CASE("sknavcensusio: a record from the simulator's triangles says so and an older file still reads", "[sknavcensusio]")
+    {
+        const CensusFile c = sample();
+        REQUIRE(c.mRecords[2]->mProvenance == Provenance::SIM);
+        std::ostringstream out;
+        writeCensus(out, c);
+        const std::string text = out.str();
+        CHECK(CENSUS_FORMAT_VERSION == 5u);
+        CHECK(text.find(currentVersion()) != std::string::npos);
+        CensusFile back;
+        std::string error;
+        REQUIRE(readCensus(text, back, &error));
+        REQUIRE(back.mRecords.size() == c.mRecords.size());
+        CHECK(back.mRecords[2]->mProvenance == Provenance::SIM);
+        CHECK(back.mRecords[1]->mProvenance == Provenance::RENDER);
+
+        std::string old = text;
+        old.replace(old.find(currentVersion()), 11, "\"version\":4");
+        INFO(error);
+        CHECK(readCensus(old, back, &error));
+
+        std::string future = text;
+        future.replace(future.find(currentVersion()), 11, "\"version\":6");
+        CHECK_FALSE(readCensus(future, back, &error));
     }
 }

@@ -77,6 +77,14 @@ namespace sknav
     void stampInput(const TileAir& air, const TileEnclosure& enclosure, const RoomsProduct& rooms, const LLVector3& tile_min,
                     const LLVector3& tile_max, TileStampInput& out);
 
+    struct EnclosureProduct;
+
+    /// What a tile's stamp, its binding and its walls' binding read of the spaces, hashed:
+    /// the stamp's pattern, its components' ids and buckets, its gaps'
+    /// buckets, and the spaces of the gaps of it and the tiles round it, which a wall's sides
+    /// are found across. A tile whose key holds under new spaces stamps and binds as it did.
+    U64 stampRoomsKey(const EnclosureProduct& enc, const TileEnclosure& tile, const RoomsProduct& rooms);
+
     struct StampParams
     {
         S32 mPaletteMax = 63;       ///< area codes a palette may use: 1 up to this

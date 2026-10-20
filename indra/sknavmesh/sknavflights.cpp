@@ -25,7 +25,9 @@
 #include "linden_common.h"
 
 #include "sknavflights.h"
+#include "sknavprofile.h"
 
+#include "llapp.h"
 #include "llstring.h"
 
 #include "Recast.h"
@@ -34,7 +36,6 @@
 #include <cmath>
 #include <map>
 #include <set>
-#include <unordered_map>
 
 namespace
 {
@@ -115,7 +116,15 @@ namespace
         F64 mGx0 = 0, mGy0 = 0;
         F64 mGcell = GRID_M;
         S32 mGw = 0, mGh = 0;
-        std::vector<std::vector<S32>> mGrid;
+        std::vector<U32> mGridStart;    // cells + 1 offsets into mGridTris
+        std::vector<S32> mGridTris;     // each cell's triangles, in triangle order
+
+        /// The triangles whose plan bounds touch a cell of the probe index.
+        std::pair<const S32*, const S32*> cellTris(S32 cx, S32 cy) const
+        {
+            const size_t c = static_cast<size_t>(cy) * mGw + cx;
+            return { mGridTris.data() + mGridStart[c], mGridTris.data() + mGridStart[c + 1] };
+        }
 
         S32 ntris() const { return static_cast<S32>(mT.size() / 3); }
 
@@ -158,22 +167,38 @@ namespace
         void build(const std::vector<LLVector3>& verts, const std::vector<S32>& tris, const std::vector<U8>& areas,
                    const std::vector<U8>& two_sided, U8 part_area)
         {
+            SK_NAV_ZONE("nav.flights.build.weld");
             // weld on the millimetre, across the whole soup
-            std::unordered_map<WeldKey, S32, WeldHash> key;
+            // Open addressing at most half full: a soup's vertices are many and the table lives only here.
+            size_t slots = 16;
+            while (slots < 2 * verts.size())
+            {
+                slots *= 2;
+            }
+            std::vector<WeldKey> keys(slots);
+            std::vector<S32> ids(slots, -1);
+            const WeldHash hash;
             std::vector<S32> remap(verts.size());
+            mV.reserve(verts.size());
             for (size_t i = 0; i < verts.size(); ++i)
             {
                 const S64 kx = std::llround(verts[i].mV[VX] * 1000.0), ky = std::llround(verts[i].mV[VY] * 1000.0),
                           kz = std::llround(verts[i].mV[VZ] * 1000.0);
                 const WeldKey k { kx, ky, kz };
-                auto it = key.find(k);
-                if (it == key.end())
+                size_t at = hash(k) & (slots - 1);
+                while (ids[at] >= 0 && !(keys[at] == k))
                 {
-                    it = key.emplace(k, static_cast<S32>(mV.size())).first;
+                    at = (at + 1) & (slots - 1);
+                }
+                if (ids[at] < 0)
+                {
+                    keys[at] = k;
+                    ids[at] = static_cast<S32>(mV.size());
                     mV.push_back({ kx / 1000.0, ky / 1000.0, kz / 1000.0 });
                 }
-                remap[i] = it->second;
+                remap[i] = ids[at];
             }
+            SK_NAV_ZONE("nav.flights.build.tris");
             const S32 n = static_cast<S32>(tris.size() / 3);
             mT.resize(tris.size());
             mValid.assign(n, 0);
@@ -184,6 +209,7 @@ namespace
             mLevel.assign(n, 0);
             mPart.assign(n, 0);
             mParent.resize(n);
+            mEdges.reserve(static_cast<size_t>(n) * 3);
             const F64 cos_level = std::cos(SLOPE_LEVEL_DEG * DEG_TO_RAD);
             for (S32 t = 0; t < n; ++t)
             {
@@ -227,14 +253,23 @@ namespace
                     mEdges.emplace_back((static_cast<U64>(std::min(i, j)) << 32) | static_cast<U64>(std::max(i, j)), t);
                 }
             }
-            std::sort(mEdges.begin(), mEdges.end());
+            {
+                SK_NAV_ZONE("nav.flights.build.sort");
+                std::sort(mEdges.begin(), mEdges.end());
+            }
+            SK_NAV_ZONE("nav.flights.build.grid");
             buildGrid();
         }
 
         template <typename Fn> void eachEdge(Fn&& fn) const
         {
-            for (size_t s = 0; s < mEdges.size();)
+            for (size_t s = 0, groups = 0; s < mEdges.size();)
             {
+                // A pool drains before it joins: a long partition left at logout gives up.
+                if ((++groups & 4095) == 0 && LLApp::isExiting())
+                {
+                    return;
+                }
                 size_t e = s + 1;
                 while (e < mEdges.size() && mEdges[e].first == mEdges[s].first)
                 {
@@ -272,13 +307,10 @@ namespace
             mGcell = std::max(GRID_M, std::sqrt((x1 - x0 + GRID_M) * (y1 - y0 + GRID_M) / static_cast<F64>(GRID_MAX_CELLS)));
             mGw = static_cast<S32>((x1 - x0) / mGcell) + 1;
             mGh = static_cast<S32>((y1 - y0) / mGcell) + 1;
-            mGrid.assign(static_cast<size_t>(mGw) * mGh, {});
-            for (S32 t = 0; t < ntris(); ++t)
-            {
-                if (!mWalk[t])
-                {
-                    continue;
-                }
+            // Counted, then filled, so each cell's triangles lie in one run.
+            const size_t cells = static_cast<size_t>(mGw) * mGh;
+            mGridStart.assign(cells + 1, 0);
+            const auto eachCell = [&](S32 t, auto&& fn) {
                 F64 tx0 = 1e30, ty0 = 1e30, tx1 = -1e30, ty1 = -1e30;
                 for (S32 k = 0; k < 3; ++k)
                 {
@@ -294,8 +326,28 @@ namespace
                 {
                     for (S32 cx = cx0; cx <= cx1; ++cx)
                     {
-                        mGrid[static_cast<size_t>(cy) * mGw + cx].push_back(t);
+                        fn(static_cast<size_t>(cy) * mGw + cx);
                     }
+                }
+            };
+            for (S32 t = 0; t < ntris(); ++t)
+            {
+                if (mWalk[t])
+                {
+                    eachCell(t, [&](size_t c) { ++mGridStart[c + 1]; });
+                }
+            }
+            for (size_t c = 0; c < cells; ++c)
+            {
+                mGridStart[c + 1] += mGridStart[c];
+            }
+            mGridTris.resize(mGridStart[cells]);
+            std::vector<U32> fill(mGridStart.begin(), mGridStart.end() - 1);
+            for (S32 t = 0; t < ntris(); ++t)
+            {
+                if (mWalk[t])
+                {
+                    eachCell(t, [&](size_t c) { mGridTris[fill[c]++] = t; });
                 }
             }
         }
@@ -374,8 +426,10 @@ namespace
                 return false;
             }
             bool found = false;
-            for (const S32 u : mGrid[static_cast<size_t>(cy) * mGw + cx])
+            const auto [first, last] = cellTris(cx, cy);
+            for (const S32* it = first; it != last; ++it)
             {
+                const S32 u = *it;
                 F64 z = 0;
                 if (g_of[u] == e.mGroup || !zAt(u, px, py, z))
                 {
@@ -490,6 +544,7 @@ namespace
     constexpr F64 FLOOR_DZ = 0.75;          ///< from the end's height
     constexpr F64 FLOOR_UP = 1.25;          ///< a named stair may sink this far into its floors
     constexpr F64 LEVEL_DZ = 0.3;
+    static_assert(MAX_RUN_M + PAST_M + BEYOND_M < FLIGHT_REACH_M, "a tile's soup must hold every flight that touches it whole");
     constexpr F64 FLOOR_MIN_M2 = 4.0;       ///< without a name, a smaller floor at an end is a prop top
     constexpr F64 MIN_RISE_UNCUED_M = 1.0;  ///< without a name or treads, a smaller climb is a step
     constexpr F64 FLAT_FACE_DEG = 10.0;     ///< a steep unstepped flight's faces lie this close to its plane
@@ -640,8 +695,10 @@ namespace
         {
             for (S32 cx = std::max(cx0, 0); cx <= std::min(cx1, P.mGw - 1); ++cx)
             {
-                for (const S32 t : P.mGrid[static_cast<size_t>(cy) * P.mGw + cx])
+                const auto [first, last] = P.cellTris(cx, cy);
+                for (const S32* it = first; it != last; ++it)
                 {
+                    const S32 t = *it;
                     if (seen[t] != stamp)
                     {
                         seen[t] = stamp;
@@ -777,6 +834,7 @@ namespace
                          const std::vector<U8>& cues, const std::vector<S32>& sources, const std::vector<std::pair<S32, S32>>& level_links,
                          F64 max_grade_deg, std::vector<Flight>& flights)
     {
+        SK_NAV_ZONE("nav.flights.connectors");
         // Per source record: its walkable area facing up, and its extent in plan.
         S32 nsources = 0;
         for (const S32 s : sources)
@@ -1321,6 +1379,7 @@ namespace sknav
                                    const std::vector<U8>& two_sided, U8 partitioned_area, F32 climb, F32 walk_slope_deg, S32 max_codes,
                                    const std::vector<U8>& cues, const std::vector<S32>& sources)
     {
+        SK_NAV_ZONE("nav.flights.partition");
         SlopePartition out;
         Partitioner P;
         P.mCosTurn = std::cos(SLOPE_TURN_DEG * DEG_TO_RAD);
@@ -1329,6 +1388,7 @@ namespace sknav
         const S32 n = P.ntris();
 
         // 1. groups: flood over shared edges within the crease angle
+        SK_NAV_ZONE("nav.flights.candidates");
         P.eachEdge([&](U64, size_t s, size_t e) {
             for (size_t a = s; a < e; ++a)
             {
@@ -1344,6 +1404,7 @@ namespace sknav
         });
 
         // coplanar neighbours that share no vertices (separate prims) join too
+        SK_NAV_ZONE("nav.flights.merge");
         std::vector<S32> g_of = P.groupsOf();
         std::vector<Boundary> edges;
         P.boundaries(g_of, edges);
@@ -1410,6 +1471,7 @@ namespace sknav
         }
 
         // 2. level groups are treads or landings
+        SK_NAV_ZONE("nav.flights.kinds");
         enum Kind : U8 { SLOPE = SLOPE_GROUP, LANDING = LANDING_GROUP, TREAD = TREAD_GROUP };
         std::vector<U8> kind(ngroups, SLOPE);
         for (S32 g = 0; g < ngroups; ++g)
@@ -1630,6 +1692,7 @@ namespace sknav
 
     void mapFlightPolys(std::vector<Flight>& flights, const std::vector<LLVector3>& centroids, const std::vector<U8>& codes, F32 climb)
     {
+        SK_NAV_ZONE("nav.flights.mappolys");
         for (Flight& f : flights)
         {
             f.mPolys.clear();
@@ -1656,6 +1719,7 @@ namespace sknav
     void fitFlightEdges(std::vector<Flight>& flights, const std::vector<std::vector<LLVector3>>& polys, F32 radius, const LLVector2& lo,
                         const LLVector2& hi)
     {
+        SK_NAV_ZONE("nav.flights.fitedges");
         const auto on_edge = [&](const LLVector3& v) {
             return v.mV[VX] - lo.mV[VX] < 0.05f || hi.mV[VX] - v.mV[VX] < 0.05f || v.mV[VY] - lo.mV[VY] < 0.05f || hi.mV[VY] - v.mV[VY] < 0.05f;
         };
@@ -1718,9 +1782,26 @@ namespace sknav
 
     bool flightSurvives(const rcCompactHeightfield& chf, S32 border, const Flight& flight, F32 climb)
     {
-        for (S32 z = border; z < chf.height - border; ++z)
+        if (flight.mFootprint.empty())
         {
-            for (S32 x = border; x < chf.width - border; ++x)
+            return false;
+        }
+        // Only columns within reach of the footprint can count. Recast x is SL y, Recast z SL x.
+        F32 sx0 = 1e30f, sy0 = 1e30f, sx1 = -1e30f, sy1 = -1e30f;
+        for (const LLVector2& p : flight.mFootprint)
+        {
+            sx0 = std::min(sx0, p.mV[VX]);
+            sy0 = std::min(sy0, p.mV[VY]);
+            sx1 = std::max(sx1, p.mV[VX]);
+            sy1 = std::max(sy1, p.mV[VY]);
+        }
+        const S32 z0 = std::max(border, static_cast<S32>(std::floor((sx0 - 0.25f - chf.bmin[2]) / chf.cs)) - 1);
+        const S32 z1 = std::min(chf.height - border - 1, static_cast<S32>(std::ceil((sx1 + 0.25f - chf.bmin[2]) / chf.cs)) + 1);
+        const S32 x0 = std::max(border, static_cast<S32>(std::floor((sy0 - 0.25f - chf.bmin[0]) / chf.cs)) - 1);
+        const S32 x1 = std::min(chf.width - border - 1, static_cast<S32>(std::ceil((sy1 + 0.25f - chf.bmin[0]) / chf.cs)) + 1);
+        for (S32 z = z0; z <= z1; ++z)
+        {
+            for (S32 x = x0; x <= x1; ++x)
             {
                 const rcCompactCell& cell = chf.cells[x + z * chf.width];
                 for (U32 i = cell.index, n = cell.index + cell.count; i < n; ++i)
@@ -1761,6 +1842,7 @@ namespace sknav
 
     void markFlights(AirGrid& grid, const std::vector<Flight>& flights)
     {
+        SK_NAV_ZONE("nav.flights.mark");
         for (const Flight& f : flights)
         {
             // a climb links levels through the mesh alone, with no stair portal
@@ -1802,9 +1884,8 @@ namespace sknav
                     {
                         AirGap& g = grid.mGaps[base + i];
                         const F32 z = grid.height(g.mFloor);
-                        // A tread stands off the fitted plane by up to half a riser.
-                        if ((g.mFlags & AirGap::TOP) && z >= f.mZMin - 0.25f && z <= f.mZMax + 0.25f &&
-                            std::fabs(z - plane) <= std::max(0.5f, f.mRise))
+                        // Treads and a wedge's fit stand off the plane by up to a metre, never by the whole rise.
+                        if ((g.mFlags & AirGap::TOP) && z >= f.mZMin - 0.25f && z <= f.mZMax + 0.25f && std::fabs(z - plane) <= std::max(0.5f, std::min(f.mRise, FLIGHT_PLANE_DZ_M)))
                         {
                             g.mFlags |= AirGap::FLIGHT;
                         }

@@ -27,6 +27,7 @@
 #include "sknavwind.h"
 
 #include "sknavbuild.h"
+#include "sknavprofile.h"
 
 #include "llmath.h"
 
@@ -34,7 +35,6 @@
 #include <chrono>
 #include <cmath>
 #include <deque>
-#include <functional>
 #include <iterator>
 #include <limits>
 
@@ -52,6 +52,7 @@ namespace sknav
         /// The 8-neighbour chamfer from blocked cells, scaled down to a lower bound on the true distance.
         void reachField(WindField& f)
         {
+            SK_NAV_ZONE("nav.wind.reach");
             const S32 w = f.mWidth, h = f.mHeight;
             const F32 inf = static_cast<F32>(w + h) * 2.f;
             f.mReach.assign(static_cast<size_t>(w) * h, inf);
@@ -99,8 +100,8 @@ namespace sknav
         /// Cells a march may skip from a cell this far from any solid, and still land on the first one.
         S32 skip(F32 reach) { return std::max(1, static_cast<S32>(reach - 0.75f)); }
 
-        /// A separable Gaussian over the valid cells only, normalised by their weight; edges repeat.
-        void smooth(std::vector<F32>& v, const std::vector<F32>& weight, S32 w, S32 h, F32 sigma_cells)
+        /// A normalised Gaussian kernel of radius three sigma.
+        std::vector<F32> gaussian(F32 sigma_cells)
         {
             const S32 r = static_cast<S32>(3.f * sigma_cells);
             std::vector<F32> k(2 * r + 1);
@@ -114,42 +115,76 @@ namespace sknav
             {
                 x /= sum;
             }
-            std::vector<F32> num(v.size()), den(v.size());
+            return k;
+        }
+
+        /// A separable blur of v by k, edges repeating: along x, then along y. Each tap is added to a whole row in
+        /// kernel order, which streams along memory and keeps every cell's sum in that order.
+        void blur(const std::vector<F32>& v, const std::vector<F32>& k, S32 w, S32 h, std::vector<F32>& out)
+        {
+            SK_NAV_ZONE("nav.wind.blur");
+            const S32 r = static_cast<S32>(k.size() / 2);
+            std::vector<F32> tmp(v.size()), row(static_cast<size_t>(w) + 2 * r);
+            for (S32 y = 0; y < h; ++y)
+            {
+                const F32* src = v.data() + static_cast<size_t>(y) * w;
+                for (S32 x = -r; x < w + r; ++x)
+                {
+                    row[x + r] = src[std::clamp(x, 0, w - 1)];
+                }
+                F32* dst = tmp.data() + static_cast<size_t>(y) * w;
+                for (S32 i = 0; i <= 2 * r; ++i)
+                {
+                    const F32 ki = k[i];
+                    const F32* tap = row.data() + i;
+                    for (S32 x = 0; x < w; ++x)
+                    {
+                        dst[x] += ki * tap[x];
+                    }
+                }
+            }
+            out.assign(v.size(), 0.f);
+            for (S32 y = 0; y < h; ++y)
+            {
+                F32* dst = out.data() + static_cast<size_t>(y) * w;
+                for (S32 i = 0; i <= 2 * r; ++i)
+                {
+                    const F32 ki = k[i];
+                    const F32* tap = tmp.data() + static_cast<size_t>(std::clamp(y + i - r, 0, h - 1)) * w;
+                    for (S32 x = 0; x < w; ++x)
+                    {
+                        dst[x] += ki * tap[x];
+                    }
+                }
+            }
+        }
+
+        /// A separable Gaussian over the valid cells only, normalised by their smoothed weight; edges repeat.
+        void smooth(std::vector<F32>& v, const std::vector<F32>& weight, const std::vector<F32>& weight_blur, S32 w, S32 h, F32 sigma_cells)
+        {
+            SK_NAV_ZONE("nav.wind.smooth");
+            std::vector<F32> num(v.size());
             for (size_t i = 0; i < v.size(); ++i)
             {
                 num[i] = v[i] * weight[i];
-                den[i] = weight[i];
             }
-            std::vector<F32> tn(v.size()), td(v.size());
-            for (S32 y = 0; y < h; ++y)
+            std::vector<F32> sum;
+            blur(num, gaussian(sigma_cells), w, h, sum);
+            for (size_t i = 0; i < v.size(); ++i)
             {
-                for (S32 x = 0; x < w; ++x)
-                {
-                    F32 a = 0.f, b = 0.f;
-                    for (S32 i = -r; i <= r; ++i)
-                    {
-                        const S32 j = std::clamp(x + i, 0, w - 1) + y * w;
-                        a += k[i + r] * num[j];
-                        b += k[i + r] * den[j];
-                    }
-                    tn[x + y * w] = a;
-                    td[x + y * w] = b;
-                }
+                v[i] = sum[i] / std::max(weight_blur[i], 1e-6f);
             }
-            for (S32 y = 0; y < h; ++y)
+        }
+
+        /// One for an open cell, nothing for a blocked one.
+        std::vector<F32> windWeight(const WindField& f)
+        {
+            std::vector<F32> weight(f.mFlags.size(), 0.f);
+            for (size_t i = 0; i < weight.size(); ++i)
             {
-                for (S32 x = 0; x < w; ++x)
-                {
-                    F32 a = 0.f, b = 0.f;
-                    for (S32 i = -r; i <= r; ++i)
-                    {
-                        const S32 j = x + std::clamp(y + i, 0, h - 1) * w;
-                        a += k[i + r] * tn[j];
-                        b += k[i + r] * td[j];
-                    }
-                    v[x + y * w] = a / std::max(b, 1e-6f);
-                }
+                weight[i] = (f.mFlags[i] & WindCell::BLOCKED) ? 0.f : 1.f;
             }
+            return weight;
         }
     }
 
@@ -203,6 +238,7 @@ namespace sknav
 
     WindFieldPtr buildWindField(const EnclosureProduct& enclosure, const RoomsProduct* rooms, const WindLevel& level, const WindParams& params)
     {
+        SK_NAV_ZONE("nav.wind.field");
         auto f = std::make_shared<WindField>();
         f->mCell = params.mCellM;
         f->mLevel = level;
@@ -230,7 +266,7 @@ namespace sknav
         const F32 none = std::numeric_limits<F32>::max();
 
         // Every fine cell of a detailed tile, with its raster cell.
-        auto forCells = [&](const std::function<void(const TileEnclosure&, S32, S32, size_t)>& fn) {
+        auto forCells = [&](auto&& fn) {
             for (const TileEnclosure& t : enclosure.mTiles)
             {
                 if (!t.mAir)
@@ -252,6 +288,7 @@ namespace sknav
             }
         };
         // Each leaf's gaps over its cells, looked up once per tile.
+        SK_NAV_ZONE("nav.wind.field.leaves");
         std::vector<std::vector<S32>> leafOf(enclosure.mTiles.size());
         for (size_t ti = 0; ti < enclosure.mTiles.size(); ++ti)
         {
@@ -276,13 +313,23 @@ namespace sknav
             }
         }
         // Leaves fill finest last, so the map holds each cell's finest leaf; the column gathers the rest.
+        // Cells walk their leaves in rows, so a column is gathered again only when the leaf changes.
+        const TileEnclosure* col_tile = nullptr;
+        S32 col_leaf = -1;
         auto column = [&](const TileEnclosure& t, S32 ix, S32 iy, AirColumn& out) {
-            airColumn(*t.mAir, leafOf[&t - enclosure.mTiles.data()][ix + iy * t.mWidth], out);
+            const S32 leaf = leafOf[&t - enclosure.mTiles.data()][ix + iy * t.mWidth];
+            if (&t != col_tile || leaf != col_leaf)
+            {
+                airColumn(*t.mAir, leaf, out);
+                col_tile = &t;
+                col_leaf = leaf;
+            }
             return out.mCount > 0;
         };
         AirColumn col;
 
         // The ground: the lowest terrain floor, else carried from the nearest one.
+        SK_NAV_ZONE("nav.wind.field.ground");
         f->mZ.assign(n, none);
         if (level.mAbsolute)
         {
@@ -339,6 +386,7 @@ namespace sknav
         }
 
         // The slab through every fine cell: in air, or in a solid of some height.
+        SK_NAV_ZONE("nav.wind.field.slab");
         std::vector<U16> covered(n, 0), solid(n, 0);
         std::vector<const TileEnclosure*> repTile(n, nullptr);
         std::vector<U32> repGap(n, 0);
@@ -400,12 +448,21 @@ namespace sknav
                 {
                     fl |= WindCell::INDOORS;
                 }
+                else if (ge.mBucket == static_cast<U8>(EnclosureBucket::UNKNOWN))
+                {
+                    fl |= WindCell::UNKNOWN;
+                }
+            }
+            else
+            {
+                fl |= WindCell::UNKNOWN;
             }
         }
 
         // Courtyards: open spaces whose edge at the slab is mostly solid.
         if (rooms)
         {
+            SK_NAV_ZONE("nav.wind.field.courts");
             const size_t spaces = rooms->mSpaces.size();
             std::vector<U32> cells(spaces, 0), edge(spaces, 0), walled(spaces, 0);
             std::vector<F32> top(spaces, 0.f);      ///< summed over walled edge cells: the wall's top
@@ -446,7 +503,7 @@ namespace sknav
             for (size_t k = 0; k < spaces; ++k)
             {
                 const Space& s = rooms->mSpaces[k];
-                if (s.mBucket == EnclosureBucket::INDOORS || s.mSMean <= params.mCourtS || !walled[k] ||
+                if (s.mBucket == EnclosureBucket::INDOORS || s.mBucket == EnclosureBucket::UNKNOWN || s.mSMean <= params.mCourtS || !walled[k] ||
                     walled[k] < params.mCourtL * edge[k] || cells[k] * cell * cell < params.mCourtAreaM2)
                 {
                     continue;
@@ -472,8 +529,17 @@ namespace sknav
         return f;
     }
 
-    std::shared_ptr<WindSlab> computeWindSlab(const WindField& f, const RoomsProduct* rooms, F32 heading_deg, const WindParams& params)
+    std::vector<F32> windWeightBlur(const WindField& f, const WindParams& params)
     {
+        std::vector<F32> out;
+        blur(windWeight(f), gaussian(params.mSmoothM / f.mCell), f.mWidth, f.mHeight, out);
+        return out;
+    }
+
+    std::shared_ptr<WindSlab> computeWindSlab(const WindField& f, const RoomsProduct* rooms, F32 heading_deg, const WindParams& params,
+                                              const std::vector<F32>* weight_blur)
+    {
+        SK_NAV_ZONE("nav.wind.slab");
         auto slab = std::make_shared<WindSlab>();
         slab->mOrigin = f.mOrigin;
         slab->mCell = f.mCell;
@@ -490,15 +556,36 @@ namespace sknav
         const F32 rad = heading_deg * DEG_TO_RAD;
         const LLVector2 wd(std::cos(rad), std::sin(rad)), pp(-wd.mV[VY], wd.mV[VX]);
         const F32 ox = f.mOrigin.mV[VX], oy = f.mOrigin.mV[VY];
+        // Dividing by a power of two is multiplying by its reciprocal, exactly.
+        S32 cell_exp = 0;
+        const bool pow2 = std::frexp(cell, &cell_exp) == 0.5f;
+        const F32 per_cell = 1.f / cell;
         auto index = [&](F32 x, F32 y) -> S32 {
-            const S32 ix = static_cast<S32>(std::floor((x - ox) / cell)), iy = static_cast<S32>(std::floor((y - oy) / cell));
+            const F32 fx = pow2 ? (x - ox) * per_cell : (x - ox) / cell, fy = pow2 ? (y - oy) * per_cell : (y - oy) / cell;
+            const S32 ix = static_cast<S32>(std::floor(fx)), iy = static_cast<S32>(std::floor(fy));
             return ix < 0 || iy < 0 || ix >= w || iy >= h ? -1 : ix + iy * w;
         };
         auto blocked = [&](S32 i) { return (f.mFlags[i] & WindCell::BLOCKED) != 0; };
 
         // Lee: the least of s / min(8 h, cap) over solids s upwind.
-        std::vector<F32> lee(n, 1.f), width(n, 0.f), weight(n, 0.f);
+        SK_NAV_ZONE("nav.wind.slab.lee");
+        std::vector<F32> lee(n, 1.f), width(n, 0.f);
         const F32 cap = params.mLeeCapM;
+        // Per cell, what the marches read: the cells a march skips from an open one, nothing on a blocked one, and
+        // a blocked one's lee length.
+        std::vector<S32> hop(n);
+        std::vector<F32> lee_len(n, 0.f);
+        for (size_t j = 0; j < n; ++j)
+        {
+            if (f.mFlags[j] & WindCell::BLOCKED)
+            {
+                lee_len[j] = std::min(params.mLeePerHeight * std::max(f.mSolid[j], params.mLeeMinHeightM), cap);
+            }
+            else
+            {
+                hop[j] = skip(f.mReach[j]);
+            }
+        }
         for (S32 y = 0; y < h; ++y)
         {
             for (S32 x = 0; x < w; ++x)
@@ -518,15 +605,14 @@ namespace sknav
                     {
                         break;      // the raster is convex: nothing further is on it
                     }
-                    if (blocked(j))
+                    if (!hop[j])
                     {
-                        const F32 len = std::min(params.mLeePerHeight * std::max(f.mSolid[j], params.mLeeMinHeightM), cap);
-                        best = std::min(best, s / len);
+                        best = std::min(best, s / lee_len[j]);
                         s += cell;
                     }
                     else
                     {
-                        s += skip(f.mReach[j]) * cell;
+                        s += hop[j] * cell;
                     }
                 }
                 lee[i] = best;
@@ -543,22 +629,23 @@ namespace sknav
                         {
                             break;
                         }
-                        if (blocked(j))
+                        if (!hop[j])
                         {
                             span = s;
                             break;
                         }
-                        s += skip(f.mReach[j]) * cell;
+                        s += hop[j] * cell;
                     }
                     sum += span;
                 }
                 width[i] = sum;
-                weight[i] = 1.f;
             }
         }
-        smooth(width, weight, w, h, params.mSmoothM / cell);
+        // The weight is the same for every heading, so a pass may blur it once.
+        smooth(width, windWeight(f), weight_blur ? *weight_blur : windWeightBlur(f, params), w, h, params.mSmoothM / cell);
 
         // Venturi, calm indoors, damped and swirling courtyards.
+        SK_NAV_ZONE("nav.wind.slab.venturi");
         const F32 fu = 1.f / WIND_FACTOR_UNIT, du = 1.f / WIND_DEFLECT_UNIT;
         auto put = [&](WindCell& c, F32 speed, const LLVector2& deflect) {
             c.mFactor = static_cast<U8>(std::clamp<S32>(static_cast<S32>(std::lround(speed * fu)), 0, 255));
@@ -587,7 +674,7 @@ namespace sknav
                 up /= static_cast<F32>(std::size(params.mUpwindM));
                 F32 v = lee[i] * std::clamp(up / std::max(width[i], 0.25f), params.mVenturiMin, params.mVenturiMax);
                 LLVector2 deflect;
-                if (c.mFlags & WindCell::INDOORS)
+                if (c.mFlags & (WindCell::INDOORS | WindCell::UNKNOWN))
                 {
                     v = 0.f;
                 }
@@ -611,6 +698,7 @@ namespace sknav
         // Draughts through portals whose sides differ in S, where the slab crosses them.
         if (rooms)
         {
+            SK_NAV_ZONE("nav.wind.slab.draughts");
             for (const Portal& p : rooms->mPortals)
             {
                 if (p.mSpaces[0] >= rooms->mSpaces.size() || p.mSpaces[1] >= rooms->mSpaces.size())
@@ -676,6 +764,7 @@ namespace sknav
         S32 mHeading = -1;          ///< -1 while the band's field is still to build
         WindFieldPtr mField;
         std::shared_ptr<const std::vector<F32>> mZ;
+        std::vector<F32> mWeightBlur;
         F64 mMs = 0.0;
         bool mDone = false;
     };
@@ -705,11 +794,12 @@ namespace sknav
         {
             s.mField = buildWindField(*in.mEnclosure, in.mRooms.get(), in.mBands[s.mBand], in.mParams);
             s.mZ = std::make_shared<const std::vector<F32>>(s.mField->mZ);
+            s.mWeightBlur = windWeightBlur(*s.mField, in.mParams);
             s.mHeading = 0;
         }
         else
         {
-            std::shared_ptr<WindSlab> slab = computeWindSlab(*s.mField, in.mRooms.get(), windHeadingDeg(s.mHeading), in.mParams);
+            std::shared_ptr<WindSlab> slab = computeWindSlab(*s.mField, in.mRooms.get(), windHeadingDeg(s.mHeading), in.mParams, &s.mWeightBlur);
             slab->mHeading = s.mHeading;
             slab->mBand = static_cast<S32>(s.mBand);
             slab->mZ = s.mZ;
@@ -718,6 +808,7 @@ namespace sknav
             {
                 s.mHeading = -1;
                 s.mField.reset();
+                s.mWeightBlur.clear();
                 s.mDone = ++s.mBand == in.mBands.size();
             }
         }

@@ -32,6 +32,8 @@
 #include "sknavtypes.h"
 #include "threadpool_fwd.h"
 
+class SKPhysicsHavokShape;
+
 #include <future>
 #include <map>
 #include <memory>
@@ -93,6 +95,9 @@ class SKWorldCensus : public LLSingleton<SKWorldCensus>
     void cleanupSingleton() override;
 
 public:
+    /// The highest land under a box's plan corners and middle, -1e9 with no world.
+    static F32 landUnder(const LLVector3d& min, const LLVector3d& max);
+
     /// Once per frame after objects have moved. Does nothing unless the
     /// navmesh is enabled and something wants a census (a demand, or the overlay).
     void update();
@@ -146,6 +151,9 @@ private:
         U64 mSignature = 0;
         sknav::RecordPtr mRecord;
         sknav::RecordPtr mPhysics;  ///< a surround's physics shape, beside its rendered one
+        /// The simulator's triangles once they arrived, held so the repository dropping them does not rebuild the record.
+        std::shared_ptr<const SKPhysicsHavokShape> mSim;
+        LLUUID mSimMesh;
         F64 mLastSeen = 0.f;
     };
 
@@ -154,6 +162,9 @@ private:
         LLVector3d mPosition;
         LLQuaternion mRotation;     ///< baseline together with mPosition
         F64 mMovedAt = -1.f;        ///< last time the root was seen somewhere else
+        F64 mBurstStart = -1.f;     ///< when its current or last burst of moves began
+        std::vector<F64> mBursts;   ///< when each recent burst began, oldest first
+        F64 mMoverUntil = -1.f;     ///< it moves by habit until then
         F64 mLastSeen = 0.f;
         bool mKnown = false;
     };
@@ -205,7 +216,8 @@ private:
     bool isSurround(LLViewerObject* root, const LLVector3d& mn, const LLVector3d& mx) const;
     /// One record from one part, at the sim-side transform the caller signed.
     sknav::RecordPtr record(LLVOVolume* volume, LLViewerObject* root, sknav::Role role, bool dynamic, U64 signature,
-                            const LLVector3& pos, const LLQuaternion& rot, sknav::FeatureKind feature, U8 exclude);
+                            const LLVector3& pos, const LLQuaternion& rot, sknav::FeatureKind feature, U8 exclude,
+                            const std::shared_ptr<const SKPhysicsHavokShape>& sim);
     /// Who is sitting on what, into the session history.
     void gatherCrew();
     /// The feature rules over the finished scan's parts; the part kinds they
@@ -237,6 +249,19 @@ private:
     std::unordered_map<LLUUID, PartFeature> mPartFeatures;
     /// Where each door leaf has rested this session, and the door id it was given.
     sknav::LeafHistories mLeaves;
+    /// The sim transform each leaf with an established doorway was last seen
+    /// at it with: what its record is built from while it swings.
+    struct LeafTransform
+    {
+        LLVector3 mPos;
+        LLQuaternion mRot;
+        U64 mRegion = 0;
+    };
+    std::unordered_map<LLUUID, LeafTransform> mDoorways;
+    /// This scan's sim transform of every leaf, kept until the scan finishes.
+    std::unordered_map<LLUUID, LeafTransform> mLeafTransforms;
+    /// Each door-shaped part's face cover, cast again only when it or its neighbours change.
+    sknav::FaceCoverCache mFaceCover;
     std::map<std::string, F32> mDemands;
     U64 mStamp = 0;
     F64 mRolesRequestedAt = -1.f;

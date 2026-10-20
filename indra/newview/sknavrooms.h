@@ -30,6 +30,7 @@
 #include "sknavresidency.h"
 #include "sknavspaceproducts.h"
 #include "sknavspaces.h"
+#include "sknavroomsschedule.h"
 #include "sknavwind.h"
 #include "threadpool.h"
 #include "v3dmath.h"
@@ -156,9 +157,11 @@ typedef std::shared_ptr<const SKNavWind> SKNavWindPtr;
 /// Schedules the enclosure pass. A mesh whose air changed is marked dirty,
 /// and once it has been quiet for SKNavRoomsSettleMs its tiles' air and the
 /// sky map are snapshotted and handed to a queue of its own, one pass per
-/// mesh at a time, each in 20 ms chunks so a newer generation can cancel it.
-/// Meshes that touch read each other's answers one generation late, and a
-/// mesh whose answers moved re-runs its neighbours, at most three times.
+/// mesh at a time, each in 20 ms chunks so a better tier can preempt it. A
+/// pass mends the last answers where their air stands, and air that moves
+/// while one runs is mended next, on top of what it lands; its spaces are
+/// kept when no air, door or answer the spaces pass reads moved. Meshes
+/// that touch read each other's answers one generation late, and a mesh whose answers moved re-runs its neighbours, at most three times.
 /// Main thread only, besides the view it hands out.
 class SKNavRooms
 {
@@ -178,10 +181,6 @@ public:
     /// Whether a mesh meeting the global box has a pass pending or running.
     bool settlingIn(const LLVector3d& min, const LLVector3d& max) const;
     std::string statsLine() const;
-
-    /// Tint the floor of every gap near the camera by e (mode 1) or by bucket
-    /// (mode 2), from the coarse answers. Agent coordinates.
-    void gatherOverlay(SKNavOverlayGeom& geom, const LLVector3d& camera, F64 reach, U32 mode, bool opaque) const;
 
     /// Fill each space's floor near the camera in a colour of its own, from
     /// the coarse answers, and draw its portals: doors red, stairs lime,
@@ -215,6 +214,18 @@ public:
 private:
     struct Job;
     struct WindJob;
+    /// Where a mesh's answers may still move: the plan of the tiles that changed, or all of it.
+    struct SettleBox
+    {
+        LLVector3d mMin = LLVector3d(1e300, 1e300, 0.0);
+        LLVector3d mMax = LLVector3d(-1e300, -1e300, 0.0);
+        bool mAll = false;
+
+        void add(const LLVector3d& min, const LLVector3d& max);
+        void add(const SettleBox& other);
+        /// Whether it meets a global box, within the reach a repair's floods can move answers.
+        bool meets(const LLVector3d& min, const LLVector3d& max) const;
+    };
     struct MeshState
     {
         LLUUID mId;
@@ -223,9 +234,15 @@ private:
         LLVector3d mMax;
         U64 mAirSignature = 0;
         U64 mDoorSignature = 0;             ///< the doors and lifts over it
+        U64 mRoomsDoorSignature = 0;        ///< the doors and lifts its landed spaces were cut with
+        std::map<sknav::TileKey, std::pair<U64, std::pair<LLVector3d, LLVector3d>>> mTileAir;   ///< per tile its air id and plan, as last seen
+        SettleBox mPending;                 ///< what moved since the last post
+        SettleBox mPosted;                  ///< what the pass in flight answers again
         bool mDirty = false;
         bool mInFlight = false;
         F64 mChanged = 0.0;                 ///< when its air last moved
+        F64 mDirtySince = 0.0;              ///< when it last went dirty: churn delays a refresh this long at most
+        F64 mLastPosted = 0.0;              ///< ready meshes take turns: the longest unserved goes first
         U64 mGeneration = 0;
         U32 mReruns = 0;                    ///< neighbour-driven re-runs since its air last moved
         std::shared_ptr<std::atomic<U64>> mLatest;
@@ -235,7 +252,30 @@ private:
         bool mWindDirty = false;            ///< its rooms landed since its slabs were built
         bool mWindInFlight = false;
         F64 mWindChanged = 0.0;             ///< when its answers last moved
+        F64 mWindDirtySince = 0.0;          ///< when its slabs last went stale: churn delays a refresh this long at most
+        U64 mWindGeneration = 0;
+        std::shared_ptr<std::atomic<U64>> mWindLatest;  ///< what cancels a wind pass: only a preemption, never the air moving
         U32 mEvicted = 0;                   ///< tiles whose detail the air cache let go
+        U8 mPriority = 3;                   ///< the navmesh's order for it: the agent's region first
+
+        sknav::RoomsSchedule schedule() const
+        {
+            return { mProduct != nullptr, mDirty, mInFlight, mChanged, mDirtySince, mLastPosted, mPriority };
+        }
+        /// Wind is scheduled as the rooms are: a mesh with no slabs builds them on the rooms it has.
+        sknav::RoomsSchedule windSchedule() const
+        {
+            return { mWind != nullptr, mWindDirty, mWindInFlight, mWindChanged, mWindDirtySince, 0.0, mPriority };
+        }
+        void windStale(F64 now)
+        {
+            if (!mWindDirty)
+            {
+                mWindDirtySince = now;
+            }
+            mWindDirty = true;
+            mWindChanged = now;
+        }
     };
 
     void post(MeshState& state, const SKNavMesh& navmesh);
@@ -268,6 +308,9 @@ private:
     F32 mLastSpaceStageMs[sknav::SpacesPass::NUM_STAGES] = {};
     U32 mPasses = 0;
     U32 mCancelled = 0;
+    U32 mRepairs = 0;                       ///< passes that mended the last answers
+    U32 mSpacesKept = 0;                    ///< of which kept the last spaces
+    U32 mLastAnswered = 0;                  ///< tiles the last pass answered again
     F32 mLastWindMs = 0.f;
     size_t mLastWindBytes = 0;
     U32 mWindPasses = 0;

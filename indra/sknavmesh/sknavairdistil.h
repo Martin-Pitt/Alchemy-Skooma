@@ -29,6 +29,7 @@
 #include "sknavfaceoffsets.h"
 #include "sknavflights.h"
 
+#include <atomic>
 #include <memory>
 #include <string>
 #include <vector>
@@ -94,6 +95,21 @@ namespace sknav
 
     /// A tile's air, immutable once built. Heights are units from mOrigin z,
     /// clipped to AIR_HEIGHT_MAX; an open ceiling reads AIR_CEILING_OPEN.
+    /// A number no other air in the process has had, a copy included: what keys hash for an air, as an
+    /// address can be freed and taken by another.
+    struct AirSerial
+    {
+        U64 mValue = next();
+        AirSerial() = default;
+        AirSerial(const AirSerial&) : mValue(next()) {}
+        AirSerial& operator=(const AirSerial&) { mValue = next(); return *this; }
+        static U64 next()
+        {
+            static std::atomic<U64> counter{ 0 };
+            return ++counter;
+        }
+    };
+
     struct TileAir
     {
         enum Side : U8 { SIDE_NEG_X = 0, SIDE_POS_X = 1, SIDE_NEG_Y = 2, SIDE_POS_Y = 3 };
@@ -105,6 +121,7 @@ namespace sknav
         S32 mHeight = 0;                ///< along SL y
         std::vector<AirLeaf> mLeaves;   ///< leaves with air only, in airKey order of their origins, coarsest first at a shared origin
         std::vector<AirGap> mGaps;
+        AirSerial mSerial;
         /// -x and +x run along y, -y and +y along x.
         SeamStrip mSeams[4];
         /// Solid tops over 1 m cells: mTopCell cells a side, row-major along y.
@@ -123,6 +140,10 @@ namespace sknav
     /// The finest leaf covering a fine cell, or -1, from the last leaf whose
     /// key is at most the cell's; the coarser ones over it follow parentLeaf.
     S32 findLeafByKey(const TileAir& air, S32 ix, S32 iy);
+
+    /// Whether two airs hold the same cells, gaps, seams, tops and face offsets, whatever their serials: a tile
+    /// built again to the same air can keep the one it has, and nothing that reads it need run again.
+    bool sameAir(const TileAir& a, const TileAir& b);
 
     /// The nearest coarser leaf over a leaf, or -1.
     inline S32 parentLeaf(const TileAir& air, S32 leaf)
@@ -206,6 +227,7 @@ namespace sknav
     /// A coarse tile's air in cells and height units factor times finer, so the
     /// passes read it beside a fine tile's: each leaf factor times as wide,
     /// split into leaves of AIR_MAX_LEVEL past it, heights times factor.
+    /// Null unless factor is a power of two.
     TileAirPtr upsampleAir(const TileAir& coarse, S32 factor);
 
     /// spanGaps for air with no fine grid, read off its leaves: the gap whose

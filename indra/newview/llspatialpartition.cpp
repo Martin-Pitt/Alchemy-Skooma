@@ -56,6 +56,7 @@
 #include "llviewershadermgr.h"
 #include "llcontrolavatar.h"
 #include "lltoolmgr.h"
+#include "skmeshhavokshape.h" // <SK:Nexii> physics_havok block
 
 extern bool gShiftFrame;
 
@@ -875,45 +876,6 @@ void LLSpatialGroup::rebound()
     }
 }
 
-void LLSpatialGroup::destroyGLState(bool keep_occlusion)
-{
-    setState(LLSpatialGroup::GEOM_DIRTY | LLSpatialGroup::IMAGE_DIRTY);
-
-    if (!keep_occlusion)
-    { //going to need a rebuild
-        gPipeline.markRebuild(this);
-    }
-
-    mLastUpdateTime = gFrameTimeSeconds;
-    mVertexBuffer = NULL;
-    mBufferMap.clear();
-
-    clearDrawMap();
-
-    if (!keep_occlusion)
-    {
-        releaseOcclusionQueryObjectNames();
-    }
-
-
-    for (LLSpatialGroup::element_iter i = getDataBegin(); i != getDataEnd(); ++i)
-    {
-        LLDrawable* drawable = (LLDrawable*)(*i)->getDrawable();
-        if(!drawable)
-        {
-            continue;
-        }
-        for (S32 j = 0; j < drawable->getNumFaces(); j++)
-        {
-            LLFace* facep = drawable->getFace(j);
-            if (facep)
-            {
-                facep->clearVertexBuffer();
-            }
-        }
-    }
-}
-
 //==============================================
 
 LLSpatialPartition::LLSpatialPartition(U32 data_mask, bool render_by_group, LLViewerRegion* regionp)
@@ -1277,7 +1239,10 @@ class LLOctreeSelect : public LLOctreeCull
 {
 public:
     LLOctreeSelect(LLCamera* camera, std::vector<LLDrawable*>* results)
-        : LLOctreeCull(camera), mResults(results) { }
+        : LLOctreeCull(camera), mResults(results)
+    {
+        mNearFirst = false; // the selection is a set of drawables, in no order
+    }
 
     virtual bool earlyFail(LLViewerOctreeGroup* group) { return false; }
     virtual void preprocess(LLViewerOctreeGroup* group) { }
@@ -1482,11 +1447,9 @@ S32 LLSpatialPartition::cull(LLCamera &camera, bool do_occlusion)
         LLOctreeCullShadow culler(&camera);
         culler.traverse(mOctree);
     }
-    // Terrain in the main view, when an infinite projection no longer bounds it. Water is a flat plane drawn out
-    // to its stretch, so it is not held to the reach.
+    // Terrain in the main view, when an infinite projection no longer bounds it.
     else if (const F32 reach = ALFarPlane::terrainReach(LLViewerCamera::getInstance()->getProjectionFar());
-             mInfiniteFarClip && reach > 0.f && !gCubeSnapshot && &camera == LLViewerCamera::getInstance() &&
-             mPartitionType != LLViewerRegion::PARTITION_WATER && mPartitionType != LLViewerRegion::PARTITION_VOIDWATER)
+             mInfiniteFarClip && reach > 0.f && !gCubeSnapshot && &camera == LLViewerCamera::getInstance())
     {
         ALOctreeCullReach culler(&camera, reach);
         culler.traverse(mOctree);
@@ -1707,6 +1670,7 @@ void renderOctree(LLSpatialGroup* group)
 
         {
             LLGLDepthTest gl_depth(false, false);
+            gGL.flush();
             glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
 
             gGL.diffuseColor4f(1,0,0,group->mBuilt);
@@ -1750,6 +1714,12 @@ void renderOctree(LLSpatialGroup* group)
                     gGL.loadMatrix(LLViewerCamera::getCurrent().getModelview());
                     if (!LLRenderPass::uploadMatrixPalette(face->mAvatar, face->mSkinInfo, lastAvatar, lastMeshId, skipLastSkin))
                     {
+                        // Both pushes above are popped at the end of the iteration this skips.
+                        gGL.popMatrix();
+                        if (!group->getSpatialPartition()->isBridge())
+                        {
+                            gGL.popMatrix();
+                        }
                         continue;
                     }
                 }
@@ -1923,6 +1893,10 @@ void renderUpdateType(LLDrawable* drawablep)
 
 void renderBoundingBox(LLDrawable* drawable, bool set_color = true)
 {
+    // The colour is a uniform, so the last drawable's outlines go out under their own colour
+    // before it changes.
+    gGL.flush();
+
     if (set_color)
     {
         if (drawable->isSpatialBridge())
@@ -1953,10 +1927,6 @@ void renderBoundingBox(LLDrawable* drawable, bool set_color = true)
                 case LLViewerObject::LL_VO_PART_GROUP:
                 case LLViewerObject::LL_VO_HUD_PART_GROUP:
                         gGL.diffuseColor4f(0,0,1,1); // blue
-                        break;
-                case LLViewerObject::LL_VO_VOID_WATER:
-                case LLViewerObject::LL_VO_WATER:
-                        gGL.diffuseColor4f(0,0.5f,1,1); // medium blue
                         break;
                 case LL_PCODE_LEGACY_TREE:
                         gGL.diffuseColor4f(0,0.5f,0,1); // dark green
@@ -2183,7 +2153,6 @@ void renderNormals(LLDrawable *drawablep)
 
                 buf->setBuffer();
                 // *NOTE: The render type in the vertex shader is TRIANGLES, but gets converted to LINES in the geometry shader
-                // *NOTE: For terrain normal debug, this seems to also include vertices for water, which is technically not part of the terrain. Should fix that at some point.
                 buf->drawRange(LLRender::TRIANGLES, face.getGeomIndex(), face.getGeomIndex() + face.getGeomCount()-1, face.getIndicesCount(), face.getIndicesStart());
             }
             if (prev_shader)
@@ -2265,14 +2234,13 @@ void renderPhysicsShape(LLDrawable* drawable, LLVOVolume* volume, bool wireframe
 
     //not allowed to return at this point without rendering *something*
 
-    F32 threshold = gSavedSettings.getF32("ObjectCostHighThreshold");
-    F32 cost = volume->getObjectCost();
-
     LLColor4 low = gSavedSettings.getColor4("ObjectCostLowColor");
     LLColor4 mid = gSavedSettings.getColor4("ObjectCostMidColor");
     LLColor4 high = gSavedSettings.getColor4("ObjectCostHighColor");
 
-    F32 normalizedCost = 1.f - exp( -(cost / threshold) );
+    // <SK:Nexii> Coloured by the physics shape's own cost, not the land impact (skphysicsshape.h)
+    F32 normalizedCost = skPhysicsShapeCostFraction(skPhysicsShapeCost(volume, shape));
+    // </SK:Nexii>
 
     LLColor4 color;
     if ( normalizedCost <= 0.5f )
@@ -2311,7 +2279,16 @@ void renderPhysicsShape(LLDrawable* drawable, LLVOVolume* volume, bool wireframe
         LLUUID mesh_id = volume->getVolume()->getParams().getSculptID();
         LLModel::Decomposition* decomp = gMeshRepo.getDecomposition(mesh_id);
 
-        if (decomp)
+        // <SK:Nexii> physics_havok block
+        // The simulator's MOPP triangles for a mesh without decomposition hulls. With hulls, which
+        // shape it collides with is not established, so they keep today's drawing.
+        const bool havok_drawn = decomp && decomp->mHull.empty() && !skPhysicsMeshTooSmallForTriangles(volume) && skRenderPhysicsHavok(mesh_id, color);
+        if (havok_drawn)
+        {
+            // Drawn.
+        }
+        else if (decomp)
+        // </SK:Nexii>
         { //render a physics based mesh
 
             gGL.getTextureSlot(0)->unbind();
@@ -2323,7 +2300,7 @@ void renderPhysicsShape(LLDrawable* drawable, LLVOVolume* volume, bool wireframe
             // never reach this branch (they arrive as USER_CONVEX).
             gMeshRepo.fetchPhysicsShape(mesh_id);
 
-            if (!decomp->mPhysicsShapeMesh.empty())
+            if (!decomp->mPhysicsShapeMesh.empty() && !skPhysicsMeshTooSmallForTriangles(volume)) // <SK:Nexii> Small meshes collide as hulls (skphysicsshape.h)
             {
                 //decomp has physics mesh, render that mesh
                 gGL.diffuseColor4fv(color.mV);
@@ -2955,6 +2932,8 @@ public:
                 gGL.vertex3fv(tri->mV[2]->getF32ptr());
             }
             gGL.end();
+            // Drawn under this pass's depth func and colour, which the next pass changes.
+            gGL.flush();
 
             if (i == 1)
             {

@@ -135,6 +135,10 @@ namespace sknav
     void buildStoreys(const dtNavMesh& nav, const PolySpaceFn& space_of, const RoomsProduct& rooms, StoreyProduct& out,
                       const PolyFlightFn& flight_of = nullptr, F32 min_area = 10.f, const std::vector<const Flight*>& flights = {});
 
+    /// What buildStoreys reads of the spaces, hashed: each space's id and whether it is a flight, a
+    /// flight's stair portals in order with the id across and the centre, and the pairs a portal joins.
+    U64 storeyRoomsKey(const RoomsProduct& rooms);
+
     /// One cell of the sheet with the space of its gap: the highest gap whose
     /// floor lies in the band, sampled at the cell's centre.
     struct SheetCell

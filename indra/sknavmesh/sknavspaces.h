@@ -217,6 +217,7 @@ namespace sknav
         TileAirPtr mAir;            ///< the air the seeds were cut from
         std::vector<U16> mSeeds;    ///< per gap of the air, 1-based; 0 on no avatar floor
         std::vector<SeedStats> mStats;  ///< per seed
+        std::vector<U32> mBasins;       ///< per seed, the watershed basin it was cut from, numbered across passes; 0 for none
     };
 
     /// Two seeds joined for want of a cut rather than by cues, kept while
@@ -232,6 +233,15 @@ namespace sknav
     /// The merge's runs and cut scores, each keyed by everything it read, for the next pass to reuse.
     struct MergeMemo;
 
+    /// Each tile's walkable components and their links into its neighbours, keyed by the airs they read, for the next pass to reuse.
+    struct FloorMemo;
+
+    /// Each tile's roof covers by gap, keyed by its air, its gaps' buckets and which of its gaps are in a space.
+    struct CoverMemo;
+
+    /// Each tile's edges to its +x and +y neighbours' seeds, keyed by the three tiles' air and seeds.
+    struct EdgeMemo;
+
     /// One mesh's spaces and portals. Positions are mesh-local.
     struct RoomsProduct
     {
@@ -246,12 +256,23 @@ namespace sknav
         U32 mDirtyTiles = 0;
         U32 mCells = 0;                     ///< level-0 cells the transform ran over
         U32 mReused = 0;                    ///< runs and scores taken from the last pass's memo
+        U32 mNextBasin = 1;                 ///< the first basin number the next pass may give
         SpacesDrawPtr mDraw;                ///< what the overlay draws, built once with the pass.
                                             ///< Landed products are replaced, never rewritten, and the
                                             ///< draw copies what it read, so it cannot go stale beside
                                             ///< them; a pass that would change it lands a new product.
         std::shared_ptr<const MergeMemo> mMemo;
+        std::shared_ptr<const FloorMemo> mFloors;
+        std::shared_ptr<const CoverMemo> mCovers;
+        std::shared_ptr<const EdgeMemo> mEdgeMemo;
+        std::vector<std::pair<TileKey, U64>> mStampKeys;    ///< per tile, by key: what its stamp reads of these spaces (stampRoomsKey)
+        std::vector<std::pair<U64, U32>> mPortalKeys;       ///< each portal's portalKey to its index, by key
+        U64 mStoreyKey = 0;                                 ///< what storeys read of these spaces (storeyRoomsKey)
 
+        /// A tile's stamp key, 0 for a tile it has none for.
+        U64 stampKey(const TileKey& key) const;
+        /// The index of the portal with this portalKey, or ~0u: a binding's portal by identity, not by an older product's index.
+        U32 portalIndex(U64 key) const;
         /// The space with this id, or null.
         const Space* byId(U32 id) const;
         const RoomsTile* tile(const TileKey& key) const;

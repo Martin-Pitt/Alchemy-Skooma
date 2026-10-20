@@ -146,14 +146,23 @@ void SKMapScene::updateDemand(bool want)
     {
         return;
     }
-    // The demand also brings the census and the rooms pass, out to SKNavRange.
+    // The navmesh demand brings the rooms pass; the census is asked directly, so it runs with the navmesh off.
+    static LLCachedControl<F32> range(gSavedSettings, "SKNavRange", 512.f);
     if (want)
     {
         SKNavMesh::instance().addDemand(DEMAND);
+        if (SKWorldCensus::instanceExists())
+        {
+            SKWorldCensus::instance().addDemand(DEMAND, range);
+        }
     }
     else
     {
         SKNavMesh::instance().removeDemand(DEMAND);
+        if (SKWorldCensus::instanceExists())
+        {
+            SKWorldCensus::instance().removeDemand(DEMAND);
+        }
     }
     mDemanding = want;
 }

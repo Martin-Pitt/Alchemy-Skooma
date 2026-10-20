@@ -42,6 +42,9 @@ namespace sknav
     /// snapshot for a worker costs a pointer per block.
     constexpr F32 SIDE_OPEN_REACH_M = 24.f;    ///< side openness looks for walls this far out
 
+    /// Whether two airs give a sky map the same solid tops, so either sets the same cells.
+    bool sameTops(const TileAir& a, const TileAir& b);
+
     class SkyMap
     {
     public:
@@ -56,9 +59,10 @@ namespace sknav
         /// of the tile, its z where the air's height 0 is.
         void set(U64 contributor, const LLVector3d& tile_min, const TileAir& air);
         void remove(U64 contributor);
-        bool has(U64 contributor) const { return mContributors.count(contributor) != 0; }
+        bool has(U64 contributor) const { return mCoverage.count(contributor) != 0; }
 
         /// No solid starts above pos within reach metres, and pos is not inside one.
+        /// False outside every contributor's footprint: air nobody published is not open.
         bool skyOpenAt(const LLVector3d& pos, F32 reach = 50.f) const;
         /// No solid but ignore's starts above pos within reach: a tile's own
         /// air already knows what stands over it.
@@ -78,6 +82,10 @@ namespace sknav
 
         /// Bumped on every change, for readers holding derived results.
         U64 version() const { return mVersion; }
+        /// The blocks holding the cells of a global plan box, by identity: a block is copied before
+        /// it changes while anything else holds it, so the key stands exactly while what the box
+        /// reads does. keep takes a hold on each block, so none is freed and replaced at its address.
+        U64 windowKey(F64 x0, F64 y0, F64 x1, F64 y1, std::vector<std::shared_ptr<const void>>& keep) const;
         size_t cells() const { return mCellCount; }
         size_t bytes() const;
 
@@ -104,6 +112,13 @@ namespace sknav
 
         std::unordered_map<U64, std::shared_ptr<Block>> mBlocks;
         std::unordered_map<U64, std::shared_ptr<const std::vector<U64>>> mContributors;   ///< the cells each contributor touches
+        /// Each contributor's footprint in global x and y, so a column no tile has seen reads unknown.
+        struct Footprint
+        {
+            F64 mX0, mY0, mX1, mY1;
+        };
+        bool covers(F64 x, F64 y) const;
+        std::unordered_map<U64, Footprint> mCoverage;
         size_t mCellCount = 0;
         U64 mVersion = 0;
     };

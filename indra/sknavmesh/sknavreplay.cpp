@@ -28,6 +28,7 @@
 
 #include "sknavexport.h"
 #include "sknavlayout.h"
+#include "sknavprofile.h"
 
 #include "llformat.h"
 
@@ -219,6 +220,7 @@ namespace sknav
 
     void replayCensus(const CensusFile& census, const ReplayOptions& options, ReplayResult& out)
     {
+        SK_NAV_ZONE("nav.replay.census");
         out = ReplayResult();
         std::map<LLUUID, U8> cues;
         for (const CensusRoot& root : census.mRoots)
@@ -646,6 +648,7 @@ namespace sknav
 
     void stampReplay(ReplayResult& out, const ReplayOptions& options)
     {
+        SK_NAV_ZONE("nav.replay.stamp");
         // Every tile's polygons from its held raster, stamped with the spaces that landed.
         const Clock::time_point t0 = Clock::now();
         std::vector<std::pair<ReplayMesh*, ReplayTile*>> jobs;
@@ -919,6 +922,7 @@ namespace sknav
 
     void writeReplayExport(std::ostream& file, const CensusFile& census, const ReplayResult& result)
     {
+        SK_NAV_ZONE("nav.export");
         file << std::setprecision(10);
         const ClassParams& avatar = census.mParams.mParams[static_cast<S32>(AgentClass::AVATAR)];
         writeExportHeader(file, census.mExported, census.mAgent, avatar.mHeight, avatar.mRadius, avatar.mClimb, avatar.mSlope, census.mParams.mCell);

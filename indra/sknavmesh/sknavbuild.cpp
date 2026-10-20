@@ -31,10 +31,12 @@
 #include "DetourNavMeshBuilder.h"
 #include "Recast.h"
 #include "RecastAlloc.h"
+#include "llapp.h"
 #include "sknavfaceoffsets.h"
 #include "sknavflights.h"
 #include "sknavlayout.h"
 #include "sknavwalls.h"
+#include "sknavprofile.h"
 
 #include <algorithm>
 #include <cfloat>
@@ -342,6 +344,7 @@ namespace
     /// crossing to its highest, which is what a convex body would have been.
     void fillSolid(rcHeightfield& hf, const Soup& soup, S32 tri_begin, S32 tri_end, S32 climb)
     {
+        SK_NAV_ZONE("nav.build.rasterise.fill");
         if (tri_end <= tri_begin)
         {
             return;
@@ -468,6 +471,7 @@ namespace
     /// span that overlaps the volume in a column it covers is cleared.
     void cutVolume(rcHeightfield& hf, const Soup& soup, S32 tri_begin, S32 tri_end)
     {
+        SK_NAV_ZONE("nav.build.rasterise.cut");
         BodyExtent body;
         bodyExtent(hf, soup, tri_begin, tri_end, body);
         for (S32 cz = body.mZ0; cz < body.mZ0 + body.mH; ++cz)
@@ -543,6 +547,7 @@ namespace
     /// heightfield has the same grid; columns outside it are incomplete.
     bool rasterisePasses(rcHeightfield& hf, const RasterSource& src, const CellRect& rect, S32 climb, StageClock& clock)
     {
+        SK_NAV_ZONE("nav.build.rasterise.passes");
         rcContext ctx(false);
         const Soup& soup = *src.mSoup;
         const bool whole = rect.covers(hf);
@@ -721,6 +726,7 @@ namespace
     /// judge the heightfield they were given.
     std::vector<Bridge> findBridges(const rcHeightfield& hf, S32 climb, U8 min_code)
     {
+        SK_NAV_ZONE("nav.build.bridges");
         std::vector<Bridge> bridges;
         for (S32 z = 1; z + 1 < hf.height; ++z)
         {
@@ -849,6 +855,7 @@ namespace
     /// faces for the walls.
     void flattenNarrowSteps(rcCompactHeightfield& chf, S32 reach, S32 climb)
     {
+        SK_NAV_ZONE("nav.build.flatten");
         if (reach <= 0)
         {
             return;
@@ -933,6 +940,7 @@ namespace
     /// whatever their size, since a short flight is smaller than a sliver.
     void mergeFragments(rcCompactHeightfield& chf, const std::vector<U8>& real, const std::vector<Flight>& flights)
     {
+        SK_NAV_ZONE("nav.build.mergefragments");
         std::vector<S32> cellOf(chf.spanCount);
         eachSpan(chf, [&](S32 x, S32 z, S32 i) { cellOf[i] = x + z * chf.width; });
         const auto neighbours = [&](S32 i, auto&& fn) {
@@ -1085,6 +1093,7 @@ namespace
     /// mesh clear of the ground - keep everything.
     void cullUnderground(rcHeightfield& hf, const TerrainWindow& t)
     {
+        SK_NAV_ZONE("nav.build.cull");
         if (t.mWidth < 2 || t.mHeight < 2 || t.mZ.size() < static_cast<size_t>(t.mWidth * t.mHeight))
         {
             return;
@@ -1182,6 +1191,7 @@ namespace
     void recordPolySpans(const rcCompactHeightfield& chf, const rcPolyMesh& pmesh, S32 border, S32 tile_cells, const std::vector<U32>& span_gap,
                          TileBuildStats& out)
     {
+        SK_NAV_ZONE("nav.build.polyspans");
         std::vector<U32> index(chf.spanCount, U32_MAX);
         for (S32 z = border; z < border + tile_cells; ++z)
         {
@@ -1359,6 +1369,7 @@ namespace
     /// before_ledges keeps the areas between them.
     void filterSpans(rcHeightfield& hf, const ClassParams& p, F32 ch, F32 cs, AreaSnapshot* before_ledges = nullptr)
     {
+        SK_NAV_ZONE("nav.build.filters");
         rcContext ctx(false);
         const S32 climb = static_cast<S32>(std::floor(p.mClimb / ch));
         const S32 height = static_cast<S32>(std::ceil(p.mHeight / ch));
@@ -1434,6 +1445,7 @@ namespace
     /// A deep copy of a compact heightfield, or null when Recast's allocator refuses.
     rcCompactHeightfield* cloneCompact(const rcCompactHeightfield& src)
     {
+        SK_NAV_ZONE("nav.build.compact.clone");
         rcCompactHeightfield* out = rcAllocCompactHeightfield();
         if (!out)
         {
@@ -1607,6 +1619,88 @@ namespace sknav
             const std::vector<std::pair<S32, S32>>& mainSolids() const { return mFiltered ? mSolidSolids : mSolids; }
         };
 
+        /// The plan the tile's passes read, mesh-local: the tile padded by the widest of them.
+        struct TileReach
+        {
+            F32 mX0, mY0, mX1, mY1;
+
+            explicit TileReach(const TileBuildInput& input)
+            {
+                const S32 avatar = static_cast<S32>(AgentClass::AVATAR);
+                const S32 border = std::max(borderCells(input.mParams[avatar].mRadius, input.mCell), input.mAirPad);
+                const F32 pad = std::max({ FLIGHT_REACH_M, AIR_PAD_M, border * input.mCell }) + input.mCell;
+                mX0 = input.mTileX * input.mTileSize - pad;
+                mY0 = input.mTileY * input.mTileSize - pad;
+                mX1 = (input.mTileX + 1) * input.mTileSize + pad;
+                mY1 = (input.mTileY + 1) * input.mTileSize + pad;
+            }
+
+            bool overlaps(const LLVector3* p, size_t n) const
+            {
+                F32 x0 = FLT_MAX, y0 = FLT_MAX, x1 = -FLT_MAX, y1 = -FLT_MAX;
+                for (size_t i = 0; i < n; ++i)
+                {
+                    x0 = std::min(x0, p[i].mV[VX]);
+                    y0 = std::min(y0, p[i].mV[VY]);
+                    x1 = std::max(x1, p[i].mV[VX]);
+                    y1 = std::max(y1, p[i].mV[VY]);
+                }
+                return x1 >= mX0 && x0 <= mX1 && y1 >= mY0 && y0 <= mY1;
+            }
+        };
+
+        /// Drops what lies wholly outside the reach. A record is not clipped to
+        /// its tile, so a big mesh would otherwise bring every triangle it has
+        /// to every tile it touches. A solid's fill counts crossings of its
+        /// whole surface, so a body is kept or dropped whole; bodies gets the
+        /// triangle count of each kept one, and stays empty for a non-solid.
+        void clipToReach(const Record& r, const TileReach& reach, std::vector<LLVector3>& tris, std::vector<S32>& bodies)
+        {
+            bodies.clear();
+            size_t kept = 0;
+            const auto keep = [&](size_t from, size_t count) {
+                if (from != kept)
+                {
+                    std::copy(tris.begin() + from, tris.begin() + from + count, tris.begin() + kept);
+                }
+                kept += count;
+            };
+            if (r.mSolid)
+            {
+                const S32 total = static_cast<S32>(tris.size() / 3);
+                S32 pieces = 0;
+                for (const S32 count : r.mConvexTris)
+                {
+                    pieces += count;
+                }
+                // Bodies not told apart arrive as one range and are one closed surface.
+                const std::vector<S32> whole{ total };
+                const std::vector<S32>& counts = r.mConvexTris.size() > 1 && pieces == total ? r.mConvexTris : whole;
+                size_t at = 0;
+                for (const S32 count : counts)
+                {
+                    const size_t n = static_cast<size_t>(count) * 3;
+                    if (count > 0 && reach.overlaps(&tris[at], n))
+                    {
+                        keep(at, n);
+                        bodies.push_back(count);
+                    }
+                    at += n;
+                }
+            }
+            else
+            {
+                for (size_t at = 0; at + 2 < tris.size(); at += 3)
+                {
+                    if (reach.overlaps(&tris[at], 3))
+                    {
+                        keep(at, 3);
+                    }
+                }
+            }
+            tris.resize(kept);
+        }
+
         /// The soup of a tile and its partition; false when it holds no triangle.
         bool soupTile(const TileBuildInput& input, TileBuildResult& result, TileBuildStats* stats, std::chrono::steady_clock::time_point started,
                       TileSoup& out)
@@ -1616,6 +1710,8 @@ namespace sknav
             std::vector<LLVector3> tris;
             std::vector<std::pair<S32, S32>>& solids = out.mSolids;
             std::vector<Excluded>& excluded = out.mExcluded;
+            const TileReach reach(input);
+            std::vector<S32> bodies;
             for (const RecordPtr& r : input.mRecords)
             {
                 if (!r)
@@ -1627,6 +1723,11 @@ namespace sknav
                 const bool hull = r->mProvenance == Provenance::HULL || r->mProvenance == Provenance::BASE_HULL;
                 tris.clear();
                 emitRecord(*r, input.mMeshOrigin, tris);
+                clipToReach(*r, reach, tris, bodies);
+                if (tris.empty())
+                {
+                    continue;
+                }
                 const S32 before = soup.ntris();
                 const auto cue = std::lower_bound(input.mRootCues.begin(), input.mRootCues.end(), std::make_pair(r->mRoot, U8(0)));
                 soup.add(tris, AREA_OBJECT, input.mTerrain.mWater, hull,
@@ -1642,26 +1743,11 @@ namespace sknav
                 // four crossings and fill none of the middle. Fill each body on
                 // its own. A record whose bodies are not told apart arrives as one
                 // range and is filled as one closed surface.
-                S32 pieces = 0;
-                for (const S32 count : r->mConvexTris)
+                S32 at = before;
+                for (const S32 count : bodies)
                 {
-                    pieces += count;
-                }
-                if (r->mSolid && r->mConvexTris.size() > 1 && pieces == soup.ntris() - before)
-                {
-                    S32 at = before;
-                    for (const S32 count : r->mConvexTris)
-                    {
-                        if (count > 0)
-                        {
-                            solids.emplace_back(at, at + count);
-                        }
-                        at += count;
-                    }
-                }
-                else if (r->mSolid)
-                {
-                    solids.emplace_back(before, soup.ntris());
+                    solids.emplace_back(at, at + count);
+                    at += count;
                 }
             }
             // An exclusion volume is a cut, not a shape: its triangles never enter
@@ -2341,10 +2427,13 @@ namespace sknav
             }
 
             mem.chf = rcAllocCompactHeightfield();
-            if (!rcBuildCompactHeightfield(&ctx, cfg.walkableHeight, cfg.walkableClimb, view.mHf, *mem.chf))
             {
-                result.mError = "compact";
-                return nullptr;
+                SK_NAV_ZONE("nav.build.compact");
+                if (!rcBuildCompactHeightfield(&ctx, cfg.walkableHeight, cfg.walkableClimb, view.mHf, *mem.chf))
+                {
+                    result.mError = "compact";
+                    return nullptr;
+                }
             }
             clock.lap(ClassBuildStats::COMPACT);
             // Which of the raster's spans AVATAR stands on, for the air: its own
@@ -2428,10 +2517,13 @@ namespace sknav
             }
             const S32 padded_width = padded_air.mWidth, padded_height = padded_air.mHeight;
             flattenNarrowSteps(*mem.chf, 2 * cfg.walkableRadius, cfg.walkableClimb);
-            if (cfg.walkableRadius > 0 && !rcErodeWalkableArea(&ctx, cfg.walkableRadius, *mem.chf))
             {
-                result.mError = "erode";
-                return nullptr;
+                SK_NAV_ZONE("nav.build.erode");
+                if (cfg.walkableRadius > 0 && !rcErodeWalkableArea(&ctx, cfg.walkableRadius, *mem.chf))
+                {
+                    result.mError = "erode";
+                    return nullptr;
+                }
             }
             clock.lap(ClassBuildStats::ERODE);
             if (input.mPartition == Partition::SLOPE)
@@ -2598,7 +2690,7 @@ namespace sknav
         TileAirPtr coarseAirOf(const TileBuildInput& input, const TileSoup& ts)
         {
             const S32 factor = static_cast<S32>(std::lround(COARSE_AIR_M / std::max(input.mCell, 1e-3f)));
-            if (factor < 1 || std::fabs(factor * input.mCell - COARSE_AIR_M) > 1e-4f)
+            if (factor < 1 || (factor & (factor - 1)) || std::fabs(factor * input.mCell - COARSE_AIR_M) > 1e-4f)
             {
                 return nullptr;
             }
@@ -2624,11 +2716,17 @@ namespace sknav
 
     TileRasterPtr rasteriseTile(const TileBuildInput& input, TileBuildResult& result, TileBuildStats* stats)
     {
+        SK_NAV_ZONE("nav.build.rasterise");
         const auto started = std::chrono::steady_clock::now();
         // An empty tile has no air to keep, which is an answer too.
         result.mAirBuilt = input.mAir;
         TileSoup ts;
-        return soupTile(input, result, stats, started, ts) ? rasteriseSoup(input, ts, result, stats, started) : nullptr;
+        // A tile left at logout stops between its stages: the pool drains before it joins.
+        if (!soupTile(input, result, stats, started, ts) || LLApp::isExiting())
+        {
+            return nullptr;
+        }
+        return rasteriseSoup(input, ts, result, stats, started);
     }
 
     const char* updatePathName(UpdatePath path)
@@ -2860,6 +2958,7 @@ namespace sknav
     void polygoniseTile(const TileBuildInput& input, const TileRaster& raster, TileBuildResult& result, TileBuildStats* stats,
                         const TileStampInput* stamp_input, const TileStamp* stamp)
     {
+        SK_NAV_ZONE("nav.build.polygonise");
         const auto started = std::chrono::steady_clock::now();
         rcContext ctx(false);
         const S32 avatar = static_cast<S32>(AgentClass::AVATAR);
@@ -2895,22 +2994,25 @@ namespace sknav
             std::memcpy(mem.chf->areas, stamp->mSpanCode.data(), stamp->mSpanCode.size());
         }
         bool regions = false;
-        switch (input.mPartition)
         {
-            case Partition::SLOPE:
-                regions = rcBuildDistanceField(&ctx, *mem.chf) &&
-                          rcBuildRegions(&ctx, *mem.chf, cfg.borderSize, cfg.minRegionArea, cfg.mergeRegionArea);
-                break;
-            case Partition::MONOTONE:
-                regions = rcBuildRegionsMonotone(&ctx, *mem.chf, cfg.borderSize, cfg.minRegionArea, cfg.mergeRegionArea);
-                break;
-            case Partition::LAYERS:
-                regions = rcBuildLayerRegions(&ctx, *mem.chf, cfg.borderSize, cfg.minRegionArea);
-                break;
-            default:
-                regions = rcBuildDistanceField(&ctx, *mem.chf) &&
-                          rcBuildRegions(&ctx, *mem.chf, cfg.borderSize, cfg.minRegionArea, cfg.mergeRegionArea);
-                break;
+            SK_NAV_ZONE("nav.build.regions");
+            switch (input.mPartition)
+            {
+                case Partition::SLOPE:
+                    regions = rcBuildDistanceField(&ctx, *mem.chf) &&
+                              rcBuildRegions(&ctx, *mem.chf, cfg.borderSize, cfg.minRegionArea, cfg.mergeRegionArea);
+                    break;
+                case Partition::MONOTONE:
+                    regions = rcBuildRegionsMonotone(&ctx, *mem.chf, cfg.borderSize, cfg.minRegionArea, cfg.mergeRegionArea);
+                    break;
+                case Partition::LAYERS:
+                    regions = rcBuildLayerRegions(&ctx, *mem.chf, cfg.borderSize, cfg.minRegionArea);
+                    break;
+                default:
+                    regions = rcBuildDistanceField(&ctx, *mem.chf) &&
+                              rcBuildRegions(&ctx, *mem.chf, cfg.borderSize, cfg.minRegionArea, cfg.mergeRegionArea);
+                    break;
+            }
         }
         if (!regions)
         {
@@ -2920,19 +3022,25 @@ namespace sknav
         }
         clock.lap(ClassBuildStats::REGIONS);
         mem.cset = rcAllocContourSet();
-        if (!mem.cset || !rcBuildContours(&ctx, *mem.chf, cfg.maxSimplificationError, cfg.maxEdgeLen, *mem.cset))
         {
-            result.mError = "contours";
-            finish();
-            return;
+            SK_NAV_ZONE("nav.build.contours");
+            if (!mem.cset || !rcBuildContours(&ctx, *mem.chf, cfg.maxSimplificationError, cfg.maxEdgeLen, *mem.cset))
+            {
+                result.mError = "contours";
+                finish();
+                return;
+            }
         }
         clock.lap(ClassBuildStats::CONTOURS);
         mem.pmesh = rcAllocPolyMesh();
-        if (!mem.pmesh || !rcBuildPolyMesh(&ctx, *mem.cset, cfg.maxVertsPerPoly, *mem.pmesh))
         {
-            result.mError = "polymesh";
-            finish();
-            return;
+            SK_NAV_ZONE("nav.build.polymesh");
+            if (!mem.pmesh || !rcBuildPolyMesh(&ctx, *mem.cset, cfg.maxVertsPerPoly, *mem.pmesh))
+            {
+                result.mError = "polymesh";
+                finish();
+                return;
+            }
         }
         clock.lap(ClassBuildStats::POLYMESH);
         // Refs number a tile's polys in 12 bits: more would alias silently.
@@ -3032,11 +3140,14 @@ namespace sknav
         }
         clock.lap(ClassBuildStats::FLIGHTMAP);
         mem.dmesh = rcAllocPolyMeshDetail();
-        if (!mem.dmesh || !rcBuildPolyMeshDetail(&ctx, *mem.pmesh, *mem.chf, cfg.detailSampleDist, cfg.detailSampleMaxError, *mem.dmesh))
         {
-            result.mError = "detail";
-            finish();
-            return;
+            SK_NAV_ZONE("nav.build.detail");
+            if (!mem.dmesh || !rcBuildPolyMeshDetail(&ctx, *mem.pmesh, *mem.chf, cfg.detailSampleDist, cfg.detailSampleMaxError, *mem.dmesh))
+            {
+                result.mError = "detail";
+                finish();
+                return;
+            }
         }
         // Recast hands the detail vertices back one cell higher than the
         // polygon vertices they refine (RecastMeshDetail.cpp, "Is this
@@ -3164,11 +3275,14 @@ namespace sknav
 
         unsigned char* data = nullptr;
         int size = 0;
-        if (!dtCreateNavMeshData(&params, &data, &size))
         {
-            result.mError = "navmesh data";
-            finish();
-            return;
+            SK_NAV_ZONE("nav.build.detour");
+            if (!dtCreateNavMeshData(&params, &data, &size))
+            {
+                result.mError = "navmesh data";
+                finish();
+                return;
+            }
         }
         if (input.mFaceOffsets && input.mAlignWallEdges)
         {
@@ -3191,6 +3305,7 @@ namespace sknav
 
     TileBuildResult buildTile(const TileBuildInput& input, TileBuildStats* stats)
     {
+        SK_NAV_ZONE("nav.build.tile");
         TileBuildResult result;
         if (const TileRasterPtr raster = rasteriseTile(input, result, stats))
         {
