@@ -50,6 +50,7 @@
 #include <chrono>
 #include <climits>
 #include <cmath>
+#include <cstring>
 #include <iterator>
 #include <map>
 #include <set>
@@ -141,6 +142,8 @@ void SKOverviewCensus::release()
     mExtentsBuilt = false;
     mOccupantCuts.clear();
     mBatches.clear();
+    mLargeLogged.clear();
+    mCoverLogged.clear();
     mStamp = 0;
     mSignature = 0;
     mTriangles = 0;
@@ -651,6 +654,7 @@ bool SKOverviewCensus::update()
         std::shared_ptr<Built> built = mJob.get();
         if (built && built->mGeneration == mGeneration)
         {
+            mVerdicts = built->mVerdicts;
             swapIn(*built);
         }
     }
@@ -926,6 +930,7 @@ bool SKOverviewCensus::update()
     std::vector<bool> void_only;   // a surround record: only its triangles over no connected region are drawn
     std::vector<CoverInput> kept_cover;
     kept.reserve(snap->mRecords.size());
+    std::unordered_map<LLUUID, Seen> large_logged; // this pass's large parts, so dropped parts leave the log's memory
     for (const sknav::RecordPtr& rec : snap->mRecords)
     {
         skoverview::CensusClass fixed;
@@ -968,11 +973,10 @@ bool SKOverviewCensus::update()
         if (large)
         {
             // Once per part and verdict: the large ones are those that cover the view when misjudged.
-            static std::map<LLUUID, Seen> logged;
-            auto it = logged.find(rec->mPart);
-            if (it == logged.end() || it->second != seen)
+            large_logged[rec->mPart] = seen;
+            const auto it = mLargeLogged.find(rec->mPart);
+            if (it == mLargeLogged.end() || it->second != seen)
             {
-                logged[rec->mPart] = seen;
                 std::string report; // only when logged: formatting every face of every large part each pass is not free
                 partSeen(rec->mPart, &report);
                 LL_INFOS("SKOverview") << "large census part " << rec->mPart << " " << extent << " m: "
@@ -1006,6 +1010,7 @@ bool SKOverviewCensus::update()
             kept_cover.pop_back();
         }
     }
+    mLargeLogged = std::move(large_logged);
     for (auto it = mCoverGeom.begin(); it != mCoverGeom.end();)
     {
         it = it->second.mPass != mSeenPass ? mCoverGeom.erase(it) : std::next(it);
@@ -1258,7 +1263,9 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildBatches(const Jo
                     span.mOffset = LLVector3(geom->mOrigin - origin);
                     spans.push_back(span);
                 }
+                const auto verdict_began = std::chrono::steady_clock::now();
                 const sknav::InvisibleResult result = sknav::invisibleVerdict(*source, spans, cover_params);
+                stats.mVerdictSeconds += std::chrono::duration<F64>(std::chrono::steady_clock::now() - verdict_began).count();
                 judged.mKey = part_key;
                 judged.mVerdict = (U8)result.mVerdict;
                 judged.mSteepM2 = result.mSteepArea;
@@ -1379,13 +1386,10 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildBatches(const Jo
             }
         }
     }
-    if (job.mVerdicts)
-    {
-        job.mVerdicts->mByPart = std::move(verdicts);
-    }
-    stats.mSeconds = std::chrono::duration<F64>(std::chrono::steady_clock::now() - cover_began).count();
+    stats.mBuildSeconds = std::chrono::duration<F64>(std::chrono::steady_clock::now() - cover_began).count();
 
     auto built = std::make_shared<Built>();
+    built->mVerdicts = std::make_shared<const Verdicts>(Verdicts{ std::move(verdicts) });
     built->mSignature = job.mSignature;
     built->mGeneration = job.mGeneration;
     built->mCover = stats;
@@ -1458,6 +1462,17 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildBatches(const Jo
             }
             Built::Region done = blank;
             done.mPositions = std::move(piece.mPositions);
+            U64 hash = 1469598103934665603ull;
+            for (const LLVector3& p : done.mPositions)
+            {
+                for (S32 k = 0; k < 3; ++k)
+                {
+                    U32 bits;
+                    std::memcpy(&bits, &p.mV[k], sizeof(bits));
+                    hash = (hash ^ bits) * 1099511628211ull;
+                }
+            }
+            done.mHash = hash;
             done.mInvisible = std::move(piece.mInvisible);
             std::copy(std::begin(piece.mStart), std::end(piece.mStart), std::begin(done.mStart));
             done.mGroups.clear();
@@ -1543,12 +1558,14 @@ void SKOverviewCensus::swapIn(Built& built)
         const U32 total = (U32)region.mPositions.size();
         Batch batch;
         batch.mOrigin = region.mOrigin;
+        batch.mHash = region.mHash;
         // A region whose triangles are the same keeps its buffer: a rebuild moves a few linksets, and uploading every
         // region's tens of megabytes again stalled the frame for tens of milliseconds.
         const auto same = std::find_if(mBatches.begin(), mBatches.end(),
                                        [&](const Batch& old)
                                        {
-                                           return old.mBuffer && old.mOrigin == region.mOrigin && old.mPositions == region.mPositions &&
+                                           return old.mBuffer && old.mOrigin == region.mOrigin && old.mHash == region.mHash &&
+                                                  old.mPositions.size() == region.mPositions.size() &&
                                                   old.mInvisible == region.mInvisible;
                                        });
         if (same != mBatches.end())
@@ -1629,17 +1646,17 @@ void SKOverviewCensus::swapIn(Built& built)
                                             "%u not known yet, %u large dropped; faces %u covered %u bare",
                                             c.mParts, c.mStandIns, c.mBarriers, c.mHatchedSteepM2, c.mUnknown, c.mDropped,
                                             c.mFacesCovered, c.mFacesBare);
-        static std::string logged;
-        if (counts != logged)
+        if (counts != mCoverLogged)
         {
-            logged = counts;
+            mCoverLogged = counts;
             std::string where;
             for (const LLViewerRegion* region : LLWorld::getInstance()->getRegionList())
             {
                 where += (where.empty() ? "" : ", ") + region->getName();
             }
             LL_INFOS("SKOverview") << "census cover in " << where << ": " << counts << ", " << c.mJudged << " judged in "
-                                   << llformat("%.2f ms", c.mSeconds * 1000.0) << LL_ENDL;
+                                   << llformat("%.2f ms of verdicts, build %.2f ms", c.mVerdictSeconds * 1000.0,
+                                               c.mBuildSeconds * 1000.0) << LL_ENDL;
         }
     }
 }

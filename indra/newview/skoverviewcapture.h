@@ -282,8 +282,8 @@ private:
     /// An enclosed room's floor polys' bounds, global, cached a few seconds.
     /// The enclosed room around a floor point, flooded through the indoor air at that floor: its air cells on the
     /// ROOM_CELL_M lattice; null when the point is not indoors. Rooms are kept a few seconds and reused while the
-    /// point stays in one.
-    std::shared_ptr<const std::set<std::pair<S32, S32>>> roomAt(const LLVector3d& floor);
+    /// point stays in one. hash is the room's cells', 0 when there is no room.
+    std::shared_ptr<const std::set<std::pair<S32, S32>>> roomAt(const LLVector3d& floor, U64& hash);
     struct Room
     {
         F64 mAt = 0.0;
@@ -291,6 +291,7 @@ private:
         U64 mRevision = 0;      ///< the world view's, so a rebuilt or teleported-from room is flooded afresh
         U64 mRegion = 0;
         std::shared_ptr<std::set<std::pair<S32, S32>>> mCells;
+        U64 mHash = 0;          ///< the cells', in order, so the cut key tells apart rooms of the same size
     };
     std::vector<Room> mRooms;
     /// Whether someone stands in outdoor air, which cuts nothing for them, held through a doorway's flicker.
@@ -325,7 +326,7 @@ private:
         U64 mCensus = 0;
         U64 mCutStamp = 0;
         U32 mDebugView = 0;
-        const void* mRegion = nullptr;
+        U64 mRegionHandle = 0;
     } mTacticalKey;
     /// CPU time of the tactical view, summed over a second and logged.
     struct Cost

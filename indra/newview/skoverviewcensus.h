@@ -133,6 +133,7 @@ public:
         std::vector<U8> mInvisible;
         /// The cut heights the buffer holds, per vertex; empty while every one is NO_CUT.
         std::vector<F32> mCutValues;
+        U64 mHash = 0;          ///< mPositions' bits, hashed on the worker, so a rebuild keeps an unchanged buffer cheaply
     };
 
     /// Which groups a shot draws: all of them, or the ground's and those at the agent's level.
@@ -256,7 +257,7 @@ private:
     std::unordered_map<U64, std::vector<U32>> mCoverGrid; ///< mCoverCandidates by COVER_CELL_M cell in plan
     std::vector<U32> mCoverLarge;                   ///< those spanning too many cells to file
     static constexpr F64 COVER_CELL_M = 16.0;
-    /// The worker's verdicts kept across builds by part; only the worker touches them, one build at a time.
+    /// The worker's verdicts kept across builds by part; each build reads the last landed map and makes the next.
     struct Verdict
     {
         U64 mKey = 0;           ///< the part's geometry and its CoverInput::mKey
@@ -269,7 +270,7 @@ private:
     {
         std::unordered_map<LLUUID, Verdict> mByPart;
     };
-    std::shared_ptr<Verdicts> mVerdicts = std::make_shared<Verdicts>();
+    std::shared_ptr<const Verdicts> mVerdicts = std::make_shared<const Verdicts>();
     /// What a build needs, as values: the worker never touches viewer objects, the world, settings or GL.
     struct Job
     {
@@ -281,7 +282,7 @@ private:
         std::vector<bool> mVoidOnly;
         std::vector<RenderedPart> mSculpts;
         std::vector<CoverInput> mCover; ///< per kept record then sculpt
-        std::shared_ptr<Verdicts> mVerdicts;
+        std::shared_ptr<const Verdicts> mVerdicts;
         std::vector<U32> mGroupOf;      ///< per kept record then sculpt, its linkset's group
         std::vector<LLUUID> mRoots;     ///< per group
         std::map<U32, U32> mGroupCluster;
@@ -299,6 +300,7 @@ private:
             std::vector<Group> mGroups;
             std::vector<std::pair<LLVector3d, LLVector3d>> mFootprints;  ///< per group, the box the land under it is read over
             std::vector<U8> mInvisible;         ///< per triangle, as Batch's
+            U64 mHash = 0;                      ///< mPositions' bits, as Batch's
         };
         /// What the overlap test made of the invisible parts, for the log.
         struct CoverStats
@@ -312,9 +314,11 @@ private:
             U32 mFacesCovered = 0;
             U32 mFacesBare = 0;
             F32 mHatchedSteepM2 = 0.f;
-            F64 mSeconds = 0.0;
+            F64 mVerdictSeconds = 0.0; ///< in the verdicts of the judged parts
+            F64 mBuildSeconds = 0.0;   ///< in the whole per-part loop
         };
         CoverStats mCover;
+        std::shared_ptr<const Verdicts> mVerdicts; ///< the verdicts this build asked for, adopted when it lands
         U64 mSignature = 0;
         U32 mGeneration = 0;
         std::vector<Region> mRegions;
@@ -377,6 +381,8 @@ private:
     U64 mStamp = 0;
     U64 mSignature = 0;
     bool mUnknownLook = false;  ///< some part's faces or images were not loaded at the last build
+    std::unordered_map<LLUUID, skoverview::Seen> mLargeLogged; ///< the large parts of the last pass and how each was logged
+    std::string mCoverLogged;   ///< the cover counts last logged
     F64 mRecheckAt = 0.0;
     U64 mRecordsKey = 0;        ///< the census records' identities at the last look
     bool mRecordsChanged = true;

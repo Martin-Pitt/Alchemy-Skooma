@@ -71,6 +71,8 @@ struct SKCensusSnapshot
         U32 mCached = 0;            ///< parts reused from the previous scan
         U32 mFromObjectCache = 0;   ///< boxes from the region's object cache, never drawn this session
         U32 mTiny = 0;              ///< parts under SKNavMinShape in every axis: never a record
+        U32 mPhysicsMeshes = 0;     ///< mesh records, the only ones whose physics shape type the census asks for
+        U32 mPhysicsUnknown = 0;    ///< mesh records whose object's physics shape type had not arrived when visited
         U32 mTriangles = 0;
         U32 mRolesKnown = 0;
         U32 mFeatures = 0;
@@ -258,6 +260,11 @@ private:
     std::vector<U64> mClusterRegions;
     bool mDiscardClusterJob = false;
     std::unordered_map<LLUUID, PartCache> mParts;
+    /// When each part was first visited with its physics shape type unknown; the session's wait for it, for the log.
+    std::unordered_map<LLUUID, F64> mUnknownSince;
+    U32 mKnownAfterCount = 0;
+    F64 mKnownAfterSumS = 0.0;
+    F64 mKnownAfterMaxS = 0.0;
     std::unordered_map<LLUUID, Rest> mRest;
     std::unordered_map<LLUUID, sknav::NavRole> mRoles;
     std::unordered_map<LLUUID, LinksetFacts> mLinksets;

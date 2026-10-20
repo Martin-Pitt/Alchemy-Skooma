@@ -1766,9 +1766,10 @@ bool SKOverviewCapture::captureMap(RegionMap& map, LLViewerRegion* region, bool 
     return true;
 }
 
-std::shared_ptr<const std::set<std::pair<S32, S32>>> SKOverviewCapture::roomAt(const LLVector3d& floor)
+std::shared_ptr<const std::set<std::pair<S32, S32>>> SKOverviewCapture::roomAt(const LLVector3d& floor, U64& hash)
 {
     LL_PROFILE_ZONE_SCOPED;
+    hash = 0;
     // The air's rooms need no navmesh: flood the indoor air gaps whose floor is the point's gap's, out from the point.
     const F64 SAME_FLOOR_M = 0.6;
     const S32 MAX_CELLS = 16384;
@@ -1808,6 +1809,7 @@ std::shared_ptr<const std::set<std::pair<S32, S32>>> SKOverviewCapture::roomAt(c
             room.mCells->count(start))
         {
             room.mAt = now; // a room in use stays cached, not flooded afresh every few seconds
+            hash = room.mHash;
             return room.mCells;
         }
     }
@@ -1868,7 +1870,14 @@ std::shared_ptr<const std::set<std::pair<S32, S32>>> SKOverviewCapture::roomAt(c
             }
         }
     }
+    room.mHash = 1469598103934665603ull;
+    for (const auto& cell : *room.mCells)
+    {
+        room.mHash = (room.mHash ^ (U32)cell.first) * 1099511628211ull;
+        room.mHash = (room.mHash ^ (U32)cell.second) * 1099511628211ull;
+    }
     mRooms.push_back(room);
+    hash = room.mHash;
     return room.mCells;
 }
 
@@ -1965,9 +1974,10 @@ void SKOverviewCapture::updateCut()
         }
         o.mPriority = -(F32)dist_vec(feet, centre);
         o.mOutdoors = outdoorsAt(id, feet, now);
+        U64 room_hash = 0;
         if (!o.mOutdoors && where.mFound && (where.mIndoor || where.mBucket == skmap::plan::Bucket::SHELTERED))
         {
-            o.mRoomCells = roomAt(floor);
+            o.mRoomCells = roomAt(floor, room_hash);
             o.mRoomCellM = (F32)ROOM_CELL_M;
         }
         mixPos(floor);
@@ -1975,7 +1985,7 @@ void SKOverviewCapture::updateCut()
         mix((U64)(S64)std::llround(o.mCut * 4.f));
         mix(id.getCRC32());
         mix(o.mOutdoors);
-        mix(o.mRoomCells ? o.mRoomCells->size() : 0);
+        mix(room_hash);
         occupants.push_back(std::move(o));
     };
     const LLVector3d agent_floor = gAgent.getPosGlobalFromAgent(
@@ -2257,7 +2267,8 @@ void SKOverviewCapture::tactical()
                           at_axis * mTacticalKey.mDir > 0.999999f && fov == mTacticalKey.mFov && vw == mTacticalKey.mWidth &&
                           vh == mTacticalKey.mHeight && std::fabs(cut_z - mTacticalKey.mCut) < 1e-3f &&
                           mCensus.signature() == mTacticalKey.mCensus &&
-                          mCensus.cutStamp() == mTacticalKey.mCutStamp && gAgent.getRegion() == mTacticalKey.mRegion &&
+                          mCensus.cutStamp() == mTacticalKey.mCutStamp &&
+                          (gAgent.getRegion() ? gAgent.getRegion()->getHandle() : 0) == mTacticalKey.mRegionHandle &&
                           (U32)tactical_debug_view == mTacticalKey.mDebugView;
         // The circles and the movers repair a copy of the static capture each frame; it is redone only on change.
         mMovers.setLoose(mCensus.restlessParts());
@@ -2281,7 +2292,7 @@ void SKOverviewCapture::tactical()
             mTacticalKey.mCensus = mCensus.signature();
             mTacticalKey.mCutStamp = mCensus.cutStamp();
             mTacticalKey.mDebugView = tactical_debug_view;
-            mTacticalKey.mRegion = gAgent.getRegion();
+            mTacticalKey.mRegionHandle = gAgent.getRegion() ? gAgent.getRegion()->getHandle() : 0;
             ++mCost.mRenders;
         }
         else

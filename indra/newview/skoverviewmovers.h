@@ -69,7 +69,7 @@ public:
 private:
     struct Mesh
     {
-        const LLVolume* mVolume = nullptr;  ///< what the buffer was built from; a new LOD builds again
+        LLPointer<const LLVolume> mVolume;  ///< what the buffer was built from, null until a build works; a new LOD builds again
         LLPointer<LLVertexBuffer> mBuffer;
         U32 mCount = 0;
     };

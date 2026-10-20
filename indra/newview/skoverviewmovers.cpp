@@ -226,9 +226,9 @@ void SKOverviewMovers::addPart(LLViewerObject* object, U8 code, std::set<LLUUID>
     if (mesh.mVolume != volume->getVolume())
     {
         mesh = Mesh();
-        mesh.mVolume = volume->getVolume();
+        // A failed build leaves mVolume null, so the next update tries again.
         SKShapeGeometry geom;
-        if (skRenderShapeGeometry(volume, geom) && !geom.mTriangles.empty())
+        if (skRenderShapeGeometry(volume, geom))
         {
             LLPointer<LLVertexBuffer> buffer = new LLVertexBuffer(LLVertexBuffer::MAP_VERTEX);
             LLStrider<LLVector3> verts;
@@ -241,6 +241,7 @@ void SKOverviewMovers::addPart(LLViewerObject* object, U8 code, std::set<LLUUID>
                 buffer->unmapBuffer();
                 mesh.mBuffer = buffer;
                 mesh.mCount = (U32)geom.mTriangles.size();
+                mesh.mVolume = volume->getVolume();
             }
         }
     }
