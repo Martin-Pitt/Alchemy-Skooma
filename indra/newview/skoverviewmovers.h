@@ -27,6 +27,7 @@
 
 #include "llmatrix4a.h"
 #include "llpointer.h"
+#include "llrect.h"
 #include "lluuid.h"
 #include "skmappeople.h"
 
@@ -56,6 +57,8 @@ public:
     /// Draws every mover part with the bound geometry program, setting each part's class code (diffuse colour) and
     /// loading view * model; the caller has set the target and the state.
     void draw(const LLMatrix4a& view) const;
+    /// The window rect, w by h pixels, the parts' boxes project to, clamped; false when none is in front of the eye.
+    bool screenBounds(const LLMatrix4a& view, const LLMatrix4a& proj, S32 w, S32 h, LLRect& rect) const;
     /// The vehicles, live, with their looks; hidden ones are left out.
     const std::vector<SKMapPeople::Vehicle>& vehicles() const { return mVehicles; }
     void release();
@@ -72,6 +75,7 @@ private:
         LLUUID mId;
         LLMatrix4a mModel;      ///< volume space to agent space
         U8 mCode = 0;           ///< the class code it draws with (skoverviewcensus.h)
+        LLVector4a mExtents[2]; ///< its box at its live pose, agent space
     };
     /// Adds a linkset's parts at their live pose.
     void addParts(LLViewerObject* root, U8 code, std::set<LLUUID>& live);

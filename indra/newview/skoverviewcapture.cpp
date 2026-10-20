@@ -180,6 +180,52 @@ namespace
     const LLStaticHashedString SK_TILT_PX("sk_tilt_px");
     const LLStaticHashedString SK_GROUND("sk_ground");
 
+    const S32 RESOLVE_REACH_PX = 29;    // how far a resolved pixel reads: the AO taps' 28 px and the neighbours' one
+
+    /// The smallest rect holding both; an empty one adds nothing.
+    LLRect rectUnion(const LLRect& a, const LLRect& b)
+    {
+        if (a.isEmpty())
+        {
+            return b;
+        }
+        if (b.isEmpty())
+        {
+            return a;
+        }
+        LLRect out = a;
+        out.unionWith(b);
+        return out;
+    }
+
+    /// Limits drawing to a window rect of the bound target while it lives; with no rect it changes nothing.
+    class ScissorTo
+    {
+    public:
+        explicit ScissorTo(const LLRect* rect)
+        : mState(rect ? GL_SCISSOR_TEST : 0, LLGLState::ENABLED_STATE)
+        {
+            if (rect)
+            {
+                glGetIntegerv(GL_SCISSOR_BOX, mSaved);
+                glScissor(rect->mLeft, rect->mBottom, rect->getWidth(), rect->getHeight());
+                mSet = true;
+            }
+        }
+        ~ScissorTo()
+        {
+            if (mSet)
+            {
+                glScissor(mSaved[0], mSaved[1], mSaved[2], mSaved[3]);
+            }
+        }
+
+    private:
+        LLGLState mState;
+        GLint mSaved[4] = {};
+        bool mSet = false;
+    };
+
     const F64 PAN_MARGIN_M = 512.0;     // how far past the battlefield the view's focus may be dragged
 
     /// The step a pan may take: zoom-to-cursor leaves the focus at whatever depth it picked, so the limit holds the
@@ -401,6 +447,7 @@ void SKOverviewCapture::releaseGL()
     mCensus.release();
     mMaps.clear();
     mTacticalKey.mValid = false;
+    mWorkValid = false;
     mGLFailed = false;
 }
 
@@ -989,7 +1036,7 @@ void SKOverviewCapture::frame()
     }
 }
 
-void SKOverviewCapture::resolve(LLRenderTarget& capture, LLRenderTarget& resolved, const Shot& shot)
+void SKOverviewCapture::resolve(LLRenderTarget& capture, LLRenderTarget& resolved, const Shot& shot, const LLRect* rect)
 {
     const S32 w = capture.getWidth();
     const S32 h = capture.getHeight();
@@ -1000,7 +1047,9 @@ void SKOverviewCapture::resolve(LLRenderTarget& capture, LLRenderTarget& resolve
         // The tactical view's resolves are timed; the maps' fall inside their capture's span.
         ALQuerySpan span = shot.mTopDown ? ALQuerySpan() : gGL.queries().beginSpan();
         resolved.bindTarget();
+        // The viewport stays whole with a rect: the resolve addresses its inputs by window pixel.
         glViewport(0, 0, w, h);
+        ScissorTo scissor(rect);
         LLGLDepthTest depth(GL_FALSE, GL_FALSE);
         LLGLDisable blend(GL_BLEND);
         LLGLDisable cull_face(GL_CULL_FACE);
@@ -1082,23 +1131,8 @@ namespace
 void SKOverviewCapture::drawMovers(const Shot& shot)
 {
     LL_PROFILE_ZONE_SCOPED;
-    const S32 w = sTacticalCapture.getWidth();
-    const S32 h = sTacticalCapture.getHeight();
-    if (!sTacticalWork.isComplete() || (S32)sTacticalWork.getWidth() != w || (S32)sTacticalWork.getHeight() != h)
-    {
-        sTacticalWork.release();
-        if (!sTacticalWork.allocate(w, h, GL_RGBA8, true, true, ALTextureSlot::TT_TEXTURE, LLRenderTarget::MIPS_NONE,
-                                    LLRenderTarget::DEPTH_FMT_32F))
-        {
-            LL_WARNS_ONCE("SKOverview") << "tactical mover target did not allocate" << LL_ENDL;
-            return;
-        }
-    }
-    {
-        LLGLDisable scissor(GL_SCISSOR_TEST); // a blit is scissored too
-        sTacticalWork.copyContents(sTacticalCapture, 0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT, GL_NEAREST);
-    }
-
+    const S32 w = sTacticalWork.getWidth();
+    const S32 h = sTacticalWork.getHeight();
     ALQuerySpan span = gGL.queries().beginSpan();
     sTacticalWork.bindTarget();
     glViewport(0, 0, w, h);
@@ -1136,10 +1170,103 @@ void SKOverviewCapture::drawMovers(const Shot& shot)
     gGLLastMatrix = NULL;
     sTacticalWork.flush();
     endSpan(SpanKind::Movers, span);
-    resolve(sTacticalWork, sTacticalResolved, shot);
 }
 
-U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved, const Shot& shot, bool resolve_now)
+bool SKOverviewCapture::ensureWork()
+{
+    const S32 w = sTacticalCapture.getWidth();
+    const S32 h = sTacticalCapture.getHeight();
+    if (sTacticalWork.isComplete() && (S32)sTacticalWork.getWidth() == w && (S32)sTacticalWork.getHeight() == h)
+    {
+        return true;
+    }
+    sTacticalWork.release();
+    mWorkValid = false;
+    if (!sTacticalWork.allocate(w, h, GL_RGBA8, true, true, ALTextureSlot::TT_TEXTURE, LLRenderTarget::MIPS_NONE,
+                                LLRenderTarget::DEPTH_FMT_32F))
+    {
+        LL_WARNS_ONCE("SKOverview") << "tactical work target did not allocate" << LL_ENDL;
+        return false;
+    }
+    return true;
+}
+
+void SKOverviewCapture::updateWork(const Shot& shot, bool static_new, U64 patch_key, const LLRect& patch_rect, bool movers)
+{
+    LL_PROFILE_ZONE_SCOPED;
+    if (!ensureWork())
+    {
+        mSceneDepth = &sTacticalCapture;
+        resolve(sTacticalCapture, sTacticalResolved, shot);
+        return;
+    }
+    const S32 w = sTacticalWork.getWidth();
+    const S32 h = sTacticalWork.getHeight();
+    const bool whole = static_new || !mWorkValid;
+    LLGLDisable scissor(GL_SCISSOR_TEST); // a blit is scissored too
+    if (whole)
+    {
+        sTacticalWork.copyContents(sTacticalCapture, 0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+        mWorkValid = true;
+        mPatchRect = LLRect();
+        mMoverRect = LLRect();
+    }
+    mSceneDepth = &sTacticalWork;
+
+    const bool patch_moved = patch_key != mPatchKey;
+    LLRect mover_rect;
+    if (movers && !mMovers.screenBounds(shot.mView, shot.mProj, w, h, mover_rect))
+    {
+        mover_rect = LLRect();
+    }
+
+    // What differs from the static capture and is stale: last frame's movers, the movers' place now, and a patch that
+    // moved. A patch clears and redraws its own rect, so it is redrawn only when it moved or the restore reached it.
+    LLRect restore = rectUnion(mMoverRect, mover_rect);
+    if (patch_moved)
+    {
+        restore = rectUnion(restore, mPatchRect);
+    }
+    const bool redraw_patch = patch_rect.notEmpty() && (whole || patch_moved || (restore.notEmpty() && restore.overlaps(patch_rect)));
+    if (!whole && restore.notEmpty())
+    {
+        sTacticalWork.copyContents(sTacticalCapture, restore.mLeft, restore.mBottom, restore.mRight, restore.mTop, restore.mLeft,
+                                   restore.mBottom, restore.mRight, restore.mTop, GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT,
+                                   GL_NEAREST);
+    }
+    if (redraw_patch)
+    {
+        LL_PROFILE_ZONE_NAMED("sk tactical patch");
+        ALQuerySpan span = gGL.queries().beginSpan();
+        render(sTacticalWork, sTacticalResolved, shot, false, &patch_rect);
+        endSpan(SpanKind::Patch, span);
+    }
+    if (movers && mover_rect.notEmpty())
+    {
+        drawMovers(shot);
+    }
+    if (whole)
+    {
+        resolve(sTacticalWork, sTacticalResolved, shot);
+    }
+    else
+    {
+        LLRect dirty = rectUnion(restore, redraw_patch ? patch_rect : LLRect());
+        if (dirty.notEmpty())
+        {
+            LL_PROFILE_ZONE_NAMED("sk tactical dirty resolve");
+            dirty.stretch(RESOLVE_REACH_PX);
+            dirty.intersectWith(LLRect(0, h, w, 0));
+            resolve(sTacticalWork, sTacticalResolved, shot, &dirty);
+        }
+    }
+    mPatchRect = patch_rect;
+    mMoverRect = movers ? mover_rect : LLRect();
+    mPatchKey = patch_key;
+}
+
+U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved, const Shot& shot, bool resolve_now,
+                              const LLRect* patch)
 {
     const S32 w = capture.getWidth();
     const S32 h = capture.getHeight();
@@ -1159,7 +1286,7 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
     std::function<void()> census;
     if (!batches.empty())
     {
-        census = [&batches, &shot]()
+        census = [&batches, &shot, patch]()
         {
             // The census writes its class code and the triangle's own normal (G, A), so flush parts never crease.
             LLVector4a down, normal_eye, origin_eye, zero;
@@ -1242,7 +1369,7 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
             {
                 passes.push_back(CAP_PARITY);
                 passes.push_back(CAP_FILL);
-                LLGLDisable scissor(GL_SCISSOR_TEST);
+                LLGLState scissor(GL_SCISSOR_TEST, patch != nullptr); // a patch clears its own stencil only
                 glStencilMask(0xFF);
                 glClearStencil(0);
                 glClear(GL_STENCIL_BUFFER_BIT);
@@ -1338,6 +1465,7 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
         LLTimer timer;
         capture.bindTarget();
         glViewport(0, 0, w, h);
+        ScissorTo scissor_to_patch(patch);
         GLfloat clear_colour[4];
         glGetFloatv(GL_COLOR_CLEAR_VALUE, clear_colour);
         GLfloat clear_depth = 1.f;
@@ -1349,7 +1477,7 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
             // terrain writes only R, so its texels kept the last capture's normals (G, A) and invisible flag (B)
             // and smeared as the camera turned. Every channel and the depth are cleared, every capture.
             LLGLDepthTest depth_write(GL_TRUE, GL_TRUE, GL_ALWAYS);
-            LLGLDisable scissor(GL_SCISSOR_TEST); // and a scissor left on would clear only part of it
+            LLGLState scissor(GL_SCISSOR_TEST, patch != nullptr); // a scissor left on would clear only part; a patch clears its own
             gGL.setColorMask(true, true);
             capture.clear();
         }
@@ -1842,7 +1970,7 @@ void SKOverviewCapture::updateCut()
     mCensus.applyCut(gAgent.getRegion(), occupants, key);
 }
 
-U64 SKOverviewCapture::tacticalDissolve(Shot& shot, S32 w, S32 h)
+U64 SKOverviewCapture::tacticalDissolve(Shot& shot, S32 w, S32 h, LLRect& rect)
 {
     LL_PROFILE_ZONE_SCOPED;
     static LLCachedControl<bool> enabled(gSavedSettings, "SKTacticalDissolve", true);
@@ -1948,7 +2076,8 @@ U64 SKOverviewCapture::tacticalDissolve(Shot& shot, S32 w, S32 h)
     {
         circles.resize(SK_MAX_DISSOLVE);
     }
-    // The key moves with a pixel, a decimetre of depth or a pixel of radius: the capture is redone only then.
+    // The key moves with a pixel, a decimetre of depth or a pixel of radius: the patch is redrawn only then.
+    rect = LLRect();
     U64 key = 1469598103934665603ull;
     auto mix = [&key](S64 v) { key = (key ^ (U64)v) * 1099511628211ull; };
     for (const Circle& c : circles)
@@ -1960,6 +2089,11 @@ U64 SKOverviewCapture::tacticalDissolve(Shot& shot, S32 w, S32 h)
         mix(std::llround(c.mAt.mV[2] * 10.f));
         mix(std::llround(c.mAt.mV[3]));
         mix(std::llround(c.mFloor * 10.f));
+        const F32 r = c.mAt.mV[3] + 1.f;
+        LLRect square((S32)std::floor(c.mAt.mV[0] - r), (S32)std::ceil(c.mAt.mV[1] + r), (S32)std::ceil(c.mAt.mV[0] + r),
+                      (S32)std::floor(c.mAt.mV[1] - r));
+        square.intersectWith(LLRect(0, h, w, 0));
+        rect = rectUnion(rect, square);
     }
     return key;
 }
@@ -2062,26 +2196,26 @@ void SKOverviewCapture::tactical()
         static LLCachedControl<bool> force(gSavedSettings, "SKOverviewForceRecapture", false);
         static LLCachedControl<U32> tactical_debug_view(gSavedSettings, "SKOverviewDebugView", 0);
         updateCut();
-        const U64 dissolve_key = tacticalDissolve(shot, vw, vh);
+        LLRect patch_rect;
+        const U64 dissolve_key = tacticalDissolve(shot, vw, vh, patch_rect);
         const bool same = !force && mTacticalKey.mValid && (eye - mTacticalKey.mEye).magVecSquared() < 1e-4f &&
                           at_axis * mTacticalKey.mDir > 0.999999f && fov == mTacticalKey.mFov && vw == mTacticalKey.mWidth &&
                           vh == mTacticalKey.mHeight && std::fabs(cut_z - mTacticalKey.mCut) < 1e-3f &&
                           mCensus.signature() == mTacticalKey.mCensus &&
                           mCensus.cutStamp() == mTacticalKey.mCutStamp && gAgent.getRegion() == mTacticalKey.mRegion &&
-                          (U32)tactical_debug_view == mTacticalKey.mDebugView && dissolve_key == mTacticalKey.mDissolve;
-        // Movers draw over a copy of the static capture each frame; the static capture itself is redone only on change.
+                          (U32)tactical_debug_view == mTacticalKey.mDebugView;
+        // The circles and the movers repair a copy of the static capture each frame; it is redone only on change.
         mMovers.setLoose(mCensus.restlessParts());
         const bool movers = mMovers.update();
         if (!same)
         {
             LL_PROFILE_ZONE_NAMED("sk tactical render");
+            Shot scene = shot;
+            scene.mDissolve.clear();
+            scene.mDissolveFloor.clear();
             ALQuerySpan span = gGL.queries().beginSpan();
-            render(sTacticalCapture, sTacticalResolved, shot, false);
+            render(sTacticalCapture, sTacticalResolved, scene, false);
             endSpan(SpanKind::Tactical, span);
-            if (!movers)
-            {
-                resolve(sTacticalCapture, sTacticalResolved, shot);
-            }
             mTacticalKey.mValid = true;
             mTacticalKey.mEye = eye;
             mTacticalKey.mDir = at_axis;
@@ -2092,7 +2226,6 @@ void SKOverviewCapture::tactical()
             mTacticalKey.mCensus = mCensus.signature();
             mTacticalKey.mCutStamp = mCensus.cutStamp();
             mTacticalKey.mDebugView = tactical_debug_view;
-            mTacticalKey.mDissolve = dissolve_key;
             mTacticalKey.mRegion = gAgent.getRegion();
             ++mCost.mRenders;
         }
@@ -2100,16 +2233,7 @@ void SKOverviewCapture::tactical()
         {
             ++mCost.mReuses;
         }
-        mSceneDepth = movers ? &sTacticalWork : &sTacticalCapture;
-        if (movers)
-        {
-            drawMovers(shot);
-        }
-        else if (mMoversDrawn && same)
-        {
-            resolve(sTacticalCapture, sTacticalResolved, shot); // the last mover left: the static map again
-        }
-        mMoversDrawn = movers;
+        updateWork(shot, !same, patch_rect.notEmpty() ? dissolve_key : 0, patch_rect, movers);
     }
 
     mTacticalView = shot.mView;

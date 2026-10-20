@@ -30,6 +30,7 @@
 #include "llcamera.h"
 #include "llhandle.h"
 #include "llmatrix4a.h"
+#include "llrect.h"
 #include "llsingleton.h"
 #include "lltimer.h"
 #include "lluuid.h"
@@ -172,11 +173,18 @@ private:
     /// Whether every program loadShaders() builds is there; it builds nothing.
     bool ensureShaders();
     void releaseGL();
-    U32 render(LLRenderTarget& capture, LLRenderTarget& resolved, const Shot& shot, bool resolve_now = true);
-    /// The capture's depth and class codes to the styled map.
-    void resolve(LLRenderTarget& capture, LLRenderTarget& resolved, const Shot& shot);
-    /// The movers over a copy of the static capture, then resolved: the static capture is not redone for them.
+    /// The terrain and the census into capture; with a patch, only inside that window rect, over what is there.
+    U32 render(LLRenderTarget& capture, LLRenderTarget& resolved, const Shot& shot, bool resolve_now = true,
+               const LLRect* patch = nullptr);
+    /// The capture's depth and class codes to the styled map, whole or inside a rect.
+    void resolve(LLRenderTarget& capture, LLRenderTarget& resolved, const Shot& shot, const LLRect* rect = nullptr);
+    /// The work target at the tactical capture's size: false when it would not allocate.
+    bool ensureWork();
+    /// The movers into the work target, over the static scene restored under them.
     void drawMovers(const Shot& shot);
+    /// The tactical work target brought up to this frame: the static capture with the see-through circles' patch and
+    /// the movers, repaired and resolved by rect; static_new says the static capture was just rendered.
+    void updateWork(const Shot& shot, bool static_new, U64 patch_key, const LLRect& patch_rect, bool movers);
     /// The avatar markers as their lit physics shapes, hidden by the census (a faint silhouette where they are), giving
     /// way zoomed out to the mini-map's flat markers; fills the marks and labels' anchors with each marker's top.
     template <typename Project>
@@ -206,7 +214,10 @@ private:
     SKOverviewCensus mCensus;
     SKOverviewMovers mMovers;
     LLRenderTarget* mSceneDepth = nullptr;   ///< the capture whose depth this frame's markers test against
-    bool mMoversDrawn = false;
+    bool mWorkValid = false;    ///< the work target holds the static capture, with the rects below drawn over it
+    LLRect mPatchRect;          ///< the window rect the circles' patch covers on the work target, empty for none
+    LLRect mMoverRect;          ///< and the movers drawn last frame
+    U64 mPatchKey = 0;          ///< the circles the patch was drawn for
     F32 mTacticalDistance = 0.f;
     std::vector<std::unique_ptr<RegionMap>> mMaps;
     size_t mCursor = 0;     // where the next round-robin turn starts in mMaps
@@ -234,8 +245,9 @@ private:
     };
     std::map<LLUUID, Dissolve> mDissolves;
     F64 mDissolveTime = -1.0;
-    /// Fills the shot's see-through circles round the agent and the people the overview marks; the key of what it drew.
-    U64 tacticalDissolve(Shot& shot, S32 w, S32 h);
+    /// Fills the shot's see-through circles round the agent and the people the overview marks, and the window rect they
+    /// cover; the key of what it drew, which moves the patch, never the static capture.
+    U64 tacticalDissolve(Shot& shot, S32 w, S32 h, LLRect& rect);
     bool mTacticalOpen = false;     ///< claims the modal view
     /// Claims or releases the modal view to match SKTacticalOverview.
     static void syncTactical();
@@ -313,7 +325,6 @@ private:
         U64 mCensus = 0;
         U64 mCutStamp = 0;
         U32 mDebugView = 0;
-        U64 mDissolve = 0;
         const void* mRegion = nullptr;
     } mTacticalKey;
     /// CPU time of the tactical view, summed over a second and logged.
