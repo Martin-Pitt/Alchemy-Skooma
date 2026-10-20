@@ -2769,6 +2769,7 @@ if(AL_BUILD_TESTS)
       tests/skworldmapmath_test.cpp # <SK:Nexii> 3D world map
       tests/skoutlinepolicy_test.cpp # <SK:Nexii> outline capture
       tests/skmapmarkers_test.cpp # <SK:Nexii> mini-map markers
+      tests/skoverviewshaders_test.cpp # <SK:Nexii> combat/minimap: the overview's shader permutations
     UNIT
       alagentlocationformat.cpp
       alchattimestamp.cpp
@@ -2897,6 +2898,7 @@ if(AL_BUILD_TESTS)
       tests/alhuddepth_gl_test.cpp
       tests/alselectionoutline_gl_test.cpp
       tests/alwatersurface_gl_test.cpp
+      tests/skoverviewshaders_gl_test.cpp # <SK:Nexii> combat/minimap: the overview's programs link
     UNIT aldepthpyramid.cpp alwaterfield.cpp alwaterheightbake.cpp
     LIBRARIES llrender ll::pocketfft
     SUPPORT llrender_test_checks llcommon_test_checks
