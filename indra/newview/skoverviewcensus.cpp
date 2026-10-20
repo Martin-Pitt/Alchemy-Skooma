@@ -50,6 +50,7 @@
 #include <chrono>
 #include <climits>
 #include <cmath>
+#include <cstring>
 #include <iterator>
 #include <map>
 #include <set>
@@ -1425,6 +1426,17 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildBatches(const Jo
             }
             Built::Region done = blank;
             done.mPositions = std::move(piece.mPositions);
+            U64 hash = 1469598103934665603ull;
+            for (const LLVector3& p : done.mPositions)
+            {
+                for (S32 k = 0; k < 3; ++k)
+                {
+                    U32 bits;
+                    std::memcpy(&bits, &p.mV[k], sizeof(bits));
+                    hash = (hash ^ bits) * 1099511628211ull;
+                }
+            }
+            done.mHash = hash;
             done.mInvisible = std::move(piece.mInvisible);
             std::copy(std::begin(piece.mStart), std::end(piece.mStart), std::begin(done.mStart));
             done.mGroups.clear();
@@ -1510,12 +1522,14 @@ void SKOverviewCensus::swapIn(Built& built)
         const U32 total = (U32)region.mPositions.size();
         Batch batch;
         batch.mOrigin = region.mOrigin;
+        batch.mHash = region.mHash;
         // A region whose triangles are the same keeps its buffer: a rebuild moves a few linksets, and uploading every
         // region's tens of megabytes again stalled the frame for tens of milliseconds.
         const auto same = std::find_if(mBatches.begin(), mBatches.end(),
                                        [&](const Batch& old)
                                        {
-                                           return old.mBuffer && old.mOrigin == region.mOrigin && old.mPositions == region.mPositions;
+                                           return old.mBuffer && old.mOrigin == region.mOrigin && old.mHash == region.mHash &&
+                                                  old.mPositions.size() == region.mPositions.size();
                                        });
         if (same != mBatches.end())
         {

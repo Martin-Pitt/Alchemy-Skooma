@@ -131,6 +131,7 @@ public:
         std::vector<U8> mInvisible;
         /// The cut heights the buffer holds, per vertex; empty while every one is NO_CUT.
         std::vector<F32> mCutValues;
+        U64 mHash = 0;          ///< mPositions' bits, hashed on the worker, so a rebuild keeps an unchanged buffer cheaply
     };
 
     /// Which groups a shot draws: all of them, or the ground's and those at the agent's level.
@@ -297,6 +298,7 @@ private:
             std::vector<Group> mGroups;
             std::vector<std::pair<LLVector3d, LLVector3d>> mFootprints;  ///< per group, the box the land under it is read over
             std::vector<U8> mInvisible;         ///< per triangle, as Batch's
+            U64 mHash = 0;                      ///< mPositions' bits, as Batch's
         };
         /// What the overlap test made of the invisible parts, for the log.
         struct CoverStats
