@@ -110,10 +110,11 @@ namespace sknav
         }
         std::sort(graph->mSpaceIndex.begin(), graph->mSpaceIndex.end());
 
-        // The walk: members joined across a door or opening whose sill stands on both of their storeys.
+        // The walk: members joined across a door or opening whose sill stands on both of their storeys, ramps left alone.
         const auto onFloor = [&params](const Space& s, F32 sill) {
             return sill >= s.mFloorMin - params.mSillSlackM && sill <= s.mFloorMax + params.mSillSlackM;
         };
+        const auto ramp = [&params](const Space& s) { return s.mFloorMax - s.mFloorMin > params.mRampBandM; };
         std::vector<U32> component(count, ~0u);
         std::vector<std::vector<U32>> members;
         std::vector<U32> stack;
@@ -132,6 +133,10 @@ namespace sknav
                 const U32 s = stack.back();
                 stack.pop_back();
                 members[c].push_back(s);
+                if (ramp(spaces[s]))
+                {
+                    continue;
+                }
                 for (U32 pi : spaces[s].mPortals)
                 {
                     if (pi >= rooms.mPortals.size())
@@ -145,7 +150,8 @@ namespace sknav
                         continue;
                     }
                     const U32 n = p.mSpaces[0] == s ? p.mSpaces[1] : p.mSpaces[0];
-                    if (component[n] != ~0u || !roomMember(spaces[n]) || !onFloor(spaces[s], p.mSill) || !onFloor(spaces[n], p.mSill))
+                    if (component[n] != ~0u || !roomMember(spaces[n]) || ramp(spaces[n]) || !onFloor(spaces[s], p.mSill) ||
+                        !onFloor(spaces[n], p.mSill))
                     {
                         continue;
                     }

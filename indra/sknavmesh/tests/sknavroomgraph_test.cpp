@@ -326,6 +326,56 @@ namespace
         CHECK_FALSE(hasPortal(*above, foot));
     }
 
+    TEST_CASE("sknavroomgraph: a ramp is a room of its own and chains no storeys", "[sknavroomgraph]")
+    {
+        // A hall at 0, a ramp up to 3 and a floor at 3, as the pass would leave them, joined by openings.
+        RoomsProduct product;
+        const F32 bands[3][2] = { { 0.f, 0.f }, { 0.f, 3.f }, { 3.f, 3.f } };
+        for (U32 i = 0; i < 3; ++i)
+        {
+            Space sp;
+            sp.mId = 10 * (i + 1);
+            sp.mBucket = EnclosureBucket::INDOORS;
+            sp.mBuilding = 10;
+            sp.mFloorMin = bands[i][0];
+            sp.mFloorMax = bands[i][1];
+            product.mSpaces.push_back(sp);
+        }
+        for (U32 i = 0; i < 2; ++i)
+        {
+            Portal p;
+            p.mKind = PortalKind::OPENING;
+            p.mSpaces[0] = i;
+            p.mSpaces[1] = i + 1;
+            p.mSill = bands[i + 1][i];
+            product.mPortals.push_back(p);
+            product.mSpaces[i].mPortals.push_back(i);
+            product.mSpaces[i + 1].mPortals.push_back(i);
+        }
+
+        const RoomGraphPtr g = buildRoomGraph(product);
+        REQUIRE(g->mRooms.size() == 3);
+        const Room* hall = g->ofSpace(0);
+        const Room* ramp = g->ofSpace(1);
+        const Room* upper = g->ofSpace(2);
+        REQUIRE(hall != nullptr);
+        REQUIRE(ramp != nullptr);
+        REQUIRE(upper != nullptr);
+        CHECK(hall->mSpaces == std::vector<U32>{ 10 });
+        CHECK(ramp->mSpaces == std::vector<U32>{ 20 });
+        CHECK(upper->mSpaces == std::vector<U32>{ 30 });
+        CHECK(hall->mPortals == std::vector<U32>{ 0 });
+        CHECK(ramp->mPortals == std::vector<U32>{ 0, 1 });
+        CHECK(upper->mPortals == std::vector<U32>{ 1 });
+
+        // Below the bound the same space is a floor, and the walk carries on through it.
+        RoomGraphParams flat;
+        flat.mRampBandM = 4.f;
+        const RoomGraphPtr one = buildRoomGraph(product, flat);
+        REQUIRE(one->mRooms.size() == 1);
+        CHECK(one->mRooms[0].mSpaces == std::vector<U32>({ 10, 20, 30 }));
+    }
+
     TEST_CASE("sknavroomgraph: identity holds and the hash moves only where the air moved", "[sknavroomgraph]")
     {
         // The split rooms and, elsewhere on the tile, a room of its own behind a lintelled doorway.

@@ -39,6 +39,7 @@ namespace sknav
     {
         /// A joining portal's sill lies within both spaces' floor bands, widened by this: past the climb the pass links floors across.
         F32 mSillSlackM = SpaceParams().mClimbM + 0.125f;
+        F32 mRampBandM = 2.f * SpaceParams().mClimbM;  ///< a member whose own floor band is taller than this is a ramp
         U32 mMaxMaskCells = 1u << 20;   ///< a footprint box holding more cells than this keeps no mask
     };
 
@@ -46,8 +47,10 @@ namespace sknav
     /// sheltered spaces of a building joined across its doors and openings.
     /// Doors cross, closed or not, as a storey runs on behind them; stairs and
     /// the outdoors never do, so a flight, a roof and the street are in no
-    /// room. A ramped space spans its own band, and a building straddling two
-    /// meshes is one room in each. Positions are mesh-local.
+    /// room. A ramp, a member whose own band is taller than two climbs, is a
+    /// room of its own that no door or opening joins, as a flight is not
+    /// entered, so it never chains the storeys at its ends into one room. A
+    /// building straddling two meshes is one room in each. Positions are mesh-local.
     struct Room
     {
         U32 mId = 0;                ///< its least member space id: stable while that member stands
