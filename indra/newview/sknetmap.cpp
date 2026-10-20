@@ -1999,7 +1999,7 @@ bool SKNetMap::handleRightMouseDown(S32 x, S32 y, MASK mask)
         for (const DrawnDot& d : mDots)
         {
             const F32 dist = dist_vec(d.mPos, click);
-            if (dist <= skmap::HOVER_ENTER_PX)
+            if (dist <= skmap::PICK_PX)
             {
                 near_click.emplace_back(dist, d.mId);
             }
