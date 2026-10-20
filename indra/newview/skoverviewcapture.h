@@ -294,7 +294,7 @@ private:
         U64 mCutStamp = 0;
         U32 mDebugView = 0;
         U64 mDissolve = 0;
-        const void* mRegion = nullptr;
+        U64 mRegionHandle = 0;
     } mTacticalKey;
     /// CPU time of the tactical view, summed over a second and logged.
     struct Cost

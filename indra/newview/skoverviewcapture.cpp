@@ -1972,7 +1972,8 @@ void SKOverviewCapture::tactical()
                           at_axis * mTacticalKey.mDir > 0.999999f && fov == mTacticalKey.mFov && vw == mTacticalKey.mWidth &&
                           vh == mTacticalKey.mHeight && std::fabs(cut_z - mTacticalKey.mCut) < 1e-3f &&
                           mCensus.signature() == mTacticalKey.mCensus &&
-                          mCensus.cutStamp() == mTacticalKey.mCutStamp && gAgent.getRegion() == mTacticalKey.mRegion &&
+                          mCensus.cutStamp() == mTacticalKey.mCutStamp &&
+                          (gAgent.getRegion() ? gAgent.getRegion()->getHandle() : 0) == mTacticalKey.mRegionHandle &&
                           (U32)tactical_debug_view == mTacticalKey.mDebugView && dissolve_key == mTacticalKey.mDissolve;
         // Movers draw over a copy of the static capture each frame; the static capture itself is redone only on change.
         mMovers.setLoose(mCensus.restlessParts());
@@ -1992,7 +1993,7 @@ void SKOverviewCapture::tactical()
             mTacticalKey.mCutStamp = mCensus.cutStamp();
             mTacticalKey.mDebugView = tactical_debug_view;
             mTacticalKey.mDissolve = dissolve_key;
-            mTacticalKey.mRegion = gAgent.getRegion();
+            mTacticalKey.mRegionHandle = gAgent.getRegion() ? gAgent.getRegion()->getHandle() : 0;
             ++mCost.mRenders;
         }
         else
