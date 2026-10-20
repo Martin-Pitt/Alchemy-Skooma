@@ -2401,7 +2401,9 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
             for (const Group& group : batch.mGroups)
             {
                 const auto it = cut_of.find(group.mId);
-                if (it == cut_of.end())
+                // A part wholly under its cut is left whole, so an open mesh there (a desk with no underside) is
+                // never counted as a solid the cut went through.
+                if (it == cut_of.end() || (it->second != skoverview::HIDDEN && group.mMax.mdV[VZ] <= it->second))
                 {
                     continue;
                 }
