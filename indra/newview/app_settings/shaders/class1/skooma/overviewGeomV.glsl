@@ -34,6 +34,8 @@ out vec3 vary_position;
 in float weight;        // the height this vertex's part is cut at, agent z
 out float vary_cut_z;
 out float vary_z;
+in vec2 texcoord0;      // x: 1 for an open part's triangle, which has no inside to section
+out float vary_open;
 #endif
 
 void main()
@@ -43,5 +45,6 @@ void main()
 #ifdef SK_CUT_ATTRIBUTE
     vary_cut_z = weight;
     vary_z = position.z; // region-local z is agent z
+    vary_open = texcoord0.x;
 #endif
 }
