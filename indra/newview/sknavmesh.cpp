@@ -5397,7 +5397,7 @@ void SKNavMesh::refreshOverlay()
     key = mixF32(key, static_cast<F32>(peek));
     key = mixF32(key, eye);
     key = mix(key, mHasMark ? 1ull : 0ull);
-    key = mix(key, show_spaces ? mRooms->revision() : 0ull);
+    key = mix(key, show_spaces ? mRooms->airRevision() : 0ull);
     key = mix(key, show_spaces ? 1ull : 0ull);
     // The spaces layer greys the portals an annotation has crossed out, so
     // it re-gathers when the marks move.
@@ -5415,14 +5415,14 @@ void SKNavMesh::refreshOverlay()
     }
     const S32 wind_bucket = static_cast<S32>(std::lround(heading / (360.f / sknav::WIND_HEADINGS)));
     key = mix(key, show_wind ? static_cast<U64>(wind_bucket + 1000) : 0ull);
-    key = mix(key, show_wind ? mRooms->revision() : 0ull);
+    key = mix(key, show_wind ? mRooms->windRevision() : 0ull);
     // The air layer re-gathers on its own switches; off, it adds one compare to the key.
     key = mix(key, static_cast<U64>(show_air));
     if (show_air)
     {
         static LLCachedControl<U32> air_budget(gSavedSettings, "SKNavOverlayAirBudget", 1000000);
         key = mix(key, static_cast<U64>(air_budget));
-        key = mix(key, mRooms->revision());
+        key = mix(key, mRooms->airRevision());
     }
     if (mHasMark)
     {

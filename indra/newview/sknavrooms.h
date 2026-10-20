@@ -84,8 +84,11 @@ public:
     typedef std::function<void(const Mesh& mesh, const sknav::Space& space)> SpaceFn;
     typedef std::function<void(const Mesh& mesh, const sknav::Portal& portal)> PortalFn;
 
-    /// Moves whenever a mesh's answers change.
-    U64 revision() const { return mRevision; }
+    /// Moves whenever a mesh's air answers change: enclosure, spaces or rooms. The air revision.
+    U64 revision() const { return mAirRevision; }
+    U64 airRevision() const { return mAirRevision; }
+    /// Moves whenever a mesh's wind slabs change, and only then.
+    U64 windRevision() const { return mWindRevision; }
 
     /// The gap holding pos, over every mesh: an answer beats UNKNOWN, and
     /// the higher floor wins among answers. False where no mesh has air.
@@ -130,7 +133,8 @@ public:
 
 private:
     friend class SKNavRooms;
-    U64 mRevision = 0;
+    U64 mAirRevision = 0;
+    U64 mWindRevision = 0;
     std::vector<Mesh> mMeshes;
     std::shared_ptr<const sknav::SkyMap> mSky;
 };
@@ -153,7 +157,7 @@ public:
 
     explicit SKNavWind(SKNavWorldViewPtr view);
 
-    /// Moves with the view, whenever a mesh's slabs change.
+    /// Moves whenever a mesh's slabs change: the view's wind revision.
     U64 revision() const;
 
     /// The slab of one heading bucket over the box: from the mesh standing
@@ -196,7 +200,10 @@ public:
     /// out is immutable, so a worker may be given it and keep it.
     SKNavWorldViewPtr view() const;
     SKNavWindPtr wind() const;
-    U64 revision() const { return mView ? mView->revision() : 0; }
+    /// The view's air revision; the wind's moves on its own.
+    U64 revision() const { return airRevision(); }
+    U64 airRevision() const { return mView ? mView->airRevision() : 0; }
+    U64 windRevision() const { return mView ? mView->windRevision() : 0; }
     /// Whether a mesh meeting the global box has a pass pending or running.
     bool settlingIn(const LLVector3d& min, const LLVector3d& max) const;
     std::string statsLine() const;
@@ -317,8 +324,10 @@ private:
     U64 mSeenFeatures = ~0ull;
     SKNavWorldViewPtr mView;
     SKNavWindPtr mWind;
-    U64 mViewRevision = 0;
-    bool mViewDirty = false;
+    U64 mViewAirRevision = 0;
+    U64 mViewWindRevision = 0;
+    bool mViewAirDirty = false;             ///< a mesh's enclosure, spaces or rooms changed since the view was built
+    bool mViewWindDirty = false;            ///< a mesh's wind slabs changed since
 
     // stats
     F32 mLastMs = 0.f;
