@@ -276,8 +276,8 @@ const Room* SKNavWorldView::room(const RoomId& id, const Mesh** mesh_out) const
 
 LLVector3d SKNavWorldView::roomCellOrigin(const Mesh& mesh, const Room& room) const
 {
-    return LLVector3d(mesh.mOrigin.mdV[VX] + room.mCellX0 * static_cast<F64>(RASTER_XY_M), mesh.mOrigin.mdV[VY] + room.mCellY0 * static_cast<F64>(RASTER_XY_M),
-                      mesh.mOrigin.mdV[VZ]);
+    return LLVector3d(mesh.mOrigin.mdV[VX] + room.mCellX0 * static_cast<F64>(RASTER_XY_M),
+                      mesh.mOrigin.mdV[VY] + room.mCellY0 * static_cast<F64>(RASTER_XY_M), mesh.mOrigin.mdV[VZ]);
 }
 
 bool SKNavWorldView::topOfWorld(const LLVector3d& xy, F64& top) const
@@ -1108,7 +1108,8 @@ void SKNavRooms::runChunk(const std::shared_ptr<Job>& job, const std::weak_ptr<b
             LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknr - room graph");
             const auto graph_start = std::chrono::steady_clock::now();
             job->mRoomGraph = buildRoomGraph(*job->mSpaces->product());
-            job->mRoomGraphMs = static_cast<F32>(std::chrono::duration<F64, std::milli>(std::chrono::steady_clock::now() - graph_start).count());
+            job->mRoomGraphMs =
+                static_cast<F32>(std::chrono::duration<F64, std::milli>(std::chrono::steady_clock::now() - graph_start).count());
         }
         return done;
     };
@@ -1389,12 +1390,14 @@ std::string SKNavRooms::statsLine() const
             wind_bytes += entry.second.mWind->bytes();
         }
     }
-    return llformat("enclosure: %u meshes, %u passes (%u repairs, %u keeping their spaces, %u dropped, %u running), last %.0f ms on the thread (%s, %u tiles answered), %.0f ms posted to landed, unknown %.1f%% and sealed %.1f%% of %llu gaps; %u spaces and %u portals, last %.0f ms (%s); rooms %u (truncated %u) graph %.1f ms view air %llu wind %llu; wind slabs over %u meshes, %.1f MB, %u builds, last %.0f ms for %.1f MB",
+    return llformat("enclosure: %u meshes, %u passes (%u repairs, %u keeping their spaces, %u dropped, %u running), last %.0f ms on the thread (%s, %u tiles answered), %.0f ms posted to landed, unknown %.1f%% and sealed %.1f%% of %llu gaps; %u spaces and %u portals, last %.0f ms (%s); "
+                    "rooms %u (truncated %u) graph %.1f ms view air %llu wind %llu; "
+                    "wind slabs over %u meshes, %.1f MB, %u builds, last %.0f ms for %.1f MB",
                     meshes, mPasses, mRepairs, mSpacesKept, mCancelled, in_flight, mLastMs, stages.c_str(), mLastAnswered, mLastWallMs,
                     gaps ? 100.0 * unknown / gaps : 0.0, gaps ? 100.0 * sealed / gaps : 0.0, static_cast<unsigned long long>(gaps), spaces,
                     portals, mLastSpacesMs, space_stages.c_str(), rooms, truncated, mLastRoomGraphMs,
-                    static_cast<unsigned long long>(mViewAirRevision), static_cast<unsigned long long>(mViewWindRevision), winds, wind_bytes / 1048576.0, mWindPasses, mLastWindMs,
-                    mLastWindBytes / 1048576.0);
+                    static_cast<unsigned long long>(mViewAirRevision), static_cast<unsigned long long>(mViewWindRevision), winds,
+                    wind_bytes / 1048576.0, mWindPasses, mLastWindMs, mLastWindBytes / 1048576.0);
 }
 
 void SKNavRooms::gatherSpaces(SKNavOverlayGeom& geom, const LLVector3d& camera, F64 reach, bool opaque,

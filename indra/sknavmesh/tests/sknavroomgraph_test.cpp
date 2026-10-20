@@ -314,7 +314,8 @@ namespace
         CHECK(below->mFloorMax < 3.f);
         CHECK(above->mFloorMin > 3.f);
 
-        const U32 door_portal = portalBetween(r, hall, landing), foot = portalBetween(r, landing, flight), head = portalBetween(r, flight, deck);
+        const U32 door_portal = portalBetween(r, hall, landing), foot = portalBetween(r, landing, flight),
+                  head = portalBetween(r, flight, deck);
         REQUIRE(door_portal != ~0u);
         REQUIRE(foot != ~0u);
         REQUIRE(head != ~0u);
@@ -574,7 +575,8 @@ namespace
         for (size_t i = 0; i < g->mRooms.size(); ++i)
         {
             const Room& room = g->mRooms[i];
-            legend << "room " << i << " id " << room.mId << " colour " << i % 4 << " band " << room.mFloorMin << ".." << room.mFloorMax << " members";
+            legend << "room " << i << " id " << room.mId << " colour " << i % 4 << " band " << room.mFloorMin << ".." << room.mFloorMax
+                   << " members";
             for (U32 id : room.mSpaces)
             {
                 legend << ' ' << id;
