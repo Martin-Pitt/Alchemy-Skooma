@@ -2069,7 +2069,8 @@ namespace sknav
                         a.mDetailMaxErrorCells == b.mDetailMaxErrorCells && a.mWallMinHeight == b.mWallMinHeight && a.mRootCues == b.mRootCues &&
                         sameTerrain(a.mTerrain, b.mTerrain) && sameParams(a.mTopParams, b.mTopParams) && a.mWallFaces == b.mWallFaces &&
                         a.mDropSpacing == b.mDropSpacing && a.mRunoff == b.mRunoff && a.mRunoffMax == b.mRunoffMax && a.mAir == b.mAir &&
-                        a.mAirPad == b.mAirPad && a.mAirMinGap == b.mAirMinGap && a.mCoarseAir == b.mCoarseAir;
+                        a.mAirPad == b.mAirPad && a.mAirMinGap == b.mAirMinGap && a.mCoarseAir == b.mCoarseAir && a.mFaceOffsets == b.mFaceOffsets &&
+                        a.mAlignWallEdges == b.mAlignWallEdges && a.mFineAir == b.mFineAir;
             for (S32 c = 0; c < NUM_CLASSES; ++c)
             {
                 same = same && sameParams(a.mParams[c], b.mParams[c]) && a.mEdges[c] == b.mEdges[c] && a.mDropMax[c] == b.mDropMax[c];
