@@ -66,6 +66,7 @@
 #include "llhudnametag.h"
 #include "llviewerobjectlist.h"
 #include "pipeline.h"
+#include "llfloaterreg.h"
 #include "sknavbuild.h"
 #include "sknavmesh.h"
 #include "sknavrooms.h"
@@ -678,6 +679,9 @@ void SKOverviewCapture::syncTactical()
     }
 }
 
+// Whether opening the overview hid a visible mini-map, for its close to bring back.
+static bool sMiniMapHidden = false;
+
 void SKOverviewCapture::openTactical()
 {
     const bool over_other_mode = SKModalView::worldCovered();
@@ -692,6 +696,12 @@ void SKOverviewCapture::openTactical()
     }
     mTacticalOpen = true;
     mTacticalKey.mValid = false;
+    // The overview is the mini-map writ large, so the mini-map steps aside while it is open.
+    sMiniMapHidden = LLFloaterReg::instanceVisible("mini_map");
+    if (sMiniMapHidden)
+    {
+        LLFloaterReg::hideInstance("mini_map");
+    }
     if (SKModalView::top() == this)
     {
         placeTacticalCamera(over_other_mode);
@@ -721,6 +731,11 @@ void SKOverviewCapture::closeTactical()
     if (SKPopupPanes* popup = mPopup.get())
     {
         popup->closeAll();
+    }
+    if (sMiniMapHidden)
+    {
+        sMiniMapHidden = false;
+        LLFloaterReg::showInstance("mini_map");
     }
     // The last release puts the world camera back; a map under the overview takes its own back.
     SKModalView::instance().release(this);
