@@ -30,7 +30,7 @@
 out vec4 frag_color;
 
 uniform sampler2D depthMap;
-uniform sampler2D classMap;     // R class code (skoverviewcensus.h), B an invisible face on top, G and A the census face normal
+uniform sampler2D diffuseMap;     // R class code (skoverviewcensus.h), B an invisible face on top, G and A the census face normal
 uniform mat4 sk_inv_vp;         // window to world: inverse of projection times view
 uniform float sk_zo;            // 1 when window depth is NDC depth (zero-to-one), 0 for minus-one-to-one
 uniform float sk_far_depth;     // the cleared depth: no surface
@@ -143,7 +143,7 @@ vec3 skOctDecode(vec2 e)
 bool geomNormal(ivec2 p, out vec3 n)
 {
     p = clamp(p, ivec2(0), gSize - 1);
-    vec4 cls = texelFetch(classMap, p, 0);
+    vec4 cls = texelFetch(diffuseMap, p, 0);
     if (cls.g == 0.0 && cls.a == 0.0)
     {
         n = vec3(0.0, 0.0, 1.0);
@@ -156,7 +156,7 @@ bool geomNormal(ivec2 p, out vec3 n)
 int codeAt(ivec2 p)
 {
     p = clamp(p, ivec2(0), gSize - 1);
-    return int(texelFetch(classMap, p, 0).r * 255.0 + 0.5);
+    return int(texelFetch(diffuseMap, p, 0).r * 255.0 + 0.5);
 }
 
 float luma(vec3 c)
@@ -299,7 +299,7 @@ void main()
         frag_color = vec4(VOID, sk_top_down > 0.5 ? 0.0 : 1.0);
         return;
     }
-    vec4 cls = texelFetch(classMap, p, 0);
+    vec4 cls = texelFetch(diffuseMap, p, 0);
     int code = int(cls.r * 255.0 + 0.5);
     bool invisible = cls.b > 0.5;
     bool capped = cls.b > 0.1 && cls.b < 0.5;
@@ -308,7 +308,7 @@ void main()
     float rel = min(pos.z, sk_level_top) - sk_focus.z;
     float px_m = pixelMetres(pos);
 
-    // The census's own face normals (classMap G, A); none (0, 0) for terrain, whose normal comes from depth.
+    // The census's own face normals (diffuseMap G, A); none (0, 0) for terrain, whose normal comes from depth.
     vec3 gn = vec3(0.0);
     bool has_gn = geomNormal(p, gn);
 

@@ -26,7 +26,7 @@
 
 out vec4 frag_color;
 
-uniform sampler2D sceneDepth;   // the overview capture's depth, the same camera as the markers
+uniform sampler2D depthMap;   // the overview capture's depth, the same camera as the markers
 uniform vec4 sk_viewport;       // x, y, width, height of the overview in window pixels
 uniform float sk_zo;            // 1 when nearer is larger (reverse-Z), 0 when nearer is smaller
 uniform float sk_ghost_alpha;   // the silhouette's opacity
@@ -36,7 +36,7 @@ in vec4 vertex_color;
 void main()
 {
     vec2 uv = (gl_FragCoord.xy - sk_viewport.xy) / sk_viewport.zw;
-    float scene = texture(sceneDepth, uv).r;
+    float scene = texture(depthMap, uv).r;
     float d = gl_FragCoord.z;
     // A hair of slack so a marker standing on a floor is not hidden by that floor.
     bool hidden = sk_zo > 0.5 ? (d < scene - 1e-5) : (d > scene + 1e-5);

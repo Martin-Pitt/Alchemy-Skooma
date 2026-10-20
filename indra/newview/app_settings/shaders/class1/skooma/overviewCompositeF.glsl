@@ -26,7 +26,7 @@
 
 out vec4 frag_color;
 
-uniform sampler2D overviewMap;
+uniform sampler2D diffuseMap;
 uniform vec4 sk_viewport;       // x, y, width, height of the world view in window pixels
 uniform float sk_tilt_px;       // blur radius at the top and bottom edges
 uniform vec3 sk_ground;
@@ -45,17 +45,17 @@ void main()
     float vignette = 1.0 - 0.35 * smoothstep(0.35, 0.85, length((uv - 0.5) * vec2(1.0, 0.8)));
     if (r < 0.5)
     {
-        frag_color = vec4(over(texture(overviewMap, uv)) * vignette, 1.0);
+        frag_color = vec4(over(texture(diffuseMap, uv)) * vignette, 1.0);
         return;
     }
     // Twelve taps on two rings, rotated per pixel to hide the pattern.
-    vec3 sum = over(texture(overviewMap, uv));
+    vec3 sum = over(texture(diffuseMap, uv));
     float rot = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453) * 6.2831853;
     for (int i = 0; i < 12; ++i)
     {
         float ang = rot + float(i) * 0.5235988;
         float rad = r * (i < 6 ? 0.5 : 1.0);
-        sum += over(texture(overviewMap, uv + vec2(cos(ang), sin(ang)) * rad * texel));
+        sum += over(texture(diffuseMap, uv + vec2(cos(ang), sin(ang)) * rad * texel));
     }
     frag_color = vec4(sum / 13.0 * vignette, 1.0);
 }
