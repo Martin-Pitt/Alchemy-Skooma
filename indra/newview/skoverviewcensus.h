@@ -377,6 +377,8 @@ private:
     U64 mStamp = 0;
     U64 mSignature = 0;
     bool mUnknownLook = false;  ///< some part's faces or images were not loaded at the last build
+    std::unordered_map<LLUUID, skoverview::Seen> mLargeLogged; ///< the large parts of the last pass and how each was logged
+    std::string mCoverLogged;   ///< the cover counts last logged
     F64 mRecheckAt = 0.0;
     U64 mRecordsKey = 0;        ///< the census records' identities at the last look
     bool mRecordsChanged = true;

@@ -141,6 +141,8 @@ void SKOverviewCensus::release()
     mExtentsBuilt = false;
     mOccupantCuts.clear();
     mBatches.clear();
+    mLargeLogged.clear();
+    mCoverLogged.clear();
     mStamp = 0;
     mSignature = 0;
     mTriangles = 0;
@@ -927,6 +929,7 @@ bool SKOverviewCensus::update()
     std::vector<bool> void_only;   // a surround record: only its triangles over no connected region are drawn
     std::vector<CoverInput> kept_cover;
     kept.reserve(snap->mRecords.size());
+    std::unordered_map<LLUUID, Seen> large_logged; // this pass's large parts, so dropped parts leave the log's memory
     for (const sknav::RecordPtr& rec : snap->mRecords)
     {
         skoverview::CensusClass fixed;
@@ -969,11 +972,10 @@ bool SKOverviewCensus::update()
         if (large)
         {
             // Once per part and verdict: the large ones are those that cover the view when misjudged.
-            static std::map<LLUUID, Seen> logged;
-            auto it = logged.find(rec->mPart);
-            if (it == logged.end() || it->second != seen)
+            large_logged[rec->mPart] = seen;
+            const auto it = mLargeLogged.find(rec->mPart);
+            if (it == mLargeLogged.end() || it->second != seen)
             {
-                logged[rec->mPart] = seen;
                 std::string report; // only when logged: formatting every face of every large part each pass is not free
                 partSeen(rec->mPart, &report);
                 LL_INFOS("SKOverview") << "large census part " << rec->mPart << " " << extent << " m: "
@@ -1007,6 +1009,7 @@ bool SKOverviewCensus::update()
             kept_cover.pop_back();
         }
     }
+    mLargeLogged = std::move(large_logged);
     for (auto it = mCoverGeom.begin(); it != mCoverGeom.end();)
     {
         it = it->second.mPass != mSeenPass ? mCoverGeom.erase(it) : std::next(it);
@@ -1583,10 +1586,9 @@ void SKOverviewCensus::swapIn(Built& built)
                                             "%u not known yet, %u large dropped; faces %u covered %u bare",
                                             c.mParts, c.mStandIns, c.mBarriers, c.mHatchedSteepM2, c.mUnknown, c.mDropped,
                                             c.mFacesCovered, c.mFacesBare);
-        static std::string logged;
-        if (counts != logged)
+        if (counts != mCoverLogged)
         {
-            logged = counts;
+            mCoverLogged = counts;
             std::string where;
             for (const LLViewerRegion* region : LLWorld::getInstance()->getRegionList())
             {
