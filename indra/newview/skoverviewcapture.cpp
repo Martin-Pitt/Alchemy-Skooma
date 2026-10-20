@@ -95,7 +95,6 @@ namespace
     LLGLSLShader sGeom;
     LLGLSLShader sGeomCut;    // the census with a cut height per vertex, for the tactical view
     LLGLSLShader sMarker;     // the tactical avatar markers, depth-tested by hand       // the census: class code and the face's own normal
-    GLuint sQueries[2] = { 0, 0 };
 
     const F32 CENSUS_RANGE_M = 128.f;
     const size_t SK_MAX_TERRITORY = 16;       // regions styled as inside, at most (the resolve's array)
@@ -372,15 +371,10 @@ void SKOverviewCapture::releaseGL()
     sGeom.unload();
     sGeomCut.unload();
     sMarker.unload();
-    if (sQueries[0])
-    {
-        glDeleteQueries(2, sQueries);
-        sQueries[0] = sQueries[1] = 0;
-    }
+    mSpans.clear();
     mCensus.release();
     mMaps.clear();
     mTacticalKey.mValid = false;
-    mTiming = false;
     mGLFailed = false;
 }
 
@@ -526,10 +520,6 @@ bool SKOverviewCapture::ensureShaders()
         ok = sMarker.createShader();
         LL_INFOS_ONCE("SKOverview") << "overview marker shader " << (ok ? "loaded" : "FAILED") << LL_ENDL;
     }
-    if (ok && !sQueries[0])
-    {
-        glGenQueries(2, sQueries);
-    }
     return ok;
 }
 
@@ -569,23 +559,55 @@ bool SKOverviewCapture::ensureGL(LLRenderTarget& capture, LLRenderTarget& resolv
     return true;
 }
 
-void SKOverviewCapture::readTimer()
+void SKOverviewCapture::endSpan(SpanKind kind, ALQuerySpan& span)
 {
-    if (!mTiming)
+    if (span.isValid())
     {
-        return;
+        gGL.queries().endSpan(span);
+        mSpans.emplace_back(kind, span);
     }
-    GLint available = 0;
-    glGetQueryObjectiv(sQueries[1], GL_QUERY_RESULT_AVAILABLE, &available);
-    if (!available)
+}
+
+void SKOverviewCapture::readSpans()
+{
+    const ALQueryPool& queries = gGL.queries();
+    std::erase_if(mSpans, [this, &queries](const std::pair<SpanKind, ALQuerySpan>& timed)
     {
-        return;
-    }
-    GLuint64 t0 = 0, t1 = 0;
-    glGetQueryObjectui64v(sQueries[0], GL_QUERY_RESULT, &t0);
-    glGetQueryObjectui64v(sQueries[1], GL_QUERY_RESULT, &t1);
-    mStats.gpu_ms = (F32)((F64)(t1 - t0) / 1.0e6);
-    mTiming = false;
+        U64 nanoseconds = 0;
+        switch (queries.result(timed.second, nanoseconds))
+        {
+        case ALQueryPool::Status::Ready:
+            break;
+        case ALQueryPool::Status::Expired:
+            return true;
+        default:
+            return false;
+        }
+        const F32 ms = (F32)((F64)nanoseconds / 1.0e6);
+        switch (timed.first)
+        {
+        case SpanKind::Map:
+            mStats.gpu_ms = ms;
+            break;
+        case SpanKind::Tactical:
+            mStats.gpu_tactical_ms = ms;
+            mCost.mGpuTacticalMs += ms;
+            break;
+        case SpanKind::Patch:
+            mStats.gpu_patch_ms = ms;
+            mCost.mGpuPatchMs += ms;
+            break;
+        case SpanKind::Movers:
+            mStats.gpu_movers_ms = ms;
+            mCost.mGpuMoversMs += ms;
+            break;
+        case SpanKind::Resolve:
+            mStats.gpu_resolve_ms = ms;
+            mCost.mGpuResolveMs += ms;
+            break;
+        }
+        return true;
+    });
 }
 
 void SKOverviewCapture::cutHeights(const LLVector3d& at, F32 fallback_z, F32& floor_z, F32& cut_z) const
@@ -883,7 +905,7 @@ void SKOverviewCapture::frame()
     }
     LL_INFOS_ONCE("SKOverview") << "overview running" << LL_ENDL;
     updateDemand(true);
-    readTimer();
+    readSpans();
     static LLCachedControl<bool> tactical_on(gSavedSettings, "SKTacticalOverview", false);
     if (mapsWanted() || (tactical_on && tacticalShown()))
     {
@@ -917,6 +939,8 @@ void SKOverviewCapture::resolve(LLRenderTarget& capture, LLRenderTarget& resolve
         LL_PROFILE_ZONE_NAMED_CATEGORY_PIPELINE("sk overview resolve");
         LL_PROFILE_GPU_ZONE("sk overview resolve");
         LLTimer timer;
+        // The tactical view's resolves are timed; the maps' fall inside their capture's span.
+        ALQuerySpan span = shot.mTopDown ? ALQuerySpan() : gGL.queries().beginSpan();
         resolved.bindTarget();
         glViewport(0, 0, w, h);
         LLGLDepthTest depth(GL_FALSE, GL_FALSE);
@@ -973,6 +997,7 @@ void SKOverviewCapture::resolve(LLRenderTarget& capture, LLRenderTarget& resolve
         gGL.getTextureSlot(0)->unbind();
         sResolve.unbind();
         resolved.flush();
+        endSpan(SpanKind::Resolve, span);
         mCost.mResolveMs += timer.getElapsedTimeF32() * 1000.f;
     }
 
@@ -1018,6 +1043,7 @@ void SKOverviewCapture::drawMovers(const Shot& shot)
         sTacticalWork.copyContents(sTacticalCapture, 0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT, GL_NEAREST);
     }
 
+    ALQuerySpan span = gGL.queries().beginSpan();
     sTacticalWork.bindTarget();
     glViewport(0, 0, w, h);
     gGL.matrixMode(LLRender::MM_PROJECTION);
@@ -1049,6 +1075,7 @@ void SKOverviewCapture::drawMovers(const Shot& shot)
     gGL.popMatrix();
     gGLLastMatrix = NULL;
     sTacticalWork.flush();
+    endSpan(SpanKind::Movers, span);
     resolve(sTacticalWork, sTacticalResolved, shot);
 }
 
@@ -1468,17 +1495,9 @@ bool SKOverviewCapture::captureMap(RegionMap& map, LLViewerRegion* region, bool 
     shot.mCull.setModelview(shot.mView);
     shot.mCull.setProjection(shot.mProj);
 
-    const bool time = agent && !mTiming;
-    if (time)
-    {
-        glQueryCounter(sQueries[0], GL_TIMESTAMP);
-    }
+    ALQuerySpan span = agent ? gGL.queries().beginSpan() : ALQuerySpan();
     const U32 draws = render(capture, map.mResolved, shot);
-    if (time)
-    {
-        glQueryCounter(sQueries[1], GL_TIMESTAMP);
-        mTiming = true;
-    }
+    endSpan(SpanKind::Map, span);
 
     map.mOrigin = region->getOriginGlobal();
     map.mWidth = width;
@@ -1980,7 +1999,13 @@ void SKOverviewCapture::tactical()
         if (!same)
         {
             LL_PROFILE_ZONE_NAMED("sk tactical render");
-            render(sTacticalCapture, sTacticalResolved, shot, !movers);
+            ALQuerySpan span = gGL.queries().beginSpan();
+            render(sTacticalCapture, sTacticalResolved, shot, false);
+            endSpan(SpanKind::Tactical, span);
+            if (!movers)
+            {
+                resolve(sTacticalCapture, sTacticalResolved, shot);
+            }
             mTacticalKey.mValid = true;
             mTacticalKey.mEye = eye;
             mTacticalKey.mDir = at_axis;
@@ -2877,7 +2902,9 @@ void SKOverviewCapture::composite()
             LL_INFOS("SKOverviewCost") << "tactical per frame over " << mCost.mFrames << " frames: capture "
                                        << mCost.mCaptureMs / n << " ms, resolve " << mCost.mResolveMs / n << " ms, composite+markers "
                                        << mCost.mCompositeMs / n << " ms; rendered " << mCost.mRenders << ", reused " << mCost.mReuses
-                                       << "; census "
+                                       << "; gpu tactical " << mCost.mGpuTacticalMs / n << " ms, patch " << mCost.mGpuPatchMs / n
+                                       << " ms, movers " << mCost.mGpuMoversMs / n << " ms, resolve " << mCost.mGpuResolveMs / n
+                                       << " ms; census "
                                        << (census_slow ? "slow" : "normal") << ", scans " << census_scans << LL_ENDL;
         }
         mCost = Cost();

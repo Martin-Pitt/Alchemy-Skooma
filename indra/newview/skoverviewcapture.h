@@ -26,6 +26,7 @@
 #ifndef SK_OVERVIEWCAPTURE_H
 #define SK_OVERVIEWCAPTURE_H
 
+#include "alquerypool.h"
 #include "llcamera.h"
 #include "llhandle.h"
 #include "llmatrix4a.h"
@@ -73,7 +74,11 @@ public:
     {
         S32 resolution = 0;
         F32 cpu_ms = 0.f;    // cull, sort, draw submission and resolve on the CPU
-        F32 gpu_ms = -1.f;   // capture and resolve on the GPU, from the previous capture's timer query
+        F32 gpu_ms = -1.f;   // the agent's map: capture and resolve on the GPU, a few frames late
+        F32 gpu_tactical_ms = -1.f; // the tactical view's static render
+        F32 gpu_patch_ms = -1.f;    // its see-through circles' patch
+        F32 gpu_movers_ms = -1.f;   // its movers
+        F32 gpu_resolve_ms = -1.f;  // one of its resolves
         U32 draws = 0;       // draw infos sorted for the capture, plus the terrain pool
         U32 census_tris = 0;
         U32 captures = 0;
@@ -180,7 +185,19 @@ private:
     bool rightClick(S32 x, S32 y);
     /// What the overview draws under a pixel, by the tactical camera's ray: the census as cut, terrain, else the agent's floor plane.
     bool groundAt(const LLVector2& at, LLVector3d& world) const;
-    void readTimer();
+    /// What a GPU span times; each is read a few frames on into Stats and the cost line.
+    enum class SpanKind : U8
+    {
+        Map,
+        Tactical,
+        Patch,
+        Movers,
+        Resolve
+    };
+    /// Ends a span begun with gGL.queries().beginSpan() and keeps it to be read; a span that began nothing is dropped.
+    void endSpan(SpanKind kind, ALQuerySpan& span);
+    void readSpans();
+    std::vector<std::pair<SpanKind, ALQuerySpan>> mSpans;
 
     SKOverviewCensus mCensus;
     SKOverviewMovers mMovers;
@@ -194,7 +211,6 @@ private:
     F32 mDemandRange = 0.f;
     U32 mClassMask = 0;     // the layers the region maps were last styled with
     bool mGLFailed = false;
-    bool mTiming = false;
     bool mDemanding = false;
     LLMatrix4a mTacticalView;
     LLMatrix4a mTacticalProj;
@@ -303,6 +319,10 @@ private:
         F32 mCaptureMs = 0.f;
         F32 mResolveMs = 0.f;
         F32 mCompositeMs = 0.f;
+        F32 mGpuTacticalMs = 0.f;   // GPU spans read in this second, summed
+        F32 mGpuPatchMs = 0.f;
+        F32 mGpuMoversMs = 0.f;
+        F32 mGpuResolveMs = 0.f;
         U32 mFrames = 0;
         U32 mRenders = 0;
         U32 mReuses = 0;
