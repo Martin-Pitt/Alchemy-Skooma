@@ -56,7 +56,7 @@ namespace sknav
         U32 mId = 0;                ///< its least member space id: stable while that member stands
         U64 mHash = 0;              ///< its members' ids and rasters and its band: moves only where its air moved
         std::vector<U32> mSpaces;   ///< member space ids, ascending
-        std::vector<U32> mPortals;  ///< indices of the portals with exactly one end in it, of any kind
+        std::vector<U32> mPortals;  ///< indices of the portals with exactly one end in it, of any kind, within the mesh
         F32 mFloorMin = 0.f;        ///< its storey band, over its members' floors
         F32 mFloorMax = 0.f;
         LLVector3 mMin;             ///< the union of its members' boxes
