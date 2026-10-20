@@ -30,6 +30,7 @@ target_sources(
     sknavreplay.cpp
     sknavreplaystats.cpp
     sknavresidency.cpp
+    sknavroomgraph.cpp
     sknavskymap.cpp
     sknavspacefilter.cpp
     sknavspaceproducts.cpp
@@ -70,6 +71,7 @@ target_sources(
         sknavreplay.h
         sknavreplaystats.h
         sknavresidency.h
+        sknavroomgraph.h
         sknavroomsschedule.h
         sknavskymap.h
         sknavspacefilter.h
@@ -149,6 +151,7 @@ if(AL_BUILD_TESTS)
       tests/sknavenclosurerepair_test.cpp
       tests/sknavfeatures_test.cpp
       tests/sknavfloors_test.cpp
+      tests/sknavroomgraph_test.cpp
       tests/sknavtileclip_test.cpp
     BENCH_SOURCES tests/sknavfeatures_bench.cpp
     LIBRARIES sknavmesh llcommon
