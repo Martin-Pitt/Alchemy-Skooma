@@ -121,17 +121,33 @@ namespace
         return llmax(HULL_MIN_COST, HULL_VERTEX_COST * (F32)vertices);
     }
 
-    F32 smallestAxis(const LLVector3& scale)
-    {
-        return llmax(llmin(scale[VX], scale[VY], scale[VZ]), 0.01f);
-    }
+    constexpr F32 MESH_TRIANGLE_COST = 0.05f;
+    constexpr F32 MESH_MIN_WIDTH = 0.001f;
+    constexpr F32 MESH_MAX_WIDTH = 20.f;
 
-    // A triangle mesh, uploaded or a prim's: about linear in triangles, dearer as the object thins.
-    // Prims are not fitted to the server, whose prim weight is dominated by a scale penalty
-    // that says little about Havok's collision work.
-    F32 meshCost(size_t triangles, const LLVector3& scale)
+    // A triangle mesh, uploaded or a prim's, by the published formula (wiki Mesh/Mesh_physics):
+    // 0.05 x triangles / their harmonic mean width, so a 0.5 m triangle costs 0.1. Narrow
+    // triangles are real collision work; the server's further scale penalty on prims is left out.
+    F32 meshCost(const std::vector<LLVector3>& tris, const LLVector3& scale)
     {
-        return llmax(MESH_MIN_COST, 0.0335f * powf((F32)triangles, 1.05f) * powf(smallestAxis(scale), -0.35f));
+        const size_t count = tris.size() / 3;
+        if (count == 0)
+        {
+            return MESH_MIN_COST;
+        }
+        F32 inverse_widths = 0.f;
+        for (size_t i = 0; i + 2 < tris.size(); i += 3)
+        {
+            const LLVector3 a = tris[i].scaledVec(scale);
+            const LLVector3 b = tris[i + 1].scaledVec(scale);
+            const LLVector3 c = tris[i + 2].scaledVec(scale);
+            const F32 longest = llmax((b - a).length(), (c - b).length(), (a - c).length());
+            // The triangle's height over its longest side: the narrow side of its enclosing rectangle.
+            const F32 width = longest > 0.f ? ((b - a) % (c - a)).length() / longest : 0.f;
+            inverse_widths += 1.f / llmax(width, MESH_MIN_WIDTH);
+        }
+        const F32 width = llclamp((F32)count / inverse_widths, MESH_MIN_WIDTH, MESH_MAX_WIDTH);
+        return llmax(MESH_MIN_COST, MESH_TRIANGLE_COST * (F32)count / width);
     }
 
     F32 primHullCost(LLVOVolume* volume)
@@ -163,13 +179,13 @@ F32 skPhysicsShapeCost(LLVOVolume* volume, const SKPhysicsShape& shape)
         case Spec::PRIM_MESH:
         {
             LLVolume* phys = LLPrimitive::sVolumeManager->refVolume(volume->getVolume()->getParams(), physicsDetail(scale));
-            size_t triangles = 0;
-            for (S32 f = 0; phys && f < phys->getNumVolumeFaces(); ++f)
+            std::vector<LLVector3> tris;
+            if (phys)
             {
-                triangles += phys->getVolumeFace(f).mNumIndices / 3;
+                appendFaces(phys, tris);
             }
             LLPrimitive::sVolumeManager->unrefVolume(phys);
-            return meshCost(triangles, scale);
+            return meshCost(tris, scale);
         }
         case Spec::USER_MESH:
         {
@@ -177,11 +193,11 @@ F32 skPhysicsShapeCost(LLVOVolume* volume, const SKPhysicsShape& shape)
             const LLModel::Decomposition* decomp = gMeshRepo.getDecomposition(mesh_id);
             if (std::shared_ptr<const SKPhysicsHavokShape> sim = skPhysicsShapeSimTriangles(volume))
             {
-                return meshCost(sim->mTriangles.size() / 3, scale);
+                return meshCost(sim->mTriangles, scale);
             }
             if (decomp && !decomp->mPhysicsShapeMesh.empty() && !skPhysicsMeshTooSmallForTriangles(volume))
             {
-                return meshCost(decomp->mPhysicsShapeMesh.mPositions.size() / 3, scale);
+                return meshCost(decomp->mPhysicsShapeMesh.mPositions, scale);
             }
             if (decomp && !decomp->mHull.empty())
             {
