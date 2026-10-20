@@ -1548,7 +1548,8 @@ std::shared_ptr<const std::set<std::pair<S32, S32>>> SKOverviewCapture::roomAt(c
     static_assert(sknav::RASTER_XY_M == ROOM_CELL_M, "the space raster and the room lattice must share cells");
     const SKNavWorldView::Mesh* mesh = nullptr;
     const sknav::Space* space = start_id.mId ? world->space(start_id, &mesh) : nullptr;
-    if (space && mesh && !space->mFrozen)
+    // Only a building's space: an open one, the ground round every building, would seed sheltered pockets region-wide.
+    if (space && mesh && !space->mFrozen && space->mBuilding != 0)
     {
         for (const auto& r : space->mRaster)
         {
