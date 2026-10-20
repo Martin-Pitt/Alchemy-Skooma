@@ -27,6 +27,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <regex>
@@ -202,11 +203,52 @@ namespace
         const std::string src = strip_comments(shader_source(GEOM_V));
         REQUIRE(!src.empty());
         CHECK(std::regex_search(src, std::regex(R"(\bout\s+float\s+gl_ClipDistance\s*\[\s*4\s*\])")));
+        const std::vector<Line> lines = lines_with_conditions(shader_source(GEOM_V));
         for (int i = 0; i < 4; ++i)
         {
             CAPTURE(i);
-            CHECK(std::regex_search(src, std::regex(R"(\bgl_ClipDistance\s*\[\s*)" + std::to_string(i) + R"(\s*\]\s*=[^=])")));
+            // Written in every permutation: unconditionally, or under a define and under its absence alike.
+            const std::regex write(R"(\bgl_ClipDistance\s*\[\s*)" + std::to_string(i) + R"(\s*\]\s*=[^=])");
+            std::vector<std::vector<std::string>> under;
+            for (const Line& line : lines)
+            {
+                if (std::regex_search(line.mText, write))
+                {
+                    under.push_back(line.mConditions);
+                }
+            }
+            bool everywhere = false;
+            for (const std::vector<std::string>& c : under)
+            {
+                if (c.empty())
+                {
+                    everywhere = true;
+                }
+                else if (c.size() == 1 && c[0][0] == '+')
+                {
+                    const std::vector<std::string> absent = { "-" + c[0].substr(1) };
+                    everywhere = everywhere || std::find(under.begin(), under.end(), absent) != under.end();
+                }
+            }
+            CHECK(everywhere);
         }
+    }
+
+    // An open part has no inside, so the cap pass's sign keeps it out of the section passes (texcoord0.x, the census's flag).
+    TEST_CASE("SKOverviewShaders: an open part is never sectioned", "[SKOverviewShaders]")
+    {
+        static const std::regex CUT_PART(R"(\bcut_part\s*=.*\btexcoord0\.x\s*<\s*0\.5)");
+        size_t found = 0;
+        for (const Line& line : lines_with_conditions(shader_source(GEOM_V)))
+        {
+            if (std::regex_search(line.mText, CUT_PART))
+            {
+                CAPTURE(line.mNumber, line.mText);
+                CHECK(requires_define(line, "SK_CUT_ATTRIBUTE"));
+                ++found;
+            }
+        }
+        CHECK(found == 1);
     }
 
     TEST_CASE("SKOverviewShaders: the fragment stage tests neither the clip plane nor the ceiling", "[SKOverviewShaders]")
