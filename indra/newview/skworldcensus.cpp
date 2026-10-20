@@ -512,6 +512,10 @@ void SKWorldCensus::finishScan()
     {
         it = (gFrameTimeSeconds - it->second.mLastSeen > 60.f) ? mParts.erase(it) : std::next(it);
     }
+    for (auto it = mUnknownSince.begin(); it != mUnknownSince.end();)
+    {
+        it = mParts.count(it->first) ? std::next(it) : mUnknownSince.erase(it);
+    }
     for (auto it = mRest.begin(); it != mRest.end();)
     {
         it = (gFrameTimeSeconds - it->second.mLastSeen > 60.f) ? mRest.erase(it) : std::next(it);
@@ -875,6 +879,19 @@ void SKWorldCensus::visit(LLViewerObject* object)
         cache.mSignature = sig;
     }
     take(snap, rec);
+    if (object->isPhysicsShapeUnknown())
+    {
+        snap.mStats.mPhysicsUnknown++;
+        mUnknownSince.try_emplace(object->getID(), gFrameTimeSeconds);
+    }
+    else if (const auto since = mUnknownSince.find(object->getID()); since != mUnknownSince.end())
+    {
+        const F64 waited = gFrameTimeSeconds - since->second;
+        mKnownAfterCount++;
+        mKnownAfterSumS += waited;
+        mKnownAfterMaxS = std::max(mKnownAfterMaxS, waited);
+        mUnknownSince.erase(since);
+    }
 
     if (!surround)
     {
@@ -1446,7 +1463,9 @@ std::string SKWorldCensus::statsLine() const
     return llformat("census #%llu: %u objects, %u records (%u cached, %u dynamic, %u surround, %u placeholders, %u from object cache, %u tiny), %u tris, %u roles, %u features; %zu clusters, largest %zu; scan %.1f ms, cluster %.1f ms, features %.1f ms",
                     static_cast<unsigned long long>(mSnapshot->mStamp), s.mObjectsSeen, s.mRecords, s.mCached, s.mDynamic, s.mSurround,
                     s.mPlaceholders, s.mFromObjectCache, s.mTiny, s.mTriangles, s.mRolesKnown, s.mFeatures, mSnapshot->mClusters.mClusters.size(), largest, s.mScanMs, s.mClusterMs,
-                    s.mFeatureMs);
+                    s.mFeatureMs) +
+           llformat("; physics unknown %u / %u, known after mean %.1f s, max %.1f s over %u parts", s.mPhysicsUnknown, s.mRecords,
+                    mKnownAfterCount ? mKnownAfterSumS / mKnownAfterCount : 0.0, mKnownAfterMaxS, mKnownAfterCount);
 }
 
 void SKWorldCensus::renderDebug()
