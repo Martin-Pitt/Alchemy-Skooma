@@ -220,7 +220,7 @@ namespace
         CHECK_FALSE(b.covers(b.mCellX0 - 1, b.mCellY0));
     }
 
-    TEST_CASE("sknavroomgraph: two rooms joined by an opening, a lintelled doorway or a door are one room", "[sknavroomgraph]")
+    TEST_CASE("sknavroomgraph: two rooms joined by an opening or a lintelled doorway or a door are one room", "[sknavroomgraph]")
     {
         const auto check = [](const Result& r, size_t members, PortalKind kind) {
             const RoomGraphPtr g = buildRoomGraph(*r.mRooms);
