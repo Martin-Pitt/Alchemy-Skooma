@@ -53,7 +53,6 @@
 #include "llnotecard.h"
 #include "llnotificationsutil.h"
 #include "llprocess.h"
-#include "alregex.h"
 #include "llmd5.h"
 #include "llsdjson.h"
 #include "llselectmgr.h"
@@ -80,6 +79,10 @@
 
 #include <openssl/rand.h>
 
+#if LL_WINDOWS
+#include <aclapi.h>
+#endif
+
 namespace
 {
     // Per-operation timeouts (seconds) for coroutine-based async RPC handlers.
@@ -98,15 +101,9 @@ namespace
     // it is sent a challenge, and nothing is written for it.
     constexpr size_t MAX_UNAUTHENTICATED = 4;
 
-    static const ALRegex LUAU_LOCATION_PATTERN(
-        R"(^([^:]*):([0-9]+):\s*(.*)$)");
-
-    static const ALRegex LSL_LOCATION_PATTERN(
-        R"(\((\d+), (\d+)\) : ([^:]+) : (.+))");
-
     // Creates a uniquely-named LLEventMailDrop under "<prefix>.<uuid>", passes
     // its name to kickoff (which arranges for one post to that pump), then
-    // suspends the current coroutine up to 	imeout seconds for the result.
+    // suspends the current coroutine up to timeout seconds for the result.
     // Throws RequestTimeoutError(timeout_msg) if the deadline elapses.
     template <typename Kickoff>
     LLSD await_async_result(const std::string& pump_prefix,
@@ -124,27 +121,6 @@ namespace
             throw LLJSONRPCConnection::RequestTimeoutError(timeout_msg);
         }
         return result;
-    }
-
-    // Returns the value of NV pair key on obj as a string, or empty if
-    // obj / pair / string is null or empty. NUL-safe.
-    std::string nv_string(LLViewerObject* obj, const char* key)
-    {
-        if (!obj)
-        {
-            return std::string();
-        }
-        LLNameValue* nv = obj->getNVPair(key);
-        if (!nv)
-        {
-            return std::string();
-        }
-        const char* s = nv->getString();
-        if (!s || s[0] == '\0')
-        {
-            return std::string();
-        }
-        return std::string(s);
     }
 
     LLSD object_id_command_params()
@@ -549,7 +525,10 @@ void LLScriptEditorWSServer::onStopped()
 
     LL_INFOS("ScriptEditorWS") << "Script editor WebSocket server stopped, all state cleaned up" << LL_ENDL;
 
-    LLNotificationsUtil::add("ExternalEditorServerStopped");
+    if (!LLApp::isExiting())
+    {
+        LLNotificationsUtil::add("ExternalEditorServerStopped");
+    }
 }
 
 void LLScriptEditorWSServer::onConnectionOpened(const LLWebsocketMgr::WSConnection::ptr_t& connection)
@@ -621,10 +600,12 @@ size_t LLScriptEditorWSServer::unauthenticatedConnectionCount() const
 
 bool LLScriptEditorWSServer::update()
 {
-    // A server nobody is connected to stops after a while, so that a
+    // A server nobody is connected to may stop after a while, so that a
     // port is not held for a client that has gone; it starts again the
-    // next time an editor asks for it. Zero keeps it up for the session.
-    static LLCachedControl<S32> idle_timeout(gSavedSettings, "ExternalWebsocketSyncIdleTimeout", 600);
+    // next time an editor asks for it. Zero, as it is unless set, keeps it
+    // up for the session: an editor started later finds nothing to connect
+    // to once it has stopped.
+    static LLCachedControl<S32> idle_timeout(gSavedSettings, "ExternalWebsocketSyncIdleTimeout", 0);
     const F64                   since = mIdleSince.load();
     if (since > 0.0 && idle_timeout > 0 && LLTimer::getTotalSeconds().value() - since >= static_cast<F64>(idle_timeout) && getConnectionCount() == 0)
     {
@@ -1896,8 +1877,9 @@ LLSD LLScriptEditorWSServer::saveScript(LLViewerObject* prim, LLInventoryItem* i
     if (region_of(prim)->getCapability("UpdateScriptTask").empty())
         throw LLJSONRPCConnection::InternalError("UpdateScriptTask capability not available");
 
-    // Sent as the studio sends it: expanded afresh where the preprocessor
-    // is on, or where the script is in its envelope, so that its includes
+    // Sent as the studio sends it: expanded afresh where a save runs the
+    // preprocessor (ALPreprocessor::wanted) -- it is on, the script is in
+    // its envelope, or it has a directive -- so that its includes
     // are current -- sent whatever the preprocessor found, since a save is
     // someone's work, with what it found said. But an envelope whose
     // compiled half was edited here, its source as it was, goes up as it
@@ -1905,6 +1887,8 @@ LLSD LLScriptEditorWSServer::saveScript(LLViewerObject* prim, LLInventoryItem* i
     const bool  lua = compile_target == "luau";
     std::string text = content;
     std::vector<ALScriptDiagnostic> preprocessed;
+    std::shared_ptr<const ALSourceMap> prepared_map;
+    S32                                prepared_code_line = 0;
     bool        as_is = false;
     const std::optional<ALScriptEnvelope> was = ALScriptEnvelope::parse(content);
     if (was && item_asset.notNull())
@@ -1912,7 +1896,7 @@ LLSD LLScriptEditorWSServer::saveScript(LLViewerObject* prim, LLInventoryItem* i
         const std::optional<ALScriptEnvelope> held = ALScriptEnvelope::parse(fetch_item_asset(prim, item, LLAssetType::AT_LSL_TEXT));
         as_is = held && held->source == was->source && held->expanded != was->expanded;
     }
-    if (!as_is && (was || ALScriptPreprocessor::enabled()))
+    if (!as_is && ALPreprocessor::wanted(content, lua, ALScriptPreprocessor::enabled()) != ALPreprocessor::Wanted::No)
     {
         auto prepared = std::make_shared<ALScriptPrepared>();
         await_async_result(
@@ -1928,8 +1912,10 @@ LLSD LLScriptEditorWSServer::saveScript(LLViewerObject* prim, LLInventoryItem* i
                     },
                     true);
             });
-        text         = prepared->text;
-        preprocessed = prepared->errors;
+        text               = prepared->text;
+        preprocessed       = prepared->errors;
+        prepared_map       = prepared->map;
+        prepared_code_line = prepared->codeLine;
     }
 
     // Through the workspace, which every save goes through: it refuses what
@@ -1940,6 +1926,11 @@ LLSD LLScriptEditorWSServer::saveScript(LLViewerObject* prim, LLInventoryItem* i
     options.compileTarget = compile_target;
     options.running       = is_running;
     options.sender        = ALScriptSender(ALScriptOrigin::Bridge);
+    if (prepared_map)
+    {
+        options.sourceMap = prepared_map;
+        options.codeLine  = prepared_code_line;
+    }
     auto        answer    = std::make_shared<ALScriptCompileResult>();
     std::string refused;
     const LLSD  landed = await_async_result(
@@ -1965,79 +1956,34 @@ LLSD LLScriptEditorWSServer::saveScript(LLViewerObject* prim, LLInventoryItem* i
     if (!answer->error.empty())
         throw LLJSONRPCConnection::InternalError("Upload failed: " + answer->error);
 
-    LLSD cb_result;
-    cb_result["compiled"]     = answer->success;
-    cb_result["new_asset_id"] = answer->newAssetId;
-    for (const std::string& message : answer->messages)
-    {
-        cb_result["errors"].append(message);
-    }
-
+    // What the compiler said, as places in the text the client sent: where
+    // that went up expanded, through the expansion's map to the source,
+    // which stands in the client's text from its second line where the
+    // client sent an envelope of its own. Only where it did not compile,
+    // as the protocol has it.
     LLSD response;
     response["success"]  = true;
     response["prim_id"]  = prim_id;
     response["item_id"]  = item_id;
-    response["compiled"] = cb_result["compiled"];
-    if (!cb_result["compiled"].asBoolean() && cb_result.has("errors"))
+    response["compiled"] = answer->success;
+    const S32 source_line = was ? 1 : 0;
+    const bool is_lua     = compile_target == "luau" || compile_target == "lsl-luau";
+    if (!answer->success)
     {
         response["diagnostics"] = LLSD::emptyArray();
-
-        const bool is_lua =
-            compile_target == "luau" ||
-            compile_target == "lsl-luau";
-
-        for (const auto& error : llsd::inArray(cb_result["errors"]))
+        for (const ALScriptDiagnostic& said : answer->inSource(source_line))
         {
-            // The match views the text, so the text is kept for as long.
-            const std::string text = error.asString();
-            ALRegexMatch match;
-            LLSD diagnostic;
-            diagnostic["level"] = "ERROR";
-            S32 line_number = 0;
-            S32 col_number = 0;
-
-            if (is_lua &&
-                LUAU_LOCATION_PATTERN.match(text, &match) &&
-                LLStringUtil::convertToS32(match.str(2), line_number))
-            {
-                diagnostic["row"] = line_number;
-                diagnostic["column"] = 0;
-                diagnostic["message"] = match.str(3);
-            }
-            else if (!is_lua &&
-                     LSL_LOCATION_PATTERN.match(text, &match) &&
-                     LLStringUtil::convertToS32(match.str(1), line_number) &&
-                     LLStringUtil::convertToS32(match.str(2), col_number) &&
-                     line_number < S32_MAX &&
-                     col_number < S32_MAX)
-            {
-                diagnostic["row"] = line_number + 1;
-                diagnostic["column"] = col_number + 1;
-                diagnostic["level"] = match.str(3);
-                diagnostic["message"] = match.str(4);
-                diagnostic["format"] = "lsl";
-            }
-            else
-            {
-                diagnostic["row"] = 0;
-                diagnostic["column"] = 0;
-                diagnostic["message"] = text;
-            }
-
-            response["diagnostics"].append(diagnostic);
+            response["diagnostics"].append(diagnosticEntry(said, is_lua));
         }
     }
 
-    // What the preprocessor found, which the script went up with; and a
-    // compiled half that went up as it was edited.
-    for (const ALScriptDiagnostic& found : preprocessed)
+    // What the preprocessor found, which the script went up with, at the
+    // source's lines; and a compiled half that went up as it was edited.
+    for (ALScriptDiagnostic found : preprocessed)
     {
-        LLSD diagnostic;
-        diagnostic["level"]   = found.level;
-        diagnostic["row"]     = found.line + 1;
-        diagnostic["column"]  = found.hasColumn ? found.column + 1 : 0;
-        diagnostic["message"] = found.message;
-        response["diagnostics"].append(diagnostic);
+        found.line += source_line;
+        found.hasColumn = found.hasColumn && source_line == 0;
+        response["diagnostics"].append(diagnosticEntry(found, is_lua));
     }
     if (as_is)
     {
@@ -2468,20 +2414,26 @@ LLSD LLScriptEditorWSServer::compiledMessage(const std::string& script_id, bool 
     params["diagnostics"] = LLSD::emptyArray();
     for (const ALScriptDiagnostic& diagnostic : diagnostics)
     {
-        // The protocol counts from one, and says zero for a place the
-        // compiler did not name.
-        LLSD entry;
-        entry["row"]     = diagnostic.line + 1;
-        entry["column"]  = diagnostic.hasColumn ? diagnostic.column + 1 : 0;
-        entry["level"]   = diagnostic.level.empty() ? std::string("ERROR") : diagnostic.level;
-        entry["message"] = diagnostic.message;
-        if (!lua)
-        {
-            entry["format"] = "lsl";
-        }
-        params["diagnostics"].append(entry);
+        params["diagnostics"].append(diagnosticEntry(diagnostic, lua));
     }
     return params;
+}
+
+// static
+LLSD LLScriptEditorWSServer::diagnosticEntry(const ALScriptDiagnostic& diagnostic, bool lua)
+{
+    // The protocol counts from one, and says zero for a place the
+    // compiler did not name.
+    LLSD entry;
+    entry["row"]     = diagnostic.hasLine ? diagnostic.line + 1 : 0;
+    entry["column"]  = diagnostic.hasLine && diagnostic.hasColumn ? diagnostic.column + 1 : 0;
+    entry["level"]   = diagnostic.level.empty() ? std::string("ERROR") : diagnostic.level;
+    entry["message"] = diagnostic.message;
+    if (!lua)
+    {
+        entry["format"] = "lsl";
+    }
+    return entry;
 }
 
 namespace
@@ -2493,13 +2445,23 @@ namespace
     }
 }
 
+bool LLScriptEditorWSServer::holds(const ALScriptRef& ref) const
+{
+    if (mSubscriptions.find(buildScriptSubscriptionId(ref.object, ref.item)) != mSubscriptions.end())
+    {
+        return true;
+    }
+    LLViewerObject* prim = ref.inInventory() ? nullptr : gObjectList.findObject(ref.object);
+    const LLViewerObject* root = prim && prim->getRootEdit() ? prim->getRootEdit() : prim;
+    return root && isObjectPublished(root->getID());
+}
+
 void LLScriptEditorWSServer::sendCompiled(const ALScriptCompileResult& result)
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_SCRIPTDEV;
-    // Nothing compiled: a notecard, or an upload that failed. Nor one this
-    // bridge sent, which its client is answered about as the save's reply.
-    if (result.kind == ALScriptKind::Notecard || !result.error.empty() || result.ref.item.isNull() ||
-        result.sender.origin == ALScriptOrigin::Bridge)
+    // Nothing compiled: a notecard. Nor one this bridge sent, which its
+    // client is answered about as the save's reply.
+    if (result.kind == ALScriptKind::Notecard || result.ref.item.isNull() || result.sender.origin == ALScriptOrigin::Bridge)
     {
         return;
     }
@@ -2520,7 +2482,21 @@ void LLScriptEditorWSServer::sendCompiled(const ALScriptCompileResult& result)
     const LLInventoryItem* item = result.ref.inInventory() ? gInventory.getItem(result.ref.item) : prim ? prim->getInventoryItem(result.ref.item) : nullptr;
     const bool             lua  = subscribed != mSubscriptions.end() ? subscribed->second.mLua : isLuaItem(item);
 
-    LLSD message = compiledMessage(script_id, result.success, result.running, result.diagnostics, lua);
+    // Of the source, which is what the client has: a save from the studio
+    // went up in its envelope, expanded. An upload that failed compiled
+    // nothing, and says why at no line.
+    std::vector<ALScriptDiagnostic> said = result.inSource();
+    if (!result.error.empty())
+    {
+        LLStringUtil::format_map_t args;
+        args["[REASON]"] = result.error;
+        ALScriptDiagnostic failed;
+        failed.hasLine = false;
+        failed.level   = "ERROR";
+        failed.message = LLTrans::getString("BridgeNotSaved", args);
+        said           = { failed };
+    }
+    LLSD message = compiledMessage(script_id, result.success && result.error.empty(), result.running, said, lua);
     if (prim)
     {
         message["object_id"] = root_id;
@@ -2665,30 +2641,6 @@ void LLScriptEditorWSServer::notifyAll(const std::string& method, const LLSD& pa
 }
 
 
-// static
-std::string LLScriptEditorWSServer::getPrimName(LLViewerObject* obj)
-{
-    std::string name = nv_string(obj, "Name");
-    if (!name.empty())
-    {
-        return name;
-    }
-
-    if (!obj)
-    {
-        return std::string();
-    }
-
-    LLSelectNode* node = LLSelectMgr::instance().getSelection()->findNode(obj);
-    if (node && !node->mName.empty())
-    {
-        return node->mName;
-    }
-
-    // Never emit an empty prim/object name to downstream tooling.
-    return obj->getID().asString();
-}
-
 bool LLScriptEditorWSServer::publishObject(const LLUUID& object_id)
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_SCRIPTDEV;
@@ -2720,12 +2672,8 @@ bool LLScriptEditorWSServer::publishObject(const LLUUID& object_id)
     // Collect root + all children
     std::vector<LLViewerObject*> prims = LLPublishedObjectMgr::linksetOf(root);
 
-    // Request object properties for each prim in the linkset (root + children),
-    // matching the hover path so name/description metadata is refreshed.
-    for (LLViewerObject* prim : prims)
-    {
-        LLSelectMgr::instance().requestObjectPropertiesFamily(prim);
-    }
+    // The sim coalesces properties-family requests to the root, so one request covers the linkset.
+    LLSelectMgr::instance().requestObjectPropertiesFamily(root);
 
     // Set up a PendingPublish to coordinate inventory loading across all prims.
     // We register a listener and call requestInventory() on every prim.
@@ -2781,6 +2729,12 @@ void LLScriptEditorWSServer::onObjectPropertyChanged(
     const LLUUID& prim_id, const std::string& name, const std::string& desc, S16 inventory_serial)
 {
     mPublishedObjectManager.onObjectPropertyChanged(prim_id, name, desc, inventory_serial);
+}
+
+void LLScriptEditorWSServer::onObjectPermissionsReceived(
+    const LLUUID& prim_id, const LLUUID& owner_id, U32 owner_mask, U32 next_owner_mask)
+{
+    mPublishedObjectManager.onObjectPermissionsReceived(prim_id, owner_id, owner_mask, next_owner_mask);
 }
 
 void LLScriptEditorWSServer::unpublishObject(const LLUUID& object_id, const std::string& reason)
@@ -3039,23 +2993,111 @@ LLScriptEditorWSConnection::Challenge LLScriptEditorWSConnection::writeChallenge
     // folder can be everyone's.
     const std::string file = LLFile::tmpdir() + "sl_script_challenge_" + LLUUID::generateNewID().asString() + ".tmp";
     const std::string text = challenge.mSecret.asString();
-    std::error_code   ec;
-    LLFile            out(file, LLFile::out | LLFile::noreplace, ec, 0600);
-    if (ec)
-    {
-        // Whatever is there by that name is somebody else's, and stays.
-        LL_WARNS("ScriptEditorWS") << "Unable to make challenge file " << file << ": " << ec.message() << LL_ENDL;
-        return {};
-    }
-    const bool written = out.write(text.data(), static_cast<S64>(text.size()), ec) == static_cast<S64>(text.size()) && !ec;
-    if (out.close(ec) != 0 || !written)
+    if (!writeUserOnlyFile(file, text))
     {
         LL_WARNS("ScriptEditorWS") << "Unable to write challenge file " << file << LL_ENDL;
-        LLFile::remove(file);
         return {};
     }
 
     challenge.mFile = file;
     return challenge;
+}
+
+// static
+bool LLScriptEditorWSConnection::writeUserOnlyFile(const std::string& file, const std::string& text)
+{
+#if LL_WINDOWS
+    // LLFile takes its permission bits for a read-only flag at most here,
+    // never an ACL, so 0600 would leave the file to whatever its folder
+    // grants. Made with an ACL of its own: the user's, and only theirs.
+    HANDLE token = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
+    {
+        LL_WARNS("ScriptEditorWS") << "Unable to open the process token for the challenge file's ACL" << LL_ENDL;
+        return false;
+    }
+    DWORD needed = 0;
+    GetTokenInformation(token, TokenUser, nullptr, 0, &needed);
+    std::vector<BYTE> user_info(needed);
+    const bool got_user = needed != 0 && GetTokenInformation(token, TokenUser, user_info.data(), needed, &needed);
+    CloseHandle(token);
+    if (!got_user)
+    {
+        LL_WARNS("ScriptEditorWS") << "Unable to read the current user's SID for the challenge file's ACL" << LL_ENDL;
+        return false;
+    }
+    PSID user_sid = reinterpret_cast<PTOKEN_USER>(user_info.data())->User.Sid;
+
+    EXPLICIT_ACCESSW ea     = {};
+    ea.grfAccessPermissions = GENERIC_READ | GENERIC_WRITE | DELETE;
+    ea.grfAccessMode        = SET_ACCESS;
+    ea.grfInheritance       = NO_INHERITANCE;
+    ea.Trustee.TrusteeForm  = TRUSTEE_IS_SID;
+    ea.Trustee.TrusteeType  = TRUSTEE_IS_USER;
+    ea.Trustee.ptstrName    = reinterpret_cast<LPWSTR>(user_sid);
+
+    PACL dacl = nullptr;
+    if (SetEntriesInAclW(1, &ea, nullptr, &dacl) != ERROR_SUCCESS)
+    {
+        LL_WARNS("ScriptEditorWS") << "Unable to build an ACL for the challenge file" << LL_ENDL;
+        return false;
+    }
+
+    // Protected: a new file's ACL takes in what its folder hands down
+    // unless it says not to, and a temp folder can hand everyone read.
+    SECURITY_DESCRIPTOR sd;
+    const bool sd_ok = InitializeSecurityDescriptor(&sd, SECURITY_DESCRIPTOR_REVISION) &&
+                       SetSecurityDescriptorDacl(&sd, TRUE, dacl, FALSE) &&
+                       SetSecurityDescriptorControl(&sd, SE_DACL_PROTECTED, SE_DACL_PROTECTED);
+    if (!sd_ok)
+    {
+        LL_WARNS("ScriptEditorWS") << "Unable to build a security descriptor for the challenge file" << LL_ENDL;
+        LocalFree(dacl);
+        return false;
+    }
+
+    SECURITY_ATTRIBUTES sa  = {};
+    sa.nLength              = sizeof(sa);
+    sa.lpSecurityDescriptor = &sd;
+    sa.bInheritHandle       = FALSE;
+
+    // CREATE_NEW, as LLFile::noreplace: whatever is there by that name is
+    // somebody else's, and stays.
+    const std::wstring wfile = ll_convert<std::wstring>(file);
+    HANDLE      handle = CreateFileW(wfile.c_str(), GENERIC_WRITE, 0, &sa, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+    const DWORD error  = GetLastError();
+    LocalFree(dacl);
+    if (handle == INVALID_HANDLE_VALUE)
+    {
+        LL_WARNS("ScriptEditorWS") << "Unable to make challenge file " << file << ": error " << error << LL_ENDL;
+        return false;
+    }
+    DWORD      written = 0;
+    const bool ok      = WriteFile(handle, text.data(), static_cast<DWORD>(text.size()), &written, nullptr) && written == text.size();
+    const bool closed  = CloseHandle(handle) != FALSE;
+    if (!ok || !closed)
+    {
+        LLFile::remove(file);
+        return false;
+    }
+    return true;
+#else
+    std::error_code ec;
+    LLFile          out(file, LLFile::out | LLFile::noreplace, ec, 0600);
+    if (ec)
+    {
+        // Whatever is there by that name is somebody else's, and stays.
+        LL_WARNS("ScriptEditorWS") << "Unable to make challenge file " << file << ": " << ec.message() << LL_ENDL;
+        return false;
+    }
+    const bool written = out.write(text.data(), static_cast<S64>(text.size()), ec) == static_cast<S64>(text.size()) && !ec;
+    const bool closed  = out.close(ec) == 0;
+    if (!written || !closed)
+    {
+        LLFile::remove(file);
+        return false;
+    }
+    return true;
+#endif
 }
 

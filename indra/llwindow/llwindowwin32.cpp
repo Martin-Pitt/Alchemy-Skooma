@@ -38,8 +38,8 @@
 // Linden library includes
 #include "llerror.h"
 #include "llexception.h"
-#include "llfasttimer.h"
 #include "llgl.h"
+#include "llrender.h"
 #include "llstring.h"
 #include "lldir.h"
 #include "llsdutil.h"
@@ -603,6 +603,9 @@ LLWindowWin32::LLWindowWin32(LLWindowCallbacks* callbacks,
     }
 
     // Initialize the keyboard
+    // One keyboard for the process, a window made after another replacing
+    // the one before, which nothing else holds.
+    delete gKeyboard;
     gKeyboard = new LLKeyboardWin32();
     gKeyboard->setCallbacks(callbacks);
 
@@ -746,6 +749,13 @@ LLWindowWin32::LLWindowWin32(LLWindowCallbacks* callbacks,
         mNativeAspectRatio = ((F32)dev_mode.dmPelsWidth) / ((F32)dev_mode.dmPelsHeight);
     }
     else
+    {
+        current_refresh = 60;
+    }
+    // 0 and 1 mean "the display hardware's default rate", which is what a
+    // virtual machine's display or a remote session reports. Taken as a rate
+    // they would cap TargetFPS at 1 the moment vsync is turned on.
+    if (current_refresh <= 1)
     {
         current_refresh = 60;
     }
@@ -1255,6 +1265,11 @@ bool LLWindowWin32::switchContext(bool fullscreen, const LLCoordScreen& size, bo
         current_refresh = dev_mode.dmDisplayFrequency;
     }
     else
+    {
+        current_refresh = 60;
+    }
+    // The hardware default, as above.
+    if (current_refresh <= 1)
     {
         current_refresh = 60;
     }
@@ -1811,8 +1826,8 @@ const   S32   max_format  = (S32)num_formats - 1;
     if (auto_show)
     {
         show();
-        glClearColor(0.0f, 0.0f, 0.0f, 0.f);
-        glClear(GL_COLOR_BUFFER_BIT);
+        gGL.setClearColor(LLColor4::transparent);
+        gGL.clear(GL_COLOR_BUFFER_BIT);
         swapBuffers();
     }
 

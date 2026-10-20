@@ -34,6 +34,7 @@
 #include "llinstantmessage.h"
 
 #include "alavataractions.h"
+#include "alchattimestamp.h"
 #include "alfloaterblocked.h"
 #include "llimview.h"
 #include "llcommandhandler.h"
@@ -69,6 +70,7 @@
 #include "llviewercontrol.h"
 #include "llviewermenu.h"
 #include "llviewerobjectlist.h"
+#include "alavatargroups.h"
 // [SL:KB] - Patch: Chat-Alerts | Checked: 2012-07-10 (Catznip-3.3)
 #include "llaudioengine.h"
 #include "lltextparser.h"
@@ -200,7 +202,7 @@ public:
             if (mTime > 0) // have frame time
             {
                 time_t current_time = time_corrected();
-                time_t message_time = (time_t)(current_time - LLFrameTimer::getElapsedSeconds() + mTime);
+                time_t message_time = (time_t)(current_time - LLFrameTimer::getUptimeSeconds() + mTime);
 
                 // Report abuse shouldn't use AM/PM, use 24-hour time
                 time_string = "[" + LLTrans::getString("TimeMonth") + "]/["
@@ -222,7 +224,7 @@ public:
 
                 // Just add current date if not full.
                 // Should be fine since both times are supposed to be SLT.
-                if (!time_string.empty() && time_string.size() < 7)
+                if (!time_string.empty() && time_string.find('/') == std::string::npos)
                 {
                     time_string = "[" + LLTrans::getString("TimeMonth") + "]/["
                         + LLTrans::getString("TimeDay") + "]/["
@@ -502,7 +504,7 @@ public:
             if (mTime > 0) // have frame time
             {
                 time_t current_time = time_corrected();
-                time_t message_time = (time_t)(current_time - LLFrameTimer::getElapsedSeconds() + mTime);
+                time_t message_time = (time_t)(current_time - LLFrameTimer::getUptimeSeconds() + mTime);
 
                 // Report abuse shouldn't use AM/PM, use 24-hour time
                 time_string = "[" + LLTrans::getString("TimeMonth") + "]/["
@@ -524,7 +526,7 @@ public:
 
                 // Just add current date if not full.
                 // Should be fine since both times are supposed to be SLT.
-                if (!time_string.empty() && time_string.size() < 7)
+                if (!time_string.empty() && time_string.find('/') == std::string::npos)
                 {
                     time_string = "[" + LLTrans::getString("TimeMonth") + "]/["
                         + LLTrans::getString("TimeDay") + "]/["
@@ -1114,7 +1116,7 @@ private:
 
         LLRect rect_before = time_box->getRect();
 
-        time_box->setValue(chat.mTimeStr);
+        time_box->setValue(ALChatTimestamp::format(chat.mTimeStr, gSavedSettings.getBOOL("AlchemyIMShowSeconds")));
 
         // set necessary textbox width to fit all text
         time_box->reshapeToFitText();
@@ -1339,6 +1341,7 @@ void LLChatHistory::clear()
 void LLChatHistory::appendMessage(const LLChat& chat, const LLSD &args, const LLStyle::Params& input_append_params)
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_UI;
+    const std::string time = ALChatTimestamp::format(chat.mTimeStr, gSavedSettings.getBOOL("AlchemyIMShowSeconds"));
     bool use_plain_text_chat_history = args["chat_history_style"].asInteger() >= 1;
     bool use_irssi_text_chat_history = args["chat_history_style"].asInteger() >= 2;
     bool square_brackets = false; // square brackets necessary for a system messages
@@ -1373,6 +1376,12 @@ void LLChatHistory::appendMessage(const LLChat& chat, const LLSD &args, const LL
     LLUIColor txt_color = LLUIColorTable::instance().getColor("White");
     LLUIColor name_color = LLUIColorTable::instance().getColor("ChatHeaderDisplayNameColor"); // <alchemy/>
     LLViewerChat::getChatColor(chat, txt_color, alpha);
+    LLColor4 irc_name;
+    const bool irc_name_color = ALAvatarGroups::instance().getChatNameColor(chat, irc_name);
+    if (irc_name_color)
+    {
+        name_color = irc_name;
+    }
 
     LLFontGL* fontp = LLViewerChat::getChatFont();
     std::string font_name = LLFontGL::nameFromFont(fontp);
@@ -1462,7 +1471,7 @@ void LLChatHistory::appendMessage(const LLChat& chat, const LLSD &args, const LL
                 timestamp_style.color(timestamp_color);
                 timestamp_style.readonly_color(timestamp_color);
             }
-            mEditor->appendText("[" + chat.mTimeStr + "] ", prependNewLineState, timestamp_style);
+            mEditor->appendText("[" + time + "] ", prependNewLineState, timestamp_style);
             prependNewLineState = false;
         }
 
@@ -1535,6 +1544,14 @@ void LLChatHistory::appendMessage(const LLChat& chat, const LLSD &args, const LL
             {
                 LLStyle::Params link_params(body_message_params);
                 link_params.overwriteFrom(LLStyleMap::instance().lookupAgent(chat.mFromID));
+                if (irc_name_color)
+                {
+                    // Keep the speaker's name colour instead of letting the
+                    // agent SLURL re-parse to the default HTMLLinkColor link style.
+                    link_params.use_default_link_style = false;
+                    link_params.color = name_color;
+                    link_params.readonly_color = name_color;
+                }
 
                 if (use_irssi_text_chat_history)
                 {
@@ -1623,12 +1640,12 @@ void LLChatHistory::appendMessage(const LLChat& chat, const LLSD &args, const LL
         p.left_pad = mLeftWidgetPad;
         p.right_pad = mRightWidgetPad;
 
-        LLDate new_message_time = LLDate::now();
+        const F64 new_message_time = LLFrameTimer::getTotalSeconds();
         if (!teleport_separator
             && mLastFromName == chat.mFromName
             && mLastFromID == chat.mFromID
-            && mLastMessageTime.notNull()
-            && (new_message_time.secondsSinceEpoch() - mLastMessageTime.secondsSinceEpoch()) < 60.0
+            && mLastMessageTime > 0.0
+            && (new_message_time - mLastMessageTime) < 60.0
             && mIsLastMessageFromLog == message_from_log)  //distinguish between current and previous chat session's histories
         {
             view = getSeparator();
@@ -1664,7 +1681,7 @@ void LLChatHistory::appendMessage(const LLChat& chat, const LLSD &args, const LL
         view->reshape(target_rect.getWidth(), view->getRect().getHeight());
         view->setOrigin(target_rect.mLeft, view->getRect().mBottom);
 
-        std::string widget_associated_text = "\n[" + chat.mTimeStr + "] ";
+        std::string widget_associated_text = "\n[" + time + "] ";
         if (utf8str_trim(chat.mFromName).size() != 0 && chat.mFromName != SYSTEM_FROM)
             widget_associated_text += chat.mFromName + delimiter;
 

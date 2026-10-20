@@ -49,6 +49,7 @@
 #include <vector>
 
 class ALScriptContentsIndex;
+class ALScriptRegionUsage;
 class ALScriptTempFiles;
 class ALSourceMap;
 class LLChat;
@@ -115,6 +116,10 @@ public:
     // editor to hear.
     typedef boost::signals2::signal<void(const ALScriptSaved&)> saved_signal_t;
     boost::signals2::connection onSaved(const saved_signal_t::slot_type& slot) { return mSaved.connect(slot); }
+    // A save that went up kept in the account's history (ALRecovery),
+    // whoever sent it, with what the item and its object are called; and
+    // what the world held, kept the same way before it is gone over.
+    void keepInHistory(const ALScriptSaved& saved) const;
 
     // A script's text as it goes up again: expanded afresh from its
     // source where the preprocessor wrapped it or is on, so that its
@@ -124,8 +129,16 @@ public:
     // preprocessor made it, the source safe in the envelope, with its
     // errors said: a save of someone's work, which always goes up.
     typedef std::function<void(const ALScriptPrepared&)> prepared_callback_t;
+    // Where the text is a file's on disk, a script's master: its identity,
+    // `disk:<path>`, which a name its includes and requires give is read
+    // from; and what the upload header's @file names it, never from a root.
+    struct From
+    {
+        std::string path;
+        std::string file;
+    };
     void prepare(const ALScriptRef& ref, const std::string& name, const LLUUID& asset_id, const std::string& text, bool lua,
-                 const std::string& target, prepared_callback_t callback, bool anyway = false);
+                 const std::string& target, prepared_callback_t callback, bool anyway = false, const From& from = From());
 
     // A script fetched, prepared, and uploaded to compile for a target:
     // what was asked, or "auto" for what it compiles for now. What the
@@ -176,6 +189,10 @@ public:
     // The region's answer, registered for the message; the legacy live
     // editor hears it through here.
     static void processScriptRunningReply(LLMessageSystem* msg, void** data);
+    // The region's answer to Top Scripts and Top Colliders, registered for
+    // the message: the studio's where it asked for its objects' time
+    // (ALScriptRegionUsage), else the Top Objects floater's.
+    static void processLandStatReply(LLMessageSystem* msg, void** data);
 
     // The experience a script in an object runs under, asked of its
     // region: the null one for none -- and for a script in the inventory,
@@ -241,6 +258,9 @@ public:
     // whether its scripts run: the one index the studio's windows, lookups
     // and searches read (alscriptcontentsindex.h).
     ALScriptContentsIndex& contentsIndex() { return *mContentsIndex; }
+    // What the region reserves for the objects in hand, for every studio
+    // window alike; and the world it asks, the viewer's.
+    ALScriptRegionUsage&   regionUsage() { return *mRegionUsage; }
     // The copies of scripts written to the temp folder for an editor
     // outside, whichever window writes one (alscripttempfiles.h): named
     // alike, held rather than owned, and what a session that crashed left
@@ -320,6 +340,7 @@ private:
     // The saves on their way, by request, until each is answered.
     boost::unordered_flat_map<U64, ALScriptRef> mUnderway;
     std::unique_ptr<ALScriptContentsIndex> mContentsIndex;
+    std::unique_ptr<ALScriptRegionUsage>   mRegionUsage;
     std::unique_ptr<ALScriptTempFiles>     mTempFiles;
     // What leaves the object list let go of by the index.
     boost::signals2::scoped_connection     mPresenceConnection;
@@ -333,7 +354,8 @@ private:
     LLEventTimer*                 mBurstTimer = nullptr;
     std::deque<ALScriptRuntimeEvent> mRecent;
     runtime_signal_t              mRuntime;
-    // When each script's errors were last let go of, by its item.
+    // When each script's errors were last let go of, by its item, as an
+    // event's heardAt counts.
     boost::unordered_flat_map<LLUUID, F64> mRuntimeSince;
     // The one in front is under way; the rest wait for it to end.
     std::vector<std::shared_ptr<Transfer>> mTransfers;

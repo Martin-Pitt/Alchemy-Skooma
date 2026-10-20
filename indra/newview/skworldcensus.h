@@ -28,8 +28,13 @@
 #include "llsingleton.h"
 #include "llviewerobject.h"
 #include "sknavcluster.h"
+#include "sknavfeatures.h"
 #include "sknavtypes.h"
+#include "threadpool_fwd.h"
 
+class SKPhysicsHavokShape;
+
+#include <future>
 #include <map>
 #include <memory>
 #include <unordered_map>
@@ -49,6 +54,11 @@ struct SKCensusSnapshot
     F64 mRange = 0.0;                           ///< metres from either centre the scan covered
     std::vector<sknav::RecordPtr> mRecords;     ///< static and dynamic alike; clusters skip the dynamic
     sknav::ClusterSet mClusters;
+    /// Doors, ladders, shafts, vehicles and seats among this scan's parts.
+    /// The records carry a part's kind from the scan after.
+    std::vector<sknav::Feature> mFeatures;
+    /// A DoorEntity per DOOR feature, built while the parts' names were at hand.
+    std::vector<sknav::DoorEntity> mDoors;
 
     struct Stats
     {
@@ -56,11 +66,14 @@ struct SKCensusSnapshot
         U32 mRecords = 0;
         U32 mDynamic = 0;
         U32 mSurround = 0;
-        U32 mPlaceholders = 0;      ///< provenance BOX: an asset still fetching
+        U32 mPlaceholders = 0;      ///< provenance BOX: objects known only from the region's object cache
         U32 mCached = 0;            ///< parts reused from the previous scan
         U32 mFromObjectCache = 0;   ///< boxes from the region's object cache, never drawn this session
+        U32 mTiny = 0;              ///< parts under SKNavMinShape in every axis: never a record
         U32 mTriangles = 0;
         U32 mRolesKnown = 0;
+        U32 mFeatures = 0;
+        F32 mFeatureMs = 0.f;       ///< the facts gathered and the rules run
         F32 mScanMs = 0.f;          ///< main-thread time the scan took, summed over its slices
         F32 mClusterMs = 0.f;
     } mStats;
@@ -70,7 +83,8 @@ typedef std::shared_ptr<const SKCensusSnapshot> SKCensusSnapshotPtr;
 
 /// Runs a time-sliced scan of the object list under a per-frame budget and
 /// swaps in a whole snapshot when one completes. Readers keep the previous
-/// snapshot meanwhile. Main thread only.
+/// snapshot meanwhile. Live object access stays on the main thread; clustering
+/// runs on immutable records on a worker.
 class SKWorldCensus : public LLSingleton<SKWorldCensus>
 {
     LLSINGLETON(SKWorldCensus);
@@ -81,6 +95,9 @@ class SKWorldCensus : public LLSingleton<SKWorldCensus>
     void cleanupSingleton() override;
 
 public:
+    /// The highest land under a box's plan corners and middle, -1e9 with no world.
+    static F32 landUnder(const LLVector3d& min, const LLVector3d& max);
+
     /// Once per frame after objects have moved. Does nothing unless the
     /// navmesh is enabled and something wants a census (a demand, or the overlay).
     void update();
@@ -98,6 +115,34 @@ public:
     /// The sim's navmesh role for a linkset, when the region has told us.
     sknav::NavRole roleOf(const LLUUID& root) const;
 
+    /// What the region's linkset reply says about a root besides its role.
+    /// Only roots in the agent's region are covered; a missing entry or an
+    /// empty name says nothing either way.
+    struct LinksetFacts
+    {
+        std::string mName;
+        std::string mDescription;
+        bool mScriptedKnown = false;
+        bool mScripted = false;
+    };
+    const LinksetFacts* linksetFactsOf(const LLUUID& root) const;
+
+    /// What this session has seen a root do. Kept across region changes, so
+    /// crew get off and a vehicle stays one; a root that is no vehicle or
+    /// working car goes once it has been out of sight for ten minutes.
+    struct RootHistory
+    {
+        bool mEverMoved = false;
+        F32 mTravel = 0.f;              ///< metres gone, turning not included
+        F64 mLastSeen = 0.f;
+        bool mEverCrewed = false;
+        bool mVehicle = false;          ///< crewed while physical or travelling: a vehicle for the session
+        bool mWorkingElevator = false;  ///< it was the car of a working shaft
+        sknav::FeatureKind mKind = sknav::FeatureKind::NONE;
+        std::vector<LLUUID> mCrew;      ///< seated on it at the last scan
+    };
+    const RootHistory* historyOf(const LLUUID& root) const;
+
     std::string statsLine() const;
 
 private:
@@ -105,14 +150,22 @@ private:
     {
         U64 mSignature = 0;
         sknav::RecordPtr mRecord;
-        F32 mLastSeen = 0.f;
+        sknav::RecordPtr mPhysics;  ///< a surround's physics shape, beside its rendered one
+        /// The simulator's triangles once they arrived, held so the repository dropping them does not rebuild the record.
+        std::shared_ptr<const SKPhysicsHavokShape> mSim;
+        LLUUID mSimMesh;
+        F64 mLastSeen = 0.f;
     };
 
     struct Rest
     {
         LLVector3d mPosition;
-        F32 mMovedAt = -1.f;        ///< last time the root was seen somewhere else
-        F32 mLastSeen = 0.f;
+        LLQuaternion mRotation;     ///< baseline together with mPosition
+        F64 mMovedAt = -1.f;        ///< last time the root was seen somewhere else
+        F64 mBurstStart = -1.f;     ///< when its current or last burst of moves began
+        std::vector<F64> mBursts;   ///< when each recent burst began, oldest first
+        F64 mMoverUntil = -1.f;     ///< it moves by habit until then
+        F64 mLastSeen = 0.f;
         bool mKnown = false;
     };
 
@@ -138,6 +191,8 @@ private:
         /// once when the scan begins and emitted as boxes after the live pass.
         std::vector<CachedPart> mCached;
         size_t mCachedIndex = 0;
+        /// Every part recorded this scan, as the feature rules read it.
+        std::vector<sknav::FeaturePart> mFeatureParts;
         F32 mElapsedMs = 0.f;
         bool mActive = false;
     };
@@ -157,27 +212,63 @@ private:
     void visitCached(const CachedPart& part);
     /// Every cached entry near either centre that has no object of its own.
     void gatherCached();
-    bool classifyRest(LLViewerObject* root, const LLVector3d& pos);
+    bool classifyRest(LLViewerObject* root, const LLVector3d& pos, const LLQuaternion& rot);
     bool isSurround(LLViewerObject* root, const LLVector3d& mn, const LLVector3d& mx) const;
     /// One record from one part, at the sim-side transform the caller signed.
     sknav::RecordPtr record(LLVOVolume* volume, LLViewerObject* root, sknav::Role role, bool dynamic, U64 signature,
-                            const LLVector3& pos, const LLQuaternion& rot);
+                            const LLVector3& pos, const LLQuaternion& rot, sknav::FeatureKind feature, U8 exclude,
+                            const std::shared_ptr<const SKPhysicsHavokShape>& sim);
+    /// Who is sitting on what, into the session history.
+    void gatherCrew();
+    /// The feature rules over the finished scan's parts; the part kinds they
+    /// give are what the next scan records with.
+    void classify(SKCensusSnapshot& snap);
+    /// A record into the pending snapshot, counted.
+    void take(SKCensusSnapshot& snap, const sknav::RecordPtr& rec);
 
     void requestRoles();
     void onRoles(U32 request, S32 status, std::shared_ptr<LLPathfindingObjectList> list);
 
     SKCensusSnapshotPtr mSnapshot;
     Scan mScan;
+    // Only one job in flight; no new scan until its snapshot is published or discarded.
+    std::unique_ptr<LL::ThreadPool> mClusterWorkers;
+    std::future<std::shared_ptr<SKCensusSnapshot>> mClusterJob;
+    std::vector<U64> mClusterRegions;
+    bool mDiscardClusterJob = false;
     std::unordered_map<LLUUID, PartCache> mParts;
     std::unordered_map<LLUUID, Rest> mRest;
     std::unordered_map<LLUUID, sknav::NavRole> mRoles;
+    std::unordered_map<LLUUID, LinksetFacts> mLinksets;
+    std::unordered_map<LLUUID, RootHistory> mHistory;
+    struct PartFeature
+    {
+        sknav::FeatureKind mKind = sknav::FeatureKind::NONE;
+        U8 mExclude = 0;
+    };
+    std::unordered_map<LLUUID, PartFeature> mPartFeatures;
+    /// Where each door leaf has rested this session, and the door id it was given.
+    sknav::LeafHistories mLeaves;
+    /// The sim transform each leaf with an established doorway was last seen
+    /// at it with: what its record is built from while it swings.
+    struct LeafTransform
+    {
+        LLVector3 mPos;
+        LLQuaternion mRot;
+        U64 mRegion = 0;
+    };
+    std::unordered_map<LLUUID, LeafTransform> mDoorways;
+    /// This scan's sim transform of every leaf, kept until the scan finishes.
+    std::unordered_map<LLUUID, LeafTransform> mLeafTransforms;
+    /// Each door-shaped part's face cover, cast again only when it or its neighbours change.
+    sknav::FaceCoverCache mFaceCover;
     std::map<std::string, F32> mDemands;
     U64 mStamp = 0;
-    F32 mRolesRequestedAt = -1.f;
+    F64 mRolesRequestedAt = -1.f;
     U64 mRolesRegion = 0;
     bool mRolesWanted = false;
     U32 mRolesRequestId = 0;
-    F32 mLastLog = 0.f;
+    F64 mLastLog = 0.f;
 };
 
 #endif // SK_WORLDCENSUS_H

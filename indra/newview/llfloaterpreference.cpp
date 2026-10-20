@@ -34,7 +34,12 @@
 
 #include "llfloaterpreference.h"
 
+#include "alavatargroups.h"
+#include "alchattimestamp.h"
 #include "llaudioengine.h"
+#include "lllogchat.h"
+#include "llstyle.h"
+#include "lluicolortable.h"
 #include "message.h"
 #include "llfloaterautoreplacesettings.h"
 #include "llagent.h"
@@ -75,6 +80,7 @@
 #include "llscrolllistitem.h"
 #include "llsliderctrl.h"
 #include "lltabcontainer.h"
+#include "lltexteditor.h"
 #include "lltrans.h"
 #include "lluri.h"
 #include "llviewercontrol.h"
@@ -398,11 +404,6 @@ LLFloaterPreference::LLFloaterPreference(const LLSD& key)
     mCommitCallbackRegistrar.add("Pref.DeleteTranscripts",      boost::bind(&LLFloaterPreference::onDeleteTranscripts, this));
     mCommitCallbackRegistrar.add("UpdateFilter", boost::bind(&LLFloaterPreference::onUpdateFilterTerm, this, false)); // <FS:ND/> Hook up for filtering
     mCommitCallbackRegistrar.add("Pref.CopySearchAsSLURL",      boost::bind(&LLFloaterPreference::onCopySearch, this));
-#ifdef LL_DISCORD
-    gSavedSettings.getControl("EnableDiscord")->getCommitSignal()->connect(boost::bind(&LLAppViewer::updateDiscordActivity));
-    gSavedSettings.getControl("ShowDiscordActivityDetails")->getCommitSignal()->connect(boost::bind(&LLAppViewer::updateDiscordActivity));
-    gSavedSettings.getControl("ShowDiscordActivityState")->getCommitSignal()->connect(boost::bind(&LLAppViewer::updateDiscordActivity));
-#endif
     mCommitCallbackRegistrar.add("Pref.AddSkin", boost::bind(&LLFloaterPreference::onAddSkin, this));
     mCommitCallbackRegistrar.add("Pref.RemoveSkin", boost::bind(&LLFloaterPreference::onRemoveSkin, this));
     mCommitCallbackRegistrar.add("Pref.ApplySkin", boost::bind(&LLFloaterPreference::onApplySkin, this));
@@ -586,8 +587,29 @@ bool LLFloaterPreference::postBuild()
     }
 
 #ifndef LL_DISCORD
+    LLTabContainer* privacy_tabs = getChild<LLTabContainer>("privacy_tab_container");
     LLPanel* panel = getChild<LLPanel>("privacy_preferences_discord");
-    getChild<LLTabContainer>("privacy_tab_container")->removeTabPanel(panel);
+    privacy_tabs->removeTabPanel(panel);
+    // Let go by its tab, and wanted by nothing in a build without Discord.
+    panel->die();
+
+    // General alone needs no tab row: hide it and give its room back to the page.
+    privacy_tabs->setTabsHidden(true);
+    LLPanel* general = getChild<LLPanel>("privacy_preferences_general");
+    LLRect general_rect = general->getRect();
+    general_rect.mTop = privacy_tabs->getRect().getHeight();
+    general->setShape(general_rect);
+#else
+    // The sharing options follow "Show my activity on Discord", which enables
+    // them as the panel is built; before login they are the account's
+    // settings with no account yet.
+    if (LLStartUp::getStartupState() < STATE_STARTED)
+    {
+        for (const char* name : { "show_name", "show_location", "discord_max_maturity" })
+        {
+            getChildView(name)->setEnabled(false);
+        }
+    }
 #endif
 
     return true;
@@ -1942,6 +1964,8 @@ void LLAvatarComplexityControls::setIndirectMaxArc()
 void LLFloaterPreference::refresh()
 {
     LLPanel::refresh();
+    LLSliderCtrl* draw_distance = getChild<LLSliderCtrl>("DrawDistance", true);
+    cap_draw_distance_control(draw_distance, draw_distance);
     setMaxNonImpostorsText(
         gSavedSettings.getU32("RenderAvatarMaxNonImpostors"),
         getChild<LLTextBox>("IndirectMaxNonImpostorsText", true));
@@ -2192,6 +2216,18 @@ void LLFloaterPreference::setPersonalInfo(const std::string& visibility)
     getChildView("conversation_log_combo")->setEnabled(true);
     getChild<LLUICtrl>("voice_call_friends_only_check")->setEnabled(true);
     getChild<LLUICtrl>("voice_call_friends_only_check")->setValue(gSavedPerAccountSettings.getBOOL("VoiceCallsFriendsOnly"));
+
+#ifdef LL_DISCORD
+    // The account's settings, so only once there is an account. The sharing
+    // options follow the first box by themselves from here; this catches them
+    // up when the window was built before login.
+    getChildView("enable_discord")->setEnabled(true);
+    const bool discord = gSavedPerAccountSettings.getBOOL("ALDiscordIntegration");
+    for (const char* name : { "show_name", "show_location", "discord_max_maturity" })
+    {
+        getChildView(name)->setEnabled(discord);
+    }
+#endif
 }
 
 
@@ -3087,6 +3123,116 @@ private:
 static LLPanelInjector<LLPanelPreferenceGraphics> t_pref_graph("panel_preference_graphics");
 static LLPanelInjector<LLPanelPreferencePrivacy> t_pref_privacy("panel_preference_privacy");
 static LLPanelInjector<LLPanelPreferenceSound> t_pref_sound("panel_preference_sound");
+static LLPanelInjector<LLPanelPreferenceColors> t_pref_colors("panel_preference_colors");
+
+bool LLPanelPreferenceColors::postBuild()
+{
+    mPreviewEditor = getChild<LLTextEditor>("irc_chat_preview");
+    return LLPanelPreference::postBuild();
+}
+
+void LLPanelPreferenceColors::draw()
+{
+    // The chat colour swatches write straight into LLUIColorTable, which
+    // counts its changes, so a number and a few settings say whether the
+    // preview still shows what chat would.
+    static LLCachedControl<bool> irc_colors(gSavedSettings, "AlchemyChatIRCColorsEnabled", false);
+    static LLCachedControl<F32> saturation(gSavedSettings, "AlchemyChatIRCAgentSaturation", 0.7f);
+    static LLCachedControl<F32> lightness(gSavedSettings, "AlchemyChatIRCAgentLightness", 0.9f);
+    static LLCachedControl<F32> name_lightness(gSavedSettings, "AlchemyChatIRCNameLightness", 0.7f);
+    static LLCachedControl<bool> show_time(gSavedSettings, "IMShowTime", true);
+    static LLCachedControl<bool> show_seconds(gSavedSettings, "AlchemyIMShowSeconds", false);
+    static LLCachedControl<bool> use_24h(gSavedSettings, "Use24HourClock", true);
+
+    const PreviewInputs inputs{ LLUIColorTable::instance().generation(), irc_colors, saturation, lightness, name_lightness,
+                                show_time, show_seconds, use_24h };
+    if (mPreviewEditor && (!mPreviewInputs || *mPreviewInputs != inputs))
+    {
+        mPreviewInputs = inputs;
+        updatePreview(inputs);
+    }
+
+    LLPanelPreference::draw();
+}
+
+void LLPanelPreferenceColors::updatePreview(const PreviewInputs& inputs)
+{
+    // One line for each kind of message the swatches above colour, laid out
+    // as compact chat lays it out, a minute apart and ending now. The
+    // residents' ids are made up, so which of them IRC-style colours reach is
+    // said here as ALAvatarGroups decides it for real ones: others and
+    // friends take their own, you and staff keep yours.
+    enum EKind { K_SYSTEM, K_SELF, K_RESIDENT, K_FRIEND, K_LINDEN, K_OBJECT, K_OWNER };
+    static const struct
+    {
+        EKind       kind;
+        const char* color;  // the text colour's name
+        const char* id;     // a made-up resident's, for IRC-style colours
+        const char* name;   // the speaker's, or empty for none
+        const char* text;
+    } samples[] = {
+        { K_SYSTEM,   "SystemChatColor",     "",                                     "",                        "Welcome to Quirk Island. Mind the dancing llamas." },
+        { K_SELF,     "UserChatColor",       "",                                     "You",                     "ok who moved my virtual cheese" },
+        { K_RESIDENT, "AgentChatColor",      "a1a1a1a1-0000-0000-0000-000000000001", "Bartholomew Bumblecrash", "anyone else seeing the sky do the wobble thing?" },
+        { K_RESIDENT, "AgentChatColor",      "f6f6f6f6-0000-0000-0000-000000000006", "Wandering Pixel",         "https://marketplace.secondlife.com/" },
+        { K_FRIEND,   "FriendChatColor",     "b2b2b2b2-0000-0000-0000-000000000002", "Glittertoes McSparkle",   "omg hi!! brb taming a baby dragon" },
+        { K_LINDEN,   "LindenChatColor",     "",                                     "Governor Linden",         "Rolling restart in 5, hold onto your hats." },
+        { K_OBJECT,   "ObjectChatColor",     "",                                     "Object",                  "Welcome to Help Island!" },
+        { K_OWNER,    "llOwnerSayChatColor", "",                                     "Animation HUD",           "Memory Free: 2167 KiB :)" },
+    };
+    constexpr U32 sample_count = static_cast<U32>(std::size(samples));
+
+    const LLUIColor time_color = LLUIColorTable::instance().getColor("ChatTimestampColor");
+    const LLUIColor link_color = LLUIColorTable::instance().getColor("HTMLLinkColor");
+    const U32 now = static_cast<U32>(time_corrected());
+
+    mPreviewEditor->clear();
+
+    bool prepend_newline = false;
+    for (U32 i = 0; i < sample_count; ++i)
+    {
+        const auto& s = samples[i];
+
+        LLUIColor txt_color = LLUIColorTable::instance().getColor(s.color);
+        LLUIColor name_color = link_color;
+        if (inputs.mIRCColors && (s.kind == K_RESIDENT || s.kind == K_FRIEND))
+        {
+            const LLUUID id(s.id);
+            txt_color = ALAvatarGroups::getIRCChatColor(id);
+            name_color = ALAvatarGroups::getIRCNameColor(id);
+        }
+
+        LLStyle::Params text_style;
+        text_style.color(txt_color);
+        text_style.readonly_color(txt_color);
+
+        if (inputs.mShowTime)
+        {
+            const U32 when = now - (sample_count - 1 - i) * 60;
+            const std::string time = ALChatTimestamp::format(LLLogChat::timestamp2LogString(when, false, true), inputs.mShowSeconds);
+            LLStyle::Params time_style;
+            time_style.color(time_color);
+            time_style.readonly_color(time_color);
+            mPreviewEditor->appendText("[" + time + "] ", prepend_newline, time_style);
+            prepend_newline = false;
+        }
+
+        if (s.name[0] != '\0')
+        {
+            LLStyle::Params name_style;
+            name_style.color(name_color);
+            name_style.readonly_color(name_color);
+            mPreviewEditor->appendText(s.name, prepend_newline, name_style);
+            prepend_newline = false;
+            mPreviewEditor->appendText(": ", prepend_newline, text_style);
+        }
+
+        // parse_urls is set on the editor, so a URL takes the link colour as
+        // it does in chat
+        mPreviewEditor->appendText(s.text, prepend_newline, text_style);
+        prepend_newline = true;
+    }
+}
 
 bool LLPanelPreferenceSound::postBuild()
 {
@@ -4331,8 +4477,8 @@ void collectChildren( LLView const *aView, ll::prefs::PanelDataPtr aParentPanel,
         ll::prefs::PanelDataPtr pCurPanelData = aParentPanel;
         ll::prefs::TabContainerDataPtr pCurTabContainer = aParentTabContainer;
 
-        LLPanel const *pPanel = dynamic_cast<LLPanel const*>(pView);
-        LLTabContainer const *pTabContainer = dynamic_cast<LLTabContainer const*>(pView);
+        LLPanel const *pPanel = pView->as<LLPanel>();
+        LLTabContainer const *pTabContainer = pView->as<LLTabContainer>();
         ll::ui::SearchableControl const *pSCtrl = dynamic_cast<ll::ui::SearchableControl const*>( pView );
 
         if (pTabContainer)

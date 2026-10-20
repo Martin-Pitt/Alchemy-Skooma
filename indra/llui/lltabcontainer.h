@@ -177,12 +177,16 @@ public:
 
     void        addTabPanel(LLPanel* panel);
     void        addTabPanel(const TabPanelParams& panel);
+    // Removing a tab, or all of them, lets its panel go without deleting it:
+    // the panel is its owner's again, who must keep it or have it die(). An
+    // owner that keeps none of them has deleteAllTabs() delete them, as it
+    // cannot reach them after.
     void        removeTabPanel( LLPanel* child );
     void        lockTabs(S32 num_tabs = 0);
     void        unlockTabs();
     S32         getNumLockedTabs() const { return mLockedTabCount; }
     void        enableTabButton(S32 which, bool enable);
-    void        deleteAllTabs();
+    void        deleteAllTabs(bool delete_panels = false);
     LLPanel*    getCurrentPanel();
     S32         getCurrentPanelIndex() const;
     S32         getTabCount() const;
@@ -270,8 +274,13 @@ private:
     S32 getScrollPosPixels() const      { return mScrollPosPixels; }
     void setScrollPosPixels(S32 pixels) { mScrollPosPixels = pixels; }
 
+public:
+    // Whether the row of tabs is shown: a host that takes every tab but one
+    // away hides the row and gives the page its room.
     void setTabsHidden(bool hidden)     { mTabsHidden = hidden; }
     bool getTabsHidden() const          { return mTabsHidden; }
+
+private:
 
     void scrollPrev() { mScrollPos = llmax(0, mScrollPos-1); } // No wrap
     void scrollNext() { mScrollPos = llmin(mScrollPos+1, mMaxScrollPos); } // No wrap

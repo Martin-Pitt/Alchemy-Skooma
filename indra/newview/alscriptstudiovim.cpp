@@ -27,16 +27,21 @@
 #include "alscriptstudiovim.h"
 
 #include "alcodeeditor.h"
+#include "aldiffview.h"
 #include "alscriptnavigation.h"
 #include "alscriptstudiocommands.h"
 #include "alscriptstudiosaves.h"
 #include "alscriptstudioservices.h"
 #include "alscriptstudiotabs.h"
+#include "alvimtext.h"
 #include "fsyspath.h"
+
+#include <fmt/format.h>
 
 #include <algorithm>
 #include <cstring>
 #include <filesystem>
+#include <iterator>
 #include <string_view>
 
 namespace
@@ -48,12 +53,18 @@ namespace
                                               "open_file", "fold_all", "unfold_all", "go_to_line", "quick_fix", "fix_all", "weights",
                                               "back",      "forward",  "reference", "go_to_symbol" };
 
-    // Whether a command's name is one of vim's, as vim reads its names: any
-    // of it from the least it may be shortened to, `least`, to the whole.
-    bool abbreviates(const std::string& name, const char* least, const char* whole)
+    // Whether a command's name is one of vim's, as vim reads its names: the
+    // keymap's own rule.
+    using ALVimText::abbreviates;
+
+    // The vim every studio window shares, made with the first and kept for
+    // the session: a register yanked into in one window is put from in
+    // another, as vim's are across its buffers, though the windows come
+    // and go. Never freed, so that nothing of it is torn down at exit.
+    std::shared_ptr<ALVimKeymap::Shared> sessionVim()
     {
-        const size_t shortest = strlen(least);
-        return name.size() >= shortest && name.size() <= strlen(whole) && std::string_view(whole).substr(0, name.size()) == name;
+        static auto* const shared = new std::shared_ptr<ALVimKeymap::Shared>(std::make_shared<ALVimKeymap::Shared>());
+        return *shared;
     }
 
     // A count or a tab's number: digits alone; -1 for anything else.
@@ -68,7 +79,7 @@ namespace
 }
 
 ALScriptStudioVim::ALScriptStudioVim(ALScriptStudioServices& services, ALScriptStudioTabs& tabs, ALScriptStudioSaves& saves, ALScriptNavigation& navigation, ALScriptStudioCommands& commands, Window& window)
-    : mServices(services), mTabs(tabs), mSaves(saves), mNavigation(navigation), mCommands(commands), mWindow(window)
+    : mServices(services), mTabs(tabs), mSaves(saves), mNavigation(navigation), mCommands(commands), mWindow(window), mShared(sessionVim())
 {
 }
 
@@ -153,6 +164,20 @@ void ALScriptStudioVim::connect(ALVimKeymap& vim)
             mWindow.showOutput();
         }
     };
+    // % is the tab's name, as :file says it, and # the alternate tab's.
+    vim.hooks().fileName = [this, alive](const ALTextView& view, char name) {
+        if (!alive.lock())
+        {
+            return std::string();
+        }
+        const Doc* doc = tabOf(view);
+        if (name == '#')
+        {
+            const Doc* alternate = alternateTab();
+            return alternate && alternate != doc ? alternate->name : std::string();
+        }
+        return doc ? doc->name : std::string();
+    };
 }
 
 void ALScriptStudioVim::source(bool show)
@@ -164,7 +189,7 @@ void ALScriptStudioVim::source(bool show)
 
 void ALScriptStudioVim::sourceText(const std::string& text, const std::string& whence, bool show)
 {
-    mSourced = true;
+    mShared->sourced = true;
     std::vector<std::string> errors;
     ALVimKeymap::source(*mShared, text, [this](const std::string& option) { return setOption(option, nullptr); }, errors);
     if (!errors.empty())
@@ -279,6 +304,23 @@ ALScriptStudioVim::Doc* ALScriptStudioVim::docOf(const ALTextView& view)
     return nullptr;
 }
 
+ALScriptStudioVim::Doc* ALScriptStudioVim::tabOf(const ALTextView& view)
+{
+    if (Doc* doc = docOf(view))
+    {
+        return doc;
+    }
+    for (Doc* doc : mServices.openDocs())
+    {
+        if (const ALDiffView* compare = doc->compareView;
+            compare && (&view == compare->left() || &view == compare->right() || &view == compare->inlined()))
+        {
+            return doc;
+        }
+    }
+    return nullptr;
+}
+
 void ALScriptStudioVim::pump()
 {
     Doc* doc = mServices.frontDoc();
@@ -358,7 +400,7 @@ void ALScriptStudioVim::historyWindow(ALTextView& view, llwchar kind, const std:
 
 bool ALScriptStudioVim::command(ALTextView& view, const std::string& name, const std::string& args)
 {
-    Doc* doc = docOf(view);
+    Doc* doc = tabOf(view);
     if (!doc)
     {
         return false;
@@ -407,7 +449,7 @@ bool ALScriptStudioVim::command(ALTextView& view, const std::string& name, const
             entry.text = std::string(kind) + " history:";
             for (size_t i = 0; i < lines.size(); ++i)
             {
-                entry.text += llformat("\n%3d  %s", static_cast<int>(i + 1), lines[i].c_str());
+                fmt::format_to(std::back_inserter(entry.text), "\n{:3}  {}", i + 1, lines[i]);
             }
             mWindow.output(entry);
         };
@@ -857,10 +899,10 @@ void ALScriptStudioVim::listTabs()
     for (const Doc* doc : mServices.openDocs())
     {
         const char  mark = doc == front ? '%' : doc == alternate ? '#' : ' ';
-        std::string row  = llformat("%3d %c%c%c%c \"%s\"", ++number, mark, doc == front ? 'a' : 'h', doc->modifiable ? ' ' : '-',
-                                    doc->unsaved() ? '+' : ' ', doc->name.c_str());
+        std::string row  = fmt::format("{:3} {}{}{}{} \"{}\"", ++number, mark, doc == front ? 'a' : 'h', doc->modifiable ? ' ' : '-',
+                                       doc->unsaved() ? '+' : ' ', doc->name);
         row.resize(std::max<size_t>(row.size() + 1, 40), ' ');
-        entry.text += "\n" + row + llformat("line %d", doc->editor ? doc->editor->caret().line + 1 : 0);
+        entry.text += "\n" + row + fmt::format("line {}", doc->editor ? doc->editor->caret().line + 1 : 0);
     }
     mWindow.output(entry);
     mWindow.showOutput();

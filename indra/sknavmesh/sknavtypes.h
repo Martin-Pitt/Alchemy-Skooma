@@ -58,6 +58,7 @@ namespace sknav
         BOX,        ///< a placeholder while the asset is still fetching
         RENDER,     ///< the rendered volume faces (surrounds)
         BASE_HULL,  ///< the single base hull, when there is no decomposition
+        SIM,        ///< the triangles the simulator kept for a mesh (its physics_havok section)
     };
 
     /// The sim's navmesh role for a linkset, when known.
@@ -70,6 +71,23 @@ namespace sknav
         EXCLUSION_VOLUME,
         DYNAMIC,        ///< a mover or a character: never in a cluster
     };
+
+    /// What a part was recognised as by the feature rules (sknavfeatures.h).
+    enum class FeatureKind : U8
+    {
+        NONE,
+        DOOR,       ///< a leaf of a door
+        LADDER,     ///< part of a ladder's span
+        ELEVATOR,   ///< an elevator's car; a feature of this kind is its shaft
+        VEHICLE,    ///< part of a linkset people sit on that moves
+        SEAT,       ///< part of a linkset people sit on that never moves
+    };
+
+    /// What a record is left out of: AVATAR's mesh, or the solid raster
+    /// (and with it the air, faces and AVATAR) as well.
+    constexpr U8 EXCLUDE_AVATAR = 1 << 0;
+    constexpr U8 EXCLUDE_SOLID = 1 << 1;
+    constexpr U8 EXCLUDE_ALL = EXCLUDE_AVATAR | EXCLUDE_SOLID;
 
     /// Analytic shape or triangle soup. Soups are region-local metres.
     enum class Shape : U8 { BOX, SPHERE, CYLINDER, TRIANGLES };
@@ -86,6 +104,9 @@ namespace sknav
         NavRole mNavRole = NavRole::UNKNOWN;
         Shape mShape = Shape::TRIANGLES;
         bool mDynamic = false;
+        bool mSolid = false;        ///< a closed body the sim collides with as a volume: the build fills its inside
+        FeatureKind mFeature = FeatureKind::NONE;
+        U8 mExclude = 0;            ///< EXCLUDE_* bits: classes that build as if it were not there
 
         LLVector3d mOrigin;         ///< region origin, global
         LLVector3 mCenter;          ///< analytic shapes: centre, region-local

@@ -2,15 +2,32 @@
 
 add_library(llui STATIC)
 
+# Linden Lab's widgets are at the top, as upstream has them. Alchemy's own
+# are in folders, each a part of the library and each on the include path,
+# so that a header is named alone wherever it is used:
+#   base/     what every part leans on: a view's type, words in the skin's
+#             language, a surface's colours, matching, placing, dragging;
+#   text/     the text view and what it is made of: the document, its undo,
+#             editing, layout, search, the ruler and the find bar;
+#   code/     the code editor over it: cards, completion, fixes, folds,
+#             snippets, the grammar and the highlighter, the keymap;
+#   diff/     two texts compared: the diff, the view and its bar;
+#   vim/      vim over a text view;
+#   xui/      XUI Studio's model of a skin's files;
+#   fields/   the property grid and the fields it edits values with;
+#   studio/   a studio's window: its panes, folds, docks and quick open;
+#   widgets/  small widgets of ours the rest are built from.
+
 target_sources(
   llui
   PRIVATE
-    alangledial.cpp
-    aldraggesture.cpp
-    alcornerfield.cpp
-    aloffsetpad.cpp
-    alpicturefield.cpp
-    alpanefolds.cpp
+    fields/alangledial.cpp
+    base/aldraggesture.cpp
+    fields/alcornerfield.cpp
+    fields/aloffsetpad.cpp
+    fields/alpicturefield.cpp
+    studio/alpanefolds.cpp
+    studio/alpaneroom.cpp
     fsvirtualtrackpad.cpp
     llaccordionctrl.cpp
     llaccordionctrltab.cpp
@@ -114,100 +131,125 @@ target_sources(
     llvirtualtrackball.cpp
     llwindowshade.cpp
     llxuiparser.cpp
-    alcanvasview.cpp
-    alcolorfield.cpp
-    alcolortablepanel.cpp
-    alcolorsheet.cpp
-    aldeferredrebuild.cpp
-    aldiffview.cpp
-    aldockpanel.cpp
-    alemptystate.cpp
-    alflagsfield.cpp
-    alhistorylist.cpp
-    alimagefield.cpp
-    aljumpbar.cpp
-    alpanelist.cpp
-    alplace.cpp
-    alpopover.cpp
-    alquickask.cpp
-    alquickopen.cpp
-    alscopebar.cpp
-    alsettingrow.cpp
-    alspecimenlist.cpp
-    alstudiofloater.cpp
-    alsurface.cpp
-    alcodecards.cpp
-    alcodeeditor.cpp
-    albracketindex.cpp
-    alcompletionmodel.cpp
-    alfuzzymatch.cpp
-    alfixlistmodel.cpp
-    alfoldmodel.cpp
-    alsmartselect.cpp
-    alsnippetsession.cpp
-    alfindbar.cpp
-    alkeycapture.cpp
-    alkeychord.cpp
-    alkeymap.cpp
-    alvimcommandline.cpp
-    alvimexcommands.cpp
-    alvimkeymap.cpp
-    alvimmappings.cpp
-    alvimpattern.cpp
-    alvimregisters.cpp
-    alvimsearch.cpp
-    alxuiservice.cpp
-    alchoicelist.cpp
-    aloutputview.cpp
-    alsyntaxgrammar.cpp
-    alsyntaxhighlighter.cpp
-    altabstrip.cpp
-    altextdiff.cpp
-    altextdocument.cpp
-    altextediting.cpp
-    altextfind.cpp
-    altextgotoline.cpp
-    altextindent.cpp
-    altextlayout.cpp
-    altextsearch.cpp
-    altextspelling.cpp
-    altextview.cpp
-    altextundo.cpp
-    alnotecarditems.cpp
-    alscripttheme.cpp
-    alscriptsnippets.cpp
-    alfieldeditors.cpp
-    alfolderfilter.cpp
-    alfollowscontrol.cpp
-    alfontfield.cpp
-    alcolorpicker.cpp
-    alpropertygrid.cpp
-    alxuicatalog.cpp
-    alxuidiagnostics.cpp
-    alxuiedit.cpp
-    alxuifields.cpp
-    alxuidocuments.cpp
-    alxuilint.cpp
-    alxuinotes.cpp
-    alxuioverlay.cpp
-    alxuischema.cpp
-    alxuiselection.cpp
-    alxuishellbuild.cpp
-    alxuisourcemap.cpp
-    alxuitranslate.cpp
-    alxuitreemodel.cpp
+    xui/alcanvasview.cpp
+    fields/alcolorfield.cpp
+    fields/alcolortablepanel.cpp
+    fields/alcolorsheet.cpp
+    base/aldeferredrebuild.cpp
+    diff/aldiffbar.cpp
+    diff/aldiffcolors.cpp
+    diff/aldiffedit.cpp
+    diff/aldifffill.cpp
+    diff/aldifflexer.cpp
+    diff/aldiffmerge.cpp
+    diff/aldiffmodel.cpp
+    diff/aldiffmoves.cpp
+    diff/aldiffrangesame.cpp
+    diff/aldiffsame.cpp
+    diff/aldiffsplice.cpp
+    diff/aldifftokens.cpp
+    diff/aldiffview.cpp
+    diff/allinediff.cpp
+    diff/allinepairs.cpp
+    diff/alstructuraldiff.cpp
+    diff/altextmerge.cpp
+    diff/alunifieddiff.cpp
+    diff/alworddiff.cpp
+    studio/aldockpanel.cpp
+    studio/alemptystate.cpp
+    fields/alflagsfield.cpp
+    studio/alhistorylist.cpp
+    fields/alimagefield.cpp
+    widgets/aljumpbar.cpp
+    studio/alpanelist.cpp
+    base/alplace.cpp
+    widgets/alpopover.cpp
+    studio/alquickask.cpp
+    studio/alquickopen.cpp
+    widgets/alscopebar.cpp
+    fields/alsettingrow.cpp
+    widgets/alspecimenlist.cpp
+    studio/alstudiofloater.cpp
+    base/alsurface.cpp
+    code/alcodecards.cpp
+    code/alcodeliterals.cpp
+    code/alchangepeek.cpp
+    code/alchangessincesaved.cpp
+    code/alcodeeditor.cpp
+    code/albracketindex.cpp
+    code/alcompletionmodel.cpp
+    base/alfuzzymatch.cpp
+    code/alfixlistmodel.cpp
+    code/alfoldmodel.cpp
+    text/alsmartselect.cpp
+    code/alsnippetsession.cpp
+    text/alfindbar.cpp
+    widgets/alflatbutton.cpp
+    studio/alkeycapture.cpp
+    code/alkeychord.cpp
+    code/alkeymap.cpp
+    studio/almenuslot.cpp
+    vim/alvimcommandline.cpp
+    vim/alvimexcommands.cpp
+    vim/alvimkeymap.cpp
+    vim/alvimmappings.cpp
+    vim/alvimpattern.cpp
+    vim/alvimregisters.cpp
+    vim/alvimsearch.cpp
+    xui/alxuiservice.cpp
+    widgets/alchoicelist.cpp
+    widgets/alchoicepopup.cpp
+    studio/aloutputview.cpp
+    code/alsyntaxgrammar.cpp
+    code/alsyntaxhighlighter.cpp
+    widgets/altabstrip.cpp
+    text/altextcarets.cpp
+    diff/altextdiff.cpp
+    text/altextdocument.cpp
+    text/altextediting.cpp
+    text/altextfind.cpp
+    text/altextgotoline.cpp
+    text/altextindent.cpp
+    text/altextlayout.cpp
+    text/altextruler.cpp
+    text/altextsearch.cpp
+    text/altextspelling.cpp
+    text/altextview.cpp
+    text/altextundo.cpp
+    text/alnotecarditems.cpp
+    fields/alfieldeditors.cpp
+    studio/alfolderfilter.cpp
+    fields/alfollowscontrol.cpp
+    fields/alfontfield.cpp
+    fields/alcolorpicker.cpp
+    fields/alpropertygrid.cpp
+    xui/alxuicatalog.cpp
+    xui/alxuidiagnostics.cpp
+    xui/alxuiedit.cpp
+    xui/alxuifields.cpp
+    xui/alxuidocuments.cpp
+    xui/alxuilint.cpp
+    xui/alxuinotes.cpp
+    xui/alxuioverlay.cpp
+    xui/alxuischema.cpp
+    xui/alxuiselection.cpp
+    xui/alxuishellbuild.cpp
+    xui/alxuisourcemap.cpp
+    xui/alxuitranslate.cpp
+    xui/alxuitreemodel.cpp
     llxyvector.cpp
   PUBLIC
     FILE_SET HEADERS
       FILES
-        alangledial.h
-        aldraggesture.h
-        alcornerfield.h
-        aloffsetpad.h
-        alpicturefield.h
-        alpanefolds.h
-        altextcaret.h
-        alviewtype.h
+        fields/alangledial.h
+        base/aldraggesture.h
+        fields/alcornerfield.h
+        fields/aloffsetpad.h
+        fields/alpicturefield.h
+        studio/alpanefolds.h
+        studio/alpaneroom.h
+        text/altextcaret.h
+        base/alviewtype.h
         fsvirtualtrackpad.h
         llaccordionctrl.h
         llaccordionctrltab.h
@@ -325,100 +367,128 @@ target_sources(
         llvirtualtrackball.h
         llwindowshade.h
         llxuiparser.h
-        alcanvasview.h
-        alcolorfield.h
-        alcolortablepanel.h
-        alcolorsheet.h
-        aldeferredrebuild.h
-        aldiffview.h
-        aldockpanel.h
-        alemptystate.h
-        alflagsfield.h
-        alhistorylist.h
-        alkeyshome.h
-        alimagefield.h
-        aljumpbar.h
-        alpanelist.h
-        alplace.h
-        alpopover.h
-        alquickask.h
-        alquickopen.h
-        alsaid.h
-        altextchars.h
-        alscopebar.h
-        alsettingrow.h
-        alspecimenlist.h
-        alstudiofloater.h
-        alsurface.h
-        alundostack.h
-        alstringmatch.h
-        alcodecards.h
-        alcodeeditor.h
-        albracketindex.h
-        alcompletionmodel.h
-        alfuzzymatch.h
-        alfixlistmodel.h
-        alfoldmodel.h
-        alsmartselect.h
-        alsnippetsession.h
-        alfindings.h
-        alanchoredranges.h
-        alfenwicktree.h
-        alfindbar.h
-        alkeycapture.h
-        alkeychord.h
-        alkeymap.h
-        allinetable.h
-        alvimcommandline.h
-        alvimexcommands.h
-        alvimhost.h
-        alvimkeymap.h
-        alvimmappings.h
-        alvimpattern.h
-        alvimregisters.h
-        alvimsearch.h
-        alvimtext.h
-        alxuiservice.h
-        alchoicelist.h
-        aloutputview.h
-        alsyntaxgrammar.h
-        alsyntaxhighlighter.h
-        altabstrip.h
-        altextdiff.h
-        altextdocument.h
-        altextediting.h
-        altextfind.h
-        altextgotoline.h
-        altextindent.h
-        altextlayout.h
-        altextsearch.h
-        altextspelling.h
-        altextview.h
-        altextundo.h
-        alnotecarditems.h
-        alscripttheme.h
-        alscriptsnippets.h
-        alfieldeditors.h
-        alfolderfilter.h
-        alfollowscontrol.h
-        alfontfield.h
-        alcolorpicker.h
-        alpropertygrid.h
-        alxuicatalog.h
-        alxuidiagnostics.h
-        alxuiedit.h
-        alxuifields.h
-        alxuidocuments.h
-        alxuifindings.h
-        alxuilint.h
-        alxuinotes.h
-        alxuioverlay.h
-        alxuischema.h
-        alxuiselection.h
-        alxuishellbuild.h
-        alxuisourcemap.h
-        alxuitranslate.h
-        alxuitreemodel.h
+        xui/alcanvasview.h
+        fields/alcolorfield.h
+        fields/alcolortablepanel.h
+        fields/alcolorsheet.h
+        base/aldeferredrebuild.h
+        diff/aldiffbar.h
+        diff/aldiffcolors.h
+        diff/aldiffedit.h
+        diff/aldifffill.h
+        diff/aldiffids.h
+        diff/aldifflexer.h
+        diff/aldiffmerge.h
+        diff/aldiffmodel.h
+        diff/aldiffmoves.h
+        diff/aldiffrangesame.h
+        diff/aldiffsame.h
+        diff/aldiffsplice.h
+        diff/aldifftokens.h
+        diff/aldiffview.h
+        diff/allinediff.h
+        diff/allinepairs.h
+        diff/alstructuraldiff.h
+        diff/altextmerge.h
+        diff/alunifieddiff.h
+        diff/alworddiff.h
+        studio/aldockpanel.h
+        studio/alemptystate.h
+        fields/alflagsfield.h
+        studio/alhistorylist.h
+        studio/alkeyshome.h
+        fields/alimagefield.h
+        widgets/aljumpbar.h
+        studio/alpanelist.h
+        base/alplace.h
+        widgets/alpopover.h
+        studio/alquickask.h
+        studio/alquickopen.h
+        base/alsaid.h
+        text/altextchars.h
+        widgets/alscopebar.h
+        fields/alsettingrow.h
+        widgets/alspecimenlist.h
+        studio/alstudiofloater.h
+        base/alsurface.h
+        base/alundostack.h
+        base/alstringmatch.h
+        code/alcodecards.h
+        code/alcodeliterals.h
+        code/alchangepeek.h
+        code/alchangessincesaved.h
+        code/alcodeeditor.h
+        code/albracketindex.h
+        code/alcompletionmodel.h
+        base/alfuzzymatch.h
+        code/alfixlistmodel.h
+        code/alfoldmodel.h
+        text/alsmartselect.h
+        code/alsnippetsession.h
+        studio/alfindings.h
+        text/alanchoredranges.h
+        text/alfenwicktree.h
+        text/alfindbar.h
+        widgets/alflatbutton.h
+        studio/alkeycapture.h
+        code/alkeychord.h
+        code/alkeymap.h
+        text/allinetable.h
+        text/almaxima.h
+        studio/almenuslot.h
+        text/alprefixsums.h
+        vim/alvimcommandline.h
+        vim/alvimexcommands.h
+        vim/alvimhost.h
+        vim/alvimkeymap.h
+        vim/alvimmappings.h
+        vim/alvimpattern.h
+        vim/alvimregisters.h
+        vim/alvimsearch.h
+        vim/alvimtext.h
+        xui/alxuiservice.h
+        widgets/alchoicelist.h
+        widgets/alchoicepopup.h
+        studio/aloutputview.h
+        code/alsyntaxgrammar.h
+        code/alsyntaxhighlighter.h
+        widgets/altabstrip.h
+        text/altextcarets.h
+        diff/altextdiff.h
+        text/altextdocument.h
+        text/altextediting.h
+        text/altextfeatures.h
+        text/altextfind.h
+        text/altextgotoline.h
+        text/altextindent.h
+        text/altextlayout.h
+        text/altextruler.h
+        text/altextsearch.h
+        text/altextspelling.h
+        text/altextview.h
+        text/altextundo.h
+        text/alnotecarditems.h
+        fields/alfieldeditors.h
+        studio/alfolderfilter.h
+        fields/alfollowscontrol.h
+        fields/alfontfield.h
+        fields/alcolorpicker.h
+        fields/alpropertygrid.h
+        xui/alxuicatalog.h
+        xui/alxuidiagnostics.h
+        xui/alxuiedit.h
+        xui/alxuifields.h
+        xui/alxuidocuments.h
+        xui/alxuifindings.h
+        xui/alxuilint.h
+        xui/alxuinotes.h
+        xui/alxuioverlay.h
+        xui/alxuischema.h
+        xui/alxuiselection.h
+        xui/alxuishellbuild.h
+        xui/alxuisourcemap.h
+        xui/alxuitranslate.h
+        xui/alxuitreemodel.h
         llxyvector.h
 )
 
@@ -436,6 +506,11 @@ else()
   target_sources(llui PRIVATE llspellcheckengine_hunspell.cpp)
 endif()
 
+target_include_directories(
+  llui
+  PUBLIC base text code diff vim xui fields studio widgets
+)
+
 target_link_libraries(
   llui
   PRIVATE al::flags
@@ -450,7 +525,7 @@ target_link_libraries(
     llxml
     llmath
     llcommon
-  PRIVATE ll::fastfloat
+  PRIVATE ll::fastfloat ll::icu
 )
 
 if(AL_USE_NSSPELLCHECKER)
@@ -489,175 +564,187 @@ if(AL_BUILD_TESTS)
     llcommon
     ${spellcheck_lib}
   )
-  al_add_test(llchatautocompletemodel UNIT PROJECT llui LIBRARIES ${test_libs})
-  al_add_test(llurlmatch UNIT PROJECT llui LIBRARIES ${test_libs})
-  al_add_test(alkeymap UNIT PROJECT llui LIBRARIES ${test_libs})
-  al_add_test(altextdiff UNIT PROJECT llui LIBRARIES ${test_libs})
-  al_add_test(alanchoredranges PROJECT llui SOURCES altextdocument.cpp LIBRARIES ${test_libs})
-  al_add_test(alfenwicktree PROJECT llui LIBRARIES ${test_libs})
-  al_add_test(allinetable PROJECT llui LIBRARIES ${test_libs})
-  al_add_test(altextdocument UNIT PROJECT llui LIBRARIES ${test_libs})
-  al_add_test(altextundo UNIT PROJECT llui SOURCES altextdocument.cpp LIBRARIES ${test_libs})
-  al_add_test(alnotecarditems UNIT PROJECT llui LIBRARIES ${test_libs})
-  al_add_test(alscriptsnippets UNIT PROJECT llui LIBRARIES ${test_libs})
-  al_add_test(
-    alsyntaxhighlighter
-    UNIT
-    PROJECT llui
-    SOURCES alsyntaxgrammar.cpp altextdocument.cpp
-    LIBRARIES ${test_libs}
-  )
+  # What llui asks the viewer for, defined once: compiled here and linked
+  # into every test and benchmark below. A test file holds no copy of its
+  # own, since two in one binary would not link.
+  add_library(llui_test_fakes OBJECT tests/llui_test_fakes.cpp)
+  target_link_libraries(llui_test_fakes PRIVATE al::flags llcommon)
+  set_target_properties(llui_test_fakes PROPERTIES FOLDER "Tests/llui")
 
-  set(test_libs llui ${test_libs})
-  foreach(
-    test
-    llstatbar
-    lltextparser
-    llview
-    lluistring
-    llxuiparser
-    llfocusmgr
-    alxuioverlay
-    alxuidocuments
-    alxuifindings
-    alxuitranslate
-  )
-    al_add_test(${test} PROJECT llui LIBRARIES ${test_libs})
-  endforeach()
-  al_add_test(llurlentry PROJECT llui SOURCES llurlentry.cpp LIBRARIES ${test_libs})
-  al_add_test(llemojidictionary PROJECT llui SOURCES llemojidictionary.cpp LIBRARIES ${test_libs})
-
-  # Tests that build widgets above LLView stand up a UI over the source
-  # tree's skins and fonts; this is where it is.
-  foreach(
-    test
-    lllayoutstack
-    llresizebar
-    llaccordionctrltab
-    llspinctrl
-    llcombobox
-    llradiogroup
-    lltabcontainer
-    llfloater
-    alpropertygrid
-    alcolorfield
-    alcolortablepanel
-    alimagefield
-    alcolorpicker
-    alfontfield
-    alflagsfield
-    alxuinotes
-    alfollowscontrol
-    alcanvasview
-    aldockpanel
-    alpanefolds
-    alangledial
-    alcornerfield
-    aldraggesture
-    aloffsetpad
-    alemptystate
-    alxuifill
-    alviewtype
-    alxuidiagnostics
-    alxuishellbuild
-    alxuicatalog
-    alxuilint
-    alxuiedit
-    alfindbar
-    alfolderfilter
-    alhistorylist
-    alplace
-    alpopover
-    alkeycapture
-    alscopebar
-    aljumpbar
-    alpanelist
-    alspecimenlist
-    altabstrip
-    alquickopen
-    alstudiofloater
-    altextgotoline
-    alxuifields
-    alxuischema
-    alxuiselection
-    alxuisourcemap
-    alxuitreemodel
-    alsettingrow
-    alstringmatch
-    alsurface
-    alcolorsheet
-    lluicolortable
-    alundostack
-    alsyntaxgrammars
-    altextediting
-    altextfind
-    altextindent
-    altextlayout
-    altextsearch
-    altextspelling
-    altextview
-    alcodecards
-    alcodeeditor
-    aldiffview
-    albracketindex
-    alcompletionmodel
-    alfuzzymatch
-    alfixlistmodel
-    alfoldmodel
-    alsnippetsession
-    alscripttheme
-    alvimkeymap
-    alvimmappings
-    alvimpattern
-    alvimregisters
-    alxuiservice
-    aloutputview
-    alchoicelist
-    llurlregistry
-  )
-    al_add_test(
-      ${test}
-      PROJECT llui
-      LIBRARIES ${test_libs}
-      DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
+  # What llui's test binaries set up for the process, put back after every
+  # case, and give the state guard to check: once for the binary with no GL,
+  # once for the one that draws.
+  add_library(llui_test_checks OBJECT tests/llui_test_checks.cpp)
+  add_library(llui_gl_test_checks OBJECT tests/llui_test_checks.cpp)
+  target_compile_definitions(llui_gl_test_checks PRIVATE LLUI_TEST_GL=1)
+  foreach(checks llui_test_checks llui_gl_test_checks)
+    target_link_libraries(${checks} PRIVATE al::flags al_test_support llui)
+    target_compile_definitions(
+      ${checks}
+      PRIVATE "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
     )
+    set_target_properties(${checks} PROPERTIES FOLDER "Tests/llui")
   endforeach()
 
-  # What the text view draws, read back from llrender's hidden window.
-  al_add_test(
-    altextview_gl
-    GL
+  # llui's tests with no GL but the colour table's: templates tested whole
+  # in their headers; text, strings, XUI and parsing; a file of llui's
+  # each, from the key map to the URL entries; what comparing two texts is
+  # made of, and the merges and grammars over it; and every widget above
+  # LLView, built over one headless UI on the source tree's skins and fonts.
+  al_add_test_binary(
+    llui_tests
     PROJECT llui
-    LIBRARIES ${test_libs}
+    SOURCES
+      tests/alanchoredranges_test.cpp
+      tests/alangledial_test.cpp
+      tests/albracketindex_test.cpp
+      tests/alcanvasview_test.cpp
+      tests/alchangepeek_test.cpp
+      tests/alchoicelist_test.cpp
+      tests/alcodecards_test.cpp
+      tests/alcodeeditor_test.cpp
+      tests/alcolorfield_test.cpp
+      tests/alcolorpicker_test.cpp
+      tests/alcolorsheet_test.cpp
+      tests/alcolortablepanel_test.cpp
+      tests/alcompletionmodel_test.cpp
+      tests/alcornerfield_test.cpp
+      tests/aldifflexer_test.cpp
+      tests/aldiffmerge_test.cpp
+      tests/aldiffmodel_test.cpp
+      tests/aldiffview_test.cpp
+      tests/aldockpanel_test.cpp
+      tests/aldraggesture_test.cpp
+      tests/alemptystate_test.cpp
+      tests/alfenwicktree_test.cpp
+      tests/alfindbar_test.cpp
+      tests/alfixlistmodel_test.cpp
+      tests/alflagsfield_test.cpp
+      tests/alfolderfilter_test.cpp
+      tests/alfoldmodel_test.cpp
+      tests/alfollowscontrol_test.cpp
+      tests/alfontfield_test.cpp
+      tests/alfuzzymatch_test.cpp
+      tests/alhistorylist_test.cpp
+      tests/alimagefield_test.cpp
+      tests/aljumpbar_test.cpp
+      tests/alkeycapture_test.cpp
+      tests/alkeymap_test.cpp
+      tests/allinetable_test.cpp
+      tests/almaxima_test.cpp
+      tests/almenuslot_test.cpp
+      tests/alnotecarditems_test.cpp
+      tests/aloffsetpad_test.cpp
+      tests/aloutputview_test.cpp
+      tests/alpanefolds_test.cpp
+      tests/alpanelist_test.cpp
+      tests/alpaneroom_test.cpp
+      tests/alplace_test.cpp
+      tests/alpopover_test.cpp
+      tests/alprefixsums_test.cpp
+      tests/alpropertygrid_test.cpp
+      tests/alquickopen_test.cpp
+      tests/alscopebar_test.cpp
+      tests/alsettingrow_test.cpp
+      tests/alsnippetsession_test.cpp
+      tests/alspecimenlist_test.cpp
+      tests/alstringmatch_test.cpp
+      tests/alstudiofloater_test.cpp
+      tests/alsurface_test.cpp
+      tests/alsyntaxgrammars_test.cpp
+      tests/alsyntaxhighlighter_test.cpp
+      tests/altabstrip_test.cpp
+      tests/altextcarets_test.cpp
+      tests/altextdiff_test.cpp
+      tests/altextdocument_test.cpp
+      tests/altextediting_test.cpp
+      tests/altextfind_test.cpp
+      tests/altextgotoline_test.cpp
+      tests/altextindent_test.cpp
+      tests/altextlayout_test.cpp
+      tests/altextsearch_test.cpp
+      tests/altextspelling_test.cpp
+      tests/altextundo_test.cpp
+      tests/altextview_test.cpp
+      tests/alundostack_test.cpp
+      tests/alunifieddiff_test.cpp
+      tests/alviewtype_test.cpp
+      tests/alvimkeymap_test.cpp
+      tests/alvimmappings_test.cpp
+      tests/alvimpattern_test.cpp
+      tests/alvimregisters_test.cpp
+      tests/alxuicatalog_test.cpp
+      tests/alxuidiagnostics_test.cpp
+      tests/alxuidocuments_test.cpp
+      tests/alxuiedit_test.cpp
+      tests/alxuifields_test.cpp
+      tests/alxuifill_test.cpp
+      tests/alxuifindings_test.cpp
+      tests/alxuilint_test.cpp
+      tests/alxuinotes_test.cpp
+      tests/alxuioverlay_test.cpp
+      tests/alxuischema_test.cpp
+      tests/alxuiselection_test.cpp
+      tests/alxuiservice_test.cpp
+      tests/alxuishellbuild_test.cpp
+      tests/alxuisourcemap_test.cpp
+      tests/alxuitranslate_test.cpp
+      tests/alxuitreemodel_test.cpp
+      tests/llaccordionctrltab_test.cpp
+      tests/llchatautocompletemodel_test.cpp
+      tests/llcombobox_test.cpp
+      tests/llconsole_test.cpp
+      tests/llemojidictionary_test.cpp
+      tests/llfloater_test.cpp
+      tests/llfocusmgr_test.cpp
+      tests/lllayoutstack_test.cpp
+      tests/llradiogroup_test.cpp
+      tests/llresizebar_test.cpp
+      tests/llspinctrl_test.cpp
+      tests/llstatbar_test.cpp
+      tests/lltabcontainer_test.cpp
+      tests/lltextparser_test.cpp
+      tests/lluistring_test.cpp
+      tests/llurlentry_test.cpp
+      tests/llurlmatch_test.cpp
+      tests/llurlregistry_test.cpp
+      tests/llview_test.cpp
+      tests/llxuiparser_test.cpp
+    # The benchmarks: comparing big scripts, by lines and laid out, and what
+    # each comparison says of some edits, which each change to how texts are
+    # compared is measured and judged by; and the code editor over
+    # 50,000-line scripts, which each change to the edit pipeline, the
+    # highlighter, the layout, the folds or find is measured by.
+    BENCH_SOURCES tests/altextdiff_bench.cpp tests/altextengine_bench.cpp
+    SUPPORT llui_test_fakes llui_test_checks llrender_test_checks llcommon_test_checks
+    LIBRARIES llui ${test_libs}
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
-  # A surface's ground and frame, and the tab strip's tabs, read back the
-  # same way.
-  al_add_test(
-    alsurface_gl
-    GL
+  # The colour table's own tests, alone: each loads documents of its own,
+  # and a name, once in the table, stays there for every case after it.
+  al_add_test_binary(
+    lluicolortable_test
     PROJECT llui
-    LIBRARIES ${test_libs}
+    SOURCES tests/lluicolortable_test.cpp
+    SUPPORT llui_test_fakes llrender_test_checks llcommon_test_checks
+    LIBRARIES llui ${test_libs}
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
-  # The code editor over 50,000-line scripts: what each change to the edit
-  # pipeline, the highlighter, the layout, the folds or find is measured by.
-  al_add_bench(
-    altextengine
+  # What the text view, a surface and its tab strip, and a comparison draw,
+  # read back from llrender's hidden window: one GL context, and the
+  # headless UI's fonts with GL textures on it.
+  al_add_test_binary(
+    llui_gl_tests
     PROJECT llui
-    LIBRARIES ${test_libs}
-    INCLUDES ${INDRA_SOURCE_DIR}/test
+    SOURCES tests/aldiffview_gl_test.cpp tests/alsurface_gl_test.cpp tests/altextview_gl_test.cpp
+    # The same editor drawn, a frame at a time, into llrender's hidden
+    # window: what the drawing steps are measured by.
+    BENCH_SOURCES tests/altextdraw_bench.cpp
+    SUPPORT llui_test_fakes llui_gl_test_checks llrender_test_checks llcommon_test_checks
+    LIBRARIES llui ${test_libs}
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
-  )
-  # The same editor drawn, a frame at a time, into llrender's hidden window:
-  # what the drawing steps are measured by.
-  al_add_bench(
-    altextdraw
-    PROJECT llui
-    LIBRARIES ${test_libs}
-    INCLUDES ${INDRA_SOURCE_DIR}/test
-    DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
+    GL
   )
 endif()

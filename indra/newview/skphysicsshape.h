@@ -28,9 +28,11 @@
 #include "llphysicsshapebuilderutil.h"
 #include "sknavtypes.h"
 
+#include <memory>
 #include <vector>
 
 class LLVOVolume;
+class SKPhysicsHavokShape;
 
 /// The decision: the object's physics type and the shape specification the
 /// physics engine would build from it.
@@ -44,6 +46,14 @@ struct SKPhysicsShape
 /// Otherwise fills the decision. This is the only place that decision is made,
 /// so the physics-shape overlay and the census cannot disagree.
 bool skPhysicsShapeClassify(LLVOVolume* volume, SKPhysicsShape& out);
+
+/// A relative estimate of what the shape costs the physics engine, from about 1
+/// (a sphere) up through hulls by vertex count to triangle meshes by triangle
+/// count and density. For the overlay's heatmap, not a measured Havok cost.
+F32 skPhysicsShapeCost(LLVOVolume* volume, const SKPhysicsShape& shape);
+
+/// @p cost on the heatmap's ramp, 0 to 1, logarithmic.
+F32 skPhysicsShapeCostFraction(F32 cost);
 
 /// Geometry in the volume's own frame, unscaled: apply scale, rotation and
 /// position to get region space. Analytic shapes carry a centre and half
@@ -62,13 +72,30 @@ struct SKShapeGeometry
     /// posts and lintel is not a body - filled as one it walls off the
     /// opening they exist to leave. Empty means one body.
     std::vector<S32> mConvexTris;
+    /// The geometry closes a body the sim collides with as a volume - a prim,
+    /// a hull, a sculpt's hull - rather than a surface it collides with from
+    /// either side, which is what a mesh's physics mesh is. The build fills
+    /// a solid's inside so no floor is offered there.
+    bool mSolid = false;
 };
 
 /// The physics geometry for a classified shape. Asks the mesh repository for
-/// what is missing exactly as the overlay does, and while it is missing
-/// returns the volume's bounding box with provenance BOX. False only when
-/// there is nothing to emit.
-bool skPhysicsShapeGeometry(LLVOVolume* volume, const SKPhysicsShape& shape, SKShapeGeometry& out);
+/// what is missing exactly as the overlay does. False while it is missing and
+/// when there is nothing to emit: nothing stands in for a fetch.
+/// sim: the simulator's triangles from skPhysicsShapeSimTriangles, used in
+/// place of the physics mesh when given; null keeps the uploaded shapes.
+bool skPhysicsShapeGeometry(LLVOVolume* volume, const SKPhysicsShape& shape, SKShapeGeometry& out,
+                            const std::shared_ptr<const SKPhysicsHavokShape>& sim = nullptr);
+
+/// The triangles the simulator kept for a Prim-type mesh that collides as its
+/// physics mesh and has no decomposition hulls, asking for them the first
+/// time. Null for any other volume, while they are on their way, and when the
+/// asset has none (too few triangles, absent section, failed fetch).
+std::shared_ptr<const SKPhysicsHavokShape> skPhysicsShapeSimTriangles(LLVOVolume* volume);
+
+/// A mesh under 0.5 m on any axis never collides as its physics mesh: the sim
+/// uses its hulls, or its single hull without them, whatever the type says.
+bool skPhysicsMeshTooSmallForTriangles(LLVOVolume* volume);
 
 /// The rendered geometry: the volume's faces at whatever LOD is loaded, with
 /// provenance RENDER. What sim surrounds contribute to the weather class.

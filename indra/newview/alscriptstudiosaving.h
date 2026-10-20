@@ -41,6 +41,8 @@ class ALScriptNavigation;
 class ALScriptExternalEditor;
 class ALScriptStudioWeighing;
 class ALScriptStudioRecovery;
+class ALScriptStudioFiles;
+class ALScriptStudioOrphans;
 class ALScriptStudioServices;
 class ALScriptStudioTabs;
 
@@ -68,8 +70,10 @@ public:
         // An LSL expansion sent compressed: what one too large is told
         // would shrink it.
         bool        compress = false;
-        // The viewer's channel and version, which the envelope says.
-        std::string program;
+        // The viewer's channel and version, which the envelope says; and
+        // whether it carries an upload header, and who it names.
+        std::string             program;
+        ALScriptStudioDoc::Header header;
     };
 
     // What saving asks of the window itself, beyond what it is given.
@@ -93,8 +97,10 @@ public:
         // A run over the text as it stands, fetching its includes, and
         // what it made once it has.
         virtual void runPreprocessor(const Doc& doc, std::function<void(const ALPreprocessor::Result&)> answer) = 0;
-        // What it made, in the tab's expanded view.
+        // What it made, in the tab's expanded view; and that view let go
+        // of, where nothing expands it any more.
         virtual void showExpanded(Doc& doc, const std::string& text) = 0;
+        virtual void dropExpanded(Doc& doc)                          = 0;
         // The map what runs is read back by known, where there was none:
         // what waited on it -- a run-time error, a line to go to -- placed.
         virtual void runningKnown(Doc& doc) = 0;
@@ -109,8 +115,6 @@ public:
         virtual bool sendNotecard(const Doc& doc, const std::string& text, const std::vector<LLPointer<LLInventoryItem>>& items,
                                   std::string& error, U64 request)                                                                = 0;
         virtual U64  newRequest()                                                                                                 = 0;
-        // A file's text written back where it came from.
-        virtual void saveFile(Doc& doc) = 0;
         // The asset the world holds now for the tab's item: the region asked
         // for an object's, which keeps no word of a co-owner's save; the
         // inventory's as it stands. Nothing where it cannot be told.
@@ -124,12 +128,6 @@ public:
         // (Doc::carriedText) put in as one step to undo.
         virtual void takeLoaded(Doc& doc, const std::string& text) = 0;
         virtual void takeCarried(Doc& doc)                        = 0;
-
-        // --- the tab and the window ----------------------------------------------------
-
-        // A kept text loaded under its item, what it holds carried over:
-        // tried now, and a few more times after if it fails.
-        virtual void retryLoad(Doc& doc) = 0;
 
         // --- closing -------------------------------------------------------------------
 
@@ -145,7 +143,7 @@ public:
         ~Window() = default;
     };
 
-    ALScriptStudioSaving(ALScriptStudioServices& services, ALScriptStudioTabs& tabs, ALScriptStudioAnalysis& analysis, ALScriptNavigation& navigation, ALScriptExternalEditor& external, ALScriptStudioWeighing& weighing, ALScriptStudioRecovery& recovery, Window& window);
+    ALScriptStudioSaving(ALScriptStudioServices& services, ALScriptStudioTabs& tabs, ALScriptStudioAnalysis& analysis, ALScriptNavigation& navigation, ALScriptExternalEditor& external, ALScriptStudioWeighing& weighing, ALScriptStudioRecovery& recovery, ALScriptStudioFiles& files, ALScriptStudioOrphans& orphans, Window& window);
 
     // --- saving ------------------------------------------------------------------------
 
@@ -226,6 +224,8 @@ private:
     ALScriptExternalEditor& mExternal;
     ALScriptStudioWeighing& mWeighing;
     ALScriptStudioRecovery& mRecovery;
+    ALScriptStudioFiles&    mFiles;
+    ALScriptStudioOrphans&  mOrphans;
     Window&                 mWindow;
     // Held while this is, for what answers later to know it still is.
     std::shared_ptr<bool>   mAlive = std::make_shared<bool>(true);

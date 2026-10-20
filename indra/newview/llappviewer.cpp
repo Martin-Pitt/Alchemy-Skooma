@@ -134,6 +134,8 @@
 #include "llavatarnamecache.h"
 #include "alrecovery.h"
 #include "alregex.h"
+#include "alsanitizer.h"
+#include "alscriptstudio.h"
 #include "alxmlmergelog.h"
 #include "lldiriterator.h"
 #include "llexperiencecache.h"
@@ -160,7 +162,9 @@
 #include <unistd.h>
 #endif
 #include "../dullahan/src/dullahan_version.h"
+#if LL_LIBVLC
 #include "vlc/libvlc_version.h"
+#endif
 
 #if LL_SDL_WINDOW
 #include "llwindowsdl.h"
@@ -175,8 +179,10 @@
 #if LL_WINDOWS
 #   include <share.h> // For _SH_DENYWR in processMarkerFiles
 #else
+#   include <fcntl.h> // For createCrashMarker
 #   include <sys/file.h> // For processMarkerFiles
 #endif
+#include <charconv>
 
 #include <boost/lexical_cast.hpp>
 
@@ -292,13 +298,7 @@ using namespace LL;
 #include "llappviewerlistener.h"
 
 #ifdef LL_DISCORD
-#define DISCORDPP_IMPLEMENTATION
-#include <discordpp.h>
-static std::shared_ptr<discordpp::Client> gDiscordClient;
-static uint64_t gDiscordTimestampsStart;
-static std::string gDiscordActivityDetails;
-static int32_t gDiscordPartyCurrentSize;
-static int32_t gDiscordPartyMaxSize;
+#include "aldiscordmanager.h"
 #endif
 
 static LLAppViewerListener sAppViewerListener(LLAppViewer::instance);
@@ -316,11 +316,11 @@ extern bool gDebugGL;
 extern bool gHiDPISupport;
 #endif
 
-#if LL_WINDOWS
+#if LL_WINDOWS || LL_LINUX
 extern bool gGPUBenchmarkMode;
 #else
 static constexpr bool gGPUBenchmarkMode = false;
-#endif // LL_WINDOWS
+#endif // LL_WINDOWS || LL_LINUX
 
 
 ////////////////////////////////////////////////////////////
@@ -354,11 +354,10 @@ U32 gForegroundFrameCount = 0; // number of frames that app window was in foregr
 LLPumpIO* gServicePump = NULL;
 
 U64MicrosecondsImplicit gFrameTime = 0;
-F32SecondsImplicit gFrameTimeSeconds = 0.f;
+F64SecondsImplicit gFrameTimeSeconds = 0.0;
 F32SecondsImplicit gFrameIntervalSeconds = 0.f;
 F32 gFPSClamped = 10.f;                     // Pretend we start at target rate.
-F32 gFrameDTClamped = 0.f;                  // Time between adjacent checks to network for packets
-U64MicrosecondsImplicit gStartTime = 0; // gStartTime is "private", used only to calculate gFrameTimeSeconds
+F32 gFrameDTClamped = 0.f;
 
 LLTimer gRenderStartTime;
 LLFrameTimer gForegroundTime;
@@ -650,7 +649,7 @@ LLPurgeDiskCacheThread* LLAppViewer::sPurgeDiskCacheThread = NULL;
 
 std::string getRuntime()
 {
-    return llformat("%.4f", (F32)LLTimer::getElapsedSeconds().value());
+    return llformat("%.4f", (F32)LLTimer::getUptimeSeconds().value());
 }
 
 LLAppViewer::LLAppViewer()
@@ -789,6 +788,14 @@ bool LLAppViewer::init()
     LL_PROFILE_ZONE_SCOPED;
 
     setupErrorHandling(mSecondInstance);
+
+    // The marker a crash leaves for the next launch, composed before there
+    // is a crash handler to write it.
+    prepareCrashMarker();
+
+    // What the previous run left, read before this run writes its own over it.
+    ALCrashReporter::readLastRun();
+    startDebugInfo();
 
     // As early as consent can be read: before the settings, on the sentinel
     // they keep for it.
@@ -990,6 +997,9 @@ bool LLAppViewer::init()
     // Load translations for tooltips
     LLFloater::initClass();
     LLUrlFloaterDispatchHandler::registerInDispatcher();
+    // What Script Studio asks of the viewer, for its windows and the
+    // preferences' preview alike.
+    ALScriptStudio::attachViewer();
 
     /////////////////////////////////////////////////
 
@@ -1027,8 +1037,12 @@ bool LLAppViewer::init()
     // Find partition serial number (Windows) or hardware serial (Mac)
     mSerialNumber = generateSerialNumber();
 
-    // do any necessary set-up for accepting incoming SLURLs from apps
-    initSLURLHandler();
+    // do any necessary set-up for accepting incoming SLURLs from apps. The
+    // GPU benchmark child takes none: the D-Bus name is its parent's.
+    if (!gGPUBenchmarkMode)
+    {
+        initSLURLHandler();
+    }
 
     if (!initHardwareTest())
     {
@@ -1165,7 +1179,8 @@ bool LLAppViewer::init()
             unsupported = true;
         }
 
-        if (gSysCPU.getMHz() < minCPU)
+        // A clock the system would not report is unknown, not slow.
+        if (gSysCPU.getMHz() > 0 && gSysCPU.getMHz() < minCPU)
         {
             minSpecs += LLNotifications::instance().getGlobalString("UnsupportedCPU");
             minSpecs += "\n";
@@ -1194,6 +1209,15 @@ bool LLAppViewer::init()
             }
         }
     }
+
+#if LL_LINUX
+    // Outside the once-only hardware alert above: a driver that did not load is something
+    // to fix, not a fact about the machine, so it is raised every session it happens.
+    if (gGLManager.mIsSoftwareRenderer)
+    {
+        LLNotificationsUtil::add("SoftwareRenderer", LLSD().with("RENDERER", gGLManager.getRawGLString()));
+    }
+#endif
 
     // Obsolete? mExpectedGLVersion is always zero
 #if LL_WINDOWS
@@ -1347,6 +1371,11 @@ bool LLAppViewer::init()
     LLSelectMgr::createInstance();
     LLViewerCamera::createInstance();
 
+#ifdef LL_DISCORD
+    // Waits for login: what it shows is the account's to choose.
+    ALDiscordManager::getInstance();
+#endif
+
     gSavedSettings.setU32("DebugQualityPerformance", gSavedSettings.getU32("RenderQualityPerformance"));
 
 #if LL_WINDOWS
@@ -1435,13 +1464,6 @@ bool LLAppViewer::doFrame()
     LL_PROFILE_GPU_ZONE("doFrame");
 
     resumeMainloopTimeout("Main:doFrameStart");
-
-#ifdef LL_DISCORD
-    {
-        LL_PROFILE_ZONE_NAMED("discord_callbacks");
-        discordpp::RunCallbacks();
-    }
-#endif
 
     {
     // The "doFrame" zone above already owns this scope, and a Tracy GPU zone
@@ -1622,7 +1644,6 @@ bool LLAppViewer::doFrame()
 
         // Sleep and run background threads
         {
-            //LL_RECORD_BLOCK_TIME(SLEEP2);
             LL_PROFILE_ZONE_WARN("Sleep2");
 
             // yield some time to the os based on command line option
@@ -1671,7 +1692,7 @@ bool LLAppViewer::doFrame()
 
             if (mRandomizeFramerate)
             {
-                ms_sleep(rand() % 200);
+                ms_sleep(ll_rand(200));
             }
 
             if (mPeriodicSlowFrame
@@ -1939,6 +1960,9 @@ bool LLAppViewer::cleanup()
     LL_INFOS() << "Global stuff deleted" << LL_ENDL;
 
     ALStreamInfo::deleteSingleton();
+#ifdef LL_DISCORD
+    ALDiscordManager::deleteSingleton();
+#endif
 
     if (gAudiop)
     {
@@ -2353,9 +2377,11 @@ bool LLAppViewer::initThreads()
     // Image decoding
     LLAppViewer::sImageDecodeThread = new LLImageDecodeThread(enable_threads && true);
     LLAppViewer::sTextureCache = new LLTextureCache(enable_threads && true);
+    LLAppViewer::sTextureCache->start();
     LLAppViewer::sTextureFetch = new LLTextureFetch(LLAppViewer::getTextureCache(),
                                                     enable_threads && true,
                                                     app_metrics_qa_mode);
+    LLAppViewer::sTextureFetch->start();
 
     // general task background thread (LLPerfStats, etc)
     LLAppViewer::instance()->initGeneralThread();
@@ -2570,6 +2596,7 @@ void LLAppViewer::initLoggingAndGetLastDuration()
 
         // Rename current log file to ".old"
         LLFile::rename(log_file, old_log_file);
+        mPreviousLogFile = old_log_file;
 
         // Set the log file.
         LLError::logToFile(log_file);
@@ -2585,6 +2612,11 @@ void LLAppViewer::initLoggingAndGetLastDuration()
             std::string user_data_path_cef_old = gDirUtilp->getExpandedFilename(LL_PATH_LOGS, "cef.old");
             LLFile::rename(user_data_path_cef_log, user_data_path_cef_old);
         }
+    }
+
+    for (const std::string& note : gDirUtilp->getInitNotes())
+    {
+        LL_INFOS("AppInit") << note << LL_ENDL;
     }
 }
 
@@ -3271,8 +3303,6 @@ bool LLAppViewer::initConfiguration()
 
     // Note: this is where we used to initialize gFeatureManagerp.
 
-    gStartTime = totalTime();
-
     //
     // Set the name of the window
     //
@@ -3547,6 +3577,13 @@ bool LLAppViewer::initWindow()
 
     LL_INFOS("AppInit") << "gViewerwindow created." << LL_ENDL;
 
+    // With the GL driver loaded, what it keeps for the process is still its
+    // own when LeakSanitizer looks at exit, as in the gl tests.
+    if constexpr (LL::LEAK_SANITIZER)
+    {
+        LL::pinLoadedLibraries();
+    }
+
     // Need to load feature table before cheking to start watchdog.
     bool use_watchdog = false;
     S32 watchdog_enabled_setting = gSavedSettings.getS32("WatchdogEnabled");
@@ -3678,7 +3715,7 @@ bool LLAppViewer::initWindow()
     gViewerWindow->initBase();
 
     // show viewer window
-    //gViewerWindow->getWindow()->show();
+    gViewerWindow->getWindow()->show();
 
     LL_INFOS("AppInit") << "Window initialization done." << LL_ENDL;
 
@@ -3936,6 +3973,7 @@ LLSD LLAppViewer::getViewerInfo() const
 
     info["LIBCEF_VERSION"] = cef_ver_codec.str();
 
+#if LL_LIBVLC
     std::ostringstream vlc_ver_codec;
     vlc_ver_codec << LIBVLC_VERSION_MAJOR;
     vlc_ver_codec << ".";
@@ -3943,6 +3981,9 @@ LLSD LLAppViewer::getViewerInfo() const
     vlc_ver_codec << ".";
     vlc_ver_codec << LIBVLC_VERSION_REVISION;
     info["LIBVLC_VERSION"] = vlc_ver_codec.str();
+#else
+    info["LIBVLC_VERSION"] = LLTrans::getString("None");
+#endif
 
     LLTrace::Recording& recording = LLViewerStats::instance().getRecording();
     S32 packets_in = (S32)recording.getSum(LLStatViewer::PACKETS_IN);
@@ -4099,12 +4140,6 @@ void LLAppViewer::cleanupSavedSettings()
     }
 
     gSavedSettings.setF32("MapScale", LLWorldMapView::getScaleSetting());
-
-    // Some things are cached in LLAgent.
-    if (gAgent.isInitialized())
-    {
-        gSavedSettings.setF32("RenderFarClip", gAgentCamera.mDrawDistance);
-    }
 }
 
 void LLAppViewer::removeCacheFiles(const std::string& file_mask)
@@ -4112,13 +4147,11 @@ void LLAppViewer::removeCacheFiles(const std::string& file_mask)
     gDirUtilp->deleteFilesInDir(gDirUtilp->getExpandedFilename(LL_PATH_CACHE, ""), file_mask);
 }
 
-void LLAppViewer::writeSystemInfo()
+void LLAppViewer::startDebugInfo()
 {
-
-    if (! gDebugInfo.has("Dynamic") )
-        gDebugInfo["Dynamic"] = LLSD::emptyMap();
-
-    // The report filed on the next launch joins the crash by this.
+    // The report filed on the next launch joins the crash by this. Written
+    // first thing, so a run that ends before the rest is known is not taken
+    // on the next launch for the run before it.
     gDebugInfo["RunId"] = ALCrashReporter::runId();
 
 #if LL_DARWIN
@@ -4130,6 +4163,15 @@ void LLAppViewer::writeSystemInfo()
     // is the one to name.
     gDebugInfo["SLLog"] = getActiveLogFileName();
 #endif
+
+    writeDebugInfo();
+}
+
+void LLAppViewer::writeSystemInfo()
+{
+
+    if (! gDebugInfo.has("Dynamic") )
+        gDebugInfo["Dynamic"] = LLSD::emptyMap();
 
     gDebugInfo["ClientInfo"]["Name"] = LLVersionInfo::instance().getChannel();
     gDebugInfo["ClientInfo"]["MajorVersion"] = LLVersionInfo::instance().getMajor();
@@ -4664,8 +4706,19 @@ void LLAppViewer::processMarkerFiles()
         LLFile::remove(crash_log_file);
         // Rename ".old" log file to ".crash"
         LLFile::rename(old_log_file, crash_log_file);
+        mPreviousLogFile = crash_log_file;
     }
 #endif
+}
+
+// static
+std::string LLAppViewer::previousLogFile()
+{
+    // Where processMarkerFiles() moved it: ".old", or on macOS ".crash"
+    // when the run did not end normally. A ".crash" left after a normal end
+    // is an older run's, and a second instance moves no log.
+    const std::string log_file = sInstance ? sInstance->mPreviousLogFile : std::string();
+    return !log_file.empty() && LLFile::isfile(log_file) ? log_file : std::string();
 }
 
 void LLAppViewer::removeMarkerFiles()
@@ -4870,7 +4923,7 @@ void LLAppViewer::sendViewerStatistics(bool include_preferences)
 
 void LLAppViewer::migrateCacheDirectory()
 {
-#if LL_WINDOWS || LL_DARWIN
+#if LL_WINDOWS || LL_DARWIN || LL_LINUX
     // NOTE: (Nyx) as of 1.21, cache for mac is moving to /library/caches/Alchemy from
     // /library/application support/Alchemy/cache This should clear/delete the old dir.
 
@@ -4885,6 +4938,10 @@ void LLAppViewer::migrateCacheDirectory()
     //   C:\Users\James\AppData\Local\Alchemy
     //
     // Note the absence of \cache on the second path.  James.
+    //
+    // The Linux cache moved from ~/.alchemynext/cache to
+    // $XDG_CACHE_HOME/AlchemyNext. With ALCHEMYNEXT_USER_DIR set it stays in
+    // that directory, where the old and new paths are the same.
 
     // Only do this once per fresh install of this version.
     if (gSavedSettings.getBOOL("MigrateCacheDirectory"))
@@ -4894,8 +4951,20 @@ void LLAppViewer::migrateCacheDirectory()
         std::string old_cache_dir = gDirUtilp->add(gDirUtilp->getOSUserAppDir(), "cache");
         std::string new_cache_dir = gDirUtilp->getCacheDir(true);
 
-        if (gDirUtilp->fileExists(old_cache_dir))
+        if (old_cache_dir != new_cache_dir && gDirUtilp->fileExists(old_cache_dir))
         {
+#if LL_LINUX
+            // Nothing is at the new place before the first run that uses it,
+            // so the cache moves whole, by one rename, subfolders and all. A
+            // rename across filesystems fails, and the old cache is purged.
+            if (!gDirUtilp->fileExists(new_cache_dir)
+                && LLFile::rename(old_cache_dir, new_cache_dir) == 0)
+            {
+                LL_INFOS() << "Moved cache from " << old_cache_dir << " to " << new_cache_dir << LL_ENDL;
+                return;
+            }
+#endif
+
             LL_INFOS() << "Migrating cache from " << old_cache_dir << " to " << new_cache_dir << LL_ENDL;
 
             // Migrate inventory cache to avoid pain to inventory database after mass update
@@ -4935,7 +5004,7 @@ void LLAppViewer::migrateCacheDirectory()
             }
         }
     }
-#endif // LL_WINDOWS || LL_DARWIN
+#endif // LL_WINDOWS || LL_DARWIN || LL_LINUX
 }
 
 //static
@@ -5461,10 +5530,12 @@ void LLAppViewer::idle()
     LL_PROFILE_ZONE_SCOPED_CATEGORY_APP;
     pingMainloopTimeout("Main:Idle");
 
-    // Update frame timers
-    static LLTimer idle_timer;
-
     LLFrameTimer::updateFrameTime();
+    // The frame's one time sample: the globals read the same reading as
+    // LLFrameTimer, so nothing this frame sees two different times.
+    gFrameTime = LLFrameTimer::getTotalTime();
+    gFrameTimeSeconds = LLFrameTimer::getUptimeSeconds();
+    gFrameIntervalSeconds = LLFrameTimer::getFrameDeltaTimeF32();
     LLFrameTimer::updateFrameCount();
     LLEventTimer::updateClass();
     LLPerfStats::updateClass();
@@ -5482,7 +5553,6 @@ void LLAppViewer::idle()
     {
         LLWebsocketMgr::instance().update();
     }
-    F32 dt_raw = idle_timer.getElapsedTimeAndResetF32();
 
     LLGLTFMaterialList::flushUpdates();
 
@@ -5519,9 +5589,9 @@ void LLAppViewer::idle()
     const F32 MIN_FRAME_RATE = 1.f;
     const F32 MAX_FRAME_RATE = 10000.f;
 
-    F32 frame_rate_clamped = 1.f / dt_raw;
-    frame_rate_clamped = llclamp(frame_rate_clamped, MIN_FRAME_RATE, MAX_FRAME_RATE);
-    gFrameDTClamped = 1.f / frame_rate_clamped;
+    // From the frame's one sample, so the clamped dt and the raw one are the same interval.
+    gFrameDTClamped = llclamp(gFrameIntervalSeconds.value(), 1.f / MAX_FRAME_RATE, 1.f / MIN_FRAME_RATE);
+    const F32 frame_rate_clamped = 1.f / gFrameDTClamped;
 
     // Global frame timer
     // Smoothly weight toward current frame
@@ -5562,9 +5632,11 @@ void LLAppViewer::idle()
 
     if (!gDisconnected)
     {
-        LL_PROFILE_ZONE_NAMED_CATEGORY_NETWORK("network"); //LL_RECORD_BLOCK_TIME(FTM_NETWORK);
+        LL_PROFILE_ZONE_NAMED_CATEGORY_NETWORK("network");
         // Update spaceserver timeinfo
-        LLWorld::getInstance()->setSpaceTimeUSec(LLWorld::getInstance()->getSpaceTimeUSec() + LLUnits::Seconds::fromValue(dt_raw));
+        // In integer microseconds: a U64 time plus F32 seconds is an F32 sum, which rounds a
+        // count of microseconds this large to far more than a frame.
+        LLWorld::getInstance()->setSpaceTimeUSec(LLWorld::getInstance()->getSpaceTimeUSec() + U64Microseconds(LLFrameTimer::getFrameDeltaTime()));
 
 
         //////////////////////////////////////
@@ -5675,8 +5747,6 @@ void LLAppViewer::idle()
     if (!mQuitRequested)  //MAINT-4243
 #endif
     {
-//      LL_RECORD_BLOCK_TIME(FTM_IDLE_CB);
-
         // Do event notifications if necessary.  Yes, we may want to move this elsewhere.
         gEventNotifier.update();
 
@@ -5827,7 +5897,6 @@ void LLAppViewer::idle()
 
         average_wind = regionp->mWind.getAverage();
         gSky.setWind(average_wind);
-        //LLVOWater::setWind(average_wind);
     }
     else
     {
@@ -5841,7 +5910,7 @@ void LLAppViewer::idle()
     //
 
     {
-        LL_PROFILE_ZONE_NAMED_CATEGORY_APP("world update"); //LL_RECORD_BLOCK_TIME(FTM_WORLD_UPDATE);
+        LL_PROFILE_ZONE_NAMED_CATEGORY_APP("world update");
         gPipeline.updateMove();
     }
     // <SK:Nexii> navmesh: the census scans after objects moved, the mesh follows the census
@@ -5885,7 +5954,7 @@ void LLAppViewer::idle()
     LLAvatarRenderInfoAccountant::getInstance()->idle();
 
     {
-        LL_PROFILE_ZONE_NAMED_CATEGORY_APP("audio update"); //LL_RECORD_BLOCK_TIME(FTM_AUDIO_UPDATE);
+        LL_PROFILE_ZONE_NAMED_CATEGORY_APP("audio update");
 
         if (gAudiop)
         {
@@ -6153,6 +6222,74 @@ bool LLAppViewer::errorMarkerExists() const
 {
     std::string error_marker_file = gDirUtilp->getExpandedFilename(LL_PATH_LOGS, ERROR_MARKER_FILE_NAME);
     return LLFile::isfile(error_marker_file);
+}
+
+void LLAppViewer::prepareCrashMarker()
+{
+    if (mSecondInstance)
+    {
+        return;
+    }
+    const std::string path = gDirUtilp->getExpandedFilename(LL_PATH_LOGS, ERROR_MARKER_FILE_NAME);
+#if LL_WINDOWS
+    mCrashMarkerPath = ll_convert<std::wstring>(path);
+#else
+    mCrashMarkerPath = path;
+#endif
+    mCrashMarkerVersion = LLVersionInfo::instance().getChannelAndVersion() + "\n";
+}
+
+void LLAppViewer::createCrashMarker(eLastExecEvent error_code) const
+{
+    // A crash handler may have interrupted the code holding the heap or any
+    // lock: nothing here allocates, the file is opened, written and closed
+    // by the system's own calls, and only created if absent, since a marker
+    // already there says more.
+    if (mSecondInstance || mCrashMarkerPath.empty())
+    {
+        return;
+    }
+    char code[16];
+    const size_t code_length = std::to_chars(code, code + sizeof(code), (S32)error_code).ptr - code;
+
+#if LL_WINDOWS
+    HANDLE file = CreateFileW(mCrashMarkerPath.c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                              CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE)
+    {
+        return;
+    }
+    DWORD written = 0;
+    WriteFile(file, mCrashMarkerVersion.data(), static_cast<DWORD>(mCrashMarkerVersion.size()), &written, nullptr);
+    WriteFile(file, code, static_cast<DWORD>(code_length), &written, nullptr);
+    CloseHandle(file);
+#else
+    const int file = open(mCrashMarkerPath.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+    if (file < 0)
+    {
+        return;
+    }
+    auto write_all = [file](const char* data, size_t length)
+    {
+        while (length > 0)
+        {
+            const ssize_t written = write(file, data, length);
+            if (written < 0 && errno == EINTR)
+            {
+                continue;
+            }
+            if (written <= 0)
+            {
+                return;
+            }
+            data += written;
+            length -= written;
+        }
+    };
+    write_all(mCrashMarkerVersion.data(), mCrashMarkerVersion.size());
+    write_all(code, code_length);
+    close(file);
+#endif
 }
 
 void LLAppViewer::createCloseRequestMarker() const
@@ -6544,7 +6681,7 @@ void LLAppViewer::forceErrorInfiniteLoop()
     {
         if (timer_expiry.hasExpired())
         {
-            LL_INFOS() << "Infinite loop time : " << timer_total.getElapsedSeconds() << LL_ENDL;
+            LL_INFOS() << "Infinite loop time : " << timer_total.getElapsedTimeF64() << LL_ENDL;
             timer_expiry.setTimerExpirySec(report_frequency);
         }
     }
@@ -6754,28 +6891,32 @@ F32 LLAppViewer::getMainloopTimeoutSec() const
 
 std::string LLAppViewer::getMainloopWatchdogState() const
 {
+    const auto [prefix, state] = getMainloopWatchdogStateParts();
+    std::string text;
+    text.reserve(prefix.size() + state.size());
+    return text.append(prefix).append(state);
+}
+
+std::pair<std::string_view, std::string_view> LLAppViewer::getMainloopWatchdogStateParts() const
+{
     if (!mMainloopTimeout)
     {
-        return std::string();
+        return {};
     }
-    std::string state = mMainloopTimeout->getState();
+    const std::string& state = mMainloopTimeout->getState();
 
     if (mMainloopTimeout->hasExpired())
     {
-        return "Expired at " + state;
+        return { "Expired at ", state };
     }
 
     // Check if the watchdog is currently active (timer started)
     if (!mMainloopTimeout->isAlive())
     {
         // Timer is not running, meaning watchdog is paused/stopped
-        if (state.empty())
-        {
-            return "Paused";
-        }
-        return "Paused at " + state;
+        return { state.empty() ? "Paused" : "Paused at ", state };
     }
-    return state;
+    return { {}, state };
 }
 
 void LLAppViewer::handleLoginComplete()
@@ -6917,113 +7058,3 @@ void LLAppViewer::metricsSend(bool enable_reporting)
     // resolution in time.
     gViewerAssetStats->restart();
 }
-
-#ifdef LL_DISCORD
-
-void LLAppViewer::initDiscordSocial()
-{
-    gDiscordPartyCurrentSize = 1;
-    gDiscordPartyMaxSize = 0;
-    gDiscordTimestampsStart = time(nullptr);
-    gDiscordClient = std::make_shared<discordpp::Client>();
-    gDiscordClient->SetApplicationId(564763931009220608);
-    updateDiscordActivity();
-}
-
-void LLAppViewer::updateDiscordActivity()
-{
-    LL_PROFILE_ZONE_SCOPED;
-
-    static LLCachedControl<bool> integration_enabled(gSavedSettings, "EnableDiscord", true);
-    if (!integration_enabled)
-    {
-        gDiscordClient->ClearRichPresence();
-        return;
-    }
-
-    discordpp::Activity activity;
-    activity.SetType(discordpp::ActivityTypes::Playing);
-    discordpp::ActivityTimestamps timestamps;
-    timestamps.SetStart(gDiscordTimestampsStart);
-    activity.SetTimestamps(timestamps);
-
-    discordpp::ActivityAssets activityAssets;
-    activityAssets.SetLargeImage("alchemy_1024");
-    activityAssets.SetLargeText(LLTrans::getString("APP_NAME"));
-    activityAssets.SetLargeUrl("https://www.alchemyviewer.org");
-    activityAssets.SetSmallImage("secondlife_512");
-    activityAssets.SetSmallText(LLTrans::getString("SECOND_LIFE"));
-    activityAssets.SetSmallUrl("https://secondlife.com/");
-    activity.SetAssets(activityAssets);
-
-    if (gAgent.getID() == LLUUID::null)
-    {
-        gDiscordClient->UpdateRichPresence(activity, [](discordpp::ClientResult) {});
-        return;
-    }
-
-    static LLCachedControl<bool> show_details(gSavedSettings, "ShowDiscordActivityDetails", false);
-    if (show_details)
-    {
-        if (gDiscordActivityDetails.empty())
-        {
-            LLAvatarName av_name;
-            LLAvatarNameCache::get(gAgent.getID(), &av_name);
-            gDiscordActivityDetails = av_name.getUserName();
-            auto displayName = av_name.getDisplayName();
-            if (gDiscordActivityDetails != displayName)
-                gDiscordActivityDetails = displayName + " (" + gDiscordActivityDetails + ")";
-        }
-        activity.SetDetails(gDiscordActivityDetails);
-    }
-
-    auto agent_pos_region = gAgent.getPositionAgent();
-    S32 pos_x = S32(agent_pos_region.mV[VX] + 0.5f);
-    S32 pos_y = S32(agent_pos_region.mV[VY] + 0.5f);
-    S32 pos_z = S32(agent_pos_region.mV[VZ] + 0.5f);
-    F32 velocity_mag_sq = gAgent.getVelocity().magVecSquared();
-    const F32 FLY_CUTOFF = 6.f;
-    const F32 FLY_CUTOFF_SQ = FLY_CUTOFF * FLY_CUTOFF;
-    const F32 WALK_CUTOFF = 1.5f;
-    const F32 WALK_CUTOFF_SQ = WALK_CUTOFF * WALK_CUTOFF;
-    if (velocity_mag_sq > FLY_CUTOFF_SQ)
-    {
-        pos_x -= pos_x % 4;
-        pos_y -= pos_y % 4;
-    }
-    else if (velocity_mag_sq > WALK_CUTOFF_SQ)
-    {
-        pos_x -= pos_x % 2;
-        pos_y -= pos_y % 2;
-    }
-
-    std::string location = "Hidden Region";
-    static LLCachedControl<bool> show_state(gSavedSettings, "ShowDiscordActivityState", false);
-    if (show_state)
-    {
-        location = llformat("%s (%d, %d, %d)", gAgent.getRegion()->getName().c_str(), pos_x, pos_y, pos_z);
-    }
-    activity.SetState(location);
-
-    discordpp::ActivityParty party;
-    party.SetId(location);
-    party.SetCurrentSize(gDiscordPartyCurrentSize);
-    party.SetMaxSize(gDiscordPartyMaxSize);
-    activity.SetParty(party);
-
-    gDiscordClient->UpdateRichPresence(activity, [](discordpp::ClientResult) {});
-}
-
-void LLAppViewer::updateDiscordPartyCurrentSize(int32_t size)
-{
-    gDiscordPartyCurrentSize = size;
-    updateDiscordActivity();
-}
-
-void LLAppViewer::updateDiscordPartyMaxSize(int32_t size)
-{
-    gDiscordPartyMaxSize = size;
-    updateDiscordActivity();
-}
-
-#endif

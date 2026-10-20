@@ -113,6 +113,9 @@ public:
 
     // GL 4.x capabilities
     bool mHasCubeMapArray = false;
+    // Debug output and object labels (glDebugMessageCallback, glObjectLabel, ...). Core in
+    // 4.3, also reachable as GL_KHR_debug. Only true once glDebugMessageCallback has
+    // actually resolved, so callers may trust it directly.
     bool mHasDebugOutput = false;
     bool mHasTransformFeedback = false;
     bool mHasAnisotropic = false;
@@ -140,6 +143,35 @@ public:
     // the entry point has actually resolved, so callers may trust it directly. Absent on
     // macOS GL 4.1, which stays forward-Z.
     bool mHasClipControl = false;
+    // GL_EXT_depth_bounds_test: passing a fragment only where the depth already stored under it lies in a range.
+    // Never core. Only true once glDepthBoundsEXT has resolved, so callers may trust it directly. See ALDepthBounds.
+    bool mHasDepthBoundsTest = false;
+    // GL_ANY_SAMPLES_PASSED_CONSERVATIVE: core in 4.3, also GL_ARB_ES3_compatibility.
+    bool mHasConservativeOcclusion = false;
+    // GL_TIMESTAMP counts time: its GL_QUERY_COUNTER_BITS are not 0, which on Apple silicon they are.
+    bool mHasTimestampQuery = false;
+    // GL_ARB_pipeline_statistics_query's counters, such as GL_FRAGMENT_SHADER_INVOCATIONS: core in 4.6.
+    bool mHasPipelineStatistics = false;
+    // Compute shaders, shader storage buffers, image load/store and indirect dispatch: core in 4.3.
+    // Only true once every entry point the compute path calls has resolved (glDispatchCompute,
+    // glDispatchComputeIndirect, glMemoryBarrier, glBindImageTexture, glShaderStorageBlockBinding,
+    // glGetProgramResourceIndex, glGetProgramInterfaceiv, glGetProgramResourceName,
+    // glGetProgramResourceiv, glClearBufferSubData, glDrawArraysIndirect, glGetIntegeri_v), so
+    // callers may trust it directly. What the context can do, not whether the session uses it:
+    // see LLRender::sCompute.
+    bool mHasCompute = false;
+    // The compute limits, queried only where mHasCompute; 0 elsewhere.
+    S32 mMaxComputeWorkGroupCount[3] = {};
+    S32 mMaxComputeWorkGroupSize[3] = {};
+    S32 mMaxComputeWorkGroupInvocations = 0;
+    S32 mMaxComputeSharedMemorySize = 0;
+    S32 mMaxImageUnits = 0;
+    S32 mMaxShaderStorageBufferBindings = 0;
+    S32 mMaxVertexShaderStorageBlocks = 0;    // a conforming 4.3 may report 0
+    S32 mMaxFragmentShaderStorageBlocks = 0;
+    S32 mMaxComputeShaderStorageBlocks = 0;
+    S64 mMaxShaderStorageBlockSize = 0;
+    S32 mShaderStorageBufferOffsetAlignment = 0;
 
     // Vendor-specific extensions
     bool mHasAMDAssociations = false;
@@ -157,6 +189,13 @@ public:
     // True for any Mesa driver (radeonsi, iris, llvmpipe, zink, ...). Detected
     // from the GL_VERSION string; used to gate Mesa-specific workarounds.
     bool mIsMesa = false;
+    // True for Mesa's d3d12 driver: GLOn12, Microsoft's GL over D3D12 and the only GL on
+    // Windows on Arm. Detected from its "D3D12 (<adapter>)" GL_RENDERER.
+    bool mIsD3D12 = false;
+    // True when GL draws on the CPU: Mesa's llvmpipe, softpipe or swrast, or WARP behind
+    // WSL's d3d12. What Mesa falls back to when the hardware driver does not load.
+    // Detected from GL_RENDERER, on Linux only.
+    bool mIsSoftwareRenderer = false;
 
     // hints to the render pipe
     U32 mDownScaleMethod = 0; // see settings.xml RenderDownScaleMethod
@@ -188,12 +227,19 @@ public:
     // In ALL CAPS
     std::string mGLRenderer;
 
+    // GL_VENDOR, GL_RENDERER and GL_VERSION as reported, less the kernel's DRM version and
+    // release radeonsi and r600 put in the renderer on Linux. Keys what a driver update must
+    // invalidate and a kernel update must not: the benchmark result and program binaries.
+    std::string mGLIdentity;
+
     // GL Extension String
     std::set<std::string> mGLExtensions;
 
 private:
     void reloadExtensionsString();
     void initExtensions();
+    void initCompute();
+    void initQueries();
     void initGLStates();
 };
 
@@ -208,13 +254,18 @@ void flush_glerror(); // Flush GL errors when we know we're handling them correc
 
 void log_glerror();
 // Validate every sampler the currently bound program declares against the state actually
-// bound to its texture unit: something bound at all, and no depth/compare mismatch in either
+// bound to its texture unit: something bound at all, no depth/compare mismatch in either
 // direction (non-shadow sampler over a compare-enabled depth texture, or a shadow sampler
-// without comparisons). Returns true when the state is sound.
+// without comparisons), and no integer one -- an integer sampler over a texture that is
+// neither integer nor read as its stencil, a float sampler over one that is, or an integer
+// texture under a filtering sampler, which leaves it incomplete. And every image against
+// its image unit: a float image over an integer format, or an integer one over the wrong
+// sign or a float format. Returns true when the state is sound.
 //
-// gDebugGL only -- returns true immediately otherwise. Intended for llassert() at draw
-// sites, the way LLVertexBuffer::validateRange is used, so it fails at the draw responsible
-// and names the uniform instead of leaving a driver warning to be traced back by hand.
+// gDebugGL only -- returns true immediately otherwise. Intended for llassert() at draw and
+// dispatch sites, the way LLVertexBuffer::validateRange is used, so it fails at the draw
+// responsible and names the uniform instead of leaving a driver warning to be traced back
+// by hand.
 bool validate_bound_samplers();
 
 // Drop the cached sampler enumeration for a program about to be deleted. GL is free to hand
@@ -304,6 +355,10 @@ public:
     static void initClass();
     static void restoreGL();
 
+    // Record a cap set with a raw glEnable/glDisable, so a scoped state does not take it for
+    // GL's default. The map describes the main context; call on the main thread only.
+    static void seedState(LLGLenum state, LLGLboolean enabled) { sStateMap[state] = enabled; }
+
     static void resetTextureStates();
     static void dumpStates();
 
@@ -319,6 +374,9 @@ public:
     enum { CURRENT_STATE = -2, DISABLED_STATE = 0, ENABLED_STATE = 1 };
     LLGLState(LLGLenum state, S32 enabled = CURRENT_STATE);
     ~LLGLState();
+    // A copy would restore the cap a second time.
+    LLGLState(const LLGLState&) = delete;
+    LLGLState& operator=(const LLGLState&) = delete;
     void setEnabled(S32 enabled);
     void enable() { setEnabled(ENABLED_STATE); }
     void disable() { setEnabled(DISABLED_STATE); }
@@ -385,25 +443,6 @@ private:
 };
 
 /*
-  Modify and load projection matrix to push depth values to far clip plane.
-  The default constructor squashes the projection on the stack.
-
-  Restores projection matrix on destruction.
-  Saves/restores matrix mode around projection manipulation.
-  Does not stack.
-*/
-class LLGLSquashToFarClip
-{
-public:
-    LLGLSquashToFarClip();
-    LLGLSquashToFarClip(const LLMatrix4a& projection, U32 layer = 0);
-
-    void setProjectionMatrix(LLMatrix4a projection, U32 layer);
-
-    ~LLGLSquashToFarClip();
-};
-
-/*
     Interface for objects that need periodic GL updates applied to them.
     Used to synchronize GL updates with GL thread.
 */
@@ -431,34 +470,6 @@ public:
     }
     virtual void updateGL() = 0;
 };
-
-const U32 FENCE_WAIT_TIME_NANOSECONDS = 1000;  //1 microsecond (despite the name's history)
-
-class LLGLFence
-{
-public:
-    virtual ~LLGLFence()
-    {
-    }
-
-    virtual void placeFence() = 0;
-    virtual bool isCompleted() = 0;
-    virtual void wait() = 0;
-};
-
-class LLGLSyncFence : public LLGLFence
-{
-public:
-    GLsync mSync;
-
-    LLGLSyncFence();
-    virtual ~LLGLSyncFence();
-
-    void placeFence();
-    bool isCompleted();
-    void wait();
-};
-
 
 #include "llglstates.h"
 

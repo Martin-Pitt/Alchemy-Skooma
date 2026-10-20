@@ -30,6 +30,7 @@
 #include "llagentui.h"
 #include "llavatarnamecache.h"
 #include "lllogchat.h"
+#include "alchattimestamp.h"
 #include "alregex.h"
 #include "lltrans.h"
 #include "llurlaction.h"
@@ -79,12 +80,8 @@ const static std::string MULTI_LINE_PREFIX(" ");
  *
  * Note: "You" was used as an avatar names in viewers of previous versions
  *
- * The timestamp and the blanks after it are matched at the head of the line,
- * and the rest of the line is what follows them: asked for no groups, the
- * regex is answered by RE2's DFA alone.
+ * ALChatTimestamp recognizes these timestamps with or without seconds.
  */
-const static ALRegex TIMESTAMP_PREFIX("\\[\\d{4}/\\d{1,2}/\\d{1,2}\\s+\\d{1,2}:\\d{2}\\s[AaPp][Mm]\\]\\s+|\\[\\d{4}/\\d{1,2}/\\d{1,2}\\s+\\d{1,2}:\\d{2}\\]\\s+|\\[\\d{1,2}:\\d{2}\\s[AaPp][Mm]\\]\\s+|\\[\\d{1,2}:\\d{2}\\]\\s+");
-const static ALRegex TIMESTAMP("^(\\[\\d{4}/\\d{1,2}/\\d{1,2}\\s+\\d{1,2}:\\d{2}(\\s[AaPp][Mm])?\\]|\\[\\d{1,2}:\\d{2}(\\s[AaPp][Mm])?\\]).*");
 
 /**
  *  Regular expression suitable to match names like
@@ -143,7 +140,7 @@ public:
     {
         typedef boost::date_time::local_adjustor<ptime, -8, no_dst> pst;
         typedef boost::date_time::local_adjustor<ptime, -7, no_dst> pdt;
-        time_t t_time = time(NULL);
+        time_t t_time = time_corrected();
         ptime p_time = LLStringOps::getPacificDaylightTime()
             ? pdt::utc_to_local(from_time_t(t_time))
             : pst::utc_to_local(from_time_t(t_time));
@@ -153,7 +150,7 @@ public:
 
     void checkAndCutOffDate(std::string& time_str)
     {
-        if (time_str.size() < 10) // not enough space for a date
+        if (time_str.find('/') == std::string::npos)
         {
             return;
         }
@@ -301,7 +298,7 @@ std::string LLLogChat::cleanFileName(std::string filename)
     return filename;
 }
 
-std::string LLLogChat::timestamp2LogString(U32 timestamp, bool withdate)
+std::string LLLogChat::timestamp2LogString(U32 timestamp, bool withdate, bool withseconds)
 {
     std::string timeStr;
     if (withdate)
@@ -311,17 +308,16 @@ std::string LLLogChat::timestamp2LogString(U32 timestamp, bool withdate)
             + LLTrans::getString("TimeDay") + "] ";
     }
 
-    static bool use_24h = gSavedSettings.getBOOL("Use24HourClock");
-    if (use_24h)
+    const bool use_24h = gSavedSettings.getBOOL("Use24HourClock");
+    timeStr += "[" + LLTrans::getString(use_24h ? "TimeHour" : "TimeHour12") + "]:["
+        + LLTrans::getString("TimeMin") + "]";
+    if (withseconds)
     {
-        timeStr += "[" + LLTrans::getString("TimeHour") + "]:["
-            + LLTrans::getString("TimeMin") + "]";
+        timeStr += ":[" + LLTrans::getString("TimeSec") + "]";
     }
-    else
+    if (!use_24h)
     {
-        timeStr += "[" + LLTrans::getString("TimeHour12") + "]:["
-            + LLTrans::getString("TimeMin") + "] ["
-            + LLTrans::getString("TimeAMPM") + "]";
+        timeStr += " [" + LLTrans::getString("TimeAMPM") + "]";
     }
 
     LLSD substitution;
@@ -381,7 +377,8 @@ void LLLogChat::saveHistory(const std::string& filename,
     LLSD item;
 
     if (gSavedPerAccountSettings.getBOOL("LogTimestamp"))
-         item["time"] = LLLogChat::timestamp2LogString(0, gSavedPerAccountSettings.getBOOL("LogTimestampDate"));
+         item["time"] = LLLogChat::timestamp2LogString(0, gSavedPerAccountSettings.getBOOL("LogTimestampDate"),
+                                                     gSavedSettings.getBOOL("AlchemyIMShowSeconds"));
 
     item["from_id"] = from_id;
     item["message"] = altered_line;
@@ -914,7 +911,7 @@ bool LLLogChat::isTranscriptFileFound(std::string fullname)
         {
             //matching a timestamp
             std::string line(remove_utf8_bom(buffer));
-            if (TIMESTAMP.match(line))
+            if (ALChatTimestamp::prefixLength(line) != 0)
             {
                 result = true;
             }
@@ -998,12 +995,11 @@ bool LLChatLogParser::parse(std::string& raw, LLSD& im, const LLSD& parse_params
     im = LLSD::emptyMap();
 
     //matching a timestamp
-    ALRegexMatch stamp;
-    bool has_timestamp = TIMESTAMP_PREFIX.search(raw, &stamp, 0, true, 0);
-    if (has_timestamp)
+    const size_t timestamp_length = ALChatTimestamp::prefixLength(raw);
+    if (timestamp_length != 0)
     {
         //timestamp was successfully parsed
-        std::string timestamp = stamp.str();
+        std::string timestamp = raw.substr(0, timestamp_length);
         boost::trim(timestamp);
         timestamp.erase(0, 1);
         timestamp.erase(timestamp.length()-1, 1);
@@ -1024,7 +1020,7 @@ bool LLChatLogParser::parse(std::string& raw, LLSD& im, const LLSD& parse_params
     }
 
     // the rest of the line, after any timestamp
-    std::string stuff = raw.substr(has_timestamp ? stamp.end() : 0);
+    std::string stuff = raw.substr(timestamp_length);
 
     //matching a name and a text
     ALRegexMatch named;
@@ -1106,37 +1102,25 @@ void LLDeleteHistoryThread::run()
 }
 
 LLActionThread::LLActionThread(const std::string& name)
-    : LLThread(name),
-    mMutex(),
-    mRunCondition(),
-    mFinished(false)
+    : LLThread(name)
 {
 }
 
 LLActionThread::~LLActionThread()
 {
+    // Stopped before mFinished goes: a thread seen finished may still be notifying
+    // its waiters through it.
+    shutdown();
 }
 
 void LLActionThread::waitFinished()
 {
-    mMutex.lock();
-    if (!mFinished)
-    {
-        mMutex.unlock();
-        mRunCondition.wait();
-    }
-    else
-    {
-        mMutex.unlock();
-    }
+    mFinished.wait();
 }
 
 void LLActionThread::setFinished()
 {
-    mMutex.lock();
-    mFinished = true;
-    mMutex.unlock();
-    mRunCondition.signal();
+    mFinished.set_all();
 }
 
 LLLoadHistoryThread::LLLoadHistoryThread(const std::string& file_name, std::list<LLSD>* messages, const LLSD& load_params)

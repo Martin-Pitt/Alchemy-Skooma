@@ -24,14 +24,14 @@
 
 #include "linden_common.h"
 
-#include "../alsnippetsession.h"
+#include "alsnippetsession.h"
 
-#include "../test/lltut.h"
+#include <catch2/catch_test_macros.hpp>
 
 #include <string>
 #include <vector>
 
-namespace tut
+namespace
 {
     struct alsnippetsession_data
     {
@@ -39,92 +39,227 @@ namespace tut
 
         static ALTextRange range(S32 line, S32 from, S32 to) { return ALTextRange(ALTextPos(line, from), ALTextPos(line, to)); }
     };
-    typedef test_group<alsnippetsession_data> alsnippetsession_group;
-    typedef alsnippetsession_group::object    alsnippetsession_object;
-    alsnippetsession_group                    alsnippetsession_instance("ALSnippetSession");
 
-    template<> template<>
-    void alsnippetsession_object::test<1>()
+    TEST_CASE_METHOD(alsnippetsession_data, "ALSnippetSession: expand reads stops and mirrors and escapes and indents a body", "[ALSnippetSession]")
     {
-        set_test_name("a body read: its stops in number order, a number again a mirror, its later lines indented, and where the caret lands");
         const ALSnippetSession::Expansion x = ALSnippetSession::expand("for (${1:i} = 0; $1 < ${2:n}; ++$1)\n{\n$0\n}", ALTextPos(0, 4), "    ");
-        ensure_equals("the text", x.text, std::string("for (i = 0; i < n; ++i)\n    {\n    \n    }"));
+        CHECK(x.text == std::string("for (i = 0; i < n; ++i)\n    {\n    \n    }"));
         const ALTextDocument doc("    " + x.text);
-        ensure("two stops", x.stops.size() == 2 && doc.text(x.stops[0]) == "i" && doc.text(x.stops[1]) == "n");
-        ensure("two mirrors of the first", x.mirrors.size() == 2 && x.mirrors[0].of == 0 && x.mirrors[1].of == 0 && doc.text(x.mirrors[1].range) == "i");
-        ensure("$0 on the indented line", x.landing == range(2, 4, 4));
+        REQUIRE(x.stops.size() == 2);
+        CHECK(doc.text(x.stops[0]) == "i");
+        CHECK(doc.text(x.stops[1]) == "n");
+        REQUIRE(x.mirrors.size() == 2);
+        CHECK(x.mirrors[0].of == 0);
+        CHECK(x.mirrors[1].of == 0);
+        CHECK(doc.text(x.mirrors[1].range) == "i");
+        UNSCOPED_INFO("$0 on the indented line");
+        CHECK(x.landing == range(2, 4, 4));
 
         const ALSnippetSession::Expansion nested = ALSnippetSession::expand("${1:a ${2:b}} ${0:done}", ALTextPos(0, 0), "");
         const ALTextDocument                nd(nested.text);
-        ensure("one inside another", nested.stops.size() == 2 && nd.text(nested.stops[0]) == "a b" && nd.text(nested.stops[1]) == "b");
-        ensure("$0's text", nd.text(nested.landing) == "done");
+        {
+            INFO("one inside another");
+            REQUIRE(nested.stops.size() == 2);
+            CHECK(nd.text(nested.stops[0]) == "a b");
+            CHECK(nd.text(nested.stops[1]) == "b");
+        }
+        UNSCOPED_INFO("$0's text");
+        CHECK(nd.text(nested.landing) == "done");
 
         const ALSnippetSession::Expansion plain = ALSnippetSession::expand("\\$1 costs $$5 \\}", ALTextPos(0, 0), "");
-        ensure_equals("escaped", plain.text, std::string("$1 costs $5 }"));
-        ensure("no stops, landing at the end", plain.stops.empty() && plain.landing == range(0, 13, 13));
+        UNSCOPED_INFO("escaped");
+        CHECK(plain.text == std::string("$1 costs $5 }"));
+        CHECK(plain.stops.empty());
+        CHECK(plain.landing == range(0, 13, 13));
     }
 
-    template<> template<>
-    void alsnippetsession_object::test<2>()
+    TEST_CASE_METHOD(alsnippetsession_data, "ALSnippetSession: stops follow edits and one an edit cuts into is dropped", "[ALSnippetSession]")
     {
-        set_test_name("the stop being typed over becomes what was typed; the rest move with the text; one an edit cuts into goes; none being typed over, it is over");
         ALTextDocument doc("f(a, b)\n");
         session.start({ range(0, 2, 3), range(0, 5, 6) }, ALTextPos(0, 7));
-        ensure("the first being typed over", session.active() && session.at() == 0);
+        {
+            INFO("the first being typed over");
+            CHECK(session.active());
+            CHECK(session.at() == 0);
+        }
         session.slide(doc.replace(range(0, 2, 3), "alpha"));
-        ensure("typed over", doc.text(session.stops()[0]) == "alpha" && doc.text(session.stops()[1]) == "b");
-        ensure("the end moved along", session.after() == ALTextPos(0, 11));
+        {
+            INFO("typed over");
+            REQUIRE(session.stops().size() == 2);
+            CHECK(doc.text(session.stops()[0]) == "alpha");
+            CHECK(doc.text(session.stops()[1]) == "b");
+        }
+        UNSCOPED_INFO("the end moved along");
+        CHECK(session.after() == ALTextPos(0, 11));
         session.slide(doc.replace(range(0, 0, 0), "x"));
-        ensure("moved with the text", doc.text(session.stops()[0]) == "alpha" && doc.text(session.stops()[1]) == "b");
+        {
+            INFO("moved with the text");
+            REQUIRE(session.stops().size() == 2);
+            CHECK(doc.text(session.stops()[0]) == "alpha");
+            CHECK(doc.text(session.stops()[1]) == "b");
+        }
         session.slide(doc.replace(range(0, 9, 11), ""));
-        ensure("the one cut into goes", session.stops().size() == 1 && session.at() == 0);
+        {
+            INFO("the one cut into goes");
+            CHECK(session.stops().size() == 1);
+            CHECK(session.at() == 0);
+        }
         session.slide(doc.replace(range(0, 2, 4), ""));
-        ensure("the one being typed over cut into from outside: over", !session.active() && session.at() == -1);
+        {
+            INFO("the one being typed over cut into from outside: over");
+            CHECK_FALSE(session.active());
+            CHECK(session.at() == -1);
+        }
     }
 
-    template<> template<>
-    void alsnippetsession_object::test<3>()
+    TEST_CASE_METHOD(alsnippetsession_data, "ALSnippetSession: staleMirrors lists out-of-date mirrors and one batch fixes them", "[ALSnippetSession]")
     {
-        set_test_name("mirrors: those that no longer read as their stop, the last first; the one being brought up is what the edit put in");
         ALTextDocument doc("i = i + i;\n");
         session.start({ range(0, 0, 1) }, ALTextPos(0, 10), { { 0, range(0, 4, 5) }, { 0, range(0, 8, 9) } });
         session.slide(doc.replace(range(0, 0, 1), "count"));
         std::string            wanted;
         const std::vector<S32> stale = session.staleMirrors(0, doc, wanted);
-        ensure_equals("what the stop holds", wanted, std::string("count"));
-        ensure("both, the last in the text first", stale.size() == 2 && stale[0] == 1 && stale[1] == 0);
-        session.syncing(1);
-        session.slide(doc.replace(session.mirrors()[1].range, wanted));
-        session.syncing(-1);
-        ensure("brought up whole", doc.text(session.mirrors()[1].range) == "count");
-        ensure("one left", session.staleMirrors(0, doc, wanted).size() == 1);
-        ensure("none for another stop", session.staleMirrors(3, doc, wanted).empty());
+        UNSCOPED_INFO("what the stop holds");
+        CHECK(wanted == std::string("count"));
+        UNSCOPED_INFO("both mirrors are stale");
+        CHECK(stale == std::vector<S32>({ 0, 1 }));
+        std::vector<std::pair<ALTextRange, std::string>> edits;
+        for (const S32 k : stale)
+        {
+            edits.emplace_back(session.mirrors()[static_cast<size_t>(k)].range, wanted);
+        }
+        session.setSyncing(true);
+        session.slide(doc.replaceMany(std::move(edits)));
+        session.setSyncing(false);
+        {
+            INFO("each brought up whole");
+            REQUIRE(session.mirrors().size() == 2);
+            CHECK(doc.text(session.mirrors()[0].range) == "count");
+            CHECK(doc.text(session.mirrors()[1].range) == "count");
+        }
+        CHECK(doc.line(0) == std::string("count = count + count;"));
+        CHECK(session.staleMirrors(0, doc, wanted).empty());
+        UNSCOPED_INFO("none for another stop");
+        CHECK(session.staleMirrors(3, doc, wanted).empty());
     }
 
-    template<> template<>
-    void alsnippetsession_object::test<4>()
+    TEST_CASE_METHOD(alsnippetsession_data, "ALSnippetSession: reaches spans from the first stop's line to where it ends", "[ALSnippetSession]")
     {
-        set_test_name("filled in from the first stop's line to where the call or the snippet ends");
         session.start({ range(1, 4, 5), range(3, 2, 3) }, ALTextPos(4, 0));
-        ensure("above: no", !session.reaches(0));
-        ensure("the first stop's line", session.reaches(1));
-        ensure("between", session.reaches(2));
-        ensure("where it ends", session.reaches(4));
-        ensure("below: no", !session.reaches(5));
+        UNSCOPED_INFO("above: no");
+        CHECK_FALSE(session.reaches(0));
+        UNSCOPED_INFO("the first stop's line");
+        CHECK(session.reaches(1));
+        UNSCOPED_INFO("between");
+        CHECK(session.reaches(2));
+        UNSCOPED_INFO("where it ends");
+        CHECK(session.reaches(4));
+        UNSCOPED_INFO("below: no");
+        CHECK_FALSE(session.reaches(5));
         session.clear();
-        ensure("cleared", !session.active() && session.mirrors().empty() && session.landing() == 0);
+        {
+            INFO("cleared");
+            CHECK_FALSE(session.active());
+            CHECK(session.mirrors().empty());
+            CHECK(session.landing() == 0);
+        }
     }
 
-    template<> template<>
-    void alsnippetsession_object::test<5>()
+    TEST_CASE_METHOD(alsnippetsession_data, "ALSnippetSession: a body's indent levels are redone in the text's own unit", "[ALSnippetSession]")
     {
-        set_test_name("a body's own levels, four spaces or a tab, made again in the text's unit; what is left over as spaces; the first line as it is");
         const ALSnippetSession::Expansion tabs = ALSnippetSession::expand("f()\n{\n    a;\n        b;\n\tc;\n      d;\n}", ALTextPos(0, 1), "\t", "\t");
-        ensure_equals("tabs a level, under the line's own", tabs.text, std::string("f()\n\t{\n\t\ta;\n\t\t\tb;\n\t\tc;\n\t\t  d;\n\t}"));
+        UNSCOPED_INFO("tabs a level, under the line's own");
+        CHECK(tabs.text == std::string("f()\n\t{\n\t\ta;\n\t\t\tb;\n\t\tc;\n\t\t  d;\n\t}"));
         const ALSnippetSession::Expansion two = ALSnippetSession::expand("if x then\n    $0\nend", ALTextPos(0, 0), "", "  ");
-        ensure_equals("two spaces a level", two.text, std::string("if x then\n  \nend"));
-        ensure("$0 where its level is now", two.landing == range(1, 2, 2));
+        UNSCOPED_INFO("two spaces a level");
+        CHECK(two.text == std::string("if x then\n  \nend"));
+        UNSCOPED_INFO("$0 where its level is now");
+        CHECK(two.landing == range(1, 2, 2));
         const ALSnippetSession::Expansion same = ALSnippetSession::expand("    lead\n    x", ALTextPos(0, 0), "");
-        ensure_equals("no unit: as written", same.text, std::string("    lead\n    x"));
+        UNSCOPED_INFO("no unit: as written");
+        CHECK(same.text == std::string("    lead\n    x"));
+    }
+
+    TEST_CASE_METHOD(alsnippetsession_data, "ALSnippetSession: syncing a mirror that is or sits in a later stop keeps that stop", "[ALSnippetSession]")
+    {
+        // Every stale mirror of a stop made again at once, as the editor does
+        // on leaving it.
+        const auto sync = [this](ALTextDocument& doc, S32 stop) {
+            std::string                                      wanted;
+            std::vector<std::pair<ALTextRange, std::string>> edits;
+            for (const S32 k : session.staleMirrors(stop, doc, wanted))
+            {
+                edits.emplace_back(session.mirrors()[static_cast<size_t>(k)].range, wanted);
+            }
+            session.setSyncing(true);
+            session.slide(doc.replaceMany(std::move(edits)));
+            session.setSyncing(false);
+        };
+
+        const ALSnippetSession::Expansion whole = ALSnippetSession::expand("local ${1:name} = require(\"${2:$1}\")", ALTextPos(0, 0), "");
+        ALTextDocument                    doc(whole.text);
+        {
+            INFO("the second stop the first's mirror");
+            REQUIRE(whole.stops.size() == 2);
+            REQUIRE(whole.mirrors.size() == 1);
+            CHECK(whole.stops[1] == whole.mirrors[0].range);
+        }
+        session.start(whole.stops, whole.landing.begin, whole.mirrors);
+        REQUIRE(session.stops().size() == 2);
+        session.slide(doc.replace(session.stops()[0], "json"));
+        sync(doc, 0);
+        CHECK(doc.text() == std::string("local json = require(\"json\")"));
+        {
+            INFO("both stops kept");
+            REQUIRE(session.stops().size() == 2);
+            CHECK(session.at() == 0);
+        }
+        UNSCOPED_INFO("the second over what its mirror holds now");
+        CHECK(doc.text(session.stops()[1]) == std::string("json"));
+
+        const ALSnippetSession::Expansion around = ALSnippetSession::expand("${1:x} ${2:the $1 thing}", ALTextPos(0, 0), "");
+        ALTextDocument                    text(around.text);
+        REQUIRE(around.stops.size() == 2);
+        session.start(around.stops, around.landing.begin, around.mirrors);
+        session.slide(text.replace(session.stops()[0], "abc"));
+        sync(text, 0);
+        CHECK(text.text() == std::string("abc the abc thing"));
+        UNSCOPED_INFO("the stop around it kept");
+        REQUIRE(session.stops().size() == 2);
+        UNSCOPED_INFO("grown with it");
+        CHECK(text.text(session.stops()[1]) == std::string("the abc thing"));
+    }
+
+    TEST_CASE_METHOD(alsnippetsession_data, "ALSnippetSession: a default given after a bare first place fills every place", "[ALSnippetSession]")
+    {
+        const ALSnippetSession::Expansion x = ALSnippetSession::expand("$1 = ${1:value};", ALTextPos(0, 0), "");
+        UNSCOPED_INFO("the default where it is first");
+        CHECK(x.text == std::string("value = value;"));
+        {
+            INFO("the stop the first place, holding it");
+            REQUIRE(x.stops.size() == 1);
+            CHECK(x.stops[0] == range(0, 0, 5));
+        }
+        {
+            INFO("its mirror the second");
+            REQUIRE(x.mirrors.size() == 1);
+            CHECK(x.mirrors[0].of == 0);
+            CHECK(x.mirrors[0].range == range(0, 8, 13));
+        }
+        const ALTextDocument doc(x.text);
+        session.start(x.stops, x.landing.begin, x.mirrors);
+        std::string wanted;
+        {
+            INFO("nothing to bring up as the stop is left");
+            CHECK(session.staleMirrors(0, doc, wanted).empty());
+            CHECK(wanted == "value");
+        }
+
+        const ALSnippetSession::Expansion braced = ALSnippetSession::expand("${1} + $1 + ${1:n}", ALTextPos(0, 0), "");
+        UNSCOPED_INFO("braced without one, and a mirror between, the same");
+        CHECK(braced.text == std::string("n + n + n"));
+        const ALSnippetSession::Expansion empty = ALSnippetSession::expand("${1:} + ${1:n}", ALTextPos(0, 0), "");
+        UNSCOPED_INFO("a first given an empty default keeps it");
+        CHECK(empty.text == std::string(" + n"));
     }
 }

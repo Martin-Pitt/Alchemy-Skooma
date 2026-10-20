@@ -114,7 +114,15 @@ struct ALScriptStudioDoc::Check
     ALTextRange              actionsAsked;
     // A Fix All asked before the text as it stands was checked, made
     // once it is: of the problems of one kind, or of all where empty.
-    std::optional<std::string> fixAllAfterCheck;
+    std::optional<FixPick> fixAllAfterCheck;
+    // A Fix All previewed: what it picked, over the text at that version,
+    // made by Apply while the text is still that.
+    struct FixAllPreview
+    {
+        FixPick pick;
+        U32     version = 0;
+    };
+    std::optional<FixAllPreview> fixAllPreviewed;
 };
 
 // A Script Studio window's checking, as the tab's part `doc.check` keeps
@@ -134,27 +142,9 @@ public:
     typedef ALScriptStudioDoc      Doc;
     typedef ALScriptStudioDoc::FixPick FixPick;
 
-    // What checking reads of the viewer's that is no window's: whether the
-    // preprocessor runs and each of its transforms is on, its expansion of
-    // a script and a script's `.luaurc`, an include or a module looked up
-    // by name, and the modules index. The viewer sets them once; a test
-    // sets its own.
-    struct Sources
-    {
-        std::function<bool()>                          preprocessing;
-        std::function<bool(ALPreprocessor::Transform)> transformOn;
-        std::function<void(ALScriptPreprocessor::Request, std::function<void(const ALPreprocessor::Result&)>)> expand;
-        std::function<bool(const ALScriptPreprocessor::Request&, ALLuauConfig&, const ALLuauConfig*)>          configOf;
-        std::function<void(const ALScriptPreprocessor::Request&, std::function<void()>)>                        fetchConfig;
-        std::function<ALPreprocessor::Found(const ALScriptPreprocessor::Request&, const ALPreprocessor::Ask&, ALPreprocessor::Include&)>
-            lookUp;
-        std::function<std::vector<ALScriptModules::Module>(const ALScriptPreprocessor::Request&,
-                                                           std::function<std::vector<ALScriptModules::Open>()>,
-                                                           const std::vector<std::string>&, std::function<void()>)>
-                                                                                          modules;
-        std::function<void(const ALScriptPreprocessor::Request&, std::function<void()>)> fetchNearby;
-    };
-    static Sources& sources();
+    // What checking reads of the viewer's that is no window's -- the
+    // preprocessor, its settings, its expansions, the .luaurc, includes
+    // and modules -- is the viewer's to say (ALScriptStudioViewer).
 
     // What checking asks of the window itself, beyond what it is given.
     class Window
@@ -174,7 +164,11 @@ public:
         // question of whether to make many fixes at once, `yes` where they
         // are to be.
         virtual ALCodeEditor& editorInFront(Doc& doc)                              = 0;
-        virtual void          confirmFixAll(const LLSD& args, std::function<void()> yes) = 0;
+        // Or to see them first, `preview` where they are.
+        virtual void          confirmFixAll(const LLSD& args, std::function<void()> yes, std::function<void()> preview) = 0;
+        // Two texts side by side in a tab's place, each under its title.
+        virtual void compare(Doc& doc, const std::string& left, const std::string& right, const std::string& left_title,
+                             const std::string& right_title) = 0;
 
     protected:
         ~Window() = default;
@@ -189,12 +183,18 @@ public:
     // where only where the script is matters; and what an include is
     // called.
     bool                          preprocessed(const Doc& doc) const;
+    // And why (ALPreprocessor::wanted): No for a notecard, or one not yet
+    // loaded.
+    ALPreprocessor::Wanted        preprocessedWhy(const Doc& doc) const;
     ALScriptPreprocessor::Request preprocessRequest(const Doc& doc, bool with_source = true) const;
     std::string                   includeName(const Doc& doc, const std::string& path) const;
     // An LSL file on disk with no default state: an include's functions
     // and globals, which the parser takes for no script at all until a
     // state is put after them, and whose declarations are for others.
-    bool lslFragment(const Doc& doc) const;
+    // What it was of the text before while the text is still being lexed
+    // to its end, a slice each time it is asked; as the text stands `now`
+    // -- for a check, which sends it.
+    bool lslFragment(const Doc& doc, bool now = false) const;
     // A check due a moment after the last keystroke, or at once. A
     // notecard's is its own (checkNotecard), which the analyzers have no
     // part in.
@@ -225,10 +225,19 @@ public:
     // once; refused where the text has moved on since `version`, the one
     // it was made over, whose places it is in.
     bool applyFix(Doc& doc, const ALScriptFix& fix, U32 version);
+    // A SLua alias of the studio's own named for a folder, as a fix that
+    // moves a require onto one does once its edit is sure to take, before
+    // it is made; false, said, where the name is another folder's.
+    bool nameStudioAlias(const std::string& name, const std::string& folder);
     // The preferred fix of every problem picked, made as one step, once
     // asked; and made, the asking done. True where anything was made.
     void askFixAll(Doc& doc, const FixPick& pick);
     bool fixAll(Doc& doc, const FixPick& pick);
+    // The text as the fixes would make it, beside the text as it is, and
+    // Apply offered over the tab (the action apply_fixes); and made by it,
+    // where the text is still what was previewed.
+    void previewFixAll(Doc& doc, const FixPick& pick);
+    bool applyPreviewed(Doc& doc);
     // The fixes of the problems on a line, as the editor lists them, each
     // with the value that finds it again; none where the text has moved on
     // since the check they were made in. And the problem a value is.
@@ -242,6 +251,26 @@ public:
     // not use dropped. Fixes are kept only for the script's own.
     static void mapBack(std::vector<ALScriptProblem>& problems, const ALSourceMap& map,
                         const std::vector<std::pair<std::string, ALSourceMap>>& module_maps);
+    // The modules an expansion of SLua read apart reaches, each by its key
+    // and text, and which require reaches which: what the analyzers check
+    // the script with (ALLuauService::setModules). Here, so that what asks
+    // the analyzers of an expansion without checking needs nothing more.
+    static std::shared_ptr<const ALLuauService::Modules> modulesOf(const ALPreprocessor::Result& result)
+    {
+        auto modules = std::make_shared<ALLuauService::Modules>();
+        for (const ALPreprocessor::Result::Piece& piece : result.apart.modules)
+        {
+            modules->modules.push_back({ piece.key, piece.text });
+        }
+        for (const ALPreprocessor::Result::Resolved& resolved : result.resolved)
+        {
+            if (resolved.require)
+            {
+                modules->reaches.push_back({ resolved.from, resolved.name, resolved.path });
+            }
+        }
+        return modules;
+    }
 
 private:
     // What the analyzers said of a word, on the tip under the mouse.
@@ -284,6 +313,10 @@ private:
     void noLint(Doc& doc);
     void explainTransformWords(Doc& doc);
     void explainRequires(Doc& doc);
+    // Each "-- LSL:" comment the converter left in an SLua script, a note
+    // to see to, with its lint's fix where there is one
+    // (ALLSLToSLua::notesIn).
+    void notesAsProblems(Doc& doc);
 
     ALScriptStudioServices& mServices;
     ALScriptStudioAnalysis& mAnalysis;

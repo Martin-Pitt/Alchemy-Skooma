@@ -30,6 +30,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // What the studio's window and its units share of places in scripts: a
@@ -39,13 +40,19 @@
 // name is declared.
 namespace ALScriptPlaces
 {
+    // A span of a script -- a problem's, an edit's, a symbol's -- as a range
+    // of its text: the one way one becomes the other.
     ALTextRange rangeOf(const ALScriptSpan& span);
-    std::string lineOf(const std::string& text, S32 line);
-    std::string lineOf(const ALTextDocument& text, S32 line);
+    // Whether a span holds a place, its ends included; and whether it holds
+    // the whole of another.
+    bool        holds(const ALScriptSpan& span, const ALTextPos& pos);
+    bool        within(const ALScriptSpan& inner, const ALScriptSpan& outer);
     // A text's lines, found once, for the many places a name has in one
     // text -- an include, an expansion -- rather than each read by walking
     // the text from its top: a text open in a tab, read where it stands for
-    // as long as the lines are asked, or a copy held apart.
+    // as long as the lines are asked, or a copy held apart, split as a tab's
+    // document splits it (ALLineBreaks), so that a place's line is the same
+    // line whether its file is open or not.
     class Lines
     {
     public:
@@ -59,13 +66,10 @@ namespace ALScriptPlaces
         std::string line(S32 line) const;
 
     private:
-        void index();
-
         const ALTextDocument*              mOpen = nullptr;
         std::shared_ptr<const std::string> mHeld;
-        const std::string*                 mText = nullptr;
-        // Where each of the text's lines starts.
-        std::vector<size_t>                mStarts;
+        // The lines of the text held or read in place, into it.
+        std::vector<std::string_view>      mLines;
     };
     bool        isIdentifier(const std::string& text);
     // The symbols of an outline a place is in, the outermost first: which
@@ -75,6 +79,13 @@ namespace ALScriptPlaces
     // A span of an expansion as the source's, in place; the file of the
     // expansion's map it is in, or -1 where it is in none.
     S32         mapSpan(const ALSourceMap& map, ALScriptSpan& span);
+    // The same of a span of a module the script requires, which the
+    // analyzers read apart and name by its key (ALScriptStudioDoc::Expanded::
+    // moduleMaps): through the module's own map, with the file it is in,
+    // by identity and by name. False where the expansion has no module of
+    // that key, or the span is in none of its files.
+    bool        mapModuleSpan(const std::vector<std::pair<std::string, ALSourceMap>>& maps, const std::string& key, ALScriptSpan& span,
+                              std::string& path, std::string& name);
     // A place's line, trimmed for a pane's row, and where the name is in
     // it.
     void        placeText(ALScriptStudioDoc::Place& place, const std::string& line);
@@ -90,16 +101,16 @@ namespace ALScriptPlaces
     size_t           outlineEntryOf(const ALScriptStudioDoc& doc, const std::string& value);
     // Where the analyzer said a name at a place is declared, back in the
     // source where the preprocessor made what it read: a line and column
-    // of the script, or of the include it is in; none where it said none
-    // or the place made no text of the source.
+    // of the script, or of the include or module it is in; none where it
+    // said none or the place made no text of the source.
     struct Declared
     {
         // As a link's value: where to go.
         LLSD        value() const;
         S32         line   = -1;
         S32         column = -1;
-        // The include it is in, by identity and by name; empty for the
-        // script itself.
+        // The include or module it is in, by identity and by name; empty
+        // for the script itself.
         std::string path;
         std::string name;
     };

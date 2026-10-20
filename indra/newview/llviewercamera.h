@@ -127,6 +127,11 @@ public:
     F32 getZoomFactor() const { return mZoomFactor; }
     S16 getZoomSubRegion() const { return mZoomSubregion; }
 
+    // The main projection's far plane (ALFarPlane::projectionFar), decided once per camera update;
+    // getFar() stays the draw distance.
+    void setProjectionFar(F32 projection_far) { mProjectionFar = projection_far; }
+    F32 getProjectionFar() const { return mProjectionFar; }
+
 protected:
     static LLTrace::CountStatHandle<> sVelocityStat;
     static LLTrace::CountStatHandle<> sAngularVelocityStat;
@@ -146,6 +151,7 @@ protected:
     S32                 mScreenPixelArea; // Pixel area of entire window
     F32                 mZoomFactor;
     S16                 mZoomSubregion;
+    F32                 mProjectionFar = FINITE_PROJECTION_FAR;
 
 public:
 };

@@ -27,8 +27,10 @@
 #include "alscriptstudioorphans.h"
 
 #include "alcodeeditor.h"
+#include "aldiffview.h"
 #include "alrecoverystore.h"
 #include "alscriptexternaleditor.h"
+#include "alscriptstudiofiles.h"
 #include "alscriptstudiorecovery.h"
 #include "alscriptstudiosaves.h"
 #include "alscriptstudioservices.h"
@@ -61,8 +63,12 @@ namespace
         for (const std::string& action : doc.offer->actions)
         {
             const bool external = action == "take_external" || action == "keep_here";
-            const bool there    = action == "take_saved" || action == "keep_saved" || action == "compare_saved";
-            if ((external && !doc.external->waiting) || (there && !doc.savedThere))
+            const bool there    = action == "take_saved" || action == "keep_saved" || action == "merge_saved" || action == "compare_saved";
+            // Conflicts a merge left, while the comparison marking them is
+            // still the merge's and any are left.
+            const bool conflicts = action == "show_compare";
+            if ((external && !doc.external->waiting) || (there && !doc.savedThere) ||
+                (conflicts && !(doc.compareView && doc.compareView->merging() && doc.compareView->conflictCount() > 0)))
             {
                 continue;
             }
@@ -76,6 +82,18 @@ namespace
                                 : action == "take_saved"    ? "NoticeTakeSaved"
                                 : action == "keep_saved"    ? "NoticeKeepSaved"
                                 : action == "compare_saved" || action == "compare_world" ? "NoticeCompare"
+                                : action == "merge_saved" || action == "merge_world"     ? "NoticeMerge"
+                                : action == "show_compare"                               ? "NoticeShowCompare"
+                                : action == "apply_fixes"                                ? "NoticeApplyFixes"
+                                : action == "make_strict"                                ? "NoticeMakeStrict"
+                                : action == "master_link_hint"                           ? "NoticeMasterLink"
+                                : action == "master_send"                                ? "NoticeMasterSend"
+                                : action == "master_compare"                             ? "NoticeCompare"
+                                : action == "master_give_way"                            ? "NoticeMasterGiveWay"
+                                : action == "master_compare_file"                        ? "NoticeMasterCompareFile"
+                                : action == "master_open_file"                           ? "NoticeMasterOpenFile"
+                                : action == "master_unlink"                              ? "NoticeMasterUnlink"
+                                : action == "master_find"                                ? "NoticeMasterFind"
                                                                                          : nullptr;
             if (label)
             {
@@ -93,7 +111,7 @@ namespace
     }
 }
 
-ALScriptStudioOrphans::ALScriptStudioOrphans(ALScriptStudioServices& services, ALScriptStudioTabs& tabs, ALScriptStudioSaves& saves, ALScriptStudioRecovery& recovery, Window& window) : mServices(services), mTabs(tabs), mSaves(saves), mRecovery(recovery), mWindow(window)
+ALScriptStudioOrphans::ALScriptStudioOrphans(ALScriptStudioServices& services, ALScriptStudioTabs& tabs, ALScriptStudioSaves& saves, ALScriptStudioRecovery& recovery, ALScriptStudioFiles& files, Window& window) : mServices(services), mTabs(tabs), mSaves(saves), mRecovery(recovery), mFiles(files), mWindow(window)
 {
 }
 
@@ -373,6 +391,17 @@ ALScriptNoticeBar::Notice ALScriptStudioOrphans::noticeFor(const Doc* doc, const
             buttons[i] = offered[i];
         }
     }
+    else if (doc && doc->historyShown)
+    {
+        // Offered back where it may be put in the tab.
+        LLStringUtil::format_map_t args;
+        args["[WHEN]"] = ALRecoveryEntry::sayWhen(doc->historyShown->when);
+        text           = services.words("NoticeHistory", args);
+        if (doc->modifiable)
+        {
+            buttons[0] = { "restore_saved", "NoticeRestoreSave" };
+        }
+    }
     else if (doc && doc->compiledDiffers)
     {
         text       = services.words("NoticeCompiledDiffers");
@@ -400,8 +429,13 @@ void ALScriptStudioOrphans::noticeAction(const std::string& action)
     }
     if (offerSaid(*doc) && (action == "close" || doc->offer->offers(action)))
     {
-        // The offer let go of, or taken up as its link in Output would be.
-        doc->offer.reset();
+        // The offer let go of, or taken up as its link in Output would be;
+        // conflicts left are said until they are settled, the comparison
+        // shown or not.
+        if (action != "show_compare")
+        {
+            doc->offer.reset();
+        }
         if (action != "close")
         {
             mWindow.takeOffer(*doc, action);
@@ -413,11 +447,25 @@ void ALScriptStudioOrphans::noticeAction(const std::string& action)
     args["[NAME]"] = doc->name;
     if (action == "close")
     {
+        // Where the compiled half's word was what was said, let go of as
+        // Keep Source lets go of it: the next save replaces the half.
+        if (doc->compiledDiffers && !doc->recoverable && !orphanSaid(*doc) && !doc->historyShown)
+        {
+            doc->compiledDiffers.reset();
+            mWindow.endCompare(*doc);
+        }
         // Hidden until there is something else to say; a kept text from an
         // earlier session stays offered, under File > Recover Unsaved
         // Changes, once the notice is gone.
         doc->orphan->noticeDismissed = true;
         doc->recoverable.reset();
+        // A save of its history let go of with its slider: stepped, it
+        // would have nothing to follow (ALScriptStudioHistory::letGo).
+        doc->historyShown.reset();
+        if (doc->compareView)
+        {
+            doc->compareView->setVersions(0, 0, nullptr);
+        }
         // An offer of nothing but a copy or a file is what a tab gone or
         // out of reach says of itself: hidden with it, not said next.
         if (doc->offer && std::ranges::all_of(doc->offer->actions, [](const std::string& each) { return each == "copy" || each == "export"; }))
@@ -440,10 +488,26 @@ void ALScriptStudioOrphans::noticeAction(const std::string& action)
     else if (action == "compare_kept" && doc->recoverable)
     {
         // What the tab holds now beside what was kept; the notice stays,
-        // to restore or let go of it after looking.
+        // to restore or let go of it after looking. What is offered is the
+        // entry's listing, its text read as it is looked at, as a restore
+        // reads it: where it cannot be, recovery says so.
+        if (!mRecovery.wholeOf(*doc->recoverable))
+        {
+            return;
+        }
         LLStringUtil::format_map_t when;
         when["[WHEN]"] = doc->recoverable->whenSaid();
         mWindow.compare(*doc, doc->editor->wholeText(), doc->recoverable->text, mServices.words("CompareNow"), mServices.words("CompareKept", when));
+    }
+    else if (action == "restore_saved" && doc->historyShown && doc->modifiable)
+    {
+        // The save in the tab as one step to undo, not saved until it is.
+        args["[WHEN]"]   = ALRecoveryEntry::sayWhen(doc->historyShown->when);
+        doc->carriedText = doc->historyShown->text;
+        doc->historyShown.reset();
+        mWindow.endCompare(*doc);
+        mTabs.takeCarriedText(*doc);
+        mServices.report(mServices.words("HistoryRestored", args), false, doc);
     }
     else if (action == "compare_compiled" && doc->compiledDiffers)
     {
@@ -482,7 +546,7 @@ void ALScriptStudioOrphans::noticeAction(const std::string& action)
     }
     else if (action == "export")
     {
-        mWindow.saveCopyToFile();
+        mFiles.saveCopy();
     }
     else if (action == "save")
     {

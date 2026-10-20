@@ -34,7 +34,6 @@
 #include <algorithm>
 #include <cstdio>
 #include "lltrace.h"
-#include "llfasttimer.h"
 #include "v3colorutil.h"
 
 #include "llglslshader.h"
@@ -906,8 +905,6 @@ const LLSettingsSky::parammapping_t& LLSettingsVOSky::getParameterMap() const
         param_map[SETTING_SKY_ICE_LEVEL] = DefaultParam(LLShaderMgr::ICE_LEVEL, sky_defaults[SETTING_SKY_ICE_LEVEL]);
 
         param_map[SETTING_REFLECTION_PROBE_AMBIANCE] = DefaultParam(LLShaderMgr::REFLECTION_PROBE_AMBIANCE, sky_defaults[SETTING_REFLECTION_PROBE_AMBIANCE]);
-// AdvancedAtmospherics TODO
-// Provide mappings for new shader params here
     }
 
     return param_map;
@@ -1110,7 +1107,8 @@ void LLSettingsVOWater::applySpecial(void *ptarget, bool force)
         shader->uniform4fv(LLShaderMgr::CLIP_PLANE, mirrorPlane.mV);
         LLVector4 light_direction = env.getClampedLightNorm();
 
-        F32 waterFogKS = 1.f / llmax(light_direction.mV[2], WATER_FOG_LIGHT_CLAMP);
+        // lightnorm is OGL order (y, z, x): the light's elevation is [1], not [2]
+        F32 waterFogKS = 1.f / llmax(light_direction.mV[1], WATER_FOG_LIGHT_CLAMP);
 
         shader->uniform1f(LLShaderMgr::WATER_FOGKS, waterFogKS);
 
@@ -1142,8 +1140,6 @@ void LLSettingsVOWater::updateSettings()
     LLDrawPoolWater* pwaterpool = (LLDrawPoolWater*)gPipeline.getPool(LLDrawPool::POOL_WATER);
     if (pwaterpool)
     {
-        pwaterpool->setTransparentTextures(getTransparentTextureID(), getNextTransparentTextureID());
-        pwaterpool->setOpaqueTexture(GetDefaultOpaqueTextureAssetId());
         pwaterpool->setNormalMaps(getNormalMapID(), getNextNormalMapID());
     }
 }

@@ -1,6 +1,6 @@
 /**
  * @file skfloaternavmesh.cpp
- * @brief The navmesh console: what the census and the mesh are doing, the overlay's switches, and its legend.
+ * @brief The navmesh console: what the census and the mesh are doing, and the overlay's switches.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Alchemy Viewer Source Code
@@ -26,14 +26,13 @@
 
 #include "skfloaternavmesh.h"
 
-#include "llscrolllistcell.h"
-#include "llscrolllistctrl.h"
-#include "llscrolllistitem.h"
+#include "llcombobox.h"
+#include "llfloaterreg.h"
 #include "lluictrl.h"
 #include "llviewercontrol.h"
 #include "pipeline.h"
+#include "skcaptureexport.h"
 #include "sknavmesh.h"
-#include "sknavpalette.h"
 #include "skworldcensus.h"
 
 SKFloaterNavMesh::SKFloaterNavMesh(const LLSD& key)
@@ -48,30 +47,21 @@ bool SKFloaterNavMesh::postBuild()
     getChild<LLUICtrl>("mark_button")->setCommitCallback([this](LLUICtrl*, const LLSD&) {
         getChild<LLUICtrl>("mark_status")->setValue(SKNavMesh::instance().markUnderCamera());
     });
-    buildLegend();
+    getChild<LLUICtrl>("export_button")->setCommitCallback([this](LLUICtrl*, const LLSD&) {
+        getChild<LLUICtrl>("export_status")->setValue(SKNavMesh::instance().exportAll());
+    });
+    getChild<LLUICtrl>("capture_button")->setCommitCallback([this](LLUICtrl*, const LLSD&) {
+        const S32 kind = llclamp(getChild<LLUICtrl>("capture_kind")->getValue().asInteger(), 0, 2);
+        getChild<LLUICtrl>("capture_status")->setValue(skCaptureExport(static_cast<SKCaptureKind>(kind)));
+    });
+    getChild<LLUICtrl>("export_census_button")->setCommitCallback([this](LLUICtrl*, const LLSD&) {
+        getChild<LLUICtrl>("export_census_status")->setValue(SKNavMesh::instance().exportCensus());
+    });
+    getChild<LLUICtrl>("export_vehicle_button")->setCommitCallback([this](LLUICtrl*, const LLSD&) {
+        getChild<LLUICtrl>("export_vehicle_status")->setValue(SKNavMesh::instance().exportObject());
+    });
+    getChild<LLUICtrl>("annotate_button")->setCommitCallback([](LLUICtrl*, const LLSD&) { LLFloaterReg::showInstance("sk_nav_annotate"); });
     return true;
-}
-
-void SKFloaterNavMesh::buildLegend()
-{
-    LLScrollListCtrl* legend = getChild<LLScrollListCtrl>("legend");
-    legend->deleteAllItems();
-    for (S32 i = 0; i < static_cast<S32>(SKNavSwatch::COUNT); ++i)
-    {
-        const SKNavSwatch swatch = static_cast<SKNavSwatch>(i);
-        LLSD row;
-        row["columns"][0]["column"] = "what";
-        row["columns"][0]["type"] = "text";
-        row["columns"][0]["value"] = getString(skNavSwatchName(swatch));
-        if (LLScrollListItem* item = legend->addElement(row))
-        {
-            // The row wears the colour it describes: reading the legend and
-            // reading the overlay are then the same act.
-            LLColor4 color = skNavSwatchColor(swatch);
-            color.mV[VALPHA] = 1.f;
-            item->getColumn(0)->setColor(color);
-        }
-    }
 }
 
 void SKFloaterNavMesh::onToggleOverlay()
@@ -109,14 +99,17 @@ void SKFloaterNavMesh::draw()
         std::string mesh_line = getString("overlay_off");
         if (SKNavMesh::overlayActive() || gSavedSettings.getBOOL("SKNavMeshAlways"))
         {
-            // Asking for a class nothing is building shows an empty world and
-            // no reason for it.
-            const bool weather = gSavedSettings.getU32("SKNavOverlayClass") == 1;
-            mesh_line = (weather && !gSavedSettings.getBOOL("SKNavBuildWeather")) ? getString("weather_off")
-                                                                                  : SKNavMesh::instance().statsLine();
+            mesh_line = SKNavMesh::instance().statsLine();
         }
         getChild<LLUICtrl>("mesh_status")->setValue(mesh_line);
+        getChild<LLUICtrl>("overlay_wind_heading")->setEnabled(gSavedSettings.getBOOL("SKNavOverlayWind"));
+        // The stamped polygons exist only with polys on; a stored choice of them is left alone and draws nothing.
+        getChild<LLComboBox>("overlay_air")->setEnabledByValue(LLSD(4), SKNavMesh::polysEnabled());
         getChild<LLUICtrl>("census_status")->setValue(SKWorldCensus::instance().statsLine());
+        if (SKNavMesh::instanceExists() && !SKNavMesh::instance().exportStatus().empty())
+        {
+            getChild<LLUICtrl>("export_status")->setValue(SKNavMesh::instance().exportStatus());
+        }
     }
     LLFloater::draw();
 }

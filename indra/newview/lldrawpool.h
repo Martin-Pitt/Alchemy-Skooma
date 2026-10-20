@@ -57,7 +57,6 @@ public:
         //
         POOL_SKY = 1,
         POOL_WATEREXCLUSION,
-        POOL_WL_SKY,
         POOL_SIMPLE,
         POOL_FULLBRIGHT,
         POOL_BUMP,
@@ -71,6 +70,7 @@ public:
         POOL_FULLBRIGHT_ALPHA_MASK,
         POOL_AVATAR,
         POOL_CONTROL_AV, // Animesh
+        POOL_WL_SKY, // after every opaque pool, so the depth test spares it all they cover
         POOL_GLOW,
         POOL_ALPHA_PRE_WATER,
         POOL_VOIDWATER,
@@ -121,7 +121,6 @@ public:
     virtual LLViewerTexture* getTexture() = 0;
     virtual bool isFacePool() { return false; }
     virtual void resetDrawOrders() = 0;
-    virtual void pushFaceGeometry() {}
 
     S32 mShaderLevel;
     S32 mId;
@@ -524,9 +523,6 @@ public:
     void printDebugInfo() const;
 
     bool isFacePool() { return true; }
-
-    // call drawIndexed on every draw face
-    void pushFaceGeometry();
 
     friend class LLFace;
     friend class LLPipeline;

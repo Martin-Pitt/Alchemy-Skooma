@@ -54,6 +54,7 @@ namespace sknav
         EdgeKind mKind = EdgeKind::OPEN;
         F32 mValue = 0.f;       ///< height, drop or clearance, metres
         U8 mArea = 0;           ///< the solid's area beyond the edge, when known
+        U32 mSpace[2] = { 0, 0 };   ///< space ids left and right of A to B, bound at publish (sknavspaceproducts.h); not cached
     };
 
     /// An exposed side of solid: the surface Atmo paints and drains along.
@@ -70,6 +71,15 @@ namespace sknav
         LLVector3 mMax;
         U8 mSide = 0;
         U8 mArea = 0;
+        U32 mSpace[2] = { 0, 0 };   ///< space ids of the side it faces and behind it, bound at publish; not cached
+    };
+
+    /// How a link is travelled.
+    enum class LinkKind : U8
+    {
+        DROP,       ///< off a ledge, down
+        LADDER,     ///< climbed, either way
+        ELEVATOR,   ///< ridden, either way
     };
 
     /// Where a floor can be left for another: from the edge to the landing.
@@ -78,6 +88,7 @@ namespace sknav
         LLVector3 mFrom;
         LLVector3 mTo;
         F32 mHeight = 0.f;
+        LinkKind mKind = LinkKind::DROP;
     };
 
     /// Recast area and Detour flag for the off-mesh polygon of a drop link.
@@ -95,12 +106,42 @@ namespace sknav
     /// is the cell size times the tangent of the slope, so half a metre keeps
     /// everything steeper than about seventy-five degrees at a 0.125 m cell
     /// and throws the terracing away.
-    void extractWallFaces(const rcHeightfield& hf, S32 border_cells, F32 min_height, std::vector<WallFace>& out);
+    /// A raster whose spans carry codes passes the code -> area table as area_lut.
+    void extractWallFaces(const rcHeightfield& hf, S32 border_cells, F32 min_height, std::vector<WallFace>& out,
+                          const U8* area_lut = nullptr);
+
+    /// Where the walkable tops of a raster end over a drop: a side whose
+    /// neighbour column has nothing within climb cells of the top or in
+    /// headroom cells over it. Runs over one drop merge into LEDGE segments,
+    /// valued by the drop to the highest solid below, < 0 with none; every
+    /// spacing metres along a run a link runs off down to it, drop_max at
+    /// most. Recast space in, SL mesh-local out; the border left out.
+    void extractRunoff(const rcHeightfield& hf, S32 border_cells, S32 climb, S32 headroom, F32 drop_max, F32 spacing,
+                       std::vector<WallSegment>& ledges, std::vector<DropLink>& links);
+
+    /// What classifyEdges reads of a heightfield: each column's solid runs,
+    /// and nothing of their areas. Recast space, as the heightfield's.
+    struct EdgeField
+    {
+        S32 mWidth = 0;
+        S32 mHeight = 0;
+        F32 mBmin[3] = { 0.f, 0.f, 0.f };
+        F32 mCs = 0.f;
+        F32 mCh = 0.f;
+        std::vector<U32> mStart;    ///< per column, where its runs begin; columns + 1
+        std::vector<U16> mRuns;     ///< smin, smax pairs, lowest first
+
+        size_t bytes() const;
+    };
+    void takeEdgeField(const rcHeightfield& hf, EdgeField& out);
 
     /// Walk every boundary edge of the polymesh, sample the column just
     /// outside, classify, and merge runs into segments. Ledge samples with a
     /// landing become drop links: the landing must be walkable in the class
     /// when walkable_landing, else any solid top will do (the weather class).
+    void classifyEdges(const rcPolyMesh& pmesh, const EdgeField& field, const rcCompactHeightfield& chf, const ClassParams& params,
+                       F32 drop_max, bool walkable_landing, F32 link_spacing,
+                       std::vector<WallSegment>& segments, std::vector<DropLink>& links);
     void classifyEdges(const rcPolyMesh& pmesh, const rcHeightfield& hf, const rcCompactHeightfield& chf, const ClassParams& params,
                        F32 drop_max, bool walkable_landing, F32 link_spacing,
                        std::vector<WallSegment>& segments, std::vector<DropLink>& links);

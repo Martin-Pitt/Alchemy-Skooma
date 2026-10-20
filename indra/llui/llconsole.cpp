@@ -147,11 +147,12 @@ void LLConsole::draw()
     static const F32 padding_vertical = 3;
     LLGLSUIDefault gls_ui;
 
-    // skip lines added more than mLinePersistTime ago
-    F32 cur_time = mTimer.getElapsedTimeF32();
+    // skip lines added more than mLinePersistTime ago. In F64: the console's timer runs all
+    // session, and F32 seconds of hours step the fade.
+    const F64 cur_time = mTimer.getElapsedTimeF64();
 
-    F32 skip_time = cur_time - mLinePersistTime;
-    F32 fade_time = cur_time - mFadeTime;
+    const F64 skip_time = cur_time - mLinePersistTime;
+    const F64 fade_time = cur_time - mFadeTime;
 
     if (mParagraphs.empty())    //No text to draw.
     {
@@ -214,7 +215,7 @@ void LLConsole::draw()
 
         if ((mLinePersistTime > 0.f) && ((*paragraph_it).mAddTime < fade_time))
         {
-            alpha = ((*paragraph_it).mAddTime - skip_time)/(mLinePersistTime - mFadeTime);
+            alpha = (F32)(((*paragraph_it).mAddTime - skip_time)/(mLinePersistTime - mFadeTime));
         }
         else
         {
@@ -374,7 +375,7 @@ void LLConsole::Paragraph::updateLines(F32 screen_width, const LLFontGL* font, b
 }
 
 //Pass in the string and the default color for this block of text.
-LLConsole::Paragraph::Paragraph (std::string str, const LLColor4 &color, F32 add_time, const LLFontGL* font, F32 screen_width)
+LLConsole::Paragraph::Paragraph (std::string str, const LLColor4 &color, F64 add_time, const LLFontGL* font, F32 screen_width)
 :   mParagraphText(std::move(str)), mAddTime(add_time), mMaxWidth(-1)
 {
     makeParagraphColorSegments(color);
@@ -393,19 +394,24 @@ void LLConsole::updateClass()
 
 void LLConsole::update()
 {
+    // The lines are taken out under the lock and laid out after it is let go. Laying out
+    // draws glyphs, and a line logged meanwhile comes back to this buffer through its
+    // recorder, which takes the lock again.
+    std::deque<std::string> lines;
     {
         LLCoros::LockType lock(mMutex);
+        lines.swap(mLines);
+        mAddTimes.clear();
+    }
 
-        while (!mLines.empty())
-        {
-            mParagraphs.push_back(
-                Paragraph(  mLines.front(),
-                            LLColor4::white,
-                            mTimer.getElapsedTimeF32(),
-                            mFont,
-                            (F32)getRect().getWidth()));
-            mLines.pop_front();
-        }
+    for (std::string& line : lines)
+    {
+        mParagraphs.push_back(
+            Paragraph(  std::move(line),
+                        LLColor4::white,
+                        mTimer.getElapsedTimeF64(),
+                        mFont,
+                        (F32)getRect().getWidth()));
     }
 
     // remove old paragraphs which can't possibly be visible any more.  ::draw() will do something similar but more conservative - we do this here because ::draw() isn't guaranteed to ever be called!  (i.e. the console isn't visible)

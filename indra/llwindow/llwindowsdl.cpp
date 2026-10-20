@@ -93,6 +93,18 @@ const S32 DEFAULT_REFRESH_RATE = 60;
 // be only one object of this class at any time.  Currently this is true.
 static LLWindowSDL *gWindowImplementation = nullptr;
 
+#if LL_LINUX
+// What glGetGraphicsResetStatus returns for a context lost to a purge of video
+// memory, with EGL_NV_robustness_video_memory_purge (see llsdl.cpp).
+#ifndef GL_PURGED_CONTEXT_RESET_NV
+#define GL_PURGED_CONTEXT_RESET_NV 0x92BB
+#endif
+
+// glGetGraphicsResetStatus while the main context reports a GPU reset, which
+// checkGraphicsReset polls each frame; null otherwise.
+static PFNGLGETGRAPHICSRESETSTATUSPROC sGetGraphicsResetStatus = nullptr;
+#endif
+
 LLWindowSDL::LLWindowSDL(LLWindowCallbacks* callbacks,
                          const std::string& title, const std::string& name, S32 x, S32 y, S32 width,
                          S32 height, U32 flags,
@@ -111,6 +123,9 @@ LLWindowSDL::LLWindowSDL(LLWindowCallbacks* callbacks,
     }
 
     // Initialize the keyboard
+    // One keyboard for the process, a window made after another replacing
+    // the one before, which nothing else holds.
+    delete gKeyboard;
     gKeyboard = new LLKeyboardSDL();
     gKeyboard->setCallbacks(callbacks);
 
@@ -166,6 +181,15 @@ LLWindowSDL::LLWindowSDL(LLWindowCallbacks* callbacks,
         LLDXHardware::updateVRAMBudgetFromDXGI();
 #endif
 
+        // Tracy's GPU context makes GL calls, so it waits for initGL to load
+        // the entry points, as on Win32.
+        {
+            LL_PROFILER_GPU_CONTEXT;
+        }
+#if LL_LINUX
+        armGraphicsResetCheck();
+#endif
+
         //start with arrow cursor
         initCursors();
         setCursor( UI_CURSOR_ARROW );
@@ -175,83 +199,55 @@ LLWindowSDL::LLWindowSDL(LLWindowCallbacks* callbacks,
 }
 
 #if LL_LINUX
-// The BMP cursor/icon tree (res-sdl/) is only shipped in the Linux bundle.
-// macOS loads cursors from cursors_mac/*.tif (makeSDLCursorFromMacTIF) and
-// Windows from the exe's embedded .cur resources (makeSDLCursorFromWin32), so
-// this helper would be unused on those platforms — and the build is -Werror
-// on unused static functions.
-static SDL_Surface *Load_BMP_Resource(const char *basename)
+// One size of the channel's icon, from the hicolor sizes the tree carries
+// under share/icons for its desktop entry, named for the application ID
+// llappviewersdl.cpp gives SDL.
+static SDL_Surface *loadWindowIcon(S32 size)
 {
-    const int PATH_BUFFER_SIZE=1000;
-    char path_buffer[PATH_BUFFER_SIZE]; /* Flawfinder: ignore */
+    const char *app_id = SDL_GetAppMetadataProperty(SDL_PROP_APP_METADATA_IDENTIFIER_STRING);
+    if (!app_id || !*app_id)
+    {
+        SDL_SetError("no application ID");
+        return nullptr;
+    }
+    const std::string dims = std::to_string(size) + "x" + std::to_string(size);
+    const std::string path = gDirUtilp->add(gDirUtilp->getAppRODataDir(), "share", "icons",
+                                            "hicolor", dims, "apps", std::string(app_id) + ".png");
+    return SDL_LoadPNG(path.c_str());
+}
 
-    // Figure out where our BMP is living on the disk
-    snprintf(path_buffer, PATH_BUFFER_SIZE-1, "%s%sres-sdl%s%s",
-             gDirUtilp->getAppRODataDir().c_str(),
-             gDirUtilp->getDirDelimiter().c_str(),
-             gDirUtilp->getDirDelimiter().c_str(),
-             basename);
-    path_buffer[PATH_BUFFER_SIZE-1] = '\0';
-
-    return SDL_LoadBMP(path_buffer);
+// The window's icon, which X11 desktops show from _NET_WM_ICON and KDE's
+// Wayland from xdg_toplevel_icon_v1. SDL sends X11 the surface alone, and
+// Wayland its alternates only at whole multiples of its size, so the 256 is
+// the icon and the 512 its 2x; a smaller size would never be sent. A tree
+// without them, a build that was never staged, keeps the desktop's default.
+static void setWindowIcon(SDL_Window *window)
+{
+    SDL_Surface *icon = loadWindowIcon(256);
+    if (!icon)
+    {
+        LL_INFOS() << "No window icon: " << SDL_GetError() << LL_ENDL;
+        return;
+    }
+    if (SDL_Surface *icon_2x = loadWindowIcon(512))
+    {
+        // The icon takes a reference of its own, released with it.
+        SDL_AddSurfaceAlternateImage(icon, icon_2x);
+        SDL_DestroySurface(icon_2x);
+    }
+    if (!SDL_SetWindowIcon(window, icon))
+    {
+        // A compositor without xdg_toplevel_icon_v1 shows the desktop
+        // entry's icon, which it finds by the window's app ID.
+        LL_INFOS() << "Window icon not set: " << SDL_GetError() << LL_ENDL;
+    }
+    SDL_DestroySurface(icon);
 }
 #endif // LL_LINUX
 
 void LLWindowSDL::setTitle(const std::string title)
 {
     SDL_SetWindowTitle( mWindow, title.c_str() );
-}
-
-void LLWindowSDL::tryFindFullscreenSize( int &width, int &height )
-{
-    LL_INFOS() << "createContext: setting up fullscreen " << width << "x" << height << LL_ENDL;
-
-    // If the requested width or height is 0, find the best default for the monitor.
-    if(width == 0 || height == 0)
-    {
-        // Scan through the list of modes, looking for one which has:
-        //      height between 700 and 800
-        //      aspect ratio closest to the user's original mode
-        S32 resolutionCount = 0;
-        LLWindowResolution *resolutionList = getSupportedResolutions(resolutionCount);
-
-        if(resolutionList != nullptr)
-        {
-            F32 closestAspect = 0;
-            U32 closestHeight = 0;
-            U32 closestWidth = 0;
-
-            LL_INFOS() << "createContext: searching for a display mode, original aspect is " << mNativeAspectRatio << LL_ENDL;
-
-            for(S32 i=0; i < resolutionCount; i++)
-            {
-                F32 aspect = (F32)resolutionList[i].mWidth / (F32)resolutionList[i].mHeight;
-
-                LL_INFOS() << "createContext: width " << resolutionList[i].mWidth << " height " << resolutionList[i].mHeight << " aspect " << aspect << LL_ENDL;
-
-                if( (resolutionList[i].mHeight >= 700) && (resolutionList[i].mHeight <= 800) &&
-                    (fabs(aspect - mNativeAspectRatio) < fabs(closestAspect - mNativeAspectRatio)))
-                {
-                    LL_INFOS() << " (new closest mode) " << LL_ENDL;
-
-                    // This is the closest mode we've seen yet.
-                    closestWidth = resolutionList[i].mWidth;
-                    closestHeight = resolutionList[i].mHeight;
-                    closestAspect = aspect;
-                }
-            }
-
-            width = closestWidth;
-            height = closestHeight;
-        }
-    }
-
-    if(width == 0 || height == 0)
-    {
-        // Mode search failed for some reason.  Use the old-school default.
-        width = 1024;
-        height = 768;
-    }
 }
 
 bool LLWindowSDL::createContext(int x, int y, int width, int height, int bits, bool fullscreen, bool enable_vsync)
@@ -272,8 +268,14 @@ bool LLWindowSDL::createContext(int x, int y, int width, int height, int bits, b
 
     mFullscreen = fullscreen;
 
-    // Setup default backing colors
-    GLint redBits{8}, greenBits{8}, blueBits{8}, alphaBits{8};
+    // Setup default backing colors. RenderGLContext10bitSDR asks for a 10-bit
+    // back buffer, which the final blit then dithers for. Its two bits of
+    // alpha don't make the window translucent: SDL presents a Wayland surface
+    // opaque (EGL_EXT_present_opaque), and on X11 the config takes a
+    // depth-30 visual, which has no alpha.
+    const GLint channelBits = LLRender::s10bitBackBuffer ? 10 : 8;
+    GLint redBits{channelBits}, greenBits{channelBits}, blueBits{channelBits};
+    GLint alphaBits{LLRender::s10bitBackBuffer ? 2 : 8};
     GLint depthBits{ 24 };
 
     SDL_GL_SetAttribute(SDL_GL_RED_SIZE,   redBits);
@@ -323,11 +325,6 @@ bool LLWindowSDL::createContext(int x, int y, int width, int height, int bits, b
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, context_flags);
     SDL_GL_SetAttribute(SDL_GL_SHARE_WITH_CURRENT_CONTEXT, 1);
 
-    if(mFullscreen)
-    {
-        tryFindFullscreenSize(width, height);
-    }
-
     SDL_PropertiesID props = SDL_CreateProperties();
     SDL_SetStringProperty(props, SDL_PROP_WINDOW_CREATE_TITLE_STRING, mWindowTitle.c_str());
     SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_X_NUMBER, x);
@@ -336,10 +333,26 @@ bool LLWindowSDL::createContext(int x, int y, int width, int height, int bits, b
     SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_HEIGHT_NUMBER, height);
     SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_RESIZABLE_BOOLEAN, true);
     SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_OPENGL_BOOLEAN, true);
+    // Fullscreen is SDL's borderless desktop fullscreen, at the desktop's own
+    // mode, as on Windows. width/height are the windowed size, not a
+    // resolution anyone chose: an exclusive mode picked from them would
+    // change the monitor's mode under X11, and under Wayland SDL would scale
+    // an emulated one up to the output (SDL_HINT_VIDEO_WAYLAND_MODE_EMULATION).
     SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_FULLSCREEN_BOOLEAN, mFullscreen);
     SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_HIGH_PIXEL_DENSITY_BOOLEAN, gHiDPISupport);
 
     mWindow = SDL_CreateWindowWithProperties(props);
+    if (mWindow == nullptr && LLRender::s10bitBackBuffer)
+    {
+        // EGL chooses the window's config as the window is made, so a 10-bit
+        // back buffer that can't be had fails here: an X server at depth 24
+        // has no visual for one. Make it again at 8 bits, as Win32 does.
+        LL_WARNS() << "No window with a 10-bit back buffer, falling back to 8 bits. SDL: "
+                   << SDL_GetError() << LL_ENDL;
+        SDL_DestroyProperties(props);
+        LLRender::s10bitBackBuffer = false;
+        return createContext(x, y, width, height, bits, fullscreen, enable_vsync);
+    }
     if (mWindow == nullptr)
     {
         LL_WARNS() << "Window creation failure. SDL: " << SDL_GetError() << LL_ENDL;
@@ -353,7 +366,23 @@ bool LLWindowSDL::createContext(int x, int y, int width, int height, int bits, b
     // (set above); the exact 4.6 request fails on drivers that cap lower, so
     // step the requested version down until creation succeeds, mirroring the
     // WGL path in createSharedContext().
-    mContext = SDL_GL_CreateContext(mWindow);
+    auto create_context = [this]() -> SDL_GLContext
+    {
+#if LL_LINUX
+        // At each version, first a context that reports a GPU reset (see
+        // checkGraphicsReset), which only NVIDIA's EGL is asked for. Should
+        // the driver refuse it, the context is asked for again without.
+        sdl_set_gl_reset_notification(true);
+        SDL_GLContext context = SDL_GL_CreateContext(mWindow);
+        if (context || !sdl_gl_reset_notification())
+        {
+            return context;
+        }
+        sdl_set_gl_reset_notification(false);
+#endif
+        return SDL_GL_CreateContext(mWindow);
+    };
+    mContext = create_context();
 #if !LL_DARWIN
     if (!mContext && LLRender::sGLCoreProfile)
     {
@@ -365,7 +394,7 @@ bool LLWindowSDL::createContext(int x, int y, int width, int height, int bits, b
             else                { break; }                // gave up at 3.0
             SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, major);
             SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, minor);
-            mContext = SDL_GL_CreateContext(mWindow);
+            mContext = create_context();
         }
         if (mContext)
         {
@@ -374,6 +403,15 @@ bool LLWindowSDL::createContext(int x, int y, int width, int height, int bits, b
         }
     }
 #endif
+    if (!mContext && LLRender::s10bitBackBuffer)
+    {
+        LL_WARNS() << "No GL context on a 10-bit back buffer, falling back to 8 bits. SDL: "
+                   << SDL_GetError() << LL_ENDL;
+        SDL_DestroyWindow(mWindow);
+        mWindow = nullptr;
+        LLRender::s10bitBackBuffer = false;
+        return createContext(x, y, width, height, bits, fullscreen, enable_vsync);
+    }
     if(!mContext)
     {
         LL_WARNS() << "Cannot create GL context " << SDL_GetError() << LL_ENDL;
@@ -388,56 +426,7 @@ bool LLWindowSDL::createContext(int x, int y, int width, int height, int bits, b
         return false;
     }
 
-    // If the caller requested fullscreen at a specific resolution, switch
-    // from SDL3's default borderless-desktop-fullscreen mode to an
-    // exclusive fullscreen mode at that resolution. width/height come from
-    // either the user's saved-window-size setting or from tryFindFullscreenSize
-    // above (which scans the display's supported modes); either way they are
-    // a deliberate resolution request, not "whatever the desktop is."
-    //
-    // On Wayland compositors that don't allow client-driven mode changes
-    // (most of them), SDL_SetWindowFullscreenMode quietly fails and we keep
-    // the borderless default. On X11 + KMS this actually changes the
-    // physical display mode.
-    if (mFullscreen && width > 0 && height > 0)
-    {
-        SDL_DisplayMode mode = {};
-        const SDL_DisplayID display = SDL_GetDisplayForWindow(mWindow);
-        if (SDL_GetClosestFullscreenDisplayMode(display, width, height, 0.f,
-                                                /*include_high_density_modes=*/false,
-                                                &mode))
-        {
-            if (SDL_SetWindowFullscreenMode(mWindow, &mode))
-            {
-                LL_INFOS() << "Exclusive fullscreen mode: "
-                           << mode.w << "x" << mode.h
-                           << " @ " << mode.refresh_rate << "Hz" << LL_ENDL;
-            }
-            else
-            {
-                LL_WARNS() << "SDL_SetWindowFullscreenMode " << mode.w << "x" << mode.h
-                           << " @ " << mode.refresh_rate << "Hz failed: "
-                           << SDL_GetError() << " — staying at borderless desktop." << LL_ENDL;
-            }
-        }
-        else
-        {
-            LL_INFOS() << "No fullscreen mode matches " << width << "x" << height
-                       << " on display " << display
-                       << " — using borderless desktop fullscreen." << LL_ENDL;
-        }
-    }
-
-    // Prefer the window's actually-applied fullscreen mode (which reflects
-    // any exclusive mode we just set) over the desktop's current mode. When
-    // the window is borderless-desktop or windowed, SDL_GetWindowFullscreenMode
-    // returns nullptr and we fall back to SDL_GetCurrentDisplayMode — the
-    // pre-exclusive-mode-support behaviour.
-    const SDL_DisplayMode* displayMode = SDL_GetWindowFullscreenMode(mWindow);
-    if (!displayMode)
-    {
-        displayMode = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(mWindow));
-    }
+    const SDL_DisplayMode* displayMode = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(mWindow));
     if(displayMode)
     {
         mRefreshRate = ll_round(displayMode->refresh_rate);
@@ -510,6 +499,14 @@ bool LLWindowSDL::createContext(int x, int y, int width, int height, int bits, b
     LL_INFOS() << "  Alpha Bits " << S32(alphaBits) << LL_ENDL;
     LL_INFOS() << "  Depth Bits " << S32(depthBits) << LL_ENDL;
 
+    // The final blit dithers for the depth asked for, so a back buffer
+    // granted shallower than that would band.
+    if (LLRender::s10bitBackBuffer && (redBits < 10 || greenBits < 10 || blueBits < 10))
+    {
+        LL_INFOS() << "Asked for a 10-bit back buffer and was given less; dithering for 8 bits." << LL_ENDL;
+        LLRender::s10bitBackBuffer = false;
+    }
+
     GLint colorBits = redBits + greenBits + blueBits + alphaBits;
     if (colorBits < 32)
     {
@@ -524,8 +521,6 @@ bool LLWindowSDL::createContext(int x, int y, int width, int height, int bits, b
         return false;
     }
 
-    LL_PROFILER_GPU_CONTEXT;
-
     // Enable vertical sync
     toggleVSync(enable_vsync);
 
@@ -537,14 +532,9 @@ bool LLWindowSDL::createContext(int x, int y, int width, int height, int bits, b
 #endif
 
 #if LL_LINUX
-    // Set the application icon.
-    SDL_Surface* bmpsurface = Load_BMP_Resource("ll_icon.BMP");
-    if (bmpsurface)
-    {
-        SDL_SetWindowIcon(mWindow, bmpsurface);
-        SDL_DestroySurface(bmpsurface);
-        bmpsurface = nullptr;
-    }
+    // The channel's icon. Not on macOS, where SDL would put it on the Dock
+    // over the bundle's own, nor Windows, where the exe's icon serves.
+    setWindowIcon(mWindow);
 #endif
 
     // SDL3 ties both committed-text events (SDL_EVENT_TEXT_INPUT) and
@@ -668,6 +658,12 @@ bool LLWindowSDL::switchContext(bool fullscreen, const LLCoordScreen &size, bool
 #if LL_WINDOWS
             LLDXHardware::updateVRAMBudgetFromDXGI();
 #endif
+            {
+                LL_PROFILER_GPU_CONTEXT;
+            }
+#if LL_LINUX
+            armGraphicsResetCheck();
+#endif
 
             //start with arrow cursor
             initCursors();
@@ -724,6 +720,11 @@ void LLWindowSDL::destroyContext()
     // the screensaver inhibit doesn't outlive the viewer's window.
     SDL_EnableScreenSaver();
 
+#if LL_LINUX
+    // The reset check calls into the context going away.
+    sGetGraphicsResetStatus = nullptr;
+#endif
+
     // Clean up remaining GL state before blowing away window
     LL_INFOS() << "shutdownGL begins" << LL_ENDL;
     gGLManager.shutdownGL();
@@ -766,6 +767,7 @@ void LLWindowSDL::destroyContext()
     mHasDeferredCursorWarp = false;
     mAbsoluteCursorPosition = false;
     mRelativeMouseMode = false;
+    mOccluded = false;
     mDialogDepth = 0;
     mDialogSavedRelativeMode = false;
     mPendingDropFiles.clear();
@@ -827,6 +829,14 @@ void LLWindowSDL::restore()
 {
     if (mWindow)
     {
+        // A Wayland window that is only suspended (mOccluded, which
+        // getMinimized() counts) has nothing SDL can restore: xdg-shell can't
+        // unminimise, and SDL_RestoreWindow would unmaximise it. Bringing it
+        // forward is bringToFront()'s.
+        if (mOccluded && !(SDL_GetWindowFlags(mWindow) & SDL_WINDOW_MINIMIZED))
+        {
+            return;
+        }
         SDL_RestoreWindow(mWindow);
     }
 }
@@ -872,7 +882,10 @@ bool LLWindowSDL::getMinimized()
             result = true;
         }
     }
-    return result;
+    // A Wayland window is never told it was minimised, only suspended; see
+    // mOccluded. Occlusion isn't counted elsewhere: on X11 it only comes with
+    // a minimise, and on macOS it means covered or on another Space.
+    return result || mOccluded;
 }
 
 bool LLWindowSDL::getMaximized()
@@ -998,7 +1011,79 @@ void LLWindowSDL::swapBuffers()
         SDL_GL_SwapWindow(mWindow);
     }
     LL_PROFILER_GPU_COLLECT;
+#if LL_LINUX
+    checkGraphicsReset();
+#endif
 }
+
+#if LL_LINUX
+// Once initGL has loaded GL: poll for a GPU reset if createContext got a
+// context that reports one, which only NVIDIA's EGL is asked for; elsewhere
+// nothing is polled. Below GL 4.5 without KHR_robustness, which initGL
+// loads the call for, ARB_robustness names it with a suffix.
+void LLWindowSDL::armGraphicsResetCheck()
+{
+    sGetGraphicsResetStatus = nullptr;
+    mGraphicsResetSeen = false;
+    if (sdl_gl_reset_notification())
+    {
+        GLint strategy = 0;
+        glGetIntegerv(GL_RESET_NOTIFICATION_STRATEGY, &strategy);
+        if (strategy == GL_LOSE_CONTEXT_ON_RESET)
+        {
+            sGetGraphicsResetStatus = glGetGraphicsResetStatus
+                ? glGetGraphicsResetStatus
+                : (PFNGLGETGRAPHICSRESETSTATUSPROC)SDL_GL_GetProcAddress("glGetGraphicsResetStatusARB");
+        }
+    }
+    LL_INFOS("Window") << "GL context " << (sGetGraphicsResetStatus ? "reports" : "does not report")
+                       << " GPU resets" << LL_ENDL;
+}
+
+// Once a frame, on the main thread, where the context reports a reset. SDL's
+// renderer device-lost events come only from its D3D and Vulkan renderers,
+// never for a GL window, so this is how the viewer learns of NVIDIA purging
+// video memory over a suspend, or of a GPU reset there.
+void LLWindowSDL::checkGraphicsReset()
+{
+    if (!sGetGraphicsResetStatus || mGraphicsResetSeen)
+    {
+        return;
+    }
+    const GLenum status = sGetGraphicsResetStatus();
+    if (status == GL_NO_ERROR)
+    {
+        return;
+    }
+    mGraphicsResetSeen = true;
+
+    // The context is lost, and with it every texture, buffer, shader and
+    // framebuffer; GL calls on it now do nothing. Rebuilding them all is a
+    // job across LLPipeline, LLViewerTextureList, the reflection probes, the
+    // shaders and the UI, and isn't attempted: rather than draw garbage or
+    // nothing, the viewer says why and exits.
+    const char* cause = (status == GL_GUILTY_CONTEXT_RESET)    ? "the viewer's own rendering"
+                      : (status == GL_INNOCENT_CONTEXT_RESET)  ? "another program's rendering"
+                      : (status == GL_PURGED_CONTEXT_RESET_NV) ? "a purge of video memory"
+                                                               : "an unknown cause";
+    LL_WARNS("Window") << "GL context lost (reset status 0x" << std::hex << status << std::dec
+                       << ", " << cause << ")" << LL_ENDL;
+
+    OSMessageBoxSDL(
+        "The graphics driver reports that the viewer's OpenGL context was "
+        "lost, as happens when the GPU is reset. Alchemy can't continue "
+        "rendering and will now exit.\n\n"
+        "This usually follows sleep/wake or hibernation, or a GPU driver crash "
+        "or restart. Please relaunch the viewer to resume.",
+        "OpenGL context lost",
+        OSMB_OK);
+
+    if (mCallbacks)
+    {
+        mCallbacks->handleQuit(this);
+    }
+}
+#endif
 
 U32 LLWindowSDL::getFSAASamples()
 {
@@ -1236,8 +1321,8 @@ F32 LLWindowSDL::getPixelAspectRatio()
 }
 
 
-// This is to support 'temporarily windowed' mode so that
-// dialogs are still usable in fullscreen.
+// Ready the window for an OS dialog: input ungrabbed and the cursor shown,
+// so the dialog is usable.
 void LLWindowSDL::beforeDialog()
 {
     LL_INFOS() << "LLWindowSDL::beforeDialog() depth=" << mDialogDepth << LL_ENDL;
@@ -1265,11 +1350,10 @@ void LLWindowSDL::beforeDialog()
             SDL_ShowCursor();
         }
 
-        if (SDLReallyCaptureInput(false)) // must ungrab input so popup works!
-        {
-            if (mFullscreen && mWindow )
-                SDL_SetWindowFullscreen( mWindow, 0 );
-        }
+        // Ungrab input so the popup works. Fullscreen is left as it is: it
+        // is borderless desktop fullscreen, which a dialog parented to the
+        // window stacks above, and it holds no mode to give the desktop back.
+        SDLReallyCaptureInput(false);
     }
     ++mDialogDepth;
 }
@@ -1287,12 +1371,6 @@ void LLWindowSDL::afterDialog()
         // Nested afterDialog: still inside an outer dialog scope, nothing
         // to restore yet.
         return;
-    }
-
-    if (mFullscreen && mWindow)
-    {
-        // Restore fullscreen state that beforeDialog() left so dialogs could draw above us.
-        SDL_SetWindowFullscreen(mWindow, true);
     }
 
     // Restore pointer-lock if we dropped it for the dialog AND the viewer is
@@ -1334,7 +1412,11 @@ void LLWindowSDL::maybeStopFlashIcon()
     if (mFlashing && mFlashTimer.hasExpired())
     {
         mFlashing = false;
-        if (mWindow)
+        // SDL's Wayland backend ignores the operation and sends every flash
+        // as an xdg-activation request, so a cancel there would ask for
+        // attention a second time. The compositor drops the request itself
+        // once the window is focused.
+        if (mWindow && mServerProtocol != Wayland)
             SDL_FlashWindow( mWindow, SDL_FLASH_CANCEL );
     }
 }
@@ -1361,9 +1443,47 @@ bool LLWindowSDL::pasteTextFromClipboard(std::string &dst)
     return false;
 }
 
+#if LL_LINUX
+namespace
+{
+    // What was last copied, held here rather than by SDL. SDL frees the text
+    // it was given when it decides another client has the clipboard, while
+    // the Wayland source or X11 owner it handed that text to can go on
+    // serving it (SDL issues 16037 and 16245), and another application
+    // pasted whatever had since been allocated there. The registry's sdl3
+    // patches the wrong decisions known on 3.4.18
+    // (clipboard-keep-own-selection.patch); this stands for any left. SDL's
+    // cleanup does nothing, so whatever still serves the text reads this.
+    std::string sClipboardText;
+
+    // Every name the X11 and Wayland backends give text by: theirs when
+    // SDL_SetClipboardText chooses, so that SDL_GetClipboardText finds them.
+    const char* const CLIPBOARD_TEXT_TYPES[] = {
+        "text/plain;charset=utf-8", "UTF8_STRING", "text/plain", "TEXT", "STRING"
+    };
+
+    const void* SDLCALL clipboardText(void*, const char*, size_t* size)
+    {
+        *size = sClipboardText.size();
+        return sClipboardText.data();
+    }
+
+    void SDLCALL keepClipboardText(void*) {}
+}
+#endif
+
 bool LLWindowSDL::copyTextToClipboard(const std::string& text)
 {
+#if LL_LINUX
+    if (text.empty())
+    {
+        return SDL_ClearClipboardData();
+    }
+    sClipboardText = text;
+    return SDL_SetClipboardData(clipboardText, keepClipboardText, nullptr, CLIPBOARD_TEXT_TYPES, std::size(CLIPBOARD_TEXT_TYPES));
+#else
     return SDL_SetClipboardText(text.c_str());
+#endif
 }
 
 bool LLWindowSDL::isPrimaryTextAvailable()
@@ -1400,7 +1520,12 @@ LLWindow::LLWindowResolution* LLWindowSDL::getSupportedResolutions(S32 &num_reso
         mSupportedResolutions = new LLWindowResolution[MAX_NUM_RESOLUTIONS];
         mNumSupportedResolutions = 0;
 
-        SDL_DisplayID display = SDL_GetPrimaryDisplay();
+        // The modes of the display the window is on, not the primary one.
+        SDL_DisplayID display = mWindow ? SDL_GetDisplayForWindow(mWindow) : 0;
+        if (!display)
+        {
+            display = SDL_GetPrimaryDisplay();
+        }
         int num_modes = 0;
         SDL_DisplayMode **modes = SDL_GetFullscreenDisplayModes(display, &num_modes);
         num_modes = llclamp(num_modes, 0, MAX_NUM_RESOLUTIONS);
@@ -1463,7 +1588,7 @@ void LLWindowSDL::exitDialog()
         return;
     }
 
-    // afterDialog() restores fullscreen and mouselook; the file dialog also needs
+    // afterDialog() restores mouselook; the file dialog also needs
     // key-window focus back once the last one closes. SDL's dialog sheet leaves no
     // key window, so without this keystrokes hit no responder and AppKit beeps.
 #if LL_DARWIN
@@ -1772,12 +1897,7 @@ void LLWindowSDL::gatherInput()
 
     // This is a good time to stop flashing the icon if our mFlashTimer has
     // expired.
-    if (mFlashing && mFlashTimer.hasExpired())
-    {
-        if (mWindow)
-            SDL_FlashWindow(mWindow, SDL_FLASH_CANCEL);
-        mFlashing = false;
-    }
+    maybeStopFlashIcon();
 }
 
 SDL_AppResult LLWindowSDL::handleEvent(const SDL_Event& event)
@@ -1844,8 +1964,21 @@ SDL_AppResult LLWindowSDL::handleEvent(const SDL_Event& event)
             // down); negate it on the way into the accumulator so the
             // viewer's "-dy pitches the camera up" math behaves the same
             // on both backends. X is Y-RIGHT-positive on both, no flip.
-            mMouseDeltaAccumX += event.motion.xrel * scale;
-            mMouseDeltaAccumY -= event.motion.yrel * scale;
+            //
+            // Emulated motion, touch and pen's included, is a difference of
+            // screen coordinates and scales to pixels like the position. A
+            // mouse's relative-mode motion on Wayland, X11 and Windows is the
+            // device's own unaccelerated counts, as Win32's raw input is,
+            // which no density applies to: scaled, it made mouselook twice as
+            // fast at 200%. Cocoa's is NSEvent's deltaX/Y, in points like the
+            // cursor, so macOS still scales it.
+#if LL_DARWIN
+            const float delta_scale = scale;
+#else
+            const float delta_scale = (mRelativeMouseMode && !from_absolute_device) ? 1.f : scale;
+#endif
+            mMouseDeltaAccumX += event.motion.xrel * delta_scale;
+            mMouseDeltaAccumY -= event.motion.yrel * delta_scale;
 
             // When relative mode is on, motion.x/y is undefined (SDL parks
             // the cursor) and we're in mouselook — UI hover/hit-testing
@@ -1901,6 +2034,67 @@ SDL_AppResult LLWindowSDL::handleEvent(const SDL_Event& event)
                 // Win32's vertical convention ("+ clicks = scroll content
                 // down" — see the line just above).
                 mCallbacks->handleScrollHWheel(this, LLScrollDelta(ix, event.wheel.x));
+            }
+            break;
+        }
+
+        // Touchpad pinch: Wayland's pointer gestures, XInput 2.4's, Cocoa's
+        // magnify. A Windows precision touchpad delivers a pinch as
+        // Control+wheel, so it zooms what Control+wheel zooms (a script's
+        // text, XUI Studio's canvas, a web page) and does to the camera what
+        // Control+wheel does: in the default third-person view, that raises
+        // or lowers the camera rather than zooming. Give it to the viewer the
+        // same way, as wheel clicks with Control held, at the cursor. SDL
+        // sends a pinch on its own stream with no wheel events beside it, so
+        // there is nothing to hold back.
+        case SDL_EVENT_PINCH_BEGIN:
+        case SDL_EVENT_PINCH_END:
+        {
+            mPinchLastScale = 1.f;
+            mPinchClickAccum = 0.f;
+            break;
+        }
+        case SDL_EVENT_PINCH_UPDATE:
+        {
+            // SDL documents the scale as the change since the last update, and
+            // Cocoa sends that, but SDL 3.4's Wayland and X11 backends pass on
+            // what their protocols carry: the scale since the gesture began
+            // (pointer-gestures-unstable-v1, XIGesturePinchEvent). Take the
+            // ratio to the last one there. Should SDL come to divide it itself,
+            // this must stop.
+            const F32 scale = event.pinch.scale;
+            if (scale <= 0.f || mPinchLastScale <= 0.f)
+            {
+                break;
+            }
+            const bool from_start = (mServerProtocol != Unknown);
+            const F32 ratio = from_start ? scale / mPinchLastScale : scale;
+            if (from_start)
+            {
+                mPinchLastScale = scale;
+            }
+
+            // A click for every quarter octave of spread, the step the camera's
+            // orbit takes a click (2^(1/4), LLAgentCamera::handleScrollWheel):
+            // where Control does not change what the wheel does, fingers spread
+            // twice as far apart bring the camera in to half its distance.
+            // Spreading zooms in, as a wheel rolled away from you does, which
+            // is negative clicks. Fractions gather as the wheel's do, so a slow
+            // pinch still makes its clicks.
+            const F32 precise = -4.f * std::log2(ratio);
+            mPinchClickAccum += precise;
+            const S32 clicks = lltrunc(mPinchClickAccum);
+            mPinchClickAccum -= (F32)clicks;
+            if (clicks != 0 || precise != 0.f)
+            {
+                // The wheel's handlers ask the keyboard for Control, and
+                // LLKeyboardSDL::currentMask asks SDL_GetModState, so hold it
+                // there for the call, as a Windows pinch arrives with it down.
+                const SDL_Keymod held = SDL_GetModState();
+                const SDL_Keymod added = (held & SDL_KMOD_CTRL) ? SDL_KMOD_NONE : SDL_KMOD_LCTRL;
+                SDL_SetModState(static_cast<SDL_Keymod>(held | added));
+                mCallbacks->handleScrollWheel(this, LLScrollDelta(clicks, precise));
+                SDL_SetModState(static_cast<SDL_Keymod>(SDL_GetModState() & ~added));
             }
             break;
         }
@@ -2233,40 +2427,69 @@ SDL_AppResult LLWindowSDL::handleEvent(const SDL_Event& event)
             mPreeditor->resetPreedit();
 
             // An empty composition string means the IME cancelled or cleared
-            // the preedit; the reset above is the entire job.
+            // the preedit; the reset above did that, and the IME's area goes
+            // back to the caret the reset left.
             if (empty)
             {
+                placeLanguageTextInputArea();
                 break;
             }
 
             const std::string_view preedit(event.edit.text);
+            const S32 preedit_bytes = static_cast<S32>(preedit.length());
 
-            // event.edit.start is the IME's caret inside the composition
-            // counted in CHARACTERS, or -1 when the IME hasn't reported one.
-            // SDL's own backends settle the unit: fcitx and the Wayland text
-            // input both run their byte position through SDL_utf8strnlen,
-            // which counts codepoints, before dispatching the event. The
-            // preeditor counts bytes, so the caret has to be walked out.
-            // start == 0 is a legitimate "caret at the beginning" value and
-            // must NOT be confused with the -1 default (the earlier `> 0`
-            // check did exactly that and pinned the caret to the end of the
-            // preedit whenever the IME started the cursor at the first
-            // character).
-            S32 caret = static_cast<S32>(preedit.length());
+            // event.edit.start and .length mark the clause the IME has
+            // selected — the one being converted, which it highlights — or,
+            // with no clause (length 0 or -1), start is the IME's caret, and
+            // -1 when it reported none. start == 0 is a legitimate "at the
+            // beginning" value and must NOT be confused with -1.
+            //
+            // SDL settles the unit in each backend: ibus, fcitx, XIM and the
+            // Wayland text input count characters (fcitx and text-input-v3 run
+            // their byte positions through SDL_utf8strnlen), Cocoa counts
+            // UTF-32 units, which are the same, and Windows UTF-16 units, the
+            // same short of the astral planes. None passes a caret on as well
+            // as a clause — ibus and fcitx drop it, XIM sends the clause in
+            // its place — so the caret goes to the clause's start, under which
+            // the candidate window belongs. The preeditor counts bytes, so
+            // both ends are walked out.
+            S32 clause_begin = preedit_bytes;
+            S32 clause_end = preedit_bytes;
             if (event.edit.start >= 0)
             {
-                size_t at = 0;
-                for (S32 remaining = event.edit.start;
-                     remaining > 0 && at < preedit.size();
-                     --remaining)
+                const size_t start = static_cast<size_t>(event.edit.start);
+                clause_begin = static_cast<S32>(utf8str_offset_from_codepoint_index(preedit, start));
+                clause_end = clause_begin;
+                if (event.edit.length > 0)
                 {
-                    at = utf8str_decode_at(preedit, at).next;
+                    clause_end = static_cast<S32>(utf8str_offset_from_codepoint_index(
+                        preedit, start + static_cast<size_t>(event.edit.length)));
                 }
-                caret = static_cast<S32>(at);
             }
-            const LLPreeditor::segment_lengths_t lengths { static_cast<S32>(preedit.length()) };
-            const LLPreeditor::standouts_t standouts { false };
-            mPreeditor->updatePreedit(preedit, lengths, standouts, caret);
+
+            // What comes before the clause, the clause standing out as the
+            // Win32 backend has a target clause stand out, and what comes
+            // after; a part with nothing in it is left out.
+            LLPreeditor::segment_lengths_t lengths;
+            LLPreeditor::standouts_t standouts;
+            const auto add_segment = [&](S32 length, bool standout)
+            {
+                if (length > 0)
+                {
+                    lengths.push_back(length);
+                    standouts.push_back(standout);
+                }
+            };
+            add_segment(clause_begin, false);
+            add_segment(clause_end - clause_begin, true);
+            add_segment(preedit_bytes - clause_end, false);
+            mPreeditor->updatePreedit(preedit, lengths, standouts, clause_begin);
+
+            // The composition moved the caret, and with it where the
+            // candidate window belongs; the IME is told now rather than at
+            // the preeditor's next draw, as the Win32 backend does after every
+            // WM_IME_COMPOSITION.
+            placeLanguageTextInputArea();
             break;
         }
 
@@ -2282,6 +2505,15 @@ SDL_AppResult LLWindowSDL::handleEvent(const SDL_Event& event)
 
         case SDL_EVENT_WINDOW_EXPOSED:
         {
+            // A Wayland window leaving the suspended state is exposed, and that
+            // is its restore. A size change while still suspended also exposes
+            // it, but SDL occludes it again in the same breath, so the flag
+            // already says occluded by the time the event is read here.
+            if (mOccluded && !(SDL_GetWindowFlags(mWindow) & SDL_WINDOW_OCCLUDED))
+            {
+                mOccluded = false;
+                mCallbacks->handleActivate(this, true);
+            }
             mCallbacks->handlePaint(this, 0, 0, 0, 0);
             break;
         }
@@ -2362,13 +2594,24 @@ SDL_AppResult LLWindowSDL::handleEvent(const SDL_Event& event)
             break;
         case SDL_EVENT_WINDOW_FOCUS_LOST:
             mCallbacks->handleFocusLost(this);
-            // Drop the IME preeditor reference defensively. The viewer's
-            // focus manager normally clears keyboard focus on app focus
-            // loss, which triggers allowLanguageTextInput(nullptr) — but
-            // if any path leaves mPreeditor pointing at a widget that
-            // thinks it's defocused, a stray TEXT_EDITING event would
-            // update a non-active widget.
-            mPreeditor = nullptr;
+            // The preeditor keeps language input: keyboard focus stays on
+            // its widget while the window is away (setAppHasFocus leaves it),
+            // and nothing allows language input again when the window comes
+            // back, so forgetting it here dropped every composition after an
+            // Alt-Tab until the widget was focused anew. As on Win32, only
+            // what is being composed goes. SDL stops text input as the window
+            // loses focus, and what the IME then does with the composition
+            // reaches no window, so the preedit would stay in the text. Win32
+            // commits it (interruptLanguageTextInput); SDL can only cancel.
+            if (mPreeditor)
+            {
+                S32 preedit_pos = 0, preedit_len = 0;
+                mPreeditor->getPreeditRange(&preedit_pos, &preedit_len);
+                if (preedit_len > 0)
+                {
+                    mPreeditor->resetPreedit();
+                }
+            }
             // Sync our relative-mode state to SDL3's. SDL3's keyboard
             // layer auto-disables relative mode on focus loss; if we don't
             // mirror that, our member stays true and setCursorPosition
@@ -2396,6 +2639,14 @@ SDL_AppResult LLWindowSDL::handleEvent(const SDL_Event& event)
         case SDL_EVENT_WINDOW_MINIMIZED:
             mCallbacks->handleActivate(this, false);
             break;
+        case SDL_EVENT_WINDOW_OCCLUDED:
+            // Wayland's minimise; see mOccluded.
+            if (mServerProtocol == Wayland && !mOccluded)
+            {
+                mOccluded = true;
+                mCallbacks->handleActivate(this, false);
+            }
+            break;
         case SDL_EVENT_WINDOW_DISPLAY_CHANGED:
         {
             // Update refresh rate when changing monitors
@@ -2405,6 +2656,10 @@ SDL_AppResult LLWindowSDL::handleEvent(const SDL_Event& event)
                 mRefreshRate = ll_round(displayMode->refresh_rate);
                 mNativeAspectRatio = ((F32)displayMode->w) / ((F32)displayMode->h);
             }
+            // The resolution list is the window's display's; build it afresh.
+            delete[] mSupportedResolutions;
+            mSupportedResolutions = nullptr;
+            mNumSupportedResolutions = 0;
             // Pixel density may have changed; refresh the pixel-unit min-size
             // shadow so setSizeImpl(LLCoordWindow)'s re-clamp stays unit-correct.
             refreshMinSizePixelShadow();
@@ -2449,8 +2704,21 @@ SDL_AppResult LLWindowSDL::handleEvent(const SDL_Event& event)
         {
             // Drag-and-drop session starting. SDL3 doesn't populate event.drop.x/y
             // or deliver file paths until later (DROP_FILE between BEGIN and
-            // COMPLETE), so we can't START_TRACKING here — just reset the buffer.
+            // COMPLETE), so we can't START_TRACKING here — just reset the buffers.
             mPendingDropFiles.clear();
+            mPendingDropText.clear();
+            break;
+        }
+        case SDL_EVENT_DROP_POSITION:
+        {
+            // Where the drag is, but not what it carries: every backend reads
+            // the payload only once it is dropped (Wayland's data offer, X11's
+            // XdndSelection, Cocoa's pasteboard), so there is nothing to
+            // START_TRACKING or TRACK with. The viewer's hover feedback, a face
+            // lit for a URL or a texture, depends on what is dragged, and an
+            // empty payload would light faces for a file drag too. SDL stamps
+            // this last position on the DROP_FILE / DROP_TEXT / DROP_COMPLETE
+            // that follow, which is where the drop is dispatched.
             break;
         }
         case SDL_EVENT_DROP_FILE:
@@ -2465,8 +2733,19 @@ SDL_AppResult LLWindowSDL::handleEvent(const SDL_Event& event)
         }
         case SDL_EVENT_DROP_TEXT:
         {
-            // The current handleDragNDrop pipeline is file-only (DNDT_FILE); SDL3
-            // also delivers dropped text but we have nowhere to route it. Drop silently.
+            // Dropped text, a SLURL or a URL, goes to the viewer as DNDT_DEFAULT
+            // the way Win32 hands over CF_TEXT (lldragdropwin32.cpp): a spatial
+            // SLURL teleports, a URL dropped on a face becomes its media. SDL
+            // sends one DROP_TEXT a line; join them back into the one string
+            // Win32 passes, and dispatch on DROP_COMPLETE.
+            if (event.drop.data)
+            {
+                if (!mPendingDropText.empty())
+                {
+                    mPendingDropText += '\n';
+                }
+                mPendingDropText += event.drop.data;
+            }
             break;
         }
         case SDL_EVENT_DROP_COMPLETE:
@@ -2479,15 +2758,20 @@ SDL_AppResult LLWindowSDL::handleEvent(const SDL_Event& event)
             // DNDA_DROPPED — a DROPPED event with no preceding START_TRACKING is
             // a no-op (see indra/newview/llviewerwindow.cpp:1455+).
             //
-            // SDL3's drop API only surfaces file paths between DROP_BEGIN and
-            // DROP_COMPLETE, so we can't drive START/TRACK live the way the
-            // Win32 OLE backend does (DragEnter/DragOver/Drop). Instead we
-            // synthesise the same three-step sequence here so the receiver's
-            // state machine sees a well-formed transaction:
+            // SDL3's drop API only surfaces file paths and text between
+            // DROP_BEGIN and DROP_COMPLETE (see DROP_POSITION), so we can't
+            // drive START/TRACK live the way the Win32 OLE backend does
+            // (DragEnter/DragOver/Drop). Instead we synthesise the same
+            // three-step sequence here so the receiver's state machine sees a
+            // well-formed transaction:
             //
             //   1) DNDA_START_TRACKING with the file list -> mDragItems populated
             //   2) DNDA_DROPPED                           -> upload / apply
             //   3) DNDA_STOP_TRACKING                     -> mDragItems cleared
+            //
+            // Text runs the same three steps as DNDT_DEFAULT: the handler
+            // weighs the string on START_TRACKING and teleports or sets the
+            // media on DROPPED. Files win if a drop carries both.
             // event.drop.x/y are screen-coord units; scale to PIXEL units.
             const float scale = mCachedPixelDensity; // cached; see refreshPixelMetrics
             LLCoordWindow winCoord(llfloor(event.drop.x * scale),
@@ -2495,25 +2779,34 @@ SDL_AppResult LLWindowSDL::handleEvent(const SDL_Event& event)
             LLCoordGL openGlCoord;
             convertCoords(winCoord, &openGlCoord);
             const MASK mask = gKeyboard->currentMask(true);
+            LLWindowCallbacks::DragNDropType type = LLWindowCallbacks::DNDT_FILE;
+            std::vector<std::string> data;
             if (!mPendingDropFiles.empty())
+            {
+                data.swap(mPendingDropFiles);
+            }
+            else if (!mPendingDropText.empty())
+            {
+                type = LLWindowCallbacks::DNDT_DEFAULT;
+                data.push_back(std::move(mPendingDropText));
+            }
+            if (!data.empty())
             {
                 mCallbacks->handleDragNDrop(this, openGlCoord, mask,
                                             LLWindowCallbacks::DNDA_START_TRACKING,
-                                            LLWindowCallbacks::DNDT_FILE,
-                                            mPendingDropFiles);
+                                            type, data);
                 mCallbacks->handleDragNDrop(this, openGlCoord, mask,
                                             LLWindowCallbacks::DNDA_DROPPED,
-                                            LLWindowCallbacks::DNDT_FILE,
-                                            mPendingDropFiles);
+                                            type, data);
             }
             // Always send STOP_TRACKING so any cached state (mDragItems,
-            // hover highlight) is cleared, whether or not files were dropped
-            // (text-only drops and cancelled drags both arrive here too).
+            // hover highlight) is cleared, whether or not anything was dropped
+            // (cancelled drags arrive here too).
             mCallbacks->handleDragNDrop(this, openGlCoord, mask,
                                         LLWindowCallbacks::DNDA_STOP_TRACKING,
-                                        LLWindowCallbacks::DNDT_FILE,
-                                        {});
+                                        type, {});
             mPendingDropFiles.clear();
+            mPendingDropText.clear();
             break;
         }
         case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
@@ -2523,50 +2816,6 @@ SDL_AppResult LLWindowSDL::handleEvent(const SDL_Event& event)
                 // Get the app to initiate cleanup.
                 mCallbacks->handleQuit(this);
                 // The app is responsible for calling destroyWindow when done with GL
-            }
-            break;
-        }
-        case SDL_EVENT_RENDER_DEVICE_RESET:
-        case SDL_EVENT_RENDER_DEVICE_LOST:
-        case SDL_EVENT_RENDER_TARGETS_RESET:
-        {
-            // The GL device underneath us has been reset, lost, or had its
-            // render targets invalidated — display sleep/wake, GPU driver
-            // restart, VT switch on some Mesa stacks. Every texture, VBO,
-            // shader program, framebuffer object, and reflection probe is
-            // now in an undefined state and subsequent GL calls will either
-            // silently no-op or crash. The pre-relative-mode viewer simply
-            // crashed; this gives the user a visible cause-of-death and a
-            // proper log line for support before we tear down.
-            //
-            // True recovery — destroying every GL resource and rebuilding
-            // it from scratch — is a substantial cross-subsystem effort
-            // (LLPipeline, LLViewerTextureList, LLReflectionMapManager,
-            // every loaded shader, the UI atlas) and is deliberately not
-            // attempted here. The viewer exits cleanly so the user knows
-            // to restart instead of staring at a black or corrupted window.
-            const char* kind = (event.type == SDL_EVENT_RENDER_DEVICE_RESET)
-                                   ? "device reset"
-                                   : (event.type == SDL_EVENT_RENDER_DEVICE_LOST)
-                                         ? "device lost"
-                                         : "render targets reset";
-            LL_WARNS("Window") << "GL " << kind
-                               << " detected via SDL3 event. SDL error: "
-                               << SDL_GetError() << LL_ENDL;
-
-            OSMessageBoxSDL(
-                "The graphics driver reported an OpenGL device "
-                + std::string(kind)
-                + ". Alchemy can't continue rendering and will now exit.\n\n"
-                  "This usually follows display sleep/wake, a GPU driver "
-                  "restart, or a virtual-terminal switch. Please relaunch "
-                  "the viewer to resume.",
-                "OpenGL device lost",
-                OSMB_OK);
-
-            if (mCallbacks)
-            {
-                mCallbacks->handleQuit(this);
             }
             break;
         }
@@ -2591,9 +2840,8 @@ SDL_AppResult LLWindowSDL::handleEvents(const SDL_Event& event)
 
 #if LL_DARWIN
 // On macOS the viewer ships TIFF cursor art in <Bundle>/Contents/Resources/cursors_mac/
-// (see viewer_manifest.py). The legacy res-sdl/*.BMP tree is Linux-only, so on the
-// SDL build for Mac we load the native TIFFs via SDL3_image. The TIFFs already carry
-// proper alpha, so unlike the BMP path we skip the color-key step.
+// (see viewer_manifest.py). The res-sdl/ PNG tree is Linux-only, so on the SDL
+// build for Mac we load the native TIFFs, which carry their own alpha, via SDL3_image.
 static SDL_Cursor *makeSDLCursorFromMacTIF(const char *basename, int hotx, int hoty)
 {
     std::string fullpath = gDirUtilp->add(
@@ -2642,83 +2890,114 @@ static SDL_Cursor *makeSDLCursorFromMacTIF(const char *basename, int hotx, int h
 #endif // LL_DARWIN
 
 #if LL_LINUX
-static SDL_Cursor *makeSDLCursorFromBMP(const char *filename, int hotx, int hoty)
+// The Linux cursors are 32x32 PNGs in res-sdl/, with their alpha. Under
+// Wayland that is the cursor's size in logical pixels, and SDL hands the
+// compositor whichever of the surface's alternate images suits the window's
+// scale, so each cursor carries nearest-neighbour copies of its art at the
+// integer scales up to this one. (SDL 3.4 picks the smallest copy whose area
+// is at least the art's times the scale, not times its square, so a 3x output
+// gets the 2x copy and the compositor scales it the rest of the way.)
+static const int MAX_CURSOR_SCALE = 3;
+
+// The integer scale the cursors are drawn at under X11. SDL gives Xcursor the
+// surface alone, at its own pixel size, and ignores its alternates; the themed
+// cursors beside it are drawn at Xcursor's size (XCURSOR_SIZE, the
+// Xcursor.size resource, or one from Xft.dpi), which is 24 at a scale of 1,
+// where the 32-pixel art belongs. Without XCURSOR_SIZE the display's content
+// scale, which SDL reads from Xft.dpi, stands in for the size: the resource
+// can't be read without Xlib.
+static int x11CursorScale(SDL_Window *window)
 {
-    SDL_Surface *bmpsurface = Load_BMP_Resource(filename);
-    if (!bmpsurface)
+    F32 scale = 0.f;
+    if (const char *size = getenv("XCURSOR_SIZE"))
     {
-        LL_WARNS() << "Cursor BMP failed to load: " << filename << LL_ENDL;
-        return nullptr;
+        scale = (F32)atoi(size) / 24.f;
     }
-
-    LL_DEBUGS() << "Loaded cursor file " << filename << " "
-                << bmpsurface->w << "x" << bmpsurface->h << LL_ENDL;
-
-    // Normalise to RGBA32 (byte order R,G,B,A in memory regardless of
-    // host endianness) so we have a predictable layout to color-key
-    // against, and so SDL_CreateColorCursor gets a surface with alpha.
-    SDL_Surface *rgba = SDL_ConvertSurface(bmpsurface, SDL_PIXELFORMAT_RGBA32);
-    SDL_DestroySurface(bmpsurface);
-    if (!rgba)
+    if (scale <= 0.f && window)
     {
-        LL_WARNS() << "Cursor RGBA conversion failed for " << filename
+        scale = SDL_GetWindowDisplayScale(window);
+    }
+    return llclamp(ll_round(scale), 1, MAX_CURSOR_SCALE);
+}
+
+// x11_scale is x11CursorScale's under X11, and 0 elsewhere, where the cursor
+// takes its scaled copies as alternates instead.
+static SDL_Cursor *makeSDLCursorFromPNG(const char *filename, int hotx, int hoty, int x11_scale)
+{
+    std::string fullpath = gDirUtilp->add(
+        gDirUtilp->getAppRODataDir(),
+        "res-sdl",
+        filename);
+
+    SDL_Surface *png = SDL_LoadPNG(fullpath.c_str());
+    if (!png)
+    {
+        LL_WARNS() << "Cursor PNG failed to load: " << fullpath
                    << ": " << SDL_GetError() << LL_ENDL;
         return nullptr;
     }
 
-    // Color-key the legacy (200,200,200) "background" pixels to fully
-    // transparent. The viewer's cursor BMPs were authored against this
-    // exact gray as the transparency key (same convention the old SDL2
-    // path used), so the assets stay drop-in compatible. Unlike the
-    // legacy path we keep the rest of the pixel data intact — the old
-    // code quantised everything to 1-bit black/white, which is why
-    // multi-colour cursors looked degraded vs Win32.
-    //
-    // A converted SDL3 RGBA32 surface shouldn't need locking, but the
-    // pair is cheap and defends against future SDL changes that flag the
-    // surface as RLE / GPU-backed.
-    const bool must_lock = SDL_MUSTLOCK(rgba);
-    if (must_lock && !SDL_LockSurface(rgba))
+    LL_DEBUGS() << "Loaded cursor file " << fullpath << " "
+                << png->w << "x" << png->h << LL_ENDL;
+
+    // ARGB8888 is what SDL makes every cursor from; converting once here
+    // spares it converting each scaled copy.
+    SDL_Surface *art = SDL_ConvertSurface(png, SDL_PIXELFORMAT_ARGB8888);
+    SDL_DestroySurface(png);
+    if (!art)
     {
-        LL_WARNS() << "SDL_LockSurface failed for cursor " << filename
+        LL_WARNS() << "Cursor ARGB conversion failed for " << fullpath
                    << ": " << SDL_GetError() << LL_ENDL;
-        SDL_DestroySurface(rgba);
         return nullptr;
-    }
-    for (int y = 0; y < rgba->h; ++y)
-    {
-        U8 *row = (U8*)rgba->pixels + (size_t)y * rgba->pitch;
-        for (int x = 0; x < rgba->w; ++x)
-        {
-            U8 *px = row + (size_t)x * 4;
-            if (px[0] == 200 && px[1] == 200 && px[2] == 200)
-            {
-                px[3] = 0;
-            }
-        }
-    }
-    if (must_lock)
-    {
-        SDL_UnlockSurface(rgba);
     }
 
     // Clamp the hot-spot — out-of-range coordinates are undefined behaviour
     // on most platforms and at minimum produce a cursor that "clicks"
     // nowhere near the visible tip.
-    if (hotx < 0 || hotx >= rgba->w || hoty < 0 || hoty >= rgba->h)
+    if (hotx < 0 || hotx >= art->w || hoty < 0 || hoty >= art->h)
     {
-        LL_WARNS() << "Cursor " << filename << " hot-spot ("
+        LL_WARNS() << "Cursor " << fullpath << " hot-spot ("
                    << hotx << "," << hoty << ") is outside "
-                   << rgba->w << "x" << rgba->h << "; clamping." << LL_ENDL;
-        hotx = llclamp(hotx, 0, rgba->w - 1);
-        hoty = llclamp(hoty, 0, rgba->h - 1);
+                   << art->w << "x" << art->h << "; clamping." << LL_ENDL;
+        hotx = llclamp(hotx, 0, art->w - 1);
+        hoty = llclamp(hoty, 0, art->h - 1);
     }
 
-    SDL_Cursor *sdlcursor = SDL_CreateColorCursor(rgba, hotx, hoty);
-    SDL_DestroySurface(rgba);
+    // Nearest-neighbour, so the art's pixels stay hard-edged. A copy that
+    // can't be made leaves the cursor at the scales it has.
+    if (x11_scale > 1)
+    {
+        SDL_Surface *scaled = SDL_ScaleSurface(art, art->w * x11_scale, art->h * x11_scale,
+                                               SDL_SCALEMODE_NEAREST);
+        if (scaled)
+        {
+            SDL_DestroySurface(art);
+            art = scaled;
+            hotx *= x11_scale;
+            hoty *= x11_scale;
+        }
+    }
+    else if (x11_scale == 0)
+    {
+        for (int scale = 2; scale <= MAX_CURSOR_SCALE; ++scale)
+        {
+            SDL_Surface *alternate = SDL_ScaleSurface(art, art->w * scale, art->h * scale,
+                                                      SDL_SCALEMODE_NEAREST);
+            if (!alternate)
+            {
+                break;
+            }
+            // The surface takes a reference of its own, released with it.
+            SDL_AddSurfaceAlternateImage(art, alternate);
+            SDL_DestroySurface(alternate);
+        }
+    }
+
+    SDL_Cursor *sdlcursor = SDL_CreateColorCursor(art, hotx, hoty);
+    SDL_DestroySurface(art);
     if (!sdlcursor)
     {
-        LL_WARNS() << "SDL_CreateColorCursor failed for " << filename
+        LL_WARNS() << "SDL_CreateColorCursor failed for " << fullpath
                    << ": " << SDL_GetError() << LL_ENDL;
     }
     return sdlcursor;
@@ -2729,7 +3008,7 @@ static SDL_Cursor *makeSDLCursorFromBMP(const char *filename, int hotx, int hoty
 // Convert one of the viewer's embedded Win32 cursor resources (the same
 // branded .cur/.ani assets the native backend loads in
 // LLWindowWin32::initCursors) into an SDL color cursor. The hot-spot is taken
-// from the resource itself via GetIconInfo, so — unlike the BMP path — there
+// from the resource itself via GetIconInfo, so — unlike the PNG path — there
 // is no hand-maintained hot-spot table to keep in sync. Returns nullptr if the
 // resource is missing or can't be converted, letting initCursors fall back to
 // the SDL system arrow.
@@ -2756,7 +3035,7 @@ static bool win32ReadDIB32(HBITMAP hbm, int width, int rows, std::vector<U8>& ou
 // Convert one of the viewer's embedded Win32 cursor resources (the same
 // branded .cur/.ani assets the native backend loads in
 // LLWindowWin32::initCursors) into an SDL color cursor. The hot-spot is taken
-// from the resource itself via GetIconInfo, so — unlike the BMP path — there
+// from the resource itself via GetIconInfo, so — unlike the PNG path — there
 // is no hand-maintained hot-spot table to keep in sync. Returns nullptr if the
 // resource is missing or can't be converted, letting initCursors fall back to
 // the SDL system arrow.
@@ -2944,7 +3223,6 @@ void LLWindowSDL::initCursors()
     // Pre-make an SDL cursor for each of the known cursor types.
     // We hardcode the hotspots - to avoid that we'd have to write
     // a .cur file loader.
-    // NOTE: SDL doesn't load RLE-compressed BMP files.
     mSDLCursors[UI_CURSOR_ARROW] = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_DEFAULT);
     mSDLCursors[UI_CURSOR_WAIT] = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_WAIT);
     mSDLCursors[UI_CURSOR_HAND] = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_POINTER);
@@ -2958,7 +3236,7 @@ void LLWindowSDL::initCursors()
     mSDLCursors[UI_CURSOR_NO] = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_NOT_ALLOWED);
     mSDLCursors[UI_CURSOR_WORKING] = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_PROGRESS);
 #if LL_DARWIN
-    // The macOS bundle ships TIFF cursors under cursors_mac/ (not the res-sdl BMP
+    // The macOS bundle ships TIFF cursors under cursors_mac/ (not the res-sdl PNG
     // tree), and uses Mac-specific hot-spots — keep these in sync with
     // LLWindowMacOSX::initCursors() so the SDL build matches the native client.
     // ARROWCOPY/ARROWCOPYMULTI/ARROWDRAGMULTI have no TIF counterpart (the native
@@ -3030,38 +3308,40 @@ void LLWindowSDL::initCursors()
     mSDLCursors[UI_CURSOR_TOOLPATHFINDING_PATH_END_ADD] = makeSDLCursorFromWin32("TOOLPATHFINDINGPATHENDADD");
     mSDLCursors[UI_CURSOR_TOOLNO] = makeSDLCursorFromWin32("TOOLNO");
 #else
-    mSDLCursors[UI_CURSOR_TOOLGRAB] = makeSDLCursorFromBMP("lltoolgrab.BMP",2,13);
-    mSDLCursors[UI_CURSOR_TOOLLAND] = makeSDLCursorFromBMP("lltoolland.BMP",1,6);
-    mSDLCursors[UI_CURSOR_TOOLFOCUS] = makeSDLCursorFromBMP("lltoolfocus.BMP",8,5);
-    mSDLCursors[UI_CURSOR_TOOLCREATE] = makeSDLCursorFromBMP("lltoolcreate.BMP",7,7);
-    mSDLCursors[UI_CURSOR_ARROWDRAG] = makeSDLCursorFromBMP("arrowdrag.BMP",0,0);
-    mSDLCursors[UI_CURSOR_ARROWCOPY] = makeSDLCursorFromBMP("arrowcop.BMP",0,0);
-    mSDLCursors[UI_CURSOR_ARROWDRAGMULTI] = makeSDLCursorFromBMP("llarrowdragmulti.BMP",0,0);
-    mSDLCursors[UI_CURSOR_ARROWCOPYMULTI] = makeSDLCursorFromBMP("arrowcopmulti.BMP",0,0);
-    mSDLCursors[UI_CURSOR_NOLOCKED] = makeSDLCursorFromBMP("llnolocked.BMP",8,8);
-    mSDLCursors[UI_CURSOR_ARROWLOCKED] = makeSDLCursorFromBMP("llarrowlocked.BMP",0,0);
-    mSDLCursors[UI_CURSOR_GRABLOCKED] = makeSDLCursorFromBMP("llgrablocked.BMP",2,13);
-    mSDLCursors[UI_CURSOR_TOOLTRANSLATE] = makeSDLCursorFromBMP("lltooltranslate.BMP",0,0);
-    mSDLCursors[UI_CURSOR_TOOLROTATE] = makeSDLCursorFromBMP("lltoolrotate.BMP",0,0);
-    mSDLCursors[UI_CURSOR_TOOLSCALE] = makeSDLCursorFromBMP("lltoolscale.BMP",0,0);
-    mSDLCursors[UI_CURSOR_TOOLCAMERA] = makeSDLCursorFromBMP("lltoolcamera.BMP",7,5);
-    mSDLCursors[UI_CURSOR_TOOLPAN] = makeSDLCursorFromBMP("lltoolpan.BMP",7,5);
-    mSDLCursors[UI_CURSOR_TOOLZOOMIN] = makeSDLCursorFromBMP("lltoolzoomin.BMP",7,5);
-    mSDLCursors[UI_CURSOR_TOOLZOOMOUT] = makeSDLCursorFromBMP("lltoolzoomout.BMP", 7, 5);
-    mSDLCursors[UI_CURSOR_TOOLPICKOBJECT3] = makeSDLCursorFromBMP("toolpickobject3.BMP",0,0);
-    mSDLCursors[UI_CURSOR_TOOLPLAY] = makeSDLCursorFromBMP("toolplay.BMP",0,0);
-    mSDLCursors[UI_CURSOR_TOOLPAUSE] = makeSDLCursorFromBMP("toolpause.BMP",0,0);
-    mSDLCursors[UI_CURSOR_TOOLMEDIAOPEN] = makeSDLCursorFromBMP("toolmediaopen.BMP",0,0);
-    mSDLCursors[UI_CURSOR_PIPETTE] = makeSDLCursorFromBMP("lltoolpipette.BMP",2,28);
-    mSDLCursors[UI_CURSOR_TOOLSIT] = makeSDLCursorFromBMP("toolsit.BMP",20,15);
-    mSDLCursors[UI_CURSOR_TOOLBUY] = makeSDLCursorFromBMP("toolbuy.BMP",20,15);
-    mSDLCursors[UI_CURSOR_TOOLOPEN] = makeSDLCursorFromBMP("toolopen.BMP",20,15);
-    mSDLCursors[UI_CURSOR_TOOLPATHFINDING] = makeSDLCursorFromBMP("lltoolpathfinding.BMP", 16, 16);
-    mSDLCursors[UI_CURSOR_TOOLPATHFINDING_PATH_START] = makeSDLCursorFromBMP("lltoolpathfindingpathstart.BMP", 16, 16);
-    mSDLCursors[UI_CURSOR_TOOLPATHFINDING_PATH_START_ADD] = makeSDLCursorFromBMP("lltoolpathfindingpathstartadd.BMP", 16, 16);
-    mSDLCursors[UI_CURSOR_TOOLPATHFINDING_PATH_END] = makeSDLCursorFromBMP("lltoolpathfindingpathend.BMP", 16, 16);
-    mSDLCursors[UI_CURSOR_TOOLPATHFINDING_PATH_END_ADD] = makeSDLCursorFromBMP("lltoolpathfindingpathendadd.BMP", 16, 16);
-    mSDLCursors[UI_CURSOR_TOOLNO] = makeSDLCursorFromBMP("llno.BMP",8,8);
+    // Hot-spots are in the 32x32 art's pixels, and scale with it under X11.
+    const int x11_scale = mServerProtocol == X11 ? x11CursorScale(mWindow) : 0;
+    mSDLCursors[UI_CURSOR_TOOLGRAB] = makeSDLCursorFromPNG("lltoolgrab.png",2,13,x11_scale);
+    mSDLCursors[UI_CURSOR_TOOLLAND] = makeSDLCursorFromPNG("lltoolland.png",1,6,x11_scale);
+    mSDLCursors[UI_CURSOR_TOOLFOCUS] = makeSDLCursorFromPNG("lltoolfocus.png",8,5,x11_scale);
+    mSDLCursors[UI_CURSOR_TOOLCREATE] = makeSDLCursorFromPNG("lltoolcreate.png",7,7,x11_scale);
+    mSDLCursors[UI_CURSOR_ARROWDRAG] = makeSDLCursorFromPNG("arrowdrag.png",0,0,x11_scale);
+    mSDLCursors[UI_CURSOR_ARROWCOPY] = makeSDLCursorFromPNG("arrowcop.png",0,0,x11_scale);
+    mSDLCursors[UI_CURSOR_ARROWDRAGMULTI] = makeSDLCursorFromPNG("llarrowdragmulti.png",0,0,x11_scale);
+    mSDLCursors[UI_CURSOR_ARROWCOPYMULTI] = makeSDLCursorFromPNG("arrowcopmulti.png",0,0,x11_scale);
+    mSDLCursors[UI_CURSOR_NOLOCKED] = makeSDLCursorFromPNG("llnolocked.png",8,8,x11_scale);
+    mSDLCursors[UI_CURSOR_ARROWLOCKED] = makeSDLCursorFromPNG("llarrowlocked.png",0,0,x11_scale);
+    mSDLCursors[UI_CURSOR_GRABLOCKED] = makeSDLCursorFromPNG("llgrablocked.png",2,13,x11_scale);
+    mSDLCursors[UI_CURSOR_TOOLTRANSLATE] = makeSDLCursorFromPNG("lltooltranslate.png",0,0,x11_scale);
+    mSDLCursors[UI_CURSOR_TOOLROTATE] = makeSDLCursorFromPNG("lltoolrotate.png",0,0,x11_scale);
+    mSDLCursors[UI_CURSOR_TOOLSCALE] = makeSDLCursorFromPNG("lltoolscale.png",0,0,x11_scale);
+    mSDLCursors[UI_CURSOR_TOOLCAMERA] = makeSDLCursorFromPNG("lltoolcamera.png",7,5,x11_scale);
+    mSDLCursors[UI_CURSOR_TOOLPAN] = makeSDLCursorFromPNG("lltoolpan.png",7,5,x11_scale);
+    mSDLCursors[UI_CURSOR_TOOLZOOMIN] = makeSDLCursorFromPNG("lltoolzoomin.png",7,5,x11_scale);
+    mSDLCursors[UI_CURSOR_TOOLZOOMOUT] = makeSDLCursorFromPNG("lltoolzoomout.png", 7, 5, x11_scale);
+    mSDLCursors[UI_CURSOR_TOOLPICKOBJECT3] = makeSDLCursorFromPNG("toolpickobject3.png",0,0,x11_scale);
+    mSDLCursors[UI_CURSOR_TOOLPLAY] = makeSDLCursorFromPNG("toolplay.png",0,0,x11_scale);
+    mSDLCursors[UI_CURSOR_TOOLPAUSE] = makeSDLCursorFromPNG("toolpause.png",0,0,x11_scale);
+    mSDLCursors[UI_CURSOR_TOOLMEDIAOPEN] = makeSDLCursorFromPNG("toolmediaopen.png",0,0,x11_scale);
+    mSDLCursors[UI_CURSOR_PIPETTE] = makeSDLCursorFromPNG("lltoolpipette.png",2,28,x11_scale);
+    mSDLCursors[UI_CURSOR_TOOLSIT] = makeSDLCursorFromPNG("toolsit.png",20,15,x11_scale);
+    mSDLCursors[UI_CURSOR_TOOLBUY] = makeSDLCursorFromPNG("toolbuy.png",20,15,x11_scale);
+    mSDLCursors[UI_CURSOR_TOOLOPEN] = makeSDLCursorFromPNG("toolopen.png",20,15,x11_scale);
+    mSDLCursors[UI_CURSOR_TOOLPATHFINDING] = makeSDLCursorFromPNG("lltoolpathfinding.png", 16, 16, x11_scale);
+    mSDLCursors[UI_CURSOR_TOOLPATHFINDING_PATH_START] = makeSDLCursorFromPNG("lltoolpathfindingpathstart.png", 16, 16, x11_scale);
+    mSDLCursors[UI_CURSOR_TOOLPATHFINDING_PATH_START_ADD] = makeSDLCursorFromPNG("lltoolpathfindingpathstartadd.png", 16, 16, x11_scale);
+    mSDLCursors[UI_CURSOR_TOOLPATHFINDING_PATH_END] = makeSDLCursorFromPNG("lltoolpathfindingpathend.png", 16, 16, x11_scale);
+    mSDLCursors[UI_CURSOR_TOOLPATHFINDING_PATH_END_ADD] = makeSDLCursorFromPNG("lltoolpathfindingpathendadd.png", 16, 16, x11_scale);
+    mSDLCursors[UI_CURSOR_TOOLNO] = makeSDLCursorFromPNG("llno.png",8,8,x11_scale);
 #endif // LL_DARWIN
 }
 
@@ -3584,11 +3864,16 @@ LLSD LLWindowSDL::getNativeKeyData()
 // Must begin with protocol identifier.
 void LLWindowSDL::spawnWebBrowser(const std::string& escaped_url, bool async)
 {
+    // The scheme has to lead the URL: found anywhere in it, "smb://host/x?http:"
+    // would pass and SDL_OpenURL would hand it to the desktop's smb handler.
+    // A scheme's case doesn't matter (RFC 3986 3.1), so "HTTPS:" is "https:".
+    const std::string_view url(escaped_url);
     bool found = false;
     S32 i;
     for (i = 0; i < gURLProtocolWhitelistCount; i++)
     {
-        if (escaped_url.find(gURLProtocolWhitelist[i]) != std::string::npos)
+        const std::string& scheme = gURLProtocolWhitelist[i];
+        if (LLStringUtil::isEqualInsensitiveASCII(url.substr(0, scheme.size()), scheme))
         {
             found = true;
             break;
@@ -3748,6 +4033,185 @@ void LLWindowSDL::bringToFront()
     }
 }
 
+#if LL_LINUX
+namespace
+{
+    // xdg-activation by hand. SDL's Wayland backend spends XDG_ACTIVATION_TOKEN
+    // only on showing a window, and SDL_RaiseWindow asks the compositor for a
+    // token of its own, which GNOME and KDE honour for a window out of focus
+    // only as a request for attention. A token handed over from another
+    // process has to reach xdg_activation_v1.activate some other way. The
+    // viewer builds against no Wayland header (UI.cmake), so the little this
+    // takes is mirrored from wayland-util.h, wayland-client-core.h and
+    // xdg-activation-v1.xml, and libwayland-client, which SDL has loaded, is
+    // resolved at run time.
+    struct ALWlInterface;
+
+    struct ALWlMessage
+    {
+        const char* name;
+        const char* signature;
+        const ALWlInterface** types;
+    };
+
+    struct ALWlInterface
+    {
+        const char* name;
+        int version;
+        int method_count;
+        const ALWlMessage* methods;
+        int event_count;
+        const ALWlMessage* events;
+    };
+
+    // A request is sent by its index. Its types matter only to a new object,
+    // which of these only get_activation_token makes, and it is never sent.
+    const ALWlInterface* NO_TYPES[] = { nullptr, nullptr };
+    const ALWlMessage XDG_ACTIVATION_REQUESTS[] = {
+        { "destroy", "", NO_TYPES },
+        { "get_activation_token", "n", NO_TYPES },
+        { "activate", "so", NO_TYPES },
+    };
+    const ALWlInterface XDG_ACTIVATION_V1 = { "xdg_activation_v1", 1, 3, XDG_ACTIVATION_REQUESTS, 0, nullptr };
+
+    enum : uint32_t
+    {
+        DISPLAY_GET_REGISTRY = 1,
+        REGISTRY_BIND = 0,
+        ACTIVATION_DESTROY = 0,
+        ACTIVATION_ACTIVATE = 2,
+        MARSHAL_FLAG_DESTROY = 1, // WL_MARSHAL_FLAG_DESTROY
+    };
+
+    struct ALWaylandClient
+    {
+        void* (*display_create_queue)(void* display);
+        void (*event_queue_destroy)(void* queue);
+        void* (*proxy_create_wrapper)(void* proxy);
+        void (*proxy_wrapper_destroy)(void* wrapper);
+        void (*proxy_set_queue)(void* proxy, void* queue);
+        int (*proxy_add_listener)(void* proxy, void (**listener)(void), void* data);
+        void* (*proxy_marshal_flags)(void* proxy, uint32_t opcode, const ALWlInterface* interface,
+                                     uint32_t version, uint32_t flags, ...);
+        uint32_t (*proxy_get_version)(void* proxy);
+        void (*proxy_destroy)(void* proxy);
+        int (*display_roundtrip_queue)(void* display, void* queue);
+        int (*display_flush)(void* display);
+        const ALWlInterface* registry_interface;
+    };
+
+    template <typename T>
+    bool loadSymbol(SDL_SharedObject* library, const char* symbol, T& slot)
+    {
+        slot = reinterpret_cast<T>(SDL_LoadFunction(library, symbol));
+        return slot != nullptr;
+    }
+
+    bool loadWaylandClient(SDL_SharedObject* library, ALWaylandClient& wl)
+    {
+        return loadSymbol(library, "wl_display_create_queue", wl.display_create_queue)
+            && loadSymbol(library, "wl_event_queue_destroy", wl.event_queue_destroy)
+            && loadSymbol(library, "wl_proxy_create_wrapper", wl.proxy_create_wrapper)
+            && loadSymbol(library, "wl_proxy_wrapper_destroy", wl.proxy_wrapper_destroy)
+            && loadSymbol(library, "wl_proxy_set_queue", wl.proxy_set_queue)
+            && loadSymbol(library, "wl_proxy_add_listener", wl.proxy_add_listener)
+            && loadSymbol(library, "wl_proxy_marshal_flags", wl.proxy_marshal_flags)
+            && loadSymbol(library, "wl_proxy_get_version", wl.proxy_get_version)
+            && loadSymbol(library, "wl_proxy_destroy", wl.proxy_destroy)
+            && loadSymbol(library, "wl_display_roundtrip_queue", wl.display_roundtrip_queue)
+            && loadSymbol(library, "wl_display_flush", wl.display_flush)
+            && loadSymbol(library, "wl_registry_interface", wl.registry_interface);
+    }
+
+    // wl_registry's global and global_remove events, in that order.
+    void onRegistryGlobal(void* data, void*, uint32_t name, const char* interface, uint32_t)
+    {
+        if (strcmp(interface, XDG_ACTIVATION_V1.name) == 0)
+        {
+            *static_cast<uint32_t*>(data) = name;
+        }
+    }
+
+    void onRegistryGlobalRemove(void*, void*, uint32_t) {}
+
+    void (*const REGISTRY_LISTENER[])(void) = {
+        reinterpret_cast<void (*)(void)>(&onRegistryGlobal),
+        reinterpret_cast<void (*)(void)>(&onRegistryGlobalRemove),
+    };
+
+    // Binds xdg_activation_v1 on a queue of its own, so that nothing of SDL's
+    // is dispatched here, and activates the surface with the token. False
+    // when there is no libwayland-client or no xdg_activation_v1.
+    bool activateWaylandSurface(void* display, void* surface, const char* token)
+    {
+        SDL_SharedObject* library = SDL_LoadObject("libwayland-client.so.0");
+        if (!library)
+        {
+            return false;
+        }
+
+        ALWaylandClient wl{};
+        void* queue = loadWaylandClient(library, wl) ? wl.display_create_queue(display) : nullptr;
+        void* wrapper = queue ? wl.proxy_create_wrapper(display) : nullptr;
+        void* registry = nullptr;
+        if (wrapper)
+        {
+            // The registry takes the wrapper's queue, and its events with it.
+            wl.proxy_set_queue(wrapper, queue);
+            registry = wl.proxy_marshal_flags(wrapper, DISPLAY_GET_REGISTRY, wl.registry_interface,
+                                              wl.proxy_get_version(wrapper), 0, nullptr);
+            wl.proxy_wrapper_destroy(wrapper);
+        }
+
+        bool activated = false;
+        if (registry)
+        {
+            uint32_t name = 0;
+            wl.proxy_add_listener(registry, const_cast<void (**)(void)>(REGISTRY_LISTENER), &name);
+            void* activation = nullptr;
+            if (wl.display_roundtrip_queue(display, queue) >= 0 && name != 0)
+            {
+                activation = wl.proxy_marshal_flags(registry, REGISTRY_BIND, &XDG_ACTIVATION_V1, 1, 0,
+                                                    name, XDG_ACTIVATION_V1.name, 1u, nullptr);
+            }
+            if (activation)
+            {
+                wl.proxy_marshal_flags(activation, ACTIVATION_ACTIVATE, nullptr, 1, 0, token, surface);
+                wl.proxy_marshal_flags(activation, ACTIVATION_DESTROY, nullptr, 1, MARSHAL_FLAG_DESTROY);
+                wl.display_flush(display);
+                activated = true;
+            }
+            wl.proxy_destroy(registry);
+        }
+        if (queue)
+        {
+            wl.event_queue_destroy(queue);
+        }
+
+        SDL_UnloadObject(library);
+        return activated;
+    }
+}
+#endif // LL_LINUX
+
+void LLWindowSDL::bringToFront(const std::string& activation_token)
+{
+#if LL_LINUX
+    if (mWindow && mServerProtocol == Wayland && !activation_token.empty())
+    {
+        SDL_PropertiesID props = SDL_GetWindowProperties(mWindow);
+        void* display = SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WAYLAND_DISPLAY_POINTER, nullptr);
+        void* surface = SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WAYLAND_SURFACE_POINTER, nullptr);
+        if (display && surface && activateWaylandSurface(display, surface, activation_token.c_str()))
+        {
+            LL_INFOS() << "bringToFront with an activation token" << LL_ENDL;
+            return;
+        }
+    }
+#endif
+    bringToFront();
+}
+
 //static
 std::vector<std::string> LLWindowSDL::getDynamicFallbackFontList()
 {
@@ -3811,6 +4275,74 @@ LLFontFallbackMatch LLWindowSDL::findFallbackFontForChar(llwchar wch)
     return result;
 }
 
+bool LLWindowSDL::placeLanguageTextInputArea()
+{
+    if (!mWindow || !mPreeditor)
+    {
+        return false;
+    }
+
+    // The preeditor's own caret and bounds — the line of text the caret is
+    // on, across the preedit, or at the caret itself when nothing is being
+    // composed — so the platform IME anchors its candidate window to the
+    // real text rather than a box guessed at the caret. Mirrors how the
+    // Win32 backend builds CANDIDATEFORM from the same query, in its own
+    // updateLanguageTextInputArea.
+    LLCoordGL caret_gl;
+    LLRect bounds_gl;
+    if (!mPreeditor->getPreeditLocation(-1, &caret_gl, &bounds_gl, nullptr))
+    {
+        return false;
+    }
+
+    // LLRect uses GL convention (Y up, mTop > mBottom). convertCoords
+    // flips Y so the GL-top-left maps to the window-top-left (the
+    // corner with the smaller window-Y), and likewise GL-bottom-right
+    // maps to window-bottom-right.
+    LLCoordWindow top_left;
+    LLCoordWindow bottom_right;
+    LLCoordWindow caret_win;
+    convertCoords(LLCoordGL(bounds_gl.mLeft, bounds_gl.mTop), &top_left);
+    convertCoords(LLCoordGL(bounds_gl.mRight, bounds_gl.mBottom), &bottom_right);
+    convertCoords(caret_gl, &caret_win);
+
+    // SDL_SetTextInputArea wants the rect and cursor offset in screen-coord
+    // (logical) units, not pixels — that's the unit the IME backends
+    // (ibus / fcitx / text-input-v3 / XIM / Cocoa) speak. LLCoordWindow on
+    // this backend is in PIXELS (see the coord-space contract above), so we
+    // divide by pixel density at the boundary.
+    const float density = SDL_GetWindowPixelDensity(mWindow);
+    const float div = density > 0.f ? density : 1.f;
+
+    SDL_Rect rect;
+    rect.x = llfloor(top_left.mX / div);
+    rect.y = llfloor(top_left.mY / div);
+    rect.w = llfloor((bottom_right.mX - top_left.mX) / div);
+    rect.h = llfloor((bottom_right.mY - top_left.mY) / div);
+
+    // A widget that's still being laid out can return a default-
+    // constructed LLRect (all zeros), which would anchor the IME popup to
+    // the window origin. No width is fine, though: it is what every
+    // preeditor gives for a bare caret, before anything is composed, which
+    // is just when the IME first needs to know.
+    if (rect.h <= 0 || rect.w < 0)
+    {
+        return false;
+    }
+
+    // The cursor is the caret's offset from rect.x. ibus, fcitx and XIM put
+    // the candidate window at rect.x + cursor, under the rect; text-input-v3
+    // clamps that to the rect's right edge; Cocoa takes the rect alone.
+    const int cursor_x = llfloor((caret_win.mX - top_left.mX) / div);
+    SDL_SetTextInputArea(mWindow, &rect, cursor_x);
+    return true;
+}
+
+void LLWindowSDL::updateLanguageTextInputArea()
+{
+    placeLanguageTextInputArea();
+}
+
 void LLWindowSDL::setLanguageTextInput(const LLCoordGL& position)
 {
     if (!mWindow)
@@ -3818,61 +4350,19 @@ void LLWindowSDL::setLanguageTextInput(const LLCoordGL& position)
         return;
     }
 
-    // SDL_SetTextInputArea wants the rect and cursor offset in screen-coord
-    // (logical) units, not pixels — that's the unit the IME backends
-    // (ibus / fcitx / IMM via SDL) speak. LLCoordWindow on this backend is
-    // in PIXELS (see the coord-space contract above), so we divide by
-    // pixel density at the boundary.
-    const float density = SDL_GetWindowPixelDensity(mWindow);
-    const float div = density > 0.f ? density : 1.f;
-
-    // If the active preeditor can give us its actual bounds + caret, feed
-    // those to SDL so the platform IME anchors its candidate-list popup to
-    // the real text input area (rather than a magic 500x16 box guessed at
-    // the caret). Mirrors how the Win32 backend builds CANDIDATEFORM from
-    // the same LLPreeditor::getPreeditLocation query — see
-    // llwindowwin32.cpp:4164.
-    if (mPreeditor)
+    // The active preeditor's caret and bounds where it can give them.
+    if (placeLanguageTextInputArea())
     {
-        LLCoordGL caret_gl;
-        LLRect bounds_gl;
-        if (mPreeditor->getPreeditLocation(-1, &caret_gl, &bounds_gl, nullptr))
-        {
-            // LLRect uses GL convention (Y up, mTop > mBottom). convertCoords
-            // flips Y so the GL-top-left maps to the window-top-left (the
-            // corner with the smaller window-Y), and likewise GL-bottom-right
-            // maps to window-bottom-right.
-            LLCoordWindow top_left;
-            LLCoordWindow bottom_right;
-            convertCoords(LLCoordGL(bounds_gl.mLeft, bounds_gl.mTop), &top_left);
-            convertCoords(LLCoordGL(bounds_gl.mRight, bounds_gl.mBottom), &bottom_right);
-
-            LLCoordWindow caret_win;
-            convertCoords(caret_gl, &caret_win);
-
-            SDL_Rect rect;
-            rect.x = llfloor(top_left.mX / div);
-            rect.y = llfloor(top_left.mY / div);
-            rect.w = llfloor((bottom_right.mX - top_left.mX) / div);
-            rect.h = llfloor((bottom_right.mY - top_left.mY) / div);
-
-            // A widget that's still being laid out can return a default-
-            // constructed LLRect (all zeros); SDL_SetTextInputArea with a
-            // zero-sized rect would anchor the IME popup to the window
-            // origin. Fall through to the caret-based fallback instead.
-            if (rect.w > 0 && rect.h > 0)
-            {
-                const int cursor_x = llfloor((caret_win.mX - top_left.mX) / div);
-                SDL_SetTextInputArea(mWindow, &rect, cursor_x);
-                return;
-            }
-        }
+        return;
     }
 
     // Fallback: no preeditor (or it couldn't compute its bounds). Use a
     // single-line guess centred at the supplied caret position, in line with
     // the pre-improvement behaviour — enough for the IME to place its popup
     // roughly under the cursor.
+    const float density = SDL_GetWindowPixelDensity(mWindow);
+    const float div = density > 0.f ? density : 1.f;
+
     LLCoordWindow caret_win;
     convertCoords(position, &caret_win);
 
@@ -3905,6 +4395,10 @@ void LLWindowSDL::allowLanguageTextInput(LLPreeditor* preeditor, bool b)
     if (b)
     {
         mPreeditor = preeditor;
+        // Tell the IME where the new owner's caret is now rather than at its
+        // next draw: the first key composed can open the candidate window
+        // before then.
+        placeLanguageTextInputArea();
         return;
     }
 

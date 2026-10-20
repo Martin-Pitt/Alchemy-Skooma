@@ -126,9 +126,9 @@ void ALScriptObjectCheck::begin(const Window::Listed::One& one)
 
 void ALScriptObjectCheck::checkRead(const Window::Listed::One& one, const Window::Read& read)
 {
-    // Read as a tab reads it: as the preprocessor makes it where it runs,
-    // or where the script went up in its envelope; as written otherwise.
-    if (!read.enveloped && !mWindow.preprocessing())
+    // Read as a tab reads it: as the preprocessor makes it where a save
+    // would run it (ALPreprocessor::wanted); as written otherwise.
+    if (ALPreprocessor::wanted(read.text, read.lua, mWindow.preprocessing()) == ALPreprocessor::Wanted::No)
     {
         ask(one, read, nullptr);
         return;
@@ -178,20 +178,8 @@ void ALScriptObjectCheck::ask(const Window::Listed::One& one, const Window::Read
     {
         if (expansion->apart.valid)
         {
-            request.text = std::make_shared<const std::string>(expansion->apart.script.text);
-            auto modules = std::make_shared<ALLuauService::Modules>();
-            for (const ALPreprocessor::Result::Piece& piece : expansion->apart.modules)
-            {
-                modules->modules.push_back({ piece.key, piece.text });
-            }
-            for (const ALPreprocessor::Result::Resolved& resolved : expansion->resolved)
-            {
-                if (resolved.require)
-                {
-                    modules->reaches.push_back({ resolved.from, resolved.name, resolved.path });
-                }
-            }
-            request.modules = std::move(modules);
+            request.text    = std::make_shared<const std::string>(expansion->apart.script.text);
+            request.modules = ALScriptStudioChecking::modulesOf(*expansion);
             request.bundle  = std::make_shared<const std::string>(expansion->text);
         }
         else

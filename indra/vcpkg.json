@@ -1,5 +1,5 @@
 {
-  "builtin-baseline": "e6f9e70a29a3e80a1fc510d8503304315447112f",
+  "builtin-baseline": "da2be01c400dd3ed102c1198752ef44c76aabe37",
   "dependencies": [
     "alchemy-branding",
     "alchemy-dictionaries",
@@ -14,8 +14,12 @@
     "boost-iostreams",
     "boost-process",
     "boost-program-options",
-    "boost-random",
-    "boost-regex",
+    {
+      "name": "boost-regex",
+      "features": [
+        "icu"
+      ]
+    },
     "boost-signals2",
     "boost-spirit",
     "boost-stacktrace",
@@ -76,7 +80,7 @@
     "minizip",
     {
       "name": "nvapi",
-      "platform": "windows & x64"
+      "platform": "windows"
     },
     {
       "name": "open-libndofdev",
@@ -100,6 +104,7 @@
         "freetype"
       ]
     },
+    "pocketfft",
     "pugixml",
     "recastnavigation",
     "re2",
@@ -143,7 +148,6 @@
     "simdjson",
     "simdutf",
     "slua",
-    "tailslide",
     "tinyexr",
     "tinygltf",
     "v-hacd",
@@ -154,7 +158,20 @@
     "xxhash",
     "zlib"
   ],
+  "overrides": [
+    {
+      "$comment": "HarfBuzz 14.5 is Unicode 18 and ICU 78 is Unicode 17; alfontshaping test 35 holds the two to one Unicode. Lift this with ICU's move to Unicode 18.",
+      "name": "harfbuzz",
+      "version": "14.4.0"
+    }
+  ],
   "features": {
+    "discord": {
+      "description": "Enable Discord rich presence through the Discord Social SDK",
+      "dependencies": [
+        "discord-social-sdk"
+      ]
+    },
     "dullahan-example": {
       "description": "Build with support for Dullahan OpenGL example application",
       "dependencies": [
@@ -181,6 +198,12 @@
       "description": "Build with support for the FAudio audio engine",
       "dependencies": [
         "faudio"
+      ]
+    },
+    "fmodstudio": {
+      "description": "Build with support for the FMOD Studio audio engine",
+      "dependencies": [
+        "fmodstudio"
       ]
     },
     "hunspell": {
@@ -228,7 +251,33 @@
         },
         {
           "name": "sentry-native",
-          "platform": "windows | linux"
+          "features": [
+            "backend",
+            "compression",
+            "transport"
+          ],
+          "platform": "linux"
+        },
+        {
+          "name": "sentry-native",
+          "features": [
+            "backend",
+            "compression",
+            "transport",
+            "wer"
+          ],
+          "platform": "windows"
+        }
+      ]
+    },
+    "tests": {
+      "description": "Build the unit tests, on Catch2",
+      "dependencies": [
+        {
+          "name": "catch2",
+          "features": [
+            "thread-safe-assertions"
+          ]
         }
       ]
     },
@@ -274,7 +323,7 @@
     "velopack": {
       "description": "Build with support for the Velopack install and update framework",
       "dependencies": [
-        "velopack"
+        "corrosion"
       ]
     },
     "webrtc": {

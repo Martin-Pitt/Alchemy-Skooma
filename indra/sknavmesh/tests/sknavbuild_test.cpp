@@ -26,7 +26,10 @@
 
 #include "../test/lltut.h"
 
+#include "../sknavairdistil.h"
 #include "../sknavbuild.h"
+#include "../sknavbuildstats.h"
+#include "../sknavlayout.h"
 
 #include "DetourNavMesh.h"
 #include "DetourNavMeshQuery.h"
@@ -48,6 +51,7 @@ namespace
         r->mAxes[0].set(1, 0, 0);
         r->mAxes[1].set(0, 1, 0);
         r->mAxes[2].set(0, 0, 1);
+        r->mSolid = true;
         r->mMin.set(x0, y0, z0);
         r->mMax.set(x1, y1, z1);
         return r;
@@ -59,6 +63,7 @@ namespace
         auto r = std::make_shared<Record>();
         r->mShape = Shape::TRIANGLES;
         r->mProvenance = provenance;
+        r->mSolid = provenance == Provenance::HULL || provenance == Provenance::BASE_HULL;
         r->mTriangles = std::make_shared<const std::vector<LLVector3>>(tris);
         r->mMin.set(1e9, 1e9, 1e9);
         r->mMax.set(-1e9, -1e9, -1e9);
@@ -102,6 +107,60 @@ namespace
         return t;
     }
 
+    // The flags of the air's gap over a floor at an SL point within tol of z, or 0 with none.
+    U8 airFlagsAt(const TileBuildResult& r, F32 x, F32 y, F32 z, F32 tol = 0.3f)
+    {
+        if (!r.mAir)
+        {
+            return 0;
+        }
+        const TileAir& air = *r.mAir;
+        const S32 leaf = findLeafByKey(air, static_cast<S32>(std::floor((x - air.mOrigin.mV[VX]) / air.mCell)),
+                                       static_cast<S32>(std::floor((y - air.mOrigin.mV[VY]) / air.mCell)));
+        for (U32 k = 0; leaf >= 0 && k < air.mLeaves[leaf].mGapCount; ++k)
+        {
+            const AirGap& g = air.mGaps[air.mLeaves[leaf].mFirstGap + k];
+            if (std::fabs(air.mOrigin.mV[VZ] + g.mFloor * air.mUnit - z) <= tol)
+            {
+                return g.mFlags;
+            }
+        }
+        return 0;
+    }
+
+    // Whether the air has a floor the air's slope stands on at an SL point, within tol of z;
+    // or with any_floor, a gap over any solid there.
+    bool topFloorAt(const TileBuildResult& r, F32 x, F32 y, F32 z, F32 tol = 0.3f, bool any_floor = false)
+    {
+        if (!r.mAir)
+        {
+            return false;
+        }
+        const TileAir& air = *r.mAir;
+        const S32 ix = static_cast<S32>(std::floor((x - air.mOrigin.mV[VX]) / air.mCell));
+        const S32 iy = static_cast<S32>(std::floor((y - air.mOrigin.mV[VY]) / air.mCell));
+        const S32 leaf = findLeafByKey(air, ix, iy);
+        if (leaf < 0)
+        {
+            return false;
+        }
+        const AirLeaf& l = air.mLeaves[leaf];
+        for (U32 k = 0; k < l.mGapCount; ++k)
+        {
+            const AirGap& g = air.mGaps[l.mFirstGap + k];
+            if ((any_floor || (g.mFlags & AirGap::TOP)) && std::fabs(air.mOrigin.mV[VZ] + g.mFloor * air.mUnit - z) <= tol)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool airFloorAt(const TileBuildResult& r, F32 x, F32 y, F32 z)
+    {
+        return topFloorAt(r, x, y, z, 0.3f, true);
+    }
+
     TileBuildInput tile(S32 tx, S32 ty)
     {
         TileBuildInput in;
@@ -110,10 +169,6 @@ namespace
         in.mZMin = -1.f;
         in.mZMax = 12.f;
         in.mCell = 0.25f; // coarser than the viewer, to keep the tests quick
-        in.mClasses[0] = true;
-        in.mClasses[1] = true;
-        in.mParams[1].mHeight = 0.5f;
-        in.mParams[1].mRadius = 0.f;
         return in;
     }
 
@@ -213,17 +268,19 @@ namespace tut
     }
 
     // Terrain alone is one floor; a block on it is an obstacle to walk round
-    // for the avatar class and a floor of its own for the weather class.
+    // for the avatar class and a floor of its own for it and the air.
     template<> template<>
     void sknavbuild_object::test<2>()
     {
         TileBuildInput in = tile(0, 0);
         in.mTerrain = flat(0.f);
         in.mRecords.push_back(box(14.f, 8.f, 0.f, 16.f, 24.f, 2.f));
+        in.mAir = true;
         const TileBuildResult r = buildTile(in);
         ensure_equals("built: " + r.mError, static_cast<int>(r.mStatus), static_cast<int>(TileBuildResult::SUCCESS));
         ensure("avatar polys", r.mPolys[0] > 0);
-        ensure("weather polys", r.mPolys[1] > 0);
+        ensure("the block's top is a floor to the air", topFloorAt(r, 15.f, 16.f, 2.f));
+        ensure("and AVATAR stands on it", (airFlagsAt(r, 15.f, 16.f, 2.f) & AirGap::AVATAR_FLOOR) != 0);
 
         Mesh m;
         m.add(r.mData[0]);
@@ -362,8 +419,8 @@ namespace tut
         ensure("roof at its height", std::fabs(snapped[1] - 7.f) < 0.3f);
     }
 
-    // A steep ramp, 80 degrees: the weather class walks it, the avatar class
-    // does not. The ledge filter must not cut it out of the weather mesh,
+    // A steep ramp, 80 degrees: the air's slope walks it, the avatar class
+    // does not. The ledge filter must not cut it out of the air's floors,
     // which its own rule would do at a climb of 0.75 m, where every slope
     // steeper than 72 degrees reads as a ledge.
     template<> template<>
@@ -376,15 +433,15 @@ namespace tut
         TileBuildInput in = tile(0, 0);
         in.mTerrain = flat(0.f);
         in.mParams[0].mSlope = 74.f;
-        in.mParams[1].mSlope = 89.f;
+        in.mTopParams.mSlope = 89.f;
         in.mRecords.push_back(soup(ramp, Provenance::EXACT));
+        in.mAir = true;
         const TileBuildResult r = buildTile(in);
         ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
 
         F32 snapped[3];
-        Mesh weather;
-        weather.add(r.mData[1]);
-        ensure("weather walks the steep ramp", weather.nearest(LLVector3(8.f, 5.75f, 10.f), snapped, 0.5f) != 0);
+        ensure("the air stands on the steep ramp", topFloorAt(r, 8.f, 5.6f, 10.f, 0.5f));
+        ensure("which is no floor of AVATAR's", !(airFlagsAt(r, 8.f, 5.6f, 10.f, 0.5f) & AirGap::AVATAR_FLOOR));
 
         Mesh avatar;
         avatar.add(r.mData[0]);
@@ -482,5 +539,736 @@ namespace tut
         const bool ok = m.path(LLVector3(8.f, 8.f, 2.f), LLVector3(8.f, 16.f, 2.5f), length, partial);
         ensure("path attempted", ok);
         ensure("riser keeps the treads split", partial);
+    }
+
+    // Nothing below the land is worth a mesh: the sim keeps every agent on or
+    // above it, so a box buried under the ground leaves no underground floor,
+    // and one sunk into it stands only on the part that pokes out.
+    template<> template<>
+    void sknavbuild_object::test<12>()
+    {
+        TileBuildInput in = tile(0, 0);
+        in.mZMin = -4.f;
+        in.mTerrain = flat(0.f);
+        // A buried roof 2.5 m down keeps 2 m of headroom to the land above it,
+        // so the headroom filter alone would leave it walkable; only the cull
+        // takes it out.
+        in.mRecords.push_back(box(14.f, 14.f, -4.f, 18.f, 18.f, -2.5f));
+        in.mRecords.push_back(box(20.f, 14.f, -3.5f, 24.f, 18.f, 2.5f));    // sunk, roof 2.5 m proud
+        const TileBuildResult r = buildTile(in);
+        ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
+        ensure("terrain floor", r.mPolys[0] > 0);
+
+        Mesh m;
+        m.add(r.mData[0]);
+        F32 snapped[3];
+        // Each query sits deep enough that the land's own polys are out of
+        // reach: only a span that survived underground could answer.
+        ensure("nothing under the buried box", m.nearest(LLVector3(16.f, 16.f, -3.f), snapped, 0.5f) == 0);
+        ensure("nothing under the proud box", m.nearest(LLVector3(22.f, 16.f, -3.f), snapped, 0.5f) == 0);
+        ensure("the proud roof is floor", m.nearest(LLVector3(22.f, 16.f, 2.5f), snapped, 0.5f) != 0);
+        ensure("roof at its height", std::fabs(snapped[1] - 2.5f) < 0.3f);
+        // The land itself is still walkable floor: a path crosses the tile
+        // round the proud box, where the buried one left no mark.
+        F32 length = 0.f;
+        bool partial = true;
+        ensure("path on the land: " + m.mWhy, m.path(LLVector3(4.f, 16.f, 0.f), LLVector3(28.f, 16.f, 0.f), length, partial));
+        ensure("path complete", !partial);
+        ensure("path went round", length > 24.f);
+    }
+
+    // A slab whose edge ends one step above the land the sim lets an agent
+    // walk up: the headroom filter takes the land out from under the slab's
+    // lip, and the erosion used to read that strip as a wall to keep its
+    // radius back from, carving the walkable ground either side of the seam
+    // away and leaving the step a hole. AVATAR walks the seam; both sides
+    // are floor to the air.
+    template<> template<>
+    void sknavbuild_object::test<13>()
+    {
+        TileBuildInput in = tile(0, 0);
+        in.mTerrain = flat(0.25f);
+        // The viewer's own numbers at its cell, coarse: height 1.25 m erodes
+        // with a radius of 2 cells here, and the step is one cell.
+        in.mParams[0] = { 1.25f, 0.3f, 0.75f, 74.f };
+        in.mTopParams = { 0.5f, 0.f, 0.75f, 89.f };
+        // The slab spans the tile so the seam can only be crossed, never
+        // round: land to the north, its top a step up to the south.
+        in.mRecords.push_back(box(0.f, -2.f, -0.5f, 36.f, 16.05f, 0.5f));
+        in.mAir = true;
+        const TileBuildResult r = buildTile(in);
+        ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
+        ensure("avatar polys", r.mPolys[0] > 0);
+
+        Mesh m;
+        m.add(r.mData[0]);
+        F32 length = 0.f;
+        bool partial = true;
+        ensure("path found: " + m.mWhy, m.path(LLVector3(16.f, 20.f, 0.25f), LLVector3(16.f, 12.f, 0.5f), length, partial));
+        ensure("the seam is walked", !partial);
+        ensure("the path reaches the top", length > 7.f);
+
+        for (F32 x = 4.f; x < 28.f; x += 4.f)
+        {
+            ensure(llformat("the air's floor either side of the seam at x %.0f", x),
+                   topFloorAt(r, x, 16.4f, 0.25f) && topFloorAt(r, x, 15.7f, 0.5f));
+        }
+    }
+
+    // The seam as the region had it: land rising over a wedge of ground whose
+    // edge ends a step up, with a buried slab under the east side. Nothing
+    // along the seam may lose its floor.
+    template<> template<>
+    void sknavbuild_object::test<14>()
+    {
+        TileBuildInput in = tile(0, 0);
+        in.mCell = 0.125f;
+        in.mZMin = 0.f;
+        in.mZMax = 12.f;
+        in.mParams[0] = { 1.25f, 0.3f, 0.75f, 74.f };
+        in.mTopParams = { 0.5f, 0.f, 0.75f, 89.f };
+        // The land: 5.375 m at the seam (y 6.2), rising a metre by y 8.2.
+        TerrainWindow t;
+        t.mOrigin.set(-2.f, -2.f, 0.f);
+        t.mSpacing = 1.f;
+        t.mWidth = 36;
+        t.mHeight = 36;
+        t.mZ.assign(36 * 36, 0.f);
+        for (S32 j = 0; j < 36; ++j)
+        {
+            for (S32 i = 0; i < 36; ++i)
+            {
+                const F32 y = -2.f + j * 1.f;
+                t.mZ[j * 36 + i] = y <= 6.2f ? 5.375f : llmin(5.375f + (y - 6.2f) * 0.5f, 6.375f);
+            }
+        }
+        t.mWater = -10.f;
+        in.mTerrain = t;
+        // The box under the east side, its top under the land, edge at y 6.2.
+        in.mRecords.push_back(box(5.f, 6.25f, 2.07f, 35.f, 50.f, 5.195f));
+        // The ground: a wedge plate whose top runs 5.5 m at the seam down to
+        // 5.25 m eight metres south, over a buried underside.
+        std::vector<LLVector3> ground;
+        const F32 x0 = -2.f, x1 = 22.f, y0 = -2.f, y1 = 6.3f;
+        const F32 zN = 5.5f, zS = 5.25f, zB = 4.6f;
+        const LLVector3 n00(x0, y1, zN), n10(x1, y1, zN), s00(x0, y0, zS), s10(x1, y0, zS);
+        const LLVector3 b00(x0, y0, zB), b10(x1, y0, zB), bN0(x0, y1, zB), bN1(x1, y1, zB);
+        const std::vector<LLVector3> quads = {
+            n00, n10, s10, n00, s10, s00,     // top
+            b00, b10, s10, b00, s10, s00,     // bottom
+            s00, s10, b10, s00, b10, b00,     // south edge
+            n00, n10, bN1, n00, bN1, bN0,     // north edge (the lip)
+            n00, s00, b00, n00, b00, bN0,     // west edge
+            n10, s10, b10, n10, b10, bN1,     // east edge
+        };
+        ground.insert(ground.end(), quads.begin(), quads.end());
+        in.mRecords.push_back(soup(ground, Provenance::HULL));
+        const TileBuildResult r = buildTile(in);
+        ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
+        ensure("avatar polys", r.mPolys[0] > 0);
+
+        Mesh m;
+        m.add(r.mData[0]);
+        S32 holes = 0;
+        std::string profile;
+        for (F32 y = 3.f; y <= 9.01f; y += 0.25f)
+        {
+            F32 snapped[3];
+            const dtPolyRef ref = m.nearest(LLVector3(10.f, y, 5.4f), snapped, 0.02f);
+            if (!ref)
+            {
+                holes++;
+            }
+            profile += (ref ? std::string(" ") : std::string(" HOLE ")) + llformat("%.2f", y);
+        }
+        ensure("no hole along the seam:" + profile, holes == 0);
+    }
+
+    // A kerb narrower than the avatar and lower than its climb is stepped
+    // over, so the floor is flat across it and a metre either side; a dais
+    // wide enough to stand on keeps its height. The detail vertices Recast
+    // adds sit at the polygon corners' level, not a cell above them.
+    template<> template<>
+    void sknavbuild_object::test<15>()
+    {
+        TileBuildInput in = tile(0, 0);
+        in.mCell = 0.125f; // the viewer's cell: the sampling this is about
+        in.mTerrain = flat(0.f);
+        in.mRecords.push_back(box(10.f, 4.f, -0.5f, 10.3f, 28.f, 0.5f));
+        in.mRecords.push_back(box(16.f, 4.f, -0.5f, 18.f, 28.f, 0.5f));
+        const TileBuildResult r = buildTile(in);
+        ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
+        Mesh m;
+        m.add(r.mData[0]);
+        // The floor's level is its polygon's corners: on flat ground the
+        // detail surface has no business leaving them.
+        F32 ref[3];
+        const dtPolyRef open = m.nearest(LLVector3(5.f, 16.f, 0.f), ref, 0.05f);
+        ensure("open floor", open != 0);
+        const dtMeshTile* tile = nullptr;
+        const dtPoly* poly = nullptr;
+        m.mNav->getTileAndPolyByRefUnsafe(open, &tile, &poly);
+        F32 floor = 1e9f;
+        for (int v = 0; v < poly->vertCount; ++v)
+        {
+            floor = std::min(floor, tile->verts[poly->verts[v] * 3 + 1]);
+        }
+        F32 worst = 0.f;
+        std::string where;
+        for (F32 y = 6.f; y <= 26.01f; y += 0.25f)
+        {
+            for (F32 x = 7.f; x <= 13.31f; x += 0.125f)
+            {
+                F32 snapped[3];
+                const dtPolyRef ref = m.nearest(LLVector3(x, y, 0.f), snapped, 0.05f);
+                ensure("floor under " + llformat("%.2f %.2f", x, y), ref != 0);
+                if (std::fabs(snapped[1] - floor) > worst)
+                {
+                    worst = std::fabs(snapped[1] - floor);
+                    where = llformat("%.2f %.2f -> %.3f (floor %.3f)", x, y, snapped[1], floor);
+                }
+            }
+        }
+        ensure("floor is flat across the kerb: " + where, worst < 0.1f);
+        // Up to the dais the floor stays floor: the detail vertices that
+        // tessellate the edge shared with the dais polygon sit at the floor's
+        // corner height, not a cell above it. The last sample spacing before
+        // the dais is its ramp, which Recast owes to sharing corners.
+        for (F32 x = 13.f; x <= 15.21f; x += 0.125f)
+        {
+            F32 snapped[3];
+            ensure("floor under " + llformat("%.2f", x), m.nearest(LLVector3(x, 16.f, 0.f), snapped, 0.05f) != 0);
+            ensure("floor level " + llformat("%.2f -> %.3f (floor %.3f)", x, snapped[1], floor), std::fabs(snapped[1] - floor) < 0.1f);
+        }
+        F32 top[3];
+        ensure("dais is floor", m.nearest(LLVector3(17.f, 16.f, 0.5f), top, 0.05f) != 0);
+        ensure("dais keeps its height", std::fabs(top[1] - floor - 0.5f) < 0.1f);
+    }
+
+    // A box sunk into the ground is solid down to its bottom: the terrain it
+    // swallows is not a floor inside it. Its roof is, and so is the ground
+    // around it.
+    template<> template<>
+    void sknavbuild_object::test<16>()
+    {
+        TileBuildInput in = tile(0, 0);
+        in.mTerrain = flat(0.f);
+        in.mRecords.push_back(box(8.f, 8.f, -0.5f, 24.f, 24.f, 3.f));
+        const TileBuildResult r = buildTile(in);
+        ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
+
+        Mesh m;
+        m.add(r.mData[0]);
+        F32 snapped[3];
+        ensure("no floor on the terrain inside the box", m.nearest(LLVector3(16.f, 16.f, 0.f), snapped, 0.5f) == 0);
+        ensure("the box roof is floor", m.nearest(LLVector3(16.f, 16.f, 3.f), snapped, 0.5f) != 0);
+        ensure("roof at its height", std::fabs(snapped[1] - 3.f) < 0.3f);
+        ensure("ground beside the box is floor", m.nearest(LLVector3(4.f, 4.f, 0.f), snapped, 0.5f) != 0);
+        ensure("ground at its height", std::fabs(snapped[1]) < 0.3f);
+    }
+
+    // A solid with a tunnel through it, as a hollow prim on its side or a
+    // hull-less physics prim arrives: one closed surface. The fill takes the
+    // column's crossings in pairs, so the tunnel floor is a floor under a
+    // roof and the solid either side of it is filled to the top.
+    template<> template<>
+    void sknavbuild_object::test<17>()
+    {
+        // Outer 8..24 x 8..24, z -0.5..4; tunnel along y at x 14..18, z 0.5..3.
+        std::vector<LLVector3> tris;
+        auto q = [&](F32 ax, F32 ay, F32 az, F32 bx, F32 by, F32 bz, F32 cx, F32 cy, F32 cz, F32 dx, F32 dy, F32 dz) {
+            const LLVector3 a(ax, ay, az), b(bx, by, bz), c(cx, cy, cz), d(dx, dy, dz);
+            tris.insert(tris.end(), { a, b, c, a, c, d });
+        };
+        q(8, 8, 4, 24, 8, 4, 24, 24, 4, 8, 24, 4);                  // top
+        q(8, 8, -0.5f, 8, 24, -0.5f, 24, 24, -0.5f, 24, 8, -0.5f);  // bottom
+        q(8, 8, -0.5f, 8, 24, -0.5f, 8, 24, 4, 8, 8, 4);            // -x side
+        q(24, 8, -0.5f, 24, 8, 4, 24, 24, 4, 24, 24, -0.5f);        // +x side
+        for (F32 y : { 8.f, 24.f })                                 // the ends, minus the tunnel mouth
+        {
+            q(8, y, -0.5f, 14, y, -0.5f, 14, y, 4, 8, y, 4);        // left of the mouth
+            q(18, y, -0.5f, 24, y, -0.5f, 24, y, 4, 18, y, 4);      // right of it
+            q(14, y, -0.5f, 18, y, -0.5f, 18, y, 0.5f, 14, y, 0.5f); // below it
+            q(14, y, 3, 18, y, 3, 18, y, 4, 14, y, 4);              // above it
+        }
+        q(14, 8, 0.5f, 18, 8, 0.5f, 18, 24, 0.5f, 14, 24, 0.5f);    // tunnel floor
+        q(14, 8, 3, 14, 24, 3, 18, 24, 3, 18, 8, 3);                // tunnel ceiling
+        q(14, 8, 0.5f, 14, 24, 0.5f, 14, 24, 3, 14, 8, 3);          // tunnel walls
+        q(18, 8, 0.5f, 18, 8, 3, 18, 24, 3, 18, 24, 0.5f);
+
+        TileBuildInput in = tile(0, 0);
+        in.mTerrain = flat(0.f);
+        in.mRecords.push_back(hull(tris));
+        const TileBuildResult r = buildTile(in);
+        ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
+
+        Mesh m;
+        m.add(r.mData[0]);
+        F32 snapped[3];
+        ensure("tunnel floor is floor", m.nearest(LLVector3(16.f, 16.f, 0.5f), snapped, 0.5f) != 0);
+        ensure("at the tunnel floor's height", std::fabs(snapped[1] - 0.5f) < 0.3f);
+        ensure("no floor in the solid beside the tunnel", m.nearest(LLVector3(11.f, 16.f, 0.f), snapped, 0.5f) == 0);
+        ensure("the roof is floor", m.nearest(LLVector3(11.f, 16.f, 4.f), snapped, 0.5f) != 0);
+        ensure("roof at its height", std::fabs(snapped[1] - 4.f) < 0.3f);
+    }
+
+    // The slope partition splits a flight from its landing: no polygon runs
+    // from the steps onto the level top, so the line where the flight tops
+    // out is a polygon edge rather than something a fan of slivers crosses.
+    template<> template<>
+    void sknavbuild_object::test<18>()
+    {
+        TileBuildInput in = tile(0, 0);
+        in.mTerrain = flat(0.f);
+        in.mPartition = Partition::SLOPE;
+        // overlapping prims, 0.25 m steps on 0.4 m treads up the y axis; the
+        // twelfth reaches on to y = 20 and is the landing
+        for (S32 k = 0; k < 12; ++k)
+        {
+            in.mRecords.push_back(box(12.f, 8.f + k * 0.4f, 0.f, 15.f, 20.f, (k + 1) * 0.25f));
+        }
+        const F32 top = 8.f + 11 * 0.4f;
+        const TileBuildResult r = buildTile(in);
+        ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
+
+        Mesh m;
+        m.add(r.mData[0]);
+        const dtMeshTile* dt = static_cast<const dtNavMesh*>(m.mNav)->getTileAt(0, 0, 0);
+        ensure("tile", dt && dt->header);
+        S32 on_flight = 0, on_landing = 0;
+        for (S32 p = 0; p < dt->header->polyCount; ++p)
+        {
+            const dtPoly& poly = dt->polys[p];
+            F32 ymin = 1e9f, ymax = -1e9f, zmin = 1e9f, xmid = 0.f;
+            for (S32 v = 0; v < poly.vertCount; ++v)
+            {
+                const LLVector3 sl = fromRecast(&dt->verts[poly.verts[v] * 3]);
+                ymin = llmin(ymin, sl.mV[VY]);
+                ymax = llmax(ymax, sl.mV[VY]);
+                zmin = llmin(zmin, sl.mV[VZ]);
+                xmid += sl.mV[VX] / poly.vertCount;
+            }
+            if (xmid < 12.f || xmid > 15.f || zmin < 0.2f)
+            {
+                continue; // the ground around the stair
+            }
+            ensure(llformat("poly %d spans the top of the flight: y %.2f..%.2f", p, ymin, ymax),
+                   ymax <= top + 0.5f || ymin >= top - 0.5f);
+            ++(ymax <= top + 0.5f ? on_flight : on_landing);
+        }
+        ensure("polys on the flight", on_flight > 0);
+        ensure("polys on the landing", on_landing > 0);
+    }
+
+    // A single step within climb is a floor edge, not a slope: the slope
+    // partition gives a curb no band of its own, so the floor either side of
+    // it breaks into no more polygons than the plain watershed makes.
+    template<> template<>
+    void sknavbuild_object::test<19>()
+    {
+        S32 polys[2] = { 0, 0 };
+        for (S32 k = 0; k < 2; ++k)
+        {
+            TileBuildInput in = tile(0, 0);
+            in.mTerrain = flat(0.f);
+            in.mPartition = k ? Partition::SLOPE : Partition::WATERSHED;
+            in.mRecords.push_back(box(4.f, 4.f, 0.f, 28.f, 28.f, 0.5f));
+            in.mRecords.push_back(box(4.f, 16.f, 0.5f, 28.f, 28.f, 0.86f)); // a 0.36 m curb across the floor
+            const TileBuildResult r = buildTile(in);
+            ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
+            polys[k] = r.mPolys[0];
+        }
+        ensure(llformat("curb adds polygons: watershed %d, slope %d", polys[0], polys[1]), polys[1] <= polys[0]);
+    }
+
+    // A smooth surface that turns as it climbs - an arched bridge, a curved
+    // ramp - is one slope to the partition however far it turns in all: only
+    // a real change of slope is an edge, so it adds a few polygons for the
+    // crown and the ends, not a boundary at every compass step.
+    template<> template<>
+    void sknavbuild_object::test<20>()
+    {
+        std::vector<LLVector3> tris;
+        auto q = [&](const LLVector3& a, const LLVector3& b, const LLVector3& c, const LLVector3& d) {
+            tris.insert(tris.end(), { a, b, c, a, c, d });
+        };
+        const S32 n = 32;
+        for (S32 k = 0; k < n; ++k)
+        {
+            // the bridge: 4 m wide, 16 m long, 2 m high at the crown
+            const F32 y0 = 2.f + 16.f * k / n, y1 = 2.f + 16.f * (k + 1) / n;
+            const F32 z0 = 2.f * std::sin(F_PI * k / n), z1 = 2.f * std::sin(F_PI * (k + 1) / n);
+            q(LLVector3(4.f, y0, z0), LLVector3(8.f, y0, z0), LLVector3(8.f, y1, z1), LLVector3(4.f, y1, z1));
+            // the ramp: a quarter turn round (22, 10), 6 to 9 m out, 3 m of climb
+            const F32 a0 = F_PI_BY_TWO * k / n, a1 = F_PI_BY_TWO * (k + 1) / n;
+            const F32 h0 = 3.f * k / n, h1 = 3.f * (k + 1) / n;
+            const LLVector3 c(22.f, 10.f, 0.f);
+            q(c + LLVector3(6.f * std::cos(a0), 6.f * std::sin(a0), h0), c + LLVector3(9.f * std::cos(a0), 9.f * std::sin(a0), h0),
+              c + LLVector3(9.f * std::cos(a1), 9.f * std::sin(a1), h1), c + LLVector3(6.f * std::cos(a1), 6.f * std::sin(a1), h1));
+        }
+        S32 polys[2] = { 0, 0 };
+        for (S32 k = 0; k < 2; ++k)
+        {
+            TileBuildInput in = tile(0, 0);
+            in.mTerrain = flat(-5.f);
+            in.mCell = 0.125f; // the viewer's: coarser cells quantise a gentle slope into noise
+            in.mPartition = k ? Partition::SLOPE : Partition::WATERSHED;
+            in.mRecords.push_back(soup(tris, Provenance::EXACT));
+            const TileBuildResult r = buildTile(in);
+            ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
+            polys[k] = r.mPolys[0];
+        }
+        ensure(llformat("smooth slopes split: watershed %d, slope %d polygons", polys[0], polys[1]), polys[1] <= polys[0] + 2);
+    }
+
+    // Tiles build alone, so every pass that reads a span's neighbours must see
+    // the same cells from both sides of a seam. A narrow raised strip along
+    // the seam used to be flattened by one tile and kept by the other, whose
+    // narrow-step walk ran into the eroded edge of its padding, and the
+    // corner the four tiles share came out three cells apart.
+    template<> template<>
+    void sknavbuild_object::test<21>()
+    {
+        for (S32 part = 0; part < 2; ++part)
+        {
+            std::vector<std::pair<LLVector3, S32>> seam; // border vertices, with their tile
+            for (S32 tx = 0; tx < 2; ++tx)
+            {
+                for (S32 ty = 0; ty < 2; ++ty)
+                {
+                    TileBuildInput in = tile(tx, ty);
+                    in.mCell = 0.125f;
+                    in.mPartition = part ? Partition::SLOPE : Partition::WATERSHED;
+                    in.mTerrain = flat(-5.f, 80, -4.f, -4.f);
+                    in.mRecords.push_back(box(20.f, 20.f, 2.5f, 44.f, 44.f, 3.f));
+                    in.mRecords.push_back(box(32.f, 26.f, 3.f, 32.5f, 38.f, 3.4f)); // the strip, along the seam
+                    in.mRecords.push_back(box(33.5f, 30.f, 3.f, 34.5f, 31.f, 5.f));
+                    in.mRecords.push_back(box(29.5f, 33.f, 3.f, 30.5f, 34.f, 5.f));
+                    const TileBuildResult r = buildTile(in);
+                    ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
+                    Mesh m;
+                    m.add(r.mData[0]);
+                    const dtMeshTile* dt = static_cast<const dtNavMesh*>(m.mNav)->getTileAt(ty, tx, 0);
+                    ensure("tile", dt && dt->header);
+                    for (S32 v = 0; v < dt->header->vertCount; ++v)
+                    {
+                        const LLVector3 sl = fromRecast(&dt->verts[v * 3]);
+                        if (std::fabs(sl.mV[VX] - 32.f) < 0.01f || std::fabs(sl.mV[VY] - 32.f) < 0.01f)
+                        {
+                            seam.emplace_back(sl, tx + ty * 2);
+                        }
+                    }
+                }
+            }
+            S32 shared = 0;
+            for (size_t a = 0; a < seam.size(); ++a)
+            {
+                for (size_t b = a + 1; b < seam.size(); ++b)
+                {
+                    const LLVector3& p = seam[a].first;
+                    const LLVector3& q = seam[b].first;
+                    if (seam[a].second == seam[b].second || std::fabs(p.mV[VX] - q.mV[VX]) > 0.01f
+                        || std::fabs(p.mV[VY] - q.mV[VY]) > 0.01f || std::fabs(p.mV[VZ] - q.mV[VZ]) > 1.f)
+                    {
+                        continue;
+                    }
+                    ++shared;
+                    ensure(llformat("partition %d, seam vertex (%.2f, %.2f): tile %d at %.3f, tile %d at %.3f", part,
+                                    p.mV[VX], p.mV[VY], seam[a].second, p.mV[VZ], seam[b].second, q.mV[VZ]),
+                           std::fabs(p.mV[VZ] - q.mV[VZ]) < 0.01f);
+                }
+            }
+            ensure("tiles share seam vertices", shared > 0);
+        }
+    }
+
+    // A flat floor on a cell boundary at a real SL height, where a float only
+    // resolves about a quarter of a millimetre and a rotated mesh leaves its
+    // heights a step or so either side. Each tile clips the triangle at its
+    // own cell edges, so unsnapped the floor rounded up a cell in one tile
+    // and not the next.
+    template<> template<>
+    void sknavbuild_object::test<22>()
+    {
+        const F32 z = 2649.f;
+        const F32 up = std::nextafter(z, 3000.f), down = std::nextafter(z, 0.f);
+        const std::vector<LLVector3> floor = {
+            LLVector3(20.f, 20.f, up), LLVector3(44.f, 20.f, down), LLVector3(44.f, 44.f, up),
+            LLVector3(20.f, 20.f, down), LLVector3(44.f, 44.f, up), LLVector3(20.f, 44.f, up),
+        };
+        for (S32 solid = 0; solid < 2; ++solid)
+        {
+        F32 lo = 1e9f, hi = -1e9f;
+        for (S32 tx = 0; tx < 2; ++tx)
+        {
+            for (S32 ty = 0; ty < 2; ++ty)
+            {
+                TileBuildInput in = tile(tx, ty);
+                in.mCell = 0.125f;
+                in.mZMin = 2640.f + 3.375f * (tx + ty); // tiles start their heightfields at different heights
+                in.mZMax = 2660.f;
+                // the same floor as a surface, and as the top of a solid body, whose
+                // inside is filled by our own code rather than Recast's rasteriser
+                in.mRecords.push_back(solid ? box(20.f, 20.f, z - 0.75f, 44.f, 44.f, z) : soup(floor, Provenance::EXACT));
+                const TileBuildResult r = buildTile(in);
+                ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
+                Mesh m;
+                m.add(r.mData[0]);
+                const dtMeshTile* dt = static_cast<const dtNavMesh*>(m.mNav)->getTileAt(ty, tx, 0);
+                ensure("tile", dt && dt->header);
+                for (S32 v = 0; v < dt->header->vertCount; ++v)
+                {
+                    const F32 h = fromRecast(&dt->verts[v * 3]).mV[VZ];
+                    lo = llmin(lo, h);
+                    hi = llmax(hi, h);
+                }
+            }
+        }
+        ensure(llformat("%s: the floor's vertices span %.4f..%.4f", solid ? "solid" : "surface", lo, hi), hi - lo < 0.01f);
+        }
+    }
+    // A record AVATAR leaves out is not there for it, neither as a floor nor
+    // as an obstacle, and the air still stands on it. The solid after it in
+    // the soup is still filled.
+    template<> template<>
+    void sknavbuild_object::test<23>()
+    {
+        for (S32 exclude = 0; exclude < 2; ++exclude)
+        {
+            TileBuildInput in = tile(0, 0);
+            in.mTerrain = flat(0.f);
+            auto platform = std::make_shared<Record>(*box(10.f, 10.f, 0.f, 20.f, 20.f, 2.f));
+            platform->mExclude = exclude ? EXCLUDE_AVATAR : 0;
+            in.mRecords.push_back(platform);
+            // A hull floating clear of the ground: walkable from inside too
+            // unless its solid range is filled, so a range renumbered wrong shows.
+            std::vector<LLVector3> body;
+            emitRecord(*box(22.f, 22.f, 1.f, 28.f, 28.f, 5.f), LLVector3d(), body);
+            in.mRecords.push_back(hull(body));
+            in.mAir = true;
+            const TileBuildResult r = buildTile(in);
+            ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
+            Mesh m;
+            m.add(r.mData[0]);
+            F32 at[3];
+            ensure("a floor at the platform", m.nearest(LLVector3(15.f, 15.f, 1.f), at) != 0);
+            ensure(llformat("exclude %d: floor at %.2f", exclude, at[1]), std::fabs(at[1] - (exclude ? 0.f : 2.f)) < 0.4f);
+            ensure("the hull's top", m.nearest(LLVector3(25.f, 25.f, 5.f), at) != 0 && std::fabs(at[1] - 5.f) < 0.4f);
+            // The avatar is too tall for the gap under it, so a floor low
+            // in its plan would be one inside it. Nearest may snap to the
+            // ground outside, whose polygon's bounds reach the query.
+            const bool low = m.nearest(LLVector3(25.f, 25.f, 2.f), at) != 0 && at[1] < 4.f;
+            const LLVector3 found = fromRecast(at);
+            const bool inside = found.mV[VX] > 22.1f && found.mV[VX] < 27.9f && found.mV[VY] > 22.1f && found.mV[VY] < 27.9f;
+            ensure(llformat("exclude %d: a floor inside the hull at z %.2f", exclude, found.mV[VZ]), !(low && inside));
+            ensure(llformat("exclude %d: the air stands on the platform", exclude), topFloorAt(r, 15.f, 15.f, 2.f));
+            ensure(llformat("exclude %d: and on the hull's top", exclude), topFloorAt(r, 25.f, 25.f, 5.f));
+            ensure(llformat("exclude %d: but not inside the hull", exclude), !topFloorAt(r, 25.f, 25.f, 1.f, 0.6f));
+        }
+    }
+    // A record AVATAR leaves out still has faces: they come off the raster.
+    template<> template<>
+    void sknavbuild_object::test<24>()
+    {
+        TileBuildInput in = tile(0, 0);
+        in.mWallFaces = true;
+        in.mTerrain = flat(0.f);
+        in.mRecords.push_back(box(10.f, 10.f, 0.f, 20.f, 20.f, 4.f));
+        auto leaf = std::make_shared<Record>(*box(24.f, 10.f, 0.f, 24.2f, 12.f, 3.f));
+        leaf->mExclude = EXCLUDE_AVATAR;
+        in.mRecords.push_back(leaf);
+        const TileBuildResult r = buildTile(in);
+        ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
+        ensure("the block's faces", !r.mFaces.empty());
+    }
+
+    // A surface only the air's slope walks shares AVATAR's raster without
+    // changing AVATAR: where its top merges with a floor's and stands higher,
+    // the floor's code still wins, as the null it used to be did.
+    template<> template<>
+    void sknavbuild_object::test<25>()
+    {
+        set_test_name("a TOP-only surface merged over a floor leaves AVATAR as it was");
+        const auto build = [](F32 top_slope) {
+            TileBuildInput in = tile(0, 0);
+            in.mTerrain = flat(0.f);
+            in.mPartitionSlope = 89.f;
+            in.mParams[0].mSlope = 74.f;
+            in.mTopParams.mSlope = top_slope;
+            in.mRecords.push_back(box(10.f, 10.f, 0.f, 20.f, 20.f, 1.f));
+            // An 80 degree face rising half a metre off the platform, inside the merge threshold.
+            std::vector<LLVector3> face;
+            for (F32 x = 11.f; x < 19.f; x += 1.f)
+            {
+                const LLVector3 a(x, 10.5f, 1.f), b(x + 0.088f, 10.5f, 1.5f), c(x + 0.088f, 19.5f, 1.5f), d(x, 19.5f, 1.f);
+                face.insert(face.end(), { a, b, c, a, c, d });
+            }
+            in.mRecords.push_back(soup(face, Provenance::EXACT));
+            return buildTile(in);
+        };
+        const TileBuildResult with_top = build(89.f), without = build(74.f);
+        ensure("built", with_top.mStatus == TileBuildResult::SUCCESS && without.mStatus == TileBuildResult::SUCCESS);
+        ensure_equals("AVATAR's polys", with_top.mPolys[0], without.mPolys[0]);
+        ensure("AVATAR's tile, byte for byte", with_top.mData[0] == without.mData[0]);
+    }
+
+    // The raster is wider than AVATAR's grid when it keeps air, and Recast's
+    // ledge filter reads a heightfield's edge as a drop: AVATAR's view stops
+    // at its own edge, so a floor running across it filters as it did.
+    template<> template<>
+    void sknavbuild_object::test<26>()
+    {
+        set_test_name("a floor across AVATAR's grid edge filters as in AVATAR's own grid");
+        const auto build = [](bool air, TileBuildStats& stats) {
+            TileBuildInput in = tile(0, 0);
+            in.mTerrain = flat(0.f, 45, -6.f, -6.f);
+            in.mAir = air;
+            in.mFaceOffsets = false;    // read off the air, they would part the two builds by design
+            // A deck reaching 3 m past the tile: beyond AVATAR's border, inside the air's pad.
+            in.mRecords.push_back(box(-3.f, -3.f, 1.5f, 35.f, 35.f, 2.f));
+            in.mRecords.push_back(box(12.f, 12.f, 2.f, 14.f, 14.f, 4.f));
+            return buildTile(in, &stats);
+        };
+        TileBuildStats wide, own;
+        const TileBuildResult a = build(true, wide), b = build(false, own);
+        ensure("built", a.mStatus == TileBuildResult::SUCCESS && b.mStatus == TileBuildResult::SUCCESS);
+        ensure("the raster is wider with air", wide.mClass[0].mHfBytes > own.mClass[0].mHfBytes);
+        ensure("AVATAR's filtered spans", wide.mClass[0].mHfAreaHash == own.mClass[0].mHfAreaHash);
+        ensure("AVATAR's compact heightfield", wide.mClass[0].mChfHash == own.mClass[0].mChfHash);
+        ensure("AVATAR's tile, byte for byte", a.mData[0] == b.mData[0]);
+    }
+
+    // A crevice the air's slope bridges and AVATAR's does not: the bridge is
+    // laid in the air's raster only, and AVATAR builds as if it never was.
+    template<> template<>
+    void sknavbuild_object::test<27>()
+    {
+        set_test_name("a bridge only the air lays stays out of AVATAR's view");
+        const auto build = [](F32 top_slope, TileBuildStats& stats) {
+            TileBuildInput in = tile(0, 0);
+            in.mTerrain = flat(0.f);
+            in.mAir = true;
+            in.mPartitionSlope = 89.f;
+            in.mParams[0].mSlope = 74.f;
+            in.mTopParams.mSlope = top_slope;
+            in.mRecords.push_back(box(8.f, 10.f, 0.f, 11.9f, 20.f, 1.f));
+            // One column of crevice, then an 80 degree face whose first column tops out half a metre up.
+            const LLVector3 a(12.3f, 10.f, 1.f), b(12.388f, 10.f, 1.5f), c(12.388f, 20.f, 1.5f), d(12.3f, 20.f, 1.f);
+            in.mRecords.push_back(soup({ a, b, c, a, c, d }, Provenance::EXACT));
+            return buildTile(in, &stats);
+        };
+        TileBuildStats with_stats, without_stats;
+        const TileBuildResult with_top = build(89.f, with_stats), without = build(74.f, without_stats);
+        ensure("built", with_top.mStatus == TileBuildResult::SUCCESS && without.mStatus == TileBuildResult::SUCCESS);
+        ensure("the air bridges the crevice", with_stats.mTopOnlyBridges > 0 && without_stats.mTopOnlyBridges == 0);
+        ensure("AVATAR's columns of its own", with_stats.mOwnColumns > 0);
+        ensure("AVATAR's compact heightfield", with_stats.mClass[0].mChfHash == without_stats.mClass[0].mChfHash);
+        ensure("AVATAR's tile, byte for byte", with_top.mData[0] == without.mData[0]);
+    }
+
+    // A door leaf AVATAR leaves out is rasterised once with everything else;
+    // AVATAR reads a window round it rasterised without it, and builds what
+    // it would with no leaf there at all: flush on the floor, against a jamb,
+    // under a lintel, first or last in the soup, or with nothing else round it.
+    template<> template<>
+    void sknavbuild_object::test<28>()
+    {
+        set_test_name("AVATAR builds round a left-out door leaf as if it were not there");
+        struct Case
+        {
+            const char* mName;
+            bool mFrame;        ///< jambs and a lintel touching the leaf
+            bool mLeafFirst;
+        };
+        const Case cases[] = { { "flush leaf", false, false }, { "framed leaf", true, false }, { "framed leaf first", true, true },
+                               { "leaf alone", false, true } };
+        for (const Case& c : cases)
+        {
+            const auto build = [&](bool leaf, TileBuildStats& stats) {
+                TileBuildInput in = tile(0, 0);
+                in.mPartition = Partition::WATERSHED;   // codes from the area alone, whatever else the soup holds
+                in.mTerrain = flat(0.f);
+                in.mAir = true;
+                in.mWallFaces = true;
+                in.mFaceOffsets = false;    // read off the air, which keeps the leaf
+                auto door = std::make_shared<Record>(*box(15.9f, 12.f, 1.f, 16.1f, 14.f, 3.5f));
+                door->mExclude = EXCLUDE_AVATAR;
+                if (leaf && c.mLeafFirst)
+                {
+                    in.mRecords.push_back(door);
+                }
+                if (std::string(c.mName) != "leaf alone")
+                {
+                    in.mRecords.push_back(box(4.f, 4.f, 0.f, 28.f, 28.f, 1.f));
+                }
+                if (c.mFrame)
+                {
+                    in.mRecords.push_back(box(15.8f, 11.f, 1.f, 16.2f, 12.f, 4.f));   // jambs, touching the leaf's edges
+                    in.mRecords.push_back(box(15.8f, 14.f, 1.f, 16.2f, 15.f, 4.f));
+                    in.mRecords.push_back(box(15.8f, 12.f, 3.5f, 16.2f, 14.f, 4.f));  // lintel on its top
+                }
+                if (leaf && !c.mLeafFirst)
+                {
+                    in.mRecords.push_back(door);
+                }
+                return buildTile(in, &stats);
+            };
+            TileBuildStats with_stats, without_stats;
+            const TileBuildResult with_leaf = build(true, with_stats), without = build(false, without_stats);
+            ensure(std::string(c.mName) + ": built", with_leaf.mStatus == TileBuildResult::SUCCESS && without.mStatus == TileBuildResult::SUCCESS);
+            ensure(std::string(c.mName) + ": a window", with_stats.mWindowCells > 0 && without_stats.mWindowCells == 0);
+            ensure(std::string(c.mName) + ": AVATAR's compact heightfield", with_stats.mClass[0].mChfHash == without_stats.mClass[0].mChfHash);
+            ensure(std::string(c.mName) + ": AVATAR's tile, byte for byte", with_leaf.mData[0] == without.mData[0]);
+            // The air and the faces keep the leaf.
+            // Framed, the leaf closes the doorway's air; free, its top is a floor of the air's.
+            const bool kept = c.mFrame ? airFloorAt(without, 16.f, 13.f, 1.f) && !airFloorAt(with_leaf, 16.f, 13.f, 1.f)
+                                       : airFloorAt(with_leaf, 16.f, 13.f, 3.5f) && !airFloorAt(without, 16.f, 13.f, 3.5f);
+            ensure(std::string(c.mName) + ": the air keeps the leaf", kept);
+            bool faces_differ = with_leaf.mFaces.size() != without.mFaces.size();
+            for (size_t i = 0; !faces_differ && i < with_leaf.mFaces.size(); ++i)
+            {
+                faces_differ = with_leaf.mFaces[i].mMin != without.mFaces[i].mMin || with_leaf.mFaces[i].mMax != without.mFaces[i].mMax;
+            }
+            ensure(std::string(c.mName) + ": the leaf's faces", faces_differ);
+        }
+    }
+
+    // A tile is swapped into Detour with the caller holding its bytes: a
+    // replacement Detour refuses leaves the old tile in, under its old ref,
+    // where the old way took it out first and had nothing to put back.
+    template<> template<>
+    void sknavbuild_object::test<29>()
+    {
+        set_test_name("a tile Detour refuses leaves the one it replaces in place");
+        TileBuildInput in = tile(0, 0);
+        in.mTerrain = flat(0.f);
+        in.mRecords.push_back(box(10.f, 10.f, 0.f, 20.f, 20.f, 1.f));
+        const TileBuildResult a = buildTile(in);
+        in.mRecords.push_back(box(4.f, 4.f, 0.f, 8.f, 8.f, 2.f));
+        const TileBuildResult b = buildTile(in);
+        ensure("built", a.mStatus == TileBuildResult::SUCCESS && b.mStatus == TileBuildResult::SUCCESS && a.mData[0] != b.mData[0]);
+        dtNavMesh* nav = allocMeshNav();
+        ensure("a navmesh", nav != nullptr);
+        // Detour links the tile inside its bytes, so they are followed by address.
+        std::vector<U8> held, next = a.mData[0];
+        const U8* bytes = next.data();
+        ensure("the first tile goes in", swapDetourTile(*nav, 0, 0, held, next) && held.data() == bytes && next.empty());
+        const dtTileRef first = nav->getTileRefAt(0, 0, 0);
+        ensure("Detour reads the held bytes", first && nav->getTileAt(0, 0, 0)->data == held.data());
+
+        std::vector<U8> refused = b.mData[0];
+        refused[0] ^= 0xff;     // the header's magic
+        ensure("a broken tile is refused", !swapDetourTile(*nav, 0, 0, held, refused));
+        ensure("and left with the caller", !refused.empty() && refused[0] == static_cast<U8>(b.mData[0][0] ^ 0xff));
+        ensure("the old tile is back under its ref", nav->getTileRefAt(0, 0, 0) == first && nav->getTileAt(0, 0, 0)->data == held.data());
+        ensure_equals("with its polys", nav->getTileAt(0, 0, 0)->header->polyCount, a.mPolys[0]);
+
+        next = b.mData[0];
+        bytes = next.data();
+        ensure("a good tile replaces it", swapDetourTile(*nav, 0, 0, held, next) && held.data() == bytes);
+        ensure_equals("Detour reads the new one", nav->getTileAt(0, 0, 0)->header->polyCount, b.mPolys[0]);
+        std::vector<U8> none;
+        ensure("an empty tile takes it out", swapDetourTile(*nav, 0, 0, held, none) && held.empty() && !nav->getTileRefAt(0, 0, 0));
+        dtFreeNavMesh(nav);
     }
 }

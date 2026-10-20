@@ -79,6 +79,27 @@ namespace
         return static_cast<S32>(std::floor(metres / pitch));
     }
 
+    // A box cut to the window in XY; false when nothing of it is left.
+    bool clip(const LLVector3d& mn, const LLVector3d& mx, const sknav::ClusterWindow& window, LLVector3d& out_min, LLVector3d& out_max)
+    {
+        out_min = mn;
+        out_max = mx;
+        if (!window.clips())
+        {
+            return true;
+        }
+        for (S32 a = VX; a <= VY; ++a)
+        {
+            out_min.mdV[a] = std::max(mn.mdV[a], window.mMin.mdV[a]);
+            out_max.mdV[a] = std::min(mx.mdV[a], window.mMax.mdV[a]);
+            if (out_min.mdV[a] > out_max.mdV[a])
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
     void forEachTile(const LLVector3d& mn, const LLVector3d& mx, F64 tile, const std::function<void(const sknav::TileKey&)>& fn)
     {
         const S32 x0 = cell(mn.mdV[VX], tile), x1 = cell(mx.mdV[VX], tile);
@@ -123,15 +144,16 @@ namespace sknav
         return nullptr;
     }
 
-    ClusterSet cluster(const std::vector<RecordPtr>& records, F64 gap, F64 tile)
+    ClusterSet cluster(const std::vector<RecordPtr>& records, F64 gap, F64 tile, const ClusterWindow& window)
     {
         // Static records only, in a stable order so component ids do not depend
-        // on the census's iteration order.
+        // on the census's iteration order. A record no class builds with, a
+        // vehicle, would only re-sign the tiles it drives across.
         std::vector<RecordPtr> live;
         live.reserve(records.size());
         for (const RecordPtr& r : records)
         {
-            if (r && !r->mDynamic && r->mNavRole != NavRole::DYNAMIC)
+            if (r && !r->mDynamic && r->mNavRole != NavRole::DYNAMIC && (r->mExclude & EXCLUDE_ALL) != EXCLUDE_ALL)
             {
                 live.push_back(r);
             }
@@ -154,13 +176,20 @@ namespace sknav
 
         // Then anything whose inflated AABB meets another's, through a hash grid
         // of the inflated boxes so the test is linear in the record count.
+        // A record wholly outside the window joins only its linkset.
         const LLVector3d pad(gap, gap, gap);
-        std::vector<LLVector3d> mn(n), mx(n);
+        std::vector<LLVector3d> cmin(n), cmax(n), mn(n), mx(n);
+        std::vector<char> inside(n);
         std::unordered_map<TileKey, std::vector<S32>, TileKeyHash> grid;
         for (size_t i = 0; i < n; ++i)
         {
-            mn[i] = live[i]->mMin - pad;
-            mx[i] = live[i]->mMax + pad;
+            inside[i] = clip(live[i]->mMin, live[i]->mMax, window, cmin[i], cmax[i]);
+            if (!inside[i])
+            {
+                continue;
+            }
+            mn[i] = cmin[i] - pad;
+            mx[i] = cmax[i] + pad;
             forEachTile(mn[i], mx[i], tile, [&](const TileKey& k) { grid[k].push_back(static_cast<S32>(i)); });
         }
         for (auto& entry : grid)
@@ -181,24 +210,21 @@ namespace sknav
 
         // Gather. The root index of a component is its smallest member index,
         // and members are sorted by root UUID, so that member's root is the id.
+        // Bounds are the clipped boxes of the members inside the window.
         std::map<S32, std::shared_ptr<Cluster>> built;
+        std::map<S32, std::vector<S32>> members_of;
         for (size_t i = 0; i < n; ++i)
         {
             const S32 root = comp.find(static_cast<S32>(i));
             std::shared_ptr<Cluster>& c = built[root];
+            std::vector<S32>& members = members_of[root];
             if (!c)
             {
                 c = std::make_shared<Cluster>();
                 c->mId = live[root]->mRoot;
-                c->mMin = live[i]->mMin;
-                c->mMax = live[i]->mMax;
             }
             c->mRecords.push_back(live[i]);
-            for (S32 k = 0; k < 3; ++k)
-            {
-                c->mMin.mdV[k] = std::min(c->mMin.mdV[k], live[i]->mMin.mdV[k]);
-                c->mMax.mdV[k] = std::max(c->mMax.mdV[k], live[i]->mMax.mdV[k]);
-            }
+            members.push_back(static_cast<S32>(i));
         }
 
         ClusterSet set;
@@ -206,16 +232,55 @@ namespace sknav
         for (auto& entry : built)
         {
             std::shared_ptr<Cluster>& c = entry.second;
+            const std::vector<S32>& members = members_of[entry.first];
+            bool placed = false;
+            for (S32 i : members)
+            {
+                if (!inside[i])
+                {
+                    continue;
+                }
+                if (!placed)
+                {
+                    c->mMin = cmin[i];
+                    c->mMax = cmax[i];
+                    placed = true;
+                }
+                for (S32 k = 0; k < 3; ++k)
+                {
+                    c->mMin.mdV[k] = std::min(c->mMin.mdV[k], cmin[i].mdV[k]);
+                    c->mMax.mdV[k] = std::max(c->mMax.mdV[k], cmax[i].mdV[k]);
+                }
+            }
+            if (!placed)
+            {
+                // Nothing of it is in the window: its own bounds, and no tiles.
+                c->mMin = c->mRecords.front()->mMin;
+                c->mMax = c->mRecords.front()->mMax;
+                for (const RecordPtr& r : c->mRecords)
+                {
+                    for (S32 k = 0; k < 3; ++k)
+                    {
+                        c->mMin.mdV[k] = std::min(c->mMin.mdV[k], r->mMin.mdV[k]);
+                        c->mMax.mdV[k] = std::max(c->mMax.mdV[k], r->mMax.mdV[k]);
+                    }
+                }
+                set.mClusters.push_back(c);
+                continue;
+            }
             // Per tile: the signature of the members that intersect it, in
             // member order (already sorted by root and part). The members go
             // into a grid first: a structure of twenty thousand records over
             // a square kilometre is otherwise records times tiles, millions of
             // overlap tests on the main thread at every census.
             std::unordered_map<TileKey, std::vector<S32>, TileKeyHash> by_tile;
-            for (size_t i = 0; i < c->mRecords.size(); ++i)
+            for (size_t i = 0; i < members.size(); ++i)
             {
-                forEachTile(c->mRecords[i]->mMin, c->mRecords[i]->mMax, tile,
-                            [&](const TileKey& k) { by_tile[k].push_back(static_cast<S32>(i)); });
+                const S32 m = members[i];
+                if (inside[m])
+                {
+                    forEachTile(cmin[m], cmax[m], tile, [&](const TileKey& k) { by_tile[k].push_back(static_cast<S32>(i)); });
+                }
             }
             forEachTile(c->mMin, c->mMax, tile, [&](const TileKey& k) {
                 U64 sig = SEED;

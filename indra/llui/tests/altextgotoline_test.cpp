@@ -24,32 +24,28 @@
 
 #include "linden_common.h"
 
-#include "../altextgotoline.h"
+#include "altextgotoline.h"
 
-#include "../alpopover.h"
-#include "../alquickask.h"
-#include "../altextview.h"
+#include "alpopover.h"
+#include "alquickask.h"
+#include "altextview.h"
 #include "../llfloater.h"
 #include "../lllineeditor.h"
 #include "../lluictrlfactory.h"
 
 #include "alheadlessui_fixture.h"
+#include "aluistatescope.h"
 
-#include "../test/lltut.h"
+#include <catch2/catch_test_macros.hpp>
 
 #include <ostream>
 #include <string>
 #include <vector>
 
-class LLAvatarName;
-const std::string gGoToLineTestAnonName("Anon");
-const std::string& rlvGetAnonym(const LLAvatarName& av_name)
-{
-    return gGoToLineTestAnonName;
-}
-
-// A place, as a failed check says it.
-std::ostream& operator<<(std::ostream& out, const ALTextPos& pos)
+// A place, as a failed check says it. Static rather than in the anonymous
+// namespace: Catch2 finds it by argument-dependent lookup, which looks
+// in ALTextPos's namespace and not in a nested one.
+static std::ostream& operator<<(std::ostream& out, const ALTextPos& pos)
 {
     return out << pos.line << ":" << pos.column;
 }
@@ -64,11 +60,14 @@ namespace
     };
 }
 
-namespace tut
+namespace
 {
     struct altextgotoline_data
     {
         ll_test::HeadlessUI& ui     = ll_test::HeadlessUI::get();
+        // Focus and capture as the test found them, whatever it leaves
+        // them on.
+        ll_test::FocusScope  focus;
         Window*              window = nullptr;
         ALTextView*          view   = nullptr;
         ALQuickAsk           asker;
@@ -90,7 +89,7 @@ namespace tut
         {
             if (!ui.ok())
             {
-                skip("no UI: LLUI_TEST_APP_DIR does not point at the source tree");
+                SKIP("no UI: LLUI_TEST_APP_DIR does not point at the source tree");
             }
             window = new Window();
             window->setRect(LLRect(100, 700, 900, 100));
@@ -107,9 +106,11 @@ namespace tut
             return *view;
         }
 
-        // Go to Line asked over the text, by lines counted as `base` says.
-        void ask(S32 base = 0)
+        // Go to Line asked over the text, by lines counted as `base` says:
+        // its field up, in a popover.
+        void require_asked(S32 base = 0)
         {
+            quick = nullptr;
             ALTextGoToLine::ask(
                 [this](std::function<void(const std::string&)> chose, std::function<void()> escaped, std::function<void()> left) {
                     quick = asker.ask({}, "Line, or line:column", "Go to Line", std::move(chose), view, 420, ALQuickOpen::heightForRows(1),
@@ -123,94 +124,226 @@ namespace tut
                     return name;
                 },
                 [this](const ALTextPos& was) { went.push_back(was); });
+            INFO("asked");
+            REQUIRE(quick != nullptr);
+            REQUIRE(popover() != nullptr);
         }
 
         ALPopover* popover() const { return quick ? ALViewType::as<ALPopover>(quick->getParentByType<LLFloater>()) : nullptr; }
 
         // Return, as the field gives it.
-        void choose() { quick->findChild<LLLineEditor>("query")->onCommit(); }
+        void require_chosen()
+        {
+            LLLineEditor* field = quick->findChild<LLLineEditor>("query");
+            REQUIRE(field != nullptr);
+            field->onCommit();
+        }
     };
 
-    typedef test_group<altextgotoline_data> altextgotoline_test;
-    typedef altextgotoline_test::object     altextgotoline_object;
-    tut::altextgotoline_test altextgotoline_testgroup("altextgotoline");
-
-    template<> template<>
-    void altextgotoline_object::test<1>()
+    TEST_CASE_METHOD(altextgotoline_data, "altextgotoline: placeTyped reads line or line:column past blanks and a comma or as none", "[altextgotoline]")
     {
-        set_test_name("a place typed: \"12\" and \"12:5\", blanks and a comma, and what is no place");
         S32 line, column;
         ALTextGoToLine::placeTyped("12", line, column);
-        ensure("a line", line == 12 && column == 0);
+        {
+            INFO("a line");
+            CHECK(line == 12);
+            CHECK(column == 0);
+        }
         ALTextGoToLine::placeTyped(" 12:5", line, column);
-        ensure("a line and a column", line == 12 && column == 5);
+        {
+            INFO("a line and a column");
+            CHECK(line == 12);
+            CHECK(column == 5);
+        }
         ALTextGoToLine::placeTyped(":7, 3", line, column);
-        ensure("a colon before, a comma between", line == 7 && column == 3);
+        {
+            INFO("a colon before, a comma between");
+            CHECK(line == 7);
+            CHECK(column == 3);
+        }
         ALTextGoToLine::placeTyped("x", line, column);
-        ensure("nothing", line == 0 && column == 0);
+        {
+            INFO("nothing");
+            CHECK(line == 0);
+            CHECK(column == 0);
+        }
     }
 
-    template<> template<>
-    void altextgotoline_object::test<2>()
+    TEST_CASE_METHOD(altextgotoline_data, "altextgotoline: the caret follows the line as it is typed and Return keeps it", "[altextgotoline]")
     {
-        set_test_name("the text goes to the line as it is typed, and Return keeps it, the way back kept");
         ALTextView& v = make("zero\none\ntwo\n\tthree\nfour\n");
         v.setCaret(ALTextPos(1, 2));
-        ask();
-        ensure("asked", quick != nullptr && popover() != nullptr);
-        ensure_equals("nothing typed: says how many", word, std::string("GoToLineHint"));
-        ensure_equals("the first line, counted from one", said["[FIRST]"](), std::string("1"));
-        ensure_equals("the last line", said["[COUNT]"](), std::string("6"));
+        require_asked();
+        UNSCOPED_INFO("nothing typed: says how many");
+        CHECK(word == std::string("GoToLineHint"));
+        UNSCOPED_INFO("the first line, counted from one");
+        CHECK(said["[FIRST]"]() == std::string("1"));
+        UNSCOPED_INFO("the last line");
+        CHECK(said["[COUNT]"]() == std::string("6"));
         quick->setQuery("3");
-        ensure_equals("going there as it is typed", v.caret(), ALTextPos(2, 0));
-        ensure_equals("and saying so", word, std::string("GoToLineGo"));
+        UNSCOPED_INFO("going there as it is typed");
+        CHECK(v.caret() == ALTextPos(2, 0));
+        UNSCOPED_INFO("and saying so");
+        CHECK(word == std::string("GoToLineGo"));
         quick->setQuery("4:5");
-        ensure_equals("a column, as the line shows it: past the tab", v.caret(), ALTextPos(3, 1));
-        ensure_equals("said with it", word, std::string("GoToLineGoColumn"));
+        UNSCOPED_INFO("a column, as the line shows it: past the tab");
+        CHECK(v.caret() == ALTextPos(3, 1));
+        UNSCOPED_INFO("said with it");
+        CHECK(word == std::string("GoToLineGoColumn"));
         quick->setQuery("40");
-        ensure_equals("no such line", word, std::string("GoToLineNone"));
+        UNSCOPED_INFO("no such line");
+        CHECK(word == std::string("GoToLineNone"));
         quick->setQuery("");
-        ensure_equals("nothing typed: back where it was", v.caret(), ALTextPos(1, 2));
+        UNSCOPED_INFO("nothing typed: back where it was");
+        CHECK(v.caret() == ALTextPos(1, 2));
         quick->setQuery("5");
-        choose();
-        ensure_equals("kept", v.caret(), ALTextPos(4, 0));
-        ensure("the way back from it told", went.size() == 1 && went.front() == ALTextPos(1, 2));
-        ensure("the text has the keyboard", v.hasFocus());
+        require_chosen();
+        UNSCOPED_INFO("kept");
+        CHECK(v.caret() == ALTextPos(4, 0));
+        {
+            INFO("the way back from it told");
+            REQUIRE(went.size() == 1);
+            CHECK(went.front() == ALTextPos(1, 2));
+        }
+        UNSCOPED_INFO("the text has the keyboard");
+        CHECK(v.hasFocus());
     }
 
-    template<> template<>
-    void altextgotoline_object::test<3>()
+    TEST_CASE_METHOD(altextgotoline_data, "altextgotoline: an Escape puts the caret back and a look away leaves it where it went", "[altextgotoline]")
     {
-        set_test_name("Escape puts the caret back; a look away leaves it where it went");
         ALTextView& v = make("a\nb\nc\nd\n");
         v.setCaret(ALTextPos(0, 1));
-        ask();
+        require_asked();
         quick->setQuery("3");
         popover()->escape();
-        ensure_equals("escaped: back", v.caret(), ALTextPos(0, 1));
-        ensure("nothing told", went.empty());
+        UNSCOPED_INFO("escaped: back");
+        CHECK(v.caret() == ALTextPos(0, 1));
+        UNSCOPED_INFO("nothing told");
+        CHECK(went.empty());
 
-        ask();
+        require_asked();
         quick->setQuery("4");
         popover()->onFocusLost();
-        ensure_equals("looked away: it stands", v.caret(), ALTextPos(3, 0));
-        ensure("the way back told", went.size() == 1 && went.front() == ALTextPos(0, 1));
+        UNSCOPED_INFO("looked away: it stands");
+        CHECK(v.caret() == ALTextPos(3, 0));
+        {
+            INFO("the way back told");
+            REQUIRE(went.size() == 1);
+            CHECK(went.front() == ALTextPos(0, 1));
+        }
     }
 
-    template<> template<>
-    void altextgotoline_object::test<4>()
+    TEST_CASE_METHOD(altextgotoline_data, "altextgotoline: lines counted from 0 as in a notecard make 0 the first line", "[altextgotoline]")
     {
-        set_test_name("lines counted from 0, as a notecard's are read: 0 is the first, and the last is one less");
         ALTextView& v = make("zero\none\ntwo\n");
-        ask(-1);
-        ensure_equals("the first line said as 0", said["[FIRST]"](), std::string("0"));
-        ensure_equals("the last line, counted from 0", said["[COUNT]"](), std::string("3"));
+        require_asked(-1);
+        UNSCOPED_INFO("the first line said as 0");
+        CHECK(said["[FIRST]"]() == std::string("0"));
+        UNSCOPED_INFO("the last line, counted from 0");
+        CHECK(said["[COUNT]"]() == std::string("3"));
         quick->setQuery("0");
-        ensure_equals("0 the first", v.caret(), ALTextPos(0, 0));
+        UNSCOPED_INFO("0 the first");
+        CHECK(v.caret() == ALTextPos(0, 0));
         quick->setQuery("2");
-        ensure_equals("2 the third", v.caret(), ALTextPos(2, 0));
-        ensure_equals("said as typed", said["[LINE]"](), std::string("2"));
+        UNSCOPED_INFO("2 the third");
+        CHECK(v.caret() == ALTextPos(2, 0));
+        UNSCOPED_INFO("said as typed");
+        CHECK(said["[LINE]"]() == std::string("2"));
         quick->setQuery("4");
-        ensure_equals("past the last", word, std::string("GoToLineNone"));
+        UNSCOPED_INFO("past the last");
+        CHECK(word == std::string("GoToLineNone"));
+    }
+
+    TEST_CASE_METHOD(altextgotoline_data, "altextgotoline: text with no number goes nowhere even when lines count from 0", "[altextgotoline]")
+    {
+        ALTextView& v = make("zero\none\ntwo\n");
+        v.setCaret(ALTextPos(2, 1));
+        require_asked(-1);
+        for (const char* typed : { "x", ":", "-3" })
+        {
+            CAPTURE(typed);
+            quick->setQuery(typed);
+            REQUIRE(word == std::string("GoToLineNone"));
+            REQUIRE(v.caret() == ALTextPos(2, 1));
+        }
+        UNSCOPED_INFO("said as typed");
+        CHECK(said["[LINE]"]() == std::string("-3"));
+        require_chosen();
+        UNSCOPED_INFO("Return leaves it there");
+        CHECK(v.caret() == ALTextPos(2, 1));
+        UNSCOPED_INFO("and tells of no way back");
+        CHECK(went.empty());
+    }
+
+    TEST_CASE_METHOD(altextgotoline_data, "altextgotoline: a number too big for a line goes nowhere rather than wrapping round", "[altextgotoline]")
+    {
+        ALTextView& v = make("zero\none\ntwo\n");
+        v.setCaret(ALTextPos(2, 1));
+        require_asked();
+        quick->setQuery("4294967298");
+        UNSCOPED_INFO("no such line");
+        CHECK(word == std::string("GoToLineNone"));
+        UNSCOPED_INFO("the caret where it was");
+        CHECK(v.caret() == ALTextPos(2, 1));
+        UNSCOPED_INFO("said as typed");
+        CHECK(said["[LINE]"]() == std::string("4294967298"));
+        // A column too long to be one is none.
+        quick->setQuery("2:4294967298");
+        UNSCOPED_INFO("the line, no column");
+        CHECK(word == std::string("GoToLineGo"));
+        UNSCOPED_INFO("at its start");
+        CHECK(v.caret() == ALTextPos(1, 0));
+        popover()->escape();
+
+        // The most a number holds, counted from 0: past the last line, not
+        // round past the least.
+        require_asked(-1);
+        quick->setQuery("2147483647");
+        UNSCOPED_INFO("no such line, from 0");
+        CHECK(word == std::string("GoToLineNone"));
+        UNSCOPED_INFO("said as typed, from 0");
+        CHECK(said["[LINE]"]() == std::string("2147483647"));
+        UNSCOPED_INFO("the caret where it was, from 0");
+        CHECK(v.caret() == ALTextPos(2, 1));
+    }
+
+    TEST_CASE_METHOD(altextgotoline_data, "altextgotoline: the selection and other carets come back on Escape or an emptied field", "[altextgotoline]")
+    {
+        ALTextView&       v = make("zero\none\ntwo\nthree\n");
+        const ALTextRange block(ALTextPos(0, 1), ALTextPos(1, 2));
+        v.setSelections(block, { ALTextRange(ALTextPos(3, 0), ALTextPos(3, 0)) });
+        require_asked();
+        UNSCOPED_INFO("opened: the selection as it was");
+        CHECK(v.selection() == block);
+        UNSCOPED_INFO("and the caret besides it");
+        CHECK(v.otherSelections().size() == size_t(1));
+        popover()->escape();
+        UNSCOPED_INFO("escaped with nothing typed: the selection");
+        CHECK(v.selection() == block);
+        UNSCOPED_INFO("and the other caret");
+        CHECK(v.otherSelections().size() == size_t(1));
+
+        require_asked();
+        quick->setQuery("3");
+        UNSCOPED_INFO("gone to the line typed");
+        CHECK(v.caret() == ALTextPos(2, 0));
+        {
+            INFO("a caret alone there");
+            CHECK_FALSE(v.hasSelection());
+            CHECK_FALSE(v.hasOtherSelections());
+        }
+        quick->setQuery("");
+        {
+            INFO("emptied: the selection back");
+            CHECK(v.selection() == block);
+            CHECK(v.otherSelections().size() == 1);
+        }
+        quick->setQuery("2");
+        popover()->escape();
+        {
+            INFO("escaped after going: the selection back");
+            CHECK(v.selection() == block);
+            CHECK(v.otherSelections().size() == 1);
+        }
     }
 }

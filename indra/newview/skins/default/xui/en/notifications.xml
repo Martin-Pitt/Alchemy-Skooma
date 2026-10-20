@@ -1836,6 +1836,62 @@ A built-in theme is already named &quot;[NAME]&quot;. Choose another name.
 
   <notification
    icon="alertmodal.tga"
+   name="ScriptStudioSnippetsNone"
+   type="alertmodal">
+You have no snippets of your own to save. Make one with New, or Copy a built-in one, first.
+    <tag>fail</tag>
+  </notification>
+
+  <notification
+   icon="alertmodal.tga"
+   name="ScriptStudioSnippetsTooLarge"
+   type="alertmodal">
+Your snippets come to [SIZE] bytes, and a notecard holds [LIMIT]. Delete some, or keep them with Edit as XML instead.
+    <tag>fail</tag>
+  </notification>
+
+  <notification
+   icon="alertmodal.tga"
+   name="ScriptStudioSnippetsNotSaved"
+   type="alertmodal">
+Your snippets could not be saved to the notecard &quot;[NAME]&quot;: [REASON].
+    <tag>fail</tag>
+  </notification>
+
+  <notification
+   icon="notifytip.tga"
+   name="ScriptStudioSnippetsSaved"
+   log_to_chat="false"
+   type="notifytip">
+Saved [COUNT] snippets to the notecard &quot;[NAME]&quot; in your Notecards folder.
+  </notification>
+
+  <notification
+   icon="alertmodal.tga"
+   name="ScriptStudioSnippetsNotRead"
+   type="alertmodal">
+The notecard &quot;[NAME]&quot; could not be read: [REASON].
+    <tag>fail</tag>
+  </notification>
+
+  <notification
+   icon="alertmodal.tga"
+   name="ScriptStudioSnippetsNotSnippets"
+   type="alertmodal">
+The notecard &quot;[NAME]&quot; does not hold snippets. Save to Inventory on the Snippets tab makes a notecard that does.
+    <tag>fail</tag>
+  </notification>
+
+  <notification
+   icon="notifytip.tga"
+   name="ScriptStudioSnippetsAdded"
+   log_to_chat="false"
+   type="notifytip">
+Snippets from &quot;[NAME]&quot;: [ADDED] added, [RENAMED] added under a numbered name as theirs was taken, [SKIPPED] you had already.
+  </notification>
+
+  <notification
+   icon="alertmodal.tga"
    name="ScriptStudioDeleteItems"
    type="alertmodal">
 [QUESTION]
@@ -2029,11 +2085,12 @@ Replace [PLACES] in [SCRIPTS] with &quot;[WITH]&quot;? You can undo each one's c
    icon="alertmodal.tga"
    name="ScriptStudioFixAll"
    type="alertmodal">
-Apply [FIXES] in &quot;[NAME]&quot;, one per problem, such as &quot;[EXAMPLE]&quot;? You can undo them in one step.[LEFT]
+Apply [FIXES] in &quot;[NAME]&quot;, one per problem, such as &quot;[EXAMPLE]&quot;? You can undo them in one step, or preview them first.[LEFT]
     <tag>confirm</tag>
     <usetemplate
-     name="okcancelbuttons"
-     notext="Cancel"
+     canceltext="Cancel"
+     name="yesnocancelbuttons"
+     notext="Preview"
      yestext="Fix"/>
   </notification>
 
@@ -2087,6 +2144,26 @@ Stop [COUNT] scripts? They stay stopped until you start them again.
   </notification>
 
   <notification
+   icon="notifytip.tga"
+   name="ScriptStudioMasters"
+   log_to_chat="false"
+   type="notifytip">
+[MESSAGE]
+  </notification>
+
+  <notification
+   icon="alertmodal.tga"
+   name="ScriptStudioMastersSendUsers"
+   type="alertmodal">
+[FILES] changed on disk. That changes [COUNT] scripts in the world linked to files, [PLACES]. Send them now? Scripts not sent wait for Send from Files.
+    <tag>confirm</tag>
+    <usetemplate
+     name="okcancelbuttons"
+     notext="Don't Send"
+     yestext="Send All"/>
+  </notification>
+
+  <notification
    icon="alertmodal.tga"
    name="ScriptStudioFileChanged"
    type="alertmodal">
@@ -2096,6 +2173,19 @@ Stop [COUNT] scripts? They stay stopped until you start them again.
      name="okcancelbuttons"
      notext="Keep Mine"
      yestext="Read from Disk"/>
+  </notification>
+
+  <notification
+   icon="alertmodal.tga"
+   name="ScriptStudioLinkUnsaved"
+   type="alertmodal">
+&quot;[NAME]&quot; has unsaved changes, and linking it to [FILE] makes the file what it holds. Write your changes to the file, replacing everything in it? Or discard them and take the file as it is? Discarded changes are kept for a week in File &gt; Recover Unsaved Changes.
+    <tag>confirm</tag>
+    <usetemplate
+     canceltext="Cancel"
+     name="yesnocancelbuttons"
+     notext="Discard Changes"
+     yestext="Write to File"/>
   </notification>
 
   <notification
@@ -2271,6 +2361,23 @@ This is often the case with new hardware that hasn&apos;t been tested yet with [
        text="My graphics card could not be identified"/>
     </form>
   <tag>fail</tag>
+  </notification>
+
+  <notification
+   icon="alertmodal.tga"
+   name="SoftwareRenderer"
+   type="alertmodal">
+[APP_NAME] is drawing with [RENDERER], which renders on the CPU instead of the graphics card, so it will be very slow.
+
+This usually means the graphics driver did not load. Common causes:
+- NVIDIA&apos;s driver without its EGL platform library: egl-wayland on Wayland, egl-x11 on X11.
+- No Mesa driver installed for the graphics card, or no permission to open /dev/dri.
+- A virtual machine or container without access to the GPU, or WSL without its d3d12 driver.
+    <tag>fail</tag>
+    <usetemplate
+     ignoretext="Graphics are being drawn on the CPU"
+     name="okignore"
+     yestext="OK"/>
   </notification>
 
   <notification
@@ -9645,6 +9752,16 @@ Failed to save snapshot to [PATH]: Directory does not exist.
   </notification>
 
   <notification icon="notifytip.tga"
+    name="CutoutSnapshotSaved" type="notifytip">
+That snapshot was a cutout: only what Cutout is set to was drawn. It stays on until you uncheck Cutout in the snapshot window.
+  </notification>
+
+  <notification icon="notifytip.tga"
+    name="CutoutTargetMissing" type="notifytip">
+No snapshot was saved: what Cutout is set to is not in view. Turn the camera to it, pick it again, or uncheck Cutout in the snapshot window.
+  </notification>
+
+  <notification icon="notifytip.tga"
     name="SnapshotSavedToComputer" type="notifytip">
 Screenshot saved to:
     [FILEPATH]
@@ -13779,6 +13896,144 @@ A report carries where the viewer crashed, its log, your settings and your avata
      name="okcancelbuttons"
      notext="Don't send"
      yestext="Send reports"/>
+ </notification>
+
+ <notification
+  icon="alert.tga"
+  name="AlchemyFeedbackAfterCrash"
+  type="alert">
+[WHAT] If you remember what you were doing, telling the developers helps them find the cause.
+    <form name="form">
+      <button
+       index="0"
+       name="tell"
+       text="Tell us what happened"/>
+      <button
+       default="true"
+       index="1"
+       name="not_now"
+       text="Not now"/>
+      <ignore text="Ask what happened after Alchemy crashes or stops responding"/>
+    </form>
+ </notification>
+
+ <notification
+  icon="notify.tga"
+  name="AlchemyFeedbackSent"
+  type="notify">
+Thanks. Your feedback reached the Alchemy developers.
+Reference: [REF]
+    <form name="form">
+      <button
+       index="0"
+       name="copy"
+       text="Copy reference"/>
+      <button
+       default="true"
+       index="1"
+       name="ok"
+       text="OK"/>
+    </form>
+ </notification>
+
+ <notification
+  icon="notifytip.tga"
+  name="AlchemyFeedbackQueued"
+  type="notifytip">
+Your feedback couldn't reach the server yet. It will be sent automatically.
+ </notification>
+
+ <notification
+  icon="notifytip.tga"
+  name="AlchemyFeedbackQueuedDisconnected"
+  type="notifytip">
+You're disconnected, so your feedback will be sent the next time Alchemy starts.
+ </notification>
+
+ <notification
+  icon="notify.tga"
+  name="AlchemyFeedbackKeptSent"
+  type="notify">
+Feedback you sent earlier has now reached the Alchemy developers.
+Reference: [REF]
+    <form name="form">
+      <button
+       index="0"
+       name="copy"
+       text="Copy reference"/>
+      <button
+       default="true"
+       index="1"
+       name="ok"
+       text="OK"/>
+    </form>
+ </notification>
+
+ <notification
+  icon="notify.tga"
+  name="AlchemyFeedbackFailed"
+  type="notify">
+Your feedback was not sent. [REASON]
+
+Your message is saved in Send Feedback.
+    <form name="form">
+      <button
+       index="0"
+       name="open"
+       text="Open"/>
+      <button
+       default="true"
+       index="1"
+       name="dismiss"
+       text="Dismiss"/>
+    </form>
+ </notification>
+
+ <notification
+  icon="notify.tga"
+  name="AlchemyFeedbackGivenUpRestored"
+  type="notify">
+Feedback you wrote on [DATE] could not reach the Alchemy developers, and Alchemy has stopped trying. Your message is back in Send Feedback.
+    <form name="form">
+      <button
+       index="0"
+       name="open"
+       text="Open"/>
+      <button
+       default="true"
+       index="1"
+       name="ok"
+       text="OK"/>
+    </form>
+ </notification>
+
+ <notification
+  icon="notify.tga"
+  name="AlchemyFeedbackGivenUp"
+  type="notify">
+Feedback you wrote on [DATE] could not reach the Alchemy developers, and Alchemy has stopped trying.
+    <form name="form">
+      <button
+       index="0"
+       name="copy"
+       text="Copy message"/>
+      <button
+       default="true"
+       index="1"
+       name="ok"
+       text="OK"/>
+    </form>
+ </notification>
+
+ <notification
+  icon="alertmodal.tga"
+  name="AlchemyFeedbackSendTest"
+  type="alertmodal">
+Send a test report to the Alchemy developers? It carries your system information and this session's log, and your avatar's name if Send Feedback is set to include it.
+    <usetemplate
+     name="okcancelbuttons"
+     notext="Cancel"
+     yestext="Send"/>
  </notification>
 
   <notification

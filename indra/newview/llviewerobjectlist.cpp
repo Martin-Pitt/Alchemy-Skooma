@@ -29,7 +29,6 @@
 #include "llviewerobjectlist.h"
 
 #include "message.h"
-#include "llfasttimer.h"
 #include "llrender.h"
 #include "llwindow.h"       // decBusyCount()
 
@@ -108,6 +107,7 @@ LLViewerObjectList::LLViewerObjectList()
     mNumOrphans = 0;
     mNumNewObjects = 0;
     mWasPaused = false;
+    mAgentPaused = false;
     mNumDeadObjectUpdates = 0;
     mNumUnknownUpdates = 0;
 }
@@ -942,27 +942,10 @@ void LLViewerObjectList::update(LLAgent &agent)
     static LLCachedControl<bool> animate_textures(gSavedSettings, "AnimateTextures", true);
     gAnimateTextures = animate_textures;
 
-    // update global timer
-    F32 last_time = gFrameTimeSeconds;
-    U64Microseconds time = totalTime();              // this will become the new gFrameTime when the update is done
-    // Time _can_ go backwards, for example if the user changes the system clock.
-    // It doesn't cause any fatal problems (just some oddness with stats), so we shouldn't assert here.
-//  llassert(time > gFrameTime);
-    F64Seconds time_diff = time - gFrameTime;
-    gFrameTime  = time;
-    F64Seconds time_since_start = gFrameTime - gStartTime;
-    gFrameTimeSeconds = time_since_start;
-
-    gFrameIntervalSeconds = gFrameTimeSeconds - last_time;
-    if (gFrameIntervalSeconds < 0.f)
-    {
-        gFrameIntervalSeconds = 0.f;
-    }
-
     //clear avatar LOD change counter
     LLVOAvatar::sNumLODChangesThisFrame = 0;
 
-    const F64 frame_time = LLFrameTimer::getElapsedSeconds();
+    const F64 frame_time = LLFrameTimer::getUptimeSeconds();
 
     LLViewerObject *objectp = NULL;
 
@@ -1028,34 +1011,46 @@ void LLViewerObjectList::update(LLAgent &agent)
         // frame behind -- or not, for the next vehicle over, and it could change when an unrelated
         // object was removed from the list. No non-avatar idleUpdate reads avatar state, so nothing
         // needs the reverse order.
-        for (std::vector<LLViewerObject*>::iterator idle_iter = idle_list.begin();
-            idle_iter != idle_end; idle_iter++)
-        {
-            objectp = *idle_iter;
-            llassert(objectp->isActive());
-            if (!objectp->isAvatar())
+        { // <SK:Nexii> sub-zones for the profiler
+            LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("vol - idle objects");
+            for (std::vector<LLViewerObject*>::iterator idle_iter = idle_list.begin();
+                idle_iter != idle_end; idle_iter++)
             {
-                objectp->idleUpdate(agent, frame_time);
+                objectp = *idle_iter;
+                llassert(objectp->isActive());
+                if (!objectp->isAvatar())
+                {
+                    objectp->idleUpdate(agent, frame_time);
+                }
             }
-        }
+        } // </SK:Nexii>
 
-        for (std::vector<LLViewerObject*>::iterator idle_iter = idle_list.begin();
-            idle_iter != idle_end; idle_iter++)
-        {
-            objectp = *idle_iter;
-            if (objectp->isAvatar())
+        { // <SK:Nexii> sub-zones for the profiler
+            LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("vol - idle avatars");
+            for (std::vector<LLViewerObject*>::iterator idle_iter = idle_list.begin();
+                idle_iter != idle_end; idle_iter++)
             {
-                objectp->idleUpdate(agent, frame_time);
+                objectp = *idle_iter;
+                if (objectp->isAvatar())
+                {
+                    objectp->idleUpdate(agent, frame_time);
+                }
             }
-        }
+        } // </SK:Nexii>
 
         //update flexible objects
-        LLVolumeImplFlexible::updateClass();
+        { // <SK:Nexii> sub-zones for the profiler
+            LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("vol - flexibles");
+            LLVolumeImplFlexible::updateClass();
+        } // </SK:Nexii>
 
         //update animated textures
         if (gAnimateTextures)
         {
-            LLViewerTextureAnim::updateClass();
+            { // <SK:Nexii> sub-zones for the profiler
+                LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("vol - texture anim");
+                LLViewerTextureAnim::updateClass();
+            } // </SK:Nexii>
         }
     }
 
@@ -1071,8 +1066,9 @@ void LLViewerObjectList::update(LLAgent &agent)
     // don't factor frames that were paused into the stats
     if (! mWasPaused)
     {
-        LLViewerStats::getInstance()->updateFrameStats(time_diff);
+        LLViewerStats::getInstance()->updateFrameStats(F64Seconds(gFrameIntervalSeconds.value()));
     }
+    mWasPaused = mAgentPaused;
 
     /*
     // Debugging code for viewing orphans, and orphaned parents
@@ -2298,7 +2294,7 @@ void LLViewerObjectList::findOrphans(LLViewerObject* objectp, U32 ip, U32 port)
             addDebugBeacon(objectp->getPositionAgent(),"");
 #endif
             gPipeline.markMoved(objectp->mDrawable);
-            objectp->setChanged(LLXform::MOVED | LLXform::SILHOUETTE);
+            objectp->setChanged(LLXform::MOVED);
 
             // Flag the object as no longer orphaned
             childp->mOrphaned = false;

@@ -98,7 +98,7 @@ constexpr S32 DEFAULT_THUMBNAIL_DIMENSIONS = 256;
 U32 LLViewerTexture::sMinLargeImageSize = 65536; //256 * 256.
 U32 LLViewerTexture::sMaxSmallImageSize = MAX_CACHED_RAW_IMAGE_AREA;
 bool LLViewerTexture::sFreezeImageUpdates = false;
-F32 LLViewerTexture::sCurrentTime = 0.0f;
+F64 LLViewerTexture::sCurrentTime = 0.0;
 
 constexpr F32 MEMORY_CHECK_WAIT_TIME = 1.0f;
 constexpr F32 MIN_VRAM_BUDGET = 768.f;
@@ -1287,7 +1287,9 @@ void LLViewerFetchedTexture::setForSculpt()
         (S32)LLGLTexture::BOOST_SCULPTED));
 
     mForSculpt = true;
-    if(isForSculptOnly() && hasGLTexture() && !getBoundRecently())
+    // Not while a texture is being created for it: on the LLImageGL thread that would
+    // publish its texture after this destroyed the old one. destroyTexture holds off too.
+    if(isForSculptOnly() && hasGLTexture() && !getBoundRecently() && !mNeedsCreateTexture)
     {
         destroyGLTexture(); //sculpt image does not need gl texture.
         mTextureState = ACTIVE;
@@ -1622,6 +1624,12 @@ void LLViewerFetchedTexture::scheduleCreateTexture()
             auto mainq = LLImageGLThread::sEnabledTextures ? mMainQueue.lock() : nullptr;
             if (mainq)
             {
+                // Until the worker's texture publishes, the image goes on reporting the one
+                // it has. The snapshot that makes it so is taken here, on the main thread,
+                // before the post -- see LLImageGL::beginUpload -- and released in the
+                // callback below, whether or not a texture came of it.
+                LLPointer<LLImageGL> gl_image = mGLTexturep;
+                gl_image->beginUpload();
                 ref();
                 mainq->postTo(
                     mImageQueue,
@@ -1650,7 +1658,7 @@ void LLViewerFetchedTexture::scheduleCreateTexture()
                     },
                     // callback to be run on main thread
 #if LL_IMAGEGL_THREAD_CHECK
-                        [this, data, data_copy, size]()
+                        [this, gl_image, data, data_copy, size]()
                     {
                         mGLTexturep->mActiveThread = LLThread::currentID();
                         llassert(data == mRawImage->getData());
@@ -1658,12 +1666,21 @@ void LLViewerFetchedTexture::scheduleCreateTexture()
                         llassert(memcmp(data, data_copy, size) == 0);
                         delete[] data_copy;
 #else
-                        [this]()
+                        [this, gl_image]()
                         {
 #endif
-                        //finalize on main thread
-                        postCreateTexture();
-                        unref();
+                        // The worker is done, but its texture publishes only once the GPU
+                        // has finished with it, which nothing waits for. Finish then: ending
+                        // the snapshot, or clearing mNeedsCreateTexture and so letting the
+                        // next upload start, must not run ahead of it.
+                        gl_image->afterPublish([this, gl_image]()
+                        {
+                            // A no-op when syncTexName published the new texture.
+                            gl_image->endUpload();
+                            //finalize on main thread
+                            postCreateTexture();
+                            unref();
+                        });
                     });
             }
             else
@@ -2899,6 +2916,12 @@ void LLViewerFetchedTexture::forceToRefetchTexture(S32 desired_discard, F32 kept
 
 void LLViewerFetchedTexture::forceToSaveRawImage(S32 desired_discard, F32 kept_time)
 {
+    // A raw image several users want is kept for the longest any asked, until it is destroyed: one asking for less
+    // after another does not cut the other's short.
+    if (mForceToSaveRawImage || mSavedRawDiscardLevel > -1)
+    {
+        kept_time = llmax(kept_time, mKeptSavedRawImageTime);
+    }
     mKeptSavedRawImageTime = kept_time;
     mLastReferencedSavedRawImageTime = sCurrentTime;
 
@@ -2944,7 +2967,7 @@ void LLViewerFetchedTexture::readbackRawImage()
 
 void LLViewerFetchedTexture::destroySavedRawImage()
 {
-    if(mLastReferencedSavedRawImageTime < mKeptSavedRawImageTime)
+    if(getElapsedLastReferencedSavedRawImageTime() < mKeptSavedRawImageTime)
     {
         return; //keep the saved raw image.
     }
@@ -2988,7 +3011,7 @@ bool LLViewerFetchedTexture::hasSavedRawImage() const
 
 F32 LLViewerFetchedTexture::getElapsedLastReferencedSavedRawImageTime() const
 {
-    return sCurrentTime - mLastReferencedSavedRawImageTime;
+    return (F32)(sCurrentTime - mLastReferencedSavedRawImageTime);
 }
 
 LLUUID LLViewerFetchedTexture::getUploader()

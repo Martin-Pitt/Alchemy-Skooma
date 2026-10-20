@@ -21,15 +21,9 @@ set(AL_CHANNEL "Alchemy Test" CACHE STRING "Viewer Channel Name")
 set(AL_GRID agni CACHE STRING "Target Grid")
 
 # The Velopack update client in the viewer, and the velopack target that
-# packs the installer and the update feed; see cmake/ViewerPackage.cmake.
-# Windows and macOS ship through it; Linux does not.
-cmake_dependent_option(
-  AL_USE_VELOPACK
-  "Build the Velopack update client and the velopack packaging target"
-  OFF
-  "WIN32 OR APPLE"
-  OFF
-)
+# packs the installer, or on Linux the AppImage, and the update feed; see
+# cmake/ViewerPackage.cmake.
+option(AL_USE_VELOPACK "Build the Velopack update client and the velopack packaging target" OFF)
 
 # Build executable options
 option(AL_BUILD_VIEWER "Build the viewer project" ON)
@@ -47,6 +41,27 @@ cmake_dependent_option(
   "AL_BUILD_TESTS"
   OFF
 )
+cmake_dependent_option(
+  AL_BUILD_FUZZERS
+  "Build the libFuzzer targets on LL's LSL compiler and VM: Clang, with address in AL_SANITIZERS; see doc/TESTING.md"
+  OFF
+  "AL_BUILD_TESTS"
+  OFF
+)
+cmake_dependent_option(
+  AL_REQUIRE_LSCRIPT
+  "Fail to configure if LL's LSL compiler (indra/lscript) and its tests cannot be built, rather than leave them out; CI's test rows set it"
+  OFF
+  "AL_BUILD_TESTS"
+  OFF
+)
+cmake_dependent_option(
+  AL_TEST_PER_CASE
+  "Register a Catch2 binary's test cases one CTest entry each, found when ctest runs, in place of one entry a test file: for finding a failure that comes from order or shared state"
+  OFF
+  "AL_BUILD_TESTS"
+  OFF
+)
 option(AL_BUILD_SHARED_LLCOMMON "Build llcommon as a shared library" OFF)
 option(AL_BUILD_PACKAGE "Add the package target: the CPack archive of the installed tree" ON)
 
@@ -58,9 +73,16 @@ set(BUILD_TESTING ${AL_BUILD_TESTS})
 option(AL_BUILD_DULLAHAN_EXAMPLE "Build the Dullahan OpenGL example application" OFF)
 
 # Plugin Build Options
-option(AL_BUILD_EXAMPLE_PLUGIN "Build support for SLPlugin example plugin" ON)
+option(AL_BUILD_EXAMPLE_PLUGIN "Build the example media plugin, a reference for writing one" OFF)
 option(AL_BUILD_CEF_PLUGIN "Build support for SLPlugin CEF web plugin." ON)
-option(AL_BUILD_VLC_PLUGIN "Build support for SLPlugin VLC media plugin." ON)
+# GStreamer plays media on Linux. VLC there is built only when asked for, and
+# used only with MediaPluginForceVLC.
+if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux")
+  set(al_vlc_plugin_default OFF)
+else()
+  set(al_vlc_plugin_default ON)
+endif()
+option(AL_BUILD_VLC_PLUGIN "Build support for SLPlugin VLC media plugin." ${al_vlc_plugin_default})
 cmake_dependent_option(
   AL_BUILD_GSTREAMER_PLUGIN
   "Build support for SLPlugin Gstreamer media plugin."
@@ -83,8 +105,7 @@ option(AL_USE_LTO "Enable Link Time Optimization" OFF)
 option(AL_USE_OPENXR "Enable building with OpenXR support (Experimental)" OFF)
 option(AL_USE_PRECOMPILED_HEADERS "Enable use of precompiled header directives where supported." ON)
 
-# Audio Engines
-option(AL_USE_FMODSTUDIO "Enable support for the FMOD Studio audio engine" OFF)
+# Audio Engines; FMOD Studio is with the proprietary libraries below.
 option(AL_USE_FAUDIO "Enable support for the FAudio audio engine" ON)
 option(AL_USE_OPENAL "Enable support for the OpenAL audio engine" OFF)
 
@@ -105,13 +126,29 @@ if(NOT AL_ISA_TIER MATCHES "^(baseline|v2|v3|v4)$")
   message(FATAL_ERROR "AL_ISA_TIER must be one of baseline, v2, v3, v4 (got '${AL_ISA_TIER}')")
 endif()
 
-# Sanitizers (GCC and Clang only): any of address, undefined, thread.
+# Sanitizers (GCC and Clang only): any of address, undefined, thread, but not
+# address and thread together, whose runtimes cannot share a process. On
+# Linux, address and thread build with Clang; see cmake/BootstrapVcpkg.cmake.
 set(
   AL_SANITIZERS
   ""
   CACHE STRING
   "Sanitizers to build with: a list drawn from address, undefined, thread"
 )
+foreach(sanitizer IN LISTS AL_SANITIZERS)
+  if(NOT sanitizer MATCHES "^(address|undefined|thread)$")
+    message(
+      FATAL_ERROR
+      "AL_SANITIZERS: unknown sanitizer '${sanitizer}' (address, undefined, thread)"
+    )
+  endif()
+endforeach()
+if("address" IN_LIST AL_SANITIZERS AND "thread" IN_LIST AL_SANITIZERS)
+  message(
+    FATAL_ERROR
+    "AL_SANITIZERS: address and thread cannot be built together; build a tree for each"
+  )
+endif()
 
 # Warnings
 option(AL_ENABLE_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" ON)
@@ -121,17 +158,42 @@ option(AL_ENABLE_PROPRIETARY "Build with support for non-free libraries" OFF)
 cmake_dependent_option(
   AL_USE_KDU
   "Enable support for the Kakadu JPEG2000 decoding library"
-  ON
+  OFF
   "AL_ENABLE_PROPRIETARY"
   OFF
 )
 
-# The Discord Social SDK is downloaded per application from Discord and
-# points to by AL_DISCORD_SDK_DIR; see cmake/Discord.cmake.
+# The Discord Social SDK comes from AlchemyViewer's private vcpkg registry;
+# see cmake/Discord.cmake. It is built for Windows and macOS, x64 and arm64,
+# and Linux x64, and the option is held off anywhere else. This runs before
+# project(), so on Linux the host stands for the target, as it does for the
+# triplet: nothing cross-compiles the viewer there. CMAKE_HOST_SYSTEM_PROCESSOR
+# is not set until project() runs, so the host is asked directly, as
+# cmake/BootstrapVcpkg.cmake does for the triplet.
+set(al_discord_supported ON)
+if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux")
+  cmake_host_system_information(RESULT al_host_arch QUERY OS_PLATFORM)
+  if(NOT al_host_arch MATCHES "^(x86_64|AMD64|amd64)$")
+    set(al_discord_supported OFF)
+  endif()
+  unset(al_host_arch)
+endif()
 cmake_dependent_option(
   AL_USE_DISCORD
-  "Enable Discord presence and friends through the Discord Social SDK"
+  "Enable Discord rich presence through the Discord Social SDK"
+  ON
+  "AL_ENABLE_PROPRIETARY;al_discord_supported"
   OFF
+)
+
+# FMOD Studio comes from the same registry, and is built for every platform
+# the viewer is; see cmake/FMODSTUDIO.cmake. It takes precedence over the
+# other audio engines when the viewer starts, so a proprietary build plays
+# through it.
+cmake_dependent_option(
+  AL_USE_FMODSTUDIO
+  "Enable support for the FMOD Studio audio engine"
+  ON
   "AL_ENABLE_PROPRIETARY"
   OFF
 )
@@ -197,12 +259,23 @@ cmake_dependent_option(
   OFF
 )
 
-# WebRTC voice. Off in sanitized builds, which cannot link libwebrtc.
+# WebRTC voice. Off in sanitized builds; see below.
 option(AL_USE_WEBRTC "Build with WebRTC voice" ON)
 
-# Signing
-option(AL_ENABLE_SIGNING "Enable signing the viewer" OFF)
-set(AL_SIGNING_IDENTITY "" CACHE STRING "Specifies the signing identity to use, if necessary.")
+# macOS signing. The install step always signs the bundle: with this
+# identity, or ad-hoc when it is empty.
+set(
+  AL_SIGNING_IDENTITY
+  ""
+  CACHE STRING
+  "The macOS Developer ID to sign the bundle with; empty signs ad-hoc"
+)
+set(
+  AL_NOTARY_PROFILE
+  ""
+  CACHE STRING
+  "The notarytool keychain profile the macOS velopack target notarizes with; empty skips notarization"
+)
 
 # Warn about any option name from before the AL_ scheme.
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/RetiredOptions.cmake)
@@ -251,12 +324,46 @@ if(NOT CMAKE_BUILD_TYPE IN_LIST CMAKE_CONFIGURATION_TYPES)
   )
 endif()
 
+# A sanitized build turns off what would stand between the sanitizers and
+# what they watch: Tracy replaces operator new and delete, and its queues and
+# Sentry's handler thread are their own synchronisation; Sentry's handler
+# takes the signals a sanitizer reports through. libwebrtc cannot be linked
+# sanitized. CEF cannot run sanitized: its prebuilt Chromium frees through
+# glibc's own __libc_free what glibc allocated through the sanitizer's
+# malloc, and its plugin process falls over at start. Before the feature
+# flags below, so vcpkg installs none of those that are features. Windows
+# builds ignore AL_SANITIZERS (00-Common.cmake).
+if(AL_SANITIZERS AND NOT CMAKE_HOST_SYSTEM_NAME STREQUAL "Windows")
+  foreach(
+    option
+    IN
+    ITEMS AL_USE_TRACY AL_USE_SENTRY AL_ENABLE_CRASH_REPORTING AL_USE_WEBRTC AL_BUILD_CEF_PLUGIN
+  )
+    if(${option})
+      message(STATUS "${option} is off in a build with AL_SANITIZERS")
+      set(${option} OFF)
+    endif()
+  endforeach()
+endif()
+
 ##########################################################################
 # vcpkg feature flags MUST be set before the first project() call below  #
 ##########################################################################
 
+if(AL_BUILD_TESTS)
+  list(APPEND VCPKG_MANIFEST_FEATURES "tests")
+endif()
+
 if(AL_USE_KDU)
   list(APPEND VCPKG_MANIFEST_FEATURES "kdu")
+endif()
+
+if(AL_USE_DISCORD)
+  list(APPEND VCPKG_MANIFEST_FEATURES "discord")
+endif()
+
+if(AL_USE_FMODSTUDIO)
+  list(APPEND VCPKG_MANIFEST_FEATURES "fmodstudio")
 endif()
 
 # Setup Tracy feature flags
@@ -333,6 +440,8 @@ project(${AL_PROJECT_NAME} LANGUAGES C CXX)
 if(DEFINED AL_VCPKG_INSTALL_KEY)
   file(WRITE "${AL_VCPKG_INSTALL_STAMP_FILE}" "${AL_VCPKG_INSTALL_KEY}")
 endif()
+al_vcpkg_check_triplet_compiler()
+al_vcpkg_check_triplet_architecture()
 
 # Location of indra directory
 set(INDRA_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -360,10 +469,22 @@ if(AL_BUILD_TESTS)
   include(ProcessorCount)
   ProcessorCount(NUM_CORES)
 
-  # Set parallel level to decrease test runtime. Benchmarks are registered
-  # as tests under their own label and left out of the default run, since
-  # their numbers are their output and a shared parallel run would ruin them.
-  set(CMAKE_CTEST_ARGUMENTS -j${NUM_CORES} --output-on-failure -LE benchmark)
+  # Set parallel level to decrease test runtime. What is labelled manual runs
+  # only when asked for by its own label: benchmarks, since their numbers are
+  # their output and a shared parallel run would ruin them, and a Catch2
+  # binary's run of all its tests in one process until they are known to
+  # share one (combined_pending; see ALAddTestBinary.cmake). One label, since
+  # these arguments reach a shell, which would take a | in a regex for a pipe.
+  # Each run also writes its results as JUnit, which CI keeps.
+  set(
+    CMAKE_CTEST_ARGUMENTS
+    -j${NUM_CORES}
+    --output-on-failure
+    -LE
+    manual
+    --output-junit
+    "${CMAKE_BINARY_DIR}/Testing/test-results.xml"
+  )
 
   # Set up our test targets
   set(CTEST_TEST_TARGET_ALIAS BUILD_AND_RUN_TESTS)
@@ -409,6 +530,7 @@ set(
   SDL3
   Sentry
   Tracy
+  Velopack
   WebRTC
 )
 
@@ -420,7 +542,7 @@ endforeach()
 
 # Add our test macros
 if(AL_BUILD_TESTS)
-  include(LLAddBuildTest)
+  include(ALAddTestBinary)
 endif()
 
 # The build system's own files, for the IDE.
@@ -429,7 +551,26 @@ add_subdirectory(template_verifier)
 
 add_subdirectory(dullahan)
 add_subdirectory(llprecompiled)
+# The fuzzers' flags are Clang's, and libFuzzer runs on AddressSanitizer:
+# said here, before alscript adds -fsanitize=fuzzer-no-link, which another
+# compiler would refuse as an unknown option in place of this.
+if(
+  AL_BUILD_FUZZERS
+  AND (NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR NOT "address" IN_LIST AL_SANITIZERS)
+)
+  message(FATAL_ERROR "AL_BUILD_FUZZERS needs Clang and address in AL_SANITIZERS")
+endif()
 add_subdirectory(alscript)
+if(AL_BUILD_TESTS)
+  # LL's LSL compiler, restored as a reference for the script tests. Left
+  # out, with the configuration report saying what it lacks, unless the
+  # build is one that must have it.
+  add_subdirectory(lscript)
+  if(AL_REQUIRE_LSCRIPT AND NOT TARGET lscript_tests)
+    get_property(lscript_status GLOBAL PROPERTY AL_LSCRIPT_STATUS)
+    message(FATAL_ERROR "AL_REQUIRE_LSCRIPT: LL's LSL compiler and its tests are ${lscript_status}")
+  endif()
+endif()
 add_subdirectory(llaudio)
 add_subdirectory(llappearance)
 add_subdirectory(llcharacter)

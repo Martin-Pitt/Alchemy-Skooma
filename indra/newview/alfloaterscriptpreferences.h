@@ -28,6 +28,7 @@
 #include "alscripttheme.h"
 #include "llfloater.h"
 
+#include <initializer_list>
 #include <map>
 #include <string>
 #include <vector>
@@ -43,6 +44,7 @@ class LLPanel;
 class LLScrollListCtrl;
 class LLTabContainer;
 class LLTextBox;
+class LLViewerInventoryItem;
 
 // One window for everything about the studio a person sets once:
 // Colours, with a theme to pick and every colour to change by hand
@@ -65,9 +67,17 @@ public:
     // OK and Cancel: where something was changed, asked first whether to
     // keep it, put it back, or stay.
     bool canClose() override;
-    // A notecard dropped on the vimrc's box.
+    // A notecard dropped on the vimrc's box, the snippet list, or the box
+    // for the snippet notecard followed.
     bool handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop, EDragAndDropType cargo_type, void* cargo_data, EAcceptance* accept,
                            std::string& tooltip_msg) override;
+    // Settings just changed outside the window, while it may be open, by
+    // something whose other change stays whatever the window does -- a
+    // fix that named an alias and rewrote a require to use it: what
+    // Cancel goes back to takes them as they now are, as it takes a lint
+    // set from a problem's menu, so that Cancel cannot take the alias
+    // from under the require.
+    static void keepChanged(std::initializer_list<const char*> settings);
 
 private:
     // Everything changes as it is changed, so that the editors show it;
@@ -116,6 +126,16 @@ private:
     void onSnippetNew();
     void onSnippetCopy();
     void onSnippetDelete();
+    // The scripter's own, both languages, to a new notecard in Notecards;
+    // and a notecard dropped on the list read, and its snippets brought in
+    // beside them.
+    void onSnippetsToInventory();
+    void addSnippetsFrom(const LLViewerInventoryItem& notecard);
+    // Convert to SLua's preset as its choices say it: SLua's own ways, as
+    // close to LSL as can be, or neither; and a preset chosen, its choices
+    // set.
+    void refreshConvertPreset();
+    void onConvertPreset();
     bool snippetLua() const;
     // The chosen row: one of the scripter's own, by index, or not.
     S32  chosenOwnSnippet() const;
@@ -135,6 +155,9 @@ private:
     // The vimrc's box: the notecard's name, or none, and where the vimrc
     // is read from or why it could not be.
     void refreshVimrc();
+    // The followed snippet notecard's box: its name, or none, and why its
+    // snippets could not be read, where they could not.
+    void refreshSnippetNotecard();
 
     LLTabContainer*                                        mTabs        = nullptr;
     LLComboBox*                                            mThemes      = nullptr;
@@ -164,6 +187,7 @@ private:
     bool                                                   mSnippetsUnsaved = false;
     U32                                                    mSnippetEdits    = 0;
     boost::signals2::scoped_connection                     mSnippetBodyChanged;
+    std::vector<boost::signals2::scoped_connection>        mConvertConnections;
     // Each language's file as it was when the window opened, for Cancel.
     std::string                                            mWasSnippets[2];
     bool                                                   mWasSnippetsFile[2] = { false, false };
@@ -201,6 +225,10 @@ private:
     // The notecard that was the vimrc when the window opened, for Cancel.
     std::string                                            mWasVimrc;
     boost::signals2::scoped_connection                     mVimrcChanged;
+    LLLineEditor*                                          mSnippetNotecard = nullptr;
+    // The snippet notecard followed when the window opened, for Cancel.
+    std::string                                            mWasSnippetNotecard;
+    boost::signals2::scoped_connection                     mSnippetNotecardChanged;
     LLScrollListCtrl*                                      mLintsLSL  = nullptr;
     LLScrollListCtrl*                                      mLintsLuau = nullptr;
     // The settings the enabling follows, by their own signals, so that it

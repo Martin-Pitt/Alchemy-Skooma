@@ -185,6 +185,10 @@ public:
     // used to discount stats from this frame
     bool mWasPaused;
 
+    // between send_agent_pause() and send_agent_resume(): every frame is discounted, and so is the
+    // frame after the resume, which the pause stalled
+    bool mAgentPaused;
+
     void getUUIDFromLocal(LLUUID &id,
                                 const U32 local_id,
                                 const U32 ip,
@@ -202,6 +206,7 @@ public:
     S32 mNumUnknownUpdates;
     S32 mNumDeadObjectUpdates;
     S32 mNumDeadObjects;
+    const std::vector<LLPointer<LLViewerObject>>& getMapObjects() const { return mMapObjects; } // <SK:Nexii> SKNetMap reads the map objects for its fallback layer
 protected:
     std::vector<U64>    mOrphanParents; // LocalID/ip,port of orphaned objects
     std::vector<OrphanInfo> mOrphanChildren;    // UUID's of orphaned objects

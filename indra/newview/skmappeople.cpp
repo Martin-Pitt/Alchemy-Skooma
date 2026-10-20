@@ -1,0 +1,584 @@
+/**
+ * @file skmappeople.cpp
+ * @brief The mini-map's people: a snapshot of nearby avatars taken once an idle, for the draw.
+ *
+ * $LicenseInfo:firstyear=2026&license=viewerlgpl$
+ * Alchemy Viewer Source Code
+ * Copyright (C) 2026, Alchemy Viewer Project.
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation;
+ * version 2.1 of the License only.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * $/LicenseInfo$
+ */
+
+#include "llviewerprecompiledheaders.h"
+
+#include "skmappeople.h"
+
+#include "alavatargroups.h"
+#include "alobjectproperties.h"
+#include "llagent.h"
+#include "llagentcamera.h"
+#include "llavataractions.h"
+#include "llcallbacklist.h"
+#include "llgroupmgr.h"
+#include "lldir.h"
+#include "llfile.h"
+#include "llviewercamera.h"
+#include "llviewerparcelmgr.h"
+#include "llviewercontrol.h"
+#include "llvoavatarself.h"
+#include "llviewerobjectlist.h"
+#include "llvoavatar.h"
+#include "llworld.h"
+#include "pipeline.h"
+#include "lljoint.h"
+#include "skmappalette.h"
+#include "skmapscene.h"
+#include "sknetmap.h"
+#include "sknavmesh.h"
+#include "skworldcensus.h"
+
+namespace
+{
+    constexpr F64 DRAWN_RECENTLY_S = 2.0;
+    constexpr F64 COARSE_CEILING_M = 1020.0;   ///< coarse locations stop telling heights here
+    constexpr F32 PEOPLE_REACH_M = 1024.f;
+}
+
+SKMapPeople::SKMapPeople()
+{
+}
+
+SKMapPeople::~SKMapPeople()
+{
+}
+
+void SKMapPeople::initSingleton()
+{
+    // Taking these here makes them outlive us at teardown.
+    SKNavMesh::instance();
+    ALObjectPropertiesCache::instance();
+    LLGroupMgr::instance();
+    gIdleCallbacks.addFunction(&SKMapPeople::onIdle, nullptr);
+    // Every probe record goes with a teleport.
+    mTeleportConnection = LLViewerParcelMgr::getInstance()->setTeleportFinishedCallback([this](const LLVector3d&, const bool&) {
+        mResolver.forgetRecords();
+        mCodes.clear();
+    });
+}
+
+void SKMapPeople::cleanupSingleton()
+{
+    gIdleCallbacks.deleteFunction(&SKMapPeople::onIdle, nullptr);
+    mTeleportConnection.disconnect();
+    mResolver.clear();
+    mPeople.clear();
+}
+
+void SKMapPeople::noteDrawn(const skmap::MapView& view)
+{
+    mLastDrawn = LLFrameTimer::getUptimeSeconds().value();
+    view.visibleBox(mViewMin, mViewMax);
+    const LLVector3d pad = (mViewMax - mViewMin) * 0.05;
+    mViewMin -= pad;
+    mViewMax += pad;
+}
+
+bool SKMapPeople::active() const
+{
+    return LLFrameTimer::getUptimeSeconds().value() - mLastDrawn < DRAWN_RECENTLY_S;
+}
+
+// static
+void SKMapPeople::onIdle(void*)
+{
+    if (instanceExists())
+    {
+        getInstance()->idle();
+    }
+}
+
+void SKMapPeople::idle()
+{
+    if (!active() || !LLWorld::instanceExists() || !gAgent.getRegion())
+    {
+        if (!mPeople.empty())
+        {
+            mPeople.clear();
+            mVehicles.clear();
+        }
+        // Kept current, so the first frame after the map reopens on damage land already hides what combat hides.
+        if (LLWorld::instanceExists() && gAgent.getRegion())
+        {
+            updateCombat();
+        }
+        else
+        {
+            mCombat = false;
+        }
+        mResolver.update(false, false, mCandidates, LLFrameTimer::getUptimeSeconds().value());
+        return;
+    }
+    LL_PROFILE_ZONE_SCOPED;
+    updateCombat();
+    updateCandidates();
+    mResolver.update(mCombat, mCombat, mCandidates, LLFrameTimer::getUptimeSeconds().value());
+    gatherPeople();
+    mResolver.dispatch(LLFrameTimer::getUptimeSeconds().value());
+    updateFiringLines();
+    updateProjectiles();
+    updateCoverAhead();
+    gatherVehicles();
+}
+
+void SKMapPeople::gatherVehicles()
+{
+    LL_PROFILE_ZONE_SCOPED;
+    static LLCachedControl<bool> show(gSavedSettings, "SKMapLayerVehicles", true);
+    mVehicles.clear();
+    if (!show || !SKWorldCensus::instanceExists())
+    {
+        return;
+    }
+    // The census latches a linkset as a vehicle once it was crewed while physical or travelled,
+    // so a parked one stays; the roots are read again only when a new census lands.
+    if (const SKCensusSnapshotPtr snap = SKWorldCensus::instance().snapshot())
+    {
+        if (snap->mStamp != mVehicleStamp)
+        {
+            mVehicleStamp = snap->mStamp;
+            mVehicleRoots.clear();
+            for (const sknav::Feature& f : snap->mFeatures)
+            {
+                if (f.mKind == sknav::FeatureKind::VEHICLE)
+                {
+                    mVehicleRoots.insert(mVehicleRoots.end(), f.mRoots.begin(), f.mRoots.end());
+                }
+            }
+        }
+    }
+    std::map<LLUUID, BoxCache> boxes;
+    for (const LLUUID& id : mVehicleRoots)
+    {
+        LLViewerObject* root = gObjectList.findObject(id);
+        if (!root || root->isDead() || !root->isRoot())
+        {
+            continue;
+        }
+        Vehicle v;
+        v.mRoot = id;
+        v.mPos = root->getPositionGlobal();
+        v.mRot = root->getRotation();
+        // The union of the parts' boxes in the root's frame, cached by the parts' local ids.
+        U64 key = sknav::mix(sknav::SEED, root->getChildren().size());
+        for (const LLPointer<LLViewerObject>& child : root->getChildren())
+        {
+            if (!child->isAvatar())
+            {
+                key = sknav::mix(key, child->getLocalID());
+            }
+        }
+        auto cached = mBoxes.find(id);
+        if (cached == mBoxes.end() || cached->second.mKey != key)
+        {
+            BoxCache box;
+            box.mKey = key;
+            box.mMin = root->getScale() * -0.5f;
+            box.mMax = root->getScale() * 0.5f;
+            for (const LLPointer<LLViewerObject>& child : root->getChildren())
+            {
+                if (child->isAvatar())
+                {
+                    continue;
+                }
+                const LLVector3 half = child->getScale() * 0.5f;
+                for (S32 k = 0; k < 8; ++k)
+                {
+                    const LLVector3 corner((k & 1) ? half.mV[VX] : -half.mV[VX], (k & 2) ? half.mV[VY] : -half.mV[VY], (k & 4) ? half.mV[VZ] : -half.mV[VZ]);
+                    const LLVector3 p = child->getPosition() + corner * child->getRotation();
+                    box.mMin.set(llmin(box.mMin.mV[VX], p.mV[VX]), llmin(box.mMin.mV[VY], p.mV[VY]), llmin(box.mMin.mV[VZ], p.mV[VZ]));
+                    box.mMax.set(llmax(box.mMax.mV[VX], p.mV[VX]), llmax(box.mMax.mV[VY], p.mV[VY]), llmax(box.mMax.mV[VZ], p.mV[VZ]));
+                }
+            }
+            cached = mBoxes.insert_or_assign(id, box).first;
+        }
+        v.mMin = cached->second.mMin;
+        v.mMax = cached->second.mMax;
+        boxes[id] = cached->second;
+        // The crew, read live from the seated avatars; a vehicle crewed by nobody allied hides in combat.
+        const auto seat = mSeats.find(id);
+        v.mLook = skmap::vehicleLook(mCombat, seat != mSeats.end() && seat->second.second, seat != mSeats.end() && seat->second.first);
+        if (v.mLook == skmap::VehicleLook::HIDDEN)
+        {
+            continue;
+        }
+        for (const Person& p : mPeople)
+        {
+            if (p.mSitting && p.mSeatRoot == id)
+            {
+                v.mCrew.push_back(p.mId);
+            }
+        }
+        mVehicles.push_back(v);
+    }
+    mBoxes.swap(boxes);
+}
+
+void SKMapPeople::updateCoverAhead()
+{
+    LL_PROFILE_ZONE_SCOPED;
+    static LLCachedControl<bool> show(gSavedSettings, "SKMapCoverAhead", true);
+    if (!show)
+    {
+        mCoverAhead = sknav::Cover::NONE;
+        return;
+    }
+    const F64 now = LLFrameTimer::getUptimeSeconds().value();
+    if (now - mCoverAt < 0.1)
+    {
+        return;
+    }
+    mCoverAt = now;
+    // Along the camera in plan, within a metre and a half, against the agent's own eyes.
+    const LLVector3 at = LLViewerCamera::getInstance()->getAtAxis();
+    const F32 eye = isAgentAvatarValid() ? gAgentAvatarp->mBodySize.mV[VZ] * 0.94f : 1.8f;
+    sknav::Cover cover = sknav::Cover::NONE;
+    F32 height = 0.f;
+    if (!SKNavMesh::instance().coverAt(gAgent.getPositionGlobal(), LLVector3(at.mV[VX], at.mV[VY], 0.f), sknav::AgentClass::AVATAR, eye, cover,
+                                       height, 1.5f))
+    {
+        cover = sknav::Cover::NONE;
+    }
+    mCoverAhead = cover;
+}
+
+void SKMapPeople::addPing(const LLVector3d& pos)
+{
+    const F64 now = LLFrameTimer::getUptimeSeconds().value();
+    mPings.erase(std::remove_if(mPings.begin(), mPings.end(), [now](const Ping& p) { return now - p.mTime > skmap::palette::PING_SECONDS; }),
+                 mPings.end());
+    mPings.push_back({ pos, now });
+    SKNetMap::firePing(pos);
+}
+
+void SKMapPeople::updateFiringLines()
+{
+    LL_PROFILE_ZONE_SCOPED;
+    static LLCachedControl<bool> show(gSavedSettings, "SKMapLayerFiringLines", true);
+    if (!show)
+    {
+        mFiring.clear();
+        return;
+    }
+    constexpr F64 RECAST_S = 0.25;      ///< 4 Hz an avatar
+    constexpr S32 RAYS_PER_IDLE = 4;
+    constexpr F64 RAY_BUDGET_S = 0.001; ///< what an idle may spend on rays, averaged
+    constexpr F64 RAY_BURST_S = 0.004;  ///< how much unspent budget may accumulate
+    constexpr F64 RAY_DEBT_S = 0.5;     ///< how far one dear ray may push the next out
+    const F64 now = LLFrameTimer::getUptimeSeconds().value();
+    // A world ray through a hub full of mesh can cost a hundred milliseconds, so the rays are
+    // paid for by measured cost: a dear one is followed by as many idles as it takes to earn
+    // the next, and a cheap scene never notices.
+    mRayAllowance = llmin(mRayAllowance + RAY_BUDGET_S, RAY_BURST_S);
+    // Only for people the map draws: in combat, allies; a hidden avatar's aim must not leak.
+    std::map<LLUUID, FiringLine> kept;
+    std::vector<std::pair<F64, const Person*>> due;
+    for (const Person& p : mPeople)
+    {
+        const bool in_view = p.mPos.mdV[VX] >= mViewMin.mdV[VX] && p.mPos.mdV[VX] <= mViewMax.mdV[VX] && p.mPos.mdV[VY] >= mViewMin.mdV[VY]
+                          && p.mPos.mdV[VY] <= mViewMax.mdV[VY];
+        if (!p.mLoaded || !in_view)
+        {
+            continue;
+        }
+        const auto it = mFiring.find(p.mId);
+        if (it != mFiring.end())
+        {
+            kept[p.mId] = it->second;
+        }
+        const F64 last = it != mFiring.end() ? it->second.mCast : -1.0e9;
+        if (now - last >= RECAST_S)
+        {
+            due.emplace_back(last, &p);
+        }
+    }
+    // The longest waiting first, a few rays an idle.
+    std::sort(due.begin(), due.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    S32 rays = 0;
+    for (const auto& entry : due)
+    {
+        if (rays >= RAYS_PER_IDLE || mRayAllowance <= 0.0)
+        {
+            break;
+        }
+        LLVOAvatar* avatar = dynamic_cast<LLVOAvatar*>(gObjectList.findObject(entry.second->mId));
+        LLJoint* head = avatar ? avatar->getJoint("mHead") : nullptr;
+        if (!head)
+        {
+            continue;
+        }
+        ++rays;
+        const F64 ray_start = LLFrameTimer::getTotalSeconds();
+        const LLVector3 from = head->getWorldPosition();
+        const LLVector3 dir = LLVector3::x_axis * head->getWorldRotation();
+        const LLVector3 to = from + dir * skmap::palette::FIRING_REACH_M;
+        LLVector4a start, end, hit;
+        // Past the head, so the shooter's own attachments are not what the ray finds.
+        start.load3((from + dir * 0.5f).mV);
+        end.load3(to.mV);
+        S32 face = -1;
+        LLVector3 stop = to;
+        if (gPipeline.lineSegmentIntersectInWorld(start, end, false, false, false, false, &face, &hit))
+        {
+            stop.set(hit.getF32ptr());
+        }
+        mRayAllowance = llmax(mRayAllowance - (LLFrameTimer::getTotalSeconds() - ray_start), -RAY_DEBT_S);
+        FiringLine& line = kept[entry.second->mId];
+        line.mFrom = gAgent.getPosGlobalFromAgent(from);
+        line.mTo = gAgent.getPosGlobalFromAgent(stop);
+        line.mCast = now;
+    }
+    mFiring.swap(kept);
+}
+
+void SKMapPeople::updateProjectiles()
+{
+    LL_PROFILE_ZONE_SCOPED;
+    static LLCachedControl<bool> show(gSavedSettings, "SKMapLayerProjectiles", false);
+    // Never in combat: a shot's owner cannot be told without asking, and it would show where
+    // someone hidden is shooting from.
+    if (!show || mCombat)
+    {
+        mProjectiles.clear();
+        mLastObjectPos.clear();
+        return;
+    }
+    const F64 now = LLFrameTimer::getUptimeSeconds().value();
+    if (now - mProjectilesAt < 0.1)
+    {
+        return;
+    }
+    mProjectilesAt = now;
+    std::vector<Projectile> found;
+    std::map<LLUUID, LLVector3d> seen;
+    for (const LLPointer<LLViewerObject>& ptr : gObjectList.getMapObjects())
+    {
+        LLViewerObject* object = ptr.get();
+        if (!object || object->isDead() || !object->isRoot() || object->isAttachment() || !object->flagUsePhysics())
+        {
+            continue;
+        }
+        const LLVector3d pos = object->getPositionGlobal();
+        if (pos.mdV[VX] < mViewMin.mdV[VX] || pos.mdV[VX] > mViewMax.mdV[VX] || pos.mdV[VY] < mViewMin.mdV[VY] || pos.mdV[VY] > mViewMax.mdV[VY])
+        {
+            continue;
+        }
+        const F32 speed = object->getVelocity().length();
+        const F32 size = object->getScale().length();
+        Projectile p;
+        p.mPos = pos;
+        if (speed > 20.f)
+        {
+            // A streak over the last tenth of a second.
+            p.mFast = true;
+            const LLVector3 back = object->getVelocity() * -0.1f;
+            p.mTail = pos + LLVector3d(back);
+        }
+        else if (size >= 0.05f && size <= 0.6f && speed > 1.f)
+        {
+            const auto last = mLastObjectPos.find(object->getID());
+            p.mTail = last != mLastObjectPos.end() ? last->second : pos;
+        }
+        else
+        {
+            continue;
+        }
+        seen[object->getID()] = pos;
+        found.push_back(p);
+    }
+    mProjectiles.swap(found);
+    mLastObjectPos.swap(seen);
+}
+
+void SKMapPeople::updateCombat()
+{
+    // The check behind the health display: the agent's own parcel, nothing else. The debug
+    // switch can only turn combat on, never show anyone it would hide.
+    static LLCachedControl<bool> force(gSavedSettings, "SKMapDebugForceCombat", false);
+    LLViewerParcelMgr* parcels = LLViewerParcelMgr::getInstance();
+    mCombat = force || parcels->allowAgentDamage(gAgent.getRegion(), parcels->getAgentParcel());
+}
+
+void SKMapPeople::loadFactions()
+{
+    mFactionsLoaded = true;
+    // The user's own copy wins over the shipped one, when it holds a faction.
+    const std::string user = gDirUtilp->getExpandedFilename(LL_PATH_USER_SETTINGS, "sk_slmc_factions.xml");
+    if (LLFile::isfile(user) && mFactions.load(user))
+    {
+        return;
+    }
+    if (!mFactions.load(gDirUtilp->getExpandedFilename(LL_PATH_APP_SETTINGS, "sk_slmc_factions.xml")))
+    {
+        LL_WARNS("SKMap") << "no faction table: allies are the active group's members only" << LL_ENDL;
+    }
+}
+
+void SKMapPeople::updateCandidates()
+{
+    const LLUUID group = gAgent.getGroupID();
+    if (mGroupKnown && group == mActiveGroup)
+    {
+        return;
+    }
+    if (!mFactionsLoaded)
+    {
+        loadFactions();
+    }
+    mGroupKnown = true;
+    mActiveGroup = group;
+    mCandidates = mFactions.candidatesFor(group);
+    const skmap::Faction* faction = mFactions.factionOf(group);
+    LL_INFOS("SKMap") << "active group " << group << ": " << (faction ? faction->mName : std::string("no faction")) << ", "
+                      << mCandidates.size() << " ally groups" << LL_ENDL;
+}
+
+void SKMapPeople::gatherPeople()
+{
+    LL_PROFILE_ZONE_SCOPED;
+    static LLCachedControl<bool> avatar_colours(gSavedSettings, "SKMapAvatarColors", true);
+    const LLVector3d agent = gAgent.getPositionGlobal();
+    const F64 camera_z = gAgentCamera.getCameraPositionGlobal().mdV[VZ];
+    uuid_vec_t ids;
+    std::vector<LLVector3d> positions;
+    LLWorld::getInstance()->getAvatars(&ids, &positions, agent, PEOPLE_REACH_M);
+
+    // Floors from the scene when there is one; the raw height difference otherwise.
+    const skmap::ScenePtr scene = SKMapScene::instanceExists() ? SKMapScene::instance().scene() : nullptr;
+    // The probe sees loaded avatars nearest first, so the nearest are asked about first.
+    if (mCombat)
+    {
+        std::vector<std::pair<F64, LLVOAvatar*>> loaded;
+        for (size_t i = 0; i < ids.size(); ++i)
+        {
+            LLVOAvatar* avatar = ids[i] == gAgent.getID() ? nullptr : dynamic_cast<LLVOAvatar*>(gObjectList.findObject(ids[i]));
+            if (avatar && !avatar->isDead())
+            {
+                loaded.emplace_back(dist_vec_squared(positions[i], agent), avatar);
+            }
+        }
+        std::sort(loaded.begin(), loaded.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+        const F64 now = LLFrameTimer::getUptimeSeconds().value();
+        for (const auto& entry : loaded)
+        {
+            const LLVector3d p = entry.second->getPositionGlobal();
+            const bool in_view = p.mdV[VX] >= mViewMin.mdV[VX] && p.mdV[VX] <= mViewMax.mdV[VX] && p.mdV[VY] >= mViewMin.mdV[VY]
+                              && p.mdV[VY] <= mViewMax.mdV[VY];
+            mResolver.noteAvatar(entry.second, in_view, now);
+        }
+    }
+
+    static LLCachedControl<F32> code_hold(gSavedSettings, "SKMapMarkerCodeHold", skmap::CODE_HOLD_S);
+    mCodes.setHold(code_hold);
+    const F64 code_now = LLFrameTimer::getUptimeSeconds().value();
+    mCodes.release(code_now);
+
+    const LLColor4 general(skmap::palette::DOT_GENERAL.mR, skmap::palette::DOT_GENERAL.mG, skmap::palette::DOT_GENERAL.mB, 1.f);
+    mPeople.clear();
+    mPeople.reserve(ids.size());
+    mSeats.clear();
+    // The user crews their own vehicle as an ally would, so it never reads as empty or hostile.
+    if (isAgentAvatarValid() && gAgentAvatarp->isSitting())
+    {
+        if (LLViewerObject* seat = static_cast<LLViewerObject*>(gAgentAvatarp->getParent()))
+        {
+            mSeats[seat->getRootEdit()->getID()] = { true, true };
+        }
+    }
+    for (size_t i = 0; i < ids.size(); ++i)
+    {
+        if (ids[i] == gAgent.getID())
+        {
+            continue;
+        }
+        Person p;
+        p.mId = ids[i];
+        p.mPos = positions[i];
+        p.mFriend = LLAvatarActions::isFriend(p.mId);
+        LLVOAvatar* avatar = dynamic_cast<LLVOAvatar*>(gObjectList.findObject(p.mId));
+        if (avatar && !avatar->isDead())
+        {
+            p.mLoaded = true;
+            p.mPos = avatar->getPositionGlobal();
+            const LLVector3 forward = LLVector3::x_axis * avatar->getRenderRotation();
+            p.mHeading = std::atan2(forward.mV[VY], forward.mV[VX]);
+            p.mHasHeading = true;
+            p.mSitting = avatar->isSitting();
+            if (p.mSitting)
+            {
+                if (LLViewerObject* seat = static_cast<LLViewerObject*>(avatar->getParent()))
+                {
+                    p.mSeatRoot = seat->getRootEdit()->getID();
+                }
+            }
+        }
+        // A coarse location past the ceiling has no height, unless the camera is below it.
+        p.mZKnown = p.mLoaded || !(p.mPos.mdV[VZ] >= COARSE_CEILING_M && camera_z >= COARSE_CEILING_M);
+        if (!p.mZKnown)
+        {
+            p.mFloor = skmap::FloorRelation::UNKNOWN;
+        }
+        else if (scene && SKMapScene::instance().agentFloorCurrent())
+        {
+            p.mFloor = skmap::floorRelation(*scene, SKMapScene::instance().agentFloor(), p.mPos, true);
+        }
+        else
+        {
+            const F64 dz = p.mPos.mdV[VZ] - agent.mdV[VZ];
+            p.mFloor = dz >= skmap::FLOOR_RAW_M ? skmap::FloorRelation::ABOVE
+                     : dz <= -skmap::FLOOR_RAW_M ? skmap::FloorRelation::BELOW
+                                                 : skmap::FloorRelation::SAME;
+        }
+        if (avatar_colours)
+        {
+            p.mColour = p.mLoaded && avatar ? ALAvatarGroups::instance().getAvatarColor(avatar, general, ALAvatarGroups::COLOR_MINIMAP)
+                                            : ALAvatarGroups::instance().getAvatarColor(p.mId, general, ALAvatarGroups::COLOR_MINIMAP);
+        }
+        else
+        {
+            p.mColour = general;
+        }
+        p.mAlly = mCombat && mResolver.verdict(p.mId) == skmap::AllyVerdict::ALLY;
+        p.mVisibility = skmap::visibilityOf(mCombat, false, p.mAlly);
+        if (p.mSitting)
+        {
+            std::pair<bool, bool>& seat = mSeats[p.mSeatRoot];
+            seat.first = true;
+            seat.second = seat.second || p.mAlly;
+        }
+        // Hidden means hidden everywhere: not drawn, picked, listed, crewing or aiming.
+        if (p.mVisibility == skmap::Visibility::HIDDEN)
+        {
+            continue;
+        }
+        if (p.mVisibility == skmap::Visibility::DOT_CODED)
+        {
+            p.mCode = skmap::codeString(mCodes.codeFor(p.mId, code_now));
+        }
+        mPeople.push_back(p);
+    }
+    // Friends draw last, on top.
+    std::stable_sort(mPeople.begin(), mPeople.end(), [](const Person& a, const Person& b) { return !a.mFriend && b.mFriend; });
+}

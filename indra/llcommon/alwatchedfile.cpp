@@ -26,6 +26,7 @@
 
 #include "alwatchedfile.h"
 
+#include "almainloop.h"
 #include "alserialworker.h"
 #include "fsyspath.h"
 #include "llerror.h"
@@ -188,7 +189,7 @@ private:
         {
             return;
         }
-        const LL::WorkQueue::ptr_t main = LL::WorkQueue::getInstance("mainloop");
+        const LL::WorkQueue::ptr_t main = ALMainLoop::queue();
         if (!mWorker)
         {
             mWorker = std::make_unique<ALSerialWorker>("WatchedFiles");
@@ -254,6 +255,14 @@ ALWatchedFile::ALWatchedFile(std::string path, changed_t changed)
 {
     mSeen   = ALFileStamp::of(mPath);
     mLooked = mSeen;
+}
+
+ALWatchedFile::ALWatchedFile(std::string path, const ALFileStamp& seen, changed_t changed)
+    : mPath(std::move(path)),
+      mChanged(std::move(changed)),
+      mSeen(seen),
+      mLooked(seen)
+{
 }
 
 ALWatchedFile::~ALWatchedFile()

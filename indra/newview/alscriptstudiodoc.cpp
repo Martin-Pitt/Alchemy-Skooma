@@ -31,15 +31,22 @@
 #include "alnotecardembedded.h"
 #include "alscriptexternaleditor.h"
 #include "alscriptfixes.h"
+#include "alscriptlintpass.h"
 #include "alscriptlookup.h"
 #include "alscriptstudiocaret.h"
 #include "alscriptstudiochecking.h"
+#include "alscriptstudiomasters.h"
+#include "alscriptstudiocomparepairs.h"
 #include "alscriptstudioorphans.h"
+#include "alscriptstudioplaces.h"
 #include "alscriptstudiorecovery.h"
 #include "alscriptstudioservices.h"
 #include "alscriptstudioweighing.h"
+#include "aluploadheader.h"
 #include "lldate.h"
 #include "llfocusmgr.h"
+
+#include <fmt/format.h>
 
 #include <algorithm>
 #include <utility>
@@ -77,15 +84,18 @@ ALScriptStudioDoc::Level ALScriptStudioDoc::levelOf(ALScriptProblem::Severity se
 ALScriptStudioDoc::Shown ALScriptStudioDoc::analysisRow(const ALScriptProblem& problem, bool lua, const ALScriptStudioServices& services)
 {
     Shown row;
-    row.level  = levelOf(problem.severity);
-    row.origin = problem.source == ALScriptProblem::Source::Parser  ? services.words("OriginParser")
-                 : problem.source == ALScriptProblem::Source::Types ? services.words("OriginTypes")
-                                                                    : services.words("OriginLint");
+    row.level     = levelOf(problem.severity);
+    row.migration = lua && ALScriptLintPass::migration(problem);
+    row.origin    = row.migration                                      ? services.words("OriginMigration")
+                    : problem.source == ALScriptProblem::Source::Parser ? services.words("OriginParser")
+                    : problem.source == ALScriptProblem::Source::Types  ? services.words("OriginTypes")
+                                                                        : services.words("OriginLint");
     // A lint's name says what to look up, or what a NOLINT comment turns
     // off: Luau's own, LSL's as its key has it. An error's number says
     // nothing to whoever reads it.
     std::string name = ALScriptFixes::lintName(problem, lua);
-    if (name.empty() && !problem.code.empty() && problem.code.find_first_not_of("0123456789") != std::string::npos)
+    if (name.empty() && problem.source != ALScriptProblem::Source::Assistant && !problem.code.empty() &&
+        problem.code.find_first_not_of("0123456789") != std::string::npos)
     {
         name = problem.code;
     }
@@ -114,6 +124,11 @@ ALCodeEditor* ALScriptStudioDoc::shownText() const
         case View::Expanded: return expandedEditor;
         default:             return editor;
     }
+}
+
+ALCodeEditor* ALScriptStudioDoc::undoText() const
+{
+    return shownView() == View::Compare && compareTitles ? editor : shownText();
 }
 
 bool ALScriptStudioDoc::hasKeyboard() const
@@ -223,7 +238,84 @@ void ALScriptStudioDoc::placeHeldRuntime()
     }
 }
 
-ALScriptEnvelope ALScriptStudioDoc::envelopeFor(const std::string& expanded_text, const std::string& program) const
+// static
+std::vector<ALScriptStudioDoc::Compiled> ALScriptStudioDoc::compiledOf(const std::vector<ALScriptDiagnostic>& said, const ALSourceMap* map,
+                                                                       S32 under)
+{
+    std::vector<Compiled> out;
+    for (const ALScriptDiagnostic& each : said)
+    {
+        Compiled one;
+        one.line      = each.hasLine ? each.line : -1;
+        one.column    = each.column;
+        one.hasColumn = each.hasColumn;
+        one.level     = each.level;
+        one.message   = mentionsMapped(each, map, under);
+        if (map && each.hasLine)
+        {
+            const ALSourceMap::Loc loc = map->toSource(each.line - under, each.column);
+            if (loc.found())
+            {
+                one.line   = loc.line;
+                one.column = loc.column;
+                if (loc.file > 0)
+                {
+                    one.file = map->files()[loc.file].path;
+                }
+            }
+            else
+            {
+                // In code the preprocessor made, at the expansion's line.
+                one.line = llmax(0, each.line - under);
+                one.file = GENERATED;
+            }
+        }
+        out.push_back(std::move(one));
+    }
+    return out;
+}
+
+// static
+std::string ALScriptStudioDoc::mentionsMapped(const ALScriptDiagnostic& said, const ALSourceMap* map, S32 under)
+{
+    std::string message = said.message;
+    if (!map)
+    {
+        return message;
+    }
+    // From the last, so that each before it is still where it was.
+    for (auto it = said.mentions.rbegin(); it != said.mentions.rend(); ++it)
+    {
+        const ALSourceMap::Loc loc = map->toSource(it->line - under, it->column);
+        if (!loc.found() || it->at + it->length > message.size())
+        {
+            continue;
+        }
+        std::string place = fmt::format("({}, {})", loc.line + 1, loc.column + 1);
+        if (loc.file > 0)
+        {
+            place += " in " + map->files()[loc.file].name;
+        }
+        message.replace(it->at, it->length, place);
+    }
+    return message;
+}
+
+std::string ALScriptStudioDoc::headerFor(const std::string& expanded_text, const Header& header) const
+{
+    if (!header.on)
+    {
+        return std::string();
+    }
+    // No @file: that is a link's, and a tab has none.
+    ALUploadHeader said;
+    said.hash    = ALUploadHeader::hashOf(language.compileTarget, editor ? editor->text() : std::string(), expanded_text);
+    said.date    = ALUploadHeader::dateOf(LLDate::now());
+    said.creator = header.creator;
+    return said.write(language.lua);
+}
+
+ALScriptEnvelope ALScriptStudioDoc::envelopeFor(const std::string& expanded_text, const std::string& program, const Header& header) const
 {
     // Every field its own: the last envelope's texts are not copied in only
     // to be written over.
@@ -234,6 +326,7 @@ ALScriptEnvelope ALScriptStudioDoc::envelopeFor(const std::string& expanded_text
     out.compileTarget    = language.compileTarget;
     out.programVersion   = program;
     out.lastCompiled     = LLDate::now().asString();
+    out.header           = headerFor(expanded_text, header);
     return out;
 }
 
@@ -295,7 +388,7 @@ std::optional<ALScriptStudioDoc::Named> ALScriptStudioDoc::namedIn(const ALTextD
     }
     for (const ALPreprocessor::Required& call : calls)
     {
-        const ALTextRange stretch(ALTextPos(call.line, call.column), ALTextPos(call.endLine, call.endColumn));
+        const ALTextRange stretch = ALScriptPlaces::rangeOf(call);
         if (!(at < stretch.begin) && !(stretch.end < at))
         {
             Named named;
@@ -346,19 +439,21 @@ std::string ALScriptStudioDoc::foundAs(const std::string& name, std::optional<bo
 
 void ALScriptStudioDoc::setShown(std::vector<Shown> rows)
 {
-    shown         = std::move(rows);
-    shownErrors   = 0;
-    shownWarnings = 0;
-    for (const Shown& one : shown)
+    shownRows      = std::make_shared<const std::vector<Shown>>(std::move(rows));
+    shownErrors    = 0;
+    shownWarnings  = 0;
+    shownMigration = 0;
+    for (const Shown& one : *shownRows)
     {
         shownErrors += one.level == Level::Error ? 1 : 0;
         shownWarnings += one.level == Level::Warning ? 1 : 0;
+        shownMigration += one.migration && one.file.empty() ? 1 : 0;
     }
 }
 
 const ALScriptStudioDoc::Shown* ALScriptStudioDoc::findShown(S32 line, S32 column, const std::string& file, const std::string& message) const
 {
-    for (const Shown& one : shown)
+    for (const Shown& one : shown())
     {
         if (one.line == line && one.column == column && one.file == file && one.message == message)
         {
@@ -372,10 +467,10 @@ std::vector<const ALScriptFix*> ALScriptStudioDoc::pickFixes(const FixPick& pick
 {
     std::vector<const ALScriptFix*> taken;
     const U32                       now       = editor->document().version();
-    const bool                      only_safe = pick.forSave || pick.key.empty();
-    for (const Shown& one : shown)
+    const bool                      only_safe = pick.forSave || (pick.key.empty() && !pick.migration);
+    for (const Shown& one : shown())
     {
-        if (!one.file.empty() || one.fixesFor != now || (!pick.key.empty() && one.key != pick.key))
+        if (!one.file.empty() || one.fixesFor != now || (!pick.key.empty() && one.key != pick.key) || (pick.migration && !one.migration))
         {
             continue;
         }
@@ -396,8 +491,8 @@ std::vector<const ALScriptFix*> ALScriptStudioDoc::pickFixes(const FixPick& pick
         }
     }
     // One step of edits that never meet: of two that would, the first.
-    const auto begin_of = [](const ALScriptEdit& edit) { return ALTextPos(edit.line, edit.column); };
-    const auto end_of   = [](const ALScriptEdit& edit) { return ALTextPos(edit.endLine, edit.endColumn); };
+    const auto begin_of = [](const ALScriptEdit& edit) { return ALScriptPlaces::rangeOf(edit).begin; };
+    const auto end_of   = [](const ALScriptEdit& edit) { return ALScriptPlaces::rangeOf(edit).end; };
     std::vector<const ALScriptFix*> kept;
     std::vector<ALTextRange>        claimed;
     for (const ALScriptFix* fix : taken)

@@ -428,8 +428,13 @@ bool LLGLTFPreviewTexture::render()
 
     if (!mShouldRender) { return false; }
 
-    glClearColor(0, 0, 0, 0);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    // The swatch's alpha is its coverage, drawn over a checkerboard. Without this the
+    // preview takes whatever mask the last frame ended on, and after a HUD pass that leaves
+    // alpha unwritten from the clears through the final blit.
+    LLGLSColorMask color_mask(true, true);
+
+    gGL.setClearColor(LLColor4::transparent);
+    gGL.clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     LLGLDepthTest depth(GL_FALSE);
     LLGLDisable stencil(GL_STENCIL_TEST);
@@ -471,7 +476,7 @@ bool LLGLTFPreviewTexture::render()
     camera.lookAt(origin, object_position);
     camera.setAspect((F32)(mFullWidth / mFullHeight));
     const LLRect texture_rect(0, mFullHeight, mFullWidth, 0);
-    camera.setPerspective(NOT_FOR_SELECTION, texture_rect.mLeft, texture_rect.mBottom, texture_rect.getWidth(), texture_rect.getHeight(), false, camera.getNear(), MAX_FAR_CLIP*2.f);
+    camera.setPerspective(NOT_FOR_SELECTION, texture_rect.mLeft, texture_rect.mBottom, texture_rect.getWidth(), texture_rect.getHeight(), false, camera.getNear(), FINITE_PROJECTION_FAR);
 
     // Generate sphere object on-the-fly. Discard afterwards. (Vertex buffer is
     // discarded, but the sphere should be cached in LLVolumeMgr.)
@@ -507,7 +512,9 @@ bool LLGLTFPreviewTexture::render()
         // Alpha blend rendering
 
         screen.bindTarget();
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        // Colour only: the sphere draws with the depth test off, and depth writes are off
+        // with it, so a depth clear here would do nothing.
+        gGL.clear(GL_COLOR_BUFFER_BIT);
 
         LLGLSLShader& shader = *gDeferredPBRAlphaProgram.selectVariant();
 
@@ -553,11 +560,16 @@ bool LLGLTFPreviewTexture::render()
     gPipeline.mExposureMap.swapFBORefs(gPipeline.mLastExposure);
 
     // Final render
+    // Nested post-processing targets restore the full preview target's viewport.
+    glViewport(mOrigin.mX, mOrigin.mY, mFullWidth, mFullHeight);
     gDeferredPostNoDoFProgram.bind();
 
     // From LLPipeline::renderFinalize: "Whatever is last in the above post processing chain should _always_ be rendered directly here.  If not, expect problems."
-    gDeferredPostNoDoFProgram.bindTexture(LLShaderMgr::DEFERRED_DIFFUSE, &screen);
-    gDeferredPostNoDoFProgram.bindDepthTexture(LLShaderMgr::DEFERRED_DEPTH, mBoundTarget);
+    // Under HDR that is colorCorrect's output in postPingMap; otherwise the glow combine has
+    // written the result back to the screen.
+    LLRenderTarget* last_in_chain = hdr ? &gPipeline.mRT->postPingMap : &screen;
+    gDeferredPostNoDoFProgram.bindTexture(LLShaderMgr::DEFERRED_DIFFUSE, last_in_chain);
+    gDeferredPostNoDoFProgram.bindDepthTexture(LLShaderMgr::DEFERRED_DEPTH, &gPipeline.mAuxillaryRT.deferredScreen);
 
     {
         LLGLDepthTest depth_test(GL_TRUE, GL_TRUE, GL_ALWAYS);

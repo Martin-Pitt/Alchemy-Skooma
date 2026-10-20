@@ -48,6 +48,7 @@
 #include "llavatarappearancedefines.h"
 #include "lltexglobalcolor.h"
 #include "lldriverparam.h"
+#include "algputimer.h"
 #include "llviewertexlayer.h"
 #include "material_codes.h"     // LL_MCODE_END
 #include "llrigginginfo.h"
@@ -316,8 +317,14 @@ public:
     void markAttachmentComplexityDirty(const LLUUID& object_id, bool force_reset_attachment = false);
     void markBodyPartsComplexityDirty();
 
+    // A profile's GPU time is taken between these two.
     void placeProfileQuery();
-    void readProfileQuery(S32 retries);
+    void endProfileQuery();
+    // Takes the last profile's GPU time once its frame has been read, waiting for nothing. Once a frame, from
+    // idleUpdate().
+    void readProfileQuery();
+    // whether a profile's GPU time is still to be read; another profile must wait for it
+    bool isProfilePending() const { return mGPUTimer.isPending(); }
 
     // get the GPU time in ms of rendering this avatar including all attachments
     // returns 0.f if this avatar has not been profiled using gPipeline.profileAvatar
@@ -561,7 +568,6 @@ public:
 
     U32         renderRigid();
     U32         renderSkinned();
-    F32         getLastSkinTime() { return mLastSkinTime; }
     U32         renderTransparent(bool first_pass);
     void        renderCollisionVolumes();
     void        renderBones(const std::string &selected_joint = std::string());
@@ -580,7 +586,6 @@ private:
     bool        shouldAlphaMask();
 
     bool        mNeedsSkin; // avatar has been animated and verts have not been updated
-    F32         mLastSkinTime; //value of gFrameTimeSeconds at last skin update
 
     S32         mUpdatePeriod;
     // An avatar wearing animesh is asked both of these once for itself and
@@ -592,13 +597,12 @@ private:
     S32         mNumInitFaces; //number of faces generated when creating the avatar drawable, does not inculde splitted faces due to long vertex buffer.
 
     // profile handle
-    U32 mGPUTimerQuery = 0;
+    ALGPUTimer mGPUTimer;
 
     // profile results
 
     // GPU render time in ms
     F32 mGPURenderTime = 0.f;
-    bool mGPUProfilePending = false;
 
     // CPU render time in ms
     F32 mCPURenderTime = 0.f;
@@ -756,7 +760,7 @@ public:
 // [/RLVa:KB]
 //  bool        mNeedsImpostorUpdate;
     S32         mLastImpostorUpdateReason;
-    F32SecondsImplicit mLastImpostorUpdateFrameTime;
+    F64SecondsImplicit mLastImpostorUpdateFrameTime;
     const LLVector3*  getLastAnimExtents() const { return mLastAnimExtents; }
     void        setNeedsExtentUpdate(bool val) { mNeedsExtentUpdate = val; }
 
@@ -795,7 +799,7 @@ public:
 private:
     F32         mWindFreq;
     LLFrameTimer mRippleTimer;
-    F32         mRippleTimeLast;
+    F64         mRippleTimeLast;    // mRippleTimer's elapsed time, which runs as long as the avatar
     LLVector3   mRippleAccel;
     LLVector3   mLastVel;
 
@@ -1109,6 +1113,8 @@ public:
 public:
     bool                hasHUDAttachment() const;
     LLBBox              getHUDBBox() const;
+    // One HUD attachment point's share of getHUDBBox, in the same frame.
+    static LLBBox       getHUDBBox(const LLViewerJointAttachment* attachment);
     void                resetHUDAttachments();
     S32                 getMaxAttachments() const;
     bool                canAttachMoreObjects(U32 n=1) const;
@@ -1137,8 +1143,7 @@ protected:
     bool            processSingleAnimationStateChange(const LLUUID &anim_id, bool start);
     void            resetAnimations();
 private:
-    LLTimer         mAnimTimer;
-    F32             mTimeLast;
+    F64             mTimeLast;  // LLFrameTimer::getUptimeSeconds() at the last root update, negative before the first
 
     //--------------------------------------------------------------------
     // Animation state data
@@ -1355,9 +1360,9 @@ public:
     void                dumpAvatarTEs(const std::string& context) const;
 
     static F32          sUnbakedTime; // Total seconds with >=1 unbaked avatars
-    static F32          sUnbakedUpdateTime; // Last time stats were updated (to prevent multiple updates per frame)
+    static U32          sUnbakedUpdateFrame; // LLFrameTimer::getFrameCount() the stats were last updated in (to prevent multiple updates per frame)
     static F32          sGreyTime; // Total seconds with >=1 grey avatars
-    static F32          sGreyUpdateTime; // Last time stats were updated (to prevent multiple updates per frame)
+    static U32          sGreyUpdateFrame; // LLFrameTimer::getFrameCount() the stats were last updated in (to prevent multiple updates per frame)
 protected:
     S32                 getUnbakedPixelAreaRank();
     bool                mHasGrey = false;

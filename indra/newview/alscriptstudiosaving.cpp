@@ -32,6 +32,7 @@
 #include "alscriptnavigation.h"
 #include "alscriptstudioanalysis.h"
 #include "alscriptstudiochecking.h"
+#include "alscriptstudiofiles.h"
 #include "alscriptstudioorphans.h"
 #include "alscriptstudiorecovery.h"
 #include "alscriptstudioservices.h"
@@ -39,9 +40,11 @@
 #include "alscriptstudioweighing.h"
 #include "lldate.h"
 
+#include <fmt/format.h>
+
 #include <algorithm>
 
-ALScriptStudioSaving::ALScriptStudioSaving(ALScriptStudioServices& services, ALScriptStudioTabs& tabs, ALScriptStudioAnalysis& analysis, ALScriptNavigation& navigation, ALScriptExternalEditor& external, ALScriptStudioWeighing& weighing, ALScriptStudioRecovery& recovery, Window& window) : mServices(services), mTabs(tabs), mAnalysis(analysis), mNavigation(navigation), mExternal(external), mWeighing(weighing), mRecovery(recovery), mWindow(window)
+ALScriptStudioSaving::ALScriptStudioSaving(ALScriptStudioServices& services, ALScriptStudioTabs& tabs, ALScriptStudioAnalysis& analysis, ALScriptNavigation& navigation, ALScriptExternalEditor& external, ALScriptStudioWeighing& weighing, ALScriptStudioRecovery& recovery, ALScriptStudioFiles& files, ALScriptStudioOrphans& orphans, Window& window) : mServices(services), mTabs(tabs), mAnalysis(analysis), mNavigation(navigation), mExternal(external), mWeighing(weighing), mRecovery(recovery), mFiles(files), mOrphans(orphans), mWindow(window)
 {
 }
 
@@ -233,7 +236,8 @@ void ALScriptStudioSaving::sendPreprocessed(Doc& doc, const Doc::Expanded& sent)
     }
     // In the envelope, with the source as written, so Firestorm opens
     // what we save; the lines that say who wrote it and when are ours.
-    const ALScriptEnvelope envelope = doc.envelopeFor(*sent.text, mWindow.saveOptions().program);
+    const Options          options  = mWindow.saveOptions();
+    const ALScriptEnvelope envelope = doc.envelopeFor(*sent.text, options.program, options.header);
     doc.envelope                    = envelope;
     upload(doc, envelope.wrap(), &sent.map);
 }
@@ -324,7 +328,7 @@ void ALScriptStudioSaving::save(Doc& doc)
             // failed waits its turn: loaded now, what it holds carried over,
             // so that it is saved as what the item is once asked again.
             mServices.setStatus(mServices.words("SaveWaitsForLoad", args), true);
-            mWindow.retryLoad(doc);
+            mOrphans.retryLoad(doc);
             stopped(doc);
             return;
         case ALScriptSaveFlow::Start::Go:
@@ -352,7 +356,7 @@ void ALScriptStudioSaving::save(Doc& doc)
     tab.version          = doc.editor->document().version();
     tab.file             = !doc.file.empty();
     tab.notecard         = doc.notecard;
-    tab.preprocessed     = !tab.file && !tab.notecard && mAnalysis.preprocessed(doc);
+    tab.preprocessed     = !tab.file && !tab.notecard && !doc.savePlain && mAnalysis.preprocessed(doc);
     tab.preprocessorBusy = doc.preprocessing;
     tab.holdOnErrors     = options.holdOnErrors;
     tab.checked          = doc.check->analysisVersion == tab.version;
@@ -362,7 +366,7 @@ void ALScriptStudioSaving::save(Doc& doc)
     switch (route)
     {
         case ALScriptSaveFlow::Route::File:
-            mWindow.saveFile(doc);
+            mFiles.write(doc);
             return;
         case ALScriptSaveFlow::Route::AskWorld:
         {
@@ -386,7 +390,7 @@ void ALScriptStudioSaving::save(Doc& doc)
         case ALScriptSaveFlow::Route::StoppedByWorld:
             // Saved elsewhere since this tab had it: saving would replace
             // that. The author says whether to, to reload, or to compare.
-            mServices.report(mServices.words("SaveWorldMoved", args), true, &doc, { "save_anyway", "reload_world", "compare_world" });
+            mServices.report(mServices.words("SaveWorldMoved", args), true, &doc, { "save_anyway", "reload_world", "merge_world", "compare_world" });
             stopped(doc);
             return;
         case ALScriptSaveFlow::Route::Notecard:
@@ -465,7 +469,15 @@ void ALScriptStudioSaving::save(Doc& doc)
     {
         return;
     }
+    // As written: no envelope round it once it is up, and no expansion of
+    // one to show.
+    doc.savePlain      = false;
     doc.uploaded.valid = false;
+    if (doc.envelope)
+    {
+        doc.envelope.reset();
+        mWindow.dropExpanded(doc);
+    }
     weighForSave(doc);
     upload(doc, doc.editor->wholeText());
 }
@@ -532,6 +544,13 @@ void ALScriptStudioSaving::upload(Doc& doc, const std::string& text, const ALSou
         options.experience = doc.experience;
     }
     options.sender = ALScriptSender(ALScriptOrigin::Studio, mWindow.newRequest());
+    // How the compiler's lines read back, for whoever else hears of it:
+    // the bridge's client among them.
+    if (map && doc.envelope)
+    {
+        options.sourceMap = std::make_shared<const ALSourceMap>(*map);
+        options.codeLine  = doc.envelope->codeLine();
+    }
     std::string error;
     // Where the journal stands as the text goes, taken before anything
     // can be typed after it.
@@ -547,6 +566,7 @@ void ALScriptStudioSaving::upload(Doc& doc, const std::string& text, const ALSou
     }
     // With the map the compiler's lines are read back through.
     doc.save.sent(at, map ? std::optional<ALSourceMap>(*map) : std::nullopt, {}, options.sender.request);
+    doc.assetSending = std::make_shared<const std::string>(text);
     doc.problems.clear();
     mAnalysis.refreshProblems(doc);
     LLStringUtil::format_map_t args;
@@ -599,8 +619,9 @@ void ALScriptStudioSaving::savedElsewhere(const ALScriptSaved& saved)
                                  [&doc]() { return doc.editor->undoJournal().savedText(); }))
     {
         case ALScriptSaved::Heard::Same:
-            // What is here is what went up.
+            // What is here is what went up, a merge in it with it.
             doc.editor->resetDirty();
+            doc.merged.reset();
             mTabs.refreshToolbar();
             return;
         case ALScriptSaved::Heard::Keep:
@@ -617,8 +638,9 @@ void ALScriptStudioSaving::savedElsewhere(const ALScriptSaved& saved)
             args["[NAME]"] = doc.name;
             args["[WHO]"]  = mServices.words(saved.sender.origin == ALScriptOrigin::Bridge   ? "SavedByBridge"
                                              : saved.sender.origin == ALScriptOrigin::Editor ? "SavedByEditor"
+                                             : saved.sender.origin == ALScriptOrigin::Disk   ? "SavedByFile"
                                                                                                     : "SavedByQueue");
-            mServices.report(mServices.words("SavedElsewhereConflict", args), true, &doc, { "take_saved", "keep_saved", "compare_saved" });
+            mServices.report(mServices.words("SavedElsewhereConflict", args), true, &doc, { "take_saved", "keep_saved", "merge_saved", "compare_saved" });
             return;
         }
         case ALScriptSaved::Heard::Take:
@@ -638,6 +660,7 @@ void ALScriptStudioSaving::takeSaved(Doc& doc)
     // step back in the undo; the server holds it, so nothing to save.
     doc.carriedText = std::move(*doc.savedThere);
     doc.savedThere.reset();
+    doc.merged.reset();
     mWindow.takeCarried(doc);
     doc.editor->resetDirty();
     mTabs.refreshToolbar();
@@ -651,6 +674,7 @@ void ALScriptStudioSaving::keepSaved(Doc& doc)
     }
     // What was typed here kept; saving it replaces what was saved there.
     doc.savedThere.reset();
+    doc.merged.reset();
     LLStringUtil::format_map_t args;
     args["[NAME]"] = doc.name;
     mServices.setStatus(mServices.words("SavedElsewhereKept", args));
@@ -729,6 +753,12 @@ void ALScriptStudioSaving::compiledHere(const ALScriptCompileResult& result)
     if (ours)
     {
         doc.editor->markSavedAt(doc.save.savePoint());
+        // A merge the text sent carried is kept for good: undoing it now
+        // is an edit like any.
+        if (doc.merged && doc.save.savePoint().serial >= doc.merged->serial)
+        {
+            doc.merged.reset();
+        }
         doc.targetChosen = false;
         // The experience it was sent with is the one it runs under now:
         // picked here, or asked of the region by the save itself where
@@ -746,6 +776,17 @@ void ALScriptStudioSaving::compiledHere(const ALScriptCompileResult& result)
         // Nothing picked waits on a save any more.
         mTabs.fillTabs();
         mWeighing.keepSaved(doc);
+        // What it sent, the asset now.
+        if (doc.assetSending)
+        {
+            doc.asset = std::move(doc.assetSending);
+        }
+        // The compiled half that did not match the source is replaced.
+        if (doc.compiledDiffers)
+        {
+            doc.compiledDiffers.reset();
+            mTabs.refreshNotice();
+        }
     }
     if (result.newAssetId.notNull())
     {
@@ -779,39 +820,8 @@ void ALScriptStudioSaving::compiledHere(const ALScriptCompileResult& result)
         }
         return;
     }
-    doc.problems.clear();
     // The region's lines count the envelope's; the map is of the code under it.
-    const ALSourceMap* read  = doc.runningMap();
-    const S32          under = doc.runningCodeLine();
-    for (const ALScriptDiagnostic& said : result.diagnostics)
-    {
-        Doc::Compiled one;
-        one.line      = said.line;
-        one.column    = said.column;
-        one.hasColumn = said.hasColumn;
-        one.level     = said.level;
-        one.message   = said.message;
-        if (read)
-        {
-            const ALSourceMap::Loc loc = read->toSource(said.line - under, said.column);
-            if (loc.found())
-            {
-                one.line   = loc.line;
-                one.column = loc.column;
-                if (loc.file > 0)
-                {
-                    one.file = read->files()[loc.file].path;
-                }
-            }
-            else
-            {
-                // In code the preprocessor made, at the expansion's line.
-                one.line = llmax(0, said.line - under);
-                one.file = Doc::GENERATED;
-            }
-        }
-        doc.problems.push_back(std::move(one));
-    }
+    doc.problems = Doc::compiledOf(result.diagnostics, doc.runningMap(), doc.runningCodeLine());
     if (result.success)
     {
         // A new script runs from here; what the old one said is past.
@@ -883,6 +893,7 @@ bool ALScriptStudioSaving::sendQueuedSave(Doc& doc)
 
 void ALScriptStudioSaving::stopped(Doc& doc)
 {
+    doc.savePlain = false;
     doc.save.stopped();
     mWindow.stopClosing();
 }
@@ -913,7 +924,7 @@ void ALScriptStudioSaving::reportOverWeight(const Doc& doc, const ALScriptWeight
 {
     LLStringUtil::format_map_t args;
     args["[NAME]"]   = doc.name;
-    args["[SIZE]"]   = llformat("%f", (F64)weight.total / 1024.0);
+    args["[SIZE]"]   = fmt::format("{:f}", (F64)weight.total / 1024.0);
     args["[LIMIT]"]  = std::to_string(weight.limit / 1024);
     args["[TARGET]"] = ALScriptWeight::nameOf(weight.target);
     mServices.report(mServices.words(weight.estimate ? "SaveOverWeightEstimate" : "SaveOverWeight", args), true, &doc);

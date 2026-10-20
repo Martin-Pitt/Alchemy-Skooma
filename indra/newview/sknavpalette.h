@@ -1,6 +1,6 @@
 /**
  * @file sknavpalette.h
- * @brief One colour per thing the navmesh overlay draws, named so a legend cannot drift from it.
+ * @brief One colour per thing the navmesh overlay draws.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Alchemy Viewer Source Code
@@ -27,9 +27,7 @@
 
 #include "v4color.h"
 
-/// Everything the navmesh and census overlays draw in a colour of its own. The
-/// console's legend is built from this list, so a colour that changes here
-/// changes there and nowhere else has to be told.
+/// Everything the navmesh and census overlays draw in a colour of its own.
 enum class SKNavSwatch : S32
 {
     GROUND,         ///< walkable terrain
@@ -51,14 +49,26 @@ enum class SKNavSwatch : S32
     SHAPE_RENDER,   ///< census record taken from the rendered shape
     SHAPE_DYNAMIC,  ///< census record for something still moving
     CLUSTER,        ///< stands in for the per-structure colours, which are hashed
+    FEATURE_DOOR,   ///< a door's leaves
+    FEATURE_LADDER, ///< a ladder's span, and its exits
+    FEATURE_SHAFT,  ///< an elevator's column
+    FEATURE_VEHICLE,    ///< a linkset people sit on that moves
+    CLIMB,          ///< a ladder or elevator link between two exits
+    ENCLOSURE_OUTDOORS,     ///< a floor under open sky, or near it
+    ENCLOSURE_SHELTERED,    ///< under cover, not far in
+    ENCLOSURE_INDOORS,      ///< far from the sky and from the way out
+    ENCLOSURE_UNKNOWN,      ///< air nothing reached: no answer
+    PORTAL_DOOR,            ///< a space's threshold at a door
+    PORTAL_STAIR,           ///< where a flight meets a floor
+    PORTAL_OPENING,         ///< any other opening; dashed without a lintel
+    PORTAL_LINK,            ///< a drawn connection from a flight's foot to an exit
+    PORTAL_DANGLING,        ///< a flight's lone end, with no exit at the other
+    SPACE_CLIMB,            ///< a climb joining the spaces at its foot and its top
     COUNT
 };
 
 /// The swatch at full strength. Overlay passes scale the alpha; the x-ray pass
 /// darkens the colour as well.
 const LLColor4& skNavSwatchColor(SKNavSwatch swatch);
-
-/// The name the console's string table knows it by, e.g. "sk_nav_ground".
-const std::string& skNavSwatchName(SKNavSwatch swatch);
 
 #endif // SK_NAVPALETTE_H

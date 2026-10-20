@@ -27,8 +27,10 @@
 #ifndef LL_LLPREVIEWNOTECARD_H
 #define LL_LLPREVIEWNOTECARD_H
 
+#include "almasterlinks.h"
 #include "alquickask.h"
 #include "alrecoverykeeper.h"
+#include "alsavehistory.h"
 #include "alscripttypes.h"
 #include "altextundo.h"
 #include "llpreview.h"
@@ -107,6 +109,14 @@ private:
     // --- saving ------------------------------------------------------------------------
 
     bool saveIfNeeded();
+    // A notecard whose master is a file on disk (ALScriptDiskMasters): the
+    // link, where it is one to save through; said over the text as it
+    // loads, with Unlink; and a save here written to the file, whose write
+    // sends it, as any save of the file does. A file holds text alone, so
+    // one carrying items is not saved through it.
+    std::optional<ALMasterLink> masterLink() const;
+    void                        showLinked();
+    bool                        saveThroughFile(const ALMasterLink& link);
     // A save of ours answered.
     void savedHere(const ALScriptCompileResult& result);
     // A save of this notecard heard from anywhere else: taken, marked
@@ -114,6 +124,8 @@ private:
     void heard(const ALScriptSaved& saved);
     void takeTheirs();
     void keepMine();
+    // The text compared with what was saved elsewhere, or with a save of
+    // its history; and back.
     void toggleCompare();
     bool handleSaveChangesDialog(const LLSD& notification, const LLSD& response);
     void deleteNotecard();
@@ -122,6 +134,18 @@ private:
     // Go to Line, as Script Studio's is, by the numbers a script reads a
     // notecard's lines by: from 0.
     void goToLine();
+
+    // --- what it was saved as before ------------------------------------------------------
+
+    // Its saves listed, as Script Studio's File > Local History lists a
+    // tab's (ALScriptStudioHistory); one chosen compared with the text now,
+    // and offered back as one step to undo; and let go of, with its notice.
+    void showHistory();
+    void compareSave(ALSavedText saved);
+    // What the notice says of the save compared, and offers.
+    void showHistoryNotice();
+    void restoreSave();
+    void endHistory();
 
     // --- what the window says ---------------------------------------------------------
 
@@ -148,6 +172,10 @@ private:
     // --- the external editor ------------------------------------------------------------
 
     void        openInExternalEditor();
+    // The copy an editor outside is given, written and watched; and that
+    // editor started on a file, what went wrong said.
+    std::string writeEditorCopy();
+    void        runExternalEditor(const std::string& filename);
     bool        onExternalChange(const std::string& filename);
     bool        loadNotecardText(const std::string& filename);
     bool        writeToFile(const std::string& filename);
@@ -160,6 +188,7 @@ private:
     LLButton*                            mSaveBtn     = nullptr;
     LLButton*                            mEditBtn     = nullptr;
     LLButton*                            mDeleteBtn   = nullptr;
+    LLButton*                            mHistoryBtn  = nullptr;
     LLUICtrl*                            mLockBtn     = nullptr;
     LLTextBox*                           mStatus      = nullptr;
     LLLayoutPanel*                       mNoticePanel = nullptr;
@@ -184,6 +213,8 @@ private:
     // Saved elsewhere while this had changes of its own: that text, until
     // it is taken or kept.
     std::optional<std::string> mSavedThere;
+    // A save of its history compared with it, until the comparison ends.
+    std::optional<ALSavedText> mHistoryShown;
     // The notecard loaded again for a Take Theirs, whose text goes in over
     // what was typed rather than as a fresh load.
     bool                       mTakingTheirs = false;

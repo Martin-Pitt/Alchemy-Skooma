@@ -26,6 +26,7 @@
 
 #include "alcodeeditor.h"
 #include "alscriptanalysis.h"
+#include "alscriptregionusage.h"
 #include "alscriptstudiodoc.h"
 #include "alscriptweight.h"
 
@@ -95,11 +96,18 @@ public:
         // says; and whether the editors show the weights as notes and heat.
         virtual bool        optimizing() const     = 0;
         virtual std::string programVersion() const = 0;
+        // The upload header an envelope carries, which a save's size
+        // counts; none unless asked.
+        virtual ALScriptStudioDoc::Header uploadHeader() const { return {}; }
         virtual bool        weightNotes() const    = 0;
         virtual bool        weightHeat() const     = 0;
         // The Weights tab: whether it is looked at, and the pane.
         virtual bool                 weightsShown() const = 0;
         virtual ALScriptWeightsPane* weightsPane()        = 0;
+        // What the region reserves for a tab's script's object, as it last
+        // said, and asked again where that is old; nothing where it has not
+        // said, or the script is in no object.
+        virtual std::optional<ALScriptRegionUsage::Usage> regionOf(const Doc&) { return std::nullopt; }
 
     protected:
         ~Window() = default;

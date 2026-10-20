@@ -59,6 +59,9 @@ public:
     // is 255 downloads of what each holds, and a question for every script
     // in it of whether it runs.
     static constexpr size_t LARGE_LINKSET = 16;
+    // What stands between the parts of a place in words: an object and its
+    // prim, a place and what is in it.
+    static constexpr char PLACE_SEPARATOR[] = " \xE2\x96\xB8 ";
 
     struct Prim
     {
@@ -319,6 +322,19 @@ public:
     // The prim a row is of, for a drop into it: an item's, a prim's own, an
     // object's root; none for the row of prims holding nothing.
     static LLUUID primOf(const LLSD& row);
+
+    // --- comparing -----------------------------------------------------------------
+
+    // Two scripts, or two notecards, chosen to be compared, in their order;
+    // nothing where the rows are not two items of one kind.
+    static std::optional<std::pair<Choice, Choice>> comparing(const std::vector<Choice>& rows);
+    // What an item may be compared with: each other item of its kind a
+    // listed prim is known to hold, those of its name first, the rest in
+    // the list's order.
+    std::vector<Choice> comparableWith(const Choice& row) const;
+    // Where a row is, in words: its object's name, and its prim's after it
+    // where that is not the root.
+    std::string placeOf(const Choice& row) const;
 
     // --- pins ----------------------------------------------------------------------
 

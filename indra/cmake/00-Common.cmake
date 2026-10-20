@@ -37,7 +37,11 @@ add_library(al::flags ALIAS al_flags)
 # the sanctioned way to set them for a whole tree.
 
 if(NOT DEFINED CMAKE_CXX_STANDARD)
-  set(CMAKE_CXX_STANDARD 20)
+  if(WINDOWS)
+    set(CMAKE_CXX_STANDARD 20)
+  else()
+    set(CMAKE_CXX_STANDARD 23)
+  endif()
 endif()
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -46,6 +50,17 @@ set(CMAKE_CXX_SCAN_FOR_MODULES OFF) # C++20 module scanning; unused here and slo
 set(CMAKE_OPTIMIZE_DEPENDENCIES ON) # static libraries do not wait on their dependencies' links
 set(CMAKE_COLOR_DIAGNOSTICS ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
+# The property alone compiles an executable's sources with -fPIE; CMake links
+# it with -pie only once check_pie_supported() has cached that the linker
+# takes it (policy CMP0083). Without that, a toolchain that does not default
+# to PIE links the executable at a fixed address, where address space layout
+# randomisation cannot move it. macOS links every executable
+# position-independent already.
+if(LINUX)
+  include(CheckPIESupported)
+  check_pie_supported()
+endif()
 
 set(CMAKE_C_VISIBILITY_PRESET hidden)
 set(CMAKE_CXX_VISIBILITY_PRESET hidden)
@@ -87,20 +102,15 @@ endif()
 # Sanitizers
 #------------------------------------------------------------------------------
 
-# AL_SANITIZERS is a list drawn from address, undefined and thread. GCC and
-# Clang only. A sanitized build cannot link libwebrtc and trips warnings that
-# are false positives, so it disables both.
+# AL_SANITIZERS is a list drawn from address, undefined and thread, checked
+# and acted on before project() in the root CMakeLists.txt. GCC and Clang
+# only. A sanitized build trips warnings that are false positives, so it does
+# not make warnings errors. Every sanitizer reports and carries on where it
+# can: a test run fails on the report (ALAddTestBinary.cmake), not the exit.
 set(AL_SANITIZING OFF)
 if(AL_SANITIZERS AND (LINUX OR DARWIN))
   set(AL_SANITIZING ON)
-  set(AL_USE_WEBRTC OFF)
   foreach(sanitizer IN LISTS AL_SANITIZERS)
-    if(NOT sanitizer MATCHES "^(address|undefined|thread)$")
-      message(
-        FATAL_ERROR
-        "AL_SANITIZERS: unknown sanitizer '${sanitizer}' (address, undefined, thread)"
-      )
-    endif()
     target_compile_options(al_flags INTERFACE -fsanitize=${sanitizer})
     target_link_options(al_flags INTERFACE -fsanitize=${sanitizer})
   endforeach()
@@ -108,6 +118,17 @@ if(AL_SANITIZERS AND (LINUX OR DARWIN))
     al_flags
     INTERFACE -U_FORTIFY_SOURCE -fno-omit-frame-pointer -fno-common -fsanitize-recover=all
   )
+  # Boost.Context tells ASan and TSan of each fiber switch, built for ucontext
+  # with these defines, as the sanitizer triplets build its ports; Boost's
+  # CMake package gives every consumer of Boost::context BOOST_USE_UCONTEXT.
+  # See triplets/alchemy-sanitizer.cmake.
+  if(LINUX)
+    if("address" IN_LIST AL_SANITIZERS)
+      target_compile_definitions(al_flags INTERFACE BOOST_USE_ASAN)
+    elseif("thread" IN_LIST AL_SANITIZERS)
+      target_compile_definitions(al_flags INTERFACE BOOST_USE_TSAN)
+    endif()
+  endif()
 endif()
 
 #------------------------------------------------------------------------------
@@ -242,12 +263,68 @@ foreach(tier baseline v2 v3 v4)
   )
 endforeach()
 
-# Hardening.
+# Hardening, in the optimised configurations: a stack canary in every
+# function with a local array or an address-taken local; probes that keep a
+# large stack allocation from stepping over the guard page; and each
+# architecture's control-flow protection, landing pads for indirect branches
+# and protected returns (shadow-stack compatibility on x86, signed return
+# addresses on arm64).
 if(LINUX)
-  target_compile_options(al_flags INTERFACE $<$<CONFIG:${AL_OPTIMIZED_CONFIGS}>:-fstack-protector>)
-  if(NOT AL_SANITIZING)
-    target_compile_definitions(al_flags INTERFACE $<$<CONFIG:Release>:_FORTIFY_SOURCE=2>)
+  target_compile_options(
+    al_flags
+    INTERFACE $<$<CONFIG:${AL_OPTIMIZED_CONFIGS}>:-fstack-protector-strong>
+  )
+  # Clang before 18 has no stack clash probes on arm64, and leaves the option
+  # unused with a warning that -Werror makes fatal.
+  if(
+    NOT (COMPILER_IS_CLANG AND BUILD_TARGET_IS_ARM64 AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 18)
+  )
+    target_compile_options(
+      al_flags
+      INTERFACE $<$<CONFIG:${AL_OPTIMIZED_CONFIGS}>:-fstack-clash-protection>
+    )
   endif()
+  if(BUILD_TARGET_IS_X86_64)
+    target_compile_options(al_flags INTERFACE $<$<CONFIG:${AL_OPTIMIZED_CONFIGS}>:-fcf-protection>)
+  elseif(BUILD_TARGET_IS_ARM64)
+    target_compile_options(
+      al_flags
+      INTERFACE $<$<CONFIG:${AL_OPTIMIZED_CONFIGS}>:-mbranch-protection=standard>
+    )
+  endif()
+  # Fortified libc calls, at level 3, which also checks sizes known only at
+  # run time. Options, not a definition: definitions come before options on
+  # the command line, and the -U has to come first, so a _FORTIFY_SOURCE the
+  # toolchain defines itself is replaced rather than redefined.
+  if(NOT AL_SANITIZING)
+    target_compile_options(
+      al_flags
+      INTERFACE
+        $<$<CONFIG:${AL_OPTIMIZED_CONFIGS}>:-U_FORTIFY_SOURCE>
+        $<$<CONFIG:${AL_OPTIMIZED_CONFIGS}>:-D_FORTIFY_SOURCE=3>
+    )
+  endif()
+endif()
+
+# No hot/cold splitting where GCC links with a mold older than 2.42.1. GCC
+# moves a function's unlikely blocks into a part of their own ("[clone
+# .cold]"), and where they all optimise away it still emits the part, empty,
+# with an unwind entry covering no bytes at the address of whatever follows
+# it. Those mold versions (rui314/mold#1648) put that entry in .eh_frame_hdr's
+# search table beside the real function's, in an order their unstable sort
+# leaves to chance; where the empty one comes last the unwinder finds no
+# entry for the function, and an exception thrown through it ends the program
+# in std::terminate whatever would have caught it. Without splitting there
+# are no such parts. The link option is for LTO, which generates the code
+# there. The vcpkg ports keep their empty parts: only a mold that leaves them
+# out of the table mends those.
+if(
+  COMPILER_IS_GCC
+  AND CMAKE_CXX_COMPILER_LINKER_ID STREQUAL "MOLD"
+  AND CMAKE_CXX_COMPILER_LINKER_VERSION VERSION_LESS 2.42.1
+)
+  target_compile_options(al_flags INTERFACE -fno-reorder-blocks-and-partition)
+  target_link_options(al_flags INTERFACE -fno-reorder-blocks-and-partition)
 endif()
 
 # Toolchain conformance and miscellany.
@@ -267,7 +344,7 @@ if(WINDOWS)
       /Zc:inline
   )
 elseif(LINUX)
-  target_compile_options(al_flags INTERFACE -fsigned-char)
+  target_compile_options(al_flags INTERFACE -fsigned-char -pthread)
 elseif(DARWIN)
   # The Xcode attribute is what the Xcode generator honours; the compile
   # option covers Ninja and Makefile generators.
@@ -285,7 +362,9 @@ endif()
 # binary. Windows sets the format through CMAKE_MSVC_DEBUG_INFORMATION_FORMAT
 # above, and links with full debug information unless the target opts out of
 # it for Release through AL_SKIP_RELEASE_DEBUG_INFO.
-if(LINUX OR DARWIN)
+if(LINUX)
+  target_compile_options(al_flags INTERFACE $<$<CONFIG:Release>:-g> -gz=zstd)
+elseif(DARWIN)
   target_compile_options(al_flags INTERFACE $<$<CONFIG:Release>:-g>)
 elseif(WINDOWS)
   target_link_options(
@@ -392,10 +471,15 @@ elseif(LINUX)
       "LINKER:--no-undefined"
   )
 elseif(DARWIN)
+  # Under -dead_strip, ld only warns of a symbol defined both in an object and
+  # in an archive member it loads, and keeps the object's: a stub in a test, or
+  # a stray copy in the viewer, silently replaces the real one. An error, as
+  # GNU ld and MSVC make it.
   target_link_options(
     al_flags
     INTERFACE
       $<$<CONFIG:${AL_OPTIMIZED_CONFIGS}>:LINKER:-dead_strip>
+      "LINKER:-duplicate_symbols,error"
       LINKER:-dead_strip_dylibs
       "LINKER:-headerpad_max_install_names"
       "LINKER:-search_paths_first"
@@ -432,7 +516,7 @@ if(DARWIN)
 
   set(CMAKE_XCODE_ATTRIBUTE_COMPILATION_CACHE_ENABLE_CACHING YES)
   set(CMAKE_XCODE_ATTRIBUTE_GCC_GENERATE_DEBUGGING_SYMBOLS YES)
-  set(CMAKE_XCODE_ATTRIBUTE_DEBUG_INFORMATION_FORMAT "dwarf") # dSYMs only where a target asks
+  set(CMAKE_XCODE_ATTRIBUTE_DEBUG_INFORMATION_FORMAT "dwarf") # the symbols target makes the dSYMs
   set(CMAKE_XCODE_ATTRIBUTE_GCC_FAST_MATH NO)
   # Xcode does not read -march; this is the Darwin row of AlchemyTarget.cmake
   # in the spelling it does read.

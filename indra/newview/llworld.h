@@ -39,7 +39,8 @@
 #include "llstring.h"
 #include "llviewerpartsim.h"
 #include "llviewertexture.h"
-#include "llvowater.h"
+
+#include <vector>
 
 class LLViewerRegion;
 class LLVector3d;
@@ -153,12 +154,6 @@ public:
     F32 getLandFarClip() const;
     void setLandFarClip(const F32 far_clip);
 
-    LLViewerTexture *getDefaultWaterTexture();
-    void updateWaterObjects();
-    // Rebuild the hole and edge water once, on the next updateVisibilities(),
-    // however many regions arrive or leave before then.
-    void requestWaterObjectsUpdate();
-
     void waterHeightRegionInfo(std::string const& sim_name, F32 water_height);
     void shiftRegions(const LLVector3& offset);
 
@@ -168,8 +163,6 @@ public:
     void getInfo(LLSD& info);
     U32  getNumOfActiveCachedObjects() const {return mNumOfActiveCachedObjects;}
     void logObjectCacheInfo() const;
-
-    void clearAllVisibleObjects();
 
     CapUrlMatches getCapURLMatches(const std::string& cap_url);
     bool isCapURLMapped(const std::string& cap_url);
@@ -215,9 +208,6 @@ public:
     F32 getNearbyAvatarsAndMaxGPUTime(std::vector<LLVOAvatar*> &valid_nearby_avs);
 
 private:
-    void clearHoleWaterObjects();
-    void clearEdgeWaterObjects();
-
     region_list_t   mActiveRegionList;
     region_list_t   mRegionList;
     region_list_t   mVisibleRegionList;
@@ -239,18 +229,6 @@ private:
     S32 mLastPacketsLost;
     U32 mNumOfActiveCachedObjects;
     U64MicrosecondsImplicit mSpaceTimeUSec;
-
-    ////////////////////////////
-    //
-    // Data for "Fake" objects
-    //
-
-    std::list<LLPointer<LLVOWater> > mHoleWaterObjects;
-    bool mWaterObjectsDirty = false;
-    static const S32 EDGE_WATER_OBJECTS_COUNT = 8;
-    LLPointer<LLVOWater> mEdgeWaterObjects[EDGE_WATER_OBJECTS_COUNT];
-
-    LLPointer<LLViewerTexture> mDefaultWaterTexturep;
 };
 
 

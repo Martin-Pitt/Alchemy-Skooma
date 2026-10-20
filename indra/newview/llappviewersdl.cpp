@@ -31,6 +31,7 @@
 #include "llcommandlineparser.h"
 
 #include "lldiriterator.h"
+#include "llcommandhandler.h"       // NAV_TYPE_EXTERNAL
 #include "llurldispatcher.h"        // SLURL from other app instance
 #include "llviewernetwork.h"
 #include "llviewercontrol.h"
@@ -46,15 +47,27 @@
 #include "SDL3/SDL.h"
 
 #include "llsdl.h"
+
+// The application ID: the Wayland app ID and X11 class, named for the desktop
+// entry. The Linux build gives each channel its own (cmake/ViewerInstall.cmake).
+#ifndef AL_VIEWER_APP_ID
+#define AL_VIEWER_APP_ID "org.alchemyviewer.viewer"
+#endif
 #include "llwindowsdl.h"
 
 #if LL_WINDOWS
 #include "llwin32headers.h"     // GetCommandLineW
 #include "llappviewerwin32.h"   // LLAppViewerWin32, create_app_mutex, NVAPI session helpers
 #include <shlwapi.h>            // PathGetArgsW
+#endif
+
 #if LL_VELOPACK
 #include "llvelopack.h"
 #endif
+
+#if LL_LINUX
+#include <filesystem>       // /sys/class/drm, for the GPU on a hybrid machine
+#include <sys/prctl.h>      // PR_SET_PDEATHSIG for the GPU benchmark child
 #endif
 
 #if LL_DARWIN
@@ -84,10 +97,23 @@ static void handleUrl(const char* url_utf8);
 #endif
 
 #if LL_LINUX && LL_DBUS
+#include "llviewerwindow.h" // bringToFront() for a SLURL handed over the bus
 #include <dbus/dbus.h>
-#include <unistd.h>         // close() for the logind inhibitor fd
+#include <unistd.h>         // getpagesize(), getppid(), readlink()
 
-#define VIEWERAPI_SERVICE   "com.secondlife.ViewerAppAPIService"
+// A viewer owns two bus names. The first is the application ID, one to a
+// channel, so a link can go to a running viewer of this channel before any
+// other. ViewerInstall.cmake builds the ID to the bus's rules, dot-separated
+// elements of [a-z0-9_] none beginning with a digit; only the length is left
+// to check. The second is LL's com.secondlife.ViewerAppAPIService, which
+// Linden Lab's viewer and other forks share: a link is handed to whichever
+// viewer holds it, so opening a secondlife:// link reaches the viewer that is
+// running rather than starting another. A viewer that finds it held waits in
+// the bus's queue for it, as GDBus viewers do, and has it when the viewers
+// ahead of it quit. The object path and interface are LL's.
+#define VIEWERAPI_SERVICE        AL_VIEWER_APP_ID
+static_assert(sizeof(VIEWERAPI_SERVICE) - 1 <= 255, "A D-Bus name is at most 255 characters");
+#define VIEWERAPI_SHARED_SERVICE "com.secondlife.ViewerAppAPIService"
 #define VIEWERAPI_PATH      "/com/secondlife/ViewerAppAPI"
 #define VIEWERAPI_INTERFACE "com.secondlife.ViewerAppAPI"
 #endif
@@ -96,6 +122,15 @@ static void handleUrl(const char* url_utf8);
 // *FIX:Mani It would be nice to provide a clean interface to get the
 // default_unix_signal_handler for the LLApp class.
 extern void default_unix_signal_handler(int, siginfo_t *, void *);
+#endif
+
+// Whether this process is the child a viewer started with --gpubenchmark to
+// run the GPU benchmark (LLFeatureManager::loadGPUClass). macOS runs it in
+// the viewer itself.
+#if LL_WINDOWS || LL_LINUX
+extern bool gGPUBenchmarkMode;
+#else
+static constexpr bool gGPUBenchmarkMode = false;
 #endif
 
 namespace
@@ -138,9 +173,12 @@ static void dispatchUrl(std::string url)
         url.replace(0, prefix.length(), "secondlife:///app/");
     }
 
+    // A URL from the OS is external, not a click, so it is throttled, as on
+    // Windows (LLViewerWindow::handleDataCopy). Launch Services brings the
+    // app forward itself, so unlike there no window is raised here.
     LLMediaCtrl* web = nullptr;
     const bool trusted_browser = false;
-    LLURLDispatcher::dispatch(url, "", web, trusted_browser);
+    LLURLDispatcher::dispatch(url, LLCommandHandler::NAV_TYPE_EXTERNAL, web, trusted_browser);
 }
 
 static void handleUrl(const char* url_utf8)
@@ -343,10 +381,34 @@ finally:
 
 SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv)
 {
-#if LL_WINDOWS && LL_VELOPACK
+#if LL_WINDOWS || LL_LINUX
+    // The GPU benchmark child learns it is one first: it leaves Velopack, and
+    // more after it, to the viewer that started it.
+    for (int i = 1; i < argc; ++i)
+    {
+        if (argv[i] && strcmp(argv[i], "--gpubenchmark") == 0)
+        {
+            gGPUBenchmarkMode = true;
+        }
+    }
+#endif
+#if LL_LINUX
+    if (gGPUBenchmarkMode)
+    {
+        // The parent kills a child that overruns the benchmark. This kills one
+        // whose parent dies first, rather than leave it hung in a driver.
+        prctl(PR_SET_PDEATHSIG, SIGKILL);
+    }
+#endif
+
+#if LL_VELOPACK
     // Velopack MUST be initialized first - it may handle install/uninstall
-    // commands and exit the process before we do anything else.
-    if (!velopack_initialize())
+    // commands and exit the process before we do anything else, and it
+    // finishes an update the last run applied. Every platform's viewer
+    // starts here but Windows' native one (llappviewerwin32.cpp); on Linux
+    // there are no hooks to run, and it finds the AppImage it updates, if any.
+    // The GPU benchmark child has none of this to do: its parent did it.
+    if (!gGPUBenchmarkMode && !velopack_initialize())
     {
         // Velopack handled the invocation (install/uninstall hook); exit
         // cleanly without ever constructing the app. Mirrors WINMAIN's
@@ -399,7 +461,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv)
 
 #if LL_WINDOWS
     // Set a debug info flag to indicate if multiple instances are running.
-    bool found_other_instance = !create_app_mutex();
+    bool found_other_instance = gGPUBenchmarkMode || !create_app_mutex();
     gDebugInfo["FoundOtherInstanceAtStartup"] = LLSD::Boolean(found_other_instance);
 #elif LL_LINUX
     // macOS injects via DYLD_INSERT_LIBRARIES, not LD_PRELOAD, so this is a
@@ -410,7 +472,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv)
     // This needs to be set as early as possible
     SDL_SetAppMetadataProperty(SDL_PROP_APP_METADATA_NAME_STRING, LLVersionInfo::getInstance()->getChannel().c_str());
     SDL_SetAppMetadataProperty(SDL_PROP_APP_METADATA_VERSION_STRING, LLVersionInfo::getInstance()->getVersion().c_str());
-    SDL_SetAppMetadataProperty(SDL_PROP_APP_METADATA_IDENTIFIER_STRING, "org.alchemyviewer.viewer");
+    SDL_SetAppMetadataProperty(SDL_PROP_APP_METADATA_IDENTIFIER_STRING, AL_VIEWER_APP_ID);
     SDL_SetAppMetadataProperty(SDL_PROP_APP_METADATA_CREATOR_STRING, "Linden Research Inc");
     SDL_SetAppMetadataProperty(SDL_PROP_APP_METADATA_COPYRIGHT_STRING, "Copyright (c) Linden Research, Inc. 2025");
     SDL_SetAppMetadataProperty(SDL_PROP_APP_METADATA_URL_STRING, "https://www.secondlife.com");
@@ -420,6 +482,14 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv)
     if(!ok)
     {
         LL_WARNS() << "Application init failed." << LL_ENDL;
+        // A failed init() is owed neither cleanup() nor the destructor. Its
+        // early-outs tear down what they need to themselves: the later ones
+        // delete every singleton, which cleanup() would build again with no
+        // UI under them, and two delete the settings location list, which
+        // the destructor would delete again. SDL_AppQuit runs after a failed
+        // SDL_AppInit too, so the app is let go here and left to the exit,
+        // as WINMAIN leaves it.
+        gViewerAppPtr = nullptr;
         return SDL_APP_FAILURE;
     }
 
@@ -486,8 +556,10 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
 void SDL_AppQuit(void *appstate, SDL_AppResult result)
 {
     // gViewerAppPtr is null when SDL_AppInit bailed before constructing the
-    // app (e.g. the Windows velopack install-hook path).
-    if (gViewerAppPtr && !LLApp::isError())
+    // app (e.g. the Windows velopack install-hook path) or when its init()
+    // failed. A GPU benchmark child only gets here having failed before it
+    // measured anything, and the settings it would save are its parent's.
+    if (gViewerAppPtr && !LLApp::isError() && !gGPUBenchmarkMode)
     {
         //
         // We don't want to do cleanup here if the error handler got called -
@@ -510,6 +582,20 @@ bool LLAppViewerSDL::init()
 {
 
     bool success = LLAppViewer::init();
+
+#if LL_LINUX
+    if (success)
+    {
+        // The launcher's startup notification was for this process's window,
+        // which is up: SDL's Wayland backend spends XDG_ACTIVATION_TOKEN on the
+        // first window it shows and clears it, and nothing spends either on
+        // X11. Left set, they would pass to whatever the viewer starts, a
+        // browser among them, which would present a spent token as its own.
+        // SDL's own copy of the environment is cleared with them.
+        SDL_unsetenv_unsafe("XDG_ACTIVATION_TOKEN");
+        SDL_unsetenv_unsafe("DESKTOP_STARTUP_ID");
+    }
+#endif
 
 #if LL_DARWIN
     if (success)
@@ -547,6 +633,245 @@ bool LLAppViewerSDL::init()
 
     return success;
 }
+
+#if LL_LINUX
+namespace
+{
+    constexpr U32 PCI_VENDOR_AMD    = 0x1002;
+    constexpr U32 PCI_VENDOR_NVIDIA = 0x10de;
+    constexpr U32 PCI_VENDOR_INTEL  = 0x8086;
+
+    // A GPU as /sys/class/drm has it: a PCI device under a DRM driver.
+    struct DrmGpu
+    {
+        std::string card;           // "card1"
+        std::string slot;           // PCI address, "0000:01:00.0"
+        std::string driver;         // kernel driver, "amdgpu"
+        U32         vendor = 0;
+        bool        boot_vga = false;   // the one the firmware lit the display with
+        bool        render_node = false;
+    };
+
+    std::string describe(const DrmGpu& gpu)
+    {
+        return llformat("%s (%s, vendor 0x%04x, %s)", gpu.card.c_str(), gpu.slot.c_str(), gpu.vendor,
+                        gpu.driver.empty() ? "no driver" : gpu.driver.c_str());
+    }
+
+    std::vector<DrmGpu> list_drm_gpus()
+    {
+        namespace fs = std::filesystem;
+        std::vector<DrmGpu> gpus;
+        std::error_code ec;
+        for (const fs::directory_entry& entry : fs::directory_iterator("/sys/class/drm", ec))
+        {
+            // card1, not its connectors (card1-DP-1).
+            const std::string name = entry.path().filename().string();
+            if (name.size() <= 4 || name.compare(0, 4, "card") != 0
+                || name.find_first_not_of("0123456789", 4) != std::string::npos)
+            {
+                continue;
+            }
+
+            DrmGpu gpu;
+            gpu.card = name;
+            const fs::path device = entry.path() / "device";
+            llifstream uevent(device / "uevent");
+            std::string line;
+            while (std::getline(uevent, line))
+            {
+                if (line.starts_with("DRIVER="))
+                {
+                    gpu.driver = line.substr(7);
+                }
+                else if (line.starts_with("PCI_SLOT_NAME="))
+                {
+                    gpu.slot = line.substr(14);
+                }
+                else if (line.starts_with("PCI_ID="))
+                {
+                    gpu.vendor = (U32)strtoul(line.c_str() + 7, nullptr, 16);
+                }
+            }
+            if (gpu.slot.empty())
+            {
+                continue; // not a PCI device: simpledrm, a virtual display
+            }
+
+            // A 3D controller, as many laptops' NVIDIA GPUs are, has no
+            // boot_vga at all: it never drives the console.
+            llifstream boot_vga(device / "boot_vga");
+            int boot = 0;
+            gpu.boot_vga = (boot_vga >> boot) && boot == 1;
+
+            std::error_code node_ec;
+            for (const fs::directory_entry& node : fs::directory_iterator(device / "drm", node_ec))
+            {
+                gpu.render_node = gpu.render_node || node.path().filename().string().starts_with("renderD");
+            }
+            gpus.push_back(gpu);
+        }
+        std::sort(gpus.begin(), gpus.end(), [](const DrmGpu& a, const DrmGpu& b)
+        {
+            return a.card.size() != b.card.size() ? a.card.size() < b.card.size() : a.card < b.card;
+        });
+        return gpus;
+    }
+
+    // Whether a GPU is the one built into the CPU. Intel's always sits at
+    // 00:02.0, where no discrete Intel card does; amdgpu gives an APU's
+    // sensors a northbridge voltage, vddnb, and a discrete card none. Any
+    // other is not known to be integrated.
+    bool is_integrated(const DrmGpu& gpu)
+    {
+        namespace fs = std::filesystem;
+        if (gpu.vendor == PCI_VENDOR_INTEL)
+        {
+            return gpu.slot == "0000:00:02.0";
+        }
+        if (gpu.vendor == PCI_VENDOR_AMD)
+        {
+            std::error_code ec;
+            const fs::path hwmon = fs::path("/sys/class/drm") / gpu.card / "device" / "hwmon";
+            for (const fs::directory_entry& sensor : fs::directory_iterator(hwmon, ec))
+            {
+                llifstream label(sensor.path() / "in1_label");
+                std::string text;
+                if (std::getline(label, text) && text == "vddnb")
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    // NVIDIA's PCI GPUs are all discrete; an AMD or Intel one is when it is
+    // not the CPU's.
+    bool is_discrete(const DrmGpu& gpu)
+    {
+        return gpu.vendor == PCI_VENDOR_NVIDIA
+            || ((gpu.vendor == PCI_VENDOR_AMD || gpu.vendor == PCI_VENDOR_INTEL) && !is_integrated(gpu));
+    }
+
+    // Whether glvnd can load NVIDIA's EGL: the driver's user-space half,
+    // which a machine can lack with the kernel module loaded.
+    bool has_nvidia_egl()
+    {
+        namespace fs = std::filesystem;
+        const char* dirs = getenv("__EGL_VENDOR_LIBRARY_DIRS");
+        std::istringstream search(dirs ? dirs : "/etc/glvnd/egl_vendor.d:/usr/share/glvnd/egl_vendor.d");
+        std::string dir;
+        while (std::getline(search, dir, ':'))
+        {
+            std::error_code ec;
+            for (const fs::directory_entry& vendor : fs::directory_iterator(dir, ec))
+            {
+                if (vendor.path().filename().string().find("nvidia") != std::string::npos)
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    // Renders on the discrete GPU of a hybrid-graphics machine, as Windows'
+    // NvOptimusEnablement and AmdPowerXpressRequestHighPerformance ask for
+    // there. The desktop entry's PrefersNonDefaultGPU does the same only for
+    // a shell that honours it; this serves every other launch.
+    void prefer_discrete_gpu()
+    {
+        // The user's choice, or a launcher's: a shell that honours
+        // PrefersNonDefaultGPU sets these from switcheroo-control.
+        for (const char* name : { "DRI_PRIME", "__NV_PRIME_RENDER_OFFLOAD", "__GLX_VENDOR_LIBRARY_NAME",
+                                  "__EGL_VENDOR_LIBRARY_FILENAMES", "__VK_LAYER_NV_optimus" })
+        {
+            if (const char* value = getenv(name))
+            {
+                LL_INFOS("RenderInit") << "GPU left to the environment, which sets " << name << "=" << value << LL_ENDL;
+                return;
+            }
+        }
+
+        const std::vector<DrmGpu> gpus = list_drm_gpus();
+        if (gpus.size() < 2)
+        {
+            return;
+        }
+
+        // A hybrid machine drives its display from the integrated GPU, which
+        // the firmware lit at boot. A desktop's card that did is left alone.
+        auto boot = std::find_if(gpus.begin(), gpus.end(), [](const DrmGpu& gpu) { return gpu.boot_vga; });
+        if (boot == gpus.end())
+        {
+            LL_INFOS("RenderInit") << gpus.size() << " GPUs, none the boot display; GPU left to the system" << LL_ENDL;
+            return;
+        }
+        if (!is_integrated(*boot))
+        {
+            LL_INFOS("RenderInit") << "The boot display's " << describe(*boot)
+                                   << " is not an integrated GPU; GPU left to the system" << LL_ENDL;
+            return;
+        }
+
+        auto discrete = std::find_if(gpus.begin(), gpus.end(), [](const DrmGpu& gpu)
+        {
+            return !gpu.boot_vga && gpu.render_node && is_discrete(gpu);
+        });
+        if (discrete == gpus.end())
+        {
+            LL_INFOS("RenderInit") << "No discrete GPU beside the integrated " << describe(*boot) << LL_ENDL;
+            return;
+        }
+
+        if (discrete->driver == "nvidia")
+        {
+            // NVIDIA's PRIME render offload: EGL needs only the switch, and
+            // glvnd keeps Mesa to fall back on if NVIDIA's declines the
+            // display. GLX, for the plugins, needs the vendor named.
+            if (!has_nvidia_egl())
+            {
+                LL_INFOS("RenderInit") << "Discrete " << describe(*discrete)
+                                       << " has no NVIDIA EGL for glvnd to load; GPU left to the system" << LL_ENDL;
+                return;
+            }
+            setenv("__NV_PRIME_RENDER_OFFLOAD", "1", 0);
+            setenv("__GLX_VENDOR_LIBRARY_NAME", "nvidia", 0);
+            LL_INFOS("RenderInit") << "Rendering on the discrete " << describe(*discrete) << " rather than the integrated "
+                                   << describe(*boot) << ": __NV_PRIME_RENDER_OFFLOAD=1" << LL_ENDL;
+        }
+        else if (discrete->driver == "amdgpu" || discrete->driver == "radeon" || discrete->driver == "nouveau"
+                 || discrete->driver == "i915" || discrete->driver == "xe")
+        {
+            // Mesa takes the device's ID_PATH_TAG. DRI_PRIME=1 says only
+            // "not the default", which beside a third GPU can be the wrong one.
+            std::string tag = "pci-" + discrete->slot;
+            std::replace(tag.begin(), tag.end(), ':', '_');
+            std::replace(tag.begin(), tag.end(), '.', '_');
+            setenv("DRI_PRIME", tag.c_str(), 0);
+            LL_INFOS("RenderInit") << "Rendering on the discrete " << describe(*discrete) << " rather than the integrated "
+                                   << describe(*boot) << ": DRI_PRIME=" << tag << LL_ENDL;
+        }
+        else
+        {
+            LL_INFOS("RenderInit") << "Discrete " << describe(*discrete)
+                                   << " is under neither Mesa nor NVIDIA's driver; GPU left to the system" << LL_ENDL;
+        }
+    }
+}
+
+bool LLAppViewerSDL::initHardwareTest()
+{
+    // Before the window loads EGL: Mesa reads DRI_PRIME, and NVIDIA's EGL its
+    // offload switch, when the display is opened.
+    if (gSavedSettings.getBOOL("RenderPreferDiscreteGPU"))
+    {
+        prefer_discrete_gpu();
+    }
+    return true;
+}
+#endif // LL_LINUX
 
 bool LLAppViewerSDL::restoreErrorTrap()
 {
@@ -613,17 +938,37 @@ if(act.sa_sigaction != old_act.sa_sigaction) ++reset_count;
 /////////////////////////////////////////
 #if LL_LINUX && LL_DBUS
 
-static void dispatchSLURL(const char* slurl)
+static void dispatchSLURL(const char* slurl, const std::string& activation_token)
 {
     LL_INFOS() << "Was asked to go to slurl: " << slurl << LL_ENDL;
 
+    // As Windows' WM_COPYDATA path does (LLViewerWindow::handleDataCopy): a
+    // link another instance hands over is external, not a click, so it is
+    // throttled, and the window comes forward as if the link had launched it.
+    // The bus is pumped from SDL_AppIterate, so this is the main thread.
     std::string url = slurl;
     LLMediaCtrl* web = nullptr;
     const bool trusted_browser = false;
-    LLURLDispatcher::dispatch(url, "", web, trusted_browser);
+    if (LLURLDispatcher::dispatch(url, LLCommandHandler::NAV_TYPE_EXTERNAL, web, trusted_browser)
+        && gViewerWindow)
+    {
+        // With the sender's activation token, which on Wayland is what lets
+        // the window take focus and ends the launcher's startup notification.
+        LLWindow* window = gViewerWindow->getWindow();
+        if (LLWindowSDL* sdl_window = dynamic_cast<LLWindowSDL*>(window))
+        {
+            sdl_window->bringToFront(activation_token);
+        }
+        else
+        {
+            window->bringToFront();
+        }
+    }
 }
 
-// Handles method calls delivered to VIEWERAPI_PATH. We only implement GoSLURL.
+// Handles method calls delivered to VIEWERAPI_PATH. We only implement GoSLURL:
+// GoSLURL(s link), or from a viewer since this one GoSLURL(s link, s token)
+// with the activation token the sending process was launched with.
 static DBusHandlerResult onBusMessage(DBusConnection* connection, DBusMessage* message, void* user_data)
 {
     if (!dbus_message_is_method_call(message, VIEWERAPI_INTERFACE, "GoSLURL"))
@@ -635,9 +980,13 @@ static DBusHandlerResult onBusMessage(DBusConnection* connection, DBusMessage* m
     dbus_error_init(&err);
 
     const char* slurl = nullptr;
-    if (dbus_message_get_args(message, &err, DBUS_TYPE_STRING, &slurl, DBUS_TYPE_INVALID))
+    const char* token = nullptr;
+    const bool has_args = dbus_message_has_signature(message, "ss")
+        ? dbus_message_get_args(message, &err, DBUS_TYPE_STRING, &slurl, DBUS_TYPE_STRING, &token, DBUS_TYPE_INVALID)
+        : dbus_message_get_args(message, &err, DBUS_TYPE_STRING, &slurl, DBUS_TYPE_INVALID);
+    if (has_args)
     {
-        dispatchSLURL(slurl);
+        dispatchSLURL(slurl, token ? token : "");
 
         // Reply so a blocking caller (sendURLToOtherInstance) unblocks promptly.
         if (!dbus_message_get_no_reply(message))
@@ -669,6 +1018,35 @@ static const DBusObjectPathVTable sViewerApiVTable =
     nullptr
 };
 
+// Asks the bus for name with flags: DO_NOT_QUEUE for a name that must be ours
+// now, so we never silently wait behind an existing owner. A name another
+// process holds is no error to libdbus, only a reply, so the reply is what says
+// the name is ours. On failure, failure says why.
+static bool acquireBusName(const char* name, unsigned int flags, std::string& failure)
+{
+    DBusError err;
+    dbus_error_init(&err);
+
+    const int reply = dbus_bus_request_name(gDBusConn, name, flags, &err);
+    if (dbus_error_is_set(&err))
+    {
+        failure = err.message;
+        dbus_error_free(&err);
+        return false;
+    }
+    if (reply == DBUS_REQUEST_NAME_REPLY_PRIMARY_OWNER
+        || reply == DBUS_REQUEST_NAME_REPLY_ALREADY_OWNER)
+    {
+        return true;
+    }
+
+    const char* result = reply == DBUS_REQUEST_NAME_REPLY_EXISTS   ? "EXISTS, another process owns it"
+                       : reply == DBUS_REQUEST_NAME_REPLY_IN_QUEUE ? "IN_QUEUE, behind its owner"
+                                                                   : "an unknown reply";
+    failure = std::string(result) + " (" + std::to_string(reply) + ")";
+    return false;
+}
+
 //virtual
 bool LLAppViewerSDL::initSLURLHandler()
 {
@@ -693,17 +1071,54 @@ bool LLAppViewerSDL::initSLURLHandler()
         return false;
     }
 
-    // Claim the well-known service name. DO_NOT_QUEUE so we never silently wait
-    // behind an existing owner; the marker-file guard upstream ensures we only
-    // reach here as the primary instance.
-    dbus_bus_request_name(gDBusConn, VIEWERAPI_SERVICE, DBUS_NAME_FLAG_DO_NOT_QUEUE, &err);
-    if (dbus_error_is_set(&err))
+    // Claim the well-known service names. This channel's must be ours, as a
+    // second viewer of this channel (AllowMultipleViewers) finds it held. LL's
+    // is shared, so another viewer holding it is no failure: links reach that
+    // viewer, and this one stays reachable by its own name. It is asked for in
+    // the queue, so it comes to this viewer in its turn as the viewers holding
+    // it quit; asked for with DO_NOT_QUEUE, it never would.
+    std::string failure;
+    if (!acquireBusName(VIEWERAPI_SERVICE, DBUS_NAME_FLAG_DO_NOT_QUEUE, failure))
     {
-        LL_WARNS() << "Failed to acquire dbus name " << VIEWERAPI_SERVICE << ": " << err.message << LL_ENDL;
-        dbus_error_free(&err);
+        LL_WARNS() << "Failed to acquire dbus name " << VIEWERAPI_SERVICE << ": " << failure << LL_ENDL;
+        return false;
+    }
+    if (!acquireBusName(VIEWERAPI_SHARED_SERVICE, 0, failure))
+    {
+        LL_INFOS() << "Not the owner of dbus name " << VIEWERAPI_SHARED_SERVICE << ": " << failure << LL_ENDL;
+    }
+
+    return true;
+}
+
+// Hands url to the viewer that owns service, with the sender's activation token
+// when there is one. Blocks for the reply, which is how it is known to have
+// been taken. On failure err is set, for the caller to look at and free.
+static bool callGoSLURL(DBusConnection* connection, const char* service,
+                        const char* url, const char* token, DBusError* err)
+{
+    DBusMessage* message = dbus_message_new_method_call(service, VIEWERAPI_PATH,
+                                                        VIEWERAPI_INTERFACE, "GoSLURL");
+    if (!message)
+    {
+        dbus_set_error_const(err, DBUS_ERROR_NO_MEMORY, "Cannot create dbus method call");
         return false;
     }
 
+    dbus_message_append_args(message, DBUS_TYPE_STRING, &url, DBUS_TYPE_INVALID);
+    if (token)
+    {
+        dbus_message_append_args(message, DBUS_TYPE_STRING, &token, DBUS_TYPE_INVALID);
+    }
+
+    DBusMessage* reply = dbus_connection_send_with_reply_and_block(connection, message, 2000, err);
+    dbus_message_unref(message);
+    if (!reply)
+    {
+        return false;
+    }
+
+    dbus_message_unref(reply);
     return true;
 }
 
@@ -721,35 +1136,56 @@ bool LLAppViewerSDL::sendURLToOtherInstance(const std::string& url)
         return false;
     }
 
-    DBusMessage* message = dbus_message_new_method_call(VIEWERAPI_SERVICE, VIEWERAPI_PATH,
-                                                        VIEWERAPI_INTERFACE, "GoSLURL");
-    if (!message)
+    // The launcher's activation token is for a window this process will never
+    // show, so it goes with the link: on Wayland the running viewer can take
+    // focus only with one. Older GIO put it in DESKTOP_STARTUP_ID alone, and
+    // sets both now.
+    const char* token = getenv("XDG_ACTIVATION_TOKEN");
+    if (!token || !*token)
     {
-        LL_WARNS() << "Cannot create dbus method call." << LL_ENDL;
-        return false;
+        token = getenv("DESKTOP_STARTUP_ID");
+    }
+    if (!token || !*token || !dbus_validate_utf8(token, nullptr))
+    {
+        token = nullptr;
     }
 
-    const char* curl = url.c_str();
-    dbus_message_append_args(message, DBUS_TYPE_STRING, &curl, DBUS_TYPE_INVALID);
-
-    // Block for a reply. If no other instance owns the name this returns null
-    // with an error set (ServiceUnknown) -> we are the primary instance ->
-    // return false so startup continues normally.
-    DBusMessage* reply = dbus_connection_send_with_reply_and_block(connection, message, 2000, &err);
-    dbus_message_unref(message);
-
-    const bool handed_off = (reply != nullptr);
-    if (reply)
+    // A running viewer of this channel first, then whichever holds LL's name.
+    // Each is tried only if nothing owned the one before: an owner that did
+    // not take the link is not passed over for another.
+    static const char* const services[] = { VIEWERAPI_SERVICE, VIEWERAPI_SHARED_SERVICE };
+    for (const char* service : services)
     {
-        dbus_message_unref(reply);
-    }
-    else
-    {
-        LL_INFOS() << "No running instance to hand off SLURL to: " << err.message << LL_ENDL;
+        bool handed_off = callGoSLURL(connection, service, url.c_str(), token, &err);
+        if (!handed_off && token
+            && (dbus_error_has_name(&err, DBUS_ERROR_INVALID_ARGS)
+                || dbus_error_has_name(&err, DBUS_ERROR_UNKNOWN_METHOD)))
+        {
+            // A viewer from before the token took GoSLURL(s) alone.
+            dbus_error_free(&err);
+            handed_off = callGoSLURL(connection, service, url.c_str(), nullptr, &err);
+        }
+        if (handed_off)
+        {
+            LL_INFOS() << "Handed SLURL to the viewer running as " << service << LL_ENDL;
+            return true;
+        }
+
+        // No owner is ServiceUnknown, from dbus-daemon and dbus-broker alike,
+        // since the call may start a service; NameHasNoOwner is the answer to
+        // one that may not. An owner that quits or times out without replying
+        // is NoReply, and may have taken the link, so it is not passed over.
+        const bool no_owner = dbus_error_has_name(&err, DBUS_ERROR_SERVICE_UNKNOWN)
+                           || dbus_error_has_name(&err, DBUS_ERROR_NAME_HAS_NO_OWNER);
+        LL_INFOS() << "No running instance of " << service << " to hand off SLURL to: " << err.message << LL_ENDL;
         dbus_error_free(&err);
+        if (!no_owner)
+        {
+            return false;
+        }
     }
 
-    return handed_off;
+    return false;
 }
 
 #elif LL_DARWIN

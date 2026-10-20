@@ -30,8 +30,12 @@
 
 #include "alobjectproperties.h"
 #include "alpanefolds.h"
+#include "alscriptdiskmasters.h"
 #include "alscriptexplorertree.h"
+#include "alscriptlinkbadges.h"
+#include "alscriptregionusage.h"
 #include "alscriptstudiodoc.h"
+#include "alscriptstudiopane.h"
 #include "alscriptstudioservices.h"
 #include "alscriptworkspace.h"
 #include "llagent.h"
@@ -57,7 +61,11 @@
 #include "llviewerregion.h"
 #include "roles_constants.h"
 
+#include <boost/unordered/unordered_flat_set.hpp>
+#include <fmt/format.h>
+
 #include <algorithm>
+#include <cstdlib>
 
 namespace
 {
@@ -73,8 +81,15 @@ namespace
     constexpr S32 BUTTON_PAD = 12;
     constexpr S32 BUTTON_GAP = 2;
 
-    // The roots selected in world, in their order.
-    std::vector<LLUUID> selectedRoots()
+    LLViewerObject* rootOf(LLViewerObject* object)
+    {
+        return object && object->getRootEdit() ? object->getRootEdit() : object;
+    }
+
+    // The roots selected in world, in their order: a whole linkset's, and
+    // the linkset of a prim selected on its own -- Edit Linked Parts --
+    // which `parts` has.
+    std::vector<LLUUID> selectedRoots(std::vector<LLUUID>& parts)
     {
         std::vector<LLUUID>     roots;
         LLObjectSelectionHandle selection = LLSelectMgr::getInstance()->getSelection();
@@ -85,12 +100,21 @@ namespace
                 roots.push_back(object->getID());
             }
         }
+        for (auto it = selection->valid_begin(); it != selection->valid_end(); ++it)
+        {
+            LLViewerObject* object = (*it)->getObject();
+            if (!(*it)->mIndividualSelection || !object || object->isAvatar())
+            {
+                continue;
+            }
+            parts.push_back(object->getID());
+            const LLUUID root = rootOf(object)->getID();
+            if (std::find(roots.begin(), roots.end(), root) == roots.end())
+            {
+                roots.push_back(root);
+            }
+        }
         return roots;
-    }
-
-    LLViewerObject* rootOf(LLViewerObject* object)
-    {
-        return object && object->getRootEdit() ? object->getRootEdit() : object;
     }
 
     // The legacy queues over whole prims, which walk their contents and
@@ -155,29 +179,14 @@ static LLPanelInjector<ALScriptExplorerPane> t_script_studio_explorer("script_st
 
 ALScriptExplorerPane::ALScriptExplorerPane(const LLPanel::Params& params) : LLPanel(params), mModel(ALScriptWorkspace::instance().contentsIndex()) {}
 
-ALScriptExplorerPane::~ALScriptExplorerPane()
-{
-    // A menu still open calls into this pane, which is going: it goes
-    // first. The menus live in the viewer's menu holder, not here.
-    if (LLContextMenu* open = mMenu.get())
-    {
-        open->hide();
-        open->die();
-    }
-}
-
 bool ALScriptExplorerPane::postBuild()
 {
     mTree   = getChild<ALScriptExplorerTree>("explorer_tree");
     mFilter = getChild<LLFilterEditor>("explorer_filter");
     // The window this is the explorer of, found through the view tree, as
     // what the explorer asks of it.
-    LLFloater* window = getParentByType<LLFloater>();
-    mServices         = dynamic_cast<ALScriptStudioServices*>(window);
-    mWindow           = dynamic_cast<Window*>(window);
-    if (!mServices || !mWindow)
+    if (!ALScriptStudioPane::findWindow(*this, "The explorer", mServices, mWindow))
     {
-        LL_WARNS() << "The explorer is not in a Script Studio window" << LL_ENDL;
         return true;
     }
     ALScriptExplorerTree::Hooks hooks;
@@ -286,6 +295,8 @@ bool ALScriptExplorerPane::postBuild()
     // window's.
     mHeardConnection = ALScriptWorkspace::instance().contentsIndex().onHeard(
         [this](const ALScriptContents& contents) { contentsHeard(contents); });
+    // What the region said the objects reserve, beside their names.
+    mRegionUsageConnection = ALScriptWorkspace::instance().regionUsage().onHeard([this]() { fillSoon(); });
     // An object it lists, or would list in sight, coming or going: a pin in
     // sight again after a teleport, one taken back into the inventory.
     mPresenceConnection = gObjectList.onPresence([this](const LLUUID& id, bool) {
@@ -294,6 +305,9 @@ bool ALScriptExplorerPane::postBuild()
             mPresenceAt = LLTimer::getTotalSeconds() + EXPLORER_PRESENCE;
         }
     });
+    // A script linked to a file, let go of, or come to stand otherwise:
+    // its mark after its name.
+    mBadgesConnection = ALScriptLinkBadges::instance().onChanged([this]() { fillSoon(); });
     return true;
 }
 
@@ -371,13 +385,30 @@ void ALScriptExplorerPane::pump()
     {
         return;
     }
-    mSelectionChanged         = false;
-    mPolled                   = now;
-    std::vector<LLUUID> roots = selectedRoots();
-    if (roots != mRoots)
+    mSelectionChanged = false;
+    mPolled           = now;
+    std::vector<LLUUID> parts;
+    std::vector<LLUUID> roots = selectedRoots(parts);
+    if (roots != mRoots || parts != mParts)
     {
         mRoots = std::move(roots);
         relist();
+        // A prim newly selected on its own shown, unfolded in a large
+        // linkset, and asked what it holds where it never was.
+        bool unfolded = false;
+        for (const LLUUID& part : parts)
+        {
+            if (std::find(mParts.begin(), mParts.end(), part) == mParts.end())
+            {
+                mModel.unfoldTo(part);
+                unfolded = true;
+            }
+        }
+        mParts = std::move(parts);
+        if (unfolded)
+        {
+            relist();
+        }
     }
 }
 
@@ -437,6 +468,9 @@ void ALScriptExplorerPane::relist(bool refetch, bool from_region)
     {
         mModel.doneAskingRegion();
     }
+    // The masters of the linked scripts looked at again, off the main
+    // thread: a file saved outside since is marked as changed.
+    ALScriptLinkBadges::instance().refresh();
 }
 
 void ALScriptExplorerPane::contentsHeard(const ALScriptContents& contents)
@@ -451,6 +485,7 @@ void ALScriptExplorerPane::contentsHeard(const ALScriptContents& contents)
         mWindow->explorerPinsChanged();
     }
     mStale = true;
+    ALScriptStudioServices::TabsHeld held(*mServices);
     for (Model::Opening& one : heard.opening)
     {
         mServices->openScript(one.ref, one.name, std::move(one.text));
@@ -532,7 +567,40 @@ void ALScriptExplorerPane::fill()
     const std::string running_no  = said("RunningNo");
     const std::string no_modify   = said("NoModifyMark");
     const std::string no_copy     = said("NoCopyMark");
-    const auto        look        = [&](const Model::Row& row) {
+    // What a script linked to a file says after its name, by how it
+    // stands, and what its tip says of it (ALScriptLinkBadges).
+    typedef ALScriptLinkBadges::Badge Badge;
+    const ALScriptLinkBadges& badges     = ALScriptLinkBadges::instance();
+    const auto                badge_word = [](Badge badge) {
+        switch (badge)
+        {
+            case Badge::Linked: return "LinkBadgeLinked";
+            case Badge::Unsent: return "LinkBadgeUnsent";
+            case Badge::Newer: return "LinkBadgeNewer";
+            case Badge::Pending: return "LinkBadgePending";
+            case Badge::Differing: return "LinkBadgeDiffering";
+            case Badge::Suspended: break;
+        }
+        return "LinkBadgeSuspended";
+    };
+    std::string badge_said[6];
+    for (const Badge badge : { Badge::Linked, Badge::Unsent, Badge::Newer, Badge::Pending, Badge::Differing, Badge::Suspended })
+    {
+        badge_said[static_cast<size_t>(badge)] = said(badge_word(badge));
+    }
+    // What the region reserves for each object in sight, asked for as it
+    // is listed -- once a minute at most -- and said once it has answered.
+    ALScriptRegionUsage& usage = ALScriptWorkspace::instance().regionUsage();
+    std::vector<LLUUID>  roots;
+    for (const Model::Row& row : rows)
+    {
+        if (row.kind == Model::Row::Kind::Object && row.present)
+        {
+            roots.push_back(row.value["root"].asUUID());
+        }
+    }
+    usage.ask(roots, mFilled);
+    const auto look = [&](const Model::Row& row) {
         ALScriptExplorerTree::Look out;
         switch (row.kind)
         {
@@ -548,6 +616,28 @@ void ALScriptExplorerPane::fill()
                 out.suffix = row.present         ? LLStringUtil::null
                              : row.region.empty() ? away
                                                   : bracketed(mServices->words("KindAwayIn", where));
+                if (const ALScriptRegionUsage::Usage* reserved = row.present ? usage.usageOf(row.value["root"].asUUID()) : nullptr)
+                {
+                    // What it reserves, and the time its scripts take where
+                    // the region tells an estate manager.
+                    std::string said;
+                    if (reserved->hasMemory())
+                    {
+                        LLStringUtil::format_map_t size;
+                        size["[RESERVED]"] = fmt::format("{:f}", (F64)reserved->memory / 1024.0);
+                        said               = mServices->words("ExplorerReserved", size);
+                    }
+                    if (reserved->hasTime())
+                    {
+                        LLStringUtil::format_map_t time;
+                        time["[TIME]"] = fmt::format("{:.3f}", reserved->time);
+                        said += (said.empty() ? "" : ", ") + mServices->words("ExplorerTime", time);
+                    }
+                    if (!said.empty())
+                    {
+                        out.suffix += bracketed(said);
+                    }
+                }
                 out.icon   = row.many ? "Inv_Object_Multi" : "Inv_Object";
                 break;
             }
@@ -584,6 +674,14 @@ void ALScriptExplorerPane::fill()
                 if (row.noCopy)
                 {
                     out.suffix += no_copy;
+                }
+                // Linked to a file on disk, a script or a notecard, and how
+                // that stands, from what was last looked at: nothing asked
+                // of the disk here.
+                if (const std::optional<ALScriptLinkBadges::Mark> mark = badges.markOf(row.ref))
+                {
+                    out.suffix += badge_said[static_cast<size_t>(mark->badge)];
+                    out.tip = row.name + "\n" + mServices->words(std::string(badge_word(mark->badge)) + "Tip", { { "[FILE]", mark->master } });
                 }
                 out.icon = row.script ? (row.lua ? "Inv_Script_Luau" : "Inv_Script")
                            : row.name == ".luaurc" || row.name == ".lslrc" ? "Studio_Config"
@@ -668,7 +766,8 @@ void ALScriptExplorerPane::onChosen()
 {
     // A script or notecard opened; an object, a prim or a linkset's row of
     // prims holding nothing opened where it is folded, folded where it is
-    // open.
+    // open. The tabs made once, as the last is opened.
+    ALScriptStudioServices::TabsHeld held(*mServices);
     for (const LLSD& value : mTree->chosen())
     {
         const std::optional<Choice> row = Choice::of(value);
@@ -769,10 +868,7 @@ bool ALScriptExplorerPane::enabled(const std::string& action) const
     // only where it may modify it; an item read only where it may copy it,
     // and a script where it may modify it too.
     auto changeable = [this](const Choice& row) { return mModel.primModifiable(row.prim); };
-    auto readable   = [this](const Choice& row) {
-        const std::optional<ALScriptContents::Item> item = mModel.itemAt(row.ref());
-        return !item || gAgent.isGodlike() || (item->copy && (item->modify || !item->script));
-    };
+    auto readable   = [this](const Choice& row) { return this->readable(row); };
     auto itemChangeable = [this](const Choice& row) {
         const std::optional<ALScriptContents::Item> item = mModel.itemAt(row.ref());
         return !item || item->modify;
@@ -844,7 +940,101 @@ bool ALScriptExplorerPane::enabled(const std::string& action) const
     {
         return !rows.empty();
     }
+    if (action == "link_scripts")
+    {
+        // An object or a prim, in sight, which may be changed.
+        return any([&](const Choice& row) { return !row.isItem() && present(row) && changeable(row); });
+    }
+    if (action == "send_from_files")
+    {
+        // A script or a notecard linked to a file, or an object or a prim
+        // holding one: as the marks say, which is nothing asked of the
+        // disk.
+        const ALScriptLinkBadges& badges = ALScriptLinkBadges::instance();
+        return any([&](const Choice& row) {
+            if (!present(row))
+            {
+                return false;
+            }
+            if (row.isItem())
+            {
+                return badges.markOf(row.ref()).has_value();
+            }
+            const std::vector<std::pair<LLUUID, std::string>> prims = mModel.containerPrims({ row });
+            return std::any_of(prims.begin(), prims.end(), [&badges](const auto& prim) { return badges.linkedIn(prim.first) > 0; });
+        });
+    }
+    if (action == "compare")
+    {
+        const auto pair = Model::comparing(rows);
+        return pair && readable(pair->first) && readable(pair->second);
+    }
+    if (action == "compare_with" || action == "local_history")
+    {
+        return rows.size() == 1 && rows.front().isItem() && readable(rows.front());
+    }
     return false;
+}
+
+bool ALScriptExplorerPane::readable(const Choice& row) const
+{
+    const std::optional<ALScriptContents::Item> item = mModel.itemAt(row.ref());
+    return !item || gAgent.isGodlike() || (item->copy && (item->modify || !item->script));
+}
+
+void ALScriptExplorerPane::compare(const Choice& first, const Choice& second)
+{
+    // The one open already is the one compared, its text as it is now:
+    // only a tab can be set beside another text.
+    const bool    swap  = !mServices->findDoc(first.ref()) && mServices->findDoc(second.ref());
+    const Choice& open  = swap ? second : first;
+    const Choice& other = swap ? first : second;
+    const auto    title = [this](const Choice& row) {
+        const std::string place = mModel.placeOf(row);
+        return place.empty() ? row.name : place + " \xE2\x96\xB8 " + row.name;
+    };
+    mWindow->compareItems(open.ref(), open.name, title(open), other.ref(), title(other));
+}
+
+std::vector<ALScriptExplorerPane::Choice> ALScriptExplorerPane::comparable(const Choice& row) const
+{
+    std::vector<Choice> others = mModel.comparableWith(row);
+    others.erase(std::remove_if(others.begin(), others.end(), [this](const Choice& one) { return !readable(one); }), others.end());
+    return others;
+}
+
+void ALScriptExplorerPane::compareWith(const Choice& row)
+{
+    const std::vector<Choice> others = comparable(row);
+    if (others.empty())
+    {
+        LLStringUtil::format_map_t args;
+        args["[NAME]"] = row.name;
+        mServices->setStatus(mServices->words("ExplorerNothingToCompare", args));
+        return;
+    }
+    std::vector<ALQuickOpen::Candidate> candidates;
+    for (size_t i = 0; i < others.size(); ++i)
+    {
+        ALQuickOpen::Candidate candidate;
+        candidate.label  = others[i].name;
+        candidate.detail = mModel.placeOf(others[i]);
+        candidate.value  = std::to_string(i);
+        candidates.push_back(std::move(candidate));
+    }
+    LLStringUtil::format_map_t args;
+    args["[NAME]"]                 = row.name;
+    const LLHandle<LLPanel> handle = getHandle();
+    mWindow->pick(std::move(candidates), mServices->words("ExplorerComparePlaceholder"), mServices->words("ExplorerCompareTitle", args),
+                  [handle, row, others](const std::string& value) {
+                      ALScriptExplorerPane* pane  = ALViewType::as<ALScriptExplorerPane>(handle.get());
+                      const size_t          index = static_cast<size_t>(std::strtoul(value.c_str(), nullptr, 10));
+                      if (pane && index < others.size())
+                      {
+                          pane->compare(row, others[index]);
+                      }
+                  },
+                  nullptr);
 }
 
 void ALScriptExplorerPane::act(const std::string& action)
@@ -941,6 +1131,21 @@ void ALScriptExplorerPane::act(const std::string& action)
     {
         editInWorld(rows.front());
     }
+    else if (action == "compare")
+    {
+        if (const auto pair = Model::comparing(rows))
+        {
+            compare(pair->first, pair->second);
+        }
+    }
+    else if (action == "compare_with")
+    {
+        compareWith(rows.front());
+    }
+    else if (action == "local_history")
+    {
+        mWindow->showHistory(rows.front().ref(), rows.front().name);
+    }
     else if (action == "describe")
     {
         describe(rows.front());
@@ -955,6 +1160,89 @@ void ALScriptExplorerPane::act(const std::string& action)
     {
         mWindow->checkScripts(rows.front().root);
     }
+    else if (action == "link_scripts")
+    {
+        linkScripts(rows);
+    }
+    else if (action == "send_from_files")
+    {
+        sendFromFiles(rows);
+    }
+}
+
+void ALScriptExplorerPane::linkScripts(const std::vector<Choice>& rows)
+{
+    // Every prim of each object chosen, and each prim chosen, once, with
+    // what its object is called and where it is in words.
+    std::vector<ALScriptLinkScripts::Prim> prims;
+    boost::unordered_flat_set<LLUUID>     taken;
+    for (const Choice& row : rows)
+    {
+        if (row.isItem())
+        {
+            continue;
+        }
+        for (const auto& [prim, name] : mModel.containerPrims({ row }))
+        {
+            if (taken.insert(prim).second)
+            {
+                Choice at;
+                at.root = row.root;
+                at.prim = prim;
+                prims.push_back({ prim, row.root, mModel.nameOf(row.root), mModel.placeOf(at) });
+            }
+        }
+    }
+    if (!prims.empty())
+    {
+        mWindow->linkScripts(std::move(prims));
+    }
+}
+
+void ALScriptExplorerPane::sendFromFiles(const std::vector<Choice>& rows)
+{
+    // Each linked script or notecard chosen, and every link of each prim
+    // and object chosen, once.
+    ALScriptDiskMasters&                   masters = ALScriptDiskMasters::instance();
+    std::vector<ALMasterLink>              links;
+    boost::unordered_flat_set<ALScriptRef> taken;
+    const auto                             take = [&](const ALMasterLink& link) {
+        if (link.state != ALMasterLink::State::Orphaned && taken.insert(ALScriptRef(link.object, link.item)).second)
+        {
+            links.push_back(link);
+        }
+    };
+    for (const auto& [prim, name] : mModel.containerPrims(rows))
+    {
+        for (const ALMasterLink& link : masters.linksIn(prim))
+        {
+            take(link);
+        }
+    }
+    for (const Choice& row : rows)
+    {
+        if (const std::optional<ALMasterLink> link = row.isItem() ? masters.linkOf(row.ref()) : std::nullopt)
+        {
+            take(*link);
+        }
+    }
+    // What goes up is the file on disk: one whose tab holds changes not
+    // saved yet is left, and said, rather than send what was not meant.
+    S32 sent    = 0;
+    S32 unsaved = 0;
+    for (const ALMasterLink& link : links)
+    {
+        if (const ALScriptStudioDoc* tab = mServices->findDoc("disk:" + link.master); tab && tab->unsaved())
+        {
+            ++unsaved;
+            continue;
+        }
+        masters.send(ALScriptRef(link.object, link.item), ALMasterPlan::Send::Derived);
+        ++sent;
+    }
+    const std::string going = sent > 0 || unsaved == 0 ? mServices->counted("ExplorerSendingFromFiles", sent) : std::string();
+    const std::string left  = unsaved > 0 ? mServices->counted("ExplorerSendUnsaved", unsaved) : std::string();
+    mServices->setStatus(mServices->sentences(going, left), unsaved > 0);
 }
 
 void ALScriptExplorerPane::run(const std::string& action, const std::vector<Choice>& rows)
@@ -1012,11 +1300,6 @@ void ALScriptExplorerPane::showMenu(S32 x, S32 y)
     {
         return;
     }
-    if (LLContextMenu* old = mMenu.get())
-    {
-        old->die();
-        mMenu.markDead();
-    }
     LLUICtrl::CommitCallbackRegistry::ScopedRegistrar commit;
     LLUICtrl::EnableCallbackRegistry::ScopedRegistrar enable;
     commit.add("Explorer.Action", [this](LLUICtrl*, const LLSD& param) { act(param.asString()); });
@@ -1025,15 +1308,11 @@ void ALScriptExplorerPane::showMenu(S32 x, S32 y)
         const std::vector<Choice> rows = choice();
         return param.asString() == "pin" && !rows.empty() && mModel.isPinned(rows.front().root);
     });
-    LLContextMenu* menu = LLUICtrlFactory::createFromFile<LLContextMenu>("menu_script_studio_explorer.xml", LLMenuGL::sMenuContainer,
-                                                                          LLMenuHolderGL::child_registry_t::instance());
-    if (!menu)
+    if (!mMenu.make("menu_script_studio_explorer.xml"))
     {
         return;
     }
-    mMenu = menu->getHandle();
-    menu->show(x, y);
-    LLMenuGL::showPopup(mTree, menu, x, y);
+    mMenu.show(mTree, x, y);
 }
 
 // --- keys, the build tools, descriptions ----------------------------------------------
@@ -1181,9 +1460,10 @@ void ALScriptExplorerPane::renamed(const Choice& row, const std::string& was, st
             mServices->report(error, true);
             return;
         }
-        // The tab, if it is open, and the list, once the tree is done with
-        // the name typed.
+        // The tab, if it is open, the link to a file, if it has one, and the
+        // list, once the tree is done with the name typed.
         mWindow->itemRenamed(ref, name);
+        ALScriptDiskMasters::instance().named(ref, name);
         relistSoon(true);
         return;
     }

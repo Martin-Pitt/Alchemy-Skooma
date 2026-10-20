@@ -29,6 +29,7 @@
 #include "alcodeeditor.h"
 #include "alscriptenvelope.h"
 #include "alscriptstudiocaret.h"
+#include "alscriptstudiopane.h"
 #include "alscriptstudioplaces.h"
 #include "alscriptstudioservices.h"
 #include "alscriptstudioweighing.h"
@@ -37,27 +38,16 @@
 #include "lluictrlfactory.h"
 #include "llnotecard.h"
 
+#include <fmt/format.h>
+
 using ALScriptPlaces::NONE;
 using ALScriptPlaces::outlineEntryOf;
 using ALScriptPlaces::outlineValue;
 using ALScriptPlaces::rangeOf;
+using ALScriptPlaces::within;
 
 namespace
 {
-    // Whether a span holds a position, its ends included.
-    bool holds(const ALScriptSpan& span, const ALTextPos& pos)
-    {
-        const ALTextPos begin(span.line, span.column);
-        const ALTextPos end(span.endLine, span.endColumn);
-        return begin <= pos && pos <= end;
-    }
-
-    // Whether a span lies within another.
-    bool within(const ALScriptSpan& inner, const ALScriptSpan& outer)
-    {
-        return holds(outer, ALTextPos(inner.line, inner.column)) && holds(outer, ALTextPos(inner.endLine, inner.endColumn));
-    }
-
     // Which of the trailer's pieces go first where the strip is narrow:
     // the indentation, which the Format menu also says; which view is in
     // front, which the toolbar also shows; what the code weighs, and
@@ -79,28 +69,13 @@ static LLPanelInjector<ALScriptCrumbsBar> t_script_studio_crumbs("script_studio_
 
 ALScriptCrumbsBar::ALScriptCrumbsBar(const LLPanel::Params& params) : LLPanel(params) {}
 
-ALScriptCrumbsBar::~ALScriptCrumbsBar()
-{
-    // A menu still open calls into this bar, which is going: it goes
-    // first. The menus live in the viewer's menu holder, not here.
-    if (LLContextMenu* open = mIndentMenu.get())
-    {
-        open->hide();
-        open->die();
-    }
-}
-
 bool ALScriptCrumbsBar::postBuild()
 {
     mBar = getChild<ALJumpBar>("breadcrumb");
     // The window this is the bar of, found through the view tree, as what
     // the bar asks of it.
-    LLFloater* window = getParentByType<LLFloater>();
-    mServices         = dynamic_cast<ALScriptStudioServices*>(window);
-    mWindow           = dynamic_cast<Window*>(window);
-    if (!mServices || !mWindow)
+    if (!ALScriptStudioPane::findWindow(*this, "The bar under the editor", mServices, mWindow))
     {
-        LL_WARNS() << "The bar under the editor is not in a Script Studio window" << LL_ENDL;
         return true;
     }
     mBar->onChose([this](size_t, const std::string& value) { choose(value); });
@@ -170,9 +145,11 @@ ALScriptCrumbsBar::Steady ALScriptCrumbsBar::steadyOf(Doc& doc) const
     steady.indentFrom = static_cast<U8>(doc.editor->indentFrom());
     steady.checking   = doc.checkRunning(LLTimer::getTotalSeconds());
     mWindow->problemCounts(doc, steady.errors, steady.warnings);
+    steady.migration  = doc.shownMigration;
     steady.target     = mWindow->weightTarget(doc);
     steady.expandable = doc.expandedEditor != nullptr;
     steady.expanded   = doc.shownView() == Doc::View::Expanded;
+    steady.wanted     = mWindow->preprocessedWhy(doc);
     steady.optimized  = steady.expanded && doc.uploaded.valid && doc.uploaded.version == doc.editor->document().version();
     steady.codeBefore = doc.uploaded.codeBefore;
     steady.codeAfter  = doc.uploaded.codeAfter;
@@ -207,6 +184,15 @@ void ALScriptCrumbsBar::lead(Doc& doc, std::vector<Part>& parts) const
     {
         parts.push_back({ banner, std::string(), std::string() });
         parts.back().drop = DROP_LEAD;
+    }
+    // A preprocessed view of a script a save sends as written -- one asked
+    // for, the preprocessor off for it: said, lest the view be taken for
+    // what goes up.
+    if (doc.expandedEditor && !doc.notecard && mWindow->preprocessedWhy(doc) == ALPreprocessor::Wanted::No)
+    {
+        parts.push_back({ mServices->words("TrailerNotPreprocessed"), "expanded", mServices->words("TrailerNotPreprocessedTip") });
+        parts.back().color = doc.editor->markColor(ALCodeEditor::Mark::Warning);
+        parts.back().drop  = DROP_LEAD;
     }
 }
 
@@ -270,6 +256,12 @@ void ALScriptCrumbsBar::problems(Doc& doc, std::vector<Part>& parts) const
         parts.push_back({ mServices->counted("ProblemWarnings", warnings), "problems", mTips.problems });
         parts.back().drop = DROP_COUNTS;
     }
+    // What a script moved from LSL has left to see to, whatever its level.
+    if (doc.shownMigration > 0)
+    {
+        parts.push_back({ mServices->counted("MigrationLeft", doc.shownMigration), "migration", mServices->words("TrailerMigrationTip") });
+        parts.back().drop = DROP_COUNTS;
+    }
 }
 
 void ALScriptCrumbsBar::weight(Doc& doc, std::vector<Part>& parts) const
@@ -286,8 +278,8 @@ void ALScriptCrumbsBar::weight(Doc& doc, std::vector<Part>& parts) const
         const size_t               limit = ALScriptWeight::limitOf(*target);
         LLStringUtil::format_map_t args;
         args["[TARGET]"]      = ALScriptWeight::nameOf(*target);
-        args["[BEFORE]"]      = llformat("%f", (F64)doc.uploaded.codeBefore / 1024.0);
-        args["[AFTER]"]       = llformat("%f", (F64)doc.uploaded.codeAfter / 1024.0);
+        args["[BEFORE]"]      = fmt::format("{:f}", (F64)doc.uploaded.codeBefore / 1024.0);
+        args["[AFTER]"]       = fmt::format("{:f}", (F64)doc.uploaded.codeAfter / 1024.0);
         args["[LIMIT]"]       = std::to_string(limit / 1024);
         args["[BYTESBEFORE]"] = std::to_string(doc.uploaded.codeBefore);
         args["[BYTESAFTER]"]  = std::to_string(doc.uploaded.codeAfter);
@@ -316,7 +308,7 @@ void ALScriptCrumbsBar::weight(Doc& doc, std::vector<Part>& parts) const
     const ALScriptWeight&      weighed = *doc.weighing->weight;
     LLStringUtil::format_map_t args;
     args["[TARGET]"] = ALScriptWeight::nameOf(weighed.target);
-    args["[SIZE]"]   = llformat("%f", (F64)weighed.total / 1024.0);
+    args["[SIZE]"]   = fmt::format("{:f}", (F64)weighed.total / 1024.0);
     args["[LIMIT]"]  = std::to_string(weighed.limit / 1024);
     args["[BYTES]"]  = std::to_string(weighed.total);
     args["[MAX]"]    = std::to_string(weighed.limit);
@@ -397,18 +389,12 @@ void ALScriptCrumbsBar::showIndentMenu()
     {
         return;
     }
-    if (LLContextMenu* old = mIndentMenu.get())
-    {
-        old->die();
-        mIndentMenu.markDead();
-    }
     LLUICtrl::CommitCallbackRegistry::ScopedRegistrar commit;
     LLUICtrl::EnableCallbackRegistry::ScopedRegistrar enable;
     commit.add("Indent.Action", [this](LLUICtrl*, const LLSD& param) { indentAct(param.asString()); });
     enable.add("Indent.Enable", [this](LLUICtrl*, const LLSD& param) { return indentEnabled(param.asString()); });
     enable.add("Indent.Check", [this](LLUICtrl*, const LLSD& param) { return indentChecked(param.asString()); });
-    LLContextMenu* menu = LLUICtrlFactory::createFromFile<LLContextMenu>("menu_script_studio_indent.xml", LLMenuGL::sMenuContainer,
-                                                                          LLMenuHolderGL::child_registry_t::instance());
+    LLContextMenu* menu = mIndentMenu.make("menu_script_studio_indent.xml");
     if (!menu)
     {
         return;
@@ -423,9 +409,7 @@ void ALScriptCrumbsBar::showIndentMenu()
     S32 x = 0;
     S32 y = 0;
     LLUI::getInstance()->getMousePositionLocal(mBar, &x, &y);
-    mIndentMenu = menu->getHandle();
-    menu->show(x, y);
-    LLMenuGL::showPopup(mBar, menu, x, y);
+    mIndentMenu.show(mBar, x, y);
 }
 
 void ALScriptCrumbsBar::indentAct(const std::string& action)
@@ -502,8 +486,14 @@ void ALScriptCrumbsBar::views(Doc& doc, std::vector<Part>& parts) const
     if (doc.expandedEditor)
     {
         const bool expanded = doc.shownView() == Doc::View::Expanded;
-        parts.push_back(
-            { mServices->words(expanded ? "TrailerExpanded" : "TrailerSource"), "expanded", expanded ? mTips.expanded : mTips.source });
+        // And why a save preprocesses it, where one does.
+        std::string                  tip = expanded ? mTips.expanded : mTips.source;
+        const ALPreprocessor::Wanted why = mWindow->preprocessedWhy(doc);
+        if (why != ALPreprocessor::Wanted::No)
+        {
+            tip += " " + mServices->words(why == ALPreprocessor::Wanted::Directives ? "TrailerPreprocessedDirectives" : "TrailerPreprocessedSetting");
+        }
+        parts.push_back({ mServices->words(expanded ? "TrailerExpanded" : "TrailerSource"), "expanded", tip });
         parts.back().drop = DROP_VIEW;
     }
 }

@@ -49,17 +49,56 @@ if(EXISTS "${VCPKG_BOOTSTRAP}")
   endif()
 endif()
 
-# The triplet, unless the caller named one: <arch>-<os>-alchemy[<tier>][-release].
-# The tier follows AL_ISA_TIER on the platforms that build ports per tier, and
-# a single-configuration tree that is not Debug takes the release-only ports.
+# al_sanitizer_triplet_suffix(<result>)
+#   The suffix of the sanitizer triplet AL_SANITIZERS takes on Linux: -asan
+#   with AddressSanitizer, -tsan with ThreadSanitizer, empty with neither.
+#   UndefinedBehaviorSanitizer alone takes the ordinary ports: it checks only
+#   the code compiled for it, and needs nothing of them.
+function(al_sanitizer_triplet_suffix result)
+  set(suffix "")
+  if("address" IN_LIST AL_SANITIZERS)
+    set(suffix "-asan")
+  elseif("thread" IN_LIST AL_SANITIZERS)
+    set(suffix "-tsan")
+  endif()
+  set(${result} "${suffix}" PARENT_SCOPE)
+endfunction()
+
+# The triplet, unless the caller named one:
+# <arch>-<os>-alchemy[-clang][<tier>][-asan|-tsan|-release]. -clang is Linux's,
+# for a viewer built with Clang. The tier follows AL_ISA_TIER on the platforms
+# that build ports per tier, and a single-configuration tree that is not Debug
+# takes the release-only ports. A Linux tree built with AddressSanitizer or
+# ThreadSanitizer takes the ports built for it, which are release-only and
+# built with Clang: see triplets/alchemy-sanitizer.cmake.
 get_property(LL_GENERATOR_IS_MULTI_CONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
 if(NOT DEFINED VCPKG_TARGET_TRIPLET)
   include(${CMAKE_CURRENT_LIST_DIR}/AlchemyTarget.cmake)
 
+  set(triplet_compiler "")
   if(WIN32)
     set(triplet_system Windows)
     set(triplet_os windows)
-    set(triplet_arch x64)
+    # The target's, which project() has not found yet: Visual Studio's
+    # platform (-A, or a preset's architecture), else what a Developer
+    # Command Prompt's compiler targets, else the host's, which is Visual
+    # Studio's default. al_vcpkg_check_triplet_architecture() checks the
+    # guess against the compiler project() found.
+    if(CMAKE_GENERATOR_PLATFORM)
+      set(triplet_arch "${CMAKE_GENERATOR_PLATFORM}")
+    elseif(
+      NOT CMAKE_GENERATOR MATCHES "^Visual Studio"
+      AND NOT "$ENV{VSCMD_ARG_TGT_ARCH}" STREQUAL ""
+    )
+      set(triplet_arch "$ENV{VSCMD_ARG_TGT_ARCH}")
+    else()
+      cmake_host_system_information(RESULT triplet_arch QUERY OS_PLATFORM)
+    endif()
+    if(triplet_arch MATCHES "^[Aa][Rr][Mm]64$")
+      set(triplet_arch arm64)
+    else()
+      set(triplet_arch x64)
+    endif()
   elseif(APPLE)
     set(triplet_system Darwin)
     set(triplet_os osx)
@@ -82,6 +121,30 @@ if(NOT DEFINED VCPKG_TARGET_TRIPLET)
     else()
       set(triplet_arch x64)
     endif()
+
+    # GCC and Clang builds of some ports are not interchangeable, so a viewer
+    # built with Clang takes the triplets whose ports Clang builds. project()
+    # has not chosen the compiler yet: this reads the one it will choose, as
+    # CMake does -- the cache, then CXX, then c++ -- and through any symlink,
+    # since c++ may be Clang. al_vcpkg_check_triplet_compiler() checks the
+    # guess against the compiler project() found.
+    set(triplet_cxx c++)
+    if(CMAKE_CXX_COMPILER)
+      set(triplet_cxx "${CMAKE_CXX_COMPILER}")
+    elseif(NOT "$ENV{CXX}" STREQUAL "")
+      separate_arguments(triplet_cxx UNIX_COMMAND "$ENV{CXX}")
+    endif()
+    list(GET triplet_cxx 0 triplet_cxx)
+    get_filename_component(triplet_cxx_names "${triplet_cxx}" NAME)
+    find_program(triplet_cxx_path NAMES "${triplet_cxx}" NO_CACHE)
+    if(triplet_cxx_path)
+      file(REAL_PATH "${triplet_cxx_path}" triplet_cxx_path)
+      get_filename_component(triplet_cxx_real "${triplet_cxx_path}" NAME)
+      list(APPEND triplet_cxx_names "${triplet_cxx_real}")
+    endif()
+    if(triplet_cxx_names MATCHES "clang")
+      set(triplet_compiler "-clang")
+    endif()
   endif()
 
   al_isa_triplet_tier("${AL_ISA_TIER}" "${triplet_system}" "${triplet_arch}" triplet_tier)
@@ -91,14 +154,125 @@ if(NOT DEFINED VCPKG_TARGET_TRIPLET)
     set(triplet_release "-release")
   endif()
 
-  set(VCPKG_TARGET_TRIPLET "${triplet_arch}-${triplet_os}-alchemy${triplet_tier}${triplet_release}")
+  al_sanitizer_triplet_suffix(triplet_sanitizer)
+  if(triplet_system STREQUAL "Linux" AND triplet_sanitizer)
+    if(NOT triplet_compiler STREQUAL "-clang")
+      message(
+        FATAL_ERROR
+        "AL_SANITIZERS (${AL_SANITIZERS}) builds with Clang on Linux, as its ports are: "
+        "configure with CMAKE_C_COMPILER=clang and CMAKE_CXX_COMPILER=clang++, "
+        "as the ninja-os-asan and ninja-os-tsan presets do."
+      )
+    endif()
+    set(triplet_release "${triplet_sanitizer}")
+  endif()
+
+  set(
+    VCPKG_TARGET_TRIPLET
+    "${triplet_arch}-${triplet_os}-alchemy${triplet_compiler}${triplet_tier}${triplet_release}"
+  )
+  # The sanitizer triplets are written for the machines they are run on, not
+  # for every architecture and tier.
+  if(
+    triplet_sanitizer
+    AND NOT EXISTS "${CMAKE_SOURCE_DIR}/cmake/triplets/${VCPKG_TARGET_TRIPLET}.cmake"
+  )
+    message(
+      FATAL_ERROR
+      "AL_SANITIZERS (${AL_SANITIZERS}) takes the triplet ${VCPKG_TARGET_TRIPLET}, which "
+      "cmake/triplets does not have: write it as x64-linux-alchemy-clang-avx2${triplet_sanitizer}.cmake "
+      "is written, for this architecture and AL_ISA_TIER."
+    )
+  endif()
 endif()
+
+# A Linux tree built with AddressSanitizer or ThreadSanitizer links the ports
+# of a sanitizer triplet, built for the same sanitizer, and no tree else does:
+# their Boost.Context reports its fiber switches to that sanitizer's runtime.
+# Checked before project(), so a triplet named by hand is refused before
+# vcpkg builds its ports.
+function(al_vcpkg_check_triplet_sanitizer)
+  if(NOT VCPKG_TARGET_TRIPLET MATCHES "-linux-alchemy")
+    return()
+  endif()
+  al_sanitizer_triplet_suffix(wanted)
+  string(REGEX MATCH "-[at]san$" ports "${VCPKG_TARGET_TRIPLET}")
+  if(ports STREQUAL wanted)
+    return()
+  endif()
+  if(wanted)
+    message(
+      FATAL_ERROR
+      "AL_SANITIZERS (${AL_SANITIZERS}) needs the ports of a ${wanted} triplet, "
+      "but ${VCPKG_TARGET_TRIPLET} is not one. Leave VCPKG_TARGET_TRIPLET unset to have it chosen."
+    )
+  endif()
+  message(
+    FATAL_ERROR
+    "The ports of ${VCPKG_TARGET_TRIPLET} are built for a sanitizer (${ports}) "
+    "that AL_SANITIZERS does not build the viewer with: set it, or leave "
+    "VCPKG_TARGET_TRIPLET unset to have the triplet chosen."
+  )
+endfunction()
+al_vcpkg_check_triplet_sanitizer()
+
+# A Linux alchemy triplet names the compiler its ports were built with, and
+# the viewer has to be built with the same one. Called once project() has
+# found the compiler, which is after vcpkg has installed the ports.
+function(al_vcpkg_check_triplet_compiler)
+  if(NOT VCPKG_TARGET_TRIPLET MATCHES "-linux-alchemy")
+    return()
+  endif()
+  if(VCPKG_TARGET_TRIPLET MATCHES "-linux-alchemy-clang")
+    set(ports Clang)
+    string(REPLACE "-linux-alchemy-clang" "-linux-alchemy" matching "${VCPKG_TARGET_TRIPLET}")
+  else()
+    set(ports GCC)
+    string(REPLACE "-linux-alchemy" "-linux-alchemy-clang" matching "${VCPKG_TARGET_TRIPLET}")
+  endif()
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    set(viewer Clang)
+  else()
+    set(viewer GCC)
+  endif()
+  if(NOT ports STREQUAL viewer)
+    message(
+      FATAL_ERROR
+      "The viewer is being built with ${CMAKE_CXX_COMPILER_ID} (${CMAKE_CXX_COMPILER}), "
+      "but the ports of ${VCPKG_TARGET_TRIPLET} are built with ${ports}, and the two "
+      "are not interchangeable. Use the triplet ${matching}, or build the viewer with ${ports}."
+    )
+  endif()
+endfunction()
+
+# A Windows alchemy triplet names the architecture its ports were built for,
+# chosen before project() could ask the compiler, and the viewer has to be
+# built for the same one. Called once project() has found the compiler.
+function(al_vcpkg_check_triplet_architecture)
+  if(NOT VCPKG_TARGET_TRIPLET MATCHES "-windows-alchemy")
+    return()
+  endif()
+  string(REGEX MATCH "^[^-]+" ports "${VCPKG_TARGET_TRIPLET}")
+  string(TOLOWER "${CMAKE_CXX_COMPILER_ARCHITECTURE_ID}" viewer)
+  if(viewer STREQUAL "" OR viewer STREQUAL ports)
+    return()
+  endif()
+  al_isa_triplet_tier("${AL_ISA_TIER}" Windows "${viewer}" tier)
+  string(REGEX MATCH "-release$" release "${VCPKG_TARGET_TRIPLET}")
+  message(
+    FATAL_ERROR
+    "The viewer is being built for ${viewer} (${CMAKE_CXX_COMPILER}), but the ports of "
+    "${VCPKG_TARGET_TRIPLET} are built for ${ports}. Use the triplet "
+    "${viewer}-windows-alchemy${tier}${release}, or build the viewer for ${ports}."
+  )
+endfunction()
 
 # vcpkg's toolchain runs `vcpkg install` inside project() on every configure,
 # and a run that installs nothing still costs seconds. It runs only when
 # something it reads has changed since the install that last ran: the
 # manifest, the registry configuration, the triplets and what they include,
-# the feature list, the triplet, and the vcpkg tool. The root writes the
+# the feature list, the triplet, the overlay ports asked for, and the vcpkg
+# tool, and every file of every overlay port. The root writes the # <SK:Nexii>
 # stamp once project() has returned, which is after the install succeeded.
 # AL_VCPKG_INSTALL off leaves the ports to you; deleting the stamp file
 # forces one install.
@@ -109,7 +283,11 @@ option(
 )
 set(AL_VCPKG_INSTALL_STAMP_FILE "${CMAKE_BINARY_DIR}/vcpkg-install.stamp")
 if(AL_VCPKG_INSTALL)
-  file(GLOB al_vcpkg_triplet_files "${CMAKE_SOURCE_DIR}/cmake/triplets/*.cmake")
+  file(
+    GLOB al_vcpkg_triplet_files
+    "${CMAKE_SOURCE_DIR}/cmake/triplets/*.cmake"
+    "${CMAKE_SOURCE_DIR}/cmake/toolchains/*.cmake"
+  )
   set(al_vcpkg_install_key "")
   foreach(
     input
@@ -131,6 +309,32 @@ if(AL_VCPKG_INSTALL)
   string(APPEND al_vcpkg_install_key "triplet=${VCPKG_TARGET_TRIPLET};")
   string(APPEND al_vcpkg_install_key "features=${VCPKG_MANIFEST_FEATURES};")
   string(APPEND al_vcpkg_install_key "toolchain=${CMAKE_TOOLCHAIN_FILE};")
+  string(APPEND al_vcpkg_install_key "overlays=${VCPKG_OVERLAY_PORTS};")
+  # <SK:Nexii> Navmesh: an overlay port's own files key the stamp too, so a port edit reinstalls.
+  set(al_vcpkg_overlay_dirs ${VCPKG_OVERLAY_PORTS})
+  file(READ "${CMAKE_SOURCE_DIR}/vcpkg-configuration.json" al_vcpkg_configuration)
+  string(
+    JSON al_vcpkg_overlay_count
+    ERROR_VARIABLE al_vcpkg_overlay_error
+    LENGTH "${al_vcpkg_configuration}"
+    "overlay-ports"
+  )
+  if(NOT al_vcpkg_overlay_error AND al_vcpkg_overlay_count GREATER 0)
+    math(EXPR al_vcpkg_overlay_last "${al_vcpkg_overlay_count} - 1")
+    foreach(index RANGE ${al_vcpkg_overlay_last})
+      string(JSON overlay GET "${al_vcpkg_configuration}" "overlay-ports" ${index})
+      list(APPEND al_vcpkg_overlay_dirs "${CMAKE_SOURCE_DIR}/${overlay}")
+    endforeach()
+  endif()
+  foreach(overlay IN LISTS al_vcpkg_overlay_dirs)
+    file(GLOB_RECURSE overlay_files LIST_DIRECTORIES false "${overlay}/*")
+    list(SORT overlay_files)
+    foreach(input IN LISTS overlay_files)
+      file(SHA256 "${input}" input_hash)
+      string(APPEND al_vcpkg_install_key "${input}=${input_hash};")
+    endforeach()
+  endforeach()
+  # </SK:Nexii>
 
   if(DEFINED VCPKG_INSTALLED_DIR)
     set(al_vcpkg_installed_dir "${VCPKG_INSTALLED_DIR}")

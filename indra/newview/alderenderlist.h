@@ -95,6 +95,9 @@ class ALDerenderObject : public ALDerenderEntry
      */
 public:
     ALDerenderObject(const LLSelectNode* pNode, bool fPersist);
+    // <SK:Nexii> SKNetMap person menu: derender an avatar without touching the selection
+    ALDerenderObject(const LLViewerObject* pObj, const std::string& strName, bool fPersist);
+    // </SK:Nexii>
     ALDerenderObject(const LLSD& sdData);
 
     /*
@@ -163,6 +166,9 @@ protected:
      */
 public:
     bool              addSelection(bool fPersist, std::vector<LLUUID>* pIdList = nullptr);
+    // <SK:Nexii> SKNetMap person menu: derender an avatar without touching the selection
+    bool              addAvatar(const LLUUID& idAvatar, const std::string& strName);
+    // </SK:Nexii>
     static bool       canAdd(const LLViewerObject* pObj);
     static bool       canAddSelection();
     bool              processObjectUpdate(U64 idRegion, const LLUUID& idObject, const LLVOCacheEntry* pEntry);

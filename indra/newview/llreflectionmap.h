@@ -26,6 +26,7 @@
 
 #pragma once
 
+#include "alquerypool.h"
 #include "llcubemaparray.h"
 #include "llmemory.h"
 
@@ -70,6 +71,11 @@ public:
     // sort order and influence volumes from these two values.
     void syncToViewerObject();
 
+    // Called by the spatial group, viewer object or region this probe was registered for when it
+    // lets go of the probe. Clears any pointer back to it, and takes the probe out of relevance for
+    // the time the manager keeps it before deleting it.
+    void orphan();
+
     // True if this probe's influence volume has moved or resized enough since its neighbour
     // list was built that the list may no longer describe it.
     bool neighborsAreStale() const;
@@ -95,6 +101,13 @@ public:
     // perform occlusion query/readback
     void doOcclusion(const LLVector4a& eye);
 
+    // In view, and the query out forgotten unread: what it says was asked of a view this state no longer follows.
+    void clearOcclusion()
+    {
+        mOccluded       = false;
+        mOcclusionQuery = {};
+    }
+
     // return false if this probe isn't currently relevant (for example, disabled due to graphics preferences)
     bool isRelevant() const;
 
@@ -112,7 +125,7 @@ public:
     F32 mRadius = 16.f;
 
     // last time this probe was updated (or when its update timer got reset)
-    F32 mLastUpdateTime = 0.f;
+    F64 mLastUpdateTime = 0.0;
 
     // cube map used to sample this environment map
     LLPointer<LLCubeMapArray> mCubeArray;
@@ -124,6 +137,11 @@ public:
     // automatic probe whose influence volume a manual probe completely swallows, so it can no
     // longer affect any pixel (maintained by LLReflectionMapManager, consulted by isRelevant)
     bool mInsideManualProbe = false;
+
+    // whatever registered this probe has let go of it (see orphan). Without this a probe with
+    // neither a group nor a viewer object is indistinguishable from a live terrain probe, and
+    // would be treated as one until the manager deletes it.
+    bool mOrphaned = false;
 
     // fade in parameter for this probe
     F32 mFadeIn = 0.f;
@@ -152,11 +170,31 @@ public:
     // 1 - manual probe
     //
     // Set once, by whichever registration created the probe, and never derived again: it says
-    // what kind of probe this is, which is fixed the moment it exists.
+    // what kind of probe this is, which is fixed the moment it exists. The one exception is
+    // orphan(), which drops it to 0 so a probe on its way out sorts behind every live one.
     U32 mPriority = 0;
 
-    // occlusion culling state
-    GLuint mOcclusionQuery = 0;
+    // <SK:Nexii> Navmesh rooms probes: an automatic sphere held by a room part, and an octree probe a room part replaces.
+    bool mNavRooms = false;
+    // Census cluster fill: blends over the default probe and under every other probe (SKClusterProbes).
+    bool mClusterFill = false;
+    bool mSuppressedByNavRooms = false;
+    bool mBlockedByCensus = false;
+    // Set once the census pass has anchored this probe's placement (mGridOrigin/mGridRadius);
+    // afterwards that pass owns re-nudging and the cleared radius.
+    bool mGridPlacementChecked = false;
+    LLVector3d mGridOrigin;
+    F32 mGridRadius = 0.f;
+    // The census scan (SKCensusSnapshot::mStamp) the grid placement's solid
+    // test last ran against: a probe already tested against the scan that is
+    // current keeps that answer until either the scan or its anchor changes.
+    U64 mGridCensusStamp = 0;
+    // Relevance as the neighbour graph last saw it; a flip rebuilds this probe's links.
+    bool mLinkedRelevant = false;
+    // </SK:Nexii>
+
+    // occlusion culling state: the last query of gGL's pool, and what the last one read said
+    ALQueryTicket mOcclusionQuery;
     bool mOccluded = false;
 
     ProbeType mType;

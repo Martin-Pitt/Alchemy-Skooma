@@ -381,12 +381,18 @@ bool LLSpinCtrl::handleHover(S32 x, S32 y, MASK mask)
         {
             scrubTo(x, y, mask);
         }
-        getWindow()->setCursor(vertical ? UI_CURSOR_SIZENS : UI_CURSOR_SIZEWE);
+        if (LLWindow* window = getWindow())
+        {
+            window->setCursor(vertical ? UI_CURSOR_SIZENS : UI_CURSOR_SIZEWE);
+        }
         return true;
     }
     if (inScrubZone(x, y))
     {
-        getWindow()->setCursor(vertical ? UI_CURSOR_SIZENS : UI_CURSOR_SIZEWE);
+        if (LLWindow* window = getWindow())
+        {
+            window->setCursor(vertical ? UI_CURSOR_SIZENS : UI_CURSOR_SIZEWE);
+        }
         return true;
     }
     return LLF32UICtrl::handleHover(x, y, mask);
@@ -591,6 +597,13 @@ void LLSpinCtrl::setUnset(bool unset)
         if (!unset)
         {
             mEditor->setLabel(LLStringUtil::null);
+            // An unset box is empty but for what is typed into it, and what
+            // is typed is the number being chosen: the one in force goes in
+            // only where nothing was, or a commit reads it back instead.
+            if (!mEditor->getText().empty())
+            {
+                return;
+            }
         }
         updateEditor();
     }

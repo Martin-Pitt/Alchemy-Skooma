@@ -28,6 +28,7 @@
 #include "alluauservice.h"
 #include "alpreprocessor.h"
 #include "alrecoverystore.h"
+#include "alsavehistory.h"
 #include "alscriptenvelope.h"
 #include "alscriptproblem.h"
 #include "alscriptsaveflow.h"
@@ -35,6 +36,8 @@
 #include "alscripttypes.h"
 #include "alsourcemap.h"
 #include "alstringmatch.h"
+#include "aldiffmodel.h"
+#include "altextdiff.h"
 #include "altextdocument.h"
 #include "llstl.h"
 
@@ -43,6 +46,7 @@
 #include <boost/unordered/unordered_flat_set.hpp>
 
 #include <algorithm>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -54,6 +58,15 @@ class ALDiffView;
 class ALNotecardEmbedded;
 class ALScriptStudioServices;
 class ALWatchedFile;
+
+// The upload header a save's envelope carries, where it is asked for
+// (ALUploadHeader): what the save hashes to and when -- and who, where
+// `creator` is given.
+struct ALScriptHeaderOptions
+{
+    bool        on = false;
+    std::string creator;
+};
 
 // One tab of the studio: a script, a notecard or a file, and the views
 // of it the pane can show -- its source, and what the preprocessor made
@@ -147,6 +160,10 @@ struct ALScriptStudioDoc
     // whose answer a save may yet wait on.
     bool          saveUnderway() const { return save.underway() || preprocessing; }
     ALCodeEditor* shownText() const;
+    // Whose steps undo and redo take back and make again: the view in
+    // front's, but the tab's own while a comparison that follows the tab
+    // is -- a change taken back from it among them.
+    ALCodeEditor* undoText() const;
     // Whether the keyboard is in one of its views, shown or not.
     bool          hasKeyboard() const;
     // Whether a check asked about is still unanswered at `now`, a while
@@ -178,9 +195,13 @@ struct ALScriptStudioDoc
     // line the expansion's, which the Preprocessed view shows.
     static const std::string GENERATED;
     RunningPlace       placeOfRunning(S32 line, S32 column) const;
+    typedef ALScriptHeaderOptions Header;
+    // The upload header's text for an expansion of the tab's source; nothing
+    // where it is off.
+    std::string        headerFor(const std::string& expanded, const Header& header) const;
     // The envelope a save sends an expansion in: the source as written,
-    // its target, the program that wrote it and when.
-    ALScriptEnvelope   envelopeFor(const std::string& expanded, const std::string& program) const;
+    // its target, the program that wrote it and when, and the header.
+    ALScriptEnvelope   envelopeFor(const std::string& expanded, const std::string& program, const Header& header = {}) const;
     // The text as it stands, for what takes it off the main thread: one
     // copy of a version, shared by every question asked of it while any of
     // them holds it, rather than one copy each.
@@ -277,6 +298,10 @@ struct ALScriptStudioDoc
     // What it is, and the rest of what ALScriptStudioOrphans keeps of it.
     struct Orphaned;
     Part<Orphaned>                             orphan;
+    // Its master on disk: the file its script names, and what a file's
+    // tab's offers about its scripts act on (ALScriptStudioMasters).
+    struct Mastered;
+    Part<Mastered>                             master;
     // What its object and region were called, while they were in sight:
     // what a kept text says it came from once they are not.
     std::string                                objectName;
@@ -297,6 +322,11 @@ struct ALScriptStudioDoc
     // and whose expanded code the other editor shows; a save runs
     // the preprocessor over the source and wraps both again.
     std::optional<ALScriptEnvelope>            envelope;
+    // Whether the text holds a directive of the preprocessor's, as of a
+    // version of it (ALPreprocessor::usesDirectives): read as it is asked,
+    // which is often, and the text but now and then changed.
+    mutable U32                                directivesOf = ~0u;
+    mutable bool                               directives   = false;
     // The version a wrapped script was loaded at, where the first run over
     // its source is to be held up to its compiled half; none once it has
     // been. And the compiled half, where the source could not have made
@@ -350,6 +380,9 @@ struct ALScriptStudioDoc
         std::shared_ptr<const ALLuauService::Modules>  modules;
         std::vector<std::pair<std::string, ALSourceMap>> moduleMaps;
         std::shared_ptr<const std::string>              bundle;
+        // The bundle's own way back to the source, the modules first in it:
+        // what its weights are placed through, not the script's alone.
+        ALSourceMap                                     bundleMap;
         ALScriptProblems problems;
         // What the code came to on the script's target before the
         // optimizer and after, where it ran and was weighed.
@@ -363,6 +396,14 @@ struct ALScriptStudioDoc
     };
     Expanded                                   expanded;
     Expanded                                   uploaded;
+    // The asset as the world holds it, whole -- the envelope and all, as
+    // another viewer opens it: as loaded, and as the last save that went
+    // up sent it; and what the save on its way sent.
+    std::shared_ptr<const std::string>         asset;
+    std::shared_ptr<const std::string>         assetSending;
+    // The next save sends it as written, its envelope let go of, whatever
+    // the setting says (Save Without Preprocessing).
+    bool                                       savePlain = false;
     // The source's require calls, of the text at requiresOf (namedAt).
     mutable std::vector<ALPreprocessor::Required> requiresFound;
     mutable std::optional<U32>                    requiresOf;
@@ -374,7 +415,7 @@ struct ALScriptStudioDoc
     bool                                       preprocessing       = false;
     // What the compiler said of the last save, in the source's places
     // -- back through the preprocessor's map, where it ran -- or an
-    // include's, by its path.
+    // include's, by its path; its line -1 where it named none.
     struct Compiled
     {
         S32         line      = 0;
@@ -385,6 +426,15 @@ struct ALScriptStudioDoc
         std::string message;
     };
     std::vector<Compiled>                      problems;
+    // What a compiler said, as a tab's problems: the region's lines under
+    // the envelope's `under` lines, read back through the expansion's map
+    // to the source and its includes, or at the expansion's line where the
+    // preprocessor made the code; as said where there is no map.
+    static std::vector<Compiled> compiledOf(const std::vector<ALScriptDiagnostic>& said, const ALSourceMap* map, S32 under);
+    // What a compiler said, with each place its words name in the
+    // source's count, as the map reads it back: `(343, 1)`, or an
+    // include's `(12, 5) in name`; as said where nothing maps it.
+    static std::string mentionsMapped(const ALScriptDiagnostic& said, const ALSourceMap* map, S32 under);
     // What the script said as it ran, since it was last saved: a
     // run-time error's place, or -1 for none, the include it is in,
     // and its words.
@@ -424,6 +474,19 @@ struct ALScriptStudioDoc
     // queue -- that landed over changes made here: its text, until the
     // author says whose to keep.
     std::optional<std::string>                 savedThere;
+    // A merge put in the tab (ALScriptStudioMerging), until the save that
+    // carries it: the undo step it made, by its serial, and what it set
+    // aside -- what was saved elsewhere, the asset the tab was made from --
+    // put back should the merge be undone before it is saved.
+    struct Merged
+    {
+        U64                        serial = 0;
+        std::optional<std::string> savedThere;
+        bool                       world = false;
+        LLUUID                     assetWas;
+        LLUUID                     assetMerged;
+    };
+    std::optional<Merged>                      merged;
     std::optional<std::string>                 carriedTarget;
     std::optional<LLUUID>                      carriedExperience;
     // A line to go to once the script has loaded, or -1; and a
@@ -442,6 +505,12 @@ struct ALScriptStudioDoc
     // more it is asked.
     std::optional<bool>                        runningAsked;
     S32                                        runningAsks = 0;
+    // The script in an object a file's tab stands in for -- its file
+    // masters it and no other -- or none, found again as the links change
+    // (ALFloaterScriptStudio::restand); and the one asked whether it runs
+    // and what experience it runs under, asked again for another.
+    ALScriptRef                                standsFor;
+    ALScriptRef                                worldAsked;
     // A compile target picked here since the last save, which the
     // region's word on what the script compiles for does not put back.
     bool                                       targetChosen = false;
@@ -495,12 +564,25 @@ struct ALScriptStudioDoc
         // The version of the text the fixes are in the places of: the
         // check's, or the preprocessor run's that made the note.
         U32                      fixesFor = 0;
+        // What a script moved from LSL is left to see to: a note the
+        // converter left, an LSL habit's lint, a call to llcompat
+        // (ALScriptLintPass::migration).
+        bool                     migration = false;
     };
-    std::vector<Shown>                         shown;
+    // The rows, shared with the Problems pane's store, which holds them
+    // as they are without a copy; never changed once put, only put again.
+    std::shared_ptr<const std::vector<Shown>>  shownRows;
+    const std::vector<Shown>&                  shown() const
+    {
+        static const std::vector<Shown> none;
+        return shownRows ? *shownRows : none;
+    }
     // How many of them are errors and warnings, counted as they are put
     // in: the tab's dot and the trailer ask on every key.
-    S32                                        shownErrors   = 0;
-    S32                                        shownWarnings = 0;
+    S32                                        shownErrors    = 0;
+    S32                                        shownWarnings  = 0;
+    // And how many are left to move from LSL, whatever their level.
+    S32                                        shownMigration = 0;
     // The rows put in, and counted.
     void setShown(std::vector<Shown> rows);
     // The problem listed at a place, in the script or an include, saying
@@ -513,6 +595,9 @@ struct ALScriptStudioDoc
         std::string key;
         // Only what may be made on a save: safe, and taking nothing out.
         bool        forSave = false;
+        // What is left from LSL alone (Shown::migration), every preferred
+        // fix of it, safe or not: what is not is seen before it is made.
+        bool        migration = false;
     };
     // The preferred fixes picked, of the script's own problems, none of
     // whose edits overlap another taken before it. Over the whole script,
@@ -557,6 +642,47 @@ struct ALScriptStudioDoc
         bool         replace = false;
     };
     std::vector<PendingEdit>                   pendingEdits;
+    // Another item's text to set this one's beside once it has loaded --
+    // the Explorer's Compare, asked before the tab had its text -- under
+    // the other's title and its own; lined up where lines of the two are
+    // known to stand for each other (ALTextDiff's ranges): the LSL a
+    // conversion was made from and the SLua it wrote, with its notes.
+    struct PendingCompare
+    {
+        std::string                      text;
+        std::string                      theirTitle;
+        std::string                      ownTitle;
+        ALTextDiff::ranges_t             ranges;
+        // Words beside lines of the other's text: a conversion's notes
+        // beside the LSL they are about.
+        std::vector<ALDiffModel::Note>   notes;
+        // What is done once it is shown: a save of the history given the
+        // other saves to step through.
+        std::function<void(ALScriptStudioDoc& doc)> shown;
+    };
+    std::optional<PendingCompare>              pendingCompare;
+    // The titles of a comparison shown whose right is this tab's text, its
+    // own said unsaved for as long as the tab is. While there are, the
+    // comparison follows the tab: changed since it was made, it is made
+    // again once the changes have stopped for a moment, or as it is shown.
+    struct CompareTitles
+    {
+        std::string theirs;
+        std::string own;
+    };
+    std::optional<CompareTitles>               compareTitles;
+    bool                                       compareStale     = false;
+    F64                                        compareChangedAt = 0.0;
+    // Moved on by each comparison asked for, so that an item still loading
+    // to be compared is dropped once another has been asked for since.
+    U32                                        compareAsked     = 0;
+    // A save of its item compared with it (ALScriptStudioHistory), until
+    // the comparison ends: offered back by the notice.
+    std::optional<ALSavedText>                 historyShown;
+    // Its comparison's texts' outlines, by which their functions are
+    // paired (ALScriptStudioComparePairs).
+    struct ComparePairs;
+    Part<ComparePairs>                         comparePairs;
     // The script held open in an external editor (ALScriptExternalEditor).
     struct External;
     Part<External>                             external;

@@ -32,7 +32,6 @@
 #include "llfontgl.h"
 
 // Linden library includes
-#include "llfasttimer.h"
 #include "llfontfreetype.h"
 #include "llfontbitmapcache.h"
 #include "llfontregistry.h"
@@ -86,6 +85,28 @@ const F32 DROP_SHADOW_SOFT_STRENGTH = 0.3f;
 
 namespace
 {
+    // A batch of glyph quads on its way to the GL. A drawing thread keeps
+    // one on the heap: as thread_local arrays a batch was 20 KB of static
+    // TLS, which glibc takes out of the stack of every thread, those that
+    // never draw a glyph too, and FMOD's mixer was left too little to run.
+    template<S32 VERTICES>
+    struct GlyphBatch
+    {
+        LLVector4a vertices[VERTICES];
+        LLVector2  uvs[VERTICES];
+        LLColor4U  colors[VERTICES];
+    };
+
+    template<S32 VERTICES>
+    GlyphBatch<VERTICES>& thread_glyph_batch(std::unique_ptr<GlyphBatch<VERTICES>>& batch)
+    {
+        if (!batch)
+        {
+            batch = std::make_unique<GlyphBatch<VERTICES>>();
+        }
+        return *batch;
+    }
+
     // Slice-local result of itemizing + shaping a measurement window. Every
     // position here is a byte offset. Each
     // pair in `ranges` is [first, second) within `slice`; `glyphs[i]` points
@@ -578,7 +599,7 @@ S32 LLFontGL::renderBytes(std::string_view utf8text, S32 begin_offset, F32 x, F3
         // asks the codepoint walk -- which is where it lives.
         string_width_unscaled = (layout.glyphs && !layout.glyphs->empty())
             ? shaped_run_width(mFontFreetype, *layout.glyphs,
-                               /*no_padding=*/false, subpixel_pen) / sScaleX
+                               /*no_padding=*/false, subpixel_pen) / divisorX()
             : getWidthF32Bytes(utf8text, begin_offset, length);
     }
     const S32 scaled_string_width = ll_round(string_width_unscaled * sScaleX);
@@ -665,9 +686,11 @@ S32 LLFontGL::renderBytes(std::string_view utf8text, S32 begin_offset, F32 x, F3
     // single-glyph path) and at 720 vertices per batch fills GL submit
     // payloads that 30 was leaving on the table.
     static constexpr S32 GLYPH_BATCH_SIZE = 120;
-    static thread_local LLVector4a vertices[GLYPH_BATCH_SIZE * 6];
-    static thread_local LLVector2 uvs[GLYPH_BATCH_SIZE * 6];
-    static thread_local LLColor4U colors[GLYPH_BATCH_SIZE * 6];
+    static thread_local std::unique_ptr<GlyphBatch<GLYPH_BATCH_SIZE * 6>> glyph_batch;
+    auto& batch = thread_glyph_batch(glyph_batch);
+    LLVector4a* const vertices = batch.vertices;
+    LLVector2* const uvs = batch.uvs;
+    LLColor4U* const colors = batch.colors;
 
     // Italic slant_offset depends only on style; hoist it out of the per-glyph
     // path so drawGlyphShadow/drawGlyphForeground don't recompute it.
@@ -1087,12 +1110,12 @@ S32 LLFontGL::renderBytes(std::string_view utf8text, S32 begin_offset, F32 x, F3
 
     if (right_x)
     {
-        *right_x = cur_x / sScaleX;
+        *right_x = cur_x / divisorX();
     }
 
     // The ellipsis is a draw of its own and sets up its own transform, so this
     // one has to be gone before it starts or the origin would be applied twice.
-    const F32 ellipsis_x = cur_x / sScaleX;
+    const F32 ellipsis_x = cur_x / divisorX();
     transform.end();
 
     if (draw_ellipses)
@@ -1157,9 +1180,11 @@ void LLFontGL::renderGlyphRuns(const GlyphRun* runs, size_t run_count, U8 style)
     gGL.setSceneBlendType(LLRender::BT_ALPHA);
 
     static constexpr S32           GLYPH_BATCH_SIZE = 120;
-    static thread_local LLVector4a vertices[GLYPH_BATCH_SIZE * 6];
-    static thread_local LLVector2  uvs[GLYPH_BATCH_SIZE * 6];
-    static thread_local LLColor4U  batch_colors[GLYPH_BATCH_SIZE * 6];
+    static thread_local std::unique_ptr<GlyphBatch<GLYPH_BATCH_SIZE * 6>> glyph_batch;
+    auto&                          batch        = thread_glyph_batch(glyph_batch);
+    LLVector4a* const              vertices     = batch.vertices;
+    LLVector2* const               uvs          = batch.uvs;
+    LLColor4U* const               batch_colors = batch.colors;
     S32                            glyph_count = 0;
 
     // The atlas the pending quads were built against, re-bound at every
@@ -1277,7 +1302,7 @@ F32 LLFontGL::placeGlyphs(std::string_view text, HAlign halign, std::vector<Plac
     F32                               shift        = 0.f;
     if (halign != LEFT)
     {
-        const F32 unscaled = shaped_run_width(mFontFreetype, shaped, /*no_padding=*/false, subpixel_pen) / sScaleX;
+        const F32 unscaled = shaped_run_width(mFontFreetype, shaped, /*no_padding=*/false, subpixel_pen) / divisorX();
         const S32 scaled   = ll_round(unscaled * sScaleX);
         shift              = static_cast<F32>(halign == RIGHT ? -scaled : -(scaled / 2));
     }
@@ -1286,25 +1311,25 @@ F32 LLFontGL::placeGlyphs(std::string_view text, HAlign halign, std::vector<Plac
     F32 cur = 0.f;
     for (const ALShapedGlyph& sg : shaped)
     {
-        out.push_back(Placed{ sg.face, sg.glyph_id, (cur + sg.x_offset) / sScaleX, sg.y_offset / sScaleY });
+        out.push_back(Placed{ sg.face, sg.glyph_id, (cur + sg.x_offset) / divisorX(), sg.y_offset / divisorY() });
         cur += sg.x_advance;
         if (!subpixel_pen)
         {
             cur = static_cast<F32>(ll_round(cur));
         }
     }
-    return shift / sScaleX;
+    return shift / divisorX();
 }
 
 // font metrics - override for LLFontFreetype that returns units of virtual pixels
 F32 LLFontGL::getAscenderHeight() const
 {
-    return mFontFreetype->getAscenderHeight() / sScaleY;
+    return mFontFreetype->getAscenderHeight() / divisorY();
 }
 
 F32 LLFontGL::getDescenderHeight() const
 {
-    return mFontFreetype->getDescenderHeight() / sScaleY;
+    return mFontFreetype->getDescenderHeight() / divisorY();
 }
 
 S32 LLFontGL::getLineHeight() const
@@ -1314,7 +1339,7 @@ S32 LLFontGL::getLineHeight() const
     // produced when both fractional parts were non-zero. For full
     // baseline-to-baseline distance including the font's recommended line
     // gap, use getLineSpacing().
-    return llceil((mFontFreetype->getAscenderHeight() + mFontFreetype->getDescenderHeight()) / sScaleY);
+    return llceil((mFontFreetype->getAscenderHeight() + mFontFreetype->getDescenderHeight()) / divisorY());
 }
 
 S32 LLFontGL::getLineSpacing() const
@@ -1324,7 +1349,7 @@ S32 LLFontGL::getLineSpacing() const
     // layout so consecutive lines sit at the spacing the font designer
     // intended; for many screen fonts lineGap is 0 and this matches
     // getLineHeight().
-    return llceil(mFontFreetype->getLineHeight() / sScaleY);
+    return llceil(mFontFreetype->getLineHeight() / divisorY());
 }
 
 S32 LLFontGL::getWidth(std::string_view utf8text) const
@@ -1391,7 +1416,7 @@ F32 LLFontGL::getWidthF32Bytes(std::string_view utf8text, S32 begin_offset, S32 
     // The glyph pointer must have stayed valid for the whole measurement.
     llassert(layout.mutation_snapshot == ALFontShaping::cacheMutationCount());
 
-    return width / sScaleX;
+    return width / divisorX();
 }
 
 void LLFontGL::generateASCIIglyphs()
@@ -1939,20 +1964,22 @@ void LLFontGL::initClass(F32 screen_dpi, F32 x_scale, F32 y_scale,
                          bool create_gl_textures)
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_UI;
-    sVertDPI = (F32)llfloor(screen_dpi * y_scale);
-    sHorizDPI = (F32)llfloor(screen_dpi * x_scale);
-    sScaleX = x_scale;
-    sScaleY = y_scale;
-    sAppDir = app_dir;
-
     // Single-shot: bail if the registry was already created via either
     // overload. Reload-with-explicit-path isn't supported — the test
-    // caller initializes once.
+    // caller initializes once. Ignored whole: the fonts already made were
+    // made at the DPI and scale they have, which a second call must not
+    // change under them.
     if (sFontRegistry)
     {
         LL_WARNS() << "LLFontGL::initClass(explicit path) called with an existing registry; ignoring" << LL_ENDL;
         return;
     }
+
+    sVertDPI = (F32)llfloor(screen_dpi * y_scale);
+    sHorizDPI = (F32)llfloor(screen_dpi * x_scale);
+    sScaleX = x_scale;
+    sScaleY = y_scale;
+    sAppDir = app_dir;
 
     sFontRegistry = new LLFontRegistry(create_gl_textures);
     sFontRegistry->parseFontInfoFromFile(fonts_xml_path, font_overrides);

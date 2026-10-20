@@ -53,13 +53,14 @@
 #include "llvlcomposition.h"
 #include "llvoavatar.h"
 #include "llvocache.h"
-#include "llvowater.h"
 #include "message.h"
 #include "pipeline.h"
 #include "llappviewer.h"        // for do_disconnect()
 #include "llscenemonitor.h"
+#include "alfarplane.h"
 #include <fmt/format.h>
 
+#include <algorithm>
 #include <deque>
 #include <queue>
 #include <map>
@@ -76,7 +77,6 @@ U32         gAgentPauseSerialNum = 0;
 //
 const S32 WORLD_PATCH_SIZE = 16;
 
-extern LLColor4U MAX_WATER_COLOR;
 
 const U32 LLWorld::mWidth = 256;
 
@@ -97,28 +97,12 @@ LLWorld::LLWorld() :
     mLastPacketsLost(0),
     mSpaceTimeUSec(0)
 {
-    for (S32 i = 0; i < EDGE_WATER_OBJECTS_COUNT; i++)
-    {
-        mEdgeWaterObjects[i] = NULL;
-    }
-
-    LLPointer<LLImageRaw> raw = new LLImageRaw(1,1,4);
-    U8 *default_texture = raw->getData();
-    *(default_texture++) = MAX_WATER_COLOR.mV[0];
-    *(default_texture++) = MAX_WATER_COLOR.mV[1];
-    *(default_texture++) = MAX_WATER_COLOR.mV[2];
-    *(default_texture++) = MAX_WATER_COLOR.mV[3];
-
-    mDefaultWaterTexturep = LLViewerTextureManager::getLocalTexture(raw.get(), false);
-
     LLViewerRegion::sVOCacheCullingEnabled = gSavedSettings.getBOOL("RequestFullRegionCache") && gSavedSettings.getBOOL("ObjectCacheEnabled");
 }
 
 
 void LLWorld::resetClass()
 {
-    mHoleWaterObjects.clear();
-    mWaterObjectsDirty = false;
     gObjectList.destroy();
     gSky.cleanup(); // references an object
     for(region_list_t::iterator region_it = mRegionList.begin(); region_it != mRegionList.end(); )
@@ -128,12 +112,6 @@ void LLWorld::resetClass()
     }
 
     LLViewerPartSim::getInstance()->destroyClass();
-
-    mDefaultWaterTexturep = NULL ;
-    for (S32 i = 0; i < EDGE_WATER_OBJECTS_COUNT; i++)
-    {
-        mEdgeWaterObjects[i] = NULL;
-    }
 
     //make all visible drawbles invisible.
     LLDrawable::incrementVisible();
@@ -244,8 +222,6 @@ LLViewerRegion* LLWorld::addRegion(const U64 &region_handle, const LLHost &host)
         }
     }
 
-    requestWaterObjectsUpdate();
-
     return regionp;
 }
 
@@ -298,8 +274,6 @@ void LLWorld::removeRegion(const LLHost &host)
     mVisibleRegionList.remove(regionp);
 
     mRegionRemovedSignal(regionp);
-
-    requestWaterObjectsUpdate();
 
     //double check all objects of this region are removed.
     gObjectList.clearAllMapObjectsInRegion(regionp) ;
@@ -639,11 +613,6 @@ LLVector3 LLWorld::resolveLandNormalGlobal(const LLVector3d &pos_global)
 
 void LLWorld::updateVisibilities()
 {
-    if (mWaterObjectsDirty)
-    {
-        updateWaterObjects();
-    }
-
     F32 cur_far_clip = LLViewerCamera::getInstance()->getFar();
 
     // Go through the culled list and check for visible regions (region is visible if land is visible)
@@ -830,18 +799,6 @@ void LLWorld::logObjectCacheInfo() const
                << LL_ENDL;
 }
 
-void LLWorld::clearAllVisibleObjects()
-{
-    for (region_list_t::iterator iter = mRegionList.begin();
-         iter != mRegionList.end(); ++iter)
-    {
-        //clear all cached visible objects.
-        (*iter)->clearCachedVisibleObjects();
-    }
-    clearHoleWaterObjects();
-    clearEdgeWaterObjects();
-}
-
 void LLWorld::updateParticles()
 {
     LLViewerPartSim::getInstance()->updateSimulation();
@@ -940,17 +897,7 @@ F32 LLWorld::getLandFarClip() const
 void LLWorld::setLandFarClip(const F32 far_clip)
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_ENVIRONMENT;
-    static S32 const rwidth = (S32)REGION_WIDTH_U32;
-    S32 const n1 = (llceil(mLandFarClip) - 1) / rwidth;
-    S32 const n2 = (llceil(far_clip) - 1) / rwidth;
-    bool need_water_objects_update = n1 != n2;
-
     mLandFarClip = far_clip;
-
-    if (need_water_objects_update)
-    {
-        requestWaterObjectsUpdate();
-    }
 }
 
 // Some region that we're connected to, but not the one we're in, gave us
@@ -967,166 +914,6 @@ void LLWorld::waterHeightRegionInfo(std::string const& sim_name, F32 water_heigh
     }
 }
 
-void LLWorld::clearHoleWaterObjects()
-{
-    for (std::list<LLPointer<LLVOWater> >::iterator iter = mHoleWaterObjects.begin();
-        iter != mHoleWaterObjects.end(); ++iter)
-    {
-        LLVOWater* waterp = (*iter).get();
-        gObjectList.killObject(waterp);
-    }
-    mHoleWaterObjects.clear();
-}
-
-void LLWorld::clearEdgeWaterObjects()
-{
-    for (S32 i = 0; i < EDGE_WATER_OBJECTS_COUNT; i++)
-    {
-        gObjectList.killObject(mEdgeWaterObjects[i]);
-        mEdgeWaterObjects[i] = NULL;
-    }
-}
-
-void LLWorld::requestWaterObjectsUpdate()
-{
-    mWaterObjectsDirty = true;
-}
-
-void LLWorld::updateWaterObjects()
-{
-    mWaterObjectsDirty = false;
-    if (!gAgent.getRegion())
-    {
-        return;
-    }
-    if (mRegionList.empty())
-    {
-        LL_WARNS() << "No regions!" << LL_ENDL;
-        return;
-    }
-
-    // First, determine the min and max "box" of water objects
-    S32 min_x = 0;
-    S32 min_y = 0;
-    S32 max_x = 0;
-    S32 max_y = 0;
-    U32 region_x, region_y;
-
-    S32 rwidth = 256;
-
-    // We only want to fill in water for stuff that's near us, say, within 256 or 512m
-    S32 range = LLViewerCamera::getInstance()->getFar() > 256.f ? 512 : 256;
-
-    LLViewerRegion* regionp = gAgent.getRegion();
-    from_region_handle(regionp->getHandle(), &region_x, &region_y);
-
-    min_x = (S32)region_x - range;
-    min_y = (S32)region_y - range;
-    max_x = (S32)region_x + range;
-    max_y = (S32)region_y + range;
-
-    for (region_list_t::iterator iter = mRegionList.begin();
-         iter != mRegionList.end(); ++iter)
-    {
-        LLViewerRegion* regionp = *iter;
-        LLVOWater* waterp = regionp->getLand().getWaterObj();
-        if (waterp)
-        {
-            gObjectList.updateActive(waterp);
-        }
-    }
-
-    clearHoleWaterObjects();
-
-    // Use the water height of the region we're on for areas where there is no region
-    F32 water_height = gAgent.getRegion()->getWaterHeight();
-
-    // Now, get a list of the holes
-    S32 x, y;
-    for (x = min_x; x <= max_x; x += rwidth)
-    {
-        for (y = min_y; y <= max_y; y += rwidth)
-        {
-            U64 region_handle = to_region_handle(x, y);
-            if (!getRegionFromHandle(region_handle))
-            {   // No region at that area, so make water
-                LLVOWater* waterp = (LLVOWater *)gObjectList.createObjectViewer(LLViewerObject::LL_VO_WATER, gAgent.getRegion());
-                waterp->setPositionGlobal(LLVector3d(x + rwidth/2,
-                                                     y + rwidth/2,
-                                                     256.f + water_height));
-                waterp->setScale(LLVector3((F32)rwidth, (F32)rwidth, 512.f));
-                gPipeline.createObject(waterp);
-                mHoleWaterObjects.push_back(waterp);
-            }
-        }
-    }
-
-    // Update edge water objects
-    S32 wx, wy;
-    S32 center_x, center_y;
-    wx = (max_x - min_x) + rwidth;
-    wy = (max_y - min_y) + rwidth;
-    center_x = min_x + (wx >> 1);
-    center_y = min_y + (wy >> 1);
-
-    S32 add_boundary[4] = {
-        (S32)(512 - (max_x - region_x)),
-        (S32)(512 - (max_y - region_y)),
-        (S32)(512 - (region_x - min_x)),
-        (S32)(512 - (region_y - min_y)) };
-
-    S32 dir;
-    for (dir = 0; dir < EDGE_WATER_OBJECTS_COUNT; dir++)
-    {
-        S32 dim[2] = { 0 };
-        switch (gDirAxes[dir][0])
-        {
-        case -1: dim[0] = add_boundary[2]; break;
-        case  0: dim[0] = wx; break;
-        default: dim[0] = add_boundary[0]; break;
-        }
-        switch (gDirAxes[dir][1])
-        {
-        case -1: dim[1] = add_boundary[3]; break;
-        case  0: dim[1] = wy; break;
-        default: dim[1] = add_boundary[1]; break;
-        }
-
-        // Resize and reshape the water objects
-        const S32 water_center_x = center_x + ll_round((wx + dim[0]) * 0.5f * gDirAxes[dir][0]);
-        const S32 water_center_y = center_y + ll_round((wy + dim[1]) * 0.5f * gDirAxes[dir][1]);
-
-        LLVOWater* waterp = mEdgeWaterObjects[dir];
-        if (!waterp || waterp->isDead())
-        {
-            // The edge water objects can be dead because they're attached to the region that the
-            // agent was in when they were originally created.
-            mEdgeWaterObjects[dir] = (LLVOWater *)gObjectList.createObjectViewer(LLViewerObject::LL_VO_VOID_WATER,
-                                                                                 gAgent.getRegion());
-            waterp = mEdgeWaterObjects[dir];
-            waterp->setIsEdgePatch(true);
-            gPipeline.createObject(waterp);
-        }
-
-        waterp->setRegion(gAgent.getRegion());
-        LLVector3d water_pos(water_center_x, water_center_y, 256.f + water_height) ;
-        LLVector3 water_scale((F32) dim[0], (F32) dim[1], 512.f);
-
-        //stretch out to horizon
-        water_scale.mV[0] += fabsf(2048.f * gDirAxes[dir][0]);
-        water_scale.mV[1] += fabsf(2048.f * gDirAxes[dir][1]);
-
-        water_pos.mdV[0] += 1024.f * gDirAxes[dir][0];
-        water_pos.mdV[1] += 1024.f * gDirAxes[dir][1];
-
-        waterp->setPositionGlobal(water_pos);
-        waterp->setScale(water_scale);
-
-        gObjectList.updateActive(waterp);
-    }
-}
-
-
 void LLWorld::shiftRegions(const LLVector3& offset)
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_PIPELINE;
@@ -1137,11 +924,6 @@ void LLWorld::shiftRegions(const LLVector3& offset)
     }
 
     LLViewerPartSim::getInstance()->shift(offset);
-}
-
-LLViewerTexture* LLWorld::getDefaultWaterTexture()
-{
-    return mDefaultWaterTexturep;
 }
 
 void LLWorld::setSpaceTimeUSec(const U64MicrosecondsImplicit space_time_usec)
@@ -1349,6 +1131,7 @@ void send_agent_pause()
     }
 
     gObjectList.mWasPaused = true;
+    gObjectList.mAgentPaused = true;
     LLViewerStats::instance().getRecording().stop();
 }
 
@@ -1409,7 +1192,9 @@ void send_agent_resume()
         gMessageSystem->sendReliable(regionp->getHost());
     }
 
-    // Resume data collection to ignore invalid rates
+    // Resume data collection to ignore invalid rates. The next frame's stats are still skipped, for
+    // the time this pause stalled it.
+    gObjectList.mAgentPaused = false;
     LLViewerStats::instance().getRecording().resume();
 
     LLAppViewer::instance()->resumeMainloopTimeout();

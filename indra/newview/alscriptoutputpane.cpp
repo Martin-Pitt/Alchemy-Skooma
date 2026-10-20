@@ -26,8 +26,10 @@
 
 #include "alscriptoutputpane.h"
 
+#include "allinebreaks.h"
 #include "alscriptmessages.h"
 #include "alscriptstudiodoc.h"
+#include "alscriptstudiopane.h"
 #include "alscriptstudioservices.h"
 #include "alstringmatch.h"
 #include "llbutton.h"
@@ -91,12 +93,8 @@ bool ALScriptOutputPane::postBuild()
     layoutRow();
     // The window this is a tab of, found through the view tree, as what
     // the tab asks of it.
-    LLFloater* window = getParentByType<LLFloater>();
-    mServices         = dynamic_cast<ALScriptStudioServices*>(window);
-    mWindow           = dynamic_cast<Window*>(window);
-    if (!mServices || !mWindow)
+    if (!ALScriptStudioPane::findWindow(*this, "The Output tab", mServices, mWindow))
     {
-        LL_WARNS() << "The Output tab is not in a Script Studio window" << LL_ENDL;
         return true;
     }
     mView->setPlaceholder(mServices->words("NoOutput"));
@@ -217,8 +215,10 @@ ALScriptOutputPane::Place ALScriptOutputPane::heard(const ALScriptRuntimeEvent& 
                  : event.channel == Channel::SaidTo   ? mServices->words("KindSaidTo")
                  : event.channel == Channel::Instant  ? mServices->words("KindInstant")
                                                       : std::string();
-    entry.text   = event.isError && !event.error.empty() ? event.error : event.message;
-    while (!entry.text.empty() && (entry.text.back() == '\n' || entry.text.back() == '\r'))
+    // Its breaks as the log reads them, so that the frames' links below
+    // count the lines the log shows.
+    entry.text   = ALLineBreaks::withLineFeeds(event.isError && !event.error.empty() ? event.error : event.message);
+    while (!entry.text.empty() && entry.text.back() == '\n')
     {
         entry.text.pop_back();
     }
@@ -264,7 +264,7 @@ ALScriptOutputPane::Place ALScriptOutputPane::heard(const ALScriptRuntimeEvent& 
             {
                 continue;
             }
-            entry.text += "\n" + line;
+            entry.text += "\n" + ALLineBreaks::withLineFeeds(line);
             ALScriptMessages::Frame frame;
             if (event.item.notNull() && ALScriptMessages::readStackFrame(line, frame) &&
                 (frame.chunk == chunk || frame.chunk == event.scriptName || frame.chunk == "lua_script" || frame.chunk == "lsl_script"))
@@ -291,7 +291,7 @@ ALScriptOutputPane::Place ALScriptOutputPane::heard(const ALScriptRuntimeEvent& 
     {
         LLStringUtil::format_map_t args;
         args["[NAME]"] = event.scriptName;
-        args["[LINE]"] = llformat("%d", at.line + 1);
+        args["[LINE]"] = std::to_string(at.line + 1);
         entry.link     = true;
         entry.tooltip  = mServices->words(event.isError && at.line >= 0 ? "OutputOpenAtLine" : "OutputOpen", args);
         entry.value    = link_value(at);
@@ -313,7 +313,9 @@ void ALScriptOutputPane::said(const std::string& text, bool failure, const ALScr
     ALOutputView::Entry entry;
     entry.time        = clockOf(LLDate::now().secondsSinceEpoch());
     entry.source      = mServices->words("OutputSourceStudio");
-    entry.text        = text;
+    // Its breaks as the log reads them, so that the links below count the
+    // lines the log shows.
+    entry.text        = ALLineBreaks::withLineFeeds(text);
     entry.key["kind"] = "studio";
     entry.lane        = 1;
     if (failure)
@@ -321,12 +323,12 @@ void ALScriptOutputPane::said(const std::string& text, bool failure, const ALScr
         entry.color = alarm.get();
     }
     // The script's name where the words say it, a link to its tab.
-    const size_t at = doc && !doc->name.empty() ? text.find(doc->name) : std::string::npos;
+    const size_t at = doc && !doc->name.empty() ? entry.text.find(doc->name) : std::string::npos;
     if (at != std::string::npos)
     {
-        const size_t              line_start = text.rfind('\n', at);
+        const size_t              line_start = entry.text.rfind('\n', at);
         ALOutputView::Entry::Link link;
-        link.line  = static_cast<S32>(std::count(text.begin(), text.begin() + at, '\n'));
+        link.line  = static_cast<S32>(std::count(entry.text.begin(), entry.text.begin() + at, '\n'));
         link.begin = static_cast<S32>(line_start == std::string::npos ? at : at - line_start - 1);
         link.end   = link.begin + static_cast<S32>(doc->name.size());
         LLStringUtil::format_map_t args;
@@ -348,8 +350,21 @@ void ALScriptOutputPane::said(const std::string& text, bool failure, const ALScr
                                   : action == "take_saved"    ? "ActionTakeSaved"
                                   : action == "keep_saved"    ? "ActionKeepSaved"
                                   : action == "compare_saved" ? "ActionCompareSaved"
+                                  : action == "merge_saved"   ? "ActionMergeSaved"
                                   : action == "reload_world"  ? "ActionReloadWorld"
                                   : action == "compare_world" ? "ActionCompareWorld"
+                                  : action == "merge_world"   ? "ActionMergeWorld"
+                                  : action == "show_compare"  ? "ActionShowCompare"
+                                  : action == "apply_fixes"   ? "ActionApplyFixes"
+                                  : action == "make_strict"   ? "ActionMakeStrict"
+                                  : action == "master_link_hint"    ? "ActionMasterLink"
+                                  : action == "master_send"         ? "ActionMasterSend"
+                                  : action == "master_compare"      ? "ActionMasterCompare"
+                                  : action == "master_compare_file" ? "ActionMasterCompareFile"
+                                  : action == "master_give_way"     ? "ActionMasterGiveWay"
+                                  : action == "master_open_file"    ? "ActionMasterOpenFile"
+                                  : action == "master_unlink"       ? "ActionMasterUnlink"
+                                  : action == "master_find"         ? "ActionMasterFind"
                                                               : "ActionExport";
         const std::string label = mServices->words(key);
         const size_t      last  = entry.text.rfind('\n');

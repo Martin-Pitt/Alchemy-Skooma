@@ -31,6 +31,7 @@
 #include "llvolume.h"
 #include "llvolumemgr.h"
 #include "llvovolume.h"
+#include "skmeshhavokshape.h"
 
 #include <algorithm>
 
@@ -77,14 +78,6 @@ namespace
         // A PhysicsMesh is three positions per triangle already.
         out.insert(out.end(), positions.begin(), positions.end() - (positions.size() % 3));
     }
-
-    void boundingBox(const LLVOVolume* volume, SKShapeGeometry& out)
-    {
-        out.mShape = sknav::Shape::BOX;
-        out.mProvenance = sknav::Provenance::BOX;
-        out.mCenter.setZero();
-        out.mHalf.set(0.5f, 0.5f, 0.5f);
-    }
 }
 
 bool skPhysicsShapeClassify(LLVOVolume* volume, SKPhysicsShape& out)
@@ -108,11 +101,147 @@ bool skPhysicsShapeClassify(LLVOVolume* volume, SKPhysicsShape& out)
     return true;
 }
 
-bool skPhysicsShapeGeometry(LLVOVolume* volume, const SKPhysicsShape& shape, SKShapeGeometry& out)
+namespace
+{
+    // Relative weights in the order Havok's collision work grows: analytic
+    // shapes first, a hull by its vertices, a triangle mesh by its triangles.
+    constexpr F32 SPHERE_COST = 1.f;
+    constexpr F32 BOX_COST = 1.5f;
+    constexpr F32 CYLINDER_COST = 2.5f;
+    constexpr F32 HULL_BASE_COST = 3.f;
+    constexpr F32 HULL_VERTICES_PER_COST = 16.f;
+    constexpr S32 HULL_UNKNOWN_VERTICES = 32;
+    constexpr F32 MESH_BASE_COST = 4.f;
+    constexpr F32 MESH_TRIANGLE_COST = 0.05f;
+
+    F32 hullCost(S32 vertices)
+    {
+        return HULL_BASE_COST + llclamp(vertices, 4, 256) / HULL_VERTICES_PER_COST;
+    }
+
+    // Small triangles packed densely cost more per triangle than a few large ones.
+    F32 meshCost(size_t triangles, const LLVector3& scale)
+    {
+        const F32 area = llmax(2.f * (scale[0] * scale[1] + scale[1] * scale[2] + scale[2] * scale[0]), 0.01f);
+        const F32 density = (F32)triangles / area;
+        return MESH_BASE_COST + MESH_TRIANGLE_COST * (F32)triangles * (1.f + log2f(1.f + density));
+    }
+
+    F32 primHullCost(LLVOVolume* volume)
+    {
+        LLVolume* phys = LLPrimitive::sVolumeManager->refVolume(volume->getVolume()->getParams(), physicsDetail(volume->getScale()));
+        const S32 points = phys && phys->mHullPoints ? phys->mNumHullPoints : HULL_UNKNOWN_VERTICES;
+        LLPrimitive::sVolumeManager->unrefVolume(phys);
+        return hullCost(points);
+    }
+
+    F32 baseHullCost(const LLModel::Decomposition* decomp)
+    {
+        return hullCost(decomp && !decomp->mBaseHull.empty() ? (S32)decomp->mBaseHull.size() : HULL_UNKNOWN_VERTICES);
+    }
+}
+
+F32 skPhysicsShapeCost(LLVOVolume* volume, const SKPhysicsShape& shape)
+{
+    const LLVector3 scale = volume->getScale();
+    Spec spec = shape.mSpec;
+    switch (spec.getType())
+    {
+        case Spec::SPHERE:
+            return SPHERE_COST;
+        case Spec::BOX:
+            return BOX_COST;
+        case Spec::CYLINDER:
+            return CYLINDER_COST;
+        case Spec::PRIM_MESH:
+        {
+            LLVolume* phys = LLPrimitive::sVolumeManager->refVolume(volume->getVolume()->getParams(), physicsDetail(scale));
+            size_t triangles = 0;
+            for (S32 f = 0; phys && f < phys->getNumVolumeFaces(); ++f)
+            {
+                triangles += phys->getVolumeFace(f).mNumIndices / 3;
+            }
+            LLPrimitive::sVolumeManager->unrefVolume(phys);
+            return meshCost(triangles, scale);
+        }
+        case Spec::USER_MESH:
+        {
+            const LLUUID& mesh_id = volume->getVolume()->getParams().getSculptID();
+            const LLModel::Decomposition* decomp = gMeshRepo.getDecomposition(mesh_id);
+            if (std::shared_ptr<const SKPhysicsHavokShape> sim = skPhysicsShapeSimTriangles(volume))
+            {
+                return meshCost(sim->mTriangles.size() / 3, scale);
+            }
+            if (decomp && !decomp->mPhysicsShapeMesh.empty() && !skPhysicsMeshTooSmallForTriangles(volume))
+            {
+                return meshCost(decomp->mPhysicsShapeMesh.mPositions.size() / 3, scale);
+            }
+            if (decomp && !decomp->mHull.empty())
+            {
+                F32 cost = 0.f;
+                for (const LLModel::hull& hull : decomp->mHull)
+                {
+                    cost += hullCost((S32)hull.size());
+                }
+                return cost;
+            }
+            return baseHullCost(decomp);
+        }
+        default: // USER_CONVEX, PRIM_CONVEX, SCULPT
+            if (volume->isMesh())
+            {
+                return baseHullCost(gMeshRepo.getDecomposition(volume->getVolume()->getParams().getSculptID()));
+            }
+            return primHullCost(volume);
+    }
+}
+
+F32 skPhysicsShapeCostFraction(F32 cost)
+{
+    // Logarithmic over [1, 1000], so every shape type gets its own band of the ramp.
+    return llclamp(log10f(llmax(cost, 1.f)) / 3.f, 0.f, 1.f);
+}
+
+bool skPhysicsMeshTooSmallForTriangles(LLVOVolume* volume)
+{
+    // The server charges every such mesh a hull's cost, triangles or not.
+    const LLVector3 scale = volume->getScale();
+    return volume->isMesh() && llmin(scale[VX], scale[VY], scale[VZ]) < SHAPE_BUILDER_USER_MESH_CONVEXIFICATION_SIZE;
+}
+
+std::shared_ptr<const SKPhysicsHavokShape> skPhysicsShapeSimTriangles(LLVOVolume* volume)
+{
+    if (!volume || !volume->isMesh() || !volume->getVolume() || volume->getPhysicsShapeType() != LLViewerObject::PHYSICS_SHAPE_PRIM
+        || skPhysicsMeshTooSmallForTriangles(volume))
+    {
+        return nullptr;
+    }
+    const LLUUID& mesh_id = volume->getVolume()->getParams().getSculptID();
+    // Only where the physics mesh is the shape: with hulls, which the sim
+    // collides with then is still open, so those keep the hull path.
+    const LLModel::Decomposition* decomp = gMeshRepo.getDecomposition(mesh_id);
+    if (gMeshRepo.physicsMeshSize(mesh_id) <= 0 || !decomp || !decomp->mHull.empty())
+    {
+        return nullptr;
+    }
+    std::shared_ptr<const SKPhysicsHavokShape> sim = gMeshRepo.getPhysicsHavok(mesh_id);
+    if (!sim || !sim->mHasMopp || sim->mTriangles.size() < 3)
+    {
+        return nullptr;
+    }
+    return sim;
+}
+
+bool skPhysicsShapeGeometry(LLVOVolume* volume, const SKPhysicsShape& shape, SKShapeGeometry& out,
+                            const std::shared_ptr<const SKPhysicsHavokShape>& sim)
 {
     out.mTriangles.clear();
     out.mShape = sknav::Shape::TRIANGLES;
     out.mProvenance = sknav::Provenance::EXACT;
+    // Every shape below is a body the sim collides with as a volume, except a
+    // mesh's own physics mesh, which is a surface it collides with from
+    // either side.
+    out.mSolid = true;
 
     Spec spec = shape.mSpec;
     if (!volume->getVolume())
@@ -127,27 +256,45 @@ bool skPhysicsShapeGeometry(LLVOVolume* volume, const SKPhysicsShape& shape, SKS
         case Spec::USER_MESH:
         {
             LLModel::Decomposition* decomp = gMeshRepo.getDecomposition(params.getSculptID());
-            // The hulls are a physics shape: the decomposition the sim
-            // collides against for a Convex Hull mesh, and the stand-in while
-            // a Prim mesh's physics mesh is still on its way. The rendered
-            // shape is not an option here - a mesh LOD can be hundreds of
-            // thousands of triangles, and only a megasculpty's surround is
-            // ever meshed from what the eye sees. The part's signature
-            // carries the physics mesh's size, so its arrival re-records the
-            // part and the tiles holding it rebuild.
+            // A Prim mesh collides as the physics mesh it was uploaded with
+            // when the asset has one, and as its hull decomposition when it
+            // has none. Nothing stands in for the wait: a hull or a box the
+            // sim never collided with is a floor and a wall it never had, and
+            // the census asks again next pass, so the fetch costs a few
+            // passes of silence and no rebuild. The rendered shape is not an
+            // option either - a mesh LOD can be hundreds of thousands of
+            // triangles, and only a megasculpty's surround is ever meshed
+            // from what the eye sees.
             if (shape.mPhysicsType == LLViewerObject::PHYSICS_SHAPE_PRIM)
             {
-                gMeshRepo.fetchPhysicsShape(params.getSculptID());
-                if (decomp && !decomp->mPhysicsShapeMesh.empty())
+                const S32 physics_mesh = gMeshRepo.physicsMeshSize(params.getSculptID());
+                if (physics_mesh < 0)
                 {
+                    return false;   // header on its way: which shape it collides as is unknown
+                }
+                if (physics_mesh > 0 && !skPhysicsMeshTooSmallForTriangles(volume))
+                {
+                    gMeshRepo.fetchPhysicsShape(params.getSculptID());
+                    // What the simulator built from the physics mesh is what it collides with.
+                    if (sim && decomp && decomp->mHull.empty())
+                    {
+                        appendSoup(sim->mTriangles, out.mTriangles);
+                        out.mProvenance = sknav::Provenance::SIM;
+                        out.mSolid = false;
+                        break;
+                    }
+                    if (!decomp || decomp->mPhysicsShapeMesh.empty())
+                    {
+                        return false;   // the physics mesh is on its way
+                    }
                     appendSoup(decomp->mPhysicsShapeMesh.mPositions, out.mTriangles);
+                    out.mSolid = false;
                     break;
                 }
             }
             if (!decomp)
             {
-                boundingBox(volume, out);
-                return true;
+                return false;   // the decomposition is on its way
             }
             if (!decomp->mHull.empty())
             {
@@ -200,10 +347,7 @@ bool skPhysicsShapeGeometry(LLVOVolume* volume, const SKPhysicsShape& shape, SKS
                 LLModel::Decomposition* decomp = gMeshRepo.getDecomposition(params.getSculptID());
                 if (!decomp)
                 {
-                    // The mesh itself is still on its way; the box stands in
-                    // until it arrives, and the part re-signs when it does.
-                    boundingBox(volume, out);
-                    return true;
+                    return false;   // the hull is on its way; nothing stands in
                 }
                 if (decomp->mBaseHullMesh.empty() || decomp->mMesh.empty())
                 {
@@ -268,9 +412,19 @@ bool skPhysicsShapeGeometry(LLVOVolume* volume, const SKPhysicsShape& shape, SKS
             // never builds; the faces at a fixed detail are the closest stable
             // stand-in. The loaded volume would make the shape follow the
             // camera, rebuilding every tile the sculpt reaches.
+            // The fixed-detail volume is shared and only sculpted by whatever
+            // draws at that detail, so it can hold a lower-resolution texture
+            // or none; a partial sculpt warps, so fall back to the loaded one.
             LLVolume* phys = LLPrimitive::sVolumeManager->refVolume(params, physicsDetail(scale));
             out.mProvenance = sknav::Provenance::RENDER;
-            appendFaces(phys, out.mTriangles);
+            if (phys->getSculptLevel() == 0)
+            {
+                appendFaces(phys, out.mTriangles);
+            }
+            else if (volume->getVolume()->getSculptLevel() == 0)
+            {
+                appendFaces(volume->getVolume(), out.mTriangles);
+            }
             LLPrimitive::sVolumeManager->unrefVolume(phys);
             break;
         }
@@ -285,6 +439,7 @@ bool skRenderShapeGeometry(LLVOVolume* volume, SKShapeGeometry& out)
     out.mTriangles.clear();
     out.mShape = sknav::Shape::TRIANGLES;
     out.mProvenance = sknav::Provenance::RENDER;
+    out.mSolid = false;
     const LLVolume* v = volume->getVolume();
     if (!v)
     {

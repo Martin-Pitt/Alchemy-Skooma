@@ -187,7 +187,6 @@ public:
     void        renderSelectedUV();
 
     void        renderSelected(LLViewerTexture *image, const LLColor4 &color);
-    void        renderOneWireframe(const LLColor4 &color, F32 fogCfx, bool wireframe_selection, bool bRenderHiddenSelections, bool shader);
 
     F32         getKey()                    const   { return mDistance; }
 
@@ -255,9 +254,8 @@ public:
 
     LLVector2       mTexExtents[2];
     F32             mDistance;
-    F32         mLastUpdateTime;
-    F32         mLastSkinTime;
-    F32         mLastMoveTime;
+    F64         mLastUpdateTime;
+    F64         mLastMoveTime;
     LLMatrix4*  mTextureMatrix;
     LLMatrix4*  mSpecMapMatrix;
     LLMatrix4*  mNormalMapMatrix;
@@ -306,7 +304,7 @@ private:
     std::vector<S32> mRiggedIndex;
 
     // gFrameTimeSeconds when mPixelArea was last updated
-    F32         mLastPixelAreaUpdate = 0.f;
+    F64         mLastPixelAreaUpdate = 0.0;
 
     // virtual size of face in texture area  (mPixelArea adjusted by texture repeats)
     // used to determine desired resolution of texture

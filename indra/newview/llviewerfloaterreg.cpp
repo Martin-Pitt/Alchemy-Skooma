@@ -39,6 +39,8 @@
 #include "alfloaterdirectory.h"
 #include "alfloaterevent.h"
 #include "alfloaterexploresounds.h"
+#include "alfloaterfeedback.h"
+#include "alfloaterfeedbackpreview.h"
 #include "alfloatergenerictext.h"
 #include "alfloatergroupprofile.h"
 #include "alfloaterlightbox.h"
@@ -46,7 +48,10 @@
 #include "alfloaterprofilelegacy.h"
 #include "alfloaterprogressview.h"
 #include "alfloaterscopes.h"
+#include "skfloaternavannotate.h" // <SK:Nexii> navmesh annotations
 #include "skfloaternavmesh.h" // <SK:Nexii> navmesh console
+#include "skfloatermap.h" // <SK:Nexii> SKNetMap mini-map
+#include "skfloatermapsettings.h" // <SK:Nexii> SKNetMap settings
 #include "alfloaterregiontracker.h"
 #include "alfloatertransactionlog.h"
 #include "alfloaterwebprofile.h"
@@ -242,6 +247,8 @@ public:
             const std::list<std::string> blacklist_clicked = {
                 "camera_presets",
                 "delete_pref_preset",
+                "feedback", // A link must not say what a report is about.
+                "feedback_preview",
                 "forget_username",
                 "god_tools",
                 "group_picker",
@@ -279,6 +286,8 @@ public:
                 "env_fixed_environmentent_water",
                 "env_fixed_environmentent_sky",
                 "env_edit_extdaycycle",
+                "feedback",
+                "feedback_preview",
                 "font_test",
                 "forget_username",
                 "god_tools",
@@ -460,7 +469,10 @@ void LLViewerFloaterReg::registerFloaters()
     LLFloaterReg::add("message_tos", "floater_tos.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloaterTOS>);
     LLFloaterReg::add("moveview", "floater_moveview.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloaterMove>);
     LLFloaterReg::add("mute_object_by_name", "floater_mute_object.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloaterGetBlockedObjectName>);
-    LLFloaterReg::add("mini_map", "floater_map.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloaterMap>);
+    // <SK:Nexii> SKNetMap replaces the classic mini-map
+    //LLFloaterReg::add("mini_map", "floater_map.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloaterMap>);
+    LLFloaterReg::add("mini_map", "floater_sk_map.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SKFloaterMap>);
+    // </SK:Nexii>
     LLFloaterReg::add("new_feature_notification", "floater_new_feature_notification.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloaterNewFeatureNotification>);
 
 
@@ -583,13 +595,19 @@ void LLViewerFloaterReg::registerFloaters()
     LLFloaterReg::add("chatbar", "floater_al_chatbar.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<ALChatBar>);
     LLFloaterReg::add("chat_alerts", "floater_chat_alerts.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloaterChatAlerts>);
     LLFloaterReg::add("delete_queue", "floater_script_queue.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloaterDeleteQueue>);
+    LLFloaterReg::add("feedback", "floater_al_feedback.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<ALFloaterFeedback>);
+    LLFloaterReg::add("feedback_preview", "floater_al_feedback_preview.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<ALFloaterFeedbackPreview>);
     LLFloaterReg::add("generic_text", "floater_al_generic_text.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<ALFloaterGenericText>);
     LLFloaterReg::add("group_profile", "floater_al_group_profile.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<ALFloaterGroupProfile>);
     LLFloaterReg::add("legacy_profile", "floater_al_profile_legacy.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<ALFloaterProfileLegacy>);
     LLFloaterReg::add("lightbox", "floater_lightbox_settings.xml", (LLFloaterBuildFunc) &LLFloaterReg::build<ALFloaterLightBox>);
     LLFloaterReg::add("scopes", "floater_scopes.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<ALFloaterScopes>);
-    // <SK:Nexii> navmesh console: overlay switches, status and legend
+    LLFloaterReg::add("sk_map_settings", "floater_sk_map_settings.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SKFloaterMapSettings>); // <SK:Nexii> SKNetMap settings
+    // <SK:Nexii> navmesh console: overlay switches and status
     LLFloaterReg::add("sk_navmesh", "floater_sk_navmesh.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SKFloaterNavMesh>);
+    // <SK:Nexii> navmesh annotations: marks placed in the world and their capture export
+    LLFloaterReg::add("sk_nav_annotate", "floater_sknav_annotate.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SKFloaterNavAnnotate>);
+    // </SK:Nexii>
     // </SK:Nexii>
     LLFloaterReg::add("message_builder", "floater_message_builder.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloaterMessageBuilder>);
     LLFloaterReg::add("message_log", "floater_message_log.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloaterMessageLog>);

@@ -627,22 +627,24 @@ bool LLKeyframeMotion::onActivate()
 //-----------------------------------------------------------------------------
 // LLKeyframeMotion::onUpdate()
 //-----------------------------------------------------------------------------
-bool LLKeyframeMotion::onUpdate(F32 time, U8* joint_mask)
+bool LLKeyframeMotion::onUpdate(F64 time, U8* joint_mask)
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_AVATAR;
     // llassert(time >= 0.f);       // This will fire
-    time = llmax(0.f, time);
+    time = llmax(0.0, time);
 
+    // The loop's phase is taken in F64 and only then narrowed: a loop that has run for hours
+    // has a time F32 rounds to milliseconds, and the phase would step by that.
     if (mJointMotionList->mLoop)
     {
         if (mJointMotionList->mDuration == 0.0f)
         {
-            time = 0.f;
+            time = 0.0;
             mLastLoopedTime = 0.0f;
         }
         else if (mStopped)
         {
-            mLastLoopedTime = llmin(mJointMotionList->mDuration, mLastLoopedTime + time - mLastUpdateTime);
+            mLastLoopedTime = llmin(mJointMotionList->mDuration, mLastLoopedTime + (F32)(time - mLastUpdateTime));
         }
         else if (time > mJointMotionList->mLoopOutPoint)
         {
@@ -653,18 +655,18 @@ bool LLKeyframeMotion::onUpdate(F32 time, U8* joint_mask)
             else
             {
                 mLastLoopedTime = mJointMotionList->mLoopInPoint +
-                    fmod(time - mJointMotionList->mLoopOutPoint,
-                    mJointMotionList->mLoopOutPoint - mJointMotionList->mLoopInPoint);
+                    (F32)fmod(time - mJointMotionList->mLoopOutPoint,
+                    (F64)(mJointMotionList->mLoopOutPoint - mJointMotionList->mLoopInPoint));
             }
         }
         else
         {
-            mLastLoopedTime = time;
+            mLastLoopedTime = (F32)time;
         }
     }
     else
     {
-        mLastLoopedTime = time;
+        mLastLoopedTime = (F32)time;
     }
 
     applyKeyframes(mLastLoopedTime, joint_mask);
@@ -771,22 +773,22 @@ void LLKeyframeMotion::onDeactivate()
 // setStopTime()
 //-----------------------------------------------------------------------------
 // time is in seconds since character creation
-void LLKeyframeMotion::setStopTime(F32 time)
+void LLKeyframeMotion::setStopTime(F64 time)
 {
     LLMotion::setStopTime(time);
 
     if (mJointMotionList->mLoop && mJointMotionList->mLoopOutPoint != mJointMotionList->mDuration)
     {
-        F32 start_loop_time = mActivationTimestamp + mJointMotionList->mLoopInPoint;
-        F32 loop_fraction_time;
+        const F64 start_loop_time = mActivationTimestamp + mJointMotionList->mLoopInPoint;
+        F64 loop_fraction_time;
         if (mJointMotionList->mLoopOutPoint == mJointMotionList->mLoopInPoint)
         {
-            loop_fraction_time = 0.f;
+            loop_fraction_time = 0.0;
         }
         else
         {
             loop_fraction_time = fmod(time - start_loop_time,
-                mJointMotionList->mLoopOutPoint - mJointMotionList->mLoopInPoint);
+                (F64)(mJointMotionList->mLoopOutPoint - mJointMotionList->mLoopInPoint));
         }
         mStopTimestamp = llmax(time,
             (time - loop_fraction_time) + (mJointMotionList->mDuration - mJointMotionList->mLoopInPoint) - getEaseOutDuration());
@@ -1160,7 +1162,7 @@ void LLKeyframeMotion::applyConstraint(JointConstraint* constraint, F32 time, U8
 
         // save simulated positions in pelvis-space and calculate total fixup distance
         constraint->mFixupDistanceRMS = 0.f;
-        F32 delta_time = llmax(0.02f, llabs(time - mLastUpdateTime));
+        F32 delta_time = llmax(0.02f, (F32)llabs(time - mLastUpdateTime));
         for (joint_num = 1; joint_num < shared_data->mChainLength; joint_num++)
         {
             LLVector3 new_pos = (positions[joint_num] - mPelvisp->getWorldPosition()) * ~mPelvisp->getWorldRotation();
@@ -2087,10 +2089,17 @@ bool LLKeyframeMotion::serialize(LLDataPacker& dp) const
             << " name: " << joint_motionp->mJointName
             << " Rotation keys: " << rot_curve.getNumKeys()
             << " Position keys: " << pos_curve.getNumKeys() << LL_ENDL;
+        // Keys are rounded to the nearest step, once. Flooring -- and before
+        // that flooring a second time through quantize16 -- sends a value
+        // read from a file a hair under its own step back one step lower,
+        // which float error does to between an eighth and a quarter of the
+        // codes depending on how the build contracts and reassociates. A
+        // rounded step reads back as itself, so saving what was loaded
+        // changes nothing.
         for (U32 k = 0; k < rot_curve.getNumKeys(); ++k)
         {
             const F32 key_time = rot_curve.getKeyTime(k);
-            U16 time_short = F32_to_U16(key_time, 0.f, mJointMotionList->mDuration);
+            U16 time_short = F32_to_U16_ROUND(key_time, 0.f, mJointMotionList->mDuration);
             success &= dp.packU16(time_short, "time");
 
             LLQuaternion key_rotation;
@@ -2098,10 +2107,9 @@ bool LLKeyframeMotion::serialize(LLDataPacker& dp) const
             LLVector3 rot_angles = key_rotation.packToVector3();
 
             U16 x, y, z;
-            rot_angles.quantize16(-1.f, 1.f, -1.f, 1.f);
-            x = F32_to_U16(rot_angles.mV[VX], -1.f, 1.f);
-            y = F32_to_U16(rot_angles.mV[VY], -1.f, 1.f);
-            z = F32_to_U16(rot_angles.mV[VZ], -1.f, 1.f);
+            x = F32_to_U16_ROUND(rot_angles.mV[VX], -1.f, 1.f);
+            y = F32_to_U16_ROUND(rot_angles.mV[VY], -1.f, 1.f);
+            z = F32_to_U16_ROUND(rot_angles.mV[VZ], -1.f, 1.f);
             success &= dp.packU16(x, "rot_angle_x");
             success &= dp.packU16(y, "rot_angle_y");
             success &= dp.packU16(z, "rot_angle_z");
@@ -2113,15 +2121,14 @@ bool LLKeyframeMotion::serialize(LLDataPacker& dp) const
         for (U32 k = 0; k < pos_curve.getNumKeys(); ++k)
         {
             const F32 key_time = pos_curve.getKeyTime(k);
-            U16 time_short = F32_to_U16(key_time, 0.f, mJointMotionList->mDuration);
+            U16 time_short = F32_to_U16_ROUND(key_time, 0.f, mJointMotionList->mDuration);
             success &= dp.packU16(time_short, "time");
 
             U16 x, y, z;
             LLVector3 position(pos_curve.getKeyValue(k).getF32ptr());
-            position.quantize16(-LL_MAX_PELVIS_OFFSET, LL_MAX_PELVIS_OFFSET, -LL_MAX_PELVIS_OFFSET, LL_MAX_PELVIS_OFFSET);
-            x = F32_to_U16(position.mV[VX], -LL_MAX_PELVIS_OFFSET, LL_MAX_PELVIS_OFFSET);
-            y = F32_to_U16(position.mV[VY], -LL_MAX_PELVIS_OFFSET, LL_MAX_PELVIS_OFFSET);
-            z = F32_to_U16(position.mV[VZ], -LL_MAX_PELVIS_OFFSET, LL_MAX_PELVIS_OFFSET);
+            x = F32_to_U16_ROUND(position.mV[VX], -LL_MAX_PELVIS_OFFSET, LL_MAX_PELVIS_OFFSET);
+            y = F32_to_U16_ROUND(position.mV[VY], -LL_MAX_PELVIS_OFFSET, LL_MAX_PELVIS_OFFSET);
+            z = F32_to_U16_ROUND(position.mV[VZ], -LL_MAX_PELVIS_OFFSET, LL_MAX_PELVIS_OFFSET);
             success &= dp.packU16(x, "pos_x");
             success &= dp.packU16(y, "pos_y");
             success &= dp.packU16(z, "pos_z");

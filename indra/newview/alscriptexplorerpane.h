@@ -24,14 +24,18 @@
 
 #pragma once
 
+#include "alquickopen.h"
 #include "alscriptexplorermodel.h"
+#include "alscriptlinkscripts.h"
 #include "alscriptrecompile.h"
+#include "almenuslot.h"
 #include "llui.h"
 #include "llhandle.h"
 #include "llpanel.h"
 
 #include <boost/signals2.hpp>
 
+#include <functional>
 #include <optional>
 #include <string>
 #include <utility>
@@ -73,6 +77,17 @@ public:
         virtual void itemDeleted(const ALScriptRef& ref) = 0;
         // Whether an item is open with unsaved changes in any of them.
         virtual bool unsavedAnywhere(const ALScriptRef& ref) const = 0;
+        // The first item open, or brought forward, and set beside the second
+        // as the region has it, each under its title.
+        virtual void compareItems(const ALScriptRef& first, const std::string& name, const std::string& first_title, const ALScriptRef& second,
+                                  const std::string& second_title) = 0;
+        // An item opened, or brought forward, and its saves offered to
+        // compare with it (ALScriptStudioHistory).
+        virtual void showHistory(const ALScriptRef& ref, const std::string& name) = 0;
+        // A list to pick from, over the editors: what is chosen, and what
+        // Shift-Return is pressed on.
+        virtual void pick(std::vector<ALQuickOpen::Candidate> candidates, const std::string& placeholder, const std::string& title,
+                          std::function<void(const std::string& value)> chosen, std::function<void(const std::string& value)> dropped) = 0;
         // Every script of an object checked, its problems listed.
         virtual void checkScripts(const LLUUID& root) = 0;
         // The scripts, and every script of the prims -- each prim with its
@@ -80,6 +95,10 @@ public:
         // a closed one's problems listed (ALScriptRecompile).
         virtual void recompileScripts(std::vector<ALScriptRecompile::One> scripts, std::vector<std::pair<LLUUID, std::string>> prims,
                                       const std::string& target) = 0;
+        // Every script of the prims, each with a file on disk proposed as
+        // its master, listed for the scripter to link them all at once
+        // (ALScriptLinkPane).
+        virtual void linkScripts(std::vector<ALScriptLinkScripts::Prim> prims) = 0;
 
     protected:
         ~Window() = default;
@@ -89,7 +108,6 @@ public:
     // Studio window it finds through the view tree, whose services it uses
     // and which it asks what it does not do itself.
     explicit ALScriptExplorerPane(const LLPanel::Params& params = getDefaultParams());
-    ~ALScriptExplorerPane() override;
     bool postBuild() override;
     // The keys a tree of files answers to past the tree's own -- the arrows,
     // F2, typing a name -- while the tree has the keyboard: return opens
@@ -122,6 +140,9 @@ public:
     // The rows chosen, in the tree's order.
     std::vector<Choice>   choice() const;
     const Model&          model() const { return mModel; }
+    // What an item may be compared with that the agent may read, those of
+    // its name first (Model::comparableWith).
+    std::vector<Choice>   comparable(const Choice& row) const;
 
     // The pins, kept between sessions.
     void saveState(LLSD& state) const { mModel.saveState(state); }
@@ -147,6 +168,14 @@ private:
     void onChosen();
     void act(const std::string& action);
     bool enabled(const std::string& action) const;
+    // Whether the agent may read a row's item: copy it, and modify a
+    // script too; true for a row that is not an item.
+    bool readable(const Choice& row) const;
+    // Two items compared, the one open already set beside the other where
+    // one is (Model::comparing); and one compared with what is picked of
+    // those like it (Model::comparableWith).
+    void compare(const Choice& first, const Choice& second);
+    void compareWith(const Choice& row);
     void showMenu(S32 x, S32 y);
     void refreshButtons();
     // Whether a script runs, as far as the studio knows: its tab's word,
@@ -172,6 +201,12 @@ private:
     // Start, stop, reset or restart over the rows, asked about first where
     // it reaches more than one script.
     void run(const std::string& action, const std::vector<Choice>& rows);
+    // Every script of the objects and prims chosen offered a file on disk
+    // to be linked to; and every linked script among the rows, and of
+    // their prims, sent from its file as the studio's own send, which a
+    // change in the world since holds.
+    void linkScripts(const std::vector<Choice>& rows);
+    void sendFromFiles(const std::vector<Choice>& rows);
 
     // What is chosen of what a prim holds, dragged out with the viewer's
     // drag tool -- to the inventory, as the build floater's contents are --
@@ -199,14 +234,15 @@ private:
     ALScriptExplorerTree*   mTree     = nullptr;
     LLFilterEditor*         mFilter   = nullptr;
     Model                   mModel;
-    LLHandle<LLContextMenu> mMenu;
+    ALMenuSlot              mMenu;
     // Answers have come that the list does not show yet: it is filled a
     // moment after it was last filled.
     bool                    mStale  = false;
     F64                     mFilled = 0.0;
-    // The roots selected in world when last looked, and when; whether the
-    // selection changed since.
+    // The roots selected in world when last looked, the prims selected on
+    // their own, and when; whether the selection changed since.
     std::vector<LLUUID>     mRoots;
+    std::vector<LLUUID>     mParts;
     F64                     mPolled           = 0.0;
     bool                    mSelectionChanged = false;
     // When what the prims hold is asked again after a drop, for what the
@@ -226,5 +262,7 @@ private:
     boost::signals2::scoped_connection mSelectionConnection;
     boost::signals2::scoped_connection mRunningConnection;
     boost::signals2::scoped_connection mHeardConnection;
+    boost::signals2::scoped_connection mRegionUsageConnection;
     boost::signals2::scoped_connection mPresenceConnection;
+    boost::signals2::scoped_connection mBadgesConnection;
 };

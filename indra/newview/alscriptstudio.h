@@ -24,6 +24,8 @@
 
 #pragma once
 
+#include "altextdiff.h"
+
 #include <string>
 
 class ALCodeEditor;
@@ -40,6 +42,11 @@ struct ALScriptRef;
 // Defined in the window's source, beside what they reach.
 namespace ALScriptStudio
 {
+    // The viewer's answers to what the studio's units ask of it -- the
+    // grid's definitions, the preprocessor -- given them once, at startup
+    // (ALScriptStudioViewer).
+    void attachViewer();
+
     // The window, as the floater registry builds it.
     LLFloater* build(const LLSD& key);
 
@@ -82,4 +89,7 @@ namespace ALScriptStudio
     // text has been, within ALFloaterScriptStudio's MIN_TEXT_POINTS and
     // MAX_TEXT_POINTS.
     const LLFontGL* editorFont();
+    // How comparisons choose the lines that stay, as the settings have it
+    // (ALScriptStudioDiffAlgorithm): the studio's and a notecard's.
+    ALTextDiff::Algorithm compareAlgorithm();
 }
