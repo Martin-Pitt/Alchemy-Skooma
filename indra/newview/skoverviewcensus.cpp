@@ -651,6 +651,7 @@ bool SKOverviewCensus::update()
         std::shared_ptr<Built> built = mJob.get();
         if (built && built->mGeneration == mGeneration)
         {
+            mVerdicts = built->mVerdicts;
             swapIn(*built);
         }
     }
@@ -1345,13 +1346,10 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildBatches(const Jo
             }
         }
     }
-    if (job.mVerdicts)
-    {
-        job.mVerdicts->mByPart = std::move(verdicts);
-    }
     stats.mBuildSeconds = std::chrono::duration<F64>(std::chrono::steady_clock::now() - cover_began).count();
 
     auto built = std::make_shared<Built>();
+    built->mVerdicts = std::make_shared<const Verdicts>(Verdicts{ std::move(verdicts) });
     built->mSignature = job.mSignature;
     built->mGeneration = job.mGeneration;
     built->mCover = stats;

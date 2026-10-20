@@ -254,7 +254,7 @@ private:
     std::unordered_map<U64, std::vector<U32>> mCoverGrid; ///< mCoverCandidates by COVER_CELL_M cell in plan
     std::vector<U32> mCoverLarge;                   ///< those spanning too many cells to file
     static constexpr F64 COVER_CELL_M = 16.0;
-    /// The worker's verdicts kept across builds by part; only the worker touches them, one build at a time.
+    /// The worker's verdicts kept across builds by part; each build reads the last landed map and makes the next.
     struct Verdict
     {
         U64 mKey = 0;           ///< the part's geometry and its CoverInput::mKey
@@ -267,7 +267,7 @@ private:
     {
         std::unordered_map<LLUUID, Verdict> mByPart;
     };
-    std::shared_ptr<Verdicts> mVerdicts = std::make_shared<Verdicts>();
+    std::shared_ptr<const Verdicts> mVerdicts = std::make_shared<const Verdicts>();
     /// What a build needs, as values: the worker never touches viewer objects, the world, settings or GL.
     struct Job
     {
@@ -279,7 +279,7 @@ private:
         std::vector<bool> mVoidOnly;
         std::vector<RenderedPart> mSculpts;
         std::vector<CoverInput> mCover; ///< per kept record then sculpt
-        std::shared_ptr<Verdicts> mVerdicts;
+        std::shared_ptr<const Verdicts> mVerdicts;
         std::vector<U32> mGroupOf;      ///< per kept record then sculpt, its linkset's group
         std::vector<LLUUID> mRoots;     ///< per group
         std::map<U32, U32> mGroupCluster;
@@ -314,6 +314,7 @@ private:
             F64 mBuildSeconds = 0.0;   ///< in the whole per-part loop
         };
         CoverStats mCover;
+        std::shared_ptr<const Verdicts> mVerdicts; ///< the verdicts this build asked for, adopted when it lands
         U64 mSignature = 0;
         U32 mGeneration = 0;
         std::vector<Region> mRegions;
