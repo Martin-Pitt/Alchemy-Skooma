@@ -123,6 +123,8 @@ public:
     void endPan() override { mPan = Pan(); }
     /// The flycam holds the camera, so a drag cannot move it.
     bool canPan() const override;
+    /// The overview is the mini-map writ large.
+    std::vector<std::string> coveredFloaters() const override { return { "mini_map" }; }
     /// Clicks reach the pie, which picks the people and objects the overview draws.
     bool passesClicks() const override { return true; }
     /// The flycam's height above the agent over a person's scale, so it crosses the view quickly from high up.
