@@ -28,6 +28,8 @@
 
 #include "llagent.h"
 #include "llagentcamera.h"
+#include "llfloater.h"
+#include "llfloaterreg.h"
 #include "llstartup.h"
 #include "llviewercamera.h"
 #include "llviewerobject.h"
@@ -111,9 +113,42 @@ void SKModalView::forget(SKModalMode* mode)
         return;
     }
     notifyTopChange(before, mode);
+    updateCoveredFloaters();
     if (mClaims.empty())
     {
         restoreWorldCamera();
+    }
+}
+
+void SKModalView::updateCoveredFloaters()
+{
+    const SKModalMode* mode = top();
+    const std::vector<std::string> covered = mode ? mode->coveredFloaters() : std::vector<std::string>();
+    // setVisible rather than show and hide: no open or close sound, and the floater keeps its place.
+    for (auto it = mHiddenFloaters.begin(); it != mHiddenFloaters.end();)
+    {
+        if (std::find(covered.begin(), covered.end(), *it) != covered.end())
+        {
+            ++it;
+            continue;
+        }
+        if (LLFloater* floater = LLFloaterReg::findInstance(*it))
+        {
+            floater->setVisible(true);
+        }
+        it = mHiddenFloaters.erase(it);
+    }
+    for (const std::string& name : covered)
+    {
+        LLFloater* floater = LLFloaterReg::findInstance(name);
+        if (!floater || !floater->getVisible() || std::find(mHiddenFloaters.begin(), mHiddenFloaters.end(), name) != mHiddenFloaters.end())
+        {
+            continue;
+        }
+        floater->setVisible(false);
+        mHiddenFloaters.push_back(name);
+        // Saved as still open, so a session that ends under the mode opens it again next time.
+        LLFloater::getControlGroup()->setBOOL(LLFloaterReg::getVisibilityControlName(name), true);
     }
 }
 
@@ -150,6 +185,7 @@ bool SKModalView::claim(SKModalMode* mode, S32 priority)
     {
         mClaims.claim(mode, priority);
         notifyTopChange(before, nullptr);
+        updateCoveredFloaters();
         return true;
     }
     if (mClaims.empty())
@@ -158,6 +194,7 @@ bool SKModalView::claim(SKModalMode* mode, S32 priority)
     }
     mClaims.claim(mode, priority);
     notifyTopChange(before, mode);
+    updateCoveredFloaters();
     LL_INFOS("ModalView") << mode->getModalName() << " covers the world" << LL_ENDL;
     return true;
 }
@@ -170,6 +207,7 @@ void SKModalView::release(SKModalMode* mode)
         return;
     }
     notifyTopChange(before, mode);
+    updateCoveredFloaters();
     LL_INFOS("ModalView") << mode->getModalName() << " released the world" << LL_ENDL;
     if (mClaims.empty())
     {
@@ -284,6 +322,7 @@ void SKModalView::shutdown()
         mode->shutdownModal();
     }
     mClaims = Claims();
+    updateCoveredFloaters();
 }
 
 // static
