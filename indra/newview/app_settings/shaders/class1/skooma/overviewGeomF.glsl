@@ -23,13 +23,12 @@
 
 // Overview census geometry: the class code in R and the triangle's own world normal, octahedron-packed, in G and A.
 // The normal comes from the triangle being drawn, not from depth, so parts lying flush on one plane write the same
-// normal whatever their depth differs by. Nothing above the cut plane, or its part's own cut height, is drawn.
+// normal whatever their depth differs by. Nothing above the cut plane, or its part's own cut height, is drawn: the
+// vertex stage clips it (overviewGeomV.glsl). Only SK_DISSOLVE discards, and only SK_CAP_LIFT writes gl_FragDepth.
 
 out vec4 frag_color;
 
 uniform vec4 color;             // R: the class code / 255
-uniform vec4 clip_plane;        // eye space; keep dot(p, xyz) + w >= 0
-uniform vec4 sk_ceiling;        // eye space, the same form: nothing this far over the agent's floor is drawn
 uniform mat3 sk_eye_to_world;
 uniform int sk_debug_cut;       // 1: G and A carry the part's cut height for debug view 5, not its normal
 
@@ -44,6 +43,7 @@ uniform int sk_cap_pass;        // 0 front faces, 1 back faces of uncut parts, 2
 in float vary_cut_z;
 in float vary_z;
 
+#ifdef SK_DISSOLVE
 #define SK_MAX_DISSOLVE 16
 uniform int sk_dissolve_count;
 uniform vec4 sk_dissolve[SK_MAX_DISSOLVE];       // window x, y in pixels, eye depth in metres, radius in pixels
@@ -75,6 +75,7 @@ bool skDissolved()
     return false;
 }
 #endif
+#endif
 
 vec2 skOctEncode(vec3 n)
 {
@@ -85,22 +86,8 @@ vec2 skOctEncode(vec3 n)
 
 void main()
 {
-    if (dot(vary_position, clip_plane.xyz) + clip_plane.w < 0.0 || dot(vary_position, sk_ceiling.xyz) + sk_ceiling.w < 0.0)
-    {
-        discard;
-    }
-#ifdef SK_CUT_ATTRIBUTE
-    // Above its own part's cut; a hidden part (cut far below anything) only shows in debug view 5.
-    if (vary_z > vary_cut_z && !(sk_debug_cut == 1 && vary_cut_z < -1.0e29))
-    {
-        discard;
-    }
+#ifdef SK_DISSOLVE
     if (sk_dissolve_count > 0 && skDissolved())
-    {
-        discard;
-    }
-    // A cut part's back faces are its section, drawn by passes 2 and 3 only; an uncut part's by pass 1.
-    if (sk_cap_pass != 0 && (vary_cut_z < 1.0e29) != (sk_cap_pass >= 2))
     {
         discard;
     }

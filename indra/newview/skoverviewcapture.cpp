@@ -94,6 +94,7 @@ namespace
     LLGLSLShader sComposite;
     LLGLSLShader sGeom;
     LLGLSLShader sGeomCut;    // the census with a cut height per vertex, for the tactical view
+    LLGLSLShader sGeomCutDissolve;  // the same with the see-through circles, the only permutation that discards
     LLGLSLShader sMarker;     // the tactical avatar markers, depth-tested by hand       // the census: class code and the face's own normal
 
     const F32 CENSUS_RANGE_M = 128.f;
@@ -504,6 +505,8 @@ namespace
             { &sComposite, "SK Overview Composite", "deferred/postDeferredNoTCV.glsl", "skooma/overviewCompositeF.glsl", {} },
             { &sGeom, "SK Overview Geometry", "skooma/overviewGeomV.glsl", "skooma/overviewGeomF.glsl", {} },
             { &sGeomCut, "SK Overview Geometry Cut", "skooma/overviewGeomV.glsl", "skooma/overviewGeomF.glsl", { "SK_CUT_ATTRIBUTE" } },
+            { &sGeomCutDissolve, "SK Overview Geometry Cut Dissolve", "skooma/overviewGeomV.glsl", "skooma/overviewGeomF.glsl",
+              { "SK_CUT_ATTRIBUTE", "SK_DISSOLVE" } },
             { &sMarker, "SK Overview Marker", "skooma/overviewMarkerV.glsl", "skooma/overviewMarkerF.glsl", {} },
         };
     }
@@ -1112,6 +1115,10 @@ void SKOverviewCapture::drawMovers(const Shot& shot)
         uniformCeiling(sGeom, shot.mView);
         LLGLDepthTest depth(GL_TRUE, GL_TRUE, GL_LEQUAL);
         LLGLDisable cull_face(GL_CULL_FACE);
+        LLGLEnable clip0(GL_CLIP_DISTANCE0);
+        LLGLEnable clip1(GL_CLIP_DISTANCE0 + 1);
+        LLGLEnable clip2(GL_CLIP_DISTANCE0 + 2);
+        LLGLEnable clip3(GL_CLIP_DISTANCE0 + 3);
         gGL.setColorMask(true, true, false, true);
         mMovers.draw(shot.mView);
         gGL.setColorMask(true, true);
@@ -1159,7 +1166,9 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
                                    shot.mCut - normal_eye.dot3(origin_eye).getF32() };
             const F32 no_cut[4] = { 0.f, 0.f, 0.f, 1.f };
             // The tactical view cuts each part at its own height (SKOverviewCensus::applyCut); a map at the one plane.
-            LLGLSLShader& geom = shot.mPartCuts ? sGeomCut : sGeom;
+            // Circles bind the one permutation that discards; without them every pass keeps early depth.
+            const bool dissolve = shot.mPartCuts && !shot.mDissolve.empty();
+            LLGLSLShader& geom = !shot.mPartCuts ? sGeom : dissolve ? sGeomCutDissolve : sGeomCut;
             LLMatrix4a inverse_view;
             inverse_view.setInverse(shot.mView);
             const F32* m = inverse_view.getF32ptr();
@@ -1180,25 +1189,38 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
                     }
                 }
             };
-            geom.bind();
-            glUniform4fv(geom.getUniformLocation(CLIP_PLANE), 1, shot.mPartCuts ? no_cut : plane);
-            glUniformMatrix3fv(geom.getUniformLocation(SK_EYE_TO_WORLD), 1, GL_FALSE, eye_to_world);
-            uniformCeiling(geom, shot.mView);
-            static LLCachedControl<U32> debug_view(gSavedSettings, "SKOverviewDebugView", 0);
-            glUniform1i(geom.getUniformLocation(SK_DEBUG_CUT), shot.mPartCuts && debug_view == 5 ? 1 : 0);
-            glUniform1f(geom.getUniformLocation(SK_ZERO_TO_ONE), LLRender::sReverseZ ? 1.f : 0.f);
-            if (shot.mPartCuts)
+            // Binds a geometry program with the shot's uniforms; the cap pass is set per pass.
+            LLGLSLShader* bound = nullptr;
+            auto bindGeom = [&](LLGLSLShader& prog)
             {
-                static LLCachedControl<F32> soft(gSavedSettings, "SKTacticalDissolveSoftness", 0.25f);
-                const GLsizei n = (GLsizei)llmin(shot.mDissolve.size(), (size_t)SK_MAX_DISSOLVE);
-                glUniform1i(geom.getUniformLocation(SK_DISSOLVE_COUNT), n);
-                glUniform1f(geom.getUniformLocation(SK_DISSOLVE_SOFT), llclamp((F32)soft, 0.f, 1.f));
-                if (n)
+                if (bound == &prog)
                 {
-                    glUniform4fv(geom.getUniformLocation(SK_DISSOLVE), n, shot.mDissolve.front().mV);
-                    glUniform1fv(geom.getUniformLocation(SK_DISSOLVE_FLOOR), n, shot.mDissolveFloor.data());
+                    return;
                 }
-            }
+                bound = &prog;
+                prog.bind();
+                glUniform4fv(prog.getUniformLocation(CLIP_PLANE), 1, shot.mPartCuts ? no_cut : plane);
+                glUniformMatrix3fv(prog.getUniformLocation(SK_EYE_TO_WORLD), 1, GL_FALSE, eye_to_world);
+                uniformCeiling(prog, shot.mView);
+                static LLCachedControl<U32> debug_view(gSavedSettings, "SKOverviewDebugView", 0);
+                glUniform1i(prog.getUniformLocation(SK_DEBUG_CUT), shot.mPartCuts && debug_view == 5 ? 1 : 0);
+                glUniform1f(prog.getUniformLocation(SK_ZERO_TO_ONE), LLRender::sReverseZ ? 1.f : 0.f);
+                const GLsizei n = (GLsizei)llmin(shot.mDissolve.size(), (size_t)SK_MAX_DISSOLVE);
+                if (dissolve && n)
+                {
+                    static LLCachedControl<F32> soft(gSavedSettings, "SKTacticalDissolveSoftness", 0.25f);
+                    glUniform1i(prog.getUniformLocation(SK_DISSOLVE_COUNT), n);
+                    glUniform1f(prog.getUniformLocation(SK_DISSOLVE_SOFT), llclamp((F32)soft, 0.f, 1.f));
+                    glUniform4fv(prog.getUniformLocation(SK_DISSOLVE), n, shot.mDissolve.front().mV);
+                    glUniform1fv(prog.getUniformLocation(SK_DISSOLVE_FLOOR), n, shot.mDissolveFloor.data());
+                }
+            };
+            // The clip plane, the ceiling and the cuts are clip distances every overview geometry program writes.
+            LLGLEnable clip0(GL_CLIP_DISTANCE0);
+            LLGLEnable clip1(GL_CLIP_DISTANCE0 + 1);
+            LLGLEnable clip2(GL_CLIP_DISTANCE0 + 2);
+            LLGLEnable clip3(GL_CLIP_DISTANCE0 + 3);
+            bindGeom(geom);
             // B carries a cut part's cap flag; the invisible pass after it raises it to 1 where it draws.
             gGL.setColorMask(true, true, shot.mPartCuts, true);
             LLGLEnable offset(GL_POLYGON_OFFSET_FILL);
@@ -1209,7 +1231,6 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
             // cut. There it is lifted onto the cut plane (overviewGeomF.glsl), so a floor running through the solid
             // does not hide it, and the outside faces in front of a far wall's inside are left alone.
             enum { CAP_FRONT, CAP_BACK, CAP_PARITY, CAP_FILL };
-            const GLint cap_pass = geom.getUniformLocation(SK_CAP_PASS);
             std::vector<S32> passes = { CAP_FRONT, CAP_BACK };
             if (shot.mPartCuts)
             {
@@ -1222,7 +1243,8 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
             }
             for (S32 pass : passes)
             {
-                glUniform1i(cap_pass, pass);
+                bindGeom(geom);
+                glUniform1i(bound->getUniformLocation(SK_CAP_PASS), pass);
                 const bool parity = pass == CAP_PARITY;
                 LLGLDepthTest depth(GL_TRUE, pass == CAP_FRONT || pass == CAP_FILL ? GL_TRUE : GL_FALSE,
                                     parity ? GL_ALWAYS : GL_LEQUAL);
@@ -1272,7 +1294,8 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
                 glCullFace(GL_BACK);
             }
             glStencilMask(0xFF);
-            glUniform1i(cap_pass, CAP_FRONT);
+            bindGeom(geom);
+            glUniform1i(bound->getUniformLocation(SK_CAP_PASS), CAP_FRONT);
             {
                 // Barriers, already drawn as their class: the hatch flag over them, hiding nothing, offset past every
                 // class's own so it passes over the copy it lies on.
@@ -1299,7 +1322,7 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
                 gGL.setColorMask(true, false, false, false);
             }
             gGL.setPolygonOffset(0.f, 0.f);
-            geom.unbind();
+            bound->unbind();
         };
     }
 
