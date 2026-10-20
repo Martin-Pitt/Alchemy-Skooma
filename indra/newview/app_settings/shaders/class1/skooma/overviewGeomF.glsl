@@ -40,6 +40,7 @@ in vec3 vary_position;
 //[ENGINE_BLOCK Matrices]
 
 uniform float sk_zero_to_one;   // 1 where clip control maps depth 0..1 (reverse-Z)
+uniform int sk_cap_pass;        // 0 front faces, 1 back faces of uncut parts, 2 cut parts' faces counted in stencil, 3 their section
 in float vary_cut_z;
 in float vary_z;
 
@@ -98,14 +99,20 @@ void main()
     {
         discard;
     }
+    // A cut part's back faces are its section, drawn by passes 2 and 3 only; an uncut part's by pass 1.
+    if (sk_cap_pass != 0 && (vary_cut_z < 1.0e29) != (sk_cap_pass >= 2))
+    {
+        discard;
+    }
 #endif
     vec3 n_eye = normalize(cross(dFdx(vary_position), dFdy(vary_position)));
     vec3 n = normalize(sk_eye_to_world * n_eye);
     bool cap = false;
 #ifdef SK_CUT_ATTRIBUTE
     // A back face seen through a part's cut is inside the solid: it stands for the section, so it moves up its view
-    // ray onto the cut plane, above any floor that runs through the solid under it.
-    if (!gl_FrontFacing && vary_cut_z < 1.0e29)
+    // ray onto the cut plane, above any floor that runs through the solid under it. The stencil keeps it to where that
+    // ray is inside a cut solid, not behind the outside of one.
+    if (sk_cap_pass == 3 && !gl_FrontFacing)
     {
         vec3 up = vec3(0.0, 0.0, 1.0) * sk_eye_to_world;
         bool ortho = projection_matrix[3][3] > 0.5;

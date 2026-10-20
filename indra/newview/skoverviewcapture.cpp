@@ -569,7 +569,7 @@ bool SKOverviewCapture::ensureGL(LLRenderTarget& capture, LLRenderTarget& resolv
         resolved.release();
     }
     bool ok = capture.isComplete() ||
-              capture.allocate(w, h, GL_RGBA8, true, false, ALTextureSlot::TT_TEXTURE, LLRenderTarget::MIPS_NONE,
+              capture.allocate(w, h, GL_RGBA8, true, true, ALTextureSlot::TT_TEXTURE, LLRenderTarget::MIPS_NONE,
                                LLRenderTarget::DEPTH_FMT_32F);
     ok = ok && (resolved.isComplete() || resolved.allocate(w, h, GL_RGBA8));
     if (!ok)
@@ -1032,7 +1032,7 @@ void SKOverviewCapture::drawMovers(const Shot& shot)
     if (!sTacticalWork.isComplete() || (S32)sTacticalWork.getWidth() != w || (S32)sTacticalWork.getHeight() != h)
     {
         sTacticalWork.release();
-        if (!sTacticalWork.allocate(w, h, GL_RGBA8, true, false, ALTextureSlot::TT_TEXTURE, LLRenderTarget::MIPS_NONE,
+        if (!sTacticalWork.allocate(w, h, GL_RGBA8, true, true, ALTextureSlot::TT_TEXTURE, LLRenderTarget::MIPS_NONE,
                                     LLRenderTarget::DEPTH_FMT_32F))
         {
             LL_WARNS_ONCE("SKOverview") << "tactical mover target did not allocate" << LL_ENDL;
@@ -1155,13 +1155,46 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
             gGL.setColorMask(true, true, shot.mPartCuts, true);
             LLGLEnable offset(GL_POLYGON_OFFSET_FILL);
             gGL.setPolygonOffset(-1.f, -4.f);
-            for (S32 pass = 0; pass < 2; ++pass)
+            // Front faces, then the back faces of solids the cut went through, which stand for their section. Where
+            // each part carries its own cut, a back face is the section only where the pixel's ray from the cut plane
+            // is inside a cut solid: an odd count of the cut parts' faces past it, every one of which lies below the
+            // cut. There it is lifted onto the cut plane (overviewGeomF.glsl), so a floor running through the solid
+            // does not hide it, and the outside faces in front of a far wall's inside are left alone.
+            enum { CAP_FRONT, CAP_BACK, CAP_PARITY, CAP_FILL };
+            const GLint cap_pass = glGetUniformLocation(geom.mProgramObject, "sk_cap_pass");
+            std::vector<S32> passes = { CAP_FRONT, CAP_BACK };
+            if (shot.mPartCuts)
             {
-                // Front: every face; back: inside a solid the cut went through, which the cut shader lifts onto the cut
-                // plane as its section, so it writes depth too.
-                LLGLDepthTest depth(GL_TRUE, pass == 0 || shot.mPartCuts ? GL_TRUE : GL_FALSE, GL_LEQUAL);
-                LLGLState cull_face(GL_CULL_FACE, pass == 1);
-                glCullFace(pass == 1 ? GL_FRONT : GL_BACK);
+                passes.push_back(CAP_PARITY);
+                passes.push_back(CAP_FILL);
+                LLGLDisable scissor(GL_SCISSOR_TEST);
+                glStencilMask(0xFF);
+                glClearStencil(0);
+                glClear(GL_STENCIL_BUFFER_BIT);
+            }
+            for (S32 pass : passes)
+            {
+                glUniform1i(cap_pass, pass);
+                const bool parity = pass == CAP_PARITY;
+                LLGLDepthTest depth(GL_TRUE, pass == CAP_FRONT || pass == CAP_FILL ? GL_TRUE : GL_FALSE,
+                                    parity ? GL_ALWAYS : GL_LEQUAL);
+                LLGLState cull_face(GL_CULL_FACE, !parity);
+                glCullFace(pass == CAP_FRONT ? GL_BACK : GL_FRONT);
+                LLGLState stencil(GL_STENCIL_TEST, pass >= CAP_PARITY);
+                if (parity)
+                {
+                    glStencilFunc(GL_ALWAYS, 0, 0x01);
+                    glStencilOp(GL_KEEP, GL_INVERT, GL_INVERT);
+                    glStencilMask(0x01);
+                    gGL.setColorMask(false, false);
+                }
+                else if (pass == CAP_FILL)
+                {
+                    glStencilFunc(GL_EQUAL, 1, 0x01);
+                    glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+                    glStencilMask(0x00);
+                    gGL.setColorMask(true, true, true, true);
+                }
                 for (const SKOverviewCensus::Batch& batch : batches)
                 {
                     const LLVector3 offset_agent = gAgent.getPosAgentFromGlobal(batch.mOrigin);
@@ -1176,7 +1209,7 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
                         {
                             continue;
                         }
-                        const U8 code = pass == 0 ? skoverview::codeOf((skoverview::CensusClass)c) : (U8)skoverview::CODE_SECTION;
+                        const U8 code = pass == CAP_FRONT ? skoverview::codeOf((skoverview::CensusClass)c) : (U8)skoverview::CODE_SECTION;
                         gGL.diffuseColor4f(code / 255.f, 0.f, 0.f, 1.f);
                         // Coplanar parts of different classes resolve the same way every frame: floor over ramp over
                         // cover over wall over the rest, by a class's own depth offset rather than draw order.
@@ -1187,6 +1220,8 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
                 }
                 glCullFace(GL_BACK);
             }
+            glStencilMask(0xFF);
+            glUniform1i(cap_pass, CAP_FRONT);
             {
                 // Barriers, already drawn as their class: the hatch flag over them, hiding nothing, offset past every
                 // class's own so it passes over the copy it lies on.
