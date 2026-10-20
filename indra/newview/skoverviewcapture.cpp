@@ -93,12 +93,12 @@ namespace
     LLRenderTarget sTacticalWork;   // the static capture copied, with the movers drawn over it
     LLGLSLShader sResolve;
     LLGLSLShader sComposite;
-    LLGLSLShader sGeom;
+    LLGLSLShader sGeom;       // the census: class code and the face's own normal
     LLGLSLShader sGeomCut;    // the census with a cut height per vertex, for the tactical view
     LLGLSLShader sGeomCutDissolve;  // the same with the see-through circles, the only permutation that discards
     LLGLSLShader sGeomCapLift;      // the cut census's section pass, the only permutation that writes depth
     LLGLSLShader sGeomCapLiftDissolve;
-    LLGLSLShader sMarker;     // the tactical avatar markers, depth-tested by hand       // the census: class code and the face's own normal
+    LLGLSLShader sMarker;     // the tactical avatar markers, depth-tested by hand
 
     const F32 CENSUS_RANGE_M = 128.f;
     const size_t SK_MAX_TERRITORY = 16;       // regions styled as inside, at most (the resolve's array)

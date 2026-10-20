@@ -27,8 +27,8 @@
 // vertex stage clips it (overviewGeomV.glsl). Only SK_DISSOLVE discards, and only SK_CAP_LIFT writes gl_FragDepth.
 
 #ifdef SK_CAP_LIFT
-// The lift only moves a fragment nearer, which keeps early depth where the context can be told so; a 4.1 context
-// without the extension builds without the qualifier.
+// The lift only moves a fragment nearer: it cannot be rejected early, but saying so keeps the hierarchical depth valid
+// for the draws after it where the context can be told; a 4.1 context without the extension builds without the qualifier.
 #if __VERSION__ < 420 && defined(GL_ARB_conservative_depth)
 #extension GL_ARB_conservative_depth : enable
 #endif
