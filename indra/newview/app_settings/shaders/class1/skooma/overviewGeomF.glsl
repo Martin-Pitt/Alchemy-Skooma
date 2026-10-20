@@ -43,6 +43,7 @@ uniform float sk_zero_to_one;   // 1 where clip control maps depth 0..1 (reverse
 uniform int sk_cap_pass;        // 0 front faces, 1 back faces of uncut parts, 2 cut parts' faces counted in stencil, 3 their section
 in float vary_cut_z;
 in float vary_z;
+in float vary_open;
 
 #define SK_MAX_DISSOLVE 16
 uniform int sk_dissolve_count;
@@ -99,8 +100,9 @@ void main()
     {
         discard;
     }
-    // A cut part's back faces are its section, drawn by passes 2 and 3 only; an uncut part's by pass 1.
-    if (sk_cap_pass != 0 && (vary_cut_z < 1.0e29) != (sk_cap_pass >= 2))
+    // A cut part's back faces are its section, drawn by passes 2 and 3 only; an uncut or open part's by pass 1.
+    bool sectioned = vary_cut_z < 1.0e29 && vary_open < 0.5;
+    if (sk_cap_pass != 0 && sectioned != (sk_cap_pass >= 2))
     {
         discard;
     }
