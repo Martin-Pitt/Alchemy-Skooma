@@ -1369,11 +1369,13 @@ std::string SKNavRooms::statsLine() const
         space_stages += llformat("%s%s %.0f", s ? ", " : "", SpacesPass::stageName(s), mLastSpaceStageMs[s]);
     }
     U32 rooms = 0, truncated = 0;
+    size_t room_bytes = 0;
     for (const auto& entry : mMeshes)
     {
         if (entry.second.mRoomGraph)
         {
             rooms += static_cast<U32>(entry.second.mRoomGraph->mRooms.size());
+            room_bytes += entry.second.mRoomGraph->bytes();
             for (const Room& r : entry.second.mRoomGraph->mRooms)
             {
                 truncated += r.mTruncated ? 1 : 0;
@@ -1391,11 +1393,11 @@ std::string SKNavRooms::statsLine() const
         }
     }
     return llformat("enclosure: %u meshes, %u passes (%u repairs, %u keeping their spaces, %u dropped, %u running), last %.0f ms on the thread (%s, %u tiles answered), %.0f ms posted to landed, unknown %.1f%% and sealed %.1f%% of %llu gaps; %u spaces and %u portals, last %.0f ms (%s); "
-                    "rooms %u (truncated %u) graph %.1f ms view air %llu wind %llu; "
+                    "rooms %u (truncated %u), %.1f KB, graph %.1f ms view air %llu wind %llu; "
                     "wind slabs over %u meshes, %.1f MB, %u builds, last %.0f ms for %.1f MB",
                     meshes, mPasses, mRepairs, mSpacesKept, mCancelled, in_flight, mLastMs, stages.c_str(), mLastAnswered, mLastWallMs,
                     gaps ? 100.0 * unknown / gaps : 0.0, gaps ? 100.0 * sealed / gaps : 0.0, static_cast<unsigned long long>(gaps), spaces,
-                    portals, mLastSpacesMs, space_stages.c_str(), rooms, truncated, mLastRoomGraphMs,
+                    portals, mLastSpacesMs, space_stages.c_str(), rooms, truncated, room_bytes / 1024.0, mLastRoomGraphMs,
                     static_cast<unsigned long long>(mViewAirRevision), static_cast<unsigned long long>(mViewWindRevision), winds,
                     wind_bytes / 1048576.0, mWindPasses, mLastWindMs, mLastWindBytes / 1048576.0);
 }
