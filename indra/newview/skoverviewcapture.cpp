@@ -1131,7 +1131,7 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
             gGL.setPolygonOffset(-1.f, -4.f);
             // Front faces, then the back faces of solids the cut went through, which stand for their section. Where
             // each part carries its own cut, a back face is the section only where the pixel's ray from the cut plane
-            // is inside a cut solid: an odd count of the cut parts' faces past it, every one of which lies below the
+            // is inside a cut solid: more of the cut parts' back faces past it than front, every one of which lies below the
             // cut. There it is lifted onto the cut plane (overviewGeomF.glsl), so a floor running through the solid
             // does not hide it, and the outside faces in front of a far wall's inside are left alone.
             enum { CAP_FRONT, CAP_BACK, CAP_PARITY, CAP_FILL };
@@ -1157,14 +1157,17 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
                 LLGLState stencil(GL_STENCIL_TEST, pass >= CAP_PARITY);
                 if (parity)
                 {
-                    glStencilFunc(GL_ALWAYS, 0, 0x01);
-                    glStencilOp(GL_KEEP, GL_INVERT, GL_INVERT);
-                    glStencilMask(0x01);
+                    // A winding count, not parity: overlapping solids (walls meeting at corners) and mirrored ones
+                    // stay inside, where an odd/even count turns their overlap and its surroundings inside out.
+                    glStencilFunc(GL_ALWAYS, 0, 0xFF);
+                    glStencilOpSeparate(GL_BACK, GL_KEEP, GL_INCR_WRAP, GL_INCR_WRAP);
+                    glStencilOpSeparate(GL_FRONT, GL_KEEP, GL_DECR_WRAP, GL_DECR_WRAP);
+                    glStencilMask(0xFF);
                     gGL.setColorMask(false, false);
                 }
                 else if (pass == CAP_FILL)
                 {
-                    glStencilFunc(GL_EQUAL, 1, 0x01);
+                    glStencilFunc(GL_NOTEQUAL, 0, 0xFF);
                     glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
                     glStencilMask(0x00);
                     gGL.setColorMask(true, true, true, true);
