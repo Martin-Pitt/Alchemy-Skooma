@@ -322,7 +322,7 @@ namespace plan
     };
     /// Where someone standing with their feet at feet is: the air just over the feet, which must be fine, known
     /// and floored within band_below under to band_above over the feet, since a foot sunk into a roof reads the
-    /// room under it. Not found otherwise: coarse air, an unloaded region or unsettled rooms give no guess.
+    /// room under it; a gap holding the point is taken however far below its floor is, as in a jump. Not found otherwise: coarse air, an unloaded region or unsettled rooms give no guess.
     Whereabouts whereabouts(const LLVector3d& feet, F32 band_below = 1.0f, F32 band_above = 1.0f);
     /// whereabouts judged from a column already read at the feet's plan, in world.
     Whereabouts whereabouts(const SKNavWorldView& world, const SKNavWorldView::AirColumn& column, const LLVector3d& feet,
@@ -332,7 +332,7 @@ namespace plan
     bool outdoorsIn(const SKNavWorldView::AirColumn& column, const LLVector3d& feet);
     /// The floor under the agent standing at at with its feet at feet: the navmesh's when polygons are built
     /// and it lies near the feet, else a known fine air gap's floored at or just under the feet, else, off the
-    /// floor in a jump or a fall, an indoor fine gap's up to 4 m under them. False with no answer. Main thread.
+    /// floor in a jump or a fall, the covered fine gap's holding them. False with no answer. Main thread.
     bool agentFloor(const LLVector3d& at, F64 feet, F32& floor_out);
     /// A space as a Data index, -1 for none. Any thread.
     S32 spaceIndex(const Data& data, const SpaceRef& ref);
