@@ -85,8 +85,6 @@ extern bool gCubeSnapshot;
 
 namespace
 {
-    bool sTacticalKeyDown = false; // the tactical overview key is held
-    bool sWarpOnOpen = false;      // the overview opening now was pressed open, so it warps in
     LLRenderTarget sCapture;      // depth, and a class code in R (skoverview::Code), an invisible face in B
     LLRenderTarget sCaptureNear;  // the same for the agent's neighbours, at half the resolution
     LLRenderTarget sCaptureFar;   // and for regions further off, at a quarter
@@ -318,7 +316,6 @@ void SKOverviewCapture::handleTacticalKey(bool down)
     static bool latched = false;
     static bool closing = false;
     static LLCachedControl<F32> tap_s(gSavedSettings, "SKTacticalTapSeconds", 0.35f);
-    static U32 press_id = 0;
     const F64 now = LLFrameTimer::getTotalSeconds();
     if (down)
     {
@@ -326,27 +323,9 @@ void SKOverviewCapture::handleTacticalKey(bool down)
         pressed_frame = LLFrameTimer::getFrameCount();
         closing = latched;
         latched = false;
-        sTacticalKeyDown = true;
-        sWarpOnOpen = !closing;
         gSavedSettings.setBOOL("SKTacticalOverview", !closing);
-        if (!closing)
-        {
-            // Still held at the warp's cut, the press is a hold: the camera snaps to the overview.
-            const U32 id = ++press_id;
-            doAfterInterval([id]()
-                            {
-                                if (id == press_id && sTacticalKeyDown && tacticalShown() && gAgentCamera.getCameraAnimating())
-                                {
-                                    gAgentCamera.stopCameraAnimation();
-                                    gAgentCamera.skipCameraSmoothing();
-                                }
-                            },
-                            SKCameraWarp::TACTICAL.mRampSeconds);
-        }
         return;
     }
-    sTacticalKeyDown = false;
-    sWarpOnOpen = false;
     if (closing || pressed_at < 0.0)
     {
         closing = false;
@@ -705,12 +684,7 @@ void SKOverviewCapture::openTactical()
     if (SKModalView::top() == this)
     {
         placeTacticalCamera(over_other_mode);
-        if (sWarpOnOpen)
-        {
-            gAgentCamera.startCameraWarp(SKCameraWarp::TACTICAL);
-        }
     }
-    sWarpOnOpen = false;
 }
 
 void SKOverviewCapture::closeTactical()
