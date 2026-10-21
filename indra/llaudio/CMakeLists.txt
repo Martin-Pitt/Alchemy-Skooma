@@ -63,7 +63,7 @@ if(AL_USE_FAUDIO)
   )
 endif()
 
-# Add tests
-if(AL_BUILD_TESTS)
+# Add tests: a TUT test, kept registered until it is ported to Catch2.
+if(AL_BUILD_TESTS AND COMMAND al_add_test)
   al_add_test(sklufs UNIT PROJECT llaudio SOURCES llwavfile.cpp)
 endif()
