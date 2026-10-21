@@ -147,7 +147,7 @@ namespace sknav
             file << ",\"air\":{\"origin\":";
             writeVec3(file, air.mOrigin);
             file << ",\"cell\":" << air.mCell << ",\"unit\":" << air.mUnit << ",\"width\":" << air.mWidth << ",\"height\":" << air.mHeight
-                 << ",\"top_cell\":" << air.mTopCell << ",\"top_width\":" << air.mTopWidth << ",\"top_height\":" << air.mTopHeight
+                 << ",\"top_cell\":" << air.mTops->mTopCell << ",\"top_width\":" << air.mTops->mTopWidth << ",\"top_height\":" << air.mTops->mTopHeight
                  << ",\"layout\":" << tileAirLayout(air) << ",\"blob\":\"" << LLBase64::encode(blob.data(), blob.size()) << "\"}";
             ++counts.mAirs;
             if (tile.mEnclosure && tile.mEnclosure->mAir == tile.mAir && tile.mEnclosure->mGaps.size() == air.mGaps.size())

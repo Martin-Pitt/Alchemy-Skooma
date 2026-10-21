@@ -68,6 +68,9 @@ struct SKNavRooms::Job
     std::unique_ptr<SpacesPass> mSpaces;        ///< once the enclosure pass is done
     EnclosureProductPtr mPreviousProduct;       ///< the answers the landed spaces were cut from
     RoomsProductPtr mPreviousRooms;             ///< those spaces, while the doors they were cut with stand
+    RoomGraphPtr mRoomGraph;                    ///< the rooms of the spaces it lands
+    RoomGraphPtr mPreviousRoomGraph;            ///< the rooms of mPreviousRooms
+    F32 mRoomGraphMs = 0.f;
     U64 mDoorSignature = 0;
     bool mSpacesKept = false;                   ///< the layout stood, and so did the last spaces
     std::chrono::steady_clock::time_point mPosted;
@@ -215,6 +218,66 @@ void SKNavWorldView::portalsOf(const SpaceId& id, const PortalFn& fn) const
     {
         fn(*m, m->mRooms->mPortals[p]);
     }
+}
+
+const Room* SKNavWorldView::roomOf(const SpaceId& space, const Mesh** mesh_out) const
+{
+    for (const Mesh& m : mMeshes)
+    {
+        if (m.mId == space.mMesh)
+        {
+            const Room* r = m.mRoomGraph ? m.mRoomGraph->roomOfId(space.mId) : nullptr;
+            if (r && mesh_out)
+            {
+                *mesh_out = &m;
+            }
+            return r;
+        }
+    }
+    return nullptr;
+}
+
+const Room* SKNavWorldView::roomAt(const LLVector3d& pos, RoomId* id_out, const Mesh** mesh_out) const
+{
+    SpaceId space;
+    const Mesh* m = nullptr;
+    const Room* r = spaceAt(pos, space) ? roomOf(space, &m) : nullptr;
+    if (r)
+    {
+        if (id_out)
+        {
+            id_out->mMesh = m->mId;
+            id_out->mId = r->mId;
+        }
+        if (mesh_out)
+        {
+            *mesh_out = m;
+        }
+    }
+    return r;
+}
+
+const Room* SKNavWorldView::room(const RoomId& id, const Mesh** mesh_out) const
+{
+    for (const Mesh& m : mMeshes)
+    {
+        if (m.mId == id.mMesh)
+        {
+            const Room* r = m.mRoomGraph ? m.mRoomGraph->byId(id.mId) : nullptr;
+            if (r && mesh_out)
+            {
+                *mesh_out = &m;
+            }
+            return r;
+        }
+    }
+    return nullptr;
+}
+
+LLVector3d SKNavWorldView::roomCellOrigin(const Mesh& mesh, const Room& room) const
+{
+    return LLVector3d(mesh.mOrigin.mdV[VX] + room.mCellX0 * static_cast<F64>(RASTER_XY_M),
+                      mesh.mOrigin.mdV[VY] + room.mCellY0 * static_cast<F64>(RASTER_XY_M), mesh.mOrigin.mdV[VZ]);
 }
 
 bool SKNavWorldView::topOfWorld(const LLVector3d& xy, F64& top) const
@@ -385,7 +448,7 @@ SKNavWind::SKNavWind(SKNavWorldViewPtr view)
 
 U64 SKNavWind::revision() const
 {
-    return mView ? mView->revision() : 0;
+    return mView ? mView->windRevision() : 0;
 }
 
 const SKNavWorldView::Mesh* SKNavWind::meshAt(const LLVector3d& pos, S32* cell) const
@@ -625,14 +688,72 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
     static LLCachedControl<U32> settle_ms(gSavedSettings, "SKNavRoomsSettleMs", 100);
     const F64 now = LLTimer::getTotalSeconds();
 
+    // Only the meshes whose air the navmesh says moved are walked; doors and lifts, and a backstop, walk them all.
+    constexpr F64 FULL_WALK_S = 30.0;
+    std::set<LLUUID> drained;
+    bool walk_all = false;
+    {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknr - drain changes");
+        std::vector<SKNavMesh::AirChange> changes;
+        walk_all = !navmesh.drainAirChanges(changes);
+        for (const SKNavMesh::AirChange& change : changes)
+        {
+            drained.insert(change.mMesh);
+        }
+        if (!changes.empty())
+        {
+            LL_DEBUGS("SKNav") << "rooms drained " << changes.size() << " air changes over " << drained.size() << " meshes" << LL_ENDL;
+        }
+    }
+    const bool doors_moved = navmesh.featureStamp() != mSeenFeatures;
+    const bool backstop = !walk_all && !doors_moved && mLastFullWalk >= 0.0 && now - mLastFullWalk >= FULL_WALK_S;
+    walk_all = walk_all || doors_moved || backstop || mLastFullWalk < 0.0;
+    std::vector<std::pair<LLUUID, const SKNavMesh::Mesh*>> walked;
+    std::map<LLUUID, bool> unwalked;
+    std::map<LLUUID, std::pair<U64, U32>> before;
+    if (walk_all)
+    {
+        mLastFullWalk = now;
+        for (const auto& entry : navmesh.mMeshes)
+        {
+            walked.emplace_back(entry.first, entry.second.get());
+        }
+        if (backstop)
+        {
+            for (const auto& entry : mMeshes)
+            {
+                before[entry.first] = { entry.second.mGeneration, entry.second.mEvicted };
+            }
+        }
+    }
+    else
+    {
+        for (const LLUUID& id : drained)
+        {
+            if (const auto it = navmesh.mMeshes.find(id); it != navmesh.mMeshes.end())
+            {
+                walked.emplace_back(id, it->second.get());
+            }
+        }
+        // A mesh not walked keeps its state; a drained one the navmesh no longer has goes as an unseen one does.
+        for (const auto& entry : mMeshes)
+        {
+            if (!drained.count(entry.first))
+            {
+                unwalked[entry.first] = true;
+            }
+        }
+    }
+
     // A publish moves the navmesh's revision; only then can a mesh's air have moved.
-    if (navmesh.mRevision != mSeenRevision || navmesh.mFeatureStamp != mSeenFeatures)
+    if (walk_all || !drained.empty())
     {
         LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknr - revision walk");
         mSeenRevision = navmesh.mRevision;
         mSeenFeatures = navmesh.mFeatureStamp;
         std::map<LLUUID, bool> seen;
-        for (const auto& entry : navmesh.mMeshes)
+        seen.insert(unwalked.begin(), unwalked.end());
+        for (const auto& entry : walked)
         {
             const SKNavMesh::Mesh& mesh = *entry.second;
             U64 sig = SEED;
@@ -691,7 +812,7 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
             {
                 state.mWind.reset();
                 state.windStale(now);
-                mViewDirty = true;
+                mViewWindDirty = true;
             }
             state.mEvicted = evicted;
             if (state.mAirSignature != sig || state.mDoorSignature != doors)
@@ -749,12 +870,33 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
                     it->second.mWindLatest->store(~0ull);
                 }
                 it = mMeshes.erase(it);
-                mViewDirty = true;
+                mViewAirDirty = true;
+                mViewWindDirty = true;
             }
             else
             {
                 ++it;
             }
+        }
+    }
+    if (backstop)
+    {
+        // Every mesh whose air moved was drained when it moved, so the backstop should find nothing.
+        U32 missed = 0;
+        for (const auto& entry : mMeshes)
+        {
+            const auto was = before.find(entry.first);
+            const bool moved = was == before.end() || was->second.first != entry.second.mGeneration
+                || was->second.second != entry.second.mEvicted;
+            missed += moved && !drained.count(entry.first) ? 1 : 0;
+        }
+        for (const auto& entry : before)
+        {
+            missed += !mMeshes.count(entry.first) && !drained.count(entry.first) ? 1 : 0;
+        }
+        if (missed)
+        {
+            LL_WARNS("SKNav") << "rooms full walk found " << missed << " meshes the change list missed" << LL_ENDL;
         }
     }
 
@@ -791,9 +933,11 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
                 {
                     state.mProduct.reset();
                     state.mRooms.reset();
+                    state.mRoomGraph.reset();
                     state.mWind.reset();
                     state.mWindDirty = false;
-                    mViewDirty = true;
+                    mViewAirDirty = true;
+                    mViewWindDirty = true;
                 }
                 continue;
             }
@@ -887,7 +1031,7 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
     }
 
     // The view's sky map is the copy the last pass was handed, not one per publish.
-    if (mViewDirty)
+    if (mViewAirDirty || mViewWindDirty)
     {
         LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknr - rebuild view");
         rebuildView();
@@ -896,8 +1040,8 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
 
 void SKNavRooms::post(MeshState& state, const SKNavMesh& navmesh)
 {
-    const auto mit = navmesh.mMeshes.find(state.mId);
-    if (mit == navmesh.mMeshes.end())
+    const SKNavMesh::AirSnapshot mesh = navmesh.airSnapshot(state.mId);
+    if (!mesh.mFound)
     {
         return;
     }
@@ -907,13 +1051,12 @@ void SKNavRooms::post(MeshState& state, const SKNavMesh& navmesh)
         mThread = std::make_unique<LL::ThreadPool>(QUEUE_NAME, 1);
         mThread->start();
     }
-    if (navmesh.mSkyMap.version() != mSkyVersion)
+    if (navmesh.skyMap().version() != mSkyVersion)
     {
-        mSky = std::make_shared<const SkyMap>(navmesh.mSkyMap);
-        mSkyVersion = navmesh.mSkyMap.version();
+        mSky = std::make_shared<const SkyMap>(navmesh.skyMap());
+        mSkyVersion = navmesh.skyMap().version();
     }
 
-    const SKNavMesh::Mesh& mesh = *mit->second;
     // The pass runs on this snapshot; only a preemption cancels it.
     state.mLatest->store(state.mGeneration);
     state.mLastPosted = LLTimer::getTotalSeconds();
@@ -928,16 +1071,16 @@ void SKNavRooms::post(MeshState& state, const SKNavMesh& navmesh)
     input->mParams.mWalkHeadM = build.mParams[static_cast<S32>(sknav::AgentClass::AVATAR)].mHeight;
     static LLCachedControl<bool> sealed(gSavedSettings, "SKNavSealedIndoors", true);
     input->mParams.mSealedIndoors = sealed;
-    for (const auto& t : mesh.mTiles)
+    for (const SKNavMesh::AirSnapshotTile& t : mesh.mTiles)
     {
-        if (t.second.mAir && !t.second.mAir->mLeaves.empty())
+        if (t.mAir && !t.mAir->mLeaves.empty())
         {
-            input->mTiles.push_back({ t.first, t.second.mAir, SKNavMesh::skyContributor(mesh.mId, t.first) });
+            input->mTiles.push_back({ t.mKey, t.mAir, t.mContributor });
         }
-        else if (!t.second.mAir && t.second.mAirCoarse && state.mProduct)
+        else if (!t.mAir && t.mCoarse && state.mProduct)
         {
             // Evicted: answer from the coarse product, which lets the detail go.
-            if (const TileEnclosure* kept = state.mProduct->tile(t.first))
+            if (const TileEnclosure* kept = state.mProduct->tile(t.mKey))
             {
                 input->mKept.push_back(*kept);
                 input->mKept.back().mAir.reset();
@@ -975,6 +1118,7 @@ void SKNavRooms::post(MeshState& state, const SKNavMesh& navmesh)
     {
         job->mPreviousProduct = state.mProduct;
         job->mPreviousRooms = state.mRooms;
+        job->mPreviousRoomGraph = state.mRoomGraph;
     }
     job->mPosted = std::chrono::steady_clock::now();
     std::weak_ptr<bool> alive = mAlive;
@@ -1029,11 +1173,22 @@ void SKNavRooms::runChunk(const std::shared_ptr<Job>& job, const std::weak_ptr<b
             {
                 carrySpaces(*job->mPass->takeProduct(), *job->mPreviousProduct);
                 job->mSpacesKept = true;
+                job->mRoomGraph = job->mPreviousRoomGraph ? job->mPreviousRoomGraph : buildRoomGraph(*job->mPreviousRooms);
                 return true;
             }
             job->mSpaces = std::make_unique<SpacesPass>(job->mRoomsInput, job->mPass->takeProduct());
         }
-        return job->mSpaces->step(CHUNK_STEP);
+        const bool done = job->mSpaces->step(CHUNK_STEP);
+        if (done)
+        {
+            // Rooms are a few milliseconds over the spaces, so they land in the same chunk.
+            LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknr - room graph");
+            const auto graph_start = std::chrono::steady_clock::now();
+            job->mRoomGraph = buildRoomGraph(*job->mSpaces->product());
+            job->mRoomGraphMs =
+                static_cast<F32>(std::chrono::duration<F64, std::milli>(std::chrono::steady_clock::now() - graph_start).count());
+        }
+        return done;
     };
     while (!step())
     {
@@ -1095,6 +1250,7 @@ void SKNavRooms::finish(const std::shared_ptr<Job>& job)
     mRepairs += job->mPass->repaired() ? 1 : 0;
     mSpacesKept += job->mSpacesKept ? 1 : 0;
     mLastAnswered = job->mPass->tilesAnswered();
+    mLastRoomGraphMs = job->mSpacesKept ? 0.f : job->mRoomGraphMs;
     mLastSpacesMs = job->mSpacesKept ? 0.f : job->mSpaces->product()->mMillis;
     for (S32 s = 0; s < SpacesPass::NUM_STAGES; ++s)
     {
@@ -1103,13 +1259,14 @@ void SKNavRooms::finish(const std::shared_ptr<Job>& job)
     const bool moved = !state.mProduct || state.mProduct->mSummary != product->mSummary;
     state.mProduct = product;
     state.mRooms = job->mSpacesKept ? job->mPreviousRooms : job->mSpaces->product();
+    state.mRoomGraph = job->mRoomGraph;
     state.mRoomsDoorSignature = job->mDoorSignature;
     // Only answers that moved, or none yet, are worth a new set of slabs.
     if (moved || !state.mWind)
     {
         state.windStale(LLTimer::getTotalSeconds());
     }
-    mViewDirty = true;
+    mViewAirDirty = true;
     if (!moved)
     {
         return;
@@ -1229,22 +1386,25 @@ void SKNavRooms::finishWind(const std::shared_ptr<WindJob>& job)
     mLastWindMs = product->mMillis;
     mLastWindBytes = product->bytes();
     state.mWind = product;
-    mViewDirty = true;
+    mViewWindDirty = true;
 }
 
 
 void SKNavRooms::rebuildView()
 {
-    mViewDirty = false;
+    // Each revision moves only for what changed: a wind publish leaves every air consumer's cache standing.
     auto view = std::make_shared<SKNavWorldView>();
-    view->mRevision = ++mViewRevision;
+    view->mAirRevision = mViewAirDirty ? ++mViewAirRevision : mViewAirRevision;
+    view->mWindRevision = mViewWindDirty ? ++mViewWindRevision : mViewWindRevision;
+    mViewAirDirty = false;
+    mViewWindDirty = false;
     view->mSky = mSky;
     for (const auto& entry : mMeshes)
     {
         const MeshState& s = entry.second;
         if (s.mProduct)
         {
-            view->mMeshes.push_back({ s.mId, s.mOrigin, s.mMin, s.mMax, s.mProduct, s.mRooms, s.mWind });
+            view->mMeshes.push_back({ s.mId, s.mOrigin, s.mMin, s.mMax, s.mProduct, s.mRooms, s.mRoomGraph, s.mWind });
         }
     }
     mView = view;
@@ -1285,6 +1445,20 @@ std::string SKNavRooms::statsLine() const
     {
         space_stages += llformat("%s%s %.0f", s ? ", " : "", SpacesPass::stageName(s), mLastSpaceStageMs[s]);
     }
+    U32 rooms = 0, truncated = 0;
+    size_t room_bytes = 0;
+    for (const auto& entry : mMeshes)
+    {
+        if (entry.second.mRoomGraph)
+        {
+            rooms += static_cast<U32>(entry.second.mRoomGraph->mRooms.size());
+            room_bytes += entry.second.mRoomGraph->bytes();
+            for (const Room& r : entry.second.mRoomGraph->mRooms)
+            {
+                truncated += r.mTruncated ? 1 : 0;
+            }
+        }
+    }
     U32 winds = 0;
     size_t wind_bytes = 0;
     for (const auto& entry : mMeshes)
@@ -1295,11 +1469,14 @@ std::string SKNavRooms::statsLine() const
             wind_bytes += entry.second.mWind->bytes();
         }
     }
-    return llformat("enclosure: %u meshes, %u passes (%u repairs, %u keeping their spaces, %u dropped, %u running), last %.0f ms on the thread (%s, %u tiles answered), %.0f ms posted to landed, unknown %.1f%% and sealed %.1f%% of %llu gaps; %u spaces and %u portals, last %.0f ms (%s); wind slabs over %u meshes, %.1f MB, %u builds, last %.0f ms for %.1f MB",
+    return llformat("enclosure: %u meshes, %u passes (%u repairs, %u keeping their spaces, %u dropped, %u running), last %.0f ms on the thread (%s, %u tiles answered), %.0f ms posted to landed, unknown %.1f%% and sealed %.1f%% of %llu gaps; %u spaces and %u portals, last %.0f ms (%s); "
+                    "rooms %u (truncated %u), %.1f KB, graph %.1f ms view air %llu wind %llu; "
+                    "wind slabs over %u meshes, %.1f MB, %u builds, last %.0f ms for %.1f MB",
                     meshes, mPasses, mRepairs, mSpacesKept, mCancelled, in_flight, mLastMs, stages.c_str(), mLastAnswered, mLastWallMs,
                     gaps ? 100.0 * unknown / gaps : 0.0, gaps ? 100.0 * sealed / gaps : 0.0, static_cast<unsigned long long>(gaps), spaces,
-                    portals, mLastSpacesMs, space_stages.c_str(), winds, wind_bytes / 1048576.0, mWindPasses, mLastWindMs,
-                    mLastWindBytes / 1048576.0);
+                    portals, mLastSpacesMs, space_stages.c_str(), rooms, truncated, room_bytes / 1024.0, mLastRoomGraphMs,
+                    static_cast<unsigned long long>(mViewAirRevision), static_cast<unsigned long long>(mViewWindRevision), winds,
+                    wind_bytes / 1048576.0, mWindPasses, mLastWindMs, mLastWindBytes / 1048576.0);
 }
 
 void SKNavRooms::gatherSpaces(SKNavOverlayGeom& geom, const LLVector3d& camera, F64 reach, bool opaque,
@@ -1507,7 +1684,7 @@ bool SKNavRooms::swapAir(const LLUUID& mesh, const AirSwap& swap, EnclosureProdu
     state.mRooms = withTileAir(*state.mRooms, swap);
     enclosure = state.mProduct;
     rooms = state.mRooms;
-    mViewDirty = true;
+    mViewAirDirty = true;
     return true;
 }
 

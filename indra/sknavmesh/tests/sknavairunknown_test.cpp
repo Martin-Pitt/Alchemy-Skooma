@@ -54,20 +54,24 @@ namespace
         return s;
     }
 
-    /// One 32 m tile's metre tops, every column holding the given interval in air units.
-    TileAir tops(U16 bottom, U16 top)
+    /// One 32 m tile's metre tops, every column holding the given interval in air units, or none.
+    TileAir tops(U16 bottom, U16 top, bool solid = true)
     {
         TileAir air;
         air.mCell = CELL;
         air.mUnit = UNIT;
-        air.mTopCell = static_cast<S32>(1.f / CELL);
-        air.mTopWidth = air.mTopHeight = 32;
-        air.mTopStart.assign(32 * 32 + 1, 0);
-        for (S32 c = 0; c < 32 * 32; ++c)
+        auto t = std::make_shared<TileTops>();
+        t->mCell = CELL;
+        t->mUnit = UNIT;
+        t->mTopCell = static_cast<S32>(1.f / CELL);
+        t->mTopWidth = t->mTopHeight = 32;
+        t->mTopStart.assign(32 * 32 + 1, 0);
+        for (S32 c = 0; c < 32 * 32 && solid; ++c)
         {
-            air.mTop.push_back({ bottom, top });
-            air.mTopStart[c + 1] = static_cast<U32>(air.mTop.size());
+            t->mTop.push_back({ bottom, top });
+            t->mTopStart[c + 1] = static_cast<U32>(t->mTop.size());
         }
+        air.mTops = t;
         return air;
     }
 }
@@ -138,9 +142,7 @@ TEST_CASE("sknavairunknown: the sky map reads air no tile published as not open,
     CHECK_FALSE(sky.skyOpenAt(LLVector3d(37.0, 5.0, 1.0)));
 
     // A tile that saw no solid at all is known open air.
-    TileAir empty = tops(0, 0);
-    empty.mTop.clear();
-    empty.mTopStart.assign(32 * 32 + 1, 0);
+    const TileAir empty = tops(0, 0, false);
     sky.set(2, LLVector3d(32.0, 0.0, -1.0), empty);
     CHECK(sky.has(2));
     CHECK(sky.skyOpenAt(LLVector3d(37.0, 5.0, 1.0)));

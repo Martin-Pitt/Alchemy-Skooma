@@ -65,8 +65,6 @@ namespace
     constexpr F32 ROOF_COVERS_SHARE = 0.25f;    ///< a roof covers a space it lies over this much of
     constexpr F32 UNDER_FLIGHT_SHARE = 0.3f;    ///< a space this much under an outdoor flight's air is sheltered by it
     constexpr F32 UNDER_FLIGHT_REACH_M = 2.f;   ///< and opens onto ground this far off across low headroom
-    constexpr F32 RASTER_XY_M = 0.5f;
-    constexpr F32 RASTER_Z_M = 1.f;
     constexpr U32 STAIR_RUN_EDGES = 3;
     constexpr F32 WALL_END_REACH = 2.5f;    ///< facing wall ends this many agent heights apart may hold a cut
     constexpr F32 WALL_END_RUN_M = 0.5f;    ///< a wall runs this far behind its end, or it is a post
@@ -6851,4 +6849,13 @@ namespace sknav
         }
         return draw;
     }
+}
+
+sknav::PlanCell sknav::rasterCell(U64 key)
+{
+    PlanCell c;
+    c.mX = (static_cast<S64>((key >> 42) & 0x1fffff) - (1ll << 20)) * RASTER_XY_M;
+    c.mY = (static_cast<S64>((key >> 21) & 0x1fffff) - (1ll << 20)) * RASTER_XY_M;
+    c.mZ = (static_cast<S64>(key & 0x1fffff) - (1ll << 20)) * RASTER_Z_M;
+    return c;
 }

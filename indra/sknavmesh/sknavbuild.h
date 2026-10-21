@@ -149,6 +149,8 @@ namespace sknav
         /// Without mAir, the air at COARSE_AIR_M in this tile's cells: enough
         /// for the spaces the tile is stamped with, wherever it is.
         bool mCoarseAir = false;
+        /// The raster keeps its solid raster, so an edit can update it (updateTile).
+        bool mHoldSolid = false;
         /// With mAir, the air again at half the cell over the blocks with narrow openings (sknavairfine.h), measured only.
         bool mFineAir = false;
     };
@@ -221,6 +223,24 @@ namespace sknav
         void operator()(rcCompactHeightfield* chf) const;
     };
 
+    /// The solid raster as rasterised, filled and cut, before anything reads
+    /// across columns, and what it was rasterised from: what an edit's cells
+    /// are spliced into, so only they are rasterised again.
+    struct SolidRaster
+    {
+        S32 mWidth = 0;
+        S32 mHeight = 0;
+        std::vector<U32> mStart;    ///< per column, where its spans begin; columns + 1
+        std::vector<U32> mSpans;    ///< smin, smax and area packed (packSpan), lowest first
+        TileBuildInput mInput;      ///< records included
+        /// Per record in soup order, null for the land, its triangles in the raster's soup.
+        std::vector<std::pair<RecordPtr, U32>> mRuns;
+        std::vector<U8> mCodes;     ///< per triangle of the raster's soup
+
+        static U32 packSpan(U32 smin, U32 smax, U32 area) { return smin | smax << 13 | area << 26; }
+        size_t bytes() const;
+    };
+
     /// What a tile's polygons are built from, once its raster is done: AVATAR's
     /// compact heightfield after erosion, its areas still the partition's codes,
     /// and what classifyEdges reads of AVATAR's view of the solid raster. Held
@@ -235,6 +255,8 @@ namespace sknav
         /// Per span of mChf, its gap in mAir's mGaps (spanGaps), empty with no air.
         std::vector<U32> mSpanGap;
         std::weak_ptr<const TileAir> mAir;
+        /// The solid raster, when the input asked for it to be held.
+        std::shared_ptr<const SolidRaster> mSolid;
 
         size_t chfBytes() const;
         size_t bytes() const;
@@ -261,6 +283,40 @@ namespace sknav
     /// two spaces, and the result's mStamp says which component each poly is.
     void polygoniseTile(const TileBuildInput& input, const TileRaster& raster, TileBuildResult& result, TileBuildStats* stats = nullptr,
                         const TileStampInput* stamp_input = nullptr, const TileStamp* stamp = nullptr);
+
+    /// Which way an update took: its window spliced into the held raster, or
+    /// the whole tile, and why.
+    enum class UpdatePath : U8
+    {
+        LOCAL,          ///< the edited records' cells rasterised, the rest from the held raster
+        NO_SOLID,       ///< the held raster keeps no solid raster to splice into
+        Z_RANGE,        ///< the tile's z range moved, and with it every span
+        SETTINGS,       ///< something other than the records moved
+        ORDER,          ///< the records that stayed changed order or triangles
+        CODES,          ///< the partition coded a triangle that stayed differently
+        EMPTY,          ///< nothing left to rasterise
+    };
+    const char* updatePathName(UpdatePath path);
+
+    struct TileUpdate
+    {
+        UpdatePath mPath = UpdatePath::NO_SOLID;
+        S32 mWindow[4] = { 0, 0, 0, 0 };    ///< raster cells rasterised again, x0 z0 x1 z1, half-open
+        U32 mWindowCells = 0;
+        U32 mChanged = 0;                   ///< records and cuts in only one of the inputs
+    };
+
+    /// The raster stage for an input whose records moved, given the raster
+    /// built before: only the cells the moved records touch are rasterised,
+    /// and every stage after the solid raster runs over the whole tile, so the
+    /// result is the one rasteriseTile makes. Anything else rasterises the
+    /// whole tile; update says which way it went.
+    TileRasterPtr updateTile(const TileBuildInput& input, const TileRaster& held, TileBuildResult& result, TileBuildStats* stats = nullptr,
+                             TileUpdate* update = nullptr);
+
+    /// Whether two rasters hold the same compact heightfield, edges, codes,
+    /// flights and span gaps; why names the first difference. For tests and tools.
+    bool sameRaster(const TileRaster& a, const TileRaster& b, std::string* why = nullptr);
 
     /// Run the pipeline: both stages. Safe on any thread; touches nothing but
     /// the input and, when given, the stats it measures itself into.

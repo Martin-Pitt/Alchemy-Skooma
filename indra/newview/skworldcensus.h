@@ -34,10 +34,12 @@
 
 class SKPhysicsHavokShape;
 
+#include <boost/signals2/connection.hpp>
 #include <future>
 #include <map>
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 class LLViewerObject;
@@ -63,6 +65,8 @@ struct SKCensusSnapshot
     struct Stats
     {
         U32 mObjectsSeen = 0;
+        U32 mDirtyVisited = 0;      ///< objects an update, a feature change or a pending state named for this scan
+        bool mFullSweep = false;    ///< the scan visited the whole object list rather than the dirty set
         U32 mRecords = 0;
         U32 mDynamic = 0;
         U32 mSurround = 0;
@@ -101,6 +105,10 @@ public:
     /// Once per frame after objects have moved. Does nothing unless the
     /// navmesh is enabled and something wants a census (a demand, or the overlay).
     void update();
+    /// The object-update path saw an object made or changed; main thread only.
+    void noteObjectUpdate(LLViewerObject* object);
+    /// An object is about to be killed, its parent still known; main thread only.
+    void noteObjectGone(LLViewerObject* object);
 
     /// The last completed scan, or null before the first.
     SKCensusSnapshotPtr snapshot() const { return mSnapshot; }
@@ -155,6 +163,18 @@ private:
         std::shared_ptr<const SKPhysicsHavokShape> mSim;
         LLUUID mSimMesh;
         F64 mLastSeen = 0.f;
+        /// What the part's last visit took, which a scan that does not visit it takes again.
+        std::vector<sknav::RecordPtr> mTaken;
+        sknav::FeaturePart mFeature;
+        bool mHasFeature = false;
+        LLVector3 mLeafPos;
+        LLQuaternion mLeafRot;
+        U64 mLeafRegion = 0;
+        bool mHasLeaf = false;
+        bool mFromObjectCache = false;
+        LLVector3d mReachCenter;    ///< the range test of its last visit, so a re-take leaves range as a visit would
+        F64 mReachPad = 0.0;
+        U32 mVisitedScan = 0;
     };
 
     struct Rest
@@ -231,6 +251,49 @@ private:
 
     SKCensusSnapshotPtr mSnapshot;
     Scan mScan;
+    // The dirty set: what a scan that is not a full sweep visits; the rest it takes again from mParts.
+    /// Whether the census is running, so an update has a scan to reach.
+    bool running() const;
+    /// The scan's live objects: the dirty set, or the whole list on a full sweep.
+    void gatherObjects();
+    /// What gatherObjects decided, collected: at once for a full sweep, once its cadence allows for a dirty scan.
+    void gatherNow();
+    /// The object and the linkset parts its change reaches.
+    void dirtyLinkset(LLViewerObject* object);
+    /// A part's server name arrived, which the door rules read and no object update announces.
+    void onPropertiesChanged(const LLUUID& id);
+    /// A visit, remembering what it took so a later scan can take it again.
+    void visitTracked(LLViewerObject* object);
+    void visitCachedTracked(const CachedPart& part);
+    /// Whether a visited part waits on something no update announces, and so is visited again next scan.
+    bool pending(LLViewerObject* object, const PartCache& cache) const;
+    /// Whether a scan that did not visit the part would take it again.
+    bool retakes(const LLUUID& id, const PartCache& cache) const;
+    /// Every part not visited this scan, from its cache, under the budget; false when out of time.
+    bool retake(LLTimer& timer, F32 budget_ms);
+    std::unordered_set<LLUUID> mDirty;
+    std::unordered_set<LLUUID> mGone;
+    boost::signals2::scoped_connection mPropertiesConn;
+    std::unordered_set<LLUUID> mScanDirty;      ///< the dirty set this scan began with
+    bool mScanFull = false;
+    U32 mScanSerial = 0;
+    U32 mScanMissed = 0;                        ///< parts a full sweep found changed that a re-take would have kept
+    U32 mPendingQueued = 0;                     ///< parts the last scan queued again for the next
+    bool mRetaking = false;
+    std::unordered_map<LLUUID, PartCache>::const_iterator mRetakeAt;
+    size_t mRetakeSize = 0;
+    F64 mScanBegan = 0.0;
+    const char* mScanWhy = "-";
+    bool mScanGathered = false;
+    F64 mScanGatherAt = 0.0;
+    F64 mLastGather = -1.0e9;
+    bool mForceSweep = true;
+    F64 mSweepBegan = -1.0e9;                   ///< when the last completed full sweep began
+    LLVector3d mSweepCenter;
+    LLVector3d mSweepCamera;
+    F64 mSweepRange = 0.0;
+    std::vector<U64> mSweepRegions;
+    F64 mLastScanLog = 0.0;
     // Only one job in flight; no new scan until its snapshot is published or discarded.
     std::unique_ptr<LL::ThreadPool> mClusterWorkers;
     std::future<std::shared_ptr<SKCensusSnapshot>> mClusterJob;

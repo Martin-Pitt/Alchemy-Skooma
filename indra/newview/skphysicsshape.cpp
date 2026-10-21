@@ -34,6 +34,7 @@
 #include "skmeshhavokshape.h"
 
 #include <algorithm>
+#include <unordered_map>
 
 namespace
 {
@@ -103,36 +104,124 @@ bool skPhysicsShapeClassify(LLVOVolume* volume, SKPhysicsShape& out)
 
 namespace
 {
-    // Relative weights in the order Havok's collision work grows: analytic
-    // shapes first, a hull by its vertices, a triangle mesh by its triangles.
-    constexpr F32 SPHERE_COST = 1.f;
-    constexpr F32 BOX_COST = 1.5f;
-    constexpr F32 CYLINDER_COST = 2.5f;
-    constexpr F32 HULL_BASE_COST = 3.f;
-    constexpr F32 HULL_VERTICES_PER_COST = 16.f;
-    constexpr S32 HULL_UNKNOWN_VERTICES = 32;
-    constexpr F32 MESH_BASE_COST = 4.f;
-    constexpr F32 MESH_TRIANGLE_COST = 0.05f;
+    // Fitted to the server's physics weight (GetObjectCost) over 24k objects.
+    // The server charges every analytic shape 0.1; the steps keep Havok's order visible on the ramp.
+    constexpr F32 SPHERE_COST = 0.1f;
+    constexpr F32 BOX_COST = 0.15f;
+    constexpr F32 CYLINDER_COST = 0.2f;
+    // The server charges a hull 0.04 a vertex plus one, and a decomposition the sum with no floor per hull.
+    constexpr F32 HULL_VERTEX_COST = 0.04f;
+    constexpr F32 HULL_MIN_COST = 0.2f;
+    constexpr S32 HULL_UNKNOWN_VERTICES = 8;
+    constexpr F32 PRIM_HULL_BASE_COST = 0.28f;
+    constexpr F32 PRIM_HULL_VERTEX_COST = 0.01f;
+    constexpr S32 PRIM_HULL_UNKNOWN_VERTICES = 8;
+    constexpr F32 MESH_MIN_COST = 0.5f;
 
     F32 hullCost(S32 vertices)
     {
-        return HULL_BASE_COST + llclamp(vertices, 4, 256) / HULL_VERTICES_PER_COST;
+        return HULL_VERTEX_COST * (F32)(vertices + 1);
     }
 
-    // Small triangles packed densely cost more per triangle than a few large ones.
-    F32 meshCost(size_t triangles, const LLVector3& scale)
+    constexpr F32 MESH_TRIANGLE_COST = 0.05f;
+    constexpr F32 MESH_MIN_WIDTH = 0.001f;
+    constexpr F32 MESH_MAX_WIDTH = 20.f;
+
+    // A triangle mesh, uploaded or a prim's, by the published formula (wiki Mesh/Mesh_physics):
+    // 0.05 x triangles / their harmonic mean width, so a 0.5 m triangle costs 0.1. Narrow
+    // triangles are real collision work. For prims the server instead charges thinness (about
+    // smallest^-0.5 x largest^0.5, the same at any uniform scale); the heatmap keeps the width.
+    // Sums one triangle into a mesh's count and inverse widths. A collapsed triangle is no
+    // collision work: it is skipped rather than charged as the narrowest width.
+    void addTriangle(const LLVector3& p0, const LLVector3& p1, const LLVector3& p2, const LLVector3& scale,
+                     size_t& count, F32& inverse_widths)
     {
-        const F32 area = llmax(2.f * (scale[0] * scale[1] + scale[1] * scale[2] + scale[2] * scale[0]), 0.01f);
-        const F32 density = (F32)triangles / area;
-        return MESH_BASE_COST + MESH_TRIANGLE_COST * (F32)triangles * (1.f + log2f(1.f + density));
+        const LLVector3 a = p0.scaledVec(scale);
+        const LLVector3 b = p1.scaledVec(scale);
+        const LLVector3 c = p2.scaledVec(scale);
+        const F32 longest = llmax((b - a).length(), (c - b).length(), (a - c).length());
+        // The triangle's height over its longest side: the narrow side of its enclosing rectangle.
+        const F32 width = longest > 0.f ? ((b - a) % (c - a)).length() / longest : 0.f;
+        if (width <= 0.f)
+        {
+            return;
+        }
+        ++count;
+        inverse_widths += 1.f / width;
+    }
+
+    F32 meshCostFrom(size_t count, F32 inverse_widths)
+    {
+        if (count == 0)
+        {
+            return MESH_MIN_COST;
+        }
+        const F32 width = llclamp((F32)count / inverse_widths, MESH_MIN_WIDTH, MESH_MAX_WIDTH);
+        return llmax(MESH_MIN_COST, MESH_TRIANGLE_COST * (F32)count / width);
+    }
+
+    F32 meshCost(const std::vector<LLVector3>& tris, const LLVector3& scale)
+    {
+        size_t count = 0;
+        F32 inverse_widths = 0.f;
+        for (size_t i = 0; i + 2 < tris.size(); i += 3)
+        {
+            addTriangle(tris[i], tris[i + 1], tris[i + 2], scale, count, inverse_widths);
+        }
+        return meshCostFrom(count, inverse_widths);
+    }
+
+    F32 meshCost(const LLVolume* volume, const LLVector3& scale)
+    {
+        size_t count = 0;
+        F32 inverse_widths = 0.f;
+        for (S32 f = 0; f < volume->getNumVolumeFaces(); ++f)
+        {
+            const LLVolumeFace& face = volume->getVolumeFace(f);
+            if (!face.mPositions || !face.mIndices)
+            {
+                continue;
+            }
+            for (S32 i = 0; i + 2 < face.mNumIndices; i += 3)
+            {
+                addTriangle(LLVector3(face.mPositions[face.mIndices[i]].getF32ptr()),
+                            LLVector3(face.mPositions[face.mIndices[i + 1]].getF32ptr()),
+                            LLVector3(face.mPositions[face.mIndices[i + 2]].getF32ptr()), scale, count, inverse_widths);
+            }
+        }
+        return meshCostFrom(count, inverse_widths);
+    }
+
+    // The overlay asks every frame; a triangle walk is redone only when its source or the scale changes.
+    struct CachedMeshCost
+    {
+        const void* mSource = nullptr;
+        size_t mSize = 0;
+        LLVector3 mScale;
+        F32 mCost = 0.f;
+    };
+
+    template <typename Compute>
+    F32 cachedMeshCost(const LLUUID& id, const void* source, size_t size, const LLVector3& scale, Compute compute)
+    {
+        static std::unordered_map<LLUUID, CachedMeshCost> cache;
+        CachedMeshCost& entry = cache[id];
+        if (entry.mSource != source || entry.mSize != size || entry.mScale != scale)
+        {
+            entry.mSource = source;
+            entry.mSize = size;
+            entry.mScale = scale;
+            entry.mCost = compute();
+        }
+        return entry.mCost;
     }
 
     F32 primHullCost(LLVOVolume* volume)
     {
         LLVolume* phys = LLPrimitive::sVolumeManager->refVolume(volume->getVolume()->getParams(), physicsDetail(volume->getScale()));
-        const S32 points = phys && phys->mHullPoints ? phys->mNumHullPoints : HULL_UNKNOWN_VERTICES;
+        const S32 points = phys && phys->mHullPoints ? phys->mNumHullPoints : PRIM_HULL_UNKNOWN_VERTICES;
         LLPrimitive::sVolumeManager->unrefVolume(phys);
-        return hullCost(points);
+        return PRIM_HULL_BASE_COST + PRIM_HULL_VERTEX_COST * (F32)points;
     }
 
     F32 baseHullCost(const LLModel::Decomposition* decomp)
@@ -156,13 +245,14 @@ F32 skPhysicsShapeCost(LLVOVolume* volume, const SKPhysicsShape& shape)
         case Spec::PRIM_MESH:
         {
             LLVolume* phys = LLPrimitive::sVolumeManager->refVolume(volume->getVolume()->getParams(), physicsDetail(scale));
-            size_t triangles = 0;
-            for (S32 f = 0; phys && f < phys->getNumVolumeFaces(); ++f)
+            F32 cost = MESH_MIN_COST;
+            if (phys)
             {
-                triangles += phys->getVolumeFace(f).mNumIndices / 3;
+                cost = cachedMeshCost(volume->getID(), phys, (size_t)phys->getNumVolumeFaces(), scale,
+                                      [&] { return meshCost(phys, scale); });
             }
             LLPrimitive::sVolumeManager->unrefVolume(phys);
-            return meshCost(triangles, scale);
+            return cost;
         }
         case Spec::USER_MESH:
         {
@@ -170,11 +260,14 @@ F32 skPhysicsShapeCost(LLVOVolume* volume, const SKPhysicsShape& shape)
             const LLModel::Decomposition* decomp = gMeshRepo.getDecomposition(mesh_id);
             if (std::shared_ptr<const SKPhysicsHavokShape> sim = skPhysicsShapeSimTriangles(volume))
             {
-                return meshCost(sim->mTriangles.size() / 3, scale);
+                return cachedMeshCost(volume->getID(), sim.get(), sim->mTriangles.size(), scale,
+                                      [&] { return meshCost(sim->mTriangles, scale); });
             }
             if (decomp && !decomp->mPhysicsShapeMesh.empty() && !skPhysicsMeshTooSmallForTriangles(volume))
             {
-                return meshCost(decomp->mPhysicsShapeMesh.mPositions.size() / 3, scale);
+                const std::vector<LLVector3>& positions = decomp->mPhysicsShapeMesh.mPositions;
+                return cachedMeshCost(volume->getID(), positions.data(), positions.size(), scale,
+                                      [&] { return meshCost(positions, scale); });
             }
             if (decomp && !decomp->mHull.empty())
             {
@@ -183,7 +276,7 @@ F32 skPhysicsShapeCost(LLVOVolume* volume, const SKPhysicsShape& shape)
                 {
                     cost += hullCost((S32)hull.size());
                 }
-                return cost;
+                return llmax(HULL_MIN_COST, cost);
             }
             return baseHullCost(decomp);
         }
@@ -198,8 +291,8 @@ F32 skPhysicsShapeCost(LLVOVolume* volume, const SKPhysicsShape& shape)
 
 F32 skPhysicsShapeCostFraction(F32 cost)
 {
-    // Logarithmic over [1, 1000], so every shape type gets its own band of the ramp.
-    return llclamp(log10f(llmax(cost, 1.f)) / 3.f, 0.f, 1.f);
+    // Logarithmic over [0.1, 100] physics weight: analytic shapes at the bottom, hulls low, meshes above.
+    return llclamp(log10f(llmax(cost, 0.1f) / 0.1f) / 3.f, 0.f, 1.f);
 }
 
 bool skPhysicsMeshTooSmallForTriangles(LLVOVolume* volume)

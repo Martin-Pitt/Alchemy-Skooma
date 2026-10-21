@@ -179,7 +179,7 @@ namespace sknav_test
             for (size_t i = 0; i < in.mTiles.size(); ++i)
             {
                 const EnclosureInput::Tile& t = in.mTiles[i];
-                TileAir tops;
+                TileTops tops;
                 tops.mCell = CELL;
                 tops.mUnit = UNIT;
                 tops.mTopCell = static_cast<S32>(1.f / CELL);

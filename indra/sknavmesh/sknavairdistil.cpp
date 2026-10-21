@@ -107,10 +107,23 @@ namespace
 
 namespace sknav
 {
+    std::atomic<size_t> gAirLiveBytes{ 0 };
+    std::atomic<size_t> gAirTopsBytes{ 0 };
+
+    size_t TileTops::bytes() const
+    {
+        return sizeof(TileTops) + mTopStart.capacity() * sizeof(U32) + mTop.capacity() * sizeof(TopInterval);
+    }
+
+    const TileTopsPtr& noTops()
+    {
+        static const TileTopsPtr none = std::make_shared<const TileTops>();
+        return none;
+    }
+
     size_t TileAir::bytes() const
     {
         size_t n = sizeof(TileAir) + mLeaves.capacity() * sizeof(AirLeaf) + mGaps.capacity() * sizeof(AirGap) +
-                   mTopStart.capacity() * sizeof(U32) + mTop.capacity() * sizeof(TopInterval) +
                    mFaceOffsets.capacity() * sizeof(FaceOffset);
         for (const SeamStrip& s : mSeams)
         {
@@ -828,15 +841,19 @@ namespace sknav
         // Recast (x, y, z) is SL (y, z, x), as in extractAir.
         const S32 w = std::max(0, hf.height - 2 * border_cells), h = std::max(0, hf.width - 2 * border_cells);
         const S32 c = std::max(1, cells_per_top);
-        out.mTopCell = c;
-        out.mTopWidth = (w + c - 1) / c;
-        out.mTopHeight = (h + c - 1) / c;
-        out.mTopStart.assign(static_cast<size_t>(out.mTopWidth) * out.mTopHeight + 1, 0);
-        out.mTop.clear();
+        auto made = std::make_shared<TileTops>();
+        TileTops& tops = *made;
+        tops.mOrigin = out.mOrigin;
+        tops.mCell = out.mCell;
+        tops.mUnit = out.mUnit;
+        tops.mTopCell = c;
+        tops.mTopWidth = (w + c - 1) / c;
+        tops.mTopHeight = (h + c - 1) / c;
+        tops.mTopStart.assign(static_cast<size_t>(tops.mTopWidth) * tops.mTopHeight + 1, 0);
         std::vector<TopInterval> runs;
-        for (S32 ty = 0; ty < out.mTopHeight; ++ty)
+        for (S32 ty = 0; ty < tops.mTopHeight; ++ty)
         {
-            for (S32 tx = 0; tx < out.mTopWidth; ++tx)
+            for (S32 tx = 0; tx < tops.mTopWidth; ++tx)
             {
                 runs.clear();
                 for (S32 iy = ty * c; iy < std::min(h, (ty + 1) * c); ++iy)
@@ -850,21 +867,23 @@ namespace sknav
                     }
                 }
                 std::sort(runs.begin(), runs.end(), [](const TopInterval& a, const TopInterval& b) { return a.mBottom < b.mBottom; });
-                const size_t first = out.mTop.size();
+                const size_t first = tops.mTop.size();
                 for (const TopInterval& r : runs)
                 {
-                    if (out.mTop.size() > first && r.mBottom <= out.mTop.back().mTop)
+                    if (tops.mTop.size() > first && r.mBottom <= tops.mTop.back().mTop)
                     {
-                        out.mTop.back().mTop = std::max(out.mTop.back().mTop, r.mTop);
+                        tops.mTop.back().mTop = std::max(tops.mTop.back().mTop, r.mTop);
                     }
                     else
                     {
-                        out.mTop.push_back(r);
+                        tops.mTop.push_back(r);
                     }
                 }
-                out.mTopStart[tx + ty * out.mTopWidth + 1] = static_cast<U32>(out.mTop.size());
+                tops.mTopStart[tx + ty * tops.mTopWidth + 1] = static_cast<U32>(tops.mTop.size());
             }
         }
+        tops.countLive();
+        out.mTops = std::move(made);
     }
 
     TileAirPtr buildTileAir(const rcHeightfield& hf, S32 border_cells, S32 pad_cells, S32 climb, S32 overlap, S32 min_gap,
@@ -927,6 +946,7 @@ namespace sknav
         {
             *fine = std::move(grid);
         }
+        air->countLive();
         return air;
     }
 
@@ -1065,15 +1085,23 @@ namespace sknav
                 strip.mStart.push_back(static_cast<U32>(strip.mGaps.size()));
             }
         }
-        out->mTopCell = coarse.mTopCell * f;
-        out->mTopWidth = coarse.mTopWidth;
-        out->mTopHeight = coarse.mTopHeight;
-        out->mTopStart = coarse.mTopStart;
-        out->mTop.reserve(coarse.mTop.size());
-        for (const TopInterval& t : coarse.mTop)
+        const TileTops& from = *coarse.mTops;
+        auto tops = std::make_shared<TileTops>();
+        tops->mOrigin = out->mOrigin;
+        tops->mCell = out->mCell;
+        tops->mUnit = out->mUnit;
+        tops->mTopCell = from.mTopCell * f;
+        tops->mTopWidth = from.mTopWidth;
+        tops->mTopHeight = from.mTopHeight;
+        tops->mTopStart = from.mTopStart;
+        tops->mTop.reserve(from.mTop.size());
+        for (const TopInterval& t : from.mTop)
         {
-            out->mTop.push_back({ scale(t.mBottom), scale(t.mTop) });
+            tops->mTop.push_back({ scale(t.mBottom), scale(t.mTop) });
         }
+        tops->countLive();
+        out->mTops = std::move(tops);
+        out->countLive();
         return out;
     }
 
@@ -1113,7 +1141,7 @@ namespace sknav
     std::vector<U8> packTileAir(const TileAir& air)
     {
         std::vector<U8> out;
-        out.reserve(air.mLeaves.size() * 12 + air.mGaps.size() * 8 + air.mTop.size() * 4);
+        out.reserve(air.mLeaves.size() * 12 + air.mGaps.size() * 8 + air.mTops->mTop.size() * 4);
         for (const AirLeaf& l : air.mLeaves)
         {
             put<U16>(out, l.mX);
@@ -1138,11 +1166,11 @@ namespace sknav
                 putGap(out, g);
             }
         }
-        for (U32 v : air.mTopStart)
+        for (U32 v : air.mTops->mTopStart)
         {
             put<U32>(out, v);
         }
-        for (const TopInterval& t : air.mTop)
+        for (const TopInterval& t : air.mTops->mTop)
         {
             put<U16>(out, t.mBottom);
             put<U16>(out, t.mTop);
@@ -1169,7 +1197,7 @@ namespace sknav
             o << ",[\"" << names[s] << "_start\",\"start\"," << air.mSeams[s].mStart.size() << "],[\"" << names[s] << "\",\"gap\","
               << air.mSeams[s].mGaps.size() << "]";
         }
-        o << ",[\"top_start\",\"start\"," << air.mTopStart.size() << "],[\"top\",\"top\"," << air.mTop.size() << "],[\"face_offsets\",\"face\","
+        o << ",[\"top_start\",\"start\"," << air.mTops->mTopStart.size() << "],[\"top\",\"top\"," << air.mTops->mTop.size() << "],[\"face_offsets\",\"face\","
           << air.mFaceOffsets.size() << "]]}";
         return o.str();
     }

@@ -318,6 +318,9 @@ public:
         size_t mRasterBytes = 0;
         U32 mRasterEvicted = 0;     ///< rasters dropped for the budget or past the radius
         U32 mReRasters = 0;         ///< builds of tiles whose raster had been dropped
+        U32 mLocalUpdates = 0;      ///< builds that rasterised only an edit's cells into the held raster (updateTile)
+        U32 mUpdateFallbacks = 0;   ///< builds with a held raster that rasterised the whole tile all the same
+        F32 mLastUpdateMs = 0.f;    ///< the raster stage of the last local update
         U32 mStamps = 0;            ///< stamped tiles published
         U32 mStampLoads = 0;        ///< of those, polys found on disk under the stamp's pattern
         U32 mStampReRasters = 0;    ///< of those, rasterised again for want of a held raster
@@ -535,7 +538,7 @@ private:
     std::future<std::shared_ptr<std::vector<AirCandidate>>> mEvictionJob;
     std::shared_ptr<std::vector<AirCandidate>> mPendingEvictions;
     size_t mNextEviction = 0;
-    struct SkyContributor { LLVector3d mOrigin; sknav::TileAirPtr mAir; };
+    struct SkyContributor { LLVector3d mOrigin; sknav::TileTopsPtr mTops; };
     std::shared_ptr<std::map<U64, SkyContributor>> mSkyScan;
     U64 mSkyScanRevision = 0;
     bool mSkyScanReady = false, mEvictionScanReady = false;
@@ -570,6 +573,57 @@ private:
     static bool probesDemanded();
     /// Whether a tile builds its air eagerly: near the camera, or under the cluster the agent is in.
     bool inAirRadius(const Tile& tile) const;
+
+public:
+    /// What moved a mesh's air since the rooms pass last drained the list, so it walks only those meshes.
+    struct AirChange
+    {
+        enum Kind : U8 { PUBLISHED, EVICTED, SPILLED, RELOADED, LOST, DROPPED, MESH_GONE };
+        LLUUID mMesh;
+        sknav::TileKey mKey;
+        U64 mAirId = 0;
+        LLVector3d mMin, mMax;
+        Kind mKind = PUBLISHED;
+        bool mWholeMesh = true;     ///< no one tile: mKey, mAirId and the box say nothing
+    };
+    /// Moves the list into out; false when it overflowed since the last drain, so any mesh may have moved.
+    bool drainAirChanges(std::vector<AirChange>& out) const;
+    /// A mesh's air as a rooms pass is posted with, by value, so the pass reads no tile of the navmesh.
+    struct AirSnapshotTile
+    {
+        sknav::TileKey mKey;
+        sknav::TileAirPtr mAir;
+        sknav::TileAirPtr mCoarse;
+        U64 mContributor = 0;
+        LLVector3d mMin, mMax;
+    };
+    struct AirSnapshot
+    {
+        bool mFound = false;
+        LLVector3d mOrigin;
+        U8 mPriority = 3;
+        std::vector<AirSnapshotTile> mTiles;
+    };
+    AirSnapshot airSnapshot(const LLUUID& mesh) const;
+    /// The census the door and lift spans were taken from.
+    U64 featureStamp() const { return mFeatureStamp; }
+
+private:
+    /// What inAirRadius reads, taken once for a pass over many tiles; it answers as the one-argument form does.
+    struct AirReach
+    {
+        LLVector3d mCamera;
+        LLVector3d mAgent;
+        F64 mRadius2 = 0.0;
+        F64 mAgentRadius2 = 0.0;
+        std::vector<std::pair<LLVector3d, LLVector3d>> mBoxes;
+    };
+    AirReach airReach() const;
+    bool inAirRadius(const Tile& tile, const AirReach& reach) const;
+    void noteAirChange(AirChange::Kind kind, const LLUUID& mesh);
+    void noteAirChange(AirChange::Kind kind, const Mesh& mesh, const sknav::TileKey& key, const Tile& tile);
+    mutable std::vector<AirChange> mAirChanges;
+    mutable bool mAirChangesLost = false;
     /// Which mesh the work queues serve first: 0 the agent's region's own
     /// terrain, 1 the terrain of the regions touching it, 2 the clusters
     /// owned by either, 3 everything else. Within a tier the distance orders,
@@ -591,7 +645,6 @@ private:
     /// that one mesh holds the ground, the walls that block it and the floors
     /// that lead off it; anything clear of the ground gets a mesh to itself.
     bool grounded(const sknav::Cluster& cluster) const;
-    static U64 recordSignature(const std::vector<sknav::RecordPtr>& records);
     /// Work out what a tile is built from, note why it moved away from what
     /// was built, and keep the old signature to tell the next move by.
     void reSign(Tile& tile, const std::vector<sknav::RecordPtr>& before, U64 records, U64 terrain, U64 params);
@@ -706,12 +759,12 @@ private:
     bool mDemanding = false;
     bool mPolysOn = false;      ///< polysEnabled() the meshes were built under
     sknav::SkyMap mSkyMap;
-    std::map<U64, sknav::TileAirPtr> mSkyTiles;     ///< what each contributor last gave the sky map
+    std::map<U64, sknav::TileTopsPtr> mSkyTiles;    ///< what each contributor last gave the sky map
     U64 mSkyRevision = 0;
     struct SkyResult
     {
         sknav::SkyMap mMap;
-        std::map<U64, sknav::TileAirPtr> mTiles;
+        std::map<U64, sknav::TileTopsPtr> mTiles;
         U64 mRevision = 0;
     };
     std::future<std::shared_ptr<SkyResult>> mSkyJob;
