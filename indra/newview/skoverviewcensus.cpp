@@ -1542,6 +1542,40 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildBatches(const Jo
     return built;
 }
 
+namespace
+{
+    /// Writes each vertex's linkset id (Group::mId) into the weight channel, which the cut table is read through.
+    void writeGroupIds(LLStrider<F32> ids, U32 total, const std::vector<SKOverviewCensus::Group>& groups)
+    {
+        for (U32 v = 0; v < total; ++v)
+        {
+            ids[v] = 0.f;
+        }
+        for (const SKOverviewCensus::Group& group : groups)
+        {
+            for (U32 c = 0; c < skoverview::NUM_CENSUS_CLASSES; ++c)
+            {
+                const U32 end = llmin(group.mStart[c] + group.mCount[c], total);
+                for (U32 v = llmin(group.mStart[c], end); v < end; ++v)
+                {
+                    ids[v] = (F32)group.mId;
+                }
+            }
+        }
+    }
+
+    /// Whether two builds of a region give its vertices the same linkset ids.
+    bool sameGroupIds(const std::vector<SKOverviewCensus::Group>& a, const std::vector<SKOverviewCensus::Group>& b)
+    {
+        return std::equal(a.begin(), a.end(), b.begin(), b.end(),
+                          [](const SKOverviewCensus::Group& x, const SKOverviewCensus::Group& y)
+                          {
+                              return x.mId == y.mId && std::equal(std::begin(x.mStart), std::end(x.mStart), std::begin(y.mStart)) &&
+                                     std::equal(std::begin(x.mCount), std::end(x.mCount), std::begin(y.mCount));
+                          });
+    }
+}
+
 void SKOverviewCensus::swapIn(Built& built)
 {
     LL_PROFILE_ZONE_SCOPED;
@@ -1573,11 +1607,18 @@ void SKOverviewCensus::swapIn(Built& built)
             LL_PROFILE_ZONE_NAMED("sk census keep buffer");
             batch.mBuffer = std::move(same->mBuffer);
             batch.mCutValues = std::move(same->mCutValues);
+            // A linkset added elsewhere shifts every later id while this region's bytes stay the same.
+            LLStrider<F32> ids;
+            if (!sameGroupIds(same->mGroups, region.mGroups) && batch.mBuffer->getWeightStrider(ids, 0, (S32)total) && ids.get())
+            {
+                writeGroupIds(ids, total, region.mGroups);
+                batch.mBuffer->unmapBuffer();
+            }
         }
         else
         {
             LL_PROFILE_ZONE_NAMED("sk census upload buffer");
-            batch.mBuffer = new LLVertexBuffer(LLVertexBuffer::MAP_VERTEX | LLVertexBuffer::MAP_WEIGHT | LLVertexBuffer::MAP_TEXCOORD0); // weight: the cut height; texcoord0.x: an open part's
+            batch.mBuffer = new LLVertexBuffer(LLVertexBuffer::MAP_VERTEX | LLVertexBuffer::MAP_WEIGHT | LLVertexBuffer::MAP_TEXCOORD0); // weight: the linkset id; texcoord0.x: an open part's
             if (!batch.mBuffer->allocateBuffer(total, 0))
             {
                 LL_WARNS("SKOverview") << "census buffer of " << total << " vertices could not be allocated" << LL_ENDL;
@@ -1594,13 +1635,10 @@ void SKOverviewCensus::swapIn(Built& built)
             {
                 *verts++ = p;
             }
-            LLStrider<F32> cuts;
-            if (batch.mBuffer->getWeightStrider(cuts) && cuts.get())
+            LLStrider<F32> ids;
+            if (batch.mBuffer->getWeightStrider(ids) && ids.get())
             {
-                for (U32 v = 0; v < total; ++v)
-                {
-                    *cuts++ = skoverview::NO_CUT;
-                }
+                writeGroupIds(ids, total, region.mGroups);
             }
             LLStrider<LLVector2> open;
             if (batch.mBuffer->getTexCoord0Strider(open) && open.get())
