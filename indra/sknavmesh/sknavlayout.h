@@ -55,6 +55,9 @@ namespace sknav
     /// A mesh tile's minimum corner, global, z zero.
     LLVector3d meshTileMin(const LLVector3d& origin, const TileKey& key);
 
+    /// What a tile's records are signed by, in whatever order they come: a sum, so two equal parts do not cancel.
+    U64 recordSignature(const std::vector<RecordPtr>& records);
+
     /// Query a TileKey-ordered map without visiting tiles outside the rectangle.
     /// Bounds are inclusive, like overlapsXY: a query on an edge sees both tiles.
     /// The callback must not change the map. Empty coordinate columns are skipped.

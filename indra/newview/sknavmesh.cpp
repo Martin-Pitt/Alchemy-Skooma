@@ -240,6 +240,37 @@ namespace
     }
 }
 
+SKNavMesh::AirReach SKNavMesh::airReach() const
+{
+    static LLCachedControl<F32> radius(gSavedSettings, "SKNavAirRadius", 300.f);
+    static LLCachedControl<F32> agent_radius(gSavedSettings, "SKNavAirAgentRadius", 30.f);
+    AirReach reach;
+    reach.mCamera = gAgent.getPosGlobalFromAgent(LLViewerCamera::getInstance()->getOrigin());
+    reach.mAgent = gAgent.getPositionGlobal();
+    const F64 r = radius, agent_r = agent_radius;
+    reach.mRadius2 = r * r;
+    reach.mAgentRadius2 = agent_r * agent_r;
+    reach.mBoxes = mHomeBoxes;
+    return reach;
+}
+
+bool SKNavMesh::inAirRadius(const Tile& tile, const AirReach& reach) const
+{
+    if (distanceXYSquared(tile.mMin, tile.mMax, reach.mCamera) <= reach.mRadius2
+        || distanceXYSquared(tile.mMin, tile.mMax, reach.mAgent) <= reach.mAgentRadius2)
+    {
+        return true;
+    }
+    for (const auto& box : reach.mBoxes)
+    {
+        if (overlapsXY(box.first, box.second, tile.mMin, tile.mMax))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool SKNavMesh::inAirRadius(const Tile& tile) const
 {
     static LLCachedControl<F32> radius(gSavedSettings, "SKNavAirRadius", 300.f);
@@ -398,6 +429,7 @@ void SKNavMesh::evictAir()
     }
     if (mPendingEvictions)
     {
+        const AirReach reach = airReach();
         LLTimer timer;
         while (mNextEviction < mPendingEvictions->size())
         {
@@ -408,7 +440,7 @@ void SKNavMesh::evictAir()
             const auto found = mesh->second->mTiles.find(candidate.mKey);
             if (found == mesh->second->mTiles.end()) continue;
             Tile& tile = found->second;
-            if (tile.mInFlight || tile.mAir != candidate.mAir || inAirRadius(tile)) continue;
+            if (tile.mInFlight || tile.mAir != candidate.mAir || inAirRadius(tile, reach)) continue;
             const auto cache = diskCache();
             if (cache && tile.mContentKey && !cache->contains(tile.mContentKey))
             {
@@ -1471,19 +1503,6 @@ void SKNavMesh::applyLayouts()
     }
 }
 
-U64 SKNavMesh::recordSignature(const std::vector<RecordPtr>& records)
-{
-    // Order independent: the grid hands the same records back in whatever
-    // order the census scan produced them, and a signature that changes with
-    // that order rebuilds the tile on every scan.
-    U64 h = 0;
-    for (const RecordPtr& r : records)
-    {
-        h ^= mix(SEED, r->mSignature);
-    }
-    return h;
-}
-
 void SKNavMesh::reSign(Tile& tile, const std::vector<RecordPtr>& before, U64 records, U64 terrain, U64 params)
 {
     // The old signatures are what says which input moved: the mixed signature
@@ -2538,9 +2557,10 @@ void SKNavMesh::schedule()
         retireOn(workers, std::move(retired));
     }
     const bool annotating = SKNavAnnotator::instanceExists() && SKNavAnnotator::instance().armed();
+    const AirReach reach = airReach();
     const auto due = [&](const Tile& tile)
     {
-        const bool air_due = tile.mSignature == tile.mBuilt && tile.mAirBuilt != tile.mSignature && inAirRadius(tile);
+        const bool air_due = tile.mSignature == tile.mBuilt && tile.mAirBuilt != tile.mSignature && inAirRadius(tile, reach);
         return !tile.mInFlight && (tile.mSignature != tile.mBuilt || air_due) && !(annotating && tile.mBuilt);
     };
     if (mBuildCandidates)
@@ -2920,6 +2940,7 @@ void SKNavMesh::syncSkyMap()
     mSkyScanReady = true;
     auto seen = mSkyScan;
     auto result = std::make_shared<SkyResult>();
+    // The worker's copy is the sky map's only writer; mSkyMap and the rooms pass's mSky only read the blocks it shares.
     result->mMap = mSkyMap; // SkyMap shares immutable blocks until the worker writes them.
     result->mRevision = mSkyScanRevision;
     auto previous = std::make_shared<std::map<U64, TileTopsPtr>>(mSkyTiles);

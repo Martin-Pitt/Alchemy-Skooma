@@ -60,6 +60,17 @@ namespace sknav
         return LLVector3d(origin.mdV[VX] + key.mX * TILE_M, origin.mdV[VY] + key.mY * TILE_M, 0.0);
     }
 
+    U64 recordSignature(const std::vector<RecordPtr>& records)
+    {
+        // Order free: the grid hands the same records back in whatever order the census scan produced them.
+        U64 h = 0;
+        for (const RecordPtr& r : records)
+        {
+            h += mix(SEED, r->mSignature);
+        }
+        return h;
+    }
+
     bool overlapsXY(const LLVector3d& amin, const LLVector3d& amax, const LLVector3d& bmin, const LLVector3d& bmax)
     {
         return !(amin.mdV[VX] > bmax.mdV[VX] || bmin.mdV[VX] > amax.mdV[VX] || amin.mdV[VY] > bmax.mdV[VY] || bmin.mdV[VY] > amax.mdV[VY]);

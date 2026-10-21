@@ -609,6 +609,17 @@ public:
     U64 featureStamp() const { return mFeatureStamp; }
 
 private:
+    /// What inAirRadius reads, taken once for a pass over many tiles; it answers as the one-argument form does.
+    struct AirReach
+    {
+        LLVector3d mCamera;
+        LLVector3d mAgent;
+        F64 mRadius2 = 0.0;
+        F64 mAgentRadius2 = 0.0;
+        std::vector<std::pair<LLVector3d, LLVector3d>> mBoxes;
+    };
+    AirReach airReach() const;
+    bool inAirRadius(const Tile& tile, const AirReach& reach) const;
     void noteAirChange(AirChange::Kind kind, const LLUUID& mesh);
     void noteAirChange(AirChange::Kind kind, const Mesh& mesh, const sknav::TileKey& key, const Tile& tile);
     mutable std::vector<AirChange> mAirChanges;
@@ -634,7 +645,6 @@ private:
     /// that one mesh holds the ground, the walls that block it and the floors
     /// that lead off it; anything clear of the ground gets a mesh to itself.
     bool grounded(const sknav::Cluster& cluster) const;
-    static U64 recordSignature(const std::vector<sknav::RecordPtr>& records);
     /// Work out what a tile is built from, note why it moved away from what
     /// was built, and keep the old signature to tell the next move by.
     void reSign(Tile& tile, const std::vector<sknav::RecordPtr>& before, U64 records, U64 terrain, U64 params);

@@ -85,6 +85,7 @@ namespace sknav
 
     SkyMap::Block& SkyMap::writable(S64 x, S64 y)
     {
+        // Right only while every other holder of a block reads it: one map writes, its copies only read.
         std::shared_ptr<Block>& b = mBlocks[blockKey(x, y)];
         if (!b)
         {
@@ -94,6 +95,7 @@ namespace sknav
         {
             b = std::make_shared<Block>(*b);    // a snapshot still reads the old one
         }
+        llassert(b.use_count() == 1);
         return *b;
     }
 
