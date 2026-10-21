@@ -1,6 +1,6 @@
 /**
  * @file sknavinvisible.cpp
- * @brief Whether an invisible part stands in for visible geometry or is a barrier of its own.
+ * @brief Whether an invisible part stands in for visible geometry, adds to it, or is a barrier of its own.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Alchemy Viewer Source Code
@@ -27,6 +27,7 @@
 #include "sknavinvisible.h"
 
 #include "llmath.h"
+#include "sknavbuild.h"
 
 #include <algorithm>
 #include <cmath>
@@ -35,12 +36,6 @@ namespace sknav
 {
     namespace
     {
-        struct UV
-        {
-            F32 mU = 0.f;
-            F32 mV = 0.f;
-        };
-
         // Keeps the part of a convex polygon on one side of a plane: n . p <= k, or >= k when !below.
         S32 clipPlane(const LLVector3* in, S32 count, const LLVector3& n, F32 k, bool below, LLVector3* out)
         {
@@ -68,65 +63,206 @@ namespace sknav
             return m;
         }
 
-        // Sets every mask cell whose centre a convex polygon holds, either winding.
-        void fill(const UV* poly, S32 count, const InvisibleFace& face, S32 cells, std::vector<U8>& mask)
+        typedef std::vector<LLVector3> Poly;
+
+        void clip(const Poly& in, const LLVector3& n, F32 k, bool below, Poly& out)
         {
-            if (count < 3)
+            out.resize(in.size() + 1);
+            out.resize(in.size() < 3 ? 0 : clipPlane(in.data(), (S32)in.size(), n, k, below, out.data()));
+        }
+
+        F32 polyArea(const Poly& p)
+        {
+            LLVector3 sum;
+            for (size_t i = 1; i + 1 < p.size(); ++i)
             {
-                return;
+                sum += (p[i] - p[0]) % (p[i + 1] - p[0]);
             }
-            F32 area = 0.f;
-            F32 lo_u = 1e30f, hi_u = -1e30f, lo_v = 1e30f, hi_v = -1e30f;
-            for (S32 i = 0; i < count; ++i)
+            return 0.5f * sum.length();
+        }
+
+        // A convex piece of a colliding neighbour: outward planes, n . p <= k inside, and its bounds.
+        struct Piece
+        {
+            std::vector<std::pair<LLVector3, F32>> mPlanes;
+            LLVector3 mLo{ 1e30f, 1e30f, 1e30f };
+            LLVector3 mHi{ -1e30f, -1e30f, -1e30f };
+            bool mPrism = false;
+        };
+
+        bool overlaps(const LLVector3& lo0, const LLVector3& hi0, const LLVector3& lo1, const LLVector3& hi1)
+        {
+            for (S32 a = 0; a < 3; ++a)
             {
-                const UV& a = poly[i];
-                const UV& b = poly[(i + 1) % count];
-                area += a.mU * b.mV - b.mU * a.mV;
-                lo_u = llmin(lo_u, a.mU);
-                hi_u = llmax(hi_u, a.mU);
-                lo_v = llmin(lo_v, a.mV);
-                hi_v = llmax(hi_v, a.mV);
-            }
-            if (std::fabs(area) <= 1e-12f)
-            {
-                return;
-            }
-            const F32 sign = area > 0.f ? 1.f : -1.f;
-            const F32 du = (face.mMaxU - face.mMinU) / cells;
-            const F32 dv = (face.mMaxV - face.mMinV) / cells;
-            if (du <= 0.f || dv <= 0.f)
-            {
-                return;
-            }
-            const S32 i0 = llclamp((S32)std::floor((lo_u - face.mMinU) / du - 0.5f), 0, cells - 1);
-            const S32 i1 = llclamp((S32)std::ceil((hi_u - face.mMinU) / du - 0.5f), 0, cells - 1);
-            const S32 j0 = llclamp((S32)std::floor((lo_v - face.mMinV) / dv - 0.5f), 0, cells - 1);
-            const S32 j1 = llclamp((S32)std::ceil((hi_v - face.mMinV) / dv - 0.5f), 0, cells - 1);
-            for (S32 j = j0; j <= j1; ++j)
-            {
-                const F32 v = face.mMinV + (j + 0.5f) * dv;
-                for (S32 i = i0; i <= i1; ++i)
+                if (hi0.mV[a] < lo1.mV[a] || lo0.mV[a] > hi1.mV[a])
                 {
-                    const F32 u = face.mMinU + (i + 0.5f) * du;
-                    bool inside = true;
-                    for (S32 e = 0; e < count && inside; ++e)
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // Every plane grown outward, so a face lying on the piece's face is inside it.
+        void grow(Piece& piece, F32 by)
+        {
+            for (auto& plane : piece.mPlanes)
+            {
+                plane.second += by;
+            }
+            piece.mLo -= LLVector3(by, by, by);
+            piece.mHi += LLVector3(by, by, by);
+        }
+
+        // A convex body's distinct planes from its triangles, oriented away from its vertices' mean.
+        Piece bodyPiece(const LLVector3* v, size_t count, const LLVector3& offset, const InvisibleParams& params)
+        {
+            Piece piece;
+            LLVector3 centroid;
+            for (size_t i = 0; i < count; ++i)
+            {
+                centroid += v[i] + offset;
+                update_min_max(piece.mLo, piece.mHi, v[i] + offset);
+            }
+            centroid /= (F32)llmax(count, (size_t)1);
+            for (size_t t = 0; t + 2 < count; t += 3)
+            {
+                const LLVector3 a = v[t] + offset;
+                LLVector3 n = (v[t + 1] - v[t]) % (v[t + 2] - v[t]);
+                const F32 len = n.length();
+                if (len <= 1e-8f)
+                {
+                    continue;
+                }
+                n /= len;
+                F32 k = n * a;
+                if (n * centroid > k)
+                {
+                    n = -n;
+                    k = -k;
+                }
+                bool known = false;
+                for (const auto& plane : piece.mPlanes)
+                {
+                    known = known || (plane.first * n >= params.mCoplanarCos && std::fabs(plane.second - k) <= params.mCoplanarD);
+                }
+                if (!known)
+                {
+                    piece.mPlanes.emplace_back(n, k);
+                }
+            }
+            grow(piece, params.mCoplanarD);
+            return piece;
+        }
+
+        // A triangle extruded mProxyTolerance either way along its normal; false when degenerate.
+        bool prismPiece(const LLVector3& a, const LLVector3& b, const LLVector3& c, const InvisibleParams& params, Piece& piece)
+        {
+            LLVector3 n = (b - a) % (c - a);
+            const F32 len = n.length();
+            if (len <= 1e-8f)
+            {
+                return false;
+            }
+            n /= len;
+            const F32 k = n * a;
+            const F32 tol = params.mProxyTolerance;
+            piece.mPlanes = { { n, k + tol }, { -n, -k + tol } };
+            const LLVector3* p[3] = { &a, &b, &c };
+            for (S32 e = 0; e < 3; ++e)
+            {
+                const LLVector3& from = *p[e];
+                LLVector3 s = (*p[(e + 1) % 3] - from) % n;
+                const F32 slen = s.length();
+                if (slen <= 1e-8f)
+                {
+                    return false;
+                }
+                s /= slen;
+                if (s * (*p[(e + 2) % 3] - from) > 0.f)
+                {
+                    s = -s;
+                }
+                piece.mPlanes.emplace_back(s, s * from);
+            }
+            piece.mLo = piece.mHi = a;
+            update_min_max(piece.mLo, piece.mHi, b);
+            update_min_max(piece.mLo, piece.mHi, c);
+            piece.mLo -= LLVector3(tol, tol, tol);
+            piece.mHi += LLVector3(tol, tol, tol);
+            piece.mPrism = true;
+            grow(piece, params.mCoplanarD);
+            return true;
+        }
+
+        // A colliding neighbour's convex pieces that reach the part's bounds.
+        void piecesOf(const CoverCandidate& c, const LLVector3& lo, const LLVector3& hi, const InvisibleParams& params,
+                      std::vector<Piece>& out)
+        {
+            const size_t tris = c.mCount / 3;
+            size_t in_bodies = 0;
+            for (size_t b = 0; b < c.mBodies && c.mConvexTris; ++b)
+            {
+                in_bodies += c.mConvexTris[b] > 0 ? (size_t)c.mConvexTris[b] : tris + 1;
+            }
+            if (c.mShape != Shape::TRIANGLES || (c.mBodies && in_bodies == tris))
+            {
+                // An analytic shape is one body; a soup's bodies follow one another.
+                const size_t bodies = c.mShape != Shape::TRIANGLES ? 1 : c.mBodies;
+                size_t at = 0;
+                for (size_t b = 0; b < bodies; ++b)
+                {
+                    const size_t n = c.mShape != Shape::TRIANGLES ? tris : (size_t)c.mConvexTris[b];
+                    Piece piece = bodyPiece(c.mVerts + at * 3, n * 3, c.mOffset, params);
+                    at += n;
+                    if (!piece.mPlanes.empty() && overlaps(piece.mLo, piece.mHi, lo, hi))
                     {
-                        const UV& a = poly[e];
-                        const UV& b = poly[(e + 1) % count];
-                        inside = sign * ((b.mU - a.mU) * (v - a.mV) - (b.mV - a.mV) * (u - a.mU)) >= 0.f;
+                        out.push_back(std::move(piece));
                     }
-                    if (inside)
-                    {
-                        mask[j * cells + i] = 1;
-                    }
+                }
+                return;
+            }
+            // A soup that is no body has a surface only: what lies on it within the tolerance is on it.
+            for (size_t t = 0; t < tris; ++t)
+            {
+                Piece piece;
+                const LLVector3* v = c.mVerts + t * 3;
+                if (prismPiece(v[0] + c.mOffset, v[1] + c.mOffset, v[2] + c.mOffset, params, piece) &&
+                    overlaps(piece.mLo, piece.mHi, lo, hi))
+                {
+                    out.push_back(std::move(piece));
                 }
             }
         }
 
-        UV project(const InvisibleFace& face, const LLVector3& p)
+        // Every vertex inside the box grown by the tolerance.
+        bool holds(const CoverCandidate& c, const std::vector<LLVector3>& tris, F32 tolerance)
         {
-            return { face.mU * p, face.mV * p };
+            const LLVector3 centre = c.mCenter + c.mOffset;
+            for (const LLVector3& v : tris)
+            {
+                const LLVector3 d = v - centre;
+                for (S32 k = 0; k < 3; ++k)
+                {
+                    if (std::fabs(d * c.mAxes[k]) > c.mHalf.mV[k] + tolerance)
+                    {
+                        return false;
+                    }
+                }
+            }
+            return true;
         }
+    }
+
+    const char* coverVerdictName(CoverVerdict verdict)
+    {
+        switch (verdict)
+        {
+            case CoverVerdict::PROXY: return "PROXY";
+            case CoverVerdict::EXTRA: return "EXTRA";
+            case CoverVerdict::BARRIER: return "BARRIER";
+            case CoverVerdict::UNKNOWN_PHYSICS: return "UNKNOWN_PHYSICS";
+        }
+        return "?";
     }
 
     std::vector<InvisibleFace> invisibleFaces(const std::vector<LLVector3>& tris, const InvisibleParams& params)
@@ -161,238 +297,204 @@ namespace sknav
             into->mTris.push_back(t / 3);
             into->mArea += 0.5f * len;
         }
-        for (InvisibleFace& f : faces)
-        {
-            const LLVector3 ref = std::fabs(f.mNormal.mV[VZ]) < 0.9f ? LLVector3(0.f, 0.f, 1.f) : LLVector3(1.f, 0.f, 0.f);
-            f.mU = ref % f.mNormal;
-            f.mU.normVec();
-            f.mV = f.mNormal % f.mU;
-            f.mMinU = f.mMinV = 1e30f;
-            f.mMaxU = f.mMaxV = -1e30f;
-            for (U32 t : f.mTris)
-            {
-                for (U32 k = 0; k < 3; ++k)
-                {
-                    const UV uv = project(f, tris[t * 3 + k]);
-                    f.mMinU = llmin(f.mMinU, uv.mU);
-                    f.mMaxU = llmax(f.mMaxU, uv.mU);
-                    f.mMinV = llmin(f.mMinV, uv.mV);
-                    f.mMaxV = llmax(f.mMaxV, uv.mV);
-                }
-            }
-            F32 lo = 1e30f, hi = -1e30f;
-            for (const LLVector3& p : tris)
-            {
-                lo = llmin(lo, f.mNormal * p);
-                hi = llmax(hi, f.mNormal * p);
-            }
-            f.mHalf = 0.5f * (hi - lo);
-            // Which side is outside: the part's middle along the normal lies behind the face or before it.
-            f.mOut = f.mD >= 0.5f * (hi + lo) ? 1.f : -1.f;
-        }
         return faces;
     }
 
-    namespace
+    CoverResult coverVerdict(const std::vector<LLVector3>& tris, const std::vector<CoverCandidate>& candidates,
+                             const InvisibleParams& params)
     {
-        // A visible triangle that can reach the part, placed and with its unit normal.
-        struct Candidate
+        CoverResult result;
+        for (const InvisibleFace& f : invisibleFaces(tris, params))
         {
-            LLVector3 mP[3];
-            LLVector3 mNormal;
-        };
-
-        // The spans' triangles that touch the part's bounds grown by the widest slab, gathered once for every face.
-        std::vector<Candidate> gather(const std::vector<LLVector3>& tris, const std::vector<InvisibleSpan>& visible,
-                                      const InvisibleParams& params)
-        {
-            LLVector3 lo(1e30f, 1e30f, 1e30f), hi(-1e30f, -1e30f, -1e30f);
-            for (const LLVector3& p : tris)
-            {
-                update_min_max(lo, hi, p);
-            }
-            const F32 reach = params.mSlabMax + params.mSlabEpsilon;
-            lo -= LLVector3(reach, reach, reach);
-            hi += LLVector3(reach, reach, reach);
-            std::vector<Candidate> out;
-            for (const InvisibleSpan& span : visible)
-            {
-                for (size_t v = 0; v + 2 < span.mCount; v += 3)
-                {
-                    Candidate c;
-                    for (S32 k = 0; k < 3; ++k)
-                    {
-                        c.mP[k] = span.mVerts[v + k] + span.mOffset;
-                    }
-                    bool outside = false;
-                    for (S32 axis = 0; axis < 3 && !outside; ++axis)
-                    {
-                        outside = llmax(c.mP[0].mV[axis], llmax(c.mP[1].mV[axis], c.mP[2].mV[axis])) < lo.mV[axis] ||
-                                  llmin(c.mP[0].mV[axis], llmin(c.mP[1].mV[axis], c.mP[2].mV[axis])) > hi.mV[axis];
-                    }
-                    if (outside)
-                    {
-                        continue;
-                    }
-                    c.mNormal = (c.mP[1] - c.mP[0]) % (c.mP[2] - c.mP[0]);
-                    const F32 len = c.mNormal.length();
-                    if (len <= 1e-8f)
-                    {
-                        continue;
-                    }
-                    c.mNormal /= len;
-                    out.push_back(c);
-                }
-            }
-            return out;
+            result.mPartArea += f.mArea;
         }
-
-        F32 cover(const InvisibleFace& face, const std::vector<LLVector3>& tris, const std::vector<Candidate>& candidates,
-                  const InvisibleParams& params)
-        {
-            const S32 cells = llmax(params.mMask, 1);
-            std::vector<U8> own(cells * cells, 0);
-            for (U32 t : face.mTris)
-            {
-                const UV poly[3] = { project(face, tris[t * 3]), project(face, tris[t * 3 + 1]), project(face, tris[t * 3 + 2]) };
-                fill(poly, 3, face, cells, own);
-            }
-            // Outward the slab reaches its full width; inward never through the part to its far side, which only the
-            // opposite face's share may claim. Its own boundary counts as inside it.
-            const F32 slab = llclamp(params.mSlabPad + face.mHalf, params.mSlabMin, params.mSlabMax);
-            const F32 inward = llmin(slab, llmax(2.f * face.mHalf - params.mSlabPad, face.mHalf));
-            const F32 top = face.mD + (face.mOut > 0.f ? slab : inward) + params.mSlabEpsilon;
-            const F32 bottom = face.mD - (face.mOut > 0.f ? inward : slab) - params.mSlabEpsilon;
-            const F32 cos_limit = std::cos(params.mNormalDeg * DEG_TO_RAD);
-            std::vector<U8> covered_mask(cells * cells, 0);
-            LLVector3 a[8], b[8];
-            UV uv[8];
-            for (const Candidate& c : candidates)
-            {
-                if (std::fabs(c.mNormal * face.mNormal) < cos_limit)
-                {
-                    continue;
-                }
-                a[0] = c.mP[0];
-                a[1] = c.mP[1];
-                a[2] = c.mP[2];
-                S32 m = clipPlane(a, 3, face.mNormal, top, true, b);
-                if (m < 3)
-                {
-                    continue;
-                }
-                m = clipPlane(b, m, face.mNormal, bottom, false, a);
-                if (m < 3)
-                {
-                    continue;
-                }
-                for (S32 i = 0; i < m; ++i)
-                {
-                    uv[i] = project(face, a[i]);
-                }
-                fill(uv, m, face, cells, covered_mask);
-            }
-            U32 inside = 0, covered = 0;
-            for (size_t i = 0; i < own.size(); ++i)
-            {
-                inside += own[i];
-                covered += own[i] & covered_mask[i];
-            }
-            return inside ? (F32)covered / (F32)inside : 0.f;
-        }
-
-        // Whether face j's outline, in face i's frame, overlaps face i's.
-        bool overlapsInPlane(const InvisibleFace& i, const InvisibleFace& j, const std::vector<LLVector3>& tris)
-        {
-            F32 lo_u = 1e30f, hi_u = -1e30f, lo_v = 1e30f, hi_v = -1e30f;
-            for (U32 t : j.mTris)
-            {
-                for (U32 k = 0; k < 3; ++k)
-                {
-                    const UV uv = project(i, tris[t * 3 + k]);
-                    lo_u = llmin(lo_u, uv.mU);
-                    hi_u = llmax(hi_u, uv.mU);
-                    lo_v = llmin(lo_v, uv.mV);
-                    hi_v = llmax(hi_v, uv.mV);
-                }
-            }
-            return llmin(hi_u, i.mMaxU) > llmax(lo_u, i.mMinU) && llmin(hi_v, i.mMaxV) > llmax(lo_v, i.mMinV);
-        }
-    }
-
-    F32 invisibleFaceCover(const InvisibleFace& face, const std::vector<LLVector3>& tris,
-                           const std::vector<InvisibleSpan>& visible, const InvisibleParams& params)
-    {
-        return cover(face, tris, gather(tris, visible, params), params);
-    }
-
-    InvisibleResult invisibleVerdict(const std::vector<LLVector3>& tris, const std::vector<InvisibleSpan>& visible,
-                                     const InvisibleParams& params)
-    {
-        InvisibleResult result;
         if (tris.size() / 3 > params.mMaxPartTris)
         {
+            result.mTooFine = true;
             return result;
         }
-        const std::vector<InvisibleFace> faces = invisibleFaces(tris, params);
-        const std::vector<Candidate> candidates = gather(tris, visible, params);
-        // Only the largest faces are judged; the rest, like those under the minimum area, are left out.
-        std::vector<size_t> order(faces.size());
-        for (size_t i = 0; i < order.size(); ++i)
+        if (candidates.empty())
         {
-            order[i] = i;
+            result.mVerdict = CoverVerdict::BARRIER;
+            result.mOutsideArea = result.mPartArea;
+            return result;
         }
-        std::stable_sort(order.begin(), order.end(), [&faces](size_t a, size_t b) { return faces[a].mArea > faces[b].mArea; });
-        result.mShares.assign(faces.size(), -1.f);
-        for (size_t k = 0; k < order.size() && k < params.mMaxFaces; ++k)
+        // Never a hatch on a guess: a neighbour may yet turn out not to collide.
+        for (const CoverCandidate& c : candidates)
         {
-            const InvisibleFace& f = faces[order[k]];
-            if (f.mArea >= params.mMinFaceArea)
+            if (!c.mPhysicsKnown)
             {
-                result.mShares[order[k]] = cover(f, tris, candidates, params);
+                return result;
             }
         }
-        F32 total = 0.f, covered = 0.f, steep_covered = 0.f;
-        for (size_t i = 0; i < faces.size(); ++i)
+        // A visible shell nothing collides with is what the eye sees, whatever collides inside it.
+        for (const CoverCandidate& c : candidates)
         {
-            F32 share = result.mShares[i];
-            if (share < 0.f)
+            if (!c.mCollides && holds(c, tris, params.mProxyTolerance))
             {
-                continue;
+                result.mVerdict = CoverVerdict::PROXY;
+                return result;
             }
-            // A thin slab stands for the surface on either side: its face takes the opposite face's cover when that
-            // face lies across the slab from it, over it.
-            const InvisibleFace& fi = faces[i];
-            const F32 extent = llmin(fi.mMaxU - fi.mMinU, fi.mMaxV - fi.mMinV);
-            if (2.f * fi.mHalf <= params.mShareThinRatio * extent)
+        }
+
+        LL_PROFILE_ZONE_NAMED("sk overview cover clip");
+        LLVector3 lo(1e30f, 1e30f, 1e30f), hi(-1e30f, -1e30f, -1e30f);
+        for (const LLVector3& v : tris)
+        {
+            update_min_max(lo, hi, v);
+        }
+        std::vector<Piece> pieces;
+        for (const CoverCandidate& c : candidates)
+        {
+            if (c.mCollides)
             {
-                for (size_t j = 0; j < faces.size(); ++j)
+                piecesOf(c, lo, hi, params, pieces);
+            }
+        }
+        std::vector<Poly> polys;
+        for (size_t t = 0; t + 2 < tris.size(); t += 3)
+        {
+            if (((tris[t + 1] - tris[t]) % (tris[t + 2] - tris[t])).length() > 1e-8f)
+            {
+                polys.push_back({ tris[t], tris[t + 1], tris[t + 2] });
+            }
+        }
+        // Each piece in turn: of what is left, the part outside its first plane, then outside its second but inside
+        // the first, and so on, is what that piece leaves; what is inside every plane is taken away.
+        std::vector<Poly> next;
+        Poly rest, out, tmp;
+        for (const Piece& piece : pieces)
+        {
+            result.mSurfaceClip |= piece.mPrism;
+            next.clear();
+            for (Poly& p : polys)
+            {
+                LLVector3 plo(1e30f, 1e30f, 1e30f), phi(-1e30f, -1e30f, -1e30f);
+                for (const LLVector3& v : p)
                 {
-                    const InvisibleFace& fj = faces[j];
-                    if (result.mShares[j] > share && fi.mNormal * fj.mNormal <= -params.mCoplanarCos &&
-                        std::fabs(fi.mD + fj.mD) <= 2.f * fi.mHalf + params.mSlabPad && overlapsInPlane(fi, fj, tris))
+                    update_min_max(plo, phi, v);
+                }
+                if (!overlaps(plo, phi, piece.mLo, piece.mHi))
+                {
+                    next.push_back(std::move(p));
+                    continue;
+                }
+                rest = p;
+                for (const auto& plane : piece.mPlanes)
+                {
+                    clip(rest, plane.first, plane.second, false, out);
+                    if (out.size() >= 3 && polyArea(out) > 0.f)
                     {
-                        share = result.mShares[j];
+                        next.push_back(out);
+                    }
+                    clip(rest, plane.first, plane.second, true, tmp);
+                    rest.swap(tmp);
+                    if (rest.size() < 3)
+                    {
+                        break;
                     }
                 }
             }
-            total += fi.mArea;
-            covered += fi.mArea * share;
-            if (std::fabs(fi.mNormal.mV[VZ]) < params.mSteepNz)
+            polys.swap(next);
+            if (polys.size() > params.mMaxPieces)
             {
-                result.mSteepArea += fi.mArea;
-                steep_covered += fi.mArea * share;
+                result.mTooFine = true;
+                return result;
             }
         }
-        if (total <= 0.f)
+        for (const Poly& p : polys)
         {
+            result.mOutsideArea += polyArea(p);
+        }
+        if (result.mOutsideArea <= params.mMinFaceArea)
+        {
+            result.mVerdict = CoverVerdict::PROXY;
             return result;
         }
-        result.mCoveredAll = covered / total;
-        result.mCoveredSteep = result.mSteepArea > 0.f ? steep_covered / result.mSteepArea : result.mCoveredAll;
-        result.mVerdict = result.mCoveredAll < params.mCoveredShare && result.mCoveredSteep < params.mCoveredShare
-                              ? InvisibleVerdict::BARRIER
-                              : InvisibleVerdict::STAND_IN;
+        result.mVerdict = CoverVerdict::EXTRA;
+        for (const Poly& p : polys)
+        {
+            for (size_t i = 1; i + 1 < p.size(); ++i)
+            {
+                result.mProtruding.insert(result.mProtruding.end(), { p[0], p[i], p[i + 1] });
+            }
+        }
         return result;
+    }
+
+    bool coverPoolRecord(const Record& rec)
+    {
+        if (rec.mDynamic || (rec.mExclude & EXCLUDE_SOLID))
+        {
+            return false;
+        }
+        if (rec.mRole == Role::SURROUND || !rec.mCollides)
+        {
+            return true;
+        }
+        // As the overview's keepRecord: no volumes, nothing drawn live.
+        return rec.mRole == Role::NAV && rec.mNavRole != NavRole::MATERIAL_VOLUME && rec.mNavRole != NavRole::EXCLUSION_VOLUME &&
+               rec.mFeature != FeatureKind::VEHICLE && rec.mFeature != FeatureKind::ELEVATOR;
+    }
+
+    std::vector<CoverCandidate> coverCandidates(const std::vector<const Record*>& records, const LLVector3d& origin,
+                                                std::vector<LLVector3>& scratch)
+    {
+        scratch.clear();
+        std::vector<CoverCandidate> out;
+        std::vector<size_t> starts;
+        for (const Record* rec : records)
+        {
+            CoverCandidate c;
+            c.mPhysicsKnown = rec->mPhysicsKnown;
+            const LLVector3 shift(rec->mOrigin - origin);
+            if (rec->mRole == Role::SURROUND)
+            {
+                // A surround collides through the physics record beside it, when it has one.
+                const bool twin = std::any_of(records.begin(), records.end(), [rec](const Record* other)
+                                              { return other->mPart == rec->mPart && other->mRole == Role::NAV && other->mCollides; });
+                if (twin)
+                {
+                    continue;
+                }
+                c.mCollides = false;
+                c.mCenter = LLVector3((rec->mMin + rec->mMax) * 0.5 - origin);
+                c.mAxes[0].set(1.f, 0.f, 0.f);
+                c.mAxes[1].set(0.f, 1.f, 0.f);
+                c.mAxes[2].set(0.f, 0.f, 1.f);
+                c.mHalf = LLVector3((rec->mMax - rec->mMin) * 0.5);
+            }
+            else if (!rec->mCollides)
+            {
+                c.mCollides = false;
+                c.mCenter = rec->mCenter + shift;
+                for (S32 k = 0; k < 3; ++k)
+                {
+                    c.mAxes[k] = rec->mAxes[k];
+                }
+                c.mHalf = rec->mHalf;
+            }
+            else
+            {
+                c.mShape = rec->mShape;
+                if (rec->mShape == Shape::TRIANGLES && !rec->mConvexTris.empty())
+                {
+                    c.mConvexTris = rec->mConvexTris.data();
+                    c.mBodies = rec->mConvexTris.size();
+                }
+            }
+            starts.push_back(scratch.size());
+            if (c.mCollides)
+            {
+                emitRecord(*rec, origin, scratch);
+            }
+            c.mCount = scratch.size() - starts.back();
+            out.push_back(c);
+        }
+        for (size_t i = 0; i < out.size(); ++i)
+        {
+            out[i].mVerts = scratch.data() + starts[i];
+        }
+        return out;
     }
 }

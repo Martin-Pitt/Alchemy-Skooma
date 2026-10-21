@@ -1,6 +1,7 @@
 /**
  * @file sknavinvisible_test.cpp
- * @brief Invisible parts on visible geometry stand in for it; those with nothing on them are barriers.
+ * @brief An invisible part stands in for a visible neighbour nothing collides with, adds what sticks out past the
+ * colliding ones, or is a barrier with nothing visible near it.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Alchemy Viewer Source Code
@@ -31,7 +32,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cmath>
-#include <cstdio>
+#include <memory>
 #include <vector>
 
 namespace
@@ -49,7 +50,7 @@ namespace
         axes[2].set(0.f, 0.f, 1.f);
     }
 
-    // A box's twelve triangles, faces in the order -x +x -y +y -z +z.
+    // A box's twelve triangles, faces in the order -x +x -y +y -z +z, wound outward.
     Tris box(const LLVector3& c, F32 deg, const LLVector3& half)
     {
         LLVector3 ax[3];
@@ -60,9 +61,9 @@ namespace
                    ax[2] * ((2 * k - 1) * half.mV[2]);
         };
         static const S32 QUADS[6][4][3] = {
-            { { 0, 0, 0 }, { 0, 1, 0 }, { 0, 1, 1 }, { 0, 0, 1 } }, { { 1, 0, 0 }, { 1, 0, 1 }, { 1, 1, 1 }, { 1, 1, 0 } },
-            { { 0, 0, 0 }, { 0, 0, 1 }, { 1, 0, 1 }, { 1, 0, 0 } }, { { 0, 1, 0 }, { 1, 1, 0 }, { 1, 1, 1 }, { 0, 1, 1 } },
-            { { 0, 0, 0 }, { 1, 0, 0 }, { 1, 1, 0 }, { 0, 1, 0 } }, { { 0, 0, 1 }, { 0, 1, 1 }, { 1, 1, 1 }, { 1, 0, 1 } },
+            { { 0, 0, 0 }, { 0, 0, 1 }, { 0, 1, 1 }, { 0, 1, 0 } }, { { 1, 0, 0 }, { 1, 1, 0 }, { 1, 1, 1 }, { 1, 0, 1 } },
+            { { 0, 0, 0 }, { 1, 0, 0 }, { 1, 0, 1 }, { 0, 0, 1 } }, { { 0, 1, 0 }, { 0, 1, 1 }, { 1, 1, 1 }, { 1, 1, 0 } },
+            { { 0, 0, 0 }, { 0, 1, 0 }, { 1, 1, 0 }, { 1, 0, 0 } }, { { 0, 0, 1 }, { 1, 0, 1 }, { 1, 1, 1 }, { 0, 1, 1 } },
         };
         Tris out;
         for (const auto& q : QUADS)
@@ -77,185 +78,219 @@ namespace
         return out;
     }
 
-    Tris quad(const LLVector3& p0, const LLVector3& p1, const LLVector3& p2, const LLVector3& p3, bool both = false)
+    Tris quad(const LLVector3& p0, const LLVector3& p1, const LLVector3& p2, const LLVector3& p3)
     {
-        Tris out{ p0, p1, p2, p0, p2, p3 };
-        if (both)
+        return { p0, p1, p2, p0, p2, p3 };
+    }
+
+    Tris floorQuad(F32 x0, F32 x1, F32 y0, F32 y1, F32 z)
+    {
+        return quad({ x0, y0, z }, { x1, y0, z }, { x1, y1, z }, { x0, y1, z });
+    }
+
+    // A census record of a box, colliding or visible only.
+    std::shared_ptr<Record> boxRecord(const LLVector3& c, F32 deg, const LLVector3& half, bool collides = true)
+    {
+        auto r = std::make_shared<Record>();
+        r->mPart.generate();
+        r->mShape = Shape::BOX;
+        r->mCollides = collides;
+        r->mCenter = c;
+        turn(deg, r->mAxes);
+        r->mHalf = half;
+        return r;
+    }
+
+    // A colliding triangle soup: a physics mesh, or convex bodies when their triangle counts are given.
+    std::shared_ptr<Record> soupRecord(const Tris& tris, const std::vector<S32>& bodies = {})
+    {
+        auto r = std::make_shared<Record>();
+        r->mPart.generate();
+        r->mShape = Shape::TRIANGLES;
+        r->mTriangles = std::make_shared<const Tris>(tris);
+        r->mConvexTris = bodies;
+        return r;
+    }
+
+    CoverResult judge(const Tris& part, const std::vector<std::shared_ptr<Record>>& neighbours)
+    {
+        std::vector<const Record*> records;
+        for (const auto& r : neighbours)
         {
-            out.insert(out.end(), { p0, p2, p1, p0, p3, p2 });
+            records.push_back(r.get());
         }
-        return out;
+        std::vector<LLVector3> scratch;
+        return coverVerdict(part, coverCandidates(records, LLVector3d(), scratch), InvisibleParams());
     }
 
-    Tris wall(F32 x0, F32 x1, F32 y, F32 z0, F32 z1)
+    F32 area(const Tris& tris)
     {
-        return quad({ x0, y, z0 }, { x1, y, z0 }, { x1, y, z1 }, { x0, y, z1 });
-    }
-
-    Tris floorQuad(F32 x0, F32 x1, F32 y0, F32 y1, F32 z, bool both = false)
-    {
-        return quad({ x0, y0, z }, { x1, y0, z }, { x1, y1, z }, { x0, y1, z }, both);
-    }
-
-    InvisibleResult judge(const Tris& part, const Tris& mesh)
-    {
-        std::vector<InvisibleSpan> spans;
-        if (!mesh.empty())
+        F32 sum = 0.f;
+        for (size_t t = 0; t + 2 < tris.size(); t += 3)
         {
-            spans.push_back({ mesh.data(), mesh.size() });
+            sum += 0.5f * ((tris[t + 1] - tris[t]) % (tris[t + 2] - tris[t])).length();
         }
-        return invisibleVerdict(part, spans, InvisibleParams());
+        return sum;
     }
 
-    // The oracle's shares (V:\Scratch\combat-minimap-invisible\oracle), exact; the mask is 32 cells a side.
-    constexpr F32 MASK_TOL = 1.5f / 32.f;
-
-    void expectShares(const InvisibleResult& r, const std::vector<F32>& oracle)
+    TEST_CASE("sknavinvisible: nothing nearby is a barrier", "[sknavinvisible]")
     {
-        REQUIRE(r.mShares.size() == oracle.size());
-        for (size_t i = 0; i < oracle.size(); ++i)
+        const CoverResult r = judge(box({ 0.f, 0.f, 1.f }, 0.f, { 1.f, 1.f, 1.f }), {});
+        CHECK(r.mVerdict == CoverVerdict::BARRIER);
+        CHECK(std::fabs(r.mPartArea - 24.f) < 1e-3f);
+        CHECK(r.mOutsideArea == r.mPartArea);
+        CHECK(r.mProtruding.empty()); // the worker hatches a barrier whole
+    }
+
+    TEST_CASE("sknavinvisible: a box inside a phantom shell within tolerance is a proxy", "[sknavinvisible]")
+    {
+        // Turned and 0.1 m past the shell's faces: inside its box grown by 0.15 m, vertex for vertex.
+        const CoverResult r = judge(box({ 0.05f, 0.f, 1.f }, 20.f, { 1.f, 0.5f, 1.05f }),
+                                    { boxRecord({ 0.f, 0.f, 1.f }, 20.f, { 1.f, 0.5f, 1.f }, false) });
+        CHECK(r.mVerdict == CoverVerdict::PROXY);
+        CHECK(r.mProtruding.empty());
+    }
+
+    TEST_CASE("sknavinvisible: a box a hair outside a phantom shell's tolerance is not its proxy", "[sknavinvisible]")
+    {
+        // 0.16 m past the shell on +x, over the 0.15 m it allows; nothing colliding takes any of it away.
+        const CoverResult r = judge(box({ 0.08f, 0.f, 1.f }, 0.f, { 1.08f, 0.5f, 1.f }),
+                                    { boxRecord({ 0.f, 0.f, 1.f }, 0.f, { 1.f, 0.5f, 1.f }, false) });
+        CHECK(r.mVerdict == CoverVerdict::EXTRA);
+        CHECK(std::fabs(r.mOutsideArea - r.mPartArea) < 1e-3f);
+    }
+
+    TEST_CASE("sknavinvisible: a box poking past a colliding box is extra and only the overhang is hatched", "[sknavinvisible]")
+    {
+        // The part spans x 1..3 and the collider x 0..2: its +x face and half of each side stick out, 12 of 24 m2. The
+        // side faces flush with the collider's are on it, not out of it.
+        const CoverResult r = judge(box({ 2.f, 1.f, 1.f }, 0.f, { 1.f, 1.f, 1.f }), { boxRecord({ 1.f, 1.f, 1.f }, 0.f, { 1.f, 1.f, 1.f }) });
+        REQUIRE(r.mVerdict == CoverVerdict::EXTRA);
+        // A solid takes away what lies within mCoplanarD of it: a band that wide along the four sides it crosses.
+        const F32 on = InvisibleParams().mCoplanarD;
+        CHECK(std::fabs(r.mOutsideArea - (12.f - 8.f * on)) < 1e-3f);
+        CHECK(std::fabs(area(r.mProtruding) - r.mOutsideArea) < 1e-3f);
+        for (const LLVector3& v : r.mProtruding)
         {
-            INFO("face " << i << ": " << r.mShares[i] << " oracle " << oracle[i]);
-            CHECK(std::fabs(r.mShares[i] - oracle[i]) <= MASK_TOL);
+            CHECK(v.mV[VX] >= 2.f + on - 1e-4f);
         }
+        CHECK_FALSE(r.mSurfaceClip);
     }
-}
 
-TEST_CASE("sknavinvisible: a box against a mesh wall, a little off and turned, stands in for it", "[sknavinvisible]")
-{
-    const InvisibleResult r = judge(box({ 5.f, 0.12f, 1.5f }, 3.f, { 5.f, 0.1f, 1.5f }), wall(0.f, 10.f, 0.f, 0.f, 3.f));
-    CHECK(r.mVerdict == InvisibleVerdict::STAND_IN);
-    expectShares(r, { 0.f, 0.f, 0.728f, 0.271f, 0.f, 0.f });
-}
-
-TEST_CASE("sknavinvisible: a box with nothing on it is a barrier", "[sknavinvisible]")
-{
-    const InvisibleResult r = judge(box({ 3.f, 0.f, 1.5f }, 0.f, { 3.f, 0.15f, 1.5f }), {});
-    CHECK(r.mVerdict == InvisibleVerdict::BARRIER);
-    expectShares(r, { 0.f, 0.f, 0.f, 0.f, 0.f, 0.f });
-}
-
-TEST_CASE("sknavinvisible: a box poking past its mesh is a barrier under half covered, a stand-in over", "[sknavinvisible]")
-{
-    const Tris part = box({ 5.f, 0.f, 1.5f }, 0.f, { 5.f, 0.1f, 1.5f });
-    const InvisibleResult forty = judge(part, wall(0.f, 4.f, 0.f, 0.f, 3.f));
-    CHECK(forty.mVerdict == InvisibleVerdict::BARRIER);
-    expectShares(forty, { 0.f, 0.f, 0.4f, 0.4f, 0.f, 0.f });
-    const InvisibleResult seventy = judge(part, wall(0.f, 7.f, 0.f, 0.f, 3.f));
-    CHECK(seventy.mVerdict == InvisibleVerdict::STAND_IN);
-    expectShares(seventy, { 0.f, 0.f, 0.7f, 0.7f, 0.f, 0.f });
-}
-
-TEST_CASE("sknavinvisible: a double-sided floor covers a slab once", "[sknavinvisible]")
-{
-    const InvisibleResult r = judge(box({ 10.f, 10.f, -0.25f }, 0.f, { 10.f, 10.f, 0.25f }), floorQuad(0.f, 20.f, 0.f, 20.f, 0.f, true));
-    CHECK(r.mVerdict == InvisibleVerdict::STAND_IN);
-    expectShares(r, { 0.f, 0.f, 0.f, 0.f, 0.f, 1.f });
-    CHECK(r.mCoveredAll <= 1.f);
-}
-
-TEST_CASE("sknavinvisible: a thin wall standing on a mesh floor is a barrier though its foot is covered", "[sknavinvisible]")
-{
-    const InvisibleResult r = judge(box({ 5.f, 5.f, 1.5f }, 0.f, { 4.f, 0.1f, 1.5f }), floorQuad(0.f, 10.f, 0.f, 10.f, 0.f));
-    CHECK(r.mVerdict == InvisibleVerdict::BARRIER);
-    expectShares(r, { 0.f, 0.f, 0.f, 0.f, 1.f, 0.f });
-}
-
-TEST_CASE("sknavinvisible: a deck slab under its mesh floor stands in, its open edges notwithstanding", "[sknavinvisible]")
-{
-    const InvisibleResult r = judge(box({ 10.f, 10.f, -0.4f }, 0.f, { 10.f, 10.f, 0.2f }), floorQuad(0.f, 20.f, 0.f, 20.f, -0.05f));
-    CHECK(r.mVerdict == InvisibleVerdict::STAND_IN);
-    expectShares(r, { 0.f, 0.f, 0.f, 0.f, 0.f, 1.f });
-}
-
-TEST_CASE("sknavinvisible: mesh turned past the normal limit or beyond the slab covers nothing", "[sknavinvisible]")
-{
-    const Tris mesh = wall(0.f, 10.f, 0.f, 0.f, 3.f);
-    const InvisibleResult turned = judge(box({ 5.f, 0.f, 1.5f }, 40.f, { 5.f, 0.1f, 1.5f }), mesh);
-    CHECK(turned.mVerdict == InvisibleVerdict::BARRIER);
-    expectShares(turned, { 0.f, 0.f, 0.f, 0.f, 0.f, 0.f });
-    const InvisibleResult beyond = judge(box({ 5.f, 0.6f, 1.5f }, 0.f, { 5.f, 0.1f, 1.5f }), mesh);
-    CHECK(beyond.mVerdict == InvisibleVerdict::BARRIER);
-    expectShares(beyond, { 0.f, 0.f, 0.f, 0.f, 0.f, 0.f });
-}
-
-TEST_CASE("sknavinvisible: parts too fine to judge are left unjudged", "[sknavinvisible]")
-{
-    InvisibleParams params;
-    params.mMaxPartTris = 4;
-    const Tris part = box({ 0.f, 0.f, 0.f }, 0.f, { 1.f, 1.f, 1.f });
-    CHECK(invisibleVerdict(part, {}, params).mVerdict == InvisibleVerdict::UNJUDGED);
-    const Tris speck = box({ 0.f, 0.f, 0.f }, 0.f, { 0.05f, 0.05f, 0.05f });
-    CHECK(invisibleVerdict(speck, {}, InvisibleParams()).mVerdict == InvisibleVerdict::UNJUDGED);
-}
-
-TEST_CASE("sknavinvisible: a low block and a kerb on a mesh floor are barriers", "[sknavinvisible]")
-{
-    const Tris floor = floorQuad(0.f, 10.f, 0.f, 10.f, 0.f);
-    const InvisibleResult block = judge(box({ 5.f, 5.f, 0.45f }, 0.f, { 1.f, 1.f, 0.45f }), floor);
-    CHECK(block.mVerdict == InvisibleVerdict::BARRIER);
-    expectShares(block, { 0.f, 0.f, 0.f, 0.f, 1.f, 0.f });
-    const InvisibleResult kerb = judge(box({ 5.f, 5.f, 0.15f }, 0.f, { 2.f, 0.25f, 0.15f }), floor);
-    CHECK(kerb.mVerdict == InvisibleVerdict::BARRIER);
-    expectShares(kerb, { 0.f, 0.f, 0.f, 0.f, 1.f, 0.f });
-}
-
-TEST_CASE("sknavinvisible: opposite faces that do not overlap share no cover", "[sknavinvisible]")
-{
-    Tris part = box({ 2.f, 2.f, 0.1f }, 0.f, { 2.f, 2.f, 0.1f });
-    const Tris upper = box({ 8.f, 2.f, 0.3f }, 0.f, { 2.f, 2.f, 0.1f });
-    part.insert(part.end(), upper.begin(), upper.end());
-    const InvisibleResult r = judge(part, floorQuad(6.f, 10.f, 0.f, 4.f, 0.2f));
-    CHECK(r.mVerdict == InvisibleVerdict::BARRIER);
-    expectShares(r, { 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 1.f, 1.f });
-}
-
-TEST_CASE("sknavinvisible: faces under the minimum area are left out", "[sknavinvisible]")
-{
-    const InvisibleResult r = judge(box({ 2.f, 0.1f, 1.5f }, 0.f, { 2.f, 0.005f, 1.5f }), wall(0.f, 4.f, 0.f, 0.f, 3.f));
-    CHECK(r.mVerdict == InvisibleVerdict::STAND_IN);
-    expectShares(r, { -1.f, -1.f, 1.f, 0.f, -1.f, -1.f });
-}
-
-TEST_CASE("sknavinvisible: duplicate spans cover once, and an offset span lands where it is placed", "[sknavinvisible]")
-{
-    const Tris part = box({ 5.f, 5.f, 1.5f }, 0.f, { 4.f, 0.1f, 1.5f });
-    const Tris floor = floorQuad(0.f, 10.f, 0.f, 10.f, 0.f);
-    const InvisibleResult once = invisibleVerdict(part, { { floor.data(), floor.size() } }, InvisibleParams());
-    const InvisibleResult twice =
-        invisibleVerdict(part, { { floor.data(), floor.size() }, { floor.data(), floor.size() } }, InvisibleParams());
-    REQUIRE(once.mShares.size() == twice.mShares.size());
-    for (size_t i = 0; i < once.mShares.size(); ++i)
+    TEST_CASE("sknavinvisible: a thin wall on a colliding floor is extra over its whole height", "[sknavinvisible]")
     {
-        CHECK(once.mShares[i] == twice.mShares[i]);
-    }
-    // The floor as a neighbour region holds it, 256 m west, brought into the part's frame by the span's offset.
-    const Tris west = floorQuad(-256.f, -246.f, 0.f, 10.f, 0.f);
-    InvisibleSpan shifted{ west.data(), west.size() };
-    shifted.mOffset.set(256.f, 0.f, 0.f);
-    const InvisibleResult moved = invisibleVerdict(part, { shifted }, InvisibleParams());
-    REQUIRE(moved.mShares.size() == once.mShares.size());
-    for (size_t i = 0; i < once.mShares.size(); ++i)
-    {
-        CHECK(moved.mShares[i] == once.mShares[i]);
-    }
-}
-
-// The oracle's sweep, printed for diffing against oracle_sweep.csv: sknavmesh_tests "[.sweep]".
-TEST_CASE("sknavinvisible: offset wall sweep", "[.sweep]")
-{
-    const F32 degs[] = { 0.f, 5.f, 10.f, 15.f, 20.f, 24.f, 26.f, 30.f, 40.f };
-    std::printf("offset,deg,face,share\n");
-    for (const F32 deg : degs)
-    {
-        for (S32 o = 0; o <= 16; ++o)
+        // A 4 m by 0.1 m by 3 m wall on a slab whose top is z 0: all but its foot sticks out.
+        const CoverResult r = judge(box({ 0.f, 0.f, 1.5f }, 0.f, { 2.f, 0.05f, 1.5f }),
+                                    { boxRecord({ 0.f, 0.f, -0.25f }, 0.f, { 5.f, 5.f, 0.25f }) });
+        REQUIRE(r.mVerdict == CoverVerdict::EXTRA);
+        // Its foot is on the slab, and a band mCoplanarD high round its sides with it.
+        const F32 on = InvisibleParams().mCoplanarD;
+        CHECK(std::fabs(r.mOutsideArea - (r.mPartArea - 0.4f - 8.2f * on)) < 1e-3f);
+        F32 lo = 1e30f, hi = -1e30f;
+        for (const LLVector3& v : r.mProtruding)
         {
-            const F32 offset = o * 0.05f;
-            const InvisibleResult r = judge(box({ 5.f, offset, 1.5f }, deg, { 5.f, 0.1f, 1.5f }), wall(0.f, 10.f, 0.f, 0.f, 3.f));
-            for (size_t f = 0; f < r.mShares.size(); ++f)
-            {
-                std::printf("%.2f,%g,%u,%.4f\n", offset, deg, (U32)f, r.mShares[f]);
-            }
+            lo = llmin(lo, v.mV[VZ]);
+            hi = llmax(hi, v.mV[VZ]);
         }
+        CHECK(std::fabs(lo - on) < 1e-3f);
+        CHECK(std::fabs(hi - 3.f) < 1e-3f);
+    }
+
+    TEST_CASE("sknavinvisible: a part lying on a physics mesh within tolerance is a proxy through the prisms", "[sknavinvisible]")
+    {
+        // A 0.1 m slab on a two-triangle mesh floor: every face within 0.15 m of the floor's surface, over it.
+        const CoverResult r = judge(box({ 0.3f, -0.2f, 0.05f }, 30.f, { 1.f, 1.f, 0.05f }), { soupRecord(floorQuad(-5.f, 5.f, -5.f, 5.f, 0.f)) });
+        CHECK(r.mVerdict == CoverVerdict::PROXY);
+        CHECK(r.mOutsideArea <= InvisibleParams().mMinFaceArea);
+        CHECK(r.mSurfaceClip);
+
+        // Raised 0.3 m off it, the slab sticks out but for nothing.
+        const CoverResult raised = judge(box({ 0.3f, -0.2f, 0.35f }, 30.f, { 1.f, 1.f, 0.05f }), { soupRecord(floorQuad(-5.f, 5.f, -5.f, 5.f, 0.f)) });
+        CHECK(raised.mVerdict == CoverVerdict::EXTRA);
+        CHECK(std::fabs(raised.mOutsideArea - raised.mPartArea) < 1e-3f);
+    }
+
+    TEST_CASE("sknavinvisible: an unknown physics type is not judged", "[sknavinvisible]")
+    {
+        auto core = boxRecord({ 0.f, 0.f, 1.f }, 0.f, { 0.5f, 0.5f, 0.5f });
+        core->mPhysicsKnown = false;
+        const CoverResult r = judge(box({ 0.f, 0.f, 1.f }, 0.f, { 1.f, 1.f, 1.f }), { core });
+        CHECK(r.mVerdict == CoverVerdict::UNKNOWN_PHYSICS);
+        CHECK_FALSE(r.mTooFine);
+        CHECK(r.mProtruding.empty());
+    }
+
+    TEST_CASE("sknavinvisible: a phantom shell beats a colliding core", "[sknavinvisible]")
+    {
+        // The core alone leaves most of the part sticking out; the shell round both is what the eye sees.
+        const Tris part = box({ 0.f, 0.f, 1.f }, 0.f, { 1.f, 1.f, 1.f });
+        auto core = boxRecord({ 0.f, 0.f, 1.f }, 0.f, { 0.5f, 0.5f, 0.5f });
+        CHECK(judge(part, { core }).mVerdict == CoverVerdict::EXTRA);
+        CHECK(judge(part, { core, boxRecord({ 0.f, 0.f, 1.f }, 0.f, { 1.05f, 1.05f, 1.05f }, false) }).mVerdict == CoverVerdict::PROXY);
+    }
+
+    TEST_CASE("sknavinvisible: a part too fine to judge is unknown and flagged", "[sknavinvisible]")
+    {
+        const Tris one = box({ 0.f, 0.f, 1.f }, 0.f, { 1.f, 1.f, 1.f });
+        Tris many;
+        while (many.size() / 3 <= InvisibleParams().mMaxPartTris)
+        {
+            many.insert(many.end(), one.begin(), one.end());
+        }
+        const CoverResult r = judge(many, { boxRecord({ 0.f, 0.f, 1.f }, 0.f, { 1.f, 1.f, 1.f }) });
+        CHECK(r.mVerdict == CoverVerdict::UNKNOWN_PHYSICS);
+        CHECK(r.mTooFine);
+        // Nothing near it is still a barrier only when it is not too fine to judge at all.
+        CHECK(judge(one, {}).mVerdict == CoverVerdict::BARRIER);
+    }
+
+    TEST_CASE("sknavinvisible: clipped pieces sum to the part area minus the inside", "[sknavinvisible]")
+    {
+        // Turned 30 degrees together, the part x 0..2 against a collider x 1..5 and wider: the half x 1..2 is inside.
+        LLVector3 ax[3];
+        turn(30.f, ax);
+        const Tris part = box(ax[0] * 1.f + ax[1] * 1.f + LLVector3(0.f, 0.f, 1.f), 30.f, { 1.f, 1.f, 1.f });
+        auto collider = boxRecord(ax[0] * 3.f + ax[1] * 1.f + LLVector3(0.f, 0.f, 1.f), 30.f, { 2.f, 2.f, 2.f });
+        const CoverResult r = judge(part, { collider });
+        REQUIRE(r.mVerdict == CoverVerdict::EXTRA);
+        CHECK(std::fabs(r.mPartArea - area(part)) < 1e-3f);
+        CHECK(std::fabs(area(r.mProtruding) - r.mOutsideArea) < 1e-3f);
+        CHECK(std::fabs(r.mOutsideArea - (r.mPartArea - 12.f - 8.f * InvisibleParams().mCoplanarD)) < 2e-3f);
+
+        // The same collider split into two convex bodies takes away the same.
+        Tris bodies = box(ax[0] * 2.f + ax[1] * 1.f + LLVector3(0.f, 0.f, 1.f), 30.f, { 1.f, 2.f, 2.f });
+        const Tris beyond = box(ax[0] * 4.f + ax[1] * 1.f + LLVector3(0.f, 0.f, 1.f), 30.f, { 1.f, 2.f, 2.f });
+        bodies.insert(bodies.end(), beyond.begin(), beyond.end());
+        const CoverResult split = judge(part, { soupRecord(bodies, { 12, 12 }) });
+        CHECK(std::fabs(split.mOutsideArea - r.mOutsideArea) < 2e-3f);
+        CHECK_FALSE(split.mSurfaceClip);
+    }
+
+    TEST_CASE("sknavinvisible: a surround with a colliding twin collides through it and without one is a shell", "[sknavinvisible]")
+    {
+        const Tris part = box({ 0.f, 0.f, 1.f }, 0.f, { 1.f, 1.f, 1.f });
+        auto surround = std::make_shared<Record>();
+        surround->mPart.generate();
+        surround->mRole = Role::SURROUND;
+        surround->mShape = Shape::TRIANGLES;
+        surround->mMin.set(-1.1, -1.1, -0.1);
+        surround->mMax.set(1.1, 1.1, 2.1);
+        CHECK(judge(part, { surround }).mVerdict == CoverVerdict::PROXY);
+        auto twin = boxRecord({ 0.f, 0.f, 1.f }, 0.f, { 0.5f, 0.5f, 0.5f });
+        twin->mPart = surround->mPart;
+        CHECK(judge(part, { surround, twin }).mVerdict == CoverVerdict::EXTRA);
+    }
+
+    TEST_CASE("sknavinvisible: a box's triangles group into its six faces", "[sknavinvisible]")
+    {
+        const std::vector<InvisibleFace> faces = invisibleFaces(box({ 0.f, 0.f, 1.f }, 30.f, { 1.f, 2.f, 3.f }), InvisibleParams());
+        REQUIRE(faces.size() == 6u);
+        F32 total = 0.f;
+        for (const InvisibleFace& f : faces)
+        {
+            CHECK(f.mTris.size() == 2u);
+            total += f.mArea;
+        }
+        CHECK(std::fabs(total - 88.f) < 1e-3f);
     }
 }

@@ -1,6 +1,6 @@
 /**
  * @file sknavinvisible.h
- * @brief Whether an invisible part stands in for visible geometry or is a barrier of its own.
+ * @brief Whether an invisible part stands in for visible geometry, adds to it, or is a barrier of its own.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Alchemy Viewer Source Code
@@ -25,80 +25,89 @@
 #ifndef SK_NAVINVISIBLE_H
 #define SK_NAVINVISIBLE_H
 
+#include "sknavtypes.h"
+
+#include "v3dmath.h"
 #include "v3math.h"
 
 #include <vector>
 
 namespace sknav
 {
-    /// The overlap test's tunables.
+    /// The cover test's tunables.
     struct InvisibleParams
     {
-        F32 mNormalDeg = 25.f;      ///< a visible triangle this close to a face's normal, either sign, can cover it
-        F32 mSlabMin = 0.3f;        ///< and lies within the face's slab: this much either side of its plane at least,
-        F32 mSlabPad = 0.1f;        ///< this much more than the part's half thickness along the normal,
-        F32 mSlabMax = 1.f;         ///< and never more than this
-        F32 mSlabEpsilon = 1e-4f;   ///< the slab's boundary counts as inside it
-        F32 mShareThinRatio = 0.25f; ///< a face takes its opposite's cover only across a slab this thin for its size
-        F32 mCoveredShare = 0.5f;   ///< a part covered this much (all faces, or its steep ones) is a stand-in
-        F32 mMinFaceArea = 0.05f;   ///< smaller faces (a buried slab's edges) are left out of the verdict
-        F32 mSteepNz = 0.5f;        ///< a face whose normal's |z| is below this is steep, wall-like
+        F32 mProxyTolerance = 0.15f; ///< a part this far out of a visible-only box is still its proxy; a soup's prisms reach this far
+        F32 mMinFaceArea = 0.05f;   ///< no more than this sticking out of the colliding neighbours is no extra
         F32 mCoplanarCos = 0.999f;  ///< triangles this parallel
-        F32 mCoplanarD = 0.01f;     ///< and this close in plane offset are one face
-        S32 mMask = 32;             ///< each face's coverage mask is this many cells a side
+        F32 mCoplanarD = 0.01f;     ///< and this close in plane offset are one face; a face this close outside a solid's lies on it
         U32 mMaxPartTris = 4096;    ///< parts with more triangles are not judged
-        U32 mMaxFaces = 64;         ///< only this many of a part's largest faces are judged
+        U32 mMaxPieces = 65536;     ///< a part clipped into more pieces than this is too fine to judge
     };
 
-    /// A coplanar group of a part's triangles, in a frame on its plane.
+    /// A coplanar group of a part's triangles.
     struct InvisibleFace
     {
         LLVector3 mNormal;
         F32 mD = 0.f;               ///< plane offset: n . p
-        LLVector3 mU;               ///< in-plane axes
-        LLVector3 mV;
-        F32 mMinU = 0.f, mMaxU = 0.f, mMinV = 0.f, mMaxV = 0.f;
-        F32 mHalf = 0.f;            ///< the part's half thickness along the normal
-        F32 mOut = 1.f;             ///< 1 when the normal points away from the part's middle, else -1
         F32 mArea = 0.f;
         std::vector<U32> mTris;     ///< the part's triangles in it, by index
     };
 
-    /// A run of triangles, three vertices each, that may cover a face; never owned.
-    struct InvisibleSpan
+    enum class CoverVerdict : U8
     {
-        const LLVector3* mVerts = nullptr;
-        size_t mCount = 0;          ///< vertices
-        LLVector3 mOffset;          ///< added to every vertex: a neighbour region's into the part's frame
+        PROXY,              ///< stands in for visible geometry: drawn as its class
+        EXTRA,              ///< sticks out past the colliding neighbours: drawn as its class, what sticks out hatched
+        BARRIER,            ///< nothing visible near it: drawn as its class and hatched whole
+        UNKNOWN_PHYSICS,    ///< a neighbour's physics type has not arrived, or the part is too fine: drawn as its class
+    };
+    const char* coverVerdictName(CoverVerdict verdict);
+
+    /// A visible neighbour as the verdict takes it, values only; never owns what it points at.
+    struct CoverCandidate
+    {
+        const LLVector3* mVerts = nullptr;  ///< colliding: its shape's triangles, three vertices each
+        size_t mCount = 0;                  ///< vertices
+        LLVector3 mOffset;                  ///< added to every vertex and to mCenter: into the part's frame
+        bool mCollides = true;
+        bool mPhysicsKnown = true;
+        Shape mShape = Shape::BOX;
+        const S32* mConvexTris = nullptr;   ///< a soup's convex bodies: triangle count of each
+        size_t mBodies = 0;
+        LLVector3 mCenter;                  ///< not colliding: the box the part must lie in
+        LLVector3 mAxes[3];
+        LLVector3 mHalf;
     };
 
-    enum class InvisibleVerdict : U8
+    struct CoverResult
     {
-        STAND_IN,   ///< lies on visible geometry: drawn as its class
-        BARRIER,    ///< nothing visible on it: drawn as its class and hatched
-        UNJUDGED,   ///< too many triangles or no face large enough: drawn as its class
-    };
-
-    struct InvisibleResult
-    {
-        InvisibleVerdict mVerdict = InvisibleVerdict::UNJUDGED;
-        std::vector<F32> mShares;   ///< per face, its own cover share; -1 for a face under the minimum area
-        F32 mCoveredAll = 0.f;      ///< area-weighted share over the judged faces, opposite faces taking the better
-        F32 mCoveredSteep = 0.f;    ///< the same over the steep ones; mCoveredAll when there are none
-        F32 mSteepArea = 0.f;
+        CoverVerdict mVerdict = CoverVerdict::UNKNOWN_PHYSICS;
+        std::vector<LLVector3> mProtruding; ///< EXTRA: what sticks out, three vertices a triangle, in the part's frame
+        F32 mOutsideArea = 0.f;     ///< what sticks out; all of it for a barrier
+        F32 mPartArea = 0.f;
+        bool mSurfaceClip = false;  ///< a soup without bodies was clipped by its triangles' prisms
+        bool mTooFine = false;      ///< over mMaxPartTris triangles or mMaxPieces pieces
     };
 
     /// A part's faces: its triangles (three vertices each) grouped by plane.
     std::vector<InvisibleFace> invisibleFaces(const std::vector<LLVector3>& tris, const InvisibleParams& params);
 
-    /// The share of a face the spans' matching triangles cover, from a mask over the face's plane.
-    F32 invisibleFaceCover(const InvisibleFace& face, const std::vector<LLVector3>& tris,
-                           const std::vector<InvisibleSpan>& visible, const InvisibleParams& params);
+    /// An invisible part's verdict over its visible neighbours, in this order: none is a barrier; a neighbour whose
+    /// physics type is not known yet leaves it unknown; a non-colliding neighbour whose box (grown by mProxyTolerance)
+    /// holds every vertex makes it a proxy; otherwise what is left of its triangles once every colliding neighbour's
+    /// convex pieces are taken away sticks out, extra when more than mMinFaceArea.
+    CoverResult coverVerdict(const std::vector<LLVector3>& tris, const std::vector<CoverCandidate>& candidates,
+                             const InvisibleParams& params);
 
-    /// A part is a barrier when both its faces and its steep faces are covered less than mCoveredShare. A thin slab
-    /// stands for the surface on either side, so a face takes the share of an opposite face across it when that is more.
-    InvisibleResult invisibleVerdict(const std::vector<LLVector3>& tris, const std::vector<InvisibleSpan>& visible,
-                                     const InvisibleParams& params);
+    /// Whether a census record may be a neighbour in the cover test, short of its look: static, in the solid raster,
+    /// and drawn by the overview (or a surround, or visible only, which it keeps for this test alone).
+    bool coverPoolRecord(const Record& rec);
+
+    /// The records' shapes as the verdict takes them, in the frame of a region whose origin is given: a colliding
+    /// record's emitted triangles, a visible-only record's box, a surround's bounds unless a colliding record of its
+    /// part is among them. scratch holds the triangles the candidates point at.
+    std::vector<CoverCandidate> coverCandidates(const std::vector<const Record*>& records, const LLVector3d& origin,
+                                                std::vector<LLVector3>& scratch);
 }
 
 #endif // SK_NAVINVISIBLE_H

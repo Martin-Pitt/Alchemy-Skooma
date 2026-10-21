@@ -81,8 +81,6 @@ namespace skoverview
     constexpr F32 WALL_NZ = 0.5f;       ///< steeper than 60 degrees is wall
     constexpr F32 COVER_TOP_M = 1.6f;   ///< a part no taller than this is cover, not wall
     constexpr F32 INVISIBLE_WALL_M = 64.f; ///< a barrier, or an invisible part not yet judged, larger than this on any axis is no wall
-    constexpr U32 COVER_RETRIES = 8;     ///< a candidate not settled after this many attempts stops forcing rechecks
-    constexpr U32 COVER_EXTRACTS_PER_BUILD = 64; ///< visible parts whose top LOD is copied for the overlap test, at most, a build
     constexpr F32 GROUND_BASE_M = 4.f;  ///< a cluster whose base is no higher than this above the land stands on it
     constexpr F32 NO_CUT = 1.0e30f;     ///< the cut height of a linkset drawn whole
     constexpr F32 HIDDEN = -1.0e30f;    ///< the cut height of a linkset not drawn at all
@@ -227,58 +225,31 @@ private:
         skoverview::CensusClass mFixed = skoverview::NUM_CENSUS_CLASSES;
     };
     void gatherSurrounds(const struct SKCensusSnapshot& snap);
-    /// A visible part's visible faces at its top LOD, region-local: what an invisible part may lie on.
-    struct CoverGeom
-    {
-        LLVector3d mOrigin;
-        std::vector<LLVector3> mTris;
-    };
-    /// What decides an invisible part's verdict: the visible geometry near it, and whether some is still on its way.
+    /// What decides an invisible part's verdict: the census records near it whose look is visible.
     struct CoverInput
     {
-        bool mTest = false;     ///< an invisible part, judged by the overlap test
-        bool mPending = false;  ///< a candidate's top LOD or a face's look is not settled: no barrier yet
-        bool mRetry = false;    ///< and is worth asking again at the recheck
-        U64 mKey = 0;           ///< its candidates' geometry and looks
-        std::vector<std::shared_ptr<const CoverGeom>> mGeoms;
+        bool mTest = false;     ///< an invisible part, judged by the cover test
+        bool mPending = false;  ///< a neighbour's look is not known yet: no hatch yet
+        U64 mKey = 0;           ///< its candidates' signatures, kinds and looks
+        std::vector<const sknav::Record*> mCandidates; ///< owned by the snapshot the job holds
     };
-    /// The candidates near an invisible part's bounds (global), copying at most budget new ones' geometry.
-    CoverInput coverInputFor(const LLUUID& part, const LLVector3d& lo, const LLVector3d& hi,
-                             const struct SKCensusSnapshot& snap, U32& budget);
-    struct CoverEntry
-    {
-        U64 mKey = 0;           ///< its geometry and look, as the verdicts are keyed
-        U64 mGeomKey = 0;       ///< its shape and placement
-        U64 mLookKey = 0;       ///< its faces' inputs
-        U32 mPass = ~0u;        ///< the pass it was last worked in
-        U32 mTries = 0;         ///< attempts since it last settled or changed
-        bool mGeomPending = true; ///< its top LOD is not copied yet
-        bool mLookPending = false; ///< a face's look is not known yet
-        bool mInRange = false;  ///< near enough the scan to copy its top LOD
-        LLVector3d mOrigin;
-        std::shared_ptr<const std::vector<LLVector3>> mRaw; ///< every face's triangles, region-local
-        std::vector<U32> mStarts;   ///< each face's first vertex in mRaw
-        std::shared_ptr<const CoverGeom> mGeom; ///< the visible faces' triangles; null when it shows nothing
-    };
-    std::unordered_map<LLUUID, CoverEntry> mCoverGeom;
-    struct CoverCandidate
-    {
-        LLUUID mId;
-        LLVector3d mCentre;
-        F32 mRadius = 0.f;
-    };
-    std::vector<CoverCandidate> mCoverCandidates;   ///< every static volume the last full object list walk found
-    std::unordered_map<U64, std::vector<U32>> mCoverGrid; ///< mCoverCandidates by COVER_CELL_M cell in plan
+    /// The pass's records near an invisible part's bounds (global) that it may stand in for or add to.
+    CoverInput coverInputFor(const LLUUID& part, const LLVector3d& lo, const LLVector3d& hi, const struct SKCensusSnapshot& snap);
+    /// The pass's cover candidates (sknav::coverPoolRecord, not restless) by index into the snapshot's records, filed
+    /// by COVER_CELL_M cell in plan, with their looks.
+    std::unordered_map<U64, std::vector<U32>> mCoverGrid;
     std::vector<U32> mCoverLarge;                   ///< those spanning too many cells to file
+    std::vector<skoverview::Seen> mCoverSeen;      ///< per snapshot record; UNKNOWN when not a candidate
     static constexpr F64 COVER_CELL_M = 16.0;
     /// The worker's verdicts kept across builds by part; each build reads the last landed map and makes the next.
     struct Verdict
     {
         U64 mKey = 0;           ///< the part's geometry and its CoverInput::mKey
-        U8 mVerdict = 0;        ///< sknav::InvisibleVerdict
-        U16 mCovered = 0;       ///< faces covered and bare, for the log
-        U16 mBare = 0;
-        F32 mSteepM2 = 0.f;
+        U8 mVerdict = 0;        ///< sknav::CoverVerdict
+        bool mTooFine = false;
+        F32 mOutsideM2 = 0.f;   ///< what sticks out past the colliding neighbours
+        F32 mPartM2 = 0.f;
+        std::shared_ptr<const std::vector<LLVector3>> mProtruding; ///< EXTRA: what sticks out, region-local triangles
     };
     struct Verdicts
     {
@@ -316,18 +287,18 @@ private:
             std::vector<U8> mInvisible;         ///< per triangle, as Batch's
             U64 mHash = 0;                      ///< mPositions' bits, as Batch's
         };
-        /// What the overlap test made of the invisible parts, for the log.
+        /// What the cover test made of the invisible parts, for the log.
         struct CoverStats
         {
             U32 mParts = 0;
-            U32 mStandIns = 0;
+            U32 mProxies = 0;
+            U32 mExtra = 0;
             U32 mBarriers = 0;
-            U32 mUnknown = 0;
-            U32 mDropped = 0;   ///< barriers or unknown parts over INVISIBLE_WALL_M
+            U32 mUnknown = 0;   ///< a neighbour's type or look not known yet, or too fine
+            U32 mTooFine = 0;
+            U32 mDropped = 0;   ///< parts other than proxies over INVISIBLE_WALL_M
             U32 mJudged = 0;    ///< worked this build, the rest from the kept verdicts
-            U32 mFacesCovered = 0;
-            U32 mFacesBare = 0;
-            F32 mHatchedSteepM2 = 0.f;
+            F32 mHatchedM2 = 0.f; ///< what sticks out of the extra parts, and the barriers whole
             F64 mVerdictSeconds = 0.0; ///< in the verdicts of the judged parts
             F64 mBuildSeconds = 0.0;   ///< in the whole per-part loop
         };
@@ -347,6 +318,10 @@ private:
     bool mBuilt = false;    ///< a build has landed since the last release()
     /// A part's look, kept per part while its object and faces' inputs stay the same.
     skoverview::Seen seenOf(const LLUUID& part);
+public:
+    /// A part's look as the last pass found it: 0 visible, 1 invisible, 2 not known yet, 255 not asked; for exports.
+    U8 lastSeen(const LLUUID& part) const;
+private:
     /// Drops the verdicts of parts no pass asked about since the last prune.
     void pruneSeen();
     struct SeenEntry
@@ -357,6 +332,7 @@ private:
     };
     static constexpr U32 SEEN_REVERIFY_PASSES = 32; ///< each kept verdict is worked again once in this many passes
     std::unordered_map<LLUUID, SeenEntry> mSeen;
+    std::unordered_map<LLUUID, U32> mSeenUnknown; ///< the parts whose look was not known yet, by the pass that asked
     U32 mSeenPass = 0;
     /// A sculpt's region-local triangles, kept while its volume, map and placement stay the same.
     struct SculptEntry
