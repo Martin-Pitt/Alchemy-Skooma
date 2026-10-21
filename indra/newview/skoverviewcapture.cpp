@@ -1360,10 +1360,17 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
             const F32 plane[4] = { normal_eye.getF32ptr()[0], normal_eye.getF32ptr()[1], normal_eye.getF32ptr()[2],
                                    shot.mCut - normal_eye.dot3(origin_eye).getF32() };
             const F32 no_cut[4] = { 0.f, 0.f, 0.f, 1.f };
+            if (shot.mPartCuts)
+            {
+                // A build that landed since the last cut is drawn whole until applyCut writes its cuts.
+                cut_table.flush();
+            }
             // The tactical view cuts each part at its own height (SKOverviewCensus::applyCut); a map at the one plane.
+            // A table whose store could not be allocated has nothing to read, so its parts are drawn whole.
+            const bool cuts = shot.mPartCuts && cut_table.publishedRows() > 0;
             // Circles bind the one permutation that discards; without them every pass keeps early depth.
-            const bool dissolve = shot.mPartCuts && !shot.mDissolve.empty();
-            LLGLSLShader& geom = !shot.mPartCuts ? sGeom : dissolve ? sGeomCutDissolve : sGeomCut;
+            const bool dissolve = cuts && !shot.mDissolve.empty();
+            LLGLSLShader& geom = !cuts ? sGeom : dissolve ? sGeomCutDissolve : sGeomCut;
             // The section pass alone writes depth, lifting each fragment onto its part's cut.
             LLGLSLShader& lift = dissolve ? sGeomCapLiftDissolve : sGeomCapLift;
             LLMatrix4a inverse_view;
@@ -1391,7 +1398,7 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
                 glUniformMatrix3fv(prog.getUniformLocation(SK_EYE_TO_WORLD), 1, GL_FALSE, eye_to_world);
                 uniformCeiling(prog, shot.mView);
                 static LLCachedControl<U32> debug_view(gSavedSettings, "SKOverviewDebugView", 0);
-                glUniform1i(prog.getUniformLocation(SK_DEBUG_CUT), shot.mPartCuts && debug_view == 5 ? 1 : 0);
+                glUniform1i(prog.getUniformLocation(SK_DEBUG_CUT), cuts && debug_view == 5 ? 1 : 0);
                 const GLsizei n = (GLsizei)llmin(shot.mDissolve.size(), (size_t)SK_MAX_DISSOLVE);
                 if (dissolve && n)
                 {
@@ -1401,16 +1408,11 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
                     glUniform4fv(prog.getUniformLocation(SK_DISSOLVE), n, shot.mDissolve.front().mV);
                     glUniform1fv(prog.getUniformLocation(SK_DISSOLVE_FLOOR), n, shot.mDissolveFloor.data());
                 }
-                if (shot.mPartCuts)
+                if (cuts)
                 {
                     cut_table.bind(prog);
                 }
             };
-            if (shot.mPartCuts)
-            {
-                // A build that landed since the last cut is drawn whole until applyCut writes its cuts.
-                cut_table.flush();
-            }
             // The clip plane, the ceiling and the cuts are clip distances every overview geometry program writes.
             LLGLEnable clip0(GL_CLIP_DISTANCE0);
             LLGLEnable clip1(GL_CLIP_DISTANCE0 + 1);
@@ -1418,7 +1420,7 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
             LLGLEnable clip3(GL_CLIP_DISTANCE0 + 3);
             bindGeom(geom);
             // B carries a cut part's cap flag; the invisible pass after it raises it to 1 where it draws.
-            gGL.setColorMask(true, true, shot.mPartCuts, true);
+            gGL.setColorMask(true, true, cuts, true);
             LLGLEnable offset(GL_POLYGON_OFFSET_FILL);
             gGL.setPolygonOffset(-1.f, -4.f);
             // Front faces, then the back faces of solids the cut went through, which stand for their section. Where
@@ -1428,7 +1430,7 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
             // does not hide it, and the outside faces in front of a far wall's inside are left alone.
             enum { CAP_FRONT, CAP_BACK, CAP_PARITY, CAP_FILL };
             std::vector<S32> passes = { CAP_FRONT, CAP_BACK };
-            if (shot.mPartCuts)
+            if (cuts)
             {
                 passes.push_back(CAP_PARITY);
                 passes.push_back(CAP_FILL);
