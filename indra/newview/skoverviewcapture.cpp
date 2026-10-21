@@ -537,6 +537,20 @@ std::vector<SKOverviewCapture::Tile> SKOverviewCapture::tiles() const
 
 namespace
 {
+    /// The frustum planes (agent space, a*x + b*y + c*z + d <= 0 inside) in the frame of a page whose origin lies at
+    /// offset_agent, which both command builders test its slots' boxes in.
+    void pagePlanes(const F32 agent[6][4], const LLVector3& offset_agent, F32 out[6][4])
+    {
+        for (U32 i = 0; i < 6; ++i)
+        {
+            out[i][0] = agent[i][0];
+            out[i][1] = agent[i][1];
+            out[i][2] = agent[i][2];
+            out[i][3] = (F32)((F64)agent[i][3] + (F64)agent[i][0] * offset_agent.mV[VX] + (F64)agent[i][1] * offset_agent.mV[VY] +
+                              (F64)agent[i][2] * offset_agent.mV[VZ]);
+        }
+    }
+
     /// The program each of skoverview::PROGRAMS builds, in its order.
     LLGLSLShader* const OVERVIEW_SHADERS[] = { &sResolve,     &sComposite,           &sGeom,  &sGeomCut, &sGeomCutDissolve,
                                                &sGeomCapLift, &sGeomCapLiftDissolve, &sMarker };
@@ -1271,84 +1285,69 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
     LLCamera cull = shot.mCull;
     LLViewerCamera::updateFrustumPlanes(cull, false, false, true);
 
-    // The census, region by region, a class a multi-draw, nearer than the terrain where they coincide.
-    const std::vector<SKOverviewCensus::Batch>& batches = mCensus.batches();
-    // Each class's groups the shot sees, merged into ranges: in the frustum, on the level the shot keeps, and with a
-    // patch, on screen inside it. A class's groups tile its range, so with all of them kept it is one range, as before.
-    struct Ranges
+    // The census, region by region and page by page, a page a multi-draw, nearer than the terrain where they coincide.
+    const std::vector<SKOverviewCensus::Region>& regions = mCensus.regions();
+    // Each page's slots the shot sees, merged into runs: on the level the shot keeps, in the frustum, and with a patch,
+    // on screen inside it. A page's slots in vertex order, so adjacent kept ones draw as one run.
+    struct Runs
     {
         std::vector<GLint> mFirst;
         std::vector<GLsizei> mCount;
     };
-    std::vector<std::array<Ranges, skoverview::NUM_CENSUS_CLASSES>> ranges(batches.size());
+    std::vector<std::vector<Runs>> runs(regions.size());
     {
         LL_PROFILE_ZONE_NAMED("sk overview cull groups");
         LLMatrix4a view_proj;
         view_proj.setMul(shot.mView, shot.mProj);
-        std::vector<std::pair<U32, U32>> spans;
-        std::vector<bool> kept;
-        for (size_t b = 0; b < batches.size(); ++b)
+        // The frustum's sides and near plane, agent space; nothing is culled by the far plane.
+        F32 agent_planes[6][4];
+        for (U32 i = 0; i < 6; ++i)
         {
-            const SKOverviewCensus::Batch& batch = batches[b];
-            kept.assign(batch.mGroups.size(), false);
-            for (size_t g = 0; g < batch.mGroups.size(); ++g)
+            const LLPlane& plane = cull.getAgentPlane(i);
+            for (U32 k = 0; k < 4; ++k)
             {
-                const SKOverviewCensus::Group& group = batch.mGroups[g];
-                if (!shot.mLevel.keeps(group))
-                {
-                    continue;
-                }
-                const LLVector3 lo_agent = gAgent.getPosAgentFromGlobal(group.mMin);
-                const LLVector3 hi_agent = gAgent.getPosAgentFromGlobal(group.mMax);
-                LLVector4a lo, hi, centre, half;
-                lo.load3(lo_agent.mV);
-                hi.load3(hi_agent.mV);
-                centre.setAdd(lo, hi);
-                centre.mul(0.5f);
-                half.setSub(hi, lo);
-                half.mul(0.5f);
-                if (!cull.AABBInFrustumNoFarClip(centre, half))
-                {
-                    continue;
-                }
-                LLRect on_screen;
-                if (patch && !(SKOverviewMovers::screenRectOf(view_proj, lo, hi, w, h, on_screen) && on_screen.overlaps(*patch)))
-                {
-                    continue;
-                }
-                kept[g] = true;
+                agent_planes[i][k] = i == LLCamera::AGENT_PLANE_FAR ? (k == 3 ? -1.f : 0.f) : plane[k];
             }
-            for (U32 c = 0; c < skoverview::NUM_CENSUS_CLASSES; ++c)
+        }
+        std::vector<U32> first, count;
+        for (size_t r = 0; r < regions.size(); ++r)
+        {
+            const SKOverviewCensus::Region& region = regions[r];
+            const LLVector3 offset_agent = gAgent.getPosAgentFromGlobal(region.mOrigin);
+            F32 planes[6][4];
+            pagePlanes(agent_planes, offset_agent, planes);
+            runs[r].resize(region.mPages.size());
+            for (size_t p = 0; p < region.mPages.size(); ++p)
             {
-                spans.clear();
-                for (size_t g = 0; g < batch.mGroups.size(); ++g)
+                const SKOverviewCensus::Page& page = region.mPages[p];
+                skoverview::buildCommands(page.mSlots, shot.mLevel, planes, first, count);
+                for (size_t i = 0; patch && i < count.size(); ++i)
                 {
-                    if (kept[g] && batch.mGroups[g].mCount[c])
+                    if (!count[i])
                     {
-                        spans.emplace_back(batch.mGroups[g].mStart[c], batch.mGroups[g].mCount[c]);
+                        continue;
+                    }
+                    const skoverview::SlotCull& slot = page.mSlots[i];
+                    const LLVector3 lo_agent = offset_agent + LLVector3(slot.mLo[0], slot.mLo[1], slot.mLo[2]);
+                    const LLVector3 hi_agent = offset_agent + LLVector3(slot.mHi[0], slot.mHi[1], slot.mHi[2]);
+                    LLVector4a lo, hi;
+                    lo.load3(lo_agent.mV);
+                    hi.load3(hi_agent.mV);
+                    LLRect on_screen;
+                    if (!(SKOverviewMovers::screenRectOf(view_proj, lo, hi, w, h, on_screen) && on_screen.overlaps(*patch)))
+                    {
+                        count[i] = 0;
                     }
                 }
-                std::sort(spans.begin(), spans.end());
-                Ranges& out = ranges[b][c];
-                for (const std::pair<U32, U32>& span : spans)
-                {
-                    if (!out.mFirst.empty() && (U32)(out.mFirst.back() + out.mCount.back()) == span.first)
-                    {
-                        out.mCount.back() += (GLsizei)span.second;
-                    }
-                    else
-                    {
-                        out.mFirst.push_back((GLint)span.first);
-                        out.mCount.push_back((GLsizei)span.second);
-                    }
-                }
+                skoverview::mergeRuns(first, count, runs[r][p].mFirst, runs[r][p].mCount);
             }
         }
     }
+    U32 census_draws = 0;
     std::function<void()> census;
-    if (!batches.empty())
+    if (!regions.empty())
     {
-        census = [&batches, &ranges, &shot, patch, &cut_table = mCensus.cutTable()]()
+        census = [&regions, &runs, &census_draws, &shot, patch, &cut_table = mCensus.cutTable()]()
         {
             // The census writes its class code and the triangle's own normal (G, A), so flush parts never crease.
             LLVector4a down, normal_eye, origin_eye, zero;
@@ -1376,12 +1375,18 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
             inverse_view.setInverse(shot.mView);
             const F32* m = inverse_view.getF32ptr();
             const F32 eye_to_world[9] = { m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10] };
-            // A class's kept ranges in one call.
-            auto drawClass = [&batches, &ranges](const SKOverviewCensus::Batch& batch, U32 c)
+            // A page's kept runs in one call.
+            auto drawPage = [&runs, &census_draws](size_t r, size_t p, const SKOverviewCensus::Page& page)
             {
-                const Ranges& kept = ranges[&batch - batches.data()][c];
-                batch.mBuffer->multiDrawArrays(LLRender::TRIANGLES, kept.mFirst.data(), kept.mCount.data(),
-                                               (GLsizei)kept.mFirst.size());
+                const Runs& kept = runs[r][p];
+                if (kept.mFirst.empty())
+                {
+                    return;
+                }
+                page.mBuffer->setBuffer();
+                page.mBuffer->multiDrawArrays(LLRender::TRIANGLES, kept.mFirst.data(), kept.mCount.data(),
+                                              (GLsizei)kept.mFirst.size());
+                ++census_draws;
             };
             // Binds a geometry program with the shot's uniforms; the cap pass is set per pass.
             LLGLSLShader* bound = nullptr;
@@ -1465,17 +1470,18 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
                     glStencilMask(0x00);
                     gGL.setColorMask(true, true, true, true);
                 }
-                for (const SKOverviewCensus::Batch& batch : batches)
+                for (size_t r = 0; r < regions.size(); ++r)
                 {
-                    const LLVector3 offset_agent = gAgent.getPosAgentFromGlobal(batch.mOrigin);
+                    const SKOverviewCensus::Region& region = regions[r];
+                    const LLVector3 offset_agent = gAgent.getPosAgentFromGlobal(region.mOrigin);
                     gGL.loadMatrix(shot.mView);
                     gGL.translatef(offset_agent.mV[VX], offset_agent.mV[VY], offset_agent.mV[VZ]);
                     gGLLastMatrix = NULL;
-                    batch.mBuffer->setBuffer();
-                    for (U32 c = 0; c < skoverview::NUM_CENSUS_CLASSES; ++c)
+                    for (size_t p = 0; p < region.mPages.size(); ++p)
                     {
-                        const U32 count = batch.mStart[c + 1] - batch.mStart[c];
-                        if (!count || c == skoverview::INVISIBLE)
+                        const SKOverviewCensus::Page& page = region.mPages[p];
+                        const U32 c = page.mClass;
+                        if (c == skoverview::INVISIBLE)
                         {
                             continue;
                         }
@@ -1485,7 +1491,7 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
                         // cover over wall over the rest, by a class's own depth offset rather than draw order.
                         static const F32 PRIORITY[skoverview::NUM_CENSUS_CLASSES] = { 8.f, 2.f, 4.f, 6.f, 1.f, 1.f, 1.f, 0.f, 0.f };
                         gGL.setPolygonOffset(-1.f, -4.f - PRIORITY[c]);
-                        drawClass(batch, c);
+                        drawPage(r, p, page);
                     }
                 }
                 glCullFace(GL_BACK);
@@ -1500,21 +1506,21 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
                 LLGLDisable cull_face(GL_CULL_FACE);
                 gGL.setColorMask(false, false, true, false);
                 gGL.setPolygonOffset(-1.f, -16.f);
-                for (const SKOverviewCensus::Batch& batch : batches)
+                for (size_t r = 0; r < regions.size(); ++r)
                 {
-                    const U32 start = batch.mStart[skoverview::INVISIBLE];
-                    const U32 count = batch.mStart[skoverview::INVISIBLE + 1] - start;
-                    if (!count)
-                    {
-                        continue;
-                    }
-                    const LLVector3 offset_agent = gAgent.getPosAgentFromGlobal(batch.mOrigin);
+                    const SKOverviewCensus::Region& region = regions[r];
+                    const LLVector3 offset_agent = gAgent.getPosAgentFromGlobal(region.mOrigin);
                     gGL.loadMatrix(shot.mView);
                     gGL.translatef(offset_agent.mV[VX], offset_agent.mV[VY], offset_agent.mV[VZ]);
                     gGLLastMatrix = NULL;
-                    batch.mBuffer->setBuffer();
                     gGL.diffuseColor4f(0.f, 0.f, 1.f, 1.f);
-                    drawClass(batch, skoverview::INVISIBLE);
+                    for (size_t p = 0; p < region.mPages.size(); ++p)
+                    {
+                        if (region.mPages[p].mClass == skoverview::INVISIBLE)
+                        {
+                            drawPage(r, p, region.mPages[p]);
+                        }
+                    }
                 }
                 gGL.setColorMask(true, false, false, false);
             }
@@ -1548,7 +1554,7 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
         }
         glClearDepth(clear_depth);
         glClearColor(clear_colour[0], clear_colour[1], clear_colour[2], clear_colour[3]);
-        draws = gPipeline.skRenderOverview(shot.mView, shot.mProj, cull, shot.mCut, census);
+        draws = gPipeline.skRenderOverview(shot.mView, shot.mProj, cull, shot.mCut, census) + census_draws;
         capture.flush();
         mCost.mCaptureMs += timer.getElapsedTimeF32() * 1000.f;
     }
@@ -1714,11 +1720,11 @@ bool SKOverviewCapture::captureMap(RegionMap& map, LLViewerRegion* region, bool 
     if (agent)
     {
         const LLVector3d region_origin = region->getOriginGlobal();
-        for (const SKOverviewCensus::Batch& batch : mCensus.batches())
+        for (const SKOverviewCensus::Region& census_region : mCensus.regions())
         {
-            if ((batch.mOrigin - region_origin).magVecSquared() < 1.0)
+            if ((census_region.mOrigin - region_origin).magVecSquared() < 1.0)
             {
-                for (const SKOverviewCensus::Group& group : batch.mGroups)
+                for (const SKOverviewCensus::Group& group : census_region.mGroups)
                 {
                     region_top = llmax(region_top, (F32)group.mMax.mdV[VZ]);
                 }

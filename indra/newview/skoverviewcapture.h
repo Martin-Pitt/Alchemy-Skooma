@@ -80,7 +80,7 @@ public:
         F32 gpu_patch_ms = -1.f;    // its see-through circles' patch
         F32 gpu_movers_ms = -1.f;   // its movers
         F32 gpu_resolve_ms = -1.f;  // one of its resolves
-        U32 draws = 0;       // draw infos sorted for the capture, plus the terrain pool
+        U32 draws = 0;       // draw infos sorted for the capture, plus the terrain pool, plus the census's page draws
         U32 census_tris = 0;
         U32 captures = 0;
     };
