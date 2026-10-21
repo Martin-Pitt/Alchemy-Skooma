@@ -3226,9 +3226,12 @@ void LLVOVolume::setLightLinearColor(const LLColor3& color)
     LLLightParams *param_block = getLightParams();
     if (param_block)
     {
-        if (param_block->getLinearColor() != color)
+        // Compared as the block holds it, at the wire's precision: a color that packs to the same bytes changes
+        // nothing.
+        const LLColor4 held = param_block->getLinearColor();
+        param_block->setLinearColor(LLColor4(color, held.mV[VALPHA]));
+        if (param_block->getLinearColor() != held)
         {
-            param_block->setLinearColor(LLColor4(color, param_block->getLinearColor().mV[3]));
             parameterChanged(LLNetworkData::PARAMS_LIGHT, true);
             gPipeline.markTextured(mDrawable);
             mFaceMappingChanged = true;
@@ -3241,9 +3244,10 @@ void LLVOVolume::setLightIntensity(F32 intensity)
     LLLightParams *param_block = getLightParams();
     if (param_block)
     {
-        if (param_block->getLinearColor().mV[3] != intensity)
+        const LLColor4 held = param_block->getLinearColor();
+        param_block->setLinearColor(LLColor4(LLColor3(held), intensity));
+        if (param_block->getLinearColor() != held)
         {
-            param_block->setLinearColor(LLColor4(LLColor3(param_block->getLinearColor()), intensity));
             parameterChanged(LLNetworkData::PARAMS_LIGHT, true);
         }
     }
@@ -4975,10 +4979,17 @@ bool LLVOVolume::lineSegmentIntersect(const LLVector4a& start, const LLVector4a&
                     {
                         if (transform)
                         {
+                            // A tangent lies in the surface, so it goes through the volume's scale as positions do,
+                            // not through the inverse scale volumeDirectionToAgent gives normals.
                             LLVector3 v_tn(tn.getF32ptr());
+                            if (!isVolumeGlobal())
+                            {
+                                v_tn.scaleVec(getScale());
+                            }
+                            v_tn = v_tn * getRenderRotation();
 
                             LLVector4a trans_tangent;
-                            trans_tangent.load3(volumeDirectionToAgent(v_tn).mV);
+                            trans_tangent.load3(v_tn.mV);
 
                             LLVector4Logical mask;
                             mask.clear();
@@ -7431,7 +7442,9 @@ U32 LLVolumeGeometryManager::genDrawInfo(LLSpatialGroup* group, U32 mask, LLFace
                 }
             }
 
-            if (!is_alpha && LLPipeline::sRenderGlow && te->getGlow() > 0.f)
+            // Whatever RenderGlow says: the glow passes check LLPipeline::sRenderGlow when they draw,
+            // so turning glow on or off rebuilds nothing.
+            if (!is_alpha && te->getGlow() > 0.f)
             {
                 if (gltf_mat)
                 {
