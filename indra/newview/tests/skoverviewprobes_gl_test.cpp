@@ -318,6 +318,25 @@ namespace
         }
     }
 
+    TEST_CASE_METHOD(skoverviewprobes_gl_data, "skoverviewprobes: a pole thinner than a texel passes by its vertices",
+                     "[skoverviewprobes][gl]")
+    {
+        if (!ALQueryPool::supports(ALQueryKind::OcclusionExact))
+        {
+            SKIP("the context has no exact occlusion queries");
+        }
+        for (bool reverse : conventions())
+        {
+            CAPTURE(reverse);
+            buildProgram(reverse);
+            // Two centimetres across inside one quarter-metre texel, off its centre: no fill and no line need touch it.
+            const std::vector<Run> runs = upload({ wall(1.30f, 1.30f, 1.32f, 1.30f, 0.f, 3.f, 8) });
+            CHECK(counts(roomBox(), {}, runs, false)[0] == 0);
+            CHECK(counts(roomBox(), {}, runs, true)[0] > 0);
+            CHECK(glGetError() == GLenum(GL_NO_ERROR));
+        }
+    }
+
     TEST_CASE_METHOD(skoverviewprobes_gl_data, "skoverviewprobes: the feet texel reads the upper quad's id and height", "[skoverviewprobes][gl]")
     {
         for (bool reverse : conventions())

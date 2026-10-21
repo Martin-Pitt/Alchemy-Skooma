@@ -428,8 +428,11 @@ ALQueryTicket SKOverviewProbes::query(const std::vector<Run>& runs, bool edges)
     drawRuns(runs);
     if (edges)
     {
-        // A face edge-on to the view covers no sample filled; its edges, as lines, cover the texels it crosses.
+        // A face edge-on to the view covers no sample filled; its edges, as lines, cover the texels it crosses, and its
+        // vertices, as points, the texel each lies in, so a linkset thinner than a texel (a pole) still counts.
         glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+        drawRuns(runs);
+        glPolygonMode(GL_FRONT_AND_BACK, GL_POINT);
         drawRuns(runs);
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
     }
