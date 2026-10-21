@@ -67,7 +67,8 @@ namespace sknav
 
         void clip(const Poly& in, const LLVector3& n, F32 k, bool below, Poly& out)
         {
-            out.resize(in.size() + 1);
+            // A vertex and a crossing per edge at most: rounding can make a piece cross a plane more than twice.
+            out.resize(in.size() * 2);
             out.resize(in.size() < 3 ? 0 : clipPlane(in.data(), (S32)in.size(), n, k, below, out.data()));
         }
 
@@ -102,6 +103,20 @@ namespace sknav
             return true;
         }
 
+        // A triangle's unit normal; false for a sliver, whose normal is rounding noise (a tessellated sphere's pole).
+        bool planeOf(const LLVector3& a, const LLVector3& b, const LLVector3& c, LLVector3& n)
+        {
+            n = (b - a) % (c - a);
+            const F32 len = n.length();
+            const F32 longest = llmax((b - a).lengthSquared(), llmax((c - b).lengthSquared(), (a - c).lengthSquared()));
+            if (len <= 1e-8f || len <= 1e-6f * longest)
+            {
+                return false;
+            }
+            n /= len;
+            return true;
+        }
+
         // Every plane grown outward, so a face lying on the piece's face is inside it.
         void grow(Piece& piece, F32 by)
         {
@@ -127,13 +142,11 @@ namespace sknav
             for (size_t t = 0; t + 2 < count; t += 3)
             {
                 const LLVector3 a = v[t] + offset;
-                LLVector3 n = (v[t + 1] - v[t]) % (v[t + 2] - v[t]);
-                const F32 len = n.length();
-                if (len <= 1e-8f)
+                LLVector3 n;
+                if (!planeOf(v[t], v[t + 1], v[t + 2], n))
                 {
                     continue;
                 }
-                n /= len;
                 F32 k = n * a;
                 if (n * centroid > k)
                 {
@@ -157,13 +170,11 @@ namespace sknav
         // A triangle extruded mProxyTolerance either way along its normal; false when degenerate.
         bool prismPiece(const LLVector3& a, const LLVector3& b, const LLVector3& c, const InvisibleParams& params, Piece& piece)
         {
-            LLVector3 n = (b - a) % (c - a);
-            const F32 len = n.length();
-            if (len <= 1e-8f)
+            LLVector3 n;
+            if (!planeOf(a, b, c, n))
             {
                 return false;
             }
-            n /= len;
             const F32 k = n * a;
             const F32 tol = params.mProxyTolerance;
             piece.mPlanes = { { n, k + tol }, { -n, -k + tol } };
