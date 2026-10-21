@@ -83,8 +83,8 @@ namespace skoverview
     constexpr U32 COVER_RETRIES = 8;     ///< a candidate not settled after this many attempts stops forcing rechecks
     constexpr U32 COVER_EXTRACTS_PER_BUILD = 64; ///< visible parts whose top LOD is copied for the overlap test, at most, a build
     constexpr F32 GROUND_BASE_M = 4.f;  ///< a cluster whose base is no higher than this above the land stands on it
-    constexpr F32 NO_CUT = 1.0e30f;     ///< the per-vertex cut height of a part drawn whole
-    constexpr F32 HIDDEN = -1.0e30f;    ///< the per-vertex cut height of a part not drawn at all
+    constexpr F32 NO_CUT = 1.0e30f;     ///< the cut height of a linkset drawn whole
+    constexpr F32 HIDDEN = -1.0e30f;    ///< the cut height of a linkset not drawn at all
     constexpr U8 TRI_PASS_THROUGH = 1;  ///< a triangle's flag: an invisible part's the cut and raycasts pass through
     constexpr U8 TRI_OPEN = 2;          ///< a triangle's flag: its part has open edges, so has no inside to section
 
@@ -132,8 +132,6 @@ public:
         /// Per triangle: an invisible part's that does not stand in for visible geometry, passed through by the cut
         /// and the raycast as invisible parts always were (TRI_PASS_THROUGH), and whether its part is open (TRI_OPEN).
         std::vector<U8> mInvisible;
-        /// The cut heights the buffer holds, per vertex; empty while every one is NO_CUT.
-        std::vector<F32> mCutValues;
         U64 mHash = 0;          ///< mPositions' bits, hashed on the worker, so a rebuild keeps an unchanged buffer cheaply
     };
 
@@ -174,7 +172,7 @@ public:
         bool mOutdoors = false; ///< in outdoor air by the enclosure: no room or column is cut for them
         F32 mPriority = 0.f;    ///< among others sharing a building, the highest priority's storey is cut for
     };
-    /// Writes each vertex's cut height for the tactical view, for the linksets in the given region:
+    /// Writes each linkset's cut height into the cut table for the tactical view, for the linksets in the given region:
     /// - room: every linkset bounding an occupant's enclosed room (walls round its floor, floors above, the roof);
     /// - none for an occupant in outdoor air (on a roof, in the street);
     /// - column: with no room known, every linkset whose bounds hold their column and rise above it;
@@ -183,7 +181,7 @@ public:
     /// What hides someone from the tactical eye is not cut here: its shader dissolves it round them.
     /// The agent's are cut at the agent's level, whoever else needs them; another's at the level of its
     /// occupant of highest mPriority. Every other part, there and elsewhere, is drawn whole. key says when the eye or the people moved:
-    /// the same key and buffers do nothing. Rewrites the attribute only when the result changed, and logs it then;
+    /// the same key and buffers do nothing. Publishes the table only when the result changed, and logs it then;
     /// cutStamp() moves when it does.
     void applyCut(const LLViewerRegion* region, const std::vector<Occupant>& occupants, U64 key);
     U64 cutStamp() const { return mCutStamp; }

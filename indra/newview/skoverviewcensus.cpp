@@ -1610,7 +1610,6 @@ void SKOverviewCensus::swapIn(Built& built)
         {
             LL_PROFILE_ZONE_NAMED("sk census keep buffer");
             batch.mBuffer = std::move(same->mBuffer);
-            batch.mCutValues = std::move(same->mCutValues);
             // A linkset added elsewhere shifts every later id while this region's bytes stay the same.
             LLStrider<F32> ids;
             if (!sameGroupIds(same->mGroups, region.mGroups) && batch.mBuffer->getWeightStrider(ids, 0, (S32)total) && ids.get())
@@ -2521,57 +2520,6 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
             row.mMaxZ = (F32)e.mMax.mdV[VZ];
         }
         mCutTable.flush();
-        for (Batch& batch : mBatches)
-        {
-            const U32 total = batch.mStart[skoverview::NUM_CENSUS_CLASSES];
-            if (!total)
-            {
-                continue;
-            }
-            std::vector<F32> values(total, skoverview::NO_CUT);
-            for (const Group& group : batch.mGroups)
-            {
-                const auto it = cut_of.find(group.mId);
-                // A part wholly under its cut is left whole, so an open mesh there (a desk with no underside) is
-                // never counted as a solid the cut went through.
-                if (it == cut_of.end() || (it->second != skoverview::HIDDEN && group.mMax.mdV[VZ] <= it->second))
-                {
-                    continue;
-                }
-                for (U32 c = 0; c < skoverview::NUM_CENSUS_CLASSES; ++c)
-                {
-                    const U32 end = llmin(group.mStart[c] + group.mCount[c], total);
-                    std::fill(values.begin() + llmin(group.mStart[c], end), values.begin() + end, it->second);
-                }
-            }
-            // Only the span that changed is written: a cut moves a building or two, not the region.
-            U32 lo = total;
-            U32 hi = 0;
-            for (U32 v = 0; v < total; ++v)
-            {
-                const F32 held = v < batch.mCutValues.size() ? batch.mCutValues[v] : skoverview::NO_CUT;
-                if (values[v] != held)
-                {
-                    lo = llmin(lo, v);
-                    hi = v + 1;
-                }
-            }
-            if (lo >= hi)
-            {
-                continue;
-            }
-            LLStrider<F32> strider;
-            if (!batch.mBuffer->getWeightStrider(strider, lo, (S32)(hi - lo)) || !strider.get())
-            {
-                continue;
-            }
-            for (U32 v = lo; v < hi; ++v)
-            {
-                *strider++ = values[v];
-            }
-            batch.mBuffer->unmapBuffer();
-            batch.mCutValues = std::move(values);
-        }
     }
 }
 
