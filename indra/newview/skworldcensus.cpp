@@ -693,6 +693,11 @@ bool SKWorldCensus::pending(LLViewerObject* object, const PartCache& cache) cons
     {
         return true;
     }
+    // A surround is signed by its loaded LOD, which follows the camera; they are few, so each scan visits them.
+    if (cache.mTaken.front()->mRole == Role::SURROUND)
+    {
+        return true;
+    }
     if (object->getPCode() == LL_PCODE_VOLUME && static_cast<LLVOVolume*>(object)->isMesh())
     {
         LLVOVolume* volume = static_cast<LLVOVolume*>(object);
