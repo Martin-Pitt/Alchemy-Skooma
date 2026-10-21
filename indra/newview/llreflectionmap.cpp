@@ -394,14 +394,15 @@ bool LLReflectionMap::isActive() const
 
 bool LLReflectionMap::isRelevant() const
 {
-    static LLCachedControl<S32> RenderReflectionProbeLevel(gSavedSettings, "RenderReflectionProbeLevel", 3);
+    // The level the programs sample the probes at.
+    const S32 probe_level = gPipeline.shaderInputs().mGlobal.mProbeLevel;
 
     if (mOrphaned)
     { // whatever it was registered for is gone; the manager deletes it on its next update
         return false;
     }
 
-    if (mViewerObject && RenderReflectionProbeLevel > 0)
+    if (mViewerObject && probe_level > 0)
     { // not an automatic probe
         return true;
     }
@@ -421,22 +422,22 @@ bool LLReflectionMap::isRelevant() const
         return false;
     }
 
-    if (mNavRooms && RenderReflectionProbeLevel < 3) // <SK:Nexii> Navmesh rooms probes stand in for octree probes, which only level 3 has.
+    if (mNavRooms && probe_level < 3) // <SK:Nexii> Navmesh rooms probes stand in for octree probes, which only level 3 has.
     {
         return false;
     }
 
-    if (mClusterFill && RenderReflectionProbeLevel < 3) // <SK:Nexii> Cluster probes fill under the automatic probes, which only level 3 has.
+    if (mClusterFill && probe_level < 3) // <SK:Nexii> Cluster probes fill under the automatic probes, which only level 3 has.
     {
         return false;
     }
 
-    if (RenderReflectionProbeLevel == 3)
+    if (probe_level == 3)
     { // all automatics are relevant
         return true;
     }
 
-    if (RenderReflectionProbeLevel == 2)
+    if (probe_level == 2)
     { // terrain and water only, ignore probes that have a group
         return !mGroup;
     }
