@@ -1889,11 +1889,11 @@ const SKNavWorldView::AirColumn* SKOverviewCapture::columnOf(const SKNavWorldVie
     }
     HeldColumn& held = mColumns[id];
     // The dissolve passes the feet back through agent coordinates, so the plan matches to a millimetre, not exactly.
-    if (held.mAt != now || held.mRevision != world->revision() || std::fabs(held.mXY.mdV[VX] - feet.mdV[VX]) > 1e-3 ||
+    if (held.mAt != now || held.mRevision != world->airRevision() || std::fabs(held.mXY.mdV[VX] - feet.mdV[VX]) > 1e-3 ||
         std::fabs(held.mXY.mdV[VY] - feet.mdV[VY]) > 1e-3)
     {
         held.mAt = now;
-        held.mRevision = world->revision();
+        held.mRevision = world->airRevision();
         held.mXY = feet;
         world->columnAt(feet, held.mColumn);
     }
