@@ -447,6 +447,7 @@ private:
     std::unordered_map<LLUUID, skoverview::Seen> mLargeLogged; ///< the large parts of the last pass and how each was logged
     std::string mCoverLogged;   ///< the cover counts last logged
     std::string mUploadLogged;  ///< the upload's source totals last logged
+    std::vector<std::pair<LLUUID, U64>> mOverflowLogged; ///< the overflowing linksets last warned about
     U32 mPagesMade = 0;         ///< pages made and freed at the last swapIn, for the log
     U32 mPagesFreed = 0;
     F64 mRecheckAt = 0.0;

@@ -1716,7 +1716,8 @@ void SKOverviewCensus::swapIn(Built& built)
             it = mLinksetIds.erase(it);
         }
     }
-    if (!built.mOverflow.empty())
+    // Warned once per set of overflowing linksets, not on every rebuild that still holds them.
+    if (!built.mOverflow.empty() && built.mOverflow != mOverflowLogged)
     {
         std::string largest;
         for (const auto& l : built.mSources.mLargest)
@@ -1729,6 +1730,7 @@ void SKOverviewCensus::swapIn(Built& built)
                                    << skoverview::MAX_PAGE_VERTICES << "); ten largest: " << largest << LL_ENDL;
         }
     }
+    mOverflowLogged = built.mOverflow;
 
     // Every region of a build lands in the same frame, as one census; a linkset whose triangles did not move keeps its
     // runs, and only the others are written.

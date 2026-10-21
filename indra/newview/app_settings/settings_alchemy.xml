@@ -5661,7 +5661,11 @@
         <key>SKOverviewPageVertices</key>
         <map>
             <key>Comment</key>
-            <string>Most vertices in one of the overview census's pages, a vertex buffer per region and class holding a run per linkset; a multiple of 3. A run larger than this gets a page of its own size, up to 16777216.</string>
+            <string>
+                Most vertices in one of the overview census's pages, a vertex buffer per region and class
+                holding a run per linkset; a multiple of 3. A run larger than this gets a page of its own
+                size, up to 16777216.
+            </string>
             <key>Persist</key>
             <integer>1</integer>
             <key>Type</key>
