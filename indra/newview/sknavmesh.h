@@ -538,7 +538,7 @@ private:
     std::future<std::shared_ptr<std::vector<AirCandidate>>> mEvictionJob;
     std::shared_ptr<std::vector<AirCandidate>> mPendingEvictions;
     size_t mNextEviction = 0;
-    struct SkyContributor { LLVector3d mOrigin; sknav::TileAirPtr mAir; };
+    struct SkyContributor { LLVector3d mOrigin; sknav::TileTopsPtr mTops; };
     std::shared_ptr<std::map<U64, SkyContributor>> mSkyScan;
     U64 mSkyScanRevision = 0;
     bool mSkyScanReady = false, mEvictionScanReady = false;
@@ -749,12 +749,12 @@ private:
     bool mDemanding = false;
     bool mPolysOn = false;      ///< polysEnabled() the meshes were built under
     sknav::SkyMap mSkyMap;
-    std::map<U64, sknav::TileAirPtr> mSkyTiles;     ///< what each contributor last gave the sky map
+    std::map<U64, sknav::TileTopsPtr> mSkyTiles;    ///< what each contributor last gave the sky map
     U64 mSkyRevision = 0;
     struct SkyResult
     {
         sknav::SkyMap mMap;
-        std::map<U64, sknav::TileAirPtr> mTiles;
+        std::map<U64, sknav::TileTopsPtr> mTiles;
         U64 mRevision = 0;
     };
     std::future<std::shared_ptr<SkyResult>> mSkyJob;

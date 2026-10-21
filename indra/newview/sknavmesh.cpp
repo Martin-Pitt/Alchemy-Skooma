@@ -479,16 +479,24 @@ void SKNavMesh::evictAir()
     auto held = mEvictionScan;
     const size_t budget = whole - std::min(mHeldRasterBytes, whole);
     const F64 protect = 1.5 * radius;
-    auto task = std::make_shared<std::packaged_task<std::shared_ptr<std::vector<AirCandidate>>()>>([held, budget, protect]()
+    const size_t live = sknav::gAirLiveBytes.load();
+    auto task = std::make_shared<std::packaged_task<std::shared_ptr<std::vector<AirCandidate>>()>>([held, budget, protect, live]()
     {
         LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - evict air worker");
         std::vector<EvictionCandidate> candidates;
         candidates.reserve(held->size());
+        size_t scanned = 0;
         // The rank keeps a candidate longer than the priority ranks it: a
         // priority's 0 is what the budget gives up last.
-        for (const auto& tile : *held) candidates.push_back({tile.mAir->bytes(), tile.mNearness, tile.mDistance, static_cast<U8>(3 - tile.mPriority)});
+        for (const auto& tile : *held)
+        {
+            candidates.push_back({tile.mAir->bytes(), tile.mNearness, tile.mDistance, static_cast<U8>(3 - tile.mPriority)});
+            scanned += candidates.back().mBytes;
+        }
+        // The budget holds the live air: what the tiles do not point at, coarse air and what products and jobs hold, comes off it first.
+        const size_t elsewhere = live > scanned ? live - scanned : 0;
         auto result = std::make_shared<std::vector<AirCandidate>>();
-        for (size_t index : chooseEvictions(candidates, budget, protect))
+        for (size_t index : chooseEvictions(candidates, budget > elsewhere ? budget - elsewhere : 0, protect))
         {
             auto candidate = (*held)[index];
             candidate.mCoarse = coarseAir(*candidate.mAir);
@@ -2803,12 +2811,13 @@ std::string SKNavMesh::statsLine() const
                                         mStats.mStamps, mStats.mStampLoads, mStats.mStampReRasters, mStats.mRebinds, mStats.mRebindsQuiet, mStats.mStampsKept, mStats.mStampsOutdated, mStats.mAwaitingStamp, mStats.mLastStampMs,
                                         mStats.mLastStampLatencyMs, mStats.mWorstStampLatencyMs, mStats.mStampOverflow, mStats.mPolyOverflowTiles,
                                         mStats.mUnstampedPublishes);
-    return llformat("navmesh: %u meshes, %u/%u tiles built (%u queued, %u in flight), %u faces, %u segments, %u links, %u builds, %u failures, last %.1f ms, worst %.1f ms, exclusion %.2f ms, raster %.1f + polys %.1f ms, held rasters %u tiles %.1f MB (%u dropped, %u re-rastered), local updates %u (%u whole, last %.1f ms), air %u tiles %.1f MB (%u evicted), sky %u cells %.1f MB, disk %.1f MB in %u, %u loads %u rebuilds %u corrupt, hit %.0f%%, load %.2f ms",
+    return llformat("navmesh: %u meshes, %u/%u tiles built (%u queued, %u in flight), %u faces, %u segments, %u links, %u builds, %u failures, last %.1f ms, worst %.1f ms, exclusion %.2f ms, raster %.1f + polys %.1f ms, held rasters %u tiles %.1f MB (%u dropped, %u re-rastered), local updates %u (%u whole, last %.1f ms), air %u tiles %.1f MB, live %.1f MB, tops %.1f MB (%u evicted), sky %u cells %.1f MB, disk %.1f MB in %u, %u loads %u rebuilds %u corrupt, hit %.0f%%, load %.2f ms",
                     mStats.mMeshes, mStats.mTilesBuilt, mStats.mTiles, mStats.mQueued, mStats.mInFlight,
                     mStats.mFaces, mStats.mSegments, mStats.mLinks, mStats.mBuilds,
                     mStats.mFailures, mStats.mLastBuildMs, mStats.mWorstBuildMs, mStats.mExcludeMs,
                     mStats.mLastRasterMs, mStats.mLastPolyMs, mStats.mRasterTiles, mStats.mRasterBytes / 1048576.0, mStats.mRasterEvicted, mStats.mReRasters,
-                    mStats.mLocalUpdates, mStats.mUpdateFallbacks, mStats.mLastUpdateMs, mStats.mAirTiles, mStats.mAirBytes / 1048576.0, mStats.mAirEvicted, static_cast<U32>(mSkyMap.cells()), mSkyMap.bytes() / 1048576.0,
+                    mStats.mLocalUpdates, mStats.mUpdateFallbacks, mStats.mLastUpdateMs, mStats.mAirTiles, mStats.mAirBytes / 1048576.0,
+                    sknav::gAirLiveBytes.load() / 1048576.0, sknav::gAirTopsBytes.load() / 1048576.0, mStats.mAirEvicted, static_cast<U32>(mSkyMap.cells()), mSkyMap.bytes() / 1048576.0,
                     mStats.mDiskBytes / 1048576.0, mStats.mDiskEntries, mStats.mDiskLoads, mStats.mDiskRebuilds, mStats.mDiskCorrupt,
                     looked ? 100.0 * mStats.mDiskLoads / looked : 0.0, mStats.mDiskLoadMs)
            + stamps
@@ -2906,25 +2915,25 @@ void SKNavMesh::syncSkyMap()
     if (!mSkyScanReady && !scanTiles(mSkyCursor, 0.001f, [&](Mesh& mesh, const TileKey& key, Tile& tile)
         {
             const auto& air = tile.mAir ? tile.mAir : tile.mAirCoarse;
-            if (air) (*mSkyScan)[skyContributor(mesh.mId, key)] = {mesh.mOrigin, air};
+            if (air) (*mSkyScan)[skyContributor(mesh.mId, key)] = {mesh.mOrigin, air->mTops};
         })) return;
     mSkyScanReady = true;
     auto seen = mSkyScan;
     auto result = std::make_shared<SkyResult>();
     result->mMap = mSkyMap; // SkyMap shares immutable blocks until the worker writes them.
     result->mRevision = mSkyScanRevision;
-    auto previous = std::make_shared<std::map<U64, TileAirPtr>>(mSkyTiles);
+    auto previous = std::make_shared<std::map<U64, TileTopsPtr>>(mSkyTiles);
     auto task = std::make_shared<std::packaged_task<std::shared_ptr<SkyResult>()>>([result, seen, previous]()
     {
         LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - sync sky map worker");
         for (const auto& entry : *seen)
         {
             const auto old = previous->find(entry.first);
-            const auto& air = entry.second.mAir;
+            const auto& tops = entry.second.mTops;
             // A spill or reload swaps the air but keeps its tops: the cells stay.
-            if (old == previous->end() || (old->second != air && !sameTops(*old->second, *air)))
-                result->mMap.set(entry.first, entry.second.mOrigin + LLVector3d(air->mOrigin), *air);
-            result->mTiles.emplace(entry.first, air);
+            if (old == previous->end() || (old->second != tops && !sameTops(*old->second, *tops)))
+                result->mMap.set(entry.first, entry.second.mOrigin + LLVector3d(tops->mOrigin), *tops);
+            result->mTiles.emplace(entry.first, tops);
         }
         for (const auto& old : *previous)
             if (!seen->count(old.first)) result->mMap.remove(old.first);

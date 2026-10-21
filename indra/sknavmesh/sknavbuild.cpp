@@ -2568,6 +2568,7 @@ namespace sknav
                     // Not shared yet: the table goes in before the air is published.
                     auto& air = const_cast<TileAir&>(*result.mAir);
                     cropFaceOffsets(padded_faces, padded_width, air_pad, air.mWidth, air.mHeight, air.mFaceOffsets);
+                    air.countLive();
                     if (stats)
                     {
                         stats->mFaceOffsets.mEntries += static_cast<U32>(air.mFaceOffsets.size());

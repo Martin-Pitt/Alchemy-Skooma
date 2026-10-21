@@ -439,12 +439,13 @@ namespace sknav
                 writeU32s(w, s.mStart);
                 writeGaps(w, s.mGaps);
             }
-            w.pod(air.mTopCell);
-            w.pod(air.mTopWidth);
-            w.pod(air.mTopHeight);
-            writeU32s(w, air.mTopStart);
-            w.pod(static_cast<U32>(air.mTop.size()));
-            for (const TopInterval& t : air.mTop)
+            const TileTops& tops = *air.mTops;
+            w.pod(tops.mTopCell);
+            w.pod(tops.mTopWidth);
+            w.pod(tops.mTopHeight);
+            writeU32s(w, tops.mTopStart);
+            w.pod(static_cast<U32>(tops.mTop.size()));
+            for (const TopInterval& t : tops.mTop)
             {
                 w.pod(t.mBottom);
                 w.pod(t.mTop);
@@ -510,18 +511,22 @@ namespace sknav
                     return false;
                 }
             }
-            if (!(r.pod(air.mTopCell) && r.pod(air.mTopWidth) && r.pod(air.mTopHeight) && readU32s(r, air.mTopStart)
+            auto tops = std::make_shared<TileTops>();
+            tops->mOrigin = air.mOrigin;
+            tops->mCell = air.mCell;
+            tops->mUnit = air.mUnit;
+            if (!(r.pod(tops->mTopCell) && r.pod(tops->mTopWidth) && r.pod(tops->mTopHeight) && readU32s(r, tops->mTopStart)
                   && r.count(n, 4)))
             {
                 return false;
             }
-            air.mTop.resize(n);
-            for (TopInterval& t : air.mTop)
+            tops->mTop.resize(n);
+            for (TopInterval& t : tops->mTop)
             {
                 r.pod(t.mBottom);
                 r.pod(t.mTop);
             }
-            if (air.mTopWidth < 0 || air.mTopHeight < 0 || !r.count(n, 4))
+            if (tops->mTopWidth < 0 || tops->mTopHeight < 0 || !r.count(n, 4))
             {
                 return false;
             }
@@ -530,8 +535,15 @@ namespace sknav
             {
                 r.pod(f.mBits);
             }
-            return air.mTopStart.empty()
-                || offsetsFit(air.mTopStart, static_cast<size_t>(air.mTopWidth) * air.mTopHeight, air.mTop.size());
+            if (!tops->mTopStart.empty()
+                && !offsetsFit(tops->mTopStart, static_cast<size_t>(tops->mTopWidth) * tops->mTopHeight, tops->mTop.size()))
+            {
+                return false;
+            }
+            tops->countLive();
+            air.mTops = std::move(tops);
+            air.countLive();
+            return true;
         }
 
         void writeFlight(Writer& w, const Flight& f)
@@ -1231,11 +1243,9 @@ namespace sknav
         out->mUnit = air.mUnit;
         out->mWidth = air.mWidth;
         out->mHeight = air.mHeight;
-        out->mTopCell = air.mTopCell;
-        out->mTopWidth = air.mTopWidth;
-        out->mTopHeight = air.mTopHeight;
-        out->mTopStart = air.mTopStart;
-        out->mTop = air.mTop;
+        // The detail's own tops, shared: the coarse air costs its header.
+        out->mTops = air.mTops;
+        out->countLive();
         return out;
     }
 

@@ -93,6 +93,54 @@ namespace sknav
         U16 mTop = 0;
     };
 
+    /// The bytes of every finished TileAir, its own and not its tops', and of every TileTops, alive in the process.
+    extern std::atomic<size_t> gAirLiveBytes;
+    extern std::atomic<size_t> gAirTopsBytes;
+
+    /// What a finished air or tops adds to one of those totals until it is destroyed; a copy starts uncounted.
+    class LiveBytes
+    {
+    public:
+        explicit LiveBytes(std::atomic<size_t>& total) : mTotal(&total) {}
+        LiveBytes(const LiveBytes& other) : mTotal(other.mTotal) {}
+        LiveBytes& operator=(const LiveBytes&) { return *this; }
+        ~LiveBytes() { mTotal->fetch_sub(mBytes, std::memory_order_relaxed); }
+        /// Counts it as this many bytes, in place of what it was counted as before.
+        void count(size_t bytes)
+        {
+            mTotal->fetch_add(bytes, std::memory_order_relaxed);
+            mTotal->fetch_sub(mBytes, std::memory_order_relaxed);
+            mBytes = bytes;
+        }
+        size_t counted() const { return mBytes; }
+
+    private:
+        std::atomic<size_t>* mTotal;
+        size_t mBytes = 0;
+    };
+
+    /// A tile's solid tops over 1 m cells, in its air's frame: shared by the detail air and by the coarse air
+    /// an evicted tile keeps, and all the sky map holds of either.
+    struct TileTops
+    {
+        LLVector3 mOrigin;              ///< the air's
+        F32 mCell = 0.f;
+        F32 mUnit = 0.f;
+        /// mTopCell cells a side, row-major along y.
+        S32 mTopCell = 0;
+        S32 mTopWidth = 0;
+        S32 mTopHeight = 0;
+        std::vector<U32> mTopStart;
+        std::vector<TopInterval> mTop;
+        LiveBytes mLive{ gAirTopsBytes };
+
+        size_t bytes() const;
+        void countLive() { mLive.count(bytes()); }
+    };
+    typedef std::shared_ptr<const TileTops> TileTopsPtr;
+    /// The tops of an air that has none, shared.
+    const TileTopsPtr& noTops();
+
     /// A tile's air, immutable once built. Heights are units from mOrigin z,
     /// clipped to AIR_HEIGHT_MAX; an open ceiling reads AIR_CEILING_OPEN.
     /// A number no other air in the process has had, a copy included: what keys hash for an air, as an
@@ -124,16 +172,16 @@ namespace sknav
         AirSerial mSerial;
         /// -x and +x run along y, -y and +y along x.
         SeamStrip mSeams[4];
-        /// Solid tops over 1 m cells: mTopCell cells a side, row-major along y.
-        S32 mTopCell = 0;
-        S32 mTopWidth = 0;
-        S32 mTopHeight = 0;
-        std::vector<U32> mTopStart;
-        std::vector<TopInterval> mTop;
+        /// Solid tops over 1 m cells, never null.
+        TileTopsPtr mTops = noTops();
         /// Where walls' true faces sit inside their solid cells (sknavfaceoffsets.h); empty for coarse air.
         std::vector<FaceOffset> mFaceOffsets;
+        LiveBytes mLive{ gAirLiveBytes };
 
+        /// Its own bytes, without the tops it shares.
         size_t bytes() const;
+        /// Counts it in gAirLiveBytes, once it is built and again if anything is added before it is shared.
+        void countLive() { mLive.count(bytes()); }
     };
     typedef std::shared_ptr<const TileAir> TileAirPtr;
 
