@@ -143,6 +143,7 @@ void SKOverviewCensus::release()
     mExtentsBuilt = false;
     mOccupantCuts.clear();
     mBatches.clear();
+    mCache = std::make_shared<const Cache>();
     mCutTable.release();
     mLargeLogged.clear();
     mCoverLogged.clear();
@@ -552,6 +553,7 @@ bool SKOverviewCensus::update()
         if (built && built->mGeneration == mGeneration)
         {
             mVerdicts = built->mVerdicts;
+            mCache = built->mCache;
             swapIn(*built);
         }
     }
@@ -817,6 +819,7 @@ bool SKOverviewCensus::update()
         sc.mRoot = volume->getRootEdit()->getID();
         sc.mTris = cached.mTris;
         sc.mHeight = cached.mHeight;
+        sc.mKey = cached.mKey;
         const Seen seen = seenOf(sc.mPart);
         mUnknownLook |= seen == Seen::UNKNOWN;
         CoverInput cover;
@@ -1020,6 +1023,7 @@ bool SKOverviewCensus::update()
     job->mCover.insert(job->mCover.end(), std::make_move_iterator(sculpt_cover.begin()),
                        std::make_move_iterator(sculpt_cover.end()));
     job->mVerdicts = mVerdicts;
+    job->mCache = mCache;
     job->mGroupOf = std::move(group_of);
     mClusterRoots.clear();
     for (const auto& gc : group_cluster)
@@ -1082,22 +1086,19 @@ bool SKOverviewCensus::update()
     return !mBatches.empty();
 }
 
+U64 SKOverviewCensus::LinksetGeom::vertices() const
+{
+    U64 n = 0;
+    for (const auto& positions : mClass)
+    {
+        n += positions.size();
+    }
+    return n;
+}
+
 // static
 std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildBatches(const Job& job)
 {
-    // Per region, per class, per group, region-local triangles; and each group's bounds.
-    struct Bounds
-    {
-        LLVector3 mMin{ 1e30f, 1e30f, 1e30f };
-        LLVector3 mMax{ -1e30f, -1e30f, -1e30f };
-    };
-    struct Bins
-    {
-        LLVector3d mOrigin;
-        std::map<U32, std::vector<LLVector3>> mClass[skoverview::NUM_CENSUS_CLASSES];
-        std::map<U32, std::vector<U8>> mInvisible[skoverview::NUM_CENSUS_CLASSES]; ///< per triangle, as Batch's
-        std::map<U32, Bounds> mBounds;
-    };
     // Whether a point lies over a connected region, as LLViewerRegion::pointInRegionGlobal has it.
     auto overLand = [&job](const LLVector3d& p)
     {
@@ -1114,7 +1115,6 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildBatches(const Jo
     };
     const std::vector<const sknav::Record*>& kept = job.mKept;
     const std::vector<RenderedPart>& sculpts = job.mSculpts;
-    std::map<std::pair<S64, S64>, Bins> regions;
     std::vector<LLVector3> tris;
     Built::CoverStats stats;
     const auto cover_began = std::chrono::steady_clock::now();
@@ -1122,15 +1122,45 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildBatches(const Jo
     std::vector<LLVector3> cover_scratch;
     // The verdicts this build asked for; the rest are dropped with the parts they were for.
     std::unordered_map<LLUUID, Verdict> verdicts;
-    Built::Sources sources;
-    std::vector<U64> group_tris(job.mRoots.size(), 0);
-    for (size_t i = 0; i < kept.size() + sculpts.size(); ++i)
+    auto regionKey = [](const LLVector3d& origin)
+    { return std::make_pair((S64)std::llround(origin.mdV[VX]), (S64)std::llround(origin.mdV[VY])); };
+    auto originOf = [&](size_t i) -> const LLVector3d&
+    { return i >= kept.size() ? sculpts[i - kept.size()].mOrigin : kept[i]->mOrigin; };
+    auto partOf = [&](size_t i) -> const LLUUID& { return i >= kept.size() ? sculpts[i - kept.size()].mPart : kept[i]->mPart; };
+    // An invisible part's verdict is kept while its own geometry and its candidates are: its record's signature, or
+    // the sculpt triangles it shares with the cache.
+    auto verdictKey = [&](size_t i, const CoverInput& cover, const std::vector<LLVector3>& source)
+    {
+        U64 part_key = skoverview::scramble(cover.mKey ^ (U64)source.size());
+        part_key = skoverview::scramble(part_key ^ (i >= kept.size() ? (U64)(uintptr_t)&source : kept[i]->mSignature));
+        if (!source.empty())
+        {
+            const LLVector3& first = source.front();
+            part_key = skoverview::scramble(part_key ^ (U64)(S64)std::llround(first.mV[VX] * 64.f) ^
+                                            ((U64)(S64)std::llround(first.mV[VY] * 64.f) << 21) ^
+                                            ((U64)(S64)std::llround(first.mV[VZ] * 64.f) << 42));
+        }
+        return part_key;
+    };
+    // Which land is connected decides what of a void-only part is drawn.
+    U64 regions_key = 0;
+    for (const auto& square : job.mRegions)
+    {
+        regions_key = skoverview::scramble(regions_key ^ (U64)(S64)std::llround(square.first.mdV[VX]) ^
+                                           ((U64)(S64)std::llround(square.first.mdV[VY]) << 32) ^ (U64)square.second);
+    }
+    auto bitsOf = [](F64 v)
+    {
+        U64 bits;
+        std::memcpy(&bits, &v, sizeof(bits));
+        return bits;
+    };
+
+    // Emits one part into its linkset's triangles: the triangles of each class, the hatch copies, and its counts.
+    auto emitPart = [&](size_t i, LinksetGeom& geom)
     {
         const bool is_sculpt = i >= kept.size();
-        const LLVector3d origin = is_sculpt ? sculpts[i - kept.size()].mOrigin : kept[i]->mOrigin;
-        const std::pair<S64, S64> key((S64)std::llround(origin.mdV[VX]), (S64)std::llround(origin.mdV[VY]));
-        Bins& bins = regions[key];
-        bins.mOrigin = origin;
+        const LLVector3d& origin = originOf(i);
         F32 part_height = 0.f;
         U8 fixed_class = skoverview::NUM_CENSUS_CLASSES;
         const std::vector<LLVector3>* source = &tris;
@@ -1150,7 +1180,6 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildBatches(const Jo
             fixed_class = job.mFixed[i];
         }
         const bool in_void_only = i < kept.size() && job.mVoidOnly[i];
-        const U32 group = job.mGroupOf[i];
         // An invisible part a visible neighbour that collides with nothing holds, or that sticks out of the colliding
         // ones by no more than a sliver, stands in for them; one sticking out further is extra, hatched where it does;
         // one with nothing visible near it is a barrier, hatched whole. While a neighbour's type or look is not known
@@ -1162,18 +1191,9 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildBatches(const Jo
         if (cover && cover->mTest)
         {
             LL_PROFILE_ZONE_NAMED("sk overview invisible cover");
-            const LLUUID& part = is_sculpt ? sculpts[i - kept.size()].mPart : kept[i]->mPart;
-            // The part's own geometry: its record's signature, or the sculpt triangles it shares with the cache.
-            U64 part_key = skoverview::scramble(cover->mKey ^ (U64)source->size());
-            part_key = skoverview::scramble(part_key ^ (is_sculpt ? (U64)(uintptr_t)source : kept[i]->mSignature));
-            if (!source->empty())
-            {
-                const LLVector3& first = source->front();
-                part_key = skoverview::scramble(part_key ^ (U64)(S64)std::llround(first.mV[VX] * 64.f) ^
-                                                ((U64)(S64)std::llround(first.mV[VY] * 64.f) << 21) ^
-                                                ((U64)(S64)std::llround(first.mV[VZ] * 64.f) << 42));
-            }
-            ++stats.mParts;
+            const LLUUID& part = partOf(i);
+            const U64 part_key = verdictKey(i, *cover, *source);
+            ++geom.mCover.mParts;
             Verdict judged;
             bool known = false;
             if (job.mVerdicts)
@@ -1207,6 +1227,7 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildBatches(const Jo
                                              << (result.mSurfaceClip ? 1 : 0) << LL_ENDL;
             }
             verdicts[part] = judged;
+            geom.mJudged.emplace_back(part, part_key);
             sknav::CoverVerdict verdict = (sknav::CoverVerdict)judged.mVerdict;
             // A neighbour still showing its look may yet hold the part: a hatch waits for it.
             if (cover->mPending && (verdict == sknav::CoverVerdict::EXTRA || verdict == sknav::CoverVerdict::BARRIER))
@@ -1223,27 +1244,27 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildBatches(const Jo
                 const LLVector3 size = hi - lo;
                 if (llmax(size.mV[VX], llmax(size.mV[VY], size.mV[VZ])) > skoverview::INVISIBLE_WALL_M)
                 {
-                    ++stats.mDropped;
-                    continue;
+                    ++geom.mCover.mDropped;
+                    return;
                 }
                 pass_through = true;
             }
             switch (verdict)
             {
-                case sknav::CoverVerdict::PROXY: ++stats.mProxies; break;
+                case sknav::CoverVerdict::PROXY: ++geom.mCover.mProxies; break;
                 case sknav::CoverVerdict::EXTRA:
-                    ++stats.mExtra;
-                    stats.mHatchedM2 += judged.mOutsideM2;
+                    ++geom.mCover.mExtra;
+                    geom.mCover.mHatchedM2 += judged.mOutsideM2;
                     hatch = judged.mProtruding.get();
                     break;
                 case sknav::CoverVerdict::BARRIER:
-                    ++stats.mBarriers;
-                    stats.mHatchedM2 += judged.mPartM2;
+                    ++geom.mCover.mBarriers;
+                    geom.mCover.mHatchedM2 += judged.mPartM2;
                     hatch = source;
                     break;
                 case sknav::CoverVerdict::UNKNOWN_PHYSICS:
-                    ++stats.mUnknown;
-                    stats.mTooFine += judged.mTooFine ? 1 : 0;
+                    ++geom.mCover.mUnknown;
+                    geom.mCover.mTooFine += judged.mTooFine ? 1 : 0;
                     break;
             }
         }
@@ -1284,7 +1305,6 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildBatches(const Jo
         }
         const U8 tri_flags = (pass_through ? skoverview::TRI_PASS_THROUGH : 0) | (open ? skoverview::TRI_OPEN : 0);
         U64 emitted = 0;
-        U64 hatched = 0;
         for (size_t t = 0; t + 2 < source->size(); t += 3)
         {
             const LLVector3& a = (*source)[t];
@@ -1307,16 +1327,13 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildBatches(const Jo
             const skoverview::CensusClass cls = fixed_class < skoverview::NUM_CENSUS_CLASSES
                                                     ? (skoverview::CensusClass)fixed_class
                                                     : skoverview::classifyTriangle(n.mV[VZ] / len, part_height);
-            Bounds& bounds = bins.mBounds[group];
+            std::vector<LLVector3>& out = geom.mClass[cls];
             for (const LLVector3* v : { &a, &b, &c })
             {
-                update_min_max(bounds.mMin, bounds.mMax, *v);
+                update_min_max(geom.mMin, geom.mMax, *v);
+                out.push_back(*v);
             }
-            std::vector<LLVector3>& out = bins.mClass[cls][group];
-            out.push_back(a);
-            out.push_back(b);
-            out.push_back(c);
-            bins.mInvisible[cls][group].push_back(tri_flags);
+            geom.mFlags[cls].push_back(tri_flags);
             ++emitted;
         }
         // What is hatched again in the invisible range, the capture's overlay pass: the barrier's every triangle, or
@@ -1331,39 +1348,191 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildBatches(const Jo
             {
                 continue;
             }
-            Bounds& bounds = bins.mBounds[group];
-            std::vector<LLVector3>& over = bins.mClass[skoverview::INVISIBLE][group];
+            std::vector<LLVector3>& over = geom.mClass[skoverview::INVISIBLE];
             for (const LLVector3* v : { &a, &b, &c })
             {
-                update_min_max(bounds.mMin, bounds.mMax, *v);
+                update_min_max(geom.mMin, geom.mMax, *v);
                 over.push_back(*v);
             }
-            bins.mInvisible[skoverview::INVISIBLE][group].push_back(tri_flags | skoverview::TRI_PASS_THROUGH);
-            ++hatched;
+            geom.mFlags[skoverview::INVISIBLE].push_back(tri_flags | skoverview::TRI_PASS_THROUGH);
+            ++geom.mHatchTris;
         }
-        U64& from = !is_sculpt ? sources.mRecords : sculpts[i - kept.size()].mSurround ? sources.mSurrounds : sources.mSculpts;
+        U64& from = !is_sculpt ? geom.mRecordTris : sculpts[i - kept.size()].mSurround ? geom.mSurroundTris : geom.mSculptTris;
         from += emitted;
-        sources.mHatch += hatched;
-        if (group < group_tris.size())
+    };
+
+    // Each linkset's parts in each region, in an order that does not follow the records', which churns.
+    std::map<std::pair<U32, std::pair<S64, S64>>, std::vector<size_t>> linksets;
+    for (size_t i = 0; i < kept.size() + sculpts.size(); ++i)
+    {
+        linksets[{ job.mGroupOf[i], regionKey(originOf(i)) }].push_back(i);
+    }
+    auto cache = std::make_shared<Cache>();
+    std::vector<std::pair<U32, std::shared_ptr<const LinksetGeom>>> geoms; // by group
+    geoms.reserve(linksets.size());
+    U32 emitted_linksets = 0;
+    {
+        LL_PROFILE_ZONE_NAMED("sk census cache");
+        for (auto& [where, parts] : linksets)
         {
-            group_tris[group] += emitted + hatched;
+            std::sort(parts.begin(), parts.end(),
+                      [&](size_t a, size_t b)
+                      {
+                          const bool sa = a >= kept.size(), sb = b >= kept.size();
+                          if (sa != sb || partOf(a) != partOf(b))
+                          {
+                              return sa != sb ? sb : partOf(a) < partOf(b);
+                          }
+                          return sa ? a < b : kept[a]->mRole < kept[b]->mRole || (kept[a]->mRole == kept[b]->mRole && kept[a]->mSignature < kept[b]->mSignature);
+                      });
+            // Everything the emitted triangles depend on, part by part: equal keys emit equal triangles.
+            U64 key = skoverview::scramble(where.second.first ^ ((U64)where.second.second << 32));
+            for (const size_t i : parts)
+            {
+                key = skoverview::scramble(key ^ partOf(i).getCRC32() ^ ((U64)(i >= kept.size()) << 40));
+                key = skoverview::scramble(key ^ bitsOf(originOf(i).mdV[VX]) ^ skoverview::scramble(bitsOf(originOf(i).mdV[VY])));
+                if (i >= kept.size())
+                {
+                    const RenderedPart& sc = sculpts[i - kept.size()];
+                    key = skoverview::scramble(key ^ sc.mKey ^ ((U64)sc.mFixed << 48) ^ ((U64)sc.mSurround << 56));
+                }
+                else
+                {
+                    const sknav::Record& rec = *kept[i];
+                    key = skoverview::scramble(key ^ rec.mSignature ^ ((U64)job.mFixed[i] << 48) ^ ((U64)rec.mRole << 56));
+                    if (job.mVoidOnly[i])
+                    {
+                        key = skoverview::scramble(key ^ regions_key ^ 0x766f6964ull);
+                    }
+                }
+                const CoverInput* cover = i < job.mCover.size() ? &job.mCover[i] : nullptr;
+                if (cover && cover->mTest)
+                {
+                    // The verdict as emitted: its key and whether a pending neighbour holds the hatch back.
+                    const std::vector<LLVector3>* source = &tris;
+                    if (i >= kept.size())
+                    {
+                        source = sculpts[i - kept.size()].mTris.get();
+                    }
+                    else
+                    {
+                        tris.clear();
+                        sknav::emitRecord(*kept[i], kept[i]->mOrigin, tris);
+                    }
+                    key = skoverview::scramble(key ^ verdictKey(i, *cover, *source) ^ (cover->mPending ? 0x9e11u : 0x0u));
+                }
+            }
+            const LLUUID root = where.first < job.mRoots.size() ? job.mRoots[where.first] : LLUUID::null;
+            const auto at = std::make_tuple(root, where.second.first, where.second.second);
+            std::shared_ptr<const LinksetGeom> geom;
+            if (job.mCache)
+            {
+                const auto it = job.mCache->mByLinkset.find(at);
+                if (it != job.mCache->mByLinkset.end() && it->second->mKey == key)
+                {
+                    // Kept whole, its verdicts with it; one its parts' verdicts no longer hold is emitted again.
+                    bool held = true;
+                    for (const auto& judged : it->second->mJudged)
+                    {
+                        const auto v = job.mVerdicts ? job.mVerdicts->mByPart.find(judged.first)
+                                                     : std::unordered_map<LLUUID, Verdict>::const_iterator();
+                        held = job.mVerdicts && v != job.mVerdicts->mByPart.end() && v->second.mKey == judged.second;
+                        if (!held)
+                        {
+                            break;
+                        }
+                        verdicts[judged.first] = v->second;
+                    }
+                    geom = held ? it->second : nullptr;
+                }
+            }
+            if (!geom)
+            {
+                auto fresh = std::make_shared<LinksetGeom>();
+                fresh->mKey = key;
+                fresh->mRoot = root;
+                fresh->mOrigin = originOf(parts.front());
+                for (const size_t i : parts)
+                {
+                    emitPart(i, *fresh);
+                }
+                geom = std::move(fresh);
+                ++emitted_linksets;
+            }
+            cache->mByLinkset[at] = geom;
+            geoms.emplace_back(where.first, geom);
         }
     }
     stats.mBuildSeconds = std::chrono::duration<F64>(std::chrono::steady_clock::now() - cover_began).count();
-    for (size_t g = 0; g < group_tris.size(); ++g)
+
+    // The build's counts, from its linksets whether kept or emitted.
+    Built::Sources sources;
+    std::unordered_map<LLUUID, U64> root_tris;
+    for (const auto& [group, geom] : geoms)
     {
-        if (group_tris[g])
+        sources.mRecords += geom->mRecordTris;
+        sources.mSculpts += geom->mSculptTris;
+        sources.mSurrounds += geom->mSurroundTris;
+        sources.mHatch += geom->mHatchTris;
+        const U64 n = geom->mRecordTris + geom->mSculptTris + geom->mSurroundTris + geom->mHatchTris;
+        if (n)
         {
-            sources.mLargest.emplace_back(job.mRoots[g], group_tris[g]);
+            root_tris[geom->mRoot] += n;
         }
+        const LinksetGeom::Cover& c = geom->mCover;
+        stats.mParts += c.mParts;
+        stats.mProxies += c.mProxies;
+        stats.mExtra += c.mExtra;
+        stats.mBarriers += c.mBarriers;
+        stats.mUnknown += c.mUnknown;
+        stats.mTooFine += c.mTooFine;
+        stats.mDropped += c.mDropped;
+        stats.mHatchedM2 += c.mHatchedM2;
     }
+    sources.mLargest.assign(root_tris.begin(), root_tris.end());
     const size_t largest = llmin(sources.mLargest.size(), (size_t)10);
     std::partial_sort(sources.mLargest.begin(), sources.mLargest.begin() + largest, sources.mLargest.end(),
                       [](const auto& a, const auto& b) { return a.second > b.second; });
     sources.mLargest.resize(largest);
 
+    // Per region, per class, per group, region-local triangles; and each group's bounds.
+    struct Bounds
+    {
+        LLVector3 mMin{ 1e30f, 1e30f, 1e30f };
+        LLVector3 mMax{ -1e30f, -1e30f, -1e30f };
+    };
+    struct Bins
+    {
+        LLVector3d mOrigin;
+        std::map<U32, std::vector<LLVector3>> mClass[skoverview::NUM_CENSUS_CLASSES];
+        std::map<U32, std::vector<U8>> mInvisible[skoverview::NUM_CENSUS_CLASSES]; ///< per triangle, as Batch's
+        std::map<U32, Bounds> mBounds;
+    };
+    std::map<std::pair<S64, S64>, Bins> regions;
+    for (const auto& [group, geom] : geoms)
+    {
+        Bins& bins = regions[regionKey(geom->mOrigin)];
+        bins.mOrigin = geom->mOrigin;
+        bool any = false;
+        for (U32 c = 0; c < skoverview::NUM_CENSUS_CLASSES; ++c)
+        {
+            if (!geom->mClass[c].empty())
+            {
+                bins.mClass[c][group] = geom->mClass[c];
+                bins.mInvisible[c][group] = geom->mFlags[c];
+                any = true;
+            }
+        }
+        if (any)
+        {
+            bins.mBounds[group] = { geom->mMin, geom->mMax };
+        }
+    }
+
     auto built = std::make_shared<Built>();
     built->mVerdicts = std::make_shared<const Verdicts>(Verdicts{ std::move(verdicts) });
+    built->mCache = std::move(cache);
+    built->mLinksetsEmitted = emitted_linksets;
     built->mSignature = job.mSignature;
     built->mGeneration = job.mGeneration;
     built->mCover = stats;
@@ -1817,7 +1986,8 @@ void SKOverviewCensus::gatherSurrounds(const SKCensusSnapshot& snap)
         h = (h ^ (U64)part.mTris->size()) * 1099511628211ull;
         h = (h ^ ((U64)(S64)std::llround(centre.mdV[VX] * 64.0) ^ ((U64)(S64)std::llround(centre.mdV[VY] * 64.0) << 21) ^
                   ((U64)(S64)std::llround(centre.mdV[VZ] * 64.0) << 42))) * 1099511628211ull;
-        sig += skoverview::scramble(h);
+        part.mKey = skoverview::scramble(h);
+        sig += part.mKey;
         mSurrounds.push_back(std::move(part));
     }
     mSurroundsSig = sig;

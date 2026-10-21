@@ -37,6 +37,7 @@
 #include <string>
 #include <map>
 #include <set>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -105,6 +106,39 @@ namespace skoverview
 class SKOverviewCensus
 {
 public:
+    /// One linkset's triangles in one region, by class, as the worker emitted them: immutable once built, shared by the
+    /// worker's cache and what draws it.
+    struct LinksetGeom
+    {
+        U64 mKey = 0;           ///< what it was emitted from: an equal key emits the same triangles
+        LLUUID mRoot;
+        LLVector3d mOrigin;     ///< its region's origin, global; triangles are region-local
+        std::vector<LLVector3> mClass[skoverview::NUM_CENSUS_CLASSES];
+        std::vector<U8> mFlags[skoverview::NUM_CENSUS_CLASSES]; ///< per triangle: TRI_PASS_THROUGH, TRI_OPEN
+        LLVector3 mMin{ 1e30f, 1e30f, 1e30f };  ///< region-local bounds of its triangles
+        LLVector3 mMax{ -1e30f, -1e30f, -1e30f };
+        /// Its triangles by where they came from, the hatch copies in the invisible class.
+        U64 mRecordTris = 0;
+        U64 mSculptTris = 0;
+        U64 mSurroundTris = 0;
+        U64 mHatchTris = 0;
+        /// What the cover test made of its invisible parts.
+        struct Cover
+        {
+            U32 mParts = 0;
+            U32 mProxies = 0;
+            U32 mExtra = 0;
+            U32 mBarriers = 0;
+            U32 mUnknown = 0;
+            U32 mTooFine = 0;
+            U32 mDropped = 0;
+            F32 mHatchedM2 = 0.f;
+        };
+        Cover mCover;
+        std::vector<std::pair<LLUUID, U64>> mJudged; ///< its invisible parts and the verdict keys it was emitted with
+        U64 vertices() const;
+    };
+
     /// A linkset's triangles within a batch, and the heights its cluster spans.
     struct Group
     {
@@ -224,6 +258,7 @@ private:
         F32 mHeight = 0.f;
         skoverview::CensusClass mFixed = skoverview::NUM_CENSUS_CLASSES;
         bool mSurround = false;         ///< a surround (gatherSurrounds), not a near sculpt
+        U64 mKey = 0;                   ///< what its triangles were worked from: its volume, map and placement
     };
     void gatherSurrounds(const struct SKCensusSnapshot& snap);
     /// What decides an invisible part's verdict: the census records near it whose look is visible.
@@ -257,6 +292,13 @@ private:
         std::unordered_map<LLUUID, Verdict> mByPart;
     };
     std::shared_ptr<const Verdicts> mVerdicts = std::make_shared<const Verdicts>();
+    /// The worker's linksets kept across builds by root and region, as the verdicts are: each build reads the last
+    /// landed map and makes the next, re-emitting only the linksets whose key moved.
+    struct Cache
+    {
+        std::map<std::tuple<LLUUID, S64, S64>, std::shared_ptr<const LinksetGeom>> mByLinkset;
+    };
+    std::shared_ptr<const Cache> mCache = std::make_shared<const Cache>();
     /// What a build needs, as values: the worker never touches viewer objects, the world, settings or GL.
     struct Job
     {
@@ -269,6 +311,7 @@ private:
         std::vector<RenderedPart> mSculpts;
         std::vector<CoverInput> mCover; ///< per kept record then sculpt
         std::shared_ptr<const Verdicts> mVerdicts;
+        std::shared_ptr<const Cache> mCache;
         std::vector<U32> mGroupOf;      ///< per kept record then sculpt, its linkset's group
         std::vector<LLUUID> mRoots;     ///< per group
         std::map<U32, U32> mGroupCluster;
@@ -315,6 +358,8 @@ private:
         };
         Sources mSources;
         std::shared_ptr<const Verdicts> mVerdicts; ///< the verdicts this build asked for, adopted when it lands
+        std::shared_ptr<const Cache> mCache;       ///< the linksets this build drew, adopted when it lands
+        U32 mLinksetsEmitted = 0;                  ///< of its linksets, those emitted again rather than kept
         U64 mSignature = 0;
         U32 mGeneration = 0;
         std::vector<Region> mRegions;
