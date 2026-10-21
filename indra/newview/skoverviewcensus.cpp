@@ -1396,7 +1396,13 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildLinksets(const J
                           {
                               return sa != sb ? sb : partOf(a) < partOf(b);
                           }
-                          return sa ? a < b : kept[a]->mRole < kept[b]->mRole || (kept[a]->mRole == kept[b]->mRole && kept[a]->mSignature < kept[b]->mSignature);
+                          if (sa)
+                          {
+                              return a < b;
+                          }
+                          const sknav::Record& ra = *kept[a];
+                          const sknav::Record& rb = *kept[b];
+                          return ra.mRole < rb.mRole || (ra.mRole == rb.mRole && ra.mSignature < rb.mSignature);
                       });
             // Everything the emitted triangles depend on, part by part: equal keys emit equal triangles.
             U64 key = skoverview::scramble(where.second.first ^ ((U64)where.second.second << 32));
