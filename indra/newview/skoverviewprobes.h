@@ -55,12 +55,17 @@ namespace skoverview
         U32 mIssued = 0;        ///< the probes' frame at issue
         bool mValid = false;    ///< an answer has landed
         U64 mAppliedKey = 0;    ///< the key it answers
+        bool mStale = false;    ///< the probe in flight was asked before an invalidate(): applied, then asked again
 
         /// Whether a probe for key should be issued: none is in flight and what stands answers another key, or none.
         bool wants(U64 key) const { return !mPending && (!mValid || mAppliedKey != key); }
         void issue(U64 key, U64 signature, U32 frame);
-        /// Forget what stands, so the next look issues again whatever the key.
-        void invalidate() { mValid = false; }
+        /// Forget what stands, and what is in flight once it lands, so the next look issues again whatever the key.
+        void invalidate()
+        {
+            mValid = false;
+            mStale = mPending;
+        }
 
         enum class Outcome : U8
         {

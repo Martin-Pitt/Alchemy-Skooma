@@ -2120,36 +2120,6 @@ void SKOverviewCensus::gatherSurrounds(const SKCensusSnapshot& snap)
     mSurroundsSig = sig;
 }
 
-namespace
-{
-    // The distance in plan from p to the triangle (a, b, c): 0 inside it; a wall's edge-on triangle is its segment.
-    F32 planDistance(const LLVector2& p, const LLVector3& a3, const LLVector3& b3, const LLVector3& c3)
-    {
-        const LLVector2 a(a3.mV[VX], a3.mV[VY]), b(b3.mV[VX], b3.mV[VY]), c(c3.mV[VX], c3.mV[VY]);
-        auto cross = [](const LLVector2& o, const LLVector2& u, const LLVector2& v)
-        {
-            return (u.mV[VX] - o.mV[VX]) * (v.mV[VY] - o.mV[VY]) - (u.mV[VY] - o.mV[VY]) * (v.mV[VX] - o.mV[VX]);
-        };
-        const F32 area = cross(a, b, c);
-        if (std::fabs(area) > 1.0e-6f)
-        {
-            const F32 s0 = cross(a, b, p) / area, s1 = cross(b, c, p) / area, s2 = cross(c, a, p) / area;
-            if (s0 >= 0.f && s1 >= 0.f && s2 >= 0.f)
-            {
-                return 0.f;
-            }
-        }
-        auto segment = [&p](const LLVector2& u, const LLVector2& v)
-        {
-            const LLVector2 d = v - u;
-            const F32 len2 = d * d;
-            const F32 t = len2 > 0.f ? llclamp(((p - u) * d) / len2, 0.f, 1.f) : 0.f;
-            return (u + d * t - p).length();
-        };
-        return llmin(segment(a, b), llmin(segment(b, c), segment(c, a)));
-    }
-}
-
 std::string SKOverviewCensus::Reason::text() const
 {
     std::string out = mFixed ? std::string(mFixed)
@@ -2362,15 +2332,6 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
         }
         return ready;
     };
-    auto idList = [](const std::vector<U32>& ids)
-    {
-        std::string out;
-        for (const U32 id : ids)
-        {
-            out += llformat("%s%u", out.empty() ? "" : " ", id);
-        }
-        return out;
-    };
     // Room: an upward look over the room's footprint from just above its floor, the cells outside it drawn into the
     // depth, and a query per linkset near it; a wall seen edge-on counts by its edges.
     auto issueRoom = [&](OccupantCut& cache, const Occupant& occupant, U64 marks_key) -> bool
@@ -2491,101 +2452,11 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
         cache.mMarksProbe.issue(marks_key, mExtentsSignature, probes->frame());
         return true;
     };
-    // Whether a linkset has a triangle above p's floor whose plan footprint holds p (within the slack): it stands
-    // over them, not merely its box.
-    auto overColumn = [&](const Extent& e, const LLVector3d& p) -> bool
-    {
-        for (const auto& part : e.mParts)
-        {
-            const LLVector3 local(p - part.first->mOrigin);
-            const LLVector2 at(local.mV[VX], local.mV[VY]);
-            for (U32 c = 0; c < skoverview::NUM_CENSUS_CLASSES; ++c)
-            {
-                if (c == skoverview::INVISIBLE)
-                {
-                    continue;
-                }
-                const std::vector<LLVector3>& positions = part.second->mGeom->mClass[c];
-                const std::vector<U8>& flags = part.second->mGeom->mFlags[c];
-                for (size_t v = 0; v + 2 < positions.size(); v += 3)
-                {
-                    if (v / 3 < flags.size() && (flags[v / 3] & skoverview::TRI_PASS_THROUGH))
-                    {
-                        continue;
-                    }
-                    const LLVector3& a = positions[v];
-                    const LLVector3& b = positions[v + 1];
-                    const LLVector3& d = positions[v + 2];
-                    if (llmax(a.mV[VZ], llmax(b.mV[VZ], d.mV[VZ])) >= local.mV[VZ] + ABOVE_M &&
-                        planDistance(at, a, b, d) <= SLACK_M)
-                    {
-                        return true;
-                    }
-                }
-            }
-        }
-        return false;
-    };
     // Who stands on a roof: the highest upward-facing surface under their feet, of a linkset with nothing over them.
     const F64 STAND_BELOW_M = 0.6;  // how far under the feet a surface still bears them
     const F64 STAND_ABOVE_M = 0.4;  // how far over them, for a sunk or estimated foot
     const F64 HOLD_S = 1.0;         // a roof stays kept this long after its stander leaves it, through a hop
     const F64 now = LLFrameTimer::getUptimeSeconds().value();
-    auto heightAt = [](const LLVector2& at, const LLVector3& a, const LLVector3& b, const LLVector3& d, F32& z) -> bool
-    {
-        const LLVector3 n = (b - a) % (d - a);
-        if (std::fabs(n.mV[VZ]) < 0.5f * n.length() || planDistance(at, a, b, d) > 0.f)
-        {
-            return false; // a wall, or not under the point
-        }
-        z = a.mV[VZ] - (n.mV[VX] * (at.mV[VX] - a.mV[VX]) + n.mV[VY] * (at.mV[VY] - a.mV[VY])) / n.mV[VZ];
-        return true;
-    };
-    // The highest surface of the linkset under the feet within the bearing band, and whether any of it covers them.
-    auto standsOn = [&](const Extent& e, const LLVector3d& feet, F64& surface, bool& covered) -> bool
-    {
-        bool found = false;
-        bool cover = false;
-        for (const auto& part : e.mParts)
-        {
-            const LLVector3d& origin = part.first->mOrigin;
-            const LLVector3 local(feet - origin);
-            const LLVector2 at(local.mV[VX], local.mV[VY]);
-            for (U32 c = 0; c < skoverview::NUM_CENSUS_CLASSES; ++c)
-            {
-                if (c == skoverview::INVISIBLE)
-                {
-                    continue;
-                }
-                const std::vector<LLVector3>& positions = part.second->mGeom->mClass[c];
-                const std::vector<U8>& flags = part.second->mGeom->mFlags[c];
-                for (size_t v = 0; v + 2 < positions.size(); v += 3)
-                {
-                    if (v / 3 < flags.size() && (flags[v / 3] & skoverview::TRI_PASS_THROUGH))
-                    {
-                        continue;
-                    }
-                    F32 z = 0.f;
-                    if (!heightAt(at, positions[v], positions[v + 1], positions[v + 2], z))
-                    {
-                        continue;
-                    }
-                    if (z >= local.mV[VZ] - STAND_BELOW_M && z <= local.mV[VZ] + STAND_ABOVE_M)
-                    {
-                        const F64 global_z = origin.mdV[VZ] + z;
-                        surface = found ? llmax(surface, global_z) : global_z;
-                        found = true;
-                    }
-                    else if (z > local.mV[VZ] + STAND_ABOVE_M)
-                    {
-                        cover = true;
-                    }
-                }
-            }
-        }
-        covered = cover;
-        return found;
-    };
     // The feet: a downward look at the one point under them, through the bearing band; the texel is the highest
     // surface's linkset, its depth the surface's height.
     auto feetBox = [&]()
@@ -2675,56 +2546,16 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
             {
                 quantise(roof_key, feet.mdV[i]);
             }
-            if (!cache.mRoofValid || cache.mRoofKey != roof_key || baseCrossed(feet.mdV[VZ]))
+            if (baseCrossed(feet.mdV[VZ]))
             {
-                cache.mBest = 0;
-                cache.mBestZ = -1e30;
-                cache.mCovered = false;
-                for (const auto& entry : extents)
-                {
-                    const Extent& e = entry.second;
-                    if (!e.mCuttable || feet.mdV[VX] < e.mMin.mdV[VX] || feet.mdV[VX] > e.mMax.mdV[VX] ||
-                        feet.mdV[VY] < e.mMin.mdV[VY] || feet.mdV[VY] > e.mMax.mdV[VY] ||
-                        feet.mdV[VZ] < e.mMin.mdV[VZ] - STAND_ABOVE_M || feet.mdV[VZ] > e.mMax.mdV[VZ] + STAND_BELOW_M)
-                    {
-                        continue;
-                    }
-                    F64 z = 0.0;
-                    bool covered = false;
-                    if (standsOn(e, feet, z, covered) && z > cache.mBestZ)
-                    {
-                        cache.mBest = entry.first;
-                        cache.mBestZ = z;
-                        cache.mCovered = covered;
-                    }
-                }
-                // A surface is a roof only with nothing over the feet, of any linkset: a storey's slab is often one
-                // linkset and the storey above it another. Skyboxes floating out of their space do not count.
-                for (const auto& entry : extents)
-                {
-                    const Extent& e = entry.second;
-                    if (cache.mCovered || cache.mBestZ <= -1e29)
-                    {
-                        break;
-                    }
-                    if (entry.first == cache.mBest || feet.mdV[VX] < e.mMin.mdV[VX] || feet.mdV[VX] > e.mMax.mdV[VX] ||
-                        feet.mdV[VY] < e.mMin.mdV[VY] || feet.mdV[VY] > e.mMax.mdV[VY] || e.mMax.mdV[VZ] <= feet.mdV[VZ] + STAND_ABOVE_M ||
-                        (!e.mGround && e.mBottom > feet.mdV[VZ] + OVERHEAD_M))
-                    {
-                        continue;
-                    }
-                    F64 z = 0.0;
-                    bool covered = false;
-                    standsOn(e, feet, z, covered);
-                    cache.mCovered = covered;
-                }
-                cache.mRoofKey = roof_key;
-                cache.mRoofValid = true;
+                cache.mRoofProbe.invalidate();
             }
             if (probes)
             {
-                // The surface under the feet and whether anything covers them, by the GPU, beside the CPU's answer
-                // until it rules. The texel names an id, which holds only under the buffers it was drawn from.
+                // The highest surface under the feet within the bearing band, and whether anything covers them: a
+                // surface is a roof only with nothing over the feet, of any linkset, as a storey's slab is often one
+                // linkset and the storey above it another. What stood is kept until the answer lands; the texel names
+                // an id, which holds only under the buffers it was drawn from.
                 LL_PROFILE_ZONE_NAMED("sk cut probes collect");
                 std::vector<U64> counts;
                 bool lost = false;
@@ -2733,9 +2564,10 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
                 F32 depth = 0.f;
                 if (cache.mRoofProbe.mPending)
                 {
-                    const SKOverviewProbes::Status feet = probes->sampleResult(cache.mRoofProbe.mIssued, cache.mFeetSlot, texel, depth);
-                    ready = ready && feet == SKOverviewProbes::Status::Ready;
-                    lost = lost || feet == SKOverviewProbes::Status::Lost;
+                    const SKOverviewProbes::Status feet_status =
+                        probes->sampleResult(cache.mRoofProbe.mIssued, cache.mFeetSlot, texel, depth);
+                    ready = ready && feet_status == SKOverviewProbes::Status::Ready;
+                    lost = lost || feet_status == SKOverviewProbes::Status::Lost;
                 }
                 if (cache.mRoofProbe.settle(ready, lost, mExtentsSignature, true) == skoverview::ProbeSlot::Outcome::Apply)
                 {
@@ -2744,35 +2576,15 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
                     F32 z = 0.f;
                     const bool surface = skoverview::feetSurface(texel, depth, box.nearZ(), box.farZ(), LLRender::sReverseZ, id, z) &&
                                          extents.count(id) && extents.at(id).mCuttable;
-                    const F64 surface_z = cache.mFeetZ + z;
-                    if (surface != cache.mSurfaceCpu ||
-                        (surface && (id != cache.mBestCpu || std::fabs(surface_z - cache.mBestZCpu) > 0.02)))
-                    {
-                        const std::string gpu = surface ? llformat("%u %.2f", id, surface_z) : std::string("none");
-                        const std::string cpu = cache.mSurfaceCpu ? llformat("%u %.2f", cache.mBestCpu, cache.mBestZCpu) : std::string("none");
-                        LL_INFOS("SKOverview") << "feet probe differs from CPU for " << occupant.mId << ": gpu " << gpu << " cpu " << cpu
-                                               << LL_ENDL;
-                    }
-                    const bool covered = surface && !skoverview::passedExtents(cache.mCoverCandidates, counts, mRootExtent).empty();
-                    if (cache.mSurfaceCpu && covered != cache.mCoveredCpu)
-                    {
-                        LL_INFOS("SKOverview") << "probe cover differs from CPU for " << occupant.mId << ": gpu "
-                                               << (covered ? "covered" : "open") << " cpu " << (cache.mCoveredCpu ? "covered" : "open")
-                                               << LL_ENDL;
-                    }
+                    cache.mBest = surface ? id : 0;
+                    cache.mBestZ = surface ? cache.mFeetZ + z : -1e30;
+                    cache.mCovered = surface && !skoverview::passedExtents(cache.mCoverCandidates, counts, mRootExtent).empty();
                     ++mProbeStats.mApplied;
                     mProbeStats.mLatencyFrames += probes->frame() - cache.mRoofProbe.mIssued;
                 }
-                if (baseCrossed(feet.mdV[VZ]))
+                if (cache.mRoofProbe.wants(roof_key))
                 {
-                    cache.mRoofProbe.invalidate();
-                }
-                if (cache.mRoofProbe.wants(roof_key) && issueRoof(cache, occupant, roof_key))
-                {
-                    cache.mSurfaceCpu = cache.mBestZ > -1e29;
-                    cache.mCoveredCpu = cache.mCovered;
-                    cache.mBestCpu = cache.mBest;
-                    cache.mBestZCpu = cache.mBestZ;
+                    issueRoof(cache, occupant, roof_key);
                 }
                 probing = probing || cache.mRoofProbe.mPending;
             }
@@ -2780,12 +2592,14 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
             const F64 best_z = cache.mBestZ;
             const bool best_covered = cache.mCovered;
             U32 roof = 0;
+            bool has_roof = false;
             F64 roof_z = 0.0;
             const bool on_surface = best_z > -1e29;
             const auto held = mStanding.find(occupant.mId);
             if (on_surface && !best_covered)
             {
                 roof = best;
+                has_roof = true;
                 roof_z = best_z;
                 mStanding[occupant.mId] = { extents.at(best).mRoot, best_z, now };
             }
@@ -2797,6 +2611,7 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
                     if (entry.second.mRoot == held->second.mRoot && entry.second.mCuttable)
                     {
                         roof = entry.first;
+                        has_roof = true;
                         roof_z = held->second.mZ;
                         holding = true;
                         break;
@@ -2807,7 +2622,7 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
             {
                 mStanding.erase(held);
             }
-            if (roof)
+            if (has_roof)
             {
                 const F64 above = occupant.mCut - occupant.mFloor.mdV[VZ];
                 occupant.mFloor.setVec(feet.mdV[VX], feet.mdV[VY], roof_z);
@@ -2822,74 +2637,8 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
     {
         it = now - it->second.mAt >= HOLD_S ? mStanding.erase(it) : std::next(it);
     }
-    // Whether a linkset has a triangle above the floor whose plan footprint comes within a cell of one of the room's
-    // grown cells; how says which (wall or cover) and the cell, for the log.
-    LLVector3d room_min, room_max;
-    auto touchesRoom = [&](const Extent& e, const Occupant& occupant, F64 cell_m, std::string& how) -> bool
-    {
-        const RoomFootprint& room = *occupant.mRoom;
-        const F32 reach = (F32)(cell_m * 0.7072);
-        for (const auto& part : e.mParts)
-        {
-            const LLVector3d& origin = part.first->mOrigin;
-            const F32 floor_local = (F32)(occupant.mFloor.mdV[VZ] - origin.mdV[VZ]);
-            for (U32 c = 0; c < skoverview::NUM_CENSUS_CLASSES; ++c)
-            {
-                if (c == skoverview::INVISIBLE)
-                {
-                    continue;
-                }
-                const std::vector<LLVector3>& positions = part.second->mGeom->mClass[c];
-                const std::vector<U8>& flags = part.second->mGeom->mFlags[c];
-                for (size_t v = 0; v + 2 < positions.size(); v += 3)
-                {
-                    if (v / 3 < flags.size() && (flags[v / 3] & skoverview::TRI_PASS_THROUGH))
-                    {
-                        continue;
-                    }
-                    const LLVector3& a = positions[v];
-                    const LLVector3& b = positions[v + 1];
-                    const LLVector3& d = positions[v + 2];
-                    if (llmax(a.mV[VZ], llmax(b.mV[VZ], d.mV[VZ])) < floor_local + ABOVE_M)
-                    {
-                        continue;
-                    }
-                    // The cells under the triangle's plan box, as far as the room has any.
-                    const F64 lo_x = origin.mdV[VX] + llmin(a.mV[VX], llmin(b.mV[VX], d.mV[VX]));
-                    const F64 hi_x = origin.mdV[VX] + llmax(a.mV[VX], llmax(b.mV[VX], d.mV[VX]));
-                    const F64 lo_y = origin.mdV[VY] + llmin(a.mV[VY], llmin(b.mV[VY], d.mV[VY]));
-                    const F64 hi_y = origin.mdV[VY] + llmax(a.mV[VY], llmax(b.mV[VY], d.mV[VY]));
-                    const S32 x0 = llmax(0, (S32)std::floor((llmax(lo_x, room_min.mdV[VX]) - room.mOrigin.mdV[VX]) / cell_m));
-                    const S32 x1 = llmin(room.mW - 1, (S32)std::floor((llmin(hi_x, room_max.mdV[VX]) - room.mOrigin.mdV[VX]) / cell_m));
-                    const S32 y0 = llmax(0, (S32)std::floor((llmax(lo_y, room_min.mdV[VY]) - room.mOrigin.mdV[VY]) / cell_m));
-                    const S32 y1 = llmin(room.mH - 1, (S32)std::floor((llmin(hi_y, room_max.mdV[VY]) - room.mOrigin.mdV[VY]) / cell_m));
-                    for (S32 x = x0; x <= x1; ++x)
-                    {
-                        for (S32 y = y0; y <= y1; ++y)
-                        {
-                            if (!room.covers(x, y))
-                            {
-                                continue;
-                            }
-                            const LLVector2 centre((F32)(room.mOrigin.mdV[VX] + (x + 0.5) * cell_m - origin.mdV[VX]),
-                                                   (F32)(room.mOrigin.mdV[VY] + (y + 0.5) * cell_m - origin.mdV[VY]));
-                            if (planDistance(centre, a, b, d) <= reach)
-                            {
-                                const LLVector3 n = (b - a) % (d - a);
-                                const bool wall = n.length() > 0.f && std::fabs(n.mV[VZ]) < 0.5f * n.length();
-                                how = llformat("%s at cell %d,%d", wall ? "wall" : "cover", x, y);
-                                return true;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        return false;
-    };
     {
         LL_PROFILE_ZONE_NAMED("sk cut marks");
-        static const std::string COLUMN("column");
         for (const Occupant* occupant : ordered)
         {
             if (occupant->mOutdoors)
@@ -2913,83 +2662,39 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
                 marks_key = (marks_key ^ occupant->mRoom->mId) * 1099511628211ull;
                 marks_key = (marks_key ^ occupant->mRoom->mMesh.getCRC32()) * 1099511628211ull;
             }
-            if (!cache.mMarksValid || cache.mMarksKey != marks_key || baseCrossed(occupant->mCut))
+            if (baseCrossed(occupant->mCut))
             {
-                cache.mMarks.clear();
-                if (occupant->mRoom)
-                {
-                    const F64 cell_m = occupant->mRoomCellM;
-                    room_min = occupant->mRoom->mOrigin;
-                    room_max = room_min + LLVector3d(occupant->mRoom->mW * cell_m, occupant->mRoom->mH * cell_m, 0.0);
-                }
-                for (const auto& entry : extents)
-                {
-                    const Extent& e = entry.second;
-                    if (!e.mCuttable || e.mMax.mdV[VZ] < p.mdV[VZ] + ABOVE_M || overhead(e, *occupant))
-                    {
-                        continue;
-                    }
-                    if (occupant->mRoom)
-                    {
-                        // The room's building, by its geometry: a linkset whose triangles above the floor come within a
-                        // cell of the room's own cells, standing round them (walls) or over them (floors above, the roof).
-                        const F64 cell_m = occupant->mRoomCellM;
-                        if (e.mMax.mdV[VX] < room_min.mdV[VX] || e.mMin.mdV[VX] > room_max.mdV[VX] ||
-                            e.mMax.mdV[VY] < room_min.mdV[VY] || e.mMin.mdV[VY] > room_max.mdV[VY])
-                        {
-                            continue; // its box is nowhere near the room's
-                        }
-                        std::string how;
-                        if (touchesRoom(e, *occupant, cell_m, how))
-                        {
-                            cache.mMarks.emplace_back(entry.first, "room " + how);
-                        }
-                    }
-                    else if (p.mdV[VX] >= e.mMin.mdV[VX] - SLACK_M && p.mdV[VX] <= e.mMax.mdV[VX] + SLACK_M &&
-                             p.mdV[VY] >= e.mMin.mdV[VY] - SLACK_M && p.mdV[VY] <= e.mMax.mdV[VY] + SLACK_M &&
-                             overColumn(e, p))
-                    {
-                        cache.mMarks.emplace_back(entry.first, COLUMN);
-                    }
-                }
-                cache.mMarksKey = marks_key;
-                cache.mMarksValid = true;
+                cache.mMarksProbe.invalidate();
             }
             if (probes)
             {
-                // The GPU's answer, beside the CPU's until it rules; diffed for the same key.
+                // Their room's building, by its geometry: the linksets standing round its cells (walls) or over them
+                // (floors above, the roof); with no room, those standing over their column. What stood is kept until
+                // the answer lands.
                 LL_PROFILE_ZONE_NAMED("sk cut probes collect");
                 std::vector<U64> counts;
                 bool lost = false;
                 const bool ready = landed(cache.mMarkTickets, counts, lost);
                 if (cache.mMarksProbe.settle(ready, lost, mExtentsSignature, false) == skoverview::ProbeSlot::Outcome::Apply)
                 {
-                    std::vector<U32> gpu = skoverview::passedExtents(cache.mMarkCandidates, counts, mRootExtent);
-                    std::sort(gpu.begin(), gpu.end());
-                    std::vector<U32> gained, lost_ids;
-                    std::set_difference(gpu.begin(), gpu.end(), cache.mMarksCpu.begin(), cache.mMarksCpu.end(), std::back_inserter(gained));
-                    std::set_difference(cache.mMarksCpu.begin(), cache.mMarksCpu.end(), gpu.begin(), gpu.end(), std::back_inserter(lost_ids));
-                    if (!gained.empty() || !lost_ids.empty())
+                    cache.mMarks.clear();
+                    for (const U32 id : skoverview::passedExtents(cache.mMarkCandidates, counts, mRootExtent))
                     {
-                        LL_INFOS("SKOverview") << "probe marks differ from CPU for " << occupant->mId << ": +" << idList(gained) << " -"
-                                               << idList(lost_ids) << LL_ENDL;
+                        cache.mMarks.emplace_back(id, cache.mMarkRule);
                     }
                     ++mProbeStats.mApplied;
                     mProbeStats.mLatencyFrames += probes->frame() - cache.mMarksProbe.mIssued;
                 }
-                if (baseCrossed(occupant->mCut))
+                if (cache.mMarksProbe.wants(marks_key))
                 {
-                    cache.mMarksProbe.invalidate();
-                }
-                if (cache.mMarksProbe.wants(marks_key) &&
-                    (occupant->mRoom ? issueRoom(cache, *occupant, marks_key) : issueColumn(cache, *occupant, marks_key)))
-                {
-                    cache.mMarksCpu.clear();
-                    for (const auto& m : cache.mMarks)
+                    if (occupant->mRoom)
                     {
-                        cache.mMarksCpu.push_back(m.first);
+                        issueRoom(cache, *occupant, marks_key);
                     }
-                    std::sort(cache.mMarksCpu.begin(), cache.mMarksCpu.end());
+                    else
+                    {
+                        issueColumn(cache, *occupant, marks_key);
+                    }
                 }
                 probing = probing || cache.mMarksProbe.mPending;
             }

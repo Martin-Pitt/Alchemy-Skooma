@@ -57,19 +57,23 @@ namespace skoverview
         if (names_ids && signature != mSignature)
         {
             mPending = false;
+            mStale = false;
             return Outcome::Dropped;
         }
         if (lost)
         {
             mPending = false;
+            mStale = false;
             return Outcome::Reissue;
         }
         if (!ready)
         {
             return Outcome::Waiting;
         }
+        // Newer than what stands, so it is applied; asked before an invalidate(), it is asked again.
         mPending = false;
-        mValid = true;
+        mValid = !mStale;
+        mStale = false;
         mAppliedKey = mPendingKey;
         return Outcome::Apply;
     }

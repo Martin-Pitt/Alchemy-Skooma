@@ -75,6 +75,13 @@ namespace
         slot.invalidate();
         CHECK(slot.wants(1));
         CHECK(slot.settle(true, false, 7, true) == Outcome::Idle);
+        // Invalidated while in flight (a base crossed the person's line): the answer is applied, then asked again.
+        slot.issue(3, 7, 3);
+        slot.invalidate();
+        CHECK_FALSE(slot.wants(3));
+        CHECK(slot.settle(true, false, 7, true) == Outcome::Apply);
+        CHECK(slot.mAppliedKey == 3);
+        CHECK(slot.wants(3));
     }
 
     TEST_CASE("skoverviewprobes: the agent's probes are issued first", "[skoverviewprobes]")

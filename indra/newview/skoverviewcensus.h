@@ -159,7 +159,7 @@ public:
         U32 mPage[skoverview::NUM_CENSUS_CLASSES]; ///< per class, its page in the region's, NO_PAGE when it has none
         U32 mStart[skoverview::NUM_CENSUS_CLASSES] = {}; ///< per class, its run in that page
         U32 mCount[skoverview::NUM_CENSUS_CLASSES] = {};
-        /// Its triangles and their flags, region-local: what the cut's sight lines read.
+        /// Its triangles and their flags, region-local: what its runs are uploaded from when they are placed again.
         std::shared_ptr<const LinksetGeom> mGeom;
     };
 
@@ -511,13 +511,9 @@ private:
     /// column takes. Most people are still in any one frame.
     struct OccupantCut
     {
-        bool mRoofValid = false;
-        U64 mRoofKey = 0;
         U32 mBest = 0;
         F64 mBestZ = -1e30;
         bool mCovered = false;
-        bool mMarksValid = false;
-        U64 mMarksKey = 0;
         std::vector<std::pair<U32, std::string>> mMarks; ///< linkset and rule
         bool mSeen = false;
         /// The membership probe in flight: its candidates (extent id, root), one query each, and the rule they mark.
@@ -525,7 +521,6 @@ private:
         std::vector<std::pair<U32, LLUUID>> mMarkCandidates;
         std::vector<ALQueryTicket> mMarkTickets;
         const char* mMarkRule = nullptr;
-        std::vector<U32> mMarksCpu;     ///< the CPU's answer for the key the probe was issued for, to diff against
         /// The roof probe in flight: the feet texel's slot and the feet's height then, and a query per linkset that
         /// may cover the feet.
         skoverview::ProbeSlot mRoofProbe;
@@ -533,10 +528,6 @@ private:
         F64 mFeetZ = 0.0;
         std::vector<std::pair<U32, LLUUID>> mCoverCandidates;
         std::vector<ALQueryTicket> mCoverTickets;
-        bool mSurfaceCpu = false;       ///< the CPU's answer for the key the roof probe was issued for
-        bool mCoveredCpu = false;
-        U32 mBestCpu = 0;
-        F64 mBestZCpu = -1e30;
     };
     /// The probes' counts over a second, for the log.
     struct ProbeStats
