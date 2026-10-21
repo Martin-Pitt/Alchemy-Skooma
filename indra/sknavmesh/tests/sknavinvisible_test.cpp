@@ -159,11 +159,17 @@ namespace
 
     TEST_CASE("sknavinvisible: a box a hair outside a phantom shell's tolerance is not its proxy", "[sknavinvisible]")
     {
-        // 0.16 m past the shell on +x, over the 0.15 m it allows; nothing colliding takes any of it away.
+        // 0.16 m past the shell on +x, over the 0.15 m it allows; with nothing colliding near it, it is a barrier.
         const CoverResult r = judge(box({ 0.08f, 0.f, 1.f }, 0.f, { 1.08f, 0.5f, 1.f }),
                                     { boxRecord({ 0.f, 0.f, 1.f }, 0.f, { 1.f, 0.5f, 1.f }, false) });
-        CHECK(r.mVerdict == CoverVerdict::EXTRA);
-        CHECK(std::fabs(r.mOutsideArea - r.mPartArea) < 1e-3f);
+        CHECK(r.mVerdict == CoverVerdict::BARRIER);
+        CHECK(r.mOutsideArea == r.mPartArea);
+        CHECK(r.mProtruding.empty());
+
+        // Under mMinFaceArea whole, it is still a barrier and no proxy of a shell it is not in.
+        const CoverResult small = judge(box({ 1.3f, 0.f, 1.f }, 0.f, { 0.04f, 0.04f, 0.04f }),
+                                        { boxRecord({ 0.f, 0.f, 1.f }, 0.f, { 1.f, 0.5f, 1.f }, false) });
+        CHECK(small.mVerdict == CoverVerdict::BARRIER);
     }
 
     TEST_CASE("sknavinvisible: a box poking past a colliding box is extra and only the overhang is hatched", "[sknavinvisible]")

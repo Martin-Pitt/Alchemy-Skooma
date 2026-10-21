@@ -94,7 +94,7 @@ namespace sknav
 
     /// An invisible part's verdict over its visible neighbours, in this order: none is a barrier; a neighbour whose
     /// physics type is not known yet leaves it unknown; a non-colliding neighbour whose box (grown by mProxyTolerance)
-    /// holds every vertex makes it a proxy; otherwise what is left of its triangles once every colliding neighbour's
+    /// holds every vertex makes it a proxy; with no colliding neighbour it is a barrier; otherwise what is left of its triangles once every colliding neighbour's
     /// convex pieces are taken away sticks out, extra when more than mMinFaceArea.
     CoverResult coverVerdict(const std::vector<LLVector3>& tris, const std::vector<CoverCandidate>& candidates,
                              const InvisibleParams& params);

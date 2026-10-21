@@ -367,6 +367,13 @@ namespace sknav
                 return result;
             }
         }
+        // Shells alone that do not hold it take nothing away: a barrier, as with nothing near it.
+        if (std::none_of(candidates.begin(), candidates.end(), [](const CoverCandidate& c) { return c.mCollides; }))
+        {
+            result.mVerdict = CoverVerdict::BARRIER;
+            result.mOutsideArea = result.mPartArea;
+            return result;
+        }
 
         LL_PROFILE_ZONE_NAMED("sk overview cover clip");
         LLVector3 lo(1e30f, 1e30f, 1e30f), hi(-1e30f, -1e30f, -1e30f);
