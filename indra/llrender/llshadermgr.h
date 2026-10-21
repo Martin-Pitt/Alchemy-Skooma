@@ -672,6 +672,8 @@ public:
         WATER_OCCLUSION,                    //  "waterOcclusion"  int, whether the control stage culls against the depth pyramid
         WATER_PATCH_ORDER,                  //  "waterPatchOrder"  ivec4, the order the patches are drawn in
 
+        SK_OVERVIEW_CUT_TABLE,              //  "sk_cut_table"  samplerBuffer  <SK:Nexii> combat/minimap: the tactical overview's cut table where it is no storage block
+
         END_RESERVED_UNIFORMS
     } eGLSLReservedUniforms;
 

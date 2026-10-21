@@ -2293,6 +2293,8 @@ void LLShaderMgr::initAttribsAndUniforms()
     mReservedUniforms.push_back("waterOcclusion");
     mReservedUniforms.push_back("waterPatchOrder");
 
+    mReservedUniforms.push_back("sk_cut_table"); // <SK:Nexii> combat/minimap: the tactical overview's cut table
+
     // The enum and this list are parallel, and an entry added or removed on one side only
     // shifts every later uniform index for every shader in the viewer -- silently, since a
     // wrong index still resolves to some other real uniform. Fatal, like the duplicate check

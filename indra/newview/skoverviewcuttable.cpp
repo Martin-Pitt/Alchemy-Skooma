@@ -32,6 +32,7 @@
 #include "llshadermgr.h"
 #include "lltimer.h"
 
+#include <algorithm>
 #include <cstring>
 
 namespace
@@ -137,6 +138,36 @@ void SKOverviewCutTable::bind(LLGLSLShader& prog)
         // The point is the same in every cut program, so binding it again for the next is no call at all.
         gGL.bindStorageBuffer((U32)point, mStream.getBuffer(), mOffset, (size_t)mPublishedRows * sizeof(Row));
         mBoundPoint = point;
+        return;
+    }
+    const S32 channel = prog.getTextureChannel(LLShaderMgr::SK_OVERVIEW_CUT_TABLE);
+    ALTextureSlot* slot = channel >= 0 ? gGL.getTextureSlot(channel) : nullptr;
+    if (!slot)
+    {
+        return;
+    }
+    if (!mTexture)
+    {
+        glGenTextures(1, &mTexture);
+    }
+    const U32 buffer = mStream.getBuffer().getGLName();
+    if (mTextureBuffer != buffer)
+    {
+        // glTexBuffer acts on the active unit, which a bind of what the slot already holds would not make this one.
+        slot->unbind();
+        slot->bindManual(ALTextureSlot::TT_BUFFER_TEXTURE, mTexture);
+        glTexBuffer(GL_TEXTURE_BUFFER, GL_RGBA32F, buffer);
+        mTextureBuffer = buffer;
+    }
+    else
+    {
+        slot->bindManual(ALTextureSlot::TT_BUFFER_TEXTURE, mTexture);
+    }
+    static const LLStaticHashedString SK_CUT_BASE("sk_cut_base");
+    glUniform1i(prog.getUniformLocation(SK_CUT_BASE), (GLint)(mOffset / sizeof(Row)));
+    if (std::find(mBoundChannels.begin(), mBoundChannels.end(), channel) == mBoundChannels.end())
+    {
+        mBoundChannels.push_back(channel);
     }
 }
 
@@ -147,11 +178,22 @@ void SKOverviewCutTable::unbind()
         gGL.unbindStorageBuffer((U32)mBoundPoint);
         mBoundPoint = -1;
     }
+    for (S32 channel : mBoundChannels)
+    {
+        gGL.getTextureSlot(channel)->unbind();
+    }
+    mBoundChannels.clear();
 }
 
 void SKOverviewCutTable::release()
 {
     unbind();
+    if (mTexture && gGLManager.mInited)
+    {
+        glDeleteTextures(1, &mTexture);
+    }
+    mTexture = 0;
+    mTextureBuffer = 0;
     mStream.release();
     mCapacity = 0;
     mOffset = 0;

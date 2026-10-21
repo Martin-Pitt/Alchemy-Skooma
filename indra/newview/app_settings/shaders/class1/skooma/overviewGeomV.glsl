@@ -46,7 +46,9 @@ in vec2 texcoord0;      // x: 1 for an open part's triangle, which has no inside
 layout(std430) readonly buffer SKOverviewCutBlock { vec4 rows[]; };
 vec4 skCutRow(int group) { return rows[group]; }
 #else
-vec4 skCutRow(int group) { return vec4(weight, 0.0, 0.0, 0.0); }
+uniform samplerBuffer sk_cut_table;     // the same rows as a buffer texture, from texel sk_cut_base
+uniform int sk_cut_base;
+vec4 skCutRow(int group) { return texelFetch(sk_cut_table, sk_cut_base + group); }
 #endif
 #endif
 
