@@ -537,8 +537,18 @@ private:
         U32 mQueries = 0;
         U32 mApplied = 0;
         U32 mLatencyFrames = 0; ///< summed over the applied ones
+        U32 mMostQueries = 0;   ///< in any one frame
     };
     ProbeStats mProbeStats;
+    /// A room probe's id render on its way back, for SKOverviewProbeDump: whose, and its box and mask.
+    struct ProbeDump
+    {
+        bool mPending = false;
+        LLUUID mWho;
+        SKOverviewProbes::Box mBox;
+        std::vector<LLVector4> mOuts;
+    };
+    ProbeDump mProbeDump;
     std::map<LLUUID, OccupantCut> mOccupantCuts;
     std::map<LLUUID, Release> mRelease;     ///< applied cuts by linkset root, relaxed only once the relaxing holds
 };

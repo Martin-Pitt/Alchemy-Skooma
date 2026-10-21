@@ -45,6 +45,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
+#include <limits>
 #include <map>
 #include <string>
 #include <vector>
@@ -415,6 +416,122 @@ namespace
                 CHECK(passed[0] == 0);
                 CHECK(passed[1] > 0);
             }
+        }
+    }
+
+    // The tactical view's pick: a shown frame's depth texel, read through the pack path a frame later, unprojected with
+    // that frame's camera (SKOverviewCapture::groundAt), lands on the surface the texel shows, under the infinite
+    // reverse-Z projection as under the finite forward one.
+    TEST_CASE_METHOD(skoverviewprobes_gl_data, "skoverviewprobes: a picked depth texel unprojects onto the surface it shows",
+                     "[skoverviewprobes][gl]")
+    {
+        constexpr S32 SIDE = 64;
+        for (bool reverse : conventions())
+        {
+            CAPTURE(reverse);
+            buildProgram(reverse);
+            // A floor at z 0 and a roof at z 2 over its middle.
+            const std::vector<Run> runs = upload({ flat(-4.f, -4.f, 8.f, 8.f, 0.f, 1), flat(1.f, 1.f, 3.f, 3.f, 2.f, 5) });
+            mDepth.release();
+            REQUIRE(mDepth.allocate(SIDE, SIDE, GL_R32UI, true, false, ALTextureSlot::TT_TEXTURE, LLRenderTarget::MIPS_NONE,
+                                    LLRenderTarget::DEPTH_FMT_32F));
+            LLVector4a eye, dir, up;
+            eye.set(2.f, -5.f, 8.f);
+            dir.set(0.f, 7.f, -8.f);
+            dir.normalize3fast();
+            up.set(0.f, 0.f, 1.f);
+            const LLMatrix4a view = LLMatrix4a::lookDir(eye, dir, up);
+            const LLMatrix4a proj = al_perspective(60.f * DEG_TO_RAD, 1.f, 0.5f, reverse ? std::numeric_limits<F32>::infinity() : 100.f);
+            mDepth.bindTarget();
+            {
+                LLGLDepthTest depth_write(GL_TRUE, GL_TRUE, GL_ALWAYS);
+                const GLuint zero[4] = { 0, 0, 0, 0 };
+                const GLfloat far_depth = al_window_far();
+                glClearBufferuiv(GL_COLOR, 0, zero);
+                glClearBufferfv(GL_DEPTH, 0, &far_depth);
+            }
+            gGL.matrixMode(LLRender::MM_PROJECTION);
+            gGL.pushMatrix();
+            gGL.loadMatrix(proj);
+            gGL.matrixMode(LLRender::MM_MODELVIEW);
+            gGL.pushMatrix();
+            gGL.loadMatrix(view);
+            {
+                static const LLStaticHashedString CLIP_PLANE("clip_plane");
+                static const LLStaticHashedString SK_CEILING("sk_ceiling");
+                const F32 none[4] = { 0.f, 0.f, 0.f, 1.f };
+                mProgram.bind();
+                glUniform4fv(mProgram.getUniformLocation(CLIP_PLANE), 1, none);
+                glUniform4fv(mProgram.getUniformLocation(SK_CEILING), 1, none);
+                LLGLDisable cull(GL_CULL_FACE);
+                LLGLDepthTest depth(GL_TRUE, GL_TRUE, GL_LEQUAL);
+                for (const Run& run : runs)
+                {
+                    run.mBuffer->setBuffer();
+                    run.mBuffer->drawArrays(LLRender::TRIANGLES, run.mFirst, run.mCount);
+                }
+                mProgram.unbind();
+            }
+            gGL.matrixMode(LLRender::MM_PROJECTION);
+            gGL.popMatrix();
+            gGL.matrixMode(LLRender::MM_MODELVIEW);
+            gGL.popMatrix();
+            mDepth.flush();
+            // A cursor path across the view, one texel a frame as the tactical view reads it.
+            const S32 viewport[4] = { 0, 0, SIDE, SIDE };
+            std::ofstream path_file;
+            const std::string dir_out = dumpDir();
+            if (!dir_out.empty() && !reverse)
+            {
+                path_file.open(dir_out + "/pick-depth.csv");
+                path_file << "x,y,depth,wx,wy,wz,surface\n";
+            }
+            U32 on_roof = 0, on_floor = 0, sky = 0;
+            for (S32 i = 0; i < SIDE; i += 2)
+            {
+                const S32 x = SIDE / 2 + (i - SIDE / 2) / 4;
+                const S32 y = i;
+                REQUIRE(mProbes.beginFrame(mProgram, 1));
+                const U32 frame = mProbes.frame();
+                REQUIRE(mProbes.readDepth(mDepth, x, y));
+                mProbes.endFrame();
+                mProbes.collect(true);
+                F32 d = 0.f;
+                REQUIRE(mProbes.pickResult(frame, d) == SKOverviewProbes::Status::Ready);
+                CAPTURE(x, y, d);
+                if (d == al_window_far())
+                {
+                    ++sky;
+                    continue;
+                }
+                LLVector4a win;
+                win.set(x + 0.5f, y + 0.5f, d, 1.f);
+                const LLVector4a world = al_unproject(win, view, proj, viewport);
+                const F32* w = world.getF32ptr();
+                // On the roof only within its square, else on the floor.
+                const bool roof = std::fabs(w[2] - 2.f) < 0.02f && w[0] > 0.98f && w[0] < 3.02f && w[1] > 0.98f && w[1] < 3.02f;
+                const bool floor = std::fabs(w[2]) < 0.02f;
+                CHECK((roof || floor));
+                if (floor)
+                {
+                    // The roof was not the first surface along that texel's ray: it crosses z 2 outside the plate.
+                    const F32* e = eye.getF32ptr();
+                    const F32 t = (e[2] - 2.f) / (e[2] - w[2]);
+                    const F32 cx = e[0] + (w[0] - e[0]) * t;
+                    const F32 cy = e[1] + (w[1] - e[1]) * t;
+                    CHECK_FALSE((cx > 1.02f && cx < 2.98f && cy > 1.02f && cy < 2.98f));
+                }
+                on_roof += roof ? 1 : 0;
+                on_floor += floor ? 1 : 0;
+                if (path_file)
+                {
+                    path_file << x << "," << y << "," << d << "," << w[0] << "," << w[1] << "," << w[2] << "," << (roof ? "roof" : "floor")
+                              << "\n";
+                }
+            }
+            CHECK(on_roof > 0);
+            CHECK(on_floor > 0);
+            mDepth.release();
         }
     }
 

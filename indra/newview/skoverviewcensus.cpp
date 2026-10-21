@@ -26,6 +26,7 @@
 
 #include "skoverviewcensus.h"
 
+#include "lldir.h"
 #include "llframetimer.h"
 #include "llimagegl.h"
 #include "llmaterial.h"
@@ -2403,6 +2404,15 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
             cache.mMarkTickets.push_back(probes->query(runsOf(extents.at(candidate.first), origin), true));
         }
         probes->endVolume();
+        // The room's id render, ids coloured and the mask outlined, on its way back to a file.
+        static LLCachedControl<bool> dump(gSavedSettings, "SKOverviewProbeDump", false);
+        if (dump && !mProbeDump.mPending && probes->requestDump())
+        {
+            mProbeDump.mPending = true;
+            mProbeDump.mWho = occupant.mId;
+            mProbeDump.mBox = box;
+            mProbeDump.mOuts = outs;
+        }
         cache.mMarkCandidates = std::move(candidates);
         cache.mMarkRule = "room";
         cache.mMarksProbe.issue(marks_key, mExtentsSignature, probes->frame());
@@ -2677,13 +2687,31 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
                 const bool ready = landed(cache.mMarkTickets, counts, lost);
                 if (cache.mMarksProbe.settle(ready, lost, mExtentsSignature, false) == skoverview::ProbeSlot::Outcome::Apply)
                 {
+                    const std::vector<U32> passed = skoverview::passedExtents(cache.mMarkCandidates, counts, mRootExtent);
+                    bool changed = passed.size() != cache.mMarks.size();
+                    for (size_t i = 0; i < passed.size() && !changed; ++i)
+                    {
+                        changed = passed[i] != cache.mMarks[i].first || cache.mMarks[i].second != cache.mMarkRule;
+                    }
+                    const U32 late = probes->frame() - cache.mMarksProbe.mIssued;
+                    if (changed)
+                    {
+                        std::string ids;
+                        for (const U32 id : passed)
+                        {
+                            ids += llformat("%s%u", ids.empty() ? "" : " ", id);
+                        }
+                        LL_INFOS("SKOverview") << "probe " << cache.mMarkRule << " for " << occupant->mId << ": " << passed.size() << " of "
+                                               << cache.mMarkCandidates.size() << " linksets [" << ids << "], " << late << " frames late"
+                                               << LL_ENDL;
+                    }
                     cache.mMarks.clear();
-                    for (const U32 id : skoverview::passedExtents(cache.mMarkCandidates, counts, mRootExtent))
+                    for (const U32 id : passed)
                     {
                         cache.mMarks.emplace_back(id, cache.mMarkRule);
                     }
                     ++mProbeStats.mApplied;
-                    mProbeStats.mLatencyFrames += probes->frame() - cache.mMarksProbe.mIssued;
+                    mProbeStats.mLatencyFrames += late;
                 }
                 if (cache.mMarksProbe.wants(marks_key))
                 {
@@ -2712,6 +2740,24 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
     {
         mProbeStats.mIssued += budget.people();
         mProbeStats.mQueries += probes->queriesIssued();
+        mProbeStats.mMostQueries = llmax(mProbeStats.mMostQueries, probes->queriesIssued());
+        std::vector<U32> ids;
+        std::vector<F32> depths;
+        S32 w = 0, h = 0;
+        if (mProbeDump.mPending && probes->collectDump(ids, depths, w, h))
+        {
+            mProbeDump.mPending = false;
+            const char* dir = getenv("SK_PROBE_DUMP_DIR");
+            const std::string name = "room-ids-" + mProbeDump.mWho.asString() + ".ppm";
+            const std::string path = dir && *dir ? std::string(dir) + gDirUtilp->getDirDelimiter() + name
+                                                 : gDirUtilp->getExpandedFilename(LL_PATH_LOGS, name);
+            SKOverviewProbes::Box box = mProbeDump.mBox;
+            box.mWidth = w;
+            box.mHeight = h;
+            const bool written = SKOverviewProbes::writeImage(path, ids, w, h, SKOverviewProbes::outTexels(box, mProbeDump.mOuts),
+                                                              llmax(1, 800 / llmax(w, h)));
+            LL_INFOS("SKOverview") << "probe dump " << (written ? "written to " : "not written to ") << path << LL_ENDL;
+        }
         if (now - mProbeStats.mSince >= 1.0)
         {
             U32 pending = 0;
@@ -2722,7 +2768,7 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
             if (mProbeStats.mIssued || pending)
             {
                 LL_INFOS("SKOverview") << "probe: " << mProbeStats.mIssued << " issued, " << pending << " pending, " << mProbeStats.mQueries
-                                       << " queries, "
+                                       << " queries (" << mProbeStats.mMostQueries << " in a frame at most), "
                                        << llformat("%.1f", mProbeStats.mApplied ? (F32)mProbeStats.mLatencyFrames / mProbeStats.mApplied : 0.f)
                                        << " frames latency" << LL_ENDL;
             }
