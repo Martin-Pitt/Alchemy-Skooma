@@ -900,7 +900,8 @@ void SKWorldCensus::visit(LLViewerObject* object)
         box->mNavRole = navRole;
         box->mShape = Shape::BOX;
         box->mCollides = false;
-        box->mPhysicsKnown = !object->isPhysicsShapeUnknown();
+        // Phantom, volume detect or shapeless at any type: the type arriving cannot make it collide.
+        box->mPhysicsKnown = true;
         box->mSignature = sig;
         box->mOrigin = object->getRegion()->getOriginGlobal();
         box->mCenter = sim_pos;
