@@ -681,6 +681,7 @@ public:
     // there for every program, so a pass binds it once whatever it draws or dispatches between.
     typedef enum
     {                                       // Block name, element count
+        SK_OVERVIEW_CUT_BLOCK,              //  "SKOverviewCutBlock", 1  <SK:Nexii> combat/minimap: the tactical overview's cut table, one vec4 a linkset
         END_RESERVED_STORAGE_BLOCKS
     } eGLSLReservedStorageBlocks;
     // clang-format on

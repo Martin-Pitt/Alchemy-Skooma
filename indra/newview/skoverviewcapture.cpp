@@ -566,6 +566,13 @@ bool SKOverviewCapture::loadShaders(S32 level)
                 shader.addPermutation(define, "1");
             }
         }
+        // The cut table is a storage block where the session computes, a buffer texture elsewhere.
+        const bool ssbo = program.mCutTable && SKOverviewCutTable::useStorageBlock();
+        if (ssbo)
+        {
+            shader.addPermutation("SK_CUT_TABLE_SSBO", "1");
+        }
+        shader.mFeatures.mMinGLSLVersion = ssbo ? 430 : 0;
         if (!shader.createShader())
         {
             LL_WARNS("Shader") << "The overview's program " << program.mName << " did not build; the overview is off until the "
@@ -1342,7 +1349,7 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
     std::function<void()> census;
     if (!batches.empty())
     {
-        census = [&batches, &ranges, &shot, patch]()
+        census = [&batches, &ranges, &shot, patch, &cut_table = mCensus.cutTable()]()
         {
             // The census writes its class code and the triangle's own normal (G, A), so flush parts never crease.
             LLVector4a down, normal_eye, origin_eye, zero;
@@ -1394,7 +1401,16 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
                     glUniform4fv(prog.getUniformLocation(SK_DISSOLVE), n, shot.mDissolve.front().mV);
                     glUniform1fv(prog.getUniformLocation(SK_DISSOLVE_FLOOR), n, shot.mDissolveFloor.data());
                 }
+                if (shot.mPartCuts)
+                {
+                    cut_table.bind(prog);
+                }
             };
+            if (shot.mPartCuts)
+            {
+                // A build that landed since the last cut is drawn whole until applyCut writes its cuts.
+                cut_table.flush();
+            }
             // The clip plane, the ceiling and the cuts are clip distances every overview geometry program writes.
             LLGLEnable clip0(GL_CLIP_DISTANCE0);
             LLGLEnable clip1(GL_CLIP_DISTANCE0 + 1);
@@ -1502,6 +1518,7 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
                 gGL.setColorMask(true, false, false, false);
             }
             gGL.setPolygonOffset(0.f, 0.f);
+            cut_table.unbind();
             bound->unbind();
         };
     }

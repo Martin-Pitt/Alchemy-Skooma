@@ -2329,6 +2329,7 @@ void LLShaderMgr::initAttribsAndUniforms()
 
     // The storage blocks, each with its element count, in eGLSLReservedStorageBlocks order.
     mReservedStorageBlocks.clear();
+    mReservedStorageBlocks.push_back({ "SKOverviewCutBlock", 1 }); // <SK:Nexii> combat/minimap: the tactical overview's cut table
 
     // The same three checks, and that every block's points fit the ones every compute context has.
     if (mReservedStorageBlocks.size() != END_RESERVED_STORAGE_BLOCKS)

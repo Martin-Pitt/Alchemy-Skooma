@@ -38,6 +38,7 @@ namespace skoverview
         const char* mVertex;
         const char* mFragment;
         std::array<const char*, 3> mDefines;
+        bool mCutTable = false; ///< reads SKOverviewCutTable: built with SK_CUT_TABLE_SSBO at GLSL 4.30 where it says useStorageBlock()
     };
 
     /// In this order; SKOverviewCapture pairs each with its LLGLSLShader by position.
@@ -45,13 +46,13 @@ namespace skoverview
         { "SK Overview Resolve", "deferred/postDeferredNoTCV.glsl", "skooma/overviewResolveF.glsl", {} },
         { "SK Overview Composite", "deferred/postDeferredNoTCV.glsl", "skooma/overviewCompositeF.glsl", {} },
         { "SK Overview Geometry", "skooma/overviewGeomV.glsl", "skooma/overviewGeomF.glsl", {} },
-        { "SK Overview Geometry Cut", "skooma/overviewGeomV.glsl", "skooma/overviewGeomF.glsl", { "SK_CUT_ATTRIBUTE" } },
+        { "SK Overview Geometry Cut", "skooma/overviewGeomV.glsl", "skooma/overviewGeomF.glsl", { "SK_CUT_ATTRIBUTE" }, true },
         { "SK Overview Geometry Cut Dissolve", "skooma/overviewGeomV.glsl", "skooma/overviewGeomF.glsl",
-          { "SK_CUT_ATTRIBUTE", "SK_DISSOLVE" } },
+          { "SK_CUT_ATTRIBUTE", "SK_DISSOLVE" }, true },
         { "SK Overview Geometry Cap Lift", "skooma/overviewGeomV.glsl", "skooma/overviewGeomF.glsl",
-          { "SK_CUT_ATTRIBUTE", "SK_CAP_LIFT" } },
+          { "SK_CUT_ATTRIBUTE", "SK_CAP_LIFT" }, true },
         { "SK Overview Geometry Cap Lift Dissolve", "skooma/overviewGeomV.glsl", "skooma/overviewGeomF.glsl",
-          { "SK_CUT_ATTRIBUTE", "SK_CAP_LIFT", "SK_DISSOLVE" } },
+          { "SK_CUT_ATTRIBUTE", "SK_CAP_LIFT", "SK_DISSOLVE" }, true },
         { "SK Overview Marker", "skooma/overviewMarkerV.glsl", "skooma/overviewMarkerF.glsl", {} },
     };
 

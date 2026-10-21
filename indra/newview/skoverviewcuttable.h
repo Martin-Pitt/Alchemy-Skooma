@@ -30,6 +30,8 @@
 
 #include <vector>
 
+class LLGLSLShader;
+
 /// The cut of every census linkset, by its id: SKOverviewCensus::Group::mId, dense in [0, rows()) over one build of
 /// every region, stored per vertex as a float in the census buffer's weight channel and read in overviewGeomV.glsl as
 /// int(weight + 0.5). A row is 16 bytes, a vec4 to the shader: x the cut (agent z, WHOLE or HIDDEN), y flags (none
@@ -75,6 +77,15 @@ public:
     /// takePending, then the rows into the stream's next region; true when it published.
     bool flush();
 
+    /// Whether the cut programs read the table as a storage block (SK_CUT_TABLE_SSBO): the session computes and the
+    /// vertex stage has storage blocks, which GL 4.3 does not promise.
+    static bool useStorageBlock();
+    /// Binds the rows published last for `prog`, which is bound: at its storage block's point, or its buffer texture's
+    /// unit with sk_cut_base. Nothing while nothing is published.
+    void bind(LLGLSLShader& prog);
+    /// Lets go of what bind() bound.
+    void unbind();
+
     /// The buffer and offset of the rows published last, rows() of them; for tests and readers of the store.
     const ALGPUBuffer& buffer() const { return mStream.getBuffer(); }
     size_t offset() const { return mOffset; }
@@ -92,6 +103,7 @@ private:
     U32 mCapacity = 0;          ///< rows a region holds
     size_t mOffset = 0;         ///< where the rows published last start in the stream's buffer
     U32 mPublishedRows = 0;
+    S32 mBoundPoint = -1;       ///< the storage point bind() bound, or -1
 };
 
 #endif

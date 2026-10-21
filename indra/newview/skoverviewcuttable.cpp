@@ -26,6 +26,10 @@
 
 #include "skoverviewcuttable.h"
 
+#include "llgl.h"
+#include "llglslshader.h"
+#include "llrender.h"
+#include "llshadermgr.h"
 #include "lltimer.h"
 
 #include <cstring>
@@ -115,8 +119,39 @@ bool SKOverviewCutTable::flush()
     return true;
 }
 
+// static
+bool SKOverviewCutTable::useStorageBlock()
+{
+    return LLRender::sCompute && gGLManager.mMaxVertexShaderStorageBlocks >= 1;
+}
+
+void SKOverviewCutTable::bind(LLGLSLShader& prog)
+{
+    if (!mPublishedRows)
+    {
+        return;
+    }
+    const S32 point = prog.getStorageBinding(LLShaderMgr::SK_OVERVIEW_CUT_BLOCK);
+    if (point >= 0 && LLRender::sCompute)
+    {
+        // The point is the same in every cut program, so binding it again for the next is no call at all.
+        gGL.bindStorageBuffer((U32)point, mStream.getBuffer(), mOffset, (size_t)mPublishedRows * sizeof(Row));
+        mBoundPoint = point;
+    }
+}
+
+void SKOverviewCutTable::unbind()
+{
+    if (mBoundPoint >= 0)
+    {
+        gGL.unbindStorageBuffer((U32)mBoundPoint);
+        mBoundPoint = -1;
+    }
+}
+
 void SKOverviewCutTable::release()
 {
+    unbind();
     mStream.release();
     mCapacity = 0;
     mOffset = 0;
