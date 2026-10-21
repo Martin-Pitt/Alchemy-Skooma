@@ -27,6 +27,7 @@
 
 #include "llpointer.h"
 #include "lluuid.h"
+#include "skoverviewcuttable.h"
 #include "threadpool_fwd.h"
 #include "v3dmath.h"
 #include "v3math.h"
@@ -198,6 +199,8 @@ public:
     std::vector<LLUUID> restlessParts() const;
     /// Moves whenever the buffers are rebuilt.
     U64 signature() const { return mSignature; }
+    /// Every linkset's cut by its id, which each vertex carries in its weight channel; for the tactical view's draws.
+    SKOverviewCutTable& cutTable() { return mCutTable; }
     void release();
 
 private:
@@ -395,6 +398,7 @@ private:
     U64 mCutKey = 0;            ///< the inputs the last applyCut was worked from
     std::string mCutLogged;     ///< the cut linksets and reasons last logged
     std::map<LLUUID, std::pair<F32, std::string>> mCutRoots; ///< the last applyCut's cuts by linkset root
+    SKOverviewCutTable mCutTable; ///< the last applyCut's cuts by linkset id, on the GPU
     struct Standing
     {
         LLUUID mRoot;           ///< the linkset stood on

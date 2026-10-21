@@ -142,6 +142,7 @@ void SKOverviewCensus::release()
     mExtentsBuilt = false;
     mOccupantCuts.clear();
     mBatches.clear();
+    mCutTable.release();
     mLargeLogged.clear();
     mCoverLogged.clear();
     mStamp = 0;
@@ -1544,6 +1545,9 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildBatches(const Jo
 
 namespace
 {
+    static_assert(SKOverviewCutTable::WHOLE == skoverview::NO_CUT && SKOverviewCutTable::HIDDEN == skoverview::HIDDEN,
+                  "the cut table and the census share their sentinels");
+
     /// Writes each vertex's linkset id (Group::mId) into the weight channel, which the cut table is read through.
     void writeGroupIds(LLStrider<F32> ids, U32 total, const std::vector<SKOverviewCensus::Group>& groups)
     {
@@ -1667,6 +1671,16 @@ void SKOverviewCensus::swapIn(Built& built)
     }
     mBatches = std::move(batches);
     mTriangles = triangles;
+    // One row per linkset id of the build, every region's, drawn whole until applyCut writes the cuts.
+    U32 rows = 0;
+    for (const Batch& batch : mBatches)
+    {
+        for (const Group& group : batch.mGroups)
+        {
+            rows = llmax(rows, group.mId + 1);
+        }
+    }
+    mCutTable.resize(rows);
     mSignature = built.mSignature;
     mBuilt = true;
     // applyCut's extents point into the batches just replaced.
@@ -2491,6 +2505,22 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
                 LL_DEBUGS("SKOverview") << "tactical cut: " << (what.empty() ? std::string("nothing cut") : what) << LL_ENDL;
             }
         }
+        for (const auto& [id, e] : extents)
+        {
+            if (id >= mCutTable.rows())
+            {
+                continue;
+            }
+            const auto it = cut_of.find(id);
+            SKOverviewCutTable::Row& row = mCutTable.row(id);
+            // A linkset wholly under its cut is left whole, so an open mesh there (a desk with no underside) is never
+            // counted as a solid the cut went through.
+            const bool whole = it == cut_of.end() || (it->second != skoverview::HIDDEN && e.mMax.mdV[VZ] <= it->second);
+            row.mCut = whole ? SKOverviewCutTable::WHOLE : it->second;
+            row.mMinZ = (F32)e.mMin.mdV[VZ];
+            row.mMaxZ = (F32)e.mMax.mdV[VZ];
+        }
+        mCutTable.flush();
         for (Batch& batch : mBatches)
         {
             const U32 total = batch.mStart[skoverview::NUM_CENSUS_CLASSES];

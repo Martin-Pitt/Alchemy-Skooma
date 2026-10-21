@@ -1968,6 +1968,7 @@ if(AL_BUILD_VIEWER)
     skfloatertacticaloptions.cpp
     skoverviewcapture.cpp
     skoverviewcensus.cpp
+    skoverviewcuttable.cpp
     skoverviewmovers.cpp
   )
   list(
@@ -1990,6 +1991,7 @@ if(AL_BUILD_VIEWER)
     skpopuplayout.h
     skoverviewcapture.h
     skoverviewcensus.h
+    skoverviewcuttable.h
     skoverviewmovers.h
     skoverviewprograms.h
     skpopuppanes.h
