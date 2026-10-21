@@ -27,6 +27,7 @@
 #include "sknavairdistil.h"
 #include "sknavbuildstats.h"
 #include "sknavprofile.h"
+#include "sknavskymap.h"
 
 #include "Recast.h"
 
@@ -116,6 +117,37 @@ namespace sknav
             n += s.mStart.capacity() * sizeof(U32) + s.mGaps.capacity() * sizeof(AirGap);
         }
         return n;
+    }
+
+    bool sameAir(const TileAir& a, const TileAir& b)
+    {
+        const auto same_gap = [](const AirGap& x, const AirGap& y) {
+            return x.mFloor == y.mFloor && x.mCeiling == y.mCeiling && x.mFlags == y.mFlags && x.mClear == y.mClear && x.mSlopeX == y.mSlopeX &&
+                   x.mSlopeY == y.mSlopeY;
+        };
+        const auto same_leaf = [](const AirLeaf& x, const AirLeaf& y) {
+            return x.mX == y.mX && x.mY == y.mY && x.mLevel == y.mLevel && x.mGapCount == y.mGapCount && x.mParent == y.mParent &&
+                   x.mFirstGap == y.mFirstGap;
+        };
+        const auto same_gaps = [&same_gap](const std::vector<AirGap>& x, const std::vector<AirGap>& y) {
+            return std::equal(x.begin(), x.end(), y.begin(), y.end(), same_gap);
+        };
+        if (a.mOrigin != b.mOrigin || a.mCell != b.mCell || a.mUnit != b.mUnit || a.mWidth != b.mWidth || a.mHeight != b.mHeight ||
+            !sameTops(a, b) || !std::equal(a.mLeaves.begin(), a.mLeaves.end(), b.mLeaves.begin(), b.mLeaves.end(), same_leaf) ||
+            !same_gaps(a.mGaps, b.mGaps) ||
+            !std::equal(a.mFaceOffsets.begin(), a.mFaceOffsets.end(), b.mFaceOffsets.begin(), b.mFaceOffsets.end(),
+                        [](const FaceOffset& x, const FaceOffset& y) { return x.mBits == y.mBits; }))
+        {
+            return false;
+        }
+        for (S32 i = 0; i < 4; ++i)
+        {
+            if (a.mSeams[i].mStart != b.mSeams[i].mStart || !same_gaps(a.mSeams[i].mGaps, b.mSeams[i].mGaps))
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     S32 findLeafByKey(const TileAir& air, S32 ix, S32 iy)

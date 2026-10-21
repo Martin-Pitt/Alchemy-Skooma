@@ -28,6 +28,7 @@
 
 #include "sknavlayout.h"
 #include "sknavspacefilter.h"
+#include "sknavtilecache.h"
 
 #include "DetourNavMesh.h"
 #include "DetourNavMeshQuery.h"
@@ -41,6 +42,7 @@
 #include <ostream>
 #include <random>
 #include <set>
+#include <sstream>
 
 namespace
 {
@@ -1076,12 +1078,202 @@ namespace sknav
         out << "\n]}\n";
     }
 
+    namespace
+    {
+        /// One tile an edit reaches, rasterised whole and updated from its held raster.
+        struct EditedTile
+        {
+            TileKey mKey;
+            std::shared_ptr<const TileBuildInput> mInput;
+            TileRasterPtr mFull;
+            TileRasterPtr mLocal;
+            TileBuildResult mFullResult;
+            TileBuildResult mLocalResult;
+            F64 mFullMs = 0.0;
+            F64 mLocalMs = 0.0;
+        };
+
+        /// A result as the disk cache stores it, its timings left out.
+        std::vector<U8> packedWithoutTimes(TileBuildResult r)
+        {
+            r.mMillis = 0.f;
+            r.mExcludeMillis = 0.f;
+            return packTileProduct(r, 0);
+        }
+
+        /// Whether the update made what the whole raster made: the rasters, and the products both polygonise to.
+        bool sameEdit(const TileBuildInput& input, const EditedTile& t, std::string& why)
+        {
+            if (!t.mFull != !t.mLocal || t.mFullResult.mStatus != t.mLocalResult.mStatus)
+            {
+                why = "status";
+                return false;
+            }
+            if (!t.mFull)
+            {
+                return true;
+            }
+            if (!sameRaster(*t.mFull, *t.mLocal, &why))
+            {
+                return false;
+            }
+            TileBuildResult a = t.mFullResult, b = t.mLocalResult;
+            polygoniseTile(input, *t.mFull, a);
+            polygoniseTile(input, *t.mLocal, b);
+            if (packedWithoutTimes(a) != packedWithoutTimes(b))
+            {
+                why = "product";
+                return false;
+            }
+            return true;
+        }
+
+        /// What the viewer does after an edit's tiles land: the rooms passes, then every tile whose stamp moved polygonised again.
+        struct EditPass
+        {
+            F64 mRasterLocalMs = 0.0, mRasterFullMs = 0.0;
+            F64 mRasterLocalMaxMs = 0.0, mRasterFullMaxMs = 0.0;
+            F64 mEnclosureMs = 0.0, mSpacesMs = 0.0;
+            F64 mStampInputMs = 0.0, mStampMs = 0.0;
+            U32 mRestamped = 0;
+            U32 mStampedTiles = 0;
+            U32 mLocal = 0;
+            bool mSameSpaces = true;
+            bool mSameStamp = true;
+            std::string mWhy;
+        };
+
+        /// A product's spaces as far as anything downstream reads them.
+        bool sameSpaces(const RoomsProduct& a, const RoomsProduct& b)
+        {
+            if (a.mSpaces.size() != b.mSpaces.size() || a.mPortals.size() != b.mPortals.size() || a.mTiles.size() != b.mTiles.size())
+            {
+                return false;
+            }
+            for (size_t i = 0; i < a.mSpaces.size(); ++i)
+            {
+                const Space& x = a.mSpaces[i];
+                const Space& y = b.mSpaces[i];
+                if (x.mId != y.mId || x.mBucket != y.mBucket || x.mFloorArea != y.mFloorArea || x.mVolume != y.mVolume || x.mPortals != y.mPortals ||
+                    x.mRaster != y.mRaster)
+                {
+                    return false;
+                }
+            }
+            for (size_t i = 0; i < a.mPortals.size(); ++i)
+            {
+                const Portal& x = a.mPortals[i];
+                const Portal& y = b.mPortals[i];
+                if (x.mKind != y.mKind || x.mSpaces[0] != y.mSpaces[0] || x.mSpaces[1] != y.mSpaces[1] || x.mA != y.mA || x.mB != y.mB || x.mCues != y.mCues)
+                {
+                    return false;
+                }
+            }
+            for (size_t i = 0; i < a.mTiles.size(); ++i)
+            {
+                if (a.mTiles[i].mSeeds != b.mTiles[i].mSeeds)
+                {
+                    return false;
+                }
+            }
+            return a.mLinks.size() == b.mLinks.size() && a.mApart.size() == b.mApart.size();
+        }
+
+        EditPass passAfterEdit(const CensusFile& census, const ReplayResult& result, size_t m, const std::vector<EditedTile>& tiles)
+        {
+            EditPass pass;
+            const ReplayMesh& mesh = *result.mMeshes[m];
+            std::map<TileKey, TileAirPtr> local_air, full_air;
+            std::map<TileKey, const EditedTile*> by_key;
+            for (const EditedTile& t : tiles)
+            {
+                pass.mRasterLocalMs += t.mLocalMs;
+                pass.mRasterFullMs += t.mFullMs;
+                pass.mRasterLocalMaxMs = std::max(pass.mRasterLocalMaxMs, t.mLocalMs);
+                pass.mRasterFullMaxMs = std::max(pass.mRasterFullMaxMs, t.mFullMs);
+                local_air[t.mKey] = t.mLocalResult.mAirBuilt ? t.mLocalResult.mAir : nullptr;
+                full_air[t.mKey] = t.mFullResult.mAirBuilt ? t.mFullResult.mAir : nullptr;
+                by_key[t.mKey] = &t;
+            }
+            const ReplayRoomsAgain local = replayRoomsAgain(census, result, m, local_air);
+            const ReplayRoomsAgain full = replayRoomsAgain(census, result, m, full_air);
+            pass.mEnclosureMs = local.mEnclosureMs;
+            pass.mSpacesMs = local.mSpacesMs;
+            pass.mSameSpaces = local.mRooms && full.mRooms && sameSpaces(*local.mRooms, *full.mRooms);
+            if (!pass.mSameSpaces)
+            {
+                pass.mWhy = "spaces";
+            }
+            for (const auto& [key, tile] : mesh.mTiles)
+            {
+                const auto it = by_key.find(key);
+                const EditedTile* et = it != by_key.end() ? it->second : nullptr;
+                const TileRasterPtr raster = et ? et->mLocal : tile.mRaster;
+                if (!raster)
+                {
+                    continue;
+                }
+                const TileBuildInput& input = et ? *et->mInput : *tile.mInput;
+                const TileAirPtr air = et ? et->mLocalResult.mAir : tile.mResult->mAir;
+                const LLVector3d lo = tile.mMin - mesh.mOrigin, hi = tile.mMax - mesh.mOrigin;
+                const auto stampOf = [&](const ReplayRoomsAgain& again, const TileAirPtr& a, TileStampInput& in) {
+                    const TileEnclosure* enc = again.mEnclosure && a ? again.mEnclosure->tile(key) : nullptr;
+                    if (enc && enc->mAir == a && again.mRooms)
+                    {
+                        stampInput(*a, *enc, *again.mRooms, LLVector3(lo), LLVector3(hi), in);
+                    }
+                };
+                auto t0 = Clock::now();
+                TileStampInput in;
+                stampOf(local, air, in);
+                pass.mStampInputMs += since(t0);
+                ++pass.mStampedTiles;
+                TileStampInput in_full;
+                stampOf(full, et ? et->mFullResult.mAir : air, in_full);
+                if (in.mPattern != in_full.mPattern || in.mGapComponent != in_full.mGapComponent)
+                {
+                    pass.mSameStamp = false;
+                    pass.mWhy = "stamp input";
+                }
+                if (!et && tile.mStampInput && tile.mStampInput->mPattern == in.mPattern)
+                {
+                    continue;   // the viewer rebinds this one, and polygonises nothing
+                }
+                const S32 border = borderCells(input.mParams[static_cast<S32>(AgentClass::AVATAR)].mRadius, input.mCell);
+                t0 = Clock::now();
+                TileStamp stamp;
+                stampTile(*raster->mChf, border, raster->mSpanGap, in, raster->mReal, raster->mFlights, StampParams(), stamp);
+                TileBuildResult r = et ? et->mLocalResult : *tile.mResult;
+                polygoniseTile(input, *raster, r, nullptr, &in, &stamp);
+                pass.mStampMs += since(t0);
+                ++pass.mRestamped;
+                if (et && et->mFull)
+                {
+                    pass.mLocal += 1;
+                    TileStamp stamp_full;
+                    stampTile(*et->mFull->mChf, border, et->mFull->mSpanGap, in_full, et->mFull->mReal, et->mFull->mFlights, StampParams(), stamp_full);
+                    TileBuildResult rf = et->mFullResult;
+                    polygoniseTile(input, *et->mFull, rf, nullptr, &in_full, &stamp_full);
+                    if (packedWithoutTimes(r) != packedWithoutTimes(rf))
+                    {
+                        pass.mSameStamp = false;
+                        pass.mWhy = "stamped product";
+                    }
+                }
+            }
+            return pass;
+        }
+    }
+
     void writeReplayEdits(std::ostream& out, const CensusFile& census, const ReplayResult& result, const std::vector<ReplayEdit>& edits)
     {
         out << std::setprecision(7) << "{\"edits\":[";
-        bool first = true;
+        std::ostringstream passes;
+        passes << std::setprecision(7);
+        bool first = true, first_pass = true;
         for (size_t e = 0; e < edits.size(); ++e)
         {
+            std::map<size_t, std::vector<EditedTile>> edited;
             const ReplayEdit& edit = edits[e];
             if (edit.mRecord >= census.mRecords.size())
             {
@@ -1169,17 +1361,53 @@ namespace sknav
                             }
                         }
                     }
-                    const auto t0 = Clock::now();
-                    const TileBuildResult rebuilt = buildTile(after);
-                    const F64 ms = since(t0);
+                    // The tile as held before the edit, then the edited tile both ways: rasterised whole, and updated from the held raster.
+                    TileBuildInput held_input = before;
+                    held_input.mHoldSolid = true;
+                    after.mHoldSolid = true;
+                    TileBuildResult base;
+                    const TileRasterPtr kept = rasteriseTile(held_input, base);
+                    EditedTile et;
+                    et.mKey = key;
+                    et.mInput = std::make_shared<TileBuildInput>(after);
+                    auto t0 = Clock::now();
+                    et.mFull = rasteriseTile(after, et.mFullResult);
+                    et.mFullMs = since(t0);
+                    TileUpdate update;
+                    t0 = Clock::now();
+                    et.mLocal = kept ? updateTile(after, *kept, et.mLocalResult, nullptr, &update) : rasteriseTile(after, et.mLocalResult);
+                    et.mLocalMs = since(t0);
+                    et.mFullResult.mStatus = et.mFull ? TileBuildResult::SUCCESS : et.mFullResult.mStatus;
+                    et.mLocalResult.mStatus = et.mLocal ? TileBuildResult::SUCCESS : et.mLocalResult.mStatus;
+                    std::string why;
+                    const bool same = sameEdit(after, et, why);
                     out << (first ? "" : ",") << "\n{\"edit\":" << e << ",\"record\":" << edit.mRecord << ",\"op\":" << static_cast<S32>(edit.mOp)
                         << ",\"mesh\":" << m << ",\"x\":" << key.mX << ",\"y\":" << key.mY << ",\"zmin\":[" << before.mZMin << ',' << after.mZMin
                         << "],\"zmax\":[" << before.mZMax << ',' << after.mZMax << "],\"flight\":" << (flight ? 1 : 0) << ",\"exclusion\":" << (exclusion ? 1 : 0)
-                        << ",\"rebuild_ms\":" << ms << ",\"base_ms\":" << tile.mResult->mMillis << ",\"status\":" << static_cast<S32>(rebuilt.mStatus) << '}';
+                        << ",\"rebuild_ms\":" << et.mFullMs << ",\"local_ms\":" << et.mLocalMs << ",\"path\":\"" << updatePathName(update.mPath)
+                        << "\",\"window\":[" << update.mWindow[0] << ',' << update.mWindow[1] << ',' << update.mWindow[2] << ',' << update.mWindow[3]
+                        << "],\"window_cells\":" << update.mWindowCells << ",\"changed\":" << update.mChanged
+                        << ",\"solid_bytes\":" << (kept && kept->mSolid ? kept->mSolid->bytes() : 0) << ",\"held_bytes\":" << (kept ? kept->bytes() : 0)
+                        << ",\"same\":" << (same ? 1 : 0) << ",\"why\":\"" << why << "\",\"base_ms\":" << tile.mResult->mMillis
+                        << ",\"status\":" << static_cast<S32>(et.mFullResult.mStatus) << '}';
                     first = false;
+                    edited[m].push_back(std::move(et));
                 }
             }
+            // Each mesh's rooms passes and stamp after the edit, as the viewer runs them once the tiles land.
+            for (auto& [m, tiles] : edited)
+            {
+                const EditPass pass = passAfterEdit(census, result, m, tiles);
+                passes << (first_pass ? "" : ",") << "\n{\"edit\":" << e << ",\"mesh\":" << m << ",\"tiles\":" << tiles.size()
+                       << ",\"raster_local_ms\":" << pass.mRasterLocalMs << ",\"raster_full_ms\":" << pass.mRasterFullMs
+                       << ",\"raster_local_max_ms\":" << pass.mRasterLocalMaxMs << ",\"raster_full_max_ms\":" << pass.mRasterFullMaxMs
+                       << ",\"enclosure_ms\":" << pass.mEnclosureMs << ",\"spaces_ms\":" << pass.mSpacesMs << ",\"stamp_input_ms\":" << pass.mStampInputMs
+                       << ",\"stamp_ms\":" << pass.mStampMs << ",\"restamped\":" << pass.mRestamped << ",\"stamped_tiles\":" << pass.mStampedTiles
+                       << ",\"local\":" << pass.mLocal << ",\"same_spaces\":" << (pass.mSameSpaces ? 1 : 0)
+                       << ",\"same_stamp\":" << (pass.mSameStamp ? 1 : 0) << ",\"why\":\"" << pass.mWhy << "\"}";
+                first_pass = false;
+            }
         }
-        out << "\n]}\n";
+        out << "\n],\"passes\":[" << passes.str() << "\n]}\n";
     }
 }

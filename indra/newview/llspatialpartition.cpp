@@ -2234,14 +2234,13 @@ void renderPhysicsShape(LLDrawable* drawable, LLVOVolume* volume, bool wireframe
 
     //not allowed to return at this point without rendering *something*
 
-    F32 threshold = gSavedSettings.getF32("ObjectCostHighThreshold");
-    F32 cost = volume->getObjectCost();
-
     LLColor4 low = gSavedSettings.getColor4("ObjectCostLowColor");
     LLColor4 mid = gSavedSettings.getColor4("ObjectCostMidColor");
     LLColor4 high = gSavedSettings.getColor4("ObjectCostHighColor");
 
-    F32 normalizedCost = 1.f - exp( -(cost / threshold) );
+    // <SK:Nexii> Coloured by the physics shape's own cost, not the land impact (skphysicsshape.h)
+    F32 normalizedCost = skPhysicsShapeCostFraction(skPhysicsShapeCost(volume, shape));
+    // </SK:Nexii>
 
     LLColor4 color;
     if ( normalizedCost <= 0.5f )
@@ -2283,7 +2282,7 @@ void renderPhysicsShape(LLDrawable* drawable, LLVOVolume* volume, bool wireframe
         // <SK:Nexii> physics_havok block
         // The simulator's MOPP triangles for a mesh without decomposition hulls. With hulls, which
         // shape it collides with is not established, so they keep today's drawing.
-        const bool havok_drawn = decomp && decomp->mHull.empty() && skRenderPhysicsHavok(mesh_id, color);
+        const bool havok_drawn = decomp && decomp->mHull.empty() && !skPhysicsMeshTooSmallForTriangles(volume) && skRenderPhysicsHavok(mesh_id, color);
         if (havok_drawn)
         {
             // Drawn.
@@ -2301,7 +2300,7 @@ void renderPhysicsShape(LLDrawable* drawable, LLVOVolume* volume, bool wireframe
             // never reach this branch (they arrive as USER_CONVEX).
             gMeshRepo.fetchPhysicsShape(mesh_id);
 
-            if (!decomp->mPhysicsShapeMesh.empty())
+            if (!decomp->mPhysicsShapeMesh.empty() && !skPhysicsMeshTooSmallForTriangles(volume)) // <SK:Nexii> Small meshes collide as hulls (skphysicsshape.h)
             {
                 //decomp has physics mesh, render that mesh
                 gGL.diffuseColor4fv(color.mV);

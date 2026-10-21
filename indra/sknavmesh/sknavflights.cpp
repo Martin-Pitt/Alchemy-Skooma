@@ -27,6 +27,7 @@
 #include "sknavflights.h"
 #include "sknavprofile.h"
 
+#include "llapp.h"
 #include "llstring.h"
 
 #include "Recast.h"
@@ -262,8 +263,13 @@ namespace
 
         template <typename Fn> void eachEdge(Fn&& fn) const
         {
-            for (size_t s = 0; s < mEdges.size();)
+            for (size_t s = 0, groups = 0; s < mEdges.size();)
             {
+                // A pool drains before it joins: a long partition left at logout gives up.
+                if ((++groups & 4095) == 0 && LLApp::isExiting())
+                {
+                    return;
+                }
                 size_t e = s + 1;
                 while (e < mEdges.size() && mEdges[e].first == mEdges[s].first)
                 {
@@ -538,6 +544,7 @@ namespace
     constexpr F64 FLOOR_DZ = 0.75;          ///< from the end's height
     constexpr F64 FLOOR_UP = 1.25;          ///< a named stair may sink this far into its floors
     constexpr F64 LEVEL_DZ = 0.3;
+    static_assert(MAX_RUN_M + PAST_M + BEYOND_M < FLIGHT_REACH_M, "a tile's soup must hold every flight that touches it whole");
     constexpr F64 FLOOR_MIN_M2 = 4.0;       ///< without a name, a smaller floor at an end is a prop top
     constexpr F64 MIN_RISE_UNCUED_M = 1.0;  ///< without a name or treads, a smaller climb is a step
     constexpr F64 FLAT_FACE_DEG = 10.0;     ///< a steep unstepped flight's faces lie this close to its plane
