@@ -309,6 +309,7 @@ bool SKWorldCensus::sameRegions(const std::vector<U64>& regions) const
 void SKWorldCensus::update()
 {
     LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - update");
+    static LLCachedControl<bool> log(gSavedSettings, "SKNavCensusLog", false);
     const bool enabled = wanted() && LLWorld::instanceExists() && gAgent.getRegion();
     if (mClusterJob.valid())
     {
@@ -322,7 +323,14 @@ void SKWorldCensus::update()
         SKCensusSnapshotPtr retired;
         if (!mDiscardClusterJob)
         {
-            done->mStamp = ++mStamp;
+            // The stamp says the content changed: a scan that found everything as it was keeps the last one's.
+            const bool same = mSnapshot && done->mHash == mSnapshot->mHash;
+            done->mStamp = same ? mSnapshot->mStamp : ++mStamp;
+            if (!same && log)
+            {
+                LL_INFOS("SKNav") << "census stamp " << done->mStamp << ": +" << done->mAdded.size() << " -" << done->mRemoved.size()
+                                  << " ~" << done->mChanged.size() << " of " << done->mRecords.size() << " records" << LL_ENDL;
+            }
             retired = std::move(mSnapshot);
             mSnapshot = std::move(done);
         }
@@ -376,7 +384,6 @@ void SKWorldCensus::update()
         requestRoles();
     }
 
-    static LLCachedControl<bool> log(gSavedSettings, "SKNavCensusLog", false);
     if (log && mSnapshot && gFrameTimeSeconds - mLastLog > 5.f)
     {
         mLastLog = gFrameTimeSeconds;
@@ -528,8 +535,17 @@ void SKWorldCensus::finishScan()
     // All viewer-derived data is now detached. The worker owns this unpublished
     // snapshot and never accesses the census, settings or live viewer objects.
     auto task = std::make_shared<std::packaged_task<std::shared_ptr<SKCensusSnapshot>()>>(
-        [done, cluster_gap = static_cast<F32>(gap), window]()
+        [done, prev = mSnapshot, cluster_gap = static_cast<F32>(gap), window]() mutable
         {
+            {
+                // The delta is against the snapshot published when this scan finished: one job is in flight at a time.
+                LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - delta worker");
+                done->mHash = sknav::censusHash(done->mRecords, done->mFeatures, done->mDoors, window, cluster_gap);
+                done->mByPart = sknav::recordsByPart(done->mRecords);
+                static const sknav::RecordsByPart none;
+                sknav::diffRecords(prev ? prev->mByPart : none, done->mByPart, done->mAdded, done->mRemoved, done->mChanged);
+                prev.reset();
+            }
             LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - cluster worker");
             LLTimer timer;
             done->mClusters = cluster(done->mRecords, cluster_gap, sknav::TILE_M, window);

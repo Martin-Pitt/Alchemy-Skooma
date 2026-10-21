@@ -15,6 +15,7 @@ target_sources(
     sknavairfine.cpp
     sknavannotate.cpp
     sknavbuild.cpp
+    sknavcensusdelta.cpp
     sknavcensusio.cpp
     sknavcluster.cpp
     sknavenclosure.cpp
@@ -56,6 +57,7 @@ target_sources(
         sknavannotate.h
         sknavbuild.h
         sknavbuildstats.h
+        sknavcensusdelta.h
         sknavcensusio.h
         sknavcluster.h
         sknavenclosure.h
@@ -149,6 +151,7 @@ if(AL_BUILD_TESTS)
     SOURCES
       tests/sknavairunknown_test.cpp
       tests/sknavcensusio_test.cpp
+      tests/sknavclusterhash_test.cpp
       tests/sknavenclosure_test.cpp
       tests/sknavenclosurerepair_test.cpp
       tests/sknavfeatures_test.cpp
