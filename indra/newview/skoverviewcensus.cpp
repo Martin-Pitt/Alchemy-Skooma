@@ -2306,17 +2306,16 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
         }
     };
     std::vector<Occupant> people(occupants);
-    std::vector<const Occupant*> ordered;
+    // The agent first: their cut wins, and their probes are issued first.
+    std::vector<bool> self;
     for (const Occupant& occupant : people)
     {
-        if (occupant.mSelf)
-        {
-            ordered.insert(ordered.begin(), &occupant);
-        }
-        else
-        {
-            ordered.push_back(&occupant);
-        }
+        self.push_back(occupant.mSelf);
+    }
+    std::vector<Occupant*> ordered;
+    for (const size_t i : skoverview::probeOrder(self))
+    {
+        ordered.push_back(&people[i]);
     }
     // The GPU's probes (SKOverviewProbes): a person's answer is asked for when their key moves and read when it lands.
     if (probes && !probes->active())
@@ -2448,6 +2447,50 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
         cache.mMarksProbe.issue(marks_key, mExtentsSignature, probes->frame());
         return true;
     };
+    // Column: an upward look over the slack's square round the floor point, from just above the floor.
+    auto issueColumn = [&](OccupantCut& cache, const Occupant& occupant, U64 marks_key) -> bool
+    {
+        LL_PROFILE_ZONE_NAMED("sk cut probes issue");
+        const LLVector3d& p = occupant.mFloor;
+        std::vector<std::pair<U32, LLUUID>> candidates;
+        F64 top = p.mdV[VZ] + ABOVE_M;
+        for (const auto& entry : extents)
+        {
+            const Extent& e = entry.second;
+            if (!e.mCuttable || e.mMax.mdV[VZ] < p.mdV[VZ] + ABOVE_M || overhead(e, occupant) ||
+                p.mdV[VX] < e.mMin.mdV[VX] - SLACK_M || p.mdV[VX] > e.mMax.mdV[VX] + SLACK_M ||
+                p.mdV[VY] < e.mMin.mdV[VY] - SLACK_M || p.mdV[VY] > e.mMax.mdV[VY] + SLACK_M)
+            {
+                continue;
+            }
+            candidates.emplace_back(entry.first, e.mRoot);
+            top = llmax(top, e.mMax.mdV[VZ]);
+        }
+        if (!budget.admit(personOf(occupant), (U32)candidates.size()))
+        {
+            return false;
+        }
+        SKOverviewProbes::Box box;
+        box.mMinX = box.mMinY = (F32)-SLACK_M;
+        box.mMaxX = box.mMaxY = (F32)SLACK_M;
+        box.mFrom = (F32)ABOVE_M;
+        box.mTo = (F32)(top - p.mdV[VZ] + 1.0);
+        box.mWidth = box.mHeight = 8;
+        if (!probes->beginVolume(box, {}))
+        {
+            return false;
+        }
+        cache.mMarkTickets.clear();
+        for (const auto& candidate : candidates)
+        {
+            cache.mMarkTickets.push_back(probes->query(runsOf(extents.at(candidate.first), p), true));
+        }
+        probes->endVolume();
+        cache.mMarkCandidates = std::move(candidates);
+        cache.mMarkRule = "column";
+        cache.mMarksProbe.issue(marks_key, mExtentsSignature, probes->frame());
+        return true;
+    };
     // Whether a linkset has a triangle above p's floor whose plan footprint holds p (within the slack): it stands
     // over them, not merely its box.
     auto overColumn = [&](const Extent& e, const LLVector3d& p) -> bool
@@ -2543,12 +2586,56 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
         covered = cover;
         return found;
     };
+    // Cover: an upward look at the one point over the feet, from just above them, a query per linkset that may be
+    // over them; a face seen edge-on does not count, as the CPU's walls never did.
+    auto issueCover = [&](OccupantCut& cache, const Occupant& occupant, U64 roof_key) -> bool
+    {
+        LL_PROFILE_ZONE_NAMED("sk cut probes issue");
+        const LLVector3d& feet = occupant.mFeet;
+        std::vector<std::pair<U32, LLUUID>> candidates;
+        F64 top = feet.mdV[VZ] + STAND_ABOVE_M;
+        for (const auto& entry : extents)
+        {
+            const Extent& e = entry.second;
+            if (feet.mdV[VX] < e.mMin.mdV[VX] || feet.mdV[VX] > e.mMax.mdV[VX] || feet.mdV[VY] < e.mMin.mdV[VY] ||
+                feet.mdV[VY] > e.mMax.mdV[VY] || e.mMax.mdV[VZ] <= feet.mdV[VZ] + STAND_ABOVE_M ||
+                (!e.mGround && e.mBottom > feet.mdV[VZ] + OVERHEAD_M))
+            {
+                continue;
+            }
+            candidates.emplace_back(entry.first, e.mRoot);
+            top = llmax(top, e.mMax.mdV[VZ]);
+        }
+        if (!budget.admit(personOf(occupant), (U32)candidates.size()))
+        {
+            return false;
+        }
+        SKOverviewProbes::Box box;
+        box.mMinX = box.mMinY = -0.01f;
+        box.mMaxX = box.mMaxY = 0.01f;
+        box.mFrom = (F32)STAND_ABOVE_M;
+        box.mTo = (F32)(top - feet.mdV[VZ] + 1.0);
+        if (!probes->beginVolume(box, {}))
+        {
+            return false;
+        }
+        cache.mCoverTickets.clear();
+        for (const auto& candidate : candidates)
+        {
+            cache.mCoverTickets.push_back(probes->query(runsOf(extents.at(candidate.first), feet), false));
+        }
+        probes->endVolume();
+        cache.mCoverCandidates = std::move(candidates);
+        cache.mRoofProbe.issue(roof_key, mExtentsSignature, probes->frame());
+        return true;
+    };
     std::map<U32, F32> roof_of;     // linkset -> the highest cut of those standing on its roof
     bool holding = false;
     {
         LL_PROFILE_ZONE_NAMED("sk cut roofs");
-        for (Occupant& occupant : people)
+        for (Occupant* who : ordered)
         {
+            Occupant& occupant = *who;
             const LLVector3d& feet = occupant.mFeet;
             OccupantCut& cache = mOccupantCuts[occupant.mId];
             cache.mSeen = true;
@@ -2602,6 +2689,36 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
                 }
                 cache.mRoofKey = roof_key;
                 cache.mRoofValid = true;
+            }
+            if (probes)
+            {
+                // Whether anything covers the feet, by the GPU, beside the CPU's answer until it rules.
+                LL_PROFILE_ZONE_NAMED("sk cut probes collect");
+                std::vector<U64> counts;
+                bool lost = false;
+                const bool ready = landed(cache.mCoverTickets, counts, lost);
+                if (cache.mRoofProbe.settle(ready, lost, mExtentsSignature, false) == skoverview::ProbeSlot::Outcome::Apply)
+                {
+                    const bool covered = !skoverview::passedExtents(cache.mCoverCandidates, counts, mRootExtent).empty();
+                    if (cache.mSurfaceCpu && covered != cache.mCoveredCpu)
+                    {
+                        LL_INFOS("SKOverview") << "probe cover differs from CPU for " << occupant.mId << ": gpu "
+                                               << (covered ? "covered" : "open") << " cpu " << (cache.mCoveredCpu ? "covered" : "open")
+                                               << LL_ENDL;
+                    }
+                    ++mProbeStats.mApplied;
+                    mProbeStats.mLatencyFrames += probes->frame() - cache.mRoofProbe.mIssued;
+                }
+                if (baseCrossed(feet.mdV[VZ]))
+                {
+                    cache.mRoofProbe.invalidate();
+                }
+                if (cache.mRoofProbe.wants(roof_key) && issueCover(cache, occupant, roof_key))
+                {
+                    cache.mSurfaceCpu = cache.mBestZ > -1e29;
+                    cache.mCoveredCpu = cache.mCovered;
+                }
+                probing = probing || cache.mRoofProbe.mPending;
             }
             const U32 best = cache.mBest;
             const F64 best_z = cache.mBestZ;
@@ -2782,7 +2899,7 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
                 cache.mMarksKey = marks_key;
                 cache.mMarksValid = true;
             }
-            if (probes && occupant->mRoom)
+            if (probes)
             {
                 // The GPU's answer, beside the CPU's until it rules; diffed for the same key.
                 LL_PROFILE_ZONE_NAMED("sk cut probes collect");
@@ -2808,7 +2925,8 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
                 {
                     cache.mMarksProbe.invalidate();
                 }
-                if (cache.mMarksProbe.wants(marks_key) && issueRoom(cache, *occupant, marks_key))
+                if (cache.mMarksProbe.wants(marks_key) &&
+                    (occupant->mRoom ? issueRoom(cache, *occupant, marks_key) : issueColumn(cache, *occupant, marks_key)))
                 {
                     cache.mMarksCpu.clear();
                     for (const auto& m : cache.mMarks)
@@ -2838,7 +2956,7 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
             U32 pending = 0;
             for (const auto& entry : mOccupantCuts)
             {
-                pending += entry.second.mMarksProbe.mPending ? 1 : 0;
+                pending += entry.second.mMarksProbe.mPending || entry.second.mRoofProbe.mPending ? 1 : 0;
             }
             if (mProbeStats.mIssued || pending)
             {
