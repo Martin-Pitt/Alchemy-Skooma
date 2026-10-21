@@ -1656,9 +1656,10 @@ U32 SKOverviewCensus::pageFor(Region& region, U8 cls, U32 count, U32 want, U32& 
 
 void SKOverviewCensus::refreshSlots(Region& region)
 {
-    for (Page& page : region.mPages)
+    std::vector<std::vector<skoverview::SlotCull>> before(region.mPages.size());
+    for (size_t p = 0; p < region.mPages.size(); ++p)
     {
-        page.mSlots.clear();
+        before[p].swap(region.mPages[p].mSlots);
     }
     for (const Group& group : region.mGroups)
     {
@@ -1684,11 +1685,15 @@ void SKOverviewCensus::refreshSlots(Region& region)
             }
         }
     }
-    for (Page& page : region.mPages)
+    for (size_t p = 0; p < region.mPages.size(); ++p)
     {
+        Page& page = region.mPages[p];
         std::sort(page.mSlots.begin(), page.mSlots.end(),
                   [](const skoverview::SlotCull& a, const skoverview::SlotCull& b) { return a.mFirst < b.mFirst; });
-        page.mTableDirty = true;
+        // The GPU's copy is written again only when the slots moved.
+        page.mTableDirty |= page.mSlots.size() != before[p].size() ||
+                            (!page.mSlots.empty() &&
+                             std::memcmp(page.mSlots.data(), before[p].data(), page.mSlots.size() * sizeof(skoverview::SlotCull)) != 0);
     }
 }
 
