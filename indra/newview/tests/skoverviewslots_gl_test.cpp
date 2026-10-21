@@ -157,8 +157,12 @@ namespace
 
         ~skoverviewslots_gl_data()
         {
-            gGL.unbindStorageBuffer(SLOT_TABLE_BINDING);
-            gGL.unbindStorageBuffer(COMMANDS_BINDING);
+            // A skipped case never raised sCompute, and the storage points assert it.
+            if (ll_test::contextHasCompute())
+            {
+                gGL.unbindStorageBuffer(SLOT_TABLE_BINDING);
+                gGL.unbindStorageBuffer(COMMANDS_BINDING);
+            }
             LLGLSLShader::unbind();
             glUseProgram(0);
             mCommandsProgram.unload();
