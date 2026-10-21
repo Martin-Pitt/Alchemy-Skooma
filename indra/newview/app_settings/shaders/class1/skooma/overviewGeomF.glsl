@@ -26,6 +26,16 @@
 // normal whatever their depth differs by. Nothing above the cut plane, or its part's own cut height, is drawn: the
 // vertex stage clips it (overviewGeomV.glsl). Only SK_DISSOLVE discards, and only SK_CAP_LIFT writes gl_FragDepth.
 
+#ifdef SK_ID_WRITE
+// The probes' id render (SKOverviewProbes): the linkset's id + 1 in an unsigned target, 0 where nothing is drawn.
+flat in int vary_group;
+out uint frag_id;
+
+void main()
+{
+    frag_id = uint(vary_group) + 1u;
+}
+#else
 #ifdef SK_CAP_LIFT
 // The lift only moves a fragment nearer: it cannot be rejected early, but saying so keeps the hierarchical depth valid
 // for the draws after it where the context can be told; a 4.1 context without the extension builds without the qualifier.
@@ -161,3 +171,4 @@ void main()
 #endif
     frag_color = vec4(color.r, e.x, flag, e.y);
 }
+#endif

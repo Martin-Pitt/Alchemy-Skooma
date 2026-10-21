@@ -98,6 +98,7 @@ namespace
     LLGLSLShader sGeomCutDissolve;  // the same with the see-through circles, the only permutation that discards
     LLGLSLShader sGeomCapLift;      // the cut census's section pass, the only permutation that writes depth
     LLGLSLShader sGeomCapLiftDissolve;
+    LLGLSLShader sGeomId;           // the probes' id render: the linkset id, no cut, no discard, no depth write
     LLGLSLShader sMarker;     // the tactical avatar markers, depth-tested by hand
     LLGLSLShader sCommands;   // the census pages' command lists, where the session computes
 
@@ -559,8 +560,8 @@ namespace
     }
 
     /// The program each of skoverview::PROGRAMS builds, in its order.
-    LLGLSLShader* const OVERVIEW_SHADERS[] = { &sResolve,     &sComposite,           &sGeom,  &sGeomCut, &sGeomCutDissolve,
-                                               &sGeomCapLift, &sGeomCapLiftDissolve, &sMarker };
+    LLGLSLShader* const OVERVIEW_SHADERS[] = { &sResolve,     &sComposite,           &sGeom,   &sGeomCut, &sGeomCutDissolve,
+                                               &sGeomCapLift, &sGeomCapLiftDissolve, &sGeomId, &sMarker };
     static_assert(sizeof(OVERVIEW_SHADERS) / sizeof(OVERVIEW_SHADERS[0]) == skoverview::PROGRAM_COUNT);
 }
 

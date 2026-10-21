@@ -53,6 +53,9 @@ namespace skoverview
           { "SK_CUT_ATTRIBUTE", "SK_CAP_LIFT" }, true },
         { "SK Overview Geometry Cap Lift Dissolve", "skooma/overviewGeomV.glsl", "skooma/overviewGeomF.glsl",
           { "SK_CUT_ATTRIBUTE", "SK_CAP_LIFT", "SK_DISSOLVE" }, true },
+        // The probes' id render (SKOverviewProbes): the linkset's id per fragment, reading no table.
+        { "SK Overview Geometry Id", "skooma/overviewGeomV.glsl", "skooma/overviewGeomF.glsl",
+          { "SK_CUT_ATTRIBUTE", "SK_ID_WRITE" } },
         { "SK Overview Marker", "skooma/overviewMarkerV.glsl", "skooma/overviewMarkerF.glsl", {} },
     };
 
