@@ -86,7 +86,7 @@ namespace
 
     TEST_CASE("skoverviewprobes: the agent's probes are issued first", "[skoverviewprobes]")
     {
-        const std::vector<size_t> order = skoverview::probeOrder({ false, false, true, false });
+        const std::vector<size_t> order = skoverview::probeOrder({ false, false, true, false }, {});
         REQUIRE(order.size() == 4);
         CHECK(order[0] == 2);
         CHECK(order[1] == 0);
@@ -99,6 +99,33 @@ namespace
         CHECK_FALSE(budget.admit((U32)order[1], 1));
         CHECK(budget.people() == 1);
         CHECK(budget.queries() == 15);
+    }
+
+    TEST_CASE("skoverviewprobes: people past the budget take turns longest-served first", "[skoverviewprobes]")
+    {
+        // Three people besides the agent and room for two a frame: whoever was served longest ago goes next.
+        std::vector<U32> issued = { 0, 0, 0, 0 };
+        const std::vector<bool> self = { false, true, false, false };
+        std::vector<size_t> served;
+        for (U32 frame = 1; frame <= 3; ++frame)
+        {
+            skoverview::ProbeBudget budget(2, 256);
+            for (const size_t i : skoverview::probeOrder(self, issued))
+            {
+                if (budget.admit((U32)i, 1))
+                {
+                    issued[i] = frame;
+                    served.push_back(i);
+                }
+            }
+        }
+        CHECK(served == std::vector<size_t>{ 1, 0, 1, 2, 1, 3 });
+        // A probe that could not be issued leaves its share to the next person.
+        skoverview::ProbeBudget budget(2, 256);
+        CHECK(budget.fits(0, 1));
+        CHECK(budget.admit(1, 1));
+        CHECK(budget.fits(2, 1));
+        CHECK(budget.people() == 1);
     }
 
     TEST_CASE("skoverviewprobes: a frame admits its first issue past the query budget and no more", "[skoverviewprobes]")

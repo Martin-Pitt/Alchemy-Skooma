@@ -78,15 +78,20 @@ namespace skoverview
         return Outcome::Apply;
     }
 
-    bool ProbeBudget::admit(U32 person, U32 queries)
+    bool ProbeBudget::fits(U32 person, U32 queries) const
     {
         const bool known = std::find(mAdmitted.begin(), mAdmitted.end(), person) != mAdmitted.end();
         const bool first = mAdmitted.empty() && mUsedQueries == 0;
-        if (!first && ((!known && mAdmitted.size() >= mPeople) || mUsedQueries + queries > mQueries))
+        return first || ((known || mAdmitted.size() < mPeople) && mUsedQueries + queries <= mQueries);
+    }
+
+    bool ProbeBudget::admit(U32 person, U32 queries)
+    {
+        if (!fits(person, queries))
         {
             return false;
         }
-        if (!known)
+        if (std::find(mAdmitted.begin(), mAdmitted.end(), person) == mAdmitted.end())
         {
             mAdmitted.push_back(person);
         }
@@ -94,24 +99,22 @@ namespace skoverview
         return true;
     }
 
-    std::vector<size_t> probeOrder(const std::vector<bool>& self)
+    std::vector<size_t> probeOrder(const std::vector<bool>& self, const std::vector<U32>& issued)
     {
-        std::vector<size_t> order;
-        order.reserve(self.size());
-        for (size_t i = 0; i < self.size(); ++i)
+        std::vector<size_t> order(self.size());
+        for (size_t i = 0; i < order.size(); ++i)
         {
-            if (self[i])
-            {
-                order.push_back(i);
-            }
+            order[i] = i;
         }
-        for (size_t i = 0; i < self.size(); ++i)
-        {
-            if (!self[i])
-            {
-                order.push_back(i);
-            }
-        }
+        std::stable_sort(order.begin(), order.end(),
+                         [&](size_t a, size_t b)
+                         {
+                             if (self[a] != self[b])
+                             {
+                                 return (bool)self[a];
+                             }
+                             return a < issued.size() && b < issued.size() && issued[a] < issued[b];
+                         });
         return order;
     }
 

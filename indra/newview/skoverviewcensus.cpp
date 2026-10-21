@@ -2277,16 +2277,25 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
         }
     };
     std::vector<Occupant> people(occupants);
-    // The agent first: their cut wins, and their probes are issued first.
+    // The agent first: their probes are issued first and their cut wins. The rest are probed longest-served first, so a
+    // crowd past the budget takes turns, and marked in census order, so a tie between two of them does not move.
     std::vector<bool> self;
+    std::vector<U32> issued;
     for (const Occupant& occupant : people)
     {
         self.push_back(occupant.mSelf);
+        const auto cut = mOccupantCuts.find(occupant.mId);
+        issued.push_back(cut == mOccupantCuts.end() ? 0 : llmax(cut->second.mRoofProbe.mIssued, cut->second.mMarksProbe.mIssued));
     }
     std::vector<Occupant*> ordered;
-    for (const size_t i : skoverview::probeOrder(self))
+    for (const size_t i : skoverview::probeOrder(self, issued))
     {
         ordered.push_back(&people[i]);
+    }
+    std::vector<const Occupant*> marking;
+    for (const size_t i : skoverview::probeOrder(self, {}))
+    {
+        marking.push_back(&people[i]);
     }
     // The GPU's probes (SKOverviewProbes): a person's answer is asked for when their key moves and read when it lands.
     if (probes && !probes->active())
@@ -2356,7 +2365,7 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
             candidates.emplace_back(entry.first, e.mRoot);
             top = llmax(top, e.mMax.mdV[VZ]);
         }
-        if (!budget.admit(personOf(occupant), (U32)candidates.size()))
+        if (!budget.fits(personOf(occupant), (U32)candidates.size()))
         {
             return false;
         }
@@ -2397,6 +2406,7 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
         {
             return false;
         }
+        budget.admit(personOf(occupant), (U32)candidates.size());
         const LLVector3d origin(lo.mdV[VX], lo.mdV[VY], p.mdV[VZ]);
         cache.mMarkTickets.clear();
         for (const auto& candidate : candidates)
@@ -2437,7 +2447,7 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
             candidates.emplace_back(entry.first, e.mRoot);
             top = llmax(top, e.mMax.mdV[VZ]);
         }
-        if (!budget.admit(personOf(occupant), (U32)candidates.size()))
+        if (!budget.fits(personOf(occupant), (U32)candidates.size()))
         {
             return false;
         }
@@ -2451,6 +2461,7 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
         {
             return false;
         }
+        budget.admit(personOf(occupant), (U32)candidates.size());
         cache.mMarkTickets.clear();
         for (const auto& candidate : candidates)
         {
@@ -2511,7 +2522,7 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
             candidates.emplace_back(entry.first, e.mRoot);
             top = llmax(top, e.mMax.mdV[VZ]);
         }
-        if (!budget.admit(personOf(occupant), (U32)candidates.size()))
+        if (!budget.fits(personOf(occupant), (U32)candidates.size()))
         {
             return false;
         }
@@ -2529,6 +2540,7 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
         {
             return false;
         }
+        budget.admit(personOf(occupant), (U32)candidates.size());
         cache.mFeetSlot = slot;
         cache.mFeetZ = feet.mdV[VZ];
         cache.mCoverTickets.clear();
@@ -2726,7 +2738,15 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
                 }
                 probing = probing || cache.mMarksProbe.mPending;
             }
-            for (const auto& m : cache.mMarks)
+        }
+        for (const Occupant* occupant : marking)
+        {
+            const auto cut = mOccupantCuts.find(occupant->mId);
+            if (occupant->mOutdoors || cut == mOccupantCuts.end())
+            {
+                continue;
+            }
+            for (const auto& m : cut->second.mMarks)
             {
                 mark(m.first, *occupant, m.second);
             }

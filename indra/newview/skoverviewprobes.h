@@ -86,7 +86,10 @@ namespace skoverview
     {
     public:
         ProbeBudget(U32 people, U32 queries) : mPeople(people), mQueries(queries) {}
-        /// Whether person may issue queries more this frame; counts them when it may.
+        /// Whether person may issue queries more this frame.
+        bool fits(U32 person, U32 queries) const;
+        /// Whether person may issue queries more this frame; counts them when it may. Called once the probe is issued,
+        /// so one that could not be leaves its share to the people after it.
         bool admit(U32 person, U32 queries);
         U32 people() const { return (U32)mAdmitted.size(); }
         U32 queries() const { return mUsedQueries; }
@@ -98,8 +101,9 @@ namespace skoverview
         std::vector<U32> mAdmitted;
     };
 
-    /// The order people are probed in: the agent first, then the rest as given.
-    std::vector<size_t> probeOrder(const std::vector<bool>& self);
+    /// The order people are probed in: the agent first, then the rest by the frame they were last issued a probe in,
+    /// longest ago first, so a budget too small for everyone serves each in turn.
+    std::vector<size_t> probeOrder(const std::vector<bool>& self, const std::vector<U32>& issued);
 
     /// A membership probe's answer: the candidates (extent id, root) whose query let a sample through, each still the
     /// extent its root names; a root no longer present is dropped.
