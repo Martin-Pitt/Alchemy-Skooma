@@ -150,12 +150,13 @@ namespace sknav
     {
         // Static records only, in a stable order so component ids do not depend
         // on the census's iteration order. A record no class builds with, a
-        // vehicle, would only re-sign the tiles it drives across.
+        // vehicle, would only re-sign the tiles it drives across; a visible-only
+        // one is no shape at all.
         std::vector<RecordPtr> live;
         live.reserve(records.size());
         for (const RecordPtr& r : records)
         {
-            if (r && !r->mDynamic && r->mNavRole != NavRole::DYNAMIC && (r->mExclude & EXCLUDE_ALL) != EXCLUDE_ALL)
+            if (r && r->mCollides && !r->mDynamic && r->mNavRole != NavRole::DYNAMIC && (r->mExclude & EXCLUDE_ALL) != EXCLUDE_ALL)
             {
                 live.push_back(r);
             }

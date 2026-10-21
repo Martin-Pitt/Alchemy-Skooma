@@ -334,7 +334,7 @@ namespace
         out.erase(std::remove_if(out.begin(), out.end(),
                                  [&](const RecordPtr* p) {
                                      const RecordPtr& r = *p;
-                                     return !(r && r->mPart != leaf.mPart && r->mRole == Role::NAV
+                                     return !(r && r->mCollides && r->mPart != leaf.mPart && r->mRole == Role::NAV
                                               && overlapsPlan(f.mMin, f.mMax, r->mMin, r->mMax) && r->mMin.mdV[VZ] <= f.mMax.mdV[VZ]
                                               && r->mMax.mdV[VZ] >= f.mMin.mdV[VZ]);
                                  }),
@@ -614,7 +614,7 @@ namespace sknav
         std::vector<const Record*> nearby;
         for (const RecordPtr& r : records)
         {
-            if (r && r->mPart != leaf.mPart && r->mRole == Role::NAV && overlapsPlan(mn, mx, r->mMin, r->mMax)
+            if (r && r->mCollides && r->mPart != leaf.mPart && r->mRole == Role::NAV && overlapsPlan(mn, mx, r->mMin, r->mMax)
                 && r->mMin.mdV[VZ] <= mx.mdV[VZ] && r->mMax.mdV[VZ] >= mn.mdV[VZ])
             {
                 nearby.push_back(r.get());

@@ -1797,7 +1797,7 @@ void SKOverviewCensus::gatherSurrounds(const SKCensusSnapshot& snap)
     std::set<LLUUID> recorded;
     for (const sknav::RecordPtr& rec : snap.mRecords)
     {
-        if (rec)
+        if (rec && rec->mCollides) // a visible-only record is a box, no shape
         {
             recorded.insert(rec->mPart);
         }

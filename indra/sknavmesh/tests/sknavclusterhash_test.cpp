@@ -101,6 +101,25 @@ namespace
         CHECK(scanHash(doubled) != scan);
     }
 
+    TEST_CASE("sknavclusterhash: a visible-only record joins no cluster and still moves the census hash", "[sknavclusterhash]")
+    {
+        std::vector<RecordPtr> records = twoBuildings();
+        const std::map<LLUUID, U64> before = hashes(records);
+        const U64 scan = scanHash(records);
+        // A phantom part between the buildings, touching both: it would bridge them into one cluster if it collided.
+        auto shell = std::make_shared<Record>(*box(4, 41, 11, 0, 51, 4));
+        shell->mCollides = false;
+        records.push_back(shell);
+        const ClusterSet set = cluster(records, 0.5);
+        CHECK(hashes(records) == before);
+        for (const ClusterPtr& c : set.mClusters)
+        {
+            CHECK(std::find(c->mRecords.begin(), c->mRecords.end(), records.back()) == c->mRecords.end());
+        }
+        // Its arrival is news to the overview's cover test, which keys on the census hash.
+        CHECK(scanHash(records) != scan);
+    }
+
     TEST_CASE("sknavclusterhash: a dynamic record moving leaves the cluster hash alone", "[sknavclusterhash]")
     {
         std::vector<RecordPtr> records = twoBuildings();
