@@ -2909,11 +2909,13 @@ if(AL_BUILD_TESTS)
       tests/alwatersurface_gl_test.cpp
       tests/skoverviewshaders_gl_test.cpp # <SK:Nexii> combat/minimap: the overview's programs link
       tests/skoverviewcuttable_gl_test.cpp # <SK:Nexii> combat/minimap: the overview's cut table on the GPU
+      tests/skoverviewslots_gl_test.cpp # <SK:Nexii> combat/minimap: the census command list on the GPU
     UNIT
       aldepthpyramid.cpp
       alwaterfield.cpp
       alwaterheightbake.cpp
       skoverviewcuttable.cpp # <SK:Nexii> combat/minimap: the overview's cut table
+      skoverviewslots.cpp # <SK:Nexii> combat/minimap: the overview's census pages
     LIBRARIES llrender ll::pocketfft
     SUPPORT llrender_test_checks llcommon_test_checks
     INCLUDES ${INDRA_SOURCE_DIR}/llprimitive

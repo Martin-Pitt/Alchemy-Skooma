@@ -57,6 +57,11 @@ namespace skoverview
     };
 
     inline constexpr size_t PROGRAM_COUNT = sizeof(PROGRAMS) / sizeof(PROGRAMS[0]);
+
+    /// The census pages' command lists, a compute program built only where the session computes (LLRender::sCompute);
+    /// apart from PROGRAMS, whose entries are vertex and fragment pairs.
+    inline constexpr const char* COMMANDS_NAME = "SK Overview Commands";
+    inline constexpr const char* COMMANDS_COMPUTE = "skooma/overviewCommandsC.glsl";
 }
 
 #endif

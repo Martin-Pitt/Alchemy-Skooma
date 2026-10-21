@@ -1019,6 +1019,35 @@ void LLVertexBuffer::multiDrawArrays(U32 mode, const GLint* first, const GLsizei
     ++LLRender::sDrawCalls;
     LLRender::sDrawElements += total;
 }
+
+// <SK:Nexii> combat/minimap: commands a shader wrote, over the bound buffer
+void LLVertexBuffer::multiDrawArraysIndirect(U32 mode, const ALGPUBuffer& commands, size_t offset, GLsizei draw_count,
+                                             GLsizei stride) const
+{
+    llassert(validate_bound_samplers());
+    llassert(mGLBuffer == sGLRenderBuffer);
+    llassert(mGLIndices == sGLRenderIndices);
+    // GL reads each command a whole number of GLuints in, and all four of its words.
+    llassert(offset % sizeof(U32) == 0 && stride >= 0 && stride % sizeof(U32) == 0);
+    if (draw_count <= 0)
+    {
+        return;
+    }
+    const size_t step = stride ? (size_t)stride : sizeof(ALDrawArraysIndirectCommand);
+    if (!glMultiDrawArraysIndirect || !commands.isAllocated() ||
+        offset + (size_t)(draw_count - 1) * step + sizeof(ALDrawArraysIndirectCommand) > commands.size())
+    {
+        llassert(false);
+        return;
+    }
+
+    gGL.syncMatrices();
+    gGL.bindDrawIndirect(commands);
+    STOP_GLERROR;
+    glMultiDrawArraysIndirect(sGLMode[mode], reinterpret_cast<const void*>(offset), draw_count, stride);
+    STOP_GLERROR;
+    ++LLRender::sDrawCalls; // its counts are the GPU's to know
+}
 // </SK:Nexii>
 
 //static

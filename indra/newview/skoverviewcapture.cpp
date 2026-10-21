@@ -100,6 +100,7 @@ namespace
     LLGLSLShader sGeomCapLift;      // the cut census's section pass, the only permutation that writes depth
     LLGLSLShader sGeomCapLiftDissolve;
     LLGLSLShader sMarker;     // the tactical avatar markers, depth-tested by hand
+    LLGLSLShader sCommands;   // the census pages' command lists, where the session computes
 
     const F32 CENSUS_RANGE_M = 128.f;
     const size_t SK_MAX_TERRITORY = 16;       // regions styled as inside, at most (the resolve's array)
@@ -151,6 +152,9 @@ namespace
     // The overview's own uniforms, looked up in each program's map once a bind rather than by string in GL: thirty
     // names would be a heavier edit to LLShaderMgr's reserved table than a lookup here. Its samplers are reserved names.
     const LLStaticHashedString SK_INV_VP("sk_inv_vp");
+    const LLStaticHashedString SK_SLOT_COUNT("sk_slot_count");
+    const LLStaticHashedString SK_LEVEL("sk_level");
+    const LLStaticHashedString SK_PLANES("sk_planes");
     const LLStaticHashedString SK_ZO("sk_zo");
     const LLStaticHashedString SK_FAR_DEPTH("sk_far_depth");
     const LLStaticHashedString SK_EYE("sk_eye");
@@ -537,6 +541,10 @@ std::vector<SKOverviewCapture::Tile> SKOverviewCapture::tiles() const
 
 namespace
 {
+    // The command list's storage blocks (overviewCommandsC.glsl), past the reserved blocks' points.
+    const U32 SLOT_TABLE_BINDING = 6;
+    const U32 COMMANDS_BINDING = 7;
+
     /// The frustum planes (agent space, a*x + b*y + c*z + d <= 0 inside) in the frame of a page whose origin lies at
     /// offset_agent, which both command builders test its slots' boxes in.
     void pagePlanes(const F32 agent[6][4], const LLVector3& offset_agent, F32 out[6][4])
@@ -603,6 +611,20 @@ bool SKOverviewCapture::loadShaders(S32 level)
     {
         unloadShaders();
     }
+    // The census's command lists are built on the GPU where the session computes, on the CPU elsewhere.
+    if (ok && LLRender::sCompute)
+    {
+        sCommands.mName = skoverview::COMMANDS_NAME;
+        sCommands.mShaderFiles.clear();
+        sCommands.mShaderFiles.push_back(std::make_pair(skoverview::COMMANDS_COMPUTE, GL_COMPUTE_SHADER));
+        sCommands.mShaderLevel = llmax(level, 1);
+        sCommands.clearPermutations();
+        if (!sCommands.createShader())
+        {
+            LL_WARNS("Shader") << "The overview's command list program did not build; the census culls on the CPU" << LL_ENDL;
+            sCommands.unload();
+        }
+    }
     if (instanceExists())
     {
         instance().mGLFailed = false;
@@ -617,6 +639,7 @@ void SKOverviewCapture::unloadShaders()
     {
         shader->unload();
     }
+    sCommands.unload();
 }
 
 bool SKOverviewCapture::ensureShaders()
@@ -1295,6 +1318,40 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
         std::vector<GLsizei> mCount;
     };
     std::vector<std::vector<Runs>> runs(regions.size());
+    // Where the session computes, a full render's lists are built on the GPU, a dispatch a page; a patch, which tests
+    // each slot on screen, and a context without compute build them here.
+    bool gpu_commands = !patch && LLRender::sCompute && sCommands.isComplete();
+    if (gpu_commands)
+    {
+        LL_PROFILE_ZONE_NAMED("sk overview command tables");
+        for (const SKOverviewCensus::Region& region : regions)
+        {
+            for (const SKOverviewCensus::Page& page : region.mPages)
+            {
+                const size_t n = page.mSlots.size();
+                if (!n || !page.mTableDirty)
+                {
+                    continue;
+                }
+                const size_t table_bytes = n * sizeof(skoverview::SlotCull);
+                const size_t command_bytes = n * sizeof(ALDrawArraysIndirectCommand);
+                if (page.mSlotTable.size() == table_bytes)
+                {
+                    page.mSlotTable.upload(0, page.mSlots.data(), table_bytes);
+                }
+                else if (!page.mSlotTable.allocate(table_bytes, ALGPUBuffer::DYNAMIC, page.mSlots.data(), "SK census slots"))
+                {
+                    gpu_commands = false;
+                }
+                if (page.mCommands.size() != command_bytes &&
+                    !page.mCommands.allocate(command_bytes, 0, nullptr, "SK census commands"))
+                {
+                    gpu_commands = false;
+                }
+                page.mTableDirty = !gpu_commands;
+            }
+        }
+    }
     {
         LL_PROFILE_ZONE_NAMED("sk overview cull groups");
         LLMatrix4a view_proj;
@@ -1317,6 +1374,29 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
             F32 planes[6][4];
             pagePlanes(agent_planes, offset_agent, planes);
             runs[r].resize(region.mPages.size());
+            if (gpu_commands)
+            {
+                // The page's slots in vertex order, kept or not, one command each.
+                LL_PROFILE_ZONE_NAMED("sk overview commands");
+                sCommands.bind();
+                const F32 level[4] = { shot.mLevel.mAll ? 1.f : 0.f, shot.mLevel.mGround ? 1.f : 0.f, shot.mLevel.mLo,
+                                       shot.mLevel.mHi };
+                glUniform4fv(sCommands.getUniformLocation(SK_LEVEL), 1, level);
+                glUniform4fv(sCommands.getUniformLocation(SK_PLANES), 6, &planes[0][0]);
+                for (const SKOverviewCensus::Page& page : region.mPages)
+                {
+                    if (page.mSlots.empty())
+                    {
+                        continue;
+                    }
+                    glUniform1ui(sCommands.getUniformLocation(SK_SLOT_COUNT), (GLuint)page.mSlots.size());
+                    gGL.bindStorageBuffer(SLOT_TABLE_BINDING, page.mSlotTable);
+                    gGL.bindStorageBuffer(COMMANDS_BINDING, page.mCommands);
+                    sCommands.dispatchThreads((U32)page.mSlots.size());
+                }
+                sCommands.unbind();
+                continue;
+            }
             for (size_t p = 0; p < region.mPages.size(); ++p)
             {
                 const SKOverviewCensus::Page& page = region.mPages[p];
@@ -1343,11 +1423,18 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
             }
         }
     }
+    if (gpu_commands)
+    {
+        // The draws read the commands the dispatches wrote; the slot and command points are left empty.
+        gGL.memoryBarrier(LLRender::BARRIER_COMMAND);
+        gGL.unbindStorageBuffer(SLOT_TABLE_BINDING);
+        gGL.unbindStorageBuffer(COMMANDS_BINDING);
+    }
     U32 census_draws = 0;
     std::function<void()> census;
     if (!regions.empty())
     {
-        census = [&regions, &runs, &census_draws, &shot, patch, &cut_table = mCensus.cutTable()]()
+        census = [&regions, &runs, &census_draws, gpu_commands, &shot, patch, &cut_table = mCensus.cutTable()]()
         {
             // The census writes its class code and the triangle's own normal (G, A), so flush parts never crease.
             LLVector4a down, normal_eye, origin_eye, zero;
@@ -1375,9 +1462,19 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
             inverse_view.setInverse(shot.mView);
             const F32* m = inverse_view.getF32ptr();
             const F32 eye_to_world[9] = { m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10] };
-            // A page's kept runs in one call.
-            auto drawPage = [&runs, &census_draws](size_t r, size_t p, const SKOverviewCensus::Page& page)
+            // A page's kept runs in one call: the commands the GPU built, or the runs the CPU merged.
+            auto drawPage = [&runs, &census_draws, gpu_commands](size_t r, size_t p, const SKOverviewCensus::Page& page)
             {
+                if (gpu_commands)
+                {
+                    if (!page.mSlots.empty())
+                    {
+                        page.mBuffer->setBuffer();
+                        page.mBuffer->multiDrawArraysIndirect(LLRender::TRIANGLES, page.mCommands, 0, (GLsizei)page.mSlots.size());
+                        ++census_draws;
+                    }
+                    return;
+                }
                 const Runs& kept = runs[r][p];
                 if (kept.mFirst.empty())
                 {
