@@ -49,6 +49,8 @@ namespace SKCameraWarp
     constexpr Profile AVATAR{ 0.35f, 0.5f, 80.f };
     /// Into the 3D world map, from the world camera up to the map's.
     constexpr Profile WORLD_MAP{ 0.9f, 1.1f, 4000.f, 5.f };
+    /// A camera reset (Escape) warps home rather than smoothing when the camera is further than this from the avatar, in metres.
+    constexpr F32 RESET_DISTANCE = 32.f;
 
     // Distance covered at u of a phase that eases from rest to unit speed, in units of the phase's length times speed.
     inline F32 eased(const Profile& p, F32 u)

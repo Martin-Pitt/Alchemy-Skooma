@@ -30,12 +30,14 @@
 #include "../sknavbuild.h"
 #include "../sknavbuildstats.h"
 #include "../sknavlayout.h"
+#include "../sknavtilecache.h"
 
 #include "DetourNavMesh.h"
 #include "DetourNavMeshQuery.h"
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 
 namespace
 {
@@ -1270,5 +1272,113 @@ namespace tut
         std::vector<U8> none;
         ensure("an empty tile takes it out", swapDetourTile(*nav, 0, 0, held, none) && held.empty() && !nav->getTileRefAt(0, 0, 0));
         dtFreeNavMesh(nav);
+    }
+
+    // An edit updated from the held raster rasterises only its own cells and
+    // must make exactly the tile a whole raster of the edited input makes:
+    // raster, air, faces, flights and polygons, byte for byte.
+    template<> template<>
+    void sknavbuild_object::test<30>()
+    {
+        set_test_name("an edit updated from the held raster makes the tile a whole raster makes");
+        TileBuildInput base = tile(0, 0);
+        base.mTerrain = flat(0.f);
+        base.mAir = true;
+        base.mAirPad = 8;
+        base.mWallFaces = true;
+        base.mRunoff = true;
+        base.mEdges[0] = true;
+        base.mHoldSolid = true;
+        const RecordPtr floor = box(4.f, 4.f, 0.f, 28.f, 28.f, 1.f);
+        const RecordPtr crate = box(9.f, 9.f, 1.f, 10.5f, 10.5f, 2.f);
+        const RecordPtr edge = box(-0.6f, 14.f, 0.f, 0.4f, 16.f, 2.5f);     // across the tile's edge, in the air's pad
+        const RecordPtr wall = box(18.f, 6.f, 1.f, 18.4f, 20.f, 4.f);
+        const RecordPtr roof = box(18.f, 6.f, 4.f, 26.f, 20.f, 4.4f);
+        auto leaf = std::make_shared<Record>(*box(17.9f, 12.f, 1.f, 18.5f, 14.f, 3.5f));
+        leaf->mExclude = EXCLUDE_AVATAR;
+        auto cut = std::make_shared<Record>(*box(6.f, 20.f, 0.5f, 8.f, 22.f, 3.f));
+        cut->mNavRole = NavRole::EXCLUSION_VOLUME;
+        base.mRecords = { floor, crate, edge, wall, roof, leaf };
+        for (S32 k = 0; k < 8; ++k)
+        {
+            base.mRecords.push_back(box(5.f, 12.f + k * 0.4f, 1.f, 7.f, 12.4f + k * 0.4f, 1.f + (k + 1) * 0.25f));
+        }
+        base.mCuts = { cut };
+
+        TileBuildResult held_result;
+        const TileRasterPtr held = rasteriseTile(base, held_result);
+        ensure("the held raster: " + held_result.mError, held && held->mSolid);
+
+        const auto moved = [](const RecordPtr& r, F32 dx, F32 dy) {
+            auto copy = std::make_shared<Record>(*r);
+            copy->mCenter += LLVector3(dx, dy, 0.f);
+            copy->mMin += LLVector3d(dx, dy, 0.0);
+            copy->mMax += LLVector3d(dx, dy, 0.0);
+            return RecordPtr(copy);
+        };
+        const auto without = [](std::vector<RecordPtr> list, const RecordPtr& r) {
+            list.erase(std::remove(list.begin(), list.end(), r), list.end());
+            return list;
+        };
+        const auto replaced = [](std::vector<RecordPtr> list, const RecordPtr& from, const RecordPtr& to) {
+            std::replace(list.begin(), list.end(), from, to);
+            return list;
+        };
+        struct Case
+        {
+            std::string mName;
+            TileBuildInput mInput;
+            UpdatePath mPath;
+        };
+        std::vector<Case> cases;
+        const auto add = [&](const std::string& name, UpdatePath path, const std::function<void(TileBuildInput&)>& edit) {
+            Case c{ name, base, path };
+            edit(c.mInput);
+            cases.push_back(std::move(c));
+        };
+        add("crate removed", UpdatePath::LOCAL, [&](TileBuildInput& in) { in.mRecords = without(in.mRecords, crate); });
+        add("crate shifted", UpdatePath::LOCAL, [&](TileBuildInput& in) { in.mRecords = replaced(in.mRecords, crate, moved(crate, 0.5f, 0.f)); });
+        add("crate copied", UpdatePath::LOCAL, [&](TileBuildInput& in) { in.mRecords.push_back(moved(crate, 0.f, 3.f)); });
+        add("edge shifted", UpdatePath::LOCAL, [&](TileBuildInput& in) { in.mRecords = replaced(in.mRecords, edge, moved(edge, 0.f, 0.5f)); });
+        add("wall shifted", UpdatePath::LOCAL, [&](TileBuildInput& in) { in.mRecords = replaced(in.mRecords, wall, moved(wall, 0.5f, 0.f)); });
+        add("leaf shifted", UpdatePath::LOCAL, [&](TileBuildInput& in) { in.mRecords = replaced(in.mRecords, leaf, moved(leaf, 0.f, 0.5f)); });
+        add("cut shifted", UpdatePath::LOCAL, [&](TileBuildInput& in) { in.mCuts = { moved(cut, 0.5f, 0.f) }; });
+        add("hull added", UpdatePath::LOCAL, [&](TileBuildInput& in) { in.mRecords.push_back(hull(slab(20.f, 22.f, 24.f, 26.f, 1.5f))); });
+        add("nothing moved", UpdatePath::LOCAL, [&](TileBuildInput&) {});
+        // A step less renumbers the flight's codes, and every step outside the window with them.
+        add("step removed", UpdatePath::CODES, [&](TileBuildInput& in) { in.mRecords = without(in.mRecords, base.mRecords[8]); });
+        add("records reordered", UpdatePath::ORDER, [&](TileBuildInput& in) { std::swap(in.mRecords[1], in.mRecords[3]); });
+        add("z range moved", UpdatePath::Z_RANGE, [&](TileBuildInput& in) { in.mZMax += 1.f; });
+        add("land moved", UpdatePath::SETTINGS, [&](TileBuildInput& in) { in.mTerrain.mZ[40] += 0.5f; });
+        for (const Case& c : cases)
+        {
+            TileBuildResult whole_result, local_result;
+            const TileRasterPtr whole = rasteriseTile(c.mInput, whole_result);
+            TileUpdate update;
+            const TileRasterPtr local = updateTile(c.mInput, *held, local_result, nullptr, &update);
+            ensure(c.mName + ": rasterised", whole && local);
+            ensure_equals(c.mName + ": path", std::string(updatePathName(update.mPath)), std::string(updatePathName(c.mPath)));
+            if (c.mPath == UpdatePath::LOCAL && c.mName != "nothing moved")
+            {
+                ensure(c.mName + ": a window, not the tile", update.mWindowCells > 0 && update.mWindowCells < static_cast<U32>(held->mSolid->mWidth * held->mSolid->mHeight) / 4);
+            }
+            std::string why;
+            ensure(c.mName + ": the same raster: " + why, sameRaster(*whole, *local, &why));
+            ensure(c.mName + ": the same solid raster", whole->mSolid && local->mSolid && whole->mSolid->mSpans == local->mSolid->mSpans &&
+                                                            whole->mSolid->mStart == local->mSolid->mStart);
+            polygoniseTile(c.mInput, *whole, whole_result);
+            polygoniseTile(c.mInput, *local, local_result);
+            whole_result.mMillis = local_result.mMillis = 0.f;
+            whole_result.mExcludeMillis = local_result.mExcludeMillis = 0.f;
+            ensure(c.mName + ": the same product", packTileProduct(whole_result, 0) == packTileProduct(local_result, 0));
+        }
+
+        // A raster that holds no solid raster has nothing to splice into.
+        TileBuildInput plain = base;
+        plain.mHoldSolid = false;
+        TileBuildResult plain_result, again;
+        const TileRasterPtr unheld = rasteriseTile(plain, plain_result);
+        TileUpdate update;
+        ensure("no solid raster", unheld && !unheld->mSolid && updateTile(plain, *unheld, again, nullptr, &update) && update.mPath == UpdatePath::NO_SOLID);
     }
 }

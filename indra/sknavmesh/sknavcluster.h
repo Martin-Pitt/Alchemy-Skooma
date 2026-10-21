@@ -42,6 +42,7 @@ namespace sknav
         std::vector<RecordPtr> mRecords;
         LLVector3d mMin;
         LLVector3d mMax;
+        U64 mHash = 0;      ///< the sum of its members' recordHash: moves when any member's content does
         /// The lattice tiles the AABB overlaps, with the signature of what each
         /// one sees: the member records intersecting it.
         std::map<TileKey, U64> mTiles;

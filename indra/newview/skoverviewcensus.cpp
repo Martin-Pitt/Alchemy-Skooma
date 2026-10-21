@@ -150,6 +150,11 @@ void SKOverviewCensus::release()
     mTriangles = 0;
 }
 
+bool SKOverviewCensus::RoomFootprint::covers(S32 x, S32 y) const
+{
+    return x >= 0 && y >= 0 && x < mW && y < mH && (mMask.empty() || mMask[(size_t)y * mW + x]);
+}
+
 bool SKOverviewCensus::isRestless(const LLUUID& part) const
 {
     const auto it = mRestless.find(part);
@@ -170,8 +175,8 @@ std::vector<LLUUID> SKOverviewCensus::restlessParts() const
     return parts;
 }
 
-void SKOverviewCensus::logChurn(std::vector<std::pair<U64, std::pair<char, LLUUID>>>& entries,
-                                std::vector<std::pair<U64, std::pair<char, LLUUID>>>& moves)
+U32 SKOverviewCensus::logChurn(std::vector<std::pair<U64, std::pair<char, LLUUID>>>& entries,
+                               std::vector<std::pair<U64, std::pair<char, LLUUID>>>& moves)
 {
     // What came and went since the last rebuild, by kind (S sculpt, U surrounds, V void surround, R record, C a part's
     // linkset and cluster, L land): a part both gone and come is one that changed.
@@ -190,7 +195,7 @@ void SKOverviewCensus::logChurn(std::vector<std::pair<U64, std::pair<char, LLUUI
     mLastMoves = moves;
     if (first)
     {
-        return;
+        return 0;
     }
     std::set<std::pair<char, LLUUID>> moved;
     for (const auto& g : moved_from)
@@ -214,6 +219,12 @@ void SKOverviewCensus::logChurn(std::vector<std::pair<U64, std::pair<char, LLUUI
                                        << ") is restless: drawn live until it holds still" << LL_ENDL;
             }
         }
+    }
+    U32 moved_records = 0;
+    for (const auto& c : moved_to)
+    {
+        const char kind = c.second.first;
+        moved_records += (kind == 'R' || kind == 'C') && !isRestless(c.second.second) ? 1 : 0;
     }
     std::map<char, U32> gone_n, came_n, changed_n;
     std::map<char, std::vector<LLUUID>> changed;
@@ -251,6 +262,7 @@ void SKOverviewCensus::logChurn(std::vector<std::pair<U64, std::pair<char, LLUUI
         what += ")";
     }
     LL_INFOS("SKOverview") << "census rebuild of " << entries.size() << " entries:" << what << LL_ENDL;
+    return moved_records;
 }
 
 namespace skoverview
@@ -687,6 +699,38 @@ bool SKOverviewCensus::update()
         }
         mRecordsChanged |= records != mRecordsKey;
         mRecordsKey = records;
+        // The clustered linksets take their cluster's heights as it moves; whether it stands on the land waits for the
+        // next rebuild.
+        std::unordered_map<LLUUID, const sknav::Cluster*> cluster_of_root;
+        for (const sknav::ClusterPtr& c : snap->mClusters.mClusters)
+        {
+            for (const sknav::RecordPtr& rec : c->mRecords)
+            {
+                cluster_of_root.emplace(rec->mRoot, c.get());
+            }
+        }
+        bool heights_moved = false;
+        for (Batch& batch : mBatches)
+        {
+            for (Group& group : batch.mGroups)
+            {
+                const auto it = cluster_of_root.find(group.mRoot);
+                if (it == cluster_of_root.end() || !mClusterRoots.count(group.mRoot))
+                {
+                    continue;
+                }
+                const F32 lo = (F32)it->second->mMin.mdV[VZ];
+                const F32 hi = (F32)it->second->mMax.mdV[VZ];
+                heights_moved |= lo != group.mMinZ || hi != group.mMaxZ;
+                group.mMinZ = lo;
+                group.mMaxZ = hi;
+            }
+        }
+        if (heights_moved)
+        {
+            mExtentHeightsMoved = true;
+            mCutSignature = 0; // applyCut works the cut again with the same key
+        }
     }
     const bool recheck = mUnknownLook && now >= mRecheckAt;
     const bool sculpts_due = now >= mSculptsAt;
@@ -704,6 +748,7 @@ bool SKOverviewCensus::update()
     {
         return !mBatches.empty();
     }
+    const bool announced = mRecordsChanged || !mBuilt; // a walk the census stamp did not ask for checks the stamp
     mRecordsChanged = false;
     mUnknownLook = false;
     mRecheckAt = now + 2.0;
@@ -1054,23 +1099,12 @@ bool SKOverviewCensus::update()
         }
     }
     auto groupOf = [&](size_t i) -> U32 { return group_of[i]; };
-    // A part's linkset and its cluster's extent, never their indices: those follow the records' order.
-    auto rounded = [](const LLVector3d& v)
-    {
-        return (U64)(S64)std::llround(v.mdV[VX] * 64.0) ^ ((U64)(S64)std::llround(v.mdV[VY] * 64.0) << 21) ^
-               ((U64)(S64)std::llround(v.mdV[VZ] * 64.0) << 42);
-    };
+    // A part's linkset, never its index, which follows the records' order; its cluster's heights are refreshed on a
+    // new stamp instead, so one part moving does not re-sign every other part of its cluster.
     for (size_t i = 0; i < kept.size(); ++i)
     {
         mix(kept[i]->mPart.getCRC32());
         mix(roots[groupOf(i)].getCRC32());
-        const auto cluster = group_cluster.find(groupOf(i));
-        if (cluster != group_cluster.end())
-        {
-            const sknav::Cluster& c = *snap->mClusters.mClusters[cluster->second];
-            mix(rounded(c.mMin));
-            mix(rounded(c.mMax));
-        }
         endEntry('C', kept[i]->mPart);
     }
     // Which land is connected decides what of a surround is in the void.
@@ -1083,7 +1117,11 @@ bool SKOverviewCensus::update()
     {
         return !mBatches.empty();
     }
-    logChurn(entries, moves);
+    const U32 missed = logChurn(entries, moves);
+    if (!announced && missed)
+    {
+        LL_WARNS("SKOverview") << "census full walk found " << missed << " record entries the stamp missed" << LL_ENDL;
+    }
 
     // The worker gets values only: what is drawn, whose linkset each part is and where, and the regions' squares.
     auto job = std::make_shared<Job>();
@@ -1099,6 +1137,11 @@ bool SKOverviewCensus::update()
                        std::make_move_iterator(sculpt_cover.end()));
     job->mVerdicts = mVerdicts;
     job->mGroupOf = std::move(group_of);
+    mClusterRoots.clear();
+    for (const auto& gc : group_cluster)
+    {
+        mClusterRoots.insert(roots[gc.first]);
+    }
     job->mRoots = std::move(roots);
     job->mGroupCluster = std::move(group_cluster);
     job->mAnchors.resize(job->mRoots.size());
@@ -1867,6 +1910,7 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
         return;
     }
     mCutKey = key;
+    std::vector<std::pair<F64, F64>> moved_bottoms; // a floating linkset's base before and after a heights refresh
     if (!mExtentsBuilt || mExtentsSignature != mSignature)
     {
         LL_PROFILE_ZONE_NAMED("sk cut extents");
@@ -1905,6 +1949,25 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
         mExtentsBuilt = true;
         mExtentsRegion = ~0ull;
     }
+    else if (mExtentHeightsMoved)
+    {
+        // Only a base moved: the triangles a person's share was found from did not.
+        for (auto& entry : mExtents)
+        {
+            Extent& e = entry.second;
+            F64 bottom = 1e30;
+            for (const auto& part : e.mParts)
+            {
+                bottom = llmin(bottom, (F64)part.second->mMinZ);
+            }
+            if (bottom != e.mBottom && !e.mGround)
+            {
+                moved_bottoms.emplace_back(e.mBottom, bottom);
+            }
+            e.mBottom = bottom;
+        }
+    }
+    mExtentHeightsMoved = false;
     const U64 region_handle = region ? region->getHandle() : 0;
     if (mExtentsRegion != region_handle)
     {
@@ -1930,6 +1993,18 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
     auto overhead = [&](const Extent& e, const Occupant& occupant)
     {
         return !e.mGround && e.mBottom > occupant.mCut + OVERHEAD_M;
+    };
+    // Whether a moved base crossed a height's overhead line, so what was found against that height may differ.
+    auto baseCrossed = [&](F64 z)
+    {
+        for (const auto& b : moved_bottoms)
+        {
+            if ((b.first > z + OVERHEAD_M) != (b.second > z + OVERHEAD_M))
+            {
+                return true;
+            }
+        }
+        return false;
     };
     std::map<U32, F32> cut_of;
     std::map<U32, Reason> why;
@@ -2095,7 +2170,7 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
             {
                 quantise(roof_key, feet.mdV[i]);
             }
-            if (!cache.mRoofValid || cache.mRoofKey != roof_key)
+            if (!cache.mRoofValid || cache.mRoofKey != roof_key || baseCrossed(feet.mdV[VZ]))
             {
                 cache.mBest = 0;
                 cache.mBestZ = -1e30;
@@ -2177,7 +2252,7 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
                 const F64 above = occupant.mCut - occupant.mFloor.mdV[VZ];
                 occupant.mFloor.setVec(feet.mdV[VX], feet.mdV[VY], roof_z);
                 occupant.mCut = (F32)(roof_z + above);
-                occupant.mRoomCells.reset();
+                occupant.mRoom.reset();
                 const auto it = roof_of.find(roof);
                 roof_of[roof] = it == roof_of.end() ? occupant.mCut : llmax(it->second, occupant.mCut);
             }
@@ -2188,13 +2263,11 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
         it = now - it->second.mAt >= HOLD_S ? mStanding.erase(it) : std::next(it);
     }
     // Whether a linkset has a triangle above the floor whose plan footprint comes within a cell of one of the room's
-    // dilated cells; how says which (wall or cover) and the cell, for the log.
-    std::unordered_set<U64> dilated;
+    // grown cells; how says which (wall or cover) and the cell, for the log.
     LLVector3d room_min, room_max;
-    auto cellKey = [](S32 x, S32 y) { return ((U64)(U32)x << 32) | (U64)(U32)y; };
-    auto touchesRoom = [&](const Extent& e, const Occupant& occupant, const std::unordered_set<U64>& cells, F64 cell_m,
-                           std::string& how) -> bool
+    auto touchesRoom = [&](const Extent& e, const Occupant& occupant, F64 cell_m, std::string& how) -> bool
     {
+        const RoomFootprint& room = *occupant.mRoom;
         const F32 reach = (F32)(cell_m * 0.7072);
         for (const auto& part : e.mParts)
         {
@@ -2225,20 +2298,20 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
                     const F64 hi_x = batch.mOrigin.mdV[VX] + llmax(a.mV[VX], llmax(b.mV[VX], d.mV[VX]));
                     const F64 lo_y = batch.mOrigin.mdV[VY] + llmin(a.mV[VY], llmin(b.mV[VY], d.mV[VY]));
                     const F64 hi_y = batch.mOrigin.mdV[VY] + llmax(a.mV[VY], llmax(b.mV[VY], d.mV[VY]));
-                    const S32 x0 = (S32)std::floor(llmax(lo_x, room_min.mdV[VX]) / cell_m);
-                    const S32 x1 = (S32)std::floor(llmin(hi_x, room_max.mdV[VX]) / cell_m);
-                    const S32 y0 = (S32)std::floor(llmax(lo_y, room_min.mdV[VY]) / cell_m);
-                    const S32 y1 = (S32)std::floor(llmin(hi_y, room_max.mdV[VY]) / cell_m);
+                    const S32 x0 = llmax(0, (S32)std::floor((llmax(lo_x, room_min.mdV[VX]) - room.mOrigin.mdV[VX]) / cell_m));
+                    const S32 x1 = llmin(room.mW - 1, (S32)std::floor((llmin(hi_x, room_max.mdV[VX]) - room.mOrigin.mdV[VX]) / cell_m));
+                    const S32 y0 = llmax(0, (S32)std::floor((llmax(lo_y, room_min.mdV[VY]) - room.mOrigin.mdV[VY]) / cell_m));
+                    const S32 y1 = llmin(room.mH - 1, (S32)std::floor((llmin(hi_y, room_max.mdV[VY]) - room.mOrigin.mdV[VY]) / cell_m));
                     for (S32 x = x0; x <= x1; ++x)
                     {
                         for (S32 y = y0; y <= y1; ++y)
                         {
-                            if (!cells.count(cellKey(x, y)))
+                            if (!room.covers(x, y))
                             {
                                 continue;
                             }
-                            const LLVector2 centre((F32)((x + 0.5) * cell_m - batch.mOrigin.mdV[VX]),
-                                                   (F32)((y + 0.5) * cell_m - batch.mOrigin.mdV[VY]));
+                            const LLVector2 centre((F32)(room.mOrigin.mdV[VX] + (x + 0.5) * cell_m - batch.mOrigin.mdV[VX]),
+                                                   (F32)(room.mOrigin.mdV[VY] + (y + 0.5) * cell_m - batch.mOrigin.mdV[VY]));
                             if (planDistance(centre, a, b, d) <= reach)
                             {
                                 const LLVector3 n = (b - a) % (d - a);
@@ -2265,7 +2338,7 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
             const LLVector3d& p = occupant->mFloor;
             OccupantCut& cache = mOccupantCuts[occupant->mId];
             cache.mSeen = true;
-            // What their room or column takes depends on their floor, their cut and their room's cells alone.
+            // What their room or column takes depends on their floor, their cut and their room alone.
             U64 marks_key = 1469598103934665603ull;
             for (S32 i = 0; i < 3; ++i)
             {
@@ -2273,41 +2346,20 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
             }
             quantise(marks_key, occupant->mCut);
             quantise(marks_key, occupant->mRoomCellM);
-            if (occupant->mRoomCells)
+            if (occupant->mRoom)
             {
-                U64 cells = 0;
-                for (const auto& cell : *occupant->mRoomCells)
-                {
-                    cells += skoverview::scramble(cellKey(cell.first, cell.second));
-                }
-                marks_key = (marks_key ^ cells) * 1099511628211ull;
-                marks_key = (marks_key ^ (U64)occupant->mRoomCells->size()) * 1099511628211ull;
+                marks_key = (marks_key ^ occupant->mRoom->mHash) * 1099511628211ull;
+                marks_key = (marks_key ^ occupant->mRoom->mId) * 1099511628211ull;
+                marks_key = (marks_key ^ occupant->mRoom->mMesh.getCRC32()) * 1099511628211ull;
             }
-            if (!cache.mMarksValid || cache.mMarksKey != marks_key)
+            if (!cache.mMarksValid || cache.mMarksKey != marks_key || baseCrossed(occupant->mCut))
             {
                 cache.mMarks.clear();
-                dilated.clear();
-                if (occupant->mRoomCells && !occupant->mRoomCells->empty())
+                if (occupant->mRoom)
                 {
-                    // The room's cells grown by one, so a wall standing just past its last cell of air still touches it.
-                    S32 min_x = INT_MAX, min_y = INT_MAX, max_x = INT_MIN, max_y = INT_MIN;
-                    for (const auto& cell : *occupant->mRoomCells)
-                    {
-                        for (S32 dx = -1; dx <= 1; ++dx)
-                        {
-                            for (S32 dy = -1; dy <= 1; ++dy)
-                            {
-                                dilated.insert(cellKey(cell.first + dx, cell.second + dy));
-                            }
-                        }
-                        min_x = llmin(min_x, cell.first - 1);
-                        min_y = llmin(min_y, cell.second - 1);
-                        max_x = llmax(max_x, cell.first + 1);
-                        max_y = llmax(max_y, cell.second + 1);
-                    }
                     const F64 cell_m = occupant->mRoomCellM;
-                    room_min.setVec(min_x * cell_m, min_y * cell_m, 0.0);
-                    room_max.setVec((max_x + 1) * cell_m, (max_y + 1) * cell_m, 0.0);
+                    room_min = occupant->mRoom->mOrigin;
+                    room_max = room_min + LLVector3d(occupant->mRoom->mW * cell_m, occupant->mRoom->mH * cell_m, 0.0);
                 }
                 for (const auto& entry : extents)
                 {
@@ -2316,7 +2368,7 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
                     {
                         continue;
                     }
-                    if (occupant->mRoomCells && !dilated.empty())
+                    if (occupant->mRoom)
                     {
                         // The room's building, by its geometry: a linkset whose triangles above the floor come within a
                         // cell of the room's own cells, standing round them (walls) or over them (floors above, the roof).
@@ -2327,7 +2379,7 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
                             continue; // its box is nowhere near the room's
                         }
                         std::string how;
-                        if (touchesRoom(e, *occupant, dilated, cell_m, how))
+                        if (touchesRoom(e, *occupant, cell_m, how))
                         {
                             cache.mMarks.emplace_back(entry.first, "room " + how);
                         }

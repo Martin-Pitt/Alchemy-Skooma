@@ -511,6 +511,7 @@ namespace tut
         // SKNAV_REPLAY_STAMP=0 polygonises each tile as it is rasterised, as before the stamp; SKNAV_REPLAY_COARSE=0 leaves far tiles airless.
         options.mStamp = LLStringUtil::getenv("SKNAV_REPLAY_STAMP") != "0";
         options.mCoarseAir = LLStringUtil::getenv("SKNAV_REPLAY_COARSE") != "0";
+        options.mKeepRasters = !LLStringUtil::getenv("SKNAV_REPLAY_EDITS").empty();
         // SKNAV_REPLAY_FINE=1 builds the fine air over the narrow openings and measures it.
         options.mFineAir = LLStringUtil::getenv("SKNAV_REPLAY_FINE") == "1";
         // SKNAV_REPLAY_FACE_OFFSETS=0 leaves faces at their cell boundaries; SKNAV_REPLAY_FACE_TRACE=n traces every n-th face for the oracle.

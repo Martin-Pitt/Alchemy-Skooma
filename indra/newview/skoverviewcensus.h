@@ -38,6 +38,7 @@
 #include <map>
 #include <set>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 class LLVertexBuffer;
@@ -157,6 +158,19 @@ public:
     /// Rebuilds the buffers when the census's geometry changed; true when there is anything to draw.
     bool update();
 
+    /// The air's room someone is in, its mask grown by a cell every way so a wall just past its last cell touches it.
+    struct RoomFootprint
+    {
+        LLUUID mMesh;           ///< the room's mesh and its id there, as SKNavWorldView::RoomId holds them
+        U32 mId = 0;
+        U64 mHash = 0;          ///< the room's: moves only where its air moved
+        LLVector3d mOrigin;     ///< global, the minimum corner of cell (0, 0)
+        S32 mW = 0;
+        S32 mH = 0;
+        std::vector<U8> mMask;  ///< row-major mW x mH; empty for a room too large to keep one, whose box is covered
+        bool covers(S32 x, S32 y) const;
+    };
+
     /// Someone the tactical cut is taken for: the building whose parts' bounds hold their floor is cut at mCut.
     struct Occupant
     {
@@ -165,9 +179,8 @@ public:
         LLVector3d mFloor;      ///< global, their feet on their floor
         LLVector3d mFeet;       ///< global, their feet as the avatar stands, for the surface they stand on
         F32 mCut = 0.f;         ///< agent z
-        /// The enclosed room they are in, flooded through the indoor air: its cells on the mRoomCellM lattice
-        /// (global x and y over the cell size, floored); null outdoors.
-        std::shared_ptr<const std::set<std::pair<S32, S32>>> mRoomCells;
+        /// The room they are in, on mRoomCellM cells; null outside any, where their column is cut instead.
+        std::shared_ptr<const RoomFootprint> mRoom;
         F32 mRoomCellM = 0.5f;
         bool mOutdoors = false; ///< in outdoor air by the enclosure: no room or column is cut for them
         F32 mPriority = 0.f;    ///< among others sharing a building, the highest priority's storey is cut for
@@ -358,7 +371,8 @@ private:
     std::vector<LLUUID> mSculptCandidates;  ///< the sculpted volumes the last full object list walk found
     /// Logs which signature entries came and went since the last rebuild; sorts entries and keeps them.
     /// and turns parts that moved twice within the window restless, from their shape and place alone (moves).
-    void logChurn(std::vector<std::pair<U64, std::pair<char, LLUUID>>>& entries,
+    /// Returns how many record and linkset entries (R, C) of settled parts moved.
+    U32 logChurn(std::vector<std::pair<U64, std::pair<char, LLUUID>>>& entries,
                   std::vector<std::pair<U64, std::pair<char, LLUUID>>>& moves);
     std::vector<std::pair<U64, std::pair<char, LLUUID>>> mLastEntries;
     std::vector<std::pair<U64, std::pair<char, LLUUID>>> mLastMoves;
@@ -387,6 +401,7 @@ private:
     F64 mRecheckAt = 0.0;
     U64 mRecordsKey = 0;        ///< the census records' identities at the last look
     bool mRecordsChanged = true;
+    std::unordered_set<LLUUID> mClusterRoots; ///< the linksets the last build bounds by their cluster's heights
     F64 mSculptsAt = 0.0;       ///< when the live sculpts are looked at again
     std::shared_ptr<const struct SKCensusSnapshot> mSnapshot;
     U32 mTriangles = 0;
@@ -438,6 +453,7 @@ private:
     std::vector<U32> mFloating;         ///< the extents not standing on the land
     U64 mExtentsSignature = 0;  ///< the buffers' signature mExtents was built for
     bool mExtentsBuilt = false;
+    bool mExtentHeightsMoved = false;   ///< clusters moved in height since mExtents' bases were taken
     U64 mExtentsRegion = ~0ull; ///< the region handle mCuttable was worked for
     /// One person's own share of the cut, kept while they stay put: the surface under them and what their room or
     /// column takes. Most people are still in any one frame.

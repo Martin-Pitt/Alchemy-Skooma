@@ -279,21 +279,18 @@ private:
     bool mKeyFast = false;
     /// Works out the per-building cut (SKOverviewCensus::applyCut) for the agent and the people the overview marks.
     void updateCut();
-    /// An enclosed room's floor polys' bounds, global, cached a few seconds.
-    /// The enclosed room around a floor point, flooded through the indoor air at that floor: its air cells on the
-    /// ROOM_CELL_M lattice; null when the point is not indoors. Rooms are kept a few seconds and reused while the
-    /// point stays in one. hash is the room's cells', 0 when there is no room.
-    std::shared_ptr<const std::set<std::pair<S32, S32>>> roomAt(const LLVector3d& floor, U64& hash);
-    struct Room
+    /// The air's room around a floor point, from its start gap's space; null where that space is in no room.
+    /// A room's footprint is built once per room hash and kept a few seconds while it is in use.
+    std::shared_ptr<const SKOverviewCensus::RoomFootprint> roomAt(const LLVector3d& floor);
+    struct HeldRoom
     {
+        SKNavWorldView::RoomId mId;
+        U64 mHash = 0;          ///< the room's when its footprint was built
+        U64 mRevision = 0;      ///< the world view's air revision then
         F64 mAt = 0.0;
-        F64 mFloor = 0.0;
-        U64 mRevision = 0;      ///< the world view's, so a rebuilt or teleported-from room is flooded afresh
-        U64 mRegion = 0;
-        std::shared_ptr<std::set<std::pair<S32, S32>>> mCells;
-        U64 mHash = 0;          ///< the cells', in order, so the cut key tells apart rooms of the same size
+        std::shared_ptr<const SKOverviewCensus::RoomFootprint> mFootprint;
     };
-    std::vector<Room> mRooms;
+    std::vector<HeldRoom> mRooms;
     /// Whether someone stands in outdoor air, which cuts nothing for them, held through a doorway's flicker.
     bool outdoorsAt(const LLUUID& id, const LLVector3d& feet, F64 now);
     struct Outdoors

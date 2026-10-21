@@ -1060,4 +1060,31 @@ namespace tut
             }
         }
     }
+
+    template<> template<>
+    void sknavairdistil_object::test<25>()
+    {
+        set_test_name("air built again to the same cells is the same air, whatever its serial; a moved gap is not");
+        AirGrid grid = field([](S32 x, S32) { return x < 8 ? 2 : 6; }, nullptr, 16);
+        TileAir air;
+        distilAir(grid, CLIMB, air);
+        airSeams(grid, air);
+        TileAir again;
+        distilAir(grid, CLIMB, again);
+        airSeams(grid, again);
+        ensure("serials differ", air.mSerial.mValue != again.mSerial.mValue);
+        ensure("the same air", sameAir(air, again));
+        TileAir copy = air;
+        ensure("a copy is the same air", sameAir(air, copy));
+        copy.mGaps[0].mCeiling += 1;
+        ensure("a moved ceiling is other air", !sameAir(air, copy));
+        copy = air;
+        copy.mFaceOffsets.emplace_back(7u, 3u);
+        ensure("a face offset more is other air", !sameAir(air, copy));
+        AirGrid moved = field([](S32 x, S32) { return x < 9 ? 2 : 6; }, nullptr, 16);
+        TileAir other;
+        distilAir(moved, CLIMB, other);
+        airSeams(moved, other);
+        ensure("a moved step is other air", !sameAir(air, other));
+    }
 }
