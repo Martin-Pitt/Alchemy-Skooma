@@ -77,7 +77,6 @@
 #include "lltool.h"
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <limits>
 #include <unordered_map>
@@ -99,7 +98,9 @@ namespace
     LLGLSLShader sGeomCutDissolve;  // the same with the see-through circles, the only permutation that discards
     LLGLSLShader sGeomCapLift;      // the cut census's section pass, the only permutation that writes depth
     LLGLSLShader sGeomCapLiftDissolve;
+    LLGLSLShader sGeomId;           // the probes' id render: the linkset id, no cut, no discard, no depth write
     LLGLSLShader sMarker;     // the tactical avatar markers, depth-tested by hand
+    LLGLSLShader sCommands;   // the census pages' command lists, where the session computes
 
     const F32 CENSUS_RANGE_M = 128.f;
     const size_t SK_MAX_TERRITORY = 16;       // regions styled as inside, at most (the resolve's array)
@@ -151,6 +152,9 @@ namespace
     // The overview's own uniforms, looked up in each program's map once a bind rather than by string in GL: thirty
     // names would be a heavier edit to LLShaderMgr's reserved table than a lookup here. Its samplers are reserved names.
     const LLStaticHashedString SK_INV_VP("sk_inv_vp");
+    const LLStaticHashedString SK_SLOT_COUNT("sk_slot_count");
+    const LLStaticHashedString SK_LEVEL("sk_level");
+    const LLStaticHashedString SK_PLANES("sk_planes");
     const LLStaticHashedString SK_ZO("sk_zo");
     const LLStaticHashedString SK_FAR_DEPTH("sk_far_depth");
     const LLStaticHashedString SK_EYE("sk_eye");
@@ -445,6 +449,7 @@ void SKOverviewCapture::releaseGL()
     sTacticalResolved.release();
     sTacticalWork.release();
     mSpans.clear();
+    mProbes.release();
     mCensus.release();
     mMaps.clear();
     mTacticalKey.mValid = false;
@@ -537,9 +542,27 @@ std::vector<SKOverviewCapture::Tile> SKOverviewCapture::tiles() const
 
 namespace
 {
+    // The command list's storage blocks (overviewCommandsC.glsl), past the reserved blocks' points.
+    const U32 SLOT_TABLE_BINDING = 6;
+    const U32 COMMANDS_BINDING = 7;
+
+    /// The frustum planes (agent space, a*x + b*y + c*z + d <= 0 inside) in the frame of a page whose origin lies at
+    /// offset_agent, which both command builders test its slots' boxes in.
+    void pagePlanes(const F32 agent[6][4], const LLVector3& offset_agent, F32 out[6][4])
+    {
+        for (U32 i = 0; i < 6; ++i)
+        {
+            out[i][0] = agent[i][0];
+            out[i][1] = agent[i][1];
+            out[i][2] = agent[i][2];
+            out[i][3] = (F32)((F64)agent[i][3] + (F64)agent[i][0] * offset_agent.mV[VX] + (F64)agent[i][1] * offset_agent.mV[VY] +
+                              (F64)agent[i][2] * offset_agent.mV[VZ]);
+        }
+    }
+
     /// The program each of skoverview::PROGRAMS builds, in its order.
-    LLGLSLShader* const OVERVIEW_SHADERS[] = { &sResolve,     &sComposite,           &sGeom,  &sGeomCut, &sGeomCutDissolve,
-                                               &sGeomCapLift, &sGeomCapLiftDissolve, &sMarker };
+    LLGLSLShader* const OVERVIEW_SHADERS[] = { &sResolve,     &sComposite,           &sGeom,   &sGeomCut, &sGeomCutDissolve,
+                                               &sGeomCapLift, &sGeomCapLiftDissolve, &sGeomId, &sMarker };
     static_assert(sizeof(OVERVIEW_SHADERS) / sizeof(OVERVIEW_SHADERS[0]) == skoverview::PROGRAM_COUNT);
 }
 
@@ -589,6 +612,20 @@ bool SKOverviewCapture::loadShaders(S32 level)
     {
         unloadShaders();
     }
+    // The census's command lists are built on the GPU where the session computes, on the CPU elsewhere.
+    if (ok && LLRender::sCompute)
+    {
+        sCommands.mName = skoverview::COMMANDS_NAME;
+        sCommands.mShaderFiles.clear();
+        sCommands.mShaderFiles.push_back(std::make_pair(skoverview::COMMANDS_COMPUTE, GL_COMPUTE_SHADER));
+        sCommands.mShaderLevel = llmax(level, 1);
+        sCommands.clearPermutations();
+        if (!sCommands.createShader())
+        {
+            LL_WARNS("Shader") << "The overview's command list program did not build; the census culls on the CPU" << LL_ENDL;
+            sCommands.unload();
+        }
+    }
     if (instanceExists())
     {
         instance().mGLFailed = false;
@@ -603,6 +640,7 @@ void SKOverviewCapture::unloadShaders()
     {
         shader->unload();
     }
+    sCommands.unload();
 }
 
 bool SKOverviewCapture::ensureShaders()
@@ -1271,84 +1309,133 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
     LLCamera cull = shot.mCull;
     LLViewerCamera::updateFrustumPlanes(cull, false, false, true);
 
-    // The census, region by region, a class a multi-draw, nearer than the terrain where they coincide.
-    const std::vector<SKOverviewCensus::Batch>& batches = mCensus.batches();
-    // Each class's groups the shot sees, merged into ranges: in the frustum, on the level the shot keeps, and with a
-    // patch, on screen inside it. A class's groups tile its range, so with all of them kept it is one range, as before.
-    struct Ranges
+    // The census, region by region and page by page, a page a multi-draw, nearer than the terrain where they coincide.
+    const std::vector<SKOverviewCensus::Region>& regions = mCensus.regions();
+    // Each page's slots the shot sees, merged into runs: on the level the shot keeps, in the frustum, and with a patch,
+    // on screen inside it. A page's slots in vertex order, so adjacent kept ones draw as one run.
+    struct Runs
     {
         std::vector<GLint> mFirst;
         std::vector<GLsizei> mCount;
     };
-    std::vector<std::array<Ranges, skoverview::NUM_CENSUS_CLASSES>> ranges(batches.size());
+    std::vector<std::vector<Runs>> runs(regions.size());
+    // Where the session computes, a full render's lists are built on the GPU, a dispatch a page; a patch, which tests
+    // each slot on screen, and a context without compute build them here.
+    bool gpu_commands = !patch && LLRender::sCompute && sCommands.isComplete();
+    if (gpu_commands)
+    {
+        LL_PROFILE_ZONE_NAMED("sk overview command tables");
+        for (const SKOverviewCensus::Region& region : regions)
+        {
+            for (const SKOverviewCensus::Page& page : region.mPages)
+            {
+                const size_t n = page.mSlots.size();
+                if (!n || !page.mTableDirty)
+                {
+                    continue;
+                }
+                const size_t table_bytes = n * sizeof(skoverview::SlotCull);
+                const size_t command_bytes = n * sizeof(ALDrawArraysIndirectCommand);
+                if (page.mSlotTable.size() == table_bytes)
+                {
+                    page.mSlotTable.upload(0, page.mSlots.data(), table_bytes);
+                }
+                else if (!page.mSlotTable.allocate(table_bytes, ALGPUBuffer::DYNAMIC, page.mSlots.data(), "SK census slots"))
+                {
+                    gpu_commands = false;
+                }
+                if (page.mCommands.size() != command_bytes &&
+                    !page.mCommands.allocate(command_bytes, 0, nullptr, "SK census commands"))
+                {
+                    gpu_commands = false;
+                }
+                page.mTableDirty = !gpu_commands;
+            }
+        }
+    }
     {
         LL_PROFILE_ZONE_NAMED("sk overview cull groups");
         LLMatrix4a view_proj;
         view_proj.setMul(shot.mView, shot.mProj);
-        std::vector<std::pair<U32, U32>> spans;
-        std::vector<bool> kept;
-        for (size_t b = 0; b < batches.size(); ++b)
+        // The frustum's sides and near plane, agent space; nothing is culled by the far plane.
+        F32 agent_planes[6][4];
+        for (U32 i = 0; i < 6; ++i)
         {
-            const SKOverviewCensus::Batch& batch = batches[b];
-            kept.assign(batch.mGroups.size(), false);
-            for (size_t g = 0; g < batch.mGroups.size(); ++g)
+            const LLPlane& plane = cull.getAgentPlane(i);
+            for (U32 k = 0; k < 4; ++k)
             {
-                const SKOverviewCensus::Group& group = batch.mGroups[g];
-                if (!shot.mLevel.keeps(group))
-                {
-                    continue;
-                }
-                const LLVector3 lo_agent = gAgent.getPosAgentFromGlobal(group.mMin);
-                const LLVector3 hi_agent = gAgent.getPosAgentFromGlobal(group.mMax);
-                LLVector4a lo, hi, centre, half;
-                lo.load3(lo_agent.mV);
-                hi.load3(hi_agent.mV);
-                centre.setAdd(lo, hi);
-                centre.mul(0.5f);
-                half.setSub(hi, lo);
-                half.mul(0.5f);
-                if (!cull.AABBInFrustumNoFarClip(centre, half))
-                {
-                    continue;
-                }
-                LLRect on_screen;
-                if (patch && !(SKOverviewMovers::screenRectOf(view_proj, lo, hi, w, h, on_screen) && on_screen.overlaps(*patch)))
-                {
-                    continue;
-                }
-                kept[g] = true;
+                agent_planes[i][k] = i == LLCamera::AGENT_PLANE_FAR ? (k == 3 ? -1.f : 0.f) : plane[k];
             }
-            for (U32 c = 0; c < skoverview::NUM_CENSUS_CLASSES; ++c)
+        }
+        std::vector<U32> first, count;
+        for (size_t r = 0; r < regions.size(); ++r)
+        {
+            const SKOverviewCensus::Region& region = regions[r];
+            const LLVector3 offset_agent = gAgent.getPosAgentFromGlobal(region.mOrigin);
+            F32 planes[6][4];
+            pagePlanes(agent_planes, offset_agent, planes);
+            runs[r].resize(region.mPages.size());
+            if (gpu_commands)
             {
-                spans.clear();
-                for (size_t g = 0; g < batch.mGroups.size(); ++g)
+                // The page's slots in vertex order, kept or not, one command each.
+                LL_PROFILE_ZONE_NAMED("sk overview commands");
+                sCommands.bind();
+                const F32 level[4] = { shot.mLevel.mAll ? 1.f : 0.f, shot.mLevel.mGround ? 1.f : 0.f, shot.mLevel.mLo,
+                                       shot.mLevel.mHi };
+                glUniform4fv(sCommands.getUniformLocation(SK_LEVEL), 1, level);
+                glUniform4fv(sCommands.getUniformLocation(SK_PLANES), 6, &planes[0][0]);
+                for (const SKOverviewCensus::Page& page : region.mPages)
                 {
-                    if (kept[g] && batch.mGroups[g].mCount[c])
+                    if (page.mSlots.empty())
                     {
-                        spans.emplace_back(batch.mGroups[g].mStart[c], batch.mGroups[g].mCount[c]);
+                        continue;
+                    }
+                    glUniform1ui(sCommands.getUniformLocation(SK_SLOT_COUNT), (GLuint)page.mSlots.size());
+                    gGL.bindStorageBuffer(SLOT_TABLE_BINDING, page.mSlotTable);
+                    gGL.bindStorageBuffer(COMMANDS_BINDING, page.mCommands);
+                    sCommands.dispatchThreads((U32)page.mSlots.size());
+                }
+                sCommands.unbind();
+                continue;
+            }
+            for (size_t p = 0; p < region.mPages.size(); ++p)
+            {
+                const SKOverviewCensus::Page& page = region.mPages[p];
+                skoverview::buildCommands(page.mSlots, shot.mLevel, planes, first, count);
+                for (size_t i = 0; patch && i < count.size(); ++i)
+                {
+                    if (!count[i])
+                    {
+                        continue;
+                    }
+                    const skoverview::SlotCull& slot = page.mSlots[i];
+                    const LLVector3 lo_agent = offset_agent + LLVector3(slot.mLo[0], slot.mLo[1], slot.mLo[2]);
+                    const LLVector3 hi_agent = offset_agent + LLVector3(slot.mHi[0], slot.mHi[1], slot.mHi[2]);
+                    LLVector4a lo, hi;
+                    lo.load3(lo_agent.mV);
+                    hi.load3(hi_agent.mV);
+                    LLRect on_screen;
+                    if (!(SKOverviewMovers::screenRectOf(view_proj, lo, hi, w, h, on_screen) && on_screen.overlaps(*patch)))
+                    {
+                        count[i] = 0;
                     }
                 }
-                std::sort(spans.begin(), spans.end());
-                Ranges& out = ranges[b][c];
-                for (const std::pair<U32, U32>& span : spans)
-                {
-                    if (!out.mFirst.empty() && (U32)(out.mFirst.back() + out.mCount.back()) == span.first)
-                    {
-                        out.mCount.back() += (GLsizei)span.second;
-                    }
-                    else
-                    {
-                        out.mFirst.push_back((GLint)span.first);
-                        out.mCount.push_back((GLsizei)span.second);
-                    }
-                }
+                skoverview::mergeRuns(first, count, runs[r][p].mFirst, runs[r][p].mCount);
             }
         }
     }
-    std::function<void()> census;
-    if (!batches.empty())
+    if (gpu_commands)
     {
-        census = [&batches, &ranges, &shot, patch, &cut_table = mCensus.cutTable()]()
+        // The draws read the commands the dispatches wrote; the slot and command points are left empty.
+        gGL.memoryBarrier(LLRender::BARRIER_COMMAND);
+        gGL.unbindStorageBuffer(SLOT_TABLE_BINDING);
+        gGL.unbindStorageBuffer(COMMANDS_BINDING);
+    }
+    U32 census_draws = 0;
+    std::function<void()> census;
+    if (!regions.empty())
+    {
+        census = [&regions, &runs, &census_draws, gpu_commands, &shot, patch, &cut_table = mCensus.cutTable()]()
         {
             // The census writes its class code and the triangle's own normal (G, A), so flush parts never crease.
             LLVector4a down, normal_eye, origin_eye, zero;
@@ -1376,12 +1463,28 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
             inverse_view.setInverse(shot.mView);
             const F32* m = inverse_view.getF32ptr();
             const F32 eye_to_world[9] = { m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10] };
-            // A class's kept ranges in one call.
-            auto drawClass = [&batches, &ranges](const SKOverviewCensus::Batch& batch, U32 c)
+            // A page's kept runs in one call: the commands the GPU built, or the runs the CPU merged.
+            auto drawPage = [&runs, &census_draws, gpu_commands](size_t r, size_t p, const SKOverviewCensus::Page& page)
             {
-                const Ranges& kept = ranges[&batch - batches.data()][c];
-                batch.mBuffer->multiDrawArrays(LLRender::TRIANGLES, kept.mFirst.data(), kept.mCount.data(),
-                                               (GLsizei)kept.mFirst.size());
+                if (gpu_commands)
+                {
+                    if (!page.mSlots.empty())
+                    {
+                        page.mBuffer->setBuffer();
+                        page.mBuffer->multiDrawArraysIndirect(LLRender::TRIANGLES, page.mCommands, 0, (GLsizei)page.mSlots.size());
+                        ++census_draws;
+                    }
+                    return;
+                }
+                const Runs& kept = runs[r][p];
+                if (kept.mFirst.empty())
+                {
+                    return;
+                }
+                page.mBuffer->setBuffer();
+                page.mBuffer->multiDrawArrays(LLRender::TRIANGLES, kept.mFirst.data(), kept.mCount.data(),
+                                              (GLsizei)kept.mFirst.size());
+                ++census_draws;
             };
             // Binds a geometry program with the shot's uniforms; the cap pass is set per pass.
             LLGLSLShader* bound = nullptr;
@@ -1465,17 +1568,18 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
                     glStencilMask(0x00);
                     gGL.setColorMask(true, true, true, true);
                 }
-                for (const SKOverviewCensus::Batch& batch : batches)
+                for (size_t r = 0; r < regions.size(); ++r)
                 {
-                    const LLVector3 offset_agent = gAgent.getPosAgentFromGlobal(batch.mOrigin);
+                    const SKOverviewCensus::Region& region = regions[r];
+                    const LLVector3 offset_agent = gAgent.getPosAgentFromGlobal(region.mOrigin);
                     gGL.loadMatrix(shot.mView);
                     gGL.translatef(offset_agent.mV[VX], offset_agent.mV[VY], offset_agent.mV[VZ]);
                     gGLLastMatrix = NULL;
-                    batch.mBuffer->setBuffer();
-                    for (U32 c = 0; c < skoverview::NUM_CENSUS_CLASSES; ++c)
+                    for (size_t p = 0; p < region.mPages.size(); ++p)
                     {
-                        const U32 count = batch.mStart[c + 1] - batch.mStart[c];
-                        if (!count || c == skoverview::INVISIBLE)
+                        const SKOverviewCensus::Page& page = region.mPages[p];
+                        const U32 c = page.mClass;
+                        if (c == skoverview::INVISIBLE)
                         {
                             continue;
                         }
@@ -1485,7 +1589,7 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
                         // cover over wall over the rest, by a class's own depth offset rather than draw order.
                         static const F32 PRIORITY[skoverview::NUM_CENSUS_CLASSES] = { 8.f, 2.f, 4.f, 6.f, 1.f, 1.f, 1.f, 0.f, 0.f };
                         gGL.setPolygonOffset(-1.f, -4.f - PRIORITY[c]);
-                        drawClass(batch, c);
+                        drawPage(r, p, page);
                     }
                 }
                 glCullFace(GL_BACK);
@@ -1500,21 +1604,21 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
                 LLGLDisable cull_face(GL_CULL_FACE);
                 gGL.setColorMask(false, false, true, false);
                 gGL.setPolygonOffset(-1.f, -16.f);
-                for (const SKOverviewCensus::Batch& batch : batches)
+                for (size_t r = 0; r < regions.size(); ++r)
                 {
-                    const U32 start = batch.mStart[skoverview::INVISIBLE];
-                    const U32 count = batch.mStart[skoverview::INVISIBLE + 1] - start;
-                    if (!count)
-                    {
-                        continue;
-                    }
-                    const LLVector3 offset_agent = gAgent.getPosAgentFromGlobal(batch.mOrigin);
+                    const SKOverviewCensus::Region& region = regions[r];
+                    const LLVector3 offset_agent = gAgent.getPosAgentFromGlobal(region.mOrigin);
                     gGL.loadMatrix(shot.mView);
                     gGL.translatef(offset_agent.mV[VX], offset_agent.mV[VY], offset_agent.mV[VZ]);
                     gGLLastMatrix = NULL;
-                    batch.mBuffer->setBuffer();
                     gGL.diffuseColor4f(0.f, 0.f, 1.f, 1.f);
-                    drawClass(batch, skoverview::INVISIBLE);
+                    for (size_t p = 0; p < region.mPages.size(); ++p)
+                    {
+                        if (region.mPages[p].mClass == skoverview::INVISIBLE)
+                        {
+                            drawPage(r, p, region.mPages[p]);
+                        }
+                    }
                 }
                 gGL.setColorMask(true, false, false, false);
             }
@@ -1548,7 +1652,7 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
         }
         glClearDepth(clear_depth);
         glClearColor(clear_colour[0], clear_colour[1], clear_colour[2], clear_colour[3]);
-        draws = gPipeline.skRenderOverview(shot.mView, shot.mProj, cull, shot.mCut, census);
+        draws = gPipeline.skRenderOverview(shot.mView, shot.mProj, cull, shot.mCut, census) + census_draws;
         capture.flush();
         mCost.mCaptureMs += timer.getElapsedTimeF32() * 1000.f;
     }
@@ -1714,11 +1818,11 @@ bool SKOverviewCapture::captureMap(RegionMap& map, LLViewerRegion* region, bool 
     if (agent)
     {
         const LLVector3d region_origin = region->getOriginGlobal();
-        for (const SKOverviewCensus::Batch& batch : mCensus.batches())
+        for (const SKOverviewCensus::Region& census_region : mCensus.regions())
         {
-            if ((batch.mOrigin - region_origin).magVecSquared() < 1.0)
+            if ((census_region.mOrigin - region_origin).magVecSquared() < 1.0)
             {
-                for (const SKOverviewCensus::Group& group : batch.mGroups)
+                for (const SKOverviewCensus::Group& group : census_region.mGroups)
                 {
                     region_top = llmax(region_top, (F32)group.mMax.mdV[VZ]);
                 }
@@ -2009,7 +2113,7 @@ void SKOverviewCapture::updateCut()
     }
     mixPos(centre);
     mix(gAgent.getRegion() ? gAgent.getRegion()->getHandle() : 0);
-    mCensus.applyCut(gAgent.getRegion(), occupants, key);
+    mCensus.applyCut(gAgent.getRegion(), occupants, key, &mProbes);
 }
 
 U64 SKOverviewCapture::tacticalDissolve(Shot& shot, S32 w, S32 h, LLRect& rect)
@@ -2245,6 +2349,8 @@ void SKOverviewCapture::tactical()
         const LLVector3 at_axis = dir;
         static LLCachedControl<bool> force(gSavedSettings, "SKOverviewForceRecapture", false);
         static LLCachedControl<U32> tactical_debug_view(gSavedSettings, "SKOverviewDebugView", 0);
+        static LLCachedControl<U32> probe_people(gSavedSettings, "SKOverviewProbeBudget", 8);
+        mProbes.beginFrame(sGeomId, llmax((U32)probe_people, 1u));
         updateCut();
         LLRect patch_rect;
         const U64 dissolve_key = tacticalDissolve(shot, vw, vh, patch_rect);
@@ -2296,6 +2402,8 @@ void SKOverviewCapture::tactical()
     mTacticalViewport[1] = vy;
     mTacticalViewport[2] = vw;
     mTacticalViewport[3] = vh;
+    updatePick();
+    mProbes.endFrame();
     mTacticalReady = true;
     mTacticalPickable = true;
     LL_INFOS_ONCE("SKOverview") << "tactical overview rendered " << vw << "x" << vh << ", census tris " << mCensus.triangles()
@@ -2352,21 +2460,84 @@ bool SKOverviewCapture::rightClick(S32 x, S32 y)
     return true;
 }
 
+void SKOverviewCapture::updatePick()
+{
+    // The texels read in earlier frames, oldest first: the newest that landed is the one a pick reads.
+    for (auto it = mPicksInFlight.begin(); it != mPicksInFlight.end();)
+    {
+        F32 depth = 0.f;
+        const SKOverviewProbes::Status status = mProbes.pickResult(it->mFrame, depth);
+        if (status == SKOverviewProbes::Status::Pending)
+        {
+            ++it;
+            continue;
+        }
+        if (status == SKOverviewProbes::Status::Ready)
+        {
+            mPick = *it;
+            mPick.mDepth = depth;
+        }
+        it = mPicksInFlight.erase(it);
+    }
+    // This frame's: the shown frame's depth (the static capture, or the work target with the circles and the movers).
+    const LLVector2 scale = gViewerWindow->getDisplayScale();
+    const S32 x = (S32)std::floor(gViewerWindow->getCurrentMouseX() * scale.mV[VX] - mTacticalViewport[0]);
+    const S32 y = (S32)std::floor(gViewerWindow->getCurrentMouseY() * scale.mV[VY] - mTacticalViewport[1]);
+    if (!mSceneDepth || mPicksInFlight.size() >= 4 || !mProbes.readDepth(*mSceneDepth, x, y))
+    {
+        return;
+    }
+    PickSample sample;
+    sample.mX = x;
+    sample.mY = y;
+    sample.mView = mTacticalView;
+    sample.mProj = mTacticalProj;
+    sample.mViewport[2] = mTacticalViewport[2];
+    sample.mViewport[3] = mTacticalViewport[3];
+    sample.mAgentOrigin = gAgent.getPosGlobalFromAgent(LLVector3::zero);
+    sample.mFrame = mProbes.frame();
+    sample.mValid = true;
+    mPicksInFlight.push_back(sample);
+}
+
 bool SKOverviewCapture::groundAt(const LLVector2& at, LLVector3d& world) const
 {
-    // The tactical camera's ray through the pixel, against what the view draws: the census as cut, then the terrain,
-    // then the agent's floor plane.
+    const F64 now = LLFrameTimer::getUptimeSeconds().value();
+    if (now - mPicksSince >= 1.0)
+    {
+        if (mPicksByTexel || mPicksByFallback)
+        {
+            LL_INFOS("SKOverview") << "pick: " << mPicksByTexel << " by texel, " << mPicksByFallback << " by terrain or plane" << LL_ENDL;
+        }
+        mPicksByTexel = 0;
+        mPicksByFallback = 0;
+        mPicksSince = now;
+    }
+    // What the pixel shows, cut, dissolved and with the movers: the frame's depth under the cursor, while the cursor is
+    // within two pixels of where it was read and the read is at most three frames old, and not the cleared depth.
+    const PickSample& pick = mPick;
+    if (pick.mValid && std::fabs(at.mV[VX] - (pick.mX + 0.5f)) <= 2.5f && std::fabs(at.mV[VY] - (pick.mY + 0.5f)) <= 2.5f &&
+        mProbes.frame() - pick.mFrame <= 3 && pick.mDepth != al_window_far())
+    {
+        LLVector4a win, agent;
+        win.set(pick.mX + 0.5f, pick.mY + 0.5f, pick.mDepth, 1.f);
+        agent = al_unproject(win, pick.mView, pick.mProj, pick.mViewport);
+        const F32* p = agent.getF32ptr();
+        if (std::isfinite(p[0]) && std::isfinite(p[1]) && std::isfinite(p[2]))
+        {
+            world = pick.mAgentOrigin + LLVector3d(p[0], p[1], p[2]);
+            ++mPicksByTexel;
+            return true;
+        }
+    }
+    ++mPicksByFallback;
+    // Otherwise the tactical camera's ray through the pixel: the terrain, then the agent's floor plane.
     LLVector3 from, dir;
     if (!cursorRay(mTacticalView, mTacticalProj, mTacticalViewport, at, from, dir))
     {
         return false;
     }
     const F32 PICK_RANGE_M = 4096.f;
-    const LLVector3d origin = gAgent.getPosGlobalFromAgent(from);
-    if (mCensus.raycast(origin, dir, PICK_RANGE_M, world))
-    {
-        return true;
-    }
     LLVector4a start, end, hit;
     start.load3(from.mV);
     LLVector3 far_pt = from + dir * PICK_RANGE_M;

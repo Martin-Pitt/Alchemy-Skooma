@@ -25,9 +25,12 @@
 #ifndef SK_OVERVIEWCENSUS_H
 #define SK_OVERVIEWCENSUS_H
 
+#include "algpubuffer.h"
 #include "llpointer.h"
 #include "lluuid.h"
 #include "skoverviewcuttable.h"
+#include "skoverviewprobes.h"
+#include "skoverviewslots.h"
 #include "threadpool_fwd.h"
 #include "v3dmath.h"
 #include "v3math.h"
@@ -37,6 +40,7 @@
 #include <string>
 #include <map>
 #include <set>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -84,7 +88,7 @@ namespace skoverview
     constexpr F32 GROUND_BASE_M = 4.f;  ///< a cluster whose base is no higher than this above the land stands on it
     constexpr F32 NO_CUT = 1.0e30f;     ///< the cut height of a linkset drawn whole
     constexpr F32 HIDDEN = -1.0e30f;    ///< the cut height of a linkset not drawn at all
-    constexpr U8 TRI_PASS_THROUGH = 1;  ///< a triangle's flag: an invisible part's the cut and raycasts pass through
+    constexpr U8 TRI_PASS_THROUGH = 1;  ///< a triangle's flag: an invisible part's, which the cut's probes pass through
     constexpr U8 TRI_OPEN = 2;          ///< a triangle's flag: its part has open edges, so has no inside to section
 
     U8 codeOf(CensusClass cls);
@@ -100,52 +104,93 @@ namespace skoverview
     CensusClass classifyTriangle(F32 nz, F32 part_height);
 }
 
-/// The census's shapes uploaded once per snapshot that changes them: one vertex buffer per region, its triangles
-/// grouped by class. Main thread only.
+/// The census's shapes on the GPU: per region and class, pages of vertex runs, one run a linkset, uploaded only for
+/// the linksets a snapshot changed. Main thread only.
 class SKOverviewCensus
 {
 public:
-    /// A linkset's triangles within a batch, and the heights its cluster spans.
+    /// One linkset's triangles in one region, by class, as the worker emitted them: immutable once built, shared by the
+    /// worker's cache and what draws it.
+    struct LinksetGeom
+    {
+        U64 mKey = 0;           ///< what it was emitted from: an equal key emits the same triangles
+        LLUUID mRoot;
+        LLVector3d mOrigin;     ///< its region's origin, global; triangles are region-local
+        std::vector<LLVector3> mClass[skoverview::NUM_CENSUS_CLASSES];
+        std::vector<U8> mFlags[skoverview::NUM_CENSUS_CLASSES]; ///< per triangle: TRI_PASS_THROUGH, TRI_OPEN
+        LLVector3 mMin{ 1e30f, 1e30f, 1e30f };  ///< region-local bounds of its triangles
+        LLVector3 mMax{ -1e30f, -1e30f, -1e30f };
+        /// Its triangles by where they came from, the hatch copies in the invisible class.
+        U64 mRecordTris = 0;
+        U64 mSculptTris = 0;
+        U64 mSurroundTris = 0;
+        U64 mHatchTris = 0;
+        /// What the cover test made of its invisible parts.
+        struct Cover
+        {
+            U32 mParts = 0;
+            U32 mProxies = 0;
+            U32 mExtra = 0;
+            U32 mBarriers = 0;
+            U32 mUnknown = 0;
+            U32 mTooFine = 0;
+            U32 mDropped = 0;
+            F32 mHatchedM2 = 0.f;
+        };
+        Cover mCover;
+        std::vector<std::pair<LLUUID, U64>> mJudged; ///< its invisible parts and the verdict keys it was emitted with
+        U64 vertices() const;
+    };
+
+    /// A linkset within a region: its runs in the region's pages, and the heights its cluster spans.
     struct Group
     {
+        static constexpr U32 NO_PAGE = 0xFFFFFFFFu;
+        Group();
         F32 mMinZ = 0.f;        ///< global z, which is agent z too: its cluster's, so a level keeps whole clusters
         F32 mMaxZ = 0.f;
         bool mGround = false;   ///< its cluster's base is on the land under it
-        U32 mId = 0;            ///< its linkset, the same in every batch it spans
+        U32 mId = 0;            ///< its linkset's id, stable while its root stays and the same in every region it spans
         LLUUID mRoot;           ///< the linkset's root
         LLVector3d mAnchor;     ///< global; the linkset root's position, which says whose region it is in
         bool mNeverCut = false; ///< a surround in the void: always whole
-        LLVector3d mMin;        ///< global bounds of its own triangles in this batch
+        LLVector3d mMin;        ///< global bounds of its own triangles in this region
         LLVector3d mMax;
-        U32 mStart[skoverview::NUM_CENSUS_CLASSES] = {}; ///< its vertex range within each class's
+        U32 mPage[skoverview::NUM_CENSUS_CLASSES]; ///< per class, its page in the region's, NO_PAGE when it has none
+        U32 mStart[skoverview::NUM_CENSUS_CLASSES] = {}; ///< per class, its run in that page
         U32 mCount[skoverview::NUM_CENSUS_CLASSES] = {};
+        /// Its triangles and their flags, region-local: what its runs are uploaded from when they are placed again.
+        std::shared_ptr<const LinksetGeom> mGeom;
     };
 
-    struct Batch
+    /// One class's vertices in one region: a buffer of fixed capacity holding a run per linkset.
+    struct Page
     {
-        LLVector3d mOrigin;     ///< region origin, global; vertices are region-local
+        U8 mClass = 0;
         LLPointer<LLVertexBuffer> mBuffer;
-        U32 mStart[skoverview::NUM_CENSUS_CLASSES + 1] = {}; ///< vertex ranges per class
-        std::vector<Group> mGroups;
-        std::vector<LLVector3> mPositions; ///< the buffer's positions, region-local, for the cut's sight lines
-        /// Per triangle: an invisible part's that does not stand in for visible geometry, passed through by the cut
-        /// and the raycast as invisible parts always were (TRI_PASS_THROUGH), and whether its part is open (TRI_OPEN).
-        std::vector<U8> mInvisible;
-        U64 mHash = 0;          ///< mPositions' bits, hashed on the worker, so a rebuild keeps an unchanged buffer cheaply
+        skoverview::SlotAllocator mRuns;
+        /// Its runs in vertex order, as the command builders read them; refreshed with the runs and the heights.
+        std::vector<skoverview::SlotCull> mSlots;
+        /// The compute command list's slot table and commands, uploaded when mSlots moves.
+        mutable ALGPUBuffer mSlotTable;
+        mutable ALGPUBuffer mCommands;
+        mutable bool mTableDirty = true;
     };
 
-    /// Which groups a shot draws: all of them, or the ground's and those at the agent's level.
-    struct Level
+    /// A region's pages, and the linksets in it.
+    struct Region
     {
-        bool mAll = true;
-        bool mGround = false;   ///< the agent is at ground level: groups standing on the land are kept
-        F32 mLo = 0.f;          ///< groups overlapping these heights are kept
-        F32 mHi = 0.f;
+        LLVector3d mOrigin;     ///< global; vertices are region-local
+        std::vector<Page> mPages;   ///< by class
+        std::vector<Group> mGroups;
+    };
 
-        bool keeps(const Group& group) const
-        {
-            return mAll || (mGround && group.mGround) || (group.mMaxZ >= mLo && group.mMinZ <= mHi);
-        }
+    /// Which groups a shot draws: all of them, or the ground's (mGround) and those overlapping [mLo, mHi], as the
+    /// command builders keep their slots.
+    struct Level : skoverview::LevelCull
+    {
+        using LevelCull::keeps;
+        bool keeps(const Group& group) const { return keeps(group.mMinZ, group.mMaxZ, group.mGround); }
     };
     /// The top of what a level keeps, at least floor; for a shot's near plane.
     F32 levelTop(const Level& level, F32 floor) const;
@@ -194,14 +239,13 @@ public:
     /// occupant of highest mPriority. Every other part, there and elsewhere, is drawn whole. key says when the eye or the people moved:
     /// the same key and buffers do nothing. Publishes the table only when the result changed, and logs it then;
     /// cutStamp() moves when it does.
-    void applyCut(const LLViewerRegion* region, const std::vector<Occupant>& occupants, U64 key);
+    /// The GPU answers which linksets stand round, over or under each person (probes, which may be null): an answer is
+    /// read a frame or two after it is asked for, and what stood before is kept until it lands.
+    void applyCut(const LLViewerRegion* region, const std::vector<Occupant>& occupants, U64 key, SKOverviewProbes* probes);
     U64 cutStamp() const { return mCutStamp; }
     /// A linkset's cut at the last applyCut, by its root: its height (HIDDEN when hidden) and why; false when whole.
     bool cutOf(const LLUUID& root, F32& height, std::string& why) const;
-    /// The nearest census triangle along a ray as the tactical view draws it, global: invisible parts, hidden linksets
-    /// and whatever lies above its linkset's last cut are passed through. False when nothing is hit within max_m.
-    bool raycast(const LLVector3d& origin, const LLVector3& dir, F32 max_m, LLVector3d& hit) const;
-    const std::vector<Batch>& batches() const { return mBatches; }
+    const std::vector<Region>& regions() const { return mRegions; }
     U32 triangles() const { return mTriangles; }
     /// Parts that keep changing (a scripted door, a target on a track), left out of the static buffers for the movers
     /// to draw live: each change would otherwise rebuild every region's buffers.
@@ -223,6 +267,8 @@ private:
         std::shared_ptr<const std::vector<LLVector3>> mTris; ///< shared with the cache it came from; never null
         F32 mHeight = 0.f;
         skoverview::CensusClass mFixed = skoverview::NUM_CENSUS_CLASSES;
+        bool mSurround = false;         ///< a surround (gatherSurrounds), not a near sculpt
+        U64 mKey = 0;                   ///< what its triangles were worked from: its volume, map and placement
     };
     void gatherSurrounds(const struct SKCensusSnapshot& snap);
     /// What decides an invisible part's verdict: the census records near it whose look is visible.
@@ -256,6 +302,13 @@ private:
         std::unordered_map<LLUUID, Verdict> mByPart;
     };
     std::shared_ptr<const Verdicts> mVerdicts = std::make_shared<const Verdicts>();
+    /// The worker's linksets kept across builds by root and region, as the verdicts are: each build reads the last
+    /// landed map and makes the next, re-emitting only the linksets whose key moved.
+    struct Cache
+    {
+        std::map<std::tuple<LLUUID, S64, S64>, std::shared_ptr<const LinksetGeom>> mByLinkset;
+    };
+    std::shared_ptr<const Cache> mCache = std::make_shared<const Cache>();
     /// What a build needs, as values: the worker never touches viewer objects, the world, settings or GL.
     struct Job
     {
@@ -268,24 +321,21 @@ private:
         std::vector<RenderedPart> mSculpts;
         std::vector<CoverInput> mCover; ///< per kept record then sculpt
         std::shared_ptr<const Verdicts> mVerdicts;
+        std::shared_ptr<const Cache> mCache;
         std::vector<U32> mGroupOf;      ///< per kept record then sculpt, its linkset's group
         std::vector<LLUUID> mRoots;     ///< per group
+        std::vector<U32> mIds;          ///< per group, its linkset's stable id
         std::map<U32, U32> mGroupCluster;
         std::vector<std::pair<LLVector3d, bool>> mAnchors; ///< per group: its root's position, and void-only
         std::vector<std::pair<LLVector3d, F64>> mRegions;  ///< connected regions' origins and widths
     };
-    /// A build's batches, short of their buffers and of whether each group stands on the land.
+    /// A build's linksets per region, short of their runs and of whether each stands on the land.
     struct Built
     {
-        struct Region
+        struct Linkset
         {
-            LLVector3d mOrigin;
-            std::vector<LLVector3> mPositions;  ///< by class, then group
-            U32 mStart[skoverview::NUM_CENSUS_CLASSES + 1] = {};
-            std::vector<Group> mGroups;
-            std::vector<std::pair<LLVector3d, LLVector3d>> mFootprints;  ///< per group, the box the land under it is read over
-            std::vector<U8> mInvisible;         ///< per triangle, as Batch's
-            U64 mHash = 0;                      ///< mPositions' bits, as Batch's
+            Group mGroup;       ///< all but its runs; mGeom set
+            std::pair<LLVector3d, LLVector3d> mFootprint; ///< the box the land under it is read over
         };
         /// What the cover test made of the invisible parts, for the log.
         struct CoverStats
@@ -303,15 +353,37 @@ private:
             F64 mBuildSeconds = 0.0;   ///< in the whole per-part loop
         };
         CoverStats mCover;
+        /// Where the build's triangles came from, for the upload log.
+        struct Sources
+        {
+            U64 mRecords = 0;
+            U64 mSculpts = 0;
+            U64 mSurrounds = 0;
+            U64 mHatch = 0;     ///< the hatch copies in the invisible range
+            std::vector<std::pair<LLUUID, U64>> mLargest; ///< the ten linksets of most triangles, by root
+        };
+        Sources mSources;
         std::shared_ptr<const Verdicts> mVerdicts; ///< the verdicts this build asked for, adopted when it lands
+        std::shared_ptr<const Cache> mCache;       ///< the linksets this build drew, adopted when it lands
+        U32 mLinksetsEmitted = 0;                  ///< of its linksets, those emitted again rather than kept
         U64 mSignature = 0;
         U32 mGeneration = 0;
-        std::vector<Region> mRegions;
-        std::vector<std::pair<size_t, size_t>> mSplit; ///< regions over one batch: their vertices and batch count
+        std::vector<Linkset> mLinksets;
+        std::vector<LLUUID> mRoots;     ///< every root the build gave an id
+        /// Linksets left out for a run of one class over MAX_PAGE_VERTICES: their roots and vertices.
+        std::vector<std::pair<LLUUID, U64>> mOverflow;
     };
-    static std::shared_ptr<Built> buildBatches(const Job& job);
-    /// Uploads a build and replaces every batch with it, in this frame.
+    static std::shared_ptr<Built> buildLinksets(const Job& job);
+    /// Lands a build in this frame: frees the runs of linksets gone or changed, and uploads the changed ones' runs.
     void swapIn(Built& built);
+    /// A page of the region's class with room for count vertices, made when none has, sized for the want vertices the
+    /// build still has to place there; its index, and the run's first vertex.
+    U32 pageFor(Region& region, U8 cls, U32 count, U32 want, U32& first);
+    static constexpr U32 MIN_PAGE_VERTICES = 3u * 8192u;   ///< a new page's least, so a class's spills stay few
+    /// Rebuilds the region's pages' slot lists from its groups.
+    void refreshSlots(Region& region);
+    std::unordered_map<LLUUID, U32> mLinksetIds;    ///< each linkset root's id while it is in a landed or pending build
+    skoverview::IdPool mIds;
     std::unique_ptr<LL::ThreadPool> mWorkers;
     std::future<std::shared_ptr<Built>> mJob;
     U32 mGeneration = 0;    ///< moves at release(), so a build begun before it never lands
@@ -365,7 +437,7 @@ private:
     std::map<LLUUID, Restless> mRestless;
     bool isRestless(const LLUUID& part) const;
 
-    std::vector<Batch> mBatches;
+    std::vector<Region> mRegions;
     std::vector<RenderedPart> mSurrounds;
     U64 mSurroundsSig = 0;
     F64 mSurroundsAt = 0.0;     ///< when the surrounds are looked at again
@@ -374,6 +446,10 @@ private:
     bool mUnknownLook = false;  ///< some part's faces or images were not loaded at the last build
     std::unordered_map<LLUUID, skoverview::Seen> mLargeLogged; ///< the large parts of the last pass and how each was logged
     std::string mCoverLogged;   ///< the cover counts last logged
+    std::string mUploadLogged;  ///< the upload's source totals last logged
+    std::vector<std::pair<LLUUID, U64>> mOverflowLogged; ///< the overflowing linksets last warned about
+    U32 mPagesMade = 0;         ///< pages made and freed at the last swapIn, for the log
+    U32 mPagesFreed = 0;
     F64 mRecheckAt = 0.0;
     U64 mRecordsKey = 0;        ///< the census records' identities at the last look
     bool mRecordsChanged = true;
@@ -411,7 +487,7 @@ private:
         Reason mWhy;
         F64 mSince = -1.0;      ///< when a relaxing decision first came, or -1
     };
-    /// A linkset over every batch it spans: its bounds and where its triangles are. Built with the buffers.
+    /// A linkset over every region it spans: its bounds and where its triangles are. Built with the pages.
     struct Extent
     {
         LLVector3d mMin{ 1e30, 1e30, 1e30 };
@@ -422,7 +498,7 @@ private:
         LLUUID mRoot;
         bool mGround = false;   ///< in a cluster standing on the land
         F64 mBottom = 1e30;     ///< its cluster's base
-        std::vector<std::pair<const Batch*, const Group*>> mParts;
+        std::vector<std::pair<const Region*, const Group*>> mParts;
     };
     std::map<U32, Extent> mExtents;
     std::map<LLUUID, U32> mRootExtent;  ///< each linkset root's extent
@@ -435,16 +511,45 @@ private:
     /// column takes. Most people are still in any one frame.
     struct OccupantCut
     {
-        bool mRoofValid = false;
-        U64 mRoofKey = 0;
         U32 mBest = 0;
         F64 mBestZ = -1e30;
         bool mCovered = false;
-        bool mMarksValid = false;
-        U64 mMarksKey = 0;
         std::vector<std::pair<U32, std::string>> mMarks; ///< linkset and rule
         bool mSeen = false;
+        /// The membership probe in flight: its candidates (extent id, root), one query each, and the rule they mark.
+        skoverview::ProbeSlot mMarksProbe;
+        std::vector<std::pair<U32, LLUUID>> mMarkCandidates;
+        std::vector<ALQueryTicket> mMarkTickets;
+        const char* mMarkRule = nullptr;
+        /// The roof probe in flight: the feet texel's slot and the feet's height then, and a query per linkset that
+        /// may cover the feet.
+        skoverview::ProbeSlot mRoofProbe;
+        S32 mFeetSlot = -1;
+        F64 mFeetZ = 0.0;
+        std::vector<std::pair<U32, LLUUID>> mCoverCandidates;
+        std::vector<ALQueryTicket> mCoverTickets;
     };
+    /// The probes' counts over a second, for the log.
+    struct ProbeStats
+    {
+        F64 mSince = 0.0;
+        U32 mIssued = 0;        ///< people probed
+        U32 mQueries = 0;
+        U32 mApplied = 0;
+        U32 mLatencyFrames = 0; ///< summed over the applied ones
+        U32 mMostQueries = 0;   ///< in any one frame
+        U32 mRefused = 0;       ///< queries the pool refused, reissued until they land
+    };
+    ProbeStats mProbeStats;
+    /// A room probe's id render on its way back, for SKOverviewProbeDump: whose, and its box and mask.
+    struct ProbeDump
+    {
+        bool mPending = false;
+        LLUUID mWho;
+        SKOverviewProbes::Box mBox;
+        std::vector<LLVector4> mOuts;
+    };
+    ProbeDump mProbeDump;
     std::map<LLUUID, OccupantCut> mOccupantCuts;
     std::map<LLUUID, Release> mRelease;     ///< applied cuts by linkset root, relaxed only once the relaxing holds
 };

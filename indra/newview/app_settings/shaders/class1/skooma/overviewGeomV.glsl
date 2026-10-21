@@ -41,7 +41,10 @@ uniform int sk_cap_pass;        // 0 front faces, 1 back faces of uncut parts, 2
 in float weight;        // the linkset id (SKOverviewCensus::Group::mId), whose row of SKOverviewCutTable holds its cut
 out float vary_cut_z;
 out float vary_z;
-in vec2 texcoord0;      // x: 1 for an open part's triangle, which has no inside to section
+in vec2 texcoord0;      // x: 1 for an open part's triangle, which has no inside to section; y: 1 for one passed through
+#ifdef SK_ID_WRITE
+flat out int vary_group;        // the probes' id render: the linkset each fragment belongs to, no cut read
+#else
 #ifdef SK_CUT_TABLE_SSBO
 layout(std430) readonly buffer SKOverviewCutBlock { vec4 rows[]; };
 vec4 skCutRow(int group) { return rows[group]; }
@@ -49,6 +52,7 @@ vec4 skCutRow(int group) { return rows[group]; }
 uniform samplerBuffer sk_cut_table;     // the same rows as a buffer texture, from texel sk_cut_base
 uniform int sk_cut_base;
 vec4 skCutRow(int group) { return texelFetch(sk_cut_table, sk_cut_base + group); }
+#endif
 #endif
 #endif
 
@@ -61,6 +65,12 @@ void main()
 #ifdef SK_CUT_ATTRIBUTE
     // The cut is its linkset's (cut, flags, lowest z, highest z), agent z.
     int sk_group = int(weight + 0.5);
+#ifdef SK_ID_WRITE
+    vary_group = sk_group;
+    // Nothing is cut for a probe; a passed-through triangle (an invisible part's) is clipped whole.
+    gl_ClipDistance[2] = 1.0;
+    gl_ClipDistance[3] = texcoord0.y > 0.5 ? -1.0 : 1.0;
+#else
     vec4 row = skCutRow(sk_group);
     float cut = row.x;
     vary_cut_z = cut;
@@ -71,6 +81,7 @@ void main()
     // A part's vertices share its cut and its openness, so the sign is the triangle's.
     float cut_part = (cut < 1.0e29 && texcoord0.x < 0.5) ? 1.0 : -1.0;
     gl_ClipDistance[3] = sk_cap_pass == 0 ? 1.0 : sk_cap_pass == 1 ? -cut_part : cut_part;
+#endif
 #else
     gl_ClipDistance[2] = 1.0;
     gl_ClipDistance[3] = 1.0;

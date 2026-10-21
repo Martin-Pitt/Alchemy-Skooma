@@ -80,7 +80,7 @@ public:
         F32 gpu_patch_ms = -1.f;    // its see-through circles' patch
         F32 gpu_movers_ms = -1.f;   // its movers
         F32 gpu_resolve_ms = -1.f;  // one of its resolves
-        U32 draws = 0;       // draw infos sorted for the capture, plus the terrain pool
+        U32 draws = 0;       // draw infos sorted for the capture, plus the terrain pool, plus the census's page draws
         U32 census_tris = 0;
         U32 captures = 0;
     };
@@ -195,8 +195,30 @@ private:
     void tactical();
     void composite();
     bool rightClick(S32 x, S32 y);
-    /// What the overview draws under a pixel, by the tactical camera's ray: the census as cut, terrain, else the agent's floor plane.
+    /// What the overview draws under a pixel: the shown frame's depth there, read back a frame or two later, while the
+    /// cursor is still over it; else the terrain under the tactical camera's ray, else the agent's floor plane.
     bool groundAt(const LLVector2& at, LLVector3d& world) const;
+    /// The depth texel under the cursor, with the camera the frame was drawn with.
+    struct PickSample
+    {
+        S32 mX = 0;
+        S32 mY = 0;
+        F32 mDepth = 0.f;
+        LLMatrix4a mView;
+        LLMatrix4a mProj;
+        S32 mViewport[4] = {};
+        LLVector3d mAgentOrigin;    ///< agent space's origin, global, as the frame was drawn
+        U32 mFrame = 0;             ///< the probes' frame it was read in
+        bool mValid = false;
+    };
+    /// Reads this frame's texel under the cursor, and takes in the ones that landed.
+    void updatePick();
+    std::vector<PickSample> mPicksInFlight;
+    PickSample mPick;               ///< the newest landed
+    /// How picks were answered over a second, for the log.
+    mutable U32 mPicksByTexel = 0;
+    mutable U32 mPicksByFallback = 0;
+    mutable F64 mPicksSince = 0.0;
     /// What a GPU span times; each is read a few frames on into Stats and the cost line.
     enum class SpanKind : U8
     {
@@ -212,6 +234,7 @@ private:
     std::vector<std::pair<SpanKind, ALQuerySpan>> mSpans;
 
     SKOverviewCensus mCensus;
+    SKOverviewProbes mProbes;   ///< the tactical cut's and the pick's questions to the GPU
     SKOverviewMovers mMovers;
     LLRenderTarget* mSceneDepth = nullptr;   ///< the capture whose depth this frame's markers test against
     bool mWorkValid = false;    ///< the work target holds the static capture, with the rects below drawn over it

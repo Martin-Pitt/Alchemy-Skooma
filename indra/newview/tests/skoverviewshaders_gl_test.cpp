@@ -198,28 +198,31 @@ namespace
             {
                 continue;
             }
-            bool cut = false, dissolve = false;
+            bool cut = false, dissolve = false, id_write = false;
             for (const char* define : program.mDefines)
             {
                 cut = cut || (define && std::string(define) == "SK_CUT_ATTRIBUTE");
                 dissolve = dissolve || (define && std::string(define) == "SK_DISSOLVE");
+                id_write = id_write || (define && std::string(define) == "SK_ID_WRITE");
             }
-            CHECK(program.mCutTable == cut);
+            // The id render reads no cut: the table, the cap pass and the base are the cut programs' alone.
+            const bool table = cut && !id_write;
+            CHECK(program.mCutTable == table);
             for (bool ssbo : tableStores(program))
             {
                 CAPTURE(program.mName, ssbo);
                 REQUIRE(build(program, ssbo));
                 CHECK(mProgram.getUniformLocation(CLIP_PLANE) >= 0);
                 CHECK(mProgram.getUniformLocation(CEILING) >= 0);
-                CHECK((mProgram.getUniformLocation(CAP_PASS) >= 0) == cut);
+                CHECK((mProgram.getUniformLocation(CAP_PASS) >= 0) == table);
                 CHECK((mProgram.getUniformLocation(DISSOLVE) >= 0) == dissolve);
                 // The census buffer carries texcoord0 for this: an open part's flag, which the cap pass's sign reads.
                 CHECK(((mProgram.mAttributeMask & LLVertexBuffer::MAP_TEXCOORD0) != 0) == cut);
                 // And weight for the linkset id, which reads the cut table: a buffer texture's unit and base, or the block.
                 CHECK(((mProgram.mAttributeMask & LLVertexBuffer::MAP_WEIGHT) != 0) == cut);
-                CHECK((mProgram.getTextureChannel(LLShaderMgr::SK_OVERVIEW_CUT_TABLE) >= 0) == (cut && !ssbo));
-                CHECK((mProgram.getUniformLocation(CUT_BASE) >= 0) == (cut && !ssbo));
-                CHECK((mProgram.getStorageBinding(LLShaderMgr::SK_OVERVIEW_CUT_BLOCK) == 0) == (cut && ssbo));
+                CHECK((mProgram.getTextureChannel(LLShaderMgr::SK_OVERVIEW_CUT_TABLE) >= 0) == (table && !ssbo));
+                CHECK((mProgram.getUniformLocation(CUT_BASE) >= 0) == (table && !ssbo));
+                CHECK((mProgram.getStorageBinding(LLShaderMgr::SK_OVERVIEW_CUT_BLOCK) == 0) == (table && ssbo));
             }
         }
         CHECK(mShaders.getStorageBlockBinding(LLShaderMgr::SK_OVERVIEW_CUT_BLOCK) == 0);

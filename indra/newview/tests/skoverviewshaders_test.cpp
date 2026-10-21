@@ -217,20 +217,29 @@ namespace
                     under.push_back(line.mConditions);
                 }
             }
-            bool everywhere = false;
-            for (const std::vector<std::string>& c : under)
+            // A write under C + {+D} paired with one under C + {-D} is a write under C, folded until nothing pairs.
+            for (bool folded = true; folded;)
             {
-                if (c.empty())
+                folded = false;
+                for (size_t a = 0; a < under.size() && !folded; ++a)
                 {
-                    everywhere = true;
-                }
-                else if (c.size() == 1 && c[0][0] == '+')
-                {
-                    const std::vector<std::string> absent = { "-" + c[0].substr(1) };
-                    everywhere = everywhere || std::find(under.begin(), under.end(), absent) != under.end();
+                    const std::vector<std::string>& c = under[a];
+                    if (c.empty() || c.back()[0] != '+')
+                    {
+                        continue;
+                    }
+                    std::vector<std::string> pair = c;
+                    pair.back()[0] = '-';
+                    std::vector<std::string> parent(c.begin(), c.end() - 1);
+                    if (std::find(under.begin(), under.end(), pair) != under.end() &&
+                        std::find(under.begin(), under.end(), parent) == under.end())
+                    {
+                        under.push_back(parent);
+                        folded = true;
+                    }
                 }
             }
-            CHECK(everywhere);
+            CHECK(std::find(under.begin(), under.end(), std::vector<std::string>()) != under.end());
         }
     }
 
@@ -283,6 +292,49 @@ namespace
         }
         CHECK(blocks > 0);
         CHECK(textures == 1);
+    }
+
+    // The probes read ids, not cuts: one unsigned output, and the cut table's reads only where SK_ID_WRITE is not defined.
+    TEST_CASE("SKOverviewShaders: the id permutation writes one unsigned id and reads no table", "[SKOverviewShaders]")
+    {
+        static const std::regex FRAG_ID(R"(\bfrag_id\b)");
+        static const std::regex OUT_ID(R"(^\s*out\s+uint\s+frag_id\s*;)");
+        static const std::regex OUT_ANY(R"(^\s*out\s+\w+\s+\w+)");
+        size_t ids = 0, declared = 0, outs = 0;
+        for (const Line& line : lines_with_conditions(shader_source(GEOM_F)))
+        {
+            CAPTURE(line.mNumber, line.mText);
+            if (std::regex_search(line.mText, FRAG_ID))
+            {
+                CHECK(requires_define(line, "SK_ID_WRITE"));
+                ++ids;
+                declared += std::regex_search(line.mText, OUT_ID) ? 1 : 0;
+            }
+            if (requires_define(line, "SK_ID_WRITE") && std::regex_search(line.mText, OUT_ANY))
+            {
+                ++outs;
+            }
+        }
+        CHECK(declared == 1);
+        CHECK(ids >= 2);
+        CHECK(outs == 1);
+        static const std::regex TABLE(R"(\brows\s*\[|\bsk_cut_table\b|\bskCutRow\b)");
+        size_t table = 0;
+        for (const Line& line : lines_with_conditions(shader_source(GEOM_V)))
+        {
+            if (std::regex_search(line.mText, TABLE))
+            {
+                CAPTURE(line.mNumber, line.mText);
+                bool not_id = false;
+                for (const std::string& c : line.mConditions)
+                {
+                    not_id = not_id || c == "-SK_ID_WRITE";
+                }
+                CHECK(not_id);
+                ++table;
+            }
+        }
+        CHECK(table > 0);
     }
 
     // The weight channel carries the linkset id, which nothing may read as a height.

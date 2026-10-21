@@ -26,9 +26,11 @@
 
 #include "skoverviewcensus.h"
 
+#include "lldir.h"
 #include "llframetimer.h"
 #include "llimagegl.h"
 #include "llmaterial.h"
+#include "llrender.h"
 #include "llvertexbuffer.h"
 #include "llviewercontrol.h"
 #include "llviewerregion.h"
@@ -58,8 +60,6 @@
 
 namespace skoverview
 {
-    const size_t MAX_BATCH_VERTICES = 16u * 1024u * 1024u;
-
     U8 codeOf(CensusClass cls)
     {
         static const U8 codes[NUM_CENSUS_CLASSES] = { CODE_FLOOR, CODE_WALL,   CODE_COVER,       CODE_RAMP,
@@ -142,10 +142,14 @@ void SKOverviewCensus::release()
     mExtents.clear();
     mExtentsBuilt = false;
     mOccupantCuts.clear();
-    mBatches.clear();
+    mRegions.clear();
+    mLinksetIds.clear();
+    mIds.clear();
+    mCache = std::make_shared<const Cache>();
     mCutTable.release();
     mLargeLogged.clear();
     mCoverLogged.clear();
+    mUploadLogged.clear();
     mStamp = 0;
     mSignature = 0;
     mTriangles = 0;
@@ -545,23 +549,24 @@ bool SKOverviewCensus::update()
     {
         if (mJob.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
         {
-            return !mBatches.empty();
+            return !mRegions.empty();
         }
         std::shared_ptr<Built> built = mJob.get();
         if (built && built->mGeneration == mGeneration)
         {
             mVerdicts = built->mVerdicts;
+            mCache = built->mCache;
             swapIn(*built);
         }
     }
     if (!SKWorldCensus::instanceExists())
     {
-        return !mBatches.empty();
+        return !mRegions.empty();
     }
     SKCensusSnapshotPtr snap = SKWorldCensus::instance().snapshot();
     if (!snap)
     {
-        return !mBatches.empty();
+        return !mRegions.empty();
     }
     // Work only on change. The census rescans every few frames, but a part it did not see change keeps its record
     // object, so the records' identities say whether anything moved. Parts whose look was not known yet are asked
@@ -593,9 +598,10 @@ bool SKOverviewCensus::update()
             }
         }
         bool heights_moved = false;
-        for (Batch& batch : mBatches)
+        for (Region& region : mRegions)
         {
-            for (Group& group : batch.mGroups)
+            bool moved = false;
+            for (Group& group : region.mGroups)
             {
                 const auto it = cluster_of_root.find(group.mRoot);
                 if (it == cluster_of_root.end() || !mClusterRoots.count(group.mRoot))
@@ -604,9 +610,14 @@ bool SKOverviewCensus::update()
                 }
                 const F32 lo = (F32)it->second->mMin.mdV[VZ];
                 const F32 hi = (F32)it->second->mMax.mdV[VZ];
-                heights_moved |= lo != group.mMinZ || hi != group.mMaxZ;
+                moved |= lo != group.mMinZ || hi != group.mMaxZ;
                 group.mMinZ = lo;
                 group.mMaxZ = hi;
+            }
+            if (moved)
+            {
+                refreshSlots(region); // the command builders read the heights from the slots
+                heights_moved = true;
             }
         }
         if (heights_moved)
@@ -629,7 +640,7 @@ bool SKOverviewCensus::update()
     }
     if (!mRecordsChanged && !recheck && !sculpts_due && mBuilt)
     {
-        return !mBatches.empty();
+        return !mRegions.empty();
     }
     const bool announced = mRecordsChanged || !mBuilt; // a walk the census stamp did not ask for checks the stamp
     mRecordsChanged = false;
@@ -816,6 +827,7 @@ bool SKOverviewCensus::update()
         sc.mRoot = volume->getRootEdit()->getID();
         sc.mTris = cached.mTris;
         sc.mHeight = cached.mHeight;
+        sc.mKey = cached.mKey;
         const Seen seen = seenOf(sc.mPart);
         mUnknownLook |= seen == Seen::UNKNOWN;
         CoverInput cover;
@@ -998,7 +1010,7 @@ bool SKOverviewCensus::update()
     }
     if (sig == mSignature && mBuilt)
     {
-        return !mBatches.empty();
+        return !mRegions.empty();
     }
     const U32 missed = logChurn(entries, moves);
     if (!announced && missed)
@@ -1019,6 +1031,7 @@ bool SKOverviewCensus::update()
     job->mCover.insert(job->mCover.end(), std::make_move_iterator(sculpt_cover.begin()),
                        std::make_move_iterator(sculpt_cover.end()));
     job->mVerdicts = mVerdicts;
+    job->mCache = mCache;
     job->mGroupOf = std::move(group_of);
     mClusterRoots.clear();
     for (const auto& gc : group_cluster)
@@ -1026,6 +1039,13 @@ bool SKOverviewCensus::update()
         mClusterRoots.insert(roots[gc.first]);
     }
     job->mRoots = std::move(roots);
+    // Each root keeps its id while it stays in the builds; a root first seen takes the lowest id free.
+    job->mIds.reserve(job->mRoots.size());
+    for (const LLUUID& root : job->mRoots)
+    {
+        const auto id = mLinksetIds.find(root);
+        job->mIds.push_back(id != mLinksetIds.end() ? id->second : (mLinksetIds[root] = mIds.acquire()));
+    }
     job->mGroupCluster = std::move(group_cluster);
     job->mAnchors.resize(job->mRoots.size());
     std::vector<bool> anchored(job->mRoots.size(), false);
@@ -1069,7 +1089,7 @@ bool SKOverviewCensus::update()
         [job]()
         {
             LL_PROFILE_ZONE_NAMED("sk overview census build");
-            return buildBatches(*job);
+            return buildLinksets(*job);
         });
     mJob = task->get_future();
     if (!mWorkers->getQueue().tryPost([task]() { (*task)(); }))
@@ -1078,25 +1098,22 @@ bool SKOverviewCensus::update()
         LL_WARNS("SKOverview") << "census overview queue refused the build; building on this thread" << LL_ENDL;
         (*task)();
     }
-    return !mBatches.empty();
+    return !mRegions.empty();
+}
+
+U64 SKOverviewCensus::LinksetGeom::vertices() const
+{
+    U64 n = 0;
+    for (const auto& positions : mClass)
+    {
+        n += positions.size();
+    }
+    return n;
 }
 
 // static
-std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildBatches(const Job& job)
+std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildLinksets(const Job& job)
 {
-    // Per region, per class, per group, region-local triangles; and each group's bounds.
-    struct Bounds
-    {
-        LLVector3 mMin{ 1e30f, 1e30f, 1e30f };
-        LLVector3 mMax{ -1e30f, -1e30f, -1e30f };
-    };
-    struct Bins
-    {
-        LLVector3d mOrigin;
-        std::map<U32, std::vector<LLVector3>> mClass[skoverview::NUM_CENSUS_CLASSES];
-        std::map<U32, std::vector<U8>> mInvisible[skoverview::NUM_CENSUS_CLASSES]; ///< per triangle, as Batch's
-        std::map<U32, Bounds> mBounds;
-    };
     // Whether a point lies over a connected region, as LLViewerRegion::pointInRegionGlobal has it.
     auto overLand = [&job](const LLVector3d& p)
     {
@@ -1113,7 +1130,6 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildBatches(const Jo
     };
     const std::vector<const sknav::Record*>& kept = job.mKept;
     const std::vector<RenderedPart>& sculpts = job.mSculpts;
-    std::map<std::pair<S64, S64>, Bins> regions;
     std::vector<LLVector3> tris;
     Built::CoverStats stats;
     const auto cover_began = std::chrono::steady_clock::now();
@@ -1121,13 +1137,45 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildBatches(const Jo
     std::vector<LLVector3> cover_scratch;
     // The verdicts this build asked for; the rest are dropped with the parts they were for.
     std::unordered_map<LLUUID, Verdict> verdicts;
-    for (size_t i = 0; i < kept.size() + sculpts.size(); ++i)
+    auto regionKey = [](const LLVector3d& origin)
+    { return std::make_pair((S64)std::llround(origin.mdV[VX]), (S64)std::llround(origin.mdV[VY])); };
+    auto originOf = [&](size_t i) -> const LLVector3d&
+    { return i >= kept.size() ? sculpts[i - kept.size()].mOrigin : kept[i]->mOrigin; };
+    auto partOf = [&](size_t i) -> const LLUUID& { return i >= kept.size() ? sculpts[i - kept.size()].mPart : kept[i]->mPart; };
+    // An invisible part's verdict is kept while its own geometry and its candidates are: its record's signature, or
+    // the sculpt triangles it shares with the cache.
+    auto verdictKey = [&](size_t i, const CoverInput& cover, const std::vector<LLVector3>& source)
+    {
+        U64 part_key = skoverview::scramble(cover.mKey ^ (U64)source.size());
+        part_key = skoverview::scramble(part_key ^ (i >= kept.size() ? (U64)(uintptr_t)&source : kept[i]->mSignature));
+        if (!source.empty())
+        {
+            const LLVector3& first = source.front();
+            part_key = skoverview::scramble(part_key ^ (U64)(S64)std::llround(first.mV[VX] * 64.f) ^
+                                            ((U64)(S64)std::llround(first.mV[VY] * 64.f) << 21) ^
+                                            ((U64)(S64)std::llround(first.mV[VZ] * 64.f) << 42));
+        }
+        return part_key;
+    };
+    // Which land is connected decides what of a void-only part is drawn.
+    U64 regions_key = 0;
+    for (const auto& square : job.mRegions)
+    {
+        regions_key = skoverview::scramble(regions_key ^ (U64)(S64)std::llround(square.first.mdV[VX]) ^
+                                           ((U64)(S64)std::llround(square.first.mdV[VY]) << 32) ^ (U64)square.second);
+    }
+    auto bitsOf = [](F64 v)
+    {
+        U64 bits;
+        std::memcpy(&bits, &v, sizeof(bits));
+        return bits;
+    };
+
+    // Emits one part into its linkset's triangles: the triangles of each class, the hatch copies, and its counts.
+    auto emitPart = [&](size_t i, LinksetGeom& geom)
     {
         const bool is_sculpt = i >= kept.size();
-        const LLVector3d origin = is_sculpt ? sculpts[i - kept.size()].mOrigin : kept[i]->mOrigin;
-        const std::pair<S64, S64> key((S64)std::llround(origin.mdV[VX]), (S64)std::llround(origin.mdV[VY]));
-        Bins& bins = regions[key];
-        bins.mOrigin = origin;
+        const LLVector3d& origin = originOf(i);
         F32 part_height = 0.f;
         U8 fixed_class = skoverview::NUM_CENSUS_CLASSES;
         const std::vector<LLVector3>* source = &tris;
@@ -1147,7 +1195,6 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildBatches(const Jo
             fixed_class = job.mFixed[i];
         }
         const bool in_void_only = i < kept.size() && job.mVoidOnly[i];
-        const U32 group = job.mGroupOf[i];
         // An invisible part a visible neighbour that collides with nothing holds, or that sticks out of the colliding
         // ones by no more than a sliver, stands in for them; one sticking out further is extra, hatched where it does;
         // one with nothing visible near it is a barrier, hatched whole. While a neighbour's type or look is not known
@@ -1159,18 +1206,9 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildBatches(const Jo
         if (cover && cover->mTest)
         {
             LL_PROFILE_ZONE_NAMED("sk overview invisible cover");
-            const LLUUID& part = is_sculpt ? sculpts[i - kept.size()].mPart : kept[i]->mPart;
-            // The part's own geometry: its record's signature, or the sculpt triangles it shares with the cache.
-            U64 part_key = skoverview::scramble(cover->mKey ^ (U64)source->size());
-            part_key = skoverview::scramble(part_key ^ (is_sculpt ? (U64)(uintptr_t)source : kept[i]->mSignature));
-            if (!source->empty())
-            {
-                const LLVector3& first = source->front();
-                part_key = skoverview::scramble(part_key ^ (U64)(S64)std::llround(first.mV[VX] * 64.f) ^
-                                                ((U64)(S64)std::llround(first.mV[VY] * 64.f) << 21) ^
-                                                ((U64)(S64)std::llround(first.mV[VZ] * 64.f) << 42));
-            }
-            ++stats.mParts;
+            const LLUUID& part = partOf(i);
+            const U64 part_key = verdictKey(i, *cover, *source);
+            ++geom.mCover.mParts;
             Verdict judged;
             bool known = false;
             if (job.mVerdicts)
@@ -1204,6 +1242,7 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildBatches(const Jo
                                              << (result.mSurfaceClip ? 1 : 0) << LL_ENDL;
             }
             verdicts[part] = judged;
+            geom.mJudged.emplace_back(part, part_key);
             sknav::CoverVerdict verdict = (sknav::CoverVerdict)judged.mVerdict;
             // A neighbour still showing its look may yet hold the part: a hatch waits for it.
             if (cover->mPending && (verdict == sknav::CoverVerdict::EXTRA || verdict == sknav::CoverVerdict::BARRIER))
@@ -1220,27 +1259,27 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildBatches(const Jo
                 const LLVector3 size = hi - lo;
                 if (llmax(size.mV[VX], llmax(size.mV[VY], size.mV[VZ])) > skoverview::INVISIBLE_WALL_M)
                 {
-                    ++stats.mDropped;
-                    continue;
+                    ++geom.mCover.mDropped;
+                    return;
                 }
                 pass_through = true;
             }
             switch (verdict)
             {
-                case sknav::CoverVerdict::PROXY: ++stats.mProxies; break;
+                case sknav::CoverVerdict::PROXY: ++geom.mCover.mProxies; break;
                 case sknav::CoverVerdict::EXTRA:
-                    ++stats.mExtra;
-                    stats.mHatchedM2 += judged.mOutsideM2;
+                    ++geom.mCover.mExtra;
+                    geom.mCover.mHatchedM2 += judged.mOutsideM2;
                     hatch = judged.mProtruding.get();
                     break;
                 case sknav::CoverVerdict::BARRIER:
-                    ++stats.mBarriers;
-                    stats.mHatchedM2 += judged.mPartM2;
+                    ++geom.mCover.mBarriers;
+                    geom.mCover.mHatchedM2 += judged.mPartM2;
                     hatch = source;
                     break;
                 case sknav::CoverVerdict::UNKNOWN_PHYSICS:
-                    ++stats.mUnknown;
-                    stats.mTooFine += judged.mTooFine ? 1 : 0;
+                    ++geom.mCover.mUnknown;
+                    geom.mCover.mTooFine += judged.mTooFine ? 1 : 0;
                     break;
             }
         }
@@ -1280,6 +1319,7 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildBatches(const Jo
             }
         }
         const U8 tri_flags = (pass_through ? skoverview::TRI_PASS_THROUGH : 0) | (open ? skoverview::TRI_OPEN : 0);
+        U64 emitted = 0;
         for (size_t t = 0; t + 2 < source->size(); t += 3)
         {
             const LLVector3& a = (*source)[t];
@@ -1302,16 +1342,14 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildBatches(const Jo
             const skoverview::CensusClass cls = fixed_class < skoverview::NUM_CENSUS_CLASSES
                                                     ? (skoverview::CensusClass)fixed_class
                                                     : skoverview::classifyTriangle(n.mV[VZ] / len, part_height);
-            Bounds& bounds = bins.mBounds[group];
+            std::vector<LLVector3>& out = geom.mClass[cls];
             for (const LLVector3* v : { &a, &b, &c })
             {
-                update_min_max(bounds.mMin, bounds.mMax, *v);
+                update_min_max(geom.mMin, geom.mMax, *v);
+                out.push_back(*v);
             }
-            std::vector<LLVector3>& out = bins.mClass[cls][group];
-            out.push_back(a);
-            out.push_back(b);
-            out.push_back(c);
-            bins.mInvisible[cls][group].push_back(tri_flags);
+            geom.mFlags[cls].push_back(tri_flags);
+            ++emitted;
         }
         // What is hatched again in the invisible range, the capture's overlay pass: the barrier's every triangle, or
         // the extra part's pieces that stick out.
@@ -1325,168 +1363,211 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildBatches(const Jo
             {
                 continue;
             }
-            Bounds& bounds = bins.mBounds[group];
-            std::vector<LLVector3>& over = bins.mClass[skoverview::INVISIBLE][group];
+            std::vector<LLVector3>& over = geom.mClass[skoverview::INVISIBLE];
             for (const LLVector3* v : { &a, &b, &c })
             {
-                update_min_max(bounds.mMin, bounds.mMax, *v);
+                update_min_max(geom.mMin, geom.mMax, *v);
                 over.push_back(*v);
             }
-            bins.mInvisible[skoverview::INVISIBLE][group].push_back(tri_flags | skoverview::TRI_PASS_THROUGH);
+            geom.mFlags[skoverview::INVISIBLE].push_back(tri_flags | skoverview::TRI_PASS_THROUGH);
+            ++geom.mHatchTris;
+        }
+        U64& from = !is_sculpt ? geom.mRecordTris : sculpts[i - kept.size()].mSurround ? geom.mSurroundTris : geom.mSculptTris;
+        from += emitted;
+    };
+
+    // Each linkset's parts in each region, in an order that does not follow the records', which churns.
+    std::map<std::pair<U32, std::pair<S64, S64>>, std::vector<size_t>> linksets;
+    for (size_t i = 0; i < kept.size() + sculpts.size(); ++i)
+    {
+        linksets[{ job.mGroupOf[i], regionKey(originOf(i)) }].push_back(i);
+    }
+    auto cache = std::make_shared<Cache>();
+    std::vector<std::pair<U32, std::shared_ptr<const LinksetGeom>>> geoms; // by group
+    geoms.reserve(linksets.size());
+    U32 emitted_linksets = 0;
+    {
+        LL_PROFILE_ZONE_NAMED("sk census cache");
+        for (auto& [where, parts] : linksets)
+        {
+            std::sort(parts.begin(), parts.end(),
+                      [&](size_t a, size_t b)
+                      {
+                          const bool sa = a >= kept.size(), sb = b >= kept.size();
+                          if (sa != sb || partOf(a) != partOf(b))
+                          {
+                              return sa != sb ? sb : partOf(a) < partOf(b);
+                          }
+                          if (sa)
+                          {
+                              return a < b;
+                          }
+                          const sknav::Record& ra = *kept[a];
+                          const sknav::Record& rb = *kept[b];
+                          return ra.mRole < rb.mRole || (ra.mRole == rb.mRole && ra.mSignature < rb.mSignature);
+                      });
+            // Everything the emitted triangles depend on, part by part: equal keys emit equal triangles.
+            U64 key = skoverview::scramble(where.second.first ^ ((U64)where.second.second << 32));
+            for (const size_t i : parts)
+            {
+                key = skoverview::scramble(key ^ partOf(i).getCRC32() ^ ((U64)(i >= kept.size()) << 40));
+                key = skoverview::scramble(key ^ bitsOf(originOf(i).mdV[VX]) ^ skoverview::scramble(bitsOf(originOf(i).mdV[VY])));
+                if (i >= kept.size())
+                {
+                    const RenderedPart& sc = sculpts[i - kept.size()];
+                    key = skoverview::scramble(key ^ sc.mKey ^ ((U64)sc.mFixed << 48) ^ ((U64)sc.mSurround << 56));
+                }
+                else
+                {
+                    const sknav::Record& rec = *kept[i];
+                    key = skoverview::scramble(key ^ rec.mSignature ^ ((U64)job.mFixed[i] << 48) ^ ((U64)rec.mRole << 56));
+                    if (job.mVoidOnly[i])
+                    {
+                        key = skoverview::scramble(key ^ regions_key ^ 0x766f6964ull);
+                    }
+                }
+                const CoverInput* cover = i < job.mCover.size() ? &job.mCover[i] : nullptr;
+                if (cover && cover->mTest)
+                {
+                    // The verdict as emitted: its key and whether a pending neighbour holds the hatch back.
+                    const std::vector<LLVector3>* source = &tris;
+                    if (i >= kept.size())
+                    {
+                        source = sculpts[i - kept.size()].mTris.get();
+                    }
+                    else
+                    {
+                        tris.clear();
+                        sknav::emitRecord(*kept[i], kept[i]->mOrigin, tris);
+                    }
+                    key = skoverview::scramble(key ^ verdictKey(i, *cover, *source) ^ (cover->mPending ? 0x9e11u : 0x0u));
+                }
+            }
+            const LLUUID root = where.first < job.mRoots.size() ? job.mRoots[where.first] : LLUUID::null;
+            const auto at = std::make_tuple(root, where.second.first, where.second.second);
+            std::shared_ptr<const LinksetGeom> geom;
+            if (job.mCache)
+            {
+                const auto it = job.mCache->mByLinkset.find(at);
+                if (it != job.mCache->mByLinkset.end() && it->second->mKey == key)
+                {
+                    // Kept whole, its verdicts with it; one its parts' verdicts no longer hold is emitted again.
+                    bool held = true;
+                    for (const auto& judged : it->second->mJudged)
+                    {
+                        const auto v = job.mVerdicts ? job.mVerdicts->mByPart.find(judged.first)
+                                                     : std::unordered_map<LLUUID, Verdict>::const_iterator();
+                        held = job.mVerdicts && v != job.mVerdicts->mByPart.end() && v->second.mKey == judged.second;
+                        if (!held)
+                        {
+                            break;
+                        }
+                        verdicts[judged.first] = v->second;
+                    }
+                    geom = held ? it->second : nullptr;
+                }
+            }
+            if (!geom)
+            {
+                auto fresh = std::make_shared<LinksetGeom>();
+                fresh->mKey = key;
+                fresh->mRoot = root;
+                fresh->mOrigin = originOf(parts.front());
+                for (const size_t i : parts)
+                {
+                    emitPart(i, *fresh);
+                }
+                geom = std::move(fresh);
+                ++emitted_linksets;
+            }
+            cache->mByLinkset[at] = geom;
+            geoms.emplace_back(where.first, geom);
         }
     }
     stats.mBuildSeconds = std::chrono::duration<F64>(std::chrono::steady_clock::now() - cover_began).count();
 
+    // The build's counts, from its linksets whether kept or emitted.
+    Built::Sources sources;
+    std::unordered_map<LLUUID, U64> root_tris;
+    for (const auto& [group, geom] : geoms)
+    {
+        sources.mRecords += geom->mRecordTris;
+        sources.mSculpts += geom->mSculptTris;
+        sources.mSurrounds += geom->mSurroundTris;
+        sources.mHatch += geom->mHatchTris;
+        const U64 n = geom->mRecordTris + geom->mSculptTris + geom->mSurroundTris + geom->mHatchTris;
+        if (n)
+        {
+            root_tris[geom->mRoot] += n;
+        }
+        const LinksetGeom::Cover& c = geom->mCover;
+        stats.mParts += c.mParts;
+        stats.mProxies += c.mProxies;
+        stats.mExtra += c.mExtra;
+        stats.mBarriers += c.mBarriers;
+        stats.mUnknown += c.mUnknown;
+        stats.mTooFine += c.mTooFine;
+        stats.mDropped += c.mDropped;
+        stats.mHatchedM2 += c.mHatchedM2;
+    }
+    sources.mLargest.assign(root_tris.begin(), root_tris.end());
+    const size_t largest = llmin(sources.mLargest.size(), (size_t)10);
+    std::partial_sort(sources.mLargest.begin(), sources.mLargest.begin() + largest, sources.mLargest.end(),
+                      [](const auto& a, const auto& b) { return a.second > b.second; });
+    sources.mLargest.resize(largest);
+
     auto built = std::make_shared<Built>();
     built->mVerdicts = std::make_shared<const Verdicts>(Verdicts{ std::move(verdicts) });
+    built->mCache = std::move(cache);
+    built->mLinksetsEmitted = emitted_linksets;
     built->mSignature = job.mSignature;
     built->mGeneration = job.mGeneration;
     built->mCover = stats;
-    for (auto& entry : regions)
+    built->mSources = std::move(sources);
+    built->mRoots = job.mRoots;
+    // Each linkset in each region it has triangles in, with its cluster's heights and the box its land is read over.
+    built->mLinksets.reserve(geoms.size());
+    for (const auto& [group, geom] : geoms)
     {
-        Bins& bins = entry.second;
-        size_t total = 0;
-        for (const auto& groups : bins.mClass)
-        {
-            for (const auto& g : groups)
-            {
-                total += g.second.size();
-            }
-        }
-        if (!total)
+        const U64 vertices = geom->vertices();
+        if (!vertices)
         {
             continue;
         }
-        Built::Region region;
-        region.mOrigin = bins.mOrigin;
-        std::map<U32, size_t> group_index;
-        for (const auto& b : bins.mBounds)
+        bool fits = true;
+        for (const auto& positions : geom->mClass)
         {
-            group_index[b.first] = region.mGroups.size();
-            Group group;
-            group.mMinZ = b.second.mMin.mV[VZ];
-            group.mMaxZ = b.second.mMax.mV[VZ];
-            std::pair<LLVector3d, LLVector3d> footprint(bins.mOrigin + LLVector3d(b.second.mMin), bins.mOrigin + LLVector3d(b.second.mMax));
-            const auto cluster = job.mGroupCluster.find(b.first);
-            if (cluster != job.mGroupCluster.end())
-            {
-                const sknav::Cluster& c = *job.mSnapshot->mClusters.mClusters[cluster->second];
-                group.mMinZ = (F32)c.mMin.mdV[VZ];
-                group.mMaxZ = (F32)c.mMax.mdV[VZ];
-                footprint = { c.mMin, c.mMax };
-            }
-            group.mId = b.first;
-            group.mRoot = b.first < job.mRoots.size() ? job.mRoots[b.first] : LLUUID::null;
-            group.mMin = bins.mOrigin + LLVector3d(b.second.mMin);
-            group.mMax = bins.mOrigin + LLVector3d(b.second.mMax);
-            if (b.first < job.mAnchors.size())
-            {
-                group.mAnchor = job.mAnchors[b.first].first;
-                group.mNeverCut = job.mAnchors[b.first].second;
-            }
-            region.mGroups.push_back(group);
-            region.mFootprints.push_back(footprint);
+            fits = fits && positions.size() <= skoverview::MAX_PAGE_VERTICES;
         }
-        // A buffer holds at most MAX_BATCH_VERTICES, so a larger region is laid out over several batches with the
-        // same origin, each a class-ordered run of whole groups where they fit and pieces of a group where one does not.
-        const size_t limit = skoverview::MAX_BATCH_VERTICES - skoverview::MAX_BATCH_VERTICES % 3;
-        const Built::Region blank = region;
-        Built::Region piece = blank;
-        std::vector<bool> present(piece.mGroups.size(), false);
-        size_t pieces = 0;
-        U32 cls = 0;
-        auto openClasses = [&](U32 upto)
+        if (!fits)
         {
-            for (; cls <= upto; ++cls)
-            {
-                piece.mStart[cls] = (U32)piece.mPositions.size();
-            }
-        };
-        auto finish = [&]()
-        {
-            openClasses(skoverview::NUM_CENSUS_CLASSES);
-            if (piece.mPositions.empty())
-            {
-                return;
-            }
-            Built::Region done = blank;
-            done.mPositions = std::move(piece.mPositions);
-            U64 hash = 1469598103934665603ull;
-            for (const LLVector3& p : done.mPositions)
-            {
-                for (S32 k = 0; k < 3; ++k)
-                {
-                    U32 bits;
-                    std::memcpy(&bits, &p.mV[k], sizeof(bits));
-                    hash = (hash ^ bits) * 1099511628211ull;
-                }
-            }
-            done.mHash = hash;
-            done.mInvisible = std::move(piece.mInvisible);
-            std::copy(std::begin(piece.mStart), std::end(piece.mStart), std::begin(done.mStart));
-            done.mGroups.clear();
-            done.mFootprints.clear();
-            for (size_t i = 0; i < present.size(); ++i)
-            {
-                if (!present[i])
-                {
-                    continue;
-                }
-                Group group = piece.mGroups[i];
-                if (total > limit)
-                {
-                    // Its bounds in this batch alone.
-                    LLVector3 lo(1e30f, 1e30f, 1e30f), hi(-1e30f, -1e30f, -1e30f);
-                    for (U32 c = 0; c < skoverview::NUM_CENSUS_CLASSES; ++c)
-                    {
-                        for (U32 v = group.mStart[c]; v < group.mStart[c] + group.mCount[c]; ++v)
-                        {
-                            update_min_max(lo, hi, done.mPositions[v]);
-                        }
-                    }
-                    group.mMin = bins.mOrigin + LLVector3d(lo);
-                    group.mMax = bins.mOrigin + LLVector3d(hi);
-                }
-                done.mGroups.push_back(group);
-                done.mFootprints.push_back(blank.mFootprints[i]);
-            }
-            built->mRegions.push_back(std::move(done));
-            ++pieces;
-            piece = blank;
-            present.assign(present.size(), false);
-            cls = 0;
-        };
-        piece.mPositions.reserve(llmin(total, limit));
-        for (U32 c = 0; c < skoverview::NUM_CENSUS_CLASSES; ++c)
-        {
-            for (const auto& g : bins.mClass[c])
-            {
-                const size_t index = group_index[g.first];
-                const std::vector<U8>& flags = bins.mInvisible[c][g.first];
-                size_t from = 0;
-                while (from < g.second.size())
-                {
-                    if (piece.mPositions.size() + (g.second.size() - from) > limit && !piece.mPositions.empty())
-                    {
-                        finish();
-                    }
-                    const size_t take = llmin(g.second.size() - from, limit - piece.mPositions.size());
-                    openClasses(c);
-                    Group& group = piece.mGroups[index];
-                    group.mStart[c] = (U32)piece.mPositions.size();
-                    group.mCount[c] = (U32)take;
-                    present[index] = true;
-                    piece.mPositions.insert(piece.mPositions.end(), g.second.begin() + from, g.second.begin() + from + take);
-                    piece.mInvisible.insert(piece.mInvisible.end(), flags.begin() + from / 3, flags.begin() + (from + take) / 3);
-                    from += take;
-                }
-            }
+            built->mOverflow.emplace_back(geom->mRoot, vertices);
+            continue;
         }
-        finish();
-        if (pieces > 1)
+        Built::Linkset linkset;
+        Group& g = linkset.mGroup;
+        g.mMinZ = geom->mMin.mV[VZ];
+        g.mMaxZ = geom->mMax.mV[VZ];
+        g.mMin = geom->mOrigin + LLVector3d(geom->mMin);
+        g.mMax = geom->mOrigin + LLVector3d(geom->mMax);
+        linkset.mFootprint = { g.mMin, g.mMax };
+        const auto cluster = job.mGroupCluster.find(group);
+        if (cluster != job.mGroupCluster.end())
         {
-            built->mSplit.emplace_back(total, pieces);
+            const sknav::Cluster& c = *job.mSnapshot->mClusters.mClusters[cluster->second];
+            g.mMinZ = (F32)c.mMin.mdV[VZ];
+            g.mMaxZ = (F32)c.mMax.mdV[VZ];
+            linkset.mFootprint = { c.mMin, c.mMax };
         }
+        g.mId = group < job.mIds.size() ? job.mIds[group] : 0;
+        g.mRoot = geom->mRoot;
+        if (group < job.mAnchors.size())
+        {
+            g.mAnchor = job.mAnchors[group].first;
+            g.mNeverCut = job.mAnchors[group].second;
+        }
+        g.mGeom = geom;
+        built->mLinksets.push_back(std::move(linkset));
     }
     return built;
 }
@@ -1496,145 +1577,413 @@ namespace
     static_assert(SKOverviewCutTable::WHOLE == skoverview::NO_CUT && SKOverviewCutTable::HIDDEN == skoverview::HIDDEN,
                   "the cut table and the census share their sentinels");
 
-    /// Writes each vertex's linkset id (Group::mId) into the weight channel, which the cut table is read through.
-    /// Every vertex of a batch belongs to one of its groups, so none is left unwritten.
-    void writeGroupIds(LLStrider<F32> ids, U32 total, const std::vector<SKOverviewCensus::Group>& groups)
+    /// Writes one linkset's run of one class into a page: positions, its id in the weight channel, which the cut table
+    /// is read through, an open part's flag in texcoord0.x and a passed-through one's in texcoord0.y.
+    bool uploadRun(LLVertexBuffer& buffer, U32 first, const std::vector<LLVector3>& positions, const std::vector<U8>& flags,
+                   U32 id)
     {
-        for (const SKOverviewCensus::Group& group : groups)
+        const U32 count = (U32)positions.size();
+        LLStrider<LLVector3> verts;
+        if (!buffer.getVertexStrider(verts, first, (S32)count) || !verts.get())
         {
-            for (U32 c = 0; c < skoverview::NUM_CENSUS_CLASSES; ++c)
+            return false;
+        }
+        for (const LLVector3& p : positions)
+        {
+            *verts++ = p;
+        }
+        LLStrider<F32> ids;
+        if (buffer.getWeightStrider(ids, first, (S32)count) && ids.get())
+        {
+            for (U32 v = 0; v < count; ++v)
             {
-                const U32 end = llmin(group.mStart[c] + group.mCount[c], total);
-                for (U32 v = llmin(group.mStart[c], end); v < end; ++v)
-                {
-                    ids[v] = (F32)group.mId;
-                }
+                ids[v] = (F32)id;
+            }
+        }
+        LLStrider<LLVector2> open;
+        if (buffer.getTexCoord0Strider(open, first, (S32)count) && open.get())
+        {
+            for (U32 v = 0; v < count; ++v)
+            {
+                const U8 flag = v / 3 < flags.size() ? flags[v / 3] : 0;
+                const bool is_open = flag & skoverview::TRI_OPEN;
+                const bool pass_through = flag & skoverview::TRI_PASS_THROUGH;
+                *open++ = LLVector2(is_open ? 1.f : 0.f, pass_through ? 1.f : 0.f);
+            }
+        }
+        return true;
+    }
+
+    std::pair<S64, S64> regionKeyOf(const LLVector3d& origin)
+    {
+        return { (S64)std::llround(origin.mdV[VX]), (S64)std::llround(origin.mdV[VY]) };
+    }
+}
+
+SKOverviewCensus::Group::Group()
+{
+    std::fill(std::begin(mPage), std::end(mPage), NO_PAGE);
+}
+
+U32 SKOverviewCensus::pageFor(Region& region, U8 cls, U32 count, U32 want, U32& first)
+{
+    for (U32 p = 0; p < (U32)region.mPages.size(); ++p)
+    {
+        Page& page = region.mPages[p];
+        if (page.mClass == cls && page.mBuffer && (first = page.mRuns.allocate(count)) != skoverview::SlotAllocator::NONE)
+        {
+            return p;
+        }
+    }
+    // None has room: a new page for what this build still has to place, up to the setting's size, or of the run's own
+    // size when it is larger; a page of the full size for every region's every class would mostly hold nothing.
+    static LLCachedControl<U32> page_vertices(gSavedSettings, "SKOverviewPageVertices", 3u * 1024u * 1024u);
+    const U32 most = llclamp((U32)page_vertices, MIN_PAGE_VERTICES, skoverview::MAX_PAGE_VERTICES);
+    const U64 wanted = (U64)want + want / 4;
+    U32 capacity = (U32)llclamp(wanted, (U64)MIN_PAGE_VERTICES, (U64)most);
+    capacity = llmax(capacity - capacity % 3, count);
+    Page page;
+    page.mClass = cls;
+    page.mBuffer = new LLVertexBuffer(LLVertexBuffer::MAP_VERTEX | LLVertexBuffer::MAP_WEIGHT | LLVertexBuffer::MAP_TEXCOORD0);
+    if (!page.mBuffer->allocateBuffer(capacity, 0))
+    {
+        LL_WARNS("SKOverview") << "census page of " << capacity << " vertices could not be allocated" << LL_ENDL;
+        first = skoverview::SlotAllocator::NONE;
+        return Group::NO_PAGE;
+    }
+    page.mRuns = skoverview::SlotAllocator(capacity);
+    first = page.mRuns.allocate(count);
+    region.mPages.push_back(std::move(page));
+    ++mPagesMade;
+    return (U32)region.mPages.size() - 1;
+}
+
+void SKOverviewCensus::refreshSlots(Region& region)
+{
+    std::vector<std::vector<skoverview::SlotCull>> before(region.mPages.size());
+    for (size_t p = 0; p < region.mPages.size(); ++p)
+    {
+        before[p].swap(region.mPages[p].mSlots);
+    }
+    for (const Group& group : region.mGroups)
+    {
+        skoverview::SlotCull slot;
+        slot.mGroup = group.mId;
+        slot.mGround = group.mGround ? 1 : 0;
+        const LLVector3 lo(group.mMin - region.mOrigin);
+        const LLVector3 hi(group.mMax - region.mOrigin);
+        for (S32 a = 0; a < 3; ++a)
+        {
+            slot.mLo[a] = lo.mV[a];
+            slot.mHi[a] = hi.mV[a];
+        }
+        slot.mLo[3] = group.mMinZ;
+        slot.mHi[3] = group.mMaxZ;
+        for (U32 c = 0; c < skoverview::NUM_CENSUS_CLASSES; ++c)
+        {
+            if (group.mPage[c] < region.mPages.size() && group.mCount[c])
+            {
+                slot.mFirst = group.mStart[c];
+                slot.mCount = group.mCount[c];
+                region.mPages[group.mPage[c]].mSlots.push_back(slot);
             }
         }
     }
-
-    /// Whether two builds of a region give its vertices the same linkset ids.
-    bool sameGroupIds(const std::vector<SKOverviewCensus::Group>& a, const std::vector<SKOverviewCensus::Group>& b)
+    for (size_t p = 0; p < region.mPages.size(); ++p)
     {
-        return std::equal(a.begin(), a.end(), b.begin(), b.end(),
-                          [](const SKOverviewCensus::Group& x, const SKOverviewCensus::Group& y)
-                          {
-                              return x.mId == y.mId && std::equal(std::begin(x.mStart), std::end(x.mStart), std::begin(y.mStart)) &&
-                                     std::equal(std::begin(x.mCount), std::end(x.mCount), std::begin(y.mCount));
-                          });
+        Page& page = region.mPages[p];
+        std::sort(page.mSlots.begin(), page.mSlots.end(),
+                  [](const skoverview::SlotCull& a, const skoverview::SlotCull& b) { return a.mFirst < b.mFirst; });
+        // The GPU's copy is written again only when the slots moved.
+        page.mTableDirty |= page.mSlots.size() != before[p].size() ||
+                            (!page.mSlots.empty() &&
+                             std::memcmp(page.mSlots.data(), before[p].data(), page.mSlots.size() * sizeof(skoverview::SlotCull)) != 0);
     }
 }
 
 void SKOverviewCensus::swapIn(Built& built)
 {
     LL_PROFILE_ZONE_SCOPED;
-    for (const auto& split : built.mSplit)
+    mPagesMade = 0;
+    mPagesFreed = 0;
+    // A root no build holds any longer gives its id back; the next new root takes the lowest free one.
     {
-        LL_INFOS("SKOverview") << "census region of " << split.first << " vertices split into " << split.second
-                               << " batches of at most " << skoverview::MAX_BATCH_VERTICES << LL_ENDL;
-    }
-    // Every region of a build lands in the same frame, as one census.
-    std::vector<Batch> batches;
-    U32 triangles = 0;
-    for (Built::Region& region : built.mRegions)
-    {
-        const U32 total = (U32)region.mPositions.size();
-        Batch batch;
-        batch.mOrigin = region.mOrigin;
-        batch.mHash = region.mHash;
-        // A region whose triangles are the same keeps its buffer: a rebuild moves a few linksets, and uploading every
-        // region's tens of megabytes again stalled the frame for tens of milliseconds.
-        const auto same = std::find_if(mBatches.begin(), mBatches.end(),
-                                       [&](const Batch& old)
-                                       {
-                                           return old.mBuffer && old.mOrigin == region.mOrigin && old.mHash == region.mHash &&
-                                                  old.mPositions.size() == region.mPositions.size() &&
-                                                  old.mInvisible == region.mInvisible;
-                                       });
-        if (same != mBatches.end())
+        std::unordered_set<LLUUID> live(built.mRoots.begin(), built.mRoots.end());
+        for (auto it = mLinksetIds.begin(); it != mLinksetIds.end();)
         {
-            LL_PROFILE_ZONE_NAMED("sk census keep buffer");
-            batch.mBuffer = std::move(same->mBuffer);
-            // A linkset added elsewhere shifts every later id while this region's bytes stay the same.
-            LLStrider<F32> ids;
-            if (!sameGroupIds(same->mGroups, region.mGroups) && batch.mBuffer->getWeightStrider(ids, 0, (S32)total) && ids.get())
+            if (live.count(it->first))
             {
-                writeGroupIds(ids, total, region.mGroups);
-                batch.mBuffer->unmapBuffer();
+                ++it;
+                continue;
             }
+            mIds.release(it->second);
+            it = mLinksetIds.erase(it);
         }
-        else
+    }
+    // Warned once per set of overflowing linksets, not on every rebuild that still holds them.
+    if (!built.mOverflow.empty() && built.mOverflow != mOverflowLogged)
+    {
+        std::string largest;
+        for (const auto& l : built.mSources.mLargest)
         {
-            LL_PROFILE_ZONE_NAMED("sk census upload buffer");
-            // weight: the linkset id; texcoord0.x: an open part's
-            batch.mBuffer = new LLVertexBuffer(LLVertexBuffer::MAP_VERTEX | LLVertexBuffer::MAP_WEIGHT | LLVertexBuffer::MAP_TEXCOORD0);
-            if (!batch.mBuffer->allocateBuffer(total, 0))
+            largest += llformat("%s%s %llu", largest.empty() ? "" : ", ", l.first.asString().c_str(), (unsigned long long)l.second);
+        }
+        for (const auto& over : built.mOverflow)
+        {
+            LL_WARNS("SKOverview") << "census linkset " << over.first << " " << over.second << " vertices exceeds MAX_PAGE_VERTICES ("
+                                   << skoverview::MAX_PAGE_VERTICES << "); ten largest: " << largest << LL_ENDL;
+        }
+    }
+    mOverflowLogged = built.mOverflow;
+
+    // Every region of a build lands in the same frame, as one census; a linkset whose triangles did not move keeps its
+    // runs, and only the others are written.
+    std::map<std::pair<S64, S64>, Region> landed;
+    for (Region& region : mRegions)
+    {
+        landed.emplace(regionKeyOf(region.mOrigin), std::move(region));
+    }
+    mRegions.clear();
+    std::map<std::pair<S64, S64>, std::vector<Built::Linkset*>> incoming;
+    for (Built::Linkset& linkset : built.mLinksets)
+    {
+        incoming[regionKeyOf(linkset.mGroup.mGeom->mOrigin)].push_back(&linkset);
+    }
+    U32 changed = 0;
+    U64 uploaded = 0;
+    U64 total = 0;
+    U32 triangles = 0;
+    std::vector<Region> regions;
+    regions.reserve(incoming.size());
+    for (auto& [key, linksets] : incoming)
+    {
+        Region region;
+        const auto was = landed.find(key);
+        if (was != landed.end())
+        {
+            region = std::move(was->second);
+            landed.erase(was);
+        }
+        region.mOrigin = linksets.front()->mGroup.mGeom->mOrigin;
+        std::vector<Group> before = std::move(region.mGroups);
+        region.mGroups.clear();
+        std::unordered_map<LLUUID, size_t> before_of;
+        for (size_t g = 0; g < before.size(); ++g)
+        {
+            before_of[before[g].mRoot] = g;
+        }
+        std::vector<bool> kept(before.size(), false);
+        std::vector<bool> fresh;
+        region.mGroups.reserve(linksets.size());
+        for (Built::Linkset* linkset : linksets)
+        {
+            Group group = std::move(linkset->mGroup);
+            const auto it = before_of.find(group.mRoot);
+            bool same = it != before_of.end() && before[it->second].mGeom == group.mGeom && before[it->second].mId == group.mId;
+            for (U32 c = 0; same && c < skoverview::NUM_CENSUS_CLASSES; ++c)
             {
-                LL_WARNS("SKOverview") << "census buffer of " << total << " vertices could not be allocated" << LL_ENDL;
-                continue;
+                // A run a full page refused last time is placed again.
+                same = group.mGeom->mClass[c].empty() || before[it->second].mPage[c] != Group::NO_PAGE;
             }
-            LLStrider<LLVector3> verts;
-            if (!batch.mBuffer->getVertexStrider(verts) || !verts.get() || batch.mBuffer->getNumVerts() < total)
+            if (same)
             {
-                LL_WARNS("SKOverview") << "census batch of " << total << " vertices could not be mapped (buffer holds "
-                                       << batch.mBuffer->getNumVerts() << ")" << LL_ENDL;
-                continue;
+                const Group& old = before[it->second];
+                std::copy(std::begin(old.mPage), std::end(old.mPage), std::begin(group.mPage));
+                std::copy(std::begin(old.mStart), std::end(old.mStart), std::begin(group.mStart));
+                std::copy(std::begin(old.mCount), std::end(old.mCount), std::begin(group.mCount));
+                kept[it->second] = true;
             }
-            for (const LLVector3& p : region.mPositions)
+            // On the ground when its cluster's base is no higher above the highest land under its footprint than a step or two.
+            group.mGround = group.mMinZ <= SKWorldCensus::landUnder(linkset->mFootprint.first, linkset->mFootprint.second) +
+                                               skoverview::GROUND_BASE_M;
+            region.mGroups.push_back(std::move(group));
+            fresh.push_back(!same);
+        }
+        // The runs of linksets gone or changed are free before the changed ones take theirs.
+        for (size_t g = 0; g < before.size(); ++g)
+        {
+            for (U32 c = 0; !kept[g] && c < skoverview::NUM_CENSUS_CLASSES; ++c)
             {
-                *verts++ = p;
-            }
-            LLStrider<F32> ids;
-            if (batch.mBuffer->getWeightStrider(ids) && ids.get())
-            {
-                writeGroupIds(ids, total, region.mGroups);
-            }
-            LLStrider<LLVector2> open;
-            if (batch.mBuffer->getTexCoord0Strider(open) && open.get())
-            {
-                for (U32 v = 0; v < total; ++v)
+                if (before[g].mPage[c] < region.mPages.size())
                 {
-                    const bool is_open = v / 3 < region.mInvisible.size() && (region.mInvisible[v / 3] & skoverview::TRI_OPEN);
-                    *open++ = LLVector2(is_open ? 1.f : 0.f, 0.f);
+                    region.mPages[before[g].mPage[c]].mRuns.release(before[g].mStart[c], before[g].mCount[c]);
                 }
             }
-            batch.mBuffer->unmapBuffer();
         }
-        // On the ground when its cluster's base is no higher above the highest land under its footprint than a step or two.
+        U32 want[skoverview::NUM_CENSUS_CLASSES] = {};
         for (size_t g = 0; g < region.mGroups.size(); ++g)
         {
-            Group& group = region.mGroups[g];
-            group.mGround = group.mMinZ <= SKWorldCensus::landUnder(region.mFootprints[g].first, region.mFootprints[g].second) +
-                                               skoverview::GROUND_BASE_M;
+            for (U32 c = 0; fresh[g] && c < skoverview::NUM_CENSUS_CLASSES; ++c)
+            {
+                want[c] += (U32)region.mGroups[g].mGeom->mClass[c].size();
+            }
         }
-        std::copy(std::begin(region.mStart), std::end(region.mStart), std::begin(batch.mStart));
-        batch.mGroups = std::move(region.mGroups);
-        batch.mPositions = std::move(region.mPositions);
-        batch.mInvisible = std::move(region.mInvisible);
-        triangles += total / 3;
-        batches.push_back(std::move(batch));
-    }
-    mBatches = std::move(batches);
-    mTriangles = triangles;
-    // One row per linkset id of the build, every region's, drawn whole until applyCut writes the cuts.
-    U32 rows = 0;
-    for (const Batch& batch : mBatches)
-    {
-        for (const Group& group : batch.mGroups)
         {
-            rows = llmax(rows, group.mId + 1);
+            LL_PROFILE_ZONE_NAMED("sk census slot upload");
+            std::set<U32> written;
+            for (size_t g = 0; g < region.mGroups.size(); ++g)
+            {
+                if (!fresh[g])
+                {
+                    continue;
+                }
+                ++changed;
+                Group& group = region.mGroups[g];
+                for (U32 c = 0; c < skoverview::NUM_CENSUS_CLASSES; ++c)
+                {
+                    const std::vector<LLVector3>& positions = group.mGeom->mClass[c];
+                    const U32 count = (U32)positions.size();
+                    group.mPage[c] = Group::NO_PAGE;
+                    group.mStart[c] = 0;
+                    group.mCount[c] = 0;
+                    if (!count)
+                    {
+                        continue;
+                    }
+                    U32 first = 0;
+                    const U32 p = pageFor(region, (U8)c, count, want[c], first);
+                    want[c] -= count;
+                    if (p == Group::NO_PAGE || first == skoverview::SlotAllocator::NONE)
+                    {
+                        continue;
+                    }
+                    if (!uploadRun(*region.mPages[p].mBuffer, first, positions, group.mGeom->mFlags[c], group.mId))
+                    {
+                        LL_WARNS("SKOverview") << "census page run of " << count << " vertices could not be mapped" << LL_ENDL;
+                        region.mPages[p].mRuns.release(first, count);
+                        continue;
+                    }
+                    group.mPage[c] = p;
+                    group.mStart[c] = first;
+                    group.mCount[c] = count;
+                    written.insert(p);
+                    uploaded += count;
+                }
+            }
+            for (const U32 p : written)
+            {
+                region.mPages[p].mBuffer->unmapBuffer();
+            }
         }
+        // Empty pages are freed, the rest kept in class order, as the classes are drawn.
+        std::vector<U32> order;
+        for (U32 p = 0; p < (U32)region.mPages.size(); ++p)
+        {
+            if (region.mPages[p].mRuns.empty())
+            {
+                ++mPagesFreed;
+            }
+            else
+            {
+                order.push_back(p);
+            }
+        }
+        std::stable_sort(order.begin(), order.end(),
+                         [&region](U32 a, U32 b) { return region.mPages[a].mClass < region.mPages[b].mClass; });
+        std::vector<U32> moved(region.mPages.size(), Group::NO_PAGE);
+        std::vector<Page> pages;
+        pages.reserve(order.size());
+        for (const U32 p : order)
+        {
+            moved[p] = (U32)pages.size();
+            pages.push_back(std::move(region.mPages[p]));
+        }
+        region.mPages = std::move(pages);
+        for (Group& group : region.mGroups)
+        {
+            for (U32 c = 0; c < skoverview::NUM_CENSUS_CLASSES; ++c)
+            {
+                group.mPage[c] = group.mPage[c] < moved.size() ? moved[group.mPage[c]] : Group::NO_PAGE;
+            }
+        }
+        refreshSlots(region);
+        for (const Page& page : region.mPages)
+        {
+            total += page.mRuns.used();
+            triangles += page.mRuns.used() / 3;
+        }
+        regions.push_back(std::move(region));
     }
-    mCutTable.resize(rows);
+    for (const auto& gone : landed)
+    {
+        mPagesFreed += (U32)gone.second.mPages.size();
+    }
+    landed.clear();
+    mRegions = std::move(regions);
+    mTriangles = triangles;
+    // One row per linkset id in use, every region's, drawn whole until applyCut writes the cuts; a free id's row is
+    // a hole no vertex reads.
+    mCutTable.resize(mIds.bound());
     mSignature = built.mSignature;
     mBuilt = true;
-    // applyCut's extents point into the batches just replaced.
+    // applyCut's extents point into the groups just replaced.
     mExtentsBuilt = false;
     mOccupantCuts.clear();
     mCuts.clear();
     mCutSignature = 0;
     ++mCutStamp;
-    LL_DEBUGS("SKOverview") << "census upload: " << mBatches.size() << " regions, " << mTriangles << " triangles" << LL_ENDL;
+    {
+        // Where the triangles come from: logged when the totals move, so a region's millions can be told apart.
+        const Built::Sources& s = built.mSources;
+        const std::string totals = llformat("%u regions, %u triangles (records %llu, sculpts %llu, surrounds %llu, hatch copies %llu)",
+                                            (U32)mRegions.size(), mTriangles, (unsigned long long)s.mRecords,
+                                            (unsigned long long)s.mSculpts, (unsigned long long)s.mSurrounds,
+                                            (unsigned long long)s.mHatch);
+        std::string largest;
+        for (const auto& l : s.mLargest)
+        {
+            largest += llformat("%s%s %llu", largest.empty() ? "" : ", ", l.first.asString().c_str(), (unsigned long long)l.second);
+        }
+        if (totals != mUploadLogged)
+        {
+            mUploadLogged = totals;
+            LL_INFOS("SKOverview") << "census upload: " << totals << "; ten largest linksets: " << largest << LL_ENDL;
+        }
+        else
+        {
+            LL_DEBUGS("SKOverview") << "census upload: " << totals << "; ten largest linksets: " << largest << LL_ENDL;
+        }
+        LL_INFOS("SKOverview") << "census upload: " << changed << " linksets (" << built.mLinksetsEmitted << " emitted), "
+                               << uploaded << " vertices sub-uploaded of " << total << LL_ENDL;
+    }
+    {
+        // Each page's fill: told when a page was made or freed, kept to the debug log otherwise.
+        const bool news = mPagesMade || mPagesFreed;
+        size_t pages = 0, slots = 0;
+        for (const Region& region : mRegions)
+        {
+            for (size_t p = 0; p < region.mPages.size(); ++p)
+            {
+                const Page& page = region.mPages[p];
+                const std::string line = llformat("census pages: %.0f,%.0f %u page %u: %u/%u vertices, %u linksets, %u free",
+                                                  region.mOrigin.mdV[VX], region.mOrigin.mdV[VY], (U32)page.mClass, (U32)p,
+                                                  page.mRuns.used(), page.mRuns.capacity(), (U32)page.mSlots.size(),
+                                                  (U32)page.mRuns.freeRuns().size());
+                if (news)
+                {
+                    LL_INFOS("SKOverview") << line << LL_ENDL;
+                }
+                else
+                {
+                    LL_DEBUGS("SKOverview") << line << LL_ENDL;
+                }
+                ++pages;
+                slots += page.mSlots.size();
+            }
+        }
+        const std::string summary = llformat("census pages: %u regions, %u pages (%u made, %u freed), %u slots; ids %u in use "
+                                             "below %u, %u free",
+                                             (U32)mRegions.size(), (U32)pages, mPagesMade, mPagesFreed, (U32)slots,
+                                             (U32)mLinksetIds.size(), mIds.bound(), (U32)mIds.freeCount());
+        if (news)
+        {
+            LL_INFOS("SKOverview") << summary << LL_ENDL;
+        }
+        else
+        {
+            LL_DEBUGS("SKOverview") << summary << LL_ENDL;
+        }
+    }
     const Built::CoverStats& c = built.mCover;
     if (c.mParts)
     {
@@ -1661,9 +2010,9 @@ void SKOverviewCensus::swapIn(Built& built)
 F32 SKOverviewCensus::levelTop(const Level& level, F32 floor) const
 {
     F32 top = floor;
-    for (const Batch& batch : mBatches)
+    for (const Region& region : mRegions)
     {
-        for (const Group& group : batch.mGroups)
+        for (const Group& group : region.mGroups)
         {
             if (level.keeps(group))
             {
@@ -1758,46 +2107,18 @@ void SKOverviewCensus::gatherSurrounds(const SKCensusSnapshot& snap)
         }
         part.mHeight = hi - lo;
         part.mTris = std::move(tris);
+        part.mSurround = true;
         const LLVector3d centre = volume->getPositionGlobal();
         U64 h = 1469598103934665603ull;
         h = (h ^ part.mPart.getCRC32()) * 1099511628211ull;
         h = (h ^ (U64)part.mTris->size()) * 1099511628211ull;
         h = (h ^ ((U64)(S64)std::llround(centre.mdV[VX] * 64.0) ^ ((U64)(S64)std::llround(centre.mdV[VY] * 64.0) << 21) ^
                   ((U64)(S64)std::llround(centre.mdV[VZ] * 64.0) << 42))) * 1099511628211ull;
-        sig += skoverview::scramble(h);
+        part.mKey = skoverview::scramble(h);
+        sig += part.mKey;
         mSurrounds.push_back(std::move(part));
     }
     mSurroundsSig = sig;
-}
-
-namespace
-{
-    // The distance in plan from p to the triangle (a, b, c): 0 inside it; a wall's edge-on triangle is its segment.
-    F32 planDistance(const LLVector2& p, const LLVector3& a3, const LLVector3& b3, const LLVector3& c3)
-    {
-        const LLVector2 a(a3.mV[VX], a3.mV[VY]), b(b3.mV[VX], b3.mV[VY]), c(c3.mV[VX], c3.mV[VY]);
-        auto cross = [](const LLVector2& o, const LLVector2& u, const LLVector2& v)
-        {
-            return (u.mV[VX] - o.mV[VX]) * (v.mV[VY] - o.mV[VY]) - (u.mV[VY] - o.mV[VY]) * (v.mV[VX] - o.mV[VX]);
-        };
-        const F32 area = cross(a, b, c);
-        if (std::fabs(area) > 1.0e-6f)
-        {
-            const F32 s0 = cross(a, b, p) / area, s1 = cross(b, c, p) / area, s2 = cross(c, a, p) / area;
-            if (s0 >= 0.f && s1 >= 0.f && s2 >= 0.f)
-            {
-                return 0.f;
-            }
-        }
-        auto segment = [&p](const LLVector2& u, const LLVector2& v)
-        {
-            const LLVector2 d = v - u;
-            const F32 len2 = d * d;
-            const F32 t = len2 > 0.f ? llclamp(((p - u) * d) / len2, 0.f, 1.f) : 0.f;
-            return (u + d * t - p).length();
-        };
-        return llmin(segment(a, b), llmin(segment(b, c), segment(c, a)));
-    }
 }
 
 std::string SKOverviewCensus::Reason::text() const
@@ -1807,7 +2128,8 @@ std::string SKOverviewCensus::Reason::text() const
     return mReleasing ? out + " (releasing)" : out;
 }
 
-void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<Occupant>& occupants, U64 key)
+void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<Occupant>& occupants, U64 key,
+                                SKOverviewProbes* probes)
 {
     LL_PROFILE_ZONE_SCOPED;
     if (key == mCutKey && mCutSignature == mSignature)
@@ -1819,12 +2141,12 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
     if (!mExtentsBuilt || mExtentsSignature != mSignature)
     {
         LL_PROFILE_ZONE_NAMED("sk cut extents");
-        // A linkset spans batches when it crosses a border: its bounds over all of them, and where its triangles are.
+        // A linkset spans regions when it crosses a border: its bounds over all of them, and where its triangles are.
         mExtents.clear();
         mOccupantCuts.clear();
-        for (const Batch& batch : mBatches)
+        for (const Region& region : mRegions)
         {
-            for (const Group& group : batch.mGroups)
+            for (const Group& group : region.mGroups)
             {
                 Extent& e = mExtents[group.mId];
                 for (S32 i = 0; i < 3; ++i)
@@ -1837,7 +2159,7 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
                 e.mRoot = group.mRoot;
                 e.mGround |= group.mGround;
                 e.mBottom = llmin(e.mBottom, (F64)group.mMinZ);
-                e.mParts.emplace_back(&batch, &group);
+                e.mParts.emplace_back(&region, &group);
             }
         }
         mRootExtent.clear();
@@ -1955,118 +2277,289 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
         }
     };
     std::vector<Occupant> people(occupants);
-    std::vector<const Occupant*> ordered;
+    // The agent first: their probes are issued first and their cut wins. The rest are probed longest-served first, so a
+    // crowd past the budget takes turns, and marked in census order, so a tie between two of them does not move.
+    std::vector<bool> self;
+    std::vector<U32> issued;
     for (const Occupant& occupant : people)
     {
-        if (occupant.mSelf)
-        {
-            ordered.insert(ordered.begin(), &occupant);
-        }
-        else
-        {
-            ordered.push_back(&occupant);
-        }
+        self.push_back(occupant.mSelf);
+        const auto cut = mOccupantCuts.find(occupant.mId);
+        issued.push_back(cut == mOccupantCuts.end() ? 0 : llmax(cut->second.mRoofProbe.mIssued, cut->second.mMarksProbe.mIssued));
     }
-    // Whether a linkset has a triangle above p's floor whose plan footprint holds p (within the slack): it stands
-    // over them, not merely its box.
-    auto overColumn = [&](const Extent& e, const LLVector3d& p) -> bool
+    std::vector<Occupant*> ordered;
+    for (const size_t i : skoverview::probeOrder(self, issued))
     {
+        ordered.push_back(&people[i]);
+    }
+    std::vector<const Occupant*> marking;
+    for (const size_t i : skoverview::probeOrder(self, {}))
+    {
+        marking.push_back(&people[i]);
+    }
+    // The GPU's probes (SKOverviewProbes): a person's answer is asked for when their key moves and read when it lands.
+    if (probes && !probes->active())
+    {
+        probes = nullptr;
+    }
+    static LLCachedControl<U32> probe_people(gSavedSettings, "SKOverviewProbeBudget", 8);
+    static LLCachedControl<U32> probe_queries(gSavedSettings, "SKOverviewProbeQueries", 256);
+    skoverview::ProbeBudget budget(llmax((U32)probe_people, 1u), llmax((U32)probe_queries, 1u));
+    bool probing = false; // an answer is in flight: worked again each frame until it lands
+    auto personOf = [&people](const Occupant& occupant) { return (U32)(&occupant - people.data()); };
+    // A linkset's runs in every region it spans, from a probe's origin; its overlay class is not drawn, as the cut never
+    // read it.
+    auto runsOf = [](const Extent& e, const LLVector3d& origin)
+    {
+        std::vector<SKOverviewProbes::Run> runs;
         for (const auto& part : e.mParts)
         {
-            const Batch& batch = *part.first;
-            const LLVector3 local(p - batch.mOrigin);
-            const LLVector2 at(local.mV[VX], local.mV[VY]);
+            const Region& in = *part.first;
+            const Group& group = *part.second;
+            const LLVector3 offset(in.mOrigin - origin);
             for (U32 c = 0; c < skoverview::NUM_CENSUS_CLASSES; ++c)
             {
-                if (c == skoverview::INVISIBLE)
+                if (c == skoverview::INVISIBLE || group.mPage[c] == Group::NO_PAGE || !group.mCount[c])
                 {
                     continue;
                 }
-                const U32 end = llmin(part.second->mStart[c] + part.second->mCount[c], (U32)batch.mPositions.size());
-                for (U32 v = part.second->mStart[c]; v + 2 < end; v += 3)
-                {
-                    if (v / 3 < batch.mInvisible.size() && (batch.mInvisible[v / 3] & skoverview::TRI_PASS_THROUGH))
-                    {
-                        continue;
-                    }
-                    const LLVector3& a = batch.mPositions[v];
-                    const LLVector3& b = batch.mPositions[v + 1];
-                    const LLVector3& d = batch.mPositions[v + 2];
-                    if (llmax(a.mV[VZ], llmax(b.mV[VZ], d.mV[VZ])) >= local.mV[VZ] + ABOVE_M &&
-                        planDistance(at, a, b, d) <= SLACK_M)
-                    {
-                        return true;
-                    }
-                }
+                runs.push_back({ in.mPages[group.mPage[c]].mBuffer.get(), group.mStart[c], group.mCount[c], offset });
             }
         }
-        return false;
+        return runs;
+    };
+    // Whether every query has landed, with their counts, and whether any was lost (refused or expired) and is asked again.
+    auto landed = [](const std::vector<ALQueryTicket>& tickets, std::vector<U64>& counts, bool& lost)
+    {
+        counts.assign(tickets.size(), 0);
+        bool ready = true;
+        lost = false;
+        for (size_t i = 0; i < tickets.size(); ++i)
+        {
+            const ALQueryPool::Status status = gGL.queries().result(tickets[i], counts[i]);
+            ready = ready && status == ALQueryPool::Status::Ready;
+            lost = lost || status == ALQueryPool::Status::Expired;
+        }
+        return ready;
+    };
+    // Room: an upward look over the room's footprint from just above its floor, the cells outside it drawn into the
+    // depth, and a query per linkset near it; a wall seen edge-on counts by its edges.
+    auto issueRoom = [&](OccupantCut& cache, const Occupant& occupant, U64 marks_key) -> bool
+    {
+        LL_PROFILE_ZONE_NAMED("sk cut probes issue");
+        const RoomFootprint& room = *occupant.mRoom;
+        const F64 cell_m = occupant.mRoomCellM;
+        const LLVector3d& p = occupant.mFloor;
+        const LLVector3d lo = room.mOrigin;
+        const LLVector3d hi = lo + LLVector3d(room.mW * cell_m, room.mH * cell_m, 0.0);
+        std::vector<std::pair<U32, LLUUID>> candidates;
+        F64 top = p.mdV[VZ] + ABOVE_M;
+        for (const auto& entry : extents)
+        {
+            const Extent& e = entry.second;
+            if (!e.mCuttable || e.mMax.mdV[VZ] < p.mdV[VZ] + ABOVE_M || overhead(e, occupant) || e.mMax.mdV[VX] < lo.mdV[VX] ||
+                e.mMin.mdV[VX] > hi.mdV[VX] || e.mMax.mdV[VY] < lo.mdV[VY] || e.mMin.mdV[VY] > hi.mdV[VY])
+            {
+                continue;
+            }
+            candidates.emplace_back(entry.first, e.mRoot);
+            top = llmax(top, e.mMax.mdV[VZ]);
+        }
+        if (!budget.fits(personOf(occupant), (U32)candidates.size()))
+        {
+            return false;
+        }
+        // Four texels a cell, fewer for a room too wide for the target.
+        F64 texels = 4.0;
+        while (texels > 1.0 / 64.0 && (room.mW * texels > SKOverviewProbes::SIZE || room.mH * texels > SKOverviewProbes::SIZE))
+        {
+            texels *= 0.5;
+        }
+        SKOverviewProbes::Box box;
+        box.mMaxX = (F32)(room.mW * cell_m);
+        box.mMaxY = (F32)(room.mH * cell_m);
+        box.mFrom = (F32)ABOVE_M;
+        box.mTo = (F32)(top - p.mdV[VZ] + 1.0);
+        box.mWidth = llclamp((S32)std::ceil(room.mW * texels), 1, SKOverviewProbes::SIZE);
+        box.mHeight = llclamp((S32)std::ceil(room.mH * texels), 1, SKOverviewProbes::SIZE);
+        // The cells outside the room, a rect per run along each row; a room with no mask is covered whole.
+        std::vector<LLVector4> outs;
+        for (S32 y = 0; y < room.mH && !room.mMask.empty(); ++y)
+        {
+            for (S32 x = 0; x < room.mW;)
+            {
+                if (room.covers(x, y))
+                {
+                    ++x;
+                    continue;
+                }
+                S32 end = x;
+                while (end < room.mW && !room.covers(end, y))
+                {
+                    ++end;
+                }
+                outs.emplace_back((F32)(x * cell_m), (F32)(y * cell_m), (F32)(end * cell_m), (F32)((y + 1) * cell_m));
+                x = end;
+            }
+        }
+        if (!probes->beginVolume(box, outs))
+        {
+            return false;
+        }
+        budget.admit(personOf(occupant), (U32)candidates.size());
+        const LLVector3d origin(lo.mdV[VX], lo.mdV[VY], p.mdV[VZ]);
+        cache.mMarkTickets.clear();
+        for (const auto& candidate : candidates)
+        {
+            cache.mMarkTickets.push_back(probes->query(runsOf(extents.at(candidate.first), origin), true));
+        }
+        probes->endVolume();
+        // The room's id render, ids coloured and the mask outlined, on its way back to a file.
+        static LLCachedControl<bool> dump(gSavedSettings, "SKOverviewProbeDump", false);
+        if (dump && !mProbeDump.mPending && probes->requestDump())
+        {
+            mProbeDump.mPending = true;
+            mProbeDump.mWho = occupant.mId;
+            mProbeDump.mBox = box;
+            mProbeDump.mOuts = outs;
+        }
+        cache.mMarkCandidates = std::move(candidates);
+        cache.mMarkRule = "room";
+        cache.mMarksProbe.issue(marks_key, mExtentsSignature, probes->frame());
+        return true;
+    };
+    // Column: an upward look over the slack's square round the floor point, from just above the floor.
+    auto issueColumn = [&](OccupantCut& cache, const Occupant& occupant, U64 marks_key) -> bool
+    {
+        LL_PROFILE_ZONE_NAMED("sk cut probes issue");
+        const LLVector3d& p = occupant.mFloor;
+        std::vector<std::pair<U32, LLUUID>> candidates;
+        F64 top = p.mdV[VZ] + ABOVE_M;
+        for (const auto& entry : extents)
+        {
+            const Extent& e = entry.second;
+            if (!e.mCuttable || e.mMax.mdV[VZ] < p.mdV[VZ] + ABOVE_M || overhead(e, occupant) ||
+                p.mdV[VX] < e.mMin.mdV[VX] - SLACK_M || p.mdV[VX] > e.mMax.mdV[VX] + SLACK_M ||
+                p.mdV[VY] < e.mMin.mdV[VY] - SLACK_M || p.mdV[VY] > e.mMax.mdV[VY] + SLACK_M)
+            {
+                continue;
+            }
+            candidates.emplace_back(entry.first, e.mRoot);
+            top = llmax(top, e.mMax.mdV[VZ]);
+        }
+        if (!budget.fits(personOf(occupant), (U32)candidates.size()))
+        {
+            return false;
+        }
+        SKOverviewProbes::Box box;
+        box.mMinX = box.mMinY = (F32)-SLACK_M;
+        box.mMaxX = box.mMaxY = (F32)SLACK_M;
+        box.mFrom = (F32)ABOVE_M;
+        box.mTo = (F32)(top - p.mdV[VZ] + 1.0);
+        box.mWidth = box.mHeight = 8;
+        if (!probes->beginVolume(box, {}))
+        {
+            return false;
+        }
+        budget.admit(personOf(occupant), (U32)candidates.size());
+        cache.mMarkTickets.clear();
+        for (const auto& candidate : candidates)
+        {
+            cache.mMarkTickets.push_back(probes->query(runsOf(extents.at(candidate.first), p), true));
+        }
+        probes->endVolume();
+        cache.mMarkCandidates = std::move(candidates);
+        cache.mMarkRule = "column";
+        cache.mMarksProbe.issue(marks_key, mExtentsSignature, probes->frame());
+        return true;
     };
     // Who stands on a roof: the highest upward-facing surface under their feet, of a linkset with nothing over them.
     const F64 STAND_BELOW_M = 0.6;  // how far under the feet a surface still bears them
     const F64 STAND_ABOVE_M = 0.4;  // how far over them, for a sunk or estimated foot
     const F64 HOLD_S = 1.0;         // a roof stays kept this long after its stander leaves it, through a hop
     const F64 now = LLFrameTimer::getUptimeSeconds().value();
-    auto heightAt = [](const LLVector2& at, const LLVector3& a, const LLVector3& b, const LLVector3& d, F32& z) -> bool
+    // The feet: a downward look at the one point under them, through the bearing band; the texel is the highest
+    // surface's linkset, its depth the surface's height.
+    auto feetBox = [&]()
     {
-        const LLVector3 n = (b - a) % (d - a);
-        if (std::fabs(n.mV[VZ]) < 0.5f * n.length() || planDistance(at, a, b, d) > 0.f)
-        {
-            return false; // a wall, or not under the point
-        }
-        z = a.mV[VZ] - (n.mV[VX] * (at.mV[VX] - a.mV[VX]) + n.mV[VY] * (at.mV[VY] - a.mV[VY])) / n.mV[VZ];
-        return true;
+        SKOverviewProbes::Box box;
+        box.mMinX = box.mMinY = -0.01f;
+        box.mMaxX = box.mMaxY = 0.01f;
+        box.mFrom = (F32)STAND_ABOVE_M;
+        box.mTo = (F32)-STAND_BELOW_M;
+        return box;
     };
-    // The highest surface of the linkset under the feet within the bearing band, and whether any of it covers them.
-    auto standsOn = [&](const Extent& e, const LLVector3d& feet, F64& surface, bool& covered) -> bool
+    // Cover: an upward look at the one point over the feet, from just above them, a query per linkset that may be
+    // over them; a face seen edge-on does not count, as the CPU's walls never did.
+    auto issueRoof = [&](OccupantCut& cache, const Occupant& occupant, U64 roof_key) -> bool
     {
-        bool found = false;
-        bool cover = false;
-        for (const auto& part : e.mParts)
+        LL_PROFILE_ZONE_NAMED("sk cut probes issue");
+        const LLVector3d& feet = occupant.mFeet;
+        std::vector<SKOverviewProbes::Run> under;
+        for (const auto& entry : extents)
         {
-            const Batch& batch = *part.first;
-            const LLVector3 local(feet - batch.mOrigin);
-            const LLVector2 at(local.mV[VX], local.mV[VY]);
-            for (U32 c = 0; c < skoverview::NUM_CENSUS_CLASSES; ++c)
+            const Extent& e = entry.second;
+            if (!e.mCuttable || feet.mdV[VX] < e.mMin.mdV[VX] || feet.mdV[VX] > e.mMax.mdV[VX] ||
+                feet.mdV[VY] < e.mMin.mdV[VY] || feet.mdV[VY] > e.mMax.mdV[VY] ||
+                feet.mdV[VZ] < e.mMin.mdV[VZ] - STAND_ABOVE_M || feet.mdV[VZ] > e.mMax.mdV[VZ] + STAND_BELOW_M)
             {
-                if (c == skoverview::INVISIBLE)
-                {
-                    continue;
-                }
-                const U32 end = llmin(part.second->mStart[c] + part.second->mCount[c], (U32)batch.mPositions.size());
-                for (U32 v = part.second->mStart[c]; v + 2 < end; v += 3)
-                {
-                    if (v / 3 < batch.mInvisible.size() && (batch.mInvisible[v / 3] & skoverview::TRI_PASS_THROUGH))
-                    {
-                        continue;
-                    }
-                    F32 z = 0.f;
-                    if (!heightAt(at, batch.mPositions[v], batch.mPositions[v + 1], batch.mPositions[v + 2], z))
-                    {
-                        continue;
-                    }
-                    if (z >= local.mV[VZ] - STAND_BELOW_M && z <= local.mV[VZ] + STAND_ABOVE_M)
-                    {
-                        const F64 global_z = batch.mOrigin.mdV[VZ] + z;
-                        surface = found ? llmax(surface, global_z) : global_z;
-                        found = true;
-                    }
-                    else if (z > local.mV[VZ] + STAND_ABOVE_M)
-                    {
-                        cover = true;
-                    }
-                }
+                continue;
             }
+            const std::vector<SKOverviewProbes::Run> runs = runsOf(e, feet);
+            under.insert(under.end(), runs.begin(), runs.end());
         }
-        covered = cover;
-        return found;
+        std::vector<std::pair<U32, LLUUID>> candidates;
+        F64 top = feet.mdV[VZ] + STAND_ABOVE_M;
+        for (const auto& entry : extents)
+        {
+            const Extent& e = entry.second;
+            if (feet.mdV[VX] < e.mMin.mdV[VX] || feet.mdV[VX] > e.mMax.mdV[VX] || feet.mdV[VY] < e.mMin.mdV[VY] ||
+                feet.mdV[VY] > e.mMax.mdV[VY] || e.mMax.mdV[VZ] <= feet.mdV[VZ] + STAND_ABOVE_M ||
+                (!e.mGround && e.mBottom > feet.mdV[VZ] + OVERHEAD_M))
+            {
+                continue;
+            }
+            candidates.emplace_back(entry.first, e.mRoot);
+            top = llmax(top, e.mMax.mdV[VZ]);
+        }
+        if (!budget.fits(personOf(occupant), (U32)candidates.size()))
+        {
+            return false;
+        }
+        const S32 slot = probes->sample(feetBox(), under);
+        if (slot < 0)
+        {
+            return false;
+        }
+        SKOverviewProbes::Box box;
+        box.mMinX = box.mMinY = -0.01f;
+        box.mMaxX = box.mMaxY = 0.01f;
+        box.mFrom = (F32)STAND_ABOVE_M;
+        box.mTo = (F32)(top - feet.mdV[VZ] + 1.0);
+        if (!probes->beginVolume(box, {}))
+        {
+            return false;
+        }
+        budget.admit(personOf(occupant), (U32)candidates.size());
+        cache.mFeetSlot = slot;
+        cache.mFeetZ = feet.mdV[VZ];
+        cache.mCoverTickets.clear();
+        for (const auto& candidate : candidates)
+        {
+            cache.mCoverTickets.push_back(probes->query(runsOf(extents.at(candidate.first), feet), false));
+        }
+        probes->endVolume();
+        cache.mCoverCandidates = std::move(candidates);
+        cache.mRoofProbe.issue(roof_key, mExtentsSignature, probes->frame());
+        return true;
     };
     std::map<U32, F32> roof_of;     // linkset -> the highest cut of those standing on its roof
     bool holding = false;
     {
         LL_PROFILE_ZONE_NAMED("sk cut roofs");
-        for (Occupant& occupant : people)
+        for (Occupant* who : ordered)
         {
+            Occupant& occupant = *who;
             const LLVector3d& feet = occupant.mFeet;
             OccupantCut& cache = mOccupantCuts[occupant.mId];
             cache.mSeen = true;
@@ -2075,62 +2568,60 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
             {
                 quantise(roof_key, feet.mdV[i]);
             }
-            if (!cache.mRoofValid || cache.mRoofKey != roof_key || baseCrossed(feet.mdV[VZ]))
+            if (baseCrossed(feet.mdV[VZ]))
             {
-                cache.mBest = 0;
-                cache.mBestZ = -1e30;
-                cache.mCovered = false;
-                for (const auto& entry : extents)
+                cache.mRoofProbe.invalidate();
+            }
+            if (probes)
+            {
+                // The highest surface under the feet within the bearing band, and whether anything covers them: a
+                // surface is a roof only with nothing over the feet, of any linkset, as a storey's slab is often one
+                // linkset and the storey above it another. What stood is kept until the answer lands; the texel names
+                // an id, which holds only under the buffers it was drawn from.
+                LL_PROFILE_ZONE_NAMED("sk cut probes collect");
+                std::vector<U64> counts;
+                bool lost = false;
+                bool ready = landed(cache.mCoverTickets, counts, lost);
+                U32 texel = 0;
+                F32 depth = 0.f;
+                if (cache.mRoofProbe.mPending)
                 {
-                    const Extent& e = entry.second;
-                    if (!e.mCuttable || feet.mdV[VX] < e.mMin.mdV[VX] || feet.mdV[VX] > e.mMax.mdV[VX] ||
-                        feet.mdV[VY] < e.mMin.mdV[VY] || feet.mdV[VY] > e.mMax.mdV[VY] ||
-                        feet.mdV[VZ] < e.mMin.mdV[VZ] - STAND_ABOVE_M || feet.mdV[VZ] > e.mMax.mdV[VZ] + STAND_BELOW_M)
-                    {
-                        continue;
-                    }
-                    F64 z = 0.0;
-                    bool covered = false;
-                    if (standsOn(e, feet, z, covered) && z > cache.mBestZ)
-                    {
-                        cache.mBest = entry.first;
-                        cache.mBestZ = z;
-                        cache.mCovered = covered;
-                    }
+                    const SKOverviewProbes::Status feet_status =
+                        probes->sampleResult(cache.mRoofProbe.mIssued, cache.mFeetSlot, texel, depth);
+                    ready = ready && feet_status == SKOverviewProbes::Status::Ready;
+                    lost = lost || feet_status == SKOverviewProbes::Status::Lost;
                 }
-                // A surface is a roof only with nothing over the feet, of any linkset: a storey's slab is often one
-                // linkset and the storey above it another. Skyboxes floating out of their space do not count.
-                for (const auto& entry : extents)
+                if (cache.mRoofProbe.settle(ready, lost, mExtentsSignature, true) == skoverview::ProbeSlot::Outcome::Apply)
                 {
-                    const Extent& e = entry.second;
-                    if (cache.mCovered || cache.mBestZ <= -1e29)
-                    {
-                        break;
-                    }
-                    if (entry.first == cache.mBest || feet.mdV[VX] < e.mMin.mdV[VX] || feet.mdV[VX] > e.mMax.mdV[VX] ||
-                        feet.mdV[VY] < e.mMin.mdV[VY] || feet.mdV[VY] > e.mMax.mdV[VY] || e.mMax.mdV[VZ] <= feet.mdV[VZ] + STAND_ABOVE_M ||
-                        (!e.mGround && e.mBottom > feet.mdV[VZ] + OVERHEAD_M))
-                    {
-                        continue;
-                    }
-                    F64 z = 0.0;
-                    bool covered = false;
-                    standsOn(e, feet, z, covered);
-                    cache.mCovered = covered;
+                    const SKOverviewProbes::Box box = feetBox();
+                    U32 id = 0;
+                    F32 z = 0.f;
+                    const bool surface = skoverview::feetSurface(texel, depth, box.nearZ(), box.farZ(), LLRender::sReverseZ, id, z) &&
+                                         extents.count(id) && extents.at(id).mCuttable;
+                    cache.mBest = surface ? id : 0;
+                    cache.mBestZ = surface ? cache.mFeetZ + z : -1e30;
+                    cache.mCovered = surface && !skoverview::passedExtents(cache.mCoverCandidates, counts, mRootExtent).empty();
+                    ++mProbeStats.mApplied;
+                    mProbeStats.mLatencyFrames += probes->frame() - cache.mRoofProbe.mIssued;
                 }
-                cache.mRoofKey = roof_key;
-                cache.mRoofValid = true;
+                if (cache.mRoofProbe.wants(roof_key))
+                {
+                    issueRoof(cache, occupant, roof_key);
+                }
+                probing = probing || cache.mRoofProbe.mPending;
             }
             const U32 best = cache.mBest;
             const F64 best_z = cache.mBestZ;
             const bool best_covered = cache.mCovered;
             U32 roof = 0;
+            bool has_roof = false;
             F64 roof_z = 0.0;
             const bool on_surface = best_z > -1e29;
             const auto held = mStanding.find(occupant.mId);
             if (on_surface && !best_covered)
             {
                 roof = best;
+                has_roof = true;
                 roof_z = best_z;
                 mStanding[occupant.mId] = { extents.at(best).mRoot, best_z, now };
             }
@@ -2142,6 +2633,7 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
                     if (entry.second.mRoot == held->second.mRoot && entry.second.mCuttable)
                     {
                         roof = entry.first;
+                        has_roof = true;
                         roof_z = held->second.mZ;
                         holding = true;
                         break;
@@ -2152,7 +2644,7 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
             {
                 mStanding.erase(held);
             }
-            if (roof)
+            if (has_roof)
             {
                 const F64 above = occupant.mCut - occupant.mFloor.mdV[VZ];
                 occupant.mFloor.setVec(feet.mdV[VX], feet.mdV[VY], roof_z);
@@ -2167,73 +2659,8 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
     {
         it = now - it->second.mAt >= HOLD_S ? mStanding.erase(it) : std::next(it);
     }
-    // Whether a linkset has a triangle above the floor whose plan footprint comes within a cell of one of the room's
-    // grown cells; how says which (wall or cover) and the cell, for the log.
-    LLVector3d room_min, room_max;
-    auto touchesRoom = [&](const Extent& e, const Occupant& occupant, F64 cell_m, std::string& how) -> bool
-    {
-        const RoomFootprint& room = *occupant.mRoom;
-        const F32 reach = (F32)(cell_m * 0.7072);
-        for (const auto& part : e.mParts)
-        {
-            const Batch& batch = *part.first;
-            const F32 floor_local = (F32)(occupant.mFloor.mdV[VZ] - batch.mOrigin.mdV[VZ]);
-            for (U32 c = 0; c < skoverview::NUM_CENSUS_CLASSES; ++c)
-            {
-                if (c == skoverview::INVISIBLE)
-                {
-                    continue;
-                }
-                const U32 end = llmin(part.second->mStart[c] + part.second->mCount[c], (U32)batch.mPositions.size());
-                for (U32 v = part.second->mStart[c]; v + 2 < end; v += 3)
-                {
-                    if (v / 3 < batch.mInvisible.size() && (batch.mInvisible[v / 3] & skoverview::TRI_PASS_THROUGH))
-                    {
-                        continue;
-                    }
-                    const LLVector3& a = batch.mPositions[v];
-                    const LLVector3& b = batch.mPositions[v + 1];
-                    const LLVector3& d = batch.mPositions[v + 2];
-                    if (llmax(a.mV[VZ], llmax(b.mV[VZ], d.mV[VZ])) < floor_local + ABOVE_M)
-                    {
-                        continue;
-                    }
-                    // The cells under the triangle's plan box, as far as the room has any.
-                    const F64 lo_x = batch.mOrigin.mdV[VX] + llmin(a.mV[VX], llmin(b.mV[VX], d.mV[VX]));
-                    const F64 hi_x = batch.mOrigin.mdV[VX] + llmax(a.mV[VX], llmax(b.mV[VX], d.mV[VX]));
-                    const F64 lo_y = batch.mOrigin.mdV[VY] + llmin(a.mV[VY], llmin(b.mV[VY], d.mV[VY]));
-                    const F64 hi_y = batch.mOrigin.mdV[VY] + llmax(a.mV[VY], llmax(b.mV[VY], d.mV[VY]));
-                    const S32 x0 = llmax(0, (S32)std::floor((llmax(lo_x, room_min.mdV[VX]) - room.mOrigin.mdV[VX]) / cell_m));
-                    const S32 x1 = llmin(room.mW - 1, (S32)std::floor((llmin(hi_x, room_max.mdV[VX]) - room.mOrigin.mdV[VX]) / cell_m));
-                    const S32 y0 = llmax(0, (S32)std::floor((llmax(lo_y, room_min.mdV[VY]) - room.mOrigin.mdV[VY]) / cell_m));
-                    const S32 y1 = llmin(room.mH - 1, (S32)std::floor((llmin(hi_y, room_max.mdV[VY]) - room.mOrigin.mdV[VY]) / cell_m));
-                    for (S32 x = x0; x <= x1; ++x)
-                    {
-                        for (S32 y = y0; y <= y1; ++y)
-                        {
-                            if (!room.covers(x, y))
-                            {
-                                continue;
-                            }
-                            const LLVector2 centre((F32)(room.mOrigin.mdV[VX] + (x + 0.5) * cell_m - batch.mOrigin.mdV[VX]),
-                                                   (F32)(room.mOrigin.mdV[VY] + (y + 0.5) * cell_m - batch.mOrigin.mdV[VY]));
-                            if (planDistance(centre, a, b, d) <= reach)
-                            {
-                                const LLVector3 n = (b - a) % (d - a);
-                                const bool wall = n.length() > 0.f && std::fabs(n.mV[VZ]) < 0.5f * n.length();
-                                how = llformat("%s at cell %d,%d", wall ? "wall" : "cover", x, y);
-                                return true;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        return false;
-    };
     {
         LL_PROFILE_ZONE_NAMED("sk cut marks");
-        static const std::string COLUMN("column");
         for (const Occupant* occupant : ordered)
         {
             if (occupant->mOutdoors)
@@ -2257,49 +2684,69 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
                 marks_key = (marks_key ^ occupant->mRoom->mId) * 1099511628211ull;
                 marks_key = (marks_key ^ occupant->mRoom->mMesh.getCRC32()) * 1099511628211ull;
             }
-            if (!cache.mMarksValid || cache.mMarksKey != marks_key || baseCrossed(occupant->mCut))
+            if (baseCrossed(occupant->mCut))
             {
-                cache.mMarks.clear();
-                if (occupant->mRoom)
+                cache.mMarksProbe.invalidate();
+            }
+            if (probes)
+            {
+                // Their room's building, by its geometry: the linksets standing round its cells (walls) or over them
+                // (floors above, the roof); with no room, those standing over their column. What stood is kept until
+                // the answer lands.
+                LL_PROFILE_ZONE_NAMED("sk cut probes collect");
+                std::vector<U64> counts;
+                bool lost = false;
+                const bool ready = landed(cache.mMarkTickets, counts, lost);
+                if (cache.mMarksProbe.settle(ready, lost, mExtentsSignature, false) == skoverview::ProbeSlot::Outcome::Apply)
                 {
-                    const F64 cell_m = occupant->mRoomCellM;
-                    room_min = occupant->mRoom->mOrigin;
-                    room_max = room_min + LLVector3d(occupant->mRoom->mW * cell_m, occupant->mRoom->mH * cell_m, 0.0);
-                }
-                for (const auto& entry : extents)
-                {
-                    const Extent& e = entry.second;
-                    if (!e.mCuttable || e.mMax.mdV[VZ] < p.mdV[VZ] + ABOVE_M || overhead(e, *occupant))
+                    const std::vector<U32> passed = skoverview::passedExtents(cache.mMarkCandidates, counts, mRootExtent);
+                    bool changed = passed.size() != cache.mMarks.size();
+                    for (size_t i = 0; i < passed.size() && !changed; ++i)
                     {
-                        continue;
+                        changed = passed[i] != cache.mMarks[i].first || cache.mMarks[i].second != cache.mMarkRule;
                     }
+                    const U32 late = probes->frame() - cache.mMarksProbe.mIssued;
+                    if (changed)
+                    {
+                        std::string ids;
+                        for (const U32 id : passed)
+                        {
+                            ids += llformat("%s%u", ids.empty() ? "" : " ", id);
+                        }
+                        LL_INFOS("SKOverview") << "probe " << cache.mMarkRule << " for " << occupant->mId << ": " << passed.size() << " of "
+                                               << cache.mMarkCandidates.size() << " linksets [" << ids << "], " << late << " frames late"
+                                               << LL_ENDL;
+                    }
+                    cache.mMarks.clear();
+                    for (const U32 id : passed)
+                    {
+                        cache.mMarks.emplace_back(id, cache.mMarkRule);
+                    }
+                    ++mProbeStats.mApplied;
+                    mProbeStats.mLatencyFrames += late;
+                }
+                if (cache.mMarksProbe.wants(marks_key))
+                {
                     if (occupant->mRoom)
                     {
-                        // The room's building, by its geometry: a linkset whose triangles above the floor come within a
-                        // cell of the room's own cells, standing round them (walls) or over them (floors above, the roof).
-                        const F64 cell_m = occupant->mRoomCellM;
-                        if (e.mMax.mdV[VX] < room_min.mdV[VX] || e.mMin.mdV[VX] > room_max.mdV[VX] ||
-                            e.mMax.mdV[VY] < room_min.mdV[VY] || e.mMin.mdV[VY] > room_max.mdV[VY])
-                        {
-                            continue; // its box is nowhere near the room's
-                        }
-                        std::string how;
-                        if (touchesRoom(e, *occupant, cell_m, how))
-                        {
-                            cache.mMarks.emplace_back(entry.first, "room " + how);
-                        }
+                        issueRoom(cache, *occupant, marks_key);
                     }
-                    else if (p.mdV[VX] >= e.mMin.mdV[VX] - SLACK_M && p.mdV[VX] <= e.mMax.mdV[VX] + SLACK_M &&
-                             p.mdV[VY] >= e.mMin.mdV[VY] - SLACK_M && p.mdV[VY] <= e.mMax.mdV[VY] + SLACK_M &&
-                             overColumn(e, p))
+                    else
                     {
-                        cache.mMarks.emplace_back(entry.first, COLUMN);
+                        issueColumn(cache, *occupant, marks_key);
                     }
                 }
-                cache.mMarksKey = marks_key;
-                cache.mMarksValid = true;
+                probing = probing || cache.mMarksProbe.mPending;
             }
-            for (const auto& m : cache.mMarks)
+        }
+        for (const Occupant* occupant : marking)
+        {
+            const auto cut = mOccupantCuts.find(occupant->mId);
+            if (occupant->mOutdoors || cut == mOccupantCuts.end())
+            {
+                continue;
+            }
+            for (const auto& m : cut->second.mMarks)
             {
                 mark(m.first, *occupant, m.second);
             }
@@ -2308,6 +2755,49 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
     for (auto it = mOccupantCuts.begin(); it != mOccupantCuts.end();)
     {
         it = it->second.mSeen ? std::next(it) : mOccupantCuts.erase(it);
+    }
+    if (probes)
+    {
+        mProbeStats.mIssued += budget.people();
+        mProbeStats.mQueries += probes->queriesIssued();
+        mProbeStats.mMostQueries = llmax(mProbeStats.mMostQueries, probes->queriesIssued());
+        mProbeStats.mRefused += probes->queriesRefused();
+        std::vector<U32> ids;
+        std::vector<F32> depths;
+        S32 w = 0, h = 0;
+        if (mProbeDump.mPending && probes->collectDump(ids, depths, w, h))
+        {
+            mProbeDump.mPending = false;
+            const char* dir = getenv("SK_PROBE_DUMP_DIR");
+            const std::string name = "room-ids-" + mProbeDump.mWho.asString() + ".ppm";
+            const std::string path = dir && *dir ? std::string(dir) + gDirUtilp->getDirDelimiter() + name
+                                                 : gDirUtilp->getExpandedFilename(LL_PATH_LOGS, name);
+            SKOverviewProbes::Box box = mProbeDump.mBox;
+            box.mWidth = w;
+            box.mHeight = h;
+            const bool written = SKOverviewProbes::writeImage(path, ids, w, h, SKOverviewProbes::outTexels(box, mProbeDump.mOuts),
+                                                              llmax(1, 800 / llmax(w, h)));
+            LL_INFOS("SKOverview") << "probe dump " << (written ? "written to " : "not written to ") << path << LL_ENDL;
+        }
+        if (now - mProbeStats.mSince >= 1.0)
+        {
+            U32 pending = 0;
+            for (const auto& entry : mOccupantCuts)
+            {
+                pending += entry.second.mMarksProbe.mPending || entry.second.mRoofProbe.mPending ? 1 : 0;
+            }
+            if (mProbeStats.mIssued || pending || mProbeStats.mRefused)
+            {
+                const F32 latency = mProbeStats.mApplied ? (F32)mProbeStats.mLatencyFrames / mProbeStats.mApplied : 0.f;
+                LL_INFOS("SKOverview") << "probe: " << mProbeStats.mIssued << " issued, " << pending << " pending, "
+                                       << mProbeStats.mQueries << " queries (" << mProbeStats.mMostQueries
+                                       << " in a frame at most, " << mProbeStats.mRefused << " refused), "
+                                       << llformat("%.1f", latency)
+                                       << " frames latency" << LL_ENDL;
+            }
+            mProbeStats = ProbeStats();
+            mProbeStats.mSince = now;
+        }
     }
     {
         LL_PROFILE_ZONE_NAMED("sk cut resolve");
@@ -2420,9 +2910,9 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
                 r.second.mWhy = why[id];
             }
         }
-        if (releasing)
+        if (releasing || probing)
         {
-            mCutKey = 0; // worked again until the release holds
+            mCutKey = 0; // worked again until the release holds and the probes land
         }
     }
     std::vector<std::pair<U32, F32>> cuts(cut_of.begin(), cut_of.end());
@@ -2476,99 +2966,6 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
         }
         mCutTable.flush();
     }
-}
-
-bool SKOverviewCensus::raycast(const LLVector3d& origin, const LLVector3& dir, F32 max_m, LLVector3d& hit) const
-{
-    F32 best = max_m;
-    bool found = false;
-    for (const Batch& batch : mBatches)
-    {
-        const LLVector3 from(origin - batch.mOrigin);
-        const U32 total = (U32)batch.mPositions.size();
-        for (const Group& group : batch.mGroups)
-        {
-            // The group's bounds first, by the slab test.
-            const LLVector3 lo(group.mMin - batch.mOrigin);
-            const LLVector3 hi(group.mMax - batch.mOrigin);
-            F32 t_lo = 0.f;
-            F32 t_hi = best;
-            bool miss = false;
-            for (S32 i = 0; i < 3 && !miss; ++i)
-            {
-                if (std::fabs(dir.mV[i]) < 1e-9f)
-                {
-                    miss = from.mV[i] < lo.mV[i] || from.mV[i] > hi.mV[i];
-                    continue;
-                }
-                const F32 a = (lo.mV[i] - from.mV[i]) / dir.mV[i];
-                const F32 b = (hi.mV[i] - from.mV[i]) / dir.mV[i];
-                t_lo = llmax(t_lo, llmin(a, b));
-                t_hi = llmin(t_hi, llmax(a, b));
-                miss = t_lo > t_hi;
-            }
-            if (miss)
-            {
-                continue;
-            }
-            F32 cut = skoverview::NO_CUT;
-            std::string why;
-            if (cutOf(group.mRoot, cut, why) && cut <= skoverview::HIDDEN * 0.5f)
-            {
-                continue;
-            }
-            // Cuts are agent z, which is global z; positions are region-local.
-            const F32 cut_local = cut >= skoverview::NO_CUT * 0.5f ? cut : cut - (F32)batch.mOrigin.mdV[VZ];
-            for (U32 c = 0; c < skoverview::NUM_CENSUS_CLASSES; ++c)
-            {
-                if (c == skoverview::INVISIBLE)
-                {
-                    continue;
-                }
-                const U32 end = llmin(group.mStart[c] + group.mCount[c], total);
-                for (U32 v = group.mStart[c]; v + 2 < end; v += 3)
-                {
-                    if (v / 3 < batch.mInvisible.size() && (batch.mInvisible[v / 3] & skoverview::TRI_PASS_THROUGH))
-                    {
-                        continue;
-                    }
-                    // Moller-Trumbore, either face, as the view draws both.
-                    const LLVector3& p0 = batch.mPositions[v];
-                    const LLVector3 e1 = batch.mPositions[v + 1] - p0;
-                    const LLVector3 e2 = batch.mPositions[v + 2] - p0;
-                    const LLVector3 pv = dir % e2;
-                    const F32 det = e1 * pv;
-                    if (std::fabs(det) < 1e-12f)
-                    {
-                        continue;
-                    }
-                    const F32 inv = 1.f / det;
-                    const LLVector3 tv = from - p0;
-                    const F32 u = (tv * pv) * inv;
-                    if (u < 0.f || u > 1.f)
-                    {
-                        continue;
-                    }
-                    const LLVector3 qv = tv % e1;
-                    const F32 w = (dir * qv) * inv;
-                    const F32 t = (e2 * qv) * inv;
-                    if (w < 0.f || u + w > 1.f || t <= 0.f || t >= best)
-                    {
-                        continue;
-                    }
-                    // Above its part's cut nothing is drawn, so the ray goes on through it.
-                    if ((from + dir * t).mV[VZ] > cut_local)
-                    {
-                        continue;
-                    }
-                    best = t;
-                    found = true;
-                    hit = origin + LLVector3d(dir * t);
-                }
-            }
-        }
-    }
-    return found;
 }
 
 bool SKOverviewCensus::cutOf(const LLUUID& root, F32& height, std::string& why) const
