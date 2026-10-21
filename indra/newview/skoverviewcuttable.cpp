@@ -106,6 +106,16 @@ bool SKOverviewCutTable::flush()
         mCapacity = capacity;
         mAttach = true;
     }
+    // The buffer texture spans the whole stream, which the context's texel limit must hold.
+    const size_t texels = mStream.getBuffer().size() / sizeof(Row);
+    if (!useStorageBlock() && gGLManager.mMaxTextureBufferSize > 0 && texels > (size_t)gGLManager.mMaxTextureBufferSize)
+    {
+        LL_WARNS_ONCE("SKOverview") << "cut table of " << texels << " texels exceeds the buffer texture limit of "
+                                    << gGLManager.mMaxTextureBufferSize << "; the tactical view draws every linkset whole" << LL_ENDL;
+        mPublishedRows = 0;
+        mPending = true;
+        return false;
+    }
     U8* dst = mStream.map();
     if (!dst)
     {

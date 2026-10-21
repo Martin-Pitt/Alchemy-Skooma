@@ -2261,6 +2261,7 @@ bool LLGLManager::initGL()
     glGetIntegerv(GL_MAX_SAMPLES, &mMaxSamples);
     glGetIntegerv(GL_MAX_VARYING_VECTORS, &mMaxVaryingVectors);
     glGetIntegerv(GL_MAX_UNIFORM_BLOCK_SIZE, &mMaxUniformBlockSize);
+    glGetIntegerv(GL_MAX_TEXTURE_BUFFER_SIZE, &mMaxTextureBufferSize); // <SK:Nexii> combat/minimap: the overview's cut table
 
     // If outside the allowed range, glLineWidth fails with "invalid value".
     glGetFloatv(GL_ALIASED_LINE_WIDTH_RANGE, mAliasedLineRange.mV);
