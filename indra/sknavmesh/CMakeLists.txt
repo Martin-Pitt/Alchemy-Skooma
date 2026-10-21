@@ -80,7 +80,8 @@ target_link_libraries(sknavmesh PRIVATE al::flags PUBLIC llmath llcommon ll::rec
 
 target_precompile_headers(sknavmesh REUSE_FROM llprecompiled)
 
-if(AL_BUILD_TESTS)
+# TUT tests, kept registered until they are ported to Catch2.
+if(AL_BUILD_TESTS AND COMMAND al_add_test)
   al_add_test(sknavair PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavairdistil PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavannotate PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
