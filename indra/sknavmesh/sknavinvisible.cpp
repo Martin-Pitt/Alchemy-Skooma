@@ -407,6 +407,12 @@ namespace sknav
             next.clear();
             for (Poly& p : polys)
             {
+                // Tested per polygon, so one body of many planes cannot build far past the cap before it is seen.
+                if (next.size() > params.mMaxPieces)
+                {
+                    result.mTooFine = true;
+                    return result;
+                }
                 LLVector3 plo(1e30f, 1e30f, 1e30f), phi(-1e30f, -1e30f, -1e30f);
                 for (const LLVector3& v : p)
                 {
