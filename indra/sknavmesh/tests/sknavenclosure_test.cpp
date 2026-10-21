@@ -476,7 +476,7 @@ TEST_CASE("a solid overhead hides the share of sky its size and height give it, 
     Scene s;
     auto in = s.input(1);
     // A platform 10 m up over x, y 8 to 16, as another tile's solid tops.
-    TileAir platform;
+    TileTops platform;
     platform.mCell = CELL;
     platform.mUnit = UNIT;
     platform.mTopCell = 2;
@@ -543,7 +543,7 @@ TEST_CASE("depth carried into unwalkable air does not climb a facade", "[sknaven
 
 TEST_CASE("a sky map copy is a snapshot: later changes to the original leave it alone", "[sknavenclosure]")
 {
-    TileAir roof;
+    TileTops roof;
     roof.mCell = CELL;
     roof.mUnit = UNIT;
     roof.mTopCell = 2;
@@ -594,15 +594,19 @@ TEST_CASE("a skybox over a terrain mesh takes no open sky from it: the terrain's
     auto field_in = field.input(1);
     // The ground's solid tops, as a built tile carries them: the field's own top is 0.
     auto tops = std::make_shared<TileAir>(*field_in->mTiles[0].mAir);
-    tops->mTopCell = static_cast<S32>(1.f / CELL);
-    tops->mTopWidth = tops->mTopHeight = 32;
-    tops->mTopStart.assign(32 * 32 + 1, 0);
-    tops->mTop.clear();
+    auto ground = std::make_shared<TileTops>();
+    ground->mOrigin = tops->mOrigin;
+    ground->mCell = tops->mCell;
+    ground->mUnit = tops->mUnit;
+    ground->mTopCell = static_cast<S32>(1.f / CELL);
+    ground->mTopWidth = ground->mTopHeight = 32;
+    ground->mTopStart.assign(32 * 32 + 1, 0);
     for (S32 c = 0; c < 32 * 32; ++c)
     {
-        tops->mTop.push_back({ 0, static_cast<U16>(1.f / UNIT) });
-        tops->mTopStart[c + 1] = static_cast<U32>(tops->mTop.size());
+        ground->mTop.push_back({ 0, static_cast<U16>(1.f / UNIT) });
+        ground->mTopStart[c + 1] = static_cast<U32>(ground->mTop.size());
     }
+    tops->mTops = ground;
     field_in->mTiles[0].mAir = tops;
     const EnclosureProductPtr a = computeEnclosure(field_in);
     Scene box;
@@ -629,7 +633,7 @@ TEST_CASE("the sky a gap reads does not depend on the order its tile's leaves ar
     }
     s.room(6.f, 6.f, 13.f, 12.f);
     auto in = s.input(1);
-    TileAir platform;
+    TileTops platform;
     platform.mCell = CELL;
     platform.mUnit = UNIT;
     platform.mTopCell = 2;
