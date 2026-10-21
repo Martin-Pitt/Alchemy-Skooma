@@ -223,6 +223,8 @@ namespace
 
 SKWorldCensus::SKWorldCensus()
 {
+    mPropertiesConn = ALObjectPropertiesCache::instance().setChangeCallback(
+        [this](const LLUUID& id) { onPropertiesChanged(id); });
 }
 
 SKWorldCensus::~SKWorldCensus()
@@ -505,6 +507,22 @@ void SKWorldCensus::noteObjectGone(LLViewerObject* object)
             mGone.insert(child->getID());
         }
     }
+}
+
+void SKWorldCensus::onPropertiesChanged(const LLUUID& id)
+{
+    llassert(on_main_thread());
+    // Only a part already taken can have read its name before the name came.
+    if (!mParts.count(id))
+    {
+        return;
+    }
+    if (!running())
+    {
+        mForceSweep = true;
+        return;
+    }
+    mDirty.insert(id);
 }
 
 void SKWorldCensus::gatherObjects()

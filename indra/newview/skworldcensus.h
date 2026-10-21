@@ -34,6 +34,7 @@
 
 class SKPhysicsHavokShape;
 
+#include <boost/signals2/connection.hpp>
 #include <future>
 #include <map>
 #include <memory>
@@ -259,6 +260,8 @@ private:
     void gatherNow();
     /// The object and the linkset parts its change reaches.
     void dirtyLinkset(LLViewerObject* object);
+    /// A part's server name arrived, which the door rules read and no object update announces.
+    void onPropertiesChanged(const LLUUID& id);
     /// A visit, remembering what it took so a later scan can take it again.
     void visitTracked(LLViewerObject* object);
     void visitCachedTracked(const CachedPart& part);
@@ -270,6 +273,7 @@ private:
     bool retake(LLTimer& timer, F32 budget_ms);
     std::unordered_set<LLUUID> mDirty;
     std::unordered_set<LLUUID> mGone;
+    boost::signals2::scoped_connection mPropertiesConn;
     std::unordered_set<LLUUID> mScanDirty;      ///< the dirty set this scan began with
     bool mScanFull = false;
     U32 mScanSerial = 0;
