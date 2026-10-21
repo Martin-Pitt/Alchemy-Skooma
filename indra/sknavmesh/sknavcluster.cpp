@@ -26,6 +26,8 @@
 
 #include "sknavcluster.h"
 
+#include "sknavcensusdelta.h"
+
 #include <algorithm>
 #include <functional>
 #include <numeric>
@@ -224,6 +226,7 @@ namespace sknav
                 c->mId = live[root]->mRoot;
             }
             c->mRecords.push_back(live[i]);
+            c->mHash += recordHash(*live[i]);
             members.push_back(static_cast<S32>(i));
         }
 

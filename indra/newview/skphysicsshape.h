@@ -47,6 +47,14 @@ struct SKPhysicsShape
 /// so the physics-shape overlay and the census cannot disagree.
 bool skPhysicsShapeClassify(LLVOVolume* volume, SKPhysicsShape& out);
 
+/// An estimate of the server's physics weight for the shape, fitted to
+/// GetObjectCost: 0.1 for analytic shapes, hulls by vertex count, triangle
+/// meshes by triangle count and thinness. For the overlay's heatmap.
+F32 skPhysicsShapeCost(LLVOVolume* volume, const SKPhysicsShape& shape);
+
+/// @p cost on the heatmap's ramp, 0 to 1, logarithmic.
+F32 skPhysicsShapeCostFraction(F32 cost);
+
 /// Geometry in the volume's own frame, unscaled: apply scale, rotation and
 /// position to get region space. Analytic shapes carry a centre and half
 /// extents (in that same unscaled frame, so scale applies to them too);
@@ -84,6 +92,10 @@ bool skPhysicsShapeGeometry(LLVOVolume* volume, const SKPhysicsShape& shape, SKS
 /// time. Null for any other volume, while they are on their way, and when the
 /// asset has none (too few triangles, absent section, failed fetch).
 std::shared_ptr<const SKPhysicsHavokShape> skPhysicsShapeSimTriangles(LLVOVolume* volume);
+
+/// A mesh under 0.5 m on any axis never collides as its physics mesh: the sim
+/// uses its hulls, or its single hull without them, whatever the type says.
+bool skPhysicsMeshTooSmallForTriangles(LLVOVolume* volume);
 
 /// The rendered geometry: the volume's faces at whatever LOD is loaded, with
 /// provenance RENDER. What sim surrounds contribute to the weather class.

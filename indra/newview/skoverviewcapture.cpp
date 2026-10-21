@@ -112,7 +112,6 @@ namespace
     const F32 HEADING_HALF_PER_RADIUS = 0.42f;
     const F32 HEADING_THICK_PER_RADIUS = 0.3f; // and extruded this thick
     const F32 TACTICAL_NEAR_M = 0.5f;
-    constexpr F64 ROOM_CELL_M = 0.5;    // the lattice a room is flooded through the air on
     const F32 TACTICAL_MIN_M = 8.f;
     const F32 TACTICAL_MAX_M = 4096.f;
     const F32 BATTLEFIELD_MAX_M = 4096.f;
@@ -1766,21 +1765,19 @@ bool SKOverviewCapture::captureMap(RegionMap& map, LLViewerRegion* region, bool 
     return true;
 }
 
-std::shared_ptr<const std::set<std::pair<S32, S32>>> SKOverviewCapture::roomAt(const LLVector3d& floor, U64& hash)
+std::shared_ptr<const SKOverviewCensus::RoomFootprint> SKOverviewCapture::roomAt(const LLVector3d& floor)
 {
-    LL_PROFILE_ZONE_SCOPED;
-    hash = 0;
-    // The air's rooms need no navmesh: flood the indoor air gaps whose floor is the point's gap's, out from the point.
-    const F64 SAME_FLOOR_M = 0.6;
-    const S32 MAX_CELLS = 16384;
-    const F64 now = LLFrameTimer::getUptimeSeconds().value();
-    const std::pair<S32, S32> start((S32)std::floor(floor.mdV[VX] / ROOM_CELL_M), (S32)std::floor(floor.mdV[VY] / ROOM_CELL_M));
-    mRooms.erase(std::remove_if(mRooms.begin(), mRooms.end(), [now](const Room& r) { return now - r.mAt > 5.0; }), mRooms.end());
     const SKNavWorldViewPtr world = SKNavMesh::instanceExists() ? SKNavMesh::instance().view() : nullptr;
     if (!world)
     {
+        mRooms.clear();
         return {};
     }
+    const U64 revision = world->airRevision();
+    const F64 now = LLFrameTimer::getUptimeSeconds().value();
+    mRooms.erase(std::remove_if(mRooms.begin(), mRooms.end(),
+                                [revision, now](const HeldRoom& r) { return r.mRevision != revision || now - r.mAt > 5.0; }),
+                 mRooms.end());
     // The room's floor is the floor of the air column the point is in, not the point's own height.
     SKNavWorldView::SpaceId start_id;
     sknav::Enclosure start_gap;
@@ -1795,90 +1792,58 @@ std::shared_ptr<const std::set<std::pair<S32, S32>>> SKOverviewCapture::roomAt(c
         start_id.mMesh = mesh;
         start_id.mId = start_gap.mSpaceId;
     }
-    if (!start_found ||
+    if (!start_found || start_id.mId == 0 ||
         (start_gap.mBucket != sknav::EnclosureBucket::INDOORS && start_gap.mBucket != sknav::EnclosureBucket::SHELTERED))
     {
         return {};
     }
-    const F64 start_floor = start_gap.mFloor;
-    const LLViewerRegion* at_region = LLWorld::getInstance()->getRegionFromPosGlobal(floor);
-    const U64 region = at_region ? at_region->getHandle() : 0;
-    for (Room& room : mRooms)
-    {
-        if (room.mRevision == world->revision() && room.mRegion == region && std::fabs(room.mFloor - start_floor) < SAME_FLOOR_M &&
-            room.mCells->count(start))
-        {
-            room.mAt = now; // a room in use stays cached, not flooded afresh every few seconds
-            hash = room.mHash;
-            return room.mCells;
-        }
-    }
-    auto indoorAt = [&](const std::pair<S32, S32>& cell)
-    {
-        const LLVector3d at((cell.first + 0.5) * ROOM_CELL_M, (cell.second + 0.5) * ROOM_CELL_M, start_floor + 1.0);
-        SKNavWorldView::SpaceId id;
-        sknav::Enclosure gap;
-        return world->airGapAt(at, id, gap) && (gap.mBucket == sknav::EnclosureBucket::INDOORS || gap.mBucket == sknav::EnclosureBucket::SHELTERED) &&
-               std::fabs(gap.mFloor - start_floor) < SAME_FLOOR_M;
-    };
-    Room room;
-    room.mCells = std::make_shared<std::set<std::pair<S32, S32>>>();
-    room.mAt = now;
-    room.mFloor = start_floor;
-    room.mRevision = world->revision();
-    room.mRegion = region;
-    std::vector<std::pair<S32, S32>> todo{ start };
-    room.mCells->insert(start);
-    // The space the point is in already holds the room's floor cells: they seed the flood, which then only
-    // walks its edge and on through portals. Its raster cells are ROOM_CELL_M square on the same lattice.
-    static_assert(sknav::RASTER_XY_M == ROOM_CELL_M, "the space raster and the room lattice must share cells");
+    // The start space's room on its own mesh, or none (the street, a roof, a flight, shelter with no building over it):
+    // then the column is cut instead.
     const SKNavWorldView::Mesh* mesh = nullptr;
-    const sknav::Space* space = start_id.mId ? world->space(start_id, &mesh) : nullptr;
-    // Only a building's space: an open one, the ground round every building, would seed sheltered pockets region-wide.
-    if (space && mesh && !space->mFrozen && space->mBuilding != 0)
+    const sknav::Room* room = world->roomOf(start_id, &mesh);
+    if (!room || !mesh)
     {
-        for (const auto& r : space->mRaster)
+        return {};
+    }
+    const SKNavWorldView::RoomId id{ mesh->mId, room->mId };
+    for (HeldRoom& held : mRooms)
+    {
+        if (held.mId == id && held.mHash == room->mHash)
         {
-            const sknav::PlanCell c = sknav::rasterCell(r.first);
-            const F64 z0 = mesh->mOrigin.mdV[VZ] + c.mZ;
-            if (start_floor < z0 - SAME_FLOOR_M || start_floor >= z0 + sknav::RASTER_Z_M + SAME_FLOOR_M ||
-                (S32)room.mCells->size() >= MAX_CELLS)
+            held.mAt = now;
+            return held.mFootprint;
+        }
+    }
+    auto footprint = std::make_shared<SKOverviewCensus::RoomFootprint>();
+    footprint->mMesh = id.mMesh;
+    footprint->mId = id.mId;
+    footprint->mHash = room->mHash;
+    footprint->mOrigin = world->roomCellOrigin(*mesh, *room) - LLVector3d(sknav::RASTER_XY_M, sknav::RASTER_XY_M, 0.0);
+    footprint->mW = room->mCellW + 2;
+    footprint->mH = room->mCellH + 2;
+    if (!room->mTruncated && room->mMask.size() == (size_t)room->mCellW * room->mCellH)
+    {
+        footprint->mMask.assign((size_t)footprint->mW * footprint->mH, 0);
+        for (S32 y = 0; y < room->mCellH; ++y)
+        {
+            for (S32 x = 0; x < room->mCellW; ++x)
             {
-                continue;
-            }
-            // The cell's middle, so a mesh origin off the lattice by rounding still lands in the right cell.
-            const std::pair<S32, S32> cell((S32)std::floor((mesh->mOrigin.mdV[VX] + c.mX + 0.5 * ROOM_CELL_M) / ROOM_CELL_M),
-                                           (S32)std::floor((mesh->mOrigin.mdV[VY] + c.mY + 0.5 * ROOM_CELL_M) / ROOM_CELL_M));
-            if (room.mCells->insert(cell).second)
-            {
-                todo.push_back(cell);
+                if (!room->mMask[(size_t)y * room->mCellW + x])
+                {
+                    continue;
+                }
+                for (S32 dy = 0; dy <= 2; ++dy)
+                {
+                    for (S32 dx = 0; dx <= 2; ++dx)
+                    {
+                        footprint->mMask[(size_t)(y + dy) * footprint->mW + x + dx] = 1;
+                    }
+                }
             }
         }
     }
-    while (!todo.empty() && (S32)room.mCells->size() < MAX_CELLS)
-    {
-        const std::pair<S32, S32> cell = todo.back();
-        todo.pop_back();
-        static const S32 STEPS[4][2] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } };
-        for (const auto& step : STEPS)
-        {
-            const std::pair<S32, S32> next(cell.first + step[0], cell.second + step[1]);
-            if (!room.mCells->count(next) && indoorAt(next))
-            {
-                room.mCells->insert(next);
-                todo.push_back(next);
-            }
-        }
-    }
-    room.mHash = 1469598103934665603ull;
-    for (const auto& cell : *room.mCells)
-    {
-        room.mHash = (room.mHash ^ (U32)cell.first) * 1099511628211ull;
-        room.mHash = (room.mHash ^ (U32)cell.second) * 1099511628211ull;
-    }
-    mRooms.push_back(room);
-    hash = room.mHash;
-    return room.mCells;
+    mRooms.push_back({ id, room->mHash, revision, now, footprint });
+    return footprint;
 }
 
 bool SKOverviewCapture::outdoorsAt(const LLUUID& id, const LLVector3d& feet, F64 now)
@@ -1925,11 +1890,11 @@ const SKNavWorldView::AirColumn* SKOverviewCapture::columnOf(const SKNavWorldVie
     }
     HeldColumn& held = mColumns[id];
     // The dissolve passes the feet back through agent coordinates, so the plan matches to a millimetre, not exactly.
-    if (held.mAt != now || held.mRevision != world->revision() || std::fabs(held.mXY.mdV[VX] - feet.mdV[VX]) > 1e-3 ||
+    if (held.mAt != now || held.mRevision != world->airRevision() || std::fabs(held.mXY.mdV[VX] - feet.mdV[VX]) > 1e-3 ||
         std::fabs(held.mXY.mdV[VY] - feet.mdV[VY]) > 1e-3)
     {
         held.mAt = now;
-        held.mRevision = world->revision();
+        held.mRevision = world->airRevision();
         held.mXY = feet;
         world->columnAt(feet, held.mColumn);
     }
@@ -1974,18 +1939,19 @@ void SKOverviewCapture::updateCut()
         }
         o.mPriority = -(F32)dist_vec(feet, centre);
         o.mOutdoors = outdoorsAt(id, feet, now);
-        U64 room_hash = 0;
         if (!o.mOutdoors && where.mFound && (where.mIndoor || where.mBucket == skmap::plan::Bucket::SHELTERED))
         {
-            o.mRoomCells = roomAt(floor, room_hash);
-            o.mRoomCellM = (F32)ROOM_CELL_M;
+            o.mRoom = roomAt(floor);
+            o.mRoomCellM = sknav::RASTER_XY_M;
         }
         mixPos(floor);
         mixPos(feet);
         mix((U64)(S64)std::llround(o.mCut * 4.f));
         mix(id.getCRC32());
         mix(o.mOutdoors);
-        mix(room_hash);
+        mix(o.mRoom ? o.mRoom->mHash : 0);
+        mix(o.mRoom ? o.mRoom->mId : 0);
+        mix(o.mRoom ? o.mRoom->mMesh.getCRC32() : 0);
         occupants.push_back(std::move(o));
     };
     const LLVector3d agent_floor = gAgent.getPosGlobalFromAgent(

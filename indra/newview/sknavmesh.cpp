@@ -1652,6 +1652,8 @@ bool SKNavMesh::prepareInput(const Mesh& mesh, const TileKey& key, Tile& tile, s
         input->mAir = false;
         input->mCoarseAir = true;
     }
+    // A tile with air of its own keeps its solid raster, so an edit rasterises only its own cells.
+    input->mHoldSolid = input->mAir;
     // Only a region mesh has ground in it, and only its own ground: a cluster
     // clear of the ground has nothing to do with the land far below it, and a
     // tile past the region's edge is standing on land another region meshes.
@@ -1723,10 +1725,14 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
         F32 mLoadMs = 0.f;
         TileRasterPtr mRaster;
         F32 mRasterMs = 0.f;
+        bool mUpdated = false;      ///< built from the held raster rather than from nothing
+        UpdatePath mPath = UpdatePath::NO_SOLID;
     };
+    // Whatever raster the update starts from, it makes the tile a whole raster of this input makes.
+    const TileRasterPtr held = tile.mRaster;
     const bool posted = main_queue->postTo(
         workers,
-        [input, records, cache, skip_load, polys]()
+        [input, records, cache, skip_load, held, polys]()
         {
             LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - build tile worker");
             // A pool drains its queue before it joins, so work left at logout skips itself.
@@ -1761,8 +1767,11 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
             out->mResult = std::make_shared<TileBuildResult>();
             TileBuildResult& result = *out->mResult;
             // Past the radius too: the raster makes the coarse air from its own soup, and is held for the stamp.
-            if (TileRasterPtr raster = rasteriseTile(*input, result))
+            TileUpdate update;
+            out->mUpdated = held != nullptr;
+            if (TileRasterPtr raster = held ? updateTile(*input, *held, result, nullptr, &update) : rasteriseTile(*input, result))
             {
+                out->mPath = update.mPath;
                 out->mRasterMs = result.mMillis;
                 result.mStatus = TileBuildResult::SUCCESS;
                 if (!polys)
@@ -1803,6 +1812,15 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
             {
                 mStats.mLastRasterMs = out->mRasterMs;
                 mStats.mLastPolyMs = out->mResult->mMillis - out->mRasterMs;
+                if (out->mUpdated && out->mPath == UpdatePath::LOCAL)
+                {
+                    ++mStats.mLocalUpdates;
+                    mStats.mLastUpdateMs = out->mRasterMs;
+                }
+                else if (out->mUpdated)
+                {
+                    ++mStats.mUpdateFallbacks;
+                }
             }
             publish(id, generation, key, signature, out->mResult, out->mKey, out->mLoaded, std::move(out->mRaster));
         });
@@ -1884,6 +1902,8 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
         bumpRevision("tile.fail");  // the tile's walls are gone: the overlay moved
         return;
     }
+    // Built again to the air it has: the published air stands, so nothing that reads it runs again.
+    const bool same_air = tile.mAir && !tile.mAirSpilled && result->mAir && tile.mAir != result->mAir && sameAir(*tile.mAir, *result->mAir);
     if (awaitsStamp(*result))
     {
         // The raster stage alone: its air goes to the spaces, and the polygons
@@ -1891,9 +1911,12 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
         tile.mFaces = std::make_shared<const std::vector<WallFace>>(std::move(result->mFaces));
         tile.mLedges = std::make_shared<const std::vector<WallSegment>>(std::move(result->mLedges));
         tile.mRunoff = std::make_shared<const std::vector<DropLink>>(std::move(result->mRunoff));
-        tile.mAir = result->mAir;
-        tile.mAirId = ++mNextAirId;
-        tile.mAirSpilled = false;
+        if (!same_air)
+        {
+            tile.mAir = result->mAir;
+            tile.mAirId = ++mNextAirId;
+            tile.mAirSpilled = false;
+        }
         tile.mAirBuilt = result->mCoarseAir ? 0 : signature;
         tile.mAirCoarse.reset();
         tile.mContentKey = content_key;
@@ -1965,9 +1988,12 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
     tile.mFaces = std::make_shared<const std::vector<WallFace>>(std::move(result->mFaces));
     tile.mLedges = std::make_shared<const std::vector<WallSegment>>(std::move(result->mLedges));
     tile.mRunoff = std::make_shared<const std::vector<DropLink>>(std::move(result->mRunoff));
-    tile.mAir = result->mAirBuilt ? result->mAir : nullptr;
-    tile.mAirId = tile.mAir ? ++mNextAirId : 0;
-    tile.mAirSpilled = false;
+    if (!result->mAirBuilt || !same_air)
+    {
+        tile.mAir = result->mAirBuilt ? result->mAir : nullptr;
+        tile.mAirId = tile.mAir ? ++mNextAirId : 0;
+        tile.mAirSpilled = false;
+    }
     tile.mAirBuilt = result->mAirBuilt && !result->mCoarseAir ? signature : 0;
     // Nothing to stamp this tile with: its polygons are final as built.
     mStats.mUnstampedPublishes += result->mAir && !result->mAir->mLeaves.empty() ? 1 : 0;
@@ -2888,12 +2914,12 @@ std::string SKNavMesh::statsLine() const
                                         mStats.mStamps, mStats.mStampLoads, mStats.mStampReRasters, mStats.mRebinds, mStats.mRebindsQuiet, mStats.mStampsKept, mStats.mStampsOutdated, mStats.mAwaitingStamp, mStats.mLastStampMs,
                                         mStats.mLastStampLatencyMs, mStats.mWorstStampLatencyMs, mStats.mStampOverflow, mStats.mPolyOverflowTiles,
                                         mStats.mUnstampedPublishes);
-    return llformat("navmesh: %u meshes, %u/%u tiles built (%u queued, %u in flight), %u faces, %u segments, %u links, %u builds, %u failures, last %.1f ms, worst %.1f ms, exclusion %.2f ms, raster %.1f + polys %.1f ms, held rasters %u tiles %.1f MB (%u dropped, %u re-rastered), air %u tiles %.1f MB (%u evicted), sky %u cells %.1f MB, disk %.1f MB in %u, %u loads %u rebuilds %u corrupt, hit %.0f%%, load %.2f ms",
+    return llformat("navmesh: %u meshes, %u/%u tiles built (%u queued, %u in flight), %u faces, %u segments, %u links, %u builds, %u failures, last %.1f ms, worst %.1f ms, exclusion %.2f ms, raster %.1f + polys %.1f ms, held rasters %u tiles %.1f MB (%u dropped, %u re-rastered), local updates %u (%u whole, last %.1f ms), air %u tiles %.1f MB (%u evicted), sky %u cells %.1f MB, disk %.1f MB in %u, %u loads %u rebuilds %u corrupt, hit %.0f%%, load %.2f ms",
                     mStats.mMeshes, mStats.mTilesBuilt, mStats.mTiles, mStats.mQueued, mStats.mInFlight,
                     mStats.mFaces, mStats.mSegments, mStats.mLinks, mStats.mBuilds,
                     mStats.mFailures, mStats.mLastBuildMs, mStats.mWorstBuildMs, mStats.mExcludeMs,
                     mStats.mLastRasterMs, mStats.mLastPolyMs, mStats.mRasterTiles, mStats.mRasterBytes / 1048576.0, mStats.mRasterEvicted, mStats.mReRasters,
-                    mStats.mAirTiles, mStats.mAirBytes / 1048576.0, mStats.mAirEvicted, static_cast<U32>(mSkyMap.cells()), mSkyMap.bytes() / 1048576.0,
+                    mStats.mLocalUpdates, mStats.mUpdateFallbacks, mStats.mLastUpdateMs, mStats.mAirTiles, mStats.mAirBytes / 1048576.0, mStats.mAirEvicted, static_cast<U32>(mSkyMap.cells()), mSkyMap.bytes() / 1048576.0,
                     mStats.mDiskBytes / 1048576.0, mStats.mDiskEntries, mStats.mDiskLoads, mStats.mDiskRebuilds, mStats.mDiskCorrupt,
                     looked ? 100.0 * mStats.mDiskLoads / looked : 0.0, mStats.mDiskLoadMs)
            + stamps
@@ -5781,7 +5807,7 @@ void SKNavMesh::refreshOverlay()
     key = mixF32(key, static_cast<F32>(peek));
     key = mixF32(key, eye);
     key = mix(key, mHasMark ? 1ull : 0ull);
-    key = mix(key, show_spaces ? mRooms->revision() : 0ull);
+    key = mix(key, show_spaces ? mRooms->airRevision() : 0ull);
     key = mix(key, show_spaces ? 1ull : 0ull);
     // The spaces layer greys the portals an annotation has crossed out, so
     // it re-gathers when the marks move.
@@ -5799,14 +5825,14 @@ void SKNavMesh::refreshOverlay()
     }
     const S32 wind_bucket = static_cast<S32>(std::lround(heading / (360.f / sknav::WIND_HEADINGS)));
     key = mix(key, show_wind ? static_cast<U64>(wind_bucket + 1000) : 0ull);
-    key = mix(key, show_wind ? mRooms->revision() : 0ull);
+    key = mix(key, show_wind ? mRooms->windRevision() : 0ull);
     // The air layer re-gathers on its own switches; off, it adds one compare to the key.
     key = mix(key, static_cast<U64>(show_air));
     if (show_air)
     {
         static LLCachedControl<U32> air_budget(gSavedSettings, "SKNavOverlayAirBudget", 1000000);
         key = mix(key, static_cast<U64>(air_budget));
-        key = mix(key, mRooms->revision());
+        key = mix(key, mRooms->airRevision());
     }
     if (mHasMark)
     {

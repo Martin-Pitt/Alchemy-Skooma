@@ -334,6 +334,9 @@ public:
         size_t mRasterBytes = 0;
         U32 mRasterEvicted = 0;     ///< rasters dropped for the budget or past the radius
         U32 mReRasters = 0;         ///< builds of tiles whose raster had been dropped
+        U32 mLocalUpdates = 0;      ///< builds that rasterised only an edit's cells into the held raster (updateTile)
+        U32 mUpdateFallbacks = 0;   ///< builds with a held raster that rasterised the whole tile all the same
+        F32 mLastUpdateMs = 0.f;    ///< the raster stage of the last local update
         U32 mStamps = 0;            ///< stamped tiles published
         U32 mStampLoads = 0;        ///< of those, polys found on disk under the stamp's pattern
         U32 mStampReRasters = 0;    ///< of those, rasterised again for want of a held raster

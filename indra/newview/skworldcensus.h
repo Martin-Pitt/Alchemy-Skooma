@@ -28,6 +28,7 @@
 #include "llhudtext.h"
 #include "llsingleton.h"
 #include "llviewerobject.h"
+#include "sknavcensusdelta.h"
 #include "sknavcluster.h"
 #include "sknavfeatures.h"
 #include "sknavtypes.h"
@@ -49,8 +50,9 @@ class LLPathfindingObjectList;
 /// who needs a consistent view (the cluster builds, the overlay, the console).
 struct SKCensusSnapshot
 {
-    U64 mStamp = 0;                             ///< moves once per completed scan
-    LLVector3d mCenter;                         ///< the agent when the scan started
+    U64 mStamp = 0;                             ///< moves when a completed scan's mHash differs from the last one's
+    U64 mHash = 0;                              ///< sknav::censusHash: records, features, doors, cluster window
+    LLVector3d mCenter;                        ///< the agent when the scan started
     LLVector3d mCamera;                         ///< the camera then: covered as well, and often elsewhere
     F64 mRange = 0.0;                           ///< metres from either centre the scan covered
     std::vector<sknav::RecordPtr> mRecords;     ///< static and dynamic alike; clusters skip the dynamic
@@ -60,6 +62,11 @@ struct SKCensusSnapshot
     std::vector<sknav::Feature> mFeatures;
     /// A DoorEntity per DOOR feature, built while the parts' names were at hand.
     std::vector<sknav::DoorEntity> mDoors;
+    /// The records by part, and the parts that came, went and changed since the scan published before this one.
+    sknav::RecordsByPart mByPart;
+    std::vector<sknav::RecordPtr> mAdded;
+    std::vector<sknav::RecordPtr> mRemoved;
+    std::vector<sknav::RecordPtr> mChanged;
 
     struct Stats
     {

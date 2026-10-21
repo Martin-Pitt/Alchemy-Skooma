@@ -73,6 +73,8 @@ namespace sknav
         bool mStamp = true;
         /// A tile without air of its own reads coarse air, so it has spaces to be stamped with.
         bool mCoarseAir = true;
+        /// Rasters stay held past the stamp, so edits can update and stamp them again.
+        bool mKeepRasters = false;
         /// Tiles with air also build it at half the cell over their narrow openings, to be measured.
         bool mFineAir = false;
         /// The air keeps walls' face offsets; off, every face stands at its cell boundary.
@@ -174,6 +176,18 @@ namespace sknav
 
     /// clusters -> meshes and tiles -> terrain -> buildTile -> enclosure -> spaces -> wind.
     void replayCensus(const CensusFile& census, const ReplayOptions& options, ReplayResult& out);
+
+    /// One mesh's enclosure and spaces run again over its last products, as
+    /// the viewer reruns them after tiles' air moved, with that air in place
+    /// of the replay's; the replay's own products are left as they were.
+    struct ReplayRoomsAgain
+    {
+        std::shared_ptr<EnclosureProduct> mEnclosure;
+        RoomsProductPtr mRooms;
+        F64 mEnclosureMs = 0.0;
+        F64 mSpacesMs = 0.0;
+    };
+    ReplayRoomsAgain replayRoomsAgain(const CensusFile& census, const ReplayResult& result, size_t mesh, const std::map<TileKey, TileAirPtr>& air);
 
     /// A mesh's rooms input as the replay gives it: its doors, lifts and last product.
     std::shared_ptr<RoomsInput> replayRoomsInput(const CensusFile& census, const ReplayMesh& mesh, U64 generation);
