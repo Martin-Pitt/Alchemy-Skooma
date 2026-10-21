@@ -529,12 +529,17 @@ private:
         std::vector<ALQueryTicket> mMarkTickets;
         const char* mMarkRule = nullptr;
         std::vector<U32> mMarksCpu;     ///< the CPU's answer for the key the probe was issued for, to diff against
-        /// The roof probe in flight: a query per linkset that may cover the feet.
+        /// The roof probe in flight: the feet texel's slot and the feet's height then, and a query per linkset that
+        /// may cover the feet.
         skoverview::ProbeSlot mRoofProbe;
+        S32 mFeetSlot = -1;
+        F64 mFeetZ = 0.0;
         std::vector<std::pair<U32, LLUUID>> mCoverCandidates;
         std::vector<ALQueryTicket> mCoverTickets;
         bool mSurfaceCpu = false;       ///< the CPU's answer for the key the roof probe was issued for
         bool mCoveredCpu = false;
+        U32 mBestCpu = 0;
+        F64 mBestZCpu = -1e30;
     };
     /// The probes' counts over a second, for the log.
     struct ProbeStats

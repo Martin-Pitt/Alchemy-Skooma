@@ -2586,12 +2586,36 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
         covered = cover;
         return found;
     };
+    // The feet: a downward look at the one point under them, through the bearing band; the texel is the highest
+    // surface's linkset, its depth the surface's height.
+    auto feetBox = [&]()
+    {
+        SKOverviewProbes::Box box;
+        box.mMinX = box.mMinY = -0.01f;
+        box.mMaxX = box.mMaxY = 0.01f;
+        box.mFrom = (F32)STAND_ABOVE_M;
+        box.mTo = (F32)-STAND_BELOW_M;
+        return box;
+    };
     // Cover: an upward look at the one point over the feet, from just above them, a query per linkset that may be
     // over them; a face seen edge-on does not count, as the CPU's walls never did.
-    auto issueCover = [&](OccupantCut& cache, const Occupant& occupant, U64 roof_key) -> bool
+    auto issueRoof = [&](OccupantCut& cache, const Occupant& occupant, U64 roof_key) -> bool
     {
         LL_PROFILE_ZONE_NAMED("sk cut probes issue");
         const LLVector3d& feet = occupant.mFeet;
+        std::vector<SKOverviewProbes::Run> under;
+        for (const auto& entry : extents)
+        {
+            const Extent& e = entry.second;
+            if (!e.mCuttable || feet.mdV[VX] < e.mMin.mdV[VX] || feet.mdV[VX] > e.mMax.mdV[VX] ||
+                feet.mdV[VY] < e.mMin.mdV[VY] || feet.mdV[VY] > e.mMax.mdV[VY] ||
+                feet.mdV[VZ] < e.mMin.mdV[VZ] - STAND_ABOVE_M || feet.mdV[VZ] > e.mMax.mdV[VZ] + STAND_BELOW_M)
+            {
+                continue;
+            }
+            const std::vector<SKOverviewProbes::Run> runs = runsOf(e, feet);
+            under.insert(under.end(), runs.begin(), runs.end());
+        }
         std::vector<std::pair<U32, LLUUID>> candidates;
         F64 top = feet.mdV[VZ] + STAND_ABOVE_M;
         for (const auto& entry : extents)
@@ -2610,6 +2634,11 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
         {
             return false;
         }
+        const S32 slot = probes->sample(feetBox(), under);
+        if (slot < 0)
+        {
+            return false;
+        }
         SKOverviewProbes::Box box;
         box.mMinX = box.mMinY = -0.01f;
         box.mMaxX = box.mMaxY = 0.01f;
@@ -2619,6 +2648,8 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
         {
             return false;
         }
+        cache.mFeetSlot = slot;
+        cache.mFeetZ = feet.mdV[VZ];
         cache.mCoverTickets.clear();
         for (const auto& candidate : candidates)
         {
@@ -2692,14 +2723,37 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
             }
             if (probes)
             {
-                // Whether anything covers the feet, by the GPU, beside the CPU's answer until it rules.
+                // The surface under the feet and whether anything covers them, by the GPU, beside the CPU's answer
+                // until it rules. The texel names an id, which holds only under the buffers it was drawn from.
                 LL_PROFILE_ZONE_NAMED("sk cut probes collect");
                 std::vector<U64> counts;
                 bool lost = false;
-                const bool ready = landed(cache.mCoverTickets, counts, lost);
-                if (cache.mRoofProbe.settle(ready, lost, mExtentsSignature, false) == skoverview::ProbeSlot::Outcome::Apply)
+                bool ready = landed(cache.mCoverTickets, counts, lost);
+                U32 texel = 0;
+                F32 depth = 0.f;
+                if (cache.mRoofProbe.mPending)
                 {
-                    const bool covered = !skoverview::passedExtents(cache.mCoverCandidates, counts, mRootExtent).empty();
+                    const SKOverviewProbes::Status feet = probes->sampleResult(cache.mRoofProbe.mIssued, cache.mFeetSlot, texel, depth);
+                    ready = ready && feet == SKOverviewProbes::Status::Ready;
+                    lost = lost || feet == SKOverviewProbes::Status::Lost;
+                }
+                if (cache.mRoofProbe.settle(ready, lost, mExtentsSignature, true) == skoverview::ProbeSlot::Outcome::Apply)
+                {
+                    const SKOverviewProbes::Box box = feetBox();
+                    U32 id = 0;
+                    F32 z = 0.f;
+                    const bool surface = skoverview::feetSurface(texel, depth, box.nearZ(), box.farZ(), LLRender::sReverseZ, id, z) &&
+                                         extents.count(id) && extents.at(id).mCuttable;
+                    const F64 surface_z = cache.mFeetZ + z;
+                    if (surface != cache.mSurfaceCpu ||
+                        (surface && (id != cache.mBestCpu || std::fabs(surface_z - cache.mBestZCpu) > 0.02)))
+                    {
+                        const std::string gpu = surface ? llformat("%u %.2f", id, surface_z) : std::string("none");
+                        const std::string cpu = cache.mSurfaceCpu ? llformat("%u %.2f", cache.mBestCpu, cache.mBestZCpu) : std::string("none");
+                        LL_INFOS("SKOverview") << "feet probe differs from CPU for " << occupant.mId << ": gpu " << gpu << " cpu " << cpu
+                                               << LL_ENDL;
+                    }
+                    const bool covered = surface && !skoverview::passedExtents(cache.mCoverCandidates, counts, mRootExtent).empty();
                     if (cache.mSurfaceCpu && covered != cache.mCoveredCpu)
                     {
                         LL_INFOS("SKOverview") << "probe cover differs from CPU for " << occupant.mId << ": gpu "
@@ -2713,10 +2767,12 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
                 {
                     cache.mRoofProbe.invalidate();
                 }
-                if (cache.mRoofProbe.wants(roof_key) && issueCover(cache, occupant, roof_key))
+                if (cache.mRoofProbe.wants(roof_key) && issueRoof(cache, occupant, roof_key))
                 {
                     cache.mSurfaceCpu = cache.mBestZ > -1e29;
                     cache.mCoveredCpu = cache.mCovered;
+                    cache.mBestCpu = cache.mBest;
+                    cache.mBestZCpu = cache.mBestZ;
                 }
                 probing = probing || cache.mRoofProbe.mPending;
             }
