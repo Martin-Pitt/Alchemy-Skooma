@@ -363,7 +363,15 @@ void LLAgentCamera::resetView(bool reset_camera, bool change_camera)
             gAgent.resetAxes(lerp(gAgent.getAtAxis(), agent_at_axis, LLSmoothInterpolation::getInterpolant(0.3f)));
         }
 
+        // <SK:Nexii> camera warp: a reset from far away (alt-cam) warps home like the mini-map's Cam.
+        const bool far_away = isAgentAvatarValid()
+            && (getCameraPositionGlobal() - gAgent.getPositionGlobal()).magVec() > SKCameraWarp::RESET_DISTANCE;
         setFocusOnAvatar(true, ANIMATE);
+        if (far_away && mCameraAnimating)
+        {
+            startCameraWarp(SKCameraWarp::AVATAR);
+        }
+        // </SK:Nexii>
 
         mCameraFOVZoomFactor = 0.f;
 
