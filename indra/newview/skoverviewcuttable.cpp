@@ -144,7 +144,7 @@ void SKOverviewCutTable::bind(LLGLSLShader& prog)
         return;
     }
     const S32 point = prog.getStorageBinding(LLShaderMgr::SK_OVERVIEW_CUT_BLOCK);
-    if (point >= 0 && LLRender::sCompute)
+    if (point >= 0)
     {
         // The point is the same in every cut program, so binding it again for the next is no call at all.
         gGL.bindStorageBuffer((U32)point, mStream.getBuffer(), mOffset, (size_t)mPublishedRows * sizeof(Row));

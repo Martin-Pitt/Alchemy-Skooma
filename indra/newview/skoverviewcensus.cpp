@@ -1549,12 +1549,9 @@ namespace
                   "the cut table and the census share their sentinels");
 
     /// Writes each vertex's linkset id (Group::mId) into the weight channel, which the cut table is read through.
+    /// Every vertex of a batch belongs to one of its groups, so none is left unwritten.
     void writeGroupIds(LLStrider<F32> ids, U32 total, const std::vector<SKOverviewCensus::Group>& groups)
     {
-        for (U32 v = 0; v < total; ++v)
-        {
-            ids[v] = 0.f;
-        }
         for (const SKOverviewCensus::Group& group : groups)
         {
             for (U32 c = 0; c < skoverview::NUM_CENSUS_CLASSES; ++c)
