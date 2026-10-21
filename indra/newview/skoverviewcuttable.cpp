@@ -104,6 +104,7 @@ bool SKOverviewCutTable::flush()
             return false;
         }
         mCapacity = capacity;
+        mAttach = true;
     }
     U8* dst = mStream.map();
     if (!dst)
@@ -150,14 +151,14 @@ void SKOverviewCutTable::bind(LLGLSLShader& prog)
     {
         glGenTextures(1, &mTexture);
     }
-    const U32 buffer = mStream.getBuffer().getGLName();
-    if (mTextureBuffer != buffer)
+    if (mAttach)
     {
+        // By a flag, not the buffer's name: GL may give a reallocated buffer the name of the one it replaced.
         // glTexBuffer acts on the active unit, which a bind of what the slot already holds would not make this one.
         slot->unbind();
         slot->bindManual(ALTextureSlot::TT_BUFFER_TEXTURE, mTexture);
-        glTexBuffer(GL_TEXTURE_BUFFER, GL_RGBA32F, buffer);
-        mTextureBuffer = buffer;
+        glTexBuffer(GL_TEXTURE_BUFFER, GL_RGBA32F, mStream.getBuffer().getGLName());
+        mAttach = false;
     }
     else
     {
@@ -193,7 +194,7 @@ void SKOverviewCutTable::release()
         glDeleteTextures(1, &mTexture);
     }
     mTexture = 0;
-    mTextureBuffer = 0;
+    mAttach = true;
     mStream.release();
     mCapacity = 0;
     mOffset = 0;
