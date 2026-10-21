@@ -2391,7 +2391,6 @@ void SKOverviewCapture::tactical()
             ++mCost.mReuses;
         }
         updateWork(shot, !same, patch_rect.notEmpty() ? dissolve_key : 0, patch_rect, movers);
-        mProbes.endFrame();
     }
 
     mTacticalView = shot.mView;
@@ -2403,6 +2402,8 @@ void SKOverviewCapture::tactical()
     mTacticalViewport[1] = vy;
     mTacticalViewport[2] = vw;
     mTacticalViewport[3] = vh;
+    updatePick();
+    mProbes.endFrame();
     mTacticalReady = true;
     mTacticalPickable = true;
     LL_INFOS_ONCE("SKOverview") << "tactical overview rendered " << vw << "x" << vh << ", census tris " << mCensus.triangles()
@@ -2459,21 +2460,84 @@ bool SKOverviewCapture::rightClick(S32 x, S32 y)
     return true;
 }
 
+void SKOverviewCapture::updatePick()
+{
+    // The texels read in earlier frames, oldest first: the newest that landed is the one a pick reads.
+    for (auto it = mPicksInFlight.begin(); it != mPicksInFlight.end();)
+    {
+        F32 depth = 0.f;
+        const SKOverviewProbes::Status status = mProbes.pickResult(it->mFrame, depth);
+        if (status == SKOverviewProbes::Status::Pending)
+        {
+            ++it;
+            continue;
+        }
+        if (status == SKOverviewProbes::Status::Ready)
+        {
+            mPick = *it;
+            mPick.mDepth = depth;
+        }
+        it = mPicksInFlight.erase(it);
+    }
+    // This frame's: the shown frame's depth (the static capture, or the work target with the circles and the movers).
+    const LLVector2 scale = gViewerWindow->getDisplayScale();
+    const S32 x = (S32)std::floor(gViewerWindow->getCurrentMouseX() * scale.mV[VX] - mTacticalViewport[0]);
+    const S32 y = (S32)std::floor(gViewerWindow->getCurrentMouseY() * scale.mV[VY] - mTacticalViewport[1]);
+    if (!mSceneDepth || mPicksInFlight.size() >= 4 || !mProbes.readDepth(*mSceneDepth, x, y))
+    {
+        return;
+    }
+    PickSample sample;
+    sample.mX = x;
+    sample.mY = y;
+    sample.mView = mTacticalView;
+    sample.mProj = mTacticalProj;
+    sample.mViewport[2] = mTacticalViewport[2];
+    sample.mViewport[3] = mTacticalViewport[3];
+    sample.mAgentOrigin = gAgent.getPosGlobalFromAgent(LLVector3::zero);
+    sample.mFrame = mProbes.frame();
+    sample.mValid = true;
+    mPicksInFlight.push_back(sample);
+}
+
 bool SKOverviewCapture::groundAt(const LLVector2& at, LLVector3d& world) const
 {
-    // The tactical camera's ray through the pixel, against what the view draws: the census as cut, then the terrain,
-    // then the agent's floor plane.
+    const F64 now = LLFrameTimer::getUptimeSeconds().value();
+    if (now - mPicksSince >= 1.0)
+    {
+        if (mPicksByTexel || mPicksByFallback)
+        {
+            LL_INFOS("SKOverview") << "pick: " << mPicksByTexel << " by texel, " << mPicksByFallback << " by terrain or plane" << LL_ENDL;
+        }
+        mPicksByTexel = 0;
+        mPicksByFallback = 0;
+        mPicksSince = now;
+    }
+    // What the pixel shows, cut, dissolved and with the movers: the frame's depth under the cursor, while the cursor is
+    // within two pixels of where it was read and the read is at most three frames old, and not the cleared depth.
+    const PickSample& pick = mPick;
+    if (pick.mValid && std::fabs(at.mV[VX] - (pick.mX + 0.5f)) <= 2.5f && std::fabs(at.mV[VY] - (pick.mY + 0.5f)) <= 2.5f &&
+        mProbes.frame() - pick.mFrame <= 3 && pick.mDepth != al_window_far())
+    {
+        LLVector4a win, agent;
+        win.set(pick.mX + 0.5f, pick.mY + 0.5f, pick.mDepth, 1.f);
+        agent = al_unproject(win, pick.mView, pick.mProj, pick.mViewport);
+        const F32* p = agent.getF32ptr();
+        if (std::isfinite(p[0]) && std::isfinite(p[1]) && std::isfinite(p[2]))
+        {
+            world = pick.mAgentOrigin + LLVector3d(p[0], p[1], p[2]);
+            ++mPicksByTexel;
+            return true;
+        }
+    }
+    ++mPicksByFallback;
+    // Otherwise the tactical camera's ray through the pixel: the terrain, then the agent's floor plane.
     LLVector3 from, dir;
     if (!cursorRay(mTacticalView, mTacticalProj, mTacticalViewport, at, from, dir))
     {
         return false;
     }
     const F32 PICK_RANGE_M = 4096.f;
-    const LLVector3d origin = gAgent.getPosGlobalFromAgent(from);
-    if (mCensus.raycast(origin, dir, PICK_RANGE_M, world))
-    {
-        return true;
-    }
     LLVector4a start, end, hit;
     start.load3(from.mV);
     LLVector3 far_pt = from + dir * PICK_RANGE_M;

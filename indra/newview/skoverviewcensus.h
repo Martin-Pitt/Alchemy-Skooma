@@ -88,7 +88,7 @@ namespace skoverview
     constexpr F32 GROUND_BASE_M = 4.f;  ///< a cluster whose base is no higher than this above the land stands on it
     constexpr F32 NO_CUT = 1.0e30f;     ///< the cut height of a linkset drawn whole
     constexpr F32 HIDDEN = -1.0e30f;    ///< the cut height of a linkset not drawn at all
-    constexpr U8 TRI_PASS_THROUGH = 1;  ///< a triangle's flag: an invisible part's the cut and raycasts pass through
+    constexpr U8 TRI_PASS_THROUGH = 1;  ///< a triangle's flag: an invisible part's, which the cut's probes pass through
     constexpr U8 TRI_OPEN = 2;          ///< a triangle's flag: its part has open edges, so has no inside to section
 
     U8 codeOf(CensusClass cls);
@@ -159,7 +159,7 @@ public:
         U32 mPage[skoverview::NUM_CENSUS_CLASSES]; ///< per class, its page in the region's, NO_PAGE when it has none
         U32 mStart[skoverview::NUM_CENSUS_CLASSES] = {}; ///< per class, its run in that page
         U32 mCount[skoverview::NUM_CENSUS_CLASSES] = {};
-        /// Its triangles and their flags, region-local: what the cut's sight lines and the raycast read.
+        /// Its triangles and their flags, region-local: what the cut's sight lines read.
         std::shared_ptr<const LinksetGeom> mGeom;
     };
 
@@ -245,9 +245,6 @@ public:
     U64 cutStamp() const { return mCutStamp; }
     /// A linkset's cut at the last applyCut, by its root: its height (HIDDEN when hidden) and why; false when whole.
     bool cutOf(const LLUUID& root, F32& height, std::string& why) const;
-    /// The nearest census triangle along a ray as the tactical view draws it, global: invisible parts, hidden linksets
-    /// and whatever lies above its linkset's last cut are passed through. False when nothing is hit within max_m.
-    bool raycast(const LLVector3d& origin, const LLVector3& dir, F32 max_m, LLVector3d& hit) const;
     const std::vector<Region>& regions() const { return mRegions; }
     U32 triangles() const { return mTriangles; }
     /// Parts that keep changing (a scripted door, a target on a track), left out of the static buffers for the movers
