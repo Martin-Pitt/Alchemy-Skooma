@@ -255,6 +255,8 @@ private:
     bool running() const;
     /// The scan's live objects: the dirty set, or the whole list on a full sweep.
     void gatherObjects();
+    /// What gatherObjects decided, collected: at once for a full sweep, once its cadence allows for a dirty scan.
+    void gatherNow();
     /// The object and the linkset parts its change reaches.
     void dirtyLinkset(LLViewerObject* object);
     /// A visit, remembering what it took so a later scan can take it again.
@@ -277,6 +279,10 @@ private:
     std::unordered_map<LLUUID, PartCache>::const_iterator mRetakeAt;
     size_t mRetakeSize = 0;
     F64 mScanBegan = 0.0;
+    const char* mScanWhy = "-";
+    bool mScanGathered = false;
+    F64 mScanGatherAt = 0.0;
+    F64 mLastGather = -1.0e9;
     bool mForceSweep = true;
     F64 mSweepBegan = -1.0e9;                   ///< when the last completed full sweep began
     LLVector3d mSweepCenter;

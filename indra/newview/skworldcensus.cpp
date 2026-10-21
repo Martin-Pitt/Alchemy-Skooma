@@ -79,6 +79,8 @@ namespace
     constexpr F64 RESCAN_MOVE_M = 16.0;
     constexpr F64 FULL_SWEEP_S = 10.0;
     constexpr F64 SCAN_LOG_S = 5.0;
+    // A dirty scan gathers no sooner than this after the last: its finish costs ~10 ms of feature rules on the main thread.
+    constexpr F64 DIRTY_SCAN_S = 0.25;
 
     // What the region's object cache knows by its local id: no asset id is
     // ever going to arrive for something we have not drawn, so the record is
@@ -507,7 +509,6 @@ void SKWorldCensus::noteObjectGone(LLViewerObject* object)
 
 void SKWorldCensus::gatherObjects()
 {
-    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - dirty gather");
     llassert(on_main_thread());
     SKCensusSnapshot& snap = *mScan.mPending;
     const F64 now = gFrameTimeSeconds;
@@ -533,6 +534,24 @@ void SKWorldCensus::gatherObjects()
     ++mScanSerial;
     mScanMissed = 0;
     mRetaking = false;
+    mScan.mObjects.clear();
+    mScanWhy = why;
+    // The finish's feature rules cost the same however little changed, so a dirty scan waits out its cadence.
+    mScanGathered = false;
+    mScanGatherAt = mScanFull ? now : std::max(now, mLastGather + DIRTY_SCAN_S);
+    if (now >= mScanGatherAt)
+    {
+        gatherNow();
+    }
+}
+
+void SKWorldCensus::gatherNow()
+{
+    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - dirty gather");
+    SKCensusSnapshot& snap = *mScan.mPending;
+    const F64 now = gFrameTimeSeconds;
+    mScanGathered = true;
+    mLastGather = now;
     mScanBegan = now;
 
     // What was killed leaves the caches first, so a part made again under its id is visited fresh.
@@ -546,7 +565,6 @@ void SKWorldCensus::gatherObjects()
     const U32 requeued = mPendingQueued;
     mPendingQueued = 0;
 
-    mScan.mObjects.clear();
     const S32 count = gObjectList.getNumObjects();
     if (mScanFull)
     {
@@ -583,7 +601,7 @@ void SKWorldCensus::gatherObjects()
     {
         mLastScanLog = now;
         LL_INFOS("SKNav") << "census scan: dirty " << mScanDirty.size() << " (" << requeued << " pending) of " << count
-                          << " objects, full " << (mScanFull ? "y" : "n") << " (" << why << "), last scan "
+                          << " objects, full " << (mScanFull ? "y" : "n") << " (" << mScanWhy << "), last scan "
                           << (mSnapshot ? mSnapshot->mStats.mScanMs : 0.f) << " ms" << LL_ENDL;
     }
 }
@@ -756,6 +774,14 @@ bool SKWorldCensus::retake(LLTimer& timer, F32 budget_ms)
 void SKWorldCensus::continueScan(F32 budget_ms)
 {
     LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - scan slice");
+    if (!mScanGathered)
+    {
+        if (gFrameTimeSeconds < mScanGatherAt)
+        {
+            return;
+        }
+        gatherNow();
+    }
     LLTimer timer;
     const S32 count = static_cast<S32>(mScan.mObjects.size());
     while (mScan.mIndex < count)
