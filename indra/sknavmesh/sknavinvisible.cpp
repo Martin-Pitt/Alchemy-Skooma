@@ -117,6 +117,18 @@ namespace sknav
             return true;
         }
 
+        // The piece's bounds as planes: a sharp corner grown outward reaches no further than they do.
+        void boxPlanes(Piece& piece)
+        {
+            for (S32 axis = 0; axis < 3; ++axis)
+            {
+                LLVector3 n;
+                n.mV[axis] = 1.f;
+                piece.mPlanes.emplace_back(n, piece.mHi.mV[axis]);
+                piece.mPlanes.emplace_back(-n, -piece.mLo.mV[axis]);
+            }
+        }
+
         // A convex body's distinct planes from its triangles, oriented away from its vertices' mean; none when it does
         // not reach the part's bounds.
         Piece bodyPiece(const LLVector3* v, size_t count, const LLVector3& offset, const LLVector3& lo, const LLVector3& hi,
@@ -159,26 +171,19 @@ namespace sknav
                     piece.mPlanes.emplace_back(n, k);
                 }
             }
-            // Every plane grown outward, so a face lying on the body's face is inside it; and its bounds as planes too,
-            // so a sharp corner grown outward reaches no further than they do.
+            // Every plane grown outward, so a face lying on the body's face is inside it.
             for (auto& plane : piece.mPlanes)
             {
                 plane.second += on;
             }
             piece.mLo -= LLVector3(on, on, on);
             piece.mHi += LLVector3(on, on, on);
-            for (S32 axis = 0; axis < 3; ++axis)
-            {
-                LLVector3 n;
-                n.mV[axis] = 1.f;
-                piece.mPlanes.emplace_back(n, piece.mHi.mV[axis]);
-                piece.mPlanes.emplace_back(-n, -piece.mLo.mV[axis]);
-            }
+            boxPlanes(piece);
             return piece;
         }
 
-        // A triangle extruded mProxyTolerance (and mCoplanarD) either way along its normal, its sides through its edges so
-        // a mesh's prisms meet without overlap; false when degenerate.
+        // A triangle extruded mProxyTolerance (and mCoplanarD) either way along its normal, its sides mCoplanarD past its
+        // edges so a face lying on a shared edge's plane is inside; false when degenerate.
         bool prismPiece(const LLVector3& a, const LLVector3& b, const LLVector3& c, const InvisibleParams& params, Piece& piece)
         {
             LLVector3 n;
@@ -204,13 +209,14 @@ namespace sknav
                 {
                     s = -s;
                 }
-                piece.mPlanes.emplace_back(s, s * from);
+                piece.mPlanes.emplace_back(s, s * from + params.mCoplanarD);
             }
             piece.mLo = piece.mHi = a;
             update_min_max(piece.mLo, piece.mHi, b);
             update_min_max(piece.mLo, piece.mHi, c);
             piece.mLo -= LLVector3(tol, tol, tol);
             piece.mHi += LLVector3(tol, tol, tol);
+            boxPlanes(piece);
             piece.mPrism = true;
             return true;
         }
@@ -407,6 +413,16 @@ namespace sknav
                 rest = p;
                 for (const auto& plane : piece.mPlanes)
                 {
+                    // Wholly on the inside, or lying in the plane as a face on a shared edge does: nothing leaves.
+                    F32 beyond = -1e30f;
+                    for (const LLVector3& v : rest)
+                    {
+                        beyond = llmax(beyond, plane.first * v - plane.second);
+                    }
+                    if (beyond <= 0.f)
+                    {
+                        continue;
+                    }
                     clip(rest, plane.first, plane.second, false, out);
                     if (out.size() >= 3 && polyArea(out) > 0.f)
                     {
