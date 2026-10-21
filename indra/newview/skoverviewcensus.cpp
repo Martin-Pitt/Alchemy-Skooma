@@ -693,6 +693,38 @@ bool SKOverviewCensus::update()
         }
         mRecordsChanged |= records != mRecordsKey;
         mRecordsKey = records;
+        // The clustered linksets take their cluster's heights as it moves; whether it stands on the land waits for the
+        // next rebuild.
+        std::unordered_map<LLUUID, const sknav::Cluster*> cluster_of_root;
+        for (const sknav::ClusterPtr& c : snap->mClusters.mClusters)
+        {
+            for (const sknav::RecordPtr& rec : c->mRecords)
+            {
+                cluster_of_root.emplace(rec->mRoot, c.get());
+            }
+        }
+        bool heights_moved = false;
+        for (Batch& batch : mBatches)
+        {
+            for (Group& group : batch.mGroups)
+            {
+                const auto it = cluster_of_root.find(group.mRoot);
+                if (it == cluster_of_root.end() || !mClusterRoots.count(group.mRoot))
+                {
+                    continue;
+                }
+                const F32 lo = (F32)it->second->mMin.mdV[VZ];
+                const F32 hi = (F32)it->second->mMax.mdV[VZ];
+                heights_moved |= lo != group.mMinZ || hi != group.mMaxZ;
+                group.mMinZ = lo;
+                group.mMaxZ = hi;
+            }
+        }
+        if (heights_moved)
+        {
+            mExtentsBuilt = false;
+            mCutSignature = 0; // applyCut works the cut again with the same key
+        }
     }
     const bool recheck = mUnknownLook && now >= mRecheckAt;
     const bool sculpts_due = now >= mSculptsAt;
@@ -1061,23 +1093,12 @@ bool SKOverviewCensus::update()
         }
     }
     auto groupOf = [&](size_t i) -> U32 { return group_of[i]; };
-    // A part's linkset and its cluster's extent, never their indices: those follow the records' order.
-    auto rounded = [](const LLVector3d& v)
-    {
-        return (U64)(S64)std::llround(v.mdV[VX] * 64.0) ^ ((U64)(S64)std::llround(v.mdV[VY] * 64.0) << 21) ^
-               ((U64)(S64)std::llround(v.mdV[VZ] * 64.0) << 42);
-    };
+    // A part's linkset, never its index, which follows the records' order; its cluster's heights are refreshed on a
+    // new stamp instead, so one part moving does not re-sign every other part of its cluster.
     for (size_t i = 0; i < kept.size(); ++i)
     {
         mix(kept[i]->mPart.getCRC32());
         mix(roots[groupOf(i)].getCRC32());
-        const auto cluster = group_cluster.find(groupOf(i));
-        if (cluster != group_cluster.end())
-        {
-            const sknav::Cluster& c = *snap->mClusters.mClusters[cluster->second];
-            mix(rounded(c.mMin));
-            mix(rounded(c.mMax));
-        }
         endEntry('C', kept[i]->mPart);
     }
     // Which land is connected decides what of a surround is in the void.
@@ -1110,6 +1131,11 @@ bool SKOverviewCensus::update()
                        std::make_move_iterator(sculpt_cover.end()));
     job->mVerdicts = mVerdicts;
     job->mGroupOf = std::move(group_of);
+    mClusterRoots.clear();
+    for (const auto& gc : group_cluster)
+    {
+        mClusterRoots.insert(roots[gc.first]);
+    }
     job->mRoots = std::move(roots);
     job->mGroupCluster = std::move(group_cluster);
     job->mAnchors.resize(job->mRoots.size());

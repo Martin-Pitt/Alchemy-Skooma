@@ -37,6 +37,7 @@
 #include <map>
 #include <set>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 class LLVertexBuffer;
@@ -387,6 +388,7 @@ private:
     F64 mRecheckAt = 0.0;
     U64 mRecordsKey = 0;        ///< the census records' identities at the last look
     bool mRecordsChanged = true;
+    std::unordered_set<LLUUID> mClusterRoots; ///< the linksets the last build bounds by their cluster's heights
     F64 mSculptsAt = 0.0;       ///< when the live sculpts are looked at again
     std::shared_ptr<const struct SKCensusSnapshot> mSnapshot;
     U32 mTriangles = 0;
