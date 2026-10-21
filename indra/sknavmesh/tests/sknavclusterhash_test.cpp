@@ -170,4 +170,65 @@ namespace
         CHECK(removed.empty());
         CHECK(changed.empty());
     }
+
+    TEST_CASE("sknavclusterhash: features doors the window and the gap move the scan hash", "[sknavclusterhash]")
+    {
+        const std::vector<RecordPtr> records = twoBuildings();
+
+        Feature vehicle;
+        vehicle.mKind = FeatureKind::VEHICLE;
+        vehicle.mRoots = { id(5), id(6) };
+        vehicle.mMin.set(20.0, 20.0, 20.0);
+        vehicle.mMax.set(24.0, 22.0, 22.0);
+        Feature shaft;
+        shaft.mKind = FeatureKind::ELEVATOR;
+        shaft.mRoots = { id(7) };
+        shaft.mMin.set(30.0, 0.0, 20.0);
+        shaft.mMax.set(32.0, 2.0, 40.0);
+        const std::vector<Feature> features{ vehicle, shaft };
+
+        DoorEntity door;
+        door.mId = id(12);
+        door.mLeaves = { id(12) };
+        door.mMin.set(4.0, 0.0, 20.0);
+        door.mMax.set(4.1, 1.0, 22.0);
+        door.mSill = 20.0;
+        const std::vector<DoorEntity> doors{ door };
+
+        ClusterWindow window;
+        window.mMin.set(0.0, 0.0, 0.0);
+        window.mMax.set(256.0, 256.0, 0.0);
+
+        const U64 scan = censusHash(records, features, doors, window, 0.5);
+        CHECK(censusHash(records, features, doors, window, 0.5) == scan);
+
+        // The same roots in another order are the same feature.
+        std::vector<Feature> f = features;
+        std::reverse(f[0].mRoots.begin(), f[0].mRoots.end());
+        CHECK(censusHash(records, f, doors, window, 0.5) == scan);
+
+        // A vehicle drives: only its feature's box says so.
+        f = features;
+        f[0].mMin.mdV[VX] += 0.25;
+        f[0].mMax.mdV[VX] += 0.25;
+        CHECK(censusHash(records, f, doors, window, 0.5) != scan);
+
+        // A car arrives in the shaft.
+        f = features;
+        f[1].mWorking = true;
+        CHECK(censusHash(records, f, doors, window, 0.5) != scan);
+
+        // A door with no rest pose swings.
+        std::vector<DoorEntity> d = doors;
+        d[0].mMax.mdV[VX] += 0.5;
+        CHECK(censusHash(records, features, d, window, 0.5) != scan);
+
+        // Another region loads, so the clusters are cut to another window.
+        ClusterWindow wider = window;
+        wider.mMax.mdV[VX] = 512.0;
+        CHECK(censusHash(records, features, doors, wider, 0.5) != scan);
+
+        // Another gap links the records differently.
+        CHECK(censusHash(records, features, doors, window, 1.0) != scan);
+    }
 }
