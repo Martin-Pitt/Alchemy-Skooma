@@ -2761,6 +2761,7 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
         mProbeStats.mIssued += budget.people();
         mProbeStats.mQueries += probes->queriesIssued();
         mProbeStats.mMostQueries = llmax(mProbeStats.mMostQueries, probes->queriesIssued());
+        mProbeStats.mRefused += probes->queriesRefused();
         std::vector<U32> ids;
         std::vector<F32> depths;
         S32 w = 0, h = 0;
@@ -2785,11 +2786,13 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
             {
                 pending += entry.second.mMarksProbe.mPending || entry.second.mRoofProbe.mPending ? 1 : 0;
             }
-            if (mProbeStats.mIssued || pending)
+            if (mProbeStats.mIssued || pending || mProbeStats.mRefused)
             {
-                LL_INFOS("SKOverview") << "probe: " << mProbeStats.mIssued << " issued, " << pending << " pending, " << mProbeStats.mQueries
-                                       << " queries (" << mProbeStats.mMostQueries << " in a frame at most), "
-                                       << llformat("%.1f", mProbeStats.mApplied ? (F32)mProbeStats.mLatencyFrames / mProbeStats.mApplied : 0.f)
+                const F32 latency = mProbeStats.mApplied ? (F32)mProbeStats.mLatencyFrames / mProbeStats.mApplied : 0.f;
+                LL_INFOS("SKOverview") << "probe: " << mProbeStats.mIssued << " issued, " << pending << " pending, "
+                                       << mProbeStats.mQueries << " queries (" << mProbeStats.mMostQueries
+                                       << " in a frame at most, " << mProbeStats.mRefused << " refused), "
+                                       << llformat("%.1f", latency)
                                        << " frames latency" << LL_ENDL;
             }
             mProbeStats = ProbeStats();

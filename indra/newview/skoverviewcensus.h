@@ -538,6 +538,7 @@ private:
         U32 mApplied = 0;
         U32 mLatencyFrames = 0; ///< summed over the applied ones
         U32 mMostQueries = 0;   ///< in any one frame
+        U32 mRefused = 0;       ///< queries the pool refused, reissued until they land
     };
     ProbeStats mProbeStats;
     /// A room probe's id render on its way back, for SKOverviewProbeDump: whose, and its box and mask.

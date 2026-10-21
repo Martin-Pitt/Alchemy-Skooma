@@ -211,6 +211,7 @@ bool SKOverviewProbes::beginFrame(LLGLSLShader& program, U32 samples)
     ++mFrame;
     mSamples = 0;
     mQueries = 0;
+    mRefused = 0;
     mPicked = false;
     mActive = false;
     mProgram = &program;
@@ -443,6 +444,10 @@ ALQueryTicket SKOverviewProbes::query(const std::vector<Run>& runs, bool edges)
     if (ticket.isValid())
     {
         ++mQueries;
+    }
+    else
+    {
+        ++mRefused;
     }
     return ticket;
 }

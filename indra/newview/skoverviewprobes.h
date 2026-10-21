@@ -199,6 +199,8 @@ public:
 
     /// This frame's counts, for the log.
     U32 queriesIssued() const { return mQueries; }
+    /// Queries the pool refused, as it does every exact occlusion query while the shader profiler holds its samples.
+    U32 queriesRefused() const { return mRefused; }
     U32 samplesIssued() const { return mSamples; }
 
     void release();
@@ -228,6 +230,7 @@ private:
     U32 mFrame = 0;
     U32 mSamples = 0;
     U32 mQueries = 0;
+    U32 mRefused = 0;
     bool mPicked = false;
     bool mInVolume = false;
     S32 mSavedViewport[4] = {};
