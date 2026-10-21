@@ -103,12 +103,6 @@ target_precompile_headers(llmath REUSE_FROM llprecompiled)
 
 # Add tests
 if(AL_BUILD_TESTS)
-  # <SK:Nexii> The volume TUT test, kept registered until it is ported to Catch2
-  if(COMMAND al_add_test)
-    al_add_test(llvolume PROJECT llmath LIBRARIES llmath llcommon)
-  endif()
-  # </SK:Nexii>
-
   # One Catch2 binary for llmath's tests, each test file run in a process of
   # its own. Each links the library rather than compiling a copy of the file
   # it tests, so the code under test is the code the viewer runs.
@@ -130,6 +124,7 @@ if(AL_BUILD_TESTS)
       tests/llrect_test.cpp
       tests/llsdutil_math_test.cpp
       tests/llvector4a_test.cpp
+      tests/llvolume_test.cpp
       tests/m3math_test.cpp
       tests/mathmisc_test.cpp
       tests/v2math_test.cpp
@@ -141,17 +136,12 @@ if(AL_BUILD_TESTS)
       tests/v4math_test.cpp
       tests/xform_test.cpp
     # Nanoseconds per element for the SIMD math the geometry rebuild spends
-    # its time in, and for the choices the SIMD series makes by a number.
-    BENCH_SOURCES tests/llsimd_bench.cpp
+    # its time in, and for the choices the SIMD series makes by a number;
+    # what generating prims, sculpts and their tangents, a flexible frame,
+    # a mesh LOD's cacheOptimize and each index order cost.
+    BENCH_SOURCES tests/llsimd_bench.cpp tests/llvolume_bench.cpp
     LIBRARIES llmath llcommon
   )
-
-  # <SK:Nexii> Develop's TUT tests, kept registered until they are ported to Catch2: LLAddBuildTest.cmake (al_add_test) is gone upstream
-  if(COMMAND al_add_test)
-    al_add_test(llvolumesplit PROJECT llmath LIBRARIES llmath llcommon)
-    al_add_test(llvolume PROJECT llmath LIBRARIES llmath llcommon)
-  endif()
-  # </SK:Nexii>
 
   # The kernel test compares kernels, instantiated in it, bit for bit with each
   # other and with the vector types' own operations. Built with the tree's
