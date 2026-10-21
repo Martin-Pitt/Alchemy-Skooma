@@ -186,4 +186,50 @@ namespace tut
         ensure("something drawn", !a.mVerts.empty());
         ensure("identical", a.mVerts == b.mVerts && a.mColours == b.mColours);
     }
+
+    // A cut cell drops the marks whose midpoint, or a glyph's anchor, lies in it; the rest stay.
+    template<> template<>
+    void skmapribbons_object::test<7>()
+    {
+        skmap::Scene s = scene({ mark(skmap::MarkKind::WALL, 2.f, 1.f, 6.f, 1.f), mark(skmap::MarkKind::LADDER, 20.f, 20.f, 20.f, 20.f),
+                                 mark(skmap::MarkKind::LEDGE, 3.f, 9.f, 9.f, 9.f) });
+        s.mOrigin.set(256.0, 512.0, 0.0);
+        std::vector<skmap::MarkRun> all, kept;
+        skmap::mergeMarks(s, 0, params(0.05f), all);
+        ensure_equals("three runs uncut", all.size(), static_cast<size_t>(3));
+
+        // The wall spans global x 258-262 at y 513, cells (64, 128) and (65, 128); the ladder is at (276, 532), cell (69, 133).
+        const skmap::CutCells wall_cut = { { 64, 128 }, { 65, 128 } };
+        skmap::mergeMarks(s, 0, params(0.05f), kept, &wall_cut);
+        ensure_equals("the wall goes", kept.size(), static_cast<size_t>(2));
+        for (const skmap::MarkRun& r : kept)
+        {
+            ensure("no wall left", r.mKind != skmap::MarkKind::WALL);
+        }
+        const skmap::CutCells glyph_cut = { { 69, 133 } };
+        skmap::mergeMarks(s, 0, params(0.05f), kept, &glyph_cut);
+        ensure_equals("the ladder goes", kept.size(), static_cast<size_t>(2));
+
+        // An empty cut, or one elsewhere, builds what no cut builds.
+        skmap::Ribbons uncut, none, elsewhere;
+        const skmap::CutCells empty, distant = { { 0, 0 } };
+        skmap::buildLayerRibbons(s, 0, params(0.05f), uncut);
+        skmap::buildLayerRibbons(s, 0, params(0.05f), none, &empty);
+        skmap::buildLayerRibbons(s, 0, params(0.05f), elsewhere, &distant);
+        ensure("empty cut is no cut", uncut.mVerts == none.mVerts);
+        ensure("a far cut changes nothing", uncut.mVerts == elsewhere.mVerts);
+
+        // A long wall loses only the cells the cut covers, global x 256-268 over cells 64-66.
+        skmap::Scene w = scene({ mark(skmap::MarkKind::WALL, 0.f, 1.f, 12.f, 1.f) });
+        w.mOrigin.set(256.0, 512.0, 0.0);
+        const skmap::CutCells middle = { { 65, 128 } };
+        skmap::mergeMarks(w, 0, params(0.05f), kept, &middle);
+        ensure_equals("both ends stay", kept.size(), static_cast<size_t>(2));
+        ensure("west end", std::fabs(kept[0].mA.mV[VX]) < 1e-4f && std::fabs(kept[0].mB.mV[VX] - 4.f) < 1e-4f);
+        ensure("east end", std::fabs(kept[1].mA.mV[VX] - 8.f) < 1e-4f && std::fabs(kept[1].mB.mV[VX] - 12.f) < 1e-4f);
+        const skmap::CutCells west = { { 64, 128 } };
+        skmap::mergeMarks(w, 0, params(0.05f), kept, &west);
+        ensure_equals("the uncut pieces join again", kept.size(), static_cast<size_t>(1));
+        ensure("from the cut's edge", std::fabs(kept[0].mA.mV[VX] - 4.f) < 1e-4f && std::fabs(kept[0].mB.mV[VX] - 12.f) < 1e-4f);
+    }
 }

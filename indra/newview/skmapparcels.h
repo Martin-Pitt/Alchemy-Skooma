@@ -36,8 +36,8 @@ namespace skmap
     class MapView;
 }
 
-/// Rebuilt when a region's parcel overlay or the collision bitmap changes, never per frame.
-/// Nothing is drawn for damage: no parcel is tinted.
+/// Rebuilt when a region's parcel overlay or the collision bitmap changes, or a region arrives,
+/// leaves or dies; never per frame. Nothing is drawn for damage: no parcel is tinted.
 class SKMapParcels
 {
 public:
@@ -48,6 +48,8 @@ public:
 
 private:
     void rebuild();
+    /// The region set and each region's liveness: a change rebuilds, whatever the overlay says.
+    static U64 regionsKey();
 
     struct Line
     {
@@ -62,6 +64,7 @@ private:
     std::vector<Line> mLines;
     std::vector<Fill> mFills;
     bool mDirty = true;
+    U64 mRegionsKey = 0;
     bool mLastSale = false;
     bool mLastCollision = false;
     boost::signals2::connection mOverlayConnection;

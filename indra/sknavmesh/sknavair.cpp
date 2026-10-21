@@ -25,6 +25,7 @@
 #include "linden_common.h"
 
 #include "sknavair.h"
+#include "sknavprofile.h"
 
 #include "Recast.h"
 
@@ -32,8 +33,9 @@
 
 namespace sknav
 {
-    void extractAir(const rcHeightfield& hf, S32 border_cells, AirGrid& out)
+    void extractAir(const rcHeightfield& hf, S32 border_cells, AirGrid& out, const U8* area_lut, const SpanFlags* extra)
     {
+        SK_NAV_ZONE("nav.air.extract");
         // Recast (x, y, z) is SL (y, z, x): a heightfield row along Recast x is
         // a run along SL y, so SL ix is Recast z and SL iy is Recast x.
         const S32 x0 = border_cells, z0 = border_cells;
@@ -54,15 +56,18 @@ namespace sknav
         {
             for (S32 ix = 0; ix < out.mWidth; ++ix)
             {
-                const rcSpan* s = hf.spans[(x0 + iy) + (z0 + ix) * hf.width];
-                for (; s; s = s->next)
+                const S32 column = (x0 + iy) + (z0 + ix) * hf.width;
+                U32 k = extra ? extra->mStart[column] : 0;
+                for (const rcSpan* s = hf.spans[column]; s; s = s->next, ++k)
                 {
                     AirGap gap;
                     gap.mFloor = static_cast<U16>(s->smax);
-                    gap.mFlags = s->area != RC_NULL_AREA ? AirGap::WALKABLE : 0;
-                    if (s->area >= 1 && s->area <= 3)
+                    const U8 area = area_lut ? area_lut[s->area] : static_cast<U8>(s->area);
+                    gap.mFlags = s->area != RC_NULL_AREA ? AirGap::TOP : 0;
+                    gap.mFlags |= extra ? extra->mFlags[k] : 0;
+                    if (area >= 1 && area <= 3)
                     {
-                        gap.mFlags |= static_cast<U8>(s->area << AirGap::AREA_SHIFT);
+                        gap.mFlags |= static_cast<U8>(area << AirGap::AREA_SHIFT);
                     }
                     if (s->next)
                     {
@@ -85,6 +90,7 @@ namespace sknav
 
     void computeClearance(AirGrid& grid, S32 climb, S32 overlap)
     {
+        SK_NAV_ZONE("nav.air.clearance");
         const S32 w = grid.mWidth, h = grid.mHeight;
         const size_t n = grid.mGaps.size();
         if (n == 0)
@@ -189,6 +195,7 @@ namespace sknav
 
     void foldSlivers(AirGrid& grid, S32 min_height)
     {
+        SK_NAV_ZONE("nav.air.fold");
         size_t at = 0;
         U32 begin = 0;
         for (size_t c = 0; c + 1 < grid.mStart.size(); ++c)
@@ -210,6 +217,7 @@ namespace sknav
 
     void cropAir(const AirGrid& in, S32 pad, AirGrid& out)
     {
+        SK_NAV_ZONE("nav.air.crop");
         out.mCell = in.mCell;
         out.mUnit = in.mUnit;
         out.mWidth = std::max(0, in.mWidth - 2 * pad);

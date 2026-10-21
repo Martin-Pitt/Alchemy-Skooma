@@ -40,6 +40,12 @@ namespace sknav
     /// removed, is forgotten. Not thread-safe, but a copy is cheap and
     /// independent: cells live in 32 m blocks shared copy-on-write, so a
     /// snapshot for a worker costs a pointer per block.
+    constexpr F32 SIDE_OPEN_REACH_M = 24.f;    ///< side openness looks for walls this far out
+
+    /// Whether two tops, or two airs' tops, set the same sky map cells; shared tops are the same at once.
+    bool sameTops(const TileTops& a, const TileTops& b);
+    bool sameTops(const TileAir& a, const TileAir& b);
+
     class SkyMap
     {
     public:
@@ -52,11 +58,13 @@ namespace sknav
 
         /// Replace what one tile contributes. tile_min is the global corner
         /// of the tile, its z where the air's height 0 is.
-        void set(U64 contributor, const LLVector3d& tile_min, const TileAir& air);
+        void set(U64 contributor, const LLVector3d& tile_min, const TileTops& tops);
+        void set(U64 contributor, const LLVector3d& tile_min, const TileAir& air) { set(contributor, tile_min, *air.mTops); }
         void remove(U64 contributor);
-        bool has(U64 contributor) const { return mContributors.count(contributor) != 0; }
+        bool has(U64 contributor) const { return mCoverage.count(contributor) != 0; }
 
         /// No solid starts above pos within reach metres, and pos is not inside one.
+        /// False outside every contributor's footprint: air nobody published is not open.
         bool skyOpenAt(const LLVector3d& pos, F32 reach = 50.f) const;
         /// No solid but ignore's starts above pos within reach: a tile's own
         /// air already knows what stands over it.
@@ -66,13 +74,20 @@ namespace sknav
         /// r^2 / (r^2 + h^2), so what is small and high hides little and what
         /// is broad and low nearly all, and a wall hides the sky under its top.
         /// Read from columns along spokes, no rays. roof, when given, gets the
-        /// share the solids overhead hide without the walls.
-        F32 coverAbove(const LLVector3d& pos, F32 radius, F32* roof = nullptr) const;
+        /// share the solids overhead hide without the walls, and open side openness.
+        F32 coverAbove(const LLVector3d& pos, F32 radius, F32* roof = nullptr, F32* open = nullptr) const;
+        /// Side openness, O: the share of 16 spokes out of pos that no solid
+        /// standing through pos's height crosses within SIDE_OPEN_REACH_M.
+        F32 sideOpenAt(const LLVector3d& pos) const;
         /// The top of the highest solid over (x, y); false when there is none.
         bool topAt(F64 x, F64 y, F64& top) const;
 
         /// Bumped on every change, for readers holding derived results.
         U64 version() const { return mVersion; }
+        /// The blocks holding the cells of a global plan box, by identity: a block is copied before
+        /// it changes while anything else holds it, so the key stands exactly while what the box
+        /// reads does. keep takes a hold on each block, so none is freed and replaced at its address.
+        U64 windowKey(F64 x0, F64 y0, F64 x1, F64 y1, std::vector<std::shared_ptr<const void>>& keep) const;
         size_t cells() const { return mCellCount; }
         size_t bytes() const;
 
@@ -99,6 +114,13 @@ namespace sknav
 
         std::unordered_map<U64, std::shared_ptr<Block>> mBlocks;
         std::unordered_map<U64, std::shared_ptr<const std::vector<U64>>> mContributors;   ///< the cells each contributor touches
+        /// Each contributor's footprint in global x and y, so a column no tile has seen reads unknown.
+        struct Footprint
+        {
+            F64 mX0, mY0, mX1, mY1;
+        };
+        bool covers(F64 x, F64 y) const;
+        std::unordered_map<U64, Footprint> mCoverage;
         size_t mCellCount = 0;
         U64 mVersion = 0;
     };
@@ -109,9 +131,11 @@ namespace sknav
     {
     public:
         SkyView(const SkyMap& map, F64 x0, F64 y0, F64 x1, F64 y1);
-        F32 coverAbove(const LLVector3d& pos, F32 radius, F32* roof = nullptr) const;
+        F32 coverAbove(const LLVector3d& pos, F32 radius, F32* roof = nullptr, F32* open = nullptr) const;
+        F32 sideOpenAt(const LLVector3d& pos) const;
 
     private:
+        const std::vector<SkyMap::Interval>* cell(S64 x, S64 y) const;
         const SkyMap* mMap;
         S64 mX0, mY0;
         S32 mWidth = 0, mHeight = 0;

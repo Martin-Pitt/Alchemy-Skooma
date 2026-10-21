@@ -280,4 +280,34 @@ namespace tut
         ensure("no spiral on a straight stair", plain.str().find("\"spiral\"") == std::string::npos);
         ensure("no exits when there are none", plain.str().find("\"exits\"") == std::string::npos);
     }
+
+    template<> template<>
+    void sknavannotate_object::test<9>()
+    {
+        set_test_name("a cross whose cut a pass did away with goes stale, and strikes no later cut of the same two ids");
+        const LLUUID mesh("f65f2ffd-9bb7-4b7c-8ee0-3948ea0d0ad2");
+        MarkSet set;
+        Mark cross = make(MarkKind::PORTAL, { LLVector3d(100.0, 100.0, 20.0) });
+        cross.mType = MarkType::CROSS;
+        cross.mSpaceMesh = mesh;
+        cross.mSpaceIds[0] = 7;
+        cross.mSpaceIds[1] = 3;
+        cross.mPortalCentre.set(100.0, 100.0, 20.0);
+        const U32 id = set.add(cross);
+        const Mark& m = *set.find(id);
+        ensure("strikes its cut, either way round", m.strikes(mesh, 3, 7, LLVector3d(101.0, 100.0, 20.0)));
+        ensure("not the same pair's cut far off", !m.strikes(mesh, 3, 7, LLVector3d(110.0, 100.0, 20.0)));
+        ensure("nor another mesh's", !m.strikes(LLUUID::null, 3, 7, LLVector3d(100.0, 100.0, 20.0)));
+        MarkSet::Cut kept;
+        kept.mSpaces[0] = 7;
+        kept.mSpaces[1] = 3;
+        kept.mCentre.set(100.5, 100.0, 20.0);
+        ensure_equals("a pass that keeps the cut leaves it live", set.staleCrosses(mesh, { kept }), 0u);
+        MarkSet::Cut elsewhere = kept;
+        elsewhere.mCentre.set(108.0, 100.0, 20.0);
+        ensure_equals("a pass without it there stales it", set.staleCrosses(mesh, { elsewhere }), 1u);
+        ensure("and it strikes nothing after", !m.strikes(mesh, 3, 7, kept.mCentre));
+        ensure_equals("for good", set.staleCrosses(mesh, { kept }), 0u);
+        ensure("still stale", m.mStale);
+    }
 }

@@ -137,9 +137,16 @@ namespace sknav
         LLUUID mSpaceMesh;
         U32 mSpaceIds[2] = { 0, 0 };
         LLVector3d mPortalCentre;
+        // A crossed portal whose cut a spaces pass did away with: it strikes
+        // nothing again, though a later cut join the same two ids nearby.
+        bool mStale = false;
 
         /// The two space ids of a portal mark, smaller first.
         std::pair<U32, U32> portalPair() const;
+
+        /// Whether a crossed portal strikes this cut: the mesh and two spaces
+        /// it named, within CROSS_REACH_M of where it sat, and not stale.
+        bool strikes(const LLUUID& mesh, U32 space_a, U32 space_b, const LLVector3d& centre) const;
 
         /// The point a share `fraction` (0 the foot, 1 the top) of a spiral
         /// stair's climb sits at: one turn of the helix about the centre, the
@@ -156,6 +163,8 @@ namespace sknav
         bool complete() const;
     };
 
+    constexpr F64 CROSS_REACH_M = 2.5;     ///< a crossed portal names the cut of its two spaces this near where it sat
+
     class MarkSet
     {
     public:
@@ -166,6 +175,16 @@ namespace sknav
         Mark* find(U32 id);
         const Mark* find(U32 id) const;
         const std::vector<Mark>& marks() const { return mMarks; }
+        /// A cut a spaces pass made: its two space ids and its centre, global.
+        struct Cut
+        {
+            U32 mSpaces[2] = { 0, 0 };
+            LLVector3d mCentre;
+        };
+        /// A mesh's spaces pass landed with these cuts: each live crossed
+        /// portal of the mesh that none of them strikes goes stale for good.
+        /// Returns how many went.
+        U32 staleCrosses(const LLUUID& mesh, const std::vector<Cut>& cuts);
         bool empty() const { return mMarks.empty(); }
 
     private:

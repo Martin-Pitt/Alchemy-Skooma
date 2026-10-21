@@ -146,8 +146,9 @@ namespace
 
     bool resolvePortal(const Mark& mark, ResolvedPortal& out)
     {
+        // A stale cross strikes at the click, where it was left.
         const SKNavWorldViewPtr view = SKNavMesh::instance().view();
-        if (!view)
+        if (!view || mark.mStale)
         {
             return false;
         }
@@ -401,12 +402,11 @@ void SKNavAnnotator::hoverPortal(S32 x, S32 y)
     mHoverPortal.mValid = mHoverPortal.mSpaces[0] && mHoverPortal.mSpaces[1] && best < F64(REACH_PX) * REACH_PX;
 }
 
-bool SKNavAnnotator::portalCrossed(const LLUUID& mesh, U32 space_a, U32 space_b) const
+bool SKNavAnnotator::portalCrossed(const LLUUID& mesh, U32 space_a, U32 space_b, const LLVector3d& centre) const
 {
-    const std::pair<U32, U32> pair = portalPairOf(space_a, space_b);
     for (const Mark& mark : mMarks.marks())
     {
-        if (mark.mKind == MarkKind::PORTAL && mark.mSpaceMesh == mesh && mark.portalPair() == pair)
+        if (mark.strikes(mesh, space_a, space_b, centre))
         {
             return true;
         }
@@ -427,11 +427,9 @@ void SKNavAnnotator::clickPortal()
 
 void SKNavAnnotator::togglePortal(const HoverPortal& portal, const LLVector3d& at)
 {
-    const std::pair<U32, U32> pair = portalPairOf(portal.mSpaces[0], portal.mSpaces[1]);
     for (const Mark& mark : mMarks.marks())
     {
-        if (mark.mKind == MarkKind::PORTAL && mark.mSpaceMesh == portal.mMesh && mark.portalPair() == pair
-            && dist_vec_squared(mark.mPortalCentre, portal.mCentre) < 6.25)
+        if (mark.strikes(portal.mMesh, portal.mSpaces[0], portal.mSpaces[1], portal.mCentre))
         {
             // Struck already: clicking it again lets the cut back.
             remove(mark.mId);
@@ -754,11 +752,53 @@ void SKNavAnnotator::syncLabels()
     }
 }
 
+void SKNavAnnotator::staleCrosses()
+{
+    // Each spaces product that lands is held against the crosses once: a
+    // cross whose cut it no longer makes goes stale and strikes nothing again.
+    const SKNavWorldViewPtr view = SKNavMesh::instance().view();
+    if (!view)
+    {
+        return;
+    }
+    for (const SKNavWorldView::Mesh& mesh : view->meshes())
+    {
+        if (!mesh.mRooms || !mesh.mProduct)
+        {
+            continue;
+        }
+        const void*& seen = mCrossesChecked[mesh.mId];
+        if (seen == mesh.mRooms.get())
+        {
+            continue;
+        }
+        seen = mesh.mRooms.get();
+        const std::vector<U32>& ids = mesh.mProduct->mSpaceIds;
+        std::vector<MarkSet::Cut> cuts;
+        for (const Portal& portal : mesh.mRooms->mPortals)
+        {
+            if (portal.mSpaces[0] < ids.size() && portal.mSpaces[1] < ids.size())
+            {
+                MarkSet::Cut c;
+                c.mSpaces[0] = ids[portal.mSpaces[0]];
+                c.mSpaces[1] = ids[portal.mSpaces[1]];
+                c.mCentre = mesh.mOrigin + LLVector3d((portal.mA + portal.mB) * 0.5f);
+                cuts.push_back(c);
+            }
+        }
+        if (mMarks.staleCrosses(mesh.mId, cuts))
+        {
+            touch();
+        }
+    }
+}
+
 void SKNavAnnotator::render()
 {
     // The bodies follow the marks and the marks the bodies, once a frame,
     // and the annotation follows what the objects picked.
     SKNavMarkObjects::instance().sync(*this);
+    staleCrosses();
     syncSelection();
     syncLabels();
     if (mMarks.empty() && mPending.mVerts.empty() && !mHasHover)

@@ -10,22 +10,35 @@ target_sources(
   sknavmesh
   PRIVATE
     sknavair.cpp
+    sknavairdebug.cpp
     sknavairdistil.cpp
+    sknavairfine.cpp
     sknavannotate.cpp
     sknavbuild.cpp
     sknavcensusio.cpp
     sknavcluster.cpp
     sknavenclosure.cpp
     sknavexport.cpp
+    sknavfaceoffsets.cpp
     sknavfeatures.cpp
+    sknavfloors.cpp
+    sknavflightends.cpp
     sknavflights.cpp
     sknavlayout.cpp
     sknavprobecache.cpp
     sknavprobes.cpp
     sknavreplay.cpp
+    sknavreplaystats.cpp
+    sknavresidency.cpp
+    sknavroomgraph.cpp
     sknavskymap.cpp
+    sknavspacefilter.cpp
+    sknavspaceproducts.cpp
     sknavspaces.cpp
+    sknavstairalign.cpp
+    sknavstamp.cpp
     sknavtilecache.cpp
+    sknavwallruns.cpp
     sknavwalls.cpp
     sknavwind.cpp
 )
@@ -36,23 +49,39 @@ target_sources(
     FILE_SET HEADERS
       FILES
         sknavair.h
+        sknavairdebug.h
         sknavairdistil.h
+        sknavairfine.h
         sknavannotate.h
         sknavbuild.h
+        sknavbuildstats.h
         sknavcensusio.h
         sknavcluster.h
         sknavenclosure.h
         sknavexport.h
+        sknavfaceoffsets.h
         sknavfeatures.h
+        sknavfloors.h
+        sknavflightends.h
         sknavflights.h
         sknavlayout.h
         sknavprobecache.h
         sknavprobes.h
+        sknavprofile.h
         sknavreplay.h
+        sknavreplaystats.h
+        sknavresidency.h
+        sknavroomgraph.h
+        sknavroomsschedule.h
         sknavskymap.h
+        sknavspacefilter.h
+        sknavspaceproducts.h
         sknavspaces.h
+        sknavstairalign.h
+        sknavstamp.h
         sknavtilecache.h
         sknavtypes.h
+        sknavwallruns.h
         sknavwalls.h
         sknavwind.h
 )
@@ -80,17 +109,21 @@ target_link_libraries(sknavmesh PRIVATE al::flags PUBLIC llmath llcommon ll::rec
 
 target_precompile_headers(sknavmesh REUSE_FROM llprecompiled)
 
-if(AL_BUILD_TESTS)
+# TUT tests, kept registered until they are ported to Catch2.
+if(AL_BUILD_TESTS AND COMMAND al_add_test)
   al_add_test(sknavasync PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavair PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
+  al_add_test(sknavairdebug PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavairdistil PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
+  al_add_test(sknavairfine PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavannotate PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavenclosure PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
-  al_add_test(sknavcensusio PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavcluster PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavbuild PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavwalls PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
-  al_add_test(sknavfeatures PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
+  al_add_test(sknavroomsschedule PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
+  al_add_test(sknavwallruns PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
+  al_add_test(sknavfaceoffsets PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavflights PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavtilecache PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavprobecache PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
@@ -98,7 +131,32 @@ if(AL_BUILD_TESTS)
   al_add_test(sknavprobeinvariants PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavprobeseval PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavreplay PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
+  al_add_test(sknavresidency PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavrooms PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
+  al_add_test(sknavspaceproducts PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
+  al_add_test(sknavstairalign PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
+  al_add_test(sknavstamp PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavwind PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_bench(spacesdraw PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
+endif()
+
+# The tests ported to Catch2 so far, one binary for the library.
+if(AL_BUILD_TESTS)
+  al_add_test_binary(
+    sknavmesh_tests
+    PROJECT sknavmesh
+    SOURCES
+      tests/sknavairbytes_test.cpp
+      tests/sknavairunknown_test.cpp
+      tests/sknavcensusio_test.cpp
+      tests/sknavenclosurerepair_test.cpp
+      tests/sknavfeatures_test.cpp
+      tests/sknavfloors_test.cpp
+      tests/sknavrecordsignature_test.cpp
+      tests/sknavroomgraph_test.cpp
+      tests/sknavskymap_test.cpp
+      tests/sknavtileclip_test.cpp
+    BENCH_SOURCES tests/sknavfeatures_bench.cpp
+    LIBRARIES sknavmesh llcommon
+  )
 endif()

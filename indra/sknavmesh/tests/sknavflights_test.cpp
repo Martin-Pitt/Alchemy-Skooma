@@ -31,6 +31,9 @@
 
 #include "llstring.h"
 
+#include "Recast.h"
+#include "RecastAlloc.h"
+
 #include <algorithm>
 #include <cmath>
 #include <fstream>
@@ -41,18 +44,22 @@ namespace
     using namespace sknav;
 
     const U8 OBJECT = 2;
+    const F32 WALK_SLOPE_DEG = 74.f;    ///< AVATAR's slope, confirmed in-world
 
     /// A triangle soup as the oracle builds its fixtures, SL axes.
     struct Soup
     {
         std::vector<LLVector3> mV;
         std::vector<S32> mT;
+        std::vector<S32> mS;    ///< per triangle, the record it came from
+        S32 mSource = -1;
 
         void tri(const LLVector3& a, const LLVector3& b, const LLVector3& c)
         {
             const S32 n = static_cast<S32>(mV.size());
             mV.insert(mV.end(), { a, b, c });
             mT.insert(mT.end(), { n, n + 1, n + 2 });
+            mS.push_back(mSource);
         }
         void quad(const LLVector3& a, const LLVector3& b, const LLVector3& c, const LLVector3& d)
         {
@@ -102,23 +109,24 @@ namespace
                 for (S32 i = 0; i < nx; ++i)
                 {
                     mT.insert(mT.end(), { idx(i, j), idx(i + 1, j), idx(i + 1, j + 1), idx(i, j), idx(i + 1, j + 1), idx(i, j + 1) });
+                    mS.insert(mS.end(), { mSource, mSource });
                 }
             }
         }
 
-        /// Walkable by the live 74 degree slope, as the oracle marks it.
-        SlopePartition partition(F32 climb = 0.75f) const
+        /// Walkable by the live 74 degree slope, as the oracle marks it; or marked at the air's steeper slope, as the build does.
+        SlopePartition partition(F32 climb = 0.75f, F32 marked_deg = WALK_SLOPE_DEG) const
         {
             const size_t n = mT.size() / 3;
             std::vector<U8> areas(n, 0), two(n, 0);
-            const F32 up = std::cos(74.f * DEG_TO_RAD);
+            const F32 up = std::cos(marked_deg * DEG_TO_RAD);
             for (size_t t = 0; t < n; ++t)
             {
                 LLVector3 nn = (mV[mT[t * 3 + 1]] - mV[mT[t * 3]]) % (mV[mT[t * 3 + 2]] - mV[mT[t * 3]]);
                 nn.normVec();
                 areas[t] = nn.mV[VZ] >= up ? OBJECT : 0;
             }
-            return partitionSlopes(mV, mT, areas, two, OBJECT, climb);
+            return partitionSlopes(mV, mT, areas, two, OBJECT, climb, WALK_SLOPE_DEG, 63, {}, mSource >= 0 || !mS.empty() ? mS : std::vector<S32>());
         }
     };
 
@@ -169,12 +177,12 @@ namespace
         return s;
     }
 
-    Soup ramp()
+    Soup ramp(F32 run = 4.f, F32 rise = 1.5f)
     {
         Soup s;
         s.box(-4, -2, -0.5f, 0, 2, 0);
-        s.quad(LLVector3(0, -0.75f, 0), LLVector3(4, -0.75f, 1.5f), LLVector3(4, 0.75f, 1.5f), LLVector3(0, 0.75f, 0));
-        s.box(4, -2, 0, 7, 2, 1.5f);
+        s.quad(LLVector3(0, -0.75f, 0), LLVector3(run, -0.75f, rise), LLVector3(run, 0.75f, rise), LLVector3(0, 0.75f, 0));
+        s.box(run, -2, 0, run + 3, 2, rise);
         return s;
     }
 
@@ -237,9 +245,6 @@ namespace
         in.mZMax = 6.f;
         in.mCell = 0.25f;
         in.mPartition = Partition::SLOPE;
-        in.mClasses[1] = true;
-        in.mParams[1].mHeight = 0.5f;
-        in.mParams[1].mRadius = 0.f;
         TerrainWindow t;
         t.mOrigin.set(-2.f, -2.f, 0.f);
         t.mWidth = t.mHeight = 37;
@@ -381,7 +386,7 @@ namespace tut
             nn.normVec();
             areas[t] = nn.mV[VZ] > 0.5f ? (t < objects ? OBJECT : 1) : 0;
         }
-        const SlopePartition p = partitionSlopes(s.mV, s.mT, areas, two, OBJECT, 0.75f);
+        const SlopePartition p = partitionSlopes(s.mV, s.mT, areas, two, OBJECT, 0.75f, WALK_SLOPE_DEG);
         for (size_t c = 2; c < p.mReal.size(); ++c)
         {
             ensure("code order is area order", p.mReal[c] >= p.mReal[c - 1]);
@@ -534,9 +539,12 @@ namespace tut
             in.mRecords.push_back(boxRecord(10.f + (k - 1) * 0.4f, 15.4f, 0.f, 10.f + k * 0.4f, 16.6f, k * 0.25f));
         }
         in.mRecords.push_back(boxRecord(11.2f, 13.f, 0.f, 15.f, 19.f, 1.f));
+        // No erosion and little headroom, so only the fragment merge could lose it.
+        in.mParams[0].mHeight = 0.5f;
+        in.mParams[0].mRadius = 0.f;
         const TileBuildResult r = buildTile(in);
         ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
-        const S32 w = static_cast<S32>(AgentClass::WEATHER);
+        const S32 w = static_cast<S32>(AgentClass::AVATAR);
         ensure_equals("one flight", r.mFlights[w].size(), 1u);
         ensure_equals("three treads", static_cast<S32>(r.mFlights[w][0].mTreads), 3);
         ensure("polys", !r.mFlights[w][0].mPolys.empty());
@@ -576,7 +584,7 @@ namespace tut
             nn.normVec();
             areas[t] = nn.mV[VZ] > 0.5f ? (t < objects ? OBJECT : 3) : 0;
         }
-        const SlopePartition p = partitionSlopes(s.mV, s.mT, areas, two, OBJECT, 0.75f, 3);
+        const SlopePartition p = partitionSlopes(s.mV, s.mT, areas, two, OBJECT, 0.75f, WALK_SLOPE_DEG, 3);
         ensure_equals("two codes and null", p.mReal.size(), 3u);
         for (size_t t = 0; t < n; ++t)
         {
@@ -631,7 +639,7 @@ namespace tut
         tin.mZMin = -20.f;
         tin.mZMax = 40.f;
         tin.mParams[0].mSlope = 74.f;
-        tin.mParams[1].mSlope = 89.f;
+        tin.mTopParams.mSlope = 89.f;
         tin.mRecords.push_back(r);
         std::ofstream out(path + ".time");
         for (S32 k = 0; k < 3; ++k)
@@ -688,11 +696,11 @@ namespace tut
             AirGap under;
             under.mFloor = 14;
             under.mCeiling = 15;
-            under.mFlags = AirGap::WALKABLE;
+            under.mFlags = AirGap::TOP;
             AirGap tread;
             tread.mFloor = static_cast<U16>(std::lround((2.f + 0.25f * x) / 0.125f));
             tread.mCeiling = 100;
-            tread.mFlags = AirGap::WALKABLE | AirGap::OPEN;
+            tread.mFlags = AirGap::TOP | AirGap::OPEN;
             g.mGaps.push_back(under);
             g.mGaps.push_back(tread);
             g.mStart[i + 1] = static_cast<U32>(g.mGaps.size());
@@ -708,6 +716,38 @@ namespace tut
         ensure("a tread inside", (g.gaps(10, 4)[1].mFlags & AirGap::FLIGHT) != 0);
         ensure("not the floor under it", (g.gaps(10, 4)[0].mFlags & AirGap::FLIGHT) == 0);
         ensure("not outside the footprint", (g.gaps(10, 20)[1].mFlags & AirGap::FLIGHT) == 0);
+
+        // A 3 m flight over open floor: the floor under its upper half lies within its height band, but not on its plane.
+        AirGrid h;
+        h.mOrigin.set(0.f, 0.f, 0.f);
+        h.mCell = 0.125f;
+        h.mUnit = 0.125f;
+        h.mWidth = h.mHeight = 32;
+        h.mStart.assign(32 * 32 + 1, 0);
+        for (S32 i = 0; i < 32 * 32; ++i)
+        {
+            const F32 x = (i % 32 + 0.5f) * 0.125f;
+            AirGap floor;
+            floor.mFloor = 0;
+            floor.mCeiling = static_cast<U16>(std::lround(0.75f * x / 0.125f));
+            floor.mFlags = AirGap::TOP;
+            AirGap tread;
+            tread.mFloor = static_cast<U16>(std::lround(0.75f * x / 0.125f));
+            tread.mCeiling = 100;
+            tread.mFlags = AirGap::TOP | AirGap::OPEN;
+            h.mGaps.push_back(floor);
+            h.mGaps.push_back(tread);
+            h.mStart[i + 1] = static_cast<U32>(h.mGaps.size());
+        }
+        Flight tall;
+        tall.mFootprint = f.mFootprint;
+        tall.mPlane[0] = 0.75f;
+        tall.mZMin = 0.f;
+        tall.mZMax = 3.f;
+        tall.mRise = 3.f;
+        markFlights(h, { tall });
+        ensure("its tread high up", (h.gaps(24, 4)[1].mFlags & AirGap::FLIGHT) != 0);
+        ensure("not the floor under it", (h.gaps(24, 4)[0].mFlags & AirGap::FLIGHT) == 0);
     }
 
     template<> template<>
@@ -723,7 +763,7 @@ namespace tut
         in.mRecords.push_back(boxRecord(12.4f, 12.f, 0.f, 16.f, 20.f, 2.25f));
         const TileBuildResult r = buildTile(in);
         ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
-        ensure("a flight", !r.mFlights[0].empty() || !r.mFlights[1].empty());
+        ensure("a flight", !r.mFlights[0].empty());
         ensure("air", r.mAir != nullptr);
         U32 marked = 0, stray = 0;
         for (const AirLeaf& leaf : r.mAir->mLeaves)
@@ -753,5 +793,556 @@ namespace tut
         const SlopePartition real = straight().partition();
         ensure_equals("a staircase still makes its flight", real.mFlights.size(), 1u);
         ensure("it rises half a metre", real.mFlights[0].mZMax - real.mFlights[0].mZMin >= FLIGHT_MIN_RISE_M);
+    }
+
+    template<> template<>
+    void sknavflights_object::test<21>()
+    {
+        set_test_name("a ramp sunk into its landing ends where it comes out of it, not on the floor below");
+        // The ramp runs on under the landing slab down to a lower floor that it never reaches underfoot.
+        Soup s;
+        s.box(-5, -2, -0.5f, -0.8f, 2, -0.3f);
+        s.box(-0.8f, -2, -0.5f, 1.2f, 2, 0.6f);
+        s.quad(LLVector3(-0.8f, -0.75f, -0.3f), LLVector3(4.8f, -0.75f, 1.8f), LLVector3(4.8f, 0.75f, 1.8f), LLVector3(-0.8f, 0.75f, -0.3f));
+        s.box(4.8f, -2, 0, 8, 2, 1.8f);
+        const SlopePartition p = s.partition();
+        ensure_equals("flights", p.mFlights.size(), 1u);
+        const Flight& f = p.mFlights[0];
+        ensure(llformat("bottom on the landing where the ramp reaches it: %.2f %.2f %.2f", f.mBottom.mV[VX], f.mBottom.mV[VY], f.mBottom.mV[VZ]),
+               near3(f.mBottom, LLVector3(1.6f, 0.f, 0.6f)));
+        ensure(llformat("top %.2f %.2f %.2f", f.mTop.mV[VX], f.mTop.mV[VY], f.mTop.mV[VZ]), near3(f.mTop, LLVector3(4.8f, 0.f, 1.8f)));
+    }
+
+    template<> template<>
+    void sknavflights_object::test<22>()
+    {
+        set_test_name("two ramps at right angles from one step are two flights, the step joining neither across the turn");
+        Soup s;
+        s.box(-6, -6, -0.5f, 8, 8, 0);
+        s.box(0, 0, 0, 0.5f, 0.5f, 0.2f);
+        s.quad(LLVector3(0.5f, -1.f, 0.2f), LLVector3(4.5f, -1.f, 2.2f), LLVector3(4.5f, 0.5f, 2.2f), LLVector3(0.5f, 0.5f, 0.2f));
+        s.box(4.5f, -2.f, 0, 7.f, 1.f, 2.2f);
+        s.quad(LLVector3(-1.f, 0.5f, 0.2f), LLVector3(0.5f, 0.5f, 0.2f), LLVector3(0.5f, 4.5f, 2.2f), LLVector3(-1.f, 4.5f, 2.2f));
+        s.box(-2.f, 4.5f, 0, 1.f, 7.f, 2.2f);
+        const SlopePartition p = s.partition();
+        ensure_equals("two flights", p.mFlights.size(), 2u);
+        bool along_x = false, along_y = false;
+        for (const Flight& f : p.mFlights)
+        {
+            const LLVector3 run = f.mTop - f.mBottom;
+            along_x = along_x || (run.mV[VX] > 3.5f && std::fabs(run.mV[VY]) < 0.2f);
+            along_y = along_y || (run.mV[VY] > 3.5f && std::fabs(run.mV[VX]) < 0.2f);
+            ensure(llformat("each as wide as its ramp: %.2f", (f.mBottomB - f.mBottomA).length()), std::fabs((f.mBottomB - f.mBottomA).length() - 1.5f) < 0.2f);
+        }
+        ensure("one up each ramp", along_x && along_y);
+    }
+
+    // The flight a stair builds stands on the raster before any polys; moved
+    // off its footprint, nothing of its codes is left under it.
+    template<> template<>
+    void sknavflights_object::test<23>()
+    {
+        set_test_name("a flight stands on the compact heightfield where its codes are, and not elsewhere");
+        TileBuildInput in = stairTile();
+        for (S32 k = 1; k <= 8; ++k)
+        {
+            in.mRecords.push_back(boxRecord(10.f + (k - 1) * 0.3f, 14.f, 0.f, 10.f + k * 0.3f, 18.f, k * 0.25f));
+        }
+        in.mRecords.push_back(boxRecord(12.4f, 12.f, 0.f, 17.f, 20.f, 2.25f));
+        TileBuildResult r;
+        const TileRasterPtr raster = rasteriseTile(in, r);
+        ensure("rasterised: " + r.mError, raster && raster->mChf);
+        ensure_equals("one flight", raster->mFlights.size(), 1u);
+        ensure("it stands", raster->mStanding.size() == 1 && raster->mStanding[0] == 1);
+        const S32 border = borderCells(in.mParams[0].mRadius, in.mCell);
+        Flight moved = raster->mFlights[0];
+        for (LLVector2& p : moved.mFootprint)
+        {
+            p.mV[VY] += 8.f;
+        }
+        ensure("off its footprint it does not", !flightSurvives(*raster->mChf, border, moved, in.mParams[0].mClimb));
+        Flight raised = raster->mFlights[0];
+        raised.mZMin += 4.f;
+        raised.mZMax += 4.f;
+        ensure("nor above its heights", !flightSurvives(*raster->mChf, border, raised, in.mParams[0].mClimb));
+    }
+
+    namespace
+    {
+        U64 rasterDigest(const TileRaster& t)
+        {
+            U64 h = 1469598103934665603ULL;
+            const auto eat = [&](const void* p, size_t n) {
+                for (size_t i = 0; i < n; ++i)
+                {
+                    h = (h ^ static_cast<const U8*>(p)[i]) * 1099511628211ULL;
+                }
+            };
+            const rcCompactHeightfield& c = *t.mChf;
+            eat(c.cells, sizeof(rcCompactCell) * c.width * c.height);
+            eat(c.spans, sizeof(rcCompactSpan) * c.spanCount);
+            eat(c.areas, c.spanCount);
+            eat(t.mEdges.mRuns.data(), t.mEdges.mRuns.size() * sizeof(U16));
+            eat(t.mReal.data(), t.mReal.size());
+            return h;
+        }
+
+        bool sameTile(const TileBuildResult& a, const TileBuildResult& b)
+        {
+            if (a.mStatus != b.mStatus || a.mData[0] != b.mData[0] || a.mSegments[0].size() != b.mSegments[0].size() ||
+                a.mLinks[0].size() != b.mLinks[0].size() || a.mFlights[0].size() != b.mFlights[0].size())
+            {
+                return false;
+            }
+            for (size_t i = 0; i < a.mFlights[0].size(); ++i)
+            {
+                if (a.mFlights[0][i].mPolys != b.mFlights[0][i].mPolys)
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        TileBuildInput stagedStair()
+        {
+            TileBuildInput in = stairTile();
+            in.mAir = true;
+            in.mEdges[0] = true;
+            for (S32 k = 1; k <= 8; ++k)
+            {
+                in.mRecords.push_back(boxRecord(10.f + (k - 1) * 0.3f, 14.f, 0.f, 10.f + k * 0.3f, 18.f, k * 0.25f));
+            }
+            in.mRecords.push_back(boxRecord(12.4f, 12.f, 0.f, 17.f, 20.f, 2.25f));
+            in.mRecords.push_back(boxRecord(20.f, 4.f, 0.f, 21.f, 28.f, 3.f));
+            return in;
+        }
+
+        S32 sAllocsLeft = 0;
+        void* failingAlloc(size_t size, rcAllocHint)
+        {
+            return sAllocsLeft-- > 0 ? malloc(size) : nullptr;
+        }
+        void plainFree(void* p)
+        {
+            free(p);
+        }
+    }
+
+    // The raster stage hands the polygon stage a raster it never changes:
+    // polygonised twice, or after a polygon stage that failed, it makes the
+    // tile the whole pipeline makes.
+    template<> template<>
+    void sknavflights_object::test<24>()
+    {
+        set_test_name("a raster polygonises again to the same tile, and is left as it was");
+        const TileBuildInput in = stagedStair();
+        const TileBuildResult whole = buildTile(in);
+        ensure("built: " + whole.mError, whole.mStatus == TileBuildResult::SUCCESS && !whole.mFlights[0].empty());
+        TileBuildResult staged;
+        const TileRasterPtr raster = rasteriseTile(in, staged);
+        ensure("rasterised", raster != nullptr);
+        const U64 before = rasterDigest(*raster);
+        TileBuildResult first = staged, second = staged;
+        polygoniseTile(in, *raster, first);
+        polygoniseTile(in, *raster, second);
+        ensure("the first is the pipeline's tile", sameTile(first, whole));
+        ensure("the second is the first", sameTile(second, first));
+        ensure("the raster is as it was", rasterDigest(*raster) == before);
+    }
+
+    template<> template<>
+    void sknavflights_object::test<25>()
+    {
+        set_test_name("a raster copy Recast's allocator refuses fails the polygon stage and leaves the raster whole");
+        const TileBuildInput in = stagedStair();
+        TileBuildResult staged;
+        const TileRasterPtr raster = rasteriseTile(in, staged);
+        ensure("rasterised", raster != nullptr);
+        const U64 before = rasterDigest(*raster);
+        // The copy's header, cells, spans and areas: refused at each in turn. Recast's own
+        // passes are not written to survive a refusal, so nothing later is.
+        bool failed_somewhere = false;
+        for (S32 allowed : { 0, 1, 2, 3 })
+        {
+            TileBuildResult refused = staged;
+            sAllocsLeft = allowed;
+            rcAllocSetCustom(failingAlloc, plainFree);
+            polygoniseTile(in, *raster, refused);
+            rcAllocSetCustom(nullptr, nullptr);
+            failed_somewhere = failed_somewhere || (refused.mStatus == TileBuildResult::FAILED && refused.mData[0].empty());
+            ensure(llformat("the raster is whole after %d allocations", allowed), rasterDigest(*raster) == before);
+        }
+        ensure("the copy was refused", failed_somewhere);
+        TileBuildResult again = staged;
+        polygoniseTile(in, *raster, again);
+        ensure("and polygonises as before", sameTile(again, buildTile(in)));
+    }
+
+    // Every floor AVATAR keeps finds the air's gap over it: a kerb the
+    // narrow-step pass lowers by the gap over its own top, a roof by the
+    // upper of its column's two gaps.
+    template<> template<>
+    void sknavflights_object::test<26>()
+    {
+        set_test_name("each AVATAR span finds the air's gap over the top it was rasterised at");
+        TileBuildInput in = stagedStair();
+        in.mRecords.push_back(boxRecord(4.05f, 4.f, 0.f, 4.2f, 10.f, 0.5f));     // a kerb inside one column, lowered to the floor
+        in.mRecords.push_back(boxRecord(22.f, 4.f, 3.f, 30.f, 12.f, 3.25f));     // a roof over open floor
+        TileBuildResult r;
+        const TileRasterPtr raster = rasteriseTile(in, r);
+        ensure("rasterised with air", raster && r.mAir);
+        ensure("bound to the air", raster->mAir.lock() == r.mAir);
+        const rcCompactHeightfield& chf = *raster->mChf;
+        ensure_equals("a gap per span", raster->mSpanGap.size(), static_cast<size_t>(chf.spanCount));
+        const S32 border = borderCells(in.mParams[0].mRadius, in.mCell);
+        const S32 climb = static_cast<S32>(std::floor(in.mParams[0].mClimb / in.mCell));
+        S32 spans = 0, roofs = 0, kerbs = 0;
+        for (S32 z = border; z < chf.height - border; ++z)
+        {
+            for (S32 x = border; x < chf.width - border; ++x)
+            {
+                const rcCompactCell& cell = chf.cells[x + z * chf.width];
+                for (U32 i = cell.index; i < cell.index + cell.count; ++i)
+                {
+                    if (chf.areas[i] == RC_NULL_AREA)
+                    {
+                        continue;
+                    }
+                    ++spans;
+                    const U32 g = raster->mSpanGap[i];
+                    ensure(llformat("span %d,%d has a gap", x, z), g != SPAN_NO_GAP && g < r.mAir->mGaps.size());
+                    const AirGap& gap = r.mAir->mGaps[g];
+                    const S32 top = chf.spans[i].y;
+                    // The gap's floor over the span's own cell: the air's x runs along chf z.
+                    AirColumn column;
+                    airColumn(*r.mAir, findLeafByKey(*r.mAir, z - border, x - border), column);
+                    const U32 k = static_cast<U32>(std::find(column.mGap, column.mGap + column.mCount, g) - column.mGap);
+                    ensure(llformat("span %d,%d's gap is over its cell", x, z), k < column.mCount);
+                    const S32 floor = column.floorAt(*r.mAir, k, z - border, x - border);
+                    // A kerb's gap is over its own top, up to its height above the floor it was lowered to.
+                    ensure(llformat("span %d,%d stands under its gap's floor", x, z), floor + 1 >= top && floor <= top + 2 * climb);
+                    ensure(llformat("span %d,%d under its gap's ceiling", x, z), top < gap.mCeiling);
+                    const F32 sx = chf.bmin[2] + (z + 0.5f) * chf.cs, sy = chf.bmin[0] + (x + 0.5f) * chf.cs;
+                    roofs += sx > 23.f && sx < 29.f && sy > 5.f && sy < 11.f && chf.bmin[1] + floor * chf.ch > 3.f ? 1 : 0;
+                    kerbs += sx > 4.f && sx < 4.25f && sy > 5.f && sy < 9.f && floor > top ? 1 : 0;
+                }
+            }
+        }
+        ensure("spans", spans > 1000);
+        ensure("the roof's spans find the upper gap", roofs > 50);
+        ensure("the kerb's spans find the gap over the kerb", kerbs > 0);
+    }
+
+    template<> template<>
+    void sknavflights_object::test<27>()
+    {
+        set_test_name("a steep slope with no treads and no name is a stair: a boat's stairs simplified to a ramp");
+        const SlopePartition p = ramp(3.8f, 1.8f).partition();
+        ensure_equals("flights", p.mFlights.size(), 1u);
+        const Flight& f = p.mFlights[0];
+        ensure("a stair by its grade", f.mKind == ConnectorKind::STAIR && f.mRule == ConnectorRule::GRADE);
+    }
+
+    template<> template<>
+    void sknavflights_object::test<28>()
+    {
+        set_test_name("a flight's ends span its walkable treads, not its rails; a side the tile cuts off keeps its span");
+        // A flight up +x over 4 m whose structure is 6 m wide, rails and all; its polys walk 2 m of it.
+        Flight f;
+        f.mBottom = LLVector3(10.f, 10.f, 0.f);
+        f.mTop = LLVector3(14.f, 10.f, 2.f);
+        f.mBottomA = LLVector3(10.f, 7.f, 0.f);
+        f.mBottomB = LLVector3(10.f, 13.f, 0.f);
+        f.mTopA = LLVector3(14.f, 7.f, 2.f);
+        f.mTopB = LLVector3(14.f, 13.f, 2.f);
+        f.mPolys = { 0 };
+        const std::vector<std::vector<LLVector3>> polys = { { LLVector3(10.f, 9.f, 0.f), LLVector3(14.f, 9.f, 2.f), LLVector3(14.f, 11.f, 2.f), LLVector3(10.f, 11.f, 0.f) } };
+        std::vector<Flight> flights = { f };
+        fitFlightEdges(flights, polys, 0.3f, LLVector2(0.f, 0.f), LLVector2(32.f, 32.f));
+        const Flight& g = flights[0];
+        ensure("bottom across the treads", std::fabs(g.mBottomA.mV[VY] - 8.7f) < 1e-3f && std::fabs(g.mBottomB.mV[VY] - 11.3f) < 1e-3f);
+        ensure("top across the treads", std::fabs(g.mTopA.mV[VY] - 8.7f) < 1e-3f && std::fabs(g.mTopB.mV[VY] - 11.3f) < 1e-3f);
+        ensure("ends stay put along the run", g.mBottomA.mV[VX] == 10.f && g.mTopB.mV[VX] == 14.f && g.mTopA.mV[VZ] == 2.f);
+        // The tile ends at y = 11: the treads may go on past it.
+        flights = { f };
+        fitFlightEdges(flights, polys, 0.3f, LLVector2(0.f, 0.f), LLVector2(32.f, 11.f));
+        ensure("cut side kept, other side fitted", std::fabs(flights[0].mBottomB.mV[VY] - 13.f) < 1e-3f && std::fabs(flights[0].mBottomA.mV[VY] - 8.7f) < 1e-3f);
+    }
+    template<> template<>
+    void sknavflights_object::test<29>()
+    {
+        set_test_name("two stair wedges with a low hull skirt between them are two narrow flights, not one across the skirt");
+        // The galleon: 49 degree wedges up to a quarterdeck, and a 12 degree skirt 6 m wide rising 0.43 m between them.
+        Soup s;
+        s.box(-6, -4, -0.5f, 0, 4, 0);
+        s.box(1.45f, -4, 0, 6, 4, 1.68f);
+        for (const F32 y : { -3.f, 2.f })
+        {
+            s.quad(LLVector3(0, y, 0), LLVector3(1.45f, y, 1.68f), LLVector3(1.45f, y + 0.88f, 1.68f), LLVector3(0, y + 0.88f, 0));
+        }
+        s.quad(LLVector3(-0.5f, -3.f, 0.01f), LLVector3(1.44f, -3.f, 0.44f), LLVector3(1.44f, 3.f, 0.44f), LLVector3(-0.5f, 3.f, 0.01f));
+        const SlopePartition p = s.partition();
+        ensure_equals("flights", p.mFlights.size(), 2u);
+        for (const Flight& f : p.mFlights)
+        {
+            ensure(llformat("as wide as a wedge: %.2f", (f.mBottomB - f.mBottomA).length()), std::fabs((f.mBottomB - f.mBottomA).length() - 0.88f) < 0.1f);
+            ensure(llformat("up the wedge: rise %.2f run %.2f", f.mRise, f.mRun), std::fabs(f.mRise - 1.68f) < 0.1f && std::fabs(f.mRun - 1.45f) < 0.2f);
+        }
+    }
+
+    template<> template<>
+    void sknavflights_object::test<30>()
+    {
+        set_test_name("a gentle ramp climbing a metre stays a ramp, beside a steep stair it does not join");
+        Soup s = ramp(7.f, 1.f);
+        s.quad(LLVector3(0, 0.75f, 0), LLVector3(1.2f, 0.75f, 1.f), LLVector3(1.2f, 1.95f, 1.f), LLVector3(0, 1.95f, 0));
+        s.box(1.2f, 0.75f, 0, 7.f, 2.f, 1.f);
+        const SlopePartition p = s.partition();
+        ensure_equals("flights", p.mFlights.size(), 2u);
+        bool ramp_found = false;
+        for (const Flight& f : p.mFlights)
+        {
+            ramp_found = ramp_found || (f.mKind == ConnectorKind::RAMP && std::fabs(f.mRun - 7.f) < 0.3f && std::fabs((f.mBottomB - f.mBottomA).length() - 1.5f) < 0.15f);
+        }
+        ensure("the ramp, at its own width and run", ramp_found);
+    }
+
+    template<> template<>
+    void sknavflights_object::test<31>()
+    {
+        set_test_name("a 60 degree wedge is a flight and a 78 degree face is a wall, at AVATAR's 74 degree slope");
+        const SlopePartition sixty = ramp(2.4f / std::tan(60.f * DEG_TO_RAD), 2.4f).partition(0.75f, TOP_SLOPE_DEG);
+        ensure_equals("the 60 degree wedge", sixty.mFlights.size(), 1u);
+        const F32 grade = std::atan2(sixty.mFlights[0].mRise, sixty.mFlights[0].mRun) * RAD_TO_DEG;
+        ensure(llformat("at its grade: %.1f", grade), std::fabs(grade - 60.f) < 3.f);
+        const SlopePartition steep = ramp(3.f / std::tan(78.f * DEG_TO_RAD), 3.f).partition(0.75f, TOP_SLOPE_DEG);
+        ensure_equals("the 78 degree face", steep.mFlights.size(), 0u);
+    }
+
+    template<> template<>
+    void sknavflights_object::test<32>()
+    {
+        set_test_name("a stair landing on a deck of small hull pieces at slightly different heights lands on the whole deck");
+        Soup s;
+        s.box(-4, -2, -0.5f, 0, 2, 0);
+        s.quad(LLVector3(0, -0.75f, 0), LLVector3(2.5f, -0.75f, 1.5f), LLVector3(2.5f, 0.75f, 1.5f), LLVector3(0, 0.75f, 0));
+        // nine 1.4 m pieces, each under the 4 m2 a floor needs, alternating 5 cm apart
+        for (S32 i = 0; i < 3; ++i)
+        {
+            for (S32 j = 0; j < 3; ++j)
+            {
+                const F32 x = 2.5f + i * 1.4f, y = -2.1f + j * 1.4f;
+                s.box(x, y, 0.f, x + 1.4f, y + 1.4f, 1.5f + ((i + j) % 2) * 0.05f);
+            }
+        }
+        const SlopePartition p = s.partition();
+        ensure_equals("flights", p.mFlights.size(), 1u);
+        ensure(llformat("up onto the deck: rise %.2f", p.mFlights[0].mRise), std::fabs(p.mFlights[0].mRise - 1.5f) < 0.1f);
+    }
+
+    template<> template<>
+    void sknavflights_object::test<33>()
+    {
+        set_test_name("a narrow stair erosion leaves no polygon on keeps its record, marked eroded, linking its floors");
+        TileBuildInput in = stairTile();
+        in.mParams[0].mSlope = WALK_SLOPE_DEG;
+        // six steps 0.88 m wide between two walls: the 0.3 m radius erodes them all away
+        for (S32 k = 1; k <= 6; ++k)
+        {
+            in.mRecords.push_back(boxRecord(10.f + (k - 1) * 0.3f, 15.56f, 0.f, 10.f + k * 0.3f, 16.44f, k * 0.25f));
+        }
+        in.mRecords.push_back(boxRecord(10.f, 14.f, 0.f, 11.8f, 15.56f, 3.5f));
+        in.mRecords.push_back(boxRecord(10.f, 16.44f, 0.f, 11.8f, 18.f, 3.5f));
+        in.mRecords.push_back(boxRecord(11.8f, 12.f, 0.f, 16.f, 20.f, 1.5f));
+        const TileBuildResult r = buildTile(in);
+        ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
+        const S32 w = static_cast<S32>(AgentClass::AVATAR);
+        ensure_equals("one flight", r.mFlights[w].size(), 1u);
+        const Flight& f = r.mFlights[w][0];
+        ensure("no polys", f.mPolys.empty());
+        ensure("eroded", f.mEroded);
+        ensure(llformat("from the ground to the landing: %.2f to %.2f", f.mBottom.mV[VZ], f.mTop.mV[VZ]),
+               std::fabs(f.mBottom.mV[VZ]) < 0.2f && std::fabs(f.mTop.mV[VZ] - 1.5f) < 0.2f);
+    }
+
+    template<> template<>
+    void sknavflights_object::test<34>()
+    {
+        set_test_name("stepped stairs are judged by riser against the climb, whatever their grade");
+        const SlopePartition p = straight(6, 0.5f, 0.12f).partition(0.75f, TOP_SLOPE_DEG);
+        ensure_equals("flights", p.mFlights.size(), 1u);
+        const F32 grade = std::atan2(p.mFlights[0].mRise, p.mFlights[0].mRun) * RAD_TO_DEG;
+        ensure(llformat("steeper than the slope: %.1f", grade), grade > WALK_SLOPE_DEG);
+        ensure("a stair by its treads", p.mFlights[0].mRule == ConnectorRule::TREADS);
+        ensure_equals("risers past the climb are platforms", straight(6, 0.8f, 0.3f).partition(0.75f, TOP_SLOPE_DEG).mFlights.size(), 0u);
+    }
+
+    /// A slope up +x from a floor to a deck, half_width either side, with a lateral bow of z += bow * y * y.
+    Soup wedge(F32 deg, F32 rise, F32 half_width, F32 bow = 0.f)
+    {
+        Soup s;
+        const F32 run = rise / std::tan(deg * DEG_TO_RAD);
+        s.box(-4, -4, -0.5f, 0, 4, 0);
+        s.grid(0.f, -half_width, run, half_width, std::min(run, half_width) / 8.f, [&](F32 x, F32 y) { return x / run * rise + bow * y * y; });
+        s.box(run, -4, 0, run + 4, 4, rise);
+        return s;
+    }
+
+    template<> template<>
+    void sknavflights_object::test<35>()
+    {
+        set_test_name("a curved column face at 60 degrees is no flight; flat, it is a climb");
+        ensure_equals("curved", wedge(60.f, 3.f, 1.f, 0.23f).partition(0.75f, TOP_SLOPE_DEG).mFlights.size(), 0u);
+        const SlopePartition flat = wedge(60.f, 3.f, 1.f).partition(0.75f, TOP_SLOPE_DEG);
+        ensure_equals("flat", flat.mFlights.size(), 1u);
+    }
+
+    template<> template<>
+    void sknavflights_object::test<36>()
+    {
+        set_test_name("a flat 60 degree cliff between decks is a climb, not a stair");
+        const SlopePartition p = wedge(60.f, 3.f, 2.f).partition(0.75f, TOP_SLOPE_DEG);
+        ensure_equals("flights", p.mFlights.size(), 1u);
+        ensure("a climb", p.mFlights[0].mKind == ConnectorKind::CLIMB);
+    }
+
+    template<> template<>
+    void sknavflights_object::test<37>()
+    {
+        set_test_name("a 0.88 m wedge just past 52 degrees between decks is a stair: a ship's stair");
+        const SlopePartition p = wedge(52.5f, 1.8f, 0.44f).partition(0.75f, TOP_SLOPE_DEG);
+        ensure_equals("flights", p.mFlights.size(), 1u);
+        ensure("a stair", p.mFlights[0].mKind == ConnectorKind::STAIR);
+    }
+
+    template<> template<>
+    void sknavflights_object::test<38>()
+    {
+        set_test_name("a polygon-less flight is kept only narrow, steep and decked at both ends");
+        Flight f;
+        f.mBottomA = LLVector3(0.f, -0.44f, 0.f);
+        f.mBottomB = LLVector3(0.f, 0.44f, 0.f);
+        f.mRise = 1.8f;
+        f.mRun = 1.4f;
+        f.mEroded = true;
+        f.mDecked = true;
+        f.mCodes = { 5 };
+        std::vector<Flight> flights = { f };
+        mapFlightPolys(flights, {}, {}, 0.75f);
+        ensure_equals("a ship's stair stays", flights.size(), 1u);
+        f.mDecked = false;
+        flights = { f };
+        mapFlightPolys(flights, {}, {}, 0.75f);
+        ensure_equals("a stray strip with no decks goes", flights.size(), 0u);
+        f.mDecked = true;
+        f.mBottomB = LLVector3(0.f, 3.f, 0.f);
+        flights = { f };
+        mapFlightPolys(flights, {}, {}, 0.75f);
+        ensure_equals("a wide one goes", flights.size(), 0u);
+    }
+
+    /// A slope between decks, its own record or one facet of a big lumpy one.
+    Soup facet(F32 deg, F32 rise, F32 half_width, bool own)
+    {
+        Soup s;
+        const F32 run = rise / std::tan(deg * DEG_TO_RAD);
+        s.mSource = 1;
+        s.box(-4, -4, -0.5f, 0, 4, 0);
+        s.mSource = 2;
+        s.box(run, -4, 0, run + 4, 4, rise);
+        s.mSource = 0;
+        s.quad(LLVector3(0, -half_width, 0), LLVector3(run, -half_width, rise), LLVector3(run, half_width, rise), LLVector3(0, half_width, 0));
+        if (!own)
+        {
+            // the rest of the rock: many walkable facets well away, spread wide in plan
+            s.grid(-12.f, 8.f, 12.f, 20.f, 1.f, [](F32 x, F32 y) { return 0.3f * std::sin(x) * std::cos(y); });
+        }
+        return s;
+    }
+
+    template<> template<>
+    void sknavflights_object::test<39>()
+    {
+        set_test_name("a narrow steep wedge is a stair only as its own record: one facet of a rock is not");
+        const SlopePartition own = facet(56.f, 1.8f, 0.44f, true).partition(0.75f, TOP_SLOPE_DEG);
+        ensure_equals("own record", own.mFlights.size(), 1u);
+        ensure("a stair", own.mFlights[0].mKind == ConnectorKind::STAIR);
+        ensure_equals("a rock's facet", facet(56.f, 1.8f, 0.44f, false).partition(0.75f, TOP_SLOPE_DEG).mFlights.size(), 0u);
+    }
+
+    template<> template<>
+    void sknavflights_object::test<40>()
+    {
+        set_test_name("a small steep facet of a rock is no climb; as its own record, or large, it is");
+        const SlopePartition own = facet(60.f, 2.5f, 1.f, true).partition(0.75f, TOP_SLOPE_DEG);
+        ensure_equals("own record", own.mFlights.size(), 1u);
+        ensure("a climb", own.mFlights[0].mKind == ConnectorKind::CLIMB);
+        ensure_equals("a rock's facet", facet(60.f, 2.5f, 1.f, false).partition(0.75f, TOP_SLOPE_DEG).mFlights.size(), 0u);
+        const SlopePartition big = facet(60.f, 3.f, 2.f, false).partition(0.75f, TOP_SLOPE_DEG);
+        ensure_equals("a large flat face of a rock", big.mFlights.size(), 1u);
+    }
+
+    template<> template<>
+    void sknavflights_object::test<41>()
+    {
+        set_test_name("a polygon-less climb is dropped: only stairs are kept bare");
+        Flight f;
+        f.mBottomA = LLVector3(0.f, -0.44f, 0.f);
+        f.mBottomB = LLVector3(0.f, 0.44f, 0.f);
+        f.mRise = 2.f;
+        f.mRun = 1.f;
+        f.mEroded = true;
+        f.mDecked = true;
+        f.mKind = ConnectorKind::CLIMB;
+        std::vector<Flight> flights = { f };
+        mapFlightPolys(flights, {}, {}, 0.75f);
+        ensure_equals("dropped", flights.size(), 0u);
+    }
+
+    template<> template<>
+    void sknavflights_object::test<42>()
+    {
+        set_test_name("a 9-step stair counts 9 treads, and so do its steps under a ramp laid over them");
+        const SlopePartition p = straight(9).partition();
+        ensure_equals("flights", p.mFlights.size(), 1u);
+        ensure_equals("treads", static_cast<S32>(p.mFlights[0].mTreadCount), 9);
+        Soup covered = straight(9);
+        const F32 top = 10 * 0.25f, run = 9 * 0.3f;
+        covered.quad(LLVector3(0, -0.75f, 0), LLVector3(run, -0.75f, top), LLVector3(run, 0.75f, top), LLVector3(0, 0.75f, 0));
+        const SlopePartition c = covered.partition();
+        ensure("a flight under the ramp", !c.mFlights.empty());
+        for (const Flight& f : c.mFlights)
+        {
+            ensure_equals("the steps under it", static_cast<S32>(f.mTreadCount), 9);
+        }
+        // With the steps unwalkable under it the ramp alone is the flight, with no tread groups: the faces still count them.
+        const size_t n = covered.mT.size() / 3, steps0 = 12, steps1 = 12 + 9 * 12;
+        std::vector<U8> areas(n, 0), two(n, 0);
+        for (size_t t = 0; t < n; ++t)
+        {
+            LLVector3 nn = (covered.mV[covered.mT[t * 3 + 1]] - covered.mV[covered.mT[t * 3]]) % (covered.mV[covered.mT[t * 3 + 2]] - covered.mV[covered.mT[t * 3]]);
+            nn.normVec();
+            areas[t] = (t < steps0 || t >= steps1) && nn.mV[VZ] >= std::cos(WALK_SLOPE_DEG * DEG_TO_RAD) ? OBJECT : 0;
+        }
+        const SlopePartition r = partitionSlopes(covered.mV, covered.mT, areas, two, OBJECT, 0.75f, WALK_SLOPE_DEG);
+        ensure_equals("the ramp", r.mFlights.size(), 1u);
+        ensure_equals("no tread groups", static_cast<S32>(r.mFlights[0].mTreads), 0);
+        ensure_equals("nine treads under it", static_cast<S32>(r.mFlights[0].mTreadCount), 9);
+    }
+
+    template<> template<>
+    void sknavflights_object::test<43>()
+    {
+        set_test_name("a smooth wedge has no treads to count: unknown, not none");
+        const SlopePartition p = ramp().partition();
+        ensure_equals("flights", p.mFlights.size(), 1u);
+        ensure_equals("smooth", static_cast<S32>(p.mFlights[0].mTreadCount), -1);
+        // A stray level face under the wedge is no stair: one riser of a metre is no step.
+        Soup stray = ramp();
+        stray.box(1.8f, -0.25f, 0.f, 2.3f, 0.25f, 0.45f);
+        const SlopePartition q = stray.partition();
+        ensure_equals("still one flight", q.mFlights.size(), 1u);
+        ensure_equals("still smooth", static_cast<S32>(q.mFlights[0].mTreadCount), -1);
     }
 }

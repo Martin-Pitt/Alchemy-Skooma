@@ -182,7 +182,7 @@ void SKMapMenu::applyGates(std::vector<SKPopupPaneSpec>& panes, std::vector<Gate
     // A request refused because eight were in flight is asked again a second later; one that
     // timed out or failed is not, so a sim that never answers is not asked over and over.
     constexpr F64 REFUSED_RETRY_S = 1.0;
-    const F64 now = LLFrameTimer::getElapsedSeconds();
+    const F64 now = LLFrameTimer::getUptimeSeconds().value();
     const std::string checking = label("checking");
     for (Gate& gate : gates)
     {

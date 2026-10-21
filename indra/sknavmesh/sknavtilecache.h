@@ -56,15 +56,37 @@ namespace sknav
 
     /// Bumped whenever the product format or what a build makes of its input
     /// changes, which orphans every entry written before.
-    constexpr U32 TILE_PRODUCT_VERSION = 3;
+    constexpr U32 TILE_PRODUCT_VERSION = 19;
 
     /// A versioned little-endian form of a tile's products under its key:
     /// a header, then tagged sections a reader skips when it does not know
     /// them, then a checksum over everything before it.
     std::vector<U8> packTileProduct(const TileBuildResult& result, U64 key);
+    /// Products held apart from the result, each packed in place of the result's own when given.
+    struct TileProductParts
+    {
+        const std::vector<WallFace>* mFaces = nullptr;
+        const std::vector<WallSegment>* mLedges = nullptr;
+        const std::vector<DropLink>* mRunoff = nullptr;
+    };
+    std::vector<U8> packTileProduct(const TileBuildResult& result, U64 key, const TileProductParts& parts);
     /// False, leaving out untouched, when the bytes are short, damaged, of
     /// another version or written for another key.
     bool unpackTileProduct(const U8* data, size_t size, U64 key, TileBuildResult& out);
+
+    /// Where a settled tile's detail air and held raster wait on disk, under its raster's key.
+    U64 spillKey(U64 content_key);
+    /// The air and raster bit for bit; either may be null.
+    std::vector<U8> packSpill(const TileAir* air, const TileRaster* raster, U64 key);
+    /// False, leaving the outputs untouched, on bytes that are short, damaged, of
+    /// another version or key. A raster read back points at the air read with it.
+    bool unpackSpill(const U8* data, size_t size, U64 key, TileAirPtr& air, TileRasterPtr& raster);
+
+    /// Where a tile's stamped polys are cached: under its raster's key and the
+    /// stamp's pattern, so the same partition finds them whatever the spaces are called.
+    U64 stampedKey(U64 content_key, U64 pattern);
+    /// What the polygon stage made: Detour, edges, links, flights and the stamp's tables.
+    TileBuildResult stampedPart(const TileBuildResult& result);
 
     /// A tile's air with only its solid tops, which the sky map reads: what an
     /// evicted tile keeps.
@@ -98,8 +120,11 @@ namespace sknav
             U64 mUsed = 0;
         };
         std::string pathOf(U64 key) const;
-        void pruneLocked(std::vector<std::string>& doomed);
+        /// Retry the failed removes, then drop the least recently used past the cap.
+        void pruneLocked();
+        void pruneEntriesLocked(std::vector<std::string>& doomed);
         void removeFiles(const std::vector<std::string>& paths);
+        void removeFilesLocked(const std::vector<std::string>& paths);
 
         mutable std::mutex mMutex;
         std::string mDir;
@@ -108,6 +133,7 @@ namespace sknav
         U64 mClock = 0;
         std::unordered_map<U64, Entry> mEntries;
         std::vector<std::string> mDoomed;
+        std::string mTmpTag;
     };
 
     /// Nearness integrated over time with a decay: a tile the camera sits by
@@ -120,11 +146,12 @@ namespace sknav
         size_t mBytes = 0;
         F64 mScore = 0.0;       ///< accumulateNearness
         F64 mDistance = 0.0;
+        U8 mRank = 0;           ///< what the candidate serves: higher ranks evict last
     };
 
-    /// Indices to evict, least near first, until the rest fit the budget.
-    /// Nothing within protect_distance is ever chosen, so the result may
-    /// still leave the total over it.
+    /// Indices to evict, lowest rank first, then least near, until the rest
+    /// fit the budget. Nothing within protect_distance is ever chosen, so the
+    /// result may still leave the total over it.
     std::vector<size_t> chooseEvictions(const std::vector<EvictionCandidate>& candidates, size_t budget_bytes, F64 protect_distance);
 }
 

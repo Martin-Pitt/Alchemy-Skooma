@@ -189,6 +189,31 @@ namespace sknav
         return std::minmax(mSpaceIds[0], mSpaceIds[1]);
     }
 
+    bool Mark::strikes(const LLUUID& mesh, U32 space_a, U32 space_b, const LLVector3d& centre) const
+    {
+        return mKind == MarkKind::PORTAL && !mStale && mSpaceMesh == mesh && portalPair() == std::minmax(space_a, space_b) &&
+               dist_vec_squared(centre, mPortalCentre) <= CROSS_REACH_M * CROSS_REACH_M;
+    }
+
+    U32 MarkSet::staleCrosses(const LLUUID& mesh, const std::vector<Cut>& cuts)
+    {
+        U32 n = 0;
+        for (Mark& m : mMarks)
+        {
+            if (m.mKind != MarkKind::PORTAL || m.mStale || m.mSpaceMesh != mesh)
+            {
+                continue;
+            }
+            const bool live = std::any_of(cuts.begin(), cuts.end(), [&](const Cut& q) { return m.strikes(mesh, q.mSpaces[0], q.mSpaces[1], q.mCentre); });
+            if (!live)
+            {
+                m.mStale = true;
+                ++n;
+            }
+        }
+        return n;
+    }
+
     bool Mark::complete() const
     {
         switch (mKind)
@@ -257,6 +282,10 @@ namespace sknav
                 out << ",\"mesh\":\"" << mark.mSpaceMesh.asString() << "\",\"spaces\":[" << mark.mSpaceIds[0] << ','
                     << mark.mSpaceIds[1] << "],\"centre\":[" << mark.mPortalCentre.mdV[VX] << ','
                     << mark.mPortalCentre.mdV[VY] << ',' << mark.mPortalCentre.mdV[VZ] << ']';
+                if (mark.mStale)
+                {
+                    out << ",\"stale\":true";
+                }
             }
             // A spiral stair's winding, named beside the sampled polyline so
             // a reader keeps the true shape when the pitch it was sampled at
