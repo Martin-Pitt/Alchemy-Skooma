@@ -119,4 +119,43 @@ namespace tut
         ensure_equals("the retained cluster produces its tile", built.first, size_t(1));
         ensure("the retained body is indexed", built.second);
     }
+    template<> template<>
+    void sknavasync_object::test<3>()
+    {
+        set_test_name("census clustering retains detached records and matches synchronous output");
+        using namespace sknav;
+        auto record = std::make_shared<Record>();
+        record->mRoot.generate();
+        record->mPart = record->mRoot;
+        record->mMin.set(30., -2., 0.);
+        record->mMax.set(66., 34., 5.);
+        record->mSignature = 1234;
+        std::vector<RecordPtr> records { record };
+        auto expected = cluster(records, 0.5);
+        const auto expected_id = expected.mClusters.front()->mId;
+        const auto expected_tiles = expected.mClusters.front()->mTiles;
+        const auto expected_index_size = expected.mByTile.size();
+        expected = {};
+        std::promise<void> release;
+        auto gate = release.get_future();
+        std::packaged_task<ClusterSet()> task([records, gate = std::move(gate)]() mutable
+        {
+            gate.wait();
+            return cluster(records, 0.5);
+        });
+        auto result = task.get_future();
+        std::thread worker(std::move(task));
+        records.clear();
+        record.reset();
+        const bool pending = result.wait_for(std::chrono::seconds(0)) == std::future_status::timeout;
+        release.set_value();
+        worker.join();
+        const auto built = result.get();
+        ensure("the caller can poll without waiting for clustering", pending);
+        ensure_equals("cluster count", built.mClusters.size(), size_t(1));
+        ensure("stable identity", built.mClusters.front()->mId == expected_id);
+        ensure("same tile coverage and signatures", built.mClusters.front()->mTiles == expected_tiles);
+        ensure_equals("same spatial index coverage", built.mByTile.size(), expected_index_size);
+    }
+
 }

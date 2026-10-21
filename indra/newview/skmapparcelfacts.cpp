@@ -83,7 +83,7 @@ void SKMapParcelFacts::onIdle(void*)
 
 void SKMapParcelFacts::expire()
 {
-    const F64 now = LLFrameTimer::getElapsedSeconds();
+    const F64 now = LLFrameTimer::getUptimeSeconds().value();
     for (auto it = mPending.begin(); it != mPending.end();)
     {
         if (now - it->second.mSent >= REPLY_TIMEOUT_S)
@@ -99,13 +99,13 @@ void SKMapParcelFacts::expire()
 
 const skmap::ParcelFacts* SKMapParcelFacts::find(const LLUUID& region, S32 x, S32 y) const
 {
-    return mCache.find(region, x, y, LLFrameTimer::getElapsedSeconds());
+    return mCache.find(region, x, y, LLFrameTimer::getUptimeSeconds().value());
 }
 
 bool SKMapParcelFacts::pending(S32 seq) const
 {
     const auto it = mPending.find(seq);
-    return it != mPending.end() && LLFrameTimer::getElapsedSeconds() - it->second.mSent < REPLY_TIMEOUT_S;
+    return it != mPending.end() && LLFrameTimer::getUptimeSeconds().value() - it->second.mSent < REPLY_TIMEOUT_S;
 }
 
 S32 SKMapParcelFacts::request(LLViewerRegion* region, S32 x, S32 y)
@@ -150,7 +150,7 @@ S32 SKMapParcelFacts::request(LLViewerRegion* region, S32 x, S32 y)
     msg->addBOOLFast(_PREHASH_SnapSelection, false);
     msg->sendReliable(region->getHost());
 
-    mPending[seq] = { region->getRegionID(), x, y, LLFrameTimer::getElapsedSeconds() };
+    mPending[seq] = { region->getRegionID(), x, y, LLFrameTimer::getUptimeSeconds().value() };
     return seq;
 }
 
@@ -194,7 +194,7 @@ void SKMapParcelFacts::take(LLMessageSystem* msg, S32 seq, S32 result)
     msg->getUUIDFast(_PREHASH_ParcelData, _PREHASH_OwnerID, facts.mOwner);
     msg->getBOOLFast(_PREHASH_ParcelData, _PREHASH_IsGroupOwned, facts.mGroupOwned);
     msg->getUUIDFast(_PREHASH_ParcelData, _PREHASH_GroupID, facts.mGroup);
-    facts.mTime = LLFrameTimer::getElapsedSeconds();
+    facts.mTime = LLFrameTimer::getUptimeSeconds().value();
     if (msg->getSizeFast(_PREHASH_ParcelData, _PREHASH_Bitmap) == BITMAP_BYTES)
     {
         // The parcel's own cells: the entry answers for every one of them.

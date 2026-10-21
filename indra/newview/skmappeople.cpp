@@ -89,7 +89,7 @@ void SKMapPeople::cleanupSingleton()
 
 void SKMapPeople::noteDrawn(const skmap::MapView& view)
 {
-    mLastDrawn = LLFrameTimer::getElapsedSeconds();
+    mLastDrawn = LLFrameTimer::getUptimeSeconds().value();
     view.visibleBox(mViewMin, mViewMax);
     const LLVector3d pad = (mViewMax - mViewMin) * 0.05;
     mViewMin -= pad;
@@ -98,7 +98,7 @@ void SKMapPeople::noteDrawn(const skmap::MapView& view)
 
 bool SKMapPeople::active() const
 {
-    return LLFrameTimer::getElapsedSeconds() - mLastDrawn < DRAWN_RECENTLY_S;
+    return LLFrameTimer::getUptimeSeconds().value() - mLastDrawn < DRAWN_RECENTLY_S;
 }
 
 // static
@@ -119,16 +119,24 @@ void SKMapPeople::idle()
             mPeople.clear();
             mVehicles.clear();
         }
-        mCombat = false;
-        mResolver.update(false, false, mCandidates, LLFrameTimer::getElapsedSeconds());
+        // Kept current, so the first frame after the map reopens on damage land already hides what combat hides.
+        if (LLWorld::instanceExists() && gAgent.getRegion())
+        {
+            updateCombat();
+        }
+        else
+        {
+            mCombat = false;
+        }
+        mResolver.update(false, false, mCandidates, LLFrameTimer::getUptimeSeconds().value());
         return;
     }
     LL_PROFILE_ZONE_SCOPED;
     updateCombat();
     updateCandidates();
-    mResolver.update(mCombat, mCombat, mCandidates, LLFrameTimer::getElapsedSeconds());
+    mResolver.update(mCombat, mCombat, mCandidates, LLFrameTimer::getUptimeSeconds().value());
     gatherPeople();
-    mResolver.dispatch(LLFrameTimer::getElapsedSeconds());
+    mResolver.dispatch(LLFrameTimer::getUptimeSeconds().value());
     updateFiringLines();
     updateProjectiles();
     updateCoverAhead();
@@ -137,6 +145,7 @@ void SKMapPeople::idle()
 
 void SKMapPeople::gatherVehicles()
 {
+    LL_PROFILE_ZONE_SCOPED;
     static LLCachedControl<bool> show(gSavedSettings, "SKMapLayerVehicles", true);
     mVehicles.clear();
     if (!show || !SKWorldCensus::instanceExists())
@@ -229,13 +238,14 @@ void SKMapPeople::gatherVehicles()
 
 void SKMapPeople::updateCoverAhead()
 {
+    LL_PROFILE_ZONE_SCOPED;
     static LLCachedControl<bool> show(gSavedSettings, "SKMapCoverAhead", true);
     if (!show)
     {
         mCoverAhead = sknav::Cover::NONE;
         return;
     }
-    const F64 now = LLFrameTimer::getElapsedSeconds();
+    const F64 now = LLFrameTimer::getUptimeSeconds().value();
     if (now - mCoverAt < 0.1)
     {
         return;
@@ -256,7 +266,7 @@ void SKMapPeople::updateCoverAhead()
 
 void SKMapPeople::addPing(const LLVector3d& pos)
 {
-    const F64 now = LLFrameTimer::getElapsedSeconds();
+    const F64 now = LLFrameTimer::getUptimeSeconds().value();
     mPings.erase(std::remove_if(mPings.begin(), mPings.end(), [now](const Ping& p) { return now - p.mTime > skmap::palette::PING_SECONDS; }),
                  mPings.end());
     mPings.push_back({ pos, now });
@@ -265,6 +275,7 @@ void SKMapPeople::addPing(const LLVector3d& pos)
 
 void SKMapPeople::updateFiringLines()
 {
+    LL_PROFILE_ZONE_SCOPED;
     static LLCachedControl<bool> show(gSavedSettings, "SKMapLayerFiringLines", true);
     if (!show)
     {
@@ -273,7 +284,14 @@ void SKMapPeople::updateFiringLines()
     }
     constexpr F64 RECAST_S = 0.25;      ///< 4 Hz an avatar
     constexpr S32 RAYS_PER_IDLE = 4;
-    const F64 now = LLFrameTimer::getElapsedSeconds();
+    constexpr F64 RAY_BUDGET_S = 0.001; ///< what an idle may spend on rays, averaged
+    constexpr F64 RAY_BURST_S = 0.004;  ///< how much unspent budget may accumulate
+    constexpr F64 RAY_DEBT_S = 0.5;     ///< how far one dear ray may push the next out
+    const F64 now = LLFrameTimer::getUptimeSeconds().value();
+    // A world ray through a hub full of mesh can cost a hundred milliseconds, so the rays are
+    // paid for by measured cost: a dear one is followed by as many idles as it takes to earn
+    // the next, and a cheap scene never notices.
+    mRayAllowance = llmin(mRayAllowance + RAY_BUDGET_S, RAY_BURST_S);
     // Only for people the map draws: in combat, allies; a hidden avatar's aim must not leak.
     std::map<LLUUID, FiringLine> kept;
     std::vector<std::pair<F64, const Person*>> due;
@@ -301,7 +319,7 @@ void SKMapPeople::updateFiringLines()
     S32 rays = 0;
     for (const auto& entry : due)
     {
-        if (rays >= RAYS_PER_IDLE)
+        if (rays >= RAYS_PER_IDLE || mRayAllowance <= 0.0)
         {
             break;
         }
@@ -312,6 +330,7 @@ void SKMapPeople::updateFiringLines()
             continue;
         }
         ++rays;
+        const F64 ray_start = LLFrameTimer::getTotalSeconds();
         const LLVector3 from = head->getWorldPosition();
         const LLVector3 dir = LLVector3::x_axis * head->getWorldRotation();
         const LLVector3 to = from + dir * skmap::palette::FIRING_REACH_M;
@@ -325,6 +344,7 @@ void SKMapPeople::updateFiringLines()
         {
             stop.set(hit.getF32ptr());
         }
+        mRayAllowance = llmax(mRayAllowance - (LLFrameTimer::getTotalSeconds() - ray_start), -RAY_DEBT_S);
         FiringLine& line = kept[entry.second->mId];
         line.mFrom = gAgent.getPosGlobalFromAgent(from);
         line.mTo = gAgent.getPosGlobalFromAgent(stop);
@@ -335,6 +355,7 @@ void SKMapPeople::updateFiringLines()
 
 void SKMapPeople::updateProjectiles()
 {
+    LL_PROFILE_ZONE_SCOPED;
     static LLCachedControl<bool> show(gSavedSettings, "SKMapLayerProjectiles", false);
     // Never in combat: a shot's owner cannot be told without asking, and it would show where
     // someone hidden is shooting from.
@@ -344,7 +365,7 @@ void SKMapPeople::updateProjectiles()
         mLastObjectPos.clear();
         return;
     }
-    const F64 now = LLFrameTimer::getElapsedSeconds();
+    const F64 now = LLFrameTimer::getUptimeSeconds().value();
     if (now - mProjectilesAt < 0.1)
     {
         return;
@@ -436,6 +457,7 @@ void SKMapPeople::updateCandidates()
 
 void SKMapPeople::gatherPeople()
 {
+    LL_PROFILE_ZONE_SCOPED;
     static LLCachedControl<bool> avatar_colours(gSavedSettings, "SKMapAvatarColors", true);
     const LLVector3d agent = gAgent.getPositionGlobal();
     const F64 camera_z = gAgentCamera.getCameraPositionGlobal().mdV[VZ];
@@ -458,7 +480,7 @@ void SKMapPeople::gatherPeople()
             }
         }
         std::sort(loaded.begin(), loaded.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
-        const F64 now = LLFrameTimer::getElapsedSeconds();
+        const F64 now = LLFrameTimer::getUptimeSeconds().value();
         for (const auto& entry : loaded)
         {
             const LLVector3d p = entry.second->getPositionGlobal();
@@ -470,7 +492,7 @@ void SKMapPeople::gatherPeople()
 
     static LLCachedControl<F32> code_hold(gSavedSettings, "SKMapMarkerCodeHold", skmap::CODE_HOLD_S);
     mCodes.setHold(code_hold);
-    const F64 code_now = LLFrameTimer::getElapsedSeconds();
+    const F64 code_now = LLFrameTimer::getUptimeSeconds().value();
     mCodes.release(code_now);
 
     const LLColor4 general(skmap::palette::DOT_GENERAL.mR, skmap::palette::DOT_GENERAL.mG, skmap::palette::DOT_GENERAL.mB, 1.f);

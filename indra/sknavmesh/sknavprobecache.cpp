@@ -93,7 +93,7 @@ namespace sknav
         constexpr size_t PART_BYTES = 4 + 12 + 4 + 4 + 1 + 4 + 12 + 12;
     }
 
-    static_assert(sizeof(void*) != 8 || sizeof(ProbeParams) == 80, "a new ProbeParams field must go into probePartsKey");
+    static_assert(sizeof(void*) != 8 || sizeof(ProbeParams) == 84, "a new ProbeParams field must go into probePartsKey");
     static_assert(sizeof(void*) != 8 || sizeof(ProbePart) == 56, "a new ProbePart field must go into packProbeParts");
 
     U64 probePartsKey(std::vector<U64> tile_keys, const ProbeParams& p)
@@ -114,7 +114,7 @@ namespace sknav
         }
         for (F32 v : { p.mCellM, p.mMinPartM2, p.mMinPartWidthM, p.mMaxRadiusM, p.mMinRadiusM, p.mCoverageShare, p.mSpaceRadiusM,
                        p.mBlendZoneM, p.mBlendShare, p.mUnknownRadiusM, p.mObligationShare, p.mOpenShare, p.mMoveM, p.mRadiusShare,
-                       p.mMatchM, p.mBudgetHoldM, p.mSpacingM })
+                       p.mMoveShare, p.mMatchM, p.mBudgetHoldM, p.mSpacingM })
         {
             h = mixFloat(h, v);
         }

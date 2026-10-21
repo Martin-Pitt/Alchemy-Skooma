@@ -127,7 +127,13 @@ namespace sknav
         F32 mUnknown = 0.f;         ///< share of the floor with no enclosure answer
         bool mLift = false;
         bool mFlight = false;       ///< a stair flight's own space
+        bool mUnderFlight = false;  ///< ground under an outdoor flight, sheltered by it
         bool mFrozen = false;       ///< kept from an earlier pass for tiles whose detail was evicted
+        bool mRoof = false;         ///< a building's roof: walkable, under open sky, over its roofed floors
+        F32 mOverRoofed = 0.f;      ///< share of the floor open to the sky over an indoor or sheltered floor
+        U32 mBuilding = 0;          ///< its building's least member id, 0 in none: indoor spaces, roofs and what they cover
+        std::vector<U32> mCovers;   ///< a roof's: indices of the roofed spaces it lies most over or over a quarter of, ascending
+        std::vector<F32> mCoverM2;  ///< m² of each of those it lies over
         std::vector<U32> mPortals;  ///< indices into the product's portals
         /// Floor area per 0.5 m x 0.5 m x 1 m cell, sorted by key: what ids are tracked by.
         std::vector<std::pair<U64, U32>> mRaster;
@@ -141,6 +147,11 @@ namespace sknav
         F32 mY = 0.f;
         F32 mZ = 0.f;
     };
+
+    constexpr F32 RASTER_XY_M = 0.5f;      ///< a Space::mRaster cell's side
+    constexpr F32 RASTER_Z_M = 1.f;        ///< and its height band
+    /// A Space::mRaster key's cell: its minimum corner, mZ the bottom of its band.
+    PlanCell rasterCell(U64 key);
 
     /// One straight run of a plan's boundary, from one cell corner to
     /// another, the plan's cells on its left, at the floor z it ran along.
@@ -211,6 +222,7 @@ namespace sknav
         TileAirPtr mAir;            ///< the air the seeds were cut from
         std::vector<U16> mSeeds;    ///< per gap of the air, 1-based; 0 on no avatar floor
         std::vector<SeedStats> mStats;  ///< per seed
+        std::vector<U32> mBasins;       ///< per seed, the watershed basin it was cut from, numbered across passes; 0 for none
     };
 
     /// Two seeds joined for want of a cut rather than by cues, kept while
@@ -226,6 +238,15 @@ namespace sknav
     /// The merge's runs and cut scores, each keyed by everything it read, for the next pass to reuse.
     struct MergeMemo;
 
+    /// Each tile's walkable components and their links into its neighbours, keyed by the airs they read, for the next pass to reuse.
+    struct FloorMemo;
+
+    /// Each tile's roof covers by gap, keyed by its air, its gaps' buckets and which of its gaps are in a space.
+    struct CoverMemo;
+
+    /// Each tile's edges to its +x and +y neighbours' seeds, keyed by the three tiles' air and seeds.
+    struct EdgeMemo;
+
     /// One mesh's spaces and portals. Positions are mesh-local.
     struct RoomsProduct
     {
@@ -240,12 +261,23 @@ namespace sknav
         U32 mDirtyTiles = 0;
         U32 mCells = 0;                     ///< level-0 cells the transform ran over
         U32 mReused = 0;                    ///< runs and scores taken from the last pass's memo
+        U32 mNextBasin = 1;                 ///< the first basin number the next pass may give
         SpacesDrawPtr mDraw;                ///< what the overlay draws, built once with the pass.
                                             ///< Landed products are replaced, never rewritten, and the
                                             ///< draw copies what it read, so it cannot go stale beside
                                             ///< them; a pass that would change it lands a new product.
         std::shared_ptr<const MergeMemo> mMemo;
+        std::shared_ptr<const FloorMemo> mFloors;
+        std::shared_ptr<const CoverMemo> mCovers;
+        std::shared_ptr<const EdgeMemo> mEdgeMemo;
+        std::vector<std::pair<TileKey, U64>> mStampKeys;    ///< per tile, by key: what its stamp reads of these spaces (stampRoomsKey)
+        std::vector<std::pair<U64, U32>> mPortalKeys;       ///< each portal's portalKey to its index, by key
+        U64 mStoreyKey = 0;                                 ///< what storeys read of these spaces (storeyRoomsKey)
 
+        /// A tile's stamp key, 0 for a tile it has none for.
+        U64 stampKey(const TileKey& key) const;
+        /// The index of the portal with this portalKey, or ~0u: a binding's portal by identity, not by an older product's index.
+        U32 portalIndex(U64 key) const;
         /// The space with this id, or null.
         const Space* byId(U32 id) const;
         const RoomsTile* tile(const TileKey& key) const;

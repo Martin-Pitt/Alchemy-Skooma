@@ -250,6 +250,37 @@ namespace tut
     }
 
     template<> template<>
+    void sknavwind_object::test<12>()
+    {
+        set_test_name("a pass's slabs, sharing the band's weight blur, match slabs computed alone");
+        Scene s;
+        s.box(20.f, 20.f, 26.f, 24.f, 0.f, 5.5f, false);
+        s.wall(36.f, 8.f, 36.5f, 30.f, 6.f);
+        auto in = std::make_shared<WindInput>();
+        const Wind w(s.input(4, 2));
+        in->mEnclosure = w.mEnc;
+        in->mRooms = w.mRooms;
+        in->mBands = { WindLevel() };
+        const WindProductPtr p = computeWind(in);
+        ensure_equals("16 slabs", p->mSlabs.size(), static_cast<size_t>(WIND_HEADINGS));
+        S32 differ = 0, venturi = 0;
+        for (S32 h = 0; h < WIND_HEADINGS; ++h)
+        {
+            const WindSlabPtr alone = w.slab(windHeadingDeg(h));
+            const WindSlabPtr shared = p->slab(h, 0);
+            ensure_equals("same size", shared->mCells.size(), alone->mCells.size());
+            for (size_t i = 0; i < alone->mCells.size(); ++i)
+            {
+                const WindCell &a = alone->mCells[i], &b = shared->mCells[i];
+                differ += a.mFactor != b.mFactor || a.mDeflect[0] != b.mDeflect[0] || a.mDeflect[1] != b.mDeflect[1] || a.mFlags != b.mFlags;
+                venturi += !(a.mFlags & WindCell::BLOCKED) && a.mFactor > 125;
+            }
+        }
+        ensure_equals("identical cells", differ, 0);
+        ensure("some air speeds up between the solids", venturi > 0);
+    }
+
+    template<> template<>
     void sknavwind_object::test<10>()
     {
         set_test_name("a portal's normal runs from its first space into its second, and a draught follows the wind");
@@ -360,6 +391,35 @@ namespace tut
                 put(v);
                 put(c.mFlags);
             }
+        }
+    }
+
+    template<> template<>
+    void sknavwind_object::test<13>()
+    {
+        set_test_name("air whose enclosure is UNKNOWN is calm and never a courtyard");
+        // The closed room of test 4 with sealing off: no way in, so its air has no answer.
+        Scene s;
+        s.wall(4.f, 4.f, 16.f, 4.25f);
+        s.wall(4.f, 15.75f, 16.f, 16.f);
+        s.wall(4.f, 4.f, 4.25f, 16.f);
+        s.wall(15.75f, 4.f, 16.f, 16.f);
+        s.box(4.f, 4.f, 16.f, 16.f, 3.f, 3.25f);
+        auto in = s.input(1);
+        in->mParams.mSealedIndoors = false;
+        const Wind w(in);
+        Enclosure e;
+        ensure("the room's air is UNKNOWN", w.mEnc->enclosureAt(LLVector3(10.f, 10.f, 0.5f), e) && e.mBucket == EnclosureBucket::UNKNOWN);
+        for (F32 heading : { 0.f, 135.f })
+        {
+            const WindSlabPtr slab = w.slab(heading);
+            const U8 f = flags(slab, 10.f, 10.f);
+            ensure("flagged UNKNOWN", (f & WindCell::UNKNOWN) != 0);
+            ensure("not INDOORS", (f & WindCell::INDOORS) == 0);
+            ensure("no courtyard", (f & WindCell::COURTYARD) == 0);
+            ensure("calm", factor(slab, 10.f, 10.f) < 0.1f);
+            ensure("windy outside", factor(slab, 25.f, 25.f) > 0.5f);
+            ensure("outside is known", (flags(slab, 25.f, 25.f) & WindCell::UNKNOWN) == 0);
         }
     }
 }

@@ -26,6 +26,7 @@
 #define SK_NAVBUILDSTATS_H
 
 #include "stdtypes.h"
+#include "sknavfaceoffsets.h"
 
 #include <chrono>
 #include <vector>
@@ -82,8 +83,8 @@ namespace sknav
     {
         enum Stage : S32
         {
-            PARTITION, RASTERISE, FILL, CUT, BRIDGES, CULL, FILTERS, COMPACT, ERODE, REGIONS, CONTOURS, POLYMESH, FLIGHTMAP, DETAIL,
-            WALLS, AIR, EDGES, DETOUR, NUM_STAGES
+            PARTITION, RASTERISE, FILL, CUT, BRIDGES, CULL, FILTERS, COMPACT, ERODE, REGIONS, CONTOURS, POLYMESH, STAMP, FLIGHTMAP,
+            DETAIL, WALLS, AIR, EDGES, DETOUR, NUM_STAGES
         };
         bool mBuilt = false;
         F64 mMs[NUM_STAGES] = {};
@@ -101,6 +102,10 @@ namespace sknav
         U32 mFlightPolys = 0;
         U32 mFlightCodes = 0;
         U32 mCodes = 0;             ///< distinct area codes rasterised
+        /// Normalised digests of the heightfield after its filters and of the compact one before regions.
+        U64 mHfHash = 0;            ///< spans and whether each is walkable
+        U64 mHfAreaHash = 0;        ///< spans and their area codes as the class reads them
+        U64 mChfHash = 0;
         AirBuildStats mAir;
 
         static const char* stageName(S32 stage);
@@ -114,6 +119,7 @@ namespace sknav
         U16 mTop = 0;               ///< in cells from the heightfield's base
         U16 mRegion = 0;
         U8 mCode = 0;               ///< the slope partition's code, before it is unfolded
+        U32 mGap = U32_MAX;         ///< its gap in the raster's span map, U32_MAX for none
     };
 
     struct TileBuildStats
@@ -121,17 +127,65 @@ namespace sknav
         F64 mSoupMs = 0.0;
         F64 mExcludeMs = 0.0;
         F64 mTotalMs = 0.0;
+        F64 mRasterMs = 0.0;            ///< the raster stage, soup to the held raster
+        F64 mPolyMs = 0.0;              ///< the polygon stage
+        F64 mCoarseAirMs = 0.0;         ///< of the raster stage, the coarse air of a tile without its own
+        /// The air's face offsets, and every mFaceTraceEvery-th side traced for an oracle when set.
+        FaceOffsetStats mFaceOffsets;
+        S32 mFaceTraceEvery = 0;
+        EdgeAlignStats mEdgeAlign;
+        std::vector<FaceOffsetTrace> mFaceTrace;
+        /// What the raster stage hands the polygon stage: all of it, its compact heightfield, its edge field.
+        size_t mHeldBytes = 0;
+        size_t mHeldChfBytes = 0;
+        size_t mHeldEdgeBytes = 0;
+        size_t mHeldSpanGapBytes = 0;
+        /// AVATAR's walkable spans on the tile proper, those with no gap of the
+        /// air in mSpanGap, and of those, the ones under door leaves and in
+        /// columns AVATAR reads from a copy of its own.
+        U32 mSpanGapSpans = 0;
+        U32 mSpanGapMisses = 0;
+        U32 mSpanGapWindowMisses = 0;
+        U32 mSpanGapOwnMisses = 0;
         U32 mExcludedRecords = 0;
         U32 mExcludeWindowCells = 0;    ///< tile cells within two of an excluded triangle's box
         U32 mTileCells = 0;
         U32 mSharedCodes = 0;           ///< distinct codes of the shared partition, at the widest slope
-        ClassBuildStats mClass[2];
+        /// Bridges the air's list lays that AVATAR's, found on the same raster, does not, and the reverse.
+        U32 mTopOnlyBridges = 0;
+        U32 mAvatarOnlyBridges = 0;
+        U32 mOwnColumns = 0;            ///< columns AVATAR reads from a copy of its own
+        U32 mWindowCells = 0;           ///< raster cells round the records AVATAR leaves out
+        S32 mWindowRect[4] = { 0, 0, 0, 0 };   ///< the window raster's cells, from the tile's corner: x0, z0, x1, z1
+        /// The fine air over the candidate blocks, and how it differs from the tile's.
+        struct Fine
+        {
+            U32 mBlocks = 0;
+            U32 mCandidates = 0;
+            U32 mWindows = 0;
+            U32 mWindowCells = 0;       ///< tile cells the windows cover
+            U32 mSkipped = 0;           ///< windows too tall for the fine height range
+            F64 mMs = 0.0;
+            F64 mRasterMs = 0.0;        ///< of mMs, the raster and its filters
+            U32 mLeaves = 0;
+            U32 mGaps = 0;
+            size_t mBytes = 0;
+            U32 mCoarseLinks = 0, mClosed = 0, mClosedSeparating = 0;
+            U32 mFineLinks = 0, mOpened = 0, mOpenedSeparating = 0;
+            U32 mFineGaps = 0, mNewGaps = 0, mNewWalkable = 0;
+        } mFine;
+        ClassBuildStats mClass[1];
+        /// The raster's own passes: the air's filters, the air, ledges and run-off.
+        ClassBuildStats mTop;
         /// AVATAR's walkable spans on the tile proper and, per poly, which of them it covers.
         std::vector<StatSpan> mSpans;
         std::vector<U32> mPolySpanStart;
         std::vector<U32> mPolySpans;
         std::vector<F32> mPolyArea;     ///< m², from its outline
         std::vector<U8> mPolyFlight;    ///< 1 where a flight claimed the poly
+        /// Flights the air marks that got no polys, and the reverse, by key.
+        std::vector<U64> mFlightStandOnly;
+        std::vector<U64> mFlightPolysOnly;
     };
 }
 

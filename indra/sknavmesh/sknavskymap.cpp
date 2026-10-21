@@ -31,6 +31,26 @@
 
 namespace sknav
 {
+    bool sameTops(const TileAir& a, const TileAir& b)
+    {
+        return sameTops(*a.mTops, *b.mTops);
+    }
+
+    bool sameTops(const TileTops& a, const TileTops& b)
+    {
+        if (&a == &b)
+        {
+            return true;
+        }
+        if (a.mOrigin != b.mOrigin || a.mCell != b.mCell || a.mUnit != b.mUnit || a.mTopCell != b.mTopCell ||
+            a.mTopWidth != b.mTopWidth || a.mTopHeight != b.mTopHeight || a.mTopStart != b.mTopStart || a.mTop.size() != b.mTop.size())
+        {
+            return false;
+        }
+        return std::equal(a.mTop.begin(), a.mTop.end(), b.mTop.begin(),
+                          [](const TopInterval& x, const TopInterval& y) { return x.mBottom == y.mBottom && x.mTop == y.mTop; });
+    }
+
     const std::vector<SkyMap::Interval>* SkyMap::find(S64 x, S64 y) const
     {
         const auto b = mBlocks.find(blockKey(x, y));
@@ -42,8 +62,30 @@ namespace sknav
         return c == b->second->mCells.end() ? nullptr : &c->second;
     }
 
+    U64 SkyMap::windowKey(F64 x0, F64 y0, F64 x1, F64 y1, std::vector<std::shared_ptr<const void>>& keep) const
+    {
+        const S64 bx0 = static_cast<S64>(std::floor(x0)) >> BLOCK_SHIFT, bx1 = static_cast<S64>(std::floor(x1)) >> BLOCK_SHIFT;
+        const S64 by0 = static_cast<S64>(std::floor(y0)) >> BLOCK_SHIFT, by1 = static_cast<S64>(std::floor(y1)) >> BLOCK_SHIFT;
+        U64 h = 0xcbf29ce484222325ull;
+        for (S64 by = by0; by <= by1; ++by)
+        {
+            for (S64 bx = bx0; bx <= bx1; ++bx)
+            {
+                const auto b = mBlocks.find(cellKey(bx, by));
+                const Block* p = b == mBlocks.end() ? nullptr : b->second.get();
+                h = (h ^ static_cast<U64>(reinterpret_cast<uintptr_t>(p))) * 0x100000001b3ull;
+                if (p)
+                {
+                    keep.push_back(b->second);
+                }
+            }
+        }
+        return h;
+    }
+
     SkyMap::Block& SkyMap::writable(S64 x, S64 y)
     {
+        // Right only while every other holder of a block reads it: one map writes, its copies only read.
         std::shared_ptr<Block>& b = mBlocks[blockKey(x, y)];
         if (!b)
         {
@@ -53,11 +95,13 @@ namespace sknav
         {
             b = std::make_shared<Block>(*b);    // a snapshot still reads the old one
         }
+        llassert(b.use_count() == 1);
         return *b;
     }
 
     void SkyMap::drop(U64 contributor)
     {
+        mCoverage.erase(contributor);
         const auto it = mContributors.find(contributor);
         if (it == mContributors.end())
         {
@@ -87,18 +131,18 @@ namespace sknav
         mContributors.erase(it);
     }
 
-    void SkyMap::set(U64 contributor, const LLVector3d& tile_min, const TileAir& air)
+    void SkyMap::set(U64 contributor, const LLVector3d& tile_min, const TileTops& tops)
     {
         drop(contributor);
         // Tiles are unrotated and start on whole metres, so each top cell is one global metre cell.
-        const F64 metres = air.mTopCell * air.mCell;
+        const F64 metres = tops.mTopCell * tops.mCell;
         auto touched = std::make_shared<std::vector<U64>>();
-        for (S32 ty = 0; ty < air.mTopHeight; ++ty)
+        for (S32 ty = 0; ty < tops.mTopHeight; ++ty)
         {
-            for (S32 tx = 0; tx < air.mTopWidth; ++tx)
+            for (S32 tx = 0; tx < tops.mTopWidth; ++tx)
             {
-                const S32 c = tx + ty * air.mTopWidth;
-                if (air.mTopStart[c] == air.mTopStart[c + 1])
+                const S32 c = tx + ty * tops.mTopWidth;
+                if (tops.mTopStart[c] == tops.mTopStart[c + 1])
                 {
                     continue;
                 }
@@ -110,10 +154,10 @@ namespace sknav
                 {
                     ++mCellCount;
                 }
-                for (U32 i = air.mTopStart[c]; i < air.mTopStart[c + 1]; ++i)
+                for (U32 i = tops.mTopStart[c]; i < tops.mTopStart[c + 1]; ++i)
                 {
-                    const TopInterval& t = air.mTop[i];
-                    cell.push_back({ tile_min.mdV[VZ] + t.mBottom * air.mUnit, tile_min.mdV[VZ] + t.mTop * air.mUnit, contributor });
+                    const TopInterval& t = tops.mTop[i];
+                    cell.push_back({ tile_min.mdV[VZ] + t.mBottom * tops.mUnit, tile_min.mdV[VZ] + t.mTop * tops.mUnit, contributor });
                 }
                 touched->push_back(key);
             }
@@ -121,6 +165,11 @@ namespace sknav
         if (!touched->empty())
         {
             mContributors[contributor] = touched;
+        }
+        if (tops.mTopWidth > 0 && tops.mTopHeight > 0)
+        {
+            mCoverage[contributor] = { tile_min.mdV[VX], tile_min.mdV[VY], tile_min.mdV[VX] + tops.mTopWidth * metres,
+                                       tile_min.mdV[VY] + tops.mTopHeight * metres };
         }
         ++mVersion;
     }
@@ -134,12 +183,24 @@ namespace sknav
         }
     }
 
+    bool SkyMap::covers(F64 x, F64 y) const
+    {
+        for (const auto& [contributor, f] : mCoverage)
+        {
+            if (x >= f.mX0 && x < f.mX1 && y >= f.mY0 && y < f.mY1)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     bool SkyMap::skyOpenAt(const LLVector3d& pos, F32 reach) const
     {
         const std::vector<Interval>* cell = find(static_cast<S64>(std::floor(pos.mdV[VX])), static_cast<S64>(std::floor(pos.mdV[VY])));
         if (!cell)
         {
-            return true;
+            return covers(pos.mdV[VX], pos.mdV[VY]);
         }
         for (const Interval& i : *cell)
         {
@@ -172,8 +233,9 @@ namespace sknav
     namespace
     {
         /// The share of 16 spokes out of pos no column standing through pos's
-        /// height crosses within SIDE_OPEN_REACH_M, read a metre at a time
-        /// along each so no wall is stepped over, stopping at the first.
+        /// height crosses within SIDE_OPEN_REACH_M and that pass under open
+        /// sky on the way, read a metre at a time along each so no wall is
+        /// stepped over, stopping at the first.
         template<typename AT>
         F32 sides(const AT& at, const LLVector3d& pos)
         {
@@ -190,7 +252,7 @@ namespace sknav
             }();
             (void)init;
             const F64 z = pos.mdV[VZ];
-            auto wall = [&](F64 x, F64 y) {
+            auto wall = [&](F64 x, F64 y, bool& sky) {
                 if (const std::vector<SkyMap::Interval>* cell = at(static_cast<S64>(std::floor(x)), static_cast<S64>(std::floor(y))))
                 {
                     for (const SkyMap::Interval& i : *cell)
@@ -199,6 +261,7 @@ namespace sknav
                         {
                             return true;
                         }
+                        sky = sky && i.mBottom <= z;
                     }
                 }
                 return false;
@@ -206,12 +269,15 @@ namespace sknav
             S32 open = 0;
             for (S32 j = 0; j < SPOKES; ++j)
             {
-                bool walled = false;
+                // A spoke roofed all the way out is a hall too wide to see across, not a canopy's open side.
+                bool walled = false, seen_sky = false;
                 for (F64 r = 0.5; r < SIDE_OPEN_REACH_M && !walled; r += 1.0)
                 {
-                    walled = wall(pos.mdV[VX] + r * dirs[j][0], pos.mdV[VY] + r * dirs[j][1]);
+                    bool sky = true;
+                    walled = wall(pos.mdV[VX] + r * dirs[j][0], pos.mdV[VY] + r * dirs[j][1], sky);
+                    seen_sky = seen_sky || (!walled && sky);
                 }
-                open += walled ? 0 : 1;
+                open += walled || !seen_sky ? 0 : 1;
             }
             return static_cast<F32>(open) / SPOKES;
         }
@@ -413,6 +479,7 @@ namespace sknav
         {
             n += sizeof(c) + 16 + c.second->capacity() * sizeof(U64);
         }
+        n += mCoverage.size() * (sizeof(U64) + sizeof(Footprint) + 16);
         return n;
     }
 }

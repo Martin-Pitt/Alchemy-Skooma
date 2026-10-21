@@ -73,7 +73,6 @@ namespace
         in.mZMin = -1.f;
         in.mZMax = 12.f;
         in.mCell = 0.25f;
-        in.mClasses[0] = true;
         in.mEdges[0] = true;
         in.mTerrain = flat(0.f);
         // A platform too high to step onto, so its edge is a ledge with drop links.

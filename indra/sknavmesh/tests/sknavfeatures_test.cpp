@@ -24,11 +24,15 @@
 
 #include "linden_common.h"
 
-#include "../test/lltut.h"
+#include "llmath.h"
+
+#include <catch2/catch_test_macros.hpp>
 
 #include "../sknavfeatures.h"
 
 #include <algorithm>
+#include <memory>
+#include <random>
 
 namespace
 {
@@ -55,7 +59,43 @@ namespace
         p.mAxes[1].set(0.f, 1.f, 0.f);
         p.mAxes[2].set(0.f, 0.f, 1.f);
         p.mHalf.set(static_cast<F32>(x1 - x0) * 0.5f, static_cast<F32>(y1 - y0) * 0.5f, static_cast<F32>(z1 - z0) * 0.5f);
+        p.mFaceCover = 0.f;     // free-standing: measured, nothing against either face
         return p;
+    }
+
+    // A record spanning the box in a region at the origin, as an analytic box
+    // or as its twelve triangles.
+    RecordPtr slab(U32 n, F64 x0, F64 y0, F64 z0, F64 x1, F64 y1, F64 z1, bool triangles = false)
+    {
+        auto r = std::make_shared<Record>();
+        r->mPart = id(n);
+        r->mRoot = id(n);
+        r->mMin.set(x0, y0, z0);
+        r->mMax.set(x1, y1, z1);
+        const LLVector3 lo(static_cast<F32>(x0), static_cast<F32>(y0), static_cast<F32>(z0));
+        const LLVector3 hi(static_cast<F32>(x1), static_cast<F32>(y1), static_cast<F32>(z1));
+        r->mCenter = (lo + hi) * 0.5f;
+        r->mHalf = (hi - lo) * 0.5f;
+        r->mAxes[0].set(1.f, 0.f, 0.f);
+        r->mAxes[1].set(0.f, 1.f, 0.f);
+        r->mAxes[2].set(0.f, 0.f, 1.f);
+        r->mShape = Shape::BOX;
+        if (triangles)
+        {
+            auto c = [&](S32 i) { return LLVector3(i & 1 ? hi.mV[0] : lo.mV[0], i & 2 ? hi.mV[1] : lo.mV[1], i & 4 ? hi.mV[2] : lo.mV[2]); };
+            const S32 quads[6][4] = { { 0, 2, 6, 4 }, { 1, 5, 7, 3 }, { 0, 4, 5, 1 }, { 2, 3, 7, 6 }, { 0, 1, 3, 2 }, { 4, 6, 7, 5 } };
+            auto tris = std::make_shared<std::vector<LLVector3>>();
+            for (const auto& q : quads)
+            {
+                for (S32 k : { q[0], q[1], q[2], q[0], q[2], q[3] })
+                {
+                    tris->push_back(c(k));
+                }
+            }
+            r->mTriangles = tris;
+            r->mShape = Shape::TRIANGLES;
+        }
+        return r;
     }
 
     FeatureRoot root(U32 n, const std::string& name = std::string())
@@ -83,18 +123,40 @@ namespace
     {
         return std::find(f.mParts.begin(), f.mParts.end(), id(n)) != f.mParts.end();
     }
+
+    void ensure(const char* what, bool ok)
+    {
+        INFO(what);
+        CHECK(ok);
+    }
+
+    template<typename A, typename B>
+    void ensure_equals(const char* what, const A& actual, const B& expected)
+    {
+        INFO(what);
+        CHECK(actual == static_cast<A>(expected));
+    }
+
+    void ensure_distance(const char* what, F64 actual, F64 expected, F64 tolerance)
+    {
+        INFO(what);
+        CAPTURE(actual, expected);
+        CHECK(std::fabs(actual - expected) <= tolerance);
+    }
+
+    void ensure_approximately_equals(const char* what, F32 actual, F32 expected, U32 frac_bits)
+    {
+        INFO(what);
+        CAPTURE(actual, expected);
+        CHECK(is_approx_equal_fraction(actual, expected, frac_bits));
+    }
 }
 
-namespace tut
+namespace
 {
-    struct sknavfeatures_data {};
-    typedef test_group<sknavfeatures_data> sknavfeatures_group;
-    typedef sknavfeatures_group::object sknavfeatures_object;
-    tut::sknavfeatures_group g("sknavfeatures");
 
     // A thin upright panel is a door only with something to say for it.
-    template<> template<>
-    void sknavfeatures_object::test<1>()
+    TEST_CASE("sknavfeatures: a thin upright panel is a door only with something to say for it", "[sknavfeatures]")
     {
         FeaturePart door = part(1, 1, 0, 0, 0, 0.125, 1.06, 3.0);
         door.mName = "Door";
@@ -110,8 +172,7 @@ namespace tut
 
     // Two leaves side by side in one plane are one double door; a leaf in a
     // parallel wall a metre away is a door of its own.
-    template<> template<>
-    void sknavfeatures_object::test<2>()
+    TEST_CASE("sknavfeatures: two leaves side by side in one plane are one double door", "[sknavfeatures]")
     {
         FeaturePart left = part(1, 1, 0, 0, 0, 0.125, 1.06, 3.0);
         FeaturePart right = part(1, 2, 0, 1.06, 0, 0.125, 2.12, 3.0);
@@ -128,8 +189,7 @@ namespace tut
     // The torus ladder: two pieces in a named linkset, two stacked above them
     // in an unnamed one, all on one footprint, union to one span. A record
     // beside it and the landing deck its top meets stay out.
-    template<> template<>
-    void sknavfeatures_object::test<3>()
+    TEST_CASE("sknavfeatures: the torus ladder", "[sknavfeatures]")
     {
         const std::vector<FeaturePart> parts = {
             part(1, 1, 103.8, 52.5, 2986.3, 104.1, 53.6, 2991.1),
@@ -158,8 +218,7 @@ namespace tut
 
     // Three landing doors stacked on one line make a shaft; a scripted car
     // named as an elevator in its column makes it work.
-    template<> template<>
-    void sknavfeatures_object::test<4>()
+    TEST_CASE("sknavfeatures: three landing doors stacked on one line make a shaft", "[sknavfeatures]")
     {
         std::vector<FeaturePart> parts;
         std::vector<FeatureRoot> roots;
@@ -202,8 +261,7 @@ namespace tut
 
     // Sat on and moved is a vehicle, and damageable by its description or
     // its hover text; sat on and never moved is a seat.
-    template<> template<>
-    void sknavfeatures_object::test<5>()
+    TEST_CASE("sknavfeatures: sat on and moved is a vehicle and damageable by its description or its hover text", "[sknavfeatures]")
     {
         const std::vector<FeaturePart> parts = { part(1, 1, 0, 0, 0, 6, 10, 3), part(2, 2, 20, 0, 0, 21, 1, 1) };
         FeatureRoot tank = root(1);
@@ -235,8 +293,7 @@ namespace tut
     }
 
     // Health in hover text: two numbers around a slash, and nothing else.
-    template<> template<>
-    void sknavfeatures_object::test<6>()
+    TEST_CASE("sknavfeatures: health in hover text", "[sknavfeatures]")
     {
         ensure("47/50", hoverShowsHealth("47/50"));
         ensure("HP 47 / 50", hoverShowsHealth("HP 47 / 50"));
@@ -244,14 +301,13 @@ namespace tut
         ensure("not a fraction of words", !hoverShowsHealth("on/off"));
         ensure("a number on one side only", !hoverShowsHealth("page 2/x"));
         ensure("case-insensitive name", containsNoCase("[Ash] Ladder that works", "ladder"));
-        ensure("masks", excludeFor(FeatureKind::VEHICLE) == (EXCLUDE_AVATAR | EXCLUDE_WEATHER) && excludeFor(FeatureKind::SEAT) == 0
+        ensure("masks", excludeFor(FeatureKind::VEHICLE) == (EXCLUDE_AVATAR | EXCLUDE_SOLID) && excludeFor(FeatureKind::SEAT) == 0
                && excludeFor(FeatureKind::ELEVATOR) == EXCLUDE_ALL);
     }
 
     // A door needs a door's width and real evidence: a name, or two of its
     // own script, touch and motion. A scripted root alone is never enough.
-    template<> template<>
-    void sknavfeatures_object::test<7>()
+    TEST_CASE("sknavfeatures: a door needs a door's width and real evidence", "[sknavfeatures]")
     {
         auto isDoor = [](FeaturePart p, FeatureRoot r) {
             p.mRoot = r.mRoot;
@@ -287,8 +343,7 @@ namespace tut
 
     // A pane mostly seen through is never a door, whatever its evidence and
     // with no name to call it a window.
-    template<> template<>
-    void sknavfeatures_object::test<8>()
+    TEST_CASE("sknavfeatures: a pane mostly seen through is never a door whatever its evidence and with no name to call it a window", "[sknavfeatures]")
     {
         FeaturePart pane = part(1, 1, 0, 0, 0, 0.018, 1.98, 3.15);
         pane.mScripted = pane.mTouch = true;
@@ -300,8 +355,7 @@ namespace tut
 
     // Crewed is a vehicle only once it has travelled or is physical: a swing
     // turns and a sofa gets nudged, and both stay seats.
-    template<> template<>
-    void sknavfeatures_object::test<9>()
+    TEST_CASE("sknavfeatures: crewed is a vehicle only once it has travelled or is physical", "[sknavfeatures]")
     {
         const std::vector<FeaturePart> parts = { part(1, 1, 0, 0, 0, 2, 2, 2) };
         FeatureRoot swing = root(1);
@@ -319,8 +373,7 @@ namespace tut
 
     // A working shaft's height is its door stack's wherever the car is, so
     // the span holds still while the car rides.
-    template<> template<>
-    void sknavfeatures_object::test<10>()
+    TEST_CASE("sknavfeatures: a working shaft's height is its door stack's wherever the car is so the span holds still while the car rides", "[sknavfeatures]")
     {
         std::vector<FeaturePart> parts;
         std::vector<FeatureRoot> roots;
@@ -349,8 +402,7 @@ namespace tut
 
     // A named linkset's pieces join only where they meet, and a car's name is
     // matched as a word.
-    template<> template<>
-    void sknavfeatures_object::test<11>()
+    TEST_CASE("sknavfeatures: a named linkset's pieces join only where they meet and a car's name is matched as a word", "[sknavfeatures]")
     {
         const std::vector<FeaturePart> parts = {
             part(1, 1, 0.0, 0.0, 0.0, 0.3, 0.6, 4.0),
@@ -383,8 +435,7 @@ namespace tut
 
     // Someone riding a car named as an elevator up a storey does not make it
     // a vehicle: it stays the shaft's car.
-    template<> template<>
-    void sknavfeatures_object::test<12>()
+    TEST_CASE("sknavfeatures: someone riding a car named as an elevator up a storey does not make it a vehicle", "[sknavfeatures]")
     {
         std::vector<FeaturePart> parts;
         std::vector<FeatureRoot> roots;
@@ -410,8 +461,7 @@ namespace tut
 
     // A linkset's name holding "door" is not a door by itself: not inside
     // another word, and as a word only with one more sign of its own.
-    template<> template<>
-    void sknavfeatures_object::test<13>()
+    TEST_CASE("sknavfeatures: a linkset's name holding \"door\" is not a door by itself", "[sknavfeatures]")
     {
         auto isDoor = [](FeaturePart p, FeatureRoot r) {
             p.mRoot = r.mRoot;
@@ -430,8 +480,7 @@ namespace tut
 
     // A lone piece of a build named for a ladder is a ladder only if it is
     // shaped like one; a wall there joins floors to nothing.
-    template<> template<>
-    void sknavfeatures_object::test<14>()
+    TEST_CASE("sknavfeatures: a lone piece of a build named for a ladder is a ladder only if it is shaped like one", "[sknavfeatures]")
     {
         const FeaturePart wall = part(1, 1, 10.0, 10.0, 20.0, 10.3, 18.0, 24.0);
         const FeaturePart rungs = part(1, 2, 30.0, 10.0, 20.0, 30.3, 10.6, 24.0);
@@ -443,8 +492,7 @@ namespace tut
 
     // Twin shafts 3 m apart: with one stack's leaves slid open its box reaches
     // the other car, and each shaft still takes its own, the nearer one.
-    template<> template<>
-    void sknavfeatures_object::test<15>()
+    TEST_CASE("sknavfeatures: twin shafts 3 m apart", "[sknavfeatures]")
     {
         std::vector<FeaturePart> parts;
         std::vector<FeatureRoot> roots;
@@ -485,8 +533,7 @@ namespace tut
 
     // A vehicle seen once stays one: parked non-physical with no travel on
     // record, it does not fall back to a seat.
-    template<> template<>
-    void sknavfeatures_object::test<16>()
+    TEST_CASE("sknavfeatures: a vehicle seen once stays one", "[sknavfeatures]")
     {
         FeatureRoot boat = root(1);
         boat.mEverCrewed = true;
@@ -499,8 +546,7 @@ namespace tut
 
     // A house root nudged is no evidence for its child panels: they stay walls,
     // while a root that is itself a panel is moved by its own motion.
-    template<> template<>
-    void sknavfeatures_object::test<17>()
+    TEST_CASE("sknavfeatures: a house root nudged is no evidence for its child panels", "[sknavfeatures]")
     {
         FeatureRoot house = root(1);
         house.mEverMoved = true;
@@ -518,8 +564,7 @@ namespace tut
 
     // Landing linksets named "Elevator Door" still give leaves and a shaft,
     // and a thin panel named as a lift nearer the line is never the car.
-    template<> template<>
-    void sknavfeatures_object::test<18>()
+    TEST_CASE("sknavfeatures: landing linksets named \"Elevator Door\" still give leaves and a shaft and a thin panel named as a lift nearer the line is never the car", "[sknavfeatures]")
     {
         std::vector<FeaturePart> parts;
         std::vector<FeatureRoot> roots;
@@ -547,8 +592,7 @@ namespace tut
     }
 
     // A single door's entity: its leaf, the opening's size and the sill.
-    template<> template<>
-    void sknavfeatures_object::test<19>()
+    TEST_CASE("sknavfeatures: a single door's entity", "[sknavfeatures]")
     {
         FeaturePart door = part(1, 7, 10.0, 20.0, 30.0, 10.125, 21.0, 33.0);
         door.mName = "Door";
@@ -570,8 +614,7 @@ namespace tut
     }
 
     // A coplanar double door is one entity with both leaves, as wide as both.
-    template<> template<>
-    void sknavfeatures_object::test<20>()
+    TEST_CASE("sknavfeatures: a coplanar double door is one entity with both leaves as wide as both", "[sknavfeatures]")
     {
         FeaturePart left = part(1, 1, 0, 0, 0, 0.125, 1.06, 3.0);
         FeaturePart right = part(1, 2, 0, 1.06, 0, 0.125, 2.12, 3.0);
@@ -587,8 +630,7 @@ namespace tut
     }
 
     // The id, leaves and normal hold whatever order the parts come in.
-    template<> template<>
-    void sknavfeatures_object::test<21>()
+    TEST_CASE("sknavfeatures: the id leaves and normal hold whatever order the parts come in", "[sknavfeatures]")
     {
         FeaturePart left = part(1, 9, 0, 0, 0, 0.125, 1.06, 3.0);
         FeaturePart right = part(1, 4, 0, 1.06, 0, 0.125, 2.12, 3.0);
@@ -627,13 +669,13 @@ namespace tut
     }
 
     // A leaf seen open briefly and then shut keeps the shut plane, even when
-    // looked at while open; while it swings the plane is not known.
-    template<> template<>
-    void sknavfeatures_object::test<22>()
+    // looked at while open; while it swings, before its doorway is
+    // established, the plane is not known.
+    TEST_CASE("sknavfeatures: a leaf seen open briefly and then shut keeps the shut plane even when looked at while open", "[sknavfeatures]")
     {
         LeafHistories h;
         F32 t = 0.f;
-        for (; t <= 10.f; t += 1.f)
+        for (; t <= 5.f; t += 1.f)
         {
             observeLeaf(h[id(1)], shutLeaf(1), t);
         }
@@ -652,8 +694,7 @@ namespace tut
 
     // A double door with one leaf standing open is still one cut: one plane
     // and the width of both leaves shut.
-    template<> template<>
-    void sknavfeatures_object::test<23>()
+    TEST_CASE("sknavfeatures: a double door with one leaf standing open is still one cut", "[sknavfeatures]")
     {
         LeafHistories h;
         for (F32 t = 0.f; t <= 10.f; t += 1.f)
@@ -680,8 +721,7 @@ namespace tut
     }
 
     // A double door keeps its id while one leaf drops out and comes back.
-    template<> template<>
-    void sknavfeatures_object::test<24>()
+    TEST_CASE("sknavfeatures: a double door keeps its id while one leaf drops out and comes back", "[sknavfeatures]")
     {
         LeafHistories h;
         std::vector<DoorEntity> d = doorsNow({ shutLeaf(9), shutLeaf(4, 1.06) }, h);
@@ -694,8 +734,7 @@ namespace tut
 
     // The classifier sees a double door with one leaf standing open as two
     // doors; their rest poses make it one doorway again, under the pair's id.
-    template<> template<>
-    void sknavfeatures_object::test<25>()
+    TEST_CASE("sknavfeatures: the classifier sees a double door with one leaf standing open as two doors", "[sknavfeatures]")
     {
         LeafHistories h;
         std::vector<DoorEntity> d = doorsNow({ shutLeaf(1), shutLeaf(2, 1.06) }, h);
@@ -720,5 +759,281 @@ namespace tut
         ensure_approximately_equals("both leaves wide", d[0].mWidth, 2.12f, 8);
         ensure("one plane at the doorway", d[0].mPlaneKnown && d[0].mNormal.mV[VX] > 0.99f
                                                && std::fabs(d[0].mPlanePoint.mdV[VX] - 0.0625) < 1e-4);
+    }
+
+    // Script and touch with both faces open is a door; with a face unmeasured
+    // it is not, and with something flat against a face it is mounted there.
+    TEST_CASE("sknavfeatures: script and touch with both faces open is a door", "[sknavfeatures]")
+    {
+        FeaturePart leaf = part(1, 1, 0, 0, 0, 0.125, 1.06, 3.0);
+        leaf.mScripted = leaf.mTouch = true;
+        auto isDoor = [](const FeaturePart& p, const FeatureRoot& r) {
+            return !ofKind(classifyFeatures({ p }, { r }, FeatureParams()), FeatureKind::DOOR).empty();
+        };
+        const FeatureParams params;
+
+        // A doorway: jambs either side and a header above, nothing on the faces.
+        const std::vector<RecordPtr> frame = { slab(2, -0.05, -0.15, 0, 0.175, 0, 3.2), slab(3, -0.05, 1.06, 0, 0.175, 1.21, 3.2),
+                                               slab(4, -0.05, -0.15, 3.0, 0.175, 1.21, 3.2), slab(5, -2, -2, -0.2, 2, 3, 0, true) };
+        leaf.mFaceCover = faceCover(leaf, frame, params);
+        ensure_equals("a frame and a floor cover nothing", leaf.mFaceCover, 0.f);
+        ensure("framed, a door", isDoor(leaf, root(1)));
+        leaf.mFaceCover = -1.f;
+        ensure("unmeasured, script and touch are not enough", !isDoor(leaf, root(1)));
+
+        // A painting on a wall, as triangles and as a box.
+        for (const bool triangles : { true, false })
+        {
+            leaf.mFaceCover = faceCover(leaf, { slab(6, 0.125, -2, 0, 0.425, 3, 4, triangles) }, params);
+            ensure("the wall covers the back", leaf.mFaceCover > 0.95f);
+            ensure("mounted, not a door", !isDoor(leaf, root(1)));
+        }
+
+        // Only a name or motion outweighs it: a leaf seen open into a wall.
+        FeaturePart named = leaf;
+        named.mName = "Front Door";
+        ensure("named", isDoor(named, root(1)));
+        FeatureRoot moved = root(1);
+        moved.mEverMoved = true;
+        ensure("moved", isDoor(leaf, moved));
+    }
+
+    // A mattress against a headboard's lower half and a second board flat on
+    // its face, as a bed's layered boards are: the boards are not leaves.
+    // Bypass leaves overlapping only at an edge still are.
+    TEST_CASE("sknavfeatures: a mattress against a headboard's lower half and a second board flat on its face as a bed's layered boards are", "[sknavfeatures]")
+    {
+        const FeatureParams params;
+        FeaturePart board = part(1, 1, 0, 0, 0, 0.3, 3.0, 2.1);
+        board.mScripted = board.mTouch = true;
+        const std::vector<RecordPtr> bed = { slab(2, 0.3, 0, 0.1, 2.5, 3.0, 0.6), slab(3, -0.25, 0, 0, -0.05, 3.0, 2.1) };
+        board.mFaceCover = faceCover(board, bed, params);
+        ensure("the layered board covers a face", board.mFaceCover >= params.mFaceBlocked);
+        ensure("a headboard", ofKind(classifyFeatures({ board }, { root(1) }, params), FeatureKind::DOOR).empty());
+
+        FeaturePart a = part(1, 1, 0, 0, 0, 0.05, 1.0, 2.5);
+        FeaturePart b = part(2, 2, 0.1, 0.9, 0, 0.15, 1.9, 2.5);
+        a.mFaceCover = faceCover(a, { slab(2, 0.1, 0.9, 0, 0.15, 1.9, 2.5) }, params);
+        b.mFaceCover = faceCover(b, { slab(1, 0, 0, 0, 0.05, 1.0, 2.5) }, params);
+        ensure("an edge's overlap leaves the face open", a.mFaceCover <= params.mFaceClear && b.mFaceCover <= params.mFaceClear);
+    }
+
+    // A leaf that has rested shut long enough keeps its shut plane through a
+    // swing, so opening the door moves nothing built over the doorway.
+    TEST_CASE("sknavfeatures: a leaf that has rested shut long enough keeps its shut plane through a swing so opening the door moves nothing built over the doorway", "[sknavfeatures]")
+    {
+        LeafHistories h;
+        F32 t = 0.f;
+        for (; t <= DOORWAY_ESTABLISHED_SECONDS; t += 1.f)
+        {
+            observeLeaf(h[id(1)], shutLeaf(1), t);
+        }
+        ensure("shut and established", atEstablishedDoorway(h[id(1)]));
+        const std::vector<DoorEntity> shut = doorsNow({ shutLeaf(1) }, h);
+        observeLeaf(h[id(1)], openLeaf(1), t);
+        ensure("swinging: no longer at it", !atEstablishedDoorway(h[id(1)]));
+        const std::vector<DoorEntity> d = doorsNow({ openLeaf(1) }, h);
+        ensure("swinging: plane still known", d.size() == 1 && d[0].mPlaneKnown);
+        ensure("the same doorway", shut.size() == 1 && d[0].mPlanePoint == shut[0].mPlanePoint && d[0].mWidth == shut[0].mWidth
+                                       && d[0].mMin == shut[0].mMin && d[0].mMax == shut[0].mMax);
+    }
+
+    // A record region-placed as the census makes them: global box, local geometry.
+    const LLVector3d ORIGIN(256000.0, 256256.0, 0.0);
+
+    RecordPtr placed(U32 n, const LLVector3d& centre, const LLVector3& half, F32 turn, bool triangles)
+    {
+        auto r = std::make_shared<Record>();
+        r->mPart = id(n);
+        r->mRoot = id(n);
+        r->mOrigin = ORIGIN;
+        r->mCenter = LLVector3(centre - ORIGIN);
+        r->mHalf = half;
+        r->mAxes[0].set(std::cos(turn), std::sin(turn), 0.f);
+        r->mAxes[1].set(-std::sin(turn), std::cos(turn), 0.f);
+        r->mAxes[2].set(0.f, 0.f, 1.f);
+        r->mShape = Shape::BOX;
+        LLVector3 span;
+        for (S32 k = 0; k < 3; ++k)
+        {
+            for (S32 j = 0; j < 3; ++j)
+            {
+                span.mV[j] += std::fabs(r->mAxes[k].mV[j]) * half.mV[k];
+            }
+        }
+        r->mMin = centre - LLVector3d(span);
+        r->mMax = centre + LLVector3d(span);
+        if (triangles)
+        {
+            auto c = [&](S32 i) {
+                return r->mCenter + r->mAxes[0] * (i & 1 ? half.mV[0] : -half.mV[0]) + r->mAxes[1] * (i & 2 ? half.mV[1] : -half.mV[1])
+                    + r->mAxes[2] * (i & 4 ? half.mV[2] : -half.mV[2]);
+            };
+            const S32 quads[6][4] = { { 0, 2, 6, 4 }, { 1, 5, 7, 3 }, { 0, 4, 5, 1 }, { 2, 3, 7, 6 }, { 0, 1, 3, 2 }, { 4, 6, 7, 5 } };
+            auto tris = std::make_shared<std::vector<LLVector3>>();
+            for (const auto& q : quads)
+            {
+                for (S32 k : { q[0], q[1], q[2], q[0], q[2], q[3] })
+                {
+                    tris->push_back(c(k));
+                }
+            }
+            r->mTriangles = tris;
+            r->mShape = Shape::TRIANGLES;
+        }
+        return r;
+    }
+
+    // A leaf turned about z, its box the turned box's.
+    FeaturePart turnedLeaf(U32 n, const LLVector3d& centre, F32 width, F32 thick, F32 height, F32 turn)
+    {
+        FeaturePart p;
+        p.mPart = id(n);
+        p.mRoot = id(n);
+        p.mCenter = centre;
+        p.mAxes[0].set(std::cos(turn), std::sin(turn), 0.f);
+        p.mAxes[1].set(-std::sin(turn), std::cos(turn), 0.f);
+        p.mAxes[2].set(0.f, 0.f, 1.f);
+        p.mHalf.set(thick * 0.5f, width * 0.5f, height * 0.5f);
+        LLVector3 span;
+        for (S32 k = 0; k < 3; ++k)
+        {
+            for (S32 j = 0; j < 3; ++j)
+            {
+                span.mV[j] += std::fabs(p.mAxes[k].mV[j]) * p.mHalf.mV[k];
+            }
+        }
+        p.mMin = centre - LLVector3d(span);
+        p.mMax = centre + LLVector3d(span);
+        return p;
+    }
+
+    // Leaves among walls, frames and clutter close enough to touch them, some
+    // of it triangles, some of it larger than the index buckets.
+    struct CoverScene
+    {
+        std::vector<RecordPtr> mRecords;
+        std::vector<FeaturePart> mLeaves;
+    };
+
+    CoverScene coverScene(U32 seed)
+    {
+        std::mt19937 rng(seed);
+        std::uniform_real_distribution<F32> u(0.f, 1.f);
+        CoverScene s;
+        U32 n = 1;
+        for (S32 i = 0; i < 120; ++i)
+        {
+            const LLVector3d c = ORIGIN + LLVector3d(20.0 + u(rng) * 60.0, 20.0 + u(rng) * 60.0, 22.25 + 1.6);
+            const F32 turn = u(rng) < 0.5f ? 0.f : u(rng) * F_TWO_PI;
+            const FeaturePart leaf = turnedLeaf(n++, c, 0.6f + u(rng) * 1.5f, 0.02f + u(rng) * 0.3f, 2.1f + u(rng), turn);
+            s.mLeaves.push_back(leaf);
+            // Up to three things by its faces, near enough to cover them or not.
+            for (S32 k = 0; k < i % 4; ++k)
+            {
+                const F32 side = u(rng) < 0.5f ? -1.f : 1.f;
+                const F32 off = leaf.mHalf.mV[0] + u(rng) * 0.5f;
+                const LLVector3d at = c + LLVector3d(leaf.mAxes[0] * (side * off) + leaf.mAxes[1] * ((u(rng) - 0.5f) * 2.f));
+                const LLVector3 half(0.05f + u(rng) * 0.3f, 0.2f + u(rng), 0.5f + u(rng) * 1.5f);
+                const F32 skew = u(rng) < 0.7f ? 0.f : u(rng);
+                s.mRecords.push_back(placed(n++, at, half, turn + skew, u(rng) < 0.5f));
+            }
+        }
+        // A megaprim floor under it all and a region-long wall.
+        s.mRecords.push_back(placed(n++, ORIGIN + LLVector3d(128.0, 128.0, 22.0), LLVector3(128.f, 128.f, 0.2f), 0.f, true));
+        s.mRecords.push_back(placed(n++, ORIGIN + LLVector3d(50.0, 128.0, 23.0), LLVector3(0.1f, 128.f, 3.f), 0.f, false));
+        s.mRecords.push_back(nullptr);
+        std::shuffle(s.mRecords.begin(), s.mRecords.end(), rng);
+        return s;
+    }
+
+    TEST_CASE("sknavfeatures: a record index query holds every record whose plan meets the box in record order", "[sknavfeatures]")
+    {
+        const CoverScene s = coverScene(1);
+        const RecordIndex index(s.mRecords, 4.0);
+        std::mt19937 rng(2);
+        std::uniform_real_distribution<F64> u(0.0, 1.0);
+        std::vector<const RecordPtr*> found;
+        for (S32 q = 0; q < 200; ++q)
+        {
+            const LLVector3d mn = ORIGIN + LLVector3d(u(rng) * 100.0, u(rng) * 100.0, 0.0);
+            const LLVector3d mx = mn + LLVector3d(u(rng) * 6.0, u(rng) * 6.0, 50.0);
+            index.query(mn, mx, found);
+            CHECK(std::is_sorted(found.begin(), found.end()));
+            CHECK(std::adjacent_find(found.begin(), found.end()) == found.end());
+            for (const RecordPtr& r : s.mRecords)
+            {
+                if (r && r->mMin.mdV[VX] <= mx.mdV[VX] && mn.mdV[VX] <= r->mMax.mdV[VX] && r->mMin.mdV[VY] <= mx.mdV[VY]
+                    && mn.mdV[VY] <= r->mMax.mdV[VY])
+                {
+                    CHECK(std::find(found.begin(), found.end(), &r) != found.end());
+                }
+            }
+        }
+    }
+
+    TEST_CASE("sknavfeatures: face cover over the index is the walk over every record", "[sknavfeatures]")
+    {
+        const FeatureParams params;
+        for (U32 seed = 1; seed <= 4; ++seed)
+        {
+            const CoverScene s = coverScene(seed);
+            const RecordIndex index(s.mRecords);
+            S32 covered = 0, open = 0;
+            for (const FeaturePart& leaf : s.mLeaves)
+            {
+                const F32 walked = faceCover(leaf, s.mRecords, params);
+                CAPTURE(seed, walked);
+                CHECK(faceCover(leaf, index, params) == walked);
+                covered += walked > 0.f ? 1 : 0;
+                open += walked == 0.f ? 1 : 0;
+            }
+            // The scene exercises both answers, not only one.
+            CHECK(covered > 10);
+            CHECK(open > 0);
+        }
+    }
+
+    TEST_CASE("sknavfeatures: the face cover cache casts again only when the leaf its neighbours or the parameters change", "[sknavfeatures]")
+    {
+        FeatureParams params;
+        const FeaturePart leaf = part(1, 1, 0, 0, 0, 0.125, 1.06, 3.0);
+        std::vector<RecordPtr> records = { slab(6, 0.125, -2, 0, 0.425, 3, 4, true), slab(7, 40, 40, 0, 41, 41, 3) };
+        FaceCoverCache cache;
+        const F32 first = cache.measure(leaf, RecordIndex(records), params);
+        CHECK(first > 0.95f);
+        CHECK(cache.mMisses == 1);
+
+        // Nothing changed, or only something far off: the answer kept.
+        CHECK(cache.measure(leaf, RecordIndex(records), params) == first);
+        records[1] = slab(7, 40, 40, 0, 42, 42, 3);
+        CHECK(cache.measure(leaf, RecordIndex(records), params) == first);
+        CHECK(cache.mHits == 2);
+
+        // The wall rebuilt, even as it was: a new record is cast against.
+        records[0] = slab(6, 0.125, -2, 0, 0.425, 3, 4, true);
+        CHECK(cache.measure(leaf, RecordIndex(records), params) == first);
+        CHECK(cache.mMisses == 2);
+
+        // The wall taken away, the leaf moved, a parameter changed.
+        records[0] = slab(6, 5, -2, 0, 5.3, 3, 4, true);
+        CHECK(cache.measure(leaf, RecordIndex(records), params) == 0.f);
+        const FeaturePart moved = part(1, 1, 4.9, 0, 0, 5.025, 1.06, 3.0);
+        CHECK(cache.measure(moved, RecordIndex(records), params) == faceCover(moved, records, params));
+        params.mFaceReach = 0.01f;
+        CHECK(cache.measure(moved, RecordIndex(records), params) == faceCover(moved, records, params));
+        CHECK(cache.mMisses == 5);
+        CHECK(cache.mHits == 2);
+
+        // A part not measured between two prunes is forgotten.
+        CHECK(cache.size() == 1);
+        cache.prune();
+        CHECK(cache.size() == 1);
+        cache.prune();
+        CHECK(cache.size() == 0);
+
+        // Not door-shaped: never cast, never kept.
+        CHECK(cache.measure(part(2, 2, 0, 0, 0, 1, 1, 1), RecordIndex(records), params) < 0.f);
+        CHECK(cache.size() == 0);
     }
 }

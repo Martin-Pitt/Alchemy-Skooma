@@ -30,8 +30,13 @@
 #include "DetourNavMesh.h"
 #include "DetourNavMeshBuilder.h"
 #include "Recast.h"
+#include "RecastAlloc.h"
+#include "llapp.h"
+#include "sknavfaceoffsets.h"
 #include "sknavflights.h"
+#include "sknavlayout.h"
 #include "sknavwalls.h"
+#include "sknavprofile.h"
 
 #include <algorithm>
 #include <cfloat>
@@ -40,6 +45,7 @@
 #include <cstring>
 #include <map>
 #include <set>
+#include <unordered_set>
 
 namespace
 {
@@ -120,8 +126,9 @@ namespace
         std::vector<U8> mAreas;       // per triangle, the Area of its source
         std::vector<U8> mTwoSided;    // per triangle, walkable from either side
         std::vector<U8> mCues;        // per triangle, its object's NameCue
+        std::vector<S32> mSources;    // per triangle, the record it came from
 
-        void add(const std::vector<LLVector3>& tris, U8 area, F32 water, bool two_sided, U8 cue = CUE_NONE)
+        void add(const std::vector<LLVector3>& tris, U8 area, F32 water, bool two_sided, U8 cue = CUE_NONE, S32 source = -1)
         {
             const size_t base = mVerts.size() / 3;
             for (size_t i = 0; i + 2 < tris.size(); i += 3)
@@ -147,6 +154,7 @@ namespace
                 mAreas.push_back(under && area == AREA_GROUND ? AREA_SUBMERGED : area);
                 mTwoSided.push_back(two_sided);
                 mCues.push_back(cue);
+                mSources.push_back(source);
             }
         }
         S32 nverts() const { return static_cast<S32>(mVerts.size() / 3); }
@@ -194,6 +202,7 @@ namespace
             out.mAreas.push_back(soup.mAreas[t]);
             out.mTwoSided.push_back(soup.mTwoSided[t]);
             out.mCues.push_back(soup.mCues[t]);
+            out.mSources.push_back(soup.mSources[t]);
         }
         for (const auto& range : solids)
         {
@@ -335,6 +344,7 @@ namespace
     /// crossing to its highest, which is what a convex body would have been.
     void fillSolid(rcHeightfield& hf, const Soup& soup, S32 tri_begin, S32 tri_end, S32 climb)
     {
+        SK_NAV_ZONE("nav.build.rasterise.fill");
         if (tri_end <= tri_begin)
         {
             return;
@@ -461,6 +471,7 @@ namespace
     /// span that overlaps the volume in a column it covers is cleared.
     void cutVolume(rcHeightfield& hf, const Soup& soup, S32 tri_begin, S32 tri_end)
     {
+        SK_NAV_ZONE("nav.build.rasterise.cut");
         BodyExtent body;
         bodyExtent(hf, soup, tri_begin, tri_end, body);
         for (S32 cz = body.mZ0; cz < body.mZ0 + body.mH; ++cz)
@@ -485,14 +496,186 @@ namespace
         }
     }
 
+    /// A rectangle of heightfield cells, half-open.
+    struct CellRect
+    {
+        S32 mX0 = 0;
+        S32 mZ0 = 0;
+        S32 mX1 = 0;
+        S32 mZ1 = 0;
+        bool covers(const rcHeightfield& hf) const { return mX0 <= 0 && mZ0 <= 0 && mX1 >= hf.width && mZ1 >= hf.height; }
+    };
+
+    /// What a raster is made of: the soup with an area code per triangle, its
+    /// closed bodies, the exclusion volumes cut out of it, and optionally the
+    /// triangles to leave out.
+    struct RasterSource
+    {
+        const Soup* mSoup = nullptr;
+        const std::vector<U8>* mCodes = nullptr;
+        const std::vector<std::pair<S32, S32>>* mSolids = nullptr;
+        const Soup* mCutSoup = nullptr;
+        const std::vector<std::pair<S32, S32>>* mCuts = nullptr;
+        const std::vector<U8>* mDrop = nullptr;
+    };
+
+    /// The cells a triangle range's bounding box covers, a cell wider each way.
+    CellRect cellsOf(const rcHeightfield& hf, const Soup& soup, S32 tri_begin, S32 tri_end)
+    {
+        F32 lo[3] = { FLT_MAX, FLT_MAX, FLT_MAX }, hi[3] = { -FLT_MAX, -FLT_MAX, -FLT_MAX };
+        for (S32 t = tri_begin * 3; t < tri_end * 3; ++t)
+        {
+            const F32* v = &soup.mVerts[soup.mTris[t] * 3];
+            for (S32 k = 0; k < 3; ++k)
+            {
+                lo[k] = std::min(lo[k], v[k]);
+                hi[k] = std::max(hi[k], v[k]);
+            }
+        }
+        return { static_cast<S32>(std::floor((lo[0] - hf.bmin[0]) / hf.cs)) - 1, static_cast<S32>(std::floor((lo[2] - hf.bmin[2]) / hf.cs)) - 1,
+                 static_cast<S32>(std::floor((hi[0] - hf.bmin[0]) / hf.cs)) + 2, static_cast<S32>(std::floor((hi[2] - hf.bmin[2]) / hf.cs)) + 2 };
+    }
+
+    bool overlaps(const CellRect& a, const CellRect& b)
+    {
+        return a.mX0 < b.mX1 && b.mX0 < a.mX1 && a.mZ0 < b.mZ1 && b.mZ0 < a.mZ1;
+    }
+
+    /// Rasterise, fill and cut, in that order, every triangle, body and cut of
+    /// the source that touches the rectangle. The columns inside it come out
+    /// exactly as a raster of the whole source would make them, provided the
+    /// heightfield has the same grid; columns outside it are incomplete.
+    bool rasterisePasses(rcHeightfield& hf, const RasterSource& src, const CellRect& rect, S32 climb, StageClock& clock)
+    {
+        SK_NAV_ZONE("nav.build.rasterise.passes");
+        rcContext ctx(false);
+        const Soup& soup = *src.mSoup;
+        const bool whole = rect.covers(hf);
+        if (whole && !src.mDrop)
+        {
+            if (!rcRasterizeTriangles(&ctx, soup.mVerts.data(), soup.nverts(), soup.mTris.data(), src.mCodes->data(), soup.ntris(), hf, climb))
+            {
+                return false;
+            }
+        }
+        else
+        {
+            std::vector<S32> tris;
+            std::vector<U8> codes;
+            for (S32 t = 0; t < soup.ntris(); ++t)
+            {
+                if ((src.mDrop && (*src.mDrop)[t]) || (!whole && !overlaps(rect, cellsOf(hf, soup, t, t + 1))))
+                {
+                    continue;
+                }
+                tris.insert(tris.end(), soup.mTris.begin() + t * 3, soup.mTris.begin() + t * 3 + 3);
+                codes.push_back((*src.mCodes)[t]);
+            }
+            if (!tris.empty() && !rcRasterizeTriangles(&ctx, soup.mVerts.data(), soup.nverts(), tris.data(), codes.data(),
+                                                       static_cast<S32>(codes.size()), hf, climb))
+            {
+                return false;
+            }
+        }
+        clock.lap(ClassBuildStats::RASTERISE);
+        for (const auto& range : *src.mSolids)
+        {
+            if ((src.mDrop && range.first < range.second && (*src.mDrop)[range.first]) ||
+                (!whole && !overlaps(rect, cellsOf(hf, soup, range.first, range.second))))
+            {
+                continue;
+            }
+            fillSolid(hf, soup, range.first, range.second, climb);
+        }
+        clock.lap(ClassBuildStats::FILL);
+        for (const auto& range : *src.mCuts)
+        {
+            cutVolume(hf, *src.mCutSoup, range.first, range.second);
+        }
+        clock.lap(ClassBuildStats::CUT);
+        return true;
+    }
+
+    /// A span of a surface only the air's slope walks becomes none, as
+    /// though AVATAR had rasterised it unwalkable.
+    void maskTopOnly(rcHeightfield& hf)
+    {
+        for (S32 c = 0; c < hf.width * hf.height; ++c)
+        {
+            for (rcSpan* s = hf.spans[c]; s; s = s->next)
+            {
+                if (s->area < AREA_CODE_BASE)
+                {
+                    s->area = RC_NULL_AREA;
+                }
+            }
+        }
+    }
+
+    /// Move a partition's flights onto the codes encodeAreas gives their triangles.
+    void shiftFlightCodes(SlopePartition& slopes)
+    {
+        for (Flight& f : slopes.mFlights)
+        {
+            for (U8& code : f.mCodes)
+            {
+                llassert(code >= 1 && code + AREA_TOP_ONLY <= AREA_CODE_MAX);
+                code = static_cast<U8>(code + AREA_TOP_ONLY);
+            }
+        }
+    }
+
+    /// The area byte each triangle rasterises as. A merge keeps the higher of
+    /// two codes when their tops meet, so AVATAR's codes sit above every
+    /// TOP-only one: masking 1-3 to none after the merge leaves exactly the
+    /// raster AVATAR would have made on its own.
+    std::vector<U8> encodeAreas(const std::vector<U8>& avatar_walk, const std::vector<U8>& top_walk, const std::vector<U8>* codes)
+    {
+        std::vector<U8> out(avatar_walk.size(), RC_NULL_AREA);
+        for (size_t t = 0; t < out.size(); ++t)
+        {
+            if (avatar_walk[t])
+            {
+                out[t] = static_cast<U8>((codes ? (*codes)[t] : avatar_walk[t]) + AREA_TOP_ONLY);
+            }
+            else if (top_walk[t])
+            {
+                out[t] = top_walk[t];
+            }
+        }
+        return out;
+    }
+
+    /// The real area of every area byte encodeAreas makes, from the partition's own table.
+    std::vector<U8> realAreas(const std::vector<U8>* partition_real)
+    {
+        std::vector<U8> out(AREA_CODE_MAX + 1, RC_NULL_AREA);
+        for (S32 c = 1; c <= AREA_CODE_MAX; ++c)
+        {
+            const S32 code = c - AREA_TOP_ONLY;
+            if (c <= AREA_TOP_ONLY)
+            {
+                out[c] = static_cast<U8>(c);
+            }
+            else if (!partition_real)
+            {
+                out[c] = static_cast<U8>(code <= AREA_SUBMERGED ? code : RC_NULL_AREA);
+            }
+            else if (code < static_cast<S32>(partition_real->size()))
+            {
+                out[c] = (*partition_real)[code];
+            }
+        }
+        return out;
+    }
+
     /// A walkable span in the column already within the agent's climb of both
     /// surfaces: they are joined through it and need no bridge.
-    bool columnJoins(const rcHeightfield& hf, S32 x, S32 z, S32 lo, S32 hi, S32 climb)
+    bool columnJoins(const rcHeightfield& hf, S32 x, S32 z, S32 lo, S32 hi, S32 climb, U8 min_code)
     {
         for (const rcSpan* s = hf.spans[x + z * hf.width]; s; s = s->next)
         {
-            if (s->area != RC_NULL_AREA && rcAbs(static_cast<S32>(s->smax) - lo) <= climb &&
-                rcAbs(static_cast<S32>(s->smax) - hi) <= climb)
+            if (s->area >= min_code && rcAbs(static_cast<S32>(s->smax) - lo) <= climb && rcAbs(static_cast<S32>(s->smax) - hi) <= climb)
             {
                 return true;
             }
@@ -517,26 +700,34 @@ namespace
         return false;
     }
 
+    /// A span to lay across a crevice, in the cells of the heightfield it was found on.
+    struct Bridge
+    {
+        S32 mX = 0;
+        S32 mZ = 0;
+        unsigned short mSMin = 0;
+        unsigned short mSMax = 0;
+        U8 mArea = RC_NULL_AREA;
+
+        bool operator==(const Bridge& o) const
+        {
+            return mX == o.mX && mZ == o.mZ && mSMin == o.mSMin && mSMax == o.mSMax && mArea == o.mArea;
+        }
+    };
+
     /// Recast joins a span to its neighbours only, so a crevice that leaves a
     /// column without a span at the surfaces' level splits them, and the
     /// erosion that follows widens it: the top of a staircase, solid in the
-    /// sim, read as a gap. Join the two sides across one such column when
-    /// their tops are within the agent's climb and nothing stands at that
-    /// level between them.
-    void bridgeCrevices(rcHeightfield& hf, S32 climb, U32* count = nullptr)
+    /// sim, read as a gap. Find where to join the two sides across one such
+    /// column, when their tops are within the agent's climb and nothing stands
+    /// at that level between them; a class walks the spans of min_code and up.
+    /// Nothing is added here: a span laid while scanning would be read as a
+    /// neighbour by a later column and by the column's other axis, which must
+    /// judge the heightfield they were given.
+    std::vector<Bridge> findBridges(const rcHeightfield& hf, S32 climb, U8 min_code)
     {
-        struct Bridge
-        {
-            S32 mX = 0;
-            S32 mZ = 0;
-            unsigned short mSMin = 0;
-            unsigned short mSMax = 0;
-            U8 mArea = RC_NULL_AREA;
-        };
+        SK_NAV_ZONE("nav.build.bridges");
         std::vector<Bridge> bridges;
-        // Collect first, then add: a span laid while scanning would be read as
-        // a neighbour by a later column and by the column's other axis, which
-        // must judge the heightfield they were given.
         for (S32 z = 1; z + 1 < hf.height; ++z)
         {
             for (S32 x = 1; x + 1 < hf.width; ++x)
@@ -547,13 +738,13 @@ namespace
                     const S32 dz = axis == 0 ? 0 : 1;
                     for (const rcSpan* a = hf.spans[(x - dx) + (z - dz) * hf.width]; a; a = a->next)
                     {
-                        if (a->area == RC_NULL_AREA)
+                        if (a->area < min_code)
                         {
                             continue;
                         }
                         for (const rcSpan* b = hf.spans[(x + dx) + (z + dz) * hf.width]; b; b = b->next)
                         {
-                            if (b->area == RC_NULL_AREA)
+                            if (b->area < min_code)
                             {
                                 continue;
                             }
@@ -563,7 +754,7 @@ namespace
                                 continue;
                             }
                             const S32 lo = std::min(atop, btop), hi = std::max(atop, btop);
-                            if (columnJoins(hf, x, z, lo, hi, climb) || creviceBlocked(hf, x, z, lo, hi))
+                            if (columnJoins(hf, x, z, lo, hi, climb, min_code) || creviceBlocked(hf, x, z, lo, hi))
                             {
                                 continue;
                             }
@@ -583,15 +774,37 @@ namespace
                 }
             }
         }
+        return bridges;
+    }
+
+    /// Lay bridges found on a heightfield whose cells sit (dx, dz) inside this one.
+    void addBridges(rcHeightfield& hf, const std::vector<Bridge>& bridges, S32 climb, S32 dx = 0, S32 dz = 0)
+    {
         rcContext ctx(false);
         for (const Bridge& bridge : bridges)
         {
-            rcAddSpan(&ctx, hf, bridge.mX, bridge.mZ, bridge.mSMin, bridge.mSMax, bridge.mArea, climb);
+            rcAddSpan(&ctx, hf, bridge.mX + dx, bridge.mZ + dz, bridge.mSMin, bridge.mSMax, bridge.mArea, climb);
         }
-        if (count)
+    }
+
+    /// How many bridges of one list the other lacks, counting repeats.
+    U32 bridgesMissing(const std::vector<Bridge>& from, const std::vector<Bridge>& in)
+    {
+        std::vector<Bridge> rest = in;
+        U32 missing = 0;
+        for (const Bridge& b : from)
         {
-            *count = static_cast<U32>(bridges.size());
+            const auto it = std::find(rest.begin(), rest.end(), b);
+            if (it == rest.end())
+            {
+                ++missing;
+            }
+            else
+            {
+                rest.erase(it);
+            }
         }
+        return missing;
     }
 
     /// Walk from a compact span along one direction until the floor drops by
@@ -642,6 +855,7 @@ namespace
     /// faces for the walls.
     void flattenNarrowSteps(rcCompactHeightfield& chf, S32 reach, S32 climb)
     {
+        SK_NAV_ZONE("nav.build.flatten");
         if (reach <= 0)
         {
             return;
@@ -726,6 +940,7 @@ namespace
     /// whatever their size, since a short flight is smaller than a sliver.
     void mergeFragments(rcCompactHeightfield& chf, const std::vector<U8>& real, const std::vector<Flight>& flights)
     {
+        SK_NAV_ZONE("nav.build.mergefragments");
         std::vector<S32> cellOf(chf.spanCount);
         eachSpan(chf, [&](S32 x, S32 z, S32 i) { cellOf[i] = x + z * chf.width; });
         const auto neighbours = [&](S32 i, auto&& fn) {
@@ -878,6 +1093,7 @@ namespace
     /// mesh clear of the ground - keep everything.
     void cullUnderground(rcHeightfield& hf, const TerrainWindow& t)
     {
+        SK_NAV_ZONE("nav.build.cull");
         if (t.mWidth < 2 || t.mHeight < 2 || t.mZ.size() < static_cast<size_t>(t.mWidth * t.mHeight))
         {
             return;
@@ -932,10 +1148,50 @@ namespace
         }
     }
 
+    /// A digest of the spans in a cell rectangle, relative to its corner, with
+    /// each area passed through a lookup; empty lookup keeps only walkability.
+    U64 hashHeightfield(const rcHeightfield& hf, S32 x0, S32 z0, S32 x1, S32 z1, const std::vector<U8>& lut)
+    {
+        U64 h = 0x9e3779b97f4a7c15ull;
+        for (S32 z = z0; z < z1; ++z)
+        {
+            for (S32 x = x0; x < x1; ++x)
+            {
+                h = mix(h, static_cast<U64>((x - x0) | (z - z0) << 16));
+                for (const rcSpan* s = hf.spans[x + z * hf.width]; s; s = s->next)
+                {
+                    const U8 a = lut.empty() ? (s->area != RC_NULL_AREA) : lut[s->area];
+                    h = mix(h, static_cast<U64>(s->smin) | static_cast<U64>(s->smax) << 16 | static_cast<U64>(a) << 32);
+                }
+            }
+        }
+        return h;
+    }
+
+    /// A digest of a compact heightfield: cells, spans, links and areas through a lookup.
+    U64 hashCompact(const rcCompactHeightfield& chf, const std::vector<U8>& lut)
+    {
+        U64 h = mix(0x9e3779b97f4a7c15ull, static_cast<U64>(chf.width) | static_cast<U64>(chf.height) << 32);
+        h = mixF32(mixF32(mixF32(h, chf.bmin[0]), chf.bmin[1]), chf.bmin[2]);
+        for (S32 c = 0; c < chf.width * chf.height; ++c)
+        {
+            h = mix(h, static_cast<U64>(chf.cells[c].index) | static_cast<U64>(chf.cells[c].count) << 32);
+        }
+        for (S32 i = 0; i < chf.spanCount; ++i)
+        {
+            const rcCompactSpan& s = chf.spans[i];
+            const U8 a = lut.empty() ? chf.areas[i] : lut[chf.areas[i]];
+            h = mix(h, static_cast<U64>(s.y) | static_cast<U64>(s.con) << 16 | static_cast<U64>(s.h) << 40 | static_cast<U64>(a) << 48);
+        }
+        return h;
+    }
+
     /// AVATAR's walkable spans on the tile proper, and the spans under each poly:
     /// those of the poly's region in the columns whose centres it covers.
-    void recordPolySpans(const rcCompactHeightfield& chf, const rcPolyMesh& pmesh, S32 border, S32 tile_cells, TileBuildStats& out)
+    void recordPolySpans(const rcCompactHeightfield& chf, const rcPolyMesh& pmesh, S32 border, S32 tile_cells, const std::vector<U32>& span_gap,
+                         TileBuildStats& out)
     {
+        SK_NAV_ZONE("nav.build.polyspans");
         std::vector<U32> index(chf.spanCount, U32_MAX);
         for (S32 z = border; z < border + tile_cells; ++z)
         {
@@ -954,6 +1210,7 @@ namespace
                     span.mTop = chf.spans[i].y;
                     span.mRegion = chf.spans[i].reg;
                     span.mCode = chf.areas[i];
+                    span.mGap = i < span_gap.size() ? span_gap[i] : U32_MAX;
                     index[i] = static_cast<U32>(out.mSpans.size());
                     out.mSpans.push_back(span);
                 }
@@ -1015,6 +1272,217 @@ namespace
         }
     }
 
+    /// A heightfield over a rectangle of other heightfields' cells, sharing their
+    /// spans rather than copying them: Recast's filters and compaction run on
+    /// it exactly as on a heightfield of that size, edges and all, and what
+    /// they change they change in the spans underneath.
+    struct CropView
+    {
+        rcHeightfield mHf;
+        S32 mInset = 0;
+
+        CropView(const rcConfig& cfg, S32 inset) : mInset(inset)
+        {
+            mHf.width = cfg.width;
+            mHf.height = cfg.height;
+            rcVcopy(mHf.bmin, cfg.bmin);
+            rcVcopy(mHf.bmax, cfg.bmax);
+            mHf.cs = cfg.cs;
+            mHf.ch = cfg.ch;
+            mHf.spans = static_cast<rcSpan**>(rcAlloc(sizeof(rcSpan*) * cfg.width * cfg.height, RC_ALLOC_PERM));
+        }
+        CropView(const CropView&) = delete;
+        CropView& operator=(const CropView&) = delete;
+
+        /// Point every column at base's, or at over's where own marks it; again after either changes.
+        void point(const rcHeightfield& base, const rcHeightfield* over = nullptr, const std::vector<U8>* own = nullptr)
+        {
+            for (S32 z = 0; z < mHf.height; ++z)
+            {
+                for (S32 x = 0; x < mHf.width; ++x)
+                {
+                    const S32 c = (x + mInset) + (z + mInset) * base.width;
+                    mHf.spans[x + z * mHf.width] = over && (*own)[c] ? over->spans[c] : base.spans[c];
+                }
+            }
+        }
+    };
+
+    /// Every span's area, column by column, to put back after a pass that rewrites them.
+    struct AreaSnapshot
+    {
+        std::vector<U8> mAreas;
+        std::vector<U32> mStart;    ///< per column, where its areas begin
+
+        void take(const rcHeightfield& hf)
+        {
+            mAreas.clear();
+            mStart.assign(1, 0);
+            for (S32 c = 0; c < hf.width * hf.height; ++c)
+            {
+                for (const rcSpan* s = hf.spans[c]; s; s = s->next)
+                {
+                    mAreas.push_back(static_cast<U8>(s->area));
+                }
+                mStart.push_back(static_cast<U32>(mAreas.size()));
+            }
+        }
+
+        /// Every column's areas back, or only those of the columns marked.
+        void restore(rcHeightfield& hf, const std::vector<U8>* only = nullptr) const
+        {
+            for (S32 c = 0; c < hf.width * hf.height; ++c)
+            {
+                if (only && !(*only)[c])
+                {
+                    continue;
+                }
+                U32 i = mStart[c];
+                for (rcSpan* s = hf.spans[c]; s; s = s->next)
+                {
+                    llassert(i < mStart[c + 1]);
+                    s->area = mAreas[i++];
+                }
+                llassert(i == mStart[c + 1]);
+            }
+        }
+    };
+
+    /// A copy of one column's spans into the same column of another heightfield.
+    void copyColumn(const rcHeightfield& from, rcHeightfield& to, S32 x, S32 z)
+    {
+        rcContext ctx(false);
+        for (const rcSpan* s = from.spans[x + z * from.width]; s; s = s->next)
+        {
+            rcAddSpan(&ctx, to, x, z, static_cast<unsigned short>(s->smin), static_cast<unsigned short>(s->smax), static_cast<U8>(s->area), 0);
+        }
+    }
+
+    /// Recast's three span filters for one agent: the ledge filter's climb
+    /// follows the agent's slope, since at its own climb it reads every slope
+    /// steeper than atan(climb / two cells) as a ledge - 72 degrees at 0.75 m,
+    /// below either slope limit - and cuts lines and holes out of exactly the
+    /// steep ground the agent walks. Matched to the slope, it only fires past
+    /// the limit, where the slope test has already said no.
+    /// The ledge and headroom filters only clear areas, on tests that read no
+    /// area but the span's own, so in either order they clear the same spans;
+    /// before_ledges keeps the areas between them.
+    void filterSpans(rcHeightfield& hf, const ClassParams& p, F32 ch, F32 cs, AreaSnapshot* before_ledges = nullptr)
+    {
+        SK_NAV_ZONE("nav.build.filters");
+        rcContext ctx(false);
+        const S32 climb = static_cast<S32>(std::floor(p.mClimb / ch));
+        const S32 height = static_cast<S32>(std::ceil(p.mHeight / ch));
+        const F32 ledge_climb = llmax(p.mClimb, 2.f * cs * std::tan(p.mSlope * DEG_TO_RAD));
+        rcFilterLowHangingWalkableObstacles(&ctx, climb, hf);
+        if (before_ledges)
+        {
+            rcFilterWalkableLowHeightSpans(&ctx, height, hf);
+            before_ledges->take(hf);
+            rcFilterLedgeSpans(&ctx, height, static_cast<int>(std::ceil(ledge_climb / ch)), hf);
+            return;
+        }
+        rcFilterLedgeSpans(&ctx, height, static_cast<int>(std::ceil(ledge_climb / ch)), hf);
+        rcFilterWalkableLowHeightSpans(&ctx, height, hf);
+    }
+
+    struct FreeHeightfield
+    {
+        void operator()(rcHeightfield* hf) const { rcFreeHeightField(hf); }
+    };
+    typedef std::unique_ptr<rcHeightfield, FreeHeightfield> HeightfieldPtr;
+
+    rcHeightfield* makeHeightfield(const rcConfig& cfg)
+    {
+        rcContext ctx(false);
+        rcHeightfield* hf = rcAllocHeightfield();
+        if (hf && !rcCreateHeightfield(&ctx, *hf, cfg.width, cfg.height, cfg.bmin, cfg.bmax, cfg.cs, cfg.ch))
+        {
+            rcFreeHeightField(hf);
+            return nullptr;
+        }
+        return hf;
+    }
+
+    /// The tile's Recast grid for an agent, with border cells of padding each side.
+    rcConfig tileConfig(const TileBuildInput& input, const ClassParams& p, S32 border)
+    {
+        rcConfig cfg;
+        std::memset(&cfg, 0, sizeof(cfg));
+        cfg.cs = input.mCell;
+        cfg.ch = input.mCell;
+        cfg.walkableSlopeAngle = p.mSlope;
+        cfg.walkableHeight = static_cast<int>(std::ceil(p.mHeight / cfg.ch));
+        cfg.walkableClimb = static_cast<int>(std::floor(p.mClimb / cfg.ch));
+        cfg.walkableRadius = static_cast<int>(std::ceil(p.mRadius / cfg.cs));
+        cfg.maxEdgeLen = static_cast<int>(12.f / cfg.cs);
+        cfg.maxSimplificationError = 1.3f;
+        cfg.minRegionArea = 8 * 8;
+        cfg.mergeRegionArea = 20 * 20;
+        cfg.maxVertsPerPoly = 6;
+        cfg.detailSampleDist = input.mDetailSampleCells * cfg.cs;
+        cfg.detailSampleMaxError = input.mDetailMaxErrorCells * cfg.ch;
+        cfg.borderSize = border;
+        cfg.tileSize = static_cast<int>(input.mTileSize / cfg.cs);
+        cfg.width = cfg.tileSize + cfg.borderSize * 2;
+        cfg.height = cfg.width;
+
+        // The tile in Recast space: x = SL y, z = SL x, y = SL z.
+        const F32 x0 = input.mTileX * input.mTileSize, y0 = input.mTileY * input.mTileSize;
+        cfg.bmin[0] = y0 - cfg.borderSize * cfg.cs;
+        // Snapped to the cell grid, not to this tile's own lowest point:
+        // heights quantise to ch from bmin, so two tiles that started
+        // from different z put the same floor on different spans, and the
+        // two sides of a seam end up at slightly different heights.
+        cfg.bmin[1] = std::floor((input.mZMin - cfg.ch) / cfg.ch) * cfg.ch;
+        cfg.bmin[2] = x0 - cfg.borderSize * cfg.cs;
+        cfg.bmax[0] = y0 + input.mTileSize + cfg.borderSize * cfg.cs;
+        cfg.bmax[1] = std::ceil((input.mZMax + cfg.ch) / cfg.ch) * cfg.ch;
+        cfg.bmax[2] = x0 + input.mTileSize + cfg.borderSize * cfg.cs;
+        return cfg;
+    }
+
+    /// A deep copy of a compact heightfield, or null when Recast's allocator refuses.
+    rcCompactHeightfield* cloneCompact(const rcCompactHeightfield& src)
+    {
+        SK_NAV_ZONE("nav.build.compact.clone");
+        rcCompactHeightfield* out = rcAllocCompactHeightfield();
+        if (!out)
+        {
+            return nullptr;
+        }
+        out->width = src.width;
+        out->height = src.height;
+        out->spanCount = src.spanCount;
+        out->walkableHeight = src.walkableHeight;
+        out->walkableClimb = src.walkableClimb;
+        out->borderSize = src.borderSize;
+        out->maxDistance = src.maxDistance;
+        out->maxRegions = src.maxRegions;
+        rcVcopy(out->bmin, src.bmin);
+        rcVcopy(out->bmax, src.bmax);
+        out->cs = src.cs;
+        out->ch = src.ch;
+        const size_t cells = static_cast<size_t>(src.width) * src.height, spans = static_cast<size_t>(src.spanCount);
+        out->cells = static_cast<rcCompactCell*>(rcAlloc(sizeof(rcCompactCell) * cells, RC_ALLOC_PERM));
+        out->spans = static_cast<rcCompactSpan*>(rcAlloc(sizeof(rcCompactSpan) * spans, RC_ALLOC_PERM));
+        out->areas = static_cast<unsigned char*>(rcAlloc(spans, RC_ALLOC_PERM));
+        out->dist = src.dist ? static_cast<unsigned short*>(rcAlloc(sizeof(unsigned short) * spans, RC_ALLOC_PERM)) : nullptr;
+        if (!out->cells || !out->spans || !out->areas || (src.dist && !out->dist))
+        {
+            rcFreeCompactHeightfield(out);
+            return nullptr;
+        }
+        std::memcpy(out->cells, src.cells, sizeof(rcCompactCell) * cells);
+        std::memcpy(out->spans, src.spans, sizeof(rcCompactSpan) * spans);
+        std::memcpy(out->areas, src.areas, spans);
+        if (src.dist)
+        {
+            std::memcpy(out->dist, src.dist, sizeof(unsigned short) * spans);
+        }
+        return out;
+    }
+
     struct Freed
     {
         rcHeightfield* hf = nullptr;
@@ -1035,6 +1503,53 @@ namespace
 
 namespace sknav
 {
+    void FreeCompact::operator()(rcCompactHeightfield* chf) const
+    {
+        rcFreeCompactHeightfield(chf);
+    }
+
+    size_t TileRaster::chfBytes() const
+    {
+        if (!mChf)
+        {
+            return 0;
+        }
+        const size_t spans = static_cast<size_t>(mChf->spanCount);
+        return sizeof(rcCompactHeightfield) + static_cast<size_t>(mChf->width) * mChf->height * sizeof(rcCompactCell) +
+               spans * (sizeof(rcCompactSpan) + 1 + (mChf->dist ? sizeof(unsigned short) : 0));
+    }
+
+    size_t TileRaster::bytes() const
+    {
+        size_t n = sizeof(TileRaster) + chfBytes() + mEdges.bytes() + mReal.capacity() + mStanding.capacity() + mSpanGap.capacity() * sizeof(U32) +
+                   (mSolid ? mSolid->bytes() : 0);
+        for (const Flight& f : mFlights)
+        {
+            n += sizeof(Flight) + f.mFootprint.capacity() * sizeof(LLVector2) + f.mCodes.capacity() + f.mPolys.capacity() * sizeof(U16);
+        }
+        return n;
+    }
+
+    size_t SolidRaster::bytes() const
+    {
+        return sizeof(SolidRaster) + mStart.capacity() * sizeof(U32) + mSpans.capacity() * sizeof(U32) + mRuns.capacity() * sizeof(mRuns[0]) +
+               mCodes.capacity() + (mInput.mRecords.capacity() + mInput.mCuts.capacity()) * sizeof(RecordPtr) + mInput.mTerrain.mZ.capacity() * sizeof(F32);
+    }
+
+    F32 partitionSlope(const TileBuildInput& input)
+    {
+        if (input.mPartitionSlope > 0.f)
+        {
+            return input.mPartitionSlope;
+        }
+        return input.mAir ? input.mTopParams.mSlope : input.mParams[static_cast<S32>(AgentClass::AVATAR)].mSlope;
+    }
+
+    S32 airPadCells(F32 cell)
+    {
+        return static_cast<S32>(std::ceil(AIR_PAD_M / cell - 1e-4f));
+    }
+
     S32 borderCells(F32 radius, F32 cell)
     {
         const S32 r = static_cast<S32>(std::ceil(radius / cell));
@@ -1076,386 +1591,1416 @@ namespace sknav
     const char* ClassBuildStats::stageName(S32 stage)
     {
         static const char* names[NUM_STAGES] = { "partition", "rasterise", "fill", "cut", "bridges", "cull", "filters", "compact", "erode",
-                                                 "regions", "contours", "polymesh", "flightmap", "detail", "walls", "air", "edges", "detour" };
+                                                 "regions", "contours", "polymesh", "stamp", "flightmap", "detail", "walls", "air", "edges", "detour" };
         return stage >= 0 && stage < NUM_STAGES ? names[stage] : "";
     }
 
-    TileBuildResult buildTile(const TileBuildInput& input, TileBuildStats* stats)
+    namespace
     {
-        const auto started = std::chrono::steady_clock::now();
-        TileBuildResult result;
-        // An empty tile has no air to keep, which is an answer too.
-        result.mAirBuilt = input.mAir && input.mClasses[static_cast<S32>(AgentClass::WEATHER)];
-
-        // Gather the soup in Recast space.
-        Soup soup;
-        std::vector<LLVector3> tris;
-        std::vector<std::pair<S32, S32>> solids;    // triangle ranges of closed bodies
-        std::vector<Excluded> excluded;             // triangle ranges some class builds without
-        for (const RecordPtr& r : input.mRecords)
+        /// What the raster stage makes of a tile before its cell matters: the soup and each triangle's area code.
+        struct TileSoup
         {
-            if (!r)
+            Soup mSoup;
+            Soup mSolidSoup;                                ///< without what the air leaves out, when it leaves anything out
+            Soup mCutSoup;
+            std::vector<std::pair<S32, S32>> mSolids;      ///< triangle ranges of closed bodies
+            std::vector<std::pair<S32, S32>> mSolidSolids;
+            std::vector<std::pair<S32, S32>> mCuts;
+            std::vector<Excluded> mExcluded;                ///< triangle ranges some class builds without
+            bool mFiltered = false;
+            std::vector<U8> mLeafTri;
+            std::vector<U8> mCodes;
+            std::vector<U8> mReal;
+            std::vector<Flight> mFlights;
+            /// Per record in soup order, null for the land, its triangle range in mSoup.
+            std::vector<std::pair<RecordPtr, std::pair<S32, S32>>> mRuns;
+
+            const Soup& main() const { return mFiltered ? mSolidSoup : mSoup; }
+            const std::vector<std::pair<S32, S32>>& mainSolids() const { return mFiltered ? mSolidSolids : mSolids; }
+        };
+
+        /// The plan the tile's passes read, mesh-local: the tile padded by the widest of them.
+        struct TileReach
+        {
+            F32 mX0, mY0, mX1, mY1;
+
+            explicit TileReach(const TileBuildInput& input)
             {
-                continue;
+                const S32 avatar = static_cast<S32>(AgentClass::AVATAR);
+                const S32 border = std::max(borderCells(input.mParams[avatar].mRadius, input.mCell), input.mAirPad);
+                const F32 pad = std::max({ FLIGHT_REACH_M, AIR_PAD_M, border * input.mCell }) + input.mCell;
+                mX0 = input.mTileX * input.mTileSize - pad;
+                mY0 = input.mTileY * input.mTileSize - pad;
+                mX1 = (input.mTileX + 1) * input.mTileSize + pad;
+                mY1 = (input.mTileY + 1) * input.mTileSize + pad;
             }
-            // A hull is a solid the sim collides with from either side: mark
-            // it walkable whichever way its triangles wind.
-            const bool hull = r->mProvenance == Provenance::HULL || r->mProvenance == Provenance::BASE_HULL;
-            tris.clear();
-            emitRecord(*r, input.mMeshOrigin, tris);
-            const S32 before = soup.ntris();
-            const auto cue = std::lower_bound(input.mRootCues.begin(), input.mRootCues.end(), std::make_pair(r->mRoot, U8(0)));
-            soup.add(tris, AREA_OBJECT, input.mTerrain.mWater, hull,
-                     cue != input.mRootCues.end() && cue->first == r->mRoot ? cue->second : static_cast<U8>(CUE_NONE));
-            if (r->mExclude && soup.ntris() > before)
+
+            bool overlaps(const LLVector3* p, size_t n) const
             {
-                excluded.push_back({ before, soup.ntris(), r->mExclude });
-            }
-            // A solid is filled. A decomposition is a set of bodies, not one:
-            // its hulls overlap, and a column through two of them would count
-            // four crossings and fill none of the middle. Fill each body on
-            // its own. A record whose bodies are not told apart arrives as one
-            // range and is filled as one closed surface.
-            S32 pieces = 0;
-            for (const S32 count : r->mConvexTris)
-            {
-                pieces += count;
-            }
-            if (r->mSolid && r->mConvexTris.size() > 1 && pieces == soup.ntris() - before)
-            {
-                S32 at = before;
-                for (const S32 count : r->mConvexTris)
+                F32 x0 = FLT_MAX, y0 = FLT_MAX, x1 = -FLT_MAX, y1 = -FLT_MAX;
+                for (size_t i = 0; i < n; ++i)
                 {
-                    if (count > 0)
+                    x0 = std::min(x0, p[i].mV[VX]);
+                    y0 = std::min(y0, p[i].mV[VY]);
+                    x1 = std::max(x1, p[i].mV[VX]);
+                    y1 = std::max(y1, p[i].mV[VY]);
+                }
+                return x1 >= mX0 && x0 <= mX1 && y1 >= mY0 && y0 <= mY1;
+            }
+        };
+
+        /// Drops what lies wholly outside the reach. A record is not clipped to
+        /// its tile, so a big mesh would otherwise bring every triangle it has
+        /// to every tile it touches. A solid's fill counts crossings of its
+        /// whole surface, so a body is kept or dropped whole; bodies gets the
+        /// triangle count of each kept one, and stays empty for a non-solid.
+        void clipToReach(const Record& r, const TileReach& reach, std::vector<LLVector3>& tris, std::vector<S32>& bodies)
+        {
+            bodies.clear();
+            size_t kept = 0;
+            const auto keep = [&](size_t from, size_t count) {
+                if (from != kept)
+                {
+                    std::copy(tris.begin() + from, tris.begin() + from + count, tris.begin() + kept);
+                }
+                kept += count;
+            };
+            if (r.mSolid)
+            {
+                const S32 total = static_cast<S32>(tris.size() / 3);
+                S32 pieces = 0;
+                for (const S32 count : r.mConvexTris)
+                {
+                    pieces += count;
+                }
+                // Bodies not told apart arrive as one range and are one closed surface.
+                const std::vector<S32> whole{ total };
+                const std::vector<S32>& counts = r.mConvexTris.size() > 1 && pieces == total ? r.mConvexTris : whole;
+                size_t at = 0;
+                for (const S32 count : counts)
+                {
+                    const size_t n = static_cast<size_t>(count) * 3;
+                    if (count > 0 && reach.overlaps(&tris[at], n))
                     {
-                        solids.emplace_back(at, at + count);
+                        keep(at, n);
+                        bodies.push_back(count);
                     }
+                    at += n;
+                }
+            }
+            else
+            {
+                for (size_t at = 0; at + 2 < tris.size(); at += 3)
+                {
+                    if (reach.overlaps(&tris[at], 3))
+                    {
+                        keep(at, 3);
+                    }
+                }
+            }
+            tris.resize(kept);
+        }
+
+        /// The soup of a tile and its partition; false when it holds no triangle.
+        bool soupTile(const TileBuildInput& input, TileBuildResult& result, TileBuildStats* stats, std::chrono::steady_clock::time_point started,
+                      TileSoup& out)
+        {
+            // Gather the soup in Recast space.
+            Soup& soup = out.mSoup;
+            std::vector<LLVector3> tris;
+            std::vector<std::pair<S32, S32>>& solids = out.mSolids;
+            std::vector<Excluded>& excluded = out.mExcluded;
+            const TileReach reach(input);
+            std::vector<S32> bodies;
+            for (const RecordPtr& r : input.mRecords)
+            {
+                if (!r)
+                {
+                    continue;
+                }
+                // A hull is a solid the sim collides with from either side: mark
+                // it walkable whichever way its triangles wind.
+                const bool hull = r->mProvenance == Provenance::HULL || r->mProvenance == Provenance::BASE_HULL;
+                tris.clear();
+                emitRecord(*r, input.mMeshOrigin, tris);
+                clipToReach(*r, reach, tris, bodies);
+                if (tris.empty())
+                {
+                    continue;
+                }
+                const S32 before = soup.ntris();
+                const auto cue = std::lower_bound(input.mRootCues.begin(), input.mRootCues.end(), std::make_pair(r->mRoot, U8(0)));
+                soup.add(tris, AREA_OBJECT, input.mTerrain.mWater, hull,
+                         cue != input.mRootCues.end() && cue->first == r->mRoot ? cue->second : static_cast<U8>(CUE_NONE),
+                         static_cast<S32>(&r - input.mRecords.data()));
+                out.mRuns.push_back({ r, { before, soup.ntris() } });
+                if (r->mExclude && soup.ntris() > before)
+                {
+                    excluded.push_back({ before, soup.ntris(), r->mExclude });
+                }
+                // A solid is filled. A decomposition is a set of bodies, not one:
+                // its hulls overlap, and a column through two of them would count
+                // four crossings and fill none of the middle. Fill each body on
+                // its own. A record whose bodies are not told apart arrives as one
+                // range and is filled as one closed surface.
+                S32 at = before;
+                for (const S32 count : bodies)
+                {
+                    solids.emplace_back(at, at + count);
                     at += count;
                 }
             }
-            else if (r->mSolid)
+            // An exclusion volume is a cut, not a shape: its triangles never enter
+            // the soup, they only say where the navmesh is taken out of.
+            Soup& cut_soup = out.mCutSoup;
+            std::vector<std::pair<S32, S32>>& cuts = out.mCuts;
+            for (const RecordPtr& r : input.mCuts)
             {
-                solids.emplace_back(before, soup.ntris());
-            }
-        }
-        // An exclusion volume is a cut, not a shape: its triangles never enter
-        // the soup, they only say where the navmesh is taken out of.
-        Soup cut_soup;
-        std::vector<std::pair<S32, S32>> cuts;
-        for (const RecordPtr& r : input.mCuts)
-        {
-            if (!r)
-            {
-                continue;
-            }
-            tris.clear();
-            emitRecord(*r, input.mMeshOrigin, tris);
-            const S32 before = cut_soup.ntris();
-            cut_soup.add(tris, AREA_OBJECT, input.mTerrain.mWater, false);
-            if (cut_soup.ntris() > before)
-            {
-                cuts.emplace_back(before, cut_soup.ntris());
-            }
-        }
-        const TerrainWindow& t = input.mTerrain;
-        if (t.mWidth >= 2 && t.mHeight >= 2 && t.mZ.size() >= static_cast<size_t>(t.mWidth * t.mHeight))
-        {
-            tris.clear();
-            for (S32 y = 0; y + 1 < t.mHeight; ++y)
-            {
-                for (S32 x = 0; x + 1 < t.mWidth; ++x)
+                if (!r)
                 {
-                    // A sample below the void sentinel has no region under it: no floor there.
-                    const F32 z00 = t.mZ[y * t.mWidth + x], z10 = t.mZ[y * t.mWidth + x + 1], z11 = t.mZ[(y + 1) * t.mWidth + x + 1], z01 = t.mZ[(y + 1) * t.mWidth + x];
-                    if (z00 < VOID_Z || z10 < VOID_Z || z11 < VOID_Z || z01 < VOID_Z)
+                    continue;
+                }
+                tris.clear();
+                emitRecord(*r, input.mMeshOrigin, tris);
+                const S32 before = cut_soup.ntris();
+                cut_soup.add(tris, AREA_OBJECT, input.mTerrain.mWater, false);
+                if (cut_soup.ntris() > before)
+                {
+                    cuts.emplace_back(before, cut_soup.ntris());
+                }
+            }
+            const TerrainWindow& t = input.mTerrain;
+            if (t.mWidth >= 2 && t.mHeight >= 2 && t.mZ.size() >= static_cast<size_t>(t.mWidth * t.mHeight))
+            {
+                tris.clear();
+                for (S32 y = 0; y + 1 < t.mHeight; ++y)
+                {
+                    for (S32 x = 0; x + 1 < t.mWidth; ++x)
+                    {
+                        // A sample below the void sentinel has no region under it: no floor there.
+                        const F32 z00 = t.mZ[y * t.mWidth + x], z10 = t.mZ[y * t.mWidth + x + 1], z11 = t.mZ[(y + 1) * t.mWidth + x + 1], z01 = t.mZ[(y + 1) * t.mWidth + x];
+                        if (z00 < VOID_Z || z10 < VOID_Z || z11 < VOID_Z || z01 < VOID_Z)
+                        {
+                            continue;
+                        }
+                        const LLVector3 a(t.mOrigin.mV[VX] + x * t.mSpacing, t.mOrigin.mV[VY] + y * t.mSpacing, z00);
+                        const LLVector3 b(t.mOrigin.mV[VX] + (x + 1) * t.mSpacing, t.mOrigin.mV[VY] + y * t.mSpacing, t.mZ[y * t.mWidth + x + 1]);
+                        const LLVector3 c(t.mOrigin.mV[VX] + (x + 1) * t.mSpacing, t.mOrigin.mV[VY] + (y + 1) * t.mSpacing, t.mZ[(y + 1) * t.mWidth + x + 1]);
+                        const LLVector3 d(t.mOrigin.mV[VX] + x * t.mSpacing, t.mOrigin.mV[VY] + (y + 1) * t.mSpacing, t.mZ[(y + 1) * t.mWidth + x]);
+                        quad(tris, a, b, c, d); // counter-clockwise from above: +z in SL, +y in Recast
+                    }
+                }
+                const S32 before = soup.ntris();
+                soup.add(tris, AREA_GROUND, t.mWater, false);
+                out.mRuns.push_back({ nullptr, { before, soup.ntris() } });
+            }
+            result.mTriangles = soup.ntris();
+            if (stats)
+            {
+                stats->mSoupMs = std::chrono::duration<F64, std::milli>(std::chrono::steady_clock::now() - started).count();
+            }
+            if (soup.ntris() == 0)
+            {
+                result.mStatus = TileBuildResult::EMPTY;
+                return false;
+            }
+            if (stats)
+            {
+                // Each excluded range's box, two cells wider, over the tile's cells.
+                const S32 n = static_cast<S32>(input.mTileSize / input.mCell);
+                const F32 x0 = input.mTileX * input.mTileSize, y0 = input.mTileY * input.mTileSize;
+                std::vector<U8> window(static_cast<size_t>(n) * n, 0);
+                for (const Excluded& e : excluded)
+                {
+                    F32 lo[3] = { FLT_MAX, FLT_MAX, FLT_MAX }, hi[3] = { -FLT_MAX, -FLT_MAX, -FLT_MAX };
+                    for (S32 t = e.mBegin * 3; t < e.mEnd * 3; ++t)
+                    {
+                        const F32* v = &soup.mVerts[soup.mTris[t] * 3];
+                        for (S32 k = 0; k < 3; ++k)
+                        {
+                            lo[k] = llmin(lo[k], v[k]);
+                            hi[k] = llmax(hi[k], v[k]);
+                        }
+                    }
+                    const S32 ix0 = std::max(0, static_cast<S32>(std::floor((lo[2] - x0) / input.mCell)) - 2);
+                    const S32 ix1 = std::min(n, static_cast<S32>(std::ceil((hi[2] - x0) / input.mCell)) + 2);
+                    const S32 iy0 = std::max(0, static_cast<S32>(std::floor((lo[0] - y0) / input.mCell)) - 2);
+                    const S32 iy1 = std::min(n, static_cast<S32>(std::ceil((hi[0] - y0) / input.mCell)) + 2);
+                    for (S32 iy = iy0; iy < iy1; ++iy)
+                    {
+                        for (S32 ix = ix0; ix < ix1; ++ix)
+                        {
+                            window[ix + iy * n] = 1;
+                        }
+                    }
+                }
+                stats->mExcludedRecords = static_cast<U32>(excluded.size());
+                stats->mExcludeWindowCells = static_cast<U32>(std::count(window.begin(), window.end(), 1));
+                stats->mTileCells = static_cast<U32>(window.size());
+            }
+
+            // One solid raster serves AVATAR and the air. It holds every solid
+            // but what the air leaves out, at AVATAR's grid widened to the air's
+            // pad; AVATAR reads it through a view cropped to its own border, and
+            // the surfaces only the air's slope walks carry codes it masks away.
+            // Records AVATAR leaves out and the air keeps - door leaves - are
+            // rasterised again without them over a window round them, whose
+            // columns AVATAR's view reads instead.
+            rcContext ctx(false);
+            const S32 avatar = static_cast<S32>(AgentClass::AVATAR);
+            const ClassParams& ap = input.mParams[avatar];
+            ClassParams tp = input.mTopParams;
+            tp.mSlope = llmax(tp.mSlope, ap.mSlope);
+            tp.mClimb = ap.mClimb;
+            ClassBuildStats* astats = stats ? &stats->mClass[avatar] : nullptr;
+            ClassBuildStats* tstats = stats ? &stats->mTop : nullptr;
+            StageClock clock(astats ? astats->mMs : nullptr);
+            if (astats)
+            {
+                astats->mBuilt = true;
+            }
+
+            // The raster's soup, and per triangle of it whether AVATAR leaves it out.
+            const U8 solid_bit = EXCLUDE_SOLID, avatar_bit = EXCLUDE_AVATAR;
+            Soup& solid_soup = out.mSolidSoup;
+            std::vector<std::pair<S32, S32>>& solid_solids = out.mSolidSolids;
+            const Soup* main_soup = &soup;
+            std::vector<U8>& leaf_tri = out.mLeafTri;
+            {
+                const auto filter_started = std::chrono::steady_clock::now();
+                std::vector<U8> solid_drop(soup.ntris(), 0), avatar_drop(soup.ntris(), 0);
+                bool solid_any = false, avatar_any = false;
+                for (const Excluded& e : excluded)
+                {
+                    const bool solid_out = (e.mClasses & solid_bit) != 0;
+                    const bool avatar_out = !solid_out && (e.mClasses & avatar_bit) != 0;
+                    std::fill(solid_drop.begin() + e.mBegin, solid_drop.begin() + e.mEnd, solid_out ? 1 : 0);
+                    std::fill(avatar_drop.begin() + e.mBegin, avatar_drop.begin() + e.mEnd, avatar_out ? 1 : 0);
+                    solid_any = solid_any || solid_out;
+                    avatar_any = avatar_any || avatar_out;
+                }
+                if (solid_any)
+                {
+                    filterSoup(soup, solids, excluded, solid_bit, solid_soup, solid_solids);
+                    main_soup = &solid_soup;
+                    out.mFiltered = true;
+                }
+                if (avatar_any)
+                {
+                    for (S32 t = 0; t < soup.ntris(); ++t)
+                    {
+                        if (!solid_drop[t])
+                        {
+                            leaf_tri.push_back(avatar_drop[t]);
+                        }
+                    }
+                }
+                if (solid_any || avatar_any)
+                {
+                    result.mExcludeMillis += std::chrono::duration<F32, std::milli>(std::chrono::steady_clock::now() - filter_started).count();
+                    clock.restart();
+                }
+            }
+
+            // The area byte of each triangle. The partition is AVATAR's: over the
+            // raster's soup at the pinned slope, or where AVATAR leaves records out,
+            // over the soup without them at AVATAR's own slope, as it always was.
+            const bool partitioned = input.mPartition == Partition::SLOPE;
+            const bool own_partition = std::any_of(excluded.begin(), excluded.end(), [&](const Excluded& e) { return (e.mClasses & avatar_bit) != 0; });
+            std::vector<U8>& codes = out.mCodes;
+            std::vector<U8>& real = out.mReal;
+            std::vector<Flight>& flights = out.mFlights;
+            {
+                std::vector<U8> avatar_walk, top_walk;
+                markWalkable(*main_soup, ap.mSlope, avatar_walk);
+                markWalkable(*main_soup, tp.mSlope, top_walk);
+                for (S32 t = 0; t < static_cast<S32>(leaf_tri.size()); ++t)
+                {
+                    avatar_walk[t] = leaf_tri[t] ? 0 : avatar_walk[t];     // AVATAR never stands on what it leaves out
+                }
+                SlopePartition slopes;
+                std::vector<U8> main_codes;     // per triangle of the raster's soup
+                if (partitioned)
+                {
+                    Soup avatar_soup;
+                    std::vector<std::pair<S32, S32>> avatar_solids;
+                    if (!leaf_tri.empty())
+                    {
+                        filterSoup(soup, solids, excluded, static_cast<U8>(avatar_bit | solid_bit), avatar_soup, avatar_solids);
+                    }
+                    const Soup& part = leaf_tri.empty() ? *main_soup : avatar_soup;
+                    std::vector<U8> walkable;
+                    markWalkable(part, own_partition ? ap.mSlope : llmax(partitionSlope(input), ap.mSlope), walkable);
+                    std::vector<LLVector3> sl(part.nverts());
+                    for (S32 v = 0; v < part.nverts(); ++v)
+                    {
+                        sl[v] = fromRecast(&part.mVerts[v * 3]);
+                    }
+                    slopes = partitionSlopes(sl, part.mTris, walkable, part.mTwoSided, AREA_OBJECT, ap.mClimb, ap.mSlope, PARTITION_MAX_CODES, part.mCues, part.mSources);
+                    shiftFlightCodes(slopes);
+                    // Back onto the raster's triangles, the left-out ones coded by area alone.
+                    main_codes.assign(main_soup->ntris(), 0);
+                    for (S32 t = 0, j = 0; t < main_soup->ntris(); ++t)
+                    {
+                        if (leaf_tri.empty() || !leaf_tri[t])
+                        {
+                            main_codes[t] = slopes.mCodes[j++];
+                        }
+                    }
+                    if (stats)
+                    {
+                        std::vector<U8> used(256, 0);
+                        for (const U8 code : slopes.mCodes)
+                        {
+                            used[code] = 1;
+                        }
+                        used[0] = 0;
+                        stats->mSharedCodes = static_cast<U32>(std::count(used.begin(), used.end(), 1));
+                    }
+                }
+                codes = encodeAreas(avatar_walk, top_walk, partitioned ? &main_codes : nullptr);
+                real = realAreas(partitioned ? &slopes.mReal : nullptr);
+                flights = std::move(slopes.mFlights);
+            }
+            if (astats)
+            {
+                std::vector<U8> used(256, 0);
+                for (S32 t = 0; t < static_cast<S32>(codes.size()); ++t)
+                {
+                    used[codes[t]] = codes[t] >= AREA_CODE_BASE && (leaf_tri.empty() || !leaf_tri[t]);
+                }
+                astats->mCodes = static_cast<U32>(std::count(used.begin(), used.end(), 1));
+            }
+            clock.lap(ClassBuildStats::PARTITION);
+            return true;
+        }
+
+        /// Each run's triangles in the raster's soup: a run the solid raster leaves out has none there.
+        std::vector<std::pair<RecordPtr, U32>> mainRuns(const TileSoup& ts)
+        {
+            std::vector<std::pair<RecordPtr, U32>> runs;
+            runs.reserve(ts.mRuns.size());
+            for (const auto& [r, range] : ts.mRuns)
+            {
+                bool dropped = false;
+                for (const Excluded& e : ts.mExcluded)
+                {
+                    dropped = dropped || (ts.mFiltered && e.mBegin == range.first && e.mEnd == range.second && (e.mClasses & EXCLUDE_SOLID));
+                }
+                runs.emplace_back(r, dropped ? 0u : static_cast<U32>(range.second - range.first));
+            }
+            return runs;
+        }
+
+        /// The solid raster as it stands, packed, with what it was rasterised from.
+        std::shared_ptr<const SolidRaster> holdSolid(const rcHeightfield& hf, const TileBuildInput& input, const TileSoup& ts)
+        {
+            auto solid = std::make_shared<SolidRaster>();
+            solid->mWidth = hf.width;
+            solid->mHeight = hf.height;
+            const size_t columns = static_cast<size_t>(hf.width) * hf.height;
+            solid->mStart.resize(columns + 1);
+            for (size_t c = 0; c < columns; ++c)
+            {
+                solid->mStart[c] = static_cast<U32>(solid->mSpans.size());
+                for (const rcSpan* s = hf.spans[c]; s; s = s->next)
+                {
+                    solid->mSpans.push_back(SolidRaster::packSpan(s->smin, s->smax, s->area));
+                }
+            }
+            solid->mStart[columns] = static_cast<U32>(solid->mSpans.size());
+            solid->mSpans.shrink_to_fit();
+            solid->mInput = input;
+            solid->mRuns = mainRuns(ts);
+            solid->mCodes = ts.mCodes;
+            return solid;
+        }
+
+        /// The held solid raster's columns into an empty hf, but for the window's, taken from window_hf.
+        void spliceSolid(const SolidRaster& solid, const rcHeightfield& window_hf, const CellRect& window, rcHeightfield& hf)
+        {
+            rcContext ctx(false);
+            for (S32 z = 0; z < hf.height; ++z)
+            {
+                for (S32 x = 0; x < hf.width; ++x)
+                {
+                    if (x >= window.mX0 && x < window.mX1 && z >= window.mZ0 && z < window.mZ1)
+                    {
+                        copyColumn(window_hf, hf, x, z);
+                        continue;
+                    }
+                    // Spans held apart stay apart: re-added lowest first, none merges.
+                    const size_t c = static_cast<size_t>(x) + static_cast<size_t>(z) * hf.width;
+                    for (U32 i = solid.mStart[c]; i < solid.mStart[c + 1]; ++i)
+                    {
+                        const U32 s = solid.mSpans[i];
+                        rcAddSpan(&ctx, hf, x, z, static_cast<unsigned short>(s & 0x1fff), static_cast<unsigned short>((s >> 13) & 0x1fff),
+                                  static_cast<U8>(s >> 26), 0);
+                    }
+                }
+            }
+        }
+
+        /// The tile's raster grid: AVATAR's, widened to the air's pad when it keeps air.
+        rcConfig rasterGrid(const TileBuildInput& input)
+        {
+            const ClassParams& ap = input.mParams[static_cast<S32>(AgentClass::AVATAR)];
+            const S32 border = borderCells(ap.mRadius, input.mCell);
+            return tileConfig(input, ap, input.mAir ? std::max(border, input.mAirPad) : border);
+        }
+
+        bool sameTerrain(const TerrainWindow& a, const TerrainWindow& b)
+        {
+            return a.mOrigin == b.mOrigin && a.mSpacing == b.mSpacing && a.mWidth == b.mWidth && a.mHeight == b.mHeight && a.mWater == b.mWater &&
+                   a.mZ == b.mZ;
+        }
+
+        bool sameParams(const ClassParams& a, const ClassParams& b)
+        {
+            return a.mHeight == b.mHeight && a.mRadius == b.mRadius && a.mClimb == b.mClimb && a.mSlope == b.mSlope;
+        }
+
+        /// Whether two inputs agree on everything but their records.
+        bool sameSettings(const TileBuildInput& a, const TileBuildInput& b)
+        {
+            bool same = a.mMeshOrigin == b.mMeshOrigin && a.mTileX == b.mTileX && a.mTileY == b.mTileY && a.mTileSize == b.mTileSize &&
+                        a.mZMin == b.mZMin && a.mZMax == b.mZMax && a.mCell == b.mCell && a.mPartition == b.mPartition &&
+                        a.mPartitionSlope == b.mPartitionSlope && a.mDetailSampleCells == b.mDetailSampleCells &&
+                        a.mDetailMaxErrorCells == b.mDetailMaxErrorCells && a.mWallMinHeight == b.mWallMinHeight && a.mRootCues == b.mRootCues &&
+                        sameTerrain(a.mTerrain, b.mTerrain) && sameParams(a.mTopParams, b.mTopParams) && a.mWallFaces == b.mWallFaces &&
+                        a.mDropSpacing == b.mDropSpacing && a.mRunoff == b.mRunoff && a.mRunoffMax == b.mRunoffMax && a.mAir == b.mAir &&
+                        a.mAirPad == b.mAirPad && a.mAirMinGap == b.mAirMinGap && a.mCoarseAir == b.mCoarseAir && a.mFaceOffsets == b.mFaceOffsets &&
+                        a.mAlignWallEdges == b.mAlignWallEdges && a.mFineAir == b.mFineAir;
+            for (S32 c = 0; c < NUM_CLASSES; ++c)
+            {
+                same = same && sameParams(a.mParams[c], b.mParams[c]) && a.mEdges[c] == b.mEdges[c] && a.mDropMax[c] == b.mDropMax[c];
+            }
+            return same;
+        }
+
+        /// The air at half the grid's cell over the candidate blocks of the tile's air, each window rasterised on its own.
+        FineAirPtr fineAirOf(const TileBuildInput& input, const rcConfig& grid, const RasterSource& source, const ClassParams& tp,
+                             const std::vector<U8>& real, const AirGrid& tile_air, TileBuildStats* stats)
+        {
+            const auto started = std::chrono::steady_clock::now();
+            const auto since = [](std::chrono::steady_clock::time_point t) {
+                return std::chrono::duration<F64, std::milli>(std::chrono::steady_clock::now() - t).count();
+            };
+            const S32 overlap = static_cast<S32>(std::ceil(0.5f / grid.ch));
+            const std::vector<U8> blocks = fineCandidates(tile_air, grid.walkableClimb, overlap);
+            const std::vector<FineWindow> windows = fineWindows(blocks, tile_air.mWidth, tile_air.mHeight);
+            if (stats)
+            {
+                stats->mFine.mBlocks = static_cast<U32>(blocks.size());
+                stats->mFine.mCandidates = static_cast<U32>(std::count(blocks.begin(), blocks.end(), 1));
+            }
+            if (windows.empty())
+            {
+                return nullptr;
+            }
+            auto air = std::make_shared<FineAir>();
+            air->mCell = grid.cs * 0.5f;
+            air->mUnit = grid.ch * 0.5f;
+            const S32 pad = static_cast<S32>(std::ceil(FINE_PAD_M / air->mCell - 1e-4f));
+            const S32 climb = static_cast<S32>(std::floor(tp.mClimb / air->mUnit));
+            const S32 fine_overlap = static_cast<S32>(std::ceil(0.5f / air->mUnit));
+            const S32 min_gap = static_cast<S32>(std::ceil(input.mAirMinGap / air->mUnit));
+            StageClock clock(nullptr);
+            U32 skipped = 0;
+            F64 compare_ms = 0.0;
+            for (const FineWindow& w : windows)
+            {
+                // Recast x runs along SL y and z along SL x; the tile proper starts borderSize cells into the grid.
+                rcConfig cfg = grid;
+                cfg.cs = air->mCell;
+                cfg.ch = air->mUnit;
+                cfg.borderSize = pad;
+                cfg.width = 2 * (w.mY1 - w.mY0) + 2 * pad;
+                cfg.height = 2 * (w.mX1 - w.mX0) + 2 * pad;
+                cfg.bmin[0] = grid.bmin[0] + (grid.borderSize + w.mY0) * grid.cs - pad * cfg.cs;
+                cfg.bmin[2] = grid.bmin[2] + (grid.borderSize + w.mX0) * grid.cs - pad * cfg.cs;
+                cfg.bmax[0] = cfg.bmin[0] + cfg.width * cfg.cs;
+                cfg.bmax[2] = cfg.bmin[2] + cfg.height * cfg.cs;
+                if ((cfg.bmax[1] - cfg.bmin[1]) / cfg.ch > RC_SPAN_MAX_HEIGHT)
+                {
+                    ++skipped;
+                    continue;
+                }
+                const auto raster_started = std::chrono::steady_clock::now();
+                HeightfieldPtr hf(makeHeightfield(cfg));
+                if (!hf || !rasterisePasses(*hf, source, CellRect{ 1, 1, cfg.width - 1, cfg.height - 1 }, climb, clock))
+                {
+                    ++skipped;
+                    continue;
+                }
+                addBridges(*hf, findBridges(*hf, climb, 1), climb);
+                cullUnderground(*hf, input.mTerrain);
+                filterSpans(*hf, tp, cfg.ch, cfg.cs);
+                if (stats)
+                {
+                    stats->mFine.mRasterMs += since(raster_started);
+                }
+                AirGrid padded, fine;
+                extractAir(*hf, 0, padded, real.data());
+                foldSlivers(padded, min_gap);
+                computeClearance(padded, climb, fine_overlap);
+                cropAir(padded, pad, fine);
+                air->mWindows.push_back(w);
+                appendFineLeaves(fine, 2 * w.mX0, 2 * w.mY0, blocks, tile_air.mWidth, *air);
+                if (stats)
+                {
+                    const auto compare_started = std::chrono::steady_clock::now();
+                    FineCompare c;
+                    compareFineAir(tile_air, fine, w, blocks, grid.walkableClimb, overlap, climb, fine_overlap, c);
+                    TileBuildStats::Fine& f = stats->mFine;
+                    f.mWindowCells += static_cast<U32>((w.mX1 - w.mX0) * (w.mY1 - w.mY0));
+                    f.mCoarseLinks += c.mCoarseLinks;
+                    f.mClosed += c.mClosed;
+                    f.mClosedSeparating += c.mClosedSeparating;
+                    f.mFineLinks += c.mFineLinks;
+                    f.mOpened += c.mOpened;
+                    f.mOpenedSeparating += c.mOpenedSeparating;
+                    f.mFineGaps += c.mFineGaps;
+                    f.mNewGaps += c.mNewGaps;
+                    f.mNewWalkable += c.mNewWalkable;
+                    compare_ms += since(compare_started);
+                }
+            }
+            sortFineLeaves(*air);
+            if (stats)
+            {
+                stats->mFine.mWindows = static_cast<U32>(air->mWindows.size());
+                stats->mFine.mLeaves = static_cast<U32>(air->mLeaves.size());
+                stats->mFine.mGaps = static_cast<U32>(air->mGaps.size());
+                stats->mFine.mBytes = air->bytes();
+                stats->mFine.mSkipped = skipped;
+                stats->mFine.mMs = since(started) - compare_ms;
+            }
+            return air;
+        }
+
+        TileAirPtr coarseAirOf(const TileBuildInput& input, const TileSoup& ts);
+
+        /// The raster stage over a tile's soup at the input's cell.
+        /// splice_from and window: only the window's cells are rasterised, the rest are the held raster's.
+        TileRasterPtr rasteriseSoup(const TileBuildInput& input, const TileSoup& ts, TileBuildResult& result, TileBuildStats* stats,
+                                    std::chrono::steady_clock::time_point started, const SolidRaster* splice_from = nullptr,
+                                    const CellRect* window = nullptr)
+        {
+            rcContext ctx(false);
+            const S32 avatar = static_cast<S32>(AgentClass::AVATAR);
+            const ClassParams& ap = input.mParams[avatar];
+            ClassParams tp = input.mTopParams;
+            tp.mSlope = llmax(tp.mSlope, ap.mSlope);
+            tp.mClimb = ap.mClimb;
+            ClassBuildStats* astats = stats ? &stats->mClass[avatar] : nullptr;
+            ClassBuildStats* tstats = stats ? &stats->mTop : nullptr;
+            StageClock clock(astats ? astats->mMs : nullptr);
+            const rcConfig cfg = tileConfig(input, ap, borderCells(ap.mRadius, input.mCell));
+            const rcConfig grid = tileConfig(input, ap, input.mAir ? std::max(cfg.borderSize, input.mAirPad) : cfg.borderSize);
+            const S32 inset = grid.borderSize - cfg.borderSize;
+            const Soup* main_soup = &ts.main();
+            const std::vector<std::pair<S32, S32>>* main_solids = &ts.mainSolids();
+            const Soup& cut_soup = ts.mCutSoup;
+            const std::vector<std::pair<S32, S32>>& cuts = ts.mCuts;
+            const std::vector<U8>& codes = ts.mCodes;
+            const std::vector<U8>& leaf_tri = ts.mLeafTri;
+            std::vector<U8> real = ts.mReal;
+            std::vector<Flight> flights = ts.mFlights;
+
+            Freed mem;
+            HeightfieldPtr overlay;
+            mem.hf = makeHeightfield(grid);
+            if (!mem.hf)
+            {
+                result.mError = "heightfield";
+                return nullptr;
+            }
+            rcHeightfield& hf = *mem.hf;
+            const RasterSource source{ main_soup, &codes, main_solids, &cut_soup, &cuts };
+            if (splice_from && window)
+            {
+                // The window's columns come out of its own raster as the whole tile's would; the held ones already are.
+                HeightfieldPtr scratch(makeHeightfield(grid));
+                if (!scratch || !rasterisePasses(*scratch, source, *window, grid.walkableClimb, clock))
+                {
+                    result.mError = "rasterize";
+                    return nullptr;
+                }
+                spliceSolid(*splice_from, *scratch, *window, hf);
+                clock.lap(ClassBuildStats::RASTERISE);
+            }
+            else if (!rasterisePasses(hf, source, CellRect{ 0, 0, hf.width, hf.height }, grid.walkableClimb, clock))
+            {
+                result.mError = "rasterize";
+                return nullptr;
+            }
+            std::shared_ptr<const SolidRaster> solid = input.mHoldSolid ? holdSolid(hf, input, ts) : nullptr;
+
+            // The window: every cell a left-out triangle touches and one more
+            // round it is AVATAR's own; its raster reaches a cell further, so
+            // a bridge in the outer ring reads the columns past it complete.
+            const size_t columns = static_cast<size_t>(hf.width) * hf.height;
+            std::vector<U8> in_window, own_column;
+            if (!leaf_tri.empty())
+            {
+                in_window.assign(columns, 0);
+                CellRect rect{ hf.width, hf.height, 0, 0 };
+                for (S32 t = 0; t < main_soup->ntris(); ++t)
+                {
+                    if (!leaf_tri[t])
                     {
                         continue;
                     }
-                    const LLVector3 a(t.mOrigin.mV[VX] + x * t.mSpacing, t.mOrigin.mV[VY] + y * t.mSpacing, z00);
-                    const LLVector3 b(t.mOrigin.mV[VX] + (x + 1) * t.mSpacing, t.mOrigin.mV[VY] + y * t.mSpacing, t.mZ[y * t.mWidth + x + 1]);
-                    const LLVector3 c(t.mOrigin.mV[VX] + (x + 1) * t.mSpacing, t.mOrigin.mV[VY] + (y + 1) * t.mSpacing, t.mZ[(y + 1) * t.mWidth + x + 1]);
-                    const LLVector3 d(t.mOrigin.mV[VX] + x * t.mSpacing, t.mOrigin.mV[VY] + (y + 1) * t.mSpacing, t.mZ[(y + 1) * t.mWidth + x]);
-                    quad(tris, a, b, c, d); // counter-clockwise from above: +z in SL, +y in Recast
+                    const CellRect r = cellsOf(hf, *main_soup, t, t + 1);
+                    for (S32 z = std::max(0, r.mZ0); z < std::min(hf.height, r.mZ1); ++z)
+                    {
+                        for (S32 x = std::max(0, r.mX0); x < std::min(hf.width, r.mX1); ++x)
+                        {
+                            in_window[x + z * hf.width] = 1;
+                        }
+                    }
+                    rect = { std::min(rect.mX0, r.mX0 - 1), std::min(rect.mZ0, r.mZ0 - 1), std::max(rect.mX1, r.mX1 + 1), std::max(rect.mZ1, r.mZ1 + 1) };
+                }
+                overlay.reset(makeHeightfield(grid));
+                const RasterSource window{ main_soup, &codes, main_solids, &cut_soup, &cuts, &leaf_tri };
+                if (!overlay || !rasterisePasses(*overlay, window, rect, grid.walkableClimb, clock))
+                {
+                    result.mError = "rasterize";
+                    return nullptr;
+                }
+                own_column = in_window;
+                if (stats)
+                {
+                    stats->mWindowCells = static_cast<U32>(std::count(in_window.begin(), in_window.end(), 1));
+                    stats->mWindowRect[0] = rect.mX0 - grid.borderSize;
+                    stats->mWindowRect[1] = rect.mZ0 - grid.borderSize;
+                    stats->mWindowRect[2] = rect.mX1 - grid.borderSize;
+                    stats->mWindowRect[3] = rect.mZ1 - grid.borderSize;
                 }
             }
-            soup.add(tris, AREA_GROUND, t.mWater, false);
-        }
-        result.mTriangles = soup.ntris();
-        if (stats)
-        {
-            stats->mSoupMs = std::chrono::duration<F64, std::milli>(std::chrono::steady_clock::now() - started).count();
-        }
-        if (soup.ntris() == 0)
-        {
-            result.mStatus = TileBuildResult::EMPTY;
-            return result;
-        }
-        if (stats)
-        {
-            // Each excluded range's box, two cells wider, over the tile's cells.
-            const S32 n = static_cast<S32>(input.mTileSize / input.mCell);
-            const F32 x0 = input.mTileX * input.mTileSize, y0 = input.mTileY * input.mTileSize;
-            std::vector<U8> window(static_cast<size_t>(n) * n, 0);
-            for (const Excluded& e : excluded)
+            CropView view(cfg, inset);
+            view.point(hf, overlay.get(), &own_column);
+
+            // Both bridge lists off the unbridged views. A column whose lists
+            // differ gets a copy of its own for AVATAR, so neither view lays the
+            // other's bridges.
+            const std::vector<Bridge> top_bridges = findBridges(hf, grid.walkableClimb, 1);
+            const std::vector<Bridge> avatar_bridges = findBridges(view.mHf, cfg.walkableClimb, AREA_CODE_BASE);
             {
-                F32 lo[3] = { FLT_MAX, FLT_MAX, FLT_MAX }, hi[3] = { -FLT_MAX, -FLT_MAX, -FLT_MAX };
-                for (S32 t = e.mBegin * 3; t < e.mEnd * 3; ++t)
+                const auto column = [&](const Bridge& b) { return b.mX + b.mZ * hf.width; };
+                std::map<S32, std::vector<Bridge>> by_top, by_avatar;
+                for (const Bridge& b : top_bridges)
                 {
-                    const F32* v = &soup.mVerts[soup.mTris[t] * 3];
-                    for (S32 k = 0; k < 3; ++k)
+                    by_top[column(b)].push_back(b);
+                }
+                for (Bridge b : avatar_bridges)
+                {
+                    b.mX += inset;
+                    b.mZ += inset;
+                    by_avatar[column(b)].push_back(b);
+                }
+                std::vector<S32> differ;
+                for (const auto& [c, list] : by_avatar)
+                {
+                    const auto it = by_top.find(c);
+                    if (it == by_top.end() || it->second != list)
                     {
-                        lo[k] = llmin(lo[k], v[k]);
-                        hi[k] = llmax(hi[k], v[k]);
+                        differ.push_back(c);
                     }
                 }
-                const S32 ix0 = std::max(0, static_cast<S32>(std::floor((lo[2] - x0) / input.mCell)) - 2);
-                const S32 ix1 = std::min(n, static_cast<S32>(std::ceil((hi[2] - x0) / input.mCell)) + 2);
-                const S32 iy0 = std::max(0, static_cast<S32>(std::floor((lo[0] - y0) / input.mCell)) - 2);
-                const S32 iy1 = std::min(n, static_cast<S32>(std::ceil((hi[0] - y0) / input.mCell)) + 2);
-                for (S32 iy = iy0; iy < iy1; ++iy)
+                for (const auto& [c, list] : by_top)
                 {
-                    for (S32 ix = ix0; ix < ix1; ++ix)
+                    const S32 x = c % hf.width - inset, z = c / hf.width - inset;
+                    if (!by_avatar.count(c) && x >= 0 && z >= 0 && x < cfg.width && z < cfg.height)
                     {
-                        window[ix + iy * n] = 1;
+                        differ.push_back(c);
+                    }
+                }
+                if (!differ.empty() && !overlay)
+                {
+                    overlay.reset(makeHeightfield(grid));
+                    if (!overlay)
+                    {
+                        result.mError = "heightfield";
+                        return nullptr;
+                    }
+                }
+                if (own_column.empty() && !differ.empty())
+                {
+                    own_column.assign(columns, 0);
+                }
+                for (const S32 c : differ)
+                {
+                    if (!own_column[c])
+                    {
+                        own_column[c] = 1;
+                        overlay->spans[c] = nullptr;
+                        copyColumn(hf, *overlay, c % hf.width, c / hf.width);
+                    }
+                }
+                for (const auto& [c, list] : by_avatar)
+                {
+                    if (!own_column.empty() && own_column[c])
+                    {
+                        addBridges(*overlay, list, cfg.walkableClimb);
+                    }
+                }
+                addBridges(hf, top_bridges, grid.walkableClimb);
+            }
+            if (astats)
+            {
+                astats->mBridges = static_cast<U32>(avatar_bridges.size());
+            }
+            if (tstats)
+            {
+                tstats->mBridges = static_cast<U32>(top_bridges.size());
+            }
+            if (stats)
+            {
+                // The lists against each other over the cells AVATAR reads.
+                std::vector<Bridge> top_in;
+                for (const Bridge& b : top_bridges)
+                {
+                    const S32 x = b.mX - inset, z = b.mZ - inset;
+                    if (x > 0 && z > 0 && x + 1 < cfg.width && z + 1 < cfg.height)
+                    {
+                        top_in.push_back(b);
+                    }
+                }
+                std::vector<Bridge> avatar_in = avatar_bridges;
+                for (Bridge& b : avatar_in)
+                {
+                    b.mX += inset;
+                    b.mZ += inset;
+                }
+                stats->mTopOnlyBridges = bridgesMissing(top_in, avatar_in);
+                stats->mAvatarOnlyBridges = bridgesMissing(avatar_in, top_in);
+                stats->mOwnColumns = static_cast<U32>(std::count(own_column.begin(), own_column.end(), 1));
+            }
+            clock.lap(ClassBuildStats::BRIDGES);
+            cullUnderground(hf, input.mTerrain);
+            if (overlay)
+            {
+                cullUnderground(*overlay, input.mTerrain);
+            }
+            clock.lap(ClassBuildStats::CULL);
+
+            // The air's filters first, kept aside, then AVATAR's over the same spans.
+            const bool top_pass = input.mAir || input.mRunoff;
+            AreaSnapshot unfiltered, top_areas, top_ledges;
+            if (top_pass)
+            {
+                StageClock top_clock(tstats ? tstats->mMs : nullptr);
+                if (tstats)
+                {
+                    tstats->mBuilt = true;
+                }
+                unfiltered.take(hf);
+                filterSpans(hf, tp, grid.ch, grid.cs, input.mRunoff ? &top_ledges : nullptr);
+                top_clock.lap(ClassBuildStats::FILTERS);
+                if (tstats)
+                {
+                    tstats->mHfHash = hashHeightfield(hf, 0, 0, hf.width, hf.height, {});
+                    tstats->mHfAreaHash = hashHeightfield(hf, 0, 0, hf.width, hf.height, real);
+                    top_clock.restart();
+                }
+                top_areas.take(hf);
+                unfiltered.restore(hf);
+                top_clock.lap(ClassBuildStats::FILTERS);
+                clock.restart();
+            }
+            view.point(hf, overlay.get(), &own_column);
+            maskTopOnly(view.mHf);
+            filterSpans(view.mHf, ap, cfg.ch, cfg.cs);
+            clock.lap(ClassBuildStats::FILTERS);
+            std::vector<U8> code_lut;
+            if (astats)
+            {
+                code_lut.resize(AREA_CODE_MAX + 1);
+                for (S32 a = 0; a <= AREA_CODE_MAX; ++a)
+                {
+                    code_lut[a] = static_cast<U8>(a >= AREA_CODE_BASE ? a - AREA_TOP_ONLY : 0);
+                }
+                astats->mHfHash = hashHeightfield(view.mHf, 0, 0, cfg.width, cfg.height, {});
+                astats->mHfAreaHash = hashHeightfield(view.mHf, 0, 0, cfg.width, cfg.height, code_lut);
+                clock.restart();
+            }
+
+            mem.chf = rcAllocCompactHeightfield();
+            {
+                SK_NAV_ZONE("nav.build.compact");
+                if (!rcBuildCompactHeightfield(&ctx, cfg.walkableHeight, cfg.walkableClimb, view.mHf, *mem.chf))
+                {
+                    result.mError = "compact";
+                    return nullptr;
+                }
+            }
+            clock.lap(ClassBuildStats::COMPACT);
+            // Which of the raster's spans AVATAR stands on, for the air: its own
+            // where it shares the span, else a span of its own column at that top.
+            SpanFlags avatar_floor;
+            if (top_pass)
+            {
+                avatar_floor.mStart.assign(1, 0);
+                for (S32 c = 0; c < hf.width * hf.height; ++c)
+                {
+                    const S32 x = c % hf.width - inset, z = c / hf.width - inset;
+                    const bool inside = x >= 0 && z >= 0 && x < cfg.width && z < cfg.height;
+                    const bool own = inside && !own_column.empty() && own_column[c];
+                    for (const rcSpan* s = hf.spans[c]; s; s = s->next)
+                    {
+                        bool walk = inside && !own && s->area != RC_NULL_AREA;
+                        for (const rcSpan* o = own ? overlay->spans[c] : nullptr; o && !walk; o = o->next)
+                        {
+                            walk = o->smax == s->smax && o->area != RC_NULL_AREA;
+                        }
+                        avatar_floor.mFlags.push_back(walk ? AirGap::AVATAR_FLOOR : 0);
+                    }
+                    avatar_floor.mStart.push_back(static_cast<U32>(avatar_floor.mFlags.size()));
+                }
+                clock.restart();
+            }
+            // Faces off AVATAR's view with the window's columns back in, their
+            // areas the air's: the faces of every solid, door leaves included.
+            if (input.mWallFaces)
+            {
+                if (!in_window.empty())
+                {
+                    if (top_pass)
+                    {
+                        top_areas.restore(hf, &in_window);
+                    }
+                    std::vector<U8> faces_own = own_column;
+                    for (size_t c = 0; c < columns; ++c)
+                    {
+                        faces_own[c] = own_column[c] && !in_window[c];
+                    }
+                    view.point(hf, overlay.get(), &faces_own);
+                }
+                extractWallFaces(view.mHf, cfg.borderSize, input.mWallMinHeight, result.mFaces, real.data());
+                if (input.mFaceOffsets)
+                {
+                    alignWallFaces(result.mFaces, main_soup->mVerts.data(), main_soup->mTris.data(), main_soup->ntris(), cfg.cs, cfg.ch);
+                }
+                view.point(hf, overlay.get(), &own_column);
+            }
+            if (top_pass)
+            {
+                top_areas.restore(hf);
+            }
+            clock.lap(ClassBuildStats::WALLS);
+
+            // The tops as rasterised: the air's gaps sit over them, not over the floor a kerb is lowered to.
+            std::vector<U16> tops;
+            if (input.mAir)
+            {
+                tops.resize(static_cast<size_t>(mem.chf->spanCount));
+                for (S32 i = 0; i < mem.chf->spanCount; ++i)
+                {
+                    tops[i] = static_cast<U16>(mem.chf->spans[i].y);
+                }
+            }
+            // The air's padded gaps, read here so the offsets reach the tile's edge columns; the air reuses them.
+            AirGrid padded_air;
+            std::vector<FaceOffset> padded_faces;
+            const S32 air_pad = std::clamp(input.mAirPad, 0, grid.borderSize);
+            if (input.mAir && input.mFaceOffsets)
+            {
+                StageClock top_clock(tstats ? tstats->mMs : nullptr);
+                extractAir(hf, grid.borderSize - air_pad, padded_air, real.data(), &avatar_floor);
+                foldSlivers(padded_air, static_cast<S32>(std::ceil(input.mAirMinGap / grid.ch)));
+                computeFaceOffsets(padded_air, main_soup->mVerts.data(), main_soup->mTris.data(), main_soup->ntris(), grid.walkableClimb,
+                                   padded_faces, stats ? &stats->mFaceOffsets : nullptr, stats ? stats->mFaceTraceEvery : 0,
+                                   stats ? &stats->mFaceTrace : nullptr);
+                top_clock.lap(ClassBuildStats::AIR);
+                clock.restart();
+            }
+            const S32 padded_width = padded_air.mWidth, padded_height = padded_air.mHeight;
+            flattenNarrowSteps(*mem.chf, 2 * cfg.walkableRadius, cfg.walkableClimb);
+            {
+                SK_NAV_ZONE("nav.build.erode");
+                if (cfg.walkableRadius > 0 && !rcErodeWalkableArea(&ctx, cfg.walkableRadius, *mem.chf))
+                {
+                    result.mError = "erode";
+                    return nullptr;
+                }
+            }
+            clock.lap(ClassBuildStats::ERODE);
+            if (input.mPartition == Partition::SLOPE)
+            {
+                mergeFragments(*mem.chf, real, flights);
+                clock.lap(ClassBuildStats::REGIONS);
+                if (astats)
+                {
+                    astats->mChfHash = hashCompact(*mem.chf, code_lut);
+                    clock.restart();
+                }
+            }
+
+            // The air off the raster with the air's areas, marked with the flights
+            // still standing on AVATAR's floor, before any polys exist.
+            std::vector<U8> standing(flights.size(), 0);
+            for (size_t f = 0; f < flights.size(); ++f)
+            {
+                standing[f] = flightSurvives(*mem.chf, cfg.borderSize, flights[f], ap.mClimb);
+                // The tile a flight sits in keeps it even if no poly comes of it, so it still joins its floors.
+                flights[f].mEroded = flightHome(*mem.chf, cfg.borderSize, flights[f]);
+            }
+            AirGrid fine;
+            if (input.mAir)
+            {
+                StageClock top_clock(tstats ? tstats->mMs : nullptr);
+                std::vector<Flight> marked;
+                for (size_t f = 0; f < flights.size(); ++f)
+                {
+                    if (standing[f] || flights[f].mEroded)
+                    {
+                        marked.push_back(flights[f]);
+                    }
+                }
+                const S32 overlap = static_cast<S32>(std::ceil(0.5f / grid.ch));
+                result.mAir = buildTileAir(hf, grid.borderSize, input.mAirPad, grid.walkableClimb, overlap,
+                                          static_cast<S32>(std::ceil(input.mAirMinGap / grid.ch)), &marked,
+                                          tstats ? &tstats->mAir : nullptr, real.data(), &avatar_floor, &fine, &padded_air);
+                if (result.mAir && !padded_faces.empty())
+                {
+                    // Not shared yet: the table goes in before the air is published.
+                    auto& air = const_cast<TileAir&>(*result.mAir);
+                    cropFaceOffsets(padded_faces, padded_width, air_pad, air.mWidth, air.mHeight, air.mFaceOffsets);
+                    air.countLive();
+                    if (stats)
+                    {
+                        stats->mFaceOffsets.mEntries += static_cast<U32>(air.mFaceOffsets.size());
+                    }
+                }
+                top_clock.lap(ClassBuildStats::AIR);
+                if (input.mFineAir && result.mAir)
+                {
+                    result.mFineAir = fineAirOf(input, grid, source, tp, real, fine, stats);
+                }
+                clock.restart();
+            }
+            // Where the air's floors end over a drop, and the run-off down them.
+            if (input.mRunoff && top_pass)
+            {
+                // Off the floors before the ledge filter: a roof's rim over a long
+                // drop is where weather runs off, though the filter takes it.
+                StageClock top_clock(tstats ? tstats->mMs : nullptr);
+                top_ledges.restore(hf);
+                extractRunoff(hf, grid.borderSize, grid.walkableClimb, static_cast<S32>(std::ceil(tp.mHeight / grid.ch)), input.mRunoffMax,
+                              input.mDropSpacing, result.mLedges, result.mRunoff);
+                top_clock.lap(ClassBuildStats::EDGES);
+                clock.restart();
+            }
+
+            // Past the air's radius the spaces still need air: the tile again at the coarse cell, in this tile's cells.
+            TileAirPtr coarse;
+            if (!input.mAir && input.mCoarseAir)
+            {
+                const auto coarse_started = std::chrono::steady_clock::now();
+                coarse = coarseAirOf(input, ts);
+                if (stats)
+                {
+                    stats->mCoarseAirMs = std::chrono::duration<F64, std::milli>(std::chrono::steady_clock::now() - coarse_started).count();
+                }
+                clock.restart();
+            }
+
+            // What the polygons are built from, kept; the heightfields go.
+            auto raster = std::make_shared<TileRaster>();
+            takeEdgeField(view.mHf, raster->mEdges);
+            raster->mReal = std::move(real);
+            raster->mFlights = std::move(flights);
+            raster->mStanding = std::move(standing);
+            raster->mSolid = std::move(solid);
+            if (result.mAir)
+            {
+                spanGaps(*mem.chf, cfg.borderSize, fine, *result.mAir, raster->mSpanGap, &tops);
+                raster->mAir = result.mAir;
+                if (stats)
+                {
+                    // AVATAR's floors the air has no gap over: under door leaves, in columns of AVATAR's own, or neither.
+                    const rcCompactHeightfield& chf = *mem.chf;
+                    for (S32 z = cfg.borderSize; z < chf.height - cfg.borderSize; ++z)
+                    {
+                        for (S32 x = cfg.borderSize; x < chf.width - cfg.borderSize; ++x)
+                        {
+                            const rcCompactCell& cell = chf.cells[x + z * chf.width];
+                            const size_t c = static_cast<size_t>(x + inset) + static_cast<size_t>(z + inset) * hf.width;
+                            for (U32 i = cell.index, n = cell.index + cell.count; i < n; ++i)
+                            {
+                                if (chf.areas[i] == RC_NULL_AREA)
+                                {
+                                    continue;
+                                }
+                                ++stats->mSpanGapSpans;
+                                if (raster->mSpanGap[i] != SPAN_NO_GAP)
+                                {
+                                    continue;
+                                }
+                                ++stats->mSpanGapMisses;
+                                if (!in_window.empty() && in_window[c])
+                                {
+                                    ++stats->mSpanGapWindowMisses;
+                                }
+                                else if (!own_column.empty() && own_column[c])
+                                {
+                                    ++stats->mSpanGapOwnMisses;
+                                }
+                            }
+                        }
                     }
                 }
             }
-            stats->mExcludedRecords = static_cast<U32>(excluded.size());
-            stats->mExcludeWindowCells = static_cast<U32>(std::count(window.begin(), window.end(), 1));
-            stats->mTileCells = static_cast<U32>(window.size());
+            if (coarse)
+            {
+                const S32 z_shift = static_cast<S32>(std::lround((mem.chf->bmin[1] - coarse->mOrigin.mV[VZ]) / coarse->mUnit));
+                leafSpanGaps(*mem.chf, cfg.borderSize, *coarse, z_shift, static_cast<S32>(std::lround(COARSE_AIR_M / input.mCell)), raster->mSpanGap);
+                raster->mAir = coarse;
+                result.mAir = coarse;
+                result.mAirBuilt = true;
+                result.mCoarseAir = true;
+            }
+            raster->mChf.reset(mem.chf);
+            mem.chf = nullptr;
+            if (astats)
+            {
+                measureHeightfield(hf, *astats);
+                if (overlay)
+                {
+                    ClassBuildStats extra;
+                    measureHeightfield(*overlay, extra);
+                    astats->mHfSpans += extra.mHfSpans;
+                    astats->mHfBytes += extra.mHfBytes;
+                }
+            }
+            result.mMillis = std::chrono::duration<F32, std::milli>(std::chrono::steady_clock::now() - started).count();
+            if (stats)
+            {
+                stats->mExcludeMs = result.mExcludeMillis;
+                stats->mRasterMs = result.mMillis;
+                stats->mTotalMs = result.mMillis;
+                stats->mHeldChfBytes = raster->chfBytes();
+                stats->mHeldEdgeBytes = raster->mEdges.bytes();
+                stats->mHeldSpanGapBytes = raster->mSpanGap.capacity() * sizeof(U32);
+                stats->mHeldBytes = raster->bytes();
+            }
+            return raster;
         }
 
-        // Wall faces come from one class's heightfield, chosen by the input
-        // alone: the first that leaves nothing out, else WEATHER, which keeps
-        // door leaves and cars, so identical tiles give identical faces.
-        // Without WEATHER the first built class stands in, so a tile keeps its
-        // faces though they may then lack the door leaves it leaves out.
-        S32 face_cls = -1;
-        for (S32 cls = 0; cls < NUM_CLASSES && face_cls < 0; ++cls)
+        TileAirPtr coarseAirOf(const TileBuildInput& input, const TileSoup& ts)
         {
-            const U8 bit = static_cast<U8>(1u << cls);
-            if (input.mClasses[cls] && std::none_of(excluded.begin(), excluded.end(), [bit](const Excluded& e) { return (e.mClasses & bit) != 0; }))
+            const S32 factor = static_cast<S32>(std::lround(COARSE_AIR_M / std::max(input.mCell, 1e-3f)));
+            if (factor < 1 || (factor & (factor - 1)) || std::fabs(factor * input.mCell - COARSE_AIR_M) > 1e-4f)
             {
-                face_cls = cls;
+                return nullptr;
             }
+            // The soup and its codes do not depend on the cell: the partition's slope is pinned to the fine tile's.
+            TileBuildInput c = input;
+            c.mCell = COARSE_AIR_M;
+            c.mAir = true;
+            c.mCoarseAir = false;
+            c.mHoldSolid = false;
+            c.mAirPad = airPadCells(c.mCell);
+            c.mPartitionSlope = partitionSlope(input);
+            c.mWallFaces = false;
+            c.mRunoff = false;
+            for (bool& e : c.mEdges)
+            {
+                e = false;
+            }
+            TileBuildResult cr;
+            cr.mAirBuilt = true;
+            return rasteriseSoup(c, ts, cr, nullptr, std::chrono::steady_clock::now()) && cr.mAir ? upsampleAir(*cr.mAir, factor) : nullptr;
         }
-        if (face_cls < 0)
+    }
+
+    TileRasterPtr rasteriseTile(const TileBuildInput& input, TileBuildResult& result, TileBuildStats* stats)
+    {
+        SK_NAV_ZONE("nav.build.rasterise");
+        const auto started = std::chrono::steady_clock::now();
+        // An empty tile has no air to keep, which is an answer too.
+        result.mAirBuilt = input.mAir;
+        TileSoup ts;
+        // A tile left at logout stops between its stages: the pool drains before it joins.
+        if (!soupTile(input, result, stats, started, ts) || LLApp::isExiting())
         {
-            face_cls = static_cast<S32>(AgentClass::WEATHER);
-            for (S32 cls = 0; cls < NUM_CLASSES && !input.mClasses[face_cls]; ++cls)
-            {
-                face_cls = input.mClasses[cls] ? cls : face_cls;
-            }
+            return nullptr;
+        }
+        return rasteriseSoup(input, ts, result, stats, started);
+    }
+
+    const char* updatePathName(UpdatePath path)
+    {
+        static const char* names[] = { "local", "no_solid", "z_range", "settings", "order", "codes", "empty" };
+        const size_t i = static_cast<size_t>(path);
+        return i < sizeof(names) / sizeof(names[0]) ? names[i] : "";
+    }
+
+    TileRasterPtr updateTile(const TileBuildInput& input, const TileRaster& held, TileBuildResult& result, TileBuildStats* stats, TileUpdate* update)
+    {
+        TileUpdate local;
+        TileUpdate& u = update ? *update : local;
+        u = TileUpdate();
+        const SolidRaster* solid = held.mSolid.get();
+        if (!solid || solid->mInput.mHoldSolid != input.mHoldSolid)
+        {
+            u.mPath = UpdatePath::NO_SOLID;
+            return rasteriseTile(input, result, stats);
+        }
+        if (input.mZMin != solid->mInput.mZMin || input.mZMax != solid->mInput.mZMax)
+        {
+            u.mPath = UpdatePath::Z_RANGE;
+            return rasteriseTile(input, result, stats);
+        }
+        if (!sameSettings(input, solid->mInput))
+        {
+            u.mPath = UpdatePath::SETTINGS;
+            return rasteriseTile(input, result, stats);
+        }
+        const auto started = std::chrono::steady_clock::now();
+        result.mAirBuilt = input.mAir;
+        TileSoup ts;
+        if (!soupTile(input, result, stats, started, ts))
+        {
+            u.mPath = UpdatePath::EMPTY;
+            return nullptr;
         }
 
-        rcContext ctx(false);
-        std::unique_ptr<SlopePartition> shared_slopes;
-        F32 shared_climb = 0.f;
-        for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
+        // What moved: the records and cuts only one input holds.
+        std::unordered_set<const Record*> before, after;
+        for (const auto* list : { &solid->mInput.mRecords, &solid->mInput.mCuts })
         {
-            if (!input.mClasses[cls])
+            for (const RecordPtr& r : *list)
+            {
+                before.insert(r.get());
+            }
+        }
+        for (const auto* list : { &input.mRecords, &input.mCuts })
+        {
+            for (const RecordPtr& r : *list)
+            {
+                after.insert(r.get());
+            }
+        }
+        std::vector<const Record*> moved;
+        for (const auto* list : { &solid->mInput.mRecords, &solid->mInput.mCuts })
+        {
+            for (const RecordPtr& r : *list)
+            {
+                if (r && !after.count(r.get()))
+                {
+                    moved.push_back(r.get());
+                }
+            }
+        }
+        for (const auto* list : { &input.mRecords, &input.mCuts })
+        {
+            for (const RecordPtr& r : *list)
+            {
+                if (r && !before.count(r.get()))
+                {
+                    moved.push_back(r.get());
+                }
+            }
+        }
+        u.mChanged = static_cast<U32>(moved.size());
+
+        // Every record that stayed rasterises as before only in the same order, with the same triangles and codes.
+        const std::vector<std::pair<RecordPtr, U32>> runs = mainRuns(ts);
+        size_t i = 0, j = 0, at_old = 0, at_new = 0;
+        u.mPath = UpdatePath::LOCAL;
+        while (u.mPath == UpdatePath::LOCAL)
+        {
+            while (i < solid->mRuns.size() && solid->mRuns[i].first && !after.count(solid->mRuns[i].first.get()))
+            {
+                at_old += solid->mRuns[i++].second;
+            }
+            while (j < runs.size() && runs[j].first && !before.count(runs[j].first.get()))
+            {
+                at_new += runs[j++].second;
+            }
+            if (i == solid->mRuns.size() || j == runs.size())
+            {
+                u.mPath = i == solid->mRuns.size() && j == runs.size() ? UpdatePath::LOCAL : UpdatePath::ORDER;
+                break;
+            }
+            const U32 n = runs[j].second;
+            if (solid->mRuns[i].first != runs[j].first || solid->mRuns[i].second != n)
+            {
+                u.mPath = UpdatePath::ORDER;
+            }
+            else if (!std::equal(solid->mCodes.begin() + at_old, solid->mCodes.begin() + at_old + n, ts.mCodes.begin() + at_new))
+            {
+                u.mPath = UpdatePath::CODES;
+            }
+            at_old += n;
+            at_new += n;
+            ++i;
+            ++j;
+            if (i == solid->mRuns.size() && j == runs.size())
+            {
+                break;
+            }
+        }
+        if (u.mPath != UpdatePath::LOCAL)
+        {
+            return rasteriseSoup(input, ts, result, stats, started);
+        }
+
+        // The window: every cell a moved record's triangles touch, a cell wider each way as cellsOf takes them.
+        const rcConfig grid = rasterGrid(input);
+        CellRect window{ grid.width, grid.height, 0, 0 };
+        std::vector<LLVector3> tris;
+        for (const Record* r : moved)
+        {
+            tris.clear();
+            emitRecord(*r, input.mMeshOrigin, tris);
+            if (tris.empty())
             {
                 continue;
             }
-            const ClassParams& p = input.mParams[cls];
-            ClassBuildStats* cstats = stats ? &stats->mClass[cls] : nullptr;
-            if (cstats)
+            F32 lo[3] = { FLT_MAX, FLT_MAX, FLT_MAX }, hi[3] = { -FLT_MAX, -FLT_MAX, -FLT_MAX };
+            for (const LLVector3& p : tris)
             {
-                cstats->mBuilt = true;
+                F32 v[3];
+                toRecast(p, v);
+                for (S32 k = 0; k < 3; ++k)
+                {
+                    lo[k] = std::min(lo[k], v[k]);
+                    hi[k] = std::max(hi[k], v[k]);
+                }
             }
-            rcConfig cfg;
-            std::memset(&cfg, 0, sizeof(cfg));
-            cfg.cs = input.mCell;
-            cfg.ch = input.mCell;
-            cfg.walkableSlopeAngle = p.mSlope;
-            cfg.walkableHeight = static_cast<int>(std::ceil(p.mHeight / cfg.ch));
-            cfg.walkableClimb = static_cast<int>(std::floor(p.mClimb / cfg.ch));
-            cfg.walkableRadius = static_cast<int>(std::ceil(p.mRadius / cfg.cs));
-            cfg.maxEdgeLen = static_cast<int>(12.f / cfg.cs);
-            cfg.maxSimplificationError = 1.3f;
-            cfg.minRegionArea = 8 * 8;
-            cfg.mergeRegionArea = 20 * 20;
-            cfg.maxVertsPerPoly = 6;
-            cfg.detailSampleDist = input.mDetailSampleCells * cfg.cs;
-            cfg.detailSampleMaxError = input.mDetailMaxErrorCells * cfg.ch;
-            cfg.borderSize = borderCells(p.mRadius, cfg.cs);
-            const bool air = input.mAir && cls == static_cast<S32>(AgentClass::WEATHER);
-            if (air)
-            {
-                cfg.borderSize = std::max(cfg.borderSize, input.mAirPad);
-            }
-            cfg.tileSize = static_cast<int>(input.mTileSize / cfg.cs);
-            cfg.width = cfg.tileSize + cfg.borderSize * 2;
-            cfg.height = cfg.width;
+            window.mX0 = std::min(window.mX0, static_cast<S32>(std::floor((lo[0] - grid.bmin[0]) / grid.cs)) - 1);
+            window.mZ0 = std::min(window.mZ0, static_cast<S32>(std::floor((lo[2] - grid.bmin[2]) / grid.cs)) - 1);
+            window.mX1 = std::max(window.mX1, static_cast<S32>(std::floor((hi[0] - grid.bmin[0]) / grid.cs)) + 2);
+            window.mZ1 = std::max(window.mZ1, static_cast<S32>(std::floor((hi[2] - grid.bmin[2]) / grid.cs)) + 2);
+        }
+        window = { std::max(window.mX0, 0), std::max(window.mZ0, 0), std::min(window.mX1, grid.width), std::min(window.mZ1, grid.height) };
+        if (window.mX0 >= window.mX1 || window.mZ0 >= window.mZ1)
+        {
+            window = CellRect();
+        }
+        u.mWindow[0] = window.mX0;
+        u.mWindow[1] = window.mZ0;
+        u.mWindow[2] = window.mX1;
+        u.mWindow[3] = window.mZ1;
+        u.mWindowCells = static_cast<U32>((window.mX1 - window.mX0) * (window.mZ1 - window.mZ0));
+        return rasteriseSoup(input, ts, result, stats, started, solid, &window);
+    }
 
-            // The tile in Recast space: x = SL y, z = SL x, y = SL z.
-            const F32 x0 = input.mTileX * input.mTileSize, y0 = input.mTileY * input.mTileSize;
-            cfg.bmin[0] = y0 - cfg.borderSize * cfg.cs;
-            // Snapped to the cell grid, not to this tile's own lowest point:
-            // heights quantise to ch from bmin, so two tiles that started
-            // from different z put the same floor on different spans, and the
-            // two sides of a seam end up at slightly different heights.
-            cfg.bmin[1] = std::floor((input.mZMin - cfg.ch) / cfg.ch) * cfg.ch;
-            cfg.bmin[2] = x0 - cfg.borderSize * cfg.cs;
-            cfg.bmax[0] = y0 + input.mTileSize + cfg.borderSize * cfg.cs;
-            cfg.bmax[1] = std::ceil((input.mZMax + cfg.ch) / cfg.ch) * cfg.ch;
-            cfg.bmax[2] = x0 + input.mTileSize + cfg.borderSize * cfg.cs;
+    bool sameRaster(const TileRaster& a, const TileRaster& b, std::string* why)
+    {
+        const auto differ = [why](const char* what) {
+            if (why)
+            {
+                *why = what;
+            }
+            return false;
+        };
+        if (!a.mChf != !b.mChf)
+        {
+            return differ("chf");
+        }
+        if (a.mChf)
+        {
+            const rcCompactHeightfield& x = *a.mChf;
+            const rcCompactHeightfield& y = *b.mChf;
+            if (x.width != y.width || x.height != y.height || x.spanCount != y.spanCount || x.borderSize != y.borderSize ||
+                x.maxDistance != y.maxDistance || x.maxRegions != y.maxRegions || std::memcmp(x.bmin, y.bmin, sizeof(x.bmin)) ||
+                std::memcmp(x.bmax, y.bmax, sizeof(x.bmax)))
+            {
+                return differ("chf header");
+            }
+            const size_t cells = static_cast<size_t>(x.width) * x.height, spans = static_cast<size_t>(x.spanCount);
+            if (std::memcmp(x.cells, y.cells, cells * sizeof(rcCompactCell)) || std::memcmp(x.spans, y.spans, spans * sizeof(rcCompactSpan)))
+            {
+                return differ("chf spans");
+            }
+            if (std::memcmp(x.areas, y.areas, spans))
+            {
+                return differ("chf areas");
+            }
+            if (!x.dist != !y.dist || (x.dist && std::memcmp(x.dist, y.dist, spans * sizeof(unsigned short))))
+            {
+                return differ("chf distances");
+            }
+        }
+        if (a.mEdges.mWidth != b.mEdges.mWidth || a.mEdges.mHeight != b.mEdges.mHeight || a.mEdges.mStart != b.mEdges.mStart ||
+            a.mEdges.mRuns != b.mEdges.mRuns)
+        {
+            return differ("edge field");
+        }
+        if (a.mReal != b.mReal)
+        {
+            return differ("codes");
+        }
+        if (a.mFlights.size() != b.mFlights.size() || a.mStanding != b.mStanding)
+        {
+            return differ("flights");
+        }
+        for (size_t f = 0; f < a.mFlights.size(); ++f)
+        {
+            const Flight& x = a.mFlights[f];
+            const Flight& y = b.mFlights[f];
+            if (x.mKey != y.mKey || x.mBottom != y.mBottom || x.mTop != y.mTop || x.mRise != y.mRise || x.mRun != y.mRun || x.mCodes != y.mCodes ||
+                x.mFootprint != y.mFootprint || x.mKind != y.mKind || x.mRule != y.mRule || x.mTreads != y.mTreads)
+            {
+                return differ("flight");
+            }
+        }
+        if (a.mSpanGap != b.mSpanGap)
+        {
+            return differ("span gaps");
+        }
+        return true;
+    }
 
-            Freed mem;
-            mem.hf = rcAllocHeightfield();
-            if (!rcCreateHeightfield(&ctx, *mem.hf, cfg.width, cfg.height, cfg.bmin, cfg.bmax, cfg.cs, cfg.ch))
+    void polygoniseTile(const TileBuildInput& input, const TileRaster& raster, TileBuildResult& result, TileBuildStats* stats,
+                        const TileStampInput* stamp_input, const TileStamp* stamp)
+    {
+        SK_NAV_ZONE("nav.build.polygonise");
+        const auto started = std::chrono::steady_clock::now();
+        rcContext ctx(false);
+        const S32 avatar = static_cast<S32>(AgentClass::AVATAR);
+        const ClassParams& ap = input.mParams[avatar];
+        ClassBuildStats* astats = stats ? &stats->mClass[avatar] : nullptr;
+        StageClock clock(astats ? astats->mMs : nullptr);
+        const rcConfig cfg = tileConfig(input, ap, borderCells(ap.mRadius, input.mCell));
+        const std::vector<U8>& real = raster.mReal;
+        const std::vector<U8>& standing = raster.mStanding;
+        std::vector<Flight> flights = raster.mFlights;
+        const auto finish = [&]() {
+            result.mMillis += std::chrono::duration<F32, std::milli>(std::chrono::steady_clock::now() - started).count();
+            if (stats)
             {
-                result.mError = "heightfield";
-                return result;
+                stats->mPolyMs = std::chrono::duration<F64, std::milli>(std::chrono::steady_clock::now() - started).count();
+                stats->mTotalMs = stats->mRasterMs + stats->mPolyMs;
             }
-            // A class that builds without some record gets a soup of its own;
-            // every other class shares the one gathered above.
-            const Soup* class_soup = &soup;
-            const std::vector<std::pair<S32, S32>>* class_solids = &solids;
-            Soup filtered;
-            std::vector<std::pair<S32, S32>> filtered_solids;
-            const U8 bit = static_cast<U8>(1u << cls);
-            if (std::any_of(excluded.begin(), excluded.end(), [bit](const Excluded& e) { return (e.mClasses & bit) != 0; }))
-            {
-                const auto filter_started = std::chrono::steady_clock::now();
-                filterSoup(soup, solids, excluded, bit, filtered, filtered_solids);
-                class_soup = &filtered;
-                class_solids = &filtered_solids;
-                result.mExcludeMillis += std::chrono::duration<F32, std::milli>(std::chrono::steady_clock::now() - filter_started).count();
-            }
-            StageClock clock(cstats ? cstats->mMs : nullptr);
-            std::vector<U8> areas;
-            markWalkable(*class_soup, cfg.walkableSlopeAngle, areas);
-            // The slope partition splits the soup into regions before it is
-            // rasterised: each walkable triangle goes in as its region's code
-            // and comes back out as its area once the poly mesh is built.
-            SlopePartition slopes;
-            if (input.mPartition == Partition::SLOPE)
-            {
-                const auto partition = [&](const Soup& from, const std::vector<U8>& walkable) {
-                    std::vector<LLVector3> sl(from.nverts());
-                    for (S32 v = 0; v < from.nverts(); ++v)
-                    {
-                        sl[v] = fromRecast(&from.mVerts[v * 3]);
-                    }
-                    return partitionSlopes(sl, from.mTris, walkable, from.mTwoSided, AREA_OBJECT, p.mClimb, 63, from.mCues);
-                };
-                if (class_soup == &soup)
-                {
-                    // Classes on the shared soup share one partition, taken at
-                    // the most permissive slope of them; each masks out what
-                    // it cannot walk.
-                    if (!shared_slopes || shared_climb != p.mClimb)
-                    {
-                        F32 widest = 0.f;
-                        for (S32 c = 0; c < NUM_CLASSES; ++c)
-                        {
-                            widest = input.mClasses[c] ? llmax(widest, input.mParams[c].mSlope) : widest;
-                        }
-                        std::vector<U8> walkable;
-                        markWalkable(soup, widest, walkable);
-                        shared_slopes = std::make_unique<SlopePartition>(partition(soup, walkable));
-                        shared_climb = p.mClimb;
-                        if (stats)
-                        {
-                            std::vector<U8> used(256, 0);
-                            for (const U8 code : shared_slopes->mCodes)
-                            {
-                                used[code] = 1;
-                            }
-                            used[0] = 0;
-                            stats->mSharedCodes = static_cast<U32>(std::count(used.begin(), used.end(), 1));
-                        }
-                    }
-                    slopes = *shared_slopes;
-                    for (size_t t = 0; t < areas.size(); ++t)
-                    {
-                        slopes.mCodes[t] = areas[t] ? slopes.mCodes[t] : 0;
-                    }
-                }
-                else
-                {
-                    slopes = partition(*class_soup, areas);
-                }
-                areas = slopes.mCodes;
-            }
-            if (cstats)
-            {
-                std::vector<U8> used(256, 0);
-                for (const U8 code : areas)
-                {
-                    used[code] = 1;
-                }
-                used[0] = 0;
-                cstats->mCodes = static_cast<U32>(std::count(used.begin(), used.end(), 1));
-            }
-            clock.lap(ClassBuildStats::PARTITION);
-            if (!rcRasterizeTriangles(&ctx, class_soup->mVerts.data(), class_soup->nverts(), class_soup->mTris.data(), areas.data(),
-                                      class_soup->ntris(), *mem.hf, cfg.walkableClimb))
-            {
-                result.mError = "rasterize";
-                return result;
-            }
-            clock.lap(ClassBuildStats::RASTERISE);
-            for (const auto& range : *class_solids)
-            {
-                fillSolid(*mem.hf, *class_soup, range.first, range.second, cfg.walkableClimb);
-            }
-            clock.lap(ClassBuildStats::FILL);
-            for (const auto& range : cuts)
-            {
-                cutVolume(*mem.hf, cut_soup, range.first, range.second);
-            }
-            clock.lap(ClassBuildStats::CUT);
-            bridgeCrevices(*mem.hf, cfg.walkableClimb, cstats ? &cstats->mBridges : nullptr);
-            clock.lap(ClassBuildStats::BRIDGES);
-            cullUnderground(*mem.hf, input.mTerrain);
-            clock.lap(ClassBuildStats::CULL);
-            // The ledge filter marks a span a ledge when the height range of
-            // its accessible neighbours exceeds the climb it is given, which
-            // reads every slope steeper than atan(climb / two cells) as a
-            // ledge: at 0.75 m of climb that is 72 degrees, below both
-            // classes' slope limits, so it cuts lines and holes out of exactly
-            // the steep ground the class is meant to walk. Give it a climb
-            // that matches the class's own slope, and the rule only fires
-            // beyond the slope limit, where the slope test has already said
-            // no.
-            const F32 ledge_climb = llmax(p.mClimb, 2.f * cfg.cs * std::tan(p.mSlope * DEG_TO_RAD));
-            rcFilterLowHangingWalkableObstacles(&ctx, cfg.walkableClimb, *mem.hf);
-            rcFilterLedgeSpans(&ctx, cfg.walkableHeight, static_cast<int>(std::ceil(ledge_climb / cfg.ch)), *mem.hf);
-            rcFilterWalkableLowHeightSpans(&ctx, cfg.walkableHeight, *mem.hf);
-            clock.lap(ClassBuildStats::FILTERS);
+        };
 
-            mem.chf = rcAllocCompactHeightfield();
-            if (!rcBuildCompactHeightfield(&ctx, cfg.walkableHeight, cfg.walkableClimb, *mem.hf, *mem.chf))
-            {
-                result.mError = "compact";
-                return result;
-            }
-            clock.lap(ClassBuildStats::COMPACT);
-            if (!slopes.mReal.empty())
-            {
-                // the walls and the air read real areas off the heightfield
-                for (S32 c = 0; c < mem.hf->width * mem.hf->height; ++c)
-                {
-                    for (rcSpan* s = mem.hf->spans[c]; s; s = s->next)
-                    {
-                        s->area = slopes.mReal[s->area];
-                    }
-                }
-            }
-            flattenNarrowSteps(*mem.chf, 2 * cfg.walkableRadius, cfg.walkableClimb);
-            if (cfg.walkableRadius > 0 && !rcErodeWalkableArea(&ctx, cfg.walkableRadius, *mem.chf))
-            {
-                result.mError = "erode";
-                return result;
-            }
-            clock.lap(ClassBuildStats::ERODE);
-            bool regions = false;
+        // Regions rewrite the spans and the unfold their areas: a copy, so the raster can polygonise again.
+        Freed mem;
+        mem.chf = raster.mChf ? cloneCompact(*raster.mChf) : nullptr;
+        if (!mem.chf)
+        {
+            result.mError = "compact copy";
+            finish();
+            return;
+        }
+        const bool stamped = stamp_input && stamp && stamp->mSpanCode.size() == static_cast<size_t>(mem.chf->spanCount);
+        if (stamped)
+        {
+            // Each span's palette code: a region grows within one, so within one space.
+            std::memcpy(mem.chf->areas, stamp->mSpanCode.data(), stamp->mSpanCode.size());
+        }
+        bool regions = false;
+        {
+            SK_NAV_ZONE("nav.build.regions");
             switch (input.mPartition)
             {
                 case Partition::SLOPE:
-                    mergeFragments(*mem.chf, slopes.mReal, slopes.mFlights);
                     regions = rcBuildDistanceField(&ctx, *mem.chf) &&
                               rcBuildRegions(&ctx, *mem.chf, cfg.borderSize, cfg.minRegionArea, cfg.mergeRegionArea);
                     break;
@@ -1470,235 +3015,303 @@ namespace sknav
                               rcBuildRegions(&ctx, *mem.chf, cfg.borderSize, cfg.minRegionArea, cfg.mergeRegionArea);
                     break;
             }
-            if (!regions)
-            {
-                result.mError = "regions";
-                return result;
-            }
-            clock.lap(ClassBuildStats::REGIONS);
-            mem.cset = rcAllocContourSet();
-            if (!rcBuildContours(&ctx, *mem.chf, cfg.maxSimplificationError, cfg.maxEdgeLen, *mem.cset))
+        }
+        if (!regions)
+        {
+            result.mError = "regions";
+            finish();
+            return;
+        }
+        clock.lap(ClassBuildStats::REGIONS);
+        mem.cset = rcAllocContourSet();
+        {
+            SK_NAV_ZONE("nav.build.contours");
+            if (!mem.cset || !rcBuildContours(&ctx, *mem.chf, cfg.maxSimplificationError, cfg.maxEdgeLen, *mem.cset))
             {
                 result.mError = "contours";
-                return result;
+                finish();
+                return;
             }
-            clock.lap(ClassBuildStats::CONTOURS);
-            mem.pmesh = rcAllocPolyMesh();
-            if (!rcBuildPolyMesh(&ctx, *mem.cset, cfg.maxVertsPerPoly, *mem.pmesh))
+        }
+        clock.lap(ClassBuildStats::CONTOURS);
+        mem.pmesh = rcAllocPolyMesh();
+        {
+            SK_NAV_ZONE("nav.build.polymesh");
+            if (!mem.pmesh || !rcBuildPolyMesh(&ctx, *mem.cset, cfg.maxVertsPerPoly, *mem.pmesh))
             {
                 result.mError = "polymesh";
-                return result;
+                finish();
+                return;
             }
-            clock.lap(ClassBuildStats::POLYMESH);
-            if (cstats)
+        }
+        clock.lap(ClassBuildStats::POLYMESH);
+        // Refs number a tile's polys in 12 bits: more would alias silently.
+        if (mem.pmesh->npolys > MAX_POLYS_PER_TILE)
+        {
+            result.mPolyOverflow = true;
+            result.mPolys[avatar] = mem.pmesh->npolys;
+            result.mError = "polys over the tile's budget";
+            finish();
+            return;
+        }
+        if (stamped)
+        {
+            stampGeometry(*mem.pmesh, *mem.chf, cfg.borderSize, raster.mSpanGap, *stamp_input, *stamp, result.mStamp);
+            for (S32 i = 0; i < mem.chf->spanCount; ++i)
             {
-                measureHeightfield(*mem.hf, *cstats);
-                cstats->mChfSpans = static_cast<U32>(mem.chf->spanCount);
-                cstats->mChfBytes = static_cast<size_t>(mem.chf->width) * mem.chf->height * sizeof(rcCompactCell) +
-                                    static_cast<size_t>(mem.chf->spanCount) * (sizeof(rcCompactSpan) + 1 + (mem.chf->dist ? 2 : 0));
-                cstats->mWalkableSpans =
-                    static_cast<U32>(mem.chf->spanCount - std::count(mem.chf->areas, mem.chf->areas + mem.chf->spanCount, RC_NULL_AREA));
-                if (cls == static_cast<S32>(AgentClass::AVATAR))
+                mem.chf->areas[i] = stamp->mPalette[mem.chf->areas[i]].mSlope;
+            }
+            for (S32 i = 0; i < mem.pmesh->npolys; ++i)
+            {
+                mem.pmesh->areas[i] = stamp->mPalette[mem.pmesh->areas[i]].mSlope;
+            }
+            clock.lap(ClassBuildStats::STAMP);
+        }
+        if (astats)
+        {
+            astats->mChfSpans = static_cast<U32>(mem.chf->spanCount);
+            astats->mChfBytes = static_cast<size_t>(mem.chf->width) * mem.chf->height * sizeof(rcCompactCell) +
+                                static_cast<size_t>(mem.chf->spanCount) * (sizeof(rcCompactSpan) + 1 + (mem.chf->dist ? 2 : 0));
+            astats->mWalkableSpans = static_cast<U32>(mem.chf->spanCount - std::count(mem.chf->areas, mem.chf->areas + mem.chf->spanCount, RC_NULL_AREA));
+            recordPolySpans(*mem.chf, *mem.pmesh, cfg.borderSize, cfg.tileSize, raster.mSpanGap, *stats);
+            clock.restart();
+        }
+        {
+            // each flight's polys by their code, then unfold the codes:
+            // everything past here reads real areas
+            std::vector<LLVector3> centroids(mem.pmesh->npolys);
+            std::vector<std::vector<LLVector3>> outlines(mem.pmesh->npolys);
+            for (S32 i = 0; i < mem.pmesh->npolys; ++i)
+            {
+                const unsigned short* poly = &mem.pmesh->polys[i * mem.pmesh->nvp * 2];
+                S32 nv = 0;
+                for (; nv < mem.pmesh->nvp && poly[nv] != RC_MESH_NULL_IDX; ++nv)
                 {
-                    recordPolySpans(*mem.chf, *mem.pmesh, cfg.borderSize, cfg.tileSize, *stats);
+                    const unsigned short* v = &mem.pmesh->verts[poly[nv] * 3];
+                    const F32 rc[3] = { mem.pmesh->bmin[0] + v[0] * mem.pmesh->cs, mem.pmesh->bmin[1] + v[1] * mem.pmesh->ch,
+                                        mem.pmesh->bmin[2] + v[2] * mem.pmesh->cs };
+                    centroids[i] += fromRecast(rc);
+                    outlines[i].push_back(fromRecast(rc));
                 }
-                clock.restart();
+                centroids[i] /= static_cast<F32>(llmax(nv, 1));
             }
-            if (!slopes.mReal.empty())
+            std::vector<U64> stood;
+            for (size_t f = 0; f < flights.size(); ++f)
             {
-                // each flight's polys by their code, then unfold the codes:
-                // everything past here reads real areas
-                std::vector<LLVector3> centroids(mem.pmesh->npolys);
-                for (S32 i = 0; i < mem.pmesh->npolys; ++i)
+                if (standing[f])
                 {
-                    const unsigned short* poly = &mem.pmesh->polys[i * mem.pmesh->nvp * 2];
-                    S32 nv = 0;
-                    for (; nv < mem.pmesh->nvp && poly[nv] != RC_MESH_NULL_IDX; ++nv)
+                    stood.push_back(flights[f].mKey);
+                }
+            }
+            mapFlightPolys(flights, centroids, std::vector<U8>(mem.pmesh->areas, mem.pmesh->areas + mem.pmesh->npolys), ap.mClimb);
+            {
+                const rcPolyMesh& pm = *mem.pmesh;
+                // Contours already moved the mesh's corner onto the tile proper.
+                const F32 r0[3] = { pm.bmin[0], pm.bmin[1], pm.bmin[2] }, r1[3] = { pm.bmin[0] + cfg.tileSize * pm.cs, pm.bmin[1], pm.bmin[2] + cfg.tileSize * pm.cs };
+                const LLVector3 c0 = fromRecast(r0), c1 = fromRecast(r1);
+                fitFlightEdges(flights, outlines, ap.mRadius, LLVector2(llmin(c0.mV[VX], c1.mV[VX]), llmin(c0.mV[VY], c1.mV[VY])),
+                               LLVector2(llmax(c0.mV[VX], c1.mV[VX]), llmax(c0.mV[VY], c1.mV[VY])));
+            }
+            if (stats)
+            {
+                // The air's flights against the polys': region removal can take a standing flight's polys.
+                for (const U64 key : stood)
+                {
+                    if (std::none_of(flights.begin(), flights.end(), [&](const Flight& f) { return f.mKey == key; }))
                     {
-                        const unsigned short* v = &mem.pmesh->verts[poly[nv] * 3];
-                        const F32 rc[3] = { mem.pmesh->bmin[0] + v[0] * mem.pmesh->cs, mem.pmesh->bmin[1] + v[1] * mem.pmesh->ch,
-                                            mem.pmesh->bmin[2] + v[2] * mem.pmesh->cs };
-                        centroids[i] += fromRecast(rc);
+                        stats->mFlightStandOnly.push_back(key);
                     }
-                    centroids[i] /= static_cast<F32>(llmax(nv, 1));
                 }
-                mapFlightPolys(slopes.mFlights, centroids, std::vector<U8>(mem.pmesh->areas, mem.pmesh->areas + mem.pmesh->npolys), p.mClimb);
-                result.mFlights[cls] = std::move(slopes.mFlights);
-                for (S32 i = 0; i < mem.chf->spanCount; ++i)
+                for (const Flight& f : flights)
                 {
-                    mem.chf->areas[i] = slopes.mReal[mem.chf->areas[i]];
-                }
-                for (S32 i = 0; i < mem.pmesh->npolys; ++i)
-                {
-                    mem.pmesh->areas[i] = slopes.mReal[mem.pmesh->areas[i]];
+                    if (std::find(stood.begin(), stood.end(), f.mKey) == stood.end())
+                    {
+                        stats->mFlightPolysOnly.push_back(f.mKey);
+                    }
                 }
             }
-            clock.lap(ClassBuildStats::FLIGHTMAP);
-            mem.dmesh = rcAllocPolyMeshDetail();
-            if (!rcBuildPolyMeshDetail(&ctx, *mem.pmesh, *mem.chf, cfg.detailSampleDist, cfg.detailSampleMaxError, *mem.dmesh))
+            result.mFlights[avatar] = std::move(flights);
+            for (S32 i = 0; i < mem.chf->spanCount; ++i)
+            {
+                mem.chf->areas[i] = real[mem.chf->areas[i]];
+            }
+            for (S32 i = 0; i < mem.pmesh->npolys; ++i)
+            {
+                mem.pmesh->areas[i] = real[mem.pmesh->areas[i]];
+            }
+        }
+        clock.lap(ClassBuildStats::FLIGHTMAP);
+        mem.dmesh = rcAllocPolyMeshDetail();
+        {
+            SK_NAV_ZONE("nav.build.detail");
+            if (!mem.dmesh || !rcBuildPolyMeshDetail(&ctx, *mem.pmesh, *mem.chf, cfg.detailSampleDist, cfg.detailSampleMaxError, *mem.dmesh))
             {
                 result.mError = "detail";
-                return result;
+                finish();
+                return;
             }
-            // Recast hands the detail vertices back one cell higher than the
-            // polygon vertices they refine (RecastMeshDetail.cpp, "Is this
-            // offset necessary?"), and Detour keeps the polygon's own corners
-            // at their unshifted height, so every vertex the detail pass adds
-            // would stand a cell proud of the corners around it and tilt the
-            // triangles between them. Take the offset back out.
-            for (int v = 0; v < mem.dmesh->nverts; ++v)
+        }
+        // Recast hands the detail vertices back one cell higher than the
+        // polygon vertices they refine (RecastMeshDetail.cpp, "Is this
+        // offset necessary?"), and Detour keeps the polygon's own corners
+        // at their unshifted height, so every vertex the detail pass adds
+        // would stand a cell proud of the corners around it and tilt the
+        // triangles between them. Take the offset back out.
+        for (int v = 0; v < mem.dmesh->nverts; ++v)
+        {
+            mem.dmesh->verts[v * 3 + 1] -= cfg.ch;
+        }
+        clock.lap(ClassBuildStats::DETAIL);
+        result.mPolys[avatar] = mem.pmesh->npolys;
+        if (astats)
+        {
+            astats->mPolys = static_cast<U32>(mem.pmesh->npolys);
+            astats->mVerts = static_cast<U32>(mem.pmesh->nverts);
+            astats->mDetailTris = static_cast<U32>(mem.dmesh->ntris);
+            astats->mFlights = static_cast<U32>(result.mFlights[avatar].size());
+            for (const Flight& f : result.mFlights[avatar])
             {
-                mem.dmesh->verts[v * 3 + 1] -= cfg.ch;
+                astats->mFlightPolys += static_cast<U32>(f.mPolys.size());
+                astats->mFlightCodes += static_cast<U32>(f.mCodes.size());
             }
-            clock.lap(ClassBuildStats::DETAIL);
-            result.mPolys[cls] = mem.pmesh->npolys;
-            // Walls come off the same heightfield, before it goes: the faces
-            // from the one class chosen above, the floor edges and the drops
-            // per class.
-            if (input.mWallFaces && cls == face_cls)
+            stats->mPolyFlight.assign(mem.pmesh->npolys, 0);
+            for (const Flight& f : result.mFlights[avatar])
             {
-                extractWallFaces(*mem.hf, cfg.borderSize, input.mWallMinHeight, result.mFaces);
-            }
-            clock.lap(ClassBuildStats::WALLS);
-            if (air)
-            {
-                const S32 overlap = static_cast<S32>(std::ceil(0.5f / cfg.ch));
-                // The avatar's flights where it built them: stairs are for feet.
-                const std::vector<Flight>& flights = result.mFlights[static_cast<S32>(AgentClass::AVATAR)].empty()
-                                                         ? result.mFlights[cls]
-                                                         : result.mFlights[static_cast<S32>(AgentClass::AVATAR)];
-                result.mAir = buildTileAir(*mem.hf, cfg.borderSize, input.mAirPad, cfg.walkableClimb, overlap,
-                                          static_cast<S32>(std::ceil(input.mAirMinGap / cfg.ch)), &flights, cstats ? &cstats->mAir : nullptr);
-            }
-            clock.lap(ClassBuildStats::AIR);
-            if (cstats)
-            {
-                cstats->mPolys = static_cast<U32>(mem.pmesh->npolys);
-                cstats->mVerts = static_cast<U32>(mem.pmesh->nverts);
-                cstats->mDetailTris = static_cast<U32>(mem.dmesh->ntris);
-                cstats->mFlights = static_cast<U32>(result.mFlights[cls].size());
-                for (const Flight& f : result.mFlights[cls])
+                for (const U16 poly : f.mPolys)
                 {
-                    cstats->mFlightPolys += static_cast<U32>(f.mPolys.size());
-                    cstats->mFlightCodes += static_cast<U32>(f.mCodes.size());
-                }
-                if (cls == static_cast<S32>(AgentClass::AVATAR))
-                {
-                    stats->mPolyFlight.assign(mem.pmesh->npolys, 0);
-                    for (const Flight& f : result.mFlights[cls])
+                    if (poly < stats->mPolyFlight.size())
                     {
-                        for (const U16 poly : f.mPolys)
-                        {
-                            if (poly < stats->mPolyFlight.size())
-                            {
-                                stats->mPolyFlight[poly] = 1;
-                            }
-                        }
+                        stats->mPolyFlight[poly] = 1;
                     }
                 }
-                clock.restart();
             }
-            if (mem.pmesh->npolys == 0)
+            clock.restart();
+        }
+        if (mem.pmesh->npolys == 0)
+        {
+            result.mStatus = TileBuildResult::SUCCESS;
+            finish();
+            return;
+        }
+        if (input.mEdges[avatar])
+        {
+            classifyEdges(*mem.pmesh, raster.mEdges, *mem.chf, ap, input.mDropMax[avatar], true, input.mDropSpacing, result.mSegments[avatar],
+                          result.mLinks[avatar]);
+        }
+        clock.lap(ClassBuildStats::EDGES);
+        for (int i = 0; i < mem.pmesh->npolys; ++i)
+        {
+            const U8 area = mem.pmesh->areas[i] == RC_WALKABLE_AREA ? AREA_OBJECT : mem.pmesh->areas[i];
+            mem.pmesh->areas[i] = area;
+            mem.pmesh->flags[i] = area ? static_cast<unsigned short>(1u << area) : 0;
+        }
+        // Flights are part of the geometry; where a poly is and what it touches are bound at publish.
+        for (const Flight& f : result.mFlights[avatar])
+        {
+            for (const U16 p : f.mPolys)
             {
-                continue;
-            }
-            if (input.mEdges[cls])
-            {
-                classifyEdges(*mem.pmesh, *mem.hf, *mem.chf, p, input.mDropMax[cls],
-                              cls == static_cast<S32>(AgentClass::AVATAR), input.mDropSpacing,
-                              result.mSegments[cls], result.mLinks[cls]);
-            }
-            clock.lap(ClassBuildStats::EDGES);
-            for (int i = 0; i < mem.pmesh->npolys; ++i)
-            {
-                const U8 area = mem.pmesh->areas[i] == RC_WALKABLE_AREA ? AREA_OBJECT : mem.pmesh->areas[i];
-                mem.pmesh->areas[i] = area;
-                mem.pmesh->flags[i] = area ? static_cast<unsigned short>(1u << area) : 0;
-            }
-
-            // A drop link becomes a one-way off-mesh connection, so findPath
-            // may step off a ledge onto the floor below. The weather class's
-            // links are drainage only and stay out of the mesh.
-            std::vector<F32> con_verts;
-            std::vector<F32> con_rad;
-            std::vector<U8> con_dir;
-            std::vector<U8> con_areas;
-            std::vector<unsigned short> con_flags;
-            std::vector<unsigned int> con_ids;
-            if (cls == static_cast<S32>(AgentClass::AVATAR))
-            {
-                for (const DropLink& link : result.mLinks[cls])
+                if (p < mem.pmesh->npolys && mem.pmesh->flags[p])
                 {
-                    F32 from[3], to[3];
-                    toRecast(link.mFrom, from);
-                    toRecast(link.mTo, to);
-                    con_verts.insert(con_verts.end(), from, from + 3);
-                    con_verts.insert(con_verts.end(), to, to + 3);
-                    con_rad.push_back(1.f);
-                    con_dir.push_back(0);   // one way: you can drop, not climb
-                    con_areas.push_back(AREA_DROP);
-                    con_flags.push_back(static_cast<unsigned short>(1u << AREA_DROP));
-                    con_ids.push_back(static_cast<unsigned int>(con_ids.size()));
+                    mem.pmesh->flags[p] |= POLY_FLIGHT;
                 }
             }
+        }
 
-            dtNavMeshCreateParams params;
-            std::memset(&params, 0, sizeof(params));
-            if (!con_rad.empty())
-            {
-                params.offMeshConVerts = con_verts.data();
-                params.offMeshConRad = con_rad.data();
-                params.offMeshConDir = con_dir.data();
-                params.offMeshConAreas = con_areas.data();
-                params.offMeshConFlags = con_flags.data();
-                params.offMeshConUserID = con_ids.data();
-                params.offMeshConCount = static_cast<int>(con_rad.size());
-            }
-            params.verts = mem.pmesh->verts;
-            params.vertCount = mem.pmesh->nverts;
-            params.polys = mem.pmesh->polys;
-            params.polyAreas = mem.pmesh->areas;
-            params.polyFlags = mem.pmesh->flags;
-            params.polyCount = mem.pmesh->npolys;
-            params.nvp = mem.pmesh->nvp;
-            params.detailMeshes = mem.dmesh->meshes;
-            params.detailVerts = mem.dmesh->verts;
-            params.detailVertsCount = mem.dmesh->nverts;
-            params.detailTris = mem.dmesh->tris;
-            params.detailTriCount = mem.dmesh->ntris;
-            params.walkableHeight = p.mHeight;
-            params.walkableRadius = p.mRadius;
-            params.walkableClimb = p.mClimb;
-            params.tileX = input.mTileY;    // Detour x runs along Recast x = SL y
-            params.tileY = input.mTileX;
-            params.tileLayer = 0;
-            rcVcopy(params.bmin, mem.pmesh->bmin);
-            rcVcopy(params.bmax, mem.pmesh->bmax);
-            params.cs = cfg.cs;
-            params.ch = cfg.ch;
-            params.buildBvTree = true;
+        // A drop link becomes a one-way off-mesh connection, so findPath
+        // may step off a ledge onto the floor below.
+        std::vector<F32> con_verts;
+        std::vector<F32> con_rad;
+        std::vector<U8> con_dir;
+        std::vector<U8> con_areas;
+        std::vector<unsigned short> con_flags;
+        std::vector<unsigned int> con_ids;
+        for (const DropLink& link : result.mLinks[avatar])
+        {
+            F32 from[3], to[3];
+            toRecast(link.mFrom, from);
+            toRecast(link.mTo, to);
+            con_verts.insert(con_verts.end(), from, from + 3);
+            con_verts.insert(con_verts.end(), to, to + 3);
+            con_rad.push_back(1.f);
+            con_dir.push_back(0);   // one way: you can drop, not climb
+            con_areas.push_back(AREA_DROP);
+            con_flags.push_back(static_cast<unsigned short>(1u << AREA_DROP));
+            con_ids.push_back(static_cast<unsigned int>(con_ids.size()));
+        }
 
-            unsigned char* data = nullptr;
-            int size = 0;
+        dtNavMeshCreateParams params;
+        std::memset(&params, 0, sizeof(params));
+        if (!con_rad.empty())
+        {
+            params.offMeshConVerts = con_verts.data();
+            params.offMeshConRad = con_rad.data();
+            params.offMeshConDir = con_dir.data();
+            params.offMeshConAreas = con_areas.data();
+            params.offMeshConFlags = con_flags.data();
+            params.offMeshConUserID = con_ids.data();
+            params.offMeshConCount = static_cast<int>(con_rad.size());
+        }
+        params.verts = mem.pmesh->verts;
+        params.vertCount = mem.pmesh->nverts;
+        params.polys = mem.pmesh->polys;
+        params.polyAreas = mem.pmesh->areas;
+        params.polyFlags = mem.pmesh->flags;
+        params.polyCount = mem.pmesh->npolys;
+        params.nvp = mem.pmesh->nvp;
+        params.detailMeshes = mem.dmesh->meshes;
+        params.detailVerts = mem.dmesh->verts;
+        params.detailVertsCount = mem.dmesh->nverts;
+        params.detailTris = mem.dmesh->tris;
+        params.detailTriCount = mem.dmesh->ntris;
+        params.walkableHeight = ap.mHeight;
+        params.walkableRadius = ap.mRadius;
+        params.walkableClimb = ap.mClimb;
+        params.tileX = input.mTileY;    // Detour x runs along Recast x = SL y
+        params.tileY = input.mTileX;
+        params.tileLayer = 0;
+        rcVcopy(params.bmin, mem.pmesh->bmin);
+        rcVcopy(params.bmax, mem.pmesh->bmax);
+        params.cs = cfg.cs;
+        params.ch = cfg.ch;
+        params.buildBvTree = true;
+
+        unsigned char* data = nullptr;
+        int size = 0;
+        {
+            SK_NAV_ZONE("nav.build.detour");
             if (!dtCreateNavMeshData(&params, &data, &size))
             {
                 result.mError = "navmesh data";
-                return result;
-            }
-            result.mData[cls].assign(data, data + size);
-            dtFree(data);
-            clock.lap(ClassBuildStats::DETOUR);
-            if (cstats)
-            {
-                cstats->mDetourBytes = static_cast<U32>(size);
+                finish();
+                return;
             }
         }
-        result.mStatus = TileBuildResult::SUCCESS;
-        result.mMillis = std::chrono::duration<F32, std::milli>(std::chrono::steady_clock::now() - started).count();
-        if (stats)
+        if (input.mFaceOffsets && input.mAlignWallEdges)
         {
-            stats->mExcludeMs = result.mExcludeMillis;
-            stats->mTotalMs = result.mMillis;
+            // Wall edges out to the radius off the walls' true faces, which only floats can say.
+            if (const TileAirPtr air = raster.mAir.lock(); air && air->mCell == cfg.cs)
+            {
+                alignWallEdges(data, size, ap.mRadius, cfg.cs, airFaceProbe(*air, cfg.walkableClimb), stats ? &stats->mEdgeAlign : nullptr);
+            }
+        }
+        result.mData[avatar].assign(data, data + size);
+        dtFree(data);
+        clock.lap(ClassBuildStats::DETOUR);
+        if (astats)
+        {
+            astats->mDetourBytes = static_cast<U32>(size);
+        }
+        result.mStatus = TileBuildResult::SUCCESS;
+        finish();
+    }
+
+    TileBuildResult buildTile(const TileBuildInput& input, TileBuildStats* stats)
+    {
+        SK_NAV_ZONE("nav.build.tile");
+        TileBuildResult result;
+        if (const TileRasterPtr raster = rasteriseTile(input, result, stats))
+        {
+            polygoniseTile(input, *raster, result, stats);
         }
         return result;
     }
