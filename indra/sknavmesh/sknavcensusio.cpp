@@ -544,7 +544,12 @@ namespace sknav
             << ",\"vertex\":\"3f, region-local\",\"convex\":\"i, triangles per body\",\"cluster_records\":\"I, record index\","
                "\"terrain\":\"f, global z, row-major along y\",\"no_triangles\":"
             << NO_TRIANGLES << "},\"records\":{\"count\":" << c.mRecords.size() << ",\"blob\":\"" << b64(records) << "\",\"vertices\":\""
-            << b64(vertices) << "\",\"convex\":\"" << b64(convex) << "\"}";
+            << b64(vertices) << "\",\"convex\":\"" << b64(convex) << '"';
+        if (!c.mSeen.empty() && c.mSeen.size() == c.mRecords.size())
+        {
+            out << ",\"seen\":\"" << b64(c.mSeen) << '"';
+        }
+        out << '}';
 
         std::map<LLUUID, const CensusRoot*> roots;
         for (const CensusRoot& r : c.mRoots)
@@ -818,7 +823,7 @@ namespace sknav
             // A file says how long its records are; one older than version 6 has no collides or physics_known.
             size_t record_bytes = version >= 6 ? RECORD_BYTES : RECORD_BYTES_V5;
             Elem layout;
-            if (rd.member(doc, "layout", layout))
+            if (doc["layout"].get(layout) == simdjson::SUCCESS)
             {
                 record_bytes = static_cast<size_t>(rd.num(layout, "record_bytes"));
             }
@@ -914,6 +919,15 @@ namespace sknav
             if (!cur.ok())
             {
                 rd.fail("records blob short");
+            }
+            Elem seen;
+            if (recs["seen"].get(seen) == simdjson::SUCCESS)
+            {
+                c.mSeen = rd.packed<U8>(recs, "seen");
+                if (c.mSeen.size() != count)
+                {
+                    rd.fail("seen does not match the records");
+                }
             }
         }
 

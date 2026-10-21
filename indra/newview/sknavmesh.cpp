@@ -72,6 +72,8 @@
 #include "llworld.h"
 #include "pipeline.h"
 #include "skmaprecorder.h"
+#include "skoverviewcapture.h"
+#include "skoverviewcensus.h"
 #include "skphysicsshape.h"
 #include "workqueue.h"
 
@@ -5258,6 +5260,16 @@ std::string SKNavMesh::exportCensus() const
     }
 
     census.mRecords = snap->mRecords;
+    // The overview's last look per part, so an offline reference can judge invisible parts as the overview did.
+    if (SKOverviewCapture::instanceExists())
+    {
+        const SKOverviewCensus& overview = SKOverviewCapture::instance().census();
+        census.mSeen.reserve(census.mRecords.size());
+        for (const RecordPtr& r : census.mRecords)
+        {
+            census.mSeen.push_back(r ? overview.lastSeen(r->mPart) : 255);
+        }
+    }
     std::unordered_map<const Record*, U32> index;
     for (size_t i = 0; i < census.mRecords.size(); ++i)
     {

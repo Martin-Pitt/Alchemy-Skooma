@@ -27,6 +27,7 @@
 #include "../sknavcensusio.h"
 #include "../sknavtilecache.h"
 
+#include "llbase64.h"
 #include "llstring.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -525,5 +526,57 @@ namespace
         std::string future = text;
         future.replace(future.find(currentVersion()), 11, "\"version\":7");
         CHECK_FALSE(readCensus(future, back, &error));
+    }
+
+    TEST_CASE("sknavcensusio: collides physics known and the seen sidecar round-trip and a version five file reads as colliding", "[sknavcensusio]")
+    {
+        CensusFile c = sample();
+        REQUIRE(c.mRecords.size() >= 3u);
+        REQUIRE((!c.mRecords[0]->mCollides && !c.mRecords[0]->mPhysicsKnown));
+        c.mSeen.assign(c.mRecords.size(), 0);
+        c.mSeen[0] = 1;
+        c.mSeen[1] = 2;
+        c.mSeen.back() = 255;
+        const CensusFile back = roundTrip(c);
+        CHECK(back.mSeen == c.mSeen);
+        REQUIRE(back.mRecords.size() == c.mRecords.size());
+        CHECK((!back.mRecords[0]->mCollides && !back.mRecords[0]->mPhysicsKnown));
+        CHECK((back.mRecords[1]->mCollides && back.mRecords[1]->mPhysicsKnown));
+
+        // No overview, no sidecar.
+        c.mSeen.clear();
+        CHECK(roundTrip(c).mSeen.empty());
+
+        // A version 5 file: the same records without the two bytes after exclude, and no sidecar.
+        std::ostringstream out;
+        writeCensus(out, c);
+        std::string text = out.str();
+        const size_t at = text.find("\"blob\":\"", text.find("\"records\":{")) + 8;
+        const size_t end = text.find('"', at);
+        const std::string blob = LLBase64::decodeAsString(text.substr(at, end - at));
+        REQUIRE(blob.size() == c.mRecords.size() * 198);
+        std::string old_blob;
+        for (size_t i = 0; i < c.mRecords.size(); ++i)
+        {
+            const std::string rec = blob.substr(i * 198, 198);
+            old_blob += rec.substr(0, 40) + rec.substr(42);
+        }
+        text.replace(at, end - at, LLBase64::encode(reinterpret_cast<const U8*>(old_blob.data()), old_blob.size()));
+        text.replace(text.find("\"record_bytes\":198"), 18, "\"record_bytes\":196");
+        text.replace(text.find(currentVersion()), 11, "\"version\":5");
+        CensusFile old;
+        std::string error;
+        INFO(error);
+        REQUIRE(readCensus(text, old, &error));
+        REQUIRE(old.mRecords.size() == c.mRecords.size());
+        CHECK(old.mSeen.empty());
+        for (size_t i = 0; i < c.mRecords.size(); ++i)
+        {
+            INFO("record " + std::to_string(i));
+            CHECK((old.mRecords[i]->mCollides && old.mRecords[i]->mPhysicsKnown));
+            Record expect = *c.mRecords[i];
+            expect.mCollides = expect.mPhysicsKnown = true;
+            CHECK(sameRecord(expect, *old.mRecords[i]));
+        }
     }
 }

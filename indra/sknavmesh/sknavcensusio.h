@@ -165,6 +165,9 @@ namespace sknav
 
         std::vector<CensusRegion> mRegions;
         std::vector<RecordPtr> mRecords;
+        /// Per record, the overview's look of its part: 0 visible, 1 invisible, 2 not known yet, 255 not asked; empty when
+        /// the overview was not running.
+        std::vector<U8> mSeen;
         std::vector<CensusCluster> mClusters;
         std::vector<Feature> mFeatures;
         std::vector<DoorEntity> mDoors;
