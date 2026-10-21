@@ -1970,6 +1970,7 @@ if(AL_BUILD_VIEWER)
     skoverviewcensus.cpp
     skoverviewcuttable.cpp
     skoverviewmovers.cpp
+    skoverviewprobes.cpp
     skoverviewslots.cpp
   )
   list(
@@ -1994,6 +1995,7 @@ if(AL_BUILD_VIEWER)
     skoverviewcensus.h
     skoverviewcuttable.h
     skoverviewmovers.h
+    skoverviewprobes.h
     skoverviewprograms.h
     skoverviewslots.h
     skpopuppanes.h
@@ -2777,6 +2779,7 @@ if(AL_BUILD_TESTS)
       tests/skoverviewshaders_test.cpp # <SK:Nexii> combat/minimap: the overview's shader permutations
       tests/skoverviewcuttable_test.cpp # <SK:Nexii> combat/minimap: the overview's cut table
       tests/skoverviewslots_test.cpp # <SK:Nexii> combat/minimap: the overview's census pages
+      tests/skoverviewprobes_test.cpp # <SK:Nexii> combat/minimap: the tactical cut's probes
     UNIT
       alagentlocationformat.cpp
       alchattimestamp.cpp
@@ -2860,6 +2863,7 @@ if(AL_BUILD_TESTS)
       skoutlinepolicy.cpp # <SK:Nexii> outline capture
       skmapmarkers.cpp # <SK:Nexii> mini-map markers
       skoverviewcuttable.cpp # <SK:Nexii> combat/minimap: the overview's cut table
+      skoverviewprobes.cpp # <SK:Nexii> combat/minimap: the tactical cut's probes
       skoverviewslots.cpp # <SK:Nexii> combat/minimap: the overview's census pages
     LIBRARIES llui alscript ll::slua llxml ll::pocketfft ${test_libs}
     SUPPORT
@@ -2910,11 +2914,13 @@ if(AL_BUILD_TESTS)
       tests/skoverviewshaders_gl_test.cpp # <SK:Nexii> combat/minimap: the overview's programs link
       tests/skoverviewcuttable_gl_test.cpp # <SK:Nexii> combat/minimap: the overview's cut table on the GPU
       tests/skoverviewslots_gl_test.cpp # <SK:Nexii> combat/minimap: the census command list on the GPU
+      tests/skoverviewprobes_gl_test.cpp # <SK:Nexii> combat/minimap: the tactical cut's probes on the GPU
     UNIT
       aldepthpyramid.cpp
       alwaterfield.cpp
       alwaterheightbake.cpp
       skoverviewcuttable.cpp # <SK:Nexii> combat/minimap: the overview's cut table
+      skoverviewprobes.cpp # <SK:Nexii> combat/minimap: the tactical cut's probes
       skoverviewslots.cpp # <SK:Nexii> combat/minimap: the overview's census pages
     LIBRARIES llrender ll::pocketfft
     SUPPORT llrender_test_checks llcommon_test_checks

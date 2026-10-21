@@ -1576,7 +1576,7 @@ namespace
                   "the cut table and the census share their sentinels");
 
     /// Writes one linkset's run of one class into a page: positions, its id in the weight channel, which the cut table
-    /// is read through, and an open part's flag in texcoord0.x.
+    /// is read through, an open part's flag in texcoord0.x and a passed-through one's in texcoord0.y.
     bool uploadRun(LLVertexBuffer& buffer, U32 first, const std::vector<LLVector3>& positions, const std::vector<U8>& flags,
                    U32 id)
     {
@@ -1603,8 +1603,10 @@ namespace
         {
             for (U32 v = 0; v < count; ++v)
             {
-                const bool is_open = v / 3 < flags.size() && (flags[v / 3] & skoverview::TRI_OPEN);
-                *open++ = LLVector2(is_open ? 1.f : 0.f, 0.f);
+                const U8 flag = v / 3 < flags.size() ? flags[v / 3] : 0;
+                const bool is_open = flag & skoverview::TRI_OPEN;
+                const bool pass_through = flag & skoverview::TRI_PASS_THROUGH;
+                *open++ = LLVector2(is_open ? 1.f : 0.f, pass_through ? 1.f : 0.f);
             }
         }
         return true;
