@@ -27,7 +27,6 @@
 
 #include "llpointer.h"
 #include "lluuid.h"
-#include "sknavrooms.h"
 #include "threadpool_fwd.h"
 #include "v3dmath.h"
 #include "v3math.h"
@@ -163,7 +162,8 @@ public:
     /// The air's room someone is in, its mask grown by a cell every way so a wall just past its last cell touches it.
     struct RoomFootprint
     {
-        SKNavWorldView::RoomId mId;
+        LLUUID mMesh;           ///< the room's mesh and its id there, as SKNavWorldView::RoomId holds them
+        U32 mId = 0;
         U64 mHash = 0;          ///< the room's: moves only where its air moved
         LLVector3d mOrigin;     ///< global, the minimum corner of cell (0, 0)
         S32 mW = 0;

@@ -1815,7 +1815,8 @@ std::shared_ptr<const SKOverviewCensus::RoomFootprint> SKOverviewCapture::roomAt
         }
     }
     auto footprint = std::make_shared<SKOverviewCensus::RoomFootprint>();
-    footprint->mId = id;
+    footprint->mMesh = id.mMesh;
+    footprint->mId = id.mId;
     footprint->mHash = room->mHash;
     footprint->mOrigin = world->roomCellOrigin(*mesh, *room) - LLVector3d(sknav::RASTER_XY_M, sknav::RASTER_XY_M, 0.0);
     footprint->mW = room->mCellW + 2;
@@ -1949,8 +1950,8 @@ void SKOverviewCapture::updateCut()
         mix(id.getCRC32());
         mix(o.mOutdoors);
         mix(o.mRoom ? o.mRoom->mHash : 0);
-        mix(o.mRoom ? o.mRoom->mId.mId : 0);
-        mix(o.mRoom ? o.mRoom->mId.mMesh.getCRC32() : 0);
+        mix(o.mRoom ? o.mRoom->mId : 0);
+        mix(o.mRoom ? o.mRoom->mMesh.getCRC32() : 0);
         occupants.push_back(std::move(o));
     };
     const LLVector3d agent_floor = gAgent.getPosGlobalFromAgent(

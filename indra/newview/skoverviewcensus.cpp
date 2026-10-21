@@ -2300,8 +2300,8 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
             if (occupant->mRoom)
             {
                 marks_key = (marks_key ^ occupant->mRoom->mHash) * 1099511628211ull;
-                marks_key = (marks_key ^ occupant->mRoom->mId.mId) * 1099511628211ull;
-                marks_key = (marks_key ^ occupant->mRoom->mId.mMesh.getCRC32()) * 1099511628211ull;
+                marks_key = (marks_key ^ occupant->mRoom->mId) * 1099511628211ull;
+                marks_key = (marks_key ^ occupant->mRoom->mMesh.getCRC32()) * 1099511628211ull;
             }
             if (!cache.mMarksValid || cache.mMarksKey != marks_key || baseCrossed(occupant->mCut))
             {
