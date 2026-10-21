@@ -573,6 +573,46 @@ private:
     static bool probesDemanded();
     /// Whether a tile builds its air eagerly: near the camera, or under the cluster the agent is in.
     bool inAirRadius(const Tile& tile) const;
+
+public:
+    /// What moved a mesh's air since the rooms pass last drained the list, so it walks only those meshes.
+    struct AirChange
+    {
+        enum Kind : U8 { PUBLISHED, EVICTED, SPILLED, RELOADED, LOST, DROPPED, MESH_GONE };
+        LLUUID mMesh;
+        sknav::TileKey mKey;
+        U64 mAirId = 0;
+        LLVector3d mMin, mMax;
+        Kind mKind = PUBLISHED;
+        bool mWholeMesh = true;     ///< no one tile: mKey, mAirId and the box say nothing
+    };
+    /// Moves the list into out; false when it overflowed since the last drain, so any mesh may have moved.
+    bool drainAirChanges(std::vector<AirChange>& out) const;
+    /// A mesh's air as a rooms pass is posted with, by value, so the pass reads no tile of the navmesh.
+    struct AirSnapshotTile
+    {
+        sknav::TileKey mKey;
+        sknav::TileAirPtr mAir;
+        sknav::TileAirPtr mCoarse;
+        U64 mContributor = 0;
+        LLVector3d mMin, mMax;
+    };
+    struct AirSnapshot
+    {
+        bool mFound = false;
+        LLVector3d mOrigin;
+        U8 mPriority = 3;
+        std::vector<AirSnapshotTile> mTiles;
+    };
+    AirSnapshot airSnapshot(const LLUUID& mesh) const;
+    /// The census the door and lift spans were taken from.
+    U64 featureStamp() const { return mFeatureStamp; }
+
+private:
+    void noteAirChange(AirChange::Kind kind, const LLUUID& mesh);
+    void noteAirChange(AirChange::Kind kind, const Mesh& mesh, const sknav::TileKey& key, const Tile& tile);
+    mutable std::vector<AirChange> mAirChanges;
+    mutable bool mAirChangesLost = false;
     /// Which mesh the work queues serve first: 0 the agent's region's own
     /// terrain, 1 the terrain of the regions touching it, 2 the clusters
     /// owned by either, 3 everything else. Within a tier the distance orders,

@@ -446,6 +446,7 @@ void SKNavMesh::evictAir()
             tile.mAir.reset();
             tile.mAirBuilt = 0;
             ++mStats.mAirEvicted;
+            noteAirChange(AirChange::EVICTED, *mesh->second, candidate.mKey, tile);
             ++mRevision;
         }
         auto retired = std::move(mPendingEvictions);
@@ -793,6 +794,7 @@ void SKNavMesh::finishSpill(const std::shared_ptr<SpillJob>& job)
     mStats.mSpillFreed = freed;
     retireOn(workerQueue(), std::move(retired));
     mesh.mResidency = Mesh::Residency::SPILLED;
+    noteAirChange(AirChange::SPILLED, mesh.mId);
     ++mRevision;
 }
 
@@ -947,6 +949,7 @@ void SKNavMesh::finishReload(const std::shared_ptr<SpillJob>& job)
             // without ever letting one land.
             ++mStats.mReloadMisses;
             tile.mAirBuilt = 0;
+            noteAirChange(AirChange::LOST, mesh, e.mKey, tile);
         }
     }
     if (!job->mEntries.empty())
@@ -956,6 +959,7 @@ void SKNavMesh::finishReload(const std::shared_ptr<SpillJob>& job)
     }
     mesh.mResidency = Mesh::Residency::RESIDENT;
     mesh.mDetailWanted = LLTimer::getTotalSeconds();
+    noteAirChange(AirChange::RELOADED, mesh.mId);
     ++mRevision;
 }
 
@@ -1364,6 +1368,7 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
         dropSlots(*it->second);
         std::shared_ptr<Mesh> retired(std::move(it->second));
         retireOn(workers, std::move(retired));
+        noteAirChange(AirChange::MESH_GONE, it->first);
         it = mMeshes.erase(it);
         ++mRevision;
     }
@@ -1444,6 +1449,7 @@ void SKNavMesh::applyLayouts()
             auto retired = std::make_shared<Tile>(std::move(current->second));
             retireOn(workers, std::move(retired));
             mesh.mTiles.erase(current);
+            noteAirChange(AirChange::DROPPED, mesh.mId);
             ++mRevision;
         }
         mesh.mLayoutCensus = layout.mCensus;
@@ -1830,6 +1836,7 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
         tile.mCause = CAUSE_FAILED;
         tile.mHasCauseAt = false;
         tileBlip(mesh, tile);
+        noteAirChange(AirChange::DROPPED, mesh, key, tile);
         mRevision++;                // the tile's walls are gone: the overlay moved
         return;
     }
@@ -1867,6 +1874,7 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
         }
         markSpansDirty(tile);
         tileBlip(mesh, tile);
+        if (!same_air) noteAirChange(AirChange::PUBLISHED, mesh, key, tile);
         mRevision++;                // new air: the spaces over it are cut again
         return;
     }
@@ -1955,6 +1963,7 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
     }
     markSpansDirty(tile);
     tileBlip(mesh, tile);
+    if (!result->mAirBuilt || !same_air) noteAirChange(AirChange::PUBLISHED, mesh, key, tile);
     mRevision++;                    // a published tile is one the overlay redraws
 }
 
@@ -2606,6 +2615,7 @@ void SKNavMesh::update()
             dropSlots(*entry.second);
             std::shared_ptr<Mesh> retired(std::move(entry.second));
             retireOn(workerQueue(), std::move(retired));
+            noteAirChange(AirChange::MESH_GONE, entry.first);
         }
         mMeshes.clear();
         mRevision++;
@@ -2641,6 +2651,7 @@ void SKNavMesh::update()
                 dropSlots(*it->second);
                 std::shared_ptr<Mesh> retired(std::move(it->second));
                 retireOn(workerQueue(), std::move(retired));
+                noteAirChange(AirChange::MESH_GONE, it->first);
                 it = mMeshes.erase(it);
                 mRevision++;
             }
@@ -2808,6 +2819,60 @@ std::string SKNavMesh::statsLine() const
                                                                     mStats.mAirOverlayTiles, mStats.mAirOverlayCut)
                                                           : std::string())
            + "; " + mRooms->statsLine() + "; " + mRoomProbes->statsLine() + "; " + gPipeline.mReflectionMapManager.clusterProbesStatsLine();
+}
+
+void SKNavMesh::noteAirChange(AirChange::Kind kind, const LLUUID& mesh)
+{
+    // Unread for this long, the list says no more than that anything may have moved.
+    constexpr size_t MOST_AIR_CHANGES = 65536;
+    if (mAirChanges.size() >= MOST_AIR_CHANGES)
+    {
+        mAirChanges.clear();
+        mAirChangesLost = true;
+    }
+    AirChange& change = mAirChanges.emplace_back();
+    change.mMesh = mesh;
+    change.mKind = kind;
+}
+
+void SKNavMesh::noteAirChange(AirChange::Kind kind, const Mesh& mesh, const TileKey& key, const Tile& tile)
+{
+    noteAirChange(kind, mesh.mId);
+    AirChange& change = mAirChanges.back();
+    change.mKey = key;
+    change.mAirId = tile.mAirId;
+    change.mMin = tile.mMin;
+    change.mMax = tile.mMax;
+    change.mWholeMesh = false;
+}
+
+bool SKNavMesh::drainAirChanges(std::vector<AirChange>& out) const
+{
+    out.clear();
+    out.swap(mAirChanges);
+    const bool whole = !mAirChangesLost;
+    mAirChangesLost = false;
+    return whole;
+}
+
+SKNavMesh::AirSnapshot SKNavMesh::airSnapshot(const LLUUID& mesh_id) const
+{
+    AirSnapshot out;
+    const auto it = mMeshes.find(mesh_id);
+    if (it == mMeshes.end())
+    {
+        return out;
+    }
+    const Mesh& mesh = *it->second;
+    out.mFound = true;
+    out.mOrigin = mesh.mOrigin;
+    out.mPriority = meshPriority(mesh);
+    out.mTiles.reserve(mesh.mTiles.size());
+    for (const auto& t : mesh.mTiles)
+    {
+        out.mTiles.push_back({ t.first, t.second.mAir, t.second.mAirCoarse, skyContributor(mesh.mId, t.first), t.second.mMin, t.second.mMax });
+    }
+    return out;
 }
 
 std::shared_ptr<const SKNavWorldView> SKNavMesh::view() const

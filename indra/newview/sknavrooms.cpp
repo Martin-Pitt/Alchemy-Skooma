@@ -688,14 +688,72 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
     static LLCachedControl<U32> settle_ms(gSavedSettings, "SKNavRoomsSettleMs", 100);
     const F64 now = LLTimer::getTotalSeconds();
 
+    // Only the meshes whose air the navmesh says moved are walked; doors and lifts, and a backstop, walk them all.
+    constexpr F64 FULL_WALK_S = 30.0;
+    std::set<LLUUID> drained;
+    bool walk_all = false;
+    {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknr - drain changes");
+        std::vector<SKNavMesh::AirChange> changes;
+        walk_all = !navmesh.drainAirChanges(changes);
+        for (const SKNavMesh::AirChange& change : changes)
+        {
+            drained.insert(change.mMesh);
+        }
+        if (!changes.empty())
+        {
+            LL_DEBUGS("SKNav") << "rooms drained " << changes.size() << " air changes over " << drained.size() << " meshes" << LL_ENDL;
+        }
+    }
+    const bool doors_moved = navmesh.featureStamp() != mSeenFeatures;
+    const bool backstop = !walk_all && !doors_moved && mLastFullWalk >= 0.0 && now - mLastFullWalk >= FULL_WALK_S;
+    walk_all = walk_all || doors_moved || backstop || mLastFullWalk < 0.0;
+    std::vector<std::pair<LLUUID, const SKNavMesh::Mesh*>> walked;
+    std::map<LLUUID, bool> unwalked;
+    std::map<LLUUID, std::pair<U64, U32>> before;
+    if (walk_all)
+    {
+        mLastFullWalk = now;
+        for (const auto& entry : navmesh.mMeshes)
+        {
+            walked.emplace_back(entry.first, entry.second.get());
+        }
+        if (backstop)
+        {
+            for (const auto& entry : mMeshes)
+            {
+                before[entry.first] = { entry.second.mGeneration, entry.second.mEvicted };
+            }
+        }
+    }
+    else
+    {
+        for (const LLUUID& id : drained)
+        {
+            if (const auto it = navmesh.mMeshes.find(id); it != navmesh.mMeshes.end())
+            {
+                walked.emplace_back(id, it->second.get());
+            }
+        }
+        // A mesh not walked keeps its state; a drained one the navmesh no longer has goes as an unseen one does.
+        for (const auto& entry : mMeshes)
+        {
+            if (!drained.count(entry.first))
+            {
+                unwalked[entry.first] = true;
+            }
+        }
+    }
+
     // A publish moves the navmesh's revision; only then can a mesh's air have moved.
-    if (navmesh.mRevision != mSeenRevision || navmesh.mFeatureStamp != mSeenFeatures)
+    if (walk_all || !drained.empty())
     {
         LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknr - revision walk");
         mSeenRevision = navmesh.mRevision;
         mSeenFeatures = navmesh.mFeatureStamp;
         std::map<LLUUID, bool> seen;
-        for (const auto& entry : navmesh.mMeshes)
+        seen.insert(unwalked.begin(), unwalked.end());
+        for (const auto& entry : walked)
         {
             const SKNavMesh::Mesh& mesh = *entry.second;
             U64 sig = SEED;
@@ -819,6 +877,26 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
             {
                 ++it;
             }
+        }
+    }
+    if (backstop)
+    {
+        // Every mesh whose air moved was drained when it moved, so the backstop should find nothing.
+        U32 missed = 0;
+        for (const auto& entry : mMeshes)
+        {
+            const auto was = before.find(entry.first);
+            const bool moved = was == before.end() || was->second.first != entry.second.mGeneration
+                || was->second.second != entry.second.mEvicted;
+            missed += moved && !drained.count(entry.first) ? 1 : 0;
+        }
+        for (const auto& entry : before)
+        {
+            missed += !mMeshes.count(entry.first) && !drained.count(entry.first) ? 1 : 0;
+        }
+        if (missed)
+        {
+            LL_WARNS("SKNav") << "rooms full walk found " << missed << " meshes the change list missed" << LL_ENDL;
         }
     }
 
@@ -962,8 +1040,8 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
 
 void SKNavRooms::post(MeshState& state, const SKNavMesh& navmesh)
 {
-    const auto mit = navmesh.mMeshes.find(state.mId);
-    if (mit == navmesh.mMeshes.end())
+    const SKNavMesh::AirSnapshot mesh = navmesh.airSnapshot(state.mId);
+    if (!mesh.mFound)
     {
         return;
     }
@@ -973,13 +1051,12 @@ void SKNavRooms::post(MeshState& state, const SKNavMesh& navmesh)
         mThread = std::make_unique<LL::ThreadPool>(QUEUE_NAME, 1);
         mThread->start();
     }
-    if (navmesh.mSkyMap.version() != mSkyVersion)
+    if (navmesh.skyMap().version() != mSkyVersion)
     {
-        mSky = std::make_shared<const SkyMap>(navmesh.mSkyMap);
-        mSkyVersion = navmesh.mSkyMap.version();
+        mSky = std::make_shared<const SkyMap>(navmesh.skyMap());
+        mSkyVersion = navmesh.skyMap().version();
     }
 
-    const SKNavMesh::Mesh& mesh = *mit->second;
     // The pass runs on this snapshot; only a preemption cancels it.
     state.mLatest->store(state.mGeneration);
     state.mLastPosted = LLTimer::getTotalSeconds();
@@ -994,16 +1071,16 @@ void SKNavRooms::post(MeshState& state, const SKNavMesh& navmesh)
     input->mParams.mWalkHeadM = build.mParams[static_cast<S32>(sknav::AgentClass::AVATAR)].mHeight;
     static LLCachedControl<bool> sealed(gSavedSettings, "SKNavSealedIndoors", true);
     input->mParams.mSealedIndoors = sealed;
-    for (const auto& t : mesh.mTiles)
+    for (const SKNavMesh::AirSnapshotTile& t : mesh.mTiles)
     {
-        if (t.second.mAir && !t.second.mAir->mLeaves.empty())
+        if (t.mAir && !t.mAir->mLeaves.empty())
         {
-            input->mTiles.push_back({ t.first, t.second.mAir, SKNavMesh::skyContributor(mesh.mId, t.first) });
+            input->mTiles.push_back({ t.mKey, t.mAir, t.mContributor });
         }
-        else if (!t.second.mAir && t.second.mAirCoarse && state.mProduct)
+        else if (!t.mAir && t.mCoarse && state.mProduct)
         {
             // Evicted: answer from the coarse product, which lets the detail go.
-            if (const TileEnclosure* kept = state.mProduct->tile(t.first))
+            if (const TileEnclosure* kept = state.mProduct->tile(t.mKey))
             {
                 input->mKept.push_back(*kept);
                 input->mKept.back().mAir.reset();
