@@ -169,8 +169,8 @@ std::vector<LLUUID> SKOverviewCensus::restlessParts() const
     return parts;
 }
 
-void SKOverviewCensus::logChurn(std::vector<std::pair<U64, std::pair<char, LLUUID>>>& entries,
-                                std::vector<std::pair<U64, std::pair<char, LLUUID>>>& moves)
+U32 SKOverviewCensus::logChurn(std::vector<std::pair<U64, std::pair<char, LLUUID>>>& entries,
+                               std::vector<std::pair<U64, std::pair<char, LLUUID>>>& moves)
 {
     // What came and went since the last rebuild, by kind (S sculpt, U surrounds, V void surround, R record, C a part's
     // linkset and cluster, L land): a part both gone and come is one that changed.
@@ -189,7 +189,7 @@ void SKOverviewCensus::logChurn(std::vector<std::pair<U64, std::pair<char, LLUUI
     mLastMoves = moves;
     if (first)
     {
-        return;
+        return 0;
     }
     std::set<std::pair<char, LLUUID>> moved;
     for (const auto& g : moved_from)
@@ -213,6 +213,12 @@ void SKOverviewCensus::logChurn(std::vector<std::pair<U64, std::pair<char, LLUUI
                                        << ") is restless: drawn live until it holds still" << LL_ENDL;
             }
         }
+    }
+    U32 moved_records = 0;
+    for (const auto& c : moved_to)
+    {
+        const char kind = c.second.first;
+        moved_records += (kind == 'R' || kind == 'C') && !isRestless(c.second.second) ? 1 : 0;
     }
     std::map<char, U32> gone_n, came_n, changed_n;
     std::map<char, std::vector<LLUUID>> changed;
@@ -250,6 +256,7 @@ void SKOverviewCensus::logChurn(std::vector<std::pair<U64, std::pair<char, LLUUI
         what += ")";
     }
     LL_INFOS("SKOverview") << "census rebuild of " << entries.size() << " entries:" << what << LL_ENDL;
+    return moved_records;
 }
 
 namespace skoverview
@@ -703,6 +710,7 @@ bool SKOverviewCensus::update()
     {
         return !mBatches.empty();
     }
+    const bool announced = mRecordsChanged || !mBuilt; // a walk the census stamp did not ask for checks the stamp
     mRecordsChanged = false;
     mUnknownLook = false;
     mRecheckAt = now + 2.0;
@@ -1082,7 +1090,11 @@ bool SKOverviewCensus::update()
     {
         return !mBatches.empty();
     }
-    logChurn(entries, moves);
+    const U32 missed = logChurn(entries, moves);
+    if (!announced && missed)
+    {
+        LL_WARNS("SKOverview") << "census full walk found " << missed << " record entries the stamp missed" << LL_ENDL;
+    }
 
     // The worker gets values only: what is drawn, whose linkset each part is and where, and the regions' squares.
     auto job = std::make_shared<Job>();

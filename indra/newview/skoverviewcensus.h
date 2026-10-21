@@ -357,7 +357,8 @@ private:
     std::vector<LLUUID> mSculptCandidates;  ///< the sculpted volumes the last full object list walk found
     /// Logs which signature entries came and went since the last rebuild; sorts entries and keeps them.
     /// and turns parts that moved twice within the window restless, from their shape and place alone (moves).
-    void logChurn(std::vector<std::pair<U64, std::pair<char, LLUUID>>>& entries,
+    /// Returns how many record and linkset entries (R, C) of settled parts moved.
+    U32 logChurn(std::vector<std::pair<U64, std::pair<char, LLUUID>>>& entries,
                   std::vector<std::pair<U64, std::pair<char, LLUUID>>>& moves);
     std::vector<std::pair<U64, std::pair<char, LLUUID>>> mLastEntries;
     std::vector<std::pair<U64, std::pair<char, LLUUID>>> mLastMoves;
