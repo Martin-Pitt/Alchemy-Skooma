@@ -146,6 +146,7 @@ void SKOverviewCensus::release()
     mCutTable.release();
     mLargeLogged.clear();
     mCoverLogged.clear();
+    mUploadLogged.clear();
     mStamp = 0;
     mSignature = 0;
     mTriangles = 0;
@@ -1121,6 +1122,8 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildBatches(const Jo
     std::vector<LLVector3> cover_scratch;
     // The verdicts this build asked for; the rest are dropped with the parts they were for.
     std::unordered_map<LLUUID, Verdict> verdicts;
+    Built::Sources sources;
+    std::vector<U64> group_tris(job.mRoots.size(), 0);
     for (size_t i = 0; i < kept.size() + sculpts.size(); ++i)
     {
         const bool is_sculpt = i >= kept.size();
@@ -1280,6 +1283,8 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildBatches(const Jo
             }
         }
         const U8 tri_flags = (pass_through ? skoverview::TRI_PASS_THROUGH : 0) | (open ? skoverview::TRI_OPEN : 0);
+        U64 emitted = 0;
+        U64 hatched = 0;
         for (size_t t = 0; t + 2 < source->size(); t += 3)
         {
             const LLVector3& a = (*source)[t];
@@ -1312,6 +1317,7 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildBatches(const Jo
             out.push_back(b);
             out.push_back(c);
             bins.mInvisible[cls][group].push_back(tri_flags);
+            ++emitted;
         }
         // What is hatched again in the invisible range, the capture's overlay pass: the barrier's every triangle, or
         // the extra part's pieces that stick out.
@@ -1333,15 +1339,35 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildBatches(const Jo
                 over.push_back(*v);
             }
             bins.mInvisible[skoverview::INVISIBLE][group].push_back(tri_flags | skoverview::TRI_PASS_THROUGH);
+            ++hatched;
+        }
+        U64& from = !is_sculpt ? sources.mRecords : sculpts[i - kept.size()].mSurround ? sources.mSurrounds : sources.mSculpts;
+        from += emitted;
+        sources.mHatch += hatched;
+        if (group < group_tris.size())
+        {
+            group_tris[group] += emitted + hatched;
         }
     }
     stats.mBuildSeconds = std::chrono::duration<F64>(std::chrono::steady_clock::now() - cover_began).count();
+    for (size_t g = 0; g < group_tris.size(); ++g)
+    {
+        if (group_tris[g])
+        {
+            sources.mLargest.emplace_back(job.mRoots[g], group_tris[g]);
+        }
+    }
+    const size_t largest = llmin(sources.mLargest.size(), (size_t)10);
+    std::partial_sort(sources.mLargest.begin(), sources.mLargest.begin() + largest, sources.mLargest.end(),
+                      [](const auto& a, const auto& b) { return a.second > b.second; });
+    sources.mLargest.resize(largest);
 
     auto built = std::make_shared<Built>();
     built->mVerdicts = std::make_shared<const Verdicts>(Verdicts{ std::move(verdicts) });
     built->mSignature = job.mSignature;
     built->mGeneration = job.mGeneration;
     built->mCover = stats;
+    built->mSources = std::move(sources);
     for (auto& entry : regions)
     {
         Bins& bins = entry.second;
@@ -1634,7 +1660,33 @@ void SKOverviewCensus::swapIn(Built& built)
     mCuts.clear();
     mCutSignature = 0;
     ++mCutStamp;
-    LL_DEBUGS("SKOverview") << "census upload: " << mBatches.size() << " regions, " << mTriangles << " triangles" << LL_ENDL;
+    {
+        // Where the triangles come from: logged when the totals move, so a region's millions can be told apart.
+        const Built::Sources& s = built.mSources;
+        std::set<std::pair<S64, S64>> origins;
+        for (const Batch& batch : mBatches)
+        {
+            origins.emplace((S64)std::llround(batch.mOrigin.mdV[VX]), (S64)std::llround(batch.mOrigin.mdV[VY]));
+        }
+        const std::string totals = llformat("%u regions, %u triangles (records %llu, sculpts %llu, surrounds %llu, hatch copies %llu)",
+                                            (U32)origins.size(), mTriangles, (unsigned long long)s.mRecords,
+                                            (unsigned long long)s.mSculpts, (unsigned long long)s.mSurrounds,
+                                            (unsigned long long)s.mHatch);
+        std::string largest;
+        for (const auto& l : s.mLargest)
+        {
+            largest += llformat("%s%s %llu", largest.empty() ? "" : ", ", l.first.asString().c_str(), (unsigned long long)l.second);
+        }
+        if (totals != mUploadLogged)
+        {
+            mUploadLogged = totals;
+            LL_INFOS("SKOverview") << "census upload: " << totals << "; ten largest linksets: " << largest << LL_ENDL;
+        }
+        else
+        {
+            LL_DEBUGS("SKOverview") << "census upload: " << totals << "; ten largest linksets: " << largest << LL_ENDL;
+        }
+    }
     const Built::CoverStats& c = built.mCover;
     if (c.mParts)
     {
@@ -1758,6 +1810,7 @@ void SKOverviewCensus::gatherSurrounds(const SKCensusSnapshot& snap)
         }
         part.mHeight = hi - lo;
         part.mTris = std::move(tris);
+        part.mSurround = true;
         const LLVector3d centre = volume->getPositionGlobal();
         U64 h = 1469598103934665603ull;
         h = (h ^ part.mPart.getCRC32()) * 1099511628211ull;

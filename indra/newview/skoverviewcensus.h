@@ -223,6 +223,7 @@ private:
         std::shared_ptr<const std::vector<LLVector3>> mTris; ///< shared with the cache it came from; never null
         F32 mHeight = 0.f;
         skoverview::CensusClass mFixed = skoverview::NUM_CENSUS_CLASSES;
+        bool mSurround = false;         ///< a surround (gatherSurrounds), not a near sculpt
     };
     void gatherSurrounds(const struct SKCensusSnapshot& snap);
     /// What decides an invisible part's verdict: the census records near it whose look is visible.
@@ -303,6 +304,16 @@ private:
             F64 mBuildSeconds = 0.0;   ///< in the whole per-part loop
         };
         CoverStats mCover;
+        /// Where the build's triangles came from, for the upload log.
+        struct Sources
+        {
+            U64 mRecords = 0;
+            U64 mSculpts = 0;
+            U64 mSurrounds = 0;
+            U64 mHatch = 0;     ///< the hatch copies in the invisible range
+            std::vector<std::pair<LLUUID, U64>> mLargest; ///< the ten linksets of most triangles, by root
+        };
+        Sources mSources;
         std::shared_ptr<const Verdicts> mVerdicts; ///< the verdicts this build asked for, adopted when it lands
         U64 mSignature = 0;
         U32 mGeneration = 0;
@@ -374,6 +385,7 @@ private:
     bool mUnknownLook = false;  ///< some part's faces or images were not loaded at the last build
     std::unordered_map<LLUUID, skoverview::Seen> mLargeLogged; ///< the large parts of the last pass and how each was logged
     std::string mCoverLogged;   ///< the cover counts last logged
+    std::string mUploadLogged;  ///< the upload's source totals last logged
     F64 mRecheckAt = 0.0;
     U64 mRecordsKey = 0;        ///< the census records' identities at the last look
     bool mRecordsChanged = true;
