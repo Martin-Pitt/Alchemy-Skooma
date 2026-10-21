@@ -212,6 +212,7 @@ private:
     std::vector<std::pair<SpanKind, ALQuerySpan>> mSpans;
 
     SKOverviewCensus mCensus;
+    SKOverviewProbes mProbes;   ///< the tactical cut's and the pick's questions to the GPU
     SKOverviewMovers mMovers;
     LLRenderTarget* mSceneDepth = nullptr;   ///< the capture whose depth this frame's markers test against
     bool mWorkValid = false;    ///< the work target holds the static capture, with the rects below drawn over it

@@ -449,6 +449,7 @@ void SKOverviewCapture::releaseGL()
     sTacticalResolved.release();
     sTacticalWork.release();
     mSpans.clear();
+    mProbes.release();
     mCensus.release();
     mMaps.clear();
     mTacticalKey.mValid = false;
@@ -2112,7 +2113,7 @@ void SKOverviewCapture::updateCut()
     }
     mixPos(centre);
     mix(gAgent.getRegion() ? gAgent.getRegion()->getHandle() : 0);
-    mCensus.applyCut(gAgent.getRegion(), occupants, key);
+    mCensus.applyCut(gAgent.getRegion(), occupants, key, &mProbes);
 }
 
 U64 SKOverviewCapture::tacticalDissolve(Shot& shot, S32 w, S32 h, LLRect& rect)
@@ -2348,6 +2349,8 @@ void SKOverviewCapture::tactical()
         const LLVector3 at_axis = dir;
         static LLCachedControl<bool> force(gSavedSettings, "SKOverviewForceRecapture", false);
         static LLCachedControl<U32> tactical_debug_view(gSavedSettings, "SKOverviewDebugView", 0);
+        static LLCachedControl<U32> probe_people(gSavedSettings, "SKOverviewProbeBudget", 8);
+        mProbes.beginFrame(sGeomId, llmax((U32)probe_people, 1u));
         updateCut();
         LLRect patch_rect;
         const U64 dissolve_key = tacticalDissolve(shot, vw, vh, patch_rect);
@@ -2388,6 +2391,7 @@ void SKOverviewCapture::tactical()
             ++mCost.mReuses;
         }
         updateWork(shot, !same, patch_rect.notEmpty() ? dissolve_key : 0, patch_rect, movers);
+        mProbes.endFrame();
     }
 
     mTacticalView = shot.mView;

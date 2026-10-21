@@ -29,6 +29,7 @@
 #include "llpointer.h"
 #include "lluuid.h"
 #include "skoverviewcuttable.h"
+#include "skoverviewprobes.h"
 #include "skoverviewslots.h"
 #include "threadpool_fwd.h"
 #include "v3dmath.h"
@@ -238,7 +239,9 @@ public:
     /// occupant of highest mPriority. Every other part, there and elsewhere, is drawn whole. key says when the eye or the people moved:
     /// the same key and buffers do nothing. Publishes the table only when the result changed, and logs it then;
     /// cutStamp() moves when it does.
-    void applyCut(const LLViewerRegion* region, const std::vector<Occupant>& occupants, U64 key);
+    /// The GPU answers which linksets stand round, over or under each person (probes, which may be null): an answer is
+    /// read a frame or two after it is asked for, and what stood before is kept until it lands.
+    void applyCut(const LLViewerRegion* region, const std::vector<Occupant>& occupants, U64 key, SKOverviewProbes* probes);
     U64 cutStamp() const { return mCutStamp; }
     /// A linkset's cut at the last applyCut, by its root: its height (HIDDEN when hidden) and why; false when whole.
     bool cutOf(const LLUUID& root, F32& height, std::string& why) const;
@@ -520,7 +523,23 @@ private:
         U64 mMarksKey = 0;
         std::vector<std::pair<U32, std::string>> mMarks; ///< linkset and rule
         bool mSeen = false;
+        /// The membership probe in flight: its candidates (extent id, root), one query each, and the rule they mark.
+        skoverview::ProbeSlot mMarksProbe;
+        std::vector<std::pair<U32, LLUUID>> mMarkCandidates;
+        std::vector<ALQueryTicket> mMarkTickets;
+        const char* mMarkRule = nullptr;
+        std::vector<U32> mMarksCpu;     ///< the CPU's answer for the key the probe was issued for, to diff against
     };
+    /// The probes' counts over a second, for the log.
+    struct ProbeStats
+    {
+        F64 mSince = 0.0;
+        U32 mIssued = 0;        ///< people probed
+        U32 mQueries = 0;
+        U32 mApplied = 0;
+        U32 mLatencyFrames = 0; ///< summed over the applied ones
+    };
+    ProbeStats mProbeStats;
     std::map<LLUUID, OccupantCut> mOccupantCuts;
     std::map<LLUUID, Release> mRelease;     ///< applied cuts by linkset root, relaxed only once the relaxing holds
 };
