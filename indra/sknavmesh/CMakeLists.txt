@@ -149,6 +149,7 @@ if(AL_BUILD_TESTS)
     sknavmesh_tests
     PROJECT sknavmesh
     SOURCES
+      tests/sknavairbytes_test.cpp
       tests/sknavairunknown_test.cpp
       tests/sknavcensusio_test.cpp
       tests/sknavclusterhash_test.cpp
@@ -157,7 +158,9 @@ if(AL_BUILD_TESTS)
       tests/sknavfeatures_test.cpp
       tests/sknavfloors_test.cpp
       tests/sknavinvisible_test.cpp
+      tests/sknavrecordsignature_test.cpp
       tests/sknavroomgraph_test.cpp
+      tests/sknavskymap_test.cpp
       tests/sknavtileclip_test.cpp
     BENCH_SOURCES tests/sknavfeatures_bench.cpp
     LIBRARIES sknavmesh llcommon

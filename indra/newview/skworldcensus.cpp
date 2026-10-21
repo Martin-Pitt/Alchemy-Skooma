@@ -79,6 +79,26 @@ namespace
     const size_t MOVER_BURSTS = 3;
     const F64 MOVER_WINDOW_SECONDS = 120.0;
     const F64 MOVER_CONTINUOUS_SECONDS = 3.0;
+    // The dirty set's backstop: a full sweep once either centre has moved this far from the last one, and this often.
+    constexpr F64 RESCAN_MOVE_M = 16.0;
+    constexpr F64 FULL_SWEEP_S = 10.0;
+    constexpr F64 SCAN_LOG_S = 5.0;
+    // A dirty scan gathers no sooner than this after the last: its finish costs ~10 ms of feature rules on the main thread.
+    constexpr F64 DIRTY_SCAN_S = 0.25;
+
+    // What the region's object cache knows by its local id: no asset id is
+    // ever going to arrive for something we have not drawn, so the record is
+    // keyed by the region and the local id, tagged so it cannot collide with
+    // a real one.
+    LLUUID placeholderId(U64 handle, U32 local)
+    {
+        LLUUID id;
+        const U32 tag = 0x534b4e56;     // 'SKNV'
+        memcpy(id.mData, &handle, sizeof(handle));
+        memcpy(id.mData + 8, &local, sizeof(local));
+        memcpy(id.mData + 12, &tag, sizeof(tag));
+        return id;
+    }
 
     // The share of a part's faces that can be seen through: a pane of glass
     // is solid to the sim and told apart from a door only here.
@@ -207,6 +227,8 @@ namespace
 
 SKWorldCensus::SKWorldCensus()
 {
+    mPropertiesConn = ALObjectPropertiesCache::instance().setChangeCallback(
+        [this](const LLUUID& id) { onPropertiesChanged(id); });
 }
 
 SKWorldCensus::~SKWorldCensus()
@@ -401,16 +423,7 @@ void SKWorldCensus::beginScan()
     // stays built whatever the camera does.
     mScan.mPending->mCamera = gAgent.getPosGlobalFromAgent(LLViewerCamera::getInstance()->getOrigin());
     mScan.mPending->mRange = range();
-    mScan.mObjects.clear();
-    const S32 count = gObjectList.getNumObjects();
-    mScan.mObjects.reserve(count);
-    for (S32 i = 0; i < count; ++i)
-    {
-        if (LLViewerObject* object = gObjectList.getObject(i))
-        {
-            mScan.mObjects.push_back(object);
-        }
-    }
+    gatherObjects();
     mScan.mIndex = 0;
     mScan.mRegions = regionHandles();
     mScan.mCached.clear();
@@ -429,11 +442,394 @@ void SKWorldCensus::abandonScan()
     mScan.mPending.reset();
     mScan.mObjects.clear();
     mScan.mActive = false;
+    mRetaking = false;
+    mForceSweep = true;
+}
+
+bool SKWorldCensus::running() const
+{
+    // Between update() calls a running census always has a scan or its cluster job in flight.
+    return mScan.mActive || mClusterJob.valid();
+}
+
+void SKWorldCensus::dirtyLinkset(LLViewerObject* object)
+{
+    LLViewerObject* root = rootOf(object);
+    if (root->isAvatar() || root->isAttachment())
+    {
+        return;
+    }
+    mDirty.insert(object->getID());
+    if (object != root)
+    {
+        // The root's rest state is what its parts are recorded dynamic by.
+        mDirty.insert(root->getID());
+        return;
+    }
+    // A root's transform is every child's.
+    for (const LLPointer<LLViewerObject>& child : root->getChildren())
+    {
+        if (child && !child->isAvatar())
+        {
+            mDirty.insert(child->getID());
+        }
+    }
+}
+
+void SKWorldCensus::noteObjectUpdate(LLViewerObject* object)
+{
+    llassert(on_main_thread());
+    if (!object || object->isDead() || object->isAvatar())
+    {
+        return;
+    }
+    if (!running())
+    {
+        // Nothing was listening, so the next scan cannot trust what it last saw.
+        mForceSweep = true;
+        return;
+    }
+    dirtyLinkset(object);
+    // A root drawn at last replaces the box the region's object cache gave it.
+    if (object->isRoot() && object->getRegion())
+    {
+        const LLUUID box = placeholderId(object->getRegion()->getHandle(), object->getLocalID());
+        if (mParts.count(box))
+        {
+            mGone.insert(box);
+        }
+    }
+}
+
+void SKWorldCensus::noteObjectGone(LLViewerObject* object)
+{
+    llassert(on_main_thread());
+    if (!object || object->isDead() || object->isAvatar())
+    {
+        return;
+    }
+    if (!running())
+    {
+        mForceSweep = true;
+        return;
+    }
+    mGone.insert(object->getID());
+    if (!object->isRoot())
+    {
+        // The linkset it leaves is another shape now.
+        LLViewerObject* root = rootOf(object);
+        if (!root->isAvatar() && !root->isAttachment())
+        {
+            mDirty.insert(root->getID());
+        }
+        return;
+    }
+    // markDead takes the children with it without killObject.
+    for (const LLPointer<LLViewerObject>& child : object->getChildren())
+    {
+        if (child && !child->isAvatar())
+        {
+            mGone.insert(child->getID());
+        }
+    }
+}
+
+void SKWorldCensus::onPropertiesChanged(const LLUUID& id)
+{
+    llassert(on_main_thread());
+    // Only a part already taken can have read its name before the name came.
+    if (!mParts.count(id))
+    {
+        return;
+    }
+    if (!running())
+    {
+        mForceSweep = true;
+        return;
+    }
+    mDirty.insert(id);
+}
+
+void SKWorldCensus::gatherObjects()
+{
+    llassert(on_main_thread());
+    SKCensusSnapshot& snap = *mScan.mPending;
+    const F64 now = gFrameTimeSeconds;
+    const char* why = "-";
+    if (!sameRegions(mSweepRegions))
+    {
+        why = "regions";
+    }
+    else if (mForceSweep)
+    {
+        why = "reset";
+    }
+    else if (dist_vec(snap.mCenter, mSweepCenter) > RESCAN_MOVE_M || dist_vec(snap.mCamera, mSweepCamera) > RESCAN_MOVE_M
+             || snap.mRange != mSweepRange)
+    {
+        why = "move";
+    }
+    else if (now - mSweepBegan >= FULL_SWEEP_S)
+    {
+        why = "timer";
+    }
+    mScanFull = why[0] != '-';
+    ++mScanSerial;
+    mScanMissed = 0;
+    mRetaking = false;
+    mScan.mObjects.clear();
+    mScanWhy = why;
+    // The finish's feature rules cost the same however little changed, so a dirty scan waits out its cadence.
+    mScanGathered = false;
+    mScanGatherAt = mScanFull ? now : std::max(now, mLastGather + DIRTY_SCAN_S);
+    if (now >= mScanGatherAt)
+    {
+        gatherNow();
+    }
+}
+
+void SKWorldCensus::gatherNow()
+{
+    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - dirty gather");
+    SKCensusSnapshot& snap = *mScan.mPending;
+    const F64 now = gFrameTimeSeconds;
+    mScanGathered = true;
+    mLastGather = now;
+    mScanBegan = now;
+
+    // What was killed leaves the caches first, so a part made again under its id is visited fresh.
+    for (const LLUUID& id : mGone)
+    {
+        mParts.erase(id);
+    }
+    mGone.clear();
+    mScanDirty.clear();
+    mScanDirty.swap(mDirty);
+    const U32 requeued = mPendingQueued;
+    mPendingQueued = 0;
+
+    const S32 count = gObjectList.getNumObjects();
+    if (mScanFull)
+    {
+        mScan.mObjects.reserve(count);
+        for (S32 i = 0; i < count; ++i)
+        {
+            if (LLViewerObject* object = gObjectList.getObject(i))
+            {
+                mScan.mObjects.push_back(object);
+            }
+        }
+    }
+    else
+    {
+        mScan.mObjects.reserve(mScanDirty.size());
+        for (const LLUUID& id : mScanDirty)
+        {
+            LLViewerObject* object = gObjectList.findObject(id);
+            if (object && !object->isDead())
+            {
+                mScan.mObjects.push_back(object);
+            }
+            else
+            {
+                mParts.erase(id);
+            }
+        }
+    }
+    snap.mStats.mDirtyVisited = static_cast<U32>(mScanDirty.size());
+    snap.mStats.mFullSweep = mScanFull;
+
+    static LLCachedControl<bool> log(gSavedSettings, "SKNavCensusLog", false);
+    if (log && (mScanFull || now - mLastScanLog >= SCAN_LOG_S))
+    {
+        mLastScanLog = now;
+        LL_INFOS("SKNav") << "census scan: dirty " << mScanDirty.size() << " (" << requeued << " pending) of " << count
+                          << " objects, full " << (mScanFull ? "y" : "n") << " (" << mScanWhy << "), last scan "
+                          << (mSnapshot ? mSnapshot->mStats.mScanMs : 0.f) << " ms" << LL_ENDL;
+    }
+}
+
+void SKWorldCensus::visitTracked(LLViewerObject* object)
+{
+    SKCensusSnapshot& snap = *mScan.mPending;
+    const LLUUID id = object->getID();
+    const size_t records = snap.mRecords.size();
+    const size_t features = mScan.mFeatureParts.size();
+    // A full sweep checks what a re-take would have kept against what it finds.
+    std::vector<RecordPtr> kept;
+    bool watched = false;
+    if (mScanFull && !mScanDirty.count(id))
+    {
+        if (const auto it = mParts.find(id); it != mParts.end() && retakes(id, it->second))
+        {
+            kept = it->second.mTaken;
+            watched = true;
+        }
+    }
+
+    visit(object);
+
+    const auto it = mParts.find(id);
+    if (it == mParts.end())
+    {
+        return;
+    }
+    PartCache& cache = it->second;
+    // visit stamps the cache only once the part is past its filters and asks for a record.
+    const F64 now = gFrameTimeSeconds;
+    const bool reached = cache.mLastSeen == now;
+    cache.mVisitedScan = mScanSerial;
+    cache.mTaken.assign(snap.mRecords.begin() + records, snap.mRecords.end());
+    cache.mHasFeature = mScan.mFeatureParts.size() > features;
+    if (cache.mHasFeature)
+    {
+        cache.mFeature = mScan.mFeatureParts.back();
+    }
+    const auto leaf = mLeafTransforms.find(id);
+    cache.mHasLeaf = leaf != mLeafTransforms.end();
+    if (cache.mHasLeaf)
+    {
+        cache.mLeafPos = leaf->second.mPos;
+        cache.mLeafRot = leaf->second.mRot;
+        cache.mLeafRegion = leaf->second.mRegion;
+    }
+    cache.mFromObjectCache = false;
+    if (object->getRegion())
+    {
+        cache.mReachCenter = object->getRegion()->getOriginGlobal() + LLVector3d(object->getPositionRegion());
+        cache.mReachPad = 0.5 * object->getScale().magVec();
+    }
+    if (watched && kept != cache.mTaken)
+    {
+        mScanMissed++;
+    }
+    if (reached && pending(object, cache))
+    {
+        mDirty.insert(id);
+        mPendingQueued++;
+    }
+}
+
+bool SKWorldCensus::pending(LLViewerObject* object, const PartCache& cache) const
+{
+    // What changes with no update to say so: the type and the assets arrive by HTTP, a leaf's doorway and a
+    // mover's rest by the clock.
+    if (cache.mTaken.empty() || object->isPhysicsShapeUnknown() || mLeaves.count(object->getID()))
+    {
+        return true;
+    }
+    // A surround is signed by its loaded LOD, which follows the camera; they are few, so each scan visits them.
+    if (cache.mTaken.front()->mRole == Role::SURROUND)
+    {
+        return true;
+    }
+    if (object->getPCode() == LL_PCODE_VOLUME && static_cast<LLVOVolume*>(object)->isMesh())
+    {
+        LLVOVolume* volume = static_cast<LLVOVolume*>(object);
+        const LLUUID& mesh = volume->getVolume()->getParams().getSculptID();
+        const LLModel::Decomposition* decomp = gMeshRepo.getDecomposition(mesh);
+        if (!decomp)
+        {
+            return true;
+        }
+        // The simulator's triangles are still on their way where nothing else rules them out.
+        if (!cache.mSim && volume->getPhysicsShapeType() == LLViewerObject::PHYSICS_SHAPE_PRIM
+            && !skPhysicsMeshTooSmallForTriangles(volume) && decomp->mHull.empty() && gMeshRepo.physicsMeshSize(mesh) > 0
+            && !gMeshRepo.getPhysicsHavok(mesh))
+        {
+            return true;
+        }
+    }
+    static LLCachedControl<F32> settle(gSavedSettings, "SKNavSettleSeconds", 4.f);
+    const F64 now = gFrameTimeSeconds;
+    const auto rest = mRest.find(rootOf(object)->getID());
+    return rest != mRest.end() && rest->second.mMovedAt >= 0.f
+        && (now - rest->second.mMovedAt < settle || now < rest->second.mMoverUntil);
+}
+
+void SKWorldCensus::visitCachedTracked(const CachedPart& part)
+{
+    visitCached(part);
+    PartCache& cache = mParts[part.mId];
+    cache.mVisitedScan = mScanSerial;
+    cache.mTaken.assign(1, cache.mRecord);
+    cache.mHasFeature = false;
+    cache.mHasLeaf = false;
+    cache.mFromObjectCache = true;
+    cache.mReachCenter = part.mOrigin + LLVector3d(part.mCenter);
+    cache.mReachPad = part.mHalf.magVec();
+}
+
+bool SKWorldCensus::retakes(const LLUUID& id, const PartCache& cache) const
+{
+    if (cache.mTaken.empty() || cache.mLastSeen < mSweepBegan || mGone.count(id))
+    {
+        return false;
+    }
+    const SKCensusSnapshot& snap = *mScan.mPending;
+    const F64 reach = snap.mRange + cache.mReachPad;
+    return dist_vec(cache.mReachCenter, snap.mCenter) <= reach || dist_vec(cache.mReachCenter, snap.mCamera) <= reach;
+}
+
+bool SKWorldCensus::retake(LLTimer& timer, F32 budget_ms)
+{
+    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - retake");
+    if (!mRetaking)
+    {
+        mRetaking = true;
+        mRetakeAt = mParts.cbegin();
+        mRetakeSize = mParts.size();
+    }
+    // Nothing touches mParts between the live pass and the end of the scan, so the iterator holds across frames.
+    llassert(mParts.size() == mRetakeSize);
+    SKCensusSnapshot& snap = *mScan.mPending;
+    U32 n = 0;
+    for (; mRetakeAt != mParts.cend(); ++mRetakeAt)
+    {
+        if ((++n & 255) == 0 && timer.getElapsedTimeF32() * 1000.f > budget_ms)
+        {
+            return false;
+        }
+        const LLUUID& id = mRetakeAt->first;
+        const PartCache& cache = mRetakeAt->second;
+        if (cache.mVisitedScan == mScanSerial || !retakes(id, cache))
+        {
+            continue;
+        }
+        snap.mStats.mObjectsSeen++;
+        snap.mStats.mCached++;
+        for (const RecordPtr& rec : cache.mTaken)
+        {
+            take(snap, rec);
+        }
+        if (cache.mFromObjectCache)
+        {
+            snap.mStats.mFromObjectCache++;
+        }
+        if (cache.mHasFeature)
+        {
+            mScan.mFeatureParts.push_back(cache.mFeature);
+        }
+        if (cache.mHasLeaf)
+        {
+            mLeafTransforms[id] = { cache.mLeafPos, cache.mLeafRot, cache.mLeafRegion };
+        }
+    }
+    mRetaking = false;
+    return true;
 }
 
 void SKWorldCensus::continueScan(F32 budget_ms)
 {
     LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - scan slice");
+    if (!mScanGathered)
+    {
+        if (gFrameTimeSeconds < mScanGatherAt)
+        {
+            return;
+        }
+        gatherNow();
+    }
     LLTimer timer;
     const S32 count = static_cast<S32>(mScan.mObjects.size());
     while (mScan.mIndex < count)
@@ -446,10 +842,17 @@ void SKWorldCensus::continueScan(F32 budget_ms)
         LLViewerObject* object = mScan.mObjects[mScan.mIndex++].get();
         if (object && !object->isDead())
         {
-            visit(object);
+            visitTracked(object);
         }
     }
     mScan.mObjects.clear();
+
+    // A scan that visited only the dirty set takes the rest from the caches.
+    if (!mScanFull && !retake(timer, budget_ms))
+    {
+        mScan.mElapsedMs += timer.getElapsedTimeF32() * 1000.f;
+        return;
+    }
 
     // Then what the region has cached but never drawn, under the same budget.
     while (mScan.mCachedIndex < mScan.mCached.size())
@@ -459,10 +862,24 @@ void SKWorldCensus::continueScan(F32 budget_ms)
             mScan.mElapsedMs += timer.getElapsedTimeF32() * 1000.f;
             return;
         }
-        visitCached(mScan.mCached[mScan.mCachedIndex++]);
+        visitCachedTracked(mScan.mCached[mScan.mCachedIndex++]);
     }
     mScan.mCached.clear();
     mScan.mElapsedMs += timer.getElapsedTimeF32() * 1000.f;
+    if (mScanFull)
+    {
+        // Re-takes trust what this sweep saw from now on.
+        mForceSweep = false;
+        mSweepBegan = mScanBegan;
+        mSweepCenter = mScan.mPending->mCenter;
+        mSweepCamera = mScan.mPending->mCamera;
+        mSweepRange = mScan.mPending->mRange;
+        mSweepRegions = mScan.mRegions;
+        if (mScanMissed)
+        {
+            LL_WARNS("SKNav") << "census full sweep found " << mScanMissed << " parts the dirty set missed" << LL_ENDL;
+        }
+    }
     finishScan();
 }
 
@@ -930,7 +1347,6 @@ void SKWorldCensus::visit(LLViewerObject* object)
         cache.mSignature = sig;
     }
     take(snap, rec);
-    snap.mStats.mVisibleOnly += rec->mCollides ? 0 : 1;
     // Only a mesh has its type asked for above; a prim's stays unknown until someone edits it.
     if (volume->isMesh())
     {
@@ -996,6 +1412,7 @@ void SKWorldCensus::take(SKCensusSnapshot& snap, const sknav::RecordPtr& rec)
     snap.mRecords.push_back(rec);
     if (rec->mDynamic) snap.mStats.mDynamic++;
     if (rec->mRole == Role::SURROUND) snap.mStats.mSurround++;
+    if (!rec->mCollides) snap.mStats.mVisibleOnly++;
     if (rec->mProvenance == Provenance::BOX) snap.mStats.mPlaceholders++;
     if (rec->mTriangles) snap.mStats.mTriangles += static_cast<U32>(rec->mTriangles->size() / 3);
 }
@@ -1003,7 +1420,8 @@ void SKWorldCensus::take(SKCensusSnapshot& snap, const sknav::RecordPtr& rec)
 void SKWorldCensus::gatherCached()
 {
     static LLCachedControl<bool> use_cache(gSavedSettings, "SKNavCensusObjectCache", true);
-    if (!use_cache || !LLWorld::instanceExists())
+    // A dirty scan takes its boxes from the caches with the rest.
+    if (!mScanFull || !use_cache || !LLWorld::instanceExists())
     {
         return;
     }
@@ -1057,14 +1475,7 @@ void SKWorldCensus::gatherCached()
             {
                 continue;
             }
-            // No asset id is ever going to arrive for something we have not
-            // drawn, so the record is keyed by where it is instead: the region
-            // and the local id, tagged so it cannot collide with a real one.
-            const U32 local = entry->getLocalID();
-            const U32 tag = 0x534b4e56;     // 'SKNV'
-            memcpy(part.mId.mData, &handle, sizeof(handle));
-            memcpy(part.mId.mData + 8, &local, sizeof(local));
-            memcpy(part.mId.mData + 12, &tag, sizeof(tag));
+            part.mId = placeholderId(handle, entry->getLocalID());
             mScan.mCached.push_back(part);
         }
     }
@@ -1420,6 +1831,7 @@ void SKWorldCensus::classify(SKCensusSnapshot& snap)
 
     // What the next scan records each part with, and what stays with a root
     // for the session: a vehicle stays one, a working car stays working.
+    std::unordered_map<LLUUID, PartFeature> before = std::move(mPartFeatures);
     mPartFeatures.clear();
     for (const Feature& f : snap.mFeatures)
     {
@@ -1437,6 +1849,22 @@ void SKWorldCensus::classify(SKCensusSnapshot& snap)
                 history.mKind = f.mKind;
                 history.mWorkingElevator = history.mWorkingElevator || f.mKind == FeatureKind::ELEVATOR;
             }
+        }
+    }
+    // A part is recorded with its kind, so one whose kind moved is visited again.
+    for (const auto& entry : mPartFeatures)
+    {
+        const auto was = before.find(entry.first);
+        if (was == before.end() || was->second.mKind != entry.second.mKind || was->second.mExclude != entry.second.mExclude)
+        {
+            mDirty.insert(entry.first);
+        }
+    }
+    for (const auto& entry : before)
+    {
+        if (!mPartFeatures.count(entry.first))
+        {
+            mDirty.insert(entry.first);
         }
     }
     mScan.mFeatureParts.clear();
@@ -1460,6 +1888,7 @@ void SKWorldCensus::requestRoles()
         // Roles are per region; the old region's linksets are gone with it.
         mRoles.clear();
         mLinksets.clear();
+        mForceSweep = true;
     }
     mRolesWanted = false;
     mRolesRequestedAt = gFrameTimeSeconds;
@@ -1490,6 +1919,11 @@ void SKWorldCensus::onRoles(U32 request, S32 status, std::shared_ptr<LLPathfindi
         {
             slot = role;
             changed++;
+            // A role is in every part's signature.
+            if (LLViewerObject* object = gObjectList.findObject(linkset->getUUID()); object && !object->isDead())
+            {
+                dirtyLinkset(object);
+            }
         }
         // The reply is the one free source of a linkset's name and whether
         // its root is scripted, which is what the feature rules read.

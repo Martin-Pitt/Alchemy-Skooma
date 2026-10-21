@@ -347,6 +347,7 @@ private:
     U64 mSkyVersion = ~0ull;
     U64 mSeenRevision = ~0ull;
     U64 mSeenFeatures = ~0ull;
+    F64 mLastFullWalk = -1.0;               ///< when every mesh was last walked, the change list's backstop
     SKNavWorldViewPtr mView;
     SKNavWindPtr mWind;
     U64 mViewAirRevision = 0;

@@ -33,6 +33,15 @@ namespace sknav
 {
     bool sameTops(const TileAir& a, const TileAir& b)
     {
+        return sameTops(*a.mTops, *b.mTops);
+    }
+
+    bool sameTops(const TileTops& a, const TileTops& b)
+    {
+        if (&a == &b)
+        {
+            return true;
+        }
         if (a.mOrigin != b.mOrigin || a.mCell != b.mCell || a.mUnit != b.mUnit || a.mTopCell != b.mTopCell ||
             a.mTopWidth != b.mTopWidth || a.mTopHeight != b.mTopHeight || a.mTopStart != b.mTopStart || a.mTop.size() != b.mTop.size())
         {
@@ -76,6 +85,7 @@ namespace sknav
 
     SkyMap::Block& SkyMap::writable(S64 x, S64 y)
     {
+        // Right only while every other holder of a block reads it: one map writes, its copies only read.
         std::shared_ptr<Block>& b = mBlocks[blockKey(x, y)];
         if (!b)
         {
@@ -85,6 +95,7 @@ namespace sknav
         {
             b = std::make_shared<Block>(*b);    // a snapshot still reads the old one
         }
+        llassert(b.use_count() == 1);
         return *b;
     }
 
@@ -120,18 +131,18 @@ namespace sknav
         mContributors.erase(it);
     }
 
-    void SkyMap::set(U64 contributor, const LLVector3d& tile_min, const TileAir& air)
+    void SkyMap::set(U64 contributor, const LLVector3d& tile_min, const TileTops& tops)
     {
         drop(contributor);
         // Tiles are unrotated and start on whole metres, so each top cell is one global metre cell.
-        const F64 metres = air.mTopCell * air.mCell;
+        const F64 metres = tops.mTopCell * tops.mCell;
         auto touched = std::make_shared<std::vector<U64>>();
-        for (S32 ty = 0; ty < air.mTopHeight; ++ty)
+        for (S32 ty = 0; ty < tops.mTopHeight; ++ty)
         {
-            for (S32 tx = 0; tx < air.mTopWidth; ++tx)
+            for (S32 tx = 0; tx < tops.mTopWidth; ++tx)
             {
-                const S32 c = tx + ty * air.mTopWidth;
-                if (air.mTopStart[c] == air.mTopStart[c + 1])
+                const S32 c = tx + ty * tops.mTopWidth;
+                if (tops.mTopStart[c] == tops.mTopStart[c + 1])
                 {
                     continue;
                 }
@@ -143,10 +154,10 @@ namespace sknav
                 {
                     ++mCellCount;
                 }
-                for (U32 i = air.mTopStart[c]; i < air.mTopStart[c + 1]; ++i)
+                for (U32 i = tops.mTopStart[c]; i < tops.mTopStart[c + 1]; ++i)
                 {
-                    const TopInterval& t = air.mTop[i];
-                    cell.push_back({ tile_min.mdV[VZ] + t.mBottom * air.mUnit, tile_min.mdV[VZ] + t.mTop * air.mUnit, contributor });
+                    const TopInterval& t = tops.mTop[i];
+                    cell.push_back({ tile_min.mdV[VZ] + t.mBottom * tops.mUnit, tile_min.mdV[VZ] + t.mTop * tops.mUnit, contributor });
                 }
                 touched->push_back(key);
             }
@@ -155,10 +166,10 @@ namespace sknav
         {
             mContributors[contributor] = touched;
         }
-        if (air.mTopWidth > 0 && air.mTopHeight > 0)
+        if (tops.mTopWidth > 0 && tops.mTopHeight > 0)
         {
-            mCoverage[contributor] = { tile_min.mdV[VX], tile_min.mdV[VY], tile_min.mdV[VX] + air.mTopWidth * metres,
-                                       tile_min.mdV[VY] + air.mTopHeight * metres };
+            mCoverage[contributor] = { tile_min.mdV[VX], tile_min.mdV[VY], tile_min.mdV[VX] + tops.mTopWidth * metres,
+                                       tile_min.mdV[VY] + tops.mTopHeight * metres };
         }
         ++mVersion;
     }

@@ -42,7 +42,8 @@ namespace sknav
     /// snapshot for a worker costs a pointer per block.
     constexpr F32 SIDE_OPEN_REACH_M = 24.f;    ///< side openness looks for walls this far out
 
-    /// Whether two airs give a sky map the same solid tops, so either sets the same cells.
+    /// Whether two tops, or two airs' tops, set the same sky map cells; shared tops are the same at once.
+    bool sameTops(const TileTops& a, const TileTops& b);
     bool sameTops(const TileAir& a, const TileAir& b);
 
     class SkyMap
@@ -57,7 +58,8 @@ namespace sknav
 
         /// Replace what one tile contributes. tile_min is the global corner
         /// of the tile, its z where the air's height 0 is.
-        void set(U64 contributor, const LLVector3d& tile_min, const TileAir& air);
+        void set(U64 contributor, const LLVector3d& tile_min, const TileTops& tops);
+        void set(U64 contributor, const LLVector3d& tile_min, const TileAir& air) { set(contributor, tile_min, *air.mTops); }
         void remove(U64 contributor);
         bool has(U64 contributor) const { return mCoverage.count(contributor) != 0; }
 

@@ -1156,7 +1156,7 @@ namespace sknav
             if (it == tops.end())
             {
                 F32 top = -1e30f;
-                for (const TopInterval& i : nt.mAir ? nt.mAir->mTop : std::vector<TopInterval>())
+                for (const TopInterval& i : nt.mAir ? nt.mAir->mTops->mTop : std::vector<TopInterval>())
                 {
                     top = std::max(top, nt.mOrigin.mV[VZ] + i.mTop * nt.mUnit);
                 }
