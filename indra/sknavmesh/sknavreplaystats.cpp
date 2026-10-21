@@ -27,6 +27,8 @@
 #include "sknavreplaystats.h"
 
 #include "sknavlayout.h"
+#include "sknavspacefilter.h"
+#include "sknavtilecache.h"
 
 #include "DetourNavMesh.h"
 #include "DetourNavMeshQuery.h"
@@ -34,11 +36,13 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <functional>
 #include <iomanip>
 #include <map>
 #include <ostream>
 #include <random>
 #include <set>
+#include <sstream>
 
 namespace
 {
@@ -83,13 +87,14 @@ namespace
         {
             return NO_GAP;
         }
-        const AirLeaf& l = air.mLeaves[leaf];
-        for (U32 k = 0; k < l.mGapCount; ++k)
+        AirColumn column;
+        airColumn(air, leaf, column);
+        for (U32 k = 0; k < column.mCount; ++k)
         {
-            const AirGap& g = air.mGaps[l.mFirstGap + k];
-            if (top >= static_cast<S32>(g.mFloor) - 1 - slack && top < static_cast<S32>(g.mCeiling))
+            const AirGap& g = air.mGaps[column.mGap[k]];
+            if (top >= column.floorAt(air, k, ix, iy) - 1 - slack && top < static_cast<S32>(g.mCeiling))
             {
-                return l.mFirstGap + k;
+                return column.mGap[k];
             }
         }
         return NO_GAP;
@@ -119,10 +124,11 @@ namespace
             const AirGap* next = nullptr;
             if (leaf >= 0)
             {
-                const AirLeaf& l = air.mLeaves[leaf];
-                for (U32 g = 0; g < l.mGapCount && !next; ++g)
+                AirColumn column;
+                airColumn(air, leaf, column);
+                for (U32 g = 0; g < column.mCount && !next; ++g)
                 {
-                    next = airAdjacent(*gap, air.mGaps[l.mFirstGap + g], climb, overlap) ? &air.mGaps[l.mFirstGap + g] : nullptr;
+                    next = airAdjacent(*gap, air.mGaps[column.mGap[g]], climb, overlap) ? &air.mGaps[column.mGap[g]] : nullptr;
                 }
             }
             if (!next)
@@ -149,11 +155,12 @@ namespace
                 {
                     continue;
                 }
-                const AirLeaf& l = air.mLeaves[leaf];
+                AirColumn column;
+                airColumn(air, leaf, column);
                 U8 found = 0;
-                for (U32 g = 0; g < l.mGapCount; ++g)
+                for (U32 g = 0; g < column.mCount; ++g)
                 {
-                    const AirGap& gap = air.mGaps[l.mFirstGap + g];
+                    const AirGap& gap = air.mGaps[column.mGap[g]];
                     if (static_cast<S32>(gap.mCeiling) - static_cast<S32>(gap.mFloor) < overlap)
                     {
                         continue;
@@ -165,7 +172,7 @@ namespace
                         const S32 hi = lo < 0 ? -1 : openRun(air, leaves, ix, iy, gap, dx, dy, climb, overlap, 1);
                         if (lo >= 0 && hi >= 0 && lo + hi + 1 <= 2)
                         {
-                            found |= (gap.mFlags & AirGap::WALKABLE) ? 3 : 1;
+                            found |= (gap.mFlags & AirGap::TOP) ? 3 : 1;
                             break;
                         }
                     }
@@ -220,9 +227,54 @@ namespace
         F32 mPortal;
     };
 
+    struct Purity
+    {
+        U32 mImpure = 0;
+        U32 mSpans = 0;
+        F64 mArea = 0.0;
+        F64 mAreaImpure = 0.0;
+        F64 mAreaUnspaced = 0.0;
+    };
+
+    /// Polys whose spans lie in more than one space, by a space per span: 0 none, U16_MAX no gap.
+    Purity purity(const TileBuildStats& st, const std::vector<U32>& space)
+    {
+        Purity out;
+        for (size_t p = 0; p < st.mPolyArea.size(); ++p)
+        {
+            std::set<U32> in;
+            bool lacks = false;
+            for (U32 k = st.mPolySpanStart[p]; k < st.mPolySpanStart[p + 1]; ++k)
+            {
+                const U32 sp = space[st.mPolySpans[k]];
+                ++out.mSpans;
+                if (sp == 0 || sp == U16_MAX)
+                {
+                    lacks = true;
+                }
+                else
+                {
+                    in.insert(sp);
+                }
+            }
+            out.mArea += st.mPolyArea[p];
+            if (in.size() > 1)
+            {
+                ++out.mImpure;
+                out.mAreaImpure += st.mPolyArea[p];
+            }
+            if (lacks)
+            {
+                out.mAreaUnspaced += st.mPolyArea[p];
+            }
+        }
+        return out;
+    }
+
     /// Spans, spaces and polys of one tile, written as the fields of its object.
+    /// poly_space_b3 gets each unstamped poly's space index, -1 for none.
     void writeSpaceFields(std::ostream& out, const CensusFile& census, const ReplayMesh& mesh, U32 mesh_index, const ReplayTile& tile,
-                          std::vector<NoGap>& nogaps)
+                          std::vector<NoGap>& nogaps, std::vector<S32>& poly_space_b3)
     {
         const TileBuildStats& st = *tile.mStats;
         const TileBuildResult& r = *tile.mResult;
@@ -377,37 +429,19 @@ namespace
             }
         }
 
-        // Purity: a poly whose spans lie in more than one space.
-        U32 impure = 0, flight_polys = 0, spans_matched = 0;
-        F64 area = 0.0, area_impure = 0.0, area_unspaced = 0.0;
+        // Purity: a poly whose spans lie in more than one space, by the spans' own gaps here and by the raster's span map.
+        const Purity pure = purity(st, space);
+        std::vector<U32> mapped(st.mSpans.size(), U16_MAX);
+        for (size_t i = 0; i < st.mSpans.size(); ++i)
+        {
+            const U32 g = st.mSpans[i].mGap;
+            mapped[i] = g == U32_MAX ? U16_MAX : enc && g < enc->mGaps.size() ? enc->mGaps[g].mSpace : 0;
+        }
+        const Purity pure_map = purity(st, mapped);
+        U32 flight_polys = 0;
         const size_t npolys = st.mPolyArea.size();
         for (size_t p = 0; p < npolys; ++p)
         {
-            std::set<U32> in;
-            bool lacks = false;
-            for (U32 k = st.mPolySpanStart[p]; k < st.mPolySpanStart[p + 1]; ++k)
-            {
-                const U32 sp = space[st.mPolySpans[k]];
-                ++spans_matched;
-                if (sp == 0 || sp == U16_MAX)
-                {
-                    lacks = true;
-                }
-                else
-                {
-                    in.insert(sp);
-                }
-            }
-            area += st.mPolyArea[p];
-            if (in.size() > 1)
-            {
-                ++impure;
-                area_impure += st.mPolyArea[p];
-            }
-            if (lacks)
-            {
-                area_unspaced += st.mPolyArea[p];
-            }
             flight_polys += p < st.mPolyFlight.size() ? st.mPolyFlight[p] : 0;
         }
 
@@ -419,11 +453,183 @@ namespace
         out << ",\"spaces\":" << adjacent.size() << ",\"spans\":" << st.mSpans.size() << ",\"spans_nogap\":" << nogap << ",\"spans_nogap_climb\":" << nogap_climb
             << ",\"spans_unspaced\":" << unspaced << ",\"pairs_raw\":" << pairs_raw.size() << ",\"pairs_raw_all\":" << pairs_raw_all.size()
             << ",\"colours\":" << colours << ",\"pairs_coloured\":" << pairs_coloured.size() << ",\"pairs_coloured_all\":" << pairs_coloured_all.size()
-            << ",\"polys\":" << npolys << ",\"polys_impure\":" << impure << ",\"poly_area\":" << area << ",\"poly_area_impure\":" << area_impure
-            << ",\"poly_area_unspaced\":" << area_unspaced << ",\"poly_spans\":" << spans_matched << ",\"flight_polys\":" << flight_polys
+            << ",\"polys\":" << npolys << ",\"polys_impure\":" << pure.mImpure << ",\"poly_area\":" << pure.mArea << ",\"poly_area_impure\":" << pure.mAreaImpure
+            << ",\"poly_area_unspaced\":" << pure.mAreaUnspaced << ",\"poly_spans\":" << pure.mSpans << ",\"map_polys_impure\":" << pure_map.mImpure
+            << ",\"map_poly_area_impure\":" << pure_map.mAreaImpure << ",\"flight_polys\":" << flight_polys
             << ",\"narrow_cells\":" << narrow << ",\"narrow_walkable_cells\":" << narrow_walkable << ",\"narrow_blocks\":" << blocks
             << ",\"narrow_walkable_blocks\":" << blocks_walkable << ",\"blocks\":"
             << (air ? ((air->mWidth + BLOCK_CELLS - 1) / BLOCK_CELLS) * ((air->mHeight + BLOCK_CELLS - 1) / BLOCK_CELLS) : 0);
+        // The same raster polygonised with no stamp: B3's polys, measured the same two ways.
+        if (tile.mUnstampedStats)
+        {
+            const TileBuildStats& us = *tile.mUnstampedStats;
+            const Purity before = purity(us, space), before_map = purity(us, mapped);
+            out << ",\"b3_polys\":" << us.mPolyArea.size() << ",\"b3_polys_impure\":" << before.mImpure << ",\"b3_poly_area\":" << before.mArea
+                << ",\"b3_poly_area_impure\":" << before.mAreaImpure << ",\"b3_map_polys_impure\":" << before_map.mImpure
+                << ",\"b3_map_poly_area_impure\":" << before_map.mAreaImpure << ",\"b3_poly_ms\":" << us.mPolyMs
+                << ",\"b3_stand_only\":" << us.mFlightStandOnly.size() << ",\"b3_polys_only\":" << us.mFlightPolysOnly.size();
+            // Each B3 poly's space: the most of its spans', by the span map.
+            std::vector<S32>& b3 = poly_space_b3;
+            b3.assign(us.mPolyArea.size(), -1);
+            for (size_t p = 0; p < us.mPolyArea.size(); ++p)
+            {
+                std::map<U32, U32> votes;
+                for (U32 k = us.mPolySpanStart[p]; k < us.mPolySpanStart[p + 1]; ++k)
+                {
+                    const U32 sp = mapped[us.mPolySpans[k]];
+                    if (sp && sp != U16_MAX)
+                    {
+                        ++votes[sp];
+                    }
+                }
+                U32 most = 0;
+                for (const auto& [sp, v] : votes)
+                {
+                    if (v > most)
+                    {
+                        most = v;
+                        b3[p] = static_cast<S32>(sp) - 1;
+                    }
+                }
+            }
+        }
+    }
+
+    struct Coverage
+    {
+        U32 mPortals = 0;
+        U32 mHalf = 0;              ///< portals at least half covered
+        U32 mAny = 0;               ///< portals with any edge on them
+        F64 mWidth = 0.0;
+        F64 mCovered = 0.0;
+    };
+
+    /// How much of each portal's width runs along poly edges between its two
+    /// spaces, read across Detour's links so seams count: space_of gives a
+    /// poly's space index, -1 for none.
+    Coverage portalCoverage(const dtNavMesh& nav, const RoomsProduct& rooms, const std::function<S32(const dtMeshTile&, S32)>& space_of)
+    {
+        std::map<std::pair<U32, U32>, std::vector<U32>> by_pair;
+        for (U32 i = 0; i < rooms.mPortals.size(); ++i)
+        {
+            const Portal& p = rooms.mPortals[i];
+            if (!p.mCrossMesh && dist_vec(p.mA, p.mB) > 0.01f)
+            {
+                by_pair[{ std::min(p.mSpaces[0], p.mSpaces[1]), std::max(p.mSpaces[0], p.mSpaces[1]) }].push_back(i);
+            }
+        }
+        std::vector<std::vector<std::pair<F32, F32>>> runs(rooms.mPortals.size());
+        for (S32 t = 0; t < nav.getMaxTiles(); ++t)
+        {
+            const dtMeshTile* tile = nav.getTile(t);
+            if (!tile || !tile->header)
+            {
+                continue;
+            }
+            for (S32 p = 0; p < tile->header->polyCount; ++p)
+            {
+                const dtPoly& poly = tile->polys[p];
+                const S32 a = poly.getType() == DT_POLYTYPE_GROUND ? space_of(*tile, p) : -1;
+                if (a < 0)
+                {
+                    continue;
+                }
+                for (S32 j = 0; j < poly.vertCount; ++j)
+                {
+                    const dtMeshTile* other = nullptr;
+                    S32 q = -1;
+                    if (poly.neis[j] & DT_EXT_LINK)
+                    {
+                        for (U32 k = poly.firstLink; k != DT_NULL_LINK; k = tile->links[k].next)
+                        {
+                            if (tile->links[k].edge == j)
+                            {
+                                const dtPoly* np = nullptr;
+                                if (dtStatusSucceed(nav.getTileAndPolyByRef(tile->links[k].ref, &other, &np)))
+                                {
+                                    q = static_cast<S32>(np - other->polys);
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    else if (poly.neis[j])
+                    {
+                        other = tile;
+                        q = poly.neis[j] - 1;
+                    }
+                    const S32 b = other && q >= 0 ? space_of(*other, q) : -1;
+                    if (b < 0 || b == a)
+                    {
+                        continue;
+                    }
+                    const auto it = by_pair.find({ static_cast<U32>(std::min(a, b)), static_cast<U32>(std::max(a, b)) });
+                    if (it == by_pair.end())
+                    {
+                        continue;
+                    }
+                    const LLVector3 va = fromRecast(&tile->verts[poly.verts[j] * 3]);
+                    const LLVector3 vb = fromRecast(&tile->verts[poly.verts[(j + 1) % poly.vertCount] * 3]);
+                    const LLVector3 mid = (va + vb) * 0.5f;
+                    for (const U32 i : it->second)
+                    {
+                        const Portal& pt = rooms.mPortals[i];
+                        if (std::fabs(mid.mV[VZ] - pt.mCentre.mV[VZ]) > 1.f ||
+                            segmentDistance(LLVector3(mid.mV[VX], mid.mV[VY], 0.f), LLVector3(pt.mA.mV[VX], pt.mA.mV[VY], 0.f),
+                                            LLVector3(pt.mB.mV[VX], pt.mB.mV[VY], 0.f)) > 0.5f)
+                        {
+                            continue;
+                        }
+                        LLVector3 dir = pt.mB - pt.mA;
+                        dir.mV[VZ] = 0.f;
+                        const F32 len = dir.normVec();
+                        LLVector3 da = va - pt.mA, db = vb - pt.mA;
+                        da.mV[VZ] = db.mV[VZ] = 0.f;
+                        F32 t0 = da * dir, t1 = db * dir;
+                        if (t0 > t1)
+                        {
+                            std::swap(t0, t1);
+                        }
+                        t0 = llclamp(t0, 0.f, len);
+                        t1 = llclamp(t1, 0.f, len);
+                        if (t1 > t0)
+                        {
+                            runs[i].emplace_back(t0, t1);
+                        }
+                    }
+                }
+            }
+        }
+        Coverage out;
+        for (const auto& [pair, list] : by_pair)
+        {
+            for (const U32 i : list)
+            {
+                const Portal& pt = rooms.mPortals[i];
+                const F32 len = dist_vec(LLVector3(pt.mA.mV[VX], pt.mA.mV[VY], 0.f), LLVector3(pt.mB.mV[VX], pt.mB.mV[VY], 0.f));
+                std::vector<std::pair<F32, F32>>& r = runs[i];
+                std::sort(r.begin(), r.end());
+                F32 covered = 0.f, end = 0.f;
+                for (const auto& [a, b] : r)
+                {
+                    const F32 from = std::max(a, end);
+                    covered += std::max(0.f, b - from);
+                    end = std::max(end, b);
+                }
+                ++out.mPortals;
+                out.mWidth += len;
+                out.mCovered += std::min(covered, len);
+                out.mHalf += covered >= 0.5f * len ? 1 : 0;
+                out.mAny += covered > 0.f ? 1 : 0;
+            }
+        }
+        return out;
+    }
+
+    void writeCoverage(std::ostream& out, const char* name, const Coverage& c)
+    {
+        out << ",\"" << name << "\":{\"portals\":" << c.mPortals << ",\"half\":" << c.mHalf << ",\"any\":" << c.mAny << ",\"width\":" << c.mWidth
+            << ",\"covered\":" << c.mCovered << '}';
     }
 
     size_t coarseBytes(const CoarseAir& c)
@@ -485,6 +691,7 @@ namespace sknav
         out << "{\"version\":1,\"cell\":" << census.mParams.mCell << ",\"air_radius\":" << census.mAirRadius << ",\"camera\":[" << census.mCamera.mdV[VX]
             << ',' << census.mCamera.mdV[VY] << ',' << census.mCamera.mdV[VZ] << "],\"tiles\":[";
         std::vector<NoGap> nogaps;
+        std::map<std::pair<size_t, TileKey>, std::vector<S32>> b3_spaces;
         bool first = true;
         for (size_t m = 0; m < result.mMeshes.size(); ++m)
         {
@@ -500,22 +707,65 @@ namespace sknav
                 out << (first ? "" : ",") << "\n{\"mesh\":" << m << ",\"x\":" << key.mX << ",\"y\":" << key.mY << ",\"terrain\":" << (mesh.mTerrain ? "true" : "false")
                     << ",\"camera_m\":" << cameraDistance(census, tile) << ",\"status\":" << static_cast<S32>(r.mStatus) << ",\"tris\":" << r.mTriangles
                     << ",\"soup_ms\":" << st.mSoupMs << ",\"exclude_ms\":" << st.mExcludeMs << ",\"total_ms\":" << st.mTotalMs
+                    << ",\"raster_ms\":" << st.mRasterMs << ",\"poly_ms\":" << st.mPolyMs << ",\"held_bytes\":" << st.mHeldBytes
+                    << ",\"held_chf_bytes\":" << st.mHeldChfBytes << ",\"held_edge_bytes\":" << st.mHeldEdgeBytes
+                    << ",\"held_span_gap_bytes\":" << st.mHeldSpanGapBytes << ",\"span_gap_spans\":" << st.mSpanGapSpans
+                    << ",\"span_gap_misses\":" << st.mSpanGapMisses << ",\"span_gap_window_misses\":" << st.mSpanGapWindowMisses
+                    << ",\"span_gap_own_misses\":" << st.mSpanGapOwnMisses
                     << ",\"excluded\":" << st.mExcludedRecords << ",\"window_cells\":" << st.mExcludeWindowCells << ",\"tile_cells\":" << st.mTileCells
                     << ",\"shared_codes\":" << st.mSharedCodes << ",\"classes\":[";
                 first = false;
-                for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
-                {
-                    out << (cls ? "," : "");
-                    writeClass(out, st.mClass[cls]);
-                }
+                // AVATAR, then the raster's own passes where WEATHER's used to be.
+                writeClass(out, st.mClass[0]);
+                out << ',';
+                writeClass(out, st.mTop);
                 out << ']';
                 const TileAir* air = r.mAirBuilt && r.mAir ? r.mAir.get() : nullptr;
                 const TileEnclosure* enc = mesh.mEnclosure ? mesh.mEnclosure->tile(key) : nullptr;
                 out << ",\"air_bytes\":" << (air ? air->bytes() : 0) << ",\"air_leaves\":" << (air ? air->mLeaves.size() : 0)
                     << ",\"air_gaps\":" << (air ? air->mGaps.size() : 0) << ",\"enclosure_bytes\":" << (enc ? enc->bytes() : 0)
                     << ",\"coarse_bytes\":" << (enc ? coarseBytes(enc->mCoarse) : 0) << ",\"coarse_gaps\":" << (enc ? enc->mCoarse.mGaps.size() : 0);
-                writeSpaceFields(out, census, mesh, static_cast<U32>(m), tile, nogaps);
-                out << '}';
+                writeSpaceFields(out, census, mesh, static_cast<U32>(m), tile, nogaps, b3_spaces[{ m, key }]);
+                // The stamp the polys were built with.
+                const TileStampGeom& g = r.mStamp;
+                U32 bound = 0;
+                if (tile.mBinding)
+                {
+                    for (const U32 id : tile.mBinding->mComponentSpaceId)
+                    {
+                        bound += id ? 1 : 0;
+                    }
+                }
+                out << ",\"coarse_air\":" << (r.mCoarseAir ? 1 : 0) << ",\"coarse_air_ms\":" << st.mCoarseAirMs
+                    << ",\"coarse_air_bytes\":" << (r.mCoarseAir && r.mAir ? r.mAir->bytes() : 0) << ",\"stamped\":" << (g.mStamped ? 1 : 0) << ",\"stamp_ms\":" << tile.mStampMs
+                    << ",\"pattern\":\"" << std::hex << g.mPattern << std::dec << "\",\"components\":" << g.mComponents << ",\"bound\":" << bound
+                    << ",\"pairs\":" << g.mPairs << ",\"overflow\":" << static_cast<S32>(g.mOverflow) << ",\"door_spans\":" << g.mDoorSpans
+                    << ",\"flood_spans\":" << g.mFloodSpans << ",\"unspaced_spans\":" << g.mUnspacedSpans << ",\"impure_polys\":" << g.mImpurePolys
+                    << ",\"portal_edges\":" << g.mPortalEdges.size() << ",\"poly_overflow\":" << (r.mPolyOverflow ? 1 : 0)
+                    << ",\"stand_only\":" << st.mFlightStandOnly.size() << ",\"polys_only\":" << st.mFlightPolysOnly.size();
+                const FaceOffsetStats& fo = st.mFaceOffsets;
+                out << ",\"face_ms\":" << fo.mMs << ",\"face_sides\":" << fo.mSides << ",\"face_measured\":" << fo.mMeasured
+                    << ",\"face_entries\":" << fo.mEntries << ",\"face_bytes\":" << (air ? air->mFaceOffsets.capacity() * sizeof(FaceOffset) : 0)
+                    << ",\"edge_walls\":" << st.mEdgeAlign.mWallEdges
+                    << ",\"edge_oblique\":" << st.mEdgeAlign.mOblique << ",\"edge_moved\":" << st.mEdgeAlign.mMovedEdges
+                    << ",\"edge_moved_verts\":" << st.mEdgeAlign.mMovedVerts << ",\"edge_dropped\":" << st.mEdgeAlign.mDropped << ",\"edge_err_before\":" << st.mEdgeAlign.mErrBefore
+                    << ",\"edge_err_after\":" << st.mEdgeAlign.mErrAfter << ",\"face_true_sum\":" << fo.mTrueSum << ",\"face_residual_sum\":" << fo.mResidualSum;
+                const TileBuildStats::Fine& f = st.mFine;
+                out << ",\"fine\":{\"blocks\":" << f.mBlocks << ",\"candidates\":" << f.mCandidates << ",\"windows\":" << f.mWindows
+                    << ",\"window_cells\":" << f.mWindowCells << ",\"skipped\":" << f.mSkipped << ",\"ms\":" << f.mMs << ",\"raster_ms\":" << f.mRasterMs
+                    << ",\"leaves\":" << f.mLeaves << ",\"gaps\":" << f.mGaps << ",\"bytes\":" << f.mBytes << ",\"coarse_links\":" << f.mCoarseLinks
+                    << ",\"closed\":" << f.mClosed << ",\"closed_separating\":" << f.mClosedSeparating << ",\"fine_links\":" << f.mFineLinks
+                    << ",\"opened\":" << f.mOpened << ",\"opened_separating\":" << f.mOpenedSeparating << ",\"fine_gaps\":" << f.mFineGaps
+                    << ",\"new_gaps\":" << f.mNewGaps << ",\"new_walkable\":" << f.mNewWalkable << ",\"rects\":[";
+                if (r.mFineAir)
+                {
+                    for (size_t i = 0; i < r.mFineAir->mWindows.size(); ++i)
+                    {
+                        const FineWindow& w = r.mFineAir->mWindows[i];
+                        out << (i ? "," : "") << '[' << w.mX0 << ',' << w.mY0 << ',' << w.mX1 << ',' << w.mY1 << ']';
+                    }
+                }
+                out << "]}}";
             }
         }
         out << "\n],\"meshes\":[";
@@ -524,8 +774,55 @@ namespace sknav
             const ReplayMesh& mesh = *result.mMeshes[m];
             out << (m ? "," : "") << "\n{\"id\":\"" << mesh.mId << "\",\"terrain\":" << (mesh.mTerrain ? "true" : "false") << ",\"tiles\":" << mesh.mTiles.size()
                 << ",\"spaces\":" << (mesh.mRooms ? mesh.mRooms->mSpaces.size() : 0) << ",\"portals\":" << (mesh.mRooms ? mesh.mRooms->mPortals.size() : 0)
-                << ",\"rooms_bytes\":" << (mesh.mRooms ? mesh.mRooms->bytes() : 0) << ",\"enclosure_bytes\":" << (mesh.mEnclosure ? mesh.mEnclosure->bytes() : 0)
-                << ",\"runs\":[";
+                << ",\"rooms_bytes\":" << (mesh.mRooms ? mesh.mRooms->bytes() : 0) << ",\"enclosure_bytes\":" << (mesh.mEnclosure ? mesh.mEnclosure->bytes() : 0);
+            // Every space renamed: tiles whose stamp would be cut again, which must be none.
+            if (mesh.mRooms && mesh.mEnclosure)
+            {
+                RoomsProduct renamed = *mesh.mRooms;
+                for (Space& sp : renamed.mSpaces)
+                {
+                    sp.mId ^= 0x5a5a5a5au;
+                }
+                U32 checked = 0, restamps = 0;
+                for (const auto& [key, tile] : mesh.mTiles)
+                {
+                    const TileEnclosure* te = tile.mResult && tile.mResult->mAir ? mesh.mEnclosure->tile(key) : nullptr;
+                    if (!tile.mStampInput || !te || te->mAir != tile.mResult->mAir)
+                    {
+                        continue;
+                    }
+                    TileStampInput again;
+                    const LLVector3d lo = tile.mMin - mesh.mOrigin, hi = tile.mMax - mesh.mOrigin;
+                    stampInput(*tile.mResult->mAir, *te, renamed, LLVector3(lo), LLVector3(hi), again);
+                    ++checked;
+                    restamps += again.mPattern != tile.mStampInput->mPattern ? 1 : 0;
+                }
+                out << ",\"rename_checked\":" << checked << ",\"rename_restamps\":" << restamps;
+            }
+            // Portals along poly edges between their spaces, stamped and not.
+            const dtNavMesh* stamped_nav = mesh.mNav[static_cast<S32>(AgentClass::AVATAR)];
+            if (mesh.mRooms && stamped_nav)
+            {
+                writeCoverage(out, "portal_cover", portalCoverage(*stamped_nav, *mesh.mRooms, [&mesh](const dtMeshTile& t, S32 p) -> S32 {
+                    const auto it = mesh.mTiles.find(TileKey{ t.header->y, t.header->x });
+                    if (it == mesh.mTiles.end() || !it->second.mStampInput)
+                    {
+                        return -1;
+                    }
+                    const TileStampGeom& g = it->second.mResult->mStamp;
+                    const U16 c = p < static_cast<S32>(g.mPolyComponent.size()) ? g.mPolyComponent[p] : STAMP_NONE;
+                    const std::vector<U32>& cs = it->second.mStampInput->mComponentSpace;
+                    return c < cs.size() ? static_cast<S32>(cs[c]) : -1;
+                }));
+            }
+            if (mesh.mRooms && mesh.mUnstampedNav)
+            {
+                writeCoverage(out, "b3_portal_cover", portalCoverage(*mesh.mUnstampedNav, *mesh.mRooms, [&](const dtMeshTile& t, S32 p) -> S32 {
+                    const auto it = b3_spaces.find({ m, TileKey{ t.header->y, t.header->x } });
+                    return it != b3_spaces.end() && p < static_cast<S32>(it->second.size()) ? it->second[p] : -1;
+                }));
+            }
+            out << ",\"runs\":[";
             for (size_t k = 0; k < mesh.mRoomsRuns.size(); ++k)
             {
                 const ReplayRoomsRun& run = mesh.mRoomsRuns[k];
@@ -553,7 +850,8 @@ namespace sknav
             out << (i ? "," : "") << '[' << g.mMesh << ',' << g.mPos.mV[VX] << ',' << g.mPos.mV[VY] << ',' << g.mPos.mV[VZ] << ',' << g.mPortal << ']';
         }
 
-        // findPath between random poly centres of each mesh, with the plain filter.
+        // findPath between random poly centres of each mesh, with the plain filter and then the space filter
+        // reading every poly's space, a space priced that no poly stands in so the paths are the same.
         out << "],\"find_path\":[";
         std::mt19937 rng(1007);
         dtNavMeshQuery* query = dtAllocNavMeshQuery();
@@ -561,6 +859,9 @@ namespace sknav
         first = true;
         for (size_t m = 0; m < result.mMeshes.size(); ++m)
         {
+            const ReplayMesh& rmesh = *result.mMeshes[m];
+            SpaceQueryFilter space_filter([&rmesh](const dtMeshTile* tile) { return rmesh.polySpaces(tile); });
+            space_filter.setSpaceCost(0xffffffffu, 2.f);
             const dtNavMesh* nav = result.mMeshes[m]->mNav[static_cast<S32>(AgentClass::AVATAR)];
             if (!nav || !dtStatusSucceed(query->init(nav, 4096)))
             {
@@ -596,24 +897,118 @@ namespace sknav
                 continue;
             }
             std::uniform_int_distribution<size_t> pick(0, polys.size() - 1);
-            dtPolyRef path[256];
+            dtPolyRef path[256], space_path[256];
             for (S32 k = 0; k < 400; ++k)
             {
                 const auto& a = polys[pick(rng)];
                 const auto& b = polys[pick(rng)];
-                S32 count = 0;
+                S32 count = 0, space_count = 0;
                 const auto t0 = Clock::now();
                 const dtStatus status = query->findPath(a.first, b.first, a.second.mV, b.second.mV, &filter, path, &count, 256);
                 const F64 ns = std::chrono::duration<F64, std::nano>(Clock::now() - t0).count();
                 const bool reached = dtStatusSucceed(status) && count > 0 && path[count - 1] == b.first;
-                out << (first ? "" : ",") << '[' << m << ',' << ns << ',' << (reached ? 1 : 0) << ',' << count << ',' << dist_vec(a.second, b.second) << ']';
+                const auto t1 = Clock::now();
+                const dtStatus space_status = query->findPath(a.first, b.first, a.second.mV, b.second.mV, &space_filter, space_path, &space_count, 256);
+                const F64 space_ns = std::chrono::duration<F64, std::nano>(Clock::now() - t1).count();
+                const bool space_reached = dtStatusSucceed(space_status) && space_count > 0 && space_path[space_count - 1] == b.first;
+                // Each path's refs folded into one number, so runs can be compared pair by pair.
+                const auto digest = [](const dtPolyRef* refs, S32 n) {
+                    U64 h = 1469598103934665603ull;
+                    for (S32 i = 0; i < n; ++i)
+                    {
+                        h = (h ^ static_cast<U64>(refs[i])) * 1099511628211ull;
+                    }
+                    return h & 0xffffffffffffull;
+                };
+                out << (first ? "" : ",") << '[' << m << ',' << ns << ',' << (reached ? 1 : 0) << ',' << count << ',' << dist_vec(a.second, b.second)
+                    << ',' << space_ns << ',' << (space_reached ? 1 : 0) << ',' << space_count << ',' << digest(path, count) << ','
+                    << digest(space_path, space_count) << ']';
                 first = false;
             }
         }
         dtFreeNavMeshQuery(query);
 
+        // Storeys and their connectors per mesh, global.
+        out << "],\"storeys\":[";
+        for (size_t m = 0; m < result.mMeshes.size(); ++m)
+        {
+            const ReplayMesh& mesh = *result.mMeshes[m];
+            const StoreyProduct& st = mesh.mStoreys;
+            out << (m ? "," : "") << "{\"mesh\":" << m << ",\"polys\":" << st.mPolys << ",\"flight_polys\":" << st.mFlightPolys << ",\"storeys\":[";
+            for (size_t k = 0; k < st.mStoreys.size(); ++k)
+            {
+                const Storey& s = st.mStoreys[k];
+                out << (k ? "," : "") << "{\"id\":" << s.mId << ",\"z\":" << mesh.mOrigin.mdV[VZ] + s.mFloorZ << ",\"area\":" << s.mArea
+                    << ",\"spaces\":" << s.mSpaces.size() << ",\"min\":[" << mesh.mOrigin.mdV[VX] + s.mMin.mV[VX] << ',' << mesh.mOrigin.mdV[VY] + s.mMin.mV[VY]
+                    << "],\"max\":[" << mesh.mOrigin.mdV[VX] + s.mMax.mV[VX] << ',' << mesh.mOrigin.mdV[VY] + s.mMax.mV[VY] << "]}";
+            }
+            out << "],\"connectors\":[";
+            for (size_t k = 0; k < st.mConnectors.size(); ++k)
+            {
+                const StoreyConnector& c = st.mConnectors[k];
+                const LLVector3d a = mesh.mOrigin + LLVector3d(c.mEnd[0]), b = mesh.mOrigin + LLVector3d(c.mEnd[1]);
+                out << (k ? "," : "") << "{\"storeys\":[" << c.mStorey[0] << ',' << c.mStorey[1] << "],\"space\":" << c.mSpace
+                    << ",\"portals\":" << (c.mPortals ? 1 : 0) << ",\"flight\":" << (c.mFlight ? 1 : 0) << ",\"kind\":" << static_cast<S32>(c.mKind) << ",\"a\":[" << a.mdV[VX] << ',' << a.mdV[VY] << ',' << a.mdV[VZ] << "],\"b\":["
+                    << b.mdV[VX] << ',' << b.mdV[VY] << ',' << b.mdV[VZ] << "]}";
+            }
+            // Each tile's polys' storeys, -1 on a flight, for the pictures.
+            out << "],\"tiles\":[";
+            bool first_tile = true;
+            const dtNavMesh* nav = mesh.mNav[static_cast<S32>(AgentClass::AVATAR)];
+            for (const auto& [key, tile] : mesh.mTiles)
+            {
+                const dtMeshTile* dt = nav ? nav->getTileAt(key.mY, key.mX, 0) : nullptr;
+                if (!dt || !dt->header)
+                {
+                    continue;
+                }
+                out << (first_tile ? "" : ",") << '[' << key.mX << ',' << key.mY << ",[";
+                first_tile = false;
+                const dtPolyRef base = nav->getPolyRefBase(dt);
+                for (S32 p = 0; p < dt->header->polyCount; ++p)
+                {
+                    out << (p ? "," : "") << st.storeyOfPoly(static_cast<U64>(base | static_cast<dtPolyRef>(p)));
+                }
+                out << "]]";
+            }
+            out << "]}";
+        }
+
+        // Wall segments and faces by what their sides found.
+        U32 seg_n = 0, seg_two = 0, seg_same = 0, seg_one = 0, face_n = 0, face_two = 0, face_same = 0, face_one = 0;
+        for (const auto& mesh : result.mMeshes)
+        {
+            for (const auto& [key, tile] : mesh->mTiles)
+            {
+                for (const WallSegment& w : tile.mResult->mSegments[static_cast<S32>(AgentClass::AVATAR)])
+                {
+                    ++seg_n;
+                    seg_two += w.mSpace[0] && w.mSpace[1] && w.mSpace[0] != w.mSpace[1] ? 1 : 0;
+                    seg_same += w.mSpace[0] && w.mSpace[0] == w.mSpace[1] ? 1 : 0;
+                    seg_one += (w.mSpace[0] != 0) != (w.mSpace[1] != 0) ? 1 : 0;
+                }
+                for (const WallFace& f : tile.mResult->mFaces)
+                {
+                    ++face_n;
+                    face_two += f.mSpace[0] && f.mSpace[1] && f.mSpace[0] != f.mSpace[1] ? 1 : 0;
+                    face_same += f.mSpace[0] && f.mSpace[0] == f.mSpace[1] ? 1 : 0;
+                    face_one += (f.mSpace[0] != 0) != (f.mSpace[1] != 0) ? 1 : 0;
+                }
+            }
+        }
+        out << "],\"walls\":{\"segments\":" << seg_n << ",\"segments_two_spaces\":" << seg_two << ",\"segments_same_space\":" << seg_same
+            << ",\"segments_one_side\":" << seg_one << ",\"faces\":" << face_n << ",\"faces_two_spaces\":" << face_two
+            << ",\"faces_same_space\":" << face_same << ",\"faces_one_side\":" << face_one;
+        const WallRunStats& wr = result.mWallRuns;
+        out << ",\"runs\":{\"edges\":" << wr.mEdges << ",\"mixed_edges\":" << wr.mMixedEdges;
+        for (S32 c = 0; c < 3; ++c)
+        {
+            out << ",\"" << wallClassName(static_cast<WallClass>(c)) << "\":[" << wr.mRuns[c] << ',' << wr.mMetres[c] << ']';
+        }
+        out << "}}";
+
         // findAirLeaf over random cells of every tile with air.
-        out << "],\"air_leaf_ns\":[";
+        out << ",\"air_leaf_ns\":[";
         first = true;
         U64 sink = 0;
         for (const auto& mesh : result.mMeshes)
@@ -642,7 +1037,7 @@ namespace sknav
             }
         }
 
-        // The coarse product past the radius: the same tile's air built at 1 m, WEATHER only.
+        // The coarse product past the radius: the same tile's air built at 1 m, AVATAR's polys with it.
         out << "],\"air_leaf_sink\":" << sink << ",\"coarse\":[";
         first = true;
         for (size_t m = 0; m < result.mMeshes.size(); ++m)
@@ -658,37 +1053,227 @@ namespace sknav
                 input.mCell = 1.f;
                 input.mAirPad = 2;
                 input.mAir = true;
-                input.mClasses[static_cast<S32>(AgentClass::AVATAR)] = false;
-                input.mClasses[static_cast<S32>(AgentClass::WEATHER)] = true;
+                input.mAirPad = airPadCells(input.mCell);
                 input.mWallFaces = false;
-                input.mEdges[0] = input.mEdges[1] = false;
+                input.mRunoff = false;
+                input.mEdges[0] = false;
                 TileBuildStats stats;
                 const auto t0 = Clock::now();
                 const TileBuildResult coarse = buildTile(input, &stats);
                 const F64 ms = since(t0);
-                const ClassBuildStats& w = stats.mClass[static_cast<S32>(AgentClass::WEATHER)];
-                F64 raster = 0.0;
-                for (S32 s = ClassBuildStats::RASTERISE; s <= ClassBuildStats::FILTERS; ++s)
+                const ClassBuildStats& w = stats.mTop;
+                F64 raster = w.mMs[ClassBuildStats::FILTERS];
+                for (S32 s = ClassBuildStats::RASTERISE; s <= ClassBuildStats::CULL; ++s)
                 {
-                    raster += w.mMs[s];
+                    raster += stats.mClass[0].mMs[s];
                 }
                 out << (first ? "" : ",") << "\n{\"mesh\":" << m << ",\"x\":" << key.mX << ",\"y\":" << key.mY << ",\"camera_m\":" << cameraDistance(census, tile)
                     << ",\"ms\":" << ms << ",\"soup_ms\":" << stats.mSoupMs << ",\"raster_ms\":" << raster << ",\"air_ms\":" << w.mMs[ClassBuildStats::AIR]
                     << ",\"polys_ms\":" << (stats.mTotalMs - stats.mSoupMs - raster - w.mMs[ClassBuildStats::AIR])
                     << ",\"air_bytes\":" << (coarse.mAir ? coarse.mAir->bytes() : 0) << ",\"air_leaves\":" << (coarse.mAir ? coarse.mAir->mLeaves.size() : 0)
-                    << ",\"hf_bytes\":" << w.mHfBytes << '}';
+                    << ",\"hf_bytes\":" << stats.mClass[0].mHfBytes << '}';
                 first = false;
             }
         }
         out << "\n]}\n";
     }
 
+    namespace
+    {
+        /// One tile an edit reaches, rasterised whole and updated from its held raster.
+        struct EditedTile
+        {
+            TileKey mKey;
+            std::shared_ptr<const TileBuildInput> mInput;
+            TileRasterPtr mFull;
+            TileRasterPtr mLocal;
+            TileBuildResult mFullResult;
+            TileBuildResult mLocalResult;
+            F64 mFullMs = 0.0;
+            F64 mLocalMs = 0.0;
+        };
+
+        /// A result as the disk cache stores it, its timings left out.
+        std::vector<U8> packedWithoutTimes(TileBuildResult r)
+        {
+            r.mMillis = 0.f;
+            r.mExcludeMillis = 0.f;
+            return packTileProduct(r, 0);
+        }
+
+        /// Whether the update made what the whole raster made: the rasters, and the products both polygonise to.
+        bool sameEdit(const TileBuildInput& input, const EditedTile& t, std::string& why)
+        {
+            if (!t.mFull != !t.mLocal || t.mFullResult.mStatus != t.mLocalResult.mStatus)
+            {
+                why = "status";
+                return false;
+            }
+            if (!t.mFull)
+            {
+                return true;
+            }
+            if (!sameRaster(*t.mFull, *t.mLocal, &why))
+            {
+                return false;
+            }
+            TileBuildResult a = t.mFullResult, b = t.mLocalResult;
+            polygoniseTile(input, *t.mFull, a);
+            polygoniseTile(input, *t.mLocal, b);
+            if (packedWithoutTimes(a) != packedWithoutTimes(b))
+            {
+                why = "product";
+                return false;
+            }
+            return true;
+        }
+
+        /// What the viewer does after an edit's tiles land: the rooms passes, then every tile whose stamp moved polygonised again.
+        struct EditPass
+        {
+            F64 mRasterLocalMs = 0.0, mRasterFullMs = 0.0;
+            F64 mRasterLocalMaxMs = 0.0, mRasterFullMaxMs = 0.0;
+            F64 mEnclosureMs = 0.0, mSpacesMs = 0.0;
+            F64 mStampInputMs = 0.0, mStampMs = 0.0;
+            U32 mRestamped = 0;
+            U32 mStampedTiles = 0;
+            U32 mLocal = 0;
+            bool mSameSpaces = true;
+            bool mSameStamp = true;
+            std::string mWhy;
+        };
+
+        /// A product's spaces as far as anything downstream reads them.
+        bool sameSpaces(const RoomsProduct& a, const RoomsProduct& b)
+        {
+            if (a.mSpaces.size() != b.mSpaces.size() || a.mPortals.size() != b.mPortals.size() || a.mTiles.size() != b.mTiles.size())
+            {
+                return false;
+            }
+            for (size_t i = 0; i < a.mSpaces.size(); ++i)
+            {
+                const Space& x = a.mSpaces[i];
+                const Space& y = b.mSpaces[i];
+                if (x.mId != y.mId || x.mBucket != y.mBucket || x.mFloorArea != y.mFloorArea || x.mVolume != y.mVolume || x.mPortals != y.mPortals ||
+                    x.mRaster != y.mRaster)
+                {
+                    return false;
+                }
+            }
+            for (size_t i = 0; i < a.mPortals.size(); ++i)
+            {
+                const Portal& x = a.mPortals[i];
+                const Portal& y = b.mPortals[i];
+                if (x.mKind != y.mKind || x.mSpaces[0] != y.mSpaces[0] || x.mSpaces[1] != y.mSpaces[1] || x.mA != y.mA || x.mB != y.mB || x.mCues != y.mCues)
+                {
+                    return false;
+                }
+            }
+            for (size_t i = 0; i < a.mTiles.size(); ++i)
+            {
+                if (a.mTiles[i].mSeeds != b.mTiles[i].mSeeds)
+                {
+                    return false;
+                }
+            }
+            return a.mLinks.size() == b.mLinks.size() && a.mApart.size() == b.mApart.size();
+        }
+
+        EditPass passAfterEdit(const CensusFile& census, const ReplayResult& result, size_t m, const std::vector<EditedTile>& tiles)
+        {
+            EditPass pass;
+            const ReplayMesh& mesh = *result.mMeshes[m];
+            std::map<TileKey, TileAirPtr> local_air, full_air;
+            std::map<TileKey, const EditedTile*> by_key;
+            for (const EditedTile& t : tiles)
+            {
+                pass.mRasterLocalMs += t.mLocalMs;
+                pass.mRasterFullMs += t.mFullMs;
+                pass.mRasterLocalMaxMs = std::max(pass.mRasterLocalMaxMs, t.mLocalMs);
+                pass.mRasterFullMaxMs = std::max(pass.mRasterFullMaxMs, t.mFullMs);
+                local_air[t.mKey] = t.mLocalResult.mAirBuilt ? t.mLocalResult.mAir : nullptr;
+                full_air[t.mKey] = t.mFullResult.mAirBuilt ? t.mFullResult.mAir : nullptr;
+                by_key[t.mKey] = &t;
+            }
+            const ReplayRoomsAgain local = replayRoomsAgain(census, result, m, local_air);
+            const ReplayRoomsAgain full = replayRoomsAgain(census, result, m, full_air);
+            pass.mEnclosureMs = local.mEnclosureMs;
+            pass.mSpacesMs = local.mSpacesMs;
+            pass.mSameSpaces = local.mRooms && full.mRooms && sameSpaces(*local.mRooms, *full.mRooms);
+            if (!pass.mSameSpaces)
+            {
+                pass.mWhy = "spaces";
+            }
+            for (const auto& [key, tile] : mesh.mTiles)
+            {
+                const auto it = by_key.find(key);
+                const EditedTile* et = it != by_key.end() ? it->second : nullptr;
+                const TileRasterPtr raster = et ? et->mLocal : tile.mRaster;
+                if (!raster)
+                {
+                    continue;
+                }
+                const TileBuildInput& input = et ? *et->mInput : *tile.mInput;
+                const TileAirPtr air = et ? et->mLocalResult.mAir : tile.mResult->mAir;
+                const LLVector3d lo = tile.mMin - mesh.mOrigin, hi = tile.mMax - mesh.mOrigin;
+                const auto stampOf = [&](const ReplayRoomsAgain& again, const TileAirPtr& a, TileStampInput& in) {
+                    const TileEnclosure* enc = again.mEnclosure && a ? again.mEnclosure->tile(key) : nullptr;
+                    if (enc && enc->mAir == a && again.mRooms)
+                    {
+                        stampInput(*a, *enc, *again.mRooms, LLVector3(lo), LLVector3(hi), in);
+                    }
+                };
+                auto t0 = Clock::now();
+                TileStampInput in;
+                stampOf(local, air, in);
+                pass.mStampInputMs += since(t0);
+                ++pass.mStampedTiles;
+                TileStampInput in_full;
+                stampOf(full, et ? et->mFullResult.mAir : air, in_full);
+                if (in.mPattern != in_full.mPattern || in.mGapComponent != in_full.mGapComponent)
+                {
+                    pass.mSameStamp = false;
+                    pass.mWhy = "stamp input";
+                }
+                if (!et && tile.mStampInput && tile.mStampInput->mPattern == in.mPattern)
+                {
+                    continue;   // the viewer rebinds this one, and polygonises nothing
+                }
+                const S32 border = borderCells(input.mParams[static_cast<S32>(AgentClass::AVATAR)].mRadius, input.mCell);
+                t0 = Clock::now();
+                TileStamp stamp;
+                stampTile(*raster->mChf, border, raster->mSpanGap, in, raster->mReal, raster->mFlights, StampParams(), stamp);
+                TileBuildResult r = et ? et->mLocalResult : *tile.mResult;
+                polygoniseTile(input, *raster, r, nullptr, &in, &stamp);
+                pass.mStampMs += since(t0);
+                ++pass.mRestamped;
+                if (et && et->mFull)
+                {
+                    pass.mLocal += 1;
+                    TileStamp stamp_full;
+                    stampTile(*et->mFull->mChf, border, et->mFull->mSpanGap, in_full, et->mFull->mReal, et->mFull->mFlights, StampParams(), stamp_full);
+                    TileBuildResult rf = et->mFullResult;
+                    polygoniseTile(input, *et->mFull, rf, nullptr, &in_full, &stamp_full);
+                    if (packedWithoutTimes(r) != packedWithoutTimes(rf))
+                    {
+                        pass.mSameStamp = false;
+                        pass.mWhy = "stamped product";
+                    }
+                }
+            }
+            return pass;
+        }
+    }
+
     void writeReplayEdits(std::ostream& out, const CensusFile& census, const ReplayResult& result, const std::vector<ReplayEdit>& edits)
     {
         out << std::setprecision(7) << "{\"edits\":[";
-        bool first = true;
+        std::ostringstream passes;
+        passes << std::setprecision(7);
+        bool first = true, first_pass = true;
         for (size_t e = 0; e < edits.size(); ++e)
         {
+            std::map<size_t, std::vector<EditedTile>> edited;
             const ReplayEdit& edit = edits[e];
             if (edit.mRecord >= census.mRecords.size())
             {
@@ -776,17 +1361,53 @@ namespace sknav
                             }
                         }
                     }
-                    const auto t0 = Clock::now();
-                    const TileBuildResult rebuilt = buildTile(after);
-                    const F64 ms = since(t0);
+                    // The tile as held before the edit, then the edited tile both ways: rasterised whole, and updated from the held raster.
+                    TileBuildInput held_input = before;
+                    held_input.mHoldSolid = true;
+                    after.mHoldSolid = true;
+                    TileBuildResult base;
+                    const TileRasterPtr kept = rasteriseTile(held_input, base);
+                    EditedTile et;
+                    et.mKey = key;
+                    et.mInput = std::make_shared<TileBuildInput>(after);
+                    auto t0 = Clock::now();
+                    et.mFull = rasteriseTile(after, et.mFullResult);
+                    et.mFullMs = since(t0);
+                    TileUpdate update;
+                    t0 = Clock::now();
+                    et.mLocal = kept ? updateTile(after, *kept, et.mLocalResult, nullptr, &update) : rasteriseTile(after, et.mLocalResult);
+                    et.mLocalMs = since(t0);
+                    et.mFullResult.mStatus = et.mFull ? TileBuildResult::SUCCESS : et.mFullResult.mStatus;
+                    et.mLocalResult.mStatus = et.mLocal ? TileBuildResult::SUCCESS : et.mLocalResult.mStatus;
+                    std::string why;
+                    const bool same = sameEdit(after, et, why);
                     out << (first ? "" : ",") << "\n{\"edit\":" << e << ",\"record\":" << edit.mRecord << ",\"op\":" << static_cast<S32>(edit.mOp)
                         << ",\"mesh\":" << m << ",\"x\":" << key.mX << ",\"y\":" << key.mY << ",\"zmin\":[" << before.mZMin << ',' << after.mZMin
                         << "],\"zmax\":[" << before.mZMax << ',' << after.mZMax << "],\"flight\":" << (flight ? 1 : 0) << ",\"exclusion\":" << (exclusion ? 1 : 0)
-                        << ",\"rebuild_ms\":" << ms << ",\"base_ms\":" << tile.mResult->mMillis << ",\"status\":" << static_cast<S32>(rebuilt.mStatus) << '}';
+                        << ",\"rebuild_ms\":" << et.mFullMs << ",\"local_ms\":" << et.mLocalMs << ",\"path\":\"" << updatePathName(update.mPath)
+                        << "\",\"window\":[" << update.mWindow[0] << ',' << update.mWindow[1] << ',' << update.mWindow[2] << ',' << update.mWindow[3]
+                        << "],\"window_cells\":" << update.mWindowCells << ",\"changed\":" << update.mChanged
+                        << ",\"solid_bytes\":" << (kept && kept->mSolid ? kept->mSolid->bytes() : 0) << ",\"held_bytes\":" << (kept ? kept->bytes() : 0)
+                        << ",\"same\":" << (same ? 1 : 0) << ",\"why\":\"" << why << "\",\"base_ms\":" << tile.mResult->mMillis
+                        << ",\"status\":" << static_cast<S32>(et.mFullResult.mStatus) << '}';
                     first = false;
+                    edited[m].push_back(std::move(et));
                 }
             }
+            // Each mesh's rooms passes and stamp after the edit, as the viewer runs them once the tiles land.
+            for (auto& [m, tiles] : edited)
+            {
+                const EditPass pass = passAfterEdit(census, result, m, tiles);
+                passes << (first_pass ? "" : ",") << "\n{\"edit\":" << e << ",\"mesh\":" << m << ",\"tiles\":" << tiles.size()
+                       << ",\"raster_local_ms\":" << pass.mRasterLocalMs << ",\"raster_full_ms\":" << pass.mRasterFullMs
+                       << ",\"raster_local_max_ms\":" << pass.mRasterLocalMaxMs << ",\"raster_full_max_ms\":" << pass.mRasterFullMaxMs
+                       << ",\"enclosure_ms\":" << pass.mEnclosureMs << ",\"spaces_ms\":" << pass.mSpacesMs << ",\"stamp_input_ms\":" << pass.mStampInputMs
+                       << ",\"stamp_ms\":" << pass.mStampMs << ",\"restamped\":" << pass.mRestamped << ",\"stamped_tiles\":" << pass.mStampedTiles
+                       << ",\"local\":" << pass.mLocal << ",\"same_spaces\":" << (pass.mSameSpaces ? 1 : 0)
+                       << ",\"same_stamp\":" << (pass.mSameStamp ? 1 : 0) << ",\"why\":\"" << pass.mWhy << "\"}";
+                first_pass = false;
+            }
         }
-        out << "\n]}\n";
+        out << "\n],\"passes\":[" << passes.str() << "\n]}\n";
     }
 }

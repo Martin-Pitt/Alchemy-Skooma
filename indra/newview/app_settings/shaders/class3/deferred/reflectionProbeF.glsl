@@ -115,6 +115,22 @@ bool shouldSampleProbe(int i, vec3 pos)
     return true;
 }
 
+// <SK:Nexii> Cluster probes: a probe's tier in the mix, see skMixProbeTiers.
+int skProbeTier(int i)
+{
+    if (i == 0)
+    {
+        return 3;
+    }
+    int p = clamp(abs(refIndex[i].w), 0, 1);
+    if (p == 0 && (floatBitsToUint(refParams[i].w) & 0x10000000u) != 0u)
+    {
+        return 2;
+    }
+    return p;
+}
+// </SK:Nexii>
+
 int getStartIndex(vec3 pos)
 {
 #if 1
@@ -145,7 +161,7 @@ void preProbeSample(vec3 pos)
     for (int i = start; i < refmapCount && probeInfluences < REF_SAMPLE_COUNT; ++i)
     {
         // found an influencing probe
-        if (shouldSampleProbe(i, pos))
+        if (skProbeTier(i) != 2 && shouldSampleProbe(i, pos)) // <SK:Nexii> Cluster probes are sampled below
         {
             probeIndex[probeInfluences] = i;
             ++probeInfluences;
@@ -231,6 +247,28 @@ void preProbeSample(vec3 pos)
             }
         }
     }
+
+    // <SK:Nexii> Cluster probes: every fill covering pos, past the anchor's neighbours (refBucket[0].yz is their range).
+    if (sample_automatic)
+    {
+        for (int i = refBucket[0].y; i < refBucket[0].z && probeInfluences < REF_SAMPLE_COUNT - 1; ++i)
+        {
+            if (skProbeTier(i) != 2 || !shouldSampleProbe(i, pos))
+            {
+                continue;
+            }
+            bool listed = false;
+            for (int k = 0; k < probeInfluences; ++k)
+            {
+                listed = listed || probeIndex[k] == i;
+            }
+            if (!listed)
+            {
+                probeIndex[probeInfluences++] = i;
+            }
+        }
+    }
+    // </SK:Nexii>
 
     if (sample_automatic && probeInfluences < REF_SAMPLE_COUNT)
     { // probe at index 0 is a special probe for smoothing out automatic probes
@@ -671,26 +709,42 @@ vec3 tapIrradianceMap(vec3 pos, vec3 dir, out float w, out float dw, vec3 c, int
     return col;
 }
 
+// <SK:Nexii> Cluster probes: four tiers, each mixed over the one below it by its distance weight.
+// 0 automatic, 1 manual, 2 a census cluster's fill (bit 28 of refParams.w), 3 the default probe.
+void skMixProbeTier(inout vec3 ret, inout bool any, vec3 col, float wsum, float dwsum)
+{
+    if (wsum > 0.0)
+    {
+        col *= 1.0/wsum;
+        ret = any ? mix(ret, col, min(dwsum, 1.0)) : col;
+        any = true;
+    }
+}
+
+vec3 skMixProbeTiers(vec3 col[4], float wsum[4], float dwsum[4])
+{
+    vec3 ret = vec3(0);
+    bool any = false;
+    skMixProbeTier(ret, any, col[3], wsum[3], dwsum[3]);
+    skMixProbeTier(ret, any, col[2], wsum[2], dwsum[2]);
+    skMixProbeTier(ret, any, col[0], wsum[0], dwsum[0]);
+    skMixProbeTier(ret, any, col[1], wsum[1], dwsum[1]);
+    return ret;
+}
+// </SK:Nexii>
+
 vec3 sampleProbes(vec3 pos, vec3 dir, float lod)
 {
-    float wsum[2];
-    wsum[0] = 0;
-    wsum[1] = 0;
-
-    float dwsum[2];
-    dwsum[0] = 0;
-    dwsum[1] = 0;
-
-    vec3 col[2];
-    col[0] = vec3(0);
-    col[1] = vec3(0);
+    float wsum[4] = float[4](0.0, 0.0, 0.0, 0.0); // <SK:Nexii> Cluster probes: per tier, see skProbeTier
+    float dwsum[4] = float[4](0.0, 0.0, 0.0, 0.0);
+    vec3 col[4] = vec3[4](vec3(0), vec3(0), vec3(0), vec3(0));
 
     for (int idx = 0; idx < probeInfluences; ++idx)
     {
         int i = probeIndex[idx];
-        int p = clamp(abs(refIndex[i].w), 0, 1);
+        int p = skProbeTier(i); // <SK:Nexii> Cluster probes
 
-        if (p == 0 && !sample_automatic)
+        if (p != 1 && !sample_automatic)
         {
             continue;
         }
@@ -708,49 +762,23 @@ vec3 sampleProbes(vec3 pos, vec3 dir, float lod)
         }
     }
 
-    // mix automatic and manual probes
-    if (sample_automatic && wsum[0] > 0.0)
-    { // some automatic probes were sampled
-        col[0] *= 1.0/wsum[0];
-        if (wsum[1] > 0.0)
-        { //some manual probes were sampled, mix between the two
-            col[1] *= 1.0/wsum[1];
-            col[1] = mix(col[0], col[1], min(dwsum[1], 1.0));
-            col[0] = vec3(0);
-        }
-    }
-    else if (wsum[1] > 0.0)
-    {
-        // manual probes were sampled but no automatic probes were
-        col[1] *= 1.0/wsum[1];
-        col[0] = vec3(0);
-    }
-
-    return col[1]+col[0];
+    return skMixProbeTiers(col, wsum, dwsum); // <SK:Nexii> Cluster probes
 }
 
 vec3 sampleProbeAmbient(vec3 pos, vec3 dir, vec3 amblit)
 {
     // modified copy/paste of sampleProbes follows, will likely diverge from sampleProbes further
     // as irradiance map mixing is tuned independently of radiance map mixing
-    float wsum[2];
-    wsum[0] = 0;
-    wsum[1] = 0;
-
-    float dwsum[2];
-    dwsum[0] = 0;
-    dwsum[1] = 0;
-
-    vec3 col[2];
-    col[0] = vec3(0);
-    col[1] = vec3(0);
+    float wsum[4] = float[4](0.0, 0.0, 0.0, 0.0); // <SK:Nexii> Cluster probes: per tier, see skProbeTier
+    float dwsum[4] = float[4](0.0, 0.0, 0.0, 0.0);
+    vec3 col[4] = vec3[4](vec3(0), vec3(0), vec3(0), vec3(0));
 
     for (int idx = 0; idx < probeInfluences; ++idx)
     {
         int i = probeIndex[idx];
-        int p = clamp(abs(refIndex[i].w), 0, 1);
+        int p = skProbeTier(i); // <SK:Nexii> Cluster probes
 
-        if (p == 0 && !sample_automatic)
+        if (p != 1 && !sample_automatic)
         {
             continue;
         }
@@ -767,25 +795,7 @@ vec3 sampleProbeAmbient(vec3 pos, vec3 dir, vec3 amblit)
         }
     }
 
-    // mix automatic and manual probes
-    if (sample_automatic && wsum[0] > 0.0)
-    { // some automatic probes were sampled
-        col[0] *= 1.0/wsum[0];
-        if (wsum[1] > 0.0)
-        { //some manual probes were sampled, mix between the two
-            col[1] *= 1.0/wsum[1];
-            col[1] = mix(col[0], col[1], min(dwsum[1], 1.0));
-            col[0] = vec3(0);
-        }
-    }
-    else if (wsum[1] > 0.0)
-    {
-        // manual probes were sampled but no automatic probes were
-        col[1] *= 1.0/wsum[1];
-        col[0] = vec3(0);
-    }
-
-    return col[1]+col[0];
+    return skMixProbeTiers(col, wsum, dwsum); // <SK:Nexii> Cluster probes
 }
 
 #if defined(HERO_PROBES)
@@ -965,6 +975,7 @@ vec3 skProbeKindColor(int i)
     if (kind == 3u) return vec3(0.1, 0.85, 1.0);   // octree automatic
     if (kind == 4u) return vec3(0.3, 1.0, 0.35);   // navmesh room sphere
     if (kind == 5u) return vec3(1.0, 0.95, 0.2);   // navmesh room box (reserved)
+    if (kind == 6u) return vec3(0.55, 0.45, 1.0);  // census cluster fill
     return vec3(0.6);                              // default probe
 }
 
@@ -1033,36 +1044,45 @@ vec4 skProbePulseDebug(vec3 pos, vec3 norm)
     // The real selection: first containing probe and its neighbours, weighted and mixed as sampleProbes does.
     sample_automatic = true;
     preProbeSample(pos);
-    float wsum[2] = float[2](0.0, 0.0);
-    float dwsum1 = 0.0;
+    float wsum[4] = float[4](0.0, 0.0, 0.0, 0.0);
+    float dwsum[4] = float[4](0.0, 0.0, 0.0, 0.0);
     float wraw[REF_SAMPLE_COUNT];
     for (int k = 0; k < probeInfluences; ++k)
     {
         int i = probeIndex[k];
-        int p = clamp(abs(refIndex[i].w), 0, 1);
+        int p = skProbeTier(i);
         wraw[k] = 0.0;
-        if (p == 0 && !sample_automatic)
+        if (p != 1 && !sample_automatic)
         {
             continue;
         }
         float dw = 0.0;
         wraw[k] = skProbeRawWeight(i, pos, dw);
         wsum[p] += wraw[k];
-        if (p == 1)
-        {
-            dwsum1 += dw;
-        }
+        dwsum[p] += dw;
     }
-    bool has_auto = sample_automatic && wsum[0] > 0.0;
-    float manual_share = wsum[1] > 0.0 ? (has_auto ? min(dwsum1, 1.0) : 1.0) : 0.0;
+    // Each tier's share of the mix, top down: what skMixProbeTiers gives it once a lower tier is present.
+    float tier_share[4];
+    float remaining = 1.0;
+    const int top_down[4] = int[4](1, 0, 2, 3);
+    for (int k = 0; k < 4; ++k)
+    {
+        int t = top_down[k];
+        bool lower = false;
+        for (int l = k + 1; l < 4; ++l)
+        {
+            lower = lower || wsum[top_down[l]] > 0.0;
+        }
+        tier_share[t] = wsum[t] > 0.0 ? remaining * (lower ? min(dwsum[t], 1.0) : 1.0) : 0.0;
+        remaining -= tier_share[t];
+    }
     float w1 = 0.0, w2 = 0.0;
     int i1 = -1, i2 = -1;
     for (int k = 0; k < probeInfluences; ++k)
     {
         int i = probeIndex[k];
-        int p = clamp(abs(refIndex[i].w), 0, 1);
-        float share = p == 1 ? manual_share : (has_auto ? 1.0 - manual_share : 0.0);
-        float w = wsum[p] > 0.0 ? wraw[k] / wsum[p] * share : 0.0;
+        int p = skProbeTier(i);
+        float w = wsum[p] > 0.0 ? wraw[k] / wsum[p] * tier_share[p] : 0.0;
         if (w > w1)
         {
             w2 = w1; i2 = i1;

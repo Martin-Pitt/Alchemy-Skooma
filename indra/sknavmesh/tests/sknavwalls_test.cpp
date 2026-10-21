@@ -36,7 +36,6 @@ namespace
     using namespace sknav;
 
     const S32 AVATAR = static_cast<S32>(AgentClass::AVATAR);
-    const S32 WEATHER = static_cast<S32>(AgentClass::WEATHER);
 
     RecordPtr box(F32 x0, F32 y0, F32 z0, F32 x1, F32 y1, F32 z1)
     {
@@ -70,13 +69,9 @@ namespace
         in.mZMin = -1.f;
         in.mZMax = 24.f;
         in.mCell = 0.25f;           // coarser than the viewer, to keep the tests quick
-        in.mClasses[AVATAR] = true;
-        in.mClasses[WEATHER] = true;
-        in.mParams[WEATHER].mHeight = 0.5f;
-        in.mParams[WEATHER].mRadius = 0.f;
         in.mWallFaces = true;
         in.mEdges[AVATAR] = true;
-        in.mEdges[WEATHER] = true;
+        in.mRunoff = true;
         in.mTerrain = flat(0.f);
         return in;
     }
@@ -168,14 +163,14 @@ namespace tut
         }
     }
 
-    // Too far to drop for the avatar; the weather class reaches further and
+    // Too far to drop for the avatar; the raster's run-off reaches further and
     // needs no headroom at the landing.
     template<> template<>
     void sknavwalls_object::test<4>()
     {
         TileBuildInput in = tile();
         in.mDropMax[AVATAR] = 10.f;
-        in.mDropMax[WEATHER] = 24.f;
+        in.mRunoffMax = 24.f;
         in.mRecords.push_back(box(8.f, 8.f, 0.f, 24.f, 24.f, 15.f));
         const TileBuildResult r = buildTile(in);
         ensure_equals("built: " + r.mError, static_cast<int>(r.mStatus), static_cast<int>(TileBuildResult::SUCCESS));
@@ -184,7 +179,11 @@ namespace tut
         summarise(r.mSegments[AVATAR], EdgeKind::LEDGE, ledge_len, drop);
         ensure(llformat("still a ledge: %.1f m at %.2f", ledge_len, drop), ledge_len > 40.f && std::fabs(drop - 15.f) < 0.6f);
         ensure("15 m is too far to jump", r.mLinks[AVATAR].empty());
-        ensure(llformat("but not too far for water: %zu", r.mLinks[WEATHER].size()), !r.mLinks[WEATHER].empty());
+        ensure(llformat("but not too far for water: %zu", r.mRunoff.size()), !r.mRunoff.empty());
+        for (const DropLink& link : r.mRunoff)
+        {
+            ensure(llformat("run-off drops 15 m: %.2f", link.mHeight), std::fabs(link.mHeight - 15.f) < 0.6f);
+        }
     }
 
     // A wall of two boxes with a gap too short to crawl through is one wall

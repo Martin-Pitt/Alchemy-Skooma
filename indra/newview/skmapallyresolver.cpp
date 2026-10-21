@@ -108,6 +108,7 @@ void SKMapAllyResolver::noteAvatar(LLVOAvatar* avatar, bool in_view, F64 now)
 
 void SKMapAllyResolver::dispatch(F64 now)
 {
+    LL_PROFILE_ZONE_SCOPED;
     static LLCachedControl<F32> rate(gSavedSettings, "SKMapAllyProbeRate", skmap::PROBE_RATE);
     mBudget.setRate(llmax(0.1f, static_cast<F32>(rate)));
     // Requests that never answered: back to unknown, retried later.
@@ -188,7 +189,7 @@ void SKMapAllyResolver::onProperties(const LLUUID& object)
     const ALObjectPropertiesCache::ServerProps* props = ALObjectPropertiesCache::instance().get(object);
     if (it != mRecords.end() && props)
     {
-        skmap::probeReply(it->second, object, props->mGroupId, LLFrameTimer::getElapsedSeconds());
+        skmap::probeReply(it->second, object, props->mGroupId, LLFrameTimer::getUptimeSeconds().value());
     }
 }
 

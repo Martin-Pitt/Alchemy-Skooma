@@ -112,6 +112,18 @@ void SKFloaterMap::reshape(S32 width, S32 height, bool called_from_parent)
     layoutCog();
 }
 
+void SKFloaterMap::onMouseEnter(S32 x, S32 y, MASK mask)
+{
+    mHovered = true;
+    LLFloater::onMouseEnter(x, y, mask);
+}
+
+void SKFloaterMap::onMouseLeave(S32 x, S32 y, MASK mask)
+{
+    mHovered = false;
+    LLFloater::onMouseLeave(x, y, mask);
+}
+
 void SKFloaterMap::layoutCog()
 {
     if (!mCog)
@@ -142,6 +154,16 @@ bool SKFloaterMap::chromeWanted() const
     if (mMap->isHovered() || mMap->namesShown() || isMinimized() || LLFloaterReg::instanceVisible("sk_map_settings"))
     {
         return true;
+    }
+    // Over the cog or a title button the map is not hovered, but the floater is, and a pressed button holds the mouse;
+    // in mouselook the pointer is the crosshair.
+    if (mHovered && !gAgentCamera.cameraMouselook())
+    {
+        const LLView* holder = dynamic_cast<LLView*>(gFocusMgr.getMouseCapture());
+        if (!gFocusMgr.getMouseCapture() || (holder && holder->hasAncestor(this)))
+        {
+            return true;
+        }
     }
     // A resize in progress keeps it, as does focus.
     if (LLView* captor = dynamic_cast<LLView*>(gFocusMgr.getMouseCapture()))

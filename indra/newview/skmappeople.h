@@ -166,6 +166,7 @@ private:
     std::vector<Ping> mPings;
     skmap::EventRing mEvents;
     std::map<LLUUID, FiringLine> mFiring;
+    F64 mRayAllowance = 0.0;            ///< seconds of ray time earned and not yet spent
     std::vector<Projectile> mProjectiles;
     std::map<LLUUID, LLVector3d> mLastObjectPos;
     F64 mProjectilesAt = -1.0e9;

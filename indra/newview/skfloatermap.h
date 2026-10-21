@@ -44,6 +44,8 @@ public:
     void setMinimized(bool minimize) override;
     bool handleDoubleClick(S32 x, S32 y, MASK mask) override;
     void reshape(S32 width, S32 height, bool called_from_parent = true) override;
+    void onMouseEnter(S32 x, S32 y, MASK mask) override;
+    void onMouseLeave(S32 x, S32 y, MASK mask) override;
 
 protected:
     /// Records which base buttons the floater shows, so the chrome can hide them at rest.
@@ -60,6 +62,8 @@ private:
     SKNetMap* mMap = nullptr;
     LLButton* mCog = nullptr;
     bool mButtonShown[BUTTON_COUNT] = {};
+    /// The pointer is over the floater, the map or any button in front of it.
+    bool mHovered = false;
 };
 
 #endif // SK_FLOATERMAP_H

@@ -58,6 +58,7 @@ namespace sknav
         BOX,        ///< a placeholder while the asset is still fetching
         RENDER,     ///< the rendered volume faces (surrounds)
         BASE_HULL,  ///< the single base hull, when there is no decomposition
+        SIM,        ///< the triangles the simulator kept for a mesh (its physics_havok section)
     };
 
     /// The sim's navmesh role for a linkset, when known.
@@ -82,10 +83,11 @@ namespace sknav
         SEAT,       ///< part of a linkset people sit on that never moves
     };
 
-    /// The classes a record is left out of, one bit per AgentClass index.
+    /// What a record is left out of: AVATAR's mesh, or the solid raster
+    /// (and with it the air, faces and AVATAR) as well.
     constexpr U8 EXCLUDE_AVATAR = 1 << 0;
-    constexpr U8 EXCLUDE_WEATHER = 1 << 1;
-    constexpr U8 EXCLUDE_ALL = EXCLUDE_AVATAR | EXCLUDE_WEATHER;
+    constexpr U8 EXCLUDE_SOLID = 1 << 1;
+    constexpr U8 EXCLUDE_ALL = EXCLUDE_AVATAR | EXCLUDE_SOLID;
 
     /// Analytic shape or triangle soup. Soups are region-local metres.
     enum class Shape : U8 { BOX, SPHERE, CYLINDER, TRIANGLES };

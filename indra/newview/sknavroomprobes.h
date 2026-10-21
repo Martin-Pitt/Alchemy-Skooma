@@ -61,6 +61,8 @@ public:
     /// Let every full probe go and release its claim on residual coverage.
     void clear();
     std::string statsLine() const;
+    /// Whether a worker is placing a space of this mesh.
+    bool pendingFor(const LLUUID& mesh) const;
 
 private:
     struct Held
@@ -68,6 +70,11 @@ private:
         LLPointer<LLReflectionMap> mProbe;
         LLVector3d mOrigin;
         F32 mRadius = 0.f;
+        /// Kept only until what replaces it is captured: mWaitFor when it
+        /// moved there, else whatever covers it once its area has settled.
+        U64 mSource = 0;        ///< what its space was placed from: tiles' content, else the space's signature
+        bool mRetiring = false;
+        LLPointer<LLReflectionMap> mWaitFor;
     };
     struct Parts
     {
@@ -118,6 +125,8 @@ private:
     U32 mClearedOut = 0;    ///< dropped to clear a placed probe
     U32 mOverBudget = 0;    ///< candidates the budget dropped: crowded, past one per space, or past the cap
     U32 mMoves = 0;
+    U32 mResizes = 0;       ///< held probes given a new radius, capture kept
+    U32 mStaled = 0;        ///< held probes kept over changed content, queued for a lazy recapture
     U32 mCreated = 0;
     U32 mCandidatesAdded = 0;   ///< threshold bubbles the portal pass stood up
     U32 mPlaced = 0;

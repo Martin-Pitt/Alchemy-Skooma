@@ -26,14 +26,19 @@
 #define SK_NAVMESH_H
 
 #include "llsingleton.h"
+#include <array>
 #include "sknavbuild.h"
 #include "sknavexport.h"
 #include "sknavlayout.h"
 #include "sknavoverlay.h"
 #include "sknavpolys.h"
+#include "sknavresidency.h"
 #include "sknavskymap.h"
+#include "sknavspacefilter.h"
+#include "sknavspaceproducts.h"
 #include "sknavtilecache.h"
 #include "sknavtypes.h"
+#include "sknavwallruns.h"
 #include "skworldcensus.h"
 #include "threadpool.h"
 
@@ -44,10 +49,12 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 class dtNavMesh;
 class dtNavMeshQuery;
+struct dtMeshTile;
 class LLViewerRegion;
 class SKNavRooms;
 class SKNavWorldView;
@@ -73,6 +80,17 @@ public:
     /// The content keys of a mesh's tiles whose footprint meets the global
     /// box, 0 for a tile not published under one.
     void tileContentKeysIn(const LLUUID& mesh, const LLVector3d& min, const LLVector3d& max, std::vector<U64>& out) const;
+    /// A hash of what a mesh's map products (polys, storeys, wall runs) meeting the box are built from.
+    U64 mapInputsKey(const LLUUID& mesh, const LLVector3d& min, const LLVector3d& max) const;
+    /// Whether a terrain mesh has a published AVATAR tile meeting the box.
+    bool terrainTilesIn(const LLUUID& mesh, const LLVector3d& min, const LLVector3d& max) const;
+    /// Whether anything meeting the global box is still on its way: a tile
+    /// queued or building, or a rooms pass not yet landed over it.
+    bool settlingIn(const LLVector3d& min, const LLVector3d& max) const;
+    /// Whether every tile of a mesh holds its detail air, none of it waiting on disk.
+    bool detailResident(const LLUUID& mesh) const;
+    /// Bring a mesh's detail air back from disk, and keep it for SKNavAirDetailHoldSeconds after the last ask.
+    void requestDetail(const LLUUID& mesh) const;
 
     /// Close the build pool before the singleton goes: a job in flight holds
     /// this pointer to publish its result.
@@ -88,6 +106,18 @@ public:
     /// mesh is torn down, air is evicted (it follows the camera), or feature links change.
     U64 revision() const { return mRevision; }
 
+    /// A poly edge on a portal: the poly and edge in the tile's polys, the
+    /// portal's key, kind and the space on each side of it.
+    struct PortalEdge
+    {
+        U16 mPoly = 0;                  ///< into PolyTile::mPolys
+        U8 mEdge = 0;                   ///< from the poly's vertex mEdge to the next
+        sknav::PortalKind mKind = sknav::PortalKind::OPENING;
+        U64 mPortal = 0;                ///< portalKey (sknavstamp.h): the same portal across tiles and passes
+        U32 mInside = 0;                ///< the poly's space id
+        U32 mAcross = 0;                ///< the space id on the portal's other side
+    };
+
     /// One published tile as the mini-map reads it.
     struct PolyTile
     {
@@ -102,10 +132,17 @@ public:
         std::shared_ptr<const std::vector<sknav::WallSegment>> mSegments;
         std::shared_ptr<const std::vector<sknav::DropLink>> mLinks;
         std::shared_ptr<const std::vector<sknav::Flight>> mFlights;
+        std::shared_ptr<const std::vector<U32>> mPolySpace;            ///< per poly of mPolys, its space id; 0 for none
+        std::shared_ptr<const std::vector<PortalEdge>> mPortalEdges;   ///< its polys' edges on portals
+        U64 mPolyRefBase = 0;           ///< Detour ref of poly 0; poly i is mPolyRefBase | i
     };
     typedef std::function<void(const PolyTile&)> PolyTileFn;
     /// Every published tile of the class whose footprint meets the box; polygons extracted once per publish.
     void polysIn(const LLVector3d& min, const LLVector3d& max, sknav::AgentClass cls, const PolyTileFn& fn) const;
+    /// A poly edge's neighbour across its tile's border, from Detour's external links as they stand now: the edge,
+    /// the neighbour's ref and the stretch of the edge they share, as fractions from the edge's first vertex.
+    typedef std::function<void(const LLUUID& mesh, const sknav::TileKey& key, U16 poly, U8 edge, U64 neighbour, F32 t0, F32 t1)> BorderLinkFn;
+    void borderLinksIn(const LLVector3d& min, const LLVector3d& max, sknav::AgentClass cls, const BorderLinkFn& fn) const;
 
     /// Whether anything the debug pass draws is switched on: the navmesh
     /// surface from the pipeline's debug mask, or any layer that reads the
@@ -114,10 +151,34 @@ public:
     /// build follows it too, so a layer draws whether or not the surface is.
     static bool overlayActive();
 
+    /// The tile pass runs for its air (SKAirCellsEnabled) or its polygons (SKNavMeshEnabled).
+    static bool airEnabled();
+    /// Whether tiles go on to polygons and Detour; off, the raster stage's air, walls and rooms are all that is built.
+    static bool polysEnabled();
+
     /// The floor under a global position within the class's reach: the nearest
     /// walkable polygon's height. Cluster meshes at the position first, then
     /// the region's terrain.
     bool floorUnder(const LLVector3d& pos, sknav::AgentClass cls, F32& z_out, LLUUID* mesh_out = nullptr) const;
+
+    /// The space under a global position: the nearest walkable poly's, within
+    /// the class's reach; false over no stamped poly.
+    bool spaceAt(const LLVector3d& pos, LLUUID& mesh_out, U32& space_out) const;
+    /// Every stamped poly of a space, its outline global.
+    typedef std::function<void(const std::vector<LLVector3d>& outline)> OutlineFn;
+    void spacePolys(const LLUUID& mesh, U32 space, const OutlineFn& fn) const;
+    /// A mesh's storeys over its published polys, rebuilt after a publish; null for no mesh.
+    /// Positions in it are relative to the mesh's origin.
+    sknav::StoreyProductPtr storeys(const LLUUID& mesh) const;
+    /// The storey under a global position, by index into storeys(mesh_out); false on a flight or off the mesh.
+    bool storeyAt(const LLVector3d& pos, LLUUID& mesh_out, S32& storey_out) const;
+    /// AVATAR's wall runs (sknavwallruns.h) of every tile meeting the box, mesh-local, with
+    /// the mesh origin they are relative to, the tile's key and its polys' storeys' mesh.
+    /// Built on the first read after a publish, from the same polys, spaces and air.
+    typedef std::function<void(const LLVector3d& origin, const LLUUID& mesh, const sknav::TileKey& key, const sknav::WallRun& run)> WallRunFn;
+    void wallRunsIn(const LLVector3d& min, const LLVector3d& max, const WallRunFn& fn) const;
+    /// The climb links touching a space: the spaces a climb joins it to, with no geometry of their own.
+    std::vector<sknav::ClimbLink> climbLinks(const LLUUID& mesh, U32 space) const;
 
     /// A path within one mesh (the one under a). Points are global; partial
     /// when b was not reachable and the path ends at the closest point found.
@@ -135,6 +196,8 @@ public:
     /// the exits of each span. The span links are a table beside the tiles,
     /// not Detour off-mesh connections: paths do not use them yet.
     void linksIn(const LLVector3d& min, const LLVector3d& max, sknav::AgentClass cls, const LinkFn& fn) const;
+    /// The solid raster's ledges and the run-off down them.
+    void runoffIn(const LLVector3d& min, const LLVector3d& max, const SegmentFn& ledge_fn, const LinkFn& link_fn) const;
     /// Stair flights whose footprint meets the box, with the mesh origin
     /// their mesh-local positions are relative to. A flight across a tile
     /// seam comes once, as the copy of the tile holding its footprint's
@@ -189,9 +252,13 @@ public:
 
     /// Every built mesh, tile, polygon, segment, link and face to one JSON
     /// file in the logs folder, for reading offline: the mini-map's test
-    /// fixtures, and evidence attached to a report. Returns a line for the
-    /// console with the counts, the size and the full path.
-    std::string exportAll() const;
+    /// fixtures, and evidence attached to a report. Written once no spaces
+    /// are pending and every tile is stamped against the spaces landed, so
+    /// one file holds one generation of them. Returns a line for the console
+    /// with the counts, the size and the full path, or that it waits.
+    std::string exportAll();
+    /// The last line exportAll gave, updated when a waiting export is written.
+    const std::string& exportStatus() const { return mExportStatus; }
 
     /// What every tile is built from, to logs/sknav-census-<UTC>.json:
     /// the census's records, clusters, doors, features and spans, each
@@ -220,12 +287,22 @@ public:
         U32 mInFlight = 0;
         U32 mBuilds = 0;
         U32 mFailures = 0;
+        U32 mRefused = 0;       ///< layouts over MAX_TILES_PER_MESH, left unbuilt
         U32 mFaces = 0;
         U32 mSegments = 0;
         U32 mLinks = 0;
         U32 mAirTiles = 0;
         size_t mAirBytes = 0;
         U32 mAirEvicted = 0;    ///< tiles whose detail went to disk for the budget
+        U32 mSpilledMeshes = 0;     ///< settled meshes whose detail air waits on disk
+        U32 mSpilledTiles = 0;
+        U32 mSpills = 0;            ///< tiles spilled, ever
+        U64 mSpillBytes = 0;        ///< bytes those spills wrote
+        size_t mSpillFreed = 0;     ///< air and raster bytes the last spill let go
+        U32 mReloads = 0;           ///< tiles brought back, ever
+        U32 mReloadMisses = 0;      ///< of those, ones the disk had lost and that were built again
+        F32 mLastReloadMs = 0.f;    ///< the last reload, per tile on the worker
+        F32 mLastReloadWallMs = 0.f;    ///< the last reload, from asking to the detail landing
         U64 mDiskBytes = 0;
         U32 mDiskEntries = 0;
         U32 mDiskLoads = 0;     ///< builds answered from disk
@@ -235,6 +312,32 @@ public:
         F32 mLastBuildMs = 0.f;
         F32 mWorstBuildMs = 0.f;
         F32 mExcludeMs = 0.f;   ///< of the last build that left records out of a class, what that cost
+        F32 mLastRasterMs = 0.f;    ///< of the last build, its raster stage
+        F32 mLastPolyMs = 0.f;      ///< and its polygon stage
+        U32 mRasterTiles = 0;       ///< tiles holding their raster
+        size_t mRasterBytes = 0;
+        U32 mRasterEvicted = 0;     ///< rasters dropped for the budget or past the radius
+        U32 mReRasters = 0;         ///< builds of tiles whose raster had been dropped
+        U32 mLocalUpdates = 0;      ///< builds that rasterised only an edit's cells into the held raster (updateTile)
+        U32 mUpdateFallbacks = 0;   ///< builds with a held raster that rasterised the whole tile all the same
+        F32 mLastUpdateMs = 0.f;    ///< the raster stage of the last local update
+        U32 mStamps = 0;            ///< stamped tiles published
+        U32 mStampLoads = 0;        ///< of those, polys found on disk under the stamp's pattern
+        U32 mStampReRasters = 0;    ///< of those, rasterised again for want of a held raster
+        U32 mRebinds = 0;           ///< tiles whose spaces moved but whose pattern did not: flags only
+        U32 mRebindsQuiet = 0;      ///< <SK:Nexii> nav/streaming: rebinds that moved nothing, so no revision
+        U32 mStampsKept = 0;        ///< <SK:Nexii> nav/streaming-2: tiles new spaces left unread, their stamp key unchanged
+        U32 mStampsOutdated = 0;    ///< <SK:Nexii> nav/streaming-2: stamps landed over spaces newer than theirs, read again
+        U32 mStampOverflow = 0;     ///< stamps whose palette went down the cascade (sknavstamp.h)
+        U32 mPolyOverflowTiles = 0; ///< polys over a Detour tile's budget: not published
+        U32 mUnstampedPublishes = 0;    ///< tiles with air published without a stamp; should stay 0
+        U32 mAwaitingStamp = 0;     ///< tiles whose raster stage published and whose stamp has not
+        F32 mLastStampMs = 0.f;     ///< the last stamp job, stamp input to Detour data
+        F32 mLastStampLatencyMs = 0.f;  ///< from a tile's raster stage publishing to its stamped polys
+        F32 mWorstStampLatencyMs = 0.f;
+        U32 mAirOverlayVerts = 0;   ///< vertices the air overlay last gathered
+        U32 mAirOverlayTiles = 0;   ///< tiles it drew from
+        U32 mAirOverlayCut = 0;     ///< tiles the vertex budget cut short or left out
     };
     const Stats& stats() const { return mStats; }
 
@@ -255,12 +358,22 @@ private:
         CAUSE_FAILED,       ///< the last build of it failed
     };
 
+    /// A tile's wall segments bucketed by the 2 m cells of its footprint their plan
+    /// AABBs touch, so a query over a few metres reads a few cells rather than the
+    /// whole tile. Built on first query, for the segment vector it holds.
+    struct SegmentCells
+    {
+        static constexpr S32 ACROSS = 16;
+        std::shared_ptr<const std::vector<sknav::WallSegment>> mSource;
+        std::vector<U32> mCells[ACROSS * ACROSS];
+    };
+
     struct Tile
     {
         U64 mSignature = 0;     ///< what the tile should be built from
         U64 mBuilt = 0;         ///< what it was built from; 0 = nothing published
         bool mInFlight = false;
-        S32 mPolys[sknav::NUM_CLASSES] = { 0, 0 };
+        S32 mPolys[sknav::NUM_CLASSES] = { 0 };
         F32 mMillis = 0.f;
         LLVector3d mMin;        ///< global, for scheduling by distance and drawing
         LLVector3d mMax;
@@ -290,18 +403,47 @@ private:
         /// Published with the tile, mesh-local; shared so a read hands them
         /// out without copying and a rebuild never rewrites one in place.
         std::shared_ptr<const std::vector<sknav::WallFace>> mFaces;
+        std::shared_ptr<const std::vector<sknav::WallSegment>> mLedges;
+        std::shared_ptr<const std::vector<sknav::DropLink>> mRunoff;
         sknav::TileAirPtr mAir;         ///< within SKNavAirRadius, until evicted
         sknav::TileAirPtr mAirCoarse;   ///< the solid tops an evicted tile keeps for the sky map
         U64 mContentKey = 0;            ///< the session-stable key of what was published (sknavtilecache.h)
         bool mDiskRefused = false;      ///< Detour refused the product loaded from disk: build the next one
         F64 mNearness = 0.0;            ///< camera nearness over time, for the air budget
         U64 mAirBuilt = 0;              ///< the signature the air was built from; 0 = never asked
+        U64 mAirId = 0;                 ///< names mAir across a spill and its reload, which change the pointer but not the air
+        bool mAirSpilled = false;       ///< its detail air and raster wait on disk under spillKey(mContentKey)
         std::shared_ptr<const std::vector<sknav::WallSegment>> mSegments[sknav::NUM_CLASSES];
         std::shared_ptr<const std::vector<sknav::DropLink>> mLinks[sknav::NUM_CLASSES];
+        std::shared_ptr<const std::vector<U32>> mPolySpace;            ///< per AVATAR poly, its space id, as bound
+        std::shared_ptr<const std::vector<PortalEdge>> mPortalEdges;   ///< AVATAR's poly edges on portals, as bound
         std::shared_ptr<const std::vector<sknav::Flight>> mFlights[sknav::NUM_CLASSES];
         /// The Detour tile's polygons, extracted on first read and valid only for the publish
         /// that set it: every path that adds or removes the Detour tile resets it.
         mutable std::shared_ptr<const sknav::TilePolys> mPolyCache[sknav::NUM_CLASSES];
+        /// AVATAR's wall runs, built on first read from the inputs named in mWallRunsKey.
+        mutable std::shared_ptr<const std::vector<sknav::WallRun>> mWallRuns;
+        mutable std::array<U64, 12> mWallRunsKey{};
+        /// The Detour tile's bytes, which Detour reads but does not own.
+        std::vector<U8> mDetour[sknav::NUM_CLASSES];
+        /// What the published polygons were built from, held near the camera
+        /// so they can be built again without rasterising (sknavbuild.h).
+        sknav::TileRasterPtr mRaster;
+        bool mRasterDropped = false;    ///< the raster went for the budget since the tile was built
+        /// The stamp the published polygons were built with: what it was read
+        /// from, the side tables, their binding to the spaces, and the spaces.
+        std::shared_ptr<const sknav::TileStampInput> mStampInput;
+        std::shared_ptr<const sknav::TileStampGeom> mStampGeom;
+        std::shared_ptr<const sknav::TileBinding> mBinding;
+        sknav::RoomsProductPtr mStampedBy;
+        U64 mStampKey = 0;              ///< what the stamp read of mStampedBy's spaces (sknav::stampRoomsKey)
+        U32 mStampSlot = 0;             ///< the Detour header's user id: the space filter's key to its polys' spaces
+        U64 mStampBuilt = 0;            ///< the signature of the raster the stamped polys were built from
+        bool mStampDue = false;         ///< spaces landed over its air since it was stamped
+        bool mStampInFlight = false;
+        F64 mStaticAt = 0.0;            ///< when its raster stage published, while the stamp is awaited
+        /// Checked against mSegments by identity, so a publish needs no reset here.
+        mutable std::shared_ptr<const SegmentCells> mSegmentCells[sknav::NUM_CLASSES];
     };
 
     struct Layout
@@ -310,11 +452,13 @@ private:
         std::vector<U64> mSignatures;
         std::set<sknav::TileKey> mKeys;
         size_t mNext = 0;
+        bool mRefused = false;      ///< more tiles than a mesh holds, so none
         U64 mCensus = 0, mWorld = 0, mLand = 0, mParams = 0;
         F32 mPad = 0.f, mVoidMargin = 0.f;
         F64 mMinZ = 0., mMaxZ = 0.;
     };
 
+    struct SpillJob;
     struct Mesh
     {
         LLUUID mId;                         ///< cluster id, or the region id for terrain
@@ -325,10 +469,10 @@ private:
         U64 mRegion = 0;                    ///< the region that owns it, for lifetime
         U32 mGeneration = 0;                ///< results carry it; a torn-down mesh rejects old ones
         LLVector3d mOrigin;                 ///< global, on the lattice
-        dtNavMesh* mNav[sknav::NUM_CLASSES] = { nullptr, nullptr };
-        dtNavMeshQuery* mQuery[sknav::NUM_CLASSES] = { nullptr, nullptr };
+        dtNavMesh* mNav[sknav::NUM_CLASSES] = { nullptr };
+        dtNavMeshQuery* mQuery[sknav::NUM_CLASSES] = { nullptr };
         std::map<sknav::TileKey, Tile> mTiles;
-        F32 mLastSeen = 0.f;
+        F64 mLastSeen = 0.f;
         // What the region pass's layout and tile re-sign were last laid
         // against. While all of these stand, the pass would rebuild exactly
         // what already stands, so it is skipped whole.
@@ -341,6 +485,19 @@ private:
         std::shared_ptr<Layout> mPendingLayout;
         std::map<sknav::TileKey, Tile>::iterator mDropCursor;
         bool mDropping = false;
+        /// The spaces the tiles are being stamped with, as they landed.
+        sknav::EnclosureProductPtr mStampEnc;
+        sknav::RoomsProductPtr mStampRooms;
+        bool mStampScan = false;            ///< some tile may be due a stamp
+        mutable sknav::StoreyProductPtr mStoreys;
+        mutable std::vector<U64> mStoreysKey;   ///< the per-tile inputs they were built from
+        /// Where its detail air is: every tile's in memory, on its way to disk, there, or on its way back.
+        enum class Residency : U8 { RESIDENT, SPILLING, SPILLED, RELOADING };
+        Residency mResidency = Residency::RESIDENT;
+        F64 mDetailWanted = 0.0;            ///< when something last needed its detail
+        F64 mResidencyChecked = 0.0;
+        F64 mReloadAsked = 0.0;
+        std::shared_ptr<SpillJob> mRefusedReload;   ///< what a reload read whose swap was refused, to try again
         ~Mesh();
     };
 
@@ -359,12 +516,29 @@ private:
         sknav::TileKey mKey;
         sknav::TileAirPtr mAir, mCoarse;
         F64 mNearness, mDistance;
+        U8 mPriority = 3;
     };
     std::shared_ptr<std::vector<AirCandidate>> mEvictionScan;
+    struct RasterCandidate
+    {
+        LLUUID mMesh;
+        U32 mGeneration;
+        sknav::TileKey mKey;
+        sknav::TileRasterPtr mRaster;
+        size_t mBytes;
+        F64 mDistance;
+        U8 mPriority = 3;
+    };
+    std::vector<RasterCandidate> mRasterScan;
+    /// Held rasters get a quarter of the air budget; past it the farthest go
+    /// until they fit in seven eighths of that, and past one and a half
+    /// radii any raster goes.
+    void evictRasters(size_t budget, F64 radius);
+    size_t mHeldRasterBytes = 0;
     std::future<std::shared_ptr<std::vector<AirCandidate>>> mEvictionJob;
     std::shared_ptr<std::vector<AirCandidate>> mPendingEvictions;
     size_t mNextEviction = 0;
-    struct SkyContributor { LLVector3d mOrigin; sknav::TileAirPtr mAir; };
+    struct SkyContributor { LLVector3d mOrigin; sknav::TileTopsPtr mTops; };
     std::shared_ptr<std::map<U64, SkyContributor>> mSkyScan;
     U64 mSkyScanRevision = 0;
     bool mSkyScanReady = false, mEvictionScanReady = false;
@@ -374,12 +548,13 @@ private:
         U32 mGeneration;
         sknav::TileKey mKey;
         F64 mDistance;
+        U8 mPriority = 3;
     };
     std::shared_ptr<std::vector<BuildCandidate>> mScheduleScan, mBuildCandidates;
     std::future<std::shared_ptr<std::vector<BuildCandidate>>> mScheduleJob;
     bool mScheduleScanReady = false;
     size_t mNextCandidate = 0;
-    F32 mCandidateTime = 0.f;
+    F64 mCandidateTime = 0.f;
     Stats mScanningStats;
 
     typedef sknav::ExportCounts ExportCounts;
@@ -396,8 +571,67 @@ private:
     /// the rooms replace. Demands the navmesh runs for them, air and census
     /// with it.
     static bool probesDemanded();
-    /// Whether a tile is near enough the camera to build its air eagerly.
-    static bool inAirRadius(const Tile& tile);
+    /// Whether a tile builds its air eagerly: near the camera, or under the cluster the agent is in.
+    bool inAirRadius(const Tile& tile) const;
+
+public:
+    /// What moved a mesh's air since the rooms pass last drained the list, so it walks only those meshes.
+    struct AirChange
+    {
+        enum Kind : U8 { PUBLISHED, EVICTED, SPILLED, RELOADED, LOST, DROPPED, MESH_GONE };
+        LLUUID mMesh;
+        sknav::TileKey mKey;
+        U64 mAirId = 0;
+        LLVector3d mMin, mMax;
+        Kind mKind = PUBLISHED;
+        bool mWholeMesh = true;     ///< no one tile: mKey, mAirId and the box say nothing
+    };
+    /// Moves the list into out; false when it overflowed since the last drain, so any mesh may have moved.
+    bool drainAirChanges(std::vector<AirChange>& out) const;
+    /// A mesh's air as a rooms pass is posted with, by value, so the pass reads no tile of the navmesh.
+    struct AirSnapshotTile
+    {
+        sknav::TileKey mKey;
+        sknav::TileAirPtr mAir;
+        sknav::TileAirPtr mCoarse;
+        U64 mContributor = 0;
+        LLVector3d mMin, mMax;
+    };
+    struct AirSnapshot
+    {
+        bool mFound = false;
+        LLVector3d mOrigin;
+        U8 mPriority = 3;
+        std::vector<AirSnapshotTile> mTiles;
+    };
+    AirSnapshot airSnapshot(const LLUUID& mesh) const;
+    /// The census the door and lift spans were taken from.
+    U64 featureStamp() const { return mFeatureStamp; }
+
+private:
+    /// What inAirRadius reads, taken once for a pass over many tiles; it answers as the one-argument form does.
+    struct AirReach
+    {
+        LLVector3d mCamera;
+        LLVector3d mAgent;
+        F64 mRadius2 = 0.0;
+        F64 mAgentRadius2 = 0.0;
+        std::vector<std::pair<LLVector3d, LLVector3d>> mBoxes;
+    };
+    AirReach airReach() const;
+    bool inAirRadius(const Tile& tile, const AirReach& reach) const;
+    void noteAirChange(AirChange::Kind kind, const LLUUID& mesh);
+    void noteAirChange(AirChange::Kind kind, const Mesh& mesh, const sknav::TileKey& key, const Tile& tile);
+    mutable std::vector<AirChange> mAirChanges;
+    mutable bool mAirChangesLost = false;
+    /// Which mesh the work queues serve first: 0 the agent's region's own
+    /// terrain, 1 the terrain of the regions touching it, 2 the clusters
+    /// owned by either, 3 everything else. Within a tier the distance orders,
+    /// so a surround in the void can never come before the ground it rings.
+    U8 meshPriority(const Mesh& mesh) const;
+    /// The plan boxes of the clusters around the agent, whose tiles all get detail air.
+    std::vector<std::pair<LLVector3d, LLVector3d>> mHomeBoxes;
+    void findHomeBoxes(const SKCensusSnapshotPtr& snap);
     /// Bring the sky map in line with the published tiles' air.
     void syncSkyMap();
     /// The pool the tile builds run on, created on first use. A pool of its
@@ -411,7 +645,6 @@ private:
     /// that one mesh holds the ground, the walls that block it and the floors
     /// that lead off it; anything clear of the ground gets a mesh to itself.
     bool grounded(const sknav::Cluster& cluster) const;
-    static U64 recordSignature(const std::vector<sknav::RecordPtr>& records);
     /// Work out what a tile is built from, note why it moved away from what
     /// was built, and keep the old signature to tell the next move by.
     void reSign(Tile& tile, const std::vector<sknav::RecordPtr>& before, U64 records, U64 terrain, U64 params);
@@ -421,14 +654,56 @@ private:
     /// A rising blip for a tile that was just built, coloured by why.
     void tileBlip(const Mesh& mesh, const Tile& tile) const;
     void schedule();
+    /// What a tile is built from, gathered on the main thread; false while its land is not sampled.
+    bool prepareInput(const Mesh& mesh, const sknav::TileKey& key, Tile& tile, std::shared_ptr<sknav::TileBuildInput>& input,
+                      std::shared_ptr<const std::vector<sknav::RecordPtr>>& records) const;
     bool launch(Mesh& mesh, const sknav::TileKey& key, Tile& tile);
+    /// Stamp the tiles whose spaces landed: the polygons wait for them, so a
+    /// tile publishes once, stamped, and a rebuilt one keeps its old polygons
+    /// until the new ones land.
+    void stampTiles();
+    bool launchStamp(Mesh& mesh, const sknav::TileKey& key, Tile& tile);
+    struct StampOutcome;
+    void publishStamped(const LLUUID& mesh_id, U32 generation, const sknav::TileKey& key, U64 signature, const sknav::TileAirPtr& air,
+                        const sknav::RoomsProductPtr& rooms, const std::shared_ptr<StampOutcome>& out);
+    /// A binding's flags onto the tile's Detour polys, and its polys' spaces where the filter finds them.
+    void applyBinding(Mesh& mesh, const sknav::TileKey& key, Tile& tile);
+    /// The space id of a poly, through its Detour tile's user id; 0 for none.
+    U32 polySpace(const dtMeshTile* tile, U32 poly) const;
+    /// A Detour tile's polys' space ids, for the space filter.
+    sknav::SpaceQueryFilter::TileSpaces polySpaces(const dtMeshTile* tile) const;
+    /// Tiles still to be stamped against their mesh's landed spaces, a mesh with spaces pending counting one.
+    U32 stampsUnsettled() const;
+    std::string writeExport() const;
+    bool mExportPending = false;
+    F64 mExportAsked = 0.0;
+    std::string mExportStatus;
+    std::unordered_map<U32, std::shared_ptr<const std::vector<U32>>> mSlotSpaces;
+    /// Forget a retiring mesh's tiles' entries in mSlotSpaces.
+    void dropSlots(const Mesh& mesh);
+    U32 mNextSlot = 0;
     void publish(const LLUUID& mesh_id, U32 generation, const sknav::TileKey& key, U64 signature, std::shared_ptr<sknav::TileBuildResult> result,
-                 U64 content_key = 0, bool loaded = false);
+                 U64 content_key = 0, bool loaded = false, sknav::TileRasterPtr raster = nullptr);
     /// The tile product cache on disk, or null when SKNavDiskCacheMB is 0.
     std::shared_ptr<sknav::TileDiskCache> diskCache();
     /// Keep the tiles' detailed air under SKNavAirBudgetMB, least recently
     /// near first, spilling to disk what is not there already.
     void evictAir();
+    /// Settled meshes spill their detail air and rasters to disk, and spilled ones
+    /// a product or a reader needs bring it back, both on the workers.
+    void updateResidency();
+    void spillMesh(Mesh& mesh);
+    void reloadMesh(Mesh& mesh);
+    /// One tile's read, posted to the pool under the reload cap; false when
+    /// the queue refused it, which retires the entry as if it had read nothing.
+    bool postReloadRead(const std::shared_ptr<SpillJob>& job, size_t i);
+    void finishSpill(const std::shared_ptr<SpillJob>& job);
+    void finishReload(const std::shared_ptr<SpillJob>& job);
+    /// Point a mesh's landed products and its stamp at other air, keeping their contents.
+    bool swapProductsAir(Mesh& mesh, const sknav::AirSwap& swap);
+    sknav::SettleGate mSettleGate;
+    mutable std::set<LLUUID> mDetailRequests;
+    U64 mNextAirId = 0;
     void fillTerrain(const LLVector3d& mesh_origin, const LLVector3d& tile_min, const LLVector3d& tile_max, F32 pad, sknav::TerrainWindow& out) const;
     U64 terrainSignature(const LLVector3d& tile_min, const LLVector3d& tile_max, F32 pad) const;
     /// What the region's land looks like now, over all its patches. A tile's
@@ -448,12 +723,20 @@ private:
     /// and upload it. A quiet mesh and a parked camera cost one signature
     /// compare a frame; renderDebug() then only draws what is cached.
     void refreshOverlay();
+    /// The air overlay (SKNavOverlayAir) into mOverlay: tiles nearest the camera first, under a vertex budget.
+    void gatherAirOverlay(const LLVector3d& camera, F64 reach, U32 mode, bool opaque);
+    void gatherClimbLinks(const LLVector3d& camera, F64 reach, bool opaque);
     /// Take the census's ladders and working elevators into mFeatureLinks,
     /// and find the exits of any span a published tile has touched.
     void syncFeatureLinks(const SKCensusSnapshotPtr& snap);
     void findExits(FeatureSpan& span) const;
+    /// Marks the feature spans over a tile to find their exits again.
+    void markSpansDirty(const Tile& tile);
     /// Every published tile whose footprint meets the box, with its mesh.
     void forEachTileIn(const LLVector3d& min, const LLVector3d& max, const std::function<void(const Mesh&, const Tile&)>& fn) const;
+    /// A tile's wall runs as of this revision, null without a Detour tile, stamp or air.
+    void storeyInputs(const Mesh& mesh, std::vector<U64>& out) const;
+    std::shared_ptr<const std::vector<sknav::WallRun>> tileWallRuns(const Mesh& mesh, const sknav::TileKey& key, const Tile& tile) const;
 
     std::map<LLUUID, std::unique_ptr<Mesh>> mMeshes;
     /// Span links by region handle, then feature. A tile rebuild would wipe
@@ -469,16 +752,19 @@ private:
     U64 mCensusStamp = 0;
     U32 mNextGeneration = 1;
     S32 mInFlight = 0;
+    U32 mReloadReadsInFlight = 0;           ///< the reload cap, so a whole region's reads cannot flood the pool
+    std::vector<std::shared_ptr<SpillJob>> mReloadBacklog;  ///< reloads the cap held back, in the order they asked
     Stats mStats;
-    F32 mLastLog = 0.f;
+    F64 mLastLog = 0.f;
     bool mDemanding = false;
+    bool mPolysOn = false;      ///< polysEnabled() the meshes were built under
     sknav::SkyMap mSkyMap;
-    std::map<U64, sknav::TileAirPtr> mSkyTiles;     ///< what each contributor last gave the sky map
+    std::map<U64, sknav::TileTopsPtr> mSkyTiles;    ///< what each contributor last gave the sky map
     U64 mSkyRevision = 0;
     struct SkyResult
     {
         sknav::SkyMap mMap;
-        std::map<U64, sknav::TileAirPtr> mTiles;
+        std::map<U64, sknav::TileTopsPtr> mTiles;
         U64 mRevision = 0;
     };
     std::future<std::shared_ptr<SkyResult>> mSkyJob;

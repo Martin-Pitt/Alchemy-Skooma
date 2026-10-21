@@ -83,6 +83,7 @@ namespace sknav
             INDOORS = 1 << 2,
             COURTYARD = 1 << 3,
             DRAUGHT = 1 << 4,       ///< near a portal between sides that differ in S
+            UNKNOWN = 1 << 5,       ///< air whose enclosure has no answer, held calm
         };
         U8 mFactor = 0;             ///< speed in WIND_FACTOR_UNIT
         S8 mDeflect[2] = { 0, 0 };  ///< in WIND_DEFLECT_UNIT, x and y
@@ -152,7 +153,12 @@ namespace sknav
     /// One heading over a field: lee behind solids, venturi from the smoothed
     /// free width, calm indoors, damped and swirling courtyards, and draughts
     /// at portals whose sides differ in S.
-    std::shared_ptr<WindSlab> computeWindSlab(const WindField& field, const RoomsProduct* rooms, F32 heading_deg, const WindParams& params);
+    /// weight_blur, when given, is windWeightBlur of the same field and params.
+    std::shared_ptr<WindSlab> computeWindSlab(const WindField& field, const RoomsProduct* rooms, F32 heading_deg, const WindParams& params,
+                                              const std::vector<F32>* weight_blur = nullptr);
+
+    /// The smoothed weight of a field's open cells, which every heading's free width is normalised by.
+    std::vector<F32> windWeightBlur(const WindField& field, const WindParams& params);
 
     struct WindInput
     {
