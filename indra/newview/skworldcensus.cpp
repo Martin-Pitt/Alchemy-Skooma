@@ -680,10 +680,12 @@ void SKWorldCensus::visit(LLViewerObject* object)
     // </SK:Nexii>
 
     // Movers and things that are not shapes.
-    if (root->flagUsePhysics() || root->flagCharacter() || root->flagVolumeDetect() || root->flagTemporaryOnRez())
+    if (root->flagUsePhysics() || root->flagCharacter() || root->flagTemporaryOnRez())
     {
         return;
     }
+    // Nothing collides with a volume detect linkset: recorded visible only, as phantom is below.
+    bool collides = !root->flagVolumeDetect();
 
     // Cull by the part's reach, not its centre: a 200 m surround whose centre
     // is far away still hangs into the range.
@@ -764,21 +766,23 @@ void SKWorldCensus::visit(LLViewerObject* object)
     const bool excluded = (feature.mExclude & EXCLUDE_ALL) == EXCLUDE_ALL;
     const bool dynamic = moving && !excluded && !held_shut;
 
-    // Phantom stays out unless the sim says it is an exclusion volume; a
-    // surround stays in whatever its flags, as its rendered shape.
+    // Phantom is visible only unless the sim says it is an exclusion volume; a
+    // surround stays in whatever its flags, as its rendered shape. A part with
+    // no physics shape is visible only as well: the overview's cover test asks
+    // whether what is seen collides, and nav never sees such a record.
     const bool phantom = root->flagPhantom();
     const LLVector3d span(extent);
     const bool surround = isSurround(root, pos - span, pos + span);
     if (phantom && navRole != NavRole::EXCLUSION_VOLUME && !surround)
     {
-        return;
+        collides = false;
     }
 
     SKPhysicsShape shape;
     const bool hasPhysics = skPhysicsShapeClassify(volume, shape);
     if (!hasPhysics && !surround)
     {
-        return;
+        collides = false;
     }
 
     U64 sig = SEED;
@@ -798,6 +802,10 @@ void SKWorldCensus::visit(LLViewerObject* object)
     sig = mix(sig, static_cast<U64>(feature.mKind));
     sig = mix(sig, feature.mExclude);
     sig = mix(sig, object->isPhysicsShapeUnknown());
+    if (!collides)
+    {
+        sig = mix(sig, 0x76697369626c65ull); // volume detect turning on or off re-signs the part
+    }
     // No shape depends on the loaded LOD: a surround is built from the top LOD
     // (skCensusRenderGeometry), the rest from a fixed detail or the
     // decomposition. Mixing the LOD in re-signs records as the camera moves and
@@ -847,7 +855,7 @@ void SKWorldCensus::visit(LLViewerObject* object)
                 held.mSim.reset();
                 held.mSimMesh = sculpt;
             }
-            if (!held.mSim && (!surround || (hasPhysics && !phantom)))
+            if (!held.mSim && collides && (!surround || (hasPhysics && !phantom)))
             {
                 held.mSim = skPhysicsShapeSimTriangles(volume);
             }
@@ -875,12 +883,38 @@ void SKWorldCensus::visit(LLViewerObject* object)
 
     PartCache& cache = mParts[object->getID()];
     cache.mLastSeen = gFrameTimeSeconds;
-    const bool fresh = cache.mRecord && cache.mSignature == sig && cache.mRecord->mDynamic == dynamic;
+    const bool fresh = cache.mRecord && cache.mSignature == sig && cache.mRecord->mDynamic == (collides && dynamic);
     RecordPtr rec;
     if (fresh)
     {
         rec = cache.mRecord;
         snap.mStats.mCached++;
+    }
+    else if (!collides)
+    {
+        // Visible only: its box for the overview's cover test, never a shape nav builds with.
+        auto box = std::make_shared<Record>();
+        box->mRoot = root->getID();
+        box->mPart = object->getID();
+        box->mProvenance = Provenance::RENDER;
+        box->mNavRole = navRole;
+        box->mShape = Shape::BOX;
+        box->mCollides = false;
+        box->mPhysicsKnown = !object->isPhysicsShapeUnknown();
+        box->mSignature = sig;
+        box->mOrigin = object->getRegion()->getOriginGlobal();
+        box->mCenter = sim_pos;
+        for (S32 k = 0; k < 3; ++k)
+        {
+            box->mAxes[k] = axis[k];
+        }
+        box->mHalf = half;
+        box->mMin = box->mOrigin + LLVector3d(sim_pos - extent);
+        box->mMax = box->mOrigin + LLVector3d(sim_pos + extent);
+        rec = box;
+        cache.mRecord = rec;
+        cache.mPhysics.reset();
+        cache.mSignature = sig;
     }
     else
     {
@@ -895,6 +929,7 @@ void SKWorldCensus::visit(LLViewerObject* object)
         cache.mSignature = sig;
     }
     take(snap, rec);
+    snap.mStats.mVisibleOnly += rec->mCollides ? 0 : 1;
     // Only a mesh has its type asked for above; a prim's stays unknown until someone edits it.
     if (volume->isMesh())
     {
@@ -914,7 +949,7 @@ void SKWorldCensus::visit(LLViewerObject* object)
         }
     }
 
-    if (!surround)
+    if (collides && !surround)
     {
         FeaturePart fp;
         fp.mPart = object->getID();
@@ -942,7 +977,7 @@ void SKWorldCensus::visit(LLViewerObject* object)
     // rezzed across the region edge is solid over the strip of ground it
     // covers. Its physics shape comes in beside the rendered one, and is the
     // record the fill makes solid.
-    if (surround && hasPhysics && !phantom)
+    if (collides && surround && hasPhysics && !phantom)
     {
         if (!fresh || !cache.mPhysics)
         {
@@ -1124,6 +1159,7 @@ sknav::RecordPtr SKWorldCensus::record(LLVOVolume* volume, LLViewerObject* root,
     rec->mFeature = feature;
     rec->mExclude = exclude;
     rec->mSignature = signature;
+    rec->mPhysicsKnown = !volume->isPhysicsShapeUnknown();
     rec->mOrigin = volume->getRegion()->getOriginGlobal();
 
     const LLVector3 scale = volume->getScale();
@@ -1481,9 +1517,9 @@ std::string SKWorldCensus::statsLine() const
     {
         largest = std::max(largest, c->mRecords.size());
     }
-    return llformat("census #%llu: %u objects, %u records (%u cached, %u dynamic, %u surround, %u placeholders, %u from object cache, %u tiny), %u tris, %u roles, %u features; %zu clusters, largest %zu; scan %.1f ms, cluster %.1f ms, features %.1f ms",
+    return llformat("census #%llu: %u objects, %u records (%u cached, %u dynamic, %u surround, %u placeholders, %u from object cache, %u tiny, %u visible-only), %u tris, %u roles, %u features; %zu clusters, largest %zu; scan %.1f ms, cluster %.1f ms, features %.1f ms",
                     static_cast<unsigned long long>(mSnapshot->mStamp), s.mObjectsSeen, s.mRecords, s.mCached, s.mDynamic, s.mSurround,
-                    s.mPlaceholders, s.mFromObjectCache, s.mTiny, s.mTriangles, s.mRolesKnown, s.mFeatures, mSnapshot->mClusters.mClusters.size(), largest, s.mScanMs, s.mClusterMs,
+                    s.mPlaceholders, s.mFromObjectCache, s.mTiny, s.mVisibleOnly, s.mTriangles, s.mRolesKnown, s.mFeatures, mSnapshot->mClusters.mClusters.size(), largest, s.mScanMs, s.mClusterMs,
                     s.mFeatureMs) +
            llformat("; physics unknown %u / %u meshes, known after mean %.1f s, max %.1f s over %u parts", s.mPhysicsUnknown,
                     s.mPhysicsMeshes, mKnownAfterCount ? mKnownAfterSumS / mKnownAfterCount : 0.0, mKnownAfterMaxS, mKnownAfterCount);

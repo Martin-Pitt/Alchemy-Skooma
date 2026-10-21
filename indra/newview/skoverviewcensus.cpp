@@ -71,7 +71,8 @@ namespace skoverview
     bool keepRecord(const sknav::Record& rec, CensusClass& fixed)
     {
         fixed = NUM_CENSUS_CLASSES;
-        if (rec.mRole != sknav::Role::NAV || rec.mNavRole == sknav::NavRole::MATERIAL_VOLUME ||
+        // A visible-only record is a cover candidate, never drawn: it would put every phantom decoration on the map.
+        if (rec.mRole != sknav::Role::NAV || !rec.mCollides || rec.mNavRole == sknav::NavRole::MATERIAL_VOLUME ||
             rec.mNavRole == sknav::NavRole::EXCLUSION_VOLUME)
         {
             return false;

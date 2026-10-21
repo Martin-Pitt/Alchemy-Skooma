@@ -41,8 +41,8 @@
 namespace sknav
 {
     /// Version 2 adds the root table and the clusters' dominant roots, version 3 the reflection probes, version 5 the SIM
-    /// provenance; older versions still read.
-    constexpr U32 CENSUS_FORMAT_VERSION = 5;
+    /// provenance, version 6 a record's collides and physics_known; older versions still read.
+    constexpr U32 CENSUS_FORMAT_VERSION = 6;
     constexpr size_t ROOT_DESCRIPTION_MAX = 256;
 
     /// Where a root's name came from: the region's linkset reply, or the object properties the viewer had cached.

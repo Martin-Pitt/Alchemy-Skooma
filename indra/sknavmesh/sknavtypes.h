@@ -105,6 +105,8 @@ namespace sknav
         Shape mShape = Shape::TRIANGLES;
         bool mDynamic = false;
         bool mSolid = false;        ///< a closed body the sim collides with as a volume: the build fills its inside
+        bool mCollides = true;      ///< false: visible only, a box nav never sees, kept for the overview's cover test
+        bool mPhysicsKnown = true;  ///< its object's physics shape type had arrived when it was recorded
         FeatureKind mFeature = FeatureKind::NONE;
         U8 mExclude = 0;            ///< EXCLUDE_* bits: classes that build as if it were not there
 

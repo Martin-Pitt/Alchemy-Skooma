@@ -112,6 +112,8 @@ namespace
         box->mMin.set(256008.1, 255761.2, 27.3);
         box->mMax.set(256012.1, 255779.2, 33.3);
         box->mSignature = 0x0123456789abcdefull;
+        box->mCollides = false;
+        box->mPhysicsKnown = false;
         auto soup = std::make_shared<const std::vector<LLVector3>>(std::vector<LLVector3>{
             LLVector3(1.f, 2.f, 3.f), LLVector3(4.f, 5.f, 6.f), LLVector3(7.f, 8.f, 9.5f) });
         auto a = std::make_shared<Record>();
@@ -192,6 +194,7 @@ namespace
     {
         if (!(a.mRoot == b.mRoot && a.mPart == b.mPart && a.mRole == b.mRole && a.mProvenance == b.mProvenance && a.mNavRole == b.mNavRole &&
               a.mShape == b.mShape && a.mDynamic == b.mDynamic && a.mSolid == b.mSolid && a.mFeature == b.mFeature && a.mExclude == b.mExclude &&
+              a.mCollides == b.mCollides && a.mPhysicsKnown == b.mPhysicsKnown &&
               a.mOrigin == b.mOrigin && a.mCenter == b.mCenter && a.mHalf == b.mHalf && a.mMin == b.mMin && a.mMax == b.mMax &&
               a.mSignature == b.mSignature && a.mConvexTris == b.mConvexTris))
         {
@@ -505,7 +508,7 @@ namespace
         std::ostringstream out;
         writeCensus(out, c);
         const std::string text = out.str();
-        CHECK(CENSUS_FORMAT_VERSION == 5u);
+        CHECK(CENSUS_FORMAT_VERSION == 6u);
         CHECK(text.find(currentVersion()) != std::string::npos);
         CensusFile back;
         std::string error;
@@ -520,7 +523,7 @@ namespace
         CHECK(readCensus(old, back, &error));
 
         std::string future = text;
-        future.replace(future.find(currentVersion()), 11, "\"version\":6");
+        future.replace(future.find(currentVersion()), 11, "\"version\":7");
         CHECK_FALSE(readCensus(future, back, &error));
     }
 }

@@ -44,7 +44,7 @@
 namespace sknav
 {
     // Whoever adds a field to Record packs and unpacks it below, then updates this size.
-    static_assert(sizeof(void*) != 8 || sizeof(Record) == 224, "a new Record field must go into the census export");
+    static_assert(sizeof(void*) != 8 || sizeof(Record) == 232,"a new Record field must go into the census export");
     // And a TileBuildInput field goes into the params, unless a tile sets it (mCoarseAir is the tile's).
     static_assert(sizeof(void*) != 8 || sizeof(TileBuildInput) == 272, "a new TileBuildInput field must go into the census export");
     // And a CensusRoot field goes into writeRootTable and the reader.
@@ -58,10 +58,12 @@ namespace sknav
         /// The packed record, in the order written; the file names it the same way.
         const char* const RECORD_LAYOUT =
             "[[\"root\",\"16s\"],[\"part\",\"16s\"],[\"role\",\"B\"],[\"provenance\",\"B\"],[\"nav_role\",\"B\"],[\"shape\",\"B\"],"
-            "[\"dynamic\",\"B\"],[\"solid\",\"B\"],[\"feature\",\"B\"],[\"exclude\",\"B\"],[\"origin\",\"3d\"],[\"center\",\"3f\"],"
+            "[\"dynamic\",\"B\"],[\"solid\",\"B\"],[\"feature\",\"B\"],[\"exclude\",\"B\"],[\"collides\",\"B\"],[\"physics_known\",\"B\"],"
+            "[\"origin\",\"3d\"],[\"center\",\"3f\"],"
             "[\"axes\",\"9f\"],[\"half\",\"3f\"],[\"min\",\"3d\"],[\"max\",\"3d\"],[\"signature\",\"Q\"],[\"tri_first\",\"I\"],"
             "[\"tri_count\",\"I\"],[\"convex_first\",\"I\"],[\"convex_count\",\"I\"]]";
-        constexpr size_t RECORD_BYTES = 196;
+        constexpr size_t RECORD_BYTES = 198;
+        constexpr size_t RECORD_BYTES_V5 = 196; ///< before collides and physics_known
 
         template<typename T>
         void put(std::vector<U8>& out, const T& v)
@@ -504,6 +506,8 @@ namespace sknav
             put(records, static_cast<U8>(r.mSolid));
             put(records, static_cast<U8>(r.mFeature));
             put(records, r.mExclude);
+            put(records, static_cast<U8>(r.mCollides));
+            put(records, static_cast<U8>(r.mPhysicsKnown));
             put(records, r.mOrigin.mdV);
             put(records, r.mCenter.mV);
             for (const LLVector3& a : r.mAxes)
@@ -811,7 +815,19 @@ namespace sknav
             const std::string blob = rd.blob(recs, "blob");
             const std::vector<LLVector3> vertices = rd.packed<LLVector3>(recs, "vertices");
             const std::vector<S32> convex = rd.packed<S32>(recs, "convex");
-            if (blob.size() != count * RECORD_BYTES)
+            // A file says how long its records are; one older than version 6 has no collides or physics_known.
+            size_t record_bytes = version >= 6 ? RECORD_BYTES : RECORD_BYTES_V5;
+            Elem layout;
+            if (rd.member(doc, "layout", layout))
+            {
+                record_bytes = static_cast<size_t>(rd.num(layout, "record_bytes"));
+            }
+            const bool flags = record_bytes == RECORD_BYTES;
+            if (!flags && record_bytes != RECORD_BYTES_V5)
+            {
+                rd.fail("unknown record size");
+            }
+            if (blob.size() != count * record_bytes)
             {
                 rd.fail("records blob size");
             }
@@ -836,6 +852,11 @@ namespace sknav
                 r->mSolid = cur.get<U8>() != 0;
                 r->mFeature = static_cast<FeatureKind>(cur.get<U8>());
                 r->mExclude = cur.get<U8>();
+                if (flags)
+                {
+                    r->mCollides = cur.get<U8>() != 0;
+                    r->mPhysicsKnown = cur.get<U8>() != 0;
+                }
                 for (F64& v : r->mOrigin.mdV)
                 {
                     v = cur.get<F64>();

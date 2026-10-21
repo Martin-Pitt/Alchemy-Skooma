@@ -78,6 +78,7 @@ struct SKCensusSnapshot
         U32 mCached = 0;            ///< parts reused from the previous scan
         U32 mFromObjectCache = 0;   ///< boxes from the region's object cache, never drawn this session
         U32 mTiny = 0;              ///< parts under SKNavMinShape in every axis: never a record
+        U32 mVisibleOnly = 0;       ///< records of parts nothing collides with: phantom, volume detect or no shape
         U32 mPhysicsMeshes = 0;     ///< mesh records, the only ones whose physics shape type the census asks for
         U32 mPhysicsUnknown = 0;    ///< mesh records whose object's physics shape type had not arrived when visited
         U32 mTriangles = 0;
