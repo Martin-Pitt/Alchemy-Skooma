@@ -804,7 +804,7 @@ void SKWorldCensus::visit(LLViewerObject* object)
     sig = mix(sig, object->isPhysicsShapeUnknown());
     if (!collides)
     {
-        sig = mix(sig, 0x76697369626c65ull); // volume detect turning on or off re-signs the part
+        sig = mix(sig, 0x76697369626c65ull); // volume detect has no other say in the signature
     }
     // No shape depends on the loaded LOD: a surround is built from the top LOD
     // (skCensusRenderGeometry), the rest from a fixed detail or the

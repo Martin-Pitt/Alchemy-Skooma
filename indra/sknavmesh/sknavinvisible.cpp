@@ -117,19 +117,10 @@ namespace sknav
             return true;
         }
 
-        // Every plane grown outward, so a face lying on the piece's face is inside it.
-        void grow(Piece& piece, F32 by)
-        {
-            for (auto& plane : piece.mPlanes)
-            {
-                plane.second += by;
-            }
-            piece.mLo -= LLVector3(by, by, by);
-            piece.mHi += LLVector3(by, by, by);
-        }
-
-        // A convex body's distinct planes from its triangles, oriented away from its vertices' mean.
-        Piece bodyPiece(const LLVector3* v, size_t count, const LLVector3& offset, const InvisibleParams& params)
+        // A convex body's distinct planes from its triangles, oriented away from its vertices' mean; none when it does
+        // not reach the part's bounds.
+        Piece bodyPiece(const LLVector3* v, size_t count, const LLVector3& offset, const LLVector3& lo, const LLVector3& hi,
+                        const InvisibleParams& params)
         {
             Piece piece;
             LLVector3 centroid;
@@ -137,6 +128,11 @@ namespace sknav
             {
                 centroid += v[i] + offset;
                 update_min_max(piece.mLo, piece.mHi, v[i] + offset);
+            }
+            const F32 on = params.mCoplanarD;
+            if (!overlaps(piece.mLo - LLVector3(on, on, on), piece.mHi + LLVector3(on, on, on), lo, hi))
+            {
+                return piece;
             }
             centroid /= (F32)llmax(count, (size_t)1);
             for (size_t t = 0; t + 2 < count; t += 3)
@@ -163,11 +159,26 @@ namespace sknav
                     piece.mPlanes.emplace_back(n, k);
                 }
             }
-            grow(piece, params.mCoplanarD);
+            // Every plane grown outward, so a face lying on the body's face is inside it; and its bounds as planes too,
+            // so a sharp corner grown outward reaches no further than they do.
+            for (auto& plane : piece.mPlanes)
+            {
+                plane.second += on;
+            }
+            piece.mLo -= LLVector3(on, on, on);
+            piece.mHi += LLVector3(on, on, on);
+            for (S32 axis = 0; axis < 3; ++axis)
+            {
+                LLVector3 n;
+                n.mV[axis] = 1.f;
+                piece.mPlanes.emplace_back(n, piece.mHi.mV[axis]);
+                piece.mPlanes.emplace_back(-n, -piece.mLo.mV[axis]);
+            }
             return piece;
         }
 
-        // A triangle extruded mProxyTolerance either way along its normal; false when degenerate.
+        // A triangle extruded mProxyTolerance (and mCoplanarD) either way along its normal, its sides through its edges so
+        // a mesh's prisms meet without overlap; false when degenerate.
         bool prismPiece(const LLVector3& a, const LLVector3& b, const LLVector3& c, const InvisibleParams& params, Piece& piece)
         {
             LLVector3 n;
@@ -176,7 +187,7 @@ namespace sknav
                 return false;
             }
             const F32 k = n * a;
-            const F32 tol = params.mProxyTolerance;
+            const F32 tol = params.mProxyTolerance + params.mCoplanarD;
             piece.mPlanes = { { n, k + tol }, { -n, -k + tol } };
             const LLVector3* p[3] = { &a, &b, &c };
             for (S32 e = 0; e < 3; ++e)
@@ -201,7 +212,6 @@ namespace sknav
             piece.mLo -= LLVector3(tol, tol, tol);
             piece.mHi += LLVector3(tol, tol, tol);
             piece.mPrism = true;
-            grow(piece, params.mCoplanarD);
             return true;
         }
 
@@ -223,7 +233,7 @@ namespace sknav
                 for (size_t b = 0; b < bodies; ++b)
                 {
                     const size_t n = c.mShape != Shape::TRIANGLES ? tris : (size_t)c.mConvexTris[b];
-                    Piece piece = bodyPiece(c.mVerts + at * 3, n * 3, c.mOffset, params);
+                    Piece piece = bodyPiece(c.mVerts + at * 3, n * 3, c.mOffset, lo, hi, params);
                     at += n;
                     if (!piece.mPlanes.empty() && overlaps(piece.mLo, piece.mHi, lo, hi))
                     {
@@ -233,12 +243,16 @@ namespace sknav
                 return;
             }
             // A soup that is no body has a surface only: what lies on it within the tolerance is on it.
+            const F32 reach = params.mProxyTolerance + params.mCoplanarD;
             for (size_t t = 0; t < tris; ++t)
             {
+                const LLVector3 a = c.mVerts[t * 3] + c.mOffset, b = c.mVerts[t * 3 + 1] + c.mOffset, d = c.mVerts[t * 3 + 2] + c.mOffset;
+                LLVector3 tlo = a, thi = a;
+                update_min_max(tlo, thi, b);
+                update_min_max(tlo, thi, d);
                 Piece piece;
-                const LLVector3* v = c.mVerts + t * 3;
-                if (prismPiece(v[0] + c.mOffset, v[1] + c.mOffset, v[2] + c.mOffset, params, piece) &&
-                    overlaps(piece.mLo, piece.mHi, lo, hi))
+                if (overlaps(tlo - LLVector3(reach, reach, reach), thi + LLVector3(reach, reach, reach), lo, hi) &&
+                    prismPiece(a, b, d, params, piece))
                 {
                     out.push_back(std::move(piece));
                 }
