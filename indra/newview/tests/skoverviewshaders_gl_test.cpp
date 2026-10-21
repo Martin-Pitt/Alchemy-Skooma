@@ -107,7 +107,18 @@ namespace
             REQUIRE(mShaders.loadShaderFile("deferred/globalF.glsl", level, GL_FRAGMENT_SHADER, &defines) != 0);
         }
 
-        bool build(const Program& program)
+        // The cut programs' two builds: the buffer texture, and the storage block where the context computes.
+        static std::vector<bool> tableStores(const Program& program)
+        {
+            std::vector<bool> ssbo = { false };
+            if (program.mCutTable && ll_test::contextHasCompute() && gGLManager.mMaxVertexShaderStorageBlocks >= 1)
+            {
+                ssbo.push_back(true);
+            }
+            return ssbo;
+        }
+
+        bool build(const Program& program, bool ssbo = false)
         {
             mProgram.unload();
             mProgram.mName = program.mName;
@@ -123,6 +134,12 @@ namespace
                     mProgram.addPermutation(define, "1");
                 }
             }
+            // As SKOverviewCapture::loadShaders builds them.
+            if (ssbo)
+            {
+                mProgram.addPermutation("SK_CUT_TABLE_SSBO", "1");
+            }
+            mProgram.mFeatures.mMinGLSLVersion = ssbo ? 430 : 0;
             return mProgram.createShader();
         }
 
@@ -145,15 +162,22 @@ namespace
         }
         WARN("GLSL " << gGLManager.mGLSLVersionMajor << "." << gGLManager.mGLSLVersionMinor << ", clip control "
                      << gGLManager.mHasClipControl << ", conservative depth qualifier " << (conservative ? "on" : "off"));
+        if (!ll_test::contextHasCompute() || gGLManager.mMaxVertexShaderStorageBlocks < 1)
+        {
+            WARN("the cut programs' SK_CUT_TABLE_SSBO builds are skipped: the context has no compute or no vertex storage blocks");
+        }
         for (bool reverse : conventions())
         {
             setConvention(reverse);
             loadSharedObjects();
             for (const Program& program : skoverview::PROGRAMS)
             {
-                CAPTURE(reverse, program.mName);
-                REQUIRE(build(program));
-                CHECK(mProgram.isComplete());
+                for (bool ssbo : tableStores(program))
+                {
+                    CAPTURE(reverse, program.mName, ssbo);
+                    REQUIRE(build(program, ssbo));
+                    CHECK(mProgram.isComplete());
+                }
             }
         }
     }
@@ -166,6 +190,7 @@ namespace
         static const LLStaticHashedString CEILING("sk_ceiling");
         static const LLStaticHashedString CAP_PASS("sk_cap_pass");
         static const LLStaticHashedString DISSOLVE("sk_dissolve");
+        static const LLStaticHashedString CUT_BASE("sk_cut_base");
         loadSharedObjects();
         for (const Program& program : skoverview::PROGRAMS)
         {
@@ -173,20 +198,30 @@ namespace
             {
                 continue;
             }
-            CAPTURE(program.mName);
-            REQUIRE(build(program));
-            CHECK(mProgram.getUniformLocation(CLIP_PLANE) >= 0);
-            CHECK(mProgram.getUniformLocation(CEILING) >= 0);
             bool cut = false, dissolve = false;
             for (const char* define : program.mDefines)
             {
                 cut = cut || (define && std::string(define) == "SK_CUT_ATTRIBUTE");
                 dissolve = dissolve || (define && std::string(define) == "SK_DISSOLVE");
             }
-            CHECK((mProgram.getUniformLocation(CAP_PASS) >= 0) == cut);
-            CHECK((mProgram.getUniformLocation(DISSOLVE) >= 0) == dissolve);
-            // The census buffer carries texcoord0 for this: an open part's flag, which the cap pass's sign reads.
-            CHECK(((mProgram.mAttributeMask & LLVertexBuffer::MAP_TEXCOORD0) != 0) == cut);
+            CHECK(program.mCutTable == cut);
+            for (bool ssbo : tableStores(program))
+            {
+                CAPTURE(program.mName, ssbo);
+                REQUIRE(build(program, ssbo));
+                CHECK(mProgram.getUniformLocation(CLIP_PLANE) >= 0);
+                CHECK(mProgram.getUniformLocation(CEILING) >= 0);
+                CHECK((mProgram.getUniformLocation(CAP_PASS) >= 0) == cut);
+                CHECK((mProgram.getUniformLocation(DISSOLVE) >= 0) == dissolve);
+                // The census buffer carries texcoord0 for this: an open part's flag, which the cap pass's sign reads.
+                CHECK(((mProgram.mAttributeMask & LLVertexBuffer::MAP_TEXCOORD0) != 0) == cut);
+                // And weight for the linkset id, which reads the cut table: a buffer texture's unit and base, or the block.
+                CHECK(((mProgram.mAttributeMask & LLVertexBuffer::MAP_WEIGHT) != 0) == cut);
+                CHECK((mProgram.getTextureChannel(LLShaderMgr::SK_OVERVIEW_CUT_TABLE) >= 0) == (cut && !ssbo));
+                CHECK((mProgram.getUniformLocation(CUT_BASE) >= 0) == (cut && !ssbo));
+                CHECK((mProgram.getStorageBinding(LLShaderMgr::SK_OVERVIEW_CUT_BLOCK) == 0) == (cut && ssbo));
+            }
         }
+        CHECK(mShaders.getStorageBlockBinding(LLShaderMgr::SK_OVERVIEW_CUT_BLOCK) == 0);
     }
 }

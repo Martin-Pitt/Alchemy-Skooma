@@ -251,6 +251,72 @@ namespace
         CHECK(found == 1);
     }
 
+    // The cut is the linkset's row of SKOverviewCutTable: a storage block where the session computes, a buffer texture elsewhere.
+    TEST_CASE("SKOverviewShaders: the vertex stage reads the cut row from one store per permutation", "[SKOverviewShaders]")
+    {
+        static const std::regex BLOCK(R"(\brows\s*\[)");
+        static const std::regex TEXTURE(R"(\btexelFetch\s*\(\s*sk_cut_table\b)");
+        size_t blocks = 0;
+        size_t textures = 0;
+        for (const Line& line : lines_with_conditions(shader_source(GEOM_V)))
+        {
+            CAPTURE(line.mNumber, line.mText);
+            bool ssbo = false;
+            bool not_ssbo = false;
+            for (const std::string& c : line.mConditions)
+            {
+                ssbo = ssbo || c == "+SK_CUT_TABLE_SSBO";
+                not_ssbo = not_ssbo || c == "-SK_CUT_TABLE_SSBO";
+            }
+            if (std::regex_search(line.mText, BLOCK))
+            {
+                CHECK(ssbo);
+                CHECK(requires_define(line, "SK_CUT_ATTRIBUTE"));
+                ++blocks;
+            }
+            if (std::regex_search(line.mText, TEXTURE))
+            {
+                CHECK(not_ssbo);
+                CHECK(requires_define(line, "SK_CUT_ATTRIBUTE"));
+                ++textures;
+            }
+        }
+        CHECK(blocks > 0);
+        CHECK(textures == 1);
+    }
+
+    // The weight channel carries the linkset id, which nothing may read as a height.
+    TEST_CASE("SKOverviewShaders: weight is read once as the group index", "[SKOverviewShaders]")
+    {
+        static const std::regex READ(R"(\bint\s*\(\s*weight\b)");
+        static const std::regex WEIGHT(R"(\bweight\b)");
+        static const std::regex DECLARATION(R"(^\s*in\s+float\s+weight\s*;)");
+        size_t reads = 0;
+        for (const Line& line : lines_with_conditions(shader_source(GEOM_V)))
+        {
+            if (!std::regex_search(line.mText, WEIGHT))
+            {
+                continue;
+            }
+            CAPTURE(line.mNumber, line.mText);
+            CHECK(requires_define(line, "SK_CUT_ATTRIBUTE"));
+            if (std::regex_search(line.mText, READ))
+            {
+                ++reads;
+            }
+            else
+            {
+                CHECK(std::regex_search(line.mText, DECLARATION));
+            }
+        }
+        CHECK(reads == 1);
+        const std::string frag = strip_comments(shader_source(GEOM_F));
+        REQUIRE(!frag.empty());
+        CHECK_FALSE(std::regex_search(frag, WEIGHT));
+        CHECK_FALSE(std::regex_search(frag, std::regex(R"(\brows\s*\[)")));
+        CHECK_FALSE(std::regex_search(frag, std::regex(R"(\bsk_cut_table\b)")));
+    }
+
     TEST_CASE("SKOverviewShaders: the fragment stage tests neither the clip plane nor the ceiling", "[SKOverviewShaders]")
     {
         const std::string src = strip_comments(shader_source(GEOM_F));

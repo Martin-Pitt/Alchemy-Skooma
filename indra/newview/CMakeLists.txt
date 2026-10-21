@@ -2773,6 +2773,7 @@ if(AL_BUILD_TESTS)
       tests/skoutlinepolicy_test.cpp # <SK:Nexii> outline capture
       tests/skmapmarkers_test.cpp # <SK:Nexii> mini-map markers
       tests/skoverviewshaders_test.cpp # <SK:Nexii> combat/minimap: the overview's shader permutations
+      tests/skoverviewcuttable_test.cpp # <SK:Nexii> combat/minimap: the overview's cut table
     UNIT
       alagentlocationformat.cpp
       alchattimestamp.cpp
@@ -2855,6 +2856,7 @@ if(AL_BUILD_TESTS)
       skworldmapmath.cpp # <SK:Nexii> 3D world map
       skoutlinepolicy.cpp # <SK:Nexii> outline capture
       skmapmarkers.cpp # <SK:Nexii> mini-map markers
+      skoverviewcuttable.cpp # <SK:Nexii> combat/minimap: the overview's cut table
     LIBRARIES llui alscript ll::slua llxml ll::pocketfft ${test_libs}
     SUPPORT
       newview_test_fakes
@@ -2902,7 +2904,12 @@ if(AL_BUILD_TESTS)
       tests/alselectionoutline_gl_test.cpp
       tests/alwatersurface_gl_test.cpp
       tests/skoverviewshaders_gl_test.cpp # <SK:Nexii> combat/minimap: the overview's programs link
-    UNIT aldepthpyramid.cpp alwaterfield.cpp alwaterheightbake.cpp
+      tests/skoverviewcuttable_gl_test.cpp # <SK:Nexii> combat/minimap: the overview's cut table on the GPU
+    UNIT
+      aldepthpyramid.cpp
+      alwaterfield.cpp
+      alwaterheightbake.cpp
+      skoverviewcuttable.cpp # <SK:Nexii> combat/minimap: the overview's cut table
     LIBRARIES llrender ll::pocketfft
     SUPPORT llrender_test_checks llcommon_test_checks
     INCLUDES ${INDRA_SOURCE_DIR}/llprimitive
