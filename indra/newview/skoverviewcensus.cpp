@@ -1621,7 +1621,8 @@ void SKOverviewCensus::swapIn(Built& built)
         else
         {
             LL_PROFILE_ZONE_NAMED("sk census upload buffer");
-            batch.mBuffer = new LLVertexBuffer(LLVertexBuffer::MAP_VERTEX | LLVertexBuffer::MAP_WEIGHT | LLVertexBuffer::MAP_TEXCOORD0); // weight: the linkset id; texcoord0.x: an open part's
+            // weight: the linkset id; texcoord0.x: an open part's
+            batch.mBuffer = new LLVertexBuffer(LLVertexBuffer::MAP_VERTEX | LLVertexBuffer::MAP_WEIGHT | LLVertexBuffer::MAP_TEXCOORD0);
             if (!batch.mBuffer->allocateBuffer(total, 0))
             {
                 LL_WARNS("SKOverview") << "census buffer of " << total << " vertices could not be allocated" << LL_ENDL;
