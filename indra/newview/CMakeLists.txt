@@ -644,6 +644,7 @@ if(AL_BUILD_VIEWER)
     llmediactrl.cpp
     llmediadataclient.cpp
     llmenuoptionpathfindingrebakenavmesh.cpp
+    skmeshhavokshape.cpp # <SK:Nexii> physics_havok block
     llmeshrepository.cpp
     llmimetypes.cpp
     llmodelpreview.cpp
@@ -996,10 +997,11 @@ if(AL_BUILD_VIEWER)
     rlvactions.cpp
     rlvenvironment.cpp
     skphysicsshape.cpp
-    skcaptureexport.cpp
-    skclusterprobes.cpp
+    skcaptureexport.cpp # <SK:Nexii> navmesh: linkset and avatar capture export
+    skclusterprobes.cpp # <SK:Nexii> navmesh: reflection probes over census clusters
     skfloaternavannotate.cpp
     skfloaternavmesh.cpp
+    sknavairoverlay.cpp # <SK:Nexii> navmesh: air overlay
     sknavannotator.cpp
     sknavmarkobjects.cpp
     sknavmesh.cpp
@@ -1547,6 +1549,7 @@ if(AL_BUILD_VIEWER)
     llmediactrl.h
     llmediadataclient.h
     llmenuoptionpathfindingrebakenavmesh.h
+    skmeshhavokshape.h # <SK:Nexii> physics_havok block
     llmeshrepository.h
     llmimetypes.h
     llmodelpreview.h
@@ -1891,8 +1894,8 @@ if(AL_BUILD_VIEWER)
     rlvactions.h
     rlvcommon.h
     skphysicsshape.h
-    skcaptureexport.h
-    skclusterprobes.h
+    skcaptureexport.h # <SK:Nexii> navmesh: linkset and avatar capture export
+    skclusterprobes.h # <SK:Nexii> navmesh: reflection probes over census clusters
     skfloaternavannotate.h
     skfloaternavmesh.h
     sknavannotator.h
@@ -2814,6 +2817,26 @@ if(AL_BUILD_TESTS)
       "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
       "AL_LSL_DEFINITIONS_DIR=\"${LSL_DEFINITIONS_DIR}\""
   )
+
+  # <SK:Nexii> The navmesh map's TUT tests, kept registered until they are ported to Catch2
+  if(COMMAND al_add_test)
+    al_add_test(skmapgeom UNIT PROJECT ${test_project} SOURCES skmapview.cpp LIBRARIES sknavmesh ${test_libs})
+    al_add_test(
+      skmapraster
+      UNIT
+      PROJECT ${test_project}
+      SOURCES skmapgeom.cpp skmapview.cpp
+      LIBRARIES sknavmesh ${test_libs}
+    )
+    al_add_test(
+      skmapribbons
+      UNIT
+      PROJECT ${test_project}
+      SOURCES skmapgeom.cpp skmapview.cpp
+      LIBRARIES sknavmesh ${test_libs}
+    )
+  endif()
+  # </SK:Nexii>
 
   # The selection outline's id and edge passes, the window's depth under the
   # HUD, and the water surface's draws over the cells the field lays out, with

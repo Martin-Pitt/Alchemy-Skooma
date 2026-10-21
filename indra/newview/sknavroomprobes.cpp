@@ -27,6 +27,7 @@
 #include "sknavroomprobes.h"
 
 #include "llagent.h"
+#include "llapp.h"
 #include "llreflectionmap.h"
 #include "llreflectionmapmanager.h"
 #include "llviewercamera.h"
@@ -170,6 +171,7 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh)
             const std::shared_ptr<WorkerResults> results = mResults;
             workers->post([results, mesh, key, copy = space, params]()
             {
+                if (LLApp::isExiting()) return;   // the pool drains before it joins
                 Placed p;
                 p.mKey = key;
                 p.mMesh = mesh;
@@ -658,6 +660,12 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh)
         manager.invalidateAutomaticPlacement();
     }
     mLastMs = std::chrono::duration<F32, std::milli>(std::chrono::steady_clock::now() - started).count();
+}
+
+bool SKNavRoomProbes::pendingFor(const LLUUID& mesh) const
+{
+    const auto it = mPlacing.lower_bound(std::make_pair(mesh, 0u));
+    return it != mPlacing.end() && it->first == mesh;
 }
 
 std::string SKNavRoomProbes::statsLine() const

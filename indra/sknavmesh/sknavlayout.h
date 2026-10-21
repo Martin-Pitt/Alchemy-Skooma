@@ -55,6 +55,9 @@ namespace sknav
     /// A mesh tile's minimum corner, global, z zero.
     LLVector3d meshTileMin(const LLVector3d& origin, const TileKey& key);
 
+    /// What a tile's records are signed by, in whatever order they come: a sum, so two equal parts do not cancel.
+    U64 recordSignature(const std::vector<RecordPtr>& records);
+
     /// Query a TileKey-ordered map without visiting tiles outside the rectangle.
     /// Bounds are inclusive, like overlapsXY: a query on an edge sees both tiles.
     /// The callback must not change the map. Empty coordinate columns are skipped.
@@ -149,6 +152,13 @@ namespace sknav
 
     /// A mesh's Detour mesh for one class, mesh-local, on the 32 m lattice. Null on failure.
     dtNavMesh* allocMeshNav();
+
+    /// Put next in Detour tile (tx, ty)'s place, the caller owning the bytes of
+    /// both: Detour gets them without DT_TILE_FREE_DATA. held is the tile's
+    /// bytes now in Detour, or empty. On success held takes next and the old
+    /// bytes go; when Detour refuses next, the old tile goes back under its old
+    /// ref and next is left as it was. Empty next takes the tile out.
+    bool swapDetourTile(dtNavMesh& nav, S32 tx, S32 ty, std::vector<U8>& held, std::vector<U8>& next);
 }
 
 #endif // SK_NAVLAYOUT_H

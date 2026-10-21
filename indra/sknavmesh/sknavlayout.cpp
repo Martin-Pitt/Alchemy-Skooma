@@ -39,12 +39,9 @@ namespace sknav
         F32 border = 0.f;
         for (S32 c = 0; c < NUM_CLASSES; ++c)
         {
-            if (params.mClasses[c])
-            {
-                border = std::max(border, borderCells(params.mParams[c].mRadius, params.mCell) * params.mCell);
-            }
+            border = std::max(border, borderCells(params.mParams[c].mRadius, params.mCell) * params.mCell);
         }
-        // WEATHER reads its air past the tile, and a seam column there needs its ground.
+        // The raster reads its air past the tile, and a seam column there needs its ground.
         if (params.mAir)
         {
             border = std::max(border, params.mAirPad * params.mCell);
@@ -61,6 +58,17 @@ namespace sknav
     LLVector3d meshTileMin(const LLVector3d& origin, const TileKey& key)
     {
         return LLVector3d(origin.mdV[VX] + key.mX * TILE_M, origin.mdV[VY] + key.mY * TILE_M, 0.0);
+    }
+
+    U64 recordSignature(const std::vector<RecordPtr>& records)
+    {
+        // Order free: the grid hands the same records back in whatever order the census scan produced them.
+        U64 h = 0;
+        for (const RecordPtr& r : records)
+        {
+            h += mix(SEED, r->mSignature);
+        }
+        return h;
     }
 
     bool overlapsXY(const LLVector3d& amin, const LLVector3d& amax, const LLVector3d& bmin, const LLVector3d& bmax)
@@ -350,6 +358,34 @@ namespace sknav
         }
         input.mZMin = zmin - 1.f;
         input.mZMax = zmax + 3.f;
+    }
+
+    bool swapDetourTile(dtNavMesh& nav, S32 tx, S32 ty, std::vector<U8>& held, std::vector<U8>& next)
+    {
+        const dtTileRef old = nav.getTileRefAt(tx, ty, 0);
+        if (old)
+        {
+            unsigned char* data = nullptr;
+            int size = 0;
+            nav.removeTile(old, &data, &size);
+            llassert(held.empty() || data == held.data());
+        }
+        if (next.empty())
+        {
+            std::vector<U8>().swap(held);
+            return true;
+        }
+        if (dtStatusSucceed(nav.addTile(next.data(), static_cast<int>(next.size()), 0, 0, nullptr)))
+        {
+            held.swap(next);
+            std::vector<U8>().swap(next);
+            return true;
+        }
+        if (old && !held.empty() && !dtStatusSucceed(nav.addTile(held.data(), static_cast<int>(held.size()), 0, old, nullptr)))
+        {
+            std::vector<U8>().swap(held);
+        }
+        return false;
     }
 
     dtNavMesh* allocMeshNav()

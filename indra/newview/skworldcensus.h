@@ -32,10 +32,14 @@
 #include "sknavtypes.h"
 #include "threadpool_fwd.h"
 
+class SKPhysicsHavokShape;
+
+#include <boost/signals2/connection.hpp>
 #include <future>
 #include <map>
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 class LLViewerObject;
@@ -61,6 +65,8 @@ struct SKCensusSnapshot
     struct Stats
     {
         U32 mObjectsSeen = 0;
+        U32 mDirtyVisited = 0;      ///< objects an update, a feature change or a pending state named for this scan
+        bool mFullSweep = false;    ///< the scan visited the whole object list rather than the dirty set
         U32 mRecords = 0;
         U32 mDynamic = 0;
         U32 mSurround = 0;
@@ -93,9 +99,16 @@ class SKWorldCensus : public LLSingleton<SKWorldCensus>
     void cleanupSingleton() override;
 
 public:
+    /// The highest land under a box's plan corners and middle, -1e9 with no world.
+    static F32 landUnder(const LLVector3d& min, const LLVector3d& max);
+
     /// Once per frame after objects have moved. Does nothing unless the
     /// navmesh is enabled and something wants a census (a demand, or the overlay).
     void update();
+    /// The object-update path saw an object made or changed; main thread only.
+    void noteObjectUpdate(LLViewerObject* object);
+    /// An object is about to be killed, its parent still known; main thread only.
+    void noteObjectGone(LLViewerObject* object);
 
     /// The last completed scan, or null before the first.
     SKCensusSnapshotPtr snapshot() const { return mSnapshot; }
@@ -129,7 +142,7 @@ public:
     {
         bool mEverMoved = false;
         F32 mTravel = 0.f;              ///< metres gone, turning not included
-        F32 mLastSeen = 0.f;
+        F64 mLastSeen = 0.f;
         bool mEverCrewed = false;
         bool mVehicle = false;          ///< crewed while physical or travelling: a vehicle for the session
         bool mWorkingElevator = false;  ///< it was the car of a working shaft
@@ -146,15 +159,33 @@ private:
         U64 mSignature = 0;
         sknav::RecordPtr mRecord;
         sknav::RecordPtr mPhysics;  ///< a surround's physics shape, beside its rendered one
-        F32 mLastSeen = 0.f;
+        /// The simulator's triangles once they arrived, held so the repository dropping them does not rebuild the record.
+        std::shared_ptr<const SKPhysicsHavokShape> mSim;
+        LLUUID mSimMesh;
+        F64 mLastSeen = 0.f;
+        /// What the part's last visit took, which a scan that does not visit it takes again.
+        std::vector<sknav::RecordPtr> mTaken;
+        sknav::FeaturePart mFeature;
+        bool mHasFeature = false;
+        LLVector3 mLeafPos;
+        LLQuaternion mLeafRot;
+        U64 mLeafRegion = 0;
+        bool mHasLeaf = false;
+        bool mFromObjectCache = false;
+        LLVector3d mReachCenter;    ///< the range test of its last visit, so a re-take leaves range as a visit would
+        F64 mReachPad = 0.0;
+        U32 mVisitedScan = 0;
     };
 
     struct Rest
     {
         LLVector3d mPosition;
         LLQuaternion mRotation;     ///< baseline together with mPosition
-        F32 mMovedAt = -1.f;        ///< last time the root was seen somewhere else
-        F32 mLastSeen = 0.f;
+        F64 mMovedAt = -1.f;        ///< last time the root was seen somewhere else
+        F64 mBurstStart = -1.f;     ///< when its current or last burst of moves began
+        std::vector<F64> mBursts;   ///< when each recent burst began, oldest first
+        F64 mMoverUntil = -1.f;     ///< it moves by habit until then
+        F64 mLastSeen = 0.f;
         bool mKnown = false;
     };
 
@@ -205,7 +236,8 @@ private:
     bool isSurround(LLViewerObject* root, const LLVector3d& mn, const LLVector3d& mx) const;
     /// One record from one part, at the sim-side transform the caller signed.
     sknav::RecordPtr record(LLVOVolume* volume, LLViewerObject* root, sknav::Role role, bool dynamic, U64 signature,
-                            const LLVector3& pos, const LLQuaternion& rot, sknav::FeatureKind feature, U8 exclude);
+                            const LLVector3& pos, const LLQuaternion& rot, sknav::FeatureKind feature, U8 exclude,
+                            const std::shared_ptr<const SKPhysicsHavokShape>& sim);
     /// Who is sitting on what, into the session history.
     void gatherCrew();
     /// The feature rules over the finished scan's parts; the part kinds they
@@ -219,6 +251,49 @@ private:
 
     SKCensusSnapshotPtr mSnapshot;
     Scan mScan;
+    // The dirty set: what a scan that is not a full sweep visits; the rest it takes again from mParts.
+    /// Whether the census is running, so an update has a scan to reach.
+    bool running() const;
+    /// The scan's live objects: the dirty set, or the whole list on a full sweep.
+    void gatherObjects();
+    /// What gatherObjects decided, collected: at once for a full sweep, once its cadence allows for a dirty scan.
+    void gatherNow();
+    /// The object and the linkset parts its change reaches.
+    void dirtyLinkset(LLViewerObject* object);
+    /// A part's server name arrived, which the door rules read and no object update announces.
+    void onPropertiesChanged(const LLUUID& id);
+    /// A visit, remembering what it took so a later scan can take it again.
+    void visitTracked(LLViewerObject* object);
+    void visitCachedTracked(const CachedPart& part);
+    /// Whether a visited part waits on something no update announces, and so is visited again next scan.
+    bool pending(LLViewerObject* object, const PartCache& cache) const;
+    /// Whether a scan that did not visit the part would take it again.
+    bool retakes(const LLUUID& id, const PartCache& cache) const;
+    /// Every part not visited this scan, from its cache, under the budget; false when out of time.
+    bool retake(LLTimer& timer, F32 budget_ms);
+    std::unordered_set<LLUUID> mDirty;
+    std::unordered_set<LLUUID> mGone;
+    boost::signals2::scoped_connection mPropertiesConn;
+    std::unordered_set<LLUUID> mScanDirty;      ///< the dirty set this scan began with
+    bool mScanFull = false;
+    U32 mScanSerial = 0;
+    U32 mScanMissed = 0;                        ///< parts a full sweep found changed that a re-take would have kept
+    U32 mPendingQueued = 0;                     ///< parts the last scan queued again for the next
+    bool mRetaking = false;
+    std::unordered_map<LLUUID, PartCache>::const_iterator mRetakeAt;
+    size_t mRetakeSize = 0;
+    F64 mScanBegan = 0.0;
+    const char* mScanWhy = "-";
+    bool mScanGathered = false;
+    F64 mScanGatherAt = 0.0;
+    F64 mLastGather = -1.0e9;
+    bool mForceSweep = true;
+    F64 mSweepBegan = -1.0e9;                   ///< when the last completed full sweep began
+    LLVector3d mSweepCenter;
+    LLVector3d mSweepCamera;
+    F64 mSweepRange = 0.0;
+    std::vector<U64> mSweepRegions;
+    F64 mLastScanLog = 0.0;
     // Only one job in flight; no new scan until its snapshot is published or discarded.
     std::unique_ptr<LL::ThreadPool> mClusterWorkers;
     std::future<std::shared_ptr<SKCensusSnapshot>> mClusterJob;
@@ -237,13 +312,26 @@ private:
     std::unordered_map<LLUUID, PartFeature> mPartFeatures;
     /// Where each door leaf has rested this session, and the door id it was given.
     sknav::LeafHistories mLeaves;
+    /// The sim transform each leaf with an established doorway was last seen
+    /// at it with: what its record is built from while it swings.
+    struct LeafTransform
+    {
+        LLVector3 mPos;
+        LLQuaternion mRot;
+        U64 mRegion = 0;
+    };
+    std::unordered_map<LLUUID, LeafTransform> mDoorways;
+    /// This scan's sim transform of every leaf, kept until the scan finishes.
+    std::unordered_map<LLUUID, LeafTransform> mLeafTransforms;
+    /// Each door-shaped part's face cover, cast again only when it or its neighbours change.
+    sknav::FaceCoverCache mFaceCover;
     std::map<std::string, F32> mDemands;
     U64 mStamp = 0;
-    F32 mRolesRequestedAt = -1.f;
+    F64 mRolesRequestedAt = -1.f;
     U64 mRolesRegion = 0;
     bool mRolesWanted = false;
     U32 mRolesRequestId = 0;
-    F32 mLastLog = 0.f;
+    F64 mLastLog = 0.f;
 };
 
 #endif // SK_WORLDCENSUS_H

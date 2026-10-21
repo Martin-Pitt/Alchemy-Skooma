@@ -38,7 +38,6 @@ namespace
 {
     using namespace sknav;
 
-    const S32 WEATHER = static_cast<S32>(AgentClass::WEATHER);
 
     /// A 6 x 6 heightfield with a one-cell border, 0.5 m cells, 0.1 m units.
     struct Field
@@ -106,7 +105,7 @@ namespace tut
         const AirGap* g = air.gaps(0, 1);
         ensure_equals("floor", g[0].mFloor, 5);
         ensure_equals("ceiling", g[0].mCeiling, 20);
-        ensure_equals("walkable, closed", g[0].mFlags, static_cast<U8>(AirGap::WALKABLE));
+        ensure_equals("walkable, closed", g[0].mFlags, static_cast<U8>(AirGap::TOP));
         ensure_equals("roof top", g[1].mFloor, 22);
         ensure_equals("open to the tile's top", g[1].mCeiling, 50);
         ensure_equals("open, own sky, not walkable", g[1].mFlags, static_cast<U8>(AirGap::OPEN | AirGap::OWN_SKY));
@@ -130,14 +129,11 @@ namespace tut
     template<> template<>
     void sknavair_object::test<3>()
     {
-        set_test_name("a tile build keeps the weather class's air, door leaf and all");
+        set_test_name("a tile build keeps the raster's air, door leaf and all");
         TileBuildInput in;
         in.mZMin = -1.f;
         in.mZMax = 8.f;
         in.mCell = 0.25f;
-        in.mClasses[WEATHER] = true;
-        in.mParams[WEATHER].mHeight = 0.5f;
-        in.mParams[WEATHER].mRadius = 0.f;
         in.mAir = true;
         // A 4 m slab at z 0..0.5 under a roof at 3..3.25.
         auto slab = [](F32 z0, F32 z1) {

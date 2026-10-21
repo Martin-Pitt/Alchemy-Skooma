@@ -28,6 +28,8 @@
 #include "sknavfingerprint.h"
 
 #include "DetourNavMesh.h"
+#include "Recast.h"
+#include "RecastAlloc.h"
 
 #include <algorithm>
 #include <cmath>
@@ -37,7 +39,9 @@
 #include <fstream>
 #include <functional>
 #include <numeric>
+#include <random>
 #include <thread>
+#include <type_traits>
 
 namespace sknav
 {
@@ -186,14 +190,165 @@ namespace sknav
             return static_cast<U32>(a) | static_cast<U32>(b) << 8 | static_cast<U32>(c) << 16 | static_cast<U32>(d) << 24;
         }
         constexpr U32 TAG_META = tag('M', 'E', 'T', 'A');
-        constexpr U32 TAG_DETOUR[NUM_CLASSES] = { tag('D', 'T', '0', ' '), tag('D', 'T', '1', ' ') };
+        constexpr U32 TAG_DETOUR[NUM_CLASSES] = { tag('D', 'T', '0', ' ') };
         constexpr U32 TAG_FACES = tag('F', 'A', 'C', 'E');
-        constexpr U32 TAG_SEGMENTS[NUM_CLASSES] = { tag('S', 'E', 'G', '0'), tag('S', 'E', 'G', '1') };
-        constexpr U32 TAG_LINKS[NUM_CLASSES] = { tag('L', 'N', 'K', '0'), tag('L', 'N', 'K', '1') };
+        constexpr U32 TAG_SEGMENTS[NUM_CLASSES] = { tag('S', 'E', 'G', '0') };
+        constexpr U32 TAG_LINKS[NUM_CLASSES] = { tag('L', 'N', 'K', '0') };
         constexpr U32 TAG_AIR = tag('A', 'I', 'R', ' ');
-        constexpr U32 TAG_FLIGHTS[NUM_CLASSES] = { tag('F', 'L', 'T', '0'), tag('F', 'L', 'T', '1') };
+        constexpr U32 TAG_FLIGHTS[NUM_CLASSES] = { tag('F', 'L', 'T', '0') };
+        constexpr U32 TAG_LEDGES = tag('L', 'D', 'G', ' ');
+        constexpr U32 TAG_RUNOFF = tag('R', 'U', 'N', ' ');
+        constexpr U32 TAG_STAMP = tag('S', 'T', 'M', 'P');
+        constexpr U32 TAG_RASTER = tag('R', 'A', 'S', 'T');
+        constexpr U32 SPILL_MAGIC = 0x534e4b53;     // 'SKNS'
+
+        /// A stamped geometry: a 32 byte header, then per poly its component and
+        /// gap, the portal edges, the stamp's portals and its counts.
+        void writeStamp(Writer& w, const TileStampGeom& g, U64 key)
+        {
+            w.pod(TILE_PRODUCT_VERSION);
+            w.pod(g.mPattern);
+            w.pod(key);
+            w.pod(static_cast<U16>(g.mComponents));
+            w.pod(static_cast<U16>(g.mPolyComponent.size()));
+            w.pod(static_cast<U16>(g.mPortalEdges.size()));
+            w.pod(static_cast<U16>(g.mPortals.size()));
+            w.pod(U32(0));
+            for (const U16 c : g.mPolyComponent)
+            {
+                w.pod(c);
+            }
+            for (const U32 gap : g.mPolyGap)
+            {
+                w.pod(gap);
+            }
+            for (const StampPortalEdge& e : g.mPortalEdges)
+            {
+                w.pod(e.mPoly);
+                w.pod(e.mEdge);
+                w.pod(e.mSide);
+                w.pod(e.mPortal);
+            }
+            for (const StampPortal& p : g.mPortals)
+            {
+                w.vec(p.mCentre);
+                w.vec(p.mNormal);
+                w.vec(p.mA);
+                w.vec(p.mB);
+                w.pod(p.mSide[0]);
+                w.pod(p.mSide[1]);
+                w.pod(p.mKind);
+                w.pod(p.mPortal);
+            }
+            w.pod(g.mOverflow);
+            for (const U32 v : { g.mPairs, g.mDoorSpans, g.mFloodSpans, g.mUnspacedSpans, g.mImpurePolys })
+            {
+                w.pod(v);
+            }
+        }
+
+        bool readStamp(Reader& r, U64 key, TileStampGeom& g)
+        {
+            U32 version = 0, reserved = 0;
+            U64 stored = 0;
+            U16 comps = 0, polys = 0, edges = 0, portals = 0;
+            if (!(r.pod(version) && r.pod(g.mPattern) && r.pod(stored) && r.pod(comps) && r.pod(polys) && r.pod(edges) && r.pod(portals) &&
+                  r.pod(reserved)) ||
+                version != TILE_PRODUCT_VERSION || stored != key || static_cast<size_t>(polys) * 6 + static_cast<size_t>(edges) * 6 > r.left())
+            {
+                return false;
+            }
+            g.mStamped = true;
+            g.mComponents = comps;
+            g.mPolyComponent.resize(polys);
+            g.mPolyGap.resize(polys);
+            g.mPortalEdges.resize(edges);
+            g.mPortals.resize(portals);
+            bool ok = true;
+            for (U16& c : g.mPolyComponent)
+            {
+                ok = ok && r.pod(c);
+            }
+            for (U32& gap : g.mPolyGap)
+            {
+                ok = ok && r.pod(gap);
+            }
+            for (StampPortalEdge& e : g.mPortalEdges)
+            {
+                ok = ok && r.pod(e.mPoly) && r.pod(e.mEdge) && r.pod(e.mSide) && r.pod(e.mPortal) && e.mPortal < portals && e.mPoly < polys;
+            }
+            for (StampPortal& p : g.mPortals)
+            {
+                ok = ok && r.vec(p.mCentre) && r.vec(p.mNormal) && r.vec(p.mA) && r.vec(p.mB) && r.pod(p.mSide[0]) && r.pod(p.mSide[1]) && r.pod(p.mKind) &&
+                     r.pod(p.mPortal);
+            }
+            return ok && r.pod(g.mOverflow) && r.pod(g.mPairs) && r.pod(g.mDoorSpans) && r.pod(g.mFloodSpans) && r.pod(g.mUnspacedSpans) &&
+                   r.pod(g.mImpurePolys);
+        }
 
         constexpr size_t GAP_BYTES = 8;
+
+        void writeSegments(Writer& w, const std::vector<WallSegment>& segments)
+        {
+            w.pod(static_cast<U32>(segments.size()));
+            for (const WallSegment& g : segments)
+            {
+                w.vec(g.mA);
+                w.vec(g.mB);
+                w.pod(static_cast<U8>(g.mKind));
+                w.pod(g.mValue);
+                w.pod(g.mArea);
+            }
+        }
+
+        bool readSegments(Reader& sec, std::vector<WallSegment>& out)
+        {
+            U32 n = 0;
+            bool ok = sec.count(n, 30);
+            out.resize(ok ? n : 0);
+            for (WallSegment& g : out)
+            {
+                U8 kind = 0;
+                sec.vec(g.mA);
+                sec.vec(g.mB);
+                sec.pod(kind);
+                sec.pod(g.mValue);
+                sec.pod(g.mArea);
+                ok = ok && kind <= static_cast<U8>(EdgeKind::OVERHANG);
+                g.mKind = static_cast<EdgeKind>(kind);
+            }
+            return ok;
+        }
+
+        void writeLinks(Writer& w, const std::vector<DropLink>& links)
+        {
+            w.pod(static_cast<U32>(links.size()));
+            for (const DropLink& l : links)
+            {
+                w.vec(l.mFrom);
+                w.vec(l.mTo);
+                w.pod(l.mHeight);
+                w.pod(static_cast<U8>(l.mKind));
+            }
+        }
+
+        bool readLinks(Reader& sec, std::vector<DropLink>& out)
+        {
+            U32 n = 0;
+            bool ok = sec.count(n, 29);
+            out.resize(ok ? n : 0);
+            for (DropLink& l : out)
+            {
+                U8 kind = 0;
+                sec.vec(l.mFrom);
+                sec.vec(l.mTo);
+                sec.pod(l.mHeight);
+                sec.pod(kind);
+                ok = ok && kind <= static_cast<U8>(LinkKind::ELEVATOR);
+                l.mKind = static_cast<LinkKind>(kind);
+            }
+            return ok;
+        }
 
         void writeGaps(Writer& w, const std::vector<AirGap>& gaps)
         {
@@ -204,7 +359,8 @@ namespace sknav
                 w.pod(g.mCeiling);
                 w.pod(g.mFlags);
                 w.pod(g.mClear);
-                w.pod(g.mSeed);
+                w.pod(g.mSlopeX);
+                w.pod(g.mSlopeY);
             }
         }
 
@@ -218,7 +374,7 @@ namespace sknav
             gaps.resize(n);
             for (AirGap& g : gaps)
             {
-                if (!(r.pod(g.mFloor) && r.pod(g.mCeiling) && r.pod(g.mFlags) && r.pod(g.mClear) && r.pod(g.mSeed)))
+                if (!(r.pod(g.mFloor) && r.pod(g.mCeiling) && r.pod(g.mFlags) && r.pod(g.mClear) && r.pod(g.mSlopeX) && r.pod(g.mSlopeY)))
                 {
                     return false;
                 }
@@ -274,6 +430,7 @@ namespace sknav
                 w.pod(l.mY);
                 w.pod(l.mLevel);
                 w.pod(l.mGapCount);
+                w.pod(l.mParent);
                 w.pod(l.mFirstGap);
             }
             writeGaps(w, air.mGaps);
@@ -282,15 +439,21 @@ namespace sknav
                 writeU32s(w, s.mStart);
                 writeGaps(w, s.mGaps);
             }
-            w.pod(air.mTopCell);
-            w.pod(air.mTopWidth);
-            w.pod(air.mTopHeight);
-            writeU32s(w, air.mTopStart);
-            w.pod(static_cast<U32>(air.mTop.size()));
-            for (const TopInterval& t : air.mTop)
+            const TileTops& tops = *air.mTops;
+            w.pod(tops.mTopCell);
+            w.pod(tops.mTopWidth);
+            w.pod(tops.mTopHeight);
+            writeU32s(w, tops.mTopStart);
+            w.pod(static_cast<U32>(tops.mTop.size()));
+            for (const TopInterval& t : tops.mTop)
             {
                 w.pod(t.mBottom);
                 w.pod(t.mTop);
+            }
+            w.pod(static_cast<U32>(air.mFaceOffsets.size()));
+            for (const FaceOffset& f : air.mFaceOffsets)
+            {
+                w.pod(f.mBits);
             }
         }
 
@@ -298,7 +461,7 @@ namespace sknav
         {
             U32 n;
             if (!(r.vec(air.mOrigin) && r.pod(air.mCell) && r.pod(air.mUnit) && r.pod(air.mWidth) && r.pod(air.mHeight)
-                  && r.count(n, 10)))
+                  && r.count(n, 12)))
             {
                 return false;
             }
@@ -313,15 +476,24 @@ namespace sknav
                 r.pod(l.mY);
                 r.pod(l.mLevel);
                 r.pod(l.mGapCount);
+                r.pod(l.mParent);
                 r.pod(l.mFirstGap);
             }
             if (!readGaps(r, air.mGaps))
             {
                 return false;
             }
-            for (const AirLeaf& l : air.mLeaves)
+            for (size_t i = 0; i < air.mLeaves.size(); ++i)
             {
-                if (static_cast<U64>(l.mFirstGap) + l.mGapCount > air.mGaps.size())
+                // Keys rise, coarsest first at a shared origin, and a parent lies back over its leaf.
+                const AirLeaf& l = air.mLeaves[i];
+                const AirLeaf* prev = i > 0 ? &air.mLeaves[i - 1] : nullptr;
+                const AirLeaf* parent = l.mParent && l.mParent <= i ? &air.mLeaves[i - l.mParent] : nullptr;
+                if (static_cast<U64>(l.mFirstGap) + l.mGapCount > air.mGaps.size() || l.mLevel > AIR_MAX_LEVEL
+                    || (prev && (airKey(l.mX, l.mY) < airKey(prev->mX, prev->mY)
+                                 || (airKey(l.mX, l.mY) == airKey(prev->mX, prev->mY) && l.mLevel > prev->mLevel)))
+                    || (l.mParent && (!parent || parent->mLevel < l.mLevel || l.mX < parent->mX || l.mY < parent->mY
+                                      || l.mX >= parent->mX + (1 << parent->mLevel) || l.mY >= parent->mY + (1 << parent->mLevel))))
                 {
                     return false;
                 }
@@ -339,23 +511,278 @@ namespace sknav
                     return false;
                 }
             }
-            if (!(r.pod(air.mTopCell) && r.pod(air.mTopWidth) && r.pod(air.mTopHeight) && readU32s(r, air.mTopStart)
+            auto tops = std::make_shared<TileTops>();
+            tops->mOrigin = air.mOrigin;
+            tops->mCell = air.mCell;
+            tops->mUnit = air.mUnit;
+            if (!(r.pod(tops->mTopCell) && r.pod(tops->mTopWidth) && r.pod(tops->mTopHeight) && readU32s(r, tops->mTopStart)
                   && r.count(n, 4)))
             {
                 return false;
             }
-            air.mTop.resize(n);
-            for (TopInterval& t : air.mTop)
+            tops->mTop.resize(n);
+            for (TopInterval& t : tops->mTop)
             {
                 r.pod(t.mBottom);
                 r.pod(t.mTop);
             }
-            if (air.mTopWidth < 0 || air.mTopHeight < 0)
+            if (tops->mTopWidth < 0 || tops->mTopHeight < 0 || !r.count(n, 4))
             {
                 return false;
             }
-            return air.mTopStart.empty()
-                || offsetsFit(air.mTopStart, static_cast<size_t>(air.mTopWidth) * air.mTopHeight, air.mTop.size());
+            air.mFaceOffsets.resize(n);
+            for (FaceOffset& f : air.mFaceOffsets)
+            {
+                r.pod(f.mBits);
+            }
+            if (!tops->mTopStart.empty()
+                && !offsetsFit(tops->mTopStart, static_cast<size_t>(tops->mTopWidth) * tops->mTopHeight, tops->mTop.size()))
+            {
+                return false;
+            }
+            tops->countLive();
+            air.mTops = std::move(tops);
+            air.countLive();
+            return true;
+        }
+
+        void writeFlight(Writer& w, const Flight& f)
+        {
+            w.pod(f.mKey);
+            w.pod(f.mRise);
+            w.pod(f.mRun);
+            w.pod(f.mPlane[0]);
+            w.pod(f.mPlane[1]);
+            w.pod(f.mPlane[2]);
+            w.pod(f.mZMin);
+            w.pod(f.mZMax);
+            for (const LLVector3* v : { &f.mBottom, &f.mTop, &f.mBottomA, &f.mBottomB, &f.mTopA, &f.mTopB })
+            {
+                w.vec(*v);
+            }
+            w.pod(static_cast<U8>(f.mKind));
+            w.pod(static_cast<U8>(f.mRule));
+            w.pod(f.mTreads);
+            w.pod(f.mTreadCount);
+            w.pod(static_cast<U8>(f.mEroded));
+            w.pod(static_cast<U8>(f.mDecked));
+            w.pod(static_cast<U32>(f.mCodes.size()));
+            for (const U8 code : f.mCodes)
+            {
+                w.pod(code);
+            }
+            w.pod(static_cast<U32>(f.mFootprint.size()));
+            for (const LLVector2& p : f.mFootprint)
+            {
+                w.pod(p.mV[0]);
+                w.pod(p.mV[1]);
+            }
+            w.pod(static_cast<U32>(f.mPolys.size()));
+            for (const U16 p : f.mPolys)
+            {
+                w.pod(p);
+            }
+        }
+
+        bool readFlight(Reader& sec, Flight& f)
+        {
+            U32 m = 0;
+            U8 kind = 0, rule = 0, eroded = 0, decked = 0;
+            bool ok = sec.pod(f.mKey) && sec.pod(f.mRise) && sec.pod(f.mRun) && sec.pod(f.mPlane[0]) && sec.pod(f.mPlane[1]) &&
+                      sec.pod(f.mPlane[2]) && sec.pod(f.mZMin) && sec.pod(f.mZMax);
+            for (LLVector3* v : { &f.mBottom, &f.mTop, &f.mBottomA, &f.mBottomB, &f.mTopA, &f.mTopB })
+            {
+                ok = ok && sec.vec(*v);
+            }
+            ok = ok && sec.pod(kind) && sec.pod(rule) && sec.pod(f.mTreads) && sec.pod(f.mTreadCount) && sec.pod(eroded) && sec.pod(decked) && kind <= static_cast<U8>(ConnectorKind::CLIMB) &&
+                 rule <= static_cast<U8>(ConnectorRule::GRADE) && sec.count(m, 1);
+            f.mKind = static_cast<ConnectorKind>(kind);
+            f.mRule = static_cast<ConnectorRule>(rule);
+            f.mEroded = eroded != 0;
+            f.mDecked = decked != 0;
+            f.mCodes.resize(ok ? m : 0);
+            for (U8& code : f.mCodes)
+            {
+                ok = ok && sec.pod(code);
+            }
+            ok = ok && sec.count(m, 8);
+            f.mFootprint.resize(ok ? m : 0);
+            for (LLVector2& p : f.mFootprint)
+            {
+                ok = ok && sec.pod(p.mV[0]) && sec.pod(p.mV[1]);
+            }
+            ok = ok && sec.count(m, 2);
+            f.mPolys.resize(ok ? m : 0);
+            for (U16& p : f.mPolys)
+            {
+                ok = ok && sec.pod(p);
+            }
+            return ok;
+        }
+
+        template <typename T> void writeArray(Writer& w, const T* data, size_t n)
+        {
+            static_assert(std::is_trivially_copyable_v<T>);
+            if (n)
+            {
+                const U8* p = reinterpret_cast<const U8*>(data);
+                w.mOut.insert(w.mOut.end(), p, p + n * sizeof(T));
+            }
+        }
+
+        template <typename T> bool readArray(Reader& r, T* data, size_t n)
+        {
+            static_assert(std::is_trivially_copyable_v<T>);
+            if (static_cast<U64>(n) * sizeof(T) > r.left())
+            {
+                return false;
+            }
+            if (n)
+            {
+                std::memcpy(data, r.mData + r.mPos, n * sizeof(T));
+                r.mPos += n * sizeof(T);
+            }
+            return true;
+        }
+
+        template <typename T> void writeVector(Writer& w, const std::vector<T>& v)
+        {
+            w.pod(static_cast<U32>(v.size()));
+            writeArray(w, v.data(), v.size());
+        }
+
+        template <typename T> bool readVector(Reader& r, std::vector<T>& v)
+        {
+            U32 n;
+            if (!r.count(n, sizeof(T)))
+            {
+                return false;
+            }
+            v.resize(n);
+            return readArray(r, v.data(), n);
+        }
+
+        /// The compact heightfield bit for bit, then the edge field, codes, flights and span gaps.
+        void writeRaster(Writer& w, const TileRaster& raster)
+        {
+            const rcCompactHeightfield* chf = raster.mChf.get();
+            w.pod(static_cast<U8>(chf ? 1 : 0));
+            if (chf)
+            {
+                w.pod(chf->width);
+                w.pod(chf->height);
+                w.pod(chf->spanCount);
+                w.pod(chf->walkableHeight);
+                w.pod(chf->walkableClimb);
+                w.pod(chf->borderSize);
+                w.pod(chf->maxDistance);
+                w.pod(chf->maxRegions);
+                writeArray(w, chf->bmin, 3);
+                writeArray(w, chf->bmax, 3);
+                w.pod(chf->cs);
+                w.pod(chf->ch);
+                writeArray(w, chf->cells, static_cast<size_t>(chf->width) * chf->height);
+                writeArray(w, chf->spans, static_cast<size_t>(chf->spanCount));
+                w.pod(static_cast<U8>(chf->dist ? 1 : 0));
+                if (chf->dist)
+                {
+                    writeArray(w, chf->dist, static_cast<size_t>(chf->spanCount));
+                }
+                writeArray(w, chf->areas, static_cast<size_t>(chf->spanCount));
+            }
+            const EdgeField& e = raster.mEdges;
+            w.pod(e.mWidth);
+            w.pod(e.mHeight);
+            writeArray(w, e.mBmin, 3);
+            w.pod(e.mCs);
+            w.pod(e.mCh);
+            writeVector(w, e.mStart);
+            writeVector(w, e.mRuns);
+            writeVector(w, raster.mReal);
+            w.pod(static_cast<U32>(raster.mFlights.size()));
+            for (const Flight& f : raster.mFlights)
+            {
+                writeFlight(w, f);
+            }
+            writeVector(w, raster.mStanding);
+            writeVector(w, raster.mSpanGap);
+        }
+
+        bool readRaster(Reader& r, TileRaster& raster)
+        {
+            U8 has = 0;
+            if (!r.pod(has))
+            {
+                return false;
+            }
+            if (has)
+            {
+                rcCompactHeightfield* chf = rcAllocCompactHeightfield();
+                if (!chf)
+                {
+                    return false;
+                }
+                raster.mChf.reset(chf);
+                if (!(r.pod(chf->width) && r.pod(chf->height) && r.pod(chf->spanCount) && r.pod(chf->walkableHeight) && r.pod(chf->walkableClimb)
+                      && r.pod(chf->borderSize) && r.pod(chf->maxDistance) && r.pod(chf->maxRegions) && readArray(r, chf->bmin, 3)
+                      && readArray(r, chf->bmax, 3) && r.pod(chf->cs) && r.pod(chf->ch)))
+                {
+                    return false;
+                }
+                if (chf->width < 0 || chf->height < 0 || chf->spanCount < 0)
+                {
+                    return false;
+                }
+                const U64 cells = static_cast<U64>(chf->width) * chf->height;
+                const U64 spans = static_cast<U64>(chf->spanCount);
+                if (cells * sizeof(rcCompactCell) + spans * sizeof(rcCompactSpan) > r.left())
+                {
+                    return false;
+                }
+                chf->cells = static_cast<rcCompactCell*>(rcAlloc(sizeof(rcCompactCell) * std::max<U64>(cells, 1), RC_ALLOC_PERM));
+                chf->spans = static_cast<rcCompactSpan*>(rcAlloc(sizeof(rcCompactSpan) * std::max<U64>(spans, 1), RC_ALLOC_PERM));
+                chf->areas = static_cast<unsigned char*>(rcAlloc(std::max<U64>(spans, 1), RC_ALLOC_PERM));
+                U8 has_dist = 0;
+                if (!chf->cells || !chf->spans || !chf->areas || !readArray(r, chf->cells, cells) || !readArray(r, chf->spans, spans) || !r.pod(has_dist))
+                {
+                    return false;
+                }
+                if (has_dist)
+                {
+                    chf->dist = static_cast<unsigned short*>(rcAlloc(sizeof(unsigned short) * std::max<U64>(spans, 1), RC_ALLOC_PERM));
+                    if (!chf->dist || !readArray(r, chf->dist, spans))
+                    {
+                        return false;
+                    }
+                }
+                if (!readArray(r, chf->areas, spans))
+                {
+                    return false;
+                }
+                for (U64 c = 0; c < cells; ++c)
+                {
+                    if (static_cast<U64>(chf->cells[c].index) + chf->cells[c].count > spans)
+                    {
+                        return false;
+                    }
+                }
+            }
+            EdgeField& e = raster.mEdges;
+            U32 n = 0;
+            if (!(r.pod(e.mWidth) && r.pod(e.mHeight) && readArray(r, e.mBmin, 3) && r.pod(e.mCs) && r.pod(e.mCh) && readVector(r, e.mStart)
+                  && readVector(r, e.mRuns) && readVector(r, raster.mReal) && r.count(n, 123)))
+            {
+                return false;
+            }
+            raster.mFlights.resize(n);
+            for (Flight& f : raster.mFlights)
+            {
+                if (!readFlight(r, f))
+                {
+                    return false;
+                }
+            }
+            return readVector(r, raster.mStanding) && readVector(r, raster.mSpanGap) && r.left() == 0;
         }
     }
 
@@ -413,7 +840,7 @@ namespace sknav
     }
 
     // Whoever adds a field to TileBuildInput keys it below, then updates this size.
-    static_assert(sizeof(void*) != 8 || sizeof(TileBuildInput) == 256, "a new TileBuildInput field must go into tileContentKey");
+    static_assert(sizeof(void*) != 8 || sizeof(TileBuildInput) == 272, "a new TileBuildInput field must go into tileContentKey");
 
     U64 tileContentKey(const TileBuildInput& input)
     {
@@ -432,6 +859,7 @@ namespace sknav
         h = quant(h, input.mZMax, KEY_POSITION_M);
         h = mixF32(h, input.mCell);
         h = mix(h, static_cast<U64>(input.mPartition));
+        h = mixF32(h, input.mPartitionSlope);
         for (const auto& [root, cue] : input.mRootCues)
         {
             h = mixId(h, root);
@@ -440,9 +868,13 @@ namespace sknav
         h = mixF32(h, input.mDetailSampleCells);
         h = mixF32(h, input.mDetailMaxErrorCells);
         h = mixF32(h, input.mWallMinHeight);
+        h = mixF32(h, input.mTopParams.mHeight);
+        h = mixF32(h, input.mTopParams.mClimb);
+        h = mixF32(h, input.mTopParams.mSlope);
+        h = mix(h, input.mRunoff);
+        h = mixF32(h, input.mRunoffMax);
         for (S32 c = 0; c < NUM_CLASSES; ++c)
         {
-            h = mix(h, input.mClasses[c]);
             h = mixF32(h, input.mParams[c].mHeight);
             h = mixF32(h, input.mParams[c].mRadius);
             h = mixF32(h, input.mParams[c].mClimb);
@@ -455,6 +887,14 @@ namespace sknav
         h = mix(h, input.mAir);
         h = mix(h, static_cast<U32>(input.mAirPad));
         h = mixF32(h, input.mAirMinGap);
+        h = mix(h, input.mCoarseAir);
+        // Mixed only when asked for, so every key built without fine air stays as it was.
+        if (input.mFineAir)
+        {
+            h = mix(h, input.mFineAir);
+        }
+        h = mix(h, input.mFaceOffsets);
+        h = mix(h, input.mAlignWallEdges);
 
         // The land by its samples, never by when a patch last arrived.
         const TerrainWindow& t = input.mTerrain;
@@ -476,6 +916,14 @@ namespace sknav
 
     std::vector<U8> packTileProduct(const TileBuildResult& result, U64 key)
     {
+        return packTileProduct(result, key, TileProductParts());
+    }
+
+    std::vector<U8> packTileProduct(const TileBuildResult& result, U64 key, const TileProductParts& parts)
+    {
+        const std::vector<WallFace>& faces = parts.mFaces ? *parts.mFaces : result.mFaces;
+        const std::vector<WallSegment>& ledges = parts.mLedges ? *parts.mLedges : result.mLedges;
+        const std::vector<DropLink>& runoff = parts.mRunoff ? *parts.mRunoff : result.mRunoff;
         Writer w;
         w.pod(MAGIC);
         w.pod(TILE_PRODUCT_VERSION);
@@ -490,7 +938,7 @@ namespace sknav
         w.pod(result.mTriangles);
         w.pod(result.mMillis);
         w.pod(result.mExcludeMillis);
-        w.pod(static_cast<U8>(result.mAirBuilt));
+        w.pod(static_cast<U8>((result.mAirBuilt ? 1 : 0) | (result.mCoarseAir ? 2 : 0)));
         w.close(s);
 
         for (S32 c = 0; c < NUM_CLASSES; ++c)
@@ -504,8 +952,8 @@ namespace sknav
         }
 
         s = w.open(TAG_FACES);
-        w.pod(static_cast<U32>(result.mFaces.size()));
-        for (const WallFace& f : result.mFaces)
+        w.pod(static_cast<U32>(faces.size()));
+        for (const WallFace& f : faces)
         {
             w.vec(f.mMin);
             w.vec(f.mMax);
@@ -517,71 +965,40 @@ namespace sknav
         for (S32 c = 0; c < NUM_CLASSES; ++c)
         {
             s = w.open(TAG_SEGMENTS[c]);
-            w.pod(static_cast<U32>(result.mSegments[c].size()));
-            for (const WallSegment& g : result.mSegments[c])
-            {
-                w.vec(g.mA);
-                w.vec(g.mB);
-                w.pod(static_cast<U8>(g.mKind));
-                w.pod(g.mValue);
-                w.pod(g.mArea);
-            }
+            writeSegments(w, result.mSegments[c]);
             w.close(s);
 
             s = w.open(TAG_LINKS[c]);
-            w.pod(static_cast<U32>(result.mLinks[c].size()));
-            for (const DropLink& l : result.mLinks[c])
-            {
-                w.vec(l.mFrom);
-                w.vec(l.mTo);
-                w.pod(l.mHeight);
-                w.pod(static_cast<U8>(l.mKind));
-            }
+            writeLinks(w, result.mLinks[c]);
             w.close(s);
 
             s = w.open(TAG_FLIGHTS[c]);
             w.pod(static_cast<U32>(result.mFlights[c].size()));
             for (const Flight& f : result.mFlights[c])
             {
-                w.pod(f.mKey);
-                w.pod(f.mRise);
-                w.pod(f.mRun);
-                w.pod(f.mPlane[0]);
-                w.pod(f.mPlane[1]);
-                w.pod(f.mPlane[2]);
-                w.pod(f.mZMin);
-                w.pod(f.mZMax);
-                for (const LLVector3* v : { &f.mBottom, &f.mTop, &f.mBottomA, &f.mBottomB, &f.mTopA, &f.mTopB })
-                {
-                    w.vec(*v);
-                }
-                w.pod(static_cast<U8>(f.mKind));
-                w.pod(static_cast<U8>(f.mRule));
-                w.pod(f.mTreads);
-                w.pod(static_cast<U32>(f.mCodes.size()));
-                for (const U8 code : f.mCodes)
-                {
-                    w.pod(code);
-                }
-                w.pod(static_cast<U32>(f.mFootprint.size()));
-                for (const LLVector2& p : f.mFootprint)
-                {
-                    w.pod(p.mV[0]);
-                    w.pod(p.mV[1]);
-                }
-                w.pod(static_cast<U32>(f.mPolys.size()));
-                for (const U16 p : f.mPolys)
-                {
-                    w.pod(p);
-                }
+                writeFlight(w, f);
             }
             w.close(s);
         }
+
+        s = w.open(TAG_LEDGES);
+        writeSegments(w, ledges);
+        w.close(s);
+        s = w.open(TAG_RUNOFF);
+        writeLinks(w, runoff);
+        w.close(s);
 
         if (result.mAir)
         {
             s = w.open(TAG_AIR);
             writeAir(w, *result.mAir);
+            w.close(s);
+        }
+
+        if (result.mStamp.mStamped)
+        {
+            s = w.open(TAG_STAMP);
+            writeStamp(w, result.mStamp, key);
             w.close(s);
         }
 
@@ -638,7 +1055,8 @@ namespace sknav
                 {
                     return false;
                 }
-                res.mAirBuilt = air_built != 0;
+                res.mAirBuilt = (air_built & 1) != 0;
+                res.mCoarseAir = (air_built & 2) != 0;
                 meta = true;
                 continue;
             }
@@ -651,19 +1069,7 @@ namespace sknav
                 }
                 else if (t == TAG_SEGMENTS[c])
                 {
-                    ok = sec.count(n, 30);
-                    res.mSegments[c].resize(ok ? n : 0);
-                    for (WallSegment& g : res.mSegments[c])
-                    {
-                        U8 kind;
-                        sec.vec(g.mA);
-                        sec.vec(g.mB);
-                        sec.pod(kind);
-                        sec.pod(g.mValue);
-                        sec.pod(g.mArea);
-                        ok = ok && kind <= static_cast<U8>(EdgeKind::OVERHANG);
-                        g.mKind = static_cast<EdgeKind>(kind);
-                    }
+                    ok = readSegments(sec, res.mSegments[c]);
                 }
                 else if (t == TAG_FLIGHTS[c])
                 {
@@ -671,51 +1077,12 @@ namespace sknav
                     res.mFlights[c].resize(ok ? n : 0);
                     for (Flight& f : res.mFlights[c])
                     {
-                        U32 m = 0;
-                        U8 kind = 0, rule = 0;
-                        ok = ok && sec.pod(f.mKey) && sec.pod(f.mRise) && sec.pod(f.mRun) && sec.pod(f.mPlane[0]) && sec.pod(f.mPlane[1]) &&
-                             sec.pod(f.mPlane[2]) && sec.pod(f.mZMin) && sec.pod(f.mZMax);
-                        for (LLVector3* v : { &f.mBottom, &f.mTop, &f.mBottomA, &f.mBottomB, &f.mTopA, &f.mTopB })
-                        {
-                            ok = ok && sec.vec(*v);
-                        }
-                        ok = ok && sec.pod(kind) && sec.pod(rule) && sec.pod(f.mTreads) && kind <= static_cast<U8>(ConnectorKind::RAMP) &&
-                             rule <= static_cast<U8>(ConnectorRule::GRADE) && sec.count(m, 1);
-                        f.mKind = static_cast<ConnectorKind>(kind);
-                        f.mRule = static_cast<ConnectorRule>(rule);
-                        f.mCodes.resize(ok ? m : 0);
-                        for (U8& code : f.mCodes)
-                        {
-                            ok = ok && sec.pod(code);
-                        }
-                        ok = ok && sec.count(m, 8);
-                        f.mFootprint.resize(ok ? m : 0);
-                        for (LLVector2& p : f.mFootprint)
-                        {
-                            ok = ok && sec.pod(p.mV[0]) && sec.pod(p.mV[1]);
-                        }
-                        ok = ok && sec.count(m, 2);
-                        f.mPolys.resize(ok ? m : 0);
-                        for (U16& p : f.mPolys)
-                        {
-                            ok = ok && sec.pod(p);
-                        }
+                        ok = ok && readFlight(sec, f);
                     }
                 }
                 else if (t == TAG_LINKS[c])
                 {
-                    ok = sec.count(n, 29);
-                    res.mLinks[c].resize(ok ? n : 0);
-                    for (DropLink& l : res.mLinks[c])
-                    {
-                        U8 kind;
-                        sec.vec(l.mFrom);
-                        sec.vec(l.mTo);
-                        sec.pod(l.mHeight);
-                        sec.pod(kind);
-                        ok = ok && kind <= static_cast<U8>(LinkKind::ELEVATOR);
-                        l.mKind = static_cast<LinkKind>(kind);
-                    }
+                    ok = readLinks(sec, res.mLinks[c]);
                 }
             }
             if (t == TAG_FACES)
@@ -730,11 +1097,23 @@ namespace sknav
                     sec.pod(f.mArea);
                 }
             }
+            else if (t == TAG_LEDGES)
+            {
+                ok = readSegments(sec, res.mLedges);
+            }
+            else if (t == TAG_RUNOFF)
+            {
+                ok = readLinks(sec, res.mRunoff);
+            }
             else if (t == TAG_AIR)
             {
                 auto air = std::make_shared<TileAir>();
                 ok = readAir(sec, *air);
                 res.mAir = air;
+            }
+            else if (t == TAG_STAMP)
+            {
+                ok = readStamp(sec, key, res.mStamp);
             }
             // Any other tag is a section this version does not know: skipped.
             if (!ok)
@@ -750,6 +1129,112 @@ namespace sknav
         return true;
     }
 
+    U64 spillKey(U64 content_key)
+    {
+        return finishKey(mix(mix(SEED, content_key), SPILL_MAGIC));
+    }
+
+    std::vector<U8> packSpill(const TileAir* air, const TileRaster* raster, U64 key)
+    {
+        Writer w;
+        w.pod(SPILL_MAGIC);
+        w.pod(TILE_PRODUCT_VERSION);
+        w.pod(key);
+        if (air)
+        {
+            const size_t s = w.open(TAG_AIR);
+            writeAir(w, *air);
+            w.close(s);
+        }
+        if (raster)
+        {
+            const size_t s = w.open(TAG_RASTER);
+            writeRaster(w, *raster);
+            w.close(s);
+        }
+        w.pod(checksum(w.mOut.data(), w.mOut.size()));
+        return std::move(w.mOut);
+    }
+
+    bool unpackSpill(const U8* data, size_t size, U64 key, TileAirPtr& air_out, TileRasterPtr& raster_out)
+    {
+        if (!data || size < 16 + sizeof(U64))
+        {
+            return false;
+        }
+        const size_t body = size - sizeof(U64);
+        U64 sum;
+        std::memcpy(&sum, data + body, sizeof(sum));
+        if (sum != checksum(data, body))
+        {
+            return false;
+        }
+        Reader r(data, body);
+        U32 magic, version;
+        U64 stored;
+        if (!(r.pod(magic) && r.pod(version) && r.pod(stored)) || magic != SPILL_MAGIC || version != TILE_PRODUCT_VERSION || stored != key)
+        {
+            return false;
+        }
+        std::shared_ptr<TileAir> air;
+        std::shared_ptr<TileRaster> raster;
+        while (r.left() > 0)
+        {
+            U32 t, len;
+            if (!r.pod(t) || !r.pod(len) || len > r.left())
+            {
+                return false;
+            }
+            Reader sec(r.mData + r.mPos, len);
+            r.mPos += len;
+            if (t == TAG_AIR)
+            {
+                air = std::make_shared<TileAir>();
+                if (!readAir(sec, *air))
+                {
+                    return false;
+                }
+            }
+            else if (t == TAG_RASTER)
+            {
+                raster = std::make_shared<TileRaster>();
+                if (!readRaster(sec, *raster))
+                {
+                    return false;
+                }
+            }
+        }
+        if (raster)
+        {
+            raster->mAir = air;
+        }
+        air_out = air;
+        raster_out = raster;
+        return true;
+    }
+
+    U64 stampedKey(U64 content_key, U64 pattern)
+    {
+        return finishKey(mix(mix(SEED, content_key), pattern));
+    }
+
+    TileBuildResult stampedPart(const TileBuildResult& result)
+    {
+        TileBuildResult out;
+        out.mStatus = result.mStatus;
+        out.mMillis = result.mMillis;
+        out.mStamp = result.mStamp;
+        for (S32 c = 0; c < NUM_CLASSES; ++c)
+        {
+            out.mData[c] = result.mData[c];
+            out.mPolys[c] = result.mPolys[c];
+            out.mSegments[c] = result.mSegments[c];
+            out.mLinks[c] = result.mLinks[c];
+            out.mFlights[c] = result.mFlights[c];
+        }
+        return out;
+    }
+
     TileAirPtr coarseAir(const TileAir& air)
     {
         auto out = std::make_shared<TileAir>();
@@ -758,16 +1243,18 @@ namespace sknav
         out->mUnit = air.mUnit;
         out->mWidth = air.mWidth;
         out->mHeight = air.mHeight;
-        out->mTopCell = air.mTopCell;
-        out->mTopWidth = air.mTopWidth;
-        out->mTopHeight = air.mTopHeight;
-        out->mTopStart = air.mTopStart;
-        out->mTop = air.mTop;
+        // The detail's own tops, shared: the coarse air costs its header.
+        out->mTops = air.mTops;
+        out->countLive();
         return out;
     }
 
     TileDiskCache::TileDiskCache(const std::string& dir, U64 cap_bytes) : mDir(dir), mCap(cap_bytes)
     {
+        // Marks this cache's half-written files, which index() must leave to the writer.
+        char tag[32];
+        std::snprintf(tag, sizeof(tag), ".%08x-", static_cast<U32>(std::random_device()()));
+        mTmpTag = tag;
     }
 
     void TileDiskCache::index()
@@ -790,7 +1277,11 @@ namespace sknav
             // A write a crash cut short never got renamed into place.
             if (p.extension() == ".tmp")
             {
-                leftovers.push_back(mDir + "/" + p.filename().string());
+                const std::string name = p.filename().string();
+                if (name.find(mTmpTag) == std::string::npos)
+                {
+                    leftovers.push_back(mDir + "/" + name);
+                }
                 continue;
             }
             if (p.extension() != ".snt")
@@ -811,7 +1302,6 @@ namespace sknav
         removeFiles(leftovers);
         // The oldest file was the least recently used last session.
         std::sort(found.begin(), found.end(), [](const Found& a, const Found& b) { return a.mTime < b.mTime; });
-        std::vector<std::string> doomed;
         {
             std::lock_guard<std::mutex> lock(mMutex);
             // Anything stored while this ran is newer than what was found.
@@ -831,9 +1321,8 @@ namespace sknav
                 mEntries[e.first] = { e.second.mBytes, ++mClock };
                 mBytes += e.second.mBytes;
             }
-            pruneLocked(doomed);
+            pruneLocked();
         }
-        removeFiles(doomed);
     }
 
     std::string TileDiskCache::pathOf(U64 key) const
@@ -882,7 +1371,7 @@ namespace sknav
         const std::string path = pathOf(key);
         // Written aside and renamed, so a reader never sees half a file.
         char suffix[32];
-        std::snprintf(suffix, sizeof(suffix), ".%zx.tmp", std::hash<std::thread::id>()(std::this_thread::get_id()));
+        std::snprintf(suffix, sizeof(suffix), "%s%zx.tmp", mTmpTag.c_str(), std::hash<std::thread::id>()(std::this_thread::get_id()));
         const fs::path tmp = pathFromUtf8(path + suffix);
         {
             std::error_code dir_ec;
@@ -897,6 +1386,8 @@ namespace sknav
                 return false;
             }
         }
+        // Renamed under the lock, so no prune can remove the path between the rename and the entry.
+        std::lock_guard<std::mutex> lock(mMutex);
         std::error_code ec;
         fs::rename(tmp, pathFromUtf8(path), ec);
         if (ec)
@@ -904,31 +1395,26 @@ namespace sknav
             fs::remove(tmp, ec);
             return false;
         }
-        std::vector<std::string> doomed;
-        {
-            std::lock_guard<std::mutex> lock(mMutex);
-            Entry& e = mEntries[key];
-            mBytes = mBytes - e.mBytes + bytes.size();
-            e.mBytes = bytes.size();
-            e.mUsed = ++mClock;
-            pruneLocked(doomed);
-        }
-        removeFiles(doomed);
+        // A remove that failed on the file this replaced is not to be retried on this one.
+        mDoomed.erase(std::remove(mDoomed.begin(), mDoomed.end(), path), mDoomed.end());
+        Entry& e = mEntries[key];
+        mBytes = mBytes - e.mBytes + bytes.size();
+        e.mBytes = bytes.size();
+        e.mUsed = ++mClock;
+        pruneLocked();
         return true;
     }
 
     void TileDiskCache::erase(U64 key)
     {
+        std::lock_guard<std::mutex> lock(mMutex);
+        const auto it = mEntries.find(key);
+        if (it != mEntries.end())
         {
-            std::lock_guard<std::mutex> lock(mMutex);
-            const auto it = mEntries.find(key);
-            if (it != mEntries.end())
-            {
-                mBytes -= it->second.mBytes;
-                mEntries.erase(it);
-            }
+            mBytes -= it->second.mBytes;
+            mEntries.erase(it);
         }
-        removeFiles({ pathOf(key) });
+        removeFilesLocked({ pathOf(key) });
     }
 
     bool TileDiskCache::contains(U64 key) const
@@ -939,13 +1425,9 @@ namespace sknav
 
     void TileDiskCache::setCap(U64 cap_bytes)
     {
-        std::vector<std::string> doomed;
-        {
-            std::lock_guard<std::mutex> lock(mMutex);
-            mCap = cap_bytes;
-            pruneLocked(doomed);
-        }
-        removeFiles(doomed);
+        std::lock_guard<std::mutex> lock(mMutex);
+        mCap = cap_bytes;
+        pruneLocked();
     }
 
     U64 TileDiskCache::bytes() const
@@ -966,15 +1448,20 @@ namespace sknav
         return mDoomed.size();
     }
 
-    void TileDiskCache::pruneLocked(std::vector<std::string>& doomed)
+    void TileDiskCache::pruneLocked()
     {
         // Files a remove failed on before are tried again with every prune.
-        doomed.insert(doomed.end(), mDoomed.begin(), mDoomed.end());
-        mDoomed.clear();
-        if (mBytes <= mCap)
+        std::vector<std::string> doomed;
+        doomed.swap(mDoomed);
+        if (mBytes > mCap)
         {
-            return;
+            pruneEntriesLocked(doomed);
         }
+        removeFilesLocked(doomed);
+    }
+
+    void TileDiskCache::pruneEntriesLocked(std::vector<std::string>& doomed)
+    {
         std::vector<std::pair<U64, U64>> order;     // used, key
         order.reserve(mEntries.size());
         for (const auto& e : mEntries)
@@ -997,19 +1484,19 @@ namespace sknav
 
     void TileDiskCache::removeFiles(const std::vector<std::string>& paths)
     {
-        std::vector<std::string> failed;
+        std::lock_guard<std::mutex> lock(mMutex);
+        removeFilesLocked(paths);
+    }
+
+    void TileDiskCache::removeFilesLocked(const std::vector<std::string>& paths)
+    {
         for (const std::string& path : paths)
         {
             std::error_code ec;
             if (!std::filesystem::remove(pathFromUtf8(path), ec) && ec)
             {
-                failed.push_back(path);
+                mDoomed.push_back(path);
             }
-        }
-        if (!failed.empty())
-        {
-            std::lock_guard<std::mutex> lock(mMutex);
-            mDoomed.insert(mDoomed.end(), failed.begin(), failed.end());
         }
     }
 
@@ -1031,7 +1518,9 @@ namespace sknav
         std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
             const EvictionCandidate& x = candidates[a];
             const EvictionCandidate& y = candidates[b];
-            return x.mScore != y.mScore ? x.mScore < y.mScore : x.mDistance > y.mDistance;
+            return x.mRank != y.mRank ? x.mRank < y.mRank
+                 : x.mScore != y.mScore ? x.mScore < y.mScore
+                 : x.mDistance > y.mDistance;
         });
         std::vector<size_t> out;
         for (size_t i : order)

@@ -32,6 +32,7 @@
 
 #include "../sknavprobes.h"
 #include "../sknavreplay.h"
+#include "../sknavspaceproducts.h"
 
 #include <algorithm>
 #include <chrono>
@@ -886,9 +887,12 @@ namespace tut
             LLVector3d mOrigin;
             std::vector<Space> mSpaces;
             std::vector<Portal> mPortals;
+            std::vector<std::vector<std::pair<U64, U32>>> mPolyRasters;     ///< per space, its floor from its stamped polys
         };
         std::vector<BenchMesh> world;
-        const std::string cache_path = out_dir + "\\spaces-radius.bin";
+        // With SKNAV_PROBES_POLYS, parts come from each space's polys; the floor scored stays its air raster.
+        const bool from_polys = !LLStringUtil::getenv("SKNAV_PROBES_POLYS").empty();
+        const std::string cache_path = out_dir + (from_polys ? "\\spaces-radius-polys.bin" : "\\spaces-radius.bin");
         constexpr U32 MAGIC = 0x31484E42;   // "BNH1"
         {
             std::ifstream in(cache_path.c_str(), std::ios::binary);
@@ -917,6 +921,17 @@ namespace tut
                         in.read(reinterpret_cast<char*>(&s.mFloorMin), sizeof(F32));
                         in.read(reinterpret_cast<char*>(&s.mOpenShare), sizeof(F32));
                     }
+                    if (from_polys)
+                    {
+                        m.mPolyRasters.resize(ns);
+                        for (auto& r : m.mPolyRasters)
+                        {
+                            U64 nr = 0;
+                            in.read(reinterpret_cast<char*>(&nr), 8);
+                            r.resize(nr);
+                            in.read(reinterpret_cast<char*>(r.data()), std::streamsize(nr * sizeof(r[0])));
+                        }
+                    }
                     in.read(reinterpret_cast<char*>(&np), 4);
                     m.mPortals.resize(np);
                     for (Portal& p : m.mPortals)
@@ -944,7 +959,17 @@ namespace tut
                 {
                     continue;
                 }
-                world.push_back({ mesh->mOrigin, mesh->mRooms->mSpaces, mesh->mRooms->mPortals });
+                world.push_back({ mesh->mOrigin, mesh->mRooms->mSpaces, mesh->mRooms->mPortals, {} });
+                const dtNavMesh* nav = mesh->mNav[static_cast<S32>(AgentClass::AVATAR)];
+                if (from_polys && nav)
+                {
+                    const ReplayMesh& rm = *mesh;
+                    const PolySpaceFn space_of = [&rm](const dtMeshTile* tile, U32 poly) { return rm.polySpace(tile, poly); };
+                    for (const Space& sp : world.back().mSpaces)
+                    {
+                        world.back().mPolyRasters.push_back(polyRaster(spacePolys(*nav, space_of, sp.mId)));
+                    }
+                }
             }
             std::ofstream out(cache_path.c_str(), std::ios::binary);
             const U32 meshes = static_cast<U32>(world.size());
@@ -967,6 +992,17 @@ namespace tut
                     out.write(reinterpret_cast<const char*>(&s.mCeilingMean), sizeof(F32));
                     out.write(reinterpret_cast<const char*>(&s.mFloorMin), sizeof(F32));
                     out.write(reinterpret_cast<const char*>(&s.mOpenShare), sizeof(F32));
+                }
+                if (from_polys)
+                {
+                    for (size_t si = 0; si < m.mSpaces.size(); ++si)
+                    {
+                        static const std::vector<std::pair<U64, U32>> none;
+                        const auto& r = si < m.mPolyRasters.size() ? m.mPolyRasters[si] : none;
+                        const U64 nr = r.size();
+                        out.write(reinterpret_cast<const char*>(&nr), 8);
+                        out.write(reinterpret_cast<const char*>(r.data()), std::streamsize(nr * sizeof(r[0])));
+                    }
                 }
                 out.write(reinterpret_cast<const char*>(&np), 4);
                 for (const Portal& p : m.mPortals)
@@ -1145,7 +1181,12 @@ namespace tut
                     auto found = part_cache.find(key);
                     if (found == part_cache.end())
                     {
-                        found = part_cache.emplace(key, spaceProbes(s, params)).first;
+                        Space shape = s;
+                        if (from_polys && si < world[mi].mPolyRasters.size())
+                        {
+                            shape.mRaster = world[mi].mPolyRasters[si];
+                        }
+                        found = part_cache.emplace(key, spaceProbes(shape, params)).first;
                     }
                     for (const ProbePart& part : found->second)
                     {

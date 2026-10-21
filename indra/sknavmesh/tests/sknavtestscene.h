@@ -59,6 +59,7 @@ namespace sknav_test
         std::vector<Solid> mSolids;
         F32 mGround[4] = { -1e9f, -1e9f, 1e9f, 1e9f };     ///< where the ground is: x0, y0, x1, y1
         F32 mShift = 0.f;                                   ///< every solid moved this far along x
+        bool mAvatarFloors = false;                         ///< walkable tops marked as AVATAR's floors, as a build marks them
 
         void box(F32 x0, F32 y0, F32 x1, F32 y1, F32 z0, F32 z1, bool walk = true, bool flight = false)
         {
@@ -136,10 +137,14 @@ namespace sknav_test
                     {
                         AirGap gap;
                         gap.mFloor = static_cast<U16>(merged[i].mZ1 + 8);   // heights from -1 m
-                        gap.mFlags = merged[i].mWalk ? AirGap::WALKABLE : 0;
+                        gap.mFlags = merged[i].mWalk ? AirGap::TOP : 0;
                         if (merged[i].mTerrain)
                         {
                             gap.mFlags |= static_cast<U8>(AREA_GROUND << AirGap::AREA_SHIFT);
+                        }
+                        if (mAvatarFloors && merged[i].mWalk)
+                        {
+                            gap.mFlags |= AirGap::AVATAR_FLOOR;
                         }
                         if (merged[i].mFlight && merged[i].mWalk)
                         {
@@ -174,7 +179,7 @@ namespace sknav_test
             for (size_t i = 0; i < in.mTiles.size(); ++i)
             {
                 const EnclosureInput::Tile& t = in.mTiles[i];
-                TileAir tops;
+                TileTops tops;
                 tops.mCell = CELL;
                 tops.mUnit = UNIT;
                 tops.mTopCell = static_cast<S32>(1.f / CELL);
@@ -288,7 +293,7 @@ namespace sknav_test
     }
 
     /// Two 8 x 8 m rooms sharing a wall at x = 10, roofed, with a door out of the west one.
-    Scene twoRooms()
+    inline Scene twoRooms()
     {
         Scene s;
         s.wall(2.f, 2.f, 18.f, 2.25f);

@@ -26,12 +26,15 @@
 
 #include "../test/lltut.h"
 
+#include "../sknavskymap.h"
 #include "../sknavtilecache.h"
 
 #include <algorithm>
+#include <atomic>
 #include <filesystem>
 #include <fstream>
 #include <random>
+#include <thread>
 
 namespace
 {
@@ -94,11 +97,12 @@ namespace
         AirGap g;
         g.mFloor = 4;
         g.mCeiling = AIR_CEILING_OPEN;
-        g.mFlags = AirGap::WALKABLE | AirGap::OPEN;
+        g.mFlags = AirGap::TOP | AirGap::OPEN;
         g.mClear = 7;
-        g.mSeed = 3;
+        g.mSlopeX = -5;
+        g.mSlopeY = 9;
         a.mGaps = { g, g };
-        a.mLeaves.push_back({ 0, 0, 1, 2, 0 });
+        a.mLeaves.push_back({ 0, 0, 1, 2, 0, 0 });
         for (S32 side = 0; side < 4; ++side)
         {
             const S32 n = side < 2 ? a.mHeight : a.mWidth;
@@ -123,8 +127,10 @@ namespace
         r.mTriangles = 99;
         r.mMillis = 12.5f;
         r.mFaces.push_back({ LLVector3(1.f, 2.f, 3.f), LLVector3(1.f, 4.f, 6.f), 2, 1 });
-        r.mSegments[1].push_back({ LLVector3(0.f, 0.f, 1.f), LLVector3(3.f, 0.f, 1.f), EdgeKind::LEDGE, -1.f, 2 });
+        r.mSegments[0].push_back({ LLVector3(0.f, 0.f, 1.f), LLVector3(3.f, 0.f, 1.f), EdgeKind::LEDGE, -1.f, 2 });
         r.mLinks[0].push_back({ LLVector3(1.f, 1.f, 5.f), LLVector3(2.f, 1.f, 1.f), 4.f, LinkKind::DROP });
+        r.mLedges.push_back({ LLVector3(5.f, 0.f, 9.f), LLVector3(5.f, 2.f, 9.f), EdgeKind::LEDGE, 8.5f, 0 });
+        r.mRunoff.push_back({ LLVector3(5.f, 1.f, 9.f), LLVector3(5.0625f, 1.f, 0.5f), 8.5f, LinkKind::DROP });
         Flight f;
         f.mKey = 0x1234567890abcdefull;
         f.mCodes = { 5, 7 };
@@ -146,7 +152,7 @@ namespace
     bool sameGaps(const std::vector<AirGap>& a, const std::vector<AirGap>& b)
     {
         return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](const AirGap& x, const AirGap& y) {
-                   return x.mFloor == y.mFloor && x.mCeiling == y.mCeiling && x.mFlags == y.mFlags && x.mClear == y.mClear && x.mSeed == y.mSeed;
+                   return x.mFloor == y.mFloor && x.mCeiling == y.mCeiling && x.mFlags == y.mFlags && x.mClear == y.mClear && x.mSlopeX == y.mSlopeX && x.mSlopeY == y.mSlopeY;
                });
     }
 
@@ -177,13 +183,15 @@ namespace tut
         TileBuildResult out;
         ensure("unpacks", unpackTileProduct(bytes.data(), bytes.size(), 42, out));
         ensure_equals("status", out.mStatus, TileBuildResult::SUCCESS);
-        ensure("detour", out.mData[0] == in.mData[0] && out.mData[1].empty());
+        ensure("detour", out.mData[0] == in.mData[0]);
         ensure_equals("polys", out.mPolys[0], 7);
         ensure_equals("triangles", out.mTriangles, 99);
         ensure_equals("faces", out.mFaces.size(), size_t(1));
         ensure("face", out.mFaces[0].mMax == in.mFaces[0].mMax && out.mFaces[0].mSide == 2 && out.mFaces[0].mArea == 1);
-        ensure_equals("segments", out.mSegments[1].size(), size_t(1));
-        ensure("segment", out.mSegments[1][0].mKind == EdgeKind::LEDGE && out.mSegments[1][0].mValue == -1.f && out.mSegments[1][0].mB == in.mSegments[1][0].mB);
+        ensure_equals("segments", out.mSegments[0].size(), size_t(1));
+        ensure("segment", out.mSegments[0][0].mKind == EdgeKind::LEDGE && out.mSegments[0][0].mValue == -1.f && out.mSegments[0][0].mB == in.mSegments[0][0].mB);
+        ensure("ledge", out.mLedges.size() == 1 && out.mLedges[0].mB == in.mLedges[0].mB && out.mLedges[0].mValue == 8.5f);
+        ensure("run-off", out.mRunoff.size() == 1 && out.mRunoff[0].mTo == in.mRunoff[0].mTo && out.mRunoff[0].mHeight == 8.5f);
         ensure("link", out.mLinks[0].size() == 1 && out.mLinks[0][0].mTo == in.mLinks[0][0].mTo && out.mLinks[0][0].mHeight == 4.f);
         ensure_equals("flight", out.mFlights[0].size(), 1u);
         const Flight& f = out.mFlights[0][0];
@@ -192,7 +200,6 @@ namespace tut
         ensure("flight kind", f.mKind == ConnectorKind::RAMP && f.mRule == ConnectorRule::NAME && f.mTreads == 3);
         ensure("flight footprint", f.mFootprint.size() == 3 && f.mFootprint[2] == LLVector2(1.f, 1.f));
         ensure("flight polys", f.mPolys == std::vector<U16>({ 3, 7 }));
-        ensure("no flights in the other class", out.mFlights[1].empty());
         ensure("air built", out.mAirBuilt && out.mAir);
         const TileAir& a = *out.mAir;
         const TileAir& b = *in.mAir;
@@ -221,6 +228,24 @@ namespace tut
         ensure("short", !unpackTileProduct(bytes.data(), bytes.size() - 9, 42, out));
         ensure("empty", !unpackTileProduct(bytes.data(), 0, 42, out));
         ensure_equals("a refused entry leaves the output alone", out.mTriangles, -5);
+    }
+
+    template<> template<>
+    void sknavtilecache_object::test<11>()
+    {
+        set_test_name("air whose leaves are out of key order is refused");
+        for (const bool sorted : { true, false })
+        {
+            TileBuildResult in = result();
+            TileAir a = *in.mAir;
+            const AirLeaf first = { 0, 2, 0, 1, 0, 0 }, second = { 1, 2, 0, 1, 0, 1 };
+            a.mLeaves.push_back(sorted ? first : second);
+            a.mLeaves.push_back(sorted ? second : first);
+            in.mAir = std::make_shared<TileAir>(a);
+            const std::vector<U8> bytes = packTileProduct(in, 42);
+            TileBuildResult out;
+            ensure_equals(sorted ? "in key order" : "out of key order", unpackTileProduct(bytes.data(), bytes.size(), 42, out), sorted);
+        }
     }
 
     template<> template<>
@@ -418,5 +443,171 @@ namespace tut
         // FNV alone leaves a top-bit change in the last input in the top bit.
         const U64 top = finishKey(mix(SEED, 1ull << 63)) ^ finishKey(mix(SEED, 0));
         ensure("low half moves on a top-bit change", (top & 0xffffffffull) != 0);
+    }
+
+    template<> template<>
+    void sknavtilecache_object::test<12>()
+    {
+        set_test_name("stamped polys survive packing under their own key, which the raster's key alone never finds");
+        TileBuildResult r;
+        r.mStatus = TileBuildResult::SUCCESS;
+        r.mData[0] = { 1, 2, 3, 4, 5 };
+        r.mPolys[0] = 3;
+        TileStampGeom& g = r.mStamp;
+        g.mStamped = true;
+        g.mPattern = 0x1234567890abcdefull;
+        g.mComponents = 2;
+        g.mPolyComponent = { 0, 1, STAMP_NONE };
+        g.mPolyGap = { 7, SPAN_NO_GAP, 9 };
+        g.mPortalEdges = { { 0, 2, 0, 0 }, { 1, 4, 1, 0 } };
+        StampPortal p;
+        p.mCentre.set(1.f, 2.f, 3.f);
+        p.mNormal.set(1.f, 0.f, 0.f);
+        p.mA.set(1.f, 1.5f, 3.f);
+        p.mB.set(1.f, 2.5f, 3.f);
+        p.mSide[0] = 0;
+        p.mSide[1] = 1;
+        p.mKind = 0;
+        p.mPortal = 5;
+        g.mPortals = { p };
+        g.mOverflow = TileStamp::CODES_MERGED;
+        g.mPairs = 12;
+        g.mDoorSpans = 4;
+        const U64 key = stampedKey(0xfeedull, g.mPattern);
+        ensure("a key of its own", key != 0xfeedull && key != stampedKey(0xfeedull, g.mPattern + 1));
+        const std::vector<U8> bytes = packTileProduct(stampedPart(r), key);
+        TileBuildResult back;
+        ensure("unpacked", unpackTileProduct(bytes.data(), bytes.size(), key, back));
+        const TileStampGeom& h = back.mStamp;
+        ensure("stamped", h.mStamped && h.mPattern == g.mPattern && h.mComponents == 2);
+        ensure("polys", h.mPolyComponent == g.mPolyComponent && h.mPolyGap == g.mPolyGap);
+        ensure("edges", h.mPortalEdges.size() == 2 && h.mPortalEdges[1].mPoly == 1 && h.mPortalEdges[1].mEdge == 4 && h.mPortalEdges[1].mSide == 1);
+        ensure("portals", h.mPortals.size() == 1 && h.mPortals[0].mB == p.mB && h.mPortals[0].mSide[1] == 1 && h.mPortals[0].mPortal == 5);
+        ensure("counts", h.mOverflow == TileStamp::CODES_MERGED && h.mPairs == 12 && h.mDoorSpans == 4);
+        ensure("the Detour bytes", back.mData[0] == r.mData[0] && back.mPolys[0] == 3);
+        TileBuildResult other;
+        ensure("not under the raster's key", !unpackTileProduct(bytes.data(), bytes.size(), 0xfeedull, other));
+        // A static product, air and no Detour, carries no stamp.
+        TileBuildResult plain;
+        plain.mStatus = TileBuildResult::SUCCESS;
+        const std::vector<U8> static_bytes = packTileProduct(plain, 0xfeedull);
+        TileBuildResult static_back;
+        ensure("static unpacked", unpackTileProduct(static_bytes.data(), static_bytes.size(), 0xfeedull, static_back));
+        ensure("no stamp, no Detour", !static_back.mStamp.mStamped && static_back.mData[0].empty());
+    }
+
+    template<> template<>
+    void sknavtilecache_object::test<13>()
+    {
+        set_test_name("a file stored again after its remove failed is not removed by the retry");
+#if LL_WINDOWS
+        const std::string dir = scratch("sknavtilecache_restore");
+        const std::vector<U8> blob(100, 3);
+        TileDiskCache cache(dir, 1 << 20);
+        cache.index();
+        cache.store(1, blob);
+        const std::filesystem::path held = std::filesystem::path(dir) / "0000000000000001.snt";
+        {
+            std::ifstream open_file(held, std::ios::binary);
+            cache.erase(1);
+            ensure_equals("pending", cache.pendingRemovals(), size_t(1));
+        }
+        ensure("stored again", cache.store(1, blob));
+        ensure("stored another", cache.store(2, blob));
+        std::vector<U8> got;
+        ensure("the second store survives the retry", std::filesystem::exists(held) && cache.load(1, got) && got == blob);
+        std::error_code ec;
+        std::filesystem::remove_all(dir, ec);
+#endif
+    }
+
+    template<> template<>
+    void sknavtilecache_object::test<14>()
+    {
+        set_test_name("indexing while another thread stores leaves its half-written files alone");
+        const std::string dir = scratch("sknavtilecache_race");
+        const std::vector<U8> blob(64 * 1024, 5);
+        TileDiskCache cache(dir, U64(1) << 32);
+        std::atomic<bool> done{ false };
+        std::thread indexer([&]() {
+            while (!done)
+            {
+                cache.index();
+            }
+        });
+        S32 failed = 0;
+        for (U64 k = 1; k <= 400; ++k)
+        {
+            failed += cache.store(k, blob) ? 0 : 1;
+        }
+        done = true;
+        indexer.join();
+        ensure_equals("every store landed", failed, 0);
+        std::error_code ec;
+        std::filesystem::remove_all(dir, ec);
+    }
+
+    template<> template<>
+    void sknavtilecache_object::test<15>()
+    {
+        set_test_name("asking for fine air moves the content key");
+        TileBuildInput a = input({});
+        a.mAir = true;
+        TileBuildInput b = a;
+        b.mFineAir = true;
+        ensure("fine air keyed", tileContentKey(a) != tileContentKey(b));
+    }
+
+    template<> template<>
+    void sknavtilecache_object::test<16>()
+    {
+        set_test_name("a spilled tile's coarse air sets the sky map's cells as its detail did");
+        const TileAir full = air();
+        const TileAirPtr coarse = coarseAir(full);
+        ensure("same tops", sameTops(full, *coarse));
+        TileAir moved = *coarse;
+        ensure("tops to move", !moved.mTop.empty());
+        moved.mTop.back().mTop += 1;
+        ensure("a moved top differs", !sameTops(full, moved));
+    }
+
+    template<> template<>
+    void sknavtilecache_object::test<17>()
+    {
+        set_test_name("products packed from parts held apart are the same bytes as packed whole");
+        const TileBuildResult whole = result();
+        ensure("the result has faces, ledges and runoff", !whole.mFaces.empty() && !whole.mLedges.empty() && !whole.mRunoff.empty());
+        TileBuildResult bare = whole;
+        bare.mFaces.clear();
+        bare.mLedges.clear();
+        bare.mRunoff.clear();
+        TileProductParts parts;
+        parts.mFaces = &whole.mFaces;
+        parts.mLedges = &whole.mLedges;
+        parts.mRunoff = &whole.mRunoff;
+        ensure("same bytes", packTileProduct(bare, 42, parts) == packTileProduct(whole, 42));
+    }
+
+    template<> template<>
+    void sknavtilecache_object::test<18>()
+    {
+        set_test_name("eviction takes the lowest rank first, whatever its nearness");
+        // Four tiles at the same distance: the agent's region's (rank 3) stays,
+        // the void's (rank 0) goes, even though the void's sat nearer just as long.
+        std::vector<EvictionCandidate> c(4);
+        c[0] = { 100, 9.0, 500.0, 3 };
+        c[1] = { 100, 9.0, 500.0, 0 };
+        c[2] = { 100, 9.0, 500.0, 1 };
+        c[3] = { 100, 9.0, 500.0, 2 };
+        const std::vector<size_t> out = chooseEvictions(c, 300, 192.0);
+        ensure_equals("one goes", out.size(), size_t(1));
+        ensure_equals("the void's", out[0], size_t(1));
+        const std::vector<size_t> more = chooseEvictions(c, 200, 192.0);
+        ensure_equals("two more go", more.size(), size_t(2));
+        ensure("the next two, lowest rank first", more[0] == size_t(1) && more[1] == size_t(2));
+        // Evicting to a bare 100 keeps only the agent region's.
+        const std::vector<size_t> rest = chooseEvictions(c, 100, 192.0);
+        ensure_equals("three go", rest.size(), size_t(3));
+        ensure("rank three stays", rest[2] == size_t(3));
     }
 }

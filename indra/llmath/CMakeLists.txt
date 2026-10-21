@@ -146,6 +146,13 @@ if(AL_BUILD_TESTS)
     LIBRARIES llmath llcommon
   )
 
+  # <SK:Nexii> Develop's TUT tests, kept registered until they are ported to Catch2: LLAddBuildTest.cmake (al_add_test) is gone upstream
+  if(COMMAND al_add_test)
+    al_add_test(llvolumesplit PROJECT llmath LIBRARIES llmath llcommon)
+    al_add_test(llvolume PROJECT llmath LIBRARIES llmath llcommon)
+  endif()
+  # </SK:Nexii>
+
   # The kernel test compares kernels, instantiated in it, bit for bit with each
   # other and with the vector types' own operations. Built with the tree's
   # reassociation and contraction, the compiler may round the same sum
