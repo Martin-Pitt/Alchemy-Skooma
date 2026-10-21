@@ -451,6 +451,7 @@ private:
     std::vector<U32> mFloating;         ///< the extents not standing on the land
     U64 mExtentsSignature = 0;  ///< the buffers' signature mExtents was built for
     bool mExtentsBuilt = false;
+    bool mExtentHeightsMoved = false;   ///< clusters moved in height since mExtents' bases were taken
     U64 mExtentsRegion = ~0ull; ///< the region handle mCuttable was worked for
     /// One person's own share of the cut, kept while they stay put: the surface under them and what their room or
     /// column takes. Most people are still in any one frame.

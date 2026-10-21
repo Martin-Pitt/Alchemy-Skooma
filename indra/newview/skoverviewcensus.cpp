@@ -727,7 +727,7 @@ bool SKOverviewCensus::update()
         }
         if (heights_moved)
         {
-            mExtentsBuilt = false;
+            mExtentHeightsMoved = true;
             mCutSignature = 0; // applyCut works the cut again with the same key
         }
     }
@@ -1861,6 +1861,7 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
         return;
     }
     mCutKey = key;
+    std::vector<std::pair<F64, F64>> moved_bottoms; // a floating linkset's base before and after a heights refresh
     if (!mExtentsBuilt || mExtentsSignature != mSignature)
     {
         LL_PROFILE_ZONE_NAMED("sk cut extents");
@@ -1899,6 +1900,25 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
         mExtentsBuilt = true;
         mExtentsRegion = ~0ull;
     }
+    else if (mExtentHeightsMoved)
+    {
+        // Only a base moved: the triangles a person's share was found from did not.
+        for (auto& entry : mExtents)
+        {
+            Extent& e = entry.second;
+            F64 bottom = 1e30;
+            for (const auto& part : e.mParts)
+            {
+                bottom = llmin(bottom, (F64)part.second->mMinZ);
+            }
+            if (bottom != e.mBottom && !e.mGround)
+            {
+                moved_bottoms.emplace_back(e.mBottom, bottom);
+            }
+            e.mBottom = bottom;
+        }
+    }
+    mExtentHeightsMoved = false;
     const U64 region_handle = region ? region->getHandle() : 0;
     if (mExtentsRegion != region_handle)
     {
@@ -1924,6 +1944,18 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
     auto overhead = [&](const Extent& e, const Occupant& occupant)
     {
         return !e.mGround && e.mBottom > occupant.mCut + OVERHEAD_M;
+    };
+    // Whether a moved base crossed a height's overhead line, so what was found against that height may differ.
+    auto baseCrossed = [&](F64 z)
+    {
+        for (const auto& b : moved_bottoms)
+        {
+            if ((b.first > z + OVERHEAD_M) != (b.second > z + OVERHEAD_M))
+            {
+                return true;
+            }
+        }
+        return false;
     };
     std::map<U32, F32> cut_of;
     std::map<U32, Reason> why;
@@ -2089,7 +2121,7 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
             {
                 quantise(roof_key, feet.mdV[i]);
             }
-            if (!cache.mRoofValid || cache.mRoofKey != roof_key)
+            if (!cache.mRoofValid || cache.mRoofKey != roof_key || baseCrossed(feet.mdV[VZ]))
             {
                 cache.mBest = 0;
                 cache.mBestZ = -1e30;
@@ -2271,7 +2303,7 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
                 marks_key = (marks_key ^ occupant->mRoom->mId.mId) * 1099511628211ull;
                 marks_key = (marks_key ^ occupant->mRoom->mId.mMesh.getCRC32()) * 1099511628211ull;
             }
-            if (!cache.mMarksValid || cache.mMarksKey != marks_key)
+            if (!cache.mMarksValid || cache.mMarksKey != marks_key || baseCrossed(occupant->mCut))
             {
                 cache.mMarks.clear();
                 if (occupant->mRoom)
