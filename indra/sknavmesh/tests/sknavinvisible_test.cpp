@@ -118,7 +118,8 @@ namespace
         return r;
     }
 
-    CoverResult judge(const Tris& part, const std::vector<std::shared_ptr<Record>>& neighbours)
+    CoverResult judge(const Tris& part, const std::vector<std::shared_ptr<Record>>& neighbours,
+                      const InvisibleParams& params = InvisibleParams())
     {
         std::vector<const Record*> records;
         for (const auto& r : neighbours)
@@ -126,7 +127,7 @@ namespace
             records.push_back(r.get());
         }
         std::vector<LLVector3> scratch;
-        return coverVerdict(part, coverCandidates(records, LLVector3d(), scratch), InvisibleParams());
+        return coverVerdict(part, coverCandidates(records, LLVector3d(), scratch), params);
     }
 
     F32 area(const Tris& tris)
@@ -254,6 +255,21 @@ namespace
         CHECK(r.mTooFine);
         // Nothing near it is still a barrier only when it is not too fine to judge at all.
         CHECK(judge(one, {}).mVerdict == CoverVerdict::BARRIER);
+    }
+
+    TEST_CASE("sknavinvisible: a part clipped into more pieces than the cap is unknown, never a proxy", "[sknavinvisible]")
+    {
+        // Two overlapping colliders poke out through the part's +x and +y faces.
+        const Tris part = box({ 0.f, 0.f, 1.f }, 0.f, { 1.f, 1.f, 1.f });
+        const std::vector<std::shared_ptr<Record>> colliders = { boxRecord({ 0.8f, 0.3f, 1.f }, 0.f, { 0.5f, 0.5f, 0.5f }),
+                                                                 boxRecord({ 0.3f, 0.8f, 1.f }, 0.f, { 0.5f, 0.5f, 0.5f }) };
+        CHECK(judge(part, colliders).mVerdict == CoverVerdict::EXTRA);
+        InvisibleParams p;
+        p.mMaxPieces = 4;
+        const CoverResult r = judge(part, colliders, p);
+        CHECK(r.mVerdict == CoverVerdict::UNKNOWN_PHYSICS);
+        CHECK(r.mTooFine);
+        CHECK(r.mProtruding.empty());
     }
 
     TEST_CASE("sknavinvisible: clipped pieces sum to the part area minus the inside", "[sknavinvisible]")
