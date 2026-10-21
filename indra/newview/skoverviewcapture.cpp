@@ -1653,6 +1653,7 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
         glClearDepth(clear_depth);
         glClearColor(clear_colour[0], clear_colour[1], clear_colour[2], clear_colour[3]);
         draws = gPipeline.skRenderOverview(shot.mView, shot.mProj, cull, shot.mCut, census) + census_draws;
+        LL_PROFILE_PLOT("census indirect draws", (int64_t)(gpu_commands ? census_draws : 0));
         capture.flush();
         mCost.mCaptureMs += timer.getElapsedTimeF32() * 1000.f;
     }

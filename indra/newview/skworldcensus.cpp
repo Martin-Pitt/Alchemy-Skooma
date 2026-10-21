@@ -436,17 +436,27 @@ void SKWorldCensus::continueScan(F32 budget_ms)
     LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - scan slice");
     LLTimer timer;
     const S32 count = static_cast<S32>(mScan.mObjects.size());
+    S64 visits = 0;
+    // What the slice visited and what it left for the next.
+    auto plot = [&]()
+    {
+        LL_PROFILE_PLOT("census visits", (int64_t)visits);
+        LL_PROFILE_PLOT("census dirty parts", (int64_t)(llmax(0, count - mScan.mIndex)
+                                                       + (S64)(mScan.mCached.size() - llmin(mScan.mCached.size(), mScan.mCachedIndex))));
+    };
     while (mScan.mIndex < count)
     {
         if (timer.getElapsedTimeF32() * 1000.f > budget_ms)
         {
             mScan.mElapsedMs += timer.getElapsedTimeF32() * 1000.f;
+            plot();
             return;
         }
         LLViewerObject* object = mScan.mObjects[mScan.mIndex++].get();
         if (object && !object->isDead())
         {
             visit(object);
+            ++visits;
         }
     }
     mScan.mObjects.clear();
@@ -457,11 +467,14 @@ void SKWorldCensus::continueScan(F32 budget_ms)
         if (timer.getElapsedTimeF32() * 1000.f > budget_ms)
         {
             mScan.mElapsedMs += timer.getElapsedTimeF32() * 1000.f;
+            plot();
             return;
         }
         visitCached(mScan.mCached[mScan.mCachedIndex++]);
+        ++visits;
     }
     mScan.mCached.clear();
+    plot();
     mScan.mElapsedMs += timer.getElapsedTimeF32() * 1000.f;
     finishScan();
 }

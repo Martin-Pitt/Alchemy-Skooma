@@ -1945,11 +1945,15 @@ void SKOverviewCensus::swapIn(Built& built)
         }
         LL_INFOS("SKOverview") << "census upload: " << changed << " linksets (" << built.mLinksetsEmitted << " emitted), "
                                << uploaded << " vertices sub-uploaded of " << total << LL_ENDL;
+        LL_PROFILE_PLOT("census vertices uploaded", (int64_t)uploaded);
+        LL_PROFILE_PLOT("census vertices total", (int64_t)total);
+        LL_PROFILE_PLOT("census linksets emitted", (int64_t)built.mLinksetsEmitted);
     }
     {
         // Each page's fill: told when a page was made or freed, kept to the debug log otherwise.
         const bool news = mPagesMade || mPagesFreed;
         size_t pages = 0, slots = 0;
+        U64 page_used = 0, page_capacity = 0;
         for (const Region& region : mRegions)
         {
             for (size_t p = 0; p < region.mPages.size(); ++p)
@@ -1969,12 +1973,22 @@ void SKOverviewCensus::swapIn(Built& built)
                 }
                 ++pages;
                 slots += page.mSlots.size();
+                page_used += page.mRuns.used();
+                page_capacity += page.mRuns.capacity();
             }
         }
         const std::string summary = llformat("census pages: %u regions, %u pages (%u made, %u freed), %u slots; ids %u in use "
                                              "below %u, %u free",
                                              (U32)mRegions.size(), (U32)pages, mPagesMade, mPagesFreed, (U32)slots,
                                              (U32)mLinksetIds.size(), mIds.bound(), (U32)mIds.freeCount());
+        static const bool fill_configured = []
+        {
+            LL_PROFILE_PLOT_CONFIG("census page fill %", tracy::PlotFormatType::Percentage, false, true, 0);
+            return true;
+        }();
+        (void)fill_configured;
+        LL_PROFILE_PLOT("census pages", (int64_t)pages);
+        LL_PROFILE_PLOT("census page fill %", page_capacity ? 100.0 * (F64)page_used / (F64)page_capacity : 0.0);
         if (news)
         {
             LL_INFOS("SKOverview") << summary << LL_ENDL;
@@ -1985,6 +1999,10 @@ void SKOverviewCensus::swapIn(Built& built)
         }
     }
     const Built::CoverStats& c = built.mCover;
+    LL_PROFILE_PLOT("cover unknown", (int64_t)c.mUnknown);
+    LL_PROFILE_PLOT("cover judged", (int64_t)c.mJudged);
+    LL_PROFILE_PLOT("cover proxies", (int64_t)c.mProxies);
+    LL_PROFILE_PLOT("cover verdict ms", c.mVerdictSeconds * 1000.0);
     if (c.mParts)
     {
         // Logged only when the counts move: the same parts judged the same way are no news.
@@ -2762,6 +2780,8 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
         mProbeStats.mQueries += probes->queriesIssued();
         mProbeStats.mMostQueries = llmax(mProbeStats.mMostQueries, probes->queriesIssued());
         mProbeStats.mRefused += probes->queriesRefused();
+        LL_PROFILE_PLOT("census probe queries", (int64_t)probes->queriesIssued());
+        LL_PROFILE_PLOT("census probe refused", (int64_t)probes->queriesRefused());
         std::vector<U32> ids;
         std::vector<F32> depths;
         S32 w = 0, h = 0;
@@ -2786,9 +2806,10 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
             {
                 pending += entry.second.mMarksProbe.mPending || entry.second.mRoofProbe.mPending ? 1 : 0;
             }
+            const F32 latency = mProbeStats.mApplied ? (F32)mProbeStats.mLatencyFrames / mProbeStats.mApplied : 0.f;
+            LL_PROFILE_PLOT("census readback latency", (F64)latency);
             if (mProbeStats.mIssued || pending || mProbeStats.mRefused)
             {
-                const F32 latency = mProbeStats.mApplied ? (F32)mProbeStats.mLatencyFrames / mProbeStats.mApplied : 0.f;
                 LL_INFOS("SKOverview") << "probe: " << mProbeStats.mIssued << " issued, " << pending << " pending, "
                                        << mProbeStats.mQueries << " queries (" << mProbeStats.mMostQueries
                                        << " in a frame at most, " << mProbeStats.mRefused << " refused), "
