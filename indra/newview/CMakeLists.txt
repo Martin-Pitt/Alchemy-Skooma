@@ -1970,6 +1970,7 @@ if(AL_BUILD_VIEWER)
     skoverviewcensus.cpp
     skoverviewcuttable.cpp
     skoverviewmovers.cpp
+    skoverviewslots.cpp
   )
   list(
     APPEND viewer_HEADERS
@@ -1994,6 +1995,7 @@ if(AL_BUILD_VIEWER)
     skoverviewcuttable.h
     skoverviewmovers.h
     skoverviewprograms.h
+    skoverviewslots.h
     skpopuppanes.h
     skmapmenu.h
     skmapparcelfacts.h
@@ -2774,6 +2776,7 @@ if(AL_BUILD_TESTS)
       tests/skmapmarkers_test.cpp # <SK:Nexii> mini-map markers
       tests/skoverviewshaders_test.cpp # <SK:Nexii> combat/minimap: the overview's shader permutations
       tests/skoverviewcuttable_test.cpp # <SK:Nexii> combat/minimap: the overview's cut table
+      tests/skoverviewslots_test.cpp # <SK:Nexii> combat/minimap: the overview's census pages
     UNIT
       alagentlocationformat.cpp
       alchattimestamp.cpp
@@ -2857,6 +2860,7 @@ if(AL_BUILD_TESTS)
       skoutlinepolicy.cpp # <SK:Nexii> outline capture
       skmapmarkers.cpp # <SK:Nexii> mini-map markers
       skoverviewcuttable.cpp # <SK:Nexii> combat/minimap: the overview's cut table
+      skoverviewslots.cpp # <SK:Nexii> combat/minimap: the overview's census pages
     LIBRARIES llui alscript ll::slua llxml ll::pocketfft ${test_libs}
     SUPPORT
       newview_test_fakes
