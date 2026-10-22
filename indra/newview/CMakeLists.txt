@@ -1023,6 +1023,7 @@ if(AL_BUILD_VIEWER)
     skworldmapmath.cpp # <SK:Nexii> 3D world map
     skworldmapscene.cpp # <SK:Nexii> 3D world map
     skworldmaptiles.cpp # <SK:Nexii> 3D world map
+    skcombatlockout.cpp
   )
 
   set(
@@ -1916,6 +1917,7 @@ if(AL_BUILD_VIEWER)
     rlvlocks.h
     rlvmodifiers.h
     rlvui.h
+    skcombatlockout.h
     roles_constants.h
     skmodalview.h # <SK:Nexii> modal view
     skmodalviewmath.h # <SK:Nexii> modal view

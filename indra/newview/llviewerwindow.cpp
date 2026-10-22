@@ -6319,53 +6319,10 @@ void LLViewerWindow::destroyWindow()
 void LLViewerWindow::drawMouselookInstructions()
 {
     static LLCachedControl<bool> draw_mouselook_instructions(gSavedSettings, "AlchemyMouselookInstructions", true);
-    static LLCachedControl<bool> draw_mouselook_position(gSavedSettings, "AlchemyMouselookPosition", true);
-    if (draw_mouselook_position || draw_mouselook_instructions)
+    // <SK:Nexii/> Position and health overlay removed for combat
+    if (draw_mouselook_instructions)
     {
-        // Draw information for mouselook (pos, health)
         const LLFontGL* font = LLFontGL::getFontSansSerifBig();
-
-        if (draw_mouselook_position)
-        {
-            //to be at top of viewer
-            const S32 INSTRUCTIONS_TOP_PAD = getWorldViewRectScaled().mTop - 15;
-            const S32 text_pos_start = getWorldViewRectScaled().getCenterX() - 150;
-            const LLVector3& vec = gAgent.getPositionAgent();
-
-            font->renderUTF8(
-                llformat("X: %.2f", vec.mV[VX]), 0,
-                text_pos_start,
-                INSTRUCTIONS_TOP_PAD,
-                LLColor4(1.0f, 0.5f, 0.5f, 0.5f),
-                LLFontGL::HCENTER, LLFontGL::TOP,
-                LLFontGL::BOLD, LLFontGL::DROP_SHADOW_SOFT);
-            font->renderUTF8(
-                llformat("Y: %.2f", vec.mV[VY]), 0,
-                text_pos_start + 100,
-                INSTRUCTIONS_TOP_PAD,
-                LLColor4(0.5f, 1.0f, 0.5f, 0.5f),
-                LLFontGL::HCENTER, LLFontGL::TOP,
-                LLFontGL::BOLD, LLFontGL::DROP_SHADOW_SOFT);
-            font->renderUTF8(
-                llformat("Z: %.2f", vec.mV[VZ]), 0,
-                text_pos_start + 200,
-                INSTRUCTIONS_TOP_PAD,
-                LLColor4(0.5f, 0.5f, 1.0f, 0.5f),
-                LLFontGL::HCENTER, LLFontGL::TOP,
-                LLFontGL::BOLD, LLFontGL::DROP_SHADOW_SOFT);
-            LLViewerParcelMgr* vpm = LLViewerParcelMgr::getInstance();
-            const bool allow_damage = vpm->allowAgentDamage(gAgent.getRegion(), vpm->getAgentParcel());
-            if (allow_damage)
-            {
-                font->renderUTF8(
-                    llformat("HP: %d%%", gAgent.getHealth()), 0,
-                    text_pos_start + 300,
-                    INSTRUCTIONS_TOP_PAD,
-                    LLColor4(1.0f, 1.0f, 1.0f, 0.5f),
-                    LLFontGL::HCENTER, LLFontGL::TOP,
-                    LLFontGL::BOLD, LLFontGL::DROP_SHADOW_SOFT);
-            }
-        }
 
         if (draw_mouselook_instructions)
         {
