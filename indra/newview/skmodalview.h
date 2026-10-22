@@ -72,6 +72,8 @@ public:
     virtual F64 flycamScale(const LLVector3d& eye) const { return 1.0; }
     /// RLVa restrictions of the mode's own, on top of the camera locks every mode honours.
     virtual bool rlvRestricted() const { return false; }
+    /// Floaters (registry names) the mode stands in for: hidden silently while it is on top, shown again after.
+    virtual std::vector<std::string> coveredFloaters() const { return {}; }
 };
 
 /// While any mode claims it, the display loop draws the top mode instead of the world, the way it draws
@@ -153,6 +155,8 @@ private:
     };
 
     void notifyTopChange(SKModalMode* before, const SKModalMode* except);
+    /// Hides what the top mode covers and shows again what it no longer does, without the floaters' open and close.
+    void updateCoveredFloaters();
     void snapshotWorldCamera();
     void restoreWorldCamera();
 
@@ -160,4 +164,5 @@ private:
     std::vector<SKModalMode*> mModes;
     WorldCamera mWorld;
     bool mClosingAll = false; ///< no mode is handed the top while every mode is closing
+    std::vector<std::string> mHiddenFloaters; ///< hidden by updateCoveredFloaters while visible
 };
