@@ -80,6 +80,7 @@
 #include "object_flags.h"
 #include "lltimer.h"
 #include "lltooltip.h"
+#include "skhover.h" // <SK:Nexii> hover context
 #include "llmediaentry.h"
 #include "llurldispatcher.h"
 #include "raytrace.h"
@@ -4046,6 +4047,7 @@ void LLViewerWindow::updateUI()
 
     // store resulting hover set for next frame
     swap(mMouseHoverViews, mouse_hover_set);
+    SKHover::update(mMouseHoverViews); // <SK:Nexii> hover context: expose the hovered set
 
     // only handle hover events when UI is enabled
     if (gPipeline.hasRenderDebugFeatureMask(LLPipeline::RENDER_DEBUG_FEATURE_UI))
