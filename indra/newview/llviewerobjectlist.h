@@ -139,6 +139,11 @@ public:
     void removeFromActiveList(LLViewerObject* objectp);
     void updateActive(LLViewerObject *objectp);
 
+    // <SK:Nexii> Ghosted physical objects: watch temp-on-rez physical objects for a stop the simulator never announced, and probe those with a silent select so a simulator that no longer owns one answers with KillObject
+    void skWatchGhostCandidate(LLViewerObject* objectp);
+    void skUpdateGhostWatch(F64Seconds now);
+    // </SK:Nexii>
+
     void updateAvatarVisibility();
 
     inline S32 getNumObjects() { return (S32) mObjects.size(); }
@@ -234,6 +239,21 @@ protected:
     uuid_set_t   mPendingPhysicsFlags;
 
     std::vector<LLDebugBeacon> mDebugBeacons;
+
+    // <SK:Nexii> Ghosted physical objects: swept a few times a second, and only ever as long as the temp-on-rez physical objects in view
+    struct SKGhostCandidate
+    {
+        LLPointer<LLViewerObject> mObject;
+        LLVector3 mLastPos;
+        F64Seconds mLastMovedAt;
+        F64Seconds mProbedAt;   // zero until probed
+        F32 mLastSpeed;
+        F32 mAudioGain;         // gain before it was silenced
+        bool mHidden;
+    };
+    std::vector<SKGhostCandidate> mSKGhostCandidates;
+    F64Seconds mSKGhostNextSweep;
+    // </SK:Nexii>
 
     S32 mCurLazyUpdateIndex;
 
