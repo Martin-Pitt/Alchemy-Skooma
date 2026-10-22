@@ -61,13 +61,6 @@ uniform bool transparent_surface;
 // Inputs
 uniform mat3 env_mat;
 
-// list of probeIndexes shader will actually use after "getRefIndex" is called
-// (stores refIndex/refSphere indices, NOT rerflectionProbes layer)
-int probeIndex[REF_SAMPLE_COUNT];
-
-// number of probes stored in probeIndex
-int probeInfluences = 0;
-
 vec3 getSpecularDominantDir(vec3 n, vec3 r, float perceptualRoughness);
 float horizonOcclusion(vec3 r, vec3 geometricNormal);
 
@@ -76,11 +69,13 @@ bool isAbove(vec3 pos, vec4 plane)
     return (dot(plane.xyz, pos) + plane.w) > 0;
 }
 
-bool sample_automatic = true;
-
-// return true if probe at index i influences position pos
-bool shouldSampleProbe(int i, vec3 pos)
+// Whether probe `i` holds `pos`. A box holds what lies within it, `box_pos` the point in its unit cube, and shuts the
+// automatic probes out once it does (`boxed`); a sphere holds what lies within its radius, an automatic one only while
+// `automatic`, before any box has.
+bool probeHolds(int i, vec3 pos, bool automatic, out bool boxed, out vec3 box_pos)
 {
+    boxed = false;
+    box_pos = vec3(0);
     if (refIndex[i].w < 0)
     {
         vec4 v = refBox[i] * vec4(pos, 1.0);
@@ -91,31 +86,26 @@ bool shouldSampleProbe(int i, vec3 pos)
             return false;
         }
 
-        // never allow automatic probes to encroach on box probes
-        sample_automatic = false;
+        boxed = true;
+        box_pos = v.xyz;
+        return true;
     }
-    else
+
+    if (refIndex[i].w == 0 && !automatic)
     {
-        if (refIndex[i].w == 0 && !sample_automatic)
-        {
-            return false;
-        }
-
-        vec3 delta = pos.xyz - refSphere[i].xyz;
-        float d = dot(delta, delta);
-        float r2 = refSphere[i].w;
-        r2 *= r2;
-
-        if (d > r2)
-        { // outside bounding sphere
-            return false;
-        }
+        return false;
     }
 
-    return true;
+    vec3 delta = pos.xyz - refSphere[i].xyz;
+    float d = dot(delta, delta);
+    float r2 = refSphere[i].w;
+    r2 *= r2;
+
+    // outside bounding sphere
+    return !(d > r2);
 }
 
-// <SK:Nexii> Cluster probes: a probe's tier in the mix, see skMixProbeTiers.
+// <SK:Nexii> Cluster probes: a probe's tier in the mix, see skProbeMix.
 int skProbeTier(int i)
 {
     if (i == 0)
@@ -138,152 +128,6 @@ int getStartIndex(vec3 pos)
     return clamp(refBucket[idx].x, 1, refmapCount+1);
 #else
     return 1;
-#endif
-}
-
-// call before sampleRef
-// populate "probeIndex" with N probe indices that influence pos where N is REF_SAMPLE_COUNT
-void preProbeSample(vec3 pos)
-{
-    // Start the populate from empty here rather than relying on probeInfluences'
-    // global initializer. That initializer runs once per invocation, so this function
-    // only produces a correct list because nothing currently calls it twice -- the
-    // three entry points that do are all mutually exclusive. Resetting here makes the
-    // populate self-contained instead of correct by coincidence; it is a no-op on
-    // every existing call path.
-    probeInfluences = 0;
-
-#if REFMAP_LEVEL > 0
-
-    int start = getStartIndex(pos);
-
-    // TODO: make some sort of structure that reduces the number of distance checks
-    for (int i = start; i < refmapCount && probeInfluences < REF_SAMPLE_COUNT; ++i)
-    {
-        // The probes are sorted on the nearest depth their bounding sphere reaches (refParams.w),
-        // which the bucket's lower bound already relies on: from the first that lies wholly
-        // beyond this point on, none can hold it.
-        if (refParams[i].w > -pos.z)
-        {
-            break;
-        }
-
-        // found an influencing probe
-        if (skProbeTier(i) != 2 && shouldSampleProbe(i, pos)) // <SK:Nexii> Cluster probes are sampled below
-        {
-            probeIndex[probeInfluences] = i;
-            ++probeInfluences;
-            if (probeInfluences == REF_SAMPLE_COUNT)
-            {
-                break;
-            }
-
-            int neighborIdx = refIndex[i].y;
-            if (neighborIdx != -1)
-            {
-                int neighborCount = refIndex[i].z;
-
-                int count = 0;
-                while (count < neighborCount)
-                {
-                    // check up to REF_SAMPLE_COUNT-1 neighbors (neighborIdx is ivec4 index)
-
-                    // sample refNeighbor[neighborIdx].x
-                    int idx = refNeighbor[neighborIdx].x;
-                    if (shouldSampleProbe(idx, pos))
-                    {
-                        probeIndex[probeInfluences++] = idx;
-                        if (probeInfluences == REF_SAMPLE_COUNT)
-                        {
-                            break;
-                        }
-                    }
-                    count++;
-                    if (count == neighborCount)
-                    {
-                        break;
-                    }
-
-                    // sample refNeighbor[neighborIdx].y
-                    idx = refNeighbor[neighborIdx].y;
-                    if (shouldSampleProbe(idx, pos))
-                    {
-                        probeIndex[probeInfluences++] = idx;
-                        if (probeInfluences == REF_SAMPLE_COUNT)
-                        {
-                            break;
-                        }
-                    }
-                    count++;
-                    if (count == neighborCount)
-                    {
-                        break;
-                    }
-
-                    // sample refNeighbor[neighborIdx].z
-                    idx = refNeighbor[neighborIdx].z;
-                    if (shouldSampleProbe(idx, pos))
-                    {
-                        probeIndex[probeInfluences++] = idx;
-                        if (probeInfluences == REF_SAMPLE_COUNT)
-                        {
-                            break;
-                        }
-                    }
-                    count++;
-                    if (count == neighborCount)
-                    {
-                        break;
-                    }
-
-                    // sample refNeighbor[neighborIdx].w
-                    idx = refNeighbor[neighborIdx].w;
-                    if (shouldSampleProbe(idx, pos))
-                    {
-                        probeIndex[probeInfluences++] = idx;
-                        if (probeInfluences == REF_SAMPLE_COUNT)
-                        {
-                            break;
-                        }
-                    }
-                    count++;
-
-                    ++neighborIdx;
-                }
-
-                break;
-            }
-        }
-    }
-
-    // <SK:Nexii> Cluster probes: every fill covering pos, past the anchor's neighbours (refBucket[0].yz is their range).
-    if (sample_automatic)
-    {
-        for (int i = refBucket[0].y; i < refBucket[0].z && probeInfluences < REF_SAMPLE_COUNT - 1; ++i)
-        {
-            if (skProbeTier(i) != 2 || !shouldSampleProbe(i, pos))
-            {
-                continue;
-            }
-            bool listed = false;
-            for (int k = 0; k < probeInfluences; ++k)
-            {
-                listed = listed || probeIndex[k] == i;
-            }
-            if (!listed)
-            {
-                probeIndex[probeInfluences++] = i;
-            }
-        }
-    }
-    // </SK:Nexii>
-
-    if (sample_automatic && probeInfluences < REF_SAMPLE_COUNT)
-    { // probe at index 0 is a special probe for smoothing out automatic probes
-        probeIndex[probeInfluences++] = 0;
-    }
-#else
-    probeIndex[probeInfluences++] = 0;
 #endif
 }
 
@@ -323,9 +167,6 @@ bool intersect(const Ray &ray) const
 
         return true;
 } */
-
-// Set while water samples the probes (sampleReflectionProbesWater).
-bool water_sample = false;
 
 // adapted -- assume that origin is inside sphere, return intersection of ray with edge of sphere.
 // An origin outside it has no exit point and gets center + dir: the probe sampled along the ray without parallax.
@@ -416,16 +257,12 @@ return texCUBE(envMap, ReflDirectionWS);
 // i - probe index in refBox/refSphere
 // d - distance to nearest wall in clip space
 // scale - scale of box, default 1.0
-vec3 boxIntersect(vec3 origin, vec3 dir, mat4 i, out float d, float scale)
+// boxIntersect from `PositionLS`, origin in the box's unit cube, which probeHolds finds it at.
+vec3 boxIntersectFrom(vec3 origin, vec3 PositionLS, vec3 dir, mat4 i, float scale)
 {
-    // Intersection with OBB convert to unit box space
-    // Transform in local unit parallax cube space (scaled and rotated)
     mat4 clipToLocal = i;
 
     vec3 RayLS = mat3(clipToLocal) * dir;
-    vec3 PositionLS = (clipToLocal * vec4(origin, 1.0)).xyz;
-
-    d = 1.0-max(max(abs(PositionLS.x), abs(PositionLS.y)), abs(PositionLS.z));
 
     // Keep the denominator off zero, sign intact.
     //
@@ -457,9 +294,20 @@ vec3 boxIntersect(vec3 origin, vec3 dir, mat4 i, out float d, float scale)
     return IntersectPositionCS;
 }
 
-vec3 boxIntersect(vec3 origin, vec3 dir, mat4 i, out float d)
+// d - boxDepth: the normalized depth of `PositionLS` inside the volume, 1 at the centre, 0 at the wall
+float boxDepth(vec3 PositionLS)
 {
-    return boxIntersect(origin, dir, i, d, 1.0);
+    return 1.0-max(max(abs(PositionLS.x), abs(PositionLS.y)), abs(PositionLS.z));
+}
+
+vec3 boxIntersect(vec3 origin, vec3 dir, mat4 i, out float d, float scale)
+{
+    // Intersection with OBB convert to unit box space
+    // Transform in local unit parallax cube space (scaled and rotated)
+    vec3 PositionLS = (i * vec4(origin, 1.0)).xyz;
+
+    d = boxDepth(PositionLS);
+    return boxIntersectFrom(origin, PositionLS, dir, i, scale);
 }
 
 void debugBoxCol(vec3 ro, vec3 rd, float t, vec3 p, inout vec4 col)
@@ -524,14 +372,10 @@ void boxIntersectDebug(vec3 origin, vec3 pos, mat4 i, inout vec4 col)
 }
 
 
-// The distance-only weight of a box probe.
+// The distance-only weight of a box probe, which decides how far a manual probe takes over from
+// the automatic ones.
 //
-// tapRefMap and tapIrradianceMap return this through an out parameter that the box branch
-// used not to write at all. An out parameter is copy-out from an uninitialised local, so the
-// caller was accumulating an undefined value into dwsum -- and dwsum is what decides how far
-// a manual probe takes over from the automatic ones.
-//
-//  d  - boxIntersect's normalized depth inside the volume: 1 at the centre, 0 at the wall
+//  d  - boxDepth: the normalized depth inside the volume, 1 at the centre, 0 at the wall
 //  fade - the probe's fade-in weight, as sphereWeight also folds in
 float boxDistanceWeight(float d, float fade)
 {
@@ -563,40 +407,22 @@ float sphereWeight(vec3 pos, vec3 dir, vec3 origin, float r, vec4 i, out float d
     return w;
 }
 
-// Tap a reflection probe
-// pos - position of pixel
-// dir - pixel normal
-//  w - weight of sample (distance and angular attenuation)
-//  dw - weight of sample (distance only)
-// lod - which mip to sample (lower is higher res, sharper reflections)
-// c - center of probe
-// r2 - radius of probe squared
-// i - index of probe
-vec3 tapRefMap(vec3 pos, vec3 dir, out float w, out float dw, float lod, vec3 c, int i)
+// The weight of probe `i` at `pos` (distance and angular attenuation), and its distance-only weight `dw`: the same for
+// every tap of it, its irradiance and its radiance alike.
+// box_pos - pos in a box's unit cube (probeHolds)
+float probeWeight(int i, vec3 pos, vec3 box_pos, out float dw)
 {
-    // parallax adjustment
-    vec3 v;
-
+    float w;
     if (refIndex[i].w < 0)
     {  // box probe
-        float d = 0;
-        v = boxIntersect(pos, dir, refBox[i], d);
+        float d = boxDepth(box_pos);
 
         w = max(d, 0.001);
         dw = boxDistanceWeight(d, refParams[i].z);
     }
     else
     { // sphere probe
-        float r = refSphere[i].w;
-
-        float rr = r * r;
-
-        v = (water_sample && i == 0) ? c + dir : // water takes the default probe without parallax
-            sphereIntersect(pos, dir, c,
-        refIndex[i].w < 1 ? 4096.0*4096.0 : // <== effectively disable parallax correction for automatically placed probes to keep from bombing the world with obvious spheres
-                rr);
-
-        w = sphereWeight(pos, dir, refSphere[i].xyz, r, refParams[i], dw);
+        w = sphereWeight(pos, vec3(0), refSphere[i].xyz, refSphere[i].w, refParams[i], dw);
         // The default probe is the fallback everywhere. Past its 4 km radius, which only an infinite projection
         // shows, its weight falls to zero and below, and far water would lose its sky reflection entirely.
         if (i == 0)
@@ -604,9 +430,41 @@ vec3 tapRefMap(vec3 pos, vec3 dir, out float w, out float dw, float lod, vec3 c,
             w = max(w, 1e-6);
         }
     }
+    return w;
+}
+
+// Where a probe's cube is sampled for a ray from `pos` along `dir`, parallax corrected: a box's walls `scale` times out,
+// a manual sphere's radius, and an automatic one's 4 km, which effectively disables parallax correction for
+// automatically placed probes to keep from bombing the world with obvious spheres. Water takes the default probe
+// without parallax.
+vec3 probeSampleDir(int i, vec3 pos, vec3 box_pos, vec3 dir, float scale, bool water)
+{
+    vec3 c = refSphere[i].xyz;
+    vec3 v;
+    if (refIndex[i].w < 0)
+    {
+        v = boxIntersectFrom(pos, box_pos, dir, refBox[i], scale);
+    }
+    else
+    {
+        float r = refSphere[i].w;
+        float rr = r * r;
+
+        v = (water && i == 0) ? c + dir : sphereIntersect(pos, dir, c, refIndex[i].w < 1 ? 4096.0*4096.0 : rr);
+    }
 
     v -= c;
-    v = env_mat * v;
+    return env_mat * v;
+}
+
+// Tap a reflection probe
+// pos - position of pixel
+// dir - direction to sample
+// lod - which mip to sample (lower is higher res, sharper reflections)
+// i - index of probe
+vec3 probeRadiance(int i, vec3 pos, vec3 box_pos, vec3 dir, float lod, bool water)
+{
+    vec3 v = probeSampleDir(i, pos, box_pos, dir, 1.0, water);
 
     // Unnormalized on purpose: a cubemap fetch takes a direction of any length. The normalize
     // that used to sit here was assigned to a local nothing read, so it was one inverse square
@@ -651,12 +509,6 @@ vec2 shUnpackHalves(uint u)
 }
 #endif
 
-// Tap an irradiance map
-// pos - position of pixel
-// dir - pixel normal
-// w - weight of sample (distance and angular attenuation)
-// dw - weight of sample (distance only)
-// i - index of probe
 // Reconstruct irradiance for a normal direction from a probe's nine coefficients.
 //
 // The band scaling is the clamped-cosine convolution (Ramamoorthi and Hanrahan): pi, 2pi/3 and
@@ -716,40 +568,14 @@ vec3 evalSHIrradiance(vec3 n, int layer)
     return max(e, vec3(0.0));
 }
 
-vec3 tapIrradianceMap(vec3 pos, vec3 dir, out float w, out float dw, vec3 c, int i, vec3 amblit)
+// Tap an irradiance map
+// pos - position of pixel
+// dir - pixel normal
+// i - index of probe
+vec3 probeIrradiance(int i, vec3 pos, vec3 box_pos, vec3 dir, vec3 amblit, bool water)
 {
-    // parallax adjustment
-    vec3 v;
-    if (refIndex[i].w < 0)
-    {
-        float d = 0.0;
-        v = boxIntersect(pos, dir, refBox[i], d, 3.0);
-        w = max(d, 0.001);
-        dw = boxDistanceWeight(d, refParams[i].z);
-    }
-    else
-    {
-        float r = refSphere[i].w; // radius of sphere volume
-
-        // pad sphere for manual probe extending into automatic probe space
-        float rr = r * r;
-
-        v = (water_sample && i == 0) ? c + dir : // water takes the default probe without parallax
-            sphereIntersect(pos, dir, c,
-        refIndex[i].w < 1 ? 4096.0*4096.0 : // <== effectively disable parallax correction for automatically placed probes to keep from bombing the world with obvious spheres
-                rr);
-
-        w = sphereWeight(pos, dir, refSphere[i].xyz, r, refParams[i], dw);
-        // The default probe is the fallback everywhere. Past its 4 km radius, which only an infinite projection
-        // shows, its weight falls to zero and below, and far water would lose its sky reflection entirely.
-        if (i == 0)
-        {
-            w = max(w, 1e-6);
-        }
-    }
-
-    v -= c;
-    v = env_mat * v;
+    // pad the box for a manual probe extending into automatic probe space
+    vec3 v = probeSampleDir(i, pos, box_pos, dir, 3.0, water);
 
     // The parallax correction can land on the probe's own origin, and normalize(0) is a NaN
     // going straight into the SH evaluation and out into the frame. The sample direction is what
@@ -772,8 +598,121 @@ vec3 tapIrradianceMap(vec3 pos, vec3 dir, out float w, out float dw, vec3 c, int
     return col;
 }
 
+// What a pass over the probes holding a point taps of each: its irradiance along `norm` where `ambient`, and its
+// radiance along `gloss_dir` at mip `gloss_lod` where `gloss`, and along `legacy_dir` at mip 0 where `legacy`.
+struct ProbeTaps
+{
+    vec3  norm;
+    vec3  amblit;
+    bool  ambient;
+    vec3  gloss_dir;
+    float gloss_lod;
+    bool  gloss;
+    vec3  legacy_dir;
+    bool  legacy;
+    bool  water;
+};
+
+// The taps' weighted sums, the automatic probes' (0) apart from the manual ones' (1).
+struct ProbeSums
+{
+    vec3  ambient0, ambient1;
+    vec3  gloss0, gloss1;
+    vec3  legacy0, legacy1;
+    float wsum0, wsum1;
+    float dwsum0, dwsum1;
+    // <SK:Nexii> Cluster probes: the census clusters' fills (2) and the default probe (3), tiers of their own.
+    vec3  ambient2, ambient3;
+    vec3  gloss2, gloss3;
+    vec3  legacy2, legacy3;
+    float wsum2, wsum3;
+    float dwsum2, dwsum3;
+    // </SK:Nexii>
+};
+
+// Where pos lies in probe `i`'s unit cube, if it is a box, for a probe tapped without probeHolds asking.
+vec3 probeBoxPos(int i, vec3 pos)
+{
+    return refIndex[i].w < 0 ? (refBox[i] * vec4(pos, 1.0)).xyz : vec3(0);
+}
+
+// Probe `i`'s taps, weighted into `s`.
+void probeTap(int i, vec3 pos, vec3 box_pos, ProbeTaps t, inout ProbeSums s)
+{
+    float dw = 0;
+    float w = probeWeight(i, pos, box_pos, dw);
+    vec3 ambient = t.ambient ? probeIrradiance(i, pos, box_pos, t.norm, t.amblit, t.water) : vec3(0);
+    vec3 gloss = t.gloss ? probeRadiance(i, pos, box_pos, t.gloss_dir, t.gloss_lod, t.water) : vec3(0);
+    vec3 legacy = t.legacy ? probeRadiance(i, pos, box_pos, t.legacy_dir, 0.0, t.water) : vec3(0);
+
+    // <SK:Nexii> Cluster probes: each tier sums apart.
+    int tier = skProbeTier(i);
+    if (tier == 3)
+    {
+        s.ambient3 += ambient*w;
+        s.gloss3 += gloss*w;
+        s.legacy3 += legacy*w;
+        s.wsum3 += w;
+        s.dwsum3 += dw;
+    }
+    else if (tier == 2)
+    {
+        s.ambient2 += ambient*w;
+        s.gloss2 += gloss*w;
+        s.legacy2 += legacy*w;
+        s.wsum2 += w;
+        s.dwsum2 += dw;
+    }
+    else if (tier == 0) // </SK:Nexii>
+    {
+        s.ambient0 += ambient*w;
+        s.gloss0 += gloss*w;
+        s.legacy0 += legacy*w;
+        s.wsum0 += w;
+        s.dwsum0 += dw;
+    }
+    else
+    {
+        s.ambient1 += ambient*w;
+        s.gloss1 += gloss*w;
+        s.legacy1 += legacy*w;
+        s.wsum1 += w;
+        s.dwsum1 += dw;
+    }
+}
+
+// mix automatic and manual probes, the automatic ones' sum `col0` only while `automatic`: once a box has shut them
+// out, those tapped before it give nothing
+vec3 probeMix(vec3 col0, vec3 col1, ProbeSums s, bool automatic)
+{
+    if (!automatic)
+    {
+        col0 = vec3(0);
+    }
+
+    if (automatic && s.wsum0 > 0.0)
+    { // some automatic probes were sampled
+        col0 *= 1.0/s.wsum0;
+        if (s.wsum1 > 0.0)
+        { //some manual probes were sampled, mix between the two
+            col1 *= 1.0/s.wsum1;
+            col1 = mix(col0, col1, min(s.dwsum1, 1.0));
+            col0 = vec3(0);
+        }
+    }
+    else if (s.wsum1 > 0.0)
+    {
+        // manual probes were sampled but no automatic probes were
+        col1 *= 1.0/s.wsum1;
+        col0 = vec3(0);
+    }
+
+    return col1+col0;
+}
+
 // <SK:Nexii> Cluster probes: four tiers, each mixed over the one below it by its distance weight.
-// 0 automatic, 1 manual, 2 a census cluster's fill (bit 28 of refParams.w), 3 the default probe.
+// 0 automatic, 1 manual, 2 a census cluster's fill (bit 28 of refParams.w), 3 the default probe; once a box has shut
+// the automatic probes out, only the manual tier is left.
 void skMixProbeTier(inout vec3 ret, inout bool any, vec3 col, float wsum, float dwsum)
 {
     if (wsum > 0.0)
@@ -784,81 +723,158 @@ void skMixProbeTier(inout vec3 ret, inout bool any, vec3 col, float wsum, float 
     }
 }
 
-vec3 skMixProbeTiers(vec3 col[4], float wsum[4], float dwsum[4])
+vec3 skProbeMix(vec3 col0, vec3 col1, vec3 col2, vec3 col3, ProbeSums s, bool automatic)
 {
     vec3 ret = vec3(0);
     bool any = false;
-    skMixProbeTier(ret, any, col[3], wsum[3], dwsum[3]);
-    skMixProbeTier(ret, any, col[2], wsum[2], dwsum[2]);
-    skMixProbeTier(ret, any, col[0], wsum[0], dwsum[0]);
-    skMixProbeTier(ret, any, col[1], wsum[1], dwsum[1]);
+    if (automatic)
+    {
+        skMixProbeTier(ret, any, col3, s.wsum3, s.dwsum3);
+        skMixProbeTier(ret, any, col2, s.wsum2, s.dwsum2);
+        skMixProbeTier(ret, any, col0, s.wsum0, s.dwsum0);
+    }
+    skMixProbeTier(ret, any, col1, s.wsum1, s.dwsum1);
     return ret;
 }
 // </SK:Nexii>
 
-vec3 sampleProbes(vec3 pos, vec3 dir, float lod)
+// Taps every probe that holds `pos`, up to REF_SAMPLE_COUNT, each as it is found: the probes from the first whose
+// bounding sphere can reach this depth (getStartIndex), until one lies wholly beyond it, which the list being sorted on
+// the nearest depth each reaches makes the last; and once one with neighbours holds it, its neighbours, which end the
+// search. A box that holds the point shuts out the automatic probes, those found before it too; the default probe 0,
+// which smooths out the automatic ones, comes last while they are not shut out. Water takes no automatic probe but
+// probe 0, which it always takes. Sets each tap's mix of the automatic and manual probes it took.
+void sampleProbeTaps(vec3 pos, ProbeTaps t, inout vec3 ambenv, inout vec3 glossenv, inout vec3 legacyenv)
 {
-    float wsum[4] = float[4](0.0, 0.0, 0.0, 0.0); // <SK:Nexii> Cluster probes: per tier, see skProbeTier
-    float dwsum[4] = float[4](0.0, 0.0, 0.0, 0.0);
-    vec3 col[4] = vec3[4](vec3(0), vec3(0), vec3(0), vec3(0));
+    ProbeSums s;
+    s.ambient0 = vec3(0);
+    s.ambient1 = vec3(0);
+    s.gloss0 = vec3(0);
+    s.gloss1 = vec3(0);
+    s.legacy0 = vec3(0);
+    s.legacy1 = vec3(0);
+    s.wsum0 = 0;
+    s.wsum1 = 0;
+    s.dwsum0 = 0;
+    s.dwsum1 = 0;
+    // <SK:Nexii> Cluster probes
+    s.ambient2 = vec3(0);
+    s.ambient3 = vec3(0);
+    s.gloss2 = vec3(0);
+    s.gloss3 = vec3(0);
+    s.legacy2 = vec3(0);
+    s.legacy3 = vec3(0);
+    s.wsum2 = 0;
+    s.wsum3 = 0;
+    s.dwsum2 = 0;
+    s.dwsum3 = 0;
+    // </SK:Nexii>
 
-    for (int idx = 0; idx < probeInfluences; ++idx)
+    bool automatic = !t.water;
+    bool boxed = false;
+    vec3 box_pos = vec3(0);
+    int count = 0;
+
+#if REFMAP_LEVEL > 0
+    int i = getStartIndex(pos);
+    int neighbor = -1;
+    int neighbor_base = 0;
+    int neighbor_count = 0;
+    // TODO: make some sort of structure that reduces the number of distance checks
+    while (count < REF_SAMPLE_COUNT)
     {
-        int i = probeIndex[idx];
-        int p = skProbeTier(i); // <SK:Nexii> Cluster probes
+        int idx;
+        if (neighbor < 0)
+        {
+            // The probes are sorted on the nearest depth their bounding sphere reaches (refParams.w),
+            // which the bucket's lower bound already relies on: from the first that lies wholly
+            // beyond this point on, none can hold it.
+            if (i >= refmapCount || refParams[i].w > -pos.z)
+            {
+                break;
+            }
+            idx = i++;
+        }
+        else
+        {
+            // up to REF_SAMPLE_COUNT-1 neighbors (neighbor_base is an ivec4 index)
+            if (neighbor >= neighbor_count)
+            {
+                break;
+            }
+            idx = refNeighbor[neighbor_base + (neighbor >> 2)][neighbor & 3];
+            ++neighbor;
+        }
 
-        if (p != 1 && !sample_automatic)
+        if (skProbeTier(idx) == 2 || !probeHolds(idx, pos, automatic, boxed, box_pos)) // <SK:Nexii> Cluster probes are tapped below
         {
             continue;
         }
 
-        float w = 0;
-        float dw = 0;
-        vec3 refcol;
-
+        // never allow automatic probes to encroach on box probes
+        if (boxed)
         {
-            refcol = tapRefMap(pos, dir, w, dw, lod, refSphere[i].xyz, i);
+            automatic = false;
+        }
 
-            col[p] += refcol.rgb*w;
-            wsum[p] += w;
-            dwsum[p] += dw;
+        probeTap(idx, pos, box_pos, t, s);
+        ++count;
+
+        if (neighbor < 0 && refIndex[idx].y != -1)
+        {
+            neighbor_base = refIndex[idx].y;
+            neighbor_count = refIndex[idx].z;
+            neighbor = 0;
         }
     }
 
-    return skMixProbeTiers(col, wsum, dwsum); // <SK:Nexii> Cluster probes
-}
-
-vec3 sampleProbeAmbient(vec3 pos, vec3 dir, vec3 amblit)
-{
-    // modified copy/paste of sampleProbes follows, will likely diverge from sampleProbes further
-    // as irradiance map mixing is tuned independently of radiance map mixing
-    float wsum[4] = float[4](0.0, 0.0, 0.0, 0.0); // <SK:Nexii> Cluster probes: per tier, see skProbeTier
-    float dwsum[4] = float[4](0.0, 0.0, 0.0, 0.0);
-    vec3 col[4] = vec3[4](vec3(0), vec3(0), vec3(0), vec3(0));
-
-    for (int idx = 0; idx < probeInfluences; ++idx)
+    // <SK:Nexii> Cluster probes: every fill holding pos (refBucket[0].yz is their range).
+    for (int ci = refBucket[0].y; automatic && ci < refBucket[0].z && count < REF_SAMPLE_COUNT - 1; ++ci)
     {
-        int i = probeIndex[idx];
-        int p = skProbeTier(i); // <SK:Nexii> Cluster probes
-
-        if (p != 1 && !sample_automatic)
+        if (skProbeTier(ci) == 2 && probeHolds(ci, pos, true, boxed, box_pos))
         {
-            continue;
+            probeTap(ci, pos, box_pos, t, s);
+            ++count;
         }
+    }
+    // </SK:Nexii>
 
+    if (automatic && count < REF_SAMPLE_COUNT)
+    { // probe at index 0 is a special probe for smoothing out automatic probes
+        probeTap(0, pos, probeBoxPos(0, pos), t, s);
+        ++count;
+    }
+#else
+    // Water takes probe 0 below.
+    if (!t.water)
+    {
+        probeTap(0, pos, probeBoxPos(0, pos), t, s);
+        ++count;
+    }
+#endif
+
+    if (t.water)
+    {
+        // always include void probe on water
+        automatic = true;
+        if (count < REF_SAMPLE_COUNT)
         {
-            float w = 0;
-            float dw = 0;
-
-            vec3 refcol = tapIrradianceMap(pos, dir, w, dw, refSphere[i].xyz, i, amblit);
-
-            col[p] += refcol*w;
-            wsum[p] += w;
-            dwsum[p] += dw;
+            probeTap(0, pos, probeBoxPos(0, pos), t, s);
         }
     }
 
-    return skMixProbeTiers(col, wsum, dwsum); // <SK:Nexii> Cluster probes
+    if (t.ambient)
+    {
+        ambenv = skProbeMix(s.ambient0, s.ambient1, s.ambient2, s.ambient3, s, automatic); // <SK:Nexii> Cluster probes
+    }
+    if (t.gloss)
+    {
+        glossenv = skProbeMix(s.gloss0, s.gloss1, s.gloss2, s.gloss3, s, automatic); // <SK:Nexii> Cluster probes
+    }
+    if (t.legacy)
+    {
+        legacyenv = skProbeMix(s.legacy0, s.legacy1, s.legacy2, s.legacy3, s, automatic); // <SK:Nexii> Cluster probes
+    }
 }
 
 #if defined(HERO_PROBES)
@@ -917,8 +933,9 @@ void tapHeroProbe(inout vec3 glossenv, vec3 pos, vec3 norm, float glossiness)
 
 
 
-void doProbeSample(inout vec3 ambenv, inout vec3 glossenv,
-        vec2 tc, vec3 pos, vec3 norm, float glossiness, bool transparent, vec3 amblit)
+// What sampleReflectionProbes taps: the irradiance along the normal, and the radiance along the GGX lobe's dominant
+// direction at the mip of its roughness.
+ProbeTaps pbrProbeTaps(vec3 pos, vec3 norm, float glossiness, vec3 amblit, bool water)
 {
     // TODO - don't hard code lods
     float reflection_lods = max_probe_lod;
@@ -931,14 +948,58 @@ void doProbeSample(inout vec3 ambenv, inout vec3 glossenv,
     float perceptualRoughness = 1.0 - glossiness;
     refnormpersp = getSpecularDominantDir(norm.xyz, refnormpersp, perceptualRoughness);
 
-    ambenv = amblit;
+    ProbeTaps t;
+    t.norm = norm;
+    t.amblit = amblit;
+    t.ambient = classic_mode == 0;
+    t.gloss_dir = refnormpersp;
+    t.gloss_lod = perceptualRoughness*reflection_lods;
+    t.gloss = true;
+    t.legacy_dir = vec3(0);
+    t.legacy = false;
+    t.water = water;
+    return t;
+}
 
-    if (classic_mode == 0)
-        ambenv = sampleProbeAmbient(pos, norm, amblit);
+// What sampleReflectionProbesLegacy taps: the irradiance along the normal, the radiance along the dominant direction
+// where the surface is glossy, and along the mirror direction at mip 0 where it takes the environment.
+ProbeTaps legacyProbeTaps(vec3 pos, vec3 norm, float glossiness, float envIntensity, vec3 amblit)
+{
+    float reflection_lods = max_probe_lod;
 
-    float lod = perceptualRoughness*reflection_lods;
-    glossenv = sampleProbes(pos, refnormpersp, lod);
+    vec3 refnormpersp = reflect(pos.xyz, norm.xyz);
 
+    ProbeTaps t;
+    t.norm = norm;
+    t.amblit = amblit;
+    t.ambient = classic_mode == 0;
+    t.gloss = glossiness > 0.0;
+    t.gloss_dir = vec3(0);
+    t.gloss_lod = 0.0;
+    if (t.gloss)
+    {
+        // (1.0 - glossiness) is this path's perceptual roughness -- it is already what selects
+        // the prefiltered mip, so the lobe correction reads it the same way.
+        float perceptualRoughness = 1.0 - glossiness;
+
+        // Bend toward the normal with roughness, as the PBR path does. A prefiltered
+        // probe sampled along the mirror direction fetches from slightly the wrong place on
+        // exactly the surfaces whose lobe is widest, which reads as reflections sliding across
+        // curvature. The legacy lookup keeps the mirror direction on purpose: legacyenv is
+        // the roughness-zero case, where the bend is the identity anyway, and the screen-space
+        // march wants the true reflection ray.
+        t.gloss_dir = getSpecularDominantDir(norm.xyz, normalize(refnormpersp), perceptualRoughness);
+        t.gloss_lod = perceptualRoughness*reflection_lods;
+    }
+    t.legacy = envIntensity > 0.0;
+    t.legacy_dir = normalize(refnormpersp);
+    t.water = false;
+    return t;
+}
+
+// The screen-space reflection and the hero probe over sampleReflectionProbes' probes.
+void pbrProbeFinish(inout vec3 glossenv, vec2 tc, vec3 pos, vec3 norm, float glossiness, bool transparent, vec3 refnormpersp)
+{
 #if defined(SSR)
     // Skip the march only where it would contribute nothing anyway. Asking the SSR unit for its
     // own fade threshold keeps this from drifting away from it again. A transparent surface
@@ -969,29 +1030,88 @@ void doProbeSample(inout vec3 ambenv, inout vec3 glossenv,
     tapHeroProbe(glossenv, pos, norm, glossiness);
 }
 
+// The screen-space reflection and the hero probe over sampleReflectionProbesLegacy's probes.
+void legacyProbeFinish(inout vec3 glossenv, inout vec3 legacyenv, vec2 tc, vec3 pos, vec3 norm, float glossiness,
+        bool transparent)
+{
+#if defined(SSR)
+    // Gated the same way the PBR path is. Both consumers below blend by ssr.a, and ssr.a is
+    // already zero at these glossiness values -- the march's own fade reaches zero at
+    // ssrMinGlossiness(), and the transparent branch scales by glossiness directly. alphaF
+    // calls this with glossiness 0, so every legacy alpha fragment in the scene was paying for
+    // a full ray march whose result was then multiplied by nothing.
+    if (cube_snapshot != 1 && (transparent ? glossiness > 0.0 : glossiness > ssrMinGlossiness()))
+    {
+        vec4 ssr = vec4(0);
+
+        vec3 ssrDir = normalize(reflect(pos.xyz, norm.xyz));
+
+        if (transparent)
+        {
+            tapScreenSpaceReflection(1, tc, pos, norm, ssrDir, ssr, sceneMap, 1);
+            ssr.a *= glossiness;
+        }
+        else
+        {
+            tapScreenSpaceReflection(1, tc, pos, norm, ssrDir, ssr, sceneMap, glossiness);
+        }
+
+        glossenv = mix(glossenv, ssr.rgb, ssr.a);
+        legacyenv = mix(legacyenv, ssr.rgb, ssr.a);
+    }
+#endif
+
+    tapHeroProbe(glossenv, pos, norm, glossiness);
+    tapHeroProbe(legacyenv, pos, norm, 1.0);
+}
+
 void sampleReflectionProbes(inout vec3 ambenv, inout vec3 glossenv,
         vec2 tc, vec3 pos, vec3 norm, float glossiness, bool transparent, vec3 amblit)
 {
-    preProbeSample(pos);
-    doProbeSample(ambenv, glossenv, tc, pos, norm, glossiness, transparent, amblit);
+    ProbeTaps t = pbrProbeTaps(pos, norm, glossiness, amblit, false);
+    vec3 legacyenv = vec3(0);
+    ambenv = amblit;
+    sampleProbeTaps(pos, t, ambenv, glossenv, legacyenv);
+    pbrProbeFinish(glossenv, tc, pos, norm, glossiness, transparent, t.gloss_dir);
 }
 
 void sampleReflectionProbesWater(inout vec3 ambenv, inout vec3 glossenv,
         vec2 tc, vec3 pos, vec3 norm, float glossiness, vec3 amblit)
 {
     // don't sample automatic probes for water
-    sample_automatic = false;
-    preProbeSample(pos);
-    sample_automatic = true;
-    // always include void probe on water
-    if (probeInfluences < REF_SAMPLE_COUNT)
-    {
-        probeIndex[probeInfluences++] = 0;
-    }
+    ProbeTaps t = pbrProbeTaps(pos, norm, glossiness, amblit, true);
+    vec3 legacyenv = vec3(0);
+    ambenv = amblit;
+    sampleProbeTaps(pos, t, ambenv, glossenv, legacyenv);
+    pbrProbeFinish(glossenv, tc, pos, norm, glossiness, false, t.gloss_dir);
+}
 
-    water_sample = true;
-    doProbeSample(ambenv, glossenv, tc, pos, norm, glossiness, false, amblit);
-    water_sample = false;
+void sampleReflectionProbesLegacy(inout vec3 ambenv, inout vec3 glossenv, inout vec3 legacyenv,
+        vec2 tc, vec3 pos, vec3 norm, float glossiness, float envIntensity, bool transparent, vec3 amblit)
+{
+    ProbeTaps t = legacyProbeTaps(pos, norm, glossiness, envIntensity, amblit);
+    ambenv = amblit;
+    sampleProbeTaps(pos, t, ambenv, glossenv, legacyenv);
+    legacyProbeFinish(glossenv, legacyenv, tc, pos, norm, glossiness, transparent);
+}
+
+// sampleReflectionProbes where `pbr`, sampleReflectionProbesLegacy where not, in one pass over the probes: a group of
+// pixels holding both kinds walks the probes once, not once for each.
+void sampleReflectionProbesEither(bool pbr, inout vec3 ambenv, inout vec3 glossenv, inout vec3 legacyenv,
+        vec2 tc, vec3 pos, vec3 norm, float glossiness, float envIntensity, bool transparent, vec3 amblit)
+{
+    ProbeTaps t = pbr ? pbrProbeTaps(pos, norm, glossiness, amblit, false)
+                      : legacyProbeTaps(pos, norm, glossiness, envIntensity, amblit);
+    ambenv = amblit;
+    sampleProbeTaps(pos, t, ambenv, glossenv, legacyenv);
+    if (pbr)
+    {
+        pbrProbeFinish(glossenv, tc, pos, norm, glossiness, transparent, t.gloss_dir);
+    }
+    else
+    {
+        legacyProbeFinish(glossenv, legacyenv, tc, pos, norm, glossiness, transparent);
+    }
 }
 
 void debugTapRefMap(vec3 pos, vec3 dir, float depth, int i, inout vec4 col)
@@ -1074,17 +1194,69 @@ float skProbeDistance(int i, vec3 pos)
     return length(pos - refSphere[i].xyz) - refSphere[i].w;
 }
 
-// The weight sampleProbes gives probe i at pos, before the per-class normalisation.
-float skProbeRawWeight(int i, vec3 pos, out float dw)
+// The probes sampleProbeTaps would tap at pos, in its order, and whether the automatic tiers survive a box.
+int skProbeSelect(vec3 pos, out int list[REF_SAMPLE_COUNT], out bool automatic)
 {
-    if (refIndex[i].w < 0)
+    automatic = true;
+    bool boxed = false;
+    vec3 box_pos = vec3(0);
+    int count = 0;
+#if REFMAP_LEVEL > 0
+    int i = getStartIndex(pos);
+    int neighbor = -1;
+    int neighbor_base = 0;
+    int neighbor_count = 0;
+    while (count < REF_SAMPLE_COUNT)
     {
-        vec3 u = (refBox[i] * vec4(pos, 1.0)).xyz;
-        float d = 1.0 - max(abs(u.x), max(abs(u.y), abs(u.z)));
-        dw = boxDistanceWeight(d, refParams[i].z);
-        return max(d, 0.001);
+        int idx;
+        if (neighbor < 0)
+        {
+            if (i >= refmapCount || refParams[i].w > -pos.z)
+            {
+                break;
+            }
+            idx = i++;
+        }
+        else
+        {
+            if (neighbor >= neighbor_count)
+            {
+                break;
+            }
+            idx = refNeighbor[neighbor_base + (neighbor >> 2)][neighbor & 3];
+            ++neighbor;
+        }
+        if (skProbeTier(idx) == 2 || !probeHolds(idx, pos, automatic, boxed, box_pos))
+        {
+            continue;
+        }
+        if (boxed)
+        {
+            automatic = false;
+        }
+        list[count++] = idx;
+        if (neighbor < 0 && refIndex[idx].y != -1)
+        {
+            neighbor_base = refIndex[idx].y;
+            neighbor_count = refIndex[idx].z;
+            neighbor = 0;
+        }
     }
-    return sphereWeight(pos, vec3(0.0), refSphere[i].xyz, refSphere[i].w, refParams[i], dw);
+    for (int ci = refBucket[0].y; automatic && ci < refBucket[0].z && count < REF_SAMPLE_COUNT - 1; ++ci)
+    {
+        if (skProbeTier(ci) == 2 && probeHolds(ci, pos, true, boxed, box_pos))
+        {
+            list[count++] = ci;
+        }
+    }
+    if (automatic && count < REF_SAMPLE_COUNT)
+    {
+        list[count++] = 0;
+    }
+#else
+    list[count++] = 0;
+#endif
+    return count;
 }
 
 vec4 skProbePulseDebug(vec3 pos, vec3 norm)
@@ -1120,27 +1292,28 @@ vec4 skProbePulseDebug(vec3 pos, vec3 norm)
 
     vec4 col = band + vec4(tint * tint_a, tint_a) * (1.0 - band.a);
 
-    // The real selection: first containing probe and its neighbours, weighted and mixed as sampleProbes does.
-    sample_automatic = true;
-    preProbeSample(pos);
+    // The real selection: the probes sampleProbeTaps takes, weighted and mixed as skProbeMix does.
+    int list[REF_SAMPLE_COUNT];
+    bool automatic;
+    int n = skProbeSelect(pos, list, automatic);
     float wsum[4] = float[4](0.0, 0.0, 0.0, 0.0);
     float dwsum[4] = float[4](0.0, 0.0, 0.0, 0.0);
     float wraw[REF_SAMPLE_COUNT];
-    for (int k = 0; k < probeInfluences; ++k)
+    for (int k = 0; k < n; ++k)
     {
-        int i = probeIndex[k];
+        int i = list[k];
         int p = skProbeTier(i);
         wraw[k] = 0.0;
-        if (p != 1 && !sample_automatic)
+        if (p != 1 && !automatic)
         {
             continue;
         }
         float dw = 0.0;
-        wraw[k] = skProbeRawWeight(i, pos, dw);
+        wraw[k] = probeWeight(i, pos, probeBoxPos(i, pos), dw);
         wsum[p] += wraw[k];
         dwsum[p] += dw;
     }
-    // Each tier's share of the mix, top down: what skMixProbeTiers gives it once a lower tier is present.
+    // Each tier's share of the mix, top down: what skProbeMix gives it once a lower tier is present.
     float tier_share[4];
     float remaining = 1.0;
     const int top_down[4] = int[4](1, 0, 2, 3);
@@ -1157,9 +1330,9 @@ vec4 skProbePulseDebug(vec3 pos, vec3 norm)
     }
     float w1 = 0.0, w2 = 0.0;
     int i1 = -1, i2 = -1;
-    for (int k = 0; k < probeInfluences; ++k)
+    for (int k = 0; k < n; ++k)
     {
-        int i = probeIndex[k];
+        int i = list[k];
         int p = skProbeTier(i);
         float w = wsum[p] > 0.0 ? wraw[k] / wsum[p] * tier_share[p] : 0.0;
         if (w > w1)
@@ -1194,73 +1367,6 @@ vec4 skProbePulseDebug(vec3 pos, vec3 norm)
     return col.a > 0.0 ? vec4(col.rgb / col.a, min(col.a, 1.0)) : vec4(0.0);
 }
 // </SK:Nexii>
-
-void sampleReflectionProbesLegacy(inout vec3 ambenv, inout vec3 glossenv, inout vec3 legacyenv,
-        vec2 tc, vec3 pos, vec3 norm, float glossiness, float envIntensity, bool transparent, vec3 amblit)
-{
-    float reflection_lods = max_probe_lod;
-    preProbeSample(pos);
-
-    vec3 refnormpersp = reflect(pos.xyz, norm.xyz);
-
-    ambenv = amblit;
-
-    if (classic_mode == 0)
-        ambenv = sampleProbeAmbient(pos, norm, amblit);
-
-    if (glossiness > 0.0)
-    {
-        // (1.0 - glossiness) is this path's perceptual roughness -- it is already what selects
-        // the prefiltered mip, so the lobe correction reads it the same way.
-        float perceptualRoughness = 1.0 - glossiness;
-
-        // Bend toward the normal with roughness, as doProbeSample does for PBR. A prefiltered
-        // probe sampled along the mirror direction fetches from slightly the wrong place on
-        // exactly the surfaces whose lobe is widest, which reads as reflections sliding across
-        // curvature. The two lookups below keep the mirror direction on purpose: legacyenv is
-        // the roughness-zero case, where the bend is the identity anyway, and the screen-space
-        // march wants the true reflection ray.
-        vec3 dominantDir = getSpecularDominantDir(norm.xyz, normalize(refnormpersp), perceptualRoughness);
-
-        float lod = perceptualRoughness*reflection_lods;
-        glossenv = sampleProbes(pos, dominantDir, lod);
-    }
-
-    if (envIntensity > 0.0)
-    {
-        legacyenv = sampleProbes(pos, normalize(refnormpersp), 0.0);
-    }
-
-#if defined(SSR)
-    // Gated the same way the PBR path is. Both consumers below blend by ssr.a, and ssr.a is
-    // already zero at these glossiness values -- the march's own fade reaches zero at
-    // ssrMinGlossiness(), and the transparent branch scales by glossiness directly. alphaF
-    // calls this with glossiness 0, so every legacy alpha fragment in the scene was paying for
-    // a full ray march whose result was then multiplied by nothing.
-    if (cube_snapshot != 1 && (transparent ? glossiness > 0.0 : glossiness > ssrMinGlossiness()))
-    {
-        vec4 ssr = vec4(0);
-
-        vec3 ssrDir = normalize(refnormpersp);
-
-        if (transparent)
-        {
-            tapScreenSpaceReflection(1, tc, pos, norm, ssrDir, ssr, sceneMap, 1);
-            ssr.a *= glossiness;
-        }
-        else
-        {
-            tapScreenSpaceReflection(1, tc, pos, norm, ssrDir, ssr, sceneMap, glossiness);
-        }
-
-        glossenv = mix(glossenv, ssr.rgb, ssr.a);
-        legacyenv = mix(legacyenv, ssr.rgb, ssr.a);
-    }
-#endif
-
-    tapHeroProbe(glossenv, pos, norm, glossiness);
-    tapHeroProbe(legacyenv, pos, norm, 1.0);
-}
 
 void applyGlossEnv(inout vec3 color, vec3 glossenv, vec4 spec, vec3 pos, vec3 norm)
 {
