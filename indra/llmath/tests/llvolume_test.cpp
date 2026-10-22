@@ -742,7 +742,7 @@ namespace
     // The checks
 
     // Whether the face can be read at all: its counts and indices.
-    bool checkLayout(const LLVolumeFace& face, S32 index, Report& report, const std::string& where, bool active)
+    bool checkLayout(const LLVolumeFace& face, S32 index, bool sculpt, Report& report, const std::string& where, bool active)
     {
         auto fail = [&](std::string what)
         {
@@ -779,7 +779,9 @@ namespace
             {
                 fail(fmt::format("{} vertices for a grid of {} by {}", face.mNumVertices, face.mNumS, face.mNumT));
             }
-            if (face.mNumIndices != (face.mNumS - 1) * (face.mNumT - 1) * 6)
+            // A sculpt drops the triangles its pinches and poles make lines of.
+            const S32 grid_indices = (face.mNumS - 1) * (face.mNumT - 1) * 6;
+            if (sculpt ? face.mNumIndices > grid_indices : face.mNumIndices != grid_indices)
             {
                 fail(fmt::format("{} indices for a grid of {} by {}", face.mNumIndices, face.mNumS, face.mNumT));
             }
@@ -1045,10 +1047,23 @@ namespace
                 incident[groups[v]].push_back((U32)t);
             }
         }
+        // A grid vertex in one place with its neighbour is a pole or a pinch,
+        // whose lines a sculpt drops from its triangles.
+        auto pinched = [&](S32 v)
+        {
+            if (!isGrid(face))
+            {
+                return false;
+            }
+            const S32 s = v % face.mNumS;
+            const S32 t = v / face.mNumS;
+            return (s > 0 && groups[v - 1] == groups[v]) || (s + 1 < face.mNumS && groups[v + 1] == groups[v]) ||
+                   (t > 0 && groups[v - face.mNumS] == groups[v]) || (t + 1 < face.mNumT && groups[v + face.mNumS] == groups[v]);
+        };
         for (S32 v = 0; v < face.mNumVertices; ++v)
         {
             const std::vector<U32>& around = incident[groups[v]];
-            if (around.empty() || std::any_of(around.begin(), around.end(), [&](U32 t) { return triangles[t].degenerate; }))
+            if (around.empty() || pinched(v) || std::any_of(around.begin(), around.end(), [&](U32 t) { return triangles[t].degenerate; }))
             {
                 continue;
             }
@@ -1247,7 +1262,7 @@ namespace
         {
             LLVolumeFace& face = volume.getVolumeFace(i);
             const std::string where = fmt::format("{}: {}", name, faceName(face));
-            if (!checkLayout(face, i, report, where, how.checks & Checks::Layout))
+            if (!checkLayout(face, i, isSculpt(volume), report, where, how.checks & Checks::Layout))
             {
                 continue;
             }
@@ -2186,6 +2201,71 @@ namespace
         CHECK(report.failures == 0);
     }
 
+    // A triangle with two corners in one place is a line, and whatever reads
+    // the index buffer, a rasteriser or a navmesh builder, would take it for
+    // geometry. The pinch leaves a run of them, which the generator drops.
+    TEST_CASE("llvolume: a sculpt's pinched triangles are dropped", "[llvolume]")
+    {
+        for (S32 lod = 0; lod < LOD_COUNT; ++lod)
+        {
+            INFO(fmt::format("LOD {}", lod));
+            LLPointer<LLVolume> volume = buildSculpt(LL_SCULPT_TYPE_PLANE, pinchedMap(), lod);
+            REQUIRE(volume->getNumVolumeFaces() == 1);
+            const LLVolumeFace& face = volume->getVolumeFace(0);
+            REQUIRE(isGrid(face));
+            CHECK(face.mNumIndices % 3 == 0);
+            CHECK(face.mNumIndices > 0);
+            CHECK(face.mNumIndices < (face.mNumS - 1) * (face.mNumT - 1) * 6);
+            S32 lines = 0;
+            for (S32 i = 0; i + 2 < face.mNumIndices; i += 3)
+            {
+                const U16 a = face.mIndices[i];
+                const U16 b = face.mIndices[i + 1];
+                const U16 c = face.mIndices[i + 2];
+                REQUIRE(llmax(a, llmax(b, c)) < face.mNumVertices);
+                const LLVector4a* pos = face.mPositions;
+                if (pos[a].equals3(pos[b]) || pos[b].equals3(pos[c]) || pos[c].equals3(pos[a]))
+                {
+                    ++lines;
+                }
+            }
+            CHECK(lines == 0);
+        }
+    }
+
+    // A sculpt with no pinch loses nothing.
+    TEST_CASE("llvolume: a sculpt without a pinch keeps every triangle of its grid", "[llvolume]")
+    {
+        for (S32 lod = 0; lod < LOD_COUNT; ++lod)
+        {
+            INFO(fmt::format("LOD {}", lod));
+            LLPointer<LLVolume> volume = buildSculpt(LL_SCULPT_TYPE_PLANE, sculptMap(PINCH_MAP, PINCH_MAP, [](U16 x, U16 y)
+            {
+                return LLVector3((F32)x / (PINCH_MAP - 1) - 0.5f, (F32)y / (PINCH_MAP - 1) - 0.5f, 0.f);
+            }), lod);
+            REQUIRE(volume->getNumVolumeFaces() == 1);
+            const LLVolumeFace& face = volume->getVolumeFace(0);
+            REQUIRE(isGrid(face));
+            CHECK(face.mNumIndices == (face.mNumS - 1) * (face.mNumT - 1) * 6);
+        }
+    }
+
+    // A dropped triangle had no area, so it added nothing to any normal: the
+    // pinched plane's normals are the flat plane's on every vertex a kept
+    // triangle uses.
+    TEST_CASE("llvolume: dropping a sculpt's pinched triangles leaves its normals", "[llvolume]")
+    {
+        LLPointer<LLVolume> volume = buildSculpt(LL_SCULPT_TYPE_PLANE, pinchedMap(), 3);
+        REQUIRE(volume->getNumVolumeFaces() == 1);
+        const LLVolumeFace& face = volume->getVolumeFace(0);
+        const LLVector3 up = v3(face.mNormals[face.mIndices[0]]);
+        for (S32 i = 0; i < face.mNumIndices; ++i)
+        {
+            INFO(fmt::format("index {}", i));
+            CHECK(degreesBetween(v3(face.mNormals[face.mIndices[i]]), up) < 1.f);
+        }
+    }
+
     TEST_CASE("llvolume: a sculpt's copied row is a hard edge", "[llvolume]")
     {
         LLPointer<LLVolume> volume = buildSculpt(LL_SCULPT_TYPE_PLANE, foldedMap(), 3);
@@ -2340,7 +2420,7 @@ namespace
             { "cylinder", { 1.2500, 1.1667, 1.0889, 1.0625 }, { 1.0133, 1.0286, 1.0146, 1.0211 } },
             { "sphere", { 0.7778, 0.6944, 0.6429, 1.0833 }, { 1.0286, 1.0240, 1.0000, 1.0043 } },
             { "torus", { 0.6806, 1.1111, 1.0667, 1.0417 }, { 1.0122, 1.0080, 1.0000, 1.0010 } },
-            { "sculpt sphere", { 0.6806, 1.1250, 1.0625, 1.0312 }, { 1.0122, 1.0074, 1.0021, 1.0006 } },
+            { "sculpt sphere", { 0.7834, 1.2500, 1.1292, 1.0636 }, { 1.0122, 1.0074, 1.0021, 1.0006 } },
             { "sculpt plane", { 0.6806, 1.1250, 1.0625, 1.0312 }, { 1.0122, 1.0074, 1.0021, 1.0006 } },
         };
         const Shape shapes[] = { box(), cylinder(), sphere(), torus() };

@@ -6804,6 +6804,25 @@ bool LLVolumeFace::createSide(LLVolume* volume, bool partial_build)
             }
         }
 
+        // A pinched sculpt's triangles across the pinch are lines, which every index consumer would treat as geometry; drop them now the normals are summed, unless nothing would be left.
+        U16* kept = mIndices;
+        for (S32 i = 0; i + 2 < mNumIndices; i += 3)
+        {
+            const U16 i0 = mIndices[i];
+            const U16 i1 = mIndices[i + 1];
+            const U16 i2 = mIndices[i + 2];
+            if (pos[i0].equals3(pos[i1]) || pos[i1].equals3(pos[i2]) || pos[i2].equals3(pos[i0]))
+            {
+                continue;
+            }
+            *kept++ = i0;
+            *kept++ = i1;
+            *kept++ = i2;
+        }
+        if (kept != mIndices)
+        {
+            mNumIndices = static_cast<S32>(kept - mIndices);
+        }
     }
 
     return true;
