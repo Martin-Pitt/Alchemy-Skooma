@@ -6347,10 +6347,10 @@
             <key>Value</key>
             <integer>190</integer>
         </map>
-        <key>SKMapVehicleGrowMax</key>
+        <key>SKMapVehicleGrow</key>
         <map>
             <key>Comment</key>
-            <string>The most the mini-map enlarges vehicles when zoomed out so they stay legible (1 = true size, up to 6).</string>
+            <string>How much larger the mini-map draws vehicles once zoomed out past about 512 m, easing in from true size at 128 m (1 = always true size, up to 6).</string>
             <key>Persist</key>
             <integer>1</integer>
             <key>Type</key>
