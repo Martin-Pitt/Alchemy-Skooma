@@ -44,7 +44,7 @@ Ideas not yet committed to.
 
 | Idea | Note |
 |---|---|
-| **HUD anti-aliasing** | Smooth the edges of HUD attachments. Rye plans MSAA for the HUD layer upstream (2026-10-03), which replaces Soapstorm's supersampling; wait for it to land in `next` |
+| **HUD anti-aliasing** | Smooth the edges of HUD attachments. Rye plans MSAA for the HUD layer upstream (2026-10-03), which replaces Soapstorm's supersampling; wait for it to land in `develop` |
 | **Dynamic near clip** | Adjust the near clip plane as the camera moves. Skooma's depth setup differs from Soapstorm's focus-scaled near clip, so only the dynamic adjustment carries over |
 | **Procedural mesh tools** | In-viewer generators for useful meshes: roads, streets and pavements, and 3D terrain tiles that look good, with erosion, cliffs and similar features |
 | **Silhouette textures for creators** | Expose silhouette capture as a tool, so content creators can generate outline textures of weapons, vehicles and other objects for their own HUDs and UI |
@@ -75,7 +75,7 @@ The world foundations stack in processing order, each built on the one before an
 | Doc | For |
 |---|---|
 | [DEVELOPING.md](DEVELOPING.md) | Humans: setup, branches, daily loop |
-| [WORKFLOW.md](WORKFLOW.md) | Terse reference: `next` / `develop` / `feature-*`, `git skooma` commands |
+| [WORKFLOW.md](WORKFLOW.md) | Terse reference: `develop` (upstream) / `main` / `feature-*`, `git skooma` commands |
 | [UPSTREAM.md](UPSTREAM.md) | Parts that can go to Alchemy on their own, and what each depends on |
 | [INJECTIONS.md](INJECTIONS.md) | Every `<SK:Nexii>` edit to upstream files, grouped by feature |
 | [UI-LAYOUT.md](UI-LAYOUT.md) | XUI layout rules for floaters and panels |

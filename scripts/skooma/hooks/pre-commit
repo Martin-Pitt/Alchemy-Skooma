@@ -5,7 +5,7 @@
 branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null) || exit 0
 
 case "$branch" in
-next | publish)
+develop | publish)
     cat >&2 <<MSG
 
   Refused: '$branch' does not take commits.
@@ -16,8 +16,8 @@ next | publish)
 MSG
     exit 1
     ;;
-develop)
-    # Unlocked during fork setup (README, branding, glue).  Feature work does not
+main)
+    # The integration branch takes glue and setup commits.  Feature work does not
     # belong here — use a worktree so it stays upstreamable.
     exit 0
     ;;
@@ -44,7 +44,7 @@ if [ -n "$bad" ]; then
 
 $(printf '%s\n' "$bad" | sed 's/^/    /')
 
-  These belong on skooma-glue (or a skooma-<name> sidecar), not in a feature that
+  These belong on glue (or a skooma-<name> sidecar), not in a feature that
   will be sent upstream.  Unstage them:  git restore --staged <path>
 
 MSG

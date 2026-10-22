@@ -124,7 +124,7 @@ rule or are upstream-bound; each is listed here so the merged tree still has a r
 | `indra/newview/llviewerjoystick.cpp` | `feature-flycam-defaults` (`8e9dd18fd6`) | `setSNDefaults()` rewritten: SpaceNavigator axis scales, dead zones and feathering; `AutoLeveling` off, `JoystickAvatarEnabled` off, `JoystickEnabled` on | none — add one if the branch is not going upstream |
 | `indra/newview/llvoavatar.cpp` | `feature-nametag-dist-default` (`2470788efe`) | `NameTagShowDistance` cached-control fallback `true` → `false` | none — one-line default flip |
 | `indra/newview/app_settings/settings_alchemy.xml` | `feature-nametag-dist-default` | `NameTagShowDistance` default `1` → `0` | XML, no marker convention |
-| `README.md` | `develop` glue | Alchemy: Skooma branding and description | fork-only, never leaves `develop` |
+| `README.md` | `main` glue | Alchemy: Skooma branding and description | fork-only, never leaves `main` |
 | `indra/CMakeLists.txt`, `indra/cmake/Tracy.cmake`, `indra/cmake/ConfigurationReport.cmake`, `indra/llcommon/llprofiler.h` | `fix-tracy/memory-option` (`58fae983a2`) | `AL_ENABLE_TRACY_MEMORY` build option, off by default, gating `LL_PROFILE_ALLOC`/`LL_PROFILE_FREE`; a plain capture no longer carries every allocation | none — build option, upstream-bound |
 
 ---
