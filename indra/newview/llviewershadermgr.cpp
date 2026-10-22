@@ -46,6 +46,7 @@
 #include "llerrorcontrol.h"
 #include "llworld.h"
 #include "llsky.h"
+#include "skoverviewcapture.h" // <SK:Nexii> combat/minimap: the overview's programs
 
 #include "pipeline.h"
 
@@ -1306,6 +1307,7 @@ void LLViewerShaderMgr::loadShadersEffects()
 void LLViewerShaderMgr::loadShadersDeferred()
 {
     LL_PROFILE_ZONE_SCOPED;
+    bool success = true; // <SK:Nexii> the SK programs' blocks below chain on it
     bool use_sun_shadow = mShaderLevel[SHADER_DEFERRED] > 1 && mInputs.mGlobal.mShadowDetail > 0;
 
     if (mShaderLevel[SHADER_DEFERRED] == 0)
@@ -3579,6 +3581,13 @@ void LLViewerShaderMgr::loadShadersDeferred()
         built(gRlvSphereProgram.createShader(), gRlvSphereProgram);
     }
     // [/RLV:KB]
+
+    // <SK:Nexii> combat/minimap: the overview's programs; a failure leaves only the overview off.
+    if (success)
+    {
+        SKOverviewCapture::loadShaders(mShaderLevel[SHADER_DEFERRED]);
+    }
+    // </SK:Nexii>
 }
 
 void LLViewerShaderMgr::loadShadersObject()

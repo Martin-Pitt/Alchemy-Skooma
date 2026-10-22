@@ -62,7 +62,7 @@ class LLEventPoll;
 class LLVLComposition;
 class LLViewerObject;
 class LLMessageSystem;
-class LLNetMap;
+//class LLNetMap; // <SK:Nexii> SKNetMap retired the classic mini-map
 class LLViewerParcelOverlay;
 class LLSurface;
 class LLVOCache;
@@ -161,7 +161,7 @@ public:
     // Draw lines in the dirt showing ownership. Return number of
     // vertices drawn.
     void renderPropertyLines();
-    void renderPropertyLinesOnMinimap(F32 scale_pixels_per_meter, const F32* parcel_outline_color);
+    // <SK:Nexii> renderPropertyLinesOnMinimap removed with the classic mini-map
 
 
     // Call this whenever you change the height data in the region.

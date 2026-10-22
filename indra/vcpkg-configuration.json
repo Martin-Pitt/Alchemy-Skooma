@@ -54,6 +54,9 @@
       ]
     }
   ],
+  "overlay-ports": [
+    "cmake/ports"
+  ],
   "overlay-triplets": [
     "cmake/triplets"
   ]

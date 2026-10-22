@@ -39,6 +39,7 @@
 #include "lldrawpool.h"
 #include "llface.h"
 #include "llviewercamera.h"
+#include <functional> // <SK:Nexii> outline capture
 #include "llvector4a.h"
 #include "llvoavatar.h"
 #include "llfetchedgltfmaterial.h"
@@ -551,6 +552,9 @@ public:
     void pushDrawable(LLDrawable* drawable);
     void pushBridge(LLSpatialBridge* bridge);
     void pushDrawInfo(U32 type, LLDrawInfo* draw_info);
+    // <SK:Nexii> outline capture: drop draw infos from every render map, keeping the order of the rest.
+    void skEraseDrawInfos(const std::function<bool(const LLDrawInfo*)>& drop);
+    // </SK:Nexii>
 
     U32 getVisibleGroupsSize()      { return mVisibleGroupsSize; }
     U32 getAlphaGroupsSize()        { return mAlphaGroupsSize; }

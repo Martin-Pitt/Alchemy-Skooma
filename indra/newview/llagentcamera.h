@@ -30,6 +30,7 @@
 #include "llfollowcam.h"            // Ventrella
 #include "llhudeffectlookat.h"      // EPointAtType
 #include "llhudeffectpointat.h"     // ELookAtType
+#include "skcamerawarp.h"           // <SK:Nexii> camera warp
 
 class LLPickInfo;
 class LLVOAvatarSelf;
@@ -202,7 +203,13 @@ public:
     void            setAnimationDuration(F32 seconds);
     void            startCameraAnimation();
     void            stopCameraAnimation();
+    void            skipCameraSmoothing(); // <SK:Nexii> modal view: a pan moves the camera rigidly
+    void            startCameraWarp(const SKCameraWarp::Profile& profile); // <SK:Nexii> camera warp: restarts the animation as a warp (skcamerawarp.h)
 private:
+    // <SK:Nexii> camera warp: the animation follows mWarpProfile while set
+    bool            mCameraWarping = false;
+    SKCameraWarp::Profile mWarpProfile = SKCameraWarp::AVATAR;
+    // </SK:Nexii>
     LLFrameTimer    mAnimationTimer;    // Seconds that transition animation has been active
     F32             mAnimationDuration; // In seconds
     bool            mCameraAnimating;                   // Camera is transitioning from one mode to another
@@ -282,6 +289,7 @@ public:
     //--------------------------------------------------------------------
 public:
     void            handleScrollWheel(F32 clicks);                          // Mousewheel driven zoom
+    bool            cameraZoomToCursor(F32 clicks);                         // <SK:Nexii> Alt-cam wheel zoom about the point under the cursor
     void            cameraZoomIn(const F32 factor);                         // Zoom in by fraction of current distance
     F32             getCameraZoomFraction(bool get_third_person = false);   // Get camera zoom as fraction of minimum and maximum zoom
     void            setCameraZoomFraction(F32 fraction);                    // Set camera zoom as fraction of minimum and maximum zoom

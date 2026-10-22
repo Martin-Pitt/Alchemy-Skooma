@@ -268,6 +268,11 @@ public:
     // Detailed error checking can be enabled by setting gDebugGL to true
     void draw(U32 mode, U32 count, U32 indices_offset) const;
     void drawArrays(U32 mode, U32 offset, U32 count) const;
+    // <SK:Nexii> combat/minimap: several ranges of the bound buffer in one call (glMultiDrawArrays)
+    void multiDrawArrays(U32 mode, const GLint* first, const GLsizei* count, GLsizei draw_count) const;
+    // <SK:Nexii> combat/minimap: draw_count ALDrawArraysIndirectCommands from offset in commands, over the bound buffer
+    // (glMultiDrawArraysIndirect, GL 4.3); stride 0 for packed commands, and one a shader wrote is read past BARRIER_COMMAND.
+    void multiDrawArraysIndirect(U32 mode, const ALGPUBuffer& commands, size_t offset, GLsizei draw_count, GLsizei stride = 0) const;
     void drawRange(U32 mode, U32 start, U32 end, U32 count, U32 indices_offset) const;
 
     // draw without syncing matrices.  If you're positive there have been no matrix

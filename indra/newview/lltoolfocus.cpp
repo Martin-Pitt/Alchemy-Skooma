@@ -28,6 +28,7 @@
 
 // File includes
 #include "lltoolfocus.h"
+#include "skmodalview.h" // <SK:Nexii> modal view
 
 // Library includes
 #include "v3math.h"
@@ -143,7 +144,7 @@ bool LLToolCamera::handleMouseDown(S32 x, S32 y, MASK mask)
 
     gViewerWindow->hideCursor();
 
-    gViewerWindow->pickAsync(x, y, mask, pickCallback, /*bool pick_transparent*/ false, /*bool pick_rigged*/ false, /*bool pick_unselectable*/ true);
+    gViewerWindow->pickAsync(x, y, mask, pickCallback, /*bool pick_transparent*/ false, /*bool pick_rigged*/ false, /*bool pick_unselectable*/ true, /*bool pick_reflection_probes*/ false, /*bool pick_focus*/ true);
 
     return true;
 }
@@ -161,6 +162,20 @@ void LLToolCamera::pickCallback(const LLPickInfo& pick_info)
     camera->mMouseDownY = pick_info.mMousePt.mY;
 
     gViewerWindow->moveCursorToCenter();
+
+    // <SK:Nexii> modal view: alt-click focuses on the modal view's ground, not on the hidden world.
+    if (SKModalView::worldCovered())
+    {
+        LLVector3d ground;
+        camera->mValidClickPoint = SKModalView::pickGround(pick_info.mMousePt.mX, pick_info.mMousePt.mY, ground);
+        if (camera->mValidClickPoint)
+        {
+            gAgentCamera.setFocusOnAvatar(false, ANIMATE);
+            gAgentCamera.setFocusGlobal(ground);
+        }
+        return;
+    }
+    // </SK:Nexii>
 
     // Potentially recenter if click outside rectangle
     LLViewerObject* hit_obj = pick_info.getObject();

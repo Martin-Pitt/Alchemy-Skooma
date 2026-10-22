@@ -43,7 +43,7 @@
 #include "llcoros.h"
 
 class LLCamera;
-class LLNetMap;
+//class LLNetMap; // <SK:Nexii> SKNetMap retired the classic mini-map
 class LLDebugBeacon;
 class LLVOCacheEntry;
 
@@ -121,7 +121,7 @@ public:
 
     bool hasMapObjectInRegion(LLViewerRegion* regionp) ;
     void clearAllMapObjectsInRegion(LLViewerRegion* regionp) ;
-    void renderObjectsForMap(LLNetMap &netmap);
+    // <SK:Nexii> renderObjectsForMap removed with the classic mini-map
     void renderObjectBounds(const LLVector3 &center);
 
     void addDebugBeacon(const LLVector3 &pos_agent, const std::string &string,
@@ -206,6 +206,7 @@ public:
     S32 mNumUnknownUpdates;
     S32 mNumDeadObjectUpdates;
     S32 mNumDeadObjects;
+    const std::vector<LLPointer<LLViewerObject>>& getMapObjects() const { return mMapObjects; } // <SK:Nexii> SKNetMap reads the map objects for its fallback layer
 protected:
     std::vector<U64>    mOrphanParents; // LocalID/ip,port of orphaned objects
     std::vector<OrphanInfo> mOrphanChildren;    // UUID's of orphaned objects
@@ -248,7 +249,7 @@ private:
     void fetchObjectCostsCoro(std::string url);
 
     static void reportPhysicsFlagFailure(LLSD &obejectList);
-    void fetchPhisicsFlagsCoro(std::string url);
+    void fetchPhisicsFlagsCoro(std::string url, LLSD idList); // <SK:Nexii> Batch per region (mini-map census).
 
 };
 

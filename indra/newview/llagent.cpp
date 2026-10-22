@@ -29,6 +29,8 @@
 
 #include "llagent.h"
 
+#include "skmodalview.h" // <SK:Nexii> modal view
+
 #include "pipeline.h"
 
 #include "llagentaccess.h"
@@ -705,6 +707,10 @@ void LLAgent::ageChat()
 //-----------------------------------------------------------------------------
 void LLAgent::moveAt(S32 direction, bool reset)
 {
+    if (SKModalView::worldCovered() && direction) // <SK:Nexii> modal view: the avatar stays put while the world is covered
+    {
+        return;
+    }
     mMoveTimer.reset();
     LLFirstUse::notMoving(false);
 
@@ -733,6 +739,10 @@ void LLAgent::moveAt(S32 direction, bool reset)
 //-----------------------------------------------------------------------------
 void LLAgent::moveAtNudge(S32 direction)
 {
+    if (SKModalView::worldCovered() && direction) // <SK:Nexii> modal view: the avatar stays put while the world is covered
+    {
+        return;
+    }
     mMoveTimer.reset();
     LLFirstUse::notMoving(false);
 
@@ -758,6 +768,10 @@ void LLAgent::moveAtNudge(S32 direction)
 //-----------------------------------------------------------------------------
 void LLAgent::moveLeft(S32 direction)
 {
+    if (SKModalView::worldCovered() && direction) // <SK:Nexii> modal view: the avatar stays put while the world is covered
+    {
+        return;
+    }
     mMoveTimer.reset();
     LLFirstUse::notMoving(false);
 
@@ -783,6 +797,10 @@ void LLAgent::moveLeft(S32 direction)
 //-----------------------------------------------------------------------------
 void LLAgent::moveLeftNudge(S32 direction)
 {
+    if (SKModalView::worldCovered() && direction) // <SK:Nexii> modal view: the avatar stays put while the world is covered
+    {
+        return;
+    }
     mMoveTimer.reset();
     LLFirstUse::notMoving(false);
 
@@ -808,6 +826,10 @@ void LLAgent::moveLeftNudge(S32 direction)
 //-----------------------------------------------------------------------------
 void LLAgent::moveUp(S32 direction)
 {
+    if (SKModalView::worldCovered() && direction) // <SK:Nexii> modal view: the avatar stays put while the world is covered
+    {
+        return;
+    }
 // [RLVa:KB] - Checked: RLVa-2.2 (@jump)
     if ( (!RlvActions::canJump()) && (direction > 0) && (!getFlying()) )
     {
@@ -848,6 +870,10 @@ void LLAgent::moveUp(S32 direction)
 //-----------------------------------------------------------------------------
 void LLAgent::moveYaw(F32 mag, bool reset_view)
 {
+    if (SKModalView::worldCovered() && mag != 0.f) // <SK:Nexii> modal view: the avatar stays put while the world is covered
+    {
+        return;
+    }
     gAgentCamera.setYawKey(mag);
 
     if (mag > 0)
@@ -879,6 +905,10 @@ void LLAgent::moveYaw(F32 mag, bool reset_view)
 //-----------------------------------------------------------------------------
 void LLAgent::movePitch(F32 mag)
 {
+    if (SKModalView::worldCovered() && mag != 0.f) // <SK:Nexii> modal view: the avatar stays put while the world is covered
+    {
+        return;
+    }
     gAgentCamera.setPitchKey(mag);
 
     if (mag > 0)
@@ -1736,6 +1766,14 @@ void LLAgent::startAutoPilotGlobal(
     F32 rot_threshold,
     bool allow_flying)
 {
+    if (SKModalView::worldCovered()) // <SK:Nexii> modal view: the avatar stays put while the world is covered
+    {
+        if (finish_callback)
+        {
+            finish_callback(false, callback_data);
+        }
+        return;
+    }
     if (!isAgentAvatarValid())
     {
         return;
@@ -1861,6 +1899,10 @@ void LLAgent::setAutoPilotTargetGlobal(const LLVector3d &target_global)
 //-----------------------------------------------------------------------------
 void LLAgent::startFollowPilot(const LLUUID &leader_id, bool allow_flying, F32 stop_distance)
 {
+    if (SKModalView::worldCovered()) // <SK:Nexii> modal view: the avatar stays put while the world is covered
+    {
+        return;
+    }
     mLeaderID = leader_id;
     if ( mLeaderID.isNull() ) return;
 

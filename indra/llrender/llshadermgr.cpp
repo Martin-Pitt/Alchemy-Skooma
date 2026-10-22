@@ -2291,6 +2291,8 @@ void LLShaderMgr::initAttribsAndUniforms()
     mReservedUniforms.push_back("waterOcclusion");
     mReservedUniforms.push_back("waterPatchOrder");
 
+    mReservedUniforms.push_back("sk_cut_table"); // <SK:Nexii> combat/minimap: the tactical overview's cut table
+
     // Settings the programs read as uniforms
     mReservedUniforms.push_back("terrainTriplanarBlend");
     mReservedUniforms.push_back("smaaPredicationThreshold");
@@ -2333,6 +2335,7 @@ void LLShaderMgr::initAttribsAndUniforms()
 
     // The storage blocks, each with its element count, in eGLSLReservedStorageBlocks order.
     mReservedStorageBlocks.clear();
+    mReservedStorageBlocks.push_back({ "SKOverviewCutBlock", 1 }); // <SK:Nexii> combat/minimap: the tactical overview's cut table
 
     // The same three checks, and that every block's points fit the ones every compute context has.
     if (mReservedStorageBlocks.size() != END_RESERVED_STORAGE_BLOCKS)

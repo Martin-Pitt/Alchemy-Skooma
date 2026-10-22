@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+<panel
+ height="10"
+ layout="topleft"
+ name="panel_sk_map_popup"
+ width="10">
+    <string name="ping">Ping</string>
+    <string name="about_land">About Land</string>
+    <string name="place_profile">Place Profile</string>
+    <string name="world_map">World Map</string>
+    <string name="stop_tracking">Stop Tracking</string>
+    <string name="recenter">Re-center Map</string>
+    <string name="settings">Minimap Settings…</string>
+    <string name="tactical_settings">Tactical Overview Options…</string>
+    <string name="view_profile">View Profile</string>
+    <string name="cam">Cam</string>
+    <string name="im">IM</string>
+    <string name="offer_teleport">Offer Teleport</string>
+    <string name="request_teleport">Request Teleport</string>
+    <string name="teleport_to">Teleport To</string>
+    <string name="block">Block</string>
+    <string name="unblock">Unblock</string>
+    <string name="derender">Derender</string>
+    <string name="report">Report</string>
+    <string name="moderate">Moderate</string>
+    <string name="freeze">Freeze</string>
+    <string name="parcel_eject">Parcel Eject</string>
+    <string name="estate_kick">Estate Kick</string>
+    <string name="estate_teleport_home">Estate Teleport Home</string>
+    <string name="estate_ban">Estate Ban</string>
+    <string name="checking">checking…</string>
+    <string name="more">›</string>
+</panel>

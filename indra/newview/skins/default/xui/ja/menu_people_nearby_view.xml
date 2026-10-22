@@ -9,7 +9,6 @@
 	<menu_item_check label="クリックでズームイン" name="click_zoom"/>
 	<menu_item_check label="クリックでテレポート" name="click_teleport"/>
 	<menu_item_check label="人物のアイコン表示" name="view_icons"/>
-	<menu_item_check label="マップを表示" name="view_map"/>
 	<menu_item_check label="ユーザー名を非表示" name="view_usernames"/>
 	<menu_item_check name="radar_alerts" label="レーダーアラートを表示"/>
 	<menu_item_check name="radar_alerts_chat" label="ログアラートをチャットに記載"/>

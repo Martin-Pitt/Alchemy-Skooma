@@ -39,6 +39,7 @@
 #include "llwindow.h"
 #include "llagent.h"
 #include "llagentcamera.h"
+#include "skmodalview.h" // <SK:Nexii> modal view
 #include "llfocusmgr.h"
 
 #if LL_WINDOWS
@@ -920,6 +921,10 @@ void LLViewerJoystick::moveObjects(bool reset)
 // -----------------------------------------------------------------------------
 void LLViewerJoystick::moveAvatar(bool reset)
 {
+    if (SKModalView::worldCovered()) // <SK:Nexii> modal view: the avatar stays put while the world is covered
+    {
+        return;
+    }
     if (!gFocusMgr.getAppHasFocus() || mDriverState != JDS_INITIALIZED
         || !gSavedSettings.getBOOL("JoystickEnabled") || !gSavedSettings.getBOOL("JoystickAvatarEnabled"))
     {
@@ -1294,7 +1299,7 @@ void LLViewerJoystick::moveFlycam(bool reset)
         }
     }
 
-    sFlycamPosition += LLVector3d(sDelta[VX], sDelta[VY], sDelta[VZ]) * sFlycamRotation;
+    sFlycamPosition += LLVector3d(sDelta[VX], sDelta[VY], sDelta[VZ]) * sFlycamRotation * SKModalView::flycamScale(sFlycamPosition); // <SK:Nexii> modal view
 
     LLMatrix3 rot_mat(sDelta[3], sDelta[4], sDelta[5]);
     sFlycamRotation = LLQuaternion(rot_mat)*sFlycamRotation;

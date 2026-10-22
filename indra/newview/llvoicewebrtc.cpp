@@ -72,6 +72,7 @@
 #include "stringize.h"
 
 #include "llwebrtc.h"
+#include "skmodalview.h" // <SK:Nexii> modal view
 
 #include <simdjson.h>
 
@@ -1203,6 +1204,15 @@ void LLWebRTCVoiceClient::updatePosition(void)
             default:
                 earPosition = region->getPosGlobalFromRegion(LLViewerCamera::getInstance()->getOrigin());
                 earRot      = LLViewerCamera::getInstance()->getQuaternion();
+                // <SK:Nexii> modal view: the ears stay at the world camera while a modal view moves the viewer's.
+                {
+                    LLVector3 at, left, up;
+                    if (SKModalView::worldCamera(earPosition, at, left, up))
+                    {
+                        earRot = LLCoordFrame(LLVector3::zero, at, left, up).getQuaternion();
+                    }
+                }
+                // </SK:Nexii>
                 break;
 
             case earLocAvatar:

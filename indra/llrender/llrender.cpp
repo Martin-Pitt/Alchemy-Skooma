@@ -1933,6 +1933,13 @@ void LLRender::drawArraysIndirect(eGeomModes mode, const ALGPUBuffer& buffer, si
     ++sDrawCalls; // its count is the GPU's to know
 }
 
+// <SK:Nexii> combat/minimap
+void LLRender::bindDrawIndirect(const ALGPUBuffer& buffer)
+{
+    bindIndirectBuffer(GL_DRAW_INDIRECT_BUFFER, mDrawIndirectBuffer, buffer.getGLName());
+}
+// </SK:Nexii>
+
 void LLRender::memoryBarrier(U32 barriers)
 {
     llassert(sCompute);

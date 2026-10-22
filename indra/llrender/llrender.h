@@ -431,6 +431,10 @@ public:
     // most often. GL 4.0, so it needs no compute -- but a command a shader wrote is read only past BARRIER_COMMAND.
     void drawArraysIndirect(eGeomModes mode, const ALGPUBuffer& buffer, size_t offset);
 
+    // <SK:Nexii> combat/minimap: `buffer` at GL_DRAW_INDIRECT_BUFFER, for a draw from vertex arrays that reads its
+    // commands there (LLVertexBuffer::multiDrawArraysIndirect).
+    void bindDrawIndirect(const ALGPUBuffer& buffer);
+
     // ---- Compute ---------------------------------------------------------------------------------------------------
     // Everything here needs sCompute and asserts it.
 

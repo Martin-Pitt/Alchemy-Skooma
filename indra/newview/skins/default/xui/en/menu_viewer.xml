@@ -799,6 +799,17 @@
              function="Floater.Toggle"
              parameter="world_map" />
         </menu_item_check>
+        <!-- <SK:Nexii> 3D world map -->
+        <menu_item_check
+         label="3D world map"
+         name="World Map 3D"
+         shortcut="control|alt|M">
+            <menu_item_check.on_check
+             function="WorldMap3D.IsOpen" />
+            <menu_item_check.on_click
+             function="WorldMap3D.Toggle" />
+        </menu_item_check>
+        <!-- </SK:Nexii> -->
             <menu_item_check
          label="Mini-map"
          name="Mini-Map"
@@ -1343,6 +1354,39 @@ function="World.EnvPreset"
 -->    
     
     </menu>
+    <!-- <SK:Nexii> Combat menu: combat features and their options -->
+    <menu
+     create_jump_keys="true"
+     label="Combat"
+     name="Combat"
+     tear_off="true"
+     visible="true">
+      <menu_item_check
+       label="Tactical Overview"
+       name="SK Tactical Overview">
+        <menu_item_check.on_check
+         function="CheckControl"
+         parameter="SKTacticalOverview" />
+        <menu_item_check.on_click
+         function="ToggleControl"
+         parameter="SKTacticalOverview" />
+      </menu_item_check>
+      <menu_item_call
+       label="Tactical Overview Options..."
+       name="sk_tactical_options">
+        <menu_item_call.on_click
+         function="Floater.ToggleOrBringToFront"
+         parameter="sk_tactical_options" />
+      </menu_item_call>
+      <menu_item_call
+       label="Mini-map Options..."
+       name="sk_map_settings">
+        <menu_item_call.on_click
+         function="Floater.ToggleOrBringToFront"
+         parameter="sk_map_settings" />
+      </menu_item_call>
+    </menu>
+    <!-- </SK:Nexii> -->
     <menu
      create_jump_keys="true"
      label="Build"
@@ -3331,6 +3375,18 @@ function="World.EnvPreset"
          label="Consoles"
          name="Consoles"
          tear_off="true">
+            <!-- <SK:Nexii> navmesh console -->
+            <menu_item_check
+             label="Navmesh Console"
+             name="SKNavmeshConsole">
+                <menu_item_check.on_check
+                 function="Floater.Visible"
+                 parameter="sk_navmesh" />
+                <menu_item_check.on_click
+                 function="Floater.Toggle"
+                 parameter="sk_navmesh" />
+            </menu_item_check>
+            <!-- </SK:Nexii> -->
             <menu_item_check
              label="Texture Console"
              name="Texture Console"
@@ -3735,6 +3791,21 @@ function="World.EnvPreset"
          label="Render Tests"
          name="Render Tests"
          tear_off="true">
+            <!-- <SK:Nexii> outline capture: the atlas and per-capture stats, behind SKOutlineCaptureDebug -->
+            <menu_item_check
+             label="Outline Capture Runtime"
+             name="SK Outline Capture Runtime">
+                <menu_item_check.on_check
+                 function="Floater.Visible"
+                 parameter="sk_outline_capture" />
+                <menu_item_check.on_click
+                 function="Floater.Toggle"
+                 parameter="sk_outline_capture" />
+                <menu_item_check.on_visible
+                 function="CheckControl"
+                 parameter="SKOutlineCaptureDebug" />
+            </menu_item_check>
+            <!-- </SK:Nexii> -->
             <menu_item_check
              label="Camera Offset"
              name="Camera Offset">
@@ -3847,6 +3918,16 @@ function="World.EnvPreset"
           <menu_item_check.on_click
            function="Advanced.ToggleInfoDisplay"
            parameter="physics shapes" />
+        </menu_item_check>
+        <menu_item_check
+         label="Navmesh"
+         name="SKNavmesh">
+          <menu_item_check.on_check
+           function="Advanced.CheckInfoDisplay"
+           parameter="navmesh" />
+          <menu_item_check.on_click
+           function="Advanced.ToggleInfoDisplay"
+           parameter="navmesh" />
         </menu_item_check>
         <menu_item_check
          label="Occlusion"

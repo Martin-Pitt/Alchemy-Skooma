@@ -489,7 +489,7 @@ if(AL_BUILD_VIEWER)
     llfloaterloadprefpreset.cpp
     llfloaterlocalassets.cpp
     llfloatermarketplacelistings.cpp
-    llfloatermap.cpp
+    # llfloatermap.cpp # <SK:Nexii> SKNetMap retired the classic mini-map floater
     llfloatermaturitydialog.cpp
     llfloatermediasettings.cpp
     llfloatermemleak.cpp
@@ -640,6 +640,7 @@ if(AL_BUILD_VIEWER)
     llmediactrl.cpp
     llmediadataclient.cpp
     llmenuoptionpathfindingrebakenavmesh.cpp
+    skmeshhavokshape.cpp # <SK:Nexii> physics_havok block
     llmeshrepository.cpp
     llmimetypes.cpp
     llmodelpreview.cpp
@@ -654,7 +655,7 @@ if(AL_BUILD_VIEWER)
     llfloaterimnearbychathandler.cpp
     llfloaterimnearbychatlistener.cpp
     llnearbyvoicemoderation.cpp
-    llnetmap.cpp
+    # llnetmap.cpp # <SK:Nexii> SKNetMap retired the classic mini-map
     llnotificationalerthandler.cpp
     llnotificationgrouphandler.cpp
     llnotificationhandlerutil.cpp
@@ -991,6 +992,21 @@ if(AL_BUILD_VIEWER)
     pipeline.cpp
     rlvactions.cpp
     rlvenvironment.cpp
+    skphysicsshape.cpp
+    skcaptureexport.cpp # <SK:Nexii> navmesh: linkset and avatar capture export
+    skclusterprobes.cpp # <SK:Nexii> navmesh: reflection probes over census clusters
+    skfloaternavannotate.cpp
+    skfloaternavmesh.cpp
+    sknavairoverlay.cpp # <SK:Nexii> navmesh: air overlay
+    sknavannotator.cpp
+    sknavmarkobjects.cpp
+    sknavmesh.cpp
+    sknavoverlay.cpp
+    sknavpalette.cpp
+    sknavroomprobes.cpp
+    sknavrooms.cpp
+    skcensusavatarshape.cpp
+    skworldcensus.cpp
     rlvcommon.cpp
     rlveffects.cpp
     rlvextensions.cpp
@@ -1000,6 +1016,13 @@ if(AL_BUILD_VIEWER)
     rlvinventory.cpp
     rlvlocks.cpp
     rlvui.cpp
+    skmodalview.cpp # <SK:Nexii> modal view
+    skmodalviewmath.cpp # <SK:Nexii> modal view
+    sktoolmappan.cpp # <SK:Nexii> modal view
+    skmapmode.cpp # <SK:Nexii> 3D world map
+    skworldmapmath.cpp # <SK:Nexii> 3D world map
+    skworldmapscene.cpp # <SK:Nexii> 3D world map
+    skworldmaptiles.cpp # <SK:Nexii> 3D world map
   )
 
   set(
@@ -1374,7 +1397,7 @@ if(AL_BUILD_VIEWER)
     llfloaterlinkreplace.h
     llfloaterloadprefpreset.h
     llfloaterlocalassets.h
-    llfloatermap.h
+    # llfloatermap.h # <SK:Nexii> SKNetMap retired the classic mini-map floater
     llfloatermarketplace.h
     llfloatermarketplacelistings.h
     llfloatermaturitydialog.h
@@ -1524,6 +1547,7 @@ if(AL_BUILD_VIEWER)
     llmediactrl.h
     llmediadataclient.h
     llmenuoptionpathfindingrebakenavmesh.h
+    skmeshhavokshape.h # <SK:Nexii> physics_havok block
     llmeshrepository.h
     llmimetypes.h
     llmodelpreview.h
@@ -1535,7 +1559,7 @@ if(AL_BUILD_VIEWER)
     llnamelistctrl.h
     llnavigationbar.h
     llnearbyvoicemoderation.h
-    llnetmap.h
+    # llnetmap.h # <SK:Nexii> SKNetMap retired the classic mini-map
     llnotificationhandler.h
     llnotificationlistitem.h
     llnotificationlistview.h
@@ -1867,6 +1891,20 @@ if(AL_BUILD_VIEWER)
     pipeline.h
     rlvactions.h
     rlvcommon.h
+    skphysicsshape.h
+    skcaptureexport.h # <SK:Nexii> navmesh: linkset and avatar capture export
+    skclusterprobes.h # <SK:Nexii> navmesh: reflection probes over census clusters
+    skfloaternavannotate.h
+    skfloaternavmesh.h
+    sknavannotator.h
+    sknavmarkobjects.h
+    sknavmesh.h
+    sknavoverlay.h
+    sknavpalette.h
+    sknavroomprobes.h
+    sknavrooms.h
+    skcensusavatarshape.h
+    skworldcensus.h
     rlvdefines.h
     rlveffects.h
     rlvenvironment.h
@@ -1879,7 +1917,79 @@ if(AL_BUILD_VIEWER)
     rlvmodifiers.h
     rlvui.h
     roles_constants.h
+    skmodalview.h # <SK:Nexii> modal view
+    skmodalviewmath.h # <SK:Nexii> modal view
+    sktoolmappan.h # <SK:Nexii> modal view
+    skmapmode.h # <SK:Nexii> 3D world map
+    skworldmapmath.h # <SK:Nexii> 3D world map
+    skworldmapscene.h # <SK:Nexii> 3D world map
+    skworldmaptiles.h # <SK:Nexii> 3D world map
   )
+
+  # <SK:Nexii> SKNetMap mini-map sources
+  list(
+    APPEND viewer_SOURCES
+    sknavpolys.cpp
+    skmapview.cpp
+    skmapplan.cpp
+    skmaplabels.cpp
+    skmapmarkers.cpp
+    skmapallies.cpp
+    skmappolicy.cpp
+    sknetmap.cpp
+    skmapml.cpp
+    skfloatermap.cpp
+    skmappeople.cpp
+    skmapparcels.cpp
+    skmapscene.cpp
+    skmaprecorder.cpp
+    skpopuplayout.cpp
+    skpopuppanes.cpp
+    skmapmenu.cpp
+    skmapparcelfacts.cpp
+    skmapallyresolver.cpp
+    skfloatermapsettings.cpp
+    skfloatertacticaloptions.cpp
+    skoverviewcapture.cpp
+    skoverviewcensus.cpp
+    skoverviewcuttable.cpp
+    skoverviewmovers.cpp
+    skoverviewprobes.cpp
+    skoverviewslots.cpp
+  )
+  list(
+    APPEND viewer_HEADERS
+    sknavpolys.h
+    skmapview.h
+    skmapplan.h
+    skmappalette.h
+    skmaplabels.h
+    skmapmarkers.h
+    skmapallies.h
+    skmappolicy.h
+    sknetmap.h
+    skmapml.h
+    skfloatermap.h
+    skmappeople.h
+    skmapparcels.h
+    skmapscene.h
+    skmaprecorder.h
+    skpopuplayout.h
+    skoverviewcapture.h
+    skoverviewcensus.h
+    skoverviewcuttable.h
+    skoverviewmovers.h
+    skoverviewprobes.h
+    skoverviewprograms.h
+    skoverviewslots.h
+    skpopuppanes.h
+    skmapmenu.h
+    skmapparcelfacts.h
+    skmapallyresolver.h
+    skfloatermapsettings.h
+    skfloatertacticaloptions.h
+  )
+  # </SK:Nexii>
 
   # Discord rich presence, over the SDK from the private registry.
   if(AL_USE_DISCORD)
@@ -2099,6 +2209,11 @@ if(AL_BUILD_VIEWER)
       ${viewer_RESOURCE_FILES}
   )
 
+  # <SK:Nexii> outline capture
+  list(APPEND viewer_SOURCES skoutlinecapture.cpp skoutlinepolicy.cpp skfloateroutlinecapture.cpp)
+  list(APPEND viewer_HEADERS skoutlinecapture.h skoutlinepolicy.h skfloateroutlinecapture.h)
+  # </SK:Nexii>
+
   add_executable(${AL_VIEWER_BINARY_NAME} WIN32 MACOSX_BUNDLE)
 
   target_sources(${AL_VIEWER_BINARY_NAME} PRIVATE ${viewer_SOURCES} ${viewer_HEADERS})
@@ -2142,6 +2257,8 @@ if(AL_BUILD_VIEWER)
       ll::tinyexr
       ll::minizip
       ll::pugixml
+      ll::recast
+      sknavmesh
       ll::velopack
       ll::webrtc
   )
@@ -2463,6 +2580,12 @@ if(AL_BUILD_TESTS)
     lllogin
   )
   set(test_project ${AL_VIEWER_BINARY_NAME})
+  # <SK:Nexii> The recastnavigation port's TUT test, kept registered until it is ported to Catch2
+  if(COMMAND al_add_test)
+    al_add_test(sknavrecast PROJECT ${test_project} LIBRARIES ll::recast)
+  endif()
+  # </SK:Nexii>
+
   get_property(newview_includes TARGET ${test_project} PROPERTY INTERFACE_INCLUDE_DIRECTORIES)
 
   # What the tests take of the rest of the viewer, faked once. Objects, which
@@ -2522,6 +2645,41 @@ if(AL_BUILD_TESTS)
   )
   target_link_libraries(newview_test_viewertexture PRIVATE al::flags llui ${test_libs})
   set_target_properties(newview_test_viewertexture PROPERTIES FOLDER "Tests/${test_project}")
+
+  # <SK:Nexii> Develop's TUT tests, kept registered until they are ported to Catch2: LLAddBuildTest.cmake (al_add_test) is gone upstream
+  if(COMMAND al_add_test)
+    # The recastnavigation port links and runs: a floor, a block, a path round it.
+    al_add_test(sknavrecast PROJECT ${test_project} LIBRARIES ll::recast)
+    al_add_test(sknavpolys UNIT PROJECT ${test_project} LIBRARIES sknavmesh ${test_libs})
+    al_add_test(skmapview UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
+    al_add_test(skmapgeom UNIT PROJECT ${test_project} SOURCES skmapview.cpp LIBRARIES sknavmesh ${test_libs})
+    al_add_test(
+      skmapraster
+      UNIT
+      PROJECT ${test_project}
+      SOURCES skmapgeom.cpp skmapview.cpp
+      LIBRARIES sknavmesh ${test_libs}
+    )
+    al_add_test(
+      skmapribbons
+      UNIT
+      PROJECT ${test_project}
+      SOURCES skmapgeom.cpp skmapview.cpp
+      LIBRARIES sknavmesh ${test_libs}
+    )
+    al_add_test(skmaplabels UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
+    al_add_test(skmapmarkers UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
+    al_add_test(
+      skmapallies
+      UNIT
+      PROJECT ${test_project}
+      LIBRARIES ${test_libs}
+      DEFINES "SKMAP_APP_SETTINGS=\"${CMAKE_CURRENT_SOURCE_DIR}/app_settings\""
+    )
+    al_add_test(skmappolicy UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
+    al_add_test(skpopuplayout UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
+  endif()
+  # </SK:Nexii>
 
   # The viewer's own code, in one binary, each test file run in a process of
   # its own. There is no library of the viewer to link, so each file of it a
@@ -2603,6 +2761,14 @@ if(AL_BUILD_TESTS)
       tests/llvocache_test.cpp
       tests/lutcube_test.cpp
       tests/noise_test.cpp
+      tests/skmodalviewmath_test.cpp # <SK:Nexii> modal view
+      tests/skworldmapmath_test.cpp # <SK:Nexii> 3D world map
+      tests/skoutlinepolicy_test.cpp # <SK:Nexii> outline capture
+      tests/skmapmarkers_test.cpp # <SK:Nexii> mini-map markers
+      tests/skoverviewshaders_test.cpp # <SK:Nexii> combat/minimap: the overview's shader permutations
+      tests/skoverviewcuttable_test.cpp # <SK:Nexii> combat/minimap: the overview's cut table
+      tests/skoverviewslots_test.cpp # <SK:Nexii> combat/minimap: the overview's census pages
+      tests/skoverviewprobes_test.cpp # <SK:Nexii> combat/minimap: the tactical cut's probes
     UNIT
       alagentlocationformat.cpp
       alchattimestamp.cpp
@@ -2678,6 +2844,13 @@ if(AL_BUILD_TESTS)
       llviewercontrollistener.cpp
       lutcube.cpp
       noise.cpp
+      skmodalviewmath.cpp # <SK:Nexii> modal view
+      skworldmapmath.cpp # <SK:Nexii> 3D world map
+      skoutlinepolicy.cpp # <SK:Nexii> outline capture
+      skmapmarkers.cpp # <SK:Nexii> mini-map markers
+      skoverviewcuttable.cpp # <SK:Nexii> combat/minimap: the overview's cut table
+      skoverviewprobes.cpp # <SK:Nexii> combat/minimap: the tactical cut's probes
+      skoverviewslots.cpp # <SK:Nexii> combat/minimap: the overview's census pages
     LIBRARIES llui alscript ll::slua llxml ${test_libs}
     SUPPORT
       newview_test_fakes
@@ -2692,6 +2865,26 @@ if(AL_BUILD_TESTS)
       "AL_LSL_DEFINITIONS_DIR=\"${LSL_DEFINITIONS_DIR}\""
   )
 
+  # <SK:Nexii> The navmesh map's TUT tests, kept registered until they are ported to Catch2
+  if(COMMAND al_add_test)
+    al_add_test(skmapgeom UNIT PROJECT ${test_project} SOURCES skmapview.cpp LIBRARIES sknavmesh ${test_libs})
+    al_add_test(
+      skmapraster
+      UNIT
+      PROJECT ${test_project}
+      SOURCES skmapgeom.cpp skmapview.cpp
+      LIBRARIES sknavmesh ${test_libs}
+    )
+    al_add_test(
+      skmapribbons
+      UNIT
+      PROJECT ${test_project}
+      SOURCES skmapgeom.cpp skmapview.cpp
+      LIBRARIES sknavmesh ${test_libs}
+    )
+  endif()
+  # </SK:Nexii>
+
   # The selection outline's id and edge passes, the shadow samplers over a
   # map the pass has none of, and the post chain's passes held against what
   # they replaced: the viewer's own shader files read from the source tree,
@@ -2705,7 +2898,15 @@ if(AL_BUILD_TESTS)
       tests/aldof_gl_test.cpp
       tests/alselectionoutline_gl_test.cpp
       tests/shadowutil_gl_test.cpp
+      tests/skoverviewshaders_gl_test.cpp # <SK:Nexii> combat/minimap: the overview's programs link
+      tests/skoverviewcuttable_gl_test.cpp # <SK:Nexii> combat/minimap: the overview's cut table on the GPU
+      tests/skoverviewslots_gl_test.cpp # <SK:Nexii> combat/minimap: the census command list on the GPU
+      tests/skoverviewprobes_gl_test.cpp # <SK:Nexii> combat/minimap: the tactical cut's probes on the GPU
     BENCH_SOURCES tests/alcasfold_bench.cpp tests/aldof_bench.cpp tests/alssrhistory_bench.cpp
+    UNIT
+      skoverviewcuttable.cpp # <SK:Nexii> combat/minimap: the overview's cut table
+      skoverviewprobes.cpp # <SK:Nexii> combat/minimap: the tactical cut's probes
+      skoverviewslots.cpp # <SK:Nexii> combat/minimap: the overview's census pages
     LIBRARIES llrender
     SUPPORT llrender_test_checks llcommon_test_checks
     INCLUDES ${INDRA_SOURCE_DIR}/llprimitive
