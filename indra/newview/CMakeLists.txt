@@ -2466,6 +2466,7 @@ if(AL_BUILD_TESTS)
     llappearance
     llprimitive
     lllogin
+    alrender
   )
   set(test_project ${AL_VIEWER_BINARY_NAME})
   # <SK:Nexii> outline capture's TUT test, kept registered until it is ported to Catch2
