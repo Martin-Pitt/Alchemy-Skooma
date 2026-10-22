@@ -437,6 +437,9 @@ public:
     // depth from the tile metadata it held before them. Needs gGLManager.mHasTextureBarrier (glTextureBarrier). What is
     // batched is drawn first.
     void textureBarrier();
+    // <SK:Nexii> combat/minimap: `buffer` at GL_DRAW_INDIRECT_BUFFER, for a draw from vertex arrays that reads its
+    // commands there (LLVertexBuffer::multiDrawArraysIndirect).
+    void bindDrawIndirect(const ALGPUBuffer& buffer);
 
     // ---- Compute ---------------------------------------------------------------------------------------------------
     // Everything here needs sCompute and asserts it.

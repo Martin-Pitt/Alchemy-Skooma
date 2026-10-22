@@ -1162,13 +1162,7 @@ void LLViewerRegion::renderPropertyLines()
     }
 }
 
-void LLViewerRegion::renderPropertyLinesOnMinimap(F32 scale_pixels_per_meter, const F32 *parcel_outline_color)
-{
-    if (mParcelOverlay)
-    {
-        mParcelOverlay->renderPropertyLinesOnMinimap(scale_pixels_per_meter, parcel_outline_color);
-    }
-}
+// <SK:Nexii> renderPropertyLinesOnMinimap removed with the classic mini-map
 
 
 // This gets called when the height field changes.

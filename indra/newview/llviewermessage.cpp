@@ -26,6 +26,7 @@
 
 #include "llviewerprecompiledheaders.h"
 #include "llviewermessage.h"
+#include "skmodalview.h" // <SK:Nexii> modal view
 
 #include "alscriptstudio.h"
 #include "alscripttypes.h"
@@ -115,6 +116,7 @@
 #include "llviewerwindow.h"
 #include "llvlmanager.h"
 #include "llvoavatarself.h"
+#include "skotscamera.h" // <SK:Nexii> Over-the-shoulder view
 #include "llvovolume.h"
 #include "llworld.h"
 #include "pipeline.h"
@@ -3584,8 +3586,20 @@ void send_agent_update(bool force_send, bool send_reliable)
 
     LLVector3 camera_pos_agent = gAgentCamera.getCameraPositionAgent(); // local to avatar's region
     LLVector3 camera_at = LLViewerCamera::getInstance()->getAtAxis();
+    // <SK:Nexii> modal view: the sim keeps the world camera while a modal view moves the viewer's.
+    LLVector3 camera_left = LLViewerCamera::getInstance()->getLeftAxis();
+    LLVector3 camera_up = LLViewerCamera::getInstance()->getUpAxis();
+    SKModalView::worldCameraForUpdate(camera_pos_agent, camera_at, camera_left, camera_up);
+    // </SK:Nexii>
     LLQuaternion body_rotation = gAgent.getFrameAgent().getQuaternion();
     LLQuaternion head_rotation = gAgent.getHeadRotation();
+    // <SK:Nexii> Over-the-shoulder view reports the eye aimed at the crosshair and turns the head the same way; the body
+    // is left alone, since the region moves the avatar along it; a modal view keeps the world camera instead
+    if (!SKModalView::worldCovered() && SKOTSCamera::reportedCamera(camera_pos_agent, camera_at, camera_left, camera_up))
+    {
+        SKOTSCamera::convergeHead(camera_at, head_rotation);
+    }
+    // </SK:Nexii>
     U8 render_state = gAgent.getRenderState();
 
     U8 flags = AU_FLAGS_NONE;
@@ -3708,11 +3722,12 @@ void send_agent_update(bool force_send, bool send_reliable)
 
     msg->addVector3Fast(_PREHASH_CameraCenter, camera_pos_agent);
     msg->addVector3Fast(_PREHASH_CameraAtAxis, camera_at);
-    msg->addVector3Fast(_PREHASH_CameraLeftAxis, LLViewerCamera::getInstance()->getLeftAxis());
-    msg->addVector3Fast(_PREHASH_CameraUpAxis, LLViewerCamera::getInstance()->getUpAxis());
+    msg->addVector3Fast(_PREHASH_CameraLeftAxis, camera_left); // <SK:Nexii> modal view, Over-the-shoulder view
+    msg->addVector3Fast(_PREHASH_CameraUpAxis, camera_up); // <SK:Nexii> modal view, Over-the-shoulder view
 
     static F32 last_draw_disatance_step = 1024;
     F32 memory_limited_draw_distance = gAgentCamera.mDrawDistance;
+    SKModalView::tacticalInterestFar(memory_limited_draw_distance); // <SK:Nexii> tactical overview: a wider Far while it steers the interest list
     const F32 mem_factor = LLMemory::getSystemMemoryBudgetFactor();
     if (mem_factor > 1.f)
     {

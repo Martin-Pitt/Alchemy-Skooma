@@ -27,6 +27,8 @@
 #include "llviewerprecompiledheaders.h"
 
 #include "llviewerinput.h"
+#include "skoverviewcapture.h" // <SK:Nexii> tactical overview
+#include "skmodalview.h" // <SK:Nexii> modal view
 
 #include "alchatbar.h"
 #include "llappviewer.h"
@@ -45,6 +47,7 @@
 #include "llviewercontrol.h"
 #include "llviewerwindow.h"
 #include "llvoavatarself.h"
+#include "skotscamera.h" // <SK:Nexii> Over-the-shoulder view
 #include "llfloatercamera.h"
 #include "llinitparam.h"
 #include "llselectmgr.h"
@@ -496,6 +499,17 @@ bool camera_roll_right(EKeystate s)
     return true;
 }
 
+// <SK:Nexii> tactical overview: hold to show, tap to latch
+bool sk_tactical_overview(EKeystate s)
+{
+    if (KEYSTATE_DOWN == s || KEYSTATE_UP == s)
+    {
+        SKOverviewCapture::handleTacticalKey(KEYSTATE_DOWN == s);
+    }
+    return true;
+}
+// </SK:Nexii>
+
 bool camera_roll_reset(EKeystate s)
 {
     if (KEYSTATE_UP == s) return true;
@@ -911,6 +925,22 @@ bool toggle_sit(EKeystate s)
     return true;
 }
 
+// <SK:Nexii> Over-the-shoulder view
+bool ots_toggle_view(EKeystate s)
+{
+    if (KEYSTATE_DOWN != s) return true;
+    SKOTSCamera::toggleView();
+    return true;
+}
+
+bool ots_swap_shoulder(EKeystate s)
+{
+    if (KEYSTATE_DOWN != s) return true;
+    SKOTSCamera::swapShoulder();
+    return true;
+}
+// </SK:Nexii>
+
 bool toggle_pause_media(EKeystate s) // analogue of play/pause button in top bar
 {
     if (KEYSTATE_DOWN != s) return true;
@@ -1097,6 +1127,8 @@ REGISTER_KEYBOARD_ACTION("run_right", run_right);
 REGISTER_KEYBOARD_ACTION("toggle_run", toggle_run);
 REGISTER_KEYBOARD_ACTION("toggle_down", agent_toggle_down);
 REGISTER_KEYBOARD_ACTION("toggle_sit", toggle_sit);
+REGISTER_KEYBOARD_ACTION("ots_toggle_view", ots_toggle_view); // <SK:Nexii> Over-the-shoulder view
+REGISTER_KEYBOARD_ACTION("ots_swap_shoulder", ots_swap_shoulder); // <SK:Nexii> Over-the-shoulder view
 REGISTER_KEYBOARD_ACTION("toggle_pause_media", toggle_pause_media);
 REGISTER_KEYBOARD_ACTION("toggle_enable_media", toggle_enable_media);
 REGISTER_KEYBOARD_ACTION("teleport_to", teleport_to);
@@ -1111,6 +1143,7 @@ REGISTER_KEYBOARD_ACTION(script_mouse_handler_name, script_trigger_lbutton);
 REGISTER_KEYBOARD_ACTION("roll_left", camera_roll_left);
 REGISTER_KEYBOARD_ACTION("roll_right", camera_roll_right);
 REGISTER_KEYBOARD_ACTION("roll_reset", camera_roll_reset);
+REGISTER_KEYBOARD_ACTION("tactical_overview", sk_tactical_overview); // <SK:Nexii> tactical overview
 #undef REGISTER_KEYBOARD_ACTION
 
 LLViewerInput::LLViewerInput()
@@ -1704,6 +1737,17 @@ bool LLViewerInput::scanKey(const std::vector<LLKeyboardBinding> &binding,
     {
         if (binding[i].mKey == key)
         {
+            // <SK:Nexii> tactical overview: held movement keys pan the map instead of moving the avatar
+            if ((key_down || key_level) && (binding[i].mMask & mask) == binding[i].mMask &&
+                SKOverviewCapture::handleKeyPan(binding[i].mFunctionName, (mask & MASK_SHIFT) != 0))
+            {
+                continue;
+            }
+            // </SK:Nexii>
+            if (SKModalView::blocksAction(binding[i].mFunctionName) && !(key_up && !key_down && !key_level)) // <SK:Nexii> modal view: the avatar stays put; only a release passes, to stop it
+            {
+                continue;
+            }
             if ((binding[i].mMask & mask) == binding[i].mMask)
             {
                 bool res = false;
@@ -1853,6 +1897,10 @@ bool LLViewerInput::scanMouse(
     {
         if (binding[i].mMouse == mouse && (ignore_additional_masks ? (binding[i].mMask & mask) == binding[i].mMask : binding[i].mMask == mask))
         {
+            if (SKModalView::blocksAction(binding[i].mFunctionName)) // <SK:Nexii> modal view: the avatar stays put
+            {
+                continue;
+            }
             bool res = false;
             switch (state)
             {

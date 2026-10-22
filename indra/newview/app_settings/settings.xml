@@ -4902,17 +4902,6 @@
       <key>Value</key>
       <integer>0</integer>
     </map>
-    <key>MiniMapAutoCenter</key>
-    <map>
-      <key>Comment</key>
-      <string>Center the focal point of the minimap.</string>
-      <key>Persist</key>
-      <integer>1</integer>
-      <key>Type</key>
-      <string>Boolean</string>
-      <key>Value</key>
-      <integer>1</integer>
-    </map>
     <key>Marker</key>
     <map>
       <key>Comment</key>
@@ -5651,53 +5640,6 @@
       <string>Boolean</string>
       <key>Value</key>
       <integer>1</integer>
-    </map>
-    <key>MiniMapPrimMaxRadius</key>
-    <map>
-      <key>Comment</key>
-      <string>Radius of the largest prim to show on the MiniMap. Increasing beyond 256 may cause client lag.</string>
-      <key>Persist</key>
-      <integer>1</integer>
-      <key>Type</key>
-      <string>F32</string>
-      <key>Value</key>
-      <real>48.0</real>
-    </map>
-    <key>MiniMapRotate</key>
-    <map>
-      <key>Comment</key>
-      <string>Rotate miniature world map to avatar direction</string>
-      <key>Persist</key>
-      <integer>1</integer>
-      <key>Type</key>
-      <string>Boolean</string>
-      <key>Value</key>
-      <!-- *HACK: On first run, set this to 0 for new users,
-           otherwise the default is 1 to maintain consistent experience
-           for existing users. Hardcoded in llnetmap.cpp -->
-      <integer>1</integer>
-    </map>
-    <key>MiniMapScale</key>
-    <map>
-      <key>Comment</key>
-      <string>Miniature world map zoom level (pixels per region)</string>
-      <key>Persist</key>
-      <integer>1</integer>
-      <key>Type</key>
-      <string>F32</string>
-      <key>Value</key>
-      <real>128.0</real>
-    </map>
-    <key>MiniMapShowPropertyLines</key>
-    <map>
-      <key>Comment</key>
-      <string>Whether or not to show parcel borders on the MiniMap.</string>
-      <key>Persist</key>
-      <integer>1</integer>
-      <key>Type</key>
-      <string>Boolean</string>
-      <key>Value</key>
-      <real>1</real>
     </map>
     <key>MouseSensitivity</key>
     <map>
@@ -11146,17 +11088,6 @@
     <map>
       <key>Comment</key>
       <string>Show descriptive tooltip when mouse hovers over land</string>
-      <key>Persist</key>
-      <integer>1</integer>
-      <key>Type</key>
-      <string>Boolean</string>
-      <key>Value</key>
-      <integer>0</integer>
-    </map>
-    <key>ShowMiniMapButton</key>
-    <map>
-      <key>Comment</key>
-      <string>Shows/hides mini-map button in the bottom tray.</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>

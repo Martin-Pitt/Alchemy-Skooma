@@ -211,6 +211,7 @@
 #include "lltracker.h"
 #include "llviewerparcelmgr.h"
 #include "llworldmapview.h"
+#include "skmodalview.h" // <SK:Nexii> modal view
 
 #include "lldebugview.h"
 #include "llconsole.h"
@@ -221,6 +222,8 @@
 #include "llsdserialize.h"
 
 #include "llworld.h"
+#include "sknavmesh.h" // <SK:Nexii> navmesh build tick
+#include "skworldcensus.h" // <SK:Nexii> navmesh census tick
 #include "llhudeffecttrail.h"
 #include "llslurl.h"
 #include "llurlregistry.h"
@@ -1588,7 +1591,7 @@ bool LLAppViewer::doFrame()
                     pingMainloopTimeout("Main:Snapshot");
                     // Probes are captured only while the world is drawn: a hidden or minimized window shows none of
                     // them, so their captures would be GPU work for nothing.
-                    if (!display_window_hidden())
+                    if (!display_window_hidden() && !SKModalView::worldCovered()) // <SK:Nexii> modal view: no probe faces (each a full scene render) under a modal view
                     {
                         gPipeline.mReflectionMapManager.update();
                     }
@@ -1946,6 +1949,13 @@ bool LLAppViewer::cleanup()
         LLWorldMap::getInstance()->reset(); // release any images
     }
 
+    // <SK:Nexii> modal view: its modes' views and targets go while the texture list and GL are still up.
+    if (SKModalView::instanceExists())
+    {
+        SKModalView::getInstance()->shutdown();
+    }
+    // </SK:Nexii>
+
     LLCalc::cleanUp();
 
     LL_INFOS() << "Global stuff deleted" << LL_ENDL;
@@ -2019,6 +2029,10 @@ bool LLAppViewer::cleanup()
     LL_INFOS() << "Cleaning up Objects" << LL_ENDL;
 
     LLViewerObject::cleanupVOClasses();
+
+    // <SK:Nexii> navmesh census: release any held viewer objects before the avatar appearance dictionary below goes away
+    SKWorldCensus::deleteSingleton();
+    // </SK:Nexii>
 
     SUBSYSTEM_CLEANUP(LLAvatarAppearance);
 
@@ -5911,6 +5925,10 @@ void LLAppViewer::idle()
         LL_PROFILE_ZONE_NAMED_CATEGORY_APP("world update");
         gPipeline.updateMove();
     }
+    // <SK:Nexii> navmesh: the census scans after objects moved, the mesh follows the census
+    SKWorldCensus::instance().update();
+    SKNavMesh::instance().update();
+    // </SK:Nexii>
 
     LLWorld::getInstance()->updateParticles();
 

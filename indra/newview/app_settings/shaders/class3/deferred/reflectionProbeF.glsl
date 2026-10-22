@@ -105,6 +105,22 @@ bool probeHolds(int i, vec3 pos, bool automatic, out bool boxed, out vec3 box_po
     return !(d > r2);
 }
 
+// <SK:Nexii> Cluster probes: a probe's tier in the mix, see skProbeMix.
+int skProbeTier(int i)
+{
+    if (i == 0)
+    {
+        return 3;
+    }
+    int p = clamp(abs(refIndex[i].w), 0, 1);
+    if (p == 0 && (floatBitsToUint(refParams[i].w) & 0x10000000u) != 0u)
+    {
+        return 2;
+    }
+    return p;
+}
+// </SK:Nexii>
+
 int getStartIndex(vec3 pos)
 {
 #if 1
@@ -605,6 +621,13 @@ struct ProbeSums
     vec3  legacy0, legacy1;
     float wsum0, wsum1;
     float dwsum0, dwsum1;
+    // <SK:Nexii> Cluster probes: the census clusters' fills (2) and the default probe (3), tiers of their own.
+    vec3  ambient2, ambient3;
+    vec3  gloss2, gloss3;
+    vec3  legacy2, legacy3;
+    float wsum2, wsum3;
+    float dwsum2, dwsum3;
+    // </SK:Nexii>
 };
 
 // Where pos lies in probe `i`'s unit cube, if it is a box, for a probe tapped without probeHolds asking.
@@ -622,7 +645,25 @@ void probeTap(int i, vec3 pos, vec3 box_pos, ProbeTaps t, inout ProbeSums s)
     vec3 gloss = t.gloss ? probeRadiance(i, pos, box_pos, t.gloss_dir, t.gloss_lod, t.water) : vec3(0);
     vec3 legacy = t.legacy ? probeRadiance(i, pos, box_pos, t.legacy_dir, 0.0, t.water) : vec3(0);
 
-    if (clamp(abs(refIndex[i].w), 0, 1) == 0)
+    // <SK:Nexii> Cluster probes: each tier sums apart.
+    int tier = skProbeTier(i);
+    if (tier == 3)
+    {
+        s.ambient3 += ambient*w;
+        s.gloss3 += gloss*w;
+        s.legacy3 += legacy*w;
+        s.wsum3 += w;
+        s.dwsum3 += dw;
+    }
+    else if (tier == 2)
+    {
+        s.ambient2 += ambient*w;
+        s.gloss2 += gloss*w;
+        s.legacy2 += legacy*w;
+        s.wsum2 += w;
+        s.dwsum2 += dw;
+    }
+    else if (tier == 0) // </SK:Nexii>
     {
         s.ambient0 += ambient*w;
         s.gloss0 += gloss*w;
@@ -669,6 +710,34 @@ vec3 probeMix(vec3 col0, vec3 col1, ProbeSums s, bool automatic)
     return col1+col0;
 }
 
+// <SK:Nexii> Cluster probes: four tiers, each mixed over the one below it by its distance weight.
+// 0 automatic, 1 manual, 2 a census cluster's fill (bit 28 of refParams.w), 3 the default probe; once a box has shut
+// the automatic probes out, only the manual tier is left.
+void skMixProbeTier(inout vec3 ret, inout bool any, vec3 col, float wsum, float dwsum)
+{
+    if (wsum > 0.0)
+    {
+        col *= 1.0/wsum;
+        ret = any ? mix(ret, col, min(dwsum, 1.0)) : col;
+        any = true;
+    }
+}
+
+vec3 skProbeMix(vec3 col0, vec3 col1, vec3 col2, vec3 col3, ProbeSums s, bool automatic)
+{
+    vec3 ret = vec3(0);
+    bool any = false;
+    if (automatic)
+    {
+        skMixProbeTier(ret, any, col3, s.wsum3, s.dwsum3);
+        skMixProbeTier(ret, any, col2, s.wsum2, s.dwsum2);
+        skMixProbeTier(ret, any, col0, s.wsum0, s.dwsum0);
+    }
+    skMixProbeTier(ret, any, col1, s.wsum1, s.dwsum1);
+    return ret;
+}
+// </SK:Nexii>
+
 // Taps every probe that holds `pos`, up to REF_SAMPLE_COUNT, each as it is found: the probes from the first whose
 // bounding sphere can reach this depth (getStartIndex), until one lies wholly beyond it, which the list being sorted on
 // the nearest depth each reaches makes the last; and once one with neighbours holds it, its neighbours, which end the
@@ -688,6 +757,18 @@ void sampleProbeTaps(vec3 pos, ProbeTaps t, inout vec3 ambenv, inout vec3 glosse
     s.wsum1 = 0;
     s.dwsum0 = 0;
     s.dwsum1 = 0;
+    // <SK:Nexii> Cluster probes
+    s.ambient2 = vec3(0);
+    s.ambient3 = vec3(0);
+    s.gloss2 = vec3(0);
+    s.gloss3 = vec3(0);
+    s.legacy2 = vec3(0);
+    s.legacy3 = vec3(0);
+    s.wsum2 = 0;
+    s.wsum3 = 0;
+    s.dwsum2 = 0;
+    s.dwsum3 = 0;
+    // </SK:Nexii>
 
     bool automatic = !t.water;
     bool boxed = false;
@@ -725,7 +806,7 @@ void sampleProbeTaps(vec3 pos, ProbeTaps t, inout vec3 ambenv, inout vec3 glosse
             ++neighbor;
         }
 
-        if (!probeHolds(idx, pos, automatic, boxed, box_pos))
+        if (skProbeTier(idx) == 2 || !probeHolds(idx, pos, automatic, boxed, box_pos)) // <SK:Nexii> Cluster probes are tapped below
         {
             continue;
         }
@@ -746,6 +827,17 @@ void sampleProbeTaps(vec3 pos, ProbeTaps t, inout vec3 ambenv, inout vec3 glosse
             neighbor = 0;
         }
     }
+
+    // <SK:Nexii> Cluster probes: every fill holding pos (refBucket[0].yz is their range).
+    for (int ci = refBucket[0].y; automatic && ci < refBucket[0].z && count < REF_SAMPLE_COUNT - 1; ++ci)
+    {
+        if (skProbeTier(ci) == 2 && probeHolds(ci, pos, true, boxed, box_pos))
+        {
+            probeTap(ci, pos, box_pos, t, s);
+            ++count;
+        }
+    }
+    // </SK:Nexii>
 
     if (automatic && count < REF_SAMPLE_COUNT)
     { // probe at index 0 is a special probe for smoothing out automatic probes
@@ -773,15 +865,15 @@ void sampleProbeTaps(vec3 pos, ProbeTaps t, inout vec3 ambenv, inout vec3 glosse
 
     if (t.ambient)
     {
-        ambenv = probeMix(s.ambient0, s.ambient1, s, automatic);
+        ambenv = skProbeMix(s.ambient0, s.ambient1, s.ambient2, s.ambient3, s, automatic); // <SK:Nexii> Cluster probes
     }
     if (t.gloss)
     {
-        glossenv = probeMix(s.gloss0, s.gloss1, s, automatic);
+        glossenv = skProbeMix(s.gloss0, s.gloss1, s.gloss2, s.gloss3, s, automatic); // <SK:Nexii> Cluster probes
     }
     if (t.legacy)
     {
-        legacyenv = probeMix(s.legacy0, s.legacy1, s, automatic);
+        legacyenv = skProbeMix(s.legacy0, s.legacy1, s.legacy2, s.legacy3, s, automatic); // <SK:Nexii> Cluster probes
     }
 }
 
@@ -1069,6 +1161,212 @@ vec4 sampleReflectionProbesDebug(vec3 pos)
 
     return col;
 }
+
+// <SK:Nexii> Probe volume display: every probe drawn on scene surfaces as a frozen scanner pulse, kind-coloured, with blends hatched.
+// refParams[i].w carries the probe's kind in bits 24-27 while the display is on (LLReflectionMapManager::SKProbeKind).
+uniform mat4 sk_probe_inv_view; // camera space to agent space
+
+vec3 skProbeKindColor(int i)
+{
+    uint kind = (floatBitsToUint(refParams[i].w) >> 24) & 15u;
+    if (kind == 1u) return vec3(1.0, 0.25, 0.85);  // placed sphere
+    if (kind == 2u) return vec3(1.0, 0.55, 0.1);   // placed box
+    if (kind == 3u) return vec3(0.1, 0.85, 1.0);   // octree automatic
+    if (kind == 4u) return vec3(0.3, 1.0, 0.35);   // navmesh room sphere
+    if (kind == 5u) return vec3(1.0, 0.95, 0.2);   // navmesh room box (reserved)
+    if (kind == 6u) return vec3(0.55, 0.45, 1.0);  // census cluster fill
+    return vec3(0.6);                              // default probe
+}
+
+// Signed distance in metres from a camera-space point to probe i's influence volume.
+float skProbeDistance(int i, vec3 pos)
+{
+    if (refIndex[i].w < 0)
+    {
+        mat4 m = refBox[i];
+        vec3 u = (m * vec4(pos, 1.0)).xyz;
+        vec3 half_extent = vec3(1.0 / length(vec3(m[0][0], m[1][0], m[2][0])),
+                                1.0 / length(vec3(m[0][1], m[1][1], m[2][1])),
+                                1.0 / length(vec3(m[0][2], m[1][2], m[2][2])));
+        vec3 q = (abs(u) - 1.0) * half_extent;
+        return length(max(q, vec3(0.0))) + min(max(q.x, max(q.y, q.z)), 0.0);
+    }
+    return length(pos - refSphere[i].xyz) - refSphere[i].w;
+}
+
+// The probes sampleProbeTaps would tap at pos, in its order, and whether the automatic tiers survive a box.
+int skProbeSelect(vec3 pos, out int list[REF_SAMPLE_COUNT], out bool automatic)
+{
+    automatic = true;
+    bool boxed = false;
+    vec3 box_pos = vec3(0);
+    int count = 0;
+#if REFMAP_LEVEL > 0
+    int i = getStartIndex(pos);
+    int neighbor = -1;
+    int neighbor_base = 0;
+    int neighbor_count = 0;
+    while (count < REF_SAMPLE_COUNT)
+    {
+        int idx;
+        if (neighbor < 0)
+        {
+            if (i >= refmapCount || refParams[i].w > -pos.z)
+            {
+                break;
+            }
+            idx = i++;
+        }
+        else
+        {
+            if (neighbor >= neighbor_count)
+            {
+                break;
+            }
+            idx = refNeighbor[neighbor_base + (neighbor >> 2)][neighbor & 3];
+            ++neighbor;
+        }
+        if (skProbeTier(idx) == 2 || !probeHolds(idx, pos, automatic, boxed, box_pos))
+        {
+            continue;
+        }
+        if (boxed)
+        {
+            automatic = false;
+        }
+        list[count++] = idx;
+        if (neighbor < 0 && refIndex[idx].y != -1)
+        {
+            neighbor_base = refIndex[idx].y;
+            neighbor_count = refIndex[idx].z;
+            neighbor = 0;
+        }
+    }
+    for (int ci = refBucket[0].y; automatic && ci < refBucket[0].z && count < REF_SAMPLE_COUNT - 1; ++ci)
+    {
+        if (skProbeTier(ci) == 2 && probeHolds(ci, pos, true, boxed, box_pos))
+        {
+            list[count++] = ci;
+        }
+    }
+    if (automatic && count < REF_SAMPLE_COUNT)
+    {
+        list[count++] = 0;
+    }
+#else
+    list[count++] = 0;
+#endif
+    return count;
+}
+
+vec4 skProbePulseDebug(vec3 pos, vec3 norm)
+{
+    float dist = length(pos);
+    float half_width = max(0.06, 0.0012 * dist); // ~12 cm near, a few pixels far
+
+    vec4 band = vec4(0.0);
+    vec3 tint = vec3(0.0);
+    float tint_a = 0.0;
+    for (int i = 1; i < refmapCount; ++i)
+    {
+        float sd = skProbeDistance(i, pos);
+        if (sd > 4.0 * half_width)
+        {
+            continue;
+        }
+        vec3 c = skProbeKindColor(i);
+        float x = sd / half_width;
+        float a = 0.9 * exp(-x * x);
+        if (sd < 0.0)
+        {   // the wake behind the front, then a faint fill
+            a = max(a, 0.3 * exp(sd / 0.75));
+            float t = 0.07 + 0.05 * exp(sd / 3.0);
+            if (t > tint_a)
+            {
+                tint_a = t;
+                tint = c;
+            }
+        }
+        band += vec4(c * a, a) * (1.0 - band.a);
+    }
+
+    vec4 col = band + vec4(tint * tint_a, tint_a) * (1.0 - band.a);
+
+    // The real selection: the probes sampleProbeTaps takes, weighted and mixed as skProbeMix does.
+    int list[REF_SAMPLE_COUNT];
+    bool automatic;
+    int n = skProbeSelect(pos, list, automatic);
+    float wsum[4] = float[4](0.0, 0.0, 0.0, 0.0);
+    float dwsum[4] = float[4](0.0, 0.0, 0.0, 0.0);
+    float wraw[REF_SAMPLE_COUNT];
+    for (int k = 0; k < n; ++k)
+    {
+        int i = list[k];
+        int p = skProbeTier(i);
+        wraw[k] = 0.0;
+        if (p != 1 && !automatic)
+        {
+            continue;
+        }
+        float dw = 0.0;
+        wraw[k] = probeWeight(i, pos, probeBoxPos(i, pos), dw);
+        wsum[p] += wraw[k];
+        dwsum[p] += dw;
+    }
+    // Each tier's share of the mix, top down: what skProbeMix gives it once a lower tier is present.
+    float tier_share[4];
+    float remaining = 1.0;
+    const int top_down[4] = int[4](1, 0, 2, 3);
+    for (int k = 0; k < 4; ++k)
+    {
+        int t = top_down[k];
+        bool lower = false;
+        for (int l = k + 1; l < 4; ++l)
+        {
+            lower = lower || wsum[top_down[l]] > 0.0;
+        }
+        tier_share[t] = wsum[t] > 0.0 ? remaining * (lower ? min(dwsum[t], 1.0) : 1.0) : 0.0;
+        remaining -= tier_share[t];
+    }
+    float w1 = 0.0, w2 = 0.0;
+    int i1 = -1, i2 = -1;
+    for (int k = 0; k < n; ++k)
+    {
+        int i = list[k];
+        int p = skProbeTier(i);
+        float w = wsum[p] > 0.0 ? wraw[k] / wsum[p] * tier_share[p] : 0.0;
+        if (w > w1)
+        {
+            w2 = w1; i2 = i1;
+            w1 = w; i1 = i;
+        }
+        else if (w > w2)
+        {
+            w2 = w; i2 = i;
+        }
+    }
+
+    if (i2 >= 0 && w1 < 0.9)
+    {   // world-space diagonal stripes, triplanar, denser the more even the blend
+        vec3 wp = (sk_probe_inv_view * vec4(pos, 1.0)).xyz;
+        vec3 wn = abs(mat3(sk_probe_inv_view) * norm);
+        wn = pow(wn, vec3(4.0));
+        wn /= max(wn.x + wn.y + wn.z, 1e-4);
+        float evenness = clamp(w2 / max(w1, 1e-4), 0.0, 1.0);
+        float freq = 1.0 / mix(0.8, 0.25, evenness); // stripes per metre
+        vec3 s = vec3(wp.y + wp.z, wp.x + wp.z, wp.x + wp.y) * freq;
+        vec3 line = step(fract(s), vec3(0.15));
+        float hatch = dot(line, wn);
+        float parity = dot(mod(floor(s), 2.0), wn);
+        vec3 c = mix(skProbeKindColor(i1 == 0 ? i2 : i1), skProbeKindColor(i2 == 0 ? i1 : i2), step(0.5, parity));
+        float a = 0.75 * hatch;
+        col = vec4(c * a, a) + col * (1.0 - a);
+    }
+
+    // unpremultiplied for the blend the display pass draws with
+    return col.a > 0.0 ? vec4(col.rgb / col.a, min(col.a, 1.0)) : vec4(0.0);
+}
+// </SK:Nexii>
 
 void applyGlossEnv(inout vec3 color, vec3 glossenv, vec4 spec, vec3 pos, vec3 norm)
 {

@@ -56,6 +56,7 @@
 #include "llrendertarget.h"
 #include "llreflectionmapmanager.h"
 #include "llheroprobemanager.h"
+#include "skcombatlockout.h" // <SK:Nexii> combat render lockout
 #include "alscopedata.h"
 
 #include <array>
@@ -275,6 +276,15 @@ public:
     //  for_profile - if true, a profile is being performed, do not update actual impostor
     //  specific_attachment - specific attachment to profile, or nullptr to profile entire avatar
     void generateImpostor(LLVOAvatar* avatar, bool preview_avatar = false, bool for_profile = false, LLViewerObject* specific_attachment = nullptr);
+    // <SK:Nexii> outline capture: depth-only coverage of one spatial bridge into the bound target; returns the draws made.
+    // skip, when set, leaves out the draw infos it returns true for.
+    U32 skRenderOutlineCoverage(LLSpatialBridge* bridge, const LLMatrix4a& view, const LLMatrix4a& proj, LLCamera& camera, F32 alpha_cutoff,
+                                const std::function<bool(const LLDrawInfo*)>& skip = nullptr);
+    // </SK:Nexii>
+    // <SK:Nexii> overview capture: terrain, then census() under the clip program, all below cut_z, a class code per pass in R; returns the draws made.
+    U32 skRenderOverview(const LLMatrix4a& view, const LLMatrix4a& proj, LLCamera& camera, F32 cut_z,
+                         const std::function<void()>& census);
+    // </SK:Nexii>
 
     // A full-screen quad at the far plane, depth-tested against the bound
     // target's depth and never writing it: GL_GREATER reaches every texel that
@@ -685,13 +695,14 @@ public:
     void recordTrianglesDrawn();
 
     bool hasRenderDebugFeatureMask(const U32 mask) const    { return bool(mRenderDebugFeatureMask & mask); }
-    bool hasRenderDebugMask(const U64 mask) const           { return bool(mRenderDebugMask & mask); }
+    bool hasRenderDebugMask(const U64 mask) const           { return bool(mRenderDebugMask & ~SKCombatLockout::debugMask() & mask); } // <SK:Nexii/> combat render lockout hides its bits from every reader but the menu
     void setAllRenderDebugFeatures() { mRenderDebugFeatureMask = 0xffffffff; }
     void clearAllRenderDebugFeatures() { mRenderDebugFeatureMask = 0x0; }
     void setAllRenderDebugDisplays() { mRenderDebugMask = 0xffffffffffffffff; }
     void clearAllRenderDebugDisplays() { mRenderDebugMask = 0x0; }
 
     bool hasRenderType(const U32 type) const;
+    bool isRenderTypeEnabled(const U32 type) const { return mRenderTypeEnabled[type]; } // <SK:Nexii/> the user's toggle, for the combat render lockout
     bool hasAnyRenderType(const U32 type, ...) const;
 
     static bool isWaterClip();
@@ -772,6 +783,10 @@ public:
     static void refreshCachedSettings();
 
     void addDebugBlip(const LLVector3& position, const LLColor4& color);
+    // <SK:Nexii> navmesh tile updates: the same blip, with a line back to
+    // whatever caused the update
+    void addDebugBlip(const LLVector3& position, const LLColor4& color, const LLVector3& from);
+    // </SK:Nexii>
 
     void hidePermanentObjects( std::vector<U32>& restoreList );
     void restorePermanentObjects( const std::vector<U32>& restoreList );
@@ -941,6 +956,7 @@ public:
         RENDER_DEBUG_IMPOSTORS          = 0x100000000,
         RENDER_DEBUG_REFLECTION_PROBES  = 0x200000000,
         RENDER_DEBUG_PROBE_UPDATES      = 0x400000000,
+        RENDER_DEBUG_NAVMESH            = 0x800000000, // <SK:Nexii> navmesh census and mesh overlay
     };
 
 public:
@@ -982,6 +998,7 @@ public:
     static bool             sNoAlpha;
     static bool             sUseFarClip;
     static bool             sShadowRender;
+    static bool             sSKCoverageRender; // <SK:Nexii> outline capture: renderShadow draws double-sided, translucency counts
     static bool             sDynamicLOD;
     static bool             sPickAvatar;
     static bool             sImpostorRender;
@@ -1535,6 +1552,11 @@ protected:
         LLColor4 mColor;
         LLVector3 mPosition;
         F32 mAge;
+        // <SK:Nexii> navmesh tile updates: the blip a tile update spawns also
+        // points at what caused it, when something did
+        LLVector3 mFrom;
+        bool mHasFrom = false;
+        // </SK:Nexii>
 
         DebugBlip(const LLVector3& position, const LLColor4& color)
             : mColor(color), mPosition(position), mAge(0.f)

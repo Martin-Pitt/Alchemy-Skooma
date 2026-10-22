@@ -125,6 +125,7 @@
 #include "llskinningutil.h"
 
 #include "llperfstats.h"
+#include "skoverviewcapture.h" // <SK:Nexii> tactical overview nametags
 
 #include <boost/lexical_cast.hpp>
 #include <fmt/format.h>
@@ -3630,7 +3631,7 @@ void LLVOAvatar::idleUpdateNameTag(const LLVector3& root_pos_last)
         static LLCachedControl<S32> name_tag_mode(gSavedSettings, "AvatarNameTagMode");
         render_name = render_name
             && !gAgentCamera.cameraMouselook()
-            && (visible_chat || (render_name_show_self && name_tag_mode));
+            && (visible_chat || ((render_name_show_self || SKOverviewCapture::tacticalShown()) && name_tag_mode)); // <SK:Nexii> tactical overview: your own tag marks you on it
     }
 
     if ( !render_name )
@@ -3672,7 +3673,7 @@ void LLVOAvatar::idleUpdateNameTag(const LLVector3& root_pos_last)
     // First Calculate Alpha
     // If alpha > 0, create mNameText if necessary, otherwise delete it
     F32 alpha = 0.f;
-    if (mAppAngle > 5.f)
+    if (mAppAngle > 5.f || SKOverviewCapture::tacticalShown()) // <SK:Nexii> tactical overview: its camera is too far up for the size fade
     {
         const F32 START_FADE_TIME = NAME_SHOW_TIME - FADE_DURATION;
         if (!visible_chat && sRenderName == RENDER_NAME_FADE && time_visible > START_FADE_TIME)

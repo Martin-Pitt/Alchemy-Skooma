@@ -1,0 +1,231 @@
+/**
+ * @file skmappeople.h
+ * @brief The mini-map's people: a snapshot of nearby avatars taken once an idle, for the draw.
+ *
+ * $LicenseInfo:firstyear=2026&license=viewerlgpl$
+ * Alchemy Viewer Source Code
+ * Copyright (C) 2026, Alchemy Viewer Project.
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation;
+ * version 2.1 of the License only.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * $/LicenseInfo$
+ */
+
+#ifndef SK_MAPPEOPLE_H
+#define SK_MAPPEOPLE_H
+
+#include "llquaternion.h"
+#include "llsingleton.h"
+#include "lluuid.h"
+#include "v3dmath.h"
+#include "v4color.h"
+
+#include "skmapallies.h"
+#include "skmapallyresolver.h"
+#include "skmapmarkers.h"
+#include "skmappolicy.h"
+#include "skmapview.h"
+
+class LLVOAvatar;
+#include "sknavwalls.h"
+#include "skmapplan.h"
+#include "skoutlinecapture.h"
+
+#include <deque>
+#include <map>
+#include <vector>
+
+namespace skmap
+{
+    /// Another avatar's floor against the reference floor (the agent's, or the camera's when it has left the agent's storey).
+    enum class FloorRelation : U8 { SAME, ABOVE, BELOW, UNKNOWN };
+}
+
+/// A vehicle's captured outline, keyed by its root: the outline capture's glyph.
+class SKMapVehicleGlyphs
+{
+public:
+    using Glyph = SKOutlineGlyph;
+    /// The glyph of a vehicle, asking for a capture; null until its first render, valid until the next frame.
+    static const Glyph* glyphFor(const LLUUID& root) { return SKOutlineCapture::glyphFor(root); }
+};
+
+/// Main thread only. Does nothing while no map has drawn for a couple of seconds.
+class SKMapPeople : public LLSingleton<SKMapPeople>
+{
+    LLSINGLETON(SKMapPeople);
+    ~SKMapPeople() override;
+
+public:
+    struct Person
+    {
+        LLUUID mId;
+        LLVector3d mPos;
+        bool mLoaded = false;               ///< a full object, not a coarse location
+        F64 mFeetZ = 0.0;                   ///< global; the sim's box bottom when loaded, else 0.9 m under a coarse location
+        bool mZKnown = true;                ///< false when both it and the camera sit at the coarse ceiling
+        bool mHasHeading = false;
+        F32 mHeading = 0.f;                 ///< radians from east, counter-clockwise
+        bool mSitting = false;
+        LLUUID mSeatRoot;
+        bool mFriend = false;
+        LLColor4 mColour;                   ///< the general dot colour
+        skmap::FloorRelation mFloor = skmap::FloorRelation::SAME;   ///< UNKNOWN with no height; ABOVE or BELOW past SKMapFloorChevronBand1
+        skmap::plan::Whereabouts mWhere;    ///< their air gap's space and floor
+        F32 mFloorDelta = 0.f;              ///< their feet minus yours, m; meaningful only when mFloorKnown
+        bool mFloorKnown = false;
+        bool mAlly = false;
+        skmap::Visibility mVisibility = skmap::Visibility::DOT;
+        std::string mCode;                  ///< the ally's code in combat, else empty
+    };
+
+    /// The bottom of an avatar's physical box as the sim sends it (object scale), global Z.
+    static F64 feetZ(LLVOAvatar* avatar);
+
+    void initSingleton() override;
+    void cleanupSingleton() override;
+
+    /// Everyone but the agent the map may show, friends last. In combat that is allies only.
+    const std::vector<Person>& people() const { return mPeople; }
+
+    struct Vehicle
+    {
+        LLUUID mRoot;
+        LLVector3d mPos;
+        LLQuaternion mRot;
+        LLVector3 mMin, mMax;               ///< the linkset's box in the root's frame
+        std::vector<LLUUID> mCrew;          ///< seated avatars the map may show
+        skmap::VehicleLook mLook = skmap::VehicleLook::CIVILIAN;
+    };
+    /// Linksets the census has seen driven this session, at their live pose.
+    const std::vector<Vehicle>& vehicles() const { return mVehicles; }
+    /// Whether the agent is engaged on land where it can be hurt, or the debug switch forces it.
+    bool combat() const { return mCombat; }
+    /// When combat last started or ended, for the map's brief notice.
+    F64 combatChangedAt() const { return mEngagement.changedAt(); }
+    /// The ally probes, for the debug readout.
+    const SKMapAllyResolver& resolver() const { return mResolver; }
+    /// A local marker at a point, fading over 4 s. Nothing is sent anywhere.
+    void addPing(const LLVector3d& pos);
+    struct Ping
+    {
+        LLVector3d mPos;
+        F64 mTime = 0.0;
+    };
+    const std::vector<Ping>& pings() const { return mPings; }
+
+    /// A hit, kill or death the combat log reported.
+    void addEvent(const SKCombatEvent& event);
+    const skmap::EventRing& events() const { return mEvents; }
+
+    /// Where a drawn avatar is aiming: its head's ray to what it hits, or 64 m out.
+    struct FiringLine
+    {
+        LLVector3d mFrom;
+        LLVector3d mTo;
+        F32 mLength = 0.f; ///< the last ray's reach, kept while the aim follows the head every idle
+        F64 mCast = -1.0e9;
+        bool mPrecise = false; ///< aimed by a mouselook LookAt, not only the body's facing
+    };
+    const std::map<LLUUID, FiringLine>& firingLines() const { return mFiring; }
+
+    /// Moving physical objects and needles in view, vehicles excluded, gathered every frame from the live object list.
+    struct Projectile
+    {
+        LLVector3d mPos;                    ///< the head
+        LLVector3 mDir;                     ///< unit direction of travel
+        F32 mLength = 0.f;                  ///< the prim's extent along its direction of travel, metres
+        F32 mWidth = 0.f;                   ///< the prim's extent across it, metres
+        LLUUID mShooter;                    ///< who it was traced back to, null when nobody fits
+        LLVector3 mScale;                   ///< the prim's scale, for a footprint
+        LLQuaternion mRot;                  ///< the prim's rotation, region frame
+        F32 mSpeed = 0.f;
+        bool mBullet = true;                ///< a needle or a small fast shot, drawn as a streak; otherwise its footprint
+        /// The box's eight corners, global.
+        void corners(LLVector3d* out) const;
+    };
+    const std::vector<Projectile>& projectiles() const { return mProjectiles; }
+
+    /// Any object moving fast enough, with where it has been over its trail's lifetime, newest first.
+    struct FastTrail
+    {
+        std::vector<std::pair<F64, LLVector3d>> mPoints;
+        F32 mAlpha = 0.f;                   ///< opacity at the head
+        F32 mLife = 0.f;                    ///< seconds the trail reaches back
+    };
+    const std::map<LLUUID, FastTrail>& fastTrails() const { return mFastTrails; }
+
+    /// The user's ally groups: the active group's faction, or the group alone.
+    const std::set<LLUUID>& candidates() const { return mCandidates; }
+
+    /// A map drew this frame with this view: the idle work runs while one has, recently.
+    void noteDrawn(const skmap::MapView& view);
+    /// The same for a view that is no map (the tactical overview): what it shows, as a global box.
+    void noteDrawn(const LLVector3d& min, const LLVector3d& max);
+    bool active() const;
+
+    static void onIdle(void*);
+
+private:
+    void idle();
+    void gatherPeople();
+    void gatherVehicles();
+    void updateCombat();
+    void updateFiringLines();
+    void updateTrails(F64 now);
+    LLUUID traceShooter(const LLVector3d& pos, const LLVector3& velocity) const;
+    void updateProjectiles();
+    void updateCandidates();
+    void loadFactions();
+
+    std::vector<Person> mPeople;
+    F64 mLastDrawn = -1.0e9;
+    std::vector<Vehicle> mVehicles;
+    /// Seat roots of everyone near, shown or not: whether a vehicle is crewed, and by an ally.
+    std::map<LLUUID, std::pair<bool, bool>> mSeats;
+    bool mCombat = false;
+    bool mSelfFeetKnown = false;            ///< the agent's avatar is valid this update
+    F64 mSelfFeet = 0.0;                    ///< global feet height, the reference for the chevrons
+    skmap::Engagement mEngagement;
+    SKMapAllyResolver mResolver;
+    skmap::FactionTable mFactions;
+    bool mFactionsLoaded = false;
+    LLUUID mActiveGroup;
+    bool mGroupKnown = false;
+    std::set<LLUUID> mCandidates;
+    skmap::MarkerCodes mCodes;
+    std::vector<Ping> mPings;
+    skmap::EventRing mEvents;
+    std::map<LLUUID, FiringLine> mFiring;
+    F64 mRayAllowance = 0.0;            ///< seconds of ray time earned and not yet spent
+    std::vector<Projectile> mProjectiles;
+    std::map<LLUUID, FastTrail> mFastTrails;
+    /// Every nearby avatar's recent positions, oldest first, to trace shots back to; never drawn.
+    std::map<LLUUID, std::deque<std::pair<F64, LLVector3d>>> mTrails;
+    std::map<LLUUID, LLUUID> mShooters;  ///< shots already traced, by object
+    F64 mProjectilesAt = -1.0e9;
+    LLVector3d mViewMin, mViewMax;      ///< the map's view with 10% to spare, where probes go
+    boost::signals2::connection mTeleportConnection;
+    std::vector<LLUUID> mVehicleRoots;
+    U64 mVehicleStamp = 0;
+    /// Linkset boxes by root, kept while the child set holds.
+    struct BoxCache
+    {
+        U64 mKey = 0;
+        LLVector3 mMin, mMax;
+    };
+    std::map<LLUUID, BoxCache> mBoxes;
+};
+
+#endif // SK_MAPPEOPLE_H
