@@ -3868,6 +3868,59 @@ function="World.EnvPreset"
           </menu_item_check>
         </menu>
         <!-- </SK:Nexii> -->
+        <!-- <SK:Nexii> census: the world layers' debug overlays and the census export -->
+        <menu
+         create_jump_keys="true"
+         label="World"
+         name="SKWorld"
+         tear_off="true">
+          <menu_item_check
+           label="Overlays"
+           name="SKWorldOverlays"
+           tool_tip="Draw the world layers' debug overlays chosen below">
+            <menu_item_check.on_check
+             function="Advanced.CheckInfoDisplay"
+             parameter="world" />
+            <menu_item_check.on_click
+             function="Advanced.ToggleInfoDisplay"
+             parameter="world" />
+          </menu_item_check>
+          <menu_item_check
+           label="Census Shapes"
+           name="SKWorldOverlayCensus">
+            <menu_item_check.on_check
+             control="SKWorldOverlayCensus" />
+            <menu_item_check.on_click
+             function="ToggleControl"
+             parameter="SKWorldOverlayCensus" />
+          </menu_item_check>
+          <menu_item_check
+           label="Census Clusters"
+           name="SKWorldOverlayClusters">
+            <menu_item_check.on_check
+             control="SKWorldOverlayClusters" />
+            <menu_item_check.on_click
+             function="ToggleControl"
+             parameter="SKWorldOverlayClusters" />
+          </menu_item_check>
+          <menu_item_check
+           label="Census Features"
+           name="SKWorldOverlayFeatures">
+            <menu_item_check.on_check
+             control="SKWorldOverlayFeatures" />
+            <menu_item_check.on_click
+             function="ToggleControl"
+             parameter="SKWorldOverlayFeatures" />
+          </menu_item_check>
+          <menu_item_call
+           label="Export Census"
+           name="SKExportWorldCensus"
+           tool_tip="Write the last census and every world layer's section to a file in the logs folder">
+            <menu_item_call.on_click
+             function="SK.ExportWorldCensus" />
+          </menu_item_call>
+        </menu>
+        <!-- </SK:Nexii> -->
         <menu_item_check
          label="Occlusion"
          name="Occlusion">

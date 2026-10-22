@@ -80,6 +80,7 @@
 #include "llvocache.h"
 #include "llcorehttputil.h"
 #include "llstartup.h"
+#include "skworldcensus.h" // <SK:Nexii> census dirty set
 
 #include <algorithm>
 #include <iterator>
@@ -293,6 +294,13 @@ void LLViewerObjectList::processUpdateCore(LLViewerObject* objectp,
         gViewerWindow->getWindow()->decBusyCount();
         gViewerWindow->setCursor( UI_CURSOR_ARROW );
     }
+
+    // <SK:Nexii> census dirty set: every update and creation, once the object has its parent and children.
+    if (SKWorldCensus::instanceExists())
+    {
+        SKWorldCensus::getInstance()->noteObjectUpdate(objectp);
+    }
+    // </SK:Nexii>
 }
 
 LLViewerObject* LLViewerObjectList::processObjectUpdateFromCache(LLVOCacheEntry* entry, LLViewerRegion* regionp)
@@ -1473,6 +1481,12 @@ bool LLViewerObjectList::killObject(LLViewerObject *objectp)
         // and object being NULLed while inside it's own function won't be pretty
         // so create a pointer to make sure object will stay alive untill markDead() finishes
         LLPointer<LLViewerObject> sp(objectp);
+        // <SK:Nexii> census dirty set: before markDead, while the parent is still known.
+        if (SKWorldCensus::instanceExists())
+        {
+            SKWorldCensus::getInstance()->noteObjectGone(objectp);
+        }
+        // </SK:Nexii>
         sp->markDead(); // does the right thing if object already dead
         return true;
     }

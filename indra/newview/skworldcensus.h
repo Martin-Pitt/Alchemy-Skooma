@@ -1,0 +1,411 @@
+/**
+ * @file skworldcensus.h
+ * @brief The census: every declared physics shape near the agent, as the world layers see it.
+ *
+ * $LicenseInfo:firstyear=2026&license=viewerlgpl$
+ * Alchemy Viewer Source Code
+ * Copyright (C) 2026, Alchemy Viewer Project.
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation;
+ * version 2.1 of the License only.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * $/LicenseInfo$
+ */
+
+#ifndef SK_WORLDCENSUS_H
+#define SK_WORLDCENSUS_H
+
+#include "llhudtext.h"
+#include "llsingleton.h"
+#include "llviewerobject.h"
+#include "skcensusdelta.h"
+#include "skcensuscluster.h"
+#include "skcensusfeatures.h"
+#include "skcensusio.h"
+#include "skcensustypes.h"
+#include "threadpool_fwd.h"
+
+class SKPhysicsHavokShape;
+
+#include <boost/signals2/connection.hpp>
+#include <functional>
+#include <future>
+#include <map>
+#include <memory>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
+
+class LLViewerObject;
+class LLVOVolume;
+class LLPathfindingObjectList;
+
+/// A completed scan: immutable once published, shared by pointer with anyone
+/// who needs a consistent view (the cluster builds, the overlay, the console).
+struct SKCensusSnapshot
+{
+    U64 mStamp = 0;                             ///< moves when a completed scan's mHash differs from the last one's
+    U64 mHash = 0;                              ///< skworld::censusHash: records, features, doors, cluster window
+    LLVector3d mCenter;                        ///< the agent when the scan started
+    LLVector3d mCamera;                         ///< the camera then: covered as well, and often elsewhere
+    F64 mRange = 0.0;                           ///< metres from either centre the scan covered
+    std::vector<skworld::RecordPtr> mRecords;     ///< static and dynamic alike; clusters skip the dynamic
+    skworld::ClusterSet mClusters;
+    /// Doors, ladders, shafts, vehicles and seats among this scan's parts.
+    /// The records carry a part's kind from the scan after.
+    std::vector<skworld::Feature> mFeatures;
+    /// A DoorEntity per DOOR feature, built while the parts' names were at hand.
+    std::vector<skworld::DoorEntity> mDoors;
+    /// The records by part, and the parts that came, went and changed since the scan published before this one.
+    skworld::RecordsByPart mByPart;
+    std::vector<skworld::RecordPtr> mAdded;
+    std::vector<skworld::RecordPtr> mRemoved;
+    std::vector<skworld::RecordPtr> mChanged;
+
+    struct Stats
+    {
+        U32 mObjectsSeen = 0;
+        U32 mDirtyVisited = 0;      ///< objects an update, a feature change or a pending state named for this scan
+        bool mFullSweep = false;    ///< the scan visited the whole object list rather than the dirty set
+        U32 mRecords = 0;
+        U32 mDynamic = 0;
+        U32 mSurround = 0;
+        U32 mPlaceholders = 0;      ///< provenance BOX: objects known only from the region's object cache
+        U32 mCached = 0;            ///< parts reused from the previous scan
+        U32 mFromObjectCache = 0;   ///< boxes from the region's object cache, never drawn this session
+        U32 mTiny = 0;              ///< parts under SKCensusMinShape in every axis: never a record
+        U32 mVisibleOnly = 0;       ///< records of parts nothing collides with: phantom, volume detect or no shape
+        U32 mPhysicsMeshes = 0;     ///< mesh records, the only ones whose physics shape type the census asks for
+        U32 mPhysicsUnknown = 0;    ///< mesh records whose object's physics shape type had not arrived when visited
+        U32 mTriangles = 0;
+        U32 mRolesKnown = 0;
+        U32 mFeatures = 0;
+        F32 mFeatureMs = 0.f;       ///< the facts gathered and the rules run
+        F32 mScanMs = 0.f;          ///< main-thread time the scan took, summed over its slices
+        F32 mClusterMs = 0.f;
+    } mStats;
+};
+
+typedef std::shared_ptr<const SKCensusSnapshot> SKCensusSnapshotPtr;
+
+/// Runs a time-sliced scan of the object list under a per-frame budget and
+/// swaps in a whole snapshot when one completes. Readers keep the previous
+/// snapshot meanwhile. Live object access stays on the main thread; clustering
+/// runs on immutable records on a worker.
+class SKWorldCensus : public LLSingleton<SKWorldCensus>
+{
+    LLSINGLETON(SKWorldCensus);
+    ~SKWorldCensus() override;
+
+    /// Drops any LLPointer<LLViewerObject> a mid-flight scan is holding, so it can't
+    /// outlive LLAvatarAppearance::cleanupClass() and tear the self avatar down late.
+    void cleanupSingleton() override;
+
+public:
+    /// The highest land under a box's plan corners and middle, -1e9 with no world.
+    static F32 landUnder(const LLVector3d& min, const LLVector3d& max);
+
+    /// Once per frame after objects have moved. Does nothing unless the
+    /// census is enabled and something wants it (a demand, or the overlay).
+    void update();
+    /// The object-update path saw an object made or changed; main thread only.
+    void noteObjectUpdate(LLViewerObject* object);
+    /// An object is about to be killed, its parent still known; main thread only.
+    void noteObjectGone(LLViewerObject* object);
+
+    /// The last completed scan, or null before the first.
+    SKCensusSnapshotPtr snapshot() const { return mSnapshot; }
+
+    /// Consumers say they need the census; the scan runs while any is registered.
+    void addDemand(const std::string& who, F32 range_m);
+
+    /// A slow cadence while nothing needs the census fresh (the tactical overview covers the view): a new scan at
+    /// most once a second, and at most SLOW_SLICE_MS of scanning a frame. Snapshots still publish whole.
+    void setSlowCadence(bool slow) { mSlow = slow; }
+    bool slowCadence() const { return mSlow; }
+    /// Scans begun so far, for a cost line.
+    U32 scansBegun() const { return mScansBegun; }
+    void removeDemand(const std::string& who);
+
+    /// Record and cluster boxes in world, from the pipeline's debug pass.
+    void renderDebug();
+
+    /// Whether a structure with these bounds stands on the land: its base no higher than a step or two over the land
+    /// under its middle. A floating one (a skybox) does not.
+    static bool grounded(const LLVector3d& min, const LLVector3d& max);
+    /// The cluster the nav console selected, which the clusters overlay highlights; null for none.
+    void selectCluster(const LLUUID& id) { mSelectedCluster = id; }
+    const LLUUID& selectedCluster() const { return mSelectedCluster; }
+
+    /// The sim's pathfinding role for a linkset, when the region has told us.
+    skworld::NavRole roleOf(const LLUUID& root) const;
+
+    /// What the region's linkset reply says about a root besides its role.
+    /// Only roots in the agent's region are covered; a missing entry or an
+    /// empty name says nothing either way.
+    struct LinksetFacts
+    {
+        std::string mName;
+        std::string mDescription;
+        bool mScriptedKnown = false;
+        bool mScripted = false;
+    };
+    const LinksetFacts* linksetFactsOf(const LLUUID& root) const;
+
+    /// What this session has seen a root do. Kept across region changes, so
+    /// crew get off and a vehicle stays one; a root that is no vehicle or
+    /// working car goes once it has been out of sight for ten minutes.
+    struct RootHistory
+    {
+        bool mEverMoved = false;
+        F32 mTravel = 0.f;              ///< metres gone, turning not included
+        F64 mLastSeen = 0.f;
+        bool mEverCrewed = false;
+        bool mVehicle = false;          ///< crewed while physical or travelling: a vehicle for the session
+        bool mWorkingElevator = false;  ///< it was the car of a working shaft
+        skworld::FeatureKind mKind = skworld::FeatureKind::NONE;
+        std::vector<LLUUID> mCrew;      ///< seated on it at the last scan
+    };
+    const RootHistory* historyOf(const LLUUID& root) const;
+
+    std::string statsLine() const;
+
+    /// The scan's doors whose box meets this one, global, as of the last snapshot. Main thread only: a worker
+    /// takes copies of the doors it needs into its input.
+    typedef std::function<void(const skworld::DoorEntity& door)> DoorFn;
+    void doorsIn(const LLVector3d& min, const LLVector3d& max, const DoorFn& fn) const;
+    /// The scan the doors and features were taken from: moves when they may have.
+    U64 featureStamp() const { return mSnapshot ? mSnapshot->mStamp : 0; }
+
+    /// A part an exclusion says yes to is no world content: never a record, never a surround.
+    typedef std::function<bool(const LLViewerObject* object)> Exclusion;
+    void addExclusion(const std::string& name, const Exclusion& fn);
+    void removeExclusion(const std::string& name);
+
+    /// What a layer above knows of the built floor under a point, for a vehicle's clearance: true with the floor's
+    /// height when there is one no higher than reach. Without one, the census reads the land alone.
+    typedef std::function<bool(const LLVector3d& foot, F32 reach, F32& floor)> FloorProbe;
+    void setFloorProbe(const FloorProbe& fn) { mFloorProbe = fn; }
+
+    /// A section a layer above writes into, and reads back from, the census file.
+    void addCensusSection(const skworld::CensusSection& section);
+    void removeCensusSection(const std::string& name);
+    const skworld::CensusSections& censusSections() const { return mSections; }
+    /// The fraction of a metre the land is sampled at in an export, so a layer's terrain windows read it exactly.
+    void setTerrainPhase(F32 phase) { mTerrainPhase = phase; }
+
+    /// The last snapshot, each region's land, and every registered section, to logs/sk-census-<UTC>.json
+    /// (skcensusio.h), for reading offline. Returns a line for the console with the counts, the size and the
+    /// full path, or why nothing was written.
+    std::string exportCensus() const;
+
+private:
+    /// The clusters overlay: each cluster in its own colour, its parts tinted, a label over it.
+    void renderClusters(const SKCensusSnapshot& snap, class SKWorldOverlayGeom& geom, const LLVector3d& camera, F64 reach);
+    LLUUID mSelectedCluster;
+    std::map<LLUUID, LLPointer<LLHUDText>> mClusterLabels;
+    F64 mClusterLabelsAt = 0.0;
+
+    struct PartCache
+    {
+        U64 mSignature = 0;
+        skworld::RecordPtr mRecord;
+        skworld::RecordPtr mPhysics;  ///< a surround's physics shape, beside its rendered one
+        /// The simulator's triangles once they arrived, held so the repository dropping them does not rebuild the record.
+        std::shared_ptr<const SKPhysicsHavokShape> mSim;
+        LLUUID mSimMesh;
+        F64 mLastSeen = 0.f;
+        /// What the part's last visit took, which a scan that does not visit it takes again.
+        std::vector<skworld::RecordPtr> mTaken;
+        skworld::FeaturePart mFeature;
+        bool mHasFeature = false;
+        LLVector3 mLeafPos;
+        LLQuaternion mLeafRot;
+        U64 mLeafRegion = 0;
+        bool mHasLeaf = false;
+        bool mFromObjectCache = false;
+        LLVector3d mReachCenter;    ///< the range test of its last visit, so a re-take leaves range as a visit would
+        F64 mReachPad = 0.0;
+        U32 mVisitedScan = 0;
+    };
+
+    struct Rest
+    {
+        LLVector3d mPosition;
+        LLQuaternion mRotation;     ///< baseline together with mPosition
+        F64 mMovedAt = -1.f;        ///< last time the root was seen somewhere else
+        F64 mBurstStart = -1.f;     ///< when its current or last burst of moves began
+        std::vector<F64> mBursts;   ///< when each recent burst began, oldest first
+        F64 mMoverUntil = -1.f;     ///< it moves by habit until then
+        F64 mLastSeen = 0.f;
+        bool mKnown = false;
+    };
+
+    /// What the region's object cache knows about something it has never
+    /// instantiated: where it is and how big, and nothing else.
+    struct CachedPart
+    {
+        LLUUID mId;                 ///< synthesised from the region and the local id
+        LLVector3d mOrigin;         ///< the region's origin, global
+        LLVector3 mCenter;          ///< region-local
+        LLVector3 mHalf;
+    };
+
+    struct Scan
+    {
+        std::shared_ptr<SKCensusSnapshot> mPending;
+        /// The object list as it stood when the scan began: the live list is
+        /// compacted every frame and would move objects past the cursor.
+        std::vector<LLPointer<LLViewerObject>> mObjects;
+        S32 mIndex = 0;             ///< next entry of mObjects to look at
+        std::vector<U64> mRegions;  ///< the region set the scan started with
+        /// Objects the region has cached but not drawn: bounds only, gathered
+        /// once when the scan begins and emitted as boxes after the live pass.
+        std::vector<CachedPart> mCached;
+        size_t mCachedIndex = 0;
+        /// Every part recorded this scan, as the feature rules read it.
+        std::vector<skworld::FeaturePart> mFeatureParts;
+        F32 mElapsedMs = 0.f;
+        bool mActive = false;
+    };
+
+    bool wanted() const;
+    F64 range() const;
+    void beginScan();
+    void continueScan(F32 budget_ms);
+    void finishScan();
+    void abandonScan();
+    bool sameRegions(const std::vector<U64>& regions) const;
+    static std::vector<U64> regionHandles();
+
+    /// One object into the pending snapshot: zero, one or many records.
+    void visit(LLViewerObject* object);
+    /// One cached object into the pending snapshot, as a box.
+    void visitCached(const CachedPart& part);
+    /// Every cached entry near either centre that has no object of its own.
+    void gatherCached();
+    bool classifyRest(LLViewerObject* root, const LLVector3d& pos, const LLQuaternion& rot);
+    bool isSurround(LLViewerObject* root, const LLVector3d& mn, const LLVector3d& mx) const;
+    /// One record from one part, at the sim-side transform the caller signed.
+    skworld::RecordPtr record(LLVOVolume* volume, LLViewerObject* root, skworld::Role role, bool dynamic, U64 signature,
+                            const LLVector3& pos, const LLQuaternion& rot, skworld::FeatureKind feature, U8 exclude,
+                            const std::shared_ptr<const SKPhysicsHavokShape>& sim);
+    /// Who is sitting on what, into the session history.
+    void gatherCrew();
+    /// The feature rules over the finished scan's parts; the part kinds they
+    /// give are what the next scan records with.
+    void classify(SKCensusSnapshot& snap);
+    /// A record into the pending snapshot, counted.
+    void take(SKCensusSnapshot& snap, const skworld::RecordPtr& rec);
+
+    void requestRoles();
+    void onRoles(U32 request, S32 status, std::shared_ptr<LLPathfindingObjectList> list);
+
+    SKCensusSnapshotPtr mSnapshot;
+    Scan mScan;
+    // The dirty set: what a scan that is not a full sweep visits; the rest it takes again from mParts.
+    /// Whether the census is running, so an update has a scan to reach.
+    bool running() const;
+    /// The scan's live objects: the dirty set, or the whole list on a full sweep.
+    void gatherObjects();
+    /// What gatherObjects decided, collected: at once for a full sweep, once its cadence allows for a dirty scan.
+    void gatherNow();
+    /// The object and the linkset parts its change reaches.
+    void dirtyLinkset(LLViewerObject* object);
+    /// A part's server name arrived, which the door rules read and no object update announces.
+    void onPropertiesChanged(const LLUUID& id);
+    /// A visit, remembering what it took so a later scan can take it again.
+    void visitTracked(LLViewerObject* object);
+    void visitCachedTracked(const CachedPart& part);
+    /// Whether a visited part waits on something no update announces, and so is visited again next scan.
+    bool pending(LLViewerObject* object, const PartCache& cache) const;
+    /// Whether a scan that did not visit the part would take it again.
+    bool retakes(const LLUUID& id, const PartCache& cache) const;
+    /// Every part not visited this scan, from its cache, under the budget; false when out of time.
+    bool retake(LLTimer& timer, F32 budget_ms);
+    std::unordered_set<LLUUID> mDirty;
+    std::unordered_set<LLUUID> mGone;
+    boost::signals2::scoped_connection mPropertiesConn;
+    std::unordered_set<LLUUID> mScanDirty;      ///< the dirty set this scan began with
+    bool mScanFull = false;
+    U32 mScanSerial = 0;
+    U32 mScanMissed = 0;                        ///< parts a full sweep found changed that a re-take would have kept
+    U32 mPendingQueued = 0;                     ///< parts the last scan queued again for the next
+    bool mRetaking = false;
+    std::unordered_map<LLUUID, PartCache>::const_iterator mRetakeAt;
+    size_t mRetakeSize = 0;
+    F64 mScanBegan = 0.0;
+    const char* mScanWhy = "-";
+    bool mScanGathered = false;
+    F64 mScanGatherAt = 0.0;
+    F64 mLastGather = -1.0e9;
+    bool mForceSweep = true;
+    F64 mSweepBegan = -1.0e9;                   ///< when the last completed full sweep began
+    LLVector3d mSweepCenter;
+    LLVector3d mSweepCamera;
+    F64 mSweepRange = 0.0;
+    std::vector<U64> mSweepRegions;
+    F64 mLastScanLog = 0.0;
+    // Only one job in flight; no new scan until its snapshot is published or discarded.
+    std::unique_ptr<LL::ThreadPool> mClusterWorkers;
+    std::future<std::shared_ptr<SKCensusSnapshot>> mClusterJob;
+    std::vector<U64> mClusterRegions;
+    bool mDiscardClusterJob = false;
+    std::unordered_map<LLUUID, PartCache> mParts;
+    /// When each part was first visited with its physics shape type unknown; the session's wait for it, for the log.
+    std::unordered_map<LLUUID, F64> mUnknownSince;
+    U32 mKnownAfterCount = 0;
+    F64 mKnownAfterSumS = 0.0;
+    F64 mKnownAfterMaxS = 0.0;
+    std::unordered_map<LLUUID, Rest> mRest;
+    std::unordered_map<LLUUID, skworld::NavRole> mRoles;
+    std::unordered_map<LLUUID, LinksetFacts> mLinksets;
+    std::unordered_map<LLUUID, RootHistory> mHistory;
+    struct PartFeature
+    {
+        skworld::FeatureKind mKind = skworld::FeatureKind::NONE;
+        U8 mExclude = 0;
+    };
+    std::unordered_map<LLUUID, PartFeature> mPartFeatures;
+    /// Where each door leaf has rested this session, and the door id it was given.
+    skworld::LeafHistories mLeaves;
+    /// The sim transform each leaf with an established doorway was last seen
+    /// at it with: what its record is built from while it swings.
+    struct LeafTransform
+    {
+        LLVector3 mPos;
+        LLQuaternion mRot;
+        U64 mRegion = 0;
+    };
+    std::unordered_map<LLUUID, LeafTransform> mDoorways;
+    /// This scan's sim transform of every leaf, kept until the scan finishes.
+    std::unordered_map<LLUUID, LeafTransform> mLeafTransforms;
+    /// Each door-shaped part's face cover, cast again only when it or its neighbours change.
+    skworld::FaceCoverCache mFaceCover;
+    std::map<std::string, F32> mDemands;
+    U64 mStamp = 0;
+    F64 mRolesRequestedAt = -1.f;
+    U64 mRolesRegion = 0;
+    bool mRolesWanted = false;
+    U32 mRolesRequestId = 0;
+    F64 mLastLog = 0.f;
+    bool mSlow = false;
+    F64 mLastScanBegun = -1.0e9;
+    U32 mScansBegun = 0;
+    std::map<std::string, Exclusion> mExclusions;
+    FloorProbe mFloorProbe;
+    skworld::CensusSections mSections;
+    F32 mTerrainPhase = 0.f;
+};
+
+#endif // SK_WORLDCENSUS_H

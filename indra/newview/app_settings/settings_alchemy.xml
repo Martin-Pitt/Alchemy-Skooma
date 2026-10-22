@@ -2520,6 +2520,182 @@
             <key>Value</key>
             <integer>1</integer>
         </map>
+        <key>SKCensusAlways</key>
+        <map>
+            <key>Comment</key>
+            <string>Run the world census even when nothing consumes it (the overlay or a consumer runs it otherwise).</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKCensusBudgetMS</key>
+        <map>
+            <key>Comment</key>
+            <string>Milliseconds per frame the world census may spend scanning objects.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>3.0</real>
+        </map>
+        <key>SKCensusClusterGap</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres two objects may be apart and still belong to one census cluster.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.5</real>
+        </map>
+        <key>SKCensusEnabled</key>
+        <map>
+            <key>Comment</key>
+            <string>Scan the objects around the agent into the world census the air cells, rooms, mini-map and probes read.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKCensusLog</key>
+        <map>
+            <key>Comment</key>
+            <string>Log the world census statistics every few seconds.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKCensusMinShape</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres: a part smaller than this along every axis is never a census record.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.3</real>
+        </map>
+        <key>SKCensusObjectCache</key>
+        <map>
+            <key>Comment</key>
+            <string>Take objects the region has cached but not drawn into the census, as boxes.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKCensusRange</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres from the agent the world census covers.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>512.0</real>
+        </map>
+        <key>SKCensusRoleRequestSeconds</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds between requests for the region's pathfinding roles.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>60.0</real>
+        </map>
+        <key>SKCensusSettleSeconds</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds a mover (one seen moving in repeated or sustained bursts) must stay still before the census treats it as landscape; a one-off move is landscape at once.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>4.0</real>
+        </map>
+        <key>SKCensusSurroundReach</key>
+        <map>
+            <key>Comment</key>
+            <string>How far outside every connected region a thing must reach before the census treats it as a sim surround, in metres.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>8.0</real>
+        </map>
+        <key>SKCensusVoidMargin</key>
+        <map>
+            <key>Comment</key>
+            <string>How far past a region's edge the census will follow what hangs off it, in metres.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>256.0</real>
+        </map>
+        <key>SKWorldOverlayCensus</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw the census shapes and their structures in the census overlay.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKWorldOverlayClusters</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw each census cluster in its own colour, its parts tinted and a label over it, in the census overlay.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKWorldOverlayFeatures</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw the doors, ladders, elevator shafts and vehicles the census has recognised.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKWorldOverlayRange</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres from the camera the census overlay draws, falling away over its last fifth.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>96.0</real>
+        </map>
         <key>SKPhysicsShapeTypes</key>
         <map>
             <key>Comment</key>

@@ -343,6 +343,10 @@ public:
 
     const LLQuaternion getRotationRegion() const;
     const LLQuaternion getRotationEdit() const;
+    // <SK:Nexii> census: the rotation the simulator last set, without the client-side llTargetOmega spin the
+    // viewer accumulates on top of it, which the sim's physics never sees.
+    const LLQuaternion& getRotationSim() const { return mPreviousRotation; }
+    // </SK:Nexii>
     const LLQuaternion getRenderRotation() const;
     virtual const LLMatrix4a& getRenderMatrix() const;
 
@@ -619,6 +623,7 @@ public:
     inline bool     flagCameraDecoupled() const     { return ((mFlags & FLAGS_CAMERA_DECOUPLED) != 0); }
 
     U8       getPhysicsShapeType() const;
+    bool     isPhysicsShapeUnknown() const { return mPhysicsShapeUnknown; } // <SK:Nexii> census: a record's physics_known
     inline F32      getPhysicsGravity() const       { return mPhysicsGravity; }
     inline F32      getPhysicsFriction() const      { return mPhysicsFriction; }
     inline F32      getPhysicsDensity() const       { return mPhysicsDensity; }

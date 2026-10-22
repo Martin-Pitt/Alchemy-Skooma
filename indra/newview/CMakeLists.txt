@@ -642,6 +642,11 @@ if(AL_BUILD_VIEWER)
     llmenuoptionpathfindingrebakenavmesh.cpp
     skmeshhavokshape.cpp # <SK:Nexii> physics_havok block
     skphysicsshape.cpp # <SK:Nexii> physics shapes
+    skobjectfaces.cpp # <SK:Nexii> census
+    skworldcensus.cpp # <SK:Nexii> census
+    skworldoverlay.cpp # <SK:Nexii> census
+    skworldpalette.cpp # <SK:Nexii> census
+    skworldtrace.cpp # <SK:Nexii> census
     llmeshrepository.cpp
     llmimetypes.cpp
     llmodelpreview.cpp
@@ -1528,6 +1533,11 @@ if(AL_BUILD_VIEWER)
     llmenuoptionpathfindingrebakenavmesh.h
     skmeshhavokshape.h # <SK:Nexii> physics_havok block
     skphysicsshape.h # <SK:Nexii> physics shapes
+    skobjectfaces.h # <SK:Nexii> census
+    skworldcensus.h # <SK:Nexii> census
+    skworldoverlay.h # <SK:Nexii> census
+    skworldpalette.h # <SK:Nexii> census
+    skworldtrace.h # <SK:Nexii> census
     llmeshrepository.h
     llmimetypes.h
     llmodelpreview.h
@@ -2127,6 +2137,7 @@ if(AL_BUILD_VIEWER)
       llplugin
       llprimitive
       llrender
+      skcensus # <SK:Nexii> census
       llui
       llfilesystem
       llwindow

@@ -941,6 +941,7 @@ public:
         RENDER_DEBUG_IMPOSTORS          = 0x100000000,
         RENDER_DEBUG_REFLECTION_PROBES  = 0x200000000,
         RENDER_DEBUG_PROBE_UPDATES      = 0x400000000,
+        RENDER_DEBUG_WORLD              = 0x800000000, // <SK:Nexii> census: the world layers' debug overlays
     };
 
 public:

@@ -221,6 +221,7 @@
 #include "llsdserialize.h"
 
 #include "llworld.h"
+#include "skworldcensus.h" // <SK:Nexii> census tick
 #include "llhudeffecttrail.h"
 #include "llslurl.h"
 #include "llurlregistry.h"
@@ -2019,6 +2020,10 @@ bool LLAppViewer::cleanup()
     LL_INFOS() << "Cleaning up Objects" << LL_ENDL;
 
     LLViewerObject::cleanupVOClasses();
+
+    // <SK:Nexii> census: release any held viewer objects before the avatar appearance dictionary below goes away
+    SKWorldCensus::deleteSingleton();
+    // </SK:Nexii>
 
     SUBSYSTEM_CLEANUP(LLAvatarAppearance);
 
@@ -5911,6 +5916,9 @@ void LLAppViewer::idle()
         LL_PROFILE_ZONE_NAMED_CATEGORY_APP("world update");
         gPipeline.updateMove();
     }
+    // <SK:Nexii> census: scans after objects moved, the layers above follow it
+    SKWorldCensus::instance().update();
+    // </SK:Nexii>
 
     LLWorld::getInstance()->updateParticles();
 

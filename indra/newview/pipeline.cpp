@@ -111,6 +111,7 @@
 #include "llviewerregion.h" // for audio debugging.
 #include "llviewerwindow.h" // For getSpinAxis
 #include "llvoavatarself.h"
+#include "skworldcensus.h" // <SK:Nexii> census overlay
 #include "llvocache.h"
 #include "llvosky.h"
 #include "llvowlsky.h"
@@ -11245,6 +11246,12 @@ void LLPipeline::renderFinalize()
     {
         renderPhysicsDisplay();
     }
+    // <SK:Nexii> census overlay: record, cluster and feature boxes, each layer behind its own setting
+    if (!cutout && SKWorldCensus::instanceExists())
+    {
+        SKWorldCensus::instance().renderDebug();
+    }
+    // </SK:Nexii>
 
     /*if (LLRenderTarget::sUseFBO && !gCubeSnapshot)
     { // copy depth buffer from mRT->screen to framebuffer
