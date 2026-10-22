@@ -128,7 +128,7 @@ namespace skworld
     /// What a layer above the census adds to its file: a JSON value under "sections" by its name. mWrite writes
     /// the value; mRead is given it back as LLSD with the file's version, false when it is not one it knows. A file
     /// older than version 7 kept some sections at its top level, and hands them over in that older shape: "params"
-    /// as "air.params", "enclosure" as "rooms.enclosure", "probes" as "probes", and the records' "seen" blob as
+    /// as "air.params" (with the "air_radius" and "grounded_margin" its "settings" held), "enclosure" as "rooms.enclosure", "probes" as "probes", and the records' "seen" blob as
     /// "overview.seen".
     struct CensusSection
     {

@@ -501,6 +501,7 @@ namespace
         text += ",\"params\":{\"cell\":0.25},\"enclosure\":{\"climb\":0.5},\"probes\":[{\"kind\":\"octree\"}]}\n";
         const size_t records = text.find("\"records\":{");
         text.insert(text.find('}', text.find("\"convex\":", records)), ",\"seen\":\"AAE=\"");
+        text.insert(text.find("\"settings\":{") + 12, "\"air_radius\":96,\"grounded_margin\":1.5,");
         LLSD params, enclosure, probes, seen;
         U32 params_version = 0;
         const CensusSections read = {
@@ -515,6 +516,8 @@ namespace
         REQUIRE(readCensus(text, back, &error, read));
         CHECK(params_version == 6u);
         CHECK(params["cell"].asReal() == 0.25);
+        CHECK(params["air_radius"].asReal() == 96.0);
+        CHECK(params["grounded_margin"].asReal() == 1.5);
         CHECK(enclosure["climb"].asReal() == 0.5);
         CHECK(probes[0]["kind"].asString() == "octree");
         CHECK(seen.asString() == "AAE=");

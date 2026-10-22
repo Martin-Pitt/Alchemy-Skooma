@@ -311,9 +311,14 @@ namespace skworld
             /// Hand a section's value to its reader, if one is given.
             void section(const CensusSections& sections, const std::string& name, const Elem& value, U32 version)
             {
+                section(sections, name, toLLSD(value), version);
+            }
+
+            void section(const CensusSections& sections, const std::string& name, const LLSD& value, U32 version)
+            {
                 for (const CensusSection& s : sections)
                 {
-                    if (s.mName == name && s.mRead && !s.mRead(toLLSD(value), version))
+                    if (s.mName == name && s.mRead && !s.mRead(value, version))
                     {
                         fail("section " + name);
                     }
@@ -958,9 +963,23 @@ namespace skworld
             for (const auto& [key, name] : legacy)
             {
                 Elem value;
-                if (doc[key].get(value) == simdjson::SUCCESS)
+                const bool found = doc[key].get(value) == simdjson::SUCCESS;
+                LLSD sd = found ? toLLSD(value) : LLSD();
+                if (std::string(key) == "params")
                 {
-                    rd.section(sections, name, value, version);
+                    // An older file kept the air's radius and grounded margin with the census's own settings.
+                    for (const char* moved : { "air_radius", "grounded_margin" })
+                    {
+                        Elem setting;
+                        if (doc["settings"][moved].get(setting) == simdjson::SUCCESS && (!found || !sd.has(moved)))
+                        {
+                            sd[moved] = toLLSD(setting);
+                        }
+                    }
+                }
+                if (found || sd.isMap())
+                {
+                    rd.section(sections, name, sd, version);
                 }
             }
         }
