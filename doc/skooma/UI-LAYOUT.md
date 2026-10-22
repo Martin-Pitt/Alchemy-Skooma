@@ -228,7 +228,7 @@ scrollable). Then check the narrowest real case: the floater at its `min_width`
   `<!-- <SK:Nexii> ... --> ... <!-- </SK:Nexii> -->` and recorded in
   [`INJECTIONS.md`](INJECTIONS.md). This applies on every branch, `feature-*`
   included -- a marker tells the next reader of the *merged* tree what is ours,
-  which a diff against `next` cannot once the work has landed (see
+  which a diff against `develop` cannot once the work has landed (see
   `CLAUDE.local.md`).
 - English strings live in `xui/en/`. Do not hand-edit the other locales; they
   inherit your rects, which is why §2 rule 3 matters.
