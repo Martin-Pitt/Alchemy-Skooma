@@ -1441,7 +1441,11 @@ function Invoke-Integrate {
     # landing a sub-feature before its parent would drag the parent in unannounced.
     # Branches bound for a trunk precede the main-bound ones, so the trunk is complete when it lands.
     $glue = @($targets | Where-Object { (Get-Role $_) -eq 'glue' } | Sort-Object)
+    # Among those, the furthest from main lands first: a sub-trunk is a base of its own worktrees, and landing it
+    # into its trunk by base order went before they had landed into it, leaving their work short of main.
+    $hops = { param($b) $n = 0; $t = Get-LandTarget $b; while ($t -ne 'main' -and $n -lt 16) { $n++; $t = Get-LandTarget $t }; $n }
     $toTrunk = Sort-ByDependency @($targets | Where-Object { (Get-Role $_) -ne 'glue' -and (Get-LandTarget $_) -ne 'main' } | Sort-Object)
+    $toTrunk = @($toTrunk | Sort-Object -Stable -Descending { & $hops $_ })
     $toMain = Sort-ByDependency @($targets | Where-Object { (Get-Role $_) -ne 'glue' -and (Get-LandTarget $_) -eq 'main' } | Sort-Object)
     $targets = @($glue) + @($toTrunk) + @($toMain)
 
@@ -1527,6 +1531,11 @@ function Invoke-Integrate {
     if ($results | Where-Object { $_.Result -like 'landed*' }) {
         $null = G config 'skooma.lastgood' $lastGood
         $null = G -C $MainWt submodule update --init --recursive
+    }
+
+    # Whatever landed must have reached main through its trunks; say so when it has not.
+    foreach ($r in @($results | Where-Object { $_.Result -like 'landed*' })) {
+        if (-not (GitOk merge-base --is-ancestor $r.Branch main)) { Warn "$($r.Branch) landed in its trunk but is not in main yet" }
     }
 
     Say ''
