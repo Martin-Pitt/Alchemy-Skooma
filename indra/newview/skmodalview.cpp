@@ -27,6 +27,7 @@
 #include "skmodalview.h"
 
 #include "llagent.h"
+#include "llapp.h"
 #include "llagentcamera.h"
 #include "llfloater.h"
 #include "llfloaterreg.h"
@@ -114,7 +115,7 @@ void SKModalView::forget(SKModalMode* mode)
     }
     notifyTopChange(before, mode);
     updateCoveredFloaters();
-    if (mClaims.empty())
+    if (mClaims.empty() && !LLApp::isExiting())
     {
         restoreWorldCamera();
     }
@@ -155,7 +156,7 @@ void SKModalView::updateCoveredFloaters()
 void SKModalView::notifyTopChange(SKModalMode* before, const SKModalMode* except)
 {
     SKModalMode* after = top();
-    if (!before || !after || before == after)
+    if (mClosingAll || !before || !after || before == after)
     {
         return;
     }
@@ -209,7 +210,7 @@ void SKModalView::release(SKModalMode* mode)
     notifyTopChange(before, mode);
     updateCoveredFloaters();
     LL_INFOS("ModalView") << mode->getModalName() << " released the world" << LL_ENDL;
-    if (mClaims.empty())
+    if (mClaims.empty() && !LLApp::isExiting()) // a mode torn down on exit leaves the camera alone
     {
         restoreWorldCamera();
     }
@@ -269,6 +270,7 @@ void SKModalView::closeTop()
 
 void SKModalView::closeAll()
 {
+    mClosingAll = true;
     for (const void* key : mClaims.ordered())
     {
         if (!mClaims.holds(key))
@@ -279,6 +281,7 @@ void SKModalView::closeAll()
         mode->closeModal();
         release(mode);
     }
+    mClosingAll = false;
 }
 
 bool SKModalView::closeIfNeeded(bool leaving_world)
