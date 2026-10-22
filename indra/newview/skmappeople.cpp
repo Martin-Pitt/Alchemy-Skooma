@@ -57,6 +57,27 @@ namespace
     constexpr F64 DRAWN_RECENTLY_S = 2.0;
     constexpr F64 COARSE_CEILING_M = 1020.0;   ///< coarse locations stop telling heights here
     constexpr F32 PEOPLE_REACH_M = 1024.f;
+    constexpr F32 ANY_HEIGHT_M = 1.0e5f;       ///< spans every height a region allows
+
+    // Everyone within reach across the ground, at any height, so a skybox still sees the ground below.
+    void avatarsInReach(uuid_vec_t& ids, std::vector<LLVector3d>& positions, const LLVector3d& from)
+    {
+        LLWorld::getInstance()->getAvatars(&ids, &positions, from, ANY_HEIGHT_M);
+        constexpr F64 reach_sq = (F64)PEOPLE_REACH_M * PEOPLE_REACH_M;
+        size_t kept = 0;
+        for (size_t i = 0; i < ids.size(); ++i)
+        {
+            const F64 dx = positions[i].mdV[VX] - from.mdV[VX], dy = positions[i].mdV[VY] - from.mdV[VY];
+            if (dx * dx + dy * dy <= reach_sq)
+            {
+                ids[kept] = ids[i];
+                positions[kept] = positions[i];
+                ++kept;
+            }
+        }
+        ids.resize(kept);
+        positions.resize(kept);
+    }
 }
 
 SKMapPeople::SKMapPeople()
@@ -542,7 +563,7 @@ void SKMapPeople::updateTrails(F64 now)
     constexpr F64 TRAIL_S = 2.0;
     uuid_vec_t ids;
     std::vector<LLVector3d> positions;
-    LLWorld::getInstance()->getAvatars(&ids, &positions, gAgent.getPositionGlobal(), PEOPLE_REACH_M);
+    avatarsInReach(ids, positions, gAgent.getPositionGlobal());
     ids.push_back(gAgentID);
     positions.push_back(gAgent.getPositionGlobal());
     std::map<LLUUID, std::deque<std::pair<F64, LLVector3d>>> trails;
@@ -658,7 +679,7 @@ void SKMapPeople::gatherPeople()
     const F64 camera_z = gAgentCamera.getCameraPositionGlobal().mdV[VZ];
     uuid_vec_t ids;
     std::vector<LLVector3d> positions;
-    LLWorld::getInstance()->getAvatars(&ids, &positions, agent, PEOPLE_REACH_M);
+    avatarsInReach(ids, positions, agent);
 
     // The probe sees loaded avatars nearest first, so the nearest are asked about first.
     if (mCombat)
