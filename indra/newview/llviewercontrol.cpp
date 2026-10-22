@@ -91,6 +91,9 @@
 #include "llperfstats.h"
 // [RLVa:KB] - Checked: 2015-12-27 (RLVa-1.5.0)
 #include "llvisualeffect.h"
+#include "llviewerobjectlist.h" // <SK:Nexii> Prim split toggle
+#include "llvovolume.h" // <SK:Nexii> Prim split toggle
+#include "llvolumemgr.h" // <SK:Nexii> Prim split toggle
 #include "rlvactions.h"
 #include "rlvcommon.h"
 // [/RLVa:KB]
@@ -370,6 +373,36 @@ static bool handleVolumeLODChanged(const LLSD& newvalue)
     LLVOVolume::sDistanceFactor = 1.f-LLVOVolume::sLODFactor * 0.1f;
     return true;
 }
+
+// <SK:Nexii> Prim split toggle: regenerate every prim volume so the two tessellations can be compared in place.
+static bool handleLegacyPrimSplitsChanged(const LLSD& newvalue)
+{
+    LLVolume::sSplitFlatSides = newvalue.asBoolean();
+
+    // Every cached LOD, so a later LOD switch does not bring back the other tessellation.
+    LLPrimitive::getVolumeManager()->regenPrims();
+
+    for (S32 i = 0; i < gObjectList.getNumObjects(); ++i)
+    {
+        LLViewerObject* objectp = gObjectList.getObject(i);
+        if (!objectp || objectp->isDead() || objectp->getPCode() != LL_PCODE_VOLUME || objectp->isSculpted() || objectp->isFlexible())
+        {
+            continue;
+        }
+        LLVOVolume* volobjp = static_cast<LLVOVolume*>(objectp);
+        LLVolume* volume = volobjp->getVolume();
+        if (volume && volume->isUnique())
+        {
+            // A unique volume (local mesh, NO_LOD) is not in the manager.
+            volume->setDirty();
+            volume->regen();
+        }
+        // A LOD change rebuilds the spatial group, which resizes every face's buffers; a plain geometry rebuild would not.
+        volobjp->forceLOD(volobjp->getLOD());
+    }
+    return true;
+}
+// </SK:Nexii>
 
 static bool handleAvatarLODChanged(const LLSD& newvalue)
 {
@@ -1016,6 +1049,7 @@ void settings_setup_listeners()
     setting_setup_signal_listener(gSavedSettings, "RenderHDREnabled", handleEnableHDR);
     setting_setup_signal_listener(gSavedSettings, "RenderGlowNoise", handleRenderInputChanged);
     setting_setup_signal_listener(gSavedSettings, "RenderVolumeLODFactor", handleVolumeLODChanged);
+    setting_setup_signal_listener(gSavedSettings, "SKRenderLegacyPrimSplits", handleLegacyPrimSplitsChanged); // <SK:Nexii> Prim split toggle
     setting_setup_signal_listener(gSavedSettings, "RenderAvatarComplexityMode", handleUserImpostorByDistEnabledChanged);
     setting_setup_signal_listener(gSavedSettings, "RenderAvatarLODFactor", handleAvatarLODChanged);
     setting_setup_signal_listener(gSavedSettings, "RenderAvatarPhysicsLODFactor", handleAvatarPhysicsLODChanged);

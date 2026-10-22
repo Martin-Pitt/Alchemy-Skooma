@@ -103,6 +103,12 @@ target_precompile_headers(llmath REUSE_FROM llprecompiled)
 
 # Add tests
 if(AL_BUILD_TESTS)
+  # <SK:Nexii> The volume split TUT test, kept registered until it is ported to Catch2
+  if(COMMAND al_add_test)
+    al_add_test(llvolumesplit PROJECT llmath LIBRARIES llmath llcommon)
+  endif()
+  # </SK:Nexii>
+
   # One Catch2 binary for llmath's tests, each test file run in a process of
   # its own. Each links the library rather than compiling a copy of the file
   # it tests, so the code under test is the code the viewer runs.

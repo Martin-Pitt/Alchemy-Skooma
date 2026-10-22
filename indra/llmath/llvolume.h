@@ -1045,6 +1045,10 @@ public:
 
 
     static void getLoDTriangleCounts(const LLVolumeParams& params, S32* counts);
+    // <SK:Nexii> Prim edge splits: the split generate() uses, and whether two details build the same prim mesh
+    static S32 getProfileSplit(const LLVolumeParams& params, F32 detail);
+    static bool isSameMesh(const LLVolumeParams& params, F32 detail_a, F32 detail_b);
+    // </SK:Nexii>
 
     S32 getNumTriangles(S32* vcount = nullptr) const;
 
@@ -1062,6 +1066,7 @@ public:
     LLFaceID generateFaceMask();
 
     bool isFaceMaskValid(LLFaceID face_mask);
+    static bool sSplitFlatSides; // <SK:Nexii> Restores the legacy edge splits on untwisted flat-sided prims, for comparison
 
     friend std::ostream& operator<<(std::ostream &s, const LLVolume &volume);
     friend std::ostream& operator<<(std::ostream &s, const LLVolume *volumep);      // HACK to bypass Windoze confusion over

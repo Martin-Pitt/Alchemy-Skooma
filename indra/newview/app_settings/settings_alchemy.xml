@@ -2478,6 +2478,17 @@
             <key>Value</key>
             <real>64.0</real>
         </map>
+        <key>SKRenderLegacyPrimSplits</key>
+        <map>
+            <key>Comment</key>
+            <string>Split the edges of untwisted flat-sided prims as the per-vertex lit renderer did, to compare against the unsplit geometry.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
         <key>AlchemyRenderMemoryDrawDistanceLimit</key>
         <map>
             <key>Comment</key>
