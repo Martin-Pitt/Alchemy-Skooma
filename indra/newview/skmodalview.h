@@ -59,6 +59,15 @@ public:
     /// The mode's ground under a point of the world view (scaled UI coordinates), where an alt-click
     /// focuses the camera. False when the point hits nothing.
     virtual bool pickGround(S32 x, S32 y, LLVector3d& ground) const { return false; }
+    /// A plain left press at (x, y), scaled UI coordinates: grabs the ground there for a drag, false when it
+    /// hits nothing. pan() moves the camera so the grabbed point stays under the cursor; endPan() lets go.
+    virtual bool beginPan(S32 x, S32 y) { return false; }
+    virtual void pan(S32 x, S32 y) {}
+    virtual void endPan() {}
+    /// Whether a drag can pan the mode right now; the map tool shows its pan cursor only then.
+    virtual bool canPan() const { return true; }
+    /// Whether plain clicks that are not drags reach the world's tool, which picks what the mode draws.
+    virtual bool passesClicks() const { return false; }
     /// How much faster the flycam translates from `eye` while the mode is on top.
     virtual F64 flycamScale(const LLVector3d& eye) const { return 1.0; }
     /// RLVa restrictions of the mode's own, on top of the camera locks every mode honours.

@@ -1002,6 +1002,7 @@ if(AL_BUILD_VIEWER)
     rlvui.cpp
     skmodalview.cpp # <SK:Nexii> modal view
     skmodalviewmath.cpp # <SK:Nexii> modal view
+    sktoolmappan.cpp # <SK:Nexii> modal view
   )
 
   set(
@@ -1883,6 +1884,7 @@ if(AL_BUILD_VIEWER)
     roles_constants.h
     skmodalview.h # <SK:Nexii> modal view
     skmodalviewmath.h # <SK:Nexii> modal view
+    sktoolmappan.h # <SK:Nexii> modal view
   )
 
   # Discord rich presence, over the SDK from the private registry.
