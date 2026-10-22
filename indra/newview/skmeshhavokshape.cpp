@@ -22,7 +22,10 @@
 
 #include "skmeshhavokshape.h"
 
+#include "llcontrol.h"
 #include "llframetimer.h"
+#include "llviewercontrol.h"
+#include "v4color.h"
 #include "llmeshrepository.h"
 #include "llrender.h"
 #include "llvertexbuffer.h"
@@ -139,6 +142,36 @@ bool skRenderPhysicsHavok(const LLUUID& mesh_id, const LLColor4& color)
     gGL.diffuseColor4fv(color.mV);
     LLVertexBuffer::drawArrays(LLRender::TRIANGLES, shape->mTriangles);
     return true;
+}
+
+LLColor4 skPhysicsShapeColor(SKPhysicsShapeSource source, const LLColor4& cost_color, bool wireframe)
+{
+    static LLCachedControl<bool> by_type(gSavedSettings, "SKPhysicsShapeTypes", false);
+    if (!by_type)
+    {
+        return cost_color;
+    }
+    LLColor4 color;
+    switch (source)
+    {
+    case SKPhysicsShapeSource::SIMULATOR:    color.set(0.2f, 0.9f, 0.3f, 1.f); break;
+    case SKPhysicsShapeSource::PHYSICS_MESH: color.set(0.2f, 0.8f, 1.f, 1.f); break;
+    case SKPhysicsShapeSource::HULLS:        color.set(1.f, 0.55f, 0.1f, 1.f); break;
+    case SKPhysicsShapeSource::MESH_HULL:    color.set(1.f, 0.9f, 0.2f, 1.f); break;
+    case SKPhysicsShapeSource::PRIM_HULL:    color.set(0.3f, 0.4f, 1.f, 1.f); break;
+    case SKPhysicsShapeSource::PRIM_MESH:    color.set(0.75f, 0.3f, 1.f, 1.f); break;
+    case SKPhysicsShapeSource::PRIMITIVE:    color.set(0.8f, 0.8f, 0.8f, 1.f); break;
+    }
+    // The overlay's wireframe pass is the darker edge over the fill, as with the cost colours.
+    if (wireframe)
+    {
+        color.setVec(color.mV[VRED] * 0.5f, color.mV[VGREEN] * 0.5f, color.mV[VBLUE] * 0.5f, cost_color.mV[VALPHA]);
+    }
+    else
+    {
+        color.mV[VALPHA] = cost_color.mV[VALPHA];
+    }
+    return color;
 }
 
 std::shared_ptr<const SKPhysicsHavokShape> SKPhysicsHavokCache::get(const LLUUID& mesh_id)

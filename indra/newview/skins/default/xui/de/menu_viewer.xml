@@ -283,7 +283,7 @@
 			<menu_item_check label="Normalen" name="Normals"/>
 			<menu_item_check label="Octree" name="Octree"/>
 			<menu_item_check label="Shadow Frusta" name="Shadow Frusta"/>
-			<menu_item_check label="Physische Formen" name="Physics Shapes"/>
+			<menu label="Physische Formen" name="Physics Shapes"/>
 			<menu_item_check label="Okklusion" name="Occlusion"/>
 			<menu_item_check label="Bündel rendern" name="Render Batches"/>
 			<menu_item_check label="Typ aktualisieren" name="Update Type"/>

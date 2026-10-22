@@ -257,7 +257,7 @@
 		</menu>
 		<menu label="Render Metadata" name="Render Metadata">
 			<menu_item_check label="Normali" name="Normals"/>
-			<menu_item_check label="Forme fisica" name="Physics Shapes"/>
+			<menu label="Forme fisica" name="Physics Shapes"/>
 			<menu_item_check label="Aggiorna tipo" name="Update Type"/>
 			<menu_item_check label="Info livello dettaglio" name="LOD Info"/>
 			<menu_item_check label="Conteggio triangolo" name="Triangle Count"/>

@@ -642,6 +642,7 @@ if(AL_BUILD_VIEWER)
     llmediadataclient.cpp
     llmenuoptionpathfindingrebakenavmesh.cpp
     skmeshhavokshape.cpp # <SK:Nexii> physics_havok block
+    skphysicsshape.cpp # <SK:Nexii> physics shapes
     llmeshrepository.cpp
     llmimetypes.cpp
     llmodelpreview.cpp
@@ -993,7 +994,6 @@ if(AL_BUILD_VIEWER)
     pipeline.cpp
     rlvactions.cpp
     rlvenvironment.cpp
-    skphysicsshape.cpp
     skcaptureexport.cpp # <SK:Nexii> navmesh: linkset and avatar capture export
     skclusterprobes.cpp # <SK:Nexii> navmesh: reflection probes over census clusters
     skfloaternavannotate.cpp
@@ -1553,6 +1553,7 @@ if(AL_BUILD_VIEWER)
     llmediadataclient.h
     llmenuoptionpathfindingrebakenavmesh.h
     skmeshhavokshape.h # <SK:Nexii> physics_havok block
+    skphysicsshape.h # <SK:Nexii> physics shapes
     llmeshrepository.h
     llmimetypes.h
     llmodelpreview.h
@@ -1896,7 +1897,6 @@ if(AL_BUILD_VIEWER)
     pipeline.h
     rlvactions.h
     rlvcommon.h
-    skphysicsshape.h
     skcaptureexport.h # <SK:Nexii> navmesh: linkset and avatar capture export
     skclusterprobes.h # <SK:Nexii> navmesh: reflection probes over census clusters
     skfloaternavannotate.h
