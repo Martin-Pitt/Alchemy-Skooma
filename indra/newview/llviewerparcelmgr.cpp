@@ -244,6 +244,10 @@ void LLViewerParcelMgr::dump()
 
 LLViewerRegion* LLViewerParcelMgr::getSelectionRegion()
 {
+    if (!LLWorld::instanceExists())
+    {
+        return nullptr;
+    }
     return LLWorld::getInstance()->getRegionFromPosGlobal( mWestSouth );
 }
 
