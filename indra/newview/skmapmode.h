@@ -80,11 +80,11 @@ public:
     /// The map's ground under a point of the world view (scaled UI coordinates), for alt-click focus.
     bool groundUnderCursor(S32 x, S32 y, LLVector3d& ground) const;
 
-    /// A plain left-drag: the camera and its focus slide across the ground together, keeping their
-    /// height and angle, so the ground point grabbed stays under the cursor.
-    bool beginPan(S32 x, S32 y);
-    void pan(S32 x, S32 y);
-    void endPan() { mPanning = false; }
+    /// SKToolMapPan's drag: the camera and its focus slide across the ground together, keeping their
+    /// height and angle, so the ground point grabbed stays under the cursor. Plain clicks go nowhere.
+    bool beginPan(S32 x, S32 y) override;
+    void pan(S32 x, S32 y) override;
+    void endPan() override { mPanning = false; }
 
     /// Fired as the map opens, while the last world frame is still in the targets: where a live
     /// impostor of the current region can be captured.
