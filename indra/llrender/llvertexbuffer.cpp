@@ -264,6 +264,9 @@ static GLWorkQueue* sQueue = nullptr;
 // the next time it asks. LLImageGL's texture-name pool works the same way.
 static std::atomic<U32> sBufferNameGeneration{ 1 };
 
+// The last content stamp handed out (LLVertexBuffer::getContentStamp).
+static std::atomic<U64> sContentStamps{ 0 };
+
 // batch calls to glGenBuffers
 static GLuint gen_buffer()
 {
@@ -1147,6 +1150,11 @@ LLVertexBuffer::LLVertexBuffer(U32 typemask)
     }
 }
 
+void LLVertexBuffer::touchContents()
+{
+    mContentStamp = sContentStamps.fetch_add(1, std::memory_order_relaxed) + 1;
+}
+
 // list of mapped buffers
 // NOTE: must not be LLPointer<LLVertexBuffer> to avoid breaking non-ref-counted LLVertexBuffer instances
 static std::vector<LLVertexBuffer*> sMappedBuffers;
@@ -1398,6 +1406,7 @@ bool LLVertexBuffer::allocateBuffer(U32 nverts, U32 nindices)
 
     success &= updateNumVerts(nverts);
     success &= updateNumIndices(nindices);
+    touchContents();
 
     return success;
 }
@@ -1427,6 +1436,7 @@ U8* LLVertexBuffer::mapVertexBuffer(LLVertexBuffer::AttributeType type, U32 inde
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_VERTEX;
     _mapBuffer();
+    touchContents();
 
     if (count == -1)
     {
@@ -1473,6 +1483,7 @@ U8* LLVertexBuffer::mapIndexBuffer(U32 index, S32 count)
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_VERTEX;
     _mapBuffer();
+    touchContents();
 
     if (count == -1)
     {
@@ -1525,6 +1536,8 @@ void LLVertexBuffer::flush_vbo(GLenum target, U32 start, U32 end, void* data, U8
     // glBufferSubData with a nonsense size.
     if (end + 1 == start)
         return;
+
+    touchContents();
 
 #if LL_DARWIN || LL_ARM64
     if (gGLManager.mIsApple)
