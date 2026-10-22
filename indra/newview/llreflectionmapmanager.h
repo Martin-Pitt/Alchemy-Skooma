@@ -232,6 +232,10 @@ public:
     U32 probeCount();
     U32 probeMemory();
 
+    // <SK:Nexii> render/probe-shot: on the next update, capture a probe's six faces from the camera and save them to disk
+    void requestProbeShot() { mProbeShotPending = true; }
+    // </SK:Nexii>
+
 private:
     friend class LLPipeline;
     friend class LLHeroProbeManager;
@@ -289,6 +293,11 @@ private:
 
     // perform an update on the currently updating Probe
     void doProbeUpdate();
+
+    // <SK:Nexii> render/probe-shot
+    void takeProbeShot(const std::string& stem, bool sky_only);
+    bool mProbeShotPending = false;
+    // </SK:Nexii>
 
     // update the specified face of the specified probe
     void updateProbeFace(LLReflectionMap* probe, U32 face);
