@@ -641,6 +641,7 @@ if(AL_BUILD_VIEWER)
     llmediadataclient.cpp
     llmenuoptionpathfindingrebakenavmesh.cpp
     skmeshhavokshape.cpp # <SK:Nexii> physics_havok block
+    skphysicsshape.cpp # <SK:Nexii> physics shapes
     llmeshrepository.cpp
     llmimetypes.cpp
     llmodelpreview.cpp
@@ -1526,6 +1527,7 @@ if(AL_BUILD_VIEWER)
     llmediadataclient.h
     llmenuoptionpathfindingrebakenavmesh.h
     skmeshhavokshape.h # <SK:Nexii> physics_havok block
+    skphysicsshape.h # <SK:Nexii> physics shapes
     llmeshrepository.h
     llmimetypes.h
     llmodelpreview.h
