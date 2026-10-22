@@ -4890,6 +4890,17 @@
             <key>Value</key>
             <integer>0</integer>
         </map>
+        <key>SKCameraZoomToCursor</key>
+        <map>
+            <key>Comment</key>
+            <string>Mouse wheel zoom in alt-cam moves toward the point under the cursor, refocusing on it, instead of straight toward the focus point.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
         <key>RenderDepthOfFieldNearBlur</key>
         <map>
             <key>Comment</key>
