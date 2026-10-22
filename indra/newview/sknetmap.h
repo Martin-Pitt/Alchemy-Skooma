@@ -187,8 +187,8 @@ private:
     /// The allies' codes on their dots, drawn after the classic matrix block as all text is.
     void drawPeopleCodes();
     void drawVehicles();
-    /// How much a vehicle is drawn larger than life at this zoom, 1 when it is already easy to see.
-    F32 vehicleGrow(const SKMapPeople::Vehicle& v) const;
+    /// How much vehicles are drawn larger than life at this zoom: 1 zoomed in, the slider's factor zoomed out.
+    F32 vehicleGrow() const;
     void drawPings();
     void drawEvents();
     void drawFiringLines();

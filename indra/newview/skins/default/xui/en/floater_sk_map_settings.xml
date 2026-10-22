@@ -225,12 +225,12 @@
              top_pad="5"
              width="308" />
             <slider
-             control_name="SKMapVehicleGrowMax"
+             control_name="SKMapVehicleGrow"
              decimal_digits="1"
              follows="left|top|right"
              height="16"
              increment="0.5"
-             label="Enlarge when far (x)"
+             label="Zoomed-out size (x)"
              label_width="110"
              layout="topleft"
              left="24"
