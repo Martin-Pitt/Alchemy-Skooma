@@ -12,6 +12,7 @@ target_sources(
     skcensuscluster.cpp
     skcensusdelta.cpp
     skcensusfeatures.cpp
+    skcensusio.cpp
     skcensuslattice.cpp
     skcensusrecord.cpp
 )
@@ -24,6 +25,7 @@ target_sources(
         skcensuscluster.h
         skcensusdelta.h
         skcensusfeatures.h
+        skcensusio.h
         skcensusland.h
         skcensuslattice.h
         skcensusprofile.h
@@ -43,6 +45,7 @@ if(AL_BUILD_TESTS)
       tests/skcensuscluster_test.cpp
       tests/skcensusclusterhash_test.cpp
       tests/skcensusfeatures_test.cpp
+      tests/skcensusio_test.cpp
       tests/skcensusrecordsignature_test.cpp
     BENCH_SOURCES tests/skcensusfeatures_bench.cpp
     LIBRARIES skcensus llcommon
