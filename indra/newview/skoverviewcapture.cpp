@@ -1583,7 +1583,10 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
                         {
                             continue;
                         }
-                        const U8 code = pass == CAP_FRONT ? skoverview::codeOf((skoverview::CensusClass)c) : (U8)skoverview::CODE_SECTION;
+                        // Where each part carries its own cut, an uncut or open part's back face is no section, only a
+                        // single-sided face seen from behind (a roof plane wound downwards): it keeps its class.
+                        const bool section = pass != CAP_FRONT && !(shot.mPartCuts && pass == CAP_BACK);
+                        const U8 code = section ? (U8)skoverview::CODE_SECTION : skoverview::codeOf((skoverview::CensusClass)c);
                         gGL.diffuseColor4f(code / 255.f, 0.f, 0.f, 1.f);
                         // Coplanar parts of different classes resolve the same way every frame: floor over ramp over
                         // cover over wall over the rest, by a class's own depth offset rather than draw order.
