@@ -25,16 +25,16 @@ changes to `scripts/skooma/`.
 
 | Branch | What it is |
 |---|---|
-| `next` | A read-only mirror of upstream. Never checked out, never committed to. Moved only by `git skooma sync`. |
-| `develop` | Your permanent checkout — the one you build and debug from with F5. Everything lands here. |
-| `feature-<name>` | One feature, in its own worktree under `.worktrees/<name>`, branched from `next`. |
+| `develop` | A read-only mirror of upstream. Never checked out, never committed to. Moved only by `git skooma sync`. |
+| `main` | Your permanent checkout — the one you build and debug from with F5. Everything lands here. |
+| `feature-<name>` | One feature, in its own worktree under `.worktrees/<name>`, branched from `develop`. |
 
 Two build trees, deliberately different:
 
 - **`vs2026-os/` in the main checkout** — Visual Studio generator, what F5 uses. Never delete it; a rebuild is hours.
 - **`ninja-os/` in the shared build worktree** (`.worktrees/build`) — Ninja, for fast compile checks of any worktree, which `git skooma build` checks out there first. A null build is 0.4s.
 
-`git skooma status` shows every worktree, what is ahead of `develop`, what is behind its
+`git skooma status` shows every worktree, what is ahead of `main`, what is behind its
 base, and what is dirty. Run it whenever you lose your bearings.
 
 ---
@@ -61,17 +61,17 @@ git skooma trunk render feature-render # add one
 git skooma trunk --join nav/walls     # make an existing branch land into its trunk
 ```
 
-`integrate` merges the area branch into the trunk, then the trunk into `develop`, so F5
+`integrate` merges the area branch into the trunk, then the trunk into `main`, so F5
 sees it either way. The trunk is the PR.
 
-**Sub-features** build on other features rather than on `next`:
+**Sub-features** build on other features rather than on `develop`:
 
 ```sh
 git skooma new atmo/weather --base atmo/keyframes
 git skooma new atmo/tornado --base atmo/weather
 ```
 
-Any depth works. `sync` carries upstream down the chain (`next` → keyframes → weather →
+Any depth works. `sync` carries upstream down the chain (`develop` → keyframes → weather →
 tornado), and `integrate` always lands parents before children. Use a stack when the work
 genuinely depends on the work below it — that dependency is also the order you will send
 the PRs in.
@@ -113,7 +113,7 @@ Things that belong **outside** the branch:
 
 - Benchmarks, frame captures, graphs, profiling output → `V:\Scratch\<feature>\`
 - Design notes, research, review output → `doc/skooma/.<topic>.md` in the main checkout
-- Fork-only glue (scripts, branding, CI) → commit on `develop`
+- Fork-only glue (scripts, branding, CI) → commit on `main`
 
 A feature branch containing any of those will fail `git skooma check` — because it would
 have to be stripped out before the branch could go upstream.
@@ -127,8 +127,8 @@ git skooma integrate
 ```
 
 With no arguments it lands every worktree branch that is ahead of its target — its trunk,
-or `develop` — parents first, then each trunk that received work into `develop`. Each is validated, dry-run merged so a conflict can never dirty your build tree,
-then merged. It refuses if `develop` is dirty or if the viewer or a compile is running —
+or `main` — parents first, then each trunk that received work into `main`. Each is validated, dry-run merged so a conflict can never dirty your build tree,
+then merged. It refuses if `main` is dirty or if the viewer or a compile is running —
 so it cannot pull the rug from under a debugging session.
 
 Then build and F5 in the main window as usual.
@@ -136,7 +136,7 @@ Then build and F5 in the main window as usual.
 If a land breaks the build:
 
 ```sh
-git skooma undo      # back to the last-known-good develop
+git skooma undo      # back to the last-known-good main
 ```
 
 The feature branches keep their commits; fix and integrate again.
@@ -149,11 +149,11 @@ The feature branches keep their commits; fix and integrate again.
 git skooma sync
 ```
 
-Fast-forwards `next` to upstream, then merges it into `develop` and into every clean
+Fast-forwards `develop` to upstream, then merges it into `main` and into every clean
 worktree, deepest chains included. Dirty worktrees are skipped and listed. On a conflict
 it stops and tells you which worktree to fix; resolve, commit, and run it again.
 
-After merging `next` into a feature, **put any resulting build fixes in their own
+After merging `develop` into a feature, **put any resulting build fixes in their own
 commit** — never amend them into the merge commit. Rebasing later silently discards
 changes made inside a merge commit, which is how a PR ends up looking clean and not
 building.
@@ -163,7 +163,7 @@ building.
 ## Sending a feature upstream
 
 Rare and manual by design — you want to write the description and handle review yourself.
-`origin` is a Forgejo fork of `alchemy/alchemy`, so this is an ordinary cross-repo PR, and
+`origin` is a GitHub fork of `AlchemyViewer/Alchemy`, so this is an ordinary cross-repo PR, and
 the feature branch is what it is opened from. Nothing is rebased, copied or squashed.
 
 ```sh
@@ -173,17 +173,17 @@ git skooma check atmo/keyframes
 git push origin feature-atmo/keyframes
 ```
 
-Then in the Forgejo UI open a PR from `Nexii/alchemy-skooma:feature-atmo/keyframes` into
-`alchemy/alchemy:next`.
+Then on GitHub open a PR from `Martin-Pitt/Alchemy-Skooma:feature-atmo/keyframes` into
+`AlchemyViewer/Alchemy:develop`.
 
-`sync` is what makes the branch presentable: it merges `next` in, so the branch contains
-upstream and the PR's diff against `next` is the feature and nothing else. Check that
+`sync` is what makes the branch presentable: it merges `develop` in, so the branch contains
+upstream and the PR's diff against `develop` is the feature and nothing else. Check that
 before opening it:
 
 ```sh
-git rev-list --count HEAD..next      # 0 — the branch is not behind upstream
-git log --oneline next..HEAD         # the commits the PR will carry
-git diff --stat next...HEAD          # the diff it will show
+git rev-list --count HEAD..develop      # 0 — the branch is not behind upstream
+git log --oneline develop..HEAD         # the commits the PR will carry
+git diff --stat develop...HEAD          # the diff it will show
 ```
 
 A non-zero first number means `sync` has not run since upstream moved; run it and push
@@ -198,12 +198,12 @@ Conventions upstream expects:
 - Keep `<SK:Nexii>` wrappers on injection sites — upstream carries Firestorm's equivalents and
   they are how a reader of the merged tree sees what is ours. Keep product/channel
   branding out of the diff.
-- When Forgejo says the branch is out of date, take the *merge* variant, or run
+- When GitHub says the branch is out of date, take the *merge* variant, or run
   `git skooma sync` and push again — both leave the same merge commit.
-- A sub-feature can only target `next` once its parent has landed upstream. Until then,
+- A sub-feature can only target `develop` once its parent has landed upstream. Until then,
   send the parent first.
 
-Never rebase a `feature-*` branch, before or after a PR. It is merged into `develop`, and
+Never rebase a `feature-*` branch, before or after a PR. It is merged into `main`, and
 rewriting it would cause conflicts forever after — which is also why the branch takes
 upstream by merging rather than by rebasing onto it.
 
@@ -215,8 +215,8 @@ upstream by merging rather than by rebasing onto it.
 |---|---|
 | A land broke the build | `git skooma undo` |
 | `sync` stopped on a conflict | Fix it in the worktree it named, `git commit`, re-run `git skooma sync` |
-| "next would move non-fast-forward" | Something was committed on `next`. `git log upstream/next..next` to see what, move it to a feature branch, then `git branch -f next upstream/next` |
-| A command refuses because `develop` is dirty | Commit or stash in the main checkout; `git -C D:\viewers\alchemy-skooma status` |
+| "develop would move non-fast-forward" | Something was committed on `develop`. `git log upstream/develop..develop` to see what, move it to a feature branch, then `git branch -f develop upstream/develop` |
+| A command refuses because `main` is dirty | Commit or stash in the main checkout; `git -C D:\viewers\alchemy-skooma status` |
 | `integrate` says a build is running | The viewer or a compile is live. Close it, or `--force` if you are sure |
 | Worktree on a `claude/*` or `t3code/*` branch | `git skooma wt-setup` in it — renames to `feature-*` and adds the agent files |
 | A worktree directory will not delete | Something holds a handle. Close the editor/shell in it, then `git worktree prune` |
@@ -227,11 +227,11 @@ upstream by merging rather than by rebasing onto it.
 
 Every restriction traces to one of three things:
 
-1. **Features must stay upstreamable.** Hence branching from `next`, no fork-only files in
+1. **Features must stay upstreamable.** Hence branching from `develop`, no fork-only files in
    feature branches, upstream commit style.
-2. **`develop` is a live debugging session.** Hence the dry-run merge, the refusal to
+2. **`main` is a live debugging session.** Hence the dry-run merge, the refusal to
    integrate while the viewer runs, and `undo`.
-3. **`next` must equal upstream exactly.** Hence it is never checked out and a hook
+3. **`develop` must equal upstream exactly.** Hence it is never checked out and a hook
    refuses to move it. If it drifts, every feature's base is wrong and every diff lies.
 
 The full reasoning, including the adversarial review that shaped it, is in

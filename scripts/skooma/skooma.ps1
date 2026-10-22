@@ -5,7 +5,7 @@
 # Commands: status | new | wt-setup | sync | check | integrate | undo | retire | bootstrap
 #
 # Never edit the copy in .git/skooma/ — it is overwritten by `git skooma bootstrap`.
-# The source of truth is scripts/skooma/skooma.ps1 on the develop branch.
+# The source of truth is scripts/skooma/skooma.ps1 on the main branch.
 
 [CmdletBinding()]
 param(
@@ -43,10 +43,10 @@ function Show-Help {
     Say '  new <name> [desc]   create <class>-<name> + worktree in .worktrees/<name>'
     Say '                      --class fix|workaround|<own>  (asked for when run with no name)'
     Say '                      --base <branch>  --tests (configure a local tests tree)'
-    Say '  sync                fetch upstream -> next -> develop + every worktree'
+    Say '  sync                fetch upstream -> develop -> main + every worktree'
     Say '  check [name|.]      validate a branch before it lands'
-    Say '  integrate [name|.]  land worktree branches into their trunk or develop (no arg = all)'
-    Say '                      <name> --resolve  on a conflict with develop, leave the merge to resolve'
+    Say '  integrate [name|.]  land worktree branches into their trunk or main (no arg = all)'
+    Say '                      <name> --resolve  on a conflict with main, leave the merge to resolve'
     Say '                      --continue  commit a resolved --resolve merge   --abort  drop it'
     Say '  trunk [prefix branch]  list or set the trunk an area lands into (atmo -> feature-atmo-magic)'
     Say '                      --join [name|.]  make an existing branch land into its trunk'
@@ -55,7 +55,7 @@ function Show-Help {
     Say '                      --obj <file>  compile one translation unit'
     Say '  test [--match re] [--label l] [--bench]  build + run CTest here (needs new --tests)'
     Say '  clean [name|--all]  delete a build tree to reclaim disk (never the main one)'
-    Say '  undo                reset develop to the last-known-good commit'
+    Say '  undo                reset main to the last-known-good commit'
     Say '  retire [name|.]     remove a worktree + branch whose work is already in its base'
     Say '                      --force  discard one that still carries work (prints the tip sha)'
     Say '  wt-setup [path]     (re)create agent files in a worktree'
@@ -132,7 +132,7 @@ function Cfg { param([string]$key, [string]$default = '')
     return $v.Trim()
 }
 
-$UpstreamBranch = Cfg 'skooma.upstreambranch' 'next'
+$UpstreamBranch = Cfg 'skooma.upstreambranch' 'develop'
 
 # Fork-only paths that must never appear in a feature-* commit.
 $ForbiddenPaths = @(
@@ -149,7 +149,7 @@ function Test-Forbidden { param([string]$path)
 # Branch class: the prefix a working branch carries ('feature', 'fix', 'workaround',
 # 'spike', or anything the human typed at `git skooma new`). Classes are cosmetic with
 # one exception — 'spike' carries a role of its own, because it is the one kind of
-# branch that is never meant to reach next. The rest just say what a branch is for.
+# branch that is never meant to reach develop. The rest just say what a branch is for.
 # Custom classes are remembered in skooma.class so they appear in the list next time.
 $BuiltinClasses = @('feature', 'fix', 'workaround', 'spike')
 
@@ -159,7 +159,7 @@ function Get-Classes {
 }
 $script:Classes = Get-Classes
 
-function Test-ClassOk { param([string]$c) return ($c -match '^[a-z][a-z0-9-]*$' -and $c -notin 'next', 'develop', 'publish', 'skooma') }
+function Test-ClassOk { param([string]$c) return ($c -match '^[a-z][a-z0-9-]*$' -and $c -notin 'develop', 'main', 'glue', 'publish', 'skooma') }
 
 function Add-Class { param([string]$c)
     if ($script:Classes -contains $c) { return }
@@ -173,7 +173,7 @@ function Get-Class { param([string]$branch)
     if (-not $branch) { return '' }
     $m = Cfg "branch.$branch.skooma"
     if ($m) { return $m }
-    if ($branch -eq 'skooma-glue') { return 'glue' }
+    if ($branch -eq 'glue') { return 'glue' }
     foreach ($c in $script:Classes) { if ($branch -like "$c-*") { return $c } }
     if ($branch -like 'skooma-*')   { return 'sidecar' }
     return ''
@@ -182,7 +182,7 @@ function Get-Class { param([string]$branch)
 # Branch role: 'feature' | 'spike' | 'glue' | 'sidecar' | '' (not ours).
 # Every working class (feature, fix, workaround, custom) has the 'feature' role:
 # the same rules apply to all of them, because all of them go upstream.
-# 'spike' is the exception. A spike may be integrated into develop so its
+# 'spike' is the exception. A spike may be integrated into main so its
 # instrumentation runs in the F5 build, but it never goes upstream, so the export
 # rules do not bind it and a rule of its own does: see DO NOT LAND in check/retire.
 # Dispatch on the config marker first so tool-created names (claude/*, t3code/*) work once adopted.
@@ -198,17 +198,17 @@ function Get-Role { param([string]$branch)
 function Get-ClassPrefixes { return @($script:Classes | Where-Object { $_ -notin 'glue', 'sidecar' }) }
 
 # A branch's base is what it was cut from and what it merges to stay current:
-# `next` for a top-level feature, another feature branch for a sub-feature.
+# `develop` for a top-level feature, another feature branch for a sub-feature.
 # Chains can be any depth (keyframes <- weather <- tornado).
 function Get-Base { param([string]$branch)
     $b = Cfg "branch.$branch.skooma-base"
-    if (-not $b) { return 'next' }
-    if (-not (GitOk show-ref --verify --quiet "refs/heads/$b")) { return 'next' }  # parent retired/merged upstream
+    if (-not $b) { return 'develop' }
+    if (-not (GitOk show-ref --verify --quiet "refs/heads/$b")) { return 'develop' }  # parent retired/merged upstream
     return $b
 }
 
 # A trunk is the feature branch one area ships as (feature-navmesh, feature-atmo-magic).
-# Worktrees of the area land into the trunk, and the trunk lands into develop, so the
+# Worktrees of the area land into the trunk, and the trunk lands into main, so the
 # trunk holds everything the PR will. The map is name prefix -> trunk, set with
 # `git skooma trunk <prefix> <branch>` and stored as skooma-trunk.<prefix>.branch.
 function Get-TrunkMap {
@@ -232,16 +232,16 @@ function Find-TrunkFor { param([string]$name)
 
 function Test-IsTrunk { param([string]$branch) return ((Get-TrunkMap).Values -contains $branch) }
 
-# Where a branch lands: its trunk if it has a live one, else develop.
+# Where a branch lands: its trunk if it has a live one, else main.
 function Get-LandTarget { param([string]$branch)
     $t = Cfg "branch.$branch.skooma-trunk"
     if ($t -and $t -ne $branch -and (GitOk show-ref --verify --quiet "refs/heads/$t")) { return $t }
-    return 'develop'
+    return 'main'
 }
 
 function Get-Depth { param([string]$branch)
     $d = 0; $x = $branch
-    while ($x -and $x -ne 'next' -and $d -lt 16) { $x = Get-Base $x; $d++ }
+    while ($x -and $x -ne 'develop' -and $d -lt 16) { $x = Get-Base $x; $d++ }
     return [Math]::Max(0, $d - 1)
 }
 
@@ -321,7 +321,7 @@ function Invoke-WtSetup { param([string]$Path = $Here)
     if ($Path -ieq $MainWt) { Info 'wt-setup: main checkout, nothing to do'; return }
 
     $branch = G -C $Path rev-parse --abbrev-ref HEAD
-    if ($branch -in 'develop', 'next', 'publish') {
+    if ($branch -in 'main', 'develop', 'publish') {
         Fail "worktree $Path is on protected branch '$branch'; refusing to adopt it as a feature"
     }
     $role = Get-Role $branch
@@ -357,7 +357,7 @@ function Invoke-WtSetup { param([string]$Path = $Here)
         "@$($MainWt -replace '\\','/')/AGENTS.md",
         '',
         "Design docs (read-only, absolute path): ``$MainWt\doc\skooma\``",
-        "Main checkout (develop, F5 build): ``$MainWt``"
+        "Main checkout (main, F5 build): ``$MainWt``"
     ) -join "`n"
     Set-Content -Path (Join-Path $Path 'CLAUDE.local.md') -Value $stub -Encoding UTF8
 
@@ -425,7 +425,7 @@ function Get-BuildTree { param([string]$Path)
 # All worktrees share one build worktree: a checkout plus a configured Ninja tree is
 # ~19 GB and takes minutes to create, the build lock already serializes builds across
 # worktrees, and nothing is lost by having one.  It lives on skooma-build, based on
-# next, so `git skooma sync` keeps its content — and therefore the baseline its build
+# develop, so `git skooma sync` keeps its content — and therefore the baseline its build
 # tree was last built against — close to whatever the next branch is cut from.
 function Get-BuildWorktreePath { return (Join-Path $WtRoot 'build') }
 
@@ -438,11 +438,11 @@ function Initialize-BuildWorktree {
         $out = G worktree add $path skooma-build
     }
     else {
-        $out = G worktree add --no-track -b skooma-build $path next
+        $out = G worktree add --no-track -b skooma-build $path develop
     }
     if ($script:GitExit -ne 0) { Fail "could not create the build worktree at ${path}`n$out" }
     $null = G config 'branch.skooma-build.skooma' 'sidecar'
-    $null = G config 'branch.skooma-build.skooma-base' 'next'
+    $null = G config 'branch.skooma-build.skooma-base' 'develop'
     $null = G config 'branch.skooma-build.description' 'Shared build worktree for git skooma build'
     Initialize-Submodules $path
     Good "created build worktree: $path"
@@ -861,10 +861,10 @@ function Invoke-Status {
         Say "Here   $($HereWt.Path)  [$($HereWt.Branch)$(if ($class) { " / $class" })]"
     } else { Say "Here   $Here  (not a registered worktree)" }
 
-    $up = Get-Counts 'develop' 'next'
+    $up = Get-Counts 'main' 'develop'
     Say ''
-    Say "next     $(G rev-parse --short next)   upstream/$UpstreamBranch = $(G rev-parse --short "upstream/$UpstreamBranch")"
-    Say "develop  $(G rev-parse --short develop)   $($up.Ahead) behind next, $($up.Behind) own commits"
+    Say "develop  $(G rev-parse --short develop)   upstream/$UpstreamBranch = $(G rev-parse --short "upstream/$UpstreamBranch")"
+    Say "main     $(G rev-parse --short main)   $($up.Ahead) behind develop, $($up.Behind) own commits"
     if ($lastGood) { Say "         last-known-good $($lastGood.Substring(0,[Math]::Min(9,$lastGood.Length)))  (git skooma undo)" }
 
     Say ''
@@ -918,7 +918,7 @@ function ConvertTo-Slug { param([string]$s)
 
 # A namespaced name (atmo/weather) means "part of the atmo feature", and parts build
 # on the family's core. The default base is therefore the group's root: the one
-# member whose own base is next. Deeper chains stay explicit via --base.
+# member whose own base is develop. Deeper chains stay explicit via --base.
 function Get-GroupRoot { param([string]$name)
     if ($name -notmatch '/') { return '' }
     $group = ($name -split '/')[0]
@@ -926,7 +926,7 @@ function Get-GroupRoot { param([string]$name)
     $members = @(G for-each-ref --format='%(refname:short)' @globs) -split "`n" |
         Where-Object { $_ }
     if (-not $members) { return '' }                      # first in the group: it is the root
-    $roots = @($members | Where-Object { (Get-Base $_) -eq 'next' })
+    $roots = @($members | Where-Object { (Get-Base $_) -eq 'develop' })
     if ($roots) { return @($roots | Sort-Object)[0] }
     return @($members | Sort-Object)[0]                   # no clear root; oldest-named member
 }
@@ -1024,15 +1024,15 @@ function Invoke-New {
         # list becomes a new class and is remembered for next time.
         if (-not $class) { $class = Read-ClassChoice }
 
-        # Offer the inferred base (group root, or next) and let it be overridden.
+        # Offer the inferred base (group root, or develop) and let it be overridden.
         $guess = Find-TrunkFor $name
         if (-not $guess -or $guess -eq "$class-$name") { $guess = Get-GroupRoot $name }
-        if (-not $guess) { $guess = 'next' }
+        if (-not $guess) { $guess = 'develop' }
         $existing = Get-WorkingBranches
         if ($existing) {
             Say ''
             Info 'builds on (Enter to accept):'
-            foreach ($e in @('next') + $existing) { Info "    $e" }
+            foreach ($e in @('develop') + $existing) { Info "    $e" }
             $pick = Read-Host "  base [$guess]"
             $base = if ($pick) { $pick } else { $guess }
         }
@@ -1061,10 +1061,10 @@ function Invoke-New {
     # Resolve and validate the base branch.
     if (-not $base) {
         $base = Get-GroupRoot $name
-        if ($base) { Info "'$name' joins an existing feature group; basing on $base (use --base next to override)" }
-        else { $base = 'next' }
+        if ($base) { Info "'$name' joins an existing feature group; basing on $base (use --base develop to override)" }
+        else { $base = 'develop' }
     }
-    if ($base -ne 'next') {
+    if ($base -ne 'develop') {
         $resolved = ''
         foreach ($cand in @($base) + @(Get-ClassPrefixes | ForEach-Object { "$_-$base" })) {
             if (GitOk show-ref --verify --quiet "refs/heads/$cand") { $resolved = $cand; break }
@@ -1083,7 +1083,7 @@ function Invoke-New {
         Where-Object { $_ -and ($branch.StartsWith("$_/") -or $_.StartsWith("$branch/")) }
     if ($conflict) { Fail "branch name clashes with existing branch '$($conflict[0])' (git cannot have both)" }
 
-    if ($base -eq 'next') { Invoke-Sync -Quiet -NextOnly }
+    if ($base -eq 'develop') { Invoke-Sync -Quiet -NextOnly }
     Say ''
     Info "creating worktree for $branch from $base"
     $null = G worktree add --no-track -b $branch $path $base
@@ -1093,7 +1093,7 @@ function Invoke-New {
     $null = G config "branch.$branch.skooma-base" $base
     if ($trunk) { $null = G config "branch.$branch.skooma-trunk" $trunk }
     $null = G config "branch.$branch.remote" 'origin'
-    $null = G config "branch.$branch.merge" "refs/heads/$base"  # a reflexive `git pull` takes the base, not develop
+    $null = G config "branch.$branch.merge" "refs/heads/$base"  # a reflexive `git pull` takes the base, not main
     if ($desc) { $null = G config "branch.$branch.description" $desc }
     if ($tests) { $null = G config "branch.$branch.skooma-tests" 'true' }
 
@@ -1105,7 +1105,7 @@ function Invoke-New {
     $scratch = "V:\Scratch\$($name -replace '/', '-')"
 
     # Feature worktrees are source checkouts: `git skooma build` runs in the shared
-    # build worktree, which is already warm at next.  Only --tests needs a local tree,
+    # build worktree, which is already warm at develop.  Only --tests needs a local tree,
     # because CTest must run against this worktree's own configuration.
     if (-not ($Rest -contains '--no-configure')) {
         if ($tests) { $null = Initialize-BuildTree $path -Branch $branch }
@@ -1117,7 +1117,7 @@ function Invoke-New {
     Say ''
     Good "worktree ready: $path"
     Say ''
-    Say '  build (shared Ninja tree, warm at next):'
+    Say '  build (shared Ninja tree, warm at develop):'
     Say "    cd $path"
     Say '    git skooma build                 # everything'
     Say '    git skooma build llrender        # one library, much faster'
@@ -1147,35 +1147,35 @@ function Invoke-Sync { param([switch]$Quiet, [switch]$NextOnly)
         Warn "upstream default branch looks like '$remoteHead', configured skooma.upstreamBranch=$UpstreamBranch"
     }
 
-    # next := upstream/<branch>, but only ever forward. Two-step because a
-    # `fetch upstream next:next` updates refs/heads/next *before* the tracking
+    # develop := upstream/<branch>, but only ever forward. Two-step because a
+    # `fetch upstream develop:develop` updates refs/heads/develop *before* the tracking
     # ref, which the guard hook cannot validate. See .review-verdict.md.
-    $old = G rev-parse next
+    $old = G rev-parse develop
     $new = G rev-parse "upstream/$UpstreamBranch"
     if ($script:GitExit -ne 0) { Fail "upstream/$UpstreamBranch does not exist" }
 
     if ($old -ne $new) {
         if (-not (GitOk merge-base --is-ancestor $old $new)) {
             Fail @"
-next would move non-fast-forward ($($old.Substring(0,9)) -> $($new.Substring(0,9))).
-Either upstream rewrote history, or a commit was made on next.
-  inspect:  git log --oneline upstream/$UpstreamBranch..next
+develop would move non-fast-forward ($($old.Substring(0,9)) -> $($new.Substring(0,9))).
+Either upstream rewrote history, or a commit was made on develop.
+  inspect:  git log --oneline upstream/$UpstreamBranch..develop
   recover:  git skooma retarget   (not implemented; do it by hand, see WORKFLOW.md)
 "@
         }
-        $null = GG update-ref refs/heads/next $new $old
-        if ($script:GitExit -ne 0) { Fail 'could not fast-forward next' }
-        Good "next $($old.Substring(0,9)) -> $($new.Substring(0,9))"
+        $null = GG update-ref refs/heads/develop $new $old
+        if ($script:GitExit -ne 0) { Fail 'could not fast-forward develop' }
+        Good "develop $($old.Substring(0,9)) -> $($new.Substring(0,9))"
     }
-    elseif (-not $Quiet) { Info 'next already up to date' }
+    elseif (-not $Quiet) { Info 'develop already up to date' }
     if ($NextOnly) { return }
 
-    # Merge each branch's own base into it: next for develop and top-level features,
+    # Merge each branch's own base into it: develop for main and top-level features,
     # the parent branch for sub-features. Parents are processed before children so a
     # single sync carries upstream all the way down a chain.
     # The shared build worktree usually sits detached at whatever branch was built
     # last.  Attach it to skooma-build so the normal merge below keeps it current
-    # with next; skip while a build is running, or the checkout would fight it.
+    # with develop; skip while a build is running, or the checkout would fight it.
     $buildWt = $Worktrees | Where-Object { $_.Path -ieq (Get-BuildWorktreePath) } | Select-Object -First 1
     if ($buildWt -and -not $buildWt.Branch -and -not (Test-BuildRunning $buildWt.Path)) {
         $out = G -C $buildWt.Path checkout --quiet 'skooma-build'
@@ -1190,15 +1190,15 @@ Either upstream rewrote history, or a commit was made on next.
         if ($b) { $byBranch[$b] = $w }
     }
     $ordered = @()
-    if ($byBranch.ContainsKey('develop')) { $ordered += 'develop' }
-    $ordered += Sort-ByDependency @($byBranch.Keys | Where-Object { $_ -ne 'develop' -and (Get-Role $_) })
+    if ($byBranch.ContainsKey('main')) { $ordered += 'main' }
+    $ordered += Sort-ByDependency @($byBranch.Keys | Where-Object { $_ -ne 'main' -and (Get-Role $_) })
 
     foreach ($branch in $ordered) {
         $w = $byBranch[$branch]
         $isMain = $w.Path -ieq $MainWt
-        if ($isMain -and $branch -ne 'develop') { $skipped += "$($w.Path) (on $branch, not develop)"; continue }
+        if ($isMain -and $branch -ne 'main') { $skipped += "$($w.Path) (on $branch, not main)"; continue }
 
-        $mergeFrom = if ($branch -eq 'develop') { 'next' } else { Get-Base $branch }
+        $mergeFrom = if ($branch -eq 'main') { 'develop' } else { Get-Base $branch }
         $behind = (Get-Counts $branch $mergeFrom).Ahead
         if ($behind -eq 0) { continue }
 
@@ -1260,19 +1260,19 @@ function Invoke-Check { param([string]$branch, [switch]$Quiet)
     $role = Get-Role $branch
     if (-not $role) { Fail "$branch is not a Skooma branch (no branch.$branch.skooma marker)" }
 
-    # Everything is judged against this branch's own base: next for a top-level
+    # Everything is judged against this branch's own base: develop for a top-level
     # feature, the parent branch for a sub-feature.
     $base = Get-Base $branch
 
     $problems = @()
     $warnings = @()
 
-    # 1. Merge parents must all be ancestors of the base (no develop/unrelated features merged in).
-    #    A sibling branch already integrated into develop is allowed with a warning: related
+    # 1. Merge parents must all be ancestors of the base (no main/unrelated features merged in).
+    #    A sibling branch already integrated into main is allowed with a warning: related
     #    worktrees (nav/*) ship together as one feature, so taking a landed sibling is not a leak.
-    #    develop itself (its first-parent line) is never allowed.
+    #    main itself (its first-parent line) is never allowed.
     #    A trunk takes its worktrees' branches by merge, so for a trunk any parent is fine
-    #    as long as it carries nothing that exists only on develop.
+    #    as long as it carries nothing that exists only on main.
     $developSpine = $null
     $isTrunk = Test-IsTrunk $branch
     $developOnly = $null
@@ -1281,20 +1281,20 @@ function Invoke-Check { param([string]$branch, [switch]$Quiet)
         foreach ($p in $parents[2..($parents.Count - 1)]) {
             if ($isTrunk -and -not (GitOk merge-base --is-ancestor $p $base)) {
                 if ($null -eq $developOnly) {
-                    # Reachable from develop but from no working branch: glue, setup commits, develop's own merges.
+                    # Reachable from main but from no working branch: glue, setup commits, main's own merges.
                     $developOnly = @{}
                     $not = @(Get-WorkingBranches | ForEach-Object { "^$_" })
-                    foreach ($d in (G rev-list develop "^$base" @not) -split "`n") { if ($d) { $developOnly[$d] = $true } }
+                    foreach ($d in (G rev-list main "^$base" @not) -split "`n") { if ($d) { $developOnly[$d] = $true } }
                 }
                 $leak = (G rev-list $p "^$base") -split "`n" | Where-Object { $_ -and $developOnly.ContainsKey($_) } | Select-Object -First 1
-                if ($leak) { $problems += "merge $($sha.Substring(0,9)) brings in develop commit $($leak.Substring(0,9))" }
+                if ($leak) { $problems += "merge $($sha.Substring(0,9)) brings in main commit $($leak.Substring(0,9))" }
                 continue
             }
             if (-not (GitOk merge-base --is-ancestor $p $base)) {
-                if (GitOk merge-base --is-ancestor $p develop) {
-                    if ($null -eq $developSpine) { $developSpine = @{}; foreach ($d in (G rev-list --first-parent develop) -split "`n") { if ($d) { $developSpine[$d] = $true } } }
+                if (GitOk merge-base --is-ancestor $p main) {
+                    if ($null -eq $developSpine) { $developSpine = @{}; foreach ($d in (G rev-list --first-parent main) -split "`n") { if ($d) { $developSpine[$d] = $true } } }
                     if (-not $developSpine.ContainsKey($p)) {
-                        $warnings += "merge $($sha.Substring(0,9)) brings in $($p.Substring(0,9)), a sibling already in develop but not from $base; it ships with this branch"
+                        $warnings += "merge $($sha.Substring(0,9)) brings in $($p.Substring(0,9)), a sibling already in main but not from $base; it ships with this branch"
                         continue
                     }
                 }
@@ -1324,13 +1324,13 @@ function Invoke-Check { param([string]$branch, [switch]$Quiet)
         if ($gen -match 'Generated with \[Claude Code\]') { $warnings += 'commit messages contain "Generated with" lines; strip them at export (Co-Authored-By is fine)' }
     }
 
-    # 4. DO NOT LAND marks throwaway instrumentation. It may ride a spike into develop
-    # so it runs in the F5 build, but it must never reach next — so on a branch that
+    # 4. DO NOT LAND marks throwaway instrumentation. It may ride a spike into main
+    # so it runs in the F5 build, but it must never reach develop — so on a branch that
     # does go upstream it is fatal, and on a spike it is only worth saying out loud.
     $dnl = @((G log --format='%h %s' --grep='DO NOT LAND' "$base..$branch") -split "`n" | Where-Object { $_ })
     if ($dnl) {
         if ($role -eq 'spike') {
-            $warnings += "carries $($dnl.Count) DO NOT LAND commit(s): this branch may go to develop, never to next"
+            $warnings += "carries $($dnl.Count) DO NOT LAND commit(s): this branch may go to main, never to develop"
         }
         else {
             foreach ($d in $dnl) { $problems += "DO NOT LAND commit on a $role branch: $d" }
@@ -1351,7 +1351,7 @@ function Invoke-Check { param([string]$branch, [switch]$Quiet)
 # ----------------------------------------------------------------- integrate
 
 # A `--resolve` land left in the main checkout for the user to finish. Its presence is
-# what lets `--continue` commit on develop; without it there is nothing to continue.
+# what lets `--continue` commit on main; without it there is nothing to continue.
 $ResolveState = Join-Path $CommonDir 'skooma-resolve.json'
 
 function Get-Unmerged { param([string]$path)
@@ -1371,7 +1371,7 @@ function Invoke-IntegrateContinue {
     }
     if ($marked) { Fail "conflict markers left in:`n    $($marked -join "`n    ")" }
 
-    $msg = "Merge branch '$($st.Branch)' into develop`n`nResolved conflicts with develop-only code in:`n" + ((@($st.Files) | ForEach-Object { "  $_" }) -join "`n") + "`n"
+    $msg = "Merge branch '$($st.Branch)' into main`n`nResolved conflicts with main-only code in:`n" + ((@($st.Files) | ForEach-Object { "  $_" }) -join "`n") + "`n"
     $tmp = Join-Path $CommonDir 'skooma-resolve-msg.txt'
     [IO.File]::WriteAllText($tmp, $msg)
     $out = GG -C $MainWt commit --no-edit -F $tmp
@@ -1381,8 +1381,8 @@ function Invoke-IntegrateContinue {
     $null = G -C $MainWt submodule update --init --recursive
 
     Say ''
-    Good "$($st.Branch) -> develop (merge commit, $(@($st.Files).Count) resolved file(s))"
-    Info "develop is now $(G rev-parse --short develop)"
+    Good "$($st.Branch) -> main (merge commit, $(@($st.Files).Count) resolved file(s))"
+    Info "main is now $(G rev-parse --short main)"
     Info "if the build breaks:  git skooma undo   (back to $($st.LastGood.Substring(0,9)))"
     Say ''
     Backup-Docs
@@ -1397,7 +1397,7 @@ function Invoke-IntegrateAbort {
     }
     if ($st.PrevLastGood) { $null = G config 'skooma.lastgood' $st.PrevLastGood } else { $null = G config --unset 'skooma.lastgood' }
     Remove-Item $ResolveState
-    Good "aborted; develop stays at $(G rev-parse --short develop)"
+    Good "aborted; main stays at $(G rev-parse --short main)"
 }
 
 function Invoke-Integrate {
@@ -1411,18 +1411,18 @@ function Invoke-Integrate {
     if ($resolve -and -not $arg) { Fail 'usage: git skooma integrate <name> --resolve' }
 
     $mainBranch = G -C $MainWt rev-parse --abbrev-ref HEAD
-    if ($mainBranch -ne 'develop') { Fail "main checkout is on '$mainBranch', expected develop" }
+    if ($mainBranch -ne 'main') { Fail "main checkout is on '$mainBranch', expected main" }
     $op = Test-MidOperation $MainWt
     if ($op) { Fail "main checkout is mid-$op; finish or abort that first" }
     if (Test-Dirty $MainWt) { Fail "main checkout has uncommitted changes; commit or stash them first`n  (git -C $MainWt status)" }
     if ((Test-BuildRunning) -and -not $force) { Fail 'a build is running; wait for it or pass --force' }
 
-    # Which branches? Each lands into its target: its trunk if it has one, else develop.
-    # A trunk that receives work then lands into develop in the same run.
+    # Which branches? Each lands into its target: its trunk if it has one, else main.
+    # A trunk that receives work then lands into main in the same run.
     $targets = @()
     if ($arg) {
         $targets = @(Resolve-Target $arg)
-        if ($resolve -and (Get-LandTarget $targets[0]) -ne 'develop') { Fail "--resolve only lands into develop; $($targets[0]) lands into $(Get-LandTarget $targets[0])" }
+        if ($resolve -and (Get-LandTarget $targets[0]) -ne 'main') { Fail "--resolve only lands into main; $($targets[0]) lands into $(Get-LandTarget $targets[0])" }
     }
     else {
         foreach ($w in $Worktrees) {
@@ -1435,27 +1435,27 @@ function Invoke-Integrate {
     # Trunks go after everything that lands into them, wherever they came from.
     foreach ($b in @($targets)) {
         $t = Get-LandTarget $b
-        while ($t -ne 'develop' -and $targets -notcontains $t) { $targets += $t; $t = Get-LandTarget $t }
+        while ($t -ne 'main' -and $targets -notcontains $t) { $targets += $t; $t = Get-LandTarget $t }
     }
     # Glue first (it carries the scripts and hooks), then parents before children:
     # landing a sub-feature before its parent would drag the parent in unannounced.
-    # Branches bound for a trunk precede the develop-bound ones, so the trunk is complete when it lands.
+    # Branches bound for a trunk precede the main-bound ones, so the trunk is complete when it lands.
     $glue = @($targets | Where-Object { (Get-Role $_) -eq 'glue' } | Sort-Object)
-    $toTrunk = Sort-ByDependency @($targets | Where-Object { (Get-Role $_) -ne 'glue' -and (Get-LandTarget $_) -ne 'develop' } | Sort-Object)
-    $toDevelop = Sort-ByDependency @($targets | Where-Object { (Get-Role $_) -ne 'glue' -and (Get-LandTarget $_) -eq 'develop' } | Sort-Object)
-    $targets = @($glue) + @($toTrunk) + @($toDevelop)
+    $toTrunk = Sort-ByDependency @($targets | Where-Object { (Get-Role $_) -ne 'glue' -and (Get-LandTarget $_) -ne 'main' } | Sort-Object)
+    $toMain = Sort-ByDependency @($targets | Where-Object { (Get-Role $_) -ne 'glue' -and (Get-LandTarget $_) -eq 'main' } | Sort-Object)
+    $targets = @($glue) + @($toTrunk) + @($toMain)
 
     if (-not $targets) { Say ''; Info 'nothing to integrate'; Say ''; return }
 
     Say ''
     Say "Integrating: $(($targets | ForEach-Object { "$_ -> $(Get-LandTarget $_)" }) -join ', ')"
-    $lastGood = G rev-parse develop
+    $lastGood = G rev-parse main
     $results = @()
 
     foreach ($b in $targets) {
         $into = Get-LandTarget $b
         $ahead = (Get-Counts $into $b).Ahead
-        if ($ahead -eq 0) { continue }   # a trunk whose work is already in develop
+        if ($ahead -eq 0) { continue }   # a trunk whose work is already in main
 
         $problems = Invoke-Check $b -Quiet
         if ($problems.Count -gt 0) {
@@ -1467,9 +1467,9 @@ function Invoke-Integrate {
         # Dry run first so a conflict never dirties the F5 tree or the trunk's worktree.
         $null = G merge-tree --write-tree --name-only $into $b
         if ($script:GitExit -ne 0) {
-            # A conflict with develop-only code cannot be synced away (features never merge
-            # develop), so --resolve leaves it in the main checkout for the user to finish.
-            if ($resolve -and $into -eq 'develop') {
+            # A conflict with main-only code cannot be synced away (features never merge
+            # main), so --resolve leaves it in the main checkout for the user to finish.
+            if ($resolve -and $into -eq 'main') {
                 $prev = Cfg 'skooma.lastgood'
                 $null = GG -C $MainWt merge --no-edit $b
                 $files = @(Get-Unmerged $MainWt)
@@ -1480,22 +1480,22 @@ function Invoke-Integrate {
                 $null = G config 'skooma.lastgood' $lastGood
                 [IO.File]::WriteAllText($ResolveState, (@{ Branch = $b; LastGood = $lastGood; PrevLastGood = $prev; Files = @($files) } | ConvertTo-Json))
                 Say ''
-                Warn "$b conflicts with develop; the merge is left in $MainWt"
+                Warn "$b conflicts with main; the merge is left in $MainWt"
                 foreach ($f in $files) { Say "    $f" }
                 Say ''
                 Info 'resolve each file, git add it, then:  git skooma integrate --continue'
-                Info 'to give up and leave develop as it was:  git skooma integrate --abort'
+                Info 'to give up and leave main as it was:  git skooma integrate --abort'
                 Say ''
                 return
             }
             $results += [pscustomobject]@{ Branch = $b; Result = 'SKIPPED (conflict)'; Detail = "conflicts with $into" }
-            Warn "$b would conflict with $into; merge $into's base into it first (git skooma sync), or land it with integrate $b --resolve if the conflict is with develop-only code"
+            Warn "$b would conflict with $into; merge $into's base into it first (git skooma sync), or land it with integrate $b --resolve if the conflict is with main-only code"
             continue
         }
 
-        # develop merges in the main checkout; a trunk in its own worktree.
+        # main merges in the main checkout; a trunk in its own worktree.
         $at = $MainWt
-        if ($into -ne 'develop') {
+        if ($into -ne 'main') {
             $tw = $Worktrees | Where-Object { $_.Branch -eq $into } | Select-Object -First 1
             if (-not $tw) {
                 $results += [pscustomobject]@{ Branch = $b; Result = 'SKIPPED (trunk)'; Detail = "$into has no worktree" }
@@ -1531,7 +1531,7 @@ function Invoke-Integrate {
 
     Say ''
     $results | Format-Table -AutoSize | Out-String | Write-Host
-    Info "develop is now $(G rev-parse --short develop)"
+    Info "main is now $(G rev-parse --short main)"
     Info "if the build breaks:  git skooma undo   (back to $($lastGood.Substring(0,9)))"
     Say ''
     Backup-Docs
@@ -1582,38 +1582,38 @@ function Invoke-Trunk {
 function Invoke-Undo {
     $lastGood = Cfg 'skooma.lastgood'
     if (-not $lastGood) { Fail 'no recorded last-known-good commit (nothing integrated yet)' }
-    $cur = G rev-parse develop
-    if ($cur -eq $lastGood) { Info 'develop is already at the last-known-good commit'; return }
+    $cur = G rev-parse main
+    if ($cur -eq $lastGood) { Info 'main is already at the last-known-good commit'; return }
     $mainBranch = G -C $MainWt rev-parse --abbrev-ref HEAD
-    if ($mainBranch -ne 'develop') { Fail "main checkout is on '$mainBranch', expected develop" }
+    if ($mainBranch -ne 'main') { Fail "main checkout is on '$mainBranch', expected main" }
     if (Test-Dirty $MainWt) { Fail 'main checkout has uncommitted changes' }
 
     Say ''
-    Say "develop  $($cur.Substring(0,9))  ->  $($lastGood.Substring(0,9))"
+    Say "main  $($cur.Substring(0,9))  ->  $($lastGood.Substring(0,9))"
     G -C $MainWt log --oneline "$lastGood..$cur" | Write-Host
     Say ''
     $null = GG -C $MainWt reset --hard $lastGood
     if ($script:GitExit -ne 0) { Fail 'reset failed' }
     $null = G -C $MainWt submodule update --init --recursive
-    Good 'develop reset. The feature branches still have their commits; re-integrate when fixed.'
+    Good 'main reset. The feature branches still have their commits; re-integrate when fixed.'
     Say ''
 }
 
 # --------------------------------------------------------------------- retire
 
-# DO NOT LAND commits from $branch that are still sitting in develop. Scoped to
-# next..develop because anything already in next is upstream's problem, not a stranded
+# DO NOT LAND commits from $branch that are still sitting in main. Scoped to
+# develop..main because anything already in develop is upstream's problem, not a stranded
 # spike, and filtered by ancestry so retiring one spike never reverts another's work.
-# Commits develop has already reverted are dropped: this answers "is the instrumentation
+# Commits main has already reverted are dropped: this answers "is the instrumentation
 # still here", and the commit being in the history does not mean that it is. A cleanup
 # done by hand is not detected, but then the revert below just refuses and nothing breaks.
 function Get-StrandedSpikes { param([string]$branch)
     $reverted = @{}
-    foreach ($m in [regex]::Matches((G log --format='%b' 'next..develop'), 'This reverts commit ([0-9a-f]{40})')) {
+    foreach ($m in [regex]::Matches((G log --format='%b' 'develop..main'), 'This reverts commit ([0-9a-f]{40})')) {
         $reverted[$m.Groups[1].Value] = $true
     }
     $found = @()
-    foreach ($line in ((G log --format='%H %h %s' --grep='DO NOT LAND' 'next..develop') -split "`n" | Where-Object { $_ })) {
+    foreach ($line in ((G log --format='%H %h %s' --grep='DO NOT LAND' 'develop..main') -split "`n" | Where-Object { $_ })) {
         $sha = ($line -split ' ', 2)[0]
         if ($reverted.ContainsKey($sha)) { continue }
         if (GitOk merge-base --is-ancestor $sha $branch) { $found += $line }
@@ -1644,26 +1644,26 @@ function Invoke-Retire {
     $op = if ($wt) { Test-MidOperation $wt.Path } else { '' }
     if ($op)                                              { Fail "$($wt.Path) is mid-$op; finish or abort that first" }
 
-    # Get-Base silently answers 'next' once a parent ref is gone, so retiring out of
+    # Get-Base silently answers 'develop' once a parent ref is gone, so retiring out of
     # order would quietly change what `check` measures a sub-feature against.
     $children = @(Get-WorkingBranches | Where-Object { $_ -ne $branch -and (Get-Base $_) -eq $branch })
     if ($children) { Fail "these are based on ${branch}: $($children -join ', ')`n    retire those first, or re-base them onto $base" }
 
-    # A spike is allowed to merge its DO NOT LAND instrumentation into develop. Deleting
+    # A spike is allowed to merge its DO NOT LAND instrumentation into main. Deleting
     # the branch does not take it back out again — and worse, the $carries check below is
     # *satisfied* by it, because the content really is in the base. That is how a whole
-    # probe spike once stayed in develop after its branch was retired without complaint.
+    # probe spike once stayed in main after its branch was retired without complaint.
     # So look for the commits themselves, not for a diff.
     $stranded = Get-StrandedSpikes $branch
     if ($stranded) {
         $mainBranch = G -C $MainWt rev-parse --abbrev-ref HEAD
-        if ($mainBranch -ne 'develop') { Fail "$branch left DO NOT LAND commits in develop, and the main checkout is on '$mainBranch'`n    put it back on develop so retire can revert them" }
+        if ($mainBranch -ne 'main') { Fail "$branch left DO NOT LAND commits in main, and the main checkout is on '$mainBranch'`n    put it back on main so retire can revert them" }
         $mop = Test-MidOperation $MainWt
         if ($mop)                      { Fail "main checkout is mid-$mop; finish or abort that first" }
         if (Test-Dirty $MainWt)        { Fail "main checkout has uncommitted changes; commit or stash them first`n  (git -C $MainWt status)" }
         if (-not $force) {
             Say ''
-            Warn "$branch merged $($stranded.Count) DO NOT LAND commit(s) into develop:"
+            Warn "$branch merged $($stranded.Count) DO NOT LAND commit(s) into main:"
             Say ''
             foreach ($s in $stranded) { Info (($s -split ' ', 2)[1]) }
             Say ''
@@ -1700,7 +1700,7 @@ function Invoke-Retire {
     # Revert before anything is deleted, so a conflict leaves the branch intact to retry
     # from. git log is newest-first, which is already the right order to revert in.
     if ($stranded) {
-        Info "reverting $($stranded.Count) DO NOT LAND commit(s) from develop"
+        Info "reverting $($stranded.Count) DO NOT LAND commit(s) from main"
         $before = G -C $MainWt rev-parse HEAD
         foreach ($s in $stranded) {
             $parts = $s -split ' ', 3
@@ -1717,7 +1717,7 @@ function Invoke-Retire {
                 }
                 $null = G -C $MainWt revert --abort
                 $null = GG -C $MainWt reset --hard $before
-                Fail "revert of $($parts[1]) failed; develop is back at $($before.Substring(0,9)) and $branch is untouched`n$out"
+                Fail "revert of $($parts[1]) failed; main is back at $($before.Substring(0,9)) and $branch is untouched`n$out"
             }
             Good "reverted $($parts[1]) $($parts[2])"
         }
@@ -1768,7 +1768,7 @@ function Invoke-Bootstrap {
     Say ''
     Say 'Bootstrapping Skooma workflow...'
 
-    # 1. Copy scripts out of the working tree so a dirty/mid-merge develop cannot brick the tooling.
+    # 1. Copy scripts out of the working tree so a dirty/mid-merge main cannot brick the tooling.
     $dst = Join-Path $CommonDir 'skooma'
     New-Item -ItemType Directory -Force -Path $dst | Out-Null
     $src = Join-Path $MainWt 'scripts\skooma'
@@ -1797,11 +1797,11 @@ function Invoke-Bootstrap {
         @('core.longpaths', 'true'),
         @('rerere.enabled', 'true'),
         @('rerere.autoUpdate', 'true'),
-        @('branch.next.remote', 'upstream'),
-        @('branch.next.merge', "refs/heads/$UpstreamBranch"),
-        @('branch.develop.remote', 'origin'),
+        @('branch.develop.remote', 'upstream'),
+        @('branch.develop.merge', "refs/heads/$UpstreamBranch"),
+        @('branch.main.remote', 'origin'),
         @('skooma.upstreamBranch', $UpstreamBranch),
-        @('skooma.prBase', (Cfg 'skooma.prbase' 'next'))
+        @('skooma.prBase', (Cfg 'skooma.prbase' 'develop'))
     )
     foreach ($kv in $cfg) { $null = G config $kv[0] $kv[1] }
     Good 'git config set'

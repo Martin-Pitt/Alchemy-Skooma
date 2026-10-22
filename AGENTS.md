@@ -8,27 +8,27 @@ Run `git skooma status` first if unsure. Branch roles:
 
 | Branch | Meaning |
 |---|---|
-| `next` | Read-only mirror of upstream. Never commit, merge, checkout or reset onto it. |
-| `develop` | Integration branch + the human's F5 build. Do not do feature work here. |
-| `feature-<name>` | Your workspace, in `.worktrees/<name>`. Branched from `next`, or from its area's trunk. |
-| trunk | The feature branch an area ships as: `feature-navmesh` (`nav/*`), `feature-atmo-magic` (`atmo/*`), `feature-combat/minimap` (`combat/minimap*`). Worktrees of the area land into it, and it lands into `develop`. `git skooma trunk` lists them. |
+| `develop` | Read-only mirror of upstream. Never commit, merge, checkout or reset onto it. |
+| `main` | Integration branch + the human's F5 build. Do not do feature work here. |
+| `feature-<name>` | Your workspace, in `.worktrees/<name>`. Branched from `develop`, or from its area's trunk. |
+| trunk | The feature branch an area ships as: `feature-navmesh` (`nav/*`), `feature-atmo-magic` (`atmo/*`), `feature-combat/minimap` (`combat/minimap*`), `camera` (`camera/*`). Worktrees of the area land into it, and it lands into `main`. `git skooma trunk` lists them. |
 | `fix-<name>`, `workaround-<name>`, … | The same kind of branch under a different classification chosen at `git skooma new`. Treat exactly like `feature-*`. |
 | `spike-<name>` | Throwaway instrumentation to answer one question. The only branch that never goes upstream. See below. |
-| `skooma-glue` | Fork-only files (scripts, docs, CI, branding). |
+| `glue` | Fork-only files (scripts, docs, CI, branding). |
 
-### `DO NOT LAND` means never reaches `next` — not never reaches `develop`
+### `DO NOT LAND` means never reaches `develop` — not never reaches `main`
 
 A spike exists to measure something, so its instrumentation has to run in a real
 build. Mark each such commit with a `DO NOT LAND:` subject prefix. Then:
 
-- It **may** be integrated into `develop`, so it runs in the human's F5 build.
-- It **must never** reach `next`. `git skooma check` makes a `DO NOT LAND` commit
+- It **may** be integrated into `main`, so it runs in the human's F5 build.
+- It **must never** reach `develop`. `git skooma check` makes a `DO NOT LAND` commit
   fatal on any branch that goes upstream, and only a warning on `spike-*`.
 - Retiring the branch is **not** the same as discarding the spike. `git skooma retire`
-  refuses while the branch's `DO NOT LAND` commits are still in `develop`, and
+  refuses while the branch's `DO NOT LAND` commits are still in `main`, and
   `--force` reverts them out before deleting anything.
 
-Do not hand-delete spike code from `develop` — let `retire --force` do it, so the
+Do not hand-delete spike code from `main` — let `retire --force` do it, so the
 revert is recorded and `git skooma undo` still works.
 
 ## Feature branches are upstream pull requests in waiting
@@ -36,20 +36,20 @@ revert is recorded and `git skooma undo` still works.
 Every commit must be acceptable to the Alchemy project as-is.
 
 - Write upstream-style code in upstream's layout. `SK`/`sk` prefixes on your own files and `<SK:Nexii>` wrappers on injection sites into non-Skooma files are expected — Alchemy already carries Firestorm's `<FS:ND>` / `<FS:AR>`. Keep product/channel branding out.
-- Never touch `AGENTS.md`, `CLAUDE.local.md`, `doc/skooma/`, `scripts/skooma/`, `.claude/`, `.worktrees/`, `vs2026-os/`. If a change needs one of those, say so — it belongs on `skooma-glue`.
-- Never merge `develop` or another feature into your branch. Take upstream (and your trunk) by `git merge next` (or `git merge <trunk>`) in your own worktree; `git skooma sync` touches every worktree, so leave it to the human.
+- Never touch `AGENTS.md`, `CLAUDE.local.md`, `doc/skooma/`, `scripts/skooma/`, `.claude/`, `.worktrees/`, `vs2026-os/`. If a change needs one of those, say so — it belongs on `glue`.
+- Never merge `main` or another feature into your branch. Take upstream (and your trunk) by `git merge develop` (or `git merge <trunk>`) in your own worktree; `git skooma sync` touches every worktree, so leave it to the human.
 - Small logical commits; imperative subject (`Fix crash when pasting into text editor`); body explains why. Squash WIP before landing.
 - `Co-Authored-By:` trailers are fine (upstream uses them). No `Generated with` lines.
-- **After `git merge next`, put any build fixes in a separate commit** — fixes made inside a merge commit are silently dropped when the branch is rebased for a PR.
+- **After `git merge develop`, put any build fixes in a separate commit** — fixes made inside a merge commit are silently dropped when the branch is rebased for a PR.
 
 ## Landing work
 
 ```
 git skooma check .        # validate this branch
-git skooma integrate      # land every ready worktree branch into its trunk, then trunks into develop
+git skooma integrate      # land every ready worktree branch into its trunk, then trunks into main
 ```
 
-In an area with a trunk, your branch lands into the trunk, not `develop`. Follow-up work
+In an area with a trunk, your branch lands into the trunk, not `main`. Follow-up work
 goes on a new branch in the same area (it is cut from the trunk) — never a stack of
 leftover branches.
 
