@@ -257,10 +257,35 @@ namespace
     }
 
     /// Write a tile's fixture: its key, the raster's states, the air and its products.
-    void writeFixture(const std::filesystem::path& path, const std::string& meta, const RasterCapture& c, const TileAirResult& r)
+    void writeFixture(const std::filesystem::path& path, const std::string& meta, const RasterCapture& c, const TileAirResult& r,
+                      const TileInput& in)
     {
         FixtureWriter w;
         w.text("META", meta);
+        w.text("PARM", llformat("{\"climb\":%d,\"avatar\":{\"height\":%g,\"radius\":%g,\"climb\":%g,\"slope\":%g},"
+                                "\"top\":{\"height\":%g,\"climb\":%g,\"slope\":%g},\"air_min_gap\":%g,\"air_pad\":%d,"
+                                "\"wall_min_height\":%g,\"runoff_max\":%g,\"runoff_spacing\":%g,\"tile\":[%d,%d],\"tile_size\":%g,"
+                                "\"z\":[%.6f,%.6f]}",
+                                c.mClimb, in.mAvatar.mHeight, in.mAvatar.mRadius, in.mAvatar.mClimb, in.mAvatar.mSlope, in.mTopParams.mHeight,
+                                in.mTopParams.mClimb, in.mTopParams.mSlope, in.mAirMinGap, in.mAirPad, in.mWallMinHeight, in.mRunoffMax,
+                                in.mRunoffSpacing, in.mTileX, in.mTileY, in.mTileSize, in.mZMin, in.mZMax));
+        w.array("SOUP", c.mSoupVerts);
+        w.array("SOLD", c.mSolids);
+        w.array("CUTV", c.mCutVerts);
+        w.array("CUTR", c.mCuts);
+        w.array("LEAF", c.mLeafTri);
+        w.array("CUES", c.mCues);
+        {
+            std::vector<U8> t;
+            putBytes(t, c.mTerrain.mOrigin);
+            putBytes(t, c.mTerrain.mSpacing);
+            putBytes(t, c.mTerrain.mWidth);
+            putBytes(t, c.mTerrain.mHeight);
+            putBytes(t, c.mTerrain.mWater);
+            const U8* z = reinterpret_cast<const U8*>(c.mTerrain.mZ.data());
+            t.insert(t.end(), z, z + c.mTerrain.mZ.size() * sizeof(F32));
+            w.section("TERR", t);
+        }
         std::vector<U8> frame;
         putBytes(frame, c.mBmin);
         putBytes(frame, c.mCell);
@@ -922,12 +947,15 @@ TEST_CASE("skairraster: capture the Recast raster's fixtures", "[skairraster][.c
         for (size_t i = 0; i < scenes.size(); ++i)
         {
             RasterCapture capture;
-            const TileAirResult r = build(scenes[i].mInput, nullptr, &capture);
+            TileInput in = scenes[i].mInput;
+            in.mWallFaces = true;
+            in.mRunoff = true;
+            const TileAirResult r = build(in, nullptr, &capture);
             std::string file = scenes[i].mName;
             std::replace(file.begin(), file.end(), ' ', '-');
             const std::string meta = llformat("{\"scene\":\"%s\",\"hash\":\"%016llx\"}", scenes[i].mName.c_str(),
                                               static_cast<unsigned long long>(hashBytes(productBytes(r))));
-            writeFixture(out / (file + ".skaf"), meta, capture, r);
+            writeFixture(out / (file + ".skaf"), meta, capture, r, in);
             manifest << (i ? "," : "") << "{\"file\":\"" << file << ".skaf\",\"meta\":" << meta << "}";
         }
         manifest << "]}\n";
@@ -964,7 +992,11 @@ TEST_CASE("skairraster: capture the Recast raster's fixtures", "[skairraster][.c
                     RasterCapture capture;
                     TileBuildStats stats;
                     TileAirResult r;
-                    const bool ok = rasteriseTile(*t.mInput, r, &stats, &capture);
+                    // Every product the raster has, so a raster of our own is held to them all.
+                    TileInput in = *t.mInput;
+                    in.mWallFaces = true;
+                    in.mRunoff = true;
+                    const bool ok = rasteriseTile(in, r, &stats, &capture);
                     const std::string file = llformat("%s_%d_%d.skaf", t.mMesh.asString().c_str(), t.mKey.mX, t.mKey.mY);
                     ColumnStats tile_stats[STATES];
                     std::string meta = llformat(
@@ -991,7 +1023,7 @@ TEST_CASE("skairraster: capture the Recast raster's fixtures", "[skairraster][.c
                     meta += "}";
                     if (ok)
                     {
-                        writeFixture(out / file, meta, capture, r);
+                        writeFixture(out / file, meta, capture, r, in);
                     }
                     std::lock_guard<std::mutex> guard(lock);
                     entries[i] = llformat("{\"file\":\"%s\",\"meta\":", ok ? file.c_str() : "") + meta + "}";

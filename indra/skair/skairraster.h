@@ -182,6 +182,17 @@ namespace skworld
         S32 mAvatarBorder = 0;              ///< AVATAR's view's; it is inset by mBorder - mAvatarBorder
         std::vector<U8> mCodes;             ///< per soup triangle, its area byte
         std::vector<U8> mReal;              ///< area byte -> area
+        /// The soup the raster was made from, so a raster of another kind can be made from the same: nine
+        /// Recast-space floats per triangle, its closed bodies' triangle ranges, the cuts' own soup and
+        /// ranges, the triangles AVATAR leaves out (empty for none), each triangle's NameCue, and the land.
+        std::vector<F32> mSoupVerts;
+        std::vector<S32> mSolids;           ///< begin, end pairs
+        std::vector<F32> mCutVerts;
+        std::vector<S32> mCuts;
+        std::vector<U8> mLeafTri;
+        std::vector<U8> mCues;
+        TerrainWindow mTerrain;
+        S32 mClimb = 0;                     ///< the merge's and bridges' climb, units
         RasterColumns mRasterised;          ///< triangles, filled bodies and cuts
         RasterColumns mBridged;             ///< with the air's crevice bridges
         RasterColumns mCulled;              ///< underground spans removed

@@ -1455,6 +1455,22 @@ namespace skworld
                 capture->mAvatarBorder = cfg.borderSize;
                 capture->mCodes = codes;
                 capture->mReal = real;
+                capture->mSoupVerts = main_soup->mVerts;
+                capture->mSolids.clear();
+                for (const auto& range : *main_solids)
+                {
+                    capture->mSolids.insert(capture->mSolids.end(), { range.first, range.second });
+                }
+                capture->mCutVerts = cut_soup.mVerts;
+                capture->mCuts.clear();
+                for (const auto& range : cuts)
+                {
+                    capture->mCuts.insert(capture->mCuts.end(), { range.first, range.second });
+                }
+                capture->mLeafTri = leaf_tri;
+                capture->mCues = main_soup->mCues;
+                capture->mTerrain = input.mTerrain;
+                capture->mClimb = grid.walkableClimb;
                 dumpColumns(hf, capture->mRasterised);
                 clock.restart();
             }
