@@ -1016,9 +1016,6 @@ if(AL_BUILD_VIEWER)
     rlvinventory.cpp
     rlvlocks.cpp
     rlvui.cpp
-    # <SK:Nexii> motion recorder
-    skmotionrecorder.cpp
-    # </SK:Nexii>
     skmodalview.cpp # <SK:Nexii> modal view
     skmodalviewmath.cpp # <SK:Nexii> modal view
     sktoolmappan.cpp # <SK:Nexii> modal view
@@ -1920,9 +1917,6 @@ if(AL_BUILD_VIEWER)
     rlvmodifiers.h
     rlvui.h
     roles_constants.h
-    # <SK:Nexii> motion recorder
-    skmotionrecorder.h
-    # </SK:Nexii>
     skmodalview.h # <SK:Nexii> modal view
     skmodalviewmath.h # <SK:Nexii> modal view
     sktoolmappan.h # <SK:Nexii> modal view

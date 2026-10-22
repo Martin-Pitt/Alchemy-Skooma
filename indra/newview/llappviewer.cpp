@@ -297,7 +297,6 @@ using namespace LL;
 #include "llviewernetwork.h"
 // define a self-registering event API object
 #include "llappviewerlistener.h"
-#include "skmotionrecorder.h" // <SK:Nexii> motion recorder
 
 #ifdef LL_DISCORD
 #include "aldiscordmanager.h"
@@ -1552,11 +1551,7 @@ bool LLAppViewer::doFrame()
                 {
                     LLPerfStats::RecordSceneTime T (LLPerfStats::StatType_t::RENDER_IDLE);
                     LL_PROFILE_ZONE_NAMED_CATEGORY_APP("df idle");
-                    // <SK:Nexii> motion recorder
-                    const U64 sk_start = SKMotionRecorder::isRecording() ? SKMotionRecorder::now() : 0;
-                    // </SK:Nexii>
                     idle();
-                    SKMotionRecorder::stageEnd(SKMotionRecorder::STAGE_IDLE, sk_start); // <SK:Nexii> motion recorder
                 }
 
                 {
@@ -1586,11 +1581,7 @@ bool LLAppViewer::doFrame()
                 pingMainloopTimeout("Main:Display");
                 gGLActive = true;
 
-                // <SK:Nexii> motion recorder
-                const U64 sk_start = SKMotionRecorder::isRecording() ? SKMotionRecorder::now() : 0;
-                // </SK:Nexii>
                 display();
-                SKMotionRecorder::stageEnd(SKMotionRecorder::STAGE_DISPLAY, sk_start); // <SK:Nexii> motion recorder
 
                 {
                     LLPerfStats::RecordSceneTime T(LLPerfStats::StatType_t::RENDER_IDLE);
@@ -5597,13 +5588,6 @@ void LLAppViewer::idle()
     gFrameDTClamped = llclamp(gFrameIntervalSeconds.value(), 1.f / MAX_FRAME_RATE, 1.f / MIN_FRAME_RATE);
     const F32 frame_rate_clamped = 1.f / gFrameDTClamped;
 
-    // <SK:Nexii> motion recorder
-    if (SKMotionRecorder::isRecording())
-    {
-        SKMotionRecorder::onFrameBegin();
-    }
-    // </SK:Nexii>
-
     // Global frame timer
     // Smoothly weight toward current frame
     gFPSClamped = (frame_rate_clamped + (4.f * gFPSClamped)) / 5.f;
@@ -5749,18 +5733,7 @@ void LLAppViewer::idle()
         // floating throughout the various object lists.
         //
         idleNameCache();
-        // <SK:Nexii> motion recorder
-        const bool sk_recording = SKMotionRecorder::isRecording();
-        if (sk_recording)
-        {
-            SKMotionRecorder::onNetworkBegin();
-        }
         idleNetwork();
-        if (sk_recording)
-        {
-            SKMotionRecorder::onNetworkEnd();
-        }
-        // </SK:Nexii>
 
 
         // Check for away from keyboard, kick idle agents.
@@ -5810,12 +5783,6 @@ void LLAppViewer::idle()
 
     if (gDisconnected)
     {
-        // <SK:Nexii> motion recorder
-        if (SKMotionRecorder::isRecording())
-        {
-            SKMotionRecorder::onFrameEnd();
-        }
-        // </SK:Nexii>
         return;
     }
 
@@ -5833,12 +5800,6 @@ void LLAppViewer::idle()
             }
         }
 
-        // <SK:Nexii> motion recorder
-        if (SKMotionRecorder::isRecording())
-        {
-            SKMotionRecorder::onFrameEnd();
-        }
-        // </SK:Nexii>
         return;
     }
 
@@ -5864,11 +5825,7 @@ void LLAppViewer::idle()
     {
         if (!(logoutRequestSent() && hasSavedFinalSnapshot()))
         {
-            // <SK:Nexii> motion recorder
-            const U64 sk_start = SKMotionRecorder::isRecording() ? SKMotionRecorder::now() : 0;
-            // </SK:Nexii>
             gObjectList.update(gAgent);
-            SKMotionRecorder::stageEnd(SKMotionRecorder::STAGE_OBJECTS, sk_start); // <SK:Nexii> motion recorder
         }
     }
 
@@ -5960,11 +5917,7 @@ void LLAppViewer::idle()
 
     {
         LL_PROFILE_ZONE_NAMED_CATEGORY_APP("world update");
-        // <SK:Nexii> motion recorder
-        const U64 sk_start = SKMotionRecorder::isRecording() ? SKMotionRecorder::now() : 0;
-        // </SK:Nexii>
         gPipeline.updateMove();
-        SKMotionRecorder::stageEnd(SKMotionRecorder::STAGE_MOVE, sk_start); // <SK:Nexii> motion recorder
     }
     // <SK:Nexii> navmesh: the census scans after objects moved, the mesh follows the census
     SKWorldCensus::instance().update();
@@ -5988,19 +5941,8 @@ void LLAppViewer::idle()
             LLViewerJoystick::getInstance()->moveObjects();
         }
 
-        // <SK:Nexii> motion recorder
-        const U64 sk_start = SKMotionRecorder::isRecording() ? SKMotionRecorder::now() : 0;
-        // </SK:Nexii>
         gAgentCamera.updateCamera();
-        SKMotionRecorder::stageEnd(SKMotionRecorder::STAGE_CAMERA, sk_start); // <SK:Nexii> motion recorder
     }
-
-    // <SK:Nexii> motion recorder
-    if (SKMotionRecorder::isRecording())
-    {
-        SKMotionRecorder::onFrameEnd();
-    }
-    // </SK:Nexii>
 
     // update media focus
     LLViewerMediaFocus::getInstance()->update();

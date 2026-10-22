@@ -112,7 +112,6 @@
 #include "rlvactions.h"
 #include "rlvcommon.h"
 #include "rlvlocks.h"
-#include "skmotionrecorder.h" // <SK:Nexii> motion recorder
 // [/RLVa:KB]
 
 //#define DEBUG_UPDATE_TYPE
@@ -1259,14 +1258,6 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
         LL_WARNS() << "Updating object in an invalid region" << LL_ENDL;
         return retval;
     }
-
-    // <SK:Nexii> motion recorder
-    if (SKMotionRecorder::isRecording())
-    {
-        SKMotionRecorder::onUpdateBegin(this, mesgsys, (U8)update_type);
-    }
-    // </SK:Nexii>
-
     // Has this message been overtaken by one already applied? Decided here, before the decode can
     // run setRegion() and zero the counter, and against the sender rather than the counter alone:
     // packet ids are per circuit, so they only order messages from the sim that issued them, and
@@ -1299,14 +1290,7 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
         }
 
         if (stale_update && update_type == OUT_TERSE_IMPROVED)
-        {
-            // <SK:Nexii> motion recorder
-            if (SKMotionRecorder::isRecording())
-            {
-                SKMotionRecorder::onUpdateEnd(this, 0, 0, true, SKMotionRecorder::DROP_NONE);
-            }
-            // </SK:Nexii>
-            return retval;
+        {            return retval;
         }
     }
 
@@ -1349,7 +1333,6 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
         from_region_handle(region_handle, &x, &y);
 
         LL_WARNS("UpdateFail") << "Object has invalid region " << x << ":" << y << "!" << LL_ENDL;
-        SKMotionRecorder::onUpdateDropped(this, SKMotionRecorder::DROP_INVALID_REGION); // <SK:Nexii> motion recorder
         return retval;
     }
 
@@ -2124,7 +2107,6 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
                                 getRegion()->addCacheMissFull(sent_parentp->getLocalID());
                                 gObjectList.killObject(sent_parentp);
                                 gObjectList.killObject(this);
-                                SKMotionRecorder::onUpdateDropped(this, SKMotionRecorder::DROP_PARENT_CYCLE); // <SK:Nexii> motion recorder
                                 return retval;
                             }
 // [RLVa:KB] - Checked: 2010-03-16 (RLVa-1.1.0k) | Added: RLVa-1.1.0k
@@ -2295,7 +2277,6 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
                             getRegion()->addCacheMissFull(sent_parentp->getLocalID());
                             gObjectList.killObject(sent_parentp);
                             gObjectList.killObject(this);
-                            SKMotionRecorder::onUpdateDropped(this, SKMotionRecorder::DROP_PARENT_CYCLE); // <SK:Nexii> motion recorder
                             return retval;
                         }
                         // make sure this object gets a non-damped update
@@ -2352,28 +2333,6 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
 
     new_rot.normQuat();
 
-    // <SK:Nexii> motion recorder
-    if (SKMotionRecorder::isRecording())
-    {
-        SKMotionRecorder::onUpdateDecoded(new_pos_parent, getVelocity(), getAcceleration(), new_rot, getAngularVelocity(), time_dilation);
-    }
-    // </SK:Nexii>
-
-    // <SK:Nexii> clamped velocity recovery
-    if (update_type == OUT_TERSE_IMPROVED)
-    {
-        static LLCachedControl<bool> recover_clamped(gSavedSettings, "SKMotionRecoverClampedVelocity", true);
-        if (recover_clamped)
-        {
-            skRecoverClampedVelocity(new_pos_parent);
-            if (SKMotionRecorder::isRecording())
-            {
-                SKMotionRecorder::onUpdateRecovered(mSKRecoveredVel, mSKRecoverMethod);
-            }
-        }
-    }
-    // </SK:Nexii>
-
     if (sPingInterpolate && mesgsys != NULL)
     {
         LLCircuitData *cdp = gMessageSystem->mCircuitInfo.findCircuit(mesgsys->getSender());
@@ -2384,7 +2343,6 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
             F32 ping_delay = 0.5f * time_dilation * ( ((F32)cdp->getPingDelay().value()) * 0.001f + gFrameDTClamped);
             LLVector3 diff = getVelocity() * ping_delay;
             new_pos_parent += diff;
-            SKMotionRecorder::sPingDelay = ping_delay; // <SK:Nexii> motion recorder
         }
         else
         {
@@ -2406,14 +2364,7 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
     {
         setVelocity(old_vel);
         setAcceleration(old_acc);
-        setAngularVelocity(old_angv);
-        // <SK:Nexii> motion recorder
-        if (SKMotionRecorder::isRecording())
-        {
-            SKMotionRecorder::onUpdateEnd(this, crc, parent_id, true, SKMotionRecorder::DROP_NONE);
-        }
-        // </SK:Nexii>
-        return retval;
+        setAngularVelocity(old_angv);        return retval;
     }
 
     // Set the change flags for scale
@@ -2594,14 +2545,7 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
     setVelocity(ALMotionPredictor::finalVelocity(getVelocity(), getAcceleration()));
 
     mLastInterpUpdateSecs = (F64Seconds)update_time;
-    mLastMessageUpdateSecs = mLastInterpUpdateSecs;
-    // <SK:Nexii> motion recorder
-    if (SKMotionRecorder::isRecording())
-    {
-        SKMotionRecorder::onUpdateEnd(this, crc, parent_id, false, SKMotionRecorder::DROP_NONE);
-    }
-    // </SK:Nexii>
-    if (mDrawable.notNull())
+    mLastMessageUpdateSecs = mLastInterpUpdateSecs;    if (mDrawable.notNull())
     {
         // Don't clear invisibility flag on update if still orphaned!
         if (mDrawable->isState(LLDrawable::FORCE_INVISIBLE) && !mOrphaned)
@@ -2667,21 +2611,7 @@ void LLViewerObject::idleUpdate(LLAgent &agent, const F64 &frame_time)
             else
             {   // Move object based on it's velocity and rotation
                 interpolateLinearMotion(frame_time, dt);
-            }
-            // <SK:Nexii> motion recorder
-            if (SKMotionRecorder::isRecording())
-            {
-                SKMotionRecorder::onObjectIdle(this, dt, !isAttachment());
-            }
-            // </SK:Nexii>
-        }
-        // <SK:Nexii> motion recorder
-        else if (SKMotionRecorder::isRecording())
-        {
-            SKMotionRecorder::onObjectIdle(this, 0.f, false);
-        }
-        // </SK:Nexii>
-
+            }        }
         updateDrawable(false);
     }
 }
@@ -2794,7 +2724,6 @@ void LLViewerObject::interpolateLinearMotion(const F64SecondsImplicit& frame_tim
             // Note - not killing angular motion here, out of paranoia about stopping rotation for
             // llTargetOmega objects and not having it restart.
             const F32 phase_out = ALMotionPredictor::phaseOutFactor(age, window);
-            SKMotionRecorder::sPhaseOut = phase_out; // <SK:Nexii> motion recorder
             if (phase_out <= 0.f)
             {
                 // Prediction has been given up on entirely, so hold where we are. Falling through
@@ -2850,7 +2779,6 @@ void LLViewerObject::interpolateLinearMotion(const F64SecondsImplicit& frame_tim
                                          << clip_pos
                                          << " from " << new_pos << LL_ENDL;
                 new_pos = clip_pos;
-                SKMotionRecorder::sEdgeClipped = true; // <SK:Nexii> motion recorder
 
                 // Stop motion and get server update for bouncing on the edge
                 new_v.clear();
@@ -7288,119 +7216,6 @@ void LLViewerObject::setIncludeInSearch(bool include_in_search)
     setFlags(FLAGS_INCLUDE_IN_SEARCH, include_in_search);
 }
 
-// <SK:Nexii> clamped velocity recovery
-// Terse updates clamp each velocity axis to +-128 m/s; the fastest unclamped axis is exact, and
-// divided by its share of the direction of travel it restores the speed.
-void LLViewerObject::skRecoverClampedVelocity(const LLVector3& new_pos)
-{
-    constexpr F32 VEL_CLAMP = 127.99f;
-    constexpr F32 ACC_CLAMP = 63.99f;
-
-    const F64 now = LLFrameTimer::getUptimeSeconds().value();
-    const bool in_world = mRegionp && !getParent();
-    const bool have_prev = in_world && mSKLastRawSecs > 0.0 && mSKLastRawRegion == mRegionp && now - mSKLastRawSecs <= 1.0;
-    if (!have_prev)
-    {
-        mSKRawSpeedEWMA = 0.f;
-    }
-    const LLVector3 prev_pos = mSKLastRawPos;
-    const F64 prev_secs = mSKLastRawSecs;
-    mSKLastRawPos = new_pos;
-    mSKLastRawSecs = now;
-    mSKLastRawRegion = in_world ? mRegionp : nullptr;
-
-    // A clamped acceleration points the wrong way, and the finite difference was no better than none.
-    const LLVector3& acc = getAcceleration();
-    if (fabsf(acc.mV[VX]) >= ACC_CLAMP || fabsf(acc.mV[VY]) >= ACC_CLAMP || fabsf(acc.mV[VZ]) >= ACC_CLAMP)
-    {
-        setAcceleration(LLVector3::zero);
-    }
-
-    const LLVector3 vel = getVelocity();
-    mSKRecoveredVel = vel;
-    mSKRecoverMethod = 0;
-
-    bool clamped[3];
-    bool any_clamped = false;
-    for (S32 i = 0; i < 3; ++i)
-    {
-        clamped[i] = fabsf(vel.mV[i]) >= VEL_CLAMP;
-        any_clamped |= clamped[i];
-    }
-    if (!any_clamped)
-    {
-        return;
-    }
-    mSKRecoverMethod = 3;
-    if (!have_prev)
-    {
-        return;
-    }
-
-    const LLVector3 delta = new_pos - prev_pos;
-    const F32 dist = delta.length();
-    if (dist < 0.5f)
-    {
-        return;
-    }
-    const LLVector3 dir = delta / dist;
-
-    // A bounce or a teleport moves against the reported velocity; the ratio would be meaningless.
-    if (dir * vel <= 0.f)
-    {
-        return;
-    }
-    for (S32 i = 0; i < 3; ++i)
-    {
-        if (clamped[i] && (dir.mV[i] > 0.f) != (vel.mV[i] > 0.f))
-        {
-            return;
-        }
-    }
-
-    const F64 gap = now - prev_secs;
-    if (gap >= 0.01 && gap <= 1.0)
-    {
-        const F32 rate = dist / (F32)gap;
-        mSKRawSpeedEWMA = mSKRawSpeedEWMA > 0.f ? mSKRawSpeedEWMA + 0.3f * (rate - mSKRawSpeedEWMA) : rate;
-    }
-
-    const F32 reported = vel.length();
-    S32 axis = -1;
-    for (S32 i = 0; i < 3; ++i)
-    {
-        if (!clamped[i] && fabsf(vel.mV[i]) >= 0.5f && fabsf(dir.mV[i]) > 1e-6f && (dir.mV[i] > 0.f) == (vel.mV[i] > 0.f)
-            && (axis < 0 || fabsf(vel.mV[i]) > fabsf(vel.mV[axis])))
-        {
-            axis = i;
-        }
-    }
-
-    F32 speed = 0.f;
-    if (axis >= 0)
-    {
-        const F32 ratio = fabsf(vel.mV[axis]) / fabsf(dir.mV[axis]);
-        if (ratio >= reported - 1e-3f && ratio <= 2000.f)
-        {
-            speed = ratio;
-            mSKRecoverMethod = 1;
-        }
-    }
-    if (mSKRecoverMethod != 1 && mSKRawSpeedEWMA > 0.f)
-    {
-        speed = llmax(mSKRawSpeedEWMA, reported);
-        mSKRecoverMethod = 2;
-    }
-    if (mSKRecoverMethod == 3)
-    {
-        return;
-    }
-
-    mSKRecoveredVel = dir * speed;
-    setVelocity(mSKRecoveredVel);
-}
-// </SK:Nexii>
-
 void LLViewerObject::setRegion(LLViewerRegion *regionp)
 {
     if (!regionp)
@@ -7421,10 +7236,6 @@ void LLViewerObject::setRegion(LLViewerRegion *regionp)
 
     mLatestRecvPacketID = 0;
     mRegionp = regionp;
-    // <SK:Nexii> clamped velocity recovery
-    mSKLastRawSecs = 0.0;
-    mSKRawSpeedEWMA = 0.f;
-    // </SK:Nexii>
 
     // A different simulator is sending this object now, at whatever rate it chooses. The rate the
     // old one used says nothing about when the new one is late.
