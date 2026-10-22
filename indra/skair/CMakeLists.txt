@@ -43,3 +43,20 @@ target_sources(
 target_link_libraries(skair PRIVATE al::flags ll::recast PUBLIC skcensus)
 
 target_precompile_headers(skair REUSE_FROM llprecompiled)
+
+if(AL_BUILD_TESTS)
+  al_add_test_binary(
+    skair_tests
+    PROJECT skair
+    SOURCES
+      tests/skair_test.cpp
+      tests/skairbytes_test.cpp
+      tests/skairdistil_test.cpp
+      tests/skairfaceoffsets_test.cpp
+      tests/skairraster_test.cpp
+      tests/skairskymap_test.cpp
+      tests/skairtileclip_test.cpp
+      tests/skairwalls_test.cpp
+    LIBRARIES skair llcommon ll::recast
+  )
+endif()
