@@ -151,7 +151,10 @@ namespace skworld
         return best;
     }
 
-    void computeFaceOffsets(const AirGrid& grid, const F32* verts, const S32* tris, S32 ntris, S32 climb, std::vector<FaceOffset>& out,
+    // A soup's floats are read in place as vertices.
+    static_assert(sizeof(LLVector3) == 3 * sizeof(F32), "LLVector3 is three packed floats");
+
+    void computeFaceOffsets(const AirGrid& grid, const F32* verts, S32 ntris, S32 climb, std::vector<FaceOffset>& out,
                             FaceOffsetStats* stats, S32 trace_every, std::vector<FaceOffsetTrace>* trace)
     {
         SK_WORLD_ZONE("air.faceoffsets.compute");
@@ -198,7 +201,7 @@ namespace skworld
             stats->mSides += static_cast<U32>(requests.size());
         }
         // The triangles over each column asked about, as a CSR.
-        std::vector<LLVector3> sl(static_cast<size_t>(ntris) * 3);
+        const LLVector3* sl = reinterpret_cast<const LLVector3*>(verts);
         std::vector<U32> start(static_cast<size_t>(w) * h + 1, 0);
         std::vector<S32> rect(static_cast<size_t>(ntris) * 4);
         std::vector<F32> bounds(static_cast<size_t>(ntris) * 6);     // x0, x1, y0, y1, z0, z1
@@ -210,9 +213,7 @@ namespace skworld
             b[1] = b[3] = b[5] = -1e30f;
             for (S32 k = 0; k < 3; ++k)
             {
-                const F32* v = &verts[tris[t * 3 + k] * 3];
-                LLVector3& p = sl[t * 3 + k];
-                p.set(v[2], v[0], v[1]);
+                const LLVector3& p = sl[t * 3 + k];
                 for (S32 a = 0; a < 3; ++a)
                 {
                     b[a * 2] = std::min(b[a * 2], p.mV[a]);
@@ -340,7 +341,7 @@ namespace skworld
         return it != table.end() && it->key() == key ? static_cast<F32>(it->offset()) / FACE_OFFSET_STEPS : 0.f;
     }
 
-    void alignWallFaces(std::vector<WallFace>& faces, const F32* verts, const S32* tris, S32 ntris, F32 cell, F32 unit)
+    void alignWallFaces(std::vector<WallFace>& faces, const F32* verts, S32 ntris, F32 cell, F32 unit)
     {
         SK_WORLD_ZONE("air.faceoffsets.alignfaces");
         if (faces.empty() || ntris <= 0 || cell <= 0.f)
@@ -363,7 +364,7 @@ namespace skworld
             r[2] = std::clamp(static_cast<S32>(std::floor((ay - y0) / cell)), 0, h - 1);
             r[3] = std::clamp(static_cast<S32>(std::floor((by - y0) / cell)), 0, h - 1);
         };
-        std::vector<LLVector3> sl(static_cast<size_t>(ntris) * 3);
+        const LLVector3* sl = reinterpret_cast<const LLVector3*>(verts);
         std::vector<S32> rect(static_cast<size_t>(ntris) * 4);
         std::vector<U32> start(static_cast<size_t>(w) * h + 1, 0);
         for (S32 t = 0; t < ntris; ++t)
@@ -371,9 +372,7 @@ namespace skworld
             F32 ax = 1e30f, bx = -1e30f, ay = 1e30f, by = -1e30f;
             for (S32 k = 0; k < 3; ++k)
             {
-                const F32* v = &verts[tris[t * 3 + k] * 3];
-                LLVector3& p = sl[t * 3 + k];
-                p.set(v[2], v[0], v[1]);
+                const LLVector3& p = sl[t * 3 + k];
                 ax = std::min(ax, p.mV[VX]);
                 bx = std::max(bx, p.mV[VX]);
                 ay = std::min(ay, p.mV[VY]);

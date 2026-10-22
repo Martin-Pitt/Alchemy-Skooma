@@ -32,6 +32,7 @@
 #include "llapp.h"
 #include "llstring.h"
 #include "skairfaceoffsets.h"
+#include "skairsoup.h"
 #include "skairwalls.h"
 #include "skcensusprofile.h"
 #include "skcensusrecord.h"
@@ -48,141 +49,29 @@ namespace
     using namespace skworld;
 
     const F32 VOID_Z = -900.f;      ///< terrain samples below this have no region
-    const F32 HEIGHT_SNAP = 1024.f;  ///< vertex heights snap to 1/1024 m, exact in binary
 
-    void tri(std::vector<LLVector3>& out, const LLVector3& a, const LLVector3& b, const LLVector3& c)
-    {
-        out.push_back(a);
-        out.push_back(b);
-        out.push_back(c);
-    }
-
-    // a, b, c, d counter-clockwise seen from outside.
-    void quad(std::vector<LLVector3>& out, const LLVector3& a, const LLVector3& b, const LLVector3& c, const LLVector3& d)
-    {
-        tri(out, a, b, c);
-        tri(out, a, c, d);
-    }
-
+    /// The soup in Recast space (x = SL y, y = SL z, z = SL x), triangles three vertices each, for Recast's raster.
     struct Soup
     {
-        std::vector<F32> mVerts;      // Recast space
+        std::vector<F32> mVerts;
         std::vector<S32> mTris;
-        std::vector<U8> mAreas;       // per triangle, the Area of its source
-        std::vector<U8> mTwoSided;    // per triangle, walkable from either side
-        std::vector<U8> mCues;        // per triangle, its object's NameCue
-        std::vector<S32> mSources;    // per triangle, the record it came from
 
-        void add(const std::vector<LLVector3>& tris, U8 area, F32 water, bool two_sided, U8 cue = CUE_NONE, S32 source = -1)
+        void assign(const std::vector<F32>& sl)
         {
-            const size_t base = mVerts.size() / 3;
-            for (size_t i = 0; i + 2 < tris.size(); i += 3)
+            mVerts.resize(sl.size());
+            for (size_t i = 0; i + 2 < sl.size(); i += 3)
             {
-                F32 p[3];
-                bool under = true;
-                for (S32 k = 0; k < 3; ++k)
-                {
-                    toRecast(tris[i + k], p);
-                    // Heights are SL heights, where a float resolves a quarter of a
-                    // millimetre, and a rotated mesh leaves a flat floor a step or so
-                    // either side of its height. On a cell boundary that noise rounds
-                    // the floor up a cell in one tile and not in the next, since
-                    // each clips the triangle at its own cell edges. Snapped to a
-                    // millimetre grid a flat surface is exactly flat, and clipping
-                    // it gives the same height in every tile.
-                    p[1] = std::round(p[1] * HEIGHT_SNAP) / HEIGHT_SNAP;
-                    mVerts.insert(mVerts.end(), p, p + 3);
-                    under = under && tris[i + k].mV[VZ] < water;
-                }
-                const S32 v = static_cast<S32>(base + i);
-                mTris.insert(mTris.end(), { v, v + 1, v + 2 });
-                mAreas.push_back(under && area == AREA_GROUND ? AREA_SUBMERGED : area);
-                mTwoSided.push_back(two_sided);
-                mCues.push_back(cue);
-                mSources.push_back(source);
+                toRecast(LLVector3(&sl[i]), &mVerts[i]);
+            }
+            mTris.resize(sl.size() / 3);
+            for (size_t i = 0; i < mTris.size(); ++i)
+            {
+                mTris[i] = static_cast<S32>(i);
             }
         }
         S32 nverts() const { return static_cast<S32>(mVerts.size() / 3); }
         S32 ntris() const { return static_cast<S32>(mTris.size() / 3); }
     };
-
-    // A triangle range of the soup a class builds without.
-    struct Excluded
-    {
-        S32 mBegin;
-        S32 mEnd;
-        U8 mClasses;
-    };
-
-    // The soup without the ranges the class leaves out, and the solid ranges
-    // renumbered into it. A solid lies within one record, so it is kept or
-    // dropped whole. Leaving the triangles out is the only way: a triangle
-    // given no area still rasterises as an obstacle.
-    void filterSoup(const Soup& soup, const std::vector<std::pair<S32, S32>>& solids, const std::vector<Excluded>& excluded,
-                    U8 bit, Soup& out, std::vector<std::pair<S32, S32>>& out_solids)
-    {
-        std::vector<S32> removed_before(soup.ntris() + 1, 0);
-        std::vector<U8> drop(soup.ntris(), 0);
-        for (const Excluded& e : excluded)
-        {
-            if (e.mClasses & bit)
-            {
-                std::fill(drop.begin() + e.mBegin, drop.begin() + e.mEnd, 1);
-            }
-        }
-        for (S32 t = 0; t < soup.ntris(); ++t)
-        {
-            removed_before[t + 1] = removed_before[t] + drop[t];
-            if (drop[t])
-            {
-                continue;
-            }
-            const S32 base = out.nverts();
-            for (S32 k = 0; k < 3; ++k)
-            {
-                const F32* v = &soup.mVerts[soup.mTris[t * 3 + k] * 3];
-                out.mVerts.insert(out.mVerts.end(), v, v + 3);
-            }
-            out.mTris.insert(out.mTris.end(), { base, base + 1, base + 2 });
-            out.mAreas.push_back(soup.mAreas[t]);
-            out.mTwoSided.push_back(soup.mTwoSided[t]);
-            out.mCues.push_back(soup.mCues[t]);
-            out.mSources.push_back(soup.mSources[t]);
-        }
-        for (const auto& range : solids)
-        {
-            if (range.first < range.second && !drop[range.first])
-            {
-                out_solids.emplace_back(range.first - removed_before[range.first], range.second - removed_before[range.second]);
-            }
-        }
-    }
-
-    // Mark walkable by slope, keeping the source area; non-walkable stays
-    // RC_NULL_AREA and still rasterises as an obstacle. A double-sided surface
-    // is walkable whichever way its winding points: the sim collides with a
-    // hull from either side, so a down-facing top is still the floor.
-    void markWalkable(const Soup& soup, F32 slope_deg, std::vector<U8>& out)
-    {
-        const F32 threshold = std::cos(slope_deg * DEG_TO_RAD);
-        out.assign(soup.ntris(), RC_NULL_AREA);
-        for (S32 i = 0; i < soup.ntris(); ++i)
-        {
-            const F32* a = &soup.mVerts[soup.mTris[i * 3] * 3];
-            const F32* b = &soup.mVerts[soup.mTris[i * 3 + 1] * 3];
-            const F32* c = &soup.mVerts[soup.mTris[i * 3 + 2] * 3];
-            F32 e0[3], e1[3], n[3];
-            rcVsub(e0, b, a);
-            rcVsub(e1, c, a);
-            rcVcross(n, e0, e1);
-            rcVnormalize(n);
-            const F32 up = soup.mTwoSided[i] ? std::fabs(n[1]) : n[1];
-            if (up > threshold)
-            {
-                out[i] = soup.mAreas[i];
-            }
-        }
-    }
 
     /// The height range a closed body covers in each column of its footprint:
     /// mLo and mHi, indexed from (mX0, mZ0) over mW by mH cells, FLT_MAX and
@@ -557,35 +446,13 @@ namespace
         }
     }
 
-    /// The area byte each triangle rasterises as. A merge keeps the higher of
-    /// two codes when their tops meet, so AVATAR's codes sit above every
-    /// TOP-only one: masking 1-3 to none after the merge leaves exactly the
-    /// raster AVATAR would have made on its own.
-    std::vector<U8> encodeAreas(const std::vector<U8>& avatar_walk, const std::vector<U8>& top_walk)
-    {
-        std::vector<U8> out(avatar_walk.size(), RC_NULL_AREA);
-        for (size_t t = 0; t < out.size(); ++t)
-        {
-            if (avatar_walk[t])
-            {
-                out[t] = static_cast<U8>(avatar_walk[t] + AREA_TOP_ONLY);
-            }
-            else if (top_walk[t])
-            {
-                out[t] = top_walk[t];
-            }
-        }
-        return out;
-    }
-
-    /// The real area of every area byte encodeAreas makes.
+    /// The real area of every area code.
     std::vector<U8> realAreas()
     {
         std::vector<U8> out(AREA_CODE_MAX + 1, RC_NULL_AREA);
         for (S32 c = 1; c <= AREA_CODE_MAX; ++c)
         {
-            const S32 code = c - AREA_TOP_ONLY;
-            out[c] = static_cast<U8>(c <= AREA_TOP_ONLY ? c : (code <= AREA_SUBMERGED ? code : RC_NULL_AREA));
+            out[c] = areaOfCode(static_cast<U8>(c));
         }
         return out;
     }
@@ -1062,327 +929,34 @@ namespace skworld
         /// What the raster stage makes of a tile before its cell matters: the soup and each triangle's area code.
         struct TileSoup
         {
-            Soup mSoup;
-            Soup mSolidSoup;                                ///< without what the air leaves out, when it leaves anything out
+            AirSoup mAir;
+            Soup mSoup;                                     ///< mAir's, in Recast space
             Soup mCutSoup;
-            std::vector<std::pair<S32, S32>> mSolids;      ///< triangle ranges of closed bodies
-            std::vector<std::pair<S32, S32>> mSolidSolids;
-            std::vector<std::pair<S32, S32>> mCuts;
-            std::vector<Excluded> mExcluded;                ///< triangle ranges some class builds without
-            bool mFiltered = false;
-            std::vector<U8> mLeafTri;
-            std::vector<U8> mCodes;
+            std::vector<U8> mLeafTri;                       ///< per triangle, 1 where AVATAR leaves it out; empty for none
             std::vector<U8> mReal;
-            /// Per record in soup order, null for the land, its triangle range in mSoup.
-            std::vector<std::pair<RecordPtr, std::pair<S32, S32>>> mRuns;
 
-            const Soup& main() const { return mFiltered ? mSolidSoup : mSoup; }
-            const std::vector<std::pair<S32, S32>>& mainSolids() const { return mFiltered ? mSolidSolids : mSolids; }
+            const Soup& main() const { return mSoup; }
+            const std::vector<std::pair<S32, S32>>& mainSolids() const { return mAir.mSolids; }
         };
 
-        /// The plan the tile's passes read, mesh-local: the tile padded by the widest of them.
-        struct TileReach
+        /// The soup of a tile; false when it holds no triangle.
+        bool soupTile(const TileInput& input, TileAirResult& result, TileBuildStats* stats, TileSoup& out)
         {
-            F32 mX0, mY0, mX1, mY1;
-
-            explicit TileReach(const TileInput& input)
+            if (!buildAirSoup(input, out.mAir, result, stats))
             {
-                const S32 border = std::max(borderCells(input.mAvatar.mRadius, input.mCell), input.mAirPad);
-                const F32 pad = std::max(AIR_PAD_M, border * input.mCell) + input.mCell;
-                mX0 = input.mTileX * input.mTileSize - pad;
-                mY0 = input.mTileY * input.mTileSize - pad;
-                mX1 = (input.mTileX + 1) * input.mTileSize + pad;
-                mY1 = (input.mTileY + 1) * input.mTileSize + pad;
-            }
-
-            bool overlaps(const LLVector3* p, size_t n) const
-            {
-                F32 x0 = FLT_MAX, y0 = FLT_MAX, x1 = -FLT_MAX, y1 = -FLT_MAX;
-                for (size_t i = 0; i < n; ++i)
-                {
-                    x0 = std::min(x0, p[i].mV[VX]);
-                    y0 = std::min(y0, p[i].mV[VY]);
-                    x1 = std::max(x1, p[i].mV[VX]);
-                    y1 = std::max(y1, p[i].mV[VY]);
-                }
-                return x1 >= mX0 && x0 <= mX1 && y1 >= mY0 && y0 <= mY1;
-            }
-        };
-
-        /// Drops what lies wholly outside the reach. A record is not clipped to
-        /// its tile, so a big mesh would otherwise bring every triangle it has
-        /// to every tile it touches. A solid's fill counts crossings of its
-        /// whole surface, so a body is kept or dropped whole; bodies gets the
-        /// triangle count of each kept one, and stays empty for a non-solid.
-        void clipToReach(const Record& r, const TileReach& reach, std::vector<LLVector3>& tris, std::vector<S32>& bodies)
-        {
-            bodies.clear();
-            size_t kept = 0;
-            const auto keep = [&](size_t from, size_t count) {
-                if (from != kept)
-                {
-                    std::copy(tris.begin() + from, tris.begin() + from + count, tris.begin() + kept);
-                }
-                kept += count;
-            };
-            if (r.mSolid)
-            {
-                const S32 total = static_cast<S32>(tris.size() / 3);
-                S32 pieces = 0;
-                for (const S32 count : r.mConvexTris)
-                {
-                    pieces += count;
-                }
-                // Bodies not told apart arrive as one range and are one closed surface.
-                const std::vector<S32> whole{ total };
-                const std::vector<S32>& counts = r.mConvexTris.size() > 1 && pieces == total ? r.mConvexTris : whole;
-                size_t at = 0;
-                for (const S32 count : counts)
-                {
-                    const size_t n = static_cast<size_t>(count) * 3;
-                    if (count > 0 && reach.overlaps(&tris[at], n))
-                    {
-                        keep(at, n);
-                        bodies.push_back(count);
-                    }
-                    at += n;
-                }
-            }
-            else
-            {
-                for (size_t at = 0; at + 2 < tris.size(); at += 3)
-                {
-                    if (reach.overlaps(&tris[at], 3))
-                    {
-                        keep(at, 3);
-                    }
-                }
-            }
-            tris.resize(kept);
-        }
-
-        /// The soup of a tile and its area codes; false when it holds no triangle.
-        bool soupTile(const TileInput& input, TileAirResult& result, TileBuildStats* stats, std::chrono::steady_clock::time_point started,
-                      TileSoup& out)
-        {
-            // Gather the soup in Recast space.
-            Soup& soup = out.mSoup;
-            std::vector<LLVector3> tris;
-            std::vector<std::pair<S32, S32>>& solids = out.mSolids;
-            std::vector<Excluded>& excluded = out.mExcluded;
-            const TileReach reach(input);
-            std::vector<S32> bodies;
-            for (const RecordPtr& r : input.mRecords)
-            {
-                if (!r)
-                {
-                    continue;
-                }
-                // A hull is a solid the sim collides with from either side: mark
-                // it walkable whichever way its triangles wind.
-                const bool hull = r->mProvenance == Provenance::HULL || r->mProvenance == Provenance::BASE_HULL;
-                tris.clear();
-                emitRecord(*r, input.mMeshOrigin, tris);
-                clipToReach(*r, reach, tris, bodies);
-                if (tris.empty())
-                {
-                    continue;
-                }
-                const S32 before = soup.ntris();
-                const auto cue = std::lower_bound(input.mRootCues.begin(), input.mRootCues.end(), std::make_pair(r->mRoot, U8(0)));
-                soup.add(tris, AREA_OBJECT, input.mTerrain.mWater, hull,
-                         cue != input.mRootCues.end() && cue->first == r->mRoot ? cue->second : static_cast<U8>(CUE_NONE),
-                         static_cast<S32>(&r - input.mRecords.data()));
-                out.mRuns.push_back({ r, { before, soup.ntris() } });
-                if (r->mExclude && soup.ntris() > before)
-                {
-                    excluded.push_back({ before, soup.ntris(), r->mExclude });
-                }
-                // A solid is filled. A decomposition is a set of bodies, not one:
-                // its hulls overlap, and a column through two of them would count
-                // four crossings and fill none of the middle. Fill each body on
-                // its own. A record whose bodies are not told apart arrives as one
-                // range and is filled as one closed surface.
-                S32 at = before;
-                for (const S32 count : bodies)
-                {
-                    solids.emplace_back(at, at + count);
-                    at += count;
-                }
-            }
-            // An exclusion volume is a cut, not a shape: its triangles never enter
-            // the soup, they only say where the navmesh is taken out of.
-            Soup& cut_soup = out.mCutSoup;
-            std::vector<std::pair<S32, S32>>& cuts = out.mCuts;
-            for (const RecordPtr& r : input.mCuts)
-            {
-                if (!r)
-                {
-                    continue;
-                }
-                tris.clear();
-                emitRecord(*r, input.mMeshOrigin, tris);
-                const S32 before = cut_soup.ntris();
-                cut_soup.add(tris, AREA_OBJECT, input.mTerrain.mWater, false);
-                if (cut_soup.ntris() > before)
-                {
-                    cuts.emplace_back(before, cut_soup.ntris());
-                }
-            }
-            const TerrainWindow& t = input.mTerrain;
-            if (t.mWidth >= 2 && t.mHeight >= 2 && t.mZ.size() >= static_cast<size_t>(t.mWidth * t.mHeight))
-            {
-                tris.clear();
-                for (S32 y = 0; y + 1 < t.mHeight; ++y)
-                {
-                    for (S32 x = 0; x + 1 < t.mWidth; ++x)
-                    {
-                        // A sample below the void sentinel has no region under it: no floor there.
-                        const F32 z00 = t.mZ[y * t.mWidth + x], z10 = t.mZ[y * t.mWidth + x + 1], z11 = t.mZ[(y + 1) * t.mWidth + x + 1], z01 = t.mZ[(y + 1) * t.mWidth + x];
-                        if (z00 < VOID_Z || z10 < VOID_Z || z11 < VOID_Z || z01 < VOID_Z)
-                        {
-                            continue;
-                        }
-                        const LLVector3 a(t.mOrigin.mV[VX] + x * t.mSpacing, t.mOrigin.mV[VY] + y * t.mSpacing, z00);
-                        const LLVector3 b(t.mOrigin.mV[VX] + (x + 1) * t.mSpacing, t.mOrigin.mV[VY] + y * t.mSpacing, t.mZ[y * t.mWidth + x + 1]);
-                        const LLVector3 c(t.mOrigin.mV[VX] + (x + 1) * t.mSpacing, t.mOrigin.mV[VY] + (y + 1) * t.mSpacing, t.mZ[(y + 1) * t.mWidth + x + 1]);
-                        const LLVector3 d(t.mOrigin.mV[VX] + x * t.mSpacing, t.mOrigin.mV[VY] + (y + 1) * t.mSpacing, t.mZ[(y + 1) * t.mWidth + x]);
-                        quad(tris, a, b, c, d); // counter-clockwise from above: +z in SL, +y in Recast
-                    }
-                }
-                const S32 before = soup.ntris();
-                soup.add(tris, AREA_GROUND, t.mWater, false);
-                out.mRuns.push_back({ nullptr, { before, soup.ntris() } });
-            }
-            result.mTriangles = soup.ntris();
-            if (stats)
-            {
-                stats->mSoupMs = std::chrono::duration<F64, std::milli>(std::chrono::steady_clock::now() - started).count();
-            }
-            if (soup.ntris() == 0)
-            {
-                result.mStatus = TileAirResult::EMPTY;
                 return false;
             }
-            if (stats)
+            out.mSoup.assign(out.mAir.mVerts);
+            out.mCutSoup.assign(out.mAir.mCutVerts);
+            if (out.mAir.mLeaves)
             {
-                // Each excluded range's box, two cells wider, over the tile's cells.
-                const S32 n = static_cast<S32>(input.mTileSize / input.mCell);
-                const F32 x0 = input.mTileX * input.mTileSize, y0 = input.mTileY * input.mTileSize;
-                std::vector<U8> window(static_cast<size_t>(n) * n, 0);
-                for (const Excluded& e : excluded)
+                out.mLeafTri.resize(out.mAir.ntris());
+                for (S32 t = 0; t < out.mAir.ntris(); ++t)
                 {
-                    F32 lo[3] = { FLT_MAX, FLT_MAX, FLT_MAX }, hi[3] = { -FLT_MAX, -FLT_MAX, -FLT_MAX };
-                    for (S32 t = e.mBegin * 3; t < e.mEnd * 3; ++t)
-                    {
-                        const F32* v = &soup.mVerts[soup.mTris[t] * 3];
-                        for (S32 k = 0; k < 3; ++k)
-                        {
-                            lo[k] = llmin(lo[k], v[k]);
-                            hi[k] = llmax(hi[k], v[k]);
-                        }
-                    }
-                    const S32 ix0 = std::max(0, static_cast<S32>(std::floor((lo[2] - x0) / input.mCell)) - 2);
-                    const S32 ix1 = std::min(n, static_cast<S32>(std::ceil((hi[2] - x0) / input.mCell)) + 2);
-                    const S32 iy0 = std::max(0, static_cast<S32>(std::floor((lo[0] - y0) / input.mCell)) - 2);
-                    const S32 iy1 = std::min(n, static_cast<S32>(std::ceil((hi[0] - y0) / input.mCell)) + 2);
-                    for (S32 iy = iy0; iy < iy1; ++iy)
-                    {
-                        for (S32 ix = ix0; ix < ix1; ++ix)
-                        {
-                            window[ix + iy * n] = 1;
-                        }
-                    }
-                }
-                stats->mExcludedRecords = static_cast<U32>(excluded.size());
-                stats->mExcludeWindowCells = static_cast<U32>(std::count(window.begin(), window.end(), 1));
-                stats->mTileCells = static_cast<U32>(window.size());
-            }
-
-            // One solid raster serves AVATAR and the air. It holds every solid
-            // but what the air leaves out, at AVATAR's grid widened to the air's
-            // pad; AVATAR reads it through a view cropped to its own border, and
-            // the surfaces only the air's slope walks carry codes it masks away.
-            // Records AVATAR leaves out and the air keeps - door leaves - are
-            // rasterised again without them over a window round them, whose
-            // columns AVATAR's view reads instead.
-            const ClassParams& ap = input.mAvatar;
-            ClassParams tp = input.mTopParams;
-            tp.mSlope = llmax(tp.mSlope, ap.mSlope);
-            tp.mClimb = ap.mClimb;
-            ClassBuildStats* astats = stats ? &stats->mClass[0] : nullptr;
-            StageClock clock(astats ? astats->mMs : nullptr);
-            if (astats)
-            {
-                astats->mBuilt = true;
-            }
-
-            // The raster's soup, and per triangle of it whether AVATAR leaves it out.
-            const U8 solid_bit = EXCLUDE_SOLID, avatar_bit = EXCLUDE_AVATAR;
-            Soup& solid_soup = out.mSolidSoup;
-            std::vector<std::pair<S32, S32>>& solid_solids = out.mSolidSolids;
-            const Soup* main_soup = &soup;
-            std::vector<U8>& leaf_tri = out.mLeafTri;
-            {
-                const auto filter_started = std::chrono::steady_clock::now();
-                std::vector<U8> solid_drop(soup.ntris(), 0), avatar_drop(soup.ntris(), 0);
-                bool solid_any = false, avatar_any = false;
-                for (const Excluded& e : excluded)
-                {
-                    const bool solid_out = (e.mClasses & solid_bit) != 0;
-                    const bool avatar_out = !solid_out && (e.mClasses & avatar_bit) != 0;
-                    std::fill(solid_drop.begin() + e.mBegin, solid_drop.begin() + e.mEnd, solid_out ? 1 : 0);
-                    std::fill(avatar_drop.begin() + e.mBegin, avatar_drop.begin() + e.mEnd, avatar_out ? 1 : 0);
-                    solid_any = solid_any || solid_out;
-                    avatar_any = avatar_any || avatar_out;
-                }
-                if (solid_any)
-                {
-                    filterSoup(soup, solids, excluded, solid_bit, solid_soup, solid_solids);
-                    main_soup = &solid_soup;
-                    out.mFiltered = true;
-                }
-                if (avatar_any)
-                {
-                    for (S32 t = 0; t < soup.ntris(); ++t)
-                    {
-                        if (!solid_drop[t])
-                        {
-                            leaf_tri.push_back(avatar_drop[t]);
-                        }
-                    }
-                }
-                if (solid_any || avatar_any)
-                {
-                    result.mExcludeMillis += std::chrono::duration<F32, std::milli>(std::chrono::steady_clock::now() - filter_started).count();
-                    clock.restart();
+                    out.mLeafTri[t] = (out.mAir.mFlags[t] & SOUP_LEAF) ? 1 : 0;
                 }
             }
-
-            // The area byte of each triangle: AVATAR's floors over the TOP-only ones.
-            std::vector<U8>& codes = out.mCodes;
-            std::vector<U8>& real = out.mReal;
-            {
-                std::vector<U8> avatar_walk, top_walk;
-                markWalkable(*main_soup, ap.mSlope, avatar_walk);
-                markWalkable(*main_soup, tp.mSlope, top_walk);
-                for (S32 t = 0; t < static_cast<S32>(leaf_tri.size()); ++t)
-                {
-                    avatar_walk[t] = leaf_tri[t] ? 0 : avatar_walk[t];     // AVATAR never stands on what it leaves out
-                }
-                codes = encodeAreas(avatar_walk, top_walk);
-                real = realAreas();
-            }
-            if (astats)
-            {
-                std::vector<U8> used(256, 0);
-                for (S32 t = 0; t < static_cast<S32>(codes.size()); ++t)
-                {
-                    used[codes[t]] = codes[t] >= AREA_CODE_BASE && (leaf_tri.empty() || !leaf_tri[t]);
-                }
-                astats->mCodes = static_cast<U32>(std::count(used.begin(), used.end(), 1));
-            }
-            clock.lap(ClassBuildStats::SOUP);
+            out.mReal = realAreas();
             return true;
         }
 
@@ -1424,8 +998,8 @@ namespace skworld
             const Soup* main_soup = &ts.main();
             const std::vector<std::pair<S32, S32>>* main_solids = &ts.mainSolids();
             const Soup& cut_soup = ts.mCutSoup;
-            const std::vector<std::pair<S32, S32>>& cuts = ts.mCuts;
-            const std::vector<U8>& codes = ts.mCodes;
+            const std::vector<std::pair<S32, S32>>& cuts = ts.mAir.mCuts;
+            const std::vector<U8>& codes = ts.mAir.mCodes;
             const std::vector<U8>& leaf_tri = ts.mLeafTri;
             const std::vector<U8>& real = ts.mReal;
 
@@ -1455,7 +1029,7 @@ namespace skworld
                 capture->mAvatarBorder = cfg.borderSize;
                 capture->mCodes = codes;
                 capture->mReal = real;
-                capture->mSoupVerts = main_soup->mVerts;
+                capture->mSoupVerts = main_soup->mVerts;     // Recast space, as the fixtures hold it
                 capture->mSolids.clear();
                 for (const auto& range : *main_solids)
                 {
@@ -1468,7 +1042,11 @@ namespace skworld
                     capture->mCuts.insert(capture->mCuts.end(), { range.first, range.second });
                 }
                 capture->mLeafTri = leaf_tri;
-                capture->mCues = main_soup->mCues;
+                capture->mCues.resize(ts.mAir.ntris());
+                for (S32 t = 0; t < ts.mAir.ntris(); ++t)
+                {
+                    capture->mCues[t] = ts.mAir.cue(t);
+                }
                 capture->mTerrain = input.mTerrain;
                 capture->mClimb = grid.walkableClimb;
                 dumpColumns(hf, capture->mRasterised);
@@ -1738,7 +1316,7 @@ namespace skworld
                 extractWallFaces(view.mHf, cfg.borderSize, input.mWallMinHeight, result.mFaces, real.data());
                 if (input.mFaceOffsets)
                 {
-                    alignWallFaces(result.mFaces, main_soup->mVerts.data(), main_soup->mTris.data(), main_soup->ntris(), cfg.cs, cfg.ch);
+                    alignWallFaces(result.mFaces, ts.mAir.mVerts.data(), ts.mAir.ntris(), cfg.cs, cfg.ch);
                 }
                 view.point(hf, overlay.get(), &own_column);
             }
@@ -1759,7 +1337,7 @@ namespace skworld
                 foldSlivers(padded_air, static_cast<S32>(std::ceil(input.mAirMinGap / grid.ch)));
                 if (input.mFaceOffsets)
                 {
-                    computeFaceOffsets(padded_air, main_soup->mVerts.data(), main_soup->mTris.data(), main_soup->ntris(), grid.walkableClimb,
+                    computeFaceOffsets(padded_air, ts.mAir.mVerts.data(), ts.mAir.ntris(), grid.walkableClimb,
                                        padded_faces, stats ? &stats->mFaceOffsets : nullptr, stats ? stats->mFaceTraceEvery : 0,
                                        stats ? &stats->mFaceTrace : nullptr);
                 }
@@ -1871,7 +1449,7 @@ namespace skworld
         result.mAirBuilt = input.mAir;
         TileSoup ts;
         // A tile left at logout stops between its stages: the pool drains before it joins.
-        if (!soupTile(input, result, stats, started, ts) || LLApp::isExiting())
+        if (!soupTile(input, result, stats, ts) || LLApp::isExiting())
         {
             return false;
         }

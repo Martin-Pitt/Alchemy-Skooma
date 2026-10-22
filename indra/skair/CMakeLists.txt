@@ -19,6 +19,7 @@ target_sources(
     skairlayout.cpp
     skairraster.cpp
     skairskymap.cpp
+    skairsoup.cpp
     skairwalls.cpp
 )
 
@@ -36,6 +37,7 @@ target_sources(
         skairlayout.h
         skairraster.h
         skairskymap.h
+        skairsoup.h
         skairstats.h
         skairwalls.h
 )

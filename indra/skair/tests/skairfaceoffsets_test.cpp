@@ -66,27 +66,23 @@ namespace
         return g;
     }
 
-    /// A soup in Recast space, filled with SL quads.
+    /// A soup of SL quads, nine floats a triangle.
     struct Soup
     {
         std::vector<F32> mVerts;
-        std::vector<S32> mTris;
 
         void quad(const LLVector3& a, const LLVector3& b, const LLVector3& c, const LLVector3& d)
         {
             for (const LLVector3* t : { &a, &b, &c, &a, &c, &d })
             {
-                F32 rc[3];
-                toRecast(*t, rc);
-                mTris.push_back(static_cast<S32>(mVerts.size() / 3));
-                mVerts.insert(mVerts.end(), rc, rc + 3);
+                mVerts.insert(mVerts.end(), t->mV, t->mV + 3);
             }
         }
         /// A wall in the plane x, across the cell and up past the band.
         void wallX(F32 x) { quad(LLVector3(x, -1.f, 0.f), LLVector3(x, 2.f, 0.f), LLVector3(x, 2.f, 3.f), LLVector3(x, -1.f, 3.f)); }
         /// A slab at height z over x0 to x1.
         void slab(F32 x0, F32 x1, F32 z) { quad(LLVector3(x0, -1.f, z), LLVector3(x1, -1.f, z), LLVector3(x1, 2.f, z), LLVector3(x0, 2.f, z)); }
-        S32 ntris() const { return static_cast<S32>(mTris.size() / 3); }
+        S32 ntris() const { return static_cast<S32>(mVerts.size() / 9); }
     };
 
     TEST_CASE("skairfaceoffsets: a jamb 0.3 of a cell in reads 4 steps of 16; rounded towards the air and its far face its own", "[skairfaceoffsets]")
@@ -97,7 +93,7 @@ namespace
         s.wallX(2.f * CELL - 0.5f * CELL);
         std::vector<FaceOffset> table;
         FaceOffsetStats stats;
-        computeFaceOffsets(g, s.mVerts.data(), s.mTris.data(), s.ntris(), CLIMB, table, &stats);
+        computeFaceOffsets(g, s.mVerts.data(), s.ntris(), CLIMB, table, &stats);
         { INFO("both sides of the solid column face a floor"); CHECK(stats.mSides == 2u); }
         { INFO("both are off the boundary"); CHECK(table.size() == static_cast<size_t>(2)); }
         { INFO("the -x face"); CHECK(faceOffset(table, faceKey(1, 0, 3, 0)) == 4.f / 16.f); }
@@ -114,7 +110,7 @@ namespace
         s.slab(CELL, 2.f * CELL, 0.6f);
         std::vector<FaceOffset> table;
         FaceOffsetStats stats;
-        computeFaceOffsets(g, s.mVerts.data(), s.mTris.data(), s.ntris(), CLIMB, table, &stats);
+        computeFaceOffsets(g, s.mVerts.data(), s.ntris(), CLIMB, table, &stats);
         { INFO("measured"); CHECK(stats.mMeasured == 2u); }
         { INFO("no entry"); CHECK(table.empty()); }
         { INFO("offset 0"); CHECK(faceOffset(table, faceKey(1, 0, 3, 0)) == 0.f); }
@@ -139,12 +135,12 @@ namespace
         s.quad(LLVector3(1.5f * CELL, -1.f, 3.2f), LLVector3(1.5f * CELL, 2.f, 3.2f), LLVector3(1.5f * CELL, 2.f, 5.f), LLVector3(1.5f * CELL, -1.f, 5.f));
         std::vector<FaceOffset> table;
         FaceOffsetStats stats;
-        computeFaceOffsets(g, s.mVerts.data(), s.mTris.data(), s.ntris(), CLIMB, table, &stats);
+        computeFaceOffsets(g, s.mVerts.data(), s.ntris(), CLIMB, table, &stats);
         { INFO("each side measured for both floors"); CHECK(stats.mMeasured == 4u); }
         { INFO("the nearer face, 4 steps"); CHECK(faceOffset(table, faceKey(1, 0, 3, 0)) == 4.f / 16.f); }
         // The upper floor's band meets a wall within a step of the boundary.
         s.quad(LLVector3(CELL + 0.002f, -1.f, 3.2f), LLVector3(CELL + 0.002f, 2.f, 3.2f), LLVector3(CELL + 0.002f, 2.f, 5.f), LLVector3(CELL + 0.002f, -1.f, 5.f));
-        computeFaceOffsets(g, s.mVerts.data(), s.mTris.data(), s.ntris(), CLIMB, table);
+        computeFaceOffsets(g, s.mVerts.data(), s.ntris(), CLIMB, table);
         { INFO("none"); CHECK(faceOffset(table, faceKey(1, 0, 3, 0)) == 0.f); }
         { INFO("another side keeps its own"); CHECK(faceOffset(table, faceKey(1, 0, 3, 1)) > 0.f); }
     }
@@ -158,7 +154,7 @@ namespace
         faces[0].mMin.set(CELL, 0.f, 0.f);
         faces[0].mMax.set(CELL, CELL, 2.f);
         faces[0].mSide = 1;     // looks -x, solid at +x
-        alignWallFaces(faces, s.mVerts.data(), s.mTris.data(), s.ntris(), CELL, UNIT);
+        alignWallFaces(faces, s.mVerts.data(), s.ntris(), CELL, UNIT);
         { INFO("moved to the wall"); CHECK((std::fabs(faces[0].mMin.mV[VX] - 1.3f * CELL) < 1e-4f && std::fabs(faces[0].mMax.mV[VX] - 1.3f * CELL) < 1e-4f)); }
         { INFO("along it, unmoved"); CHECK(faces[0].mMax.mV[VY] == CELL); }
     }
@@ -170,7 +166,7 @@ namespace
         s.wallX(CELL + 0.3f * CELL);
         s.slab(0.f, 3.f * CELL, 15 * UNIT);
         std::vector<FaceOffset> table;
-        computeFaceOffsets(g, s.mVerts.data(), s.mTris.data(), s.ntris(), CLIMB, table);
+        computeFaceOffsets(g, s.mVerts.data(), s.ntris(), CLIMB, table);
         { INFO("the -x face"); CHECK(faceOffset(table, faceKey(1, 0, 3, 0)) == 4.f / 16.f); }
     }
     TEST_CASE("skairfaceoffsets: a padded table crops to the tile's own columns", "[skairfaceoffsets]")

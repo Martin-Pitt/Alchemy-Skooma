@@ -84,11 +84,11 @@ namespace skworld
     };
 
     /// The face offsets of a grid's solid columns from the triangles that
-    /// made them, given in Recast space as a soup (skairraster.h's toRecast).
+    /// made them: a soup in mesh-local SL metres, nine floats a triangle (skairsoup.h).
     /// A column is solid for a floor AVATAR stands on where no gap of it spans
     /// the band from climb + 1 to FACE_BAND_TOP_M over that floor, as the spaces read it.
     /// trace_every > 0 traces every that many measured sides.
-    void computeFaceOffsets(const AirGrid& grid, const F32* verts, const S32* tris, S32 ntris, S32 climb, std::vector<FaceOffset>& out,
+    void computeFaceOffsets(const AirGrid& grid, const F32* verts, S32 ntris, S32 climb, std::vector<FaceOffset>& out,
                             FaceOffsetStats* stats = nullptr, S32 trace_every = 0, std::vector<FaceOffsetTrace>* trace = nullptr);
 
     /// A padded grid's table in the cropped grid's columns, pad cells in from each side.
@@ -111,8 +111,8 @@ namespace skworld
     /// Move each wall face from its cell boundary back to the true face of the
     /// triangles in the cell of solid behind it, over its height less a unit
     /// each end so the floor and the top do not count. Faces with no triangle
-    /// behind them stay. Soup in Recast space, faces mesh-local SL.
-    void alignWallFaces(std::vector<WallFace>& faces, const F32* verts, const S32* tris, S32 ntris, F32 cell, F32 unit);
+    /// behind them stay. Soup and faces mesh-local SL, the soup nine floats a triangle.
+    void alignWallFaces(std::vector<WallFace>& faces, const F32* verts, S32 ntris, F32 cell, F32 unit);
 }
 
 #endif // SK_AIRFACEOFFSETS_H
