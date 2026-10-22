@@ -56,6 +56,7 @@
 #include "llviewershadermgr.h"
 #include "llcontrolavatar.h"
 #include "lltoolmgr.h"
+#include "skmeshhavokshape.h" // <SK:Nexii> physics_havok block
 
 extern bool gShiftFrame;
 
@@ -2265,6 +2266,7 @@ void renderPhysicsShape(LLDrawable* drawable, LLVOVolume* volume, bool wireframe
     }
 
     U32 data_mask = LLVertexBuffer::MAP_VERTEX;
+    LLColor4 mesh_hull_color = skPhysicsShapeColor(SKPhysicsShapeSource::MESH_HULL, color, wireframe); // <SK:Nexii> Types colouring
 
     LLVolumeParams volume_params = volume->getVolume()->getParams();
 
@@ -2287,7 +2289,16 @@ void renderPhysicsShape(LLDrawable* drawable, LLVOVolume* volume, bool wireframe
         LLUUID mesh_id = volume->getVolume()->getParams().getSculptID();
         LLModel::Decomposition* decomp = gMeshRepo.getDecomposition(mesh_id);
 
-        if (decomp)
+        // <SK:Nexii> physics_havok block
+        // The simulator's MOPP triangles for a mesh without decomposition hulls. With hulls, which
+        // shape it collides with is not established, so they keep today's drawing.
+        const bool havok_drawn = decomp && decomp->mHull.empty() && skRenderPhysicsHavok(mesh_id, skPhysicsShapeColor(SKPhysicsShapeSource::SIMULATOR, color, wireframe)); // <SK:Nexii> Types colouring
+        if (havok_drawn)
+        {
+            // Drawn.
+        }
+        else if (decomp)
+        // </SK:Nexii>
         { //render a physics based mesh
 
             gGL.getTextureSlot(0)->unbind();
@@ -2302,19 +2313,19 @@ void renderPhysicsShape(LLDrawable* drawable, LLVOVolume* volume, bool wireframe
 
                 for (U32 i = 0; i < decomp->mMesh.size(); ++i)
                 {
-                    render_hull(decomp->mMesh[i], color);
+                    render_hull(decomp->mMesh[i], skPhysicsShapeColor(SKPhysicsShapeSource::HULLS, color, wireframe)); // <SK:Nexii> Types colouring
                 }
             }
             else if (!decomp->mPhysicsShapeMesh.empty())
             {
                 //decomp has physics mesh, render that mesh
-                gGL.diffuseColor4fv(color.mV);
+                gGL.diffuseColor4fv(skPhysicsShapeColor(SKPhysicsShapeSource::PHYSICS_MESH, color, wireframe).mV); // <SK:Nexii> Types colouring
 
                 LLVertexBuffer::drawArrays(LLRender::TRIANGLES, decomp->mPhysicsShapeMesh.mPositions);
             }
             else
             { //no mesh or decomposition, render base hull
-                renderMeshBaseHull(volume, data_mask, color);
+                renderMeshBaseHull(volume, data_mask, mesh_hull_color); // <SK:Nexii> Types colouring
 
                 if (decomp->mPhysicsShapeMesh.empty())
                 {
@@ -2334,7 +2345,7 @@ void renderPhysicsShape(LLDrawable* drawable, LLVOVolume* volume, bool wireframe
     {
         if (volume->isMesh())
         {
-            renderMeshBaseHull(volume, data_mask, color);
+            renderMeshBaseHull(volume, data_mask, mesh_hull_color); // <SK:Nexii> Types colouring
         }
         else
         {
@@ -2430,7 +2441,7 @@ void renderPhysicsShape(LLDrawable* drawable, LLVOVolume* volume, bool wireframe
             if (phys_volume->mHullPoints)
             {
                 //render hull
-                gGL.diffuseColor4fv(color.mV);
+                gGL.diffuseColor4fv(skPhysicsShapeColor(SKPhysicsShapeSource::PRIM_HULL, color, wireframe).mV); // <SK:Nexii> Types colouring
 
                 LLVertexBuffer::unbind();
                 LLVertexBuffer::drawElements(LLRender::TRIANGLES, phys_volume->mHullPoints, NULL, phys_volume->mNumHullIndices, phys_volume->mHullIndices);
@@ -2453,7 +2464,7 @@ void renderPhysicsShape(LLDrawable* drawable, LLVOVolume* volume, bool wireframe
             LLVector3 vscale = volume->getScale() * 2.f;
             scale.set(scale[0] / vscale[0], scale[1] / vscale[1], scale[2] / vscale[2]);
 
-            gGL.diffuseColor4fv(color.mV);
+            gGL.diffuseColor4fv(skPhysicsShapeColor(SKPhysicsShapeSource::PRIMITIVE, color, wireframe).mV); // <SK:Nexii> Types colouring
             drawBox(center, scale);
         }
     }
@@ -2469,7 +2480,7 @@ void renderPhysicsShape(LLDrawable* drawable, LLVOVolume* volume, bool wireframe
             volume_params.setShear(0, 0);
             LLVolume* sphere = LLPrimitive::sVolumeManager->refVolume(volume_params, 3);
 
-            gGL.diffuseColor4fv(color.mV);
+            gGL.diffuseColor4fv(skPhysicsShapeColor(SKPhysicsShapeSource::PRIMITIVE, color, wireframe).mV); // <SK:Nexii> Types colouring
             pushVerts(sphere);
             LLPrimitive::sVolumeManager->unrefVolume(sphere);
         }
@@ -2486,7 +2497,7 @@ void renderPhysicsShape(LLDrawable* drawable, LLVOVolume* volume, bool wireframe
             volume_params.setShear(0, 0);
             LLVolume* cylinder = LLPrimitive::sVolumeManager->refVolume(volume_params, 3);
 
-            gGL.diffuseColor4fv(color.mV);
+            gGL.diffuseColor4fv(skPhysicsShapeColor(SKPhysicsShapeSource::PRIMITIVE, color, wireframe).mV); // <SK:Nexii> Types colouring
             pushVerts(cylinder);
             LLPrimitive::sVolumeManager->unrefVolume(cylinder);
         }
@@ -2498,7 +2509,7 @@ void renderPhysicsShape(LLDrawable* drawable, LLVOVolume* volume, bool wireframe
 
         LLVolume* phys_volume = LLPrimitive::sVolumeManager->refVolume(volume_params, detail);
 
-        gGL.diffuseColor4fv(color.mV);
+        gGL.diffuseColor4fv(skPhysicsShapeColor(SKPhysicsShapeSource::PRIM_MESH, color, wireframe).mV); // <SK:Nexii> Types colouring
         pushVerts(phys_volume);
 
         LLPrimitive::sVolumeManager->unrefVolume(phys_volume);
@@ -2516,7 +2527,7 @@ void renderPhysicsShape(LLDrawable* drawable, LLVOVolume* volume, bool wireframe
             llassert(LLGLSLShader::sCurBoundShader != 0);
             LLVertexBuffer::unbind();
 
-            gGL.diffuseColor4fv(color.mV);
+            gGL.diffuseColor4fv(skPhysicsShapeColor(SKPhysicsShapeSource::PRIM_HULL, color, wireframe).mV); // <SK:Nexii> Types colouring
             gGL.syncMatrices();
 
             LLVertexBuffer::drawElements(LLRender::TRIANGLES, phys_volume->mHullPoints, nullptr, phys_volume->mNumHullIndices, phys_volume->mHullIndices);

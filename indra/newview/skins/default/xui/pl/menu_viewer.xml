@@ -253,7 +253,7 @@
 			<menu_item_check label="Wektory normalne" name="Normals" />
 			<menu_item_check label="Drzewo okluzji" name="Octree" />
 			<menu_item_check label="Wzmocniona okluzja (Shadow Frusta)" name="Shadow Frusta" />
-			<menu_item_check label="Kształty fizyczne" name="Physics Shapes" />
+			<menu label="Kształty fizyczne" name="Physics Shapes"/>
 			<menu_item_check label="Okluzja" name="Occlusion" />
 			<menu_item_check label="Pakiety renderu" name="Render Batches" />
 			<menu_item_check label="Typy aktualizacji" name="Update Type" />

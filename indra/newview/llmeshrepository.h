@@ -46,6 +46,7 @@
 
 #include "llconvexdecomposition.h"
 #include "lluploadfloaterobservers.h"
+#include "skmeshhavokshape.h" // <SK:Nexii> physics_havok block
 
 class LLVOVolume;
 class LLMutex;
@@ -379,6 +380,11 @@ public:
         mPhysicsMeshOffset = header["physics_mesh"]["offset"].asInteger();
         mPhysicsMeshSize = header["physics_mesh"]["size"].asInteger();
 
+        // <SK:Nexii> physics_havok block
+        mPhysicsHavokOffset = header["physics_havok"]["offset"].asInteger();
+        mPhysicsHavokSize = header["physics_havok"]["size"].asInteger();
+        // </SK:Nexii>
+
         m404 = header.has("404");
     }
 private:
@@ -387,6 +393,7 @@ private:
         FLAG_SKIN = 1 << LLModel::NUM_LODS,
         FLAG_PHYSCONVEX = 1 << (LLModel::NUM_LODS + 1),
         FLAG_PHYSMESH = 1 << (LLModel::NUM_LODS + 2),
+        FLAG_PHYSHAVOK = 1 << (LLModel::NUM_LODS + 3), // <SK:Nexii> physics_havok block
     };
 public:
     U32 getFlags()
@@ -411,6 +418,12 @@ public:
         {
             flags |= FLAG_PHYSMESH;
         }
+        // <SK:Nexii> physics_havok block
+        if (mPhysicsHavokInCache)
+        {
+            flags |= FLAG_PHYSHAVOK;
+        }
+        // </SK:Nexii>
         return flags;
     }
 
@@ -423,6 +436,7 @@ public:
         mSkinInCache          = (flags & FLAG_SKIN) != 0;
         mPhysicsConvexInCache = (flags & FLAG_PHYSCONVEX) != 0;
         mPhysicsMeshInCache   = (flags & FLAG_PHYSMESH) != 0;
+        mPhysicsHavokInCache  = (flags & FLAG_PHYSHAVOK) != 0; // <SK:Nexii> physics_havok block
     }
 
     S32 mVersion = -1;
@@ -437,6 +451,12 @@ public:
     S32 mPhysicsMeshOffset = -1;
     S32 mPhysicsMeshSize = -1;
     bool mPhysicsMeshInCache = false;
+
+    // <SK:Nexii> physics_havok block
+    S32 mPhysicsHavokOffset = -1;
+    S32 mPhysicsHavokSize = -1;
+    bool mPhysicsHavokInCache = false;
+    // </SK:Nexii>
 
     // Every element, not just the first: `= { -1 }` leaves the rest zeroed, which reads
     // as "this LOD exists and is empty" rather than "absent". Sized by LLModel::NUM_LODS,
@@ -617,6 +637,11 @@ public:
     // list of completed Physics Mesh info requests
     std::list<std::unique_ptr<LLModel::Decomposition>> mPhysicsQ;
 
+    // <SK:Nexii> physics_havok block
+    std::set<UUIDBasedRequest> mPhysicsHavokRequests; // mMutex
+    std::deque<SKPhysicsHavokDelivery> mPhysicsHavokQ; // mLoadedMutex
+    // </SK:Nexii>
+
     //queue of requested headers
     std::queue<HeaderRequest> mHeaderReqQ;
 
@@ -677,6 +702,14 @@ public:
     bool skinInfoReceived(const LLUUID& mesh_id, U8* data, S32 data_size);
     bool decompositionReceived(const LLUUID& mesh_id, U8* data, S32 data_size);
     EMeshProcessingResult physicsShapeReceived(const LLUUID& mesh_id, U8* data, S32 data_size);
+    // <SK:Nexii> physics_havok block
+    // Builds and delivers the shape; havok_valid says whether the section itself was readable.
+    SKPhysicsHavokResult physicsHavokReceived(const LLUUID& mesh_id, const U8* data, S32 data_size, bool from_cache,
+                                              bool& havok_valid);
+    void physicsHavokFailed(const LLUUID& mesh_id, SKPhysicsHavokResult result);
+    // physics_mesh as the physics-shape fetch cached it; false while it is not on disk.
+    bool readCachedPhysicsMesh(const LLUUID& mesh_id, std::vector<U8>& out);
+    // </SK:Nexii>
     bool hasHeader(const LLUUID& mesh_id) const;
 
     void notifyLoadedMeshes();
@@ -684,6 +717,7 @@ public:
     void loadMeshSkinInfo(const LLUUID& mesh_id);
     void loadMeshDecomposition(const LLUUID& mesh_id);
     void loadMeshPhysicsShape(const LLUUID& mesh_id);
+    void loadMeshPhysicsHavok(const LLUUID& mesh_id); // <SK:Nexii> physics_havok block
 
     //send request for skin info, returns true if header info exists
     //  (should hold onto mesh_id and try again later if header info does not exist)
@@ -696,6 +730,11 @@ public:
     //send request for PhysicsShape, returns true if header info exists
     //  (should hold onto mesh_id and try again later if header info does not exist)
     bool fetchMeshPhysicsShape(const LLUUID& mesh_id);
+
+    // <SK:Nexii> physics_havok block
+    // Send request for the physics_havok section; false while there is no header.
+    bool fetchMeshPhysicsHavok(const LLUUID& mesh_id);
+    // </SK:Nexii>
 
     static void incActiveLODRequests();
     static void decActiveLODRequests();
@@ -995,6 +1034,11 @@ public:
     bool hasSkinInfo(const LLUUID& mesh_id);
     bool hasHeader(const LLUUID& mesh_id) const;
 
+    // <SK:Nexii> physics_havok block
+    // The simulator's collision triangles; null until fetched, the first ask queues the fetch.
+    std::shared_ptr<const SKPhysicsHavokShape> getPhysicsHavok(const LLUUID& mesh_id);
+    // </SK:Nexii>
+
     void buildHull(const LLVolumeParams& params, S32 detail);
     void buildPhysicsMesh(LLModel::Decomposition& decomp);
 
@@ -1053,6 +1097,8 @@ public:
 
     //list of mesh ids that need to send physics shape fetch requests
     std::queue<LLUUID> mPendingPhysicsShapeRequests;
+
+    SKPhysicsHavokCache mPhysicsHavok; // <SK:Nexii> physics_havok block
 
     U32 mMeshThreadCount;
 

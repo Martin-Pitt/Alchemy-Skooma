@@ -1337,6 +1337,33 @@ class LLAdvancedCheckInfoDisplay : public view_listener_t
     }
 };
 
+// <SK:Nexii> Physics Shapes > Cost / Types: one overlay, two colourings; picking the shown one hides it
+class SKTogglePhysicsShapes : public view_listener_t
+{
+    bool handleEvent(const LLSD& userdata)
+    {
+        const bool types = userdata.asString() == "types";
+        const bool shown = gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_PHYSICS_SHAPES);
+        if (!shown || gSavedSettings.getBOOL("SKPhysicsShapeTypes") == types)
+        {
+            LLPipeline::toggleRenderDebug(LLPipeline::RENDER_DEBUG_PHYSICS_SHAPES);
+        }
+        gSavedSettings.setBOOL("SKPhysicsShapeTypes", types);
+        return true;
+    }
+};
+
+class SKCheckPhysicsShapes : public view_listener_t
+{
+    bool handleEvent(const LLSD& userdata)
+    {
+        const bool types = userdata.asString() == "types";
+        return gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_PHYSICS_SHAPES)
+            && gSavedSettings.getBOOL("SKPhysicsShapeTypes") == types;
+    }
+};
+// </SK:Nexii>
+
 
 ///////////////////////////
 //// RANDOMIZE FRAMERATE //
@@ -10790,6 +10817,8 @@ void initialize_menus()
     // Advanced > Render > Info Displays
     view_listener_t::addMenu(new LLAdvancedToggleInfoDisplay(), "Advanced.ToggleInfoDisplay");
     view_listener_t::addMenu(new LLAdvancedCheckInfoDisplay(), "Advanced.CheckInfoDisplay");
+    view_listener_t::addMenu(new SKTogglePhysicsShapes(), "SK.TogglePhysicsShapes"); // <SK:Nexii> physics shape colourings
+    view_listener_t::addMenu(new SKCheckPhysicsShapes(), "SK.CheckPhysicsShapes"); // <SK:Nexii> physics shape colourings
     view_listener_t::addMenu(new LLAdvancedSelectedTextureInfo(), "Advanced.SelectedTextureInfo");
     commit.add("Advanced.SelectedMaterialInfo", boost::bind(&handle_selected_material_info));
     view_listener_t::addMenu(new LLAdvancedToggleWireframe(), "Advanced.ToggleWireframe");

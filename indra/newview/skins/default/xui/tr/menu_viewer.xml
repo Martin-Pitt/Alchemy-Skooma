@@ -257,7 +257,7 @@
 			<menu_item_check label="Normaller" name="Normals"/>
 			<menu_item_check label="Gölgeleme Ağacı" name="Octree"/>
 			<menu_item_check label="Gölge Kesik Koni" name="Shadow Frusta"/>
-			<menu_item_check label="Fizik Şekilleri" name="Physics Shapes"/>
+			<menu label="Fizik Şekilleri" name="Physics Shapes"/>
 			<menu_item_check label="Gölgeleme" name="Occlusion"/>
 			<menu_item_check label="Toplu İşleri İşle" name="Render Batches"/>
 			<menu_item_check label="Güncelleştirme Türü" name="Update Type"/>

@@ -3838,16 +3838,36 @@ function="World.EnvPreset"
            function="Advanced.ToggleInfoDisplay"
            parameter="shadow frusta" />
         </menu_item_check>
-        <menu_item_check
+        <!-- <SK:Nexii> Physics shapes coloured by cost or by where each shape comes from -->
+        <menu
+         create_jump_keys="true"
          label="Physics Shapes"
-         name="Physics Shapes">
-          <menu_item_check.on_check
-           function="Advanced.CheckInfoDisplay"
-           parameter="physics shapes" />
-          <menu_item_check.on_click
-           function="Advanced.ToggleInfoDisplay"
-           parameter="physics shapes" />
-        </menu_item_check>
+         name="Physics Shapes"
+         tear_off="true">
+          <menu_item_check
+           label="Cost"
+           name="Physics Shapes Cost"
+           tool_tip="Physics shapes coloured by physics cost, from the low colour to the high one">
+            <menu_item_check.on_check
+             function="SK.CheckPhysicsShapes"
+             parameter="cost" />
+            <menu_item_check.on_click
+             function="SK.TogglePhysicsShapes"
+             parameter="cost" />
+          </menu_item_check>
+          <menu_item_check
+           label="Types"
+           name="Physics Shapes Types"
+           tool_tip="Physics shapes coloured by source. Green: simulator collision triangles. Cyan: uploaded physics mesh. Orange: decomposition hulls. Yellow: mesh convex hull. Blue: prim convex hull. Purple: prim shape. Grey: box, sphere or cylinder.">
+            <menu_item_check.on_check
+             function="SK.CheckPhysicsShapes"
+             parameter="types" />
+            <menu_item_check.on_click
+             function="SK.TogglePhysicsShapes"
+             parameter="types" />
+          </menu_item_check>
+        </menu>
+        <!-- </SK:Nexii> -->
         <menu_item_check
          label="Occlusion"
          name="Occlusion">
