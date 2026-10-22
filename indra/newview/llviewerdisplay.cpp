@@ -242,6 +242,12 @@ void display_update_camera()
     static LLCachedControl<S32> force_projection(gSavedSettings, "AlchemyRenderFarPlaneForce", ALFarPlane::FORCE_AUTOMATIC);
     LLViewerCamera* camera = LLViewerCamera::getInstance();
     camera->setProjectionFar(ALFarPlane::projectionFar(reverse_z, gCubeSnapshot, force_projection(), gAgentCamera.mDrawDistance));
+    // <SK:Nexii> render/vertical-reach: the main view draws scenery in an ellipsoid flattened from the draw distance, never shorter than a floor.
+    static LLCachedControl<F32> vertical_ratio(gSavedSettings, "SKRenderVerticalDrawRatio", 1.f);
+    static LLCachedControl<F32> vertical_floor(gSavedSettings, "SKRenderVerticalDrawMin", 64.f);
+    const F32 vertical_reach = llmax(final_far * llclamp((F32)vertical_ratio, 0.f, 1.f), (F32)vertical_floor);
+    camera->setVerticalReach(!gCubeSnapshot && vertical_reach < final_far ? vertical_reach : 0.f);
+    // </SK:Nexii>
     LLVOAvatar::sRenderDistance = llclamp(final_far, 16.f, 256.f);
     gViewerWindow->setup3DRender();
 
