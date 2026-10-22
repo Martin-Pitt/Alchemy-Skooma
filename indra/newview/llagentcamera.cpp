@@ -293,6 +293,7 @@ LLAgentCamera::~LLAgentCamera()
 //-----------------------------------------------------------------------------
 void LLAgentCamera::resetView(bool reset_camera, bool change_camera)
 {
+    resetSKFollow(); // <SK:Nexii> camera follow
     if (gDisconnected)
     {
         return;
@@ -1760,8 +1761,12 @@ LLVector3d LLAgentCamera::calcFocusPositionTargetGlobal()
             {
                 updateFocusOffset();
             }
-            LLVector3 focus_agent = mFocusObject->getRenderPosition() + mFocusObjectOffset;
-            mFocusTargetGlobal.setVec(gAgent.getPosGlobalFromAgent(focus_agent));
+            // <SK:Nexii> camera follow
+            // Only the object's position is smoothed; the user's offset passes through untouched.
+            const LLVector3d obj_global = smoothSKFollow(gAgent.getPosGlobalFromAgent(mFocusObject->getRenderPosition()));
+            mFocusTargetGlobal = obj_global + LLVector3d(mFocusObjectOffset);
+            mSKFollowRaw = gAgent.getPosGlobalFromAgent(mFocusObject->getRenderPosition() + mFocusObjectOffset);
+            // </SK:Nexii>
         }
         return mFocusTargetGlobal;
     }
@@ -1779,6 +1784,61 @@ LLVector3d LLAgentCamera::calcFocusPositionTargetGlobal()
         return gAgent.getPositionGlobal() + calcThirdPersonFocusOffset();
     }
 }
+
+// <SK:Nexii> camera follow
+// Exponential follower with root-velocity feed-forward, so network corrections of a moving focus object do not jerk the view.
+LLVector3d LLAgentCamera::smoothSKFollow(const LLVector3d& raw)
+{
+    static LLCachedControl<bool> follow_enabled(gSavedSettings, "SKCameraFollowEnabled", true);
+    static LLCachedControl<F32> follow_tau(gSavedSettings, "SKCameraFollowSmoothing", 0.12f);
+    constexpr F64 SNAP_DISTANCE = 2.0;
+    constexpr F64 SETTLED_DISTANCE = 0.001;
+    constexpr F64 MAX_STEP = 0.25;
+
+    LLViewerObject* rootp = mFocusObject.notNull() ? (LLViewerObject*)mFocusObject->getRoot() : nullptr;
+    const F64 tau = follow_tau();
+    if (!follow_enabled || tau <= 0.0 || !mTrackFocusObject || !rootp || rootp->isAvatar() || rootp->mDrawable.isNull())
+    {
+        resetSKFollow();
+        return raw;
+    }
+
+    const bool moving = !rootp->getVelocity().isExactlyZero() || rootp->mDrawable->isActive();
+    const F64 now = LLFrameTimer::getUptimeSeconds().value();
+    if (!mSKFollowValid || mSKFollowObjectId != mFocusObject->getID() || (raw - mSKFollowPos).magVec() > SNAP_DISTANCE)
+    {
+        if (!moving)
+        {
+            resetSKFollow();
+            return raw;
+        }
+        mSKFollowPos = raw;
+        mSKFollowSecs = now;
+        mSKFollowObjectId = mFocusObject->getID();
+        mSKFollowValid = true;
+        mSKFollowActive = true;
+        return raw;
+    }
+
+    // A stopped object keeps settling without feed-forward, so it never jumps.
+    if (!moving && (raw - mSKFollowPos).magVec() < SETTLED_DISTANCE)
+    {
+        resetSKFollow();
+        return raw;
+    }
+
+    const F64 dt = llclamp(now - mSKFollowSecs, 0.0, MAX_STEP);
+    mSKFollowSecs = now;
+    if (moving)
+    {
+        const LLVector3 arm = mFocusObject->getRenderPosition() - rootp->getRenderPosition();
+        mSKFollowPos += LLVector3d(rootp->getVelocity() + rootp->getAngularVelocity() % arm) * dt;
+    }
+    mSKFollowPos += (raw - mSKFollowPos) * (1.0 - exp(-dt / tau));
+    mSKFollowActive = true;
+    return mSKFollowPos;
+}
+// </SK:Nexii>
 
 LLVector3d LLAgentCamera::calcThirdPersonFocusOffset()
 {
@@ -2344,13 +2404,73 @@ void LLAgentCamera::handleScrollWheel(F32 clicks)
 // [/RLVa:KB]
 //          cameraOrbitIn(current_zoom_fraction * camera_offset_initial_mag * gSavedSettings.getF32("CameraOffsetScale"));
         }
-        else
+        // <SK:Nexii> Alt-cam zoom to cursor, classic zoom when it opts out or misses
+        else if (!cameraZoomToCursor(clicks))
+        // </SK:Nexii>
         {
             F32 current_zoom_fraction = (F32)mCameraFocusOffsetTarget.magVec();
             cameraOrbitIn(current_zoom_fraction * (1.f - (F32)pow(ROOT_ROOT_TWO, clicks)));
         }
     }
 }
+
+// <SK:Nexii> Alt-cam zoom to cursor
+bool LLAgentCamera::cameraZoomToCursor(F32 clicks)
+{
+    static LLCachedControl<bool> zoom_to_cursor(gSavedSettings, "SKCameraZoomToCursor", true);
+    if (!zoom_to_cursor || mCameraMode == CAMERA_MODE_CUSTOMIZE_AVATAR)
+    {
+        return false;
+    }
+
+    LLPickInfo pick = gViewerWindow->pickImmediate(gViewerWindow->getCurrentMouseX(), gViewerWindow->getCurrentMouseY(),
+                                                   false /*pick_transparent*/, false /*pick_rigged*/, false /*pick_particle*/,
+                                                   true /*pick_unselectable*/, false /*pick_reflection_probe*/, true /*pick_focus*/);
+    LLViewerObject* hit_obj = pick.getObject();
+    if ((!hit_obj && pick.mPosGlobal.isExactlyZero()) || (hit_obj && hit_obj->isHUDAttachment()))
+    {
+        return false;
+    }
+
+    // Scaling camera and focus about the picked point keeps that point under the cursor.
+    const LLVector3d cursor = pick.mPosGlobal;
+    const LLVector3d camera = mFocusTargetGlobal + mCameraFocusOffsetTarget;
+    const F64 focus_distance = mCameraFocusOffsetTarget.magVec();
+    const F64 cursor_distance = (camera - cursor).magVec();
+    if (focus_distance <= 0.0 || cursor_distance <= 0.0)
+    {
+        return false;
+    }
+
+    F64 scale = pow(sqrt(F_SQRT2), (F64)clicks);
+    if (!isDisableCameraConstraints())
+    {
+        F64 min_zoom = LAND_MIN_ZOOM;
+        if (hit_obj)
+        {
+            min_zoom = hit_obj->isAvatar() ? AVATAR_MIN_ZOOM : OBJECT_MIN_ZOOM;
+        }
+        scale = llmax(scale, min_zoom / llmin(focus_distance, cursor_distance));
+    }
+    scale = llmin(scale, (F64)getCameraMaxZoomDistance() / focus_distance);
+    if (RlvActions::isRlvEnabled() && !allowFocusOffsetChange(mCameraFocusOffsetTarget * scale))
+    {
+        return false;
+    }
+
+    setFocusObject(hit_obj);
+    mFocusTargetGlobal = cursor + (mFocusTargetGlobal - cursor) * scale;
+    mFocusGlobal = mFocusTargetGlobal;
+    mCameraFocusOffsetTarget *= scale;
+
+    // The focus moves sideways, so smoothing the camera behind it would swing the view.
+    mCameraSmoothingStop = true;
+    cameraZoomIn(1.f);
+    updateFocusOffset();
+    mCameraSmoothingLastPositionGlobal = calcCameraPositionTargetGlobal();
+    return true;
+}
+// </SK:Nexii>
 
 
 //-----------------------------------------------------------------------------
@@ -2967,6 +3087,7 @@ void LLAgentCamera::setSitCamera(const LLUUID &object_id, const LLVector3 &camer
 //-----------------------------------------------------------------------------
 void LLAgentCamera::setFocusOnAvatar(bool focus_on_avatar, bool animate, bool reset_axes)
 {
+    resetSKFollow(); // <SK:Nexii> camera follow
     if (focus_on_avatar != mFocusOnAvatar)
     {
         if (animate)

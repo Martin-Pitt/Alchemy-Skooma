@@ -229,6 +229,11 @@ public:
     void            setAllowChangeToFollow(bool focus)  { mAllowChangeToFollow = focus; }
     void            setObjectTracking(bool track)   { mTrackFocusObject = track; }
     const LLVector3d &getFocusGlobal() const        { return mFocusGlobal; }
+    // <SK:Nexii> camera follow
+    // The focus target before the follower's smoothing, for the motion recorder.
+    LLVector3d      getSKFollowRawFocusGlobal() const { return mSKFollowActive ? mSKFollowRaw : mFocusGlobal; }
+    void            resetSKFollow()                  { mSKFollowValid = false; mSKFollowActive = false; }
+    // </SK:Nexii>
     const LLVector3d &getFocusTargetGlobal() const  { return mFocusTargetGlobal; }
 private:
     LLVector3d      mCameraFocusOffset;             // Offset from focus point in build mode
@@ -241,6 +246,15 @@ private:
     F32             mFocusObjectDist;
     LLVector3       mFocusObjectOffset;
     bool            mTrackFocusObject;
+    // <SK:Nexii> camera follow
+    LLVector3d      smoothSKFollow(const LLVector3d& raw);
+    LLVector3d      mSKFollowPos;
+    LLVector3d      mSKFollowRaw;                   // Unsmoothed object position plus offset
+    F64             mSKFollowSecs = 0.0;
+    LLUUID          mSKFollowObjectId;
+    bool            mSKFollowValid = false;
+    bool            mSKFollowActive = false;
+    // </SK:Nexii>
 
     //--------------------------------------------------------------------
     // Lookat / Pointat
@@ -282,6 +296,7 @@ public:
     //--------------------------------------------------------------------
 public:
     void            handleScrollWheel(F32 clicks);                          // Mousewheel driven zoom
+    bool            cameraZoomToCursor(F32 clicks);                         // <SK:Nexii> Alt-cam wheel zoom about the point under the cursor
     void            cameraZoomIn(const F32 factor);                         // Zoom in by fraction of current distance
     F32             getCameraZoomFraction(bool get_third_person = false);   // Get camera zoom as fraction of minimum and maximum zoom
     void            setCameraZoomFraction(F32 fraction);                    // Set camera zoom as fraction of minimum and maximum zoom
