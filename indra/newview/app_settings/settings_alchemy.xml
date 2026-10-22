@@ -4977,6 +4977,43 @@
             <real>0.12</real>
         </map>
         <!-- </SK:Nexii> -->
+        <!-- <SK:Nexii> clamped velocity recovery -->
+        <key>SKMotionRecoverClampedVelocity</key>
+        <map>
+            <key>Comment</key>
+            <string>Restore the true velocity of fast objects whose terse update clamps an axis at 128 m/s, from the unclamped axes and the direction of travel.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <!-- </SK:Nexii> -->
+        <!-- <SK:Nexii> smoothed update corrections -->
+        <key>SKMotionSmoothCorrections</key>
+        <map>
+            <key>Comment</key>
+            <string>Keep a moving object where it is shown when an update arrives and bleed the difference to the received position out over SKMotionSmoothTau, instead of snapping.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKMotionSmoothTau</key>
+        <map>
+            <key>Comment</key>
+            <string>Time constant in seconds of the exponential bleed used by SKMotionSmoothCorrections.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.15</real>
+        </map>
+        <!-- </SK:Nexii> -->
         <key>ClickingAvatarKeepsCamera</key>
         <map>
             <key>Comment</key>
