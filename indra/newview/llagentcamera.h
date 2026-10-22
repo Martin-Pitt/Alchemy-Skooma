@@ -225,9 +225,6 @@ public:
     bool            getFocusOnAvatar() const        { return mFocusOnAvatar; }
     LLPointer<LLViewerObject>&  getFocusObject()    { return mFocusObject; }
     F32             getFocusObjectDist() const      { return mFocusObjectDist; }
-    // <SK:Nexii> motion recorder
-    const LLVector3& getFocusObjectOffset() const   { return mFocusObjectOffset; }
-    // </SK:Nexii>
     void            updateFocusOffset();
     void            validateFocusObject();
     void            setFocusGlobal(const LLPickInfo& pick);
@@ -239,11 +236,6 @@ public:
     void            setAllowChangeToFollow(bool focus)  { mAllowChangeToFollow = focus; }
     void            setObjectTracking(bool track)   { mTrackFocusObject = track; }
     const LLVector3d &getFocusGlobal() const        { return mFocusGlobal; }
-    // <SK:Nexii> camera follow
-    // The focus target before the follower's smoothing, for the motion recorder.
-    LLVector3d      getSKFollowRawFocusGlobal() const { return mSKFollowActive ? mSKFollowRaw : mFocusGlobal; }
-    void            resetSKFollow()                  { mSKFollowValid = false; mSKFollowActive = false; }
-    // </SK:Nexii>
     const LLVector3d &getFocusTargetGlobal() const  { return mFocusTargetGlobal; }
 private:
     LLVector3d      mCameraFocusOffset;             // Offset from focus point in build mode
@@ -256,15 +248,6 @@ private:
     F32             mFocusObjectDist;
     LLVector3       mFocusObjectOffset;
     bool            mTrackFocusObject;
-    // <SK:Nexii> camera follow
-    LLVector3d      smoothSKFollow(const LLVector3d& raw);
-    LLVector3d      mSKFollowPos;
-    LLVector3d      mSKFollowRaw;                   // Unsmoothed object position plus offset
-    F64             mSKFollowSecs = 0.0;
-    LLUUID          mSKFollowObjectId;
-    bool            mSKFollowValid = false;
-    bool            mSKFollowActive = false;
-    // </SK:Nexii>
 
     //--------------------------------------------------------------------
     // Lookat / Pointat

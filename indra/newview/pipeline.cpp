@@ -152,7 +152,6 @@
 
 #include "llenvironment.h"
 #include "llsettingsvo.h"
-#include "skmotionrecorder.h" // <SK:Nexii> motion recorder
 
 #include "SMAAAreaTex.h"
 #include "SMAASearchTex.h"
@@ -3878,12 +3877,6 @@ void LLPipeline::updateGeom(F32 max_dtime)
             {
                 drawablep->clearState(LLDrawable::IN_REBUILD_Q);
                 mBuildQ1.erase(curiter);
-                // <SK:Nexii> motion recorder
-                if (SKMotionRecorder::isRecording())
-                {
-                    SKMotionRecorder::onGeomRebuilt();
-                }
-                // </SK:Nexii>
             }
         }
         else
