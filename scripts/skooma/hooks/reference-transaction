@@ -1,0 +1,41 @@
+#!/bin/sh
+# Skooma: protect refs/heads/next.  Installed to .git/hooks by `git skooma bootstrap`.
+#
+# next must always equal upstream/<skooma.upstreamBranch>.  Only `git skooma sync`
+# may move it, and it verifies the fast-forward itself before calling update-ref.
+# Written in sh, not pwsh: this fires hundreds of times during a rebase
+# (sh ~19 ms vs pwsh ~190 ms per spawn).
+#
+# develop/publish are deliberately NOT guarded yet — direct commits on develop are
+# allowed while the fork is being set up.  To lock them later, add them to the case
+# below and use `git skooma` (or SKOOMA_SCRIPT=1) for legitimate moves.
+
+[ "$1" = prepared ] || exit 0
+
+# Fast path: the script that legitimately moves next sets this.
+if [ "$SKOOMA_SCRIPT" = "1" ]; then
+    cat >/dev/null
+    exit 0
+fi
+
+blocked=
+while read -r old new ref; do
+    case "$ref" in
+    refs/heads/next) blocked="$old $new" ;;
+    *) continue ;;
+    esac
+done
+
+[ -n "$blocked" ] || exit 0
+
+cat >&2 <<'MSG'
+
+  Refused: refs/heads/next is a read-only mirror of upstream.
+
+  next must stay identical to upstream — never commit, merge or reset onto it.
+    update from upstream :  git skooma sync
+    start a feature      :  git skooma new <name>
+    land work            :  git skooma integrate
+
+MSG
+exit 1

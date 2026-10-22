@@ -3,13 +3,19 @@
   <img alt="Alchemy Viewer Logo" src="doc/alchemy_logo.png">
 </picture>
 
-# Alchemy Viewer
+# Alchemy: Skooma Viewer
 
 [![License: LGPL 2.1](https://img.shields.io/badge/License-LGPL_2.1-blue.svg)](LICENSE)
 [![Latest Release](https://img.shields.io/github/v/release/AlchemyViewer/Alchemy)](https://github.com/AlchemyViewer/Alchemy/releases)
 [![Discord](https://img.shields.io/badge/Discord-Join-7289da?logo=discord&logoColor=white)][discord]
 
-[Alchemy Viewer](https://www.alchemyviewer.org) is a third-party client for [Second Life](https://secondlife.com), forked from the official [Linden Lab viewer](https://github.com/secondlife/viewer). We focus on a cohesive, modern experience built on thoughtful defaults — while staying on the bleeding edge of new platform features.
+
+**Alchemy: Skooma** is a derivative of the [Alchemy Viewer](https://www.alchemyviewer.org), a third-party client for [Second Life](https://secondlife.com), forked from the official [Linden Lab viewer](https://github.com/secondlife/viewer).
+
+_Alchemy_ focuses on a cohesive, modern experience built on thoughtful defaults — while staying on the bleeding edge of new platform features.
+
+_Alchemy: Skooma_ pushes deeper into unstable and experimental features, with major features like a comprehensive client-side weather and environment system codenamed Atmo Magic.
+
 
 ## 📥 Download
 

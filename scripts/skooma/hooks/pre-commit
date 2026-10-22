@@ -1,0 +1,54 @@
+#!/bin/sh
+# Skooma: keep commits on the right branch and fork-only files out of upstream-bound
+# feature branches.  Installed to .git/hooks by `git skooma bootstrap`.
+
+branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null) || exit 0
+
+case "$branch" in
+next | publish)
+    cat >&2 <<MSG
+
+  Refused: '$branch' does not take commits.
+
+  Work happens in a worktree:  git skooma new <name>
+  Then land it:                git skooma integrate
+
+MSG
+    exit 1
+    ;;
+develop)
+    # Unlocked during fork setup (README, branding, glue).  Feature work does not
+    # belong here — use a worktree so it stays upstreamable.
+    exit 0
+    ;;
+esac
+
+# Working branches (feature-, fix-, workaround-, any custom class) are upstream pull
+# requests in waiting: no fork-only files.  Classes live in skooma.class.
+class=$(git config --get "branch.$branch.skooma" 2>/dev/null)
+if [ -z "$class" ]; then
+    for c in feature fix workaround $(git config --get-all skooma.class 2>/dev/null); do
+        case "$branch" in "$c"-*) class=$c ; break ;; esac
+    done
+fi
+case "$class" in '' | glue | sidecar) exit 0 ;; esac
+
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+[ -n "$staged" ] || exit 0
+
+bad=$(printf '%s\n' "$staged" | grep -E '^(AGENTS\.md|CLAUDE\.local\.md|doc/skooma/|scripts/skooma/|\.githooks/|\.worktrees/|\.claude/|\.vcpkg-shared/|vs2026-os/|ninja-os/|build-(Windows|Darwin|Linux)-)' || true)
+if [ -n "$bad" ]; then
+    cat >&2 <<MSG
+
+  Refused: fork-only files staged on upstream-bound branch '$branch':
+
+$(printf '%s\n' "$bad" | sed 's/^/    /')
+
+  These belong on skooma-glue (or a skooma-<name> sidecar), not in a feature that
+  will be sent upstream.  Unstage them:  git restore --staged <path>
+
+MSG
+    exit 1
+fi
+
+exit 0
