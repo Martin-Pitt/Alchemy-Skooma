@@ -46,7 +46,6 @@ LLModalDialog::LLModalDialog( const LLSD& key, bool modal )
 {
     if (modal)
     {
-        setCanMinimize(false);
         setCanCollapse(false);
         setCanClose(false);
     }

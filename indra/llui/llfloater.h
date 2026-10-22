@@ -147,12 +147,25 @@ public:
 // [SL:KB] - Patch: UI-FloaterCollapse | Checked: Catznip-3.2
         BUTTON_COLLAPSE,
 // [/SL:KB]
-        BUTTON_MINIMIZE,
         BUTTON_TEAR_OFF,
         BUTTON_DOCK,
         BUTTON_HELP,
         BUTTON_COUNT
     };
+
+// <SK:Nexii> Collapse replaces minimize; a collapsed floater near a screen edge folds against it
+    enum ECollapseEdge
+    {
+        COLLAPSE_EDGE_NONE = 0,     // header bar, left where the floater already was
+        COLLAPSE_EDGE_BOTTOM,       // header bar, floater's own width
+        COLLAPSE_EDGE_TOP,          // header bar, floater's own width
+        COLLAPSE_EDGE_LEFT,         // header bar turned 90 degrees counter-clockwise
+        COLLAPSE_EDGE_RIGHT,        // header bar turned 90 degrees counter-clockwise
+        COLLAPSE_EDGE_COUNT
+    };
+
+    static bool     isSideEdge(ECollapseEdge edge) { return edge == COLLAPSE_EDGE_LEFT || edge == COLLAPSE_EDGE_RIGHT; }
+// </SK:Nexii>
 
     struct Params
     :   public LLInitParam::Block<Params, LLPanel::Params>
@@ -165,7 +178,7 @@ public:
                                 can_resize,
                                 can_resize_height,
                                 can_resize_width,
-                                can_minimize,
+                                can_minimize, // <SK:Nexii> Minimize is gone; the attribute lives on as the legacy spelling of can_collapse
 // [SL:KB] - Patch: UI-FloaterCollapse | Checked: Catznip-5.2
                                 can_collapse,
 // [/SL:KB]
@@ -192,19 +205,29 @@ public:
         // Images for top-right controls
         Optional<LLUIImage*>    close_image,
                                 restore_image,
-                                minimize_image,
 // [SL:KB] - Patch: UI-FloaterCollapse | Checked: Catznip-3.2
                                 collapse_image,
 // [/SL:KB]
+// <SK:Nexii> Shown in place of collapse_image when the floater would fold against that screen edge
+                                collapse_down_image,
+                                collapse_up_image,
+                                collapse_left_image,
+                                collapse_right_image,
+// </SK:Nexii>
                                 tear_off_image,
                                 dock_image,
                                 help_image;
         Optional<LLUIImage*>    close_pressed_image,
                                 restore_pressed_image,
-                                minimize_pressed_image,
 // [SL:KB] - Patch: UI-FloaterCollapse | Checked: Catznip-3.2
                                 collapse_pressed_image,
 // [/SL:KB]
+// <SK:Nexii>
+                                collapse_down_pressed_image,
+                                collapse_up_pressed_image,
+                                collapse_left_pressed_image,
+                                collapse_right_pressed_image,
+// </SK:Nexii>
                                 tear_off_pressed_image,
                                 dock_pressed_image,
                                 help_pressed_image;
@@ -280,7 +303,13 @@ public:
 // [SL:KB] - Patch: UI-FloaterCollapse | Checked: Catznip-3.4
     void            setCollapsed(bool collapsed);
 // [/SL:KB]
+    // Collapsing is the only way a floater is put away now, so this is what
+    // every caller that used to minimize one ends up in.
     virtual void    setMinimized(bool b);
+// <SK:Nexii> Which edge the current collapse folded against, and whether that made a turned strip
+    ECollapseEdge   getCollapseEdge() const         { return mCollapseEdge; }
+    bool            isCollapsedToSide() const       { return mMinimized && isSideEdge(mCollapseEdge); }
+// </SK:Nexii>
     void            moveResizeHandlesToFront();
     void            addDependentFloater(LLFloater* dependent, bool reposition = true, bool resize = false);
     void            addDependentFloater(LLHandle<LLFloater> dependent_handle, bool reposition = true, bool resize = false);
@@ -299,7 +328,6 @@ public:
     bool            isFirstLook() const { return mFirstLook; } // EXT-2653: This function is necessary to prevent overlapping for secondary showed toasts
     virtual bool    isFrontmost();
     bool            isDependent() const { return !mDependeeHandle.isDead(); }
-    void            setCanMinimize(bool can_minimize);
 // [SL:KB] - Patch: UI-FloaterCollapse | Checked: Catznip-5.2
     void            setCanCollapse(bool can_collapse);
 // [/SL:KB]
@@ -316,7 +344,6 @@ public:
     static std::string      getControlName(const std::string& name, const LLSD& key);
     static LLControlGroup*  getControlGroup();
 
-    bool            isMinimizeable() const{ return mCanMinimize; }
 // [SL:KB] - Patch: UI-FloaterCollapse | Checked: Catznip-5.2
     bool            isCollapsible() const { return mCanCollapse; }
 // [/SL:KB]
@@ -393,16 +420,13 @@ public:
 
     static void     onClickClose(LLFloater* floater);
     static void     onClickClose(LLFloater* floater, bool app_quitting);
-    static void     onClickMinimize(LLFloater* floater);
 // [SL:KB] - Patch: UI-FloaterCollapse | Checked: Catznip-3.2
     static void     onClickCollapse(LLFloater* floater);
 // [/SL:KB]
+    static void     onClickRestore(LLFloater* floater); // <SK:Nexii> Collapse replaces minimize
     static void     onClickTearOff(LLFloater* floater);
     static void     onClickDock(LLFloater* floater);
     static void     onClickHelp(LLFloater* floater);
-// [SL:KB] - Patch: UI-FloaterCollapse | Checked: Catznip-3.2
-    static void     handleShowCollapseButtonChanged(const LLSD& sdValue);
-// [/SL:KB]
 
     static void     setFloaterHost(LLMultiFloater* hostp) {sHostp = hostp; }
     static LLMultiFloater* getFloaterHost() {return sHostp; }
@@ -430,6 +454,7 @@ protected:
     void            storeRectControl();
     void            storeVisibilityControl();
     void            storeDockStateControl();
+    void            storeCollapseStateControl(); // <SK:Nexii> Collapse is restored at login
 
     void            setKey(const LLSD& key);
     void            setInstanceName(const std::string& name);
@@ -437,7 +462,16 @@ protected:
     virtual void    bringToFront(S32 x, S32 y);
     virtual void    goneFromFront();
 
-    void            setExpandedRect(const LLRect& rect) { mExpandedRect = rect; } // size when not minimized
+// <SK:Nexii> Collapse geometry: which edge the floater folds against, and the shape that makes
+    ECollapseEdge   pickCollapseEdge();
+    LLRect          calcCollapsedRect(ECollapseEdge edge);
+    LLRect          calcExpandedRect() const;
+    LLRect          getCollapseSnapRect();
+    void            drawCollapsedBackground(LLUIImage* image, const LLColor4& color);
+    void            updateCollapseButtonIcon();
+// </SK:Nexii>
+
+    void            setExpandedRect(const LLRect& rect) { mExpandedRect = rect; } // size when not collapsed
     const LLRect&   getExpandedRect() const { return mExpandedRect; }
 
     LLDragHandle*   getDragHandle() const { return mDragHandle; }
@@ -507,6 +541,7 @@ protected:
     std::string     mPosYControl;
     std::string     mVisibilityControl;
     std::string     mDocStateControl;
+    std::string     mCollapseStateControl; // <SK:Nexii> Collapse is restored at login
     LLSD            mKey;               // Key used for retrieving instances; set (for now) by LLFLoaterReg
 
     LLDragHandle*   mDragHandle;
@@ -526,7 +561,6 @@ private:
     std::string     mInstanceName;        // Store the instance name so we can remove ourselves from the list
 
     bool            mCanTearOff;
-    bool            mCanMinimize;
 // [SL:KB] - Patch: UI-FloaterCollapse | Checked: Catznip-5.2
     bool            mCanCollapse;
 // [/SL:KB]
@@ -547,9 +581,9 @@ private:
     S32             mLegacyHeaderHeight;// HACK see initFloaterXML()
 
     bool            mMinimized;
-// [SL:KB] - Patch: UI-FloaterCollapse | Checked: Catznip-3.2
-    bool            mCollapseOnMinimize;
-// [/SL:KB]
+// <SK:Nexii> Where the current collapse folded to, so that restoring knows what to undo
+    ECollapseEdge   mCollapseEdge;
+// </SK:Nexii>
     bool            mForeground;
     LLHandle<LLFloater> mDependeeHandle;
 
@@ -589,16 +623,19 @@ private:
     static std::string  sButtonNames[BUTTON_COUNT];
     static std::string  sButtonToolTips[BUTTON_COUNT];
     static std::string  sButtonToolTipsIndex[BUTTON_COUNT];
-// [SL:KB] - Patch: UI-FloaterCollapse | Checked: Catznip-3.2
-    static bool         sShowCollapseButton;
-// [/SL:KB]
 
     typedef void(*click_callback)(LLFloater*);
     static click_callback sButtonCallbacks[BUTTON_COUNT];
 
-    bool            mHasBeenDraggedWhileMinimized;
-    S32             mPreviousMinimizedBottom;
-    S32             mPreviousMinimizedLeft;
+// <SK:Nexii> A collapsed floater the user moved expands where they left it, not where it came from
+    bool            mDraggedWhileCollapsed;
+    // One glyph per way the floater could fold, kept because the collapse button
+    // swaps between them as it moves and the params they came from are long
+    // gone by then. Indexed by ECollapseEdge.
+    LLPointer<LLUIImage> mCollapseImages[COLLAPSE_EDGE_COUNT];
+    LLPointer<LLUIImage> mCollapsePressedImages[COLLAPSE_EDGE_COUNT];
+    ECollapseEdge   mCollapseIconEdge { COLLAPSE_EDGE_NONE };
+// </SK:Nexii>
 
     F32             mDefaultRelativeX;
     F32             mDefaultRelativeY;
@@ -637,9 +674,7 @@ public:
     // Given a child of gFloaterView, make sure this view can fit entirely onscreen.
     void            adjustToFitScreen(LLFloater* floater, bool allow_partial_outside, bool snap_in_toolbars = false);
 
-    void            setMinimizePositionVerticalOffset(S32 offset) { mMinimizePositionVOffset = offset; }
-    void            getMinimizePosition( S32 *left, S32 *bottom);
-    void            restoreAll();       // un-minimize all floaters
+    void            restoreAll();       // expand every collapsed floater
     typedef std::set<LLView*> skip_list_t;
     void pushVisibleAll(bool visible, const skip_list_t& skip_list = skip_list_t());
     void popVisibleAll(const skip_list_t& skip_list = skip_list_t());
@@ -654,7 +689,6 @@ public:
     // attempt to close all floaters
     void            closeAllChildren(bool app_quitting);
     bool            allChildrenClosed();
-    void            shiftMinimizedFloaters(S32 x_offset, S32 y_offset);
 
     void            hideAllFloaters();
     void            showHiddenFloaters();
@@ -676,6 +710,12 @@ public:
 
     void setToolbarRect(LLToolBarEnums::EToolBarLocation tb, const LLRect& toolbar_rect);
 
+// <SK:Nexii> Where a collapsed bar of this shape sits against `edge`: flush to the
+// screen, clear of any toolbar in the way, and stacked outwards over whatever is
+// already folded there.
+    LLRect          getCollapsedPosition(const LLFloater* floater, LLRect bar, LLFloater::ECollapseEdge edge) const;
+// </SK:Nexii>
+
 private:
     void hiddenFloaterClosed(LLFloater* floater);
 
@@ -683,9 +723,9 @@ private:
     LLRect              mToolbarLeftRect;
     LLRect              mToolbarBottomRect;
     LLRect              mToolbarRightRect;
+    LLRect              mToolbarTopRect; // <SK:Nexii> What a floater collapsing to the top edge has to clear
     LLHandle<LLView>    mSnapView;
     bool            mFocusCycleMode;
-    S32             mMinimizePositionVOffset;
     typedef std::vector<std::pair<LLHandle<LLFloater>, boost::signals2::connection> > hidden_floaters_t;
     hidden_floaters_t mHiddenFloaters;
     LLHandle<LLFloater> mFrontChildHandle;

@@ -652,7 +652,6 @@ LLSceneMonitorView::LLSceneMonitorView(const LLRect& rect)
     setRect(rect);
     setVisible(false);
 
-    setCanMinimize(false);
     setCanCollapse(false);
     setCanClose(true);
 

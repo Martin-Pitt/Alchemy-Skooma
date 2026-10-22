@@ -211,6 +211,10 @@ public:
         void setLocationId(LLToolBarEnums::EToolBarLocation id) { mLocationId = id; }
         void setReshapeCallback(reshape_callback_t cb) { mReshapeCallback = cb; }
         void setButtonPanel(LLPanel * panel) { mButtonPanel = panel; }
+// <SK:Nexii> An empty toolbar is not somewhere floaters have to keep clear of
+        void setHasButtons(bool has_buttons) { mHasButtons = has_buttons; }
+        void reportShape() const;
+// </SK:Nexii>
 
     protected:
         friend class LLUICtrlFactory;
@@ -220,6 +224,7 @@ public:
         reshape_callback_t                  mReshapeCallback;
         LLToolBarEnums::EToolBarLocation    mLocationId{ LLToolBarEnums::EToolBarLocation::TOOLBAR_NONE };
         LLPanel *                           mButtonPanel{ nullptr };
+        bool                                mHasButtons{ false }; // <SK:Nexii>
     };
 
     struct Params : public LLInitParam::Block<Params, LLUICtrl::Params>
