@@ -318,6 +318,7 @@ if(AL_BUILD_VIEWER)
     llagentaccess.cpp
     llagentbenefits.cpp
     llagentcamera.cpp
+    skotscamera.cpp
     llagentdata.cpp
     llagenthandler.cpp
     llagentlanguage.cpp
@@ -1224,6 +1225,7 @@ if(AL_BUILD_VIEWER)
     llagentaccess.h
     llagentbenefits.h
     llagentcamera.h
+    skotscamera.h
     llagentdata.h
     llagentlanguage.h
     llagentlistener.h

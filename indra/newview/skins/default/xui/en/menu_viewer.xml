@@ -1362,6 +1362,23 @@ function="World.EnvPreset"
      tear_off="true"
      visible="true">
       <menu_item_check
+       label="Over-the-Shoulder Mouselook"
+       name="ots_enabled">
+        <menu_item_check.on_check
+         control="SKOTSEnabled" />
+        <menu_item_check.on_click
+         function="ToggleControl"
+         parameter="SKOTSEnabled" />
+      </menu_item_check>
+      <menu_item_call
+       label="Over-the-Shoulder Options..."
+       name="ots_options">
+        <menu_item_call.on_click
+         function="Floater.ToggleOrBringToFront"
+         parameter="sk_ots_options" />
+      </menu_item_call>
+      <menu_item_separator />
+      <menu_item_check
        label="Tactical Overview"
        name="SK Tactical Overview">
         <menu_item_check.on_check

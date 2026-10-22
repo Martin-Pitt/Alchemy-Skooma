@@ -116,6 +116,7 @@
 #include "llviewerwindow.h"
 #include "llvlmanager.h"
 #include "llvoavatarself.h"
+#include "skotscamera.h" // <SK:Nexii> Over-the-shoulder view
 #include "llvovolume.h"
 #include "llworld.h"
 #include "pipeline.h"
@@ -3592,6 +3593,13 @@ void send_agent_update(bool force_send, bool send_reliable)
     // </SK:Nexii>
     LLQuaternion body_rotation = gAgent.getFrameAgent().getQuaternion();
     LLQuaternion head_rotation = gAgent.getHeadRotation();
+    // <SK:Nexii> Over-the-shoulder view reports the eye aimed at the crosshair and turns the head the same way; the body
+    // is left alone, since the region moves the avatar along it; a modal view keeps the world camera instead
+    if (!SKModalView::worldCovered() && SKOTSCamera::reportedCamera(camera_pos_agent, camera_at, camera_left, camera_up))
+    {
+        SKOTSCamera::convergeHead(camera_at, head_rotation);
+    }
+    // </SK:Nexii>
     U8 render_state = gAgent.getRenderState();
 
     U8 flags = AU_FLAGS_NONE;
@@ -3714,8 +3722,8 @@ void send_agent_update(bool force_send, bool send_reliable)
 
     msg->addVector3Fast(_PREHASH_CameraCenter, camera_pos_agent);
     msg->addVector3Fast(_PREHASH_CameraAtAxis, camera_at);
-    msg->addVector3Fast(_PREHASH_CameraLeftAxis, camera_left); // <SK:Nexii> modal view
-    msg->addVector3Fast(_PREHASH_CameraUpAxis, camera_up); // <SK:Nexii> modal view
+    msg->addVector3Fast(_PREHASH_CameraLeftAxis, camera_left); // <SK:Nexii> modal view, Over-the-shoulder view
+    msg->addVector3Fast(_PREHASH_CameraUpAxis, camera_up); // <SK:Nexii> modal view, Over-the-shoulder view
 
     static F32 last_draw_disatance_step = 1024;
     F32 memory_limited_draw_distance = gAgentCamera.mDrawDistance;
