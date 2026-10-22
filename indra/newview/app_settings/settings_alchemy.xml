@@ -6347,6 +6347,17 @@
             <key>Value</key>
             <integer>190</integer>
         </map>
+        <key>SKMapVehicleGrowMax</key>
+        <map>
+            <key>Comment</key>
+            <string>The most the mini-map enlarges vehicles when zoomed out so they stay legible (1 = true size, up to 6).</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>4.0</real>
+        </map>
         <key>SKMapVehicleGlyphs</key>
         <map>
             <key>Comment</key>
