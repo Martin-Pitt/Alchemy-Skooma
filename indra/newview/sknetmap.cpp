@@ -1104,6 +1104,19 @@ void SKNetMap::drawPings()
     gGL.end();
 }
 
+F32 SKNetMap::vehicleGrow(const SKMapPeople::Vehicle& v) const
+{
+    // Zoomed out, a vehicle grows about its position until its longer side spans VEHICLE_GROW_PX, up to the slider's factor.
+    static LLCachedControl<F32> max_grow(gSavedSettings, "SKMapVehicleGrowMax", 4.f);
+    constexpr F32 VEHICLE_GROW_PX = 24.f;
+    const F32 side = llmax(v.mMax.mV[VX] - v.mMin.mV[VX], v.mMax.mV[VY] - v.mMin.mV[VY]) * mView.pixelsPerMetre();
+    if (side <= 0.f)
+    {
+        return 1.f;
+    }
+    return llclamp(VEHICLE_GROW_PX / side, 1.f, llclamp(static_cast<F32>(max_grow), 1.f, 6.f));
+}
+
 void SKNetMap::drawVehicles()
 {
     static LLCachedControl<bool> show(gSavedSettings, "SKMapLayerVehicles", true);
@@ -1123,6 +1136,7 @@ void SKNetMap::drawVehicles()
             continue;
         }
         drew[i] = true;
+        const F32 grow = vehicleGrow(v);
         gGL.blendFunc(LLRender::BF_ONE, LLRender::BF_ONE_MINUS_SOURCE_ALPHA);
         skmapdraw::colour(skmapdraw::vehicleHull(v.mLook));
         for (const skmapdraw::GlyphQuad& q : quads)
@@ -1131,7 +1145,7 @@ void SKNetMap::drawVehicles()
             gGL.begin(LLRender::TRIANGLES);
             for (S32 k : { 0, 1, 2, 0, 2, 3 })
             {
-                const LLVector2 at = mView.toWidget(v.mPos + LLVector3d(q.mCorner[k].mV[VX], q.mCorner[k].mV[VY], 0.0));
+                const LLVector2 at = mView.toWidget(v.mPos + LLVector3d(q.mCorner[k].mV[VX] * grow, q.mCorner[k].mV[VY] * grow, 0.0));
                 gGL.texCoord2f(q.mUV[k][0], q.mUV[k][1]);
                 gGL.vertex2f(at.mV[VX], at.mV[VY]);
             }
@@ -1146,8 +1160,9 @@ void SKNetMap::drawVehicles()
     {
         const SKMapPeople::Vehicle& v = vehicles[i];
         // The linkset's box at its live heading, unless its glyph drew: hull, and a nose tick at its front.
+        const F32 grow = vehicleGrow(v);
         auto at = [&](F32 x, F32 y) {
-            const LLVector3 p = LLVector3(x, y, 0.f) * v.mRot;
+            const LLVector3 p = LLVector3(x * grow, y * grow, 0.f) * v.mRot;
             return mView.toWidget(v.mPos + LLVector3d(p.mV[VX], p.mV[VY], 0.0));
         };
         if (!drew[i])
