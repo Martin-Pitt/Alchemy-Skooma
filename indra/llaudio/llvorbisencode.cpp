@@ -167,7 +167,7 @@ S32 check_for_invalid_wav_formats(const std::string& in_fname, std::string& erro
     return(LLVORBISENC_NOERR);
 }
 
-S32 encode_vorbis_file(const std::string& in_fname, const std::string& out_fname)
+S32 encode_vorbis_file(const std::string& in_fname, const std::string& out_fname, F32 gain)
 {
 #define READ_BUFFER 1024
     unsigned char readbuffer[READ_BUFFER*4+44];   /* out of the data segment, not the stack */  /*Flawfinder: ignore*/
@@ -409,6 +409,18 @@ S32 encode_vorbis_file(const std::string& in_fname, const std::string& out_fname
                      }
                  }
              }
+
+             // <SK:Nexii> loudness normalization -- one place for all four
+             // unpack branches above. Clamped because the encoder expects
+             // normalized input, not because 16-bit would have wrapped.
+             if (gain != 1.f)
+             {
+                 for (long j = 0; j < samples; j++)
+                 {
+                     buffer[0][j] = llclamp(buffer[0][j] * gain, -1.f, 1.f);
+                 }
+             }
+             // </SK:Nexii>
 
              /* tell the library how much we actually submitted */
              vorbis_analysis_wrote(&vd,i);

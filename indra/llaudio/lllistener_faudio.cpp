@@ -377,7 +377,9 @@ namespace
         // submix more than help spatially.
         emitter.pLPFDirectCurve = &kLpfCurve;
         emitter.pLPFReverbCurve = nullptr;
-        emitter.pReverbCurve = nullptr;
+        // <SK:Nexii> Reverb send: F3DAudio's default reverb curve is linear over the whole range and ignores rolloff, so far sounds filled the reverb.
+        emitter.pReverbCurve = &kVolumeCurve;
+        // </SK:Nexii>
         emitter.pCone = nullptr;
 
         std::array<float, 64> matrix{};

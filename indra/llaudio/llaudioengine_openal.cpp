@@ -838,6 +838,11 @@ LLAudioChannelOpenAL::LLAudioChannelOpenAL()
     mLastSamplePos(0)
 {
     alGenSources(1, &mALSource);
+    // <SK:Nexii> loudness normalization -- AL_MAX_GAIN defaults to 1.0, which
+    // would silently discard the boost half of a per-asset loudness trim. The
+    // ceiling matches SK_LUFS_MAX_BOOST_DB.
+    alSourcef(mALSource, AL_MAX_GAIN, 4.f);
+    // </SK:Nexii>
 }
 
 LLAudioChannelOpenAL::~LLAudioChannelOpenAL()
@@ -978,6 +983,10 @@ bool LLAudioChannelOpenAL::updateBuffer()
               mCurrentSourcep->isLoop() ? AL_TRUE : AL_FALSE);
         alSourcef(mALSource, AL_ROLLOFF_FACTOR,
               gAudiop->mListenerp->getRolloffFactor());
+        // <SK:Nexii> Reverb send: the presets' room rolloff is 0, so without this every source reaches the reverb unattenuated by distance.
+        alSourcef(mALSource, AL_ROOM_ROLLOFF_FACTOR,
+              gAudiop->mListenerp->getRolloffFactor());
+        // </SK:Nexii>
     }
 
     return true;

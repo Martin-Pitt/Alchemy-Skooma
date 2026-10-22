@@ -53,7 +53,11 @@ const size_t LLVORBIS_CLIP_REJECT_SAMPLES              = LLVORBIS_CLIP_MAX_SAMPL
 const size_t LLVORBIS_CLIP_REJECT_SIZE                 = LLVORBIS_CLIP_MAX_SAMPLE_DATA * 3;
 
 S32 check_for_invalid_wav_formats(const std::string& in_fname, std::string& error_msg);
-S32 encode_vorbis_file(const std::string& in_fname, const std::string& out_fname);
+// <SK:Nexii> loudness normalization -- gain is applied to the float samples
+// after the WAV is unpacked and downmixed, before analysis, so a boost cannot
+// clip against the 16-bit input range. Defaults to unity.
+S32 encode_vorbis_file(const std::string& in_fname, const std::string& out_fname, F32 gain = 1.f);
+// </SK:Nexii>
 
 #endif
 
