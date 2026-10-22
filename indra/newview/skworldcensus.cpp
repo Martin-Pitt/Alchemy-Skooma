@@ -830,6 +830,18 @@ void SKWorldCensus::continueScan(F32 budget_ms)
         }
         gatherNow();
     }
+    // The parts this slice visited and those dirtied for the next scan, plotted however the slice returns.
+    struct SlicePlot
+    {
+        std::shared_ptr<SKCensusSnapshot> snap;
+        const std::unordered_set<LLUUID>& dirty;
+        U32 seen_before;
+        ~SlicePlot()
+        {
+            LL_PROFILE_PLOT("census visits", (int64_t)(snap ? snap->mStats.mObjectsSeen - seen_before : 0));
+            LL_PROFILE_PLOT("census dirty parts", (int64_t)dirty.size());
+        }
+    } slice_plot{ mScan.mPending, mDirty, mScan.mPending ? mScan.mPending->mStats.mObjectsSeen : 0 };
     LLTimer timer;
     const S32 count = static_cast<S32>(mScan.mObjects.size());
     while (mScan.mIndex < count)

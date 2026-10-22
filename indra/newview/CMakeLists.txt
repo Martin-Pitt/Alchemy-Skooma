@@ -2589,9 +2589,8 @@ if(AL_BUILD_TESTS)
     alrender
   )
   set(test_project ${AL_VIEWER_BINARY_NAME})
-  # <SK:Nexii> The recastnavigation port's and outline capture's TUT tests, kept registered until they are ported to Catch2
+  # <SK:Nexii> outline capture's TUT test, kept registered until it is ported to Catch2
   if(COMMAND al_add_test)
-    al_add_test(sknavrecast PROJECT ${test_project} LIBRARIES ll::recast)
     al_add_test(skoutlinepolicy UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
   endif()
   # </SK:Nexii>
