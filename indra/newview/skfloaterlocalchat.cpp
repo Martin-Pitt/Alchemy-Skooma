@@ -53,6 +53,7 @@
 #include "llagent.h"
 #include "alchattimestamp.h"
 #include "llagentcamera.h"
+#include "llfloaterimcontainer.h"
 #include "llfloaterimnearbychat.h"
 #include "lllogchat.h"
 #include "llviewerchat.h"
@@ -123,6 +124,18 @@ bool SKFloaterLocalChat::modernEnabled()
 {
     static LLCachedControl<bool> modern(gSavedSettings, "SkoomaLocalChatModern", true);
     return modern;
+}
+
+// static
+bool SKFloaterLocalChat::shouldTakeChat()
+{
+    if (!modernEnabled())
+    {
+        return false;
+    }
+    // As the chat bar: while Conversations is up, starting chat selects its nearby conversation instead.
+    LLFloaterIMContainer* conversations = LLFloaterIMContainer::findInstance();
+    return !conversations || !conversations->getVisible() || conversations->isMinimized();
 }
 
 // static
