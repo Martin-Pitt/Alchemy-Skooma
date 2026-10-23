@@ -253,6 +253,7 @@ private:
     std::vector<Typer> mTyping[2];    // within chat range and just beyond it, sorted
     std::vector<Typer> mTypingScratch[2];
     std::string mTypingLabel[2];
+    std::string mTypingFarCount;      // the out-of-range part as a count, for when the line is short
     F64 mTypingPollAt = 0.0;
     bool mTypingNamed[2] = { true, true }; // every name in the label had resolved
     SKChatUnfurlCache mUnfurl;
