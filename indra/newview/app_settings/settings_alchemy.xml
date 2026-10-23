@@ -5066,6 +5066,7 @@
             <key>Value</key>
             <integer>0</integer>
         </map>
+<!-- <SK:Nexii> Modern local chat settings -->
         <key>SkoomaLocalChatModern</key>
         <map>
             <key>Comment</key>
@@ -5110,6 +5111,7 @@
             <key>Value</key>
             <real>2.0</real>
         </map>
+<!-- </SK:Nexii> -->
         <key>AlchemyChatHistoryStyle</key>
         <map>
             <key>Comment</key>
@@ -5306,7 +5308,6 @@
             <key>Value</key>
             <integer>1</integer>
         </map>
-<!-- </SK:Nexii> -->
     </map>
 </llsd>
 
