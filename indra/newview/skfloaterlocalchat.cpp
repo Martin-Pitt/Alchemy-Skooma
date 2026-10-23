@@ -486,8 +486,8 @@ bool SKFloaterLocalChat::expanded() const
 
 LLRect SKFloaterLocalChat::contentRect() const
 {
-    const S32 bottom = (mInput && mInput->getVisible()) ? INPUT_HEIGHT + INPUT_GAP : 0;
-    return LLRect(0, getRect().getHeight(), getRect().getWidth(), bottom);
+    // The input's row is always kept, so the messages do not jump when it opens or closes.
+    return LLRect(0, getRect().getHeight(), getRect().getWidth(), INPUT_HEIGHT + INPUT_GAP);
 }
 
 S32 SKFloaterLocalChat::lineHeight(const Row& row) const
