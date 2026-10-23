@@ -46,6 +46,10 @@ namespace skworld
 
     /// The tile's linkset roots that cue_of gives a NameCue, into mRootCues.
     void tileRootCues(const std::function<U8(const LLUUID&)>& cue_of, TileInput& input);
+
+    /// What a finished tile input builds, in one key: the air's version, the tile, its parameters, cues,
+    /// land samples and the content of its records and cuts. The same world gives the same key in any session.
+    U64 tileContentKey(const TileInput& input);
 }
 
 #endif // SK_AIRLAYOUT_H

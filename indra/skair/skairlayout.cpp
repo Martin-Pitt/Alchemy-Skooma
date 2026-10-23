@@ -26,6 +26,8 @@
 
 #include "skairlayout.h"
 
+#include "skcensusrecord.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -116,5 +118,62 @@ namespace skworld
         }
         input.mZMin = zmin - 1.f;
         input.mZMax = zmax + 3.f;
+    }
+
+    U64 tileContentKey(const TileInput& input)
+    {
+        U64 h = mix(SEED, AIR_VERSION);
+        h = mixF64(h, input.mMeshOrigin.mdV[VX]);
+        h = mixF64(h, input.mMeshOrigin.mdV[VY]);
+        h = mixF64(h, input.mMeshOrigin.mdV[VZ]);
+        h = mix(h, static_cast<U32>(input.mTileX));
+        h = mix(h, static_cast<U32>(input.mTileY));
+        h = mixF32(h, input.mTileSize);
+        h = mixF32(h, input.mZMin);
+        h = mixF32(h, input.mZMax);
+        h = mixF32(h, input.mCell);
+        h = mixF32(h, input.mWallMinHeight);
+        for (const ClassParams* c : { &input.mAvatar, &input.mTopParams })
+        {
+            h = mixF32(h, c->mHeight);
+            h = mixF32(h, c->mRadius);
+            h = mixF32(h, c->mClimb);
+            h = mixF32(h, c->mSlope);
+        }
+        h = mix(h, (input.mWallFaces ? 1u : 0u) | (input.mRunoff ? 2u : 0u) | (input.mAir ? 4u : 0u) | (input.mFaceOffsets ? 8u : 0u)
+                       | (input.mCoarseAir ? 16u : 0u));
+        h = mixF32(h, input.mRunoffMax);
+        h = mix(h, static_cast<U32>(input.mAirPad));
+        h = mixF32(h, input.mAirMinGap);
+        for (const auto& [root, cue] : input.mRootCues)
+        {
+            for (U8 b : root.mData)
+            {
+                h = mix(h, b);
+            }
+            h = mix(h, cue);
+        }
+        const TerrainWindow& t = input.mTerrain;
+        h = mixF32(h, t.mOrigin.mV[VX]);
+        h = mixF32(h, t.mOrigin.mV[VY]);
+        h = mixF32(h, t.mSpacing);
+        h = mix(h, static_cast<U32>(t.mWidth));
+        h = mix(h, static_cast<U32>(t.mHeight));
+        h = mixF32(h, t.mWater);
+        for (F32 z : t.mZ)
+        {
+            h = mixF32(h, z);
+        }
+        // Order-free over the records, as the tile's own signature is.
+        for (const std::vector<RecordPtr>* set : { &input.mRecords, &input.mCuts })
+        {
+            U64 sum = 0;
+            for (const RecordPtr& r : *set)
+            {
+                sum += r ? finalise(recordContentKey(*r)) : 0;
+            }
+            h = mix(h, sum);
+        }
+        return finalise(h);
     }
 }
