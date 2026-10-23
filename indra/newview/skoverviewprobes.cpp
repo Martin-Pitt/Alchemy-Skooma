@@ -285,8 +285,8 @@ void SKOverviewProbes::bindProgram()
 {
     mProgram->bind();
     const F32 none[4] = { 0.f, 0.f, 0.f, 1.f };
-    glUniform4fv(mProgram->getUniformLocation(CLIP_PLANE), 1, none);
-    glUniform4fv(mProgram->getUniformLocation(SK_CEILING), 1, none);
+    mProgram->uniform4fv(CLIP_PLANE, 1, none);
+    mProgram->uniform4fv(SK_CEILING, 1, none);
 }
 
 void SKOverviewProbes::beginTarget(const Box& box)
@@ -296,16 +296,17 @@ void SKOverviewProbes::beginTarget(const Box& box)
     mTarget.bindTarget();
     const S32 w = llclamp(box.mWidth, 1, SIZE);
     const S32 h = llclamp(box.mHeight, 1, SIZE);
-    glViewport(0, 0, w, h);
+    gGL.setViewport(0, 0, w, h);
     {
         // Only the box's texels: the rest keeps what the dump may still want.
         LLGLSScissor scissor(0, 0, w, h);
         LLGLDepthTest depth_write(GL_TRUE, GL_TRUE, GL_ALWAYS);
         gGL.setColorMask(true, true);
-        const GLuint zero[4] = { 0, 0, 0, 0 };
-        const GLfloat far_depth = al_window_far();
-        glClearBufferuiv(GL_COLOR, 0, zero);
-        glClearBufferfv(GL_DEPTH, 0, &far_depth);
+        // The ids to 0 (an integer attachment the target clears by its own call) and the depth to the convention's far.
+        const LLColor4 saved_clear = gGL.getClearColor();
+        gGL.setClearColor(LLColor4::transparent);
+        mTarget.clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        gGL.setClearColor(saved_clear);
     }
     const bool up = lookingUp(box);
     const F32 near_m = up ? box.nearZ() : -box.nearZ();
@@ -332,7 +333,7 @@ void SKOverviewProbes::endTarget()
     gGL.matrixMode(LLRender::MM_MODELVIEW);
     gGL.popMatrix();
     mTarget.flush();
-    glViewport(gGLViewport[0], gGLViewport[1], gGLViewport[2], gGLViewport[3]);
+    gGL.setViewport(gGLViewport[0], gGLViewport[1], gGLViewport[2], gGLViewport[3]);
     LLRenderTarget::sCurResX = mSavedResX;
     LLRenderTarget::sCurResY = mSavedResY;
 }
@@ -377,27 +378,31 @@ bool SKOverviewProbes::beginVolume(const Box& box, const std::vector<LLVector4>&
             return true;
         }
     }
-    LLStrider<LLVector3> verts;
-    LLStrider<F32> weights;
-    LLStrider<LLVector2> flags;
-    if (!mOuts->getVertexStrider(verts, 0, (S32)count) || !mOuts->getWeightStrider(weights, 0, (S32)count) ||
-        !mOuts->getTexCoord0Strider(flags, 0, (S32)count))
+    // Instrumented, not fixed: a second room's upload in a frame writes a buffer the first room's draw still reads.
     {
-        mOuts->unmapBuffer();
-        return true;
-    }
-    const F32 z = box.mFrom - (lookingUp(box) ? OUT_DEPTH_M : -OUT_DEPTH_M);
-    for (const LLVector4& r : outs)
-    {
-        const LLVector3 a(r.mV[0], r.mV[1], z), b(r.mV[2], r.mV[1], z), c(r.mV[2], r.mV[3], z), d(r.mV[0], r.mV[3], z);
-        for (const LLVector3& v : { a, b, c, a, c, d })
+        LL_PROFILE_ZONE_NAMED("sk probes outs upload");
+        LLStrider<LLVector3> verts;
+        LLStrider<F32> weights;
+        LLStrider<LLVector2> flags;
+        if (!mOuts->getVertexStrider(verts, 0, (S32)count) || !mOuts->getWeightStrider(weights, 0, (S32)count) ||
+            !mOuts->getTexCoord0Strider(flags, 0, (S32)count))
         {
-            *verts++ = v;
-            *weights++ = 0.f;
-            *flags++ = LLVector2(0.f, 0.f);
+            mOuts->unmapBuffer();
+            return true;
         }
+        const F32 z = box.mFrom - (lookingUp(box) ? OUT_DEPTH_M : -OUT_DEPTH_M);
+        for (const LLVector4& r : outs)
+        {
+            const LLVector3 a(r.mV[0], r.mV[1], z), b(r.mV[2], r.mV[1], z), c(r.mV[2], r.mV[3], z), d(r.mV[0], r.mV[3], z);
+            for (const LLVector3& v : { a, b, c, a, c, d })
+            {
+                *verts++ = v;
+                *weights++ = 0.f;
+                *flags++ = LLVector2(0.f, 0.f);
+            }
+        }
+        mOuts->unmapBuffer();
     }
-    mOuts->unmapBuffer();
     // The upload left the buffer bound with no attributes set up for it; setBuffer sets them up only on a new binding.
     LLVertexBuffer::unbind();
     ProbeDrawState state;
@@ -415,8 +420,8 @@ void SKOverviewProbes::clipToBox()
     const F32 dir = lookingUp(mVolume) ? 1.f : -1.f;
     const F32 from_plane[4] = { 0.f, 0.f, -1.f, -dir * mVolume.mFrom };
     const F32 to_plane[4] = { 0.f, 0.f, 1.f, dir * mVolume.mTo };
-    glUniform4fv(mProgram->getUniformLocation(CLIP_PLANE), 1, from_plane);
-    glUniform4fv(mProgram->getUniformLocation(SK_CEILING), 1, to_plane);
+    mProgram->uniform4fv(CLIP_PLANE, 1, from_plane);
+    mProgram->uniform4fv(SK_CEILING, 1, to_plane);
 }
 
 ALQueryTicket SKOverviewProbes::query(const std::vector<Run>& runs, bool edges)
@@ -434,11 +439,11 @@ ALQueryTicket SKOverviewProbes::query(const std::vector<Run>& runs, bool edges)
     {
         // A face edge-on to the view covers no sample filled; its edges, as lines, cover the texels it crosses, and its
         // vertices, as points, the texel each lies in, so a linkset thinner than a texel (a pole) still counts.
-        glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+        gGL.setPolygonMode(GL_LINE);
         drawRuns(runs);
-        glPolygonMode(GL_FRONT_AND_BACK, GL_POINT);
+        gGL.setPolygonMode(GL_POINT);
         drawRuns(runs);
-        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+        gGL.setPolygonMode(GL_FILL);
     }
     gGL.queries().end(ticket);
     if (ticket.isValid())
@@ -480,13 +485,10 @@ S32 SKOverviewProbes::sample(const Box& box, const std::vector<Run>& runs)
     }
     // The texel and its depth into the pack buffer, GPU-side; the binding is left empty.
     const S32 slot = (S32)mSamples++;
-    const uintptr_t offset = (uintptr_t)slot * SAMPLE_BYTES;
-    gGL.flush();
-    glReadBuffer(GL_COLOR_ATTACHMENT0);
-    glBindBuffer(GL_PIXEL_PACK_BUFFER, mPack.getGLName());
-    glReadPixels(0, 0, 1, 1, GL_RED_INTEGER, GL_UNSIGNED_INT, reinterpret_cast<void*>(offset));
-    glReadPixels(0, 0, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT, reinterpret_cast<void*>(offset + 4));
-    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    const size_t offset = (size_t)slot * SAMPLE_BYTES;
+    // bindTarget set the read buffer to attachment 0.
+    gGL.readPixelsInto(mPack, offset, 0, 0, 1, 1, GL_RED_INTEGER, GL_UNSIGNED_INT);
+    gGL.readPixelsInto(mPack, offset + 4, 0, 0, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT);
     endTarget();
     return slot;
 }
@@ -523,11 +525,9 @@ bool SKOverviewProbes::readDepth(LLRenderTarget& target, S32 x, S32 y)
     const U32 res_x = LLRenderTarget::sCurResX;
     const U32 res_y = LLRenderTarget::sCurResY;
     target.bindTarget();
-    glBindBuffer(GL_PIXEL_PACK_BUFFER, mPack.getGLName());
-    glReadPixels(x, y, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT, reinterpret_cast<void*>((uintptr_t)mSamplesMax * SAMPLE_BYTES));
-    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    gGL.readPixelsInto(mPack, (size_t)mSamplesMax * SAMPLE_BYTES, x, y, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT);
     target.flush();
-    glViewport(gGLViewport[0], gGLViewport[1], gGLViewport[2], gGLViewport[3]);
+    gGL.setViewport(gGLViewport[0], gGLViewport[1], gGLViewport[2], gGLViewport[3]);
     LLRenderTarget::sCurResX = res_x;
     LLRenderTarget::sCurResY = res_y;
     mPicked = true;
@@ -573,13 +573,11 @@ bool SKOverviewProbes::requestDump()
     const U32 res_x = LLRenderTarget::sCurResX;
     const U32 res_y = LLRenderTarget::sCurResY;
     mTarget.bindTarget();
-    glReadBuffer(GL_COLOR_ATTACHMENT0);
-    glBindBuffer(GL_PIXEL_PACK_BUFFER, mDumpPack.getGLName());
-    glReadPixels(0, 0, w, h, GL_RED_INTEGER, GL_UNSIGNED_INT, nullptr);
-    glReadPixels(0, 0, w, h, GL_DEPTH_COMPONENT, GL_FLOAT, reinterpret_cast<void*>((uintptr_t)w * h * 4));
-    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    // bindTarget set the read buffer to attachment 0.
+    gGL.readPixelsInto(mDumpPack, 0, 0, 0, w, h, GL_RED_INTEGER, GL_UNSIGNED_INT);
+    gGL.readPixelsInto(mDumpPack, (size_t)w * h * 4, 0, 0, w, h, GL_DEPTH_COMPONENT, GL_FLOAT);
     mTarget.flush();
-    glViewport(gGLViewport[0], gGLViewport[1], gGLViewport[2], gGLViewport[3]);
+    gGL.setViewport(gGLViewport[0], gGLViewport[1], gGLViewport[2], gGLViewport[3]);
     LLRenderTarget::sCurResX = res_x;
     LLRenderTarget::sCurResY = res_y;
     if (!mDumpReadback.request(mDumpPack, 0, (size_t)w * h * SAMPLE_BYTES))
