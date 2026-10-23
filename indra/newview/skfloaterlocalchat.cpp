@@ -53,6 +53,8 @@
 #include "llagentcamera.h"
 #include "llfloaterimnearbychat.h"
 #include "llviewerchat.h"
+#include "llviewerobject.h"
+#include "llviewerobjectlist.h"
 #include "llviewercontrol.h"
 #include "llviewerwindow.h"
 
@@ -67,6 +69,8 @@ constexpr S32 CARD_GAP = 4;
 constexpr S32 MINIMAL_GAP = 2;
 constexpr S32 DISC = 12;
 constexpr S32 DISC_GAP = 6;
+constexpr F64 GLYPH_CHECK_SECONDS = 0.5; // how often an object speaker's glyph is looked up
+constexpr F32 GLYPH_BACK_ALPHA = 0.25f;  // the square behind a glyph
 constexpr S32 INPUT_HEIGHT = 24;
 constexpr S32 INPUT_GAP = 4;
 constexpr S32 INSET = 8; // inside the backdrop's border
@@ -833,7 +837,7 @@ void SKFloaterLocalChat::draw()
                     disc.mV[VALPHA] *= alpha * edge(disc_top - DISC, disc_top);
                     if (first.mSource == CHAT_SOURCE_OBJECT)
                     {
-                        gl_rect_2d(content.mLeft + PAD_X, disc_top, content.mLeft + PAD_X + DISC, disc_top - DISC, disc);
+                        drawObjectIcon(first, content.mLeft + PAD_X, disc_top, disc, now);
                     }
                     else
                     {
@@ -1021,6 +1025,72 @@ bool SKFloaterLocalChat::handleScrollWheel(S32 x, S32 y, LLScrollDelta delta)
     mScroll -= clicks * LLViewerChat::getChatFont()->getLineHeight() * 3;
     mScroll = llclamp(mScroll, 0, llmax(0, mContentHeight - contentRect().getHeight()));
     return true;
+}
+
+const SKOutlineLayer* SKFloaterLocalChat::objectGlyph(const LLUUID& speaker, F64 now)
+{
+    if (speaker.isNull())
+    {
+        return nullptr;
+    }
+    if (mObjectGlyphs.size() > MAX_MESSAGES)
+    {
+        mObjectGlyphs.clear(); // more speakers than the log holds; the shown ones are looked up again
+    }
+    ObjectGlyph& g = mObjectGlyphs[speaker];
+    // Asking keeps the capture alive while its cards are drawn; once they fade it expires on its own.
+    if (now - g.mChecked > GLYPH_CHECK_SECONDS)
+    {
+        g.mChecked = now;
+        g.mShown = false;
+        LLViewerObject* obj = gObjectList.findObject(speaker);
+        LLViewerObject* root = obj && !obj->isDead() ? obj->getRootEdit() : nullptr;
+        if (root && !root->isAvatar())
+        {
+            const SKOutlineGlyph* glyph = SKOutlineCapture::glyphFor(root->getID(), SKOutlinePolicy::View::SIDE);
+            if (glyph && !glyph->layers.empty() && glyph->layers[0].texture)
+            {
+                g.mLayer = glyph->layers[0];
+                g.mShown = true;
+            }
+        }
+    }
+    return g.mShown ? &g.mLayer : nullptr;
+}
+
+void SKFloaterLocalChat::drawObjectIcon(const Message& first, S32 left, S32 top, const LLColor4& color, F64 now)
+{
+    const SKOutlineLayer* layer = objectGlyph(first.mFromID, now);
+    const F32 w = layer ? layer->x1 - layer->x0 : 0.f;
+    const F32 h = layer ? layer->y1 - layer->y0 : 0.f;
+    if (w <= 0.f || h <= 0.f)
+    {
+        gl_rect_2d(left, top, left + DISC, top - DISC, color);
+        return;
+    }
+
+    // The silhouette in the speaker's colour over a dimmed square, fitted to the square with its aspect kept.
+    LLColor4 back = color;
+    back.mV[VALPHA] *= GLYPH_BACK_ALPHA;
+    gl_rect_2d(left, top, left + DISC, top - DISC, back);
+    const F32 scale = (F32)DISC / llmax(w, h);
+    const F32 gw = w * scale;
+    const F32 gh = h * scale;
+    const F32 x0 = (F32)left + ((F32)DISC - gw) * 0.5f;
+    const F32 y0 = (F32)(top - DISC) + ((F32)DISC - gh) * 0.5f;
+    gGL.getTextureSlot(0)->bindManual(ALTextureSlot::TT_TEXTURE, layer->texture);
+    gGL.color4fv(color.mV);
+    gGL.begin(LLRender::TRIANGLE_STRIP);
+    gGL.texCoord2f(layer->u0, layer->v0);
+    gGL.vertex2f(x0, y0);
+    gGL.texCoord2f(layer->u1, layer->v0);
+    gGL.vertex2f(x0 + gw, y0);
+    gGL.texCoord2f(layer->u0, layer->v1);
+    gGL.vertex2f(x0, y0 + gh);
+    gGL.texCoord2f(layer->u1, layer->v1);
+    gGL.vertex2f(x0 + gw, y0 + gh);
+    gGL.end();
+    gGL.getTextureSlot(0)->unbind();
 }
 
 void SKFloaterLocalChat::onStyleMenu(const LLSD& param)

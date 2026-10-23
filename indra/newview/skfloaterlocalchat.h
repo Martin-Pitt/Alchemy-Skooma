@@ -28,6 +28,7 @@
 #include "llfloater.h"
 #include "llchat.h"
 #include "llfontgl.h"
+#include "skoutlinecapture.h"
 
 #include <deque>
 
@@ -127,6 +128,9 @@ private:
     /// The url under a point in the floater, empty when none.
     std::string urlAt(S32 x, S32 y) const;
     void drawRowText(const Row& row, S32 x, S32 y, F32 alpha, LLFontGL::ShadowType shadow) const;
+    /// An object speaker's side-view glyph, null until the capture has one.
+    const SKOutlineLayer* objectGlyph(const LLUUID& speaker, F64 now);
+    void drawObjectIcon(const Message& first, S32 left, S32 top, const LLColor4& color, F64 now);
     void onStyleMenu(const LLSD& param);
     bool onStyleCheck(const LLSD& param) const;
 
@@ -152,6 +156,15 @@ private:
     bool mWasExpanded = false;
     F64 mCollapsedAt = -1.0e9; // when the log last stopped being shown whole
     boost::signals2::connection mFontConnection;
+
+    // An object speaker's linkset root and the base layer of its glyph, looked at a few times a second.
+    struct ObjectGlyph
+    {
+        F64 mChecked = -1.0e9;
+        bool mShown = false;
+        SKOutlineLayer mLayer;
+    };
+    std::unordered_map<LLUUID, ObjectGlyph> mObjectGlyphs;
 };
 
 #endif // SK_FLOATERLOCALCHAT_H
