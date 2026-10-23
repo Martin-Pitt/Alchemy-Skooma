@@ -95,7 +95,7 @@ namespace skworld
 
     LLColor4 airFlagsColour(U8 flags)
     {
-        if (flags & AirGap::FLIGHT)
+        if (flags & (AirGap::CUE_STAIR | AirGap::CUE_RAMP))
         {
             return LLColor4(1.f, 0.3f, 0.9f, 1.f);
         }

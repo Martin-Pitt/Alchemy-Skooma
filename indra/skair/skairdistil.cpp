@@ -443,7 +443,7 @@ namespace skworld
                                 for (U32 j = cursor[k]; j < end[k]; ++j)
                                 {
                                     const GapAgg o = below_gaps.agg(j);
-                                    if ((below_gaps.state(j) & MERGE) && (o.mFlags & ~AirGap::AVATAR_FLOOR) == (a.mFlags & ~AirGap::AVATAR_FLOOR) &&
+                                    if ((below_gaps.state(j) & MERGE) && (o.mFlags & ~AirGap::HINTS) == (a.mFlags & ~AirGap::HINTS) &&
                                         std::max(a.mCeilMax, o.mCeilMax) - std::min(a.mCeilMin, o.mCeilMin) <= climb && std::abs(o.mFloor - want) <= climb)
                                     {
                                         pick[k] = j;
@@ -462,7 +462,7 @@ namespace skworld
                             for (S32 k = 0; k < 4; ++k)
                             {
                                 const GapAgg o = below_gaps.agg(four[k]);
-                                m.mFlags |= o.mFlags & AirGap::AVATAR_FLOOR;
+                                m.mFlags |= o.mFlags & AirGap::HINTS;
                                 m.mFloorMin = std::min(m.mFloorMin, o.mFloorMin);
                                 m.mFloorMax = std::max(m.mFloorMax, o.mFloorMax);
                                 m.mCeilMin = std::min(m.mCeilMin, o.mCeilMin);
@@ -1111,8 +1111,8 @@ namespace skworld
     {
         // Struct formats as Python's struct module reads them.
         std::ostringstream o;
-        o << "{\"leaf_order\":\"morton\",\"leaf_nesting\":\"parent\",\"leaf\":\"<HHBBHI\",\"gap\":\"<HHBBbb\",\"slope_q\":" << AIR_SLOPE_Q << ",\"floor_at\":\"floor + floor((sx * (2 * (ix - x) + 1 - s) + sy * (2 * (iy - y) + 1 - s) + q) / (2 * q))\",\"start\":\"<I\",\"top\":\"<HH\",\"face\":\"<I\",\"flags\":{\"top\":1,\"open\":2,\"own_sky\":4,"
-             "\"flight\":8,\"area_shift\":4,\"area_mask\":48,\"avatar_floor\":64},\"ceiling_open\":"
+        o << "{\"version\":" << AIR_VERSION << ",\"leaf_order\":\"morton\",\"leaf_nesting\":\"parent\",\"leaf\":\"<HHBBHI\",\"gap\":\"<HHBBbb\",\"slope_q\":" << AIR_SLOPE_Q << ",\"floor_at\":\"floor + floor((sx * (2 * (ix - x) + 1 - s) + sy * (2 * (iy - y) + 1 - s) + q) / (2 * q))\",\"start\":\"<I\",\"top\":\"<HH\",\"face\":\"<I\",\"flags\":{\"top\":1,\"open\":2,\"own_sky\":4,"
+             "\"cue_stair\":8,\"area_shift\":4,\"area_mask\":48,\"avatar_floor\":64,\"cue_ramp\":128},\"ceiling_open\":"
           << AIR_CEILING_OPEN
           << ",\"face_bits\":{\"key_shift\":5,\"offset_mask\":31,\"steps\":" << FACE_OFFSET_STEPS
           << ",\"key\":\"column*4+side\",\"column\":\"ix+iy*width\",\"sides\":[\"neg_x\",\"pos_x\",\"neg_y\",\"pos_y\"]},\"sections\":[[\"leaves\",\"leaf\"," << air.mLeaves.size() << "],[\"gaps\",\"gap\"," << air.mGaps.size() << "]";

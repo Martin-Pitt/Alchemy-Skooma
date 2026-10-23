@@ -195,6 +195,45 @@ namespace
         { INFO("no air unless asked"); TileAirResult none; rasteriseTile(in, none); CHECK((!none.mAir && !none.mAirBuilt)); }
     }
 
+    TEST_CASE("skair: a slab named a stair carries the stair cue on its floor, and the cue does not split the air", "[skair]")
+    {
+        TileInput in;
+        in.mAirPad = airPadCells(0.25f);
+        in.mZMin = -1.f;
+        in.mZMax = 8.f;
+        in.mCell = 0.25f;
+        in.mAir = true;
+        auto slab = std::make_shared<Record>();
+        slab->mShape = Shape::BOX;
+        slab->mCenter.set(16.f, 16.f, 0.25f);
+        slab->mHalf.set(4.f, 4.f, 0.25f);
+        slab->mAxes[0].set(1, 0, 0);
+        slab->mAxes[1].set(0, 1, 0);
+        slab->mAxes[2].set(0, 0, 1);
+        slab->mMin.set(12.f, 12.f, 0.f);
+        slab->mMax.set(20.f, 20.f, 0.5f);
+        slab->mSolid = true;
+        slab->mRoot.generate();
+        in.mRecords.push_back(slab);
+        TileAirResult plain;
+        rasteriseTile(in, plain);
+        in.mRootCues.push_back({ slab->mRoot, CUE_STAIR });
+        TileAirResult named;
+        rasteriseTile(in, named);
+        REQUIRE((plain.mAir && named.mAir));
+        U32 stair = 0, ramp = 0;
+        for (const AirGap& g : named.mAir->mGaps)
+        {
+            stair += (g.mFlags & AirGap::CUE_STAIR) != 0;
+            ramp += (g.mFlags & AirGap::CUE_RAMP) != 0;
+        }
+        CHECK(stair > 0u);
+        CHECK(ramp == 0u);
+        // The hint rides on the gaps as AVATAR_FLOOR does: the leaves are the same either way.
+        CHECK(named.mAir->mLeaves.size() == plain.mAir->mLeaves.size());
+        CHECK(named.mAir->mGaps.size() == plain.mAir->mGaps.size());
+    }
+
     TEST_CASE("skair: clearance is the 2/3 chamfer to a step no one can climb and the grid's edge is no wall", "[skair]")
     {
         // A 5 x 5 floor whose middle column stands 2.5 m up, past the 0.75 m climb.

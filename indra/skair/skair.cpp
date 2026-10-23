@@ -66,6 +66,7 @@ namespace skworld
                         gap.mFlags = static_cast<U8>(AirGap::TOP | (areaOfCode(raster.mCode[k]) << AirGap::AREA_SHIFT));
                     }
                     gap.mFlags |= (walk & AVATAR_WALK) ? AirGap::AVATAR_FLOOR : 0;
+                    gap.mFlags |= (walk & WALK_CUE_STAIR) ? AirGap::CUE_STAIR : (walk & WALK_CUE_RAMP) ? AirGap::CUE_RAMP : 0;
                     if (k + 1 < last)
                     {
                         gap.mCeiling = raster.mBottom[k + 1];

@@ -48,10 +48,13 @@ namespace skworld
             TOP = 1 << 0,       ///< the solid under the gap is floor at the air's slope and headroom
             OPEN = 1 << 1,      ///< nothing above within the tile; mCeiling is the tile's top
             OWN_SKY = 1 << 2,   ///< nothing above within this tile's column: the column's top gap
-            FLIGHT = 1 << 3,    ///< on a stair flight; reserved, filled by the flight records
+            CUE_STAIR = 1 << 3, ///< the surface under the gap is named a stair: a hint, not a flight (flights are the rooms layer's)
             AREA_SHIFT = 4,     ///< two bits of the Recast area under the gap, 0 when it is not floor
             AREA_MASK = 3 << AREA_SHIFT,
             AVATAR_FLOOR = 1 << 6,  ///< AVATAR walks the solid under the gap, before its erosion
+            CUE_RAMP = 1 << 7,  ///< the surface under the gap is named a ramp
+            /// Hints a merge of gaps ORs up rather than tells them apart by.
+            HINTS = AVATAR_FLOOR | CUE_STAIR | CUE_RAMP,
         };
         U16 mFloor = 0;
         U16 mCeiling = 0;
@@ -64,6 +67,9 @@ namespace skworld
     };
 
     constexpr S32 AIR_SLOPE_Q = 64;     ///< slope steps per height unit per cell
+
+    /// The air's version: what an air built by another reads as. 2: the column raster, the cue bits in place of FLIGHT.
+    constexpr U32 AIR_VERSION = 2;
 
     /// Division rounding towards negative infinity, for positive b.
     inline S64 floorDiv(S64 a, S64 b)
