@@ -22,7 +22,10 @@
 
 #include "skmeshhavokshape.h"
 
+#include "llcontrol.h"
 #include "llframetimer.h"
+#include "llviewercontrol.h"
+#include "v4color.h"
 #include "llmeshrepository.h"
 #include "llrender.h"
 #include "llvertexbuffer.h"
@@ -77,6 +80,26 @@ namespace
                     shape->mTriangles.push_back(submesh.mPositions[submesh.mIndices[ref.mTriangle * 3 + v]]);
                 }
             }
+
+            // The simulator fits the physics mesh's bounds to the object's box, each axis on its own: the same block
+            // comes back for an upload at any scale, and its MOPP origin is the physics mesh's lowest corner.
+            LLVector3 lo(F32_MAX, F32_MAX, F32_MAX);
+            LLVector3 hi(-F32_MAX, -F32_MAX, -F32_MAX);
+            for (const SKPhysicsMeshSubmesh& submesh : physics_mesh.mSubmeshes)
+            {
+                for (const LLVector3& p : submesh.mPositions)
+                {
+                    update_min_max(lo, hi, p);
+                }
+            }
+            for (LLVector3& p : shape->mTriangles)
+            {
+                for (S32 k = 0; k < 3; ++k)
+                {
+                    const F32 range = hi.mV[k] - lo.mV[k];
+                    p.mV[k] = range > 1e-6f ? (p.mV[k] - lo.mV[k]) / range - 0.5f : 0.f;
+                }
+            }
             shape->mHasMopp = true;
         }
         out = shape;
@@ -119,6 +142,36 @@ bool skRenderPhysicsHavok(const LLUUID& mesh_id, const LLColor4& color)
     gGL.diffuseColor4fv(color.mV);
     LLVertexBuffer::drawArrays(LLRender::TRIANGLES, shape->mTriangles);
     return true;
+}
+
+LLColor4 skPhysicsShapeColor(SKPhysicsShapeSource source, const LLColor4& cost_color, bool wireframe)
+{
+    static LLCachedControl<bool> by_type(gSavedSettings, "SKPhysicsShapeTypes", false);
+    if (!by_type)
+    {
+        return cost_color;
+    }
+    LLColor4 color;
+    switch (source)
+    {
+    case SKPhysicsShapeSource::SIMULATOR:    color.set(0.2f, 0.9f, 0.3f, 1.f); break;
+    case SKPhysicsShapeSource::PHYSICS_MESH: color.set(0.2f, 0.8f, 1.f, 1.f); break;
+    case SKPhysicsShapeSource::HULLS:        color.set(1.f, 0.55f, 0.1f, 1.f); break;
+    case SKPhysicsShapeSource::MESH_HULL:    color.set(1.f, 0.9f, 0.2f, 1.f); break;
+    case SKPhysicsShapeSource::PRIM_HULL:    color.set(0.3f, 0.4f, 1.f, 1.f); break;
+    case SKPhysicsShapeSource::PRIM_MESH:    color.set(0.75f, 0.3f, 1.f, 1.f); break;
+    case SKPhysicsShapeSource::PRIMITIVE:    color.set(0.8f, 0.8f, 0.8f, 1.f); break;
+    }
+    // The overlay's wireframe pass is the darker edge over the fill, as with the cost colours.
+    if (wireframe)
+    {
+        color.setVec(color.mV[VRED] * 0.5f, color.mV[VGREEN] * 0.5f, color.mV[VBLUE] * 0.5f, cost_color.mV[VALPHA]);
+    }
+    else
+    {
+        color.mV[VALPHA] = cost_color.mV[VALPHA];
+    }
+    return color;
 }
 
 std::shared_ptr<const SKPhysicsHavokShape> SKPhysicsHavokCache::get(const LLUUID& mesh_id)

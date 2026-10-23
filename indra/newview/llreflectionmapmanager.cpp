@@ -47,10 +47,13 @@
 #include "llviewermenufile.h"
 #include "llnotificationsutil.h"
 #include "llagent.h"
-#include "sknavmesh.h"
-#include "sknavrooms.h"
-#include "sknavprobes.h"
-#include "skclusterprobes.h" // <SK:Nexii> Cluster probes
+// <SK:Nexii> Room and cluster probes
+#include "skclusterprobes.h"
+#include "skroomprobes.h"
+#include "skrooms.h"
+#include "skroomsprobes.h"
+#include "skworldcensus.h"
+// </SK:Nexii>
 
 #if LL_WINDOWS
 #pragma warning (push)
@@ -181,8 +184,9 @@ static void touch_default_probe(LLReflectionMap* probe)
 }
 
 LLReflectionMapManager::LLReflectionMapManager()
-: mSolids(new sknav::SolidLattice),
-  mClusterProbes(std::make_unique<SKClusterProbes>()) // <SK:Nexii> Cluster probes
+: mSolids(new skworld::SolidLattice), // <SK:Nexii> Room probes
+  mClusterProbes(std::make_unique<SKClusterProbes>()), // <SK:Nexii> Cluster probes
+  mRoomProbes(std::make_unique<SKRoomProbes>()) // <SK:Nexii> Room probes
 {
     mDynamicProbeCount = LL_MAX_REFLECTION_PROBE_COUNT;
     initCubeFree();
@@ -234,9 +238,9 @@ struct CompareProbeDistance
         {
             return lhs->mClusterFill;
         }
-        if (lhs->mNavRooms != rhs->mNavRooms)
+        if (lhs->mRoomProbe != rhs->mRoomProbe)
         {
-            return lhs->mNavRooms;
+            return lhs->mRoomProbe;
         }
         return lhs->mDistance < rhs->mDistance;
     }
@@ -268,9 +272,9 @@ static bool check_priority(LLReflectionMap* a, LLReflectionMap* b)
         {
             return a->mClusterFill;
         }
-        if (a->mNavRooms != b->mNavRooms)
+        if (a->mRoomProbe != b->mRoomProbe)
         {
-            return a->mNavRooms;
+            return a->mRoomProbe;
         }
         return a->mDistance < b->mDistance;
     }
@@ -439,7 +443,7 @@ void LLReflectionMapManager::update()
     LLReflectionMap* oldestProbe = nullptr;
     LLReflectionMap* oldestOccluded = nullptr;
 
-    SKNavMesh::instance().placeReflectionProbes();
+    updateRoomProbes(); // <SK:Nexii> Room probes
     updateCensusPlacement();
     updateClusterProbes(); // <SK:Nexii> Cluster probes
 
@@ -513,7 +517,7 @@ void LLReflectionMapManager::update()
         }
     }
 
-    updateRelevanceLinks(); // <SK:Nexii> Probe links: relevance flips (eclipse, census, nav rooms) rebuild the graph
+    updateRelevanceLinks(); // <SK:Nexii> Probe links: relevance flips (eclipse, census, room probes) rebuild the graph
 
     // A probe that stopped being relevant partway through its twelve passes is dropped rather than
     // finished, by the same rule the scheduling loop below uses to skip one. Every remaining pass
@@ -733,7 +737,7 @@ void LLReflectionMapManager::update()
         LLReflectionMap* probe = oldestProbe;
         llassert(probe->mCubeIndex != -1);
 
-        // <SK:Nexii> Navmesh rooms probes: a probe the census pass has anchored gets its
+        // <SK:Nexii> Room probes: a probe the census pass has anchored gets its
         // placement from that pass -- re-deriving it here would reset the radius the pass
         // cleared and restart the capture on every refresh.
         if (!probe->mGridPlacementChecked)
@@ -761,7 +765,7 @@ void LLReflectionMapManager::refreshSettings()
     mRenderReflectionProbeLevel = gSavedSettings.getS32("RenderReflectionProbeLevel");
     mRenderReflectionProbeCount = gSavedSettings.getU32("RenderReflectionProbeCount");
     mRenderReflectionProbeDynamicAllocation = gSavedSettings.getS32("RenderReflectionProbeDynamicAllocation");
-    mNavRoomsDirty = true; // <SK:Nexii> Navmesh rooms probes
+    mRoomProbesDirty = true; // <SK:Nexii> Room probes
 }
 
 LLReflectionMap* LLReflectionMapManager::addProbe(LLSpatialGroup* group)
@@ -785,7 +789,7 @@ LLReflectionMap* LLReflectionMapManager::addProbe(LLSpatialGroup* group)
     if (group)
     {
         probe->mOrigin = group->getOctreeNode()->getCenter();
-        mNavRoomsDirty = true; // <SK:Nexii> Navmesh rooms probes
+        mRoomProbesDirty = true; // <SK:Nexii> Room probes
     }
 
     if (gCubeSnapshot)
@@ -936,13 +940,13 @@ LLReflectionMap* LLReflectionMapManager::registerViewerObject(LLViewerObject* vo
     return probe;
 }
 
-// <SK:Nexii> Navmesh rooms probes
-LLReflectionMap* LLReflectionMapManager::registerNavRoomsProbe(const LLVector3& origin, F32 radius)
+// <SK:Nexii> Room probes
+LLReflectionMap* LLReflectionMapManager::registerRoomProbe(const LLVector3& origin, F32 radius)
 {
     LLReflectionMap* probe = addProbe();
     if (probe)
     {
-        probe->mNavRooms = true;
+        probe->mRoomProbe = true;
         probe->mOrigin.load3(origin.mV);
         probe->mRadius = radius;
     }
@@ -966,6 +970,54 @@ std::string LLReflectionMapManager::clusterProbesStatsLine() const
     return mClusterProbes->statsLine();
 }
 
+std::string LLReflectionMapManager::roomProbesStatsLine() const
+{
+    return mRoomProbes->statsLine();
+}
+
+void LLReflectionMapManager::updateRoomProbes()
+{
+    if (!mCensusSectionAdded)
+    {
+        skworld::CensusSection section;
+        section.mName = "probes";
+        section.mWrite = [this](std::ostream& out) { writeCensusProbes(out); };
+        section.mRead = [](const LLSD&, U32) { return true; };
+        SKWorldCensus::instance().addCensusSection(section);
+        mCensusSectionAdded = true;
+    }
+    mRoomProbes->update(SKRooms::instance().view());
+}
+
+// Every probe held, global, as the census file's probes section: the kinds are the file's.
+void LLReflectionMapManager::writeCensusProbes(std::ostream& out) const
+{
+    static const char* const KIND_NAMES[] = { "default", "placed_sphere", "placed_box", "octree", "nav_sphere", "nav_box", "cluster" };
+    out << '[';
+    bool first = true;
+    for (const LLPointer<LLReflectionMap>& probe : mProbes)
+    {
+        const SKProbeKind kind = getSKProbeKind(probe);
+        const LLVector3d origin = gAgent.getPosGlobalFromAgent(LLVector3(probe->mOrigin.getF32ptr()));
+        out << (first ? "" : ",") << "{\"kind\":\"" << (kind <= SK_PROBE_CLUSTER ? KIND_NAMES[kind] : "unknown") << "\",\"object\":\""
+            << (probe->mViewerObject ? probe->mViewerObject->getID() : LLUUID::null) << "\",\"origin\":[" << origin.mdV[VX] << ','
+            << origin.mdV[VY] << ',' << origin.mdV[VZ] << "],\"radius\":" << probe->mRadius << ",\"priority\":" << probe->mPriority
+            << ",\"relevant\":" << (probe->isRelevant() ? "true" : "false") << ",\"suppressed\":"
+            << (probe->mSuppressedByRoomProbe ? "true" : "false") << ",\"inside_manual\":" << (probe->mInsideManualProbe ? "true" : "false")
+            << ",\"resident\":" << (probe->isActive() ? "true" : "false");
+        if (kind == SK_PROBE_PLACED_BOX && probe->mViewerObject)
+        {
+            const LLQuaternion rot = probe->mViewerObject->getRenderRotation();
+            const LLVector3 scale = probe->mViewerObject->getScale();
+            out << ",\"rotation\":[" << rot.mQ[VX] << ',' << rot.mQ[VY] << ',' << rot.mQ[VZ] << ',' << rot.mQ[VW] << "],\"scale\":["
+                << scale.mV[VX] << ',' << scale.mV[VY] << ',' << scale.mV[VZ] << ']';
+        }
+        out << '}';
+        first = false;
+    }
+    out << ']';
+}
+
 void LLReflectionMapManager::updateClusterProbes()
 {
     const auto census = SKWorldCensus::instance().snapshot();
@@ -979,20 +1031,20 @@ void LLReflectionMapManager::updateClusterProbes()
     mClusterProbes->update(*this, census, census && census == mSolidsCensus ? mSolids.get() : nullptr);
 }
 
-void LLReflectionMapManager::resizeNavRoomsProbe(LLReflectionMap* probe, F32 radius)
+void LLReflectionMapManager::resizeRoomProbe(LLReflectionMap* probe, F32 radius)
 {
     probe->mRadius = radius;
-    mNavRoomsDirty = true;
+    mRoomProbesDirty = true;
     updateNeighbors(probe);
 }
 
-void LLReflectionMapManager::staleNavRoomsProbe(LLReflectionMap* probe)
+void LLReflectionMapManager::staleRoomProbe(LLReflectionMap* probe)
 {
     constexpr F32 STALE_AGE_S = 60.f;
     probe->mLastUpdateTime = llmin(probe->mLastUpdateTime, (F32)gFrameTimeSeconds - STALE_AGE_S);
 }
 
-void LLReflectionMapManager::invalidateNavRoomsProbe(LLReflectionMap* probe)
+void LLReflectionMapManager::invalidateRoomProbe(LLReflectionMap* probe)
 {
     if (mUpdatingProbe == probe)
     {
@@ -1003,7 +1055,7 @@ void LLReflectionMapManager::invalidateNavRoomsProbe(LLReflectionMap* probe)
     probe->mComplete = false;
     probe->mFadeIn = 0.f;
     probe->mOccluded = false;
-    mNavRoomsDirty = true;
+    mRoomProbesDirty = true;
     updateNeighbors(probe);
 }
 
@@ -1026,19 +1078,19 @@ void LLReflectionMapManager::updateCensusPlacement()
     {
         // The scan the old index described goes with it: this is often its last holder, and
         // freeing a scan's triangle soup took seconds of one frame when it ran here.
-        auto retired = std::make_shared<std::pair<std::shared_ptr<sknav::SolidLattice>, std::shared_ptr<const SKCensusSnapshot>>>(
+        auto retired = std::make_shared<std::pair<std::shared_ptr<skworld::SolidLattice>, std::shared_ptr<const SKCensusSnapshot>>>(
             std::move(mSolids), std::move(mSolidsCensus));
         mSolids = mSolidJob.get();
         mSolidsCensus = std::move(mSolidJobCensus);
-        mNavRoomsDirty = true;
+        mRoomProbesDirty = true;
         workers->post([retired]() { retired->first.reset(); retired->second.reset(); });
     }
     if (!mSolidJob.valid() && census != mSolidsCensus)
     {
-        auto task = std::make_shared<std::packaged_task<std::shared_ptr<sknav::SolidLattice>()>>([census]()
+        auto task = std::make_shared<std::packaged_task<std::shared_ptr<skworld::SolidLattice>()>>([census]()
         {
             LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("rmmu - census lattice worker");
-            auto lattice = std::make_shared<sknav::SolidLattice>();
+            auto lattice = std::make_shared<skworld::SolidLattice>();
             if (census) lattice->rebuild(census->mRecords);
             return lattice;
         });
@@ -1051,28 +1103,28 @@ void LLReflectionMapManager::updateCensusPlacement()
     }
     // Stamp tests with the snapshot the index actually describes.
     census = mSolidsCensus;
-    const bool refresh = mNavRoomsDirty || gFrameTimeSeconds >= mNextCensusPlacement;
+    const bool refresh = mRoomProbesDirty || gFrameTimeSeconds >= mNextCensusPlacement;
     if (refresh)
     {
         mNextCensusPlacement = gFrameTimeSeconds + 1.0;
-        mNavRoomsDirty = false;
+        mRoomProbesDirty = false;
     }
     const U64 census_stamp = census ? census->mStamp : 0;
     if (!refresh && std::all_of(mProbes.begin(), mProbes.end(), [&](const auto& probe)
-        { return probe == mDefaultProbe || probe->mViewerObject || probe->mNavRooms || probe->mClusterFill ||
+        { return probe == mDefaultProbe || probe->mViewerObject || probe->mRoomProbe || probe->mClusterFill ||
                  (probe->mGridPlacementChecked && probe->mGridCensusStamp == census_stamp); }))
     {
         return;
     }
-    const sknav::ProbeParams params;
-    std::vector<sknav::ProbeInfluence> full_probes;
+    const skworld::ProbeParams params;
+    std::vector<skworld::ProbeInfluence> full_probes;
 
     for (const auto& probe : mProbes)
     {
         if (probe->mViewerObject && !probe->mViewerObject->isDead())
         {
             probe->syncToViewerObject();
-            sknav::ProbeInfluence inf;
+            skworld::ProbeInfluence inf;
             inf.mCentre.set(probe->mOrigin.getF32ptr());
             inf.mRadius = probe->mRadius;
             inf.mBox = probe->mViewerObject->getReflectionProbeIsBox();
@@ -1086,9 +1138,9 @@ void LLReflectionMapManager::updateCensusPlacement()
             }
             full_probes.push_back(inf);
         }
-        else if (probe->mNavRooms && probe->isRelevant())
+        else if (probe->mRoomProbe && probe->isRelevant())
         {
-            sknav::ProbeInfluence inf;
+            skworld::ProbeInfluence inf;
             inf.mCentre.set(probe->mOrigin.getF32ptr());
             inf.mRadius = probe->mRadius;
             full_probes.push_back(inf);
@@ -1102,7 +1154,7 @@ void LLReflectionMapManager::updateCensusPlacement()
     const auto solid_checks_started = std::chrono::steady_clock::now();
     for (auto& probe : mProbes)
     {
-        if (probe == mDefaultProbe || probe->mViewerObject || probe->mNavRooms || probe->mClusterFill) continue;
+        if (probe == mDefaultProbe || probe->mViewerObject || probe->mRoomProbe || probe->mClusterFill) continue;
         if (!refresh && probe->mGridPlacementChecked && probe->mGridCensusStamp == census_stamp) continue;
         const LLVector3 old(probe->mOrigin.getF32ptr());
         if (!probe->mGridPlacementChecked)
@@ -1154,12 +1206,12 @@ void LLReflectionMapManager::updateCensusPlacement()
         }
         // Full probes have already claimed their space and their slots. The
         // second pass only covers what remains, including high/unwalkable air.
-        radius = sknav::clearRadius(chosen, radius, full_probes, params);
+        radius = skworld::clearRadius(chosen, radius, full_probes, params);
         const bool covered = radius <= 0.f;
         const bool changed = dist_vec_squared(old, chosen) > 0.0001f || fabsf(radius - probe->mRadius) > 0.001f ||
-                             probe->mBlockedByCensus != blocked || probe->mSuppressedByNavRooms != covered;
+                             probe->mBlockedByCensus != blocked || probe->mSuppressedByRoomProbe != covered;
         probe->mBlockedByCensus = blocked;
-        probe->mSuppressedByNavRooms = covered;
+        probe->mSuppressedByRoomProbe = covered;
         if (changed)
         {
             // Never finish a capture whose first faces came from another position.
@@ -1179,7 +1231,7 @@ void LLReflectionMapManager::updateCensusPlacement()
     }
 }
 
-void LLReflectionMapManager::getNavRoomsContext(std::vector<LLReflectionMap*>& placed) const
+void LLReflectionMapManager::getRoomProbesContext(std::vector<LLReflectionMap*>& placed) const
 {
     placed.clear();
     for (const auto& probe : mProbes)
@@ -1207,7 +1259,7 @@ LLReflectionMapManager::SKProbeKind LLReflectionMapManager::getSKProbeKind(const
     {
         return SK_PROBE_CLUSTER;
     }
-    return probe->mNavRooms ? SK_PROBE_NAV_SPHERE : SK_PROBE_OCTREE;
+    return probe->mRoomProbe ? SK_PROBE_ROOM_SPHERE : SK_PROBE_OCTREE;
 }
 // </SK:Nexii>
 
@@ -1284,7 +1336,7 @@ void LLReflectionMapManager::doProbeUpdate()
         if (isRadiancePass())
         {
             mUpdatingProbe->mComplete = true;
-            mNavRoomsDirty = mNavRoomsDirty || mUpdatingProbe->mGroup != nullptr; // <SK:Nexii> Navmesh rooms probes: its origin has settled
+            mRoomProbesDirty = mRoomProbesDirty || mUpdatingProbe->mGroup != nullptr; // <SK:Nexii> Room probes: its origin has settled
             mUpdatingProbe = nullptr;
             mRadiancePass = false;
         }
@@ -1745,16 +1797,16 @@ void LLReflectionMapManager::updateRelevanceLinks()
     }
 }
 
-U32 LLReflectionMapManager::countNavOctreeLinks() const
+U32 LLReflectionMapManager::countRoomOctreeLinks() const
 {
     U32 links = 0;
     for (const auto& probe : mProbes)
     {
-        if (probe->mNavRooms && probe->isRelevant())
+        if (probe->mRoomProbe && probe->isRelevant())
         {
             for (const auto& other : probe->mNeighbors)
             {
-                links += (other != mDefaultProbe && !other->mViewerObject && !other->mNavRooms && !other->mClusterFill) ? 1 : 0;
+                links += (other != mDefaultProbe && !other->mViewerObject && !other->mRoomProbe && !other->mClusterFill) ? 1 : 0;
             }
         }
     }
@@ -1889,7 +1941,7 @@ void LLReflectionMapManager::updateUniforms()
             refmap->mMinDepth); // the sort key; the shader's scan stops past the pixel's depth
 
         // <SK:Nexii> Probe volume display: the kind rides in bits 24-27 of refParams.w, raw, only while the display is on.
-        // Bits 0-15 stay free for the navmesh room box plan; with a kind set the pattern is a normal float, never a denormal.
+        // Bits 0-15 stay free for the room box plan; with a kind set the pattern is a normal float, never a denormal.
         // Bit 28 marks a census cluster fill for the shader's tiers (skProbeTier), always.
         static LLCachedControl<bool> render_ref_probe_volumes(gSavedSettings, "RenderReflectionProbeVolumes");
         if (render_ref_probe_volumes || refmap->mClusterFill)
@@ -2139,8 +2191,8 @@ namespace
         case LLReflectionMapManager::SK_PROBE_PLACED_SPHERE: return LLColor4(1.f, 0.25f, 0.85f, 1.f);
         case LLReflectionMapManager::SK_PROBE_PLACED_BOX: return LLColor4(1.f, 0.55f, 0.1f, 1.f);
         case LLReflectionMapManager::SK_PROBE_OCTREE: return LLColor4(0.1f, 0.85f, 1.f, 1.f);
-        case LLReflectionMapManager::SK_PROBE_NAV_SPHERE: return LLColor4(0.3f, 1.f, 0.35f, 1.f);
-        case LLReflectionMapManager::SK_PROBE_NAV_BOX: return LLColor4(1.f, 0.95f, 0.2f, 1.f);
+        case LLReflectionMapManager::SK_PROBE_ROOM_SPHERE: return LLColor4(0.3f, 1.f, 0.35f, 1.f);
+        case LLReflectionMapManager::SK_PROBE_ROOM_BOX: return LLColor4(1.f, 0.95f, 0.2f, 1.f);
         case LLReflectionMapManager::SK_PROBE_CLUSTER: return LLColor4(0.55f, 0.45f, 1.f, 1.f);
         default: return LLColor4(0.7f, 0.7f, 0.7f, 1.f);
         }
@@ -2576,7 +2628,7 @@ void LLReflectionMapManager::cleanup()
     mReflectionMaps.clear();
     abandonProbeUpdate();
 
-    // <SK:Nexii> Navmesh rooms probes: join the solids pool here, as gPipeline is destroyed after the fiber machinery.
+    // <SK:Nexii> Room probes: join the solids pool here, as gPipeline is destroyed after the fiber machinery.
     if (mSolidWorkers)
     {
         mSolidWorkers->close();

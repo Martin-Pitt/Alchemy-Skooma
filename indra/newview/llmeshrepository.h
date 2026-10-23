@@ -1031,7 +1031,7 @@ public:
     LLModel::Decomposition* getDecomposition(const LLUUID& mesh_id);
     void fetchPhysicsShape(const LLUUID& mesh_id);
     bool hasPhysicsShape(const LLUUID& mesh_id);
-    // <SK:Nexii> Navmesh census (skphysicsshape.cpp): the asset's physics mesh block size, 0 when it has none and -1 until its header is in
+    // <SK:Nexii> physics shapes (skphysicsshape.cpp): the asset's physics mesh block size, 0 when it has none and -1 until its header is in
     S32 physicsMeshSize(const LLUUID& mesh_id) const
     {
         const LLMeshHeader* header = mHeaderCache.findValid(mesh_id);

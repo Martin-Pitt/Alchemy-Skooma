@@ -36,6 +36,7 @@
 #include "lltimer.h"
 #include "llviewercontrol.h"
 #include "llviewerregion.h"
+#include "skworldtrace.h"
 
 #include <cstdio>
 #include <memory>
@@ -84,6 +85,20 @@ namespace
         const int n = snprintf(tmp, sizeof(tmp), fmt, v);
         out.append(tmp, n > 0 ? llmin<size_t>(n, sizeof(tmp) - 1) : 0);
     }
+
+    const char* TRACE_SINK = "skmaprecorder";
+
+    /// What the census, air and rooms trace, framed as the recorder's own lines are.
+    void traceLine(const std::string& body)
+    {
+        sBuffer += "{\"f\":";
+        sBuffer += std::to_string(LLFrameTimer::getFrameCount());
+        sBuffer += ",\"s\":";
+        appendReal(sBuffer, LLTimer::getTotalSeconds() - sStarted, "%.4f");
+        sBuffer += ',';
+        sBuffer += body;
+        sBuffer += "}\n";
+    }
 }
 
 void SKMapRecorder::start()
@@ -107,6 +122,7 @@ void SKMapRecorder::start()
     sLimit = static_cast<U64>(llmax<U32>(max_mb, 1)) << 20;
     sBuffer.clear();
     sRecording = true;
+    SKWorldTrace::addSink(TRACE_SINK, &traceLine);
     Line("header").num("version", 1).str("date", LLDate::now().asString()).num("limit", static_cast<S64>(sLimit));
     LL_INFOS("SKMapRecorder") << "recording to " << sPath << LL_ENDL;
 }
@@ -118,6 +134,7 @@ void SKMapRecorder::stop()
         return;
     }
     Line("end");
+    SKWorldTrace::removeSink(TRACE_SINK);
     sRecording = false;
     flush();
     sFile.reset();

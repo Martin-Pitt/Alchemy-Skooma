@@ -1,6 +1,6 @@
 /**
  * @file skphysicsshape.h
- * @brief What a volume's physics shape is, decided once for the debug renderer and the navmesh census.
+ * @brief What a volume's physics shape is, decided once for the physics display and whatever else reads it.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Alchemy Viewer Source Code
@@ -26,13 +26,26 @@
 #define SK_PHYSICSSHAPE_H
 
 #include "llphysicsshapebuilderutil.h"
-#include "sknavtypes.h"
 
 #include <memory>
 #include <vector>
 
 class LLVOVolume;
 class SKPhysicsHavokShape;
+
+/// Analytic shape or triangle soup.
+enum class SKShapeKind : U8 { BOX, SPHERE, CYLINDER, TRIANGLES };
+
+/// How exact a shape's geometry is.
+enum class SKShapeProvenance : U8
+{
+    EXACT,      ///< the physics shape itself (analytic, physics mesh, prim volume)
+    HULL,       ///< a convex decomposition hull
+    BOX,        ///< a placeholder while the asset is still fetching
+    RENDER,     ///< the rendered volume faces (surrounds)
+    BASE_HULL,  ///< the single base hull, when there is no decomposition
+    SIM,        ///< the triangles the simulator kept for a mesh (its physics_havok section)
+};
 
 /// The decision: the object's physics type and the shape specification the
 /// physics engine would build from it.
@@ -44,7 +57,7 @@ struct SKPhysicsShape
 
 /// False when the volume has no physics shape at all (type NONE, or flexible).
 /// Otherwise fills the decision. This is the only place that decision is made,
-/// so the physics-shape overlay and the census cannot disagree.
+/// so the physics-shape overlay and its other readers cannot disagree.
 bool skPhysicsShapeClassify(LLVOVolume* volume, SKPhysicsShape& out);
 
 /// An estimate of the server's physics weight for the shape, fitted to
@@ -61,8 +74,8 @@ F32 skPhysicsShapeCostFraction(F32 cost);
 /// TRIANGLES carry three vertices per triangle.
 struct SKShapeGeometry
 {
-    sknav::Shape mShape = sknav::Shape::TRIANGLES;
-    sknav::Provenance mProvenance = sknav::Provenance::EXACT;
+    SKShapeKind mShape = SKShapeKind::TRIANGLES;
+    SKShapeProvenance mProvenance = SKShapeProvenance::EXACT;
     LLVector3 mCenter;
     LLVector3 mHalf;
     std::vector<LLVector3> mTriangles;

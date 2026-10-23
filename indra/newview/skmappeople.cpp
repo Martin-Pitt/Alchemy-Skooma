@@ -49,7 +49,7 @@
 #include "lljoint.h"
 #include "skmappalette.h"
 #include "sknetmap.h"
-#include "sknavmesh.h"
+#include "skrooms.h"
 #include "skworldcensus.h"
 
 namespace
@@ -98,7 +98,7 @@ F64 SKMapPeople::feetZ(LLVOAvatar* avatar)
 void SKMapPeople::initSingleton()
 {
     // Taking these here makes them outlive us at teardown.
-    SKNavMesh::instance();
+    SKRooms::instance();
     ALObjectPropertiesCache::instance();
     LLGroupMgr::instance();
     gIdleCallbacks.addFunction(&SKMapPeople::onIdle, nullptr);
@@ -201,9 +201,9 @@ void SKMapPeople::gatherVehicles()
         {
             mVehicleStamp = snap->mStamp;
             mVehicleRoots.clear();
-            for (const sknav::Feature& f : snap->mFeatures)
+            for (const skworld::Feature& f : snap->mFeatures)
             {
-                if (f.mKind == sknav::FeatureKind::VEHICLE)
+                if (f.mKind == skworld::FeatureKind::VEHICLE)
                 {
                     mVehicleRoots.insert(mVehicleRoots.end(), f.mRoots.begin(), f.mRoots.end());
                 }
@@ -223,12 +223,12 @@ void SKMapPeople::gatherVehicles()
         v.mPos = root->getPositionGlobal();
         v.mRot = root->getRotation();
         // The union of the parts' boxes in the root's frame, cached by the parts' local ids.
-        U64 key = sknav::mix(sknav::SEED, root->getChildren().size());
+        U64 key = skworld::mix(skworld::SEED, root->getChildren().size());
         for (const LLPointer<LLViewerObject>& child : root->getChildren())
         {
             if (!child->isAvatar())
             {
-                key = sknav::mix(key, child->getLocalID());
+                key = skworld::mix(key, child->getLocalID());
             }
         }
         auto cached = mBoxes.find(id);

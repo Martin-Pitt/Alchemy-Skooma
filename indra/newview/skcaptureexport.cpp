@@ -43,139 +43,19 @@
 #include "llviewerwindow.h"
 #include "llvoavatarself.h"
 #include "llvovolume.h"
+#include "skobjectfaces.h"
 
 #include <iomanip>
 #include <vector>
 
-namespace skcapture
+namespace
 {
-    // A PBR material's own mode wins over a legacy material's, and with
-    // neither the face is blended only if its tint or texture carries alpha.
-    const char* faceAlphaMode(const LLTextureEntry* te)
-    {
-        if (const LLGLTFMaterial* gltf = te->getGLTFRenderMaterial())
-        {
-            switch (gltf->mAlphaMode)
-            {
-                case LLGLTFMaterial::ALPHA_MODE_BLEND: return "pbr-blend";
-                case LLGLTFMaterial::ALPHA_MODE_MASK: return "pbr-mask";
-                default: return "pbr-opaque";
-            }
-        }
-        const LLMaterialPtr material = te->getMaterialParams();
-        if (material.notNull())
-        {
-            switch (material->getDiffuseAlphaMode())
-            {
-                case LLMaterial::DIFFUSE_ALPHA_MODE_NONE: return "none";
-                case LLMaterial::DIFFUSE_ALPHA_MODE_BLEND: return "blend";
-                case LLMaterial::DIFFUSE_ALPHA_MODE_MASK: return "mask";
-                case LLMaterial::DIFFUSE_ALPHA_MODE_EMISSIVE: return "emissive";
-                default: break;
-            }
-        }
-        return "default";
-    }
-
-    F32 facePbrAlpha(const LLTextureEntry* te)
-    {
-        const LLGLTFMaterial* gltf = te->getGLTFRenderMaterial();
-        return gltf ? gltf->mBaseColor.mV[VW] : 1.f;
-    }
-
-    S32 linkNumber(const LLViewerObject* object)
-    {
-        const LLViewerObject* parent = static_cast<const LLViewerObject*>(object->getParent());
-        if (!parent)
-        {
-            return 1;
-        }
-        S32 link = 2;
-        for (const LLPointer<LLViewerObject>& child : parent->getChildren())
-        {
-            if (child.get() == object)
-            {
-                break;
-            }
-            if (!child->isAvatar())
-            {
-                ++link;
-            }
-        }
-        return link;
-    }
-
-    // The image a face draws: a PBR face its material's base colour, any other its own texture.
-    const LLViewerTexture* faceImage(const LLViewerObject* object, U8 f)
-    {
-        const LLTextureEntry* te = object->getTE(f);
-        if (const LLFetchedGLTFMaterial* gltf = te ? dynamic_cast<const LLFetchedGLTFMaterial*>(te->getGLTFRenderMaterial()) : nullptr)
-        {
-            return gltf->mBaseColorTexture.get();
-        }
-        return object->getTEImage(f);
-    }
-
     // Whether a face's image has decoded: an undecoded image has no channels yet, and an
     // empty slot falls back to the default image, so its alpha is unknown either way.
     bool faceTextureLoaded(const LLViewerTexture* image)
     {
         return image && image->getComponents() > 0 && image != LLViewerFetchedTexture::sDefaultImagep.get();
     }
-
-    // Whether one face can be seen through: set to blend whatever its tint,
-    // faint under blend, or the stock transparent texture.
-    bool faceSeeThrough(const LLViewerObject* object, U8 f)
-    {
-        const LLTextureEntry* te = object->getTE(f);
-        if (!te)
-        {
-            return false;
-        }
-        F32 alpha = te->getColor().mV[VALPHA];
-        bool blended = true;
-        bool blend_mode = false;
-        if (const LLGLTFMaterial* gltf = te->getGLTFRenderMaterial())
-        {
-            // A PBR face draws its material's base colour texture, not the face's own texture.
-            if (gltf->mTextureId[LLGLTFMaterial::GLTF_TEXTURE_INFO_BASE_COLOR] == IMG_TRANSPARENT)
-            {
-                return true;
-            }
-            alpha *= gltf->mBaseColor.mV[VW];
-            blended = gltf->mAlphaMode == LLGLTFMaterial::ALPHA_MODE_BLEND;
-            blend_mode = blended;
-        }
-        else if (const LLMaterialPtr material = te->getMaterialParams(); material.notNull())
-        {
-            // A legacy material defaults to blend, so an opaque door with a
-            // normal map reads as blended; only a texture with alpha is glass.
-            const LLViewerTexture* image = faceImage(object, f);
-            blend_mode = material->getDiffuseAlphaMode() == LLMaterial::DIFFUSE_ALPHA_MODE_BLEND && image &&
-                         image->getComponents() == 4;
-        }
-        return te->getID() == IMG_TRANSPARENT || blend_mode || (blended && alpha < 0.95f);
-    }
-
-    F32 seeThroughShare(const LLViewerObject* object)
-    {
-        const U8 faces = object->getNumTEs();
-        if (faces == 0)
-        {
-            return 0.f;
-        }
-        U32 clear = 0;
-        for (U8 f = 0; f < faces; ++f)
-        {
-            clear += faceSeeThrough(object, f) ? 1 : 0;
-        }
-        return static_cast<F32>(clear) / faces;
-    }
-}
-
-namespace
-{
-    using namespace skcapture;
 
     const char* kindName(SKCaptureKind kind)
     {
@@ -304,13 +184,13 @@ namespace
                 mFile << ",\"teMissing\":" << (i >= object->getNumTEs() ? "true" : "false");
                 if (te)
                 {
-                    mFile << ",\"alpha\":" << te->getColor().mV[VALPHA] << ",\"pbrAlpha\":" << facePbrAlpha(te)
-                          << ",\"mode\":\"" << faceAlphaMode(te) << "\",\"texture\":\"" << te->getID()
+                    mFile << ",\"alpha\":" << te->getColor().mV[VALPHA] << ",\"pbrAlpha\":" << skFacePbrAlpha(te)
+                          << ",\"mode\":\"" << skFaceAlphaMode(te) << "\",\"texture\":\"" << te->getID()
                           << "\",\"fullbright\":" << (te->getFullbright() ? "true" : "false")
-                          << ",\"seeThrough\":" << (faceSeeThrough(object, static_cast<U8>(i)) ? "true" : "false");
+                          << ",\"seeThrough\":" << (skFaceSeeThrough(object, static_cast<U8>(i)) ? "true" : "false");
                     // Whether the texture carries alpha at all: a prim made invisible by a fully
                     // transparent texture reads opaque by tint alone, and only the viewer knows the channels.
-                    const LLViewerTexture* image = faceImage(object, static_cast<U8>(i));
+                    const LLViewerTexture* image = skFaceImage(object, static_cast<U8>(i));
                     mFile << ",\"textureAlpha\":" << (image && image->getComponents() == 4 ? "true" : "false")
                           << ",\"textureLoaded\":" << (faceTextureLoaded(image) ? "true" : "false");
                     if (const LLGLTFMaterial* gltf = te->getGLTFRenderMaterial())
@@ -368,7 +248,7 @@ namespace
                 faces += n;
                 for (U8 f = 0; f < n; ++f)
                 {
-                    clear += faceSeeThrough(prim, f) ? 1 : 0;
+                    clear += skFaceSeeThrough(prim, f) ? 1 : 0;
                 }
                 rigged |= prim->isRiggedMesh();
             }
@@ -392,7 +272,7 @@ namespace
                 {
                     mFile << ',';
                 }
-                part(prims[i], i ? linkNumber(prims[i]) : 1, tris);
+                part(prims[i], i ? skLinkNumber(prims[i]) : 1, tris);
             }
             mFile << "]}";
         }
@@ -551,7 +431,7 @@ std::string skCaptureExport(SKCaptureKind kind)
             {
                 if (child->isAvatar())
                 {
-                    crew.emplace_back(static_cast<LLVOAvatar*>(child.get()), linkNumber(prim));
+                    crew.emplace_back(static_cast<LLVOAvatar*>(child.get()), skLinkNumber(prim));
                 }
             }
         }
@@ -614,7 +494,7 @@ std::string skCaptureExport(SKCaptureKind kind)
     const std::streamoff bytes = file.tellp();
     file.close();
 
-    LL_INFOS("SKNavExport") << "wrote " << bytes << " bytes to " << path << LL_ENDL;
+    LL_INFOS("SKCaptureExport") << "wrote " << bytes << " bytes to " << path << LL_ENDL;
     return llformat("%u sources, %u parts, %u triangles (%.1f MB) -> %s", out.mSources, out.mParts, out.mTriangles,
                     static_cast<F64>(bytes) / (1024.0 * 1024.0), path.c_str());
 }

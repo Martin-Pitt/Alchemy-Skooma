@@ -1,0 +1,74 @@
+/**
+ * @file skworldpalette.h
+ * @brief One colour per thing the world overlays draw.
+ *
+ * $LicenseInfo:firstyear=2026&license=viewerlgpl$
+ * Alchemy Viewer Source Code
+ * Copyright (C) 2026, Alchemy Viewer Project.
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation;
+ * version 2.1 of the License only.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * $/LicenseInfo$
+ */
+
+#ifndef SK_WORLDPALETTE_H
+#define SK_WORLDPALETTE_H
+
+#include "v4color.h"
+
+/// Everything the world overlays draw in a colour of its own.
+enum class SKWorldSwatch : S32
+{
+    GROUND,         ///< walkable terrain
+    OBJECT,         ///< walkable object surface
+    SUBMERGED,      ///< walkable, but under water
+    OTHER,          ///< walkable, with an area class the palette does not know
+    TILE_JOINED,    ///< tile-boundary edge Detour linked to its neighbour
+    TILE_OPEN,      ///< tile-boundary edge with nothing joined to it
+    COVER_FULL,     ///< wall taller than the reader's eye
+    COVER_HALF,     ///< wall that can be shot over
+    COVER_LOW,      ///< wall too low to take cover behind
+    WALL_FACE,      ///< the vertical surface itself, what Atmo paints and drains
+    LEDGE,          ///< floor edge with a landable drop beyond it
+    OVERHANG,       ///< floor edge with nothing below within reach
+    DROP,           ///< where a ledge lands
+    SHAPE_EXACT,    ///< census record built from the object's own triangles
+    SHAPE_HULL,     ///< census record built from its convex hull
+    SHAPE_BOX,      ///< census record standing in as its bounding box
+    SHAPE_RENDER,   ///< census record taken from the rendered shape
+    SHAPE_DYNAMIC,  ///< census record for something still moving
+    CLUSTER,        ///< stands in for the per-structure colours, which are hashed
+    FEATURE_DOOR,   ///< a door's leaves
+    FEATURE_LADDER, ///< a ladder's span, and its exits
+    FEATURE_SHAFT,  ///< an elevator's column
+    FEATURE_VEHICLE,    ///< a linkset people sit on that moves
+    CLIMB,          ///< a ladder or elevator link between two exits
+    ENCLOSURE_OUTDOORS,     ///< a floor under open sky, or near it
+    ENCLOSURE_SHELTERED,    ///< under cover, not far in
+    ENCLOSURE_INDOORS,      ///< far from the sky and from the way out
+    ENCLOSURE_UNKNOWN,      ///< air nothing reached: no answer
+    PORTAL_DOOR,            ///< a space's threshold at a door
+    PORTAL_STAIR,           ///< where a flight meets a floor
+    PORTAL_OPENING,         ///< any other opening; dashed without a lintel
+    PORTAL_LINK,            ///< a drawn connection from a flight's foot to an exit
+    PORTAL_DANGLING,        ///< a flight's lone end, with no exit at the other
+    SPACE_CLIMB,            ///< a climb joining the spaces at its foot and its top
+    COUNT
+};
+
+/// The swatch at full strength. Overlay passes scale the alpha; the x-ray pass
+/// darkens the colour as well.
+const LLColor4& skWorldSwatchColor(SKWorldSwatch swatch);
+
+#endif // SK_WORLDPALETTE_H

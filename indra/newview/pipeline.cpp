@@ -111,6 +111,9 @@
 #include "llviewerregion.h" // for audio debugging.
 #include "llviewerwindow.h" // For getSpinAxis
 #include "llvoavatarself.h"
+#include "skaircells.h" // <SK:Nexii> air cells overlay
+#include "skrooms.h" // <SK:Nexii> rooms overlay
+#include "skworldcensus.h" // <SK:Nexii> census overlay
 #include "llvocache.h"
 #include "llvosky.h"
 #include "llvowlsky.h"
@@ -120,9 +123,6 @@
 #include "llvotree.h"
 #include "llvopartgroup.h"
 #include "llworld.h"
-#include "sknavannotator.h" // <SK:Nexii> navmesh annotations
-#include "sknavmesh.h" // <SK:Nexii> navmesh overlay
-#include "skworldcensus.h" // <SK:Nexii> navmesh census overlay
 #include "llcubemap.h"
 #include "llviewershadermgr.h"
 #include "skoutlinecapture.h" // <SK:Nexii> outline capture
@@ -1557,7 +1557,6 @@ void LLPipeline::releaseAllGLResources()
 
     SKOutlineCapture::cleanupGL(); // <SK:Nexii> outline capture: the atlas goes with the context and every capture renders again
     SKOverviewCapture::cleanupGL(); // <SK:Nexii> overview capture: its targets go with the context
-    SKNavMesh::cleanupGL(); // <SK:Nexii> navmesh overlay: its buffers go with the context
     releaseRenderTargets();
     releaseDepthDependents();
 
@@ -11299,16 +11298,6 @@ void LLPipeline::renderFinalize()
     {
         renderPhysicsDisplay();
     }
-    // <SK:Nexii> navmesh census overlay: record and cluster boxes
-    // A layer of the navmesh debug pass can be on without the surface itself,
-    // so ask the pass rather than the mask alone.
-    // The census draws its own layers, so they show with the navmesh off.
-    SKWorldCensus::instance().renderDebug();
-    if (SKNavMesh::overlayActive())
-    {
-        SKNavMesh::instance().renderDebug();
-    }
-    // </SK:Nexii>
     // <SK:Nexii> Probe debug drawn after tonemapping so its kind colours survive exposure; occludes like the navmesh overlay.
     if (hasRenderDebugMask(LLPipeline::RENDER_DEBUG_REFLECTION_PROBES))
     {
@@ -11316,10 +11305,22 @@ void LLPipeline::renderFinalize()
         mReflectionMapManager.renderDebug();
     }
     // </SK:Nexii>
-    // <SK:Nexii> navmesh annotations: marks draw whether or not the overlay is on
-    if (SKNavAnnotator::instanceExists())
+    // <SK:Nexii> census overlay: record, cluster and feature boxes, each layer behind its own setting
+    if (!cutout && SKWorldCensus::instanceExists())
     {
-        SKNavAnnotator::instance().render();
+        SKWorldCensus::instance().renderDebug();
+    }
+    // </SK:Nexii>
+    // <SK:Nexii> air cells overlay: the air, wall faces, run-off and sky map, under the world debug mask
+    if (!cutout && SKAirCells::instanceExists())
+    {
+        SKAirCells::instance().renderDebug();
+    }
+    // </SK:Nexii>
+    // <SK:Nexii> rooms overlay: spaces, portals, wind and the air's space and indoor modes, under the world debug mask
+    if (!cutout && SKRooms::instanceExists())
+    {
+        SKRooms::instance().renderDebug();
     }
     // </SK:Nexii>
 

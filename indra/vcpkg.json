@@ -106,7 +106,6 @@
     },
     "pocketfft",
     "pugixml",
-    "recastnavigation",
     "re2",
     {
       "name": "sdl3",

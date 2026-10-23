@@ -1,6 +1,6 @@
 /**
  * @file skworldcensus.cpp
- * @brief The census: every declared physics shape near the agent, as the navmesh sees it.
+ * @brief The census: every declared physics shape near the agent, as the world layers see it.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Alchemy Viewer Source Code
@@ -30,10 +30,11 @@
 
 #include "llframetimer.h"
 
-#include "sknavoverlay.h"
-#include "sknavpalette.h"
 
 #include "alobjectproperties.h"
+#include "lldate.h"
+#include "lldir.h"
+#include "llfile.h"
 #include "llagent.h"
 #include "llappviewer.h"
 #include "llcharacter.h"
@@ -54,21 +55,38 @@
 #include "llvovolume.h"
 #include "llworld.h"
 #include "pipeline.h"
-#include "skcaptureexport.h"
-#include "sknavmarkobjects.h"
-#include "sknavfloors.h"
-#include "sknavmesh.h"
-#include "sknavrooms.h"
+#include "llsurface.h"
+#include "skcensusland.h"
+#include "skcensuslattice.h"
+#include "skobjectfaces.h"
 #include "skphysicsshape.h"
+#include "skworldoverlay.h"
+#include "skworldpalette.h"
 #include "threadpool.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <ctime>
 #include <unordered_set>
+
+// The physics shape's seam names its kinds as the census does, so a record takes them as they are.
+static_assert(static_cast<U8>(SKShapeKind::TRIANGLES) == static_cast<U8>(skworld::Shape::TRIANGLES) &&
+                  static_cast<U8>(SKShapeKind::BOX) == static_cast<U8>(skworld::Shape::BOX) &&
+                  static_cast<U8>(SKShapeKind::SPHERE) == static_cast<U8>(skworld::Shape::SPHERE) &&
+                  static_cast<U8>(SKShapeKind::CYLINDER) == static_cast<U8>(skworld::Shape::CYLINDER),
+              "SKShapeKind is skworld::Shape");
+static_assert(static_cast<U8>(SKShapeProvenance::EXACT) == static_cast<U8>(skworld::Provenance::EXACT) &&
+                  static_cast<U8>(SKShapeProvenance::HULL) == static_cast<U8>(skworld::Provenance::HULL) &&
+                  static_cast<U8>(SKShapeProvenance::BOX) == static_cast<U8>(skworld::Provenance::BOX) &&
+                  static_cast<U8>(SKShapeProvenance::RENDER) == static_cast<U8>(skworld::Provenance::RENDER) &&
+                  static_cast<U8>(SKShapeProvenance::BASE_HULL) == static_cast<U8>(skworld::Provenance::BASE_HULL) &&
+                  static_cast<U8>(SKShapeProvenance::SIM) == static_cast<U8>(skworld::Provenance::SIM),
+              "SKShapeProvenance is skworld::Provenance");
 
 namespace
 {
-    using namespace sknav;
+    using namespace skworld;
 
     const F32 MOVED_EPSILON = 0.01f;
     const F32 MOVED_ANGLE = 2.f * DEG_TO_RAD;
@@ -93,7 +111,7 @@ namespace
     LLUUID placeholderId(U64 handle, U32 local)
     {
         LLUUID id;
-        const U32 tag = 0x534b4e56;     // 'SKNV'
+        const U32 tag = PLACEHOLDER_TAG;
         memcpy(id.mData, &handle, sizeof(handle));
         memcpy(id.mData + 8, &local, sizeof(local));
         memcpy(id.mData + 12, &tag, sizeof(tag));
@@ -104,7 +122,7 @@ namespace
     // is solid to the sim and told apart from a door only here.
     F32 seeThrough(const LLViewerObject* object)
     {
-        return skcapture::seeThroughShare(object);
+        return skSeeThroughShare(object);
     }
 
     LLViewerObject* rootOf(LLViewerObject* object)
@@ -258,21 +276,21 @@ void SKWorldCensus::removeDemand(const std::string& who)
 
 bool SKWorldCensus::wanted() const
 {
-    static LLCachedControl<bool> enabled(gSavedSettings, "SKWorldCensusEnabled", true);
-    static LLCachedControl<bool> always(gSavedSettings, "SKNavCensusAlways", false);
-    static LLCachedControl<bool> show(gSavedSettings, "SKNavOverlayCensus", false);
-    static LLCachedControl<bool> show_features(gSavedSettings, "SKNavOverlayFeatures", false);
+    static LLCachedControl<bool> enabled(gSavedSettings, "SKCensusEnabled", true);
+    static LLCachedControl<bool> always(gSavedSettings, "SKCensusAlways", false);
+    static LLCachedControl<bool> show(gSavedSettings, "SKWorldOverlayCensus", false);
+    static LLCachedControl<bool> show_features(gSavedSettings, "SKWorldOverlayFeatures", false);
     if (!enabled)
     {
         return false;
     }
-    // The census overlays draw without the navmesh, so they bring the census themselves.
-    return always || show || show_features || !mDemands.empty() || gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_NAVMESH);
+    // The census overlays draw without a consumer, so they bring the census themselves.
+    return always || show || show_features || !mDemands.empty() || gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_WORLD);
 }
 
 F64 SKWorldCensus::range() const
 {
-    static LLCachedControl<F32> setting(gSavedSettings, "SKNavRange", 512.f);
+    static LLCachedControl<F32> setting(gSavedSettings, "SKCensusRange", 512.f);
     F64 r = setting;
     for (const auto& d : mDemands)
     {
@@ -281,7 +299,7 @@ F64 SKWorldCensus::range() const
     return r;
 }
 
-sknav::NavRole SKWorldCensus::roleOf(const LLUUID& root) const
+skworld::NavRole SKWorldCensus::roleOf(const LLUUID& root) const
 {
     const auto it = mRoles.find(root);
     return it == mRoles.end() ? NavRole::UNKNOWN : it->second;
@@ -306,7 +324,7 @@ F32 SKWorldCensus::landUnder(const LLVector3d& min, const LLVector3d& max)
         return -1e9f;
     }
     LLWorld* world = LLWorld::getInstance();
-    return sknav::footprintMax(min, max, [world](const LLVector3d& p) { return static_cast<F32>(world->resolveLandHeightGlobal(p)); });
+    return skworld::footprintMax(min, max, [world](const LLVector3d& p) { return static_cast<F32>(world->resolveLandHeightGlobal(p)); });
 }
 
 std::vector<U64> SKWorldCensus::regionHandles()
@@ -331,7 +349,7 @@ bool SKWorldCensus::sameRegions(const std::vector<U64>& regions) const
 void SKWorldCensus::update()
 {
     LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - update");
-    static LLCachedControl<bool> log(gSavedSettings, "SKNavCensusLog", false);
+    static LLCachedControl<bool> log(gSavedSettings, "SKCensusLog", false);
     const bool enabled = wanted() && LLWorld::instanceExists() && gAgent.getRegion();
     if (mClusterJob.valid())
     {
@@ -350,7 +368,7 @@ void SKWorldCensus::update()
             done->mStamp = same ? mSnapshot->mStamp : ++mStamp;
             if (!same && log)
             {
-                LL_INFOS("SKNav") << "census stamp " << done->mStamp << ": +" << done->mAdded.size() << " -" << done->mRemoved.size()
+                LL_INFOS("SKCensus") << "census stamp " << done->mStamp << ": +" << done->mAdded.size() << " -" << done->mRemoved.size()
                                   << " ~" << done->mChanged.size() << " of " << done->mRecords.size() << " records" << LL_ENDL;
             }
             retired = std::move(mSnapshot);
@@ -376,7 +394,7 @@ void SKWorldCensus::update()
         return;
     }
 
-    static LLCachedControl<F32> budget(gSavedSettings, "SKNavCensusBudgetMS", 3.f);
+    static LLCachedControl<F32> budget(gSavedSettings, "SKCensusBudgetMS", 3.f);
     constexpr F64 SLOW_SCAN_INTERVAL_S = 1.0;
     constexpr F32 SLOW_SLICE_MS = 1.f;
 
@@ -409,7 +427,7 @@ void SKWorldCensus::update()
     if (log && mSnapshot && gFrameTimeSeconds - mLastLog > 5.f)
     {
         mLastLog = gFrameTimeSeconds;
-        LL_INFOS("SKNav") << statsLine() << LL_ENDL;
+        LL_INFOS("SKCensus") << statsLine() << LL_ENDL;
     }
 }
 
@@ -639,11 +657,11 @@ void SKWorldCensus::gatherNow()
     snap.mStats.mDirtyVisited = static_cast<U32>(mScanDirty.size());
     snap.mStats.mFullSweep = mScanFull;
 
-    static LLCachedControl<bool> log(gSavedSettings, "SKNavCensusLog", false);
+    static LLCachedControl<bool> log(gSavedSettings, "SKCensusLog", false);
     if (log && (mScanFull || now - mLastScanLog >= SCAN_LOG_S))
     {
         mLastScanLog = now;
-        LL_INFOS("SKNav") << "census scan: dirty " << mScanDirty.size() << " (" << requeued << " pending) of " << count
+        LL_INFOS("SKCensus") << "census scan: dirty " << mScanDirty.size() << " (" << requeued << " pending) of " << count
                           << " objects, full " << (mScanFull ? "y" : "n") << " (" << mScanWhy << "), last scan "
                           << (mSnapshot ? mSnapshot->mStats.mScanMs : 0.f) << " ms" << LL_ENDL;
     }
@@ -740,7 +758,7 @@ bool SKWorldCensus::pending(LLViewerObject* object, const PartCache& cache) cons
             return true;
         }
     }
-    static LLCachedControl<F32> settle(gSavedSettings, "SKNavSettleSeconds", 4.f);
+    static LLCachedControl<F32> settle(gSavedSettings, "SKCensusSettleSeconds", 4.f);
     const F64 now = gFrameTimeSeconds;
     const auto rest = mRest.find(rootOf(object)->getID());
     return rest != mRest.end() && rest->second.mMovedAt >= 0.f
@@ -830,6 +848,18 @@ void SKWorldCensus::continueScan(F32 budget_ms)
         }
         gatherNow();
     }
+    // The parts this slice visited and those dirtied for the next scan, plotted however the slice returns.
+    struct SlicePlot
+    {
+        std::shared_ptr<SKCensusSnapshot> snap;
+        const std::unordered_set<LLUUID>& dirty;
+        U32 seen_before;
+        ~SlicePlot()
+        {
+            LL_PROFILE_PLOT("census visits", (int64_t)(snap ? snap->mStats.mObjectsSeen - seen_before : 0));
+            LL_PROFILE_PLOT("census dirty parts", (int64_t)dirty.size());
+        }
+    } slice_plot{ mScan.mPending, mDirty, mScan.mPending ? mScan.mPending->mStats.mObjectsSeen : 0 };
     LLTimer timer;
     const S32 count = static_cast<S32>(mScan.mObjects.size());
     while (mScan.mIndex < count)
@@ -877,7 +907,7 @@ void SKWorldCensus::continueScan(F32 budget_ms)
         mSweepRegions = mScan.mRegions;
         if (mScanMissed)
         {
-            LL_WARNS("SKNav") << "census full sweep found " << mScanMissed << " parts the dirty set missed" << LL_ENDL;
+            LL_WARNS("SKCensus") << "census full sweep found " << mScanMissed << " parts the dirty set missed" << LL_ENDL;
         }
     }
     finishScan();
@@ -886,20 +916,20 @@ void SKWorldCensus::continueScan(F32 budget_ms)
 void SKWorldCensus::finishScan()
 {
     LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - finish scan");
-    static LLCachedControl<F32> gap(gSavedSettings, "SKNavClusterGap", 0.5f);
+    static LLCachedControl<F32> gap(gSavedSettings, "SKCensusClusterGap", 0.5f);
     std::shared_ptr<SKCensusSnapshot> done = mScan.mPending;
     mScan.mActive = false;
     mScan.mPending.reset();
 
     // Clusters stop where the region meshes' void does: a kilometre megaprim
     // would otherwise tile kilometres and join whatever it overhangs.
-    static LLCachedControl<F32> void_margin(gSavedSettings, "SKNavVoidMargin", 256.f);
-    std::vector<sknav::RegionSquare> squares;
+    static LLCachedControl<F32> void_margin(gSavedSettings, "SKCensusVoidMargin", 256.f);
+    std::vector<skworld::RegionSquare> squares;
     for (LLViewerRegion* region : LLWorld::getInstance()->getRegionList())
     {
         squares.push_back({ region->getOriginGlobal(), region->getWidth() });
     }
-    const auto window = sknav::regionWindow(squares, void_margin);
+    const auto window = skworld::regionWindow(squares, void_margin);
     LLTimer timer;
     done->mStats.mScanMs = mScan.mElapsedMs;
     done->mStats.mRecords = static_cast<U32>(done->mRecords.size());
@@ -957,15 +987,15 @@ void SKWorldCensus::finishScan()
             {
                 // The delta is against the snapshot published when this scan finished: one job is in flight at a time.
                 LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - delta worker");
-                done->mHash = sknav::censusHash(done->mRecords, done->mFeatures, done->mDoors, window, cluster_gap);
-                done->mByPart = sknav::recordsByPart(done->mRecords);
-                static const sknav::RecordsByPart none;
-                sknav::diffRecords(prev ? prev->mByPart : none, done->mByPart, done->mAdded, done->mRemoved, done->mChanged);
+                done->mHash = skworld::censusHash(done->mRecords, done->mFeatures, done->mDoors, window, cluster_gap);
+                done->mByPart = skworld::recordsByPart(done->mRecords);
+                static const skworld::RecordsByPart none;
+                skworld::diffRecords(prev ? prev->mByPart : none, done->mByPart, done->mAdded, done->mRemoved, done->mChanged);
                 prev.reset();
             }
             LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - cluster worker");
             LLTimer timer;
-            done->mClusters = cluster(done->mRecords, cluster_gap, sknav::TILE_M, window);
+            done->mClusters = cluster(done->mRecords, cluster_gap, skworld::TILE_M, window);
             done->mStats.mClusterMs = timer.getElapsedTimeF32() * 1000.f;
             return done;
         });
@@ -973,7 +1003,7 @@ void SKWorldCensus::finishScan()
     if (!LL::WorkQueue::getInstance("CensusClusters")->tryPost([task]() { (*task)(); }))
     {
         // A refused post would drop the finished scan, so it is clustered here instead.
-        LL_WARNS("SKNav") << "Census cluster queue refused the scan; clustering on this thread" << LL_ENDL;
+        LL_WARNS("SKCensus") << "Census cluster queue refused the scan; clustering on this thread" << LL_ENDL;
         (*task)();
     }
     mClusterJob = std::move(future);
@@ -983,7 +1013,7 @@ void SKWorldCensus::finishScan()
 
 bool SKWorldCensus::classifyRest(LLViewerObject* root, const LLVector3d& pos, const LLQuaternion& rot)
 {
-    static LLCachedControl<F32> settle(gSavedSettings, "SKNavSettleSeconds", 4.f);
+    static LLCachedControl<F32> settle(gSavedSettings, "SKCensusSettleSeconds", 4.f);
     // The baseline moves only when the root is seen to have moved, so a slow
     // drift adds up to a move instead of hiding under the epsilon each frame.
     // A door swinging on its hinge by steps turns without going anywhere, so
@@ -1039,7 +1069,7 @@ bool SKWorldCensus::isSurround(LLViewerObject* root, const LLVector3d& mn, const
     // centre it is an ordinary object - which then falls at the physics gate,
     // since a surround is phantom or shape-NONE precisely because there is no
     // physics out in the void.
-    static LLCachedControl<F32> reach(gSavedSettings, "SKNavSurroundReach", 8.f);
+    static LLCachedControl<F32> reach(gSavedSettings, "SKCensusSurroundReach", 8.f);
     F64 outside = 0.0;
     const LLVector3d corners[4] = {
         mn,
@@ -1086,15 +1116,14 @@ void SKWorldCensus::visit(LLViewerObject* object)
         return;
     }
 
-    // <SK:Nexii> navmesh annotation bodies are survey instruments, not world
-    // content: a mark's beam would otherwise be built into the very mesh it
-    // measures, and the handles would count as surrounds. The annotator
-    // owns them and drops them with the session.
-    if (SKNavMarkObjects::instanceExists() && SKNavMarkObjects::getInstance()->isMarkProxy(object))
+    // What a layer above says is no world content, such as the bodies of its own instruments.
+    for (const auto& exclusion : mExclusions)
     {
-        return;
+        if (exclusion.second(object))
+        {
+            return;
+        }
     }
-    // </SK:Nexii>
 
     // Movers and things that are not shapes.
     if (root->flagUsePhysics() || root->flagCharacter() || root->flagTemporaryOnRez())
@@ -1162,7 +1191,7 @@ void SKWorldCensus::visit(LLViewerObject* object)
     // over. Small parts appear in clouds as content streams in, and each
     // one arriving was a whole tile rebuild for nothing. An exclusion volume
     // keeps: the sim takes the navmesh out of it whatever its size.
-    static LLCachedControl<F32> min_shape(gSavedSettings, "SKNavMinShape", 0.3f);
+    static LLCachedControl<F32> min_shape(gSavedSettings, "SKCensusMinShape", 0.3f);
     if (navRole != NavRole::EXCLUSION_VOLUME
         && extent.mV[VX] < min_shape && extent.mV[VY] < min_shape && extent.mV[VZ] < min_shape)
     {
@@ -1407,7 +1436,7 @@ void SKWorldCensus::visit(LLViewerObject* object)
     }
 }
 
-void SKWorldCensus::take(SKCensusSnapshot& snap, const sknav::RecordPtr& rec)
+void SKWorldCensus::take(SKCensusSnapshot& snap, const skworld::RecordPtr& rec)
 {
     snap.mRecords.push_back(rec);
     if (rec->mDynamic) snap.mStats.mDynamic++;
@@ -1419,7 +1448,7 @@ void SKWorldCensus::take(SKCensusSnapshot& snap, const sknav::RecordPtr& rec)
 
 void SKWorldCensus::gatherCached()
 {
-    static LLCachedControl<bool> use_cache(gSavedSettings, "SKNavCensusObjectCache", true);
+    static LLCachedControl<bool> use_cache(gSavedSettings, "SKCensusObjectCache", true);
     // A dirty scan takes its boxes from the caches with the rest.
     if (!mScanFull || !use_cache || !LLWorld::instanceExists())
     {
@@ -1532,8 +1561,8 @@ void SKWorldCensus::visitCached(const CachedPart& part)
     snap.mStats.mFromObjectCache++;
 }
 
-sknav::RecordPtr SKWorldCensus::record(LLVOVolume* volume, LLViewerObject* root, sknav::Role role, bool dynamic, U64 signature,
-                                       const LLVector3& pos, const LLQuaternion& rot, sknav::FeatureKind feature, U8 exclude,
+skworld::RecordPtr SKWorldCensus::record(LLVOVolume* volume, LLViewerObject* root, skworld::Role role, bool dynamic, U64 signature,
+                                       const LLVector3& pos, const LLQuaternion& rot, skworld::FeatureKind feature, U8 exclude,
                                        const std::shared_ptr<const SKPhysicsHavokShape>& sim)
 {
     LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - shape");
@@ -1563,9 +1592,9 @@ sknav::RecordPtr SKWorldCensus::record(LLVOVolume* volume, LLViewerObject* root,
     rec->mRoot = root->getID();
     rec->mPart = volume->getID();
     rec->mRole = role;
-    rec->mProvenance = geom.mProvenance;
+    rec->mProvenance = static_cast<Provenance>(geom.mProvenance);
     rec->mNavRole = roleOf(root->getID());
-    rec->mShape = geom.mShape;
+    rec->mShape = static_cast<Shape>(geom.mShape);
     rec->mSolid = geom.mSolid;
     rec->mDynamic = dynamic;
     rec->mFeature = feature;
@@ -1579,7 +1608,7 @@ sknav::RecordPtr SKWorldCensus::record(LLVOVolume* volume, LLViewerObject* root,
     rec->mMin.set(1e30, 1e30, 1e30);
     rec->mMax.set(-1e30, -1e30, -1e30);
 
-    if (geom.mShape == Shape::TRIANGLES)
+    if (geom.mShape == SKShapeKind::TRIANGLES)
     {
         auto tris = std::make_shared<std::vector<LLVector3>>();
         tris->reserve(geom.mTriangles.size());
@@ -1754,28 +1783,12 @@ void SKWorldCensus::classify(SKCensusSnapshot& snap)
                 LLVector3d foot = (r.mMin + r.mMax) * 0.5;
                 foot.mdV[VZ] = r.mMin.mdV[VZ];
                 F32 floor = landUnder(r.mMin, r.mMax);
-                // The built floor is read at the foot only: the navmesh's when it has polys, else the air's.
+                // The built floor is read at the foot only, from whichever layer above has one.
                 F32 built = 0.f;
                 const F32 reach = static_cast<F32>(foot.mdV[VZ]) + 0.5f;
-                if (SKNavMesh::instanceExists())
+                if (mFloorProbe && mFloorProbe(foot, reach, built))
                 {
-                    const SKNavMesh& nav = SKNavMesh::instance();
-                    if (SKNavMesh::polysEnabled())
-                    {
-                        if (nav.floorUnder(foot, AgentClass::AVATAR, built) && built <= reach)
-                        {
-                            floor = llmax(floor, built);
-                        }
-                    }
-                    else if (const auto view = nav.view())
-                    {
-                        std::vector<sknav::Enclosure> gaps;
-                        view->gapsAt(foot, [&gaps](const sknav::Enclosure& e) { gaps.push_back(e); });
-                        if (sknav::pickFloor(gaps, -1e9f, reach, built))
-                        {
-                            floor = llmax(floor, built);
-                        }
-                    }
+                    floor = llmax(floor, built);
                 }
                 r.mClearance = static_cast<F32>(foot.mdV[VZ]) - floor;
             }
@@ -1786,7 +1799,7 @@ void SKWorldCensus::classify(SKCensusSnapshot& snap)
     // Only a door-shaped part with something to say for it is worth the rays.
     {
         LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - classify face cover");
-        const sknav::RecordIndex index(snap.mRecords);
+        const skworld::RecordIndex index(snap.mRecords);
         for (FeaturePart& p : mScan.mFeatureParts)
         {
             if ((p.mScripted || p.mTouch || !p.mName.empty()) && doorShaped(p, params))
@@ -1872,7 +1885,7 @@ void SKWorldCensus::classify(SKCensusSnapshot& snap)
 
 void SKWorldCensus::requestRoles()
 {
-    static LLCachedControl<F32> every(gSavedSettings, "SKNavRoleRequestSeconds", 60.f);
+    static LLCachedControl<F32> every(gSavedSettings, "SKCensusRoleRequestSeconds", 60.f);
     LLViewerRegion* region = gAgent.getRegion();
     if (!region || !region->capabilitiesReceived())
     {
@@ -1936,7 +1949,7 @@ void SKWorldCensus::onRoles(U32 request, S32 status, std::shared_ptr<LLPathfindi
     if (changed)
     {
         // Roles are part of the part signature, so the next scan re-records.
-        LL_INFOS("SKNav") << "navmesh roles: " << changed << " linksets changed" << LL_ENDL;
+        LL_INFOS("SKCensus") << "pathfinding roles: " << changed << " linksets changed" << LL_ENDL;
     }
 }
 
@@ -1962,9 +1975,9 @@ std::string SKWorldCensus::statsLine() const
 
 void SKWorldCensus::renderDebug()
 {
-    static LLCachedControl<bool> show(gSavedSettings, "SKNavOverlayCensus", false);
-    static LLCachedControl<bool> show_features(gSavedSettings, "SKNavOverlayFeatures", false);
-    static LLCachedControl<bool> show_clusters(gSavedSettings, "SKNavOverlayClusters", false);
+    static LLCachedControl<bool> show(gSavedSettings, "SKWorldOverlayCensus", false);
+    static LLCachedControl<bool> show_features(gSavedSettings, "SKWorldOverlayFeatures", false);
+    static LLCachedControl<bool> show_clusters(gSavedSettings, "SKWorldOverlayClusters", false);
     SKCensusSnapshotPtr snap = mSnapshot;
     if (!show_clusters || !snap)
     {
@@ -1982,14 +1995,14 @@ void SKWorldCensus::renderDebug()
     // The census covers the whole sim, but the shapes only draw around the
     // camera, falling away over the last fifth of the range like the mesh
     // does.
-    static LLCachedControl<F32> range(gSavedSettings, "SKNavOverlayRange", 96.f);
+    static LLCachedControl<F32> range(gSavedSettings, "SKWorldOverlayRange", 96.f);
     const LLVector3d camera = gAgent.getPosGlobalFromAgent(LLViewerCamera::getInstance()->getOrigin());
     const F64 reach = range;
     auto within = [&](const LLVector3d& p) {
         return dist_vec_squared2D(p, camera) <= reach * reach;
     };
 
-    SKNavOverlayGeom geom;
+    SKWorldOverlayGeom geom;
     for (const RecordPtr& r : snap->mRecords)
     {
         if (!show)
@@ -2000,24 +2013,24 @@ void SKWorldCensus::renderDebug()
         {
             continue;
         }
-        SKNavSwatch swatch = SKNavSwatch::SHAPE_BOX;
+        SKWorldSwatch swatch = SKWorldSwatch::SHAPE_BOX;
         if (r->mDynamic)
         {
-            swatch = SKNavSwatch::SHAPE_DYNAMIC;
+            swatch = SKWorldSwatch::SHAPE_DYNAMIC;
         }
         else
         {
             switch (r->mProvenance)
             {
-                case Provenance::EXACT: swatch = SKNavSwatch::SHAPE_EXACT; break;
-                case Provenance::HULL: swatch = SKNavSwatch::SHAPE_HULL; break;
-                case Provenance::BOX: swatch = SKNavSwatch::SHAPE_BOX; break;
-                case Provenance::RENDER: swatch = SKNavSwatch::SHAPE_RENDER; break;
-                case Provenance::BASE_HULL: swatch = SKNavSwatch::SHAPE_HULL; break;
-                case Provenance::SIM: swatch = SKNavSwatch::SHAPE_EXACT; break;
+                case Provenance::EXACT: swatch = SKWorldSwatch::SHAPE_EXACT; break;
+                case Provenance::HULL: swatch = SKWorldSwatch::SHAPE_HULL; break;
+                case Provenance::BOX: swatch = SKWorldSwatch::SHAPE_BOX; break;
+                case Provenance::RENDER: swatch = SKWorldSwatch::SHAPE_RENDER; break;
+                case Provenance::BASE_HULL: swatch = SKWorldSwatch::SHAPE_HULL; break;
+                case Provenance::SIM: swatch = SKWorldSwatch::SHAPE_EXACT; break;
             }
         }
-        geom.box(gAgent.getPosAgentFromGlobal(r->mMin), gAgent.getPosAgentFromGlobal(r->mMax), skNavSwatchColor(swatch));
+        geom.box(gAgent.getPosAgentFromGlobal(r->mMin), gAgent.getPosAgentFromGlobal(r->mMax), skWorldSwatchColor(swatch));
     }
     for (const ClusterPtr& c : snap->mClusters.mClusters)
     {
@@ -2033,41 +2046,27 @@ void SKWorldCensus::renderDebug()
         // between scans.
         const U32 h = static_cast<U32>(mix(SEED, c->mId.mData[0] | (c->mId.mData[1] << 8) | (c->mId.mData[2] << 16)));
         const LLColor4 color(0.3f + 0.7f * ((h & 255) / 255.f), 0.3f + 0.7f * (((h >> 8) & 255) / 255.f),
-                             0.3f + 0.7f * (((h >> 16) & 255) / 255.f), skNavSwatchColor(SKNavSwatch::CLUSTER).mV[VALPHA]);
+                             0.3f + 0.7f * (((h >> 16) & 255) / 255.f), skWorldSwatchColor(SKWorldSwatch::CLUSTER).mV[VALPHA]);
         geom.box(gAgent.getPosAgentFromGlobal(c->mMin), gAgent.getPosAgentFromGlobal(c->mMax), color);
     }
-    // What the feature rules recognised, as boxes, and a tick at each floor
-    // a span can be boarded or left at. Seats are a label, not a glyph.
+    // What the feature rules recognised, as boxes. Seats are a label, not a glyph.
     for (const Feature& f : snap->mFeatures)
     {
         if (!show_features || !within((f.mMin + f.mMax) * 0.5))
         {
             continue;
         }
-        SKNavSwatch swatch;
+        SKWorldSwatch swatch;
         switch (f.mKind)
         {
-            case FeatureKind::DOOR: swatch = SKNavSwatch::FEATURE_DOOR; break;
-            case FeatureKind::LADDER: swatch = SKNavSwatch::FEATURE_LADDER; break;
-            case FeatureKind::ELEVATOR: swatch = SKNavSwatch::FEATURE_SHAFT; break;
-            case FeatureKind::VEHICLE: swatch = SKNavSwatch::FEATURE_VEHICLE; break;
+            case FeatureKind::DOOR: swatch = SKWorldSwatch::FEATURE_DOOR; break;
+            case FeatureKind::LADDER: swatch = SKWorldSwatch::FEATURE_LADDER; break;
+            case FeatureKind::ELEVATOR: swatch = SKWorldSwatch::FEATURE_SHAFT; break;
+            case FeatureKind::VEHICLE: swatch = SKWorldSwatch::FEATURE_VEHICLE; break;
             default: continue;
         }
-        const LLColor4 color = skNavSwatchColor(swatch);
+        const LLColor4 color = skWorldSwatchColor(swatch);
         geom.box(gAgent.getPosAgentFromGlobal(f.mMin), gAgent.getPosAgentFromGlobal(f.mMax), color);
-        if (f.mKind != FeatureKind::LADDER && f.mKind != FeatureKind::ELEVATOR)
-        {
-            continue;
-        }
-        if (const SKNavMesh::FeatureSpan* span = SKNavMesh::instance().featureSpan(SKNavMesh::featureId(f)))
-        {
-            for (const LLVector3d& exit : span->mExits[static_cast<S32>(AgentClass::AVATAR)])
-            {
-                const LLVector3 p = gAgent.getPosAgentFromGlobal(exit) + LLVector3(0.f, 0.f, 0.05f);
-                geom.line(p - LLVector3(0.3f, 0.f, 0.f), p + LLVector3(0.3f, 0.f, 0.f), color);
-                geom.line(p - LLVector3(0.f, 0.3f, 0.f), p + LLVector3(0.f, 0.3f, 0.f), color);
-            }
-        }
     }
     if (show_clusters)
     {
@@ -2079,13 +2078,13 @@ void SKWorldCensus::renderDebug()
     }
     geom.setFade(gAgent.getPosAgentFromGlobal(camera), static_cast<F32>(reach), static_cast<F32>(reach * 0.8));
 
-    SKNavOverlayGeom::bindShader();
+    SKWorldOverlayGeom::bindShader();
     {
         LLGLEnable blend(GL_BLEND);
         LLGLDepthTest depth(GL_TRUE, GL_FALSE);
         geom.draw();
     }
-    SKNavOverlayGeom::unbindShader();
+    SKWorldOverlayGeom::unbindShader();
 }
 
 bool SKWorldCensus::grounded(const LLVector3d& min, const LLVector3d& max)
@@ -2094,7 +2093,7 @@ bool SKWorldCensus::grounded(const LLVector3d& min, const LLVector3d& max)
     return min.mdV[VZ] <= landUnder(min, max) + GROUND_BASE_M;
 }
 
-void SKWorldCensus::renderClusters(const SKCensusSnapshot& snap, SKNavOverlayGeom& geom, const LLVector3d& camera, F64 reach)
+void SKWorldCensus::renderClusters(const SKCensusSnapshot& snap, SKWorldOverlayGeom& geom, const LLVector3d& camera, F64 reach)
 {
     LL_PROFILE_ZONE_SCOPED;
     const F64 now = LLFrameTimer::getUptimeSeconds().value();
@@ -2158,4 +2157,195 @@ void SKWorldCensus::renderClusters(const SKCensusSnapshot& snap, SKNavOverlayGeo
             ++it;
         }
     }
+}
+
+void SKWorldCensus::doorsIn(const LLVector3d& min, const LLVector3d& max, const DoorFn& fn) const
+{
+    if (!mSnapshot)
+    {
+        return;
+    }
+    for (const DoorEntity& door : mSnapshot->mDoors)
+    {
+        if (overlapsXY(door.mMin, door.mMax, min, max) && door.mMin.mdV[VZ] <= max.mdV[VZ] && min.mdV[VZ] <= door.mMax.mdV[VZ])
+        {
+            fn(door);
+        }
+    }
+}
+
+void SKWorldCensus::addExclusion(const std::string& name, const Exclusion& fn)
+{
+    mExclusions[name] = fn;
+    mForceSweep = true;
+}
+
+void SKWorldCensus::removeExclusion(const std::string& name)
+{
+    if (mExclusions.erase(name))
+    {
+        mForceSweep = true;
+    }
+}
+
+void SKWorldCensus::addCensusSection(const CensusSection& section)
+{
+    removeCensusSection(section.mName);
+    mSections.push_back(section);
+}
+
+void SKWorldCensus::removeCensusSection(const std::string& name)
+{
+    mSections.erase(std::remove_if(mSections.begin(), mSections.end(), [&name](const CensusSection& s) { return s.mName == name; }),
+                    mSections.end());
+}
+
+namespace
+{
+    /// Every root the records name, with what the viewer already knows of it: the
+    /// region's linkset reply first, else the object properties cache. `named` counts those with a name.
+    std::vector<CensusRoot> rootTable(const SKWorldCensus& census, const std::vector<RecordPtr>& records, size_t& named)
+    {
+        std::vector<CensusRoot> out;
+        std::set<LLUUID> seen;
+        named = 0;
+        for (const RecordPtr& record : records)
+        {
+            if (!seen.insert(record->mRoot).second)
+            {
+                continue;
+            }
+            CensusRoot root;
+            root.mId = record->mRoot;
+            if (const SKWorldCensus::LinksetFacts* facts = census.linksetFactsOf(root.mId))
+            {
+                root.mScriptedKnown = facts->mScriptedKnown;
+                root.mScripted = facts->mScripted;
+                if (!facts->mName.empty())
+                {
+                    root.mName = facts->mName;
+                    root.mDescription = capDescription(facts->mDescription);
+                    root.mSource = NameSource::LINKSET;
+                }
+            }
+            if (root.mSource == NameSource::NONE)
+            {
+                if (const ALObjectPropertiesCache::ServerProps* props = ALObjectPropertiesCache::instance().get(root.mId))
+                {
+                    if (!props->mName.empty())
+                    {
+                        root.mName = props->mName;
+                        root.mDescription = capDescription(props->mDescription);
+                        root.mSource = NameSource::PROPERTIES;
+                    }
+                }
+            }
+            named += root.mSource != NameSource::NONE;
+            out.push_back(std::move(root));
+        }
+        return out;
+    }
+}
+
+std::string SKWorldCensus::exportCensus() const
+{
+    if (!LLWorld::instanceExists())
+    {
+        return "no world";
+    }
+    SKCensusSnapshotPtr snap = mSnapshot;
+    if (!snap)
+    {
+        return "no census yet";
+    }
+    static LLCachedControl<F32> gap(gSavedSettings, "SKCensusClusterGap", 0.5f);
+    static LLCachedControl<F32> void_margin(gSavedSettings, "SKCensusVoidMargin", 256.f);
+
+    LLTimer timer;
+    CensusFile census;
+    census.mExported = LLDate::now().asString();
+    census.mStamp = snap->mStamp;
+    census.mAgent = gAgent.getPositionGlobal();
+    census.mCamera = gAgent.getPosGlobalFromAgent(LLViewerCamera::getInstance()->getOrigin());
+    census.mRange = snap->mRange;
+    census.mClusterGap = gap;
+    census.mVoidMargin = void_margin;
+
+    // One phase for every region's samples: the one a layer's terrain windows read at.
+    const F64 phase = mTerrainPhase;
+    for (LLViewerRegion* region : LLWorld::getInstance()->getRegionList())
+    {
+        CensusRegion r;
+        r.mId = region->getRegionID();
+        r.mHandle = region->getHandle();
+        r.mOrigin = region->getOriginGlobal();
+        r.mName = region->getName();
+        r.mWidth = region->getWidth();
+        r.mWater = region->getWaterHeight();
+        LLSurface& land = region->getLand();
+        r.mLandMin = land.getMinZ();
+        r.mLandMax = land.getMaxZ();
+        r.mPhase = static_cast<F32>(phase);
+        r.mSamples = static_cast<S32>(std::ceil(r.mWidth - phase));
+        r.mZ.resize(static_cast<size_t>(r.mSamples) * r.mSamples);
+        for (S32 y = 0; y < r.mSamples; ++y)
+        {
+            for (S32 x = 0; x < r.mSamples; ++x)
+            {
+                const LLVector3d p(r.mOrigin.mdV[VX] + phase + x, r.mOrigin.mdV[VY] + phase + y, 0.0);
+                r.mZ[static_cast<size_t>(y) * r.mSamples + x] = land.resolveHeightGlobal(p);
+            }
+        }
+        census.mRegions.push_back(std::move(r));
+    }
+
+    census.mRecords = snap->mRecords;
+    std::unordered_map<const Record*, U32> index;
+    for (size_t i = 0; i < census.mRecords.size(); ++i)
+    {
+        index[census.mRecords[i].get()] = static_cast<U32>(i);
+    }
+    for (const ClusterPtr& c : snap->mClusters.mClusters)
+    {
+        CensusCluster cl;
+        cl.mId = c->mId;
+        cl.mGrounded = grounded(c->mMin, c->mMax);
+        for (const RecordPtr& r : c->mRecords)
+        {
+            const auto found = index.find(r.get());
+            if (found != index.end())
+            {
+                cl.mRecords.push_back(found->second);
+            }
+        }
+        census.mClusters.push_back(std::move(cl));
+    }
+    census.mFeatures = snap->mFeatures;
+    census.mDoors = snap->mDoors;
+    size_t named = 0;
+    census.mRoots = rootTable(*this, census.mRecords, named);
+
+    // Milliseconds in the name, so two exports in one second both survive.
+    const auto now = std::chrono::system_clock::now();
+    const std::time_t secs = std::chrono::system_clock::to_time_t(now);
+    const S32 millis = static_cast<S32>(std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count() % 1000);
+    char stamp[32];
+    std::strftime(stamp, sizeof(stamp), "%Y%m%dT%H%M%S", std::gmtime(&secs));
+    const std::string path = gDirUtilp->getExpandedFilename(LL_PATH_LOGS, llformat("sk-census-%s.%03dZ.json", stamp, millis));
+    llofstream file(path, std::ios::out | std::ios::binary | std::ios::trunc);
+    if (!file.is_open())
+    {
+        return llformat("could not write %s", path.c_str());
+    }
+    writeCensus(file, census, mSections);
+    const std::streamoff bytes = file.tellp();
+    file.close();
+
+    // All of it on the main thread, which a large census keeps well under half a second; the time is reported to keep that honest.
+    const F32 ms = timer.getElapsedTimeF32() * 1000.f;
+    LL_INFOS("SKCensus") << "wrote " << bytes << " bytes to " << path << " in " << ms << " ms, " << named << " of " << census.mRoots.size()
+                         << " roots named" << LL_ENDL;
+    return llformat("%zu records, %zu clusters, %zu regions, %zu doors, %zu features, %zu sections, %zu/%zu roots named (%.1f MB, %.0f ms) -> %s",
+                    census.mRecords.size(), census.mClusters.size(), census.mRegions.size(), census.mDoors.size(), census.mFeatures.size(),
+                    mSections.size(), named, census.mRoots.size(), static_cast<F64>(bytes) / (1024.0 * 1024.0), ms, path.c_str());
 }

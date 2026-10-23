@@ -35,7 +35,7 @@
 class LLReflectionMap;
 class LLReflectionMapManager;
 struct SKCensusSnapshot;
-namespace sknav { class SolidLattice; }
+namespace skworld { class SolidLattice; }
 
 /// Holds a fill probe per cell of each census cluster near the camera: the
 /// cluster's footprint cut into a 1x1 up to 3x3 grid, one sphere per occupied
@@ -49,7 +49,7 @@ class SKClusterProbes
 public:
     /// solids is the census scan's lattice, or null while it is not built yet.
     void update(LLReflectionMapManager& manager, const std::shared_ptr<const SKCensusSnapshot>& census,
-                const sknav::SolidLattice* solids);
+                const skworld::SolidLattice* solids);
     /// Let every probe go.
     void clear();
     std::string statsLine() const;

@@ -256,7 +256,7 @@
 			<menu_item_check label="Нормали" name="Normals"/>
 			<menu_item_check label="Октадерево" name="Octree"/>
 			<menu_item_check label="Тень от усеченной пирамиды" name="Shadow Frusta"/>
-			<menu_item_check label="Физические формы" name="Physics Shapes"/>
+			<menu label="Физические формы" name="Physics Shapes"/>
 			<menu_item_check label="Смыкание" name="Occlusion"/>
 			<menu_item_check label="Визуализация порциями" name="Render Batches"/>
 			<menu_item_check label="Тип обновления" name="Update Type"/>

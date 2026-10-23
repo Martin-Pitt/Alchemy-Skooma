@@ -1,6 +1,6 @@
 /**
  * @file skphysicsshape.cpp
- * @brief What a volume's physics shape is, decided once for the debug renderer and the navmesh census.
+ * @brief What a volume's physics shape is, decided once for the physics display and whatever else reads it.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Alchemy Viewer Source Code
@@ -345,8 +345,8 @@ bool skPhysicsShapeGeometry(LLVOVolume* volume, const SKPhysicsShape& shape, SKS
                             const std::shared_ptr<const SKPhysicsHavokShape>& sim)
 {
     out.mTriangles.clear();
-    out.mShape = sknav::Shape::TRIANGLES;
-    out.mProvenance = sknav::Provenance::EXACT;
+    out.mShape = SKShapeKind::TRIANGLES;
+    out.mProvenance = SKShapeProvenance::EXACT;
     // Every shape below is a body the sim collides with as a volume, except a
     // mesh's own physics mesh, which is a surface it collides with from
     // either side.
@@ -388,7 +388,7 @@ bool skPhysicsShapeGeometry(LLVOVolume* volume, const SKPhysicsShape& shape, SKS
                     if (sim && decomp && decomp->mHull.empty())
                     {
                         appendSoup(sim->mTriangles, out.mTriangles);
-                        out.mProvenance = sknav::Provenance::SIM;
+                        out.mProvenance = SKShapeProvenance::SIM;
                         out.mSolid = false;
                         break;
                     }
@@ -411,7 +411,7 @@ bool skPhysicsShapeGeometry(LLVOVolume* volume, const SKPhysicsShape& shape, SKS
                 {
                     gMeshRepo.buildPhysicsMesh(*decomp);
                 }
-                out.mProvenance = sknav::Provenance::HULL;
+                out.mProvenance = SKShapeProvenance::HULL;
                 for (const LLModel::PhysicsMesh& hull : decomp->mMesh)
                 {
                     const size_t before = out.mTriangles.size();
@@ -439,7 +439,7 @@ bool skPhysicsShapeGeometry(LLVOVolume* volume, const SKPhysicsShape& shape, SKS
                     return false;
                 }
                 // The single hull of a shape with no decomposition.
-                out.mProvenance = sknav::Provenance::BASE_HULL;
+                out.mProvenance = SKShapeProvenance::BASE_HULL;
                 appendSoup(decomp->mBaseHullMesh.mPositions, out.mTriangles);
                 if (out.mTriangles.empty())
                 {
@@ -470,7 +470,7 @@ bool skPhysicsShapeGeometry(LLVOVolume* volume, const SKPhysicsShape& shape, SKS
                 {
                     return false;
                 }
-                out.mProvenance = sknav::Provenance::HULL;
+                out.mProvenance = SKShapeProvenance::HULL;
                 appendSoup(decomp->mBaseHullMesh.mPositions, out.mTriangles);
                 if (out.mTriangles.empty())
                 {
@@ -496,8 +496,8 @@ bool skPhysicsShapeGeometry(LLVOVolume* volume, const SKPhysicsShape& shape, SKS
             // The spec's centre and size are in world units (a cut cylinder is
             // shorter than its object and sits off-centre); back both into the
             // unscaled frame so the object transform puts them right.
-            out.mShape = spec.getType() == Spec::BOX ? sknav::Shape::BOX
-                       : spec.getType() == Spec::SPHERE ? sknav::Shape::SPHERE : sknav::Shape::CYLINDER;
+            out.mShape = spec.getType() == Spec::BOX ? SKShapeKind::BOX
+                       : spec.getType() == Spec::SPHERE ? SKShapeKind::SPHERE : SKShapeKind::CYLINDER;
             const LLVector3 centre = spec.getCenter();
             const LLVector3 size = spec.getScale();
             for (S32 i = 0; i < 3; ++i)
@@ -525,7 +525,7 @@ bool skPhysicsShapeGeometry(LLVOVolume* volume, const SKPhysicsShape& shape, SKS
             // draws at that detail, so it can hold a lower-resolution texture
             // or none; a partial sculpt warps, so fall back to the loaded one.
             LLVolume* phys = LLPrimitive::sVolumeManager->refVolume(params, physicsDetail(scale));
-            out.mProvenance = sknav::Provenance::RENDER;
+            out.mProvenance = SKShapeProvenance::RENDER;
             if (phys->getSculptLevel() == 0)
             {
                 appendFaces(phys, out.mTriangles);
@@ -540,14 +540,14 @@ bool skPhysicsShapeGeometry(LLVOVolume* volume, const SKPhysicsShape& shape, SKS
         default:
             return false;
     }
-    return out.mShape != sknav::Shape::TRIANGLES || !out.mTriangles.empty();
+    return out.mShape != SKShapeKind::TRIANGLES || !out.mTriangles.empty();
 }
 
 bool skRenderShapeGeometry(LLVOVolume* volume, SKShapeGeometry& out)
 {
     out.mTriangles.clear();
-    out.mShape = sknav::Shape::TRIANGLES;
-    out.mProvenance = sknav::Provenance::RENDER;
+    out.mShape = SKShapeKind::TRIANGLES;
+    out.mProvenance = SKShapeProvenance::RENDER;
     out.mSolid = false;
     const LLVolume* v = volume->getVolume();
     if (!v)
@@ -561,8 +561,8 @@ bool skRenderShapeGeometry(LLVOVolume* volume, SKShapeGeometry& out)
 bool skCensusRenderGeometry(LLVOVolume* volume, SKShapeGeometry& out)
 {
     out.mTriangles.clear();
-    out.mShape = sknav::Shape::TRIANGLES;
-    out.mProvenance = sknav::Provenance::RENDER;
+    out.mShape = SKShapeKind::TRIANGLES;
+    out.mProvenance = SKShapeProvenance::RENDER;
     out.mSolid = false;
     if (!volume->getVolume())
     {

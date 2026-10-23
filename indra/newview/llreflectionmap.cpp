@@ -325,8 +325,8 @@ F32 LLReflectionMap::getNearClip() const
     {
         ret = mViewerObject->getReflectionProbeNearClip();
     }
-    // <SK:Nexii> Navmesh rooms probes: placed in clear space near floors, so half their radius would clip the floor away.
-    else if (mNavRooms)
+    // <SK:Nexii> Room probes: placed in clear space near floors, so half their radius would clip the floor away.
+    else if (mRoomProbe)
     {
         ret = MINIMUM_NEAR_CLIP;
     }
@@ -417,12 +417,12 @@ bool LLReflectionMap::isRelevant() const
         return false;
     }
 
-    if (mSuppressedByNavRooms) // <SK:Nexii> Navmesh rooms probes: a room part's sphere stands in for this octree probe.
+    if (mSuppressedByRoomProbe) // <SK:Nexii> Room probes: a room part's sphere stands in for this octree probe.
     {
         return false;
     }
 
-    if (mNavRooms && probe_level < 3) // <SK:Nexii> Navmesh rooms probes stand in for octree probes, which only level 3 has.
+    if (mRoomProbe && probe_level < 3) // <SK:Nexii> Room probes stand in for octree probes, which only level 3 has.
     {
         return false;
     }

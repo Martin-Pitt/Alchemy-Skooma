@@ -32,8 +32,8 @@
 #include "llreflectionmapmanager.h"
 #include "llviewercamera.h"
 #include "llviewercontrol.h"
-#include "sknavcluster.h"
-#include "sknavprobes.h"
+#include "skcensuscluster.h"
+#include "skroomsprobes.h"
 #include "skworldcensus.h"
 
 #include <algorithm>
@@ -69,7 +69,7 @@ namespace
     }
 
     // One candidate per occupied cell of the cluster's footprint grid.
-    void placeCluster(const sknav::Cluster& cluster, const sknav::SolidLattice* solids, const LLVector3d& camera,
+    void placeCluster(const skworld::Cluster& cluster, const skworld::SolidLattice* solids, const LLVector3d& camera,
                       F64 cell_m, F64 height_share, std::vector<Candidate>& out)
     {
         const LLVector3d extent = cluster.mMax - cluster.mMin;
@@ -88,7 +88,7 @@ namespace
                 // What the cell actually holds: the members' bounds clipped to it.
                 LLVector3d lo(DBL_MAX, DBL_MAX, DBL_MAX);
                 LLVector3d hi(-DBL_MAX, -DBL_MAX, -DBL_MAX);
-                for (const sknav::RecordPtr& r : cluster.mRecords)
+                for (const skworld::RecordPtr& r : cluster.mRecords)
                 {
                     if (r->mMax.mdV[VX] < cx0 || r->mMin.mdV[VX] > cx1 || r->mMax.mdV[VY] < cy0 || r->mMin.mdV[VY] > cy1)
                     {
@@ -133,7 +133,7 @@ namespace
 }
 
 void SKClusterProbes::update(LLReflectionMapManager& manager, const std::shared_ptr<const SKCensusSnapshot>& census,
-                             const sknav::SolidLattice* solids)
+                             const skworld::SolidLattice* solids)
 {
     // A probe only this holds was dropped by the manager, on a teleport or a reset.
     mHeld.erase(std::remove_if(mHeld.begin(), mHeld.end(), [](const Held& h) { return h.mProbe->getNumRefs() == 1; }), mHeld.end());
@@ -152,7 +152,7 @@ void SKClusterProbes::update(LLReflectionMapManager& manager, const std::shared_
     const LLVector3d camera = gAgent.getPosGlobalFromAgent(LLViewerCamera::getInstance()->getOrigin());
     std::vector<Candidate> candidates;
     mClusters = 0;
-    for (const sknav::ClusterPtr& cluster : census->mClusters.mClusters)
+    for (const skworld::ClusterPtr& cluster : census->mClusters.mClusters)
     {
         const LLVector3d extent = cluster->mMax - cluster->mMin;
         if (extent.mdV[VX] < MIN_EXTENT_M && extent.mdV[VY] < MIN_EXTENT_M && extent.mdV[VZ] < MIN_EXTENT_M)
@@ -223,7 +223,7 @@ void SKClusterProbes::update(LLReflectionMapManager& manager, const std::shared_
             spare.pop_back();
             h.mProbe->mOrigin.load3(origin.mV);
             h.mProbe->mRadius = c.mRadius;
-            manager.invalidateNavRoomsProbe(h.mProbe);
+            manager.invalidateRoomProbe(h.mProbe);
             ++mMoved;
         }
         else

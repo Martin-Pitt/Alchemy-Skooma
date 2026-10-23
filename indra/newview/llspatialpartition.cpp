@@ -51,7 +51,7 @@
 #include "lldrawpool.h"
 #include "lloctree.h"
 #include "llphysicsshapebuilderutil.h"
-#include "skphysicsshape.h" // <SK:Nexii> navmesh census shares the physics-shape decision
+#include "skphysicsshape.h" // <SK:Nexii> physics shapes: the shared physics-shape decision
 #include "llvoavatar.h"
 #include "llvolumemgr.h"
 #include "llviewershadermgr.h"
@@ -2233,7 +2233,7 @@ void render_hull(LLModel::PhysicsMesh& mesh, const LLColor4& color)
 
 void renderPhysicsShape(LLDrawable* drawable, LLVOVolume* volume, bool wireframe)
 {
-    // <SK:Nexii> The navmesh census decides the physics shape through the same call (skphysicsshape.h)
+    // <SK:Nexii> physics shapes: decided through the same call as every other reader (skphysicsshape.h)
     SKPhysicsShape shape;
     if (!skPhysicsShapeClassify(volume, shape))
     {
@@ -2247,7 +2247,7 @@ void renderPhysicsShape(LLDrawable* drawable, LLVOVolume* volume, bool wireframe
     LLColor4 mid = gSavedSettings.getColor4("ObjectCostMidColor");
     LLColor4 high = gSavedSettings.getColor4("ObjectCostHighColor");
 
-    // <SK:Nexii> Coloured by the physics shape's own cost, not the land impact (skphysicsshape.h)
+    // <SK:Nexii> physics shapes: coloured by the physics shape's own cost, not the land impact
     F32 normalizedCost = skPhysicsShapeCostFraction(skPhysicsShapeCost(volume, shape));
     // </SK:Nexii>
 
@@ -2267,12 +2267,15 @@ void renderPhysicsShape(LLDrawable* drawable, LLVOVolume* volume, bool wireframe
         // coplanar shapes, and at half alpha it reads as a slightly darker
         // wash of the fill rather than an edge.
         color = color * 0.5f;
+        // <SK:Nexii> physics shapes: keep the alpha, so this pass separates coplanar shapes as an edge
         color.mV[VALPHA] = 1.f;
+        // </SK:Nexii>
     }
 
     U32 data_mask = LLVertexBuffer::MAP_VERTEX;
+    LLColor4 mesh_hull_color = skPhysicsShapeColor(SKPhysicsShapeSource::MESH_HULL, color, wireframe); // <SK:Nexii> Types colouring
 
-    // <SK:Nexii> spec and type come from the shared decision above
+    // <SK:Nexii> physics shapes: spec from the shared decision above
     LLPhysicsShapeBuilderUtil::PhysicsShapeSpecification physics_spec = shape.mSpec;
     U32 type = physics_spec.getType();
     // </SK:Nexii>
@@ -2291,7 +2294,7 @@ void renderPhysicsShape(LLDrawable* drawable, LLVOVolume* volume, bool wireframe
         // <SK:Nexii> physics_havok block
         // The simulator's MOPP triangles for a mesh without decomposition hulls. With hulls, which
         // shape it collides with is not established, so they keep today's drawing.
-        const bool havok_drawn = decomp && decomp->mHull.empty() && !skPhysicsMeshTooSmallForTriangles(volume) && skRenderPhysicsHavok(mesh_id, color);
+        const bool havok_drawn = decomp && decomp->mHull.empty() && !skPhysicsMeshTooSmallForTriangles(volume) && skRenderPhysicsHavok(mesh_id, skPhysicsShapeColor(SKPhysicsShapeSource::SIMULATOR, color, wireframe)); // <SK:Nexii> Types colouring
         if (havok_drawn)
         {
             // Drawn.
@@ -2302,22 +2305,21 @@ void renderPhysicsShape(LLDrawable* drawable, LLVOVolume* volume, bool wireframe
 
             gGL.getTextureSlot(0)->unbind();
 
-            // <SK:Nexii> A mesh whose physics shape type is Prim collides as
-            // the physics mesh it was uploaded with, not as its convex
-            // decomposition: ask for the physics mesh and take it the moment
-            // it lands, the hulls only cover the wait. Convex Hull shapes
-            // never reach this branch (they arrive as USER_CONVEX).
+            // <SK:Nexii> physics shapes: a Prim-type mesh collides as its
+            // physics mesh, not its decomposition: ask for it and take it the
+            // moment it lands, the hulls only cover the wait.
             gMeshRepo.fetchPhysicsShape(mesh_id);
 
-            if (!decomp->mPhysicsShapeMesh.empty() && !skPhysicsMeshTooSmallForTriangles(volume)) // <SK:Nexii> Small meshes collide as hulls (skphysicsshape.h)
+            if (!decomp->mPhysicsShapeMesh.empty() && !skPhysicsMeshTooSmallForTriangles(volume))
             {
                 //decomp has physics mesh, render that mesh
-                gGL.diffuseColor4fv(color.mV);
+                gGL.diffuseColor4fv(skPhysicsShapeColor(SKPhysicsShapeSource::PHYSICS_MESH, color, wireframe).mV);
 
                 LLVertexBuffer::drawArrays(LLRender::TRIANGLES, decomp->mPhysicsShapeMesh.mPositions);
             }
             else if (!decomp->mHull.empty())
             { //physics mesh still on its way, the decomposition covers the wait
+            // </SK:Nexii>
                 if (decomp->mMesh.empty())
                 {
                     gMeshRepo.buildPhysicsMesh(*decomp);
@@ -2325,12 +2327,12 @@ void renderPhysicsShape(LLDrawable* drawable, LLVOVolume* volume, bool wireframe
 
                 for (U32 i = 0; i < decomp->mMesh.size(); ++i)
                 {
-                    render_hull(decomp->mMesh[i], color);
+                    render_hull(decomp->mMesh[i], skPhysicsShapeColor(SKPhysicsShapeSource::HULLS, color, wireframe)); // <SK:Nexii> Types colouring
                 }
             }
             else
             { //no mesh or decomposition, render base hull
-                renderMeshBaseHull(volume, data_mask, color);
+                renderMeshBaseHull(volume, data_mask, mesh_hull_color); // <SK:Nexii> Types colouring
             }
         }
         else
@@ -2344,7 +2346,7 @@ void renderPhysicsShape(LLDrawable* drawable, LLVOVolume* volume, bool wireframe
     {
         if (volume->isMesh())
         {
-            renderMeshBaseHull(volume, data_mask, color);
+            renderMeshBaseHull(volume, data_mask, mesh_hull_color); // <SK:Nexii> Types colouring
         }
         else
         {
@@ -2440,7 +2442,7 @@ void renderPhysicsShape(LLDrawable* drawable, LLVOVolume* volume, bool wireframe
             if (phys_volume->mHullPoints)
             {
                 //render hull
-                gGL.diffuseColor4fv(color.mV);
+                gGL.diffuseColor4fv(skPhysicsShapeColor(SKPhysicsShapeSource::PRIM_HULL, color, wireframe).mV); // <SK:Nexii> Types colouring
 
                 LLVertexBuffer::unbind();
                 LLVertexBuffer::drawElements(LLRender::TRIANGLES, phys_volume->mHullPoints, NULL, phys_volume->mNumHullIndices, phys_volume->mHullIndices);
@@ -2463,7 +2465,7 @@ void renderPhysicsShape(LLDrawable* drawable, LLVOVolume* volume, bool wireframe
             LLVector3 vscale = volume->getScale() * 2.f;
             scale.set(scale[0] / vscale[0], scale[1] / vscale[1], scale[2] / vscale[2]);
 
-            gGL.diffuseColor4fv(color.mV);
+            gGL.diffuseColor4fv(skPhysicsShapeColor(SKPhysicsShapeSource::PRIMITIVE, color, wireframe).mV); // <SK:Nexii> Types colouring
             drawBox(center, scale);
         }
     }
@@ -2479,7 +2481,7 @@ void renderPhysicsShape(LLDrawable* drawable, LLVOVolume* volume, bool wireframe
             volume_params.setShear(0, 0);
             LLVolume* sphere = LLPrimitive::sVolumeManager->refVolume(volume_params, 3);
 
-            gGL.diffuseColor4fv(color.mV);
+            gGL.diffuseColor4fv(skPhysicsShapeColor(SKPhysicsShapeSource::PRIMITIVE, color, wireframe).mV); // <SK:Nexii> Types colouring
             pushVerts(sphere);
             LLPrimitive::sVolumeManager->unrefVolume(sphere);
         }
@@ -2496,7 +2498,7 @@ void renderPhysicsShape(LLDrawable* drawable, LLVOVolume* volume, bool wireframe
             volume_params.setShear(0, 0);
             LLVolume* cylinder = LLPrimitive::sVolumeManager->refVolume(volume_params, 3);
 
-            gGL.diffuseColor4fv(color.mV);
+            gGL.diffuseColor4fv(skPhysicsShapeColor(SKPhysicsShapeSource::PRIMITIVE, color, wireframe).mV); // <SK:Nexii> Types colouring
             pushVerts(cylinder);
             LLPrimitive::sVolumeManager->unrefVolume(cylinder);
         }
@@ -2508,7 +2510,7 @@ void renderPhysicsShape(LLDrawable* drawable, LLVOVolume* volume, bool wireframe
 
         LLVolume* phys_volume = LLPrimitive::sVolumeManager->refVolume(volume_params, detail);
 
-        gGL.diffuseColor4fv(color.mV);
+        gGL.diffuseColor4fv(skPhysicsShapeColor(SKPhysicsShapeSource::PRIM_MESH, color, wireframe).mV); // <SK:Nexii> Types colouring
         pushVerts(phys_volume);
 
         LLPrimitive::sVolumeManager->unrefVolume(phys_volume);
@@ -2526,7 +2528,7 @@ void renderPhysicsShape(LLDrawable* drawable, LLVOVolume* volume, bool wireframe
             llassert(LLGLSLShader::sCurBoundShader != 0);
             LLVertexBuffer::unbind();
 
-            gGL.diffuseColor4fv(color.mV);
+            gGL.diffuseColor4fv(skPhysicsShapeColor(SKPhysicsShapeSource::PRIM_HULL, color, wireframe).mV); // <SK:Nexii> Types colouring
             gGL.syncMatrices();
 
             LLVertexBuffer::drawElements(LLRender::TRIANGLES, phys_volume->mHullPoints, nullptr, phys_volume->mNumHullIndices, phys_volume->mHullIndices);
@@ -2576,12 +2578,10 @@ void renderPhysicsShapes(LLSpatialGroup* group, bool wireframe)
         else
         {
             LLVOVolume* volume = drawable->getVOVolume();
-            // A phantom does not collide, so its shape is not something anyone
-            // can stand on or bump into; drawing it only makes the overlay
-            // noisier. The flag can sit on the part or on the linkset root, so
-            // check both.
+            // <SK:Nexii> physics shapes: a phantom (part or root) collides with nothing, so it is not drawn
             const bool phantom = volume && (volume->flagPhantom() || volume->getRootEdit()->flagPhantom());
             if (volume && !phantom && !volume->isAttachment() && volume->getPhysicsShapeType() != LLViewerObject::PHYSICS_SHAPE_NONE )
+            // </SK:Nexii>
             {
                 if (!group->getSpatialPartition()->isBridge())
                 {
