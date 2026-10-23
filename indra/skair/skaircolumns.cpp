@@ -137,8 +137,11 @@ namespace
     };
 
     /// Recast's dividePoly: the part of a convex polygon at or below offset along axis into out1, the rest into
-    /// out2; a vertex on the line goes to both. At most 12 vertices in, 12 each out.
-    void dividePoly(const V3* in, S32 n, V3* out1, S32& n1, V3* out2, S32& n2, F64 offset, S32 axis)
+    /// out2; a vertex on the line goes to both. At most 12 vertices in, 12 each out. Where Recast keeps a piece of no
+    /// width beyond the line - an edge or vertex touching it, or a face lying in it - this keeps only a face in the
+    /// line, on the side its solid is on: behind its normal along the axis, facing -1 (below the line), +1 (above),
+    /// 0 for a triangle with no extent across the axis, whose touching pieces go nowhere.
+    void dividePoly(const V3* in, S32 n, V3* out1, S32& n1, V3* out2, S32& n2, F64 offset, S32 axis, S32 facing)
     {
         F64 d[12];
         for (S32 k = 0; k < n; ++k)
@@ -180,6 +183,26 @@ namespace
                 out2[n2++] = in[a];
             }
         }
+        const auto onLine = [&](const V3* p, S32 m) {
+            for (S32 k = 0; k < m; ++k)
+            {
+                if (p[k].v[axis] != offset)
+                {
+                    return false;
+                }
+            }
+            return m > 0;
+        };
+        // A piece with no width on this side - a touching edge or vertex, or a face in the line - is kept only
+        // where it is a face whose solid is on this side.
+        if (facing >= 0 && onLine(out1, n1))
+        {
+            n1 = 0;
+        }
+        if (facing <= 0 && onLine(out2, n2))
+        {
+            n2 = 0;
+        }
     }
 
     /// The frame in doubles, as every stage reads it.
@@ -215,17 +238,24 @@ namespace
         }
         const S32 W = g.mW;
         const F64 cs = g.mCell;
+        // The side of a column edge the triangle's solid lies on, should it lie in one: behind its plan normal.
+        const F64 e0x = in[1].v[0] - in[0].v[0], e0y = in[1].v[1] - in[0].v[1], e0z = in[1].v[2] - in[0].v[2];
+        const F64 e1x = in[2].v[0] - in[0].v[0], e1y = in[2].v[1] - in[0].v[1], e1z = in[2].v[2] - in[0].v[2];
+        const F64 nx = e0y * e1z - e0z * e1y, ny = e0z * e1x - e0x * e1z;
+        const S32 facing_x = nx > 0.0 ? -1 : nx < 0.0 ? 1 : 0;
+        const S32 facing_y = ny > 0.0 ? -1 : ny < 0.0 ? 1 : 0;
         if (lo[0] > g.mOx + W * cs || hi[0] < g.mOx || lo[1] > g.mOy + W * cs || hi[1] < g.mOy || lo[2] > g.mOz + g.mRange || hi[2] < g.mOz)
         {
             return;
         }
-        const S32 ix0 = std::clamp(static_cast<S32>(std::floor((lo[0] - g.mOx) / cs)), -1, W - 1);
+        // A cell earlier than the triangle's least x, so a face on that column edge is split there and goes to its solid's side.
+        const S32 ix0 = std::clamp(static_cast<S32>(std::floor((lo[0] - g.mOx) / cs)) - 1, -1, W - 1);
         const S32 ix1 = std::clamp(static_cast<S32>(std::floor((hi[0] - g.mOx) / cs)), 0, W - 1);
         S32 nin = 3;
         for (S32 ix = ix0; ix <= ix1; ++ix)
         {
             S32 nrow, nrest;
-            dividePoly(in, nin, row, nrow, rest, nrest, g.mOx + (ix + 1) * cs, 0);
+            dividePoly(in, nin, row, nrow, rest, nrest, g.mOx + (ix + 1) * cs, 0, facing_x);
             std::copy(rest, rest + nrest, in);
             nin = nrest;
             if (nrow < 3 || ix < 0)
@@ -238,7 +268,7 @@ namespace
                 ylo = std::min(ylo, row[k].v[1]);
                 yhi = std::max(yhi, row[k].v[1]);
             }
-            S32 iy0 = static_cast<S32>(std::floor((ylo - g.mOy) / cs));
+            S32 iy0 = static_cast<S32>(std::floor((ylo - g.mOy) / cs)) - 1;
             S32 iy1 = static_cast<S32>(std::floor((yhi - g.mOy) / cs));
             if (iy1 < 0 || iy0 >= W)
             {
@@ -249,7 +279,7 @@ namespace
             for (S32 iy = iy0; iy <= iy1; ++iy)
             {
                 S32 ncell, nrr;
-                dividePoly(row, nrow, cell, ncell, rrest, nrr, g.mOy + (iy + 1) * cs, 1);
+                dividePoly(row, nrow, cell, ncell, rrest, nrr, g.mOy + (iy + 1) * cs, 1, facing_y);
                 std::copy(rrest, rrest + nrr, row);
                 nrow = nrr;
                 if (ncell < 3 || iy < 0)
@@ -1060,6 +1090,23 @@ namespace skworld
             view_walk.resize(view_top.size());
             walkRules(cw, view_start.data(), view_bottom.data(), view_top.data(), view_code.data(), input.mAvatar, view_out.data(), nullptr,
                       view_walk.data());
+            if (stats)
+            {
+                U64 walk_hash = 0x9e3779b97f4a7c15ull, area_hash = walk_hash;
+                for (size_t v = 0; v + 1 < view_start.size(); ++v)
+                {
+                    walk_hash = mix(walk_hash, v);
+                    area_hash = mix(area_hash, v);
+                    for (U32 k = view_start[v]; k < view_start[v + 1]; ++k)
+                    {
+                        const U64 span = static_cast<U64>(view_bottom[k]) | static_cast<U64>(view_top[k]) << 16;
+                        walk_hash = mix(walk_hash, span | static_cast<U64>(view_walk[k]) << 32);
+                        area_hash = mix(area_hash, span | static_cast<U64>(view_walk[k] ? areaOfCode(view_out[k]) : 0) << 32);
+                    }
+                }
+                stats->mAvatarWalkHash = walk_hash;
+                stats->mAvatarAreaHash = area_hash;
+            }
 
             // Back onto the raster's spans: its own where the view shares the column, else a span of the window's at that top.
             for (S32 y = 0; y < cw; ++y)

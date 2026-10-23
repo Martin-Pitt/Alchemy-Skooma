@@ -29,7 +29,8 @@
 #include "../skairdistil.h"
 #include "../skairskymap.h"
 
-#include "Recast.h"
+#include "../skaircolumns.h"
+#include "../skairsoup.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -401,32 +402,38 @@ namespace
 
     TEST_CASE("skairdistil: solid tops merge per metre and the sky map forgets a roof that is gone", "[skairdistil]")
     {
-        rcContext ctx(false);
-        rcHeightfield* hf = rcAllocHeightfield();
-        const F32 bmin[3] = { 0.f, 0.f, 0.f };
-        const F32 bmax[3] = { 4.f, 40.f, 4.f };
-        // 16 x 16 cells of 0.25 m with a one-cell border: 14 x 14 inside.
-        rcCreateHeightfield(&ctx, *hf, 16, 16, bmin, bmax, 0.25f, 0.25f);
-        for (S32 x = 1; x < 15; ++x)
+        // 16 x 16 cells of 0.25 m with a one-cell border: 14 x 14 inside; ground in every inner column, and a
+        // roof over columns 1..4 each way: the first metre cell of the tile.
+        ColumnRaster hf;
+        hf.mFrame.mCell = hf.mFrame.mUnit = 0.25f;
+        hf.mFrame.mWidth = 16;
+        hf.mFrame.mHeightRange = 40.f;
+        hf.mStart.assign(1, 0);
+        for (S32 iy = 0; iy < 16; ++iy)
         {
-            for (S32 z = 1; z < 15; ++z)
+            for (S32 ix = 0; ix < 16; ++ix)
             {
-                rcAddSpan(&ctx, *hf, x, z, 0, 4, RC_WALKABLE_AREA, 1);
-            }
-        }
-        // A roof over Recast x 1..4, z 1..4: the first metre cell of the tile.
-        for (S32 x = 1; x < 5; ++x)
-        {
-            for (S32 z = 1; z < 5; ++z)
-            {
-                rcAddSpan(&ctx, *hf, x, z, 20 + (x & 1), 22, RC_NULL_AREA, 1);
+                if (ix >= 1 && ix < 15 && iy >= 1 && iy < 15)
+                {
+                    hf.mBottom.push_back(0);
+                    hf.mTop.push_back(4);
+                    hf.mCode.push_back(AREA_CODE_BASE);
+                    hf.mWalk.push_back(TOP_WALK);
+                }
+                if (ix >= 1 && ix < 5 && iy >= 1 && iy < 5)
+                {
+                    hf.mBottom.push_back(static_cast<U16>(20 + (iy & 1)));
+                    hf.mTop.push_back(22);
+                    hf.mCode.push_back(0);
+                    hf.mWalk.push_back(0);
+                }
+                hf.mStart.push_back(static_cast<U32>(hf.mTop.size()));
             }
         }
         TileAir air;
         air.mCell = 0.25f;
         air.mUnit = 0.25f;
-        airTops(*hf, 1, 4, air);
-        rcFreeHeightField(hf);
+        airTops(hf, 1, 4, air);
         const TileTops& tops = *air.mTops;
         { INFO("metre cells across"); CHECK(tops.mTopWidth == 4); }
         { INFO("roofed cell: ground and roof"); CHECK(tops.mTopStart[1] - tops.mTopStart[0] == 2u); }

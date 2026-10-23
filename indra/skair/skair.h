@@ -32,10 +32,10 @@
 #include <cstdlib>
 #include <vector>
 
-struct rcHeightfield;
-
 namespace skworld
 {
+    struct ColumnRaster;
+
     /// One open gap in a column: from the top of a solid to the bottom of the
     /// next one, or to the top of the tile's height range when nothing is above.
     /// Heights are in grid units from the grid's origin z. A floor may read up
@@ -95,19 +95,10 @@ namespace skworld
         F32 height(U16 units) const { return mOrigin.mV[VZ] + units * mUnit; }
     };
 
-    /// Read the gaps off a heightfield after its filters have run, so the
-    /// walkable flag is the class's own. Gaps below the lowest solid are not
-    /// air anything stands in and are left out.
-    /// Flags to add to the gap over each span of a heightfield, column by
-    /// column in the heightfield's order, bottom up.
-    struct SpanFlags
-    {
-        std::vector<U32> mStart;    ///< per column, where its spans' flags begin; columns + 1
-        std::vector<U8> mFlags;
-    };
-
-    /// A raster whose spans carry codes passes the code -> area table as area_lut.
-    void extractAir(const rcHeightfield& hf, S32 border_cells, AirGrid& out, const U8* area_lut = nullptr, const SpanFlags* extra = nullptr);
+    /// Read the gaps off a walked raster (skaircolumns.h), border_cells in from its edge: TOP where the air
+    /// stands on the span, its area then, and AVATAR_FLOOR where AVATAR does. Gaps below the lowest solid are
+    /// not air anything stands in and are left out.
+    void extractAir(const ColumnRaster& raster, S32 border_cells, AirGrid& out);
 
     /// Whether two gaps of lateral neighbours connect: floors within climb
     /// and at least overlap units of air shared above both.

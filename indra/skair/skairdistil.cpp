@@ -29,7 +29,7 @@
 #include "skcensusprofile.h"
 #include "skairskymap.h"
 
-#include "Recast.h"
+#include "skaircolumns.h"
 
 #include <algorithm>
 #include <climits>
@@ -835,11 +835,11 @@ namespace skworld
         }
     }
 
-    void airTops(const rcHeightfield& hf, S32 border_cells, S32 cells_per_top, TileAir& out)
+    void airTops(const ColumnRaster& raster, S32 border_cells, S32 cells_per_top, TileAir& out)
     {
         SK_WORLD_ZONE("air.tops");
-        // Recast (x, y, z) is SL (y, z, x), as in extractAir.
-        const S32 w = std::max(0, hf.height - 2 * border_cells), h = std::max(0, hf.width - 2 * border_cells);
+        const S32 W = raster.mFrame.mWidth;
+        const S32 w = std::max(0, W - 2 * border_cells), h = w;
         const S32 c = std::max(1, cells_per_top);
         auto made = std::make_shared<TileTops>();
         TileTops& tops = *made;
@@ -860,9 +860,10 @@ namespace skworld
                 {
                     for (S32 ix = tx * c; ix < std::min(w, (tx + 1) * c); ++ix)
                     {
-                        for (const rcSpan* s = hf.spans[(border_cells + iy) + (border_cells + ix) * hf.width]; s; s = s->next)
+                        const S32 col = (border_cells + ix) + (border_cells + iy) * W;
+                        for (U32 k = raster.mStart[col]; k < raster.mStart[col + 1]; ++k)
                         {
-                            runs.push_back({ clipHeight(static_cast<U16>(s->smin)), clipHeight(static_cast<U16>(s->smax)) });
+                            runs.push_back({ clipHeight(raster.mBottom[k]), clipHeight(raster.mTop[k]) });
                         }
                     }
                 }
@@ -886,9 +887,8 @@ namespace skworld
         out.mTops = std::move(made);
     }
 
-    TileAirPtr buildTileAir(const rcHeightfield& hf, S32 border_cells, S32 pad_cells, S32 climb, S32 overlap, S32 min_gap,
-                            AirBuildStats* stats, const U8* area_lut, const SpanFlags* extra, AirGrid* fine,
-                            AirGrid* extracted)
+    TileAirPtr buildTileAir(const ColumnRaster& raster, S32 border_cells, S32 pad_cells, S32 climb, S32 overlap, S32 min_gap,
+                            AirBuildStats* stats, AirGrid* fine, AirGrid* extracted)
     {
         SK_WORLD_ZONE("air.build");
         StageClock clock(stats ? stats->mMs : nullptr);
@@ -901,7 +901,7 @@ namespace skworld
         }
         else
         {
-            extractAir(hf, border_cells - pad, padded, area_lut, extra);
+            extractAir(raster, border_cells - pad, padded);
         }
         clock.lap(AirBuildStats::EXTRACT);
         if (padded.empty())
@@ -926,7 +926,7 @@ namespace skworld
         clock.lap(AirBuildStats::DISTIL);
         airSeams(grid, *air);
         clock.lap(AirBuildStats::SEAMS);
-        airTops(hf, border_cells, std::max(1, static_cast<S32>(1.f / hf.cs + 0.5f)), *air);
+        airTops(raster, border_cells, std::max(1, static_cast<S32>(1.f / raster.mFrame.mCell + 0.5f)), *air);
         clock.lap(AirBuildStats::TOPS);
         if (stats)
         {

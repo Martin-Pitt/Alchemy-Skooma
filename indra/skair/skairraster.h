@@ -101,10 +101,9 @@ namespace skworld
         /// The exposed faces of every solid (skairwalls.h).
         bool mWallFaces = false;
         /// Where the raster's TOP floors end over a drop, and where weather
-        /// runs off them, down to mRunoffMax metres, a link every mRunoffSpacing.
+        /// runs off them, down to mRunoffMax metres.
         bool mRunoff = false;
         F32 mRunoffMax = 24.f;
-        F32 mRunoffSpacing = 2.f;
         /// The air grid (skair.h), off the solid raster, which keeps the door leaves that split rooms.
         bool mAir = false;
         /// Cells the raster reads past the tile when it keeps the air, so the clearance on the tile is exact.
@@ -128,7 +127,7 @@ namespace skworld
         std::vector<WallFace> mFaces;
         /// The raster's TOP floor edges over a drop, and the run-off down them.
         std::vector<WallSegment> mLedges;
-        std::vector<DropLink> mRunoff;
+        std::vector<RunoffSegment> mRunoff;
         /// The distilled air, null when there is none; mAirBuilt says it was asked for.
         TileAirPtr mAir;
         bool mAirBuilt = false;

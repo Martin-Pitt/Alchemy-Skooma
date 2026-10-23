@@ -99,6 +99,9 @@ namespace skworld
         F64 mCullMs = 0.0;          ///< and the compaction into the arrays
         F64 mTopWalkMs = 0.0;       ///< the air's walk rules
         F64 mAvatarWalkMs = 0.0;    ///< AVATAR's view and its walk rules
+        /// Digests of AVATAR's view after its walk rules, relative to its corner: where it walks, and on what.
+        U64 mAvatarWalkHash = 0;
+        U64 mAvatarAreaHash = 0;
     };
 
     /// What a raster is made of beyond the frame: the soup, and, for a window raster, the triangles to leave out

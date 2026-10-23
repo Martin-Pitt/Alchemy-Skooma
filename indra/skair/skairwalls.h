@@ -29,10 +29,10 @@
 
 #include <vector>
 
-struct rcHeightfield;
-
 namespace skworld
 {
+    struct ColumnRaster;
+
     /// What lies beyond a floor edge. Positions are mesh-local SL metres.
     enum class EdgeKind : U8
     {
@@ -56,11 +56,11 @@ namespace skworld
     /// An exposed side of solid: the surface Atmo paints and drains along.
     /// mSide is the outward direction: 0 +x, 1 -x, 2 +y, 3 -y in SL axes.
     ///
-    /// mArea is the Recast area of the span the face belongs to, which is null
-    /// for anything steep: only up-facing triangles are given an area, because
-    /// that is how Recast decides walkability. So a genuine wall reports no
-    /// area, and telling an object's wall from a terrain cliff needs a second
-    /// rasterisation this does not do. Do not gate behaviour on it.
+    /// mArea is the area of the span the face belongs to where the air stands on
+    /// its top (TOP_WALK), else none: only up-facing triangles are given an
+    /// area, so a genuine wall reports none, and telling an object's wall from
+    /// a terrain cliff needs a second rasterisation this does not do. Do not
+    /// gate behaviour on it.
     struct WallFace
     {
         LLVector3 mMin;         ///< a thin axis-aligned box; the thin axis is the side's
@@ -78,6 +78,18 @@ namespace skworld
         ELEVATOR,   ///< ridden, either way
     };
 
+    /// A stretch of a floor's edge over a drop, and what lies below it: the edge from mA to mB at the floor's
+    /// height, the drop to the landing at each end, linear between. One stretch runs until the landing changes
+    /// (another surface, or the drop leaves its line by more than a unit), the edge bends, or the drop starts or ends.
+    struct RunoffSegment
+    {
+        LLVector3 mA;
+        LLVector3 mB;
+        F32 mDropA = 0.f;
+        F32 mDropB = 0.f;
+        U8 mSide = 0;           ///< the side the floor's edge faces at mA: 0 +x, 1 -x, 2 +y, 3 -y
+    };
+
     /// Where a floor can be left for another: from the edge to the landing.
     struct DropLink
     {
@@ -92,25 +104,22 @@ namespace skworld
     Cover coverClass(F32 wall_height, F32 eye_height, F32 climb, F32 peek = 0.15f);
 
     /// Every exposed span side inside the tile proper (border columns left
-    /// out), greedy-merged along the wall. Recast space in, SL mesh-local out.
+    /// out), greedy-merged along the wall, mesh-local SL.
     /// `min_height` drops anything shorter, which on sloping ground is most
     /// of what a heightfield has: a smooth hillside rasterises into a
     /// staircase, and every riser of it is an exposed vertical face. A riser
     /// is the cell size times the tangent of the slope, so half a metre keeps
     /// everything steeper than about seventy-five degrees at a 0.125 m cell
     /// and throws the terracing away.
-    /// A raster whose spans carry codes passes the code -> area table as area_lut.
-    void extractWallFaces(const rcHeightfield& hf, S32 border_cells, F32 min_height, std::vector<WallFace>& out,
-                          const U8* area_lut = nullptr);
+    void extractWallFaces(const ColumnRaster& raster, S32 border_cells, F32 min_height, std::vector<WallFace>& out);
 
-    /// Where the walkable tops of a raster end over a drop: a side whose
-    /// neighbour column has nothing within climb cells of the top or in
-    /// headroom cells over it. Runs over one drop merge into LEDGE segments,
-    /// valued by the drop to the highest solid below, < 0 with none; every
-    /// spacing metres along a run a link runs off down to it, drop_max at
-    /// most. Recast space in, SL mesh-local out; the border left out.
-    void extractRunoff(const rcHeightfield& hf, S32 border_cells, S32 climb, S32 headroom, F32 drop_max, F32 spacing,
-                       std::vector<WallSegment>& ledges, std::vector<DropLink>& links);
+    /// Where the air's floors end over a drop, before the rim rule took them (TOP_PRE_LEDGE): a side whose
+    /// neighbour column has nothing within climb units of the top or in headroom units over it. Runs over one
+    /// drop merge into LEDGE segments, valued by the drop to the highest solid below, < 0 with none. The edge
+    /// is followed round as a polyline and laid as run-off where it has a landing no more than drop_max metres
+    /// down (RunoffSegment); the border left out.
+    void extractRunoff(const ColumnRaster& raster, S32 border_cells, S32 climb, S32 headroom, F32 drop_max, std::vector<WallSegment>& ledges,
+                       std::vector<RunoffSegment>& runoff);
 }
 
 #endif // SK_AIRWALLS_H

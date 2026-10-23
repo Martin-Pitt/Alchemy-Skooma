@@ -123,13 +123,17 @@ TEST_CASE("skairwalls: a platform's top is a ledge all round with run-off down t
     INFO(llformat("ledges %.1f m, drop %.2f", ledge_len, drop));
     CHECK(ledge_len > 40.f);
     CHECK(std::fabs(drop - 3.f) < 0.4f);
-    CHECK(r.mRunoff.size() > 15);
-    for (const DropLink& link : r.mRunoff)
+    // The platform's rim over flat land is four straight stretches, one a side.
+    CHECK(r.mRunoff.size() == 4u);
+    F32 run = 0.f;
+    for (const RunoffSegment& seg : r.mRunoff)
     {
-        CHECK(std::fabs(link.mHeight - 3.f) < 0.4f);
-        CHECK(link.mFrom.mV[VZ] > 2.5f);
-        CHECK(std::fabs(link.mTo.mV[VZ]) < 0.5f);
+        CHECK(std::fabs(seg.mDropA - 3.f) < 0.4f);
+        CHECK(std::fabs(seg.mDropB - 3.f) < 0.4f);
+        CHECK(seg.mA.mV[VZ] > 2.5f);
+        run += (seg.mB - seg.mA).magVec();
     }
+    CHECK(std::fabs(run - 64.f) < 1.f);
 }
 
 TEST_CASE("skairwalls: run-off reaches as far down as its limit", "[skairwalls]")
@@ -144,9 +148,10 @@ TEST_CASE("skairwalls: run-off reaches as far down as its limit", "[skairwalls]"
     CHECK(ledge_len > 40.f);
     CHECK(std::fabs(drop - 15.f) < 0.6f);
     REQUIRE(!r.mRunoff.empty());
-    for (const DropLink& link : r.mRunoff)
+    for (const RunoffSegment& seg : r.mRunoff)
     {
-        CHECK(std::fabs(link.mHeight - 15.f) < 0.6f);
+        CHECK(std::fabs(seg.mDropA - 15.f) < 0.6f);
+        CHECK(std::fabs(seg.mDropB - 15.f) < 0.6f);
     }
     in.mRunoffMax = 10.f;
     CHECK(build(in).mRunoff.empty());
@@ -180,4 +185,30 @@ TEST_CASE("skairwalls: a block AVATAR leaves out still shows its sides", "[skair
     const TileAirResult r = build(in);
     REQUIRE(r.mStatus == TileAirResult::SUCCESS);
     CHECK(faceArea(r.mFaces, 10.f, 10.f, 22.f, 22.f) > 32.f);
+}
+
+TEST_CASE("skairwalls: a platform turned off the grid still runs off in one stretch a side", "[skairwalls]")
+{
+    TileInput in = wallTile();
+    // A 12 m square platform 3 m up, turned 10 degrees: its rim rasterises as a staircase on every side.
+    auto r = std::make_shared<Record>(*box(10.f, 10.f, 0.f, 22.f, 22.f, 3.f));
+    const F32 a = 10.f * DEG_TO_RAD;
+    r->mAxes[0].set(std::cos(a), std::sin(a), 0.f);
+    r->mAxes[1].set(-std::sin(a), std::cos(a), 0.f);
+    r->mMin.set(7.f, 7.f, 0.f);
+    r->mMax.set(25.f, 25.f, 3.f);
+    in.mRecords.push_back(r);
+    const TileAirResult out = build(in);
+    REQUIRE(out.mStatus == TileAirResult::SUCCESS);
+    INFO("segments " << out.mRunoff.size());
+    CHECK(out.mRunoff.size() >= 4u);
+    CHECK(out.mRunoff.size() <= 8u);
+    F32 run = 0.f;
+    for (const RunoffSegment& seg : out.mRunoff)
+    {
+        run += (seg.mB - seg.mA).magVec();
+        CHECK(std::fabs(seg.mDropA - 3.f) < 0.4f);
+    }
+    // Chords across the staircase are about as long as the rim itself.
+    CHECK(std::fabs(run - 48.f) < 3.f);
 }

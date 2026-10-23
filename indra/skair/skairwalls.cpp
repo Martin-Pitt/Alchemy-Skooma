@@ -26,46 +26,41 @@
 
 #include "skairwalls.h"
 
-#include "skairraster.h"
+#include "skaircolumns.h"
+#include "skairsoup.h"
 #include "skcensusprofile.h"
-
-#include "Recast.h"
 
 #include <algorithm>
 #include <cmath>
-#include <map>
 #include <tuple>
 
 namespace
 {
     using namespace skworld;
 
-    struct Interval
-    {
-        F32 mBottom;
-        F32 mTop;
-    };
+    // Sides in SL: 0 +x, 1 -x, 2 +y, 3 -y.
+    const S32 DX[4] = { 1, -1, 0, 0 };
+    const S32 DY[4] = { 0, 0, 1, -1 };
 
-    /// Solid intervals of a heightfield column, ascending, in Recast y metres.
-    void column(const rcHeightfield& hf, S32 cx, S32 cz, std::vector<Interval>& out)
-    {
-        out.clear();
-        if (cx < 0 || cz < 0 || cx >= hf.width || cz >= hf.height)
-        {
-            return;
-        }
-        for (const rcSpan* s = hf.spans[cx + cz * hf.width]; s; s = s->next)
-        {
-            out.push_back({ hf.bmin[1] + s->smin * hf.ch, hf.bmin[1] + s->smax * hf.ch });
-        }
-    }
-
+    /// A column's side exposed over some height, before runs along the wall are merged.
     struct FaceRun
     {
-        S32 mAlong0, mAlong1;   // inclusive cell range along the wall
-        S32 mAcross;            // the column across the wall
-        F32 mBottom, mTop;
+        S32 mAcross;            ///< the column's index across the wall
+        S32 mBottom;            ///< units
+        S32 mAlong0;            ///< inclusive range along the wall
+        S32 mAlong1;
+        S32 mTop;
         U8 mArea;
+    };
+
+    /// A floor's side over a drop: what the ledges and the run-off are made of.
+    struct EdgeCell
+    {
+        S32 mX;
+        S32 mY;
+        S32 mTop;
+        S32 mLanding;           ///< the landing's top in units, -1 with nothing below
+        S32 mSide;
     };
 }
 
@@ -84,259 +79,334 @@ namespace skworld
         return Cover::NONE;
     }
 
-    void extractWallFaces(const rcHeightfield& hf, S32 border_cells, F32 min_height, std::vector<WallFace>& out, const U8* area_lut)
+    void extractWallFaces(const ColumnRaster& raster, S32 border_cells, F32 min_height, std::vector<WallFace>& out)
     {
         SK_WORLD_ZONE("air.walls.faces");
-        // Sides in Recast: 0 +x, 1 -x, 2 +z, 3 -z. Faces of one side, one
-        // across-column and one z-interval merge along the wall's direction.
-        static const S32 DX[4] = { 1, -1, 0, 0 };
-        static const S32 DZ[4] = { 0, 0, 1, -1 };
-        std::vector<Interval> theirs;
+        const ColumnFrame& f = raster.mFrame;
+        const S32 W = f.mWidth;
+        const F32 ox = f.mOrigin.mV[VX], oy = f.mOrigin.mV[VY], oz = f.mOrigin.mV[VZ], cs = f.mCell, unit = f.mUnit;
+        std::vector<FaceRun> runs;
         for (S32 side = 0; side < 4; ++side)
         {
-            const bool alongZ = (side < 2);     // ±x faces run along z
-            std::map<std::pair<S32, S32>, std::vector<FaceRun>> runs;  // key: (across, bottom cells)
-            const S32 x0 = border_cells, x1 = hf.width - border_cells, z0 = border_cells, z1 = hf.height - border_cells;
-            for (S32 cz = z0; cz < z1; ++cz)
+            // Faces of one side, one across-column and one bottom merge along the wall: ±x faces run along y.
+            const bool along_y = side < 2;
+            runs.clear();
+            for (S32 iy = border_cells; iy < W - border_cells; ++iy)
             {
-                for (S32 cx = x0; cx < x1; ++cx)
+                for (S32 ix = border_cells; ix < W - border_cells; ++ix)
                 {
-                    const rcSpan* first = hf.spans[cx + cz * hf.width];
-                    if (!first)
+                    const S32 c = ix + iy * W;
+                    const S32 nx = ix + DX[side], ny = iy + DY[side];
+                    const bool inside = nx >= 0 && ny >= 0 && nx < W && ny < W;
+                    const S32 n = nx + ny * W;
+                    const U32 na = inside ? raster.mStart[n] : 0, nb = inside ? raster.mStart[n + 1] : 0;
+                    const S32 along = along_y ? iy : ix, across = along_y ? ix : iy;
+                    for (U32 k = raster.mStart[c]; k < raster.mStart[c + 1]; ++k)
                     {
-                        continue;
-                    }
-                    column(hf, cx + DX[side], cz + DZ[side], theirs);
-                    for (const rcSpan* s = first; s; s = s->next)
-                    {
-                        const U8 area = area_lut ? area_lut[s->area] : static_cast<U8>(s->area);
-                        // Subtract the neighbour's solids from this span's interval.
-                        F32 lo = hf.bmin[1] + s->smin * hf.ch;
-                        const F32 hi = hf.bmin[1] + s->smax * hf.ch;
-                        for (const Interval& t : theirs)
+                        const U8 area = (raster.mWalk[k] & TOP_WALK) ? areaOfCode(raster.mCode[k]) : 0;
+                        // The span's height less the neighbour's solids.
+                        S32 lo = raster.mBottom[k];
+                        const S32 hi = raster.mTop[k];
+                        for (U32 m = na; m < nb; ++m)
                         {
-                            if (t.mTop <= lo || t.mBottom >= hi)
+                            const S32 tb = raster.mBottom[m], tt = raster.mTop[m];
+                            if (tt <= lo || tb >= hi)
                             {
                                 continue;
                             }
-                            if (t.mBottom > lo)
+                            if (tb > lo)
                             {
-                                const S32 along = alongZ ? cz : cx, across = alongZ ? cx : cz;
-                                runs[{ across, static_cast<S32>(std::lround(lo / hf.ch)) }].push_back({ along, along, across, lo, t.mBottom, area });
+                                runs.push_back({ across, lo, along, along, tb, area });
                             }
-                            lo = std::max(lo, t.mTop);
+                            lo = std::max(lo, tt);
                         }
                         if (lo < hi)
                         {
-                            const S32 along = alongZ ? cz : cx, across = alongZ ? cx : cz;
-                            runs[{ across, static_cast<S32>(std::lround(lo / hf.ch)) }].push_back({ along, along, across, lo, hi, area });
+                            runs.push_back({ across, lo, along, along, hi, area });
                         }
                     }
                 }
             }
-            for (auto& entry : runs)
+            std::stable_sort(runs.begin(), runs.end(), [](const FaceRun& a, const FaceRun& b) {
+                return std::tie(a.mAcross, a.mBottom, a.mAlong0) < std::tie(b.mAcross, b.mBottom, b.mAlong0);
+            });
+            size_t i = 0;
+            while (i < runs.size())
             {
-                std::vector<FaceRun>& list = entry.second;
-                std::sort(list.begin(), list.end(), [](const FaceRun& a, const FaceRun& b) { return a.mAlong0 < b.mAlong0; });
-                size_t i = 0;
-                while (i < list.size())
+                FaceRun run = runs[i];
+                size_t j = i + 1;
+                while (j < runs.size() && runs[j].mAcross == run.mAcross && runs[j].mBottom == run.mBottom && runs[j].mAlong0 == run.mAlong1 + 1 &&
+                       runs[j].mTop == run.mTop && runs[j].mArea == run.mArea)
                 {
-                    FaceRun run = list[i];
-                    size_t j = i + 1;
-                    while (j < list.size() && list[j].mAlong0 == run.mAlong1 + 1 && std::fabs(list[j].mTop - run.mTop) < hf.ch * 0.5f && list[j].mArea == run.mArea)
-                    {
-                        run.mAlong1 = list[j].mAlong0;
-                        ++j;
-                    }
-                    i = j;
-                    // Recast cells back to SL mesh-local metres: x = Recast z, y = Recast x, z = Recast y.
-                    if (run.mTop - run.mBottom < min_height)
-                    {
-                        continue;
-                    }
-                    WallFace f;
-                    const F32 rx0 = hf.bmin[0] + (alongZ ? run.mAcross : run.mAlong0) * hf.cs;
-                    const F32 rx1 = hf.bmin[0] + (alongZ ? run.mAcross + 1 : run.mAlong1 + 1) * hf.cs;
-                    const F32 rz0 = hf.bmin[2] + (alongZ ? run.mAlong0 : run.mAcross) * hf.cs;
-                    const F32 rz1 = hf.bmin[2] + (alongZ ? run.mAlong1 + 1 : run.mAcross + 1) * hf.cs;
-                    // The face sits on the side's boundary of the column.
-                    const F32 fx0 = side == 0 ? rx1 : side == 1 ? rx0 : rx0, fx1 = side == 0 ? rx1 : side == 1 ? rx0 : rx1;
-                    const F32 fz0 = side == 2 ? rz1 : side == 3 ? rz0 : rz0, fz1 = side == 2 ? rz1 : side == 3 ? rz0 : rz1;
-                    f.mMin.set(std::min(fz0, fz1), std::min(fx0, fx1), run.mBottom);
-                    f.mMax.set(std::max(fz0, fz1), std::max(fx0, fx1), run.mTop);
-                    // Recast +x is SL +y, Recast +z is SL +x.
-                    f.mSide = side == 0 ? 2 : side == 1 ? 3 : side == 2 ? 0 : 1;
-                    f.mArea = run.mArea;
-                    out.push_back(f);
+                    run.mAlong1 = runs[j].mAlong0;
+                    ++j;
                 }
+                i = j;
+                if ((run.mTop - run.mBottom) * unit < min_height)
+                {
+                    continue;
+                }
+                // The face sits on the side's boundary of the column.
+                const F32 a0 = (along_y ? oy : ox) + run.mAlong0 * cs, a1 = (along_y ? oy : ox) + (run.mAlong1 + 1) * cs;
+                const F32 at = (along_y ? ox : oy) + (run.mAcross + ((side & 1) ? 0 : 1)) * cs;
+                WallFace face;
+                face.mMin.set(along_y ? at : a0, along_y ? a0 : at, oz + run.mBottom * unit);
+                face.mMax.set(along_y ? at : a1, along_y ? a1 : at, oz + run.mTop * unit);
+                face.mSide = static_cast<U8>(side);
+                face.mArea = run.mArea;
+                out.push_back(face);
             }
         }
     }
 
-    void extractRunoff(const rcHeightfield& hf, S32 border_cells, S32 climb, S32 headroom, F32 drop_max, F32 spacing,
-                       std::vector<WallSegment>& ledges, std::vector<DropLink>& links)
+    void extractRunoff(const ColumnRaster& raster, S32 border_cells, S32 climb, S32 headroom, F32 drop_max, std::vector<WallSegment>& ledges,
+                       std::vector<RunoffSegment>& runoff)
     {
         SK_WORLD_ZONE("air.walls.runoff");
-        // Sides in Recast: 0 +x, 1 -x, 2 +z, 3 -z, as for the faces.
-        static const S32 DX[4] = { 1, -1, 0, 0 };
-        static const S32 DZ[4] = { 0, 0, 1, -1 };
-        struct Cell
+        const ColumnFrame& f = raster.mFrame;
+        const S32 W = f.mWidth;
+        const F32 ox = f.mOrigin.mV[VX], oy = f.mOrigin.mV[VY], oz = f.mOrigin.mV[VZ], cs = f.mCell, unit = f.mUnit;
+
+        // Every floor side with nothing within climb of its top or in its headroom beyond it.
+        std::vector<EdgeCell> cells;
+        for (S32 iy = border_cells; iy < W - border_cells; ++iy)
         {
-            S32 mX;
-            S32 mZ;
-            S32 mTop;
-            S32 mLanding;   ///< the landing's top in cells, -1 with nothing below
-            S32 mSide;
-        };
-        std::vector<Cell> cells;
-        const S32 x0 = border_cells, x1 = hf.width - border_cells, z0 = border_cells, z1 = hf.height - border_cells;
-        for (S32 cz = z0; cz < z1; ++cz)
-        {
-            for (S32 cx = x0; cx < x1; ++cx)
+            for (S32 ix = border_cells; ix < W - border_cells; ++ix)
             {
-                for (const rcSpan* s = hf.spans[cx + cz * hf.width]; s; s = s->next)
+                const S32 c = ix + iy * W;
+                for (U32 k = raster.mStart[c]; k < raster.mStart[c + 1]; ++k)
                 {
-                    if (s->area == RC_NULL_AREA)
+                    if (!(raster.mWalk[k] & TOP_PRE_LEDGE))
                     {
                         continue;
                     }
-                    // Over a side, nothing within the climb of the top or in its headroom.
-                    const S32 top = static_cast<S32>(s->smax);
+                    const S32 top = raster.mTop[k];
                     for (S32 side = 0; side < 4; ++side)
                     {
+                        const S32 n = (ix + DX[side]) + (iy + DY[side]) * W;
                         S32 landing = -1;
                         bool open = true;
-                        for (const rcSpan* o = hf.spans[(cx + DX[side]) + (cz + DZ[side]) * hf.width]; o && open; o = o->next)
+                        for (U32 m = raster.mStart[n]; m < raster.mStart[n + 1] && open; ++m)
                         {
-                            if (static_cast<S32>(o->smax) > top - climb && static_cast<S32>(o->smin) < top + headroom)
+                            if (raster.mTop[m] > top - climb && raster.mBottom[m] < top + headroom)
                             {
                                 open = false;
                             }
-                            else if (static_cast<S32>(o->smax) <= top - climb)
+                            else if (raster.mTop[m] <= top - climb)
                             {
-                                landing = std::max(landing, static_cast<S32>(o->smax));
+                                landing = std::max<S32>(landing, raster.mTop[m]);
                             }
                         }
                         if (open)
                         {
-                            cells.push_back({ cx, cz, top, landing, side });
+                            cells.push_back({ ix, iy, top, landing, side });
                         }
                     }
                 }
             }
         }
-        // A point on a cell's side, at a fraction along it, at the top.
-        const auto edgeAt = [&](const Cell& c, F32 t) {
-            F32 rc[3];
-            rc[1] = hf.bmin[1] + c.mTop * hf.ch;
-            const bool alongZ = c.mSide < 2;
+        // A point on a cell's side, a fraction t along it, at its top.
+        const auto edgeAt = [&](const EdgeCell& c, F32 t) {
+            const bool along_y = c.mSide < 2;
             const F32 rim = (c.mSide == 0 || c.mSide == 2) ? 1.f : 0.f;
-            rc[0] = hf.bmin[0] + (c.mX + (alongZ ? rim : t)) * hf.cs;
-            rc[2] = hf.bmin[2] + (c.mZ + (alongZ ? t : rim)) * hf.cs;
-            return fromRecast(rc);
+            return LLVector3(ox + (c.mX + (along_y ? rim : t)) * cs, oy + (c.mY + (along_y ? t : rim)) * cs, oz + c.mTop * unit);
         };
 
-        // Ledges: runs of one side along a line of columns, each cell joining
-        // the run ending beside it within the climb.
-        std::vector<size_t> order(cells.size());
-        for (size_t i = 0; i < cells.size(); ++i)
+        // Ledges: runs of one side along a line of columns, each cell joining the run ending beside it within the climb.
         {
-            order[i] = i;
-        }
-        const auto along = [](const Cell& c) { return c.mSide < 2 ? c.mZ : c.mX; };
-        const auto across = [](const Cell& c) { return c.mSide < 2 ? c.mX : c.mZ; };
-        std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
-            const Cell& p = cells[a];
-            const Cell& q = cells[b];
-            return std::make_tuple(p.mSide, across(p), along(p), p.mTop) < std::make_tuple(q.mSide, across(q), along(q), q.mTop);
-        });
-        size_t i = 0;
-        while (i < order.size())
-        {
-            size_t j = i + 1;
-            while (j < order.size() && cells[order[j]].mSide == cells[order[i]].mSide && across(cells[order[j]]) == across(cells[order[i]]) &&
-                   along(cells[order[j]]) == along(cells[order[j - 1]]) + 1 && std::abs(cells[order[j]].mTop - cells[order[j - 1]].mTop) <= climb)
+            const auto along = [](const EdgeCell& c) { return c.mSide < 2 ? c.mY : c.mX; };
+            const auto across = [](const EdgeCell& c) { return c.mSide < 2 ? c.mX : c.mY; };
+            std::vector<U32> order(cells.size());
+            for (size_t i = 0; i < cells.size(); ++i)
             {
-                ++j;
+                order[i] = static_cast<U32>(i);
             }
-            WallSegment seg;
-            seg.mA = edgeAt(cells[order[i]], 0.f);
-            seg.mB = edgeAt(cells[order[j - 1]], 1.f);
-            seg.mKind = EdgeKind::LEDGE;
-            seg.mValue = -1.f;
-            for (size_t k = i; k < j; ++k)
+            std::sort(order.begin(), order.end(), [&](U32 a, U32 b) {
+                const EdgeCell& p = cells[a];
+                const EdgeCell& q = cells[b];
+                return std::make_tuple(p.mSide, across(p), along(p), p.mTop) < std::make_tuple(q.mSide, across(q), along(q), q.mTop);
+            });
+            size_t i = 0;
+            while (i < order.size())
             {
-                const Cell& c = cells[order[k]];
-                const F32 drop = c.mLanding < 0 ? -1.f : (c.mTop - c.mLanding) * hf.ch;
-                seg.mValue = drop >= 0.f && (seg.mValue < 0.f || drop < seg.mValue) ? drop : seg.mValue;
+                size_t j = i + 1;
+                while (j < order.size() && cells[order[j]].mSide == cells[order[i]].mSide && across(cells[order[j]]) == across(cells[order[i]]) &&
+                       along(cells[order[j]]) == along(cells[order[j - 1]]) + 1 && std::abs(cells[order[j]].mTop - cells[order[j - 1]].mTop) <= climb)
+                {
+                    ++j;
+                }
+                WallSegment seg;
+                seg.mA = edgeAt(cells[order[i]], 0.f);
+                seg.mB = edgeAt(cells[order[j - 1]], 1.f);
+                seg.mKind = EdgeKind::LEDGE;
+                seg.mValue = -1.f;
+                for (size_t k = i; k < j; ++k)
+                {
+                    const EdgeCell& c = cells[order[k]];
+                    const F32 drop = c.mLanding < 0 ? -1.f : (c.mTop - c.mLanding) * unit;
+                    seg.mValue = drop >= 0.f && (seg.mValue < 0.f || drop < seg.mValue) ? drop : seg.mValue;
+                }
+                ledges.push_back(seg);
+                i = j;
             }
-            ledges.push_back(seg);
-            i = j;
         }
 
-        // Run-off: the ledge cells joined across lines and sides where a floor's
-        // edge runs on, eight ways within the climb, and down each such edge a
-        // link every spacing metres, from the cell to its own landing.
-        std::map<std::tuple<S32, S32>, std::vector<size_t>> at;
-        for (size_t k = 0; k < cells.size(); ++k)
+        // Run-off: the edge followed round as a chain of unit edges, the floor on its left, then laid as chords.
+        // Each unit edge runs from p0 to p1 on the lattice of column corners.
+        struct UnitEdge
         {
-            at[{ cells[k].mX, cells[k].mZ }].push_back(k);
+            S32 mX0, mY0, mX1, mY1;
+            U32 mCell;
+        };
+        std::vector<UnitEdge> edges;
+        edges.reserve(cells.size());
+        for (U32 i = 0; i < cells.size(); ++i)
+        {
+            const EdgeCell& c = cells[i];
+            switch (c.mSide)
+            {
+            case 0: edges.push_back({ c.mX + 1, c.mY, c.mX + 1, c.mY + 1, i }); break;
+            case 1: edges.push_back({ c.mX, c.mY + 1, c.mX, c.mY, i }); break;
+            case 2: edges.push_back({ c.mX + 1, c.mY + 1, c.mX, c.mY + 1, i }); break;
+            default: edges.push_back({ c.mX, c.mY, c.mX + 1, c.mY, i }); break;
+            }
         }
-        std::vector<S32> component(cells.size(), -1);
-        std::vector<size_t> stack;
-        const F32 gap = std::max(spacing, hf.cs) / hf.cs;
-        for (size_t seed = 0; seed < cells.size(); ++seed)
+        // By where they start, then height, to find each edge's successor.
+        std::vector<U32> by_start(edges.size());
+        for (size_t i = 0; i < edges.size(); ++i)
         {
-            if (component[seed] >= 0)
+            by_start[i] = static_cast<U32>(i);
+        }
+        const auto startKey = [&](U32 e) { return std::make_tuple(edges[e].mX0, edges[e].mY0, cells[edges[e].mCell].mTop); };
+        std::sort(by_start.begin(), by_start.end(), [&](U32 a, U32 b) { return startKey(a) < startKey(b); });
+        std::vector<S32> next(edges.size(), -1);
+        std::vector<U8> has_prev(edges.size(), 0);
+        for (size_t e = 0; e < edges.size(); ++e)
+        {
+            const UnitEdge& u = edges[e];
+            const S32 top = cells[u.mCell].mTop;
+            auto it = std::lower_bound(by_start.begin(), by_start.end(), std::make_tuple(u.mX1, u.mY1, top - climb),
+                                       [&](U32 a, const std::tuple<S32, S32, S32>& k) { return startKey(a) < k; });
+            S32 best = -1, best_d = climb + 1;
+            for (; it != by_start.end() && edges[*it].mX0 == u.mX1 && edges[*it].mY0 == u.mY1; ++it)
+            {
+                const S32 d = std::abs(cells[edges[*it].mCell].mTop - top);
+                if (d <= climb && d < best_d && !has_prev[*it] && *it != e)
+                {
+                    best = static_cast<S32>(*it);
+                    best_d = d;
+                }
+            }
+            if (best >= 0)
+            {
+                next[e] = best;
+                has_prev[best] = 1;
+            }
+        }
+        // The chains, open ones from their first edge, then what is left as loops.
+        std::vector<U8> used(edges.size(), 0);
+        std::vector<U32> chain;
+        const auto lay = [&](size_t first) {
+            chain.clear();
+            for (S32 e = static_cast<S32>(first); e >= 0 && !used[e]; e = next[e])
+            {
+                used[e] = 1;
+                chain.push_back(static_cast<U32>(e));
+            }
+            const auto drop = [&](U32 e) { return (cells[edges[e].mCell].mTop - cells[edges[e].mCell].mLanding) * unit; };
+            const auto runs = [&](U32 e) {
+                const EdgeCell& c = cells[edges[e].mCell];
+                return c.mLanding >= 0 && (c.mTop - c.mLanding) * unit <= drop_max;
+            };
+            size_t i = 0;
+            while (i < chain.size())
+            {
+                if (!runs(chain[i]))
+                {
+                    ++i;
+                    continue;
+                }
+                // Grow a chord from edge i while every edge's middle stays within a cell of it (a staircase is one
+                // line), the landing stays one surface, and the drop stays on its line within a unit.
+                size_t j = i;
+                while (j + 1 < chain.size() && runs(chain[j + 1]))
+                {
+                    const size_t k = j + 1;
+                    const EdgeCell& prev = cells[edges[chain[j]].mCell];
+                    const EdgeCell& cur = cells[edges[chain[k]].mCell];
+                    if (std::abs(cur.mLanding - prev.mLanding) > climb)
+                    {
+                        break;
+                    }
+                    const UnitEdge& a = edges[chain[i]];
+                    const UnitEdge& b = edges[chain[k]];
+                    const F32 vx = static_cast<F32>(b.mX1 - a.mX0), vy = static_cast<F32>(b.mY1 - a.mY0);
+                    const F32 len = std::sqrt(vx * vx + vy * vy);
+                    bool fits = len > 0.f;
+                    const F32 da = drop(chain[i]), db = drop(chain[k]);
+                    for (size_t m = i; m <= k && fits; ++m)
+                    {
+                        const UnitEdge& u = edges[chain[m]];
+                        const F32 mx = 0.5f * (u.mX0 + u.mX1) - a.mX0, my = 0.5f * (u.mY0 + u.mY1) - a.mY0;
+                        const F32 t = (mx * vx + my * vy) / (len * len);
+                        fits = std::fabs(mx * vy - my * vx) / len <= 1.f && std::fabs(drop(chain[m]) - (da + (db - da) * t)) <= unit;
+                    }
+                    if (!fits)
+                    {
+                        break;
+                    }
+                    j = k;
+                }
+                const UnitEdge& a = edges[chain[i]];
+                const UnitEdge& b = edges[chain[j]];
+                const EdgeCell& ca = cells[a.mCell];
+                const EdgeCell& cb = cells[b.mCell];
+                RunoffSegment seg;
+                seg.mA.set(ox + a.mX0 * cs, oy + a.mY0 * cs, oz + ca.mTop * unit);
+                seg.mB.set(ox + b.mX1 * cs, oy + b.mY1 * cs, oz + cb.mTop * unit);
+                seg.mDropA = drop(chain[i]);
+                seg.mDropB = drop(chain[j]);
+                seg.mSide = static_cast<U8>(ca.mSide);
+                runoff.push_back(seg);
+                i = j + 1;
+            }
+        };
+        for (size_t e = 0; e < edges.size(); ++e)
+        {
+            if (!has_prev[e] && !used[e])
+            {
+                lay(e);
+            }
+        }
+        // A loop starts at a turn, so a straight side is not cut where the walk round it happened to begin.
+        std::vector<S32> prev(edges.size(), -1);
+        for (size_t e = 0; e < edges.size(); ++e)
+        {
+            if (next[e] >= 0)
+            {
+                prev[next[e]] = static_cast<S32>(e);
+            }
+        }
+        const auto turns = [&](S32 e) {
+            const S32 p = prev[e];
+            return p < 0 || edges[p].mX1 - edges[p].mX0 != edges[e].mX1 - edges[e].mX0 || edges[p].mY1 - edges[p].mY0 != edges[e].mY1 - edges[e].mY0;
+        };
+        for (size_t e = 0; e < edges.size(); ++e)
+        {
+            if (used[e])
             {
                 continue;
             }
-            std::vector<const Cell*> picked;
-            component[seed] = static_cast<S32>(seed);
-            stack.assign(1, seed);
-            while (!stack.empty())
+            S32 start = static_cast<S32>(e);
+            for (S32 k = next[e]; k >= 0 && k != static_cast<S32>(e); k = next[k])
             {
-                const size_t k = stack.back();
-                stack.pop_back();
-                const Cell& c = cells[k];
-                bool near_pick = false;
-                for (const Cell* p : picked)
+                if (turns(start))
                 {
-                    const F32 dx = static_cast<F32>(p->mX - c.mX), dz = static_cast<F32>(p->mZ - c.mZ);
-                    near_pick = near_pick || dx * dx + dz * dz < gap * gap;
+                    break;
                 }
-                const F32 drop = (c.mTop - c.mLanding) * hf.ch;
-                if (!near_pick && c.mLanding >= 0 && drop <= drop_max)
-                {
-                    picked.push_back(&c);
-                    DropLink link;
-                    link.mFrom = edgeAt(c, 0.5f);
-                    const LLVector3 out_dir(static_cast<F32>(DZ[c.mSide]), static_cast<F32>(DX[c.mSide]), 0.f);   // Recast x is SL y
-                    link.mTo = link.mFrom + out_dir * (hf.cs * 0.5f) - LLVector3(0.f, 0.f, drop);
-                    link.mHeight = drop;
-                    link.mKind = LinkKind::DROP;
-                    links.push_back(link);
-                }
-                for (S32 dz = -1; dz <= 1; ++dz)
-                {
-                    for (S32 dx = -1; dx <= 1; ++dx)
-                    {
-                        const auto it = at.find({ c.mX + dx, c.mZ + dz });
-                        if (it == at.end())
-                        {
-                            continue;
-                        }
-                        for (const size_t n : it->second)
-                        {
-                            if (component[n] < 0 && std::abs(cells[n].mTop - c.mTop) <= climb)
-                            {
-                                component[n] = static_cast<S32>(seed);
-                                stack.push_back(n);
-                            }
-                        }
-                    }
-                }
+                start = k;
             }
+            lay(static_cast<size_t>(start));
         }
     }
 }

@@ -27,51 +27,48 @@
 #include "skair.h"
 #include "skcensusprofile.h"
 
-#include "Recast.h"
+#include "skaircolumns.h"
+#include "skairsoup.h"
 
 #include <algorithm>
 
 namespace skworld
 {
-    void extractAir(const rcHeightfield& hf, S32 border_cells, AirGrid& out, const U8* area_lut, const SpanFlags* extra)
+    void extractAir(const ColumnRaster& raster, S32 border_cells, AirGrid& out)
     {
-        SK_WORLD_ZONE("air.extract");
-        // Recast (x, y, z) is SL (y, z, x): a heightfield row along Recast x is
-        // a run along SL y, so SL ix is Recast z and SL iy is Recast x.
-        const S32 x0 = border_cells, z0 = border_cells;
-        out.mWidth = std::max(0, hf.height - 2 * border_cells);
-        out.mHeight = std::max(0, hf.width - 2 * border_cells);
-        out.mCell = hf.cs;
-        out.mUnit = hf.ch;
-        out.mOrigin.set(hf.bmin[2] + z0 * hf.cs, hf.bmin[0] + x0 * hf.cs, hf.bmin[1]);
+        SK_WORLD_ZONE("air.raster.extract");
+        const ColumnFrame& f = raster.mFrame;
+        const S32 W = f.mWidth, b = border_cells;
+        out.mWidth = std::max(0, W - 2 * b);
+        out.mHeight = out.mWidth;
+        out.mCell = f.mCell;
+        out.mUnit = f.mUnit;
+        out.mOrigin.set(f.mOrigin.mV[VX] + b * f.mCell, f.mOrigin.mV[VY] + b * f.mCell, f.mOrigin.mV[VZ]);
         out.mStart.assign(static_cast<size_t>(out.mWidth) * out.mHeight + 1, 0);
         out.mGaps.clear();
+        out.mGaps.reserve(raster.spans());
 
-        // The top of the tile's height range, in span units: a gap with
-        // nothing above it runs to here.
-        const S32 top = static_cast<S32>((hf.bmax[1] - hf.bmin[1]) / hf.ch + 0.5f);
-        const U16 open = static_cast<U16>(std::clamp(top, 0, 0xffff));
-
+        // The top of the tile's heights: a gap with nothing above it runs to here.
+        const U16 open = f.topUnits();
         for (S32 iy = 0; iy < out.mHeight; ++iy)
         {
             for (S32 ix = 0; ix < out.mWidth; ++ix)
             {
-                const S32 column = (x0 + iy) + (z0 + ix) * hf.width;
-                U32 k = extra ? extra->mStart[column] : 0;
-                for (const rcSpan* s = hf.spans[column]; s; s = s->next, ++k)
+                const S32 c = (ix + b) + (iy + b) * W;
+                const U32 last = raster.mStart[c + 1];
+                for (U32 k = raster.mStart[c]; k < last; ++k)
                 {
                     AirGap gap;
-                    gap.mFloor = static_cast<U16>(s->smax);
-                    const U8 area = area_lut ? area_lut[s->area] : static_cast<U8>(s->area);
-                    gap.mFlags = s->area != RC_NULL_AREA ? AirGap::TOP : 0;
-                    gap.mFlags |= extra ? extra->mFlags[k] : 0;
-                    if (area >= 1 && area <= 3)
+                    gap.mFloor = raster.mTop[k];
+                    const U8 walk = raster.mWalk[k];
+                    if (walk & TOP_WALK)
                     {
-                        gap.mFlags |= static_cast<U8>(area << AirGap::AREA_SHIFT);
+                        gap.mFlags = static_cast<U8>(AirGap::TOP | (areaOfCode(raster.mCode[k]) << AirGap::AREA_SHIFT));
                     }
-                    if (s->next)
+                    gap.mFlags |= (walk & AVATAR_WALK) ? AirGap::AVATAR_FLOOR : 0;
+                    if (k + 1 < last)
                     {
-                        gap.mCeiling = static_cast<U16>(s->next->smin);
+                        gap.mCeiling = raster.mBottom[k + 1];
                     }
                     else
                     {

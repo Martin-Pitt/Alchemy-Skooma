@@ -99,11 +99,13 @@ namespace
             putBytes(out, s.mValue);
         }
         putBytes(out, static_cast<U32>(r.mRunoff.size()));
-        for (const DropLink& l : r.mRunoff)
+        for (const RunoffSegment& l : r.mRunoff)
         {
-            putBytes(out, l.mFrom);
-            putBytes(out, l.mTo);
-            putBytes(out, l.mHeight);
+            putBytes(out, l.mA);
+            putBytes(out, l.mB);
+            putBytes(out, l.mDropA);
+            putBytes(out, l.mDropB);
+            putBytes(out, l.mSide);
         }
         return out;
     }
@@ -264,11 +266,11 @@ namespace
         w.text("META", meta);
         w.text("PARM", llformat("{\"climb\":%d,\"avatar\":{\"height\":%g,\"radius\":%g,\"climb\":%g,\"slope\":%g},"
                                 "\"top\":{\"height\":%g,\"climb\":%g,\"slope\":%g},\"air_min_gap\":%g,\"air_pad\":%d,"
-                                "\"wall_min_height\":%g,\"runoff_max\":%g,\"runoff_spacing\":%g,\"tile\":[%d,%d],\"tile_size\":%g,"
+                                "\"wall_min_height\":%g,\"runoff_max\":%g,\"tile\":[%d,%d],\"tile_size\":%g,"
                                 "\"z\":[%.6f,%.6f]}",
                                 c.mClimb, in.mAvatar.mHeight, in.mAvatar.mRadius, in.mAvatar.mClimb, in.mAvatar.mSlope, in.mTopParams.mHeight,
                                 in.mTopParams.mClimb, in.mTopParams.mSlope, in.mAirMinGap, in.mAirPad, in.mWallMinHeight, in.mRunoffMax,
-                                in.mRunoffSpacing, in.mTileX, in.mTileY, in.mTileSize, in.mZMin, in.mZMax));
+                                in.mTileX, in.mTileY, in.mTileSize, in.mZMin, in.mZMax));
         w.array("SOUP", c.mSoupVerts);
         w.array("SOLD", c.mSolids);
         w.array("CUTV", c.mCutVerts);
@@ -664,27 +666,6 @@ TEST_CASE("skairraster: a floor across AVATAR's grid edge filters as in AVATAR's
     CHECK(wide.mClass[0].mHfAreaHash == own.mClass[0].mHfAreaHash);
 }
 
-TEST_CASE("skairraster: a bridge only the air lays stays out of AVATAR's view", "[skairraster]")
-{
-    const auto run = [](F32 top_slope, TileBuildStats& stats) {
-        TileInput in = airTile(0, 0);
-        in.mTerrain = flat(0.f);
-        in.mAvatar.mSlope = 74.f;
-        in.mTopParams.mSlope = top_slope;
-        in.mRecords.push_back(box(8.f, 10.f, 0.f, 11.9f, 20.f, 1.f));
-        const LLVector3 a(12.3f, 10.f, 1.f), b(12.388f, 10.f, 1.5f), c(12.388f, 20.f, 1.5f), d(12.3f, 20.f, 1.f);
-        in.mRecords.push_back(soup({ a, b, c, a, c, d }, Provenance::EXACT));
-        return build(in, &stats);
-    };
-    TileBuildStats with_stats, without_stats;
-    REQUIRE(built(run(89.f, with_stats)));
-    REQUIRE(built(run(74.f, without_stats)));
-    CHECK(with_stats.mTopOnlyBridges > 0);
-    CHECK(without_stats.mTopOnlyBridges == 0);
-    CHECK(with_stats.mOwnColumns > 0);
-    CHECK(with_stats.mClass[0].mHfAreaHash == without_stats.mClass[0].mHfAreaHash);
-}
-
 TEST_CASE("skairraster: AVATAR's view round a left-out door leaf is as if it were not there", "[skairraster]")
 {
     struct Case
@@ -787,21 +768,21 @@ TEST_CASE("skairraster: a capture holds every stage and changes nothing it captu
     }
 }
 
-// The synthetic scenes' products, hashed: what the Recast raster made of them when the fixtures were captured.
-// A raster that replaces it is held to the fixtures by outcome, not to these; they say the Recast one moved.
+// The synthetic scenes' products, hashed: what the column raster makes of them. It is held to Recast's fixtures by
+// outcome (skaircolumns_test.cpp); these say only that it moved.
 TEST_CASE("skairraster: the synthetic fixture scenes build to their golden products", "[skairraster]")
 {
     const std::pair<const char*, U64> golden[] = {
-        { "stairs", 0x5d1b14ea2b963748ull },
-        { "closed box", 0x9f479d0ad00ae08dull },
-        { "hollow box", 0x80806eaf04fbf099ull },
-        { "tunnel", 0x97fb617a5cf6574bull },
-        { "door leaf", 0x73a8e6b66495cdc8ull },
-        { "crevice", 0xf7b23878dd7f0264ull },
-        { "buried prim", 0xb1ca5eb37bd8006bull },
-        { "exclusion cut", 0x8bb1a87791edf2caull },
-        { "under-water slope", 0x746c42bdf557a153ull },
-        { "megaprim", 0xbd8b3c0f53fb8929ull },
+        { "stairs", 0x519c6c2734f7cfe7ull },
+        { "closed box", 0x36d2767464398fe7ull },
+        { "hollow box", 0x95ed37dff85bf72full },
+        { "tunnel", 0xb8b43d516271db94ull },
+        { "door leaf", 0x8f8386b61ac4ffddull },
+        { "crevice", 0x6206864c5324d4c6ull },
+        { "buried prim", 0x5e06656005b0f7bfull },
+        { "exclusion cut", 0xd7879a8d790b15d3ull },
+        { "under-water slope", 0xc6ee54cc6e2c5efbull },
+        { "megaprim", 0x006fe15a9a6fdd85ull },
     };
     const std::vector<Scene> scenes = fixtureScenes();
     REQUIRE(scenes.size() == std::size(golden));

@@ -33,8 +33,6 @@
 #include <string>
 #include <vector>
 
-struct rcHeightfield;
-
 namespace skworld
 {
     struct AirBuildStats;
@@ -245,18 +243,17 @@ namespace skworld
     /// The seam strips of a tile's fine grid.
     void airSeams(const AirGrid& grid, TileAir& out);
 
-    /// The solid runs of the heightfield inside the border, merged over
+    /// The solid runs of the raster inside the border, merged over
     /// cells_per_top columns a side.
-    void airTops(const rcHeightfield& hf, S32 border_cells, S32 cells_per_top, TileAir& out);
+    void airTops(const ColumnRaster& raster, S32 border_cells, S32 cells_per_top, TileAir& out);
 
     /// Everything a tile's air is built from the solid raster: gaps
     /// read pad_cells past the tile so clearance is exact on it, slivers
     /// under min_gap units folded away, then the distil, seams and tops. Null when the tile has no air.
     /// fine, when given, gets the fine grid the air was distilled from;
     /// extracted, when not empty, is taken as the padded gaps already read and folded.
-    TileAirPtr buildTileAir(const rcHeightfield& hf, S32 border_cells, S32 pad_cells, S32 climb, S32 overlap, S32 min_gap,
-                            AirBuildStats* stats = nullptr, const U8* area_lut = nullptr,
-                            const SpanFlags* extra = nullptr, AirGrid* fine = nullptr, AirGrid* extracted = nullptr);
+    TileAirPtr buildTileAir(const ColumnRaster& raster, S32 border_cells, S32 pad_cells, S32 climb, S32 overlap, S32 min_gap,
+                            AirBuildStats* stats = nullptr, AirGrid* fine = nullptr, AirGrid* extracted = nullptr);
 
     /// A coarse tile's air in cells and height units factor times finer, so the
     /// passes read it beside a fine tile's: each leaf factor times as wide,

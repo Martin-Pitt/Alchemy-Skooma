@@ -106,7 +106,7 @@ namespace skworld
         const TileInput& p = params.mParams;
         const ClassParams& a = p.mAvatar;
         out << "{\"tile_size\":" << p.mTileSize << ",\"cell\":" << p.mCell << ",\"wall_min_height\":" << p.mWallMinHeight
-            << ",\"wall_faces\":" << boolText(p.mWallFaces) << ",\"drop_spacing\":" << p.mRunoffSpacing << ",\"air\":" << boolText(p.mAir)
+            << ",\"wall_faces\":" << boolText(p.mWallFaces) << ",\"air\":" << boolText(p.mAir)
             << ",\"air_pad\":" << p.mAirPad << ",\"air_min_gap\":" << p.mAirMinGap << ",\"face_offsets\":" << boolText(p.mFaceOffsets)
             << ",\"classes\":[{\"name\":\"avatar\",\"height\":" << a.mHeight << ",\"radius\":" << a.mRadius << ",\"climb\":" << a.mClimb
             << ",\"slope\":" << a.mSlope << "}],\"top\":{\"height\":" << p.mTopParams.mHeight << ",\"slope\":" << p.mTopParams.mSlope
@@ -125,7 +125,6 @@ namespace skworld
         p.mCell = real(v, "cell", p.mCell);
         p.mWallMinHeight = real(v, "wall_min_height", p.mWallMinHeight);
         p.mWallFaces = flag(v, "wall_faces", p.mWallFaces);
-        p.mRunoffSpacing = real(v, "drop_spacing", p.mRunoffSpacing);
         p.mAir = flag(v, "air", p.mAir);
         p.mAirPad = v.has("air_pad") ? v["air_pad"].asInteger() : p.mAirPad;
         p.mAirMinGap = real(v, "air_min_gap", p.mAirMinGap);

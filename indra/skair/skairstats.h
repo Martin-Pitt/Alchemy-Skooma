@@ -90,9 +90,9 @@ namespace skworld
         U32 mHfMaxSpans = 0;        ///< the most spans one column holds
         U32 mBridges = 0;
         U32 mCodes = 0;             ///< distinct area codes rasterised
-        /// Normalised digests of the heightfield after its filters.
+        /// Normalised digests of the class's view after its walk rules.
         U64 mHfHash = 0;            ///< spans and whether each is walkable
-        U64 mHfAreaHash = 0;        ///< spans and their area codes as the class reads them
+        U64 mHfAreaHash = 0;        ///< spans and the areas the class walks
         AirBuildStats mAir;
 
         static const char* stageName(S32 stage);
@@ -112,10 +112,7 @@ namespace skworld
         U32 mExcludedRecords = 0;
         U32 mExcludeWindowCells = 0;    ///< tile cells within two of an excluded triangle's box
         U32 mTileCells = 0;
-        /// Bridges the air's list lays that AVATAR's, found on the same raster, does not, and the reverse.
-        U32 mTopOnlyBridges = 0;
-        U32 mAvatarOnlyBridges = 0;
-        U32 mOwnColumns = 0;            ///< columns AVATAR reads from a copy of its own
+        U32 mOwnColumns = 0;            ///< columns AVATAR reads from the window raster
         U32 mWindowCells = 0;           ///< raster cells round the records AVATAR leaves out
         S32 mWindowRect[4] = { 0, 0, 0, 0 };   ///< the window raster's cells, from the tile's corner: x0, z0, x1, z1
         ClassBuildStats mClass[1];

@@ -39,7 +39,7 @@ namespace
     using namespace skworld;
 
     const F32 VOID_Z = -900.f;       ///< terrain samples below this have no region
-    const F32 HEIGHT_SNAP = 1024.f;  ///< vertex heights snap to 1/1024 m, exact in binary
+    const F32 SNAP = 1024.f;         ///< vertices snap to 1/1024 m, exact in binary
 
     void tri(std::vector<LLVector3>& out, const LLVector3& a, const LLVector3& b, const LLVector3& c)
     {
@@ -148,11 +148,11 @@ namespace
         tris.resize(kept);
     }
 
-    /// Append triangles, heights snapped. Heights are SL heights, where a float resolves a quarter of a
-    /// millimetre, and a rotated mesh leaves a flat floor a step or so either side of its height. On a cell
-    /// boundary that noise rounds the floor up a cell in one tile and not in the next, since each clips the
-    /// triangle at its own cell edges. Snapped to a millimetre grid a flat surface is exactly flat, and
-    /// clipping it gives the same height in every tile. Returns per triangle whether it lies under the water.
+    /// Append triangles, snapped to a grid of 1/1024 m. A float resolves a fraction of a millimetre at SL's
+    /// coordinates, and a rotated mesh leaves a flat floor, or a wall on a cell edge, a step or so either side
+    /// of where it is. On a cell boundary that noise rounds the floor up a cell in one tile and not in the next,
+    /// and puts the wall in the column past its edge. Snapped, a flat surface is exactly flat and a wall on an
+    /// edge is on it, in every tile. Returns per triangle whether it lies under the water.
     void addTris(std::vector<F32>& verts, const std::vector<LLVector3>& tris, F32 water, std::vector<U8>* under)
     {
         for (size_t i = 0; i + 2 < tris.size(); i += 3)
@@ -161,9 +161,9 @@ namespace
             for (S32 k = 0; k < 3; ++k)
             {
                 const LLVector3& p = tris[i + k];
-                verts.push_back(p.mV[VX]);
-                verts.push_back(p.mV[VY]);
-                verts.push_back(std::round(p.mV[VZ] * HEIGHT_SNAP) / HEIGHT_SNAP);
+                verts.push_back(std::round(p.mV[VX] * SNAP) / SNAP);
+                verts.push_back(std::round(p.mV[VY] * SNAP) / SNAP);
+                verts.push_back(std::round(p.mV[VZ] * SNAP) / SNAP);
                 below = below && p.mV[VZ] < water;
             }
             if (under)

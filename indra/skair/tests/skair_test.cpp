@@ -30,7 +30,10 @@
 #include "../skairdistil.h"
 #include "../skairraster.h"
 
-#include "Recast.h"
+#include "../skaircolumns.h"
+#include "../skairsoup.h"
+
+#include <array>
 
 #include <cmath>
 
@@ -39,19 +42,32 @@ namespace
     using namespace skworld;
 
 
-    /// A 6 x 6 heightfield with a one-cell border, 0.5 m cells, 0.1 m units.
+    /// A 6 x 6 raster with a one-cell border, 0.5 m cells, 0.1 m units, heights to 5 m; spans added lowest first.
     struct Field
     {
-        rcContext mCtx { false };
-        rcHeightfield* mHf = rcAllocHeightfield();
-        Field()
+        std::vector<std::vector<std::array<U16, 3>>> mColumns = std::vector<std::vector<std::array<U16, 3>>>(36);
+        void span(S32 ix, S32 iy, U16 smin, U16 smax, U8 walk) { mColumns[ix + iy * 6].push_back({ smin, smax, walk }); }
+        ColumnRaster raster() const
         {
-            const F32 bmin[3] = { 0.f, 0.f, 0.f };
-            const F32 bmax[3] = { 3.f, 5.f, 3.f };
-            rcCreateHeightfield(&mCtx, *mHf, 6, 6, bmin, bmax, 0.5f, 0.1f);
+            ColumnRaster r;
+            r.mFrame.mCell = 0.5f;
+            r.mFrame.mUnit = 0.1f;
+            r.mFrame.mWidth = 6;
+            r.mFrame.mHeightRange = 5.f;
+            r.mStart.assign(1, 0);
+            for (const auto& col : mColumns)
+            {
+                for (const auto& s : col)
+                {
+                    r.mBottom.push_back(s[0]);
+                    r.mTop.push_back(s[1]);
+                    r.mCode.push_back(s[2] ? AREA_OBJECT + AREA_TOP_ONLY : 0);
+                    r.mWalk.push_back(static_cast<U8>(s[2]));
+                }
+                r.mStart.push_back(static_cast<U32>(r.mTop.size()));
+            }
+            return r;
         }
-        ~Field() { rcFreeHeightField(mHf); }
-        void span(S32 x, S32 z, U16 smin, U16 smax, U8 area) { rcAddSpan(&mCtx, *mHf, x, z, smin, smax, area, 1); }
     };
 
     /// A grid of one gap per column, floor 0 and ceiling 40, at 0.125 m;
@@ -85,11 +101,11 @@ namespace
     TEST_CASE("skair: a floor under a roof gives a walkable gap and an open one above", "[skair]")
     {
         Field f;
-        // Recast column x = 2, z = 1 is SL (ix, iy) = (z - 1, x - 1) = (0, 1).
-        f.span(2, 1, 0, 5, RC_WALKABLE_AREA);
-        f.span(2, 1, 20, 22, RC_NULL_AREA);
+        // Raster column (1, 2) is the grid's (0, 1), past the border.
+        f.span(1, 2, 0, 5, TOP_WALK);
+        f.span(1, 2, 20, 22, 0);
         AirGrid air;
-        extractAir(*f.mHf, 1, air);
+        extractAir(f.raster(), 1, air);
         { INFO("width"); CHECK(air.mWidth == 4); }
         { INFO("height"); CHECK(air.mHeight == 4); }
         { INFO("gaps in the column"); CHECK(air.count(0, 1) == 2u); }
@@ -97,22 +113,22 @@ namespace
         const AirGap* g = air.gaps(0, 1);
         { INFO("floor"); CHECK(g[0].mFloor == 5); }
         { INFO("ceiling"); CHECK(g[0].mCeiling == 20); }
-        { INFO("walkable, closed"); CHECK(g[0].mFlags == static_cast<U8>(AirGap::TOP)); }
+        { INFO("walkable, closed"); CHECK(g[0].mFlags == static_cast<U8>(AirGap::TOP | AREA_OBJECT << AirGap::AREA_SHIFT)); }
         { INFO("roof top"); CHECK(g[1].mFloor == 22); }
         { INFO("open to the tile's top"); CHECK(g[1].mCeiling == 50); }
         { INFO("open, own sky, not walkable"); CHECK(g[1].mFlags == static_cast<U8>(AirGap::OPEN | AirGap::OWN_SKY)); }
         { INFO("ceiling in metres"); CHECK(std::fabs(air.height(g[0].mCeiling) - 2.f) < 1e-4f); }
-        { INFO("origin x is Recast z past the border"); CHECK(std::fabs(air.mOrigin.mV[VX] - 0.5f) < 1e-4f); }
-        { INFO("origin y is Recast x past the border"); CHECK(std::fabs(air.mOrigin.mV[VY] - 0.5f) < 1e-4f); }
+        { INFO("origin x past the border"); CHECK(std::fabs(air.mOrigin.mV[VX] - 0.5f) < 1e-4f); }
+        { INFO("origin y past the border"); CHECK(std::fabs(air.mOrigin.mV[VY] - 0.5f) < 1e-4f); }
     }
 
     TEST_CASE("skair: the border is left out", "[skair]")
     {
         Field f;
-        f.span(0, 0, 0, 5, RC_WALKABLE_AREA);
-        f.span(5, 3, 0, 5, RC_WALKABLE_AREA);
+        f.span(0, 0, 0, 5, TOP_WALK);
+        f.span(5, 3, 0, 5, TOP_WALK);
         AirGrid air;
-        extractAir(*f.mHf, 1, air);
+        extractAir(f.raster(), 1, air);
         { INFO("no gaps from border columns"); CHECK(air.empty()); }
     }
 

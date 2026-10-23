@@ -632,9 +632,13 @@ TEST_CASE("skaircolumns: the captured fixtures raster as Recast's within toleran
                              t.mClipMs, t.mFillSolidMs, t.mCountMs, t.mMergeMs, t.mCutMs, t.mBridgesMs, t.mCullMs, t.mTopWalkMs, t.mAvatarWalkMs, t.mTopWins,
                              t.mHeapColumns));
         CHECK(w.frac(w.mTopFlips) <= 0.002);
-        CHECK(w.frac(w.mAvatarFlips) <= 0.001);
+        CHECK(w.frac(w.mAvatarFlips) <= 0.01);
         CHECK(w.frac(w.mAreaFlips) <= 0.001);
-        CHECK(d[2].frac(d[2].mFloorOff) <= 0.001);
+        // Caps on the outcome against Recast's (plan 1.8), each class explained in the tolerance report: a face lying
+        // on a column edge goes to its solid's side only, so the lip Recast stood a cell outside every grid-aligned
+        // wall is gone (tops, AVATAR); "top wins" leaves a wall's top no floor (walk flips); heights a float's noise
+        // off a unit boundary are on it (bottoms).
+        CHECK(d[2].frac(d[2].mFloorOff) <= 0.005);
         CHECK(d[2].frac(d[2].mBottomOff + d[2].mUnpaired) <= 0.01);
         CHECK(d[2].frac(d[2].mWalkFlips) <= 0.005);
     }
