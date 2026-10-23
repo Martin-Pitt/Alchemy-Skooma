@@ -95,6 +95,21 @@ constexpr S32 EMBED_PAD = 6;
 constexpr S32 EMBED_GAP = 4;    // between the text and its preview
 constexpr S32 EMBED_ACCENT = 3; // the bar in the speaker's colour
 constexpr S32 EMBED_LINE_GAP = 2;
+constexpr S32 DIVIDER_PAD = 8;    // above and below a day divider
+constexpr S32 DIVIDER_GAP = 8;    // between a day divider's lines and its label
+constexpr F32 DIVIDER_ALPHA = 0.45f;
+constexpr F32 DIVIDER_LINE_ALPHA = 0.15f;
+
+// The day a chat timestamp leads with, "year/month/day ...", as yyyymmdd; 0 when it carries none.
+S32 day_key(const std::string& stamp)
+{
+    S32 year = 0, month = 0, day = 0;
+    if (sscanf(stamp.c_str(), "%d/%d/%d", &year, &month, &day) != 3 || year < 1970 || month < 1 || month > 12 || day < 1 || day > 31)
+    {
+        return 0;
+    }
+    return year * 10000 + month * 100 + day;
+}
 
 S32 utf8_lead_len(char c)
 {
@@ -364,6 +379,8 @@ void SKFloaterLocalChat::appendChat(const LLChat& chat, const LLSD& args, F64 ar
     msg.mArrival = arrival;
     static LLCachedControl<bool> show_seconds(gSavedSettings, "AlchemyIMShowSeconds", false);
     msg.mTime = ALChatTimestamp::format(chat.mTimeStr.empty() ? LLLogChat::timestamp2LogString(0, false, true) : chat.mTimeStr, show_seconds);
+    // The day in the timestamps' own time base; history logged without dates has none.
+    msg.mDay = day_key(chat.mTimeStr.empty() ? LLLogChat::timestamp2LogString(0, true, false) : chat.mTimeStr);
 
     LLUIColor text_color = LLUIColorTable::instance().getColor("White");
     F32 alpha = 1.f;
@@ -776,8 +793,9 @@ void SKFloaterLocalChat::layout()
         msg.mNameWidth = bold_width(name_font(), msg.mName);
         msg.mTimeWidth = msg.mName.empty() || msg.mTime.empty() ? 0 : time_font()->getWidth(msg.mTime) + (cards ? TIME_GAP : LEAD_TIME_GAP);
         // Cards gather one speaker's run of messages; a minimal line stands alone.
+        const bool new_day = m > 0 && msg.mDay != 0 && mMessages[m - 1].mDay != 0 && msg.mDay != mMessages[m - 1].mDay;
         bool join = false;
-        if (cards && !mCards.empty() && !msg.mName.empty())
+        if (cards && !new_day && !mCards.empty() && !msg.mName.empty())
         {
             const Card& last = mCards.back();
             const Message& prev = mMessages[last.mLastMessage];
@@ -792,6 +810,37 @@ void SKFloaterLocalChat::layout()
         }
         else
         {
+            if (new_day)
+            {
+                // Its own card, so it breaks the grouping and fades with the message after it.
+                if (msg.mDayLabel.empty())
+                {
+                    static const std::vector<std::string> months = []
+                    {
+                        std::vector<std::string> names;
+                        LLStringUtil::getTokens(LLTrans::getString("dateTimeMonthNames"), names, ":");
+                        return names;
+                    }();
+                    const S32 month = msg.mDay / 100 % 100;
+                    LLStringUtil::format_map_t args;
+                    args["[MONTH]"] = month <= (S32)months.size() ? months[month - 1] : llformat("%d", month);
+                    args["[DAY]"] = llformat("%d", msg.mDay % 100);
+                    args["[YEAR]"] = llformat("%d", msg.mDay / 10000);
+                    msg.mDayLabel = getString("day_divider", args);
+                }
+                msg.mDayWidth = bold_width(name_font(), msg.mDayLabel);
+                Card divider;
+                divider.mFirstMessage = divider.mLastMessage = m;
+                divider.mFirstRow = divider.mLastRow = (S32)mRows.size();
+                divider.mDivider = true;
+                mCards.push_back(divider);
+                Row row;
+                row.mMessage = DIVIDER_ROW;
+                row.mCard = (S32)mCards.size() - 1;
+                row.mPadTop = llmax(0, DIVIDER_PAD - (cards ? CARD_GAP : MINIMAL_GAP));
+                row.mPadBottom = DIVIDER_PAD;
+                mRows.push_back(row);
+            }
             Card card;
             card.mFirstMessage = card.mLastMessage = m;
             card.mFirstRow = (S32)mRows.size();
@@ -872,6 +921,11 @@ void SKFloaterLocalChat::layout()
     // Each bubble as wide as its name or widest line, wrapping only past the floater's width.
     for (Card& card : mCards)
     {
+        if (card.mDivider)
+        {
+            card.mWidth = width;
+            continue;
+        }
         S32 widest = 0;
         for (S32 r = card.mFirstRow; r <= card.mLastRow; ++r)
         {
@@ -991,6 +1045,28 @@ void SKFloaterLocalChat::drawRowText(const Row& row, S32 x, S32 y, F32 alpha, LL
     }
 }
 
+void SKFloaterLocalChat::drawDivider(const Card& card, const LLRect& content, S32 base, F32 alpha, LLFontGL::ShadowType shadow) const
+{
+    // As Discord's: a faint line across the width, broken by the date in the middle.
+    const Row& row = mRows[card.mFirstRow];
+    const Message& msg = mMessages[card.mFirstMessage];
+    const S32 y = base + row.mBottom + row.mGap + row.mPadBottom;
+    const S32 mid = content.mLeft + content.getWidth() / 2;
+    const S32 line_y = y + name_font()->getLineHeight() / 2;
+    const S32 half = msg.mDayWidth / 2 + DIVIDER_GAP;
+    static LLUIColor white = LLUIColorTable::instance().getColor("White");
+    gGL.getTextureSlot(0)->unbind();
+    shape_blend();
+    const LLColor4 line = white.get() % (DIVIDER_LINE_ALPHA * alpha);
+    if (mid - half > content.mLeft + PAD_X)
+    {
+        gl_rect_2d(content.mLeft + PAD_X, line_y + 1, mid - half, line_y, line);
+        gl_rect_2d(mid + half, line_y + 1, content.mRight - PAD_X, line_y, line);
+    }
+    name_font()->renderUTF8(msg.mDayLabel, 0, (F32)mid, (F32)y, white.get() % (DIVIDER_ALPHA * alpha), LLFontGL::HCENTER, LLFontGL::BOTTOM,
+                            LLFontGL::BOLD, shadow);
+}
+
 void SKFloaterLocalChat::requestEmbeds(const Card& card)
 {
     if (!unfurl_enabled())
@@ -1079,6 +1155,11 @@ void SKFloaterLocalChat::drawMessages(const LLRect& content, F64 now, bool full,
         {
             break;
         }
+        if (card.mDivider)
+        {
+            drawDivider(card, content, base, alpha, shadow);
+            continue;
+        }
 
         const Message& first = mMessages[card.mFirstMessage];
         const S32 text_x = content.mLeft + card.mTextX;
@@ -1166,6 +1247,10 @@ void SKFloaterLocalChat::drawMaskedMessages(const LLRect& content, F64 now, bool
         }
         in_band |= card_top > top_band || (scrolled && card_bottom < bottom_band);
         fades = (fades ^ (U64)(c * 256 + ll_round(alpha * 255.f))) * 1099511628211ULL;
+        if (card.mDivider)
+        {
+            continue;
+        }
         icons = (icons ^ iconStamp(mMessages[card.mFirstMessage])) * 1099511628211ULL;
         requestEmbeds(card);
         for (S32 m = card.mFirstMessage; m <= card.mLastMessage; ++m)
@@ -1407,6 +1492,10 @@ std::string SKFloaterLocalChat::urlAt(S32 x, S32 y) const
         const Card& card = mCards[row.mCard];
         const S32 text_x = contentRect().mLeft + card.mTextX;
         if (!full && cardAlpha(card, now) <= 0.f)
+        {
+            return std::string();
+        }
+        if (row.mMessage == DIVIDER_ROW)
         {
             return std::string();
         }
