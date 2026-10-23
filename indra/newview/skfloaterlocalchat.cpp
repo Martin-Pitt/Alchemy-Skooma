@@ -51,8 +51,10 @@
 #include "alavatargroups.h"
 #include "alchatbar.h"
 #include "llagent.h"
+#include "alchattimestamp.h"
 #include "llagentcamera.h"
 #include "llfloaterimnearbychat.h"
+#include "lllogchat.h"
 #include "llviewerchat.h"
 #include "llviewercontrol.h"
 #include "llviewerwindow.h"
@@ -73,6 +75,8 @@ constexpr S32 INPUT_GAP = 4;
 constexpr S32 INSET = 8; // inside the backdrop's border
 constexpr F32 EDGE_FADE = 24.f; // the scroll mask at the top, and at the bottom while scrolled
 constexpr F32 CARD_ALPHA = 0.6f;
+constexpr S32 TIME_GAP = 5;     // between the name and its timestamp
+constexpr F32 TIME_ALPHA = 0.45f;
 
 S32 utf8_lead_len(char c)
 {
@@ -81,6 +85,11 @@ S32 utf8_lead_len(char c)
 }
 
 LLFontGL* name_font()
+{
+    return LLFontGL::getFontSansSerifSmall();
+}
+
+LLFontGL* time_font()
 {
     return LLFontGL::getFontSansSerifSmall();
 }
@@ -269,6 +278,8 @@ void SKFloaterLocalChat::appendChat(const LLChat& chat, const LLSD& args, F64 ar
     msg.mFromID = chat.mFromID;
     msg.mSource = chat.mSourceType;
     msg.mArrival = arrival;
+    static LLCachedControl<bool> show_seconds(gSavedSettings, "AlchemyIMShowSeconds", false);
+    msg.mTime = ALChatTimestamp::format(chat.mTimeStr.empty() ? LLLogChat::timestamp2LogString(0, false, true) : chat.mTimeStr, show_seconds);
 
     LLUIColor text_color = LLUIColorTable::instance().getColor("White");
     F32 alpha = 1.f;
@@ -599,7 +610,9 @@ void SKFloaterLocalChat::layout()
 
     for (S32 m = 0; m < (S32)mMessages.size(); ++m)
     {
-        const Message& msg = mMessages[m];
+        Message& msg = mMessages[m];
+        msg.mNameWidth = msg.mName.empty() ? 0 : name_font()->getWidth(msg.mName);
+        msg.mTimeWidth = msg.mName.empty() || msg.mTime.empty() ? 0 : time_font()->getWidth(msg.mTime) + TIME_GAP;
         // Cards gather one speaker's run of messages; a minimal line stands alone.
         bool join = false;
         if (cards && !mCards.empty() && !msg.mName.empty())
@@ -643,7 +656,9 @@ void SKFloaterLocalChat::layout()
             {
                 line_end = (S32)nl;
             }
-            S32 count = font->maxDrawableBytes(body.substr(pos), wrap, line_end - pos, LLFontGL::WORD_BOUNDARY_IF_POSSIBLE);
+            // A minimal line's timestamp sits in its first row, after the name.
+            const F32 row_wrap = pos == 0 && msg.mNameLen > 0 ? llmax(16.f, wrap - (F32)msg.mTimeWidth) : wrap;
+            S32 count = font->maxDrawableBytes(body.substr(pos), row_wrap, line_end - pos, LLFontGL::WORD_BOUNDARY_IF_POSSIBLE);
             if (count <= 0 && pos < line_end)
             {
                 count = llmin(utf8_lead_len(body[pos]), line_end - pos);
@@ -681,8 +696,17 @@ void SKFloaterLocalChat::layout()
         for (S32 r = card.mFirstRow; r <= card.mLastRow; ++r)
         {
             const Row& row = mRows[r];
-            widest = llmax(widest, row.mMessage < 0 ? name_font()->getWidth(mMessages[mCards[row.mCard].mFirstMessage].mName)
-                                                    : font->getWidthBytes(mMessages[row.mMessage].mBody, row.mBegin, row.mLength));
+            if (row.mMessage < 0)
+            {
+                const Message& first = mMessages[mCards[row.mCard].mFirstMessage];
+                widest = llmax(widest, first.mNameWidth + first.mTimeWidth);
+            }
+            else
+            {
+                const Message& msg = mMessages[row.mMessage];
+                const S32 time = row.mBegin == 0 && msg.mNameLen > 0 ? msg.mTimeWidth : 0;
+                widest = llmax(widest, font->getWidthBytes(msg.mBody, row.mBegin, row.mLength) + time);
+            }
         }
         // A little slack for the bold name run, measured above in the regular face.
         card.mWidth = llmin(width, text_x + widest + PAD_X + 2);
@@ -713,6 +737,13 @@ void SKFloaterLocalChat::layout()
             }
         }
     }
+}
+
+void SKFloaterLocalChat::drawTime(const Message& msg, F32 x, S32 y, F32 alpha, LLFontGL::ShadowType shadow) const
+{
+    LLColor4 color = msg.mNameColor;
+    color.mV[VALPHA] *= TIME_ALPHA * alpha;
+    time_font()->renderUTF8(msg.mTime, 0, x, (F32)y, color, LLFontGL::LEFT, LLFontGL::BOTTOM, LLFontGL::NORMAL, shadow);
 }
 
 void SKFloaterLocalChat::drawRowText(const Row& row, S32 x, S32 y, F32 alpha, LLFontGL::ShadowType shadow) const
@@ -758,6 +789,11 @@ void SKFloaterLocalChat::drawRowText(const Row& row, S32 x, S32 y, F32 alpha, LL
         font->renderUTF8(body, pos, pen, (F32)y, color, LLFontGL::LEFT, LLFontGL::BOTTOM, style, shadow, run_end - pos, S32_MAX, &right);
         pen = right;
         pos = run_end;
+        if (pos == msg.mNameLen && row.mBegin == 0 && msg.mTimeWidth > 0)
+        {
+            drawTime(msg, pen + (F32)TIME_GAP, y, alpha, shadow);
+            pen += (F32)msg.mTimeWidth;
+        }
     }
 }
 
@@ -825,6 +861,10 @@ void SKFloaterLocalChat::drawMessages(const LLRect& content, F64 now, bool full,
                 LLColor4 color = first.mNameColor;
                 color.mV[VALPHA] *= alpha;
                 name_font()->renderUTF8(first.mName, 0, (F32)text_x, (F32)y, color, LLFontGL::LEFT, LLFontGL::BOTTOM, LLFontGL::BOLD, LLFontGL::NO_SHADOW);
+                if (first.mTimeWidth > 0)
+                {
+                    drawTime(first, (F32)(text_x + first.mNameWidth + TIME_GAP), y, alpha, LLFontGL::NO_SHADOW);
+                }
             }
             else
             {
@@ -1085,7 +1125,21 @@ std::string SKFloaterLocalChat::urlAt(S32 x, S32 y) const
         {
             return std::string();
         }
-        const S32 at = row.mBegin + LLViewerChat::getChatFont()->byteFromPixelOffset(msg.mBody, row.mBegin, (F32)(x - text_x), F32_MAX, row.mLength, false);
+        F32 offset = (F32)(x - text_x);
+        if (row.mBegin == 0 && msg.mNameLen > 0 && msg.mTimeWidth > 0)
+        {
+            // Past the name, the timestamp pushes the rest of the row along.
+            const F32 name_end = (F32)LLViewerChat::getChatFont()->getWidthBytes(msg.mBody, 0, msg.mNameLen);
+            if (offset >= name_end)
+            {
+                offset = offset < name_end + msg.mTimeWidth ? -1.f : offset - msg.mTimeWidth;
+            }
+        }
+        if (offset < 0.f)
+        {
+            return std::string();
+        }
+        const S32 at = row.mBegin + LLViewerChat::getChatFont()->byteFromPixelOffset(msg.mBody, row.mBegin, offset, F32_MAX, row.mLength, false);
         if (at >= row.mBegin + row.mLength)
         {
             return std::string();
