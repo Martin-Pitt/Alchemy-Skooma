@@ -269,12 +269,15 @@ SKNavMesh::AirReach SKNavMesh::airReach() const
     reach.mBoxes = mHomeBoxes;
     static LLCachedControl<F32> hold(gSavedSettings, "SKNavAirDetailHoldSeconds", 20.f);
     const F64 now = LLTimer::getTotalSeconds();
-    for (const auto& r : mAirRequests)
+    for (auto it = mAirRequests.begin(); it != mAirRequests.end();)
     {
-        if (now - r.second.mAt < hold)
+        if (now - it->second.mAt >= hold)
         {
-            reach.mBoxes.emplace_back(r.second.mMin, r.second.mMax);
+            it = mAirRequests.erase(it);
+            continue;
         }
+        reach.mBoxes.emplace_back(it->second.mMin, it->second.mMax);
+        ++it;
     }
     return reach;
 }
@@ -388,6 +391,14 @@ U8 SKNavMesh::meshPriority(const Mesh& mesh) const
         }
     }
     return 3;
+}
+
+void SKNavMesh::cleanupGL()
+{
+    if (instanceExists())
+    {
+        instance().mOverlay.releaseGL();
+    }
 }
 
 void SKNavMesh::requestAir(const std::string& who, const LLVector3d& min, const LLVector3d& max) const

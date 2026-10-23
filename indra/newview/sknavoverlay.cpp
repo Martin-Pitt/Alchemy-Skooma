@@ -215,6 +215,14 @@ void SKNavOverlayGeom::uploadBatch(const std::vector<LLVector3>& verts, const st
     vb->unmapBuffer();
 }
 
+void SKNavOverlayGeom::releaseGL()
+{
+    mTriVB = nullptr;
+    mEdgeVB = nullptr;
+    mLineVB = nullptr;
+    mUploaded = false;
+}
+
 void SKNavOverlayGeom::upload()
 {
     uploadBatch(mTriVerts, mTriColors, mTriVB);

@@ -64,6 +64,7 @@ namespace
     constexpr S32 MIN_ACTIVE_FRAMES = 2;  // frames a freshly made-active root waits for its bridge to fill
     constexpr S32 AVATAR_CENTER_POINT = 40;
     constexpr F64 NAME_RETRY_SECONDS = 30.0; // a name that never came is asked for again after this
+    constexpr F64 NAME_SWEEP_SECONDS = 60.0; // names of objects no longer in the world are dropped this often
 
     LLRenderTarget sTarget; // depth (and a scratch colour) at twice a slot's resolution
     LLRenderTarget sAtlas;  // R8 coverage, one slot per layer
@@ -813,6 +814,21 @@ void SKOutlineCapture::frame()
         }
     }
     readCounts();
+
+    if (now - mNamesSwept > NAME_SWEEP_SECONDS)
+    {
+        mNamesSwept = now;
+        for (auto it = mNameRequests.begin(); it != mNameRequests.end();)
+        {
+            if (gObjectList.findObject(it->first))
+            {
+                ++it;
+                continue;
+            }
+            mNames.erase(it->first);
+            it = mNameRequests.erase(it);
+        }
+    }
 
     std::vector<Candidate> candidates;
     std::vector<Entry*> by_index;

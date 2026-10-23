@@ -26,6 +26,7 @@
 
 #include "skphysicsshape.h"
 
+#include "llappviewer.h"
 #include "llmeshrepository.h"
 #include "llmodel.h"
 #include "llvolume.h"
@@ -199,13 +200,28 @@ namespace
         size_t mSize = 0;
         LLVector3 mScale;
         F32 mCost = 0.f;
+        U32 mUsed = 0; // the frame it was last asked for
     };
+
+    // Past this many entries, those not asked for in the last few seconds are dropped.
+    constexpr size_t MESH_COST_CACHE_SWEEP = 4096;
+    constexpr U32 MESH_COST_CACHE_KEEP_FRAMES = 600;
 
     template <typename Compute>
     F32 cachedMeshCost(const LLUUID& id, const void* source, size_t size, const LLVector3& scale, Compute compute)
     {
         static std::unordered_map<LLUUID, CachedMeshCost> cache;
+        static U32 swept = 0;
+        if (cache.size() >= MESH_COST_CACHE_SWEEP && gFrameCount - swept > MESH_COST_CACHE_KEEP_FRAMES)
+        {
+            swept = gFrameCount;
+            for (auto it = cache.begin(); it != cache.end();)
+            {
+                it = gFrameCount - it->second.mUsed > MESH_COST_CACHE_KEEP_FRAMES ? cache.erase(it) : std::next(it);
+            }
+        }
         CachedMeshCost& entry = cache[id];
+        entry.mUsed = gFrameCount;
         if (entry.mSource != source || entry.mSize != size || entry.mScale != scale)
         {
             entry.mSource = source;
