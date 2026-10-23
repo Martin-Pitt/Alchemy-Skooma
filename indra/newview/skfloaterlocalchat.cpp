@@ -69,6 +69,7 @@ constexpr S32 DISC = 12;
 constexpr S32 DISC_GAP = 6;
 constexpr S32 INPUT_HEIGHT = 24;
 constexpr S32 INPUT_GAP = 4;
+constexpr S32 INSET = 8; // inside the backdrop's border
 constexpr F32 CARD_ALPHA = 0.6f;
 
 S32 utf8_lead_len(char c)
@@ -487,7 +488,7 @@ bool SKFloaterLocalChat::expanded() const
 LLRect SKFloaterLocalChat::contentRect() const
 {
     // The input's row is always kept, so the messages do not jump when it opens or closes.
-    return LLRect(0, getRect().getHeight(), getRect().getWidth(), INPUT_HEIGHT + INPUT_GAP);
+    return LLRect(INSET, getRect().getHeight() - INSET, getRect().getWidth() - INSET, INPUT_HEIGHT + INPUT_GAP + INSET);
 }
 
 S32 SKFloaterLocalChat::lineHeight(const Row& row) const
@@ -516,7 +517,7 @@ void SKFloaterLocalChat::layout()
 {
     static LLCachedControl<S32> style(gSavedSettings, "SkoomaLocalChatStyle", STYLE_CARDS);
     const bool cards = style != STYLE_MINIMAL;
-    const S32 width = getRect().getWidth();
+    const S32 width = contentRect().getWidth();
     if (!mLayoutDirty && width == mLayoutWidth && style == mLayoutStyle)
     {
         return;
@@ -735,11 +736,13 @@ void SKFloaterLocalChat::draw()
         mCog->setVisible(mHovered && opaque);
     }
 
-    if (mHovered && opaque)
+    if (opaque && (mHovered || (mInput && mInput->getVisible())))
     {
-        // The only chrome: a faint frame to show where to drag and resize.
-        static LLUIColor frame = LLUIColorTable::instance().getColor("FloaterUnfocusBorderColor");
-        gl_rect_2d(0, getRect().getHeight(), getRect().getWidth(), 0, frame.get() % 0.5f, false);
+        // The only chrome, the mini-map's: a faint dark tint inside a thin light border.
+        static const LLColor4 tint(16.f / 255.f, 16.f / 255.f, 20.f / 255.f, 61.f / 255.f);
+        static const LLColor4 border(197.f / 255.f, 205.f / 255.f, 211.f / 255.f, 122.f / 255.f);
+        gl_rect_2d(0, getRect().getHeight(), getRect().getWidth(), 0, tint, true);
+        gl_rect_2d(0, getRect().getHeight(), getRect().getWidth(), 0, border, false);
     }
 
     if (!mRows.empty())
@@ -747,7 +750,7 @@ void SKFloaterLocalChat::draw()
         LLLocalClipRect clip(content);
         static LLUIImagePtr card_image = LLUI::getUIImage("Rounded_Square");
         static LLUIColor card_color = LLUIColorTable::instance().getColor("Black");
-        const S32 text_x = cards ? PAD_X + DISC + DISC_GAP : PAD_X;
+        const S32 text_x = content.mLeft + (cards ? PAD_X + DISC + DISC_GAP : PAD_X);
         const LLFontGL::ShadowType shadow = cards ? LLFontGL::NO_SHADOW : LLFontGL::DROP_SHADOW_SOFT;
         const S32 base = content.mBottom - mScroll;
 
@@ -775,7 +778,7 @@ void SKFloaterLocalChat::draw()
             const Message& first = mMessages[card.mFirstMessage];
             if (cards)
             {
-                card_image->draw(0, card_bottom, getRect().getWidth(), card_top - card_bottom, card_color.get() % (CARD_ALPHA * alpha));
+                card_image->draw(content.mLeft, card_bottom, content.getWidth(), card_top - card_bottom, card_color.get() % (CARD_ALPHA * alpha));
                 if (!first.mName.empty())
                 {
                     // Round for people, square for objects.
@@ -785,12 +788,12 @@ void SKFloaterLocalChat::draw()
                     disc.mV[VALPHA] *= alpha;
                     if (first.mSource == CHAT_SOURCE_OBJECT)
                     {
-                        gl_rect_2d(PAD_X, disc_top, PAD_X + DISC, disc_top - DISC, disc);
+                        gl_rect_2d(content.mLeft + PAD_X, disc_top, content.mLeft + PAD_X + DISC, disc_top - DISC, disc);
                     }
                     else
                     {
                         gGL.color4fv(disc.mV);
-                        gl_circle_2d((F32)PAD_X + DISC * 0.5f, (F32)disc_top - DISC * 0.5f, DISC * 0.5f, 16, true);
+                        gl_circle_2d((F32)(content.mLeft + PAD_X) + DISC * 0.5f, (F32)disc_top - DISC * 0.5f, DISC * 0.5f, 16, true);
                     }
                 }
             }
@@ -839,7 +842,7 @@ std::string SKFloaterLocalChat::urlAt(S32 x, S32 y) const
     {
         return std::string();
     }
-    const S32 text_x = mLayoutStyle != STYLE_MINIMAL ? PAD_X + DISC + DISC_GAP : PAD_X;
+    const S32 text_x = contentRect().mLeft + (mLayoutStyle != STYLE_MINIMAL ? PAD_X + DISC + DISC_GAP : PAD_X);
     const S32 base = contentRect().mBottom - mScroll;
     const bool full = expanded();
     const F64 now = LLFrameTimer::getTotalSeconds();
