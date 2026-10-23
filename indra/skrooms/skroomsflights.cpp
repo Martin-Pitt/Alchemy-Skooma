@@ -59,6 +59,15 @@ namespace skworld
             bool mOk = false;
         };
 
+        /// A grown region's sums, kept at its union-find root.
+        struct Root
+        {
+            F64 mX = 0.0;
+            F64 mY = 0.0;
+            F64 mGrade = 0.0;
+            U32 mCount = 0;
+        };
+
         /// Scratch a detection reuses on its thread: stamps instead of sets, flat arrays, no allocation per cell.
         struct Scratch
         {
@@ -69,6 +78,14 @@ namespace skworld
             std::vector<U32> mSeeds;
             std::vector<U32> mVisited;
             std::vector<U8> mDist;
+            std::vector<U32> mCandidate;    ///< per cell, its candidate index or NONE
+            std::vector<U32> mCands;        ///< candidate cells, in index order
+            std::vector<Fit> mFits;         ///< per candidate
+            std::vector<S32> mRegionOf;     ///< per candidate
+            std::vector<U32> mParent;
+            std::vector<Root> mRoots;
+            std::vector<U32> mCount;
+            std::vector<S32> mIndex;
 
             void reset(size_t n)
             {
@@ -240,8 +257,14 @@ namespace skworld
 
         // Fit: a grade and an uphill direction per object floor cell; the rest are never candidates.
         auto t0 = std::chrono::steady_clock::now();
-        std::vector<Fit> fits(n);
-        std::vector<U8> cand(n, 0);
+        // Candidates in index order, and per cell its candidate index or NONE: what grows, measures and floods is
+        // sized by the sloped cells, not by every floor cell.
+        std::vector<U32>& ci = s.mCandidate;
+        ci.assign(n, NONE);
+        std::vector<U32>& cands = s.mCands;
+        std::vector<Fit>& cfit = s.mFits;
+        cands.clear();
+        cfit.clear();
         {
             SK_WORLD_ZONE("flights.fit");
             // Only cells within FLIGHT_FIT_HOPS links of a step (a link to another floor) can fit a grade: the rest
@@ -286,112 +309,107 @@ namespace skworld
                 {
                     continue;
                 }
-                fits[c] = fitCell(g, c);
+                const Fit f = fitCell(g, c);
                 ++st.mFitted;
-                const Fit& f = fits[c];
                 if (f.mOk && f.mGrade >= FLIGHT_MIN_GRADE_DEG && f.mGrade <= FLIGHT_MAX_GRADE_DEG && (f.mUx != 0.0 || f.mUy != 0.0))
                 {
-                    cand[c] = 1;
-                    ++st.mCandidates;
+                    ci[c] = static_cast<U32>(cands.size());
+                    cands.push_back(c);
+                    cfit.push_back(f);
                 }
             }
         }
+        const U32 ncand = static_cast<U32>(cands.size());
+        st.mCandidates = ncand;
         st.mFitMs = static_cast<F32>(msSince(t0));
 
         // Grow: union neighbours rising the same way at much the same grade; the least cell is a region's root.
         t0 = std::chrono::steady_clock::now();
-        std::vector<U32> parent(n);
         std::vector<U32> region_start, region_cells;
-        std::vector<S32> region_of(n, -1);
+        std::vector<S32>& rof = s.mRegionOf;     // per candidate, its region or -1
+        rof.assign(ncand, -1);
         {
             SK_WORLD_ZONE("flights.grow");
             // Per root, the sum of its cells' uphill directions and grades, and its count.
-            std::vector<F64> sum_x(n, 0.0), sum_y(n, 0.0), sum_g(n, 0.0);
-            std::vector<U32> members(n, 1);
-            for (U32 c = 0; c < n; ++c)
+            std::vector<U32>& parent = s.mParent;
+            std::vector<Root>& roots = s.mRoots;
+            parent.resize(ncand);
+            roots.resize(ncand);
+            for (U32 i = 0; i < ncand; ++i)
             {
-                parent[c] = c;
-                if (cand[c])
-                {
-                    sum_x[c] = fits[c].mUx;
-                    sum_y[c] = fits[c].mUy;
-                    sum_g[c] = fits[c].mGrade;
-                }
+                parent[i] = i;
+                roots[i] = { cfit[i].mUx, cfit[i].mUy, cfit[i].mGrade, 1 };
             }
             const F64 cos_turn = std::cos(FLIGHT_JOIN_TURN_DEG / DEG);
-            for (U32 c = 0; c < n; ++c)
+            for (U32 i = 0; i < ncand; ++i)
             {
-                if (!cand[c])
-                {
-                    continue;
-                }
+                const U32 c = cands[i];
                 for (S32 d = 0; d < 4; ++d)
                 {
                     const U32 o = g.mLink[c * 4 + d];
-                    if (o == NONE || o <= c || !cand[o])
+                    if (o == NONE || o <= c || ci[o] == NONE)
                     {
                         continue;
                     }
-                    const Fit& fc = fits[c];
-                    const Fit& fo = fits[o];
+                    const U32 j = ci[o];
+                    const Fit& fc = cfit[i];
+                    const Fit& fo = cfit[j];
                     if (fc.mUx * fo.mUx + fc.mUy * fo.mUy >= cos_turn && std::fabs(fc.mGrade - fo.mGrade) <= FLIGHT_JOIN_GRADE_DEG)
                     {
-                        const U32 ra = findRoot(parent, c), rb = findRoot(parent, o);
+                        const U32 ra = findRoot(parent, i), rb = findRoot(parent, j);
                         if (ra == rb)
                         {
                             continue;
                         }
                         // And the two regions as a whole rise the same way, so no chain of cells turns a corner.
-                        const F64 ma = std::hypot(sum_x[ra], sum_y[ra]), mb = std::hypot(sum_x[rb], sum_y[rb]);
-                        if (ma < 1e-12 || mb < 1e-12 || (sum_x[ra] * sum_x[rb] + sum_y[ra] * sum_y[rb]) / (ma * mb) < cos_turn ||
-                            std::fabs(sum_g[ra] / members[ra] - sum_g[rb] / members[rb]) > FLIGHT_JOIN_GRADE_DEG)
+                        const Root& qa = roots[ra];
+                        const Root& qb = roots[rb];
+                        const F64 ma = std::hypot(qa.mX, qa.mY), mb = std::hypot(qb.mX, qb.mY);
+                        if (ma < 1e-12 || mb < 1e-12 || (qa.mX * qb.mX + qa.mY * qb.mY) / (ma * mb) < cos_turn ||
+                            std::fabs(qa.mGrade / qa.mCount - qb.mGrade / qb.mCount) > FLIGHT_JOIN_GRADE_DEG)
                         {
                             continue;
                         }
                         const U32 lo = std::min(ra, rb), hi = std::max(ra, rb);
                         parent[hi] = lo;
-                        sum_x[lo] += sum_x[hi];
-                        sum_y[lo] += sum_y[hi];
-                        sum_g[lo] += sum_g[hi];
-                        members[lo] += members[hi];
+                        roots[lo].mX += roots[hi].mX;
+                        roots[lo].mY += roots[hi].mY;
+                        roots[lo].mGrade += roots[hi].mGrade;
+                        roots[lo].mCount += roots[hi].mCount;
                     }
                 }
             }
             // Regions in the order of their roots, their cells in index order: a counting sort over the roots.
-            std::vector<U32> count(n, 0);
-            for (U32 c = 0; c < n; ++c)
+            std::vector<U32>& count = s.mCount;
+            count.assign(ncand, 0);
+            for (U32 i = 0; i < ncand; ++i)
             {
-                if (cand[c])
-                {
-                    ++count[findRoot(parent, c)];
-                }
+                ++count[findRoot(parent, i)];
             }
-            std::vector<S32> index(n, -1);
+            std::vector<S32>& index = s.mIndex;
+            index.assign(ncand, -1);
             region_start.push_back(0);
-            for (U32 c = 0; c < n; ++c)
+            for (U32 i = 0; i < ncand; ++i)
             {
-                if (count[c] >= FLIGHT_MIN_REGION_CELLS)
+                if (count[i] >= FLIGHT_MIN_REGION_CELLS)
                 {
-                    index[c] = static_cast<S32>(region_start.size() - 1);
-                    region_start.push_back(region_start.back() + count[c]);
+                    index[i] = static_cast<S32>(region_start.size() - 1);
+                    region_start.push_back(region_start.back() + count[i]);
                 }
             }
             region_cells.resize(region_start.back());
             std::vector<U32> fill(region_start.begin(), region_start.end() - 1);
-            for (U32 c = 0; c < n; ++c)
+            for (U32 i = 0; i < ncand; ++i)
             {
-                if (!cand[c])
-                {
-                    continue;
-                }
-                const S32 r = index[findRoot(parent, c)];
+                const S32 r = index[findRoot(parent, i)];
                 if (r >= 0)
                 {
-                    region_cells[fill[r]++] = c;
-                    region_of[c] = r;
+                    region_cells[fill[r]++] = cands[i];
+                    rof[i] = r;
                 }
             }
         }
+        const auto regionOf = [&](U32 c) { return ci[c] == NONE ? -1 : rof[ci[c]]; };
         const U32 regions = static_cast<U32>(region_start.size() - 1);
         st.mRegions = regions;
         st.mGrowMs = static_cast<F32>(msSince(t0));
@@ -406,8 +424,8 @@ namespace skworld
                 F64 ux = 0.0, uy = 0.0;
                 for (U32 k = region_start[r]; k < region_start[r + 1]; ++k)
                 {
-                    ux += fits[region_cells[k]].mUx;
-                    uy += fits[region_cells[k]].mUy;
+                    ux += cfit[ci[region_cells[k]]].mUx;
+                    uy += cfit[ci[region_cells[k]]].mUy;
                 }
                 const F64 m = std::hypot(ux, uy);
                 if (m < 1e-9)
@@ -484,7 +502,7 @@ namespace skworld
                     for (S32 d = 0; d < 4; ++d)
                     {
                         const U32 o = g.mLink[a * 4 + d];
-                        if (o == NONE || !cand[o] || region_of[o] == static_cast<S32>(r) || (region_of[o] >= 0 && !small[region_of[o]]))
+                        if (o == NONE || ci[o] == NONE || rof[ci[o]] == static_cast<S32>(r) || (rof[ci[o]] >= 0 && !small[rof[ci[o]]]))
                         {
                             continue;
                         }
@@ -493,18 +511,18 @@ namespace skworld
                         {
                             continue;
                         }
-                        region_of[o] = static_cast<S32>(r);
+                        rof[ci[o]] = static_cast<S32>(r);
                         s.mQueue.push_back(o);
                     }
                 }
             }
             {
                 std::vector<U32> fill(regions + 1, 0);
-                for (U32 c = 0; c < n; ++c)
+                for (U32 i = 0; i < ncand; ++i)
                 {
-                    if (region_of[c] >= 0)
+                    if (rof[i] >= 0)
                     {
-                        ++fill[region_of[c] + 1];
+                        ++fill[rof[i] + 1];
                     }
                 }
                 for (U32 r = 0; r < regions; ++r)
@@ -513,11 +531,11 @@ namespace skworld
                 }
                 region_start = fill;
                 region_cells.resize(fill[regions]);
-                for (U32 c = 0; c < n; ++c)
+                for (U32 i = 0; i < ncand; ++i)
                 {
-                    if (region_of[c] >= 0)
+                    if (rof[i] >= 0)
                     {
-                        region_cells[fill[region_of[c]]++] = c;
+                        region_cells[fill[rof[i]]++] = cands[i];
                     }
                 }
             }
@@ -630,7 +648,7 @@ namespace skworld
                         for (S32 d = 0; d < 4; ++d)
                         {
                             const U32 o = g.mLink[c * 4 + d];
-                            if (o == NONE || s.mStamp[o] == seed_walk || region_of[o] == static_cast<S32>(r) || std::fabs(zOf(o) - band) > FLIGHT_FLOOR_DZ_M ||
+                            if (o == NONE || s.mStamp[o] == seed_walk || regionOf(o) == static_cast<S32>(r) || std::fabs(zOf(o) - band) > FLIGHT_FLOOR_DZ_M ||
                                 !beyond(o))
                             {
                                 continue;
@@ -651,7 +669,7 @@ namespace skworld
                             continue;
                         }
                         s.mStamp2[a] = walk;
-                        const S32 ra = region_of[a];
+                        const S32 ra = regionOf(a);
                         if (ra >= 0 && (region_start[ra + 1] - region_start[ra]) * cell2 >= FLIGHT_MIN_AREA_M2)
                         {
                             if (axes[ra].mOk)
@@ -673,7 +691,7 @@ namespace skworld
                         for (S32 d = 0; d < 4; ++d)
                         {
                             const U32 o = g.mLink[a * 4 + d];
-                            if (o == NONE || s.mStamp2[o] == walk || region_of[o] == static_cast<S32>(r) || std::fabs(zOf(o) - band) > FLIGHT_FLOOR_DZ_M ||
+                            if (o == NONE || s.mStamp2[o] == walk || regionOf(o) == static_cast<S32>(r) || std::fabs(zOf(o) - band) > FLIGHT_FLOOR_DZ_M ||
                                 !beyond(o))
                             {
                                 continue;
