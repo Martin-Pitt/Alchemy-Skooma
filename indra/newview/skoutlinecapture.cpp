@@ -70,7 +70,7 @@ namespace
     LLRenderTarget sTarget; // depth (and a scratch colour) at twice a slot's resolution
     LLRenderTarget sAtlas;  // R8 coverage, one slot per layer
     LLGLSLShader sResolve;
-    U32 sQueries[2] = { 0, 0 };
+    ALQuerySpan sTimedSpan;
     LLUUID sTimedRoot; // the capture whose render the queries are timing
     View sTimedView = View::PLAN;
 
@@ -594,11 +594,7 @@ void SKOutlineCapture::releaseGL()
     sTarget.release();
     sAtlas.release();
     sResolve.unload();
-    if (sQueries[0])
-    {
-        glDeleteQueries(2, sQueries);
-        sQueries[0] = sQueries[1] = 0;
-    }
+    sTimedSpan = ALQuerySpan();
     sTimedRoot.setNull();
     mGLFailed = false;
     for (auto& [id, entry] : mEntries)
@@ -808,19 +804,20 @@ void SKOutlineCapture::frame()
     // The GPU time of the last timed render, read only once it is ready.
     if (sTimedRoot.notNull())
     {
-        GLint available = 0;
-        glGetQueryObjectiv(sQueries[1], GL_QUERY_RESULT_AVAILABLE, &available);
-        if (available)
+        U64 ns = 0;
+        const ALQueryPool::Status st = gGL.queries().result(sTimedSpan, ns);
+        if (st == ALQueryPool::Status::Ready)
         {
-            GLuint64 t0 = 0, t1 = 0;
-            glGetQueryObjectui64v(sQueries[0], GL_QUERY_RESULT, &t0);
-            glGetQueryObjectui64v(sQueries[1], GL_QUERY_RESULT, &t1);
             const auto it = mEntries.find({ sTimedRoot, sTimedView });
             if (it != mEntries.end())
             {
-                it->second->gpu_ms = t1 > t0 ? (F64)(t1 - t0) / 1.0e6 : 0.0;
+                it->second->gpu_ms = (F64)ns / 1.0e6;
             }
+        }
+        if (st != ALQueryPool::Status::Pending)
+        {
             sTimedRoot.setNull();
+            sTimedSpan = ALQuerySpan();
         }
     }
     readCounts();
@@ -943,21 +940,17 @@ void SKOutlineCapture::frame()
             }
             Entry& e = *by_index[c.index];
             LLTimer t;
-            // Timestamps rather than GL_TIME_ELAPSED, which cannot nest inside the profiler's own GPU zones.
+            // A pool span, which nests inside the profiler's GPU zones and is read with no GL call.
             const bool time_gpu = debug && sTimedRoot.isNull();
             if (time_gpu)
             {
-                if (!sQueries[0])
-                {
-                    glGenQueries(2, sQueries);
-                }
-                glQueryCounter(sQueries[0], GL_TIMESTAMP);
+                sTimedSpan = gGL.queries().beginSpan();
             }
             e.last_reason = c.reason;
             const bool ok = render(e);
             if (time_gpu)
             {
-                glQueryCounter(sQueries[1], GL_TIMESTAMP);
+                gGL.queries().endSpan(sTimedSpan);
                 sTimedRoot = e.root_id;
                 sTimedView = e.view;
             }
