@@ -68,7 +68,9 @@ public:
     bool applyRectControl() override;
     bool handleKeyHere(KEY key, MASK mask) override;
     bool handleMouseDown(S32 x, S32 y, MASK mask) override;
+    bool handleMouseUp(S32 x, S32 y, MASK mask) override;
     bool handleHover(S32 x, S32 y, MASK mask) override;
+    void onMouseCaptureLost() override;
     bool handleScrollWheel(S32 x, S32 y, LLScrollDelta delta) override;
     void onMouseEnter(S32 x, S32 y, MASK mask) override;
     void onMouseLeave(S32 x, S32 y, MASK mask) override;
@@ -139,6 +141,12 @@ private:
     void layout();
     void layoutCog();
     LLRect contentRect() const;
+    bool barShown() const;
+    LLRect barStrip() const;
+    LLRect barThumb() const;    // the thumb's whole extent in the strip
+    S32 barRange() const;
+    void barPage(S32 dir);
+    bool barTakes(S32 x, S32 y); // a click or hover here belongs to the bar
     bool expanded() const;
     F32 cardAlpha(const Card& card, F64 now) const;
     S32 lineHeight(const Row& row) const;
@@ -182,6 +190,13 @@ private:
     S32 mLayoutStyle = -1;
     bool mLayoutDirty = true;
     bool mHovered = false;
+    bool mBarHot = false;       // the pointer is on the scroll bar's strip
+    S32 mBarDrag = -1;          // while the thumb is dragged, the pointer's height above its bottom
+    S32 mBarPage = 0;           // while the track is held, +1 paging back through history, -1 forward
+    S32 mBarPointerY = 0;       // the pointer's last height, so a held page stops at it
+    F64 mBarRepeatAt = 0.0;     // when a held page next repeats
+    F32 mBarWide = 0.f;         // 0 for the thin thumb, 1 for the full bar, eased between
+    F64 mBarDrawnAt = 0.0;      // the last draw, to ease mBarWide by
     bool mWasExpanded = false;
     F64 mCollapsedAt = -1.0e9; // when the log last stopped being shown whole
     boost::signals2::connection mFontConnection;
