@@ -1260,9 +1260,9 @@ bool SKOutlineCapture::dumpAtlas(const std::string& path)
         return false;
     }
     LLPointer<LLImageRaw> raw = new LLImageRaw(ATLAS_SIZE, ATLAS_SIZE, 1);
+    // Synchronous on purpose: a command, not a frame.
     sAtlas.bindTarget();
-    glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    glReadPixels(0, 0, ATLAS_SIZE, ATLAS_SIZE, GL_RED, GL_UNSIGNED_BYTE, raw->getData());
+    gGL.readPixels(0, 0, ATLAS_SIZE, ATLAS_SIZE, GL_RED, GL_UNSIGNED_BYTE, raw->getData());
     sAtlas.flush();
     LLPointer<LLImagePNG> png = new LLImagePNG();
     return png->encode(raw, 0.f) && png->save(path);
