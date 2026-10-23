@@ -51,10 +51,12 @@
 #include "alchatbar.h"
 #include "llagent.h"
 #include "llagentcamera.h"
+#include "llavatariconctrl.h"
 #include "llfloaterimnearbychat.h"
 #include "llviewerchat.h"
 #include "llviewerobject.h"
 #include "llviewerobjectlist.h"
+#include "llviewertexture.h"
 #include "llviewercontrol.h"
 #include "llviewerwindow.h"
 
@@ -106,6 +108,16 @@ SKFloaterLocalChat::~SKFloaterLocalChat()
 {
     mFontConnection.disconnect();
     mEmojiCloseConnection.disconnect();
+    if (LLAvatarPropertiesProcessor::instanceExists())
+    {
+        for (const auto& [id, picture] : mAvatarPictures)
+        {
+            if (picture.mObserving)
+            {
+                LLAvatarPropertiesProcessor::getInstance()->removeObserver(id, this);
+            }
+        }
+    }
 }
 
 // static
@@ -841,8 +853,7 @@ void SKFloaterLocalChat::draw()
                     }
                     else
                     {
-                        gGL.color4fv(disc.mV);
-                        gl_circle_2d((F32)(content.mLeft + PAD_X) + DISC * 0.5f, (F32)disc_top - DISC * 0.5f, DISC * 0.5f, 16, true);
+                        drawAvatarIcon(first, content.mLeft + PAD_X, disc_top, disc);
                     }
                 }
             }
@@ -1091,6 +1102,96 @@ void SKFloaterLocalChat::drawObjectIcon(const Message& first, S32 left, S32 top,
     gGL.vertex2f(x0 + gw, y0 + gh);
     gGL.end();
     gGL.getTextureSlot(0)->unbind();
+}
+
+void SKFloaterLocalChat::drawAvatarIcon(const Message& first, S32 left, S32 top, const LLColor4& color)
+{
+    const F32 cx = (F32)left + DISC * 0.5f;
+    const F32 cy = (F32)top - DISC * 0.5f;
+    const F32 radius = DISC * 0.5f;
+    LLViewerFetchedTexture* tex = nullptr;
+    if (first.mSource == CHAT_SOURCE_AGENT && first.mFromID.notNull())
+    {
+        AvatarPicture& picture = mAvatarPictures[first.mFromID];
+        if (!picture.mAsked)
+        {
+            // As LLAvatarIconCtrl does: the shared icon id cache first, a legacy properties request otherwise.
+            picture.mAsked = true;
+            const LLUUID* icon = LLAvatarIconIDCache::getInstance()->get(first.mFromID);
+            if (icon && icon->notNull())
+            {
+                picture.mTexture = LLViewerTextureManager::getFetchedTexture(*icon, FTT_DEFAULT, true, LLGLTexture::BOOST_ICON);
+            }
+            else if (!icon)
+            {
+                LLAvatarPropertiesProcessor* app = LLAvatarPropertiesProcessor::getInstance();
+                app->addObserver(first.mFromID, this);
+                app->sendAvatarLegacyPropertiesRequest(first.mFromID);
+                picture.mObserving = true;
+            }
+        }
+        tex = picture.mTexture.get();
+    }
+    if (tex)
+    {
+        tex->addTextureStats((F32)(DISC * DISC * 4));
+    }
+    if (!tex || !tex->hasGLTexture())
+    {
+        gGL.color4fv(color.mV);
+        gl_circle_2d(cx, cy, radius, 16, true);
+        return;
+    }
+
+    // The picture clipped to a circle, inside a ring of the speaker's colour.
+    gGL.getTextureSlot(0)->bindSampled(tex, ALSamplers::BilinearClamp);
+    gGL.color4f(1.f, 1.f, 1.f, color.mV[VALPHA]);
+    constexpr S32 STEPS = 20;
+    const F32 inner = radius - 1.f;
+    gGL.begin(LLRender::TRIANGLE_FAN);
+    gGL.texCoord2f(0.5f, 0.5f);
+    gGL.vertex2f(cx, cy);
+    for (S32 i = 0; i <= STEPS; ++i)
+    {
+        const F32 a = F_TWO_PI * (F32)i / (F32)STEPS;
+        const F32 c = cosf(a);
+        const F32 sn = sinf(a);
+        gGL.texCoord2f(0.5f + 0.5f * c, 0.5f + 0.5f * sn);
+        gGL.vertex2f(cx + inner * c, cy + inner * sn);
+    }
+    gGL.end();
+    gGL.getTextureSlot(0)->unbind();
+    gGL.color4fv(color.mV);
+    gl_circle_2d(cx, cy, radius - 0.5f, STEPS, false);
+}
+
+void SKFloaterLocalChat::processProperties(void* data, EAvatarProcessorType type)
+{
+    LLUUID avatar_id, image_id;
+    if (type == APT_PROPERTIES_LEGACY && data)
+    {
+        const LLAvatarLegacyData* avatar = static_cast<const LLAvatarLegacyData*>(data);
+        avatar_id = avatar->avatar_id;
+        image_id = avatar->image_id;
+    }
+    else if (type == APT_PROPERTIES && data)
+    {
+        const LLAvatarData* avatar = static_cast<const LLAvatarData*>(data);
+        avatar_id = avatar->avatar_id;
+        image_id = avatar->image_id;
+    }
+    const auto it = mAvatarPictures.find(avatar_id);
+    if (avatar_id.isNull() || it == mAvatarPictures.end())
+    {
+        return;
+    }
+    LLAvatarIconIDCache::getInstance()->add(avatar_id, image_id);
+    LLAvatarPropertiesProcessor::getInstance()->removeObserver(avatar_id, this);
+    it->second.mObserving = false;
+    if (image_id.notNull())
+    {
+        it->second.mTexture = LLViewerTextureManager::getFetchedTexture(image_id, FTT_DEFAULT, true, LLGLTexture::BOOST_ICON);
+    }
 }
 
 void SKFloaterLocalChat::onStyleMenu(const LLSD& param)

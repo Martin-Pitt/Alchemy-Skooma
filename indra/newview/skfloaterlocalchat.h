@@ -28,6 +28,8 @@
 #include "llfloater.h"
 #include "llchat.h"
 #include "llfontgl.h"
+#include "llavatarpropertiesprocessor.h"
+#include "llpointer.h"
 #include "skoutlinecapture.h"
 
 #include <deque>
@@ -36,8 +38,9 @@ class LLButton;
 class LLChatEntry;
 class LLFontGL;
 class LLMenuButton;
+class LLViewerFetchedTexture;
 
-class SKFloaterLocalChat final : public LLFloater
+class SKFloaterLocalChat final : public LLFloater, public LLAvatarPropertiesObserver
 {
 public:
     AL_VIEW_TYPE(SKFloaterLocalChat, LLFloater);
@@ -66,6 +69,7 @@ public:
     void onMouseEnter(S32 x, S32 y, MASK mask) override;
     void onMouseLeave(S32 x, S32 y, MASK mask) override;
     void onFocusLost() override;
+    void processProperties(void* data, EAvatarProcessorType type) override;
 
 private:
     enum EStyle : S32 { STYLE_CARDS = 0, STYLE_MINIMAL = 1 };
@@ -131,6 +135,7 @@ private:
     /// An object speaker's side-view glyph, null until the capture has one.
     const SKOutlineLayer* objectGlyph(const LLUUID& speaker, F64 now);
     void drawObjectIcon(const Message& first, S32 left, S32 top, const LLColor4& color, F64 now);
+    void drawAvatarIcon(const Message& first, S32 left, S32 top, const LLColor4& color);
     void onStyleMenu(const LLSD& param);
     bool onStyleCheck(const LLSD& param) const;
 
@@ -165,6 +170,15 @@ private:
         SKOutlineLayer mLayer;
     };
     std::unordered_map<LLUUID, ObjectGlyph> mObjectGlyphs;
+
+    // A person's profile picture, through the icon id cache the other chats share.
+    struct AvatarPicture
+    {
+        LLPointer<LLViewerFetchedTexture> mTexture;
+        bool mAsked = false;     // the cache or the properties processor has been asked
+        bool mObserving = false; // waiting on a properties reply
+    };
+    std::unordered_map<LLUUID, AvatarPicture> mAvatarPictures;
 };
 
 #endif // SK_FLOATERLOCALCHAT_H
