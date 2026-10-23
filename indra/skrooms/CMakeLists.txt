@@ -10,6 +10,7 @@ add_library(skrooms STATIC)
 target_sources(
   skrooms
   PRIVATE
+    skroomscensus.cpp
     skroomsenclosure.cpp
     skroomsexport.cpp
     skroomsfloors.cpp
@@ -27,6 +28,7 @@ target_sources(
   PUBLIC
     FILE_SET HEADERS
       FILES
+        skroomscensus.h
         skroomsenclosure.h
         skroomsexport.h
         skroomsfloors.h
@@ -52,6 +54,7 @@ if(AL_BUILD_TESTS)
       tests/skrooms_test.cpp
       tests/skroomsairdebug_test.cpp
       tests/skroomsairunknown_test.cpp
+      tests/skroomscensus_test.cpp
       tests/skroomsasync_test.cpp
       tests/skroomsenclosure_test.cpp
       tests/skroomsenclosurerepair_test.cpp

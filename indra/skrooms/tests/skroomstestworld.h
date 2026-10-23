@@ -30,6 +30,7 @@
 #include "skairraster.h"
 #include "skairskymap.h"
 #include "skcensusio.h"
+#include "../skroomscensus.h"
 #include "../skroomsenclosure.h"
 #include "../skroomsspaces.h"
 
@@ -74,7 +75,9 @@ namespace skrooms_test
     inline bool buildWorld(const std::string& path, AirMode mode, CensusFile& census, World& out, std::string* error = nullptr)
     {
         AirCensusParams params;
-        if (!readCensusFile(path, census, error, { airParamsSection(params) }))
+        EnclosureParams enclosure;
+        enclosure.mWalkHeadM = params.mParams.mAvatar.mHeight;
+        if (!readCensusFile(path, census, error, { airParamsSection(params), enclosureParamsSection(enclosure) }))
         {
             return false;
         }
@@ -118,6 +121,7 @@ namespace skrooms_test
             enc->mGeneration = 1;
             enc->mMeshOrigin = m->mOrigin;
             enc->mSky = out.mSky;
+            enc->mParams = enclosure;
             for (size_t i = 0; i < m->mKeys.size(); ++i)
             {
                 enc->mTiles.push_back({ m->mKeys[i], m->mAirs[i], skyContributor(id, m->mKeys[i]) });
@@ -131,6 +135,8 @@ namespace skrooms_test
             auto rooms = std::make_shared<RoomsInput>();
             rooms->mGeneration = 1;
             rooms->mMeshOrigin = m->mOrigin;
+            rooms->mParams.mWalkHeadM = enclosure.mWalkHeadM;
+            rooms->mParams.mAgentRadiusM = params.mParams.mAvatar.mRadius;
             rooms->mMeshKey = mix(SEED, std::hash<LLUUID>()(id));
             for (const DoorEntity& d : census.mDoors)
             {
