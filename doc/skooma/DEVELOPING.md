@@ -217,7 +217,7 @@ upstream by merging rather than by rebasing onto it.
 | `sync` stopped on a conflict | Fix it in the worktree it named, `git commit`, re-run `git skooma sync` |
 | "develop would move non-fast-forward" | Something was committed on `develop`. `git log upstream/develop..develop` to see what, move it to a feature branch, then `git branch -f develop upstream/develop` |
 | A command refuses because `main` is dirty | Commit or stash in the main checkout; `git -C D:\viewers\alchemy-skooma status` |
-| `integrate` says a build is running | The viewer or a compile is live. Close it, or `--force` if you are sure |
+| `integrate` warns a build is running | It lands anyway; F5 again once that build ends to pick up what landed |
 | Worktree on a `claude/*` or `t3code/*` branch | `git skooma wt-setup` in it — renames to `feature-*` and adds the agent files |
 | A worktree directory will not delete | Something holds a handle. Close the editor/shell in it, then `git worktree prune` |
 
