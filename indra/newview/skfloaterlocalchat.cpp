@@ -441,8 +441,8 @@ bool SKFloaterLocalChat::applyRectControl()
         return true;
     }
     // First open: an MMO-sized box at the bottom left, above the toolbar.
-    constexpr S32 DEFAULT_W = 420;
-    constexpr S32 DEFAULT_H = 260;
+    constexpr S32 DEFAULT_W = 480;
+    constexpr S32 DEFAULT_H = 560;
     constexpr S32 MARGIN = 10;
     const LLRect snap = gFloaterView->getSnapRect();
     reshape(DEFAULT_W, DEFAULT_H);
