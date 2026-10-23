@@ -2079,6 +2079,21 @@ void LLRender::readPixels(S32 x, S32 y, S32 width, S32 height, U32 format, U32 t
     glReadPixels(x, y, width, height, format, type, data);
 }
 
+// <SK:Nexii> Overview probes: several reads packed into one buffer before one readback.
+void LLRender::readPixelsInto(const ALGPUBuffer& pack, size_t offset, S32 x, S32 y, S32 width, S32 height, U32 format, U32 type)
+{
+    if (!pack.isAllocated() || width <= 0 || height <= 0)
+    {
+        llassert(false);
+        return;
+    }
+    flush();
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, pack.getGLName());
+    glReadPixels(x, y, width, height, format, type, reinterpret_cast<void*>(static_cast<uintptr_t>(offset)));
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+}
+// </SK:Nexii>
+
 void LLRender::drawArraysInstanced(eGeomModes mode, U32 first, U32 count, U32 instances)
 {
     // An input left in the program would read whatever buffer the last vertex buffer left on its array.

@@ -488,6 +488,10 @@ public:
     // issued before it. For a read made once on purpose, a snapshot or a click's probe; anything read every frame
     // reads through ALGPUReadback.
     void readPixels(S32 x, S32 y, S32 width, S32 height, U32 format, U32 type, void* data);
+    // <SK:Nexii> Overview probes: several reads packed into one buffer before one readback.
+    // As readPixels, but into `pack` at `offset` through the pack buffer binding, which is back to none after.
+    void readPixelsInto(const ALGPUBuffer& pack, size_t offset, S32 x, S32 y, S32 width, S32 height, U32 format, U32 type);
+    // </SK:Nexii>
 
     // The colour glClear fills colour buffers with. Every writer in the tree goes through
     // here, so the cache is the state. Redundant sets are dropped; nothing batched reads it,
