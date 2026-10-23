@@ -31,6 +31,7 @@
 
 #include <deque>
 
+class LLButton;
 class LLChatEntry;
 class LLFontGL;
 class LLMenuButton;
@@ -56,6 +57,7 @@ public:
     bool postBuild() override;
     void draw() override;
     void reshape(S32 width, S32 height, bool called_from_parent = true) override;
+    bool applyRectControl() override;
     bool handleKeyHere(KEY key, MASK mask) override;
     bool handleMouseDown(S32 x, S32 y, MASK mask) override;
     bool handleHover(S32 x, S32 y, MASK mask) override;
@@ -108,6 +110,7 @@ private:
         S32 mLastMessage = 0;
         S32 mFirstRow = 0;
         S32 mLastRow = 0;
+        S32 mWidth = 0;     // the bubble, shrink-wrapped to its widest line
     };
 
     void backfill(bool skip_last);
@@ -129,6 +132,9 @@ private:
 
     LLChatEntry* mInput = nullptr;
     LLMenuButton* mCog = nullptr;
+    LLButton* mEmojiButton = nullptr;
+    U32 mEmojiClosedFrame = 0;  // the frame the picker last closed, to tell a toggle-off click
+    boost::signals2::connection mEmojiCloseConnection;
     std::deque<Message> mMessages;
     std::vector<Card> mCards;
     std::vector<Row> mRows;
@@ -138,6 +144,8 @@ private:
     S32 mLayoutStyle = -1;
     bool mLayoutDirty = true;
     bool mHovered = false;
+    bool mWasExpanded = false;
+    F64 mCollapsedAt = -1.0e9; // when the log last stopped being shown whole
     boost::signals2::connection mFontConnection;
 };
 

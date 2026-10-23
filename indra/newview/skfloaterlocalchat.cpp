@@ -27,7 +27,9 @@
 #include "skfloaterlocalchat.h"
 
 #include "llautoreplace.h"
+#include "llbutton.h"
 #include "llchatentry.h"
+#include "llemojihelper.h"
 #include "lldbstrings.h"
 #include "lldraghandle.h"
 #include "llfloaterreg.h"
@@ -67,6 +69,8 @@ constexpr S32 DISC = 12;
 constexpr S32 DISC_GAP = 6;
 constexpr S32 INPUT_HEIGHT = 24;
 constexpr S32 INPUT_GAP = 4;
+constexpr S32 INSET = 8; // inside the backdrop's border
+constexpr F32 EDGE_FADE = 24.f; // the scroll mask at the top, and at the bottom while scrolled
 constexpr F32 CARD_ALPHA = 0.6f;
 
 S32 utf8_lead_len(char c)
@@ -97,6 +101,7 @@ SKFloaterLocalChat::SKFloaterLocalChat(const LLSD& key)
 SKFloaterLocalChat::~SKFloaterLocalChat()
 {
     mFontConnection.disconnect();
+    mEmojiCloseConnection.disconnect();
 }
 
 // static
@@ -185,6 +190,35 @@ bool SKFloaterLocalChat::postBuild()
     mInput->setFont(LLViewerChat::getChatFont());
     ALChatBar::applyChannelLabel(mInput, gSavedSettings.getS32("AlchemyNearbyChatChannel"));
     mInput->setVisible(false);
+
+    // The emoji picker as the conversation window has it; the toggle state follows the picker.
+    mEmojiButton = getChild<LLButton>("sk_local_chat_emoji");
+    mEmojiButton->setClickedCallback([this](LLUICtrl*, const LLSD&)
+    {
+        mInput->hideEmojiHelper();
+        if (!mEmojiButton->getToggleState())
+        {
+            mInput->setFocus(true);
+            mInput->showEmojiHelper();
+        }
+        mEmojiButton->setToggleState(!mEmojiButton->getToggleState());
+    });
+    mEmojiButton->setMouseDownCallback([this](LLUICtrl*, const LLSD&)
+    {
+        // The press itself closed the picker; keep the state so the click does not reopen it.
+        if (mEmojiClosedFrame == LLFrameTimer::getFrameCount())
+        {
+            mEmojiButton->setToggleState(true);
+        }
+    });
+    mEmojiCloseConnection = LLEmojiHelper::instance().setCloseCallback([this](LLUICtrl*, const LLSD&)
+    {
+        if (mEmojiButton->getToggleState())
+        {
+            mEmojiButton->setToggleState(false);
+            mEmojiClosedFrame = LLFrameTimer::getFrameCount();
+        }
+    });
 
     mCog = getChild<LLMenuButton>("sk_local_chat_cog");
     mCog->setVisible(false);
@@ -326,6 +360,11 @@ void SKFloaterLocalChat::showInput(bool show)
         return;
     }
     mInput->setVisible(show);
+    mEmojiButton->setVisible(show);
+    if (!show)
+    {
+        mInput->hideEmojiHelper();
+    }
     if (show)
     {
         setFocus(true);
@@ -387,11 +426,29 @@ bool SKFloaterLocalChat::handleKeyHere(KEY key, MASK mask)
 
 void SKFloaterLocalChat::onFocusLost()
 {
-    if (mInput && mInput->getVisible())
+    // The emoji picker takes focus while it is open; the chat stays open for its pick.
+    if (mInput && mInput->getVisible() && !LLEmojiHelper::instance().isActive(mInput))
     {
         stopChat();
     }
     LLFloater::onFocusLost();
+}
+
+bool SKFloaterLocalChat::applyRectControl()
+{
+    if (LLFloater::applyRectControl())
+    {
+        return true;
+    }
+    // First open: an MMO-sized box at the bottom left, above the toolbar.
+    constexpr S32 DEFAULT_W = 480;
+    constexpr S32 DEFAULT_H = 560;
+    constexpr S32 MARGIN = 10;
+    const LLRect snap = gFloaterView->getSnapRect();
+    reshape(DEFAULT_W, DEFAULT_H);
+    setOrigin(snap.mLeft + MARGIN, snap.mBottom + MARGIN);
+    storeRectControl();
+    return true;
 }
 
 void SKFloaterLocalChat::reshape(S32 width, S32 height, bool called_from_parent)
@@ -431,8 +488,8 @@ bool SKFloaterLocalChat::expanded() const
 
 LLRect SKFloaterLocalChat::contentRect() const
 {
-    const S32 bottom = (mInput && mInput->getVisible()) ? INPUT_HEIGHT + INPUT_GAP : 0;
-    return LLRect(0, getRect().getHeight(), getRect().getWidth(), bottom);
+    // The input's row is always kept, so the messages do not jump when it opens or closes.
+    return LLRect(INSET, getRect().getHeight() - INSET, getRect().getWidth() - INSET, INPUT_HEIGHT + INPUT_GAP + INSET);
 }
 
 S32 SKFloaterLocalChat::lineHeight(const Row& row) const
@@ -444,23 +501,24 @@ F32 SKFloaterLocalChat::cardAlpha(const Card& card, F64 now) const
 {
     static LLCachedControl<F32> delay(gSavedSettings, "SkoomaLocalChatFadeDelay", 8.f);
     static LLCachedControl<F32> fade(gSavedSettings, "SkoomaLocalChatFadeTime", 2.f);
-    const F64 age = now - mMessages[card.mLastMessage].mArrival;
-    if (age <= delay)
+    static LLCachedControl<F32> grace(gSavedSettings, "SkoomaLocalChatHoverGrace", 5.f);
+    auto fading = [&](F64 age, F32 hold)
     {
-        return 1.f;
-    }
-    if (fade <= 0.f)
-    {
-        return 0.f;
-    }
-    return llclamp(1.f - (F32)((age - delay) / fade), 0.f, 1.f);
+        if (age <= hold)
+        {
+            return 1.f;
+        }
+        return fade <= 0.f ? 0.f : llclamp(1.f - (F32)((age - hold) / fade), 0.f, 1.f);
+    };
+    // After the log was shown whole it stays whole for the grace, then fades as one, as MMO chat does.
+    return llmax(fading(now - mMessages[card.mLastMessage].mArrival, delay), fading(now - mCollapsedAt, grace));
 }
 
 void SKFloaterLocalChat::layout()
 {
     static LLCachedControl<S32> style(gSavedSettings, "SkoomaLocalChatStyle", STYLE_CARDS);
     const bool cards = style != STYLE_MINIMAL;
-    const S32 width = getRect().getWidth();
+    const S32 width = contentRect().getWidth();
     if (!mLayoutDirty && width == mLayoutWidth && style == mLayoutStyle)
     {
         return;
@@ -590,6 +648,20 @@ void SKFloaterLocalChat::layout()
         mCards.back().mLastRow = (S32)mRows.size() - 1;
     }
 
+    // Each bubble as wide as its name or widest line, wrapping only past the floater's width.
+    for (Card& card : mCards)
+    {
+        S32 widest = 0;
+        for (S32 r = card.mFirstRow; r <= card.mLastRow; ++r)
+        {
+            const Row& row = mRows[r];
+            widest = llmax(widest, row.mMessage < 0 ? name_font()->getWidth(mMessages[mCards[row.mCard].mFirstMessage].mName)
+                                                    : font->getWidthBytes(mMessages[row.mMessage].mBody, row.mBegin, row.mLength));
+        }
+        // A little slack for the bold name run, measured above in the regular face.
+        card.mWidth = llmin(width, text_x + widest + PAD_X + 2);
+    }
+
     // Offsets from the bottom, newest first.
     S32 y = 0;
     for (S32 r = (S32)mRows.size() - 1; r >= 0; --r)
@@ -668,17 +740,24 @@ void SKFloaterLocalChat::draw()
     const S32 view_height = content.getHeight();
     mScroll = llclamp(mScroll, 0, llmax(0, mContentHeight - view_height));
     const F64 now = LLFrameTimer::getTotalSeconds();
+    if (mWasExpanded && !full)
+    {
+        mCollapsedAt = now;
+    }
+    mWasExpanded = full;
 
     if (mCog)
     {
         mCog->setVisible(mHovered && opaque);
     }
 
-    if (mHovered && opaque)
+    if (opaque && mHovered)
     {
-        // The only chrome: a faint frame to show where to drag and resize.
-        static LLUIColor frame = LLUIColorTable::instance().getColor("FloaterUnfocusBorderColor");
-        gl_rect_2d(0, getRect().getHeight(), getRect().getWidth(), 0, frame.get() % 0.5f, false);
+        // The only chrome, the mini-map's: a faint dark tint inside a thin light border.
+        static const LLColor4 tint(16.f / 255.f, 16.f / 255.f, 20.f / 255.f, 61.f / 255.f);
+        static const LLColor4 border(197.f / 255.f, 205.f / 255.f, 211.f / 255.f, 122.f / 255.f);
+        gl_rect_2d(0, getRect().getHeight(), getRect().getWidth(), 0, tint, true);
+        gl_rect_2d(0, getRect().getHeight(), getRect().getWidth(), 0, border, false);
     }
 
     if (!mRows.empty())
@@ -686,9 +765,17 @@ void SKFloaterLocalChat::draw()
         LLLocalClipRect clip(content);
         static LLUIImagePtr card_image = LLUI::getUIImage("Rounded_Square");
         static LLUIColor card_color = LLUIColorTable::instance().getColor("Black");
-        const S32 text_x = cards ? PAD_X + DISC + DISC_GAP : PAD_X;
+        const S32 text_x = content.mLeft + (cards ? PAD_X + DISC + DISC_GAP : PAD_X);
         const LLFontGL::ShadowType shadow = cards ? LLFontGL::NO_SHADOW : LLFontGL::DROP_SHADOW_SOFT;
         const S32 base = content.mBottom - mScroll;
+        const bool scrolled = mScroll > 0;
+        // Scroll masks: what nears the top edge fades out, and the bottom edge too while scrolled up.
+        auto edge = [&](S32 lo, S32 hi)
+        {
+            const F32 mid = 0.5f * (F32)(llmax(lo, content.mBottom) + llmin(hi, content.mTop));
+            const F32 top = llclamp(((F32)content.mTop - mid) / EDGE_FADE, 0.f, 1.f);
+            return scrolled ? top * llclamp((mid - (F32)content.mBottom) / EDGE_FADE, 0.f, 1.f) : top;
+        };
 
         for (S32 c = (S32)mCards.size() - 1; c >= 0; --c)
         {
@@ -714,22 +801,22 @@ void SKFloaterLocalChat::draw()
             const Message& first = mMessages[card.mFirstMessage];
             if (cards)
             {
-                card_image->draw(0, card_bottom, getRect().getWidth(), card_top - card_bottom, card_color.get() % (CARD_ALPHA * alpha));
+                card_image->draw(content.mLeft, card_bottom, card.mWidth,card_top - card_bottom, card_color.get() % (CARD_ALPHA * alpha * edge(card_bottom, card_top)));
                 if (!first.mName.empty())
                 {
                     // Round for people, square for objects.
                     gGL.getTextureSlot(0)->unbind();
                     const S32 disc_top = card_top - PAD_Y - 1;
                     LLColor4 disc = first.mNameColor;
-                    disc.mV[VALPHA] *= alpha;
+                    disc.mV[VALPHA] *= alpha * edge(disc_top - DISC, disc_top);
                     if (first.mSource == CHAT_SOURCE_OBJECT)
                     {
-                        gl_rect_2d(PAD_X, disc_top, PAD_X + DISC, disc_top - DISC, disc);
+                        gl_rect_2d(content.mLeft + PAD_X, disc_top, content.mLeft + PAD_X + DISC, disc_top - DISC, disc);
                     }
                     else
                     {
                         gGL.color4fv(disc.mV);
-                        gl_circle_2d((F32)PAD_X + DISC * 0.5f, (F32)disc_top - DISC * 0.5f, DISC * 0.5f, 16, true);
+                        gl_circle_2d((F32)(content.mLeft + PAD_X) + DISC * 0.5f, (F32)disc_top - DISC * 0.5f, DISC * 0.5f, 16, true);
                     }
                 }
             }
@@ -742,18 +829,36 @@ void SKFloaterLocalChat::draw()
                 {
                     continue;
                 }
+                const F32 row_alpha = alpha * edge(y, y + lineHeight(row));
+                if (row_alpha <= 0.f)
+                {
+                    continue;
+                }
                 if (row.mMessage < 0)
                 {
                     LLColor4 color = first.mNameColor;
-                    color.mV[VALPHA] *= alpha;
+                    color.mV[VALPHA] *= row_alpha;
                     name_font()->renderUTF8(first.mName, 0, (F32)text_x, (F32)y, color, LLFontGL::LEFT, LLFontGL::BOTTOM, LLFontGL::BOLD, LLFontGL::NO_SHADOW);
                 }
                 else
                 {
-                    drawRowText(row, text_x, y, alpha, shadow);
+                    drawRowText(row, text_x, y, row_alpha, shadow);
                 }
             }
         }
+    }
+
+    if (mHovered && opaque && mContentHeight > view_height)
+    {
+        // A thin scroll thumb on hover, its position read from the bottom.
+        constexpr S32 THUMB_W = 3;
+        const S32 track = view_height;
+        const S32 thumb = llmax(12, track * view_height / mContentHeight);
+        const S32 range = mContentHeight - view_height;
+        const S32 bottom = content.mBottom + (track - thumb) * mScroll / range;
+        static LLUIColor thumb_color = LLUIColorTable::instance().getColor("White");
+        const S32 right = getRect().getWidth() - 2;
+        gl_rect_2d(right - THUMB_W, bottom + thumb, right, bottom, thumb_color.get() % 0.35f);
     }
 
     LLFloater::draw();
@@ -765,7 +870,7 @@ std::string SKFloaterLocalChat::urlAt(S32 x, S32 y) const
     {
         return std::string();
     }
-    const S32 text_x = mLayoutStyle != STYLE_MINIMAL ? PAD_X + DISC + DISC_GAP : PAD_X;
+    const S32 text_x = contentRect().mLeft + (mLayoutStyle != STYLE_MINIMAL ? PAD_X + DISC + DISC_GAP : PAD_X);
     const S32 base = contentRect().mBottom - mScroll;
     const bool full = expanded();
     const F64 now = LLFrameTimer::getTotalSeconds();
@@ -843,7 +948,8 @@ bool SKFloaterLocalChat::handleHover(S32 x, S32 y, MASK mask)
 bool SKFloaterLocalChat::handleScrollWheel(S32 x, S32 y, LLScrollDelta delta)
 {
     const S32 clicks = delta.mClicks;
-    if (LLFloater::handleScrollWheel(x, y, delta))
+    // LLFloater::handleScrollWheel always claims the wheel, so only a child that scrolls may take it first.
+    if (childrenHandleScrollWheel(x, y, delta))
     {
         return true;
     }
