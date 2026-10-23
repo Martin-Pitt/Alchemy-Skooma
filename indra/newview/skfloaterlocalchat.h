@@ -89,6 +89,9 @@ private:
         EChatSourceType mSource = CHAT_SOURCE_SYSTEM;
         bool mEmote = false;
         F64 mArrival = 0.0;
+        std::string mTime;  // the timestamp after the name
+        S32 mNameWidth = 0; // measured at layout
+        S32 mTimeWidth = 0; // the timestamp and its gap, 0 for none
         std::vector<Link> mLinks;
     };
 
@@ -132,6 +135,7 @@ private:
     void drawMessages(const LLRect& content, F64 now, bool full, bool cards) const;
     /// The visible cards, faded out at the edges through mMask when any reach into the edge bands.
     void drawMaskedMessages(const LLRect& content, F64 now, bool full, bool cards);
+    void drawTime(const Message& msg, F32 x, S32 y, F32 alpha, LLFontGL::ShadowType shadow) const;
     void drawRowText(const Row& row, S32 x, S32 y, F32 alpha, LLFontGL::ShadowType shadow) const;
     void onStyleMenu(const LLSD& param);
     bool onStyleCheck(const LLSD& param) const;
