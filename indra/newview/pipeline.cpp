@@ -86,6 +86,7 @@
 #include "lldrawpoolwater.h"
 #include "llface.h"
 #include "llfeaturemanager.h"
+#include "llfetchedgltfmaterial.h"
 #include "llfloatertelehub.h"
 #include "llgltfmaterialpreviewmgr.h"
 #include "llfloaterreg.h"
@@ -122,6 +123,7 @@
 #include "llworld.h"
 #include "llcubemap.h"
 #include "llviewershadermgr.h"
+#include "skoutlinecapture.h" // <SK:Nexii> outline capture
 #include "llviewerstats.h"
 #include "llviewerjoystick.h"
 #include "llviewerdisplay.h"
@@ -251,6 +253,8 @@ S32 LLPipeline::RenderHeroProbeConservativeUpdateMultiplier;
 const F32 BACKLIGHT_DAY_MAGNITUDE_OBJECT = 0.1f;
 const F32 BACKLIGHT_NIGHT_MAGNITUDE_OBJECT = 0.08f;
 const F32 ALPHA_BLEND_CUTOFF = 0.598f;
+static F32 sk_coverage_cutoff = 0.02f; // <SK:Nexii> outline capture: any rendered translucent surface covers
+static const std::function<bool(const LLDrawInfo*)>* sk_coverage_skip = nullptr; // <SK:Nexii> outline capture: draw infos a glyph leaves out
 const F32 DEFERRED_LIGHT_FALLOFF = 0.5f;
 const U32 DEFERRED_VB_MASK = LLVertexBuffer::MAP_VERTEX | LLVertexBuffer::MAP_TEXCOORD0 | LLVertexBuffer::MAP_TEXCOORD1;
 
@@ -310,6 +314,7 @@ bool    LLPipeline::sBakeSunlight = false;
 bool    LLPipeline::sNoAlpha = false;
 bool    LLPipeline::sUseFarClip = true;
 bool    LLPipeline::sShadowRender = false;
+bool    LLPipeline::sSKCoverageRender = false; // <SK:Nexii> outline capture
 bool    LLPipeline::sRenderGlow = false;
 bool    LLPipeline::sImpostorRender = false;
 bool    LLPipeline::sCutoutRender = false;
@@ -893,6 +898,9 @@ void LLPipeline::latchRenderInputs()
 
     sReflectionProbesEnabled = mLatchedInputs.mProbes;
     sRenderTransparentWater  = mLatchedInputs.mTransparentWater;
+
+    mMaxFramesAhead  = gSavedSettings.getU32("AlchemyRenderMaxFramesAhead");
+    mPacingSlackWork = gSavedSettings.getBOOL("AlchemyRenderPacingSlackWork");
 }
 
 const ALShaderInputs& LLPipeline::shaderInputs() const
@@ -1205,11 +1213,17 @@ ALRenderResourceInputs LLPipeline::resourceInputsFromSettings(const ALShaderInpu
     in.mGBufferNormHDR = shaders.mGlobal.mGBufferNormHDR;
     in.mReverseZ       = shaders.mGlobal.mReverseZ;
     in.mCompute        = shaders.mLocal.mCompute;
+    in.mTextureBarrier = gGLManager.mHasTextureBarrier;
 
     in.mShadowDetail     = gSavedSettings.getS32("RenderShadowDetail");
     in.mShadowScale      = gSavedSettings.getF32("RenderShadowResolutionScale");
+    in.mSpotShadowMaxResolution = gSavedSettings.getU32("AlchemyRenderSpotShadowMaxResolution");
     in.mShadowDepth32F   = gSavedSettings.getBOOL("AlchemyRenderShadowDepth32F");
     in.mSSAO             = gSavedSettings.getBOOL("RenderDeferredSSAO");
+    in.mSSAOBlurDispatched =
+        ALLightMapBlur::apron(ALLightMapBlur::kernel(gSavedSettings.getVector3("RenderShadowGaussian"),
+                                                     gSavedSettings.getF32("RenderShadowBlurSize"),
+                                                     gSavedSettings.getF32("RenderShadowBlurDistFactor"))) >= 0;
     in.mSSR              = gSavedSettings.getBOOL("RenderScreenSpaceReflections");
     in.mTransparentWater = gSavedSettings.getBOOL("RenderTransparentWater");
 
@@ -1536,6 +1550,7 @@ void LLPipeline::releaseAllGLResources()
 {
     assertInitialized();
 
+    SKOutlineCapture::cleanupGL(); // <SK:Nexii> outline capture: the atlas goes with the context and every capture renders again
     releaseRenderTargets();
     releaseDepthDependents();
 
@@ -1671,6 +1686,15 @@ bool LLPipeline::rebuildGLBuffers(const ALRenderResourceInputs& requested, Rebui
     const ResourceChanges changes = reconcileResources(requested);
     mGLResourcesLive   = true;
     mResourcesFullSize = changes.mFullSize;
+
+    // A spot map built again, or not there, holds nothing its last draw left in it.
+    ALRenderResourcePlan::IdSet spot_maps;
+    spot_maps.set((size_t)ALRenderResourcePlan::Id::SpotShadow0).set((size_t)ALRenderResourcePlan::Id::SpotShadow1);
+    const bool spot_maps_lost = new_context || ((changes.mBuilt | changes.mFreed | changes.mFailed) & spot_maps).any();
+    if (spot_maps_lost)
+    {
+        mSpotShadowCache.invalidate();
+    }
     // Which resource each pooled target serves over the next whole frame, for the log; not for a resize that built what
     // it asked, which is logged at debug level alone and comes every frame of a window's drag.
     if (!resized_as_asked(cause, changes))
@@ -1745,6 +1769,11 @@ bool LLPipeline::rebuildGLBuffers(const ALRenderResourceInputs& requested, Rebui
         {
             releaseDepthDependents();
             add(invalidated, "depth pyramid, water surface maps, selection outline, far-plane overlay");
+        }
+
+        if (spot_maps_lost)
+        {
+            add(invalidated, "spot shadows");
         }
 
         // An impostor is G-buffer channels and depth in the main G-buffer's formats (generateImpostor), so those
@@ -3336,7 +3365,13 @@ bool LLPipeline::visibleObjectsInFrustum(LLCamera& camera)
     return false;
 }
 
-bool LLPipeline::getVisibleExtents(LLCamera& camera, LLVector3& min, LLVector3& max)
+bool LLPipeline::waterReceivesShadows(LLCamera& camera)
+{
+    return hasRenderType(LLPipeline::RENDER_TYPE_WATER) && mWaterSurface.inView(camera) &&
+           mWaterSurface.drawnFrom(*LLViewerCamera::getInstance());
+}
+
+bool LLPipeline::getVisibleExtents(LLCamera& camera, LLVector3& min, LLVector3& max, bool water)
 {
     const F32 X = 65536.f;
 
@@ -3372,8 +3407,7 @@ bool LLPipeline::getVisibleExtents(LLCamera& camera, LLVector3& min, LLVector3& 
     // The water has no partition: its field, whole, with its lowest and highest water, and a receiver wherever the
     // camera meets it. Left out, a view of open sea, or a shadow split holding nothing but water, finds no receivers
     // and its split is left empty. Not from where the water is not drawn at all.
-    if (hasRenderType(LLPipeline::RENDER_TYPE_WATER) && mWaterSurface.inView(camera) &&
-        mWaterSurface.drawnFrom(*LLViewerCamera::getInstance()))
+    if (water && waterReceivesShadows(camera))
     {
         mWaterSurface.addExtents(min, max);
         res = false;
@@ -3643,7 +3677,10 @@ void LLPipeline::doOcclusion(LLCamera& camera)
         return;
     }
 
-    if (sReflectionProbesEnabled && sUseOcclusion > 1 && !LLPipeline::sShadowRender && !gCubeSnapshot)
+    // Not from a snapshot's camera: a tile of a snapshot larger than the window sees part of the view, and a probe off
+    // it would read as occluded, dropping it from the reflections of the tiles after and of the frames after the
+    // snapshot. A snapshot keeps the main view's occlusion instead (LLReflectionMapManager::getReflectionMaps).
+    if (sReflectionProbesEnabled && sUseOcclusion > 1 && !LLPipeline::sShadowRender && !gCubeSnapshot && !gSnapshot)
     {
         LLGLSColorMask color_mask(false, false);
         LLGLDepthTest depth(GL_TRUE, GL_FALSE);
@@ -7975,7 +8012,7 @@ void LLPipeline::renderAlphaObjects(bool rigged)
             {
                 bound->uniform1f(LLShaderMgr::DEFERRED_SHADOW_STIPPLE, 1.f); // blended
             }
-            bound->setMinimumAlpha(ALPHA_BLEND_CUTOFF);
+            bound->setMinimumAlpha(sSKCoverageRender ? sk_coverage_cutoff : ALPHA_BLEND_CUTOFF); // <SK:Nexii> outline capture
         }
     };
 
@@ -9378,13 +9415,6 @@ void LLPipeline::copySceneDepth(LLRenderTarget& dst)
 {
     LL_PROFILE_GPU_ZONE("depth copy");
     LLRenderTarget& src = mRT->deferredScreen;
-    if (!gCopyDepthProgram.isComplete())
-    {
-        // Unstretched, where the two differ in size, but the depth all the same.
-        dst.copyContents(src, 0, 0, src.getWidth(), src.getHeight(), 0, 0, dst.getWidth(), dst.getHeight(),
-                         GL_DEPTH_BUFFER_BIT, GL_NEAREST);
-        return;
-    }
 
     dst.bindTarget();
     {
@@ -9393,14 +9423,52 @@ void LLPipeline::copySceneDepth(LLRenderTarget& dst)
         LLGLDisable no_blend(GL_BLEND);
         LLGLDisable no_cull(GL_CULL_FACE);
 
-        gCopyDepthProgram.bind();
-        gCopyDepthProgram.bindDepthTexture(LLShaderMgr::DEFERRED_DEPTH, &src, ALSamplers::PointClamp);
-        mScreenTriangleVB->setBuffer();
-        mScreenTriangleVB->drawArrays(LLRender::TRIANGLES, 0, 3);
-        gCopyDepthProgram.unbindTexture(LLShaderMgr::DEFERRED_DEPTH);
-        gCopyDepthProgram.unbind();
+        // Cleared whole before it is drawn over. radeonsi makes a depth's tile metadata sampleable only at a whole
+        // clear, once a sample has had to decompress it: a copy never cleared is decompressed for every frame's readers.
+        dst.clear(GL_DEPTH_BUFFER_BIT);
+
+        if (gCopyDepthProgram.isComplete())
+        {
+            gCopyDepthProgram.bind();
+            gCopyDepthProgram.bindDepthTexture(LLShaderMgr::DEFERRED_DEPTH, &src, ALSamplers::PointClamp);
+            mScreenTriangleVB->setBuffer();
+            mScreenTriangleVB->drawArrays(LLRender::TRIANGLES, 0, 3);
+            gCopyDepthProgram.unbindTexture(LLShaderMgr::DEFERRED_DEPTH);
+            gCopyDepthProgram.unbind();
+        }
+        else
+        {
+            // A blit cannot stand in: GL copies depth only between matching formats, and the copies keep none of the
+            // scene's stencil. Their readers find nothing nearer than the far plane.
+            LL_WARNS_ONCE("RenderResources") << "No depth copy program; the scene's depth copies stay cleared" << LL_ENDL;
+        }
     }
     dst.flush();
+}
+
+LLRenderTarget* LLPipeline::hazeDepth(ALTransientTargets& scope)
+{
+    // The water, the forward pools and the alpha before the water write the scene's depth with the screen bound, and a
+    // read that follows them in that binding sees their writes only past a barrier: without one radeonsi samples the
+    // depth's tile metadata as it stood before them, a fast-cleared tile as the far plane.
+    if (gGLManager.mHasTextureBarrier)
+    {
+        gGL.textureBarrier();
+        return nullptr;
+    }
+
+    // macOS's 4.1 context may have no barrier. The screen is let go and bound again, the framebuffer change a barrier
+    // stands for, with the scene's depth copied in between where the pack has a copy, so the pass reads no attachment.
+    // Where it has none, or the copy could not be built, the pass reads the scene's own past that change, as the
+    // lighting passes read it past theirs: a null return is the scene's depth made current either way.
+    LLRenderTarget* copy = acquireResource(scope, ALRenderResourcePlan::inPack(renderPack(), ALRenderResourcePlan::Slot::DepthCopy));
+    mRT->screen.flush();
+    if (copy)
+    {
+        copySceneDepth(*copy);
+    }
+    mRT->screen.bindTarget();
+    return copy;
 }
 
 LLRenderTarget* LLPipeline::generateGlow(LLRenderTarget* src, ALTransientTargets& scope)
@@ -10044,7 +10112,6 @@ LLPipeline::SMAATargets LLPipeline::generateSMAABuffers(LLRenderTarget* src, ALT
         const bool use_predication = shaderInputs().mLocal.mSMAAPredication;
         // Stencil optimization requires all three passes to share the same stencil attachment.
         bool use_stencil = mResourceInputs.mSMAAStencil && smaa.mEdges->hasStencil() && smaa.mBlend->hasStencil();
-        LLGLState stencil(GL_STENCIL_TEST, use_stencil);
         {
             // Bind setup:
             LLRenderTarget& dest = *smaa.mEdges;
@@ -10092,14 +10159,16 @@ LLPipeline::SMAATargets LLPipeline::generateSMAABuffers(LLRenderTarget* src, ALT
                 edge_shader.uniform1f(LLShaderMgr::SMAA_PREDICATION_STRENGTH, llclamp((F32)pred_strength, 0.f, 1.f));
             }
 
-            if (use_stencil)
             {
-                glStencilFunc(GL_ALWAYS, 1, 0xFF);
-                glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
-                glStencilMask(0xFF);
+                // Marks the edges the pass finds, for the blend pass to keep to; the scope puts the stencil state back.
+                std::optional<ALGLStencil> mark_edges;
+                if (use_stencil)
+                {
+                    mark_edges.emplace(GL_ALWAYS, 1, 0xFFu, GL_KEEP, GL_KEEP, GL_REPLACE, 0xFFu);
+                }
+                mScreenTriangleVB->setBuffer();
+                mScreenTriangleVB->drawArrays(LLRender::TRIANGLES, 0, 3);
             }
-            mScreenTriangleVB->setBuffer();
-            mScreenTriangleVB->drawArrays(LLRender::TRIANGLES, 0, 3);
 
             edge_shader.unbind();
             dest.flush();
@@ -10141,17 +10210,15 @@ LLPipeline::SMAATargets LLPipeline::generateSMAABuffers(LLRenderTarget* src, ALT
                                                                gGL.getSampler(ALSamplers::BilinearClamp));
             }
 
-            if (use_stencil)
             {
-                glStencilFunc(GL_EQUAL, 1, 0xFF);
-                glStencilMask(0x00);
-            }
-            mScreenTriangleVB->setBuffer();
-            mScreenTriangleVB->drawArrays(LLRender::TRIANGLES, 0, 3);
-            if (use_stencil)
-            {
-                glStencilFunc(GL_ALWAYS, 0, 0xFF);
-                glStencilMask(0xFF);
+                // Only on the edges the edge pass marked, writing none.
+                std::optional<ALGLStencil> on_edges;
+                if (use_stencil)
+                {
+                    on_edges.emplace(GL_EQUAL, 1, 0xFFu, GL_KEEP, GL_KEEP, GL_KEEP, 0u);
+                }
+                mScreenTriangleVB->setBuffer();
+                mScreenTriangleVB->drawArrays(LLRender::TRIANGLES, 0, 3);
             }
             blend_weights_shader.unbind();
             dest.flush();
@@ -12271,6 +12338,10 @@ void LLPipeline::doAtmospherics()
 
     if (RenderDeferredAtmospheric)
     {
+        // The scene's depth as the haze reads it, after the water and the pools before it wrote it in this binding.
+        ALTransientTargets haze(mTransientTargets);
+        LLRenderTarget*    depth = hazeDepth(haze);
+
         LLGLEnable blend(GL_BLEND);
         // The haze dims the glow in the alpha as it dims what is lit. In a cutout frame the alpha is the subject's
         // coverage, seeded before this pass, and haze in front of the subject leaves it no less covered.
@@ -12283,12 +12354,13 @@ void LLPipeline::doAtmospherics()
 
         // The triangle lies on the far plane (hazeV.glsl), level with the depth the sky leaves cleared: it passes
         // only where the world drew something, so the sky is rejected before it is shaded. The screen target shares
-        // the G-buffer's depth, which the shader reads where it is, as the lighting passes do: neither draw writes it.
+        // the G-buffer's depth, which the shader reads where it is past the barrier, or from its copy (hazeDepth): the
+        // haze writes none.
         ALDrawnOnly drawn;
 
-        const auto apply_haze = [this](LLGLSLShader& haze_shader, bool on_water)
+        const auto apply_haze = [this, depth](LLGLSLShader& haze_shader, bool on_water)
         {
-            bindDeferredShader(haze_shader);
+            bindDeferredShader(haze_shader, nullptr, depth);
 
             LLEnvironment& environment = LLEnvironment::instance();
             haze_shader.uniform1i(LLShaderMgr::SUN_UP_FACTOR, environment.getIsSunUp() ? 1 : 0);
@@ -12360,8 +12432,19 @@ void LLPipeline::doWaterHaze()
         return;
     }
 
+    // Nor where this view's water does not refract (ALRenderResourcePlan::refractsWater): its opaque surface hides what
+    // lies under it, which is all the haze fogs, and where an exclusion prim removed it the haze fogs nothing either.
+    if (!sUnderWaterRender && !ALRenderResourcePlan::refractsWater(renderPack(), sRenderTransparentWater))
+    {
+        return;
+    }
+
     if (RenderDeferredAtmospheric)
     {
+        // The scene's depth as the haze reads it, after the pools before it wrote it in this binding.
+        ALTransientTargets haze(mTransientTargets);
+        LLRenderTarget*    depth = hazeDepth(haze);
+
         LLGLEnable blend(GL_BLEND);
         gGL.blendFunc(LLRender::BF_ONE, LLRender::BF_SOURCE_ALPHA, LLRender::BF_ZERO, LLRender::BF_SOURCE_ALPHA);
 
@@ -12372,9 +12455,9 @@ void LLPipeline::doWaterHaze()
         LLGLSLShader& haze_shader = gHazeWaterProgram;
 
         LL_PROFILE_GPU_ZONE("water haze");
-        // The scene's depth where it is, the G-buffer's, which the screen shares: the haze tests against it and
-        // writes none, from above or below.
-        bindDeferredShader(haze_shader);
+        // The scene's depth where it is, the G-buffer's, which the screen shares, past the barrier, or its copy
+        // (hazeDepth): the haze tests against it and writes none, from above or below.
+        bindDeferredShader(haze_shader, nullptr, depth);
 
         haze_shader.uniform4fv(LLShaderMgr::WATER_WATERPLANE, 1, LLDrawPoolAlpha::sWaterPlane.mV);
         haze_shader.uniform1i(LLShaderMgr::WATER_ABOVE_WATER, sUnderWaterRender ? -1 : 1);
@@ -12745,41 +12828,54 @@ inline float sgn(float a)
     return (0.0F);
 }
 
+// The render pass types drawShadow draws as the prim volume alone, ignoring textures. Each has its rigged twin at the
+// next type.
+static constexpr U32 SHADOW_GEOMETRY_PASSES[] = {
+    LLRenderPass::PASS_SIMPLE,
+    LLRenderPass::PASS_FULLBRIGHT,
+    LLRenderPass::PASS_SHINY,
+    LLRenderPass::PASS_BUMP,
+    LLRenderPass::PASS_FULLBRIGHT_SHINY,
+    LLRenderPass::PASS_MATERIAL,
+    LLRenderPass::PASS_MATERIAL_ALPHA_EMISSIVE,
+    LLRenderPass::PASS_SPECMAP,
+    LLRenderPass::PASS_SPECMAP_EMISSIVE,
+    LLRenderPass::PASS_NORMMAP,
+    LLRenderPass::PASS_NORMMAP_EMISSIVE,
+    LLRenderPass::PASS_NORMSPEC,
+    LLRenderPass::PASS_NORMSPEC_EMISSIVE
+};
+
+// Those it alpha tests by their textures, each with its rigged twin at the next type. The blended casters and the
+// grass it draws besides, from PASS_ALPHA and PASS_GRASS.
+static constexpr U32 SHADOW_MASKED_PASSES[] = {
+    LLRenderPass::PASS_ALPHA_MASK,
+    LLRenderPass::PASS_FULLBRIGHT_ALPHA_MASK,
+    LLRenderPass::PASS_NORMSPEC_MASK,
+    LLRenderPass::PASS_MATERIAL_ALPHA_MASK,
+    LLRenderPass::PASS_SPECMAP_MASK,
+    LLRenderPass::PASS_NORMMAP_MASK,
+    LLRenderPass::PASS_GLTF_PBR_ALPHA_MASK
+};
+
 void LLPipeline::renderShadow(const LLMatrix4a& view, const LLMatrix4a& proj, LLCamera& shadow_cam, LLCullResult& result, bool depth_clamp, bool do_cull, S32 occlusion)
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_PIPELINE;
     LL_PROFILE_GPU_ZONE("renderShadow");
+
+    sortShadow(shadow_cam, result, do_cull, occlusion);
+    drawShadow(view, proj, shadow_cam, depth_clamp, occlusion);
+}
+
+void LLPipeline::sortShadow(LLCamera& shadow_cam, LLCullResult& result, bool do_cull, S32 occlusion)
+{
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_PIPELINE;
 
     LLPipeline::sShadowRender = true;
 
     // Occlusion culling as the caller asks, by the shadow camera's own queries: none unless it does.
     U32 saved_occlusion = sUseOcclusion;
     sUseOcclusion = occlusion;
-
-    // List of render pass types that use the prim volume as the shadow,
-    // ignoring textures.
-    static const U32 types[] = {
-        LLRenderPass::PASS_SIMPLE,
-        LLRenderPass::PASS_FULLBRIGHT,
-        LLRenderPass::PASS_SHINY,
-        LLRenderPass::PASS_BUMP,
-        LLRenderPass::PASS_FULLBRIGHT_SHINY,
-        LLRenderPass::PASS_MATERIAL,
-        LLRenderPass::PASS_MATERIAL_ALPHA_EMISSIVE,
-        LLRenderPass::PASS_SPECMAP,
-        LLRenderPass::PASS_SPECMAP_EMISSIVE,
-        LLRenderPass::PASS_NORMMAP,
-        LLRenderPass::PASS_NORMMAP_EMISSIVE,
-        LLRenderPass::PASS_NORMSPEC,
-        LLRenderPass::PASS_NORMSPEC_EMISSIVE
-    };
-
-    LLGLEnable cull(GL_CULL_FACE);
-
-    //enable depth clamping if available
-    LLGLEnable clamp_depth(depth_clamp ? GL_DEPTH_CLAMP : 0);
-
-    LLGLDepthTest depth_test(GL_TRUE, GL_TRUE, GL_LESS);
 
     // In RenderShadowCullMode 1, do_cull is false: generateSunShadow did the single union
     // octree cull and pre-filtered `result` to this cascade's frustum (bucketShadowCull),
@@ -12790,6 +12886,32 @@ void LLPipeline::renderShadow(const LLMatrix4a& view, const LLMatrix4a& proj, LL
     }
 
     stateSort(shadow_cam, result);
+    // <SK:Nexii> outline capture: parts a glyph leaves out, such as thin alpha planes.
+    if (sSKCoverageRender && sk_coverage_skip && *sk_coverage_skip)
+    {
+        result.skEraseDrawInfos(*sk_coverage_skip);
+    }
+    // </SK:Nexii>
+
+    sUseOcclusion = saved_occlusion;
+    LLPipeline::sShadowRender = false;
+}
+
+void LLPipeline::drawShadow(const LLMatrix4a& view, const LLMatrix4a& proj, LLCamera& shadow_cam, bool depth_clamp, S32 occlusion)
+{
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_PIPELINE;
+
+    LLPipeline::sShadowRender = true;
+
+    U32 saved_occlusion = sUseOcclusion;
+    sUseOcclusion = occlusion;
+
+    LLGLEnable cull(sSKCoverageRender ? 0 : GL_CULL_FACE); // <SK:Nexii> outline capture: coverage is double-sided
+
+    //enable depth clamping if available
+    LLGLEnable clamp_depth(depth_clamp ? GL_DEPTH_CLAMP : 0);
+
+    LLGLDepthTest depth_test(GL_TRUE, GL_TRUE, GL_LESS);
 
     //generate shadow map
     gGL.matrixMode(LLRender::MM_PROJECTION);
@@ -12835,7 +12957,7 @@ void LLPipeline::renderShadow(const LLMatrix4a& view, const LLMatrix4a& proj, LL
         LL_PROFILE_GPU_ZONE("shadow simple");
         gGL.getTextureSlot(0)->unbind();
 
-        for (U32 type : types)
+        for (U32 type : SHADOW_GEOMETRY_PASSES)
         {
             renderObjects(type, false, false, rigged);
         }
@@ -13000,12 +13122,256 @@ void LLPipeline::renderShadow(const LLMatrix4a& view, const LLMatrix4a& proj, LL
     LLPipeline::sShadowRender = false;
 }
 
-bool LLPipeline::getVisiblePointCloud(LLCamera& camera, LLVector3& min, LLVector3& max, std::vector<LLVector3>& fp, LLVector3 light_dir)
+// <SK:Nexii> outline capture: renderShadow's depth-only passes over one bridge, culled and sorted with the capture camera.
+namespace
+{
+    // The coverage cutoff on the shadow alpha programs: 0 keeps their stripes and floor, above 0 replaces both.
+    void skSetCoverageCutoff(F32 cutoff)
+    {
+        for (LLGLSLShader* base : { &gDeferredShadowAlphaMaskProgram, &gDeferredShadowFullbrightAlphaMaskProgram,
+                                    &gDeferredShadowGLTFAlphaBlendProgram })
+        {
+            base->forEachVariant(
+                [cutoff](LLGLSLShader& shader)
+                {
+                    if (!shader.mProgramObject)
+                    {
+                        return;
+                    }
+                    const GLint loc = glGetUniformLocation(shader.mProgramObject, "sk_coverage_cutoff");
+                    if (loc >= 0)
+                    {
+                        shader.bind();
+                        glUniform1f(loc, cutoff);
+                    }
+                });
+        }
+        LLGLSLShader::unbind();
+    }
+}
+
+U32 LLPipeline::skRenderOutlineCoverage(LLSpatialBridge* bridge, const LLMatrix4a& view, const LLMatrix4a& proj, LLCamera& camera,
+                                        F32 alpha_cutoff, const std::function<bool(const LLDrawInfo*)>& skip)
+{
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_PIPELINE;
+    LL_PROFILE_GPU_ZONE("skRenderOutlineCoverage");
+
+    struct Restore
+    {
+        LLCullResult* cull = sCull;
+        LLViewerCamera::eCameraID camera_id = LLViewerCamera::sCurCameraID;
+        LLCamera current = LLViewerCamera::getCurrent();
+        S32 occlusion = sUseOcclusion;
+        bool shadow = sShadowRender;
+        bool impostor = sImpostorRender;
+        bool coverage = sSKCoverageRender;
+        const std::function<bool(const LLDrawInfo*)>* coverage_skip = sk_coverage_skip;
+        ~Restore()
+        {
+            skSetCoverageCutoff(0.f);
+            sSKCoverageRender = coverage;
+            sk_coverage_skip = coverage_skip;
+            sImpostorRender = impostor;
+            sShadowRender = shadow;
+            sUseOcclusion = occlusion;
+            LLViewerCamera::setCurrent(current);
+            LLViewerCamera::sCurCameraID = camera_id;
+            sCull = cull;
+        }
+    } restore;
+
+    // Avatars stay in the mask so stateSort resets their pools; otherwise this frame's bodies would draw.
+    pushRenderTypeMask();
+    clearRenderTypeMask(RENDER_TYPE_SKY, RENDER_TYPE_WL_SKY, RENDER_TYPE_TERRAIN, RENDER_TYPE_GRASS, RENDER_TYPE_TREE,
+                        RENDER_TYPE_VOIDWATER, RENDER_TYPE_WATER, RENDER_TYPE_PASS_GRASS, RENDER_TYPE_HUD, RENDER_TYPE_PARTICLES,
+                        RENDER_TYPE_CLOUDS, RENDER_TYPE_HUD_PARTICLES, END_RENDER_TYPES);
+
+    LLViewerCamera::sCurCameraID = LLViewerCamera::CAMERA_SK_COVERAGE;
+    sUseOcclusion = 0;
+    sShadowRender = true;
+    sImpostorRender = false;
+    sSKCoverageRender = true;
+    sk_coverage_skip = &skip;
+    sk_coverage_cutoff = llclamp(alpha_cutoff, 0.001f, 1.f);
+    skSetCoverageCutoff(sk_coverage_cutoff);
+    LLViewerCamera::setCurrent(camera);
+
+    static LLCullResult result;
+    result.clear();
+    grabReferences(result);
+    // Impostor-style acceptance for the bridge itself: no frustum or impostor-flag rejection of the subject.
+    sImpostorRender = true;
+    markVisible(bridge, camera);
+    sImpostorRender = false;
+
+    renderShadow(view, proj, camera, result, true, false);
+
+    U32 draw_infos = 0;
+    for (U32 type = 0; type < LLRenderPass::NUM_RENDER_TYPES; ++type)
+    {
+        for (LLCullResult::drawinfo_iterator i = result.beginRenderMap(type); i != result.endRenderMap(type); ++i)
+        {
+            ++draw_infos;
+        }
+    }
+
+    popRenderTypeMask();
+    return draw_infos;
+}
+// </SK:Nexii>
+
+namespace
+{
+    using ShadowHash = ALSpotShadowCache::Hash;
+
+    // What of its buffer a draw draws, and where it is placed.
+    void add_shadow_geometry(ShadowHash& draw, const LLDrawInfo& info, ALSpotShadowCache::Placements& placements)
+    {
+        ALSpotShadowCache::foldGeometry(draw, info.mVertexBuffer.get(), info.mStart, info.mEnd, info.mCount, info.mOffset,
+                                        placements.of(info.mModelMatrix));
+    }
+
+    // A draw's texture animation, which moves what it alpha tests by.
+    void add_texture_matrix(ShadowHash& draw, const LLMatrix4* matrix)
+    {
+        if (matrix)
+        {
+            draw.add(matrix->mMatrix, sizeof(matrix->mMatrix));
+        }
+        else
+        {
+            draw.add((U64)0);
+        }
+    }
+
+    // A GLTF material as the shadow programs draw by it: whether it culls back faces and, where it is alpha tested or
+    // stippled, by what of its base colour.
+    void add_shadow_material(ALSpotShadowCache::Casters& casters, ShadowHash& draw, const LLFetchedGLTFMaterial* material,
+                             bool textured)
+    {
+        draw.add(material);
+        if (!material)
+        {
+            return;
+        }
+        draw.add((U64)material->mDoubleSided);
+        if (textured)
+        {
+            add_shadow_texture(casters, draw, material->mBaseColorTexture.get());
+            draw.add((U64)material->mAlphaMode).add(material->mAlphaCutoff).add(material->mBaseColor.mV[VALPHA]);
+            LLGLTFMaterial::TextureTransform::Pack packed;
+            material->mTextureTransform[LLGLTFMaterial::GLTF_TEXTURE_INFO_BASE_COLOR].getPacked(packed);
+            draw.add(packed, sizeof(packed));
+        }
+    }
+}
+
+void LLPipeline::addShadowCasters(ALSpotShadowCache::Casters& casters)
+{
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_PIPELINE;
+
+    ALSpotShadowCache::Placements placements;
+
+    // A rigged caster is skinned to its avatar's pose, which moves every frame.
+    const auto rigged = [&](U32 type)
+    {
+        if (beginRenderMap(type) != endRenderMap(type))
+        {
+            casters.markChanging();
+        }
+    };
+
+    // Those drawn as geometry alone, a GLTF material's by whether it culls back faces.
+    const auto geometry = [&](U32 type, bool gltf)
+    {
+        for (LLCullResult::drawinfo_iterator i = beginRenderMap(type), end = endRenderMap(type); i != end && !casters.changing(); ++i)
+        {
+            const LLDrawInfo& info = **i;
+            ShadowHash draw;
+            add_shadow_geometry(draw, info, placements);
+            if (gltf)
+            {
+                add_shadow_material(casters, draw, info.mGLTFMaterial.get(), false);
+            }
+            casters.add(draw);
+        }
+    };
+
+    // Those alpha tested or stippled by their textures, whichever of them the draw binds.
+    const auto textured = [&](U32 type)
+    {
+        for (LLCullResult::drawinfo_iterator i = beginRenderMap(type), end = endRenderMap(type); i != end && !casters.changing(); ++i)
+        {
+            const LLDrawInfo& info = **i;
+            if (info.mAvatar.notNull())
+            {
+                casters.markChanging();
+                continue;
+            }
+            ShadowHash draw;
+            add_shadow_geometry(draw, info, placements);
+            draw.add(info.mAlphaMaskCutoff);
+            add_shadow_texture(casters, draw, info.mTexture.get());
+            add_texture_matrix(draw, info.mTextureMatrix);
+            for (const LLPointer<LLViewerTexture>& texture : info.mTextureList)
+            {
+                add_shadow_texture(casters, draw, texture.get());
+            }
+            for (const LLDrawInfo::MaterialSlot& slot : info.mMaterialSlotList)
+            {
+                add_shadow_texture(casters, draw, slot.mDiffuse.get());
+                draw.add(slot.mAlphaMaskCutoff);
+            }
+            add_shadow_material(casters, draw, info.mGLTFMaterial.get(), true);
+            for (const LLPointer<LLFetchedGLTFMaterial>& material : info.mGLTFMaterialList)
+            {
+                add_shadow_material(casters, draw, material.get(), true);
+            }
+            casters.add(draw);
+        }
+    };
+
+    // What changes every frame first, the skinned casters and the pools' (an avatar's among them): a pass that draws
+    // any is drawn whatever its map holds, and the rest of what it draws is not folded.
+    for (U32 type : SHADOW_GEOMETRY_PASSES)
+    {
+        rigged(type + 1);
+    }
+    rigged(LLRenderPass::PASS_GLTF_PBR_RIGGED);
+    for (U32 type : SHADOW_MASKED_PASSES)
+    {
+        rigged(type + 1);
+    }
+    // What the pools draw in their own shadow passes, picked as renderGeomShadow picks them.
+    for (LLDrawPool* pool : mPools)
+    {
+        if (!casters.changing() && hasRenderType(pool->getType()) && pool->getNumShadowPasses() > 0)
+        {
+            pool->addShadowCasters(casters);
+        }
+    }
+
+    for (U32 type : SHADOW_GEOMETRY_PASSES)
+    {
+        geometry(type, false);
+    }
+    geometry(LLRenderPass::PASS_GLTF_PBR, true);
+    for (U32 type : SHADOW_MASKED_PASSES)
+    {
+        textured(type);
+    }
+    // The blended casters, rigged and not in one map, and the grass, which has no rigged twin.
+    textured(LLRenderPass::PASS_ALPHA);
+    textured(LLRenderPass::PASS_GRASS);
+}
+
+bool LLPipeline::getVisiblePointCloud(LLCamera& camera, LLVector3& min, LLVector3& max, std::vector<LLVector3>& fp, LLVector3 light_dir,
+                                      bool water)
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_PIPELINE;
     //get point cloud of intersection of frust and min, max
 
-    if (getVisibleExtents(camera, min, max))
+    if (getVisibleExtents(camera, min, max, water))
     {
         return false;
     }
@@ -13441,9 +13807,13 @@ void LLPipeline::generateSunShadow(LLCamera& camera)
         main_camera.calcAgentFrustumPlanes(main_camera.mAgentFrustum);
 
         LLVector3 min,max;
-        getVisiblePointCloud(main_camera,min,max,fp);
+        // The split range is set by the receivers other than the water: its field reaches past the draw distance, and
+        // among them it would stretch every split to the draw distance whenever the sea is in view. Each split still
+        // takes the water among its receivers for its own fit, and with nothing but water in view the range takes its
+        // floor rather than leaving the sun without shadows.
+        getVisiblePointCloud(main_camera, min, max, fp, LLVector3(0.f, 0.f, 0.f), false);
 
-        if (fp.empty())
+        if (fp.empty() && !waterReceivesShadows(main_camera))
         {
             if (!hasRenderDebugMask(RENDER_DEBUG_SHADOW_FRUSTA) && !gCubeSnapshot)
             {
@@ -13466,25 +13836,34 @@ void LLPipeline::generateSunShadow(LLCamera& camera)
             return;
         }
 
-        //get good split distances for frustum
-        for (U32 i = 0; i < fp.size(); ++i)
+        // The nearest and farthest receivers' depths, 0 with only water in view.
+        F32 nearest = 0.f;
+        F32 farthest = 0.f;
+        if (!fp.empty())
         {
-            LLVector4a v;
-            saved_view.affineTransform(LLVector4a(fp[i].mV[0], fp[i].mV[1], fp[i].mV[2], 1.f), v);
-            fp[i].set(v.getF32ptr());
+            //get good split distances for frustum
+            for (U32 i = 0; i < fp.size(); ++i)
+            {
+                LLVector4a v;
+                saved_view.affineTransform(LLVector4a(fp[i].mV[0], fp[i].mV[1], fp[i].mV[2], 1.f), v);
+                fp[i].set(v.getF32ptr());
+            }
+
+            min = fp[0];
+            max = fp[0];
+
+            //get camera space bounding box
+            for (U32 i = 1; i < fp.size(); ++i)
+            {
+                update_min_max(min, max, fp[i]);
+            }
+
+            nearest = -max.mV[2];
+            farthest = -min.mV[2];
         }
 
-        min = fp[0];
-        max = fp[0];
-
-        //get camera space bounding box
-        for (U32 i = 1; i < fp.size(); ++i)
-        {
-            update_min_max(min, max, fp[i]);
-        }
-
-        near_clip    = llclamp(-max.mV[2], 0.01f, 4.0f);
-        F32 far_clip = llclamp(-min.mV[2]*2.f, 16.0f, 512.0f);
+        near_clip    = llclamp(nearest, 0.01f, 4.0f);
+        F32 far_clip = llclamp(farthest*2.f, 16.0f, 512.0f);
 
         //far_clip = llmin(far_clip, 128.f);
         far_clip = llmin(far_clip, camera.getFar());
@@ -13776,6 +14155,25 @@ void LLPipeline::generateSunShadow(LLCamera& camera)
                 update_min_max(min, max, wpf[i]);
             }
 
+            // Receivers lying in one plane square to the light, as open water or flat ground does under a sun or moon at
+            // the zenith, have no depth along it: the ortho fit would divide by it and the perspective fit's depth scale
+            // be infinite, either leaving infinities in the matrices and NaN in every lookup of the split. Each fit takes
+            // at least MIN_SHADOW_DEPTH of depth, the ortho one about the receivers' middle and the perspective one at the
+            // split's far end (fz). Only the depth's scale changes, only in a split with less, and by its depth smoothly.
+            // Receivers that collapse to a line or a point in the light's view, no wider across it than that, would be
+            // divided by in the line fit's error and the ortho fit, and the perspective fit's y range would be empty:
+            // their extent across the light is padded the same way.
+            constexpr F32 MIN_SHADOW_DEPTH = 1.f;
+            for (U32 axis = 0; axis < 3; ++axis)
+            {
+                if (max.mV[axis] - min.mV[axis] < MIN_SHADOW_DEPTH)
+                {
+                    const F32 mid = (min.mV[axis] + max.mV[axis]) * 0.5f;
+                    min.mV[axis] = mid - MIN_SHADOW_DEPTH * 0.5f;
+                    max.mV[axis] = mid + MIN_SHADOW_DEPTH * 0.5f;
+                }
+            }
+
             // Construct a perspective transform with perspective along y-axis that contains
             // points in wpf
             //Known:
@@ -13861,7 +14259,9 @@ void LLPipeline::generateSunShadow(LLCamera& camera)
                 mShadowError.mV[j] /= wpf.size();
                 mShadowError.mV[j] /= size.mV[0];
 
-                if (mShadowError.mV[j] > RenderShadowErrorCutoff)
+                // Ortho too where no line was fitted: with every point the same distance across the light, as a split
+                // seen straight along it is, the least squares divide zero by zero and the error is NaN.
+                if (!(mShadowError.mV[j] <= RenderShadowErrorCutoff))
                 { //just use ortho projection
                     mShadowFOV.mV[j] = -1.f;
                     origin.clearVec();
@@ -13952,8 +14352,8 @@ void LLPipeline::generateSunShadow(LLCamera& camera)
                         yfar += diff;
                     }
 
-                    if (fovx > cutoff)
-                    { //just use ortho projection
+                    if (!(fovx <= cutoff))
+                    { //just use ortho projection, also where the field of view came out NaN
                         origin.clearVec();
                         mShadowError.mV[j] = -1.f;
                         proj[j] = al_ortho(min.mV[0], max.mV[0],
@@ -13980,7 +14380,8 @@ void LLPipeline::generateSunShadow(LLCamera& camera)
                         view[j] = LLMatrix4a::lookDir(origin_agent, LLVector4a(lightDir.mV[0], lightDir.mV[1], lightDir.mV[2]), LLVector4a(-up.mV[0], -up.mV[1], -up.mV[2]));
 
                         F32 fx = 1.f/tanf(fovx);
-                        F32 fz = 1.f/tanf(fovz);
+                        // MIN_SHADOW_DEPTH across at yfar, at least; also where the field of view came out NaN.
+                        F32 fz = 1.f/tanf(llmax(fovz, atanf(MIN_SHADOW_DEPTH * 0.5f / yfar)));
 
                         proj[j].mMatrix[0].set(-fx, 0.f, 0.f, 0.f);
                         proj[j].mMatrix[1].set(0.f, (yfar + ynear) / (ynear - yfar), 0.f, -1.f);
@@ -14099,6 +14500,17 @@ void LLPipeline::generateSunShadow(LLCamera& camera)
         // this should never happen
         llassert(mShadowSpotLight[0] != mShadowSpotLight[1] || mShadowSpotLight[0].isNull());
 
+        // What the spot maps' casters are drawn with besides themselves: the programs as loaded, and the settings and
+        // state drawShadow reads.
+        const U64 spot_state = ALSpotShadowCache::Hash()
+                                   .add((U64)LLGLSLShader::sLoadGeneration)
+                                   .add((U64)mResourceInputs.mShadowDetail)
+                                   .add((U64)LLEnvironment::instance().getIsSunUp())
+                                   .add((U64)sRenderTextures)
+                                   .value();
+        U32 spot_draws = 0;
+        static LLCachedControl<bool> keep_spot_shadows(gSavedSettings, "AlchemyRenderSpotShadowCache", true);
+
         for (S32 i = 0; i < 2; i++)
         {
             LLViewerCamera::setCurrent(saved_camera);
@@ -14178,24 +14590,46 @@ void LLPipeline::generateSunShadow(LLCamera& camera)
                 LLViewerCamera::updateFrustumPlanes(shadow_cam, false, false, true);
                 LLViewerCamera::setCurrent(shadow_cam);
 
-                //
-
-                mSpotShadow[i].bindTarget();
-                mSpotShadow[i].getViewport(gGLViewport);
-                mSpotShadow[i].clear();
-
                 static LLCullResult result[2];
 
                 LLViewerCamera::sCurCameraID = (LLViewerCamera::eCameraID)(LLViewerCamera::CAMERA_SPOT_SHADOW0 + i);
 
                 RenderSpotLight = drawable;
 
-                renderShadow(view[i + 4], proj[i + 4], shadow_cam, result[i], false);
+                // Culled and sorted every frame, which keeps what the light sees built, and drawn only when the map
+                // holds something other than what the light and its casters draw now.
+                sortShadow(shadow_cam, result[i], true, 0);
+
+                ALSpotShadowCache::Key key;
+                key.mView       = view[i + 4];
+                key.mProjection = proj[i + 4];
+                key.mLight      = (U64)(uintptr_t)drawable;
+                key.mState      = spot_state;
+                addShadowCasters(key.mCasters);
+
+                if (!keep_spot_shadows || mSpotShadowCache.needsDraw(i, key))
+                {
+                    LL_PROFILE_ZONE_NAMED_CATEGORY_PIPELINE("spot shadow");
+                    LL_PROFILE_GPU_ZONE("spot shadow");
+
+                    mSpotShadow[i].bindTarget();
+                    mSpotShadow[i].getViewport(gGLViewport);
+                    mSpotShadow[i].clear();
+
+                    drawShadow(view[i + 4], proj[i + 4], shadow_cam, false, 0);
+
+                    mSpotShadow[i].flush();
+                    mSpotShadowCache.drawn(i, key);
+                    ++spot_draws;
+                }
 
                 RenderSpotLight = nullptr;
-
-                mSpotShadow[i].flush();
             }
+        }
+
+        if (!gCubeSnapshot)
+        {
+            LL_PROFILE_PLOT("spot shadow draws", (int64_t)spot_draws);
         }
     }
     else
