@@ -28,6 +28,7 @@
 #include "llfloater.h"
 #include "llchat.h"
 #include "llfontgl.h"
+#include "llrendertarget.h"
 
 #include <deque>
 
@@ -127,6 +128,10 @@ private:
     S32 lineHeight(const Row& row) const;
     /// The url under a point in the floater, empty when none.
     std::string urlAt(S32 x, S32 y) const;
+    /// The visible cards in UI units, unclipped and unmasked.
+    void drawMessages(const LLRect& content, F64 now, bool full, bool cards) const;
+    /// The visible cards, faded out at the edges through mMask when any reach into the edge bands.
+    void drawMaskedMessages(const LLRect& content, F64 now, bool full, bool cards);
     void drawRowText(const Row& row, S32 x, S32 y, F32 alpha, LLFontGL::ShadowType shadow) const;
     void onStyleMenu(const LLSD& param);
     bool onStyleCheck(const LLSD& param) const;
@@ -153,6 +158,20 @@ private:
     bool mWasExpanded = false;
     F64 mCollapsedAt = -1.0e9; // when the log last stopped being shown whole
     boost::signals2::connection mFontConnection;
+
+    struct MaskKey
+    {
+        U32 mWidth = 0;
+        U32 mHeight = 0;
+        S32 mScroll = -1;
+        U32 mLayout = 0;
+        U64 mFades = 0;
+        bool mCards = false;
+        bool operator==(const MaskKey&) const = default;
+    };
+    LLRenderTarget mMask;       // the messages, premultiplied, for the scroll mask
+    MaskKey mMaskKey;           // what mMask holds
+    U32 mLayoutGeneration = 0;  // counts layouts, so mMask knows the rows moved
 };
 
 #endif // SK_FLOATERLOCALCHAT_H

@@ -38,6 +38,7 @@
 #include "lllocalcliprect.h"
 #include "llmenubutton.h"
 #include "llrender2dutils.h"
+#include "llrendertarget.h"
 #include "llslurl.h"
 #include "lltrans.h"
 #include "lluicolortable.h"
@@ -102,6 +103,7 @@ SKFloaterLocalChat::~SKFloaterLocalChat()
 {
     mFontConnection.disconnect();
     mEmojiCloseConnection.disconnect();
+    mMask.release();
 }
 
 // static
@@ -546,6 +548,7 @@ void SKFloaterLocalChat::layout()
     {
         return;
     }
+    ++mLayoutGeneration;
     if (mLayoutStyle >= 0 && style != mLayoutStyle)
     {
         // The minimal style folds the name into the body, so the messages are made again.
@@ -758,6 +761,200 @@ void SKFloaterLocalChat::drawRowText(const Row& row, S32 x, S32 y, F32 alpha, LL
     }
 }
 
+void SKFloaterLocalChat::drawMessages(const LLRect& content, F64 now, bool full, bool cards) const
+{
+    static LLUIImagePtr card_image = LLUI::getUIImage("Rounded_Square");
+    static LLUIColor card_color = LLUIColorTable::instance().getColor("Black");
+    const S32 text_x = content.mLeft + (cards ? PAD_X + DISC + DISC_GAP : PAD_X);
+    const LLFontGL::ShadowType shadow = cards ? LLFontGL::NO_SHADOW : LLFontGL::DROP_SHADOW_SOFT;
+    const S32 base = content.mBottom - mScroll;
+    for (S32 c = (S32)mCards.size() - 1; c >= 0; --c)
+    {
+        const Card& card = mCards[c];
+        const F32 alpha = full ? 1.f : cardAlpha(card, now);
+        if (alpha <= 0.f)
+        {
+            break; // older cards arrived earlier, so they have faded too
+        }
+        const Row& top_row = mRows[card.mFirstRow];
+        const Row& bottom_row = mRows[card.mLastRow];
+        const S32 card_bottom = base + bottom_row.mBottom + bottom_row.mGap;
+        const S32 card_top = base + top_row.mBottom + top_row.height() + lineHeight(top_row);
+        if (card_top < content.mBottom)
+        {
+            continue;
+        }
+        if (card_bottom > content.mTop)
+        {
+            break;
+        }
+
+        const Message& first = mMessages[card.mFirstMessage];
+        if (cards)
+        {
+            card_image->draw(content.mLeft, card_bottom, card.mWidth, card_top - card_bottom, card_color.get() % (CARD_ALPHA * alpha));
+            if (!first.mName.empty())
+            {
+                // Round for people, square for objects.
+                gGL.getTextureSlot(0)->unbind();
+                const S32 disc_top = card_top - PAD_Y - 1;
+                LLColor4 disc = first.mNameColor;
+                disc.mV[VALPHA] *= alpha;
+                if (first.mSource == CHAT_SOURCE_OBJECT)
+                {
+                    gl_rect_2d(content.mLeft + PAD_X, disc_top, content.mLeft + PAD_X + DISC, disc_top - DISC, disc);
+                }
+                else
+                {
+                    gGL.color4fv(disc.mV);
+                    gl_circle_2d((F32)(content.mLeft + PAD_X) + DISC * 0.5f, (F32)disc_top - DISC * 0.5f, DISC * 0.5f, 16, true);
+                }
+            }
+        }
+
+        for (S32 r = card.mFirstRow; r <= card.mLastRow; ++r)
+        {
+            const Row& row = mRows[r];
+            const S32 y = base + row.mBottom + row.mGap + row.mPadBottom;
+            if (y > content.mTop || y + lineHeight(row) < content.mBottom)
+            {
+                continue;
+            }
+            if (row.mMessage < 0)
+            {
+                LLColor4 color = first.mNameColor;
+                color.mV[VALPHA] *= alpha;
+                name_font()->renderUTF8(first.mName, 0, (F32)text_x, (F32)y, color, LLFontGL::LEFT, LLFontGL::BOTTOM, LLFontGL::BOLD, LLFontGL::NO_SHADOW);
+            }
+            else
+            {
+                drawRowText(row, text_x, y, alpha, shadow);
+            }
+        }
+    }
+}
+
+void SKFloaterLocalChat::drawMaskedMessages(const LLRect& content, F64 now, bool full, bool cards)
+{
+    // What the frame shows: the visible cards' fades, and whether any of them reaches into an edge band.
+    const S32 base = content.mBottom - mScroll;
+    const bool scrolled = mScroll > 0;
+    const S32 top_band = content.mTop - (S32)EDGE_FADE;
+    const S32 bottom_band = content.mBottom + (S32)EDGE_FADE;
+    bool in_band = false;
+    U64 fades = 1469598103934665603ULL;
+    for (S32 c = (S32)mCards.size() - 1; c >= 0; --c)
+    {
+        const Card& card = mCards[c];
+        const F32 alpha = full ? 1.f : cardAlpha(card, now);
+        if (alpha <= 0.f)
+        {
+            break;
+        }
+        const Row& top_row = mRows[card.mFirstRow];
+        const Row& bottom_row = mRows[card.mLastRow];
+        const S32 card_bottom = base + bottom_row.mBottom + bottom_row.mGap;
+        const S32 card_top = base + top_row.mBottom + top_row.height() + lineHeight(top_row);
+        if (card_top < content.mBottom)
+        {
+            continue;
+        }
+        if (card_bottom > content.mTop)
+        {
+            break;
+        }
+        in_band |= card_top > top_band || (scrolled && card_bottom < bottom_band);
+        fades = (fades ^ (U64)(c * 256 + ll_round(alpha * 255.f))) * 1099511628211ULL;
+    }
+
+    if (!in_band)
+    {
+        LLLocalClipRect clip(content);
+        drawMessages(content, now, full, cards);
+        return;
+    }
+
+    // A mask as CSS draws one: the messages go to a target of their own, laid over the world through a gradient.
+    const LLVector3 scale = gGL.getUIScale();
+    const U32 width = (U32)llmax(1, ll_round(content.getWidth() * scale.mV[VX]));
+    const U32 height = (U32)llmax(1, ll_round(content.getHeight() * scale.mV[VY]));
+    const MaskKey key{ width, height, mScroll, mLayoutGeneration, fades, cards };
+    if (mMask.getWidth() != width || mMask.getHeight() != height)
+    {
+        mMask.release();
+        mMaskKey = MaskKey();
+        if (!mMask.allocate(width, height, GL_RGBA8))
+        {
+            mMask.release();
+            LLLocalClipRect clip(content);
+            drawMessages(content, now, full, cards);
+            return;
+        }
+    }
+    if (!(key == mMaskKey))
+    {
+        mMaskKey = key;
+        LLGLDisable scissor(GL_SCISSOR_TEST);
+        mMask.bindTarget();
+        mMask.clear(GL_COLOR_BUFFER_BIT);
+        gGL.matrixMode(LLRender::MM_PROJECTION);
+        gGL.pushMatrix();
+        gGL.loadIdentity();
+        gGL.ortho(0.f, (F32)width, 0.f, (F32)height, -1.f, 1.f);
+        gGL.matrixMode(LLRender::MM_MODELVIEW);
+        gGL.pushMatrix();
+        gGL.loadIdentity();
+        LLUI::pushMatrix();
+        LLUI::loadIdentity();
+        gGL.scaleUI(scale.mV[VX], scale.mV[VY], 1.f);
+        LLUI::translate((F32)-content.mLeft, (F32)-content.mBottom);
+        // Premultiplied: colour blends over, alpha accumulates as coverage.
+        gGL.blendFunc(LLRender::BF_SOURCE_ALPHA, LLRender::BF_ONE_MINUS_SOURCE_ALPHA, LLRender::BF_ONE, LLRender::BF_ONE_MINUS_SOURCE_ALPHA);
+        drawMessages(content, now, full, cards);
+        gGL.flush();
+        gGL.setSceneBlendType(LLRender::BT_ALPHA);
+        LLUI::popMatrix();
+        gGL.matrixMode(LLRender::MM_PROJECTION);
+        gGL.popMatrix();
+        gGL.matrixMode(LLRender::MM_MODELVIEW);
+        gGL.popMatrix();
+        mMask.flush();
+    }
+
+    // Three bands: fading in under the top edge, whole, and fading out over the bottom one while scrolled.
+    const F32 l = (F32)content.mLeft;
+    const F32 r = (F32)content.mRight;
+    const F32 b = (F32)content.mBottom;
+    const F32 t = (F32)content.mTop;
+    const F32 fade = llmin(EDGE_FADE, 0.5f * (t - b));
+    const F32 ys[4] = { b, scrolled ? b + fade : b, t - fade, t };
+    const F32 as[4] = { scrolled ? 0.f : 1.f, 1.f, 1.f, 0.f };
+    LLLocalClipRect clip(content);
+    gGL.getTextureSlot(0)->bind(&mMask);
+    gGL.blendFunc(LLRender::BF_ONE, LLRender::BF_ONE_MINUS_SOURCE_ALPHA);
+    gGL.begin(LLRender::TRIANGLES);
+    for (S32 i = 0; i < 3; ++i)
+    {
+        const F32 y0 = ys[i], y1 = ys[i + 1];
+        if (y1 <= y0)
+        {
+            continue;
+        }
+        const F32 v0 = (y0 - b) / (t - b), v1 = (y1 - b) / (t - b);
+        const F32 a0 = as[i], a1 = as[i + 1];
+        gGL.color4f(a0, a0, a0, a0); gGL.texCoord2f(0.f, v0); gGL.vertex2f(l, y0);
+        gGL.color4f(a0, a0, a0, a0); gGL.texCoord2f(1.f, v0); gGL.vertex2f(r, y0);
+        gGL.color4f(a1, a1, a1, a1); gGL.texCoord2f(1.f, v1); gGL.vertex2f(r, y1);
+        gGL.color4f(a0, a0, a0, a0); gGL.texCoord2f(0.f, v0); gGL.vertex2f(l, y0);
+        gGL.color4f(a1, a1, a1, a1); gGL.texCoord2f(1.f, v1); gGL.vertex2f(r, y1);
+        gGL.color4f(a1, a1, a1, a1); gGL.texCoord2f(0.f, v1); gGL.vertex2f(l, y1);
+    }
+    gGL.end();
+    gGL.flush();
+    gGL.getTextureSlot(0)->unbind();
+    gGL.setSceneBlendType(LLRender::BT_ALPHA);
+}
+
 void SKFloaterLocalChat::draw()
 {
     if (!modernEnabled())
@@ -802,90 +999,7 @@ void SKFloaterLocalChat::draw()
 
     if (!mRows.empty())
     {
-        LLLocalClipRect clip(content);
-        static LLUIImagePtr card_image = LLUI::getUIImage("Rounded_Square");
-        static LLUIColor card_color = LLUIColorTable::instance().getColor("Black");
-        const S32 text_x = content.mLeft + (cards ? PAD_X + DISC + DISC_GAP : PAD_X);
-        const LLFontGL::ShadowType shadow = cards ? LLFontGL::NO_SHADOW : LLFontGL::DROP_SHADOW_SOFT;
-        const S32 base = content.mBottom - mScroll;
-        const bool scrolled = mScroll > 0;
-        // Scroll masks: what nears the top edge fades out, and the bottom edge too while scrolled up.
-        auto edge = [&](S32 lo, S32 hi)
-        {
-            const F32 mid = 0.5f * (F32)(llmax(lo, content.mBottom) + llmin(hi, content.mTop));
-            const F32 top = llclamp(((F32)content.mTop - mid) / EDGE_FADE, 0.f, 1.f);
-            return scrolled ? top * llclamp((mid - (F32)content.mBottom) / EDGE_FADE, 0.f, 1.f) : top;
-        };
-
-        for (S32 c = (S32)mCards.size() - 1; c >= 0; --c)
-        {
-            const Card& card = mCards[c];
-            const F32 alpha = full ? 1.f : cardAlpha(card, now);
-            if (alpha <= 0.f)
-            {
-                break; // older cards arrived earlier, so they have faded too
-            }
-            const Row& top_row = mRows[card.mFirstRow];
-            const Row& bottom_row = mRows[card.mLastRow];
-            const S32 card_bottom = base + bottom_row.mBottom + bottom_row.mGap;
-            const S32 card_top = base + top_row.mBottom + top_row.height() + lineHeight(top_row);
-            if (card_top < content.mBottom)
-            {
-                continue;
-            }
-            if (card_bottom > content.mTop)
-            {
-                break;
-            }
-
-            const Message& first = mMessages[card.mFirstMessage];
-            if (cards)
-            {
-                card_image->draw(content.mLeft, card_bottom, card.mWidth,card_top - card_bottom, card_color.get() % (CARD_ALPHA * alpha * edge(card_bottom, card_top)));
-                if (!first.mName.empty())
-                {
-                    // Round for people, square for objects.
-                    gGL.getTextureSlot(0)->unbind();
-                    const S32 disc_top = card_top - PAD_Y - 1;
-                    LLColor4 disc = first.mNameColor;
-                    disc.mV[VALPHA] *= alpha * edge(disc_top - DISC, disc_top);
-                    if (first.mSource == CHAT_SOURCE_OBJECT)
-                    {
-                        gl_rect_2d(content.mLeft + PAD_X, disc_top, content.mLeft + PAD_X + DISC, disc_top - DISC, disc);
-                    }
-                    else
-                    {
-                        gGL.color4fv(disc.mV);
-                        gl_circle_2d((F32)(content.mLeft + PAD_X) + DISC * 0.5f, (F32)disc_top - DISC * 0.5f, DISC * 0.5f, 16, true);
-                    }
-                }
-            }
-
-            for (S32 r = card.mFirstRow; r <= card.mLastRow; ++r)
-            {
-                const Row& row = mRows[r];
-                const S32 y = base + row.mBottom + row.mGap + row.mPadBottom;
-                if (y > content.mTop || y + lineHeight(row) < content.mBottom)
-                {
-                    continue;
-                }
-                const F32 row_alpha = alpha * edge(y, y + lineHeight(row));
-                if (row_alpha <= 0.f)
-                {
-                    continue;
-                }
-                if (row.mMessage < 0)
-                {
-                    LLColor4 color = first.mNameColor;
-                    color.mV[VALPHA] *= row_alpha;
-                    name_font()->renderUTF8(first.mName, 0, (F32)text_x, (F32)y, color, LLFontGL::LEFT, LLFontGL::BOTTOM, LLFontGL::BOLD, LLFontGL::NO_SHADOW);
-                }
-                else
-                {
-                    drawRowText(row, text_x, y, row_alpha, shadow);
-                }
-            }
-        }
+        drawMaskedMessages(content, now, full, cards);
     }
 
     // Jump to present: once scrolled up by more than a view, or from any distance once something new arrived.
