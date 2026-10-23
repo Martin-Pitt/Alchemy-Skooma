@@ -444,16 +444,17 @@ F32 SKFloaterLocalChat::cardAlpha(const Card& card, F64 now) const
 {
     static LLCachedControl<F32> delay(gSavedSettings, "SkoomaLocalChatFadeDelay", 8.f);
     static LLCachedControl<F32> fade(gSavedSettings, "SkoomaLocalChatFadeTime", 2.f);
-    const F64 age = now - mMessages[card.mLastMessage].mArrival;
-    if (age <= delay)
+    static LLCachedControl<F32> grace(gSavedSettings, "SkoomaLocalChatHoverGrace", 5.f);
+    auto fading = [&](F64 age, F32 hold)
     {
-        return 1.f;
-    }
-    if (fade <= 0.f)
-    {
-        return 0.f;
-    }
-    return llclamp(1.f - (F32)((age - delay) / fade), 0.f, 1.f);
+        if (age <= hold)
+        {
+            return 1.f;
+        }
+        return fade <= 0.f ? 0.f : llclamp(1.f - (F32)((age - hold) / fade), 0.f, 1.f);
+    };
+    // After the log was shown whole it stays whole for the grace, then fades as one, as MMO chat does.
+    return llmax(fading(now - mMessages[card.mLastMessage].mArrival, delay), fading(now - mCollapsedAt, grace));
 }
 
 void SKFloaterLocalChat::layout()
@@ -668,6 +669,11 @@ void SKFloaterLocalChat::draw()
     const S32 view_height = content.getHeight();
     mScroll = llclamp(mScroll, 0, llmax(0, mContentHeight - view_height));
     const F64 now = LLFrameTimer::getTotalSeconds();
+    if (mWasExpanded && !full)
+    {
+        mCollapsedAt = now;
+    }
+    mWasExpanded = full;
 
     if (mCog)
     {
