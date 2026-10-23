@@ -269,4 +269,24 @@ namespace tut
         ensure("defaults", !nameAffinity("Object", "Object"));
         ensure("empty", !nameAffinity("", ""));
     }
+
+    // Each view's horizontal, vertical and depth axes are distinct and right-handed (h x v points at the viewer).
+    template<> template<>
+    void skoutlinepolicy_object::test<14>()
+    {
+        const ViewAxes plan = viewAxes(View::PLAN);
+        ensure("plan", plan.h == 0 && plan.v == 1 && plan.d == 2 && plan.depth_sign < 0.f);
+        const ViewAxes side = viewAxes(View::SIDE);
+        ensure("side", side.h == 0 && side.v == 2 && side.d == 1 && side.depth_sign > 0.f);
+        const ViewAxes front = viewAxes(View::FRONT);
+        ensure("front", front.h == 1 && front.v == 2 && front.d == 0 && front.depth_sign < 0.f);
+        for (View view : { View::PLAN, View::SIDE, View::FRONT })
+        {
+            const ViewAxes a = viewAxes(view);
+            // The cross of two unit axes is the third, signed by their cyclic order; it must point back at the eye.
+            const F32 cross_sign = ((a.v - a.h + 3) % 3 == 1) ? 1.f : -1.f;
+            ensure("distinct", a.h != a.v && a.v != a.d && a.h != a.d);
+            ensure("faces the eye", cross_sign == -a.depth_sign);
+        }
+    }
 }

@@ -55,7 +55,8 @@ struct SKOutlineLayer
     LLUUID pose_id;        // the object whose live transform poses the layer
     U32 texture = 0;       // the atlas; R8 coverage, swizzled so every channel reads it
     F32 u0 = 0.f, v0 = 0.f, u1 = 0.f, v1 = 0.f; // the layer's rect in the atlas
-    // The rect's extents in metres in the pose source's frame, plan view: x along its +X, y along its +Y.
+    // The rect's extents in metres in the pose source's frame, in the glyph's view (SKOutlinePolicy::viewAxes):
+    // x is the view's horizontal axis and y its vertical, so +X/+Y in PLAN, +X/+Z in SIDE and +Y/+Z in FRONT.
     F32 x0 = 0.f, y0 = 0.f, x1 = 0.f, y1 = 0.f;
     F32 cell = 0.f;        // metres per atlas texel
     bool coarsened = false; // the layer was too long for its slot at the resolution ceiling
@@ -71,13 +72,15 @@ struct SKOutlineLayer
 struct SKOutlineGlyph
 {
     LLUUID root;
+    SKOutlinePolicy::View view = SKOutlinePolicy::View::PLAN;
     std::vector<SKOutlineLayer> layers; // the base layer (root linkset) first
     bool settled = false;  // every part at its top LOD and no change for SKOutlineCaptureSettleSeconds
     U32 version = 0;       // bumps on every render, so a consumer can tell a new image
 };
 
-// Renders a plan-view coverage glyph of each requested vehicle on the GPU, at first sight and again when it
-// changes or moves, under a per-frame budget. No readback: consumers draw straight from the atlas.
+// Renders a coverage glyph of each requested root linkset, plan view unless another is asked for (a weapon or a chat
+// speaker's side view), and keeps one glyph per root and view. Only plan glyphs carry crew layers. Each renders on the
+// GPU at first sight and again when it changes or moves, under a per-frame budget. No readback: consumers draw straight from the atlas.
 //
 // The base layer is the root linkset. Crew layers are the worn linksets of the avatars seated on the root and its
 // children that belong to the vehicle (SKOutlinePolicy::crewVerdict), each rendered in its own attachment frame
@@ -92,10 +95,11 @@ class SKOutlineCapture : public LLSingleton<SKOutlineCapture>
 public:
     // The glyph of a vehicle root, asking for it if it is not known yet. Null until its first render.
     // The pointer is valid until the next frame.
-    static const SKOutlineGlyph* glyphFor(const LLUUID& root);
+    static const SKOutlineGlyph* glyphFor(const LLUUID& root, SKOutlinePolicy::View view = SKOutlinePolicy::View::PLAN);
 
     // Ask for a capture without reading it; pinned requests never expire.
-    void request(const LLUUID& root, bool pinned = false);
+    void request(const LLUUID& root, bool pinned = false, SKOutlinePolicy::View view = SKOutlinePolicy::View::PLAN);
+    // Forgets every view of a root.
     void forget(const LLUUID& root);
     void forgetAll();
 
@@ -112,6 +116,7 @@ public:
     struct Stats
     {
         LLUUID root;
+        SKOutlinePolicy::View view = SKOutlinePolicy::View::PLAN;
         std::string name;
         S32 parts = 0;
         S32 layers = 0;
@@ -141,6 +146,19 @@ public:
 
     struct Entry;
 
+    // A capture is one root seen one way.
+    struct Key
+    {
+        LLUUID root;
+        SKOutlinePolicy::View view = SKOutlinePolicy::View::PLAN;
+
+        bool operator==(const Key& o) const { return root == o.root && view == o.view; }
+    };
+    struct KeyHash
+    {
+        size_t operator()(const Key& k) const { return std::hash<LLUUID>{}(k.root) * 31 + (size_t)k.view; }
+    };
+
 private:
     void frame();
     void releaseGL();
@@ -150,7 +168,7 @@ private:
     void updateCrew(Entry& entry, LLViewerObject* root, F64 now);
     void readCounts();
 
-    std::unordered_map<LLUUID, std::unique_ptr<Entry>> mEntries;
+    std::unordered_map<Key, std::unique_ptr<Entry>, KeyHash> mEntries;
     std::unordered_map<LLUUID, std::string> mNames;   // names of vehicle roots and worn parts, as they arrive
     std::unordered_map<LLUUID, F64> mNameRequests;    // when a name was asked for
     SKOutlinePolicy::SlotAtlas mAtlas;
