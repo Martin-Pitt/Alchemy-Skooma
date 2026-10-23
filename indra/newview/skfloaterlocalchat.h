@@ -28,6 +28,9 @@
 #include "llfloater.h"
 #include "llchat.h"
 #include "llfontgl.h"
+#include "llavatarpropertiesprocessor.h"
+#include "llpointer.h"
+#include "skoutlinecapture.h"
 #include "llrendertarget.h"
 
 #include <deque>
@@ -36,8 +39,9 @@ class LLButton;
 class LLChatEntry;
 class LLFontGL;
 class LLMenuButton;
+class LLViewerFetchedTexture;
 
-class SKFloaterLocalChat final : public LLFloater
+class SKFloaterLocalChat final : public LLFloater, public LLAvatarPropertiesObserver
 {
 public:
     AL_VIEW_TYPE(SKFloaterLocalChat, LLFloater);
@@ -47,6 +51,8 @@ public:
 
     /// Whether this floater replaces the nearby toasts and chat bar (SkoomaLocalChatModern).
     static bool modernEnabled();
+    /// Whether starting chat opens this floater: modern chat is on and Conversations is not up to take it.
+    static bool shouldTakeChat();
     /// Takes a nearby chat message as the toasts would have.
     static void addChat(const LLChat& chat, const LLSD& args);
     /// Shows the input with the cursor at the end, starting it with line when given.
@@ -66,6 +72,7 @@ public:
     void onMouseEnter(S32 x, S32 y, MASK mask) override;
     void onMouseLeave(S32 x, S32 y, MASK mask) override;
     void onFocusLost() override;
+    void processProperties(void* data, EAvatarProcessorType type) override;
 
 private:
     enum EStyle : S32 { STYLE_CARDS = 0, STYLE_MINIMAL = 1 };
@@ -116,6 +123,8 @@ private:
         S32 mFirstRow = 0;
         S32 mLastRow = 0;
         S32 mWidth = 0;     // the bubble, shrink-wrapped to its widest line
+        S32 mIconWidth = 0; // the speaker's icon, 0 for none
+        S32 mTextX = 0;     // where the text column starts, from the content's left
     };
 
     void backfill(bool skip_last);
@@ -132,11 +141,18 @@ private:
     /// The url under a point in the floater, empty when none.
     std::string urlAt(S32 x, S32 y) const;
     /// The visible cards in UI units, unclipped and unmasked.
-    void drawMessages(const LLRect& content, F64 now, bool full, bool cards) const;
+    void drawMessages(const LLRect& content, F64 now, bool full, bool cards);
     /// The visible cards, faded out at the edges through mMask when any reach into the edge bands.
     void drawMaskedMessages(const LLRect& content, F64 now, bool full, bool cards);
     void drawTime(const Message& msg, F32 x, S32 y, F32 alpha, LLFontGL::ShadowType shadow) const;
     void drawRowText(const Row& row, S32 x, S32 y, F32 alpha, LLFontGL::ShadowType shadow) const;
+    /// An object speaker's side-view glyph, null until the capture has one.
+    const SKOutlineLayer* objectGlyph(const LLUUID& speaker, F64 now);
+    /// An icon's width at the card icon height: an object's glyph keeps its aspect, everything else is square.
+    S32 iconWidth(const Message& first, F64 now);
+    void drawObjectIcon(const Message& first, S32 left, S32 top, S32 width, const LLColor4& color, F64 now);
+    U64 iconStamp(const Message& first) const;
+    void drawAvatarIcon(const Message& first, S32 left, S32 top, const LLColor4& color);
     void onStyleMenu(const LLSD& param);
     bool onStyleCheck(const LLSD& param) const;
 
@@ -163,6 +179,23 @@ private:
     F64 mCollapsedAt = -1.0e9; // when the log last stopped being shown whole
     boost::signals2::connection mFontConnection;
 
+    // An object speaker's linkset root and the base layer of its glyph, looked at a few times a second.
+    struct ObjectGlyph
+    {
+        F64 mChecked = -1.0e9;
+        bool mShown = false;
+        SKOutlineLayer mLayer;
+    };
+    std::unordered_map<LLUUID, ObjectGlyph> mObjectGlyphs;
+
+    // A person's profile picture, through the icon id cache the other chats share.
+    struct AvatarPicture
+    {
+        LLPointer<LLViewerFetchedTexture> mTexture;
+        bool mAsked = false;     // the cache or the properties processor has been asked
+        bool mObserving = false; // waiting on a properties reply
+    };
+    std::unordered_map<LLUUID, AvatarPicture> mAvatarPictures;
     struct MaskKey
     {
         U32 mWidth = 0;
@@ -170,6 +203,7 @@ private:
         S32 mScroll = -1;
         U32 mLayout = 0;
         U64 mFades = 0;
+        U64 mIcons = 0;
         bool mCards = false;
         bool operator==(const MaskKey&) const = default;
     };

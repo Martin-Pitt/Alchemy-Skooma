@@ -3478,7 +3478,7 @@ bool LLViewerWindow::handleKey(KEY key, MASK mask)
         !keyboard_focus && key < 0x80 && (mask == MASK_NONE || mask == MASK_SHIFT) )
     {
         // <SK:Nexii> Modern local chat takes letter keys that start chat.
-        if (SKFloaterLocalChat::modernEnabled())
+        if (SKFloaterLocalChat::shouldTakeChat())
         {
             SKFloaterLocalChat::startChat(nullptr);
             return true;
