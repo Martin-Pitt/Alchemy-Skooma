@@ -242,7 +242,6 @@ bool SKFloaterLocalChat::postBuild()
 
     sendChildToBack(getDragHandle());
     layoutCog();
-    layoutInput();
     gFloaterView->adjustToFitScreen(this, false);
     return true;
 }
@@ -474,7 +473,6 @@ void SKFloaterLocalChat::reshape(S32 width, S32 height, bool called_from_parent)
 {
     LLFloater::reshape(width, height, called_from_parent);
     layoutCog();
-    layoutInput();
 }
 
 void SKFloaterLocalChat::layoutCog()
@@ -487,22 +485,6 @@ void SKFloaterLocalChat::layoutCog()
     const S32 right = getRect().getWidth() - 4;
     const S32 top = getRect().getHeight() - 2;
     mCog->setRect(LLRect(right - COG_PX, top, right, top - COG_PX));
-}
-
-void SKFloaterLocalChat::layoutInput()
-{
-    // The input row sits on the bottom inset at any size, the emoji button at its right.
-    constexpr S32 EMOJI_PX = 20;
-    const S32 right = getRect().getWidth() - INSET;
-    if (mEmojiButton)
-    {
-        const S32 bottom = INSET + (INPUT_HEIGHT - EMOJI_PX) / 2;
-        mEmojiButton->setRect(LLRect(right - EMOJI_PX, bottom + EMOJI_PX, right, bottom));
-    }
-    if (mInput)
-    {
-        mInput->setRect(LLRect(INSET, INSET + INPUT_HEIGHT, right - EMOJI_PX - 4, INSET));
-    }
 }
 
 void SKFloaterLocalChat::onMouseEnter(S32 x, S32 y, MASK mask)
