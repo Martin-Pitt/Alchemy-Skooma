@@ -160,6 +160,10 @@ private:
     void drawEmbed(const Message& msg, S32 x, S32 y, F32 alpha) const;
     /// Starts the lookups of the previews in a card about to be drawn.
     void requestEmbeds(const Card& card);
+    /// Polls who nearby is typing, a few times a second, and remakes the label when that changes.
+    void updateTyping(F64 now);
+    void makeTypingLabel(S32 group);
+    void drawTyping(F64 now) const;
     void onStyleMenu(const LLSD& param);
     bool onStyleCheck(const LLSD& param) const;
 
@@ -206,6 +210,19 @@ private:
     LLRenderTarget mMask;       // the messages, premultiplied, for the scroll mask
     MaskKey mMaskKey;           // what mMask holds
     U32 mLayoutGeneration = 0;  // counts layouts, so mMask knows the rows moved
+    struct Typer
+    {
+        LLUUID mID;
+        S32 mMetres = 0;   // 0 within chat range, else the whole metres beyond it
+        F64 mTypedAt = 0.0; // last seen typing, for the out-of-range grace
+        bool operator==(const Typer& o) const { return mID == o.mID && mMetres == o.mMetres; }
+        bool operator<(const Typer& o) const { return mID < o.mID; }
+    };
+    std::vector<Typer> mTyping[2];    // within chat range and just beyond it, sorted
+    std::vector<Typer> mTypingScratch[2];
+    std::string mTypingLabel[2];
+    F64 mTypingPollAt = 0.0;
+    bool mTypingNamed[2] = { true, true }; // every name in the label had resolved
     SKChatUnfurlCache mUnfurl;
     U32 mUnfurlGeneration = 0;  // the cache's generation the layout was made for
 };
