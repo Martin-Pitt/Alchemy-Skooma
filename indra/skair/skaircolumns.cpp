@@ -48,7 +48,7 @@ namespace
     F64 units(F64 h, F64 unit)
     {
         const F64 q = h / unit;
-        const F64 r = std::nearbyint(q);
+        const F64 r = std::floor(q + 0.5);
         return std::fabs(q - r) < SNAP_UNITS ? r : q;
     }
 
