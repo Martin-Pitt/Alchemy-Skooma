@@ -12,6 +12,7 @@ target_sources(
   PRIVATE
     skair.cpp
     skaircensus.cpp
+    skaircolumns.cpp
     skairdebug.cpp
     skairdistil.cpp
     skairevict.cpp
@@ -30,6 +31,7 @@ target_sources(
       FILES
         skair.h
         skaircensus.h
+        skaircolumns.h
         skairdebug.h
         skairdistil.h
         skairevict.h
@@ -46,6 +48,26 @@ target_link_libraries(skair PRIVATE al::flags ll::recast PUBLIC skcensus)
 
 target_precompile_headers(skair REUSE_FROM llprecompiled)
 
+# The column raster clips triangles at cell edges, and a triangle that only
+# touches a column there gives it a span or not by the last bit of the clip.
+# Built with IEEE's arithmetic a step at a time, without the viewer's float
+# flags (00-Common.cmake), it clips the same on every compiler, so two tiles
+# agree at their seam and the raster matches its oracle exactly.
+if(WINDOWS)
+  set(skair_ieee_options /fp:precise)
+else()
+  set(
+    skair_ieee_options
+    -ffp-contract=off
+    -fno-associative-math
+    -fno-reciprocal-math
+  )
+endif()
+set_source_files_properties(
+  skaircolumns.cpp
+  PROPERTIES COMPILE_OPTIONS "${skair_ieee_options}" SKIP_PRECOMPILE_HEADERS TRUE
+)
+
 if(AL_BUILD_TESTS)
   al_add_test_binary(
     skair_tests
@@ -53,6 +75,7 @@ if(AL_BUILD_TESTS)
     SOURCES
       tests/skair_test.cpp
       tests/skairbytes_test.cpp
+      tests/skaircolumns_test.cpp
       tests/skairdistil_test.cpp
       tests/skairfaceoffsets_test.cpp
       tests/skairraster_test.cpp
