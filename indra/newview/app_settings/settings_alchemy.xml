@@ -5262,6 +5262,51 @@
             <key>Value</key>
             <integer>1</integer>
         </map>
+        <key>SkoomaLocalChatModern</key>
+        <map>
+            <key>Comment</key>
+            <string>Show nearby chat in the game-style local chat window instead of toasts and the chat bar.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SkoomaLocalChatStyle</key>
+        <map>
+            <key>Comment</key>
+            <string>Look of the game-style local chat: 0 cards, 1 minimal lines.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>S32</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SkoomaLocalChatFadeDelay</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds a message in the game-style local chat stays fully visible before it fades.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>8.0</real>
+        </map>
+        <key>SkoomaLocalChatFadeTime</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds a message in the game-style local chat takes to fade out.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>2.0</real>
+        </map>
+<!-- </SK:Nexii> -->
     </map>
 </llsd>
 

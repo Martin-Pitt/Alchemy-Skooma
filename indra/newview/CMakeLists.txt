@@ -998,6 +998,7 @@ if(AL_BUILD_VIEWER)
     rlvhandler.cpp
     rlvhelper.cpp
     rlvinventory.cpp
+    skfloaterlocalchat.cpp
     skhover.cpp
     skoverlay.cpp
     rlvlocks.cpp
@@ -1877,6 +1878,7 @@ if(AL_BUILD_VIEWER)
     rlvhandler.h
     rlvhelper.h
     rlvinventory.h
+    skfloaterlocalchat.h
     skhover.h
     skoverlay.h
     rlvlocks.h

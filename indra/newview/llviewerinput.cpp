@@ -53,6 +53,7 @@
 #include "rlvactions.h"
 #include "rlvhandler.h"
 #include "rlvhelper.h"
+#include "skfloaterlocalchat.h" // <SK:Nexii> Modern local chat
 // [/RLVa:KB]
 
 //
@@ -692,6 +693,13 @@ bool start_chat( EKeystate s )
     if (KEYSTATE_DOWN != s) return true;
 
     // start chat
+    // <SK:Nexii> Modern local chat takes Enter-to-chat.
+    if (SKFloaterLocalChat::modernEnabled())
+    {
+        SKFloaterLocalChat::startChat(nullptr);
+        return true;
+    }
+    // </SK:Nexii>
     if (!ALChatBar::shouldUseChatBar())
     {
         LLFloaterIMNearbyChat::startChat(nullptr);
@@ -709,6 +717,13 @@ bool start_gesture( EKeystate s )
     if (KEYSTATE_UP == s &&
         ! (focus_ctrlp && focus_ctrlp->acceptsTextInput()))
     {
+        // <SK:Nexii> Modern local chat takes the gesture slash.
+        if (SKFloaterLocalChat::modernEnabled())
+        {
+            SKFloaterLocalChat::startChat(SKFloaterLocalChat::currentChat().empty() ? "/" : nullptr);
+            return true;
+        }
+        // </SK:Nexii>
         if (!ALChatBar::shouldUseChatBar())
         {
             if ((LLFloaterReg::getTypedInstance<LLFloaterIMNearbyChat>("nearby_chat"))->getCurrentChat().empty())

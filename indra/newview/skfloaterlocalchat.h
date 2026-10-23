@@ -1,0 +1,144 @@
+/**
+ * @file skfloaterlocalchat.h
+ * @brief Game-style nearby chat: messages over the world that fade, with the input shown only while chatting.
+ *
+ * $LicenseInfo:firstyear=2026&license=viewerlgpl$
+ * Alchemy Viewer Source Code
+ * Copyright (C) 2026, Alchemy Viewer Project.
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation;
+ * version 2.1 of the License only.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * $/LicenseInfo$
+ */
+
+#ifndef SK_FLOATERLOCALCHAT_H
+#define SK_FLOATERLOCALCHAT_H
+
+#include "llfloater.h"
+#include "llchat.h"
+#include "llfontgl.h"
+
+#include <deque>
+
+class LLChatEntry;
+class LLFontGL;
+class LLMenuButton;
+
+class SKFloaterLocalChat final : public LLFloater
+{
+public:
+    AL_VIEW_TYPE(SKFloaterLocalChat, LLFloater);
+
+    SKFloaterLocalChat(const LLSD& key);
+    ~SKFloaterLocalChat() override;
+
+    /// Whether this floater replaces the nearby toasts and chat bar (SkoomaLocalChatModern).
+    static bool modernEnabled();
+    /// Takes a nearby chat message as the toasts would have.
+    static void addChat(const LLChat& chat, const LLSD& args);
+    /// Shows the input with the cursor at the end, starting it with line when given.
+    static void startChat(const char* line);
+    static void stopChat();
+    /// The text being typed, empty when the floater does not exist.
+    static std::string currentChat();
+
+    bool postBuild() override;
+    void draw() override;
+    void reshape(S32 width, S32 height, bool called_from_parent = true) override;
+    bool handleKeyHere(KEY key, MASK mask) override;
+    bool handleMouseDown(S32 x, S32 y, MASK mask) override;
+    bool handleHover(S32 x, S32 y, MASK mask) override;
+    bool handleScrollWheel(S32 x, S32 y, LLScrollDelta delta) override;
+    void onMouseEnter(S32 x, S32 y, MASK mask) override;
+    void onMouseLeave(S32 x, S32 y, MASK mask) override;
+    void onFocusLost() override;
+
+private:
+    enum EStyle : S32 { STYLE_CARDS = 0, STYLE_MINIMAL = 1 };
+
+    struct Link
+    {
+        S32 mBegin = 0; // bytes into the body
+        S32 mEnd = 0;   // exclusive
+        std::string mUrl;
+    };
+
+    struct Message
+    {
+        std::string mBody;  // what is drawn; may start with the speaker's name
+        std::string mName;  // the card header
+        std::string mSenderUrl;
+        LLUUID mFromID;
+        LLColor4 mTextColor;
+        LLColor4 mNameColor;
+        S32 mNameLen = 0;   // bytes of the name at the start of mBody, 0 for none
+        EChatSourceType mSource = CHAT_SOURCE_SYSTEM;
+        bool mEmote = false;
+        F64 mArrival = 0.0;
+        std::vector<Link> mLinks;
+    };
+
+    struct Row
+    {
+        S32 mMessage = 0;   // -1 for a card header
+        S32 mCard = 0;
+        S32 mBegin = 0;
+        S32 mLength = 0;
+        S32 mPadTop = 0;
+        S32 mPadBottom = 0;
+        S32 mGap = 0;       // space below the row, outside its card
+        S32 mBottom = 0;    // from the bottom of the content
+        S32 height() const;
+    };
+
+    struct Card
+    {
+        S32 mFirstMessage = 0;
+        S32 mLastMessage = 0;
+        S32 mFirstRow = 0;
+        S32 mLastRow = 0;
+    };
+
+    void backfill(bool skip_last);
+    void appendChat(const LLChat& chat, const LLSD& args, F64 arrival);
+    void showInput(bool show);
+    void sendChat(EChatType type);
+    void invalidateLayout() { mLayoutDirty = true; }
+    void layout();
+    void layoutCog();
+    LLRect contentRect() const;
+    bool expanded() const;
+    F32 cardAlpha(const Card& card, F64 now) const;
+    S32 lineHeight(const Row& row) const;
+    /// The url under a point in the floater, empty when none.
+    std::string urlAt(S32 x, S32 y) const;
+    void drawRowText(const Row& row, S32 x, S32 y, F32 alpha, LLFontGL::ShadowType shadow) const;
+    void onStyleMenu(const LLSD& param);
+    bool onStyleCheck(const LLSD& param) const;
+
+    LLChatEntry* mInput = nullptr;
+    LLMenuButton* mCog = nullptr;
+    std::deque<Message> mMessages;
+    std::vector<Card> mCards;
+    std::vector<Row> mRows;
+    S32 mContentHeight = 0;
+    S32 mScroll = 0;            // pixels scrolled up from the newest message
+    S32 mLayoutWidth = -1;
+    S32 mLayoutStyle = -1;
+    bool mLayoutDirty = true;
+    bool mHovered = false;
+    boost::signals2::connection mFontConnection;
+};
+
+#endif // SK_FLOATERLOCALCHAT_H
