@@ -32,6 +32,7 @@
 #include "llpointer.h"
 #include "skoutlinecapture.h"
 #include "llrendertarget.h"
+#include "skchatunfurlcache.h"
 
 #include <deque>
 
@@ -101,6 +102,8 @@ private:
         S32 mNameWidth = 0; // measured at layout
         S32 mTimeWidth = 0; // the timestamp and its gap, 0 for none
         std::vector<Link> mLinks;
+        SKChatEmbedPtr mEmbed; // the preview of the first link that has one
+        S32 mEmbedWidth = 0;   // measured at layout
     };
 
     struct Row
@@ -113,6 +116,7 @@ private:
         S32 mPadBottom = 0;
         S32 mGap = 0;       // space below the row, outside its card
         S32 mBottom = 0;    // from the bottom of the content
+        bool mEmbed = false; // the message's link preview rather than a line of it
         S32 height() const;
     };
 
@@ -153,6 +157,9 @@ private:
     void drawObjectIcon(const Message& first, S32 left, S32 top, S32 width, const LLColor4& color, F64 now);
     U64 iconStamp(const Message& first) const;
     void drawAvatarIcon(const Message& first, S32 left, S32 top, const LLColor4& color);
+    void drawEmbed(const Message& msg, S32 x, S32 y, F32 alpha) const;
+    /// Starts the lookups of the previews in a card about to be drawn.
+    void requestEmbeds(const Card& card);
     void onStyleMenu(const LLSD& param);
     bool onStyleCheck(const LLSD& param) const;
 
@@ -210,6 +217,8 @@ private:
     LLRenderTarget mMask;       // the messages, premultiplied, for the scroll mask
     MaskKey mMaskKey;           // what mMask holds
     U32 mLayoutGeneration = 0;  // counts layouts, so mMask knows the rows moved
+    SKChatUnfurlCache mUnfurl;
+    U32 mUnfurlGeneration = 0;  // the cache's generation the layout was made for
 };
 
 #endif // SK_FLOATERLOCALCHAT_H
