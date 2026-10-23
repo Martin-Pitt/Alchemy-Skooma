@@ -756,6 +756,19 @@ void SKFloaterLocalChat::draw()
         }
     }
 
+    if (mHovered && opaque && mContentHeight > view_height)
+    {
+        // A thin scroll thumb on hover, its position read from the bottom.
+        constexpr S32 THUMB_W = 3;
+        const S32 track = view_height;
+        const S32 thumb = llmax(12, track * view_height / mContentHeight);
+        const S32 range = mContentHeight - view_height;
+        const S32 bottom = content.mBottom + (track - thumb) * mScroll / range;
+        static LLUIColor thumb_color = LLUIColorTable::instance().getColor("White");
+        const S32 right = getRect().getWidth() - 2;
+        gl_rect_2d(right - THUMB_W, bottom + thumb, right, bottom, thumb_color.get() % 0.35f);
+    }
+
     LLFloater::draw();
 }
 
@@ -843,7 +856,8 @@ bool SKFloaterLocalChat::handleHover(S32 x, S32 y, MASK mask)
 bool SKFloaterLocalChat::handleScrollWheel(S32 x, S32 y, LLScrollDelta delta)
 {
     const S32 clicks = delta.mClicks;
-    if (LLFloater::handleScrollWheel(x, y, delta))
+    // LLFloater::handleScrollWheel always claims the wheel, so only a child that scrolls may take it first.
+    if (childrenHandleScrollWheel(x, y, delta))
     {
         return true;
     }
