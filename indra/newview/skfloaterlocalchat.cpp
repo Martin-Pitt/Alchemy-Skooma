@@ -81,7 +81,6 @@ constexpr S32 ICON_PX = 28;        // card icon height; avatars are this wide, o
 constexpr S32 ICON_MAX_ASPECT = 4;
 constexpr S32 DISC_GAP = 6;
 constexpr F64 GLYPH_CHECK_SECONDS = 0.5; // how often an object speaker's glyph is looked up
-constexpr F32 GLYPH_BACK_ALPHA = 0.25f;  // the square behind a glyph
 constexpr S32 INPUT_HEIGHT = 24;
 constexpr S32 INPUT_GAP = 4;
 constexpr S32 INSET = 8; // inside the backdrop's border
@@ -1533,11 +1532,8 @@ void SKFloaterLocalChat::drawObjectIcon(const Message& first, S32 left, S32 top,
         return;
     }
 
-    // The silhouette in the speaker's colour over a dimmed box of the card's icon size, fitted with its aspect kept.
+    // The silhouette alone in the speaker's colour, fitted to the card's icon size with its aspect kept.
     const S32 box = llmax(width, ICON_PX);
-    LLColor4 back = color;
-    back.mV[VALPHA] *= GLYPH_BACK_ALPHA;
-    gl_rect_2d(left, top, left + box, top - ICON_PX, back);
     const F32 scale = llmin((F32)box / w, (F32)ICON_PX / h);
     const F32 gw = w * scale;
     const F32 gh = h * scale;
