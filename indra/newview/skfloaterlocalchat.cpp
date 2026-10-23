@@ -105,6 +105,19 @@ LLFontGL* time_font()
     return LLFontGL::getFontSansSerifSmall();
 }
 
+// Set while the messages draw into the mask's target.
+bool sDrawingMask = false;
+
+// Into the mask, alpha has to accumulate as coverage. The fonts reset the blend to BT_ALPHA, which squares a shape's
+// alpha in the target, so every shape drawn after text asks for this again.
+void shape_blend()
+{
+    if (sDrawingMask)
+    {
+        gGL.blendFunc(LLRender::BF_SOURCE_ALPHA, LLRender::BF_ONE_MINUS_SOURCE_ALPHA, LLRender::BF_ONE, LLRender::BF_ONE_MINUS_SOURCE_ALPHA);
+    }
+}
+
 LLFontGL* embed_font()
 {
     return LLFontGL::getFontSansSerifSmall();
@@ -906,6 +919,7 @@ void SKFloaterLocalChat::drawEmbed(const Message& msg, S32 x, S32 y, F32 alpha) 
     const SKChatEmbed& embed = *msg.mEmbed;
     const S32 w = msg.mEmbedWidth;
     const S32 h = embed_height();
+    shape_blend();
     card_image->draw(x, y, w, h, card_color.get() % (0.45f * alpha));
 
     gGL.getTextureSlot(0)->unbind();
@@ -974,6 +988,7 @@ void SKFloaterLocalChat::drawMessages(const LLRect& content, F64 now, bool full,
         const Message& first = mMessages[card.mFirstMessage];
         if (cards)
         {
+            shape_blend();
             card_image->draw(content.mLeft, card_bottom, card.mWidth, card_top - card_bottom, card_color.get() % (CARD_ALPHA * alpha));
             if (!first.mName.empty())
             {
@@ -1096,7 +1111,10 @@ void SKFloaterLocalChat::drawMaskedMessages(const LLRect& content, F64 now, bool
         mMaskKey = key;
         LLGLDisable scissor(GL_SCISSOR_TEST);
         mMask.bindTarget();
+        const LLColor4 clear_color = gGL.getClearColor();
+        gGL.setClearColor(LLColor4::transparent);
         mMask.clear(GL_COLOR_BUFFER_BIT);
+        gGL.setClearColor(clear_color);
         gGL.matrixMode(LLRender::MM_PROJECTION);
         gGL.pushMatrix();
         gGL.loadIdentity();
@@ -1109,9 +1127,11 @@ void SKFloaterLocalChat::drawMaskedMessages(const LLRect& content, F64 now, bool
         gGL.scaleUI(scale.mV[VX], scale.mV[VY], 1.f);
         LLUI::translate((F32)-content.mLeft, (F32)-content.mBottom);
         // Premultiplied: colour blends over, alpha accumulates as coverage.
-        gGL.blendFunc(LLRender::BF_SOURCE_ALPHA, LLRender::BF_ONE_MINUS_SOURCE_ALPHA, LLRender::BF_ONE, LLRender::BF_ONE_MINUS_SOURCE_ALPHA);
+        sDrawingMask = true;
+        shape_blend();
         drawMessages(content, now, full, cards);
         gGL.flush();
+        sDrawingMask = false;
         gGL.setSceneBlendType(LLRender::BT_ALPHA);
         LLUI::popMatrix();
         gGL.matrixMode(LLRender::MM_PROJECTION);
