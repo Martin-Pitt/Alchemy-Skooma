@@ -419,6 +419,18 @@ public:
     void uniformMatrix3fv(U32 index, const LLMatrix3a& m);
 
     void uniform1i(const LLStaticHashedString& uniform, GLint i);
+    // <SK:Nexii> Hashed setters for Skooma programs whose uniform names are not reserved.
+    void uniform1f(const LLStaticHashedString& uniform, GLfloat v);
+    void uniform1ui(const LLStaticHashedString& uniform, GLuint v);
+    void uniform2f(const LLStaticHashedString& uniform, GLfloat x, GLfloat y);
+    void uniform3f(const LLStaticHashedString& uniform, GLfloat x, GLfloat y, GLfloat z);
+    void uniform4f(const LLStaticHashedString& uniform, GLfloat x, GLfloat y, GLfloat z, GLfloat w);
+    void uniform1fv(const LLStaticHashedString& uniform, U32 count, const GLfloat* v);
+    void uniform4fv(const LLStaticHashedString& uniform, U32 count, const GLfloat* v);
+    void uniform4iv(const LLStaticHashedString& uniform, U32 count, const GLint* v);
+    void uniformMatrix3fv(const LLStaticHashedString& uniform, U32 count, GLboolean transpose, const GLfloat* v);
+    void uniformMatrix4fv(const LLStaticHashedString& uniform, U32 count, GLboolean transpose, const GLfloat* v);
+    // </SK:Nexii>
 
     void setMinimumAlpha(F32 minimum);
 
