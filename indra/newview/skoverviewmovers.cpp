@@ -104,16 +104,16 @@ bool SKOverviewMovers::update()
         {
             mStamp = snap->mStamp;
             std::set<LLUUID> roots;
-            for (const sknav::RecordPtr& rec : snap->mRecords)
+            for (const skworld::RecordPtr& rec : snap->mRecords)
             {
                 if (rec && rec->mDynamic)
                 {
                     roots.insert(rec->mRoot);
                 }
             }
-            for (const sknav::Feature& f : snap->mFeatures)
+            for (const skworld::Feature& f : snap->mFeatures)
             {
-                if (f.mKind == sknav::FeatureKind::ELEVATOR || f.mKind == sknav::FeatureKind::VEHICLE)
+                if (f.mKind == skworld::FeatureKind::ELEVATOR || f.mKind == skworld::FeatureKind::VEHICLE)
                 {
                     roots.insert(f.mRoots.begin(), f.mRoots.end());
                 }

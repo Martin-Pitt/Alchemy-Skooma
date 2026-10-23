@@ -30,6 +30,7 @@
 
 class LLTextureEntry;
 class LLViewerObject;
+class LLViewerTexture;
 
 /// How the renderer will blend a face: pbr-blend, pbr-mask, pbr-opaque,
 /// none, blend, mask, emissive or default.
@@ -37,6 +38,13 @@ const char* skFaceAlphaMode(const LLTextureEntry* te);
 
 /// The PBR base colour's alpha, which multiplies the tint on a PBR face; 1 without one.
 F32 skFacePbrAlpha(const LLTextureEntry* te);
+
+/// The image a face draws: a PBR face its material's base colour, any other its own texture.
+const LLViewerTexture* skFaceImage(const LLViewerObject* object, U8 face);
+
+/// Whether one face can be seen through: set to blend whatever its tint, faint under blend, or the stock
+/// transparent texture.
+bool skFaceSeeThrough(const LLViewerObject* object, U8 face);
 
 /// SL's link number: the root is 1 and its non-avatar children count from 2.
 S32 skLinkNumber(const LLViewerObject* object);

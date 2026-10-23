@@ -1965,6 +1965,7 @@ if(AL_BUILD_VIEWER)
     skfloatertacticaloptions.cpp
     skoverviewcapture.cpp
     skoverviewcensus.cpp
+    skoverviewcover.cpp
     skoverviewcuttable.cpp
     skoverviewmovers.cpp
     skoverviewprobes.cpp
@@ -1990,6 +1991,7 @@ if(AL_BUILD_VIEWER)
     skpopuplayout.h
     skoverviewcapture.h
     skoverviewcensus.h
+    skoverviewcover.h
     skoverviewcuttable.h
     skoverviewmovers.h
     skoverviewprobes.h
@@ -2786,6 +2788,7 @@ if(AL_BUILD_TESTS)
       tests/skoverviewcuttable_test.cpp # <SK:Nexii> combat/minimap: the overview's cut table
       tests/skoverviewslots_test.cpp # <SK:Nexii> combat/minimap: the overview's census pages
       tests/skoverviewprobes_test.cpp # <SK:Nexii> combat/minimap: the tactical cut's probes
+      tests/skoverviewcover_test.cpp # <SK:Nexii> combat/minimap: the overview's cover verdicts
     UNIT
       alagentlocationformat.cpp
       alchattimestamp.cpp
@@ -2868,7 +2871,8 @@ if(AL_BUILD_TESTS)
       skoverviewcuttable.cpp # <SK:Nexii> combat/minimap: the overview's cut table
       skoverviewprobes.cpp # <SK:Nexii> combat/minimap: the tactical cut's probes
       skoverviewslots.cpp # <SK:Nexii> combat/minimap: the overview's census pages
-    LIBRARIES llui alscript ll::slua llxml ${test_libs}
+      skoverviewcover.cpp # <SK:Nexii> combat/minimap: the overview's cover verdicts
+    LIBRARIES llui alscript ll::slua llxml skcensus ${test_libs}
     SUPPORT
       newview_test_fakes
       newview_test_settings
