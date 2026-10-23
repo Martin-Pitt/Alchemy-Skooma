@@ -1718,7 +1718,7 @@ void renderOctree(LLSpatialGroup* group)
         {
             LLGLDepthTest gl_depth(false, false);
             gGL.flush();
-            glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+            gGL.setPolygonMode(GL_LINE);
 
             gGL.diffuseColor4f(1,0,0,group->mBuilt);
             gGL.setLineWidth(5.f);
@@ -1819,7 +1819,7 @@ void renderOctree(LLSpatialGroup* group)
                     gGL.popMatrix();
                 }
             }
-            glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+            gGL.setPolygonMode(GL_FILL);
             gDebugProgram.bind(); // make sure non-rigged variant is bound
             gGL.diffuseColor4f(1,1,1,1);
         }
@@ -2638,14 +2638,14 @@ void renderPhysicsShapes(LLSpatialGroup* group, bool wireframe)
                             LLVertexBuffer* buff = face->getVertexBuffer();
                             if (buff)
                             {
-                                glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+                                gGL.setPolygonMode(GL_LINE);
 
                                 buff->setBuffer();
                                 gGL.diffuseColor4f(0.2f, 0.5f, 0.3f, 0.5f);
                                 buff->draw(LLRender::TRIANGLES, buff->getNumIndices(), 0);
 
                                 gGL.diffuseColor4f(0.2f, 1.f, 0.3f, 0.75f);
-                                glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+                                gGL.setPolygonMode(GL_FILL);
                                 buff->draw(LLRender::TRIANGLES, buff->getNumIndices(), 0);
                             }
                         }
@@ -3041,7 +3041,7 @@ void renderRaycast(LLDrawable* drawablep)
                     dir.setSub(end, start);
 
                     gGL.flush();
-                    glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+                    gGL.setPolygonMode(GL_LINE);
 
                     {
                         //render face positions
@@ -3060,7 +3060,7 @@ void renderRaycast(LLDrawable* drawablep)
                     }
 
                     gGL.popMatrix();
-                    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+                    gGL.setPolygonMode(GL_FILL);
                 }
             }
         }
@@ -3648,7 +3648,7 @@ void LLSpatialPartition::renderDebug()
 
             LLGLEnable blend(GL_BLEND);
             LLGLDepthTest depth_under(GL_TRUE, GL_FALSE, GL_GREATER);
-            glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+            gGL.setPolygonMode(GL_LINE);
             gGL.diffuseColor4f(0.5f, 0.0f, 0, 0.25f);
 
             LLGLEnable offset(GL_POLYGON_OFFSET_LINE);
@@ -3657,7 +3657,7 @@ void LLSpatialPartition::renderDebug()
             LLOctreeRenderXRay xray(camera);
             xray.traverse(mOctree);
 
-            glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+            gGL.setPolygonMode(GL_FILL);
         }
     }
     gDebugProgram.unbind();
@@ -4222,6 +4222,25 @@ void LLCullResult::pushDrawInfo(U32 type, LLDrawInfo* draw_info)
     mRenderMapEnd[type] = &(mRenderMap[type][mRenderMapSize[type]]);
 }
 
+
+// <SK:Nexii> outline capture: drop draw infos from every render map, keeping the order of the rest.
+void LLCullResult::skEraseDrawInfos(const std::function<bool(const LLDrawInfo*)>& drop)
+{
+    for (U32 i = 0; i < LLRenderPass::NUM_RENDER_TYPES; i++)
+    {
+        U32 kept = 0;
+        for (U32 j = 0; j < mRenderMapSize[i]; ++j)
+        {
+            if (!drop(mRenderMap[i][j]))
+            {
+                mRenderMap[i][kept++] = mRenderMap[i][j];
+            }
+        }
+        mRenderMapSize[i] = kept;
+        mRenderMapEnd[i] = &(mRenderMap[i][kept]);
+    }
+}
+// </SK:Nexii>
 
 void LLCullResult::assertDrawMapsEmpty()
 {

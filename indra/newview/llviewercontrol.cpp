@@ -254,8 +254,8 @@ static bool handleNumpadControlChanged(const LLSD& newvalue)
 }
 
 
-// An input of the programs or the render resources (ALShaderInputs, ALRenderResourceInputs): the frame's application
-// latches the inputs again with its other changes, and reloads and reconciles only what they moved.
+// An input of the programs or the render resources (ALShaderInputs, ALRenderResourceInputs), or the frames' pacing: the
+// frame's application latches the inputs again with its other changes, and reloads and reconciles only what they moved.
 static bool handleRenderInputChanged(const LLSD& newvalue)
 {
     gPipeline.markRenderInputsDirty();
@@ -1021,6 +1021,8 @@ void settings_setup_listeners()
     setting_setup_signal_listener(gSavedSettings, "AlchemyRenderWaterHextile", handleRenderInputChanged);
     setting_setup_signal_listener(gSavedSettings, "AlchemyRenderWaterWaves", handleRenderInputChanged);
     setting_setup_signal_listener(gSavedSettings, "AlchemyRenderDisableCompute", handleRenderInputChanged);
+    setting_setup_signal_listener(gSavedSettings, "AlchemyRenderMaxFramesAhead", handleRenderInputChanged);
+    setting_setup_signal_listener(gSavedSettings, "AlchemyRenderPacingSlackWork", handleRenderInputChanged);
     setting_setup_signal_listener(gSavedSettings, "RenderShaderLightingMaxLevel", handleRenderInputChanged);
     setting_setup_signal_listener(gSavedSettings, "RenderReservedTextureIndices", handleRenderInputChanged);
     setting_setup_signal_listener(gSavedSettings, "OctreeStaticObjectSizeFactor", handleRepartition);
@@ -1034,6 +1036,7 @@ void settings_setup_listeners()
     setting_setup_signal_listener(gSavedSettings, "RenderAnisotropicLevel", handleAnisotropicFilteringChanged);
     gSavedSettings.getControl("RenderAnisotropicLevel")->getValidateSignal()->connect(boost::bind(&validateAnisotropicFiltering, _2));
     setting_setup_signal_listener(gSavedSettings, "RenderShadowResolutionScale", handleRenderInputChanged);
+    setting_setup_signal_listener(gSavedSettings, "AlchemyRenderSpotShadowMaxResolution", handleRenderInputChanged);
     setting_setup_signal_listener(gSavedSettings, "RenderGlow", handleRenderGlowChanged);
     setting_setup_signal_listener(gSavedSettings, "RenderGlowResolutionPow", handleRenderInputChanged);
     setting_setup_signal_listener(gSavedSettings, "RenderGlowHDR", handleRenderInputChanged);
@@ -1082,6 +1085,8 @@ void settings_setup_listeners()
     setting_setup_signal_listener(gSavedSettings, "AlchemyRenderShadowDepth32F", handleRenderInputChanged);
     setting_setup_signal_listener(gSavedSettings, "AlchemyRenderProbeAllShadowCascades", handleRenderInputChanged);
     setting_setup_signal_listener(gSavedSettings, "RenderDeferredSSAO", handleRenderInputChanged);
+    // How far SSAO's blur reaches, which decides whether a dispatch blurs it into a target of its own.
+    setting_setup_signal_listener(gSavedSettings, "RenderShadowBlurSize", handleRenderInputChanged);
 // [SL:KB] - Patch: Settings-RenderResolutionMultiplier | Checked: Catznip-5.4
     setting_setup_signal_listener(gSavedSettings, "RenderResolutionMultiplier", handleRenderInputChanged);
 // [/SL:KB]
