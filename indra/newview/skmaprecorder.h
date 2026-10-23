@@ -43,8 +43,9 @@ class SKMapRecorder
 public:
     static bool isRecording() { return sRecording; }
 
-    /// Once a frame, first in the navmesh's update: follows the setting, writes the frame's
-    /// positions and flushes what the last frame recorded.
+    /// Once a frame, before the census's update: follows the setting, writes the frame's
+    /// positions and flushes what the last frame recorded. While recording, it takes every
+    /// line the world layers trace (SKWorldTrace).
     static void onFrame();
     static void start();
     static void stop();

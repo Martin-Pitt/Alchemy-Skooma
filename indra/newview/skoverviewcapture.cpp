@@ -67,9 +67,8 @@
 #include "llhudnametag.h"
 #include "llviewerobjectlist.h"
 #include "pipeline.h"
-#include "sknavbuild.h"
-#include "sknavmesh.h"
-#include "sknavrooms.h"
+#include "skrooms.h"
+#include "llbase64.h"
 #include "skmappalette.h"
 #include "skworldcensus.h"
 #include "skworldmapmath.h"
@@ -329,10 +328,33 @@ struct SKOverviewCapture::RegionMap
 SKOverviewCapture::SKOverviewCapture()
 {
     SKModalView::instance().registerMode(this);
+    // The overview's last look per record, in the census file's record order, so an offline reference can judge
+    // invisible parts as the overview did: base64 of one byte a record, 255 for a part it never looked at.
+    skworld::CensusSection seen;
+    seen.mName = "overview.seen";
+    seen.mWrite = [this](std::ostream& out)
+    {
+        std::vector<U8> bytes;
+        if (const SKCensusSnapshotPtr snap = SKWorldCensus::instance().snapshot())
+        {
+            bytes.reserve(snap->mRecords.size());
+            for (const skworld::RecordPtr& r : snap->mRecords)
+            {
+                bytes.push_back(r ? mCensus.lastSeen(r->mPart) : 255);
+            }
+        }
+        out << '"' << LLBase64::encode(bytes.data(), bytes.size()) << '"';
+    };
+    seen.mRead = [](const LLSD&, U32) { return true; };
+    SKWorldCensus::instance().addCensusSection(seen);
 }
 
 SKOverviewCapture::~SKOverviewCapture()
 {
+    if (SKWorldCensus::instanceExists())
+    {
+        SKWorldCensus::getInstance()->removeCensusSection("overview.seen");
+    }
     if (SKModalView::instanceExists())
     {
         SKModalView::getInstance()->unregisterMode(this);
@@ -1905,7 +1927,7 @@ bool SKOverviewCapture::captureMap(RegionMap& map, LLViewerRegion* region, bool 
 
 std::shared_ptr<const SKOverviewCensus::RoomFootprint> SKOverviewCapture::roomAt(const LLVector3d& floor)
 {
-    const SKNavWorldViewPtr world = SKNavMesh::instanceExists() ? SKNavMesh::instance().view() : nullptr;
+    const SKWorldViewPtr world = SKRooms::instanceExists() ? SKRooms::instance().view() : nullptr;
     if (!world)
     {
         mRooms.clear();
@@ -1917,10 +1939,10 @@ std::shared_ptr<const SKOverviewCensus::RoomFootprint> SKOverviewCapture::roomAt
                                 [revision, now](const HeldRoom& r) { return r.mRevision != revision || now - r.mAt > 5.0; }),
                  mRooms.end());
     // The room's floor is the floor of the air column the point is in, not the point's own height.
-    SKNavWorldView::SpaceId start_id;
-    sknav::Enclosure start_gap;
+    SKWorldView::SpaceId start_id;
+    skworld::Enclosure start_gap;
     // The gap of a space below stands in only within a metre: further down it is another storey's (a spaceless pocket).
-    SKNavWorldView::AirColumn start_column;
+    SKWorldView::AirColumn start_column;
     world->columnAt(floor, start_column);
     bool start_found = start_column.airGapAt(floor.mdV[VZ] + 0.3, start_id, start_gap);
     if (start_found && start_gap.mFloor < floor.mdV[VZ] - 1.0)
@@ -1931,19 +1953,19 @@ std::shared_ptr<const SKOverviewCensus::RoomFootprint> SKOverviewCapture::roomAt
         start_id.mId = start_gap.mSpaceId;
     }
     if (!start_found || start_id.mId == 0 ||
-        (start_gap.mBucket != sknav::EnclosureBucket::INDOORS && start_gap.mBucket != sknav::EnclosureBucket::SHELTERED))
+        (start_gap.mBucket != skworld::EnclosureBucket::INDOORS && start_gap.mBucket != skworld::EnclosureBucket::SHELTERED))
     {
         return {};
     }
     // The start space's room on its own mesh, or none (the street, a roof, a flight, shelter with no building over it):
     // then the column is cut instead.
-    const SKNavWorldView::Mesh* mesh = nullptr;
-    const sknav::Room* room = world->roomOf(start_id, &mesh);
+    const SKWorldView::Mesh* mesh = nullptr;
+    const skworld::Room* room = world->roomOf(start_id, &mesh);
     if (!room || !mesh)
     {
         return {};
     }
-    const SKNavWorldView::RoomId id{ mesh->mId, room->mId };
+    const SKWorldView::RoomId id{ mesh->mId, room->mId };
     for (HeldRoom& held : mRooms)
     {
         if (held.mId == id && held.mHash == room->mHash)
@@ -1956,7 +1978,7 @@ std::shared_ptr<const SKOverviewCensus::RoomFootprint> SKOverviewCapture::roomAt
     footprint->mMesh = id.mMesh;
     footprint->mId = id.mId;
     footprint->mHash = room->mHash;
-    footprint->mOrigin = world->roomCellOrigin(*mesh, *room) - LLVector3d(sknav::RASTER_XY_M, sknav::RASTER_XY_M, 0.0);
+    footprint->mOrigin = world->roomCellOrigin(*mesh, *room) - LLVector3d(skworld::RASTER_XY_M, skworld::RASTER_XY_M, 0.0);
     footprint->mW = room->mCellW + 2;
     footprint->mH = room->mCellH + 2;
     if (!room->mTruncated && room->mMask.size() == (size_t)room->mCellW * room->mCellH)
@@ -1993,8 +2015,8 @@ bool SKOverviewCapture::outdoorsAt(const LLUUID& id, const LLVector3d& feet, F64
     {
         return seen->second.mOut;
     }
-    const SKNavWorldViewPtr world = SKNavMesh::instanceExists() ? SKNavMesh::instance().view() : nullptr;
-    const SKNavWorldView::AirColumn* column = columnOf(world, id, feet, now);
+    const SKWorldViewPtr world = SKRooms::instanceExists() ? SKRooms::instance().view() : nullptr;
+    const SKWorldView::AirColumn* column = columnOf(world, id, feet, now);
     const bool out = column && skmap::plan::outdoorsIn(*column, feet);
     auto inserted = mOutdoors.emplace(id, Outdoors());
     Outdoors& held = inserted.first->second;
@@ -2019,7 +2041,7 @@ bool SKOverviewCapture::outdoorsAt(const LLUUID& id, const LLVector3d& feet, F64
     return held.mOut;
 }
 
-const SKNavWorldView::AirColumn* SKOverviewCapture::columnOf(const SKNavWorldViewPtr& world, const LLUUID& id,
+const SKWorldView::AirColumn* SKOverviewCapture::columnOf(const SKWorldViewPtr& world, const LLUUID& id,
                                                              const LLVector3d& feet, F64 now)
 {
     if (!world)
@@ -2080,7 +2102,7 @@ void SKOverviewCapture::updateCut()
         if (!o.mOutdoors && where.mFound && (where.mIndoor || where.mBucket == skmap::plan::Bucket::SHELTERED))
         {
             o.mRoom = roomAt(floor);
-            o.mRoomCellM = sknav::RASTER_XY_M;
+            o.mRoomCellM = skworld::RASTER_XY_M;
         }
         mixPos(floor);
         mixPos(feet);
@@ -2100,8 +2122,8 @@ void SKOverviewCapture::updateCut()
         agent_feet.mdV[VZ] = SKMapPeople::feetZ(gAgentAvatarp);
     }
     skmap::plan::Whereabouts agent_where;
-    const SKNavWorldViewPtr world = SKNavMesh::instanceExists() ? SKNavMesh::instance().view() : nullptr;
-    if (const SKNavWorldView::AirColumn* column = columnOf(world, gAgent.getID(), agent_feet, now))
+    const SKWorldViewPtr world = SKRooms::instanceExists() ? SKRooms::instance().view() : nullptr;
+    if (const SKWorldView::AirColumn* column = columnOf(world, gAgent.getID(), agent_feet, now))
     {
         agent_where = skmap::plan::whereabouts(*world, *column, agent_feet);
     }

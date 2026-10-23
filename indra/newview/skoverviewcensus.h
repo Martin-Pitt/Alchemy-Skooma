@@ -48,7 +48,7 @@
 class LLVertexBuffer;
 class LLViewerRegion;
 
-namespace sknav
+namespace skworld
 {
     struct Record;
 }
@@ -98,7 +98,7 @@ namespace skoverview
 
     /// Whether the overview draws a record at all, and the class of its parts that is not per triangle (door, ladder,
     /// vehicle); NUM_CENSUS_CLASSES when each triangle is classed by its slope.
-    bool keepRecord(const sknav::Record& rec, CensusClass& fixed);
+    bool keepRecord(const skworld::Record& rec, CensusClass& fixed);
 
     /// A triangle's class from its unit normal's z and its part's height.
     CensusClass classifyTriangle(F32 nz, F32 part_height);
@@ -204,7 +204,7 @@ public:
     /// The air's room someone is in, its mask grown by a cell every way so a wall just past its last cell touches it.
     struct RoomFootprint
     {
-        LLUUID mMesh;           ///< the room's mesh and its id there, as SKNavWorldView::RoomId holds them
+        LLUUID mMesh;           ///< the room's mesh and its id there, as SKWorldView::RoomId holds them
         U32 mId = 0;
         U64 mHash = 0;          ///< the room's: moves only where its air moved
         LLVector3d mOrigin;     ///< global, the minimum corner of cell (0, 0)
@@ -277,11 +277,11 @@ private:
         bool mTest = false;     ///< an invisible part, judged by the cover test
         bool mPending = false;  ///< a neighbour's look is not known yet: no hatch yet
         U64 mKey = 0;           ///< its candidates' signatures, kinds and looks
-        std::vector<const sknav::Record*> mCandidates; ///< owned by the snapshot the job holds
+        std::vector<const skworld::Record*> mCandidates; ///< owned by the snapshot the job holds
     };
     /// The pass's records near an invisible part's bounds (global) that it may stand in for or add to.
     CoverInput coverInputFor(const LLUUID& part, const LLVector3d& lo, const LLVector3d& hi, const struct SKCensusSnapshot& snap);
-    /// The pass's cover candidates (sknav::coverPoolRecord, not restless) by index into the snapshot's records, filed
+    /// The pass's cover candidates (skoverview::coverPoolRecord, not restless) by index into the snapshot's records, filed
     /// by COVER_CELL_M cell in plan, with their looks.
     std::unordered_map<U64, std::vector<U32>> mCoverGrid;
     std::vector<U32> mCoverLarge;                   ///< those spanning too many cells to file
@@ -291,7 +291,7 @@ private:
     struct Verdict
     {
         U64 mKey = 0;           ///< the part's geometry and its CoverInput::mKey
-        U8 mVerdict = 0;        ///< sknav::CoverVerdict
+        U8 mVerdict = 0;        ///< skoverview::CoverVerdict
         bool mTooFine = false;
         F32 mOutsideM2 = 0.f;   ///< what sticks out past the colliding neighbours
         F32 mPartM2 = 0.f;
@@ -315,7 +315,7 @@ private:
         std::shared_ptr<const struct SKCensusSnapshot> mSnapshot; ///< owns the records and clusters below
         U64 mSignature = 0;
         U32 mGeneration = 0;
-        std::vector<const sknav::Record*> mKept;
+        std::vector<const skworld::Record*> mKept;
         std::vector<U8> mFixed;
         std::vector<bool> mVoidOnly;
         std::vector<RenderedPart> mSculpts;

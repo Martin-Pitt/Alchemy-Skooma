@@ -3392,18 +3392,6 @@ function="World.EnvPreset"
          label="Consoles"
          name="Consoles"
          tear_off="true">
-            <!-- <SK:Nexii> navmesh console -->
-            <menu_item_check
-             label="Navmesh Console"
-             name="SKNavmeshConsole">
-                <menu_item_check.on_check
-                 function="Floater.Visible"
-                 parameter="sk_navmesh" />
-                <menu_item_check.on_click
-                 function="Floater.Toggle"
-                 parameter="sk_navmesh" />
-            </menu_item_check>
-            <!-- </SK:Nexii> -->
             <menu_item_check
              label="Texture Console"
              name="Texture Console"
@@ -3976,16 +3964,191 @@ function="World.EnvPreset"
           </menu_item_check>
         </menu>
         <!-- </SK:Nexii> -->
-        <menu_item_check
-         label="Navmesh"
-         name="SKNavmesh">
-          <menu_item_check.on_check
-           function="Advanced.CheckInfoDisplay"
-           parameter="navmesh" />
-          <menu_item_check.on_click
-           function="Advanced.ToggleInfoDisplay"
-           parameter="navmesh" />
-        </menu_item_check>
+        <!-- <SK:Nexii> census: the world layers' debug overlays and the census export -->
+        <menu
+         create_jump_keys="true"
+         label="World"
+         name="SKWorld"
+         tear_off="true">
+          <menu_item_check
+           label="Overlays"
+           name="SKWorldOverlays"
+           tool_tip="Draw the world layers' debug overlays chosen below">
+            <menu_item_check.on_check
+             function="Advanced.CheckInfoDisplay"
+             parameter="world" />
+            <menu_item_check.on_click
+             function="Advanced.ToggleInfoDisplay"
+             parameter="world" />
+          </menu_item_check>
+          <menu_item_check
+           label="Census Shapes"
+           name="SKWorldOverlayCensus">
+            <menu_item_check.on_check
+             control="SKWorldOverlayCensus" />
+            <menu_item_check.on_click
+             function="ToggleControl"
+             parameter="SKWorldOverlayCensus" />
+          </menu_item_check>
+          <menu_item_check
+           label="Census Clusters"
+           name="SKWorldOverlayClusters">
+            <menu_item_check.on_check
+             control="SKWorldOverlayClusters" />
+            <menu_item_check.on_click
+             function="ToggleControl"
+             parameter="SKWorldOverlayClusters" />
+          </menu_item_check>
+          <menu_item_check
+           label="Census Features"
+           name="SKWorldOverlayFeatures">
+            <menu_item_check.on_check
+             control="SKWorldOverlayFeatures" />
+            <menu_item_check.on_click
+             function="ToggleControl"
+             parameter="SKWorldOverlayFeatures" />
+          </menu_item_check>
+          <!-- <SK:Nexii> air cells: the air overlays and status -->
+          <menu_item_check
+           label="Air Leaves"
+           name="SKAirOverlay1">
+            <menu_item_check.on_check
+             function="SK.CheckAirOverlay"
+             parameter="1" />
+            <menu_item_check.on_click
+             function="SK.SetAirOverlay"
+             parameter="1" />
+          </menu_item_check>
+          <menu_item_check
+           label="Air Gaps"
+           name="SKAirOverlay2">
+            <menu_item_check.on_check
+             function="SK.CheckAirOverlay"
+             parameter="2" />
+            <menu_item_check.on_click
+             function="SK.SetAirOverlay"
+             parameter="2" />
+          </menu_item_check>
+          <menu_item_check
+           label="Air Clearance"
+           name="SKAirOverlay5">
+            <menu_item_check.on_check
+             function="SK.CheckAirOverlay"
+             parameter="5" />
+            <menu_item_check.on_click
+             function="SK.SetAirOverlay"
+             parameter="5" />
+          </menu_item_check>
+          <menu_item_check
+           label="Air Face Offsets"
+           name="SKAirOverlay6">
+            <menu_item_check.on_check
+             function="SK.CheckAirOverlay"
+             parameter="6" />
+            <menu_item_check.on_click
+             function="SK.SetAirOverlay"
+             parameter="6" />
+          </menu_item_check>
+          <menu_item_check
+           label="Air Wall Faces"
+           name="SKAirOverlayFaces">
+            <menu_item_check.on_check
+             control="SKAirOverlayFaces" />
+            <menu_item_check.on_click
+             function="ToggleControl"
+             parameter="SKAirOverlayFaces" />
+          </menu_item_check>
+          <menu_item_check
+           label="Air Run-off"
+           name="SKAirOverlayRunoff">
+            <menu_item_check.on_check
+             control="SKAirOverlayRunoff" />
+            <menu_item_check.on_click
+             function="ToggleControl"
+             parameter="SKAirOverlayRunoff" />
+          </menu_item_check>
+          <menu_item_check
+           label="Air Sky Map"
+           name="SKAirOverlaySky">
+            <menu_item_check.on_check
+             control="SKAirOverlaySky" />
+            <menu_item_check.on_click
+             function="ToggleControl"
+             parameter="SKAirOverlaySky" />
+          </menu_item_check>
+          <menu_item_check
+           label="Air Tile Updates"
+           name="SKAirOverlayUpdates">
+            <menu_item_check.on_check
+             control="SKAirOverlayUpdates" />
+            <menu_item_check.on_click
+             function="ToggleControl"
+             parameter="SKAirOverlayUpdates" />
+          </menu_item_check>
+          <menu_item_call
+           label="Air Status"
+           name="SKShowAirStatus"
+           tool_tip="Show the air cells' meshes, tiles, raster time, memory and evictions">
+            <menu_item_call.on_click
+             function="SK.ShowAirStatus" />
+          </menu_item_call>
+          <!-- </SK:Nexii> -->
+          <!-- <SK:Nexii> rooms: the spaces, wind and enclosure overlays and status -->
+          <menu_item_check
+           label="Rooms Spaces"
+           name="SKRoomsOverlaySpaces">
+            <menu_item_check.on_check
+             control="SKRoomsOverlaySpaces" />
+            <menu_item_check.on_click
+             function="ToggleControl"
+             parameter="SKRoomsOverlaySpaces" />
+          </menu_item_check>
+          <menu_item_check
+           label="Air by Space"
+           name="SKAirOverlay3">
+            <menu_item_check.on_check
+             function="SK.CheckAirOverlay"
+             parameter="3" />
+            <menu_item_check.on_click
+             function="SK.SetAirOverlay"
+             parameter="3" />
+          </menu_item_check>
+          <menu_item_check
+           label="Air by Indoorness"
+           name="SKAirOverlay7">
+            <menu_item_check.on_check
+             function="SK.CheckAirOverlay"
+             parameter="7" />
+            <menu_item_check.on_click
+             function="SK.SetAirOverlay"
+             parameter="7" />
+          </menu_item_check>
+          <menu_item_check
+           label="Rooms Wind"
+           name="SKRoomsOverlayWind">
+            <menu_item_check.on_check
+             control="SKRoomsOverlayWind" />
+            <menu_item_check.on_click
+             function="ToggleControl"
+             parameter="SKRoomsOverlayWind" />
+          </menu_item_check>
+          <menu_item_call
+           label="Rooms Status"
+           name="SKShowRoomsStatus"
+           tool_tip="Show the rooms passes' meshes, timings, spaces, rooms and wind slabs">
+            <menu_item_call.on_click
+             function="SK.ShowRoomsStatus" />
+          </menu_item_call>
+          <!-- </SK:Nexii> -->
+          <menu_item_call
+           label="Export Census"
+           name="SKExportWorldCensus"
+           tool_tip="Write the last census and every world layer's section to a file in the logs folder">
+            <menu_item_call.on_click
+             function="SK.ExportWorldCensus" />
+          </menu_item_call>
+        </menu>
+        <!-- </SK:Nexii> -->
         <menu_item_check
          label="Occlusion"
          name="Occlusion">

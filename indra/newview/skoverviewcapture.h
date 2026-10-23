@@ -307,7 +307,7 @@ private:
     std::shared_ptr<const SKOverviewCensus::RoomFootprint> roomAt(const LLVector3d& floor);
     struct HeldRoom
     {
-        SKNavWorldView::RoomId mId;
+        SKWorldView::RoomId mId;
         U64 mHash = 0;          ///< the room's when its footprint was built
         U64 mRevision = 0;      ///< the world view's air revision then
         F64 mAt = 0.0;
@@ -324,13 +324,13 @@ private:
     };
     std::map<LLUUID, Outdoors> mOutdoors;
     /// Someone's air column, read once a frame for the cut, the dissolve and their whereabouts; null with no air.
-    const SKNavWorldView::AirColumn* columnOf(const SKNavWorldViewPtr& world, const LLUUID& id, const LLVector3d& feet, F64 now);
+    const SKWorldView::AirColumn* columnOf(const SKWorldViewPtr& world, const LLUUID& id, const LLVector3d& feet, F64 now);
     struct HeldColumn
     {
         F64 mAt = -1.0;
         U64 mRevision = 0;
         LLVector3d mXY;
-        SKNavWorldView::AirColumn mColumn;
+        SKWorldView::AirColumn mColumn;
     };
     std::map<LLUUID, HeldColumn> mColumns;
     /// What the last tactical capture showed: the same again reuses its image.

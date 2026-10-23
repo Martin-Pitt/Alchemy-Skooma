@@ -222,8 +222,10 @@
 #include "llsdserialize.h"
 
 #include "llworld.h"
-#include "sknavmesh.h" // <SK:Nexii> navmesh build tick
-#include "skworldcensus.h" // <SK:Nexii> navmesh census tick
+#include "skaircells.h" // <SK:Nexii> air cells tick
+#include "skmaprecorder.h" // <SK:Nexii> mini-map recorder tick
+#include "skrooms.h" // <SK:Nexii> rooms tick
+#include "skworldcensus.h" // <SK:Nexii> census tick
 #include "llhudeffecttrail.h"
 #include "llslurl.h"
 #include "llurlregistry.h"
@@ -2030,7 +2032,9 @@ bool LLAppViewer::cleanup()
 
     LLViewerObject::cleanupVOClasses();
 
-    // <SK:Nexii> navmesh census: release any held viewer objects before the avatar appearance dictionary below goes away
+    // <SK:Nexii> census, air cells, rooms: release any held viewer objects before the avatar appearance dictionary below goes away; the layers over the census go first
+    SKRooms::deleteSingleton();
+    SKAirCells::deleteSingleton();
     SKWorldCensus::deleteSingleton();
     // </SK:Nexii>
 
@@ -5925,10 +5929,12 @@ void LLAppViewer::idle()
         LL_PROFILE_ZONE_NAMED_CATEGORY_APP("world update");
         gPipeline.updateMove();
     }
-    // <SK:Nexii> navmesh: the census scans after objects moved, the mesh follows the census
+    SKMapRecorder::onFrame(); // <SK:Nexii> mini-map recorder: takes the world layers' trace lines while recording
+    // <SK:Nexii> census: scans after objects moved, the layers above follow it
     SKWorldCensus::instance().update();
-    SKNavMesh::instance().update();
     // </SK:Nexii>
+    SKAirCells::instance().update(); // <SK:Nexii> air cells: tiles follow the census
+    SKRooms::instance().update(); // <SK:Nexii> rooms: spaces follow the air
 
     LLWorld::getInstance()->updateParticles();
 

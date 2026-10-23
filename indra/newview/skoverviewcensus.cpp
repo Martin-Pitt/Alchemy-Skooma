@@ -37,9 +37,9 @@
 #include "llworld.h"
 #include "llvovolume.h"
 #include "skphysicsshape.h"
-#include "sknavbuild.h"
-#include "sknavinvisible.h"
-#include "sknavtypes.h"
+#include "skcensusrecord.h"
+#include "skcensustypes.h"
+#include "skoverviewcover.h"
 #include "skworldcensus.h"
 #include "lltextureentry.h"
 #include "llviewerobject.h"
@@ -68,34 +68,34 @@ namespace skoverview
         return cls < NUM_CENSUS_CLASSES ? codes[cls] : CODE_NONE;
     }
 
-    bool keepRecord(const sknav::Record& rec, CensusClass& fixed)
+    bool keepRecord(const skworld::Record& rec, CensusClass& fixed)
     {
         fixed = NUM_CENSUS_CLASSES;
         // A visible-only record is a cover candidate, never drawn: it would put every phantom decoration on the map.
-        if (rec.mRole != sknav::Role::NAV || !rec.mCollides || rec.mNavRole == sknav::NavRole::MATERIAL_VOLUME ||
-            rec.mNavRole == sknav::NavRole::EXCLUSION_VOLUME)
+        if (rec.mRole != skworld::Role::NAV || !rec.mCollides || rec.mNavRole == skworld::NavRole::MATERIAL_VOLUME ||
+            rec.mNavRole == skworld::NavRole::EXCLUSION_VOLUME)
         {
             return false;
         }
         switch (rec.mFeature)
         {
-            case sknav::FeatureKind::DOOR: fixed = DOOR; return true;
-            case sknav::FeatureKind::LADDER: fixed = LADDER; return true;
-            case sknav::FeatureKind::VEHICLE:
-            case sknav::FeatureKind::ELEVATOR: return false; // drawn live, at their current pose (skoverviewmovers.h)
+            case skworld::FeatureKind::DOOR: fixed = DOOR; return true;
+            case skworld::FeatureKind::LADDER: fixed = LADDER; return true;
+            case skworld::FeatureKind::VEHICLE:
+            case skworld::FeatureKind::ELEVATOR: return false; // drawn live, at their current pose (skoverviewmovers.h)
             default: break;
         }
-        if (rec.mExclude & sknav::EXCLUDE_AVATAR)
+        if (rec.mExclude & skworld::EXCLUDE_AVATAR)
         {
             fixed = DOOR; // door leaves are the only parts left out of the avatar class alone
             return true;
         }
-        if (rec.mProvenance == sknav::Provenance::BOX)
+        if (rec.mProvenance == skworld::Provenance::BOX)
         {
             fixed = PLACEHOLDER; // only its bounds are known: its own code, so the debug view can tell it apart
         }
         // Movers' census poses are a scan old; the markers show who is where.
-        return !rec.mDynamic && !(rec.mExclude & sknav::EXCLUDE_SOLID);
+        return !rec.mDynamic && !(rec.mExclude & skworld::EXCLUDE_SOLID);
     }
 
     CensusClass classifyTriangle(F32 nz, F32 part_height)
@@ -485,7 +485,7 @@ SKOverviewCensus::CoverInput SKOverviewCensus::coverInputFor(const LLUUID& part,
 {
     CoverInput in;
     in.mTest = true;
-    const F64 reach = sknav::InvisibleParams().mProxyTolerance;
+    const F64 reach = skoverview::InvisibleParams().mProxyTolerance;
     std::vector<U32> nearby = mCoverLarge;
     const S64 x0 = (S64)std::floor((lo.mdV[VX] - reach) / COVER_CELL_M);
     const S64 x1 = (S64)std::floor((hi.mdV[VX] + reach) / COVER_CELL_M);
@@ -507,7 +507,7 @@ SKOverviewCensus::CoverInput SKOverviewCensus::coverInputFor(const LLUUID& part,
     U64 key = 0; // summed: the records follow the object list's order, which churns
     for (const U32 index : nearby)
     {
-        const sknav::Record& rec = *snap.mRecords[index];
+        const skworld::Record& rec = *snap.mRecords[index];
         if (rec.mPart == part)
         {
             continue;
@@ -536,7 +536,7 @@ SKOverviewCensus::CoverInput SKOverviewCensus::coverInputFor(const LLUUID& part,
     }
     // The verdict does not depend on their order, the pieces the worker cuts do: by part, a surround after its twin.
     std::sort(in.mCandidates.begin(), in.mCandidates.end(),
-              [](const sknav::Record* a, const sknav::Record* b)
+              [](const skworld::Record* a, const skworld::Record* b)
               { return a->mPart < b->mPart || (a->mPart == b->mPart && a->mRole < b->mRole); });
     in.mKey = skoverview::scramble(key ^ part.getCRC32());
     return in;
@@ -577,7 +577,7 @@ bool SKOverviewCensus::update()
         mStamp = snap->mStamp;
         // A sum, blind to order: the records follow the object list, which reorders whenever an object comes or goes.
         U64 records = 0;
-        for (const sknav::RecordPtr& rec : snap->mRecords)
+        for (const skworld::RecordPtr& rec : snap->mRecords)
         {
             if (rec && isRestless(rec->mPart))
             {
@@ -589,10 +589,10 @@ bool SKOverviewCensus::update()
         mRecordsKey = records;
         // The clustered linksets take their cluster's heights as it moves; whether it stands on the land waits for the
         // next rebuild.
-        std::unordered_map<LLUUID, const sknav::Cluster*> cluster_of_root;
-        for (const sknav::ClusterPtr& c : snap->mClusters.mClusters)
+        std::unordered_map<LLUUID, const skworld::Cluster*> cluster_of_root;
+        for (const skworld::ClusterPtr& c : snap->mClusters.mClusters)
         {
-            for (const sknav::RecordPtr& rec : c->mRecords)
+            for (const skworld::RecordPtr& rec : c->mRecords)
             {
                 cluster_of_root.emplace(rec->mRoot, c.get());
             }
@@ -723,16 +723,16 @@ bool SKOverviewCensus::update()
     mCoverSeen.assign(snap->mRecords.size(), Seen::UNKNOWN);
     for (U32 index = 0; index < (U32)snap->mRecords.size(); ++index)
     {
-        const sknav::Record* rec = snap->mRecords[index].get();
+        const skworld::Record* rec = snap->mRecords[index].get();
         skoverview::CensusClass fixed;
-        if (!rec || (!sknav::coverPoolRecord(*rec) && !skoverview::keepRecord(*rec, fixed)))
+        if (!rec || (!skoverview::coverPoolRecord(*rec) && !skoverview::keepRecord(*rec, fixed)))
         {
             continue;
         }
         mCoverSeen[index] = seenOf(rec->mPart);
         mUnknownLook |= mCoverSeen[index] == Seen::UNKNOWN;
         // A restless part rekeys every pass; it is drawn live and covers nothing in the static buffers.
-        if (!sknav::coverPoolRecord(*rec) || isRestless(rec->mPart))
+        if (!skoverview::coverPoolRecord(*rec) || isRestless(rec->mPart))
         {
             continue;
         }
@@ -872,7 +872,7 @@ bool SKOverviewCensus::update()
     mix(mSurroundsSig);
     endEntry('U', LLUUID::null);
 
-    std::vector<const sknav::Record*> kept;
+    std::vector<const skworld::Record*> kept;
     std::vector<U8> fixed_classes;
     std::vector<bool> void_only;   // a surround record: only its triangles over no connected region are drawn
     std::vector<CoverInput> kept_cover;
@@ -880,13 +880,13 @@ bool SKOverviewCensus::update()
     std::unordered_map<LLUUID, Seen> large_logged; // this pass's large parts, so dropped parts leave the log's memory
     for (size_t index = 0; index < snap->mRecords.size(); ++index)
     {
-        const sknav::RecordPtr& rec = snap->mRecords[index];
+        const skworld::RecordPtr& rec = snap->mRecords[index];
         skoverview::CensusClass fixed;
         if (!rec || sculpted.count(rec->mPart))
         {
             continue;
         }
-        if (rec->mRole == sknav::Role::SURROUND)
+        if (rec->mRole == skworld::Role::SURROUND)
         {
             // A sim surround's rendered shape, in the void only: over land a phantom megasculpt would roof the region.
             if (rendered.count(rec->mPart))
@@ -960,12 +960,12 @@ bool SKOverviewCensus::update()
     // Each linkset is a group, so the tactical cut can take a building's linksets and leave its neighbours whole: a
     // cluster joins whatever touches, often a whole block. A level still keeps whole clusters, by the heights of the
     // cluster a linkset is in.
-    std::unordered_map<const sknav::Record*, U32> cluster_of;
+    std::unordered_map<const skworld::Record*, U32> cluster_of;
     cluster_of.reserve(snap->mRecords.size());
     const U32 clusters = (U32)snap->mClusters.mClusters.size();
     for (U32 c = 0; c < clusters; ++c)
     {
-        for (const sknav::RecordPtr& rec : snap->mClusters.mClusters[c]->mRecords)
+        for (const skworld::RecordPtr& rec : snap->mClusters.mClusters[c]->mRecords)
         {
             cluster_of[rec.get()] = c;
         }
@@ -1069,7 +1069,7 @@ bool SKOverviewCensus::update()
         }
         else
         {
-            const sknav::Record& rec = *job->mKept[i];
+            const skworld::Record& rec = *job->mKept[i];
             const LLViewerObject* root = gObjectList.findObject(rec.mRoot);
             anchor = root && !root->isDead() ? root->getPositionGlobal() : (rec.mMin + rec.mMax) * 0.5;
         }
@@ -1128,12 +1128,12 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildLinksets(const J
         }
         return false;
     };
-    const std::vector<const sknav::Record*>& kept = job.mKept;
+    const std::vector<const skworld::Record*>& kept = job.mKept;
     const std::vector<RenderedPart>& sculpts = job.mSculpts;
     std::vector<LLVector3> tris;
     Built::CoverStats stats;
     const auto cover_began = std::chrono::steady_clock::now();
-    const sknav::InvisibleParams cover_params;
+    const skoverview::InvisibleParams cover_params;
     std::vector<LLVector3> cover_scratch;
     // The verdicts this build asked for; the rest are dropped with the parts they were for.
     std::unordered_map<LLUUID, Verdict> verdicts;
@@ -1188,9 +1188,9 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildLinksets(const J
         }
         else
         {
-            const sknav::Record& rec = *kept[i];
+            const skworld::Record& rec = *kept[i];
             tris.clear();
-            sknav::emitRecord(rec, rec.mOrigin, tris);
+            skworld::emitRecord(rec, rec.mOrigin, tris);
             part_height = (F32)(rec.mMax.mdV[VZ] - rec.mMin.mdV[VZ]);
             fixed_class = job.mFixed[i];
         }
@@ -1225,8 +1225,8 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildLinksets(const J
                 ++stats.mJudged;
                 const auto verdict_began = std::chrono::steady_clock::now();
                 // The neighbours' shapes go into a scratch for this part alone: nothing of theirs outlives the verdict.
-                const std::vector<sknav::CoverCandidate> candidates = sknav::coverCandidates(cover->mCandidates, origin, cover_scratch);
-                sknav::CoverResult result = sknav::coverVerdict(*source, candidates, cover_params);
+                const std::vector<skoverview::CoverCandidate> candidates = skoverview::coverCandidates(cover->mCandidates, origin, cover_scratch);
+                skoverview::CoverResult result = skoverview::coverVerdict(*source, candidates, cover_params);
                 stats.mVerdictSeconds += std::chrono::duration<F64>(std::chrono::steady_clock::now() - verdict_began).count();
                 judged.mKey = part_key;
                 judged.mVerdict = (U8)result.mVerdict;
@@ -1237,19 +1237,19 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildLinksets(const J
                 {
                     judged.mProtruding = std::make_shared<const std::vector<LLVector3>>(std::move(result.mProtruding));
                 }
-                LL_DEBUGS("SKOverviewCover") << part << " " << sknav::coverVerdictName(result.mVerdict) << " "
+                LL_DEBUGS("SKOverviewCover") << part << " " << skoverview::coverVerdictName(result.mVerdict) << " "
                                              << result.mOutsideArea << " " << result.mPartArea << " "
                                              << (result.mSurfaceClip ? 1 : 0) << LL_ENDL;
             }
             verdicts[part] = judged;
             geom.mJudged.emplace_back(part, part_key);
-            sknav::CoverVerdict verdict = (sknav::CoverVerdict)judged.mVerdict;
+            skoverview::CoverVerdict verdict = (skoverview::CoverVerdict)judged.mVerdict;
             // A neighbour still showing its look may yet hold the part: a hatch waits for it.
-            if (cover->mPending && (verdict == sknav::CoverVerdict::EXTRA || verdict == sknav::CoverVerdict::BARRIER))
+            if (cover->mPending && (verdict == skoverview::CoverVerdict::EXTRA || verdict == skoverview::CoverVerdict::BARRIER))
             {
-                verdict = sknav::CoverVerdict::UNKNOWN_PHYSICS;
+                verdict = skoverview::CoverVerdict::UNKNOWN_PHYSICS;
             }
-            if (verdict != sknav::CoverVerdict::PROXY)
+            if (verdict != skoverview::CoverVerdict::PROXY)
             {
                 LLVector3 lo(1e30f, 1e30f, 1e30f), hi(-1e30f, -1e30f, -1e30f);
                 for (const LLVector3& v : *source)
@@ -1266,18 +1266,18 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildLinksets(const J
             }
             switch (verdict)
             {
-                case sknav::CoverVerdict::PROXY: ++geom.mCover.mProxies; break;
-                case sknav::CoverVerdict::EXTRA:
+                case skoverview::CoverVerdict::PROXY: ++geom.mCover.mProxies; break;
+                case skoverview::CoverVerdict::EXTRA:
                     ++geom.mCover.mExtra;
                     geom.mCover.mHatchedM2 += judged.mOutsideM2;
                     hatch = judged.mProtruding.get();
                     break;
-                case sknav::CoverVerdict::BARRIER:
+                case skoverview::CoverVerdict::BARRIER:
                     ++geom.mCover.mBarriers;
                     geom.mCover.mHatchedM2 += judged.mPartM2;
                     hatch = source;
                     break;
-                case sknav::CoverVerdict::UNKNOWN_PHYSICS:
+                case skoverview::CoverVerdict::UNKNOWN_PHYSICS:
                     ++geom.mCover.mUnknown;
                     geom.mCover.mTooFine += judged.mTooFine ? 1 : 0;
                     break;
@@ -1287,7 +1287,7 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildLinksets(const J
         // triangle-mesh physics shape): it has no inside, so the cut draws its edge but no section fill.
         // A physics mesh is open whatever its edges: the sim collides with it from either side, and its winding is as
         // uploaded, so it is drawn two-sided rather than as a solid.
-        bool open = !is_sculpt && !kept[i]->mSolid && kept[i]->mProvenance != sknav::Provenance::RENDER;
+        bool open = !is_sculpt && !kept[i]->mSolid && kept[i]->mProvenance != skworld::Provenance::RENDER;
         if (!open)
         {
             auto vertexKey = [](const LLVector3& v)
@@ -1405,8 +1405,8 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildLinksets(const J
                           {
                               return a < b;
                           }
-                          const sknav::Record& ra = *kept[a];
-                          const sknav::Record& rb = *kept[b];
+                          const skworld::Record& ra = *kept[a];
+                          const skworld::Record& rb = *kept[b];
                           return ra.mRole < rb.mRole || (ra.mRole == rb.mRole && ra.mSignature < rb.mSignature);
                       });
             // Everything the emitted triangles depend on, part by part: equal keys emit equal triangles.
@@ -1422,7 +1422,7 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildLinksets(const J
                 }
                 else
                 {
-                    const sknav::Record& rec = *kept[i];
+                    const skworld::Record& rec = *kept[i];
                     key = skoverview::scramble(key ^ rec.mSignature ^ ((U64)job.mFixed[i] << 48) ^ ((U64)rec.mRole << 56));
                     if (job.mVoidOnly[i])
                     {
@@ -1441,7 +1441,7 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildLinksets(const J
                     else
                     {
                         tris.clear();
-                        sknav::emitRecord(*kept[i], kept[i]->mOrigin, tris);
+                        skworld::emitRecord(*kept[i], kept[i]->mOrigin, tris);
                     }
                     key = skoverview::scramble(key ^ verdictKey(i, *cover, *source) ^ (cover->mPending ? 0x9e11u : 0x0u));
                 }
@@ -1557,7 +1557,7 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildLinksets(const J
         const auto cluster = job.mGroupCluster.find(group);
         if (cluster != job.mGroupCluster.end())
         {
-            const sknav::Cluster& c = *job.mSnapshot->mClusters.mClusters[cluster->second];
+            const skworld::Cluster& c = *job.mSnapshot->mClusters.mClusters[cluster->second];
             g.mMinZ = (F32)c.mMin.mdV[VZ];
             g.mMaxZ = (F32)c.mMax.mdV[VZ];
             linkset.mFootprint = { c.mMin, c.mMax };
@@ -2069,7 +2069,7 @@ void SKOverviewCensus::gatherSurrounds(const SKCensusSnapshot& snap)
     // (megasculpts, phantom or physics-less meshes and megaprims) are drawn from what is rendered, wherever they are
     // in the loaded regions, so the map shows the land they make.
     std::set<LLUUID> recorded;
-    for (const sknav::RecordPtr& rec : snap.mRecords)
+    for (const skworld::RecordPtr& rec : snap.mRecords)
     {
         if (rec && rec->mCollides) // a visible-only record is a box, no shape
         {

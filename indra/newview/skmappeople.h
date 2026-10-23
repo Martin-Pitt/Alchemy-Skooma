@@ -38,7 +38,6 @@
 #include "skmapview.h"
 
 class LLVOAvatar;
-#include "sknavwalls.h"
 #include "skmapplan.h"
 #include "skoutlinecapture.h"
 

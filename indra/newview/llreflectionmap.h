@@ -174,11 +174,11 @@ public:
     // orphan(), which drops it to 0 so a probe on its way out sorts behind every live one.
     U32 mPriority = 0;
 
-    // <SK:Nexii> Navmesh rooms probes: an automatic sphere held by a room part, and an octree probe a room part replaces.
-    bool mNavRooms = false;
+    // <SK:Nexii> Room probes: an automatic sphere held by a room part, and an octree probe a room part replaces.
+    bool mRoomProbe = false;
     // Census cluster fill: blends over the default probe and under every other probe (SKClusterProbes).
     bool mClusterFill = false;
-    bool mSuppressedByNavRooms = false;
+    bool mSuppressedByRoomProbe = false;
     bool mBlockedByCensus = false;
     // Set once the census pass has anchored this probe's placement (mGridOrigin/mGridRadius);
     // afterwards that pass owns re-nudging and the cleared radius.
