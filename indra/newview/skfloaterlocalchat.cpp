@@ -1518,7 +1518,7 @@ void SKFloaterLocalChat::updateTyping(F64 now)
             {
                 if (typing)
                 {
-                    mTypingScratch[0].push_back({ avatar->getID(), 0, now });
+                    mTypingScratch[0].push_back({ avatar->getID(), 0, 0, now });
                 }
             }
             else if (dist <= reach)
@@ -1538,7 +1538,7 @@ void SKFloaterLocalChat::updateTyping(F64 now)
                 }
                 if (typed_at >= 0.0)
                 {
-                    mTypingScratch[1].push_back({ avatar->getID(), llmax(1, (S32)ceil(dist - range)), typed_at });
+                    mTypingScratch[1].push_back({ avatar->getID(), llmax(1, (S32)ceil(dist - range)), (S32)ll_round((F32)dist), typed_at });
                 }
             }
         }
@@ -1597,7 +1597,7 @@ void SKFloaterLocalChat::makeTypingLabel(S32 group)
             name = getString("typing_someone");
         }
         args[i == 0 ? "[NAME]" : "[NAME2]"] = name;
-        args[i == 0 ? "[DIST]" : "[DIST2]"] = llformat("%d", typers[i].mMetres);
+        args[i == 0 ? "[DIST]" : "[DIST2]"] = llformat("%d", typers.size() == 1 ? typers[i].mMetres : typers[i].mDistance);
     }
     label = getString(std::string(prefix) + (typers.size() == 1 ? "one" : "two"), args);
 }

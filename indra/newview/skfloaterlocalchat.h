@@ -246,8 +246,9 @@ private:
     {
         LLUUID mID;
         S32 mMetres = 0;   // 0 within chat range, else the whole metres beyond it
+        S32 mDistance = 0; // whole metres away, for the bracketed form
         F64 mTypedAt = 0.0; // last seen typing, for the out-of-range grace
-        bool operator==(const Typer& o) const { return mID == o.mID && mMetres == o.mMetres; }
+        bool operator==(const Typer& o) const { return mID == o.mID && mMetres == o.mMetres && mDistance == o.mDistance; }
         bool operator<(const Typer& o) const { return mID < o.mID; }
     };
     std::vector<Typer> mTyping[2];    // within chat range and just beyond it, sorted
