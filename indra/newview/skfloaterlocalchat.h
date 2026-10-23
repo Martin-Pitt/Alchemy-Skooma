@@ -56,6 +56,7 @@ public:
     bool postBuild() override;
     void draw() override;
     void reshape(S32 width, S32 height, bool called_from_parent = true) override;
+    bool applyRectControl() override;
     bool handleKeyHere(KEY key, MASK mask) override;
     bool handleMouseDown(S32 x, S32 y, MASK mask) override;
     bool handleHover(S32 x, S32 y, MASK mask) override;
