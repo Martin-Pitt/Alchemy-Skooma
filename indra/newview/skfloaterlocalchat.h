@@ -110,6 +110,7 @@ private:
         S32 mLastMessage = 0;
         S32 mFirstRow = 0;
         S32 mLastRow = 0;
+        S32 mWidth = 0;     // the bubble, shrink-wrapped to its widest line
     };
 
     void backfill(bool skip_last);
