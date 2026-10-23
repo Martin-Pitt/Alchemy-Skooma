@@ -221,10 +221,15 @@ namespace
 
     /// Clip one triangle into the frame's columns, Recast-style: rows along SL x, then columns along SL y, in a
     /// fixed buffer on the stack. Each piece's height range becomes a span.
-    void emitTriangle(const Frame& g, const F32* t, U32 code, U32 cue, std::vector<RawSpan>& raw)
+    template<typename Store> void emitTriangle(const Frame& g, const F32* t, U8 code, U8 cue, Store& out)
     {
         F64 lo[3], hi[3];
-        V3 in[12], row[12], rest[12], cell[12], rrest[12];
+        V3 buf[5][12];
+        V3* in = buf[0];
+        V3* row = buf[1];
+        V3* rest = buf[2];
+        V3* cell = buf[3];
+        V3* rrest = buf[4];
         for (S32 k = 0; k < 3; ++k)
         {
             in[k].v[0] = t[k * 3];
@@ -248,15 +253,16 @@ namespace
         {
             return;
         }
-        // A cell earlier than the triangle's least x, so a face on that column edge is split there and goes to its solid's side.
-        const S32 ix0 = std::clamp(static_cast<S32>(std::floor((lo[0] - g.mOx) / cs)) - 1, -1, W - 1);
+        // On a column edge, the triangle's least x is split there first, so a face lying in it goes to its solid's side.
+        const F64 qx = (lo[0] - g.mOx) / cs, fx = std::floor(qx);
+        const S32 ix0 = std::clamp(static_cast<S32>(fx) - (qx == fx ? 1 : 0), -1, W - 1);
         const S32 ix1 = std::clamp(static_cast<S32>(std::floor((hi[0] - g.mOx) / cs)), 0, W - 1);
         S32 nin = 3;
         for (S32 ix = ix0; ix <= ix1; ++ix)
         {
             S32 nrow, nrest;
             dividePoly(in, nin, row, nrow, rest, nrest, g.mOx + (ix + 1) * cs, 0, facing_x);
-            std::copy(rest, rest + nrest, in);
+            std::swap(in, rest);
             nin = nrest;
             if (nrow < 3 || ix < 0)
             {
@@ -268,7 +274,8 @@ namespace
                 ylo = std::min(ylo, row[k].v[1]);
                 yhi = std::max(yhi, row[k].v[1]);
             }
-            S32 iy0 = static_cast<S32>(std::floor((ylo - g.mOy) / cs)) - 1;
+            const F64 qy = (ylo - g.mOy) / cs, fy = std::floor(qy);
+            S32 iy0 = static_cast<S32>(fy) - (qy == fy ? 1 : 0);
             S32 iy1 = static_cast<S32>(std::floor((yhi - g.mOy) / cs));
             if (iy1 < 0 || iy0 >= W)
             {
@@ -280,7 +287,7 @@ namespace
             {
                 S32 ncell, nrr;
                 dividePoly(row, nrow, cell, ncell, rrest, nrr, g.mOy + (iy + 1) * cs, 1, facing_y);
-                std::copy(rrest, rrest + nrr, row);
+                std::swap(row, rrest);
                 nrow = nrr;
                 if (ncell < 3 || iy < 0)
                 {
@@ -302,7 +309,7 @@ namespace
                 zhi = std::min(zhi, g.mRange);
                 const S32 smin = std::clamp(static_cast<S32>(std::floor(units(zlo, g.mUnit))), 0, COLUMN_HEIGHT_MAX - 1);
                 const S32 smax = std::clamp(static_cast<S32>(std::ceil(units(zhi, g.mUnit))), smin + 1, static_cast<S32>(COLUMN_HEIGHT_MAX));
-                raw.push_back(packSpan(static_cast<U32>(ix + iy * W), smin, smax, code, cue));
+                out.add(static_cast<size_t>(ix) + static_cast<size_t>(iy) * W, Span{ static_cast<U16>(smin), static_cast<U16>(smax), code, cue });
             }
         }
     }
@@ -417,7 +424,7 @@ namespace
     /// A body's inside as null spans: what each column's centre crosses an odd number of surfaces to reach,
     /// the crossings taken in pairs from the bottom up; a column the body only touches (odd) is filled from
     /// its lowest crossing to its highest. The same surface met at a shared edge is one crossing.
-    void fillBody(const Frame& g, const F32* verts, S32 begin, S32 end, Hits& hits, std::vector<RawSpan>& raw)
+    template<typename Store> void fillBody(const Frame& g, const F32* verts, S32 begin, S32 end, Hits& hits, Store& out)
     {
         const Box box = bodyBox(g, verts, begin, end);
         if (box.mX1 <= box.mX0 || box.mY1 <= box.mY0)
@@ -436,7 +443,7 @@ namespace
             const S32 smax = std::clamp(static_cast<S32>(std::ceil(units(top - g.mOz, g.mUnit))), 0, static_cast<S32>(COLUMN_HEIGHT_MAX));
             if (smax > smin)
             {
-                raw.push_back(packSpan(static_cast<U32>(ix + iy * g.mW), smin, smax, 0, 0));
+                out.add(static_cast<size_t>(ix) + static_cast<size_t>(iy) * g.mW, Span{ static_cast<U16>(smin), static_cast<U16>(smax), 0, 0 });
             }
         };
         F64 column[256];
@@ -475,12 +482,88 @@ namespace
 
     // ---- the raster's scratch --------------------------------------------------
 
+    /// Every column's merged spans, merged as they arrive: a few inline per column, a column that grows past
+    /// them moved to a block of the pool. Emission order is the merge order, as Recast's incremental inserts.
+    struct ColumnStore
+    {
+        static constexpr S32 INLINE = 8;
+        static constexpr U8 SPILLED = 0xff;
+        struct Spill
+        {
+            U32 mAt;
+            U32 mCount;
+            U32 mCap;
+        };
+        std::vector<U8> mCount;         ///< per column, its spans inline, or SPILLED
+        std::vector<Span> mInline;      ///< INLINE per column
+        std::vector<U32> mSpill;        ///< per spilled column, its entry in mSpills
+        std::vector<Spill> mSpills;
+        std::vector<Span> mPool;
+        S32 mClimb = 0;
+        U32* mTopWins = nullptr;
+        U32 mAdded = 0;
+
+        void reset(size_t columns, S32 climb, U32* top_wins)
+        {
+            mCount.assign(columns, 0);
+            mInline.resize(columns * INLINE);
+            mSpill.resize(columns);
+            mSpills.clear();
+            mPool.clear();
+            mClimb = climb;
+            mTopWins = top_wins;
+            mAdded = 0;
+        }
+
+        Span* list(size_t c, U32& n)
+        {
+            if (mCount[c] != SPILLED)
+            {
+                n = mCount[c];
+                return &mInline[c * INLINE];
+            }
+            const Spill& sp = mSpills[mSpill[c]];
+            n = sp.mCount;
+            return &mPool[sp.mAt];
+        }
+
+        void add(size_t c, Span in)
+        {
+            ++mAdded;
+            if (mCount[c] != SPILLED)
+            {
+                S32 n = mCount[c];
+                if (n < INLINE)
+                {
+                    addSpan(&mInline[c * INLINE], n, in, mClimb, mTopWins);
+                    mCount[c] = static_cast<U8>(n);
+                    return;
+                }
+                // Full: the column moves to the pool.
+                mSpill[c] = static_cast<U32>(mSpills.size());
+                mSpills.push_back({ static_cast<U32>(mPool.size()), static_cast<U32>(INLINE), 4 * INLINE });
+                mPool.resize(mPool.size() + 4 * INLINE);
+                std::copy(&mInline[c * INLINE], &mInline[c * INLINE] + INLINE, &mPool[mSpills.back().mAt]);
+                mCount[c] = SPILLED;
+            }
+            Spill& sp = mSpills[mSpill[c]];
+            if (sp.mCount + 1 > sp.mCap)
+            {
+                const U32 at = static_cast<U32>(mPool.size());
+                mPool.resize(mPool.size() + 2 * sp.mCap);
+                std::copy(mPool.begin() + sp.mAt, mPool.begin() + sp.mAt + sp.mCount, mPool.begin() + at);
+                sp.mAt = at;
+                sp.mCap *= 2;
+            }
+            S32 n = static_cast<S32>(sp.mCount);
+            addSpan(&mPool[sp.mAt], n, in, mClimb, mTopWins);
+            sp.mCount = static_cast<U32>(n);
+        }
+    };
+
     struct Scratch
     {
-        std::vector<RawSpan> mRaw;          ///< as emitted
-        std::vector<RawSpan> mSorted;       ///< by column, emission order kept; merged lists in place at each slice's start
-        std::vector<U32> mCount;            ///< per column: raw spans, then merged spans
-        std::vector<U32> mStart;            ///< columns + 1
+        ColumnStore mStore;
         std::vector<RawSpan> mBridges;
         std::vector<Span> mHeap;
         Hits mHits;
@@ -552,11 +635,7 @@ namespace
         out.mTop.clear();
         out.mCode.clear();
         out.mWalk.clear();
-        size_t total = bridges ? s.mBridges.size() : 0;
-        for (size_t c = 0; c < columns; ++c)
-        {
-            total += s.mCount[c];
-        }
+        const size_t total = s.mStore.mAdded + (bridges ? s.mBridges.size() : 0);
         out.mBottom.reserve(total);
         out.mTop.reserve(total);
         out.mCode.reserve(total);
@@ -567,7 +646,8 @@ namespace
         for (size_t c = 0; c < columns; ++c)
         {
             out.mStart[c] = static_cast<U32>(out.mTop.size());
-            const U32 n = s.mCount[c];
+            U32 n;
+            const Span* merged = s.mStore.list(c, n);
             size_t nb = 0;
             while (bridges && b + nb < s.mBridges.size() && spanColumn(s.mBridges[b + nb]) == c)
             {
@@ -585,7 +665,7 @@ namespace
             }
             for (U32 k = 0; k < n; ++k)
             {
-                col[k] = unpackSpan(s.mSorted[s.mStart[c] + k]);
+                col[k] = merged[k];
             }
             S32 m = static_cast<S32>(n);
             for (size_t k = 0; k < nb; ++k)
@@ -668,8 +748,8 @@ namespace skworld
         ColumnRasterStats local;
         ColumnRasterStats& st = stats ? *stats : local;
 
-        // Clip and emit: triangles in soup order, then the bodies' fills.
-        s.mRaw.clear();
+        // Clip and merge: triangles in soup order, then the bodies' fills, each span merged into its column as it comes.
+        s.mStore.reset(columns, g.mClimb, &st.mTopWins);
         {
             SK_WORLD_ZONE("air.raster.clip");
             S32 r[4];
@@ -687,7 +767,7 @@ namespace skworld
                         continue;
                     }
                 }
-                emitTriangle(g, soup.tri(t), soup.mCodes[t], soup.cue(t), s.mRaw);
+                emitTriangle(g, soup.tri(t), soup.mCodes[t], soup.cue(t), s.mStore);
             }
         }
         st.mClipMs += msSince(clock);
@@ -708,74 +788,12 @@ namespace skworld
                         continue;
                     }
                 }
-                fillBody(g, soup.mVerts.data(), begin, end, s.mHits, s.mRaw);
+                fillBody(g, soup.mVerts.data(), begin, end, s.mHits, s.mStore);
             }
         }
         st.mFillSolidMs += msSince(clock);
-        st.mRawSpans += static_cast<U32>(s.mRaw.size());
-
-        // Count, then scatter by column, emission order kept.
-        {
-            SK_WORLD_ZONE("air.raster.count");
-            s.mCount.assign(columns, 0);
-            for (const RawSpan v : s.mRaw)
-            {
-                ++s.mCount[spanColumn(v)];
-            }
-            s.mStart.resize(columns + 1);
-            s.mStart[0] = 0;
-            for (size_t c = 0; c < columns; ++c)
-            {
-                s.mStart[c + 1] = s.mStart[c] + s.mCount[c];
-            }
-        }
-        {
-            SK_WORLD_ZONE("air.raster.fill");
-            s.mSorted.resize(s.mRaw.size());
-            U32* at = s.mCount.data();
-            for (size_t c = 0; c < columns; ++c)
-            {
-                at[c] = s.mStart[c];
-            }
-            for (const RawSpan v : s.mRaw)
-            {
-                s.mSorted[at[spanColumn(v)]++] = v;
-            }
-        }
-        st.mCountMs += msSince(clock);
-
-        // Merge each column in a stack array; its merged list goes back over the start of its slice.
-        {
-            SK_WORLD_ZONE("air.raster.merge");
-            Span stack[STACK_SPANS];
-            for (size_t c = 0; c < columns; ++c)
-            {
-                const U32 a = s.mStart[c], n = s.mStart[c + 1] - a;
-                if (!n)
-                {
-                    s.mCount[c] = 0;
-                    continue;
-                }
-                Span* col = stack;
-                if (n > STACK_SPANS)
-                {
-                    s.mHeap.resize(n + 1);
-                    col = s.mHeap.data();
-                    ++st.mHeapColumns;
-                }
-                S32 m = 0;
-                for (U32 k = 0; k < n; ++k)
-                {
-                    addSpan(col, m, unpackSpan(s.mSorted[a + k]), g.mClimb, &st.mTopWins);
-                }
-                for (S32 k = 0; k < m; ++k)
-                {
-                    s.mSorted[a + k] = packSpan(static_cast<U32>(c), col[k].mMin, col[k].mMax, col[k].mCode, col[k].mCue);
-                }
-                s.mCount[c] = static_cast<U32>(m);
-            }
-        }
-        st.mMergeMs += msSince(clock);
+        st.mRawSpans += s.mStore.mAdded;
+        st.mHeapColumns += static_cast<U32>(s.mStore.mSpills.size());
 
         // Cut: the exclusion volumes clear the codes of the spans they overlap.
         {
@@ -811,13 +829,14 @@ namespace skworld
                         const S32 smin = static_cast<S32>(std::floor(units(lo - g.mOz, g.mUnit)));
                         const S32 smax = static_cast<S32>(std::ceil(units(hi - g.mOz, g.mUnit)));
                         const size_t c = static_cast<size_t>(ix) + static_cast<size_t>(iy) * W;
-                        for (U32 k = 0; k < s.mCount[c]; ++k)
+                        U32 n;
+                        Span* col = s.mStore.list(c, n);
+                        for (U32 k = 0; k < n; ++k)
                         {
-                            RawSpan& v = s.mSorted[s.mStart[c] + k];
-                            const Span sp = unpackSpan(v);
-                            if (sp.mCode && sp.mMin < smax && sp.mMax > smin)
+                            if (col[k].mCode && col[k].mMin < smax && col[k].mMax > smin)
                             {
-                                v = packSpan(static_cast<U32>(c), sp.mMin, sp.mMax, 0, 0);
+                                col[k].mCode = 0;
+                                col[k].mCue = 0;
                             }
                         }
                     }
@@ -832,7 +851,7 @@ namespace skworld
         {
             SK_WORLD_ZONE("air.raster.bridges");
             const S32 climb = g.mClimb;
-            const auto span = [&](size_t c, U32 k) { return unpackSpan(s.mSorted[s.mStart[c] + k]); };
+            ColumnStore& store = s.mStore;
             for (S32 ix = 1; ix + 1 < W; ++ix)
             {
                 for (S32 iy = 1; iy + 1 < W; ++iy)
@@ -845,25 +864,29 @@ namespace skworld
                     for (S32 axis = 0; axis < 2; ++axis)
                     {
                         const size_t na = axis == 0 ? c - W : c - 1, nb = axis == 0 ? c + W : c + 1;
-                        for (U32 i = 0; i < s.mCount[na]; ++i)
+                        U32 nna, nnb, nc;
+                        const Span* la = store.list(na, nna);
+                        const Span* lb = store.list(nb, nnb);
+                        const Span* lc = store.list(c, nc);
+                        for (U32 i = 0; i < nna; ++i)
                         {
-                            const Span a = span(na, i);
+                            const Span a = la[i];
                             if (a.mCode < 1)
                             {
                                 continue;
                             }
-                            for (U32 j = 0; j < s.mCount[nb]; ++j)
+                            for (U32 j = 0; j < nnb; ++j)
                             {
-                                const Span b = span(nb, j);
+                                const Span b = lb[j];
                                 if (b.mCode < 1 || std::abs(static_cast<S32>(a.mMax) - static_cast<S32>(b.mMax)) > climb)
                                 {
                                     continue;
                                 }
                                 const S32 lo = std::min(a.mMax, b.mMax), hi = std::max(a.mMax, b.mMax);
                                 bool skip = false;
-                                for (U32 k = 0; k < s.mCount[c] && !skip; ++k)
+                                for (U32 k = 0; k < nc && !skip; ++k)
                                 {
-                                    const Span h = span(c, k);
+                                    const Span h = lc[k];
                                     // Already joined through a floor within climb of both; or matter in the way.
                                     skip = (h.mCode >= 1 && std::abs(h.mMax - lo) <= climb && std::abs(h.mMax - hi) <= climb) ||
                                            (h.mMax > lo && h.mMin <= hi);
