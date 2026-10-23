@@ -23,11 +23,11 @@ main)
     ;;
 esac
 
-# Working branches (feature-, fix-, workaround-, any custom class) are upstream pull
+# Working branches (feature-, fix-, workaround-, amend-, any custom class) are upstream pull
 # requests in waiting: no fork-only files.  Classes live in skooma.class.
 class=$(git config --get "branch.$branch.skooma" 2>/dev/null)
 if [ -z "$class" ]; then
-    for c in feature fix workaround $(git config --get-all skooma.class 2>/dev/null); do
+    for c in feature fix workaround amend $(git config --get-all skooma.class 2>/dev/null); do
         case "$branch" in "$c"-*) class=$c ; break ;; esac
     done
 fi

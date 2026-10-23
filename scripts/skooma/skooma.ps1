@@ -43,6 +43,8 @@ function Show-Help {
     Say '  new <name> [desc]   create <class>-<name> + worktree in .worktrees/<name>'
     Say '                      --class fix|workaround|<own>  (asked for when run with no name)'
     Say '                      --base <branch>  --tests (configure a local tests tree)'
+    Say '  new <area>/<x> --amend [--base <feature>]  amend-<area>/<x>: a follow-up that lands'
+    Say '                      into an existing feature (default feature-<area>/<x>), never a PR alone'
     Say '  sync                fetch upstream -> develop -> main + every worktree'
     Say '  check [name|.]      validate a branch before it lands'
     Say '  integrate [name|.]  land worktree branches into their trunk or main (no arg = all)'
@@ -151,7 +153,16 @@ function Test-Forbidden { param([string]$path)
 # one exception — 'spike' carries a role of its own, because it is the one kind of
 # branch that is never meant to reach develop. The rest just say what a branch is for.
 # Custom classes are remembered in skooma.class so they appear in the list next time.
-$BuiltinClasses = @('feature', 'fix', 'workaround', 'spike')
+# 'amend' is a follow-up to an existing feature: it lands into that feature (its
+# skooma-base), never into a trunk or main directly, and is never a PR on its own.
+$BuiltinClasses = @('feature', 'fix', 'workaround', 'spike', 'amend')
+
+function Test-IsAmend { param([string]$branch) return ((Get-Class $branch) -eq 'amend') }
+
+# Branches an amend may never amend: the trunks and the shared lines.
+function Test-NotAmendable { param([string]$branch)
+    return ($branch -in 'develop', 'main', 'glue', 'publish' -or (Test-IsTrunk $branch) -or (Test-IsAmend $branch) -or (Get-Role $branch) -ne 'feature')
+}
 
 function Get-Classes {
     $extra = @((G config --get-all skooma.class) -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
@@ -876,7 +887,14 @@ function Invoke-Status {
         if ($w.Path -ieq $MainWt) { $rows += $w; continue }
         if ($w.Branch -and (Get-Role $w.Branch)) { $byBranch[$w.Branch] = $w; $featBranches += $w.Branch }
     }
-    foreach ($b in (Sort-ByDependency $featBranches)) { if ($byBranch.ContainsKey($b)) { $rows += $byBranch[$b] } }
+    # Amends sit directly under the feature they amend.
+    $sorted = @(Sort-ByDependency $featBranches)
+    $amends = @($sorted | Where-Object { (Test-IsAmend $_) -and $sorted -contains (Get-Base $_) })
+    foreach ($b in $sorted) {
+        if ($amends -contains $b) { continue }
+        $rows += $byBranch[$b]
+        foreach ($a in $amends) { if ((Get-Base $a) -eq $b) { $rows += $byBranch[$a] } }
+    }
     foreach ($w in $Worktrees) {
         if ($w.Path -ieq $MainWt) { continue }
         if (-not ($w.Branch -and (Get-Role $w.Branch))) { $rows += $w }
@@ -989,6 +1007,7 @@ function Invoke-New {
     $argv = @(); $base = ''; $class = ''; $tests = $false
     for ($i = 0; $i -lt $Rest.Count; $i++) {
         if ($Rest[$i] -in '--base', '-b')      { $base = $Rest[$i + 1]; $i++ }
+        elseif ($Rest[$i] -eq '--amend')       { $class = 'amend' }
         elseif ($Rest[$i] -in '--class', '-c') { $class = $Rest[$i + 1]; $i++ }
         elseif ($Rest[$i] -eq '--tests')       { $tests = $true }
         elseif ($Rest[$i] -eq '--no-configure') { }
@@ -1051,7 +1070,21 @@ function Invoke-New {
     # otherwise, is cut from it, so it starts with everything the area already has.
     $trunk = Find-TrunkFor $name
     if ($trunk -eq "$class-$name") { $trunk = '' }
-    if ($trunk) {
+
+    # An amend is cut from, and lands into, the feature it amends: --base, else feature-<name>.
+    if ($class -eq 'amend') {
+        $want = if ($base) { $base } else { "feature-$name" }
+        $parent = ''
+        foreach ($cand in @($want) + @(Get-ClassPrefixes | Where-Object { $_ -ne 'amend' } | ForEach-Object { "$_-$want" })) {
+            if (GitOk show-ref --verify --quiet "refs/heads/$cand") { $parent = $cand; break }
+        }
+        if (-not $parent) { Fail "amend base '$want' does not exist; name the feature with --base <feature-branch>" }
+        if (Test-NotAmendable $parent) { Fail "'$parent' is not a feature branch (trunk, develop, main, glue, spike or amend); an amend must amend a feature" }
+        $base = $parent
+        $trunk = $parent    # where it lands
+        Info "amending $parent; integrate lands it there"
+    }
+    elseif ($trunk) {
         if (-not (GitOk show-ref --verify --quiet "refs/heads/$trunk")) {
             Fail "'$name' belongs to trunk $trunk, which does not exist yet; create it first (git skooma new $($trunk -replace '^[a-z0-9-]+?-', ''))"
         }
@@ -1075,6 +1108,7 @@ function Invoke-New {
     }
     $branch = "$class-$name"
     $path   = Join-Path $WtRoot ($name -replace '/', '\')
+    if ($class -eq 'amend') { $path = Join-Path $WtRoot ("amend\" + ($name -replace '/', '\')) }  # the feature holds .worktrees/<name>
 
     if (GitOk show-ref --verify --quiet "refs/heads/$branch") { Fail "branch $branch already exists" }
     if (Test-Path $path) { Fail "$path already exists" }
@@ -1278,8 +1312,10 @@ function Invoke-Check { param([string]$branch, [switch]$Quiet)
     $developOnly = $null
     foreach ($sha in (G rev-list --merges "$base..$branch") -split "`n" | Where-Object { $_ }) {
         $parents = (G rev-list --parents -n 1 $sha) -split '\s+'
+        # An amend landed into this feature is part of it, judged like a trunk's merges.
+        $takesAmend = (G log -1 --format=%s $sha) -like "Merge amend '*"
         foreach ($p in $parents[2..($parents.Count - 1)]) {
-            if ($isTrunk -and -not (GitOk merge-base --is-ancestor $p $base)) {
+            if (($isTrunk -or $takesAmend) -and -not (GitOk merge-base --is-ancestor $p $base)) {
                 if ($null -eq $developOnly) {
                     # Reachable from main but from no working branch: glue, setup commits, main's own merges.
                     $developOnly = @{}
@@ -1342,6 +1378,7 @@ function Invoke-Check { param([string]$branch, [switch]$Quiet)
     if (-not $Quiet) {
         Say ''
         Say "check $branch ($role, base $base)"
+        if (Test-IsAmend $branch) { Warn "amend: never a PR on its own; it lands into and ships with $base" }
         foreach ($w in $warnings) { Warn $w }
         if ($problems) { foreach ($p in $problems) { Write-Host "  x $p" -ForegroundColor Red } }
         else { Good 'ok' }
@@ -1505,8 +1542,9 @@ function Invoke-Integrate {
         if ($into -ne 'main') {
             $tw = $Worktrees | Where-Object { $_.Branch -eq $into } | Select-Object -First 1
             if (-not $tw) {
-                $results += [pscustomobject]@{ Branch = $b; Result = 'SKIPPED (trunk)'; Detail = "$into has no worktree" }
-                Warn "trunk $into has no worktree to merge in"
+                $what = if (Test-IsAmend $b) { 'parent' } else { 'trunk' }
+                $results += [pscustomobject]@{ Branch = $b; Result = "SKIPPED ($what)"; Detail = "$into has no worktree" }
+                Warn "$what $into has no worktree to merge in; open one for it (git worktree add) and integrate again"
                 continue
             }
             $op = Test-MidOperation $tw.Path
@@ -1518,7 +1556,8 @@ function Invoke-Integrate {
             $at = $tw.Path
         }
 
-        $out = GG -C $at merge --no-edit $b
+        # check recognises an amend's merge into its parent by this subject.
+        $out = if (Test-IsAmend $b) { GG -C $at merge --no-edit -m "Merge amend '$b' into $into" $b } else { GG -C $at merge --no-edit $b }
         if ($script:GitExit -ne 0) {
             Say $out
             $null = G -C $at merge --abort
@@ -1687,9 +1726,20 @@ function Invoke-Retire {
         }
     }
 
+    # An amend is done once its parent holds its work: the routine case. Anything else is
+    # judged against develop when its base is a trunk, since a trunk (like main) is ours, not upstream.
+    if (-not (Test-IsAmend $branch) -and (Test-IsTrunk $base)) { $base = 'develop' }
     $carries = -not (GitOk diff --quiet "$base...$branch")
     if ($carries -and -not $force) {
         Say ''
+        if (-not (Test-IsAmend $branch)) {
+            $landed = @(@('main') + @((Get-TrunkMap).Values) | Select-Object -Unique |
+                Where-Object { (GitOk show-ref --verify --quiet "refs/heads/$_") -and (GitOk merge-base --is-ancestor $branch $_) })
+            if ($landed) {
+                Warn "$branch is merged into $($landed -join ', ') but its work is not in $base"
+                Info 'being in main or a trunk is not a reason to retire a feature: it is still a PR in waiting.'
+            }
+        }
         Warn "$branch still carries work that is not in $base"
         Say ''
         G log --oneline "$base..$branch" | Write-Host
@@ -1745,11 +1795,21 @@ function Invoke-Retire {
             # -f is what clears that guard. Match on the message so any other refusal -
             # locked, in use, untracked files - still stops us, because -f waives those
             # too and the checks above only cover tracked changes.
-            if ($out -notmatch 'submodule') { Fail "worktree remove failed: $out" }
-            Info 'worktree holds submodules; removing with --force'
-            $out = G worktree remove --force $wt.Path
-            if ($script:GitExit -ne 0) { Fail "worktree remove --force failed: $out" }
+            # On Windows git may deregister the worktree and then fail to delete the emptied
+            # folder (a watcher holds it). Deregistered is what matters; a registered one never is.
+            $gone = { -not (Get-Worktrees | Where-Object { $_.Path -ieq $wt.Path }) }
+            if (& $gone) { Warn "worktree deregistered but $($wt.Path) could not be deleted ($out); remove the folder later" }
+            else {
+                if ($out -notmatch 'submodule') { Fail "worktree remove failed: $out" }
+                Info 'worktree holds submodules; removing with --force'
+                $out = G worktree remove --force $wt.Path
+                if ($script:GitExit -ne 0) {
+                    if (& $gone) { Warn "worktree deregistered but $($wt.Path) could not be deleted ($out); remove the folder later" }
+                    else { Fail "worktree remove --force failed: $out" }
+                }
+            }
         }
+        if (Get-Worktrees | Where-Object { $_.Path -ieq $wt.Path }) { Fail "$($wt.Path) is still a registered worktree; not deleting $branch" }
         Good "removed worktree $($wt.Path)"
     }
 
@@ -1762,7 +1822,7 @@ function Invoke-Retire {
     }
     Good "deleted branch $branch"
 
-    foreach ($k in 'skooma', 'skooma-base', 'remote', 'merge', 'description') {
+    foreach ($k in 'skooma', 'skooma-base', 'skooma-trunk', 'remote', 'merge', 'description') {
         $null = G config --unset "branch.$branch.$k"
     }
 
