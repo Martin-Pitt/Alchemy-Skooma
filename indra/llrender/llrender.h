@@ -430,6 +430,16 @@ public:
     // flushes what is batched on a change and drops a redundant set without one. ALGLStencil scopes all three.
     void setStencilFunc(U32 func, S32 ref, U32 mask);
     void setStencilOp(U32 stencil_fail, U32 depth_fail, U32 pass);
+    // <SK:Nexii> Overview capture: the winding count needs INCR on back faces and DECR on front.
+    // One face's ops (GL_FRONT or GL_BACK); setStencilOp sets both, and getStencilOp reads the front's.
+    void setStencilOpSeparate(U32 face, U32 stencil_fail, U32 depth_fail, U32 pass);
+    void getStencilOpBack(U32& stencil_fail, U32& depth_fail, U32& pass) const
+    {
+        stencil_fail = mStencilBackFail;
+        depth_fail   = mStencilBackDepthFail;
+        pass         = mStencilBackPass;
+    }
+    // </SK:Nexii>
     void setStencilMask(U32 mask);
     void getStencilFunc(U32& func, S32& ref, U32& mask) const
     {
@@ -737,6 +747,11 @@ private:
     U32             mStencilFail = GL_KEEP;
     U32             mStencilDepthFail = GL_KEEP;
     U32             mStencilPass = GL_KEEP;
+    // <SK:Nexii> Overview capture: the back faces' stencil ops, apart from the front's.
+    U32             mStencilBackFail = GL_KEEP;
+    U32             mStencilBackDepthFail = GL_KEEP;
+    U32             mStencilBackPass = GL_KEEP;
+    // </SK:Nexii>
     U32             mStencilWriteMask = ~0u;
     U32             mBlendEquationRGB = GL_FUNC_ADD;
     U32             mBlendEquationAlpha = GL_FUNC_ADD;
