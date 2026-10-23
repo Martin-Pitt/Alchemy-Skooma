@@ -33,7 +33,6 @@
 #include "skcensusrecord.h"
 
 #include "llformat.h"
-#include "Recast.h"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -337,17 +336,6 @@ namespace
         }
         return out;
     }
-}
-
-TEST_CASE("skairraster: the coordinate map is a proper rotation and round-trips", "[skairraster]")
-{
-    const LLVector3 sl(1.f, 2.f, 3.f);
-    F32 rc[3];
-    toRecast(sl, rc);
-    CHECK(rc[2] == 1.f);
-    CHECK(rc[0] == 2.f);
-    CHECK(rc[1] == 3.f);
-    CHECK(fromRecast(rc) == sl);
 }
 
 TEST_CASE("skairraster: a block on the land is a floor to the air and to AVATAR; the land around it too", "[skairraster]")
@@ -799,110 +787,10 @@ TEST_CASE("skairraster: the synthetic fixture scenes build to their golden produ
     }
 }
 
-// What stock Recast 1.6.0 does at the edges of its merge and filter tests, which a raster of our own
-// need not copy but must know: each case sets up a column on its exact boundary.
-TEST_CASE("skairraster: Recast's merge and filter boundaries", "[skairraster]")
-{
-    rcContext ctx(false);
-    const F32 bmin[3] = { 0.f, 0.f, 0.f }, bmax[3] = { 3.f, 100.f, 3.f };
-    const auto field = [&](rcHeightfield& hf) { REQUIRE(rcCreateHeightfield(&ctx, hf, 3, 3, bmin, bmax, 1.f, 0.1f)); };
-    const auto spans = [](const rcHeightfield& hf, S32 x, S32 z) {
-        std::vector<std::array<U32, 3>> out;
-        for (const rcSpan* s = hf.spans[x + z * hf.width]; s; s = s->next)
-        {
-            out.push_back({ s->smin, s->smax, s->area });
-        }
-        return out;
-    };
-
-    SECTION("merge: tops exactly climb apart keep the higher area; one more keeps the incoming span's")
-    {
-        rcHeightfield hf;
-        field(hf);
-        rcAddSpan(&ctx, hf, 1, 1, 0, 10, 5, 3);
-        rcAddSpan(&ctx, hf, 1, 1, 5, 13, 1, 3);    // tops 3 apart, climb 3
-        rcAddSpan(&ctx, hf, 2, 1, 0, 10, 5, 3);
-        rcAddSpan(&ctx, hf, 2, 1, 5, 14, 1, 3);    // tops 4 apart
-        const auto a = spans(hf, 1, 1), b = spans(hf, 2, 1);
-        REQUIRE(a.size() == 1);
-        REQUIRE(b.size() == 1);
-        CHECK(a[0] == std::array<U32, 3>{ 0, 13, 5 });
-        CHECK(b[0] == std::array<U32, 3>{ 0, 14, 1 });
-    }
-    SECTION("merge: spans that only touch merge")
-    {
-        rcHeightfield hf;
-        field(hf);
-        rcAddSpan(&ctx, hf, 1, 1, 0, 10, 1, 0);
-        rcAddSpan(&ctx, hf, 1, 1, 10, 20, 1, 0);
-        rcAddSpan(&ctx, hf, 2, 1, 0, 10, 1, 0);
-        rcAddSpan(&ctx, hf, 2, 1, 11, 20, 1, 0);
-        CHECK(spans(hf, 1, 1).size() == 1);
-        CHECK(spans(hf, 2, 1).size() == 2);
-    }
-    SECTION("headroom: a gap exactly the height keeps its floor; one less clears it")
-    {
-        rcHeightfield hf;
-        field(hf);
-        rcAddSpan(&ctx, hf, 1, 1, 0, 10, 1, 0);
-        rcAddSpan(&ctx, hf, 1, 1, 30, 31, 0, 0);   // gap 20
-        rcAddSpan(&ctx, hf, 2, 1, 0, 10, 1, 0);
-        rcAddSpan(&ctx, hf, 2, 1, 29, 30, 0, 0);   // gap 19
-        rcFilterWalkableLowHeightSpans(&ctx, 20, hf);
-        CHECK(spans(hf, 1, 1)[0][2] == 1u);
-        CHECK(spans(hf, 2, 1)[0][2] == 0u);
-    }
-    SECTION("headroom: a column's last span is open above")
-    {
-        rcHeightfield hf;
-        field(hf);
-        rcAddSpan(&ctx, hf, 1, 1, 990, 995, 1, 0);  // five units under the field's top
-        rcFilterWalkableLowHeightSpans(&ctx, 20, hf);
-        CHECK(spans(hf, 1, 1)[0][2] == 1u);
-    }
-    SECTION("step-up: an obstacle exactly climb above a floor becomes floor; one more stays obstacle; no chaining")
-    {
-        rcHeightfield hf;
-        field(hf);
-        rcAddSpan(&ctx, hf, 0, 0, 0, 10, 1, 0);
-        rcAddSpan(&ctx, hf, 0, 0, 11, 13, 0, 0);   // top 3 above, climb 3
-        rcAddSpan(&ctx, hf, 0, 0, 14, 16, 0, 0);   // 3 above that: chained, not promoted
-        rcAddSpan(&ctx, hf, 1, 0, 0, 10, 1, 0);
-        rcAddSpan(&ctx, hf, 1, 0, 11, 14, 0, 0);   // 4 above
-        rcFilterLowHangingWalkableObstacles(&ctx, 3, hf);
-        const auto a = spans(hf, 0, 0), b = spans(hf, 1, 0);
-        REQUIRE(a.size() == 3);
-        CHECK(a[1][2] == 1u);
-        CHECK(a[2][2] == 0u);
-        CHECK(b[1][2] == 0u);
-    }
-    SECTION("ledge: a drop of exactly climb to a neighbour keeps the floor; one more clears it; the grid edge is a drop")
-    {
-        // A floor at 10 in the middle column, its neighbours at 7 (drop 3) or 6 (drop 4).
-        for (S32 drop = 3; drop <= 4; ++drop)
-        {
-            rcHeightfield hf;
-            field(hf);
-            for (S32 z = 0; z < 3; ++z)
-            {
-                for (S32 x = 0; x < 3; ++x)
-                {
-                    const U16 top = x == 1 && z == 1 ? 10 : static_cast<U16>(10 - drop);
-                    rcAddSpan(&ctx, hf, x, z, 0, top, 1, 0);
-                }
-            }
-            rcFilterLedgeSpans(&ctx, 20, 3, hf);
-            INFO("drop " << drop);
-            CHECK(spans(hf, 1, 1)[0][2] == (drop == 3 ? 1u : 0u));
-            CHECK(spans(hf, 0, 0)[0][2] == 0u);     // the grid's edge
-        }
-    }
-}
-
 // Run by hand: SKAIR_CAPTURE_DIR names the output folder, SKAIR_CAPTURE_CENSUS the census files (';'
 // between them), SKAIR_CAPTURE_THREADS the workers. Every tile of every census is rasterised with its air
 // and dumped with each raster stage, as fixtures a raster of our own is checked against.
-TEST_CASE("skairraster: capture the Recast raster's fixtures", "[skairraster][.capture]")
+TEST_CASE("skairraster: capture the raster's fixtures", "[skairraster][.capture]")
 {
     const char* dir_env = std::getenv("SKAIR_CAPTURE_DIR");
     if (!dir_env || !*dir_env)

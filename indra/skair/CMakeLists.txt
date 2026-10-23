@@ -44,7 +44,7 @@ target_sources(
         skairwalls.h
 )
 
-target_link_libraries(skair PRIVATE al::flags ll::recast PUBLIC skcensus)
+target_link_libraries(skair PRIVATE al::flags PUBLIC skcensus)
 
 target_precompile_headers(skair REUSE_FROM llprecompiled)
 
@@ -82,6 +82,6 @@ if(AL_BUILD_TESTS)
       tests/skairskymap_test.cpp
       tests/skairtileclip_test.cpp
       tests/skairwalls_test.cpp
-    LIBRARIES skair llcommon ll::recast
+    LIBRARIES skair llcommon
   )
 endif()

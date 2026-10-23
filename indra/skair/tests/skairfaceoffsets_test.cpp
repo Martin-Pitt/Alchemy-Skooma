@@ -32,7 +32,6 @@
 #include "../skairfaceoffsets.h"
 #include "../skairwalls.h"
 
-#include "Recast.h"
 
 #include <algorithm>
 #include <cmath>

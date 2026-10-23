@@ -134,22 +134,8 @@ namespace skworld
         bool mCoarseAir = false;            ///< mAir is the coarse air, not the tile's own
     };
 
-    /// SL is z-up, Recast is y-up: (x, y, z) -> (y, z, x), a cyclic permutation,
-    /// so winding and up-facing are preserved and nothing goes negative inside a
-    /// mesh whose origin is at its minimum corner.
-    inline void toRecast(const LLVector3& sl, F32* out)
-    {
-        out[0] = sl.mV[VY];
-        out[1] = sl.mV[VZ];
-        out[2] = sl.mV[VX];
-    }
-    inline LLVector3 fromRecast(const F32* rc)
-    {
-        return LLVector3(rc[2], rc[0], rc[1]);
-    }
-
-    /// The padding AVATAR's view reads past a tile, in cells: Recast's own
-    /// three, and the radius twice over, so both sides of a seam read the same cells.
+    /// The padding AVATAR's view reads past a tile, in cells: three, and the
+    /// radius twice over, so both sides of a seam read the same cells.
     S32 borderCells(F32 radius, F32 cell);
 
     /// The air's pad in cells: AIR_PAD_M, whole cells.
@@ -157,7 +143,7 @@ namespace skworld
 
     struct TileBuildStats;
 
-    /// A raster's columns as dumped: Recast's grid (x along SL y, z along SL x),
+    /// A raster's columns as dumped, in the fixtures' order (x along SL y fastest, z along SL x),
     /// every column's spans lowest first, packed smin | smax << 13 | area << 26.
     struct RasterColumns
     {
@@ -174,7 +160,7 @@ namespace skworld
     /// checked against. Every state is the full padded grid unless it says otherwise.
     struct RasterCapture
     {
-        F32 mBmin[3] = { 0.f, 0.f, 0.f };   ///< the grid's Recast corner
+        F32 mBmin[3] = { 0.f, 0.f, 0.f };   ///< the grid's corner in the fixtures' axes: SL y, z, x
         F32 mCell = 0.f;
         F32 mUnit = 0.f;
         S32 mBorder = 0;                    ///< the grid's cells past the tile
@@ -182,7 +168,7 @@ namespace skworld
         std::vector<U8> mCodes;             ///< per soup triangle, its area byte
         std::vector<U8> mReal;              ///< area byte -> area
         /// The soup the raster was made from, so a raster of another kind can be made from the same: nine
-        /// Recast-space floats per triangle, its closed bodies' triangle ranges, the cuts' own soup and
+        /// floats per triangle in the fixtures' axes (SL y, z, x), its closed bodies' triangle ranges, the cuts' own soup and
         /// ranges, the triangles AVATAR leaves out (empty for none), each triangle's NameCue, and the land.
         std::vector<F32> mSoupVerts;
         std::vector<S32> mSolids;           ///< begin, end pairs

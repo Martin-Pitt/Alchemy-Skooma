@@ -66,13 +66,15 @@ namespace
         }
     }
 
-    /// SL triangles back into the fixtures' Recast axes.
+    /// SL triangles into the fixtures' axes: (x, y, z) -> (y, z, x), as the captured Recast fixtures hold them.
     void recastVerts(const std::vector<F32>& sl, std::vector<F32>& out)
     {
         out.resize(sl.size());
         for (size_t i = 0; i + 2 < sl.size(); i += 3)
         {
-            toRecast(LLVector3(&sl[i]), &out[i]);
+            out[i] = sl[i + 1];
+            out[i + 1] = sl[i + 2];
+            out[i + 2] = sl[i];
         }
     }
 }

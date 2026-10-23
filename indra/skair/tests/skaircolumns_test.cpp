@@ -491,50 +491,6 @@ TEST_CASE("skaircolumns: a column taller than the stack merges on the heap", "[s
     CHECK(stats.mHeapColumns == 16u);
 }
 
-// The synthetic scenes against Recast's raster of them: the same soup, the states before the walk rules.
-TEST_CASE("skaircolumns: the synthetic scenes raster as Recast's within tolerance", "[skaircolumns]")
-{
-    for (const Scene& scene : fixtureScenes())
-    {
-        RasterCapture capture;
-        TileAirResult recast;
-        REQUIRE(rasteriseTile(scene.mInput, recast, nullptr, &capture));
-        AirSoup soup;
-        TileAirResult r;
-        REQUIRE(buildAirSoup(scene.mInput, soup, r));
-        ColumnFrame f = tileFrame(scene.mInput.mTileX, scene.mInput.mTileY, scene.mInput.mTileSize, scene.mInput.mZMin, scene.mInput.mZMax,
-                                  scene.mInput.mCell, capture.mBorder, scene.mInput.mAvatar.mClimb);
-        CHECK(f.mOrigin.mV[VX] == capture.mBmin[2]);
-        CHECK(f.mOrigin.mV[VY] == capture.mBmin[0]);
-        CHECK(f.mOrigin.mV[VZ] == capture.mBmin[1]);
-        CHECK(f.mClimb == capture.mClimb);
-        Ours ours;
-        ColumnSource src;
-        src.mSoup = &soup;
-        src.mTerrain = &scene.mInput.mTerrain;
-        src.mAfterCut = &ours.mCut;
-        src.mAfterBridges = &ours.mBridged;
-        rasteriseColumns(f, src, ours.mCulled, &ours.mStats);
-        const auto recastColumns = [](const RasterColumns& c) {
-            RecastColumns out;
-            out.mWidth = c.mWidth;
-            out.mHeight = c.mHeight;
-            out.mStart = c.mStart;
-            out.mSpans = c.mSpans;
-            return out;
-        };
-        const StateDiff d0 = compareState(ours.mCut, recastColumns(capture.mRasterised));
-        const StateDiff d1 = compareState(ours.mBridged, recastColumns(capture.mBridged));
-        const StateDiff d2 = compareState(ours.mCulled, recastColumns(capture.mCulled));
-        INFO(scene.mName << "\n  cut     " << d0.text() << "\n  bridged " << d1.text() << "\n  culled  " << d2.text());
-        // Heights: Recast's float32 puts a face a rounding error off a column edge in the column past it, ours
-        // in the one it is in (the hollow box's front wall); nothing else moves.
-        CHECK(d2.frac(d2.mFloorOff + d2.mBottomOff + d2.mUnpaired) <= 0.005);
-        // Codes: the merge's "top wins" takes a wall's null code where Recast kept a floor's under it.
-        CHECK(d2.frac(d2.mWalkFlips) <= 0.005);
-    }
-}
-
 // Run by hand: SKAIR_FIXTURES names the captured fixtures (a folder of sets), SKAIR_FIXTURES_OUT where our
 // raster's states go for the oracle's diff, SKAIR_CAPTURE_THREADS the workers.
 TEST_CASE("skaircolumns: the captured fixtures raster as Recast's within tolerance", "[skaircolumns][.fixtures]")
