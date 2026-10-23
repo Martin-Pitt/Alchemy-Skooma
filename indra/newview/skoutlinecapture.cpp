@@ -35,6 +35,7 @@
 #include "llgl.h"
 #include "llgltfmaterial.h"
 #include "llglslshader.h"
+#include "llglstates.h"
 #include "llimagepng.h"
 #include "llmaterial.h"
 #include "llmeshrepository.h"
@@ -1076,24 +1077,15 @@ namespace
         camera.setProjection(proj);
         LLViewerCamera::updateFrustumPlanes(camera, false, false, true);
 
-        S32 saved_viewport[4];
-        memcpy(saved_viewport, gGLViewport, sizeof(saved_viewport));
-        const U32 saved_res_x = LLRenderTarget::sCurResX;
-        const U32 saved_res_y = LLRenderTarget::sCurResY;
-
         // Coverage into the scratch target's corner, cleared there only.
         sTarget.bindTarget();
-        gGLViewport[0] = gGLViewport[1] = 0;
-        gGLViewport[2] = resx;
-        gGLViewport[3] = resy;
-        glViewport(0, 0, resx, resy);
+        gGL.setViewport(0, 0, resx, resy);
         {
-            LLGLEnable scissor(GL_SCISSOR_TEST);
-            glScissor(0, 0, resx, resy);
+            LLGLSScissor scissor(0, 0, resx, resy);
             sTarget.clear();
         }
-        F32 clear_depth = 1.f;
-        glGetFloatv(GL_DEPTH_CLEAR_VALUE, &clear_depth);
+        // The convention's far value: LLRender::applyDepthConvention() is the clear depth's only setter.
+        const F32 clear_depth = al_window_far();
         const U32 draws = gPipeline.skRenderOutlineCoverage(bridge, view, proj, camera, alpha_cutoff, skip);
         sTarget.flush();
 
@@ -1102,11 +1094,7 @@ namespace
         S32 sx = 0, sy = 0;
         atlas.origin(l.slot, sx, sy);
         sAtlas.bindTarget();
-        gGLViewport[0] = sx;
-        gGLViewport[1] = sy;
-        gGLViewport[2] = SLOT_SIZE;
-        gGLViewport[3] = SLOT_SIZE;
-        glViewport(sx, sy, SLOT_SIZE, SLOT_SIZE);
+        gGL.setViewport(sx, sy, SLOT_SIZE, SLOT_SIZE);
         {
             LLGLDepthTest depth(GL_FALSE, GL_FALSE);
             LLGLDisable blend(GL_BLEND);
@@ -1133,11 +1121,6 @@ namespace
             sResolve.unbind();
         }
         sAtlas.flush();
-
-        memcpy(gGLViewport, saved_viewport, sizeof(saved_viewport));
-        glViewport(gGLViewport[0], gGLViewport[1], gGLViewport[2], gGLViewport[3]);
-        LLRenderTarget::sCurResX = saved_res_x;
-        LLRenderTarget::sCurResY = saved_res_y;
 
         l.grid = g;
         l.rendered = true;
