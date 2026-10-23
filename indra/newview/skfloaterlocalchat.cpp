@@ -82,7 +82,7 @@ constexpr S32 DISC_GAP = 6;
 constexpr S32 INPUT_HEIGHT = 24;
 constexpr S32 INPUT_GAP = 4;
 constexpr S32 TYPING_LINE = 14;
-constexpr S32 TYPING_HEIGHT = 2 * TYPING_LINE; // both typing lines, kept between the messages and the input
+constexpr S32 TYPING_HEIGHT = TYPING_LINE; // the typing line, kept between the messages and the input
 constexpr F64 TYPING_POLL = 0.25;
 constexpr S32 INSET = 8; // inside the backdrop's border
 constexpr F32 EDGE_FADE = 24.f; // the scroll mask at the top, and at the bottom while scrolled
@@ -1531,6 +1531,16 @@ void SKFloaterLocalChat::makeTypingLabel(S32 group)
     std::string& label = mTypingLabel[group];
     mTypingNamed[group] = true;
     label.clear();
+    if (group == 1)
+    {
+        mTypingFarCount.clear();
+        if (!typers.empty())
+        {
+            LLStringUtil::format_map_t count_args;
+            count_args["[COUNT]"] = llformat("%d", (S32)typers.size());
+            mTypingFarCount = getString(typers.size() == 1 ? "typing_far_count_one" : "typing_far_count", count_args);
+        }
+    }
     if (typers.empty())
     {
         return;
@@ -1566,36 +1576,49 @@ void SKFloaterLocalChat::drawTyping(F64 now) const
     static LLUIColor color = LLUIColorTable::instance().getColor("White");
     static LLUIColor far_color = LLUIColorTable::instance().getColor("Yellow");
     LLFontGL* font = LLFontGL::getFontSansSerifSmall();
-    // The lowest line sits on the input; with both groups the in-range one goes above.
-    S32 y = INSET + INPUT_HEIGHT + INPUT_GAP + 1;
-    if (!mTypingLabel[0].empty() && !mTypingLabel[1].empty())
-    {
-        y += TYPING_LINE;
-    }
+    const S32 y = INSET + INPUT_HEIGHT + INPUT_GAP + 1;
+    const bool has_near = !mTypingLabel[0].empty();
+    const LLColor4 base = has_near ? color.get() : far_color.get();
+    const F32 dim = has_near ? 1.f : 0.75f;
+
+    // Three dots rising in turn, as Discord's do.
+    constexpr S32 DOT = 3;
+    constexpr S32 DOT_GAP = 2;
     const F32 phase = (F32)fmod(now, 1.2) / 1.2f;
-    for (S32 g = 0; g < 2; ++g)
+    S32 x = INSET + PAD_X;
+    for (S32 i = 0; i < 3; ++i)
     {
-        if (mTypingLabel[g].empty())
-        {
-            continue;
-        }
-        const LLColor4 base = g == 0 ? color.get() : far_color.get();
-        const F32 dim = g == 0 ? 1.f : 0.75f;
-        // Three dots rising in turn, as Discord's do.
-        constexpr S32 DOT = 3;
-        constexpr S32 DOT_GAP = 2;
-        S32 x = INSET + PAD_X;
-        for (S32 i = 0; i < 3; ++i)
-        {
-            const F32 t = phase - i * 0.15f;
-            const F32 bump = (t > 0.f && t < 0.3f) ? sinf(t / 0.3f * F_PI) : 0.f;
-            const S32 lift = ll_round(bump * 2.f);
-            gl_rect_2d(x, y + 6 + DOT + lift, x + DOT, y + 6 + lift, base % ((0.4f + 0.5f * bump) * dim), true);
-            x += DOT + DOT_GAP;
-        }
-        font->renderUTF8(mTypingLabel[g], 0, (F32)(x + 4), (F32)y, base % (0.6f * dim), LLFontGL::LEFT, LLFontGL::BOTTOM, LLFontGL::NORMAL, LLFontGL::DROP_SHADOW_SOFT);
-        y -= TYPING_LINE;
+        const F32 t = phase - i * 0.15f;
+        const F32 bump = (t > 0.f && t < 0.3f) ? sinf(t / 0.3f * F_PI) : 0.f;
+        const S32 lift = ll_round(bump * 2.f);
+        gl_rect_2d(x, y + 6 + DOT + lift, x + DOT, y + 6 + lift, base % ((0.4f + 0.5f * bump) * dim), true);
+        x += DOT + DOT_GAP;
     }
+    F32 text_x = (F32)(x + 4);
+    const S32 right = getRect().getWidth() - INSET;
+
+    // The in-range part is never cut; the out-of-range part after it falls back to a count, then an ellipsis.
+    const LLColor4 far_text = far_color.get() % 0.45f;
+    if (has_near)
+    {
+        font->renderUTF8(mTypingLabel[0], 0, text_x, (F32)y, color.get() % 0.6f, LLFontGL::LEFT, LLFontGL::BOTTOM, LLFontGL::NORMAL, LLFontGL::DROP_SHADOW_SOFT, S32_MAX, S32_MAX, &text_x);
+        if (mTypingLabel[1].empty())
+        {
+            return;
+        }
+        static const std::string SEPARATOR = "  \xC2\xB7  ";
+        font->renderUTF8(SEPARATOR, 0, text_x, (F32)y, color.get() % 0.4f, LLFontGL::LEFT, LLFontGL::BOTTOM, LLFontGL::NORMAL, LLFontGL::DROP_SHADOW_SOFT, S32_MAX, S32_MAX, &text_x);
+        const S32 room = right - ll_round(text_x);
+        const std::string& far_label = font->getWidth(mTypingLabel[1]) <= room ? mTypingLabel[1] : mTypingFarCount;
+        if (room > 0)
+        {
+            font->renderUTF8(far_label, 0, text_x, (F32)y, far_text, LLFontGL::LEFT, LLFontGL::BOTTOM, LLFontGL::NORMAL, LLFontGL::DROP_SHADOW_SOFT, S32_MAX, room, nullptr, true);
+        }
+        return;
+    }
+    const S32 room = right - ll_round(text_x);
+    const std::string& far_label = font->getWidth(mTypingLabel[1]) <= room ? mTypingLabel[1] : mTypingFarCount;
+    font->renderUTF8(far_label, 0, text_x, (F32)y, far_text, LLFontGL::LEFT, LLFontGL::BOTTOM, LLFontGL::NORMAL, LLFontGL::DROP_SHADOW_SOFT, S32_MAX, llmax(room, 0), nullptr, true);
 }
 
 std::string SKFloaterLocalChat::urlAt(S32 x, S32 y) const
