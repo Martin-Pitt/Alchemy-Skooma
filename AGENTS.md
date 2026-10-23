@@ -40,6 +40,7 @@ Every commit must be acceptable to the Alchemy project as-is.
 - Never merge `main` or another feature into your branch. Take upstream (and your trunk) by `git merge develop` (or `git merge <trunk>`) in your own worktree; `git skooma sync` touches every worktree, so leave it to the human.
 - Small logical commits; imperative subject (`Fix crash when pasting into text editor`); body explains why. Squash WIP before landing.
 - `Co-Authored-By:` trailers are fine (upstream uses them). No `Generated with` lines.
+- **Never append to the end of a shared list file** (`settings*.xml`, `CMakeLists.txt` source lists, floater registrations, strings): every branch appends there, so every pair of branches conflicts. Insert beside a related entry (`SkoomaLocalChat*` next to `AlchemyChatHistoryStyle`), or alphabetically where the file is sorted.
 - **After `git merge develop`, put any build fixes in a separate commit** — fixes made inside a merge commit are silently dropped when the branch is rebased for a PR.
 
 ## Landing work
