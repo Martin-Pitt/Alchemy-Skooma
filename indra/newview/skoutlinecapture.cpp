@@ -42,6 +42,7 @@
 #include "llmodel.h"
 #include "llrender.h"
 #include "llrendertarget.h"
+#include "llshadermgr.h"
 #include "llselectmgr.h"
 #include "llspatialpartition.h"
 #include "lltimer.h"
@@ -72,6 +73,9 @@ namespace
     LLRenderTarget sAtlas;  // R8 coverage, one slot per layer
     LLGLSLShader sResolve;
     ALQuerySpan sTimedSpan;
+    const LLStaticHashedString sk_slot("sk_slot");
+    const LLStaticHashedString sk_clear_depth("sk_clear_depth");
+    const LLStaticHashedString sk_count("sk_count");
     LLUUID sTimedRoot; // the capture whose render the queries are timing
     View sTimedView = View::PLAN;
 
@@ -1100,24 +1104,22 @@ namespace
             LLGLDisable blend(GL_BLEND);
             LLGLDisable cull(GL_CULL_FACE);
             sResolve.bind();
-            gGL.getTextureSlot(0)->bindManual(ALTextureSlot::TT_TEXTURE, sTarget.getDepth(), gGL.getSampler(ALSamplers::PointClamp));
-            const GLint prog = sResolve.mProgramObject;
-            glUniform1i(glGetUniformLocation(prog, "depthMap"), 0);
-            glUniform4i(glGetUniformLocation(prog, "sk_slot"), sx, sy, g.cols, g.rows);
-            glUniform1f(glGetUniformLocation(prog, "sk_clear_depth"), clear_depth);
-            const GLint count_loc = glGetUniformLocation(prog, "sk_count");
-            glUniform1i(count_loc, 0);
+            sResolve.bindDepthTexture(LLShaderMgr::DEFERRED_DEPTH, &sTarget, ALSamplers::PointClamp);
+            const GLint slot[4] = { sx, sy, g.cols, g.rows };
+            sResolve.uniform4iv(sk_slot, 1, slot);
+            sResolve.uniform1f(sk_clear_depth, clear_depth);
+            sResolve.uniform1i(sk_count, 0);
             gPipeline.mScreenTriangleVB->setBuffer();
             gPipeline.mScreenTriangleVB->drawArrays(LLRender::TRIANGLES, 0, 3);
 
-            glUniform1i(count_loc, 1);
+            sResolve.uniform1i(sk_count, 1);
             gGL.setColorMask(false, false);
             // Refused while the shader profiler holds the samples target: this render goes uncounted and the last count stands.
             l.ticket = gGL.queries().begin(ALQueryKind::Samples);
             gPipeline.mScreenTriangleVB->drawArrays(LLRender::TRIANGLES, 0, 3);
             gGL.queries().end(l.ticket);
             gGL.setColorMask(true, true);
-            gGL.getTextureSlot(0)->unbind();
+            sResolve.unbindTexture(LLShaderMgr::DEFERRED_DEPTH);
             sResolve.unbind();
         }
         sAtlas.flush();
