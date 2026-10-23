@@ -47,109 +47,41 @@ namespace
     constexpr U32 MAX_SIDE = 4096;
     constexpr U32 SIDE_STEP = 32;
 
-    // One quad over the map's square; each layer is masked by its own fade, its colour premultiplied.
-    const char* VS_MASK = R"(#version 330 core
-uniform vec4 u_rect;
-out vec2 v_t;
-void main()
-{
-    v_t = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));
-    gl_Position = vec4(mix(u_rect.xy, u_rect.zw, v_t), 0.0, 1.0);
-}
-)";
+    // The overlay's mask over each layer (skooma/mapMask*.glsl); built on the first frame that wants it.
+    LLGLSLShader sMask;
+    const LLStaticHashedString SK_RECT("sk_rect");
+    const LLStaticHashedString SK_MODE("sk_mode");
+    const LLStaticHashedString SK_SIDE("sk_side");
+    const LLStaticHashedString SK_OUTER("sk_outer");
+    const LLStaticHashedString SK_CENTRE("sk_centre");
+    const LLStaticHashedString SK_SELF("sk_self");
 
-    // The study's radial gradients: two linear segments meeting at a middle stop.
-    const char* FS_MASK = R"(#version 330 core
-in vec2 v_t;
-out vec4 o;
-uniform sampler2D u_t;
-uniform int u_mode;
-uniform float u_side;
-uniform float u_outer;
-uniform float u_centre;
-uniform float u_self;
-float ramp(float t, float a0, float tm, float am, float a1)
-{
-    t = clamp(t, 0.0, 1.0);
-    return t < tm ? mix(a0, am, t / tm) : mix(am, a1, (t - tm) / (1.0 - tm));
-}
-void main()
-{
-    vec4 p = texture(u_t, v_t);
-    float d = length((v_t - 0.5) * u_side);
-    float k = 1.0;
-    if (u_mode < 2)
+    /// Built again after a shader load unloads it, as no loader asks for it.
+    bool ensureMask()
     {
-        float r = u_side * 0.45;
-        float inner = r * (1.0 - u_outer);
-        k *= ramp((d - inner) / max(r - inner, 1e-3), 1.0, 0.48, 0.58, 0.0);
-    }
-    if (u_mode == 0)
-    {
-        float r0 = u_centre * 0.18;
-        k *= 1.0 - ramp((d - r0) / max(u_centre - r0, 1e-3), 0.92, 0.38, 0.70, 0.0);
-    }
-    else if (u_mode == 2)
-    {
-        float r0 = min(4.0, u_self * 0.3);
-        k *= 1.0 - ramp((d - r0) / max(u_self - r0, 1e-3), 1.0, 0.5, 0.5, 0.0);
-    }
-    o = p * k;
-}
-)";
-
-    GLuint compileStage(GLenum type, const char* src)
-    {
-        const GLuint s = glCreateShader(type);
-        glShaderSource(s, 1, &src, nullptr);
-        glCompileShader(s);
-        GLint ok = 0;
-        glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
-        if (!ok)
+        if (sMask.isComplete())
         {
-            char log[1024] = {};
-            glGetShaderInfoLog(s, sizeof(log) - 1, nullptr, log);
-            LL_WARNS("SKMap") << "Mouselook map shader failed to compile: " << log << LL_ENDL;
-            glDeleteShader(s);
-            return 0;
+            return true;
         }
-        return s;
-    }
-
-    U32 compileProgram()
-    {
-        const GLuint vs = compileStage(GL_VERTEX_SHADER, VS_MASK);
-        const GLuint fs = compileStage(GL_FRAGMENT_SHADER, FS_MASK);
-        if (!vs || !fs)
+        sMask.mName = "SK Mouselook Map Mask";
+        sMask.mShaderFiles.clear();
+        sMask.clearPermutations();
+        sMask.mShaderFiles.push_back(std::make_pair("skooma/mapMaskV.glsl", GL_VERTEX_SHADER));
+        sMask.mShaderFiles.push_back(std::make_pair("skooma/mapMaskF.glsl", GL_FRAGMENT_SHADER));
+        sMask.mShaderLevel = 1;
+        if (!sMask.createShader())
         {
-            if (vs) glDeleteShader(vs);
-            if (fs) glDeleteShader(fs);
-            return 0;
+            LL_WARNS("SKMap") << "Mouselook map shader failed to build" << LL_ENDL;
+            sMask.unload();
+            return false;
         }
-        const GLuint p = glCreateProgram();
-        glAttachShader(p, vs);
-        glAttachShader(p, fs);
-        glLinkProgram(p);
-        glDeleteShader(vs);
-        glDeleteShader(fs);
-        GLint ok = 0;
-        glGetProgramiv(p, GL_LINK_STATUS, &ok);
-        if (!ok)
-        {
-            LL_WARNS("SKMap") << "Mouselook map shader failed to link" << LL_ENDL;
-            glDeleteProgram(p);
-            return 0;
-        }
-        return p;
+        return true;
     }
 
     struct State
     {
         LLRenderTarget mTarget;
-        U32 mProgram = 0;
-        U32 mVao = 0;
         bool mFailed = false;       ///< the shader failed to build; nothing will draw
-        GLint mLocRect = -1, mLocMode = -1, mLocSide = -1, mLocOuter = -1, mLocCentre = -1, mLocSelf = -1;
         U32 mDrawnFrame = 0;        ///< the frame the overlay last drew in, plus one
         F32 mHeading = 0.f;         ///< the last heading the camera gave, held while it looks straight up or down
         bool mIdleAdded = false;
@@ -157,14 +89,7 @@ void main()
         ~State()
         {
             mTarget.release();
-            if (mProgram)
-            {
-                glDeleteProgram(mProgram);
-            }
-            if (mVao)
-            {
-                glDeleteVertexArrays(1, &mVao);
-            }
+            sMask.unload();
         }
     };
     State* sState = nullptr;
@@ -201,51 +126,34 @@ void main()
     }
 
     /// The target's layer over the window: viewport is the window's, side the map's, both in pixels.
-    void blit(State& s, const GLint* viewport, F32 side, S32 mode, const Fades& fades)
+    void blit(State& s, const S32* viewport, F32 side, S32 mode, const Fades& fades)
     {
-        GLint program = 0, vao = 0, src_rgb = 0, dst_rgb = 0, src_a = 0, dst_a = 0, eq_rgb = 0, eq_a = 0;
-        glGetIntegerv(GL_CURRENT_PROGRAM, &program);
-        glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &vao);
-        glGetIntegerv(GL_BLEND_SRC_RGB, &src_rgb);
-        glGetIntegerv(GL_BLEND_DST_RGB, &dst_rgb);
-        glGetIntegerv(GL_BLEND_SRC_ALPHA, &src_a);
-        glGetIntegerv(GL_BLEND_DST_ALPHA, &dst_a);
-        glGetIntegerv(GL_BLEND_EQUATION_RGB, &eq_rgb);
-        glGetIntegerv(GL_BLEND_EQUATION_ALPHA, &eq_a);
-        const GLboolean blend = glIsEnabled(GL_BLEND);
-        GLboolean colour_mask[4] = {}, depth_mask = GL_TRUE;
-        glGetBooleanv(GL_COLOR_WRITEMASK, colour_mask);
-        glGetBooleanv(GL_DEPTH_WRITEMASK, &depth_mask);
+        LLGLEnable blend(GL_BLEND);
         LLGLDisable depth(GL_DEPTH_TEST);
         LLGLDisable stencil(GL_STENCIL_TEST);
         LLGLDisable cull(GL_CULL_FACE);
-        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-        glDepthMask(GL_FALSE);
+        LLGLDepthTest depth_write(GL_FALSE, GL_FALSE);
+        gGL.setColorMask(true, true);
+        gGL.flush();
+        gGL.setBlendEquation(GL_FUNC_ADD, GL_FUNC_ADD);
+        gGL.blendFunc(LLRender::BF_ONE, LLRender::BF_ONE_MINUS_SOURCE_ALPHA, LLRender::BF_ONE, LLRender::BF_ONE_MINUS_SOURCE_ALPHA);
 
         const F32 hw = side / static_cast<F32>(viewport[2]);
         const F32 hh = side / static_cast<F32>(viewport[3]);
-        glUseProgram(s.mProgram);
-        glBindVertexArray(s.mVao);
-        glUniform4f(s.mLocRect, -hw, -hh, hw, hh);
-        glUniform1i(s.mLocMode, mode);
-        glUniform1f(s.mLocSide, side);
-        glUniform1f(s.mLocOuter, fades.mOuter);
-        glUniform1f(s.mLocCentre, fades.mCentre);
-        glUniform1f(s.mLocSelf, fades.mSelf);
-        gGL.getTextureSlot(0)->bindManual(ALTextureSlot::TT_TEXTURE, s.mTarget.getTexture(), 0);
-        glEnable(GL_BLEND);
-        glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
-        glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-        gGL.getTextureSlot(0)->unbind();
-
-        blend ? glEnable(GL_BLEND) : glDisable(GL_BLEND);
-        glColorMask(colour_mask[0], colour_mask[1], colour_mask[2], colour_mask[3]);
-        glDepthMask(depth_mask);
-        glBlendFuncSeparate(src_rgb, dst_rgb, src_a, dst_a);
-        glBlendEquationSeparate(eq_rgb, eq_a);
-        glBindVertexArray(vao);
-        glUseProgram(program);
+        sMask.bind();
+        sMask.uniform4f(SK_RECT, -hw, -hh, hw, hh);
+        sMask.uniform1i(SK_MODE, mode);
+        sMask.uniform1f(SK_SIDE, side);
+        sMask.uniform1f(SK_OUTER, fades.mOuter);
+        sMask.uniform1f(SK_CENTRE, fades.mCentre);
+        sMask.uniform1f(SK_SELF, fades.mSelf);
+        const S32 unit = sMask.bindTexture(LLShaderMgr::DIFFUSE_MAP, &s.mTarget, ALSamplers::BilinearClamp);
+        gGL.drawArraysInstanced(LLRender::TRIANGLE_STRIP, 0, 4, 1);
+        if (unit >= 0)
+        {
+            gGL.getTextureSlot(unit)->unbind();
+        }
+        sMask.unbind();
     }
 
     /// One frame of the overlay; false when nothing was drawn.
@@ -274,8 +182,9 @@ void main()
         {
             return false;
         }
-        GLint viewport[4] = {};
-        glGetIntegerv(GL_VIEWPORT, viewport);
+        // The UI's, set by setup2DViewport before the UI draws.
+        S32 viewport[4] = {};
+        gGL.getViewport(viewport);
         if (viewport[2] <= 0 || viewport[3] <= 0)
         {
             return false;
@@ -285,26 +194,10 @@ void main()
         // Stepped, so dragging the window's height reallocates the target and the plan only every SIDE_STEP pixels.
         const U32 side = llclamp(static_cast<U32>(ll_round(height * llclamp(static_cast<F32>(size), 0.2f, 1.5f) / SIDE_STEP)) * SIDE_STEP,
                                  SIDE_STEP, MAX_SIDE);
-        if (!s.mProgram)
+        if (!ensureMask())
         {
-            s.mProgram = compileProgram();
-            if (!s.mProgram)
-            {
-                s.mFailed = true;
-                return false;
-            }
-            glGenVertexArrays(1, &s.mVao);
-            s.mLocRect = glGetUniformLocation(s.mProgram, "u_rect");
-            s.mLocMode = glGetUniformLocation(s.mProgram, "u_mode");
-            s.mLocSide = glGetUniformLocation(s.mProgram, "u_side");
-            s.mLocOuter = glGetUniformLocation(s.mProgram, "u_outer");
-            s.mLocCentre = glGetUniformLocation(s.mProgram, "u_centre");
-            s.mLocSelf = glGetUniformLocation(s.mProgram, "u_self");
-            GLint program = 0;
-            glGetIntegerv(GL_CURRENT_PROGRAM, &program);
-            glUseProgram(s.mProgram);
-            glUniform1i(glGetUniformLocation(s.mProgram, "u_t"), 0);
-            glUseProgram(program);
+            s.mFailed = true;
+            return false;
         }
         if (!s.mTarget.isComplete() || s.mTarget.getWidth() != side)
         {
@@ -342,11 +235,7 @@ void main()
 
         gGL.flush();
         LLGLSLShader* shader = LLGLSLShader::sCurBoundShaderPtr;
-        GLfloat clear[4] = {};
-        glGetFloatv(GL_COLOR_CLEAR_VALUE, clear);
-        GLint draw_fbo = 0, read_fbo = 0;
-        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw_fbo);
-        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read_fbo);
+        const LLColor4 saved_clear = gGL.getClearColor();
         LLGLDisable scissor(GL_SCISSOR_TEST);
         gGL.matrixMode(LLRender::MM_PROJECTION);
         gGL.pushMatrix();
@@ -359,7 +248,7 @@ void main()
         gGL.pushUIMatrix();
         gGL.loadUIIdentity();
         gUIProgram.bind();
-        glClearColor(0.f, 0.f, 0.f, 0.f);
+        gGL.setClearColor(LLColor4::transparent);
 
         for (S32 mode : { 0, 1, 2 })
         {
@@ -374,10 +263,9 @@ void main()
                                                              : SKNetMap::OverlayLayer::SELF;
             map->drawOverlay(layer, metres, rotation, side_ui, llclamp(static_cast<F32>(surface), 0.f, 1.f));
             gGL.flush();
+            // Back to whatever the UI draws into; the viewport set again in case that was a target of another size.
             s.mTarget.flush();
-            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, draw_fbo);
-            glBindFramebuffer(GL_READ_FRAMEBUFFER, read_fbo);
-            glViewport(viewport[0], viewport[1], viewport[2], viewport[3]);
+            gGL.setViewport(viewport[0], viewport[1], viewport[2], viewport[3]);
             blit(s, viewport, static_cast<F32>(side), mode, fades);
         }
 
@@ -388,7 +276,7 @@ void main()
         gGL.matrixMode(LLRender::MM_PROJECTION);
         gGL.popMatrix();
         gGL.matrixMode(LLRender::MM_MODELVIEW);
-        glClearColor(clear[0], clear[1], clear[2], clear[3]);
+        gGL.setClearColor(saved_clear);
         // Unbound first, so the bind below is never skipped as already current.
         LLGLSLShader::unbind();
         if (shader)
@@ -409,7 +297,7 @@ bool SKMapML::showing()
 // static
 void SKMapML::draw()
 {
-    LL_PROFILE_ZONE_SCOPED;
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_UI;
     if (drawOverlay())
     {
         state().mDrawnFrame = LLFrameTimer::getFrameCount() + 1;
