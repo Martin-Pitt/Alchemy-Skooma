@@ -1000,6 +1000,7 @@ if(AL_BUILD_VIEWER)
     rlvhandler.cpp
     rlvhelper.cpp
     rlvinventory.cpp
+    skchatunfurl.cpp
     skfloaterlocalchat.cpp
     rlvlocks.cpp
     rlvui.cpp
@@ -1880,6 +1881,7 @@ if(AL_BUILD_VIEWER)
     rlvhandler.h
     rlvhelper.h
     rlvinventory.h
+    skchatunfurl.h
     skfloaterlocalchat.h
     rlvlocks.h
     rlvmodifiers.h
@@ -2610,6 +2612,7 @@ if(AL_BUILD_TESTS)
       tests/llvocache_test.cpp
       tests/lutcube_test.cpp
       tests/noise_test.cpp
+      tests/skchatunfurl_test.cpp
     UNIT
       alagentlocationformat.cpp
       albakeproxies.cpp
@@ -2686,6 +2689,7 @@ if(AL_BUILD_TESTS)
       llviewercontrollistener.cpp
       lutcube.cpp
       noise.cpp
+      skchatunfurl.cpp
     LIBRARIES llui alscript ll::slua llxml ${test_libs}
     SUPPORT
       newview_test_fakes
