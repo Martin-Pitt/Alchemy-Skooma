@@ -1383,6 +1383,7 @@ function Invoke-IntegrateContinue {
     Say ''
     Good "$($st.Branch) -> main (merge commit, $(@($st.Files).Count) resolved file(s))"
     Info "main is now $(G rev-parse --short main)"
+    Install-Tooling -Quiet
     Info "if the build breaks:  git skooma undo   (back to $($st.LastGood.Substring(0,9)))"
     Say ''
     Backup-Docs
@@ -1541,6 +1542,7 @@ function Invoke-Integrate {
     Say ''
     $results | Format-Table -AutoSize | Out-String | Write-Host
     Info "main is now $(G rev-parse --short main)"
+    Install-Tooling -Quiet
     Info "if the build breaks:  git skooma undo   (back to $($lastGood.Substring(0,9)))"
     Say ''
     Backup-Docs
@@ -1773,28 +1775,37 @@ function Invoke-Retire {
 
 # ------------------------------------------------------------------ bootstrap
 
-function Invoke-Bootstrap {
-    Say ''
-    Say 'Bootstrapping Skooma workflow...'
-
-    # 1. Copy scripts out of the working tree so a dirty/mid-merge main cannot brick the tooling.
+# Copy the tooling out of main's tree, so a dirty/mid-merge main cannot brick it; -Quiet installs only what changed.
+function Install-Tooling { param([switch]$Quiet)
     $dst = Join-Path $CommonDir 'skooma'
     New-Item -ItemType Directory -Force -Path $dst | Out-Null
     $src = Join-Path $MainWt 'scripts\skooma'
-    Copy-Item (Join-Path $src 'skooma.ps1') $dst -Force
-    Good "scripts -> $dst"
+    $installed = Join-Path $dst 'skooma.ps1'
+    $fresh = Join-Path $src 'skooma.ps1'
+    if (-not $Quiet -or -not (Test-Path $installed) -or (Get-FileHash $fresh).Hash -ne (Get-FileHash $installed).Hash) {
+        Copy-Item $fresh $dst -Force
+        Good "scripts -> $dst"
+    }
 
-    # 2. Hooks (sh, shared by every worktree via .git/hooks).
+    # Hooks (sh, shared by every worktree via .git/hooks).
     $hookDst = Join-Path $CommonDir 'hooks'
     New-Item -ItemType Directory -Force -Path $hookDst | Out-Null
     foreach ($h in 'reference-transaction', 'pre-commit') {
         $s = Join-Path $src "hooks\$h"
-        if (Test-Path $s) {
-            $text = (Get-Content $s -Raw) -replace "`r`n", "`n"
-            [IO.File]::WriteAllText((Join-Path $hookDst $h), $text)
-            Good "hook $h installed"
-        }
+        if (-not (Test-Path $s)) { continue }
+        $text = (Get-Content $s -Raw) -replace "`r`n", "`n"
+        $d = Join-Path $hookDst $h
+        if ($Quiet -and (Test-Path $d) -and [IO.File]::ReadAllText($d) -eq $text) { continue }
+        [IO.File]::WriteAllText($d, $text)
+        Good "hook $h installed"
     }
+}
+
+function Invoke-Bootstrap {
+    Say ''
+    Say 'Bootstrapping Skooma workflow...'
+
+    Install-Tooling
 
     # 3. Config.
     $alias = '!f() { d=$(git rev-parse --path-format=absolute --git-common-dir); pwsh -NoProfile -File "$d/skooma/skooma.ps1" "$@"; }; f'
