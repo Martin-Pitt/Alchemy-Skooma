@@ -37,7 +37,7 @@ out vec3 vary_position;
 out float gl_ClipDistance[4];   // 0 the clip plane, 1 the ceiling, 2 the part's own cut, 3 the cap pass's parts
 #ifdef SK_CUT_ATTRIBUTE
 uniform int sk_debug_cut;       // 1: debug view 5, where a hidden part shows whole
-uniform int sk_cap_pass;        // 0 front faces, 1 back faces of uncut parts, 2 cut parts' faces counted in stencil, 3 their section
+uniform int sk_cap_pass;        // 0 front faces, 1 back faces of uncut parts, 2 cut parts' faces counted in stencil, 3 their section, 4 open parts' back faces
 in float weight;        // the linkset id (SKOverviewCensus::Group::mId), whose row of SKOverviewCutTable holds its cut
 out float vary_cut_z;
 out float vary_z;
@@ -79,8 +79,11 @@ void main()
     gl_ClipDistance[2] = (sk_debug_cut == 1 && cut < -1.0e29) ? 1.0 : cut - position.z;
     // A cut part's back faces are its section, drawn by passes 2 and 3 only; an uncut or open part's by pass 1.
     // A part's vertices share its cut and its openness, so the sign is the triangle's.
+    // An open part's back faces are drawn by pass 4 alone, with depth, as a surface seen from its other side.
     float cut_part = (cut < 1.0e29 && texcoord0.x < 0.5) ? 1.0 : -1.0;
-    gl_ClipDistance[3] = sk_cap_pass == 0 ? 1.0 : sk_cap_pass == 1 ? -cut_part : cut_part;
+    float open_part = texcoord0.x > 0.5 ? 1.0 : -1.0;
+    gl_ClipDistance[3] = sk_cap_pass == 0 ? 1.0 : sk_cap_pass == 4 ? open_part
+                       : sk_cap_pass == 1 ? min(-cut_part, -open_part) : cut_part;
 #endif
 #else
     gl_ClipDistance[2] = 1.0;
