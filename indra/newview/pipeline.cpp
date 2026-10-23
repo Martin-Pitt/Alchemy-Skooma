@@ -112,6 +112,7 @@
 #include "llviewerwindow.h" // For getSpinAxis
 #include "llvoavatarself.h"
 #include "skaircells.h" // <SK:Nexii> air cells overlay
+#include "skrooms.h" // <SK:Nexii> rooms overlay
 #include "skworldcensus.h" // <SK:Nexii> census overlay
 #include "llvocache.h"
 #include "llvosky.h"
@@ -11257,6 +11258,12 @@ void LLPipeline::renderFinalize()
     if (!cutout && SKAirCells::instanceExists())
     {
         SKAirCells::instance().renderDebug();
+    }
+    // </SK:Nexii>
+    // <SK:Nexii> rooms overlay: spaces, portals, wind and the air's space and indoor modes, under the world debug mask
+    if (!cutout && SKRooms::instanceExists())
+    {
+        SKRooms::instance().renderDebug();
     }
     // </SK:Nexii>
 

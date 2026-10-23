@@ -2993,6 +2993,83 @@
             <key>Value</key>
             <integer>0</integer>
         </map>
+        <key>SKRoomsEnabled</key>
+        <map>
+            <key>Comment</key>
+            <string>Cut the air cells into enclosure answers, spaces, portals, rooms and wind slabs. Off, nothing reads the rooms layer.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKRoomsOverlaySpaces</key>
+        <map>
+            <key>Comment</key>
+            <string>Fill the floor of each space the rooms pass cut in a colour of its own, and draw its portals: doors red, stairs lime, openings cyan, dashed where nothing is over them. Under World overlays.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKRoomsOverlayWind</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw an arrow every 2 m over the lowest wind band near the camera, for one heading, coloured by speed factor: blue calm, cyan the free stream, yellow twice it. Under World overlays.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKRoomsOverlayWindHeading</key>
+        <map>
+            <key>Comment</key>
+            <string>The heading the wind overlay shows, in degrees the wind blows toward, counter-clockwise from east; negative follows the region's wind at the camera.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>-1.0</real>
+        </map>
+        <key>SKRoomsSealedIndoors</key>
+        <map>
+            <key>Comment</key>
+            <string>Read walkable air that no walkable path reaches from outside (a sealed building) as indoors, flagged sealed and as deep as depth goes, rather than as no answer. Air over no walkable floor stays unknown either way.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKRoomsSettleMs</key>
+        <map>
+            <key>Comment</key>
+            <string>Milliseconds a mesh's air must stay unchanged before its enclosure pass runs, so a burst of tile builds costs one pass.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>100</integer>
+        </map>
+        <key>SKRoomsWindSettleMs</key>
+        <map>
+            <key>Comment</key>
+            <string>Milliseconds a mesh's rooms must be quiet before its wind slabs are rebuilt, so a mesh still streaming in builds them once.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>1000</integer>
+        </map>
         <key>AlchemyRenderWaterHextile</key>
         <map>
             <key>Comment</key>

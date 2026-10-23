@@ -140,6 +140,7 @@
 #include "llworldmap.h"
 #include "pipeline.h"
 #include "skaircells.h" // <SK:Nexii> air cells menu
+#include "skrooms.h" // <SK:Nexii> rooms menu
 #include "skworldcensus.h" // <SK:Nexii> census export
 #include "llviewerjoystick.h"
 #include "llfloatercamera.h"
@@ -1408,6 +1409,19 @@ class SKShowAirStatus : public view_listener_t
     {
         LLSD args;
         args["MESSAGE"] = SKAirCells::instance().statsLine();
+        LLNotificationsUtil::add("SystemMessageTip", args);
+        return true;
+    }
+};
+// </SK:Nexii>
+
+// <SK:Nexii> rooms: the enclosure, spaces, room graph and wind passes' status
+class SKShowRoomsStatus : public view_listener_t
+{
+    bool handleEvent(const LLSD& userdata)
+    {
+        LLSD args;
+        args["MESSAGE"] = SKRooms::instance().statsLine();
         LLNotificationsUtil::add("SystemMessageTip", args);
         return true;
     }
@@ -10873,6 +10887,7 @@ void initialize_menus()
     view_listener_t::addMenu(new SKSetAirOverlay(), "SK.SetAirOverlay"); // <SK:Nexii> air cells
     view_listener_t::addMenu(new SKCheckAirOverlay(), "SK.CheckAirOverlay"); // <SK:Nexii> air cells
     view_listener_t::addMenu(new SKShowAirStatus(), "SK.ShowAirStatus"); // <SK:Nexii> air cells
+    view_listener_t::addMenu(new SKShowRoomsStatus(), "SK.ShowRoomsStatus"); // <SK:Nexii> rooms
     view_listener_t::addMenu(new LLAdvancedSelectedTextureInfo(), "Advanced.SelectedTextureInfo");
     commit.add("Advanced.SelectedMaterialInfo", boost::bind(&handle_selected_material_info));
     view_listener_t::addMenu(new LLAdvancedToggleWireframe(), "Advanced.ToggleWireframe");
