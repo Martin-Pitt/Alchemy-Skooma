@@ -140,6 +140,11 @@ private:
     std::vector<Row> mRows;
     S32 mContentHeight = 0;
     S32 mScroll = 0;            // pixels scrolled up from the newest message
+    S32 mPendingMessages = 0;   // appended since the last layout
+    S32 mUnseen = 0;            // arrived while scrolled up
+    S32 mPillCount = -1;        // the count mPillLabel was made for
+    std::string mPillLabel;
+    LLRect mPillRect;           // empty while the jump pill is hidden
     S32 mLayoutWidth = -1;
     S32 mLayoutStyle = -1;
     bool mLayoutDirty = true;
