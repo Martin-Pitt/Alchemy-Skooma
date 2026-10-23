@@ -1530,8 +1530,15 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
             // is inside a cut solid: more of the cut parts' back faces past it than front, every one of which lies below the
             // cut. There it is lifted onto the cut plane (overviewGeomF.glsl), so a floor running through the solid
             // does not hide it, and the outside faces in front of a far wall's inside are left alone.
-            enum { CAP_FRONT, CAP_BACK, CAP_PARITY, CAP_FILL };
-            std::vector<S32> passes = { CAP_FRONT, CAP_BACK };
+            // An open part (a physics mesh, wound as uploaded) is a surface with no inside: its back faces are drawn
+            // with depth and class as its front faces are, and it takes no part in the section passes.
+            enum { CAP_FRONT, CAP_BACK, CAP_PARITY, CAP_FILL, CAP_OPEN_BACK };
+            std::vector<S32> passes = { CAP_FRONT };
+            if (cuts)
+            {
+                passes.push_back(CAP_OPEN_BACK);
+            }
+            passes.push_back(CAP_BACK);
             if (cuts)
             {
                 passes.push_back(CAP_PARITY);
@@ -1546,11 +1553,11 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
                 bindGeom(pass == CAP_FILL ? lift : geom);
                 glUniform1i(bound->getUniformLocation(SK_CAP_PASS), pass);
                 const bool parity = pass == CAP_PARITY;
-                LLGLDepthTest depth(GL_TRUE, pass == CAP_FRONT || pass == CAP_FILL ? GL_TRUE : GL_FALSE,
+                LLGLDepthTest depth(GL_TRUE, pass == CAP_FRONT || pass == CAP_OPEN_BACK || pass == CAP_FILL ? GL_TRUE : GL_FALSE,
                                     parity ? GL_ALWAYS : GL_LEQUAL);
                 LLGLState cull_face(GL_CULL_FACE, !parity);
                 glCullFace(pass == CAP_FRONT ? GL_BACK : GL_FRONT);
-                LLGLState stencil(GL_STENCIL_TEST, pass >= CAP_PARITY);
+                LLGLState stencil(GL_STENCIL_TEST, pass == CAP_PARITY || pass == CAP_FILL);
                 if (parity)
                 {
                     // A winding count, not parity: overlapping solids (walls meeting at corners) and mirrored ones
@@ -1585,7 +1592,7 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
                         }
                         // Where each part carries its own cut, an uncut or open part's back face is no section, only a
                         // single-sided face seen from behind (a roof plane wound downwards): it keeps its class.
-                        const bool section = pass != CAP_FRONT && !(shot.mPartCuts && pass == CAP_BACK);
+                        const bool section = pass == CAP_PARITY || pass == CAP_FILL || (pass == CAP_BACK && !shot.mPartCuts);
                         const U8 code = section ? (U8)skoverview::CODE_SECTION : skoverview::codeOf((skoverview::CensusClass)c);
                         gGL.diffuseColor4f(code / 255.f, 0.f, 0.f, 1.f);
                         // Coplanar parts of different classes resolve the same way every frame: floor over ramp over

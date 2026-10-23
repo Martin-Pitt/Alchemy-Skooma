@@ -1285,7 +1285,10 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildLinksets(const J
         }
         // A part with an edge not shared by an even count of its triangles is open (single-sided planes, often a cheap
         // triangle-mesh physics shape): it has no inside, so the cut draws its edge but no section fill.
-        bool open = false;
+        // A physics mesh is open whatever its edges: the sim collides with it from either side, and its winding is as
+        // uploaded, so it is drawn two-sided rather than as a solid.
+        bool open = !is_sculpt && !kept[i]->mSolid && kept[i]->mProvenance != sknav::Provenance::RENDER;
+        if (!open)
         {
             auto vertexKey = [](const LLVector3& v)
             {
