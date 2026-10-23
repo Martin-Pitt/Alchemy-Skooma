@@ -48,6 +48,7 @@
 #include "sknavoverlay.h"
 #include "sknavrooms.h"
 
+#include <algorithm>
 #include <utility>
 
 namespace
@@ -761,18 +762,25 @@ void SKNavAnnotator::staleCrosses()
     {
         return;
     }
+    // A mesh that has left the view is forgotten, so the map holds only the meshes in it.
+    for (auto it = mCrossesChecked.begin(); it != mCrossesChecked.end();)
+    {
+        const bool live = std::any_of(view->meshes().begin(), view->meshes().end(),
+                                      [&](const SKNavWorldView::Mesh& mesh) { return mesh.mId == it->first; });
+        it = live ? std::next(it) : mCrossesChecked.erase(it);
+    }
     for (const SKNavWorldView::Mesh& mesh : view->meshes())
     {
         if (!mesh.mRooms || !mesh.mProduct)
         {
             continue;
         }
-        const void*& seen = mCrossesChecked[mesh.mId];
-        if (seen == mesh.mRooms.get())
+        std::weak_ptr<const sknav::RoomsProduct>& seen = mCrossesChecked[mesh.mId];
+        if (seen.lock() == mesh.mRooms)
         {
             continue;
         }
-        seen = mesh.mRooms.get();
+        seen = mesh.mRooms;
         const std::vector<U32>& ids = mesh.mProduct->mSpaceIds;
         std::vector<MarkSet::Cut> cuts;
         for (const Portal& portal : mesh.mRooms->mPortals)
