@@ -109,6 +109,8 @@ public:
     /// Treat a global box like the camera's SKNavAirRadius: its tiles build and keep detail air while asked for within
     /// SKNavAirDetailHoldSeconds. One box per consumer; the mini-map asks for the frame it shows (ruling 13).
     void requestAir(const std::string& who, const LLVector3d& min, const LLVector3d& max) const;
+    /// Drops the overlay's buffers, which go with the context.
+    static void cleanupGL();
 
     /// Close the build pool before the singleton goes: a job in flight holds
     /// this pointer to publish its result.

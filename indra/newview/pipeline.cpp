@@ -1558,6 +1558,7 @@ void LLPipeline::releaseAllGLResources()
 
     SKOutlineCapture::cleanupGL(); // <SK:Nexii> outline capture: the atlas goes with the context and every capture renders again
     SKOverviewCapture::cleanupGL(); // <SK:Nexii> overview capture: its targets go with the context
+    SKNavMesh::cleanupGL(); // <SK:Nexii> navmesh overlay: its buffers go with the context
     releaseRenderTargets();
     releaseDepthDependents();
 

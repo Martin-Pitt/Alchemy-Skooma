@@ -32,8 +32,11 @@
 #include "v4color.h"
 
 #include <map>
+#include <memory>
 #include <ostream>
 #include <string>
+
+namespace sknav { struct RoomsProduct; }
 
 class LLHUDText;
 class SKNavMarkObjects;
@@ -139,7 +142,7 @@ private:
 
     sknav::MarkSet mMarks;
     /// Per mesh, the spaces product its crosses were last held against.
-    std::map<LLUUID, const void*> mCrossesChecked;
+    std::map<LLUUID, std::weak_ptr<const sknav::RoomsProduct>> mCrossesChecked;
     void staleCrosses();
     sknav::Mark mPending;
     bool mArmed = false;

@@ -77,6 +77,8 @@ public:
     /// The gathered colours stay in memory, because the scaled x-ray pass has
     /// no batch uniform to scale by under `gUIProgram` and still reads them.
     void upload();
+    /// Drop the buffers, which go with the context; draw() emits from the vectors until the next upload().
+    void releaseGL();
 
     /// Draw what was gathered: fills, then edges, then the lines over them.
     /// `shade` darkens the colours (the x-ray pass, seen through geometry)

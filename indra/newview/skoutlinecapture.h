@@ -153,6 +153,7 @@ private:
     std::unordered_map<LLUUID, std::unique_ptr<Entry>> mEntries;
     std::unordered_map<LLUUID, std::string> mNames;   // names of vehicle roots and worn parts, as they arrive
     std::unordered_map<LLUUID, F64> mNameRequests;    // when a name was asked for
+    F64 mNamesSwept = 0.0;
     SKOutlinePolicy::SlotAtlas mAtlas;
     SKOutlinePolicy::FrameBudget mBudget;
     F64 mLastFrameMs = 0.0;

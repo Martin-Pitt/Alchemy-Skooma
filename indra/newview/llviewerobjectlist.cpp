@@ -1655,6 +1655,7 @@ void LLViewerObjectList::cleanupReferences(LLViewerObject *objectp)
     {
         mDeadObjects.insert(objectp->mID);
     }
+    sPhysicsFlagsRefused.erase(objectp->mID); // <SK:Nexii> Mini-map census: the refused set holds only live objects.
 
     // Cleanup any references we have to this object
     // Remove from object map so noone can look it up.
@@ -1771,6 +1772,7 @@ void LLViewerObjectList::killAllObjects()
     mIndexAndLocalIDToUUID.clear();
     mActiveObjects.clear();
     mMapObjects.clear();
+    sPhysicsFlagsRefused.clear(); // <SK:Nexii> Mini-map census
 
     LLViewerObject *objectp;
     for (vobj_list_t::iterator iter = mObjects.begin(); iter != mObjects.end(); ++iter)
