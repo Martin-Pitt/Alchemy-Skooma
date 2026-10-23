@@ -5254,6 +5254,17 @@
             <key>Value</key>
             <integer>0</integer>
         </map>
+        <key>SkoomaLocalChatUnfurl</key>
+        <map>
+            <key>Comment</key>
+            <string>Show a preview card under game-style local chat messages that link to a Second Life place, resident, group or Marketplace listing. Only Linden Lab's own hosts are ever fetched.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
         <key>SkoomaLocalChatFadeDelay</key>
         <map>
             <key>Comment</key>

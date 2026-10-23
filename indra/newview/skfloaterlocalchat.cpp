@@ -62,6 +62,7 @@
 #include "llviewerobjectlist.h"
 #include "llviewertexture.h"
 #include "llviewercontrol.h"
+#include "llviewertexture.h"
 #include "llviewerwindow.h"
 
 namespace
@@ -88,6 +89,12 @@ constexpr F32 EDGE_FADE = 24.f; // the scroll mask at the top, and at the bottom
 constexpr F32 CARD_ALPHA = 0.6f;
 constexpr S32 TIME_GAP = 5;     // between the name and its timestamp
 constexpr F32 TIME_ALPHA = 0.45f;
+constexpr S32 EMBED_MAX_WIDTH = 360;
+constexpr S32 EMBED_MIN_WIDTH = 120;
+constexpr S32 EMBED_PAD = 6;
+constexpr S32 EMBED_GAP = 4;    // between the text and its preview
+constexpr S32 EMBED_ACCENT = 3; // the bar in the speaker's colour
+constexpr S32 EMBED_LINE_GAP = 2;
 
 S32 utf8_lead_len(char c)
 {
@@ -103,6 +110,32 @@ LLFontGL* name_font()
 LLFontGL* time_font()
 {
     return LLFontGL::getFontSansSerifSmall();
+}
+
+LLFontGL* embed_font()
+{
+    return LLFontGL::getFontSansSerifSmall();
+}
+
+S32 embed_height()
+{
+    return 2 * embed_font()->getLineHeight() + EMBED_LINE_GAP + 2 * EMBED_PAD;
+}
+
+S32 embed_thumb()
+{
+    return embed_height() - 2 * EMBED_PAD;
+}
+
+bool unfurl_enabled()
+{
+    static LLCachedControl<bool> unfurl(gSavedSettings, "SkoomaLocalChatUnfurl", true);
+    return unfurl;
+}
+
+bool embed_shown(const SKChatEmbedPtr& embed)
+{
+    return embed && embed->mState == SKChatEmbed::READY && !embed->mTitle.empty() && unfurl_enabled();
 }
 } // namespace
 
@@ -406,6 +439,18 @@ void SKFloaterLocalChat::appendChat(const LLChat& chat, const LLSD& args, F64 ar
     out += rest;
     msg.mBody = std::move(out);
 
+    // One preview a message, for its first link that has one; nothing is looked up until it is drawn.
+    if (unfurl_enabled())
+    {
+        for (const Link& link : msg.mLinks)
+        {
+            if (!link.mQuery && (msg.mEmbed = mUnfurl.find(link.mUrl)))
+            {
+                break;
+            }
+        }
+    }
+
     mMessages.push_back(std::move(msg));
     ++mPendingMessages;
     if (mScroll > 0)
@@ -560,6 +605,10 @@ LLRect SKFloaterLocalChat::contentRect() const
 
 S32 SKFloaterLocalChat::lineHeight(const Row& row) const
 {
+    if (row.mEmbed)
+    {
+        return embed_height();
+    }
     return row.mMessage < 0 ? name_font()->getLineHeight() + 1 : LLViewerChat::getChatFont()->getLineHeight();
 }
 
@@ -585,10 +634,13 @@ void SKFloaterLocalChat::layout()
     static LLCachedControl<S32> style(gSavedSettings, "SkoomaLocalChatStyle", STYLE_CARDS);
     const bool cards = style != STYLE_MINIMAL;
     const S32 width = contentRect().getWidth();
-    if (!mLayoutDirty && width == mLayoutWidth && style == mLayoutStyle)
+    // A preview that arrived, or the setting turned, lays the messages out again.
+    const U32 unfurl_generation = mUnfurl.generation() * 2 + (unfurl_enabled() ? 1 : 0);
+    if (!mLayoutDirty && width == mLayoutWidth && style == mLayoutStyle && unfurl_generation == mUnfurlGeneration)
     {
         return;
     }
+    mUnfurlGeneration = unfurl_generation;
     ++mLayoutGeneration;
     if (mLayoutStyle >= 0 && style != mLayoutStyle)
     {
@@ -719,6 +771,20 @@ void SKFloaterLocalChat::layout()
                 break;
             }
         }
+        if (embed_shown(msg.mEmbed))
+        {
+            const SKChatEmbed& embed = *msg.mEmbed;
+            const S32 text_w = llmax(embed_font()->getWidth(embed.mTitle) + 2, embed_font()->getWidth(embed.mDescription));
+            const S32 thumb = embed.mImage.notNull() ? embed_thumb() + EMBED_PAD : 0;
+            const S32 room = llmax(16, llmin(EMBED_MAX_WIDTH, width - mCards.back().mTextX - pad_x));
+            msg.mEmbedWidth = llclamp(EMBED_ACCENT + 2 * EMBED_PAD + text_w + thumb, llmin(EMBED_MIN_WIDTH, room), room);
+            Row row;
+            row.mMessage = m;
+            row.mCard = (S32)mCards.size() - 1;
+            row.mEmbed = true;
+            row.mPadTop = EMBED_GAP;
+            mRows.push_back(row);
+        }
         mRows.back().mPadBottom = cards ? CARD_PAD_Y : 0;
         mRows.back().mGap = cards ? CARD_GAP : MINIMAL_GAP;
         mCards.back().mLastRow = (S32)mRows.size() - 1;
@@ -735,6 +801,10 @@ void SKFloaterLocalChat::layout()
             {
                 const Message& first = mMessages[mCards[row.mCard].mFirstMessage];
                 widest = llmax(widest, first.mNameWidth + first.mTimeWidth);
+            }
+            else if (row.mEmbed)
+            {
+                widest = llmax(widest, mMessages[row.mMessage].mEmbedWidth);
             }
             else
             {
@@ -843,6 +913,67 @@ void SKFloaterLocalChat::drawRowText(const Row& row, S32 x, S32 y, F32 alpha, LL
     }
 }
 
+void SKFloaterLocalChat::requestEmbeds(const Card& card)
+{
+    if (!unfurl_enabled())
+    {
+        return;
+    }
+    for (S32 m = card.mFirstMessage; m <= card.mLastMessage; ++m)
+    {
+        const SKChatEmbedPtr& embed = mMessages[m].mEmbed;
+        if (embed && embed->mState == SKChatEmbed::IDLE)
+        {
+            mUnfurl.request(embed);
+        }
+    }
+}
+
+void SKFloaterLocalChat::drawEmbed(const Message& msg, S32 x, S32 y, F32 alpha) const
+{
+    static LLUIImagePtr card_image = LLUI::getUIImage("Rounded_Square");
+    static LLUIColor card_color = LLUIColorTable::instance().getColor("Black");
+    static LLUIColor title_color = LLUIColorTable::instance().getColor("White");
+    const SKChatEmbed& embed = *msg.mEmbed;
+    const S32 w = msg.mEmbedWidth;
+    const S32 h = embed_height();
+    card_image->draw(x, y, w, h, card_color.get() % (0.45f * alpha));
+
+    gGL.getTextureSlot(0)->unbind();
+    LLColor4 accent = msg.mNameColor;
+    accent.mV[VALPHA] *= alpha;
+    gl_rect_2d(x + 1, y + h - 3, x + 1 + EMBED_ACCENT, y + 3, accent);
+
+    S32 right = x + w - EMBED_PAD;
+    if (embed.mImage.notNull())
+    {
+        const S32 thumb = embed_thumb();
+        right -= thumb;
+        embed.mImage->addTextureStats((F32)(thumb * thumb));
+        if (embed.mImage->hasGLTexture())
+        {
+            gl_draw_scaled_image(right, y + EMBED_PAD, thumb, thumb, embed.mImage, LLColor4(1.f, 1.f, 1.f, alpha));
+        }
+        right -= EMBED_PAD;
+    }
+
+    LLFontGL* font = embed_font();
+    const S32 left = x + EMBED_ACCENT + EMBED_PAD;
+    const S32 max_px = llmax(0, right - left);
+    const S32 line = font->getLineHeight();
+    LLColor4 title = title_color.get();
+    title.mV[VALPHA] *= alpha;
+    font->renderUTF8(embed.mTitle, 0, (F32)left, (F32)(y + EMBED_PAD + line + EMBED_LINE_GAP), title, LLFontGL::LEFT, LLFontGL::BOTTOM,
+                     LLFontGL::BOLD, LLFontGL::NO_SHADOW, S32_MAX, max_px, nullptr, true);
+    if (!embed.mDescription.empty())
+    {
+        LLColor4 desc = title;
+        desc.mV[VALPHA] *= 0.7f;
+        font->renderUTF8(embed.mDescription, 0, (F32)left, (F32)(y + EMBED_PAD), desc, LLFontGL::LEFT, LLFontGL::BOTTOM,
+                         LLFontGL::NORMAL, LLFontGL::NO_SHADOW, S32_MAX, max_px, nullptr, true);
+    }
+}
+
 void SKFloaterLocalChat::drawMessages(const LLRect& content, F64 now, bool full, bool cards)
 {
     static LLUIImagePtr card_image = LLUI::getUIImage("Rounded_Square");
@@ -911,6 +1042,10 @@ void SKFloaterLocalChat::drawMessages(const LLRect& content, F64 now, bool full,
                     drawTime(first, (F32)(text_x + first.mNameWidth + TIME_GAP), y, alpha, LLFontGL::NO_SHADOW);
                 }
             }
+            else if (row.mEmbed)
+            {
+                drawEmbed(mMessages[row.mMessage], text_x, y, alpha);
+            }
             else
             {
                 drawRowText(row, text_x, y, alpha, shadow);
@@ -952,6 +1087,16 @@ void SKFloaterLocalChat::drawMaskedMessages(const LLRect& content, F64 now, bool
         in_band |= card_top > top_band || (scrolled && card_bottom < bottom_band);
         fades = (fades ^ (U64)(c * 256 + ll_round(alpha * 255.f))) * 1099511628211ULL;
         icons = (icons ^ iconStamp(mMessages[card.mFirstMessage])) * 1099511628211ULL;
+        requestEmbeds(card);
+        for (S32 m = card.mFirstMessage; m <= card.mLastMessage; ++m)
+        {
+            // A preview's picture arriving changes what the mask holds.
+            const SKChatEmbedPtr& embed = mMessages[m].mEmbed;
+            if (embed && embed->mImage.notNull())
+            {
+                fades = (fades ^ (U64)(embed->mImage->hasGLTexture() ? 64 + embed->mImage->getDiscardLevel() : 63)) * 1099511628211ULL;
+            }
+        }
     }
 
     if (!in_band)
@@ -1055,6 +1200,7 @@ void SKFloaterLocalChat::draw()
     setMouseOpaque(opaque);
     getDragHandle()->setMouseOpaque(opaque);
 
+    mUnfurl.update();
     layout();
 
     static LLCachedControl<S32> style(gSavedSettings, "SkoomaLocalChatStyle", STYLE_CARDS);
@@ -1166,6 +1312,11 @@ std::string SKFloaterLocalChat::urlAt(S32 x, S32 y) const
         {
             const Message& first = mMessages[card.mFirstMessage];
             return x < text_x + name_font()->getWidth(first.mName) ? first.mSenderUrl : std::string();
+        }
+        if (row.mEmbed)
+        {
+            const Message& msg = mMessages[row.mMessage];
+            return msg.mEmbed && x >= text_x && x < text_x + msg.mEmbedWidth ? msg.mEmbed->mUrl : std::string();
         }
         const Message& msg = mMessages[row.mMessage];
         if (x < text_x)

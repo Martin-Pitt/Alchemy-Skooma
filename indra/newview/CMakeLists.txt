@@ -998,6 +998,8 @@ if(AL_BUILD_VIEWER)
     rlvhandler.cpp
     rlvhelper.cpp
     rlvinventory.cpp
+    skchatunfurl.cpp
+    skchatunfurlcache.cpp
     skfloaterlocalchat.cpp
     skhover.cpp
     skoverlay.cpp
@@ -1878,6 +1880,8 @@ if(AL_BUILD_VIEWER)
     rlvhandler.h
     rlvhelper.h
     rlvinventory.h
+    skchatunfurl.h
+    skchatunfurlcache.h
     skfloaterlocalchat.h
     skhover.h
     skoverlay.h
@@ -2621,6 +2625,7 @@ if(AL_BUILD_TESTS)
       tests/llvocache_test.cpp
       tests/lutcube_test.cpp
       tests/noise_test.cpp
+      tests/skchatunfurl_test.cpp
     UNIT
       alagentlocationformat.cpp
       alchattimestamp.cpp
@@ -2696,6 +2701,7 @@ if(AL_BUILD_TESTS)
       llviewercontrollistener.cpp
       lutcube.cpp
       noise.cpp
+      skchatunfurl.cpp
     LIBRARIES llui alscript ll::slua llxml ${test_libs}
     SUPPORT
       newview_test_fakes
