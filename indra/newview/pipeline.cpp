@@ -5983,11 +5983,7 @@ void LLPipeline::renderDebug()
         static LLStaticHashedString sk_probe_inv_view("sk_probe_inv_view");
         LLMatrix4a inv_view = LLViewerCamera::getCurrent().getModelview();
         inv_view.invert();
-        const GLint inv_view_loc = gReflectionProbeDisplayProgram.getUniformLocation(sk_probe_inv_view);
-        if (inv_view_loc >= 0)
-        {
-            glUniformMatrix4fv(inv_view_loc, 1, GL_FALSE, inv_view.getF32ptr());
-        }
+        gReflectionProbeDisplayProgram.uniformMatrix4fv(sk_probe_inv_view, 1, GL_FALSE, inv_view.getF32ptr());
         // </SK:Nexii>
         mScreenTriangleVB->setBuffer();
 
@@ -13317,8 +13313,9 @@ U32 LLPipeline::skRenderOverview(const LLMatrix4a& view, const LLMatrix4a& proj,
     LLVector4a clip_plane(normal_eye.getF32ptr()[0], normal_eye.getF32ptr()[1], normal_eye.getF32ptr()[2], plane_w);
     auto bind_clip = [&](U8 code)
     {
+        static const LLStaticHashedString sk_clip_plane("clip_plane");
         gClipProgram.bind();
-        glUniform4fv(glGetUniformLocation(gClipProgram.mProgramObject, "clip_plane"), 1, clip_plane.getF32ptr());
+        gClipProgram.uniform4fv(sk_clip_plane, 1, clip_plane.getF32ptr());
         gGL.diffuseColor4f(code / 255.f, 0.f, 1.f, 1.f);
     };
 
