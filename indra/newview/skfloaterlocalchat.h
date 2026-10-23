@@ -106,11 +106,14 @@ private:
         std::vector<Link> mLinks;
         SKChatEmbedPtr mEmbed; // the preview of the first link that has one
         S32 mEmbedWidth = 0;   // measured at layout
+        S32 mDay = 0;          // yyyymmdd in the timestamps' time base, 0 when unknown
+        std::string mDayLabel; // the day divider above it, made at layout when needed
+        S32 mDayWidth = 0;     // measured at layout
     };
 
     struct Row
     {
-        S32 mMessage = 0;   // -1 for a card header
+        S32 mMessage = 0;   // -1 for a card header, DIVIDER_ROW for a day divider
         S32 mCard = 0;
         S32 mBegin = 0;
         S32 mLength = 0;
@@ -131,7 +134,9 @@ private:
         S32 mWidth = 0;     // the bubble, shrink-wrapped to its widest line
         S32 mIconWidth = 0; // the speaker's icon, 0 for none
         S32 mTextX = 0;     // where the text column starts, from the content's left
+        bool mDivider = false; // a day divider, fading with the message after it
     };
+    static constexpr S32 DIVIDER_ROW = -2;
 
     void backfill(bool skip_last);
     void appendChat(const LLChat& chat, const LLSD& args, F64 arrival);
@@ -165,6 +170,7 @@ private:
     void drawObjectIcon(const Message& first, S32 left, S32 top, S32 width, const LLColor4& color, F64 now);
     U64 iconStamp(const Message& first) const;
     void drawAvatarIcon(const Message& first, S32 left, S32 top, const LLColor4& color);
+    void drawDivider(const Card& card, const LLRect& content, S32 base, F32 alpha, LLFontGL::ShadowType shadow) const;
     void drawEmbed(const Message& msg, S32 x, S32 y, F32 alpha) const;
     /// Starts the lookups of the previews in a card about to be drawn.
     void requestEmbeds(const Card& card);
