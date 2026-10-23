@@ -70,6 +70,7 @@ constexpr S32 DISC_GAP = 6;
 constexpr S32 INPUT_HEIGHT = 24;
 constexpr S32 INPUT_GAP = 4;
 constexpr S32 INSET = 8; // inside the backdrop's border
+constexpr F32 EDGE_FADE = 24.f; // the scroll mask at the top, and at the bottom while scrolled
 constexpr F32 CARD_ALPHA = 0.6f;
 
 S32 utf8_lead_len(char c)
@@ -753,6 +754,14 @@ void SKFloaterLocalChat::draw()
         const S32 text_x = content.mLeft + (cards ? PAD_X + DISC + DISC_GAP : PAD_X);
         const LLFontGL::ShadowType shadow = cards ? LLFontGL::NO_SHADOW : LLFontGL::DROP_SHADOW_SOFT;
         const S32 base = content.mBottom - mScroll;
+        const bool scrolled = mScroll > 0;
+        // Scroll masks: what nears the top edge fades out, and the bottom edge too while scrolled up.
+        auto edge = [&](S32 lo, S32 hi)
+        {
+            const F32 mid = 0.5f * (F32)(llmax(lo, content.mBottom) + llmin(hi, content.mTop));
+            const F32 top = llclamp(((F32)content.mTop - mid) / EDGE_FADE, 0.f, 1.f);
+            return scrolled ? top * llclamp((mid - (F32)content.mBottom) / EDGE_FADE, 0.f, 1.f) : top;
+        };
 
         for (S32 c = (S32)mCards.size() - 1; c >= 0; --c)
         {
@@ -778,14 +787,14 @@ void SKFloaterLocalChat::draw()
             const Message& first = mMessages[card.mFirstMessage];
             if (cards)
             {
-                card_image->draw(content.mLeft, card_bottom, content.getWidth(), card_top - card_bottom, card_color.get() % (CARD_ALPHA * alpha));
+                card_image->draw(content.mLeft, card_bottom, content.getWidth(), card_top - card_bottom, card_color.get() % (CARD_ALPHA * alpha * edge(card_bottom, card_top)));
                 if (!first.mName.empty())
                 {
                     // Round for people, square for objects.
                     gGL.getTextureSlot(0)->unbind();
                     const S32 disc_top = card_top - PAD_Y - 1;
                     LLColor4 disc = first.mNameColor;
-                    disc.mV[VALPHA] *= alpha;
+                    disc.mV[VALPHA] *= alpha * edge(disc_top - DISC, disc_top);
                     if (first.mSource == CHAT_SOURCE_OBJECT)
                     {
                         gl_rect_2d(content.mLeft + PAD_X, disc_top, content.mLeft + PAD_X + DISC, disc_top - DISC, disc);
@@ -806,15 +815,20 @@ void SKFloaterLocalChat::draw()
                 {
                     continue;
                 }
+                const F32 row_alpha = alpha * edge(y, y + lineHeight(row));
+                if (row_alpha <= 0.f)
+                {
+                    continue;
+                }
                 if (row.mMessage < 0)
                 {
                     LLColor4 color = first.mNameColor;
-                    color.mV[VALPHA] *= alpha;
+                    color.mV[VALPHA] *= row_alpha;
                     name_font()->renderUTF8(first.mName, 0, (F32)text_x, (F32)y, color, LLFontGL::LEFT, LLFontGL::BOTTOM, LLFontGL::BOLD, LLFontGL::NO_SHADOW);
                 }
                 else
                 {
-                    drawRowText(row, text_x, y, alpha, shadow);
+                    drawRowText(row, text_x, y, row_alpha, shadow);
                 }
             }
         }
