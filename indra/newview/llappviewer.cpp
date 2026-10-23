@@ -223,6 +223,7 @@
 
 #include "llworld.h"
 #include "skaircells.h" // <SK:Nexii> air cells tick
+#include "skmaprecorder.h" // <SK:Nexii> mini-map recorder tick
 #include "skrooms.h" // <SK:Nexii> rooms tick
 #include "skworldcensus.h" // <SK:Nexii> census tick
 #include "llhudeffecttrail.h"
@@ -5928,6 +5929,7 @@ void LLAppViewer::idle()
         LL_PROFILE_ZONE_NAMED_CATEGORY_APP("world update");
         gPipeline.updateMove();
     }
+    SKMapRecorder::onFrame(); // <SK:Nexii> mini-map recorder: takes the world layers' trace lines while recording
     // <SK:Nexii> census: scans after objects moved, the layers above follow it
     SKWorldCensus::instance().update();
     // </SK:Nexii>
