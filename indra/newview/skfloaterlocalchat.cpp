@@ -80,7 +80,8 @@ constexpr S32 INPUT_GAP = 4;
 constexpr S32 INSET = 8; // inside the backdrop's border
 constexpr F32 EDGE_FADE = 24.f; // the scroll mask at the top, and at the bottom while scrolled
 constexpr F32 CARD_ALPHA = 0.6f;
-constexpr S32 TIME_GAP = 10;    // between the name and its timestamp
+constexpr S32 TIME_GAP = 10;    // between a card's name and its timestamp
+constexpr S32 LEAD_TIME_GAP = 6; // between a minimal line's leading timestamp and the name
 constexpr F32 TIME_ALPHA = 0.45f;
 constexpr S32 EMBED_MAX_WIDTH = 360;
 constexpr S32 EMBED_MIN_WIDTH = 120;
@@ -757,7 +758,7 @@ void SKFloaterLocalChat::layout()
     {
         Message& msg = mMessages[m];
         msg.mNameWidth = bold_width(name_font(), msg.mName);
-        msg.mTimeWidth = msg.mName.empty() || msg.mTime.empty() ? 0 : time_font()->getWidth(msg.mTime) + TIME_GAP;
+        msg.mTimeWidth = msg.mName.empty() || msg.mTime.empty() ? 0 : time_font()->getWidth(msg.mTime) + (cards ? TIME_GAP : LEAD_TIME_GAP);
         // Cards gather one speaker's run of messages; a minimal line stands alone.
         bool join = false;
         if (cards && !mCards.empty() && !msg.mName.empty())
@@ -802,7 +803,7 @@ void SKFloaterLocalChat::layout()
             {
                 line_end = (S32)nl;
             }
-            // A minimal line's timestamp sits in its first row, after the name.
+            // A minimal line's timestamp sits in its first row, before the name.
             const F32 row_wrap = pos == 0 && msg.mNameLen > 0 ? llmax(16.f, wrap - (F32)(msg.mTimeWidth + bold_extra(msg))) : wrap;
             S32 count = font->maxDrawableBytes(body.substr(pos), row_wrap, line_end - pos, LLFontGL::WORD_BOUNDARY_IF_POSSIBLE);
             if (count <= 0 && pos < line_end)
@@ -918,6 +919,11 @@ void SKFloaterLocalChat::drawRowText(const Row& row, S32 x, S32 y, F32 alpha, LL
     const S32 end = row.mBegin + row.mLength;
     F32 pen = (F32)x;
     S32 pos = row.mBegin;
+    if (pos == 0 && msg.mNameLen > 0 && msg.mTimeWidth > 0)
+    {
+        drawTime(msg, pen, y, alpha, shadow);
+        pen += (F32)msg.mTimeWidth;
+    }
     while (pos < end)
     {
         // The run up to the next change of colour: the name, a link, or plain text.
@@ -952,11 +958,6 @@ void SKFloaterLocalChat::drawRowText(const Row& row, S32 x, S32 y, F32 alpha, LL
         font->renderUTF8(body, pos, pen, (F32)y, color, LLFontGL::LEFT, LLFontGL::BOTTOM, style, shadow, run_end - pos, S32_MAX, &right);
         pen = right;
         pos = run_end;
-        if (pos == msg.mNameLen && row.mBegin == 0 && msg.mTimeWidth > 0)
-        {
-            drawTime(msg, pen + (F32)TIME_GAP, y, alpha, shadow);
-            pen += (F32)msg.mTimeWidth;
-        }
     }
 }
 
@@ -1394,14 +1395,10 @@ std::string SKFloaterLocalChat::urlAt(S32 x, S32 y) const
             return std::string();
         }
         F32 offset = (F32)(x - text_x);
-        if (row.mBegin == 0 && msg.mNameLen > 0 && msg.mTimeWidth > 0)
+        if (row.mBegin == 0 && msg.mNameLen > 0)
         {
-            // Past the name, the timestamp pushes the rest of the row along.
-            const F32 name_end = (F32)LLViewerChat::getChatFont()->getWidthBytes(msg.mBody, 0, msg.mNameLen);
-            if (offset >= name_end)
-            {
-                offset = offset < name_end + msg.mTimeWidth ? -1.f : offset - msg.mTimeWidth;
-            }
+            // A minimal line's timestamp leads its first row and pushes the rest along.
+            offset -= (F32)msg.mTimeWidth;
         }
         if (offset < 0.f)
         {
