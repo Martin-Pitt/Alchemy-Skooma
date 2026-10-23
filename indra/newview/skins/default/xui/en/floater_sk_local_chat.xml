@@ -26,10 +26,22 @@
      layout="topleft"
      left="0"
      top="236"
-     right="-1"
+     right="-25"
      name="sk_local_chat_input"
      spellcheck="true"
      visible="false" />
+    <button
+     follows="right|bottom"
+     height="20"
+     image_overlay="Emoji_Picker_Icon"
+     is_toggle="true"
+     layout="topleft"
+     left_pad="2"
+     top="238"
+     name="sk_local_chat_emoji"
+     tool_tip="Shows/hides emoji picker"
+     visible="false"
+     width="20" />
     <menu_button
      follows="top|right"
      height="16"

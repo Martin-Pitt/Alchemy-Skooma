@@ -31,6 +31,7 @@
 
 #include <deque>
 
+class LLButton;
 class LLChatEntry;
 class LLFontGL;
 class LLMenuButton;
@@ -130,6 +131,9 @@ private:
 
     LLChatEntry* mInput = nullptr;
     LLMenuButton* mCog = nullptr;
+    LLButton* mEmojiButton = nullptr;
+    U32 mEmojiClosedFrame = 0;  // the frame the picker last closed, to tell a toggle-off click
+    boost::signals2::connection mEmojiCloseConnection;
     std::deque<Message> mMessages;
     std::vector<Card> mCards;
     std::vector<Row> mRows;
