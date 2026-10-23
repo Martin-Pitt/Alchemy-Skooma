@@ -143,9 +143,9 @@ namespace
     const F32 LEVEL_ABOVE_M = 8.f;  // and this far above it
     const F32 ON_GROUND_M = 8.f;    // an agent's floor this close to the land is at ground level
 
-    void uniformColour(GLint location, const skmap::PaletteColour& c)
+    void uniformColour(LLGLSLShader& prog, const LLStaticHashedString& name, const skmap::PaletteColour& c)
     {
-        glUniform3f(location, c.mR, c.mG, c.mB);
+        prog.uniform3f(name, c.mR, c.mG, c.mB);
     }
 
     // The overview's own uniforms, looked up in each program's map once a bind rather than by string in GL: thirty
@@ -211,22 +211,23 @@ namespace
         {
             if (rect)
             {
-                glGetIntegerv(GL_SCISSOR_BOX, mSaved);
-                glScissor(rect->mLeft, rect->mBottom, rect->getWidth(), rect->getHeight());
+                gGL.getScissor(mSaved);
+                gGL.setScissor(rect->mLeft, rect->mBottom, rect->getWidth(), rect->getHeight());
                 mSet = true;
             }
         }
         ~ScissorTo()
         {
-            if (mSet)
+            // As LLGLSScissor: only a box that was known is put back.
+            if (mSet && mSaved[2] >= 0 && mSaved[3] >= 0)
             {
-                glScissor(mSaved[0], mSaved[1], mSaved[2], mSaved[3]);
+                gGL.setScissor(mSaved[0], mSaved[1], mSaved[2], mSaved[3]);
             }
         }
 
     private:
         LLGLState mState;
-        GLint mSaved[4] = {};
+        S32 mSaved[4] = { 0, 0, -1, -1 };
         bool mSet = false;
     };
 
@@ -1102,7 +1103,7 @@ void SKOverviewCapture::resolve(LLRenderTarget& capture, LLRenderTarget& resolve
         ALQuerySpan span = shot.mTopDown ? ALQuerySpan() : gGL.queries().beginSpan();
         resolved.bindTarget();
         // The viewport stays whole with a rect: the resolve addresses its inputs by window pixel.
-        glViewport(0, 0, w, h);
+        gGL.setViewport(0, 0, w, h);
         ScissorTo scissor(rect);
         LLGLDepthTest depth(GL_FALSE, GL_FALSE);
         LLGLDisable blend(GL_BLEND);
@@ -1114,11 +1115,11 @@ void SKOverviewCapture::resolve(LLRenderTarget& capture, LLRenderTarget& resolve
         LLMatrix4a inv_vp;
         inv_vp.setMul(shot.mView, shot.mProj);
         inv_vp.invert();
-        glUniformMatrix4fv(prog.getUniformLocation(SK_INV_VP), 1, GL_FALSE, inv_vp.getF32ptr());
-        glUniform1f(prog.getUniformLocation(SK_ZO), LLRender::sReverseZ ? 1.f : 0.f);
-        glUniform1f(prog.getUniformLocation(SK_FAR_DEPTH), al_window_far());
-        glUniform3f(prog.getUniformLocation(SK_EYE), shot.mEye.mV[VX], shot.mEye.mV[VY], shot.mEye.mV[VZ]);
-        glUniform1f(prog.getUniformLocation(SK_TOP_DOWN), shot.mTopDown ? 1.f : 0.f);
+        prog.uniformMatrix4fv(SK_INV_VP, 1, GL_FALSE, inv_vp.getF32ptr());
+        prog.uniform1f(SK_ZO, LLRender::sReverseZ ? 1.f : 0.f);
+        prog.uniform1f(SK_FAR_DEPTH, al_window_far());
+        prog.uniform3f(SK_EYE, shot.mEye.mV[VX], shot.mEye.mV[VY], shot.mEye.mV[VZ]);
+        prog.uniform1f(SK_TOP_DOWN, shot.mTopDown ? 1.f : 0.f);
         {
             // World up on screen (world north looking straight down), so the hatch keeps its angle when the camera rolls.
             LLVector4a up;
@@ -1128,18 +1129,18 @@ void SKOverviewCapture::resolve(LLRenderTarget& capture, LLRenderTarget& resolve
                 shot.mView.rotate(LLVector4a(0.f, 1.f, 0.f), up);
             }
             const F32 len = llmax(sqrtf(up[0] * up[0] + up[1] * up[1]), 1e-6f);
-            glUniform2f(prog.getUniformLocation(SK_SCREEN_UP), up[0] / len, up[1] / len);
+            prog.uniform2f(SK_SCREEN_UP, up[0] / len, up[1] / len);
         }
-        glUniform3f(prog.getUniformLocation(SK_FOCUS), shot.mFocus.mV[VX], shot.mFocus.mV[VY], shot.mFocus.mV[VZ]);
-        glUniform1f(prog.getUniformLocation(SK_CUT_FLAG), shot.mPartCuts ? 1.f : 0.f);
-        glUniform1f(prog.getUniformLocation(SK_LEVEL_TOP), shot.mLevelTop);
-        glUniform1f(prog.getUniformLocation(SK_CUT), shot.mCut);
-        glUniform1f(prog.getUniformLocation(SK_WATER_Z), shot.mWater);
-        glUniform1f(prog.getUniformLocation(SK_WATER_DEPTH), skmap::palette::WATER_DEPTH_M);
-        uniformColour(prog.getUniformLocation(SK_INVISIBLE), skmap::palette::DROP_EDGE);
+        prog.uniform3f(SK_FOCUS, shot.mFocus.mV[VX], shot.mFocus.mV[VY], shot.mFocus.mV[VZ]);
+        prog.uniform1f(SK_CUT_FLAG, shot.mPartCuts ? 1.f : 0.f);
+        prog.uniform1f(SK_LEVEL_TOP, shot.mLevelTop);
+        prog.uniform1f(SK_CUT, shot.mCut);
+        prog.uniform1f(SK_WATER_Z, shot.mWater);
+        prog.uniform1f(SK_WATER_DEPTH, skmap::palette::WATER_DEPTH_M);
+        uniformColour(prog, SK_INVISIBLE, skmap::palette::DROP_EDGE);
         static LLCachedControl<U32> debug_view(gSavedSettings, "SKOverviewDebugView", 0);
-        glUniform1i(prog.getUniformLocation(SK_DEBUG_VIEW), (GLint)(U32)debug_view);
-        glUniform1i(prog.getUniformLocation(SK_CLASS_MASK), shot.mTopDown ? (GLint)mapClassMask() : -1);
+        prog.uniform1i(SK_DEBUG_VIEW, (GLint)(U32)debug_view);
+        prog.uniform1i(SK_CLASS_MASK, shot.mTopDown ? (GLint)mapClassMask() : -1);
         {
             // The territory: the regions styled as inside, at most SK_MAX_TERRITORY of them.
             std::vector<LLVector4> rects = shot.mTerritory.empty() ? std::vector<LLVector4>{ shot.mRegion } : shot.mTerritory;
@@ -1147,8 +1148,8 @@ void SKOverviewCapture::resolve(LLRenderTarget& capture, LLRenderTarget& resolve
             {
                 rects.resize(SK_MAX_TERRITORY);
             }
-            glUniform4fv(prog.getUniformLocation(SK_REGIONS), (GLsizei)rects.size(), rects.front().mV);
-            glUniform1i(prog.getUniformLocation(SK_REGION_COUNT), (GLint)rects.size());
+            prog.uniform4fv(SK_REGIONS, (GLsizei)rects.size(), rects.front().mV);
+            prog.uniform1i(SK_REGION_COUNT, (GLint)rects.size());
         }
         gPipeline.mScreenTriangleVB->setBuffer();
         gPipeline.mScreenTriangleVB->drawArrays(LLRender::TRIANGLES, 0, 3);
@@ -1160,7 +1161,7 @@ void SKOverviewCapture::resolve(LLRenderTarget& capture, LLRenderTarget& resolve
         mCost.mResolveMs += timer.getElapsedTimeF32() * 1000.f;
     }
 
-    glViewport(gGLViewport[0], gGLViewport[1], gGLViewport[2], gGLViewport[3]);
+    gGL.setViewport(gGLViewport[0], gGLViewport[1], gGLViewport[2], gGLViewport[3]);
 }
 
 namespace
@@ -1178,7 +1179,7 @@ namespace
         view.affineTransform(zero, origin_eye);
         const F32 plane[4] = { normal_eye.getF32ptr()[0], normal_eye.getF32ptr()[1], normal_eye.getF32ptr()[2],
                                ceiling - normal_eye.dot3(origin_eye).getF32() };
-        glUniform4fv(prog.getUniformLocation(SK_CEILING), 1, plane);
+        prog.uniform4fv(SK_CEILING, 1, plane);
     }
 }
 
@@ -1189,7 +1190,7 @@ void SKOverviewCapture::drawMovers(const Shot& shot)
     const S32 h = sTacticalWork.getHeight();
     ALQuerySpan span = gGL.queries().beginSpan();
     sTacticalWork.bindTarget();
-    glViewport(0, 0, w, h);
+    gGL.setViewport(0, 0, w, h);
     gGL.matrixMode(LLRender::MM_PROJECTION);
     gGL.pushMatrix();
     gGL.loadMatrix(shot.mProj);
@@ -1203,8 +1204,8 @@ void SKOverviewCapture::drawMovers(const Shot& shot)
         const F32 eye_to_world[9] = { m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10] };
         const F32 no_cut[4] = { 0.f, 0.f, 0.f, 1.f };
         sGeom.bind();
-        glUniform4fv(sGeom.getUniformLocation(CLIP_PLANE), 1, no_cut);
-        glUniformMatrix3fv(sGeom.getUniformLocation(SK_EYE_TO_WORLD), 1, GL_FALSE, eye_to_world);
+        sGeom.uniform4fv(CLIP_PLANE, 1, no_cut);
+        sGeom.uniformMatrix3fv(SK_EYE_TO_WORLD, 1, GL_FALSE, eye_to_world);
         uniformCeiling(sGeom, shot.mView);
         LLGLDepthTest depth(GL_TRUE, GL_TRUE, GL_LEQUAL);
         LLGLDisable cull_face(GL_CULL_FACE);
@@ -1364,6 +1365,8 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
                 const size_t command_bytes = n * sizeof(ALDrawArraysIndirectCommand);
                 if (page.mSlotTable.size() == table_bytes)
                 {
+                    // Instrumented, not fixed: a write into a buffer the last capture's dispatch read may wait on Mesa.
+                    LL_PROFILE_ZONE_NAMED("sk overview slot table upload");
                     page.mSlotTable.upload(0, page.mSlots.data(), table_bytes);
                 }
                 else if (!page.mSlotTable.allocate(table_bytes, ALGPUBuffer::DYNAMIC, page.mSlots.data(), "SK census slots"))
@@ -1408,15 +1411,15 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
                 sCommands.bind();
                 const F32 level[4] = { shot.mLevel.mAll ? 1.f : 0.f, shot.mLevel.mGround ? 1.f : 0.f, shot.mLevel.mLo,
                                        shot.mLevel.mHi };
-                glUniform4fv(sCommands.getUniformLocation(SK_LEVEL), 1, level);
-                glUniform4fv(sCommands.getUniformLocation(SK_PLANES), 6, &planes[0][0]);
+                sCommands.uniform4fv(SK_LEVEL, 1, level);
+                sCommands.uniform4fv(SK_PLANES, 6, &planes[0][0]);
                 for (const SKOverviewCensus::Page& page : region.mPages)
                 {
                     if (page.mSlots.empty())
                     {
                         continue;
                     }
-                    glUniform1ui(sCommands.getUniformLocation(SK_SLOT_COUNT), (GLuint)page.mSlots.size());
+                    sCommands.uniform1ui(SK_SLOT_COUNT, (GLuint)page.mSlots.size());
                     gGL.bindStorageBuffer(SLOT_TABLE_BINDING, page.mSlotTable);
                     gGL.bindStorageBuffer(COMMANDS_BINDING, page.mCommands);
                     sCommands.dispatchThreads((U32)page.mSlots.size());
@@ -1522,19 +1525,19 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
                 }
                 bound = &prog;
                 prog.bind();
-                glUniform4fv(prog.getUniformLocation(CLIP_PLANE), 1, shot.mPartCuts ? no_cut : plane);
-                glUniformMatrix3fv(prog.getUniformLocation(SK_EYE_TO_WORLD), 1, GL_FALSE, eye_to_world);
+                prog.uniform4fv(CLIP_PLANE, 1, shot.mPartCuts ? no_cut : plane);
+                prog.uniformMatrix3fv(SK_EYE_TO_WORLD, 1, GL_FALSE, eye_to_world);
                 uniformCeiling(prog, shot.mView);
                 static LLCachedControl<U32> debug_view(gSavedSettings, "SKOverviewDebugView", 0);
-                glUniform1i(prog.getUniformLocation(SK_DEBUG_CUT), cuts && debug_view == 5 ? 1 : 0);
+                prog.uniform1i(SK_DEBUG_CUT, cuts && debug_view == 5 ? 1 : 0);
                 const GLsizei n = (GLsizei)llmin(shot.mDissolve.size(), (size_t)SK_MAX_DISSOLVE);
                 if (dissolve && n)
                 {
                     static LLCachedControl<F32> soft(gSavedSettings, "SKTacticalDissolveSoftness", 0.25f);
-                    glUniform1i(prog.getUniformLocation(SK_DISSOLVE_COUNT), n);
-                    glUniform1f(prog.getUniformLocation(SK_DISSOLVE_SOFT), llclamp((F32)soft, 0.f, 1.f));
-                    glUniform4fv(prog.getUniformLocation(SK_DISSOLVE), n, shot.mDissolve.front().mV);
-                    glUniform1fv(prog.getUniformLocation(SK_DISSOLVE_FLOOR), n, shot.mDissolveFloor.data());
+                    prog.uniform1i(SK_DISSOLVE_COUNT, n);
+                    prog.uniform1f(SK_DISSOLVE_SOFT, llclamp((F32)soft, 0.f, 1.f));
+                    prog.uniform4fv(SK_DISSOLVE, n, shot.mDissolve.front().mV);
+                    prog.uniform1fv(SK_DISSOLVE_FLOOR, n, shot.mDissolveFloor.data());
                 }
                 if (cuts)
                 {
@@ -1570,35 +1573,35 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
                 passes.push_back(CAP_PARITY);
                 passes.push_back(CAP_FILL);
                 LLGLState scissor(GL_SCISSOR_TEST, patch != nullptr); // a patch clears its own stencil only
-                glStencilMask(0xFF);
-                glClearStencil(0);
-                glClear(GL_STENCIL_BUFFER_BIT);
+                // GL's clear stencil, 0, which nothing in the viewer sets but the transient pool, which puts it back.
+                gGL.setStencilMask(0xFF);
+                gGL.clear(GL_STENCIL_BUFFER_BIT);
             }
             for (S32 pass : passes)
             {
                 bindGeom(pass == CAP_FILL ? lift : geom);
-                glUniform1i(bound->getUniformLocation(SK_CAP_PASS), pass);
+                bound->uniform1i(SK_CAP_PASS, pass);
                 const bool parity = pass == CAP_PARITY;
                 LLGLDepthTest depth(GL_TRUE, pass == CAP_FRONT || pass == CAP_OPEN_BACK || pass == CAP_FILL ? GL_TRUE : GL_FALSE,
                                     parity ? GL_ALWAYS : GL_LEQUAL);
                 LLGLState cull_face(GL_CULL_FACE, !parity);
-                glCullFace(pass == CAP_FRONT ? GL_BACK : GL_FRONT);
+                gGL.setCullFace(pass == CAP_FRONT ? GL_BACK : GL_FRONT);
                 LLGLState stencil(GL_STENCIL_TEST, pass == CAP_PARITY || pass == CAP_FILL);
                 if (parity)
                 {
                     // A winding count, not parity: overlapping solids (walls meeting at corners) and mirrored ones
                     // stay inside, where an odd/even count turns their overlap and its surroundings inside out.
-                    glStencilFunc(GL_ALWAYS, 0, 0xFF);
-                    glStencilOpSeparate(GL_BACK, GL_KEEP, GL_INCR_WRAP, GL_INCR_WRAP);
-                    glStencilOpSeparate(GL_FRONT, GL_KEEP, GL_DECR_WRAP, GL_DECR_WRAP);
-                    glStencilMask(0xFF);
+                    gGL.setStencilFunc(GL_ALWAYS, 0, 0xFF);
+                    gGL.setStencilOpSeparate(GL_BACK, GL_KEEP, GL_INCR_WRAP, GL_INCR_WRAP);
+                    gGL.setStencilOpSeparate(GL_FRONT, GL_KEEP, GL_DECR_WRAP, GL_DECR_WRAP);
+                    gGL.setStencilMask(0xFF);
                     gGL.setColorMask(false, false);
                 }
                 else if (pass == CAP_FILL)
                 {
-                    glStencilFunc(GL_NOTEQUAL, 0, 0xFF);
-                    glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
-                    glStencilMask(0x00);
+                    gGL.setStencilFunc(GL_NOTEQUAL, 0, 0xFF);
+                    gGL.setStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+                    gGL.setStencilMask(0x00);
                     gGL.setColorMask(true, true, true, true);
                 }
                 for (size_t r = 0; r < regions.size(); ++r)
@@ -1628,11 +1631,14 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
                         drawPage(r, p, page);
                     }
                 }
-                glCullFace(GL_BACK);
+                gGL.setCullFace(GL_BACK);
             }
-            glStencilMask(0xFF);
+            // The stencil state back at GL's defaults, as ALGLStencil leaves it.
+            gGL.setStencilFunc(GL_ALWAYS, 0, ~0u);
+            gGL.setStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+            gGL.setStencilMask(~0u);
             bindGeom(geom);
-            glUniform1i(bound->getUniformLocation(SK_CAP_PASS), CAP_FRONT);
+            bound->uniform1i(SK_CAP_PASS, CAP_FRONT);
             {
                 // Barriers, already drawn as their class: the hatch flag over them, hiding nothing, offset past every
                 // class's own so it passes over the copy it lies on.
@@ -1669,14 +1675,11 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
         LL_PROFILE_ZONE_NAMED_CATEGORY_PIPELINE("sk overview capture");
         LLTimer timer;
         capture.bindTarget();
-        glViewport(0, 0, w, h);
+        gGL.setViewport(0, 0, w, h);
         ScissorTo scissor_to_patch(patch);
-        GLfloat clear_colour[4];
-        glGetFloatv(GL_COLOR_CLEAR_VALUE, clear_colour);
-        GLfloat clear_depth = 1.f;
-        glGetFloatv(GL_DEPTH_CLEAR_VALUE, &clear_depth);
-        glClearColor(0.f, 0.f, 0.f, 0.f);
-        glClearDepth(al_window_far()); // the cleared depth must be the far plane of the current convention
+        // The clear depth is always the convention's far plane (LLRender::applyDepthConvention), so it is not set here.
+        const LLColor4 saved_clear = gGL.getClearColor();
+        gGL.setClearColor(LLColor4::transparent);
         {
             // A clear obeys the write masks: whatever pass ran last could have left them on one channel, and the
             // terrain writes only R, so its texels kept the last capture's normals (G, A) and invisible flag (B)
@@ -1686,8 +1689,7 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
             gGL.setColorMask(true, true);
             capture.clear();
         }
-        glClearDepth(clear_depth);
-        glClearColor(clear_colour[0], clear_colour[1], clear_colour[2], clear_colour[3]);
+        gGL.setClearColor(saved_clear);
         draws = gPipeline.skRenderOverview(shot.mView, shot.mProj, cull, shot.mCut, census) + census_draws;
         LL_PROFILE_PLOT("census indirect draws", (int64_t)(gpu_commands ? census_draws : 0));
         capture.flush();
@@ -1700,7 +1702,7 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
     }
 
     memcpy(gGLViewport, saved_viewport, sizeof(saved_viewport));
-    glViewport(gGLViewport[0], gGLViewport[1], gGLViewport[2], gGLViewport[3]);
+    gGL.setViewport(gGLViewport[0], gGLViewport[1], gGLViewport[2], gGLViewport[3]);
     LLRenderTarget::sCurResX = saved_res_x;
     LLRenderTarget::sCurResY = saved_res_y;
     return draws;
@@ -2867,9 +2869,9 @@ void SKOverviewCapture::drawMarkers3D(const Project& project, S32 vw, S32 vh, st
     LLGLDisable cull_face(GL_CULL_FACE);
     sMarker.bind();
     sMarker.bindDepthTexture(LLShaderMgr::DEFERRED_DEPTH, mSceneDepth);
-    glUniform4f(sMarker.getUniformLocation(SK_VIEWPORT), (F32)mTacticalViewport[0], (F32)mTacticalViewport[1], (F32)vw, (F32)vh);
-    glUniform1f(sMarker.getUniformLocation(SK_ZO), LLRender::sReverseZ ? 1.f : 0.f);
-    glUniform1f(sMarker.getUniformLocation(SK_GHOST_ALPHA), MARKER_GHOST_ALPHA);
+    sMarker.uniform4f(SK_VIEWPORT, (F32)mTacticalViewport[0], (F32)mTacticalViewport[1], (F32)vw, (F32)vh);
+    sMarker.uniform1f(SK_ZO, LLRender::sReverseZ ? 1.f : 0.f);
+    sMarker.uniform1f(SK_GHOST_ALPHA, MARKER_GHOST_ALPHA);
 
     gGL.begin(LLRender::TRIANGLES);
     // A triangle facing the camera, lit by the overview's key light; those facing away are left out (no depth buffer).
@@ -3101,22 +3103,23 @@ void SKOverviewCapture::composite()
     }
     else
     {
-        glBindFramebuffer(GL_FRAMEBUFFER, 0); // the window's back buffer
+        // With no target bound, the window's back buffer is already the one bound.
+        llassert(LLRenderTarget::sCurFBO == 0);
     }
     LLGLDisable scissor(GL_SCISSOR_TEST);
     gGL.setColorMask(true, true);
     LLTimer composite_timer;
     {
         LL_PROFILE_ZONE_NAMED("sk tactical composite");
-        glViewport(vx, vy, vw, vh);
+        gGL.setViewport(vx, vy, vw, vh);
         LLGLDepthTest depth(GL_FALSE, GL_FALSE);
         LLGLDisable blend(GL_BLEND);
         LLGLDisable cull_face(GL_CULL_FACE);
         sComposite.bind();
         sComposite.bindTexture(LLShaderMgr::DIFFUSE_MAP, &sTacticalResolved, ALSamplers::BilinearClamp);
-        glUniform4f(sComposite.getUniformLocation(SK_VIEWPORT), (F32)vx, (F32)vy, (F32)vw, (F32)vh);
-        glUniform1f(sComposite.getUniformLocation(SK_TILT_PX), llmax((F32)tilt_setting, 0.f));
-        uniformColour(sComposite.getUniformLocation(SK_GROUND), skmap::palette::CODE_INK);
+        sComposite.uniform4f(SK_VIEWPORT, (F32)vx, (F32)vy, (F32)vw, (F32)vh);
+        sComposite.uniform1f(SK_TILT_PX, llmax((F32)tilt_setting, 0.f));
+        uniformColour(sComposite, SK_GROUND, skmap::palette::CODE_INK);
         gPipeline.mScreenTriangleVB->setBuffer();
         gPipeline.mScreenTriangleVB->drawArrays(LLRender::TRIANGLES, 0, 3);
         sComposite.unbindTexture(LLShaderMgr::DIFFUSE_MAP);
@@ -3153,7 +3156,7 @@ void SKOverviewCapture::composite()
             return ahead.normVec() > 1e-4f;
         };
 
-        glViewport(vx, vy, vw, vh);
+        gGL.setViewport(vx, vy, vw, vh);
         gGL.matrixMode(LLRender::MM_PROJECTION);
         gGL.pushMatrix();
         gGL.loadIdentity();
@@ -3365,7 +3368,7 @@ void SKOverviewCapture::composite()
         mCost.mSince = now;
         mCost.mScansAtStart = scans_now;
     }
-    glViewport(gGLViewport[0], gGLViewport[1], gGLViewport[2], gGLViewport[3]);
+    gGL.setViewport(gGLViewport[0], gGLViewport[1], gGLViewport[2], gGLViewport[3]);
     LL_INFOS_ONCE("SKOverview") << "tactical overview composited at " << vx << "," << vy << " " << vw << "x" << vh << LL_ENDL;
 }
 

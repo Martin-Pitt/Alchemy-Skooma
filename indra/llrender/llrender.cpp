@@ -458,6 +458,11 @@ bool LLRender::init(bool needs_vertex_buffer)
     mStencilFail        = GL_KEEP;
     mStencilDepthFail   = GL_KEEP;
     mStencilPass        = GL_KEEP;
+    // <SK:Nexii> Overview capture: the back faces' stencil ops.
+    mStencilBackFail      = GL_KEEP;
+    mStencilBackDepthFail = GL_KEEP;
+    mStencilBackPass      = GL_KEEP;
+    // </SK:Nexii>
     mStencilWriteMask   = ~0u;
     mBlendEquationRGB   = GL_FUNC_ADD;
     mBlendEquationAlpha = GL_FUNC_ADD;
@@ -1975,15 +1980,39 @@ void LLRender::setStencilFunc(U32 func, S32 ref, U32 mask)
 
 void LLRender::setStencilOp(U32 stencil_fail, U32 depth_fail, U32 pass)
 {
-    if (mStencilFail != stencil_fail || mStencilDepthFail != depth_fail || mStencilPass != pass)
+    if (mStencilFail != stencil_fail || mStencilDepthFail != depth_fail || mStencilPass != pass
+        || mStencilBackFail != stencil_fail || mStencilBackDepthFail != depth_fail || mStencilBackPass != pass) // <SK:Nexii> Overview capture: both faces.
     {
         flush();
         mStencilFail      = stencil_fail;
         mStencilDepthFail = depth_fail;
         mStencilPass      = pass;
+        // <SK:Nexii> Overview capture: both faces.
+        mStencilBackFail      = stencil_fail;
+        mStencilBackDepthFail = depth_fail;
+        mStencilBackPass      = pass;
+        // </SK:Nexii>
         glStencilOp(stencil_fail, depth_fail, pass);
     }
 }
+
+// <SK:Nexii> Overview capture: the winding count needs INCR on back faces and DECR on front.
+void LLRender::setStencilOpSeparate(U32 face, U32 stencil_fail, U32 depth_fail, U32 pass)
+{
+    llassert(face == GL_FRONT || face == GL_BACK);
+    U32& fail       = face == GL_BACK ? mStencilBackFail : mStencilFail;
+    U32& depth_fail_ = face == GL_BACK ? mStencilBackDepthFail : mStencilDepthFail;
+    U32& pass_      = face == GL_BACK ? mStencilBackPass : mStencilPass;
+    if (fail != stencil_fail || depth_fail_ != depth_fail || pass_ != pass)
+    {
+        flush();
+        fail        = stencil_fail;
+        depth_fail_ = depth_fail;
+        pass_       = pass;
+        glStencilOpSeparate(face, stencil_fail, depth_fail, pass);
+    }
+}
+// </SK:Nexii>
 
 void LLRender::setStencilMask(U32 mask)
 {
@@ -2026,7 +2055,10 @@ void LLRender::issueRasterState() const
     glCullFace(mCullFace);
     glPointSize(mPointSize);
     glStencilFunc(mStencilFunc, mStencilRef, mStencilReadMask);
-    glStencilOp(mStencilFail, mStencilDepthFail, mStencilPass);
+    // <SK:Nexii> Overview capture: each face's ops, as they may differ.
+    glStencilOpSeparate(GL_FRONT, mStencilFail, mStencilDepthFail, mStencilPass);
+    glStencilOpSeparate(GL_BACK, mStencilBackFail, mStencilBackDepthFail, mStencilBackPass);
+    // </SK:Nexii>
     glStencilMask(mStencilWriteMask);
     glBlendEquationSeparate(mBlendEquationRGB, mBlendEquationAlpha);
 }
@@ -2046,6 +2078,21 @@ void LLRender::readPixels(S32 x, S32 y, S32 width, S32 height, U32 format, U32 t
     flush();
     glReadPixels(x, y, width, height, format, type, data);
 }
+
+// <SK:Nexii> Overview probes: several reads packed into one buffer before one readback.
+void LLRender::readPixelsInto(const ALGPUBuffer& pack, size_t offset, S32 x, S32 y, S32 width, S32 height, U32 format, U32 type)
+{
+    if (!pack.isAllocated() || width <= 0 || height <= 0)
+    {
+        llassert(false);
+        return;
+    }
+    flush();
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, pack.getGLName());
+    glReadPixels(x, y, width, height, format, type, reinterpret_cast<void*>(static_cast<uintptr_t>(offset)));
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+}
+// </SK:Nexii>
 
 void LLRender::drawArraysInstanced(eGeomModes mode, U32 first, U32 count, U32 instances)
 {

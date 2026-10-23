@@ -104,7 +104,7 @@ private:
     size_t mOffset = 0;         ///< where the rows published last start in the stream's buffer
     U32 mPublishedRows = 0;
     S32 mBoundPoint = -1;       ///< the storage point bind() bound, or -1
-    U32 mTexture = 0;           ///< the buffer texture over the stream's whole buffer, where it is no storage block
+    ALGPUBufferTexture mTexture; ///< the buffer texture over the stream's whole buffer, where it is no storage block
     bool mAttach = true;        ///< mTexture is to be attached to the stream's buffer, which a reallocation replaced
     std::vector<S32> mBoundChannels; ///< the texture units bind() bound mTexture on
 };

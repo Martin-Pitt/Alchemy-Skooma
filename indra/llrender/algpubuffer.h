@@ -31,6 +31,7 @@
 #include <vector>
 
 class ALFrameFences;
+class ALTextureSlot; // <SK:Nexii> Overview cut table: ALGPUBufferTexture binds on a slot.
 
 // GL 4.3's minimum GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS, so every point here exists on every context that has
 // compute. LLRender keeps what each holds; the reserved storage blocks' fixed points all fall below it.
@@ -275,3 +276,24 @@ private:
     U32                mNext         = 0;  // the region the next map() gives
     U32                mStalls       = 0;
 };
+
+// <SK:Nexii> Overview cut table: a buffer texture over a stream.
+// A GL_TEXTURE_BUFFER over an ALGPUBuffer, owning the texture name. attach() binds it on the slot it is given, as
+// glTexBuffer acts on the active unit; the caller attaches again whenever the buffer was reallocated, by its own flag,
+// not the buffer's name, which GL may reuse. Non-copyable.
+class ALGPUBufferTexture
+{
+public:
+    ALGPUBufferTexture() = default;
+    ALGPUBufferTexture(const ALGPUBufferTexture&) = delete;
+    ALGPUBufferTexture& operator=(const ALGPUBufferTexture&) = delete;
+
+    // Attach the texture to `buffer` as texels of `internal_format` (GL_RGBA32F and the rest), left bound on `slot`.
+    bool attach(ALTextureSlot* slot, const ALGPUBuffer& buffer, U32 internal_format);
+    U32  getTexture() const { return mTexture; }
+    void release();
+
+private:
+    U32 mTexture = 0;
+};
+// </SK:Nexii>

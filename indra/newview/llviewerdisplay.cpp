@@ -169,8 +169,10 @@ static void sk_display_modal(bool rebuild)
     gGLTFMaterialList.flushMaterials();
 
     gGL.setColorMask(true, true);
-    glClearColor(0.f, 0.f, 0.f, 0.f);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    const LLColor4 saved_clear = gGL.getClearColor();
+    gGL.setClearColor(LLColor4::transparent);
+    gGL.clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    gGL.setClearColor(saved_clear);
     SKModalView::instance().render(gViewerWindow->getWorldViewRectRaw());
 
     sSKModalFrame = true;

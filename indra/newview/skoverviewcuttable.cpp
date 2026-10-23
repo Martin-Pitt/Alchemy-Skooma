@@ -157,25 +157,17 @@ void SKOverviewCutTable::bind(LLGLSLShader& prog)
     {
         return;
     }
-    if (!mTexture)
-    {
-        glGenTextures(1, &mTexture);
-    }
     if (mAttach)
     {
         // By a flag, not the buffer's name: GL may give a reallocated buffer the name of the one it replaced.
-        // glTexBuffer acts on the active unit, which a bind of what the slot already holds would not make this one.
-        slot->unbind();
-        slot->bindManual(ALTextureSlot::TT_BUFFER_TEXTURE, mTexture);
-        glTexBuffer(GL_TEXTURE_BUFFER, GL_RGBA32F, mStream.getBuffer().getGLName());
-        mAttach = false;
+        mAttach = !mTexture.attach(slot, mStream.getBuffer(), GL_RGBA32F);
     }
     else
     {
-        slot->bindManual(ALTextureSlot::TT_BUFFER_TEXTURE, mTexture);
+        slot->bindManual(ALTextureSlot::TT_BUFFER_TEXTURE, mTexture.getTexture());
     }
     static const LLStaticHashedString SK_CUT_BASE("sk_cut_base");
-    glUniform1i(prog.getUniformLocation(SK_CUT_BASE), (GLint)(mOffset / sizeof(Row)));
+    prog.uniform1i(SK_CUT_BASE, (GLint)(mOffset / sizeof(Row)));
     if (std::find(mBoundChannels.begin(), mBoundChannels.end(), channel) == mBoundChannels.end())
     {
         mBoundChannels.push_back(channel);
@@ -199,11 +191,7 @@ void SKOverviewCutTable::unbind()
 void SKOverviewCutTable::release()
 {
     unbind();
-    if (mTexture && gGLManager.mInited)
-    {
-        glDeleteTextures(1, &mTexture);
-    }
-    mTexture = 0;
+    mTexture.release();
     mAttach = true;
     mStream.release();
     mCapacity = 0;
