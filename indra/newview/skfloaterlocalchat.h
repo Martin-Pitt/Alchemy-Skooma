@@ -119,6 +119,7 @@ private:
     void sendChat(EChatType type);
     void invalidateLayout() { mLayoutDirty = true; }
     void layout();
+    void layoutInput();
     void layoutCog();
     LLRect contentRect() const;
     bool expanded() const;
