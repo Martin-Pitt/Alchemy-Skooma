@@ -591,6 +591,7 @@ void SKFloaterLocalChat::onMouseEnter(S32 x, S32 y, MASK mask)
 void SKFloaterLocalChat::onMouseLeave(S32 x, S32 y, MASK mask)
 {
     mHovered = false;
+    mBarHot = false;
     LLFloater::onMouseLeave(x, y, mask);
 }
 
@@ -603,6 +604,59 @@ LLRect SKFloaterLocalChat::contentRect() const
 {
     // The input's row is always kept, so the messages do not jump when it opens or closes.
     return LLRect(INSET, getRect().getHeight() - INSET, getRect().getWidth() - INSET, INPUT_HEIGHT + INPUT_GAP + INSET);
+}
+
+constexpr S32 BAR_STRIP = 12;   // the scroll bar's hit strip, in from the right edge
+constexpr S32 BAR_THIN = 3;     // the thumb's width while the pointer is elsewhere
+constexpr S32 BAR_WIDE = 8;     // and on the strip
+constexpr S32 BAR_MARGIN = 2;   // between the bar and the floater's edge
+constexpr S32 BAR_MIN_THUMB = 12;
+
+bool SKFloaterLocalChat::barShown() const
+{
+    return (mHovered || mBarDrag >= 0 || mBarPage != 0) && !gAgentCamera.cameraMouselook() && barRange() > 0;
+}
+
+S32 SKFloaterLocalChat::barRange() const
+{
+    return mContentHeight - contentRect().getHeight();
+}
+
+LLRect SKFloaterLocalChat::barStrip() const
+{
+    const LLRect content = contentRect();
+    return LLRect(getRect().getWidth() - BAR_STRIP, content.mTop, getRect().getWidth(), content.mBottom);
+}
+
+LLRect SKFloaterLocalChat::barThumb() const
+{
+    // The thumb's position is read from the bottom, as mScroll is.
+    const LLRect strip = barStrip();
+    const S32 track = strip.getHeight();
+    const S32 range = llmax(1, barRange());
+    const S32 thumb = llmin(track, llmax(BAR_MIN_THUMB, track * track / llmax(1, mContentHeight)));
+    const S32 bottom = strip.mBottom + (track - thumb) * llclamp(mScroll, 0, range) / range;
+    return LLRect(strip.mLeft, bottom + thumb, strip.mRight, bottom);
+}
+
+void SKFloaterLocalChat::barPage(S32 dir)
+{
+    mScroll = llclamp(mScroll + dir * contentRect().getHeight(), 0, llmax(0, barRange()));
+}
+
+bool SKFloaterLocalChat::barTakes(S32 x, S32 y)
+{
+    if (mBarDrag >= 0 || mBarPage != 0)
+    {
+        return true;
+    }
+    if (!barShown() || !barStrip().pointInRect(x, y))
+    {
+        return false;
+    }
+    // A real child over the strip (the cog) keeps its own clicks.
+    const LLView* child = childFromPoint(x, y);
+    return !child || child == getDragHandle();
 }
 
 S32 SKFloaterLocalChat::lineHeight(const Row& row) const
@@ -1269,17 +1323,34 @@ void SKFloaterLocalChat::draw()
         font->renderUTF8(mPillLabel, 0, (F32)(left + w / 2), (F32)(bottom + PAD_Y), pill_text.get(), LLFontGL::HCENTER, LLFontGL::BOTTOM, LLFontGL::NORMAL, LLFontGL::NO_SHADOW);
     }
 
-    if (mHovered && opaque && mContentHeight > view_height)
+    // An overlay scroll bar: a thin thumb on hover, widening over a faint track once the pointer is on its strip.
+    const bool bar_active = mBarHot || mBarDrag >= 0 || mBarPage != 0;
+    const F32 dt = (F32)llclamp(now - mBarDrawnAt, 0.0, 0.1);
+    mBarDrawnAt = now;
+    mBarWide = llclamp(mBarWide + (bar_active ? dt : -dt) / 0.12f, 0.f, 1.f);
+    if (mBarPage != 0 && now >= mBarRepeatAt)
     {
-        // A thin scroll thumb on hover, its position read from the bottom.
-        constexpr S32 THUMB_W = 3;
-        const S32 track = view_height;
-        const S32 thumb = llmax(12, track * view_height / mContentHeight);
-        const S32 range = mContentHeight - view_height;
-        const S32 bottom = content.mBottom + (track - thumb) * mScroll / range;
-        static LLUIColor thumb_color = LLUIColorTable::instance().getColor("White");
-        const S32 right = getRect().getWidth() - 2;
-        gl_rect_2d(right - THUMB_W, bottom + thumb, right, bottom, thumb_color.get() % 0.35f);
+        // A held page repeats until the thumb reaches the pointer.
+        const LLRect thumb = barThumb();
+        if (mBarPage > 0 ? mBarPointerY >= thumb.mTop : mBarPointerY < thumb.mBottom)
+        {
+            barPage(mBarPage);
+        }
+        mBarRepeatAt = now + 0.05;
+    }
+    if (barShown())
+    {
+        const F32 ease = mBarWide * mBarWide * (3.f - 2.f * mBarWide);
+        const S32 width = ll_round(BAR_THIN + (BAR_WIDE - BAR_THIN) * ease);
+        const S32 right = getRect().getWidth() - BAR_MARGIN;
+        const LLRect thumb = barThumb();
+        static LLUIColor bar_color = LLUIColorTable::instance().getColor("White");
+        if (ease > 0.f)
+        {
+            gl_rect_2d(right - width, content.mTop, right, content.mBottom, bar_color.get() % (0.08f * ease));
+        }
+        const F32 alpha = mBarDrag >= 0 ? 0.6f : 0.35f + 0.15f * ease;
+        gl_rect_2d(right - width, thumb.mTop, right, thumb.mBottom, bar_color.get() % alpha);
     }
 
     LLFloater::draw();
@@ -1361,6 +1432,24 @@ bool SKFloaterLocalChat::handleMouseDown(S32 x, S32 y, MASK mask)
 {
     // The drag handle lies under everything; any other child takes its own clicks.
     LLView* child = childFromPoint(x, y);
+    if (barTakes(x, y))
+    {
+        const LLRect thumb = barThumb();
+        if (y >= thumb.mBottom && y < thumb.mTop)
+        {
+            mBarDrag = y - thumb.mBottom;
+        }
+        else
+        {
+            // The track pages by a view, then repeats while held.
+            mBarPage = y >= thumb.mTop ? 1 : -1;
+            mBarPointerY = y;
+            barPage(mBarPage);
+            mBarRepeatAt = LLFrameTimer::getTotalSeconds() + 0.35;
+        }
+        gFocusMgr.setMouseCapture(this);
+        return true;
+    }
     if (mPillRect.pointInRect(x, y))
     {
         mScroll = 0;
@@ -1380,8 +1469,48 @@ bool SKFloaterLocalChat::handleMouseDown(S32 x, S32 y, MASK mask)
     return LLFloater::handleMouseDown(x, y, mask);
 }
 
+bool SKFloaterLocalChat::handleMouseUp(S32 x, S32 y, MASK mask)
+{
+    if (hasMouseCapture() && (mBarDrag >= 0 || mBarPage != 0))
+    {
+        gFocusMgr.setMouseCapture(nullptr);
+        return true;
+    }
+    return LLFloater::handleMouseUp(x, y, mask);
+}
+
+void SKFloaterLocalChat::onMouseCaptureLost()
+{
+    mBarDrag = -1;
+    mBarPage = 0;
+    LLFloater::onMouseCaptureLost();
+}
+
 bool SKFloaterLocalChat::handleHover(S32 x, S32 y, MASK mask)
 {
+    mBarHot = barShown() && barStrip().pointInRect(x, y);
+    if (hasMouseCapture() && (mBarDrag >= 0 || mBarPage != 0))
+    {
+        if (mBarDrag >= 0)
+        {
+            // The thumb follows the pointer, and the scroll follows the thumb.
+            const LLRect strip = barStrip();
+            const S32 travel = strip.getHeight() - barThumb().getHeight();
+            const S32 range = llmax(0, barRange());
+            if (travel > 0)
+            {
+                mScroll = llclamp((y - mBarDrag - strip.mBottom) * range / travel, 0, range);
+            }
+        }
+        mBarPointerY = y;
+        getWindow()->setCursor(UI_CURSOR_ARROW);
+        return true;
+    }
+    if (barTakes(x, y))
+    {
+        getWindow()->setCursor(UI_CURSOR_ARROW);
+        return true;
+    }
     if (!hasMouseCapture() && (mPillRect.pointInRect(x, y) || !urlAt(x, y).empty()))
     {
         getWindow()->setCursor(UI_CURSOR_HAND);
