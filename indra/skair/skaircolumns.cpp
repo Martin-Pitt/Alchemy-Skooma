@@ -144,9 +144,11 @@ namespace
     void dividePoly(const V3* in, S32 n, V3* out1, S32& n1, V3* out2, S32& n2, F64 offset, S32 axis, S32 facing)
     {
         F64 d[12];
+        bool zero = false;
         for (S32 k = 0; k < n; ++k)
         {
             d[k] = offset - in[k].v[axis];
+            zero = zero || d[k] == 0.0;
         }
         n1 = n2 = 0;
         for (S32 a = 0, b = n - 1; a < n; b = a, ++a)
@@ -195,6 +197,11 @@ namespace
         };
         // A piece with no width on this side - a touching edge or vertex, or a face in the line - is kept only
         // where it is a face whose solid is on this side.
+        // Only a vertex on the line can leave a side with nothing but points on it.
+        if (!zero)
+        {
+            return;
+        }
         if (facing >= 0 && onLine(out1, n1))
         {
             n1 = 0;
@@ -256,14 +263,26 @@ namespace
         // On a column edge, the triangle's least x is split there first, so a face lying in it goes to its solid's side.
         const F64 qx = (lo[0] - g.mOx) / cs, fx = std::floor(qx);
         const S32 ix0 = std::clamp(static_cast<S32>(fx) - (qx == fx ? 1 : 0), -1, W - 1);
-        const S32 ix1 = std::clamp(static_cast<S32>(std::floor((hi[0] - g.mOx) / cs)), 0, W - 1);
+        const S32 raw_ix1 = static_cast<S32>(std::floor((hi[0] - g.mOx) / cs));
+        const S32 ix1 = std::clamp(raw_ix1, 0, W - 1);
+        const bool one_row = ix0 == raw_ix1;
         S32 nin = 3;
         for (S32 ix = ix0; ix <= ix1; ++ix)
         {
             S32 nrow, nrest;
-            dividePoly(in, nin, row, nrow, rest, nrest, g.mOx + (ix + 1) * cs, 0, facing_x);
-            std::swap(in, rest);
-            nin = nrest;
+            if (one_row)
+            {
+                // Wholly inside one row: nothing to split off.
+                std::swap(in, row);
+                nrow = nin;
+                nin = 0;
+            }
+            else
+            {
+                dividePoly(in, nin, row, nrow, rest, nrest, g.mOx + (ix + 1) * cs, 0, facing_x);
+                std::swap(in, rest);
+                nin = nrest;
+            }
             if (nrow < 3 || ix < 0)
             {
                 continue;
@@ -281,14 +300,25 @@ namespace
             {
                 continue;
             }
+            const bool one_column = iy0 == iy1;
             iy0 = std::clamp(iy0, -1, W - 1);
             iy1 = std::clamp(iy1, 0, W - 1);
             for (S32 iy = iy0; iy <= iy1; ++iy)
             {
                 S32 ncell, nrr;
-                dividePoly(row, nrow, cell, ncell, rrest, nrr, g.mOy + (iy + 1) * cs, 1, facing_y);
-                std::swap(row, rrest);
-                nrow = nrr;
+                if (one_column)
+                {
+                    // Wholly inside one column.
+                    std::swap(row, cell);
+                    ncell = nrow;
+                    nrow = 0;
+                }
+                else
+                {
+                    dividePoly(row, nrow, cell, ncell, rrest, nrr, g.mOy + (iy + 1) * cs, 1, facing_y);
+                    std::swap(row, rrest);
+                    nrow = nrr;
+                }
                 if (ncell < 3 || iy < 0)
                 {
                     continue;
