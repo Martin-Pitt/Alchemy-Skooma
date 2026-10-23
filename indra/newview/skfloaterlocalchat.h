@@ -31,6 +31,7 @@
 #include "llavatarpropertiesprocessor.h"
 #include "llpointer.h"
 #include "skoutlinecapture.h"
+#include "llrendertarget.h"
 
 #include <deque>
 
@@ -50,6 +51,8 @@ public:
 
     /// Whether this floater replaces the nearby toasts and chat bar (SkoomaLocalChatModern).
     static bool modernEnabled();
+    /// Whether starting chat opens this floater: modern chat is on and Conversations is not up to take it.
+    static bool shouldTakeChat();
     /// Takes a nearby chat message as the toasts would have.
     static void addChat(const LLChat& chat, const LLSD& args);
     /// Shows the input with the cursor at the end, starting it with line when given.
@@ -79,6 +82,7 @@ private:
         S32 mBegin = 0; // bytes into the body
         S32 mEnd = 0;   // exclusive
         std::string mUrl;
+        bool mQuery = false; // a web link's query, drawn grey as chat history does
     };
 
     struct Message
@@ -93,6 +97,9 @@ private:
         EChatSourceType mSource = CHAT_SOURCE_SYSTEM;
         bool mEmote = false;
         F64 mArrival = 0.0;
+        std::string mTime;  // the timestamp after the name
+        S32 mNameWidth = 0; // measured at layout
+        S32 mTimeWidth = 0; // the timestamp and its gap, 0 for none
         std::vector<Link> mLinks;
     };
 
@@ -126,7 +133,6 @@ private:
     void sendChat(EChatType type);
     void invalidateLayout() { mLayoutDirty = true; }
     void layout();
-    void layoutInput();
     void layoutCog();
     LLRect contentRect() const;
     bool expanded() const;
@@ -134,12 +140,18 @@ private:
     S32 lineHeight(const Row& row) const;
     /// The url under a point in the floater, empty when none.
     std::string urlAt(S32 x, S32 y) const;
+    /// The visible cards in UI units, unclipped and unmasked.
+    void drawMessages(const LLRect& content, F64 now, bool full, bool cards);
+    /// The visible cards, faded out at the edges through mMask when any reach into the edge bands.
+    void drawMaskedMessages(const LLRect& content, F64 now, bool full, bool cards);
+    void drawTime(const Message& msg, F32 x, S32 y, F32 alpha, LLFontGL::ShadowType shadow) const;
     void drawRowText(const Row& row, S32 x, S32 y, F32 alpha, LLFontGL::ShadowType shadow) const;
     /// An object speaker's side-view glyph, null until the capture has one.
     const SKOutlineLayer* objectGlyph(const LLUUID& speaker, F64 now);
     /// An icon's width at the card icon height: an object's glyph keeps its aspect, everything else is square.
     S32 iconWidth(const Message& first, F64 now);
     void drawObjectIcon(const Message& first, S32 left, S32 top, S32 width, const LLColor4& color, F64 now);
+    U64 iconStamp(const Message& first) const;
     void drawAvatarIcon(const Message& first, S32 left, S32 top, const LLColor4& color);
     void onStyleMenu(const LLSD& param);
     bool onStyleCheck(const LLSD& param) const;
@@ -184,6 +196,20 @@ private:
         bool mObserving = false; // waiting on a properties reply
     };
     std::unordered_map<LLUUID, AvatarPicture> mAvatarPictures;
+    struct MaskKey
+    {
+        U32 mWidth = 0;
+        U32 mHeight = 0;
+        S32 mScroll = -1;
+        U32 mLayout = 0;
+        U64 mFades = 0;
+        U64 mIcons = 0;
+        bool mCards = false;
+        bool operator==(const MaskKey&) const = default;
+    };
+    LLRenderTarget mMask;       // the messages, premultiplied, for the scroll mask
+    MaskKey mMaskKey;           // what mMask holds
+    U32 mLayoutGeneration = 0;  // counts layouts, so mMask knows the rows moved
 };
 
 #endif // SK_FLOATERLOCALCHAT_H

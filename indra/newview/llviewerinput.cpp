@@ -694,7 +694,7 @@ bool start_chat( EKeystate s )
 
     // start chat
     // <SK:Nexii> Modern local chat takes Enter-to-chat.
-    if (SKFloaterLocalChat::modernEnabled())
+    if (SKFloaterLocalChat::shouldTakeChat())
     {
         SKFloaterLocalChat::startChat(nullptr);
         return true;
@@ -718,7 +718,7 @@ bool start_gesture( EKeystate s )
         ! (focus_ctrlp && focus_ctrlp->acceptsTextInput()))
     {
         // <SK:Nexii> Modern local chat takes the gesture slash.
-        if (SKFloaterLocalChat::modernEnabled())
+        if (SKFloaterLocalChat::shouldTakeChat())
         {
             SKFloaterLocalChat::startChat(SKFloaterLocalChat::currentChat().empty() ? "/" : nullptr);
             return true;
