@@ -5265,6 +5265,28 @@
             <key>Value</key>
             <integer>1</integer>
         </map>
+        <key>SkoomaLocalChatTyping</key>
+        <map>
+            <key>Comment</key>
+            <string>Show who nearby is typing under the game-style local chat's messages.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SkoomaLocalChatTypingGrace</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds someone typing just out of chat range stays listed in the game-style local chat after they stop.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>5.0</real>
+        </map>
         <key>SkoomaLocalChatFadeDelay</key>
         <map>
             <key>Comment</key>
