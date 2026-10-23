@@ -648,6 +648,20 @@ void SKFloaterLocalChat::layout()
         mCards.back().mLastRow = (S32)mRows.size() - 1;
     }
 
+    // Each bubble as wide as its name or widest line, wrapping only past the floater's width.
+    for (Card& card : mCards)
+    {
+        S32 widest = 0;
+        for (S32 r = card.mFirstRow; r <= card.mLastRow; ++r)
+        {
+            const Row& row = mRows[r];
+            widest = llmax(widest, row.mMessage < 0 ? name_font()->getWidth(mMessages[mCards[row.mCard].mFirstMessage].mName)
+                                                    : font->getWidthBytes(mMessages[row.mMessage].mBody, row.mBegin, row.mLength));
+        }
+        // A little slack for the bold name run, measured above in the regular face.
+        card.mWidth = llmin(width, text_x + widest + PAD_X + 2);
+    }
+
     // Offsets from the bottom, newest first.
     S32 y = 0;
     for (S32 r = (S32)mRows.size() - 1; r >= 0; --r)
@@ -787,7 +801,7 @@ void SKFloaterLocalChat::draw()
             const Message& first = mMessages[card.mFirstMessage];
             if (cards)
             {
-                card_image->draw(content.mLeft, card_bottom, content.getWidth(), card_top - card_bottom, card_color.get() % (CARD_ALPHA * alpha * edge(card_bottom, card_top)));
+                card_image->draw(content.mLeft, card_bottom, card.mWidth,card_top - card_bottom, card_color.get() % (CARD_ALPHA * alpha * edge(card_bottom, card_top)));
                 if (!first.mName.empty())
                 {
                     // Round for people, square for objects.
