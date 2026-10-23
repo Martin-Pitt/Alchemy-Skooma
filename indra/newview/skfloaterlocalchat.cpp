@@ -751,7 +751,7 @@ void SKFloaterLocalChat::draw()
         mCog->setVisible(mHovered && opaque);
     }
 
-    if (opaque && (mHovered || (mInput && mInput->getVisible())))
+    if (opaque && mHovered)
     {
         // The only chrome, the mini-map's: a faint dark tint inside a thin light border.
         static const LLColor4 tint(16.f / 255.f, 16.f / 255.f, 20.f / 255.f, 61.f / 255.f);
