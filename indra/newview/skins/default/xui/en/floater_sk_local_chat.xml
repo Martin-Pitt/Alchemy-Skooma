@@ -39,6 +39,7 @@
      left="8"
      top="528"
      right="-32"
+     expand_lines_count="5"
      name="sk_local_chat_input"
      spellcheck="true"
      visible="false" />
