@@ -1050,7 +1050,11 @@ void SKOverviewCapture::frame()
     {
         if (!tacticalShown())
         {
+            // The cut's roofs, rooms and columns are GPU probes, so the maps run a probe frame of their own.
+            static LLCachedControl<U32> probe_people(gSavedSettings, "SKOverviewProbeBudget", 8);
+            mProbes.beginFrame(sGeomId, llmax((U32)probe_people, 1u));
             updateCut();
+            mProbes.endFrame();
         }
         captureMaps(LLFrameTimer::getUptimeSeconds().value());
     }
