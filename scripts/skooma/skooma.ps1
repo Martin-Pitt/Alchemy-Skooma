@@ -1290,6 +1290,8 @@ function Invoke-Check { param([string]$branch, [switch]$Quiet)
                 if ($leak) { $problems += "merge $($sha.Substring(0,9)) brings in main commit $($leak.Substring(0,9))" }
                 continue
             }
+            # Upstream is never a leak, however it arrives (a merged sibling's own develop merges).
+            if (GitOk merge-base --is-ancestor $p develop) { continue }
             if (-not (GitOk merge-base --is-ancestor $p $base)) {
                 if (GitOk merge-base --is-ancestor $p main) {
                     if ($null -eq $developSpine) { $developSpine = @{}; foreach ($d in (G rev-list --first-parent main) -split "`n") { if ($d) { $developSpine[$d] = $true } } }
