@@ -1491,7 +1491,7 @@ void LLReflectionMapManager::updateProbeFace(LLReflectionMap* probe, U32 face)
                 if (i != mMipChain.size() - 1)
                 {
                     res /= 2;
-                    glViewport(0, 0, res, res);
+                    gGL.setViewport(0, 0, res, res);
                 }
             }
 
@@ -1520,7 +1520,7 @@ void LLReflectionMapManager::updateProbeFace(LLReflectionMap* probe, U32 face)
                 program.uniform1i(LLShaderMgr::U_WIDTH, (S32)sh_res);
 
                 mSHCoeffs.bindTarget();
-                glViewport(0, probe->mCubeIndex, LL_SH_PACKED_TEXELS, 1);
+                gGL.setViewport(0, probe->mCubeIndex, LL_SH_PACKED_TEXELS, 1);
 
                 mVertexBuffer->setBuffer();
                 mVertexBuffer->drawArrays(gGL.TRIANGLE_STRIP, 0, 4);
@@ -1550,7 +1550,7 @@ void LLReflectionMapManager::updateProbeFace(LLReflectionMap* probe, U32 face)
                     mSHPartial.bindTarget();
                     // bindTarget sets the viewport to the whole target, which is exactly this
                     // strip; restated because the draw depends on it.
-                    glViewport(0, 0, LL_SH_COEFF_COUNT, sh_rows);
+                    gGL.setViewport(0, 0, LL_SH_COEFF_COUNT, sh_rows);
 
                     mVertexBuffer->setBuffer();
                     mVertexBuffer->drawArrays(gGL.TRIANGLE_STRIP, 0, 4);
