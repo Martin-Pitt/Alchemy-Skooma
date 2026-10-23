@@ -7494,10 +7494,10 @@
             <key>Value</key>
             <integer>0</integer>
         </map>
-        <key>SKNavRoomProbes</key>
+        <key>SKRoomProbes</key>
         <map>
             <key>Comment</key>
-            <string>Give each part of an indoor space the rooms pass cut an automatic reflection probe sphere of its own, in place of the octree's automatic probes there. Placed probes always win. Needs SKNavBuildAir.</string>
+            <string>Give each part of an indoor space the rooms pass cut an automatic reflection probe sphere of its own, in place of the octree's automatic probes there. Placed probes always win. Keeps the air cells building.</string>
             <key>Persist</key>
             <integer>1</integer>
             <key>Type</key>
@@ -7505,7 +7505,7 @@
             <key>Value</key>
             <integer>1</integer>
         </map>
-        <key>SKNavRoomProbesMax</key>
+        <key>SKRoomProbesMax</key>
         <map>
             <key>Comment</key>
             <string>At most this many rooms probes, the nearest kept; the probe array's own cap applies as well.</string>

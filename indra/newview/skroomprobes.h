@@ -1,6 +1,6 @@
 /**
- * @file sknavroomprobes.h
- * @brief Automatic reflection probe spheres for the navmesh's rooms, in place of the octree's.
+ * @file skroomprobes.h
+ * @brief Automatic reflection probe spheres for the rooms layer's spaces, in place of the octree's.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Alchemy Viewer Source Code
@@ -22,12 +22,12 @@
  * $/LicenseInfo$
  */
 
-#ifndef SK_NAVROOMPROBES_H
-#define SK_NAVROOMPROBES_H
+#ifndef SK_ROOMPROBES_H
+#define SK_ROOMPROBES_H
 
-#include "sknavprobecache.h"
-#include "sknavprobes.h"
-#include "sknavrooms.h"
+#include "skrooms.h"
+#include "skroomsprobecache.h"
+#include "skroomsprobes.h"
 
 #include "llpointer.h"
 
@@ -39,7 +39,6 @@
 #include <vector>
 
 class LLReflectionMap;
-class SKNavMesh;
 struct SKCensusSnapshot;
 
 /// Holds a full probe per walkable space near the camera — its extra parts
@@ -48,21 +47,19 @@ struct SKCensusSnapshot;
 /// nearest origin, before the residual grid pass. Placed probes
 /// always win: a sphere shrinks clear of their influence or is dropped.
 /// Only at probe level 3, where octree probes exist. A space's parts are
-/// cached under its tiles' content keys, in memory and beside the tile
-/// products on disk, so a space over unchanged tiles places exactly as it
-/// did, however far the camera went. Main thread only.
-class SKNavRoomProbes
+/// cached in memory under its tiles' content keys, so a space over
+/// unchanged tiles places exactly as it did, however far the camera went.
+/// Keeps the air cells building while it places. Main thread only.
+class SKRoomProbes
 {
 public:
-    SKNavRoomProbes();
-    ~SKNavRoomProbes();
+    SKRoomProbes();
+    ~SKRoomProbes();
 
-    void update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh);
-    /// Let every full probe go and release its claim on residual coverage.
+    void update(const SKWorldViewPtr& view);
+    /// Let every full probe go, release its claim on residual coverage, and drop the air cells' demand.
     void clear();
     std::string statsLine() const;
-    /// Whether a worker is placing a space of this mesh.
-    bool pendingFor(const LLUUID& mesh) const;
 
 private:
     struct Held
@@ -79,7 +76,7 @@ private:
     struct Parts
     {
         U64 mSignature = 0;
-        std::vector<sknav::ProbePart> mParts;
+        std::vector<skworld::ProbePart> mParts;
         bool mPlaced = false;   ///< placed under mSignature, even to nothing
         bool mSeen = false;
         S32 mIndex = -1;        ///< this space's number within an update, for the budget's per-space rule
@@ -93,31 +90,26 @@ private:
         U32 mSpace = 0;
         LLVector3 mAnchor;
         U64 mSignature = 0;
-        std::vector<sknav::ProbePart> mParts;
+        std::vector<skworld::ProbePart> mParts;
     };
     /// What the workers finished, taken on the main thread.
     struct WorkerResults
     {
         std::mutex mMutex;
-        std::vector<std::pair<U64, std::vector<sknav::CachedSpaceParts>>> mDone;
-        std::vector<U64> mMissed;
         std::vector<Placed> mPlaced;
     };
     void takeWorkerResults();
 
     std::vector<Held> mHeld;
-    sknav::ProbePartsCache mCache;
+    skworld::ProbePartsCache mCache;
     std::shared_ptr<WorkerResults> mResults;
-    std::set<U64> mReading;         ///< keys a worker is reading; their spaces wait
     std::set<std::pair<LLUUID, U32>> mPlacing;  ///< spaces a worker is placing; their old parts stand
-    std::set<U64> mStoreKeys;       ///< keys a worker placed under since the last pass, to write
-    std::set<U64> mMissed;          ///< keys the disk had nothing usable under
     std::map<std::pair<LLUUID, U32>, Parts> mParts;
     F64 mNextUpdate = 0.0;
     // The census's solid bodies as a tile lattice for the candidates' point
     // tests, rebuilt only when the census publishes a new scan;
     // mSolidsCensus is the scan it was built from.
-    sknav::SolidLattice mSolids;
+    skworld::SolidLattice mSolids;
     std::shared_ptr<const SKCensusSnapshot> mSolidsCensus;
 
     // stats
@@ -132,9 +124,8 @@ private:
     U32 mPlaced = 0;
     U32 mCacheHits = 0;     ///< spaces given their cached parts, last update
     U32 mCachePlaced = 0;   ///< spaces placed anew, last update
-    U32 mDiskLoads = 0;
-    U32 mDiskStores = 0;
+    bool mDemanding = false;    ///< the air cells' demand is held
     F32 mLastMs = 0.f;
 };
 
-#endif // SK_NAVROOMPROBES_H
+#endif // SK_ROOMPROBES_H

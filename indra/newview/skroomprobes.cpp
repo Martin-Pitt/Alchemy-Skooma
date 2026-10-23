@@ -1,6 +1,6 @@
 /**
- * @file sknavroomprobes.cpp
- * @brief Automatic reflection probe spheres for the navmesh's rooms, in place of the octree's.
+ * @file skroomprobes.cpp
+ * @brief Automatic reflection probe spheres for the rooms layer's spaces, in place of the octree's.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Alchemy Viewer Source Code
@@ -24,7 +24,7 @@
 
 #include "llviewerprecompiledheaders.h"
 
-#include "sknavroomprobes.h"
+#include "skroomprobes.h"
 
 #include "llagent.h"
 #include "llapp.h"
@@ -34,8 +34,7 @@
 #include "llviewercontrol.h"
 #include "llviewerobject.h"
 #include "pipeline.h"
-#include "sknavmesh.h"
-#include "sknavtilecache.h"
+#include "skaircells.h"
 #include "skworldcensus.h"
 
 #include <algorithm>
@@ -43,11 +42,12 @@
 
 namespace
 {
+    const char* DEMAND = "room probes";
     // Spaces this far from the camera are considered; the budget trims the rest.
     constexpr F64 REACH_M = 192.0;
     constexpr F32 UPDATE_PERIOD_S = 1.f;
 
-    U64 signatureOf(const sknav::Space& space)
+    U64 signatureOf(const skworld::Space& space)
     {
         U64 h = 1469598103934665603ull;
         auto mix = [&h](U64 v) { h = (h ^ v) * 1099511628211ull; };
@@ -63,13 +63,13 @@ namespace
     }
 }
 
-SKNavRoomProbes::SKNavRoomProbes() : mResults(std::make_shared<WorkerResults>())
+SKRoomProbes::SKRoomProbes() : mResults(std::make_shared<WorkerResults>())
 {
 }
 
-SKNavRoomProbes::~SKNavRoomProbes() = default;
+SKRoomProbes::~SKRoomProbes() = default;
 
-void SKNavRoomProbes::clear()
+void SKRoomProbes::clear()
 {
     if (!mHeld.empty() || mPlaced)
     {
@@ -81,17 +81,18 @@ void SKNavRoomProbes::clear()
     mSolids.clear();
     mSolidsCensus = nullptr;
     mCandidates = mClearedOut = mOverBudget = mPlaced = mCandidatesAdded = 0;
+    if (mDemanding && SKAirCells::instanceExists())
+    {
+        SKAirCells::instance().removeDemand(DEMAND);
+    }
+    mDemanding = false;
 }
 
-void SKNavRoomProbes::takeWorkerResults()
+void SKRoomProbes::takeWorkerResults()
 {
-    std::vector<std::pair<U64, std::vector<sknav::CachedSpaceParts>>> done;
-    std::vector<U64> missed;
     std::vector<Placed> placed;
     {
         std::lock_guard<std::mutex> lock(mResults->mMutex);
-        done.swap(mResults->mDone);
-        missed.swap(mResults->mMissed);
         placed.swap(mResults->mPlaced);
     }
     for (Placed& p : placed)
@@ -100,7 +101,6 @@ void SKNavRoomProbes::takeWorkerResults()
         if (p.mKey)
         {
             mCache.insert(p.mKey, p.mSpace, p.mAnchor, p.mParts);
-            mStoreKeys.insert(p.mKey);
         }
         else
         {
@@ -111,31 +111,26 @@ void SKNavRoomProbes::takeWorkerResults()
         }
         ++mCachePlaced;
     }
-    for (auto& d : done)
-    {
-        mCache.adopt(d.first, d.second);
-        mReading.erase(d.first);
-        ++mDiskLoads;
-    }
-    if (mMissed.size() > 4096)
-    {
-        mMissed.clear();
-    }
-    for (U64 key : missed)
-    {
-        mReading.erase(key);
-        mMissed.insert(key);
-    }
 }
 
-void SKNavRoomProbes::update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh)
+void SKRoomProbes::update(const SKWorldViewPtr& view)
 {
-    static LLCachedControl<bool> enabled(gSavedSettings, "SKNavRoomProbes", true);
-    static LLCachedControl<U32> max_probes(gSavedSettings, "SKNavRoomProbesMax", 240);
+    static LLCachedControl<bool> enabled(gSavedSettings, "SKRoomProbes", true);
+    static LLCachedControl<U32> max_probes(gSavedSettings, "SKRoomProbesMax", 240);
     static LLCachedControl<S32> probe_level(gSavedSettings, "RenderReflectionProbeLevel", 3);
-    if (!enabled || !view || !LLPipeline::sReflectionProbesEnabled || probe_level < 3)
+    if (!enabled || !LLPipeline::sReflectionProbesEnabled || probe_level < 3)
     {
         clear();
+        return;
+    }
+    // The spaces stand on the air, which builds only while something needs it.
+    if (!mDemanding)
+    {
+        SKAirCells::instance().addDemand(DEMAND);
+        mDemanding = true;
+    }
+    if (!view)
+    {
         return;
     }
 
@@ -154,17 +149,15 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh)
     const auto started = std::chrono::steady_clock::now();
     mCacheHits = mCachePlaced = 0;
     takeWorkerResults();
-    const std::shared_ptr<sknav::TileDiskCache> disk = navmesh.diskCache();
-    const LL::WorkQueue::ptr_t workers = navmesh.workerQueue();
-    std::set<U64> placed_keys;
-    placed_keys.swap(mStoreKeys);
+    SKAirCells& air = SKAirCells::instance();
+    const LL::WorkQueue::ptr_t workers = air.workerQueue();
     std::vector<U64> tile_keys;
     // Placement is pure work over a space's raster, tens of milliseconds a
     // space: it runs on the workers, and a space whose answer is pending
     // keeps the parts it had, or waits, until the result is taken.
     bool deferred = false;
-    const sknav::ProbeParams params;
-    const auto place = [&](const LLUUID& mesh, const sknav::Space& space, U64 key)
+    const skworld::ProbeParams params;
+    const auto place = [&](const LLUUID& mesh, const skworld::Space& space, U64 key)
     {
         if (mPlacing.insert(std::make_pair(mesh, space.mId)).second)
         {
@@ -178,7 +171,7 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh)
                 p.mSpace = copy.mId;
                 p.mAnchor = copy.mAnchor;
                 p.mSignature = signatureOf(copy);
-                p.mParts = sknav::spaceProbes(copy, params);
+                p.mParts = skworld::spaceProbes(copy, params);
                 std::lock_guard<std::mutex> lock(results->mMutex);
                 results->mPlaced.push_back(std::move(p));
             });
@@ -205,12 +198,12 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh)
     }
 
     std::vector<LLReflectionMap*> placed_probes;
-    manager.getNavRoomsContext(placed_probes);
-    std::vector<sknav::ProbeInfluence> placed;
+    manager.getRoomProbesContext(placed_probes);
+    std::vector<skworld::ProbeInfluence> placed;
     for (LLReflectionMap* probe : placed_probes)
     {
         LLViewerObject* vobj = probe->mViewerObject;
-        sknav::ProbeInfluence inf;
+        skworld::ProbeInfluence inf;
         inf.mCentre.set(probe->mOrigin.getF32ptr());
         inf.mRadius = probe->mRadius;
         if (vobj->getReflectionProbeIsBox())
@@ -260,57 +253,23 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh)
     {
         p.second.mSeen = false;
     }
-    view->spacesIn(camera_global - reach, camera_global + reach, [&](const SKNavWorldView::Mesh& mesh, const sknav::Space& space)
+    view->spacesIn(camera_global - reach, camera_global + reach, [&](const SKWorldView::Mesh& mesh, const skworld::Space& space)
     {
-        if (!sknav::wantsProbes(space, params))
+        if (!skworld::wantsProbes(space, params))
         {
             return;
         }
-        // Over tiles that all have content keys the cache answers, and a key
-        // the disk holds is read on a worker first, its space waiting a pass.
+        // Over tiles that all have content keys the cache answers.
         const LLVector3d space_min = mesh.mOrigin + LLVector3d(space.mMin);
         const LLVector3d space_max = mesh.mOrigin + LLVector3d(space.mMax);
-        navmesh.tileContentKeysIn(mesh.mId, space_min, space_max, tile_keys);
-        const U64 key = sknav::probePartsKey(tile_keys, params);
-        std::vector<sknav::ProbePart> cached;
-        const std::vector<sknav::ProbePart>* space_parts = &cached;
+        air.tileContentKeysIn(mesh.mId, space_min, space_max, tile_keys);
+        const U64 key = skworld::probePartsKey(tile_keys, params);
+        std::vector<skworld::ProbePart> cached;
+        const std::vector<skworld::ProbePart>* space_parts = &cached;
         U64 source = key;
         if (key)
         {
-            if (mReading.count(key))
-            {
-                deferred = true;
-                pending.emplace_back(space_min, space_max);
-                return;
-            }
-            if (disk && !mCache.hasKey(key) && !mMissed.count(key) && disk->contains(key))
-            {
-                mReading.insert(key);
-                const std::shared_ptr<WorkerResults> reads = mResults;
-                workers->post([disk, reads, key]()
-                {
-                    std::vector<U8> bytes;
-                    std::vector<sknav::CachedSpaceParts> spaces;
-                    const bool ok = disk->load(key, bytes) && sknav::unpackProbeParts(bytes.data(), bytes.size(), key, spaces);
-                    if (!ok && !bytes.empty())
-                    {
-                        disk->erase(key);   // stale or damaged: placed anew and rewritten
-                    }
-                    std::lock_guard<std::mutex> lock(reads->mMutex);
-                    if (ok)
-                    {
-                        reads->mDone.emplace_back(key, std::move(spaces));
-                    }
-                    else
-                    {
-                        reads->mMissed.push_back(key);
-                    }
-                });
-                deferred = true;
-                pending.emplace_back(space_min, space_max);
-                return;
-            }
-            const std::vector<sknav::ProbePart>* held = mCache.find(key, space.mId, space.mAnchor);
+            const std::vector<skworld::ProbePart>* held = mCache.find(key, space.mId, space.mAnchor);
             if (!held)
             {
                 place(mesh.mId, space, key);
@@ -339,7 +298,7 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh)
             source = parts.mSignature;
         }
         const LLVector3 origin = gAgent.getPosAgentFromGlobal(mesh.mOrigin);
-        for (const sknav::ProbePart& part : *space_parts)
+        for (const skworld::ProbePart& part : *space_parts)
         {
             Candidate c;
             c.mOrigin = origin + part.mOrigin;
@@ -348,7 +307,7 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh)
             {
                 continue;
             }
-            c.mRadius = sknav::clearRadius(c.mOrigin, std::max(part.mRadius, part.mSpaceRadius), placed, params);
+            c.mRadius = skworld::clearRadius(c.mOrigin, std::max(part.mRadius, part.mSpaceRadius), placed, params);
             if (c.mRadius <= 0.f)
             {
                 ++mClearedOut;
@@ -366,17 +325,6 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh)
     {
         it = it->second.mSeen ? std::next(it) : mParts.erase(it);
     }
-    // Every key a space was placed under this pass is written whole, on a worker.
-    for (U64 key : placed_keys)
-    {
-        const std::vector<sknav::CachedSpaceParts>* spaces = disk ? mCache.spaces(key) : nullptr;
-        if (spaces)
-        {
-            workers->post([disk, key, copy = *spaces]() { disk->store(key, sknav::packProbeParts(copy, key)); });
-            ++mDiskStores;
-        }
-    }
-
     // Every doorway where two spaces meet is a blend the shader must carry:
     // both sides' bubbles reach the threshold and past it, so they overlap
     // and the graph links them; a doorway into a space with no bubbles of
@@ -420,7 +368,7 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh)
             return std::make_pair(best, best_d2);
         };
         std::vector<std::pair<LLUUID, U32>> bridged;
-        view->portalsIn(camera_global - reach, camera_global + reach, [&](const SKNavWorldView::Mesh& mesh, const sknav::Portal& portal)
+        view->portalsIn(camera_global - reach, camera_global + reach, [&](const SKWorldView::Mesh& mesh, const skworld::Portal& portal)
         {
             if (portal.mSpaces[0] >= productId_to_space[mesh.mId].size() ||
                 portal.mSpaces[1] >= productId_to_space[mesh.mId].size())
@@ -482,10 +430,10 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh)
     // bridged sphere is budgeted at its final size.
     // The budget counts spheres per space, and slots repeat across meshes.
     std::map<std::pair<LLUUID, U32>, U32> space_numbers;
-    std::vector<sknav::ProbeSlot> slots;
+    std::vector<skworld::ProbeSlot> slots;
     for (const Candidate& c : candidates)
     {
-        sknav::ProbeSlot slot;
+        skworld::ProbeSlot slot;
         slot.mKey = slots.size();
         slot.mSpace = space_numbers.emplace(std::make_pair(c.mMesh, c.mSpace), static_cast<U32>(space_numbers.size())).first->second;
         slot.mPart = c.mPart;
@@ -506,8 +454,8 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh)
     {
         origins.push_back(c.mOrigin);
     }
-    const std::vector<S32> match = sknav::matchNearest(held_origins, origins, params.mMatchM);
-    for (sknav::ProbeSlot& slot : slots)
+    const std::vector<S32> match = skworld::matchNearest(held_origins, origins, params.mMatchM);
+    for (skworld::ProbeSlot& slot : slots)
     {
         slot.mHeld = match[slot.mKey] >= 0;
     }
@@ -516,7 +464,7 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh)
     const U32 room = std::max(static_cast<S32>(manager.probeCount()) - 1 - static_cast<S32>(placed.size()), 0);
     const U32 cap = std::min<U32>(max_probes, std::min<U32>(room, LL_MAX_REFLECTION_PROBE_COUNT - 1));
     mCandidates = static_cast<U32>(slots.size());
-    sknav::budgetProbes(slots, cap, params);
+    skworld::budgetProbes(slots, cap, params);
     mOverBudget = mCandidates - static_cast<U32>(slots.size());
 
     // One real move per update, so re-captures are staggered and placed probes are never starved.
@@ -524,7 +472,7 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh)
     bool created = false;
     std::vector<Held> held;
     std::vector<Held> retiring;
-    for (const sknav::ProbeSlot& slot : slots)
+    for (const skworld::ProbeSlot& slot : slots)
     {
         const Candidate& c = candidates[slot.mKey];
         const S32 m = match[slot.mKey];
@@ -538,7 +486,7 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh)
             // its capture stands, and is retaken in place when the refresh rotation comes round.
             if (h.mSource && c.mSource && h.mSource != c.mSource)
             {
-                manager.staleNavRoomsProbe(h.mProbe);
+                manager.staleRoomProbe(h.mProbe);
                 ++mStaled;
             }
             if (c.mSource)
@@ -547,10 +495,10 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh)
             }
             // A capture taken from inside what is now a solid shows its inside: always retake it.
             const bool buried = mSolids.contains(h.mOrigin);
-            if (!moved && (buried || sknav::shouldRecapture(held_origins[m], h.mRadius, c.mOrigin, params)))
+            if (!moved && (buried || skworld::shouldRecapture(held_origins[m], h.mRadius, c.mOrigin, params)))
             {
                 // Make before break: the old sphere keeps its capture until the new one has its own.
-                LLPointer<LLReflectionMap> fresh = manager.registerNavRoomsProbe(c.mOrigin, c.mRadius);
+                LLPointer<LLReflectionMap> fresh = manager.registerRoomProbe(c.mOrigin, c.mRadius);
                 if (fresh.notNull())
                 {
                     moved = true;
@@ -565,10 +513,10 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh)
                     created = true;
                 }
             }
-            else if (sknav::shouldReplace(held_origins[m], h.mRadius, held_origins[m], c.mRadius, params))
+            else if (skworld::shouldReplace(held_origins[m], h.mRadius, held_origins[m], c.mRadius, params))
             {
                 // Close enough to keep its capture: only the sphere it reaches over follows the part.
-                manager.resizeNavRoomsProbe(h.mProbe, c.mRadius);
+                manager.resizeRoomProbe(h.mProbe, c.mRadius);
                 h.mRadius = c.mRadius;
                 ++mResizes;
                 created = true;
@@ -576,7 +524,7 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh)
         }
         else
         {
-            h.mProbe = manager.registerNavRoomsProbe(c.mOrigin, c.mRadius);
+            h.mProbe = manager.registerRoomProbe(c.mOrigin, c.mRadius);
             if (h.mProbe.isNull())
             {
                 continue;
@@ -630,7 +578,7 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh)
         }
         const LLVector3d span(r.mRadius, r.mRadius, r.mRadius);
         const LLVector3d lo = r.mOrigin - span, hi = r.mOrigin + span;
-        const bool unsettled = navmesh.settlingIn(lo, hi) ||
+        const bool unsettled = air.settlingIn(lo, hi) || SKRooms::instance().settlingIn(lo, hi) ||
             std::any_of(pending.begin(), pending.end(), [&](const std::pair<LLVector3d, LLVector3d>& box)
             {
                 return box.first.mdV[VX] <= hi.mdV[VX] && lo.mdV[VX] <= box.second.mdV[VX] &&
@@ -662,18 +610,12 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh)
     mLastMs = std::chrono::duration<F32, std::milli>(std::chrono::steady_clock::now() - started).count();
 }
 
-bool SKNavRoomProbes::pendingFor(const LLUUID& mesh) const
-{
-    const auto it = mPlacing.lower_bound(std::make_pair(mesh, 0u));
-    return it != mPlacing.end() && it->first == mesh;
-}
-
-std::string SKNavRoomProbes::statsLine() const
+std::string SKRoomProbes::statsLine() const
 {
     const LLReflectionMapManager& manager = gPipeline.mReflectionMapManager;
     return llformat("room probes %u of %u parts (%u clear of placed, %u dropped by the budget), %u created, %u moves, %u resizes, %u staled, "
-                    "%u nav-octree links, %u relinked, cache %u hits %u placed, %u keys %u parts, %u loads %u stores, %.2f ms",
+                    "%u nav-octree links, %u relinked, cache %u hits %u placed, %u keys %u parts, %.2f ms",
                     mPlaced, mCandidates + mClearedOut, mClearedOut, mOverBudget, mCreated, mMoves, mResizes, mStaled,
-                    manager.countNavOctreeLinks(), manager.getRelevanceRelinks(), mCacheHits, mCachePlaced,
-                    static_cast<U32>(mCache.keys()), static_cast<U32>(mCache.parts()), mDiskLoads, mDiskStores, mLastMs);
+                    manager.countRoomOctreeLinks(), manager.getRelevanceRelinks(), mCacheHits, mCachePlaced,
+                    static_cast<U32>(mCache.keys()), static_cast<U32>(mCache.parts()), mLastMs);
 }
