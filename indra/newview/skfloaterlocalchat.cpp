@@ -352,7 +352,22 @@ void SKFloaterLocalChat::appendChat(const LLChat& chat, const LLSD& args, F64 ar
         out += label;
         link.mEnd = (S32)out.size();
         link.mUrl = match.getUrl();
-        msg.mLinks.push_back(std::move(link));
+        // As chat history: a web link's query follows its label, in grey.
+        const std::string query = match.getQuery();
+        if (!query.empty())
+        {
+            Link tail = link;
+            tail.mBegin = link.mEnd;
+            out += query;
+            tail.mEnd = (S32)out.size();
+            tail.mQuery = true;
+            msg.mLinks.push_back(std::move(link));
+            msg.mLinks.push_back(std::move(tail));
+        }
+        else
+        {
+            msg.mLinks.push_back(std::move(link));
+        }
         rest.erase(0, match.getEnd() + 1);
     }
     out += rest;
@@ -755,7 +770,7 @@ void SKFloaterLocalChat::drawRowText(const Row& row, S32 x, S32 y, F32 alpha, LL
             {
                 if (pos >= link.mBegin && pos < link.mEnd)
                 {
-                    color = link_color.get();
+                    color = link.mQuery ? LLColor4::grey : link_color.get();
                     run_end = llmin(end, link.mEnd);
                     style = LLFontGL::UNDERLINE;
                     break;

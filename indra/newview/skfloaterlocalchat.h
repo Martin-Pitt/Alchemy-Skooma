@@ -75,6 +75,7 @@ private:
         S32 mBegin = 0; // bytes into the body
         S32 mEnd = 0;   // exclusive
         std::string mUrl;
+        bool mQuery = false; // a web link's query, drawn grey as chat history does
     };
 
     struct Message
