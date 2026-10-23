@@ -80,7 +80,7 @@ constexpr S32 INPUT_GAP = 4;
 constexpr S32 INSET = 8; // inside the backdrop's border
 constexpr F32 EDGE_FADE = 24.f; // the scroll mask at the top, and at the bottom while scrolled
 constexpr F32 CARD_ALPHA = 0.6f;
-constexpr S32 TIME_GAP = 5;     // between the name and its timestamp
+constexpr S32 TIME_GAP = 10;    // between the name and its timestamp
 constexpr F32 TIME_ALPHA = 0.45f;
 constexpr S32 EMBED_MAX_WIDTH = 360;
 constexpr S32 EMBED_MIN_WIDTH = 120;
@@ -103,6 +103,12 @@ LLFontGL* name_font()
 LLFontGL* time_font()
 {
     return LLFontGL::getFontSansSerifSmall();
+}
+
+// The width a bold run draws at: the bold face's, plus the synthesized bold's second pass.
+S32 bold_width(const LLFontGL* font, std::string_view text)
+{
+    return text.empty() ? 0 : font->faceFor(LLFontGL::BOLD)->getWidth(text) + 1;
 }
 
 // Set while the messages draw into the mask's target.
@@ -686,11 +692,17 @@ void SKFloaterLocalChat::layout()
     const S32 pad_x = cards ? CARD_PAD_X : PAD_X;
     const S32 text_x = cards ? pad_x + DISC + DISC_GAP : pad_x;
     const F32 wrap = (F32)llmax(16, width - text_x - pad_x);
+    // How much wider a minimal line's bold name draws than the regular face measures it.
+    auto bold_extra = [font](const Message& msg)
+    {
+        const std::string_view name = std::string_view(msg.mBody).substr(0, msg.mNameLen);
+        return llmax(0, bold_width(font, name) - font->getWidth(name));
+    };
 
     for (S32 m = 0; m < (S32)mMessages.size(); ++m)
     {
         Message& msg = mMessages[m];
-        msg.mNameWidth = msg.mName.empty() ? 0 : name_font()->getWidth(msg.mName);
+        msg.mNameWidth = bold_width(name_font(), msg.mName);
         msg.mTimeWidth = msg.mName.empty() || msg.mTime.empty() ? 0 : time_font()->getWidth(msg.mTime) + TIME_GAP;
         // Cards gather one speaker's run of messages; a minimal line stands alone.
         bool join = false;
@@ -737,7 +749,7 @@ void SKFloaterLocalChat::layout()
                 line_end = (S32)nl;
             }
             // A minimal line's timestamp sits in its first row, after the name.
-            const F32 row_wrap = pos == 0 && msg.mNameLen > 0 ? llmax(16.f, wrap - (F32)msg.mTimeWidth) : wrap;
+            const F32 row_wrap = pos == 0 && msg.mNameLen > 0 ? llmax(16.f, wrap - (F32)(msg.mTimeWidth + bold_extra(msg))) : wrap;
             S32 count = font->maxDrawableBytes(body.substr(pos), row_wrap, line_end - pos, LLFontGL::WORD_BOUNDARY_IF_POSSIBLE);
             if (count <= 0 && pos < line_end)
             {
@@ -802,12 +814,11 @@ void SKFloaterLocalChat::layout()
             else
             {
                 const Message& msg = mMessages[row.mMessage];
-                const S32 time = row.mBegin == 0 && msg.mNameLen > 0 ? msg.mTimeWidth : 0;
-                widest = llmax(widest, font->getWidthBytes(msg.mBody, row.mBegin, row.mLength) + time);
+                const S32 lead = row.mBegin == 0 && msg.mNameLen > 0 ? msg.mTimeWidth + bold_extra(msg) : 0;
+                widest = llmax(widest, font->getWidthBytes(msg.mBody, row.mBegin, row.mLength) + lead);
             }
         }
-        // A little slack for the bold name run, measured above in the regular face.
-        card.mWidth = llmin(width, text_x + widest + pad_x + 2);
+        card.mWidth = llmin(width, text_x + widest + pad_x);
     }
 
     // Offsets from the bottom, newest first.
@@ -1299,7 +1310,7 @@ std::string SKFloaterLocalChat::urlAt(S32 x, S32 y) const
         if (row.mMessage < 0)
         {
             const Message& first = mMessages[card.mFirstMessage];
-            return x < text_x + name_font()->getWidth(first.mName) ? first.mSenderUrl : std::string();
+            return x < text_x + first.mNameWidth ? first.mSenderUrl : std::string();
         }
         if (row.mEmbed)
         {
