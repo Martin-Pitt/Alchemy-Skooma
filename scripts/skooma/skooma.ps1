@@ -1406,7 +1406,6 @@ function Invoke-Integrate {
     if (Test-Path $ResolveState) { Fail 'an integrate --resolve is in progress; finish it with --continue or --abort' }
 
     $arg = if ($Rest -and $Rest[0] -notlike '--*') { $Rest[0] } else { '' }
-    $force = $Rest -contains '--force'
     $resolve = $Rest -contains '--resolve'
     if ($resolve -and -not $arg) { Fail 'usage: git skooma integrate <name> --resolve' }
 
@@ -1415,7 +1414,8 @@ function Invoke-Integrate {
     $op = Test-MidOperation $MainWt
     if ($op) { Fail "main checkout is mid-$op; finish or abort that first" }
     if (Test-Dirty $MainWt) { Fail "main checkout has uncommitted changes; commit or stash them first`n  (git -C $MainWt status)" }
-    if ((Test-BuildRunning) -and -not $force) { Fail 'a build is running; wait for it or pass --force' }
+    # A running build only reads the tree; the next F5 picks up what landed.
+    if (Test-BuildRunning) { Warn 'a build is running; it builds the tree as it was, F5 again for what lands' }
 
     # Which branches? Each lands into its target: its trunk if it has one, else main.
     # A trunk that receives work then lands into main in the same run.
