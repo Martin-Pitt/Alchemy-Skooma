@@ -327,11 +327,13 @@ void ALChatBar::setGestureCombo(LLComboBox* combo)
 // Internal functions
 //-----------------------------------------------------------------------
 
-void ALChatBar::sendChat( EChatType type )
+// <SK:Nexii> Modern local chat: the chat bar's send, shared with SKFloaterLocalChat.
+// static
+void ALChatBar::sendChatText(LLChatEntry* editor, EChatType type)
 {
-    if (mInputEditor)
+    if (editor)
     {
-        std::string text = mInputEditor->getConvertedText();
+        std::string text = editor->getConvertedText();
         LLStringUtil::trim(text);
         // The paragraph character is two bytes, so this is a substitution
         // rather than a character-for-character swap.
@@ -388,9 +390,17 @@ void ALChatBar::sendChat( EChatType type )
             }
         }
 
-        mInputEditor->updateHistory();
-        mInputEditor->setText(LLStringExplicit(""));
+        editor->updateHistory();
+        editor->setText(LLStringExplicit(""));
     }
+}
+// </SK:Nexii>
+
+void ALChatBar::sendChat( EChatType type )
+{
+    // <SK:Nexii> Modern local chat: the send itself is shared with SKFloaterLocalChat.
+    sendChatText(mInputEditor, type);
+    // </SK:Nexii>
 
     gAgent.stopTyping();
 
@@ -404,15 +414,23 @@ void ALChatBar::sendChat( EChatType type )
 
 void ALChatBar::changeChannelLabel(S32 channel)
 {
+    applyChannelLabel(mInputEditor, channel); // <SK:Nexii> Modern local chat
+}
+
+// <SK:Nexii> Modern local chat: the channel label, shared with SKFloaterLocalChat.
+// static
+void ALChatBar::applyChannelLabel(LLChatEntry* editor, S32 channel)
+{
     if (channel == 0)
-        mInputEditor->setLabel(LLTrans::getString("NearbyChatTitle"));
+        editor->setLabel(LLTrans::getString("NearbyChatTitle"));
     else
     {
         LLStringUtil::format_map_t args;
         args["CHANNEL"] = llformat("%d", channel);
-        mInputEditor->setLabel(LLTrans::getString("NearbyChatTitleChannel", args));
+        editor->setLabel(LLTrans::getString("NearbyChatTitleChannel", args));
     }
 }
+// </SK:Nexii>
 
 //-----------------------------------------------------------------------
 // Static functions
@@ -474,8 +492,17 @@ void ALChatBar::updateChatFont()
 
 void ALChatBar::onInputEditorKeystroke(LLTextEditor* caller)
 {
+    // <SK:Nexii> Modern local chat: the keystroke handling is shared with SKFloaterLocalChat.
+    handleInputKeystroke(mInputEditor, [this]() { sendChat(CHAT_TYPE_NORMAL); });
+    // </SK:Nexii>
+}
+
+// <SK:Nexii> Modern local chat: typing state and autocomplete, shared with SKFloaterLocalChat.
+// static
+void ALChatBar::handleInputKeystroke(LLChatEntry* editor, const std::function<void()>& submit)
+{
     std::string raw_text;
-    if (mInputEditor) raw_text = mInputEditor->getText();
+    if (editor) raw_text = editor->getText();
 
     // Can't trim the end, because that will cause autocompletion
     // to eat trailing spaces that might be part of a gesture.
@@ -498,21 +525,22 @@ void ALChatBar::onInputEditorKeystroke(LLTextEditor* caller)
     KEY key = gKeyboard->currentKey();
 
     ALChatAutocomplete::update(
-        mInputEditor,
+        editor,
         raw_text,
         key,
-        [this](const LLGestureAutocompleteHelper::Row& row, ALChatAutocomplete::CommitAction action)
+        [editor, submit](const LLGestureAutocompleteHelper::Row& row, ALChatAutocomplete::CommitAction action)
         {
             if (action == ALChatAutocomplete::CommitAction::SUBMIT)
             {
-                sendChat(CHAT_TYPE_NORMAL);
+                submit();
                 return;
             }
 
-            mInputEditor->setText(row.value + " ");
-            mInputEditor->endOfDoc();
+            editor->setText(row.value + " ");
+            editor->endOfDoc();
         });
 }
+// </SK:Nexii>
 
 // static
 void ALChatBar::onInputEditorFocusLost()

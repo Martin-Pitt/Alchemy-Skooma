@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<toggleable_menu
+ name="menu_sk_local_chat"
+ left="0" bottom="0" visible="false"
+ mouse_opaque="false">
+    <menu_item_check
+     label="Cards"
+     name="sk_local_chat_cards">
+        <menu_item_check.on_click
+         function="SKLocalChat.Style"
+         parameter="cards"/>
+        <menu_item_check.on_check
+         function="SKLocalChat.CheckStyle"
+         parameter="cards"/>
+    </menu_item_check>
+    <menu_item_check
+     label="Minimal"
+     name="sk_local_chat_minimal">
+        <menu_item_check.on_click
+         function="SKLocalChat.Style"
+         parameter="minimal"/>
+        <menu_item_check.on_check
+         function="SKLocalChat.CheckStyle"
+         parameter="minimal"/>
+    </menu_item_check>
+</toggleable_menu>

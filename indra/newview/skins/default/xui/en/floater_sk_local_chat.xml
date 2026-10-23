@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+<floater
+ positioning="specified"
+ left="10"
+ bottom="-50"
+ follows="left|bottom"
+ background_visible="false"
+ can_minimize="false"
+ can_close="false"
+ can_resize="true"
+ header_height="0"
+ chrome="true"
+ height="260"
+ layout="topleft"
+ min_height="80"
+ min_width="160"
+ name="sk_local_chat"
+ title=""
+ single_instance="true"
+ save_rect="true"
+ width="420">
+    <chat_editor
+     follows="left|bottom|right"
+     font="SansSerifLarge"
+     height="24"
+     layout="topleft"
+     left="0"
+     top="236"
+     right="-1"
+     name="sk_local_chat_input"
+     spellcheck="true"
+     visible="false" />
+    <menu_button
+     follows="top|right"
+     height="16"
+     image_overlay="Icon_Gear"
+     layout="topleft"
+     left="400"
+     menu_filename="menu_sk_local_chat.xml"
+     name="sk_local_chat_cog"
+     tool_tip="Local chat style"
+     top="2"
+     visible="false"
+     width="16" />
+</floater>
