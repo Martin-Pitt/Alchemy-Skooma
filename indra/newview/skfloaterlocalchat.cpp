@@ -66,6 +66,9 @@ constexpr S32 MAX_CARD_MESSAGES = 8;
 constexpr F64 CARD_JOIN_SECONDS = 60.0;
 constexpr S32 PAD_X = 8;
 constexpr S32 PAD_Y = 5;
+constexpr S32 CARD_PAD_X = 10; // a card's sides
+constexpr S32 CARD_PAD_Y = 6;  // above the name line and below the last line
+constexpr S32 NAME_GAP = 2;    // between the name line and the text
 constexpr S32 CARD_GAP = 4;
 constexpr S32 MINIMAL_GAP = 2;
 constexpr S32 DISC = 12;
@@ -602,8 +605,9 @@ void SKFloaterLocalChat::layout()
     mCards.clear();
 
     LLFontGL* font = LLViewerChat::getChatFont();
-    const S32 text_x = cards ? PAD_X + DISC + DISC_GAP : PAD_X;
-    const F32 wrap = (F32)llmax(16, width - text_x - PAD_X);
+    const S32 pad_x = cards ? CARD_PAD_X : PAD_X;
+    const S32 text_x = cards ? pad_x + DISC + DISC_GAP : pad_x;
+    const F32 wrap = (F32)llmax(16, width - text_x - pad_x);
 
     for (S32 m = 0; m < (S32)mMessages.size(); ++m)
     {
@@ -636,7 +640,8 @@ void SKFloaterLocalChat::layout()
                 Row header;
                 header.mMessage = -1;
                 header.mCard = (S32)mCards.size() - 1;
-                header.mPadTop = PAD_Y;
+                header.mPadTop = CARD_PAD_Y;
+                header.mPadBottom = NAME_GAP;
                 mRows.push_back(header);
             }
         }
@@ -667,7 +672,7 @@ void SKFloaterLocalChat::layout()
             row.mLength = count;
             if (first && !join && !(cards && !msg.mName.empty()))
             {
-                row.mPadTop = cards ? PAD_Y : 0;
+                row.mPadTop = cards ? CARD_PAD_Y : 0;
             }
             mRows.push_back(row);
             pos += count;
@@ -681,7 +686,7 @@ void SKFloaterLocalChat::layout()
                 break;
             }
         }
-        mRows.back().mPadBottom = cards ? PAD_Y : 0;
+        mRows.back().mPadBottom = cards ? CARD_PAD_Y : 0;
         mRows.back().mGap = cards ? CARD_GAP : MINIMAL_GAP;
         mCards.back().mLastRow = (S32)mRows.size() - 1;
     }
@@ -706,7 +711,7 @@ void SKFloaterLocalChat::layout()
             }
         }
         // A little slack for the bold name run, measured above in the regular face.
-        card.mWidth = llmin(width, text_x + widest + PAD_X + 2);
+        card.mWidth = llmin(width, text_x + widest + pad_x + 2);
     }
 
     // Offsets from the bottom, newest first.
@@ -798,7 +803,7 @@ void SKFloaterLocalChat::drawMessages(const LLRect& content, F64 now, bool full,
 {
     static LLUIImagePtr card_image = LLUI::getUIImage("Rounded_Square");
     static LLUIColor card_color = LLUIColorTable::instance().getColor("Black");
-    const S32 text_x = content.mLeft + (cards ? PAD_X + DISC + DISC_GAP : PAD_X);
+    const S32 text_x = content.mLeft + (cards ? CARD_PAD_X + DISC + DISC_GAP : PAD_X);
     const LLFontGL::ShadowType shadow = cards ? LLFontGL::NO_SHADOW : LLFontGL::DROP_SHADOW_SOFT;
     const S32 base = content.mBottom - mScroll;
     for (S32 c = (S32)mCards.size() - 1; c >= 0; --c)
@@ -830,17 +835,17 @@ void SKFloaterLocalChat::drawMessages(const LLRect& content, F64 now, bool full,
             {
                 // Round for people, square for objects.
                 gGL.getTextureSlot(0)->unbind();
-                const S32 disc_top = card_top - PAD_Y - 1;
+                const S32 disc_top = card_top - CARD_PAD_Y - 1;
                 LLColor4 disc = first.mNameColor;
                 disc.mV[VALPHA] *= alpha;
                 if (first.mSource == CHAT_SOURCE_OBJECT)
                 {
-                    gl_rect_2d(content.mLeft + PAD_X, disc_top, content.mLeft + PAD_X + DISC, disc_top - DISC, disc);
+                    gl_rect_2d(content.mLeft + CARD_PAD_X, disc_top, content.mLeft + CARD_PAD_X + DISC, disc_top - DISC, disc);
                 }
                 else
                 {
                     gGL.color4fv(disc.mV);
-                    gl_circle_2d((F32)(content.mLeft + PAD_X) + DISC * 0.5f, (F32)disc_top - DISC * 0.5f, DISC * 0.5f, 16, true);
+                    gl_circle_2d((F32)(content.mLeft + CARD_PAD_X) + DISC * 0.5f, (F32)disc_top - DISC * 0.5f, DISC * 0.5f, 16, true);
                 }
             }
         }
@@ -1096,7 +1101,7 @@ std::string SKFloaterLocalChat::urlAt(S32 x, S32 y) const
     {
         return std::string();
     }
-    const S32 text_x = contentRect().mLeft + (mLayoutStyle != STYLE_MINIMAL ? PAD_X + DISC + DISC_GAP : PAD_X);
+    const S32 text_x = contentRect().mLeft + (mLayoutStyle != STYLE_MINIMAL ? CARD_PAD_X + DISC + DISC_GAP : PAD_X);
     const S32 base = contentRect().mBottom - mScroll;
     const bool full = expanded();
     const F64 now = LLFrameTimer::getTotalSeconds();
