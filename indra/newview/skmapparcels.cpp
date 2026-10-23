@@ -35,7 +35,7 @@
 #include "llviewerparceloverlay.h"
 #include "llviewerregion.h"
 #include "llworld.h"
-#include "sknavtypes.h"
+#include "skcensustypes.h"
 #include "sknetmap.h"
 #include "skmapview.h"
 
@@ -54,10 +54,10 @@ SKMapParcels::~SKMapParcels()
 // static
 U64 SKMapParcels::regionsKey()
 {
-    U64 key = sknav::SEED;
+    U64 key = skworld::SEED;
     for (LLViewerRegion* region : LLWorld::getInstance()->getRegionList())
     {
-        key = sknav::mix(sknav::mix(key, region->getHandle()), region->isAlive() ? 1u : 0u);
+        key = skworld::mix(skworld::mix(key, region->getHandle()), region->isAlive() ? 1u : 0u);
     }
     return key;
 }

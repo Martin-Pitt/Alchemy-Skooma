@@ -786,9 +786,9 @@ void SKNetMap::drawElevators()
     gGL.getTextureSlot(0)->unbind();
     gGL.begin(LLRender::TRIANGLES);
     skmapdraw::colour(skmap::palette::ELEVATOR);
-    for (const sknav::Feature& feature : snap->mFeatures)
+    for (const skworld::Feature& feature : snap->mFeatures)
     {
-        if (feature.mKind != sknav::FeatureKind::ELEVATOR)
+        if (feature.mKind != skworld::FeatureKind::ELEVATOR)
         {
             continue;
         }

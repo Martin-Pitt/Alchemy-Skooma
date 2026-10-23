@@ -33,7 +33,7 @@
 #include "llgroupmgr.h"
 #include "llviewercontrol.h"
 #include "llworld.h"
-#include "sknavmesh.h"
+#include "skaircells.h"
 #include "sknetmap.h"
 #include "skworldcensus.h"
 
@@ -56,7 +56,8 @@ SKMapScene::~SKMapScene()
 void SKMapScene::initSingleton()
 {
     // Taking these here makes them outlive us at teardown.
-    SKNavMesh::instance();
+    SKWorldCensus::instance();
+    SKAirCells::instance();
     ALObjectPropertiesCache::instance();
     LLGroupMgr::instance();
     gIdleCallbacks.addFunction(&SKMapScene::onIdle, nullptr);
@@ -89,27 +90,21 @@ void SKMapScene::onIdle(void*)
 
 void SKMapScene::updateDemand(bool want)
 {
-    if (want == mDemanding || !SKNavMesh::instanceExists())
+    if (want == mDemanding || !SKAirCells::instanceExists() || !SKWorldCensus::instanceExists())
     {
         return;
     }
-    // The navmesh demand brings the rooms pass; the census is asked directly, so it runs with the navmesh off.
-    static LLCachedControl<F32> range(gSavedSettings, "SKNavRange", 512.f);
+    // The air demand brings the rooms pass over it; the census is asked directly.
+    static LLCachedControl<F32> range(gSavedSettings, "SKCensusRange", 512.f);
     if (want)
     {
-        SKNavMesh::instance().addDemand(DEMAND);
-        if (SKWorldCensus::instanceExists())
-        {
-            SKWorldCensus::instance().addDemand(DEMAND, range);
-        }
+        SKAirCells::instance().addDemand(DEMAND);
+        SKWorldCensus::instance().addDemand(DEMAND, range);
     }
     else
     {
-        SKNavMesh::instance().removeDemand(DEMAND);
-        if (SKWorldCensus::instanceExists())
-        {
-            SKWorldCensus::instance().removeDemand(DEMAND);
-        }
+        SKAirCells::instance().removeDemand(DEMAND);
+        SKWorldCensus::instance().removeDemand(DEMAND);
     }
     mDemanding = want;
 }
