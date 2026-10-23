@@ -27,7 +27,9 @@
 #include "skfloaterlocalchat.h"
 
 #include "llautoreplace.h"
+#include "llbutton.h"
 #include "llchatentry.h"
+#include "llemojihelper.h"
 #include "lldbstrings.h"
 #include "lldraghandle.h"
 #include "llfloaterreg.h"
@@ -97,6 +99,7 @@ SKFloaterLocalChat::SKFloaterLocalChat(const LLSD& key)
 SKFloaterLocalChat::~SKFloaterLocalChat()
 {
     mFontConnection.disconnect();
+    mEmojiCloseConnection.disconnect();
 }
 
 // static
@@ -185,6 +188,35 @@ bool SKFloaterLocalChat::postBuild()
     mInput->setFont(LLViewerChat::getChatFont());
     ALChatBar::applyChannelLabel(mInput, gSavedSettings.getS32("AlchemyNearbyChatChannel"));
     mInput->setVisible(false);
+
+    // The emoji picker as the conversation window has it; the toggle state follows the picker.
+    mEmojiButton = getChild<LLButton>("sk_local_chat_emoji");
+    mEmojiButton->setClickedCallback([this](LLUICtrl*, const LLSD&)
+    {
+        mInput->hideEmojiHelper();
+        if (!mEmojiButton->getToggleState())
+        {
+            mInput->setFocus(true);
+            mInput->showEmojiHelper();
+        }
+        mEmojiButton->setToggleState(!mEmojiButton->getToggleState());
+    });
+    mEmojiButton->setMouseDownCallback([this](LLUICtrl*, const LLSD&)
+    {
+        // The press itself closed the picker; keep the state so the click does not reopen it.
+        if (mEmojiClosedFrame == LLFrameTimer::getFrameCount())
+        {
+            mEmojiButton->setToggleState(true);
+        }
+    });
+    mEmojiCloseConnection = LLEmojiHelper::instance().setCloseCallback([this](LLUICtrl*, const LLSD&)
+    {
+        if (mEmojiButton->getToggleState())
+        {
+            mEmojiButton->setToggleState(false);
+            mEmojiClosedFrame = LLFrameTimer::getFrameCount();
+        }
+    });
 
     mCog = getChild<LLMenuButton>("sk_local_chat_cog");
     mCog->setVisible(false);
@@ -326,6 +358,11 @@ void SKFloaterLocalChat::showInput(bool show)
         return;
     }
     mInput->setVisible(show);
+    mEmojiButton->setVisible(show);
+    if (!show)
+    {
+        mInput->hideEmojiHelper();
+    }
     if (show)
     {
         setFocus(true);
@@ -387,7 +424,8 @@ bool SKFloaterLocalChat::handleKeyHere(KEY key, MASK mask)
 
 void SKFloaterLocalChat::onFocusLost()
 {
-    if (mInput && mInput->getVisible())
+    // The emoji picker takes focus while it is open; the chat stays open for its pick.
+    if (mInput && mInput->getVisible() && !LLEmojiHelper::instance().isActive(mInput))
     {
         stopChat();
     }
