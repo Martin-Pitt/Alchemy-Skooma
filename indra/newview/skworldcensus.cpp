@@ -1575,9 +1575,9 @@ sknav::RecordPtr SKWorldCensus::record(LLVOVolume* volume, LLViewerObject* root,
     rec->mRoot = root->getID();
     rec->mPart = volume->getID();
     rec->mRole = role;
-    rec->mProvenance = geom.mProvenance;
+    rec->mProvenance = static_cast<Provenance>(geom.mProvenance); // <SK:Nexii> physics shapes: same values
     rec->mNavRole = roleOf(root->getID());
-    rec->mShape = geom.mShape;
+    rec->mShape = static_cast<Shape>(geom.mShape); // <SK:Nexii> physics shapes: same values
     rec->mSolid = geom.mSolid;
     rec->mDynamic = dynamic;
     rec->mFeature = feature;
@@ -1591,7 +1591,7 @@ sknav::RecordPtr SKWorldCensus::record(LLVOVolume* volume, LLViewerObject* root,
     rec->mMin.set(1e30, 1e30, 1e30);
     rec->mMax.set(-1e30, -1e30, -1e30);
 
-    if (geom.mShape == Shape::TRIANGLES)
+    if (geom.mShape == SKShapeKind::TRIANGLES) // <SK:Nexii> physics shapes
     {
         auto tris = std::make_shared<std::vector<LLVector3>>();
         tris->reserve(geom.mTriangles.size());
