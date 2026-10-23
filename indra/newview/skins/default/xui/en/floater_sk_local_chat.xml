@@ -28,6 +28,8 @@
     <string name="typing_far_one">[NAME] is typing [DIST]m out of chat range…</string>
     <string name="typing_far_two">[NAME] ([DIST]m) and [NAME2] ([DIST2]m) are typing out of chat range…</string>
     <string name="typing_far_many">Several people are typing out of chat range…</string>
+    <string name="typing_far_count_one">1 person typing out of chat range…</string>
+    <string name="typing_far_count">[COUNT] people typing out of chat range…</string>
     <string name="typing_someone">Someone</string>
     <chat_editor
      follows="left|bottom|right"
