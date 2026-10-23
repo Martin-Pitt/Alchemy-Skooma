@@ -2340,7 +2340,7 @@ bool LLAppViewer::initThreads()
 
     static const bool enable_threads = true;
 
-    LLImage::initClass(gSavedSettings.getBOOL("TextureNewByteRange"),gSavedSettings.getS32("TextureReverseByteRange"));
+    LLImage::initClass();
 
     LLLFSThread::initClass(enable_threads && true); // TODO: fix crashes associated with this shutdo
 
@@ -3852,8 +3852,8 @@ LLSD LLAppViewer::getViewerInfo() const
     // Moved hack adjustment to Windows memory size into llsys.cpp
     info["CONCURRENCY"] = LLSD::Integer((S32) std::thread::hardware_concurrency());
     info["OS_VERSION"] = LLOSInfo::instance().getOSString();
-    info["GRAPHICS_CARD_VENDOR"] = ll_safe_string((const char*)(glGetString(GL_VENDOR)));
-    info["GRAPHICS_CARD"] = ll_safe_string((const char*)(glGetString(GL_RENDERER)));
+    info["GRAPHICS_CARD_VENDOR"] = gGLManager.mGLVendorString;
+    info["GRAPHICS_CARD"] = gGLManager.mGLRendererString;
 
 #if LL_WINDOWS
     std::string drvinfo;
@@ -3896,7 +3896,7 @@ LLSD LLAppViewer::getViewerInfo() const
 // [RLVa:KB] - Checked: 2010-04-18 (RLVa-1.2.0)
     info["RLV_VERSION"] = (rlv_handler_t::isEnabled()) ? RlvStrings::getVersionAbout() : "(disabled)";
 // [/RLVa:KB]
-    info["OPENGL_VERSION"] = ll_safe_string((const char*)(glGetString(GL_VERSION)));
+    info["OPENGL_VERSION"] = gGLManager.mGLVersionString;
 
     // Settings
 
