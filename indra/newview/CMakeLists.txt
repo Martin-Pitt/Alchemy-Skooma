@@ -641,6 +641,15 @@ if(AL_BUILD_VIEWER)
     llmediadataclient.cpp
     llmenuoptionpathfindingrebakenavmesh.cpp
     skmeshhavokshape.cpp # <SK:Nexii> physics_havok block
+    skphysicsshape.cpp # <SK:Nexii> physics shapes
+    skaircells.cpp # <SK:Nexii> air cells
+    skairoverlay.cpp # <SK:Nexii> air cells
+    skrooms.cpp # <SK:Nexii> rooms and spaces
+    skobjectfaces.cpp # <SK:Nexii> census
+    skworldcensus.cpp # <SK:Nexii> census
+    skworldoverlay.cpp # <SK:Nexii> census
+    skworldpalette.cpp # <SK:Nexii> census
+    skworldtrace.cpp # <SK:Nexii> census
     llmeshrepository.cpp
     llmimetypes.cpp
     llmodelpreview.cpp
@@ -992,7 +1001,6 @@ if(AL_BUILD_VIEWER)
     pipeline.cpp
     rlvactions.cpp
     rlvenvironment.cpp
-    skphysicsshape.cpp
     skcaptureexport.cpp # <SK:Nexii> navmesh: linkset and avatar capture export
     skclusterprobes.cpp # <SK:Nexii> navmesh: reflection probes over census clusters
     skfloaternavannotate.cpp
@@ -1006,7 +1014,6 @@ if(AL_BUILD_VIEWER)
     sknavroomprobes.cpp
     sknavrooms.cpp
     skcensusavatarshape.cpp
-    skworldcensus.cpp
     rlvcommon.cpp
     rlveffects.cpp
     rlvextensions.cpp
@@ -1548,6 +1555,14 @@ if(AL_BUILD_VIEWER)
     llmediadataclient.h
     llmenuoptionpathfindingrebakenavmesh.h
     skmeshhavokshape.h # <SK:Nexii> physics_havok block
+    skphysicsshape.h # <SK:Nexii> physics shapes
+    skaircells.h # <SK:Nexii> air cells
+    skrooms.h # <SK:Nexii> rooms and spaces
+    skobjectfaces.h # <SK:Nexii> census
+    skworldcensus.h # <SK:Nexii> census
+    skworldoverlay.h # <SK:Nexii> census
+    skworldpalette.h # <SK:Nexii> census
+    skworldtrace.h # <SK:Nexii> census
     llmeshrepository.h
     llmimetypes.h
     llmodelpreview.h
@@ -1891,7 +1906,6 @@ if(AL_BUILD_VIEWER)
     pipeline.h
     rlvactions.h
     rlvcommon.h
-    skphysicsshape.h
     skcaptureexport.h # <SK:Nexii> navmesh: linkset and avatar capture export
     skclusterprobes.h # <SK:Nexii> navmesh: reflection probes over census clusters
     skfloaternavannotate.h
@@ -1904,7 +1918,6 @@ if(AL_BUILD_VIEWER)
     sknavroomprobes.h
     sknavrooms.h
     skcensusavatarshape.h
-    skworldcensus.h
     rlvdefines.h
     rlveffects.h
     rlvenvironment.h
@@ -2238,6 +2251,9 @@ if(AL_BUILD_VIEWER)
       llplugin
       llprimitive
       llrender
+      skrooms # <SK:Nexii> rooms and spaces
+      skair # <SK:Nexii> air cells
+      skcensus # <SK:Nexii> census
       llui
       llfilesystem
       llwindow

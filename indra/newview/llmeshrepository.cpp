@@ -2878,7 +2878,7 @@ bool LLMeshRepoThread::decompositionReceived(const LLUUID& mesh_id, U8* data, S3
         }
     }
 
-    // <SK:Nexii> Navmesh census and physics-shape render: the sim stretches the
+    // <SK:Nexii> physics shapes: the sim stretches the
     // hulls to the object's box, so decode their domain to it, not to Min/Max.
     decomp.erase("Min");
     decomp.erase("Max");
@@ -2954,7 +2954,7 @@ EMeshProcessingResult LLMeshRepoThread::physicsShapeReceived(const LLUUID& mesh_
                 // Report the same "no physics shape" result as an asset that carries none.
                 d->mPhysicsShapeMesh.clear();
             }
-            // <SK:Nexii> Navmesh census and physics-shape render: the sim stretches the
+            // <SK:Nexii> physics shapes: the sim stretches the
             // physics mesh to the object's box, so map its bounds onto -0.5..0.5.
             else if (!pos.empty())
             {
@@ -6955,6 +6955,7 @@ void LLMeshRepository::buildPhysicsMesh(LLModel::Decomposition& decomp)
         {
             get_vertex_buffer_from_mesh(mesh, decomp.mMesh[i]);
         }
+        // <SK:Nexii> physics shapes: fan a flat hull QuickHull leaves empty
         else
         {
             // QuickHull builds nothing for a hull with no volume: every point
@@ -7053,6 +7054,7 @@ void LLMeshRepository::buildPhysicsMesh(LLModel::Decomposition& decomp)
                 }
             }
         }
+        // </SK:Nexii>
     }
 
     if (!decomp.mBaseHull.empty() && decomp.mBaseHullMesh.empty())

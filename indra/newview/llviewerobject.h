@@ -343,11 +343,8 @@ public:
 
     const LLQuaternion getRotationRegion() const;
     const LLQuaternion getRotationEdit() const;
-    // <SK:Nexii> navmesh census: the rotation the simulator last set, without
-    // the client-side llTargetOmega spin the viewer accumulates on top of it.
-    // The sim's physics never sees that spin on a non-physical object or a
-    // linkset child, so the shape it declares sits at this rotation for as
-    // long as the prim turns on its own.
+    // <SK:Nexii> census: the rotation the simulator last set, without the client-side llTargetOmega spin the
+    // viewer accumulates on top of it, which the sim's physics never sees.
     const LLQuaternion& getRotationSim() const { return mPreviousRotation; }
     // </SK:Nexii>
     // <SK:Nexii> tactical overview and minimap: the simulator's last rotation in the region frame, carried on by the
@@ -630,7 +627,7 @@ public:
     inline bool     flagCameraDecoupled() const     { return ((mFlags & FLAGS_CAMERA_DECOUPLED) != 0); }
 
     U8       getPhysicsShapeType() const;
-    bool     isPhysicsShapeUnknown() const { return mPhysicsShapeUnknown; } // <SK:Nexii> navmesh census provenance
+    bool     isPhysicsShapeUnknown() const { return mPhysicsShapeUnknown; } // <SK:Nexii> census: a record's physics_known
     inline F32      getPhysicsGravity() const       { return mPhysicsGravity; }
     inline F32      getPhysicsFriction() const      { return mPhysicsFriction; }
     inline F32      getPhysicsDensity() const       { return mPhysicsDensity; }
