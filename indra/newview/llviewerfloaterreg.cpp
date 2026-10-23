@@ -33,6 +33,7 @@
 
 #include "ao.h"
 #include "alchatbar.h"
+#include "skfloaterlocalchat.h" // <SK:Nexii> Modern local chat
 // [SL:KB] - Patch: World-Derender | Checked: Catznip-3.2
 #include "alfloaterblocked.h"
 // [/SL:KB]
@@ -596,6 +597,7 @@ void LLViewerFloaterReg::registerFloaters()
     LLFloaterReg::add("blocked", "floater_al_blocked.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<ALFloaterBlocked>);
 // [/SL:KB]
     LLFloaterReg::add("chatbar", "floater_al_chatbar.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<ALChatBar>);
+    LLFloaterReg::add("sk_local_chat", "floater_sk_local_chat.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SKFloaterLocalChat>); // <SK:Nexii> Modern local chat
     LLFloaterReg::add("chat_alerts", "floater_chat_alerts.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloaterChatAlerts>);
     LLFloaterReg::add("delete_queue", "floater_script_queue.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloaterDeleteQueue>);
     LLFloaterReg::add("feedback", "floater_al_feedback.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<ALFloaterFeedback>);

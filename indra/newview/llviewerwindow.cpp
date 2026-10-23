@@ -83,6 +83,7 @@
 #include "lltimer.h"
 #include "lltooltip.h"
 #include "skhover.h" // <SK:Nexii> hover context
+#include "skfloaterlocalchat.h" // <SK:Nexii> Modern local chat
 #include "llmediaentry.h"
 #include "llurldispatcher.h"
 #include "raytrace.h"
@@ -3476,6 +3477,13 @@ bool LLViewerWindow::handleKey(KEY key, MASK mask)
         letter_keys_Focus_chat_bar && !gAgentCamera.cameraMouselook() &&
         !keyboard_focus && key < 0x80 && (mask == MASK_NONE || mask == MASK_SHIFT) )
     {
+        // <SK:Nexii> Modern local chat takes letter keys that start chat.
+        if (SKFloaterLocalChat::modernEnabled())
+        {
+            SKFloaterLocalChat::startChat(nullptr);
+            return true;
+        }
+        // </SK:Nexii>
         if (!ALChatBar::shouldUseChatBar())
         {
             // Initialize nearby chat if it's missing
