@@ -37,6 +37,25 @@ namespace SKOutlinePolicy
     // Rendered subsamples per cell along each axis; the resolve averages them.
     constexpr S32 SUPERSAMPLE = 2;
 
+    // Which way a layer is looked at, in its root's frame (+X forward, +Y left, +Z up).
+    enum class View : U8
+    {
+        PLAN,  // down -Z: horizontal +X, vertical +Y
+        SIDE,  // from the -Y side looking +Y: horizontal +X, vertical +Z
+        FRONT, // from +X looking back -X: horizontal +Y, vertical +Z
+    };
+
+    // A view's axes as indices into the root frame, and the sign that turns the depth axis into distance along the view.
+    struct ViewAxes
+    {
+        S32 h = 0;
+        S32 v = 1;
+        S32 d = 2;
+        F32 depth_sign = -1.f;
+    };
+
+    ViewAxes viewAxes(View view);
+
     // A layer's cells in its view plane (metres): corners on the cell grid with one cell of padding.
     struct Grid
     {

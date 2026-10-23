@@ -70,6 +70,7 @@ namespace
     LLGLSLShader sResolve;
     U32 sQueries[2] = { 0, 0 };
     LLUUID sTimedRoot; // the capture whose render the queries are timing
+    View sTimedView = View::PLAN;
 
     U64 mix(U64 h, U64 v)
     {
@@ -390,6 +391,7 @@ struct SKOutlineCrewRef
 struct SKOutlineCapture::Entry
 {
     LLUUID root_id;
+    View view = View::PLAN;
     bool pinned = false;
     F64 wanted = 0.0;       // last time a consumer asked
     F64 first_asked = 0.0;
@@ -493,11 +495,11 @@ SKOutlineCapture::SKOutlineCapture()
 
 SKOutlineCapture::~SKOutlineCapture() = default;
 
-const SKOutlineGlyph* SKOutlineCapture::glyphFor(const LLUUID& root)
+const SKOutlineGlyph* SKOutlineCapture::glyphFor(const LLUUID& root, View view)
 {
     SKOutlineCapture& self = instance();
-    self.request(root);
-    const auto it = self.mEntries.find(root);
+    self.request(root, false, view);
+    const auto it = self.mEntries.find({ root, view });
     if (it == self.mEntries.end() || !it->second->rendered || it->second->lost || !it->second->hasBase())
     {
         return nullptr;
@@ -505,20 +507,22 @@ const SKOutlineGlyph* SKOutlineCapture::glyphFor(const LLUUID& root)
     return &it->second->glyph;
 }
 
-void SKOutlineCapture::request(const LLUUID& root, bool pinned)
+void SKOutlineCapture::request(const LLUUID& root, bool pinned, View view)
 {
     if (root.isNull())
     {
         return;
     }
     const F64 now = LLTimer::getTotalSeconds();
-    std::unique_ptr<Entry>& entry = mEntries[root];
+    std::unique_ptr<Entry>& entry = mEntries[{ root, view }];
     if (!entry)
     {
         entry = std::make_unique<Entry>();
         entry->root_id = root;
+        entry->view = view;
         entry->first_asked = now;
         entry->glyph.root = root;
+        entry->glyph.view = view;
     }
     entry->wanted = now;
     entry->pinned = entry->pinned || pinned;
@@ -526,11 +530,17 @@ void SKOutlineCapture::request(const LLUUID& root, bool pinned)
 
 void SKOutlineCapture::forget(const LLUUID& root)
 {
-    const auto it = mEntries.find(root);
-    if (it != mEntries.end())
+    for (auto it = mEntries.begin(); it != mEntries.end();)
     {
-        it->second->release(mAtlas, true);
-        mEntries.erase(it);
+        if (it->first.root == root)
+        {
+            it->second->release(mAtlas, true);
+            it = mEntries.erase(it);
+        }
+        else
+        {
+            ++it;
+        }
     }
 }
 
@@ -804,7 +814,7 @@ void SKOutlineCapture::frame()
             GLuint64 t0 = 0, t1 = 0;
             glGetQueryObjectui64v(sQueries[0], GL_QUERY_RESULT, &t0);
             glGetQueryObjectui64v(sQueries[1], GL_QUERY_RESULT, &t1);
-            const auto it = mEntries.find(sTimedRoot);
+            const auto it = mEntries.find({ sTimedRoot, sTimedView });
             if (it != mEntries.end())
             {
                 it->second->gpu_ms = t1 > t0 ? (F64)(t1 - t0) / 1.0e6 : 0.0;
@@ -853,7 +863,10 @@ void SKOutlineCapture::frame()
             e.parts = (S32)parts.size();
 
             // Crew layers: which pieces belong, and their own shapes, not their poses, which are live.
-            updateCrew(e, root, now);
+            if (e.view == View::PLAN)
+            {
+                updateCrew(e, root, now);
+            }
             for (const SKOutlineCrewRef& c : e.crew)
             {
                 LLViewerObject* worn = gObjectList.findObject(c.id);
@@ -945,6 +958,7 @@ void SKOutlineCapture::frame()
             {
                 glQueryCounter(sQueries[1], GL_TIMESTAMP);
                 sTimedRoot = e.root_id;
+                sTimedView = e.view;
             }
             if (ok)
             {
@@ -967,9 +981,9 @@ void SKOutlineCapture::frame()
 
 namespace
 {
-    // Renders one linkset's plan-view coverage, in its root's own frame, into its slot, and starts counting its cells.
+    // Renders one linkset's coverage in a view of its root's own frame, into its slot, and starts counting its cells.
     // Returns the draws made, or -1 when there was nothing to render.
-    S32 renderLayer(SKOutlineLayerState& l, LLViewerObject* layer_root, const Pose& vehicle, SlotAtlas& atlas)
+    S32 renderLayer(SKOutlineLayerState& l, LLViewerObject* layer_root, const Pose& vehicle, SlotAtlas& atlas, View look)
     {
         static LLCachedControl<S32> target_cells(gSavedSettings, "SKOutlineCaptureCells", 160);
         static LLCachedControl<F32> max_cell(gSavedSettings, "SKOutlineCaptureMaxCellMetres", 0.25f);
@@ -982,11 +996,16 @@ namespace
             return -1;
         }
 
-        // Plan view in the layer root's frame: look down its -Z with its +X right and +Y up. View space is then the
-        // root's frame, so the linkset's box in that frame is the view box.
+        // Look along the view's depth axis of the layer root's frame with its horizontal axis right and vertical axis up
+        // (plan: down -Z, +X right, +Y up). View space is then the root's frame with its axes renamed, so the linkset's
+        // box in that frame is the view box.
         const Pose frame = poseOf(layer_root);
-        const LLVector3 dir = LLVector3(0.f, 0.f, -1.f) * frame.rot;
-        const LLVector3 up = LLVector3(0.f, 1.f, 0.f) * frame.rot;
+        const ViewAxes axes = viewAxes(look);
+        LLVector3 dir_local, up_local;
+        dir_local.mV[axes.d] = axes.depth_sign;
+        up_local.mV[axes.v] = 1.f;
+        const LLVector3 dir = dir_local * frame.rot;
+        const LLVector3 up = up_local * frame.rot;
         LLVector4a eye4, dir4, up4;
         eye4.load3(frame.pos.mV);
         dir4.load3(dir.mV);
@@ -1007,7 +1026,7 @@ namespace
         limits.target_cells = llclamp((S32)target_cells, 16, SLOT_SIZE - 2);
         limits.max_cell = llmax((F32)max_cell, limits.min_cell);
         limits.max_cells = SLOT_SIZE - 2;
-        const Grid g = gridFor(vmin.mV[0], vmin.mV[1], vmax.mV[0], vmax.mV[1], limits);
+        const Grid g = gridFor(vmin.mV[axes.h], vmin.mV[axes.v], vmax.mV[axes.h], vmax.mV[axes.v], limits);
         if (!g.valid())
         {
             return -1;
@@ -1041,7 +1060,10 @@ namespace
         }
 
         const F32 zpad = 1.f;
-        const LLMatrix4a proj = al_ortho(g.x0, g.x1, g.y0, g.y1, -vmax.mV[2] - zpad, -vmin.mV[2] + zpad);
+        // Distances along the view of the box's near and far faces.
+        const F32 near_d = axes.depth_sign > 0.f ? vmin.mV[axes.d] : -vmax.mV[axes.d];
+        const F32 far_d = axes.depth_sign > 0.f ? vmax.mV[axes.d] : -vmin.mV[axes.d];
+        const LLMatrix4a proj = al_ortho(g.x0, g.x1, g.y0, g.y1, near_d - zpad, far_d + zpad);
         const S32 resx = g.cols * SUPERSAMPLE;
         const S32 resy = g.rows * SUPERSAMPLE;
 
@@ -1204,7 +1226,7 @@ bool SKOutlineCapture::render(Entry& e)
     {
         SKOutlineLayerState& l = e.layers[i];
         LLViewerObject* layer_root = i == 0 ? root : gObjectList.findObject(l.id);
-        const S32 draws = renderLayer(l, layer_root, vehicle, mAtlas);
+        const S32 draws = renderLayer(l, layer_root, vehicle, mAtlas, e.view);
         if (draws < 0)
         {
             l.rendered = false;
@@ -1234,7 +1256,8 @@ void SKOutlineCapture::forEachCapture(const std::function<void(const Stats&)>& f
     for (const auto& [id, entry] : mEntries)
     {
         Stats s;
-        s.root = id;
+        s.root = id.root;
+        s.view = id.view;
         s.parts = entry->parts;
         s.layers = (S32)entry->glyph.layers.size();
         s.renders = entry->renders;
