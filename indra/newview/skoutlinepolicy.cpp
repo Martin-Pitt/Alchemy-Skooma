@@ -350,4 +350,14 @@ namespace SKOutlinePolicy
         }
         return false;
     }
+
+    ViewAxes viewAxes(View view)
+    {
+        switch (view)
+        {
+            case View::SIDE: return { 0, 2, 1, 1.f };
+            case View::FRONT: return { 1, 2, 0, -1.f };
+            default: return { 0, 1, 2, -1.f };
+        }
+    }
 }
