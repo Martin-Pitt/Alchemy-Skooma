@@ -136,6 +136,8 @@ private:
     void showInput(bool show);
     void sendChat(EChatType type);
     void invalidateLayout() { mLayoutDirty = true; }
+    S32 inputHeight() const;
+    void onInputResized();
     void layout();
     void layoutCog();
     LLRect contentRect() const;

@@ -287,7 +287,8 @@ bool SKFloaterLocalChat::postBuild()
     mInput->setPassDelete(true);
     mInput->setShowChatMentionPicker(true);
     mInput->setShowEmojiHelper(true);
-    mInput->enableSingleLineMode(true);
+    mInput->enableSingleLineMode(false); // wraps and grows to expand_lines_count, upward from its bottom
+    mInput->setTextExpandedCallback([this](LLUICtrl*, const LLSD&) { onInputResized(); });
     mInput->setMaxTextLength(DB_CHAT_MSG_STR_LEN * 5);
     mInput->setFont(LLViewerChat::getChatFont());
     ALChatBar::applyChannelLabel(mInput, gSavedSettings.getS32("AlchemyNearbyChatChannel"));
@@ -499,6 +500,7 @@ void SKFloaterLocalChat::showInput(bool show)
     }
     mInput->setVisible(show);
     mEmojiButton->setVisible(show);
+    onInputResized();
     if (!show)
     {
         mInput->hideEmojiHelper();
@@ -628,7 +630,20 @@ bool SKFloaterLocalChat::expanded() const
 LLRect SKFloaterLocalChat::contentRect() const
 {
     // The input's row and the typing line are always kept, so the messages do not jump when either shows.
-    return LLRect(INSET, getRect().getHeight() - INSET, getRect().getWidth() - INSET, INPUT_HEIGHT + INPUT_GAP + TYPING_HEIGHT + INSET);
+    return LLRect(INSET, getRect().getHeight() - INSET, getRect().getWidth() - INSET, inputHeight() + INPUT_GAP + TYPING_HEIGHT + INSET);
+}
+
+S32 SKFloaterLocalChat::inputHeight() const
+{
+    // A hidden input keeps one line's row, so a draft left in it does not hold the messages up.
+    return mInput && mInput->getVisible() ? llmax(INPUT_HEIGHT, mInput->getRect().getHeight()) : INPUT_HEIGHT;
+}
+
+void SKFloaterLocalChat::onInputResized()
+{
+    // mScroll counts up from the newest message, so the bottom of the view stays where it was.
+    mScroll = llclamp(mScroll, 0, llmax(0, barRange()));
+    invalidateLayout();
 }
 
 constexpr S32 BAR_STRIP = 12;   // the scroll bar's hit strip, in from the right edge
@@ -1576,7 +1591,7 @@ void SKFloaterLocalChat::drawTyping(F64 now) const
     static LLUIColor color = LLUIColorTable::instance().getColor("White");
     static LLUIColor far_color = LLUIColorTable::instance().getColor("Yellow");
     LLFontGL* font = LLFontGL::getFontSansSerifSmall();
-    const S32 y = INSET + INPUT_HEIGHT + INPUT_GAP + 1;
+    const S32 y = INSET + inputHeight() + INPUT_GAP + 1;
     const bool has_near = !mTypingLabel[0].empty();
     const LLColor4 base = has_near ? color.get() : far_color.get();
     const F32 dim = has_near ? 1.f : 0.75f;
