@@ -2623,9 +2623,9 @@ if(AL_BUILD_TESTS)
       tests/llviewerassetstats_test.cpp
       tests/llviewercontrollistener_test.cpp
       tests/llvocache_test.cpp
+      tests/skchatunfurl_test.cpp # <SK:Nexii> local chat link previews
       tests/lutcube_test.cpp
       tests/noise_test.cpp
-      tests/skchatunfurl_test.cpp
     UNIT
       alagentlocationformat.cpp
       alchattimestamp.cpp
@@ -2699,9 +2699,9 @@ if(AL_BUILD_TESTS)
       llversioninfo.cpp
       llviewerassetstats.cpp
       llviewercontrollistener.cpp
+      skchatunfurl.cpp # <SK:Nexii> local chat link previews
       lutcube.cpp
       noise.cpp
-      skchatunfurl.cpp
     LIBRARIES llui alscript ll::slua llxml ${test_libs}
     SUPPORT
       newview_test_fakes
