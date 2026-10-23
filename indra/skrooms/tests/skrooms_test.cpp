@@ -401,7 +401,7 @@ namespace
         { INFO("no door portal"); REQUIRE((r.count(a, PortalKind::DOOR) == 0)); }
     }
 
-    TEST_CASE("skrooms: a stairwell behind a door is its own space, linked to its flight by a stair portal", "[skrooms][.flights]")
+    TEST_CASE("skrooms: a stairwell behind a door is its own space, linked to its flight by a stair portal", "[skrooms]")
     {
         Scene s;
         s.box(20.f, 0.f, 28.f, 8.f, 3.f, 3.25f);            // a deck the stair climbs to
@@ -423,7 +423,7 @@ namespace
         { INFO("a stair portal onto the flight"); REQUIRE((!r.between(landing, stair).empty() && r.between(landing, stair)[0]->mKind == PortalKind::STAIR)); }
     }
 
-    TEST_CASE("skrooms: an open stair is cut at each floor, with no opening at its top", "[skrooms][.flights]")
+    TEST_CASE("skrooms: an open stair is cut at each floor, with no opening at its top", "[skrooms]")
     {
         Scene s;
         s.box(20.f, 0.f, 28.f, 8.f, 3.f, 3.25f);
@@ -605,7 +605,7 @@ namespace
         }
     }
 
-    TEST_CASE("skrooms: a switchback stair with a landing between its flights leaves neither flight an island", "[skrooms][.flights]")
+    TEST_CASE("skrooms: a switchback stair with a landing between its flights leaves neither flight an island", "[skrooms]")
     {
         Scene s;
         s.flight(8.f, 14.f, 1.f, 3.f, 0.f, 1.75f);
@@ -619,7 +619,7 @@ namespace
         { INFO("every flight linked at both ends"); REQUIRE((r.flightsLinked())); }
     }
 
-    TEST_CASE("skrooms: a flight wider than a stair portal's run still meets its floors", "[skrooms][.flights]")
+    TEST_CASE("skrooms: a flight wider than a stair portal's run still meets its floors", "[skrooms]")
     {
         Scene s;
         s.box(20.f, 0.f, 28.f, 8.f, 3.f, 3.25f);
@@ -629,7 +629,7 @@ namespace
         { INFO("to the deck"); REQUIRE((!r.between(r.at(16.f, 4.f, 2.9f), r.at(24.f, 4.f, 3.75f)).empty())); }
     }
 
-    TEST_CASE("skrooms: a flight across a tile seam meets both its floors", "[skrooms][.flights]")
+    TEST_CASE("skrooms: a flight across a tile seam meets both its floors", "[skrooms]")
     {
         Scene s;
         s.box(36.f, 0.f, 44.f, 8.f, 3.f, 3.25f);
@@ -640,7 +640,7 @@ namespace
         { INFO("to the ground"); REQUIRE((!r.between(r.at(29.f, 2.f, 0.8f), r.at(20.f, 4.f)).empty())); }
     }
 
-    TEST_CASE("skrooms: a floor that meets a flight only along its side is still linked to it", "[skrooms][.flights]")
+    TEST_CASE("skrooms: a floor that meets a flight only along its side is still linked to it", "[skrooms]")
     {
         Scene s;
         s.box(20.f, 0.f, 28.f, 8.f, 3.f, 3.25f);
@@ -1795,7 +1795,7 @@ TEST_CASE("skrooms: a plan with a hole, a slope and a pinch traces them apart", 
         { INFO("only the shaft"); REQUIRE((lifts) == (1u)); }
     }
 
-    TEST_CASE("skrooms: ground under an open flight is sheltered and opens onto the street under its stringer", "[skrooms][.flights]")
+    TEST_CASE("skrooms: ground under an open flight is sheltered and opens onto the street under its stringer", "[skrooms]")
     {
         // A flight up +x from 4 m to 16 m onto a landing block, treads as thin slabs with air below;
         // walled on the north, and on the south a stringer hangs to 0.9 m over the street.

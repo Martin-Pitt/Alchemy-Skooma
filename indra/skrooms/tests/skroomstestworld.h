@@ -34,6 +34,7 @@
 #include "../skroomsenclosure.h"
 #include "../skroomsspaces.h"
 
+#include <functional>
 #include <map>
 #include <memory>
 #include <vector>
@@ -72,7 +73,11 @@ namespace skrooms_test
 
     /// A census file read with its air parameters, laid out as the viewer lays it, each tile rasterised with
     /// its air, every tile's tops on one sky map, then each mesh's enclosure and spaces. False when it does not read.
-    inline bool buildWorld(const std::string& path, AirMode mode, CensusFile& census, World& out, std::string* error = nullptr)
+    /// Handed each mesh's floor-cell graphs as the spaces pass finds flights on them.
+    typedef std::function<void(const LLUUID& mesh, const FlightGraph& graph)> FlightGraphFn;
+
+    inline bool buildWorld(const std::string& path, AirMode mode, CensusFile& census, World& out, std::string* error = nullptr,
+                           const FlightGraphFn& graphs = nullptr)
     {
         AirCensusParams params;
         EnclosureParams enclosure;
@@ -137,6 +142,11 @@ namespace skrooms_test
             rooms->mMeshOrigin = m->mOrigin;
             rooms->mParams.mWalkHeadM = enclosure.mWalkHeadM;
             rooms->mParams.mAgentRadiusM = params.mParams.mAvatar.mRadius;
+            if (graphs)
+            {
+                const LLUUID mesh = id;
+                rooms->mFlightGraphSink = [graphs, mesh](const FlightGraph& g) { graphs(mesh, g); };
+            }
             rooms->mMeshKey = mix(SEED, std::hash<LLUUID>()(id));
             for (const DoorEntity& d : census.mDoors)
             {

@@ -27,6 +27,7 @@
 
 #include "skroomsenclosure.h"
 #include "skcensusfeatures.h"
+#include "skroomsflights.h"
 
 #include "v2math.h"
 #include "v4color.h"
@@ -222,6 +223,7 @@ namespace skworld
         std::vector<U16> mSeeds;    ///< per gap of the air, 1-based; 0 on no avatar floor
         std::vector<SeedStats> mStats;  ///< per seed
         std::vector<U32> mBasins;       ///< per seed, the watershed basin it was cut from, numbered across passes; 0 for none
+        std::vector<std::pair<U32, U32>> mFlightGaps;   ///< the gaps on a flight and its id, by gap
     };
 
     /// Two seeds joined for want of a cut rather than by cues, kept while
@@ -270,11 +272,15 @@ namespace skworld
         std::shared_ptr<const CoverMemo> mCovers;
         std::shared_ptr<const EdgeMemo> mEdgeMemo;
         std::vector<std::pair<U64, U32>> mPortalKeys;       ///< each portal's portalKey to its index, by key
+        std::vector<AirFlight> mFlights;                    ///< the stairs, ramps and climbs on its floor cells, by id
+        FlightStats mFlightStats;                           ///< summed over the pass's detections
 
         /// The index of the portal with this portalKey, or ~0u: a binding's portal by identity, not by an older product's index.
         U32 portalIndex(U64 key) const;
         /// The space with this id, or null.
         const Space* byId(U32 id) const;
+        /// The flight with this id, or null.
+        const AirFlight* flight(U32 id) const;
         const RoomsTile* tile(const TileKey& key) const;
         size_t bytes() const;
     };
@@ -316,6 +322,8 @@ namespace skworld
         RoomsProductPtr mPrevious;
         SpaceParams mParams;
         bool mFrameApertures = true;    ///< doorways cut from below read their cells in bulk; off, a sample at a time, as a check
+        /// Handed each floor-cell graph the flights are found on, for the oracle's sweep; empty in the viewer.
+        std::function<void(const FlightGraph&)> mFlightGraphSink;
     };
 
     /// The spaces pass over an enclosure product: the feature transform and

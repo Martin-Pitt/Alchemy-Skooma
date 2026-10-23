@@ -50,6 +50,7 @@ namespace
 
     constexpr U32 NONE = 0xffffffffu;
     constexpr S32 OPEN_TOP = INT_MAX / 4;   ///< an open ceiling, in mesh units
+    static_assert(OPEN_TOP == FLIGHT_OPEN_CEIL, "the flights read an open ceiling as the spaces write it");
     constexpr S32 GROW_STEPS = 64;          ///< a watershed level grows its regions this far before seeding new ones
     constexpr S32 MERGE_ROUNDS = 50;
     constexpr F32 OPEN_HEIGHT_M = 20.f;     ///< what an open ceiling counts for in a volume
@@ -625,6 +626,12 @@ namespace skworld
         return h;
     }
 
+    const AirFlight* RoomsProduct::flight(U32 id) const
+    {
+        const auto it = std::lower_bound(mFlights.begin(), mFlights.end(), id, [](const AirFlight& f, U32 k) { return f.mId < k; });
+        return it != mFlights.end() && it->mId == id ? &*it : nullptr;
+    }
+
     U32 RoomsProduct::portalIndex(U64 key) const
     {
         const auto it = std::lower_bound(mPortalKeys.begin(), mPortalKeys.end(), std::make_pair(key, U32(0)));
@@ -744,6 +751,18 @@ namespace skworld
         std::vector<std::vector<U32>> mGapSpace;    ///< per tile, per gap, space + 1
         /// Per tile, per gap, the flight it lies on + 1, 0 on none: what the flights found on the floor cells mark.
         std::vector<std::vector<U16>> mGapFlight;
+        /// The pass's flights: those kept from the last pass, then those found in its batches; a dropped one stays, not live.
+        std::vector<AirFlight> mFlights;
+        std::vector<std::vector<std::pair<U32, U32>>> mFlightGaps;  ///< per flight, its (tile, gap)s
+        std::vector<U8> mFlightLive;
+        /// Keep the last pass's flights on tiles whose air stands; one that touches a moved tile goes.
+        void carryFlights();
+        /// Clear a flight's gaps and drop it.
+        void dropFlight(U32 f);
+        /// Find the flights on the batch's floor cells, replacing those that touch its block.
+        void findFlights();
+        /// The live flights into the product and each tile's flight gaps, with the spaces their gaps and stair portals join.
+        void finishFlights(const std::vector<Space>& out);
         bool flightGap(U32 t, U32 g) const { return t < mGapFlight.size() && g < mGapFlight[t].size() && mGapFlight[t][g] != 0; }
 
         const SpaceParams& params() const { return mInput->mParams; }
@@ -1617,6 +1636,7 @@ namespace skworld
                 }
             }
         }
+        carryFlights();
         // Floors an avatar stands on are judged per component of the whole mesh: a tile
         // whose floors' verdict moved with air elsewhere is cut again too.
         floors();
@@ -1780,6 +1800,7 @@ namespace skworld
             }
         }
         buildCells();
+        findFlights();
         transform();
         cutSeeds(b);
         std::vector<Cell>().swap(mCells);
@@ -2492,6 +2513,302 @@ namespace skworld
                                 mSide[c * 4 + d] = SIDE_LINKED;
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    void SpacesPass::State::carryFlights()
+    {
+        SK_WORLD_ZONE("rooms.spaces.flights.carry");
+        mGapFlight.assign(mTiles.size(), std::vector<U16>());
+        for (U32 t = 0; t < mTiles.size(); ++t)
+        {
+            mGapFlight[t].assign(mTiles[t].mAir->mGaps.size(), 0);
+        }
+        const RoomsProduct* prev = mInput->mPrevious.get();
+        if (!prev || prev->mFlights.empty())
+        {
+            return;
+        }
+        // A kept flight's gaps are read off its tiles' kept rooms; one with a gap on a tile whose air moved goes whole.
+        std::vector<U8> gone(prev->mFlights.size(), 0);
+        std::vector<std::vector<std::pair<U32, U32>>> gaps(prev->mFlights.size());
+        const auto indexOf = [prev](U32 id) {
+            const AirFlight* f = prev->flight(id);
+            return f ? static_cast<S32>(f - prev->mFlights.data()) : -1;
+        };
+        for (const RoomsTile& rt : prev->mTiles)
+        {
+            const U32 t = tileAt(rt.mKey);
+            for (const auto& [gap, id] : rt.mFlightGaps)
+            {
+                const S32 f = indexOf(id);
+                if (f < 0)
+                {
+                    continue;
+                }
+                if (t == NONE || mTiles[t].mDirty || gap >= mGapFlight[t].size())
+                {
+                    gone[f] = 1;
+                    continue;
+                }
+                gaps[f].push_back({ t, gap });
+            }
+        }
+        for (size_t f = 0; f < prev->mFlights.size(); ++f)
+        {
+            if (gone[f] || gaps[f].empty() || mFlights.size() >= 0xfffe)
+            {
+                continue;
+            }
+            const U16 mark = static_cast<U16>(mFlights.size() + 1);
+            for (const auto& [t, gap] : gaps[f])
+            {
+                mGapFlight[t][gap] = mark;
+            }
+            mFlights.push_back(prev->mFlights[f]);
+            mFlightGaps.push_back(std::move(gaps[f]));
+            mFlightLive.push_back(1);
+        }
+    }
+
+    void SpacesPass::State::dropFlight(U32 f)
+    {
+        if (!mFlightLive[f])
+        {
+            return;
+        }
+        const U16 mark = static_cast<U16>(f + 1);
+        for (const auto& [t, gap] : mFlightGaps[f])
+        {
+            if (mGapFlight[t][gap] == mark)
+            {
+                mGapFlight[t][gap] = 0;
+            }
+        }
+        mFlightGaps[f].clear();
+        mFlightLive[f] = 0;
+    }
+
+    void SpacesPass::State::findFlights()
+    {
+        SK_WORLD_ZONE("rooms.spaces.flights");
+        // Flights touching the block are found again whole, over its cells and those within FLIGHT_REACH_M of it, read
+        // only: the cells hold the block and two rings round it, past that reach.
+        static_assert(FLIGHT_REACH_M <= 32.0, "the cells' rings must hold every flight touching the block");
+        for (U32 f = 0; f < mFlights.size(); ++f)
+        {
+            for (const auto& [t, gap] : mFlightGaps[f])
+            {
+                if (mTiles[t].mInBlock)
+                {
+                    dropFlight(f);
+                    break;
+                }
+            }
+        }
+        // Per work tile, the plan rectangles of the block tiles it is, or touches.
+        std::vector<std::vector<std::array<F32, 4>>> block_rects(mTiles.size());
+        for (U32 t = 0; t < mTiles.size(); ++t)
+        {
+            const TileInfo& ti = mTiles[t];
+            if (!ti.mWork)
+            {
+                continue;
+            }
+            for (S32 dy = -1; dy <= 1; ++dy)
+            {
+                for (S32 dx = -1; dx <= 1; ++dx)
+                {
+                    const U32 u = tileAt(TileKey{ ti.mKey.mX + dx, ti.mKey.mY + dy });
+                    if (u != NONE && mTiles[u].mInBlock)
+                    {
+                        const TileAir& a = *mTiles[u].mAir;
+                        block_rects[t].push_back({ a.mOrigin.mV[VX], a.mOrigin.mV[VY], a.mOrigin.mV[VX] + a.mWidth * a.mCell, a.mOrigin.mV[VY] + a.mHeight * a.mCell });
+                    }
+                }
+            }
+        }
+        const F32 reach2 = static_cast<F32>(FLIGHT_REACH_M * FLIGHT_REACH_M);
+        std::vector<U32> sub(mCells.size(), NONE);
+        std::vector<U32> of;
+        FlightGraph graph;
+        graph.mCell = mCell;
+        graph.mUnit = mUnit;
+        for (U32 c = 0; c < mCells.size(); ++c)
+        {
+            const Cell& cell = mCells[c];
+            const TileInfo& ti = mTiles[cell.mTile];
+            const F32 x = cellX(ti, cell.mX), y = cellY(ti, cell.mY);
+            bool in = ti.mInBlock;
+            for (size_t k = 0; !in && k < block_rects[cell.mTile].size(); ++k)
+            {
+                const std::array<F32, 4>& r = block_rects[cell.mTile][k];
+                const F32 dx = std::max({ r[0] - x, 0.f, x - r[2] }), dy = std::max({ r[1] - y, 0.f, y - r[3] });
+                in = dx * dx + dy * dy <= reach2;
+            }
+            if (!in)
+            {
+                continue;
+            }
+            sub[c] = static_cast<U32>(of.size());
+            of.push_back(c);
+            FlightCell fc;
+            fc.mX = x;
+            fc.mY = y;
+            fc.mFloor = cell.mFloor;
+            fc.mCeil = cell.mCeil;
+            fc.mFlags = ti.mAir->mGaps[cell.mGap].mFlags;
+            graph.mCells.push_back(fc);
+        }
+        graph.mLink.resize(of.size() * 4);
+        for (size_t k = 0; k < of.size(); ++k)
+        {
+            for (S32 d = 0; d < 4; ++d)
+            {
+                const U32 o = mLink[of[k] * 4 + d];
+                graph.mLink[k * 4 + d] = o == NONE ? NONE : sub[o];
+            }
+        }
+        if (mInput->mFlightGraphSink)
+        {
+            mInput->mFlightGraphSink(graph);
+        }
+        std::vector<AirFlight> found;
+        std::vector<U16> cell_flight;
+        FlightStats stats;
+        detectFlights(graph, found, cell_flight, &stats);
+        FlightStats& sum = mProduct->mFlightStats;
+        sum.mCells += stats.mCells;
+        sum.mCandidates += stats.mCandidates;
+        sum.mRegions += stats.mRegions;
+        sum.mFitMs += stats.mFitMs;
+        sum.mGrowMs += stats.mGrowMs;
+        sum.mRegionsMs += stats.mRegionsMs;
+        // A found flight is kept when it touches the block; one wholly in the rings stands as the last pass left it.
+        std::vector<std::vector<std::pair<U32, U32>>> gaps(found.size());
+        std::vector<U8> touches(found.size(), 0);
+        for (size_t i = 0; i < of.size(); ++i)
+        {
+            if (const U16 k = cell_flight[i])
+            {
+                const Cell& cell = mCells[of[i]];
+                gaps[k - 1].push_back({ cell.mTile, cell.mGap });
+                touches[k - 1] |= mTiles[cell.mTile].mInBlock ? 1 : 0;
+            }
+        }
+        const U32 first_new = static_cast<U32>(mFlights.size());
+        for (size_t k = 0; k < found.size(); ++k)
+        {
+            if (!touches[k] || mFlights.size() >= 0xfffe)
+            {
+                continue;
+            }
+            const U16 mark = static_cast<U16>(mFlights.size() + 1);
+            for (const auto& [t, gap] : gaps[k])
+            {
+                // A gap two of this batch's flights share (a merged leaf at a landing) stays with the first;
+                // a kept flight from before that holds it was found again, or is gone.
+                const U16 was = mGapFlight[t][gap];
+                if (was && static_cast<U32>(was - 1) >= first_new)
+                {
+                    continue;
+                }
+                if (was)
+                {
+                    dropFlight(was - 1);
+                }
+                mGapFlight[t][gap] = mark;
+            }
+            mFlights.push_back(std::move(found[k]));
+            mFlightGaps.push_back(std::move(gaps[k]));
+            mFlightLive.push_back(1);
+            ++sum.mFlights;
+        }
+        for (Cell& cell : mCells)
+        {
+            cell.mFlight = flightGap(cell.mTile, cell.mGap);
+        }
+    }
+
+    void SpacesPass::State::finishFlights(const std::vector<Space>& out)
+    {
+        SK_WORLD_ZONE("rooms.spaces.flights.finish");
+        std::vector<AirFlight>& flights = mProduct->mFlights;
+        flights.clear();
+        std::vector<U32> id_of(mFlights.size(), 0);
+        for (U32 f = 0; f < mFlights.size(); ++f)
+        {
+            if (!mFlightLive[f] || mFlightGaps[f].empty())
+            {
+                continue;
+            }
+            AirFlight fl = mFlights[f];
+            // Its own spaces, and those its stair portals open onto.
+            fl.mSpaces.clear();
+            for (const auto& [t, gap] : mFlightGaps[f])
+            {
+                const U32 s = t < mGapSpace.size() && gap < mGapSpace[t].size() ? mGapSpace[t][gap] : 0;
+                if (s && s <= out.size())
+                {
+                    fl.mSpaces.push_back(out[s - 1].mId);
+                }
+            }
+            std::sort(fl.mSpaces.begin(), fl.mSpaces.end());
+            fl.mSpaces.erase(std::unique(fl.mSpaces.begin(), fl.mSpaces.end()), fl.mSpaces.end());
+            const size_t own = fl.mSpaces.size();
+            for (size_t i = 0; i < own; ++i)
+            {
+                const Space* sp = nullptr;
+                for (const Space& s : out)
+                {
+                    if (s.mId == fl.mSpaces[i])
+                    {
+                        sp = &s;
+                        break;
+                    }
+                }
+                for (const U32 pi : sp ? sp->mPortals : std::vector<U32>())
+                {
+                    if (pi >= mProduct->mPortals.size())
+                    {
+                        continue;
+                    }
+                    const Portal& p = mProduct->mPortals[pi];
+                    if (p.mKind != PortalKind::STAIR)
+                    {
+                        continue;
+                    }
+                    for (const U32 side : p.mSpaces)
+                    {
+                        if (side < out.size())
+                        {
+                            fl.mSpaces.push_back(out[side].mId);
+                        }
+                    }
+                }
+            }
+            std::sort(fl.mSpaces.begin(), fl.mSpaces.end());
+            fl.mSpaces.erase(std::unique(fl.mSpaces.begin(), fl.mSpaces.end()), fl.mSpaces.end());
+            id_of[f] = fl.mId;
+            flights.push_back(std::move(fl));
+        }
+        std::sort(flights.begin(), flights.end(), [](const AirFlight& a, const AirFlight& b) { return a.mId < b.mId; });
+        flights.erase(std::unique(flights.begin(), flights.end(), [](const AirFlight& a, const AirFlight& b) { return a.mId == b.mId; }),
+                      flights.end());
+        for (U32 t = 0; t < mTiles.size(); ++t)
+        {
+            std::vector<std::pair<U32, U32>>& fg = mTiles[t].mRooms.mFlightGaps;
+            fg.clear();
+            for (U32 g = 0; g < mGapFlight[t].size(); ++g)
+            {
+                if (const U16 k = mGapFlight[t][g])
+                {
+                    if (id_of[k - 1])
+                    {
+                        fg.push_back({ g, id_of[k - 1] });
                     }
                 }
             }
@@ -6367,6 +6684,7 @@ namespace skworld
         {
             mEnc->mSpaceIds[i] = out[i].mId;
         }
+        finishFlights(out);
         for (TileInfo& ti : mTiles)
         {
             mProduct->mTiles.push_back(std::move(ti.mRooms));

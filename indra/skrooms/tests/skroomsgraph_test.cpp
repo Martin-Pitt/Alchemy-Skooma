@@ -290,7 +290,7 @@ namespace
         CHECK(apart->ofSpace(west) != apart->ofSpace(east));
     }
 
-    TEST_CASE("skroomsgraph: a stair joins no storey", "[skroomsgraph][.flights]")
+    TEST_CASE("skroomsgraph: a stair joins no storey", "[skroomsgraph]")
     {
         const Result r = run(stairHouse().input(1), stairDoor());
         const RoomGraphPtr g = buildRoomGraph(*r.mRooms);
@@ -418,7 +418,7 @@ namespace
         CHECK(g1->byId(other0->mId) == other1);
     }
 
-    TEST_CASE("skroomsgraph: ofSpace, roomOfId and byId agree with the walk", "[skroomsgraph][.flights]")
+    TEST_CASE("skroomsgraph: ofSpace, roomOfId and byId agree with the walk", "[skroomsgraph]")
     {
         const Result r = run(stairHouse().input(1), stairDoor());
         const RoomGraphPtr g = buildRoomGraph(*r.mRooms);

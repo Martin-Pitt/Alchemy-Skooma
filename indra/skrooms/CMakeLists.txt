@@ -13,6 +13,7 @@ target_sources(
     skroomscensus.cpp
     skroomsenclosure.cpp
     skroomsexport.cpp
+    skroomsflights.cpp
     skroomsfloors.cpp
     skroomsgraph.cpp
     skroomsprobecache.cpp
@@ -31,6 +32,7 @@ target_sources(
         skroomscensus.h
         skroomsenclosure.h
         skroomsexport.h
+        skroomsflights.h
         skroomsfloors.h
         skroomsgraph.h
         skroomsprobecache.h
@@ -58,6 +60,7 @@ if(AL_BUILD_TESTS)
       tests/skroomsasync_test.cpp
       tests/skroomsenclosure_test.cpp
       tests/skroomsenclosurerepair_test.cpp
+      tests/skroomsflights_test.cpp
       tests/skroomsfloors_test.cpp
       tests/skroomsgraph_test.cpp
       tests/skroomsprobecache_test.cpp

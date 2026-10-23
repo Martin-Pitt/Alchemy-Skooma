@@ -255,6 +255,51 @@ void SKWorldView::portalsIn(const LLVector3d& min, const LLVector3d& max, const 
     }
 }
 
+void SKWorldView::flightsIn(const LLVector3d& min, const LLVector3d& max, const FlightFn& fn) const
+{
+    for (const Mesh& m : mMeshes)
+    {
+        if (!m.mRooms)
+        {
+            continue;
+        }
+        for (const AirFlight& f : m.mRooms->mFlights)
+        {
+            F64 x0 = 1e300, y0 = 1e300, x1 = -1e300, y1 = -1e300;
+            for (const LLVector2& p : f.mFootprint)
+            {
+                x0 = llmin(x0, static_cast<F64>(p.mV[VX]));
+                y0 = llmin(y0, static_cast<F64>(p.mV[VY]));
+                x1 = llmax(x1, static_cast<F64>(p.mV[VX]));
+                y1 = llmax(y1, static_cast<F64>(p.mV[VY]));
+            }
+            const LLVector3d& o = m.mOrigin;
+            if (x0 + o.mdV[VX] <= max.mdV[VX] && x1 + o.mdV[VX] >= min.mdV[VX] && y0 + o.mdV[VY] <= max.mdV[VY] && y1 + o.mdV[VY] >= min.mdV[VY] &&
+                f.mZMin + o.mdV[VZ] <= max.mdV[VZ] && f.mZMax + o.mdV[VZ] >= min.mdV[VZ])
+            {
+                fn(m, f);
+            }
+        }
+    }
+}
+
+const AirFlight* SKWorldView::flight(const LLUUID& mesh, U32 id, const Mesh** mesh_out) const
+{
+    for (const Mesh& m : mMeshes)
+    {
+        if (m.mId == mesh && m.mRooms)
+        {
+            const AirFlight* f = m.mRooms->flight(id);
+            if (f && mesh_out)
+            {
+                *mesh_out = &m;
+            }
+            return f;
+        }
+    }
+    return nullptr;
+}
+
 void SKWorldView::portalsOf(const SpaceId& id, const PortalFn& fn) const
 {
     const Mesh* m = nullptr;
@@ -1374,6 +1419,11 @@ void SKRooms::finish(const std::shared_ptr<Job>& job)
     mLastAnswered = job->mPass->tilesAnswered();
     mLastRoomGraphMs = job->mSpacesKept ? 0.f : job->mRoomGraphMs;
     mLastSpacesMs = job->mSpacesKept ? 0.f : job->mSpaces->product()->mMillis;
+    if (!job->mSpacesKept)
+    {
+        const FlightStats& fs = job->mSpaces->product()->mFlightStats;
+        mLastFlightMs = fs.mFitMs + fs.mGrowMs + fs.mRegionsMs;
+    }
     for (S32 s = 0; s < SpacesPass::NUM_STAGES; ++s)
     {
         mLastSpaceStageMs[s] = job->mSpacesKept ? 0.f : job->mSpaces->stageMillis(s);
@@ -1607,6 +1657,19 @@ std::string SKRooms::statsLine() const
             }
         }
     }
+    U32 flights[3] = {};
+    F32 flight_ms = 0.f;
+    for (const auto& entry : mMeshes)
+    {
+        if (entry.second.mRooms)
+        {
+            for (const AirFlight& f : entry.second.mRooms->mFlights)
+            {
+                ++flights[static_cast<S32>(f.mKind)];
+            }
+        }
+    }
+    flight_ms = mLastFlightMs;
     U32 winds = 0;
     size_t wind_bytes = 0;
     for (const auto& entry : mMeshes)
@@ -1618,11 +1681,11 @@ std::string SKRooms::statsLine() const
         }
     }
     return llformat("enclosure: %u meshes, %u passes (%u repairs, %u keeping their spaces, %u dropped, %u running), last %.0f ms on the thread (%s, %u tiles answered), %.0f ms posted to landed, unknown %.1f%% and sealed %.1f%% of %llu gaps; %u spaces and %u portals, last %.0f ms (%s); "
-                    "rooms %u (truncated %u), %.1f KB, graph %.1f ms view air %llu wind %llu; "
+                    "flights: %u stairs, %u ramps, %u climbs, last %.1f ms; rooms %u (truncated %u), %.1f KB, graph %.1f ms view air %llu wind %llu; "
                     "wind slabs over %u meshes, %.1f MB, %u builds, last %.0f ms for %.1f MB",
                     meshes, mPasses, mRepairs, mSpacesKept, mCancelled, in_flight, mLastMs, stages.c_str(), mLastAnswered, mLastWallMs,
                     gaps ? 100.0 * unknown / gaps : 0.0, gaps ? 100.0 * sealed / gaps : 0.0, static_cast<unsigned long long>(gaps), spaces,
-                    portals, mLastSpacesMs, space_stages.c_str(), rooms, truncated, room_bytes / 1024.0, mLastRoomGraphMs,
+                    portals, mLastSpacesMs, space_stages.c_str(), flights[0], flights[1], flights[2], flight_ms, rooms, truncated, room_bytes / 1024.0, mLastRoomGraphMs,
                     static_cast<unsigned long long>(mViewAirRevision), static_cast<unsigned long long>(mViewWindRevision), winds,
                     wind_bytes / 1048576.0, mWindPasses, mLastWindMs, mLastWindBytes / 1048576.0);
 }
@@ -1727,6 +1790,30 @@ void SKRooms::gatherSpaces(SKWorldOverlayGeom& geom, const LLVector3d& camera, F
             path.push_back(gAgent.getPosAgentFromGlobal(ca));
             path.push_back(gAgent.getPosAgentFromGlobal(cb));
             skDrawStairGlyph(geom, path, width, color, 0.f);
+        }
+        // Each flight the air's cells showed: its footprint on its plane, and a line up its run from foot to head.
+        for (const AirFlight& f : m.mRooms->mFlights)
+        {
+            const LLVector3d mid = m.mOrigin + LLVector3d((f.mBottom + f.mTop) * 0.5f);
+            if (f.mFootprint.size() < 2 || dist_vec_squared2D(mid, camera) > reach2)
+            {
+                continue;
+            }
+            const SKWorldSwatch swatch = f.mKind == FlightKind::STAIR  ? SKWorldSwatch::PORTAL_STAIR
+                                         : f.mKind == FlightKind::RAMP ? SKWorldSwatch::PORTAL_LINK
+                                                                       : SKWorldSwatch::PORTAL_DANGLING;
+            LLColor4 color = skWorldSwatchColor(swatch);
+            color.mV[VALPHA] = opaque ? 1.f : 0.8f;
+            const auto on_plane = [&](const LLVector2& p) {
+                const F32 z = llclamp(f.mPlane[0] * p.mV[VX] + f.mPlane[1] * p.mV[VY] + f.mPlane[2], f.mZMin, f.mZMax) + 0.1f;
+                return gAgent.getPosAgentFromGlobal(m.mOrigin + LLVector3d(p.mV[VX], p.mV[VY], z));
+            };
+            for (size_t k = 0; k < f.mFootprint.size(); ++k)
+            {
+                geom.line(on_plane(f.mFootprint[k]), on_plane(f.mFootprint[(k + 1) % f.mFootprint.size()]), color);
+            }
+            geom.edge(gAgent.getPosAgentFromGlobal(m.mOrigin + LLVector3d(f.mBottom) + LLVector3d(0.0, 0.0, 0.1)),
+                      gAgent.getPosAgentFromGlobal(m.mOrigin + LLVector3d(f.mTop) + LLVector3d(0.0, 0.0, 0.1)), color);
         }
         for (const Space& sp : m.mRooms->mSpaces)
         {

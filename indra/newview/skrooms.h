@@ -83,6 +83,7 @@ public:
     };
     typedef std::function<void(const Mesh& mesh, const skworld::Space& space)> SpaceFn;
     typedef std::function<void(const Mesh& mesh, const skworld::Portal& portal)> PortalFn;
+    typedef std::function<void(const Mesh& mesh, const skworld::AirFlight& flight)> FlightFn;
 
     /// Every mesh's gaps over one point, read once so many heights can be asked of it.
     struct AirColumn
@@ -124,6 +125,10 @@ public:
     void spacesIn(const LLVector3d& min, const LLVector3d& max, const SpaceFn& fn) const;
     void portalsIn(const LLVector3d& min, const LLVector3d& max, const PortalFn& fn) const;
     void portalsOf(const SpaceId& id, const PortalFn& fn) const;
+    /// Flights (stairs, ramps, climbs) whose footprint and height range meet the global box. Positions mesh-local.
+    void flightsIn(const LLVector3d& min, const LLVector3d& max, const FlightFn& fn) const;
+    /// A flight by its mesh and id, or null.
+    const skworld::AirFlight* flight(const LLUUID& mesh, U32 id, const Mesh** mesh_out = nullptr) const;
 
     /// The room holding a space; null for a space in no room (outdoors, roof, flight) or an unknown id.
     /// Its positions and cells are relative to its mesh's origin.
@@ -366,6 +371,7 @@ private:
     U32 mSpacesKept = 0;                    ///< of which kept the last spaces
     U32 mLastAnswered = 0;                  ///< tiles the last pass answered again
     F32 mLastRoomGraphMs = 0.f;
+    F32 mLastFlightMs = 0.f;                ///< the last spaces pass's flight detection
     F32 mLastWindMs = 0.f;
     size_t mLastWindBytes = 0;
     U32 mWindPasses = 0;

@@ -142,6 +142,10 @@ namespace skrooms_test
                         {
                             gap.mFlags |= static_cast<U8>(AREA_GROUND << AirGap::AREA_SHIFT);
                         }
+                        else if (merged[i].mWalk)
+                        {
+                            gap.mFlags |= static_cast<U8>(AREA_OBJECT << AirGap::AREA_SHIFT);   // as the raster gives an object's floor
+                        }
                         if (mAvatarFloors && merged[i].mWalk)
                         {
                             gap.mFlags |= AirGap::AVATAR_FLOOR;
