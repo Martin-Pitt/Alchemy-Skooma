@@ -13,6 +13,7 @@ Run `git skooma status` first if unsure. Branch roles:
 | `feature-<name>` | Your workspace, in `.worktrees/<name>`. Branched from `develop`, or from its area's trunk. |
 | trunk | The feature branch an area ships as: `feature-navmesh` (`nav/*`), `feature-atmo-magic` (`atmo/*`), `feature-combat/minimap` (`combat/minimap*`), `camera` (`camera/*`). Worktrees of the area land into it, and it lands into `main`. `git skooma trunk` lists them. |
 | `fix-<name>`, `workaround-<name>`, … | The same kind of branch under a different classification chosen at `git skooma new`. Treat exactly like `feature-*`. |
+| `amend-<area>/<x>` | A follow-up to an existing feature. Lands into that feature, never a PR on its own. |
 | `spike-<name>` | Throwaway instrumentation to answer one question. The only branch that never goes upstream. See below. |
 | `glue` | Fork-only files (scripts, docs, CI, branding). |
 
@@ -53,6 +54,11 @@ git skooma integrate      # land every ready worktree branch into its trunk, the
 In an area with a trunk, your branch lands into the trunk, not `main`. Follow-up work
 goes on a new branch in the same area (it is cut from the trunk) — never a stack of
 leftover branches.
+
+Follow-up work on an existing feature by another agent goes on
+`git skooma new <area>/<x> --amend`, never a new `feature-*`. Retire is only for amends
+whose work is in their parent, or branches merged upstream; never retire a feature because
+it is merged into `main` or a trunk.
 
 Do not run `git merge`, `git rebase`, `git push`, or `git checkout <other branch>` to land work. Do not create worktrees by hand — `git skooma new <name>` (add `--class fix` / `--class workaround` when it is not a feature).
 
