@@ -698,3 +698,32 @@ void ALGPUStream::noteRead(size_t offset)
     }
     mReadIn[region] = frames().frame();
 }
+
+// <SK:Nexii> Overview cut table: a buffer texture over a stream.
+bool ALGPUBufferTexture::attach(ALTextureSlot* slot, const ALGPUBuffer& buffer, U32 internal_format)
+{
+    if (!slot || !buffer.isAllocated())
+    {
+        llassert(false);
+        return false;
+    }
+    if (!mTexture)
+    {
+        glGenTextures(1, &mTexture);
+    }
+    // Unbound first: a bind of what the slot already holds would not make its unit the active one.
+    slot->unbind();
+    slot->bindManual(ALTextureSlot::TT_BUFFER_TEXTURE, mTexture);
+    glTexBuffer(GL_TEXTURE_BUFFER, internal_format, buffer.getGLName());
+    return true;
+}
+
+void ALGPUBufferTexture::release()
+{
+    if (mTexture && gGLManager.mInited)
+    {
+        glDeleteTextures(1, &mTexture);
+    }
+    mTexture = 0;
+}
+// </SK:Nexii>
