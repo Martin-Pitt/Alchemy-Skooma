@@ -346,6 +346,11 @@ void SKFloaterLocalChat::appendChat(const LLChat& chat, const LLSD& args, F64 ar
     msg.mBody = std::move(out);
 
     mMessages.push_back(std::move(msg));
+    ++mPendingMessages;
+    if (mScroll > 0)
+    {
+        ++mUnseen;
+    }
     while (mMessages.size() > MAX_MESSAGES)
     {
         mMessages.pop_front();
@@ -670,6 +675,23 @@ void SKFloaterLocalChat::layout()
         y += mRows[r].height() + lineHeight(mRows[r]);
     }
     mContentHeight = y;
+
+    // While scrolled up, what arrived grows the content below the view; scroll by as much so the view holds still.
+    const S32 first_new = (S32)mMessages.size() - mPendingMessages;
+    mPendingMessages = 0;
+    if (mScroll > 0 && first_new > 0)
+    {
+        for (S32 r = 1; r < (S32)mRows.size(); ++r)
+        {
+            const Row& row = mRows[r];
+            const S32 msg = row.mMessage >= 0 ? row.mMessage : mCards[row.mCard].mFirstMessage;
+            if (msg >= first_new)
+            {
+                mScroll += mRows[r - 1].mBottom;
+                break;
+            }
+        }
+    }
 }
 
 void SKFloaterLocalChat::drawRowText(const Row& row, S32 x, S32 y, F32 alpha, LLFontGL::ShadowType shadow) const
@@ -848,6 +870,41 @@ void SKFloaterLocalChat::draw()
         }
     }
 
+    // Jump to present: once scrolled up by more than a view, or from any distance once something new arrived.
+    if (mScroll == 0)
+    {
+        mUnseen = 0;
+    }
+    mPillRect = LLRect();
+    if (mScroll > view_height || mUnseen > 0)
+    {
+        if (mPillCount != mUnseen)
+        {
+            mPillCount = mUnseen;
+            if (mUnseen > 0)
+            {
+                LLStringUtil::format_map_t args;
+                args["[COUNT]"] = llformat("%d", mUnseen);
+                mPillLabel = getString("new_messages", args);
+            }
+            else
+            {
+                mPillLabel = getString("jump_to_present");
+            }
+        }
+        LLFontGL* font = LLFontGL::getFontSansSerifSmall();
+        const S32 w = font->getWidth(mPillLabel) + 2 * PAD_X + 4;
+        const S32 h = font->getLineHeight() + 2 * PAD_Y;
+        const S32 left = (getRect().getWidth() - w) / 2;
+        const S32 bottom = content.mBottom + 2;
+        mPillRect.setOriginAndSize(left, bottom, w, h);
+        static LLUIImagePtr pill_image = LLUI::getUIImage("Rounded_Square");
+        static LLUIColor pill_color = LLUIColorTable::instance().getColor("Black");
+        static LLUIColor pill_text = LLUIColorTable::instance().getColor("White");
+        pill_image->draw(mPillRect, pill_color.get() % 0.8f);
+        font->renderUTF8(mPillLabel, 0, (F32)(left + w / 2), (F32)(bottom + PAD_Y), pill_text.get(), LLFontGL::HCENTER, LLFontGL::BOTTOM, LLFontGL::NORMAL, LLFontGL::NO_SHADOW);
+    }
+
     if (mHovered && opaque && mContentHeight > view_height)
     {
         // A thin scroll thumb on hover, its position read from the bottom.
@@ -921,6 +978,13 @@ bool SKFloaterLocalChat::handleMouseDown(S32 x, S32 y, MASK mask)
 {
     // The drag handle lies under everything; any other child takes its own clicks.
     LLView* child = childFromPoint(x, y);
+    if (mPillRect.pointInRect(x, y))
+    {
+        mScroll = 0;
+        mUnseen = 0;
+        mPillRect = LLRect();
+        return true;
+    }
     if (!child || child == getDragHandle())
     {
         const std::string url = urlAt(x, y);
@@ -935,7 +999,7 @@ bool SKFloaterLocalChat::handleMouseDown(S32 x, S32 y, MASK mask)
 
 bool SKFloaterLocalChat::handleHover(S32 x, S32 y, MASK mask)
 {
-    if (!hasMouseCapture() && !urlAt(x, y).empty())
+    if (!hasMouseCapture() && (mPillRect.pointInRect(x, y) || !urlAt(x, y).empty()))
     {
         getWindow()->setCursor(UI_CURSOR_HAND);
         LLFloater::handleHover(x, y, mask);
