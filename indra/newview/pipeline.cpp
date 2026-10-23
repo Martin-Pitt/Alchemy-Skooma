@@ -111,6 +111,7 @@
 #include "llviewerregion.h" // for audio debugging.
 #include "llviewerwindow.h" // For getSpinAxis
 #include "llvoavatarself.h"
+#include "skaircells.h" // <SK:Nexii> air cells overlay
 #include "skworldcensus.h" // <SK:Nexii> census overlay
 #include "llvocache.h"
 #include "llvosky.h"
@@ -11250,6 +11251,12 @@ void LLPipeline::renderFinalize()
     if (!cutout && SKWorldCensus::instanceExists())
     {
         SKWorldCensus::instance().renderDebug();
+    }
+    // </SK:Nexii>
+    // <SK:Nexii> air cells overlay: the air, wall faces, run-off and sky map, under the world debug mask
+    if (!cutout && SKAirCells::instanceExists())
+    {
+        SKAirCells::instance().renderDebug();
     }
     // </SK:Nexii>
 

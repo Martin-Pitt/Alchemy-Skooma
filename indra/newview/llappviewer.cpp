@@ -221,6 +221,7 @@
 #include "llsdserialize.h"
 
 #include "llworld.h"
+#include "skaircells.h" // <SK:Nexii> air cells tick
 #include "skworldcensus.h" // <SK:Nexii> census tick
 #include "llhudeffecttrail.h"
 #include "llslurl.h"
@@ -2021,7 +2022,8 @@ bool LLAppViewer::cleanup()
 
     LLViewerObject::cleanupVOClasses();
 
-    // <SK:Nexii> census: release any held viewer objects before the avatar appearance dictionary below goes away
+    // <SK:Nexii> census, air cells: release any held viewer objects before the avatar appearance dictionary below goes away; the layers over the census go first
+    SKAirCells::deleteSingleton();
     SKWorldCensus::deleteSingleton();
     // </SK:Nexii>
 
@@ -5919,6 +5921,7 @@ void LLAppViewer::idle()
     // <SK:Nexii> census: scans after objects moved, the layers above follow it
     SKWorldCensus::instance().update();
     // </SK:Nexii>
+    SKAirCells::instance().update(); // <SK:Nexii> air cells: tiles follow the census
 
     LLWorld::getInstance()->updateParticles();
 

@@ -2520,6 +2520,292 @@
             <key>Value</key>
             <integer>1</integer>
         </map>
+        <key>SKAirAgentRadius</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres around the agent within which tiles build their detail air, wherever the camera is.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>30.0</real>
+        </map>
+        <key>SKAirAlways</key>
+        <map>
+            <key>Comment</key>
+            <string>Build the air cells whenever they are enabled, not only while an overlay or a consumer asks for them.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKAirBudgetMB</key>
+        <map>
+            <key>Comment</key>
+            <string>Megabytes of detail air kept in memory. Past it, the tiles the camera has been least near keep only their solid tops, never within 1.5 times SKAirRadius.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>512</integer>
+        </map>
+        <key>SKAirBuildsInFlight</key>
+        <map>
+            <key>Comment</key>
+            <string>Air tile builds allowed on the workers at once. 0 = the pool's width.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>S32</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKAirBuildsPerFrame</key>
+        <map>
+            <key>Comment</key>
+            <string>Air tile builds launched per frame at most.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>S32</string>
+            <key>Value</key>
+            <integer>4</integer>
+        </map>
+        <key>SKAirCell</key>
+        <map>
+            <key>Comment</key>
+            <string>The air raster's cell in metres, horizontal and vertical.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.125</real>
+        </map>
+        <key>SKAirCellsEnabled</key>
+        <map>
+            <key>Comment</key>
+            <string>Build the air cells from the census around the agent and the camera.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKAirClimb</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres of step the air still treats as connected floor.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.75</real>
+        </map>
+        <key>SKAirGroundedMargin</key>
+        <map>
+            <key>Comment</key>
+            <string>How far above the land a structure may sit and still be built with its region rather than as a mesh of its own, in metres.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>5.0</real>
+        </map>
+        <key>SKAirLog</key>
+        <map>
+            <key>Comment</key>
+            <string>Log the air cells' statistics every few seconds.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKAirMinGap</key>
+        <map>
+            <key>Comment</key>
+            <string>Closed gaps of the air lower than this, in metres, are folded into the solid around them: slivers between stacked prims are not air anything moves through.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.5</real>
+        </map>
+        <key>SKAirOverlay</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw the air under World overlays: 0 off, 1 quadtree leaves by level, 2 gaps by flags with ceilings and the walls and steps between them, 5 clearance, 6 the walls' true faces from the face offsets. 3, 4 and 7 are the rooms layer's.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKAirOverlayBudget</key>
+        <map>
+            <key>Comment</key>
+            <string>Vertices the air overlay may draw; tiles go nearest the camera first, and the stats line counts the tiles cut.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>1000000</integer>
+        </map>
+        <key>SKAirOverlayFaces</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw the air's wall faces under World overlays: the vertical surfaces weather paints and drains, at their full height.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKAirOverlayRunoff</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw the air's ledges and the run-off down them under World overlays.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKAirOverlaySky</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw the solid tops the sky map holds, one per metre cell, under World overlays.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKAirOverlayUpdates</key>
+        <map>
+            <key>Comment</key>
+            <string>Blip each air tile build while World overlays are on, coloured by why it was built.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKAirRadius</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres around the camera within which tiles build their detail air. Tiles further out read coarse air.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>300.0</real>
+        </map>
+        <key>SKAirRequestHoldSeconds</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds a box a consumer asked detail air for (SKAirCells::requestAir) keeps it, after the last ask.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>20.0</real>
+        </map>
+        <key>SKAirRunoffMax</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres water may fall from a ledge and still be traced to where it lands.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>24.0</real>
+        </map>
+        <key>SKAirSlope</key>
+        <map>
+            <key>Comment</key>
+            <string>Degrees of slope an avatar still stands on, for the air's AVATAR_FLOOR. Avatars in Second Life climb far steeper ground than a navmesh usually allows.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>74.0</real>
+        </map>
+        <key>SKAirTerrainBudgetMS</key>
+        <map>
+            <key>Comment</key>
+            <string>Milliseconds a frame may spend sampling the land under air tiles.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>1.0</real>
+        </map>
+        <key>SKAirWallMinHeight</key>
+        <map>
+            <key>Comment</key>
+            <string>How tall a vertical surface must be to count as a wall face, in metres. Below this it is the terracing a slope leaves in the raster.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.5</real>
+        </map>
+        <key>SKAirWalls</key>
+        <map>
+            <key>Comment</key>
+            <string>Read wall faces, ledges and run-off off the air raster as tiles are built.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKAirWholeCluster</key>
+        <map>
+            <key>Comment</key>
+            <string>Every tile under the cluster the agent stands in builds detail air, however far from the camera, so the building it is in is whole.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKAirWorkerThreads</key>
+        <map>
+            <key>Comment</key>
+            <string>Threads the air tile builds run on. 0 = one per core, less two.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>S32</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
         <key>SKCensusAlways</key>
         <map>
             <key>Comment</key>
