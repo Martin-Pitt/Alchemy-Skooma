@@ -28,6 +28,8 @@
 
 #include "skoutlinecapture.h"
 
+#include "alquerypool.h"
+
 #include "lldrawable.h"
 #include "llface.h"
 #include "llgl.h"
@@ -372,8 +374,7 @@ struct SKOutlineLayerState
     LLUUID id;           // the root of the layer's linkset
     S32 slot = -1;
     Grid grid;
-    U32 query = 0;
-    bool counting = false; // a count is in flight
+    ALQueryTicket ticket; // the count of the last render, until it is read
     bool rendered = false;
     SKOutlineLayer out;
 };
@@ -437,12 +438,7 @@ struct SKOutlineCapture::Entry
         {
             atlas.release(l.slot);
             l.slot = -1;
-            if (l.query && gl)
-            {
-                glDeleteQueries(1, &l.query);
-            }
-            l.query = 0;
-            l.counting = false;
+            l.ticket = ALQueryTicket();
         }
     }
 };
@@ -671,19 +667,24 @@ void SKOutlineCapture::readCounts()
         bool counted = false;
         for (SKOutlineLayerState& l : entry->layers)
         {
-            if (!l.counting || !l.query)
+            // A count lands frames after its render, read by the pool with no GL call; until then the last count stands.
+            if (!l.ticket.isValid())
             {
                 continue;
             }
-            GLint available = 0;
-            glGetQueryObjectiv(l.query, GL_QUERY_RESULT_AVAILABLE, &available);
-            if (available)
+            U64 samples = 0;
+            switch (gGL.queries().result(l.ticket, samples))
             {
-                GLuint samples = 0;
-                glGetQueryObjectuiv(l.query, GL_QUERY_RESULT, &samples);
-                l.out.covered_cells = (S32)samples;
-                l.counting = false;
-                counted = true;
+                case ALQueryPool::Status::Ready:
+                    l.out.covered_cells = (S32)llmin<U64>(samples, (U64)S32_MAX);
+                    l.ticket = ALQueryTicket();
+                    counted = true;
+                    break;
+                case ALQueryPool::Status::Pending:
+                    break;
+                case ALQueryPool::Status::Expired:
+                    l.ticket = ALQueryTicket(); // the next render counts again
+                    break;
             }
         }
         if (counted && entry->rendered && publish(*entry))
@@ -1128,20 +1129,13 @@ namespace
             gPipeline.mScreenTriangleVB->setBuffer();
             gPipeline.mScreenTriangleVB->drawArrays(LLRender::TRIANGLES, 0, 3);
 
-            if (!l.counting)
-            {
-                if (!l.query)
-                {
-                    glGenQueries(1, &l.query);
-                }
-                glUniform1i(count_loc, 1);
-                gGL.setColorMask(false, false);
-                glBeginQuery(GL_SAMPLES_PASSED, l.query);
-                gPipeline.mScreenTriangleVB->drawArrays(LLRender::TRIANGLES, 0, 3);
-                glEndQuery(GL_SAMPLES_PASSED);
-                gGL.setColorMask(true, true);
-                l.counting = true;
-            }
+            glUniform1i(count_loc, 1);
+            gGL.setColorMask(false, false);
+            // Refused while the shader profiler holds the samples target: this render goes uncounted and the last count stands.
+            l.ticket = gGL.queries().begin(ALQueryKind::Samples);
+            gPipeline.mScreenTriangleVB->drawArrays(LLRender::TRIANGLES, 0, 3);
+            gGL.queries().end(l.ticket);
+            gGL.setColorMask(true, true);
             gGL.getTextureSlot(0)->unbind();
             sResolve.unbind();
         }
@@ -1194,12 +1188,11 @@ bool SKOutlineCapture::render(Entry& e)
     {
         for (SKOutlineLayerState& l : e.layers)
         {
-            if (l.id == id && (l.slot >= 0 || l.query))
+            if (l.id == id && (l.slot >= 0 || l.ticket.isValid()))
             {
                 SKOutlineLayerState kept = l;
                 l.slot = -1;
-                l.query = 0;
-                l.counting = false;
+                l.ticket = ALQueryTicket();
                 return kept;
             }
         }
