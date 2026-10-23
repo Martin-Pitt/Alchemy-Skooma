@@ -2924,6 +2924,150 @@ void LLGLSLShader::uniform1i(const LLStaticHashedString& uniform, GLint v)
         glUniform1i(location, v);
     }
 }
+// <SK:Nexii> Hashed setters for Skooma programs whose uniform names are not reserved.
+void LLGLSLShader::uniform1f(const LLStaticHashedString& uniform, GLfloat v)
+{
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_SHADER;
+    llassert(sCurBoundShaderPtr == this);
+    GLint location = getUniformLocation(uniform);
+    if (location >= 0 && mUniformCache.changed(location, UniformCache::Kind::Float, uniform_bits(v)))
+    {
+        glUniform1f(location, v);
+    }
+}
+
+void LLGLSLShader::uniform1ui(const LLStaticHashedString& uniform, GLuint v)
+{
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_SHADER;
+    llassert(sCurBoundShaderPtr == this);
+    GLint location = getUniformLocation(uniform);
+    if (location >= 0 && mUniformCache.changed(location, UniformCache::Kind::UInt, uniform_bits(v)))
+    {
+        glUniform1ui(location, v);
+    }
+}
+
+void LLGLSLShader::uniform2f(const LLStaticHashedString& uniform, GLfloat x, GLfloat y)
+{
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_SHADER;
+    llassert(sCurBoundShaderPtr == this);
+    GLint location = getUniformLocation(uniform);
+    if (location >= 0 && mUniformCache.changed(location, UniformCache::Kind::Vec2, uniform_bits(x), uniform_bits(y)))
+    {
+        glUniform2f(location, x, y);
+    }
+}
+
+void LLGLSLShader::uniform3f(const LLStaticHashedString& uniform, GLfloat x, GLfloat y, GLfloat z)
+{
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_SHADER;
+    llassert(sCurBoundShaderPtr == this);
+    GLint location = getUniformLocation(uniform);
+    if (location >= 0
+        && mUniformCache.changed(location, UniformCache::Kind::Vec3, uniform_bits(x), uniform_bits(y), uniform_bits(z)))
+    {
+        glUniform3f(location, x, y, z);
+    }
+}
+
+void LLGLSLShader::uniform4f(const LLStaticHashedString& uniform, GLfloat x, GLfloat y, GLfloat z, GLfloat w)
+{
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_SHADER;
+    llassert(sCurBoundShaderPtr == this);
+    GLint location = getUniformLocation(uniform);
+    if (location >= 0
+        && mUniformCache.changed(location, UniformCache::Kind::Vec4,
+                                 uniform_bits(x), uniform_bits(y), uniform_bits(z), uniform_bits(w)))
+    {
+        glUniform4f(location, x, y, z, w);
+    }
+}
+
+void LLGLSLShader::uniform1fv(const LLStaticHashedString& uniform, U32 count, const GLfloat* v)
+{
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_SHADER;
+    llassert(sCurBoundShaderPtr == this);
+    GLint location = getUniformLocation(uniform);
+    if (location < 0)
+    {
+        return;
+    }
+    if (count != 1)
+    {
+        mUniformCache.forget(location);
+        glUniform1fv(location, count, v);
+    }
+    else if (mUniformCache.changed(location, UniformCache::Kind::Float, uniform_bits(v[0])))
+    {
+        glUniform1fv(location, 1, v);
+    }
+}
+
+void LLGLSLShader::uniform4fv(const LLStaticHashedString& uniform, U32 count, const GLfloat* v)
+{
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_SHADER;
+    llassert(sCurBoundShaderPtr == this);
+    GLint location = getUniformLocation(uniform);
+    if (location < 0)
+    {
+        return;
+    }
+    if (count != 1)
+    {
+        mUniformCache.forget(location);
+        glUniform4fv(location, count, v);
+    }
+    else if (mUniformCache.changed(location, UniformCache::Kind::Vec4,
+                                   uniform_bits(v[0]), uniform_bits(v[1]), uniform_bits(v[2]), uniform_bits(v[3])))
+    {
+        glUniform4fv(location, 1, v);
+    }
+}
+
+void LLGLSLShader::uniform4iv(const LLStaticHashedString& uniform, U32 count, const GLint* v)
+{
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_SHADER;
+    llassert(sCurBoundShaderPtr == this);
+    GLint location = getUniformLocation(uniform);
+    if (location < 0)
+    {
+        return;
+    }
+    if (count != 1)
+    {
+        mUniformCache.forget(location);
+        glUniform4iv(location, count, v);
+    }
+    else if (mUniformCache.changed(location, UniformCache::Kind::IVec4,
+                                   uniform_bits(v[0]), uniform_bits(v[1]), uniform_bits(v[2]), uniform_bits(v[3])))
+    {
+        glUniform4iv(location, 1, v);
+    }
+}
+
+void LLGLSLShader::uniformMatrix3fv(const LLStaticHashedString& uniform, U32 count, GLboolean transpose, const GLfloat* v)
+{
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_SHADER;
+    llassert(sCurBoundShaderPtr == this);
+    GLint location = getUniformLocation(uniform);
+    if (location >= 0)
+    {
+        glUniformMatrix3fv(location, count, transpose, v);
+    }
+}
+
+void LLGLSLShader::uniformMatrix4fv(const LLStaticHashedString& uniform, U32 count, GLboolean transpose, const GLfloat* v)
+{
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_SHADER;
+    llassert(sCurBoundShaderPtr == this);
+    GLint location = getUniformLocation(uniform);
+    if (location >= 0)
+    {
+        glUniformMatrix4fv(location, count, transpose, v);
+    }
+}
+// </SK:Nexii>
+
 void LLGLSLShader::vertexAttrib4f(U32 index, GLfloat x, GLfloat y, GLfloat z, GLfloat w)
 {
     if (index < mAttribute.size() && mAttribute[index] > 0)
