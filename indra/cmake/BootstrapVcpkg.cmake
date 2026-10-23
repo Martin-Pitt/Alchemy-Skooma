@@ -272,7 +272,7 @@ endfunction()
 # something it reads has changed since the install that last ran: the
 # manifest, the registry configuration, the triplets and what they include,
 # the feature list, the triplet, the overlay ports asked for, and the vcpkg
-# tool, and every file of every overlay port. The root writes the # <SK:Nexii>
+# tool. An overlay port's own files changing is not seen: delete the stamp. The root writes the
 # stamp once project() has returned, which is after the install succeeded.
 # AL_VCPKG_INSTALL off leaves the ports to you; deleting the stamp file
 # forces one install.
@@ -310,31 +310,6 @@ if(AL_VCPKG_INSTALL)
   string(APPEND al_vcpkg_install_key "features=${VCPKG_MANIFEST_FEATURES};")
   string(APPEND al_vcpkg_install_key "toolchain=${CMAKE_TOOLCHAIN_FILE};")
   string(APPEND al_vcpkg_install_key "overlays=${VCPKG_OVERLAY_PORTS};")
-  # <SK:Nexii> Navmesh: an overlay port's own files key the stamp too, so a port edit reinstalls.
-  set(al_vcpkg_overlay_dirs ${VCPKG_OVERLAY_PORTS})
-  file(READ "${CMAKE_SOURCE_DIR}/vcpkg-configuration.json" al_vcpkg_configuration)
-  string(
-    JSON al_vcpkg_overlay_count
-    ERROR_VARIABLE al_vcpkg_overlay_error
-    LENGTH "${al_vcpkg_configuration}"
-    "overlay-ports"
-  )
-  if(NOT al_vcpkg_overlay_error AND al_vcpkg_overlay_count GREATER 0)
-    math(EXPR al_vcpkg_overlay_last "${al_vcpkg_overlay_count} - 1")
-    foreach(index RANGE ${al_vcpkg_overlay_last})
-      string(JSON overlay GET "${al_vcpkg_configuration}" "overlay-ports" ${index})
-      list(APPEND al_vcpkg_overlay_dirs "${CMAKE_SOURCE_DIR}/${overlay}")
-    endforeach()
-  endif()
-  foreach(overlay IN LISTS al_vcpkg_overlay_dirs)
-    file(GLOB_RECURSE overlay_files LIST_DIRECTORIES false "${overlay}/*")
-    list(SORT overlay_files)
-    foreach(input IN LISTS overlay_files)
-      file(SHA256 "${input}" input_hash)
-      string(APPEND al_vcpkg_install_key "${input}=${input_hash};")
-    endforeach()
-  endforeach()
-  # </SK:Nexii>
 
   if(DEFINED VCPKG_INSTALLED_DIR)
     set(al_vcpkg_installed_dir "${VCPKG_INSTALLED_DIR}")

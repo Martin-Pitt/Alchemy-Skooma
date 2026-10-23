@@ -1001,18 +1001,9 @@ if(AL_BUILD_VIEWER)
     pipeline.cpp
     rlvactions.cpp
     rlvenvironment.cpp
-    skcaptureexport.cpp # <SK:Nexii> navmesh: linkset and avatar capture export
+    skcaptureexport.cpp # <SK:Nexii> mini-map: linkset and avatar capture export
     skclusterprobes.cpp # <SK:Nexii> cluster probes: reflection probes over census clusters
-    skfloaternavannotate.cpp
-    skfloaternavmesh.cpp
-    sknavairoverlay.cpp # <SK:Nexii> navmesh: air overlay
-    sknavannotator.cpp
-    sknavmarkobjects.cpp
-    sknavmesh.cpp
-    sknavoverlay.cpp
-    sknavpalette.cpp
     skroomprobes.cpp # <SK:Nexii> room probes: reflection probes over the rooms layer's spaces
-    sknavrooms.cpp
     skcensusavatarshape.cpp
     rlvcommon.cpp
     rlveffects.cpp
@@ -1906,17 +1897,9 @@ if(AL_BUILD_VIEWER)
     pipeline.h
     rlvactions.h
     rlvcommon.h
-    skcaptureexport.h # <SK:Nexii> navmesh: linkset and avatar capture export
+    skcaptureexport.h # <SK:Nexii> mini-map: linkset and avatar capture export
     skclusterprobes.h # <SK:Nexii> cluster probes: reflection probes over census clusters
-    skfloaternavannotate.h
-    skfloaternavmesh.h
-    sknavannotator.h
-    sknavmarkobjects.h
-    sknavmesh.h
-    sknavoverlay.h
-    sknavpalette.h
     skroomprobes.h # <SK:Nexii> room probes: reflection probes over the rooms layer's spaces
-    sknavrooms.h
     skcensusavatarshape.h
     rlvdefines.h
     rlveffects.h
@@ -1942,7 +1925,6 @@ if(AL_BUILD_VIEWER)
   # <SK:Nexii> SKNetMap mini-map sources
   list(
     APPEND viewer_SOURCES
-    sknavpolys.cpp
     skmapview.cpp
     skmapplan.cpp
     skmaplabels.cpp
@@ -1973,7 +1955,6 @@ if(AL_BUILD_VIEWER)
   )
   list(
     APPEND viewer_HEADERS
-    sknavpolys.h
     skmapview.h
     skmapplan.h
     skmappalette.h
@@ -2275,8 +2256,6 @@ if(AL_BUILD_VIEWER)
       ll::tinyexr
       ll::minizip
       ll::pugixml
-      ll::recast
-      sknavmesh
       ll::velopack
       ll::webrtc
   )
@@ -2599,11 +2578,6 @@ if(AL_BUILD_TESTS)
     alrender
   )
   set(test_project ${AL_VIEWER_BINARY_NAME})
-  # <SK:Nexii> The recastnavigation port's TUT test, kept registered until it is ported to Catch2
-  if(COMMAND al_add_test)
-    al_add_test(sknavrecast PROJECT ${test_project} LIBRARIES ll::recast)
-  endif()
-  # </SK:Nexii>
 
   get_property(newview_includes TARGET ${test_project} PROPERTY INTERFACE_INCLUDE_DIRECTORIES)
 
@@ -2667,25 +2641,7 @@ if(AL_BUILD_TESTS)
 
   # <SK:Nexii> Develop's TUT tests, kept registered until they are ported to Catch2: LLAddBuildTest.cmake (al_add_test) is gone upstream
   if(COMMAND al_add_test)
-    # The recastnavigation port links and runs: a floor, a block, a path round it.
-    al_add_test(sknavrecast PROJECT ${test_project} LIBRARIES ll::recast)
-    al_add_test(sknavpolys UNIT PROJECT ${test_project} LIBRARIES sknavmesh ${test_libs})
     al_add_test(skmapview UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
-    al_add_test(skmapgeom UNIT PROJECT ${test_project} SOURCES skmapview.cpp LIBRARIES sknavmesh ${test_libs})
-    al_add_test(
-      skmapraster
-      UNIT
-      PROJECT ${test_project}
-      SOURCES skmapgeom.cpp skmapview.cpp
-      LIBRARIES sknavmesh ${test_libs}
-    )
-    al_add_test(
-      skmapribbons
-      UNIT
-      PROJECT ${test_project}
-      SOURCES skmapgeom.cpp skmapview.cpp
-      LIBRARIES sknavmesh ${test_libs}
-    )
     al_add_test(skmaplabels UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
     al_add_test(skmapmarkers UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
     al_add_test(
@@ -2885,26 +2841,6 @@ if(AL_BUILD_TESTS)
       "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
       "AL_LSL_DEFINITIONS_DIR=\"${LSL_DEFINITIONS_DIR}\""
   )
-
-  # <SK:Nexii> The navmesh map's TUT tests, kept registered until they are ported to Catch2
-  if(COMMAND al_add_test)
-    al_add_test(skmapgeom UNIT PROJECT ${test_project} SOURCES skmapview.cpp LIBRARIES sknavmesh ${test_libs})
-    al_add_test(
-      skmapraster
-      UNIT
-      PROJECT ${test_project}
-      SOURCES skmapgeom.cpp skmapview.cpp
-      LIBRARIES sknavmesh ${test_libs}
-    )
-    al_add_test(
-      skmapribbons
-      UNIT
-      PROJECT ${test_project}
-      SOURCES skmapgeom.cpp skmapview.cpp
-      LIBRARIES sknavmesh ${test_libs}
-    )
-  endif()
-  # </SK:Nexii>
 
   # The selection outline's id and edge passes, the shadow samplers over a
   # map the pass has none of, and the post chain's passes held against what

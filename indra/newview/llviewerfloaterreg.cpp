@@ -48,8 +48,6 @@
 #include "alfloaterprofilelegacy.h"
 #include "alfloaterprogressview.h"
 #include "alfloaterscopes.h"
-#include "skfloaternavannotate.h" // <SK:Nexii> navmesh annotations
-#include "skfloaternavmesh.h" // <SK:Nexii> navmesh console
 #include "skfloatermap.h" // <SK:Nexii> SKNetMap mini-map
 #include "skfloatermapsettings.h" // <SK:Nexii> SKNetMap settings
 #include "skfloatertacticaloptions.h" // <SK:Nexii> tactical overview options
@@ -606,12 +604,6 @@ void LLViewerFloaterReg::registerFloaters()
     LLFloaterReg::add("scopes", "floater_scopes.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<ALFloaterScopes>);
     LLFloaterReg::add("sk_map_settings", "floater_sk_map_settings.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SKFloaterMapSettings>); // <SK:Nexii> SKNetMap settings
     LLFloaterReg::add("sk_tactical_options", "floater_sk_tactical_options.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SKFloaterTacticalOptions>); // <SK:Nexii> tactical overview options
-    // <SK:Nexii> navmesh console: overlay switches and status
-    LLFloaterReg::add("sk_navmesh", "floater_sk_navmesh.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SKFloaterNavMesh>);
-    // <SK:Nexii> navmesh annotations: marks placed in the world and their capture export
-    LLFloaterReg::add("sk_nav_annotate", "floater_sknav_annotate.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SKFloaterNavAnnotate>);
-    // </SK:Nexii>
-    // </SK:Nexii>
     LLFloaterReg::add("message_builder", "floater_message_builder.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloaterMessageBuilder>);
     LLFloaterReg::add("message_log", "floater_message_log.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloaterMessageLog>);
     LLFloaterReg::add("message_rewriter", "floater_message_rewriter.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloaterMessageRewriter>);

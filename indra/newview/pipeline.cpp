@@ -123,8 +123,6 @@
 #include "llvotree.h"
 #include "llvopartgroup.h"
 #include "llworld.h"
-#include "sknavannotator.h" // <SK:Nexii> navmesh annotations
-#include "sknavmesh.h" // <SK:Nexii> navmesh overlay
 #include "llcubemap.h"
 #include "llviewershadermgr.h"
 #include "skoutlinecapture.h" // <SK:Nexii> outline capture
@@ -1559,7 +1557,6 @@ void LLPipeline::releaseAllGLResources()
 
     SKOutlineCapture::cleanupGL(); // <SK:Nexii> outline capture: the atlas goes with the context and every capture renders again
     SKOverviewCapture::cleanupGL(); // <SK:Nexii> overview capture: its targets go with the context
-    SKNavMesh::cleanupGL(); // <SK:Nexii> navmesh overlay: its buffers go with the context
     releaseRenderTargets();
     releaseDepthDependents();
 
