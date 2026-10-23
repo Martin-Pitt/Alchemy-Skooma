@@ -394,6 +394,23 @@ void SKFloaterLocalChat::onFocusLost()
     LLFloater::onFocusLost();
 }
 
+bool SKFloaterLocalChat::applyRectControl()
+{
+    if (LLFloater::applyRectControl())
+    {
+        return true;
+    }
+    // First open: an MMO-sized box at the bottom left, above the toolbar.
+    constexpr S32 DEFAULT_W = 420;
+    constexpr S32 DEFAULT_H = 260;
+    constexpr S32 MARGIN = 10;
+    const LLRect snap = gFloaterView->getSnapRect();
+    reshape(DEFAULT_W, DEFAULT_H);
+    setOrigin(snap.mLeft + MARGIN, snap.mBottom + MARGIN);
+    storeRectControl();
+    return true;
+}
+
 void SKFloaterLocalChat::reshape(S32 width, S32 height, bool called_from_parent)
 {
     LLFloater::reshape(width, height, called_from_parent);
