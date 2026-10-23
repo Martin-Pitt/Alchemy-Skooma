@@ -5100,6 +5100,17 @@
             <key>Value</key>
             <real>8.0</real>
         </map>
+        <key>SkoomaLocalChatHoverGrace</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds the whole game-style local chat stays fully visible after the mouse leaves it or the input closes, before it fades together.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>5.0</real>
+        </map>
         <key>SkoomaLocalChatFadeTime</key>
         <map>
             <key>Comment</key>

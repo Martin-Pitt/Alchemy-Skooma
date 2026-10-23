@@ -138,6 +138,8 @@ private:
     S32 mLayoutStyle = -1;
     bool mLayoutDirty = true;
     bool mHovered = false;
+    bool mWasExpanded = false;
+    F64 mCollapsedAt = -1.0e9; // when the log last stopped being shown whole
     boost::signals2::connection mFontConnection;
 };
 
