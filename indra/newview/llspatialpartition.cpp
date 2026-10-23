@@ -4183,6 +4183,25 @@ void LLCullResult::pushDrawInfo(U32 type, LLDrawInfo* draw_info)
 }
 
 
+// <SK:Nexii> outline capture: drop draw infos from every render map, keeping the order of the rest.
+void LLCullResult::skEraseDrawInfos(const std::function<bool(const LLDrawInfo*)>& drop)
+{
+    for (U32 i = 0; i < LLRenderPass::NUM_RENDER_TYPES; i++)
+    {
+        U32 kept = 0;
+        for (U32 j = 0; j < mRenderMapSize[i]; ++j)
+        {
+            if (!drop(mRenderMap[i][j]))
+            {
+                mRenderMap[i][kept++] = mRenderMap[i][j];
+            }
+        }
+        mRenderMapSize[i] = kept;
+        mRenderMapEnd[i] = &(mRenderMap[i][kept]);
+    }
+}
+// </SK:Nexii>
+
 void LLCullResult::assertDrawMapsEmpty()
 {
     for (U32 i = 0; i < LLRenderPass::NUM_RENDER_TYPES; i++)

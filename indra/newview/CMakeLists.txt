@@ -2105,6 +2105,11 @@ if(AL_BUILD_VIEWER)
       ${viewer_RESOURCE_FILES}
   )
 
+  # <SK:Nexii> outline capture
+  list(APPEND viewer_SOURCES skoutlinecapture.cpp skoutlinepolicy.cpp skfloateroutlinecapture.cpp)
+  list(APPEND viewer_HEADERS skoutlinecapture.h skoutlinepolicy.h skfloateroutlinecapture.h)
+  # </SK:Nexii>
+
   add_executable(${AL_VIEWER_BINARY_NAME} WIN32 MACOSX_BUNDLE)
 
   target_sources(${AL_VIEWER_BINARY_NAME} PRIVATE ${viewer_SOURCES} ${viewer_HEADERS})
@@ -2467,8 +2472,15 @@ if(AL_BUILD_TESTS)
     llappearance
     llprimitive
     lllogin
+    alrender
   )
   set(test_project ${AL_VIEWER_BINARY_NAME})
+  # <SK:Nexii> outline capture's TUT test, kept registered until it is ported to Catch2
+  if(COMMAND al_add_test)
+    al_add_test(skoutlinepolicy UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
+  endif()
+  # </SK:Nexii>
+
   get_property(newview_includes TARGET ${test_project} PROPERTY INTERFACE_INCLUDE_DIRECTORIES)
 
   # What the tests take of the rest of the viewer, faked once. Objects, which
