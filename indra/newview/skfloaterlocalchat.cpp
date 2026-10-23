@@ -69,7 +69,8 @@ constexpr S32 PAD_X = 8;
 constexpr S32 PAD_Y = 5;
 constexpr S32 CARD_GAP = 4;
 constexpr S32 MINIMAL_GAP = 2;
-constexpr S32 DISC = 12;
+constexpr S32 ICON_PX = 28;        // card icon height; avatars are this wide, objects up to ICON_MAX_ASPECT times
+constexpr S32 ICON_MAX_ASPECT = 4;
 constexpr S32 DISC_GAP = 6;
 constexpr F64 GLYPH_CHECK_SECONDS = 0.5; // how often an object speaker's glyph is looked up
 constexpr F32 GLYPH_BACK_ALPHA = 0.25f;  // the square behind a glyph
@@ -607,8 +608,8 @@ void SKFloaterLocalChat::layout()
     mCards.clear();
 
     LLFontGL* font = LLViewerChat::getChatFont();
-    const S32 text_x = cards ? PAD_X + DISC + DISC_GAP : PAD_X;
-    const F32 wrap = (F32)llmax(16, width - text_x - PAD_X);
+    const F64 now = LLFrameTimer::getTotalSeconds();
+    F32 wrap = (F32)llmax(16, width - 2 * PAD_X);
 
     for (S32 m = 0; m < (S32)mMessages.size(); ++m)
     {
@@ -633,6 +634,9 @@ void SKFloaterLocalChat::layout()
             Card card;
             card.mFirstMessage = card.mLastMessage = m;
             card.mFirstRow = (S32)mRows.size();
+            card.mIconWidth = cards && !msg.mName.empty() ? iconWidth(msg, now) : 0;
+            card.mTextX = cards ? PAD_X + llmax(card.mIconWidth, ICON_PX) + DISC_GAP : PAD_X;
+            wrap = (F32)llmax(16, width - card.mTextX - PAD_X);
             mCards.push_back(card);
             if (cards && !msg.mName.empty())
             {
@@ -698,7 +702,18 @@ void SKFloaterLocalChat::layout()
                                                     : font->getWidthBytes(mMessages[row.mMessage].mBody, row.mBegin, row.mLength));
         }
         // A little slack for the bold name run, measured above in the regular face.
-        card.mWidth = llmin(width, text_x + widest + PAD_X + 2);
+        card.mWidth = llmin(width, card.mTextX + widest + PAD_X + 2);
+
+        // Tall enough for its icon.
+        if (card.mIconWidth > 0)
+        {
+            S32 height = -mRows[card.mLastRow].mGap;
+            for (S32 r = card.mFirstRow; r <= card.mLastRow; ++r)
+            {
+                height += mRows[r].height() + lineHeight(mRows[r]);
+            }
+            mRows[card.mLastRow].mPadBottom += llmax(0, ICON_PX + 2 * PAD_Y + 1 - height);
+        }
     }
 
     // Offsets from the bottom, newest first.
@@ -821,7 +836,6 @@ void SKFloaterLocalChat::draw()
         LLLocalClipRect clip(content);
         static LLUIImagePtr card_image = LLUI::getUIImage("Rounded_Square");
         static LLUIColor card_color = LLUIColorTable::instance().getColor("Black");
-        const S32 text_x = content.mLeft + (cards ? PAD_X + DISC + DISC_GAP : PAD_X);
         const LLFontGL::ShadowType shadow = cards ? LLFontGL::NO_SHADOW : LLFontGL::DROP_SHADOW_SOFT;
         const S32 base = content.mBottom - mScroll;
         const bool scrolled = mScroll > 0;
@@ -855,6 +869,7 @@ void SKFloaterLocalChat::draw()
             }
 
             const Message& first = mMessages[card.mFirstMessage];
+            const S32 text_x = content.mLeft + card.mTextX;
             if (cards)
             {
                 card_image->draw(content.mLeft, card_bottom, card.mWidth,card_top - card_bottom, card_color.get() % (CARD_ALPHA * alpha * edge(card_bottom, card_top)));
@@ -864,10 +879,10 @@ void SKFloaterLocalChat::draw()
                     gGL.getTextureSlot(0)->unbind();
                     const S32 disc_top = card_top - PAD_Y - 1;
                     LLColor4 disc = first.mNameColor;
-                    disc.mV[VALPHA] *= alpha * edge(disc_top - DISC, disc_top);
+                    disc.mV[VALPHA] *= alpha * edge(disc_top - ICON_PX, disc_top);
                     if (first.mSource == CHAT_SOURCE_OBJECT)
                     {
-                        drawObjectIcon(first, content.mLeft + PAD_X, disc_top, disc, now);
+                        drawObjectIcon(first, content.mLeft + PAD_X, disc_top, card.mIconWidth, disc, now);
                     }
                     else
                     {
@@ -960,7 +975,6 @@ std::string SKFloaterLocalChat::urlAt(S32 x, S32 y) const
     {
         return std::string();
     }
-    const S32 text_x = contentRect().mLeft + (mLayoutStyle != STYLE_MINIMAL ? PAD_X + DISC + DISC_GAP : PAD_X);
     const S32 base = contentRect().mBottom - mScroll;
     const bool full = expanded();
     const F64 now = LLFrameTimer::getTotalSeconds();
@@ -972,6 +986,7 @@ std::string SKFloaterLocalChat::urlAt(S32 x, S32 y) const
             continue;
         }
         const Card& card = mCards[row.mCard];
+        const S32 text_x = contentRect().mLeft + card.mTextX;
         if (!full && cardAlpha(card, now) <= 0.f)
         {
             return std::string();
@@ -1056,6 +1071,33 @@ bool SKFloaterLocalChat::handleScrollWheel(S32 x, S32 y, LLScrollDelta delta)
     return true;
 }
 
+namespace
+{
+// Whether an avatar sits on the root or one of its prims, as the outline capture finds a vehicle's crew.
+bool hasSeatedAvatar(const LLViewerObject* root)
+{
+    for (const LLViewerObject* child : root->getChildren())
+    {
+        if (!child)
+        {
+            continue;
+        }
+        if (child->isAvatar())
+        {
+            return true;
+        }
+        for (const LLViewerObject* sitter : child->getChildren())
+        {
+            if (sitter && sitter->isAvatar())
+            {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+} // namespace
+
 const SKOutlineLayer* SKFloaterLocalChat::objectGlyph(const LLUUID& speaker, F64 now)
 {
     if (speaker.isNull())
@@ -1076,7 +1118,9 @@ const SKOutlineLayer* SKFloaterLocalChat::objectGlyph(const LLUUID& speaker, F64
         LLViewerObject* root = obj && !obj->isDead() ? obj->getRootEdit() : nullptr;
         if (root && !root->isAvatar())
         {
-            const SKOutlineGlyph* glyph = SKOutlineCapture::glyphFor(root->getID(), SKOutlinePolicy::View::SIDE);
+            // A vehicle (someone seated on it) reads best from above, anything else from the side.
+            const SKOutlinePolicy::View view = hasSeatedAvatar(root) ? SKOutlinePolicy::View::PLAN : SKOutlinePolicy::View::SIDE;
+            const SKOutlineGlyph* glyph = SKOutlineCapture::glyphFor(root->getID(), view);
             if (glyph && !glyph->layers.empty() && glyph->layers[0].texture)
             {
                 g.mLayer = glyph->layers[0];
@@ -1087,26 +1131,51 @@ const SKOutlineLayer* SKFloaterLocalChat::objectGlyph(const LLUUID& speaker, F64
     return g.mShown ? &g.mLayer : nullptr;
 }
 
-void SKFloaterLocalChat::drawObjectIcon(const Message& first, S32 left, S32 top, const LLColor4& color, F64 now)
+S32 SKFloaterLocalChat::iconWidth(const Message& first, F64 now)
 {
+    if (first.mSource != CHAT_SOURCE_OBJECT)
+    {
+        return ICON_PX;
+    }
+    S32 width = ICON_PX;
+    if (const SKOutlineLayer* layer = objectGlyph(first.mFromID, now))
+    {
+        const F32 w = layer->x1 - layer->x0;
+        const F32 h = layer->y1 - layer->y0;
+        if (w > 0.f && h > 0.f)
+        {
+            width = llclamp((S32)std::lround((F32)ICON_PX * w / h), ICON_PX, ICON_PX * ICON_MAX_ASPECT);
+        }
+    }
+    return width;
+}
+
+void SKFloaterLocalChat::drawObjectIcon(const Message& first, S32 left, S32 top, S32 width, const LLColor4& color, F64 now)
+{
+    // A glyph that came, went or changed shape since the card was laid out: lay out again next frame.
+    if (iconWidth(first, now) != width)
+    {
+        invalidateLayout();
+    }
     const SKOutlineLayer* layer = objectGlyph(first.mFromID, now);
     const F32 w = layer ? layer->x1 - layer->x0 : 0.f;
     const F32 h = layer ? layer->y1 - layer->y0 : 0.f;
     if (w <= 0.f || h <= 0.f)
     {
-        gl_rect_2d(left, top, left + DISC, top - DISC, color);
+        gl_rect_2d(left, top, left + ICON_PX, top - ICON_PX, color);
         return;
     }
 
-    // The silhouette in the speaker's colour over a dimmed square, fitted to the square with its aspect kept.
+    // The silhouette in the speaker's colour over a dimmed box of the card's icon size, fitted with its aspect kept.
+    const S32 box = llmax(width, ICON_PX);
     LLColor4 back = color;
     back.mV[VALPHA] *= GLYPH_BACK_ALPHA;
-    gl_rect_2d(left, top, left + DISC, top - DISC, back);
-    const F32 scale = (F32)DISC / llmax(w, h);
+    gl_rect_2d(left, top, left + box, top - ICON_PX, back);
+    const F32 scale = llmin((F32)box / w, (F32)ICON_PX / h);
     const F32 gw = w * scale;
     const F32 gh = h * scale;
-    const F32 x0 = (F32)left + ((F32)DISC - gw) * 0.5f;
-    const F32 y0 = (F32)(top - DISC) + ((F32)DISC - gh) * 0.5f;
+    const F32 x0 = (F32)left + ((F32)box - gw) * 0.5f;
+    const F32 y0 = (F32)(top - ICON_PX) + ((F32)ICON_PX - gh) * 0.5f;
     gGL.getTextureSlot(0)->bindManual(ALTextureSlot::TT_TEXTURE, layer->texture);
     gGL.color4fv(color.mV);
     gGL.begin(LLRender::TRIANGLE_STRIP);
@@ -1124,9 +1193,9 @@ void SKFloaterLocalChat::drawObjectIcon(const Message& first, S32 left, S32 top,
 
 void SKFloaterLocalChat::drawAvatarIcon(const Message& first, S32 left, S32 top, const LLColor4& color)
 {
-    const F32 cx = (F32)left + DISC * 0.5f;
-    const F32 cy = (F32)top - DISC * 0.5f;
-    const F32 radius = DISC * 0.5f;
+    const F32 cx = (F32)left + ICON_PX * 0.5f;
+    const F32 cy = (F32)top - ICON_PX * 0.5f;
+    const F32 radius = ICON_PX * 0.5f;
     LLViewerFetchedTexture* tex = nullptr;
     if (first.mSource == CHAT_SOURCE_AGENT && first.mFromID.notNull())
     {
@@ -1152,7 +1221,7 @@ void SKFloaterLocalChat::drawAvatarIcon(const Message& first, S32 left, S32 top,
     }
     if (tex)
     {
-        tex->addTextureStats((F32)(DISC * DISC * 4));
+        tex->addTextureStats((F32)(ICON_PX * ICON_PX * 4));
     }
     if (!tex || !tex->hasGLTexture())
     {

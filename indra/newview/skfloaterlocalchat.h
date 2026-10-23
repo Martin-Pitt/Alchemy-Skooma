@@ -116,6 +116,8 @@ private:
         S32 mFirstRow = 0;
         S32 mLastRow = 0;
         S32 mWidth = 0;     // the bubble, shrink-wrapped to its widest line
+        S32 mIconWidth = 0; // the speaker's icon, 0 for none
+        S32 mTextX = 0;     // where the text column starts, from the content's left
     };
 
     void backfill(bool skip_last);
@@ -135,7 +137,9 @@ private:
     void drawRowText(const Row& row, S32 x, S32 y, F32 alpha, LLFontGL::ShadowType shadow) const;
     /// An object speaker's side-view glyph, null until the capture has one.
     const SKOutlineLayer* objectGlyph(const LLUUID& speaker, F64 now);
-    void drawObjectIcon(const Message& first, S32 left, S32 top, const LLColor4& color, F64 now);
+    /// An icon's width at the card icon height: an object's glyph keeps its aspect, everything else is square.
+    S32 iconWidth(const Message& first, F64 now);
+    void drawObjectIcon(const Message& first, S32 left, S32 top, S32 width, const LLColor4& color, F64 now);
     void drawAvatarIcon(const Message& first, S32 left, S32 top, const LLColor4& color);
     void onStyleMenu(const LLSD& param);
     bool onStyleCheck(const LLSD& param) const;
