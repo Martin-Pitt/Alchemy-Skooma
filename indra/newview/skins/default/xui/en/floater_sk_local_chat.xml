@@ -18,7 +18,7 @@
  title=""
  single_instance="true"
  save_rect="true"
- width="480">
+ width="600">
     <string name="jump_to_present">Jump to present ↓</string>
     <string name="new_messages">[COUNT] new messages ↓</string>
     <chat_editor
