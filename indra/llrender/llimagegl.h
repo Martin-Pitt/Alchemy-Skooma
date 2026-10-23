@@ -249,6 +249,9 @@ public:
     // callers uploading into a raw GL texture name (e.g. llvoavatar's
     // morph-mask upload) call this themselves before/after binding.
     static void applySwizzleForDeprecatedFormat(ALTextureSlot::eTextureType type, U32 original_format);
+    // <SK:Nexii> outline capture: a swizzle for any texture, not only the deprecated formats
+    static void setSwizzle(ALTextureSlot::eTextureType type, U32 r, U32 g, U32 b, U32 a);
+    // </SK:Nexii>
 
     bool createGLTexture() ;
     bool createGLTexture(S32 discard_level, const LLImageRaw* imageraw, S32 usename = 0, bool to_create = true,

@@ -2924,6 +2924,38 @@ void LLGLSLShader::uniform1i(const LLStaticHashedString& uniform, GLint v)
         glUniform1i(location, v);
     }
 }
+
+// <SK:Nexii> hashed uniform setters for Skooma programs whose names are not reserved
+void LLGLSLShader::uniform1f(const LLStaticHashedString& uniform, GLfloat v)
+{
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_SHADER;
+    GLint location = getUniformLocation(uniform);
+    if (location >= 0 && mUniformCache.changed(location, UniformCache::Kind::Float, uniform_bits(v)))
+    {
+        uploadFloat(location, v);
+    }
+}
+
+void LLGLSLShader::uniform4iv(const LLStaticHashedString& uniform, U32 count, const GLint* v)
+{
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_SHADER;
+    GLint location = getUniformLocation(uniform);
+    if (location < 0)
+    {
+        return;
+    }
+    if (count != 1)
+    {
+        mUniformCache.forget(location);
+        glUniform4iv(location, count, v);
+    }
+    else if (mUniformCache.changed(location, UniformCache::Kind::IVec4,
+                                   uniform_bits(v[0]), uniform_bits(v[1]), uniform_bits(v[2]), uniform_bits(v[3])))
+    {
+        glUniform4iv(location, 1, v);
+    }
+}
+// </SK:Nexii>
 void LLGLSLShader::vertexAttrib4f(U32 index, GLfloat x, GLfloat y, GLfloat z, GLfloat w)
 {
     if (index < mAttribute.size() && mAttribute[index] > 0)

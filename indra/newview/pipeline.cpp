@@ -257,6 +257,7 @@ const F32 BACKLIGHT_DAY_MAGNITUDE_OBJECT = 0.1f;
 const F32 BACKLIGHT_NIGHT_MAGNITUDE_OBJECT = 0.08f;
 const F32 ALPHA_BLEND_CUTOFF = 0.598f;
 static F32 sk_coverage_cutoff = 0.02f; // <SK:Nexii> outline capture: any rendered translucent surface covers
+static const LLStaticHashedString sk_coverage_cutoff_name("sk_coverage_cutoff"); // <SK:Nexii> outline capture: the shadow alpha programs' cutoff uniform
 static const std::function<bool(const LLDrawInfo*)>* sk_coverage_skip = nullptr; // <SK:Nexii> outline capture: draw infos a glyph leaves out
 const F32 DEFERRED_LIGHT_FALLOFF = 0.5f;
 const U32 DEFERRED_VB_MASK = LLVertexBuffer::MAP_VERTEX | LLVertexBuffer::MAP_TEXCOORD0 | LLVertexBuffer::MAP_TEXCOORD1;
@@ -8045,6 +8046,7 @@ void LLPipeline::renderAlphaObjects(bool rigged)
                 bound->uniform1f(LLShaderMgr::DEFERRED_SHADOW_STIPPLE, 1.f); // blended
             }
             bound->setMinimumAlpha(sSKCoverageRender ? sk_coverage_cutoff : ALPHA_BLEND_CUTOFF); // <SK:Nexii> outline capture
+            bound->uniform1f(sk_coverage_cutoff_name, sSKCoverageRender ? sk_coverage_cutoff : 0.f); // <SK:Nexii> outline capture: 0 keeps the stripes and floor, the cutoff replaces both
         }
     };
 
@@ -13026,6 +13028,7 @@ void LLPipeline::drawShadow(const LLMatrix4a& view, const LLMatrix4a& proj, LLCa
                 // Masked: opaque wherever it draws, so solid where it casts. The blended pass below
                 // shares the program and stipples.
                 LLGLSLShader::sCurBoundShaderPtr->uniform1f(LLShaderMgr::DEFERRED_SHADOW_STIPPLE, 0.f);
+                LLGLSLShader::sCurBoundShaderPtr->uniform1f(sk_coverage_cutoff_name, sSKCoverageRender ? sk_coverage_cutoff : 0.f); // <SK:Nexii> outline capture: 0 keeps the stripes and floor, the cutoff replaces both
                 renderMaskedObjects(LLRenderPass::PASS_ALPHA_MASK, true, true, rigged);
             }
 
@@ -13042,6 +13045,7 @@ void LLPipeline::drawShadow(const LLMatrix4a& view, const LLMatrix4a& proj, LLCa
                 LLGLSLShader::sCurBoundShaderPtr->uniform1i(LLShaderMgr::SUN_UP_FACTOR, sun_up);
                 LLGLSLShader::sCurBoundShaderPtr->uniform1f(LLShaderMgr::DEFERRED_SHADOW_TARGET_WIDTH, (float)target_width);
                 LLGLSLShader::sCurBoundShaderPtr->uniform1f(LLShaderMgr::DEFERRED_SHADOW_STIPPLE, 0.f); // masked
+                LLGLSLShader::sCurBoundShaderPtr->uniform1f(sk_coverage_cutoff_name, sSKCoverageRender ? sk_coverage_cutoff : 0.f); // <SK:Nexii> outline capture: 0 keeps the stripes and floor, the cutoff replaces both
                 renderFullbrightMaskedObjects(LLRenderPass::PASS_FULLBRIGHT_ALPHA_MASK, true, true, rigged);
             }
 
@@ -13153,33 +13157,6 @@ void LLPipeline::drawShadow(const LLMatrix4a& view, const LLMatrix4a& proj, LLCa
 }
 
 // <SK:Nexii> outline capture: renderShadow's depth-only passes over one bridge, culled and sorted with the capture camera.
-namespace
-{
-    // The coverage cutoff on the shadow alpha programs: 0 keeps their stripes and floor, above 0 replaces both.
-    void skSetCoverageCutoff(F32 cutoff)
-    {
-        for (LLGLSLShader* base : { &gDeferredShadowAlphaMaskProgram, &gDeferredShadowFullbrightAlphaMaskProgram,
-                                    &gDeferredShadowGLTFAlphaBlendProgram })
-        {
-            base->forEachVariant(
-                [cutoff](LLGLSLShader& shader)
-                {
-                    if (!shader.mProgramObject)
-                    {
-                        return;
-                    }
-                    const GLint loc = glGetUniformLocation(shader.mProgramObject, "sk_coverage_cutoff");
-                    if (loc >= 0)
-                    {
-                        shader.bind();
-                        glUniform1f(loc, cutoff);
-                    }
-                });
-        }
-        LLGLSLShader::unbind();
-    }
-}
-
 U32 LLPipeline::skRenderOutlineCoverage(LLSpatialBridge* bridge, const LLMatrix4a& view, const LLMatrix4a& proj, LLCamera& camera,
                                         F32 alpha_cutoff, const std::function<bool(const LLDrawInfo*)>& skip)
 {
@@ -13198,7 +13175,6 @@ U32 LLPipeline::skRenderOutlineCoverage(LLSpatialBridge* bridge, const LLMatrix4
         const std::function<bool(const LLDrawInfo*)>* coverage_skip = sk_coverage_skip;
         ~Restore()
         {
-            skSetCoverageCutoff(0.f);
             sSKCoverageRender = coverage;
             sk_coverage_skip = coverage_skip;
             sImpostorRender = impostor;
@@ -13223,7 +13199,6 @@ U32 LLPipeline::skRenderOutlineCoverage(LLSpatialBridge* bridge, const LLMatrix4
     sSKCoverageRender = true;
     sk_coverage_skip = &skip;
     sk_coverage_cutoff = llclamp(alpha_cutoff, 0.001f, 1.f);
-    skSetCoverageCutoff(sk_coverage_cutoff);
     LLViewerCamera::setCurrent(camera);
 
     static LLCullResult result;
