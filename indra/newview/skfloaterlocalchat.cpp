@@ -81,13 +81,12 @@ constexpr S32 ICON_PX = 28;        // card icon height; avatars are this wide, o
 constexpr S32 ICON_MAX_ASPECT = 4;
 constexpr S32 DISC_GAP = 6;
 constexpr F64 GLYPH_CHECK_SECONDS = 0.5; // how often an object speaker's glyph is looked up
-constexpr F32 GLYPH_BACK_ALPHA = 0.25f;  // the square behind a glyph
 constexpr S32 INPUT_HEIGHT = 24;
 constexpr S32 INPUT_GAP = 4;
 constexpr S32 INSET = 8; // inside the backdrop's border
 constexpr F32 EDGE_FADE = 24.f; // the scroll mask at the top, and at the bottom while scrolled
 constexpr F32 CARD_ALPHA = 0.6f;
-constexpr S32 TIME_GAP = 5;     // between the name and its timestamp
+constexpr S32 TIME_GAP = 10;    // between the name and its timestamp
 constexpr F32 TIME_ALPHA = 0.45f;
 constexpr S32 EMBED_MAX_WIDTH = 360;
 constexpr S32 EMBED_MIN_WIDTH = 120;
@@ -110,6 +109,25 @@ LLFontGL* name_font()
 LLFontGL* time_font()
 {
     return LLFontGL::getFontSansSerifSmall();
+}
+
+// The width a bold run draws at: the bold face's, plus the synthesized bold's second pass.
+S32 bold_width(const LLFontGL* font, std::string_view text)
+{
+    return text.empty() ? 0 : font->faceFor(LLFontGL::BOLD)->getWidth(text) + 1;
+}
+
+// Set while the messages draw into the mask's target.
+bool sDrawingMask = false;
+
+// Into the mask, alpha has to accumulate as coverage. The fonts reset the blend to BT_ALPHA, which squares a shape's
+// alpha in the target, so every shape drawn after text asks for this again.
+void shape_blend()
+{
+    if (sDrawingMask)
+    {
+        gGL.blendFunc(LLRender::BF_SOURCE_ALPHA, LLRender::BF_ONE_MINUS_SOURCE_ALPHA, LLRender::BF_ONE, LLRender::BF_ONE_MINUS_SOURCE_ALPHA);
+    }
 }
 
 LLFontGL* embed_font()
@@ -690,11 +708,17 @@ void SKFloaterLocalChat::layout()
     const F64 now = LLFrameTimer::getTotalSeconds();
     const S32 pad_x = cards ? CARD_PAD_X : PAD_X;
     F32 wrap = (F32)llmax(16, width - 2 * pad_x);
+    // How much wider a minimal line's bold name draws than the regular face measures it.
+    auto bold_extra = [font](const Message& msg)
+    {
+        const std::string_view name = std::string_view(msg.mBody).substr(0, msg.mNameLen);
+        return llmax(0, bold_width(font, name) - font->getWidth(name));
+    };
 
     for (S32 m = 0; m < (S32)mMessages.size(); ++m)
     {
         Message& msg = mMessages[m];
-        msg.mNameWidth = msg.mName.empty() ? 0 : name_font()->getWidth(msg.mName);
+        msg.mNameWidth = bold_width(name_font(), msg.mName);
         msg.mTimeWidth = msg.mName.empty() || msg.mTime.empty() ? 0 : time_font()->getWidth(msg.mTime) + TIME_GAP;
         // Cards gather one speaker's run of messages; a minimal line stands alone.
         bool join = false;
@@ -744,7 +768,7 @@ void SKFloaterLocalChat::layout()
                 line_end = (S32)nl;
             }
             // A minimal line's timestamp sits in its first row, after the name.
-            const F32 row_wrap = pos == 0 && msg.mNameLen > 0 ? llmax(16.f, wrap - (F32)msg.mTimeWidth) : wrap;
+            const F32 row_wrap = pos == 0 && msg.mNameLen > 0 ? llmax(16.f, wrap - (F32)(msg.mTimeWidth + bold_extra(msg))) : wrap;
             S32 count = font->maxDrawableBytes(body.substr(pos), row_wrap, line_end - pos, LLFontGL::WORD_BOUNDARY_IF_POSSIBLE);
             if (count <= 0 && pos < line_end)
             {
@@ -809,12 +833,11 @@ void SKFloaterLocalChat::layout()
             else
             {
                 const Message& msg = mMessages[row.mMessage];
-                const S32 time = row.mBegin == 0 && msg.mNameLen > 0 ? msg.mTimeWidth : 0;
-                widest = llmax(widest, font->getWidthBytes(msg.mBody, row.mBegin, row.mLength) + time);
+                const S32 lead = row.mBegin == 0 && msg.mNameLen > 0 ? msg.mTimeWidth + bold_extra(msg) : 0;
+                widest = llmax(widest, font->getWidthBytes(msg.mBody, row.mBegin, row.mLength) + lead);
             }
         }
-        // A little slack for the bold name run, measured above in the regular face.
-        card.mWidth = llmin(width, card.mTextX + widest + pad_x + 2);
+        card.mWidth = llmin(width, card.mTextX + widest + pad_x);
 
         // Tall enough for its icon.
         if (card.mIconWidth > 0)
@@ -937,6 +960,7 @@ void SKFloaterLocalChat::drawEmbed(const Message& msg, S32 x, S32 y, F32 alpha) 
     const SKChatEmbed& embed = *msg.mEmbed;
     const S32 w = msg.mEmbedWidth;
     const S32 h = embed_height();
+    shape_blend();
     card_image->draw(x, y, w, h, card_color.get() % (0.45f * alpha));
 
     gGL.getTextureSlot(0)->unbind();
@@ -1005,6 +1029,7 @@ void SKFloaterLocalChat::drawMessages(const LLRect& content, F64 now, bool full,
         const S32 text_x = content.mLeft + card.mTextX;
         if (cards)
         {
+            shape_blend();
             card_image->draw(content.mLeft, card_bottom, card.mWidth, card_top - card_bottom, card_color.get() % (CARD_ALPHA * alpha));
             if (!first.mName.empty())
             {
@@ -1128,7 +1153,10 @@ void SKFloaterLocalChat::drawMaskedMessages(const LLRect& content, F64 now, bool
         mMaskKey = key;
         LLGLDisable scissor(GL_SCISSOR_TEST);
         mMask.bindTarget();
+        const LLColor4 clear_color = gGL.getClearColor();
+        gGL.setClearColor(LLColor4::transparent);
         mMask.clear(GL_COLOR_BUFFER_BIT);
+        gGL.setClearColor(clear_color);
         gGL.matrixMode(LLRender::MM_PROJECTION);
         gGL.pushMatrix();
         gGL.loadIdentity();
@@ -1141,9 +1169,11 @@ void SKFloaterLocalChat::drawMaskedMessages(const LLRect& content, F64 now, bool
         gGL.scaleUI(scale.mV[VX], scale.mV[VY], 1.f);
         LLUI::translate((F32)-content.mLeft, (F32)-content.mBottom);
         // Premultiplied: colour blends over, alpha accumulates as coverage.
-        gGL.blendFunc(LLRender::BF_SOURCE_ALPHA, LLRender::BF_ONE_MINUS_SOURCE_ALPHA, LLRender::BF_ONE, LLRender::BF_ONE_MINUS_SOURCE_ALPHA);
+        sDrawingMask = true;
+        shape_blend();
         drawMessages(content, now, full, cards);
         gGL.flush();
+        sDrawingMask = false;
         gGL.setSceneBlendType(LLRender::BT_ALPHA);
         LLUI::popMatrix();
         gGL.matrixMode(LLRender::MM_PROJECTION);
@@ -1311,7 +1341,7 @@ std::string SKFloaterLocalChat::urlAt(S32 x, S32 y) const
         if (row.mMessage < 0)
         {
             const Message& first = mMessages[card.mFirstMessage];
-            return x < text_x + name_font()->getWidth(first.mName) ? first.mSenderUrl : std::string();
+            return x < text_x + first.mNameWidth ? first.mSenderUrl : std::string();
         }
         if (row.mEmbed)
         {
@@ -1502,11 +1532,8 @@ void SKFloaterLocalChat::drawObjectIcon(const Message& first, S32 left, S32 top,
         return;
     }
 
-    // The silhouette in the speaker's colour over a dimmed box of the card's icon size, fitted with its aspect kept.
+    // The silhouette alone in the speaker's colour, fitted to the card's icon size with its aspect kept.
     const S32 box = llmax(width, ICON_PX);
-    LLColor4 back = color;
-    back.mV[VALPHA] *= GLYPH_BACK_ALPHA;
-    gl_rect_2d(left, top, left + box, top - ICON_PX, back);
     const F32 scale = llmin((F32)box / w, (F32)ICON_PX / h);
     const F32 gw = w * scale;
     const F32 gh = h * scale;
