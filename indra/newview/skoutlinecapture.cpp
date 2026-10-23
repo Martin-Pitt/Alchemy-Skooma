@@ -36,6 +36,7 @@
 #include "llgltfmaterial.h"
 #include "llglslshader.h"
 #include "llglstates.h"
+#include "llimagegl.h"
 #include "llimagepng.h"
 #include "llmaterial.h"
 #include "llmeshrepository.h"
@@ -629,8 +630,7 @@ bool SKOutlineCapture::ensureGL()
     {
         // Every channel reads the coverage, so a consumer can draw it as a white mask or an alpha.
         gGL.getTextureSlot(0)->bindManual(ALTextureSlot::TT_TEXTURE, sAtlas.getTexture());
-        const GLint swizzle[4] = { GL_RED, GL_RED, GL_RED, GL_RED };
-        glTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_RGBA, swizzle);
+        LLImageGL::setSwizzle(ALTextureSlot::TT_TEXTURE, GL_RED, GL_RED, GL_RED, GL_RED);
         gGL.getTextureSlot(0)->unbind();
 
         // A fresh atlas holds garbage outside the slots written, and the resolve writes whole slots, so clear it once.

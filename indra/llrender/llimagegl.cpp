@@ -2878,7 +2878,7 @@ void LLImageGL::applySwizzleForDeprecatedFormat(ALTextureSlot::eTextureType type
     // identify the format they originally asked for and let this routine
     // pick the matching mask. Keeps GL_TEXTURE_SWIZZLE_RGBA and the
     // mask-component constants out of the call sites.
-    LLGLint mask[4];
+    U32 mask[4]; // <SK:Nexii> outline capture: set through setSwizzle
     switch (original_format)
     {
     case GL_ALPHA:
@@ -2896,8 +2896,16 @@ void LLImageGL::applySwizzleForDeprecatedFormat(ALTextureSlot::eTextureType type
     default:
         return;  // not a format we re-express via swizzle
     }
+    setSwizzle(type, mask[0], mask[1], mask[2], mask[3]); // <SK:Nexii> outline capture: one swizzle setter
+}
+
+// <SK:Nexii> outline capture: a swizzle for any texture, not only the deprecated formats
+void LLImageGL::setSwizzle(ALTextureSlot::eTextureType type, U32 r, U32 g, U32 b, U32 a)
+{
+    const LLGLint mask[4] = { (LLGLint)r, (LLGLint)g, (LLGLint)b, (LLGLint)a };
     glTexParameteriv(ALTextureSlot::getInternalType(type), GL_TEXTURE_SWIZZLE_RGBA, mask);
 }
+// </SK:Nexii>
 
 // The format of an image without an explicit one, from its component count. Worked out
 // once a count: beginUpload does it on the main thread before an upload is posted, so the
