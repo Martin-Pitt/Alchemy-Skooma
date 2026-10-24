@@ -371,7 +371,7 @@ void SKOverviewCapture::onFrame()
 {
     updateCapsLockCapture();
     syncTactical();
-    // The world census runs slowly only while the overview hides the world (navmesh freshness matters little then),
+    // The world census runs slowly only while the overview hides the world (census freshness matters little then),
     // and back at its normal cadence the frame it closes.
     if (SKWorldCensus::instanceExists())
     {
@@ -774,7 +774,7 @@ void SKOverviewCapture::readSpans()
 void SKOverviewCapture::cutHeights(const LLVector3d& at, F32 fallback_z, F32& floor_z, F32& cut_z) const
 {
     static LLCachedControl<F32> cut(gSavedSettings, "SKOverviewCutHeight", 2.5f);
-    // The avatar's feet are the floor; the navmesh only refines it, since its nearest mesh can be the ground under a street.
+    // The avatar's feet are the floor; the air cells only refine it, since their nearest floor can be the ground under a street.
     F32 feet = fallback_z;
     if (isAgentAvatarValid())
     {

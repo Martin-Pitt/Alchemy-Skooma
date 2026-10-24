@@ -43,7 +43,7 @@ namespace skmap
     constexpr F64 ANALYSIS_REACH_M = 256.0; ///< half the widest span along the short side
     constexpr F64 ANALYSIS_JOIN_M = 256.0;  ///< the agent shares the box only while this close to the map centre in plan
 
-    /// The box the map holds the navmesh over: the agent and the map centre, each with the widest
+    /// The box the map holds the census and air over: the agent and the map centre, each with the widest
     /// view and a margin around it, snapped outward to 64 m. It depends on the two positions and
     /// the widget's aspect only, never on the zoom.
     void analysisBox(const LLVector3d& agent, const LLVector3d& centre, F32 long_side_px, F32 short_side_px, LLVector3d& min,

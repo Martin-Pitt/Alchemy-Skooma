@@ -5980,7 +5980,7 @@
         <key>SKMapRecord</key>
         <map>
             <key>Comment</key>
-            <string>Record why the mini-map and the navmesh update to a JSON lines file while on.</string>
+            <string>Record why the mini-map and the census and air update to a JSON lines file while on.</string>
             <key>Persist</key>
             <integer>0</integer>
             <key>Type</key>
@@ -6101,7 +6101,7 @@
         <key>SKOverviewCutHeight</key>
         <map>
             <key>Comment</key>
-            <string>Metres above the navmesh floor under the agent (or above the agent where there is no mesh) where the overview cuts the world, so ceilings and roofs above do not hide the floor.</string>
+            <string>Metres above the air cells' floor under the agent (or above the agent's feet where they have none) where the overview cuts the world, so ceilings and roofs above do not hide the floor.</string>
             <key>Persist</key>
             <integer>1</integer>
             <key>Type</key>
@@ -6490,7 +6490,7 @@
         <key>SKMapLayerFloorplan</key>
         <map>
             <key>Comment</key>
-            <string>Draw the navmesh floorplan on the mini-map.</string>
+            <string>Draw the census floorplan on the mini-map.</string>
             <key>Persist</key>
             <integer>1</integer>
             <key>Type</key>
