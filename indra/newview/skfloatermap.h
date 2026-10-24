@@ -45,6 +45,8 @@ public:
     void reshape(S32 width, S32 height, bool called_from_parent = true) override;
     void onMouseEnter(S32 x, S32 y, MASK mask) override;
     void onMouseLeave(S32 x, S32 y, MASK mask) override;
+    /// Locked, only the map's square and the visible buttons take the mouse.
+    bool hitsContentAt(S32 x, S32 y) override;
 
     /// The one map, which the Mouselook map also draws through.
     SKNetMap* map() const { return mMap; }

@@ -144,7 +144,7 @@ bool SKFloaterMap::chromeWanted() const
 void SKFloaterMap::draw()
 {
     // In mouselook the map must not take the mouse from the world.
-    const bool opaque = !gAgentCamera.cameraMouselook();
+    const bool opaque = !gAgentCamera.cameraMouselook() && !isLocked();
     setMouseOpaque(opaque);
     getDragHandle()->setMouseOpaque(opaque);
     // The Mouselook map shows this map in its place; the floater stays open, undrawn and deaf to the mouse.
@@ -174,11 +174,12 @@ void SKFloaterMap::draw()
     }
     if (mMap)
     {
-        mMap->setChrome(chrome);
+        // Locked, the buttons still show on hover so it can be unlocked, but the tint, frame and grip do not.
+        mMap->setChrome(chrome && !isLocked());
     }
     if (mCog)
     {
-        mCog->setVisible(chrome && !isMinimized());
+        mCog->setVisible(chrome && !isMinimized() && !isLocked());
     }
     LLFloater::draw();
 }
@@ -197,4 +198,22 @@ bool SKFloaterMap::handleDoubleClick(S32 x, S32 y, MASK mask)
         return true;
     }
     return LLFloater::handleDoubleClick(x, y, mask);
+}
+
+bool SKFloaterMap::hitsContentAt(S32 x, S32 y)
+{
+    // The visible buttons first, then the map's own square; the base test would count the full-size map everywhere.
+    for (S32 i = 0; i < BUTTON_COUNT; ++i)
+    {
+        const LLButton* button = mButtons[i];
+        if (button && button->getVisible() && button->getRect().pointInRect(x, y))
+        {
+            return true;
+        }
+    }
+    if (mCog && mCog->getVisible() && mCog->getRect().pointInRect(x, y))
+    {
+        return true;
+    }
+    return mMap && mMap->getVisible() && mMap->getRect().pointInRect(x, y);
 }
