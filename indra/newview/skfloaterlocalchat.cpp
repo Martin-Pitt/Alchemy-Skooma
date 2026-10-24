@@ -1286,7 +1286,8 @@ void SKFloaterLocalChat::drawMaskedMessages(const LLRect& content, F64 now, bool
         }
     }
 
-    if (!in_band)
+    static LLCachedControl<bool> mask_edges(gSavedSettings, "SkoomaLocalChatMask", true);
+    if (!in_band || !mask_edges)
     {
         LLLocalClipRect clip(content);
         drawMessages(content, now, full, cards);
@@ -1315,6 +1316,10 @@ void SKFloaterLocalChat::drawMaskedMessages(const LLRect& content, F64 now, bool
         mMaskKey = key;
         LLGLDisable scissor(GL_SCISSOR_TEST);
         mMask.bindTarget();
+        // The UI may draw with alpha writes off; the mask needs the coverage the shapes leave in alpha.
+        bool color_mask[4];
+        gGL.getColorMask(color_mask);
+        gGL.setColorMask(true, true);
         const LLColor4 clear_color = gGL.getClearColor();
         gGL.setClearColor(LLColor4::transparent);
         mMask.clear(GL_COLOR_BUFFER_BIT);
@@ -1342,6 +1347,7 @@ void SKFloaterLocalChat::drawMaskedMessages(const LLRect& content, F64 now, bool
         gGL.popMatrix();
         gGL.matrixMode(LLRender::MM_MODELVIEW);
         gGL.popMatrix();
+        gGL.setColorMask(color_mask[0], color_mask[1], color_mask[2], color_mask[3]);
         mMask.flush();
     }
 
