@@ -236,9 +236,6 @@ public:
     void            setAllowChangeToFollow(bool focus)  { mAllowChangeToFollow = focus; }
     void            setObjectTracking(bool track)   { mTrackFocusObject = track; }
     const LLVector3d &getFocusGlobal() const        { return mFocusGlobal; }
-    // <SK:Nexii> camera follow
-    void            resetSKFollow()                  { mSKFollowValid = false; mSKFollowActive = false; }
-    // </SK:Nexii>
     const LLVector3d &getFocusTargetGlobal() const  { return mFocusTargetGlobal; }
 private:
     LLVector3d      mCameraFocusOffset;             // Offset from focus point in build mode
@@ -251,14 +248,6 @@ private:
     F32             mFocusObjectDist;
     LLVector3       mFocusObjectOffset;
     bool            mTrackFocusObject;
-    // <SK:Nexii> camera follow
-    LLVector3d      smoothSKFollow(const LLVector3d& raw);
-    LLVector3d      mSKFollowPos;
-    F64             mSKFollowSecs = 0.0;
-    LLUUID          mSKFollowObjectId;
-    bool            mSKFollowValid = false;
-    bool            mSKFollowActive = false;
-    // </SK:Nexii>
 
     //--------------------------------------------------------------------
     // Lookat / Pointat

@@ -4741,18 +4741,6 @@ function="World.EnvPreset"
                  function="ToggleControl"
                  parameter="PingInterpolate" />
             </menu_item_check>
-            <!-- <SK:Nexii> camera follow -->
-            <menu_item_check
-             label="Smooth Camera Follow"
-             name="Smooth Camera Follow">
-                <menu_item_check.on_check
-                 function="CheckControl"
-                 parameter="SKCameraFollowEnabled" />
-                <menu_item_check.on_click
-                 function="ToggleControl"
-                 parameter="SKCameraFollowEnabled" />
-            </menu_item_check>
-            <!-- </SK:Nexii> -->
             <!-- <SK:Nexii> clamped velocity recovery -->
             <menu_item_check
              label="Recover Clamped Velocities"

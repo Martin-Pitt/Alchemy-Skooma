@@ -5217,28 +5217,6 @@
             <key>Value</key>
             <real>0.5</real>
         </map>
-        <key>SKCameraFollowEnabled</key>
-        <map>
-            <key>Comment</key>
-            <string>Smooth the alt-cam focus on a moving object so its network corrections do not jerk the view.</string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>Boolean</string>
-            <key>Value</key>
-            <integer>1</integer>
-        </map>
-        <key>SKCameraFollowSmoothing</key>
-        <map>
-            <key>Comment</key>
-            <string>Time constant in seconds of the alt-cam focus follower on a moving object; 0 turns it off.</string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>F32</string>
-            <key>Value</key>
-            <real>0.12</real>
-        </map>
         <key>SKMotionRecoverClampedVelocity</key>
         <map>
             <key>Comment</key>
