@@ -1877,7 +1877,7 @@ bool SKFloaterLocalChat::hitsContentAt(S32 x, S32 y)
     {
         return view && view->getVisible() && view->getRect().pointInRect(x, y);
     };
-    if (hits_view(mCog) || hits_view(mInput) || mPillRect.pointInRect(x, y) || (barShown() && barStrip().pointInRect(x, y)))
+    if (hits_view(mCog) || hits_view(mInput) || hits_view(mEmojiButton) || mPillRect.pointInRect(x, y) || (barShown() && barStrip().pointInRect(x, y)))
     {
         return true;
     }
