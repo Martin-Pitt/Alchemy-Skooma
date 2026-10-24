@@ -41,6 +41,7 @@ namespace skworld
     namespace
     {
         constexpr U32 NONE = ~0u;
+        constexpr U32 NO_REGION = NONE - 1;     ///< a candidate cell in no region, once cells hold their regions
         constexpr U8 AREA_OF_GROUND = 1;
         constexpr U8 AREA_OF_OBJECT = 2;
         constexpr U8 CUE_NAMED = AirGap::CUE_STAIR | AirGap::CUE_RAMP;
@@ -428,17 +429,20 @@ namespace skworld
             region_cells.resize(region_start.back());
             s.mFill.assign(region_start.begin(), region_start.end() - 1);
             U32* fill = s.mFill.data();
+            // From here a candidate cell holds its region (or NO_REGION) in place of its candidate index, so a cell's
+            // region is one read.
             for (U32 i = 0; i < ncand; ++i)
             {
                 const S32 r = index[parent[i]];
                 rof[i] = r;
+                ci[cands[i]] = r >= 0 ? static_cast<U32>(r) : NO_REGION;
                 if (r >= 0)
                 {
                     region_cells[fill[r]++] = cands[i];
                 }
             }
         }
-        const auto regionOf = [&](U32 c) { return ci[c] == NONE ? -1 : rof[ci[c]]; };
+        const auto regionOf = [&](U32 c) { return ci[c] >= NO_REGION ? -1 : static_cast<S32>(ci[c]); };
         const U32 regions = static_cast<U32>(region_start.size() - 1);
         st.mRegions = regions;
         st.mGrowMs = static_cast<F32>(msSince(t0));
@@ -499,20 +503,26 @@ namespace skworld
                     continue;
                 }
                 const U32 b = region_start[r], e = region_start[r + 1];
+                std::vector<F64>& sv = s.mS;
+                std::vector<F64>& zv = s.mValues;
+                sv.resize(e - b);
+                zv.resize(e - b);
                 F64 sbar = 0.0, zbar = 0.0;
                 for (U32 k = b; k < e; ++k)
                 {
-                    sbar += sOf(ax, region_cells[k]);
-                    zbar += zOf(region_cells[k]);
+                    sv[k - b] = sOf(ax, region_cells[k]);
+                    zv[k - b] = zOf(region_cells[k]);
+                    sbar += sv[k - b];
+                    zbar += zv[k - b];
                 }
                 sbar /= (e - b);
                 zbar /= (e - b);
                 F64 vs = 0.0, cov = 0.0;
-                for (U32 k = b; k < e; ++k)
+                for (U32 k = 0; k < e - b; ++k)
                 {
-                    const F64 ds = sOf(ax, region_cells[k]) - sbar;
+                    const F64 ds = sv[k] - sbar;
                     vs += ds * ds;
-                    cov += ds * (zOf(region_cells[k]) - zbar);
+                    cov += ds * (zv[k] - zbar);
                 }
                 if (vs < 1e-9)
                 {
@@ -530,7 +540,7 @@ namespace skworld
                         {
                             continue;
                         }
-                        const S32 ro = rof[ci[o]];
+                        const S32 ro = ci[o] == NO_REGION ? -1 : static_cast<S32>(ci[o]);
                         if (ro == static_cast<S32>(r) || (ro >= 0 && !small[ro]))
                         {
                             continue;
@@ -540,7 +550,7 @@ namespace skworld
                         {
                             continue;
                         }
-                        rof[ci[o]] = static_cast<S32>(r);
+                        ci[o] = r;
                         s.mQueue.push_back(o);
                     }
                 }
@@ -550,6 +560,7 @@ namespace skworld
                 fill.assign(regions + 1, 0);
                 for (U32 i = 0; i < ncand; ++i)
                 {
+                    rof[i] = regionOf(cands[i]);
                     if (rof[i] >= 0)
                     {
                         ++fill[rof[i] + 1];
@@ -776,10 +787,24 @@ namespace skworld
                     }
                     return ground || other || s.mVisited.size() * cell2 >= FLIGHT_FLOOR_MIN_M2;
                 };
+                // Unless traced, a region is left as soon as it is refused whatever else is measured: unnamed and not
+                // decked at an end, or not rising enough between its decks.
                 F64 fb = 0.0, ft = 0.0;
                 const bool deck_b = deck(false, fb);
+                if (!trace && !cue && !deck_b)
+                {
+                    continue;
+                }
                 const bool deck_t = deck(true, ft);
+                if (!trace && !cue && !deck_t)
+                {
+                    continue;
+                }
                 const F64 rise = ft - fb;
+                if (!trace && (rise < FLIGHT_MIN_RISE_M || (rise < FLIGHT_MIN_RISE_UNCUED_M && !cue)))
+                {
+                    continue;
+                }
 
                 // Width: the median across-run extent of one-cell slices along the run. Slice floors: their medians
                 // in order, for the going between risers of two units or more. Slices are counted into buckets.
