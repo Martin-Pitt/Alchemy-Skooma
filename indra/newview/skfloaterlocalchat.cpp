@@ -1526,7 +1526,7 @@ void SKFloaterLocalChat::updateTyping(F64 now)
         const F64 range = (F64)region->getChatRange();
         const F64 reach = range * 1.5;
         const LLVector3d self_pos = gAgent.getPositionGlobal();
-        static LLCachedControl<F32> grace(gSavedSettings, "SkoomaLocalChatTypingGrace", 5.f);
+        static LLCachedControl<F32> grace(gSavedSettings, "SkoomaLocalChatTypingGrace", 2.f);
         for (LLCharacter* character : LLCharacter::sInstances)
         {
             LLVOAvatar* avatar = static_cast<LLVOAvatar*>(character);
