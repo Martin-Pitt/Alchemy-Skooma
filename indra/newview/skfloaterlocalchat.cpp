@@ -2017,7 +2017,7 @@ bool SKFloaterLocalChat::handleScrollWheel(S32 x, S32 y, LLScrollDelta delta)
     }
     // Wheel up reads back through history, gliding there as the platform scrolls.
     const S32 view_h = contentRect().getHeight();
-    const F32 line = (F32)LLViewerChat::getChatFont()->getLineHeight();
+    const F32 line = SKScrollDistance::lineFor((F32)LLViewerChat::getChatFont()->getLineHeight());
     if (ll_round(mWheelGlide.position()) != mScroll)
     {
         mWheelGlide.jumpTo((F32)mScroll);
