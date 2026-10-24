@@ -3619,6 +3619,12 @@ void LLViewerWindow::handleScrollWheel(LLScrollDelta delta)
     // Discrete consumers read delta.mClicks and are intentionally left untouched.
     static LLCachedControl<F32> scroll_sensitivity(gSavedSettings, "MouseWheelScrollSensitivity", 1.f);
     delta.mPrecise *= scroll_sensitivity;
+    // <SK:Nexii> smooth scroll
+    delta.mPixels *= scroll_sensitivity;
+    delta.mLines *= scroll_sensitivity;
+    static LLCachedControl<bool> precise_heuristic(gSavedSettings, "SkoomaScrollWinPreciseHeuristic", true);
+    LLWindow::sPreciseWheelHeuristic = precise_heuristic;
+    // </SK:Nexii>
 
     LLMouseHandler* mouse_captor = gFocusMgr.getMouseCapture();
     if( mouse_captor )
@@ -3677,6 +3683,12 @@ void LLViewerWindow::handleScrollHWheel(LLScrollDelta delta)
 
     static LLCachedControl<F32> scroll_sensitivity(gSavedSettings, "MouseWheelScrollSensitivity", 1.f);
     delta.mPrecise *= scroll_sensitivity;
+    // <SK:Nexii> smooth scroll
+    delta.mPixels *= scroll_sensitivity;
+    delta.mLines *= scroll_sensitivity;
+    static LLCachedControl<bool> precise_heuristic(gSavedSettings, "SkoomaScrollWinPreciseHeuristic", true);
+    LLWindow::sPreciseWheelHeuristic = precise_heuristic;
+    // </SK:Nexii>
 
     LLMouseHandler* mouse_captor = gFocusMgr.getMouseCapture();
     if (mouse_captor)

@@ -87,6 +87,7 @@ target_sources(
         m3math.h
         m4math.h
         raytrace.h
+        skwarpprofile.h
         v2math.h
         v3color.h
         v3colorutil.h
@@ -133,6 +134,7 @@ if(AL_BUILD_TESTS)
       tests/llvolume_test.cpp
       tests/m3math_test.cpp
       tests/mathmisc_test.cpp
+      tests/skwarpprofile_test.cpp
       tests/v2math_test.cpp
       tests/v3color_test.cpp
       tests/v3dmath_test.cpp

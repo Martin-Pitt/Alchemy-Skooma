@@ -44,6 +44,7 @@
 #include "lluicolor.h"
 #include "lluictrl.h"
 #include "lluiimage.h"
+#include "skscrollanimator.h" // <SK:Nexii> smooth scroll
 
 #include <array>
 #include <functional>
@@ -720,6 +721,10 @@ public:
     S32  rowsPerPage() const;
     S32  scrollY() const { return mScrollY; }
     void setScrollY(S32 y);
+    // <SK:Nexii> smooth scroll
+    // Where the wheel is taking the view: mScrollY at rest, the glide's end while it glides.
+    S32  wheelTargetY() const { return mWheelGlide.isAnimating() ? ll_round(mWheelGlide.target()) : mScrollY; }
+    // </SK:Nexii>
     // Whether there is more of the text to scroll to that way: below for
     // a positive direction, above for a negative.
     bool canScrollY(S32 direction);
@@ -1254,6 +1259,7 @@ private:
     void                 syncLanguageInput();
 
     void syncScrollbar();
+    void glideWheel(); // <SK:Nexii> smooth scroll: moves mScrollY on to where the wheel's glide is now
     // The ruler, or the map in its place, put where it goes and shown
     // where there is one; and whether the mouse at a point is on it, with
     // nothing of the view's over it there.
@@ -1439,8 +1445,10 @@ private:
     U32          mAnchorHeights = 0;
     bool         mAnchorAtTop   = true;
     bool         mScrollAsked   = true;
-    // What a wheel moved that did not make a whole pixel yet.
-    F32          mWheelRemainder = 0.f;
+    // <SK:Nexii> smooth scroll
+    // Where the wheel's glide is, ahead of the whole pixels mScrollY has taken from it.
+    SKScrollAnimator mWheelGlide;
+    // </SK:Nexii>
     std::function<void(S32)> mZoomWheel;
     F32          mZoomRemainder = 0.f;
     bool         mSelecting = false;

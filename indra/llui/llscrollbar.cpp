@@ -41,6 +41,7 @@
 #include "llcontrol.h"
 #include "llrender.h"
 #include "lluictrlfactory.h"
+#include "skscrolldistance.h" // <SK:Nexii> smooth scroll
 
 static LLDefaultChildRegistry::Register<LLScrollbar> register_scrollbar("scroll_bar");
 
@@ -88,6 +89,7 @@ LLScrollbar::LLScrollbar(const Params & p)
         mBGVisible(p.bg_visible),
         mBGColor(p.bg_color)
 {
+    mWheelLine = (F32)llmax(mStepSize, 1); // <SK:Nexii> smooth scroll: a wheel line is a step unless the owner says
     updateThumbRect();
 
     // Page up and page down buttons
@@ -147,6 +149,22 @@ void LLScrollbar::setDocParams( S32 size, S32 pos )
 bool LLScrollbar::setDocPos(S32 pos, bool update_thumb)
 {
     pos = llclamp(pos, 0, getDocPosMax());
+    // <SK:Nexii> smooth scroll
+    // A position from anywhere but the wheel's own glide ends the glide; the same position only reclamps it.
+    if (!mApplyingWheel)
+    {
+        if (pos != mDocPos)
+        {
+            mWheelAnimator.jumpTo((F32)pos);
+            mDocPosF = (F32)pos;
+        }
+        else
+        {
+            mWheelAnimator.clamp(0.f, (F32)getDocPosMax());
+            mDocPosF = llclamp(mDocPosF, 0.f, (F32)getDocPosMax());
+        }
+    }
+    // </SK:Nexii>
     if (pos != mDocPos)
     {
         mDocPos = pos;
@@ -404,58 +422,56 @@ bool LLScrollbar::handleHover(S32 x, S32 y, MASK mask)
 } // end handleHover
 
 
-// Accumulate fractional line movement from the precise (sub-notch) scroll
-// delta and apply whole lines as the accumulator crosses an integer, carrying
-// the remainder. mDocPos is integer "lines", so this residue is what lets
-// high-resolution wheels and touchpads scroll smoothly instead of dropping
-// everything below one whole notch. A whole notch (precise == 1) moves
-// mStepSize lines exactly as before.
-bool LLScrollbar::scrollByWheel(F32 precise)
+// <SK:Nexii> smooth scroll
+// A wheel glides the position onto its target by the distance the OS asks for; a precise device moves it at once.
+// Parked at the end it is scrolling toward, the gesture goes on to a parent scroller, as it always did.
+bool LLScrollbar::scrollByWheel(const LLScrollDelta& delta)
 {
-    mScrollWheelResidue += precise * (F32)mStepSize;
-    S32 lines = lltrunc(mScrollWheelResidue);
-    mScrollWheelResidue -= (F32)lines;
-    if (changeLine(lines, true))
+    const F32 max = (F32)getDocPosMax();
+    if (!mWheelAnimator.isAnimating() && llround(mWheelAnimator.position()) != mDocPos)
     {
-        return true; // moved at least one whole line
+        mWheelAnimator.jumpTo((F32)mDocPos);
     }
-    // No whole line crossed yet (sub-notch precise scroll). Still report the
-    // gesture as handled so it isn't forwarded to a parent scroller, which would
-    // otherwise advance on the same high-resolution / touchpad gesture (a
-    // visible double-scroll in nested non-opaque scroll areas). The one
-    // exception is being parked at the boundary in the scroll direction: there
-    // the legacy behavior was to let the event chain to the parent, so preserve
-    // that.
-    if (precise > 0.f)
+    const F32 units = SKScrollDistance::pixels(delta, mWheelLine, (F32)mPageSize * mWheelUnit) / mWheelUnit;
+    const F32 target = mWheelAnimator.target();
+    if (units == 0.f || (units > 0.f && target >= max) || (units < 0.f && target <= 0.f))
     {
-        if (mDocPos < getDocPosMax())
-        {
-            return true;
-        }
-        mScrollWheelResidue = 0.f; // forwarding to parent; don't keep partial progress
         return false;
     }
-    if (precise < 0.f)
+    mWheelAnimator.addDelta(units, delta.mIsPrecise, SKScrollDistance::now(), 0.f, max, SKScrollDistance::config());
+    tickWheel();
+    return true;
+}
+
+void LLScrollbar::setWheelUnits(F32 unit_pixels, F32 line_pixels)
+{
+    mWheelUnit = llmax(unit_pixels, 1.f);
+    mWheelLine = llmax(line_pixels, 1.f);
+}
+
+void LLScrollbar::tickWheel()
+{
+    if (!mWheelAnimator.isAnimating() && mDocPosF == mWheelAnimator.position())
     {
-        if (mDocPos > 0)
-        {
-            return true;
-        }
-        mScrollWheelResidue = 0.f; // forwarding to parent; don't keep partial progress
-        return false;
+        return;
     }
-    return false;
+    mWheelAnimator.clamp(0.f, (F32)getDocPosMax());
+    mDocPosF = mWheelAnimator.tick(SKScrollDistance::now());
+    mApplyingWheel = true;
+    setDocPos((S32)llround(mDocPosF));
+    mApplyingWheel = false;
 }
 
 bool LLScrollbar::handleScrollWheel(S32 x, S32 y, LLScrollDelta delta)
 {
-    return scrollByWheel(delta.mPrecise);
+    return scrollByWheel(delta);
 }
 
 bool LLScrollbar::handleScrollHWheel(S32 x, S32 y, LLScrollDelta delta)
 {
-    return (LLScrollbar::HORIZONTAL == mOrientation) ? scrollByWheel(delta.mPrecise) : false;
+    return (LLScrollbar::HORIZONTAL == mOrientation) ? scrollByWheel(delta) : false;
 }
+// </SK:Nexii>
 
 bool LLScrollbar::handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop,
                                     EDragAndDropType cargo_type, void *cargo_data, EAcceptance *accept, std::string &tooltip_msg)
@@ -529,6 +545,7 @@ void LLScrollbar::reshape(S32 width, S32 height, bool called_from_parent)
 void LLScrollbar::draw()
 {
     if (!getRect().isValid()) return;
+    tickWheel(); // <SK:Nexii> smooth scroll
 
     if(mBGVisible)
     {

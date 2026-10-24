@@ -1697,11 +1697,15 @@ LLSD LLScrollListCtrl::getSelectedValue()
 
 void LLScrollListCtrl::drawItems()
 {
-    S32 x = mItemListRect.mLeft;
-    S32 y = mItemListRect.mTop - mLineHeight;
-
-    // allow for partial line at bottom
+    // <SK:Nexii> smooth scroll
+    S32 scroll_lines = mScrollLines;
     S32 num_page_lines = getLinesPerPage();
+    S32 glide_offset = 0;
+    glideRows(scroll_lines, num_page_lines, glide_offset);
+
+    S32 x = mItemListRect.mLeft;
+    S32 y = mItemListRect.mTop - mLineHeight + glide_offset;
+    // </SK:Nexii>
 
     LLRect item_rect;
 
@@ -1729,8 +1733,8 @@ void LLScrollListCtrl::drawItems()
         }
         else
         {
-            first_line = mScrollLines;
-            last_line = llmin((S32)mItemList.size() - 1, mScrollLines + getLinesPerPage());
+            first_line = scroll_lines; // <SK:Nexii> smooth scroll
+            last_line = llmin((S32)mItemList.size() - 1, scroll_lines + num_page_lines); // <SK:Nexii> smooth scroll
         }
         S32 line = first_line;
 
@@ -1760,7 +1764,7 @@ void LLScrollListCtrl::drawItems()
             LLColor4 hover_color(LLColor4::transparent);
             LLColor4 select_color(LLColor4::transparent);
 
-            if( mScrollLines <= line && line < mScrollLines + num_page_lines )
+            if( scroll_lines <= line && line < scroll_lines + num_page_lines ) // <SK:Nexii> smooth scroll
             {
                 fg_color = (item->getEnabled() ? mFgUnselectedColor.get() : mFgDisabledColor.get());
                 if( item->getSelected() && mCanSelect)
@@ -1817,6 +1821,7 @@ void LLScrollListCtrl::drawItems()
 void LLScrollListCtrl::draw()
 {
     LLLocalClipRect clip(getLocalRect());
+    mScrollbar->tickWheel(); // <SK:Nexii> smooth scroll: before the rows are laid out, not after with the scrollbar
 
     // if user specifies sort, make sure it is maintained
     updateSort();
@@ -1859,6 +1864,7 @@ void LLScrollListCtrl::setEnabled(bool enabled)
 bool LLScrollListCtrl::handleScrollWheel(S32 x, S32 y, LLScrollDelta delta)
 {
     bool handled = false;
+    mScrollbar->setWheelUnits((F32)mLineHeight, (F32)mLineHeight); // <SK:Nexii> smooth scroll: a wheel line is a row
     // Pretend the mouse is over the scrollbar
     handled = mScrollbar->handleScrollWheel( 0, 0, delta );
 
@@ -2317,15 +2323,19 @@ LLScrollListItem* LLScrollListCtrl::hitItem( S32 x, S32 y )
 
     updateSort();
 
+    // <SK:Nexii> smooth scroll
+    S32 scroll_lines = mScrollLines;
+    S32 num_page_lines = getLinesPerPage();
+    S32 glide_offset = 0;
+    glideRows(scroll_lines, num_page_lines, glide_offset);
+
     LLRect item_rect;
     item_rect.setLeftTopAndSize(
         mItemListRect.mLeft,
-        mItemListRect.mTop,
+        mItemListRect.mTop + glide_offset,
         mItemListRect.getWidth(),
         mLineHeight );
-
-    // allow for partial line at bottom
-    S32 num_page_lines = getLinesPerPage();
+    // </SK:Nexii>
 
     S32 line = 0;
     for(LLScrollListItem* item : mItemList)
@@ -2335,9 +2345,10 @@ LLScrollListItem* LLScrollListCtrl::hitItem( S32 x, S32 y )
             continue;
         }
 
-        if( mScrollLines <= line && line < mScrollLines + num_page_lines )
+        if( scroll_lines <= line && line < scroll_lines + num_page_lines ) // <SK:Nexii> smooth scroll
         {
-            if( item->getEnabled() && item_rect.pointInRect( x, y ) )
+            // <SK:Nexii> smooth scroll: a row partly scrolled out is hit only where it shows
+            if( item->getEnabled() && item_rect.pointInRect( x, y ) && mItemListRect.pointInRect( x, y ) )
             {
                 hit_item = item;
                 break;
@@ -2399,9 +2410,31 @@ S32 LLScrollListCtrl::getColumnOffsetFromIndex(S32 index)
 
 S32 LLScrollListCtrl::getRowOffsetFromIndex(S32 index)
 {
-    S32 row_bottom = (mItemListRect.mTop - ((index - mScrollLines + 1) * mLineHeight) );
+    // <SK:Nexii> smooth scroll
+    S32 scroll_lines = mScrollLines;
+    S32 num_page_lines = 0;
+    S32 glide_offset = 0;
+    glideRows(scroll_lines, num_page_lines, glide_offset);
+    S32 row_bottom = (mItemListRect.mTop + glide_offset - ((index - scroll_lines + 1) * mLineHeight) );
+    // </SK:Nexii>
     return row_bottom;
 }
+
+// <SK:Nexii> smooth scroll
+// While the wheel glides between rows the list is drawn from the row partly off its top, moved up by the part
+// scrolled past, with one more row to fill the bottom. Otherwise it is the whole rows it always was.
+void LLScrollListCtrl::glideRows(S32& first, S32& lines, S32& offset)
+{
+    const F32 pos = mScrollbar->getDocPosF();
+    if (mLineHeight <= 0 || pos == (F32)mScrollLines)
+    {
+        return;
+    }
+    first = llfloor(pos);
+    offset = ll_round((pos - (F32)first) * (F32)mLineHeight);
+    lines += 1;
+}
+// </SK:Nexii>
 
 
 bool LLScrollListCtrl::handleHover(S32 x,S32 y,MASK mask)

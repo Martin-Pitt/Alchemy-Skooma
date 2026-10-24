@@ -3352,6 +3352,85 @@
             <key>Value</key>
             <real>1.0</real>
         </map>
+<!-- <SK:Nexii> smooth scroll -->
+        <key>SkoomaScrollSmooth</key>
+        <map>
+            <key>Comment</key>
+            <string>Animate wheel scrolling in lists, panels and text. Trackpads and other precise devices always scroll directly.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SkoomaScrollSmoothMode</key>
+        <map>
+            <key>Comment</key>
+            <string>How wheel scrolling animates: 0 eases over 100-200 ms like Chrome, 1 warps (ramps up, cuts out the cruise, brakes) like the camera.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>S32</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SkoomaScrollSmoothDurationScale</key>
+        <map>
+            <key>Comment</key>
+            <string>Multiplies the eased wheel scroll duration (mode 0).</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>1.0</real>
+        </map>
+        <key>SkoomaScrollWarpTopSpeed</key>
+        <map>
+            <key>Comment</key>
+            <string>Top speed of the warp wheel scroll (mode 1), in pixels per second.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>6000.0</real>
+        </map>
+        <key>SkoomaScrollWarpRamp</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds the warp wheel scroll (mode 1) takes to reach its top speed.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.04</real>
+        </map>
+        <key>SkoomaScrollWarpBrake</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds the warp wheel scroll (mode 1) takes to brake onto its target.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.14</real>
+        </map>
+        <key>SkoomaScrollWinPreciseHeuristic</key>
+        <map>
+            <key>Comment</key>
+            <string>Treat a fast stream of sub-notch wheel messages as a precise touchpad (scrolled directly, not animated). Free-spin and high-resolution wheels send the same messages.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+<!-- </SK:Nexii> -->
         <key>NearbyToastHeightRatio</key>
         <map>
             <key>Comment</key>
