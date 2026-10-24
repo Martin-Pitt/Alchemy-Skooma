@@ -5232,6 +5232,17 @@
             <integer>0</integer>
         </map>
 <!-- <SK:Nexii> Modern local chat settings -->
+        <key>SkoomaLocalChatMask</key>
+        <map>
+            <key>Comment</key>
+            <string>Fade the game-style local chat's messages per pixel at its scroll edges; off draws them unmasked.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
         <key>SkoomaLocalChatModern</key>
         <map>
             <key>Comment</key>
