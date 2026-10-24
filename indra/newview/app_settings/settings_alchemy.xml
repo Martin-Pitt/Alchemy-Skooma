@@ -3409,6 +3409,39 @@
             <integer>1</integer>
         </map>
 <!-- </SK:Nexii> -->
+        <key>SkoomaScrollbarOverlayFadeDelay</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds an overlay scroll bar stays shown after the last scroll or hover before it fades.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>1.0</real>
+        </map>
+        <key>SkoomaScrollbarOverlayFadeTime</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds an overlay scroll bar takes to fade out.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.25</real>
+        </map>
+        <key>SkoomaScrollbarOverlayEverywhere</key>
+        <map>
+            <key>Comment</key>
+            <string>Give every scroll container overlay scroll bars (thin, fading, drawn over the content). Takes effect for windows built after the change.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
         <key>NearbyToastHeightRatio</key>
         <map>
             <key>Comment</key>
