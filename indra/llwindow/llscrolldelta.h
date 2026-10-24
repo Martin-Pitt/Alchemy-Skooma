@@ -52,6 +52,31 @@ struct LLScrollDelta
 
     S32 mClicks  = 0;
     F32 mPrecise = 0.f;
+
+    // <SK:Nexii> smooth scroll
+    // What the gesture is in distance, for scrolling consumers. A backend that leaves these at zero is read as
+    // mPrecise wheel notches of DEFAULT_LINES each.
+    enum EPhase : U8
+    {
+        PHASE_NONE,     // a wheel, or a device that reports no phase
+        PHASE_BEGAN,    // fingers down
+        PHASE_CHANGED,  // fingers moving
+        PHASE_ENDED,    // fingers lifted
+        PHASE_MOMENTUM, // the OS's inertia after the fingers lifted
+        PHASE_MOMENTUM_ENDED,
+    };
+    static constexpr F32 DEFAULT_LINES = 3.f;  // lines per notch where the OS says nothing
+    static constexpr F32 PIXELS_PER_LINE = 100.f / 3.f; // Chrome's line, for devices measured in pixels
+
+    F32  mPixels    = 0.f;   // points to move when mIsPrecise, at UI scale 1, signed as mPrecise
+    F32  mLines     = 0.f;   // OS lines (or characters, horizontally) to move for a wheel, signed as mPrecise
+    bool mIsPrecise = false; // a trackpad-class device: apply mPixels directly, never animate
+    bool mPage      = false; // the OS asks for a page per notch
+    U8   mPhase     = PHASE_NONE;
+
+    // Lines this delta asks for, filling in for a backend that set none.
+    F32 lines() const { return mLines != 0.f ? mLines : mPrecise * DEFAULT_LINES; }
+    // </SK:Nexii>
 };
 
 #endif // LL_SCROLLDELTA_H
