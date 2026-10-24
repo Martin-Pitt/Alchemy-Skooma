@@ -195,6 +195,7 @@ private:
     S32 typingWidth() const;
     bool anyoneTyping() const { return !mTypingLabel[0].empty() || !mTypingLabel[1].empty(); }
     void updateCollapsedStatus();
+    static void onIdle(void* data);
     void onStyleMenu(const LLSD& param);
     bool onStyleCheck(const LLSD& param) const;
 
@@ -219,6 +220,7 @@ private:
     S32 mLayoutStyle = -1;
     bool mLayoutDirty = true;
     bool mHovered = false;
+    bool mHiddenForConversations = false; // put away while Conversations shows nearby chat
     bool mBarHot = false;       // the pointer is on the scroll bar's strip
     S32 mBarDrag = -1;          // while the thumb is dragged, the pointer's height above its bottom
     S32 mBarPage = 0;           // while the track is held, +1 paging back through history, -1 forward

@@ -26,6 +26,8 @@
 
 #include "skfloaterlocalchat.h"
 
+#include "llcallbacklist.h"
+
 #include "llautoreplace.h"
 #include "llbutton.h"
 #include "llchatentry.h"
@@ -202,6 +204,7 @@ SKFloaterLocalChat::SKFloaterLocalChat(const LLSD& key)
 
 SKFloaterLocalChat::~SKFloaterLocalChat()
 {
+    gIdleCallbacks.deleteFunction(onIdle, this);
     mFontConnection.disconnect();
     mEmojiCloseConnection.disconnect();
     if (LLAvatarPropertiesProcessor::instanceExists())
@@ -304,8 +307,32 @@ std::string SKFloaterLocalChat::currentChat()
     return self && self->mInput ? self->mInput->getText() : LLStringUtil::null;
 }
 
+// static
+void SKFloaterLocalChat::onIdle(void* data)
+{
+    // Conversations carries nearby chat, so the chat steps aside while it is up and comes back after.
+    SKFloaterLocalChat* self = static_cast<SKFloaterLocalChat*>(data);
+    LLFloaterIMContainer* conversations = LLFloaterIMContainer::findInstance();
+    const bool conversations_up = conversations && conversations->getVisible() && !conversations->isMinimized();
+    if (conversations_up && self->getVisible())
+    {
+        if (self->mInput && self->mInput->getVisible())
+        {
+            self->stopChat();
+        }
+        self->mHiddenForConversations = true;
+        self->setVisible(false);
+    }
+    else if (!conversations_up && self->mHiddenForConversations)
+    {
+        self->mHiddenForConversations = false;
+        self->setVisible(true);
+    }
+}
+
 bool SKFloaterLocalChat::postBuild()
 {
+    gIdleCallbacks.addFunction(onIdle, this);
     mInput = getChild<LLChatEntry>("sk_local_chat_input");
     mInput->setAutoreplaceCallback(boost::bind(&LLAutoReplace::autoreplaceCallback, LLAutoReplace::getInstance(), _1, _2, _3, _4, _5));
     mInput->setKeystrokeCallback([this](LLTextEditor*) { ALChatBar::handleInputKeystroke(mInput, [this]() { sendChat(CHAT_TYPE_NORMAL); }); });
