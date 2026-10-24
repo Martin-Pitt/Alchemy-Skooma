@@ -122,8 +122,8 @@ private:
 class ALQueryPool
 {
 public:
-    static constexpr U32 FRAMES        = 4;
-    static constexpr U32 RESULT_FRAMES = 64;
+    static constexpr U32 FRAMES        = 6;
+    static constexpr U32 RESULT_FRAMES = 112;
 
     enum class Status : U8
     {
