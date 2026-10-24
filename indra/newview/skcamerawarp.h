@@ -1,6 +1,6 @@
 /**
  * @file skcamerawarp.h
- * @brief A camera move that speeds up, cuts out its cruise, and brakes onto the target.
+ * @brief The camera's warp profiles, in metres (the arithmetic is SKWarp's).
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Alchemy Viewer Source Code
@@ -25,25 +25,13 @@
 #ifndef SK_SKCAMERAWARP_H
 #define SK_SKCAMERAWARP_H
 
-#include "llmath.h"
+#include "skwarpprofile.h"
 
-// The move ramps up to a top speed, jumps to its braking distance short of the target, and brakes to a stop.
-// Speed eases in and out (smoothstep), or with mPower as a power curve from rest that creeps away and slams up to
-// speed; a trip shorter than the two phases together lowers the top speed instead, and has no cut.
+// A camera move that speeds up, cuts out its cruise, and brakes onto the target: SKWarp in metres.
 namespace SKCameraWarp
 {
-    struct Profile
-    {
-        F32 mRampSeconds;
-        F32 mBrakeSeconds;
-        F32 mTopSpeed; // metres per second
-        F32 mPower = 0.f; // speed goes as u^mPower over a phase; 0 is smoothstep
-
-        // The phase's mean speed as a fraction of the top speed.
-        constexpr F32 meanSpeed() const { return mPower > 0.f ? 1.f / (mPower + 1.f) : 0.5f; }
-
-        constexpr F32 duration() const { return mRampSeconds + mBrakeSeconds; }
-    };
+    using Profile = SKWarp::Profile;
+    using SKWarp::fraction;
 
     /// The mini-map's Cam onto an avatar.
     constexpr Profile AVATAR{ 0.35f, 0.5f, 80.f };
@@ -51,33 +39,6 @@ namespace SKCameraWarp
     constexpr Profile WORLD_MAP{ 0.9f, 1.1f, 4000.f, 5.f };
     /// A camera reset (Escape) warps home rather than smoothing when the camera is further than this from the avatar, in metres.
     constexpr F32 RESET_DISTANCE = 32.f;
-
-    // Distance covered at u of a phase that eases from rest to unit speed, in units of the phase's length times speed.
-    inline F32 eased(const Profile& p, F32 u)
-    {
-        u = llclamp(u, 0.f, 1.f);
-        if (p.mPower > 0.f)
-        {
-            return std::pow(u, p.mPower + 1.f) / (p.mPower + 1.f);
-        }
-        return u * u * u - 0.5f * u * u * u * u;
-    }
-
-    // Fraction of the way from start to target at time seconds, for a trip of length metres.
-    inline F32 fraction(const Profile& p, F32 seconds, F32 length)
-    {
-        if (length <= 0.f || seconds >= p.duration())
-        {
-            return 1.f;
-        }
-        const F32 speed = llmin(p.mTopSpeed, length / (p.meanSpeed() * p.duration()));
-        if (seconds < p.mRampSeconds)
-        {
-            return speed * p.mRampSeconds * eased(p, seconds / p.mRampSeconds) / length;
-        }
-        const F32 left = speed * p.mBrakeSeconds * eased(p, (p.duration() - seconds) / p.mBrakeSeconds);
-        return 1.f - left / length;
-    }
 }
 
 #endif // SK_SKCAMERAWARP_H
