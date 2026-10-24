@@ -283,9 +283,11 @@ namespace
 
     UINT sWheelScrollLines = 3;
     UINT sWheelScrollChars = 3;
+    bool sWheelSettingsStale = false;
 
     void read_wheel_settings()
     {
+        sWheelSettingsStale = false;
         if (!SystemParametersInfo(SPI_GETWHEELSCROLLLINES, 0, &sWheelScrollLines, 0))
         {
             sWheelScrollLines = 3;
@@ -302,10 +304,19 @@ namespace
         ULONGLONG mPreciseUntilMs = 0;
     };
 
-    // Fills in a wheel message's distances: notches times the OS's lines (or characters), or a page.
-    LLScrollDelta wheel_delta(S32 clicks, S16 raw, F32 sign, UINT per_notch, WheelStream& stream)
+    // Fills in a wheel message's distances, unless smooth scrolling is off: notches times the OS's lines (or characters), or a page.
+    LLScrollDelta wheel_delta(S32 clicks, S16 raw, F32 sign, bool horizontal, WheelStream& stream)
     {
         LLScrollDelta delta(clicks, sign * (F32)raw / (F32)WHEEL_DELTA);
+        if (!LLWindow::sSmoothScroll)
+        {
+            return delta; // upstream's clicks and fractions only
+        }
+        if (sWheelSettingsStale)
+        {
+            read_wheel_settings();
+        }
+        UINT per_notch = horizontal ? sWheelScrollChars : sWheelScrollLines;
         const ULONGLONG now = GetTickCount64();
         if (LLWindow::sPreciseWheelHeuristic && raw % WHEEL_DELTA != 0 && now - stream.mLastMs <= PRECISE_STREAM_GAP_MS)
         {
@@ -3404,7 +3415,7 @@ LRESULT CALLBACK LLWindowWin32::mainWindowProc(HWND h_wnd, UINT u_msg, WPARAM w_
             }
             // <SK:Nexii> smooth scroll
             static WheelStream z_stream;
-            const LLScrollDelta delta = wheel_delta(clicks, incoming_z_delta, -1.f, sWheelScrollLines, z_stream);
+            const LLScrollDelta delta = wheel_delta(clicks, incoming_z_delta, -1.f, false, z_stream);
             WINDOW_IMP_POST(window_imp->mCallbacks->handleScrollWheel(window_imp, delta));
             // </SK:Nexii>
             return 0;
@@ -3463,7 +3474,7 @@ LRESULT CALLBACK LLWindowWin32::mainWindowProc(HWND h_wnd, UINT u_msg, WPARAM w_
             }
             // <SK:Nexii> smooth scroll
             static WheelStream h_stream;
-            const LLScrollDelta delta = wheel_delta(h_clicks, incoming_h_delta, 1.f, sWheelScrollChars, h_stream);
+            const LLScrollDelta delta = wheel_delta(h_clicks, incoming_h_delta, 1.f, true, h_stream);
             WINDOW_IMP_POST(window_imp->mCallbacks->handleScrollHWheel(window_imp, delta));
             // </SK:Nexii>
             return 0;
@@ -3654,7 +3665,15 @@ LRESULT CALLBACK LLWindowWin32::mainWindowProc(HWND h_wnd, UINT u_msg, WPARAM w_
             // <SK:Nexii> smooth scroll
             else if (w_param == SPI_SETWHEELSCROLLLINES || w_param == SPI_SETWHEELSCROLLCHARS)
             {
-                read_wheel_settings();
+                // Switched off, read them on the first wheel message after it is on again.
+                if (LLWindow::sSmoothScroll)
+                {
+                    read_wheel_settings();
+                }
+                else
+                {
+                    sWheelSettingsStale = true;
+                }
             }
             // </SK:Nexii>
             // Check if theme-related settings changed
