@@ -158,6 +158,10 @@ public:
     static std::string declareDockStateControl(const std::string& name);
     static std::string getDockStateControlName(const std::string& name);
     static std::string declareLockControl(const std::string& name); // <SK:Nexii> Floater lock
+    // <SK:Nexii> Collapse is restored at login
+    static std::string declareCollapseStateControl(const std::string& name);
+    static std::string getCollapseStateControlName(const std::string& name);
+    // </SK:Nexii>
 
     static void registerControlVariables();
 
