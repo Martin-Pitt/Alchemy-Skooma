@@ -333,6 +333,8 @@ with the same filename but different name
   
   <texture name="Icon_Collapse_Foreground" file_name="windows/Icon_Collapse_Foreground.png" preload="true" />
   <texture name="Icon_Collapse_Press" file_name="windows/Icon_Collapse_Press.png" preload="true" />
+  <texture name="Icon_Lock_Foreground" file_name="windows/Icon_Lock_Foreground.png" preload="true" />
+  <texture name="Icon_Unlock_Foreground" file_name="windows/Icon_Unlock_Foreground.png" preload="true" />
 
   <texture name="Icon_Paste" file_name="icons/paste_clipboard.png" preload="true" />
 

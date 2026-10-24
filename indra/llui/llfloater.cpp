@@ -1952,8 +1952,11 @@ void LLFloater::setLocked(bool locked)
     }
     if (LLButton* button = mButtons[BUTTON_LOCK])
     {
-        button->setToggleState(mLocked);
-        button->setImageColor(LLColor4(1.f, 1.f, 1.f, mLocked ? 1.f : 0.45f));
+        // Drawn like the other title buttons: a closed lock while locked, an open one otherwise.
+        static LLUIImagePtr locked_image = LLUI::getUIImage("Icon_Lock_Foreground");
+        static LLUIImagePtr unlocked_image = LLUI::getUIImage("Icon_Unlock_Foreground");
+        button->setImageUnselected(mLocked ? locked_image : unlocked_image);
+        button->setImagePressed(mLocked ? unlocked_image : locked_image);
         button->setToolTip(LLTrans::getString(mLocked ? "BUTTON_UNLOCK" : "BUTTON_LOCK"));
     }
     storeLockControl();
@@ -2809,7 +2812,7 @@ LLUIImage* LLFloater::getButtonImage(const Params& p, EFloaterButton e)
         case BUTTON_HELP:
             return p.help_image;
         case BUTTON_LOCK: // <SK:Nexii> Floater lock
-            return LLUI::getUIImage("Lock");
+            return LLUI::getUIImage("Icon_Unlock_Foreground");
     }
 }
 
@@ -2836,7 +2839,7 @@ LLUIImage* LLFloater::getButtonPressedImage(const Params& p, EFloaterButton e)
         case BUTTON_HELP:
             return p.help_pressed_image;
         case BUTTON_LOCK: // <SK:Nexii> Floater lock
-            return LLUI::getUIImage("Lock");
+            return LLUI::getUIImage("Icon_Lock_Foreground");
     }
 }
 
