@@ -267,6 +267,7 @@ private:
     torn_signal_t       mTornSignal;
     // How far along the tabs the strip is scrolled, in pixels.
     S32                 mScroll = 0;
+    F32                 mScrollRemainder = 0.f; // <SK:Nexii> smooth scroll: a wheel's fractions with SkoomaScroll off
     // <SK:Nexii> smooth scroll
     // Where the wheel's glide is, ahead of the whole pixels mScroll has taken from it.
     SKScrollAnimator    mWheelGlide;
