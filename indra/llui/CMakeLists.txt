@@ -319,6 +319,7 @@ target_sources(
         llsearchablecontrol.h
         llsearcheditor.h
         llscrollbar.h
+        skscrollbaroverlay.h
         llscrollcontainer.h
         llscrollingpanellist.h
         llscrolllistcell.h
@@ -704,6 +705,7 @@ if(AL_BUILD_TESTS)
       tests/lllayoutstack_test.cpp
       tests/llradiogroup_test.cpp
       tests/llresizebar_test.cpp
+      tests/skscrollbaroverlay_test.cpp
       tests/llspinctrl_test.cpp
       tests/llstatbar_test.cpp
       tests/lltabcontainer_test.cpp
