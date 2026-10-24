@@ -60,7 +60,7 @@ public:
                                         track_image_vertical;
 
         Optional<bool>                  bg_visible;
-        Optional<bool>                  overlay; // <SK:Nexii> Overlay scroll bar: thin fading thumb over the content, no track or arrows
+        Optional<bool>                  overlay; // <SK:Nexii> Overlay scroll bar: thin fading thumb over the content; a dwell expands it to a track with arrows
 
         Optional<LLUIColor>             track_color,
                                         thumb_color,
@@ -138,7 +138,8 @@ private:
     bool                changeLine(S32 delta, bool update_thumb );
     bool                scrollByWheel(F32 precise); // precise sub-notch wheel delta -> whole lines + residue
     // <SK:Nexii> Overlay scroll bar
-    S32                 arrowLength() const { return mOverlay ? 0 : mThickness; }
+    S32                 arrowLength() const { return mOverlay && !mOverlayExpanded ? 0 : mThickness; }
+    void                overlaySetExpanded(bool expanded);
     F32                 overlayAlpha(F64 now) const;
     void                overlayTouch();
     void                drawOverlay();
@@ -183,6 +184,9 @@ private:
     bool                mOverlay = false;
     bool                mOverlayRevealPending = false;
     F32                 mOverlayWiden = 0.f;
+    bool                mOverlayExpanded = false;
+    F64                 mOverlayHoverSince = -1.0;
+    F64                 mOverlayLeftAt = -1000.0;
     F64                 mOverlayShownAt = -1000.0;
     F64                 mOverlayActiveAt = -1000.0;
     U32                 mOverlayDrawnFrame = 0;

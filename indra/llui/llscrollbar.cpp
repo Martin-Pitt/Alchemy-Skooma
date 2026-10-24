@@ -531,7 +531,7 @@ void LLScrollbar::reshape(S32 width, S32 height, bool called_from_parent)
     if (width == getRect().getWidth() && height == getRect().getHeight()) return;
     LLView::reshape( width, height, called_from_parent );
 
-    if (mOverlay) {} // <SK:Nexii> Overlay scroll bar: arrows stay zero-sized
+    if (mOverlay) overlaySetExpanded(mOverlayExpanded); // <SK:Nexii> Overlay scroll bar: lay the arrows out again
     else if (mOrientation == VERTICAL)
     {
         mLineUpBtn->reshape(mLineUpBtn->getRect().getWidth(), llmin(getRect().getHeight() / 2, mThickness));
@@ -766,6 +766,28 @@ void LLScrollbar::onVisibilityChange(bool new_visibility)
     }
 }
 
+void LLScrollbar::overlaySetExpanded(bool expanded)
+{
+    // Expanded, the real line buttons take the ends as in the classic bar; collapsed, the thumb has the whole length.
+    mOverlayExpanded = expanded;
+    const S32 len = mOrientation == VERTICAL ? getRect().getHeight() : getRect().getWidth();
+    const S32 cross = mOrientation == VERTICAL ? getRect().getWidth() : getRect().getHeight();
+    const S32 arrow = expanded ? llmin(len / 2, mThickness) : 0;
+    if (mOrientation == VERTICAL)
+    {
+        mLineUpBtn->setRect(LLRect(0, len, cross, len - arrow));
+        mLineDownBtn->setRect(LLRect(0, arrow, cross, 0));
+    }
+    else
+    {
+        mLineUpBtn->setRect(LLRect(0, cross, arrow, 0));
+        mLineDownBtn->setRect(LLRect(len - arrow, cross, len, 0));
+    }
+    mLineUpBtn->setVisible(expanded);
+    mLineDownBtn->setVisible(expanded);
+    updateThumbRect();
+}
+
 void LLScrollbar::drawOverlay()
 {
     // A frame skipped since the last draw means the bar was hidden (tab, accordion, closed floater).
@@ -779,13 +801,20 @@ void LLScrollbar::drawOverlay()
     if (!SKScrollbarOverlay::scrollable(mDocSize, mPageSize))
     {
         mOverlayWiden = 0.f;
+        mOverlayHoverSince = -1.0;
+        if (mOverlayExpanded)
+        {
+            overlaySetExpanded(false);
+        }
         return;
     }
 
     S32 mouse_x, mouse_y;
     LLUI::getInstance()->getMousePositionLocal(this, &mouse_x, &mouse_y);
-    bool other_captor = gFocusMgr.getMouseCapture() && gFocusMgr.getMouseCapture() != this;
-    bool dragging = hasMouseCapture();
+    LLMouseHandler* captor = gFocusMgr.getMouseCapture();
+    // Holding a line button is as much a drag as holding the thumb.
+    bool dragging = captor && (captor == this || captor == mLineUpBtn || captor == mLineDownBtn);
+    bool other_captor = captor && !dragging;
     bool hovered = getEnabled() && !other_captor && getLocalRect().pointInRect(mouse_x, mouse_y);
     if (hovered || dragging || mOverlayRevealPending)
     {
@@ -793,7 +822,27 @@ void LLScrollbar::drawOverlay()
         mOverlayRevealPending = false;
     }
 
-    mOverlayWiden = SKScrollbarOverlay::stepWiden(mOverlayWiden, hovered || dragging,
+    // Windows 11 Settings style: a dwell on the bar expands it to show its track and arrows.
+    static LLUICachedControl<F32> expand_delay("SkoomaScrollbarOverlayExpandDelay", 0.3f);
+    const F64 now = LLFrameTimer::getTotalSeconds();
+    if (hovered && mOverlayHoverSince < 0.0)
+    {
+        mOverlayHoverSince = now;
+    }
+    else if (!hovered && mOverlayHoverSince >= 0.0)
+    {
+        mOverlayHoverSince = -1.0;
+        mOverlayLeftAt = now;
+    }
+    const bool expand = SKScrollbarOverlay::expanded(mOverlayExpanded, hovered ? F32(now - mOverlayHoverSince) : -1.f,
+                                                     F32(now - mOverlayLeftAt), dragging, expand_delay,
+                                                     SKScrollbarOverlay::COLLAPSE_DELAY);
+    if (expand != mOverlayExpanded)
+    {
+        overlaySetExpanded(expand);
+    }
+
+    mOverlayWiden = SKScrollbarOverlay::stepWiden(mOverlayWiden, mOverlayExpanded,
                                                   LLFrameTimer::getFrameDeltaTimeF32(), SKScrollbarOverlay::WIDEN_TIME);
     F32 alpha = overlayAlpha(LLFrameTimer::getTotalSeconds());
     if (alpha <= 0.f)
@@ -803,21 +852,21 @@ void LLScrollbar::drawOverlay()
 
     const bool vertical = mOrientation == VERTICAL;
     S32 cross = vertical ? getRect().getWidth() : getRect().getHeight();
-    F32 want = SKScrollbarOverlay::width(mOverlayWiden, SKScrollbarOverlay::THIN_WIDTH, SKScrollbarOverlay::WIDE_WIDTH);
+    F32 wide = llmax(SKScrollbarOverlay::THIN_WIDTH, F32(cross - 6));
+    F32 want = SKScrollbarOverlay::width(mOverlayWiden, SKScrollbarOverlay::THIN_WIDTH, wide);
     S32 width = llclamp(ll_round(want), 1, llmax(1, cross - 2));
-    S32 inset = llmax(0, cross - width - 2); // against the far edge with a 2 px margin
+    // Against the far edge with a 2 px margin while thin, centred once expanded.
+    S32 inset = llmax(0, ll_round(lerp(F32(cross - width - 2), F32(cross - width) * 0.5f, mOverlayWiden)));
 
     static LLUIColor thumb_color = LLUIColorTable::instance().getColor("ScrollbarThumbColor");
     static LLUIColor track_color = LLUIColorTable::instance().getColor("ScrollbarTrackColor");
 
-    // The faint track shows only while the bar is wide.
+    // The track shows only while the bar is expanded.
     if (mOverlayWiden > 0.f)
     {
         LLColor4 track = track_color.get();
-        track.mV[VALPHA] *= 0.35f * mOverlayWiden * alpha;
-        LLRect strip = vertical ? LLRect(inset, getRect().getHeight(), inset + width, 0)
-                                : LLRect(0, cross - inset, getRect().getWidth(), cross - inset - width);
-        gl_rect_2d(strip, track, true);
+        track.mV[VALPHA] *= 0.6f * mOverlayWiden * alpha;
+        gl_rect_2d(getLocalRect(), track, true);
     }
 
     LLColor4 thumb = thumb_color.get();
@@ -849,6 +898,31 @@ void LLScrollbar::drawOverlay()
         {
             gl_rect_2d(r.mLeft + i, r.mTop - cut, r.mLeft + i + 1, r.mBottom + cut, thumb, true);
             gl_rect_2d(r.mRight - i - 1, r.mTop - cut, r.mRight - i, r.mBottom + cut, thumb, true);
+        }
+    }
+
+    // Small frameless chevrons over the line buttons, which keep the classic bar's click and hold-repeat.
+    if (mOverlayExpanded && mOverlayWiden > 0.f)
+    {
+        LLColor4 arrow = thumb_color.get();
+        arrow.mV[VALPHA] *= 0.8f * mOverlayWiden * alpha;
+        for (LLButton* btn : { mLineUpBtn, mLineDownBtn })
+        {
+            const LLRect& b = btn->getRect();
+            const F32 cx = (F32)b.getCenterX();
+            const F32 cy = (F32)b.getCenterY();
+            const F32 h = llmax(2.f, F32(llmin(b.getWidth(), b.getHeight())) * 0.2f);
+            const F32 dir = btn == mLineUpBtn ? 1.f : -1.f; // up/left button points to the start
+            if (vertical)
+            {
+                gl_triangle_2d(ll_round(cx - h * 1.5f), ll_round(cy - h * dir), ll_round(cx + h * 1.5f), ll_round(cy - h * dir),
+                               ll_round(cx), ll_round(cy + h * dir), arrow, true);
+            }
+            else
+            {
+                gl_triangle_2d(ll_round(cx + h * dir), ll_round(cy - h * 1.5f), ll_round(cx + h * dir), ll_round(cy + h * 1.5f),
+                               ll_round(cx - h * dir), ll_round(cy), arrow, true);
+            }
         }
     }
 }

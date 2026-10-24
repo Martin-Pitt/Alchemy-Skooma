@@ -3110,6 +3110,17 @@
             <key>Value</key>
             <real>0.25</real>
         </map>
+        <key>SkoomaScrollbarOverlayExpandDelay</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds the pointer rests on an overlay scroll bar before it expands to show its track and arrows.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.3</real>
+        </map>
         <key>SkoomaScrollbarOverlayEverywhere</key>
         <map>
             <key>Comment</key>

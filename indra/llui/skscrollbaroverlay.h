@@ -31,10 +31,11 @@
 
 namespace SKScrollbarOverlay
 {
-    constexpr F32 THIN_WIDTH = 4.f;
+    constexpr F32 THIN_WIDTH = 3.f;
     constexpr F32 WIDE_WIDTH = 10.f;
     constexpr F32 FADE_IN_TIME = 0.15f;
     constexpr F32 WIDEN_TIME = 0.12f;
+    constexpr F32 COLLAPSE_DELAY = 0.5f;
 
     inline F32 clamp01(F32 v) { return std::clamp(v, 0.f, 1.f); }
 
@@ -62,6 +63,23 @@ namespace SKScrollbarOverlay
     {
         F32 p = clamp01(progress);
         return thin + (wide - thin) * p * p * (3.f - 2.f * p);
+    }
+
+    // Whether the bar is expanded (track and arrows), Windows 11 Settings style: after the pointer rests on it
+    // expand_delay seconds, until it has been away collapse_delay seconds; a drag keeps whatever it began in.
+    // hovered_for is negative while the pointer is away.
+    inline bool expanded(bool expanded_now, F32 hovered_for, F32 away_for, bool dragging,
+                         F32 expand_delay, F32 collapse_delay)
+    {
+        if (dragging)
+        {
+            return expanded_now;
+        }
+        if (hovered_for >= 0.f)
+        {
+            return expanded_now || hovered_for >= expand_delay;
+        }
+        return expanded_now && away_for < collapse_delay;
     }
 
     inline bool scrollable(S32 doc_size, S32 page_size) { return doc_size > page_size; }
