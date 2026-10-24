@@ -62,6 +62,7 @@
 #include "llviewerobject.h"
 #include "llviewerobjectlist.h"
 #include "llviewertexture.h"
+#include "llspeakers.h"
 #include "llviewercontrol.h"
 #include "llviewertexture.h"
 #include "llviewerregion.h"
@@ -1533,7 +1534,10 @@ void SKFloaterLocalChat::updateTyping(F64 now)
             {
                 continue;
             }
-            const bool typing = avatar->mSignaledAnimations.find(ANIM_AGENT_TYPE) != avatar->mSignaledAnimations.end();
+            // The simulator's start/stop typing chat, which arrives even from those who turned the typing animation off.
+            const LLPointer<LLSpeaker> speaker = LLLocalSpeakerMgr::getInstance()->findSpeaker(avatar->getID());
+            const bool typing = (speaker.notNull() && speaker->mTyping) ||
+                                avatar->mSignaledAnimations.find(ANIM_AGENT_TYPE) != avatar->mSignaledAnimations.end();
             const F64 dist = dist_vec(avatar->getPositionGlobal(), self_pos);
             if (dist <= range)
             {
