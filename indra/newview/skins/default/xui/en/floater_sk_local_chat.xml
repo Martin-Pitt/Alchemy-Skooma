@@ -18,7 +18,7 @@
  title=""
  single_instance="true"
  save_rect="true"
- width="600">
+ width="450">
     <string name="jump_to_present">Jump to present ↓</string>
     <string name="new_messages">[COUNT] new messages ↓</string>
     <string name="day_divider">[MONTH] [DAY], [YEAR]</string>
@@ -49,7 +49,7 @@
      image_overlay="Emoji_Picker_Icon"
      is_toggle="true"
      layout="topleft"
-     left="572"
+     left="422"
      top="530"
      name="sk_local_chat_emoji"
      tool_tip="Shows/hides emoji picker"
@@ -60,7 +60,7 @@
      height="16"
      image_overlay="Icon_Gear"
      layout="topleft"
-     left="400"
+     left="250"
      menu_filename="menu_sk_local_chat.xml"
      name="sk_local_chat_cog"
      tool_tip="Local chat style"
