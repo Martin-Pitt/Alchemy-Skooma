@@ -257,6 +257,48 @@ namespace
         return m;
     }
 
+    /// A cell this far inside a triangle (metres) is wholly covered, whatever the clip rounds.
+    constexpr F64 INTERIOR_EPS = 1e-7;
+    /// Fewest covered columns in a row worth stepping over.
+    constexpr S32 INTERIOR_MIN_RUN = 2;
+
+    /// The plan y range of a triangle on the line x = x, false where the line misses it.
+    inline bool planSpan(const V3* t, F64 x, F64& ya, F64& yb)
+    {
+        ya = 1e300;
+        yb = -1e300;
+        S32 hits = 0;
+        for (S32 i = 0, j = 2; i < 3; j = i, ++i)
+        {
+            const F64 xi = t[i].v[0], xj = t[j].v[0];
+            if (xi == xj || x < std::min(xi, xj) || x > std::max(xi, xj))
+            {
+                continue;
+            }
+            const F64 y = t[i].v[1] + (t[j].v[1] - t[i].v[1]) * ((x - xi) / (xj - xi));
+            ya = std::min(ya, y);
+            yb = std::max(yb, y);
+            ++hits;
+        }
+        return hits >= 2;
+    }
+
+    /// A piece's height range, in metres, as a span of its column.
+    template<typename Store> inline void emitSpan(const Frame& g, S32 ix, S32 iy, F64 zlo, F64 zhi, U8 code, U8 cue, Store& out)
+    {
+        zlo -= g.mOz;
+        zhi -= g.mOz;
+        if (zhi < 0.0 || zlo > g.mRange)
+        {
+            return;
+        }
+        zlo = std::max(zlo, 0.0);
+        zhi = std::min(zhi, g.mRange);
+        const S32 smin = std::clamp(static_cast<S32>(std::floor(g.heightUnits(zlo))), 0, COLUMN_HEIGHT_MAX - 1);
+        const S32 smax = std::clamp(static_cast<S32>(std::ceil(g.heightUnits(zhi))), smin + 1, static_cast<S32>(COLUMN_HEIGHT_MAX));
+        out.add(static_cast<size_t>(ix) + static_cast<size_t>(iy) * g.mW, Span{ static_cast<U16>(smin), static_cast<U16>(smax), code, cue });
+    }
+
     /// Clip one triangle into the frame's columns, Recast-style: rows along SL x, then columns along SL y, in a
     /// fixed buffer on the stack. Each piece's height range becomes a span.
     template<typename Store> void emitTriangle(const Frame& g, const F32* t, U8 code, U8 cue, Store& out)
@@ -287,6 +329,11 @@ namespace
         const F64 nx = e0y * e1z - e0z * e1y, ny = e0z * e1x - e0x * e1z;
         const S32 facing_x = nx > 0.0 ? -1 : nx < 0.0 ? 1 : 0;
         const S32 facing_y = ny > 0.0 ? -1 : ny < 0.0 ? 1 : 0;
+        // Heights off the plane, for the cells the triangle covers; not for one too steep to read them off.
+        const F64 nz = e0x * e1y - e0y * e1x;
+        const bool plane = std::fabs(nz) >= 0.01 * (std::fabs(nx) + std::fabs(ny));
+        const F64 gx = plane ? -nx / nz : 0.0, gy = plane ? -ny / nz : 0.0;
+        V3 in3[3] = { in[0], in[1], in[2] };
         if (lo[0] > g.mOx + W * cs || hi[0] < g.mOx || lo[1] > g.mOy + W * cs || hi[1] < g.mOy || lo[2] > g.mOz + g.mRange || hi[2] < g.mOz)
         {
             return;
@@ -336,8 +383,50 @@ namespace
             const bool one_column = iy0 == iy1;
             iy0 = std::clamp(iy0, -1, W - 1);
             iy1 = std::clamp(iy1, 0, W - 1);
+            // The columns whose cell lies inside the triangle with room to spare: each piece is the whole cell, so
+            // its heights are the plane's over the cell and the walk steps over them in one split.
+            S32 ja = 1, jb = 0;
+            const F64 xl = g.mOx + ix * cs, xr = xl + cs;
+            if (plane && !one_column && xl > lo[0] + INTERIOR_EPS && xr < hi[0] - INTERIOR_EPS)
+            {
+                F64 ya, yb;
+                if (planSpan(in3, xl, ya, yb))
+                {
+                    F64 ya2, yb2;
+                    if (planSpan(in3, xr, ya2, yb2))
+                    {
+                        ya = std::max(ya, ya2) + INTERIOR_EPS;
+                        yb = std::min(yb, yb2) - INTERIOR_EPS;
+                        ja = std::max(static_cast<S32>(std::ceil(g.cells(ya - g.mOy))), std::max(iy0, 0));
+                        jb = std::min(static_cast<S32>(std::floor(g.cells(yb - g.mOy))) - 1, iy1);
+                    }
+                }
+            }
+            if (jb - ja < INTERIOR_MIN_RUN - 1)
+            {
+                ja = W + 1;
+            }
+            const F64 zl = in3[0].v[2] + gx * (xl - in3[0].v[0]), zr = in3[0].v[2] + gx * (xr - in3[0].v[0]);
+            const F64 zxlo = std::min(zl, zr), zxhi = std::max(zl, zr);
             for (S32 iy = iy0; iy <= iy1; ++iy)
             {
+                if (iy == ja)
+                {
+                    for (; iy <= jb; ++iy)
+                    {
+                        const F64 ta = gy * (g.mOy + iy * cs - in3[0].v[1]), tb = gy * (g.mOy + (iy + 1) * cs - in3[0].v[1]);
+                        emitSpan(g, ix, iy, zxlo + std::min(ta, tb), zxhi + std::max(ta, tb), code, cue, out);
+                    }
+                    iy = jb;
+                    if (jb < iy1)
+                    {
+                        S32 ncell, nrr;
+                        dividePoly<1, 1>(row, nrow, cell, ncell, rrest, nrr, g.mOy + (jb + 1) * cs, facing_y);
+                        std::swap(row, rrest);
+                        nrow = nrr;
+                    }
+                    continue;
+                }
                 S32 ncell, nrr;
                 const F64 y_line = g.mOy + (iy + 1) * cs;
                 if (one_column || (iy == raw_iy1 && (nrow == 0 || maxOf(row, nrow, 1) < y_line)))
@@ -363,17 +452,7 @@ namespace
                     zlo = std::min(zlo, cell[k].v[2]);
                     zhi = std::max(zhi, cell[k].v[2]);
                 }
-                zlo -= g.mOz;
-                zhi -= g.mOz;
-                if (zhi < 0.0 || zlo > g.mRange)
-                {
-                    continue;
-                }
-                zlo = std::max(zlo, 0.0);
-                zhi = std::min(zhi, g.mRange);
-                const S32 smin = std::clamp(static_cast<S32>(std::floor(g.heightUnits(zlo))), 0, COLUMN_HEIGHT_MAX - 1);
-                const S32 smax = std::clamp(static_cast<S32>(std::ceil(g.heightUnits(zhi))), smin + 1, static_cast<S32>(COLUMN_HEIGHT_MAX));
-                out.add(static_cast<size_t>(ix) + static_cast<size_t>(iy) * W, Span{ static_cast<U16>(smin), static_cast<U16>(smax), code, cue });
+                emitSpan(g, ix, iy, zlo, zhi, code, cue, out);
             }
         }
     }
