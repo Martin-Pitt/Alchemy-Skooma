@@ -590,7 +590,8 @@ void SKFloaterLocalChat::showInput(bool show)
 
 void SKFloaterLocalChat::sendChat(EChatType type)
 {
-    ALChatBar::sendChatText(mInput, type);
+    static LLCachedControl<bool> mu_pose(gSavedSettings, "SkoomaLocalChatMUPose", false);
+    ALChatBar::sendChatText(mInput, type, mu_pose);
     gAgent.stopTyping();
     if (gSavedSettings.getBOOL("CloseChatBarOnReturn"))
     {
