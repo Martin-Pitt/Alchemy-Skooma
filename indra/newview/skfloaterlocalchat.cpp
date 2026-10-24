@@ -556,7 +556,7 @@ void SKFloaterLocalChat::appendChat(const LLChat& chat, const LLSD& args, F64 ar
     if (arrival > 0.0 && isMinimized())
     {
         ++mCollapsedUnread;
-        layoutCollapsed();
+        updateCollapsedStatus();
     }
     if (scrolledUp())
     {
@@ -668,9 +668,7 @@ bool SKFloaterLocalChat::applyRectControl()
     return true;
 }
 
-constexpr S32 COLLAPSED_HEIGHT = 22;
-constexpr S32 COLLAPSED_MIN_WIDTH = 72;
-static const std::string COLLAPSED_SEPARATOR = "  \xC2\xB7  "; // the typing line's separator too
+static const std::string TYPING_SEPARATOR = "  Â·  ";
 
 void SKFloaterLocalChat::setMinimized(bool minimize)
 {
@@ -683,72 +681,15 @@ void SKFloaterLocalChat::setMinimized(bool minimize)
         stopChat();
     }
     mCollapsedUnread = 0;
+    updateCollapsedStatus();
     LLFloater::setMinimized(minimize);
-    if (minimize)
-    {
-        // Where the chat was, not against a screen edge; the expanded rect is what save_rect keeps.
-        setBorderVisible(false);
-        setOrigin(getExpandedRect().mLeft, getExpandedRect().mBottom);
-        layoutCollapsed();
-    }
-    if (mButtons[BUTTON_RESTORE])
-    {
-        mButtons[BUTTON_RESTORE]->setVisible(false); // the bar itself restores
-    }
 }
 
-void SKFloaterLocalChat::layoutCollapsed()
+void SKFloaterLocalChat::updateCollapsedStatus()
 {
-    if (!isMinimized())
-    {
-        return;
-    }
-    LLStringUtil::format_map_t args;
-    args["[COUNT]"] = llformat("%d", mCollapsedUnread);
-    mCollapsedLabel = getString(mCollapsedUnread > 0 ? "collapsed_unread" : "collapsed_title", args);
-    // Typing goes inline after the label, the bar growing to fit as far as the screen allows.
-    LLFontGL* font = LLFontGL::getFontSansSerifSmall();
-    S32 width = llmax(COLLAPSED_MIN_WIDTH, font->getWidth(mCollapsedLabel) + 4 * PAD_X);
-    if (anyoneTyping() && !gAgentCamera.cameraMouselook())
-    {
-        width = 2 * PAD_X + font->getWidth(mCollapsedLabel) + font->getWidth(COLLAPSED_SEPARATOR) + typingWidth() + 2 * PAD_X;
-        const LLView* parent = getParent();
-        if (parent)
-        {
-            width = llmin(width, parent->getRect().getWidth() - getRect().mLeft);
-        }
-        width = llmax(width, COLLAPSED_MIN_WIDTH);
-    }
-    const S32 height = COLLAPSED_HEIGHT;
-    if (width != getRect().getWidth() || height != getRect().getHeight())
-    {
-        reshape(width, height);
-    }
-}
-
-void SKFloaterLocalChat::drawCollapsed(F64 now)
-{
-    static LLUIImagePtr bar_image = LLUI::getUIImage("Rounded_Square");
-    static LLUIColor bar_color = LLUIColorTable::instance().getColor("Black");
-    static LLUIColor text_color = LLUIColorTable::instance().getColor("White");
-    LLFontGL* font = LLFontGL::getFontSansSerifSmall();
-    const S32 bar_w = getRect().getWidth();
-    const S32 text_y = (COLLAPSED_HEIGHT - font->getLineHeight()) / 2;
-    const LLFontGL::StyleFlags style = mCollapsedUnread > 0 ? LLFontGL::BOLD : LLFontGL::NORMAL;
-    bar_image->draw(0, 0, bar_w, COLLAPSED_HEIGHT, bar_color.get() % (mHovered ? 0.75f : 0.55f));
-    if (!anyoneTyping() || gAgentCamera.cameraMouselook())
-    {
-        font->renderUTF8(mCollapsedLabel, 0, (F32)(bar_w / 2), (F32)text_y, text_color.get() % 0.9f,
-                         LLFontGL::HCENTER, LLFontGL::BOTTOM, style, LLFontGL::NO_SHADOW);
-        return;
-    }
-    // "Chat · 3  ·  ... Kaia is typing", on the one line.
-    F32 x = (F32)(2 * PAD_X);
-    font->renderUTF8(mCollapsedLabel, 0, x, (F32)text_y, text_color.get() % 0.9f, LLFontGL::LEFT, LLFontGL::BOTTOM, style,
-                     LLFontGL::NO_SHADOW, S32_MAX, S32_MAX, &x);
-    font->renderUTF8(COLLAPSED_SEPARATOR, 0, x, (F32)text_y, text_color.get() % 0.4f, LLFontGL::LEFT, LLFontGL::BOTTOM, LLFontGL::NORMAL,
-                     LLFontGL::NO_SHADOW, S32_MAX, S32_MAX, &x);
-    drawTyping(now, ll_round(x), text_y, bar_w - 2 * PAD_X);
+    // The unread count and who is typing, in the bar every collapsed floater draws.
+    const std::string& typing = !mTypingLabel[0].empty() ? mTypingLabel[0] : mTypingLabel[1];
+    setCollapsedStatus(mCollapsedUnread, typing);
 }
 
 void SKFloaterLocalChat::reshape(S32 width, S32 height, bool called_from_parent)
@@ -1555,17 +1496,12 @@ void SKFloaterLocalChat::draw()
     {
         const F64 now = LLFrameTimer::getTotalSeconds();
         updateTyping(now);
-        layoutCollapsed(); // the bar's width follows the inline typing line
+        updateCollapsedStatus();
 
         if (mCog)
         {
             mCog->setVisible(false);
         }
-        if (mButtons[BUTTON_RESTORE])
-        {
-            mButtons[BUTTON_RESTORE]->setVisible(false);
-        }
-        drawCollapsed(now);
         LLFloater::draw();
         return;
     }
@@ -1824,7 +1760,7 @@ S32 SKFloaterLocalChat::typingWidth() const
         width += font->getWidth(mTypingLabel[0]);
         if (!mTypingLabel[1].empty())
         {
-            width += font->getWidth(COLLAPSED_SEPARATOR);
+            width += font->getWidth(TYPING_SEPARATOR);
         }
     }
     if (!mTypingLabel[1].empty())
@@ -1869,7 +1805,7 @@ void SKFloaterLocalChat::drawTyping(F64 now, S32 x0, S32 y, S32 right) const
         {
             return;
         }
-        font->renderUTF8(COLLAPSED_SEPARATOR, 0, text_x, (F32)y, color.get() % 0.4f, LLFontGL::LEFT, LLFontGL::BOTTOM, LLFontGL::NORMAL, LLFontGL::DROP_SHADOW_SOFT, S32_MAX, S32_MAX, &text_x);
+        font->renderUTF8(TYPING_SEPARATOR, 0, text_x, (F32)y, color.get() % 0.4f, LLFontGL::LEFT, LLFontGL::BOTTOM, LLFontGL::NORMAL, LLFontGL::DROP_SHADOW_SOFT, S32_MAX, S32_MAX, &text_x);
         const S32 room = right - ll_round(text_x);
         const std::string& far_label = font->getWidth(mTypingLabel[1]) <= room ? mTypingLabel[1] : mTypingFarCount;
         if (room > 0)
@@ -1887,7 +1823,7 @@ bool SKFloaterLocalChat::hitsContentAt(S32 x, S32 y)
 {
     if (isMinimized())
     {
-        return x >= 0 && x < getRect().getWidth() && y >= 0 && y < COLLAPSED_HEIGHT;
+        return true; // the collapsed bar is all header
     }
     auto hits_view = [x, y](const LLView* view)
     {
@@ -2008,8 +1944,7 @@ bool SKFloaterLocalChat::handleMouseDown(S32 x, S32 y, MASK mask)
 {
     if (isMinimized())
     {
-        setMinimized(false);
-        return true;
+        return LLFloater::handleMouseDown(x, y, mask);
     }
     // The drag handle lies under everything; any other child takes its own clicks.
     LLView* child = childFromPoint(x, y);

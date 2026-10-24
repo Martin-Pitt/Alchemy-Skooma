@@ -68,10 +68,8 @@ public:
     void draw() override;
     void reshape(S32 width, S32 height, bool called_from_parent = true) override;
     bool applyRectControl() override;
-    /// Collapsed, the chat is a compact bar at its bottom left with the unread count and the typing line.
+    /// Collapsed, the chat's bar carries the unread count and the typing line.
     void setMinimized(bool minimize) override;
-    /// The chat draws its own bar where it was, so it never folds against a screen edge.
-    ECollapseEdge pickCollapseEdge() override { return COLLAPSE_EDGE_NONE; }
     /// Locked, only what the chat draws takes the mouse: shown messages, the pill, the input, the typing line, the scroll bar and the buttons.
     bool hitsContentAt(S32 x, S32 y) override;
     bool handleKeyHere(KEY key, MASK mask) override;
@@ -196,9 +194,7 @@ private:
     /// What the typing line takes untruncated.
     S32 typingWidth() const;
     bool anyoneTyping() const { return !mTypingLabel[0].empty() || !mTypingLabel[1].empty(); }
-    /// Sizes the collapsed bar to its label, widened for the inline typing line while anyone types.
-    void layoutCollapsed();
-    void drawCollapsed(F64 now);
+    void updateCollapsedStatus();
     void onStyleMenu(const LLSD& param);
     bool onStyleCheck(const LLSD& param) const;
 
@@ -235,7 +231,6 @@ private:
     F64 mEdgeSince = -1.0;      // when the pointer reached the floater's edge, -1 while it is elsewhere
     F64 mChromeDrawnAt = 0.0;
     S32 mCollapsedUnread = 0;   // arrived since the chat was collapsed
-    std::string mCollapsedLabel;
     bool mWasExpanded = false;
     F64 mCollapsedAt = -1.0e9; // when the log last stopped being shown whole
     boost::signals2::connection mFontConnection;
