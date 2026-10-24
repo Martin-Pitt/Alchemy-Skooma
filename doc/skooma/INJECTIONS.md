@@ -1214,7 +1214,7 @@ Weather sound: rain, snow, hail and sand beds, roof rain, Atmo's wind, thunder a
 
 ## Floater collapse (replaces minimize)
 
-Branch `feature-minimize-vs-collapse`. Floaters fold against the nearest screen edge
+Branch `foundation-ui/collapse` (was `feature-minimize-vs-collapse`). Floaters fold against the nearest screen edge
 instead of minimizing, and a floater restored at login comes back collapsed.
 
 ### Injection sites
