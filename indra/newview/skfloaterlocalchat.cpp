@@ -255,7 +255,8 @@ void SKFloaterLocalChat::addChat(const LLChat& chat, const LLSD& args)
         self->backfill(true);
     }
     self->appendChat(chat, args, LLFrameTimer::getTotalSeconds());
-    if (!self->getVisible())
+    // Put away for Conversations, the chat stays hidden; reopening it would sound and flicker on every line.
+    if (!self->getVisible() && !self->mHiddenForConversations && shouldTakeChat())
     {
         LLFloaterReg::showInstance("sk_local_chat", LLSD(), false);
     }
