@@ -1,6 +1,6 @@
 /**
  * @file skcensusio.cpp
- * @brief A census export: everything the navmesh builds from, to a file and back, so a place replays offline.
+ * @brief A census export: everything the air cells build from, to a file and back, so a place replays offline.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Alchemy Viewer Source Code
@@ -1014,7 +1014,7 @@ namespace skworld
     void censusTerrain(const CensusFile& census, const LLVector3d& mesh_origin, const LLVector3d& tile_min, const LLVector3d& tile_max, F32 pad,
                        TerrainWindow& out)
     {
-        // SKNavMesh::fillTerrain, with the regions' samples for resolveHeightGlobal.
+        // The terrain on a 1 m lattice round the tile, from the regions' samples, as resolveHeightGlobal reads it.
         const F32 spacing = 1.f;
         const LLVector3d start(tile_min.mdV[VX] - pad, tile_min.mdV[VY] - pad, 0.0);
         const S32 n = static_cast<S32>(std::ceil((tile_max.mdV[VX] - tile_min.mdV[VX] + 2 * pad) / spacing)) + 1;
