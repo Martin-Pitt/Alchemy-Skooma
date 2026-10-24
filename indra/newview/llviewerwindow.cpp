@@ -3601,11 +3601,16 @@ void LLViewerWindow::handleScrollWheel(LLScrollDelta delta)
     // Discrete consumers read delta.mClicks and are intentionally left untouched.
     static LLCachedControl<F32> scroll_sensitivity(gSavedSettings, "MouseWheelScrollSensitivity", 1.f);
     delta.mPrecise *= scroll_sensitivity;
-    // <SK:Nexii> smooth scroll
-    delta.mPixels *= scroll_sensitivity;
-    delta.mLines *= scroll_sensitivity;
+    // <SK:Nexii> smooth scroll: off, the window sends upstream's deltas from the next wheel event on
+    static LLCachedControl<bool> smooth_scroll(gSavedSettings, "SkoomaScroll", true);
     static LLCachedControl<bool> precise_heuristic(gSavedSettings, "SkoomaScrollWinPreciseHeuristic", true);
-    LLWindow::sPreciseWheelHeuristic = precise_heuristic;
+    LLWindow::sSmoothScroll = smooth_scroll;
+    LLWindow::sPreciseWheelHeuristic = smooth_scroll && precise_heuristic;
+    if (smooth_scroll)
+    {
+        delta.mPixels *= scroll_sensitivity;
+        delta.mLines *= scroll_sensitivity;
+    }
     // </SK:Nexii>
 
     LLMouseHandler* mouse_captor = gFocusMgr.getMouseCapture();
@@ -3665,11 +3670,16 @@ void LLViewerWindow::handleScrollHWheel(LLScrollDelta delta)
 
     static LLCachedControl<F32> scroll_sensitivity(gSavedSettings, "MouseWheelScrollSensitivity", 1.f);
     delta.mPrecise *= scroll_sensitivity;
-    // <SK:Nexii> smooth scroll
-    delta.mPixels *= scroll_sensitivity;
-    delta.mLines *= scroll_sensitivity;
+    // <SK:Nexii> smooth scroll: off, the window sends upstream's deltas from the next wheel event on
+    static LLCachedControl<bool> smooth_scroll(gSavedSettings, "SkoomaScroll", true);
     static LLCachedControl<bool> precise_heuristic(gSavedSettings, "SkoomaScrollWinPreciseHeuristic", true);
-    LLWindow::sPreciseWheelHeuristic = precise_heuristic;
+    LLWindow::sSmoothScroll = smooth_scroll;
+    LLWindow::sPreciseWheelHeuristic = smooth_scroll && precise_heuristic;
+    if (smooth_scroll)
+    {
+        delta.mPixels *= scroll_sensitivity;
+        delta.mLines *= scroll_sensitivity;
+    }
     // </SK:Nexii>
 
     LLMouseHandler* mouse_captor = gFocusMgr.getMouseCapture();

@@ -139,8 +139,6 @@ public:
     F32                 getDocPosF() const { return mDocPosF; }
     // Pixels per doc unit (1 where the doc is in pixels, a row's height where it is in rows), and per wheel line.
     void                setWheelUnits(F32 unit_pixels, F32 line_pixels);
-    // The content's own line; a wheel line is Chrome's unless SkoomaScrollRealLines asks for this one.
-    void                setWheelContentLine(F32 line_pixels);
     // Doc units are whole items (rows): a notch brings in whole items, Explorer style.
     void                setWheelSnapsItems(bool snaps) { mWheelSnapsItems = snaps; }
     // Advances the wheel's glide to now; its owner calls this every frame it draws.
@@ -167,12 +165,12 @@ private:
     S32                 mDocPos;        // Position within the doc that the scrollbar is modeling, in "lines" (user size)
     S32                 mPageSize;      // Maximum number of lines that can be seen at one time.
     S32                 mStepSize;
+    F32                 mScrollWheelResidue = 0.f; // carries sub-line precise scroll between events
     // <SK:Nexii> smooth scroll
     SKScrollAnimator    mWheelAnimator;
     F32                 mDocPosF = 0.f;
     F32                 mWheelUnit = 1.f;
     F32                 mWheelLine = 1.f;
-    F32                 mWheelContentLine = 0.f;
     bool                mWheelSnapsItems = false;
     bool                mApplyingWheel = false;
     // </SK:Nexii>

@@ -98,6 +98,15 @@ static LLWindowSDL *gWindowImplementation = nullptr;
 // lines, and a fast stream of fractional values taken as a precise device.
 static void describe_wheel(const SDL_MouseWheelEvent& wheel, LLScrollDelta& dx, LLScrollDelta& dy)
 {
+    if (!LLWindow::sSmoothScroll)
+    {
+#if LL_DARWIN
+        // Still take AppKit's account, so the stash stays in step with SDL's queue.
+        LLSDLMacScroll skipped;
+        ll_sdl_macos_take_scroll(skipped);
+#endif
+        return;
+    }
     dx.mLines = dx.mPrecise * LLScrollDelta::DEFAULT_LINES;
     dy.mLines = dy.mPrecise * LLScrollDelta::DEFAULT_LINES;
 #if LL_DARWIN
