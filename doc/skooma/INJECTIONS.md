@@ -1225,6 +1225,8 @@ instead of minimizing, and a floater restored at login comes back collapsed.
 | `indra/llui/llfloaterreg.h` / `.cpp` | `declareCollapseStateControl` / `getCollapseStateControlName` (`floater_collapsed_<name>`); `showInitialVisibleInstances` re-collapses a restored floater; `registerControlVariables` declares saved ones | Beside the visibility control it rides on, at the one place login reopens floaters |
 | `indra/llui/llfloater.cpp` (`LLFloaterView::getCollapsedPosition`) | Where a bar lands against an edge, stacked past toolbars and other bars | The floater view owns the toolbar rects |
 | `indra/llui/lldraghandle.h` / `.cpp` | `setTurned` / `mTurned`: a side-collapsed header drawn turned 90°, buttons at its far end | The header draws the bar |
+| `indra/llui/lldraghandle.h` / `.cpp` | `setTitleStatus`: a bold count and a dim status line after the title | Collapsed status, shared by every floater |
+| `indra/llui/llfloater.h` / `.cpp` | `setCollapsedStatus`; a collapsed floater draws its bar even when its background is hidden | Collapsed status: chat, and later other windows |
 | `indra/llrender/llrender2dutils.h` / `.cpp` | Helper drawing what follows turned 90° counter-clockwise | Used by the turned header |
 | `indra/llui/lltextbase.h` | `setClip()` | Turned text cannot use a screen-space scissor |
 | `indra/llui/lltoolbar.h` / `.cpp` | `mHasButtons`; button-area query for bars to keep clear of; empty toolbars ignored | Bars stack past toolbars |
