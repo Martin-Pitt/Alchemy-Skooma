@@ -107,6 +107,9 @@ constexpr S32 DIVIDER_PAD = 8;    // above and below a day divider
 constexpr S32 DIVIDER_GAP = 8;    // between a day divider's lines and its label
 constexpr F32 DIVIDER_ALPHA = 0.45f;
 constexpr F32 DIVIDER_LINE_ALPHA = 0.15f;
+constexpr F32 CHROME_FADE = 0.15f; // the hover backdrop's and border's ease, in seconds
+constexpr S32 EDGE_REACH = 6;      // how near the floater's edge the pointer shows the border
+constexpr F64 EDGE_REST = 0.08;    // and how long it rests there first
 
 // The day a chat timestamp leads with, "year/month/day ...", as yyyymmdd; 0 when it carries none.
 S32 day_key(const std::string& stamp)
@@ -636,6 +639,7 @@ void SKFloaterLocalChat::onMouseLeave(S32 x, S32 y, MASK mask)
 {
     mHovered = false;
     mBarHot = false;
+    mEdgeSince = -1.0;
     LLFloater::onMouseLeave(x, y, mask);
 }
 
@@ -1420,13 +1424,23 @@ void SKFloaterLocalChat::draw()
         mCog->setVisible(mHovered && opaque);
     }
 
-    if (opaque && mHovered)
+    // The only chrome, the mini-map's faint tint, eased in and out; its border shows only while the pointer rests on an edge.
+    const F32 chrome_dt = (F32)llclamp(now - mChromeDrawnAt, 0.0, 0.1);
+    mChromeDrawnAt = now;
+    const bool edge_rest = mEdgeSince >= 0.0 && now - mEdgeSince >= EDGE_REST;
+    mBackdrop = llclamp(mBackdrop + ((opaque && mHovered) ? chrome_dt : -chrome_dt) / CHROME_FADE, 0.f, 1.f);
+    mBorder = llclamp(mBorder + ((opaque && edge_rest) ? chrome_dt : -chrome_dt) / CHROME_FADE, 0.f, 1.f);
+    if (mBackdrop > 0.f)
     {
-        // The only chrome, the mini-map's: a faint dark tint inside a thin light border.
         static const LLColor4 tint(16.f / 255.f, 16.f / 255.f, 20.f / 255.f, 61.f / 255.f);
+        const F32 ease = mBackdrop * mBackdrop * (3.f - 2.f * mBackdrop);
+        gl_rect_2d(0, getRect().getHeight(), getRect().getWidth(), 0, tint % (tint.mV[VALPHA] * ease), true);
+    }
+    if (mBorder > 0.f)
+    {
         static const LLColor4 border(197.f / 255.f, 205.f / 255.f, 211.f / 255.f, 122.f / 255.f);
-        gl_rect_2d(0, getRect().getHeight(), getRect().getWidth(), 0, tint, true);
-        gl_rect_2d(0, getRect().getHeight(), getRect().getWidth(), 0, border, false);
+        const F32 ease = mBorder * mBorder * (3.f - 2.f * mBorder);
+        gl_rect_2d(0, getRect().getHeight(), getRect().getWidth(), 0, border % (border.mV[VALPHA] * ease), false);
     }
 
     if (!mRows.empty())
@@ -1810,6 +1824,15 @@ void SKFloaterLocalChat::onMouseCaptureLost()
 bool SKFloaterLocalChat::handleHover(S32 x, S32 y, MASK mask)
 {
     mBarHot = barShown() && barStrip().pointInRect(x, y);
+    const bool at_edge = x < EDGE_REACH || y < EDGE_REACH || x >= getRect().getWidth() - EDGE_REACH || y >= getRect().getHeight() - EDGE_REACH;
+    if (!at_edge)
+    {
+        mEdgeSince = -1.0;
+    }
+    else if (mEdgeSince < 0.0)
+    {
+        mEdgeSince = LLFrameTimer::getTotalSeconds();
+    }
     if (hasMouseCapture() && (mBarDrag >= 0 || mBarPage != 0))
     {
         if (mBarDrag >= 0)

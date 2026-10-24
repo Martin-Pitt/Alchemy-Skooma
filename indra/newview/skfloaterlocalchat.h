@@ -209,6 +209,10 @@ private:
     F64 mBarRepeatAt = 0.0;     // when a held page next repeats
     F32 mBarWide = 0.f;         // 0 for the thin thumb, 1 for the full bar, eased between
     F64 mBarDrawnAt = 0.0;      // the last draw, to ease mBarWide by
+    F32 mBackdrop = 0.f;        // the hover tint, 0 to 1, eased in and out
+    F32 mBorder = 0.f;          // the edge border, likewise
+    F64 mEdgeSince = -1.0;      // when the pointer reached the floater's edge, -1 while it is elsewhere
+    F64 mChromeDrawnAt = 0.0;
     bool mWasExpanded = false;
     F64 mCollapsedAt = -1.0e9; // when the log last stopped being shown whole
     boost::signals2::connection mFontConnection;
