@@ -36,6 +36,7 @@
 
 #include <deque>
 
+class SKEmojiComplete;
 class LLButton;
 class LLChatEntry;
 class LLFontGL;
@@ -201,6 +202,7 @@ private:
     LLChatEntry* mInput = nullptr;
     LLMenuButton* mCog = nullptr;
     LLButton* mEmojiButton = nullptr;
+    SKEmojiComplete* mEmojiComplete = nullptr;
     U32 mEmojiClosedFrame = 0;  // the frame the picker last closed, to tell a toggle-off click
     boost::signals2::connection mEmojiCloseConnection;
     std::deque<Message> mMessages;

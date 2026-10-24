@@ -205,6 +205,11 @@ public:
     void            showEmojiHelper();
     void            hideEmojiHelper();
     void            setShowEmojiHelper(bool show);
+    // <SK:Nexii> Emoji autocomplete: a key hook that runs before the editor's own handling, and the cursor it completes at.
+    void            setKeyInterceptor(std::function<bool(KEY, MASK)> cb) { mKeyInterceptor = std::move(cb); }
+    S32             getCursorPosition() const { return mCursorPos; }
+    void            setShowEmojiShortcodeHelper(bool show) { mShowEmojiShortcodeHelper = show; } // a typed :code opens the picker
+    // </SK:Nexii>
 // [RLVa:KB]
     void            setShowChatMentionPicker(bool show) { mShowChatMentionPicker = show; }
 // [/RLVa:KB]
@@ -333,6 +338,10 @@ private:
     bool            mSelectedOnFocusReceived;
 
     keystroke_signal_t mKeystrokeSignal;
+    // <SK:Nexii> Emoji autocomplete
+    std::function<bool(KEY, MASK)> mKeyInterceptor;
+    bool mShowEmojiShortcodeHelper = true;
+    // </SK:Nexii>
     LLTextValidate::Validator mPrevalidator;
 
     LLHandle<LLContextMenu> mContextMenuHandle;
