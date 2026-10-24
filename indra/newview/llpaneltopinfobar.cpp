@@ -176,7 +176,6 @@ bool LLPanelTopInfoBar::postBuild()
     mHealthConnection = gAgent.addHealthChangedCallback(
         [this](S32 health) { mParcelIcons.setHealth(health); });
 
-    setVisibleCallback(boost::bind(&LLPanelTopInfoBar::onVisibilityChanged, this, _2));
 
     return true;
 }
@@ -184,27 +183,6 @@ bool LLPanelTopInfoBar::postBuild()
 void LLPanelTopInfoBar::onNavBarShowParcelPropertiesCtrlChanged()
 {
     refreshParcelInfoText();
-}
-
-// when panel is shown, all minimized floaters should be shifted downwards to prevent overlapping of
-// PanelTopInfoBar. See EXT-7951.
-void LLPanelTopInfoBar::onVisibilityChanged(const LLSD& show)
-{
-    // this height is used as a vertical offset for ALREADY MINIMIZED floaters
-    // when PanelTopInfoBar visibility changes
-    S32 height = getRect().getHeight();
-
-    // this vertical offset is used for a start minimize position of floaters that
-    // are NOT MIMIMIZED YET
-    S32 minimize_pos_offset = 0;
-
-    if (show.asBoolean())
-    {
-        height = minimize_pos_offset = -height;
-    }
-
-    gFloaterView->shiftMinimizedFloaters(0, height);
-    gFloaterView->setMinimizePositionVerticalOffset(minimize_pos_offset);
 }
 
 boost::signals2::connection LLPanelTopInfoBar::setResizeCallback( const resize_signal_t::slot_type& cb )

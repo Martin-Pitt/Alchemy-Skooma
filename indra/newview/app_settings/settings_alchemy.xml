@@ -4819,17 +4819,6 @@
             <key>Value</key>
             <integer>0</integer>
         </map>
-        <key>ShowFloaterCollapseButton</key>
-        <map>
-            <key>Comment</key>
-            <string>Show/hide the collapse button in the floater controls</string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>Boolean</string>
-            <key>Value</key>
-            <boolean>1</boolean>
-        </map>
         <key>ShowGroupFloaters</key>
         <map>
             <key>Comment</key>
@@ -4895,6 +4884,61 @@
             <string>Boolean</string>
             <key>Value</key>
             <integer>0</integer>
+        </map>
+        <key>SkoomaFloaterCollapseAxisBias</key>
+        <map>
+            <key>Comment</key>
+            <string>How much closer the losing axis must be before a collapsing floater folds against it instead of the preferred one. 1.0 makes it plain nearest-edge, 0.0 makes the preferred axis always win</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.5</real>
+        </map>
+        <key>SkoomaFloaterCollapseDirectional</key>
+        <map>
+            <key>Comment</key>
+            <string>Collapse a floater against the screen edge it sits nearest. Off, collapsing always leaves the header bar where the floater already was</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SkoomaFloaterCollapsePreferSide</key>
+        <map>
+            <key>Comment</key>
+            <string>Collapse floaters into a turned strip against the left or right screen edge in preference to a flat bar against the top or bottom</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SkoomaFloaterCollapseSnapDistance</key>
+        <map>
+            <key>Comment</key>
+            <string>How near a screen edge a floater has to be, in pixels, before collapsing folds it against that edge. Further out than this it collapses to its header where it stands</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>S32</string>
+            <key>Value</key>
+            <integer>100</integer>
+        </map>
+        <key>SkoomaFloaterCollapseSnapToEdge</key>
+        <map>
+            <key>Comment</key>
+            <string>Move a collapsing floater flush against the screen edge it folds towards, rather than leaving it where it was</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
         </map>
         <key>SnapshotDetection</key>
         <map>

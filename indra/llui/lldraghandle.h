@@ -72,9 +72,14 @@ public:
     bool            getForeground() const       { return mForeground; }
     void            setMaxTitleWidth(S32 max_width) {mMaxTitleWidth = llmin(max_width, mMaxTitleWidth); }
     S32             getMaxTitleWidth() const { return mMaxTitleWidth; }
-    void            setButtonsRect(const LLRect& rect){ mButtonsRect = rect; }
+    virtual void    setButtonsRect(const LLRect& rect){ mButtonsRect = rect; }
     LLRect          getButtonsRect() const { return mButtonsRect; }
     void            setTitleVisible(bool visible);
+
+// <SK:Nexii> A floater collapsed against a side of the screen draws its header turned
+    virtual void    setTurned(bool turned)      { mTurned = turned; }
+    bool            getTurned() const           { return mTurned; }
+// </SK:Nexii>
 
     virtual void    setTitle( const std::string& title ) = 0;
     virtual std::string getTitle() const = 0;
@@ -91,6 +96,7 @@ protected:
     LLTextBox*      mTitleBox;
     const LLFontGL* mFont;
     S32             mLabelVPad;
+    bool            mTurned { false }; // <SK:Nexii> Drawn ninety degrees counter-clockwise
 
 private:
     LLRect          mButtonsRect;
@@ -125,6 +131,8 @@ public:
     virtual std::string getTitle() const override;
     virtual void    draw() override;
     virtual void    reshape(S32 width, S32 height, bool called_from_parent = true) override;
+    virtual void    setTurned(bool turned) override; // <SK:Nexii>
+    virtual void    setButtonsRect(const LLRect& rect) override;
 
 private:
     void    reshapeTitleBox();

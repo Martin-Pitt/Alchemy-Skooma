@@ -38,6 +38,8 @@
 #include "lltextbox.h"
 #include "llcontrol.h"
 #include "llfontgl.h"
+#include "lllocalcliprect.h"
+#include "llrender.h"
 #include "llwindow.h"
 #include "llfocusmgr.h"
 #include "lluictrlfactory.h"
@@ -151,8 +153,47 @@ std::string LLDragHandleLeft::getTitle() const
 }
 
 
+// <SK:Nexii> A turned header is laid out as the flat bar it still is and rotated
+// ninety degrees counter-clockwise on the way to the screen, so the title reads
+// bottom to top and the end that carried the buttons ends up at the top.
+void LLDragHandleTop::setTurned(bool turned)
+{
+    if (turned == mTurned)
+    {
+        return;
+    }
+    mTurned = turned;
+    if (mTitleBox)
+    {
+        // The scissor a clipping text box would set is axis-aligned in screen
+        // space, which is not where the turned title ends up.
+        mTitleBox->setClip(!turned);
+    }
+    reshapeTitleBox();
+}
+// </SK:Nexii>
+
+void LLDragHandleTop::setButtonsRect(const LLRect& rect)
+{
+    LLDragHandle::setButtonsRect(rect);
+    reshapeTitleBox();
+}
+
 void LLDragHandleTop::draw()
 {
+// <SK:Nexii> Turn the header, title and all, when the floater is collapsed to a side
+    if (mTurned)
+    {
+        // The strip is axis-aligned even though what lands in it is not, so a
+        // scissor around it still means what it says -- and the title, drawn
+        // through the turn, has had to give up its own.
+        LLLocalClipRect clip(getLocalRect());
+        LLLocalQuarterTurn turn(getRect().getWidth());
+        LLView::draw();
+        return;
+    }
+// </SK:Nexii>
+
     /* Disable lines.  Can drag anywhere in most windows.  JC
     if( getVisible() && getEnabled() && mForeground)
     {
@@ -240,15 +281,28 @@ void LLDragHandleTop::reshapeTitleBox()
         return;
     }
     const LLFontGL* font = LLFontGL::getFontSansSerif();
-    S32 title_width = getRect().getWidth();
-    title_width -= LEFT_PAD + 2 * BORDER_PAD + getButtonsRect().getWidth();
-    S32 title_height = font->getLineHeight();
+    const S32 title_height = font->getLineHeight();
     LLRect title_rect;
-    title_rect.setLeftTopAndSize(
-        LEFT_PAD,
-        getRect().getHeight() - mLabelVPad,
-        title_width,
-        title_height);
+// <SK:Nexii> A turned header runs along the strip's height, with the buttons at its far end
+    if (mTurned)
+    {
+        const S32 title_width = llmax(getRect().getHeight() - LEFT_PAD - 2 * BORDER_PAD - getButtonsRect().getHeight(), 1);
+        title_rect.setLeftTopAndSize(
+            LEFT_PAD,
+            getRect().getWidth() - mLabelVPad,
+            title_width,
+            title_height);
+    }
+    else
+// </SK:Nexii>
+    {
+        const S32 title_width = llmax(getRect().getWidth() - LEFT_PAD - 2 * BORDER_PAD - getButtonsRect().getWidth(), 1);
+        title_rect.setLeftTopAndSize(
+            LEFT_PAD,
+            getRect().getHeight() - mLabelVPad,
+            title_width,
+            title_height);
+    }
 
     // calls reshape on mTitleBox
     mTitleBox->setShape( title_rect );

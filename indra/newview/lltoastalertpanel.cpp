@@ -445,7 +445,7 @@ bool LLToastAlertPanel::hasTitleBar() const
     // *TODO: check necessity of this code
     /*
     return (getCurrentTitle() != "" && getCurrentTitle() != " ")    // has title
-            || isMinimizeable()
+            || isCollapsible()
             || isCloseable();
     */
     return false;

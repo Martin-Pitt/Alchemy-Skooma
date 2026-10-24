@@ -361,7 +361,15 @@ void LLFloaterReg::showInitialVisibleInstances()
             bool isvis = LLFloater::getControlGroup()->getBOOL(controlname);
             if (isvis)
             {
-                showInstance(name, LLSD()); // keyed floaters shouldn't set save_vis to true
+                // <SK:Nexii> A floater collapsed at logout comes back collapsed
+                LLFloater* floater = showInstance(name, LLSD()); // keyed floaters shouldn't set save_vis to true
+                const std::string collapsename = getCollapseStateControlName(name);
+                if (floater && !floater->getHost() && floater->isCollapsible() && LLFloater::getControlGroup()->controlExists(collapsename)
+                    && LLFloater::getControlGroup()->getBOOL(collapsename))
+                {
+                    floater->setCollapsed(true);
+                }
+                // </SK:Nexii>
             }
         }
     }
@@ -498,6 +506,26 @@ std::string LLFloaterReg::declareLockControl(const std::string& name)
 }
 // </SK:Nexii>
 
+// <SK:Nexii> Collapse is restored at login, alongside visibility
+//static
+std::string LLFloaterReg::declareCollapseStateControl(const std::string& name)
+{
+    std::string controlname = getCollapseStateControlName(name);
+    LLFloater::getControlGroup()->declareBOOL(controlname, false,
+                                              llformat("Window Collapse state for %s", name.c_str()),
+                                              LLControlVariable::PERSIST_NONDFT);
+    return controlname;
+}
+
+//static
+std::string LLFloaterReg::getCollapseStateControlName(const std::string& name)
+{
+    std::string res = std::string("floater_collapsed_") + getBaseControlName(name);
+    LLStringUtil::replaceChar( res, ' ', '_' );
+    return res;
+}
+// </SK:Nexii>
+
 
 //static
 void LLFloaterReg::registerControlVariables()
@@ -513,6 +541,10 @@ void LLFloaterReg::registerControlVariables()
         if (LLFloater::getControlGroup()->controlExists(getVisibilityControlName(name)))
         {
             declareVisibilityControl(name);
+        }
+        if (LLFloater::getControlGroup()->controlExists(getCollapseStateControlName(name))) // <SK:Nexii>
+        {
+            declareCollapseStateControl(name);
         }
     }
 
