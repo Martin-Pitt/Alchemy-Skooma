@@ -947,18 +947,6 @@ function ConvertTo-Slug { param([string]$s)
 # A namespaced name (atmo/weather) means "part of the atmo feature", and parts build
 # on the family's core. The default base is therefore the group's root: the one
 # member whose own base is develop. Deeper chains stay explicit via --base.
-function Get-GroupRoot { param([string]$name)
-    if ($name -notmatch '/') { return '' }
-    $group = ($name -split '/')[0]
-    $globs = @(Get-ClassPrefixes | ForEach-Object { "refs/heads/$_-$group/*" })
-    $members = @(G for-each-ref --format='%(refname:short)' @globs) -split "`n" |
-        Where-Object { $_ }
-    if (-not $members) { return '' }                      # first in the group: it is the root
-    $roots = @($members | Where-Object { (Get-Base $_) -eq 'develop' })
-    if ($roots) { return @($roots | Sort-Object)[0] }
-    return @($members | Sort-Object)[0]                   # no clear root; oldest-named member
-}
-
 # Every existing working branch, whatever class prefix it carries.
 # Filtered here rather than by ref glob: for-each-ref's * stops at /, so feature-* misses feature-nav/x.
 function Get-WorkingBranches {
@@ -1053,10 +1041,8 @@ function Invoke-New {
         # list becomes a new class and is remembered for next time.
         if (-not $class) { $class = Read-ClassChoice }
 
-        # Offer the inferred base (group root, or develop) and let it be overridden.
-        $guess = Find-TrunkFor $name
-        if (-not $guess -or $guess -eq "$class-$name") { $guess = Get-GroupRoot $name }
-        if (-not $guess) { $guess = 'develop' }
+        # Offer develop and let it be overridden by a foundation or feature to build on.
+        $guess = 'develop'
         $existing = Get-WorkingBranches
         if ($existing) {
             Say ''
@@ -1076,8 +1062,9 @@ function Invoke-New {
     $name = ConvertTo-Slug $name
     if (-not (Test-SlugOk $name)) { Fail 'invalid name (lowercase letters, digits, and . _ - / )' }
 
-    # An area with a trunk: the new branch lands into it and, unless --base says
-    # otherwise, is cut from it, so it starts with everything the area already has.
+    # An area with a trunk: the new branch lands into it, but is cut from develop like
+    # every working branch. A trunk, like main, holds many PRs at once; a branch cut
+    # from one carries all of them into its own PR.
     $trunk = Find-TrunkFor $name
     if ($trunk -eq "$class-$name") { $trunk = '' }
 
@@ -1098,21 +1085,20 @@ function Invoke-New {
         if (-not (GitOk show-ref --verify --quiet "refs/heads/$trunk")) {
             Fail "'$name' belongs to trunk $trunk, which does not exist yet; create it first (git skooma new $($trunk -replace '^[a-z0-9-]+?-', ''))"
         }
-        if (-not $base) { $base = $trunk; Info "'$name' lands into trunk $trunk; basing on it (use --base to stack on a sibling)" }
+        Info "'$name' lands into trunk $trunk"
     }
 
     # Resolve and validate the base branch.
-    if (-not $base) {
-        $base = Get-GroupRoot $name
-        if ($base) { Info "'$name' joins an existing feature group; basing on $base (use --base develop to override)" }
-        else { $base = 'develop' }
-    }
+    if (-not $base) { $base = 'develop' }
     if ($base -ne 'develop') {
         $resolved = ''
         foreach ($cand in @($base) + @(Get-ClassPrefixes | ForEach-Object { "$_-$base" })) {
             if (GitOk show-ref --verify --quiet "refs/heads/$cand") { $resolved = $cand; break }
         }
         if (-not $resolved) { Fail "base branch '$base' does not exist" }
+        if ($resolved -eq 'main' -or (Test-IsTrunk $resolved)) {
+            Fail "never cut a branch from '$resolved': it holds many PRs at once. Cut from develop (the default), a foundation (--base foundation-...), or amend a feature (--amend)"
+        }
         if (-not (Get-Role $resolved)) { Fail "base '$resolved' is not a Skooma branch" }
         $base = $resolved
     }
