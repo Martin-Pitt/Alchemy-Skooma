@@ -329,7 +329,7 @@ void ALChatBar::setGestureCombo(LLComboBox* combo)
 
 // <SK:Nexii> Modern local chat: the chat bar's send, shared with SKFloaterLocalChat.
 // static
-void ALChatBar::sendChatText(LLChatEntry* editor, EChatType type, bool mu_pose) // <SK:Nexii> Modern local chat: mu_pose
+void ALChatBar::sendChatText(LLChatEntry* editor, EChatType type)
 {
     if (editor)
     {
@@ -365,10 +365,7 @@ void ALChatBar::sendChatText(LLChatEntry* editor, EChatType type, bool mu_pose) 
             if (0 == channel)
             {
                 LLFloaterIMNearbyChat::applyOOCClose(utf8text);
-                if (mu_pose) // <SK:Nexii> Modern local chat: the colon pose can be off
-                {
-                    LLFloaterIMNearbyChat::applyMUPose(utf8text);
-                }
+                LLFloaterIMNearbyChat::applyMUPose(utf8text);
 
                 // discard returned "found" boolean
                 if (!LLGestureMgr::instance().triggerAndReviseString(utf8text, &utf8_revised_text))
