@@ -451,6 +451,12 @@ void SKFloaterLocalChat::appendChat(const LLChat& chat, const LLSD& args, F64 ar
     {
         msg.mNameColor = irc_name;
     }
+    if (msg.mHistory)
+    {
+        // As the conversation log: lines from an earlier session are greyed out.
+        msg.mTextColor.setVec(LLColor4::grey.mV[VRED], LLColor4::grey.mV[VGREEN], LLColor4::grey.mV[VBLUE], msg.mTextColor.mV[VALPHA]);
+        msg.mNameColor = LLColor4::grey;
+    }
 
     const bool named = !chat.mFromName.empty() && chat.mSourceType != CHAT_SOURCE_SYSTEM;
     if (named && !chat.mRlvNamesFiltered)
@@ -2326,7 +2332,8 @@ void SKFloaterLocalChat::drawAvatarIcon(const Message& first, S32 left, S32 top,
 
     // The picture clipped to a circle, inside a ring of the speaker's colour.
     gGL.getTextureSlot(0)->bindSampled(tex, ALSamplers::BilinearClamp);
-    gGL.color4f(1.f, 1.f, 1.f, color.mV[VALPHA]);
+    const F32 tint = first.mHistory ? 0.5f : 1.f; // dimmed with the greyed-out history
+    gGL.color4f(tint, tint, tint, color.mV[VALPHA]);
     constexpr S32 STEPS = 20;
     const F32 inner = radius - 1.f;
     gGL.begin(LLRender::TRIANGLE_FAN);
