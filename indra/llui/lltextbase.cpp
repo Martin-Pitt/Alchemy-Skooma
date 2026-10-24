@@ -270,6 +270,12 @@ LLTextBase::LLTextBase(const LLTextBase::Params &p)
         scroll_params.border_visible = p.border_visible;
         mScroller = LLUICtrlFactory::create<LLScrollContainer>(scroll_params);
         addChild(mScroller);
+        // <SK:Nexii> smooth scroll
+        if (mFont)
+        {
+            mScroller->setWheelLine((F32)mFont->getLineHeight());
+        }
+        // </SK:Nexii>
     }
 
     LLView::Params view_params;

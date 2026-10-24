@@ -31,6 +31,7 @@
 #include "lluictrl.h"
 #include "v4color.h"
 #include "llbutton.h"
+#include "skscrollanimator.h" // <SK:Nexii> smooth scroll
 
 //
 // Classes
@@ -128,10 +129,20 @@ public:
     S32                 getThickness() const { return mThickness; }
     void                setThickness(S32 thickness);
 
+    // <SK:Nexii> smooth scroll
+    // The wheel glides the position; getDocPos() is where it rounds to, getDocPosF() where it is.
+    F32                 getDocPosF() const { return mDocPosF; }
+    // Pixels per doc unit (1 where the doc is in pixels, a row's height where it is in rows), and per wheel line.
+    void                setWheelUnits(F32 unit_pixels, F32 line_pixels);
+    // Advances the wheel's glide to now; its owner calls this every frame it draws.
+    void                tickWheel();
+    bool                isWheelGliding() const { return mWheelAnimator.isAnimating(); }
+    bool                scrollByWheel(const LLScrollDelta& delta);
+    // </SK:Nexii>
+
 private:
     void                updateThumbRect();
     bool                changeLine(S32 delta, bool update_thumb );
-    bool                scrollByWheel(F32 precise); // precise sub-notch wheel delta -> whole lines + residue
 
     callback_t          mChangeCallback;
 
@@ -140,7 +151,13 @@ private:
     S32                 mDocPos;        // Position within the doc that the scrollbar is modeling, in "lines" (user size)
     S32                 mPageSize;      // Maximum number of lines that can be seen at one time.
     S32                 mStepSize;
-    F32                 mScrollWheelResidue = 0.f; // carries sub-line precise scroll between events
+    // <SK:Nexii> smooth scroll
+    SKScrollAnimator    mWheelAnimator;
+    F32                 mDocPosF = 0.f;
+    F32                 mWheelUnit = 1.f;
+    F32                 mWheelLine = 1.f;
+    bool                mApplyingWheel = false;
+    // </SK:Nexii>
     bool                mDocChanged;
 
     LLRect              mThumbRect;
