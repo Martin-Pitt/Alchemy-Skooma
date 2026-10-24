@@ -225,38 +225,6 @@ S32 AABBSphereIntersectR2(const LLVector4a& min, const LLVector4a& max, const LL
     return 1;
 }
 
-// <SK:Nexii> render/vertical-reach
-S32 AABBEllipsoidIntersect(const LLVector4a& min, const LLVector4a& max, const LLVector3& origin, F32 rad, F32 z_scale)
-{
-    // Stretching z by z_scale turns the ellipsoid back into a sphere of radius rad.
-    const F32 scale[3] = { 1.f, 1.f, z_scale };
-    const F32 r2 = rad * rad;
-
-    F32 near_d2 = 0.f;
-    F32 far_d2 = 0.f;
-    for (U32 i = 0; i < 3; i++)
-    {
-        const F32 lo = (min[i] - origin.mV[i]) * scale[i];
-        const F32 hi = (max[i] - origin.mV[i]) * scale[i];
-        if (lo > 0.f)
-        {
-            near_d2 += lo * lo;
-        }
-        else if (hi < 0.f)
-        {
-            near_d2 += hi * hi;
-        }
-        far_d2 += llmax(lo * lo, hi * hi);
-    }
-
-    if (near_d2 > r2)
-    {
-        return 0;
-    }
-    return far_d2 < r2 ? 2 : 1;
-}
-// </SK:Nexii>
-
 //-----------------------------------------------------------------------------------
 //class LLViewerOctreeEntry definitions
 //-----------------------------------------------------------------------------------

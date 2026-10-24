@@ -1007,13 +1007,6 @@ class LLOctreeCull : public LLViewerOctreeCull
 public:
     LLOctreeCull(LLCamera* camera) : LLViewerOctreeCull(camera) {}
 
-    // <SK:Nexii> render/vertical-reach: hold groups to a vertical reach as well as the draw distance.
-    void setVerticalReach(F32 vertical_reach)
-    {
-        mZScale = vertical_reach > 0.f ? llmax(mCamera->mFrustumCornerDist / vertical_reach, 1.f) : 1.f;
-    }
-    // </SK:Nexii>
-
     virtual bool earlyFail(LLViewerOctreeGroup* base_group)
     {
         LLSpatialGroup* group = (LLSpatialGroup*)base_group;
@@ -1036,11 +1029,7 @@ public:
         S32 res = AABBInFrustumNoFarClipGroupBounds(group);
         if (res != 0)
         {
-            // <SK:Nexii> render/vertical-reach: was AABBSphereIntersectGroupExtents alone
-            res = llmin(res, mZScale > 1.f
-                ? AABBEllipsoidIntersect(group->getExtents()[0], group->getExtents()[1], mCamera->getOrigin(), mCamera->mFrustumCornerDist, mZScale)
-                : AABBSphereIntersectGroupExtents(group));
-            // </SK:Nexii>
+            res = llmin(res, AABBSphereIntersectGroupExtents(group));
         }
         return res;
     }
@@ -1050,11 +1039,7 @@ public:
         S32 res = AABBInFrustumNoFarClipObjectBounds(group);
         if (res != 0)
         {
-            // <SK:Nexii> render/vertical-reach: was AABBSphereIntersectObjectExtents alone
-            res = llmin(res, mZScale > 1.f
-                ? AABBEllipsoidIntersect(group->getObjectExtents()[0], group->getObjectExtents()[1], mCamera->getOrigin(), mCamera->mFrustumCornerDist, mZScale)
-                : AABBSphereIntersectObjectExtents(group));
-            // </SK:Nexii>
+            res = llmin(res, AABBSphereIntersectObjectExtents(group));
         }
         return res;
     }
@@ -1069,9 +1054,6 @@ public:
         }*/
         gPipeline.markNotCulled(group, *mCamera);
     }
-
-protected:
-    F32 mZScale = 1.f; // <SK:Nexii> render/vertical-reach
 };
 
 class LLOctreeCullNoFarClip : public LLOctreeCull
@@ -1446,27 +1428,6 @@ S32 LLSpatialPartition::cull(LLCamera &camera, std::vector<LLDrawable *>* result
 
 extern bool gCubeSnapshot;
 
-// <SK:Nexii> render/vertical-reach: the main view's vertical reach for scenery; 0 for avatars, terrain, water and the
-// HUD, and for bridges, whose local space is not z-up and which LLSpatialBridge::setVisible holds to it instead.
-F32 LLSpatialPartition::verticalReach(const LLCamera& camera)
-{
-    if (gCubeSnapshot || isBridge() || &camera != LLViewerCamera::getInstance())
-    {
-        return 0.f;
-    }
-    switch (mPartitionType)
-    {
-        case LLViewerRegion::PARTITION_VOLUME:
-        case LLViewerRegion::PARTITION_TREE:
-        case LLViewerRegion::PARTITION_GRASS:
-        case LLViewerRegion::PARTITION_PARTICLE:
-            return LLViewerCamera::getInstance()->getVerticalReach();
-        default:
-            return 0.f;
-    }
-}
-// </SK:Nexii>
-
 S32 LLSpatialPartition::cull(LLCamera &camera, bool do_occlusion)
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_SPATIAL;
@@ -1508,7 +1469,6 @@ S32 LLSpatialPartition::cull(LLCamera &camera, bool do_occlusion)
     else
     {
         LLOctreeCull culler(&camera);
-        culler.setVerticalReach(verticalReach(camera)); // <SK:Nexii> render/vertical-reach
         culler.traverse(mOctree);
     }
 

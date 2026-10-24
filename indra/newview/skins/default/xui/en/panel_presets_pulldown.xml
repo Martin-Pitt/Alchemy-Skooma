@@ -8,7 +8,7 @@
  border="false"
  chrome="true"
  follows="bottom"
- height="401"
+ height="380"
  layout="topleft"
  name="presets_pulldown"
  width="400">
@@ -235,46 +235,6 @@
    increment="32"
    name="draw_dist_spinner"
    control_name="RenderFarClip"/>
-  <!-- <SK:Nexii> render/vertical-reach -->
-  <text
-   follows="left|top"
-   height="15"
-   left="10"
-   top_pad="3"
-   width="120"
-   layout="topleft"
-   value="Vertical Ratio:"
-   name="vertical_draw_label"/>
-  <slider_bar
-   top_pad="-16"
-   height="20"
-   increment="0.05"
-   initial_value="1"
-   follows="left|top|right"
-   layout="topleft"
-   max_val="1"
-   min_val="0.25"
-   left="113"
-   right="-68"
-   name="vertical_draw_slider_bar"
-   tool_tip="How far above and below you objects are drawn, as a fraction of draw distance."
-   control_name="SKRenderVerticalDrawRatio"/>
-  <spinner
-   top_pad="-21"
-   height="20"
-   label=""
-   label_width="0"
-   right="-8"
-   decimal_digits="2"
-   follows="top|right"
-   layout="topleft"
-   max_val="1"
-   min_val="0.25"
-   width="60"
-   increment="0.05"
-   name="vertical_draw_spinner"
-   control_name="SKRenderVerticalDrawRatio"/>
-  <!-- </SK:Nexii> -->
   <text
    follows="left|top"
    height="15"
