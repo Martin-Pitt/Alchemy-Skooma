@@ -50,6 +50,10 @@ struct LLFontFallbackMatch
 class LLWindow
 {
 public:
+    // <SK:Nexii> smooth scroll
+    // Read a fast stream of sub-notch wheel messages as a precise device, where the backend cannot tell.
+    static inline bool sPreciseWheelHeuristic = true;
+    // </SK:Nexii>
 
     struct LLWindowResolution
     {
