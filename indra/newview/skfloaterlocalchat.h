@@ -68,6 +68,8 @@ public:
     bool applyRectControl() override;
     /// Collapsed, the chat is a compact bar at its bottom left with the unread count and the typing line.
     void setMinimized(bool minimize) override;
+    /// The chat draws its own bar where it was, so it never folds against a screen edge.
+    ECollapseEdge pickCollapseEdge() override { return COLLAPSE_EDGE_NONE; }
     bool handleKeyHere(KEY key, MASK mask) override;
     bool handleMouseDown(S32 x, S32 y, MASK mask) override;
     bool handleMouseUp(S32 x, S32 y, MASK mask) override;

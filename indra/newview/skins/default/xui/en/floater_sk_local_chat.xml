@@ -5,7 +5,7 @@
  bottom="-50"
  follows="left|bottom"
  background_visible="false"
- can_minimize="true"
+ can_collapse="true"
  can_close="false"
  can_resize="true"
  header_height="0"

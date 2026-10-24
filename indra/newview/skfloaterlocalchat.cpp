@@ -675,7 +675,7 @@ void SKFloaterLocalChat::setMinimized(bool minimize)
     LLFloater::setMinimized(minimize);
     if (minimize)
     {
-        // Where the chat was, not in the minimized row; the expanded rect is what save_rect keeps.
+        // Where the chat was, not against a screen edge; the expanded rect is what save_rect keeps.
         setBorderVisible(false);
         setOrigin(getExpandedRect().mLeft, getExpandedRect().mBottom);
         layoutCollapsed();
@@ -735,9 +735,9 @@ void SKFloaterLocalChat::layoutCog()
         return;
     }
     constexpr S32 COG_PX = 16;
-    // Left of the minimize button, which the floater keeps at the top right.
+    // Left of the collapse button, which the floater keeps at the top right.
     static LLUICachedControl<S32> close_box_size("UIFloaterCloseBoxSize", 0);
-    const S32 right = getRect().getWidth() - 4 - (mButtons[BUTTON_MINIMIZE] ? close_box_size + 2 : 0);
+    const S32 right = getRect().getWidth() - 4 - (mButtons[BUTTON_COLLAPSE] ? close_box_size + 2 : 0);
     const S32 top = getRect().getHeight() - 2;
     mCog->setRect(LLRect(right - COG_PX, top, right, top - COG_PX));
 }
@@ -1559,9 +1559,9 @@ void SKFloaterLocalChat::draw()
     {
         mCog->setVisible(mHovered && opaque);
     }
-    if (mButtons[BUTTON_MINIMIZE])
+    if (mButtons[BUTTON_COLLAPSE])
     {
-        mButtons[BUTTON_MINIMIZE]->setVisible(mHovered && opaque);
+        mButtons[BUTTON_COLLAPSE]->setVisible(mHovered && opaque);
     }
 
     // The only chrome, the mini-map's faint tint, eased in and out; its border shows only while the pointer rests on an edge.

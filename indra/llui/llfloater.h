@@ -479,7 +479,7 @@ protected:
     virtual void    goneFromFront();
 
 // <SK:Nexii> Collapse geometry: which edge the floater folds against, and the shape that makes
-    ECollapseEdge   pickCollapseEdge();
+    virtual ECollapseEdge pickCollapseEdge(); // <SK:Nexii> Virtual, so a floater drawing its own collapsed bar can opt out of folding
     LLRect          calcCollapsedRect(ECollapseEdge edge);
     LLRect          calcExpandedRect() const;
     LLRect          getCollapseSnapRect();
