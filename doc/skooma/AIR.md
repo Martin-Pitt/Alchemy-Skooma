@@ -161,7 +161,7 @@ fallback; wall runs and storeys rebased on air and spaces.
 
 | doc | what | status |
 |---|---|---|
-| `NAVMESH.md` | branch history and rulings for every air branch | current index |
+| `.archive/NAVMESH.md` | branch history and rulings for every air branch | archived: the navmesh is phased out |
 | `.navmesh-rooms-plan.md` | enclosure, spaces, portals, wind, probes design | v2 2026-09-25; WEATHER-raster wording stale |
 | `.air-cell-rules-review.md` | review of the cell rules | read for rationale |
 | `.nav-air-distil-brief.md`, `.nav-air-morton-brief.md` | quadtree distil, Morton order | built; gap-merge/leaf-cap superseded parts |

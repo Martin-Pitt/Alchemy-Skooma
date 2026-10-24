@@ -6,7 +6,7 @@ A replacement for the classic mini-map (`LLNetMap` / `LLFloaterMap`), for everyo
 Only the shell is inherited: the chrome-less transparent floater with drag and resize, and the
 `mini_map` registration. Every interaction is redesigned in a UX pass; all options live in a settings
 floater opened by a gear button beside the close button, not in a right-click menu. The navmesh
-(`NAVMESH.md`) supplies the new content: a floorplan of walkable floor, wall lines with XCOM-style
+(`.archive/NAVMESH.md`) supplies the new content: a floorplan of walkable floor, wall lines with XCOM-style
 full / half / no cover, showing navmeshes connected to your current one with ramps leading up/down marked,
 clarity between ledges vs walls, and a future combat-log feed for kill/death lines.
 

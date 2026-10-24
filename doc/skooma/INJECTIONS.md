@@ -192,7 +192,7 @@ notecard resolve / fetch / poll — the only inventory and asset calls in atmo: 
 ## Navmesh — world census
 
 Branch `feature-nav/census`. A time-sliced scan of the object list that feeds the navmesh
-data model. See `NAVMESH.md` for the wider feature.
+data model. See `.archive/NAVMESH.md` for the wider feature.
 
 ### Files we own
 
@@ -211,7 +211,7 @@ data model. See `NAVMESH.md` for the wider feature.
 
 ## Navmesh — Recast dependency
 
-Branch `feature-nav/recast`. Design: `.navmesh-plan.md` (index `NAVMESH.md`). No code beyond the test yet, so
+Branch `feature-nav/recast`. Design: `.navmesh-plan.md` (index `.archive/NAVMESH.md`). No code beyond the test yet, so
 no `<SK:Nexii>` markers; everything here is CMake or JSON, identified by name.
 
 ### Files we own
@@ -311,7 +311,7 @@ Branch `feature-sky/farlayer`. A `far` sky layer (key 550) draws registered cont
 ## Navmesh — air grid and annotations
 
 Branches `feature-nav/sheet` (air grid) and `feature-nav/annotate` (in-world marks and capture
-bundles). Design: `.navmesh-rooms-plan.md`, `.nav-annotate-brief.md` (index `NAVMESH.md`).
+bundles). Design: `.navmesh-rooms-plan.md`, `.nav-annotate-brief.md` (index `.archive/NAVMESH.md`).
 
 ### Files we own
 
@@ -1246,7 +1246,7 @@ Branch `feature-render/prim-split` (merge `257736e19c`). Untwisted square and tr
 
 Branch `feature-nav/capture` (landed 2026-10-05): the vehicle export generalised into a capture export of
 any source kind, with per-face `textureLoaded` / `teMissing` and PBR alpha from the base colour. Plan:
-`.outline-capture-buildout.md` (index `NAVMESH.md`).
+`.outline-capture-buildout.md` (index `.archive/NAVMESH.md`).
 
 ### Files we own
 
