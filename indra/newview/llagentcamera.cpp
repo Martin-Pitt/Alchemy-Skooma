@@ -2470,7 +2470,7 @@ void LLAgentCamera::handleScrollWheel(F32 clicks)
 // <SK:Nexii> Alt-cam zoom to cursor
 bool LLAgentCamera::cameraZoomToCursor(F32 clicks)
 {
-    static LLCachedControl<bool> zoom_to_cursor(gSavedSettings, "SKCameraZoomToCursor", true);
+    static LLCachedControl<bool> zoom_to_cursor(gSavedSettings, "SKCameraZoomToCursor", false);
     if (!zoom_to_cursor || mCameraMode == CAMERA_MODE_CUSTOMIZE_AVATAR)
     {
         return false;
