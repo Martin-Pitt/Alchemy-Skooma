@@ -156,8 +156,9 @@ namespace
 
     // SKOverviewMovers::screenRectOf on plain floats: the box's screen rectangle with a pixel's margin, the whole view
     // when it straddles the eye's plane, none when wholly behind it. The x0/y0/x1/y1 it floors are returned for the
-    // edge tolerance.
-    bool screenRect(const Patch& p, const F32 lo[3], const F32 hi[3], S32 rect[4], F32 edges[4], bool& straddles)
+    // edge tolerance, and mean anything only when every corner projected.
+    bool screenRect(const Patch& p, const F32 lo[3], const F32 hi[3], S32 rect[4], F32 edges[4], bool& straddles,
+                    bool& projected)
     {
         U32 behind = 0;
         F32 x0 = 1e30f, y0 = 1e30f, x1 = -1e30f, y1 = -1e30f;
@@ -185,6 +186,7 @@ namespace
             y1 = llmax(y1, y);
         }
         straddles = behind > 0 && behind < 8;
+        projected = behind == 0;
         edges[0] = x0; edges[1] = y0; edges[2] = x1; edges[3] = y1;
         if (behind == 8)
         {
@@ -460,13 +462,14 @@ namespace
                 S32 rect[4];
                 F32 edges[4];
                 bool straddles = false;
-                const bool keep = screenRect(patch, lo, hi, rect, edges, straddles) && overlaps(rect, patch.mRect);
+                bool projected = false;
+                const bool keep = screenRect(patch, lo, hi, rect, edges, straddles, projected) && overlaps(rect, patch.mRect);
                 CHECK(gpu[i].mFirst == slots[i].mFirst);
                 CHECK(gpu[i].mInstanceCount == 1u);
                 straddled += straddles ? 1 : 0;
                 // A rectangle edge that floors or ceils right on a pixel boundary rounds either way on the two.
                 bool rounding = false;
-                for (S32 e = 0; !straddles && e < 4; ++e)
+                for (S32 e = 0; projected && e < 4; ++e)
                 {
                     rounding = rounding || std::fabs(edges[e] - std::round(edges[e])) < 1.0e-3f + 1.0e-5f * std::fabs(edges[e]);
                 }
