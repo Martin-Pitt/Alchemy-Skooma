@@ -93,6 +93,47 @@ const S32 DEFAULT_REFRESH_RATE = 60;
 // be only one object of this class at any time.  Currently this is true.
 static LLWindowSDL *gWindowImplementation = nullptr;
 
+// <SK:Nexii> smooth scroll
+// Fills in a wheel event's distances: AppKit's own account where it gave one, otherwise notches of the default
+// lines, and a fast stream of fractional values taken as a precise device.
+static void describe_wheel(const SDL_MouseWheelEvent& wheel, LLScrollDelta& dx, LLScrollDelta& dy)
+{
+    dx.mLines = dx.mPrecise * LLScrollDelta::DEFAULT_LINES;
+    dy.mLines = dy.mPrecise * LLScrollDelta::DEFAULT_LINES;
+#if LL_DARWIN
+    LLSDLMacScroll mac;
+    if (ll_sdl_macos_take_scroll(mac))
+    {
+        if (mac.mPrecise)
+        {
+            dx.mIsPrecise = dy.mIsPrecise = true;
+            dx.mPixels = -mac.mDeltaX;
+            dy.mPixels = -mac.mDeltaY;
+        }
+        dx.mPhase = dy.mPhase = mac.mPhase;
+        return;
+    }
+#endif
+    constexpr Uint64 STREAM_GAP_NS = 40000000;  // fractional events this close together are one stream
+    constexpr Uint64 STREAM_HOLD_NS = 150000000; // a stream stays precise this long after its last event
+    static Uint64 last_ns = 0;
+    static Uint64 precise_until_ns = 0;
+    auto fractional = [](F32 v) { return v != 0.f && v != (F32)lltrunc(v); };
+    const Uint64 now = wheel.timestamp;
+    if (LLWindow::sPreciseWheelHeuristic && (fractional(wheel.x) || fractional(wheel.y)) && now - last_ns <= STREAM_GAP_NS)
+    {
+        precise_until_ns = now + STREAM_HOLD_NS;
+    }
+    last_ns = now;
+    if (now < precise_until_ns)
+    {
+        dx.mIsPrecise = dy.mIsPrecise = true;
+        dx.mPixels = dx.mLines * LLScrollDelta::PIXELS_PER_LINE;
+        dy.mPixels = dy.mLines * LLScrollDelta::PIXELS_PER_LINE;
+    }
+}
+// </SK:Nexii>
+
 #if LL_LINUX
 // What glGetGraphicsResetStatus returns for a context lost to a purge of video
 // memory, with EGL_NV_robustness_video_memory_purge (see llsdl.cpp).
@@ -2030,12 +2071,17 @@ SDL_AppResult LLWindowSDL::handleEvent(const SDL_Event& event)
             // llfloor would for negative residue.
             const S32 iy = lltrunc(mScrollWheelAccumY);
             mScrollWheelAccumY -= (F32)iy;
-            if (iy != 0 || event.wheel.y != 0.f)
-            {
-                mCallbacks->handleScrollWheel(this, LLScrollDelta(-iy, -event.wheel.y));
-            }
             const S32 ix = lltrunc(mScrollWheelAccumX);
             mScrollWheelAccumX -= (F32)ix;
+            // <SK:Nexii> smooth scroll
+            LLScrollDelta delta_y(-iy, -event.wheel.y);
+            LLScrollDelta delta_x(ix, event.wheel.x);
+            describe_wheel(event.wheel, delta_x, delta_y);
+            // </SK:Nexii>
+            if (iy != 0 || event.wheel.y != 0.f)
+            {
+                mCallbacks->handleScrollWheel(this, delta_y); // <SK:Nexii> smooth scroll
+            }
             if (ix != 0 || event.wheel.x != 0.f)
             {
                 // Win32 sends WM_MOUSEHWHEEL's HIWORD (+=right) directly with
@@ -2044,7 +2090,7 @@ SDL_AppResult LLWindowSDL::handleEvent(const SDL_Event& event)
                 // forward unmodified. Only the Y axis negates to match
                 // Win32's vertical convention ("+ clicks = scroll content
                 // down" — see the line just above).
-                mCallbacks->handleScrollHWheel(this, LLScrollDelta(ix, event.wheel.x));
+                mCallbacks->handleScrollHWheel(this, delta_x); // <SK:Nexii> smooth scroll
             }
             break;
         }
