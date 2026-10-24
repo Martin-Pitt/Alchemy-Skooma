@@ -1864,7 +1864,10 @@ void LLScrollListCtrl::setEnabled(bool enabled)
 bool LLScrollListCtrl::handleScrollWheel(S32 x, S32 y, LLScrollDelta delta)
 {
     bool handled = false;
-    mScrollbar->setWheelUnits((F32)mLineHeight, (F32)mLineHeight); // <SK:Nexii> smooth scroll: a wheel line is a row
+    // <SK:Nexii> smooth scroll: a wheel line is a row, and a notch brings in whole rows
+    mScrollbar->setWheelUnits((F32)mLineHeight, (F32)mLineHeight);
+    mScrollbar->setWheelSnapsItems(true);
+    // </SK:Nexii>
     // Pretend the mouse is over the scrollbar
     handled = mScrollbar->handleScrollWheel( 0, 0, delta );
 

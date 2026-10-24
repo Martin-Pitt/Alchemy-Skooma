@@ -458,6 +458,7 @@ target_sources(
         widgets/altabstrip.h
         widgets/skscrollanimator.h
         widgets/skscrolldistance.h
+        widgets/skscrollsnap.h
         text/altextcarets.h
         diff/altextdiff.h
         text/altextdocument.h
@@ -717,6 +718,7 @@ if(AL_BUILD_TESTS)
       tests/llview_test.cpp
       tests/llxuiparser_test.cpp
       tests/skscrollanimator_test.cpp
+      tests/skscrollsnap_test.cpp
     # The benchmarks: comparing big scripts, by lines and laid out, and what
     # each comparison says of some edits, which each change to how texts are
     # compared is measured and judged by; and the code editor over

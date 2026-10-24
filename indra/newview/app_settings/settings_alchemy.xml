@@ -3342,6 +3342,17 @@
             <key>Value</key>
             <integer>1</integer>
         </map>
+        <key>SkoomaScrollRealLines</key>
+        <map>
+            <key>Comment</key>
+            <string>A wheel line is the content's own line (font line height, editor row) instead of a third of 100 pixels. Lists always scroll whole items.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
         <key>SkoomaScrollSmoothMode</key>
         <map>
             <key>Comment</key>

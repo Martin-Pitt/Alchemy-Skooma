@@ -48,6 +48,12 @@ SKScrollAnimator::Config SKScrollDistance::config()
     return config;
 }
 
+F32 SKScrollDistance::lineFor(F32 content_line)
+{
+    static LLUICachedControl<bool> real_lines("SkoomaScrollRealLines", false);
+    return real_lines && content_line > 0.f ? content_line : DEFAULT_LINE;
+}
+
 F64 SKScrollDistance::now()
 {
     return LLFrameTimer::getUptimeSeconds();

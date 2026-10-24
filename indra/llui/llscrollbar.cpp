@@ -42,6 +42,7 @@
 #include "llrender.h"
 #include "lluictrlfactory.h"
 #include "skscrolldistance.h" // <SK:Nexii> smooth scroll
+#include "skscrollsnap.h" // <SK:Nexii> smooth scroll: lists scroll whole items
 #include "lluicolortable.h" // <SK:Nexii> Overlay scroll bar
 #include "llframetimer.h" // <SK:Nexii> Overlay scroll bar
 #include "skscrollbaroverlay.h" // <SK:Nexii> Overlay scroll bar
@@ -455,8 +456,19 @@ bool LLScrollbar::scrollByWheel(const LLScrollDelta& delta)
     {
         mWheelAnimator.jumpTo((F32)mDocPos);
     }
-    const F32 units = SKScrollDistance::pixels(delta, mWheelLine, (F32)mPageSize * mWheelUnit) / mWheelUnit;
     const F32 target = mWheelAnimator.target();
+    F32 units;
+    if (mWheelSnapsItems && !delta.mIsPrecise && !delta.mPage)
+    {
+        // Whole items per notch, the view's edge snapped onto an item's.
+        const S32 items = ll_round(SKScrollSnap::itemsPerNotch(mWheelUnit) * fabsf(delta.mPrecise));
+        units = SKScrollSnap::target(target, (F32)mPageSize, max, llmax(items, 1), delta.mPrecise > 0.f) - target;
+    }
+    else
+    {
+        const F32 line = mWheelContentLine > 0.f ? SKScrollDistance::lineFor(mWheelContentLine) : mWheelLine;
+        units = SKScrollDistance::pixels(delta, line, (F32)mPageSize * mWheelUnit) / mWheelUnit;
+    }
     if (units == 0.f || (units > 0.f && target >= max) || (units < 0.f && target <= 0.f))
     {
         return false;
@@ -470,6 +482,11 @@ void LLScrollbar::setWheelUnits(F32 unit_pixels, F32 line_pixels)
 {
     mWheelUnit = llmax(unit_pixels, 1.f);
     mWheelLine = llmax(line_pixels, 1.f);
+}
+
+void LLScrollbar::setWheelContentLine(F32 line_pixels)
+{
+    mWheelContentLine = llmax(line_pixels, 0.f);
 }
 
 void LLScrollbar::tickWheel()
