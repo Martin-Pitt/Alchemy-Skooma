@@ -1013,6 +1013,11 @@ if(AL_BUILD_VIEWER)
     rlvhandler.cpp
     rlvhelper.cpp
     rlvinventory.cpp
+    skchatunfurl.cpp
+    skchatunfurlcache.cpp
+    skfloaterlocalchat.cpp
+    skhover.cpp
+    skoverlay.cpp
     rlvlocks.cpp
     rlvui.cpp
     skmodalview.cpp # <SK:Nexii> modal view
@@ -1912,6 +1917,11 @@ if(AL_BUILD_VIEWER)
     rlvhandler.h
     rlvhelper.h
     rlvinventory.h
+    skchatunfurl.h
+    skchatunfurlcache.h
+    skfloaterlocalchat.h
+    skhover.h
+    skoverlay.h
     rlvlocks.h
     rlvmodifiers.h
     rlvui.h
@@ -2738,6 +2748,7 @@ if(AL_BUILD_TESTS)
       tests/llviewerassetstats_test.cpp
       tests/llviewercontrollistener_test.cpp
       tests/llvocache_test.cpp
+      tests/skchatunfurl_test.cpp # <SK:Nexii> local chat link previews
       tests/lutcube_test.cpp
       tests/noise_test.cpp
       tests/skmodalviewmath_test.cpp # <SK:Nexii> modal view
@@ -2822,6 +2833,7 @@ if(AL_BUILD_TESTS)
       llversioninfo.cpp
       llviewerassetstats.cpp
       llviewercontrollistener.cpp
+      skchatunfurl.cpp # <SK:Nexii> local chat link previews
       lutcube.cpp
       noise.cpp
       skmodalviewmath.cpp # <SK:Nexii> modal view

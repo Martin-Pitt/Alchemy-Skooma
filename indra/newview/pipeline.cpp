@@ -110,6 +110,7 @@
 #include "llviewerparcelmgr.h"
 #include "llviewerregion.h" // for audio debugging.
 #include "llviewerwindow.h" // For getSpinAxis
+#include "skoverlay.h" // <SK:Nexii> overlay registry
 #include "llvoavatarself.h"
 #include "skaircells.h" // <SK:Nexii> air cells overlay
 #include "skrooms.h" // <SK:Nexii> rooms overlay
@@ -5405,6 +5406,7 @@ void LLPipeline::renderGeomPostDeferred(LLCamera& camera)
         {
             ALFarPlaneOverlay::render();
         }
+        SKOverlays::draw(SKOverlayLayer::World); // <SK:Nexii> overlay registry: 3D layer
     }
 }
 

@@ -185,15 +185,13 @@ void LLMultiFloater::addFloater(LLFloater* floaterp, bool select_added_floater, 
     LLFloaterData floater_data;
     floater_data.mWidth = floaterp->getRect().getWidth();
     floater_data.mHeight = floaterp->getRect().getHeight();
-    floater_data.mCanMinimize = floaterp->isMinimizeable();
 // [SL:KB] - Patch: UI-FloaterCollapse | Checked: Catznip-5.2
     floater_data.mCanCollapse = floaterp->isCollapsible();
 // [/SL:KB]
     floater_data.mCanResize = floaterp->isResizable();
     floater_data.mSaveRect = floaterp->mSaveRect;
 
-    // remove minimize and close buttons
-    floaterp->setCanMinimize(false);
+    // remove collapse and close buttons
 // [SL:KB] - Patch: UI-FloaterCollapse | Checked: Catznip-5.2
     floaterp->setCanCollapse(false);
 // [/SL:KB]
@@ -297,7 +295,6 @@ void LLMultiFloater::removeFloater(LLFloater* floaterp)
     if (found_data_it != mFloaterDataMap.end())
     {
         LLFloaterData& floater_data = found_data_it->second;
-        floaterp->setCanMinimize(floater_data.mCanMinimize);
 // [SL:KB] - Patch: UI-FloaterCollapse | Checked: Catznip-5.2
         floaterp->setCanCollapse(floater_data.mCanCollapse);
 // [/SL:KB]
