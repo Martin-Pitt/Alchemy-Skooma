@@ -203,6 +203,8 @@ target_sources(
     code/alsyntaxgrammar.cpp
     code/alsyntaxhighlighter.cpp
     widgets/altabstrip.cpp
+    widgets/skscrollanimator.cpp
+    widgets/skscrolldistance.cpp
     text/altextcarets.cpp
     diff/altextdiff.cpp
     text/altextdocument.cpp
@@ -453,6 +455,8 @@ target_sources(
         code/alsyntaxgrammar.h
         code/alsyntaxhighlighter.h
         widgets/altabstrip.h
+        widgets/skscrollanimator.h
+        widgets/skscrolldistance.h
         text/altextcarets.h
         diff/altextdiff.h
         text/altextdocument.h
@@ -710,6 +714,7 @@ if(AL_BUILD_TESTS)
       tests/llurlregistry_test.cpp
       tests/llview_test.cpp
       tests/llxuiparser_test.cpp
+      tests/skscrollanimator_test.cpp
     # The benchmarks: comparing big scripts, by lines and laid out, and what
     # each comparison says of some edits, which each change to how texts are
     # compared is measured and judged by; and the code editor over
