@@ -68,6 +68,7 @@ LLScrollbar::Params::Params()
     right_button("right_button"),
     bg_visible("bg_visible", false),
     overlay("overlay", false), // <SK:Nexii> Overlay scroll bar
+    smooth_scroll("smooth_scroll", true), // <SK:Nexii> smooth scroll
     bg_color("bg_color", LLColor4::black)
 {}
 
@@ -96,6 +97,7 @@ LLScrollbar::LLScrollbar(const Params & p)
         mOverlay(p.overlay) // <SK:Nexii> Overlay scroll bar
 {
     mWheelLine = (F32)llmax(mStepSize, 1); // <SK:Nexii> smooth scroll: a wheel line is a step unless the owner says
+    mSmoothScroll = p.smooth_scroll; // <SK:Nexii> smooth scroll
     updateThumbRect();
 
     // Page up and page down buttons
@@ -502,7 +504,9 @@ bool LLScrollbar::scrollByWheel(const LLScrollDelta& delta)
     {
         return false;
     }
-    mWheelAnimator.addDelta(units, delta.mIsPrecise, SKScrollDistance::now(), 0.f, max, SKScrollDistance::config());
+    SKScrollAnimator::Config config = SKScrollDistance::config();
+    config.mSmooth = config.mSmooth && mSmoothScroll;
+    mWheelAnimator.addDelta(units, delta.mIsPrecise, SKScrollDistance::now(), 0.f, max, config);
     tickWheel();
     return true;
 }

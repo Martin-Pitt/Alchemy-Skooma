@@ -71,6 +71,7 @@ LLScrollContainer::Params::Params()
     bg_color("color"),
     border_visible("border_visible"),
     hide_scrollbar("hide_scrollbar"),
+    smooth_scroll("smooth_scroll", true), // <SK:Nexii> smooth scroll
     ignore_arrow_keys("ignore_arrow_keys"),
     min_auto_scroll_rate("min_auto_scroll_rate", 100),
     max_auto_scroll_rate("max_auto_scroll_rate", 1000),
@@ -138,6 +139,7 @@ LLScrollContainer::LLScrollContainer(const LLScrollContainer::Params& p)
     sbparams.visible(false);
     sbparams.change_callback(p.scroll_callback);
     sbparams.overlay(mOverlayScrollbars); // <SK:Nexii> Overlay scroll bar
+    sbparams.smooth_scroll(p.smooth_scroll); // <SK:Nexii> smooth scroll
     mScrollbar[VERTICAL] = LLUICtrlFactory::create<LLScrollbar> (sbparams);
     LLView::addChild( mScrollbar[VERTICAL] );
 
@@ -155,6 +157,7 @@ LLScrollContainer::LLScrollContainer(const LLScrollContainer::Params& p)
     sbparams.follows.flags(FOLLOWS_LEFT | FOLLOWS_RIGHT | FOLLOWS_BOTTOM);
     sbparams.change_callback(p.scroll_callback);
     sbparams.overlay(mOverlayScrollbars); // <SK:Nexii> Overlay scroll bar
+    sbparams.smooth_scroll(p.smooth_scroll); // <SK:Nexii> smooth scroll
     mScrollbar[HORIZONTAL] = LLUICtrlFactory::create<LLScrollbar> (sbparams);
     // <SK:Nexii> smooth scroll
     // Content in pixels, with no lines of its own until its owner gives it some: Chrome's.

@@ -177,6 +177,7 @@ public:
         // whether resting on it shows the lines there, and which side --
         // on the left it is left of the gutter.
         Optional<bool>        scroll_map;
+        Optional<bool>        smooth_scroll; // <SK:Nexii> smooth scroll: false moves the wheel's distance at once
         Optional<S32>         scroll_map_width;
         Optional<bool>        scroll_map_preview;
         Optional<bool>        scroll_map_left;
@@ -1450,6 +1451,7 @@ private:
     // <SK:Nexii> smooth scroll
     // Where the wheel's glide is, ahead of the whole pixels mScrollY has taken from it.
     SKScrollAnimator mWheelGlide;
+    bool mSmoothScroll = true; // <SK:Nexii> smooth scroll
     // </SK:Nexii>
     std::function<void(S32)> mZoomWheel;
     F32          mZoomRemainder = 0.f;
