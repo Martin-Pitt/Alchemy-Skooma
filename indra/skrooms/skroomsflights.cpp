@@ -30,8 +30,10 @@
 #include "skcensusprofile.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
+#include <cstring>
 #include <istream>
 #include <ostream>
 #include <string>
@@ -77,6 +79,20 @@ namespace skworld
             bool mExtent = false;
         };
 
+        constexpr U32 SLOPE_MEMO_BITS = 9;
+
+        /// A pair of slopes seen, by their bits, and what they give: a pure function of the pair.
+        struct SlopeMemo
+        {
+            U64 mX = 0;
+            U64 mY = 0;
+            F64 mGrad = 0.0;
+            F64 mGrade = 0.0;
+            F64 mUx = 0.0;
+            F64 mUy = 0.0;
+            bool mUsed = false;
+        };
+
         /// A set of cells as one bit each, small enough to stay in cache, emptied by clearing the bits it set.
         struct CellBits
         {
@@ -116,6 +132,7 @@ namespace skworld
             std::vector<U32> mQueue;
             std::vector<U32> mSeeds;
             std::vector<U32> mVisited;
+            std::array<SlopeMemo, 1u << SLOPE_MEMO_BITS> mSlopeMemo;     ///< kept across detections
             std::vector<U32> mCandidate;    ///< per cell, its candidate index or NONE
             std::vector<U32> mCands;        ///< candidate cells, in index order
             std::vector<CandFit> mFits;     ///< per candidate
@@ -303,13 +320,29 @@ namespace skworld
                 {
                     continue;     // no grade: level, or too few cells linked to fit
                 }
-                const F64 grad = std::hypot(sx, sy);
-                const F64 grade = std::atan(grad) * DEG;
+                // The slopes come from a few rises over a few runs, so the grade and direction of each pair seen is
+                // kept: the same pair gives the same values without the trigonometry.
+                U64 kx, ky;
+                std::memcpy(&kx, &sx, sizeof(kx));
+                std::memcpy(&ky, &sy, sizeof(ky));
+                SlopeMemo& memo = s.mSlopeMemo[((kx * 0x9e3779b97f4a7c15ull) ^ (ky * 0xc2b2ae3d27d4eb4full)) >> (64 - SLOPE_MEMO_BITS)];
+                if (!memo.mUsed || memo.mX != kx || memo.mY != ky)
+                {
+                    const F64 grad = std::hypot(sx, sy);
+                    memo.mX = kx;
+                    memo.mY = ky;
+                    memo.mUsed = true;
+                    memo.mGrad = grad;
+                    memo.mGrade = std::atan(grad) * DEG;
+                    memo.mUx = sx / grad;
+                    memo.mUy = sy / grad;
+                }
+                const F64 grad = memo.mGrad, grade = memo.mGrade;
                 if (grade < FLIGHT_MIN_GRADE_DEG || grade > FLIGHT_MAX_GRADE_DEG || grad < 1e-12)
                 {
                     continue;
                 }
-                const F64 ux = sx / grad, uy = sy / grad;
+                const F64 ux = memo.mUx, uy = memo.mUy;
                 if (ux == 0.0 && uy == 0.0)
                 {
                     continue;
@@ -360,6 +393,7 @@ namespace skworld
                 const U32 c = cands[i];
                 const U32* l = link + static_cast<size_t>(c) * 4;
                 const CandFit fi = fit[i];
+                U32 ra = NONE;      // i's root, found once and moved by its merges
                 for (S32 d = 0; d < 4; ++d)
                 {
                     const U32 o = l[d];
@@ -371,7 +405,8 @@ namespace skworld
                     const CandFit& fj = fit[j];
                     if (fi.mUx * fj.mUx + fi.mUy * fj.mUy >= cos_turn && std::fabs(fi.mGrade - fj.mGrade) <= FLIGHT_JOIN_GRADE_DEG)
                     {
-                        const U32 ra = findRoot(parent, i), rb = findRoot(parent, j);
+                        ra = ra == NONE ? findRoot(parent, i) : ra;
+                        const U32 rb = findRoot(parent, j);
                         if (ra == rb)
                         {
                             continue;
@@ -392,6 +427,7 @@ namespace skworld
                         q.mGrade = qa.mGrade + qb.mGrade;
                         q.mLen = std::sqrt(q.mX * q.mX + q.mY * q.mY);
                         rn[lo] = na + nb;
+                        ra = lo;
                     }
                 }
             }
