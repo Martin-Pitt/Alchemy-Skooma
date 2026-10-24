@@ -62,6 +62,7 @@ public:
 
         Optional<bool>                  bg_visible;
         Optional<bool>                  overlay; // <SK:Nexii> Overlay scroll bar: thin fading thumb over the content; a dwell expands it to a track with arrows
+        Optional<bool>                  smooth_scroll; // <SK:Nexii> smooth scroll: false moves the wheel's distance at once
 
         Optional<LLUIColor>             track_color,
                                         thumb_color,
@@ -144,6 +145,7 @@ public:
     // Advances the wheel's glide to now; its owner calls this every frame it draws.
     void                tickWheel();
     bool                isWheelGliding() const { return mWheelAnimator.isAnimating(); }
+    void                setSmoothScroll(bool smooth) { mSmoothScroll = smooth; } // <SK:Nexii> smooth scroll
     bool                scrollByWheel(const LLScrollDelta& delta);
     // </SK:Nexii>
 
@@ -168,6 +170,7 @@ private:
     F32                 mScrollWheelResidue = 0.f; // carries sub-line precise scroll between events
     // <SK:Nexii> smooth scroll
     SKScrollAnimator    mWheelAnimator;
+    bool                mSmoothScroll = true; // <SK:Nexii> smooth scroll
     F32                 mDocPosF = 0.f;
     F32                 mWheelUnit = 1.f;
     F32                 mWheelLine = 1.f;

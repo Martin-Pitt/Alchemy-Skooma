@@ -308,6 +308,7 @@ ALTextView::Params::Params()
     context_menu("context_menu"),
     find_match_color("find_match_color"),
     scroll_map("scroll_map", false),
+    smooth_scroll("smooth_scroll", true), // <SK:Nexii> smooth scroll
     scroll_map_width("scroll_map_width", 80),
     scroll_map_preview("scroll_map_preview", true),
     scroll_map_left("scroll_map_left", false),
@@ -382,6 +383,7 @@ ALTextView::ALTextView(const Params& p)
     mIndentDefaults     = { mTabWidth, mSoftTabs };
     mFindMatchColor     = p.find_match_color.isProvided() ? p.find_match_color() : LLUIColorTable::instance().getColor("TextFindMatchColor", LLColor4(1.f, 0.7f, 0.2f, 0.4f));
     mScrollMap          = p.scroll_map;
+    mSmoothScroll       = p.smooth_scroll; // <SK:Nexii> smooth scroll
     mScrollMapWidth     = llmax(20, static_cast<S32>(p.scroll_map_width));
     mScrollMapPreview   = p.scroll_map_preview;
     mScrollMapLeft      = p.scroll_map_left;
@@ -6335,7 +6337,9 @@ bool ALTextView::handleScrollWheel(S32 x, S32 y, LLScrollDelta delta)
         mWheelGlide.jumpTo(static_cast<F32>(mScrollY));
     }
     const F32 most = static_cast<F32>(llmax(0, mLayout.totalHeight() - page));
-    mWheelGlide.addDelta(pixels, delta.mIsPrecise, SKScrollDistance::now(), 0.f, most, SKScrollDistance::config());
+    SKScrollAnimator::Config config = SKScrollDistance::config();
+    config.mSmooth = config.mSmooth && mSmoothScroll;
+    mWheelGlide.addDelta(pixels, delta.mIsPrecise, SKScrollDistance::now(), 0.f, most, config);
     glideWheel();
     return true;
     // </SK:Nexii>
