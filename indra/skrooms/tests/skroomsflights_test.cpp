@@ -39,6 +39,7 @@
 
 #include <cmath>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <fstream>
 #include <iostream>
@@ -60,6 +61,7 @@ namespace
         S32 mTilesX = 1;
         std::shared_ptr<EnclosureProduct> mEnc;
         RoomsProductPtr mRooms;
+        std::function<void(const FlightGraph&)> mGraphSink;    ///< given the floor-cell graph each build detects flights on
 
         void add(const RecordPtr& r) { mRecords.push_back(r); }
 
@@ -94,7 +96,11 @@ namespace
             auto rooms = std::make_shared<RoomsInput>();
             rooms->mGeneration = 1;
             rooms->mParams.mWalkHeadM = 2.f;
-            if (!dump.empty())
+            if (mGraphSink)
+            {
+                rooms->mFlightGraphSink = mGraphSink;
+            }
+            else if (!dump.empty())
             {
                 rooms->mFlightGraphSink = [](const FlightGraph& g) {
                     std::ofstream f(dump.c_str(), std::ios::binary);
@@ -305,6 +311,57 @@ namespace
             CHECK(std::fabs(f.mRise - c.mRise) < 0.25f);
             CHECK(std::fabs(std::atan2(f.mRise, f.mRun) * RAD_TO_DEG - c.mDeg) < 4.f);
         }
+    }
+
+    // A detection keeps scratch on its thread and, untraced, leaves a refused region as soon as its verdict is
+    // known: the same graph gives the same flights and cells traced or not, and again after another graph.
+    TEST_CASE("skroomsflights: a graph gives the same flights traced or not, and again after another graph", "[skroomsflights]")
+    {
+        FlightGraph graph, other;
+        World w;
+        w.mGraphSink = [&graph](const FlightGraph& g) { graph = g; };
+        const F32 top = steps(w, 10.f, 10.f, 12.f, 0.f, 12, 0.2f, 0.3f);
+        w.add(box(13.6f, 8.f, 0.f, 20.f, 14.f, top));
+        w.add(wedge(2.f, 18.f, 30.f, 31.f, 0.f, 5.f));      // a hillside, over the uncued area: refused as it grows
+        w.add(wedge(2.f, 2.f, 4.f, 4.f, 0.f, 0.3f));         // a bump, decked at neither end
+        w.build();
+        World v;
+        v.mGraphSink = [&other](const FlightGraph& g) { other = g; };
+        v.add(wedge(8.f, 10.f, 11.f, 12.f, 0.f, 1.5f));
+        v.add(box(11.f, 8.f, 0.f, 17.f, 16.f, 1.5f));
+        v.build();
+        REQUIRE(!graph.mCells.empty());
+        REQUIRE(!other.mCells.empty());
+
+        const auto run = [](const FlightGraph& g, std::vector<FlightRegionTrace>* trace, std::vector<U16>& cells) {
+            std::vector<AirFlight> flights;
+            detectFlights(g, flights, cells, nullptr, trace);
+            std::ostringstream o;
+            writeFlightsJson(o, flights);
+            return o.str();
+        };
+        std::vector<U16> plain_cells, traced_cells, again_cells, other_cells;
+        std::vector<FlightRegionTrace> trace;
+        const std::string plain = run(graph, nullptr, plain_cells);
+        const std::string traced = run(graph, &trace, traced_cells);
+        run(other, nullptr, other_cells);
+        const std::string again = run(graph, nullptr, again_cells);
+        INFO(plain);
+        CHECK(!plain.empty());
+        CHECK(traced == plain);
+        CHECK(traced_cells == plain_cells);
+        CHECK(again == plain);
+        CHECK(again_cells == plain_cells);
+        // The trace still holds every region: the hillside refused by its area, and one refused once measured.
+        bool hillside = false, refused = false;
+        for (const FlightRegionTrace& t : trace)
+        {
+            const std::string verdict = t.mVerdict;
+            hillside = hillside || (verdict == "area" && t.mArea > FLIGHT_MAX_AREA_UNCUED_M2);
+            refused = refused || verdict == "not decked" || verdict == "rise";
+        }
+        CHECK(hillside);
+        CHECK(refused);
     }
 
     TEST_CASE("skroomsflights: an L-stair with a landing is two flights, each decked on the landing", "[skroomsflights]")
