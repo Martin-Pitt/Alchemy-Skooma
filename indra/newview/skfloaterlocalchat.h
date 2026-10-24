@@ -33,13 +33,16 @@
 #include "skoutlinecapture.h"
 #include "llrendertarget.h"
 #include "skchatunfurlcache.h"
+#include "skscrollanimator.h"
 
 #include <deque>
 
+class SKEmojiComplete;
 class LLButton;
 class LLChatEntry;
 class LLFontGL;
 class LLMenuButton;
+class LLScrollbar;
 class LLViewerFetchedTexture;
 
 class SKFloaterLocalChat final : public LLFloater, public LLAvatarPropertiesObserver
@@ -66,11 +69,15 @@ public:
     void draw() override;
     void reshape(S32 width, S32 height, bool called_from_parent = true) override;
     bool applyRectControl() override;
+    /// Collapsed, the chat's bar carries the unread count and the typing line.
+    void setMinimized(bool minimize) override;
+    /// Locked, only what the chat draws takes the mouse: shown messages, the pill, the input, the typing line, the scroll bar and the buttons.
+    bool hitsContentAt(S32 x, S32 y) override;
     bool handleKeyHere(KEY key, MASK mask) override;
     bool handleMouseDown(S32 x, S32 y, MASK mask) override;
-    bool handleMouseUp(S32 x, S32 y, MASK mask) override;
     bool handleHover(S32 x, S32 y, MASK mask) override;
-    void onMouseCaptureLost() override;
+    void glideWheel();
+    bool scrolledUp() const;  // up from the newest message, or gliding there
     bool handleScrollWheel(S32 x, S32 y, LLScrollDelta delta) override;
     void onMouseEnter(S32 x, S32 y, MASK mask) override;
     void onMouseLeave(S32 x, S32 y, MASK mask) override;
@@ -107,6 +114,7 @@ private:
         SKChatEmbedPtr mEmbed; // the preview of the first link that has one
         S32 mEmbedWidth = 0;   // measured at layout
         S32 mDay = 0;          // yyyymmdd in the timestamps' time base, 0 when unknown
+        bool mHistory = false; // loaded from the chat log rather than heard this session
         std::string mDayLabel; // the day divider above it, made at layout when needed
         S32 mDayWidth = 0;     // measured at layout
     };
@@ -139,7 +147,8 @@ private:
     static constexpr S32 DIVIDER_ROW = -2;
 
     void backfill(bool skip_last);
-    void appendChat(const LLChat& chat, const LLSD& args, F64 arrival);
+    /// day is the message's yyyymmdd when the caller knows it better than its timestamp does, else 0.
+    void appendChat(const LLChat& chat, const LLSD& args, F64 arrival, S32 day = 0);
     void showInput(bool show);
     void sendChat(EChatType type);
     void invalidateLayout() { mLayoutDirty = true; }
@@ -148,12 +157,11 @@ private:
     void layout();
     void layoutCog();
     LLRect contentRect() const;
-    bool barShown() const;
-    LLRect barStrip() const;
-    LLRect barThumb() const;    // the thumb's whole extent in the strip
     S32 barRange() const;
-    void barPage(S32 dir);
-    bool barTakes(S32 x, S32 y); // a click or hover here belongs to the bar
+    /// The bar counts down from the top of history while mScroll counts up from the newest message.
+    S32 barPos() const;
+    /// Places the scroll bar at the content's right and gives it the chat's size and position.
+    void layoutBar();
     bool expanded() const;
     F32 cardAlpha(const Card& card, F64 now) const;
     S32 lineHeight(const Row& row) const;
@@ -179,13 +187,20 @@ private:
     /// Polls who nearby is typing, a few times a second, and remakes the label when that changes.
     void updateTyping(F64 now);
     void makeTypingLabel(S32 group);
-    void drawTyping(F64 now) const;
+    /// Dots and names from x to right, the out-of-range part falling back to a count, then an ellipsis.
+    void drawTyping(F64 now, S32 x, S32 y, S32 right) const;
+    /// What the typing line takes untruncated.
+    S32 typingWidth() const;
+    bool anyoneTyping() const { return !mTypingLabel[0].empty() || !mTypingLabel[1].empty(); }
+    void updateCollapsedStatus();
+    static void onIdle(void* data);
     void onStyleMenu(const LLSD& param);
     bool onStyleCheck(const LLSD& param) const;
 
     LLChatEntry* mInput = nullptr;
     LLMenuButton* mCog = nullptr;
     LLButton* mEmojiButton = nullptr;
+    SKEmojiComplete* mEmojiComplete = nullptr;
     U32 mEmojiClosedFrame = 0;  // the frame the picker last closed, to tell a toggle-off click
     boost::signals2::connection mEmojiCloseConnection;
     std::deque<Message> mMessages;
@@ -193,6 +208,7 @@ private:
     std::vector<Row> mRows;
     S32 mContentHeight = 0;
     S32 mScroll = 0;            // pixels scrolled up from the newest message
+    SKScrollAnimator mWheelGlide; // the wheel's smooth scroll, which mScroll follows rounded
     S32 mPendingMessages = 0;   // appended since the last layout
     S32 mUnseen = 0;            // arrived while scrolled up
     S32 mPillCount = -1;        // the count mPillLabel was made for
@@ -202,13 +218,14 @@ private:
     S32 mLayoutStyle = -1;
     bool mLayoutDirty = true;
     bool mHovered = false;
-    bool mBarHot = false;       // the pointer is on the scroll bar's strip
-    S32 mBarDrag = -1;          // while the thumb is dragged, the pointer's height above its bottom
-    S32 mBarPage = 0;           // while the track is held, +1 paging back through history, -1 forward
-    S32 mBarPointerY = 0;       // the pointer's last height, so a held page stops at it
-    F64 mBarRepeatAt = 0.0;     // when a held page next repeats
-    F32 mBarWide = 0.f;         // 0 for the thin thumb, 1 for the full bar, eased between
-    F64 mBarDrawnAt = 0.0;      // the last draw, to ease mBarWide by
+    bool mHiddenForConversations = false; // put away while Conversations shows nearby chat
+    LLScrollbar* mScrollbar = nullptr; // an overlay bar over the content's right edge
+    bool mBarSyncing = false;   // while layoutBar pushes the chat's position, the bar's callback ignores it
+    F32 mBackdrop = 0.f;        // the hover tint, 0 to 1, eased in and out
+    F32 mBorder = 0.f;          // the edge border, likewise
+    F64 mEdgeSince = -1.0;      // when the pointer reached the floater's edge, -1 while it is elsewhere
+    F64 mChromeDrawnAt = 0.0;
+    S32 mCollapsedUnread = 0;   // arrived since the chat was collapsed
     bool mWasExpanded = false;
     F64 mCollapsedAt = -1.0e9; // when the log last stopped being shown whole
     boost::signals2::connection mFontConnection;

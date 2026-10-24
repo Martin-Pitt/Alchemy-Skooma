@@ -83,7 +83,6 @@ protected:
     {
         S32         mWidth;
         S32         mHeight;
-        bool        mCanMinimize;
 // [SL:KB] - Patch: UI-FloaterCollapse | Checked: Catznip-5.2
         bool        mCanCollapse;
 // [/SL:KB]

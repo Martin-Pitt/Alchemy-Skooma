@@ -61,6 +61,7 @@ public:
                                         track_image_vertical;
 
         Optional<bool>                  bg_visible;
+        Optional<bool>                  overlay; // <SK:Nexii> Overlay scroll bar: thin fading thumb over the content; a dwell expands it to a track with arrows
 
         Optional<LLUIColor>             track_color,
                                         thumb_color,
@@ -97,6 +98,10 @@ public:
     virtual void    reshape(S32 width, S32 height, bool called_from_parent = true) override;
 
     virtual void    draw() override;
+    // <SK:Nexii> Overlay scroll bar
+    virtual void    onVisibilityChange(bool new_visibility) override;
+    bool                isOverlay() const { return mOverlay; }
+    // </SK:Nexii>
 
     // How long the "document" is.
     void                setDocSize( S32 size );
@@ -147,6 +152,13 @@ public:
 private:
     void                updateThumbRect();
     bool                changeLine(S32 delta, bool update_thumb );
+    // <SK:Nexii> Overlay scroll bar
+    S32                 arrowLength() const { return mOverlay && !mOverlayExpanded ? 0 : mThickness; }
+    void                overlaySetExpanded(bool expanded);
+    F32                 overlayAlpha(F64 now) const;
+    void                overlayTouch();
+    void                drawOverlay();
+    // </SK:Nexii>
 
     callback_t          mChangeCallback;
 
@@ -190,6 +202,18 @@ private:
 
     LLButton*           mLineUpBtn = nullptr;
     LLButton*           mLineDownBtn = nullptr;
+
+    // <SK:Nexii> Overlay scroll bar
+    bool                mOverlay = false;
+    bool                mOverlayRevealPending = false;
+    F32                 mOverlayWiden = 0.f;
+    bool                mOverlayExpanded = false;
+    F64                 mOverlayHoverSince = -1.0;
+    F64                 mOverlayLeftAt = -1000.0;
+    F64                 mOverlayShownAt = -1000.0;
+    F64                 mOverlayActiveAt = -1000.0;
+    U32                 mOverlayDrawnFrame = 0;
+    // </SK:Nexii>
 };
 
 
