@@ -66,6 +66,8 @@ public:
     void draw() override;
     void reshape(S32 width, S32 height, bool called_from_parent = true) override;
     bool applyRectControl() override;
+    /// Collapsed, the chat is a compact bar at its bottom left with the unread count and the typing line.
+    void setMinimized(bool minimize) override;
     bool handleKeyHere(KEY key, MASK mask) override;
     bool handleMouseDown(S32 x, S32 y, MASK mask) override;
     bool handleMouseUp(S32 x, S32 y, MASK mask) override;
@@ -107,6 +109,7 @@ private:
         SKChatEmbedPtr mEmbed; // the preview of the first link that has one
         S32 mEmbedWidth = 0;   // measured at layout
         S32 mDay = 0;          // yyyymmdd in the timestamps' time base, 0 when unknown
+        bool mHistory = false; // loaded from the chat log rather than heard this session
         std::string mDayLabel; // the day divider above it, made at layout when needed
         S32 mDayWidth = 0;     // measured at layout
     };
@@ -139,7 +142,8 @@ private:
     static constexpr S32 DIVIDER_ROW = -2;
 
     void backfill(bool skip_last);
-    void appendChat(const LLChat& chat, const LLSD& args, F64 arrival);
+    /// day is the message's yyyymmdd when the caller knows it better than its timestamp does, else 0.
+    void appendChat(const LLChat& chat, const LLSD& args, F64 arrival, S32 day = 0);
     void showInput(bool show);
     void sendChat(EChatType type);
     void invalidateLayout() { mLayoutDirty = true; }
@@ -179,7 +183,11 @@ private:
     /// Polls who nearby is typing, a few times a second, and remakes the label when that changes.
     void updateTyping(F64 now);
     void makeTypingLabel(S32 group);
-    void drawTyping(F64 now) const;
+    void drawTyping(F64 now, S32 y) const;
+    bool anyoneTyping() const { return !mTypingLabel[0].empty() || !mTypingLabel[1].empty(); }
+    /// Sizes the collapsed bar to its label, and to the typing line while anyone types.
+    void layoutCollapsed();
+    void drawCollapsed(F64 now);
     void onStyleMenu(const LLSD& param);
     bool onStyleCheck(const LLSD& param) const;
 
@@ -209,6 +217,12 @@ private:
     F64 mBarRepeatAt = 0.0;     // when a held page next repeats
     F32 mBarWide = 0.f;         // 0 for the thin thumb, 1 for the full bar, eased between
     F64 mBarDrawnAt = 0.0;      // the last draw, to ease mBarWide by
+    F32 mBackdrop = 0.f;        // the hover tint, 0 to 1, eased in and out
+    F32 mBorder = 0.f;          // the edge border, likewise
+    F64 mEdgeSince = -1.0;      // when the pointer reached the floater's edge, -1 while it is elsewhere
+    F64 mChromeDrawnAt = 0.0;
+    S32 mCollapsedUnread = 0;   // arrived since the chat was collapsed
+    std::string mCollapsedLabel;
     bool mWasExpanded = false;
     F64 mCollapsedAt = -1.0e9; // when the log last stopped being shown whole
     boost::signals2::connection mFontConnection;

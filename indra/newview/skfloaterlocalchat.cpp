@@ -107,6 +107,9 @@ constexpr S32 DIVIDER_PAD = 8;    // above and below a day divider
 constexpr S32 DIVIDER_GAP = 8;    // between a day divider's lines and its label
 constexpr F32 DIVIDER_ALPHA = 0.45f;
 constexpr F32 DIVIDER_LINE_ALPHA = 0.15f;
+constexpr F32 CHROME_FADE = 0.15f; // the hover backdrop's and border's ease, in seconds
+constexpr S32 EDGE_REACH = 6;      // how near the floater's edge the pointer shows the border
+constexpr F64 EDGE_REST = 0.08;    // and how long it rests there first
 
 // The day a chat timestamp leads with, "year/month/day ...", as yyyymmdd; 0 when it carries none.
 S32 day_key(const std::string& stamp)
@@ -268,6 +271,10 @@ void SKFloaterLocalChat::startChat(const char* line)
     {
         LLFloaterReg::showInstance("sk_local_chat", LLSD(), false);
     }
+    if (self->isMinimized())
+    {
+        self->setMinimized(false);
+    }
     self->showInput(true);
     if (line)
     {
@@ -368,14 +375,43 @@ void SKFloaterLocalChat::backfill(bool skip_last)
     {
         --count;
     }
+
+    // The archive's history lines carry the log's time as shown, which drops today's date and may never have had one;
+    // the log's own datetime keeps whatever date it was written with, so take the days from there.
+    std::vector<S32> days(count, 0);
+    size_t history_end = 0;
+    while (history_end < count && archive[history_end].mChatStyle == CHAT_STYLE_HISTORY)
+    {
+        ++history_end;
+    }
+    if (history_end > 0)
+    {
+        std::list<LLSD> log;
+        LLLogChat::loadChatHistory("chat", log);
+        // Both end with the last line loaded; walk back matching by text, as the archive may hold only the latest.
+        auto it = log.rbegin();
+        for (size_t i = history_end; i-- > 0 && it != log.rend();)
+        {
+            while (it != log.rend() && (*it)[LL_IM_TEXT].asString() != archive[i].mText)
+            {
+                ++it;
+            }
+            if (it != log.rend())
+            {
+                days[i] = day_key((*it)[LL_IM_DATE_TIME].asString());
+                ++it;
+            }
+        }
+    }
+
     for (size_t i = count > MAX_MESSAGES ? count - MAX_MESSAGES : 0; i < count; ++i)
     {
         // Arrival 0 leaves history faded until the chat is opened.
-        appendChat(archive[i], LLSD(), 0.0);
+        appendChat(archive[i], LLSD(), 0.0, days[i]);
     }
 }
 
-void SKFloaterLocalChat::appendChat(const LLChat& chat, const LLSD& args, F64 arrival)
+void SKFloaterLocalChat::appendChat(const LLChat& chat, const LLSD& args, F64 arrival, S32 day)
 {
     if (chat.mText.empty())
     {
@@ -388,8 +424,17 @@ void SKFloaterLocalChat::appendChat(const LLChat& chat, const LLSD& args, F64 ar
     msg.mArrival = arrival;
     static LLCachedControl<bool> show_seconds(gSavedSettings, "AlchemyIMShowSeconds", false);
     msg.mTime = ALChatTimestamp::format(chat.mTimeStr.empty() ? LLLogChat::timestamp2LogString(0, false, true) : chat.mTimeStr, show_seconds);
-    // The day in the timestamps' own time base; history logged without dates has none.
-    msg.mDay = day_key(chat.mTimeStr.empty() ? LLLogChat::timestamp2LogString(0, true, false) : chat.mTimeStr);
+    // The day in the timestamps' own time base; a line that truly has none takes the last known day.
+    msg.mHistory = chat.mChatStyle == CHAT_STYLE_HISTORY;
+    msg.mDay = day != 0 ? day : day_key(chat.mTimeStr);
+    if (msg.mDay == 0 && !msg.mHistory)
+    {
+        msg.mDay = day_key(LLLogChat::timestamp2LogString(0, true, false)); // heard now, so today
+    }
+    if (msg.mDay == 0 && !mMessages.empty())
+    {
+        msg.mDay = mMessages.back().mDay;
+    }
 
     LLUIColor text_color = LLUIColorTable::instance().getColor("White");
     F32 alpha = 1.f;
@@ -498,6 +543,11 @@ void SKFloaterLocalChat::appendChat(const LLChat& chat, const LLSD& args, F64 ar
 
     mMessages.push_back(std::move(msg));
     ++mPendingMessages;
+    if (arrival > 0.0 && isMinimized())
+    {
+        ++mCollapsedUnread;
+        layoutCollapsed();
+    }
     if (mScroll > 0)
     {
         ++mUnseen;
@@ -598,7 +648,7 @@ bool SKFloaterLocalChat::applyRectControl()
         return true;
     }
     // First open: an MMO-sized box at the bottom left, above the toolbar.
-    constexpr S32 DEFAULT_W = 600;
+    constexpr S32 DEFAULT_W = 450;
     constexpr S32 DEFAULT_H = 560;
     constexpr S32 MARGIN = 10;
     const LLRect snap = gFloaterView->getSnapRect();
@@ -606,6 +656,70 @@ bool SKFloaterLocalChat::applyRectControl()
     setOrigin(snap.mLeft + MARGIN, snap.mBottom + MARGIN);
     storeRectControl();
     return true;
+}
+
+constexpr S32 COLLAPSED_HEIGHT = 22;
+constexpr S32 COLLAPSED_MIN_WIDTH = 72;
+
+void SKFloaterLocalChat::setMinimized(bool minimize)
+{
+    if (minimize == isMinimized())
+    {
+        return;
+    }
+    if (minimize && mInput && mInput->getVisible())
+    {
+        stopChat();
+    }
+    mCollapsedUnread = 0;
+    LLFloater::setMinimized(minimize);
+    if (minimize)
+    {
+        // Where the chat was, not in the minimized row; the expanded rect is what save_rect keeps.
+        setBorderVisible(false);
+        setOrigin(getExpandedRect().mLeft, getExpandedRect().mBottom);
+        layoutCollapsed();
+    }
+    if (mButtons[BUTTON_RESTORE])
+    {
+        mButtons[BUTTON_RESTORE]->setVisible(false); // the bar itself restores
+    }
+}
+
+void SKFloaterLocalChat::layoutCollapsed()
+{
+    if (!isMinimized())
+    {
+        return;
+    }
+    LLStringUtil::format_map_t args;
+    args["[COUNT]"] = llformat("%d", mCollapsedUnread);
+    mCollapsedLabel = getString(mCollapsedUnread > 0 ? "collapsed_unread" : "collapsed_title", args);
+    // The typing line needs the chat's own width; the label alone keeps the bar compact.
+    const bool typing = anyoneTyping();
+    const S32 width = typing ? getExpandedRect().getWidth()
+                             : llmax(COLLAPSED_MIN_WIDTH, LLFontGL::getFontSansSerifSmall()->getWidth(mCollapsedLabel) + 4 * PAD_X);
+    const S32 height = COLLAPSED_HEIGHT + (typing ? TYPING_LINE + INPUT_GAP : 0);
+    if (width != getRect().getWidth() || height != getRect().getHeight())
+    {
+        reshape(width, height);
+    }
+}
+
+void SKFloaterLocalChat::drawCollapsed(F64 now)
+{
+    static LLUIImagePtr bar_image = LLUI::getUIImage("Rounded_Square");
+    static LLUIColor bar_color = LLUIColorTable::instance().getColor("Black");
+    static LLUIColor text_color = LLUIColorTable::instance().getColor("White");
+    LLFontGL* font = LLFontGL::getFontSansSerifSmall();
+    const S32 bar_w = llmax(COLLAPSED_MIN_WIDTH, font->getWidth(mCollapsedLabel) + 4 * PAD_X);
+    bar_image->draw(0, 0, bar_w, COLLAPSED_HEIGHT, bar_color.get() % (mHovered ? 0.75f : 0.55f));
+    font->renderUTF8(mCollapsedLabel, 0, (F32)(bar_w / 2), (F32)((COLLAPSED_HEIGHT - font->getLineHeight()) / 2), text_color.get() % 0.9f,
+                     LLFontGL::HCENTER, LLFontGL::BOTTOM, mCollapsedUnread > 0 ? LLFontGL::BOLD : LLFontGL::NORMAL, LLFontGL::NO_SHADOW);
+    if (anyoneTyping() && !gAgentCamera.cameraMouselook())
+    {
+        drawTyping(now, COLLAPSED_HEIGHT + INPUT_GAP);
+    }
 }
 
 void SKFloaterLocalChat::reshape(S32 width, S32 height, bool called_from_parent)
@@ -621,7 +735,9 @@ void SKFloaterLocalChat::layoutCog()
         return;
     }
     constexpr S32 COG_PX = 16;
-    const S32 right = getRect().getWidth() - 4;
+    // Left of the minimize button, which the floater keeps at the top right.
+    static LLUICachedControl<S32> close_box_size("UIFloaterCloseBoxSize", 0);
+    const S32 right = getRect().getWidth() - 4 - (mButtons[BUTTON_MINIMIZE] ? close_box_size + 2 : 0);
     const S32 top = getRect().getHeight() - 2;
     mCog->setRect(LLRect(right - COG_PX, top, right, top - COG_PX));
 }
@@ -636,6 +752,7 @@ void SKFloaterLocalChat::onMouseLeave(S32 x, S32 y, MASK mask)
 {
     mHovered = false;
     mBarHot = false;
+    mEdgeSince = -1.0;
     LLFloater::onMouseLeave(x, y, mask);
 }
 
@@ -816,7 +933,8 @@ void SKFloaterLocalChat::layout()
         msg.mNameWidth = bold_width(name_font(), msg.mName);
         msg.mTimeWidth = msg.mName.empty() || msg.mTime.empty() ? 0 : time_font()->getWidth(msg.mTime) + (cards ? TIME_GAP : LEAD_TIME_GAP);
         // Cards gather one speaker's run of messages; a minimal line stands alone.
-        const bool new_day = m > 0 && msg.mDay != 0 && mMessages[m - 1].mDay != 0 && msg.mDay != mMessages[m - 1].mDay;
+        // A new day, or the step from the log's history to what was heard this session.
+        const bool new_day = m > 0 && msg.mDay != 0 && ((mMessages[m - 1].mDay != 0 && msg.mDay != mMessages[m - 1].mDay) || (mMessages[m - 1].mHistory && !msg.mHistory));
         bool join = false;
         if (cards && !new_day && !mCards.empty() && !msg.mName.empty())
         {
@@ -1399,6 +1517,28 @@ void SKFloaterLocalChat::draw()
     setMouseOpaque(opaque);
     getDragHandle()->setMouseOpaque(opaque);
 
+    if (isMinimized())
+    {
+        const F64 now = LLFrameTimer::getTotalSeconds();
+        const bool was_typing = anyoneTyping();
+        updateTyping(now);
+        if (was_typing != anyoneTyping())
+        {
+            layoutCollapsed();
+        }
+        if (mCog)
+        {
+            mCog->setVisible(false);
+        }
+        if (mButtons[BUTTON_RESTORE])
+        {
+            mButtons[BUTTON_RESTORE]->setVisible(false);
+        }
+        drawCollapsed(now);
+        LLFloater::draw();
+        return;
+    }
+
     mUnfurl.update();
     layout();
 
@@ -1419,14 +1559,28 @@ void SKFloaterLocalChat::draw()
     {
         mCog->setVisible(mHovered && opaque);
     }
-
-    if (opaque && mHovered)
+    if (mButtons[BUTTON_MINIMIZE])
     {
-        // The only chrome, the mini-map's: a faint dark tint inside a thin light border.
+        mButtons[BUTTON_MINIMIZE]->setVisible(mHovered && opaque);
+    }
+
+    // The only chrome, the mini-map's faint tint, eased in and out; its border shows only while the pointer rests on an edge.
+    const F32 chrome_dt = (F32)llclamp(now - mChromeDrawnAt, 0.0, 0.1);
+    mChromeDrawnAt = now;
+    const bool edge_rest = mEdgeSince >= 0.0 && now - mEdgeSince >= EDGE_REST;
+    mBackdrop = llclamp(mBackdrop + ((opaque && mHovered) ? chrome_dt : -chrome_dt) / CHROME_FADE, 0.f, 1.f);
+    mBorder = llclamp(mBorder + ((opaque && edge_rest) ? chrome_dt : -chrome_dt) / CHROME_FADE, 0.f, 1.f);
+    if (mBackdrop > 0.f)
+    {
         static const LLColor4 tint(16.f / 255.f, 16.f / 255.f, 20.f / 255.f, 61.f / 255.f);
+        const F32 ease = mBackdrop * mBackdrop * (3.f - 2.f * mBackdrop);
+        gl_rect_2d(0, getRect().getHeight(), getRect().getWidth(), 0, tint % (tint.mV[VALPHA] * ease), true);
+    }
+    if (mBorder > 0.f)
+    {
         static const LLColor4 border(197.f / 255.f, 205.f / 255.f, 211.f / 255.f, 122.f / 255.f);
-        gl_rect_2d(0, getRect().getHeight(), getRect().getWidth(), 0, tint, true);
-        gl_rect_2d(0, getRect().getHeight(), getRect().getWidth(), 0, border, false);
+        const F32 ease = mBorder * mBorder * (3.f - 2.f * mBorder);
+        gl_rect_2d(0, getRect().getHeight(), getRect().getWidth(), 0, border % (border.mV[VALPHA] * ease), false);
     }
 
     if (!mRows.empty())
@@ -1437,7 +1591,7 @@ void SKFloaterLocalChat::draw()
     updateTyping(now);
     if (opaque && (!mTypingLabel[0].empty() || !mTypingLabel[1].empty()))
     {
-        drawTyping(now);
+        drawTyping(now, INSET + inputHeight() + INPUT_GAP + 1);
     }
 
     // Jump to present: once scrolled up by more than a view, or from any distance once something new arrived.
@@ -1627,12 +1781,11 @@ void SKFloaterLocalChat::makeTypingLabel(S32 group)
     label = getString(std::string(prefix) + (typers.size() == 1 ? "one" : "two"), args);
 }
 
-void SKFloaterLocalChat::drawTyping(F64 now) const
+void SKFloaterLocalChat::drawTyping(F64 now, S32 y) const
 {
     static LLUIColor color = LLUIColorTable::instance().getColor("White");
     static LLUIColor far_color = LLUIColorTable::instance().getColor("Yellow");
     LLFontGL* font = LLFontGL::getFontSansSerifSmall();
-    const S32 y = INSET + inputHeight() + INPUT_GAP + 1;
     const bool has_near = !mTypingLabel[0].empty();
     const LLColor4 base = has_near ? color.get() : far_color.get();
     const F32 dim = has_near ? 1.f : 0.75f;
@@ -1751,6 +1904,11 @@ std::string SKFloaterLocalChat::urlAt(S32 x, S32 y) const
 
 bool SKFloaterLocalChat::handleMouseDown(S32 x, S32 y, MASK mask)
 {
+    if (isMinimized())
+    {
+        setMinimized(false);
+        return true;
+    }
     // The drag handle lies under everything; any other child takes its own clicks.
     LLView* child = childFromPoint(x, y);
     if (barTakes(x, y))
@@ -1810,6 +1968,15 @@ void SKFloaterLocalChat::onMouseCaptureLost()
 bool SKFloaterLocalChat::handleHover(S32 x, S32 y, MASK mask)
 {
     mBarHot = barShown() && barStrip().pointInRect(x, y);
+    const bool at_edge = x < EDGE_REACH || y < EDGE_REACH || x >= getRect().getWidth() - EDGE_REACH || y >= getRect().getHeight() - EDGE_REACH;
+    if (!at_edge)
+    {
+        mEdgeSince = -1.0;
+    }
+    else if (mEdgeSince < 0.0)
+    {
+        mEdgeSince = LLFrameTimer::getTotalSeconds();
+    }
     if (hasMouseCapture() && (mBarDrag >= 0 || mBarPage != 0))
     {
         if (mBarDrag >= 0)
