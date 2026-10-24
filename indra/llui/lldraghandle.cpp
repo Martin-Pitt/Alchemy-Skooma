@@ -38,6 +38,7 @@
 #include "lltextbox.h"
 #include "llcontrol.h"
 #include "llfontgl.h"
+#include "llfontregistry.h" // <SK:Nexii> Collapsed status
 #include "lllocalcliprect.h"
 #include "llrender.h"
 #include "llwindow.h"
@@ -104,10 +105,11 @@ void LLDragHandleTop::setTitle(const std::string& title)
 {
     std::string trimmed_title = title;
     LLStringUtil::trim(trimmed_title);
+    mTitle = trimmed_title; // <SK:Nexii> Collapsed status
 
     if( mTitleBox )
     {
-        mTitleBox->setText(trimmed_title);
+        applyTitleText(); // <SK:Nexii> Collapsed status
     }
     else
     {
@@ -123,6 +125,7 @@ void LLDragHandleTop::setTitle(const std::string& title)
         mTitleBox = LLUICtrlFactory::create<LLTextBox> (params);
         mTitleBox->setEnabled(getForeground());
         addChild( mTitleBox );
+        applyTitleText(); // <SK:Nexii> Collapsed status
     }
 
     reshapeTitleBox();
@@ -131,8 +134,46 @@ void LLDragHandleTop::setTitle(const std::string& title)
 
 std::string LLDragHandleTop::getTitle() const
 {
-    return mTitleBox == NULL ? LLStringUtil::null : mTitleBox->getText();
+    return mTitleBox == NULL ? LLStringUtil::null : mTitle; // <SK:Nexii> Without the collapsed status
 }
+
+// <SK:Nexii> Collapsed status: "Title · 3  status", the count bold and the status dim.
+void LLDragHandleTop::setTitleStatus(S32 count, const std::string& status)
+{
+    if (count == mStatusCount && status == mStatus)
+    {
+        return;
+    }
+    mStatusCount = count;
+    mStatus = status;
+    applyTitleText();
+}
+
+void LLDragHandleTop::applyTitleText()
+{
+    if (!mTitleBox)
+    {
+        return;
+    }
+    mTitleBox->setText(mTitle);
+    const LLColor4 color = mTitleBox->getColor().get();
+    if (mStatusCount > 0)
+    {
+        LLStyle::Params style;
+        style.color = color;
+        LLFontDescriptor bold = mFont->getFontDesc();
+        bold.setStyle(bold.getStyle() | LLFontGL::BOLD);
+        style.font = LLFontGL::getFont(bold);
+        mTitleBox->appendText(llformat(" Â· %d", mStatusCount), false, style);
+    }
+    if (!mStatus.empty())
+    {
+        LLStyle::Params style;
+        style.color = color % 0.6f;
+        mTitleBox->appendText("  " + mStatus, false, style);
+    }
+}
+// </SK:Nexii>
 
 
 void LLDragHandleLeft::setTitle(const std::string& )
