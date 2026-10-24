@@ -28,17 +28,22 @@
 
 #include "skoutlinecapture.h"
 
+#include "alquerypool.h"
+
 #include "lldrawable.h"
 #include "llface.h"
 #include "llgl.h"
 #include "llgltfmaterial.h"
 #include "llglslshader.h"
+#include "llglstates.h"
+#include "llimagegl.h"
 #include "llimagepng.h"
 #include "llmaterial.h"
 #include "llmeshrepository.h"
 #include "llmodel.h"
 #include "llrender.h"
 #include "llrendertarget.h"
+#include "llshadermgr.h"
 #include "llselectmgr.h"
 #include "llspatialpartition.h"
 #include "lltimer.h"
@@ -68,7 +73,10 @@ namespace
     LLRenderTarget sTarget; // depth (and a scratch colour) at twice a slot's resolution
     LLRenderTarget sAtlas;  // R8 coverage, one slot per layer
     LLGLSLShader sResolve;
-    U32 sQueries[2] = { 0, 0 };
+    ALQuerySpan sTimedSpan;
+    const LLStaticHashedString sk_slot("sk_slot");
+    const LLStaticHashedString sk_clear_depth("sk_clear_depth");
+    const LLStaticHashedString sk_count("sk_count");
     LLUUID sTimedRoot; // the capture whose render the queries are timing
     View sTimedView = View::PLAN;
 
@@ -372,8 +380,7 @@ struct SKOutlineLayerState
     LLUUID id;           // the root of the layer's linkset
     S32 slot = -1;
     Grid grid;
-    U32 query = 0;
-    bool counting = false; // a count is in flight
+    ALQueryTicket ticket; // the count of the last render, until it is read
     bool rendered = false;
     SKOutlineLayer out;
 };
@@ -437,12 +444,7 @@ struct SKOutlineCapture::Entry
         {
             atlas.release(l.slot);
             l.slot = -1;
-            if (l.query && gl)
-            {
-                glDeleteQueries(1, &l.query);
-            }
-            l.query = 0;
-            l.counting = false;
+            l.ticket = ALQueryTicket();
         }
     }
 };
@@ -598,11 +600,7 @@ void SKOutlineCapture::releaseGL()
     sTarget.release();
     sAtlas.release();
     sResolve.unload();
-    if (sQueries[0])
-    {
-        glDeleteQueries(2, sQueries);
-        sQueries[0] = sQueries[1] = 0;
-    }
+    sTimedSpan = ALQuerySpan();
     sTimedRoot.setNull();
     mGLFailed = false;
     for (auto& [id, entry] : mEntries)
@@ -632,8 +630,7 @@ bool SKOutlineCapture::ensureGL()
     {
         // Every channel reads the coverage, so a consumer can draw it as a white mask or an alpha.
         gGL.getTextureSlot(0)->bindManual(ALTextureSlot::TT_TEXTURE, sAtlas.getTexture());
-        const GLint swizzle[4] = { GL_RED, GL_RED, GL_RED, GL_RED };
-        glTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_RGBA, swizzle);
+        LLImageGL::setSwizzle(ALTextureSlot::TT_TEXTURE, GL_RED, GL_RED, GL_RED, GL_RED);
         gGL.getTextureSlot(0)->unbind();
 
         // A fresh atlas holds garbage outside the slots written, and the resolve writes whole slots, so clear it once.
@@ -671,19 +668,24 @@ void SKOutlineCapture::readCounts()
         bool counted = false;
         for (SKOutlineLayerState& l : entry->layers)
         {
-            if (!l.counting || !l.query)
+            // A count lands frames after its render, read by the pool with no GL call; until then the last count stands.
+            if (!l.ticket.isValid())
             {
                 continue;
             }
-            GLint available = 0;
-            glGetQueryObjectiv(l.query, GL_QUERY_RESULT_AVAILABLE, &available);
-            if (available)
+            U64 samples = 0;
+            switch (gGL.queries().result(l.ticket, samples))
             {
-                GLuint samples = 0;
-                glGetQueryObjectuiv(l.query, GL_QUERY_RESULT, &samples);
-                l.out.covered_cells = (S32)samples;
-                l.counting = false;
-                counted = true;
+                case ALQueryPool::Status::Ready:
+                    l.out.covered_cells = (S32)llmin<U64>(samples, (U64)S32_MAX);
+                    l.ticket = ALQueryTicket();
+                    counted = true;
+                    break;
+                case ALQueryPool::Status::Pending:
+                    break;
+                case ALQueryPool::Status::Expired:
+                    l.ticket = ALQueryTicket(); // the next render counts again
+                    break;
             }
         }
         if (counted && entry->rendered && publish(*entry))
@@ -807,19 +809,20 @@ void SKOutlineCapture::frame()
     // The GPU time of the last timed render, read only once it is ready.
     if (sTimedRoot.notNull())
     {
-        GLint available = 0;
-        glGetQueryObjectiv(sQueries[1], GL_QUERY_RESULT_AVAILABLE, &available);
-        if (available)
+        U64 ns = 0;
+        const ALQueryPool::Status st = gGL.queries().result(sTimedSpan, ns);
+        if (st == ALQueryPool::Status::Ready)
         {
-            GLuint64 t0 = 0, t1 = 0;
-            glGetQueryObjectui64v(sQueries[0], GL_QUERY_RESULT, &t0);
-            glGetQueryObjectui64v(sQueries[1], GL_QUERY_RESULT, &t1);
             const auto it = mEntries.find({ sTimedRoot, sTimedView });
             if (it != mEntries.end())
             {
-                it->second->gpu_ms = t1 > t0 ? (F64)(t1 - t0) / 1.0e6 : 0.0;
+                it->second->gpu_ms = (F64)ns / 1.0e6;
             }
+        }
+        if (st != ALQueryPool::Status::Pending)
+        {
             sTimedRoot.setNull();
+            sTimedSpan = ALQuerySpan();
         }
     }
     readCounts();
@@ -942,21 +945,17 @@ void SKOutlineCapture::frame()
             }
             Entry& e = *by_index[c.index];
             LLTimer t;
-            // Timestamps rather than GL_TIME_ELAPSED, which cannot nest inside the profiler's own GPU zones.
+            // A pool span, which nests inside the profiler's GPU zones and is read with no GL call.
             const bool time_gpu = debug && sTimedRoot.isNull();
             if (time_gpu)
             {
-                if (!sQueries[0])
-                {
-                    glGenQueries(2, sQueries);
-                }
-                glQueryCounter(sQueries[0], GL_TIMESTAMP);
+                sTimedSpan = gGL.queries().beginSpan();
             }
             e.last_reason = c.reason;
             const bool ok = render(e);
             if (time_gpu)
             {
-                glQueryCounter(sQueries[1], GL_TIMESTAMP);
+                gGL.queries().endSpan(sTimedSpan);
                 sTimedRoot = e.root_id;
                 sTimedView = e.view;
             }
@@ -1082,24 +1081,15 @@ namespace
         camera.setProjection(proj);
         LLViewerCamera::updateFrustumPlanes(camera, false, false, true);
 
-        S32 saved_viewport[4];
-        memcpy(saved_viewport, gGLViewport, sizeof(saved_viewport));
-        const U32 saved_res_x = LLRenderTarget::sCurResX;
-        const U32 saved_res_y = LLRenderTarget::sCurResY;
-
         // Coverage into the scratch target's corner, cleared there only.
         sTarget.bindTarget();
-        gGLViewport[0] = gGLViewport[1] = 0;
-        gGLViewport[2] = resx;
-        gGLViewport[3] = resy;
-        glViewport(0, 0, resx, resy);
+        gGL.setViewport(0, 0, resx, resy);
         {
-            LLGLEnable scissor(GL_SCISSOR_TEST);
-            glScissor(0, 0, resx, resy);
+            LLGLSScissor scissor(0, 0, resx, resy);
             sTarget.clear();
         }
-        F32 clear_depth = 1.f;
-        glGetFloatv(GL_DEPTH_CLEAR_VALUE, &clear_depth);
+        // The convention's far value: LLRender::applyDepthConvention() is the clear depth's only setter.
+        const F32 clear_depth = al_window_far();
         const U32 draws = gPipeline.skRenderOutlineCoverage(bridge, view, proj, camera, alpha_cutoff, skip);
         sTarget.flush();
 
@@ -1108,49 +1098,31 @@ namespace
         S32 sx = 0, sy = 0;
         atlas.origin(l.slot, sx, sy);
         sAtlas.bindTarget();
-        gGLViewport[0] = sx;
-        gGLViewport[1] = sy;
-        gGLViewport[2] = SLOT_SIZE;
-        gGLViewport[3] = SLOT_SIZE;
-        glViewport(sx, sy, SLOT_SIZE, SLOT_SIZE);
+        gGL.setViewport(sx, sy, SLOT_SIZE, SLOT_SIZE);
         {
             LLGLDepthTest depth(GL_FALSE, GL_FALSE);
             LLGLDisable blend(GL_BLEND);
             LLGLDisable cull(GL_CULL_FACE);
             sResolve.bind();
-            gGL.getTextureSlot(0)->bindManual(ALTextureSlot::TT_TEXTURE, sTarget.getDepth(), gGL.getSampler(ALSamplers::PointClamp));
-            const GLint prog = sResolve.mProgramObject;
-            glUniform1i(glGetUniformLocation(prog, "depthMap"), 0);
-            glUniform4i(glGetUniformLocation(prog, "sk_slot"), sx, sy, g.cols, g.rows);
-            glUniform1f(glGetUniformLocation(prog, "sk_clear_depth"), clear_depth);
-            const GLint count_loc = glGetUniformLocation(prog, "sk_count");
-            glUniform1i(count_loc, 0);
+            sResolve.bindDepthTexture(LLShaderMgr::DEFERRED_DEPTH, &sTarget, ALSamplers::PointClamp);
+            const GLint slot[4] = { sx, sy, g.cols, g.rows };
+            sResolve.uniform4iv(sk_slot, 1, slot);
+            sResolve.uniform1f(sk_clear_depth, clear_depth);
+            sResolve.uniform1i(sk_count, 0);
             gPipeline.mScreenTriangleVB->setBuffer();
             gPipeline.mScreenTriangleVB->drawArrays(LLRender::TRIANGLES, 0, 3);
 
-            if (!l.counting)
-            {
-                if (!l.query)
-                {
-                    glGenQueries(1, &l.query);
-                }
-                glUniform1i(count_loc, 1);
-                gGL.setColorMask(false, false);
-                glBeginQuery(GL_SAMPLES_PASSED, l.query);
-                gPipeline.mScreenTriangleVB->drawArrays(LLRender::TRIANGLES, 0, 3);
-                glEndQuery(GL_SAMPLES_PASSED);
-                gGL.setColorMask(true, true);
-                l.counting = true;
-            }
-            gGL.getTextureSlot(0)->unbind();
+            sResolve.uniform1i(sk_count, 1);
+            gGL.setColorMask(false, false);
+            // Refused while the shader profiler holds the samples target: this render goes uncounted and the last count stands.
+            l.ticket = gGL.queries().begin(ALQueryKind::Samples);
+            gPipeline.mScreenTriangleVB->drawArrays(LLRender::TRIANGLES, 0, 3);
+            gGL.queries().end(l.ticket);
+            gGL.setColorMask(true, true);
+            sResolve.unbindTexture(LLShaderMgr::DEFERRED_DEPTH);
             sResolve.unbind();
         }
         sAtlas.flush();
-
-        memcpy(gGLViewport, saved_viewport, sizeof(saved_viewport));
-        glViewport(gGLViewport[0], gGLViewport[1], gGLViewport[2], gGLViewport[3]);
-        LLRenderTarget::sCurResX = saved_res_x;
-        LLRenderTarget::sCurResY = saved_res_y;
 
         l.grid = g;
         l.rendered = true;
@@ -1194,12 +1166,11 @@ bool SKOutlineCapture::render(Entry& e)
     {
         for (SKOutlineLayerState& l : e.layers)
         {
-            if (l.id == id && (l.slot >= 0 || l.query))
+            if (l.id == id && (l.slot >= 0 || l.ticket.isValid()))
             {
                 SKOutlineLayerState kept = l;
                 l.slot = -1;
-                l.query = 0;
-                l.counting = false;
+                l.ticket = ALQueryTicket();
                 return kept;
             }
         }
@@ -1289,9 +1260,9 @@ bool SKOutlineCapture::dumpAtlas(const std::string& path)
         return false;
     }
     LLPointer<LLImageRaw> raw = new LLImageRaw(ATLAS_SIZE, ATLAS_SIZE, 1);
+    // Synchronous on purpose: a command, not a frame.
     sAtlas.bindTarget();
-    glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    glReadPixels(0, 0, ATLAS_SIZE, ATLAS_SIZE, GL_RED, GL_UNSIGNED_BYTE, raw->getData());
+    gGL.readPixels(0, 0, ATLAS_SIZE, ATLAS_SIZE, GL_RED, GL_UNSIGNED_BYTE, raw->getData());
     sAtlas.flush();
     LLPointer<LLImagePNG> png = new LLImagePNG();
     return png->encode(raw, 0.f) && png->save(path);

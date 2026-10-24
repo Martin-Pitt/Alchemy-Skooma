@@ -61,7 +61,7 @@ namespace
     // light scene's footprint -- and the orphan-on-wrap churn -- down. No fences here, so the cap is
     // smaller than the persistent ring's.
     constexpr size_t RING_MIN_BYTES    = 1 * 1024 * 1024;  // initial ring, and the floor
-    constexpr size_t RING_MAX_BYTES    = 4 * 1024 * 1024;  // grow cap (the old fixed size)
+    constexpr size_t RING_MAX_BYTES    = 8 * 1024 * 1024;  // grow cap; temporary workaround, was 4 MB
     constexpr int    RING_SLACK_FRAMES = 4;                // keep >= this many frames before a wrap
     static_assert(RING_MIN_BYTES <= RING_MAX_BYTES, "ring floor must not exceed the cap");
 

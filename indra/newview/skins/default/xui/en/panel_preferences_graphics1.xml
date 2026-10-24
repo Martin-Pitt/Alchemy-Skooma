@@ -231,25 +231,6 @@
     width="128">
      m
   </text>
-  <!-- <SK:Nexii> render/vertical-reach -->
-  <slider
-    control_name="SKRenderVerticalDrawRatio"
-    decimal_digits="2"
-    follows="left|top"
-    height="16"
-    increment="0.05"
-    initial_value="1"
-    label="Vertical draw ratio:"
-    label_width="187"
-    layout="topleft"
-    left="30"
-    min_val="0.25"
-    max_val="1"
-    name="VerticalDrawRatio"
-    tool_tip="How far above and below you objects are drawn, as a fraction of draw distance. Lower it to skip skyboxes while on the ground, or the ground while flying high."
-    top_delta="20"
-    width="428" />
-  <!-- </SK:Nexii> -->
 
   <button
   height="23"

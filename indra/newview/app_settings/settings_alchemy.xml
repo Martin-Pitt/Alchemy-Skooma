@@ -2454,28 +2454,6 @@
             <key>Value</key>
             <integer>0</integer>
         </map>
-        <key>SKRenderVerticalDrawRatio</key>
-        <map>
-            <key>Comment</key>
-            <string>How far above and below the camera objects, trees, grass and particles are drawn, as a fraction of draw distance (1 = a full sphere). Avatars, terrain and water always use the full draw distance.</string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>F32</string>
-            <key>Value</key>
-            <real>1.0</real>
-        </map>
-        <key>SKRenderVerticalDrawMin</key>
-        <map>
-            <key>Comment</key>
-            <string>The least vertical draw distance, in meters, however low SKRenderVerticalDrawRatio is set.</string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>F32</string>
-            <key>Value</key>
-            <real>64.0</real>
-        </map>
         <key>SKRenderLegacyPrimSplits</key>
         <map>
             <key>Comment</key>
