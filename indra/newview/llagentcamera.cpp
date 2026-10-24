@@ -1805,7 +1805,6 @@ LLVector3d LLAgentCamera::calcFocusPositionTargetGlobal()
             // Only the object's position is smoothed; the user's offset passes through untouched.
             const LLVector3d obj_global = smoothSKFollow(gAgent.getPosGlobalFromAgent(mFocusObject->getRenderPosition()));
             mFocusTargetGlobal = obj_global + LLVector3d(mFocusObjectOffset);
-            mSKFollowRaw = gAgent.getPosGlobalFromAgent(mFocusObject->getRenderPosition() + mFocusObjectOffset);
             // </SK:Nexii>
         }
         return mFocusTargetGlobal;
