@@ -154,6 +154,11 @@ namespace
     const LLStaticHashedString SK_SLOT_COUNT("sk_slot_count");
     const LLStaticHashedString SK_LEVEL("sk_level");
     const LLStaticHashedString SK_PLANES("sk_planes");
+const LLStaticHashedString SK_PATCH_ON("sk_patch_on");
+const LLStaticHashedString SK_VIEW_PROJ("sk_view_proj");
+const LLStaticHashedString SK_OFFSET_AGENT("sk_offset_agent");
+const LLStaticHashedString SK_SIZE("sk_size");
+const LLStaticHashedString SK_PATCH("sk_patch");
     const LLStaticHashedString SK_ZO("sk_zo");
     const LLStaticHashedString SK_FAR_DEPTH("sk_far_depth");
     const LLStaticHashedString SK_EYE("sk_eye");
@@ -1346,9 +1351,9 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
         std::vector<GLsizei> mCount;
     };
     std::vector<std::vector<Runs>> runs(regions.size());
-    // Where the session computes, a full render's lists are built on the GPU, a dispatch a page; a patch, which tests
-    // each slot on screen, and a context without compute build them here.
-    bool gpu_commands = !patch && LLRender::sCompute && sCommands.isComplete();
+    // Where the session computes, the lists are built on the GPU, a dispatch a page, a patch's on-screen test there
+    // too; a context without compute builds them here.
+    bool gpu_commands = LLRender::sCompute && sCommands.isComplete();
     if (gpu_commands)
     {
         LL_PROFILE_ZONE_NAMED("sk overview command tables");
@@ -1413,6 +1418,16 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
                                        shot.mLevel.mHi };
                 sCommands.uniform4fv(SK_LEVEL, 1, level);
                 sCommands.uniform4fv(SK_PLANES, 6, &planes[0][0]);
+                sCommands.uniform1ui(SK_PATCH_ON, patch ? 1u : 0u);
+                if (patch)
+                {
+                    const GLint size[4] = { w, h, 0, 0 };
+                    const GLint rect[4] = { patch->mLeft, patch->mBottom, patch->mRight, patch->mTop };
+                    sCommands.uniformMatrix4fv(SK_VIEW_PROJ, 1, GL_FALSE, view_proj.getF32ptr());
+                    sCommands.uniform3f(SK_OFFSET_AGENT, offset_agent.mV[VX], offset_agent.mV[VY], offset_agent.mV[VZ]);
+                    sCommands.uniform4iv(SK_SIZE, 1, size);
+                    sCommands.uniform4iv(SK_PATCH, 1, rect);
+                }
                 for (const SKOverviewCensus::Page& page : region.mPages)
                 {
                     if (page.mSlots.empty())

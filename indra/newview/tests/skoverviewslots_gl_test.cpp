@@ -144,6 +144,72 @@ namespace
         return nearest;
     }
 
+    // A patch capture's inputs: column-major view-projection, the page's agent offset, the capture size and the patch
+    // rectangle (left, bottom, right, top).
+    struct Patch
+    {
+        F32 mViewProj[16];
+        F32 mOffset[3];
+        S32 mW, mH;
+        S32 mRect[4];
+    };
+
+    // SKOverviewMovers::screenRectOf on plain floats: the box's screen rectangle with a pixel's margin, the whole view
+    // when it straddles the eye's plane, none when wholly behind it. The x0/y0/x1/y1 it floors are returned for the
+    // edge tolerance, and mean anything only when every corner projected.
+    bool screenRect(const Patch& p, const F32 lo[3], const F32 hi[3], S32 rect[4], F32 edges[4], bool& straddles,
+                    bool& projected)
+    {
+        U32 behind = 0;
+        F32 x0 = 1e30f, y0 = 1e30f, x1 = -1e30f, y1 = -1e30f;
+        for (U32 corner = 0; corner < 8; ++corner)
+        {
+            const F32 at[4] = { corner & 1 ? hi[0] : lo[0], corner & 2 ? hi[1] : lo[1], corner & 4 ? hi[2] : lo[2], 1.f };
+            F32 c[4] = {};
+            for (S32 r = 0; r < 4; ++r)
+            {
+                for (S32 k = 0; k < 4; ++k)
+                {
+                    c[r] += p.mViewProj[k * 4 + r] * at[k];
+                }
+            }
+            if (c[3] <= 1.0e-4f)
+            {
+                ++behind;
+                continue;
+            }
+            const F32 x = (c[0] / c[3] * 0.5f + 0.5f) * p.mW;
+            const F32 y = (c[1] / c[3] * 0.5f + 0.5f) * p.mH;
+            x0 = llmin(x0, x);
+            y0 = llmin(y0, y);
+            x1 = llmax(x1, x);
+            y1 = llmax(y1, y);
+        }
+        straddles = behind > 0 && behind < 8;
+        projected = behind == 0;
+        edges[0] = x0; edges[1] = y0; edges[2] = x1; edges[3] = y1;
+        if (behind == 8)
+        {
+            return false;
+        }
+        if (behind)
+        {
+            rect[0] = 0; rect[1] = 0; rect[2] = p.mW; rect[3] = p.mH;
+            return true;
+        }
+        rect[0] = llclamp((S32)std::floor(x0) - 1, 0, p.mW);
+        rect[1] = llclamp((S32)std::floor(y0) - 1, 0, p.mH);
+        rect[2] = llclamp((S32)std::ceil(x1) + 1, 0, p.mW);
+        rect[3] = llclamp((S32)std::ceil(y1) + 1, 0, p.mH);
+        return rect[0] != rect[2] && rect[1] != rect[3];
+    }
+
+    // LLRect::overlaps: edges inclusive.
+    bool overlaps(const S32 a[4], const S32 b[4])
+    {
+        return !(a[0] > b[2] || a[2] < b[0] || a[1] > b[3] || a[3] < b[1]);
+    }
+
     struct skoverviewslots_gl_data
     {
         skoverviewslots_gl_data()
@@ -201,11 +267,16 @@ namespace
 
         // The GPU's commands for the slots, read back.
         std::vector<ALDrawArraysIndirectCommand> gpuCommands(const std::vector<SlotCull>& slots, const skoverview::LevelCull& level,
-                                                             const F32 planes[6][4])
+                                                             const F32 planes[6][4], const Patch* patch = nullptr)
         {
             static const LLStaticHashedString SK_SLOT_COUNT("sk_slot_count");
             static const LLStaticHashedString SK_LEVEL("sk_level");
             static const LLStaticHashedString SK_PLANES("sk_planes");
+            static const LLStaticHashedString SK_PATCH_ON("sk_patch_on");
+            static const LLStaticHashedString SK_VIEW_PROJ("sk_view_proj");
+            static const LLStaticHashedString SK_OFFSET_AGENT("sk_offset_agent");
+            static const LLStaticHashedString SK_SIZE("sk_size");
+            static const LLStaticHashedString SK_PATCH("sk_patch");
             const size_t table_bytes = slots.size() * sizeof(SlotCull);
             const size_t command_bytes = slots.size() * sizeof(ALDrawArraysIndirectCommand);
             if (mTable.size() != table_bytes)
@@ -226,6 +297,15 @@ namespace
             glUniform4fv(mCommandsProgram.getUniformLocation(SK_LEVEL), 1, l);
             glUniform4fv(mCommandsProgram.getUniformLocation(SK_PLANES), 6, &planes[0][0]);
             glUniform1ui(mCommandsProgram.getUniformLocation(SK_SLOT_COUNT), (GLuint)slots.size());
+            glUniform1ui(mCommandsProgram.getUniformLocation(SK_PATCH_ON), patch ? 1u : 0u);
+            if (patch)
+            {
+                const GLint size[4] = { patch->mW, patch->mH, 0, 0 };
+                glUniformMatrix4fv(mCommandsProgram.getUniformLocation(SK_VIEW_PROJ), 1, GL_FALSE, patch->mViewProj);
+                glUniform3fv(mCommandsProgram.getUniformLocation(SK_OFFSET_AGENT), 1, patch->mOffset);
+                glUniform4iv(mCommandsProgram.getUniformLocation(SK_SIZE), 1, size);
+                glUniform4iv(mCommandsProgram.getUniformLocation(SK_PATCH), 1, patch->mRect);
+            }
             gGL.bindStorageBuffer(SLOT_TABLE_BINDING, mTable);
             gGL.bindStorageBuffer(COMMANDS_BINDING, mCommands);
             mCommandsProgram.dispatchThreads((U32)slots.size());
@@ -322,6 +402,90 @@ namespace
         INFO("compared " << compared << ", kept " << kept << ", on a plane " << near_plane);
         CHECK(near_plane < compared / 1000 + 1);
         // Both kept and culled slots in numbers, so neither answer passes by itself.
+        CHECK(kept > compared / 20);
+        CHECK(kept < compared - compared / 20);
+        CHECK(glGetError() == GLenum(GL_NO_ERROR));
+    }
+
+    TEST_CASE_METHOD(skoverviewslots_gl_data, "skoverviewslots_gl: a patch keeps the slots the CPU's screen test keeps",
+                     "[skoverviewslots][gl]")
+    {
+        if (!ll_test::contextHasCompute())
+        {
+            WARN("the context has no compute: a patch builds its command lists on the CPU");
+            SKIP("no compute");
+        }
+        LLRender::sCompute = true;
+        REQUIRE(buildCommands());
+        // Planes that hold everything and a level that keeps everything, so only the patch decides.
+        F32 planes[6][4] = {};
+        for (S32 p = 0; p < 6; ++p)
+        {
+            planes[p][3] = -1.f;
+        }
+        skoverview::LevelCull level;
+        level.mAll = true;
+        std::mt19937 rng(20261024u);
+        std::uniform_real_distribution<F32> shift(-10.f, 10.f);
+        std::uniform_int_distribution<S32> corner(0, 40);
+        U32 compared = 0, kept = 0, straddled = 0, on_edge = 0;
+        for (S32 trial = 0; trial < 16; ++trial)
+        {
+            CAPTURE(trial);
+            const std::vector<SlotCull> slots = randomSlots(rng);
+            // An eye at (50, 50, -20) looking up +z, a 90 degree view: boxes below it are behind or straddle it.
+            Patch patch = {};
+            patch.mViewProj[0] = 1.f;
+            patch.mViewProj[12] = -50.f;
+            patch.mViewProj[5] = 1.f;
+            patch.mViewProj[13] = -50.f;
+            patch.mViewProj[10] = 1.f;
+            patch.mViewProj[11] = 1.f;
+            patch.mViewProj[15] = 20.f;
+            patch.mOffset[0] = shift(rng);
+            patch.mOffset[1] = shift(rng);
+            patch.mOffset[2] = shift(rng);
+            patch.mW = 96;
+            patch.mH = 64;
+            patch.mRect[0] = corner(rng);
+            patch.mRect[1] = corner(rng) / 2;
+            patch.mRect[2] = patch.mRect[0] + 8 + corner(rng);
+            patch.mRect[3] = patch.mRect[1] + 6 + corner(rng) / 2;
+            const std::vector<ALDrawArraysIndirectCommand> gpu = gpuCommands(slots, level, planes, &patch);
+            for (U32 i = 0; i < SLOTS; ++i)
+            {
+                CAPTURE(i);
+                const F32 lo[3] = { slots[i].mLo[0] + patch.mOffset[0], slots[i].mLo[1] + patch.mOffset[1],
+                                    slots[i].mLo[2] + patch.mOffset[2] };
+                const F32 hi[3] = { slots[i].mHi[0] + patch.mOffset[0], slots[i].mHi[1] + patch.mOffset[1],
+                                    slots[i].mHi[2] + patch.mOffset[2] };
+                S32 rect[4];
+                F32 edges[4];
+                bool straddles = false;
+                bool projected = false;
+                const bool keep = screenRect(patch, lo, hi, rect, edges, straddles, projected) && overlaps(rect, patch.mRect);
+                CHECK(gpu[i].mFirst == slots[i].mFirst);
+                CHECK(gpu[i].mInstanceCount == 1u);
+                straddled += straddles ? 1 : 0;
+                // A rectangle edge that floors or ceils right on a pixel boundary rounds either way on the two.
+                bool rounding = false;
+                for (S32 e = 0; projected && e < 4; ++e)
+                {
+                    rounding = rounding || std::fabs(edges[e] - std::round(edges[e])) < 1.0e-3f + 1.0e-5f * std::fabs(edges[e]);
+                }
+                if (rounding)
+                {
+                    ++on_edge;
+                    continue;
+                }
+                CHECK(gpu[i].mCount == (keep ? slots[i].mCount : 0u));
+                ++compared;
+                kept += keep ? 1 : 0;
+            }
+        }
+        INFO("compared " << compared << ", kept " << kept << ", straddling " << straddled << ", on an edge " << on_edge);
+        CHECK(on_edge < compared / 100 + 1);
+        CHECK(straddled > 0u);
         CHECK(kept > compared / 20);
         CHECK(kept < compared - compared / 20);
         CHECK(glGetError() == GLenum(GL_NO_ERROR));
