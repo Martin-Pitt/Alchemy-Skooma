@@ -283,17 +283,15 @@
     <combo_box.commit_callback
      function="Pref.ClickActionChange"/>
   </combo_box>
-  <!-- <SK:Nexii> Alt-cam zoom to cursor: pad below the click combos so the added checkbox cannot push them into the button -->
   <button
    height="23"
    label="Other Devices"
    left="30"
    name="joystick_setup_button"
-   top_pad="16"
+   top="30"
    width="155">
     <button.commit_callback
      function="Floater.Show"
      parameter="pref_joystick" />
   </button>
-  <!-- </SK:Nexii> -->
 </panel>
