@@ -42,6 +42,11 @@ namespace skmap
             return std::hypot(ax - bx, ay - by);
         }
 
+        LabelRect room(const LabelProblem& p)
+        {
+            return p.mRoom.mW > 0.0 && p.mRoom.mH > 0.0 ? p.mRoom : LabelRect{ 0.0, 0.0, p.mWidth, p.mHeight };
+        }
+
         /// The study's candidate order for one tag: its previous target, the rings, the grid.
         template <typename Fn>
         void forEachCandidate(const LabelProblem& p, const LabelInput& tag, F64 r, F64 preferred, Fn&& fn)
@@ -69,11 +74,6 @@ namespace skmap
                     fn(x, y);
                 }
             }
-        }
-
-        LabelRect room(const LabelProblem& p)
-        {
-            return p.mRoom.mW > 0.0 && p.mRoom.mH > 0.0 ? p.mRoom : LabelRect{ 0.0, 0.0, p.mWidth, p.mHeight };
         }
 
         F64 radius(const LabelProblem& p)
