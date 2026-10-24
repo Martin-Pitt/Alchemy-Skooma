@@ -48,6 +48,7 @@ Ideas not yet committed to.
 | **Silhouette textures for creators** | Expose silhouette capture as a tool, so content creators can generate outline textures of weapons, vehicles and other objects for their own HUDs and UI |
 | **Bridge link unfurls** | Local chat previews for non-SL links fetched by the LSL bridge's `llHTTPRequest`, so the site sees the simulator, never the resident's IP (only owner/region headers, which chat range already reveals). Title and description only (16 KB body cap; images only from SL hosts), queued under the script HTTP throttles, cached, per-domain cooldown, opt-out. Second fetch path beside the SL-domain unfurls (`skchatunfurl`). Needs the bridge foundation first |
 | **Procedural textures** | An in-viewer tool for content creators to generate textures from node graphs, in the style of [Arcanigen](https://arcanigen.thatrobhuman.com/), built from GLSL SDF shapes ([Pixel Spirit Deck](https://github.com/patriciogonzalezvivo/PixelSpiritDeck/)) and Blender-style nodes. Spec: [TEXTURE-STUDIO.md](TEXTURE-STUDIO.md) |
+| **Combat mouselook** | [secondlife/viewer#1443](https://github.com/secondlife/viewer/issues/1443): in mouselook, turn your own avatar's torso toward where you aim, as an opt-in procedural animation seen only by you, so held weapons stay on screen, and fix animated child prims lagging behind. An optional, adjustable camera at the eyes with your own head hidden. Turn the camera and head only, never BodyRotation, which steers movement |
 
 
 ## Foundations
