@@ -164,7 +164,7 @@ void LLDragHandleTop::applyTitleText()
         LLFontDescriptor bold = mFont->getFontDesc();
         bold.setStyle(bold.getStyle() | LLFontGL::BOLD);
         style.font = LLFontGL::getFont(bold);
-        mTitleBox->appendText(llformat(" Â· %d", mStatusCount), false, style);
+        mTitleBox->appendText(llformat(" \xC2\xB7 %d", mStatusCount), false, style);
     }
     if (!mStatus.empty())
     {
