@@ -142,7 +142,7 @@ namespace
     /// line, on the side its solid is on: behind its normal along the axis, facing -1 (below the line), +1 (above),
     /// 0 for a triangle with no extent across the axis, whose touching pieces go nowhere.
     /// Coordinates below FIRST of the pieces' new vertices are left unset, for a caller that reads none of them.
-    template<S32 FIRST = 0> void dividePoly(const V3* in, S32 n, V3* out1, S32& n1, V3* out2, S32& n2, F64 offset, S32 axis, S32 facing)
+    template<S32 axis, S32 FIRST = 0> inline void dividePoly(const V3* in, S32 n, V3* out1, S32& n1, V3* out2, S32& n2, F64 offset, S32 facing)
     {
         F64 d[12];
         bool zero = false;
@@ -311,7 +311,7 @@ namespace
             }
             else
             {
-                dividePoly(in, nin, row, nrow, rest, nrest, x_line, 0, facing_x);
+                dividePoly<0>(in, nin, row, nrow, rest, nrest, x_line, facing_x);
                 std::swap(in, rest);
                 nin = nrest;
             }
@@ -349,7 +349,7 @@ namespace
                 }
                 else
                 {
-                    dividePoly<1>(row, nrow, cell, ncell, rrest, nrr, y_line, 1, facing_y);
+                    dividePoly<1, 1>(row, nrow, cell, ncell, rrest, nrr, y_line, facing_y);
                     std::swap(row, rrest);
                     nrow = nrr;
                 }
