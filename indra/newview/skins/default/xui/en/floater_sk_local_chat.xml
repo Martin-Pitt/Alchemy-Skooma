@@ -5,7 +5,7 @@
  bottom="-50"
  follows="left|bottom"
  background_visible="false"
- can_minimize="false"
+ can_minimize="true"
  can_close="false"
  can_resize="true"
  header_height="0"
@@ -31,6 +31,8 @@
     <string name="typing_far_count_one">1 person typing out of chat range…</string>
     <string name="typing_far_count">[COUNT] people typing out of chat range…</string>
     <string name="typing_someone">Someone</string>
+    <string name="collapsed_title">Chat</string>
+    <string name="collapsed_unread">Chat · [COUNT]</string>
     <chat_editor
      follows="left|bottom|right"
      font="SansSerifLarge"

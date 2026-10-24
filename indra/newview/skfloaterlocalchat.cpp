@@ -271,6 +271,10 @@ void SKFloaterLocalChat::startChat(const char* line)
     {
         LLFloaterReg::showInstance("sk_local_chat", LLSD(), false);
     }
+    if (self->isMinimized())
+    {
+        self->setMinimized(false);
+    }
     self->showInput(true);
     if (line)
     {
@@ -501,6 +505,11 @@ void SKFloaterLocalChat::appendChat(const LLChat& chat, const LLSD& args, F64 ar
 
     mMessages.push_back(std::move(msg));
     ++mPendingMessages;
+    if (arrival > 0.0 && isMinimized())
+    {
+        ++mCollapsedUnread;
+        layoutCollapsed();
+    }
     if (mScroll > 0)
     {
         ++mUnseen;
@@ -611,6 +620,70 @@ bool SKFloaterLocalChat::applyRectControl()
     return true;
 }
 
+constexpr S32 COLLAPSED_HEIGHT = 22;
+constexpr S32 COLLAPSED_MIN_WIDTH = 72;
+
+void SKFloaterLocalChat::setMinimized(bool minimize)
+{
+    if (minimize == isMinimized())
+    {
+        return;
+    }
+    if (minimize && mInput && mInput->getVisible())
+    {
+        stopChat();
+    }
+    mCollapsedUnread = 0;
+    LLFloater::setMinimized(minimize);
+    if (minimize)
+    {
+        // Where the chat was, not in the minimized row; the expanded rect is what save_rect keeps.
+        setBorderVisible(false);
+        setOrigin(getExpandedRect().mLeft, getExpandedRect().mBottom);
+        layoutCollapsed();
+    }
+    if (mButtons[BUTTON_RESTORE])
+    {
+        mButtons[BUTTON_RESTORE]->setVisible(false); // the bar itself restores
+    }
+}
+
+void SKFloaterLocalChat::layoutCollapsed()
+{
+    if (!isMinimized())
+    {
+        return;
+    }
+    LLStringUtil::format_map_t args;
+    args["[COUNT]"] = llformat("%d", mCollapsedUnread);
+    mCollapsedLabel = getString(mCollapsedUnread > 0 ? "collapsed_unread" : "collapsed_title", args);
+    // The typing line needs the chat's own width; the label alone keeps the bar compact.
+    const bool typing = anyoneTyping();
+    const S32 width = typing ? getExpandedRect().getWidth()
+                             : llmax(COLLAPSED_MIN_WIDTH, LLFontGL::getFontSansSerifSmall()->getWidth(mCollapsedLabel) + 4 * PAD_X);
+    const S32 height = COLLAPSED_HEIGHT + (typing ? TYPING_LINE + INPUT_GAP : 0);
+    if (width != getRect().getWidth() || height != getRect().getHeight())
+    {
+        reshape(width, height);
+    }
+}
+
+void SKFloaterLocalChat::drawCollapsed(F64 now)
+{
+    static LLUIImagePtr bar_image = LLUI::getUIImage("Rounded_Square");
+    static LLUIColor bar_color = LLUIColorTable::instance().getColor("Black");
+    static LLUIColor text_color = LLUIColorTable::instance().getColor("White");
+    LLFontGL* font = LLFontGL::getFontSansSerifSmall();
+    const S32 bar_w = llmax(COLLAPSED_MIN_WIDTH, font->getWidth(mCollapsedLabel) + 4 * PAD_X);
+    bar_image->draw(0, 0, bar_w, COLLAPSED_HEIGHT, bar_color.get() % (mHovered ? 0.75f : 0.55f));
+    font->renderUTF8(mCollapsedLabel, 0, (F32)(bar_w / 2), (F32)((COLLAPSED_HEIGHT - font->getLineHeight()) / 2), text_color.get() % 0.9f,
+                     LLFontGL::HCENTER, LLFontGL::BOTTOM, mCollapsedUnread > 0 ? LLFontGL::BOLD : LLFontGL::NORMAL, LLFontGL::NO_SHADOW);
+    if (anyoneTyping() && !gAgentCamera.cameraMouselook())
+    {
+        drawTyping(now, COLLAPSED_HEIGHT + INPUT_GAP);
+    }
+}
+
 void SKFloaterLocalChat::reshape(S32 width, S32 height, bool called_from_parent)
 {
     LLFloater::reshape(width, height, called_from_parent);
@@ -624,7 +697,9 @@ void SKFloaterLocalChat::layoutCog()
         return;
     }
     constexpr S32 COG_PX = 16;
-    const S32 right = getRect().getWidth() - 4;
+    // Left of the minimize button, which the floater keeps at the top right.
+    static LLUICachedControl<S32> close_box_size("UIFloaterCloseBoxSize", 0);
+    const S32 right = getRect().getWidth() - 4 - (mButtons[BUTTON_MINIMIZE] ? close_box_size + 2 : 0);
     const S32 top = getRect().getHeight() - 2;
     mCog->setRect(LLRect(right - COG_PX, top, right, top - COG_PX));
 }
@@ -1403,6 +1478,28 @@ void SKFloaterLocalChat::draw()
     setMouseOpaque(opaque);
     getDragHandle()->setMouseOpaque(opaque);
 
+    if (isMinimized())
+    {
+        const F64 now = LLFrameTimer::getTotalSeconds();
+        const bool was_typing = anyoneTyping();
+        updateTyping(now);
+        if (was_typing != anyoneTyping())
+        {
+            layoutCollapsed();
+        }
+        if (mCog)
+        {
+            mCog->setVisible(false);
+        }
+        if (mButtons[BUTTON_RESTORE])
+        {
+            mButtons[BUTTON_RESTORE]->setVisible(false);
+        }
+        drawCollapsed(now);
+        LLFloater::draw();
+        return;
+    }
+
     mUnfurl.update();
     layout();
 
@@ -1422,6 +1519,10 @@ void SKFloaterLocalChat::draw()
     if (mCog)
     {
         mCog->setVisible(mHovered && opaque);
+    }
+    if (mButtons[BUTTON_MINIMIZE])
+    {
+        mButtons[BUTTON_MINIMIZE]->setVisible(mHovered && opaque);
     }
 
     // The only chrome, the mini-map's faint tint, eased in and out; its border shows only while the pointer rests on an edge.
@@ -1451,7 +1552,7 @@ void SKFloaterLocalChat::draw()
     updateTyping(now);
     if (opaque && (!mTypingLabel[0].empty() || !mTypingLabel[1].empty()))
     {
-        drawTyping(now);
+        drawTyping(now, INSET + inputHeight() + INPUT_GAP + 1);
     }
 
     // Jump to present: once scrolled up by more than a view, or from any distance once something new arrived.
@@ -1641,12 +1742,11 @@ void SKFloaterLocalChat::makeTypingLabel(S32 group)
     label = getString(std::string(prefix) + (typers.size() == 1 ? "one" : "two"), args);
 }
 
-void SKFloaterLocalChat::drawTyping(F64 now) const
+void SKFloaterLocalChat::drawTyping(F64 now, S32 y) const
 {
     static LLUIColor color = LLUIColorTable::instance().getColor("White");
     static LLUIColor far_color = LLUIColorTable::instance().getColor("Yellow");
     LLFontGL* font = LLFontGL::getFontSansSerifSmall();
-    const S32 y = INSET + inputHeight() + INPUT_GAP + 1;
     const bool has_near = !mTypingLabel[0].empty();
     const LLColor4 base = has_near ? color.get() : far_color.get();
     const F32 dim = has_near ? 1.f : 0.75f;
@@ -1765,6 +1865,11 @@ std::string SKFloaterLocalChat::urlAt(S32 x, S32 y) const
 
 bool SKFloaterLocalChat::handleMouseDown(S32 x, S32 y, MASK mask)
 {
+    if (isMinimized())
+    {
+        setMinimized(false);
+        return true;
+    }
     // The drag handle lies under everything; any other child takes its own clicks.
     LLView* child = childFromPoint(x, y);
     if (barTakes(x, y))
