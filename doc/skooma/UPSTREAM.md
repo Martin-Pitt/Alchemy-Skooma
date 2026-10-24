@@ -21,8 +21,7 @@ lands, is offered or is merged.
 | `atmo/clouds` | Atmo Magic | Cloud density model and puff renderer | `atmo/sky` | see spec |
 | `atmo/weather` | Atmo Magic | Weather cube, wind, precipitation | `atmo/clouds` | yes |
 | `atmo/water` | Atmo Magic | Water renderer | `atmo/weather` | ask Rye first |
-| `render/vertical-reach` | Its own feature | Shorter draw distance above and below the camera than horizontally | `develop` | undecided |
-| `render/prim-split` | Its own feature | Untwisted flat-sided prims without the legacy edge splits; Render Tests A/B toggle; geometry-equivalence test | `feature-render/vertical-reach` | yes |
+| `render/prim-split` | Its own feature | Untwisted flat-sided prims without the legacy edge splits; Render Tests A/B toggle; geometry-equivalence test | `render` | yes |
 | `audio/loudness-normalization` | Its own feature | BS.1770 loudness measured during decode, gain trim on playback | `develop` | undecided |
 
 Fork-only (not offered): the Atmo editor and keyframes UI, notecard and parcel transport,
@@ -35,8 +34,7 @@ develop
 ├── sky/seeded
 ├── sky/layers ──────────┬─► sky/farlayer
 ├── render/farplane      │   (merged upstream)
-├── render/vertical-reach
-│   └── render/prim-split
+├── render/prim-split
 ├── audio/loudness-normalization
 └── atmo/registry
     └── atmo/provider
