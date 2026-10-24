@@ -189,44 +189,122 @@ notecard resolve / fetch / poll — the only inventory and asset calls in atmo: 
 
 ---
 
-## Navmesh — world census
+## World foundations — physics shapes
 
-Branch `feature-nav/census`. A time-sliced scan of the object list that feeds the navmesh
-data model. See `.archive/NAVMESH.md` for the wider feature.
+Branch `foundation-world/physics-shapes` (on `main` via the census merge `91ec21954d`). What a volume collides as, decided once and read by the display, the census and the overview. Plan: `.foundations-plan.md`. Replaces the `feature-mesh/havok-block`, `nav/physics-cost` and `nav/small-mesh-convex` rows further down.
 
 ### Files we own
 
 | File | Role |
 |---|---|
-| `indra/newview/skworldcensus.h` / `.cpp` | `SKWorldCensus` singleton: time-sliced scan, snapshot publishing, region-cache coverage, nav-role lookups |
+| `indra/llprimitive/skmeshhavok.h` / `.cpp`, `tests/skmeshhavok_test.cpp` | Parser for a mesh asset's `physics_havok` block (public sources only) |
+| `indra/newview/skmeshhavokshape.h` / `.cpp` | The simulator's collision triangles as a drawable, cached shape |
+| `indra/newview/skphysicsshape.h` / `.cpp` | `skphysicsshape`: the one decision of what a volume's physics shape is, and its cost |
 
 ### Injection sites
 
 | File | What | Why there |
 |---|---|---|
-| `indra/newview/llappviewer.cpp` | `#include "skworldcensus.h"`; `SKWorldCensus::instance().update()` once per frame after object motion; `SKWorldCensus::deleteSingleton()` explicitly in `cleanup()`, before `SUBSYSTEM_CLEANUP(LLAvatarAppearance)` | The scan needs a post-motion tick; the explicit `deleteSingleton()` releases its held `LLPointer<LLViewerObject>`s before `LLAvatarAppearance::cleanupClass()` deletes the appearance dictionary — left to the generic singleton teardown pass this ran too late and could crash tearing down the self avatar on logout |
-| `indra/newview/pipeline.cpp` | `SKWorldCensus::instance().renderDebug()` from the debug render pass | Draws the census's boxes/clusters alongside the other `RENDER_DEBUG_*` overlays |
+| `indra/llprimitive/CMakeLists.txt` | `skmeshhavok.*` and its test, single-line markers `physics_havok block` | Parser lives beside the mesh model |
+| `indra/newview/llmeshrepository.h` / `.cpp` | `physics_havok block`: header offset/size/in-cache and `FLAG_PHYSHAVOK`, repo-thread havok queue and handler, cache reservation, `mTakeRequestedOnly` capped copy, `getPhysicsHavok` and its cache, `notifyLoadedMeshes` handoff. `physics shapes`: physics mesh block size accessor; hulls and meshes fitted to the object's box (two sites); a flat hull QuickHull leaves empty fanned | The block is fetched like the other mesh blocks |
+| `indra/newview/llspatialpartition.cpp` | Includes; `renderPhysicsShape` decides through `skphysicsshape`, colours by the shape's own cost or by source, keeps alpha for coplanar edges, draws sim triangles for hull-less decompositions, Prim-type meshes as prims; phantoms not drawn | The Physics Shapes display shares the census's decision |
+| `indra/newview/llviewermenu.cpp` | `SKTogglePhysicsShapes` / `SKCheckPhysicsShapes` and their registrations | Physics Shapes > Cost / Types |
+| `indra/newview/skins/default/xui/en/menu_viewer.xml` | Physics Shapes submenu (Cost, Types), XML comment marker | Render Metadata menu |
+| `indra/newview/CMakeLists.txt` | `skmeshhavokshape`, `skphysicsshape` sources and headers, trailing markers | |
+
+### Unmarked additions
+
+- `settings_alchemy.xml` — `SKPhysicsShapeTypes` and the physics-shape colour keys.
 
 ---
 
-## Navmesh — Recast dependency
+## World foundations — census
 
-Branch `feature-nav/recast`. Design: `.navmesh-plan.md` (index `.archive/NAVMESH.md`). No code beyond the test yet, so
-no `<SK:Nexii>` markers; everything here is CMake or JSON, identified by name.
+Branch `foundation-world/census` (merge `91ec21954d`). The world census: a time-sliced scan of the object list into records, clusters and features, written to a file with named sections. Library `indra/skcensus`, free of the layers above it. Replaces the old "Navmesh — world census" section.
 
 ### Files we own
 
 | File | Role |
 |---|---|
-| `indra/cmake/ports/recastnavigation/` | Overlay port over vcpkg's `recastnavigation` 1.6.0: the stock port plus `fix-detail-mesh-empty-tris.patch` (upstream #796, one line in `RecastMeshDetail.cpp`), `fix-detail-mesh-edge-detection.patch`, `fix-closest-point-on-empty-detail.patch` |
-| `indra/newview/tests/sknavrecast_test.cpp` | Integration-style smoke test: floor + block through the whole Recast pipeline into one Detour tile, a path round the block, the block top unreachable |
+| `indra/skcensus/*` | Data model and algorithms: records, clusters, features, lattice, delta, file IO; Catch2 tests and a features bench |
+| `indra/newview/skworldcensus.h` / `.cpp` | `SKWorldCensus` singleton: the viewer driver, dirty set, snapshot, export |
+| `indra/newview/skobjectfaces.h` / `.cpp` | Per-face visibility read off viewer objects |
+| `indra/newview/skworldoverlay.h` / `.cpp`, `skworldpalette.*`, `skworldtrace.*` | The world layers' debug overlay, shared palette, trace lines (read by the map recorder) |
+
+### Injection sites
+
+| File | What | Why there |
+|---|---|---|
+| `indra/CMakeLists.txt` | `add_subdirectory(skcensus)`, single-line marker | |
+| `indra/newview/CMakeLists.txt` | `skobjectfaces`, `skworldcensus`, `skworldoverlay`, `skworldpalette`, `skworldtrace` sources/headers; `skcensus` linked; trailing markers | |
+| `indra/newview/llappviewer.cpp` | Include; `SKWorldCensus::instance().update()` after object motion; in `cleanup()` a block deleting `SKRooms`, `SKAirCells`, `SKWorldCensus` (that order) before `SUBSYSTEM_CLEANUP(LLAvatarAppearance)` | Post-motion tick; the layers release held `LLViewerObject`s before the appearance dictionary goes, top layer first |
+| `indra/newview/llviewerobjectlist.cpp` | Include; `noteObjectUpdate` at the end of `processUpdateCore`, `noteObjectGone` in `killObject` before `markDead` | The census dirty set |
+| `indra/newview/llviewerobject.h` | Sim rotation without the client `llTargetOmega` spin; `isPhysicsShapeUnknown()` | A record's rotation and `physics_known` |
+| `indra/newview/pipeline.h` / `.cpp` | `RENDER_DEBUG_WORLD` (`0x800000000`); include and census overlay call in `renderFinalize` | The world layers' debug overlays, one mask |
+| `indra/newview/llviewermenu.cpp` | Include; `"world"` info display → `RENDER_DEBUG_WORLD`; `SKExportWorldCensus` and its registration | Census export to the logs folder |
+| `indra/newview/skins/default/xui/en/menu_viewer.xml` | World overlays submenu (Census Shapes / Clusters / Features, export), XML comment marker | |
 
 ### Unmarked additions
 
-- `indra/vcpkg.json` — `recastnavigation` dependency
-- `indra/vcpkg-configuration.json` — `overlay-ports: ["cmake/ports"]` beside the existing `overlay-triplets`
-- `indra/cmake/Dependencies.cmake` — `al_import(ll::recast PACKAGE recastnavigation CONFIG TARGETS RecastNavigation::Recast RecastNavigation::Detour)`
-- `indra/newview/CMakeLists.txt` — `al_add_test(sknavrecast PROJECT … LIBRARIES ll::recast)` after `llsecapi`
+- `settings_alchemy.xml` — `SKCensus*` (`Enabled`, `Always`, `BudgetMS`, `ClusterGap`, `Log`, `MinShape`, `ObjectCache`, `Range`, `RoleRequestSeconds`, `SettleSeconds`, `SurroundReach`, `VoidMargin`), `SKWorldOverlay{Census,Clusters,Features,Range}`.
+
+---
+
+## World foundations — air cells
+
+Branch `foundation-world/air` (on `main` via the rooms merge `734706e258`). The air over the census's solid raster: every gap above a solid per column, walls, run-off, sky map. Library `indra/skair`; Recast removed (`fe5e36eee1`), so no vcpkg or `Dependencies.cmake` edit remains.
+
+### Files we own
+
+| File | Role |
+|---|---|
+| `indra/skair/*` | Column raster, soup, walls, distil, sky map, layout, eviction; Catch2 tests and fixtures |
+| `indra/newview/skaircells.h` / `.cpp` | `SKAirCells` singleton: tiles follow the census, worker builds, status |
+| `indra/newview/skairoverlay.cpp` | Air, wall-face, run-off and sky-map overlays |
+
+### Injection sites
+
+| File | What | Why there |
+|---|---|---|
+| `indra/CMakeLists.txt` | `add_subdirectory(skair)` | |
+| `indra/newview/CMakeLists.txt` | `skaircells`, `skairoverlay`; `skair` linked | |
+| `indra/newview/llappviewer.cpp` | Include; `SKAirCells::instance().update()` after the census tick; teardown (census row) | |
+| `indra/newview/pipeline.cpp` | Include; air overlay call in `renderFinalize` under the world mask | |
+| `indra/newview/llviewermenu.cpp` | Include; `SKSetAirOverlay`, `SKCheckAirOverlay`, `SKShowAirStatus` and registrations | |
+| `indra/newview/skins/default/xui/en/menu_viewer.xml` | Air cells overlays and status, XML comment marker | |
+| `indra/newview/pipeline.h` / `.cpp` | `addDebugBlip(position, color, from)` overload and the line drawn back to `from`, still marked "navmesh tile updates" | Leftover: nothing calls the `from` overload now (`skaircells.cpp` uses the plain one) |
+
+### Unmarked additions
+
+- `settings_alchemy.xml` — `SKAir*` (`AgentRadius`, `Always`, `BudgetMB`, `BuildsInFlight`, `BuildsPerFrame`, `Cell…`, `CellsEnabled`, `Climb`, `GroundedMargin`, `Log`, `MinGap`, `Overlay`, `Overlay{Budget,Faces,Runoff,Sky,Updates}`, `Radius`, `RequestHoldSeconds`, `RunoffMax`, `Slope`, `TerrainBudgetMS`, `WallMinHeight`, `Walls`, `WholeCluster`, `WorkerThreads`).
+
+---
+
+## World foundations — rooms and spaces
+
+Branch `foundation-world/rooms` (merge `734706e258`). Enclosure, spaces, flights, room graph and wind over the air cells; written as the census's rooms section. Library `indra/skrooms`.
+
+### Files we own
+
+| File | Role |
+|---|---|
+| `indra/skrooms/*` | Enclosure, spaces, floors, flights, stair alignment, graph, wind, probe placement and cache, export; Catch2 tests |
+| `indra/newview/skrooms.h` / `.cpp` | `SKRooms` singleton: spaces follow the air, overlays, status |
+
+### Injection sites
+
+| File | What | Why there |
+|---|---|---|
+| `indra/CMakeLists.txt` | `add_subdirectory(skrooms)` | |
+| `indra/newview/CMakeLists.txt` | `skrooms`; `skrooms` linked | |
+| `indra/newview/llappviewer.cpp` | Include; `SKRooms::instance().update()` after the air tick; deleted first in the teardown block (census row) | |
+| `indra/newview/pipeline.cpp` | Include; rooms overlay call in `renderFinalize` under the world mask | |
+| `indra/newview/llviewermenu.cpp` | Include; `SKShowRoomsStatus` and registration | |
+| `indra/newview/skins/default/xui/en/menu_viewer.xml` | Spaces, wind and enclosure overlays and status, XML comment marker | |
+
+### Unmarked additions
+
+- `settings_alchemy.xml` — `SKRooms{Enabled,OverlaySpaces,OverlayWind,OverlayWindHeading,SealedIndoors,SettleMs,WindSettleMs}`.
 
 ---
 
@@ -308,28 +386,23 @@ Branch `feature-sky/farlayer`. A `far` sky layer (key 550) draws registered cont
 
 ---
 
-## Navmesh — air grid and annotations
+## Reflection probes — room and cluster probes
 
-Branches `feature-nav/sheet` (air grid) and `feature-nav/annotate` (in-world marks and capture
-bundles). Design: `.navmesh-rooms-plan.md`, `.nav-annotate-brief.md` (index `.archive/NAVMESH.md`).
+Probes over the world layers. Moved off the navmesh by `5c567c6748` (combat, "Place the room probes over the rooms layer's spaces"): `sknavroomprobes.*` became `skroomprobes.*`, the nav names became room names. The annotation tool (`sknavannotator`, `skfloaternavannotate`, `sknavannotate`) and its `pipeline.cpp` / `llviewerfloaterreg.cpp` hooks were deleted with the navmesh (`23b0cc0c84`).
 
 ### Files we own
 
 | File | Role |
 |---|---|
-| `indra/sknavmesh/sknavair.h` / `.cpp`, `tests/sknavair_test.cpp` | Air grid: every gap above a solid per column, off the `WEATHER` heightfield |
-| `indra/sknavmesh/sknavannotate.h` / `.cpp`, `tests/sknavannotate_test.cpp` | Session model of annotation marks |
-| `indra/newview/sknavannotator.h` / `.cpp` | Annotation tool, world drawing, capture export |
-| `indra/newview/skfloaternavannotate.h` / `.cpp`, `skins/default/xui/en/floater_sknav_annotate.xml` | Annotation floater |
+| `indra/newview/skroomprobes.h` / `.cpp` | `SKRoomProbes`: a full sphere per walkable space of the rooms layer near the camera, census-anchored; solids pool |
+| `indra/newview/skclusterprobes.h` / `.cpp` | `SKClusterProbes`: a fill tier over each census cluster |
 
 ### Injection sites
 
 | File | What | Why there |
 |---|---|---|
-| `indra/newview/pipeline.cpp` | Include plus a `<SK:Nexii>` block after the navmesh overlay that draws the marks | Marks draw with the other navmesh debug overlays |
-| `indra/newview/llviewerfloaterreg.cpp` | Include plus `sk_nav_annotate` registration in a `<SK:Nexii>` block | Floater registry |
-| `indra/newview/llreflectionmap.h` / `.cpp` | `mNavRooms` owner kind and `mSuppressedByNavRooms`; `isRelevant()` false for a suppressed probe and for rooms probes below level 3; `getNearClip()` gives rooms probes the 0.1 m minimum, not half their radius (`<SK:Nexii>` "Navmesh rooms probes") | Rooms probes are automatic probes with their own owner (`nav/probes`) |
-| `indra/newview/llreflectionmapmanager.h` / `.cpp` | `registerNavRoomsProbe`, `setNavRoomsVolumes`, `getNavRoomsContext`, `mNavRoomsVolumes`; octree probes inside finished room parts suppressed (cached, recomputed on change); `shift()` moves the part boxes (all marked) | Octree auto probes are replaced where a room exists; placed probes are never touched |
+| `indra/newview/llreflectionmap.h` / `.cpp` | `mRoomProbe`, `mSuppressedByRoomProbe`, `mClusterFill`; `isRelevant()` false for a suppressed probe and for room/cluster probes below level 3; `getNearClip()` gives room probes the 0.1 m minimum (markers "Room probes", "Cluster probes") | Room probes are automatic probes with their own owner |
+| `indra/newview/llreflectionmapmanager.h` / `.cpp` | Includes ("Room and cluster probes"); `mSolids`, `mClusterProbes`, `mRoomProbes` members; `updateRoomProbes()` / `updateClusterProbes()` in `update`; `mRoomProbesDirty` set on probe add/settle; octree probes inside room parts suppressed; `shift()` moves the part boxes | Octree auto probes are replaced where a room exists; placed probes are never touched |
 | `indra/newview/llreflectionmapmanager.h` / `.cpp` | `SKProbeKind`, `getSKProbeKind`, `getSKProbes`; the kind written into `refParams.w` bits 24–27 in `updateUniforms` only while `RenderReflectionProbeVolumes` is on (`fix-nav/probe-debug`) | Probe kinds for the census export and the scan-pulse display; UBO layout unchanged |
 | `indra/newview/pipeline.cpp` | `sk_probe_inv_view` uniform in the probe display pass (`fix-nav/probe-debug`) | The pulse reconstructs world position and normal |
 | `indra/newview/app_settings/shaders/class3/deferred/reflectionProbeF.glsl` | `skProbeKindColor`, `skProbeDistance`, `skProbeRawWeight`, `skProbePulseDebug`: every probe drawn as a frozen scan pulse, blends hatched (`fix-nav/probe-debug`) | Reuses the shader's own probe selection, so the hatch shows real blends |
@@ -337,20 +410,15 @@ bundles). Design: `.navmesh-rooms-plan.md`, `.nav-annotate-brief.md` (index `.ar
 | `indra/newview/app_settings/shaders/class2/interface/reflectionprobeF.glsl` | Skips sky pixels and calls `skProbePulseDebug` (`fix-nav/probe-debug`) | The `RenderReflectionProbeVolumes` display pass |
 | `indra/newview/llreflectionmapmanager.cpp` | `skProbeKindColor`, `SKProbeLinkEnd`/`skProbeLinkEnd`/`skProbeLinkWeight`/`skProbeLinkShares` and the link loop in `renderDebug`; `renderReflectionProbe`'s plain orange/yellow neighbour lines disabled (`fix-nav/probe-links`, `fix-nav/probe-link-weights`) | Each neighbour pair drawn once in kind colours, sampled every 0.05 m with the shader's weights (`skProbeRawWeight` mirror, manual/automatic classes): solid in the dominant colour at >= 90% share, two-colour dashes 0.05 m (even) to 0.5 m (near 90%) otherwise, never under 0.05 m, grey where neither reaches; debug drawing only |
 | `indra/newview/llreflectionmapmanager.cpp` | `probeDebugColor` removed; the axis markers in `renderDebug` take `skProbeKindColor(getSKProbeKind())`, census-blocked probes red (`fix-nav/probe-cache`) | One palette for markers, links and the scan pulse; debug drawing only |
-| `indra/newview/llreflectionmap.h` / `llreflectionmapmanager.h` / `.cpp` | `mLinkedRelevant`; `updateRelevanceLinks()` called after the manual-eclipse pass, `updateNeighbors` records relevance; `countNavOctreeLinks`, `getRelevanceRelinks`, `mRelevanceRelinks` (`fix-nav/probe-cache`) | A probe whose relevance flipped (nav suppression, census block, manual eclipse) is relinked in one sweep per update; inherited overlap rule unchanged |
+| `indra/newview/llreflectionmap.h` / `llreflectionmapmanager.h` / `.cpp` | `mLinkedRelevant`; `updateRelevanceLinks()` called after the manual-eclipse pass, `updateNeighbors` records relevance; `countRoomOctreeLinks`, `getRelevanceRelinks`, `mRelevanceRelinks` (`fix-nav/probe-cache`) | A probe whose relevance flipped (room suppression, census block, manual eclipse) is relinked in one sweep per update; inherited overlap rule unchanged |
 | `indra/newview/llreflectionmapmanager.cpp` | `cleanup()` closes and resets `mSolidWorkers` (`fix-nav/pool-shutdown`) | The ProbeSolids pool is joined at pipeline cleanup; left to `gPipeline`'s static destructor its close threw from boost.fiber and quitting aborted |
 | `indra/newview/llreflectionmap.h` / `.cpp`, `llreflectionmapmanager.h` / `.cpp`, `class3/deferred/reflectionProbeF.glsl` | `mClusterFill`; `registerClusterProbe`, `updateClusterProbes`, `mClusterProbes` (`SKClusterProbes`), `SK_PROBE_CLUSTER`; cluster probes sorted first, never a search's first probe, their index range in bucket 0 (`feature-nav/cluster-probes`, merge `2fbdb854ea`) | A fill tier over each census cluster, between the default probe and the rest |
-| `indra/newview/pipeline.cpp` | `mReflectionMapManager.renderDebug()` moved from `renderDebug()` to `renderFinalize`, after the navmesh overlay, depth-tested without writes (`fix-nav/probe-debug-colors`) | Probe debug lines and markers skip exposure and tonemapping, so their kind colours survive dim scenes |
+| `indra/newview/pipeline.cpp` | `mReflectionMapManager.renderDebug()` moved from `renderDebug()` to `renderFinalize`, after the world layers' overlays, depth-tested without writes (`fix-nav/probe-debug-colors`) | Probe debug lines and markers skip exposure and tonemapping, so their kind colours survive dim scenes |
 
 ### Unmarked additions
 
-- `indra/newview/CMakeLists.txt` — `sknavannotator`, `skfloaternavannotate`, `sknavrooms`, `sknavroomprobes` sources and headers
-- `indra/newview/app_settings/settings_alchemy.xml` — `SKClusterProbes`, `SKClusterProbesMax`, `SKClusterProbesCellM`, `SKClusterProbesHeight`
-- `indra/newview/app_settings/settings_alchemy.xml` — `SKNavRoomProbes`, `SKNavRoomProbesMax` (default 128 → 240 by `fix-nav/street-probes`)
-- `indra/sknavmesh/CMakeLists.txt` — `sknavprobes` source and test
-- `indra/sknavmesh/CMakeLists.txt` — `sknavair`, `sknavannotate` sources and tests
-- `indra/newview/app_settings/settings_alchemy.xml` — `SKNavAirRadius`, `SKNavAirAgentRadius` (`nav/air-agent-disc`: fine air in a disc round the agent), `SKNavAirBudgetMB`, `SKNavAirMinGap`, `SKNavDiskCacheMB`, `SKNavRoomsSettleMs`, `SKNavOverlayEnclosure` (since removed, `8ebc9cb749`), `SKNavOverlaySpaces`, `SKNavOverlayWind`, `SKNavOverlayWindHeading`, `SKNavWindSettleMs` (wind in its own marker block), `SKNavSealedIndoors`, 
-- `indra/sknavmesh/CMakeLists.txt` — `sknavairdistil`, `sknavskymap`, `sknavtilecache`, `sknavflights`, `sknavenclosure`, `sknavspaces`, `sknavwind`, `sknavcensusio`, `sknavlayout`, `sknavexport`, `sknavreplay` sources and tests, `tests/sknavtestscene.h` (plus the source-hash build step)
+- `indra/newview/CMakeLists.txt` — `skclusterprobes`, `skroomprobes` sources and headers (trailing markers)
+- `indra/newview/app_settings/settings_alchemy.xml` — `SKClusterProbes`, `SKClusterProbesMax`, `SKClusterProbesCellM`, `SKClusterProbesHeight`, `SKRoomProbes`, `SKRoomProbesMax` (were `SKNavRoomProbes*`)
 
 ---
 
@@ -1242,7 +1310,7 @@ Branch `feature-render/prim-split` (merge `257736e19c`). Untwisted square and tr
 
 ---
 
-## Navmesh — capture export
+## Capture export
 
 Branch `feature-nav/capture` (landed 2026-10-05): the vehicle export generalised into a capture export of
 any source kind, with per-face `textureLoaded` / `teMissing` and PBR alpha from the base colour. Plan:
@@ -1252,7 +1320,7 @@ any source kind, with per-face `textureLoaded` / `teMissing` and PBR alpha from 
 
 | File | Role |
 |---|---|
-| `indra/newview/skcaptureexport.h` / `.cpp` | Capture export (vehicle / attachments / avatar) and the shared face-visibility helpers (`skcapture::faceSeeThrough`, `seeThroughShare`) the census and navmesh call |
+| `indra/newview/skcaptureexport.h` / `.cpp` | Capture export (vehicle / attachments / avatar) and the shared face-visibility helpers (`skcapture::faceSeeThrough`, `seeThroughShare`) the census calls |
 
 ### Unmarked additions
 
@@ -1323,9 +1391,9 @@ Landed on `develop` in two merges of the same branch: `b7f8571b51` (as `feature-
 
 ### Files we own
 
-- `sknetmap.*`, `skfloatermap.*`, `skfloatermapsettings.*`, `skmap{allies,allyresolver,geom,labels,markers,menu,objects,palette,parcelfacts,parcels,people,policy,raster,ribbons,scene,view}.*`, `sknavpolys.*`, `skpopuplayout.*`, `skpopuppanes.*`; changed `sknavmesh.*` (poly reads, `revision()`, demand switch).
+- `sknetmap.*`, `skfloatermap.*`, `skfloatermapsettings.*`, `skmap{allies,allyresolver,geom,labels,markers,menu,objects,palette,parcelfacts,parcels,people,policy,raster,ribbons,scene,view}.*`, `skpopuplayout.*`, `skpopuppanes.*`.
 - XUI: `floater_sk_map.xml`, `floater_sk_map_settings.xml`, `panel_sk_map_popup.xml`. Data: `app_settings/sk_slmc_factions.xml` (SLMC factions; land groups in, civilian groups out).
-- Tests: `skmap{allies,geom,labels,markers,policy,raster,ribbons,view}_test.cpp`, `sknavpolys_test.cpp`, `skpopuplayout_test.cpp`.
+- Tests: `skmap{allies,geom,labels,markers,policy,raster,ribbons,view}_test.cpp`, `skpopuplayout_test.cpp`.
 
 ### Injection sites
 
@@ -1337,7 +1405,7 @@ Landed on `develop` in two merges of the same branch: `b7f8571b51` (as `feature-
 
 ### Unmarked additions
 
-- `indra/newview/CMakeLists.txt`: the files above, UNIT tests `skmap*`, `sknavpolys`, `skpopuplayout`.
+- `indra/newview/CMakeLists.txt`: the files above, UNIT tests `skmap*`, `skpopuplayout`.
 - `indra/newview/app_settings/settings_alchemy.xml`: the `SKMap*` keys in one block.
 - `indra/newview/CMakeLists.txt` (marked, `combat/minimap-air-people`): `skmapmarkers.cpp` and `tests/skmapmarkers_test.cpp` in `newview_tests`, the TUT test ported to Catch2.
 - `indra/newview/app_settings/settings_alchemy.xml` (marked, `combat/minimap-air-people`): `SKMapFloorChevronBand1`..`5`, the graded floor chevron band edges (2.5/6/12/24/48 m).
@@ -1353,12 +1421,6 @@ Landed on `develop` in two merges of the same branch: `b7f8571b51` (as `feature-
 - `combat/ml-map` (merge `5d0bae0a2d`, 2026-10-13): the Mouselook map (Automap), the mini-map drawn faintly over the world in mouselook through the same `SKNetMap`/composite (new `skmapml.*`; Automap tab in `floater_sk_map_settings.xml`). `indra/newview/llviewerwindow.cpp` (marked): include, `SKMapML::draw()` before the tool draw (skipped for tiled snapshots), `SKMapML::cleanup()` in `shutdownGL()` and `stopGL()`. `settings_alchemy.xml`: the `SKMapML*` keys in a marked block. `CMakeLists.txt`: `skmapml.cpp`/`.h` inside the existing marked block.
 
 
-### Navmesh: feature-nav/solid-raster (B2, 2026-10-08)
-
-- `feature-nav/solid-raster` (merge `4fbd3c5d1a`): WEATHER dropped as a Detour class, one solid raster. `indra/newview/app_settings/settings_alchemy.xml`: added `SKNavBuildRaster`, `SKNavOverlayRunoff` (marked `<SK:Nexii>` block); removed `SKNavBuildWeather`, `SKNavWeatherSlope`, `SKNavWeatherHeight`, `SKNavWeatherRadius`, `SKNavOverlayClass` (unmarked removals). All other edits are in `indra/sknavmesh` and `sk*` files.
-- `fix-nav/airborne-clip`, `fix-nav/cut-perf`, `feature-nav/air-morton`, `feature-nav/space-polys-baseline`, `fix-nav/test-numbers` (2026-10-08): Skooma files only, no injections.
-
-
 ### Outline capture: feature-skoutline/capture (2026-10-11)
 
 - `spike-skoutline/rtt-spike` was retired from develop (reverts `351f866b56`..`57f30a968a`); its injections are gone.
@@ -1367,14 +1429,8 @@ Landed on `develop` in two merges of the same branch: `b7f8571b51` (as `feature-
 - `feature-skoutline/capture` crew layers (develop `e42d4ef0ea`): marked `llselectmgr.cpp` (include; `SKOutlineCapture::onObjectName(id, name)` in `processObjectPropertiesFamily`, so crew-attachment names feed the layer rule), `llspatialpartition.h` / `.cpp` (`<functional>` include; `LLCullResult::skEraseDrawInfos`, non-virtual, layout unchanged), `pipeline.h` / `.cpp` (`sk_coverage_skip` static and a filter after `stateSort` in `renderShadow` that drops thin-plane draw infos during coverage; `skRenderOutlineCoverage` takes the skip predicate, defaulted). Own files: `skoutlinepolicy.*` crew/plane/merge rules, `SKOutlineCaptureDumpFolder` in `settings_alchemy.xml`, `sk_count` in `skOutlineResolveF.glsl`.
 - `feature-combat/minimap-glyphs` (into `feature-combat/minimap`, develop `7736e092dc`): the map draws captured vehicle glyphs. Only `sk*` files plus `settings_alchemy.xml` (`SKMapVehicleGlyphs` beside `SKMapLayerVehicles`).
 
-### Navmesh: feature-nav/tile-stages (B3)
+### Later landings
 
-- `feature-nav/tile-stages` (B3, merge `007a0fbd37`): `indra/newview/app_settings/settings_alchemy.xml` — the duplicate `SKNavAirBudgetMB` removed (unmarked deletion), the remaining entry wrapped in a `<SK:Nexii>` comment block. Everything else in `indra/sknavmesh` and `sk*` files.
-- `feature-nav/space-stamp` (B4, via `feature-navmesh`, develop `b10cecd4ce`): the Recast overlay port (`portfile.cmake`, `vcpkg.json`) gains `DT_VIRTUAL_QUERYFILTER` and a port-version bump; ours but unprefixed and unmarked. Otherwise `indra/sknavmesh` and `sk*` files only.
-- `fix-nav/stamp-perf` (via `feature-navmesh`, develop `7065397133`): `indra/cmake/BootstrapVcpkg.cmake` — one `<SK:Nexii>` block plus a marked single line: the install stamp hashes every overlay port file.
-- `feature-nav/air-overlay` (via `feature-navmesh`, develop `8fb47460a5`): `indra/newview/app_settings/settings_alchemy.xml` — a `<SK:Nexii>` block with `SKNavOverlayAir`, `SKNavOverlayAirSource`, `SKNavOverlayAirSlice`, `SKNavOverlayAirSliceCamera`, `SKNavOverlayAirBudget` (`Source`/`Slice`/`SliceCamera` since removed, `8ebc9cb749`); `indra/newview/CMakeLists.txt` — `sknavairoverlay.cpp` added (unmarked, like its sknav neighbours).
-- `feature-nav/air-residency` (via `feature-navmesh`, develop `e6f765de14`): `indra/newview/app_settings/settings_alchemy.xml` — a `<SK:Nexii>` block with `SKNavAirSpill`, `SKNavAirDetailHoldSeconds`, `SKNavAirWholeCluster`.
-- `fix-nav/review-stamp` (via `feature-navmesh`): `indra/newview/CMakeLists.txt` — trailing `# <SK:Nexii> navmesh: …` markers added to the existing `skcaptureexport.cpp/.h`, `skclusterprobes.cpp/.h`, `sknavairoverlay.cpp` entries (previously unmarked).
 - `feature-combat/edge-chevrons` (via `feature-combat/minimap`, develop `9620ed08f6`): `indra/newview/app_settings/settings_alchemy.xml` — `SKMapEdgeChevrons` added unmarked next to the other `SKMap*` entries.
 - `feature-combat/map-recorder` (via `feature-combat/minimap`, develop `9620ed08f6`): `indra/newview/app_settings/settings_alchemy.xml` — a `<SK:Nexii>` block with `SKMapRecord`, `SKMapRecordPath`, `SKMapRecordMaxMB`; `indra/newview/CMakeLists.txt` — `skmaprecorder.cpp/.h` added (unmarked, like its skmap neighbours).
 - `feature-combat/minimap-capture` (via `feature-combat/minimap`, develop `a98488462d`): tactical overview and census-styled capture base. Own files `skoverviewcapture.*`, `skoverviewcensus.*`, `shaders/class1/skooma/overview*.glsl`. Marked: `pipeline.h` / `.cpp` (`skRenderOverview` on `gClipProgram`: terrain, ghost, census and section passes), `llviewerdisplay.cpp` (per-frame overview hook after the world), `llviewerwindow.cpp` (wheel sets `SKTacticalDistance` while the overview is on), `llviewerinput.cpp` (`tactical_overview` action, hold / tap-to-latch), `key_bindings.xml` (CapsLock in first and third person), `control_table_contents_camera.xml` (Tactical Overview row), `en/menu_viewer.xml` (Develop > Render Tests > Tactical Overview), `llwindow.h` (no-op virtual `skSetCapsLockCapture`), `llwindowwin32.h` / `.cpp` (`WH_KEYBOARD_LL` hook that swallows Caps Lock while the world has focus and forwards it), `llkeyboardwin32.cpp` (Caps Lock level follows the physical key while held), `CMakeLists.txt` (inside the marked map block), `settings_alchemy.xml` (`SKMapCaptureBase`, `SKOverview*`, `SKTactical*`).
@@ -1391,13 +1447,10 @@ Landed on `develop` in two merges of the same branch: `b7f8571b51` (as `feature-
 - `fix-combat/minimap-tactical-ghostinvis` row superseded once `fix-combat/minimap-tactical-fps` lands (ghost layer removed).
 - `fix-combat/minimap-tactical-fps` (via `feature-combat/minimap`): ghost passes removed from `skRenderOverview` (`pipeline.cpp`); marked gate in `llviewerdisplay.cpp` / `pipeline.cpp` skipping the main view cull, hero probes, sun shadows, impostors, geometry, lighting and post while the tactical overview covered the view last frame.
 - `fix-combat/minimap-tactical-fps2` (via `feature-combat/minimap`): marked line in `llappviewer.cpp` skipping `LLReflectionMapManager::update()` while the tactical overview covered the view. Crease and cut-floor fixes: `sk*` files only.
-- `fix-nav/census-without-navmesh` (via `feature-navmesh`, develop `c45751dfdb`): `settings_alchemy.xml` — `SKWorldCensusEnabled` (on) and `SKAirCellsEnabled` (on) added, `SKNavMeshEnabled` default off; marked `pipeline.cpp` census overlay no longer waits for `SKNavMesh::overlayActive()`.
 - `fix-combat/minimap-capture-default` (develop `e194a1d0bb`): `SKMapCaptureBase` default on (unmarked value change in `settings_alchemy.xml`); the setting was later removed (`dd779ed388`, base is capture-only).
 - `feature-combat/minimap-avatar-shapes` (via `feature-combat/minimap`): unmarked `indra/newview/CMakeLists.txt` lines adding `skcensusavatarshape.cpp` / `.h`. Avatar physics shapes in the tactical overview: `sk*` files only.
-- `feature-mesh/havok-block` (develop `a1169f4cef`), physics_havok block, all marked `<SK:Nexii> physics_havok block`: `llprimitive/CMakeLists.txt` (`skmeshhavok.*`, its test); `newview/CMakeLists.txt` (`skmeshhavokshape.*`, beside `llmeshrepository`); `llmeshrepository.h` (include, `LLMeshHeader` physics_havok offset/size/in-cache and `FLAG_PHYSHAVOK`, repo-thread havok queues and fetch/received/failed, `LLMeshRepository::getPhysicsHavok` and its cache); `llmeshrepository.cpp` (include, thread-table rows, `SKMeshPhysicsHavokHandler`, request loop in `run()`, header in-cache detection, cache reservation, both `notifyLoadedMeshes` handoffs, `LLMeshHandlerBase::mTakeRequestedOnly` capped copy, `readCachedPhysicsMesh`); `llspatialpartition.cpp` (`renderPhysicsShape` draws the simulator's triangles for a decomposition without hulls). Own files: `llprimitive/skmeshhavok.*`, `llprimitive/tests/skmeshhavok_test.cpp`, `newview/skmeshhavokshape.*`.
 - `spike-mesh/dump` (DO NOT LAND, develop `229d6899c9`, re-cut on `feature-mesh/havok-block`): marked whole-asset dump in `llmeshrepository.h/.cpp` (`mFullDumpQ`, `issueFullDumps`, `SKMeshFullDumpHandler`, queue push in `headerReceived`). Retired 2026-10-16 (revert `5e4e272a7b`): no longer in develop.
 - Build fixes after the `next` merge `690ee90ccc` (develop, 2026-10-15): marked TUT guards in `llmath`, `llui`, `newview` and `llaudio` `CMakeLists.txt` (`if(COMMAND al_add_test)`, develop's TUT tests registered but not built until ported to Catch2); marked `setCanCollapse` in upstream's `llui/tests/alstudiofloater_test.cpp`; `skNudge` in `llviewerobject.cpp` (inside its existing motion block) passes `MOVED` only, as upstream dropped `SILHOUETTE`; develop's `ALNoiseHash` cases in `newview/tests/noise_test.cpp` ported to Catch2 (unmarked, develop-only test cases in upstream's file); merge-resolution placements of the atmo/surround outline, motion recorder, tactical-overview and overlay injections in `llselectmgr.cpp`, `llappviewer.cpp`, `llviewerdisplay.cpp` (see `V:\Scratch\mesh-havok-block\SYNC-REPORT.md`).
-- `feature-nav/havok-census` (via `feature-navmesh`, develop `44ee57a6cb`): census uses the simulator's collision triangles (provenance `SIM`, census format v5): `sk*` files only, plus `sknavmesh/CMakeLists.txt` registering the `sknavmesh_tests` Catch2 binary (census io test). The trunk's reconciliation with develop's TUT guards (`3d6968f436`) leaves the nav-only map tests (`skmapgeom`, `skmapraster`, `skmapribbons`) in their own marked guard after `newview_tests`.
 - `feature-combat/minimap-avatar-shapes` (via `feature-combat/minimap`): marked `llviewerobject.h` / `.cpp` — `LLViewerObject::skPredictedRotationRegion()`, the sim's last rotation extrapolated by its angular velocity, read by the minimap heading and the tactical overview's avatar shapes.
 - `feature-modal-view` (develop `a639a27c1d`): the modal view foundation (`SKModalView`, `SKModalMode`), marked `<SK:Nexii> modal view`; it took over the world map's hooks (first landed in `1db5319883`/`bc49267e7f`), same sites, every gate `SKModalView::worldCovered()`. `newview/CMakeLists.txt` adds `skmodalview`, `skmodalviewmath` and the `skmodalviewmath` test; `llagentcamera.cpp`/`.h` lift camera constraints, refuse mouselook and add `skipCameraSmoothing()` (`isDisableCameraConstraints`, `getCameraMaxZoomDistance`, `changeCameraToMouselook`); `llagent.cpp` refuses movement and autopilot (`moveAt`/`moveAtNudge`/`moveLeft`/`moveLeftNudge`/`moveUp`/`moveYaw`/`movePitch`, `startAutoPilotGlobal`, `startFollowPilot`); `llappviewer.cpp` calls `SKModalView::shutdown` in `cleanup` and skips probe faces (one condition with the tactical overview's `worldHidden()`); `lltoolfocus.cpp` `pickCallback` → `SKModalView::pickGround` (top mode); `llviewerdisplay.cpp` adds `sk_display_modal`/`sSKModalFrame` (world object work kept) and the `display()` gate through `closeIfNeeded(leaving_world)`, and skips finalize, HUD, HUD attachments, hover text and 3D UI in a modal frame (finalize and hover text share their conditions with the tactical overview's `worldHidden()`/`tacticalShown()`; its composite is skipped in a modal frame); `llviewerinput.cpp` `scanKey`/`scanMouse` → `SKModalView::blocksAction`; `llviewerjoystick.cpp` `moveAvatar` returns, `moveFlycam` × `SKModalView::flycamScale`; `llviewermessage.cpp` `send_agent_update` sends `SKModalView::worldCameraForUpdate` while covered, otherwise the over-the-shoulder camera (one shared `camera_left`/`camera_up`); `llvieweraudio.cpp` `audio_update_listener` and `llvoicewebrtc.cpp` ear location use `SKModalView::worldCamera`; `llviewerwindow.cpp` `rawSnapshot`/`simpleSnapshot` refuse while covered; `llviewermenu.cpp` `handle_reset_view` (Escape) → `SKModalView::closeTop()`.
 - `feature-worldmap` (develop `562f6607dc`, first `1db5319883`/`bc49267e7f`): 3D world map mode, an `SKModalMode` on the foundation above, marked `<SK:Nexii> 3D world map`. `newview/CMakeLists.txt` adds `skmapmode`, `skworldmapmath`, `skworldmapscene`, `skworldmaptiles` and the `skworldmapmath` test; `llviewermenu.cpp` (`skmapmode.h` include, `WorldMap3D.Toggle`/`IsOpen`) and `menu_viewer.xml` add the World menu toggle (Ctrl+Alt+M); new `panel_sk_world_map.xml`; RLVa checks in `skmapmode.cpp` only (no upstream edit).
@@ -1425,21 +1478,17 @@ Landed on `develop` in two merges of the same branch: `b7f8571b51` (as `feature-
 - `mesh/physics-shape-types` (develop `7dceda85a7`): Render Metadata > Physics Shapes becomes a Cost / Types submenu (`SKPhysicsShapeTypes`). Marked: `menu_viewer.xml` (en submenu); `llviewermenu.cpp` (`SKTogglePhysicsShapes` / `SKCheckPhysicsShapes` and their registration); `llspatialpartition.cpp` (`renderPhysicsShape` draw colours through `skPhysicsShapeColor`, each line marked `Types colouring`). Unmarked: the other locales' `menu_viewer.xml` (`menu_item_check` -> `menu` for `Physics Shapes`), `settings_alchemy.xml` (`SKPhysicsShapeTypes`, before `AlchemyRenderWaterHextile`). Own: `skmeshhavokshape.*` (`SKPhysicsShapeSource`, `skPhysicsShapeColor`).
 - `combat/minimap-objlist-zones` (via `feature-combat/minimap`, develop `6ff3f2e8a9`): profiler sub-zones in `LLViewerObjectList::update`. Marked: `llviewerobjectlist.cpp` (`vol - copy active`, `vol - fetch costs`, `vol - fetch physics flags`, `vol - frame stats`).
 - `combat/minimap-physics-flags` (via `feature-combat/minimap`, develop `93c98627a3`): physics flags fetched from each object's own region, with refused objects not queued again (stopped the census re-queuing parts from other regions every frame). Marked: `llviewerobjectlist.cpp` (`sPhysicsFlagsRefused`, `fetchPhysicsFlags`, `fetchPhisicsFlagsCoro`, `updatePhysicsFlags`, `onPhysicsFlagsFetchFailure`), `llviewerobjectlist.h` (`fetchPhisicsFlagsCoro` signature).
-- `nav/physics-cost` (via `feature-navmesh`, develop `9341208865`): Physics Shapes > Cost colours by the shape's own estimated physics cost instead of land impact. Marked: `llspatialpartition.cpp` (`renderPhysicsShape` ramp fraction from `skPhysicsShapeCostFraction(skPhysicsShapeCost(...))`; `ObjectCostHighThreshold` no longer read there). Own: `skphysicsshape.*` (`skPhysicsShapeCost`, `skPhysicsShapeCostFraction`).
 - `combat/minimap-lookat-aim` (via `feature-combat/minimap`, develop `6297b520dc`): firing lines aim along the mouselook LookAt (else the body rotation), never the animated head; precise ones also drawn on the tactical overview. Marked: `llhudmanager.h` (`getEffects()` read-only getter). Own: `skmappeople.*` (`aimDirection`, `mouselookTargets`, `FiringLine::mPrecise`), `skoverviewcapture.cpp`.
 - `spike-physics-cost-sample` (DO NOT LAND, develop `b4fd2b457c`): `llspatialpartition.cpp` `renderPhysicsShape` calls `skPhysicsCostSample`, which queues GetObjectCost and appends estimate vs server physics cost to `logs/sk-physics-cost.csv`. Retired 2026-10-20 (reverts `e0e9637510`, `df1ec61bac`): no longer in develop.
 - `spike-prim-cost-sample` (DO NOT LAND, develop `a536aa29be`): `llspatialpartition.cpp` `renderPhysicsShape` calls `skPhysicsPrimCostSample`, which logs PRIM_MESH prims' parameters and per-LOD triangles against GetObjectCost to `logs/sk-prim-cost.csv`. Retired 2026-10-20 (revert `9ae41ed053`): no longer in develop; prims now share the triangle mesh cost.
 - `fix-combat/minimap-cam` (via `feature-combat/minimap`, develop `54f1424f27`): camera warp, an animation that eases up, cuts out its cruise and brakes onto the target; the mini-map's Cam frames an avatar from a clear third-person view and warps there, the 3D world map warps in on open, a tapped tactical overview warps in (a hold snaps). Marked: `llagentcamera.h` (`startCameraWarp`, `mCameraWarping`, `mWarpProfile`, `skcamerawarp.h` include), `llagentcamera.cpp` (warp fraction in the `updateCamera` animation ahead of the over-the-shoulder follow, smoothing held off while warping, flag cleared in `startCameraAnimation`, `startCameraWarp`). Own: `skcamerawarp.h`, `skmapmenu.cpp` (`camOnAvatar`), `skmapmode.cpp`, `skoverviewcapture.cpp`.
 - `combat/minimap-storey-cut` (via `feature-combat/minimap`, develop `01bb19b90e`): tactical overview storey cut. The roof pass counts any linkset over the feet as cover (a storey slab and its ceiling in separate linksets no longer reset the room); SHELTERED takes the ceiling cut and room; floor + 1.8 m only when the ceiling is unknown; agentFloor never more than 1 m below the feet; whereabouts, agentFloor and roomAt's start take the space-below stand-in only within 1 m (`airGapNear`); a linkset is never-cut only when every record is a void surround (sky build at Resdayn 3497). No markers: own files only, `skoverviewcensus.cpp` (`applyCut` roof pass, anchors), `skoverviewcapture.cpp` (`roomAt`, `updateCut`), `skmapplan.cpp` (`airGapNear`, `whereabouts`, `agentFloor`).
-- `nav/small-mesh-convex` (fix, via `feature-navmesh`, develop `afd906745a`): meshes under 0.5 m on any axis collide as hulls. Marked: `llspatialpartition.cpp` `renderPhysicsShape` skips the physics mesh for them (`Small meshes collide as hulls`); the `physics_havok block` line gains `!skPhysicsMeshTooSmallForTriangles(volume)`. Own: `skphysicsshape.*` (`skPhysicsMeshTooSmallForTriangles`, gates in `skPhysicsShapeSimTriangles`, the geometry and the cost).
 - `combat/minimap-quick-fixes` (via `feature-combat/minimap`, develop `c178326d57`): verdict timer, census log memory, worker region hash, mover retry, region-handle tactical key, room hash in the cut key, unknown-physics counter. Own files only.
 - `combat/minimap-early-z` (via `feature-combat/minimap`, develop `9f32772d13`): overview programs built by the shader manager, clip distances, permutations, dirty-rect tactical repair, GPU spans, census group cull. Marked: `llviewershadermgr.cpp` (include `skoverviewcapture.h`; `SKOverviewCapture::loadShaders(mShaderLevel[SHADER_DEFERRED])` at the end of `loadShadersDeferred`, after the RLVa block; a failure leaves only the overview off), `llvertexbuffer.h` / `.cpp` (`multiDrawArrays`, `glMultiDrawArrays` over ranges of the bound buffer, beside `drawArrays`), `newview/CMakeLists.txt` (`skoverviewprograms.h` in the SK headers list; `tests/skoverviewshaders_test.cpp` and `tests/skoverviewshaders_gl_test.cpp` registrations, each line-marked). Own: `skoverview*`, `shaders/class1/skooma/overview*.glsl`, `tests/skoverviewshaders*_test.cpp`.
-- `nav/room-graph` (via `feature-navmesh`, develop `310657b191`): rooms on the world view and the air/wind revision split. Own files only (`sknavroomgraph.*`, its test, `sknavrooms.*`, `sknavmesh.cpp`, `indra/sknavmesh/CMakeLists.txt`); the develop merge also gave the `view.rebuild` and `rooms.publish` recorder lines their air/wind and rooms fields.
 - `combat/minimap-escape-warp` (via `feature-combat/minimap`, develop `0e5abf28e5`): Escape warps the camera home when it is over `SKCameraWarp::RESET_DISTANCE` from the avatar. Marked: `llagentcamera.cpp` (`resetView`, around `setFocusOnAvatar`). Own: `skcamerawarp.h` (`RESET_DISTANCE`).
 - `combat/minimap-churn` (via `feature-combat/minimap`, develop `8b8fd270b1`): census stamp on a content hash with a delta in the snapshot, cut rooms from the room graph, overview caches on `airRevision`. Own files only (`skworldcensus.*`, `sknavcensusdelta.*`, `sknavcluster.*`, `tests/sknavclusterhash_test.cpp`, `skoverviewcensus.*`, `skoverviewcapture.*`, `indra/sknavmesh/CMakeLists.txt`); `llspatialpartition.cpp` arrived through its `feature-navmesh` merge, already indexed above.
 - `combat/minimap-cut-table` (via `feature-combat/minimap`, develop `f2b5a8afeb`): per-linkset cut table for the tactical overview. Marked: `llshadermgr.h` / `.cpp` (reserved uniform `SK_OVERVIEW_CUT_TABLE` `"sk_cut_table"`, last before `END_RESERVED_UNIFORMS`; reserved storage block `SK_OVERVIEW_CUT_BLOCK` `{ "SKOverviewCutBlock", 1 }`, first entry, binding point 0), `altextureslot.h` / `.cpp` (`TT_BUFFER_TEXTURE` → `GL_TEXTURE_BUFFER`), `llgl.h` / `.cpp` (`LLGLManager::mMaxTextureBufferSize`, `GL_MAX_TEXTURE_BUFFER_SIZE` queried beside `GL_MAX_UNIFORM_BLOCK_SIZE`), `newview/CMakeLists.txt` (`skoverviewcuttable.cpp/.h` in the SK lists, unmarked; `tests/skoverviewcuttable_test.cpp` and `tests/skoverviewcuttable_gl_test.cpp` registrations and the two `UNIT` entries, line-marked; the GL binary's `UNIT` list reflowed one file a line by gersemi). Own: `skoverviewcuttable.*`, `skoverviewcensus.*`, `skoverviewcapture.cpp`, `skoverviewprograms.h`, `shaders/class1/skooma/overviewGeomV.glsl`, `tests/skoverview*_test.cpp`. The storage binding points are now full in `llglslshader_gl_test.cpp` (ours + 7 test blocks): the next product block takes one test block out.
 - `combat/minimap-cover` (via `feature-combat/minimap`, develop `d43a179343`): verdicts by clipping against colliding neighbours, visible-only census records, census export v6. Own files only (`sknavinvisible.*`, `sknavtypes.h`, `sknavcensusio.*`, `sknavcluster.cpp`, `sknavfeatures.cpp`, `skworldcensus.*`, `skoverviewcensus.*`, `skphysicsshape.*`, `sknavmesh.cpp`, tests).
-- `nav/census-incremental` (via `feature-navmesh`, develop `0865ee2601`): census dirty-set scan, rooms change list, live air byte counts, shared tops. Marked: `llviewerobjectlist.cpp` (include `skworldcensus.h`; `SKWorldCensus::noteObjectUpdate` as the last statement of `processUpdateCore`; `SKWorldCensus::noteObjectGone` in `killObject` before `markDead`). Own: `skworldcensus.*`, `sknavmesh.*`, `sknavrooms.*`, `indra/sknavmesh` (`sknavairdistil.*`, `sknavskymap.*`, `sknavlayout.*`, `sknavtilecache.cpp`, tests). The develop merge kept the recorder lines and `bumpRevision` at the ten air-revision sites beside the change-list notes, moved the `tile.drop` recorder line ahead of the retire (it read a moved-from pointer), and widened `airReach()` with the live `requestAir` boxes. Develop-only `145578d488` moved four of the mini-map trunk's `sknavenclosure_test.cpp` cases onto `TileTops`.
 - `combat/minimap-linkset-buffers` (via `feature-combat/minimap`, develop `63df43dbd7`): census slot pages per region and class, stable per-root linkset ids, compute-built draw commands. Marked: `llvertexbuffer.h` / `.cpp` (`multiDrawArraysIndirect`, `glMultiDrawArraysIndirect` of an `ALGPUBuffer`'s commands over the bound buffer, range-checked, beside early-z's `multiDrawArrays`), `llrender.h` / `.cpp` (`bindDrawIndirect`, `GL_DRAW_INDIRECT_BUFFER` through the cached indirect binding), `newview/CMakeLists.txt` (`skoverviewslots.cpp/.h` in the SK lists, unmarked; `tests/skoverviewslots_test.cpp` and `tests/skoverviewslots_gl_test.cpp` registrations and the two `UNIT skoverviewslots.cpp` entries, line-marked). Unmarked: `settings_alchemy.xml` (`SKOverviewPageVertices`, U32 3145728, beside the other `SKOverview*`). Own: `skoverviewslots.*`, `skoverviewcensus.*`, `skoverviewcapture.*`, `skoverviewprograms.h`, `shaders/class1/skooma/overviewCommandsC.glsl`, `tests/skoverviewslots*_test.cpp`.
 - `combat/minimap-id-readback` (via `feature-combat/minimap`, develop `ed11c4e608`): the tactical cut's room, column, cover and feet answers from GPU probes, picks from the shown frame's depth. Marked: `newview/CMakeLists.txt` (`skoverviewprobes.cpp/.h` in the SK lists, unmarked; `tests/skoverviewprobes_test.cpp` and `tests/skoverviewprobes_gl_test.cpp` registrations and the two `UNIT skoverviewprobes.cpp` entries, line-marked). Unmarked: `settings_alchemy.xml` (`SKOverviewProbeBudget` U32 8, `SKOverviewProbeQueries` U32 256, `SKOverviewProbeDump` Boolean 0 not persisted, beside the other `SKOverview*`). Own: `skoverviewprobes.*`, `skoverviewcensus.*`, `skoverviewcapture.*`, `skoverviewprograms.h`, `shaders/class1/skooma/overviewGeomV.glsl` / `overviewGeomF.glsl`, `tests/skoverviewprobes*_test.cpp`, `tests/skoverviewshaders*_test.cpp`. No llrender edit: `LLVertexBuffer::sGLRenderBuffer` can name a buffer whose attribute pointers were never set up after `_unmapBuffer`, a VBO-pool miss (which binds the new buffer) and a recycled pool name, so `setBuffer`'s same-buffer skip draws from the old pointers; the probes `LLVertexBuffer::unbind()` before drawing, as `LLRender::genBuffer` does. A one-line `_unmapBuffer` fix was tried and the GL test still crashed on the pool-miss path; the proper fix is an llrender follow-up.
 - `ui/game-chat` (via `ui`, main `35fb5f2a26`): game-style local chat window replacing the nearby toasts and chat bar while `SkoomaLocalChatModern` is on. Marked: `alchatbar.h` / `.cpp` (send, keystroke and channel-label code as shared statics), `llfloaterimnearbychathandler.cpp` (`processChat` hands the message to `SKFloaterLocalChat` and returns before the toasts), `llviewerinput.cpp`, `llviewerwindow.cpp` (Enter, `/` and letter keys open its input), `llfloaterimnearbychat.h` (`getMessageArchive()` for the backfill), `llviewerfloaterreg.cpp` (registration), `newview/CMakeLists.txt`, `settings_alchemy.xml` (`SkoomaLocalChatModern`, `SkoomaLocalChatStyle`, `SkoomaLocalChatFadeDelay`, `SkoomaLocalChatFadeTime`, before `AlchemyChatHistoryStyle`). Own: `skfloaterlocalchat.*`, `floater_sk_local_chat.xml`, `menu_sk_local_chat.xml`.
@@ -1451,3 +1500,5 @@ Landed on `develop` in two merges of the same branch: `b7f8571b51` (as `feature-
 - `ui/smooth-scroll` (via `ui`, main `8abf470a67`): precise wheel deltas and glide. Marked: `llscrolldelta.h` (`mPixels`, `mLines`, `mIsPrecise`, `mPage`, `mPhase`, `lines()`), `llwindow.h`, `llwindowwin32.cpp` (lines/chars per notch from the OS, `WM_SETTINGCHANGE`, precise-stream guess), `llwindowsdl.cpp` + macOS NSEvent monitor, `llviewerwindow.cpp` (sensitivity on the new fields), `llscrollbar.*`, `llscrollcontainer.*`, `lltextbase.cpp`, `llscrolllistctrl.*`, `text/altextview.*`, `widgets/altabstrip.*`, `llmath`/`llui` CMake lists, two llui tests (`SkoomaScrollSmooth` off in a settings scope). Unmarked: `settings_alchemy.xml` (seven `SkoomaScroll*` beside `MouseWheelScrollSensitivity`). Own: `llmath/skwarpprofile.h`, `llui/skscrollanimator.*`, tests. Layout changes: full rebuild. Pending: `skcamerawarp.h` forwarder (`V:\Scratch\smooth-scroll\skcamerawarp.h`) for the combat/camera side.
 - `ui/game-chat` emoji: marked `lltexteditor.h` / `.cpp` (pre-key hook, public `getCursorPosition`, shortcode popup switch), `llemojihelper.cpp` (closes silently — all chats). Own: `skemojicomplete.*` (CMake SK list after `skchatunfurlcache`).
 - `ui/mu-pose-emoticons` (via `ui`, main `b41d92bc8c`): the `:` MU* pose (`EnableMUPoseChat`) skips text emoticons and emoji shortcodes. Marked: `llfloaterimsessiontab.cpp` (`sk_starts_with_emoticon` before `applyMUPose`, its call in the condition, and `:'` posing only before a letter). Applies to nearby chat, the chat bar, the game-style chat and IMs.
+- World foundations consumers (via `combat`, main `7a86df287b`): the mini-map and tactical overview read the census and rooms layers (`fbd2370f90`, `c4afa10f39`); `sknavpolys.*` and the overview's navmesh readers gone, `skoverviewcensus.*` reads the census. Marked: `llappviewer.cpp` (`skmaprecorder.h` include; `SKMapRecorder::onFrame()` before the census tick, taking the world layers' trace lines, `168087a50b`). Room/cluster probes: see "Reflection probes — room and cluster probes". `settings_alchemy.xml`: map/overview keys renamed off navmesh wording (`c6440e0635`).
+- Navmesh removed (`23b0cc0c84`, via `combat`): `indra/sknavmesh`, every `sknav*` file, the nav console and annotate floaters, the Recast overlay port (`indra/cmake/ports/recastnavigation`), its `vcpkg.json` / `vcpkg-configuration.json` (`overlay-ports`) / `Dependencies.cmake` entries, the `BootstrapVcpkg.cmake` port-hash block, the annotate hooks in `llselectmgr.cpp` and `llviewerfloaterreg.cpp`, the navmesh overlay call in `pipeline.cpp`, and the `SKNav*` settings. Their rows are removed from this index. Left behind: the `pipeline.h` / `.cpp` `addDebugBlip(…, from)` overload, still marked "navmesh tile updates" (listed under air cells).
