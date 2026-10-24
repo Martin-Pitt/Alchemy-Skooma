@@ -226,6 +226,53 @@ namespace
         return t > 1e-4f && t <= reach;
     }
 
+    // A triangle as its first corner and the edges from it, with what rayHitsTriangle works from the ray's
+    // direction alone: worked once for all the rays one direction casts at it.
+    struct EdgeTriangle
+    {
+        LLVector3 mA;
+        LLVector3 mE1;
+        LLVector3 mE2;
+        LLVector3 mP;       ///< d % e2
+        F32 mInv = 0.f;     ///< 1 / (e1 * p)
+        bool mFlat = true;  ///< parallel to the direction: never hit
+    };
+
+    void prepareEdges(EdgeTriangle& tri, const LLVector3& d)
+    {
+        tri.mP = d % tri.mE2;
+        const F32 det = tri.mE1 * tri.mP;
+        tri.mFlat = std::fabs(det) < 1e-9f;
+        tri.mInv = tri.mFlat ? 0.f : 1.f / det;
+    }
+
+    // rayHitsTriangle over a triangle prepared for d.
+    bool rayHitsEdges(const LLVector3& o, const LLVector3& d, const EdgeTriangle& tri, F32 reach)
+    {
+        if (tri.mFlat)
+        {
+            return false;
+        }
+        const LLVector3& e1 = tri.mE1;
+        const LLVector3& e2 = tri.mE2;
+        const LLVector3& p = tri.mP;
+        const F32 inv = tri.mInv;
+        const LLVector3 s = o - tri.mA;
+        const F32 u = (s * p) * inv;
+        if (u < 0.f || u > 1.f)
+        {
+            return false;
+        }
+        const LLVector3 q = s % e1;
+        const F32 v = (d * q) * inv;
+        if (v < 0.f || u + v > 1.f)
+        {
+            return false;
+        }
+        const F32 t = (e2 * q) * inv;
+        return t > 1e-4f && t <= reach;
+    }
+
     // A ray against an analytic record's oriented box; spheres and cylinders
     // are taken as their boxes, which only ever covers more.
     bool rayHitsBox(const LLVector3& o, const LLVector3& d, const Record& r, F32 reach)
@@ -374,8 +421,11 @@ namespace
             size_t mFirst;
             size_t mEnd;
         };
-        std::vector<Target> targets;
-        std::vector<LLVector3> tris;
+        // Scratch kept per thread: a scan measures hundreds of leaves.
+        thread_local std::vector<Target> targets;
+        thread_local std::vector<EdgeTriangle> tris;
+        targets.clear();
+        tris.clear();
         for (const RecordPtr* p : nearby)
         {
             const Record& r = **p;
@@ -402,7 +452,10 @@ namespace
                 }
                 if (!apart)
                 {
-                    tris.insert(tris.end(), { t[i], t[i + 1], t[i + 2] });
+                    EdgeTriangle& e = tris.emplace_back();
+                    e.mA = t[i];
+                    e.mE1 = t[i + 1] - t[i];
+                    e.mE2 = t[i + 2] - t[i];
                 }
             }
             if (tris.size() > first)
@@ -421,6 +474,10 @@ namespace
         for (const F32 side : { 1.f, -1.f })
         {
             const LLVector3 d = n * side;
+            for (EdgeTriangle& tri : tris)
+            {
+                prepareEdges(tri, d);
+            }
             S32 hit = 0;
             for (S32 i = 0; i < GRID; ++i)
             {
@@ -440,9 +497,9 @@ namespace
                         }
                         else
                         {
-                            for (size_t k = t.mFirst; k < t.mEnd && !struck; k += 3)
+                            for (size_t k = t.mFirst; k < t.mEnd && !struck; ++k)
                             {
-                                struck = rayHitsTriangle(o, d, tris[k], tris[k + 1], tris[k + 2], ray);
+                                struck = rayHitsEdges(o, d, tris[k], ray);
                             }
                         }
                         if (struck)
@@ -689,7 +746,8 @@ namespace skworld
 
     void RecordIndex::query(const LLVector3d& mn, const LLVector3d& mx, std::vector<const RecordPtr*>& out) const
     {
-        std::vector<U32> found = mLarge;
+        thread_local std::vector<U32> found;
+        found.assign(mLarge.begin(), mLarge.end());
         const S64 x0 = static_cast<S64>(std::floor(mn.mdV[VX] / mCell)), x1 = static_cast<S64>(std::floor(mx.mdV[VX] / mCell));
         const S64 y0 = static_cast<S64>(std::floor(mn.mdV[VY] / mCell)), y1 = static_cast<S64>(std::floor(mx.mdV[VY] / mCell));
         for (S64 x = x0; x <= x1; ++x)
