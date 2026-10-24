@@ -42,6 +42,7 @@ class LLButton;
 class LLChatEntry;
 class LLFontGL;
 class LLMenuButton;
+class LLScrollbar;
 class LLViewerFetchedTexture;
 
 class SKFloaterLocalChat final : public LLFloater, public LLAvatarPropertiesObserver
@@ -74,9 +75,7 @@ public:
     bool hitsContentAt(S32 x, S32 y) override;
     bool handleKeyHere(KEY key, MASK mask) override;
     bool handleMouseDown(S32 x, S32 y, MASK mask) override;
-    bool handleMouseUp(S32 x, S32 y, MASK mask) override;
     bool handleHover(S32 x, S32 y, MASK mask) override;
-    void onMouseCaptureLost() override;
     void glideWheel();
     bool scrolledUp() const;  // up from the newest message, or gliding there
     bool handleScrollWheel(S32 x, S32 y, LLScrollDelta delta) override;
@@ -158,12 +157,11 @@ private:
     void layout();
     void layoutCog();
     LLRect contentRect() const;
-    bool barShown() const;
-    LLRect barStrip() const;
-    LLRect barThumb() const;    // the thumb's whole extent in the strip
     S32 barRange() const;
-    void barPage(S32 dir);
-    bool barTakes(S32 x, S32 y); // a click or hover here belongs to the bar
+    /// The bar counts down from the top of history while mScroll counts up from the newest message.
+    S32 barPos() const;
+    /// Places the scroll bar at the content's right and gives it the chat's size and position.
+    void layoutBar();
     bool expanded() const;
     F32 cardAlpha(const Card& card, F64 now) const;
     S32 lineHeight(const Row& row) const;
@@ -221,13 +219,8 @@ private:
     bool mLayoutDirty = true;
     bool mHovered = false;
     bool mHiddenForConversations = false; // put away while Conversations shows nearby chat
-    bool mBarHot = false;       // the pointer is on the scroll bar's strip
-    S32 mBarDrag = -1;          // while the thumb is dragged, the pointer's height above its bottom
-    S32 mBarPage = 0;           // while the track is held, +1 paging back through history, -1 forward
-    S32 mBarPointerY = 0;       // the pointer's last height, so a held page stops at it
-    F64 mBarRepeatAt = 0.0;     // when a held page next repeats
-    F32 mBarWide = 0.f;         // 0 for the thin thumb, 1 for the full bar, eased between
-    F64 mBarDrawnAt = 0.0;      // the last draw, to ease mBarWide by
+    LLScrollbar* mScrollbar = nullptr; // an overlay bar over the content's right edge
+    bool mBarSyncing = false;   // while layoutBar pushes the chat's position, the bar's callback ignores it
     F32 mBackdrop = 0.f;        // the hover tint, 0 to 1, eased in and out
     F32 mBorder = 0.f;          // the edge border, likewise
     F64 mEdgeSince = -1.0;      // when the pointer reached the floater's edge, -1 while it is elsewhere
