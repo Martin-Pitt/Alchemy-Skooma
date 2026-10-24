@@ -71,12 +71,11 @@ namespace skworld
             F64 mLen;
         };
 
-        /// A grown region's run axis and its extent along it; the extent is worked out when first asked for.
+        /// A grown region's run axis and its extent along it.
         struct Axis
         {
             F64 mUx = 0.0, mUy = 0.0, mS0 = 0.0, mS1 = 0.0;
             bool mOk = false;
-            bool mExtent = false;
         };
 
         constexpr U32 SLOPE_MEMO_BITS = 9;
@@ -144,6 +143,7 @@ namespace skworld
             std::vector<S32> mIndex;
             std::vector<U32> mRegionStart;
             std::vector<U32> mRegionCells;
+            std::vector<U32> mRegionSize;   ///< per region once completed, hillsides included
             std::vector<U32> mFill;
             std::vector<Axis> mAxes;
             std::vector<U8> mSmall;
@@ -591,15 +591,37 @@ namespace skworld
                     }
                 }
             }
+            // Each region's cells now, and its extent along its run over them, in one pass over the candidates. A
+            // hillside's cells are only counted: nothing reads them again.
+            std::vector<U32>& rsize = s.mRegionSize;
+            rsize.assign(regions, 0);
             {
+                for (U32 r = 0; r < regions; ++r)
+                {
+                    axes[r].mS0 = 1e300;
+                    axes[r].mS1 = -1e300;
+                }
                 std::vector<U32>& fill = s.mFill;
                 fill.assign(regions + 1, 0);
                 for (U32 i = 0; i < ncand; ++i)
                 {
-                    rof[i] = regionOf(cands[i]);
-                    if (rof[i] >= 0)
+                    const S32 r = regionOf(cands[i]);
+                    rof[i] = r;
+                    if (r < 0)
                     {
-                        ++fill[rof[i] + 1];
+                        continue;
+                    }
+                    ++rsize[r];
+                    Axis& a = axes[r];
+                    if (a.mOk)
+                    {
+                        const F64 sv = sOf(a, cands[i]);
+                        a.mS0 = std::min(a.mS0, sv);
+                        a.mS1 = std::max(a.mS1, sv);
+                    }
+                    if (!hillside[r])
+                    {
+                        ++fill[r + 1];
                     }
                 }
                 for (U32 r = 0; r < regions; ++r)
@@ -610,33 +632,12 @@ namespace skworld
                 region_cells.resize(fill[regions]);
                 for (U32 i = 0; i < ncand; ++i)
                 {
-                    if (rof[i] >= 0)
+                    if (rof[i] >= 0 && !hillside[rof[i]])
                     {
                         region_cells[fill[rof[i]]++] = cands[i];
                     }
                 }
             }
-            // Each region's extent along its run, over its cells now: when first asked for, as a hillside's is only
-            // where a deck search reaches it.
-            const auto axisOf = [&](U32 r) -> const Axis& {
-                Axis& a = axes[r];
-                if (a.mOk && !a.mExtent)
-                {
-                    a.mExtent = true;
-                    if (region_start[r] != region_start[r + 1])
-                    {
-                        a.mS0 = 1e300;
-                        a.mS1 = -1e300;
-                        for (U32 k = region_start[r]; k < region_start[r + 1]; ++k)
-                        {
-                            const F64 sv = sOf(a, region_cells[k]);
-                            a.mS0 = std::min(a.mS0, sv);
-                            a.mS1 = std::max(a.mS1, sv);
-                        }
-                    }
-                }
-                return a;
-            };
 
             std::vector<F64>& values = s.mValues;
             std::vector<F64>& sv_of = s.mS;
@@ -648,7 +649,7 @@ namespace skworld
                     continue;
                 }
                 const U32* rc = region_cells.data() + region_start[r];
-                const U32 nc = region_start[r + 1] - region_start[r];
+                const U32 nc = rsize[r];
                 if (!nc)
                 {
                     continue;     // every cell taken by another region's completion
@@ -679,7 +680,7 @@ namespace skworld
                 {
                     if (trace)
                     {
-                        const Axis& ax = axisOf(r);
+                        const Axis& ax = axes[r];
                         FlightRegionTrace tr;
                         tr.mCells = nc;
                         tr.mUx = ax.mUx;
@@ -697,17 +698,6 @@ namespace skworld
                 for (U32 k = 0; k < nc; ++k)
                 {
                     sv_of[k] = static_cast<F64>(loc[k].mX) * ax.mUx + static_cast<F64>(loc[k].mY) * ax.mUy;
-                }
-                if (!ax.mExtent)
-                {
-                    ax.mExtent = true;
-                    ax.mS0 = 1e300;
-                    ax.mS1 = -1e300;
-                    for (U32 k = 0; k < nc; ++k)
-                    {
-                        ax.mS0 = std::min(ax.mS0, sv_of[k]);
-                        ax.mS1 = std::max(ax.mS1, sv_of[k]);
-                    }
                 }
                 const F64 ux = ax.mUx, uy = ax.mUy, px = -uy, py = ux, s0 = ax.mS0, s1 = ax.mS1;
                 F64 lmin = 1e300, lmax = -1e300, zb_sum = 0.0, zt_sum = 0.0;
@@ -777,9 +767,9 @@ namespace skworld
                         }
                         s.mSeen2.set(a);
                         const S32 ra = regionOf(a);
-                        if (ra >= 0 && (region_start[ra + 1] - region_start[ra]) * cell2 >= FLIGHT_MIN_AREA_M2)
+                        if (ra >= 0 && rsize[ra] * cell2 >= FLIGHT_MIN_AREA_M2)
                         {
-                            const Axis& oa = axisOf(ra);
+                            const Axis& oa = axes[ra];
                             if (oa.mOk)
                             {
                                 const F64 sa = sOf(oa, a);
