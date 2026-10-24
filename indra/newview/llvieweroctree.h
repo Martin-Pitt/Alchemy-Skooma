@@ -70,9 +70,6 @@ S32 AABBSphereIntersectR2(const LLVector4a& min, const LLVector4a& max, const LL
 S32 AABBSphereIntersect(const LLVector3& min, const LLVector3& max, const LLVector3 &origin, const F32 &rad);
 S32 AABBSphereIntersectR2(const LLVector3& min, const LLVector3& max, const LLVector3 &origin, const F32 &radius_squared);
 
-// <SK:Nexii> render/vertical-reach: AABBSphereIntersect against a sphere of radius rad squashed along z by 1/z_scale.
-S32 AABBEllipsoidIntersect(const LLVector4a& min, const LLVector4a& max, const LLVector3& origin, F32 rad, F32 z_scale);
-
 //defines data needed for octree of an entry
 class alignas(16) LLViewerOctreeEntry : public LLRefCount
 {
