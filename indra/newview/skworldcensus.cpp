@@ -673,14 +673,12 @@ void SKWorldCensus::visitTracked(LLViewerObject* object)
     const LLUUID id = object->getID();
     const size_t records = snap.mRecords.size();
     const size_t features = mScan.mFeatureParts.size();
-    // A full sweep checks what a re-take would have kept against what it finds.
-    std::vector<RecordPtr> kept;
+    // A full sweep checks what a re-take would have kept against what it finds; visit leaves mTaken as it was.
     bool watched = false;
     if (mScanFull && !mScanDirty.count(id))
     {
         if (const auto it = mParts.find(id); it != mParts.end() && retakes(id, it->second))
         {
-            kept = it->second.mTaken;
             watched = true;
         }
     }
@@ -697,6 +695,10 @@ void SKWorldCensus::visitTracked(LLViewerObject* object)
     const F64 now = gFrameTimeSeconds;
     const bool reached = cache.mLastSeen == now;
     cache.mVisitedScan = mScanSerial;
+    if (watched && !std::equal(cache.mTaken.begin(), cache.mTaken.end(), snap.mRecords.begin() + records, snap.mRecords.end()))
+    {
+        mScanMissed++;
+    }
     cache.mTaken.assign(snap.mRecords.begin() + records, snap.mRecords.end());
     cache.mHasFeature = mScan.mFeatureParts.size() > features;
     if (cache.mHasFeature)
@@ -716,10 +718,6 @@ void SKWorldCensus::visitTracked(LLViewerObject* object)
     {
         cache.mReachCenter = object->getRegion()->getOriginGlobal() + LLVector3d(object->getPositionRegion());
         cache.mReachPad = 0.5 * object->getScale().magVec();
-    }
-    if (watched && kept != cache.mTaken)
-    {
-        mScanMissed++;
     }
     if (reached && pending(object, cache))
     {
@@ -945,34 +943,37 @@ void SKWorldCensus::finishScan()
     }
     done->mStats.mFeatureMs = timer.getElapsedTimeF32() * 1000.f;
 
-    // Parts and roots not seen for a minute leave the caches, and a root's
-    // history ten minutes out of sight unless it is a vehicle or a working
-    // car; a seat is cheap to find again.
-    for (auto it = mHistory.begin(); it != mHistory.end();)
     {
-        const bool keep = it->second.mVehicle || it->second.mWorkingElevator
-            || gFrameTimeSeconds - it->second.mLastSeen <= HISTORY_KEEP_SECONDS;
-        it = keep ? std::next(it) : mHistory.erase(it);
-    }
-    for (auto it = mLeaves.begin(); it != mLeaves.end();)
-    {
-        it = (gFrameTimeSeconds - it->second.mLastSeen > HISTORY_KEEP_SECONDS) ? mLeaves.erase(it) : std::next(it);
-    }
-    for (auto it = mDoorways.begin(); it != mDoorways.end();)
-    {
-        it = mLeaves.count(it->first) ? std::next(it) : mDoorways.erase(it);
-    }
-    for (auto it = mParts.begin(); it != mParts.end();)
-    {
-        it = (gFrameTimeSeconds - it->second.mLastSeen > 60.f) ? mParts.erase(it) : std::next(it);
-    }
-    for (auto it = mUnknownSince.begin(); it != mUnknownSince.end();)
-    {
-        it = mParts.count(it->first) ? std::next(it) : mUnknownSince.erase(it);
-    }
-    for (auto it = mRest.begin(); it != mRest.end();)
-    {
-        it = (gFrameTimeSeconds - it->second.mLastSeen > 60.f) ? mRest.erase(it) : std::next(it);
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - finish prune");
+        // Parts and roots not seen for a minute leave the caches, and a root's
+        // history ten minutes out of sight unless it is a vehicle or a working
+        // car; a seat is cheap to find again.
+        for (auto it = mHistory.begin(); it != mHistory.end();)
+        {
+            const bool keep = it->second.mVehicle || it->second.mWorkingElevator
+                || gFrameTimeSeconds - it->second.mLastSeen <= HISTORY_KEEP_SECONDS;
+            it = keep ? std::next(it) : mHistory.erase(it);
+        }
+        for (auto it = mLeaves.begin(); it != mLeaves.end();)
+        {
+            it = (gFrameTimeSeconds - it->second.mLastSeen > HISTORY_KEEP_SECONDS) ? mLeaves.erase(it) : std::next(it);
+        }
+        for (auto it = mDoorways.begin(); it != mDoorways.end();)
+        {
+            it = mLeaves.count(it->first) ? std::next(it) : mDoorways.erase(it);
+        }
+        for (auto it = mParts.begin(); it != mParts.end();)
+        {
+            it = (gFrameTimeSeconds - it->second.mLastSeen > 60.f) ? mParts.erase(it) : std::next(it);
+        }
+        for (auto it = mUnknownSince.begin(); it != mUnknownSince.end();)
+        {
+            it = mParts.count(it->first) ? std::next(it) : mUnknownSince.erase(it);
+        }
+        for (auto it = mRest.begin(); it != mRest.end();)
+        {
+            it = (gFrameTimeSeconds - it->second.mLastSeen > 60.f) ? mRest.erase(it) : std::next(it);
+        }
     }
     if (!mClusterWorkers)
     {
@@ -1448,6 +1449,7 @@ void SKWorldCensus::take(SKCensusSnapshot& snap, const skworld::RecordPtr& rec)
 
 void SKWorldCensus::gatherCached()
 {
+    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - gather cached");
     static LLCachedControl<bool> use_cache(gSavedSettings, "SKCensusObjectCache", true);
     // A dirty scan takes its boxes from the caches with the rest.
     if (!mScanFull || !use_cache || !LLWorld::instanceExists())
@@ -2102,7 +2104,10 @@ void SKWorldCensus::renderClusters(const SKCensusSnapshot& snap, SKWorldOverlayG
     {
         mClusterLabelsAt = now;
     }
-    std::set<LLUUID> labelled;
+    // Per frame: scratch held between frames, the linksets counted only when a label is written.
+    thread_local std::vector<LLUUID> labelled;
+    thread_local std::vector<LLUUID> roots;
+    labelled.clear();
     for (const ClusterPtr& c : snap.mClusters.mClusters)
     {
         if (dist_vec_squared2D((c->mMin + c->mMax) * 0.5, camera) > reach * reach)
@@ -2121,13 +2126,11 @@ void SKWorldCensus::renderClusters(const SKCensusSnapshot& snap, SKWorldOverlayG
         // Its parts in its colour, fainter, so neighbouring structures read apart.
         LLColor4 part = color;
         part.mV[VALPHA] = selected ? 0.8f : 0.45f;
-        std::set<LLUUID> roots;
         for (const RecordPtr& r : c->mRecords)
         {
             geom.box(gAgent.getPosAgentFromGlobal(r->mMin), gAgent.getPosAgentFromGlobal(r->mMax), part);
-            roots.insert(r->mRoot.notNull() ? r->mRoot : r->mPart);
         }
-        labelled.insert(c->mId);
+        labelled.push_back(c->mId);
         LLPointer<LLHUDText>& label = mClusterLabels[c->mId];
         const bool fresh = label.isNull();
         if (fresh)
@@ -2138,6 +2141,13 @@ void SKWorldCensus::renderClusters(const SKCensusSnapshot& snap, SKWorldOverlayG
         }
         if (relabel || fresh)
         {
+            roots.clear();
+            for (const RecordPtr& r : c->mRecords)
+            {
+                roots.push_back(r->mRoot.notNull() ? r->mRoot : r->mPart);
+            }
+            std::sort(roots.begin(), roots.end());
+            roots.erase(std::unique(roots.begin(), roots.end()), roots.end());
             label->setPositionGlobal(LLVector3d((c->mMin.mdV[VX] + c->mMax.mdV[VX]) * 0.5, (c->mMin.mdV[VY] + c->mMax.mdV[VY]) * 0.5,
                                                 c->mMax.mdV[VZ] + 0.5));
             label->setColor(color);
@@ -2145,9 +2155,10 @@ void SKWorldCensus::renderClusters(const SKCensusSnapshot& snap, SKWorldOverlayG
                                       roots.size() == 1 ? "" : "s"));
         }
     }
+    std::sort(labelled.begin(), labelled.end());
     for (auto it = mClusterLabels.begin(); it != mClusterLabels.end();)
     {
-        if (!labelled.count(it->first))
+        if (!std::binary_search(labelled.begin(), labelled.end(), it->first))
         {
             it->second->markDead();
             it = mClusterLabels.erase(it);
