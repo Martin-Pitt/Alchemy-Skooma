@@ -83,7 +83,7 @@ model is Rye's: authored as Bruneton density profiles (already in EEP), rendered
 
 All design docs live in the **main checkout** `D:\viewers\alchemy-skooma\doc\skooma\` (gitignored
 `.atmo-*.md`; read by absolute path from any worktree). The world field / Recast navmesh (spec §7.7,
-`.worldfield-plan.md`) is now its own feature: see `NAVMESH.md` (being phased out for the census and air cells, `AIR.md`); Atmo's surface ledger and acoustics
+`.worldfield-plan.md`) is now its own feature: see `AIR.md` (the navmesh it began as is phased out, `.archive/NAVMESH.md`); Atmo's surface ledger and acoustics
 consume its floor sheet and wall faces when they are built. Predecessor: Soapstorm `D:\viewers\soapstorm`
 (lessons only, no code reuse; `ssatmoenvplanetarystate.*` maths and `SSAtmoLandscape`'s conversion state
 machine are the two things worth carrying).
