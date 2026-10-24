@@ -2073,7 +2073,8 @@ bool SKFloaterLocalChat::handleScrollWheel(S32 x, S32 y, LLScrollDelta delta)
     }
     mWheelGlide.addDelta(-SKScrollDistance::pixels(delta, line, (F32)view_h), delta.mIsPrecise, SKScrollDistance::now(), 0.f,
                          (F32)llmax(0, mContentHeight - view_h), SKScrollDistance::config());
-    glideWheel();
+    // A precise device or unsmoothed wheel moves the glide at once without animating it, so follow it here.
+    mScroll = llclamp(ll_round(mWheelGlide.tick(SKScrollDistance::now())), 0, llmax(0, barRange()));
     return true;
 }
 
