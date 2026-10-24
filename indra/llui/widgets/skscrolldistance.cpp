@@ -32,7 +32,7 @@
 SKScrollAnimator::Config SKScrollDistance::config()
 {
     static LLUICachedControl<bool> smooth("SkoomaScrollSmooth", true);
-    static LLUICachedControl<S32> mode("SkoomaScrollSmoothMode", 0);
+    static LLUICachedControl<S32> mode("SkoomaScrollSmoothMode", 1);
     static LLUICachedControl<F32> duration_scale("SkoomaScrollSmoothDurationScale", 1.f);
     static LLUICachedControl<F32> top_speed("SkoomaScrollWarpTopSpeed", 6000.f);
     static LLUICachedControl<F32> ramp("SkoomaScrollWarpRamp", 0.04f);
@@ -48,10 +48,10 @@ SKScrollAnimator::Config SKScrollDistance::config()
     return config;
 }
 
-F32 SKScrollDistance::lineFor(F32 content_line)
+bool SKScrollDistance::enabled()
 {
-    static LLUICachedControl<bool> real_lines("SkoomaScrollRealLines", false);
-    return real_lines && content_line > 0.f ? content_line : DEFAULT_LINE;
+    static LLUICachedControl<bool> enabled("SkoomaScroll", true);
+    return enabled;
 }
 
 F64 SKScrollDistance::now()

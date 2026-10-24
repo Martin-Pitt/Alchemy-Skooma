@@ -112,10 +112,6 @@ public:
     void            setDocPosVertical(S32 pos) { mScrollbar[VERTICAL]->setDocPos(pos); }
     S32             getDocPosHorizontal() const { return mScrollbar[HORIZONTAL]->getDocPos(); }
     void            setDocPosHorizontal(S32 pos) { mScrollbar[HORIZONTAL]->setDocPos(pos); }
-    // <SK:Nexii> smooth scroll
-    // How far a wheel line moves the content, for content with lines of its own.
-    void            setWheelLine(F32 line_pixels) { mScrollbar[VERTICAL]->setWheelContentLine(line_pixels); }
-    // </SK:Nexii>
     // What is scrolled, for a caller working out where a point of it is.
     LLView*         getScrolledView() const { return mScrolledView; }
     S32             getBorderWidth() const;

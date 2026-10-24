@@ -1445,6 +1445,8 @@ private:
     U32          mAnchorHeights = 0;
     bool         mAnchorAtTop   = true;
     bool         mScrollAsked   = true;
+    // What a wheel moved that did not make a whole pixel yet.
+    F32          mWheelRemainder = 0.f;
     // <SK:Nexii> smooth scroll
     // Where the wheel's glide is, ahead of the whole pixels mScrollY has taken from it.
     SKScrollAnimator mWheelGlide;

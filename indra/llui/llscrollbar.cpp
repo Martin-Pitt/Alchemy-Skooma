@@ -451,6 +451,36 @@ bool LLScrollbar::handleHover(S32 x, S32 y, MASK mask)
 // Parked at the end it is scrolling toward, the gesture goes on to a parent scroller, as it always did.
 bool LLScrollbar::scrollByWheel(const LLScrollDelta& delta)
 {
+    if (!SKScrollDistance::enabled())
+    {
+        // Upstream: whole lines from the precise delta, the residue carried, the gesture handed on only at the end.
+        mScrollWheelResidue += delta.mPrecise * (F32)mStepSize;
+        S32 lines = lltrunc(mScrollWheelResidue);
+        mScrollWheelResidue -= (F32)lines;
+        if (changeLine(lines, true))
+        {
+            return true;
+        }
+        if (delta.mPrecise > 0.f)
+        {
+            if (mDocPos < getDocPosMax())
+            {
+                return true;
+            }
+            mScrollWheelResidue = 0.f;
+            return false;
+        }
+        if (delta.mPrecise < 0.f)
+        {
+            if (mDocPos > 0)
+            {
+                return true;
+            }
+            mScrollWheelResidue = 0.f;
+            return false;
+        }
+        return false;
+    }
     const F32 max = (F32)getDocPosMax();
     if (!mWheelAnimator.isAnimating() && llround(mWheelAnimator.position()) != mDocPos)
     {
@@ -466,8 +496,7 @@ bool LLScrollbar::scrollByWheel(const LLScrollDelta& delta)
     }
     else
     {
-        const F32 line = mWheelContentLine > 0.f ? SKScrollDistance::lineFor(mWheelContentLine) : mWheelLine;
-        units = SKScrollDistance::pixels(delta, line, (F32)mPageSize * mWheelUnit) / mWheelUnit;
+        units = SKScrollDistance::pixels(delta, mWheelLine, (F32)mPageSize * mWheelUnit) / mWheelUnit;
     }
     if (units == 0.f || (units > 0.f && target >= max) || (units < 0.f && target <= 0.f))
     {
@@ -484,13 +513,15 @@ void LLScrollbar::setWheelUnits(F32 unit_pixels, F32 line_pixels)
     mWheelLine = llmax(line_pixels, 1.f);
 }
 
-void LLScrollbar::setWheelContentLine(F32 line_pixels)
-{
-    mWheelContentLine = llmax(line_pixels, 0.f);
-}
-
 void LLScrollbar::tickWheel()
 {
+    if (!SKScrollDistance::enabled())
+    {
+        // Switched off mid-glide: stop where the position is.
+        mWheelAnimator.jumpTo((F32)mDocPos);
+        mDocPosF = (F32)mDocPos;
+        return;
+    }
     if (!mWheelAnimator.isAnimating() && mDocPosF == mWheelAnimator.position())
     {
         return;

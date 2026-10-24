@@ -64,7 +64,8 @@ namespace
     // and the shade over a tab cut off at either edge.
     constexpr S32 LIST_W = 20;
     constexpr S32 SHADE = 12;
-    // <SK:Nexii> smooth scroll: a notch is the OS's lines now (SKScrollDistance), not 40 pixels
+    // Pixels a wheel's notch moves the tabs.
+    constexpr F32 WHEEL_PIXELS = 40.f; // <SK:Nexii> smooth scroll: used only with SkoomaScroll off
 
     // A rect shaded across, from one colour at its left to another at its
     // right.
@@ -812,6 +813,17 @@ bool ALTabStrip::handleScrollWheel(S32 x, S32 y, LLScrollDelta delta)
         return LLUICtrl::handleScrollWheel(x, y, delta);
     }
     // <SK:Nexii> smooth scroll
+    if (!SKScrollDistance::enabled())
+    {
+        // Along the tabs, by the wheel's own fractions where it has them.
+        mScrollRemainder += delta.mPrecise * WHEEL_PIXELS;
+        const S32 pixels = static_cast<S32>(mScrollRemainder);
+        mScrollRemainder -= static_cast<F32>(pixels);
+        mScroll += pixels;
+        clampScroll();
+        mHover = at(x, y);
+        return true;
+    }
     // Along the tabs by the OS's lines, Chrome's line each, gliding there; a trackpad's own points at once.
     if (ll_round(mWheelGlide.position()) != mScroll)
     {
@@ -830,6 +842,11 @@ bool ALTabStrip::handleScrollWheel(S32 x, S32 y, LLScrollDelta delta)
 // <SK:Nexii> smooth scroll
 void ALTabStrip::glideWheel()
 {
+    if (!SKScrollDistance::enabled())
+    {
+        mWheelGlide.jumpTo(static_cast<F32>(mScroll));
+        return;
+    }
     const S32 was = ll_round(mWheelGlide.position());
     if (mWheelGlide.isAnimating() && was != mScroll)
     {
