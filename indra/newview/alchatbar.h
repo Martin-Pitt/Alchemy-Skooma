@@ -95,7 +95,7 @@ public:
     static bool shouldUseChatBar();
 
     // <SK:Nexii> Modern local chat sends, types and labels through the chat bar's own code.
-    static void sendChatText(LLChatEntry* editor, EChatType type, bool mu_pose = true); // <SK:Nexii> Modern local chat: mu_pose
+    static void sendChatText(LLChatEntry* editor, EChatType type);
     static void handleInputKeystroke(LLChatEntry* editor, const std::function<void()>& submit);
     static void applyChannelLabel(LLChatEntry* editor, S32 channel);
     // </SK:Nexii>
