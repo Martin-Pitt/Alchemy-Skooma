@@ -27,6 +27,7 @@
 #include "aldraggesture.h"
 #include "lluictrl.h"
 #include "lluiimage.h"
+#include "skscrollanimator.h" // <SK:Nexii> smooth scroll
 
 class LLFontGL;
 
@@ -264,10 +265,13 @@ private:
     order_signal_t      mReorderedSignal;
     list_signal_t       mListSignal;
     torn_signal_t       mTornSignal;
-    // How far along the tabs the strip is scrolled, in pixels; a wheel's
-    // fractions kept until they make a pixel.
+    // How far along the tabs the strip is scrolled, in pixels.
     S32                 mScroll = 0;
-    F32                 mScrollRemainder = 0.f;
+    // <SK:Nexii> smooth scroll
+    // Where the wheel's glide is, ahead of the whole pixels mScroll has taken from it.
+    SKScrollAnimator    mWheelGlide;
+    void                glideWheel();
+    // </SK:Nexii>
     // A tab whose way out was pressed: it goes if the press is let go of
     // over it, and not if the mouse slid off first.
     //

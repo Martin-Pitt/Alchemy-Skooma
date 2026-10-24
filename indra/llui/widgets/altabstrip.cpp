@@ -27,6 +27,7 @@
 #include "altabstrip.h"
 
 #include "alsurface.h"
+#include "skscrolldistance.h" // <SK:Nexii> smooth scroll
 #include "llfocusmgr.h"
 
 #include "alsaid.h"
@@ -63,8 +64,7 @@ namespace
     // and the shade over a tab cut off at either edge.
     constexpr S32 LIST_W = 20;
     constexpr S32 SHADE = 12;
-    // Pixels a wheel's notch moves the tabs.
-    constexpr F32 WHEEL_PIXELS = 40.f;
+    // <SK:Nexii> smooth scroll: a notch is the OS's lines now (SKScrollDistance), not 40 pixels
 
     // A rect shaded across, from one colour at its left to another at its
     // right.
@@ -558,6 +558,7 @@ void ALTabStrip::reshape(S32 width, S32 height, bool called_from_parent)
 
 void ALTabStrip::draw()
 {
+    glideWheel(); // <SK:Nexii> smooth scroll
     static const LLUIColor shown = LLUIColorTable::instance().getColor("PanelDefaultBackgroundColor", LLColor4::grey4);
     static const LLUIColor rest = LLUIColorTable::instance().getColor("StudioTabColor", LLColor4::grey3);
     const LLUIColor& edge = ALSurface::well();
@@ -810,15 +811,40 @@ bool ALTabStrip::handleScrollWheel(S32 x, S32 y, LLScrollDelta delta)
     {
         return LLUICtrl::handleScrollWheel(x, y, delta);
     }
-    // Along the tabs, by the wheel's own fractions where it has them.
-    mScrollRemainder += delta.mPrecise * WHEEL_PIXELS;
-    const S32 pixels = static_cast<S32>(mScrollRemainder);
-    mScrollRemainder -= static_cast<F32>(pixels);
-    mScroll += pixels;
-    clampScroll();
+    // <SK:Nexii> smooth scroll
+    // Along the tabs by the OS's lines, Chrome's line each, gliding there; a trackpad's own points at once.
+    if (ll_round(mWheelGlide.position()) != mScroll)
+    {
+        mWheelGlide.jumpTo(static_cast<F32>(mScroll));
+    }
+    const F32 shown = static_cast<F32>(shownWidth());
+    const F32 most = static_cast<F32>(llmax(0, contentWidth() - shownWidth()));
+    mWheelGlide.addDelta(SKScrollDistance::pixels(delta, SKScrollDistance::DEFAULT_LINE, shown), delta.mIsPrecise,
+                         SKScrollDistance::now(), 0.f, most, SKScrollDistance::config());
+    glideWheel();
+    // </SK:Nexii>
     mHover = at(x, y);
     return true;
 }
+
+// <SK:Nexii> smooth scroll
+void ALTabStrip::glideWheel()
+{
+    const S32 was = ll_round(mWheelGlide.position());
+    if (mWheelGlide.isAnimating() && was != mScroll)
+    {
+        // Something else scrolled the tabs: the glide gives way.
+        mWheelGlide.jumpTo(static_cast<F32>(mScroll));
+        return;
+    }
+    const S32 now = ll_round(mWheelGlide.tick(SKScrollDistance::now()));
+    if (now != mScroll)
+    {
+        mScroll = now;
+        clampScroll();
+    }
+}
+// </SK:Nexii>
 
 bool ALTabStrip::handleScrollHWheel(S32 x, S32 y, LLScrollDelta delta)
 {

@@ -34,6 +34,7 @@
 #include "allinebreaks.h"
 #include "alsurface.h"
 #include "alviewtype.h"
+#include "skscrolldistance.h" // <SK:Nexii> smooth scroll
 #include "llclipboard.h"
 #include "lldir.h"
 #include "llfocusmgr.h"
@@ -65,7 +66,7 @@ namespace
     const F32 TRIPLE_CLICK_INTERVAL = 0.3f;
     // How far apart two clicks may land and still be one run of clicks.
     const S32 CLICK_SLOP = 4;
-    const S32 WHEEL_ROWS            = 3;
+    // <SK:Nexii> smooth scroll: a notch is the OS's lines now (SKScrollDistance), not three rows
     // Room past the widest line before a horizontal scrollbar is needed,
     // and what the caret keeps between itself and an edge.
     // The bars: the bottom thumb's height, how long the bars stay in
@@ -5618,6 +5619,7 @@ void ALTextView::pump()
 void ALTextView::draw()
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_UI;
+    glideWheel(); // <SK:Nexii> smooth scroll
     pump();
     const F32 alpha = getDrawContext().mAlpha;
     if (mBgVisible)
@@ -6312,15 +6314,47 @@ bool ALTextView::handleScrollWheel(S32 x, S32 y, LLScrollDelta delta)
     {
         return handleScrollHWheel(x, y, delta);
     }
-    // By the wheel's own fractions -- a trackpad's glide, a fine wheel's
-    // steps -- three rows to a notch, what is less than a pixel kept for
-    // the next.
-    const F32 pixels = delta.mPrecise * static_cast<F32>(WHEEL_ROWS * mLayout.rowHeight()) + mWheelRemainder;
-    const S32 whole  = static_cast<S32>(pixels);
-    mWheelRemainder  = pixels - static_cast<F32>(whole);
-    setScrollY(mScrollY + whole);
+    // <SK:Nexii> smooth scroll
+    // The OS's lines to a notch, a row a line, gliding there; a trackpad's own points at once. The glide keeps what
+    // is less than a pixel for the next.
+    const S32 page = llmax(1, textRect().getHeight());
+    const F32 pixels = SKScrollDistance::pixels(delta, static_cast<F32>(mLayout.rowHeight()), static_cast<F32>(page));
+    if (ll_round(mWheelGlide.position()) != mScrollY)
+    {
+        mWheelGlide.jumpTo(static_cast<F32>(mScrollY));
+    }
+    const F32 most = static_cast<F32>(llmax(0, mLayout.totalHeight() - page));
+    mWheelGlide.addDelta(pixels, delta.mIsPrecise, SKScrollDistance::now(), 0.f, most, SKScrollDistance::config());
+    glideWheel();
     return true;
+    // </SK:Nexii>
 }
+
+// <SK:Nexii> smooth scroll
+void ALTextView::glideWheel()
+{
+    if (!mWheelGlide.isAnimating())
+    {
+        if (ll_round(mWheelGlide.position()) != mScrollY)
+        {
+            setScrollY(ll_round(mWheelGlide.position()));
+        }
+        return;
+    }
+    const S32 was = ll_round(mWheelGlide.position());
+    if (was != mScrollY)
+    {
+        // Something else scrolled the view: the glide gives way.
+        mWheelGlide.jumpTo(static_cast<F32>(mScrollY));
+        return;
+    }
+    const S32 now = ll_round(mWheelGlide.tick(SKScrollDistance::now()));
+    if (now != mScrollY)
+    {
+        setScrollY(now);
+    }
+}
+// </SK:Nexii>
 
 bool ALTextView::handleScrollHWheel(S32 x, S32 y, LLScrollDelta delta)
 {
@@ -6328,7 +6362,8 @@ bool ALTextView::handleScrollHWheel(S32 x, S32 y, LLScrollDelta delta)
     {
         return false;
     }
-    setScrollX(mScrollX + delta.mPrecise * static_cast<F32>(WHEEL_ROWS * mLayout.rowHeight()));
+    // <SK:Nexii> smooth scroll: the OS's characters to a notch, a row's height each, or a trackpad's points
+    setScrollX(mScrollX + SKScrollDistance::pixels(delta, static_cast<F32>(mLayout.rowHeight()), static_cast<F32>(textRect().getWidth())));
     return true;
 }
 
