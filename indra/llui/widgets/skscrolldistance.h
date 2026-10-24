@@ -48,6 +48,9 @@ namespace SKScrollDistance
         return delta.lines() * line;
     }
 
+    // The line a wheel moves content whose own line is content_line: Chrome's, unless the real lines are asked for.
+    F32 lineFor(F32 content_line);
+
     // The smooth scroll's settings, as the viewer has them now.
     SKScrollAnimator::Config config();
     // The clock the animators run on, in seconds.
