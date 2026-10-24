@@ -836,7 +836,11 @@ void SKFloaterLocalChat::layoutBar()
     {
         return;
     }
-    mScrollbar->setShape(LLRect(getRect().getWidth() - BAR_STRIP, content.mTop, getRect().getWidth(), content.mBottom));
+    // Below the title buttons' row, which the cog shares, so the two never overlap.
+    static LLUICachedControl<S32> close_box_size("UIFloaterCloseBoxSize", 0);
+    static LLUICachedControl<S32> close_box_from_top("UICloseBoxFromTop", 0);
+    const S32 top = llmin(content.mTop, getRect().getHeight() - close_box_from_top - close_box_size - 2);
+    mScrollbar->setShape(LLRect(getRect().getWidth() - BAR_STRIP, top, getRect().getWidth(), content.mBottom));
     mBarSyncing = true;
     mScrollbar->setDocSize(mContentHeight);
     mScrollbar->setPageSize(content.getHeight());
