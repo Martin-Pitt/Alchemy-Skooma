@@ -247,28 +247,6 @@ Ported onto `ALFarPlane` by the Atmo trunk. A far-flagged object is drawn past t
 
 ---
 
-## Render — vertical reach
-
-Branch `feature-render/vertical-reach`, which replaced `feature-render/vertical-draw-ratio` on 2026-10-10, re-cut onto `ALFarPlane`. Scenery can be drawn to a shorter reach above and below the camera than across. The horizontal radius is the draw distance (`mFrustumCornerDist`).
-
-### Injection sites
-
-| File | What | Why there |
-|---|---|---|
-| `indra/newview/llvieweroctree.h` / `.cpp` | `AABBEllipsoidIntersect`: the sphere squashed along z | Shared by group and object extents tests |
-| `indra/newview/llspatialpartition.h` / `.cpp` | `verticalReach()`; `LLOctreeCull::setVerticalReach`, group and object cull held to it; also passed to `LLOctreeCullFar` | The partition cull tests |
-| `indra/newview/lldrawable.cpp` | Scenery bridges held to the vertical reach; `gCubeSnapshot` extern | Bridges cull separately from the octree |
-| `indra/newview/llviewercamera.h` | `mVerticalReach` with get/set | Per-view camera state |
-| `indra/newview/llviewerdisplay.cpp` | Vertical reach from the clamped draw distance × `SKRenderVerticalDrawRatio`, floored at `SKRenderVerticalDrawMin`; 0 in cube snapshots | Camera setup |
-| `skins/default/xui/en/panel_preferences_graphics1.xml`, `panel_quick_settings.xml`, `panel_presets_pulldown.xml` | `SKRenderVerticalDrawRatio` slider / spinner, XML comment markers | Beside the draw distance controls |
-
-### Unmarked additions
-
-- `indra/newview/app_settings/settings_alchemy.xml` — `SKRenderVerticalDrawRatio`, `SKRenderVerticalDrawMin`
-- `panel_quick_settings_pulldown.xml` — height change for the new row
-
----
-
 ## Sky — layers
 
 Branch `feature-sky/layers`. The deferred sky pool draws the sky as an ordered sequence of named layers; meteors are their own object.
