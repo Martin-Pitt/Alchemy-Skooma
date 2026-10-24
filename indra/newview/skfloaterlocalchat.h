@@ -109,6 +109,7 @@ private:
         SKChatEmbedPtr mEmbed; // the preview of the first link that has one
         S32 mEmbedWidth = 0;   // measured at layout
         S32 mDay = 0;          // yyyymmdd in the timestamps' time base, 0 when unknown
+        bool mHistory = false; // loaded from the chat log rather than heard this session
         std::string mDayLabel; // the day divider above it, made at layout when needed
         S32 mDayWidth = 0;     // measured at layout
     };
@@ -141,7 +142,8 @@ private:
     static constexpr S32 DIVIDER_ROW = -2;
 
     void backfill(bool skip_last);
-    void appendChat(const LLChat& chat, const LLSD& args, F64 arrival);
+    /// day is the message's yyyymmdd when the caller knows it better than its timestamp does, else 0.
+    void appendChat(const LLChat& chat, const LLSD& args, F64 arrival, S32 day = 0);
     void showInput(bool show);
     void sendChat(EChatType type);
     void invalidateLayout() { mLayoutDirty = true; }

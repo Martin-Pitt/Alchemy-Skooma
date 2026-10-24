@@ -375,14 +375,43 @@ void SKFloaterLocalChat::backfill(bool skip_last)
     {
         --count;
     }
+
+    // The archive's history lines carry the log's time as shown, which drops today's date and may never have had one;
+    // the log's own datetime keeps whatever date it was written with, so take the days from there.
+    std::vector<S32> days(count, 0);
+    size_t history_end = 0;
+    while (history_end < count && archive[history_end].mChatStyle == CHAT_STYLE_HISTORY)
+    {
+        ++history_end;
+    }
+    if (history_end > 0)
+    {
+        std::list<LLSD> log;
+        LLLogChat::loadChatHistory("chat", log);
+        // Both end with the last line loaded; walk back matching by text, as the archive may hold only the latest.
+        auto it = log.rbegin();
+        for (size_t i = history_end; i-- > 0 && it != log.rend();)
+        {
+            while (it != log.rend() && (*it)[LL_IM_TEXT].asString() != archive[i].mText)
+            {
+                ++it;
+            }
+            if (it != log.rend())
+            {
+                days[i] = day_key((*it)[LL_IM_DATE_TIME].asString());
+                ++it;
+            }
+        }
+    }
+
     for (size_t i = count > MAX_MESSAGES ? count - MAX_MESSAGES : 0; i < count; ++i)
     {
         // Arrival 0 leaves history faded until the chat is opened.
-        appendChat(archive[i], LLSD(), 0.0);
+        appendChat(archive[i], LLSD(), 0.0, days[i]);
     }
 }
 
-void SKFloaterLocalChat::appendChat(const LLChat& chat, const LLSD& args, F64 arrival)
+void SKFloaterLocalChat::appendChat(const LLChat& chat, const LLSD& args, F64 arrival, S32 day)
 {
     if (chat.mText.empty())
     {
@@ -395,8 +424,17 @@ void SKFloaterLocalChat::appendChat(const LLChat& chat, const LLSD& args, F64 ar
     msg.mArrival = arrival;
     static LLCachedControl<bool> show_seconds(gSavedSettings, "AlchemyIMShowSeconds", false);
     msg.mTime = ALChatTimestamp::format(chat.mTimeStr.empty() ? LLLogChat::timestamp2LogString(0, false, true) : chat.mTimeStr, show_seconds);
-    // The day in the timestamps' own time base; history logged without dates has none.
-    msg.mDay = day_key(chat.mTimeStr.empty() ? LLLogChat::timestamp2LogString(0, true, false) : chat.mTimeStr);
+    // The day in the timestamps' own time base; a line that truly has none takes the last known day.
+    msg.mHistory = chat.mChatStyle == CHAT_STYLE_HISTORY;
+    msg.mDay = day != 0 ? day : day_key(chat.mTimeStr);
+    if (msg.mDay == 0 && !msg.mHistory)
+    {
+        msg.mDay = day_key(LLLogChat::timestamp2LogString(0, true, false)); // heard now, so today
+    }
+    if (msg.mDay == 0 && !mMessages.empty())
+    {
+        msg.mDay = mMessages.back().mDay;
+    }
 
     LLUIColor text_color = LLUIColorTable::instance().getColor("White");
     F32 alpha = 1.f;
@@ -895,7 +933,8 @@ void SKFloaterLocalChat::layout()
         msg.mNameWidth = bold_width(name_font(), msg.mName);
         msg.mTimeWidth = msg.mName.empty() || msg.mTime.empty() ? 0 : time_font()->getWidth(msg.mTime) + (cards ? TIME_GAP : LEAD_TIME_GAP);
         // Cards gather one speaker's run of messages; a minimal line stands alone.
-        const bool new_day = m > 0 && msg.mDay != 0 && mMessages[m - 1].mDay != 0 && msg.mDay != mMessages[m - 1].mDay;
+        // A new day, or the step from the log's history to what was heard this session.
+        const bool new_day = m > 0 && msg.mDay != 0 && ((mMessages[m - 1].mDay != 0 && msg.mDay != mMessages[m - 1].mDay) || (mMessages[m - 1].mHistory && !msg.mHistory));
         bool join = false;
         if (cards && !new_day && !mCards.empty() && !msg.mName.empty())
         {
