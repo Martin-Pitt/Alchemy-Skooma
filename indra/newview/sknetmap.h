@@ -1,6 +1,6 @@
 /**
  * @file sknetmap.h
- * @brief The mini-map widget: view state, input and the draw, over the navmesh floorplan.
+ * @brief The mini-map widget: view state, input and the draw, over the census floorplan.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Alchemy Viewer Source Code

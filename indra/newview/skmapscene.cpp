@@ -1,6 +1,6 @@
 /**
  * @file skmapscene.cpp
- * @brief The mini-map's hold on the navmesh: its demand while a map draws.
+ * @brief The mini-map's hold on the census and air cells: their demand while a map draws.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Alchemy Viewer Source Code

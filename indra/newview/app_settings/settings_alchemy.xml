@@ -6256,11 +6256,11 @@
             <key>Value</key>
             <integer>0</integer>
         </map>
-        <!-- <SK:Nexii> Mini-map recorder: why the map and the navmesh under it update -->
+        <!-- <SK:Nexii> Mini-map recorder: why the map and the census and air under it update -->
         <key>SKMapRecord</key>
         <map>
             <key>Comment</key>
-            <string>Record why the mini-map and the navmesh update to a JSON lines file while on.</string>
+            <string>Record why the mini-map and the census and air update to a JSON lines file while on.</string>
             <key>Persist</key>
             <integer>0</integer>
             <key>Type</key>
@@ -6385,7 +6385,7 @@
         <key>SKOverviewCutHeight</key>
         <map>
             <key>Comment</key>
-            <string>Metres above the navmesh floor under the agent (or above the agent where there is no mesh) where the overview cuts the world, so ceilings and roofs above do not hide the floor.</string>
+            <string>Metres above the air cells' floor under the agent (or above the agent's feet where they have none) where the overview cuts the world, so ceilings and roofs above do not hide the floor.</string>
             <key>Persist</key>
             <integer>1</integer>
             <key>Type</key>
@@ -6775,7 +6775,7 @@
         <key>SKMapLayerFloorplan</key>
         <map>
             <key>Comment</key>
-            <string>Draw the navmesh floorplan on the mini-map.</string>
+            <string>Draw the census floorplan on the mini-map.</string>
             <key>Persist</key>
             <integer>1</integer>
             <key>Type</key>
@@ -7247,15 +7247,7 @@
         </map>
         <!-- <SK:Nexii> SKNetMap mini-map section cut -->
         <!-- </SK:Nexii> -->
-        <!-- <SK:Nexii> Navmesh tile stages: one budget for the air and the held rasters -->
-        <!-- </SK:Nexii> -->
-        <!-- <SK:Nexii> Navmesh air residency: settled air on disk, whole-cluster detail -->
-        <!-- </SK:Nexii> -->
-        <!-- <SK:Nexii> Navmesh solid raster: its faces, ledges and run-off -->
-        <!-- </SK:Nexii> -->
-        <!-- <SK:Nexii> Navmesh air overlay -->
-        <!-- </SK:Nexii> -->
-        <!-- <SK:Nexii> Navmesh features overlay -->
+        <!-- <SK:Nexii> Rooms pass reflection probes -->
         <key>SKRoomProbes</key>
         <map>
             <key>Comment</key>
@@ -7322,8 +7314,6 @@
             <key>Value</key>
             <real>0.65</real>
         </map>
-        <!-- </SK:Nexii> -->
-        <!-- <SK:Nexii> Navmesh wind -->
         <!-- </SK:Nexii> -->
         <key>ShowAdvancedHoverTips</key>
         <map>

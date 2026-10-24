@@ -1,6 +1,6 @@
 /**
  * @file skmaprecorder.cpp
- * @brief Records why the mini-map and the navmesh under it update, frame by frame, to a JSON lines file.
+ * @brief Records why the mini-map and the census and air under it update, frame by frame, to a JSON lines file.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Alchemy Viewer Source Code

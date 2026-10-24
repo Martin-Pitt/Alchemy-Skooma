@@ -60,7 +60,7 @@ namespace skmapdraw
 class SKPopupPanes;
 
 // Renders terrain and the census's shapes below a cut plane at the
-// navmesh floor under the agent plus SKOverviewCutHeight, each writing a class code, then resolves depth and codes
+// air cells' floor under the agent plus SKOverviewCutHeight, each writing a class code, then resolves depth and codes
 // into an RGBA8 map. Two kinds of shot share the passes: straight-down maps of every connected region for the mini-map
 // (while a map draws them; the agent's region cut, every SKOverviewRefresh seconds, its neighbours uncut and less often,
 // regions further off rarer still) and the tactical view (SKTacticalOverview), a modal view drawn from the viewer's
@@ -165,7 +165,7 @@ private:
     void updateDemand(bool wanted);
     /// Caps Lock is taken from the OS while the tactical action is bound to it and the world has the keyboard.
     static void updateCapsLockCapture();
-    /// The floor under the agent from the navmesh and the cut above it, or the agent's height and the old offset.
+    /// The floor under the agent from the air cells and the cut above it, or the agent's height and the old offset.
     void cutHeights(const LLVector3d& at, F32 fallback_z, F32& floor_z, F32& cut_z) const;
     /// What the tactical orbit centres on: the avatar, the alt-cam focus target, or the surface under a flycam.
     void tacticalCentre(LLVector3d& centre) const;
