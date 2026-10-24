@@ -230,8 +230,6 @@ public:
     void            setObjectTracking(bool track)   { mTrackFocusObject = track; }
     const LLVector3d &getFocusGlobal() const        { return mFocusGlobal; }
     // <SK:Nexii> camera follow
-    // The focus target before the follower's smoothing, for the motion recorder.
-    LLVector3d      getSKFollowRawFocusGlobal() const { return mSKFollowActive ? mSKFollowRaw : mFocusGlobal; }
     void            resetSKFollow()                  { mSKFollowValid = false; mSKFollowActive = false; }
     // </SK:Nexii>
     const LLVector3d &getFocusTargetGlobal() const  { return mFocusTargetGlobal; }
@@ -249,7 +247,6 @@ private:
     // <SK:Nexii> camera follow
     LLVector3d      smoothSKFollow(const LLVector3d& raw);
     LLVector3d      mSKFollowPos;
-    LLVector3d      mSKFollowRaw;                   // Unsmoothed object position plus offset
     F64             mSKFollowSecs = 0.0;
     LLUUID          mSKFollowObjectId;
     bool            mSKFollowValid = false;
