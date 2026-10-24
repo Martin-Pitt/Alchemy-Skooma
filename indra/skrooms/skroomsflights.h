@@ -119,7 +119,7 @@ namespace skworld
     struct FlightStats
     {
         U32 mCells = 0;             ///< floor cells read
-        U32 mFitted = 0;            ///< of those, object floor near a step, fitted
+        U32 mFitted = 0;            ///< of those, object floor whose link walks rise, fitted
         U32 mCandidates = 0;        ///< of those, sloped
         U32 mRegions = 0;           ///< grown regions
         U32 mFlights = 0;           ///< kept
