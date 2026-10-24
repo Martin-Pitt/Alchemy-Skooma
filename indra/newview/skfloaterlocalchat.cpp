@@ -435,6 +435,12 @@ void SKFloaterLocalChat::appendChat(const LLChat& chat, const LLSD& args, F64 ar
     {
         msg.mNameColor = irc_name;
     }
+    if (msg.mHistory)
+    {
+        // As the conversation log: lines from an earlier session are greyed out.
+        msg.mTextColor.setVec(LLColor4::grey.mV[VRED], LLColor4::grey.mV[VGREEN], LLColor4::grey.mV[VBLUE], msg.mTextColor.mV[VALPHA]);
+        msg.mNameColor = LLColor4::grey;
+    }
 
     const bool named = !chat.mFromName.empty() && chat.mSourceType != CHAT_SOURCE_SYSTEM;
     if (named && !chat.mRlvNamesFiltered)
