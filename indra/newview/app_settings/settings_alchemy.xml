@@ -5563,17 +5563,6 @@
             <key>Value</key>
             <integer>1</integer>
         </map>
-        <key>SkoomaLocalChatMUPose</key>
-        <map>
-            <key>Comment</key>
-            <string>In the game-style local chat, send a message starting with a colon and a letter as a /me pose (MU* style). Off sends it as typed.</string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>Boolean</string>
-            <key>Value</key>
-            <integer>0</integer>
-        </map>
         <key>SkoomaLocalChatStyle</key>
         <map>
             <key>Comment</key>
