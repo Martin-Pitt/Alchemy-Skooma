@@ -31,6 +31,8 @@
 #include "llchatentry.h"
 #include "llemojihelper.h"
 #include "skemojicomplete.h"
+#include "skscrollanimator.h"
+#include "skscrolldistance.h"
 #include "lldbstrings.h"
 #include "lldraghandle.h"
 #include "llfloaterreg.h"
@@ -550,7 +552,7 @@ void SKFloaterLocalChat::appendChat(const LLChat& chat, const LLSD& args, F64 ar
         ++mCollapsedUnread;
         layoutCollapsed();
     }
-    if (mScroll > 0)
+    if (scrolledUp())
     {
         ++mUnseen;
     }
@@ -1134,7 +1136,7 @@ void SKFloaterLocalChat::layout()
     // While scrolled up, what arrived grows the content below the view; scroll by as much so the view holds still.
     const S32 first_new = (S32)mMessages.size() - mPendingMessages;
     mPendingMessages = 0;
-    if (mScroll > 0 && first_new > 0)
+    if (scrolledUp() && first_new > 0)
     {
         for (S32 r = 1; r < (S32)mRows.size(); ++r)
         {
@@ -1143,6 +1145,7 @@ void SKFloaterLocalChat::layout()
             if (msg >= first_new)
             {
                 mScroll += mRows[r - 1].mBottom;
+                mWheelGlide.jumpTo((F32)mScroll);
                 break;
             }
         }
@@ -1569,6 +1572,7 @@ void SKFloaterLocalChat::draw()
     const bool full = expanded();
     const LLRect content = contentRect();
     const S32 view_height = content.getHeight();
+    glideWheel();
     mScroll = llclamp(mScroll, 0, llmax(0, mContentHeight - view_height));
     const F64 now = LLFrameTimer::getTotalSeconds();
     if (mWasExpanded && !full)
@@ -1619,7 +1623,7 @@ void SKFloaterLocalChat::draw()
     }
 
     // Jump to present: once scrolled up by more than a view, or from any distance once something new arrived.
-    if (mScroll == 0)
+    if (!scrolledUp())
     {
         mUnseen = 0;
     }
@@ -2103,16 +2107,41 @@ bool SKFloaterLocalChat::handleHover(S32 x, S32 y, MASK mask)
 
 bool SKFloaterLocalChat::handleScrollWheel(S32 x, S32 y, LLScrollDelta delta)
 {
-    const S32 clicks = delta.mClicks;
     // LLFloater::handleScrollWheel always claims the wheel, so only a child that scrolls may take it first.
     if (childrenHandleScrollWheel(x, y, delta))
     {
         return true;
     }
-    // Wheel up reads back through history.
-    mScroll -= clicks * LLViewerChat::getChatFont()->getLineHeight() * 3;
-    mScroll = llclamp(mScroll, 0, llmax(0, mContentHeight - contentRect().getHeight()));
+    // Wheel up reads back through history, gliding there as the platform scrolls.
+    const S32 view_h = contentRect().getHeight();
+    const F32 line = (F32)LLViewerChat::getChatFont()->getLineHeight();
+    if (ll_round(mWheelGlide.position()) != mScroll)
+    {
+        mWheelGlide.jumpTo((F32)mScroll);
+    }
+    mWheelGlide.addDelta(-SKScrollDistance::pixels(delta, line, (F32)view_h), delta.mIsPrecise, SKScrollDistance::now(), 0.f,
+                         (F32)llmax(0, mContentHeight - view_h), SKScrollDistance::config());
+    glideWheel();
     return true;
+}
+
+void SKFloaterLocalChat::glideWheel()
+{
+    if (ll_round(mWheelGlide.position()) != mScroll)
+    {
+        // Something else scrolled the chat (arrivals, the bar, jump to present): the glide gives way.
+        mWheelGlide.jumpTo((F32)mScroll);
+        return;
+    }
+    if (mWheelGlide.isAnimating())
+    {
+        mScroll = llclamp(ll_round(mWheelGlide.tick(SKScrollDistance::now())), 0, llmax(0, barRange()));
+    }
+}
+
+bool SKFloaterLocalChat::scrolledUp() const
+{
+    return mScroll > 0 || (mWheelGlide.isAnimating() && mWheelGlide.target() > 0.f);
 }
 
 namespace
