@@ -1,6 +1,6 @@
 /**
  * @file skmapscene.h
- * @brief The mini-map's hold on the navmesh: its demand while a map draws, and which tiles it has built.
+ * @brief The mini-map's hold on the census and air cells: their demand while a map draws.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Alchemy Viewer Source Code
@@ -39,7 +39,7 @@ public:
     void initSingleton() override;
     void cleanupSingleton() override;
 
-    /// A map drew this frame: hold the navmesh demand.
+    /// A map drew this frame: hold the census and air demand.
     void noteDrawn(const SKNetMap& map);
     bool active() const;
 

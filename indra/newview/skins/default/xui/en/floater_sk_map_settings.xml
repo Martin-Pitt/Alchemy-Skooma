@@ -581,7 +581,7 @@
              layout="topleft"
              left="8"
              name="sk_map_record"
-             tool_tip="Records why the map and the navmesh under it update, until unticked."
+             tool_tip="Records why the map and the census and air under it update, until unticked."
              top_pad="5"
              width="308" />
             <slider
