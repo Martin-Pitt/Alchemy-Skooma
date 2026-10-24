@@ -61,13 +61,19 @@ namespace skmap
                     fn(cx + std::cos(angle) * (rr + w * 0.45) - w / 2.0, cy + std::sin(angle) * (rr + h * 0.5) - h / 2.0);
                 }
             }
-            for (F64 y = 8.0; y + h < p.mHeight - 8.0; y += h + 2.0)
+            const LabelRect box = room(p);
+            for (F64 y = box.mY + 8.0; y + h < box.mY + box.mH - 8.0; y += h + 2.0)
             {
-                for (F64 x = 8.0; x + w < p.mWidth - 7.0; x += w + 2.0)
+                for (F64 x = box.mX + 8.0; x + w < box.mX + box.mW - 7.0; x += w + 2.0)
                 {
                     fn(x, y);
                 }
             }
+        }
+
+        LabelRect room(const LabelProblem& p)
+        {
+            return p.mRoom.mW > 0.0 && p.mRoom.mH > 0.0 ? p.mRoom : LabelRect{ 0.0, 0.0, p.mWidth, p.mHeight };
         }
 
         F64 radius(const LabelProblem& p)
@@ -102,8 +108,9 @@ namespace skmap
         LabelRect clampCandidate(const LabelProblem& p, const LabelInput& tag, F64 x, F64 y)
         {
             LabelRect q;
-            q.mX = std::max(8.0, std::min(p.mWidth - tag.mW - 8.0, x));
-            q.mY = std::max(8.0, std::min(p.mHeight - tag.mH - 8.0, y));
+            const LabelRect box = room(p);
+            q.mX = std::max(box.mX + 8.0, std::min(box.mX + box.mW - tag.mW - 8.0, x));
+            q.mY = std::max(box.mY + 8.0, std::min(box.mY + box.mH - tag.mH - 8.0, y));
             q.mW = tag.mW;
             q.mH = tag.mH;
             return q;
@@ -241,7 +248,9 @@ namespace skmap
     bool LabelLayout::needsSolve(const Input& in) const
     {
         if (!mHasLast || in.mMembers.size() != mLast.mMembers.size() || in.mWidth != mLast.mWidth || in.mHeight != mLast.mHeight
-            || in.mChrome != mLast.mChrome || dist_vec(in.mPointer, mLast.mPointer) >= 1.f)
+            || in.mChrome != mLast.mChrome
+            || std::fabs(in.mRoom.mY - mLast.mRoom.mY) >= 1.0 || std::fabs(in.mRoom.mH - mLast.mRoom.mH) >= 1.0
+            || std::fabs(in.mRoom.mX - mLast.mRoom.mX) >= 1.0 || std::fabs(in.mRoom.mW - mLast.mRoom.mW) >= 1.0 || dist_vec(in.mPointer, mLast.mPointer) >= 1.f)
         {
             return true;
         }
@@ -297,6 +306,7 @@ namespace skmap
             problem.mObstacles = in.mObstacles;
             problem.mWidth = in.mWidth;
             problem.mHeight = in.mHeight;
+            problem.mRoom = in.mRoom;
             for (size_t i = 0; i < next.size(); ++i)
             {
                 LabelInput li;

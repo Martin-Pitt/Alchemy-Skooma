@@ -108,6 +108,7 @@ namespace skmap
         std::vector<LabelRect> mObstacles;  ///< drawn dots, the cog and the grip
         F64 mWidth = 0.0;                   ///< the whole viewer window
         F64 mHeight = 0.0;
+        LabelRect mRoom;                    ///< where tags may go, clear of the bars; empty is the whole window
     };
 
     /// The study's search with branch-and-bound pruning: the same answer as solveBruteForce.
@@ -133,6 +134,7 @@ namespace skmap
             std::vector<LabelRect> mObstacles;
             F32 mWidth = 0.f;
             F32 mHeight = 0.f;
+            LabelRect mRoom;                ///< y down; empty is the whole window
             bool mChrome = false;
         };
         struct Tag

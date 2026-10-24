@@ -1616,6 +1616,14 @@ void SKNetMap::updateHover()
     in.mPointer = down(pointer);
     in.mWidth = win_w;
     in.mHeight = win_h;
+    // Tags keep to the room floaters get, off the menu, nav and tool bars.
+    if (gFloaterView)
+    {
+        LLRect room;
+        gFloaterView->localRectToOtherView(gFloaterView->getSnapRect(), &room, gViewerWindow->getRootView());
+        in.mRoom = { static_cast<F64>(room.mLeft), static_cast<F64>(win_h - room.mTop), static_cast<F64>(room.getWidth()),
+                     static_cast<F64>(room.getHeight()) };
+    }
     in.mChrome = mChrome;
     for (const TagText& t : mTagTexts)
     {
