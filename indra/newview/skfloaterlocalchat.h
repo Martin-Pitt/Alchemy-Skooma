@@ -70,6 +70,8 @@ public:
     void setMinimized(bool minimize) override;
     /// The chat draws its own bar where it was, so it never folds against a screen edge.
     ECollapseEdge pickCollapseEdge() override { return COLLAPSE_EDGE_NONE; }
+    /// Locked, only what the chat draws takes the mouse: shown messages, the pill, the input, the typing line, the scroll bar and the buttons.
+    bool hitsContentAt(S32 x, S32 y) override;
     bool handleKeyHere(KEY key, MASK mask) override;
     bool handleMouseDown(S32 x, S32 y, MASK mask) override;
     bool handleMouseUp(S32 x, S32 y, MASK mask) override;
@@ -185,9 +187,12 @@ private:
     /// Polls who nearby is typing, a few times a second, and remakes the label when that changes.
     void updateTyping(F64 now);
     void makeTypingLabel(S32 group);
-    void drawTyping(F64 now, S32 y) const;
+    /// Dots and names from x to right, the out-of-range part falling back to a count, then an ellipsis.
+    void drawTyping(F64 now, S32 x, S32 y, S32 right) const;
+    /// What the typing line takes untruncated.
+    S32 typingWidth() const;
     bool anyoneTyping() const { return !mTypingLabel[0].empty() || !mTypingLabel[1].empty(); }
-    /// Sizes the collapsed bar to its label, and to the typing line while anyone types.
+    /// Sizes the collapsed bar to its label, widened for the inline typing line while anyone types.
     void layoutCollapsed();
     void drawCollapsed(F64 now);
     void onStyleMenu(const LLSD& param);

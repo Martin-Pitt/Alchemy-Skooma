@@ -660,6 +660,7 @@ bool SKFloaterLocalChat::applyRectControl()
 
 constexpr S32 COLLAPSED_HEIGHT = 22;
 constexpr S32 COLLAPSED_MIN_WIDTH = 72;
+static const std::string COLLAPSED_SEPARATOR = "  \xC2\xB7  "; // the typing line's separator too
 
 void SKFloaterLocalChat::setMinimized(bool minimize)
 {
@@ -695,11 +696,20 @@ void SKFloaterLocalChat::layoutCollapsed()
     LLStringUtil::format_map_t args;
     args["[COUNT]"] = llformat("%d", mCollapsedUnread);
     mCollapsedLabel = getString(mCollapsedUnread > 0 ? "collapsed_unread" : "collapsed_title", args);
-    // The typing line needs the chat's own width; the label alone keeps the bar compact.
-    const bool typing = anyoneTyping();
-    const S32 width = typing ? getExpandedRect().getWidth()
-                             : llmax(COLLAPSED_MIN_WIDTH, LLFontGL::getFontSansSerifSmall()->getWidth(mCollapsedLabel) + 4 * PAD_X);
-    const S32 height = COLLAPSED_HEIGHT + (typing ? TYPING_LINE + INPUT_GAP : 0);
+    // Typing goes inline after the label, the bar growing to fit as far as the screen allows.
+    LLFontGL* font = LLFontGL::getFontSansSerifSmall();
+    S32 width = llmax(COLLAPSED_MIN_WIDTH, font->getWidth(mCollapsedLabel) + 4 * PAD_X);
+    if (anyoneTyping() && !gAgentCamera.cameraMouselook())
+    {
+        width = 2 * PAD_X + font->getWidth(mCollapsedLabel) + font->getWidth(COLLAPSED_SEPARATOR) + typingWidth() + 2 * PAD_X;
+        const LLView* parent = getParent();
+        if (parent)
+        {
+            width = llmin(width, parent->getRect().getWidth() - getRect().mLeft);
+        }
+        width = llmax(width, COLLAPSED_MIN_WIDTH);
+    }
+    const S32 height = COLLAPSED_HEIGHT;
     if (width != getRect().getWidth() || height != getRect().getHeight())
     {
         reshape(width, height);
@@ -712,14 +722,23 @@ void SKFloaterLocalChat::drawCollapsed(F64 now)
     static LLUIColor bar_color = LLUIColorTable::instance().getColor("Black");
     static LLUIColor text_color = LLUIColorTable::instance().getColor("White");
     LLFontGL* font = LLFontGL::getFontSansSerifSmall();
-    const S32 bar_w = llmax(COLLAPSED_MIN_WIDTH, font->getWidth(mCollapsedLabel) + 4 * PAD_X);
+    const S32 bar_w = getRect().getWidth();
+    const S32 text_y = (COLLAPSED_HEIGHT - font->getLineHeight()) / 2;
+    const LLFontGL::StyleFlags style = mCollapsedUnread > 0 ? LLFontGL::BOLD : LLFontGL::NORMAL;
     bar_image->draw(0, 0, bar_w, COLLAPSED_HEIGHT, bar_color.get() % (mHovered ? 0.75f : 0.55f));
-    font->renderUTF8(mCollapsedLabel, 0, (F32)(bar_w / 2), (F32)((COLLAPSED_HEIGHT - font->getLineHeight()) / 2), text_color.get() % 0.9f,
-                     LLFontGL::HCENTER, LLFontGL::BOTTOM, mCollapsedUnread > 0 ? LLFontGL::BOLD : LLFontGL::NORMAL, LLFontGL::NO_SHADOW);
-    if (anyoneTyping() && !gAgentCamera.cameraMouselook())
+    if (!anyoneTyping() || gAgentCamera.cameraMouselook())
     {
-        drawTyping(now, COLLAPSED_HEIGHT + INPUT_GAP);
+        font->renderUTF8(mCollapsedLabel, 0, (F32)(bar_w / 2), (F32)text_y, text_color.get() % 0.9f,
+                         LLFontGL::HCENTER, LLFontGL::BOTTOM, style, LLFontGL::NO_SHADOW);
+        return;
     }
+    // "Chat · 3  ·  ... Kaia is typing", on the one line.
+    F32 x = (F32)(2 * PAD_X);
+    font->renderUTF8(mCollapsedLabel, 0, x, (F32)text_y, text_color.get() % 0.9f, LLFontGL::LEFT, LLFontGL::BOTTOM, style,
+                     LLFontGL::NO_SHADOW, S32_MAX, S32_MAX, &x);
+    font->renderUTF8(COLLAPSED_SEPARATOR, 0, x, (F32)text_y, text_color.get() % 0.4f, LLFontGL::LEFT, LLFontGL::BOTTOM, LLFontGL::NORMAL,
+                     LLFontGL::NO_SHADOW, S32_MAX, S32_MAX, &x);
+    drawTyping(now, ll_round(x), text_y, bar_w - 2 * PAD_X);
 }
 
 void SKFloaterLocalChat::reshape(S32 width, S32 height, bool called_from_parent)
@@ -1520,12 +1539,9 @@ void SKFloaterLocalChat::draw()
     if (isMinimized())
     {
         const F64 now = LLFrameTimer::getTotalSeconds();
-        const bool was_typing = anyoneTyping();
         updateTyping(now);
-        if (was_typing != anyoneTyping())
-        {
-            layoutCollapsed();
-        }
+        layoutCollapsed(); // the bar's width follows the inline typing line
+
         if (mCog)
         {
             mCog->setVisible(false);
@@ -1568,8 +1584,10 @@ void SKFloaterLocalChat::draw()
     const F32 chrome_dt = (F32)llclamp(now - mChromeDrawnAt, 0.0, 0.1);
     mChromeDrawnAt = now;
     const bool edge_rest = mEdgeSince >= 0.0 && now - mEdgeSince >= EDGE_REST;
-    mBackdrop = llclamp(mBackdrop + ((opaque && mHovered) ? chrome_dt : -chrome_dt) / CHROME_FADE, 0.f, 1.f);
-    mBorder = llclamp(mBorder + ((opaque && edge_rest) ? chrome_dt : -chrome_dt) / CHROME_FADE, 0.f, 1.f);
+    // Locked, the chat is part of the world view: no backdrop, no edge border.
+    const bool chrome = opaque && !isLocked();
+    mBackdrop = isLocked() ? 0.f : llclamp(mBackdrop + ((chrome && mHovered) ? chrome_dt : -chrome_dt) / CHROME_FADE, 0.f, 1.f);
+    mBorder = isLocked() ? 0.f : llclamp(mBorder + ((chrome && edge_rest) ? chrome_dt : -chrome_dt) / CHROME_FADE, 0.f, 1.f);
     if (mBackdrop > 0.f)
     {
         static const LLColor4 tint(16.f / 255.f, 16.f / 255.f, 20.f / 255.f, 61.f / 255.f);
@@ -1591,7 +1609,7 @@ void SKFloaterLocalChat::draw()
     updateTyping(now);
     if (opaque && (!mTypingLabel[0].empty() || !mTypingLabel[1].empty()))
     {
-        drawTyping(now, INSET + inputHeight() + INPUT_GAP + 1);
+        drawTyping(now, INSET + PAD_X, INSET + inputHeight() + INPUT_GAP + 1, getRect().getWidth() - INSET);
     }
 
     // Jump to present: once scrolled up by more than a view, or from any distance once something new arrived.
@@ -1781,7 +1799,26 @@ void SKFloaterLocalChat::makeTypingLabel(S32 group)
     label = getString(std::string(prefix) + (typers.size() == 1 ? "one" : "two"), args);
 }
 
-void SKFloaterLocalChat::drawTyping(F64 now, S32 y) const
+S32 SKFloaterLocalChat::typingWidth() const
+{
+    LLFontGL* font = LLFontGL::getFontSansSerifSmall();
+    S32 width = 3 * (3 + 2) + 4; // the dots and the gap after them
+    if (!mTypingLabel[0].empty())
+    {
+        width += font->getWidth(mTypingLabel[0]);
+        if (!mTypingLabel[1].empty())
+        {
+            width += font->getWidth(COLLAPSED_SEPARATOR);
+        }
+    }
+    if (!mTypingLabel[1].empty())
+    {
+        width += font->getWidth(mTypingLabel[1]);
+    }
+    return width;
+}
+
+void SKFloaterLocalChat::drawTyping(F64 now, S32 x0, S32 y, S32 right) const
 {
     static LLUIColor color = LLUIColorTable::instance().getColor("White");
     static LLUIColor far_color = LLUIColorTable::instance().getColor("Yellow");
@@ -1794,7 +1831,7 @@ void SKFloaterLocalChat::drawTyping(F64 now, S32 y) const
     constexpr S32 DOT = 3;
     constexpr S32 DOT_GAP = 2;
     const F32 phase = (F32)fmod(now, 1.2) / 1.2f;
-    S32 x = INSET + PAD_X;
+    S32 x = x0;
     for (S32 i = 0; i < 3; ++i)
     {
         const F32 t = phase - i * 0.15f;
@@ -1804,19 +1841,19 @@ void SKFloaterLocalChat::drawTyping(F64 now, S32 y) const
         x += DOT + DOT_GAP;
     }
     F32 text_x = (F32)(x + 4);
-    const S32 right = getRect().getWidth() - INSET;
 
     // The in-range part is never cut; the out-of-range part after it falls back to a count, then an ellipsis.
     const LLColor4 far_text = far_color.get() % 0.45f;
     if (has_near)
     {
-        font->renderUTF8(mTypingLabel[0], 0, text_x, (F32)y, color.get() % 0.6f, LLFontGL::LEFT, LLFontGL::BOTTOM, LLFontGL::NORMAL, LLFontGL::DROP_SHADOW_SOFT, S32_MAX, S32_MAX, &text_x);
+        // Cut only when the line has no room at all, as in a collapsed bar at the screen's edge.
+        const S32 near_room = llmax(right - ll_round(text_x), 0);
+        font->renderUTF8(mTypingLabel[0], 0, text_x, (F32)y, color.get() % 0.6f, LLFontGL::LEFT, LLFontGL::BOTTOM, LLFontGL::NORMAL, LLFontGL::DROP_SHADOW_SOFT, S32_MAX, near_room, &text_x, true);
         if (mTypingLabel[1].empty())
         {
             return;
         }
-        static const std::string SEPARATOR = "  \xC2\xB7  ";
-        font->renderUTF8(SEPARATOR, 0, text_x, (F32)y, color.get() % 0.4f, LLFontGL::LEFT, LLFontGL::BOTTOM, LLFontGL::NORMAL, LLFontGL::DROP_SHADOW_SOFT, S32_MAX, S32_MAX, &text_x);
+        font->renderUTF8(COLLAPSED_SEPARATOR, 0, text_x, (F32)y, color.get() % 0.4f, LLFontGL::LEFT, LLFontGL::BOTTOM, LLFontGL::NORMAL, LLFontGL::DROP_SHADOW_SOFT, S32_MAX, S32_MAX, &text_x);
         const S32 room = right - ll_round(text_x);
         const std::string& far_label = font->getWidth(mTypingLabel[1]) <= room ? mTypingLabel[1] : mTypingFarCount;
         if (room > 0)
@@ -1828,6 +1865,55 @@ void SKFloaterLocalChat::drawTyping(F64 now, S32 y) const
     const S32 room = right - ll_round(text_x);
     const std::string& far_label = font->getWidth(mTypingLabel[1]) <= room ? mTypingLabel[1] : mTypingFarCount;
     font->renderUTF8(far_label, 0, text_x, (F32)y, far_text, LLFontGL::LEFT, LLFontGL::BOTTOM, LLFontGL::NORMAL, LLFontGL::DROP_SHADOW_SOFT, S32_MAX, llmax(room, 0), nullptr, true);
+}
+
+bool SKFloaterLocalChat::hitsContentAt(S32 x, S32 y)
+{
+    if (isMinimized())
+    {
+        return x >= 0 && x < getRect().getWidth() && y >= 0 && y < COLLAPSED_HEIGHT;
+    }
+    auto hits_view = [x, y](const LLView* view)
+    {
+        return view && view->getVisible() && view->getRect().pointInRect(x, y);
+    };
+    if (hits_view(mCog) || hits_view(mInput) || mPillRect.pointInRect(x, y) || (barShown() && barStrip().pointInRect(x, y)))
+    {
+        return true;
+    }
+    for (const LLButton* button : mButtons)
+    {
+        if (hits_view(button))
+        {
+            return true;
+        }
+    }
+    const S32 typing_y = INSET + inputHeight() + INPUT_GAP;
+    if (anyoneTyping() && y >= typing_y && y < typing_y + TYPING_LINE && x >= INSET && x < getRect().getWidth() - INSET)
+    {
+        return true;
+    }
+
+    const LLRect content = contentRect();
+    if (mLayoutDirty || !content.pointInRect(x, y))
+    {
+        return false;
+    }
+    const S32 base = content.mBottom - mScroll;
+    const bool full = expanded();
+    const F64 now = LLFrameTimer::getTotalSeconds();
+    for (const Row& row : mRows)
+    {
+        const S32 y0 = base + row.mBottom + row.mGap;
+        if (y < y0 || y >= y0 + row.mPadBottom + lineHeight(row) + row.mPadTop)
+        {
+            continue;
+        }
+        const Card& card = mCards[row.mCard];
+        const S32 right = content.mLeft + (card.mWidth > 0 ? card.mWidth : content.getWidth());
+        return x < right && (full || cardAlpha(card, now) > 0.f);
+    }
+    return false;
 }
 
 std::string SKFloaterLocalChat::urlAt(S32 x, S32 y) const
@@ -1968,7 +2054,7 @@ void SKFloaterLocalChat::onMouseCaptureLost()
 bool SKFloaterLocalChat::handleHover(S32 x, S32 y, MASK mask)
 {
     mBarHot = barShown() && barStrip().pointInRect(x, y);
-    const bool at_edge = x < EDGE_REACH || y < EDGE_REACH || x >= getRect().getWidth() - EDGE_REACH || y >= getRect().getHeight() - EDGE_REACH;
+    const bool at_edge = !isLocked() && (x < EDGE_REACH || y < EDGE_REACH || x >= getRect().getWidth() - EDGE_REACH || y >= getRect().getHeight() - EDGE_REACH); // locked, no edge timer
     if (!at_edge)
     {
         mEdgeSince = -1.0;
