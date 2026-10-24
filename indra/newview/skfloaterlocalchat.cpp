@@ -30,6 +30,7 @@
 #include "llbutton.h"
 #include "llchatentry.h"
 #include "llemojihelper.h"
+#include "skemojicomplete.h"
 #include "lldbstrings.h"
 #include "lldraghandle.h"
 #include "llfloaterreg.h"
@@ -301,6 +302,7 @@ bool SKFloaterLocalChat::postBuild()
     mInput->setFont(LLViewerChat::getChatFont());
     ALChatBar::applyChannelLabel(mInput, gSavedSettings.getS32("AlchemyNearbyChatChannel"));
     mInput->setVisible(false);
+    mEmojiComplete = SKEmojiComplete::attach(mInput); // completes :shortcodes in place of the picker's popup
 
     // The emoji picker as the conversation window has it; the toggle state follows the picker.
     mEmojiButton = getChild<LLButton>("sk_local_chat_emoji");
@@ -1499,6 +1501,10 @@ void SKFloaterLocalChat::draw()
         closeFloater();
         return;
     }
+    if (mEmojiComplete)
+    {
+        mEmojiComplete->update();
+    }
 
     // In mouselook the chat must not take the mouse from the world.
     const bool opaque = !gAgentCamera.cameraMouselook();
@@ -1846,7 +1852,7 @@ bool SKFloaterLocalChat::hitsContentAt(S32 x, S32 y)
     {
         return view && view->getVisible() && view->getRect().pointInRect(x, y);
     };
-    if (hits_view(mCog) || hits_view(mInput) || hits_view(mEmojiButton) || mPillRect.pointInRect(x, y) || (barShown() && barStrip().pointInRect(x, y)))
+    if (hits_view(mCog) || hits_view(mInput) || hits_view(mEmojiButton) || hits_view(mEmojiComplete) || mPillRect.pointInRect(x, y) || (barShown() && barStrip().pointInRect(x, y)))
     {
         return true;
     }

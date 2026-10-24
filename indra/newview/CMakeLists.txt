@@ -1002,6 +1002,7 @@ if(AL_BUILD_VIEWER)
     rlvinventory.cpp
     skchatunfurl.cpp
     skchatunfurlcache.cpp
+    skemojicomplete.cpp
     skfloaterlocalchat.cpp
     rlvlocks.cpp
     rlvui.cpp
@@ -1884,6 +1885,7 @@ if(AL_BUILD_VIEWER)
     rlvinventory.h
     skchatunfurl.h
     skchatunfurlcache.h
+    skemojicomplete.h
     skfloaterlocalchat.h
     rlvlocks.h
     rlvmodifiers.h
