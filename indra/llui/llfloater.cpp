@@ -1214,12 +1214,38 @@ void LLFloater::applyTitle()
     {
         mDragHandle->setTitle ( mTitle );
     }
+    // <SK:Nexii> Collapsed status
+    if (isMinimized())
+    {
+        mDragHandle->setTitleStatus(mCollapsedCount, mCollapsedStatus);
+    }
+    else
+    {
+        mDragHandle->setTitleStatus(0, LLStringUtil::null);
+    }
+    // </SK:Nexii>
 
     if (getHost())
     {
         getHost()->updateFloaterTitle(this);
     }
 }
+
+// <SK:Nexii> Collapsed status
+void LLFloater::setCollapsedStatus(S32 count, const std::string& status)
+{
+    if (count == mCollapsedCount && status == mCollapsedStatus)
+    {
+        return;
+    }
+    mCollapsedCount = count;
+    mCollapsedStatus = status;
+    if (mDragHandle && isMinimized())
+    {
+        mDragHandle->setTitleStatus(mCollapsedCount, mCollapsedStatus);
+    }
+}
+// </SK:Nexii>
 
 std::string LLFloater::getCurrentTitle() const
 {
@@ -2385,7 +2411,7 @@ void LLFloater::draw()
     LL_PROFILE_ZONE_TEXT(getTitle().c_str(), getTitle().length());
 
     // draw background
-    if( isBackgroundVisible() )
+    if( isBackgroundVisible() || isMinimized() ) // <SK:Nexii> A collapsed floater is a title bar, chromeless or not
     {
         const F32 alpha = getCurrentTransparency();
 

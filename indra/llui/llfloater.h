@@ -309,6 +309,8 @@ public:
 // <SK:Nexii> Which edge the current collapse folded against, and whether that made a turned strip
     ECollapseEdge   getCollapseEdge() const         { return mCollapseEdge; }
     bool            isCollapsedToSide() const       { return mMinimized && isSideEdge(mCollapseEdge); }
+    // What the collapsed bar shows after its title: a count (0 for none) and a dim live line.
+    void            setCollapsedStatus(S32 count, const std::string& status);
 // </SK:Nexii>
     void            moveResizeHandlesToFront();
     void            addDependentFloater(LLFloater* dependent, bool reposition = true, bool resize = false);
@@ -578,6 +580,10 @@ private:
     S32             mMinWidth;
     S32             mMinHeight;
     S32             mHeaderHeight;      // height in pixels of header for title, drag bar
+// <SK:Nexii> Collapsed status
+    S32             mCollapsedCount { 0 };
+    std::string     mCollapsedStatus;
+// </SK:Nexii>
     S32             mLegacyHeaderHeight;// HACK see initFloaterXML()
 
     bool            mMinimized;
