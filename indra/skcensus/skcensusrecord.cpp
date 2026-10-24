@@ -27,6 +27,7 @@
 
 #include "skcensusrecord.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 
@@ -202,7 +203,9 @@ namespace skworld
         // F64 until the shift is applied, then F32 in mesh space.
         const LLVector3d shift64 = record.mOrigin - mesh_origin;
         const LLVector3 shift(static_cast<F32>(shift64.mdV[VX]), static_cast<F32>(shift64.mdV[VY]), static_cast<F32>(shift64.mdV[VZ]));
-        std::vector<LLVector3> local;
+        // Analytic shapes tessellate into scratch kept per thread, not a vector per call.
+        thread_local std::vector<LLVector3> local;
+        local.clear();
         const std::vector<LLVector3>* src = &local;
         switch (record.mShape)
         {
@@ -216,10 +219,19 @@ namespace skworld
             case Shape::CYLINDER: emitCylinder(record, local); break;
             case Shape::SPHERE: emitSphere(record, local); break;
         }
-        out.reserve(out.size() + src->size());
-        for (const LLVector3& p : *src)
+        // Grown geometrically: a caller appending record after record into one
+        // vector would otherwise reallocate it at every record.
+        const size_t first = out.size(), count = src->size();
+        if (out.capacity() < first + count)
         {
-            out.push_back(p + shift);
+            out.reserve(std::max(first + count, out.capacity() * 2));
+        }
+        out.resize(first + count);
+        LLVector3* dst = out.data() + first;
+        const LLVector3* from = src->data();
+        for (size_t i = 0; i < count; ++i)
+        {
+            dst[i] = from[i] + shift;
         }
     }
 }
