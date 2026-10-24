@@ -266,6 +266,7 @@ void init_sdl(const std::string& app_name, bool hidden_window)
     // shortcut reaches the viewer's own "Close Window" handler instead of
     // tearing down the window (which the SDL backend reads as a quit request).
     ll_sdl_macos_strip_default_close_shortcut();
+    ll_sdl_macos_watch_scroll(); // <SK:Nexii> smooth scroll
 #endif
 }
 
