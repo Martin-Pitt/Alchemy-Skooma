@@ -10,7 +10,7 @@ Run `git skooma status` first if unsure. Branch roles:
 |---|---|
 | `develop` | Read-only mirror of upstream. Never commit, merge, checkout or reset onto it. |
 | `main` | Integration branch + the human's F5 build. Do not do feature work here. |
-| `feature-<name>` | Your workspace, in `.worktrees/<name>`. Branched from `develop` (or a foundation it builds on); never from a trunk or `main`, which hold many PRs at once. |
+| `feature-<name>` | Your workspace, in `.worktrees/<name>`. Branched from `develop`, or from its area's trunk. |
 | trunk | The feature branch an area ships as: `feature-navmesh` (`nav/*`), `feature-atmo-magic` (`atmo/*`), `feature-combat/minimap` (`combat/minimap*`), `camera` (`camera/*`). Worktrees of the area land into it, and it lands into `main`. `git skooma trunk` lists them. |
 | `fix-<name>`, `workaround-<name>`, … | The same kind of branch under a different classification chosen at `git skooma new`. Treat exactly like `feature-*`. |
 | `amend-<area>/<x>` | A follow-up to an existing feature. Lands into that feature, never a PR on its own. |
@@ -39,7 +39,7 @@ Every commit must be acceptable to the Alchemy project as-is.
 
 - Write upstream-style code in upstream's layout. `SK`/`sk` prefixes on your own files and `<SK:Nexii>` wrappers on injection sites into non-Skooma files are expected — Alchemy already carries Firestorm's `<FS:ND>` / `<FS:AR>`. Keep product/channel branding out.
 - Never touch `AGENTS.md`, `CLAUDE.local.md`, `doc/skooma/`, `scripts/skooma/`, `.claude/`, `.worktrees/`, `vs2026-os/`. If a change needs one of those, say so — it belongs on `glue`.
-- Never merge `main`, a trunk or another feature into your branch. Take upstream by `git merge develop`, and a foundation you build on by `git merge foundation-<name>`, in your own worktree; `git skooma sync` touches every worktree, so leave it to the human.
+- Never merge `main` or another feature into your branch. Take upstream (and your trunk) by `git merge develop` (or `git merge <trunk>`) in your own worktree; `git skooma sync` touches every worktree, so leave it to the human.
 - Small logical commits; imperative subject (`Fix crash when pasting into text editor`); body explains why. Squash WIP before landing.
 - `Co-Authored-By:` trailers are fine (upstream uses them). No `Generated with` lines.
 - **Never append to the end of a shared list file** (`settings*.xml`, `CMakeLists.txt` source lists, floater registrations, strings): every branch appends there, so every pair of branches conflicts. Insert beside a related entry (`SkoomaLocalChat*` next to `AlchemyChatHistoryStyle`), or alphabetically where the file is sorted.
@@ -53,7 +53,7 @@ git skooma integrate      # land every ready worktree branch into its trunk, the
 ```
 
 In an area with a trunk, your branch lands into the trunk, not `main`. Follow-up work
-goes on a new branch in the same area (cut from `develop`, landing into the trunk) — never a stack of
+goes on a new branch in the same area (it is cut from the trunk) — never a stack of
 leftover branches.
 
 Follow-up work on an existing feature by another agent goes on

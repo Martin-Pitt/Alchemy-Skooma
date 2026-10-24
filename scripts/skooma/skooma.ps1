@@ -1067,6 +1067,7 @@ function Invoke-New {
     # from one carries all of them into its own PR.
     $trunk = Find-TrunkFor $name
     if ($trunk -eq "$class-$name") { $trunk = '' }
+    if ($class -eq 'foundation') { $trunk = '' } # a foundation is in no trunk: it lands into main and ships first
 
     # An amend is cut from, and lands into, the feature it amends: --base, else feature-<name>.
     if ($class -eq 'amend') {
