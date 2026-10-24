@@ -32,7 +32,7 @@
 SKScrollAnimator::Config SKScrollDistance::config()
 {
     static LLUICachedControl<bool> smooth("SkoomaScrollSmooth", true);
-    static LLUICachedControl<S32> mode("SkoomaScrollSmoothMode", 0);
+    static LLUICachedControl<S32> mode("SkoomaScrollSmoothMode", 1);
     static LLUICachedControl<F32> duration_scale("SkoomaScrollSmoothDurationScale", 1.f);
     static LLUICachedControl<F32> top_speed("SkoomaScrollWarpTopSpeed", 6000.f);
     static LLUICachedControl<F32> ramp("SkoomaScrollWarpRamp", 0.04f);
