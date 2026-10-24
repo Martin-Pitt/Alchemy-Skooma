@@ -3,6 +3,7 @@
  positioning="cascading"
  bg_alpha_image_overlay="DkGray_33"
  background_visible="false"
+ can_lock="true"
  can_minimize="true"
  can_resize="true"
  header_height="0"
