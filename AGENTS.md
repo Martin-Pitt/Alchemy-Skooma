@@ -14,6 +14,7 @@ Run `git skooma status` first if unsure. Branch roles:
 | trunk | The feature branch an area ships as: `feature-navmesh` (`nav/*`), `feature-atmo-magic` (`atmo/*`), `feature-combat/minimap` (`combat/minimap*`), `camera` (`camera/*`). Worktrees of the area land into it, and it lands into `main`. `git skooma trunk` lists them. |
 | `fix-<name>`, `workaround-<name>`, … | The same kind of branch under a different classification chosen at `git skooma new`. Treat exactly like `feature-*`. |
 | `amend-<area>/<x>` | A follow-up to an existing feature. Lands into that feature, never a PR on its own. |
+| `foundation-<name>` | A shared base other features build on (`foundation-warp`: SKWarp under the camera and scrolling). Cut from `develop`; branches of any trunk may `git merge` it, and `check` accepts that. Lands into `main` and ships as its own PR first. |
 | `spike-<name>` | Throwaway instrumentation to answer one question. The only branch that never goes upstream. See below. |
 | `glue` | Fork-only files (scripts, docs, CI, branding). |
 

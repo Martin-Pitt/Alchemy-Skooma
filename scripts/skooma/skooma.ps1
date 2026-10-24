@@ -41,7 +41,8 @@ function Show-Help {
     Say ''
     Say '  status              where am I, what is ahead/behind, what is dirty'
     Say '  new <name> [desc]   create <class>-<name> + worktree in .worktrees/<name>'
-    Say '                      --class fix|workaround|<own>  (asked for when run with no name)'
+    Say '                      --class fix|workaround|foundation|<own>  (asked for when run with no name)'
+    Say '                      a foundation is shared: branches of any trunk may merge it'
     Say '                      --base <branch>  --tests (configure a local tests tree)'
     Say '  new <area>/<x> --amend [--base <feature>]  amend-<area>/<x>: a follow-up that lands'
     Say '                      into an existing feature (default feature-<area>/<x>), never a PR alone'
@@ -155,7 +156,16 @@ function Test-Forbidden { param([string]$path)
 # Custom classes are remembered in skooma.class so they appear in the list next time.
 # 'amend' is a follow-up to an existing feature: it lands into that feature (its
 # skooma-base), never into a trunk or main directly, and is never a PR on its own.
-$BuiltinClasses = @('feature', 'fix', 'workaround', 'spike', 'amend')
+# 'foundation' is a shared base other features build on (SKWarp under the camera and
+# scrolling): cut from develop, it may be merged into any branch of any trunk.
+$BuiltinClasses = @('feature', 'fix', 'workaround', 'spike', 'amend', 'foundation')
+
+# Whether everything merge parent $p brings beyond $base and develop comes from foundations.
+function Test-FromFoundation { param([string]$p, [string]$base)
+    $found = @(Get-WorkingBranches | Where-Object { (Get-Class $_) -eq 'foundation' } | ForEach-Object { "^$_" })
+    if (-not $found) { return $false }
+    return -not ((G rev-list $p "^$base" '^develop' @found) -split "`n" | Where-Object { $_ })
+}
 
 function Test-IsAmend { param([string]$branch) return ((Get-Class $branch) -eq 'amend') }
 
@@ -1329,6 +1339,8 @@ function Invoke-Check { param([string]$branch, [switch]$Quiet)
             # Upstream is never a leak, however it arrives (a merged sibling's own develop merges).
             if (GitOk merge-base --is-ancestor $p develop) { continue }
             if (-not (GitOk merge-base --is-ancestor $p $base)) {
+                # A foundation is meant to be shared across trunks.
+                if (Test-FromFoundation $p $base) { continue }
                 if (GitOk merge-base --is-ancestor $p main) {
                     if ($null -eq $developSpine) { $developSpine = @{}; foreach ($d in (G rev-list --first-parent main) -split "`n") { if ($d) { $developSpine[$d] = $true } } }
                     if (-not $developSpine.ContainsKey($p)) {
