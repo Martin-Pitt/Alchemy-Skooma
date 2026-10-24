@@ -1404,8 +1404,8 @@ void LLReflectionMapManager::takeProbeShot(const std::string& stem, bool sky_onl
         std::vector<F32>& pixels = faces[face];
         pixels.resize((size_t)res * res * 3);
         screen.bindTarget();
-        glPixelStorei(GL_PACK_ALIGNMENT, 1);
-        glReadPixels(0, 0, res, res, GL_RGB, GL_FLOAT, pixels.data());
+        // LLRender keeps the pack alignment at 1, and an RGB float row is a whole number of words anyway.
+        gGL.readPixels(0, 0, res, res, GL_RGB, GL_FLOAT, pixels.data());
         screen.flush();
 
         // GL rows run bottom up; images run top down.
