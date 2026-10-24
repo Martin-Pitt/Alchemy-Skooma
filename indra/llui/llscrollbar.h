@@ -60,6 +60,7 @@ public:
                                         track_image_vertical;
 
         Optional<bool>                  bg_visible;
+        Optional<bool>                  overlay; // <SK:Nexii> Overlay scroll bar: thin fading thumb over the content, no track or arrows
 
         Optional<LLUIColor>             track_color,
                                         thumb_color,
@@ -96,6 +97,10 @@ public:
     virtual void    reshape(S32 width, S32 height, bool called_from_parent = true) override;
 
     virtual void    draw() override;
+    // <SK:Nexii> Overlay scroll bar
+    virtual void    onVisibilityChange(bool new_visibility) override;
+    bool                isOverlay() const { return mOverlay; }
+    // </SK:Nexii>
 
     // How long the "document" is.
     void                setDocSize( S32 size );
@@ -132,6 +137,12 @@ private:
     void                updateThumbRect();
     bool                changeLine(S32 delta, bool update_thumb );
     bool                scrollByWheel(F32 precise); // precise sub-notch wheel delta -> whole lines + residue
+    // <SK:Nexii> Overlay scroll bar
+    S32                 arrowLength() const { return mOverlay ? 0 : mThickness; }
+    F32                 overlayAlpha(F64 now) const;
+    void                overlayTouch();
+    void                drawOverlay();
+    // </SK:Nexii>
 
     callback_t          mChangeCallback;
 
@@ -167,6 +178,15 @@ private:
 
     LLButton*           mLineUpBtn = nullptr;
     LLButton*           mLineDownBtn = nullptr;
+
+    // <SK:Nexii> Overlay scroll bar
+    bool                mOverlay = false;
+    bool                mOverlayRevealPending = false;
+    F32                 mOverlayWiden = 0.f;
+    F64                 mOverlayShownAt = -1000.0;
+    F64                 mOverlayActiveAt = -1000.0;
+    U32                 mOverlayDrawnFrame = 0;
+    // </SK:Nexii>
 };
 
 

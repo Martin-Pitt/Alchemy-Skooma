@@ -67,7 +67,8 @@ public:
                             border_visible,
                             hide_scrollbar,
                             ignore_arrow_keys,
-                            keep_scroll_pos;
+                            keep_scroll_pos,
+                            overlay_scrollbars; // <SK:Nexii> Overlay scroll bar
         Optional<F32>       min_auto_scroll_rate,
                             max_auto_scroll_rate;
         Optional<U32>       max_auto_scroll_zone;
@@ -165,6 +166,7 @@ private:
     F32         mMaxAutoScrollRate;
     U32         mMaxAutoScrollZone;
     bool        mHideScrollbar;
+    bool        mOverlayScrollbars = false; // <SK:Nexii> Overlay scroll bar: bars draw over the content, no gutter
     bool        mIgnoreArrowKeys;
 };
 
