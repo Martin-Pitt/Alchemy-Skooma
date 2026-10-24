@@ -1584,8 +1584,10 @@ void SKFloaterLocalChat::draw()
     const F32 chrome_dt = (F32)llclamp(now - mChromeDrawnAt, 0.0, 0.1);
     mChromeDrawnAt = now;
     const bool edge_rest = mEdgeSince >= 0.0 && now - mEdgeSince >= EDGE_REST;
-    mBackdrop = llclamp(mBackdrop + ((opaque && mHovered) ? chrome_dt : -chrome_dt) / CHROME_FADE, 0.f, 1.f);
-    mBorder = llclamp(mBorder + ((opaque && edge_rest) ? chrome_dt : -chrome_dt) / CHROME_FADE, 0.f, 1.f);
+    // Locked, the chat is part of the world view: no backdrop, no edge border.
+    const bool chrome = opaque && !isLocked();
+    mBackdrop = isLocked() ? 0.f : llclamp(mBackdrop + ((chrome && mHovered) ? chrome_dt : -chrome_dt) / CHROME_FADE, 0.f, 1.f);
+    mBorder = isLocked() ? 0.f : llclamp(mBorder + ((chrome && edge_rest) ? chrome_dt : -chrome_dt) / CHROME_FADE, 0.f, 1.f);
     if (mBackdrop > 0.f)
     {
         static const LLColor4 tint(16.f / 255.f, 16.f / 255.f, 20.f / 255.f, 61.f / 255.f);
@@ -1865,6 +1867,55 @@ void SKFloaterLocalChat::drawTyping(F64 now, S32 x0, S32 y, S32 right) const
     font->renderUTF8(far_label, 0, text_x, (F32)y, far_text, LLFontGL::LEFT, LLFontGL::BOTTOM, LLFontGL::NORMAL, LLFontGL::DROP_SHADOW_SOFT, S32_MAX, llmax(room, 0), nullptr, true);
 }
 
+bool SKFloaterLocalChat::hitsContentAt(S32 x, S32 y)
+{
+    if (isMinimized())
+    {
+        return x >= 0 && x < getRect().getWidth() && y >= 0 && y < COLLAPSED_HEIGHT;
+    }
+    auto hits_view = [x, y](const LLView* view)
+    {
+        return view && view->getVisible() && view->getRect().pointInRect(x, y);
+    };
+    if (hits_view(mCog) || hits_view(mInput) || mPillRect.pointInRect(x, y) || (barShown() && barStrip().pointInRect(x, y)))
+    {
+        return true;
+    }
+    for (const LLButton* button : mButtons)
+    {
+        if (hits_view(button))
+        {
+            return true;
+        }
+    }
+    const S32 typing_y = INSET + inputHeight() + INPUT_GAP;
+    if (anyoneTyping() && y >= typing_y && y < typing_y + TYPING_LINE && x >= INSET && x < getRect().getWidth() - INSET)
+    {
+        return true;
+    }
+
+    const LLRect content = contentRect();
+    if (mLayoutDirty || !content.pointInRect(x, y))
+    {
+        return false;
+    }
+    const S32 base = content.mBottom - mScroll;
+    const bool full = expanded();
+    const F64 now = LLFrameTimer::getTotalSeconds();
+    for (const Row& row : mRows)
+    {
+        const S32 y0 = base + row.mBottom + row.mGap;
+        if (y < y0 || y >= y0 + row.mPadBottom + lineHeight(row) + row.mPadTop)
+        {
+            continue;
+        }
+        const Card& card = mCards[row.mCard];
+        const S32 right = content.mLeft + (card.mWidth > 0 ? card.mWidth : content.getWidth());
+        return x < right && (full || cardAlpha(card, now) > 0.f);
+    }
+    return false;
+}
+
 std::string SKFloaterLocalChat::urlAt(S32 x, S32 y) const
 {
     if (mLayoutDirty || !contentRect().pointInRect(x, y))
@@ -2003,7 +2054,7 @@ void SKFloaterLocalChat::onMouseCaptureLost()
 bool SKFloaterLocalChat::handleHover(S32 x, S32 y, MASK mask)
 {
     mBarHot = barShown() && barStrip().pointInRect(x, y);
-    const bool at_edge = x < EDGE_REACH || y < EDGE_REACH || x >= getRect().getWidth() - EDGE_REACH || y >= getRect().getHeight() - EDGE_REACH;
+    const bool at_edge = !isLocked() && (x < EDGE_REACH || y < EDGE_REACH || x >= getRect().getWidth() - EDGE_REACH || y >= getRect().getHeight() - EDGE_REACH); // locked, no edge timer
     if (!at_edge)
     {
         mEdgeSince = -1.0;

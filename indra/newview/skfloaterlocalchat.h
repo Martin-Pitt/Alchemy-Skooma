@@ -70,6 +70,8 @@ public:
     void setMinimized(bool minimize) override;
     /// The chat draws its own bar where it was, so it never folds against a screen edge.
     ECollapseEdge pickCollapseEdge() override { return COLLAPSE_EDGE_NONE; }
+    /// Locked, only what the chat draws takes the mouse: shown messages, the pill, the input, the typing line, the scroll bar and the buttons.
+    bool hitsContentAt(S32 x, S32 y) override;
     bool handleKeyHere(KEY key, MASK mask) override;
     bool handleMouseDown(S32 x, S32 y, MASK mask) override;
     bool handleMouseUp(S32 x, S32 y, MASK mask) override;
