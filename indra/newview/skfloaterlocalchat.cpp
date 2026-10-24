@@ -704,12 +704,17 @@ void SKFloaterLocalChat::layoutCog()
     {
         return;
     }
-    constexpr S32 COG_PX = 16;
-    // Left of the collapse button, which the floater keeps at the top right.
+    // In the title buttons' row, left of them all, at their size.
     static LLUICachedControl<S32> close_box_size("UIFloaterCloseBoxSize", 0);
-    const S32 right = getRect().getWidth() - 4 - (mButtons[BUTTON_COLLAPSE] ? close_box_size + 2 : 0);
-    const S32 top = getRect().getHeight() - 2;
-    mCog->setRect(LLRect(right - COG_PX, top, right, top - COG_PX));
+    static LLUICachedControl<S32> close_box_from_top("UICloseBoxFromTop", 0);
+    const LLRect buttons = getDragHandle() ? getDragHandle()->getButtonsRect() : LLRect();
+    const S32 right = buttons.isEmpty() ? getRect().getWidth() - LLPANEL_BORDER_WIDTH : buttons.mLeft - 1;
+    const S32 top = getRect().getHeight() - close_box_from_top;
+    const LLRect rect(right - close_box_size, top, right, top - close_box_size);
+    if (rect != mCog->getRect())
+    {
+        mCog->setRect(rect);
+    }
 }
 
 void SKFloaterLocalChat::onMouseEnter(S32 x, S32 y, MASK mask)
@@ -1523,13 +1528,19 @@ void SKFloaterLocalChat::draw()
     }
     mWasExpanded = full;
 
+    // The cog and the title buttons show together, while the chat is hovered or focused.
+    const bool buttons_shown = (mHovered || hasFocus()) && opaque;
+    layoutCog(); // the lock and collapse buttons come and go with the floater's state
     if (mCog)
     {
-        mCog->setVisible(mHovered && opaque);
+        mCog->setVisible(buttons_shown);
     }
-    if (mButtons[BUTTON_COLLAPSE])
+    for (EFloaterButton button : { BUTTON_COLLAPSE, BUTTON_LOCK })
     {
-        mButtons[BUTTON_COLLAPSE]->setVisible(mHovered && opaque);
+        if (mButtons[button])
+        {
+            mButtons[button]->setVisible(buttons_shown);
+        }
     }
 
     // The only chrome, the mini-map's faint tint, eased in and out; its border shows only while the pointer rests on an edge.
