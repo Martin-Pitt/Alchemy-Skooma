@@ -33,9 +33,11 @@
 #include "skoutlinecapture.h"
 #include "llrendertarget.h"
 #include "skchatunfurlcache.h"
+#include "skscrollanimator.h"
 
 #include <deque>
 
+class SKEmojiComplete;
 class LLButton;
 class LLChatEntry;
 class LLFontGL;
@@ -77,6 +79,8 @@ public:
     bool handleMouseUp(S32 x, S32 y, MASK mask) override;
     bool handleHover(S32 x, S32 y, MASK mask) override;
     void onMouseCaptureLost() override;
+    void glideWheel();
+    bool scrolledUp() const;  // up from the newest message, or gliding there
     bool handleScrollWheel(S32 x, S32 y, LLScrollDelta delta) override;
     void onMouseEnter(S32 x, S32 y, MASK mask) override;
     void onMouseLeave(S32 x, S32 y, MASK mask) override;
@@ -201,6 +205,7 @@ private:
     LLChatEntry* mInput = nullptr;
     LLMenuButton* mCog = nullptr;
     LLButton* mEmojiButton = nullptr;
+    SKEmojiComplete* mEmojiComplete = nullptr;
     U32 mEmojiClosedFrame = 0;  // the frame the picker last closed, to tell a toggle-off click
     boost::signals2::connection mEmojiCloseConnection;
     std::deque<Message> mMessages;
@@ -208,6 +213,7 @@ private:
     std::vector<Row> mRows;
     S32 mContentHeight = 0;
     S32 mScroll = 0;            // pixels scrolled up from the newest message
+    SKScrollAnimator mWheelGlide; // the wheel's smooth scroll, which mScroll follows rounded
     S32 mPendingMessages = 0;   // appended since the last layout
     S32 mUnseen = 0;            // arrived while scrolled up
     S32 mPillCount = -1;        // the count mPillLabel was made for

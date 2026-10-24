@@ -50,7 +50,6 @@
      follows="right|bottom"
      height="20"
      image_overlay="Emoji_Picker_Icon"
-     is_toggle="true"
      layout="topleft"
      left="422"
      top="530"
