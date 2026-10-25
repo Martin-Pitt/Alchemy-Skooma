@@ -20,7 +20,7 @@
  title=""
  single_instance="true"
  save_rect="true"
- width="450">
+ width="640">
     <string name="jump_to_present">Jump to present ↓</string>
     <string name="new_messages">[COUNT] new messages ↓</string>
     <string name="day_divider">[MONTH] [DAY], [YEAR]</string>
