@@ -277,6 +277,7 @@ void SKChatUnfurlCache::request(const SKChatEmbedPtr& embed)
         break;
     }
     case EKind::MARKETPLACE:
+    case EKind::DOCS:
         requestPage(embed);
         break;
     default:
