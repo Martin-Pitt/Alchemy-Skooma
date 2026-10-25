@@ -259,6 +259,7 @@ private:
         LLVector3d mOrigin;         ///< the region's origin, global
         LLVector3 mCenter;          ///< region-local
         LLVector3 mHalf;
+        LLQuaternion mRot;          ///< region frame
     };
 
     struct Scan
