@@ -150,6 +150,7 @@
 #include "llmessageconfig.h"
 #include "llmoveview.h"
 #include "llfloaterimcontainer.h"
+#include "llimview.h" // <SK:Nexii> Reopen IMs
 #include "llfloaterimnearbychat.h"
 #include "llnotifications.h"
 #include "llnotificationsutil.h"
@@ -2759,6 +2760,8 @@ bool idle_startup()
 
         LLStartUp::setStartupState( STATE_STARTED );
         do_startup_frame();
+
+        gIMMgr->reopenSavedSessions(); // <SK:Nexii> Reopen IMs: reopen the chats open at the last logout.
 
         // A login that skipped the login screen asks about the last run here.
         ALFeedback::askAboutLastRun();
