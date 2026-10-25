@@ -71,6 +71,8 @@ public:
     bool hitsContentAt(S32 x, S32 y) override;
     bool handleKeyHere(KEY key, MASK mask) override;
     bool handleMouseDown(S32 x, S32 y, MASK mask) override;
+    bool handleRightMouseDown(S32 x, S32 y, MASK mask) override;
+    bool handleRightMouseUp(S32 x, S32 y, MASK mask) override;
     bool handleHover(S32 x, S32 y, MASK mask) override;
     void glideWheel();
     bool scrolledUp() const;  // up from the newest message, or gliding there
