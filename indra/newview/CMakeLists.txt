@@ -640,6 +640,7 @@ if(AL_BUILD_VIEWER)
     llmediactrl.cpp
     llmediadataclient.cpp
     llmenuoptionpathfindingrebakenavmesh.cpp
+    skcachedobject.cpp # <SK:Nexii> census
     skmeshhavokshape.cpp # <SK:Nexii> physics_havok block
     skphysicsshape.cpp # <SK:Nexii> physics shapes
     skobjectfaces.cpp # <SK:Nexii> census
@@ -1531,6 +1532,7 @@ if(AL_BUILD_VIEWER)
     llmediactrl.h
     llmediadataclient.h
     llmenuoptionpathfindingrebakenavmesh.h
+    skcachedobject.h # <SK:Nexii> census
     skmeshhavokshape.h # <SK:Nexii> physics_havok block
     skphysicsshape.h # <SK:Nexii> physics shapes
     skobjectfaces.h # <SK:Nexii> census
