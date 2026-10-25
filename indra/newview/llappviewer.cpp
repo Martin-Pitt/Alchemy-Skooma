@@ -97,6 +97,7 @@
 #include "lltoast.h"
 #include "llsdutil_math.h"
 #include "lllocationhistory.h"
+#include "llmeshoptimizer.h"
 #include "llvector4a.h"
 #include "llviewermenufile.h"
 #include "llvoicechannel.h"
@@ -810,6 +811,9 @@ bool LLAppViewer::init()
     // initialize SSE options
     LLVector4a::initClass();
 
+    // meshoptimizer's scratch from each thread's own arena
+    LLMeshOptimizer::initClass();
+
     //initialize particle index pool
     LLVOPartGroup::initClass();
 
@@ -1439,10 +1443,6 @@ bool LLAppViewer::doFrame()
     }
 
     LLPerfStats::RecordSceneTime T (LLPerfStats::StatType_t::RENDER_FRAME);
-    if (!LLWorld::instanceExists())
-    {
-        LLWorld::createInstance();
-    }
 
     LLEventPump& mainloop(LLEventPumps::instance().obtain("mainloop"));
     LLSD newFrame;
@@ -2333,7 +2333,7 @@ bool LLAppViewer::initThreads()
 
     static const bool enable_threads = true;
 
-    LLImage::initClass(gSavedSettings.getBOOL("TextureNewByteRange"),gSavedSettings.getS32("TextureReverseByteRange"));
+    LLImage::initClass();
 
     LLLFSThread::initClass(enable_threads && true); // TODO: fix crashes associated with this shutdo
 
@@ -3845,8 +3845,8 @@ LLSD LLAppViewer::getViewerInfo() const
     // Moved hack adjustment to Windows memory size into llsys.cpp
     info["CONCURRENCY"] = LLSD::Integer((S32) std::thread::hardware_concurrency());
     info["OS_VERSION"] = LLOSInfo::instance().getOSString();
-    info["GRAPHICS_CARD_VENDOR"] = ll_safe_string((const char*)(glGetString(GL_VENDOR)));
-    info["GRAPHICS_CARD"] = ll_safe_string((const char*)(glGetString(GL_RENDERER)));
+    info["GRAPHICS_CARD_VENDOR"] = gGLManager.mGLVendorString;
+    info["GRAPHICS_CARD"] = gGLManager.mGLRendererString;
 
 #if LL_WINDOWS
     std::string drvinfo;
@@ -3889,7 +3889,7 @@ LLSD LLAppViewer::getViewerInfo() const
 // [RLVa:KB] - Checked: 2010-04-18 (RLVa-1.2.0)
     info["RLV_VERSION"] = (rlv_handler_t::isEnabled()) ? RlvStrings::getVersionAbout() : "(disabled)";
 // [/RLVa:KB]
-    info["OPENGL_VERSION"] = ll_safe_string((const char*)(glGetString(GL_VERSION)));
+    info["OPENGL_VERSION"] = gGLManager.mGLVersionString;
 
     // Settings
 
@@ -6607,12 +6607,11 @@ void LLAppViewer::disconnectViewer()
     // Also writes cached agent settings to gSavedSettings
     gAgent.cleanup();
 
-    // This is where we used to call gObjectList.destroy() and then delete gWorldp.
-    // Now we just ask the LLWorld singleton to cleanly shut down.
+    // The world gives up its regions and objects here but stays until cleanup() deletes it: the frames drawn while
+    // disconnected, this one among them, still read it.
     if(LLWorld::instanceExists())
     {
         LLWorld::getInstance()->resetClass();
-        LLWorld::deleteSingleton();
     }
     LLVOCache::deleteSingleton();
 
