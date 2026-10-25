@@ -1489,25 +1489,55 @@ void SKWorldCensus::gatherCached()
             {
                 continue;
             }
-            const LLVector4a* extents = entry->getSpatialExtents();
-            CachedPart part;
-            part.mOrigin = origin;
-            part.mCenter.set((extents[0][0] + extents[1][0]) * 0.5f, (extents[0][1] + extents[1][1]) * 0.5f,
-                             (extents[0][2] + extents[1][2]) * 0.5f);
-            part.mHalf.set((extents[1][0] - extents[0][0]) * 0.5f, (extents[1][1] - extents[0][1]) * 0.5f,
-                           (extents[1][2] - extents[0][2]) * 0.5f);
-            if (part.mHalf.mV[VX] <= 0.f || part.mHalf.mV[VY] <= 0.f || part.mHalf.mV[VZ] <= 0.f)
+            // The octree's extents are pos +/- scale around the whole linkset, so
+            // each prim is read from its cached update instead: scale, position
+            // and rotation, a child's relative to its root.
+            LLDataPackerBinaryBuffer* dp = entry->getDP();
+            if (!dp)
             {
                 continue;
             }
-            const LLVector3d pos = origin + LLVector3d(part.mCenter);
-            const F64 reach = snap.mRange + part.mHalf.magVec();
-            if (dist_vec(pos, snap.mCenter) > reach && dist_vec(pos, snap.mCamera) > reach)
+            LLVector3 root_pos, root_scale;
+            LLQuaternion root_rot;
+            LLViewerObject::extractSpatialExtents(dp, root_pos, root_scale, root_rot);
+            root_rot.normalize();
+
+            auto take = [&](const LLVOCacheEntry* prim, const LLVector3& center, const LLVector3& scale, const LLQuaternion& rot)
             {
-                continue;
+                CachedPart part;
+                part.mOrigin = origin;
+                part.mCenter = center;
+                part.mHalf = scale * 0.5f;
+                part.mRot = rot;
+                if (part.mHalf.mV[VX] <= 0.f || part.mHalf.mV[VY] <= 0.f || part.mHalf.mV[VZ] <= 0.f)
+                {
+                    return;
+                }
+                const LLVector3d pos = origin + LLVector3d(part.mCenter);
+                const F64 reach = snap.mRange + part.mHalf.magVec();
+                if (dist_vec(pos, snap.mCenter) > reach && dist_vec(pos, snap.mCamera) > reach)
+                {
+                    return;
+                }
+                part.mId = placeholderId(handle, prim->getLocalID());
+                mScan.mCached.push_back(part);
+            };
+
+            take(entry, root_pos, root_scale, root_rot);
+            for (auto it = entry->getChildrenBegin(); it != entry->getChildrenEnd(); ++it)
+            {
+                const LLVOCacheEntry* child = *it;
+                LLDataPackerBinaryBuffer* cdp = child ? child->getDP() : nullptr;
+                if (!cdp || !child->isValid())
+                {
+                    continue;
+                }
+                LLVector3 pos, scale;
+                LLQuaternion rot;
+                LLViewerObject::extractSpatialExtents(cdp, pos, scale, rot);
+                rot.normalize();
+                take(child, root_pos + pos * root_rot, scale, rot * root_rot);
             }
-            part.mId = placeholderId(handle, entry->getLocalID());
-            mScan.mCached.push_back(part);
         }
     }
 }
@@ -1522,6 +1552,10 @@ void SKWorldCensus::visitCached(const CachedPart& part)
     sig = mix(sig, *reinterpret_cast<const U64*>(part.mId.mData + 8));
     sig = mixVec(sig, part.mCenter);
     sig = mixVec(sig, part.mHalf);
+    for (F32 q : part.mRot.mQ)
+    {
+        sig = mixF64(sig, q);
+    }
     sig = mixF64(sig, part.mOrigin.mdV[VX]);
     sig = mixF64(sig, part.mOrigin.mdV[VY]);
 
@@ -1546,12 +1580,18 @@ void SKWorldCensus::visitCached(const CachedPart& part)
         made->mSolid = true;
         made->mOrigin = part.mOrigin;
         made->mCenter = part.mCenter;
-        made->mAxes[0].set(1.f, 0.f, 0.f);
-        made->mAxes[1].set(0.f, 1.f, 0.f);
-        made->mAxes[2].set(0.f, 0.f, 1.f);
+        made->mAxes[0] = LLVector3::x_axis * part.mRot;
+        made->mAxes[1] = LLVector3::y_axis * part.mRot;
+        made->mAxes[2] = LLVector3::z_axis * part.mRot;
         made->mHalf = part.mHalf;
-        made->mMin = part.mOrigin + LLVector3d(part.mCenter - part.mHalf);
-        made->mMax = part.mOrigin + LLVector3d(part.mCenter + part.mHalf);
+        LLVector3 reach;
+        for (S32 a = 0; a < 3; ++a)
+        {
+            reach.mV[a] = fabsf(made->mAxes[0].mV[a]) * part.mHalf.mV[VX] + fabsf(made->mAxes[1].mV[a]) * part.mHalf.mV[VY]
+                        + fabsf(made->mAxes[2].mV[a]) * part.mHalf.mV[VZ];
+        }
+        made->mMin = part.mOrigin + LLVector3d(part.mCenter - reach);
+        made->mMax = part.mOrigin + LLVector3d(part.mCenter + reach);
         made->mSignature = sig;
         rec = made;
         cache.mRecord = rec;
