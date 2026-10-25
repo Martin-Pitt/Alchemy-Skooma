@@ -2249,6 +2249,14 @@ bool SKFloaterLocalChat::handleHover(S32 x, S32 y, MASK mask)
         getWindow()->setCursor(UI_CURSOR_HAND);
         return true;
     }
+    TextPos pos;
+    if (!hasMouseCapture() && !isMinimized() && textPosAt(x, y, false, pos))
+    {
+        // Over selectable text, the text cursor, as a browser shows.
+        LLFloater::handleHover(x, y, mask);
+        getWindow()->setCursor(UI_CURSOR_IBEAM);
+        return true;
+    }
     return LLFloater::handleHover(x, y, mask);
 }
 
