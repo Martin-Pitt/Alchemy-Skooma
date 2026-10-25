@@ -2013,6 +2013,10 @@ bool SKFloaterLocalChat::handleHover(S32 x, S32 y, MASK mask)
 
 bool SKFloaterLocalChat::handleScrollWheel(S32 x, S32 y, LLScrollDelta delta)
 {
+    if (isLocked() && !hitsContentAt(x, y))
+    {
+        return false; // locked, the wheel off the content zooms the camera as over the world
+    }
     // LLFloater::handleScrollWheel always claims the wheel, so only a child that scrolls may take it first; the bar never does.
     const bool on_bar = mScrollbar && mScrollbar->getVisible() && mScrollbar->getRect().pointInRect(x, y);
     if (!on_bar && childrenHandleScrollWheel(x, y, delta))
