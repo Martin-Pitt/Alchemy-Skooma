@@ -37,6 +37,8 @@ constexpr std::string_view MAPS_HOST = "maps.secondlife.com";
 constexpr std::string_view WORLD_HOST = "world.secondlife.com";
 constexpr std::string_view MARKETPLACE_HOST = "marketplace.secondlife.com";
 constexpr std::string_view MARKETPLACE_IMAGE_HOST = "slm-assets.secondlife.com";
+constexpr std::string_view LSL_DOCS_HOST = "lsl.dev";
+constexpr std::string_view SLUA_DOCS_HOST = "slua.dev";
 constexpr size_t MAX_REGION_NAME = 64;
 
 char lower(char c)
@@ -416,12 +418,12 @@ std::string httpsHost(std::string_view url, std::string* path)
 
 bool isPageHost(std::string_view host)
 {
-    return host == MARKETPLACE_HOST;
+    return host == MARKETPLACE_HOST || host == LSL_DOCS_HOST || host == SLUA_DOCS_HOST;
 }
 
 bool isImageHost(std::string_view host)
 {
-    return host == MARKETPLACE_IMAGE_HOST;
+    return host == MARKETPLACE_IMAGE_HOST || host == LSL_DOCS_HOST || host == SLUA_DOCS_HOST;
 }
 
 bool redirectAllowed(std::string_view from, std::string_view location)
@@ -548,6 +550,35 @@ Target classify(std::string_view url)
         Target target;
         target.mKind = EKind::MARKETPLACE;
         target.mKey = "https://marketplace.secondlife.com/p/" + std::string(seg[1]) + "/" + std::string(seg[2]);
+        return target;
+    }
+    if (host == LSL_DOCS_HOST || host == SLUA_DOCS_HOST)
+    {
+        Target target;
+        target.mKind = EKind::DOCS;
+        target.mKey = "https://" + host;
+        for (size_t i = 0; i < count; ++i)
+        {
+            if (seg[i].empty() || seg[i].size() > 200 || seg[i] == "." || seg[i] == "..")
+            {
+                return {};
+            }
+            for (char c : seg[i])
+            {
+                const bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '%' || c == '.';
+                if (!ok)
+                {
+                    return {};
+                }
+            }
+            target.mKey += "/" + std::string(seg[i]);
+        }
+        // The docs answer a page's own spelling and redirects are not followed, so a trailing slash is kept.
+        const std::string_view bare = std::string_view(path).substr(0, std::min(path.find_first_of("?#"), path.size()));
+        if (count == 0 || bare.back() == '/')
+        {
+            target.mKey += "/";
+        }
         return target;
     }
     return {};

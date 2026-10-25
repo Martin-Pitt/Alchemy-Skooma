@@ -32,7 +32,8 @@
 
 // Every viewer in chat range would fetch a previewed link, so a link to any other host would
 // let its owner log their addresses. Only Linden Lab's own hosts are previewed, and only those
-// a viewer talks to anyway; nothing here touches the network.
+// a viewer talks to anyway, besides the LSL and SLua documentation sites (lsl.dev, slua.dev),
+// which Nexii runs; nothing here touches the network.
 namespace SKChatUnfurl
 {
 enum class EKind
@@ -43,6 +44,7 @@ enum class EKind
     AGENT,
     GROUP,
     MARKETPLACE, // a listing page, read for its Open Graph tags
+    DOCS,        // a page of lsl.dev or slua.dev, read for its Open Graph tags
 };
 
 struct Target
