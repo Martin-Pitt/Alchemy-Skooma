@@ -141,7 +141,8 @@ namespace
     /// width beyond the line - an edge or vertex touching it, or a face lying in it - this keeps only a face in the
     /// line, on the side its solid is on: behind its normal along the axis, facing -1 (below the line), +1 (above),
     /// 0 for a triangle with no extent across the axis, whose touching pieces go nowhere.
-    void dividePoly(const V3* in, S32 n, V3* out1, S32& n1, V3* out2, S32& n2, F64 offset, S32 axis, S32 facing)
+    /// Coordinates below FIRST of the pieces' new vertices are left unset, for a caller that reads none of them.
+    template<S32 axis, S32 FIRST = 0> inline void dividePoly(const V3* in, S32 n, V3* out1, S32& n1, V3* out2, S32& n2, F64 offset, S32 facing)
     {
         F64 d[12];
         bool zero = false;
@@ -157,7 +158,7 @@ namespace
             {
                 const F64 s = d[b] / (d[b] - d[a]);
                 V3 q;
-                for (S32 k = 0; k < 3; ++k)
+                for (S32 k = FIRST; k < 3; ++k)
                 {
                     q.v[k] = in[b].v[k] + (in[a].v[k] - in[b].v[k]) * s;
                 }
@@ -216,15 +217,87 @@ namespace
     struct Frame
     {
         F64 mOx, mOy, mOz, mCell, mUnit, mRange;
+        F64 mInvCell, mInvUnit;
         S32 mW;
         S32 mClimb;
+        bool mPow2;     ///< cell and unit are powers of two, so multiplying by their reciprocals is exact
 
         explicit Frame(const ColumnFrame& f)
             : mOx(f.mOrigin.mV[VX]), mOy(f.mOrigin.mV[VY]), mOz(f.mOrigin.mV[VZ]), mCell(f.mCell), mUnit(f.mUnit), mRange(f.mHeightRange),
-              mW(f.mWidth), mClimb(f.mClimb)
+              mInvCell(1.0 / mCell), mInvUnit(1.0 / mUnit), mW(f.mWidth), mClimb(f.mClimb), mPow2(pow2(mCell) && pow2(mUnit))
         {
         }
+
+        static bool pow2(F64 x)
+        {
+            S32 e;
+            return x > 0.0 && std::frexp(x, &e) == 0.5;
+        }
+
+        /// A distance in cells, exactly d / mCell.
+        F64 cells(F64 d) const { return mPow2 ? d * mInvCell : d / mCell; }
+
+        /// units(h, mUnit), exactly.
+        F64 heightUnits(F64 h) const
+        {
+            const F64 q = mPow2 ? h * mInvUnit : h / mUnit;
+            const F64 r = std::floor(q + 0.5);
+            return std::fabs(q - r) < SNAP_UNITS ? r : q;
+        }
     };
+
+    /// The greatest coordinate along axis of a polygon's vertices.
+    inline F64 maxOf(const V3* p, S32 n, S32 axis)
+    {
+        F64 m = p[0].v[axis];
+        for (S32 k = 1; k < n; ++k)
+        {
+            m = std::max(m, p[k].v[axis]);
+        }
+        return m;
+    }
+
+    /// A cell this far inside a triangle (metres) is wholly covered, whatever the clip rounds.
+    constexpr F64 INTERIOR_EPS = 1e-7;
+    /// Fewest covered columns in a row worth stepping over.
+    constexpr S32 INTERIOR_MIN_RUN = 2;
+
+    /// The plan y range of a triangle on the line x = x, false where the line misses it.
+    inline bool planSpan(const V3* t, F64 x, F64& ya, F64& yb)
+    {
+        ya = 1e300;
+        yb = -1e300;
+        S32 hits = 0;
+        for (S32 i = 0, j = 2; i < 3; j = i, ++i)
+        {
+            const F64 xi = t[i].v[0], xj = t[j].v[0];
+            if (xi == xj || x < std::min(xi, xj) || x > std::max(xi, xj))
+            {
+                continue;
+            }
+            const F64 y = t[i].v[1] + (t[j].v[1] - t[i].v[1]) * ((x - xi) / (xj - xi));
+            ya = std::min(ya, y);
+            yb = std::max(yb, y);
+            ++hits;
+        }
+        return hits >= 2;
+    }
+
+    /// A piece's height range, in metres, as a span of its column.
+    template<typename Store> inline void emitSpan(const Frame& g, S32 ix, S32 iy, F64 zlo, F64 zhi, U8 code, U8 cue, Store& out)
+    {
+        zlo -= g.mOz;
+        zhi -= g.mOz;
+        if (zhi < 0.0 || zlo > g.mRange)
+        {
+            return;
+        }
+        zlo = std::max(zlo, 0.0);
+        zhi = std::min(zhi, g.mRange);
+        const S32 smin = std::clamp(static_cast<S32>(std::floor(g.heightUnits(zlo))), 0, COLUMN_HEIGHT_MAX - 1);
+        const S32 smax = std::clamp(static_cast<S32>(std::ceil(g.heightUnits(zhi))), smin + 1, static_cast<S32>(COLUMN_HEIGHT_MAX));
+        out.add(static_cast<size_t>(ix) + static_cast<size_t>(iy) * g.mW, Span{ static_cast<U16>(smin), static_cast<U16>(smax), code, cue });
+    }
 
     /// Clip one triangle into the frame's columns, Recast-style: rows along SL x, then columns along SL y, in a
     /// fixed buffer on the stack. Each piece's height range becomes a span.
@@ -256,21 +329,27 @@ namespace
         const F64 nx = e0y * e1z - e0z * e1y, ny = e0z * e1x - e0x * e1z;
         const S32 facing_x = nx > 0.0 ? -1 : nx < 0.0 ? 1 : 0;
         const S32 facing_y = ny > 0.0 ? -1 : ny < 0.0 ? 1 : 0;
+        // Heights off the plane, for the cells the triangle covers; not for one too steep to read them off.
+        const F64 nz = e0x * e1y - e0y * e1x;
+        const bool plane = std::fabs(nz) >= 0.01 * (std::fabs(nx) + std::fabs(ny));
+        const F64 gx = plane ? -nx / nz : 0.0, gy = plane ? -ny / nz : 0.0;
+        V3 in3[3] = { in[0], in[1], in[2] };
         if (lo[0] > g.mOx + W * cs || hi[0] < g.mOx || lo[1] > g.mOy + W * cs || hi[1] < g.mOy || lo[2] > g.mOz + g.mRange || hi[2] < g.mOz)
         {
             return;
         }
         // On a column edge, the triangle's least x is split there first, so a face lying in it goes to its solid's side.
-        const F64 qx = (lo[0] - g.mOx) / cs, fx = std::floor(qx);
+        const F64 qx = g.cells(lo[0] - g.mOx), fx = std::floor(qx);
         const S32 ix0 = std::clamp(static_cast<S32>(fx) - (qx == fx ? 1 : 0), -1, W - 1);
-        const S32 raw_ix1 = static_cast<S32>(std::floor((hi[0] - g.mOx) / cs));
+        const S32 raw_ix1 = static_cast<S32>(std::floor(g.cells(hi[0] - g.mOx)));
         const S32 ix1 = std::clamp(raw_ix1, 0, W - 1);
         const bool one_row = ix0 == raw_ix1;
         S32 nin = 3;
         for (S32 ix = ix0; ix <= ix1; ++ix)
         {
             S32 nrow, nrest;
-            if (one_row)
+            const F64 x_line = g.mOx + (ix + 1) * cs;
+            if (one_row || (ix == raw_ix1 && (nin == 0 || maxOf(in, nin, 0) < x_line)))
             {
                 // Wholly inside one row: nothing to split off.
                 std::swap(in, row);
@@ -279,7 +358,7 @@ namespace
             }
             else
             {
-                dividePoly(in, nin, row, nrow, rest, nrest, g.mOx + (ix + 1) * cs, 0, facing_x);
+                dividePoly<0>(in, nin, row, nrow, rest, nrest, x_line, facing_x);
                 std::swap(in, rest);
                 nin = nrest;
             }
@@ -293,9 +372,10 @@ namespace
                 ylo = std::min(ylo, row[k].v[1]);
                 yhi = std::max(yhi, row[k].v[1]);
             }
-            const F64 qy = (ylo - g.mOy) / cs, fy = std::floor(qy);
+            const F64 qy = g.cells(ylo - g.mOy), fy = std::floor(qy);
             S32 iy0 = static_cast<S32>(fy) - (qy == fy ? 1 : 0);
-            S32 iy1 = static_cast<S32>(std::floor((yhi - g.mOy) / cs));
+            S32 iy1 = static_cast<S32>(std::floor(g.cells(yhi - g.mOy)));
+            const S32 raw_iy1 = iy1;
             if (iy1 < 0 || iy0 >= W)
             {
                 continue;
@@ -303,10 +383,53 @@ namespace
             const bool one_column = iy0 == iy1;
             iy0 = std::clamp(iy0, -1, W - 1);
             iy1 = std::clamp(iy1, 0, W - 1);
+            // The columns whose cell lies inside the triangle with room to spare: each piece is the whole cell, so
+            // its heights are the plane's over the cell and the walk steps over them in one split.
+            S32 ja = 1, jb = 0;
+            const F64 xl = g.mOx + ix * cs, xr = xl + cs;
+            if (plane && !one_column && xl > lo[0] + INTERIOR_EPS && xr < hi[0] - INTERIOR_EPS)
+            {
+                F64 ya, yb;
+                if (planSpan(in3, xl, ya, yb))
+                {
+                    F64 ya2, yb2;
+                    if (planSpan(in3, xr, ya2, yb2))
+                    {
+                        ya = std::max(ya, ya2) + INTERIOR_EPS;
+                        yb = std::min(yb, yb2) - INTERIOR_EPS;
+                        ja = std::max(static_cast<S32>(std::ceil(g.cells(ya - g.mOy))), std::max(iy0, 0));
+                        jb = std::min(static_cast<S32>(std::floor(g.cells(yb - g.mOy))) - 1, iy1);
+                    }
+                }
+            }
+            if (jb - ja < INTERIOR_MIN_RUN - 1)
+            {
+                ja = W + 1;
+            }
+            const F64 zl = in3[0].v[2] + gx * (xl - in3[0].v[0]), zr = in3[0].v[2] + gx * (xr - in3[0].v[0]);
+            const F64 zxlo = std::min(zl, zr), zxhi = std::max(zl, zr);
             for (S32 iy = iy0; iy <= iy1; ++iy)
             {
+                if (iy == ja)
+                {
+                    for (; iy <= jb; ++iy)
+                    {
+                        const F64 ta = gy * (g.mOy + iy * cs - in3[0].v[1]), tb = gy * (g.mOy + (iy + 1) * cs - in3[0].v[1]);
+                        emitSpan(g, ix, iy, zxlo + std::min(ta, tb), zxhi + std::max(ta, tb), code, cue, out);
+                    }
+                    iy = jb;
+                    if (jb < iy1)
+                    {
+                        S32 ncell, nrr;
+                        dividePoly<1, 1>(row, nrow, cell, ncell, rrest, nrr, g.mOy + (jb + 1) * cs, facing_y);
+                        std::swap(row, rrest);
+                        nrow = nrr;
+                    }
+                    continue;
+                }
                 S32 ncell, nrr;
-                if (one_column)
+                const F64 y_line = g.mOy + (iy + 1) * cs;
+                if (one_column || (iy == raw_iy1 && (nrow == 0 || maxOf(row, nrow, 1) < y_line)))
                 {
                     // Wholly inside one column.
                     std::swap(row, cell);
@@ -315,7 +438,7 @@ namespace
                 }
                 else
                 {
-                    dividePoly(row, nrow, cell, ncell, rrest, nrr, g.mOy + (iy + 1) * cs, 1, facing_y);
+                    dividePoly<1, 1>(row, nrow, cell, ncell, rrest, nrr, y_line, facing_y);
                     std::swap(row, rrest);
                     nrow = nrr;
                 }
@@ -329,17 +452,7 @@ namespace
                     zlo = std::min(zlo, cell[k].v[2]);
                     zhi = std::max(zhi, cell[k].v[2]);
                 }
-                zlo -= g.mOz;
-                zhi -= g.mOz;
-                if (zhi < 0.0 || zlo > g.mRange)
-                {
-                    continue;
-                }
-                zlo = std::max(zlo, 0.0);
-                zhi = std::min(zhi, g.mRange);
-                const S32 smin = std::clamp(static_cast<S32>(std::floor(units(zlo, g.mUnit))), 0, COLUMN_HEIGHT_MAX - 1);
-                const S32 smax = std::clamp(static_cast<S32>(std::ceil(units(zhi, g.mUnit))), smin + 1, static_cast<S32>(COLUMN_HEIGHT_MAX));
-                out.add(static_cast<size_t>(ix) + static_cast<size_t>(iy) * W, Span{ static_cast<U16>(smin), static_cast<U16>(smax), code, cue });
+                emitSpan(g, ix, iy, zlo, zhi, code, cue, out);
             }
         }
     }
