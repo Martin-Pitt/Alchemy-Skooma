@@ -343,6 +343,10 @@ public:
 
     const LLQuaternion getRotationRegion() const;
     const LLQuaternion getRotationEdit() const;
+    // <SK:Nexii> census: the rotation the simulator last set, without the client-side llTargetOmega spin the
+    // viewer accumulates on top of it, which the sim's physics never sees.
+    const LLQuaternion& getRotationSim() const { return mPreviousRotation; }
+    // </SK:Nexii>
     const LLQuaternion getRenderRotation() const;
     virtual const LLMatrix4a& getRenderMatrix() const;
 
