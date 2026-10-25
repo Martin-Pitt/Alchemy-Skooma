@@ -735,7 +735,7 @@ bool SKFloaterLocalChat::applyRectControl()
     return true;
 }
 
-static const std::string TYPING_SEPARATOR = "  Â\xC2\xB7  ";
+static const std::string TYPING_SEPARATOR = "  \xC2\xB7  ";
 
 void SKFloaterLocalChat::setMinimized(bool minimize)
 {
@@ -2633,12 +2633,12 @@ void SKFloaterLocalChat::drawAvatarIcon(const Message& first, S32 left, S32 top,
         return;
     }
 
-    // The picture clipped to a circle, inside a ring of the speaker's colour.
+    // The picture clipped to a circle.
     gGL.getTextureSlot(0)->bindSampled(tex, ALSamplers::BilinearClamp);
     const F32 tint = first.mHistory ? 0.5f : 1.f; // dimmed with the greyed-out history
     gGL.color4f(tint, tint, tint, color.mV[VALPHA]);
     constexpr S32 STEPS = 20;
-    const F32 inner = radius - 1.f;
+    const F32 inner = radius;
     gGL.begin(LLRender::TRIANGLE_FAN);
     gGL.texCoord2f(0.5f, 0.5f);
     gGL.vertex2f(cx, cy);
@@ -2652,8 +2652,6 @@ void SKFloaterLocalChat::drawAvatarIcon(const Message& first, S32 left, S32 top,
     }
     gGL.end();
     gGL.getTextureSlot(0)->unbind();
-    gGL.color4fv(color.mV);
-    gl_circle_2d(cx, cy, radius - 0.5f, STEPS, false);
 }
 
 void SKFloaterLocalChat::processProperties(void* data, EAvatarProcessorType type)
