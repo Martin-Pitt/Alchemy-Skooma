@@ -41,6 +41,19 @@ TEST_CASE("skchatunfurl: listing pages are accepted and made canonical", "[skcha
     REQUIRE(classify("HTTPS://Marketplace.SecondLife.com/p/x/1").mKind == EKind::MARKETPLACE);
 }
 
+TEST_CASE("skchatunfurl: documentation pages are accepted and made canonical", "[skchatunfurl]")
+{
+    const Target t = classify("https://lsl.dev/functions/llSay/?x=1#top");
+    REQUIRE(t.mKind == EKind::DOCS);
+    REQUIRE(t.mKey == "https://lsl.dev/functions/llSay/");
+    REQUIRE(classify("https://SLua.dev").mKey == "https://slua.dev/");
+    REQUIRE(classify("https://slua.dev/ll/say").mKey == "https://slua.dev/ll/say");
+    REQUIRE(classify("https://lsl.dev/a<b").mKind == EKind::NONE);
+    REQUIRE(classify("https://docs.lsl.dev/").mKind == EKind::NONE);
+    REQUIRE(classify("http://lsl.dev/").mKind == EKind::NONE);
+    REQUIRE(isImageHost("slua.dev"));
+}
+
 TEST_CASE("skchatunfurl: anything but an exact allowlisted https host is refused", "[skchatunfurl]")
 {
     for (const char* url : {
