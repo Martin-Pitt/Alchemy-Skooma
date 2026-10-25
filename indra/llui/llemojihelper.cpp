@@ -55,7 +55,7 @@ bool LLEmojiHelper::isActive(const LLUICtrl* ctrl_p) const
 }
 
 // static
-bool LLEmojiHelper::isCursorInEmojiCode(std::string_view text, S32 cursorPos, S32* pShortCodePos, S32 min_length) // <SK:Nexii> min_length for the local chat's emoji autocomplete
+bool LLEmojiHelper::isCursorInEmojiCode(std::string_view text, S32 cursorPos, S32* pShortCodePos)
 {
     // The walk goes back a character at a time, not a byte at a time: the
     // predicate below classifies Unicode, and one byte of a multi-byte
@@ -100,7 +100,7 @@ bool LLEmojiHelper::isCursorInEmojiCode(std::string_view text, S32 cursorPos, S3
     }
 
     const S32 colonPos = prev_char(shortCodePos);
-    bool isShortCode = (cursorPos - shortCodePos >= min_length) // <SK:Nexii> was 2
+    bool isShortCode = (cursorPos - shortCodePos >= 2)
                     && (shortCodePos > 0) && (U':' == char_at(colonPos));
     // <TS:3T> Add qualifier to avoid emoji pop-up when typing times.
     if (isShortCode && (colonPos > 0) && LLStringOps::isDigit(char_at(prev_char(colonPos))))
