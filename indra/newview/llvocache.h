@@ -146,6 +146,7 @@ public:
     void removeAllChildren();
     LLVOCacheEntry* getChild(); //remove the first child, and return it.
     S32  getNumOfChildren() const { return static_cast<S32>(mChildrenList.size()); }
+
     void setBoundingInfo(const LLVector3& pos, const LLVector3& scale); //called from processing object update message
     void updateParentBoundingInfo();
     void saveBoundingSphere();
