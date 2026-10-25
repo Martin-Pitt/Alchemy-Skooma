@@ -1532,10 +1532,10 @@ void SKFloaterLocalChat::draw()
         mEmojiComplete->update();
     }
 
-    // In mouselook the chat must not take the mouse from the world.
+    // In mouselook the chat must not take the mouse from the world, and locked only its content takes it (hitsContentAt).
     const bool opaque = !gAgentCamera.cameraMouselook();
-    setMouseOpaque(opaque);
-    getDragHandle()->setMouseOpaque(opaque);
+    setMouseOpaque(opaque && !isLocked());
+    getDragHandle()->setMouseOpaque(opaque && !isLocked());
 
     if (isMinimized())
     {
