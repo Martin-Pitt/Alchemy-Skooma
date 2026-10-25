@@ -44,7 +44,7 @@ public:
     std::string getToolTip(std::string_view emoji) const;
     bool        isActive(const LLUICtrl* ctrl_p) const;
     // `text` is UTF-8 and every offset here is a byte offset into it.
-    static bool isCursorInEmojiCode(std::string_view text, S32 cursor_pos, S32* short_code_pos_p = nullptr);
+    static bool isCursorInEmojiCode(std::string_view text, S32 cursor_pos, S32* short_code_pos_p = nullptr, S32 min_length = 2); // <SK:Nexii> min_length for the local chat's emoji autocomplete
     void        showHelper(LLUICtrl* hostctrl_p, S32 local_x, S32 local_y, const std::string& short_code, std::function<void(const std::string&)> commit_cb);
     void        hideHelper(const LLUICtrl* ctrl_p = nullptr, bool strict = false);
     void        setIsHideDisabled(bool disabled) { mIsHideDisabled = disabled; };
