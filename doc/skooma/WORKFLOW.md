@@ -21,7 +21,7 @@ Status (2026-10-18): **implemented and in daily use.** `git skooma status|new|wt
 | Branch | Role | Checked out? | Moves by |
 |---|---|---|---|
 | `develop` | Mirror of `upstream/develop`. Zero Skooma commits, ever | Never | `git fetch upstream develop:develop` (inherently ff-only) |
-| `main` | Permanent integration branch. F5/debug checkout. Direct commits **allowed for now** (fork setup: README, branding, glue) and the home of the `doc/skooma/` docs, edited and committed here directly; feature work still belongs in a worktree | Main checkout `D:\viewers\alchemy-skooma` | `git skooma sync` / `integrate`, plus setup commits |
+| `main` | Permanent integration branch. F5/debug checkout. Direct commits **allowed for now** (fork setup: README, branding, glue) and the home of the `doc/skooma/` docs, edited and committed here directly (commit every doc change at once; never leave it uncommitted); feature work still belongs in a worktree | Main checkout `D:\viewers\alchemy-skooma` | `git skooma sync` / `integrate`, plus setup commits |
 | `glue` | Fork-only glue: `AGENTS.md`, `scripts/skooma`, hooks, skins, CI. Never upstreamed | `.worktrees/glue` | Commits; `git merge develop` |
 | `feature-<name>` | One feature, branched from `develop`, upstreamable as-is | `.worktrees/<name>` | Commits; `git merge develop` |
 | trunk (`feature-navmesh`, `feature-atmo-magic`, `feature-combat/minimap`, `camera`) | The branch an area ships as one PR. Area worktrees land into it but are cut from `develop` (`new` refuses a trunk or `main` as a base); it lands into `main` | `.worktrees/<name>` | `integrate` merges area branches; `git merge develop` |
