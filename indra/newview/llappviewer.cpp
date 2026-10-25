@@ -97,6 +97,7 @@
 #include "lltoast.h"
 #include "llsdutil_math.h"
 #include "lllocationhistory.h"
+#include "llmeshoptimizer.h"
 #include "llvector4a.h"
 #include "llviewermenufile.h"
 #include "llvoicechannel.h"
@@ -813,6 +814,9 @@ bool LLAppViewer::init()
     // initialize SSE options
     LLVector4a::initClass();
 
+    // meshoptimizer's scratch from each thread's own arena
+    LLMeshOptimizer::initClass();
+
     //initialize particle index pool
     LLVOPartGroup::initClass();
 
@@ -1442,10 +1446,6 @@ bool LLAppViewer::doFrame()
     }
 
     LLPerfStats::RecordSceneTime T (LLPerfStats::StatType_t::RENDER_FRAME);
-    if (!LLWorld::instanceExists())
-    {
-        LLWorld::createInstance();
-    }
 
     LLEventPump& mainloop(LLEventPumps::instance().obtain("mainloop"));
     LLSD newFrame;
@@ -6621,12 +6621,11 @@ void LLAppViewer::disconnectViewer()
     // Also writes cached agent settings to gSavedSettings
     gAgent.cleanup();
 
-    // This is where we used to call gObjectList.destroy() and then delete gWorldp.
-    // Now we just ask the LLWorld singleton to cleanly shut down.
+    // The world gives up its regions and objects here but stays until cleanup() deletes it: the frames drawn while
+    // disconnected, this one among them, still read it.
     if(LLWorld::instanceExists())
     {
         LLWorld::getInstance()->resetClass();
-        LLWorld::deleteSingleton();
     }
     LLVOCache::deleteSingleton();
 

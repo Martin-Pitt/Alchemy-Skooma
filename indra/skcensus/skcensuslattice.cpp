@@ -27,6 +27,111 @@
 
 #include "skcensuslattice.h"
 
+namespace
+{
+    using namespace skworld;
+
+    // RecordGrid's buckets laid out flat over the tiles they span: each
+    // record's tile rectangle is found as RecordGrid::insert finds it, then
+    // the records are counted into one list in tile order, each tile's in
+    // the order they were added, and copied out once by the tiles that ask.
+    class FlatGrid
+    {
+    public:
+        void add(const RecordPtr& r, F32 pad, const LLVector3d& clip_min, const LLVector3d& clip_max)
+        {
+            LLVector3d pmin = r->mMin - LLVector3d(pad, pad, 0);
+            LLVector3d pmax = r->mMax + LLVector3d(pad, pad, 0);
+            for (S32 a = VX; a <= VY; ++a)
+            {
+                pmin.mdV[a] = std::max(pmin.mdV[a], clip_min.mdV[a]);
+                pmax.mdV[a] = std::min(pmax.mdV[a], clip_max.mdV[a]);
+                if (pmin.mdV[a] > pmax.mdV[a])
+                {
+                    return;
+                }
+            }
+            const TileKey k0 = tileOf(pmin), k1 = tileOf(pmax);
+            mSpans.push_back({ &r, k0, k1 });
+            mX0 = std::min(mX0, k0.mX);
+            mY0 = std::min(mY0, k0.mY);
+            mX1 = std::max(mX1, k1.mX);
+            mY1 = std::max(mY1, k1.mY);
+        }
+
+        void build()
+        {
+            if (mSpans.empty())
+            {
+                return;
+            }
+            mRows = static_cast<size_t>(static_cast<S64>(mY1) - mY0 + 1);
+            const size_t cells = static_cast<size_t>(static_cast<S64>(mX1) - mX0 + 1) * mRows;
+            mStart.assign(cells + 1, 0);
+            for (const Span& s : mSpans)
+            {
+                for (S32 x = s.mMin.mX; x <= s.mMax.mX; ++x)
+                {
+                    for (S32 y = s.mMin.mY; y <= s.mMax.mY; ++y)
+                    {
+                        ++mStart[cell(x, y) + 1];
+                    }
+                }
+            }
+            for (size_t c = 1; c <= cells; ++c)
+            {
+                mStart[c] += mStart[c - 1];
+            }
+            mItems.resize(mStart[cells]);
+            std::vector<U32> fill(mStart.begin(), mStart.end() - 1);
+            for (const Span& s : mSpans)
+            {
+                for (S32 x = s.mMin.mX; x <= s.mMax.mX; ++x)
+                {
+                    for (S32 y = s.mMin.mY; y <= s.mMax.mY; ++y)
+                    {
+                        mItems[fill[cell(x, y)]++] = s.mRecord;
+                    }
+                }
+            }
+        }
+
+        void query(const TileKey& key, std::vector<RecordPtr>& out) const
+        {
+            out.clear();
+            if (mItems.empty() || key.mX < mX0 || key.mX > mX1 || key.mY < mY0 || key.mY > mY1)
+            {
+                return;
+            }
+            const size_t c = cell(key.mX, key.mY);
+            out.reserve(mStart[c + 1] - mStart[c]);
+            for (U32 i = mStart[c]; i < mStart[c + 1]; ++i)
+            {
+                out.push_back(*mItems[i]);
+            }
+        }
+
+    private:
+        struct Span
+        {
+            const RecordPtr* mRecord;
+            TileKey mMin;
+            TileKey mMax;
+        };
+
+        size_t cell(S32 x, S32 y) const
+        {
+            return static_cast<size_t>(static_cast<S64>(x) - mX0) * mRows + static_cast<size_t>(static_cast<S64>(y) - mY0);
+        }
+
+        std::vector<Span> mSpans;
+        std::vector<U32> mStart;
+        std::vector<const RecordPtr*> mItems;
+        S32 mX0 = S32_MAX, mY0 = S32_MAX, mX1 = S32_MIN, mY1 = S32_MIN;
+        size_t mRows = 0;
+    };
+}
+
 namespace skworld
 {
     LLVector3d latticeOrigin(const LLVector3d& p)
@@ -124,11 +229,12 @@ namespace skworld
         // Only the cells the cluster tiles: a record far bigger than its
         // cluster's clipped box is not spread over cells nobody queries.
         const LLVector3d reach(TILE_M, TILE_M, 0.0);
-        RecordGrid grid;
+        FlatGrid grid;
         for (const RecordPtr& r : cluster.mRecords)
         {
-            grid.insert(r, pad, cluster.mMin - reach, cluster.mMax + reach);
+            grid.add(r, pad, cluster.mMin - reach, cluster.mMax + reach);
         }
+        grid.build();
         for (const auto& entry : cluster.mTiles)
         {
             LaidTile t;
@@ -187,8 +293,8 @@ namespace skworld
         const LLVector3d void_min = region_origin - margin;
         const LLVector3d void_max = region_origin + LLVector3d(width, width, 0) + margin;
         const S32 ox = tileIndex(mesh_origin.mdV[VX]), oy = tileIndex(mesh_origin.mdV[VY]);
-        RecordGrid land_grid;   // reaches over this region's land
-        RecordGrid void_grid;   // reaches into the void about it
+        FlatGrid land_grid;     // reaches over this region's land
+        FlatGrid void_grid;     // reaches into the void about it
         S32 x0 = 0, x1 = per_edge - 1, y0 = 0, y1 = per_edge - 1;
         for (const RecordPtr& r : ground_records)
         {
@@ -197,17 +303,19 @@ namespace skworld
             // already comes in as its physics record.
             if (r->mRole != Role::SURROUND && overlapsXY(r->mMin, r->mMax, land_min, land_max))
             {
-                land_grid.insert(r, pad, land_min, land_max);
+                land_grid.add(r, pad, land_min, land_max);
             }
             if (overlapsXY(r->mMin, r->mMax, void_min, void_max))
             {
-                void_grid.insert(r, pad, void_min, void_max);
+                void_grid.add(r, pad, void_min, void_max);
                 x0 = std::min(x0, tileIndex(r->mMin.mdV[VX]) - ox);
                 x1 = std::max(x1, tileIndex(r->mMax.mdV[VX]) - ox);
                 y0 = std::min(y0, tileIndex(r->mMin.mdV[VY]) - oy);
                 y1 = std::max(y1, tileIndex(r->mMax.mdV[VY]) - oy);
             }
         }
+        land_grid.build();
+        void_grid.build();
         x0 = std::max(x0, -reach);
         y0 = std::max(y0, -reach);
         x1 = std::min(x1, per_edge - 1 + reach);
