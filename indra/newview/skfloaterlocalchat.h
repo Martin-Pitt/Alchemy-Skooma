@@ -26,6 +26,7 @@
 #define SK_FLOATERLOCALCHAT_H
 
 #include "llfloater.h"
+#include "lleditmenuhandler.h"
 #include "llchat.h"
 #include "llfontgl.h"
 #include "llavatarpropertiesprocessor.h"
@@ -45,7 +46,7 @@ class LLMenuButton;
 class LLScrollbar;
 class LLViewerFetchedTexture;
 
-class SKFloaterLocalChat final : public LLFloater, public LLAvatarPropertiesObserver
+class SKFloaterLocalChat final : public LLFloater, public LLAvatarPropertiesObserver, public LLEditMenuHandler
 {
 public:
     AL_VIEW_TYPE(SKFloaterLocalChat, LLFloater);
@@ -77,6 +78,14 @@ public:
     bool handleMouseDown(S32 x, S32 y, MASK mask) override;
     bool handleRightMouseDown(S32 x, S32 y, MASK mask) override;
     bool handleRightMouseUp(S32 x, S32 y, MASK mask) override;
+    bool handleMouseUp(S32 x, S32 y, MASK mask) override;
+    bool handleDoubleClick(S32 x, S32 y, MASK mask) override;
+    /// Selected message text goes to the clipboard through the Edit menu's copy.
+    LLView* asView() override { return this; }
+    void copy() override;
+    bool canCopy() const override;
+    void deselect() override;
+    bool canDeselect() const override;
     bool handleHover(S32 x, S32 y, MASK mask) override;
     void glideWheel();
     bool scrolledUp() const;  // up from the newest message, or gliding there
@@ -169,11 +178,27 @@ private:
     S32 lineHeight(const Row& row) const;
     /// The url under a point in the floater, empty when none.
     std::string urlAt(S32 x, S32 y) const;
+    /// A place in a message's text: its index and a byte of its body.
+    struct TextPos
+    {
+        S32 mMessage = -1;
+        S32 mByte = 0;
+        bool operator<(const TextPos& o) const { return mMessage != o.mMessage ? mMessage < o.mMessage : mByte < o.mByte; }
+        bool operator==(const TextPos& o) const = default;
+    };
+    /// The text position under a point, false off message text; clamp takes the row's ends beside it.
+    bool textPosAt(S32 x, S32 y, bool clamp, TextPos& pos) const;
+    bool hasSelection() const { return mSelAnchor.mMessage >= 0 && !(mSelAnchor == mSelFocus); }
+    /// The selected bytes of one message, false when none of it is selected.
+    bool selectedRange(S32 message, S32& begin, S32& end) const;
+    std::string selectedText() const;
+    void clearSelection();
     /// The visible cards in UI units, unclipped and unmasked.
     void drawMessages(const LLRect& content, F64 now, bool full, bool cards);
     /// The visible cards, faded out at the edges through mMask when any reach into the edge bands.
     void drawMaskedMessages(const LLRect& content, F64 now, bool full, bool cards);
     void drawTime(const Message& msg, F32 x, S32 y, F32 alpha, LLFontGL::ShadowType shadow) const;
+    void drawRowSelection(const Row& row, S32 x, S32 y, F32 alpha) const;
     void drawRowText(const Row& row, S32 x, S32 y, F32 alpha, LLFontGL::ShadowType shadow) const;
     /// An object speaker's side-view glyph, null until the capture has one.
     const SKOutlineLayer* objectGlyph(const LLUUID& speaker, F64 now);
@@ -219,6 +244,9 @@ private:
     S32 mLayoutWidth = -1;
     S32 mLayoutStyle = -1;
     bool mLayoutDirty = true;
+    TextPos mSelAnchor;          // where a selection began
+    TextPos mSelFocus;           // where it reaches now
+    bool mSelecting = false;     // dragging one out
     bool mHovered = false;
     bool mHiddenForConversations = false; // put away while Conversations shows nearby chat
     LLScrollbar* mScrollbar = nullptr; // an overlay bar over the content's right edge
