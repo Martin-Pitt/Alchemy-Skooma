@@ -2048,7 +2048,6 @@ LLProfile::~LLProfile()
 }
 
 
-bool LLVolume::sSplitFlatSides = false; // <SK:Nexii> Prim split toggle
 
 LLVolume::LLVolume(const LLVolumeParams &params, const F32 detail, const bool generate_single_face, const bool is_unique)
     : mParams(params)
