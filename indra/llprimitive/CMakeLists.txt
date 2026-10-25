@@ -70,6 +70,7 @@ if(AL_BUILD_TESTS)
       tests/llmaterialid_test.cpp
       tests/llmediaentry_test.cpp
       tests/skmeshhavok_test.cpp # <SK:Nexii> physics_havok block
+      tests/llmodel_test.cpp
     LIBRARIES llprimitive
   )
   # This one stubs LLMaterialID and LLPrimTextureList, which the library
