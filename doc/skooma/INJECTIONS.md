@@ -586,6 +586,19 @@ Branch `feature-atmo/editor` (`982966f5af`). The Atmo editor saves its window sh
 |---|---|---|
 | `indra/llui/studio/alstudiofloater.cpp` / `.h` | Marked `<SK:Nexii> Atmo Magic editor: a re-laid-out XUI must not restore the old rect`: `llsdutil.h` include; saved-size handling in state save / restore; `loadState` records the declared size from the XUI rect (`mDeclaredWidth` / `mDeclaredHeight`, first call only); the member's declaration in the header | A re-laid-out XUI must not restore a stale saved size |
 
+## UI — reopen IMs
+
+Branch `feature-ui/reopen-ims` (via `ui`, main `65575fd429`). The IM and group chats open at logout come back in Conversations at the next login (the window stays closed). Ad-hoc conferences, muted senders and RLVa-blocked IMs are skipped.
+
+### Injection sites
+
+| File | What | Why there |
+|---|---|---|
+| `indra/newview/llimview.h` / `.cpp` | Marked `LLIMMgr::saveOpenSessions` / `reopenSavedSessions` | Sessions live in `LLIMModel`; adding goes through `LLIMMgr::addSession` |
+| `indra/newview/llappviewer.cpp` | Marked block calling `saveOpenSessions()` just before the per-account settings are saved in `cleanup()` | The list is a per-account setting, saved only after a successful login |
+| `indra/newview/llstartup.cpp` | Marked include and `reopenSavedSessions()` after `STATE_STARTED` | Login is done; groups use the saved name, so the group list need not have arrived |
+| `indra/newview/app_settings/settings_per_account_alchemy.xml` | `SkoomaReopenIMSessions`, `SkoomaOpenIMSessions` (unmarked, after `AlchemyReportIgnoredAdHocSession`) | Settings |
+
 ---
 
 ## Object motion recorder
@@ -1298,6 +1311,7 @@ Branch `feature-render/prim-split` (merge `257736e19c`). Untwisted square and tr
 | File | What | Why there |
 |---|---|---|
 | `indra/llmath/llvolume.cpp` | `split = 0` condition also covers untwisted paths unless `sSplitFlatSides`; the static's definition | Where `LLVolume::generate` picks the split |
+| `indra/llmath/llvolume.cpp` | **Superseded at the develop sync `ab3b18133a`:** upstream's `profile_split` / `lod_invariance` now drop the splits; `generate()`, `createSide` and their tests take upstream's code. `getProfileSplit` follows `profile_split`, and `isSameMesh` redoes upstream's hole-touches-wall split, so canonical LODs match what `generate()` builds. `sSplitFlatSides` and the menu toggle no longer change anything, and `llvolumesplit_test` likely fails | Upstream took the feature over |
 | `indra/llmath/llvolume.cpp` | `createSide` and `createUnCutCubeCap` partial builds only when the vertex and index counts are unchanged (merge `955852d822`) | A face shrunk by an in-place regen kept stale indices |
 | `indra/llmath/llvolume.h` | `static bool sSplitFlatSides`; `getProfileSplit`, `isSameMesh` | A/B toggle, the test, LOD equivalence |
 | `indra/llmath/llvolume.cpp` | The split rule moved into `getProfileSplit`; `isSameMesh` compares path and profile at two details (merge `fe9247088c`) | Shared by `generate()` and the LOD check |
