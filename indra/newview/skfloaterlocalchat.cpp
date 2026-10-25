@@ -1132,6 +1132,28 @@ void SKFloaterLocalChat::drawTime(const Message& msg, F32 x, S32 y, F32 alpha, L
     time_font()->renderUTF8(msg.mTime, 0, x, (F32)y, color, LLFontGL::LEFT, LLFontGL::BOTTOM, LLFontGL::NORMAL, shadow);
 }
 
+S32 SKFloaterLocalChat::selectedFrom(S32 message) const
+{
+    S32 begin = 0;
+    S32 end = 0;
+    return selectedRange(message, begin, end) ? begin : 0;
+}
+
+void SKFloaterLocalChat::drawHeaderSelection(const Card& card, S32 x, S32 y, F32 alpha) const
+{
+    S32 begin = 0;
+    S32 end = 0;
+    if (!selectedRange(card.mFirstMessage, begin, end) || begin >= 0)
+    {
+        return;
+    }
+    const Message& first = mMessages[card.mFirstMessage];
+    static LLUIColor select_color = LLUIColorTable::instance().getColor("EmphasisColor");
+    gGL.getTextureSlot(0)->unbind();
+    shape_blend();
+    gl_rect_2d(x, y + name_font()->getLineHeight(), x + first.mNameWidth + first.mTimeWidth, y, select_color.get() % (0.5f * alpha));
+}
+
 void SKFloaterLocalChat::drawRowSelection(const Row& row, S32 x, S32 y, F32 alpha) const
 {
     S32 begin = 0;
@@ -1149,11 +1171,15 @@ void SKFloaterLocalChat::drawRowSelection(const Row& row, S32 x, S32 y, F32 alph
     const Message& msg = mMessages[row.mMessage];
     const LLFontGL* font = LLViewerChat::getChatFont();
     F32 left = (F32)x;
-    if (row.mBegin == 0 && msg.mNameLen > 0)
+    // A minimal line's leading time is highlighted too when the selection takes it.
+    if (!(row.mBegin == 0 && msg.mNameLen > 0 && selectedFrom(row.mMessage) < 0))
     {
-        left += (F32)msg.mTimeWidth;
+        if (row.mBegin == 0 && msg.mNameLen > 0)
+        {
+            left += (F32)msg.mTimeWidth;
+        }
+        left += font->getWidthF32Bytes(msg.mBody, row.mBegin, begin - row.mBegin);
     }
-    left += font->getWidthF32Bytes(msg.mBody, row.mBegin, begin - row.mBegin);
     const F32 right = left + font->getWidthF32Bytes(msg.mBody, begin, end - begin);
     static LLUIColor select_color = LLUIColorTable::instance().getColor("EmphasisColor");
     gGL.getTextureSlot(0)->unbind();
@@ -1363,6 +1389,7 @@ void SKFloaterLocalChat::drawMessages(const LLRect& content, F64 now, bool full,
             }
             if (row.mMessage < 0)
             {
+                drawHeaderSelection(card, text_x, y, alpha);
                 LLColor4 color = first.mNameColor;
                 color.mV[VALPHA] *= alpha;
                 name_font()->renderUTF8(first.mName, 0, (F32)text_x, (F32)y, color, LLFontGL::LEFT, LLFontGL::BOTTOM, LLFontGL::BOLD, LLFontGL::NO_SHADOW);
@@ -1994,7 +2021,7 @@ bool SKFloaterLocalChat::textPosAt(S32 x, S32 y, bool clamp, TextPos& pos) const
     S32 nearest = S32_MAX;
     for (const Row& row : mRows)
     {
-        if (row.mMessage < 0 || row.mEmbed || (!full && cardAlpha(mCards[row.mCard], now) <= 0.f))
+        if (row.mMessage == DIVIDER_ROW || row.mEmbed || (!full && cardAlpha(mCards[row.mCard], now) <= 0.f))
         {
             continue;
         }
@@ -2018,12 +2045,31 @@ bool SKFloaterLocalChat::textPosAt(S32 x, S32 y, bool clamp, TextPos& pos) const
         return false;
     }
     const Row& row = *hit;
-    const Message& msg = mMessages[row.mMessage];
     const S32 text_x = content.mLeft + (mLayoutStyle != STYLE_MINIMAL ? CARD_PAD_X + DISC + DISC_GAP : PAD_X);
+    if (row.mMessage < 0)
+    {
+        // A card's header selects whole: its name and its time.
+        const Message& first = mMessages[mCards[row.mCard].mFirstMessage];
+        if (!clamp && (x < text_x || x > text_x + first.mNameWidth + first.mTimeWidth))
+        {
+            return false;
+        }
+        pos.mMessage = mCards[row.mCard].mFirstMessage;
+        pos.mByte = -1;
+        return true;
+    }
+    const Message& msg = mMessages[row.mMessage];
     F32 offset = (F32)(x - text_x);
     if (row.mBegin == 0 && msg.mNameLen > 0)
     {
         offset -= (F32)msg.mTimeWidth;
+        if (offset < 0.f && offset >= -(F32)msg.mTimeWidth && msg.mTimeWidth > 0 && y >= hit_y && y < hit_y + lineHeight(row))
+        {
+            // On a minimal line's leading time.
+            pos.mMessage = row.mMessage;
+            pos.mByte = -1;
+            return true;
+        }
     }
     const LLFontGL* font = LLViewerChat::getChatFont();
     if (!clamp && (offset < 0.f || offset > font->getWidthF32Bytes(msg.mBody, row.mBegin, row.mLength)))
@@ -2055,9 +2101,30 @@ bool SKFloaterLocalChat::selectedRange(S32 message, S32& begin, S32& end) const
     {
         return false;
     }
-    begin = message == first.mMessage ? first.mByte : 0;
+    begin = message == first.mMessage ? first.mByte : (hasHeader(message) ? -1 : 0);
     end = message == last.mMessage ? last.mByte : (S32)mMessages[message].mBody.size();
     return begin < end;
+}
+
+bool SKFloaterLocalChat::hasHeader(S32 message) const
+{
+    const Message& msg = mMessages[message];
+    if (msg.mNameLen > 0)
+    {
+        return msg.mTimeWidth > 0; // a minimal line leads with its time
+    }
+    if (msg.mName.empty())
+    {
+        return false;
+    }
+    for (const Card& card : mCards)
+    {
+        if (!card.mDivider && card.mFirstMessage == message)
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 std::string SKFloaterLocalChat::selectedText() const
@@ -2079,7 +2146,25 @@ std::string SKFloaterLocalChat::selectedText() const
         }
         if (selectedRange(m, begin, end))
         {
-            text.append(mMessages[m].mBody, begin, end - begin);
+            const Message& msg = mMessages[m];
+            if (begin < 0)
+            {
+                if (msg.mNameLen > 0)
+                {
+                    text += msg.mTime + " "; // minimal: the time leads the line
+                }
+                else
+                {
+                    text += msg.mName;
+                    if (!msg.mTime.empty())
+                    {
+                        text += "  \xE2\x80\x94 " + msg.mTime;
+                    }
+                    text += '\n';
+                }
+                begin = 0;
+            }
+            text.append(msg.mBody, begin, end - begin);
         }
     }
     return text;
