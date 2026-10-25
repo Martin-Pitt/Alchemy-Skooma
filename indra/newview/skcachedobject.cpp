@@ -75,10 +75,16 @@ bool skDecodeCachedObject(const LLVOCacheEntry& entry, SKCachedObject& out)
     ok = ok && dp.unpackU32(value, "SpecialCode");
     LLUUID owner;
     ok = ok && dp.unpackUUID(owner, "Owner");
+    LLVector3 omega;
     if (ok && (value & 0x80))
     {
-        LLVector3 omega;
         ok = dp.unpackVector3(omega, "Omega");
+    }
+    // A new object keeps its identity rotation for an update that rotates it by
+    // less than the epsilon and sets no spin, and that is what it reports.
+    if (omega.isExactlyZero() && !out.mRot.isNotEqualEps(LLQuaternion::DEFAULT, F_ALMOST_ZERO))
+    {
+        out.mRot = LLQuaternion::DEFAULT;
     }
     out.mParentId = 0;
     if (ok && (value & 0x20))
