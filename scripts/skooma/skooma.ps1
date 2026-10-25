@@ -1317,6 +1317,9 @@ function Invoke-Check { param([string]$branch, [switch]$Quiet)
                     # Reachable from main but from no working branch: glue, setup commits, main's own merges.
                     $developOnly = @{}
                     $not = @(Get-WorkingBranches | ForEach-Object { "^$_" })
+                    # What this branch already landed is ours, even once a branch it took is retired.
+                    $landed = G merge-base main $branch
+                    if ($landed) { $not += "^$landed" }
                     foreach ($d in (G rev-list main "^$base" @not) -split "`n") { if ($d) { $developOnly[$d] = $true } }
                 }
                 $leak = (G rev-list $p "^$base") -split "`n" | Where-Object { $_ -and $developOnly.ContainsKey($_) } | Select-Object -First 1
