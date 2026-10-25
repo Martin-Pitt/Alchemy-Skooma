@@ -78,9 +78,19 @@ namespace skworld
             return finalise(h);
         }
 
-        bool byPart(const RecordPtr& a, const RecordPtr& b)
+        U64 bigEndianWord(const LLUUID& id, size_t at)
         {
-            return a->mPart < b->mPart;
+            U64 w = 0;
+            for (size_t b = 0; b < 8; ++b)
+            {
+                w = (w << 8) | id.mData[at + b];
+            }
+            return w;
+        }
+
+        bool partOrder(const PartRecord& a, const PartRecord& b)
+        {
+            return a.mHigh < b.mHigh || (a.mHigh == b.mHigh && a.mLow < b.mLow);
         }
     }
 
@@ -120,14 +130,35 @@ namespace skworld
 
     RecordsByPart recordsByPart(const std::vector<RecordPtr>& records)
     {
-        RecordsByPart out;
-        out.reserve(records.size());
-        for (const RecordPtr& rec : records)
+        // Sorted as plain words with the listing order last, so of a part
+        // listed twice the last listed is kept; the pointers are copied once.
+        struct Key
         {
-            if (rec)
+            U64 mHigh;
+            U64 mLow;
+            size_t mIndex;
+        };
+        std::vector<Key> keys;
+        keys.reserve(records.size());
+        for (size_t i = 0; i < records.size(); ++i)
+        {
+            if (const RecordPtr& rec = records[i])
             {
-                out[rec->mPart] = rec;
+                keys.push_back({ bigEndianWord(rec->mPart, 0), bigEndianWord(rec->mPart, 8), i });
             }
+        }
+        std::sort(keys.begin(), keys.end(), [](const Key& a, const Key& b) {
+            return a.mHigh != b.mHigh ? a.mHigh < b.mHigh : a.mLow != b.mLow ? a.mLow < b.mLow : a.mIndex < b.mIndex;
+        });
+        RecordsByPart out;
+        out.reserve(keys.size());
+        for (size_t i = 0; i < keys.size(); ++i)
+        {
+            if (i + 1 < keys.size() && keys[i + 1].mHigh == keys[i].mHigh && keys[i + 1].mLow == keys[i].mLow)
+            {
+                continue;
+            }
+            out.push_back({ keys[i].mHigh, keys[i].mLow, records[keys[i].mIndex] });
         }
         return out;
     }
@@ -138,27 +169,27 @@ namespace skworld
         added.clear();
         removed.clear();
         changed.clear();
-        for (const auto& entry : after)
+        // Both in part order: one walk down the two side by side.
+        size_t b = 0, a = 0;
+        while (b < before.size() || a < after.size())
         {
-            const auto was = before.find(entry.first);
-            if (was == before.end())
+            if (a == after.size() || (b < before.size() && partOrder(before[b], after[a])))
             {
-                added.push_back(entry.second);
+                removed.push_back(before[b++].mRecord);
             }
-            else if (was->second->mSignature != entry.second->mSignature || was->second->mDynamic != entry.second->mDynamic)
+            else if (b == before.size() || partOrder(after[a], before[b]))
             {
-                changed.push_back(entry.second);
+                added.push_back(after[a++].mRecord);
+            }
+            else
+            {
+                const Record& was = *before[b++].mRecord;
+                const RecordPtr& now = after[a++].mRecord;
+                if (was.mSignature != now->mSignature || was.mDynamic != now->mDynamic)
+                {
+                    changed.push_back(now);
+                }
             }
         }
-        for (const auto& entry : before)
-        {
-            if (!after.count(entry.first))
-            {
-                removed.push_back(entry.second);
-            }
-        }
-        std::sort(added.begin(), added.end(), byPart);
-        std::sort(removed.begin(), removed.end(), byPart);
-        std::sort(changed.begin(), changed.end(), byPart);
     }
 }

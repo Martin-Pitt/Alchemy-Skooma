@@ -142,7 +142,11 @@ namespace skworld
     private:
         const std::vector<RecordPtr>& mRecords;
         F64 mCell;
-        std::unordered_map<U64, std::vector<U32>> mCells;
+        /// The cells that hold records, as words sorting by x then y; a cell's
+        /// records are mItems[mStart[k]] up to mItems[mStart[k + 1]], in record order.
+        std::vector<U64> mKeys;
+        std::vector<U32> mStart;
+        std::vector<U32> mItems;
         std::vector<U32> mLarge;    ///< records spanning too many cells to bucket
     };
 
