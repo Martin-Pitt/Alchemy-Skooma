@@ -192,12 +192,17 @@ private:
     /// The selected bytes of one message, false when none of it is selected.
     bool selectedRange(S32 message, S32& begin, S32& end) const;
     std::string selectedText() const;
+    /// Where a message's selection starts, -1 for its header or leading time, 0 when unselected.
+    S32 selectedFrom(S32 message) const;
+    /// Whether the message shows a header or a leading time a selection can take.
+    bool hasHeader(S32 message) const;
     void clearSelection();
     /// The visible cards in UI units, unclipped and unmasked.
     void drawMessages(const LLRect& content, F64 now, bool full, bool cards);
     /// The visible cards, faded out at the edges through mMask when any reach into the edge bands.
     void drawMaskedMessages(const LLRect& content, F64 now, bool full, bool cards);
     void drawTime(const Message& msg, F32 x, S32 y, F32 alpha, LLFontGL::ShadowType shadow) const;
+    void drawHeaderSelection(const Card& card, S32 x, S32 y, F32 alpha) const;
     void drawRowSelection(const Row& row, S32 x, S32 y, F32 alpha) const;
     void drawRowText(const Row& row, S32 x, S32 y, F32 alpha, LLFontGL::ShadowType shadow) const;
     /// An object speaker's side-view glyph, null until the capture has one.
