@@ -27,6 +27,7 @@
 #include "skfloaterlocalchat.h"
 
 #include "llcallbacklist.h"
+#include "llclipboard.h"
 
 #include "llautoreplace.h"
 #include "llbutton.h"
@@ -606,6 +607,10 @@ void SKFloaterLocalChat::appendChat(const LLChat& chat, const LLSD& args, F64 ar
     while (mMessages.size() > MAX_MESSAGES)
     {
         mMessages.pop_front();
+        if (mSelAnchor.mMessage >= 0 && (--mSelAnchor.mMessage < 0 || --mSelFocus.mMessage < 0))
+        {
+            clearSelection(); // the selection began or ended in a message now gone
+        }
     }
     invalidateLayout();
 }
@@ -647,6 +652,11 @@ void SKFloaterLocalChat::sendChat(EChatType type)
 
 bool SKFloaterLocalChat::handleKeyHere(KEY key, MASK mask)
 {
+    if (hasSelection() && mask == MASK_CONTROL && (key == 'C' || key == KEY_INSERT))
+    {
+        copy();
+        return true;
+    }
     if (mInput && mInput->getVisible())
     {
         // The chat bar's modifiers: ctrl shouts, ctrl+shift whispers, alt speaks out of character.
@@ -875,6 +885,7 @@ void SKFloaterLocalChat::layout()
     {
         // The minimal style folds the name into the body, so the messages are made again.
         mLayoutStyle = style;
+        clearSelection();
         std::deque<Message> old;
         old.swap(mMessages);
         for (Message& msg : old)
@@ -1121,6 +1132,35 @@ void SKFloaterLocalChat::drawTime(const Message& msg, F32 x, S32 y, F32 alpha, L
     time_font()->renderUTF8(msg.mTime, 0, x, (F32)y, color, LLFontGL::LEFT, LLFontGL::BOTTOM, LLFontGL::NORMAL, shadow);
 }
 
+void SKFloaterLocalChat::drawRowSelection(const Row& row, S32 x, S32 y, F32 alpha) const
+{
+    S32 begin = 0;
+    S32 end = 0;
+    if (!selectedRange(row.mMessage, begin, end))
+    {
+        return;
+    }
+    begin = llmax(begin, row.mBegin);
+    end = llmin(end, row.mBegin + row.mLength);
+    if (begin >= end)
+    {
+        return;
+    }
+    const Message& msg = mMessages[row.mMessage];
+    const LLFontGL* font = LLViewerChat::getChatFont();
+    F32 left = (F32)x;
+    if (row.mBegin == 0 && msg.mNameLen > 0)
+    {
+        left += (F32)msg.mTimeWidth;
+    }
+    left += font->getWidthF32Bytes(msg.mBody, row.mBegin, begin - row.mBegin);
+    const F32 right = left + font->getWidthF32Bytes(msg.mBody, begin, end - begin);
+    static LLUIColor select_color = LLUIColorTable::instance().getColor("EmphasisColor");
+    gGL.getTextureSlot(0)->unbind();
+    shape_blend();
+    gl_rect_2d(ll_round(left), y + lineHeight(row), ll_round(right), y, select_color.get() % (0.5f * alpha));
+}
+
 void SKFloaterLocalChat::drawRowText(const Row& row, S32 x, S32 y, F32 alpha, LLFontGL::ShadowType shadow) const
 {
     const Message& msg = mMessages[row.mMessage];
@@ -1337,6 +1377,7 @@ void SKFloaterLocalChat::drawMessages(const LLRect& content, F64 now, bool full,
             }
             else
             {
+                drawRowSelection(row, text_x, y, alpha);
                 drawRowText(row, text_x, y, alpha, shadow);
             }
         }
@@ -1388,6 +1429,12 @@ void SKFloaterLocalChat::drawMaskedMessages(const LLRect& content, F64 now, bool
                 fades = (fades ^ (U64)(embed->mImage->hasGLTexture() ? 64 + embed->mImage->getDiscardLevel() : 63)) * 1099511628211ULL;
             }
         }
+    }
+
+    if (hasSelection())
+    {
+        fades = (fades ^ ((U64)mSelAnchor.mMessage << 40 ^ (U64)mSelAnchor.mByte << 20 ^ (U64)mSelFocus.mByte)) * 1099511628211ULL;
+        fades = (fades ^ (U64)mSelFocus.mMessage) * 1099511628211ULL;
     }
 
     static LLCachedControl<bool> mask_edges(gSavedSettings, "SkoomaLocalChatMask", true);
@@ -1932,6 +1979,147 @@ std::string SKFloaterLocalChat::urlAt(S32 x, S32 y) const
     return std::string();
 }
 
+bool SKFloaterLocalChat::textPosAt(S32 x, S32 y, bool clamp, TextPos& pos) const
+{
+    if (mLayoutDirty)
+    {
+        return false;
+    }
+    const LLRect content = contentRect();
+    const S32 base = content.mBottom - mScroll;
+    const bool full = expanded();
+    const F64 now = LLFrameTimer::getTotalSeconds();
+    const Row* hit = nullptr;
+    S32 hit_y = 0;
+    S32 nearest = S32_MAX;
+    for (const Row& row : mRows)
+    {
+        if (row.mMessage < 0 || row.mEmbed || (!full && cardAlpha(mCards[row.mCard], now) <= 0.f))
+        {
+            continue;
+        }
+        const S32 y0 = base + row.mBottom + row.mGap + row.mPadBottom;
+        const S32 y1 = y0 + lineHeight(row);
+        if (y1 < content.mBottom || y0 > content.mTop)
+        {
+            continue;
+        }
+        // Dragging past the rows, the nearest one takes the point.
+        const S32 distance = y < y0 ? y0 - y : (y >= y1 ? y - y1 + 1 : 0);
+        if (distance < nearest && (distance == 0 || clamp))
+        {
+            nearest = distance;
+            hit = &row;
+            hit_y = y0;
+        }
+    }
+    if (!hit)
+    {
+        return false;
+    }
+    const Row& row = *hit;
+    const Message& msg = mMessages[row.mMessage];
+    const S32 text_x = content.mLeft + (mLayoutStyle != STYLE_MINIMAL ? CARD_PAD_X + DISC + DISC_GAP : PAD_X);
+    F32 offset = (F32)(x - text_x);
+    if (row.mBegin == 0 && msg.mNameLen > 0)
+    {
+        offset -= (F32)msg.mTimeWidth;
+    }
+    const LLFontGL* font = LLViewerChat::getChatFont();
+    if (!clamp && (offset < 0.f || offset > font->getWidthF32Bytes(msg.mBody, row.mBegin, row.mLength)))
+    {
+        return false; // beside the text, not on it
+    }
+    if (y < hit_y)
+    {
+        offset = F32_MAX; // below the row's text, its end
+    }
+    else if (y >= hit_y + lineHeight(row))
+    {
+        offset = 0.f; // above it, its start
+    }
+    pos.mMessage = row.mMessage;
+    pos.mByte = row.mBegin + font->byteFromPixelOffset(msg.mBody, row.mBegin, llmax(offset, 0.f), F32_MAX, row.mLength, true);
+    return true;
+}
+
+bool SKFloaterLocalChat::selectedRange(S32 message, S32& begin, S32& end) const
+{
+    if (!hasSelection())
+    {
+        return false;
+    }
+    const TextPos& first = mSelFocus < mSelAnchor ? mSelFocus : mSelAnchor;
+    const TextPos& last = mSelFocus < mSelAnchor ? mSelAnchor : mSelFocus;
+    if (message < first.mMessage || message > last.mMessage)
+    {
+        return false;
+    }
+    begin = message == first.mMessage ? first.mByte : 0;
+    end = message == last.mMessage ? last.mByte : (S32)mMessages[message].mBody.size();
+    return begin < end;
+}
+
+std::string SKFloaterLocalChat::selectedText() const
+{
+    std::string text;
+    if (!hasSelection())
+    {
+        return text;
+    }
+    const S32 first = llmin(mSelAnchor.mMessage, mSelFocus.mMessage);
+    const S32 last = llmax(mSelAnchor.mMessage, mSelFocus.mMessage);
+    for (S32 m = first; m <= last && m < (S32)mMessages.size(); ++m)
+    {
+        S32 begin = 0;
+        S32 end = 0;
+        if (!text.empty())
+        {
+            text += '\n';
+        }
+        if (selectedRange(m, begin, end))
+        {
+            text.append(mMessages[m].mBody, begin, end - begin);
+        }
+    }
+    return text;
+}
+
+void SKFloaterLocalChat::clearSelection()
+{
+    mSelAnchor = TextPos();
+    mSelFocus = TextPos();
+    mSelecting = false;
+    if (gEditMenuHandler == this)
+    {
+        gEditMenuHandler = nullptr;
+    }
+}
+
+void SKFloaterLocalChat::copy()
+{
+    const std::string text = selectedText();
+    if (!text.empty())
+    {
+        LLClipboard::instance().copyToClipboard(text, 0, (S32)text.size());
+    }
+}
+
+bool SKFloaterLocalChat::canCopy() const
+{
+    return hasSelection();
+}
+
+void SKFloaterLocalChat::deselect()
+{
+    clearSelection();
+}
+
+bool SKFloaterLocalChat::canDeselect() const
+{
+    return hasSelection();
+}
+
 bool SKFloaterLocalChat::handleMouseDown(S32 x, S32 y, MASK mask)
 {
     if (isMinimized())
@@ -1955,8 +2143,71 @@ bool SKFloaterLocalChat::handleMouseDown(S32 x, S32 y, MASK mask)
             LLUrlAction::clickAction(url, true);
             return true;
         }
+        TextPos pos;
+        if (textPosAt(x, y, false, pos))
+        {
+            if ((mask & MASK_SHIFT) && mSelAnchor.mMessage >= 0)
+            {
+                mSelFocus = pos; // shift extends what is selected
+            }
+            else
+            {
+                mSelAnchor = pos;
+                mSelFocus = pos;
+            }
+            mSelecting = true;
+            gFocusMgr.setMouseCapture(this);
+            gEditMenuHandler = this;
+            return true;
+        }
     }
+    clearSelection();
     return LLFloater::handleMouseDown(x, y, mask);
+}
+
+bool SKFloaterLocalChat::handleMouseUp(S32 x, S32 y, MASK mask)
+{
+    if (mSelecting)
+    {
+        mSelecting = false;
+        if (hasMouseCapture())
+        {
+            gFocusMgr.setMouseCapture(nullptr);
+        }
+        if (!hasSelection())
+        {
+            clearSelection(); // a click without a drag selects nothing
+        }
+        return true;
+    }
+    return LLFloater::handleMouseUp(x, y, mask);
+}
+
+bool SKFloaterLocalChat::handleDoubleClick(S32 x, S32 y, MASK mask)
+{
+    TextPos pos;
+    if (!isMinimized() && urlAt(x, y).empty() && textPosAt(x, y, false, pos))
+    {
+        // The word under the point, as far as the spaces either side.
+        const std::string& body = mMessages[pos.mMessage].mBody;
+        auto is_space = [](char c) { return c == ' ' || c == '\n' || c == '\t'; };
+        S32 begin = llclamp(pos.mByte, 0, (S32)body.size());
+        S32 end = begin;
+        while (begin > 0 && !is_space(body[begin - 1]))
+        {
+            --begin;
+        }
+        while (end < (S32)body.size() && !is_space(body[end]))
+        {
+            ++end;
+        }
+        mSelAnchor = { pos.mMessage, begin };
+        mSelFocus = { pos.mMessage, end };
+        mSelecting = false;
+        gEditMenuHandler = this;
+        return true;
+    }
+    return LLFloater::handleDoubleClick(x, y, mask);
 }
 
 // A right click on the chat's content is the chat's, so it never reaches the object behind a card.
@@ -1980,6 +2231,16 @@ bool SKFloaterLocalChat::handleHover(S32 x, S32 y, MASK mask)
     else if (mEdgeSince < 0.0)
     {
         mEdgeSince = LLFrameTimer::getTotalSeconds();
+    }
+    if (mSelecting && hasMouseCapture())
+    {
+        TextPos pos;
+        if (textPosAt(x, y, true, pos))
+        {
+            mSelFocus = pos;
+        }
+        getWindow()->setCursor(UI_CURSOR_IBEAM);
+        return true;
     }
     if (!hasMouseCapture() && (mPillRect.pointInRect(x, y) || !urlAt(x, y).empty()))
     {
