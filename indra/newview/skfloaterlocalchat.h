@@ -188,6 +188,8 @@ private:
     };
     /// The text position under a point, false off message text; clamp takes the row's ends beside it.
     bool textPosAt(S32 x, S32 y, bool clamp, TextPos& pos) const;
+    /// textPosAt for starting a selection: anywhere in a bubble takes its nearest text.
+    bool selectionPosAt(S32 x, S32 y, TextPos& pos) const;
     bool hasSelection() const { return mSelAnchor.mMessage >= 0 && !(mSelAnchor == mSelFocus); }
     /// The selected bytes of one message, false when none of it is selected.
     bool selectedRange(S32 message, S32& begin, S32& end) const;
