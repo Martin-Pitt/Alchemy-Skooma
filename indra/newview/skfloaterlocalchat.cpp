@@ -2120,6 +2120,35 @@ bool SKFloaterLocalChat::textPosAt(S32 x, S32 y, bool clamp, TextPos& pos) const
     return true;
 }
 
+bool SKFloaterLocalChat::selectionPosAt(S32 x, S32 y, TextPos& pos) const
+{
+    // Anywhere in a bubble starts a selection, at the text nearest the point.
+    if (mLayoutDirty || !contentRect().pointInRect(x, y))
+    {
+        return false;
+    }
+    const LLRect content = contentRect();
+    const S32 base = content.mBottom - mScroll;
+    const bool full = expanded();
+    const F64 now = LLFrameTimer::getTotalSeconds();
+    for (const Card& card : mCards)
+    {
+        if (card.mDivider || (!full && cardAlpha(card, now) <= 0.f))
+        {
+            continue;
+        }
+        const Row& top_row = mRows[card.mFirstRow];
+        const Row& bottom_row = mRows[card.mLastRow];
+        const S32 card_bottom = base + bottom_row.mBottom + bottom_row.mGap;
+        const S32 card_top = base + top_row.mBottom + top_row.height() + lineHeight(top_row);
+        if (x >= content.mLeft && x < content.mLeft + card.mWidth && y >= card_bottom && y < card_top)
+        {
+            return textPosAt(x, y, true, pos);
+        }
+    }
+    return textPosAt(x, y, false, pos);
+}
+
 bool SKFloaterLocalChat::selectedRange(S32 message, S32& begin, S32& end) const
 {
     if (!hasSelection())
@@ -2260,7 +2289,7 @@ bool SKFloaterLocalChat::handleMouseDown(S32 x, S32 y, MASK mask)
             return true;
         }
         TextPos pos;
-        if (textPosAt(x, y, false, pos))
+        if (selectionPosAt(x, y, pos))
         {
             if ((mask & MASK_SHIFT) && mSelAnchor.mMessage >= 0)
             {
@@ -2366,7 +2395,7 @@ bool SKFloaterLocalChat::handleHover(S32 x, S32 y, MASK mask)
         return true;
     }
     TextPos pos;
-    if (!hasMouseCapture() && !isMinimized() && textPosAt(x, y, false, pos))
+    if (!hasMouseCapture() && !isMinimized() && selectionPosAt(x, y, pos))
     {
         // Over selectable text, the text cursor, as a browser shows.
         LLFloater::handleHover(x, y, mask);
