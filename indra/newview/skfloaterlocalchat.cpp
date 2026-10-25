@@ -1532,10 +1532,10 @@ void SKFloaterLocalChat::draw()
         mEmojiComplete->update();
     }
 
-    // In mouselook the chat must not take the mouse from the world.
+    // In mouselook the chat must not take the mouse from the world, and locked only its content takes it (hitsContentAt).
     const bool opaque = !gAgentCamera.cameraMouselook();
-    setMouseOpaque(opaque);
-    getDragHandle()->setMouseOpaque(opaque);
+    setMouseOpaque(opaque && !isLocked());
+    getDragHandle()->setMouseOpaque(opaque && !isLocked());
 
     if (isMinimized())
     {
@@ -2013,6 +2013,10 @@ bool SKFloaterLocalChat::handleHover(S32 x, S32 y, MASK mask)
 
 bool SKFloaterLocalChat::handleScrollWheel(S32 x, S32 y, LLScrollDelta delta)
 {
+    if (isLocked() && !hitsContentAt(x, y))
+    {
+        return false; // locked, the wheel off the content zooms the camera as over the world
+    }
     // LLFloater::handleScrollWheel always claims the wheel, so only a child that scrolls may take it first; the bar never does.
     const bool on_bar = mScrollbar && mScrollbar->getVisible() && mScrollbar->getRect().pointInRect(x, y);
     if (!on_bar && childrenHandleScrollWheel(x, y, delta))
