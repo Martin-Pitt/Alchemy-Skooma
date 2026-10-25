@@ -108,7 +108,7 @@ void SKEmojiComplete::update()
     mLastCursor = cursor;
 
     S32 pos = -1;
-    if (!LLEmojiHelper::isCursorInEmojiCode(text, cursor, &pos, 1)) // from the first letter
+    if (!LLEmojiHelper::isCursorInEmojiCode(text, cursor, &pos))
     {
         mDismissedPos = -1;
         close();
