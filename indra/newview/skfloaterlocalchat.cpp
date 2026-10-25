@@ -719,7 +719,7 @@ bool SKFloaterLocalChat::applyRectControl()
     return true;
 }
 
-static const std::string TYPING_SEPARATOR = "  Â\xC2\xB7  ";
+static const std::string TYPING_SEPARATOR = "  \xC2\xB7  ";
 
 void SKFloaterLocalChat::setMinimized(bool minimize)
 {
