@@ -43,7 +43,16 @@ namespace skworld
     U64 censusHash(const std::vector<RecordPtr>& records, const std::vector<Feature>& features,
                    const std::vector<DoorEntity>& doors, const ClusterWindow& window, F64 gap);
 
-    typedef std::unordered_map<LLUUID, RecordPtr> RecordsByPart;
+    /// A record under its part id, the id as two big-endian words so they sort as LLUUID does.
+    struct PartRecord
+    {
+        U64 mHigh = 0;
+        U64 mLow = 0;
+        RecordPtr mRecord;
+    };
+
+    /// A scan's records in part order, one per part: the last the scan listed for it.
+    typedef std::vector<PartRecord> RecordsByPart;
     RecordsByPart recordsByPart(const std::vector<RecordPtr>& records);
 
     /// The parts that came, went and changed (the same part with another signature or dynamic flag) from before to
