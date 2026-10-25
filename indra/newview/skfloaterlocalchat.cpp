@@ -1055,15 +1055,16 @@ void SKFloaterLocalChat::layout()
                 row.mPadTop = cards ? CARD_PAD_Y : 0;
             }
             mRows.push_back(row);
+            const S32 before = pos;
             pos += count;
             if (pos == line_end && line_end < total)
             {
                 ++pos; // the newline
             }
             first = false;
-            if (count == 0)
+            if (pos == before)
             {
-                break;
+                break; // nothing taken, so nothing more to lay out; a blank line still takes its newline
             }
         }
         if (embed_shown(msg.mEmbed))
