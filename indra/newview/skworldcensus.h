@@ -33,8 +33,11 @@
 #include "skcensusfeatures.h"
 #include "skcensusio.h"
 #include "skcensustypes.h"
+#include "skcachedobject.h"
+#include "skphysicsshape.h"
 #include "threadpool_fwd.h"
 
+class LLVOCacheEntry;
 class SKPhysicsHavokShape;
 
 #include <boost/signals2/connection.hpp>
@@ -80,9 +83,9 @@ struct SKCensusSnapshot
         U32 mRecords = 0;
         U32 mDynamic = 0;
         U32 mSurround = 0;
-        U32 mPlaceholders = 0;      ///< provenance BOX: objects known only from the region's object cache
+        U32 mPlaceholders = 0;      ///< provenance BOX: stand-ins while an asset is on its way
         U32 mCached = 0;            ///< parts reused from the previous scan
-        U32 mFromObjectCache = 0;   ///< boxes from the region's object cache, never drawn this session
+        U32 mFromObjectCache = 0;   ///< parts taken from the region's object cache, with no object of their own
         U32 mTiny = 0;              ///< parts under SKCensusMinShape in every axis: never a record
         U32 mVisibleOnly = 0;       ///< records of parts nothing collides with: phantom, volume detect or no shape
         U32 mPhysicsMeshes = 0;     ///< mesh records, the only ones whose physics shape type the census asks for
@@ -251,15 +254,44 @@ private:
         bool mKnown = false;
     };
 
-    /// What the region's object cache knows about something it has never
-    /// instantiated: where it is and how big, and nothing else.
+    /// A part the region's object cache holds and has not instantiated, read
+    /// when the scan reaches it: the entry is held so it outlives a kill.
     struct CachedPart
     {
-        LLUUID mId;                 ///< synthesised from the region and the local id
-        LLVector3d mOrigin;         ///< the region's origin, global
-        LLVector3 mCenter;          ///< region-local
-        LLVector3 mHalf;
-        LLQuaternion mRot;          ///< region frame
+        LLPointer<LLVOCacheEntry> mEntry;
+        LLPointer<LLVOCacheEntry> mRoot;    ///< the linkset root's entry, null when mEntry is the root
+        LLVector3d mOrigin;                 ///< the region's origin, global
+        U64 mRegion = 0;
+    };
+
+    /// What a part's records are signed and built from, read alike from a
+    /// live object and from the object cache, so a part revived from the cache
+    /// signs as it did there and keeps its records.
+    struct PartFacts
+    {
+        LLUUID mPart;
+        LLUUID mRoot;
+        U64 mRegion = 0;
+        LLVector3d mOrigin;
+        LLVector3d mCullPos;        ///< where the range test takes the part, global
+        LLVector3 mSimPos;          ///< the sim-side transform, region frame
+        LLQuaternion mSimRot;
+        LLVector3d mRootPos;        ///< the root's rest, global
+        LLQuaternion mRootRot;
+        U32 mRootFlags = 0;         ///< the root's update flags
+        bool mLocalOnly = false;
+        bool mPhysicsUnknown = true;
+        S32 mSculptLevel = -2;      ///< the loaded volume's; a cached sculpt has none
+        SKPhysicsShapeInput mShape;
+    };
+
+    /// A cached body decoded once per CRC.
+    struct CachedDecode
+    {
+        SKCachedObject mObject;
+        U32 mCRC = 0;
+        F64 mUsed = 0.0;
+        bool mOk = false;
     };
 
     struct Scan
@@ -291,14 +323,19 @@ private:
 
     /// One object into the pending snapshot: zero, one or many records.
     void visit(LLViewerObject* object);
-    /// One cached object into the pending snapshot, as a box.
-    void visitCached(const CachedPart& part);
+    /// One cached part into the pending snapshot, shaped as its object would be. The part's id, null when the
+    /// entry no longer stands for a part without an object.
+    LLUUID visitCached(const CachedPart& part);
+    /// What both visits share, from the facts; @p live is the object when there is one.
+    void visitPart(const PartFacts& facts, LLVOVolume* live);
+    /// The entry's body, decoded again only when its CRC moved; null when it does not decode as a volume.
+    const SKCachedObject* decoded(U64 region, LLVOCacheEntry& entry);
     /// Every cached entry near either centre that has no object of its own.
     void gatherCached();
-    bool classifyRest(LLViewerObject* root, const LLVector3d& pos, const LLQuaternion& rot);
-    bool isSurround(LLViewerObject* root, const LLVector3d& mn, const LLVector3d& mx) const;
+    bool classifyRest(const LLUUID& root, const LLVector3d& pos, const LLQuaternion& rot);
+    bool isSurround(bool local_only, const LLVector3d& mn, const LLVector3d& mx) const;
     /// One record from one part, at the sim-side transform the caller signed.
-    skworld::RecordPtr record(LLVOVolume* volume, LLViewerObject* root, skworld::Role role, bool dynamic, U64 signature,
+    skworld::RecordPtr record(const PartFacts& facts, skworld::Role role, bool dynamic, U64 signature,
                             const LLVector3& pos, const LLQuaternion& rot, skworld::FeatureKind feature, U8 exclude,
                             const std::shared_ptr<const SKPhysicsHavokShape>& sim);
     /// Who is sitting on what, into the session history.
@@ -335,7 +372,13 @@ private:
     /// Every part not visited this scan, from its cache, under the budget; false when out of time.
     bool retake(LLTimer& timer, F32 budget_ms);
     std::unordered_set<LLUUID> mDirty;
-    std::unordered_set<LLUUID> mGone;
+    /// Where each killed part was, so the next gather can tell one gone back into the object cache from one gone.
+    struct GoneFrom
+    {
+        U64 mRegion = 0;
+        U32 mLocalId = 0;
+    };
+    std::unordered_map<LLUUID, GoneFrom> mGone;
     boost::signals2::scoped_connection mPropertiesConn;
     std::unordered_set<LLUUID> mScanDirty;      ///< the dirty set this scan began with
     bool mScanFull = false;
@@ -363,6 +406,8 @@ private:
     std::vector<U64> mClusterRegions;
     bool mDiscardClusterJob = false;
     std::unordered_map<LLUUID, PartCache> mParts;
+    /// Cached bodies by region and local id.
+    std::unordered_map<LLUUID, CachedDecode> mDecoded;
     /// When each part was first visited with its physics shape type unknown; the session's wait for it, for the log.
     std::unordered_map<LLUUID, F64> mUnknownSince;
     U32 mKnownAfterCount = 0;
