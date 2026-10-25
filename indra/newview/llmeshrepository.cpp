@@ -1463,6 +1463,28 @@ void LLMeshRepoThread::loadMeshPhysicsHavok(const LLUUID& mesh_id)
 }
 // </SK:Nexii>
 
+// <SK:Nexii> census: a header with no LOD asked for
+// Mutex:  acquires mPendingMutex, mMutex
+void LLMeshRepoThread::loadMeshHeader(const LLVolumeParams& mesh_params)
+{
+    const LLUUID& mesh_id = mesh_params.getSculptID();
+    if (hasHeader(mesh_id))
+    {
+        return;
+    }
+    // An empty pending entry, so a LOD asked for meanwhile joins this request as it would its own.
+    LLMutexLock lock(mPendingMutex);
+    if (mPendingLOD.find(mesh_id) != mPendingLOD.end())
+    {
+        return;
+    }
+    auto& array = mPendingLOD[mesh_id];
+    std::fill(array.begin(), array.end(), 0);
+    LLMutexLock queue_lock(mMutex);
+    mHeaderReqQ.push(HeaderRequest(mesh_params));
+}
+// </SK:Nexii>
+
 void LLMeshRepoThread::lockAndLoadMeshLOD(const LLVolumeParams& mesh_params, S32 lod)
 {
     if (!LLAppViewer::isExiting())
@@ -5812,6 +5834,18 @@ void LLMeshRepository::fetchPhysicsShape(const LLUUID& mesh_id)
         }
     }
 }
+
+// <SK:Nexii> census: the header of a mesh no object has asked a LOD of
+void LLMeshRepository::fetchMeshHeader(const LLVolumeParams& mesh_params)
+{
+    const LLUUID& mesh_id = mesh_params.getSculptID();
+    if (mesh_id.isNull() || hasHeader(mesh_id) || (LLLocalMeshMgr::instanceExists() && LLLocalMeshMgr::getInstance()->isLocal(mesh_id)))
+    {
+        return;
+    }
+    mThread->loadMeshHeader(mesh_params);
+}
+// </SK:Nexii>
 
 // <SK:Nexii> physics_havok block
 std::shared_ptr<const SKPhysicsHavokShape> LLMeshRepository::getPhysicsHavok(const LLUUID& mesh_id)
