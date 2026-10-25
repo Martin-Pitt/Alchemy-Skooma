@@ -99,6 +99,28 @@
             <key>Value</key>
             <integer>0</integer>
         </map>
+        <key>SkoomaReopenIMSessions</key>
+        <map>
+            <key>Comment</key>
+            <string>Reopen the IM and group chats that were open at logout on the next login.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SkoomaOpenIMSessions</key>
+        <map>
+            <key>Comment</key>
+            <string>The IM and group chats open at logout, reopened at login while SkoomaReopenIMSessions is on.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>LLSD</string>
+            <key>Value</key>
+            <array />
+        </map>
         <key>ALDiscordIntegration</key>
         <map>
             <key>Comment</key>

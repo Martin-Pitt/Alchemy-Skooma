@@ -422,6 +422,11 @@ public:
      */
     bool leaveSession(const LLUUID& session_id);
 
+    // <SK:Nexii> Reopen IMs: remember the IM and group chats open at logout and reopen them at login.
+    void saveOpenSessions();
+    void reopenSavedSessions();
+    // </SK:Nexii>
+
     void inviteToSession(
         const LLUUID& session_id,
         const std::string& session_name,

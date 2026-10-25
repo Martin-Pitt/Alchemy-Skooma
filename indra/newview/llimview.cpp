@@ -3574,6 +3574,62 @@ bool LLIMMgr::leaveSession(const LLUUID& session_id)
     return true;
 }
 
+// <SK:Nexii> Reopen IMs: remember the IM and group chats open at logout and reopen them at login.
+void LLIMMgr::saveOpenSessions()
+{
+    LLSD sessions = LLSD::emptyArray();
+    for (const auto& [session_id, session] : LLIMModel::getInstance()->mId2SessionMap)
+    {
+        if (session->isP2PSessionType() && session->mOtherParticipantID.notNull())
+        {
+            sessions.append(LLSD().with("type", "p2p").with("id", session->mOtherParticipantID).with("name", session->mName));
+        }
+        else if (session->isGroupSessionType())
+        {
+            sessions.append(LLSD().with("type", "group").with("id", session_id).with("name", session->mName));
+        }
+    }
+    gSavedPerAccountSettings.setLLSD("SkoomaOpenIMSessions", sessions);
+}
+
+void LLIMMgr::reopenSavedSessions()
+{
+    if (!gSavedPerAccountSettings.getBOOL("SkoomaReopenIMSessions"))
+    {
+        return;
+    }
+
+    const LLSD sessions = gSavedPerAccountSettings.getLLSD("SkoomaOpenIMSessions");
+    for (const LLSD& entry : llsd::inArray(sessions))
+    {
+        const LLUUID id = entry["id"].asUUID();
+        const std::string name = entry["name"].asString();
+        if (id.isNull() || !RlvActions::canStartIM(id))
+        {
+            continue;
+        }
+
+        if (entry["type"].asString() == "group")
+        {
+            if (!name.empty() && !LLMuteList::getInstance()->isMuted(id))
+            {
+                addSession(name, IM_SESSION_GROUP_START, id);
+            }
+        }
+        else if (id != gAgent.getID() && !LLMuteList::getInstance()->isMuted(id))
+        {
+            LLAvatarNameCache::get(id, [id](const LLUUID&, const LLAvatarName& av_name)
+            {
+                if (gIMMgr)
+                {
+                    gIMMgr->addSession(av_name.getDisplayName(), IM_NOTHING_SPECIAL, id);
+                }
+            });
+        }
+    }
+}
+// </SK:Nexii>
+
 // Removes data associated with a particular session specified by session_id
 void LLIMMgr::removeSession(const LLUUID& session_id)
 {
