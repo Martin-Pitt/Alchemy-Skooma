@@ -38,7 +38,7 @@ revert is recorded and `git skooma undo` still works.
 Every commit must be acceptable to the Alchemy project as-is.
 
 - Write upstream-style code in upstream's layout. `SK`/`sk` prefixes on your own files and `<SK:Nexii>` wrappers on injection sites into non-Skooma files are expected — Alchemy already carries Firestorm's `<FS:ND>` / `<FS:AR>`. Keep product/channel branding out.
-- Never touch `AGENTS.md`, `CLAUDE.local.md`, `doc/skooma/`, `scripts/skooma/`, `.claude/`, `.worktrees/`, `vs2026-os/`. If a change needs one of those, say so — it belongs on `glue`.
+- Never touch `AGENTS.md`, `CLAUDE.local.md`, `doc/skooma/`, `scripts/skooma/`, `.claude/`, `.worktrees/`, `vs2026-os/`. If a change needs one of those, say so — it belongs on `glue`, except `doc/skooma/` docs, which are edited on `main` in the main checkout and committed at once, never left uncommitted.
 - Never merge `main`, a trunk or another feature into your branch. Take upstream by `git merge develop`, and a foundation you build on by `git merge foundation-<name>`, in your own worktree; `git skooma sync` touches every worktree, so leave it to the human.
 - Small logical commits; imperative subject (`Fix crash when pasting into text editor`); body explains why. Squash WIP before landing.
 - `Co-Authored-By:` trailers are fine (upstream uses them). No `Generated with` lines.
