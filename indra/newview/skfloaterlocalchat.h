@@ -122,6 +122,7 @@ private:
         S32 mNameWidth = 0; // measured at layout
         S32 mTimeWidth = 0; // the timestamp and its gap, 0 for none
         std::vector<Link> mLinks;
+        std::vector<U8> mStyle; // a markdown style a byte of mBody, empty for plain text
         SKChatEmbedPtr mEmbed; // the preview of the first link that has one
         S32 mEmbedWidth = 0;   // measured at layout
         S32 mDay = 0;          // yyyymmdd in the timestamps' time base, 0 when unknown
@@ -141,6 +142,7 @@ private:
         S32 mGap = 0;       // space below the row, outside its card
         S32 mBottom = 0;    // from the bottom of the content
         bool mEmbed = false; // the message's link preview rather than a line of it
+        bool mQuote = false; // a line of a block quote, drawn indented behind a bar
         S32 height() const;
     };
 
@@ -160,6 +162,8 @@ private:
     void backfill(bool skip_last);
     /// day is the message's yyyymmdd when the caller knows it better than its timestamp does, else 0.
     void appendChat(const LLChat& chat, const LLSD& args, F64 arrival, S32 day = 0);
+    /// Discord's subset of markdown: takes the markers out of the body and keeps the styles they asked for.
+    static void applyMarkdown(Message& msg);
     void showInput(bool show);
     void sendChat(EChatType type);
     void invalidateLayout() { mLayoutDirty = true; }

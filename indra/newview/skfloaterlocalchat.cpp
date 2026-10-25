@@ -151,6 +151,79 @@ S32 bold_width(const LLFontGL* font, std::string_view text)
     return text.empty() ? 0 : font->faceFor(LLFontGL::BOLD)->getWidth(text) + 1;
 }
 
+// Markdown styles a byte of a message can carry: the font's own bits, then what the chat draws itself.
+constexpr U8 MD_FONT = LLFontGL::BOLD | LLFontGL::ITALIC | LLFontGL::UNDERLINE;
+constexpr U8 MD_STRIKE = 0x08;
+constexpr U8 MD_CODE = 0x10;
+constexpr U8 MD_QUOTE = 0x20;
+constexpr S32 CODE_PAD = 2;     // either side of an inline code run, inside its background
+constexpr S32 QUOTE_INDENT = 12; // a quoted line's text, past its bar
+constexpr S32 QUOTE_BAR = 3;
+
+U8 style_at(const std::vector<U8>& style, S32 pos)
+{
+    return pos >= 0 && pos < (S32)style.size() ? style[pos] : 0;
+}
+
+// Where the run of one style that starts at pos ends, at most end.
+S32 style_run(const std::vector<U8>& style, S32 pos, S32 end)
+{
+    if (style.empty())
+    {
+        return end;
+    }
+    const U8 at = style_at(style, pos);
+    while (++pos < end && style_at(style, pos) == at)
+    {
+    }
+    return pos;
+}
+
+// How wide a stretch of a body draws, each run in its own face.
+F32 styled_width(const LLFontGL* font, std::string_view body, const std::vector<U8>& style, S32 begin, S32 len)
+{
+    if (style.empty())
+    {
+        return font->getWidthF32Bytes(body, begin, len);
+    }
+    F32 width = 0.f;
+    const S32 end = begin + len;
+    for (S32 pos = begin; pos < end;)
+    {
+        const S32 run = style_run(style, pos, end);
+        const U8 at = style_at(style, pos);
+        width += font->faceFor(at & MD_FONT)->getWidthF32Bytes(body, pos, run - pos);
+        width += (at & LLFontGL::BOLD) ? 1.f : 0.f; // the synthesized bold's second pass, as bold_width counts it
+        width += (at & MD_CODE) ? 2.f * CODE_PAD : 0.f;
+        pos = run;
+    }
+    return width;
+}
+
+// The byte, from begin, nearest a pixel offset into a styled stretch.
+S32 styled_byte_at(const LLFontGL* font, std::string_view body, const std::vector<U8>& style, S32 begin, S32 len, F32 offset, bool round)
+{
+    if (style.empty())
+    {
+        return font->byteFromPixelOffset(body, begin, offset, F32_MAX, len, round);
+    }
+    const S32 end = begin + len;
+    for (S32 pos = begin; pos < end;)
+    {
+        const S32 run = style_run(style, pos, end);
+        const U8 at = style_at(style, pos);
+        const F32 width = styled_width(font, body, style, pos, run - pos);
+        if (offset < width)
+        {
+            const F32 pad = (at & MD_CODE) ? (F32)CODE_PAD : 0.f;
+            return pos - begin + font->faceFor(at & MD_FONT)->byteFromPixelOffset(body, pos, llmax(0.f, offset - pad), F32_MAX, run - pos, round);
+        }
+        offset -= width;
+        pos = run;
+    }
+    return len;
+}
+
 // Set while the messages draw into the mask's target.
 bool sDrawingMask = false;
 
@@ -596,6 +669,7 @@ void SKFloaterLocalChat::appendChat(const LLChat& chat, const LLSD& args, F64 ar
     }
     out += rest;
     msg.mBody = std::move(out);
+    applyMarkdown(msg);
 
     // One preview a message, for its first link that has one; nothing is looked up until it is drawn.
     if (unfurl_enabled())
@@ -629,6 +703,206 @@ void SKFloaterLocalChat::appendChat(const LLChat& chat, const LLSD& args, F64 ar
         }
     }
     invalidateLayout();
+}
+
+void SKFloaterLocalChat::applyMarkdown(Message& msg)
+{
+    std::string& body = msg.mBody;
+    const S32 n = (S32)body.size();
+    const S32 from = msg.mNameLen;
+    if (body.find_first_of("*_~`>#-\\", from) == std::string::npos)
+    {
+        return;
+    }
+    std::vector<U8> style(n, 0);
+    std::vector<U8> kept(n, 1);   // 0 for a marker taken out
+    std::vector<U8> fixed(n, 0);  // a link, code or an escaped character, which nothing restyles
+    std::vector<U8> bullet(n, 0); // a list's dash, drawn as a bullet
+    for (const Link& link : msg.mLinks)
+    {
+        std::fill(fixed.begin() + link.mBegin, fixed.begin() + link.mEnd, 1);
+    }
+    auto drop = [&](S32 at, S32 count) { std::fill(kept.begin() + at, kept.begin() + llmin(n, at + count), 0); };
+
+    // Lines: code fences, quotes, headings and lists. A minimal line's first line follows the name and takes none.
+    bool fence = false;
+    bool quote_rest = false;
+    for (S32 line = from; line < n;)
+    {
+        size_t found = body.find('\n', line);
+        const S32 eol = found == std::string::npos ? n : (S32)found;
+        const S32 next = eol < n ? eol + 1 : n;
+        S32 i = line;
+        if (body.compare(i, 3, "```") == 0 && !fixed[i] && body.find("```", i + 3) >= (size_t)eol)
+        {
+            fence = !fence; // a fence line opens or closes a code block and is not shown
+            drop(line, next - line);
+            line = next;
+            continue;
+        }
+        if (fence)
+        {
+            for (S32 k = line; k < next; ++k)
+            {
+                style[k] |= MD_CODE;
+                fixed[k] = 1;
+            }
+            line = next;
+            continue;
+        }
+        if (line > 0 || from == 0)
+        {
+            bool quoted = quote_rest;
+            if (!quoted && body.compare(i, 4, ">>> ") == 0)
+            {
+                quote_rest = quoted = true; // the rest of the message
+                drop(i, 4);
+                i += 4;
+            }
+            else if (!quoted && body.compare(i, 2, "> ") == 0)
+            {
+                quoted = true;
+                drop(i, 2);
+                i += 2;
+            }
+            if (quoted)
+            {
+                for (S32 k = line; k < next; ++k)
+                {
+                    style[k] |= MD_QUOTE;
+                }
+            }
+            S32 hashes = 0;
+            while (hashes < 3 && i + hashes < eol && body[i + hashes] == '#')
+            {
+                ++hashes;
+            }
+            if (hashes > 0 && i + hashes + 1 < eol && body[i + hashes] == ' ')
+            {
+                drop(i, hashes + 1); // a heading, drawn bold
+                for (S32 k = i + hashes + 1; k < eol; ++k)
+                {
+                    style[k] |= LLFontGL::BOLD;
+                }
+            }
+            else if (i + 2 < eol && (body[i] == '-' || body[i] == '*') && body[i + 1] == ' ')
+            {
+                bullet[i] = 1;
+                fixed[i] = 1;
+            }
+        }
+        line = next;
+    }
+
+    auto free_at = [&](S32 k) { return k >= from && k < n && kept[k] && !fixed[k]; };
+    auto is_word = [](char c) { return LLStringOps::isAlnum(c); };
+
+    // A backslash shows the punctuation after it as it is.
+    for (S32 i = from; i + 1 < n; ++i)
+    {
+        if (body[i] == '\\' && free_at(i) && free_at(i + 1) && LLStringOps::isPunct(body[i + 1]))
+        {
+            kept[i] = 0;
+            fixed[i + 1] = 1;
+            ++i;
+        }
+    }
+
+    // Inline pairs, code first so nothing inside it is read as a marker.
+    auto pairs = [&](std::string_view mark, U8 flag, bool code, bool tight, bool word_bound)
+    {
+        const S32 len = (S32)mark.size();
+        auto marker_at = [&](S32 k)
+        {
+            if (k < from || k + len > n || body.compare(k, len, mark) != 0)
+            {
+                return false;
+            }
+            for (S32 j = k; j < k + len; ++j)
+            {
+                if (!free_at(j))
+                {
+                    return false;
+                }
+            }
+            return true;
+        };
+        for (S32 i = from; i + 2 * len < n + 1; ++i)
+        {
+            if (!marker_at(i) || (word_bound && i > 0 && is_word(body[i - 1])) || (tight && (i + len >= n || body[i + len] == ' ')))
+            {
+                continue;
+            }
+            for (S32 j = i + len + 1; j + len <= n; ++j)
+            {
+                if (!marker_at(j) || (tight && body[j - 1] == ' ') || (word_bound && j + len < n && is_word(body[j + len])))
+                {
+                    continue;
+                }
+                drop(i, len);
+                drop(j, len);
+                for (S32 k = i + len; k < j; ++k)
+                {
+                    style[k] |= flag;
+                    if (code)
+                    {
+                        fixed[k] = 1;
+                    }
+                }
+                i = j + len - 1;
+                break;
+            }
+        }
+    };
+    pairs("```", MD_CODE, true, false, false);
+    pairs("`", MD_CODE, true, false, false);
+    pairs("**", LLFontGL::BOLD, false, false, false);
+    pairs("__", LLFontGL::UNDERLINE, false, false, false);
+    pairs("~~", MD_STRIKE, false, false, false);
+    pairs("*", LLFontGL::ITALIC, false, true, false);
+    pairs("_", LLFontGL::ITALIC, false, true, true);
+
+    // What is left, with the links moved to where their bytes went.
+    std::string out;
+    std::vector<U8> out_style;
+    std::vector<S32> moved(n + 1, 0);
+    out.reserve(n);
+    out_style.reserve(n);
+    bool styled = false;
+    for (S32 i = 0; i < n; ++i)
+    {
+        moved[i] = (S32)out.size();
+        if (!kept[i])
+        {
+            continue;
+        }
+        if (bullet[i])
+        {
+            out += "\xE2\x80\xA2";
+            out_style.insert(out_style.end(), 3, style[i]);
+        }
+        else
+        {
+            out += body[i];
+            out_style.push_back(style[i]);
+        }
+        styled |= style[i] != 0;
+    }
+    moved[n] = (S32)out.size();
+    if (out.size() == body.size() && !styled)
+    {
+        return; // nothing was markdown
+    }
+    for (Link& link : msg.mLinks)
+    {
+        link.mBegin = moved[link.mBegin];
+        link.mEnd = moved[link.mEnd];
+    }
+    body = std::move(out);
+    if (styled)
+    {
+        msg.mStyle = std::move(out_style);
+    }
 }
 
 void SKFloaterLocalChat::showInput(bool show)
@@ -1039,17 +1313,40 @@ void SKFloaterLocalChat::layout()
                 line_end = (S32)nl;
             }
             // A minimal line's timestamp sits in its first row, before the name.
-            const F32 row_wrap = pos == 0 && msg.mNameLen > 0 ? llmax(16.f, wrap - (F32)(msg.mTimeWidth + bold_extra(msg))) : wrap;
+            const bool quoted = (style_at(msg.mStyle, pos) & MD_QUOTE) != 0;
+            F32 row_wrap = pos == 0 && msg.mNameLen > 0 ? llmax(16.f, wrap - (F32)(msg.mTimeWidth + bold_extra(msg))) : wrap;
+            if (quoted)
+            {
+                row_wrap = llmax(16.f, row_wrap - (F32)QUOTE_INDENT);
+            }
             S32 count = font->maxDrawableBytes(body.substr(pos), row_wrap, line_end - pos, LLFontGL::WORD_BOUNDARY_IF_POSSIBLE);
             if (count <= 0 && pos < line_end)
             {
                 count = llmin(utf8_lead_len(body[pos]), line_end - pos);
+            }
+            // The plain face measured it; styled runs may draw wider, so give back words until it fits.
+            while (!msg.mStyle.empty() && count > 1 && styled_width(font, body, msg.mStyle, pos, count) > row_wrap)
+            {
+                const size_t space = body.rfind(' ', (size_t)(pos + count - 2));
+                if (space != std::string_view::npos && (S32)space >= pos)
+                {
+                    count = (S32)space - pos + 1;
+                }
+                else
+                {
+                    --count;
+                    while (count > 1 && ((unsigned char)body[pos + count] & 0xC0) == 0x80)
+                    {
+                        --count;
+                    }
+                }
             }
             Row row;
             row.mMessage = m;
             row.mCard = (S32)mCards.size() - 1;
             row.mBegin = pos;
             row.mLength = count;
+            row.mQuote = quoted;
             if (first && !join && !(cards && !msg.mName.empty()))
             {
                 row.mPadTop = cards ? CARD_PAD_Y : 0;
@@ -1110,8 +1407,9 @@ void SKFloaterLocalChat::layout()
             else
             {
                 const Message& msg = mMessages[row.mMessage];
-                const S32 lead = row.mBegin == 0 && msg.mNameLen > 0 ? msg.mTimeWidth + bold_extra(msg) : 0;
-                widest = llmax(widest, font->getWidthBytes(msg.mBody, row.mBegin, row.mLength) + lead);
+                S32 lead = row.mBegin == 0 && msg.mNameLen > 0 ? msg.mTimeWidth + bold_extra(msg) : 0;
+                lead += row.mQuote ? QUOTE_INDENT : 0;
+                widest = llmax(widest, (S32)ceilf(styled_width(font, msg.mBody, msg.mStyle, row.mBegin, row.mLength)) + lead);
             }
         }
         card.mWidth = llmin(width, card.mTextX + widest + pad_x);
@@ -1209,9 +1507,9 @@ void SKFloaterLocalChat::drawRowSelection(const Row& row, S32 x, S32 y, F32 alph
         {
             left += (F32)msg.mTimeWidth;
         }
-        left += font->getWidthF32Bytes(msg.mBody, row.mBegin, begin - row.mBegin);
+        left += styled_width(font, msg.mBody, msg.mStyle, row.mBegin, begin - row.mBegin);
     }
-    const F32 right = left + font->getWidthF32Bytes(msg.mBody, begin, end - begin);
+    const F32 right = left + styled_width(font, msg.mBody, msg.mStyle, begin, end - begin);
     static LLUIColor select_color = LLUIColorTable::instance().getColor("EmphasisColor");
     gGL.getTextureSlot(0)->unbind();
     shape_blend();
@@ -1261,10 +1559,34 @@ void SKFloaterLocalChat::drawRowText(const Row& row, S32 x, S32 y, F32 alpha, LL
                 }
             }
         }
+        U8 md = 0;
+        if (pos >= msg.mNameLen)
+        {
+            md = style_at(msg.mStyle, pos);
+            run_end = llmin(run_end, style_run(msg.mStyle, pos, run_end));
+            style |= md & MD_FONT;
+        }
         color.mV[VALPHA] *= alpha;
+        if (md & MD_CODE)
+        {
+            // Inline code on a darker ground, as Discord's.
+            const F32 width = styled_width(font, body, msg.mStyle, pos, run_end - pos);
+            gGL.getTextureSlot(0)->unbind();
+            shape_blend();
+            gl_rect_2d(ll_round(pen), y + lineHeight(row), ll_round(pen + width), y - 1, LLColor4(0.f, 0.f, 0.f, 0.35f * alpha));
+            pen += (F32)CODE_PAD;
+        }
+        const F32 start = pen;
         F32 right = pen;
         font->renderUTF8(body, pos, pen, (F32)y, color, LLFontGL::LEFT, LLFontGL::BOTTOM, style, shadow, run_end - pos, S32_MAX, &right);
-        pen = right;
+        if (md & MD_STRIKE)
+        {
+            gGL.getTextureSlot(0)->unbind();
+            shape_blend();
+            const S32 strike_y = y + ll_round((F32)font->getLineHeight() * 0.45f);
+            gl_rect_2d(ll_round(start), strike_y + 1, ll_round(right), strike_y, color);
+        }
+        pen = right + ((md & MD_CODE) ? (F32)CODE_PAD : 0.f);
         pos = run_end;
     }
 }
@@ -1434,8 +1756,16 @@ void SKFloaterLocalChat::drawMessages(const LLRect& content, F64 now, bool full,
             }
             else
             {
-                drawRowSelection(row, text_x, y, alpha);
-                drawRowText(row, text_x, y, alpha, shadow);
+                if (row.mQuote)
+                {
+                    static LLUIColor quote_color = LLUIColorTable::instance().getColor("White");
+                    gGL.getTextureSlot(0)->unbind();
+                    shape_blend();
+                    gl_rect_2d(text_x, y + lineHeight(row), text_x + QUOTE_BAR, y, quote_color.get() % (0.35f * alpha));
+                }
+                const S32 row_x = text_x + (row.mQuote ? QUOTE_INDENT : 0);
+                drawRowSelection(row, row_x, y, alpha);
+                drawRowText(row, row_x, y, alpha, shadow);
             }
         }
     }
@@ -2003,11 +2333,12 @@ std::string SKFloaterLocalChat::urlAt(S32 x, S32 y) const
             return msg.mEmbed && x >= text_x && x < text_x + msg.mEmbedWidth ? msg.mEmbed->mUrl : std::string();
         }
         const Message& msg = mMessages[row.mMessage];
-        if (x < text_x)
+        const S32 row_x = text_x + (row.mQuote ? QUOTE_INDENT : 0);
+        if (x < row_x)
         {
             return std::string();
         }
-        F32 offset = (F32)(x - text_x);
+        F32 offset = (F32)(x - row_x);
         if (row.mBegin == 0 && msg.mNameLen > 0)
         {
             // A minimal line's timestamp leads its first row and pushes the rest along.
@@ -2017,7 +2348,7 @@ std::string SKFloaterLocalChat::urlAt(S32 x, S32 y) const
         {
             return std::string();
         }
-        const S32 at = row.mBegin + LLViewerChat::getChatFont()->byteFromPixelOffset(msg.mBody, row.mBegin, offset, F32_MAX, row.mLength, false);
+        const S32 at = row.mBegin + styled_byte_at(LLViewerChat::getChatFont(), msg.mBody, msg.mStyle, row.mBegin, row.mLength, offset, false);
         if (at >= row.mBegin + row.mLength)
         {
             return std::string();
@@ -2091,7 +2422,7 @@ bool SKFloaterLocalChat::textPosAt(S32 x, S32 y, bool clamp, TextPos& pos) const
         return true;
     }
     const Message& msg = mMessages[row.mMessage];
-    F32 offset = (F32)(x - text_x);
+    F32 offset = (F32)(x - text_x - (row.mQuote ? QUOTE_INDENT : 0));
     if (row.mBegin == 0 && msg.mNameLen > 0)
     {
         offset -= (F32)msg.mTimeWidth;
@@ -2104,7 +2435,7 @@ bool SKFloaterLocalChat::textPosAt(S32 x, S32 y, bool clamp, TextPos& pos) const
         }
     }
     const LLFontGL* font = LLViewerChat::getChatFont();
-    if (!clamp && (offset < 0.f || offset > font->getWidthF32Bytes(msg.mBody, row.mBegin, row.mLength)))
+    if (!clamp && (offset < 0.f || offset > styled_width(font, msg.mBody, msg.mStyle, row.mBegin, row.mLength)))
     {
         return false; // beside the text, not on it
     }
@@ -2117,7 +2448,7 @@ bool SKFloaterLocalChat::textPosAt(S32 x, S32 y, bool clamp, TextPos& pos) const
         offset = 0.f; // above it, its start
     }
     pos.mMessage = row.mMessage;
-    pos.mByte = row.mBegin + font->byteFromPixelOffset(msg.mBody, row.mBegin, llmax(offset, 0.f), F32_MAX, row.mLength, true);
+    pos.mByte = row.mBegin + styled_byte_at(font, msg.mBody, msg.mStyle, row.mBegin, row.mLength, llmax(offset, 0.f), true);
     return true;
 }
 
