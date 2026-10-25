@@ -1304,23 +1304,15 @@ Unmarked: `AlchemyMouselookIFF`, `AlchemyMouselookIFFMarkers`, `AlchemyMouselook
 
 ## Prim edge splits
 
-Branch `feature-render/prim-split` (merge `257736e19c`). Untwisted square and triangle prims on a line path drop the legacy per-vertex-lighting edge splits (box 108 → 12 triangles at the top LOD). Own test: `indra/llmath/tests/llvolumesplit_test.cpp`.
+Branch `feature-render/prim-split`. Upstream's `profile_split` took over dropping the splits at the develop sync `ab3b18133a`; the legacy toggle, its listener, `regenPrims` and `llvolumesplit_test` were dropped after it (main `cc94ed261a`). What is left is LOD sharing between details that build the same prim.
 
 ### Injection sites
 
 | File | What | Why there |
 |---|---|---|
-| `indra/llmath/llvolume.cpp` | `split = 0` condition also covers untwisted paths unless `sSplitFlatSides`; the static's definition | Where `LLVolume::generate` picks the split |
-| `indra/llmath/llvolume.cpp` | **Superseded at the develop sync `ab3b18133a`:** upstream's `profile_split` / `lod_invariance` now drop the splits; `generate()`, `createSide` and their tests take upstream's code. `getProfileSplit` follows `profile_split`, and `isSameMesh` redoes upstream's hole-touches-wall split, so canonical LODs match what `generate()` builds. `sSplitFlatSides` and the menu toggle no longer change anything, and `llvolumesplit_test` likely fails | Upstream took the feature over |
-| `indra/llmath/llvolume.cpp` | `createSide` and `createUnCutCubeCap` partial builds only when the vertex and index counts are unchanged (merge `955852d822`) | A face shrunk by an in-place regen kept stale indices |
-| `indra/llmath/llvolume.h` | `static bool sSplitFlatSides`; `getProfileSplit`, `isSameMesh` | A/B toggle, the test, LOD equivalence |
-| `indra/llmath/llvolume.cpp` | The split rule moved into `getProfileSplit`; `isSameMesh` compares path and profile at two details (merge `fe9247088c`) | Shared by `generate()` and the LOD check |
-| `indra/llmath/llvolumemgr.h` / `.cpp` | `LLVolumeLODGroup::regenPrims`, `getCanonicalLOD` (cached `mCanonicalLOD`); `LLVolumeMgr::regenPrims` | Per-shape LOD cache lives in the group |
+| `indra/llmath/llvolume.h` / `.cpp` | `getProfileSplit` (follows `profile_split`), `isSameMesh` (compares path and profile at two details, redoing the hole-touches-wall split as `generate()` does) | LOD equivalence matches what `generate()` builds |
+| `indra/llmath/llvolumemgr.h` / `.cpp` | `LLVolumeLODGroup::getCanonicalLOD` (cached `mCanonicalLOD`) | Per-shape LOD cache lives in the group |
 | `indra/newview/llvovolume.cpp` | `calcLOD` returns no change between LODs with the same canonical LOD | Skips rebuilds that change nothing |
-| `indra/newview/llviewercontrol.cpp` | `handleLegacyPrimSplitsChanged` regenerates every cached prim LOD and unique volumes; listener; three includes | Settings listeners live there |
-| `indra/newview/skins/default/xui/en/menu_viewer.xml` | Render Tests > Legacy Prim Edge Splits | Debug A/B |
-| `indra/newview/app_settings/settings_alchemy.xml` | `SKRenderLegacyPrimSplits` (unmarked, next to the `SKRender*` entries) | Setting |
-| `indra/llmath/CMakeLists.txt` | `llvolumesplit` test registered (marked TUT guard) | Build |
 | `indra/llmath/llvolume.cpp` | End of `createSide`: a sculpt's degenerate (pinched) triangles dropped from the indices (unmarked; `fix-sculpt-degenerate`, merge `3f39170197`) | Each rasterised as a stripe across the region |
 | `indra/llmath/tests/llvolume_test.cpp` | New TUT test for the above (unprefixed, unmarked), registered in a marked guard in `llmath/CMakeLists.txt` | Build |
 
