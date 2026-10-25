@@ -1990,6 +1990,17 @@ bool SKFloaterLocalChat::handleMouseDown(S32 x, S32 y, MASK mask)
     return LLFloater::handleMouseDown(x, y, mask);
 }
 
+// A right click on the chat's content is the chat's, so it never reaches the object behind a card.
+bool SKFloaterLocalChat::handleRightMouseDown(S32 x, S32 y, MASK mask)
+{
+    return LLFloater::handleRightMouseDown(x, y, mask) || (!isMinimized() && hitsContentAt(x, y));
+}
+
+bool SKFloaterLocalChat::handleRightMouseUp(S32 x, S32 y, MASK mask)
+{
+    return LLFloater::handleRightMouseUp(x, y, mask) || (!isMinimized() && hitsContentAt(x, y));
+}
+
 bool SKFloaterLocalChat::handleHover(S32 x, S32 y, MASK mask)
 {
     const bool at_edge = !isLocked() && (x < EDGE_REACH || y < EDGE_REACH || x >= getRect().getWidth() - EDGE_REACH || y >= getRect().getHeight() - EDGE_REACH); // locked, no edge timer
@@ -2013,10 +2024,6 @@ bool SKFloaterLocalChat::handleHover(S32 x, S32 y, MASK mask)
 
 bool SKFloaterLocalChat::handleScrollWheel(S32 x, S32 y, LLScrollDelta delta)
 {
-    if (isLocked() && !hitsContentAt(x, y))
-    {
-        return false; // locked, the wheel off the content zooms the camera as over the world
-    }
     // LLFloater::handleScrollWheel always claims the wheel, so only a child that scrolls may take it first; the bar never does.
     const bool on_bar = mScrollbar && mScrollbar->getVisible() && mScrollbar->getRect().pointInRect(x, y);
     if (!on_bar && childrenHandleScrollWheel(x, y, delta))
