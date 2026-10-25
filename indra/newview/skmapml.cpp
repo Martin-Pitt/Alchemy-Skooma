@@ -247,11 +247,12 @@ namespace
         gGL.scalef(ui, ui, 1.f);
         gGL.pushUIMatrix();
         gGL.loadUIIdentity();
-        gUIProgram.bind();
         gGL.setClearColor(LLColor4::transparent);
 
         for (S32 mode : { 0, 1, 2 })
         {
+            // Each layer, since the last layer's blit leaves its mask bound and then none.
+            gUIProgram.bind();
             s.mTarget.bindTarget();
             s.mTarget.clear(GL_COLOR_BUFFER_BIT);
             gGL.getTextureSlot(0)->unbind();
