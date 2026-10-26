@@ -61,9 +61,31 @@ SKColorScale SKColorScale::even(std::string id, Kind kind, const std::vector<LLC
     return SKColorScale(std::move(id), kind, std::move(stops));
 }
 
-SKColorScale& SKColorScale::setDomain(F64 lo, F64 hi) { mLo = lo; mHi = hi; bump(); return *this; }
+SKColorScale& SKColorScale::setDomain(F64 lo, F64 hi)
+{
+    mLo = lo;
+    mHi = hi;
+    warnIfDegenerate();
+    bump();
+    return *this;
+}
 SKColorScale& SKColorScale::setMid(F64 mid) { mMid = mid; mHasMid = !std::isnan(mid); bump(); return *this; }
-SKColorScale& SKColorScale::setTransform(Transform transform) { mTransform = transform; bump(); return *this; }
+SKColorScale& SKColorScale::setTransform(Transform transform)
+{
+    mTransform = transform;
+    warnIfDegenerate();
+    bump();
+    return *this;
+}
+
+void SKColorScale::warnIfDegenerate() const
+{
+    if (mTransform == Transform::Log && !(mLo > 0.0) && !isDiscrete())
+    {
+        LL_WARNS_ONCE("SKColorScale") << "Scale '" << mId << "' is logarithmic over a domain from " << mLo
+                                      << "; it maps every value to its low end" << LL_ENDL;
+    }
+}
 SKColorScale& SKColorScale::setUnit(std::string unit) { mUnit = std::move(unit); bump(); return *this; }
 SKColorScale& SKColorScale::setStops(std::vector<SKColorStop> stops) { mStops = std::move(stops); bump(); return *this; }
 SKColorScale& SKColorScale::setClasses(std::vector<std::string> names) { mClasses = std::move(names); bump(); return *this; }
@@ -107,12 +129,32 @@ F64 SKColorScale::inverse(F64 x) const
     }
 }
 
+bool SKColorScale::span(F64& lo, F64& mid, F64& hi) const
+{
+    lo = forward(mLo);
+    hi = forward(mHi);
+    if (!std::isfinite(lo) || !std::isfinite(hi) || !(hi > lo))
+    {
+        lo = mid = hi = 0.0;
+        return false;
+    }
+    mid = mHasMid ? forward(mMid) : (lo + hi) * 0.5;
+    if (!(mid > lo && mid < hi))
+    {
+        mid = (lo + hi) * 0.5;
+    }
+    return true;
+}
+
 F64 SKColorScale::valueOf(F64 t) const
 {
-    const F64 lo = forward(mLo), hi = forward(mHi);
+    F64 lo, m, hi;
+    if (!span(lo, m, hi))
+    {
+        return mLo;
+    }
     if (mKind == Kind::Diverging)
     {
-        const F64 m = mHasMid ? forward(mMid) : (lo + hi) * 0.5;
         return inverse(t < 0.5 ? lo + (m - lo) * t * 2.0 : m + (hi - m) * (t - 0.5) * 2.0);
     }
     return inverse(lo + (hi - lo) * t);
@@ -124,17 +166,21 @@ F64 SKColorScale::unitOf(F64 value) const
     {
         return 0.0;
     }
-    const F64 lo = forward(mLo), hi = forward(mHi), v = forward(value);
-    if (mKind == Kind::Diverging)
+    F64 lo, m, hi;
+    if (!span(lo, m, hi))
     {
-        const F64 m = mHasMid ? forward(mMid) : (lo + hi) * 0.5;
-        return v < m ? 0.5 * (v - lo) / (m - lo) : 0.5 + 0.5 * (v - m) / (hi - m);
+        return 0.0;
     }
+    const F64 v = forward(value);
     if (std::isinf(v) && v < 0.0)
     {
         return v;
     }
-    return hi == lo ? 0.0 : (v - lo) / (hi - lo);
+    if (mKind == Kind::Diverging)
+    {
+        return v < m ? 0.5 * (v - lo) / (m - lo) : 0.5 + 0.5 * (v - m) / (hi - m);
+    }
+    return (v - lo) / (hi - lo);
 }
 
 LLColor4 SKColorScale::at(F32 t) const
@@ -292,9 +338,11 @@ SKColorScale::Uniforms SKColorScale::uniforms() const
     u.kind      = (S32)mKind;
     u.transform = (S32)mTransform;
     u.count     = std::min((S32)mStops.size(), MAX_UNIFORM_STOPS);
-    u.lo        = (F32)forward(mLo);
-    u.hi        = (F32)forward(mHi);
-    u.mid       = (F32)(mHasMid ? forward(mMid) : (forward(mLo) + forward(mHi)) * 0.5);
+    F64 lo, m, hi;
+    span(lo, m, hi);
+    u.lo        = (F32)lo;
+    u.hi        = (F32)hi;
+    u.mid       = (F32)m;
     u.under     = mHasUnder ? mUnder : LLColor4(0.f, 0.f, 0.f, 0.f);
     u.over      = mHasOver ? mOver : LLColor4(0.f, 0.f, 0.f, 0.f);
     for (S32 i = 0; i < u.count; ++i)

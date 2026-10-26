@@ -148,6 +148,9 @@ public:
 private:
     F64 forward(F64 x) const;
     F64 inverse(F64 x) const;
+    // The transformed domain with the mid clamped inside it; false where it is empty or not finite.
+    bool span(F64& lo, F64& mid, F64& hi) const;
+    void warnIfDegenerate() const;
     void bump() { ++mRevision; }
 
     std::string              mId;

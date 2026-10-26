@@ -87,6 +87,18 @@ namespace
             }
             return s;
         }
+        if (name == "logzero")
+        {
+            return SKColorScale(SKColorScales::heat()).setDomain(0.0, 100.0).setTransform(SKColorScale::Transform::Log);
+        }
+        if (name == "divend")
+        {
+            return SKColorScale(SKColorScales::signedScale()).setMid(-1.0);
+        }
+        if (name == "flat")
+        {
+            return SKColorScale(SKColorScales::heat()).setDomain(5.0, 5.0);
+        }
         return SKColorScale(SKColorScales::ink()).setUnder(rgb(1.f, 0.f, 0.f)).setOver(rgb(0.f, 0.f, 1.f));
     }
 
@@ -123,7 +135,8 @@ namespace
         {
             CAPTURE(want.scale, want.value);
             CHECK(std::fabs(custom(want.scale).unitOf(want.value) - want.t) < 1e-9);
-            if (want.t >= 0.0 && want.t <= 1.0)
+            const std::string name = want.scale;
+            if (want.t >= 0.0 && want.t <= 1.0 && (name == "log" || name == "sqrt" || name == "div"))
             {
                 CHECK(std::fabs(custom(want.scale).valueOf(want.t) - want.value) < 1e-9 * (1.0 + std::fabs(want.value)));
             }
@@ -157,6 +170,21 @@ namespace
             {
                 CHECK(bytes[(size_t)i * 4 + k] == SKColorScale::toByte(c.mV[k]));
             }
+        }
+    }
+
+    TEST_CASE("skcolorscale: a degenerate domain gives finite uniforms and positions", "[skcolorscale]")
+    {
+        for (const std::string& name : { "logzero", "divend", "flat" })
+        {
+            CAPTURE(name);
+            const SKColorScale           s = custom(name);
+            const SKColorScale::Uniforms u = s.uniforms();
+            CHECK(std::isfinite(u.lo));
+            CHECK(std::isfinite(u.hi));
+            CHECK(std::isfinite(u.mid));
+            CHECK(std::isfinite(s.valueOf(0.5)));
+            CHECK(std::isfinite(s.unitOf(3.0)));
         }
     }
 
