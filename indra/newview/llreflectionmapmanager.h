@@ -32,8 +32,22 @@
 #include "llcubemap.h"
 #include "aluniformbuffer.h"
 
+#include <memory>
+#include <future>
+#include "threadpool.h"
+
 class LLSpatialGroup;
 class LLViewerObject;
+
+struct SKCensusSnapshot;
+// <SK:Nexii> Room and cluster probes
+class SKClusterProbes;
+class SKRoomProbes;
+namespace skworld
+{
+    class SolidLattice;
+}
+// </SK:Nexii>
 
 // number of reflection probes to keep in vram
 #define LL_MAX_REFLECTION_PROBE_COUNT 256
@@ -119,6 +133,7 @@ public:
 
     // allocate an environment map of the given resolution
     LLReflectionMapManager();
+    ~LLReflectionMapManager();
 
     // release any GL state
     void cleanup();
@@ -145,6 +160,42 @@ public:
     // vobj must not be null
     // Guaranteed to not return null
     LLReflectionMap* registerViewerObject(LLViewerObject* vobj);
+
+    // <SK:Nexii> Room probes: full spheres placed before residual grid irradiance probes.
+    LLReflectionMap* registerRoomProbe(const LLVector3& origin, F32 radius);
+    void invalidateRoomProbe(LLReflectionMap* probe);
+    // A new influence radius for a rooms probe; its capture stands, as it depends only on the origin.
+    void resizeRoomProbe(LLReflectionMap* probe, F32 radius);
+    // What a rooms probe sees may have changed: its capture stands, and is retaken in place when the
+    // refresh rotation reaches it, as if it were a minute old, ahead of fresh ones but behind any capture.
+    void staleRoomProbe(LLReflectionMap* probe);
+    void invalidateAutomaticPlacement() { mRoomProbesDirty = true; }
+    // Census cluster fill probes: automatic spheres that blend over the default probe and under every other probe.
+    LLReflectionMap* registerClusterProbe(const LLVector3& origin, F32 radius);
+    std::string clusterProbesStatsLine() const;
+    std::string roomProbesStatsLine() const;
+    // Placed probes, which the rooms probes must stay clear of and share the cap with.
+    void getRoomProbesContext(std::vector<LLReflectionMap*>& placed) const;
+    // </SK:Nexii>
+
+    // <SK:Nexii> Probe kinds for the census export and the probe volume display; the values are the census file's.
+    enum SKProbeKind : U8
+    {
+        SK_PROBE_DEFAULT = 0,
+        SK_PROBE_PLACED_SPHERE,
+        SK_PROBE_PLACED_BOX,
+        SK_PROBE_OCTREE,
+        SK_PROBE_ROOM_SPHERE,
+        SK_PROBE_ROOM_BOX, // reserved: room boxes do not exist yet
+        SK_PROBE_CLUSTER, // a fill over one cell of a census cluster, between the default probe and the rest
+    };
+    SKProbeKind getSKProbeKind(const LLReflectionMap* probe) const;
+    // Every probe held, the default probe first.
+    const std::vector<LLPointer<LLReflectionMap>>& getSKProbes() const { return mProbes; }
+    // Neighbour links from a room probe sphere to an octree probe, and probes relinked for a relevance flip.
+    U32 countRoomOctreeLinks() const;
+    U32 getRelevanceRelinks() const { return mRelevanceRelinks; }
+    // </SK:Nexii>
 
     // reset all state on the next update
     void reset();
@@ -321,5 +372,34 @@ private:
     F64 mResumeTime = 0.0;
 
     ReflectionProbeData mProbeData;
+
+    // <SK:Nexii> Room probes: the held parts, agent space, and whether the octree probes need testing against them.
+    bool mRoomProbesDirty = false;
+    void updateCensusPlacement();
+    F64 mNextCensusPlacement = 0.0;
+    // The census's solid bodies as a tile lattice for the grid placement's
+    // point tests, rebuilt only when the census publishes a new scan.
+    // mSolidsCensus is the scan it was built from.
+    std::shared_ptr<skworld::SolidLattice> mSolids;
+    std::unique_ptr<LL::ThreadPool> mSolidWorkers;
+    std::future<std::shared_ptr<skworld::SolidLattice>> mSolidJob;
+    std::shared_ptr<const SKCensusSnapshot> mSolidJobCensus;
+    std::shared_ptr<const SKCensusSnapshot> mSolidsCensus;
+    void updateRelevanceLinks();
+    U32 mRelevanceRelinks = 0;
+    // </SK:Nexii>
+
+    // <SK:Nexii> Cluster probes: a fill tier over each census cluster, between the default probe and the rest.
+    void updateClusterProbes();
+    std::unique_ptr<SKClusterProbes> mClusterProbes;
+    // </SK:Nexii>
+
+    // <SK:Nexii> Room probes: a full sphere per walkable space of the rooms layer near the camera, and the census
+    // file's probes section, registered on the first update.
+    void updateRoomProbes();
+    void writeCensusProbes(std::ostream& out) const;
+    std::unique_ptr<SKRoomProbes> mRoomProbes;
+    bool mCensusSectionAdded = false;
+    // </SK:Nexii>
 };
 
