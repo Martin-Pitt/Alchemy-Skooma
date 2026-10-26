@@ -171,6 +171,10 @@ target_sources(
     widgets/alspecimenlist.cpp
     studio/alstudiofloater.cpp
     base/alsurface.cpp
+    dataviz/sklegendmodel.cpp
+    dataviz/sklegendsamples.cpp
+    dataviz/sklegendview.cpp
+    dataviz/skticks.cpp
     code/alcodecards.cpp
     code/alcodeliterals.cpp
     code/alchangepeek.cpp
@@ -250,6 +254,12 @@ target_sources(
         studio/alpaneroom.h
         text/altextcaret.h
         base/alviewtype.h
+        dataviz/skdatavizstyle.h
+        dataviz/sklegendmodel.h
+        dataviz/sklegendsamples.h
+        dataviz/sklegendview.h
+        dataviz/skticks.h
+        dataviz/skvizkey.h
         fsvirtualtrackpad.h
         llaccordionctrl.h
         llaccordionctrltab.h
@@ -508,7 +518,7 @@ endif()
 
 target_include_directories(
   llui
-  PUBLIC base text code diff vim xui fields studio widgets
+  PUBLIC base text code diff vim xui fields studio widgets dataviz # <SK:Nexii> legend foundation
 )
 
 target_link_libraries(
@@ -710,6 +720,9 @@ if(AL_BUILD_TESTS)
       tests/llurlregistry_test.cpp
       tests/llview_test.cpp
       tests/llxuiparser_test.cpp
+      tests/sklegendview_test.cpp
+      tests/skticks_test.cpp
+      tests/skvizkey_test.cpp
     # The benchmarks: comparing big scripts, by lines and laid out, and what
     # each comparison says of some edits, which each change to how texts are
     # compared is measured and judged by; and the code editor over
@@ -738,7 +751,11 @@ if(AL_BUILD_TESTS)
   al_add_test_binary(
     llui_gl_tests
     PROJECT llui
-    SOURCES tests/aldiffview_gl_test.cpp tests/alsurface_gl_test.cpp tests/altextview_gl_test.cpp
+    SOURCES
+      tests/aldiffview_gl_test.cpp
+      tests/alsurface_gl_test.cpp
+      tests/altextview_gl_test.cpp
+      tests/sklegendview_gl_test.cpp
     # The same editor drawn, a frame at a time, into llrender's hidden
     # window: what the drawing steps are measured by.
     BENCH_SOURCES tests/altextdraw_bench.cpp

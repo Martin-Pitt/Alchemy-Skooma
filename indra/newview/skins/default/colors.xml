@@ -1465,6 +1465,32 @@
    <color
     name="MusicTickerEmphasisColor" 
     reference="EmphasisColor"/>
+  <!-- <SK:Nexii> legend foundation: data visualisation tokens -->
+  <color
+   name="SkDataVizBg"
+   value="0.063 0.063 0.078 1" />
+  <color
+   name="SkDataVizFrame"
+   value="0.227 0.227 0.259 1" />
+  <color
+   name="SkDataVizText"
+   value="0.949 0.949 0.949 1" />
+  <color
+   name="SkDataVizDim"
+   value="0.627 0.627 0.659 1" />
+  <color
+   name="SkDataVizUnit"
+   value="0.471 0.471 0.502 1" />
+  <color
+   name="SkDataVizSelected"
+   value="1 1 1 1" />
+  <color
+   name="SkDataVizThreshold"
+   value="0.541 0.565 0.592 1" />
+  <color
+   name="SkDataVizReference"
+   value="0.361 0.549 1 1" />
+  <!-- </SK:Nexii> -->
   <color
    name="ChatHeaderDisplayNameColor"
    reference="White" />

@@ -113,6 +113,8 @@ public:
 
     // Value to position on the scale, unclamped; NaN gives 0, a log of nothing positive -inf.
     F64      unitOf(F64 value) const;
+    // Position back to value, the inverse of unitOf within the domain.
+    F64      valueOf(F64 t) const;
     // Position to colour along the stops, clamped to the ends.
     LLColor4 at(F32 t) const;
     // Value to colour, with the clip colours where set; a class colour for discrete kinds.
@@ -145,6 +147,7 @@ public:
 
 private:
     F64 forward(F64 x) const;
+    F64 inverse(F64 x) const;
     void bump() { ++mRevision; }
 
     std::string              mId;

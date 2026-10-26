@@ -123,6 +123,10 @@ namespace
         {
             CAPTURE(want.scale, want.value);
             CHECK(std::fabs(custom(want.scale).unitOf(want.value) - want.t) < 1e-9);
+            if (want.t >= 0.0 && want.t <= 1.0)
+            {
+                CHECK(std::fabs(custom(want.scale).valueOf(want.t) - want.value) < 1e-9 * (1.0 + std::fabs(want.value)));
+            }
         }
     }
 

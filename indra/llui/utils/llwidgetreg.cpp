@@ -53,6 +53,7 @@
 #include "llflyoutbutton.h"
 #include "llfiltereditor.h"
 #include "lllayoutstack.h"
+#include "sklegendview.h" // <SK:Nexii> legend foundation
 
 void LLWidgetReg::initClass(bool register_widgets)
 {
@@ -96,6 +97,7 @@ void LLWidgetReg::initClass(bool register_widgets)
         LLDefaultChildRegistry::Register<LLTextEditor> simple_text_editor("simple_text_editor");
         LLDefaultChildRegistry::Register<LLUICtrl> ui_ctrl("ui_ctrl");
         LLDefaultChildRegistry::Register<LLStatView> stat_view("stat_view");
+        LLDefaultChildRegistry::Register<SKLegendView> sk_legend("sk_legend"); // <SK:Nexii> legend foundation
         //LLDefaultChildRegistry::Register<LLUICtrlLocate> locate("locate");
         //LLDefaultChildRegistry::Register<LLUICtrlLocate> pad("pad");
         LLDefaultChildRegistry::Register<LLViewBorder> view_border("view_border");

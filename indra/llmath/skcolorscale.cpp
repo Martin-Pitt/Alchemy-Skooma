@@ -94,6 +94,30 @@ F64 SKColorScale::forward(F64 x) const
     }
 }
 
+F64 SKColorScale::inverse(F64 x) const
+{
+    switch (mTransform)
+    {
+        case Transform::Log:
+            return std::pow(10.0, x);
+        case Transform::Sqrt:
+            return std::copysign(x * x, x);
+        default:
+            return x;
+    }
+}
+
+F64 SKColorScale::valueOf(F64 t) const
+{
+    const F64 lo = forward(mLo), hi = forward(mHi);
+    if (mKind == Kind::Diverging)
+    {
+        const F64 m = mHasMid ? forward(mMid) : (lo + hi) * 0.5;
+        return inverse(t < 0.5 ? lo + (m - lo) * t * 2.0 : m + (hi - m) * (t - 0.5) * 2.0);
+    }
+    return inverse(lo + (hi - lo) * t);
+}
+
 F64 SKColorScale::unitOf(F64 value) const
 {
     if (std::isnan(value))
