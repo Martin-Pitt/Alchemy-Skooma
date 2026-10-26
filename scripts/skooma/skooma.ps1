@@ -1099,7 +1099,7 @@ function Invoke-New {
             if (GitOk show-ref --verify --quiet "refs/heads/$cand") { $resolved = $cand; break }
         }
         if (-not $resolved) { Fail "base branch '$base' does not exist" }
-        if ($resolved -eq 'main' -or (Test-IsTrunk $resolved)) {
+        if ($resolved -eq 'main' -or ((Test-IsTrunk $resolved) -and $class -ne 'amend')) {
             Fail "never cut a branch from '$resolved': it holds many PRs at once. Cut from develop (the default), a foundation (--base foundation-...), or amend a feature (--amend)"
         }
         if (-not (Get-Role $resolved)) { Fail "base '$resolved' is not a Skooma branch" }
