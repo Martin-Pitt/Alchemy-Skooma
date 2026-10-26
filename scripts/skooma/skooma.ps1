@@ -171,7 +171,9 @@ function Test-IsAmend { param([string]$branch) return ((Get-Class $branch) -eq '
 
 # Branches an amend may never amend: the trunks and the shared lines.
 function Test-NotAmendable { param([string]$branch)
-    return ($branch -in 'develop', 'main', 'glue', 'publish' -or (Test-IsTrunk $branch) -or (Test-IsAmend $branch) -or (Get-Role $branch) -ne 'feature')
+    # A feature-* trunk is a feature that also gathers its sub-branches (feature-combat/minimap): its own code can be amended.
+    $pureTrunk = (Test-IsTrunk $branch) -and $branch -notlike 'feature-*'
+    return ($branch -in 'develop', 'main', 'glue', 'publish' -or $pureTrunk -or (Test-IsAmend $branch) -or (Get-Role $branch) -ne 'feature')
 }
 
 function Get-Classes {
