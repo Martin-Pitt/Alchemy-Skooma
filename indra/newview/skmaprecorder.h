@@ -3,8 +3,8 @@
  * @brief Records why the mini-map and the census and air under it update, frame by frame, to a JSON lines file.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
- * Alchemy Viewer Source Code
- * Copyright (C) 2026, Alchemy Viewer Project.
+ * Second Life Viewer Source Code
+ * Copyright (C) 2026, Martin "Nexii" Pitt <martin.r.pitt@gmail.com>
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public

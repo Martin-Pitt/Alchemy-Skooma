@@ -4,8 +4,8 @@
  *        commands a shot builds over a page's slots on the CPU, as overviewCommandsC.glsl builds them on the GPU.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
- * Alchemy Viewer Source Code
- * Copyright (C) 2026, Alchemy Viewer Project.
+ * Second Life Viewer Source Code
+ * Copyright (C) 2026, Martin "Nexii" Pitt <martin.r.pitt@gmail.com>
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -27,6 +27,8 @@
 #define SK_OVERVIEWSLOTS_H
 
 #include "stdtypes.h"
+
+class LLVector3;
 
 #include <map>
 #include <set>
@@ -111,6 +113,11 @@ namespace skoverview
     /// of 0. The planes are in the page's own frame.
     void buildCommands(const std::vector<SlotCull>& slots, const LevelCull& level, const F32 planes[6][4],
                        std::vector<U32>& first, std::vector<U32>& count);
+
+    /// Welds one run's triangle soup and orders it for the vertex cache and vertex fetch (meshoptimizer): positions
+    /// become its distinct vertices, flags (one per triangle in) one per vertex, and indices its triangles' corners,
+    /// as many as the soup had vertices, so a run's slot keeps its size. Corners weld only where their flags match.
+    void indexRun(std::vector<LLVector3>& positions, std::vector<U8>& flags, std::vector<U32>& indices);
 
     /// The commands with a count, each run that starts where the last ends merged into it.
     void mergeRuns(const std::vector<U32>& first, const std::vector<U32>& count, std::vector<S32>& merged_first,

@@ -4,8 +4,8 @@
  *        and a one-texel id render, and the depth under the cursor, each read back a frame or two later.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
- * Alchemy Viewer Source Code
- * Copyright (C) 2026, Alchemy Viewer Project.
+ * Second Life Viewer Source Code
+ * Copyright (C) 2026, Martin "Nexii" Pitt <martin.r.pitt@gmail.com>
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -125,14 +125,15 @@ class SKOverviewProbes
 public:
     static constexpr S32 SIZE = 256;
 
-    /// A run of census vertices to draw: a page's buffer and one linkset's range in it, its region's origin from the
-    /// probe's own, metres.
+    /// A run of census triangles to draw: a page's buffer and one linkset's range in it, its region's origin from the
+    /// probe's own, metres. An indexed run's range is of indices, its vertices within the same range.
     struct Run
     {
         LLVertexBuffer* mBuffer = nullptr;
         U32 mFirst = 0;
         U32 mCount = 0;
         LLVector3 mOffset;
+        bool mIndexed = false;
     };
 
     /// An orthographic look along z through a box of the probe's frame (its origin the probe's point, z up), from the

@@ -49,6 +49,18 @@ struct ALDrawArraysIndirectCommand
 };
 static_assert(sizeof(ALDrawArraysIndirectCommand) == 16, "GL's DrawArraysIndirectCommand is four uints");
 
+// <SK:Nexii> combat/minimap: what glDrawElementsIndirect reads, GL's DrawElementsIndirectCommand word for word.
+struct ALDrawElementsIndirectCommand
+{
+    U32 mCount         = 0;
+    U32 mInstanceCount = 0;
+    U32 mFirstIndex    = 0;
+    S32 mBaseVertex    = 0;
+    U32 mBaseInstance  = 0;
+};
+static_assert(sizeof(ALDrawElementsIndirectCommand) == 20, "GL's DrawElementsIndirectCommand is five words");
+// </SK:Nexii>
+
 // What glDispatchComputeIndirect reads: the work group counts, x, y, z.
 struct ALDispatchIndirectCommand
 {
