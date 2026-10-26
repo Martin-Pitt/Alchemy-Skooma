@@ -998,10 +998,10 @@ if(AL_BUILD_VIEWER)
     rlvhandler.cpp
     rlvhelper.cpp
     rlvinventory.cpp
-    skfloaterlegenddemo.cpp
+    skfloaterlegenddemo.cpp # <SK:Nexii> legend foundation
     skhover.cpp
     skoverlay.cpp
-    skvizhover.cpp
+    skvizhover.cpp # <SK:Nexii> legend foundation
     rlvlocks.cpp
     rlvui.cpp
   )
@@ -1879,10 +1879,10 @@ if(AL_BUILD_VIEWER)
     rlvhandler.h
     rlvhelper.h
     rlvinventory.h
-    skfloaterlegenddemo.h
+    skfloaterlegenddemo.h # <SK:Nexii> legend foundation
     skhover.h
     skoverlay.h
-    skvizhover.h
+    skvizhover.h # <SK:Nexii> legend foundation
     rlvlocks.h
     rlvmodifiers.h
     rlvui.h

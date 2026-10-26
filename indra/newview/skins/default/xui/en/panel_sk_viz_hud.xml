@@ -20,8 +20,16 @@
    height="440"
    width="232">
     <layout_panel
-     name="sk_viz_hud_slot_0"
+     name="sk_viz_hud_filler"
      auto_resize="true"
+     user_resize="false"
+     mouse_opaque="false"
+     background_visible="false"
+     height="10"
+     width="232" />
+    <layout_panel
+     name="sk_viz_hud_slot_0"
+     auto_resize="false"
      user_resize="false"
      mouse_opaque="false"
      visible="false"
@@ -39,7 +47,7 @@
     </layout_panel>
     <layout_panel
      name="sk_viz_hud_slot_1"
-     auto_resize="true"
+     auto_resize="false"
      user_resize="false"
      mouse_opaque="false"
      visible="false"
@@ -57,7 +65,7 @@
     </layout_panel>
     <layout_panel
      name="sk_viz_hud_slot_2"
-     auto_resize="true"
+     auto_resize="false"
      user_resize="false"
      mouse_opaque="false"
      visible="false"
@@ -75,7 +83,7 @@
     </layout_panel>
     <layout_panel
      name="sk_viz_hud_slot_3"
-     auto_resize="true"
+     auto_resize="false"
      user_resize="false"
      mouse_opaque="false"
      visible="false"

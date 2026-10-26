@@ -73,9 +73,15 @@ namespace
 
     void listenOnce()
     {
+        // Only a viz.key or the end of one touches the legends, so a world pick's highlight outlives other hovers.
         static const bool listening = (SKHover::listen([](const SKHoverContext& ctx) {
-            const bool ours = ctx.kind == SKVizHover::KIND;
-            lightAll(ours ? SKVizKey::fromLLSD(ctx.data) : SKVizKey(), ours ? ctx.source.get() : nullptr);
+            static bool was_ours = false;
+            const bool  ours     = ctx.kind == SKVizHover::KIND;
+            if (ours || was_ours)
+            {
+                lightAll(ours ? SKVizKey::fromLLSD(ctx.data) : SKVizKey(), ours ? ctx.source.get() : nullptr);
+            }
+            was_ours = ours;
         }), true);
         (void)listening;
     }
