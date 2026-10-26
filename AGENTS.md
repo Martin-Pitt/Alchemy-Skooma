@@ -11,7 +11,7 @@ Run `git skooma status` first if unsure. Branch roles:
 | `develop` | Read-only mirror of upstream. Never commit, merge, checkout or reset onto it. |
 | `main` | Integration branch + the human's F5 build. Do not do feature work here. |
 | `feature-<name>` | Your workspace, in `.worktrees/<name>`. Branched from `develop` (or a foundation it builds on); never from a trunk or `main`, which hold many PRs at once. |
-| trunk | The feature branch an area ships as: `feature-navmesh` (`nav/*`), `feature-atmo-magic` (`atmo/*`), `feature-combat/minimap` (`combat/minimap*`), `camera` (`camera/*`). Worktrees of the area land into it, and it lands into `main`. `git skooma trunk` lists them. |
+| trunk | Merge-only branch gathering an area's features before `main` (`combat`, `camera`, `ui`, …). Never cut from or commit to one; follow-ups to a feature are `--amend` of that feature. Worktrees of the area land into it, and it lands into `main`. `git skooma trunk` lists them. |
 | `fix-<name>`, `workaround-<name>`, … | The same kind of branch under a different classification chosen at `git skooma new`. Treat exactly like `feature-*`. |
 | `amend-<area>/<x>` | A follow-up to an existing feature. Lands into that feature, never a PR on its own. |
 | `foundation-<name>` | A shared base other features build on (`foundation-warp`: SKWarp under the camera and scrolling). Cut from `develop`; branches of any trunk may `git merge` it, and `check` accepts that. Lands into `main` and ships as its own PR first. |
