@@ -5929,11 +5929,13 @@ void LLPipeline::renderDebug()
 
     visible_selected_groups.clear();
 
+    // <SK:Nexii> Probe debug drawn after tonemapping in renderFinalize so its kind colours survive exposure.
     //draw reflection probes and links between them
-    if (gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_REFLECTION_PROBES) && !hud_only)
-    {
-        mReflectionMapManager.renderDebug();
-    }
+    //if (gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_REFLECTION_PROBES) && !hud_only)
+    //{
+    //    mReflectionMapManager.renderDebug();
+    //}
+    // </SK:Nexii>
 
     static LLCachedControl<bool> render_ref_probe_volumes(gSavedSettings, "RenderReflectionProbeVolumes");
     if (render_ref_probe_volumes && !hud_only)
@@ -5941,6 +5943,12 @@ void LLPipeline::renderDebug()
         LL_PROFILE_ZONE_NAMED_CATEGORY_PIPELINE("probe debug display");
 
         bindDeferredShader(gReflectionProbeDisplayProgram, NULL);
+        // <SK:Nexii> Probe volume display: camera to agent space, so its blend hatching stays put on surfaces.
+        static LLStaticHashedString sk_probe_inv_view("sk_probe_inv_view");
+        LLMatrix4a inv_view = LLViewerCamera::getCurrent().getModelview();
+        inv_view.invert();
+        gReflectionProbeDisplayProgram.uniformMatrix4fv(sk_probe_inv_view, 1, GL_FALSE, inv_view.getF32ptr());
+        // </SK:Nexii>
         mScreenTriangleVB->setBuffer();
 
         LLGLEnable blend(GL_BLEND);
@@ -11205,6 +11213,13 @@ void LLPipeline::renderFinalize()
     {
         renderPhysicsDisplay();
     }
+    // <SK:Nexii> Probe debug drawn after tonemapping so its kind colours survive exposure; occludes like the navmesh overlay.
+    if (hasRenderDebugMask(LLPipeline::RENDER_DEBUG_REFLECTION_PROBES))
+    {
+        LLGLDepthTest depth(GL_TRUE, GL_FALSE);
+        mReflectionMapManager.renderDebug();
+    }
+    // </SK:Nexii>
     // <SK:Nexii> census overlay: record, cluster and feature boxes, each layer behind its own setting
     if (!cutout && SKWorldCensus::instanceExists())
     {
