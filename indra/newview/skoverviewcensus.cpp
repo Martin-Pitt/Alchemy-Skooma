@@ -286,6 +286,17 @@ namespace
     using skoverview::transparentTexture;
     using skoverview::Seen;
 
+    constexpr size_t MAX_IMAGE_VERDICTS = 1u << 18; ///< a bound on the images remembered; past it they are read again
+
+    // What each image's pixels showed, by its id: an asset's pixels never change, while what of them is loaded does. An
+    // image discarded, or reloaded at a level without a pick mask, reads unknown or visible; its verdict holds instead.
+    // A read without a mask can say visible wrongly but never invisible, so invisible is never taken back.
+    std::unordered_map<LLUUID, Seen>& imageVerdicts()
+    {
+        static std::unordered_map<LLUUID, Seen> verdicts;
+        return verdicts;
+    }
+
     // Whether the viewer draws a face so anyone sees it, from its own render inputs: colour alpha 0, an alpha-only
     // image (the invisiprim path), the default transparent or an invisiprim texture, an image whose alpha never rises
     // above the pick mask's threshold (32/255, below any mask cutoff), or a PBR base colour that is fully transparent.
@@ -331,16 +342,33 @@ namespace
         }
         LLViewerTexture* image = object->getTEImage(i);
         LLImageGL* gl = image ? image->getGLTexture() : nullptr;
+        std::unordered_map<LLUUID, Seen>& verdicts = imageVerdicts();
+        const auto kept = image ? verdicts.find(image->getID()) : verdicts.end();
         if (!gl || !gl->getHasGLTexture())
         {
+            if (kept != verdicts.end())
+            {
+                detail += kept->second == Seen::INVISIBLE ? " image not loaded, kept -> invisible" : " image not loaded, kept -> visible";
+                return kept->second;
+            }
             detail += " image not loaded -> unknown";
             return Seen::UNKNOWN;
+        }
+        if (kept != verdicts.end() && kept->second == Seen::INVISIBLE)
+        {
+            detail += " -> invisible (kept)";
+            return Seen::INVISIBLE;
+        }
+        if (verdicts.size() >= MAX_IMAGE_VERDICTS)
+        {
+            verdicts.clear();
         }
         detail += llformat(" components %d alpha-only %d mask %d", (S32)gl->getComponents(), gl->isAlphaOnly() ? 1 : 0,
                            gl->getIsAlphaMask() ? 1 : 0);
         if (gl->isAlphaOnly())
         {
             detail += " -> invisible (alpha-only image)";
+            verdicts[image->getID()] = Seen::INVISIBLE;
             return Seen::INVISIBLE;
         }
         if (gl->getComponents() == 4)
@@ -357,10 +385,12 @@ namespace
             if (!any)
             {
                 detail += " -> invisible (alpha below the mask threshold everywhere)";
+                verdicts[image->getID()] = Seen::INVISIBLE;
                 return Seen::INVISIBLE;
             }
         }
         detail += " -> visible";
+        verdicts[image->getID()] = Seen::VISIBLE;
         return Seen::VISIBLE;
     }
 
