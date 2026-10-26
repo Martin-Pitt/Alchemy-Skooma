@@ -3,8 +3,8 @@
  * @brief Game-style nearby chat: messages over the world that fade, with the input shown only while chatting.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
- * Alchemy Viewer Source Code
- * Copyright (C) 2026, Alchemy Viewer Project.
+ * Second Life Viewer Source Code
+ * Copyright (C) 2026, Martin "Nexii" Pitt <martin.r.pitt@gmail.com>
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -2086,10 +2086,9 @@ void SKFloaterLocalChat::updateTyping(F64 now)
             {
                 continue;
             }
-            // The simulator's start/stop typing chat, which arrives even from those who turned the typing animation off.
-            const LLPointer<LLSpeaker> speaker = LLLocalSpeakerMgr::getInstance()->findSpeaker(avatar->getID());
-            const bool typing = (speaker.notNull() && speaker->mTyping) ||
-                                avatar->mSignaledAnimations.find(ANIM_AGENT_TYPE) != avatar->mSignaledAnimations.end();
+            // The simulator's start/stop typing chat, as the name tag shows it, which arrives even from those who turned the
+            // typing animation off; the speaker list drops it for anyone it does not list yet.
+            const bool typing = avatar->isTyping() || avatar->mSignaledAnimations.find(ANIM_AGENT_TYPE) != avatar->mSignaledAnimations.end();
             const F64 dist = dist_vec(avatar->getPositionGlobal(), self_pos);
             if (dist <= range)
             {
