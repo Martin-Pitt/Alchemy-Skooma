@@ -11,7 +11,7 @@ into `ui`).
 
 | doc | what | status |
 |---|---|---|
-| [.inventory-explorer.md](.inventory-explorer.md) | Spec: rules §2, data §3, layout §4, sidebar §5, views §6, interaction §7, path bar and search §8, details §9, viewer mapping §10, branch plan §11, open questions §12 | draft 2026-10-26, unreviewed |
+| [.inventory-explorer.md](.inventory-explorer.md) | Spec: rules §2, data §3, layout §4, sidebar §5, views §6, interaction §7, path bar and search §8, details §9, viewer mapping §10, build plan §11, open questions §12, reference values §13, departures from the prototype §14 | draft r3 2026-10-26: two adversarial + prototype-coverage rounds folded in; open questions in §12 |
 
 Prototype: `V:\Scratch\web\inventory-explorer\` (the reference for every behaviour; `#hash` demos per feature).
 
