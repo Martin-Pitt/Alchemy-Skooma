@@ -424,6 +424,18 @@ private:
         F32 mHeight = 0.f;
     };
     std::unordered_map<LLUUID, SculptEntry> mSculptGeom;
+    /// What each sculpt's signature entry was mixed from last pass, to name the input that changed.
+    struct SculptInputs
+    {
+        U64 mShape = 0;
+        U64 mTris = 0;
+        U64 mCentre = 0;
+        U8 mSeen = 0;
+        U64 mCover = 0;
+        bool mPending = false;
+        size_t mCandidates = 0;
+    };
+    std::unordered_map<LLUUID, SculptInputs> mSculptInputs;
     std::vector<LLUUID> mSculptCandidates;  ///< the sculpted volumes the last full object list walk found
     /// Logs which signature entries came and went since the last rebuild; sorts entries and keeps them.
     /// and turns parts that moved twice within the window restless, from their shape and place alone (moves).
