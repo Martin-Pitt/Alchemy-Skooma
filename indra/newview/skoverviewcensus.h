@@ -387,6 +387,10 @@ private:
     /// A page of the region's class with room for count vertices, made when none has, sized for the want vertices the
     /// build still has to place there; its index, and the run's first vertex.
     U32 pageFor(Region& region, U8 cls, U32 count, U32 want, U32& first);
+    /// Packs a page's runs to its start again from the geometry their linksets keep; false leaves its runs unplaced.
+    bool compactPage(Region& region, U32 p);
+    U32 mPagesCompacted = 0;    ///< this swap's
+    U64 mCompactedIndices = 0;  ///< this swap's, uploaded again by compaction
     static constexpr U32 MIN_PAGE_VERTICES = 3u * 8192u;   ///< a new page's least, so a class's spills stay few
     /// Rebuilds the region's pages' slot lists from its groups.
     void refreshSlots(Region& region);

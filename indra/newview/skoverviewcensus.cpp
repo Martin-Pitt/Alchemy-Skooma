@@ -1724,6 +1724,23 @@ U32 SKOverviewCensus::pageFor(Region& region, U8 cls, U32 count, U32 want, U32& 
             return p;
         }
     }
+    // None has a hole the run fits, but one may have room spread over its holes: packed again from the geometry its
+    // linksets keep, it serves the run without a page more. The fullest such page, so the least is uploaded again.
+    U32 roomy = Group::NO_PAGE;
+    for (U32 p = 0; p < (U32)region.mPages.size(); ++p)
+    {
+        const Page& page = region.mPages[p];
+        if (page.mClass == cls && page.mBuffer && page.mRuns.capacity() - page.mRuns.used() >= count &&
+            (roomy == Group::NO_PAGE || page.mRuns.used() > region.mPages[roomy].mRuns.used()))
+        {
+            roomy = p;
+        }
+    }
+    if (roomy != Group::NO_PAGE && compactPage(region, roomy) &&
+        (first = region.mPages[roomy].mRuns.allocate(count)) != skoverview::SlotAllocator::NONE)
+    {
+        return roomy;
+    }
     // None has room: a new page for what this build still has to place, up to the setting's size, or of the run's own
     // size when it is larger; a page of the full size for every region's every class would mostly hold nothing.
     static LLCachedControl<U32> page_vertices(gSavedSettings, "SKOverviewPageVertices", 3u * 1024u * 1024u);
@@ -1746,6 +1763,63 @@ U32 SKOverviewCensus::pageFor(Region& region, U8 cls, U32 count, U32 want, U32& 
     region.mPages.push_back(std::move(page));
     ++mPagesMade;
     return (U32)region.mPages.size() - 1;
+}
+
+bool SKOverviewCensus::compactPage(Region& region, U32 p)
+{
+    LL_PROFILE_ZONE_SCOPED;
+    Page& page = region.mPages[p];
+    // The runs placed in it, in page order, so each moves only towards the start and none passes another.
+    std::vector<std::pair<Group*, U32>> runs;
+    for (Group& group : region.mGroups)
+    {
+        for (U32 c = 0; c < skoverview::NUM_CENSUS_CLASSES; ++c)
+        {
+            if (group.mPage[c] == p && group.mCount[c] && group.mGeom)
+            {
+                runs.emplace_back(&group, c);
+            }
+        }
+    }
+    std::sort(runs.begin(), runs.end(), [](const std::pair<Group*, U32>& a, const std::pair<Group*, U32>& b)
+              { return a.first->mStart[a.second] < b.first->mStart[b.second]; });
+    skoverview::SlotAllocator packed(page.mRuns.capacity());
+    bool ok = true;
+    for (const auto& [group, c] : runs)
+    {
+        const U32 first = packed.allocate(group->mCount[c]);
+        if (first == skoverview::SlotAllocator::NONE)
+        {
+            ok = false; // cannot happen: the runs fit the page before
+            break;
+        }
+        if (first != group->mStart[c])
+        {
+            if (!uploadRun(*page.mBuffer, first, *group->mGeom, c, group->mId))
+            {
+                LL_WARNS("SKOverview") << "census page compaction could not map a run" << LL_ENDL;
+                ok = false;
+                break;
+            }
+            group->mStart[c] = first;
+            mCompactedIndices += group->mCount[c];
+        }
+    }
+    page.mBuffer->unmapBuffer();
+    if (!ok)
+    {
+        // A run left half moved is in neither place: its linksets are placed again by the next build.
+        for (const auto& [group, c] : runs)
+        {
+            group->mPage[c] = Group::NO_PAGE;
+            group->mCount[c] = 0;
+        }
+        page.mRuns = skoverview::SlotAllocator(page.mRuns.capacity());
+        return false;
+    }
+    page.mRuns = std::move(packed);
+    ++mPagesCompacted;
+    return true;
 }
 
 void SKOverviewCensus::refreshSlots(Region& region)
@@ -1796,6 +1870,8 @@ void SKOverviewCensus::swapIn(Built& built)
     LL_PROFILE_ZONE_SCOPED;
     mPagesMade = 0;
     mPagesFreed = 0;
+    mPagesCompacted = 0;
+    mCompactedIndices = 0;
     // A root no build holds any longer gives its id back; the next new root takes the lowest free one.
     {
         std::unordered_set<LLUUID> live(built.mRoots.begin(), built.mRoots.end());
@@ -2040,7 +2116,7 @@ void SKOverviewCensus::swapIn(Built& built)
     }
     {
         // Each page's fill: told when a page was made or freed, kept to the debug log otherwise.
-        const bool news = mPagesMade || mPagesFreed;
+        const bool news = mPagesMade || mPagesFreed || mPagesCompacted;
         size_t pages = 0, slots = 0;
         U64 page_used = 0, page_capacity = 0;
         for (const Region& region : mRegions)
@@ -2066,9 +2142,10 @@ void SKOverviewCensus::swapIn(Built& built)
                 page_capacity += page.mRuns.capacity();
             }
         }
-        const std::string summary = llformat("census pages: %u regions, %u pages (%u made, %u freed), %u slots; ids %u in use "
-                                             "below %u, %u free",
-                                             (U32)mRegions.size(), (U32)pages, mPagesMade, mPagesFreed, (U32)slots,
+        const std::string summary = llformat("census pages: %u regions, %u pages (%u made, %u freed, %u compacted moving %llu "
+                                             "indices), %u slots; ids %u in use below %u, %u free",
+                                             (U32)mRegions.size(), (U32)pages, mPagesMade, mPagesFreed, mPagesCompacted,
+                                             (unsigned long long)mCompactedIndices, (U32)slots,
                                              (U32)mLinksetIds.size(), mIds.bound(), (U32)mIds.freeCount());
         static const bool fill_configured = []
         {
