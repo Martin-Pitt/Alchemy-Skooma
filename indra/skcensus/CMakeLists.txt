@@ -10,6 +10,7 @@ target_sources(
   skcensus
   PRIVATE
     skcensuscluster.cpp
+    skcensusclusterspots.cpp
     skcensusdelta.cpp
     skcensusfeatures.cpp
     skcensusio.cpp
@@ -23,6 +24,7 @@ target_sources(
     FILE_SET HEADERS
       FILES
         skcensuscluster.h
+        skcensusclusterspots.h
         skcensusdelta.h
         skcensusfeatures.h
         skcensusio.h
@@ -44,6 +46,7 @@ if(AL_BUILD_TESTS)
     SOURCES
       tests/skcensuscluster_test.cpp
       tests/skcensusclusterhash_test.cpp
+      tests/skcensusclusterspots_test.cpp
       tests/skcensusfeatures_test.cpp
       tests/skcensusio_test.cpp
       tests/skcensusrecordsignature_test.cpp

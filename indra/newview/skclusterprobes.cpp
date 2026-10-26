@@ -33,6 +33,7 @@
 #include "llviewercamera.h"
 #include "llviewercontrol.h"
 #include "skcensuscluster.h"
+#include "skcensusclusterspots.h"
 #include "skroomsprobes.h"
 #include "skworldcensus.h"
 
@@ -45,7 +46,6 @@ namespace
     constexpr F32 UPDATE_PERIOD_S = 1.f;
     // A cluster smaller than this along every axis is left to the room and octree probes.
     constexpr F64 MIN_EXTENT_M = 6.0;
-    constexpr U32 MAX_CELLS = 3;
     // sphereWeight's distance weight reaches 1 out to about 0.88 of the radius, so a cell's
     // farthest corner sits inside that and the cell is covered in full.
     constexpr F32 FULL_COVER_SHARE = 0.85f;
@@ -63,71 +63,37 @@ namespace
         F64 mDistance = 0.0;
     };
 
-    U32 cellsAlong(F64 extent, F64 cell_m)
-    {
-        return static_cast<U32>(llclamp(static_cast<S32>(std::ceil(extent / llmax(cell_m, 1.0))), 1, static_cast<S32>(MAX_CELLS)));
-    }
-
-    // One candidate per occupied cell of the cluster's footprint grid.
+    // One candidate per occupied cell of each region's part of the cluster, on the cell's largest clump.
     void placeCluster(const skworld::Cluster& cluster, const skworld::SolidLattice* solids, const LLVector3d& camera,
-                      F64 cell_m, F64 height_share, std::vector<Candidate>& out)
+                      F64 cell_m, F64 height_share, std::vector<skworld::ClusterSpot>& spots, std::vector<Candidate>& out)
     {
-        const LLVector3d extent = cluster.mMax - cluster.mMin;
-        const U32 nx = cellsAlong(extent.mdV[VX], cell_m);
-        const U32 ny = cellsAlong(extent.mdV[VY], cell_m);
-        const F64 sx = extent.mdV[VX] / nx;
-        const F64 sy = extent.mdV[VY] / ny;
-        for (U32 ix = 0; ix < nx; ++ix)
+        spots.clear();
+        skworld::clusterSpots(cluster, cell_m, spots);
+        for (const skworld::ClusterSpot& spot : spots)
         {
-            for (U32 iy = 0; iy < ny; ++iy)
+            const LLVector3d& lo = spot.mMin;
+            const LLVector3d& hi = spot.mMax;
+            Candidate c;
+            c.mOrigin.set(spot.mX, spot.mY, lo.mdV[VZ] + (hi.mdV[VZ] - lo.mdV[VZ]) * height_share);
+            // A capture from inside a wall sees nothing; rise until clear, past the top if need be.
+            if (solids)
             {
-                const F64 cx0 = cluster.mMin.mdV[VX] + sx * ix;
-                const F64 cy0 = cluster.mMin.mdV[VY] + sy * iy;
-                const F64 cx1 = cx0 + sx;
-                const F64 cy1 = cy0 + sy;
-                // What the cell actually holds: the members' bounds clipped to it.
-                LLVector3d lo(DBL_MAX, DBL_MAX, DBL_MAX);
-                LLVector3d hi(-DBL_MAX, -DBL_MAX, -DBL_MAX);
-                for (const skworld::RecordPtr& r : cluster.mRecords)
+                const F64 ceiling = hi.mdV[VZ] + 4.0;
+                while (c.mOrigin.mdV[VZ] < ceiling && solids->contains(c.mOrigin))
                 {
-                    if (r->mMax.mdV[VX] < cx0 || r->mMin.mdV[VX] > cx1 || r->mMax.mdV[VY] < cy0 || r->mMin.mdV[VY] > cy1)
-                    {
-                        continue;
-                    }
-                    lo.mdV[VX] = llmin(lo.mdV[VX], llmax(r->mMin.mdV[VX], cx0));
-                    lo.mdV[VY] = llmin(lo.mdV[VY], llmax(r->mMin.mdV[VY], cy0));
-                    lo.mdV[VZ] = llmin(lo.mdV[VZ], r->mMin.mdV[VZ]);
-                    hi.mdV[VX] = llmax(hi.mdV[VX], llmin(r->mMax.mdV[VX], cx1));
-                    hi.mdV[VY] = llmax(hi.mdV[VY], llmin(r->mMax.mdV[VY], cy1));
-                    hi.mdV[VZ] = llmax(hi.mdV[VZ], r->mMax.mdV[VZ]);
+                    c.mOrigin.mdV[VZ] += LIFT_STEP_M;
                 }
-                if (lo.mdV[VX] > hi.mdV[VX])
-                {
-                    continue; // an empty corner of an L-shaped cluster
-                }
-                Candidate c;
-                c.mOrigin.set((lo.mdV[VX] + hi.mdV[VX]) * 0.5, (lo.mdV[VY] + hi.mdV[VY]) * 0.5,
-                              lo.mdV[VZ] + (hi.mdV[VZ] - lo.mdV[VZ]) * height_share);
-                // A capture from inside a wall sees nothing; rise until clear, past the top if need be.
-                if (solids)
-                {
-                    const F64 ceiling = hi.mdV[VZ] + 4.0;
-                    while (c.mOrigin.mdV[VZ] < ceiling && solids->contains(c.mOrigin))
-                    {
-                        c.mOrigin.mdV[VZ] += LIFT_STEP_M;
-                    }
-                }
-                F64 reach2 = 0.0;
-                for (U32 corner = 0; corner < 8; ++corner)
-                {
-                    const LLVector3d p((corner & 1) ? hi.mdV[VX] : lo.mdV[VX], (corner & 2) ? hi.mdV[VY] : lo.mdV[VY],
-                                       (corner & 4) ? hi.mdV[VZ] : lo.mdV[VZ]);
-                    reach2 = llmax(reach2, (p - c.mOrigin).magVecSquared());
-                }
-                c.mRadius = llclamp(static_cast<F32>(std::sqrt(reach2)) / FULL_COVER_SHARE, MIN_RADIUS_M, MAX_RADIUS_M);
-                c.mDistance = llmax((c.mOrigin - camera).magVec() - c.mRadius, 0.0);
-                out.push_back(c);
             }
+            F64 reach2 = 0.0;
+            for (U32 corner = 0; corner < 8; ++corner)
+            {
+                const LLVector3d p((corner & 1) ? hi.mdV[VX] : lo.mdV[VX], (corner & 2) ? hi.mdV[VY] : lo.mdV[VY],
+                                   (corner & 4) ? hi.mdV[VZ] : lo.mdV[VZ]);
+                reach2 = llmax(reach2, (p - c.mOrigin).magVecSquared());
+            }
+            c.mRadius = llclamp(static_cast<F32>(std::sqrt(reach2)) / FULL_COVER_SHARE, MIN_RADIUS_M, MAX_RADIUS_M);
+            c.mDistance = llmax((c.mOrigin - camera).magVec() - c.mRadius, 0.0);
+            out.push_back(c);
         }
     }
 }
@@ -151,6 +117,7 @@ void SKClusterProbes::update(LLReflectionMapManager& manager, const std::shared_
 
     const LLVector3d camera = gAgent.getPosGlobalFromAgent(LLViewerCamera::getInstance()->getOrigin());
     std::vector<Candidate> candidates;
+    std::vector<skworld::ClusterSpot> spots;
     mClusters = 0;
     for (const skworld::ClusterPtr& cluster : census->mClusters.mClusters)
     {
@@ -169,7 +136,7 @@ void SKClusterProbes::update(LLReflectionMapManager& manager, const std::shared_
             continue;
         }
         ++mClusters;
-        placeCluster(*cluster, solids, camera, cell_m(), llclamp(static_cast<F64>(height_share()), 0.0, 1.0), candidates);
+        placeCluster(*cluster, solids, camera, cell_m(), llclamp(static_cast<F64>(height_share()), 0.0, 1.0), spots, candidates);
     }
     mCandidates = static_cast<U32>(candidates.size());
     std::sort(candidates.begin(), candidates.end(), [](const Candidate& a, const Candidate& b) { return a.mDistance < b.mDistance; });
