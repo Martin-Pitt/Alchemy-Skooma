@@ -51,7 +51,7 @@
      height="20"
      image_overlay="Emoji_Picker_Icon"
      layout="topleft"
-     left="422"
+     left="612"
      top="530"
      name="sk_local_chat_emoji"
      tool_tip="Shows/hides emoji picker"
