@@ -212,7 +212,8 @@ namespace skoverview
         meshopt_remapVertexBuffer(welded.data(), positions.data(), n, sizeof(LLVector3), remap.data());
         meshopt_remapVertexBuffer(welded_flags.data(), corner_flags.data(), n, sizeof(U8), remap.data());
 
-        meshopt_optimizeVertexCache(indices.data(), indices.data(), n, unique);
+        // The FIFO pass is linear; the full one takes seconds on a large linkset and welding gives most of the reuse.
+        meshopt_optimizeVertexCacheFifo(indices.data(), indices.data(), n, unique, 16);
         unique = meshopt_optimizeVertexFetchRemap(remap.data(), indices.data(), n, unique);
         meshopt_remapIndexBuffer(indices.data(), indices.data(), n, remap.data());
         positions.resize(unique);

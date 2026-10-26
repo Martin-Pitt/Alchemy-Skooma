@@ -26,6 +26,7 @@
 
 #include "skoverviewcensus.h"
 
+#include "llapp.h"
 #include "lldir.h"
 #include "llframetimer.h"
 #include "llimagegl.h"
@@ -1466,6 +1467,11 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildLinksets(const J
         LL_PROFILE_ZONE_NAMED("sk census cache");
         for (auto& [where, parts] : linksets)
         {
+            // Quitting joins this pool, so a build in flight gives up rather than hold the exit.
+            if (LLApp::isExiting())
+            {
+                return nullptr;
+            }
             std::sort(parts.begin(), parts.end(),
                       [&](size_t a, size_t b)
                       {
