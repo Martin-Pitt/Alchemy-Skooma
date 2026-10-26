@@ -838,11 +838,37 @@ bool SKOverviewCensus::update()
             cover = coverInputFor(sc.mPart, centre - LLVector3d(reach, reach, reach), centre + LLVector3d(reach, reach, reach),
                                   *snap);
         }
+        const U64 centre_key = (U64)(S64)std::llround(centre.mdV[VX] * 64.0) ^
+                               ((U64)(S64)std::llround(centre.mdV[VY] * 64.0) << 21) ^
+                               ((U64)(S64)std::llround(centre.mdV[VZ] * 64.0) << 42);
+        {
+            // Which input of the entry moved since the last pass, while the census churns with nothing moving.
+            const SculptInputs now{ sc.mKey, (U64)sc.mTris->size(), centre_key, (U8)seen, cover.mKey, cover.mPending,
+                                    cover.mCandidates.size() };
+            const auto last = mSculptInputs.find(sc.mPart);
+            if (last != mSculptInputs.end())
+            {
+                const SculptInputs& was = last->second;
+                std::string what;
+                what += was.mShape != now.mShape ? " shape" : "";
+                what += was.mTris != now.mTris ? llformat(" tris %llu->%llu", was.mTris, now.mTris) : "";
+                what += was.mCentre != now.mCentre ? " centre" : "";
+                what += was.mSeen != now.mSeen ? llformat(" seen %u->%u", (U32)was.mSeen, (U32)now.mSeen) : "";
+                what += was.mCover != now.mCover ? llformat(" cover key (%u->%u candidates)", (U32)was.mCandidates,
+                                                            (U32)now.mCandidates) : "";
+                what += was.mPending != now.mPending ? llformat(" pending %d->%d", was.mPending, now.mPending) : "";
+                if (!what.empty())
+                {
+                    LL_INFOS("SKOverviewChurn") << "census sculpt " << sc.mPart << " root " << sc.mRoot << " entry moved:" << what
+                                                << LL_ENDL;
+                }
+            }
+            mSculptInputs[sc.mPart] = now;
+        }
         mix(sc.mPart.getCRC32());
         mixLook(seen == Seen::INVISIBLE ? 0x7a11u ^ cover.mKey ^ (cover.mPending ? 0x9e11u : 0x0u) : 0x0u);
         mix((U64)sc.mTris->size());
-        mix((U64)(S64)std::llround(centre.mdV[VX] * 64.0) ^ ((U64)(S64)std::llround(centre.mdV[VY] * 64.0) << 21) ^
-            ((U64)(S64)std::llround(centre.mdV[VZ] * 64.0) << 42));
+        mix(centre_key);
         if (endEntry('S', sc.mPart))
         {
             continue; // drawn live by the movers
@@ -852,7 +878,15 @@ bool SKOverviewCensus::update()
     }
     for (auto it = mSculptGeom.begin(); it != mSculptGeom.end();)
     {
-        it = it->second.mPass != mSeenPass ? mSculptGeom.erase(it) : std::next(it);
+        if (it->second.mPass != mSeenPass)
+        {
+            mSculptInputs.erase(it->first);
+            it = mSculptGeom.erase(it);
+        }
+        else
+        {
+            it = std::next(it);
+        }
     }
 
     // The surrounds the near look did not already take.
