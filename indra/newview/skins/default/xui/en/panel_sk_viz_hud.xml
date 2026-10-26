@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+<!-- In-viewport legends: one hidden slot per legend a debug view pushes, stacked up from the bottom left. -->
+<panel
+ name="sk_viz_hud"
+ follows="all"
+ mouse_opaque="false"
+ background_visible="false"
+ layout="topleft"
+ left="0"
+ top="0"
+ height="500"
+ width="1024">
+  <layout_stack
+   name="sk_viz_hud_stack"
+   orientation="vertical"
+   follows="left|bottom"
+   mouse_opaque="false"
+   left="8"
+   top="52"
+   height="440"
+   width="232">
+    <layout_panel
+     name="sk_viz_hud_slot_0"
+     auto_resize="true"
+     user_resize="false"
+     mouse_opaque="false"
+     visible="false"
+     height="110"
+     width="232">
+      <sk_legend
+       name="sk_viz_hud_legend_0"
+       hud="true"
+       follows="all"
+       mouse_opaque="true"
+       left="0"
+       top="0"
+       height="106"
+       width="232" />
+    </layout_panel>
+    <layout_panel
+     name="sk_viz_hud_slot_1"
+     auto_resize="true"
+     user_resize="false"
+     mouse_opaque="false"
+     visible="false"
+     height="110"
+     width="232">
+      <sk_legend
+       name="sk_viz_hud_legend_1"
+       hud="true"
+       follows="all"
+       mouse_opaque="true"
+       left="0"
+       top="0"
+       height="106"
+       width="232" />
+    </layout_panel>
+    <layout_panel
+     name="sk_viz_hud_slot_2"
+     auto_resize="true"
+     user_resize="false"
+     mouse_opaque="false"
+     visible="false"
+     height="110"
+     width="232">
+      <sk_legend
+       name="sk_viz_hud_legend_2"
+       hud="true"
+       follows="all"
+       mouse_opaque="true"
+       left="0"
+       top="0"
+       height="106"
+       width="232" />
+    </layout_panel>
+    <layout_panel
+     name="sk_viz_hud_slot_3"
+     auto_resize="true"
+     user_resize="false"
+     mouse_opaque="false"
+     visible="false"
+     height="110"
+     width="232">
+      <sk_legend
+       name="sk_viz_hud_legend_3"
+       hud="true"
+       follows="all"
+       mouse_opaque="true"
+       left="0"
+       top="0"
+       height="106"
+       width="232" />
+    </layout_panel>
+  </layout_stack>
+</panel>

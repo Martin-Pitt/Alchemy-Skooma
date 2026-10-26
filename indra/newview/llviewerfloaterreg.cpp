@@ -162,6 +162,7 @@
 #include "llfloatersavecamerapreset.h"
 #include "llfloatersaveprefpreset.h"
 #include "llfloatersceneloadstats.h"
+#include "skfloaterlegenddemo.h" // <SK:Nexii> legend foundation
 #include "llfloaterscripting.h"
 #include "llfloaterscriptdebug.h"
 #include "llfloaterscriptlimits.h"
@@ -546,6 +547,7 @@ void LLViewerFloaterReg::registerFloaters()
     LLFloaterReg::add("sell_land", "floater_sell_land.xml", &LLFloaterSellLand::buildFloater);
     LLFloaterReg::add("settings_color", "floater_settings_color.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloaterSettingsColor>);
     LLFloaterReg::add("settings_debug", "floater_settings_debug.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloaterSettingsDebug>);
+    LLFloaterReg::add("sk_legend_demo", "floater_sk_legend_demo.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SKFloaterLegendDemo>); // <SK:Nexii> legend foundation
     LLFloaterReg::add("stats", "floater_stats.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloater>);
     LLFloaterReg::add("start_queue", "floater_script_queue.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloaterRunQueue>);
     LLFloaterReg::add("scene_load_stats", "floater_scene_load_stats.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloaterSceneLoadStats>);

@@ -3783,6 +3783,15 @@ function="World.EnvPreset"
              function="Advanced.ClickHDRIPreview" />
           </menu_item_call>
         </menu>
+      <!-- <SK:Nexii> legend foundation -->
+      <menu_item_call
+       label="Legend Demo"
+       name="Legend Demo">
+        <menu_item_call.on_click
+         function="Floater.Show"
+         parameter="sk_legend_demo" />
+      </menu_item_call>
+      <!-- </SK:Nexii> -->
       <menu
         create_jump_keys="true"
         label="Render Metadata"

@@ -998,8 +998,10 @@ if(AL_BUILD_VIEWER)
     rlvhandler.cpp
     rlvhelper.cpp
     rlvinventory.cpp
+    skfloaterlegenddemo.cpp
     skhover.cpp
     skoverlay.cpp
+    skvizhover.cpp
     rlvlocks.cpp
     rlvui.cpp
   )
@@ -1877,8 +1879,10 @@ if(AL_BUILD_VIEWER)
     rlvhandler.h
     rlvhelper.h
     rlvinventory.h
+    skfloaterlegenddemo.h
     skhover.h
     skoverlay.h
+    skvizhover.h
     rlvlocks.h
     rlvmodifiers.h
     rlvui.h
