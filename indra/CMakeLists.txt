@@ -15,7 +15,7 @@ set(
 )
 
 # Set our base channel
-set(AL_CHANNEL "Alchemy Test" CACHE STRING "Viewer Channel Name")
+set(AL_CHANNEL "Alchemy Skooma" CACHE STRING "Viewer Channel Name") # <SK:Nexii> Skooma channel branding
 
 # Default deploy grid
 set(AL_GRID agni CACHE STRING "Target Grid")
@@ -235,7 +235,7 @@ set(AL_SENTRY_DSN "" CACHE STRING "The DSN of the Sentry project crash reports g
 # Default Tracy profiling on for test builds, but off for all others
 set(BUILDING_TEST_CHANNEL OFF)
 string(TOLOWER "${AL_CHANNEL}" channel_lower)
-if(channel_lower MATCHES "^alchemy test")
+if(channel_lower MATCHES "^alchemy (test|skooma)") # <SK:Nexii> Skooma channel keeps Tracy available
   set(BUILDING_TEST_CHANNEL ON)
 endif()
 cmake_dependent_option(
