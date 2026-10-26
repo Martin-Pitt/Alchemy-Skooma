@@ -350,7 +350,14 @@ void SKOverviewProbes::drawRuns(const std::vector<Run>& runs)
         gGL.loadMatrix(view);
         gGL.translatef(run.mOffset.mV[VX], run.mOffset.mV[VY], run.mOffset.mV[VZ]);
         run.mBuffer->setBuffer();
-        run.mBuffer->drawArrays(LLRender::TRIANGLES, run.mFirst, run.mCount);
+        if (run.mIndexed)
+        {
+            run.mBuffer->drawRange(LLRender::TRIANGLES, run.mFirst, run.mFirst + run.mCount - 1, run.mCount, run.mFirst);
+        }
+        else
+        {
+            run.mBuffer->drawArrays(LLRender::TRIANGLES, run.mFirst, run.mCount);
+        }
     }
     gGL.loadMatrix(view);
 }

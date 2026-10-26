@@ -116,8 +116,12 @@ public:
         U64 mKey = 0;           ///< what it was emitted from: an equal key emits the same triangles
         LLUUID mRoot;
         LLVector3d mOrigin;     ///< its region's origin, global; triangles are region-local
+        /// Per class, a triangle soup as emitted; once index() has run, its distinct vertices in fetch order.
         std::vector<LLVector3> mClass[skoverview::NUM_CENSUS_CLASSES];
-        std::vector<U8> mFlags[skoverview::NUM_CENSUS_CLASSES]; ///< per triangle: TRI_PASS_THROUGH, TRI_OPEN
+        /// TRI_PASS_THROUGH, TRI_OPEN: per triangle as emitted, per vertex once indexed.
+        std::vector<U8> mFlags[skoverview::NUM_CENSUS_CLASSES];
+        /// Per class, its triangles' corners into mClass in vertex cache order; a run in a page is this long.
+        std::vector<U32> mIndices[skoverview::NUM_CENSUS_CLASSES];
         LLVector3 mMin{ 1e30f, 1e30f, 1e30f };  ///< region-local bounds of its triangles
         LLVector3 mMax{ -1e30f, -1e30f, -1e30f };
         /// Its triangles by where they came from, the hatch copies in the invisible class.
@@ -139,7 +143,10 @@ public:
         };
         Cover mCover;
         std::vector<std::pair<LLUUID, U64>> mJudged; ///< its invisible parts and the verdict keys it was emitted with
+        /// Its runs' length over every class, in indices.
         U64 vertices() const;
+        /// Welds and orders every class (skoverview::indexRun); the build job's, before the geometry is shared.
+        void index();
     };
 
     /// A linkset within a region: its runs in the region's pages, and the heights its cluster spans.
@@ -163,7 +170,8 @@ public:
         std::shared_ptr<const LinksetGeom> mGeom;
     };
 
-    /// One class's vertices in one region: a buffer of fixed capacity holding a run per linkset.
+    /// One class's triangles in one region: a buffer of fixed capacity holding a run per linkset. A run is a range of
+    /// indices, and its vertices sit at the start of the same range of vertices, which a welded run never outgrows.
     struct Page
     {
         U8 mClass = 0;

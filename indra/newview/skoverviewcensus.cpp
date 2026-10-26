@@ -1104,11 +1104,20 @@ bool SKOverviewCensus::update()
 U64 SKOverviewCensus::LinksetGeom::vertices() const
 {
     U64 n = 0;
-    for (const auto& positions : mClass)
+    for (const auto& indices : mIndices)
     {
-        n += positions.size();
+        n += indices.size();
     }
     return n;
+}
+
+void SKOverviewCensus::LinksetGeom::index()
+{
+    LL_PROFILE_ZONE_SCOPED;
+    for (U32 c = 0; c < skoverview::NUM_CENSUS_CLASSES; ++c)
+    {
+        skoverview::indexRun(mClass[c], mFlags[c], mIndices[c]);
+    }
 }
 
 // static
@@ -1480,6 +1489,7 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildLinksets(const J
                 {
                     emitPart(i, *fresh);
                 }
+                fresh->index();
                 geom = std::move(fresh);
                 ++emitted_linksets;
             }
@@ -1538,9 +1548,9 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildLinksets(const J
             continue;
         }
         bool fits = true;
-        for (const auto& positions : geom->mClass)
+        for (const auto& indices : geom->mIndices)
         {
-            fits = fits && positions.size() <= skoverview::MAX_PAGE_VERTICES;
+            fits = fits && indices.size() <= skoverview::MAX_PAGE_VERTICES;
         }
         if (!fits)
         {
@@ -1580,16 +1590,28 @@ namespace
     static_assert(SKOverviewCutTable::WHOLE == skoverview::NO_CUT && SKOverviewCutTable::HIDDEN == skoverview::HIDDEN,
                   "the cut table and the census share their sentinels");
 
-    /// Writes one linkset's run of one class into a page: positions, its id in the weight channel, which the cut table
-    /// is read through, an open part's flag in texcoord0.x and a passed-through one's in texcoord0.y.
-    bool uploadRun(LLVertexBuffer& buffer, U32 first, const std::vector<LLVector3>& positions, const std::vector<U8>& flags,
-                   U32 id)
+    /// Writes one linkset's run of one class into a page: its indices at first, offset to its vertices, which sit at
+    /// first too; their positions, its id in the weight channel, which the cut table is read through, an open part's
+    /// flag in texcoord0.x and a passed-through one's in texcoord0.y.
+    bool uploadRun(LLVertexBuffer& buffer, U32 first, const SKOverviewCensus::LinksetGeom& geom, U32 cls, U32 id)
     {
+        const std::vector<LLVector3>& positions = geom.mClass[cls];
+        const std::vector<U8>& flags = geom.mFlags[cls];
+        const std::vector<U32>& indices = geom.mIndices[cls];
         const U32 count = (U32)positions.size();
-        LLStrider<LLVector3> verts;
-        if (!buffer.getVertexStrider(verts, first, (S32)count) || !verts.get())
+        LLStrider<U32> corners;
+        if (!buffer.getIndexStrider(corners, first, (S32)indices.size()) || !corners.get())
         {
             return false;
+        }
+        for (const U32 i : indices)
+        {
+            *corners++ = first + i;
+        }
+        LLStrider<LLVector3> verts;
+        if (!count || !buffer.getVertexStrider(verts, first, (S32)count) || !verts.get())
+        {
+            return count == 0;
         }
         for (const LLVector3& p : positions)
         {
@@ -1608,7 +1630,7 @@ namespace
         {
             for (U32 v = 0; v < count; ++v)
             {
-                const U8 flag = v / 3 < flags.size() ? flags[v / 3] : 0;
+                const U8 flag = v < flags.size() ? flags[v] : 0;
                 const bool is_open = flag & skoverview::TRI_OPEN;
                 const bool pass_through = flag & skoverview::TRI_PASS_THROUGH;
                 *open++ = LLVector2(is_open ? 1.f : 0.f, pass_through ? 1.f : 0.f);
@@ -1648,7 +1670,8 @@ U32 SKOverviewCensus::pageFor(Region& region, U8 cls, U32 count, U32 want, U32& 
     Page page;
     page.mClass = cls;
     page.mBuffer = new LLVertexBuffer(LLVertexBuffer::MAP_VERTEX | LLVertexBuffer::MAP_WEIGHT | LLVertexBuffer::MAP_TEXCOORD0);
-    if (!page.mBuffer->allocateBuffer(capacity, 0))
+    // Twice the 16-bit indices: the first 32-bit run switches the buffer to them, as many as the vertices.
+    if (!page.mBuffer->allocateBuffer(capacity, capacity * 2))
     {
         LL_WARNS("SKOverview") << "census page of " << capacity << " vertices could not be allocated" << LL_ENDL;
         first = skoverview::SlotAllocator::NONE;
@@ -1786,7 +1809,7 @@ void SKOverviewCensus::swapIn(Built& built)
             for (U32 c = 0; same && c < skoverview::NUM_CENSUS_CLASSES; ++c)
             {
                 // A run a full page refused last time is placed again.
-                same = group.mGeom->mClass[c].empty() || before[it->second].mPage[c] != Group::NO_PAGE;
+                same = group.mGeom->mIndices[c].empty() || before[it->second].mPage[c] != Group::NO_PAGE;
             }
             if (same)
             {
@@ -1818,7 +1841,7 @@ void SKOverviewCensus::swapIn(Built& built)
         {
             for (U32 c = 0; fresh[g] && c < skoverview::NUM_CENSUS_CLASSES; ++c)
             {
-                want[c] += (U32)region.mGroups[g].mGeom->mClass[c].size();
+                want[c] += (U32)region.mGroups[g].mGeom->mIndices[c].size();
             }
         }
         {
@@ -1834,8 +1857,7 @@ void SKOverviewCensus::swapIn(Built& built)
                 Group& group = region.mGroups[g];
                 for (U32 c = 0; c < skoverview::NUM_CENSUS_CLASSES; ++c)
                 {
-                    const std::vector<LLVector3>& positions = group.mGeom->mClass[c];
-                    const U32 count = (U32)positions.size();
+                    const U32 count = (U32)group.mGeom->mIndices[c].size();
                     group.mPage[c] = Group::NO_PAGE;
                     group.mStart[c] = 0;
                     group.mCount[c] = 0;
@@ -1850,9 +1872,9 @@ void SKOverviewCensus::swapIn(Built& built)
                     {
                         continue;
                     }
-                    if (!uploadRun(*region.mPages[p].mBuffer, first, positions, group.mGeom->mFlags[c], group.mId))
+                    if (!uploadRun(*region.mPages[p].mBuffer, first, *group.mGeom, c, group.mId))
                     {
-                        LL_WARNS("SKOverview") << "census page run of " << count << " vertices could not be mapped" << LL_ENDL;
+                        LL_WARNS("SKOverview") << "census page run of " << count << " indices could not be mapped" << LL_ENDL;
                         region.mPages[p].mRuns.release(first, count);
                         continue;
                     }
@@ -1947,9 +1969,9 @@ void SKOverviewCensus::swapIn(Built& built)
             LL_DEBUGS("SKOverview") << "census upload: " << totals << "; ten largest linksets: " << largest << LL_ENDL;
         }
         LL_INFOS("SKOverview") << "census upload: " << changed << " linksets (" << built.mLinksetsEmitted << " emitted), "
-                               << uploaded << " vertices sub-uploaded of " << total << LL_ENDL;
-        LL_PROFILE_PLOT("census vertices uploaded", (int64_t)uploaded);
-        LL_PROFILE_PLOT("census vertices total", (int64_t)total);
+                               << uploaded << " indices sub-uploaded of " << total << LL_ENDL;
+        LL_PROFILE_PLOT("census indices uploaded", (int64_t)uploaded);
+        LL_PROFILE_PLOT("census indices total", (int64_t)total);
         LL_PROFILE_PLOT("census linksets emitted", (int64_t)built.mLinksetsEmitted);
     }
     {
@@ -1962,7 +1984,7 @@ void SKOverviewCensus::swapIn(Built& built)
             for (size_t p = 0; p < region.mPages.size(); ++p)
             {
                 const Page& page = region.mPages[p];
-                const std::string line = llformat("census pages: %.0f,%.0f %u page %u: %u/%u vertices, %u linksets, %u free",
+                const std::string line = llformat("census pages: %.0f,%.0f %u page %u: %u/%u indices, %u linksets, %u free",
                                                   region.mOrigin.mdV[VX], region.mOrigin.mdV[VY], (U32)page.mClass, (U32)p,
                                                   page.mRuns.used(), page.mRuns.capacity(), (U32)page.mSlots.size(),
                                                   (U32)page.mRuns.freeRuns().size());
@@ -2344,7 +2366,7 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
                 {
                     continue;
                 }
-                runs.push_back({ in.mPages[group.mPage[c]].mBuffer.get(), group.mStart[c], group.mCount[c], offset });
+                runs.push_back({ in.mPages[group.mPage[c]].mBuffer.get(), group.mStart[c], group.mCount[c], offset, true });
             }
         }
         return runs;

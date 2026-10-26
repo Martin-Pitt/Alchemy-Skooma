@@ -36,8 +36,8 @@ struct SKSlot
 
 // Past the reserved storage blocks' points, which this program declares none of.
 layout(std430, binding = 6) readonly buffer SKOverviewSlotBlock { SKSlot sk_slots[]; };
-// ALDrawArraysIndirectCommand: count, instances, first, base instance.
-layout(std430, binding = 7) writeonly buffer SKOverviewCommandBlock { uvec4 sk_commands[]; };
+// ALDrawElementsIndirectCommand, five words a slot: count, instances, first index, base vertex, base instance.
+layout(std430, binding = 7) writeonly buffer SKOverviewCommandBlock { uint sk_commands[]; };
 
 uniform uint sk_slot_count;
 uniform vec4 sk_level;          // x all, y the ground's, z and w the heights a kept linkset overlaps
@@ -106,5 +106,11 @@ void main()
     {
         keep = onPatch(sk_offset_agent + slot.lo.xyz, sk_offset_agent + slot.hi.xyz);
     }
-    sk_commands[i] = uvec4(keep ? slot.run.y : 0u, 1u, slot.run.x, 0u);
+    // A run's indices already point at its vertices, so the base vertex is 0.
+    const uint at = i * 5u;
+    sk_commands[at] = keep ? slot.run.y : 0u;
+    sk_commands[at + 1u] = 1u;
+    sk_commands[at + 2u] = slot.run.x;
+    sk_commands[at + 3u] = 0u;
+    sk_commands[at + 4u] = 0u;
 }

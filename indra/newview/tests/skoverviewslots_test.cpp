@@ -26,10 +26,14 @@
 
 #include "../skoverviewslots.h"
 
+#include "v3math.h"
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <iterator>
 #include <map>
+#include <algorithm>
+#include <array>
 #include <random>
 #include <vector>
 
@@ -238,5 +242,134 @@ namespace
         CHECK(ids.bound() == 2);
         CHECK(ids.freeCount() == 0);
         CHECK(ids.acquire() == 2);
+    }
+
+    // Flags as the census sets them; indexRun keeps them opaque.
+    constexpr U8 PASS = 1;
+    constexpr U8 OPEN = 2;
+
+    // A soup's triangles as (flags, corners), each rotated to start at its least corner so winding is kept.
+    using Tri = std::array<F32, 10>;
+    std::vector<Tri> soupTris(const std::vector<LLVector3>& corners, const std::vector<U8>& per_tri)
+    {
+        std::vector<Tri> tris;
+        for (size_t t = 0; t + 2 < corners.size(); t += 3)
+        {
+            std::array<std::array<F32, 3>, 3> c;
+            for (S32 k = 0; k < 3; ++k)
+            {
+                c[k] = { corners[t + k].mV[0], corners[t + k].mV[1], corners[t + k].mV[2] };
+            }
+            const size_t least = std::min_element(c.begin(), c.end()) - c.begin();
+            Tri tri;
+            tri[0] = per_tri[t / 3];
+            for (S32 k = 0; k < 3; ++k)
+            {
+                for (S32 a = 0; a < 3; ++a)
+                {
+                    tri[1 + k * 3 + a] = c[(least + k) % 3][a];
+                }
+            }
+            tris.push_back(tri);
+        }
+        std::sort(tris.begin(), tris.end());
+        return tris;
+    }
+
+    std::vector<Tri> indexedTris(const std::vector<LLVector3>& verts, const std::vector<U8>& per_vertex,
+                                 const std::vector<U32>& indices)
+    {
+        std::vector<LLVector3> corners;
+        std::vector<U8> per_tri;
+        for (size_t i = 0; i < indices.size(); ++i)
+        {
+            corners.push_back(verts[indices[i]]);
+            if (i % 3 == 0)
+            {
+                per_tri.push_back(per_vertex[indices[i]]);
+            }
+        }
+        return soupTris(corners, per_tri);
+    }
+
+    TEST_CASE("skoverviewslots: a run welds shared corners only where their flags match", "[skoverviewslots]")
+    {
+        const LLVector3 a(0.f, 0.f, 0.f), b(1.f, 0.f, 0.f), c(1.f, 1.f, 0.f), d(0.f, 1.f, 0.f);
+        const std::vector<LLVector3> quad = { a, b, c, a, c, d };
+        {
+            std::vector<LLVector3> verts = quad;
+            std::vector<U8> flags = { 0, 0 };
+            std::vector<U32> indices;
+            skoverview::indexRun(verts, flags, indices);
+            CHECK(verts.size() == 4);
+            CHECK(flags.size() == 4);
+            REQUIRE(indices.size() == 6);
+            CHECK(indexedTris(verts, flags, indices) == soupTris(quad, std::vector<U8>{ 0, 0 }));
+        }
+        {
+            std::vector<LLVector3> verts = quad;
+            std::vector<U8> flags = { 0, OPEN };
+            std::vector<U32> indices;
+            skoverview::indexRun(verts, flags, indices);
+            CHECK(verts.size() == 6);
+            REQUIRE(indices.size() == 6);
+            CHECK(indexedTris(verts, flags, indices) == soupTris(quad, std::vector<U8>{ 0, OPEN }));
+        }
+        {
+            std::vector<LLVector3> verts;
+            std::vector<U8> flags;
+            std::vector<U32> indices;
+            skoverview::indexRun(verts, flags, indices);
+            CHECK(verts.empty());
+            CHECK(flags.empty());
+            CHECK(indices.empty());
+        }
+    }
+
+    TEST_CASE("skoverviewslots: an indexed run draws the soup's triangles", "[skoverviewslots]")
+    {
+        // A grid's triangles, shuffled, with flags by row: welded and reordered, the same triangles, wound the same.
+        std::mt19937 rng(20261026u);
+        const S32 side = 24;
+        std::vector<std::pair<std::array<LLVector3, 3>, U8>> tris;
+        for (S32 y = 0; y < side; ++y)
+        {
+            for (S32 x = 0; x < side; ++x)
+            {
+                const LLVector3 p00((F32)x, (F32)y, 0.f), p10((F32)x + 1, (F32)y, 0.f);
+                const LLVector3 p11((F32)x + 1, (F32)y + 1, 0.f), p01((F32)x, (F32)y + 1, 0.f);
+                const U8 flag = y % 5 == 0 ? PASS : 0;
+                tris.push_back({ { p00, p10, p11 }, flag });
+                tris.push_back({ { p00, p11, p01 }, flag });
+            }
+        }
+        std::shuffle(tris.begin(), tris.end(), rng);
+        std::vector<LLVector3> soup;
+        std::vector<U8> per_tri;
+        for (const auto& [corners, flag] : tris)
+        {
+            soup.insert(soup.end(), corners.begin(), corners.end());
+            per_tri.push_back(flag);
+        }
+        std::vector<LLVector3> verts = soup;
+        std::vector<U8> flags = per_tri;
+        std::vector<U32> indices;
+        skoverview::indexRun(verts, flags, indices);
+        REQUIRE(indices.size() == soup.size());
+        CHECK(verts.size() < soup.size() / 2);
+        for (const U32 i : indices)
+        {
+            REQUIRE(i < verts.size());
+        }
+        // Fetch order: the vertices are first used in the order they are stored.
+        U32 next = 0;
+        bool fetch_order = true;
+        for (const U32 i : indices)
+        {
+            fetch_order = fetch_order && i <= next;
+            next = std::max(next, i + 1);
+        }
+        CHECK(fetch_order);
+        CHECK(indexedTris(verts, flags, indices) == soupTris(soup, per_tri));
     }
 }

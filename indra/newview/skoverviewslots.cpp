@@ -27,6 +27,10 @@
 
 #include "skoverviewslots.h"
 
+#include "v3math.h"
+
+#include <meshoptimizer.h>
+
 #include <cmath>
 #include <iterator>
 
@@ -181,5 +185,39 @@ namespace skoverview
                 merged_count.push_back((S32)count[i]);
             }
         }
+    }
+
+    void indexRun(std::vector<LLVector3>& positions, std::vector<U8>& flags, std::vector<U32>& indices)
+    {
+        const size_t n = positions.size() - positions.size() % 3;
+        positions.resize(n);
+        std::vector<U8> corner_flags(n);
+        for (size_t v = 0; v < n; ++v)
+        {
+            corner_flags[v] = v / 3 < flags.size() ? flags[v / 3] : 0;
+        }
+        indices.resize(n);
+        if (!n)
+        {
+            flags.clear();
+            return;
+        }
+        const meshopt_Stream streams[] = { { positions.data(), sizeof(LLVector3), sizeof(LLVector3) },
+                                           { corner_flags.data(), sizeof(U8), sizeof(U8) } };
+        std::vector<U32> remap(n);
+        size_t unique = meshopt_generateVertexRemapMulti(remap.data(), nullptr, n, n, streams, std::size(streams));
+        meshopt_remapIndexBuffer(indices.data(), nullptr, n, remap.data());
+        std::vector<LLVector3> welded(unique);
+        std::vector<U8> welded_flags(unique);
+        meshopt_remapVertexBuffer(welded.data(), positions.data(), n, sizeof(LLVector3), remap.data());
+        meshopt_remapVertexBuffer(welded_flags.data(), corner_flags.data(), n, sizeof(U8), remap.data());
+
+        meshopt_optimizeVertexCache(indices.data(), indices.data(), n, unique);
+        unique = meshopt_optimizeVertexFetchRemap(remap.data(), indices.data(), n, unique);
+        meshopt_remapIndexBuffer(indices.data(), indices.data(), n, remap.data());
+        positions.resize(unique);
+        flags.resize(unique);
+        meshopt_remapVertexBuffer(positions.data(), welded.data(), welded.size(), sizeof(LLVector3), remap.data());
+        meshopt_remapVertexBuffer(flags.data(), welded_flags.data(), welded_flags.size(), sizeof(U8), remap.data());
     }
 }

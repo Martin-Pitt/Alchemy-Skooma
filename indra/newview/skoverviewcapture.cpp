@@ -1367,7 +1367,7 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
                     continue;
                 }
                 const size_t table_bytes = n * sizeof(skoverview::SlotCull);
-                const size_t command_bytes = n * sizeof(ALDrawArraysIndirectCommand);
+                const size_t command_bytes = n * sizeof(ALDrawElementsIndirectCommand);
                 if (page.mSlotTable.size() == table_bytes)
                 {
                     // Instrumented, not fixed: a write into a buffer the last capture's dispatch read may wait on Mesa.
@@ -1515,7 +1515,7 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
                     if (!page.mSlots.empty())
                     {
                         page.mBuffer->setBuffer();
-                        page.mBuffer->multiDrawArraysIndirect(LLRender::TRIANGLES, page.mCommands, 0, (GLsizei)page.mSlots.size());
+                        page.mBuffer->multiDrawElementsIndirect(LLRender::TRIANGLES, page.mCommands, 0, (GLsizei)page.mSlots.size());
                         ++census_draws;
                     }
                     return;
@@ -1526,8 +1526,8 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
                     return;
                 }
                 page.mBuffer->setBuffer();
-                page.mBuffer->multiDrawArrays(LLRender::TRIANGLES, kept.mFirst.data(), kept.mCount.data(),
-                                              (GLsizei)kept.mFirst.size());
+                page.mBuffer->multiDrawElements(LLRender::TRIANGLES, kept.mFirst.data(), kept.mCount.data(),
+                                                (GLsizei)kept.mFirst.size());
                 ++census_draws;
             };
             // Binds a geometry program with the shot's uniforms; the cap pass is set per pass.

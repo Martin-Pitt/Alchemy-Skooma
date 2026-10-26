@@ -266,7 +266,7 @@ namespace
         }
 
         // The GPU's commands for the slots, read back.
-        std::vector<ALDrawArraysIndirectCommand> gpuCommands(const std::vector<SlotCull>& slots, const skoverview::LevelCull& level,
+        std::vector<ALDrawElementsIndirectCommand> gpuCommands(const std::vector<SlotCull>& slots, const skoverview::LevelCull& level,
                                                              const F32 planes[6][4], const Patch* patch = nullptr)
         {
             static const LLStaticHashedString SK_SLOT_COUNT("sk_slot_count");
@@ -278,7 +278,7 @@ namespace
             static const LLStaticHashedString SK_SIZE("sk_size");
             static const LLStaticHashedString SK_PATCH("sk_patch");
             const size_t table_bytes = slots.size() * sizeof(SlotCull);
-            const size_t command_bytes = slots.size() * sizeof(ALDrawArraysIndirectCommand);
+            const size_t command_bytes = slots.size() * sizeof(ALDrawElementsIndirectCommand);
             if (mTable.size() != table_bytes)
             {
                 REQUIRE(mTable.allocate(table_bytes, ALGPUBuffer::DYNAMIC, slots.data(), "test slots"));
@@ -311,7 +311,7 @@ namespace
             mCommandsProgram.dispatchThreads((U32)slots.size());
             gGL.memoryBarrier(LLRender::BARRIER_COMMAND | LLRender::BARRIER_BUFFER_UPDATE);
             LLGLSLShader::unbind();
-            std::vector<ALDrawArraysIndirectCommand> commands(slots.size());
+            std::vector<ALDrawElementsIndirectCommand> commands(slots.size());
             REQUIRE(mCommands.read(0, commands.data(), command_bytes));
             return commands;
         }
@@ -328,11 +328,11 @@ namespace
             mPoints->setBuffer();
             if (first)
             {
-                mPoints->multiDrawArrays(LLRender::POINTS, first->data(), count->data(), (GLsizei)first->size());
+                mPoints->multiDrawElements(LLRender::POINTS, first->data(), count->data(), (GLsizei)first->size());
             }
             else
             {
-                mPoints->multiDrawArraysIndirect(LLRender::POINTS, mCommands, 0, (GLsizei)indirect_count);
+                mPoints->multiDrawElementsIndirect(LLRender::POINTS, mCommands, 0, (GLsizei)indirect_count);
             }
             std::vector<U8> pixels(SIDE * SIDE * 4);
             glReadPixels(0, 0, SIDE, SIDE, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
@@ -382,11 +382,12 @@ namespace
             level.mHi = level.mLo + 15.f;
             std::vector<U32> first, count;
             skoverview::buildCommands(slots, level, planes, first, count);
-            const std::vector<ALDrawArraysIndirectCommand> gpu = gpuCommands(slots, level, planes);
+            const std::vector<ALDrawElementsIndirectCommand> gpu = gpuCommands(slots, level, planes);
             for (U32 i = 0; i < SLOTS; ++i)
             {
                 CAPTURE(i);
-                CHECK(gpu[i].mFirst == first[i]);
+                CHECK(gpu[i].mFirstIndex == first[i]);
+                CHECK(gpu[i].mBaseVertex == 0);
                 CHECK(gpu[i].mInstanceCount == 1u);
                 CHECK(gpu[i].mBaseInstance == 0u);
                 if (margin(slots[i], planes) < 1.0e-3f)
@@ -451,7 +452,7 @@ namespace
             patch.mRect[1] = corner(rng) / 2;
             patch.mRect[2] = patch.mRect[0] + 8 + corner(rng);
             patch.mRect[3] = patch.mRect[1] + 6 + corner(rng) / 2;
-            const std::vector<ALDrawArraysIndirectCommand> gpu = gpuCommands(slots, level, planes, &patch);
+            const std::vector<ALDrawElementsIndirectCommand> gpu = gpuCommands(slots, level, planes, &patch);
             for (U32 i = 0; i < SLOTS; ++i)
             {
                 CAPTURE(i);
@@ -464,7 +465,7 @@ namespace
                 bool straddles = false;
                 bool projected = false;
                 const bool keep = screenRect(patch, lo, hi, rect, edges, straddles, projected) && overlaps(rect, patch.mRect);
-                CHECK(gpu[i].mFirst == slots[i].mFirst);
+                CHECK(gpu[i].mFirstIndex == slots[i].mFirst);
                 CHECK(gpu[i].mInstanceCount == 1u);
                 straddled += straddles ? 1 : 0;
                 // A rectangle edge that floors or ceils right on a pixel boundary rounds either way on the two.
@@ -505,7 +506,14 @@ namespace
         REQUIRE(mTarget.allocate(SIDE, SIDE, GL_RGBA8));
         // A point at each slot's pixel centre, in the slot's vertex order.
         mPoints = new LLVertexBuffer(LLVertexBuffer::MAP_VERTEX);
-        REQUIRE(mPoints->allocateBuffer(SLOTS, 0));
+        // Indexed as the census pages are, each index its own point.
+        REQUIRE(mPoints->allocateBuffer(SLOTS, SLOTS * 2));
+        LLStrider<U32> indices;
+        REQUIRE(mPoints->getIndexStrider(indices, 0, (S32)SLOTS));
+        for (U32 i = 0; i < SLOTS; ++i)
+        {
+            *indices++ = i;
+        }
         LLStrider<LLVector3> verts;
         REQUIRE(mPoints->getVertexStrider(verts));
         for (U32 i = 0; i < SLOTS; ++i)
