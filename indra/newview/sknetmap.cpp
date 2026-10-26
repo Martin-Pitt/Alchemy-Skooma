@@ -581,17 +581,28 @@ LLVector3d SKNetMap::regionFit(const LLViewerRegion* region, F32* span)
     const LLVector3d origin = region->getOriginGlobal();
     LLWorld* world = LLWorld::getInstance();
     LLVector3d centre = origin;
-    F64 extent = width;
+    // The scale is the same whatever the neighbours; a side with no region holds its edge to the map's.
+    const F64 extent = width + 2.0 * reach;
     for (S32 axis : { VX, VY })
     {
-        // Probe just past the middle of each edge; a side with no region keeps its edge.
+        // Probe just past the middle of each edge.
         LLVector3d probe = origin + LLVector3d(width * 0.5, width * 0.5, 0.0);
         probe.mdV[axis] = origin.mdV[axis] - 1.0;
-        const F64 lo = world->getRegionFromPosGlobal(probe) ? origin.mdV[axis] - reach : origin.mdV[axis];
+        const bool lo = world->getRegionFromPosGlobal(probe) != nullptr;
         probe.mdV[axis] = origin.mdV[axis] + width + 1.0;
-        const F64 hi = world->getRegionFromPosGlobal(probe) ? origin.mdV[axis] + width + reach : origin.mdV[axis] + width;
-        centre.mdV[axis] = (lo + hi) * 0.5;
-        extent = llmax(extent, hi - lo);
+        const bool hi = world->getRegionFromPosGlobal(probe) != nullptr;
+        if (lo == hi)
+        {
+            centre.mdV[axis] = origin.mdV[axis] + width * 0.5;
+        }
+        else if (lo)
+        {
+            centre.mdV[axis] = origin.mdV[axis] + width - extent * 0.5;
+        }
+        else
+        {
+            centre.mdV[axis] = origin.mdV[axis] + extent * 0.5;
+        }
     }
     if (span)
     {

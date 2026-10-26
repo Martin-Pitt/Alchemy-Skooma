@@ -238,7 +238,7 @@ private:
     skmap::MapView mView;
     /// What the view centres on: the agent's region's centre in region mode, else anchorGlobal().
     LLVector3d viewAnchor() const;
-    /// Region mode's fit: the region and SKMapRegionMargin into each connected neighbour; returns its centre.
+    /// Region mode's fit: a fixed span of the region and SKMapRegionMargin each side, a side with no neighbour held to the map's edge; returns its centre.
     static LLVector3d regionFit(const LLViewerRegion* region, F32* span);
     /// Region mode's fitted view again: no pan.
     void refitRegion();
