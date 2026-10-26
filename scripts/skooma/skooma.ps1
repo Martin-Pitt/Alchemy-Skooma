@@ -171,9 +171,7 @@ function Test-IsAmend { param([string]$branch) return ((Get-Class $branch) -eq '
 
 # Branches an amend may never amend: the trunks and the shared lines.
 function Test-NotAmendable { param([string]$branch)
-    # A feature-* trunk is a feature that also gathers its sub-branches (feature-combat/minimap): its own code can be amended.
-    $pureTrunk = (Test-IsTrunk $branch) -and $branch -notlike 'feature-*'
-    return ($branch -in 'develop', 'main', 'glue', 'publish' -or $pureTrunk -or (Test-IsAmend $branch) -or (Get-Role $branch) -ne 'feature')
+    return ($branch -in 'develop', 'main', 'glue', 'publish' -or (Test-IsTrunk $branch) -or (Test-IsAmend $branch) -or (Get-Role $branch) -ne 'feature')
 }
 
 function Get-Classes {
@@ -1099,7 +1097,7 @@ function Invoke-New {
             if (GitOk show-ref --verify --quiet "refs/heads/$cand") { $resolved = $cand; break }
         }
         if (-not $resolved) { Fail "base branch '$base' does not exist" }
-        if ($resolved -eq 'main' -or ((Test-IsTrunk $resolved) -and $class -ne 'amend')) {
+        if ($resolved -eq 'main' -or (Test-IsTrunk $resolved)) {
             Fail "never cut a branch from '$resolved': it holds many PRs at once. Cut from develop (the default), a foundation (--base foundation-...), or amend a feature (--amend)"
         }
         if (-not (Get-Role $resolved)) { Fail "base '$resolved' is not a Skooma branch" }
