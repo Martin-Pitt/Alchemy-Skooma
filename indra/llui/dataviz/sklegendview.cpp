@@ -37,8 +37,6 @@
 #include <algorithm>
 #include <cmath>
 
-static LLDefaultChildRegistry::Register<SKLegendView> r("sk_legend");
-
 namespace
 {
     using namespace SKDataVizStyle;
@@ -189,7 +187,6 @@ void SKLegendView::layout()
     const S32 row_h = rowHeight();
     const S32 gap   = (row_h - 2) / 2;
     const S32 avail = H - 2 * PAD;
-    const S32 inner = W - 2 * PAD;
 
     // Every line with the gap above it, before fitting.
     struct Want
@@ -255,14 +252,18 @@ void SKLegendView::layout()
 
     const bool has_title = !mLegend.title.empty();
     std::vector<Want> kept;
+    S32 pad = PAD;
     if (W < MIN_WIDTH || (has_title ? 2 : 1) * row_h > avail)
     {
-        mTooSmall = true;
-        if (has_title && row_h <= avail)
+        // Collapsed: the title, else the words, at the least padding that still reads.
+        mTooSmall       = true;
+        pad             = MIN_PAD;
+        const S32 small = H - 2 * pad;
+        if (has_title && row_h <= small)
         {
             kept.push_back(want.front());
         }
-        if ((S32)kept.size() * row_h + row_h <= avail)
+        if ((S32)kept.size() * row_h + row_h <= small)
         {
             kept.push_back({ { Line::Kind::TooSmall, -1, -1, LLRect() }, row_h, 0 });
         }
@@ -292,6 +293,7 @@ void SKLegendView::layout()
         if (!kept.empty() && kept.back().l.kind == Line::Kind::RampBar)
         {
             kept.pop_back();
+            ++mHiddenRows;
         }
         while (!kept.empty() && (kept.back().l.kind == Line::Kind::Heading || kept.back().l.kind == Line::Kind::Format))
         {
@@ -303,11 +305,11 @@ void SKLegendView::layout()
         }
     }
 
-    S32 top = H - PAD;
+    S32 top = H - pad;
     for (Want& w : kept)
     {
         top -= w.above;
-        w.l.rect = LLRect(PAD, top, PAD + std::max(0, inner), top - w.h);
+        w.l.rect = LLRect(pad, top, pad + std::max(0, W - 2 * pad), top - w.h);
         top -= w.h;
         mLines.push_back(w.l);
     }
@@ -376,9 +378,57 @@ void SKLegendView::layout()
             }
             ends.values.push_back(sc.hi());
             ends.labels.push_back(hi_label);
+            // Only as many decimals as the ticks that stayed need.
+            S32 d = 0;
+            for (; d < ends.decimals; ++d)
+            {
+                const F64 scale = std::pow(10.0, d);
+                if (std::all_of(ends.values.begin(), ends.values.end(),
+                                [&](F64 v) { return std::fabs(std::round(v * scale) / scale - v) <= 1e-9 * std::max(1.0, std::fabs(v)); }))
+                {
+                    break;
+                }
+            }
+            ends.decimals = d;
+            for (size_t i = 0; i < ends.values.size(); ++i)
+            {
+                ends.labels[i] = SKTicks::format(ends.values[i], d);
+            }
             t = std::move(ends);
         }
     }
+}
+
+F64 SKLegendView::rampPosition(S32 section, F64 value) const
+{
+    if (section < 0 || section >= (S32)mLegend.sections.size() || !mLegend.sections[section].scale || std::isnan(value))
+    {
+        return std::nan("");
+    }
+    const SKColorScale& sc = *mLegend.sections[section].scale;
+    F64                 u  = sc.unitOf(value);
+    if (sc.kind() == SKColorScale::Kind::Binned)
+    {
+        // Classes are drawn equal width, so a value sits within its class's share.
+        const S32 i = sc.classOf(value);
+        if (i < 0 || i + 1 >= (S32)sc.edges().size())
+        {
+            return std::nan("");
+        }
+        const F64 e0 = sc.edges()[i], e1 = sc.edges()[i + 1];
+        u            = ((F64)i + (e1 > e0 ? (value - e0) / (e1 - e0) : 0.0)) / (F64)sc.stops().size();
+    }
+    return u >= 0.0 && u <= 1.0 ? u : std::nan("");
+}
+
+F64 SKLegendView::markPosition(S32 section) const
+{
+    if (section < 0 || section >= (S32)mLegend.sections.size() || !mLegend.sections[section].scale ||
+        !(mMarkScale.empty() || mMarkScale == mLegend.sections[section].scale->id()))
+    {
+        return std::nan("");
+    }
+    return rampPosition(section, mMark);
 }
 
 const SKTicks* SKLegendView::ticksOf(S32 section) const
@@ -514,8 +564,8 @@ void SKLegendView::drawRamp(const Line& l, const SKLegendSection& sec, F32 alpha
         }
     }
     auto rail = [&](F64 v, const LLColor4& c, bool caret) {
-        const F64 u = sc.unitOf(v);
-        if (std::isnan(v) || u < 0.0 || u > 1.0)
+        const F64 u = rampPosition(l.section, v);
+        if (std::isnan(u))
         {
             return;
         }

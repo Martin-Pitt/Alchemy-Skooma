@@ -31,6 +31,7 @@
 namespace SKDataVizStyle
 {
     inline constexpr S32 PAD        = 8;   // inset on every side
+    inline constexpr S32 MIN_PAD    = 2;   // the inset of a collapsed legend
     inline constexpr S32 SWATCH     = 10;  // square marks
     inline constexpr S32 LINE_MARK  = 14;  // line marks, at their real width
     inline constexpr S32 MARK_GAP   = 6;   // mark to label

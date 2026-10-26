@@ -48,6 +48,22 @@ namespace
         CHECK(back.id == 0xFEDCBA9876543210ull);
     }
 
+    TEST_CASE("skvizkey: a key with only a scale an id or a colour is not empty and survives LLSD", "[skvizkey]")
+    {
+        SKVizKey scale_only;
+        scale_only.scale = "s";
+        SKVizKey id_only;
+        id_only.id = 7;
+        SKVizKey colour_only;
+        colour_only.colour    = LLColor4::green;
+        colour_only.hasColour = true;
+        for (const SKVizKey& k : { scale_only, id_only, colour_only })
+        {
+            CHECK_FALSE(k.empty());
+            CHECK(SKVizKey::fromLLSD(k.toLLSD()) == k);
+        }
+    }
+
     TEST_CASE("skvizkey: rows match by scale and class or state and never by colour", "[skvizkey]")
     {
         SKVizKey a;

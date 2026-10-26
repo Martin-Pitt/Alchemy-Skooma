@@ -29,7 +29,7 @@
 
 #include <memory>
 
-// Specs only: the real debug views take their legends from their own drawers' scales.
+// The demo floater's and the tests' data, not a debug view's: those take their legends from their own drawers' scales.
 namespace SKLegendSamples
 {
     // A scale whose domain the caller moves at runtime, as a setting would.

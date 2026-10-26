@@ -44,7 +44,7 @@ struct SKVizKey
     LLColor4    colour;                  // optional, alpha 0 for none
     bool        hasColour = false;
 
-    bool empty() const { return scale.empty() && category == NO_CATEGORY && std::isnan(value) && id == 0 && state.empty(); }
+    bool empty() const { return scale.empty() && category == NO_CATEGORY && std::isnan(value) && id == 0 && state.empty() && !hasColour; }
     bool hasCategory() const { return category != NO_CATEGORY; }
     bool hasValue() const { return !std::isnan(value); }
 

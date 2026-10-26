@@ -29,6 +29,9 @@
 #include "../lluictrlfactory.h"
 
 #include "alheadlessui_fixture.h"
+#include "skdatavizstyle.h"
+
+#include <cmath>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -207,6 +210,110 @@ namespace
             REQUIRE(t != nullptr);
             CHECK(t->values.size() <= 7);
         }
+        v->die();
+    }
+
+    TEST_CASE_METHOD(sklegendview_data, "sklegendview: a ramp cut at its ticks is counted in the more row", "[sklegendview]")
+    {
+        if (!ui.ok())
+        {
+            SKIP("no UI");
+        }
+        SKLegend l;
+        l.title = "cut";
+        l.sections.push_back(SKLegendSection::key(SKColorScales::series(), "series"));
+        l.sections.push_back(SKLegendSection::ramp(SKColorScales::heat(), "heat"));
+        SKLegendView* v = make(220, 2000);
+        v->setLegend(l);
+        S32 ticks_h = 0;
+        for (const Line& line : v->lines())
+        {
+            ticks_h = line.kind == Line::Kind::RampTicks ? line.rect.getHeight() : ticks_h;
+        }
+        REQUIRE(ticks_h > 0);
+        v->reshape(220, v->contentHeight() - ticks_h);
+        CHECK(v->hiddenRows() == 1);
+        CHECK(find(*v, Line::Kind::More) != nullptr);
+        CHECK(find(*v, Line::Kind::RampBar) == nullptr);
+        v->die();
+    }
+
+    TEST_CASE_METHOD(sklegendview_data, "sklegendview: binned ramps place values within their class and setMark follows its scale", "[sklegendview]")
+    {
+        if (!ui.ok())
+        {
+            SKIP("no UI");
+        }
+        SKLegendView* v = make(220, 400);
+        v->setLegend(SKLegendSamples::nameTagDistance());
+        // Edges 0 10 20 64 96 drawn as four equal classes.
+        CHECK(std::fabs(v->rampPosition(0, 5.0) - 0.125) < 1e-9);
+        CHECK(std::fabs(v->rampPosition(0, 42.0) - 0.625) < 1e-9);
+        CHECK(std::fabs(v->rampPosition(0, 96.0) - 1.0) < 1e-9);
+        CHECK(std::isnan(v->rampPosition(0, 120.0)));
+        CHECK(std::isnan(v->markPosition(0)));
+        v->setMark(50.0, "name-tag-distance");
+        CHECK(std::fabs(v->markPosition(0) - (2.0 + 30.0 / 44.0) / 4.0) < 1e-9);
+        v->setMark(50.0, "another-scale");
+        CHECK(std::isnan(v->markPosition(0)));
+        v->setMark(50.0);
+        CHECK_FALSE(std::isnan(v->markPosition(0)));
+        v->setMark(std::nan(""));
+        CHECK(std::isnan(v->markPosition(0)));
+        v->die();
+    }
+
+    TEST_CASE_METHOD(sklegendview_data, "sklegendview: end labels keep only the decimals the kept ticks need", "[sklegendview]")
+    {
+        if (!ui.ok())
+        {
+            SKIP("no UI");
+        }
+        SKLegend l;
+        l.sections.push_back(SKLegendSection::ramp(SKColorScales::ink(), "narrow"));
+        SKLegendView* v = make(80, 200);
+        v->setLegend(l);
+        const SKTicks* t = v->ticksOf(0);
+        REQUIRE(t != nullptr);
+        REQUIRE(t->labels.size() >= 2);
+        CHECK(t->labels.front() == "0");
+        CHECK(t->labels.back() == "1");
+        v->die();
+    }
+
+    TEST_CASE_METHOD(sklegendview_data, "sklegendview: too small keeps the title at a single row's height", "[sklegendview]")
+    {
+        if (!ui.ok())
+        {
+            SKIP("no UI");
+        }
+        SKLegendView* v = make(220, 400);
+        v->setLegend(SKLegendSamples::beacons());
+        const Line* title = find(*v, Line::Kind::Title);
+        REQUIRE(title != nullptr);
+        v->reshape(220, title->rect.getHeight() + 2 * SKDataVizStyle::MIN_PAD);
+        CHECK(v->tooSmall());
+        CHECK(find(*v, Line::Kind::Title) != nullptr);
+        SKLegend untitled = SKLegendSamples::beacons();
+        untitled.title.clear();
+        v->setLegend(untitled);
+        CHECK(find(*v, Line::Kind::TooSmall) != nullptr);
+        v->die();
+    }
+
+    TEST_CASE_METHOD(sklegendview_data, "sklegendview: a line mark row hovers to its key", "[sklegendview]")
+    {
+        if (!ui.ok())
+        {
+            SKIP("no UI");
+        }
+        SKLegendView* v = make(220, 400);
+        v->setLegend(SKLegendSamples::beacons());
+        const Line* row = find(*v, Line::Kind::Row);
+        REQUIRE(row != nullptr);
+        const SKVizKey k = v->keyAt(row->rect.mLeft + 2, row->rect.getCenterY());
+        CHECK(k.scale == "beacons");
+        CHECK(k.category == 0);
         v->die();
     }
 }

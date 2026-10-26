@@ -90,6 +90,10 @@ public:
     bool tooSmall() const { return mTooSmall; }
     // The ramp bar's ticks for a section, as laid out.
     const SKTicks* ticksOf(S32 section) const;
+    // Where a value sits along a section's ramp in [0, 1] as drawn, NaN where it is off the bar.
+    F64 rampPosition(S32 section, F64 value) const;
+    // Where setMark's reading sits on a section's ramp, NaN for none.
+    F64 markPosition(S32 section) const;
     // What a point in local coordinates stands for, empty for nothing.
     SKVizKey keyAt(S32 x, S32 y) const;
     // Whether a row is drawn lit, by the hover or the highlight.

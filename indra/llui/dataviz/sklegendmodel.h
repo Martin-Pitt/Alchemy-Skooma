@@ -138,7 +138,7 @@ struct SKLegendSection
     std::string              format; // Fields: how the label reads, "prio / area"
     std::vector<SKLegendRow> rows;
 
-    // A ramp over a scale the caller keeps alive (a built-in, a member).
+    // A ramp over a scale the caller keeps alive (a built-in, a member); a scale on the stack would dangle.
     static SKLegendSection ramp(const SKColorScale& s, std::string quantity, std::string unit = std::string())
     {
         return ramp(std::shared_ptr<const SKColorScale>(&s, [](const SKColorScale*) {}), std::move(quantity), std::move(unit));
