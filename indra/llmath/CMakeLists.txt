@@ -32,6 +32,7 @@ target_sources(
     m3math.cpp
     m4math.cpp
     raytrace.cpp
+    skcolorscale.cpp
     v2math.cpp
     v3color.cpp
     v3dmath.cpp
@@ -88,6 +89,7 @@ target_sources(
         m3math.h
         m4math.h
         raytrace.h
+        skcolorscale.h
         v2math.h
         v3color.h
         v3colorutil.h
@@ -147,6 +149,7 @@ if(AL_BUILD_TESTS)
       tests/llvolume_test.cpp
       tests/m3math_test.cpp
       tests/mathmisc_test.cpp
+      tests/skcolorscale_test.cpp
       tests/v2math_test.cpp
       tests/v3color_test.cpp
       tests/v3dmath_test.cpp
