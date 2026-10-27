@@ -201,126 +201,133 @@ S32 SKInventoryListView::getScroll() const
     return mScrollbar->getDocPos();
 }
 
+bool SKInventoryListView::readRows(const LLUUID& folder_id, const SKInventoryListLabels& labels, std::vector<SKInventoryRow>& rows)
+{
+    rows.clear();
+    LLViewerInventoryCategory* folder = gInventory.getCategory(folder_id);
+    if (!folder)
+    {
+        return false;
+    }
+
+    bool loading = false;
+    if (folder->getVersion() == LLViewerInventoryCategory::VERSION_UNKNOWN || !gInventory.isCategoryComplete(folder_id))
+    {
+        LLInventoryModelBackgroundFetch::instance().start(folder_id, false);
+        loading = true;
+    }
+
+    LLInventoryModel::cat_array_t* cats = nullptr;
+    LLInventoryModel::item_array_t* items = nullptr;
+    gInventory.getDirectDescendentsOf(folder_id, cats, items);
+
+    if (cats)
+    {
+        for (LLViewerInventoryCategory* cat : *cats)
+        {
+            SKInventoryRow row;
+            row.mID = cat->getUUID();
+            row.mTargetID = row.mID;
+            row.mIsFolder = true;
+            row.mIsSystem = LLFolderType::lookupIsProtectedType(cat->getPreferredType());
+            row.mName = cat->getName();
+            const S32 count = cat->getDescendentCount();
+            if (count >= 0 && !labels.mFolderCount.empty())
+            {
+                LLStringUtil::format_map_t args;
+                args["[COUNT]"] = llformat("%d", count);
+                row.mType = labels.mFolderCount;
+                LLStringUtil::format(row.mType, args);
+            }
+            else
+            {
+                row.mType = labels.mFolder;
+            }
+            row.mIcon = LLUI::getUIImage(LLViewerFolderType::lookupIconName(cat->getPreferredType(), false));
+            rows.push_back(row);
+        }
+    }
+
+    if (items)
+    {
+        for (LLViewerInventoryItem* item : *items)
+        {
+            SKInventoryRow row;
+            row.mID = item->getUUID();
+            row.mIsLink = item->getIsLinkType();
+            row.mTargetID = row.mIsLink ? item->getLinkedUUID() : row.mID;
+            row.mName = item->getName();
+
+            LLViewerInventoryCategory* linked_cat = row.mIsLink ? gInventory.getCategory(row.mTargetID) : nullptr;
+            if (linked_cat)
+            {
+                // A folder link lists as the folder it opens.
+                row.mIsFolder = true;
+                row.mType = labels.mFolder;
+                row.mIcon = LLUI::getUIImage(LLViewerFolderType::lookupIconName(linked_cat->getPreferredType(), false));
+                rows.push_back(row);
+                continue;
+            }
+
+            const LLViewerInventoryItem* target = row.mIsLink ? gInventory.getItem(row.mTargetID) : item;
+            const LLViewerInventoryItem* info = target ? target : item;
+            row.mType = std::string(LLInventoryType::lookupHumanReadable(info->getInventoryType()));
+            if (!row.mType.empty())
+            {
+                row.mType[0] = toupper(row.mType[0]);
+            }
+            row.mCreatorID = info->getCreatorUUID();
+            row.mAcquired = item->getCreationDate();
+            if (row.mAcquired > 0 && !labels.mDateFormat.empty())
+            {
+                row.mAcquiredLabel = labels.mDateFormat;
+                LLSD args;
+                args["datetime"] = (S32)row.mAcquired;
+                LLStringUtil::format(row.mAcquiredLabel, args);
+            }
+            const U32 mask = info->getPermissions().getMaskOwner();
+            row.mPermRank = perm_rank(mask);
+            row.mPerms = perm_letters(mask);
+            row.mDescription = info->getDescription();
+            row.mIsWorn = get_is_item_worn(row.mTargetID);
+            if (row.mIsWorn)
+            {
+                row.mWornOn = labels.mWorn;
+                if (info->getType() == LLAssetType::AT_OBJECT && isAgentAvatarValid())
+                {
+                    const LLViewerJointAttachment* point = gAgentAvatarp->getWornAttachmentPoint(row.mTargetID);
+                    if (point)
+                    {
+                        row.mWornOn = point->getName();
+                    }
+                }
+                else if (info->isWearableType())
+                {
+                    row.mWornOn = LLWearableType::getInstance()->getTypeLabel(info->getWearableType());
+                }
+            }
+            row.mIcon = LLInventoryIcon::getIcon(info->getType(), info->getInventoryType(), info->getFlags(), false);
+            rows.push_back(row);
+        }
+    }
+    return loading;
+}
+
 void SKInventoryListView::rebuild()
 {
     mDirty = false;
     const uuid_vec_t selection = getSelection();
     const LLUUID cursor_id = (mCursor >= 0 && mCursor < (S32)mRows.size()) ? mRows[mCursor].mID : LLUUID::null;
 
-    mRows.clear();
     mFolderCount = 0;
-    mLoading = false;
-
-    LLViewerInventoryCategory* folder = gInventory.getCategory(mFolderID);
-    if (folder)
-    {
-        if (folder->getVersion() == LLViewerInventoryCategory::VERSION_UNKNOWN || !gInventory.isCategoryComplete(mFolderID))
-        {
-            LLInventoryModelBackgroundFetch::instance().start(mFolderID, false);
-            mLoading = true;
-        }
-
-        LLInventoryModel::cat_array_t* cats = nullptr;
-        LLInventoryModel::item_array_t* items = nullptr;
-        gInventory.getDirectDescendentsOf(mFolderID, cats, items);
-
-        if (cats)
-        {
-            for (LLViewerInventoryCategory* cat : *cats)
-            {
-                SKInventoryRow row;
-                row.mID = cat->getUUID();
-                row.mTargetID = row.mID;
-                row.mIsFolder = true;
-                row.mIsSystem = LLFolderType::lookupIsProtectedType(cat->getPreferredType());
-                row.mName = cat->getName();
-                const S32 count = cat->getDescendentCount();
-                if (count >= 0 && !mLabels.mFolderCount.empty())
-                {
-                    LLStringUtil::format_map_t args;
-                    args["[COUNT]"] = llformat("%d", count);
-                    row.mType = mLabels.mFolderCount;
-                    LLStringUtil::format(row.mType, args);
-                }
-                else
-                {
-                    row.mType = mLabels.mFolder;
-                }
-                row.mIcon = LLUI::getUIImage(LLViewerFolderType::lookupIconName(cat->getPreferredType(), false));
-                mRows.push_back(row);
-            }
-        }
-
-        if (items)
-        {
-            for (LLViewerInventoryItem* item : *items)
-            {
-                SKInventoryRow row;
-                row.mID = item->getUUID();
-                row.mIsLink = item->getIsLinkType();
-                row.mTargetID = row.mIsLink ? item->getLinkedUUID() : row.mID;
-                row.mName = item->getName();
-
-                LLViewerInventoryCategory* linked_cat = row.mIsLink ? gInventory.getCategory(row.mTargetID) : nullptr;
-                if (linked_cat)
-                {
-                    // A folder link lists as the folder it opens.
-                    row.mIsFolder = true;
-                    row.mType = mLabels.mFolder;
-                    row.mIcon = LLUI::getUIImage(LLViewerFolderType::lookupIconName(linked_cat->getPreferredType(), false));
-                    mRows.push_back(row);
-                    continue;
-                }
-
-                const LLViewerInventoryItem* target = row.mIsLink ? gInventory.getItem(row.mTargetID) : item;
-                const LLViewerInventoryItem* info = target ? target : item;
-                row.mType = std::string(LLInventoryType::lookupHumanReadable(info->getInventoryType()));
-                if (!row.mType.empty())
-                {
-                    row.mType[0] = toupper(row.mType[0]);
-                }
-                row.mCreatorID = info->getCreatorUUID();
-                requestCreatorName(row);
-                row.mAcquired = item->getCreationDate();
-                if (row.mAcquired > 0 && !mLabels.mDateFormat.empty())
-                {
-                    row.mAcquiredLabel = mLabels.mDateFormat;
-                    LLSD args;
-                    args["datetime"] = (S32)row.mAcquired;
-                    LLStringUtil::format(row.mAcquiredLabel, args);
-                }
-                const U32 mask = info->getPermissions().getMaskOwner();
-                row.mPermRank = perm_rank(mask);
-                row.mPerms = perm_letters(mask);
-                row.mDescription = info->getDescription();
-                row.mIsWorn = get_is_item_worn(row.mTargetID);
-                if (row.mIsWorn)
-                {
-                    row.mWornOn = mLabels.mWorn;
-                    if (info->getType() == LLAssetType::AT_OBJECT && isAgentAvatarValid())
-                    {
-                        const LLViewerJointAttachment* point = gAgentAvatarp->getWornAttachmentPoint(row.mTargetID);
-                        if (point)
-                        {
-                            row.mWornOn = point->getName();
-                        }
-                    }
-                    else if (info->isWearableType())
-                    {
-                        row.mWornOn = LLWearableType::getInstance()->getTypeLabel(info->getWearableType());
-                    }
-                }
-                row.mIcon = LLInventoryIcon::getIcon(info->getType(), info->getInventoryType(), info->getFlags(), false);
-                mRows.push_back(row);
-            }
-        }
-    }
+    mLoading = readRows(mFolderID, mLabels, mRows);
 
     mRowIDs.clear();
-    for (const SKInventoryRow& row : mRows)
+    for (SKInventoryRow& row : mRows)
     {
         mFolderCount += row.mIsFolder ? 1 : 0;
         mRowIDs.insert(row.mID);
+        requestCreatorName(row);
     }
     ++mGeneration;
 
@@ -385,14 +392,19 @@ void SKInventoryListView::applyArrivedNames()
 
 void SKInventoryListView::sortRows()
 {
-    const EColumn key = mSortKey;
-    const bool ascending = mSortAscending;
+    sortRows(mRows, mSortKey, mSortAscending);
+    mSelected.assign(mRows.size(), false);
+    mSelectedCount = 0;
+}
+
+void SKInventoryListView::sortRows(std::vector<SKInventoryRow>& rows, EColumn key, bool ascending)
+{
     auto by_name = [](const SKInventoryRow& a, const SKInventoryRow& b)
     {
         return LLStringUtil::compareDict(a.mName, b.mName) < 0;
     };
 
-    std::stable_sort(mRows.begin(), mRows.end(), [&](const SKInventoryRow& a, const SKInventoryRow& b)
+    std::stable_sort(rows.begin(), rows.end(), [&](const SKInventoryRow& a, const SKInventoryRow& b)
     {
         if (a.mIsFolder != b.mIsFolder)
         {
@@ -425,8 +437,6 @@ void SKInventoryListView::sortRows()
         }
         return ascending ? order < 0 : order > 0;
     });
-    mSelected.assign(mRows.size(), false);
-    mSelectedCount = 0;
 }
 
 S32 SKInventoryListView::rowsPerPage() const
