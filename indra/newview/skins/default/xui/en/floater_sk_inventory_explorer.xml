@@ -28,6 +28,7 @@
     <string name="date_format">[year,datetime,local]-[mthnum,datetime,local]-[day,datetime,local] [hour,datetime,local]:[min,datetime,local]</string>
     <string name="loading">Loading…</string>
     <string name="empty_folder">Empty folder</string>
+    <string name="n_more">and [COUNT] more</string>
     <string name="worn">Worn</string>
     <string name="one_folder">1 folder</string>
     <string name="n_folders">[FOLDERS] folders</string>
@@ -338,6 +339,16 @@
              name="list_view"
              tab_stop="true"
              top="0"
+             width="418" />
+            <sk_inventory_columns
+             follows="all"
+             height="442"
+             layout="topleft"
+             left="0"
+             name="columns_view"
+             tab_stop="true"
+             top="0"
+             visible="false"
              width="418" />
         </layout_panel>
         <layout_panel

@@ -1,0 +1,1141 @@
+/**
+ * @file skinventorycolumnsview.cpp
+ * @brief Inventory Explorer's Columns view: the path below the top-level folder as a strip of columns
+ *
+ * $LicenseInfo:firstyear=2026&license=viewerlgpl$
+ * Second Life Viewer Source Code
+ * Copyright (C) 2026, Linden Research, Inc.
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation;
+ * version 2.1 of the License only.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ *
+ * Linden Research, Inc., 945 Battery Street, San Francisco, CA  94111  USA
+ * $/LicenseInfo$
+ */
+
+#include "llviewerprecompiledheaders.h"
+
+#include "skinventorycolumnsview.h"
+
+#include "llfontgl.h"
+#include "llinventorymodel.h"
+#include "lllocalcliprect.h"
+#include "llrender2dutils.h"
+#include "llscrollbar.h"
+#include "lltooltip.h"
+#include "llui.h"
+#include "llviewerinventory.h"
+#include "skinventoryexplorermenu.h"
+
+#include <algorithm>
+
+static LLDefaultChildRegistry::Register<SKInventoryColumnsView> r_sk_inventory_columns("sk_inventory_columns");
+
+namespace
+{
+    constexpr S32 COLUMN_WIDTH = 230;
+    constexpr S32 DETAILS_WIDTH = 280;
+    constexpr S32 ROW_HEIGHT = 20;
+    constexpr S32 TOP_PAD = 4;
+    constexpr S32 CELL_PAD = 4;
+    constexpr S32 ICON_SIZE = 16;
+    constexpr S32 DETAILS_ICON_SIZE = 32;
+    constexpr S32 GHOST_ROWS = 600;
+    constexpr S32 WHEEL_ROWS = 3;
+    constexpr S32 HWHEEL_PIXELS = 30;
+
+    bool is_root(const LLUUID& folder_id)
+    {
+        const LLViewerInventoryCategory* cat = gInventory.getCategory(folder_id);
+        return cat && cat->getParentUUID().isNull();
+    }
+}
+
+SKInventoryColumnsView::SKInventoryColumnsView(const Params& p)
+:   LLUICtrl(p),
+    mCurrent(-1),
+    mSelectedCount(0),
+    mCursor(-1),
+    mAnchor(-1),
+    mFolderCount(0),
+    mItemCount(0),
+    mLoading(false),
+    mDirty(false),
+    mDetailsShown(true),
+    mGeneration(0),
+    mSortKey(SKInventoryListView::COL_ACQUIRED),
+    mSortAscending(false),
+    mStripX(0),
+    mStripPad(0),
+    mHoverColumn(-1),
+    mHoverRow(-1),
+    mStripScrollbar(nullptr)
+{
+    const S32 bar = LLUI::getInstance()->mSettingGroups["config"]->getS32("UIScrollbarSize");
+    LLScrollbar::Params sbparams;
+    sbparams.name("strip_scrollbar");
+    sbparams.rect(LLRect(0, bar, getRect().getWidth(), 0));
+    sbparams.orientation(LLScrollbar::HORIZONTAL);
+    sbparams.doc_size(0);
+    sbparams.doc_pos(0);
+    sbparams.page_size(1);
+    sbparams.follows.flags(FOLLOWS_LEFT | FOLLOWS_RIGHT | FOLLOWS_BOTTOM);
+    sbparams.visible(false);
+    sbparams.change_callback([this](S32 pos, LLScrollbar*) { mStripX = pos; });
+    mStripScrollbar = LLUICtrlFactory::create<LLScrollbar>(sbparams);
+    addChild(mStripScrollbar);
+}
+
+SKInventoryColumnsView::~SKInventoryColumnsView()
+{
+    if (gEditMenuHandler == this)
+    {
+        gEditMenuHandler = nullptr;
+    }
+}
+
+void SKInventoryColumnsView::setFolder(const LLUUID& folder_id, const uuid_vec_t& selection)
+{
+    mFolderID = folder_id;
+    mCursor = -1;
+    mAnchor = -1;
+    rebuild();
+    setSelection(selection);
+}
+
+void SKInventoryColumnsView::setScrollState(S32 strip_x, const scroll_map_t& scrolls)
+{
+    mStripX = llmax(0, strip_x);
+    mScrolls = scrolls;
+    updateStripScrollbar();
+}
+
+void SKInventoryColumnsView::setSort(SKInventoryListView::EColumn key, bool ascending)
+{
+    if (key != mSortKey || ascending != mSortAscending)
+    {
+        mSortKey = key;
+        mSortAscending = ascending;
+        mDirty = true;
+    }
+}
+
+void SKInventoryColumnsView::setDetailsShown(bool shown)
+{
+    if (shown != mDetailsShown)
+    {
+        mDetailsShown = shown;
+        rebuildTrailing();
+        revealColumns(false);
+    }
+}
+
+bool SKInventoryColumnsView::lists(const LLUUID& id) const
+{
+    if (mListedIDs.contains(id))
+    {
+        return true;
+    }
+    // The ghost's rows are few, so they are looked through rather than indexed.
+    const Column* current = currentColumn();
+    if (current && &mColumns.back() != current && mColumns.back().mKind == KIND_GHOST)
+    {
+        const Column& ghost = mColumns.back();
+        return ghost.mFolderID == id || std::any_of(ghost.mRows.begin(), ghost.mRows.end(), [&](const SKInventoryRow& row) { return row.mID == id; });
+    }
+    return false;
+}
+
+LLUUID SKInventoryColumnsView::nearestLiveFolder() const
+{
+    for (auto it = mPath.rbegin(); it != mPath.rend(); ++it)
+    {
+        if (gInventory.getCategory(*it))
+        {
+            return *it;
+        }
+    }
+    return LLUUID::null;
+}
+
+SKInventoryColumnsView::Column* SKInventoryColumnsView::currentColumn()
+{
+    return (mCurrent >= 0 && mCurrent < (S32)mColumns.size()) ? &mColumns[mCurrent] : nullptr;
+}
+
+const SKInventoryColumnsView::Column* SKInventoryColumnsView::currentColumn() const
+{
+    return (mCurrent >= 0 && mCurrent < (S32)mColumns.size()) ? &mColumns[mCurrent] : nullptr;
+}
+
+void SKInventoryColumnsView::readColumn(Column& column, bool folders_too)
+{
+    column.mLoading = SKInventoryListView::readRows(column.mFolderID, mLabels, column.mRows);
+    if (!folders_too)
+    {
+        // At My Inventory or the Library the sidebar lists the folders, so only loose items stay.
+        std::erase_if(column.mRows, [](const SKInventoryRow& row) { return row.mIsFolder && !row.mIsLink; });
+    }
+    SKInventoryListView::sortRows(column.mRows, mSortKey, mSortAscending);
+}
+
+void SKInventoryColumnsView::rebuild()
+{
+    mDirty = false;
+    const uuid_vec_t selection = getSelection();
+    const Column* cur = currentColumn();
+    const LLUUID cursor_id = (cur && mCursor >= 0 && mCursor < (S32)cur->mRows.size()) ? cur->mRows[mCursor].mID : LLUUID::null;
+
+    mPath.clear();
+    for (const LLViewerInventoryCategory* cat = gInventory.getCategory(mFolderID); cat;
+         cat = cat->getParentUUID().notNull() ? gInventory.getCategory(cat->getParentUUID()) : nullptr)
+    {
+        mPath.insert(mPath.begin(), cat->getUUID());
+    }
+
+    // One column per folder below the top: the sidebar is the top-level folders' column.
+    mColumns.clear();
+    mListedIDs.clear();
+    const size_t first = mPath.size() > 1 ? 1 : 0;
+    for (size_t i = first; i < mPath.size(); ++i)
+    {
+        Column column;
+        column.mFolderID = mPath[i];
+        column.mPathID = (i + 1 < mPath.size()) ? mPath[i + 1] : LLUUID::null;
+        readColumn(column, !is_root(column.mFolderID));
+        mListedIDs.insert(column.mFolderID);
+        for (const SKInventoryRow& row : column.mRows)
+        {
+            mListedIDs.insert(row.mID);
+        }
+        mColumns.push_back(std::move(column));
+    }
+    mCurrent = (S32)mColumns.size() - 1;
+
+    // The status counts what the open folder holds, the sidebar's folders included.
+    mFolderCount = 0;
+    mItemCount = 0;
+    mLoading = false;
+    if (Column* current = currentColumn())
+    {
+        std::vector<SKInventoryRow> all;
+        mLoading = SKInventoryListView::readRows(current->mFolderID, mLabels, all);
+        for (const SKInventoryRow& row : all)
+        {
+            (row.mIsFolder ? mFolderCount : mItemCount)++;
+        }
+        // Grouping headers (step 3) go into the current column here.
+    }
+
+    // Each path column keeps its scroll, moving only to show the row the path goes on through.
+    for (S32 i = 0; i < mCurrent; ++i)
+    {
+        const Column& column = mColumns[i];
+        for (S32 r = 0; r < (S32)column.mRows.size(); ++r)
+        {
+            if (column.mRows[r].mID == column.mPathID)
+            {
+                scrollRowIntoView(column, r);
+                break;
+            }
+        }
+    }
+
+    ++mGeneration;
+    mSelected.assign(currentColumn() ? currentColumn()->mRows.size() : 0, false);
+    mSelectedCount = 0;
+    mCursor = -1;
+    mAnchor = -1;
+    if (const Column* current = currentColumn())
+    {
+        for (S32 r = 0; r < (S32)current->mRows.size(); ++r)
+        {
+            const LLUUID& id = current->mRows[r].mID;
+            if (std::find(selection.begin(), selection.end(), id) != selection.end())
+            {
+                mSelected[r] = true;
+                ++mSelectedCount;
+                mCursor = r;
+            }
+            if (id == cursor_id)
+            {
+                mCursor = r;
+            }
+        }
+    }
+    mAnchor = mCursor;
+    rebuildTrailing();
+    updateStripScrollbar();
+}
+
+void SKInventoryColumnsView::rebuildTrailing()
+{
+    if (mCurrent < 0)
+    {
+        mColumns.clear();
+        layoutColumns();
+        return;
+    }
+    mColumns.resize(mCurrent + 1);
+    const Column& current = mColumns[mCurrent];
+
+    const SKInventoryRow* single = nullptr;
+    if (mSelectedCount == 1)
+    {
+        for (size_t r = 0; r < current.mRows.size(); ++r)
+        {
+            if (mSelected[r])
+            {
+                single = &current.mRows[r];
+                break;
+            }
+        }
+    }
+
+    Column trailing;
+    if (single && single->mIsFolder)
+    {
+        // A folder or folder link previews its contents, dimmed.
+        trailing.mKind = KIND_GHOST;
+        trailing.mFolderID = single->mTargetID;
+        readColumn(trailing, true);
+        if ((S32)trailing.mRows.size() > GHOST_ROWS)
+        {
+            trailing.mMore = (S32)trailing.mRows.size() - GHOST_ROWS;
+            trailing.mRows.resize(GHOST_ROWS);
+        }
+        trailing.mWidth = COLUMN_WIDTH;
+    }
+    else if (single && mDetailsShown)
+    {
+        trailing.mKind = KIND_DETAILS;
+        trailing.mPathID = single->mID;
+        trailing.mRows.push_back(*single);
+        trailing.mWidth = DETAILS_WIDTH;
+    }
+    else if (!current.mRows.empty())
+    {
+        // As wide as what a selection here could open, so deselecting doesn't shrink the strip.
+        const bool items = std::any_of(current.mRows.begin(), current.mRows.end(),
+                                       [](const SKInventoryRow& row) { return !row.mIsFolder; });
+        trailing.mKind = KIND_SPARE;
+        trailing.mFolderID = current.mFolderID;
+        trailing.mWidth = (items && mDetailsShown) ? DETAILS_WIDTH : COLUMN_WIDTH;
+    }
+    if (trailing.mWidth > 0)
+    {
+        mColumns.push_back(std::move(trailing));
+    }
+    layoutColumns();
+}
+
+void SKInventoryColumnsView::layoutColumns()
+{
+    S32 left = 0;
+    for (S32 i = 0; i < (S32)mColumns.size(); ++i)
+    {
+        Column& column = mColumns[i];
+        column.mLeft = left;
+        if (column.mKind == KIND_PATH)
+        {
+            // At My Inventory or the Library with no loose items there is no column at all.
+            const bool empty_root = column.mRows.empty() && !column.mLoading && is_root(column.mFolderID);
+            column.mWidth = empty_root ? 0 : COLUMN_WIDTH;
+        }
+        left += column.mWidth;
+    }
+}
+
+void SKInventoryColumnsView::revealColumns(bool trailing)
+{
+    const Column* current = currentColumn();
+    const S32 view = getRect().getWidth();
+    if (current && current->mWidth > 0)
+    {
+        const S32 left = current->mLeft;
+        S32 right = current->mLeft + current->mWidth;
+        const Column& last = mColumns.back();
+        if (trailing && (last.mKind == KIND_GHOST || last.mKind == KIND_DETAILS))
+        {
+            right = last.mLeft + last.mWidth;
+        }
+        if (right > mStripX + view)
+        {
+            mStripX = right - view;
+        }
+        // The current column wins when both don't fit.
+        if (left < mStripX)
+        {
+            mStripX = left;
+        }
+    }
+    mStripX = llmax(0, mStripX);
+    updateStripScrollbar();
+}
+
+void SKInventoryColumnsView::updateStripScrollbar()
+{
+    if (!mStripScrollbar)
+    {
+        return;
+    }
+    const S32 view = getRect().getWidth();
+    const S32 total = mColumns.empty() ? 0 : mColumns.back().mLeft + mColumns.back().mWidth;
+    // A narrower strip gets empty room at its end rather than clamping the scroll.
+    mStripPad = llmax(0, mStripX + view - total);
+    mStripScrollbar->setDocSize(total + mStripPad);
+    mStripScrollbar->setPageSize(view);
+    mStripScrollbar->setDocPos(mStripX);
+    mStripScrollbar->setVisible(total + mStripPad > view);
+}
+
+void SKInventoryColumnsView::reshape(S32 width, S32 height, bool called_from_parent)
+{
+    LLUICtrl::reshape(width, height, called_from_parent);
+    updateStripScrollbar();
+}
+
+S32 SKInventoryColumnsView::rowsPerPage() const
+{
+    const S32 bar = (mStripScrollbar && mStripScrollbar->getVisible()) ? mStripScrollbar->getRect().getHeight() : 0;
+    return llmax(1, (getRect().getHeight() - bar - TOP_PAD) / ROW_HEIGHT);
+}
+
+S32 SKInventoryColumnsView::columnScroll(const Column& column) const
+{
+    auto it = mScrolls.find(column.mFolderID);
+    const S32 rows = (S32)column.mRows.size() + (column.mMore > 0 ? 1 : 0);
+    const S32 first = it != mScrolls.end() ? it->second : 0;
+    return llclamp(first, 0, llmax(0, rows - rowsPerPage()));
+}
+
+void SKInventoryColumnsView::setColumnScroll(const Column& column, S32 first)
+{
+    const S32 rows = (S32)column.mRows.size() + (column.mMore > 0 ? 1 : 0);
+    first = llclamp(first, 0, llmax(0, rows - rowsPerPage()));
+    if (first == 0)
+    {
+        mScrolls.erase(column.mFolderID);
+    }
+    else
+    {
+        mScrolls[column.mFolderID] = first;
+    }
+}
+
+void SKInventoryColumnsView::scrollRowIntoView(const Column& column, S32 row)
+{
+    const S32 first = columnScroll(column);
+    const S32 page = rowsPerPage();
+    if (row < first)
+    {
+        setColumnScroll(column, row);
+    }
+    else if (row >= first + page)
+    {
+        setColumnScroll(column, row - page + 1);
+    }
+}
+
+S32 SKInventoryColumnsView::columnAt(S32 x) const
+{
+    const S32 strip_x = x + mStripX;
+    for (S32 i = 0; i < (S32)mColumns.size(); ++i)
+    {
+        const Column& column = mColumns[i];
+        if (column.mWidth > 0 && strip_x >= column.mLeft && strip_x < column.mLeft + column.mWidth)
+        {
+            return i;
+        }
+    }
+    return -1;
+}
+
+S32 SKInventoryColumnsView::rowAt(const Column& column, S32 y) const
+{
+    const S32 bar = mStripScrollbar->getVisible() ? mStripScrollbar->getRect().getHeight() : 0;
+    const S32 below_top = getRect().getHeight() - TOP_PAD - y;
+    if (below_top < 0 || y < bar)
+    {
+        return -1;
+    }
+    const S32 row = columnScroll(column) + below_top / ROW_HEIGHT;
+    return row < (S32)column.mRows.size() ? row : -1;
+}
+
+uuid_vec_t SKInventoryColumnsView::getSelection() const
+{
+    uuid_vec_t ids;
+    const Column* current = currentColumn();
+    if (current)
+    {
+        for (size_t r = 0; r < current->mRows.size() && r < mSelected.size(); ++r)
+        {
+            if (mSelected[r])
+            {
+                ids.push_back(current->mRows[r].mID);
+            }
+        }
+    }
+    return ids;
+}
+
+void SKInventoryColumnsView::setSelection(const uuid_vec_t& ids)
+{
+    const Column* current = currentColumn();
+    const size_t count = current ? current->mRows.size() : 0;
+    mSelected.assign(count, false);
+    mCursor = -1;
+    for (size_t r = 0; r < count; ++r)
+    {
+        if (std::find(ids.begin(), ids.end(), current->mRows[r].mID) != ids.end())
+        {
+            mSelected[r] = true;
+            mCursor = (S32)r;
+        }
+    }
+    mAnchor = mCursor;
+    mSelectedCount = (S32)std::count(mSelected.begin(), mSelected.end(), true);
+    if (current && mCursor >= 0)
+    {
+        scrollRowIntoView(*current, mCursor);
+    }
+    rebuildTrailing();
+    revealColumns(mSelectedCount > 0);
+}
+
+void SKInventoryColumnsView::selectFirstRow()
+{
+    const Column* current = currentColumn();
+    if (current && !current->mRows.empty() && mSelectedCount == 0)
+    {
+        moveCursor(0, MASK_NONE);
+    }
+}
+
+void SKInventoryColumnsView::notifySelection(bool reveal)
+{
+    mSelectedCount = (S32)std::count(mSelected.begin(), mSelected.end(), true);
+    rebuildTrailing();
+    revealColumns(reveal);
+    if (mSelectionCallback)
+    {
+        mSelectionCallback();
+    }
+}
+
+void SKInventoryColumnsView::clearSelection()
+{
+    mSelected.assign(mSelected.size(), false);
+    mCursor = -1;
+    mAnchor = -1;
+    notifySelection(false);
+}
+
+void SKInventoryColumnsView::selectRange(S32 from, S32 to)
+{
+    mSelected.assign(mSelected.size(), false);
+    for (S32 i = llmax(0, llmin(from, to)); i <= llmax(from, to) && i < (S32)mSelected.size(); ++i)
+    {
+        mSelected[i] = true;
+    }
+}
+
+void SKInventoryColumnsView::moveCursor(S32 row, MASK mask)
+{
+    const Column* current = currentColumn();
+    if (!current || current->mRows.empty())
+    {
+        return;
+    }
+    row = llclamp(row, 0, (S32)current->mRows.size() - 1);
+    if ((mask & MASK_SHIFT) && mAnchor >= 0)
+    {
+        selectRange(mAnchor, row);
+    }
+    else
+    {
+        selectRange(row, row);
+        mAnchor = row;
+    }
+    mCursor = row;
+    scrollRowIntoView(*current, row);
+    notifySelection(true);
+}
+
+bool SKInventoryColumnsView::selectRow(S32 column, S32 row, MASK mask)
+{
+    if (column != mCurrent)
+    {
+        // Another column becomes current, with the row selected; not a history entry.
+        const LLUUID folder_id = mColumns[column].mFolderID;
+        const LLUUID row_id = mColumns[column].mRows[row].mID;
+        if (mMoveCallback)
+        {
+            mMoveCallback(folder_id);
+        }
+        if (mFolderID == folder_id)
+        {
+            setSelection({ row_id });
+            if (mSelectionCallback)
+            {
+                mSelectionCallback();
+            }
+        }
+        return true;
+    }
+    if (mask & MASK_CONTROL)
+    {
+        mSelected[row] = !mSelected[row];
+        mAnchor = row;
+        mCursor = row;
+        notifySelection(true);
+    }
+    else
+    {
+        moveCursor(row, mask);
+    }
+    return true;
+}
+
+void SKInventoryColumnsView::openRow(const SKInventoryRow& row)
+{
+    const LLUUID id = row.mID;
+    const LLUUID target = row.mTargetID;
+    const bool is_folder = row.mIsFolder;
+    if (mOpenCallback)
+    {
+        mOpenCallback(id);
+    }
+    if (is_folder && mFolderID == target)
+    {
+        selectFirstRow();
+    }
+}
+
+void SKInventoryColumnsView::draw()
+{
+    if (mDirty)
+    {
+        rebuild();
+    }
+
+    const S32 bar = mStripScrollbar->getVisible() ? mStripScrollbar->getRect().getHeight() : 0;
+    const S32 height = getRect().getHeight();
+    const bool focused = hasFocus();
+    const S32 view = getRect().getWidth();
+    {
+        LLLocalClipRect clip(LLRect(0, height, view, bar));
+        for (S32 i = 0; i < (S32)mColumns.size(); ++i)
+        {
+            const Column& column = mColumns[i];
+            if (column.mWidth > 0 && column.mLeft + column.mWidth > mStripX && column.mLeft < mStripX + view)
+            {
+                drawColumn(column, i, height, focused);
+            }
+        }
+    }
+    LLUICtrl::draw();
+}
+
+void SKInventoryColumnsView::drawColumn(const Column& column, S32 index, S32 height, bool focused)
+{
+    static LLUIColor sel_color = LLUIColorTable::instance().getColor("EmphasisColor_35");
+    static LLUIColor path_color = LLUIColorTable::instance().getColor("LtGray_35");
+    static LLUIColor ghost_bg = LLUIColorTable::instance().getColor("Black_10");
+    static LLUIColor text_color = LLUIColorTable::instance().getColor("LabelTextColor");
+    static LLUIColor dim_color = LLUIColorTable::instance().getColor("LtGray_50");
+    static LLUIColor rule_color = LLUIColorTable::instance().getColor("White_10");
+    static LLPointer<LLUIImage> arrow = LLUI::getUIImage("Arrow_Small_Right");
+
+    const LLFontGL* font = LLFontGL::getFontSansSerifSmall();
+    const S32 left = column.mLeft - mStripX;
+    const S32 right = left + column.mWidth;
+    LLLocalClipRect clip(LLRect(left, height, right, 0));
+
+    if (column.mKind == KIND_GHOST)
+    {
+        gl_rect_2d(left, height, right, 0, ghost_bg.get());
+    }
+    gl_line_2d(right - 1, height, right - 1, 0, rule_color.get());
+
+    if (column.mKind == KIND_DETAILS)
+    {
+        drawDetails(column, height);
+        return;
+    }
+    if (column.mKind == KIND_SPARE)
+    {
+        return;
+    }
+
+    if (column.mRows.empty())
+    {
+        const std::string& message = column.mLoading ? mLabels.mLoading : mLabels.mEmpty;
+        font->renderUTF8(message, 0, left + 2 * CELL_PAD, height - TOP_PAD - ROW_HEIGHT / 2, dim_color.get(),
+                         LLFontGL::LEFT, LLFontGL::VCENTER);
+        return;
+    }
+
+    const bool is_current = index == mCurrent;
+    const bool is_ghost = column.mKind == KIND_GHOST;
+    LLColor4 selected = sel_color.get();
+    if (!focused)
+    {
+        selected.mV[VALPHA] *= 0.5f;
+    }
+
+    // Only the rows in view are drawn.
+    const S32 first = columnScroll(column);
+    const S32 rows = (S32)column.mRows.size();
+    const S32 last = llmin(rows + (column.mMore > 0 ? 1 : 0), first + rowsPerPage() + 1);
+    for (S32 r = first; r < last; ++r)
+    {
+        const S32 top = height - TOP_PAD - (r - first) * ROW_HEIGHT;
+        const S32 middle = top - ROW_HEIGHT / 2;
+        if (r >= rows)
+        {
+            LLStringUtil::format_map_t args;
+            args["[COUNT]"] = llformat("%d", column.mMore);
+            std::string more = mLabels.mMore;
+            LLStringUtil::format(more, args);
+            font->renderUTF8(more, 0, left + 2 * CELL_PAD, middle, dim_color.get(), LLFontGL::LEFT, LLFontGL::VCENTER);
+            continue;
+        }
+
+        const SKInventoryRow& row = column.mRows[r];
+        if (is_current && r < (S32)mSelected.size() && mSelected[r])
+        {
+            gl_rect_2d(left, top, right - 1, top - ROW_HEIGHT, selected);
+        }
+        else if (row.mID == column.mPathID)
+        {
+            gl_rect_2d(left, top, right - 1, top - ROW_HEIGHT, path_color.get());
+        }
+
+        S32 x = left + CELL_PAD;
+        if (row.mIcon.notNull())
+        {
+            row.mIcon->draw(x, middle - ICON_SIZE / 2, ICON_SIZE, ICON_SIZE);
+            x += ICON_SIZE + CELL_PAD;
+        }
+        S32 text_right = right - CELL_PAD;
+        if (row.mIsFolder && !row.mIsLink && arrow.notNull())
+        {
+            text_right -= arrow->getWidth() + CELL_PAD;
+            arrow->draw(right - CELL_PAD - arrow->getWidth(), middle - arrow->getHeight() / 2);
+        }
+
+        // The ghost's text is dim, brightening under the pointer.
+        LLColor4 color = text_color.get();
+        U8 style = LLFontGL::NORMAL;
+        if (row.mIsLink)
+        {
+            color = dim_color.get();
+            style = LLFontGL::ITALIC;
+        }
+        if (is_ghost && !(mHoverColumn == index && mHoverRow == r))
+        {
+            color = dim_color.get();
+        }
+        font->renderUTF8(row.mName, 0, (F32)x, (F32)middle, color, LLFontGL::LEFT, LLFontGL::VCENTER, style,
+                         LLFontGL::NO_SHADOW, S32_MAX, llmax(0, text_right - x), nullptr, true);
+    }
+
+    // A thin bar says where a column taller than the view is scrolled to.
+    const S32 page = rowsPerPage();
+    const S32 total = rows + (column.mMore > 0 ? 1 : 0);
+    if (total > page)
+    {
+        const S32 bar = mStripScrollbar->getVisible() ? mStripScrollbar->getRect().getHeight() : 0;
+        const S32 track = height - TOP_PAD - bar;
+        const S32 thumb = llmax(16, track * page / total);
+        const S32 thumb_top = height - TOP_PAD - (track - thumb) * first / llmax(1, total - page);
+        gl_rect_2d(right - 5, thumb_top, right - 2, thumb_top - thumb, dim_color.get());
+    }
+}
+
+void SKInventoryColumnsView::drawDetails(const Column& column, S32 height)
+{
+    static LLUIColor text_color = LLUIColorTable::instance().getColor("LabelTextColor");
+    static LLUIColor dim_color = LLUIColorTable::instance().getColor("LtGray_50");
+    if (column.mRows.empty())
+    {
+        return;
+    }
+    const SKInventoryRow& row = column.mRows.front();
+    const S32 left = column.mLeft - mStripX;
+    const S32 width = column.mWidth - 4 * CELL_PAD;
+    S32 top = height - 3 * CELL_PAD;
+    if (row.mIcon.notNull())
+    {
+        row.mIcon->draw(left + (column.mWidth - DETAILS_ICON_SIZE) / 2, top - DETAILS_ICON_SIZE, DETAILS_ICON_SIZE, DETAILS_ICON_SIZE);
+        top -= DETAILS_ICON_SIZE + 2 * CELL_PAD;
+    }
+
+    // The step-1 details content: the name, with the type and the date it was acquired.
+    const LLFontGL* bold = LLFontGL::getFontSansSerifBold();
+    const LLFontGL* font = LLFontGL::getFontSansSerifSmall();
+    bold->renderUTF8(row.mName, 0, (F32)(left + column.mWidth / 2), (F32)top, text_color.get(), LLFontGL::HCENTER, LLFontGL::TOP,
+                     LLFontGL::NORMAL, LLFontGL::NO_SHADOW, S32_MAX, width, nullptr, true);
+    top -= (S32)bold->getLineHeight() + CELL_PAD;
+    for (const std::string* line : { &row.mType, &row.mAcquiredLabel })
+    {
+        if (!line->empty())
+        {
+            font->renderUTF8(*line, 0, (F32)(left + column.mWidth / 2), (F32)top, dim_color.get(), LLFontGL::HCENTER, LLFontGL::TOP,
+                             LLFontGL::NORMAL, LLFontGL::NO_SHADOW, S32_MAX, width, nullptr, true);
+            top -= (S32)font->getLineHeight() + CELL_PAD;
+        }
+    }
+}
+
+bool SKInventoryColumnsView::handleMouseDown(S32 x, S32 y, MASK mask)
+{
+    if (childrenHandleMouseDown(x, y, mask))
+    {
+        return true;
+    }
+    setFocus(true);
+    const S32 index = columnAt(x);
+    if (index < 0)
+    {
+        clearSelection();
+        return true;
+    }
+
+    const Column& column = mColumns[index];
+    if (column.mKind == KIND_PATH)
+    {
+        const S32 row = rowAt(column, y);
+        if (row >= 0)
+        {
+            return selectRow(index, row, mask);
+        }
+        if (index != mCurrent)
+        {
+            // Empty space in another column makes it current, with nothing selected.
+            const LLUUID folder_id = column.mFolderID;
+            if (mMoveCallback)
+            {
+                mMoveCallback(folder_id);
+            }
+        }
+        clearSelection();
+        revealColumns(false);
+    }
+    else if (column.mKind == KIND_GHOST)
+    {
+        // A click in the ghost moves into it and selects there.
+        const S32 row = rowAt(column, y);
+        if (row >= 0)
+        {
+            const LLUUID folder_id = column.mFolderID;
+            const LLUUID row_id = column.mRows[row].mID;
+            if (mMoveCallback)
+            {
+                mMoveCallback(folder_id);
+            }
+            if (mFolderID == folder_id)
+            {
+                setSelection({ row_id });
+                if (mSelectionCallback)
+                {
+                    mSelectionCallback();
+                }
+            }
+        }
+    }
+    return true;
+}
+
+bool SKInventoryColumnsView::handleDoubleClick(S32 x, S32 y, MASK mask)
+{
+    if (childrenHandleDoubleClick(x, y, mask))
+    {
+        return true;
+    }
+    const S32 index = columnAt(x);
+    if (index < 0)
+    {
+        return true;
+    }
+    const Column& column = mColumns[index];
+    if (column.mKind == KIND_PATH || column.mKind == KIND_GHOST)
+    {
+        const S32 row = rowAt(column, y);
+        if (row >= 0)
+        {
+            const SKInventoryRow target = column.mRows[row];
+            openRow(target);
+        }
+    }
+    return true;
+}
+
+bool SKInventoryColumnsView::handleRightMouseDown(S32 x, S32 y, MASK mask)
+{
+    if (childrenHandleRightMouseDown(x, y, mask))
+    {
+        return true;
+    }
+    setFocus(true);
+    const S32 index = columnAt(x);
+    LLUUID menu_folder = mFolderID;
+    if (index >= 0 && (mColumns[index].mKind == KIND_PATH || mColumns[index].mKind == KIND_GHOST))
+    {
+        const Column& column = mColumns[index];
+        const S32 row = rowAt(column, y);
+        if (row >= 0)
+        {
+            if (index == mCurrent)
+            {
+                if (!mSelected[row])
+                {
+                    moveCursor(row, MASK_NONE);
+                }
+            }
+            else if (column.mKind == KIND_GHOST)
+            {
+                handleMouseDown(x, y, MASK_NONE);
+            }
+            else
+            {
+                selectRow(index, row, MASK_NONE);
+            }
+            if (mMenuCallback)
+            {
+                mMenuCallback(x, y, getSelection(), mFolderID);
+            }
+            return true;
+        }
+        // Empty space gives that column's folder menu.
+        menu_folder = column.mFolderID;
+        if (index == mCurrent)
+        {
+            clearSelection();
+        }
+    }
+    else
+    {
+        clearSelection();
+    }
+    if (mMenuCallback)
+    {
+        mMenuCallback(x, y, uuid_vec_t(), menu_folder);
+    }
+    return true;
+}
+
+bool SKInventoryColumnsView::handleHover(S32 x, S32 y, MASK mask)
+{
+    mHoverColumn = columnAt(x);
+    mHoverRow = mHoverColumn >= 0 ? rowAt(mColumns[mHoverColumn], y) : -1;
+    return LLUICtrl::handleHover(x, y, mask);
+}
+
+void SKInventoryColumnsView::onMouseLeave(S32 x, S32 y, MASK mask)
+{
+    mHoverColumn = -1;
+    mHoverRow = -1;
+    LLUICtrl::onMouseLeave(x, y, mask);
+}
+
+bool SKInventoryColumnsView::handleScrollWheel(S32 x, S32 y, LLScrollDelta delta)
+{
+    if (childrenHandleScrollWheel(x, y, delta))
+    {
+        return true;
+    }
+    const S32 index = columnAt(x);
+    if (index >= 0 && (mColumns[index].mKind == KIND_PATH || mColumns[index].mKind == KIND_GHOST))
+    {
+        const Column& column = mColumns[index];
+        setColumnScroll(column, columnScroll(column) + delta.mClicks * WHEEL_ROWS);
+        return true;
+    }
+    return handleScrollHWheel(x, y, delta);
+}
+
+bool SKInventoryColumnsView::handleScrollHWheel(S32 x, S32 y, LLScrollDelta delta)
+{
+    const S32 total = mColumns.empty() ? 0 : mColumns.back().mLeft + mColumns.back().mWidth;
+    const S32 max_x = llmax(0, total - getRect().getWidth());
+    mStripX = llclamp(mStripX + delta.mClicks * HWHEEL_PIXELS, 0, llmax(max_x, mStripX));
+    updateStripScrollbar();
+    return true;
+}
+
+bool SKInventoryColumnsView::handleKeyHere(KEY key, MASK mask)
+{
+    if (mask & MASK_ALT)
+    {
+        return false;
+    }
+    const Column* current = currentColumn();
+    const S32 last = current ? (S32)current->mRows.size() - 1 : -1;
+    const S32 page = rowsPerPage();
+    switch (key)
+    {
+        case KEY_UP:
+            moveCursor((mask & MASK_CONTROL) || mCursor < 0 ? 0 : mCursor - 1, mask);
+            return true;
+        case KEY_DOWN:
+            moveCursor((mask & MASK_CONTROL) ? last : (mCursor < 0 ? 0 : mCursor + 1), mask);
+            return true;
+        case KEY_HOME:
+            moveCursor(0, mask);
+            return true;
+        case KEY_END:
+            moveCursor(last, mask);
+            return true;
+        case KEY_PAGE_UP:
+            moveCursor(mCursor < 0 ? 0 : mCursor - page, mask);
+            return true;
+        case KEY_PAGE_DOWN:
+            moveCursor(mCursor < 0 ? 0 : mCursor + page, mask);
+            return true;
+        case KEY_RIGHT:
+            if (mask == MASK_NONE && current && mCursor >= 0 && mCursor <= last && current->mRows[mCursor].mIsFolder)
+            {
+                const SKInventoryRow target = current->mRows[mCursor];
+                openRow(target);
+            }
+            return true;
+        case KEY_LEFT:
+            if (mask != MASK_NONE)
+            {
+                return true;
+            }
+            if (mCurrent <= 0)
+            {
+                // From the first column, ← goes back into the sidebar.
+                if (mSelectedCount > 0)
+                {
+                    clearSelection();
+                }
+                if (mSidebarCallback)
+                {
+                    mSidebarCallback();
+                }
+            }
+            else if (mUpCallback)
+            {
+                mUpCallback();
+            }
+            return true;
+        case KEY_RETURN:
+            if (mask == MASK_NONE && current && mCursor >= 0 && mCursor <= last)
+            {
+                const SKInventoryRow target = current->mRows[mCursor];
+                openRow(target);
+                return true;
+            }
+            break;
+        case KEY_BACKSPACE:
+            if (mask == MASK_NONE && mUpCallback)
+            {
+                mUpCallback();
+                return true;
+            }
+            break;
+        case KEY_ESCAPE:
+            if (mSelectedCount > 0)
+            {
+                clearSelection();
+                return true;
+            }
+            break;
+        case KEY_DELETE:
+            if (canDoDelete())
+            {
+                doDelete();
+            }
+            return true;
+        case KEY_F2:
+        {
+            const uuid_vec_t selection = getSelection();
+            if (selection.size() == 1)
+            {
+                SKInventoryExplorerActions::rename(selection.front());
+            }
+            return true;
+        }
+        case 'A':
+            if (mask == MASK_CONTROL)
+            {
+                selectAll();
+                return true;
+            }
+            break;
+        default:
+            break;
+    }
+    return false;
+}
+
+bool SKInventoryColumnsView::handleToolTip(S32 x, S32 y, MASK mask)
+{
+    const S32 index = columnAt(x);
+    if (index >= 0 && (mColumns[index].mKind == KIND_PATH || mColumns[index].mKind == KIND_GHOST))
+    {
+        const S32 row = rowAt(mColumns[index], y);
+        if (row >= 0)
+        {
+            LLToolTipMgr::instance().show(mColumns[index].mRows[row].mName);
+            return true;
+        }
+    }
+    return LLUICtrl::handleToolTip(x, y, mask);
+}
+
+void SKInventoryColumnsView::onFocusReceived()
+{
+    gEditMenuHandler = this;
+    LLUICtrl::onFocusReceived();
+}
+
+void SKInventoryColumnsView::onFocusLost()
+{
+    if (gEditMenuHandler == this)
+    {
+        gEditMenuHandler = nullptr;
+    }
+    LLUICtrl::onFocusLost();
+}
+
+void SKInventoryColumnsView::doDelete()
+{
+    SKInventoryExplorerActions::deleteObjects(getSelection());
+}
+
+bool SKInventoryColumnsView::canDoDelete() const
+{
+    return SKInventoryExplorerActions::canDelete(getSelection(), mFolderID);
+}
+
+void SKInventoryColumnsView::selectAll()
+{
+    if (currentColumn())
+    {
+        mSelected.assign(mSelected.size(), true);
+        notifySelection(true);
+    }
+}
+
+bool SKInventoryColumnsView::canSelectAll() const
+{
+    const Column* current = currentColumn();
+    return current && !current->mRows.empty();
+}
