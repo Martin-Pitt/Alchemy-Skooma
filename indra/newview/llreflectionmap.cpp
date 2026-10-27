@@ -409,6 +409,21 @@ bool LLReflectionMap::isRelevant() const
         return false;
     }
 
+    if (mSuppressedByRoomProbe) // <SK:Nexii> Room probes: a room part's sphere stands in for this octree probe.
+    {
+        return false;
+    }
+
+    if (mRoomProbe && probe_level < 3) // <SK:Nexii> Room probes stand in for octree probes, which only level 3 has.
+    {
+        return false;
+    }
+
+    if (mClusterFill && probe_level < 3) // <SK:Nexii> Cluster probes fill under the automatic probes, which only level 3 has.
+    {
+        return false;
+    }
+
     if (probe_level == 3)
     { // all automatics are relevant
         return true;

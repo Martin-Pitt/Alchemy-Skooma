@@ -649,6 +649,8 @@ if(AL_BUILD_VIEWER)
     skaircells.cpp # <SK:Nexii> air cells
     skairoverlay.cpp # <SK:Nexii> air cells
     skrooms.cpp # <SK:Nexii> rooms and spaces
+    skroomprobes.cpp # <SK:Nexii> room probes
+    skclusterprobes.cpp # <SK:Nexii> cluster probes
     skobjectfaces.cpp # <SK:Nexii> census
     skworldcensus.cpp # <SK:Nexii> census
     skworldoverlay.cpp # <SK:Nexii> census
@@ -1568,6 +1570,8 @@ if(AL_BUILD_VIEWER)
     skphysicsshape.h # <SK:Nexii> physics shapes
     skaircells.h # <SK:Nexii> air cells
     skrooms.h # <SK:Nexii> rooms and spaces
+    skroomprobes.h # <SK:Nexii> room probes
+    skclusterprobes.h # <SK:Nexii> cluster probes
     skobjectfaces.h # <SK:Nexii> census
     skworldcensus.h # <SK:Nexii> census
     skworldoverlay.h # <SK:Nexii> census
