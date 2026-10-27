@@ -13,7 +13,7 @@
  name="sk_inventory_explorer"
  save_rect="true"
  single_instance="true"
- title="Inventory Explorer">
+ title="">
     <string name="new_tab_tooltip">New tab (Ctrl+T)</string>
     <string name="view_unavailable">(not built yet)</string>
     <string name="col_name">Name</string>
@@ -190,6 +190,7 @@
      top="56"
      width="900">
         <layout_panel
+         height="442"
          auto_resize="false"
          layout="topleft"
          min_width="140"
@@ -330,6 +331,7 @@
             </scroll_container>
         </layout_panel>
         <layout_panel
+         height="442"
          auto_resize="false"
          layout="topleft"
          name="sidebar_edge_panel"
@@ -346,6 +348,7 @@
              width="6" />
         </layout_panel>
         <layout_panel
+         height="442"
          auto_resize="true"
          layout="topleft"
          min_width="200"
@@ -362,6 +365,7 @@
              width="418" />
         </layout_panel>
         <layout_panel
+         height="442"
          auto_resize="false"
          layout="topleft"
          name="details_edge_panel"
@@ -378,6 +382,7 @@
              width="6" />
         </layout_panel>
         <layout_panel
+         height="442"
          auto_resize="false"
          layout="topleft"
          min_width="140"
