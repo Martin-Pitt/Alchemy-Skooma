@@ -182,7 +182,8 @@ std::vector<LLUUID> SKOverviewCensus::restlessParts() const
 }
 
 U32 SKOverviewCensus::logChurn(std::vector<std::pair<U64, std::pair<char, LLUUID>>>& entries,
-                               std::vector<std::pair<U64, std::pair<char, LLUUID>>>& moves)
+                               std::vector<std::pair<U64, std::pair<char, LLUUID>>>& moves,
+                               const std::string& sculpt_moved)
 {
     LL_PROFILE_ZONE_SCOPED;
     // What came and went since the last rebuild, by kind (S sculpt, U surrounds, V void surround, R record, C a part's
@@ -267,6 +268,10 @@ U32 SKOverviewCensus::logChurn(std::vector<std::pair<U64, std::pair<char, LLUUID
             what += " " + id.asString();
         }
         what += ")";
+    }
+    if (!sculpt_moved.empty())
+    {
+        what += " sculpt inputs:" + sculpt_moved;
     }
     LL_INFOS("SKOverview") << "census rebuild of " << entries.size() << " entries:" << what << LL_ENDL;
     return moved_records;
@@ -820,6 +825,8 @@ bool SKOverviewCensus::update()
         std::sort(mCoverGrid.begin(), mCoverGrid.end());
     }
     std::vector<CoverInput> sculpt_cover;
+    std::string sculpt_moved; // which inputs of which sculpts' entries moved since the last walk
+    U32 sculpt_moved_n = 0;
     {
         LL_PROFILE_ZONE_NAMED("sk overview census sculpts");
         for (const LLUUID& candidate : mSculptCandidates)
@@ -897,8 +904,14 @@ bool SKOverviewCensus::update()
             sc.mTris = cached.mTris;
             sc.mHeight = cached.mHeight;
             sc.mKey = cached.mKey;
+            // A region wide or more is never terrain in a region (mesh is): the void's land alone, as a surround record is.
+            sc.mVoidOnly = llmax(scale.mV[VX], llmax(scale.mV[VY], scale.mV[VZ])) >= volume->getRegion()->getWidth();
             const Seen seen = seenOf(sc.mPart);
             mUnknownLook |= seen == Seen::UNKNOWN;
+            if (sc.mVoidOnly && seen != Seen::VISIBLE)
+            {
+                continue; // no cover test: only a visible one is land
+            }
             CoverInput cover;
             if (seen == Seen::INVISIBLE)
             {
@@ -926,10 +939,10 @@ bool SKOverviewCensus::update()
                     what += was.mCover != now.mCover ? llformat(" cover key (%u->%u candidates)", (U32)was.mCandidates,
                                                                 (U32)now.mCandidates) : "";
                     what += was.mPending != now.mPending ? llformat(" pending %d->%d", was.mPending, now.mPending) : "";
-                    if (!what.empty())
+                    if (!what.empty() && sculpt_moved_n++ < 4)
                     {
-                        LL_DEBUGS("SKOverviewChurn") << "census sculpt " << sc.mPart << " root " << sc.mRoot << " entry moved:" << what
-                                                    << LL_ENDL;
+                        // On the rebuild line, so a capture names the input that re-signs it.
+                        sculpt_moved += " " + sc.mPart.asString().substr(0, 8) + what + (sc.mVoidOnly ? " void" : "") + ";";
                     }
                 }
                 mSculptInputs[sc.mPart] = now;
@@ -1122,7 +1135,7 @@ bool SKOverviewCensus::update()
     {
         return !mRegions.empty();
     }
-    const U32 missed = logChurn(entries, moves);
+    const U32 missed = logChurn(entries, moves, sculpt_moved);
     if (!announced && missed)
     {
         LL_WARNS("SKOverview") << "census full walk found " << missed << " record entries the stamp missed" << LL_ENDL;
@@ -1159,6 +1172,8 @@ bool SKOverviewCensus::update()
     job->mGroupCluster = std::move(group_cluster);
     job->mAnchors.resize(job->mRoots.size());
     std::vector<bool> anchored(job->mRoots.size(), false);
+    auto voidOnlyOf = [&job](size_t i)
+    { return i < job->mKept.size() ? (bool)job->mVoidOnly[i] : job->mSculpts[i - job->mKept.size()].mVoidOnly; };
     for (size_t i = 0; i < job->mGroupOf.size(); ++i)
     {
         const U32 group = job->mGroupOf[i];
@@ -1166,7 +1181,7 @@ bool SKOverviewCensus::update()
         {
             // A linkset is whole only when all of it is a surround in the void: a part's physics record beside its
             // surround record is land.
-            job->mAnchors[group].second = job->mAnchors[group].second && i < job->mKept.size() && job->mVoidOnly[i];
+            job->mAnchors[group].second = job->mAnchors[group].second && voidOnlyOf(i);
             continue; // once per linkset
         }
         anchored[group] = true;
@@ -1183,7 +1198,7 @@ bool SKOverviewCensus::update()
             const LLViewerObject* root = gObjectList.findObject(rec.mRoot);
             anchor = root && !root->isDead() ? root->getPositionGlobal() : (rec.mMin + rec.mMax) * 0.5;
         }
-        job->mAnchors[group] = { anchor, i < job->mKept.size() && job->mVoidOnly[i] };
+        job->mAnchors[group] = { anchor, voidOnlyOf(i) };
     }
     for (const LLViewerRegion* region : LLWorld::getInstance()->getRegionList())
     {
@@ -1313,7 +1328,7 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildLinksets(const J
             part_height = (F32)(rec.mMax.mdV[VZ] - rec.mMin.mdV[VZ]);
             fixed_class = job.mFixed[i];
         }
-        const bool in_void_only = i < kept.size() && job.mVoidOnly[i];
+        const bool in_void_only = i < kept.size() ? job.mVoidOnly[i] : sculpts[i - kept.size()].mVoidOnly;
         // An invisible part a visible neighbour that collides with nothing holds, or that sticks out of the colliding
         // ones by no more than a sliver, stands in for them; one sticking out further is extra, hatched where it does;
         // one with nothing visible near it is a barrier, hatched whole. While a neighbour's type or look is not known
@@ -1543,6 +1558,10 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildLinksets(const J
                 {
                     const RenderedPart& sc = sculpts[i - kept.size()];
                     key = skoverview::scramble(key ^ sc.mKey ^ ((U64)sc.mFixed << 48) ^ ((U64)sc.mSurround << 56));
+                    if (sc.mVoidOnly)
+                    {
+                        key = skoverview::scramble(key ^ regions_key ^ 0x766f6964ull);
+                    }
                 }
                 else
                 {
@@ -2343,6 +2362,7 @@ void SKOverviewCensus::gatherSurrounds(const SKCensusSnapshot& snap)
         part.mHeight = hi - lo;
         part.mTris = std::move(tris);
         part.mSurround = true;
+        part.mVoidOnly = size >= volume->getRegion()->getWidth(); // never in-region terrain at that size
         const LLVector3d centre = volume->getPositionGlobal();
         U64 h = 1469598103934665603ull;
         h = (h ^ part.mPart.getCRC32()) * 1099511628211ull;

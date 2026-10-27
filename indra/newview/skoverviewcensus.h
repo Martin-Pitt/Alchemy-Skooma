@@ -276,6 +276,7 @@ private:
         F32 mHeight = 0.f;
         skoverview::CensusClass mFixed = skoverview::NUM_CENSUS_CLASSES;
         bool mSurround = false;         ///< a surround (gatherSurrounds), not a near sculpt
+        bool mVoidOnly = false;         ///< a region wide or more: drawn only over no connected region
         U64 mKey = 0;                   ///< what its triangles were worked from: its volume, map and placement
     };
     void gatherSurrounds(const struct SKCensusSnapshot& snap);
@@ -448,7 +449,7 @@ private:
     /// and turns parts that moved twice within the window restless, from their shape and place alone (moves).
     /// Returns how many record and linkset entries (R, C) of settled parts moved.
     U32 logChurn(std::vector<std::pair<U64, std::pair<char, LLUUID>>>& entries,
-                  std::vector<std::pair<U64, std::pair<char, LLUUID>>>& moves);
+                  std::vector<std::pair<U64, std::pair<char, LLUUID>>>& moves, const std::string& sculpt_moved);
     std::vector<std::pair<U64, std::pair<char, LLUUID>>> mLastEntries;
     std::vector<std::pair<U64, std::pair<char, LLUUID>>> mLastMoves;
     static constexpr F64 RESTLESS_WINDOW_S = 20.0;  ///< a second change within this turns a part restless
