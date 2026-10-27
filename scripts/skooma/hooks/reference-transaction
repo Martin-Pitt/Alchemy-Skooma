@@ -34,7 +34,7 @@ cat >&2 <<'MSG'
   develop must stay identical to upstream — never commit, merge or reset onto it.
     update from upstream :  git skooma sync
     start a feature      :  git skooma new <name>
-    land work            :  git skooma integrate
+    land work            :  git skooma integrate <name>
 
 MSG
 exit 1

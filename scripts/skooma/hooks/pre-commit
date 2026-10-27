@@ -11,7 +11,7 @@ develop | publish)
   Refused: '$branch' does not take commits.
 
   Work happens in a worktree:  git skooma new <name>
-  Then land it:                git skooma integrate
+  Then land it:                git skooma integrate <name>
 
 MSG
     exit 1
