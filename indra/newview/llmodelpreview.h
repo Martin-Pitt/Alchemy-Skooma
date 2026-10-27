@@ -33,6 +33,7 @@
 #include "llmeshrepository.h"
 #include "llmodelloader.h" //NUM_LOD
 #include "llmodel.h"
+#include "almeshsimplifier.h"
 
 class LLJoint;
 class LLVOAvatar;
@@ -207,6 +208,9 @@ protected:
 
     void warnTextureScaling();
     void lookupLODModelFiles(S32 lod);
+    // Drops the face copies of models no LOD and not the base holds any
+    // longer, which nothing restores into and the copies alone keep.
+    void dropFacesCopiesOfLostModels();
 
 private:
     //Utility function for controller vertex compare
@@ -217,6 +221,8 @@ private:
     LLVOAvatar* getPreviewAvatar(void) { return mPreviewAvatar; }
     // Count amount of original models, excluding sub-models
     static U32 countRootModels(LLModelLoader::model_list models);
+    // The simplifier of mBaseModel[mdl_idx], kept in mSimplifiers.
+    const ALMeshSimplifier& simplifierFor(U32 mdl_idx);
     LLVector3   mGroundPlane[4];
     void        renderGroundPlane(float z_offset = 0.0f);
     /// Indicates whether we should warn of high-lod meshes that do not have a corresponding physics mesh.
@@ -284,10 +290,26 @@ protected:
     LLModelLoader::model_list mBaseModel;
 
     typedef std::vector<LLVolumeFace>       v_LLVolumeFace_t;
-    typedef std::vector<v_LLVolumeFace_t>   vv_LLVolumeFace_t;
+    // Each model's faces as they were before generateNormals first rewrote
+    // them, for restoreNormals to put back into that model: a model the
+    // base and a LOD share is copied once, before either is rewritten, and
+    // a model loaded or made since takes nothing of another's.
+    typedef std::vector<std::pair<LLPointer<LLModel>, v_LLVolumeFace_t>> faces_copy_t;
 
-    vv_LLVolumeFace_t mModelFacesCopy[LLModel::NUM_LODS];
-    vv_LLVolumeFace_t mBaseModelFacesCopy;
+    faces_copy_t mModelFacesCopy[LLModel::NUM_LODS];
+    faces_copy_t mBaseModelFacesCopy;
+
+    // A simplifier of each of mBaseModel's models, made the first time a
+    // level of detail is generated from the model and kept for the levels
+    // after, while it is the same model with the faces it had. They are
+    // dropped where the base models are replaced or their faces rewritten.
+    struct BaseSimplifier
+    {
+        LLPointer<LLModel> mModel;
+        LLModel::material_list mMaterialList; // the model's when it was made
+        std::unique_ptr<const ALMeshSimplifier> mSimplifier;
+    };
+    std::vector<BaseSimplifier> mSimplifiers;
 
     U32 mGroup;
 
