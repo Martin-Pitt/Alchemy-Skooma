@@ -3,8 +3,8 @@
  * @brief Automatic reflection probe spheres for rooms: parts, placement, clearing placed probes, budget and churn.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
- * Alchemy Viewer Source Code
- * Copyright (C) 2026, Alchemy Viewer Project.
+ * Second Life Viewer Source Code
+ * Copyright (C) 2026, Martin "Nexii" Pitt <martin.r.pitt@gmail.com>
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -75,7 +75,7 @@ namespace skworld
         {
             return false;
         }
-        // Match the navmesh's solid fill: merge shared-edge crossings, pair
+        // Fill solids as the air cells do: merge shared-edge crossings, pair
         // them by height, and union decomposition pieces rather than XOR them.
         const auto& tris = *record.mTriangles;
         auto inside = [&](size_t begin, size_t end)

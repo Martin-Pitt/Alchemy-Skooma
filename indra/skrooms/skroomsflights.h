@@ -3,8 +3,8 @@
  * @brief Stairs, ramps and climbs found on the spaces' floor cells: the rooms layer's flights, read off the air.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
- * Alchemy Viewer Source Code
- * Copyright (C) 2026, Alchemy Viewer Project.
+ * Second Life Viewer Source Code
+ * Copyright (C) 2026, Martin "Nexii" Pitt <martin.r.pitt@gmail.com>
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -119,7 +119,7 @@ namespace skworld
     struct FlightStats
     {
         U32 mCells = 0;             ///< floor cells read
-        U32 mFitted = 0;            ///< of those, object floor near a step, fitted
+        U32 mFitted = 0;            ///< of those, object floor whose link walks rise, fitted
         U32 mCandidates = 0;        ///< of those, sloped
         U32 mRegions = 0;           ///< grown regions
         U32 mFlights = 0;           ///< kept
