@@ -57,6 +57,13 @@ SKInventoryListView::SKInventoryListView(const Params& p)
     updateColumns();
 }
 
+void SKInventoryListView::setSort(EColumn key, bool ascending)
+{
+    // A sort chosen anywhere but this header starts the header's cycle again.
+    mHeaderClicks = 0;
+    SKInventoryFlatView::setSort(key, ascending);
+}
+
 void SKInventoryListView::setHiddenColumns(const std::set<std::string>& keys)
 {
     for (S32 i = 0; i < COL_COUNT; ++i)
@@ -325,19 +332,19 @@ bool SKInventoryListView::handleHeaderMouseDown(S32 x, S32 y, MASK mask)
     if (col >= 0)
     {
         // Each header cycles: its first direction, flipped, then back to the default sort.
+        // setSort forgets the clicks, so they are counted after it.
         if (col != mSortKey)
         {
-            mHeaderClicks = 1;
             setSort((EColumn)col, col != COL_ACQUIRED);
+            mHeaderClicks = 1;
         }
-        else if (mHeaderClicks < 2)
+        else if (mHeaderClicks == 1)
         {
-            mHeaderClicks = 2;
             setSort(mSortKey, !mSortAscending);
+            mHeaderClicks = 2;
         }
         else
         {
-            mHeaderClicks = 0;
             setSort(COL_ACQUIRED, false);
         }
         if (mSortCallback)

@@ -66,6 +66,17 @@ SKInventoryIconsView::~SKInventoryIconsView()
     releaseHiddenTextures();
 }
 
+void SKInventoryIconsView::onVisibilityChange(bool new_visibility)
+{
+    // A hidden view holds no priority on its tiles.
+    if (!new_visibility)
+    {
+        mVisibleImages.clear();
+        releaseHiddenTextures();
+    }
+    SKInventoryFlatView::onVisibilityChange(new_visibility);
+}
+
 void SKInventoryIconsView::setTileSize(S32 size)
 {
     size = llclamp(size, MIN_TILE, MAX_TILE);
@@ -75,7 +86,6 @@ void SKInventoryIconsView::setTileSize(S32 size)
         const S32 line = lineAt(getRect().getHeight());
         const S32 row = line >= 0 ? mLines[line].mFirst : -1;
         mTileSize = size;
-        endRename();
         layoutRows();
         if (row >= 0 && row < (S32)mRowLine.size())
         {
@@ -315,7 +325,6 @@ LLRect SKInventoryIconsView::nameRect(S32 row, bool& multiline) const
 
 bool SKInventoryIconsView::handleScrollWheel(S32 x, S32 y, LLScrollDelta delta)
 {
-    endRename();
     mScrollbar->setDocPos(mScrollbar->getDocPos() + delta.mClicks * WHEEL_PIXELS);
     return true;
 }
@@ -337,7 +346,8 @@ void SKInventoryIconsView::releaseHiddenTextures()
     {
         if (std::find(mVisibleImages.begin(), mVisibleImages.end(), it->first) == mVisibleImages.end())
         {
-            it->second->setBoostLevel(LLGLTexture::BOOST_NONE);
+            // Only the hold this view put on it goes; the texture's own level and others' holds stay.
+            it->second->removeBoostHold(LLGLTexture::BOOST_THUMBNAIL);
             it = mTextures.erase(it);
         }
         else
@@ -372,7 +382,8 @@ void SKInventoryIconsView::drawTile(const SKInventoryRow& row, const LLRect& rec
         if (it == mTextures.end())
         {
             LLViewerFetchedTexture* texture = LLViewerTextureManager::getFetchedTexture(row.mImageID, FTT_DEFAULT, MIPMAP_YES,
-                                                                                        LLGLTexture::BOOST_THUMBNAIL);
+                                                                                        LLGLTexture::BOOST_NONE);
+            texture->addBoostHold(LLGLTexture::BOOST_THUMBNAIL);
             it = mTextures.emplace(row.mImageID, texture).first;
         }
         mVisibleImages.push_back(row.mImageID);

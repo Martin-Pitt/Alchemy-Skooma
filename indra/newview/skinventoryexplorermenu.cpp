@@ -59,6 +59,7 @@
 #include "rlvactions.h"
 #include "rlvlocks.h"
 
+#include <deque>
 #include <fmt/format.h>
 
 // The gallery menu's outfit action, defined in llinventorygallerymenu.cpp.
@@ -357,83 +358,70 @@ void cut(const uuid_vec_t& ids)
     }
 }
 
+// The panel the bridges are built over: the sidebar's Inventory panel, set by the floater.
+static LLHandle<LLPanel> sBridgePanel;
+
+void setBridgePanel(LLInventoryPanel* panel)
+{
+    sBridgePanel = panel ? panel->getHandle() : LLHandle<LLPanel>();
+}
+
+static LLInventoryPanel* bridge_panel()
+{
+    return static_cast<LLInventoryPanel*>(sBridgePanel.get());
+}
+
+// A folder's stock bridge, kept alive a while: its paste may ask first and answers on the bridge itself.
+static LLFolderBridge* folder_bridge(const LLUUID& dest_id)
+{
+    static std::deque<std::unique_ptr<LLInvFVBridge>> kept;
+    LLInventoryPanel* panel = bridge_panel();
+    if (!panel || !gInventory.getCategory(dest_id))
+    {
+        return nullptr;
+    }
+    LLInvFVBridge* bridge = LLInvFVBridge::createBridge(LLAssetType::AT_CATEGORY, LLAssetType::AT_CATEGORY, LLInventoryType::IT_CATEGORY,
+                                                       panel, nullptr, nullptr, dest_id);
+    if (!bridge)
+    {
+        return nullptr;
+    }
+    kept.emplace_back(bridge);
+    if (kept.size() > 8)
+    {
+        kept.pop_front();
+    }
+    return dynamic_cast<LLFolderBridge*>(bridge);
+}
+
 bool canPaste(const LLUUID& dest_id)
 {
-    if (!LLClipboard::instance().hasContents() || !gInventory.getCategory(dest_id)
-        || !gInventory.isObjectDescendentOf(dest_id, gInventory.getRootFolderID()))
-    {
-        return false;
-    }
-    if (dest_id == gInventory.findCategoryUUIDForType(LLFolderType::FT_CURRENT_OUTFIT))
-    {
-        return false;
-    }
-    if (LLClipboard::instance().isCutMode())
-    {
-        return true;
-    }
-    uuid_vec_t objects;
-    LLClipboard::instance().pasteFromClipboard(objects);
-    for (const LLUUID& id : objects)
-    {
-        if (!LLInventoryGallery::isItemCopyable(id))
-        {
-            return false;
-        }
-    }
-    return true;
+    LLFolderBridge* bridge = LLClipboard::instance().hasContents() ? folder_bridge(dest_id) : nullptr;
+    return bridge && bridge->isClipboardPasteable();
 }
 
 void paste(const LLUUID& dest_id)
 {
-    // As LLInventoryGallery::paste(dest, ...) does it.
-    if (!canPaste(dest_id))
+    // LLFolderBridge::pasteFromClipboard, with its RLVa, outfit, landmark and Marketplace rules.
+    if (LLFolderBridge* bridge = folder_bridge(dest_id))
     {
-        return;
+        bridge->performAction(&gInventory, "paste");
     }
-    const LLUUID& marketplacelistings_id = gInventory.getMarketplaceListingsUUID();
-    if (marketplacelistings_id.notNull() && gInventory.isObjectDescendentOf(dest_id, marketplacelistings_id))
+}
+
+bool canPasteLink(const LLUUID& dest_id)
+{
+    static LLCachedControl<bool> inventory_linking(gSavedSettings, "InventoryLinking", true);
+    LLFolderBridge* bridge = (inventory_linking && LLClipboard::instance().hasContents()) ? folder_bridge(dest_id) : nullptr;
+    return bridge && bridge->isClipboardPasteableAsLink();
+}
+
+void pasteLink(const LLUUID& dest_id)
+{
+    if (LLFolderBridge* bridge = folder_bridge(dest_id))
     {
-        return;
+        bridge->performAction(&gInventory, "paste_link");
     }
-    const bool is_cut_mode = LLClipboard::instance().isCutMode();
-    uuid_vec_t objects;
-    LLClipboard::instance().pasteFromClipboard(objects);
-    for (const LLUUID& id : objects)
-    {
-        if (marketplacelistings_id.notNull() && gInventory.isObjectDescendentOf(id, marketplacelistings_id)
-            && (LLMarketplaceData::instance().isInActiveFolder(id) || LLMarketplaceData::instance().isListedAndActive(id)))
-        {
-            return;
-        }
-        if (LLViewerInventoryCategory* cat = gInventory.getCategory(id))
-        {
-            if (is_cut_mode)
-            {
-                gInventory.changeCategoryParent(cat, dest_id, false);
-            }
-            else
-            {
-                copy_inventory_category(&gInventory, cat, dest_id);
-            }
-        }
-        else if (LLViewerInventoryItem* item = gInventory.getItem(id))
-        {
-            if (is_cut_mode)
-            {
-                gInventory.changeItemParent(item, dest_id, false);
-            }
-            else if (item->getIsLinkType())
-            {
-                link_inventory_object(dest_id, id, nullptr);
-            }
-            else
-            {
-                copy_inventory_item(gAgent.getID(), item->getPermissions().getOwner(), item->getUUID(), dest_id, std::string(), nullptr);
-            }
-        }
-    }
-    LLClipboard::instance().setCutMode(false);
 }
 
 void toggleFavorite(const uuid_vec_t& ids)
@@ -454,8 +442,9 @@ void create(const LLUUID& dest_id, const std::string& kind)
     menu_create_inventory_item(nullptr, dest_id, LLSD(kind));
 }
 
-void bridgeAction(LLInventoryPanel* panel, const LLUUID& id, const std::string& action)
+void bridgeAction(const LLUUID& id, const std::string& action)
 {
+    LLInventoryPanel* panel = bridge_panel();
     const LLInventoryObject* obj = gInventory.getObject(id);
     if (!panel || !obj)
     {
@@ -592,15 +581,30 @@ static void register_options(const SKExplorerOptions& options, LLUICtrl::CommitC
                          { return options.mCheck && options.mCheck(param.asString()); });
 }
 
+LLHandle<LLContextMenu> SKInventoryExplorerContextMenu::sOptionsMenu;
+
+// static
+void SKInventoryExplorerContextMenu::closeOptionsMenu()
+{
+    if (LLContextMenu* menu = sOptionsMenu.get())
+    {
+        menu->die();
+    }
+    sOptionsMenu.markDead();
+}
+
 // static
 void SKInventoryExplorerContextMenu::showOptionsMenu(const std::string& filename, const SKExplorerOptions& options, LLView* spawn, S32 x, S32 y)
 {
     LLUICtrl::CommitCallbackRegistry::ScopedRegistrar registrar;
     LLUICtrl::EnableCallbackRegistry::ScopedRegistrar enable_registrar;
     register_options(options, registrar, enable_registrar);
+    // One at a time, as LLListContextMenu::show keeps its menu.
+    closeOptionsMenu();
     LLContextMenu* menu = createFromFile(filename);
     if (menu)
     {
+        sOptionsMenu = menu->getHandle();
         menu->show(x, y);
         LLMenuGL::showPopup(spawn, menu, x, y);
     }
@@ -650,19 +654,19 @@ void SKInventoryExplorerContextMenu::addIconRow(LLContextMenu* menu)
     if (mRootMode)
     {
         // Over empty space only Paste, into the open folder.
-        row->mIcons.push_back(icon("paste", "Paste  (Ctrl+V)", "Icon_Paste", SKInventoryExplorerActions::canPaste(first)));
+        row->mIcons.push_back(icon("paste", string("tip_paste"), "Icon_Paste", SKInventoryExplorerActions::canPaste(first)));
     }
     else
     {
         const bool favorite = get_is_favorite(first);
-        row->mIcons.push_back(icon("cut", "Cut  (Ctrl+X)", "Clipboard_Cut", SKInventoryExplorerActions::canCut(mUUIDs)));
-        row->mIcons.push_back(icon("copy", "Copy  (Ctrl+C)", "Icon_Copy", SKInventoryExplorerActions::canCopy(mUUIDs)));
-        row->mIcons.push_back(icon("paste", "Paste  (Ctrl+V)", "Icon_Paste",
+        row->mIcons.push_back(icon("cut", string("tip_cut"), "Clipboard_Cut", SKInventoryExplorerActions::canCut(mUUIDs)));
+        row->mIcons.push_back(icon("copy", string("tip_copy"), "Icon_Copy", SKInventoryExplorerActions::canCopy(mUUIDs)));
+        row->mIcons.push_back(icon("paste", string("tip_paste"), "Icon_Paste",
                                    single_folder && SKInventoryExplorerActions::canPaste(SKInventoryExplorerActions::folderOf(first))));
-        row->mIcons.push_back(icon("favorite", favorite ? "Remove from Favorites" : "Add to Favorites",
+        row->mIcons.push_back(icon("favorite", string(favorite ? "tip_unfavorite" : "tip_favorite"),
                                    favorite ? "Inv_Favorite_Star_Full" : "Inv_Favorite_Star_Content",
                                    gInventory.isObjectDescendentOf(first, gInventory.getRootFolderID())));
-        row->mIcons.push_back(icon("delete", "Delete  (Del)", "TrashItem_Off",
+        row->mIcons.push_back(icon("delete", string("tip_delete"), "TrashItem_Off",
                                    SKInventoryExplorerActions::canDelete(mUUIDs, mListedFolderID)));
     }
     row->mAction = [this](const std::string& action) { doToSelected(action); };
@@ -696,19 +700,39 @@ void SKInventoryExplorerContextMenu::addAttachmentPoints(LLContextMenu* menu)
     }
 }
 
+// Whether anything under the folder can be worn, an object or a gesture; one walk that stops at the first.
 static bool folder_has_wearables(const LLUUID& id)
 {
-    LLFindWearables is_wearable;
-    LLIsType is_object(LLAssetType::AT_OBJECT);
-    LLIsType is_gesture(LLAssetType::AT_GESTURE);
-    for (LLInventoryCollectFunctor* functor : std::initializer_list<LLInventoryCollectFunctor*>{ &is_wearable, &is_object, &is_gesture })
+    const LLUUID trash_id = gInventory.findCategoryUUIDForType(LLFolderType::FT_TRASH);
+    std::vector<LLUUID> pending{ id };
+    while (!pending.empty())
     {
-        LLInventoryModel::cat_array_t cats;
-        LLInventoryModel::item_array_t items;
-        gInventory.collectDescendentsIf(id, cats, items, LLInventoryModel::EXCLUDE_TRASH, *functor);
-        if (!items.empty())
+        const LLUUID folder = pending.back();
+        pending.pop_back();
+        LLInventoryModel::cat_array_t* cats = nullptr;
+        LLInventoryModel::item_array_t* items = nullptr;
+        gInventory.getDirectDescendentsOf(folder, cats, items);
+        if (items)
         {
-            return true;
+            for (const LLViewerInventoryItem* item : *items)
+            {
+                const LLAssetType::EType type = item->getType();
+                if (type == LLAssetType::AT_OBJECT || type == LLAssetType::AT_GESTURE || type == LLAssetType::AT_CLOTHING
+                    || type == LLAssetType::AT_BODYPART)
+                {
+                    return true;
+                }
+            }
+        }
+        if (cats)
+        {
+            for (const LLViewerInventoryCategory* cat : *cats)
+            {
+                if (cat->getUUID() != trash_id)
+                {
+                    pending.push_back(cat->getUUID());
+                }
+            }
         }
     }
     return false;
@@ -732,7 +756,11 @@ void SKInventoryExplorerContextMenu::updateMenuItemsVisibility(LLContextMenu* me
     {
         items.push_back("title");
         LLMenuItemGL* title = menu->getChild<LLMenuItemGL>("title");
-        title->setLabel(llformat("%d ITEMS", (S32)mUUIDs.size()));
+        LLStringUtil::format_map_t args;
+        args["[COUNT]"] = llformat("%d", (S32)mUUIDs.size());
+        std::string label = string("menu_title");
+        LLStringUtil::format(label, args);
+        title->setLabel(label);
         disabled.push_back("title");
     }
 
@@ -760,6 +788,10 @@ void SKInventoryExplorerContextMenu::updateMenuItemsVisibility(LLContextMenu* me
             items.push_back("open");
             items.push_back("open_in_new_tab");
             items.push_back("folder_separator");
+        }
+        if (SKInventoryExplorerActions::canPasteLink(folder_id))
+        {
+            items.push_back("paste_link");
         }
         if (folder_id == trash_id)
         {
@@ -996,7 +1028,7 @@ void SKInventoryExplorerContextMenu::updateMenuItemsVisibility(LLContextMenu* me
         {
             disabled.push_back("copy_asset_uuid");
             LLMenuItemGL* asset = menu->getChild<LLMenuItemGL>("copy_asset_uuid");
-            asset->setLabel(asset->getLabel() + "  (Full perm only)");
+            asset->setLabel(asset->getLabel() + "  " + string("full_perm_only"));
         }
     }
     if (many && is_agent_inventory)
@@ -1019,7 +1051,6 @@ void SKInventoryExplorerContextMenu::doToSelected(const std::string& action)
     const uuid_vec_t ids = mUUIDs;
     const LLUUID id = ids.front();
     const LLUUID folder_id = SKInventoryExplorerActions::folderOf(id);
-    LLInventoryPanel* panel = mPanelGetter ? mPanelGetter() : nullptr;
     LLViewerInventoryItem* item = gInventory.getItem(id);
 
     if (action == "open" || action == "open_in_new_tab")
@@ -1075,11 +1106,11 @@ void SKInventoryExplorerContextMenu::doToSelected(const std::string& action)
         target = target ? target : item;
         if (target && target->getType() == LLAssetType::AT_SOUND)
         {
-            SKInventoryExplorerActions::bridgeAction(panel, target->getUUID(), "sound_play");
+            SKInventoryExplorerActions::bridgeAction(target->getUUID(), "sound_play");
         }
         else if (target)
         {
-            SKInventoryExplorerActions::bridgeAction(panel, target->getUUID(), "playworld");
+            SKInventoryExplorerActions::bridgeAction(target->getUUID(), "playworld");
         }
     }
     else if (action == "play_locally")
@@ -1095,12 +1126,12 @@ void SKInventoryExplorerContextMenu::doToSelected(const std::string& action)
         }
         else if (target)
         {
-            SKInventoryExplorerActions::bridgeAction(panel, target->getUUID(), "playlocal");
+            SKInventoryExplorerActions::bridgeAction(target->getUUID(), "playlocal");
         }
     }
     else if (action == "teleport" || action == "about_landmark")
     {
-        SKInventoryExplorerActions::bridgeAction(panel, id, action == "teleport" ? "teleport" : "about");
+        SKInventoryExplorerActions::bridgeAction(id, action == "teleport" ? "teleport" : "about");
     }
     else if (action == "show_on_map")
     {
@@ -1149,40 +1180,32 @@ void SKInventoryExplorerContextMenu::doToSelected(const std::string& action)
     }
     else if (action == "gesture_play")
     {
-        SKInventoryExplorerActions::bridgeAction(panel, id, "play");
+        SKInventoryExplorerActions::bridgeAction(id, "play");
     }
     else if (action == "activate" || action == "deactivate")
     {
-        SKInventoryExplorerActions::bridgeAction(panel, id, action == "activate" ? "activate" : "deactivate");
+        SKInventoryExplorerActions::bridgeAction(id, action == "activate" ? "activate" : "deactivate");
     }
     else if (action == "apply_local" || action == "apply_parcel")
     {
-        SKInventoryExplorerActions::bridgeAction(panel, id, action == "apply_local" ? "apply_settings_local" : "apply_settings_parcel");
+        SKInventoryExplorerActions::bridgeAction(id, action == "apply_local" ? "apply_settings_local" : "apply_settings_parcel");
     }
-    else if (action == "wear")
+    else if (action == "wear" || action == "wear_add")
     {
-        for (const LLUUID& selected : ids)
-        {
-            LLAppearanceMgr::instance().wearItemOnAvatar(selected, true, true);
-        }
-    }
-    else if (action == "wear_add")
-    {
-        for (const LLUUID& selected : ids)
-        {
-            LLAppearanceMgr::instance().wearItemOnAvatar(selected, true, false);
-        }
+        // Batched, as LLInventoryAction::doToSelected wears a selection.
+        wear_multiple(ids, action == "wear");
     }
     else if (action == "take_off" || action == "detach")
     {
-        for (const LLUUID& selected : ids)
-        {
-            LLAppearanceMgr::instance().removeItemFromAvatar(selected);
-        }
+        LLAppearanceMgr::instance().removeItemsFromAvatar(ids);
+    }
+    else if (action == "paste_link")
+    {
+        SKInventoryExplorerActions::pasteLink(mRootMode ? id : folder_id);
     }
     else if (action == "edit")
     {
-        SKInventoryExplorerActions::bridgeAction(panel, id, "edit");
+        SKInventoryExplorerActions::bridgeAction(id, "edit");
     }
     else if (action == "rename")
     {

@@ -163,7 +163,7 @@ public:
     U32 getGeneration() const { return mGeneration; }
     S32 getSelectedCount() const { return mSelectedCount; }
 
-    void setSort(EColumn key, bool ascending);
+    virtual void setSort(EColumn key, bool ascending);
     EColumn getSortKey() const { return mSortKey; }
     bool getSortAscending() const { return mSortAscending; }
     void setGroup(EGroup group);
@@ -232,6 +232,7 @@ protected:
     void requestCreatorName(SKInventoryRow& row);
     void applyArrivedNames();
     void endRename();
+    void findRenameRow();
 
     LLUUID mFolderID;
     std::vector<SKInventoryRow> mAllRows;   // every entry, sorted, before paging
@@ -260,6 +261,8 @@ protected:
     bool mSlowClickArmed;
     LLFrameTimer mSlowClickTimer;
     LLHandle<LLView> mRenameEditor;
+    LLUUID mRenameID;
+    S32 mRenameRow;
 
     LLScrollbar* mScrollbar;
     SKInventoryListLabels mLabels;

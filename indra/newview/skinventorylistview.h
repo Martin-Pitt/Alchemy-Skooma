@@ -46,6 +46,8 @@ public:
     // A right-click on the header: the "Columns" menu.
     void setHeaderMenuCallback(const point_callback_t& cb) { mHeaderMenuCallback = cb; }
 
+    void setSort(EColumn key, bool ascending) override;
+
     // Hidden columns by key; Name always shows, Folder only while searching.
     void setHiddenColumns(const std::set<std::string>& keys);
     void setSearching(bool searching);

@@ -237,6 +237,7 @@ SKInventoryFlatView::SKInventoryFlatView(const LLUICtrl::Params& p)
     mLoading(false),
     mSlowClickRow(-1),
     mSlowClickArmed(false),
+    mRenameRow(-1),
     mScrollbar(nullptr)
 {
     const S32 bar = LLUI::getInstance()->mSettingGroups["config"]->getS32("UIScrollbarSize");
@@ -249,13 +250,14 @@ SKInventoryFlatView::SKInventoryFlatView(const LLUICtrl::Params& p)
     sbparams.page_size(1);
     sbparams.follows.flags(FOLLOWS_RIGHT | FOLLOWS_TOP | FOLLOWS_BOTTOM);
     sbparams.visible(false);
-    sbparams.change_callback([this](S32, LLScrollbar*) { endRename(); });
     mScrollbar = LLUICtrlFactory::create<LLScrollbar>(sbparams);
     addChild(mScrollbar);
 }
 
 SKInventoryFlatView::~SKInventoryFlatView()
 {
+    // A rename in progress keeps what was typed when the floater closes.
+    endRename();
     for (auto& request : mNameRequests)
     {
         request.second.disconnect();
@@ -699,7 +701,6 @@ void SKInventoryFlatView::rebuild()
 
 void SKInventoryFlatView::sortAndGroup()
 {
-    endRename();
     // Headers from an earlier grouping go before sorting again.
     std::erase_if(mAllRows, [](const SKInventoryRow& row) { return !row.isEntry(); });
     sortRows(mAllRows, mSortKey, mSortAscending);
@@ -741,6 +742,27 @@ void SKInventoryFlatView::sortAndGroup()
     mCursor = -1;
     mAnchor = -1;
     layoutRows();
+    findRenameRow();
+}
+
+void SKInventoryFlatView::findRenameRow()
+{
+    mRenameRow = -1;
+    if (!mRenameEditor.get())
+    {
+        return;
+    }
+    for (S32 r = 0; r < (S32)mRows.size(); ++r)
+    {
+        if (mRows[r].isEntry() && mRows[r].mID == mRenameID)
+        {
+            mRenameRow = r;
+            return;
+        }
+    }
+    // The row went: the editor closes without saving.
+    SKInventoryRename::cancel(mRenameEditor);
+    mRenameEditor.markDead();
 }
 
 void SKInventoryFlatView::requestCreatorName(SKInventoryRow& row)
@@ -802,7 +824,6 @@ void SKInventoryFlatView::reshape(S32 width, S32 height, bool called_from_parent
     LLUICtrl::reshape(width, height, called_from_parent);
     if (mScrollbar)
     {
-        endRename();
         layoutRows();
     }
 }
@@ -820,6 +841,19 @@ void SKInventoryFlatView::draw()
         if (mSlowClickRow >= 0 && mSlowClickRow < (S32)mRows.size() && mSelectedCount == 1 && mSelected[mSlowClickRow])
         {
             startRename(mRows[mSlowClickRow].mID);
+        }
+    }
+    // An open editor follows its row through scrolls, resizes and rebuilds.
+    if (LLView* editor = mRenameEditor.get())
+    {
+        if (mRenameRow >= 0 && mRenameRow < (S32)mRows.size())
+        {
+            bool multiline = false;
+            const LLRect rect = nameRect(mRenameRow, multiline);
+            if (rect != editor->getRect())
+            {
+                editor->setShape(rect);
+            }
         }
     }
     drawContent();
@@ -891,6 +925,8 @@ void SKInventoryFlatView::startRename(const LLUUID& id)
             bool multiline = false;
             const LLRect rect = nameRect(r, multiline);
             mRenameEditor = SKInventoryRename::start(this, id, rect, multiline, nullptr);
+            mRenameID = id;
+            mRenameRow = r;
             return;
         }
     }
@@ -900,6 +936,7 @@ void SKInventoryFlatView::endRename()
 {
     SKInventoryRename::finish(mRenameEditor);
     mRenameEditor.markDead();
+    mRenameRow = -1;
 }
 
 void SKInventoryFlatView::showMenuFromKeyboard()

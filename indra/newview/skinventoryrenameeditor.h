@@ -46,6 +46,8 @@ namespace SKInventoryRename
 
     // Ends an open editor, keeping what was typed.
     void finish(const LLHandle<LLView>& editor);
+    // Ends an open editor without saving, for a row that went.
+    void cancel(const LLHandle<LLView>& editor);
 
     // What is kept of typed text: whitespace collapsed and trimmed; empty keeps the old name.
     std::string cleanName(const std::string& text);

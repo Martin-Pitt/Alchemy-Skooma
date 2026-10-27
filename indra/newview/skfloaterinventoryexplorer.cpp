@@ -386,6 +386,7 @@ SKFloaterInventoryExplorer::SKFloaterInventoryExplorer(const LLSD& key)
 
 SKFloaterInventoryExplorer::~SKFloaterInventoryExplorer()
 {
+    SKInventoryExplorerContextMenu::closeOptionsMenu();
     if (mObserver)
     {
         gInventory.removeObserver(mObserver.get());
@@ -520,8 +521,14 @@ bool SKFloaterInventoryExplorer::postBuild()
     mSidebar->setKeyCallback([this](KEY key, MASK mask) { return onSidebarKey(key, mask); });
 
     mMenu = std::make_unique<SKInventoryExplorerContextMenu>([this](const LLUUID& id, bool new_tab) { openObject(id, new_tab); },
-                                                             [this](const LLUUID& id) { startRename(id); }, mOptions,
-                                                             [this]() { return mSidebar->getInventoryPanel(); });
+                                                             [this](const LLUUID& id) { startRename(id); }, mOptions);
+    SKInventoryExplorerActions::setBridgePanel(mSidebar->getInventoryPanel());
+    std::map<std::string, std::string> menu_strings;
+    for (const char* key : { "menu_title", "full_perm_only", "tip_cut", "tip_copy", "tip_paste", "tip_favorite", "tip_unfavorite", "tip_delete" })
+    {
+        menu_strings[key] = getString(std::string("menu_") + key);
+    }
+    mMenu->setStrings(menu_strings);
 
     const bool details = gSavedPerAccountSettings.getBOOL("SkoomaInvExplorerDetailsShown");
     mDetailsBtn->setToggleState(details);
