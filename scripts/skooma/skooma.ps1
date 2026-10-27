@@ -47,8 +47,9 @@ function Show-Help {
     Say '  new <area>/<x> --amend [--base <feature>]  amend-<area>/<x>: a follow-up that lands'
     Say '                      into an existing feature (default feature-<area>/<x>), never a PR alone'
     Say '  sync                fetch upstream -> develop -> main + every worktree'
-    Say '  check [name|.]      validate a branch before it lands'
-    Say '  integrate [name|.]  land worktree branches into their trunk or main (no arg = all)'
+    Say '  check [name|.]      validate a branch before it lands (--full: re-check merges main has)'
+    Say '  integrate <name|.>  land one branch along its chain (amend -> feature -> trunk -> main)'
+    Say '                      all  land every ready worktree branch (never the default)'
     Say '                      <name> --resolve  on a conflict with main, leave the merge to resolve'
     Say '                      --continue  commit a resolved --resolve merge   --abort  drop it'
     Say '  trunk [prefix branch]  list or set the trunk an area lands into (atmo -> feature-atmo-magic)'
@@ -1165,7 +1166,7 @@ function Invoke-New {
     Say "    codex --cd $path"
     Say "    opencode        # run from $path"
     Say ''
-    Say '  land the work:  git skooma integrate'
+    Say "  land the work:  git skooma integrate $branch"
     Say ''
 }
 
@@ -1312,7 +1313,10 @@ function Invoke-Check { param([string]$branch, [switch]$Quiet)
     $developSpine = $null
     $isTrunk = Test-IsTrunk $branch
     $developOnly = $null
-    foreach ($sha in (G rev-list --merges "$base..$branch") -split "`n" | Where-Object { $_ }) {
+    # Merges main already has were checked when they landed and cannot change; --full walks them again.
+    $range = @("$base..$branch")
+    if (-not ($Rest -contains '--full')) { $range += '^main' }
+    foreach ($sha in (G rev-list --merges @range) -split "`n" | Where-Object { $_ }) {
         $parents = (G rev-list --parents -n 1 $sha) -split '\s+'
         # An amend landed into this feature is part of it, judged like a trunk's merges.
         $takesAmend = (G log -1 --format=%s $sha) -like "Merge amend '*"
@@ -1452,7 +1456,11 @@ function Invoke-Integrate {
     if ($Rest -contains '--abort') { Invoke-IntegrateAbort; return }
     if (Test-Path $ResolveState) { Fail 'an integrate --resolve is in progress; finish it with --continue or --abort' }
 
+    # Landing everything is never the default: an agent lands its own branch, `all` is asked for by name.
     $arg = if ($Rest -and $Rest[0] -notlike '--*') { $Rest[0] } else { '' }
+    if (-not $arg) { Fail "usage: git skooma integrate <name|.>   (every ready branch: git skooma integrate all)" }
+    $all = $arg -eq 'all'
+    if ($all) { $arg = '' }
     $resolve = $Rest -contains '--resolve'
     if ($resolve -and -not $arg) { Fail 'usage: git skooma integrate <name> --resolve' }
 
