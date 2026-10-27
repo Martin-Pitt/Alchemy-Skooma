@@ -202,7 +202,7 @@
 		</menu>
 		<menu label="Render Metadata" name="Render Metadata">
 			<menu_item_check label="Normals" name="Normals"/>
-			<menu_item_check label="Physics Shapes" name="Physics Shapes"/>
+			<menu label="Physics Shapes" name="Physics Shapes"/>
 			<menu_item_check label="Opdatér type" name="Update Type"/>
 			<menu_item_check label="LOD Info" name="LOD Info"/>
 			<menu_item_check label="Sculpt" name="Sculpt"/>

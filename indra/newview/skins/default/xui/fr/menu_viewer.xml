@@ -260,7 +260,7 @@
 			<menu_item_check label="Normales" name="Normals"/>
 			<menu_item_check label="Octree" name="Octree"/>
 			<menu_item_check label="Shadow Frusta" name="Shadow Frusta"/>
-			<menu_item_check label="Formes physiques" name="Physics Shapes"/>
+			<menu label="Formes physiques" name="Physics Shapes"/>
 			<menu_item_check label="Occlusion" name="Occlusion"/>
 			<menu_item_check label="Lots de rendu" name="Render Batches"/>
 			<menu_item_check label="Type de mise à jour" name="Update Type"/>

@@ -7397,6 +7397,7 @@ bool LLViewerObject::setFlagsWithoutUpdate(U32 flags, bool state)
 void LLViewerObject::setPhysicsShapeType(U8 type)
 {
     mPhysicsShapeUnknown = false;
+    gObjectList.notePhysicsShapeType(mID, type); // <SK:Nexii> census: an edit reaches the type kept for the cached part
     if (type != mPhysicsShapeType)
     {
     mPhysicsShapeType = type;

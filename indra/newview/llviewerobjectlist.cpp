@@ -80,6 +80,7 @@
 #include "llvocache.h"
 #include "llcorehttputil.h"
 #include "llstartup.h"
+#include "skworldcensus.h" // <SK:Nexii> census dirty set
 
 #include <algorithm>
 #include <iterator>
@@ -293,6 +294,13 @@ void LLViewerObjectList::processUpdateCore(LLViewerObject* objectp,
         gViewerWindow->getWindow()->decBusyCount();
         gViewerWindow->setCursor( UI_CURSOR_ARROW );
     }
+
+    // <SK:Nexii> census dirty set: every update and creation, once the object has its parent and children.
+    if (SKWorldCensus::instanceExists())
+    {
+        SKWorldCensus::getInstance()->noteObjectUpdate(objectp);
+    }
+    // </SK:Nexii>
 }
 
 LLViewerObject* LLViewerObjectList::processObjectUpdateFromCache(LLVOCacheEntry* entry, LLViewerRegion* regionp)
@@ -383,6 +391,13 @@ LLViewerObject* LLViewerObjectList::processObjectUpdateFromCache(LLVOCacheEntry*
 
     processUpdateCore(objectp, NULL, 0, OUT_FULL_CACHED, cached_dpp, justCreated, true);
     objectp->loadFlags(entry->getUpdateFlags()); //just in case, reload update flags from cache.
+    // <SK:Nexii> census: a revived object takes the physics shape type already answered for its id
+    U8 known_type = 0;
+    if (justCreated && knownPhysicsShapeType(fullid, known_type))
+    {
+        objectp->setPhysicsShapeType(known_type);
+    }
+    // </SK:Nexii>
 
     if(entry->getHitCount() > 0)
     {
@@ -1473,6 +1488,12 @@ bool LLViewerObjectList::killObject(LLViewerObject *objectp)
         // and object being NULLed while inside it's own function won't be pretty
         // so create a pointer to make sure object will stay alive untill markDead() finishes
         LLPointer<LLViewerObject> sp(objectp);
+        // <SK:Nexii> census dirty set: before markDead, while the parent is still known.
+        if (SKWorldCensus::instanceExists())
+        {
+            SKWorldCensus::getInstance()->noteObjectGone(objectp);
+        }
+        // </SK:Nexii>
         sp->markDead(); // does the right thing if object already dead
         return true;
     }
@@ -1731,9 +1752,31 @@ void LLViewerObjectList::updatePhysicsFlags(const LLViewerObject* object)
     mStalePhysicsFlags.insert(object->getID());
 }
 
+// <SK:Nexii> census: physics shape types by id, for parts the region has cached but not instantiated
+void LLViewerObjectList::requestPhysicsShapeType(const LLUUID& object_id)
+{
+    if (object_id.notNull() && !mKnownPhysicsShapeTypes.count(object_id) && !mPendingPhysicsFlags.count(object_id))
+    {
+        mStalePhysicsFlags.insert(object_id);
+    }
+}
+
+bool LLViewerObjectList::knownPhysicsShapeType(const LLUUID& object_id, U8& type) const
+{
+    const auto it = mKnownPhysicsShapeTypes.find(object_id);
+    if (it == mKnownPhysicsShapeTypes.end())
+    {
+        return false;
+    }
+    type = it->second;
+    return true;
+}
+// </SK:Nexii>
+
 void LLViewerObjectList::updatePhysicsShapeType(const LLUUID& object_id, S32 type)
 {
     mPendingPhysicsFlags.erase(object_id);
+    notePhysicsShapeType(object_id, (U8)type); // <SK:Nexii> census: kept for parts the cache holds
     LLViewerObject* object = findObject(object_id);
     if (object)
     {

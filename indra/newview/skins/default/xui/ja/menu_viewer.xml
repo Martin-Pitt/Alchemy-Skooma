@@ -399,7 +399,7 @@
 			<menu_item_check label="八分木" name="Octree"/>
 			<menu_item_check label="ＧＬＴＦノード" name="GLTF Nodes"/>
 			<menu_item_check label="シャドウ円錐" name="Shadow Frusta"/>
-			<menu_item_check label="物理的形状" name="Physics Shapes"/>
+			<menu label="物理的形状" name="Physics Shapes"/>
 			<menu_item_check label="オクルージョン" name="Occlusion"/>
 			<menu_item_check label="バッチの描画" name="Render Batches"/>
 			<menu_item_check label="タイプを更新" name="Update Type"/>
