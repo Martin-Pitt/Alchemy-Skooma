@@ -1,16 +1,22 @@
-<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
 <context_menu
-    layout="topleft"
-    name="Inventory Explorer">
+ layout="topleft"
+ name="Inventory Explorer">
+    <menu_item_call
+     label="ITEMS"
+     layout="topleft"
+     name="title"
+     enabled="false">
+        <menu_item_call.on_click
+         function="SKInvExplorer.Do"
+         parameter="title" />
+    </menu_item_call>
     <menu_item_call
      label="Open"
      layout="topleft"
      name="open">
         <menu_item_call.on_click
-         function="SKInvExplorer.DoToSelected"
-         parameter="open" />
-        <menu_item_call.on_enable
-         function="SKInvExplorer.Enable"
+         function="SKInvExplorer.Do"
          parameter="open" />
     </menu_item_call>
     <menu_item_call
@@ -18,35 +24,808 @@
      layout="topleft"
      name="open_in_new_tab">
         <menu_item_call.on_click
-         function="SKInvExplorer.DoToSelected"
+         function="SKInvExplorer.Do"
          parameter="open_in_new_tab" />
-        <menu_item_call.on_enable
-         function="SKInvExplorer.Enable"
-         parameter="open_in_new_tab" />
+    </menu_item_call>
+    <menu_item_call
+     label="Empty Trash"
+     layout="topleft"
+     name="empty_trash">
+        <menu_item_call.on_click
+         function="SKInvExplorer.Do"
+         parameter="empty_trash" />
+    </menu_item_call>
+    <menu_item_call
+     label="Empty Lost And Found"
+     layout="topleft"
+     name="empty_lost_and_found">
+        <menu_item_call.on_click
+         function="SKInvExplorer.Do"
+         parameter="empty_lost_and_found" />
     </menu_item_call>
     <menu_item_separator
      layout="topleft"
-     name="edit_separator" />
+     name="folder_separator" />
+    <menu
+     label="New"
+     layout="topleft"
+     name="create_new">
+        <menu_item_call
+         label="Folder"
+         layout="topleft"
+         name="new_category">
+            <menu_item_call.on_click
+             function="SKInvExplorer.Create"
+             parameter="category" />
+        </menu_item_call>
+        <menu_item_separator
+         layout="topleft"
+         name="new_separator" />
+        <menu_item_call
+         label="Script"
+         layout="topleft"
+         name="new_lsl">
+            <menu_item_call.on_click
+             function="SKInvExplorer.Create"
+             parameter="lsl" />
+        </menu_item_call>
+        <menu_item_call
+         label="Notecard"
+         layout="topleft"
+         name="new_notecard">
+            <menu_item_call.on_click
+             function="SKInvExplorer.Create"
+             parameter="notecard" />
+        </menu_item_call>
+        <menu_item_call
+         label="Gesture"
+         layout="topleft"
+         name="new_gesture">
+            <menu_item_call.on_click
+             function="SKInvExplorer.Create"
+             parameter="gesture" />
+        </menu_item_call>
+        <menu_item_call
+         label="Material"
+         layout="topleft"
+         name="new_material">
+            <menu_item_call.on_click
+             function="SKInvExplorer.Create"
+             parameter="material" />
+        </menu_item_call>
+        <menu
+         label="Clothes"
+         layout="topleft"
+         name="New Clothes">
+            <menu_item_call
+             label="Shirt"
+             layout="topleft"
+             name="new_shirt">
+                <menu_item_call.on_click
+                 function="SKInvExplorer.Create"
+                 parameter="shirt" />
+            </menu_item_call>
+            <menu_item_call
+             label="Pants"
+             layout="topleft"
+             name="new_pants">
+                <menu_item_call.on_click
+                 function="SKInvExplorer.Create"
+                 parameter="pants" />
+            </menu_item_call>
+            <menu_item_call
+             label="Shoes"
+             layout="topleft"
+             name="new_shoes">
+                <menu_item_call.on_click
+                 function="SKInvExplorer.Create"
+                 parameter="shoes" />
+            </menu_item_call>
+            <menu_item_call
+             label="Socks"
+             layout="topleft"
+             name="new_socks">
+                <menu_item_call.on_click
+                 function="SKInvExplorer.Create"
+                 parameter="socks" />
+            </menu_item_call>
+            <menu_item_call
+             label="Jacket"
+             layout="topleft"
+             name="new_jacket">
+                <menu_item_call.on_click
+                 function="SKInvExplorer.Create"
+                 parameter="jacket" />
+            </menu_item_call>
+            <menu_item_call
+             label="Skirt"
+             layout="topleft"
+             name="new_skirt">
+                <menu_item_call.on_click
+                 function="SKInvExplorer.Create"
+                 parameter="skirt" />
+            </menu_item_call>
+            <menu_item_call
+             label="Gloves"
+             layout="topleft"
+             name="new_gloves">
+                <menu_item_call.on_click
+                 function="SKInvExplorer.Create"
+                 parameter="gloves" />
+            </menu_item_call>
+            <menu_item_call
+             label="Undershirt"
+             layout="topleft"
+             name="new_undershirt">
+                <menu_item_call.on_click
+                 function="SKInvExplorer.Create"
+                 parameter="undershirt" />
+            </menu_item_call>
+            <menu_item_call
+             label="Underpants"
+             layout="topleft"
+             name="new_underpants">
+                <menu_item_call.on_click
+                 function="SKInvExplorer.Create"
+                 parameter="underpants" />
+            </menu_item_call>
+            <menu_item_call
+             label="Alpha Mask"
+             layout="topleft"
+             name="new_alpha">
+                <menu_item_call.on_click
+                 function="SKInvExplorer.Create"
+                 parameter="alpha" />
+            </menu_item_call>
+            <menu_item_call
+             label="Tattoo"
+             layout="topleft"
+             name="new_tattoo">
+                <menu_item_call.on_click
+                 function="SKInvExplorer.Create"
+                 parameter="tattoo" />
+            </menu_item_call>
+            <menu_item_call
+             label="Universal"
+             layout="topleft"
+             name="new_universal">
+                <menu_item_call.on_click
+                 function="SKInvExplorer.Create"
+                 parameter="universal" />
+            </menu_item_call>
+            <menu_item_call
+             label="Physics"
+             layout="topleft"
+             name="new_physics">
+                <menu_item_call.on_click
+                 function="SKInvExplorer.Create"
+                 parameter="physics" />
+            </menu_item_call>
+        </menu>
+        <menu
+         label="Body Parts"
+         layout="topleft"
+         name="New Body Parts">
+            <menu_item_call
+             label="Shape"
+             layout="topleft"
+             name="new_shape">
+                <menu_item_call.on_click
+                 function="SKInvExplorer.Create"
+                 parameter="shape" />
+            </menu_item_call>
+            <menu_item_call
+             label="Skin"
+             layout="topleft"
+             name="new_skin">
+                <menu_item_call.on_click
+                 function="SKInvExplorer.Create"
+                 parameter="skin" />
+            </menu_item_call>
+            <menu_item_call
+             label="Hair"
+             layout="topleft"
+             name="new_hair">
+                <menu_item_call.on_click
+                 function="SKInvExplorer.Create"
+                 parameter="hair" />
+            </menu_item_call>
+            <menu_item_call
+             label="Eyes"
+             layout="topleft"
+             name="new_eyes">
+                <menu_item_call.on_click
+                 function="SKInvExplorer.Create"
+                 parameter="eyes" />
+            </menu_item_call>
+        </menu>
+        <menu
+         label="Settings"
+         layout="topleft"
+         name="New Settings">
+            <menu_item_call
+             label="Sky"
+             layout="topleft"
+             name="new_sky">
+                <menu_item_call.on_click
+                 function="SKInvExplorer.Create"
+                 parameter="sky" />
+            </menu_item_call>
+            <menu_item_call
+             label="Water"
+             layout="topleft"
+             name="new_water">
+                <menu_item_call.on_click
+                 function="SKInvExplorer.Create"
+                 parameter="water" />
+            </menu_item_call>
+            <menu_item_call
+             label="Day Cycle"
+             layout="topleft"
+             name="new_daycycle">
+                <menu_item_call.on_click
+                 function="SKInvExplorer.Create"
+                 parameter="daycycle" />
+            </menu_item_call>
+        </menu>
+    </menu>
+    <menu
+     label="Upload to Folder"
+     layout="topleft"
+     name="upload_options">
+        <menu_item_call
+         label="Image…"
+         layout="topleft"
+         name="upload_texture">
+            <menu_item_call.on_click
+             function="SKInvExplorer.Upload"
+             parameter="upload_texture" />
+        </menu_item_call>
+        <menu_item_call
+         label="Sound…"
+         layout="topleft"
+         name="upload_sound">
+            <menu_item_call.on_click
+             function="SKInvExplorer.Upload"
+             parameter="upload_sound" />
+        </menu_item_call>
+        <menu_item_call
+         label="Animation…"
+         layout="topleft"
+         name="upload_animation">
+            <menu_item_call.on_click
+             function="SKInvExplorer.Upload"
+             parameter="upload_animation" />
+        </menu_item_call>
+        <menu_item_call
+         label="Model…"
+         layout="topleft"
+         name="upload_model">
+            <menu_item_call.on_click
+             function="SKInvExplorer.Upload"
+             parameter="upload_model" />
+        </menu_item_call>
+        <menu_item_call
+         label="Material…"
+         layout="topleft"
+         name="upload_pbr_material">
+            <menu_item_call.on_click
+             function="SKInvExplorer.Upload"
+             parameter="upload_pbr_material" />
+        </menu_item_call>
+        <menu_item_separator
+         layout="topleft"
+         name="upload_separator" />
+        <menu_item_call
+         label="Bulk…"
+         layout="topleft"
+         name="upload_bulk">
+            <menu_item_call.on_click
+             function="SKInvExplorer.Upload"
+             parameter="upload_bulk" />
+        </menu_item_call>
+    </menu>
+    <menu_item_separator
+     layout="topleft"
+     name="outfit_separator" />
+    <menu_item_call
+     label="Replace Current Outfit"
+     layout="topleft"
+     name="replace_outfit">
+        <menu_item_call.on_click
+         function="SKInvExplorer.Do"
+         parameter="replace_outfit" />
+    </menu_item_call>
+    <menu_item_call
+     label="Add Folder Items"
+     layout="topleft"
+     name="add_to_outfit">
+        <menu_item_call.on_click
+         function="SKInvExplorer.Do"
+         parameter="add_to_outfit" />
+    </menu_item_call>
+    <menu_item_call
+     label="Take Off Folder Items"
+     layout="topleft"
+     name="remove_from_outfit">
+        <menu_item_call.on_click
+         function="SKInvExplorer.Do"
+         parameter="remove_from_outfit" />
+    </menu_item_call>
+    <menu_item_separator
+     layout="topleft"
+     name="item_separator" />
+    <menu_item_call
+     label="Find Original"
+     layout="topleft"
+     name="find_original">
+        <menu_item_call.on_click
+         function="SKInvExplorer.Do"
+         parameter="find_original" />
+    </menu_item_call>
+    <menu_item_call
+     label="Open Original"
+     layout="topleft"
+     name="open_original">
+        <menu_item_call.on_click
+         function="SKInvExplorer.Do"
+         parameter="open_original" />
+    </menu_item_call>
+    <menu_item_call
+     label="Open"
+     layout="topleft"
+     name="open_item">
+        <menu_item_call.on_click
+         function="SKInvExplorer.Do"
+         parameter="open_item" />
+    </menu_item_call>
+    <menu_item_call
+     label="Save As…"
+     layout="topleft"
+     name="save_as">
+        <menu_item_call.on_click
+         function="SKInvExplorer.Do"
+         parameter="save_as" />
+    </menu_item_call>
+    <menu_item_call
+     label="Play Inworld"
+     layout="topleft"
+     name="play_inworld">
+        <menu_item_call.on_click
+         function="SKInvExplorer.Do"
+         parameter="play_inworld" />
+    </menu_item_call>
+    <menu_item_call
+     label="Play Locally"
+     layout="topleft"
+     name="play_locally">
+        <menu_item_call.on_click
+         function="SKInvExplorer.Do"
+         parameter="play_locally" />
+    </menu_item_call>
+    <menu_item_call
+     label="Teleport"
+     layout="topleft"
+     name="teleport">
+        <menu_item_call.on_click
+         function="SKInvExplorer.Do"
+         parameter="teleport" />
+    </menu_item_call>
+    <menu_item_call
+     label="Show on Map"
+     layout="topleft"
+     name="show_on_map">
+        <menu_item_call.on_click
+         function="SKInvExplorer.Do"
+         parameter="show_on_map" />
+    </menu_item_call>
+    <menu_item_call
+     label="Copy SLurl"
+     layout="topleft"
+     name="copy_slurl">
+        <menu_item_call.on_click
+         function="SKInvExplorer.Do"
+         parameter="copy_slurl" />
+    </menu_item_call>
+    <menu_item_call
+     label="About Landmark"
+     layout="topleft"
+     name="about_landmark">
+        <menu_item_call.on_click
+         function="SKInvExplorer.Do"
+         parameter="about_landmark" />
+    </menu_item_call>
+    <menu_item_call
+     label="Play"
+     layout="topleft"
+     name="gesture_play">
+        <menu_item_call.on_click
+         function="SKInvExplorer.Do"
+         parameter="gesture_play" />
+    </menu_item_call>
+    <menu_item_call
+     label="Activate"
+     layout="topleft"
+     name="activate">
+        <menu_item_call.on_click
+         function="SKInvExplorer.Do"
+         parameter="activate" />
+    </menu_item_call>
+    <menu_item_call
+     label="Deactivate"
+     layout="topleft"
+     name="deactivate">
+        <menu_item_call.on_click
+         function="SKInvExplorer.Do"
+         parameter="deactivate" />
+    </menu_item_call>
+    <menu_item_call
+     label="Apply Only to Myself"
+     layout="topleft"
+     name="apply_local">
+        <menu_item_call.on_click
+         function="SKInvExplorer.Do"
+         parameter="apply_local" />
+    </menu_item_call>
+    <menu_item_call
+     label="Apply to Parcel"
+     layout="topleft"
+     name="apply_parcel">
+        <menu_item_call.on_click
+         function="SKInvExplorer.Do"
+         parameter="apply_parcel" />
+    </menu_item_call>
+    <menu_item_call
+     label="Wear"
+     layout="topleft"
+     name="wear">
+        <menu_item_call.on_click
+         function="SKInvExplorer.Do"
+         parameter="wear" />
+    </menu_item_call>
+    <menu_item_call
+     label="Add"
+     layout="topleft"
+     name="wear_add">
+        <menu_item_call.on_click
+         function="SKInvExplorer.Do"
+         parameter="wear_add" />
+    </menu_item_call>
+    <menu_item_call
+     label="Take Off"
+     layout="topleft"
+     name="take_off">
+        <menu_item_call.on_click
+         function="SKInvExplorer.Do"
+         parameter="take_off" />
+    </menu_item_call>
+    <menu_item_call
+     label="Detach From Yourself"
+     layout="topleft"
+     name="detach">
+        <menu_item_call.on_click
+         function="SKInvExplorer.Do"
+         parameter="detach" />
+    </menu_item_call>
+    <menu
+     label="Attach To"
+     layout="topleft"
+     name="Attach To" />
+    <menu
+     label="Attach To HUD"
+     layout="topleft"
+     name="Attach To HUD" />
+    <menu_item_call
+     label="Edit"
+     layout="topleft"
+     name="edit">
+        <menu_item_call.on_click
+         function="SKInvExplorer.Do"
+         parameter="edit" />
+    </menu_item_call>
+    <menu_item_separator
+     layout="topleft"
+     name="common_separator" />
+    <menu_item_call
+     label="Show in Folder"
+     layout="topleft"
+     name="show_in_folder">
+        <menu_item_call.on_click
+         function="SKInvExplorer.Do"
+         parameter="show_in_folder" />
+    </menu_item_call>
     <menu_item_call
      label="Rename"
      layout="topleft"
      name="rename">
         <menu_item_call.on_click
-         function="SKInvExplorer.DoToSelected"
-         parameter="rename" />
-        <menu_item_call.on_enable
-         function="SKInvExplorer.Enable"
+         function="SKInvExplorer.Do"
          parameter="rename" />
     </menu_item_call>
     <menu_item_call
-     label="Delete"
+     label="Properties"
      layout="topleft"
-     name="delete">
+     name="properties">
         <menu_item_call.on_click
-         function="SKInvExplorer.DoToSelected"
-         parameter="delete" />
-        <menu_item_call.on_enable
-         function="SKInvExplorer.Enable"
-         parameter="delete" />
+         function="SKInvExplorer.Do"
+         parameter="properties" />
     </menu_item_call>
+    <menu_item_call
+     label="Image…"
+     layout="topleft"
+     name="thumbnail">
+        <menu_item_call.on_click
+         function="SKInvExplorer.Do"
+         parameter="thumbnail" />
+    </menu_item_call>
+    <menu
+     label="Copy UUID"
+     layout="topleft"
+     name="copy_uuid">
+        <menu_item_call
+         label="Inventory UUID"
+         layout="topleft"
+         name="copy_inventory_uuid">
+            <menu_item_call.on_click
+             function="SKInvExplorer.Do"
+             parameter="copy_inventory_uuid" />
+        </menu_item_call>
+        <menu_item_call
+         label="Asset UUID"
+         layout="topleft"
+         name="copy_asset_uuid">
+            <menu_item_call.on_click
+             function="SKInvExplorer.Do"
+             parameter="copy_asset_uuid" />
+        </menu_item_call>
+    </menu>
+    <menu_item_call
+     label="Create Folder from Selected"
+     layout="topleft"
+     name="new_folder_from_selected">
+        <menu_item_call.on_click
+         function="SKInvExplorer.Do"
+         parameter="new_folder_from_selected" />
+    </menu_item_call>
+    <menu_item_separator
+     layout="topleft"
+     name="options_separator" />
+    <menu
+     label="View"
+     layout="topleft"
+     name="View">
+        <menu_item_check
+         label="Columns"
+         layout="topleft"
+         name="view_columns">
+            <menu_item_check.on_click
+             function="SKInvExplorer.Option"
+             parameter="view:columns" />
+            <menu_item_check.on_check
+             function="SKInvExplorer.OptionCheck"
+             parameter="view:columns" />
+        </menu_item_check>
+        <menu_item_check
+         label="Icons"
+         layout="topleft"
+         name="view_icons">
+            <menu_item_check.on_click
+             function="SKInvExplorer.Option"
+             parameter="view:icons" />
+            <menu_item_check.on_check
+             function="SKInvExplorer.OptionCheck"
+             parameter="view:icons" />
+        </menu_item_check>
+        <menu_item_check
+         label="List"
+         layout="topleft"
+         name="view_list">
+            <menu_item_check.on_click
+             function="SKInvExplorer.Option"
+             parameter="view:list" />
+            <menu_item_check.on_check
+             function="SKInvExplorer.OptionCheck"
+             parameter="view:list" />
+        </menu_item_check>
+        <menu_item_check
+         label="Gallery"
+         layout="topleft"
+         name="view_gallery">
+            <menu_item_check.on_click
+             function="SKInvExplorer.Option"
+             parameter="view:gallery" />
+            <menu_item_check.on_check
+             function="SKInvExplorer.OptionCheck"
+             parameter="view:gallery" />
+        </menu_item_check>
+    </menu>
+    <menu
+     label="Group By"
+     layout="topleft"
+     name="Group By">
+        <menu_item_check
+         label="None"
+         layout="topleft"
+         name="group_none">
+            <menu_item_check.on_click
+             function="SKInvExplorer.Option"
+             parameter="group:none" />
+            <menu_item_check.on_check
+             function="SKInvExplorer.OptionCheck"
+             parameter="group:none" />
+        </menu_item_check>
+        <menu_item_check
+         label="Type"
+         layout="topleft"
+         name="group_type">
+            <menu_item_check.on_click
+             function="SKInvExplorer.Option"
+             parameter="group:type" />
+            <menu_item_check.on_check
+             function="SKInvExplorer.OptionCheck"
+             parameter="group:type" />
+        </menu_item_check>
+        <menu_item_check
+         label="Date Acquired"
+         layout="topleft"
+         name="group_date">
+            <menu_item_check.on_click
+             function="SKInvExplorer.Option"
+             parameter="group:date" />
+            <menu_item_check.on_check
+             function="SKInvExplorer.OptionCheck"
+             parameter="group:date" />
+        </menu_item_check>
+        <menu_item_check
+         label="Brand"
+         layout="topleft"
+         name="group_brand">
+            <menu_item_check.on_click
+             function="SKInvExplorer.Option"
+             parameter="group:brand" />
+            <menu_item_check.on_check
+             function="SKInvExplorer.OptionCheck"
+             parameter="group:brand" />
+        </menu_item_check>
+        <menu_item_check
+         label="Permissions"
+         layout="topleft"
+         name="group_perms">
+            <menu_item_check.on_click
+             function="SKInvExplorer.Option"
+             parameter="group:perms" />
+            <menu_item_check.on_check
+             function="SKInvExplorer.OptionCheck"
+             parameter="group:perms" />
+        </menu_item_check>
+        <menu_item_check
+         label="Worn"
+         layout="topleft"
+         name="group_worn">
+            <menu_item_check.on_click
+             function="SKInvExplorer.Option"
+             parameter="group:worn" />
+            <menu_item_check.on_check
+             function="SKInvExplorer.OptionCheck"
+             parameter="group:worn" />
+        </menu_item_check>
+        <menu_item_check
+         label="Creator"
+         layout="topleft"
+         name="group_creator">
+            <menu_item_check.on_click
+             function="SKInvExplorer.Option"
+             parameter="group:creator" />
+            <menu_item_check.on_check
+             function="SKInvExplorer.OptionCheck"
+             parameter="group:creator" />
+        </menu_item_check>
+    </menu>
+    <menu
+     label="Sort By"
+     layout="topleft"
+     name="Sort By">
+        <menu_item_check
+         label="Name"
+         layout="topleft"
+         name="sort_name">
+            <menu_item_check.on_click
+             function="SKInvExplorer.Option"
+             parameter="sort:name" />
+            <menu_item_check.on_check
+             function="SKInvExplorer.OptionCheck"
+             parameter="sort:name" />
+        </menu_item_check>
+        <menu_item_check
+         label="Type"
+         layout="topleft"
+         name="sort_type">
+            <menu_item_check.on_click
+             function="SKInvExplorer.Option"
+             parameter="sort:type" />
+            <menu_item_check.on_check
+             function="SKInvExplorer.OptionCheck"
+             parameter="sort:type" />
+        </menu_item_check>
+        <menu_item_check
+         label="Creator"
+         layout="topleft"
+         name="sort_creator">
+            <menu_item_check.on_click
+             function="SKInvExplorer.Option"
+             parameter="sort:creator" />
+            <menu_item_check.on_check
+             function="SKInvExplorer.OptionCheck"
+             parameter="sort:creator" />
+        </menu_item_check>
+        <menu_item_check
+         label="Acquired"
+         layout="topleft"
+         name="sort_acquired">
+            <menu_item_check.on_click
+             function="SKInvExplorer.Option"
+             parameter="sort:acquired" />
+            <menu_item_check.on_check
+             function="SKInvExplorer.OptionCheck"
+             parameter="sort:acquired" />
+        </menu_item_check>
+        <menu_item_check
+         label="Perms"
+         layout="topleft"
+         name="sort_perms">
+            <menu_item_check.on_click
+             function="SKInvExplorer.Option"
+             parameter="sort:perms" />
+            <menu_item_check.on_check
+             function="SKInvExplorer.OptionCheck"
+             parameter="sort:perms" />
+        </menu_item_check>
+        <menu_item_check
+         label="Worn on"
+         layout="topleft"
+         name="sort_worn">
+            <menu_item_check.on_click
+             function="SKInvExplorer.Option"
+             parameter="sort:worn" />
+            <menu_item_check.on_check
+             function="SKInvExplorer.OptionCheck"
+             parameter="sort:worn" />
+        </menu_item_check>
+        <menu_item_check
+         label="Description"
+         layout="topleft"
+         name="sort_description">
+            <menu_item_check.on_click
+             function="SKInvExplorer.Option"
+             parameter="sort:description" />
+            <menu_item_check.on_check
+             function="SKInvExplorer.OptionCheck"
+             parameter="sort:description" />
+        </menu_item_check>
+        <menu_item_separator
+         layout="topleft"
+         name="sort_dir_separator" />
+        <menu_item_check
+         label="Ascending"
+         layout="topleft"
+         name="dir_asc">
+            <menu_item_check.on_click
+             function="SKInvExplorer.Option"
+             parameter="dir:asc" />
+            <menu_item_check.on_check
+             function="SKInvExplorer.OptionCheck"
+             parameter="dir:asc" />
+        </menu_item_check>
+        <menu_item_check
+         label="Descending"
+         layout="topleft"
+         name="dir_desc">
+            <menu_item_check.on_click
+             function="SKInvExplorer.Option"
+             parameter="dir:desc" />
+            <menu_item_check.on_check
+             function="SKInvExplorer.OptionCheck"
+             parameter="dir:desc" />
+        </menu_item_check>
+    </menu>
 </context_menu>
