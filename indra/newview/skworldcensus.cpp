@@ -1374,12 +1374,9 @@ void SKWorldCensus::visitPart(const PartFacts& facts, LLVOVolume* live)
             }
             sig = mix(sig, held.mSim ? 1 + held.mSim->mTriangles.size() : 0);
         }
-        // A sculpt's texture arriving replaces the stretched placeholder, so
-        // its level has to move the signature or the placeholder never leaves.
-        else if (facts.mShape.mSculpted)
-        {
-            sig = mix(sig, static_cast<U64>(facts.mSculptLevel + 3));
-        }
+        // No sculpt level: a sculpt is recorded only at level 0 (record), and its
+        // texture's discard follows the camera, or is none at all from the object
+        // cache, so the level re-signed and dropped static sculpts every few scans.
     }
 
     // A record every class leaves out shapes nothing and stays out of every
