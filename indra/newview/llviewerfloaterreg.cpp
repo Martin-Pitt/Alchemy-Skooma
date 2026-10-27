@@ -118,6 +118,7 @@
 #include "alfloatersceneexplorerfilters.h"
 #include "llfloaterinventorysettings.h"
 #include "llfloaterinventorythumbnailshelper.h"
+#include "skfloaterinventoryexplorer.h" // <SK:Nexii> Inventory Explorer
 #include "llfloaterjoystick.h"
 #include "llfloaterlagmeter.h"
 #include "llfloaterland.h"
@@ -213,7 +214,6 @@
 // [RLVa:KB] - Checked: 2010-03-11
 #include "rlvfloaters.h"
 // [/RLVa:KB]
-#include "skfloaterinventoryexplorer.h" // <SK:Nexii> Inventory Explorer
 // handle secondlife:///app/openfloater/{NAME} URLs
 const std::string FLOATER_PROFILE("profile");
 class LLFloaterOpenHandler : public LLCommandHandler
