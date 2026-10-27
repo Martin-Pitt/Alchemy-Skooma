@@ -201,7 +201,8 @@ S32 SKInventoryListView::getScroll() const
     return mScrollbar->getDocPos();
 }
 
-bool SKInventoryListView::readRows(const LLUUID& folder_id, const SKInventoryListLabels& labels, std::vector<SKInventoryRow>& rows)
+bool SKInventoryListView::readRows(const LLUUID& folder_id, const SKInventoryListLabels& labels, std::vector<SKInventoryRow>& rows,
+                                   bool fetch)
 {
     rows.clear();
     LLViewerInventoryCategory* folder = gInventory.getCategory(folder_id);
@@ -213,7 +214,10 @@ bool SKInventoryListView::readRows(const LLUUID& folder_id, const SKInventoryLis
     bool loading = false;
     if (folder->getVersion() == LLViewerInventoryCategory::VERSION_UNKNOWN || !gInventory.isCategoryComplete(folder_id))
     {
-        LLInventoryModelBackgroundFetch::instance().start(folder_id, false);
+        if (fetch)
+        {
+            LLInventoryModelBackgroundFetch::instance().start(folder_id, false);
+        }
         loading = true;
     }
 

@@ -30,6 +30,7 @@
 
 #include "llfontgl.h"
 #include "llinventorymodel.h"
+#include "llinventorymodelbackgroundfetch.h"
 #include "lllocalcliprect.h"
 #include "llrender2dutils.h"
 #include "llscrollbar.h"
@@ -80,6 +81,11 @@ SKInventoryColumnsView::SKInventoryColumnsView(const Params& p)
     mStripPad(0),
     mHoverColumn(-1),
     mHoverRow(-1),
+    mContentGeneration(0),
+    mGhostGeneration(U32_MAX),
+    mGhostSortKey(SKInventoryListView::COL_ACQUIRED),
+    mGhostSortAscending(false),
+    mGhostFetchPending(false),
     mStripScrollbar(nullptr)
 {
     const S32 bar = LLUI::getInstance()->mSettingGroups["config"]->getS32("UIScrollbarSize");
@@ -110,7 +116,7 @@ void SKInventoryColumnsView::setFolder(const LLUUID& folder_id, const uuid_vec_t
     mFolderID = folder_id;
     mCursor = -1;
     mAnchor = -1;
-    rebuild();
+    rebuild(true);
     setSelection(selection);
 }
 
@@ -179,9 +185,34 @@ const SKInventoryColumnsView::Column* SKInventoryColumnsView::currentColumn() co
     return (mCurrent >= 0 && mCurrent < (S32)mColumns.size()) ? &mColumns[mCurrent] : nullptr;
 }
 
-void SKInventoryColumnsView::readColumn(Column& column, bool folders_too)
+SKInventoryColumnsView::scroll_map_t SKInventoryColumnsView::getColumnScrolls() const
 {
-    column.mLoading = SKInventoryListView::readRows(column.mFolderID, mLabels, column.mRows);
+    scroll_map_t scrolls;
+    for (const Column& column : mColumns)
+    {
+        auto it = mScrolls.find(column.mFolderID);
+        if (it != mScrolls.end())
+        {
+            scrolls.insert(*it);
+        }
+    }
+    return scrolls;
+}
+
+void SKInventoryColumnsView::focusFirstColumn()
+{
+    if (mCurrent > 0 && mMoveCallback)
+    {
+        mMoveCallback(mColumns.front().mFolderID);
+    }
+    setFocus(true);
+    selectFirstRow();
+    revealColumns(false);
+}
+
+void SKInventoryColumnsView::readColumn(Column& column, bool folders_too, bool fetch)
+{
+    column.mLoading = SKInventoryListView::readRows(column.mFolderID, mLabels, column.mRows, fetch);
     if (!folders_too)
     {
         // At My Inventory or the Library the sidebar lists the folders, so only loose items stay.
@@ -190,7 +221,7 @@ void SKInventoryColumnsView::readColumn(Column& column, bool folders_too)
     SKInventoryListView::sortRows(column.mRows, mSortKey, mSortAscending);
 }
 
-void SKInventoryColumnsView::rebuild()
+void SKInventoryColumnsView::rebuild(bool reveal_path)
 {
     mDirty = false;
     const uuid_vec_t selection = getSelection();
@@ -229,17 +260,25 @@ void SKInventoryColumnsView::rebuild()
     mLoading = false;
     if (Column* current = currentColumn())
     {
-        std::vector<SKInventoryRow> all;
-        mLoading = SKInventoryListView::readRows(current->mFolderID, mLabels, all);
-        for (const SKInventoryRow& row : all)
+        mLoading = current->mLoading;
+        LLInventoryModel::cat_array_t* cats = nullptr;
+        LLInventoryModel::item_array_t* items = nullptr;
+        gInventory.getDirectDescendentsOf(current->mFolderID, cats, items);
+        mFolderCount = cats ? (S32)cats->size() : 0;
+        if (items)
         {
-            (row.mIsFolder ? mFolderCount : mItemCount)++;
+            for (const LLViewerInventoryItem* item : *items)
+            {
+                // A folder link counts as the folder it opens, as its row does.
+                const bool folder_link = item->getIsLinkType() && gInventory.getCategory(item->getLinkedUUID());
+                (folder_link ? mFolderCount : mItemCount)++;
+            }
         }
         // Grouping headers (step 3) go into the current column here.
     }
 
-    // Each path column keeps its scroll, moving only to show the row the path goes on through.
-    for (S32 i = 0; i < mCurrent; ++i)
+    // On navigation each path column moves only to show the row the path goes on through; live updates keep scrolls.
+    for (S32 i = 0; reveal_path && i < mCurrent; ++i)
     {
         const Column& column = mColumns[i];
         for (S32 r = 0; r < (S32)column.mRows.size(); ++r)
@@ -307,15 +346,30 @@ void SKInventoryColumnsView::rebuildTrailing()
     if (single && single->mIsFolder)
     {
         // A folder or folder link previews its contents, dimmed.
-        trailing.mKind = KIND_GHOST;
-        trailing.mFolderID = single->mTargetID;
-        readColumn(trailing, true);
-        if ((S32)trailing.mRows.size() > GHOST_ROWS)
+        // Read again only when the folder, the content or the sort moved; a fetch waits for the cursor to rest.
+        if (mGhostCache.mFolderID != single->mTargetID || mGhostGeneration != mContentGeneration
+            || mGhostSortKey != mSortKey || mGhostSortAscending != mSortAscending)
         {
-            trailing.mMore = (S32)trailing.mRows.size() - GHOST_ROWS;
-            trailing.mRows.resize(GHOST_ROWS);
+            if (mGhostCache.mFolderID != single->mTargetID)
+            {
+                mGhostRestTimer.reset();
+                mGhostFetchPending = true;
+            }
+            mGhostCache = Column();
+            mGhostCache.mKind = KIND_GHOST;
+            mGhostCache.mFolderID = single->mTargetID;
+            readColumn(mGhostCache, true, false);
+            if ((S32)mGhostCache.mRows.size() > GHOST_ROWS)
+            {
+                mGhostCache.mMore = (S32)mGhostCache.mRows.size() - GHOST_ROWS;
+                mGhostCache.mRows.resize(GHOST_ROWS);
+            }
+            mGhostCache.mWidth = COLUMN_WIDTH;
+            mGhostGeneration = mContentGeneration;
+            mGhostSortKey = mSortKey;
+            mGhostSortAscending = mSortAscending;
         }
-        trailing.mWidth = COLUMN_WIDTH;
+        trailing = mGhostCache;
     }
     else if (single && mDetailsShown)
     {
@@ -585,12 +639,16 @@ bool SKInventoryColumnsView::selectRow(S32 column, S32 row, MASK mask)
         {
             mMoveCallback(folder_id);
         }
-        if (mFolderID == folder_id)
+        const Column* current = currentColumn();
+        if (mFolderID != folder_id || !current)
         {
-            setSelection({ row_id });
-            if (mSelectionCallback)
+            return true;
+        }
+        for (S32 r = 0; r < (S32)current->mRows.size(); ++r)
+        {
+            if (current->mRows[r].mID == row_id)
             {
-                mSelectionCallback();
+                return selectRow(mCurrent, r, mask);
             }
         }
         return true;
@@ -628,8 +686,9 @@ void SKInventoryColumnsView::draw()
 {
     if (mDirty)
     {
-        rebuild();
+        rebuild(false);
     }
+    fetchGhostWhenResting();
 
     const S32 bar = mStripScrollbar->getVisible() ? mStripScrollbar->getRect().getHeight() : 0;
     const S32 height = getRect().getHeight();
@@ -647,6 +706,21 @@ void SKInventoryColumnsView::draw()
         }
     }
     LLUICtrl::draw();
+}
+
+void SKInventoryColumnsView::fetchGhostWhenResting()
+{
+    constexpr F32 REST_SECONDS = 0.25f;
+    if (!mGhostFetchPending || mGhostRestTimer.getElapsedTimeF32() < REST_SECONDS)
+    {
+        return;
+    }
+    mGhostFetchPending = false;
+    const bool shown = !mColumns.empty() && mColumns.back().mKind == KIND_GHOST && mColumns.back().mFolderID == mGhostCache.mFolderID;
+    if (shown && mGhostCache.mLoading)
+    {
+        LLInventoryModelBackgroundFetch::instance().start(mGhostCache.mFolderID, false);
+    }
 }
 
 void SKInventoryColumnsView::drawColumn(const Column& column, S32 index, S32 height, bool focused)
@@ -843,7 +917,14 @@ bool SKInventoryColumnsView::handleMouseDown(S32 x, S32 y, MASK mask)
         {
             const LLUUID folder_id = column.mFolderID;
             const LLUUID row_id = column.mRows[row].mID;
-            if (mMoveCallback)
+            const LLViewerInventoryCategory* cat = gInventory.getCategory(folder_id);
+            // A folder link's target outside the path is a navigation, recorded in history.
+            const bool elsewhere = !cat || cat->getParentUUID() != mFolderID;
+            if (elsewhere && mOpenCallback)
+            {
+                mOpenCallback(folder_id);
+            }
+            else if (mMoveCallback)
             {
                 mMoveCallback(folder_id);
             }

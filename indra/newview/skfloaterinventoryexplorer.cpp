@@ -744,8 +744,7 @@ bool SKFloaterInventoryExplorer::onSidebarKey(KEY key, MASK mask)
     // In Columns the sidebar is column 0, so -> steps into the first column.
     if (isColumns() && key == KEY_RIGHT && mask == MASK_NONE)
     {
-        mColumns->setFocus(true);
-        mColumns->selectFirstRow();
+        mColumns->focusFirstColumn();
         return true;
     }
     return false;

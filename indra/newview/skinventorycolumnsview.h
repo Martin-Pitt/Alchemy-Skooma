@@ -28,6 +28,7 @@
 #define SK_SKINVENTORYCOLUMNSVIEW_H
 
 #include "lleditmenuhandler.h"
+#include "llframetimer.h"
 #include "lluictrl.h"
 #include "skinventorylistview.h"
 
@@ -71,13 +72,14 @@ public:
     // A tab's scrolls: the strip's and each column's first row, per folder.
     void setScrollState(S32 strip_x, const scroll_map_t& scrolls);
     S32 getStripScroll() const { return mStripX; }
-    const scroll_map_t& getColumnScrolls() const { return mScrolls; }
+    // Only the folders on screen keep a scroll, so a tab's memory stays small.
+    scroll_map_t getColumnScrolls() const;
 
     void setSort(SKInventoryListView::EColumn key, bool ascending);
     void setDetailsShown(bool shown);
 
     // Reads every column again on the next draw, keeping selection and scrolls.
-    void markDirty() { mDirty = true; }
+    void markDirty() { mDirty = true; ++mContentGeneration; }
     bool lists(const LLUUID& id) const;
     // The deepest folder on the path that still exists, for a path whose folder went.
     LLUUID nearestLiveFolder() const;
@@ -86,6 +88,8 @@ public:
     void setSelection(const uuid_vec_t& ids);
     // Selects the current column's first row when nothing is selected.
     void selectFirstRow();
+    // Focuses the first column, making it current, from the sidebar.
+    void focusFirstColumn();
 
     U32 getGeneration() const { return mGeneration; }
     S32 getSelectedCount() const { return mSelectedCount; }
@@ -141,10 +145,11 @@ protected:
         S32 mWidth = 0;
     };
 
-    void rebuild();
+    void rebuild(bool reveal_path);
     void rebuildTrailing();
     void layoutColumns();
-    void readColumn(Column& column, bool folders_too);
+    void readColumn(Column& column, bool folders_too, bool fetch = true);
+    void fetchGhostWhenResting();
     void revealColumns(bool trailing);
     void updateStripScrollbar();
     void notifySelection(bool reveal);
@@ -183,6 +188,13 @@ protected:
     bool mSortAscending;
     std::unordered_set<LLUUID> mListedIDs;
     std::vector<LLUUID> mPath;
+    U32 mContentGeneration;     // bumped by every live change
+    Column mGhostCache;         // the last ghost read, reused while its folder, the content and the sort hold
+    U32 mGhostGeneration;
+    SKInventoryListView::EColumn mGhostSortKey;
+    bool mGhostSortAscending;
+    LLFrameTimer mGhostRestTimer;
+    bool mGhostFetchPending;
 
     S32 mStripX;
     S32 mStripPad;      // room added past the last column so the scroll needn't clamp
