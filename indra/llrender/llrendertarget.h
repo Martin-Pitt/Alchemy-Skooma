@@ -31,6 +31,7 @@
 
 #include "alrendertargetdesc.h"
 #include "llgl.h"
+#include "llrect.h"
 #include "llrender.h"
 
 #include <array>
@@ -63,10 +64,12 @@
 
 */
 
+class LLGLSLShader;
+class LLVertexBuffer;
+
 class LLRenderTarget
 {
 public:
-    static U32 sBytesAllocated;
     static U32 sCurFBO;
     static U32 sCurResX;
     static U32 sCurResY;
@@ -111,7 +114,10 @@ public:
     // stencil - if true, allocate a combined depth+stencil buffer (requires depth)
     // usage - deprecated, should always be TT_TEXTURE
     // depth_fmt - bit depth for the depth component (ignored unless depth is true)
-    bool allocate(U32 resx, U32 resy, U32 color_fmt, bool depth = false, bool stencil = false, ALTextureSlot::eTextureType usage = ALTextureSlot::TT_TEXTURE, eMipGeneration generateMipMaps = MIPS_NONE, eDepthFormat depth_fmt = DEPTH_FMT_24);
+    // mip_levels - with mips, the levels each colour attachment holds from level 0 down: 0 for every level to 1x1, and
+    //              never more than that. desc() does not say it: a target given a shorter chain describes itself as
+    //              one with every level, so it is for targets ensure does not build, and resize gives every level.
+    bool allocate(U32 resx, U32 resy, U32 color_fmt, bool depth = false, bool stencil = false, ALTextureSlot::eTextureType usage = ALTextureSlot::TT_TEXTURE, eMipGeneration generateMipMaps = MIPS_NONE, eDepthFormat depth_fmt = DEPTH_FMT_24, U32 mip_levels = 0);
 
     // What this target's own storage is: its size, the formats of the colour attachments it allocated, the depth it
     // allocated, and its mips. A released target is the default description. A depth attachment shared from another
@@ -150,8 +156,9 @@ public:
     // it attached from one built since in its place. 0 for none.
     U64 getDepthSerial() const { return mDepthSerial; }
 
-    // What sBytesAllocated counts for a target built from `desc`: each colour attachment's first level and the depth
-    // of its own, not a depth it shares.
+    // What the VRAM accounting counts for a target built from `desc`, as render target storage: every level of each
+    // colour attachment and the depth of its own, not a depth it shares, at the size their formats pad to, and at the
+    // size allocate holds a description to where there is a context.
     static U64 bytesFor(const ALRenderTargetDesc& desc);
 
     // The name debuggers and the GL debug output show for this target: its framebuffer is labelled `label`, the
@@ -295,6 +302,15 @@ public:
 
     static void copyContentsToFramebuffer(LLRenderTarget& source, S32 srcX0, S32 srcY0, S32 srcX1, S32 srcY1, S32 dstX0, S32 dstY0,
                                           S32 dstX1, S32 dstY1, U32 mask, U32 filter);
+
+    // `source`'s colour into `dest` by a draw rather than a blit, which a driver may run as a pixel transfer it has
+    // to synchronize with the rendering around it: `program`, a copy reading DIFFUSE_MAP at the screen triangle's
+    // coordinates (the viewer's interface/copyF.glsl), over `triangle`, the screen triangle, point sampled, so that each
+    // texel of `dest` takes the one of `source` under its centre. Only over `rect` where there is one, the scissor
+    // keeping the rest of `dest` as it was. No depth is written, nothing blended, and the targets bound before are bound
+    // again after.
+    static void drawCopy(LLRenderTarget& dest, LLRenderTarget& source, const LLRect* rect, LLGLSLShader& program,
+                         LLVertexBuffer& triangle);
 
     // Copies the colour of the rect srcX0..srcX1, srcY0..srcY1 of the framebuffer bound now (the window's where no
     // target is) into this target's rect dstX0..dstX1, dstY0..dstY1, scaled with `filter`, GL_NEAREST or GL_LINEAR.
