@@ -593,8 +593,46 @@ LLVector3d SKNetMap::regionFit(const LLViewerRegion* region, F32* span)
             loaded[i][j] = (i != 1 || j != 1) && world->getRegionFromPosGlobal(probe);
         }
     }
-    // From 0 to 1 the region's box grows into every side with a loaded neighbour, diagonals included;
-    // from 0 to -1 it zooms to a 32 m box around the anchor, kept within the region and up to 32 m past it.
+    // At 0 a region's box slides with the anchor along the lines joining the centres of edge-adjacent loaded regions,
+    // so an L of regions is walked through its corner.
+    LLVector3d slide = origin + LLVector3d(width * 0.5, width * 0.5, 0.0);
+    {
+        F64 best = F64_MAX;
+        const auto consider = [&](const LLVector3d& a, const LLVector3d& b)
+        {
+            const F64 dx = b.mdV[VX] - a.mdV[VX], dy = b.mdV[VY] - a.mdV[VY];
+            const F64 length2 = dx * dx + dy * dy;
+            const F64 u = length2 > 0.0 ? llclamp(((anchor.mdV[VX] - a.mdV[VX]) * dx + (anchor.mdV[VY] - a.mdV[VY]) * dy) / length2, 0.0, 1.0) : 0.0;
+            const F64 px = a.mdV[VX] + dx * u, py = a.mdV[VY] + dy * u;
+            const F64 d = (anchor.mdV[VX] - px) * (anchor.mdV[VX] - px) + (anchor.mdV[VY] - py) * (anchor.mdV[VY] - py);
+            if (d < best)
+            {
+                best = d;
+                slide.mdV[VX] = px;
+                slide.mdV[VY] = py;
+            }
+        };
+        const LLWorld::region_list_t& regions = world->getRegionList();
+        for (auto a = regions.begin(); a != regions.end(); ++a)
+        {
+            const F64 wa = (*a)->getWidth();
+            const LLVector3d ca = (*a)->getOriginGlobal() + LLVector3d(wa * 0.5, wa * 0.5, 0.0);
+            consider(ca, ca);
+            for (auto b = std::next(a); b != regions.end(); ++b)
+            {
+                const F64 wb = (*b)->getWidth();
+                const LLVector3d cb = (*b)->getOriginGlobal() + LLVector3d(wb * 0.5, wb * 0.5, 0.0);
+                const F64 dx = fabs(cb.mdV[VX] - ca.mdV[VX]), dy = fabs(cb.mdV[VY] - ca.mdV[VY]);
+                const F64 touch = (wa + wb) * 0.5;
+                if ((fabs(dx - touch) < 1.0 && dy < 1.0) || (fabs(dy - touch) < 1.0 && dx < 1.0))
+                {
+                    consider(ca, cb);
+                }
+            }
+        }
+    }
+    // From 0 to 1 the sliding box grows to the region and every side with a loaded neighbour, diagonals included;
+    // from 0 to -1 it zooms to a 32 m box around the anchor, kept within the sliding box and up to 32 m past it.
     F64 extent = 0.0;
     for (S32 axis : { VX, VY })
     {
@@ -605,12 +643,14 @@ LLVector3d SKNetMap::regionFit(const LLViewerRegion* region, F32* span)
             lo |= axis == VX ? loaded[0][k] : loaded[k][0];
             hi |= axis == VX ? loaded[2][k] : loaded[k][2];
         }
-        F64 min = origin.mdV[axis];
-        F64 max = origin.mdV[axis] + width;
+        F64 min = slide.mdV[axis] - width * 0.5;
+        F64 max = slide.mdV[axis] + width * 0.5;
         if (t >= 0.0)
         {
-            min -= lo ? t * width : 0.0;
-            max += hi ? t * width : 0.0;
+            const F64 grown_min = origin.mdV[axis] - (lo ? width : 0.0);
+            const F64 grown_max = origin.mdV[axis] + width + (hi ? width : 0.0);
+            min += (grown_min - min) * t;
+            max += (grown_max - max) * t;
         }
         else
         {
