@@ -158,6 +158,8 @@ public:
 
     // Columns view: the sidebar is the first column, flat, nothing expanding.
     void setFlat(bool flat);
+    // A live inventory panel, for the bridges the content views' menu runs actions through.
+    LLInventoryPanel* getInventoryPanel() const;
     // Gives keyboard focus to the panel holding the selected row.
     void focusSelection();
 

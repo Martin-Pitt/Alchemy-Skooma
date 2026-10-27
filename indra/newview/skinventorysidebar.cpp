@@ -676,3 +676,15 @@ void SKInventorySidebar::onPanelSelect(SKInventorySidebarPanel* panel, const std
         mOpenCallback(model->getUUID());
     }
 }
+
+LLInventoryPanel* SKInventorySidebar::getInventoryPanel() const
+{
+    for (SKInventorySidebarPanel* panel : mPanels)
+    {
+        if (panel->getSection() == SKInventorySidebarPanel::SECTION_INVENTORY)
+        {
+            return panel;
+        }
+    }
+    return mPanels.empty() ? nullptr : mPanels.front();
+}

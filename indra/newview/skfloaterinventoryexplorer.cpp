@@ -36,6 +36,7 @@
 #include "lllocalcliprect.h"
 #include "lllayoutstack.h"
 #include "llrender2dutils.h"
+#include "llsliderctrl.h"
 #include "lltextbox.h"
 #include "lltooltip.h"
 #include "llui.h"
@@ -59,6 +60,7 @@ namespace
     constexpr S32 CONTENT_MIN = 200;
     constexpr S32 SIDEBAR_DEFAULT = 220;
     constexpr S32 DETAILS_DEFAULT = 250;
+    constexpr S32 SIZE_LABEL_WIDTH = 26; // the size slider label_width in XUI
     const char* const PATH_SEPARATOR = " \xE2\x80\xBA ";
 }
 
@@ -360,6 +362,11 @@ SKFloaterInventoryExplorer::SKFloaterInventoryExplorer(const LLSD& key)
     mTabStrip(nullptr),
     mSidebar(nullptr),
     mList(nullptr),
+    mColumns(nullptr),
+    mIcons(nullptr),
+    mSortBtn(nullptr),
+    mGroupBtn(nullptr),
+    mSizeSlider(nullptr),
     mBackBtn(nullptr),
     mForwardBtn(nullptr),
     mUpBtn(nullptr),
@@ -391,6 +398,10 @@ bool SKFloaterInventoryExplorer::postBuild()
     mSidebar = getChild<SKInventorySidebar>("sidebar");
     mList = getChild<SKInventoryListView>("list_view");
     mColumns = getChild<SKInventoryColumnsView>("columns_view");
+    mIcons = getChild<SKInventoryIconsView>("icons_view");
+    mSortBtn = getChild<LLButton>("sort_btn");
+    mGroupBtn = getChild<LLButton>("group_btn");
+    mSizeSlider = getChild<LLSliderCtrl>("size_slider");
     mBackBtn = getChild<LLButton>("back_btn");
     mForwardBtn = getChild<LLButton>("forward_btn");
     mUpBtn = getChild<LLButton>("up_btn");
@@ -424,13 +435,35 @@ bool SKFloaterInventoryExplorer::postBuild()
     mUpBtn->setCommitCallback([this](LLUICtrl*, const LLSD&) { goUp(); });
     mDetailsBtn->setCommitCallback([this](LLUICtrl*, const LLSD&) { onToggleDetails(); });
 
-    // Icons and Gallery are not built yet; they say so.
-    for (const char* name : { "view_icons_btn", "view_gallery_btn" })
+    // Gallery is not built yet; it says so.
+    LLButton* gallery_btn = getChild<LLButton>("view_gallery_btn");
+    gallery_btn->setToolTip(gallery_btn->getToolTip() + " " + getString("view_unavailable"));
+    gallery_btn->setEnabled(false);
+    getChild<LLButton>("view_icons_btn")->setCommitCallback([this](LLUICtrl*, const LLSD&) { setView(SKExplorerTab::VIEW_ICONS); });
+
+    mOptions.mSet = [this](const std::string& option) { setOption(option); };
+    mOptions.mCheck = [this](const std::string& option) { return checkOption(option); };
+    // Group and Sort open their menus at the button's left edge, 2 px below.
+    for (LLButton* button : { mSortBtn, mGroupBtn })
     {
-        LLButton* button = getChild<LLButton>(name);
-        button->setToolTip(button->getToolTip() + " " + getString("view_unavailable"));
-        button->setEnabled(false);
+        button->setCommitCallback([this, button](LLUICtrl*, const LLSD&)
+                                  {
+                                      SKInventoryExplorerContextMenu::showOptionsMenu(button == mSortBtn ? "menu_sk_inventory_explorer_sort.xml"
+                                                                                                         : "menu_sk_inventory_explorer_group.xml",
+                                                                                      mOptions, button, 0, -2);
+                                  });
     }
+    mSizeSlider->setValue((F32)llclamp(gSavedPerAccountSettings.getS32("SkoomaInvExplorerIconSize"), SKInventoryIconsView::MIN_TILE,
+                                  SKInventoryIconsView::MAX_TILE));
+    mSizeSlider->setCommitCallback([this](LLUICtrl*, const LLSD&) { onIconSizeChanged(); });
+    mIcons->setTileSize((S32)mSizeSlider->getValueF32());
+
+    const LLSD hidden = gSavedPerAccountSettings.getLLSD("SkoomaInvExplorerHiddenColumns");
+    for (LLSD::array_const_iterator it = hidden.beginArray(); it != hidden.endArray(); ++it)
+    {
+        mHiddenColumns.insert(it->asString());
+    }
+    mList->setHiddenColumns(mHiddenColumns);
     getChild<LLButton>("view_columns_btn")->setCommitCallback([this](LLUICtrl*, const LLSD&) { setView(SKExplorerTab::VIEW_COLUMNS); });
     getChild<LLButton>("view_list_btn")->setCommitCallback([this](LLUICtrl*, const LLSD&) { setView(SKExplorerTab::VIEW_LIST); });
 
@@ -443,7 +476,7 @@ bool SKFloaterInventoryExplorer::postBuild()
     }
 
     SKInventoryListLabels labels;
-    for (const char* key : { "col_name", "col_type", "col_creator", "col_acquired", "col_perms", "col_worn", "col_description" })
+    for (const char* key : { "col_name", "col_folder", "col_type", "col_creator", "col_acquired", "col_perms", "col_worn", "col_description" })
     {
         labels.mColumns.push_back(getString(key));
     }
@@ -454,13 +487,26 @@ bool SKFloaterInventoryExplorer::postBuild()
     labels.mEmpty = getString("empty_folder");
     labels.mWorn = getString("worn");
     labels.mMore = getString("n_more");
-    mList->setLabels(labels);
+    labels.mShowAll = getString("show_all");
+    for (const char* key : { "folders", "objects", "clothing", "bodyparts", "textures", "sounds", "animations", "gestures", "landmarks",
+                             "notecards", "scripts", "materials", "settings", "callingcards", "other", "today", "yesterday", "this_week",
+                             "this_month", "earlier_this_year", "unknown", "system_folders", "no_brand", "full_perm", "copy_modify",
+                             "copy_transfer", "copy_only", "no_copy", "worn", "not_worn", "you" })
+    {
+        labels.mGroups[key] = getString(std::string("group_") + key);
+    }
     mColumns->setLabels(labels);
-    mList->setOpenCallback([this](const LLUUID& id) { openObject(id, false); });
-    mList->setUpCallback([this]() { goUp(); });
-    mList->setSelectionCallback([this]() { refreshDetails(); });
+    for (SKInventoryFlatView* view : { (SKInventoryFlatView*)mList, (SKInventoryFlatView*)mIcons })
+    {
+        view->setLabels(labels);
+        view->setOpenCallback([this](const LLUUID& id) { openObject(id, false); });
+        view->setUpCallback([this]() { goUp(); });
+        view->setSelectionCallback([this]() { refreshDetails(); });
+        view->setMenuCallback([this, view](S32 x, S32 y, const uuid_vec_t& ids) { showContextMenu(view, x, y, ids, view->getFolder()); });
+    }
     mList->setSortCallback([this]() { onListSortChanged(); });
-    mList->setMenuCallback([this](S32 x, S32 y, const uuid_vec_t& ids) { showContextMenu(mList, x, y, ids, mList->getFolder()); });
+    mList->setHeaderMenuCallback([this](S32 x, S32 y)
+                                 { SKInventoryExplorerContextMenu::showOptionsMenu("menu_sk_inventory_explorer_columns.xml", mOptions, mList, x, y); });
 
     mColumns->setMoveCallback([this](const LLUUID& folder_id) { navigateTo(folder_id, false); });
     mColumns->setOpenCallback([this](const LLUUID& id) { openObject(id, false); });
@@ -473,7 +519,9 @@ bool SKFloaterInventoryExplorer::postBuild()
     mSidebar->setOpenCallback([this](const LLUUID& folder_id) { navigateTo(folder_id, true); });
     mSidebar->setKeyCallback([this](KEY key, MASK mask) { return onSidebarKey(key, mask); });
 
-    mMenu = std::make_unique<SKInventoryExplorerContextMenu>([this](const LLUUID& id, bool new_tab) { openObject(id, new_tab); });
+    mMenu = std::make_unique<SKInventoryExplorerContextMenu>([this](const LLUUID& id, bool new_tab) { openObject(id, new_tab); },
+                                                             [this](const LLUUID& id) { startRename(id); }, mOptions,
+                                                             [this]() { return mSidebar->getInventoryPanel(); });
 
     const bool details = gSavedPerAccountSettings.getBOOL("SkoomaInvExplorerDetailsShown");
     mDetailsBtn->setToggleState(details);
@@ -504,8 +552,9 @@ void SKFloaterInventoryExplorer::draw()
         mStatusSelected = -1;
     }
     // The status follows the view's counts, read only when they move.
-    const U32 generation = isColumns() ? mColumns->getGeneration() : mList->getGeneration();
-    const S32 selected = isColumns() ? mColumns->getSelectedCount() : mList->getSelectedCount();
+    SKInventoryFlatView* flat = flatView();
+    const U32 generation = flat ? flat->getGeneration() : mColumns->getGeneration();
+    const S32 selected = flat ? flat->getSelectedCount() : mColumns->getSelectedCount();
     if (generation != mStatusGeneration || selected != mStatusSelected)
     {
         mStatusGeneration = generation;
@@ -513,6 +562,32 @@ void SKFloaterInventoryExplorer::draw()
         refreshStatus();
     }
     LLFloater::draw();
+
+    // A tick on the size slider marks the default size.
+    if (mSizeSlider->getVisible())
+    {
+        static LLUIColor tick_color = LLUIColorTable::instance().getColor("LtGray_50");
+        static LLPointer<LLUIImage> thumb = LLUI::getUIImage("SliderThumb_Off");
+        const LLRect rect = mSizeSlider->getRect();
+        const S32 half = thumb.notNull() ? thumb->getWidth() / 2 : 4;
+        const F32 t = (F32)(SKInventoryIconsView::DEFAULT_TILE - SKInventoryIconsView::MIN_TILE)
+                    / (F32)(SKInventoryIconsView::MAX_TILE - SKInventoryIconsView::MIN_TILE);
+        const S32 track_left = rect.mLeft + SIZE_LABEL_WIDTH;
+        const S32 x = track_left + half + (S32)(t * (rect.mRight - track_left - 2 * half));
+        gl_line_2d(x, rect.mBottom, x, rect.mBottom + 4, tick_color.get());
+    }
+}
+
+bool SKFloaterInventoryExplorer::handleDoubleClick(S32 x, S32 y, MASK mask)
+{
+    // A double-click on the size slider gives the default size.
+    if (mSizeSlider && mSizeSlider->getVisible() && mSizeSlider->getRect().pointInRect(x, y))
+    {
+        mSizeSlider->setValue((F32)SKInventoryIconsView::DEFAULT_TILE);
+        onIconSizeChanged();
+        return true;
+    }
+    return LLFloater::handleDoubleClick(x, y, mask);
 }
 
 bool SKFloaterInventoryExplorer::handleKeyHere(KEY key, MASK mask)
@@ -542,12 +617,14 @@ bool SKFloaterInventoryExplorer::handleKeyHere(KEY key, MASK mask)
             case '1':
                 setView(SKExplorerTab::VIEW_COLUMNS);
                 return true;
+            case '2':
+                setView(SKExplorerTab::VIEW_ICONS);
+                return true;
             case '3':
                 setView(SKExplorerTab::VIEW_LIST);
                 return true;
-            case '2':
             case '4':
-                return true; // Icons and Gallery are not built yet
+                return true; // Gallery is not built yet
             default:
                 break;
         }
@@ -570,20 +647,23 @@ void SKFloaterInventoryExplorer::onInventoryChanged(U32 mask)
         return;
     }
 
-    const LLUUID& folder_id = mList->getFolder();
-    bool affects_list = (mask & LLInventoryObserver::REBUILD) != 0;
-    for (const LLUUID& id : gInventory.getChangedIDs())
+    for (SKInventoryFlatView* view : { (SKInventoryFlatView*)mList, (SKInventoryFlatView*)mIcons })
     {
-        const LLInventoryObject* obj = gInventory.getObject(id);
-        if (id == folder_id || (obj && obj->getParentUUID() == folder_id) || mList->lists(id))
+        const LLUUID& folder_id = view->getFolder();
+        bool affects_view = (mask & LLInventoryObserver::REBUILD) != 0;
+        for (const LLUUID& id : gInventory.getChangedIDs())
         {
-            affects_list = true;
-            break;
+            const LLInventoryObject* obj = gInventory.getObject(id);
+            if (id == folder_id || (obj && obj->getParentUUID() == folder_id) || view->lists(id))
+            {
+                affects_view = true;
+                break;
+            }
         }
-    }
-    if (affects_list)
-    {
-        mList->markDirty();
+        if (affects_view)
+        {
+            view->markDirty();
+        }
     }
     bool affects_columns = (mask & LLInventoryObserver::REBUILD) != 0;
     for (const LLUUID& id : gInventory.getChangedIDs())
@@ -635,12 +715,10 @@ void SKFloaterInventoryExplorer::saveListState()
         tab.mStripScroll = mColumns->getStripScroll();
         tab.mColumnScrolls = mColumns->getColumnScrolls();
     }
-    else
+    else if (SKInventoryFlatView* flat = flatView())
     {
-        tab.mSelection = mList->getSelection();
-        tab.mListScroll = mList->getScroll();
-        tab.mSortKey = mList->getSortKey();
-        tab.mSortAscending = mList->getSortAscending();
+        tab.mSelection = flat->getSelection();
+        tab.mListScroll = flat->getScroll();
     }
 }
 
@@ -648,10 +726,15 @@ void SKFloaterInventoryExplorer::showCurrentTab()
 {
     SKExplorerTab& tab = currentTab();
     const bool columns = isColumns();
-    mList->setVisible(!columns);
+    SKInventoryFlatView* flat = flatView();
+    mList->setVisible(flat == mList);
+    mIcons->setVisible(flat == mIcons);
     mColumns->setVisible(columns);
+    // The size slider shows in Icons alone; its space stays.
+    mSizeSlider->setVisible(flat == mIcons);
     getChild<LLButton>("view_columns_btn")->setToggleState(columns);
-    getChild<LLButton>("view_list_btn")->setToggleState(!columns);
+    getChild<LLButton>("view_icons_btn")->setToggleState(flat == mIcons);
+    getChild<LLButton>("view_list_btn")->setToggleState(flat == mList);
     // Columns shows details as a column of its own, in place of the pane.
     const bool details = mDetailsBtn->getToggleState();
     mDetailsPanel->setVisible(details && !columns);
@@ -660,14 +743,17 @@ void SKFloaterInventoryExplorer::showCurrentTab()
     if (columns)
     {
         mColumns->setSort(tab.mSortKey, tab.mSortAscending);
+        mColumns->setGroup(tab.mGroup);
         mColumns->setScrollState(tab.mStripScroll, tab.mColumnScrolls);
         mColumns->setFolder(tab.mFolderID, tab.mSelection);
     }
     else
     {
-        mList->setSort(tab.mSortKey, tab.mSortAscending);
-        mList->setFolder(tab.mFolderID, tab.mSelection, tab.mListScroll);
+        flat->setSort(tab.mSortKey, tab.mSortAscending);
+        flat->setGroup(tab.mGroup);
+        flat->setFolder(tab.mFolderID, tab.mSelection, tab.mListScroll);
     }
+    refreshSortAndGroupButtons();
     revealInSidebar();
     mNeedsRefresh = true;
 }
@@ -681,7 +767,7 @@ void SKFloaterInventoryExplorer::showFolder()
     }
     else
     {
-        mList->setFolder(tab.mFolderID);
+        flatView()->setFolder(tab.mFolderID);
     }
     revealInSidebar();
     mNeedsRefresh = true;
@@ -724,7 +810,8 @@ void SKFloaterInventoryExplorer::setView(SKExplorerTab::EView view)
 
 uuid_vec_t SKFloaterInventoryExplorer::activeSelection() const
 {
-    return isColumns() ? mColumns->getSelection() : mList->getSelection();
+    SKInventoryFlatView* flat = flatView();
+    return flat ? flat->getSelection() : mColumns->getSelection();
 }
 
 void SKFloaterInventoryExplorer::setActiveSelection(const uuid_vec_t& ids)
@@ -735,7 +822,7 @@ void SKFloaterInventoryExplorer::setActiveSelection(const uuid_vec_t& ids)
     }
     else
     {
-        mList->setSelection(ids);
+        flatView()->setSelection(ids);
     }
 }
 
@@ -845,13 +932,13 @@ void SKFloaterInventoryExplorer::newTab(const LLUUID& folder_id)
     tab.mFolderID = folder_id;
     tab.mView = mTabs.empty() ? (SKExplorerTab::EView)llclamp(gSavedPerAccountSettings.getS32("SkoomaInvExplorerView"), 0, 3)
                               : currentTab().mView;
-    if (tab.mView != SKExplorerTab::VIEW_LIST)
+    if (tab.mView == SKExplorerTab::VIEW_GALLERY)
     {
-        tab.mView = SKExplorerTab::VIEW_COLUMNS; // Icons and Gallery are not built yet
+        tab.mView = SKExplorerTab::VIEW_COLUMNS; // Gallery is not built yet
     }
     tab.mSortKey = SKInventoryListView::columnFromKey(gSavedPerAccountSettings.getString("SkoomaInvExplorerSortKey"));
     tab.mSortAscending = gSavedPerAccountSettings.getBOOL("SkoomaInvExplorerSortAscending");
-    tab.mGroup = gSavedPerAccountSettings.getString("SkoomaInvExplorerGroup");
+    tab.mGroup = SKInventoryFlatView::groupFromKey(gSavedPerAccountSettings.getString("SkoomaInvExplorerGroup"));
 
     saveListState();
     const S32 index = mTabs.empty() ? 0 : mActiveTab + 1;
@@ -967,11 +1054,11 @@ std::string SKFloaterInventoryExplorer::countLabel(S32 folders, S32 items) const
 void SKFloaterInventoryExplorer::refreshStatus()
 {
     std::string text;
-    const bool columns = isColumns();
-    const S32 selected = columns ? mColumns->getSelectedCount() : mList->getSelectedCount();
-    const S32 folders = columns ? mColumns->getFolderCount() : mList->getFolderCount();
-    const S32 items = columns ? mColumns->getItemCount() : mList->getItemCount();
-    const bool loading = columns ? mColumns->isLoading() : mList->isLoading();
+    const SKInventoryFlatView* flat = flatView();
+    const S32 selected = flat ? flat->getSelectedCount() : mColumns->getSelectedCount();
+    const S32 folders = flat ? flat->getFolderCount() : mColumns->getFolderCount();
+    const S32 items = flat ? flat->getItemCount() : mColumns->getItemCount();
+    const bool loading = flat ? flat->isLoading() : mColumns->isLoading();
     if (loading && folders + items == 0)
     {
         text = getString("loading");
@@ -1075,8 +1162,181 @@ void SKFloaterInventoryExplorer::onListSortChanged()
     SKExplorerTab& tab = currentTab();
     tab.mSortKey = mList->getSortKey();
     tab.mSortAscending = mList->getSortAscending();
-    gSavedPerAccountSettings.setString("SkoomaInvExplorerSortKey", SKInventoryListView::columnKey(tab.mSortKey));
+    saveSortAndGroup();
+}
+
+void SKFloaterInventoryExplorer::saveSortAndGroup()
+{
+    const SKExplorerTab& tab = currentTab();
+    gSavedPerAccountSettings.setString("SkoomaInvExplorerSortKey", SKInventoryFlatView::columnKey(tab.mSortKey));
     gSavedPerAccountSettings.setBOOL("SkoomaInvExplorerSortAscending", tab.mSortAscending);
+    gSavedPerAccountSettings.setString("SkoomaInvExplorerGroup", SKInventoryFlatView::groupKey(tab.mGroup));
+    refreshSortAndGroupButtons();
+}
+
+void SKFloaterInventoryExplorer::refreshSortAndGroupButtons()
+{
+    const SKExplorerTab& tab = currentTab();
+    LLStringUtil::format_map_t sort_args;
+    sort_args["[KEY]"] = getString(std::string("col_") + SKInventoryFlatView::columnKey(tab.mSortKey));
+    sort_args["[DIR]"] = getString(tab.mSortAscending ? "sort_up" : "sort_down");
+    mSortBtn->setLabel(getString("sort_label", sort_args));
+    LLStringUtil::format_map_t group_args;
+    group_args["[GROUP]"] = getString(std::string("group_by_") + SKInventoryFlatView::groupKey(tab.mGroup));
+    mGroupBtn->setLabel(getString("group_label", group_args));
+    // Lit while grouping.
+    mGroupBtn->setToggleState(tab.mGroup != SKInventoryFlatView::GROUP_NONE);
+}
+
+SKInventoryFlatView* SKFloaterInventoryExplorer::flatView() const
+{
+    if (mTabs.empty())
+    {
+        return nullptr;
+    }
+    switch (mTabs[mActiveTab].mView)
+    {
+        case SKExplorerTab::VIEW_ICONS: return mIcons;
+        case SKExplorerTab::VIEW_LIST:  return mList;
+        default:                        return nullptr;
+    }
+}
+
+void SKFloaterInventoryExplorer::applySortAndGroup()
+{
+    const SKExplorerTab& tab = currentTab();
+    if (SKInventoryFlatView* flat = flatView())
+    {
+        flat->setSort(tab.mSortKey, tab.mSortAscending);
+        flat->setGroup(tab.mGroup);
+    }
+    else
+    {
+        mColumns->setSort(tab.mSortKey, tab.mSortAscending);
+        mColumns->setGroup(tab.mGroup);
+    }
+    saveSortAndGroup();
+}
+
+void SKFloaterInventoryExplorer::setOption(const std::string& option)
+{
+    const size_t colon = option.find(':');
+    if (colon == std::string::npos || mTabs.empty())
+    {
+        return;
+    }
+    const std::string kind = option.substr(0, colon);
+    const std::string value = option.substr(colon + 1);
+    SKExplorerTab& tab = currentTab();
+    if (kind == "sort")
+    {
+        // A new key starts descending for Acquired, ascending otherwise.
+        const SKInventoryFlatView::EColumn key = SKInventoryFlatView::columnFromKey(value);
+        if (key != tab.mSortKey)
+        {
+            tab.mSortKey = key;
+            tab.mSortAscending = key != SKInventoryFlatView::COL_ACQUIRED;
+        }
+        applySortAndGroup();
+    }
+    else if (kind == "dir")
+    {
+        tab.mSortAscending = value == "asc";
+        applySortAndGroup();
+    }
+    else if (kind == "group")
+    {
+        tab.mGroup = SKInventoryFlatView::groupFromKey(value);
+        applySortAndGroup();
+    }
+    else if (kind == "view")
+    {
+        if (value == "columns")
+        {
+            setView(SKExplorerTab::VIEW_COLUMNS);
+        }
+        else if (value == "icons")
+        {
+            setView(SKExplorerTab::VIEW_ICONS);
+        }
+        else if (value == "list")
+        {
+            setView(SKExplorerTab::VIEW_LIST);
+        }
+    }
+    else if (kind == "col")
+    {
+        if (!mHiddenColumns.erase(value))
+        {
+            mHiddenColumns.insert(value);
+        }
+        mList->setHiddenColumns(mHiddenColumns);
+        LLSD hidden = LLSD::emptyArray();
+        for (const std::string& key : mHiddenColumns)
+        {
+            hidden.append(key);
+        }
+        gSavedPerAccountSettings.setLLSD("SkoomaInvExplorerHiddenColumns", hidden);
+    }
+}
+
+bool SKFloaterInventoryExplorer::checkOption(const std::string& option) const
+{
+    const size_t colon = option.find(':');
+    if (colon == std::string::npos || mTabs.empty())
+    {
+        return false;
+    }
+    const std::string kind = option.substr(0, colon);
+    const std::string value = option.substr(colon + 1);
+    const SKExplorerTab& tab = mTabs[mActiveTab];
+    if (kind == "sort")
+    {
+        return value == SKInventoryFlatView::columnKey(tab.mSortKey);
+    }
+    if (kind == "dir")
+    {
+        return tab.mSortAscending == (value == "asc");
+    }
+    if (kind == "group")
+    {
+        return value == SKInventoryFlatView::groupKey(tab.mGroup);
+    }
+    if (kind == "view")
+    {
+        static const char* const VIEWS[] = { "columns", "icons", "list", "gallery" };
+        return value == VIEWS[llclamp((S32)tab.mView, 0, 3)];
+    }
+    if (kind == "col")
+    {
+        return !mHiddenColumns.contains(value);
+    }
+    return false;
+}
+
+void SKFloaterInventoryExplorer::startRename(const LLUUID& id)
+{
+    if (SKInventoryFlatView* flat = flatView())
+    {
+        flat->startRename(id);
+    }
+    else
+    {
+        mColumns->startRename(id);
+    }
+}
+
+void SKFloaterInventoryExplorer::onIconSizeChanged()
+{
+    // Snaps to the default within 5 px of it.
+    S32 size = (S32)mSizeSlider->getValueF32();
+    if (std::abs(size - SKInventoryIconsView::DEFAULT_TILE) <= 5)
+    {
+        size = SKInventoryIconsView::DEFAULT_TILE;
+        mSizeSlider->setValue((F32)size);
+    }
+    mIcons->setTileSize(size);
+    gSavedPerAccountSettings.setS32("SkoomaInvExplorerIconSize", size);
 }
 
 void SKFloaterInventoryExplorer::showContextMenu(LLView* view, S32 x, S32 y, const uuid_vec_t& ids, const LLUUID& folder_id)
