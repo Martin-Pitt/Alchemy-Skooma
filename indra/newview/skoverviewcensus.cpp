@@ -198,27 +198,37 @@ U32 SKOverviewCensus::logChurn(std::vector<std::pair<U64, std::pair<char, LLUUID
     std::set_difference(mLastEntries.begin(), mLastEntries.end(), entries.begin(), entries.end(), std::back_inserter(gone));
     std::set_difference(entries.begin(), entries.end(), mLastEntries.begin(), mLastEntries.end(), std::back_inserter(came));
     const bool first = mLastEntries.empty();
-    mLastEntries = entries;
+    mLastEntries.swap(entries);
+    const size_t entry_count = mLastEntries.size();
     // Restlessness is judged on shape and place alone: an invisible part's look and cover churn as its neighbours load.
     std::sort(moves.begin(), moves.end());
     std::vector<std::pair<U64, std::pair<char, LLUUID>>> moved_from, moved_to;
     std::set_difference(mLastMoves.begin(), mLastMoves.end(), moves.begin(), moves.end(), std::back_inserter(moved_from));
     std::set_difference(moves.begin(), moves.end(), mLastMoves.begin(), mLastMoves.end(), std::back_inserter(moved_to));
-    mLastMoves = moves;
+    mLastMoves.swap(moves);
     if (first)
     {
         return 0;
     }
-    std::set<std::pair<char, LLUUID>> moved;
-    for (const auto& g : moved_from)
+    // The differences are few: sorted flat lists of who, searched, rather than node sets.
+    auto whoSorted = [](const std::vector<std::pair<U64, std::pair<char, LLUUID>>>& from)
     {
-        moved.insert(g.second);
-    }
+        std::vector<std::pair<char, LLUUID>> who;
+        who.reserve(from.size());
+        for (const auto& e : from)
+        {
+            who.push_back(e.second);
+        }
+        std::sort(who.begin(), who.end());
+        return who;
+    };
+    const std::vector<std::pair<char, LLUUID>> moved = whoSorted(moved_from);
     for (const auto& c : moved_to)
     {
         // A part moved again within the window turns restless: drawn live, out of the static buffers.
         const char kind = c.second.first;
-        if ((kind == 'R' || kind == 'S' || kind == 'V') && c.second.second.notNull() && moved.count(c.second))
+        if ((kind == 'R' || kind == 'S' || kind == 'V') && c.second.second.notNull() &&
+            std::binary_search(moved.begin(), moved.end(), c.second))
         {
             Restless& r = mRestless[c.second.second];
             r.mChanges = now - r.mLast <= RESTLESS_WINDOW_S ? r.mChanges + 1 : 1;
@@ -238,38 +248,57 @@ U32 SKOverviewCensus::logChurn(std::vector<std::pair<U64, std::pair<char, LLUUID
         const char kind = c.second.first;
         moved_records += (kind == 'R' || kind == 'C') && !isRestless(c.second.second) ? 1 : 0;
     }
-    std::map<char, U32> gone_n, came_n, changed_n;
-    std::map<char, std::vector<LLUUID>> changed;
-    std::set<std::pair<char, LLUUID>> went;
-    for (const auto& g : gone)
+    static const char KINDS[] = { 'S', 'U', 'V', 'R', 'C', 'L' };
+    auto kindIndex = [](char kind) -> S32
     {
-        ++gone_n[g.second.first];
-        went.insert(g.second);
-    }
-    for (const auto& c : came)
-    {
-        ++came_n[c.second.first];
-        if (went.count(c.second))
+        for (S32 k = 0; k < 6; ++k)
         {
-            ++changed_n[c.second.first];
-            std::vector<LLUUID>& ids = changed[c.second.first];
-            if (ids.size() < 4)
+            if (KINDS[k] == kind)
             {
-                ids.push_back(c.second.second);
+                return k;
             }
         }
-    }
-    std::string what;
-    for (const char kind : { 'S', 'U', 'V', 'R', 'C', 'L' })
+        return -1;
+    };
+    U32 gone_n[6] = {}, came_n[6] = {}, changed_n[6] = {};
+    LLUUID changed[6][4];
+    for (const auto& g : gone)
     {
-        if (!gone_n[kind] && !came_n[kind])
+        const S32 k = kindIndex(g.second.first);
+        if (k >= 0)
+        {
+            ++gone_n[k];
+        }
+    }
+    const std::vector<std::pair<char, LLUUID>> went = whoSorted(gone);
+    for (const auto& c : came)
+    {
+        const S32 k = kindIndex(c.second.first);
+        if (k < 0)
         {
             continue;
         }
-        what += llformat(" %c -%u +%u (%u changed", kind, gone_n[kind], came_n[kind], changed_n[kind]);
-        for (const LLUUID& id : changed[kind])
+        ++came_n[k];
+        if (std::binary_search(went.begin(), went.end(), c.second))
         {
-            what += " " + id.asString();
+            if (changed_n[k] < 4)
+            {
+                changed[k][changed_n[k]] = c.second.second;
+            }
+            ++changed_n[k];
+        }
+    }
+    std::string what;
+    for (S32 k = 0; k < 6; ++k)
+    {
+        if (!gone_n[k] && !came_n[k])
+        {
+            continue;
+        }
+        what += llformat(" %c -%u +%u (%u changed", KINDS[k], gone_n[k], came_n[k], changed_n[k]);
+        for (U32 j = 0; j < llmin(changed_n[k], 4u); ++j)
+        {
+            what += " " + changed[k][j].asString();
         }
         what += ")";
     }
@@ -277,7 +306,7 @@ U32 SKOverviewCensus::logChurn(std::vector<std::pair<U64, std::pair<char, LLUUID
     {
         what += " sculpt inputs:" + sculpt_moved;
     }
-    LL_INFOS("SKOverview") << "census rebuild of " << entries.size() << " entries:" << what << LL_ENDL;
+    LL_INFOS("SKOverview") << "census rebuild of " << entry_count << " entries:" << what << LL_ENDL;
     return moved_records;
 }
 
