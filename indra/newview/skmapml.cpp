@@ -194,10 +194,20 @@ namespace
         // Stepped, so dragging the window's height reallocates the target and the plan only every SIDE_STEP pixels.
         const U32 side = llclamp(static_cast<U32>(ll_round(height * llclamp(static_cast<F32>(size), 0.2f, 1.5f) / SIDE_STEP)) * SIDE_STEP,
                                  SIDE_STEP, MAX_SIDE);
+        // Taken before ensureMask, whose first build of the mask program unbinds it.
+        LLGLSLShader* shader = LLGLSLShader::sCurBoundShaderPtr;
         if (!ensureMask())
         {
             s.mFailed = true;
+            if (shader)
+            {
+                shader->bind();
+            }
             return false;
+        }
+        if (shader && LLGLSLShader::sCurBoundShaderPtr != shader)
+        {
+            shader->bind();
         }
         if (!s.mTarget.isComplete() || s.mTarget.getWidth() != side)
         {
@@ -234,7 +244,6 @@ namespace
         const F32 metres = llclamp(static_cast<F32>(span), skmap::ZOOM_MIN_M, skmap::ZOOM_MAX_M);
 
         gGL.flush();
-        LLGLSLShader* shader = LLGLSLShader::sCurBoundShaderPtr;
         const LLColor4 saved_clear = gGL.getClearColor();
         LLGLDisable scissor(GL_SCISSOR_TEST);
         gGL.matrixMode(LLRender::MM_PROJECTION);
