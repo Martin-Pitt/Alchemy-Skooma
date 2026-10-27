@@ -41,6 +41,8 @@
 static LLDefaultChildRegistry::Register<SKInventorySidebarPanel> r_sk_sidebar_panel("sk_inventory_sidebar_panel");
 static LLDefaultChildRegistry::Register<SKInventoryFavoritesPanel> r_sk_favorites_panel("sk_inventory_favorites_panel");
 static LLDefaultChildRegistry::Register<SKInventorySidebar> r_sk_sidebar("sk_inventory_sidebar");
+// The sidebar sits in a scroll_container, which builds only children from its own registry.
+static ScrollContainerRegistry::Register<SKInventorySidebar> r_sk_sidebar_scrolled("sk_inventory_sidebar");
 
 namespace
 {
@@ -681,10 +683,17 @@ LLInventoryPanel* SKInventorySidebar::getInventoryPanel() const
 {
     for (SKInventorySidebarPanel* panel : mPanels)
     {
-        if (panel->getSection() == SKInventorySidebarPanel::SECTION_INVENTORY)
+        if (panel && panel->getSection() == SKInventorySidebarPanel::SECTION_INVENTORY)
         {
             return panel;
         }
     }
-    return mPanels.empty() ? nullptr : mPanels.front();
+    for (SKInventorySidebarPanel* panel : mPanels)
+    {
+        if (panel)
+        {
+            return panel;
+        }
+    }
+    return nullptr;
 }
