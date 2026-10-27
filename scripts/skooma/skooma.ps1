@@ -225,6 +225,11 @@ function Get-Base { param([string]$branch)
     $b = Cfg "branch.$branch.skooma-base"
     if (-not $b) { return 'develop' }
     if (-not (GitOk show-ref --verify --quiet "refs/heads/$b")) { return 'develop' }  # parent retired/merged upstream
+    # A trunk or main holds many PRs: merging it in (sync) would carry them all into this branch.
+    if ($b -eq 'main' -or (Test-IsTrunk $b)) {
+        Warn "$branch has skooma-base $b, a trunk; using develop (fix: git config branch.$branch.skooma-base develop)"
+        return 'develop'
+    }
     return $b
 }
 
