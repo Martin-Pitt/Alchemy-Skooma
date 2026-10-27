@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+<context_menu
+ layout="topleft"
+ name="Sort By">
+    <menu_item_check
+     label="Name"
+     layout="topleft"
+     name="sort_name">
+        <menu_item_check.on_click
+         function="SKInvExplorer.Option"
+         parameter="sort:name" />
+        <menu_item_check.on_check
+         function="SKInvExplorer.OptionCheck"
+         parameter="sort:name" />
+    </menu_item_check>
+    <menu_item_check
+     label="Type"
+     layout="topleft"
+     name="sort_type">
+        <menu_item_check.on_click
+         function="SKInvExplorer.Option"
+         parameter="sort:type" />
+        <menu_item_check.on_check
+         function="SKInvExplorer.OptionCheck"
+         parameter="sort:type" />
+    </menu_item_check>
+    <menu_item_check
+     label="Creator"
+     layout="topleft"
+     name="sort_creator">
+        <menu_item_check.on_click
+         function="SKInvExplorer.Option"
+         parameter="sort:creator" />
+        <menu_item_check.on_check
+         function="SKInvExplorer.OptionCheck"
+         parameter="sort:creator" />
+    </menu_item_check>
+    <menu_item_check
+     label="Acquired"
+     layout="topleft"
+     name="sort_acquired">
+        <menu_item_check.on_click
+         function="SKInvExplorer.Option"
+         parameter="sort:acquired" />
+        <menu_item_check.on_check
+         function="SKInvExplorer.OptionCheck"
+         parameter="sort:acquired" />
+    </menu_item_check>
+    <menu_item_check
+     label="Perms"
+     layout="topleft"
+     name="sort_perms">
+        <menu_item_check.on_click
+         function="SKInvExplorer.Option"
+         parameter="sort:perms" />
+        <menu_item_check.on_check
+         function="SKInvExplorer.OptionCheck"
+         parameter="sort:perms" />
+    </menu_item_check>
+    <menu_item_check
+     label="Worn on"
+     layout="topleft"
+     name="sort_worn">
+        <menu_item_check.on_click
+         function="SKInvExplorer.Option"
+         parameter="sort:worn" />
+        <menu_item_check.on_check
+         function="SKInvExplorer.OptionCheck"
+         parameter="sort:worn" />
+    </menu_item_check>
+    <menu_item_check
+     label="Description"
+     layout="topleft"
+     name="sort_description">
+        <menu_item_check.on_click
+         function="SKInvExplorer.Option"
+         parameter="sort:description" />
+        <menu_item_check.on_check
+         function="SKInvExplorer.OptionCheck"
+         parameter="sort:description" />
+    </menu_item_check>
+    <menu_item_separator
+     layout="topleft"
+     name="sort_dir_separator" />
+    <menu_item_check
+     label="Ascending"
+     layout="topleft"
+     name="dir_asc">
+        <menu_item_check.on_click
+         function="SKInvExplorer.Option"
+         parameter="dir:asc" />
+        <menu_item_check.on_check
+         function="SKInvExplorer.OptionCheck"
+         parameter="dir:asc" />
+    </menu_item_check>
+    <menu_item_check
+     label="Descending"
+     layout="topleft"
+     name="dir_desc">
+        <menu_item_check.on_click
+         function="SKInvExplorer.Option"
+         parameter="dir:desc" />
+        <menu_item_check.on_check
+         function="SKInvExplorer.OptionCheck"
+         parameter="dir:desc" />
+    </menu_item_check>
+</context_menu>

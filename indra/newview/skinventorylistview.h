@@ -27,186 +27,58 @@
 #ifndef SK_SKINVENTORYLISTVIEW_H
 #define SK_SKINVENTORYLISTVIEW_H
 
-#include "lleditmenuhandler.h"
-#include "lluictrl.h"
-#include "lluiimage.h"
+#include "skinventoryflatview.h"
 
-#include <functional>
-#include <map>
-#include <unordered_set>
+#include <set>
 
-class LLScrollbar;
-
-// One row of a folder's contents, read from the inventory model when the folder is listed.
-struct SKInventoryRow
-{
-    LLUUID mID;
-    LLUUID mTargetID;       // the folder or item a link points to, else mID
-    bool mIsFolder = false;
-    bool mIsSystem = false;
-    bool mIsLink = false;
-    bool mIsWorn = false;
-    std::string mName;
-    std::string mType;
-    LLUUID mCreatorID;
-    std::string mCreatorName;
-    time_t mAcquired = 0;
-    std::string mAcquiredLabel;
-    S32 mPermRank = 0;      // Full Perm, Copy & Modify, Copy & Transfer, Copy Only, No Copy
-    std::string mPerms;
-    std::string mWornOn;
-    std::string mDescription;
-    LLPointer<LLUIImage> mIcon;
-};
-
-// The labels the view draws, handed in by its floater so every string stays in XUI.
-struct SKInventoryListLabels
-{
-    std::vector<std::string> mColumns;
-    std::string mFolderCount;   // "Folder ([COUNT])"
-    std::string mFolder;
-    std::string mDateFormat;
-    std::string mLoading;
-    std::string mEmpty;
-    std::string mWorn;
-    std::string mMore;          // "and [COUNT] more"
-};
-
-class SKInventoryListView : public LLUICtrl, public LLEditMenuHandler
+class SKInventoryListView : public SKInventoryFlatView
 {
 public:
-    AL_VIEW_TYPE(SKInventoryListView, LLUICtrl);
-
-    enum EColumn
-    {
-        COL_NAME,
-        COL_TYPE,
-        COL_CREATOR,
-        COL_ACQUIRED,
-        COL_PERMS,
-        COL_WORN,
-        COL_DESCRIPTION,
-        COL_COUNT
-    };
+    AL_VIEW_TYPE(SKInventoryListView, SKInventoryFlatView);
 
     struct Params : public LLInitParam::Block<Params, LLUICtrl::Params>
     {
     };
 
-    typedef std::function<void(const LLUUID& id)> id_callback_t;
-    typedef std::function<void()> void_callback_t;
-    typedef std::function<void(S32 x, S32 y, const uuid_vec_t& ids)> menu_callback_t;
+    typedef std::function<void(S32 x, S32 y)> point_callback_t;
 
-    ~SKInventoryListView();
-
-    static const char* columnKey(EColumn col);
-    static EColumn columnFromKey(const std::string& key);
-
-    // Reads a folder's direct contents, starting a fetch while it is incomplete; true while it loads.
-    static bool readRows(const LLUUID& folder_id, const SKInventoryListLabels& labels, std::vector<SKInventoryRow>& rows,
-                         bool fetch = true);
-    // Folders first (system folders first, then by name), items by the key.
-    static void sortRows(std::vector<SKInventoryRow>& rows, EColumn key, bool ascending);
-
-    void setLabels(const SKInventoryListLabels& labels) { mLabels = labels; }
-    void setOpenCallback(const id_callback_t& cb) { mOpenCallback = cb; }
-    void setUpCallback(const void_callback_t& cb) { mUpCallback = cb; }
-    void setSelectionCallback(const void_callback_t& cb) { mSelectionCallback = cb; }
-    void setMenuCallback(const menu_callback_t& cb) { mMenuCallback = cb; }
     void setSortCallback(const void_callback_t& cb) { mSortCallback = cb; }
+    // A right-click on the header: the "Columns" menu.
+    void setHeaderMenuCallback(const point_callback_t& cb) { mHeaderMenuCallback = cb; }
 
-    // Lists the folder; the selection and scroll given are kept where their rows still exist.
-    void setFolder(const LLUUID& folder_id, const uuid_vec_t& selection = uuid_vec_t(), S32 scroll = 0);
-    const LLUUID& getFolder() const { return mFolderID; }
+    // Hidden columns by key; Name always shows, Folder only while searching.
+    void setHiddenColumns(const std::set<std::string>& keys);
+    void setSearching(bool searching);
+    bool isColumnHidden(EColumn col) const { return mHidden[col]; }
 
-    // Reads the folder again on the next draw, keeping selection and scroll.
-    void markDirty() { mDirty = true; }
-    bool lists(const LLUUID& id) const { return mRowIDs.contains(id); }
-
-    // Bumped by every reading of the folder, so a reader can tell the counts moved.
-    U32 getGeneration() const { return mGeneration; }
-    S32 getSelectedCount() const { return mSelectedCount; }
-
-    void setSort(EColumn key, bool ascending);
-    EColumn getSortKey() const { return mSortKey; }
-    bool getSortAscending() const { return mSortAscending; }
-
-    uuid_vec_t getSelection() const;
-    void setSelection(const uuid_vec_t& ids);
-    S32 getScroll() const;
-
-    S32 getFolderCount() const { return mFolderCount; }
-    S32 getItemCount() const { return (S32)mRows.size() - mFolderCount; }
-    bool isLoading() const { return mLoading; }
-
-    // LLView
-    void draw() override;
-    void reshape(S32 width, S32 height, bool called_from_parent = true) override;
-    bool handleMouseDown(S32 x, S32 y, MASK mask) override;
-    bool handleDoubleClick(S32 x, S32 y, MASK mask) override;
-    bool handleRightMouseDown(S32 x, S32 y, MASK mask) override;
-    bool handleScrollWheel(S32 x, S32 y, LLScrollDelta delta) override;
-    bool handleKeyHere(KEY key, MASK mask) override;
     bool handleToolTip(S32 x, S32 y, MASK mask) override;
-    void onFocusReceived() override;
-    void onFocusLost() override;
-
-    // LLEditMenuHandler
-    LLView* asView() override { return this; }
-    void doDelete() override;
-    bool canDoDelete() const override;
-    void selectAll() override;
-    bool canSelectAll() const override { return !mRows.empty(); }
-    void deselect() override;
-    bool canDeselect() const override;
 
 protected:
     SKInventoryListView(const Params& p);
     friend class LLUICtrlFactory;
 
-    void rebuild();
-    void sortRows();
-    void updateScrollbar();
-    void scrollToRow(S32 row);
-    void selectRange(S32 from, S32 to, bool add);
-    void moveCursor(S32 row, MASK mask);
-    void notifySelection();
+    void layoutRows() override;
+    void drawContent() override;
+    S32 rowAt(S32 x, S32 y, bool* on_name) const override;
+    void scrollToRow(S32 row) override;
+    S32 rowFromKey(KEY key, MASK mask) const override;
+    LLRect nameRect(S32 row, bool& multiline) const override;
+    bool handleHeaderMouseDown(S32 x, S32 y, MASK mask) override;
+    bool handleHeaderRightMouseDown(S32 x, S32 y, MASK mask) override;
 
-    S32 rowAt(S32 y) const;
-    S32 columnAt(S32 x) const;
+    void updateColumns();
     S32 rowsPerPage() const;
-    S32 firstVisibleRow() const;
+    S32 columnAt(S32 x) const;
     std::string cellText(const SKInventoryRow& row, EColumn col) const;
-    void requestCreatorName(SKInventoryRow& row);
-    void applyArrivedNames();
 
-    LLUUID mFolderID;
-    std::vector<SKInventoryRow> mRows;
-    std::vector<bool> mSelected;
-    std::unordered_set<LLUUID> mRowIDs;
-    std::map<LLUUID, boost::signals2::connection> mNameRequests;
-    LLFrameTimer mNameTimer;
-    bool mNamesArrived;
-    U32 mGeneration;
-    S32 mSelectedCount;
-    S32 mFolderCount;
-    S32 mCursor;
-    S32 mAnchor;
-    EColumn mSortKey;
-    bool mSortAscending;
-    S32 mHeaderClicks;  // clicks on the sorted header since it was chosen, 0 for the default sort
-    bool mDirty;
-    bool mLoading;
     S32 mColumnWidths[COL_COUNT];
+    bool mHidden[COL_COUNT];
+    bool mSearching;
+    std::vector<EColumn> mShown;    // the columns drawn, in order
+    S32 mHeaderClicks;              // clicks on the sorted header since it was chosen, 0 for the default sort
 
-    LLScrollbar* mScrollbar;
-    SKInventoryListLabels mLabels;
-
-    id_callback_t mOpenCallback;
-    void_callback_t mUpCallback;
-    void_callback_t mSelectionCallback;
-    menu_callback_t mMenuCallback;
     void_callback_t mSortCallback;
+    point_callback_t mHeaderMenuCallback;
 };
 
 #endif // SK_SKINVENTORYLISTVIEW_H

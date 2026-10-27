@@ -1011,7 +1011,10 @@ if(AL_BUILD_VIEWER)
     skfloaterinventoryexplorer.cpp # <SK:Nexii> Inventory Explorer
     skinventorycolumnsview.cpp # <SK:Nexii> Inventory Explorer
     skinventoryexplorermenu.cpp # <SK:Nexii> Inventory Explorer
+    skinventoryflatview.cpp # <SK:Nexii> Inventory Explorer
+    skinventoryiconsview.cpp # <SK:Nexii> Inventory Explorer
     skinventorylistview.cpp # <SK:Nexii> Inventory Explorer
+    skinventoryrenameeditor.cpp # <SK:Nexii> Inventory Explorer
     skinventorysidebar.cpp # <SK:Nexii> Inventory Explorer
   )
 
@@ -1903,7 +1906,10 @@ if(AL_BUILD_VIEWER)
     skfloaterinventoryexplorer.h # <SK:Nexii> Inventory Explorer
     skinventorycolumnsview.h # <SK:Nexii> Inventory Explorer
     skinventoryexplorermenu.h # <SK:Nexii> Inventory Explorer
+    skinventoryflatview.h # <SK:Nexii> Inventory Explorer
+    skinventoryiconsview.h # <SK:Nexii> Inventory Explorer
     skinventorylistview.h # <SK:Nexii> Inventory Explorer
+    skinventoryrenameeditor.h # <SK:Nexii> Inventory Explorer
     skinventorysidebar.h # <SK:Nexii> Inventory Explorer
   )
 

@@ -30,14 +30,18 @@
 #include "llfloater.h"
 #include "lluiimage.h"
 #include "skinventorycolumnsview.h"
+#include "skinventoryexplorermenu.h"
+#include "skinventoryiconsview.h"
 #include "skinventorylistview.h"
 
 #include <functional>
 #include <memory>
+#include <set>
 
 class LLButton;
 class LLInventoryObserver;
 class LLLayoutPanel;
+class LLSliderCtrl;
 class LLTextBox;
 class SKInventoryExplorerContextMenu;
 class SKInventorySidebar;
@@ -59,7 +63,7 @@ struct SKExplorerTab
     EView mView = VIEW_COLUMNS;
     SKInventoryListView::EColumn mSortKey = SKInventoryListView::COL_ACQUIRED;
     bool mSortAscending = false;
-    std::string mGroup = "none";
+    SKInventoryFlatView::EGroup mGroup = SKInventoryFlatView::GROUP_NONE;
     uuid_vec_t mSelection;
     S32 mListScroll = 0;
     S32 mStripScroll = 0;
@@ -171,6 +175,7 @@ public:
     void onOpen(const LLSD& key) override;
     void draw() override;
     bool handleKeyHere(KEY key, MASK mask) override;
+    bool handleDoubleClick(S32 x, S32 y, MASK mask) override;
 
     void onInventoryChanged(U32 mask);
 
@@ -191,6 +196,13 @@ private:
     void showFolder();
     void setView(SKExplorerTab::EView view);
     bool isColumns() const { return !mTabs.empty() && mTabs[mActiveTab].mView == SKExplorerTab::VIEW_COLUMNS; }
+    // The List or the Icons view while one shows, else null.
+    SKInventoryFlatView* flatView() const;
+    void setOption(const std::string& option);
+    bool checkOption(const std::string& option) const;
+    void applySortAndGroup();
+    void startRename(const LLUUID& id);
+    void onIconSizeChanged();
     uuid_vec_t activeSelection() const;
     void setActiveSelection(const uuid_vec_t& ids);
     void revealInSidebar();
@@ -207,6 +219,8 @@ private:
     void setPaneWidth(const std::string& pane, S32 width, bool save);
     void onToggleDetails();
     void onListSortChanged();
+    void saveSortAndGroup();
+    void refreshSortAndGroupButtons();
     void showContextMenu(LLView* view, S32 x, S32 y, const uuid_vec_t& ids, const LLUUID& folder_id);
 
     std::string folderPath(const LLUUID& folder_id) const;
@@ -220,6 +234,12 @@ private:
     SKInventorySidebar* mSidebar;
     SKInventoryListView* mList;
     SKInventoryColumnsView* mColumns;
+    SKInventoryIconsView* mIcons;
+    LLButton* mSortBtn;
+    LLButton* mGroupBtn;
+    LLSliderCtrl* mSizeSlider;
+    std::set<std::string> mHiddenColumns;
+    SKExplorerOptions mOptions;
     LLButton* mBackBtn;
     LLButton* mForwardBtn;
     LLButton* mUpBtn;
