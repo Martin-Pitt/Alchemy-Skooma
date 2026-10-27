@@ -3912,6 +3912,91 @@ function="World.EnvPreset"
              function="ToggleControl"
              parameter="SKWorldOverlayFeatures" />
           </menu_item_check>
+          <!-- <SK:Nexii> air cells: the air overlays and status -->
+          <menu_item_check
+           label="Air Leaves"
+           name="SKAirOverlay1">
+            <menu_item_check.on_check
+             function="SK.CheckAirOverlay"
+             parameter="1" />
+            <menu_item_check.on_click
+             function="SK.SetAirOverlay"
+             parameter="1" />
+          </menu_item_check>
+          <menu_item_check
+           label="Air Gaps"
+           name="SKAirOverlay2">
+            <menu_item_check.on_check
+             function="SK.CheckAirOverlay"
+             parameter="2" />
+            <menu_item_check.on_click
+             function="SK.SetAirOverlay"
+             parameter="2" />
+          </menu_item_check>
+          <menu_item_check
+           label="Air Clearance"
+           name="SKAirOverlay5">
+            <menu_item_check.on_check
+             function="SK.CheckAirOverlay"
+             parameter="5" />
+            <menu_item_check.on_click
+             function="SK.SetAirOverlay"
+             parameter="5" />
+          </menu_item_check>
+          <menu_item_check
+           label="Air Face Offsets"
+           name="SKAirOverlay6">
+            <menu_item_check.on_check
+             function="SK.CheckAirOverlay"
+             parameter="6" />
+            <menu_item_check.on_click
+             function="SK.SetAirOverlay"
+             parameter="6" />
+          </menu_item_check>
+          <menu_item_check
+           label="Air Wall Faces"
+           name="SKAirOverlayFaces">
+            <menu_item_check.on_check
+             control="SKAirOverlayFaces" />
+            <menu_item_check.on_click
+             function="ToggleControl"
+             parameter="SKAirOverlayFaces" />
+          </menu_item_check>
+          <menu_item_check
+           label="Air Run-off"
+           name="SKAirOverlayRunoff">
+            <menu_item_check.on_check
+             control="SKAirOverlayRunoff" />
+            <menu_item_check.on_click
+             function="ToggleControl"
+             parameter="SKAirOverlayRunoff" />
+          </menu_item_check>
+          <menu_item_check
+           label="Air Sky Map"
+           name="SKAirOverlaySky">
+            <menu_item_check.on_check
+             control="SKAirOverlaySky" />
+            <menu_item_check.on_click
+             function="ToggleControl"
+             parameter="SKAirOverlaySky" />
+          </menu_item_check>
+          <menu_item_check
+           label="Air Tile Updates"
+           name="SKAirOverlayUpdates">
+            <menu_item_check.on_check
+             control="SKAirOverlayUpdates" />
+            <menu_item_check.on_click
+             function="ToggleControl"
+             parameter="SKAirOverlayUpdates" />
+          </menu_item_check>
+          <menu_item_call
+           label="Air Status"
+           name="SKShowAirStatus"
+           tool_tip="Show the air cells' meshes, tiles, raster time, memory and evictions">
+            <menu_item_call.on_click
+             function="SK.ShowAirStatus" />
+          </menu_item_call>
+          <!-- </SK:Nexii> -->
           <menu_item_call
            label="Export Census"
            name="SKExportWorldCensus"

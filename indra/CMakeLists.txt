@@ -587,6 +587,7 @@ add_subdirectory(llphysicsextensionsos)
 add_subdirectory(llprimitive)
 add_subdirectory(llrender)
 add_subdirectory(skcensus) # <SK:Nexii> census
+add_subdirectory(skair) # <SK:Nexii> air cells
 add_subdirectory(llfilesystem)
 if(AL_USE_WEBRTC)
   add_subdirectory(llwebrtc)
