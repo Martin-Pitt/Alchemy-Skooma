@@ -1528,6 +1528,7 @@ Branch `feature-ui/inventory-explorer` (via `ui`, main `7b8ef524f4`). Spec: `.in
 | `indra/newview/skfloaterinventoryexplorer.*` | The floater: tabs, toolbar, history, panes, status, observer |
 | `indra/newview/skinventorysidebar.*` | Favorites / Inventory / Marketplace / Library panels in one scroller |
 | `indra/newview/skinventorylistview.*` | List view drawn from a flat model, visible rows only |
+| `indra/newview/skinventorycolumnsview.*` | Columns view: strip, ghost, details and spare columns |
 | `indra/newview/skinventoryexplorermenu.*` | Context menu and actions (gallery pattern) |
 | `skins/default/xui/en/floater_sk_inventory_explorer.xml`, `menu_sk_inventory_explorer.xml` | Layout and menu |
 
@@ -1536,6 +1537,8 @@ Branch `feature-ui/inventory-explorer` (via `ui`, main `7b8ef524f4`). Spec: `.in
 | File | What | Marked |
 |---|---|---|
 | `indra/newview/llviewerfloaterreg.cpp` | include beside `llfloaterinventorythumbnailshelper.h`; `LLFloaterReg::add("sk_inventory_explorer")` after `"inventory"` | trailing `// <SK:Nexii> Inventory Explorer` |
-| `indra/newview/CMakeLists.txt` | 4 sources after `rlvui.cpp`, 4 headers after `roles_constants.h` | trailing `# <SK:Nexii> Inventory Explorer` |
-| `app_settings/settings_alchemy.xml` | `SkoomaInventoryExplorer` (debug gate, off) after `ALSceneExplorerSortOrder` | `<!-- <SK:Nexii> Inventory Explorer -->` |
+| `indra/newview/CMakeLists.txt` | 5 sources and 5 headers in alphabetical order among the sk entries | trailing `# <SK:Nexii> Inventory Explorer` |
+| `skins/default/xui/en/menu_viewer.xml` | Me menu: "Inventory Explorer..." directly below Inventory | `<!-- <SK:Nexii> Inventory Explorer -->` |
+| `app_settings/commands.xml` | toolbar command `sk_inventory_explorer` right after `inventory` (borrows `Command_Inventory_Icon`) | `<!-- <SK:Nexii> Inventory Explorer -->` |
+| `skins/default/xui/en/strings.xml` | `Command_SKInventoryExplorer_Label` / `_Tooltip` after `Command_Search_*` | trailing `<!-- <SK:Nexii> Inventory Explorer -->` |
 | `app_settings/settings_per_account_alchemy.xml` | 11 `SkoomaInvExplorer*` preferences after `ALScriptStudioVimrcNotecard` | `<!-- <SK:Nexii> Inventory Explorer -->` |
