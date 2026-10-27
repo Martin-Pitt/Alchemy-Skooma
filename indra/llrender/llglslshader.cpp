@@ -2924,7 +2924,7 @@ void LLGLSLShader::uniform1i(const LLStaticHashedString& uniform, GLint v)
         glUniform1i(location, v);
     }
 }
-// <SK:Nexii> Hashed setters for Skooma programs whose uniform names are not reserved.
+// <SK:Nexii> Hashed setters for Skooma programs whose uniform names are not reserved; each uploads as its index twin does.
 void LLGLSLShader::uniform1f(const LLStaticHashedString& uniform, GLfloat v)
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_SHADER;
@@ -2932,7 +2932,7 @@ void LLGLSLShader::uniform1f(const LLStaticHashedString& uniform, GLfloat v)
     GLint location = getUniformLocation(uniform);
     if (location >= 0 && mUniformCache.changed(location, UniformCache::Kind::Float, uniform_bits(v)))
     {
-        glUniform1f(location, v);
+        uploadFloat(location, v);
     }
 }
 
@@ -2943,7 +2943,7 @@ void LLGLSLShader::uniform1ui(const LLStaticHashedString& uniform, GLuint v)
     GLint location = getUniformLocation(uniform);
     if (location >= 0 && mUniformCache.changed(location, UniformCache::Kind::UInt, uniform_bits(v)))
     {
-        glUniform1ui(location, v);
+        uploadUInt(location, v);
     }
 }
 
@@ -2995,11 +2995,11 @@ void LLGLSLShader::uniform1fv(const LLStaticHashedString& uniform, U32 count, co
     if (count != 1)
     {
         mUniformCache.forget(location);
-        glUniform1fv(location, count, v);
+        uploadFloats(location, count, v);
     }
     else if (mUniformCache.changed(location, UniformCache::Kind::Float, uniform_bits(v[0])))
     {
-        glUniform1fv(location, 1, v);
+        uploadFloats(location, 1, v);
     }
 }
 

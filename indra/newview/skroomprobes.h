@@ -34,9 +34,8 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
-#include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 class LLReflectionMap;
@@ -100,35 +99,18 @@ private:
         std::vector<Placed> mPlaced;
     };
     void takeWorkerResults();
-    bool workerResultsReady() const;
-
-    /// A (mesh, space) pair hashed for the flat per-space tables.
-    struct SpaceIdHash
-    {
-        size_t operator()(const std::pair<LLUUID, U32>& k) const
-        {
-            return hash_value(k.first) ^ (static_cast<size_t>(k.second) * 0x9e3779b97f4a7c15ull);
-        }
-    };
-    /// A space's candidate tests as last run: per part, its cleared radius, 0 cleared out, -1 inside a solid.
-    struct SpaceCandidates
-    {
-        U64 mStamp = 0;     ///< its parts' source, where they stand, and what they were tested against
-        U32 mRun = 0;       ///< the update that last saw it
-        std::vector<F32> mRadii;
-    };
 
     std::vector<Held> mHeld;
     skworld::ProbePartsCache mCache;
     std::shared_ptr<WorkerResults> mResults;
-    std::unordered_set<std::pair<LLUUID, U32>, SpaceIdHash> mPlacing;  ///< spaces a worker is placing; their old parts stand
-    std::unordered_map<std::pair<LLUUID, U32>, Parts, SpaceIdHash> mParts;
-    std::unordered_map<std::pair<LLUUID, U32>, SpaceCandidates, SpaceIdHash> mSpaceCandidates;
-    U32 mRun = 0;
+    std::set<std::pair<LLUUID, U32>> mPlacing;  ///< spaces a worker is placing; their old parts stand
+    std::map<std::pair<LLUUID, U32>, Parts> mParts;
     F64 mNextUpdate = 0.0;
-    F64 mLastUpdate = -1.0;
-    // The census pass's solid lattice, built on its worker, for the candidates' point tests.
-    std::shared_ptr<const skworld::SolidLattice> mSolids;
+    // The census's solid bodies as a tile lattice for the candidates' point
+    // tests, rebuilt only when the census publishes a new scan;
+    // mSolidsCensus is the scan it was built from.
+    skworld::SolidLattice mSolids;
+    std::shared_ptr<const SKCensusSnapshot> mSolidsCensus;
 
     // stats
     U32 mCandidates = 0;
