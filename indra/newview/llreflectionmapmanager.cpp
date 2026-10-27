@@ -1089,10 +1089,14 @@ void LLReflectionMapManager::updateCensusPlacement()
     }
     // Stamp tests with the snapshot the index actually describes.
     census = mSolidsCensus;
-    const bool refresh = mRoomProbesDirty || gFrameTimeSeconds >= mNextCensusPlacement;
+    // Changes coalesce: a dirty flag waits out a short minimum interval rather than refreshing every frame it is raised.
+    constexpr F64 DIRTY_MIN_INTERVAL_S = 0.25;
+    const bool refresh = gFrameTimeSeconds >= mNextCensusPlacement ||
+                         (mRoomProbesDirty && gFrameTimeSeconds >= mLastCensusPlacement + DIRTY_MIN_INTERVAL_S);
     if (refresh)
     {
         mNextCensusPlacement = gFrameTimeSeconds + 1.0;
+        mLastCensusPlacement = gFrameTimeSeconds;
         mRoomProbesDirty = false;
     }
     const U64 census_stamp = census ? census->mStamp : 0;
