@@ -1,10 +1,10 @@
 /**
  * @file skcensusio.h
- * @brief A census export: everything the navmesh builds from, to a file and back, so a place replays offline.
+ * @brief A census export: everything the air cells build from, to a file and back, so a place replays offline.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
- * Alchemy Viewer Source Code
- * Copyright (C) 2026, Alchemy Viewer Project.
+ * Second Life Viewer Source Code
+ * Copyright (C) 2026, Martin "Nexii" Pitt <martin.r.pitt@gmail.com>
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -150,7 +150,7 @@ namespace skworld
     /// "Hotel lobby (+2)": the first named dominant root, and how many other roots the cluster holds.
     std::string clusterLabel(const CensusFile& census, const CensusCluster& cluster);
 
-    /// The root table as a JSON array, for the census and the navmesh export alike.
+    /// The root table as a JSON array, for the census export.
     void writeRootTable(std::ostream& out, const std::vector<CensusRoot>& roots);
 
     /// JSON with the records, vertices and terrain as base64 blobs of packed

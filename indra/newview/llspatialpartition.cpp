@@ -2308,6 +2308,33 @@ void renderPhysicsShape(LLDrawable* drawable, LLVOVolume* volume, bool wireframe
     gGL.pushMatrix();
     gGL.multMatrix((F32*) volume->getRelativeXform().mMatrix);
 
+    // <SK:Nexii> physics shapes: undo llTargetOmega's client-side spin, which the sim's physics never sees
+    LLViewerObject* root = volume->getRootEdit();
+    if (!root->flagUsePhysics())
+    {
+        LLQuaternion sim_rot = root->getRotationSim();
+        LLVector3 sim_pos = root->getRenderPosition();
+        if (volume != root)
+        {
+            sim_pos += volume->getPosition() * sim_rot;
+            sim_rot = volume->getRotationSim() * sim_rot;
+        }
+        const LLQuaternion render_rot = volume->getRenderRotation();
+        const LLQuaternion delta = sim_rot * ~render_rot;
+        if (std::fabs(delta.mQ[VW]) < 0.99999f)
+        {
+            const LLVector3 offset = (sim_pos - volume->getRenderPosition()) * ~render_rot;
+            const LLVector3 scale = volume->getScale();
+            F32 angle, x, y, z;
+            delta.getAngleAxis(&angle, &x, &y, &z);
+            gGL.scalef(1.f / scale.mV[VX], 1.f / scale.mV[VY], 1.f / scale.mV[VZ]);
+            gGL.translatef(offset.mV[VX], offset.mV[VY], offset.mV[VZ]);
+            gGL.rotatef(angle * RAD_TO_DEG, x, y, z);
+            gGL.scalef(scale.mV[VX], scale.mV[VY], scale.mV[VZ]);
+        }
+    }
+    // </SK:Nexii>
+
     if (type == LLPhysicsShapeBuilderUtil::PhysicsShapeSpecification::USER_MESH)
     {
         LLUUID mesh_id = volume->getVolume()->getParams().getSculptID();

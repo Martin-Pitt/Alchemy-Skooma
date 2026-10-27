@@ -3,8 +3,8 @@
  * @brief Doors, ladders, elevators, vehicles and seats, recognised from census parts and what the viewer knows of them.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
- * Alchemy Viewer Source Code
- * Copyright (C) 2026, Alchemy Viewer Project.
+ * Second Life Viewer Source Code
+ * Copyright (C) 2026, Martin "Nexii" Pitt <martin.r.pitt@gmail.com>
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -142,7 +142,11 @@ namespace skworld
     private:
         const std::vector<RecordPtr>& mRecords;
         F64 mCell;
-        std::unordered_map<U64, std::vector<U32>> mCells;
+        /// The cells that hold records, as words sorting by x then y; a cell's
+        /// records are mItems[mStart[k]] up to mItems[mStart[k + 1]], in record order.
+        std::vector<U64> mKeys;
+        std::vector<U32> mStart;
+        std::vector<U32> mItems;
         std::vector<U32> mLarge;    ///< records spanning too many cells to bucket
     };
 

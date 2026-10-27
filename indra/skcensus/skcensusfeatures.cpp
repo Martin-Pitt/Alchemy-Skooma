@@ -3,8 +3,8 @@
  * @brief Doors, ladders, elevators, vehicles and seats, recognised from census parts and what the viewer knows of them.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
- * Alchemy Viewer Source Code
- * Copyright (C) 2026, Alchemy Viewer Project.
+ * Second Life Viewer Source Code
+ * Copyright (C) 2026, Martin "Nexii" Pitt <martin.r.pitt@gmail.com>
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -226,6 +226,59 @@ namespace
         return t > 1e-4f && t <= reach;
     }
 
+    // A RecordIndex cell as one word that sorts by x, then y.
+    U64 indexCell(S64 x, S64 y)
+    {
+        return (static_cast<U64>(static_cast<U32>(x) ^ 0x80000000u) << 32) | (static_cast<U32>(y) ^ 0x80000000u);
+    }
+
+    // A triangle as its first corner and the edges from it, with what rayHitsTriangle works from the ray's
+    // direction alone: worked once for all the rays one direction casts at it.
+    struct EdgeTriangle
+    {
+        LLVector3 mA;
+        LLVector3 mE1;
+        LLVector3 mE2;
+        LLVector3 mP;       ///< d % e2
+        F32 mInv = 0.f;     ///< 1 / (e1 * p)
+        bool mFlat = true;  ///< parallel to the direction: never hit
+    };
+
+    void prepareEdges(EdgeTriangle& tri, const LLVector3& d)
+    {
+        tri.mP = d % tri.mE2;
+        const F32 det = tri.mE1 * tri.mP;
+        tri.mFlat = std::fabs(det) < 1e-9f;
+        tri.mInv = tri.mFlat ? 0.f : 1.f / det;
+    }
+
+    // rayHitsTriangle over a triangle prepared for d.
+    bool rayHitsEdges(const LLVector3& o, const LLVector3& d, const EdgeTriangle& tri, F32 reach)
+    {
+        if (tri.mFlat)
+        {
+            return false;
+        }
+        const LLVector3& e1 = tri.mE1;
+        const LLVector3& e2 = tri.mE2;
+        const LLVector3& p = tri.mP;
+        const F32 inv = tri.mInv;
+        const LLVector3 s = o - tri.mA;
+        const F32 u = (s * p) * inv;
+        if (u < 0.f || u > 1.f)
+        {
+            return false;
+        }
+        const LLVector3 q = s % e1;
+        const F32 v = (d * q) * inv;
+        if (v < 0.f || u + v > 1.f)
+        {
+            return false;
+        }
+        const F32 t = (e2 * q) * inv;
+        return t > 1e-4f && t <= reach;
+    }
+
     // A ray against an analytic record's oriented box; spheres and cylinders
     // are taken as their boxes, which only ever covers more.
     bool rayHitsBox(const LLVector3& o, const LLVector3& d, const Record& r, F32 reach)
@@ -374,8 +427,11 @@ namespace
             size_t mFirst;
             size_t mEnd;
         };
-        std::vector<Target> targets;
-        std::vector<LLVector3> tris;
+        // Scratch kept per thread: a scan measures hundreds of leaves.
+        thread_local std::vector<Target> targets;
+        thread_local std::vector<EdgeTriangle> tris;
+        targets.clear();
+        tris.clear();
         for (const RecordPtr* p : nearby)
         {
             const Record& r = **p;
@@ -402,7 +458,10 @@ namespace
                 }
                 if (!apart)
                 {
-                    tris.insert(tris.end(), { t[i], t[i + 1], t[i + 2] });
+                    EdgeTriangle& e = tris.emplace_back();
+                    e.mA = t[i];
+                    e.mE1 = t[i + 1] - t[i];
+                    e.mE2 = t[i + 2] - t[i];
                 }
             }
             if (tris.size() > first)
@@ -421,6 +480,10 @@ namespace
         for (const F32 side : { 1.f, -1.f })
         {
             const LLVector3 d = n * side;
+            for (EdgeTriangle& tri : tris)
+            {
+                prepareEdges(tri, d);
+            }
             S32 hit = 0;
             for (S32 i = 0; i < GRID; ++i)
             {
@@ -440,9 +503,9 @@ namespace
                         }
                         else
                         {
-                            for (size_t k = t.mFirst; k < t.mEnd && !struck; k += 3)
+                            for (size_t k = t.mFirst; k < t.mEnd && !struck; ++k)
                             {
-                                struck = rayHitsTriangle(o, d, tris[k], tris[k + 1], tris[k + 2], ray);
+                                struck = rayHitsEdges(o, d, tris[k], ray);
                             }
                         }
                         if (struck)
@@ -663,6 +726,8 @@ namespace skworld
     {
         // A record spanning more cells than this is checked by every query instead.
         const S64 MAX_CELLS = 64;
+        std::vector<std::pair<U64, U32>> entries;
+        entries.reserve(records.size() * 2);
         for (size_t i = 0; i < records.size(); ++i)
         {
             const RecordPtr& r = records[i];
@@ -681,26 +746,74 @@ namespace skworld
             {
                 for (S64 y = y0; y <= y1; ++y)
                 {
-                    mCells[(static_cast<U64>(static_cast<U32>(x)) << 32) | static_cast<U32>(y)].push_back(static_cast<U32>(i));
+                    entries.push_back({ indexCell(x, y), static_cast<U32>(i) });
                 }
             }
         }
+        // By cell, each cell's records in record order, then each cell's run
+        // noted once: counted into place over the cells' box when that is no
+        // bigger than the entries, else sorted.
+        U64 kmin = ~0ull, kmax = 0;
+        U32 ymin = ~0u, ymax = 0;
+        for (const auto& e : entries)
+        {
+            kmin = std::min(kmin, e.first >> 32);
+            kmax = std::max(kmax, e.first >> 32);
+            ymin = std::min(ymin, static_cast<U32>(e.first));
+            ymax = std::max(ymax, static_cast<U32>(e.first));
+        }
+        const U64 rows = entries.empty() ? 0 : static_cast<U64>(ymax - ymin) + 1;
+        const U64 span = entries.empty() ? 0 : (kmax - kmin + 1) * rows;
+        if (!entries.empty() && span <= entries.size() * 4)
+        {
+            const auto dense = [&](U64 key) { return static_cast<size_t>(((key >> 32) - kmin) * rows + (static_cast<U32>(key) - ymin)); };
+            std::vector<U32> at(span + 1, 0);
+            for (const auto& e : entries)
+            {
+                ++at[dense(e.first) + 1];
+            }
+            for (size_t c = 1; c <= span; ++c)
+            {
+                at[c] += at[c - 1];
+            }
+            std::vector<std::pair<U64, U32>> sorted(entries.size());
+            for (const auto& e : entries)
+            {
+                sorted[at[dense(e.first)]++] = e;
+            }
+            entries.swap(sorted);
+        }
+        else
+        {
+            std::sort(entries.begin(), entries.end());
+        }
+        mItems.reserve(entries.size());
+        for (size_t k = 0; k < entries.size(); ++k)
+        {
+            if (k == 0 || entries[k].first != entries[k - 1].first)
+            {
+                mKeys.push_back(entries[k].first);
+                mStart.push_back(static_cast<U32>(k));
+            }
+            mItems.push_back(entries[k].second);
+        }
+        mStart.push_back(static_cast<U32>(mItems.size()));
     }
 
     void RecordIndex::query(const LLVector3d& mn, const LLVector3d& mx, std::vector<const RecordPtr*>& out) const
     {
-        std::vector<U32> found = mLarge;
+        thread_local std::vector<U32> found;
+        found.assign(mLarge.begin(), mLarge.end());
         const S64 x0 = static_cast<S64>(std::floor(mn.mdV[VX] / mCell)), x1 = static_cast<S64>(std::floor(mx.mdV[VX] / mCell));
         const S64 y0 = static_cast<S64>(std::floor(mn.mdV[VY] / mCell)), y1 = static_cast<S64>(std::floor(mx.mdV[VY] / mCell));
         for (S64 x = x0; x <= x1; ++x)
         {
-            for (S64 y = y0; y <= y1; ++y)
+            // A column's cells are one run of keys.
+            const U64 last = indexCell(x, y1);
+            for (auto it = std::lower_bound(mKeys.begin(), mKeys.end(), indexCell(x, y0)); it != mKeys.end() && *it <= last; ++it)
             {
-                const auto it = mCells.find((static_cast<U64>(static_cast<U32>(x)) << 32) | static_cast<U32>(y));
-                if (it != mCells.end())
-                {
-                    found.insert(found.end(), it->second.begin(), it->second.end());
-                }
+                const size_t k = static_cast<size_t>(it - mKeys.begin());
+                found.insert(found.end(), mItems.begin() + mStart[k], mItems.begin() + mStart[k + 1]);
             }
         }
         std::sort(found.begin(), found.end());
