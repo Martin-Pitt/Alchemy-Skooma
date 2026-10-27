@@ -20854,7 +20854,15 @@
       <xs:element name="close_image" type="al_any"/>
       <xs:element name="close_pressed_image" type="al_any"/>
       <xs:element name="collapse_image" type="al_any"/>
+      <xs:element name="collapse_down_image" type="al_any"/>
+      <xs:element name="collapse_up_image" type="al_any"/>
+      <xs:element name="collapse_left_image" type="al_any"/>
+      <xs:element name="collapse_right_image" type="al_any"/>
       <xs:element name="collapse_pressed_image" type="al_any"/>
+      <xs:element name="collapse_down_pressed_image" type="al_any"/>
+      <xs:element name="collapse_up_pressed_image" type="al_any"/>
+      <xs:element name="collapse_left_pressed_image" type="al_any"/>
+      <xs:element name="collapse_right_pressed_image" type="al_any"/>
       <xs:element name="commit_callback" type="al_any"/>
       <xs:element name="dock_image" type="al_any"/>
       <xs:element name="dock_pressed_image" type="al_any"/>
@@ -20868,7 +20876,15 @@
       <xs:element name="floater.close_image" type="al_any"/>
       <xs:element name="floater.close_pressed_image" type="al_any"/>
       <xs:element name="floater.collapse_image" type="al_any"/>
+      <xs:element name="floater.collapse_down_image" type="al_any"/>
+      <xs:element name="floater.collapse_up_image" type="al_any"/>
+      <xs:element name="floater.collapse_left_image" type="al_any"/>
+      <xs:element name="floater.collapse_right_image" type="al_any"/>
       <xs:element name="floater.collapse_pressed_image" type="al_any"/>
+      <xs:element name="floater.collapse_down_pressed_image" type="al_any"/>
+      <xs:element name="floater.collapse_up_pressed_image" type="al_any"/>
+      <xs:element name="floater.collapse_left_pressed_image" type="al_any"/>
+      <xs:element name="floater.collapse_right_pressed_image" type="al_any"/>
       <xs:element name="floater.commit_callback" type="al_any"/>
       <xs:element name="floater.dock_image" type="al_any"/>
       <xs:element name="floater.dock_pressed_image" type="al_any"/>
@@ -20881,8 +20897,6 @@
       <xs:element name="floater.highlight_light_color" type="al_any"/>
       <xs:element name="floater.init_callback" type="al_any"/>
       <xs:element name="floater.initial_value" type="al_any"/>
-      <xs:element name="floater.minimize_image" type="al_any"/>
-      <xs:element name="floater.minimize_pressed_image" type="al_any"/>
       <xs:element name="floater.mouseenter_callback" type="al_any"/>
       <xs:element name="floater.mouseleave_callback" type="al_any"/>
       <xs:element name="floater.open_callback" type="al_any"/>
@@ -20906,8 +20920,6 @@
       <xs:element name="highlight_light_color" type="al_any"/>
       <xs:element name="init_callback" type="al_any"/>
       <xs:element name="initial_value" type="al_any"/>
-      <xs:element name="minimize_image" type="al_any"/>
-      <xs:element name="minimize_pressed_image" type="al_any"/>
       <xs:element name="mouseenter_callback" type="al_any"/>
       <xs:element name="mouseleave_callback" type="al_any"/>
       <xs:element name="open_callback" type="al_any"/>
@@ -20997,9 +21009,25 @@
     <xs:attribute name="close_pressed_image" type="xs:string"/>
     <xs:attribute name="close_pressed_image.name" type="xs:string"/>
     <xs:attribute name="collapse_image" type="xs:string"/>
+    <xs:attribute name="collapse_down_image" type="xs:string"/>
+    <xs:attribute name="collapse_up_image" type="xs:string"/>
+    <xs:attribute name="collapse_left_image" type="xs:string"/>
+    <xs:attribute name="collapse_right_image" type="xs:string"/>
     <xs:attribute name="collapse_image.name" type="xs:string"/>
+    <xs:attribute name="collapse_down_image.name" type="xs:string"/>
+    <xs:attribute name="collapse_up_image.name" type="xs:string"/>
+    <xs:attribute name="collapse_left_image.name" type="xs:string"/>
+    <xs:attribute name="collapse_right_image.name" type="xs:string"/>
     <xs:attribute name="collapse_pressed_image" type="xs:string"/>
+    <xs:attribute name="collapse_down_pressed_image" type="xs:string"/>
+    <xs:attribute name="collapse_up_pressed_image" type="xs:string"/>
+    <xs:attribute name="collapse_left_pressed_image" type="xs:string"/>
+    <xs:attribute name="collapse_right_pressed_image" type="xs:string"/>
     <xs:attribute name="collapse_pressed_image.name" type="xs:string"/>
+    <xs:attribute name="collapse_down_pressed_image.name" type="xs:string"/>
+    <xs:attribute name="collapse_up_pressed_image.name" type="xs:string"/>
+    <xs:attribute name="collapse_left_pressed_image.name" type="xs:string"/>
+    <xs:attribute name="collapse_right_pressed_image.name" type="xs:string"/>
     <xs:attribute name="commit_callback" type="xs:string"/>
     <xs:attribute name="commit_callback.control" type="xs:string"/>
     <xs:attribute name="commit_callback.function" type="xs:string"/>
@@ -21074,10 +21102,6 @@
     <xs:attribute name="length" type="xs:string"/>
     <xs:attribute name="min_height" type="xs:integer"/>
     <xs:attribute name="min_width" type="xs:integer"/>
-    <xs:attribute name="minimize_image" type="xs:string"/>
-    <xs:attribute name="minimize_image.name" type="xs:string"/>
-    <xs:attribute name="minimize_pressed_image" type="xs:string"/>
-    <xs:attribute name="minimize_pressed_image.name" type="xs:string"/>
     <xs:attribute name="mouse_opaque" type="xs:boolean"/>
     <xs:attribute name="mouseenter_callback" type="xs:string"/>
     <xs:attribute name="mouseenter_callback.control" type="xs:string"/>
@@ -44274,7 +44298,15 @@
       <xs:element name="close_image" type="al_any"/>
       <xs:element name="close_pressed_image" type="al_any"/>
       <xs:element name="collapse_image" type="al_any"/>
+      <xs:element name="collapse_down_image" type="al_any"/>
+      <xs:element name="collapse_up_image" type="al_any"/>
+      <xs:element name="collapse_left_image" type="al_any"/>
+      <xs:element name="collapse_right_image" type="al_any"/>
       <xs:element name="collapse_pressed_image" type="al_any"/>
+      <xs:element name="collapse_down_pressed_image" type="al_any"/>
+      <xs:element name="collapse_up_pressed_image" type="al_any"/>
+      <xs:element name="collapse_left_pressed_image" type="al_any"/>
+      <xs:element name="collapse_right_pressed_image" type="al_any"/>
       <xs:element name="commit_callback" type="al_any"/>
       <xs:element name="dock_image" type="al_any"/>
       <xs:element name="dock_pressed_image" type="al_any"/>
@@ -44287,8 +44319,6 @@
       <xs:element name="highlight_light_color" type="al_any"/>
       <xs:element name="init_callback" type="al_any"/>
       <xs:element name="initial_value" type="al_any"/>
-      <xs:element name="minimize_image" type="al_any"/>
-      <xs:element name="minimize_pressed_image" type="al_any"/>
       <xs:element name="mouseenter_callback" type="al_any"/>
       <xs:element name="mouseleave_callback" type="al_any"/>
       <xs:element name="multi_floater.bg_alpha_color" type="al_any"/>
@@ -44301,7 +44331,15 @@
       <xs:element name="multi_floater.close_image" type="al_any"/>
       <xs:element name="multi_floater.close_pressed_image" type="al_any"/>
       <xs:element name="multi_floater.collapse_image" type="al_any"/>
+      <xs:element name="multi_floater.collapse_down_image" type="al_any"/>
+      <xs:element name="multi_floater.collapse_up_image" type="al_any"/>
+      <xs:element name="multi_floater.collapse_left_image" type="al_any"/>
+      <xs:element name="multi_floater.collapse_right_image" type="al_any"/>
       <xs:element name="multi_floater.collapse_pressed_image" type="al_any"/>
+      <xs:element name="multi_floater.collapse_down_pressed_image" type="al_any"/>
+      <xs:element name="multi_floater.collapse_up_pressed_image" type="al_any"/>
+      <xs:element name="multi_floater.collapse_left_pressed_image" type="al_any"/>
+      <xs:element name="multi_floater.collapse_right_pressed_image" type="al_any"/>
       <xs:element name="multi_floater.commit_callback" type="al_any"/>
       <xs:element name="multi_floater.dock_image" type="al_any"/>
       <xs:element name="multi_floater.dock_pressed_image" type="al_any"/>
@@ -44314,8 +44352,6 @@
       <xs:element name="multi_floater.highlight_light_color" type="al_any"/>
       <xs:element name="multi_floater.init_callback" type="al_any"/>
       <xs:element name="multi_floater.initial_value" type="al_any"/>
-      <xs:element name="multi_floater.minimize_image" type="al_any"/>
-      <xs:element name="multi_floater.minimize_pressed_image" type="al_any"/>
       <xs:element name="multi_floater.mouseenter_callback" type="al_any"/>
       <xs:element name="multi_floater.mouseleave_callback" type="al_any"/>
       <xs:element name="multi_floater.open_callback" type="al_any"/>
@@ -44417,9 +44453,25 @@
     <xs:attribute name="close_pressed_image" type="xs:string"/>
     <xs:attribute name="close_pressed_image.name" type="xs:string"/>
     <xs:attribute name="collapse_image" type="xs:string"/>
+    <xs:attribute name="collapse_down_image" type="xs:string"/>
+    <xs:attribute name="collapse_up_image" type="xs:string"/>
+    <xs:attribute name="collapse_left_image" type="xs:string"/>
+    <xs:attribute name="collapse_right_image" type="xs:string"/>
     <xs:attribute name="collapse_image.name" type="xs:string"/>
+    <xs:attribute name="collapse_down_image.name" type="xs:string"/>
+    <xs:attribute name="collapse_up_image.name" type="xs:string"/>
+    <xs:attribute name="collapse_left_image.name" type="xs:string"/>
+    <xs:attribute name="collapse_right_image.name" type="xs:string"/>
     <xs:attribute name="collapse_pressed_image" type="xs:string"/>
+    <xs:attribute name="collapse_down_pressed_image" type="xs:string"/>
+    <xs:attribute name="collapse_up_pressed_image" type="xs:string"/>
+    <xs:attribute name="collapse_left_pressed_image" type="xs:string"/>
+    <xs:attribute name="collapse_right_pressed_image" type="xs:string"/>
     <xs:attribute name="collapse_pressed_image.name" type="xs:string"/>
+    <xs:attribute name="collapse_down_pressed_image.name" type="xs:string"/>
+    <xs:attribute name="collapse_up_pressed_image.name" type="xs:string"/>
+    <xs:attribute name="collapse_left_pressed_image.name" type="xs:string"/>
+    <xs:attribute name="collapse_right_pressed_image.name" type="xs:string"/>
     <xs:attribute name="commit_callback" type="xs:string"/>
     <xs:attribute name="commit_callback.control" type="xs:string"/>
     <xs:attribute name="commit_callback.function" type="xs:string"/>
@@ -44494,10 +44546,6 @@
     <xs:attribute name="length" type="xs:string"/>
     <xs:attribute name="min_height" type="xs:integer"/>
     <xs:attribute name="min_width" type="xs:integer"/>
-    <xs:attribute name="minimize_image" type="xs:string"/>
-    <xs:attribute name="minimize_image.name" type="xs:string"/>
-    <xs:attribute name="minimize_pressed_image" type="xs:string"/>
-    <xs:attribute name="minimize_pressed_image.name" type="xs:string"/>
     <xs:attribute name="mouse_opaque" type="xs:boolean"/>
     <xs:attribute name="mouseenter_callback" type="xs:string"/>
     <xs:attribute name="mouseenter_callback.control" type="xs:string"/>
