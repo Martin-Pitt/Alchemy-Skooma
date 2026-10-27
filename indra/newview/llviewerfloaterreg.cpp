@@ -214,6 +214,7 @@
 // [RLVa:KB] - Checked: 2010-03-11
 #include "rlvfloaters.h"
 // [/RLVa:KB]
+#include "skfloateroutlinecapture.h" // <SK:Nexii> outline capture
 // handle secondlife:///app/openfloater/{NAME} URLs
 const std::string FLOATER_PROFILE("profile");
 class LLFloaterOpenHandler : public LLCommandHandler
@@ -610,6 +611,7 @@ void LLViewerFloaterReg::registerFloaters()
     LLFloaterReg::add("webprofile", "floater_al_web_profile.xml", (LLFloaterBuildFunc)&ALFloaterWebProfile::create);
 
     LLFloaterReg::add("fs_poser", "floater_fs_poser.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<FSFloaterPoser>); // <FS:AR> [FIRE-30873]: Poser
+    LLFloaterReg::add("sk_outline_capture", "floater_sk_outline_capture.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SKFloaterOutlineCapture>); // <SK:Nexii> outline capture
 
     // *NOTE: Please keep these alphabetized for easier merges
 
