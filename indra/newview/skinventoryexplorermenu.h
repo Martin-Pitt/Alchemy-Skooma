@@ -30,6 +30,7 @@
 #include "lllistcontextmenu.h"
 
 #include <functional>
+#include <map>
 
 class LLContextMenu;
 class LLInventoryPanel;
@@ -57,8 +58,11 @@ namespace SKInventoryExplorerActions
     void copy(const uuid_vec_t& ids);
     bool canCut(const uuid_vec_t& ids);
     void cut(const uuid_vec_t& ids);
+    // Pastes go through the folder's stock bridge (LLFolderBridge::pasteFromClipboard and its rules).
     bool canPaste(const LLUUID& dest_id);
     void paste(const LLUUID& dest_id);
+    bool canPasteLink(const LLUUID& dest_id);
+    void pasteLink(const LLUUID& dest_id);
 
     // Every selected object takes the opposite of the first one's favourite state.
     void toggleFavorite(const uuid_vec_t& ids);
@@ -66,8 +70,10 @@ namespace SKInventoryExplorerActions
     // One of the Inventory floater's "New" kinds (category, lsl, notecard, shirt, sky, ...) in the folder.
     void create(const LLUUID& dest_id, const std::string& kind);
 
-    // Runs a bridge's own action for an item, the bridge built over a live inventory panel.
-    void bridgeAction(LLInventoryPanel* panel, const LLUUID& id, const std::string& action);
+    // The live inventory panel the stock bridges are built over.
+    void setBridgePanel(LLInventoryPanel* panel);
+    // Runs a bridge's own action for an object, the bridge built over that panel.
+    void bridgeAction(const LLUUID& id, const std::string& action);
 }
 
 // The view, group, sort and column options, set and checked by key ("sort:name", "group:type", "dir:asc",
@@ -84,23 +90,24 @@ class SKInventoryExplorerContextMenu : public LLListContextMenu
 public:
     typedef std::function<void(const LLUUID& id, bool new_tab)> open_callback_t;
     typedef std::function<void(const LLUUID& id)> id_callback_t;
-    typedef std::function<LLInventoryPanel*()> panel_getter_t;
-
-    SKInventoryExplorerContextMenu(const open_callback_t& open_cb, const id_callback_t& rename_cb, const SKExplorerOptions& options,
-                                   const panel_getter_t& panel_getter)
+    SKInventoryExplorerContextMenu(const open_callback_t& open_cb, const id_callback_t& rename_cb, const SKExplorerOptions& options)
     :   LLListContextMenu(),
         mOpenCallback(open_cb),
         mRenameCallback(rename_cb),
         mOptions(options),
-        mPanelGetter(panel_getter),
         mRootMode(false)
     {}
+
+    // The labels and tooltips the menu sets itself, from the floater's XUI strings.
+    void setStrings(const std::map<std::string, std::string>& strings) { mStrings = strings; }
 
     // The folder listed, and whether the menu was opened over empty space (its id is then the folder's).
     void setListedFolder(const LLUUID& folder_id, bool root_mode) { mListedFolderID = folder_id; mRootMode = root_mode; }
 
     // A menu of options alone (the List's header menu, the toolbar's Sort and Group), shown under spawn at x, y.
     static void showOptionsMenu(const std::string& filename, const SKExplorerOptions& options, LLView* spawn, S32 x, S32 y);
+    // Deletes the options menu, whose callbacks reach the floater that opened it.
+    static void closeOptionsMenu();
 
 protected:
     LLContextMenu* createMenu() override;
@@ -109,13 +116,19 @@ protected:
     void updateMenuItemsVisibility(LLContextMenu* menu);
     void addIconRow(LLContextMenu* menu);
     void addAttachmentPoints(LLContextMenu* menu);
+    std::string string(const std::string& key) const
+    {
+        auto it = mStrings.find(key);
+        return it != mStrings.end() ? it->second : key;
+    }
 
     open_callback_t mOpenCallback;
     id_callback_t mRenameCallback;
     SKExplorerOptions mOptions;
-    panel_getter_t mPanelGetter;
     LLUUID mListedFolderID;
     bool mRootMode;
+    std::map<std::string, std::string> mStrings;
+    static LLHandle<LLContextMenu> sOptionsMenu;   // the one options menu open, deleted before the next
 };
 
 #endif // SK_SKINVENTORYEXPLORERMENU_H
