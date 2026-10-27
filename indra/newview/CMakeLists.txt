@@ -1035,6 +1035,7 @@ if(AL_BUILD_VIEWER)
     skworldmaptiles.cpp # <SK:Nexii> 3D world map
     skcombatlockout.cpp
     skfloaterinventoryexplorer.cpp # <SK:Nexii> Inventory Explorer
+    skinventorycolumnsview.cpp # <SK:Nexii> Inventory Explorer
     skinventoryexplorermenu.cpp # <SK:Nexii> Inventory Explorer
     skinventorylistview.cpp # <SK:Nexii> Inventory Explorer
     skinventorysidebar.cpp # <SK:Nexii> Inventory Explorer
@@ -1951,6 +1952,7 @@ if(AL_BUILD_VIEWER)
     skworldmapscene.h # <SK:Nexii> 3D world map
     skworldmaptiles.h # <SK:Nexii> 3D world map
     skfloaterinventoryexplorer.h # <SK:Nexii> Inventory Explorer
+    skinventorycolumnsview.h # <SK:Nexii> Inventory Explorer
     skinventoryexplorermenu.h # <SK:Nexii> Inventory Explorer
     skinventorylistview.h # <SK:Nexii> Inventory Explorer
     skinventorysidebar.h # <SK:Nexii> Inventory Explorer

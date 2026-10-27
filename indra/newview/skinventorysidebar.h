@@ -27,12 +27,36 @@
 #ifndef SK_SKINVENTORYSIDEBAR_H
 #define SK_SKINVENTORYSIDEBAR_H
 
+#include "llfolderview.h"
 #include "llinventorypanel.h"
 
 #include <functional>
 #include <set>
 
 class LLTextBox;
+
+// The sidebar panels' folder view, letting the sidebar take a key before the stock handling.
+class SKSidebarFolderView final : public LLFolderView
+{
+public:
+    AL_VIEW_TYPE(SKSidebarFolderView, LLFolderView);
+
+    struct Params : public LLInitParam::Block<Params, LLFolderView::Params>
+    {
+    };
+
+    SKSidebarFolderView(const LLFolderView::Params& p);
+
+    // Flat, as Columns' first column: rows select but never expand.
+    void setFlat(bool flat) { mFlat = flat; }
+
+    bool handleKeyHere(KEY key, MASK mask) override;
+    bool handleMouseDown(S32 x, S32 y, MASK mask) override;
+    bool handleDoubleClick(S32 x, S32 y, MASK mask) override;
+
+private:
+    bool mFlat;
+};
 
 // An inventory panel of folders only that never scrolls itself: its scroller is
 // kept as the folder view's frame with its bars hidden, the panel is sized to the
@@ -67,13 +91,19 @@ public:
     // Whether this panel lists the folder as a row.
     virtual bool covers(const LLUUID& folder_id) const;
 
+    typedef std::function<bool(KEY key, MASK mask)> key_callback_t;
+    void setKeyCallback(const key_callback_t& cb) { mKeyCallback = cb; }
+    bool handleSidebarKey(KEY key, MASK mask) { return mKeyCallback && mKeyCallback(key, mask); }
+
 protected:
     SKInventorySidebarPanel(const Params& p);
     friend class LLUICtrlFactory;
 
     bool typedViewsFilter(const LLUUID& id, LLInventoryObject const* objectp) override;
+    LLFolderView* createFolderRoot(LLUUID root_id) override;
 
     ESection mSection;
+    key_callback_t mKeyCallback;
 };
 
 // Favorites: one root per favourite folder, each expanding in place.
@@ -117,11 +147,19 @@ public:
     };
 
     typedef std::function<void(const LLUUID& folder_id)> open_callback_t;
+    typedef SKInventorySidebarPanel::key_callback_t key_callback_t;
 
     bool postBuild() override;
     void draw() override;
 
     void setOpenCallback(const open_callback_t& cb) { mOpenCallback = cb; }
+    // Keys a panel's folder view offers first, before its own handling.
+    void setKeyCallback(const key_callback_t& cb) { mKeyCallback = cb; }
+
+    // Columns view: the sidebar is the first column, flat, nothing expanding.
+    void setFlat(bool flat);
+    // Gives keyboard focus to the panel holding the selected row.
+    void focusSelection();
 
     // Selects the folder's row in the panel that should show it, expanding to it,
     // and scrolls only if no copy of the row is in view.
@@ -140,6 +178,9 @@ protected:
     std::vector<LLTextBox*> mHeadings;
     LLTextBox* mFavoritesHint;
     open_callback_t mOpenCallback;
+    key_callback_t mKeyCallback;
+    bool mFlat;
+    std::vector<LLUUID> mOpenBeforeFlat;   // top-level folders open in List, opened again on leaving Columns
     bool mRevealing;
     LLUUID mPendingReveal;
     SKInventorySidebarPanel* mPendingPanel;
