@@ -139,50 +139,73 @@ namespace skworld
 
     void SolidLattice::clear()
     {
-        mTiles.clear();
+        mRecords.clear();
+        mKeys.clear();
+        mStarts.clear();
+        mRefs.clear();
         mLarge.clear();
     }
 
     void SolidLattice::rebuild(const std::vector<RecordPtr>& records)
     {
         clear();
+        std::vector<std::pair<TileKey, U32>> cover;
         for (const RecordPtr& record : records)
         {
             if (!record->mSolid || record->mRole != Role::NAV || record->mProvenance == Provenance::BOX)
             {
                 continue;
             }
+            const U32 index = static_cast<U32>(mRecords.size());
+            mRecords.push_back(record);
             const TileKey lo = tileOf(record->mMin), hi = tileOf(record->mMax);
             if ((static_cast<S64>(hi.mX) - lo.mX + 1) * (static_cast<S64>(hi.mY) - lo.mY + 1) > SOLID_MAX_TILES)
             {
-                mLarge.push_back(record);
+                mLarge.push_back(index);
                 continue;
             }
             for (S32 y = lo.mY; y <= hi.mY; ++y)
             {
                 for (S32 x = lo.mX; x <= hi.mX; ++x)
                 {
-                    mTiles[TileKey{ x, y }].push_back(record);
+                    cover.emplace_back(TileKey{ x, y }, index);
                 }
             }
         }
+        std::sort(cover.begin(), cover.end(), [](const std::pair<TileKey, U32>& a, const std::pair<TileKey, U32>& b)
+        {
+            return a.first < b.first || (a.first == b.first && a.second < b.second);
+        });
+        mRefs.reserve(cover.size());
+        for (const auto& [key, index] : cover)
+        {
+            if (mKeys.empty() || !(mKeys.back() == key))
+            {
+                mKeys.push_back(key);
+                mStarts.push_back(static_cast<U32>(mRefs.size()));
+            }
+            mRefs.push_back(index);
+        }
+        mStarts.push_back(static_cast<U32>(mRefs.size()));
     }
 
     bool SolidLattice::contains(const LLVector3d& p) const
     {
-        for (const RecordPtr& record : mLarge)
+        for (U32 index : mLarge)
         {
-            if (probeInsideSolid(*record, p))
+            if (probeInsideSolid(*mRecords[index], p))
             {
                 return true;
             }
         }
-        const auto found = mTiles.find(tileOf(p));
-        if (found != mTiles.end())
+        const TileKey key = tileOf(p);
+        const auto found = std::lower_bound(mKeys.begin(), mKeys.end(), key);
+        if (found != mKeys.end() && *found == key)
         {
-            for (const RecordPtr& record : found->second)
+            const size_t k = static_cast<size_t>(found - mKeys.begin());
+            for (U32 i = mStarts[k]; i < mStarts[k + 1]; ++i)
             {
-                if (probeInsideSolid(*record, p))
+                if (probeInsideSolid(*mRecords[mRefs[i]], p))
                 {
                     return true;
                 }

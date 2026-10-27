@@ -42,9 +42,9 @@ namespace skworld
     /// The solid records of one census scan, bucketed by the lattice tiles
     /// their global AABBs cover, with the oversized few -- spanning more than
     /// a screen of tiles -- kept separate, where every point test reaches
-    /// them. A point test is one hash and the records of a single tile.
-    /// Holds its records by counted handle: rebuilding from a new scan lets
-    /// the old scan's records go.
+    /// them. A point test is one binary search over the sorted tile keys and
+    /// the records of a single tile, all in flat arrays. Holds its records by
+    /// counted handle: rebuilding from a new scan lets the old scan's records go.
     class SolidLattice
     {
     public:
@@ -55,8 +55,11 @@ namespace skworld
         bool contains(const LLVector3d& p) const;
 
     private:
-        std::unordered_map<TileKey, std::vector<RecordPtr>, TileKeyHash> mTiles;
-        std::vector<RecordPtr> mLarge;
+        std::vector<RecordPtr> mRecords;    ///< the solid records, each once
+        std::vector<TileKey> mKeys;         ///< sorted, unique
+        std::vector<U32> mStarts;           ///< per key, its range in mRefs; one past the last at the end
+        std::vector<U32> mRefs;             ///< indices into mRecords, tile by tile
+        std::vector<U32> mLarge;            ///< indices into mRecords
     };
 
     struct ProbeParams
