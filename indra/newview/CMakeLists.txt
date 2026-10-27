@@ -135,6 +135,7 @@ if(AL_BUILD_VIEWER)
     alassetblocklist.cpp
     alavataractions.cpp
     alavatargroups.cpp
+    albakeproxies.cpp
     alchatautocomplete.cpp
     alchatbar.cpp
     alchatcommand.cpp
@@ -250,6 +251,7 @@ if(AL_BUILD_VIEWER)
     alscriptweightspane.cpp
     alscriptworkspace.cpp
     alterrainsurfacemaps.cpp
+    altextureboost.cpp
     alwatersurface.cpp
     alfloaterscriptstudio.cpp
     alfloaterwebprofile.cpp
@@ -1040,6 +1042,7 @@ if(AL_BUILD_VIEWER)
     alassetblocklist.h
     alavataractions.h
     alavatargroups.h
+    albakeproxies.h
     alchatautocomplete.h
     alchatbar.h
     alchatcommand.h
@@ -1162,6 +1165,7 @@ if(AL_BUILD_VIEWER)
     alscriptworkspace.h
     alterrainsurfacemaps.h
     alwatersurface.h
+    altextureboost.h
     altexturetable.h
     alfloaterscriptstudio.h
     alfloaterwebprofile.h
@@ -2175,7 +2179,6 @@ if(AL_BUILD_VIEWER)
     app_settings/cmd_line.xml
     app_settings/commands.xml
     app_settings/emoji_groups.xml
-    app_settings/foldertypes.xml
     app_settings/grass.xml
     app_settings/ignorable_dialogs.xml
     app_settings/key_bindings.xml
@@ -2189,7 +2192,6 @@ if(AL_BUILD_VIEWER)
     app_settings/std_bump.ini
     app_settings/toolbars.xml
     app_settings/trees.xml
-    app_settings/viewerart.xml
     app_settings/message.xml
     ${SCRIPTS_DIR}/messages/message_template.msg
     featuretable.txt
@@ -2688,6 +2690,7 @@ if(AL_BUILD_TESTS)
     PROJECT ${test_project}
     SOURCES
       tests/alagentlocationformat_test.cpp
+      tests/albakeproxies_test.cpp
       tests/alchattimestamp_test.cpp
       tests/alcolorwheelmodel_test.cpp
       tests/alcrashreporter_test.cpp
@@ -2747,6 +2750,7 @@ if(AL_BUILD_TESTS)
       tests/alscripttypes_test.cpp
       tests/alscriptweightspane_test.cpp
       tests/alterrainsurfacemaps_test.cpp
+      tests/altextureboost_test.cpp
       tests/altexturetable_test.cpp
       tests/alwhitebalancesolver_test.cpp
       tests/cppfeatures_test.cpp
@@ -2771,6 +2775,7 @@ if(AL_BUILD_TESTS)
       tests/skoverviewcover_test.cpp # <SK:Nexii> combat/minimap: the overview's cover verdicts
     UNIT
       alagentlocationformat.cpp
+      albakeproxies.cpp
       alchattimestamp.cpp
       alcolorwheelmodel.cpp
       alcrashreporter.cpp
@@ -2879,6 +2884,8 @@ if(AL_BUILD_TESTS)
       tests/alcasfold_gl_test.cpp
       tests/aldof_gl_test.cpp
       tests/alselectionoutline_gl_test.cpp
+      tests/copycolor_gl_test.cpp
+      tests/objectskinblock_gl_test.cpp
       tests/shadowutil_gl_test.cpp
       tests/skoverviewshaders_gl_test.cpp # <SK:Nexii> combat/minimap: the overview's programs link
       tests/skoverviewcuttable_gl_test.cpp # <SK:Nexii> combat/minimap: the overview's cut table on the GPU
