@@ -3,8 +3,8 @@
  * @brief A modal view: something shown in place of the world, under the viewer's own camera.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
- * Alchemy Viewer Source Code
- * Copyright (C) 2026, Alchemy Viewer Project.
+ * Second Life Viewer Source Code
+ * Copyright (C) 2026, Martin "Nexii" Pitt <martin.r.pitt@gmail.com>
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -169,5 +169,6 @@ private:
     skmodalview::Claims mClaims;
     std::vector<SKModalMode*> mModes;
     WorldCamera mWorld;
+    bool mClosingAll = false; ///< no mode is handed the top while every mode is closing
     std::vector<std::string> mHiddenFloaters; ///< hidden by updateCoveredFloaters while visible
 };
