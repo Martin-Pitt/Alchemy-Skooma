@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+<floater
+ name="sk_outline_capture"
+ title="OUTLINE CAPTURE"
+ single_instance="true"
+ reuse_instance="true"
+ layout="topleft"
+ height="560"
+ width="520"
+ min_height="300"
+ min_width="300"
+ can_resize="true">
+  <button
+   follows="left|top"
+   height="22"
+   label="Capture selection"
+   layout="topleft"
+   left="8"
+   name="capture_selection"
+   top="24"
+   width="120" />
+  <button
+   follows="left|top"
+   height="22"
+   label="Capture my seat"
+   layout="topleft"
+   left_pad="4"
+   name="capture_seat"
+   top_delta="0"
+   width="110" />
+  <button
+   follows="left|top"
+   height="22"
+   label="Forget all"
+   layout="topleft"
+   left_pad="4"
+   name="forget_all"
+   top_delta="0"
+   width="80" />
+  <button
+   follows="left|top"
+   height="22"
+   label="Dump atlas"
+   layout="topleft"
+   left_pad="4"
+   name="dump_atlas"
+   top_delta="0"
+   width="90" />
+  <view
+   follows="left|top|right"
+   height="300"
+   layout="topleft"
+   left="8"
+   name="atlas_view"
+   top="52"
+   width="504" />
+  <text
+   follows="all"
+   font="Monospace"
+   height="196"
+   layout="topleft"
+   left="8"
+   name="stats"
+   top="358"
+   width="504"
+   wrap="false">
+  </text>
+</floater>
