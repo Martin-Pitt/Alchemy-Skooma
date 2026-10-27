@@ -83,7 +83,7 @@ namespace
     constexpr F64 RECENTRE_S = 0.25;
     // SKMapRegionFit's range, as the settings slider has it, one wheel notch of it, and the side of its closest box.
     constexpr F32 REGION_FIT_MIN = -1.f, REGION_FIT_MAX = 1.f, REGION_FIT_NOTCH = 0.05f;
-    constexpr F64 REGION_FIT_CLOSE = 32.0;
+    constexpr F64 REGION_FIT_CLOSE = 32.0, REGION_FIT_CROSSING = 64.0;
 
     LLPointer<LLViewerTexture> sShadowSprite;
 
@@ -606,7 +606,12 @@ LLVector3d SKNetMap::regionFit(const LLViewerRegion* region, F32* span)
             const F64 length2 = dx * dx + dy * dy;
             const F64 u = length2 > 0.0 ? llclamp(((anchor.mdV[VX] - a.mdV[VX]) * dx + (anchor.mdV[VY] - a.mdV[VY]) * dy) / length2, 0.0, 1.0) : 0.0;
             const F64 px = a.mdV[VX] + dx * u, py = a.mdV[VY] + dy * u;
-            candidates.push_back({ px, py, sqrt((anchor.mdV[VX] - px) * (anchor.mdV[VX] - px) + (anchor.mdV[VY] - py) * (anchor.mdV[VY] - py)) });
+            // The box holds on a region's centre and crosses only while the anchor is within REGION_FIT_CROSSING of the border.
+            const F64 zone = length2 > 0.0 ? REGION_FIT_CROSSING / sqrt(length2) : 0.5;
+            const F64 k = llclamp((u - 0.5 + zone) / (2.0 * zone), 0.0, 1.0);
+            const F64 v = k * k * (3.0 - 2.0 * k);
+            candidates.push_back({ a.mdV[VX] + dx * v, a.mdV[VY] + dy * v,
+                                   sqrt((anchor.mdV[VX] - px) * (anchor.mdV[VX] - px) + (anchor.mdV[VY] - py) * (anchor.mdV[VY] - py)) });
         };
         const LLWorld::region_list_t& regions = world->getRegionList();
         for (auto a = regions.begin(); a != regions.end(); ++a)
