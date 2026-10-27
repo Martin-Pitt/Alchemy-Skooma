@@ -1220,3 +1220,8 @@ bool SKInventoryColumnsView::canSelectAll() const
     const Column* current = currentColumn();
     return current && !current->mRows.empty();
 }
+
+void SKInventoryColumnsView::deselect()
+{
+    clearSelection();
+}
