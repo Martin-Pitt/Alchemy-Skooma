@@ -162,7 +162,9 @@ static void sk_modal_world_tick()
     }
     LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("Modal World Tick");
     LLViewerCamera* camera = LLViewerCamera::getInstance();
-    const LLCamera saved_camera = LLViewerCamera::getCurrent();
+    // The mode draws from the camera after this, so its own pose goes back once the tick is done.
+    const LLCamera saved_camera = *camera;
+    const LLCamera saved_current = LLViewerCamera::getCurrent();
     camera->setOrigin(gAgent.getPosAgentFromGlobal(eye));
     camera->setAxes(at, left, up);
     camera->setModelview(camera->frameModelview());
@@ -186,7 +188,8 @@ static void sk_modal_world_tick()
         LLSpatialGroup::sNoDelete = false;
         LLPipeline::sUseOcclusion = occlusion;
     }
-    LLViewerCamera::setCurrent(saved_camera);
+    static_cast<LLCamera&>(*camera) = saved_camera;
+    LLViewerCamera::setCurrent(saved_current);
 }
 
 static void sk_display_modal(bool rebuild)
