@@ -210,6 +210,7 @@ ALCodeEditor::Params::Params()
     bracket_color_2("bracket_color_2"),
     bracket_color_3("bracket_color_3")
 {
+    changeDefault(smooth_scroll, false); // <SK:Nexii> smooth scroll: code moves by the wheel at once, as editors do
 }
 
 ALCodeEditor::ALCodeEditor(const Params& p)
