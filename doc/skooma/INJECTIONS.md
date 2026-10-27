@@ -1515,3 +1515,26 @@ Landed on `develop` in two merges of the same branch: `b7f8571b51` (as `feature-
 - World foundations consumers (via `combat`, main `7a86df287b`): the mini-map and tactical overview read the census and rooms layers (`fbd2370f90`, `c4afa10f39`); `sknavpolys.*` and the overview's navmesh readers gone, `skoverviewcensus.*` reads the census. Marked: `llappviewer.cpp` (`skmaprecorder.h` include; `SKMapRecorder::onFrame()` before the census tick, taking the world layers' trace lines, `168087a50b`). Room/cluster probes: see "Reflection probes — room and cluster probes". `settings_alchemy.xml`: map/overview keys renamed off navmesh wording (`c6440e0635`).
 - Navmesh removed (`23b0cc0c84`, via `combat`): `indra/sknavmesh`, every `sknav*` file, the nav console and annotate floaters, the Recast overlay port (`indra/cmake/ports/recastnavigation`), its `vcpkg.json` / `vcpkg-configuration.json` (`overlay-ports`) / `Dependencies.cmake` entries, the `BootstrapVcpkg.cmake` port-hash block, the annotate hooks in `llselectmgr.cpp` and `llviewerfloaterreg.cpp`, the navmesh overlay call in `pipeline.cpp`, and the `SKNav*` settings. Their rows are removed from this index. Left behind: the `pipeline.h` / `.cpp` `addDebugBlip(…, from)` overload, still marked "navmesh tile updates" (listed under air cells).
 - `combat/minimap-meshopt` (via `feature-combat/minimap`, main `bcabc72e82`): census runs indexed, welded and ordered with meshoptimizer on the build job; a run's indices fill its old range, its vertices the start of it. Marked: `llvertexbuffer.h` / `.cpp` (`getIndexStrider(LLStrider<U32>&, index, count)`, switching the buffer to 32-bit indices as `setIndexData(const U32*)` does; `multiDrawElements` and `multiDrawElementsIndirect` beside the arrays forms), `algpubuffer.h` (`ALDrawElementsIndirectCommand`, beside `ALDrawArraysIndirectCommand`). Own: `skoverviewslots.*` (`indexRun`), `skoverviewcensus.*`, `skoverviewcapture.cpp`, `skoverviewprobes.*`, `overviewCommandsC.glsl` (five-word commands), `tests/skoverviewslots*_test.cpp`.
+
+## Inventory Explorer
+
+Branch `feature-ui/inventory-explorer` (via `ui`, main `7b8ef524f4`). Spec: `.inventory-explorer.md`; index [INVENTORY-EXPLORER.md](INVENTORY-EXPLORER.md).
+
+### Files we own
+
+| File | Role |
+|---|---|
+| `indra/newview/skfloaterinventoryexplorer.*` | The floater: tabs, toolbar, history, panes, status, observer |
+| `indra/newview/skinventorysidebar.*` | Favorites / Inventory / Marketplace / Library panels in one scroller |
+| `indra/newview/skinventorylistview.*` | List view drawn from a flat model, visible rows only |
+| `indra/newview/skinventoryexplorermenu.*` | Context menu and actions (gallery pattern) |
+| `skins/default/xui/en/floater_sk_inventory_explorer.xml`, `menu_sk_inventory_explorer.xml` | Layout and menu |
+
+### Injection sites
+
+| File | What | Marked |
+|---|---|---|
+| `indra/newview/llviewerfloaterreg.cpp` | include beside `llfloaterinventorythumbnailshelper.h`; `LLFloaterReg::add("sk_inventory_explorer")` after `"inventory"` | trailing `// <SK:Nexii> Inventory Explorer` |
+| `indra/newview/CMakeLists.txt` | 4 sources after `rlvui.cpp`, 4 headers after `roles_constants.h` | trailing `# <SK:Nexii> Inventory Explorer` |
+| `app_settings/settings_alchemy.xml` | `SkoomaInventoryExplorer` (debug gate, off) after `ALSceneExplorerSortOrder` | `<!-- <SK:Nexii> Inventory Explorer -->` |
+| `app_settings/settings_per_account_alchemy.xml` | 11 `SkoomaInvExplorer*` preferences after `ALScriptStudioVimrcNotecard` | `<!-- <SK:Nexii> Inventory Explorer -->` |
