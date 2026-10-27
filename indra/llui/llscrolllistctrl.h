@@ -442,6 +442,10 @@ public:
     void            setNeedsSort(bool val = true) { mSorted = !val; }
     void            dirtyColumns(); // some operation has potentially affected column layout or ordering
     S32             getLinesPerPage();
+    // <SK:Nexii> smooth scroll
+    // The rows a glide shows: the first (partly scrolled off the top), how many, and how far up they are moved.
+    void            glideRows(S32& first, S32& lines, S32& offset);
+    // </SK:Nexii>
 
     bool highlightMatchingItems(const std::string& filter_str);
 

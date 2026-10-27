@@ -156,6 +156,11 @@ LLScrollContainer::LLScrollContainer(const LLScrollContainer::Params& p)
     sbparams.change_callback(p.scroll_callback);
     sbparams.overlay(mOverlayScrollbars); // <SK:Nexii> Overlay scroll bar
     mScrollbar[HORIZONTAL] = LLUICtrlFactory::create<LLScrollbar> (sbparams);
+    // <SK:Nexii> smooth scroll
+    // Content in pixels, with no lines of its own until its owner gives it some: Chrome's.
+    mScrollbar[VERTICAL]->setWheelUnits(1.f, LLScrollDelta::PIXELS_PER_LINE);
+    mScrollbar[HORIZONTAL]->setWheelUnits(1.f, LLScrollDelta::PIXELS_PER_LINE);
+    // </SK:Nexii>
     LLView::addChild( mScrollbar[HORIZONTAL] );
 }
 
@@ -540,6 +545,10 @@ void LLScrollContainer::draw()
         // of the rectangle.
         if( mScrolledView )
         {
+            // <SK:Nexii> smooth scroll
+            mScrollbar[VERTICAL]->tickWheel();
+            mScrollbar[HORIZONTAL]->tickWheel();
+            // </SK:Nexii>
             updateScroll();
 
             // Draw the scrolled area.

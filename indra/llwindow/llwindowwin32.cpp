@@ -245,6 +245,76 @@ HMODULE LLWindowWin32::sGLDLLHandle = nullptr;
 
 static HWND sWindowHandleForMessageBox = NULL;
 
+// <SK:Nexii> smooth scroll
+// The wheel's OS distances and the precise-stream guess, kept on the window thread.
+namespace
+{
+    constexpr ULONGLONG PRECISE_STREAM_GAP_MS = 40;  // sub-notch messages this close together are one stream
+    constexpr ULONGLONG PRECISE_STREAM_HOLD_MS = 150; // a stream stays precise this long after its last message
+
+    UINT sWheelScrollLines = 3;
+    UINT sWheelScrollChars = 3;
+    bool sWheelSettingsStale = false;
+
+    void read_wheel_settings()
+    {
+        sWheelSettingsStale = false;
+        if (!SystemParametersInfo(SPI_GETWHEELSCROLLLINES, 0, &sWheelScrollLines, 0))
+        {
+            sWheelScrollLines = 3;
+        }
+        if (!SystemParametersInfo(SPI_GETWHEELSCROLLCHARS, 0, &sWheelScrollChars, 0))
+        {
+            sWheelScrollChars = 3;
+        }
+    }
+
+    struct WheelStream
+    {
+        ULONGLONG mLastMs = 0;
+        ULONGLONG mPreciseUntilMs = 0;
+    };
+
+    // Fills in a wheel message's distances, unless smooth scrolling is off: notches times the OS's lines (or characters), or a page.
+    LLScrollDelta wheel_delta(S32 clicks, S16 raw, F32 sign, bool horizontal, WheelStream& stream)
+    {
+        LLScrollDelta delta(clicks, sign * (F32)raw / (F32)WHEEL_DELTA);
+        if (!LLWindow::sSmoothScroll)
+        {
+            return delta; // upstream's clicks and fractions only
+        }
+        if (sWheelSettingsStale)
+        {
+            read_wheel_settings();
+        }
+        UINT per_notch = horizontal ? sWheelScrollChars : sWheelScrollLines;
+        const ULONGLONG now = GetTickCount64();
+        if (LLWindow::sPreciseWheelHeuristic && raw % WHEEL_DELTA != 0 && now - stream.mLastMs <= PRECISE_STREAM_GAP_MS)
+        {
+            stream.mPreciseUntilMs = now + PRECISE_STREAM_HOLD_MS;
+        }
+        stream.mLastMs = now;
+        if (per_notch == WHEEL_PAGESCROLL)
+        {
+            delta.mPage = true;
+            delta.mLines = delta.mPrecise;
+            per_notch = (UINT)LLScrollDelta::DEFAULT_LINES;
+        }
+        else
+        {
+            delta.mLines = delta.mPrecise * (F32)per_notch;
+        }
+        if (now < stream.mPreciseUntilMs)
+        {
+            delta.mIsPrecise = true;
+            delta.mPage = false;
+            delta.mPixels = delta.mPrecise * (F32)per_notch * LLScrollDelta::PIXELS_PER_LINE;
+        }
+        return delta;
+    }
+}
+// </SK:Nexii>
+
 // The following class LLWinImm delegates Windows IMM APIs.
 // It was originally introduced to support US Windows XP, on which we needed
 // to dynamically load IMM32.DLL and use GetProcAddress to resolve its entry
@@ -622,6 +692,7 @@ LLWindowWin32::LLWindowWin32(LLWindowCallbacks* callbacks,
     {
         mMouseVanish = true;
     }
+    read_wheel_settings(); // <SK:Nexii> smooth scroll
 
     // Initialize the keyboard
     // One keyboard for the process, a window made after another replacing
@@ -3273,8 +3344,11 @@ LRESULT CALLBACK LLWindowWin32::mainWindowProc(HWND h_wnd, UINT u_msg, WPARAM w_
                 clicks = -z_delta / WHEEL_DELTA;
                 z_delta = 0;
             }
-            WINDOW_IMP_POST(window_imp->mCallbacks->handleScrollWheel(window_imp,
-                LLScrollDelta(clicks, -(F32)incoming_z_delta / (F32)WHEEL_DELTA)));
+            // <SK:Nexii> smooth scroll
+            static WheelStream z_stream;
+            const LLScrollDelta delta = wheel_delta(clicks, incoming_z_delta, -1.f, false, z_stream);
+            WINDOW_IMP_POST(window_imp->mCallbacks->handleScrollWheel(window_imp, delta));
+            // </SK:Nexii>
             return 0;
         }
         /*
@@ -3329,8 +3403,11 @@ LRESULT CALLBACK LLWindowWin32::mainWindowProc(HWND h_wnd, UINT u_msg, WPARAM w_
                 h_clicks = h_delta / WHEEL_DELTA;
                 h_delta = 0;
             }
-            WINDOW_IMP_POST(window_imp->mCallbacks->handleScrollHWheel(window_imp,
-                LLScrollDelta(h_clicks, (F32)incoming_h_delta / (F32)WHEEL_DELTA)));
+            // <SK:Nexii> smooth scroll
+            static WheelStream h_stream;
+            const LLScrollDelta delta = wheel_delta(h_clicks, incoming_h_delta, 1.f, true, h_stream);
+            WINDOW_IMP_POST(window_imp->mCallbacks->handleScrollHWheel(window_imp, delta));
+            // </SK:Nexii>
             return 0;
         }
         // Handle mouse movement within the window
@@ -3516,6 +3593,20 @@ LRESULT CALLBACK LLWindowWin32::mainWindowProc(HWND h_wnd, UINT u_msg, WPARAM w_
                     WINDOW_IMP_POST(window_imp->mMouseVanish = true);
                 }
             }
+            // <SK:Nexii> smooth scroll
+            else if (w_param == SPI_SETWHEELSCROLLLINES || w_param == SPI_SETWHEELSCROLLCHARS)
+            {
+                // Switched off, read them on the first wheel message after it is on again.
+                if (LLWindow::sSmoothScroll)
+                {
+                    read_wheel_settings();
+                }
+                else
+                {
+                    sWheelSettingsStale = true;
+                }
+            }
+            // </SK:Nexii>
             // Check if theme-related settings changed
             else if (l_param && (wcscmp((LPCWSTR)l_param, L"ImmersiveColorSet") == 0))
             {
