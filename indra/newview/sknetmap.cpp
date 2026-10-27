@@ -594,30 +594,25 @@ LLVector3d SKNetMap::regionFit(const LLViewerRegion* region, F32* span)
         }
     }
     // At 0 a region's box slides with the anchor along the lines joining the centres of edge-adjacent loaded regions,
-    // so an L of regions is walked through its corner.
+    // so an L of regions is walked through its corner; where two lines are near as close, it blends between them
+    // rather than snapping from one leg to the other.
     LLVector3d slide = origin + LLVector3d(width * 0.5, width * 0.5, 0.0);
     {
-        F64 best = F64_MAX;
+        struct Candidate { F64 x, y, d; };
+        std::vector<Candidate> candidates;
         const auto consider = [&](const LLVector3d& a, const LLVector3d& b)
         {
             const F64 dx = b.mdV[VX] - a.mdV[VX], dy = b.mdV[VY] - a.mdV[VY];
             const F64 length2 = dx * dx + dy * dy;
             const F64 u = length2 > 0.0 ? llclamp(((anchor.mdV[VX] - a.mdV[VX]) * dx + (anchor.mdV[VY] - a.mdV[VY]) * dy) / length2, 0.0, 1.0) : 0.0;
             const F64 px = a.mdV[VX] + dx * u, py = a.mdV[VY] + dy * u;
-            const F64 d = (anchor.mdV[VX] - px) * (anchor.mdV[VX] - px) + (anchor.mdV[VY] - py) * (anchor.mdV[VY] - py);
-            if (d < best)
-            {
-                best = d;
-                slide.mdV[VX] = px;
-                slide.mdV[VY] = py;
-            }
+            candidates.push_back({ px, py, sqrt((anchor.mdV[VX] - px) * (anchor.mdV[VX] - px) + (anchor.mdV[VY] - py) * (anchor.mdV[VY] - py)) });
         };
         const LLWorld::region_list_t& regions = world->getRegionList();
         for (auto a = regions.begin(); a != regions.end(); ++a)
         {
             const F64 wa = (*a)->getWidth();
             const LLVector3d ca = (*a)->getOriginGlobal() + LLVector3d(wa * 0.5, wa * 0.5, 0.0);
-            consider(ca, ca);
             for (auto b = std::next(a); b != regions.end(); ++b)
             {
                 const F64 wb = (*b)->getWidth();
@@ -629,6 +624,27 @@ LLVector3d SKNetMap::regionFit(const LLViewerRegion* region, F32* span)
                     consider(ca, cb);
                 }
             }
+        }
+        if (!candidates.empty())
+        {
+            F64 nearest = F64_MAX;
+            for (const Candidate& c : candidates)
+            {
+                nearest = llmin(nearest, c.d);
+            }
+            // A line within a quarter region of the nearest shares the box, its weight easing to none at that distance.
+            const F64 blend = width * 0.25;
+            F64 sx = 0.0, sy = 0.0, sw = 0.0;
+            for (const Candidate& c : candidates)
+            {
+                const F64 k = llmax(1.0 - (c.d - nearest) / blend, 0.0);
+                const F64 w = k * k * (3.0 - 2.0 * k);
+                sx += c.x * w;
+                sy += c.y * w;
+                sw += w;
+            }
+            slide.mdV[VX] = sx / sw;
+            slide.mdV[VY] = sy / sw;
         }
     }
     // From 0 to 1 the sliding box grows to the region and every side with a loaded neighbour, diagonals included;
