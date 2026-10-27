@@ -1008,6 +1008,10 @@ if(AL_BUILD_VIEWER)
     skoverlay.cpp
     rlvlocks.cpp
     rlvui.cpp
+    skfloaterinventoryexplorer.cpp # <SK:Nexii> Inventory Explorer
+    skinventoryexplorermenu.cpp # <SK:Nexii> Inventory Explorer
+    skinventorylistview.cpp # <SK:Nexii> Inventory Explorer
+    skinventorysidebar.cpp # <SK:Nexii> Inventory Explorer
   )
 
   set(
@@ -1895,6 +1899,10 @@ if(AL_BUILD_VIEWER)
     rlvmodifiers.h
     rlvui.h
     roles_constants.h
+    skfloaterinventoryexplorer.h # <SK:Nexii> Inventory Explorer
+    skinventoryexplorermenu.h # <SK:Nexii> Inventory Explorer
+    skinventorylistview.h # <SK:Nexii> Inventory Explorer
+    skinventorysidebar.h # <SK:Nexii> Inventory Explorer
   )
 
   # Discord rich presence, over the SDK from the private registry.

@@ -1,0 +1,407 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+<floater
+ positioning="cascading"
+ can_close="false"
+ can_minimize="false"
+ can_resize="true"
+ header_height="0"
+ height="520"
+ width="900"
+ min_height="320"
+ min_width="600"
+ layout="topleft"
+ name="sk_inventory_explorer"
+ save_rect="true"
+ single_instance="true"
+ title="Inventory Explorer">
+    <string name="new_tab_tooltip">New tab (Ctrl+T)</string>
+    <string name="view_unavailable">(not built yet)</string>
+    <string name="col_name">Name</string>
+    <string name="col_type">Type</string>
+    <string name="col_creator">Creator</string>
+    <string name="col_acquired">Acquired</string>
+    <string name="col_perms">Perms</string>
+    <string name="col_worn">Worn on</string>
+    <string name="col_description">Description</string>
+    <string name="folder">Folder</string>
+    <string name="folder_count">Folder ([COUNT])</string>
+    <string name="date_format">[year,datetime,local]-[mthnum,datetime,local]-[day,datetime,local] [hour,datetime,local]:[min,datetime,local]</string>
+    <string name="loading">Loading…</string>
+    <string name="empty_folder">Empty folder</string>
+    <string name="worn">Worn</string>
+    <string name="one_folder">1 folder</string>
+    <string name="n_folders">[FOLDERS] folders</string>
+    <string name="one_item">1 item</string>
+    <string name="n_items">[ITEMS] items</string>
+    <string name="folders_and_items">[FOLDERS], [ITEMS]</string>
+    <string name="n_selected">[COUNT] selected</string>
+    <string name="status_join">[A] · [B]</string>
+    <string name="no_selection">No item selected</string>
+    <sk_explorer_tab_strip
+     follows="left|top|right"
+     height="26"
+     layout="topleft"
+     left="0"
+     name="tab_strip"
+     right="-50"
+     top="0" />
+    <button
+     follows="top|right"
+     height="22"
+     image_overlay="Icon_Minimize_Foreground"
+     image_selected="Toolbar_Middle_Selected"
+     image_unselected="Toolbar_Middle_Off"
+     layout="topleft"
+     name="minimize_btn"
+     right="-26"
+     tool_tip="Minimize"
+     top="2"
+     width="22" />
+    <button
+     follows="top|right"
+     height="22"
+     image_overlay="Icon_Close_Foreground"
+     image_selected="Toolbar_Middle_Selected"
+     image_unselected="Toolbar_Middle_Off"
+     layout="topleft"
+     name="close_btn"
+     right="-2"
+     tool_tip="Close"
+     top="2"
+     width="22" />
+    <button
+     follows="top|left"
+     height="22"
+     image_overlay="Single_Folder_Back"
+     image_selected="Toolbar_Middle_Selected"
+     image_unselected="Toolbar_Middle_Off"
+     layout="topleft"
+     left="4"
+     name="back_btn"
+     tool_tip="Back (Alt+←)"
+     top="29"
+     width="24" />
+    <button
+     follows="top|left"
+     height="22"
+     image_overlay="Single_Folder_Forward"
+     image_selected="Toolbar_Middle_Selected"
+     image_unselected="Toolbar_Middle_Off"
+     layout="topleft"
+     left_pad="2"
+     name="forward_btn"
+     tool_tip="Forward (Alt+→)"
+     top="29"
+     width="24" />
+    <button
+     follows="top|left"
+     height="22"
+     image_overlay="Single_Folder_Up"
+     image_selected="Toolbar_Middle_Selected"
+     image_unselected="Toolbar_Middle_Off"
+     layout="topleft"
+     left_pad="2"
+     name="up_btn"
+     tool_tip="Up (Alt+↑)"
+     top="29"
+     width="24" />
+    <text
+     follows="left|top|right"
+     height="16"
+     layout="topleft"
+     left_pad="8"
+     name="path_text"
+     right="-140"
+     top="33"
+     use_ellipses="true" />
+    <button
+     follows="top|right"
+     height="22"
+     image_overlay="Hierarchy_View_On"
+     image_selected="Toolbar_Middle_Selected"
+     image_unselected="Toolbar_Middle_Off"
+     is_toggle="true"
+     layout="topleft"
+     name="view_columns_btn"
+     right="-106"
+     tool_tip="Columns (Ctrl+1)"
+     top="29"
+     width="24" />
+    <button
+     follows="top|right"
+     height="22"
+     image_overlay="Thumbnail_Fallback"
+     image_selected="Toolbar_Middle_Selected"
+     image_unselected="Toolbar_Middle_Off"
+     is_toggle="true"
+     layout="topleft"
+     name="view_icons_btn"
+     right="-82"
+     tool_tip="Icons (Ctrl+2)"
+     top="29"
+     width="24" />
+    <button
+     follows="top|right"
+     height="22"
+     image_overlay="List_View_On"
+     image_selected="Toolbar_Middle_Selected"
+     image_unselected="Toolbar_Middle_Off"
+     is_toggle="true"
+     layout="topleft"
+     name="view_list_btn"
+     right="-58"
+     tool_tip="List (Ctrl+3)"
+     top="29"
+     width="24" />
+    <button
+     follows="top|right"
+     height="22"
+     image_overlay="Icon_Snapshot"
+     image_selected="Toolbar_Middle_Selected"
+     image_unselected="Toolbar_Middle_Off"
+     is_toggle="true"
+     layout="topleft"
+     name="view_gallery_btn"
+     right="-34"
+     tool_tip="Gallery (Ctrl+4)"
+     top="29"
+     width="24" />
+    <button
+     follows="top|right"
+     height="22"
+     image_overlay="Info_Small"
+     image_selected="Toolbar_Middle_Selected"
+     image_unselected="Toolbar_Middle_Off"
+     is_toggle="true"
+     layout="topleft"
+     name="details_btn"
+     right="-4"
+     tool_tip="Details pane"
+     top="29"
+     width="24" />
+    <layout_stack
+     border_size="0"
+     follows="all"
+     height="442"
+     layout="topleft"
+     left="0"
+     name="panes"
+     orientation="horizontal"
+     top="56"
+     width="900">
+        <layout_panel
+         auto_resize="false"
+         layout="topleft"
+         min_width="140"
+         name="sidebar_panel"
+         width="220">
+            <scroll_container
+             follows="all"
+             height="442"
+             layout="topleft"
+             left="0"
+             name="sidebar_scroll"
+             reserve_scroll_corner="false"
+             top="0"
+             width="220">
+                <sk_inventory_sidebar
+                 follows="left|top|right"
+                 height="442"
+                 layout="topleft"
+                 left="0"
+                 name="sidebar"
+                 top="0"
+                 width="205">
+                    <text
+                     follows="left|top"
+                     font="SansSerifSmallBold"
+                     height="18"
+                     layout="topleft"
+                     left="8"
+                     name="heading_favorites"
+                     text_color="LtGray_50"
+                     top="0"
+                     width="190">FAVORITES</text>
+                    <text
+                     follows="left|top"
+                     height="32"
+                     layout="topleft"
+                     left="12"
+                     name="favorites_hint"
+                     text_color="LtGray_50"
+                     top_pad="0"
+                     width="186"
+                     word_wrap="true">Drag folders here, or star a search</text>
+                    <sk_inventory_favorites_panel
+                     allow_multi_select="false"
+                     follows="left|top"
+                     height="20"
+                     layout="topleft"
+                     left="0"
+                     name="panel_favorites"
+                     section="favorites"
+                     top_pad="0"
+                     width="205">
+                        <scroll
+                         follows="all"
+                         hide_scrollbar="true"
+                         name="favorites_frame"
+                         reserve_scroll_corner="false" />
+                    </sk_inventory_favorites_panel>
+                    <text
+                     follows="left|top"
+                     font="SansSerifSmallBold"
+                     height="18"
+                     layout="topleft"
+                     left="8"
+                     name="heading_inventory"
+                     text_color="LtGray_50"
+                     top_pad="0"
+                     width="190">INVENTORY</text>
+                    <sk_inventory_sidebar_panel
+                     allow_multi_select="false"
+                     follows="left|top"
+                     height="20"
+                     layout="topleft"
+                     left="0"
+                     name="panel_inventory"
+                     section="inventory"
+                     top_pad="0"
+                     width="205">
+                        <scroll
+                         follows="all"
+                         hide_scrollbar="true"
+                         name="inventory_frame"
+                         reserve_scroll_corner="false" />
+                    </sk_inventory_sidebar_panel>
+                    <text
+                     follows="left|top"
+                     font="SansSerifSmallBold"
+                     height="18"
+                     layout="topleft"
+                     left="8"
+                     name="heading_marketplace"
+                     text_color="LtGray_50"
+                     top_pad="0"
+                     width="190">MARKETPLACE</text>
+                    <sk_inventory_sidebar_panel
+                     allow_multi_select="false"
+                     follows="left|top"
+                     height="20"
+                     layout="topleft"
+                     left="0"
+                     name="panel_marketplace"
+                     section="marketplace"
+                     top_pad="0"
+                     width="205">
+                        <scroll
+                         follows="all"
+                         hide_scrollbar="true"
+                         name="marketplace_frame"
+                         reserve_scroll_corner="false" />
+                    </sk_inventory_sidebar_panel>
+                    <text
+                     follows="left|top"
+                     font="SansSerifSmallBold"
+                     height="18"
+                     layout="topleft"
+                     left="8"
+                     name="heading_library"
+                     text_color="LtGray_50"
+                     top_pad="0"
+                     width="190">LIBRARY</text>
+                    <sk_inventory_sidebar_panel
+                     allow_multi_select="false"
+                     follows="left|top"
+                     height="20"
+                     layout="topleft"
+                     left="0"
+                     name="panel_library"
+                     section="library"
+                     top_pad="0"
+                     width="205">
+                        <scroll
+                         follows="all"
+                         hide_scrollbar="true"
+                         name="library_frame"
+                         reserve_scroll_corner="false" />
+                    </sk_inventory_sidebar_panel>
+                </sk_inventory_sidebar>
+            </scroll_container>
+        </layout_panel>
+        <layout_panel
+         auto_resize="false"
+         layout="topleft"
+         name="sidebar_edge_panel"
+         width="6">
+            <sk_pane_edge
+             follows="all"
+             height="442"
+             layout="topleft"
+             left="0"
+             name="sidebar_edge"
+             pane="sidebar"
+             tool_tip="Drag to resize; double-click for the default"
+             top="0"
+             width="6" />
+        </layout_panel>
+        <layout_panel
+         auto_resize="true"
+         layout="topleft"
+         min_width="200"
+         name="content_panel"
+         width="418">
+            <sk_inventory_list
+             follows="all"
+             height="442"
+             layout="topleft"
+             left="0"
+             name="list_view"
+             tab_stop="true"
+             top="0"
+             width="418" />
+        </layout_panel>
+        <layout_panel
+         auto_resize="false"
+         layout="topleft"
+         name="details_edge_panel"
+         width="6">
+            <sk_pane_edge
+             follows="all"
+             height="442"
+             layout="topleft"
+             left="0"
+             name="details_edge"
+             pane="details"
+             tool_tip="Drag to resize; double-click for the default"
+             top="0"
+             width="6" />
+        </layout_panel>
+        <layout_panel
+         auto_resize="false"
+         layout="topleft"
+         min_width="140"
+         name="details_panel"
+         width="250">
+            <text
+             follows="all"
+             height="426"
+             layout="topleft"
+             left="8"
+             name="details_text"
+             right="-8"
+             text_color="LtGray_50"
+             top="8"
+             word_wrap="true" />
+        </layout_panel>
+    </layout_stack>
+    <text
+     follows="left|bottom|right"
+     height="16"
+     layout="topleft"
+     left="8"
+     name="status_text"
+     right="-8"
+     top="501"
+     use_ellipses="true" />
+</floater>

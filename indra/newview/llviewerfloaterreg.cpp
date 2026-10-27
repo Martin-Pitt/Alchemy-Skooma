@@ -119,6 +119,7 @@
 #include "alfloatersceneexplorerfilters.h"
 #include "llfloaterinventorysettings.h"
 #include "llfloaterinventorythumbnailshelper.h"
+#include "skfloaterinventoryexplorer.h" // <SK:Nexii> Inventory Explorer
 #include "llfloaterjoystick.h"
 #include "llfloaterlagmeter.h"
 #include "llfloaterland.h"
@@ -436,6 +437,7 @@ void LLViewerFloaterReg::registerFloaters()
     LLFloaterReg::add("im_well_window", "floater_sys_well.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLIMWellWindow>);
     LLFloaterReg::add("incoming_call", "floater_incoming_call.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLIncomingCallDialog>);
     LLFloaterReg::add("inventory", "floater_my_inventory.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloaterSidePanelContainer>);
+    LLFloaterReg::add("sk_inventory_explorer", "floater_sk_inventory_explorer.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SKFloaterInventoryExplorer>); // <SK:Nexii> Inventory Explorer
     LLFloaterReg::add("inspect", "floater_inspect.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloaterInspect>);
     LLFloaterReg::add("scene_explorer", "floater_scene_explorer.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<ALFloaterSceneExplorer>);
     LLFloaterReg::add("scene_explorer_filters", "floater_scene_explorer_filters.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<ALFloaterSceneExplorerFilters>);
