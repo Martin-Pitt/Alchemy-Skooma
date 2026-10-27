@@ -39,6 +39,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstring>
 
 namespace
 {
@@ -46,6 +47,8 @@ namespace
     // Spaces this far from the camera are considered; the budget trims the rest.
     constexpr F64 REACH_M = 192.0;
     constexpr F32 UPDATE_PERIOD_S = 1.f;
+    // A worker's finished placement is taken no sooner than this after the last update.
+    constexpr F32 RESULTS_MIN_PERIOD_S = 0.25f;
 
     U64 signatureOf(const skworld::Space& space)
     {
@@ -78,14 +81,20 @@ void SKRoomProbes::clear()
     mHeld.clear();
     mParts.clear();
     mPlacing.clear();
-    mSolids.clear();
-    mSolidsCensus = nullptr;
+    mSpaceCandidates.clear();
+    mSolids = nullptr;
     mCandidates = mClearedOut = mOverBudget = mPlaced = mCandidatesAdded = 0;
     if (mDemanding && SKAirCells::instanceExists())
     {
         SKAirCells::instance().removeDemand(DEMAND);
     }
     mDemanding = false;
+}
+
+bool SKRoomProbes::workerResultsReady() const
+{
+    std::lock_guard<std::mutex> lock(mResults->mMutex);
+    return !mResults->mPlaced.empty();
 }
 
 void SKRoomProbes::takeWorkerResults()
@@ -139,11 +148,15 @@ void SKRoomProbes::update(const SKWorldViewPtr& view)
     mHeld.erase(std::remove_if(mHeld.begin(), mHeld.end(), [](const Held& h) { return h.mProbe->getNumRefs() == 1; }), mHeld.end());
     const bool dropped = mHeld.size() != held_before;
 
-    if (gFrameTimeSeconds < mNextUpdate)
+    // Finished placements bring the next update forward, but never closer than the minimum period.
+    if (gFrameTimeSeconds < mNextUpdate &&
+        !(gFrameTimeSeconds >= mLastUpdate + RESULTS_MIN_PERIOD_S && workerResultsReady()))
     {
         return;
     }
     mNextUpdate = gFrameTimeSeconds + UPDATE_PERIOD_S;
+    mLastUpdate = gFrameTimeSeconds;
+    ++mRun;
 
     LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("rmmu - room probes");
     const auto started = std::chrono::steady_clock::now();
@@ -155,7 +168,6 @@ void SKRoomProbes::update(const SKWorldViewPtr& view)
     // Placement is pure work over a space's raster, tens of milliseconds a
     // space: it runs on the workers, and a space whose answer is pending
     // keeps the parts it had, or waits, until the result is taken.
-    bool deferred = false;
     const skworld::ProbeParams params;
     const auto place = [&](const LLUUID& mesh, const skworld::Space& space, U64 key)
     {
@@ -176,26 +188,13 @@ void SKRoomProbes::update(const SKWorldViewPtr& view)
                 results->mPlaced.push_back(std::move(p));
             });
         }
-        deferred = true;
     };
 
     LLReflectionMapManager& manager = gPipeline.mReflectionMapManager;
-    const auto census = SKWorldCensus::instance().snapshot();
-    // The candidates' solid test reads a tile lattice over the census's solid
-    // records, rebuilt only when a new scan publishes: the per-candidate scan
-    // over every record swept each body's whole triangle soup.
-    if (census != mSolidsCensus)
-    {
-        mSolidsCensus = census;
-        if (census)
-        {
-            mSolids.rebuild(census->mRecords);
-        }
-        else
-        {
-            mSolids.clear();
-        }
-    }
+    // The candidates' solid test reads the census pass's lattice, built on its worker.
+    mSolids = manager.roomSolids();
+    const skworld::SolidLattice* solids = mSolids.get();
+    const auto inside_solid = [solids](const LLVector3d& p) { return solids && solids->contains(p); };
 
     std::vector<LLReflectionMap*> placed_probes;
     manager.getRoomProbesContext(placed_probes);
@@ -217,6 +216,31 @@ void SKRoomProbes::update(const SKWorldViewPtr& view)
         }
         placed.push_back(inf);
     }
+    // What every space's candidate tests depend on beyond its own parts: the lattice, the placed probes, the agent frame.
+    U64 epoch = 1469598103934665603ull;
+    {
+        epoch = skworld::mix(epoch, reinterpret_cast<uintptr_t>(solids));
+        const LLVector3d frame = gAgent.getPosGlobalFromAgent(LLVector3::zero);
+        for (F64 v : frame.mdV)
+        {
+            U64 bits;
+            memcpy(&bits, &v, sizeof(bits));
+            epoch = skworld::mix(epoch, bits);
+        }
+        for (const skworld::ProbeInfluence& inf : placed)
+        {
+            const F32 values[] = { inf.mCentre.mV[0], inf.mCentre.mV[1], inf.mCentre.mV[2], inf.mRadius, inf.mBox ? 1.f : 0.f,
+                                   inf.mAxes[0].mV[0], inf.mAxes[0].mV[1], inf.mAxes[0].mV[2], inf.mAxes[1].mV[0], inf.mAxes[1].mV[1],
+                                   inf.mAxes[1].mV[2], inf.mAxes[2].mV[0], inf.mAxes[2].mV[1], inf.mAxes[2].mV[2],
+                                   inf.mHalf.mV[0], inf.mHalf.mV[1], inf.mHalf.mV[2] };
+            for (F32 v : values)
+            {
+                U32 bits;
+                memcpy(&bits, &v, sizeof(bits));
+                epoch = skworld::mix(epoch, bits);
+            }
+        }
+    }
 
     const LLVector3 camera = LLViewerCamera::getInstance()->getOrigin();
     const LLVector3d camera_global = gAgent.getPosGlobalFromAgent(camera);
@@ -224,16 +248,36 @@ void SKRoomProbes::update(const SKWorldViewPtr& view)
 
     // Portals name each side by its slot in the mesh's spaces, so the
     // candidates gather under the same names: space id to slot, per mesh.
-    std::map<LLUUID, std::map<U32, U32>> productId_to_space;
+    // Flat: per mesh a range of (id, slot) pairs sorted by id, the last slot of a repeated id winning.
+    std::vector<std::pair<U32, U32>> slot_pairs;
+    std::unordered_map<LLUUID, std::pair<U32, U32>> slot_ranges;
     for (const auto& entry : view->meshes())
     {
         if (!entry.mRooms) continue;
-        std::map<U32, U32>& ids = productId_to_space[entry.mId];
+        const U32 begin = static_cast<U32>(slot_pairs.size());
         for (size_t i = 0; i < entry.mRooms->mSpaces.size(); ++i)
         {
-            ids[entry.mRooms->mSpaces[i].mId] = static_cast<U32>(i);
+            slot_pairs.emplace_back(entry.mRooms->mSpaces[i].mId, static_cast<U32>(i));
         }
+        std::sort(slot_pairs.begin() + begin, slot_pairs.end());
+        const auto last = std::unique(slot_pairs.rbegin(), slot_pairs.rend() - begin,
+                                      [](const std::pair<U32, U32>& a, const std::pair<U32, U32>& b) { return a.first == b.first; });
+        slot_pairs.erase(slot_pairs.begin() + begin, last.base());
+        slot_ranges[entry.mId] = std::make_pair(begin, static_cast<U32>(slot_pairs.size()));
     }
+    const auto space_count = [&](const LLUUID& mesh) -> U32
+    {
+        const auto found = slot_ranges.find(mesh);
+        return found == slot_ranges.end() ? 0 : found->second.second - found->second.first;
+    };
+    const auto slot_of = [&](const LLUUID& mesh, U32 id) -> U32
+    {
+        const auto found = slot_ranges.find(mesh);
+        if (found == slot_ranges.end()) return 0;
+        const auto begin = slot_pairs.begin() + found->second.first, end = slot_pairs.begin() + found->second.second;
+        const auto at = std::lower_bound(begin, end, std::make_pair(id, 0u));
+        return at != end && at->first == id ? at->second : 0;
+    };
 
     struct Candidate
     {
@@ -253,6 +297,8 @@ void SKRoomProbes::update(const SKWorldViewPtr& view)
     {
         p.second.mSeen = false;
     }
+    {
+    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("rmmu - room probes: spaces");
     view->spacesIn(camera_global - reach, camera_global + reach, [&](const SKWorldView::Mesh& mesh, const skworld::Space& space)
     {
         if (!skworld::wantsProbes(space, params))
@@ -264,8 +310,7 @@ void SKRoomProbes::update(const SKWorldViewPtr& view)
         const LLVector3d space_max = mesh.mOrigin + LLVector3d(space.mMax);
         air.tileContentKeysIn(mesh.mId, space_min, space_max, tile_keys);
         const U64 key = skworld::probePartsKey(tile_keys, params);
-        std::vector<skworld::ProbePart> cached;
-        const std::vector<skworld::ProbePart>* space_parts = &cached;
+        const std::vector<skworld::ProbePart>* space_parts = nullptr;
         U64 source = key;
         if (key)
         {
@@ -276,7 +321,7 @@ void SKRoomProbes::update(const SKWorldViewPtr& view)
                 pending.emplace_back(space_min, space_max);
                 return;
             }
-            cached = *held;
+            space_parts = held;
             ++mCacheHits;
         }
         else
@@ -298,16 +343,48 @@ void SKRoomProbes::update(const SKWorldViewPtr& view)
             source = parts.mSignature;
         }
         const LLVector3 origin = gAgent.getPosAgentFromGlobal(mesh.mOrigin);
-        for (const skworld::ProbePart& part : *space_parts)
+        // A space whose parts, place and surroundings are as last run reuses its tests.
+        U64 stamp = skworld::mix(epoch, source);
+        stamp = skworld::mix(stamp, space.mId);
+        stamp = skworld::mix(stamp, space_parts->size());
+        for (F64 v : mesh.mOrigin.mdV)
         {
+            U64 bits;
+            memcpy(&bits, &v, sizeof(bits));
+            stamp = skworld::mix(stamp, bits);
+        }
+        for (F32 v : space.mAnchor.mV)
+        {
+            U32 bits;
+            memcpy(&bits, &v, sizeof(bits));
+            stamp = skworld::mix(stamp, bits);
+        }
+        SpaceCandidates& tested = mSpaceCandidates[std::make_pair(mesh.mId, space.mId)];
+        tested.mRun = mRun;
+        const bool fresh = tested.mStamp != stamp || tested.mRadii.size() != space_parts->size();
+        if (fresh)
+        {
+            tested.mStamp = stamp;
+            tested.mRadii.resize(space_parts->size());
+        }
+        const U32 slot = slot_of(mesh.mId, space.mId);
+        for (size_t i = 0; i < space_parts->size(); ++i)
+        {
+            const skworld::ProbePart& part = (*space_parts)[i];
             Candidate c;
             c.mOrigin = origin + part.mOrigin;
-            const LLVector3d global = gAgent.getPosGlobalFromAgent(c.mOrigin);
-            if (mSolids.contains(global))
+            if (fresh)
+            {
+                const LLVector3d global = gAgent.getPosGlobalFromAgent(c.mOrigin);
+                tested.mRadii[i] = inside_solid(global) ? -1.f :
+                    skworld::clearRadius(c.mOrigin, std::max(part.mRadius, part.mSpaceRadius), placed, params);
+            }
+            const F32 radius = tested.mRadii[i];
+            if (radius < 0.f)
             {
                 continue;
             }
-            c.mRadius = skworld::clearRadius(c.mOrigin, std::max(part.mRadius, part.mSpaceRadius), placed, params);
+            c.mRadius = radius;
             if (c.mRadius <= 0.f)
             {
                 ++mClearedOut;
@@ -315,12 +392,17 @@ void SKRoomProbes::update(const SKWorldViewPtr& view)
             }
             c.mArea = part.mArea;
             c.mPart = part.mPart;
-            c.mSpace = productId_to_space[mesh.mId][space.mId];
+            c.mSpace = slot;
             c.mMesh = mesh.mId;
             c.mSource = source;
             candidates.push_back(c);
         }
     });
+    }
+    for (auto it = mSpaceCandidates.begin(); it != mSpaceCandidates.end();)
+    {
+        it = it->second.mRun == mRun ? std::next(it) : mSpaceCandidates.erase(it);
+    }
     for (auto it = mParts.begin(); it != mParts.end();)
     {
         it = it->second.mSeen ? std::next(it) : mParts.erase(it);
@@ -332,7 +414,8 @@ void SKRoomProbes::update(const SKWorldViewPtr& view)
     // neither side can reach, however far the octree cap lets them grow,
     // gets a small bubble of its own. The camera's reach bounds the work.
     {
-        std::map<std::pair<LLUUID, U32>, std::vector<U32>> by_space;
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("rmmu - room probes: portals");
+        std::unordered_map<std::pair<LLUUID, U32>, std::vector<U32>, SpaceIdHash> by_space;
         for (size_t i = 0; i < candidates.size(); ++i)
         {
             by_space[{candidates[i].mMesh, candidates[i].mSpace}].push_back(static_cast<U32>(i));
@@ -370,8 +453,8 @@ void SKRoomProbes::update(const SKWorldViewPtr& view)
         std::vector<std::pair<LLUUID, U32>> bridged;
         view->portalsIn(camera_global - reach, camera_global + reach, [&](const SKWorldView::Mesh& mesh, const skworld::Portal& portal)
         {
-            if (portal.mSpaces[0] >= productId_to_space[mesh.mId].size() ||
-                portal.mSpaces[1] >= productId_to_space[mesh.mId].size())
+            const U32 spaces = space_count(mesh.mId);
+            if (portal.mSpaces[0] >= spaces || portal.mSpaces[1] >= spaces)
             {
                 return;
             }
@@ -429,8 +512,12 @@ void SKRoomProbes::update(const SKWorldViewPtr& view)
     // Slots stand for candidates, built after the portal pass so a grown or
     // bridged sphere is budgeted at its final size.
     // The budget counts spheres per space, and slots repeat across meshes.
-    std::map<std::pair<LLUUID, U32>, U32> space_numbers;
     std::vector<skworld::ProbeSlot> slots;
+    std::vector<LLVector3> held_origins, origins;
+    std::vector<S32> match;
+    {
+    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("rmmu - room probes: match and budget");
+    std::unordered_map<std::pair<LLUUID, U32>, U32, SpaceIdHash> space_numbers;
     for (const Candidate& c : candidates)
     {
         skworld::ProbeSlot slot;
@@ -445,7 +532,6 @@ void SKRoomProbes::update(const SKWorldViewPtr& view)
     }
 
     // Parts renumbered by a rebuild keep their probes: match by nearest origin.
-    std::vector<LLVector3> held_origins, origins;
     for (const Held& h : mHeld)
     {
         held_origins.push_back(gAgent.getPosAgentFromGlobal(h.mOrigin));
@@ -454,7 +540,7 @@ void SKRoomProbes::update(const SKWorldViewPtr& view)
     {
         origins.push_back(c.mOrigin);
     }
-    const std::vector<S32> match = skworld::matchNearest(held_origins, origins, params.mMatchM);
+    match = skworld::matchNearest(held_origins, origins, params.mMatchM);
     for (skworld::ProbeSlot& slot : slots)
     {
         slot.mHeld = match[slot.mKey] >= 0;
@@ -466,12 +552,15 @@ void SKRoomProbes::update(const SKWorldViewPtr& view)
     mCandidates = static_cast<U32>(slots.size());
     skworld::budgetProbes(slots, cap, params);
     mOverBudget = mCandidates - static_cast<U32>(slots.size());
+    }
 
     // One real move per update, so re-captures are staggered and placed probes are never starved.
     bool moved = false;
     bool created = false;
     std::vector<Held> held;
     std::vector<Held> retiring;
+    {
+    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("rmmu - room probes: hold");
     for (const skworld::ProbeSlot& slot : slots)
     {
         const Candidate& c = candidates[slot.mKey];
@@ -494,7 +583,7 @@ void SKRoomProbes::update(const SKWorldViewPtr& view)
                 h.mSource = c.mSource;
             }
             // A capture taken from inside what is now a solid shows its inside: always retake it.
-            const bool buried = mSolids.contains(h.mOrigin);
+            const bool buried = inside_solid(h.mOrigin);
             if (!moved && (buried || skworld::shouldRecapture(held_origins[m], h.mRadius, c.mOrigin, params)))
             {
                 // Make before break: the old sphere keeps its capture until the new one has its own.
@@ -542,9 +631,14 @@ void SKRoomProbes::update(const SKWorldViewPtr& view)
     // goes: it stays matchable, so the same parts coming back take it up again
     // capture intact, and it lets go only once its area has settled and every
     // probe now covering it, or the one it moved to, has finished capturing.
+    std::vector<U8> matched(mHeld.size(), 0);
+    for (S32 m : match)
+    {
+        if (m >= 0) matched[m] = 1;
+    }
     for (size_t i = 0; i < mHeld.size(); ++i)
     {
-        if (std::find(match.begin(), match.end(), static_cast<S32>(i)) == match.end())
+        if (!matched[i])
         {
             Held h = mHeld[i];
             if (!h.mRetiring)
@@ -594,9 +688,6 @@ void SKRoomProbes::update(const SKWorldViewPtr& view)
             held.push_back(r);
         }
     }
-    if (deferred)
-    {
-        mNextUpdate = gFrameTimeSeconds;
     }
     mHeld.swap(held);
     mPlaced = static_cast<U32>(mHeld.size());
