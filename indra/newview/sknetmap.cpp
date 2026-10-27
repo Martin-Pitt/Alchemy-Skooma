@@ -581,28 +581,31 @@ LLVector3d SKNetMap::regionFit(const LLViewerRegion* region, F32* span)
     const LLVector3d origin = region->getOriginGlobal();
     LLWorld* world = LLWorld::getInstance();
     LLVector3d centre = origin;
-    // The scale is the same whatever the neighbours; a side with no region holds its edge to the map's.
-    const F64 extent = width + 2.0 * reach;
+    // Which of the eight neighbours are loaded, probed at the middle of each.
+    bool loaded[3][3] = {};
+    for (S32 i = 0; i < 3; ++i)
+    {
+        for (S32 j = 0; j < 3; ++j)
+        {
+            const LLVector3d probe = origin + LLVector3d(width * (i - 0.5), width * (j - 0.5), 0.0);
+            loaded[i][j] = (i != 1 || j != 1) && world->getRegionFromPosGlobal(probe);
+        }
+    }
+    // The box takes the margin into a side wherever a neighbour on it, diagonals included, is loaded.
+    F64 extent = 0.0;
     for (S32 axis : { VX, VY })
     {
-        // Probe just past the middle of each edge.
-        LLVector3d probe = origin + LLVector3d(width * 0.5, width * 0.5, 0.0);
-        probe.mdV[axis] = origin.mdV[axis] - 1.0;
-        const bool lo = world->getRegionFromPosGlobal(probe) != nullptr;
-        probe.mdV[axis] = origin.mdV[axis] + width + 1.0;
-        const bool hi = world->getRegionFromPosGlobal(probe) != nullptr;
-        if (lo == hi)
+        bool lo = false;
+        bool hi = false;
+        for (S32 k = 0; k < 3; ++k)
         {
-            centre.mdV[axis] = origin.mdV[axis] + width * 0.5;
+            lo |= axis == VX ? loaded[0][k] : loaded[k][0];
+            hi |= axis == VX ? loaded[2][k] : loaded[k][2];
         }
-        else if (lo)
-        {
-            centre.mdV[axis] = origin.mdV[axis] + width - extent * 0.5;
-        }
-        else
-        {
-            centre.mdV[axis] = origin.mdV[axis] + extent * 0.5;
-        }
+        const F64 min = origin.mdV[axis] - (lo ? reach : 0.0);
+        const F64 max = origin.mdV[axis] + width + (hi ? reach : 0.0);
+        centre.mdV[axis] = (min + max) * 0.5;
+        extent = llmax(extent, max - min);
     }
     if (span)
     {
