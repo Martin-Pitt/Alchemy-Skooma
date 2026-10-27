@@ -1002,6 +1002,10 @@ if(AL_BUILD_VIEWER)
     rlvinventory.cpp
     rlvlocks.cpp
     rlvui.cpp
+    skfloaterinventoryexplorer.cpp
+    skinventoryexplorermenu.cpp
+    skinventorylistview.cpp
+    skinventorysidebar.cpp
   )
 
   set(
@@ -1883,6 +1887,10 @@ if(AL_BUILD_VIEWER)
     rlvmodifiers.h
     rlvui.h
     roles_constants.h
+    skfloaterinventoryexplorer.h
+    skinventoryexplorermenu.h
+    skinventorylistview.h
+    skinventorysidebar.h
   )
 
   # Discord rich presence, over the SDK from the private registry.
