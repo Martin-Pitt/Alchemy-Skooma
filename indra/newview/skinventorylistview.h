@@ -32,6 +32,8 @@
 #include "lluiimage.h"
 
 #include <functional>
+#include <map>
+#include <unordered_set>
 
 class LLScrollbar;
 
@@ -47,6 +49,7 @@ struct SKInventoryRow
     std::string mName;
     std::string mType;
     LLUUID mCreatorID;
+    std::string mCreatorName;
     time_t mAcquired = 0;
     std::string mAcquiredLabel;
     S32 mPermRank = 0;      // Full Perm, Copy & Modify, Copy & Transfer, Copy Only, No Copy
@@ -111,7 +114,11 @@ public:
 
     // Reads the folder again on the next draw, keeping selection and scroll.
     void markDirty() { mDirty = true; }
-    bool listsAny(const uuid_vec_t& ids) const;
+    bool lists(const LLUUID& id) const { return mRowIDs.contains(id); }
+
+    // Bumped by every reading of the folder, so a reader can tell the counts moved.
+    U32 getGeneration() const { return mGeneration; }
+    S32 getSelectedCount() const { return mSelectedCount; }
 
     void setSort(EColumn key, bool ascending);
     EColumn getSortKey() const { return mSortKey; }
@@ -163,11 +170,18 @@ protected:
     S32 rowsPerPage() const;
     S32 firstVisibleRow() const;
     std::string cellText(const SKInventoryRow& row, EColumn col) const;
-    std::string creatorName(const LLUUID& id) const;
+    void requestCreatorName(SKInventoryRow& row);
+    void applyArrivedNames();
 
     LLUUID mFolderID;
     std::vector<SKInventoryRow> mRows;
     std::vector<bool> mSelected;
+    std::unordered_set<LLUUID> mRowIDs;
+    std::map<LLUUID, boost::signals2::connection> mNameRequests;
+    LLFrameTimer mNameTimer;
+    bool mNamesArrived;
+    U32 mGeneration;
+    S32 mSelectedCount;
     S32 mFolderCount;
     S32 mCursor;
     S32 mAnchor;

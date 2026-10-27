@@ -113,6 +113,9 @@ SKInventoryListView::SKInventoryListView(const Params& p)
     mSortAscending(false),
     mDirty(false),
     mLoading(false),
+    mNamesArrived(false),
+    mGeneration(0),
+    mSelectedCount(0),
     mScrollbar(nullptr)
 {
     std::copy(std::begin(DEFAULT_WIDTHS), std::end(DEFAULT_WIDTHS), mColumnWidths);
@@ -134,6 +137,10 @@ SKInventoryListView::SKInventoryListView(const Params& p)
 
 SKInventoryListView::~SKInventoryListView()
 {
+    for (auto& request : mNameRequests)
+    {
+        request.second.disconnect();
+    }
     if (gEditMenuHandler == this)
     {
         gEditMenuHandler = nullptr;
@@ -148,18 +155,6 @@ void SKInventoryListView::setFolder(const LLUUID& folder_id, const uuid_vec_t& s
     rebuild();
     setSelection(selection);
     mScrollbar->setDocPos(scroll);
-}
-
-bool SKInventoryListView::listsAny(const uuid_vec_t& ids) const
-{
-    for (const SKInventoryRow& row : mRows)
-    {
-        if (std::find(ids.begin(), ids.end(), row.mID) != ids.end())
-        {
-            return true;
-        }
-    }
-    return false;
 }
 
 void SKInventoryListView::setSort(EColumn key, bool ascending)
@@ -197,6 +192,7 @@ void SKInventoryListView::setSelection(const uuid_vec_t& ids)
         }
     }
     mAnchor = mCursor;
+    mSelectedCount = (S32)std::count(mSelected.begin(), mSelected.end(), true);
 }
 
 S32 SKInventoryListView::getScroll() const
@@ -283,6 +279,7 @@ void SKInventoryListView::rebuild()
                     row.mType[0] = toupper(row.mType[0]);
                 }
                 row.mCreatorID = info->getCreatorUUID();
+                requestCreatorName(row);
                 row.mAcquired = item->getCreationDate();
                 if (row.mAcquired > 0 && !mLabels.mDateFormat.empty())
                 {
@@ -318,10 +315,13 @@ void SKInventoryListView::rebuild()
         }
     }
 
+    mRowIDs.clear();
     for (const SKInventoryRow& row : mRows)
     {
         mFolderCount += row.mIsFolder ? 1 : 0;
+        mRowIDs.insert(row.mID);
     }
+    ++mGeneration;
 
     sortRows();
     setSelection(selection);
@@ -335,14 +335,51 @@ void SKInventoryListView::rebuild()
     updateScrollbar();
 }
 
-std::string SKInventoryListView::creatorName(const LLUUID& id) const
+void SKInventoryListView::requestCreatorName(SKInventoryRow& row)
 {
-    LLAvatarName av_name;
-    if (id.notNull() && LLAvatarNameCache::get(id, &av_name))
+    if (row.mCreatorID.isNull())
     {
-        return av_name.getCompleteName();
+        return;
     }
-    return std::string();
+    LLAvatarName av_name;
+    if (LLAvatarNameCache::get(row.mCreatorID, &av_name))
+    {
+        row.mCreatorName = av_name.getCompleteName();
+    }
+    else if (!mNameRequests.contains(row.mCreatorID))
+    {
+        mNameRequests[row.mCreatorID] = LLAvatarNameCache::get(row.mCreatorID,
+            [this](const LLUUID&, const LLAvatarName&) { mNamesArrived = true; });
+    }
+}
+
+void SKInventoryListView::applyArrivedNames()
+{
+    // Names are taken in batches, at most twice a second, so a burst of replies sorts once.
+    if (!mNamesArrived || mNameTimer.getElapsedTimeF32() < 0.5f)
+    {
+        return;
+    }
+    mNamesArrived = false;
+    mNameTimer.reset();
+    for (SKInventoryRow& row : mRows)
+    {
+        LLAvatarName av_name;
+        if (row.mCreatorName.empty() && row.mCreatorID.notNull() && LLAvatarNameCache::get(row.mCreatorID, &av_name))
+        {
+            row.mCreatorName = av_name.getCompleteName();
+            auto request = mNameRequests.find(row.mCreatorID);
+            if (request != mNameRequests.end())
+            {
+                request->second.disconnect();
+                mNameRequests.erase(request);
+            }
+        }
+    }
+    if (mSortKey == COL_CREATOR)
+    {
+        setSort(mSortKey, mSortAscending);
+    }
 }
 
 void SKInventoryListView::sortRows()
@@ -353,16 +390,6 @@ void SKInventoryListView::sortRows()
     {
         return LLStringUtil::compareDict(a.mName, b.mName) < 0;
     };
-
-    // Creator names are resolved once, not per comparison.
-    std::map<LLUUID, std::string> creators;
-    if (key == COL_CREATOR)
-    {
-        for (const SKInventoryRow& row : mRows)
-        {
-            creators[row.mCreatorID] = creatorName(row.mCreatorID);
-        }
-    }
 
     std::stable_sort(mRows.begin(), mRows.end(), [&](const SKInventoryRow& a, const SKInventoryRow& b)
     {
@@ -384,7 +411,7 @@ void SKInventoryListView::sortRows()
         switch (key)
         {
             case COL_TYPE:        order = LLStringUtil::compareDict(a.mType, b.mType); break;
-            case COL_CREATOR:     order = LLStringUtil::compareDict(creators[a.mCreatorID], creators[b.mCreatorID]); break;
+            case COL_CREATOR:     order = LLStringUtil::compareDict(a.mCreatorName, b.mCreatorName); break;
             case COL_ACQUIRED:    order = (a.mAcquired < b.mAcquired) ? -1 : (a.mAcquired > b.mAcquired ? 1 : 0); break;
             case COL_PERMS:       order = a.mPermRank - b.mPermRank; break;
             case COL_WORN:        order = (a.mIsWorn != b.mIsWorn) ? (a.mIsWorn ? -1 : 1) : LLStringUtil::compareDict(a.mWornOn, b.mWornOn); break;
@@ -398,6 +425,7 @@ void SKInventoryListView::sortRows()
         return ascending ? order < 0 : order > 0;
     });
     mSelected.assign(mRows.size(), false);
+    mSelectedCount = 0;
 }
 
 S32 SKInventoryListView::rowsPerPage() const
@@ -472,7 +500,7 @@ std::string SKInventoryListView::cellText(const SKInventoryRow& row, EColumn col
     {
         case COL_NAME:        return row.mName;
         case COL_TYPE:        return row.mType;
-        case COL_CREATOR:     return creatorName(row.mCreatorID);
+        case COL_CREATOR:     return row.mCreatorName;
         case COL_ACQUIRED:    return row.mAcquiredLabel;
         case COL_PERMS:       return row.mPerms;
         case COL_WORN:        return row.mWornOn;
@@ -487,6 +515,7 @@ void SKInventoryListView::draw()
     {
         rebuild();
     }
+    applyArrivedNames();
 
     static LLUIColor sel_focus = LLUIColorTable::instance().getColor("EmphasisColor_35");
     static LLUIColor sel_blur = LLUIColorTable::instance().getColor("LtGray_35");
@@ -581,6 +610,7 @@ void SKInventoryListView::draw()
 
 void SKInventoryListView::notifySelection()
 {
+    mSelectedCount = (S32)std::count(mSelected.begin(), mSelected.end(), true);
     if (mSelectionCallback)
     {
         mSelectionCallback();
@@ -834,5 +864,5 @@ void SKInventoryListView::deselect()
 
 bool SKInventoryListView::canDeselect() const
 {
-    return std::find(mSelected.begin(), mSelected.end(), true) != mSelected.end();
+    return mSelectedCount > 0;
 }

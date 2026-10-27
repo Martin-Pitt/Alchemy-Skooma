@@ -132,6 +132,7 @@ public:
     typedef std::function<void(const std::string& pane, S32 delta, bool done)> drag_callback_t;
     typedef std::function<void(const std::string& pane)> reset_callback_t;
 
+    void setStartCallback(const reset_callback_t& cb) { mStartCallback = cb; }
     void setDragCallback(const drag_callback_t& cb) { mDragCallback = cb; }
     void setResetCallback(const reset_callback_t& cb) { mResetCallback = cb; }
 
@@ -141,6 +142,7 @@ public:
     bool handleHover(S32 x, S32 y, MASK mask) override;
     bool handleDoubleClick(S32 x, S32 y, MASK mask) override;
     void onMouseLeave(S32 x, S32 y, MASK mask) override;
+    void onMouseCaptureLost() override;
 
 protected:
     SKPaneEdge(const Params& p);
@@ -149,6 +151,9 @@ protected:
     std::string mPane;
     S32 mDragStartX;
     bool mHovered;
+    bool mDragging;
+    S32 mLastDelta;
+    reset_callback_t mStartCallback;
     drag_callback_t mDragCallback;
     reset_callback_t mResetCallback;
 };
@@ -186,6 +191,7 @@ private:
     void refreshStatus();
     void refreshDetails();
 
+    void onPaneDragStart(const std::string& pane);
     void onPaneDrag(const std::string& pane, S32 delta, bool done);
     void onPaneReset(const std::string& pane);
     void setPaneWidth(const std::string& pane, S32 width, bool save);
@@ -218,6 +224,8 @@ private:
     std::unique_ptr<LLInventoryObserver> mObserver;
     std::unique_ptr<SKInventoryExplorerContextMenu> mMenu;
     bool mNeedsRefresh;
+    U32 mStatusGeneration;
+    S32 mStatusSelected;
 };
 
 #endif // SK_SKFLOATERINVENTORYEXPLORER_H

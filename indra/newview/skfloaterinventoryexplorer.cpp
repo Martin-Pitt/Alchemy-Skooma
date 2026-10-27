@@ -252,8 +252,24 @@ SKPaneEdge::SKPaneEdge(const Params& p)
 :   LLUICtrl(p),
     mPane(p.pane()),
     mDragStartX(0),
-    mHovered(false)
+    mHovered(false),
+    mDragging(false),
+    mLastDelta(0)
 {
+}
+
+void SKPaneEdge::onMouseCaptureLost()
+{
+    // A drag cut short still ends, and its width is saved.
+    if (mDragging)
+    {
+        mDragging = false;
+        if (mDragCallback)
+        {
+            mDragCallback(mPane, mLastDelta, true);
+        }
+    }
+    LLUICtrl::onMouseCaptureLost();
 }
 
 void SKPaneEdge::onMouseLeave(S32 x, S32 y, MASK mask)
@@ -276,6 +292,12 @@ bool SKPaneEdge::handleMouseDown(S32 x, S32 y, MASK mask)
 {
     S32 screen_y = 0;
     localPointToScreen(x, y, &mDragStartX, &screen_y);
+    mDragging = true;
+    mLastDelta = 0;
+    if (mStartCallback)
+    {
+        mStartCallback(mPane);
+    }
     gFocusMgr.setMouseCapture(this);
     return true;
 }
@@ -289,7 +311,8 @@ bool SKPaneEdge::handleHover(S32 x, S32 y, MASK mask)
         S32 screen_x = 0;
         S32 screen_y = 0;
         localPointToScreen(x, y, &screen_x, &screen_y);
-        mDragCallback(mPane, screen_x - mDragStartX, false);
+        mLastDelta = screen_x - mDragStartX;
+        mDragCallback(mPane, mLastDelta, false);
     }
     return true;
 }
@@ -298,14 +321,12 @@ bool SKPaneEdge::handleMouseUp(S32 x, S32 y, MASK mask)
 {
     if (hasMouseCapture())
     {
+        S32 screen_x = 0;
+        S32 screen_y = 0;
+        localPointToScreen(x, y, &screen_x, &screen_y);
+        mLastDelta = screen_x - mDragStartX;
+        // Releasing capture ends the drag through onMouseCaptureLost.
         gFocusMgr.setMouseCapture(nullptr);
-        if (mDragCallback)
-        {
-            S32 screen_x = 0;
-            S32 screen_y = 0;
-            localPointToScreen(x, y, &screen_x, &screen_y);
-            mDragCallback(mPane, screen_x - mDragStartX, true);
-        }
     }
     return true;
 }
@@ -350,7 +371,9 @@ SKFloaterInventoryExplorer::SKFloaterInventoryExplorer(const LLSD& key)
     mDetailsPanel(nullptr),
     mDetailsEdgePanel(nullptr),
     mPaneDragStartWidth(0),
-    mNeedsRefresh(true)
+    mNeedsRefresh(true),
+    mStatusGeneration(0),
+    mStatusSelected(-1)
 {
 }
 
@@ -414,6 +437,7 @@ bool SKFloaterInventoryExplorer::postBuild()
     for (const char* name : { "sidebar_edge", "details_edge" })
     {
         SKPaneEdge* edge = getChild<SKPaneEdge>(name);
+        edge->setStartCallback([this](const std::string& pane) { onPaneDragStart(pane); });
         edge->setDragCallback([this](const std::string& pane, S32 delta, bool done) { onPaneDrag(pane, delta, done); });
         edge->setResetCallback([this](const std::string& pane) { onPaneReset(pane); });
     }
@@ -432,7 +456,7 @@ bool SKFloaterInventoryExplorer::postBuild()
     mList->setLabels(labels);
     mList->setOpenCallback([this](const LLUUID& id) { openObject(id, false); });
     mList->setUpCallback([this]() { goUp(); });
-    mList->setSelectionCallback([this]() { refreshStatus(); refreshDetails(); });
+    mList->setSelectionCallback([this]() { refreshDetails(); });
     mList->setSortCallback([this]() { onListSortChanged(); });
     mList->setMenuCallback([this](S32 x, S32 y, const uuid_vec_t& ids) { showContextMenu(x, y, ids); });
 
@@ -473,8 +497,15 @@ void SKFloaterInventoryExplorer::draw()
         refreshToolbar();
         refreshTabStrip();
         refreshDetails();
+        mStatusSelected = -1;
     }
-    refreshStatus();
+    // The status follows the list's counts, read only when they move.
+    if (mList->getGeneration() != mStatusGeneration || mList->getSelectedCount() != mStatusSelected)
+    {
+        mStatusGeneration = mList->getGeneration();
+        mStatusSelected = mList->getSelectedCount();
+        refreshStatus();
+    }
     LLFloater::draw();
 }
 
@@ -548,7 +579,7 @@ void SKFloaterInventoryExplorer::onInventoryChanged(U32 mask)
     for (const LLUUID& id : gInventory.getChangedIDs())
     {
         const LLInventoryObject* obj = gInventory.getObject(id);
-        if (id == folder_id || (obj && obj->getParentUUID() == folder_id) || mList->listsAny({ id }))
+        if (id == folder_id || (obj && obj->getParentUUID() == folder_id) || mList->lists(id))
         {
             affects_list = true;
             break;
@@ -559,9 +590,12 @@ void SKFloaterInventoryExplorer::onInventoryChanged(U32 mask)
         mList->markDirty();
     }
 
-    // A tab whose folder is gone goes back to My Inventory.
+    // A tab whose folder is gone goes back to My Inventory, and its history forgets folders that are gone.
+    auto is_gone = [](const LLUUID& id) { return !gInventory.getCategory(id); };
     for (S32 i = 0; i < (S32)mTabs.size(); ++i)
     {
+        std::erase_if(mTabs[i].mBack, is_gone);
+        std::erase_if(mTabs[i].mForward, is_gone);
         if (!gInventory.getCategory(mTabs[i].mFolderID))
         {
             mTabs[i].mFolderID = gInventory.getRootFolderID();
@@ -623,30 +657,41 @@ void SKFloaterInventoryExplorer::navigateTo(const LLUUID& folder_id, bool record
     mNeedsRefresh = true;
 }
 
+// Steps through one history stack onto the next live folder that differs from the current one.
+static bool step_history(SKExplorerTab& tab, std::vector<LLUUID>& from, std::vector<LLUUID>& to, LLUUID& target)
+{
+    while (!from.empty())
+    {
+        const LLUUID id = from.back();
+        from.pop_back();
+        if (id != tab.mFolderID && gInventory.getCategory(id))
+        {
+            to.push_back(tab.mFolderID);
+            target = id;
+            return true;
+        }
+    }
+    return false;
+}
+
 void SKFloaterInventoryExplorer::goBack()
 {
     SKExplorerTab& tab = currentTab();
-    if (tab.mBack.empty())
+    LLUUID target;
+    if (step_history(tab, tab.mBack, tab.mForward, target))
     {
-        return;
+        navigateTo(target, false);
     }
-    const LLUUID target = tab.mBack.back();
-    tab.mBack.pop_back();
-    tab.mForward.push_back(tab.mFolderID);
-    navigateTo(target, false);
 }
 
 void SKFloaterInventoryExplorer::goForward()
 {
     SKExplorerTab& tab = currentTab();
-    if (tab.mForward.empty())
+    LLUUID target;
+    if (step_history(tab, tab.mForward, tab.mBack, target))
     {
-        return;
+        navigateTo(target, false);
     }
-    const LLUUID target = tab.mForward.back();
-    tab.mForward.pop_back();
-    tab.mBack.push_back(tab.mFolderID);
-    navigateTo(target, false);
 }
 
 void SKFloaterInventoryExplorer::goUp()
@@ -802,7 +847,7 @@ std::string SKFloaterInventoryExplorer::countLabel(S32 folders, S32 items) const
 void SKFloaterInventoryExplorer::refreshStatus()
 {
     std::string text;
-    const S32 selected = (S32)mList->getSelection().size();
+    const S32 selected = mList->getSelectedCount();
     if (mList->isLoading() && mList->getFolderCount() + mList->getItemCount() == 0)
     {
         text = getString("loading");
@@ -814,7 +859,10 @@ void SKFloaterInventoryExplorer::refreshStatus()
         {
             LLStringUtil::format_map_t args;
             args["[COUNT]"] = llformat("%d", selected);
-            text += getString("status_separator") + getString("n_selected", args);
+            LLStringUtil::format_map_t parts;
+            parts["[A]"] = text;
+            parts["[B]"] = getString("n_selected", args);
+            text = getString("status_join", parts);
         }
     }
     if (mStatusText->getText() != text)
@@ -840,18 +888,18 @@ void SKFloaterInventoryExplorer::refreshDetails()
     else if (const LLInventoryObject* obj = gInventory.getObject(selection.front()))
     {
         // The per-type rows arrive with the details pane; the name stands in for them.
-        text = gInventory.getCategory(obj->getUUID()) ? std::string() : obj->getName();
+        text = obj->getName();
     }
     mDetailsText->setText(text);
 }
 
+void SKFloaterInventoryExplorer::onPaneDragStart(const std::string& pane)
+{
+    mPaneDragStartWidth = (pane == "sidebar" ? mSidebarPanel : mDetailsPanel)->getRect().getWidth();
+}
+
 void SKFloaterInventoryExplorer::onPaneDrag(const std::string& pane, S32 delta, bool done)
 {
-    LLLayoutPanel* panel = pane == "sidebar" ? mSidebarPanel : mDetailsPanel;
-    if (!mPaneDragStartWidth)
-    {
-        mPaneDragStartWidth = panel->getRect().getWidth();
-    }
     // The sidebar grows to the right, the details pane to the left.
     const S32 width = mPaneDragStartWidth + (pane == "sidebar" ? delta : -delta);
     setPaneWidth(pane, width, done);

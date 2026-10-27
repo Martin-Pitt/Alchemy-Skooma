@@ -35,7 +35,7 @@
     <string name="n_items">[ITEMS] items</string>
     <string name="folders_and_items">[FOLDERS], [ITEMS]</string>
     <string name="n_selected">[COUNT] selected</string>
-    <string name="status_separator"> · </string>
+    <string name="status_join">[A] · [B]</string>
     <string name="no_selection">No item selected</string>
     <sk_explorer_tab_strip
      follows="left|top|right"
