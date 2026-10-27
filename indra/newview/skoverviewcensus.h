@@ -288,10 +288,12 @@ private:
         std::vector<const skworld::Record*> mCandidates; ///< owned by the snapshot the job holds
     };
     /// The pass's records near an invisible part's bounds (global) that it may stand in for or add to.
-    CoverInput coverInputFor(const LLUUID& part, const LLVector3d& lo, const LLVector3d& hi, const struct SKCensusSnapshot& snap);
+    /// A large part (over INVISIBLE_WALL_M) takes only the visible shells that could hold it.
+    CoverInput coverInputFor(const LLUUID& part, const LLVector3d& lo, const LLVector3d& hi, const struct SKCensusSnapshot& snap,
+                             bool large);
     /// The pass's cover candidates (skoverview::coverPoolRecord, not restless) by index into the snapshot's records, filed
     /// by COVER_CELL_M cell in plan, with their looks.
-    std::unordered_map<U64, std::vector<U32>> mCoverGrid;
+    std::vector<std::pair<U64, U32>> mCoverGrid;    ///< (cell, record index), sorted once filed
     std::vector<U32> mCoverLarge;                   ///< those spanning too many cells to file
     std::vector<skoverview::Seen> mCoverSeen;      ///< per snapshot record; UNKNOWN when not a candidate
     static constexpr F64 COVER_CELL_M = 16.0;
@@ -426,6 +428,7 @@ private:
         bool mValid = false;    ///< it had geometry
         std::shared_ptr<const std::vector<LLVector3>> mTris;
         F32 mHeight = 0.f;
+        F32 mSpan = 0.f;        ///< its triangles' largest extent
     };
     std::unordered_map<LLUUID, SculptEntry> mSculptGeom;
     /// What each sculpt's signature entry was mixed from last pass, to name the input that changed.
@@ -475,7 +478,12 @@ private:
     U32 mPagesMade = 0;         ///< pages made and freed at the last swapIn, for the log
     U32 mPagesFreed = 0;
     F64 mRecheckAt = 0.0;
-    U64 mRecordsKey = 0;        ///< the census records' identities at the last look
+    F64 mRecheckDelay = 2.0;    ///< grows while parts stay unknown
+    F64 mWalkAt = 0.0;          ///< no walk before this
+    static constexpr F64 RECHECK_MIN_S = 2.0;
+    static constexpr F64 RECHECK_MAX_S = 16.0;
+    static constexpr F64 WALK_INTERVAL_S = 1.0;
+    U64 mRecordsKey = 0;        ///< the census records' contents at the last look
     bool mRecordsChanged = true;
     std::unordered_set<LLUUID> mClusterRoots; ///< the linksets the last build bounds by their cluster's heights
     F64 mSculptsAt = 0.0;       ///< when the live sculpts are looked at again
