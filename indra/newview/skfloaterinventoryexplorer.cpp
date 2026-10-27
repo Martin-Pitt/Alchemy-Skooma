@@ -522,7 +522,14 @@ bool SKFloaterInventoryExplorer::postBuild()
 
     mMenu = std::make_unique<SKInventoryExplorerContextMenu>([this](const LLUUID& id, bool new_tab) { openObject(id, new_tab); },
                                                              [this](const LLUUID& id) { startRename(id); }, mOptions);
-    SKInventoryExplorerActions::setBridgePanel(mSidebar->getInventoryPanel());
+    // Resolved when an action runs, so a panel built late or never is no hazard here.
+    LLHandle<LLFloater> handle = getHandle();
+    SKInventoryExplorerActions::setBridgePanelGetter([handle]() -> LLInventoryPanel*
+                                                     {
+                                                         SKFloaterInventoryExplorer* floater =
+                                                             static_cast<SKFloaterInventoryExplorer*>(handle.get());
+                                                         return (floater && floater->mSidebar) ? floater->mSidebar->getInventoryPanel() : nullptr;
+                                                     });
     std::map<std::string, std::string> menu_strings;
     for (const char* key : { "menu_title", "full_perm_only", "tip_cut", "tip_copy", "tip_paste", "tip_favorite", "tip_unfavorite", "tip_delete" })
     {

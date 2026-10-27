@@ -70,8 +70,9 @@ namespace SKInventoryExplorerActions
     // One of the Inventory floater's "New" kinds (category, lsl, notecard, shirt, sky, ...) in the folder.
     void create(const LLUUID& dest_id, const std::string& kind);
 
-    // The live inventory panel the stock bridges are built over.
-    void setBridgePanel(LLInventoryPanel* panel);
+    // Finds the live inventory panel the stock bridges are built over, null while there is none.
+    typedef std::function<LLInventoryPanel*()> bridge_panel_getter_t;
+    void setBridgePanelGetter(const bridge_panel_getter_t& getter);
     // Runs a bridge's own action for an object, the bridge built over that panel.
     void bridgeAction(const LLUUID& id, const std::string& action);
 }

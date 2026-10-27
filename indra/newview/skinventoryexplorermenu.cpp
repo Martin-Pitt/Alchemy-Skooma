@@ -358,17 +358,17 @@ void cut(const uuid_vec_t& ids)
     }
 }
 
-// The panel the bridges are built over: the sidebar's Inventory panel, set by the floater.
-static LLHandle<LLPanel> sBridgePanel;
+// Finds the panel the bridges are built over (the sidebar's Inventory panel), asked at action time.
+static bridge_panel_getter_t sBridgePanelGetter;
 
-void setBridgePanel(LLInventoryPanel* panel)
+void setBridgePanelGetter(const bridge_panel_getter_t& getter)
 {
-    sBridgePanel = panel ? panel->getHandle() : LLHandle<LLPanel>();
+    sBridgePanelGetter = getter;
 }
 
 static LLInventoryPanel* bridge_panel()
 {
-    return static_cast<LLInventoryPanel*>(sBridgePanel.get());
+    return sBridgePanelGetter ? sBridgePanelGetter() : nullptr;
 }
 
 // A folder's stock bridge, kept alive a while: its paste may ask first and answers on the bridge itself.
