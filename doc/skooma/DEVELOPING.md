@@ -123,10 +123,11 @@ have to be stripped out before the branch could go upstream.
 ## Landing work
 
 ```sh
-git skooma integrate
+git skooma integrate .      # this branch: amend -> feature -> trunk -> main
+git skooma integrate all    # every ready branch; only when asked
 ```
 
-With no arguments it lands every worktree branch that is ahead of its target — its trunk,
+`all` lands every worktree branch that is ahead of its target — its trunk,
 or `main` — parents first, then each trunk that received work into `main`. Each is validated, dry-run merged so a conflict can never dirty your build tree,
 then merged. It refuses if `main` is dirty or if the viewer or a compile is running —
 so it cannot pull the rug from under a debugging session.
