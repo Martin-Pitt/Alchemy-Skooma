@@ -651,9 +651,10 @@ void SKWorldCensus::gatherNow()
             {
                 mScan.mObjects.push_back(object);
             }
-            else
+            else if (const auto part = mParts.find(id); part != mParts.end() && !part->second.mFromObjectCache)
             {
-                mParts.erase(id);
+                // Killed back into the object cache keeps its records, as the gone pass above decided.
+                mParts.erase(part);
             }
         }
     }
