@@ -200,6 +200,7 @@
             <key>Value</key>
             <string></string>
         </map>
+        <!-- <SK:Nexii> Inventory Explorer -->
         <key>SkoomaInvExplorerView</key>
         <map>
             <key>Comment</key>
@@ -321,6 +322,7 @@
             <key>Value</key>
             <integer>96</integer>
         </map>
+        <!-- </SK:Nexii> -->
         <key>ALRejectFriendshipRequestsChanged</key>
         <map>
             <key>Comment</key>

@@ -277,6 +277,7 @@
             <key>Value</key>
             <integer>0</integer>
         </map>
+        <!-- <SK:Nexii> Inventory Explorer -->
         <key>SkoomaInventoryExplorer</key>
         <map>
             <key>Comment</key>
@@ -288,6 +289,7 @@
             <key>Value</key>
             <integer>0</integer>
         </map>
+        <!-- </SK:Nexii> -->
         <key>ALSnapshotCutout</key>
         <map>
             <key>Comment</key>
