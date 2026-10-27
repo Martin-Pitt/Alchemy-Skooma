@@ -151,6 +151,7 @@
 
 #include "SMAAAreaTex.h"
 #include "SMAASearchTex.h"
+#include "skmodalview.h" // <SK:Nexii> modal view
 #include "llerror.h"
 
 #if LL_CLANG
@@ -796,7 +797,8 @@ void LLPipeline::applyRenderInputs()
     // login's frames draw no world, and the world's first frame takes what the reconcile readied for it rather than
     // building it mid-pass.
     mTransientTargets.setValidation(gDebugGL);
-    mTransientTargets.holdTrimming(LLStartUp::getStartupState() < STATE_STARTED);
+    mTransientTargets.holdTrimming(LLStartUp::getStartupState() < STATE_STARTED
+                                   || SKModalView::worldCovered()); // <SK:Nexii> modal view: the world comes back to the targets it left
     mTransientTargets.beginFrame();
     if (mTransientTargets.namesRecorded())
     {
