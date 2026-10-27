@@ -418,8 +418,6 @@ bool SKFloaterInventoryExplorer::postBuild()
                                    return handle->handleMouseDown(hx, hy, mask);
                                });
 
-    getChild<LLButton>("minimize_btn")->setCommitCallback([this](LLUICtrl*, const LLSD&) { setMinimized(true); });
-    getChild<LLButton>("close_btn")->setCommitCallback([this](LLUICtrl*, const LLSD&) { closeFloater(); });
     mBackBtn->setCommitCallback([this](LLUICtrl*, const LLSD&) { goBack(); });
     mForwardBtn->setCommitCallback([this](LLUICtrl*, const LLSD&) { goForward(); });
     mUpBtn->setCommitCallback([this](LLUICtrl*, const LLSD&) { goUp(); });
