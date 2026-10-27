@@ -298,6 +298,24 @@ private:
     std::vector<U32> mCoverLarge;                   ///< those spanning too many cells to file
     std::vector<skoverview::Seen> mCoverSeen;      ///< per snapshot record; UNKNOWN when not a candidate
     static constexpr F64 COVER_CELL_M = 16.0;
+    /// Each record visited once per coverInputFor, by stamp; indexed as the snapshot's records.
+    std::vector<U32> mCoverStamp;
+    U32 mCoverStampGen = 0;
+    /// The pool's content hash; coverInputFor's answers are kept while it holds, by part and box.
+    U64 mCoverVersion = 0;
+    struct CoverCached
+    {
+        U64 mBox = 0;
+        U64 mKey = 0;
+        U64 mVersion = 0;
+        U32 mFirst = 0;         ///< its candidates in mCoverCacheCands
+        U32 mCount = 0;
+        U32 mPass = 0;
+        bool mPending = false;
+    };
+    std::unordered_map<LLUUID, CoverCached> mCoverCache;
+    std::vector<const skworld::Record*> mCoverCacheCands;
+    static constexpr size_t COVER_CACHE_MAX = 1u << 22;
     /// The worker's verdicts kept across builds by part; each build reads the last landed map and makes the next.
     struct Verdict
     {

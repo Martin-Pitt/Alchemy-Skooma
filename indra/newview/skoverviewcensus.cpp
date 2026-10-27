@@ -514,6 +514,10 @@ void SKOverviewCensus::pruneSeen()
     {
         it = it->second != mSeenPass ? mSeenUnknown.erase(it) : std::next(it);
     }
+    for (auto it = mCoverCache.begin(); it != mCoverCache.end();)
+    {
+        it = it->second.mPass != mSeenPass ? mCoverCache.erase(it) : std::next(it);
+    }
     ++mSeenPass;
 }
 
@@ -524,41 +528,52 @@ SKOverviewCensus::CoverInput SKOverviewCensus::coverInputFor(const LLUUID& part,
     CoverInput in;
     in.mTest = true;
     const F64 reach = skoverview::InvisibleParams().mProxyTolerance;
-    std::vector<U32> nearby = mCoverLarge;
-    const S64 x0 = (S64)std::floor((lo.mdV[VX] - reach) / COVER_CELL_M);
-    const S64 x1 = (S64)std::floor((hi.mdV[VX] + reach) / COVER_CELL_M);
-    const S64 y0 = (S64)std::floor((lo.mdV[VY] - reach) / COVER_CELL_M);
-    const S64 y1 = (S64)std::floor((hi.mdV[VY] + reach) / COVER_CELL_M);
-    for (S64 x = x0; x <= x1; ++x)
+    // The grid holds the same records with the same looks as when this box was last asked: the same answer.
+    auto bitsOf = [](F64 v)
     {
-        for (S64 y = y0; y <= y1; ++y)
-        {
-            const U64 cell = ((U64)(U32)(S32)x << 32) | (U32)(S32)y;
-            auto it = std::lower_bound(mCoverGrid.begin(), mCoverGrid.end(), std::make_pair(cell, (U32)0));
-            for (; it != mCoverGrid.end() && it->first == cell; ++it)
-            {
-                nearby.push_back(it->second);
-            }
-        }
+        U64 bits;
+        std::memcpy(&bits, &v, sizeof(bits));
+        return bits;
+    };
+    U64 box = skoverview::scramble((U64)large ^ 0xb0c5u);
+    for (S32 a = 0; a < 3; ++a)
+    {
+        box = skoverview::scramble(box ^ bitsOf(lo.mdV[a]) ^ skoverview::scramble(bitsOf(hi.mdV[a])));
     }
-    std::sort(nearby.begin(), nearby.end());
-    nearby.erase(std::unique(nearby.begin(), nearby.end()), nearby.end());
-    U64 key = 0; // summed: the records follow the object list's order, which churns
-    for (const U32 index : nearby)
+    CoverCached& cached = mCoverCache[part];
+    cached.mPass = mSeenPass;
+    if (cached.mVersion == mCoverVersion && cached.mBox == box)
     {
+        in.mPending = cached.mPending;
+        in.mKey = cached.mKey;
+        in.mCandidates.assign(mCoverCacheCands.begin() + cached.mFirst, mCoverCacheCands.begin() + cached.mFirst + cached.mCount);
+        return in;
+    }
+    // Each record once, by a stamp per record rather than a sort of the cells' lists.
+    if (++mCoverStampGen == 0)
+    {
+        std::fill(mCoverStamp.begin(), mCoverStamp.end(), 0u);
+        mCoverStampGen = 1;
+    }
+    U64 key = 0; // summed: the records follow the object list's order, which churns
+    auto visit = [&](U32 index)
+    {
+        if (mCoverStamp[index] == mCoverStampGen)
+        {
+            return;
+        }
+        mCoverStamp[index] = mCoverStampGen;
         const skworld::Record& rec = *snap.mRecords[index];
         if (rec.mPart == part)
         {
-            continue;
+            return;
         }
-        bool meets = true;
-        for (S32 a = 0; a < 3 && meets; ++a)
+        for (S32 a = 0; a < 3; ++a)
         {
-            meets = rec.mMax.mdV[a] + reach >= lo.mdV[a] && rec.mMin.mdV[a] - reach <= hi.mdV[a];
-        }
-        if (!meets)
-        {
-            continue;
+            if (rec.mMax.mdV[a] + reach < lo.mdV[a] || rec.mMin.mdV[a] - reach > hi.mdV[a])
+            {
+                return;
+            }
         }
         const Seen seen = mCoverSeen[index];
         if (large)
@@ -570,7 +585,7 @@ SKOverviewCensus::CoverInput SKOverviewCensus::coverInputFor(const LLUUID& part,
             if (seen != Seen::VISIBLE || rec.mCollides || !rec.mPhysicsKnown ||
                 span + 2.0 * reach < skoverview::INVISIBLE_WALL_M)
             {
-                continue;
+                return;
             }
         }
         if (seen == Seen::UNKNOWN)
@@ -584,12 +599,38 @@ SKOverviewCensus::CoverInput SKOverviewCensus::coverInputFor(const LLUUID& part,
             in.mCandidates.push_back(&rec);
             key += skoverview::scramble(rec.mSignature ^ (rec.mPhysicsKnown ? 0x1u : 0x5u) ^ (rec.mCollides ? 0x0u : 0x2u));
         }
+    };
+    for (const U32 index : mCoverLarge)
+    {
+        visit(index);
+    }
+    const S64 x0 = (S64)std::floor((lo.mdV[VX] - reach) / COVER_CELL_M);
+    const S64 x1 = (S64)std::floor((hi.mdV[VX] + reach) / COVER_CELL_M);
+    const S64 y0 = (S64)std::floor((lo.mdV[VY] - reach) / COVER_CELL_M);
+    const S64 y1 = (S64)std::floor((hi.mdV[VY] + reach) / COVER_CELL_M);
+    for (S64 x = x0; x <= x1; ++x)
+    {
+        for (S64 y = y0; y <= y1; ++y)
+        {
+            const U64 cell = ((U64)(U32)(S32)x << 32) | (U32)(S32)y;
+            auto it = std::lower_bound(mCoverGrid.begin(), mCoverGrid.end(), std::make_pair(cell, (U32)0));
+            for (; it != mCoverGrid.end() && it->first == cell; ++it)
+            {
+                visit(it->second);
+            }
+        }
     }
     // The verdict does not depend on their order, the pieces the worker cuts do: by part, a surround after its twin.
     std::sort(in.mCandidates.begin(), in.mCandidates.end(),
               [](const skworld::Record* a, const skworld::Record* b)
               { return a->mPart < b->mPart || (a->mPart == b->mPart && a->mRole < b->mRole); });
     in.mKey = skoverview::scramble(key ^ part.getCRC32());
+    if (mCoverCacheCands.size() > COVER_CACHE_MAX)
+    {
+        return in; // full until the grid changes: asked again each walk, as before the cache
+    }
+    cached = { box, in.mKey, mCoverVersion, (U32)mCoverCacheCands.size(), (U32)in.mCandidates.size(), mSeenPass, in.mPending };
+    mCoverCacheCands.insert(mCoverCacheCands.end(), in.mCandidates.begin(), in.mCandidates.end());
     return in;
 }
 
@@ -790,6 +831,7 @@ bool SKOverviewCensus::update()
     mCoverSeen.assign(snap->mRecords.size(), Seen::UNKNOWN);
     {
         LL_PROFILE_ZONE_NAMED("sk overview census cover grid");
+        U64 version = 0; // summed over the pool: its order churns
         for (U32 index = 0; index < (U32)snap->mRecords.size(); ++index)
         {
             const skworld::Record* rec = snap->mRecords[index].get();
@@ -804,6 +846,17 @@ bool SKOverviewCensus::update()
             if (!skoverview::coverPoolRecord(*rec) || isRestless(rec->mPart))
             {
                 continue;
+            }
+            {
+                // What every cover answer reads of it: who, its box and look. Moved, the cached answers go.
+                U64 h = skoverview::scramble((U64)(uintptr_t)rec ^ rec->mSignature ^ ((U64)mCoverSeen[index] << 60) ^
+                                             ((U64)rec->mCollides << 56) ^ ((U64)rec->mPhysicsKnown << 57));
+                for (S32 a = 0; a < 3; ++a)
+                {
+                    h = skoverview::scramble(h ^ (U64)(S64)std::llround(rec->mMin.mdV[a] * 64.0) ^
+                                             ((U64)(S64)std::llround(rec->mMax.mdV[a] * 64.0) << 32));
+                }
+                version += h;
             }
             const S64 x0 = (S64)std::floor(rec->mMin.mdV[VX] / COVER_CELL_M);
             const S64 x1 = (S64)std::floor(rec->mMax.mdV[VX] / COVER_CELL_M);
@@ -823,6 +876,17 @@ bool SKOverviewCensus::update()
             }
         }
         std::sort(mCoverGrid.begin(), mCoverGrid.end());
+        if (version != mCoverVersion)
+        {
+            mCoverVersion = version;
+            mCoverCache.clear();
+            mCoverCacheCands.clear();
+        }
+        if (mCoverStamp.size() != snap->mRecords.size())
+        {
+            mCoverStamp.assign(snap->mRecords.size(), 0u);
+            mCoverStampGen = 0;
+        }
     }
     std::vector<CoverInput> sculpt_cover;
     std::string sculpt_moved; // which inputs of which sculpts' entries moved since the last walk
