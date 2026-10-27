@@ -69,6 +69,7 @@ struct SKInventoryListLabels
     std::string mLoading;
     std::string mEmpty;
     std::string mWorn;
+    std::string mMore;          // "and [COUNT] more"
 };
 
 class SKInventoryListView : public LLUICtrl, public LLEditMenuHandler
@@ -100,6 +101,12 @@ public:
 
     static const char* columnKey(EColumn col);
     static EColumn columnFromKey(const std::string& key);
+
+    // Reads a folder's direct contents, starting a fetch while it is incomplete; true while it loads.
+    static bool readRows(const LLUUID& folder_id, const SKInventoryListLabels& labels, std::vector<SKInventoryRow>& rows,
+                         bool fetch = true);
+    // Folders first (system folders first, then by name), items by the key.
+    static void sortRows(std::vector<SKInventoryRow>& rows, EColumn key, bool ascending);
 
     void setLabels(const SKInventoryListLabels& labels) { mLabels = labels; }
     void setOpenCallback(const id_callback_t& cb) { mOpenCallback = cb; }

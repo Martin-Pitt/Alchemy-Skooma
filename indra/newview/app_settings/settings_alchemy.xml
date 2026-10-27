@@ -398,19 +398,6 @@
             <key>Value</key>
             <integer>0</integer>
         </map>
-        <!-- <SK:Nexii> Inventory Explorer -->
-        <key>SkoomaInventoryExplorer</key>
-        <map>
-            <key>Comment</key>
-            <string>Inventory Explorer: allow the floater to open (secondlife:///app/openfloater/sk_inventory_explorer) while it is being built.</string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>Boolean</string>
-            <key>Value</key>
-            <integer>0</integer>
-        </map>
-        <!-- </SK:Nexii> -->
         <key>ALSnapshotCutout</key>
         <map>
             <key>Comment</key>

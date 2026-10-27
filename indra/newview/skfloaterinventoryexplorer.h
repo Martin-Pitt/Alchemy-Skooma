@@ -29,6 +29,7 @@
 
 #include "llfloater.h"
 #include "lluiimage.h"
+#include "skinventorycolumnsview.h"
 #include "skinventorylistview.h"
 
 #include <functional>
@@ -61,6 +62,8 @@ struct SKExplorerTab
     std::string mGroup = "none";
     uuid_vec_t mSelection;
     S32 mListScroll = 0;
+    S32 mStripScroll = 0;
+    SKInventoryColumnsView::scroll_map_t mColumnScrolls;
 };
 
 // The top row: flat square tabs, the new-tab button, and empty space that drags the floater.
@@ -185,6 +188,13 @@ private:
     void activateTab(S32 index);
     void saveListState();
     void showCurrentTab();
+    void showFolder();
+    void setView(SKExplorerTab::EView view);
+    bool isColumns() const { return !mTabs.empty() && mTabs[mActiveTab].mView == SKExplorerTab::VIEW_COLUMNS; }
+    uuid_vec_t activeSelection() const;
+    void setActiveSelection(const uuid_vec_t& ids);
+    void revealInSidebar();
+    bool onSidebarKey(KEY key, MASK mask);
 
     void refreshToolbar();
     void refreshTabStrip();
@@ -197,7 +207,7 @@ private:
     void setPaneWidth(const std::string& pane, S32 width, bool save);
     void onToggleDetails();
     void onListSortChanged();
-    void showContextMenu(S32 x, S32 y, const uuid_vec_t& ids);
+    void showContextMenu(LLView* view, S32 x, S32 y, const uuid_vec_t& ids, const LLUUID& folder_id);
 
     std::string folderPath(const LLUUID& folder_id) const;
     LLPointer<LLUIImage> folderIcon(const LLUUID& folder_id) const;
@@ -209,6 +219,7 @@ private:
     SKExplorerTabStrip* mTabStrip;
     SKInventorySidebar* mSidebar;
     SKInventoryListView* mList;
+    SKInventoryColumnsView* mColumns;
     LLButton* mBackBtn;
     LLButton* mForwardBtn;
     LLButton* mUpBtn;
