@@ -176,6 +176,8 @@ public:
     std::string roomProbesStatsLine() const;
     // Placed probes, which the rooms probes must stay clear of and share the cap with.
     void getRoomProbesContext(std::vector<LLReflectionMap*>& placed) const;
+    // The census pass's solid lattice, built on its worker; may trail the newest scan by the build.
+    std::shared_ptr<const skworld::SolidLattice> roomSolids() const { return mSolids; }
     // </SK:Nexii>
 
     // <SK:Nexii> Probe kinds for the census export and the probe volume display; the values are the census file's.
@@ -377,6 +379,7 @@ private:
     bool mRoomProbesDirty = false;
     void updateCensusPlacement();
     F64 mNextCensusPlacement = 0.0;
+    F64 mLastCensusPlacement = -1.0;   ///< a dirty flag refreshes no sooner than a quarter second after this
     // The census's solid bodies as a tile lattice for the grid placement's
     // point tests, rebuilt only when the census publishes a new scan.
     // mSolidsCensus is the scan it was built from.
