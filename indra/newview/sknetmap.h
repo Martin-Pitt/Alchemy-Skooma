@@ -155,7 +155,7 @@ public:
     void recentre();
     static bool followsAvatar();
     static LLVector3d anchorGlobal();
-    /// SKMapViewMode is region: north up over the camera's region, fitted with SKMapRegionMargin around it.
+    /// SKMapViewMode is region: north up over the camera's region, fitted as SKMapRegionFit says.
     static bool regionMode();
     /// The region under the camera, or the nearest one while it is out in the void.
     static const LLViewerRegion* viewRegion();
@@ -238,7 +238,7 @@ private:
     skmap::MapView mView;
     /// What the view centres on: the agent's region's centre in region mode, else anchorGlobal().
     LLVector3d viewAnchor() const;
-    /// Region mode's fit: the region and SKMapRegionMargin into each side with a loaded neighbour, diagonals included; returns its centre.
+    /// Region mode's fit, by SKMapRegionFit: -1 a 32 m box around the anchor, 0 the region, 1 every loaded neighbour, diagonals included; returns its centre.
     static LLVector3d regionFit(const LLViewerRegion* region, F32* span);
     /// Region mode's fitted view again: no pan.
     void refitRegion();
