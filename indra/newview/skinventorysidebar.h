@@ -47,7 +47,15 @@ public:
 
     SKSidebarFolderView(const LLFolderView::Params& p);
 
+    // Flat, as Columns' first column: rows select but never expand.
+    void setFlat(bool flat) { mFlat = flat; }
+
     bool handleKeyHere(KEY key, MASK mask) override;
+    bool handleMouseDown(S32 x, S32 y, MASK mask) override;
+    bool handleDoubleClick(S32 x, S32 y, MASK mask) override;
+
+private:
+    bool mFlat;
 };
 
 // An inventory panel of folders only that never scrolls itself: its scroller is
@@ -172,6 +180,7 @@ protected:
     open_callback_t mOpenCallback;
     key_callback_t mKeyCallback;
     bool mFlat;
+    std::vector<LLUUID> mOpenBeforeFlat;   // top-level folders open in List, opened again on leaving Columns
     bool mRevealing;
     LLUUID mPendingReveal;
     SKInventorySidebarPanel* mPendingPanel;

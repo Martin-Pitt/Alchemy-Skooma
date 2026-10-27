@@ -70,8 +70,41 @@ namespace
 //
 
 SKSidebarFolderView::SKSidebarFolderView(const LLFolderView::Params& p)
-:   LLFolderView(p)
+:   LLFolderView(p),
+    mFlat(false)
 {
+}
+
+bool SKSidebarFolderView::handleMouseDown(S32 x, S32 y, MASK mask)
+{
+    if (mFlat)
+    {
+        // A press anywhere on a top-level row selects it; the arrow does not toggle.
+        for (auto it = getFoldersBegin(); it != getFoldersEnd(); ++it)
+        {
+            LLFolderViewFolder* folder = *it;
+            const LLRect& rect = folder->getRect();
+            if (folder->getVisible() && rect.pointInRect(x, y))
+            {
+                if (getParentPanel())
+                {
+                    getParentPanel()->setFocus(true);
+                }
+                LLEditMenuHandler::gEditMenuHandler = this;
+                return folder->LLFolderViewItem::handleMouseDown(x - rect.mLeft, y - rect.mBottom, mask);
+            }
+        }
+    }
+    return LLFolderView::handleMouseDown(x, y, mask);
+}
+
+bool SKSidebarFolderView::handleDoubleClick(S32 x, S32 y, MASK mask)
+{
+    if (mFlat)
+    {
+        return true; // nothing expands in a flat column
+    }
+    return LLFolderView::handleDoubleClick(x, y, mask);
 }
 
 bool SKSidebarFolderView::handleKeyHere(KEY key, MASK mask)
@@ -410,7 +443,47 @@ bool SKInventorySidebar::postBuild()
 
 void SKInventorySidebar::setFlat(bool flat)
 {
+    if (flat == mFlat)
+    {
+        return;
+    }
     mFlat = flat;
+    if (flat)
+    {
+        mOpenBeforeFlat.clear();
+    }
+    for (SKInventorySidebarPanel* panel : mPanels)
+    {
+        SKSidebarFolderView* root = panel ? dynamic_cast<SKSidebarFolderView*>(panel->getRootFolder()) : nullptr;
+        if (!root)
+        {
+            continue;
+        }
+        root->setFlat(flat);
+        if (flat)
+        {
+            // Close what List had open, remembering it; nested open state stays in the closed folders.
+            for (auto it = root->getFoldersBegin(); it != root->getFoldersEnd(); ++it)
+            {
+                LLFolderViewModelItemInventory* model = static_cast<LLFolderViewModelItemInventory*>((*it)->getViewModelItem());
+                if ((*it)->isOpen() && model)
+                {
+                    mOpenBeforeFlat.push_back(model->getUUID());
+                    (*it)->setOpen(false);
+                }
+            }
+        }
+        else
+        {
+            for (const LLUUID& id : mOpenBeforeFlat)
+            {
+                if (LLFolderViewItem* item = panel->getItemByID(id))
+                {
+                    item->setOpen(true);
+                }
+            }
+        }
+    }
 }
 
 void SKInventorySidebar::focusSelection()
@@ -432,25 +505,6 @@ void SKInventorySidebar::focusSelection()
 
 void SKInventorySidebar::draw()
 {
-    if (mFlat)
-    {
-        // Flat as a column: whatever an arrow or a double-click opened closes again.
-        for (SKInventorySidebarPanel* panel : mPanels)
-        {
-            LLFolderView* root = panel ? panel->getRootFolder() : nullptr;
-            if (!root)
-            {
-                continue;
-            }
-            for (auto it = root->getFoldersBegin(); it != root->getFoldersEnd(); ++it)
-            {
-                if ((*it)->isOpen())
-                {
-                    (*it)->setOpen(false);
-                }
-            }
-        }
-    }
     arrangePanels();
     scrollToPendingReveal();
     LLPanel::draw();
