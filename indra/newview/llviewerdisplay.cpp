@@ -144,9 +144,55 @@ void render_disconnected_background();
 // for close, and draws the top modal view and the UI in place of the world.
 static bool sSKModalFrame = false;
 
+// The world's bookkeeping without its draw, thinned and on separate frames: a cull and sort from the saved world
+// camera on one, the environment half a period later.
+static void sk_modal_world_tick()
+{
+    static LLCachedControl<U32> world_frames(gSavedSettings, "SKModalWorldTickFrames", 16);
+    static LLCachedControl<U32> env_frames(gSavedSettings, "SKModalEnvironmentTickFrames", 16);
+    static U32 frame = 0;
+    ++frame;
+    const bool world = world_frames > 0 && frame % world_frames == 0;
+    const bool env = env_frames > 0 && (frame + env_frames / 2) % env_frames == 0;
+    LLVector3d eye;
+    LLVector3 at, left, up;
+    if ((!world && !env) || !SKModalView::worldCamera(eye, at, left, up))
+    {
+        return;
+    }
+    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("Modal World Tick");
+    LLViewerCamera* camera = LLViewerCamera::getInstance();
+    const LLCamera saved_camera = LLViewerCamera::getCurrent();
+    camera->setOrigin(gAgent.getPosAgentFromGlobal(eye));
+    camera->setAxes(at, left, up);
+    camera->setModelview(camera->frameModelview());
+    LLViewerCamera::updateFrustumPlanes(*camera);
+    if (env)
+    {
+        LLEnvironment::instance().update(camera);
+    }
+    if (world)
+    {
+        // Nothing drew depth to test against, so no occlusion.
+        const S32 occlusion = LLPipeline::sUseOcclusion;
+        LLPipeline::sUseOcclusion = 0;
+        LLDrawable::incrementVisible();
+        LLSpatialGroup::sNoDelete = true;
+        static LLCullResult result;
+        LLViewerCamera::sCurCameraID = LLViewerCamera::CAMERA_WORLD;
+        LLPipeline::sUnderWaterRender = camera->cameraUnderWater();
+        gPipeline.updateCull(*camera, result);
+        gPipeline.stateSort(*camera, result);
+        LLSpatialGroup::sNoDelete = false;
+        LLPipeline::sUseOcclusion = occlusion;
+    }
+    LLViewerCamera::setCurrent(saved_camera);
+}
+
 static void sk_display_modal(bool rebuild)
 {
     LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("Modal View Frame");
+    sk_modal_world_tick();
     LLHUDManager::getInstance()->updateEffects();
     LLHUDObject::updateAll();
     const F32 max_geom_update_time = llmin(0.005f * 10.f * gFrameIntervalSeconds.value(), 0.005f);
