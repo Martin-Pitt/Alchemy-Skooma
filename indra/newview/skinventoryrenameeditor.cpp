@@ -258,7 +258,7 @@ LLHandle<LLView> start(LLView* parent, const LLUUID& id, const LLRect& rect, boo
     return view->getHandle();
 }
 
-void finish(const LLHandle<LLView>& editor)
+static void end_editor(const LLHandle<LLView>& editor, bool keep)
 {
     LLView* view = editor.get();
     if (!view || !view->getVisible())
@@ -267,12 +267,22 @@ void finish(const LLHandle<LLView>& editor)
     }
     if (SKRenameLineEditor* line = dynamic_cast<SKRenameLineEditor*>(view))
     {
-        end_rename(line, line->mState, line->getText(), true, false);
+        end_rename(line, line->mState, line->getText(), keep, false);
     }
     else if (SKRenameTextEditor* text = dynamic_cast<SKRenameTextEditor*>(view))
     {
-        end_rename(text, text->mState, text->getText(), true, false);
+        end_rename(text, text->mState, text->getText(), keep, false);
     }
+}
+
+void finish(const LLHandle<LLView>& editor)
+{
+    end_editor(editor, true);
+}
+
+void cancel(const LLHandle<LLView>& editor)
+{
+    end_editor(editor, false);
 }
 
 } // namespace SKInventoryRename

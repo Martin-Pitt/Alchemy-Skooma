@@ -51,6 +51,7 @@ public:
 
     bool handleScrollWheel(S32 x, S32 y, LLScrollDelta delta) override;
     bool handleToolTip(S32 x, S32 y, MASK mask) override;
+    void onVisibilityChange(bool new_visibility) override;
 
 protected:
     SKInventoryIconsView(const Params& p);

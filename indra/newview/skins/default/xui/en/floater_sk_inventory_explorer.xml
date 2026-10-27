@@ -38,6 +38,14 @@
     <string name="n_selected">[COUNT] selected</string>
     <string name="status_join">[A] · [B]</string>
     <string name="no_selection">No item selected</string>
+    <string name="menu_menu_title">[COUNT] ITEMS</string>
+    <string name="menu_full_perm_only">(Full perm only)</string>
+    <string name="menu_tip_cut">Cut  (Ctrl+X)</string>
+    <string name="menu_tip_copy">Copy  (Ctrl+C)</string>
+    <string name="menu_tip_paste">Paste  (Ctrl+V)</string>
+    <string name="menu_tip_favorite">Add to Favorites</string>
+    <string name="menu_tip_unfavorite">Remove from Favorites</string>
+    <string name="menu_tip_delete">Delete  (Del)</string>
     <string name="group_folders">Folders</string>
     <string name="group_objects">Objects</string>
     <string name="group_clothing">Clothing</string>
