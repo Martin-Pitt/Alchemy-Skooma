@@ -1,0 +1,323 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+<context_menu
+ layout="topleft"
+ name="Columns">
+    <menu
+     label="Sort By"
+     layout="topleft"
+     name="Sort By">
+        <menu_item_check
+         label="Name"
+         layout="topleft"
+         name="sort_name">
+            <menu_item_check.on_click
+             function="SKInvExplorer.Option"
+             parameter="sort:name" />
+            <menu_item_check.on_check
+             function="SKInvExplorer.OptionCheck"
+             parameter="sort:name" />
+        </menu_item_check>
+        <menu_item_check
+         label="Type"
+         layout="topleft"
+         name="sort_type">
+            <menu_item_check.on_click
+             function="SKInvExplorer.Option"
+             parameter="sort:type" />
+            <menu_item_check.on_check
+             function="SKInvExplorer.OptionCheck"
+             parameter="sort:type" />
+        </menu_item_check>
+        <menu_item_check
+         label="Creator"
+         layout="topleft"
+         name="sort_creator">
+            <menu_item_check.on_click
+             function="SKInvExplorer.Option"
+             parameter="sort:creator" />
+            <menu_item_check.on_check
+             function="SKInvExplorer.OptionCheck"
+             parameter="sort:creator" />
+        </menu_item_check>
+        <menu_item_check
+         label="Acquired"
+         layout="topleft"
+         name="sort_acquired">
+            <menu_item_check.on_click
+             function="SKInvExplorer.Option"
+             parameter="sort:acquired" />
+            <menu_item_check.on_check
+             function="SKInvExplorer.OptionCheck"
+             parameter="sort:acquired" />
+        </menu_item_check>
+        <menu_item_check
+         label="Perms"
+         layout="topleft"
+         name="sort_perms">
+            <menu_item_check.on_click
+             function="SKInvExplorer.Option"
+             parameter="sort:perms" />
+            <menu_item_check.on_check
+             function="SKInvExplorer.OptionCheck"
+             parameter="sort:perms" />
+        </menu_item_check>
+        <menu_item_check
+         label="Worn on"
+         layout="topleft"
+         name="sort_worn">
+            <menu_item_check.on_click
+             function="SKInvExplorer.Option"
+             parameter="sort:worn" />
+            <menu_item_check.on_check
+             function="SKInvExplorer.OptionCheck"
+             parameter="sort:worn" />
+        </menu_item_check>
+        <menu_item_check
+         label="Description"
+         layout="topleft"
+         name="sort_description">
+            <menu_item_check.on_click
+             function="SKInvExplorer.Option"
+             parameter="sort:description" />
+            <menu_item_check.on_check
+             function="SKInvExplorer.OptionCheck"
+             parameter="sort:description" />
+        </menu_item_check>
+    </menu>
+    <menu
+     label="Group By"
+     layout="topleft"
+     name="Group By">
+        <menu_item_check
+         label="None"
+         layout="topleft"
+         name="group_none">
+            <menu_item_check.on_click
+             function="SKInvExplorer.Option"
+             parameter="group:none" />
+            <menu_item_check.on_check
+             function="SKInvExplorer.OptionCheck"
+             parameter="group:none" />
+        </menu_item_check>
+        <menu_item_check
+         label="Type"
+         layout="topleft"
+         name="group_type">
+            <menu_item_check.on_click
+             function="SKInvExplorer.Option"
+             parameter="group:type" />
+            <menu_item_check.on_check
+             function="SKInvExplorer.OptionCheck"
+             parameter="group:type" />
+        </menu_item_check>
+        <menu_item_check
+         label="Date Acquired"
+         layout="topleft"
+         name="group_date">
+            <menu_item_check.on_click
+             function="SKInvExplorer.Option"
+             parameter="group:date" />
+            <menu_item_check.on_check
+             function="SKInvExplorer.OptionCheck"
+             parameter="group:date" />
+        </menu_item_check>
+        <menu_item_check
+         label="Brand"
+         layout="topleft"
+         name="group_brand">
+            <menu_item_check.on_click
+             function="SKInvExplorer.Option"
+             parameter="group:brand" />
+            <menu_item_check.on_check
+             function="SKInvExplorer.OptionCheck"
+             parameter="group:brand" />
+        </menu_item_check>
+        <menu_item_check
+         label="Permissions"
+         layout="topleft"
+         name="group_perms">
+            <menu_item_check.on_click
+             function="SKInvExplorer.Option"
+             parameter="group:perms" />
+            <menu_item_check.on_check
+             function="SKInvExplorer.OptionCheck"
+             parameter="group:perms" />
+        </menu_item_check>
+        <menu_item_check
+         label="Worn"
+         layout="topleft"
+         name="group_worn">
+            <menu_item_check.on_click
+             function="SKInvExplorer.Option"
+             parameter="group:worn" />
+            <menu_item_check.on_check
+             function="SKInvExplorer.OptionCheck"
+             parameter="group:worn" />
+        </menu_item_check>
+        <menu_item_check
+         label="Creator"
+         layout="topleft"
+         name="group_creator">
+            <menu_item_check.on_click
+             function="SKInvExplorer.Option"
+             parameter="group:creator" />
+            <menu_item_check.on_check
+             function="SKInvExplorer.OptionCheck"
+             parameter="group:creator" />
+        </menu_item_check>
+    </menu>
+    <menu_item_check
+     label="Ascending"
+     layout="topleft"
+     name="dir_asc">
+        <menu_item_check.on_click
+         function="SKInvExplorer.Option"
+         parameter="dir:asc" />
+        <menu_item_check.on_check
+         function="SKInvExplorer.OptionCheck"
+         parameter="dir:asc" />
+    </menu_item_check>
+    <menu_item_check
+     label="Descending"
+     layout="topleft"
+     name="dir_desc">
+        <menu_item_check.on_click
+         function="SKInvExplorer.Option"
+         parameter="dir:desc" />
+        <menu_item_check.on_check
+         function="SKInvExplorer.OptionCheck"
+         parameter="dir:desc" />
+    </menu_item_check>
+    <menu_item_separator
+     layout="topleft"
+     name="columns_separator" />
+    <menu_item_check
+     label="Folder"
+     layout="topleft"
+     name="col_folder">
+        <menu_item_check.on_click
+         function="SKInvExplorer.Option"
+         parameter="col:folder" />
+        <menu_item_check.on_check
+         function="SKInvExplorer.OptionCheck"
+         parameter="col:folder" />
+    </menu_item_check>
+    <menu_item_check
+     label="Type"
+     layout="topleft"
+     name="col_type">
+        <menu_item_check.on_click
+         function="SKInvExplorer.Option"
+         parameter="col:type" />
+        <menu_item_check.on_check
+         function="SKInvExplorer.OptionCheck"
+         parameter="col:type" />
+    </menu_item_check>
+    <menu_item_check
+     label="Creator"
+     layout="topleft"
+     name="col_creator">
+        <menu_item_check.on_click
+         function="SKInvExplorer.Option"
+         parameter="col:creator" />
+        <menu_item_check.on_check
+         function="SKInvExplorer.OptionCheck"
+         parameter="col:creator" />
+    </menu_item_check>
+    <menu_item_check
+     label="Acquired"
+     layout="topleft"
+     name="col_acquired">
+        <menu_item_check.on_click
+         function="SKInvExplorer.Option"
+         parameter="col:acquired" />
+        <menu_item_check.on_check
+         function="SKInvExplorer.OptionCheck"
+         parameter="col:acquired" />
+    </menu_item_check>
+    <menu_item_check
+     label="Perms"
+     layout="topleft"
+     name="col_perms">
+        <menu_item_check.on_click
+         function="SKInvExplorer.Option"
+         parameter="col:perms" />
+        <menu_item_check.on_check
+         function="SKInvExplorer.OptionCheck"
+         parameter="col:perms" />
+    </menu_item_check>
+    <menu_item_check
+     label="Worn on"
+     layout="topleft"
+     name="col_worn">
+        <menu_item_check.on_click
+         function="SKInvExplorer.Option"
+         parameter="col:worn" />
+        <menu_item_check.on_check
+         function="SKInvExplorer.OptionCheck"
+         parameter="col:worn" />
+    </menu_item_check>
+    <menu_item_check
+     label="Description"
+     layout="topleft"
+     name="col_description">
+        <menu_item_check.on_click
+         function="SKInvExplorer.Option"
+         parameter="col:description" />
+        <menu_item_check.on_check
+         function="SKInvExplorer.OptionCheck"
+         parameter="col:description" />
+    </menu_item_check>
+    <menu_item_separator
+     layout="topleft"
+     name="view_separator" />
+    <menu
+     label="View"
+     layout="topleft"
+     name="View">
+        <menu_item_check
+         label="Columns"
+         layout="topleft"
+         name="view_columns">
+            <menu_item_check.on_click
+             function="SKInvExplorer.Option"
+             parameter="view:columns" />
+            <menu_item_check.on_check
+             function="SKInvExplorer.OptionCheck"
+             parameter="view:columns" />
+        </menu_item_check>
+        <menu_item_check
+         label="Icons"
+         layout="topleft"
+         name="view_icons">
+            <menu_item_check.on_click
+             function="SKInvExplorer.Option"
+             parameter="view:icons" />
+            <menu_item_check.on_check
+             function="SKInvExplorer.OptionCheck"
+             parameter="view:icons" />
+        </menu_item_check>
+        <menu_item_check
+         label="List"
+         layout="topleft"
+         name="view_list">
+            <menu_item_check.on_click
+             function="SKInvExplorer.Option"
+             parameter="view:list" />
+            <menu_item_check.on_check
+             function="SKInvExplorer.OptionCheck"
+             parameter="view:list" />
+        </menu_item_check>
+        <menu_item_check
+         label="Gallery"
+         layout="topleft"
+         name="view_gallery">
+            <menu_item_check.on_click
+             function="SKInvExplorer.Option"
+             parameter="view:gallery" />
+            <menu_item_check.on_check
+             function="SKInvExplorer.OptionCheck"
+             parameter="view:gallery" />
+        </menu_item_check>
+    </menu>
+</context_menu>

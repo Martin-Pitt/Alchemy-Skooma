@@ -31,8 +31,11 @@
 
 #include <functional>
 
-// What the content views do to inventory, through the same model calls and
-// notifications the Inventory floater's gallery uses.
+class LLContextMenu;
+class LLInventoryPanel;
+
+// What the content views do to inventory, through the same model calls, free functions
+// and notifications the Inventory floater's gallery and bridges use.
 namespace SKInventoryExplorerActions
 {
     // The folder a folder link points to, the folder itself, or null for an item.
@@ -41,36 +44,76 @@ namespace SKInventoryExplorerActions
     // Opens an item as its bridge would; folders are the floater's to navigate.
     void openItem(const LLUUID& id);
 
+    // Where the bridges allow a rename: not system folders, the Library, no-modify items or RLVa-locked folders.
     bool canRename(const LLUUID& id);
-    void rename(const LLUUID& id);
+    // Saves a new name, true when it differs from the old one.
+    bool applyName(const LLUUID& id, const std::string& name);
 
     bool canDelete(const uuid_vec_t& ids, const LLUUID& listed_folder_id);
     void deleteObjects(const uuid_vec_t& ids);
+
+    // The clipboard, as LLInventoryGallery's cut, copy and paste use it.
+    bool canCopy(const uuid_vec_t& ids);
+    void copy(const uuid_vec_t& ids);
+    bool canCut(const uuid_vec_t& ids);
+    void cut(const uuid_vec_t& ids);
+    bool canPaste(const LLUUID& dest_id);
+    void paste(const LLUUID& dest_id);
+
+    // Every selected object takes the opposite of the first one's favourite state.
+    void toggleFavorite(const uuid_vec_t& ids);
+
+    // One of the Inventory floater's "New" kinds (category, lsl, notecard, shirt, sky, ...) in the folder.
+    void create(const LLUUID& dest_id, const std::string& kind);
+
+    // Runs a bridge's own action for an item, the bridge built over a live inventory panel.
+    void bridgeAction(LLInventoryPanel* panel, const LLUUID& id, const std::string& action);
 }
 
-// Modelled on LLInventoryGalleryContextMenu; the floater supplies navigation.
+// The view, group, sort and column options, set and checked by key ("sort:name", "group:type", "dir:asc",
+// "view:icons", "col:type"); every menu that lists them goes through one of these.
+struct SKExplorerOptions
+{
+    std::function<void(const std::string& option)> mSet;
+    std::function<bool(const std::string& option)> mCheck;
+};
+
+// Modelled on LLInventoryGalleryContextMenu; the floater supplies navigation, rename and the options.
 class SKInventoryExplorerContextMenu : public LLListContextMenu
 {
 public:
     typedef std::function<void(const LLUUID& id, bool new_tab)> open_callback_t;
+    typedef std::function<void(const LLUUID& id)> id_callback_t;
+    typedef std::function<LLInventoryPanel*()> panel_getter_t;
 
-    SKInventoryExplorerContextMenu(const open_callback_t& open_cb)
+    SKInventoryExplorerContextMenu(const open_callback_t& open_cb, const id_callback_t& rename_cb, const SKExplorerOptions& options,
+                                   const panel_getter_t& panel_getter)
     :   LLListContextMenu(),
         mOpenCallback(open_cb),
+        mRenameCallback(rename_cb),
+        mOptions(options),
+        mPanelGetter(panel_getter),
         mRootMode(false)
     {}
 
     // The folder listed, and whether the menu was opened over empty space (its id is then the folder's).
     void setListedFolder(const LLUUID& folder_id, bool root_mode) { mListedFolderID = folder_id; mRootMode = root_mode; }
 
+    // A menu of options alone (the List's header menu, the toolbar's Sort and Group), shown under spawn at x, y.
+    static void showOptionsMenu(const std::string& filename, const SKExplorerOptions& options, LLView* spawn, S32 x, S32 y);
+
 protected:
     LLContextMenu* createMenu() override;
 
-    void doToSelected(const LLSD& userdata);
-    bool enableItem(const LLSD& userdata);
-    void updateVisibility(LLContextMenu* menu);
+    void doToSelected(const std::string& action);
+    void updateMenuItemsVisibility(LLContextMenu* menu);
+    void addIconRow(LLContextMenu* menu);
+    void addAttachmentPoints(LLContextMenu* menu);
 
     open_callback_t mOpenCallback;
+    id_callback_t mRenameCallback;
+    SKExplorerOptions mOptions;
+    panel_getter_t mPanelGetter;
     LLUUID mListedFolderID;
     bool mRootMode;
 };

@@ -38,6 +38,7 @@
 #include "llui.h"
 #include "llviewerinventory.h"
 #include "skinventoryexplorermenu.h"
+#include "skinventoryrenameeditor.h"
 
 #include <algorithm>
 
@@ -77,6 +78,7 @@ SKInventoryColumnsView::SKInventoryColumnsView(const Params& p)
     mGeneration(0),
     mSortKey(SKInventoryListView::COL_ACQUIRED),
     mSortAscending(false),
+    mGroup(SKInventoryFlatView::GROUP_NONE),
     mStripX(0),
     mStripPad(0),
     mHoverColumn(-1),
@@ -245,6 +247,11 @@ void SKInventoryColumnsView::rebuild(bool reveal_path)
         column.mFolderID = mPath[i];
         column.mPathID = (i + 1 < mPath.size()) ? mPath[i + 1] : LLUUID::null;
         readColumn(column, !is_root(column.mFolderID));
+        if (i + 1 == mPath.size())
+        {
+            // Grouping adds headers in the current column only.
+            SKInventoryFlatView::groupRows(column.mRows, mGroup, mLabels);
+        }
         mListedIDs.insert(column.mFolderID);
         for (const SKInventoryRow& row : column.mRows)
         {
@@ -274,7 +281,6 @@ void SKInventoryColumnsView::rebuild(bool reveal_path)
                 (folder_link ? mFolderCount : mItemCount)++;
             }
         }
-        // Grouping headers (step 3) go into the current column here.
     }
 
     // On navigation each path column moves only to show the row the path goes on through; live updates keep scrolls.
@@ -382,7 +388,7 @@ void SKInventoryColumnsView::rebuildTrailing()
     {
         // As wide as what a selection here could open, so deselecting doesn't shrink the strip.
         const bool items = std::any_of(current.mRows.begin(), current.mRows.end(),
-                                       [](const SKInventoryRow& row) { return !row.mIsFolder; });
+                                       [](const SKInventoryRow& row) { return row.isEntry() && !row.mIsFolder; });
         trailing.mKind = KIND_SPARE;
         trailing.mFolderID = current.mFolderID;
         trailing.mWidth = (items && mDetailsShown) ? DETAILS_WIDTH : COLUMN_WIDTH;
@@ -600,9 +606,10 @@ void SKInventoryColumnsView::clearSelection()
 void SKInventoryColumnsView::selectRange(S32 from, S32 to)
 {
     mSelected.assign(mSelected.size(), false);
-    for (S32 i = llmax(0, llmin(from, to)); i <= llmax(from, to) && i < (S32)mSelected.size(); ++i)
+    const Column* current = currentColumn();
+    for (S32 i = llmax(0, llmin(from, to)); current && i <= llmax(from, to) && i < (S32)mSelected.size(); ++i)
     {
-        mSelected[i] = true;
+        mSelected[i] = current->mRows[i].isEntry();
     }
 }
 
@@ -614,6 +621,24 @@ void SKInventoryColumnsView::moveCursor(S32 row, MASK mask)
         return;
     }
     row = llclamp(row, 0, (S32)current->mRows.size() - 1);
+    // A header is stepped over, in the direction of travel.
+    const S32 step = row < mCursor ? -1 : 1;
+    while (row >= 0 && row < (S32)current->mRows.size() && !current->mRows[row].isEntry())
+    {
+        row += step;
+    }
+    if (row < 0 || row >= (S32)current->mRows.size())
+    {
+        row -= step;
+        while (row >= 0 && row < (S32)current->mRows.size() && !current->mRows[row].isEntry())
+        {
+            row -= step;
+        }
+        if (row < 0 || row >= (S32)current->mRows.size())
+        {
+            return;
+        }
+    }
     if ((mask & MASK_SHIFT) && mAnchor >= 0)
     {
         selectRange(mAnchor, row);
@@ -630,6 +655,10 @@ void SKInventoryColumnsView::moveCursor(S32 row, MASK mask)
 
 bool SKInventoryColumnsView::selectRow(S32 column, S32 row, MASK mask)
 {
+    if (!mColumns[column].mRows[row].isEntry())
+    {
+        return true;
+    }
     if (column != mCurrent)
     {
         // Another column becomes current, with the row selected; not a history entry.
@@ -669,6 +698,10 @@ bool SKInventoryColumnsView::selectRow(S32 column, S32 row, MASK mask)
 
 void SKInventoryColumnsView::openRow(const SKInventoryRow& row)
 {
+    if (!row.isEntry())
+    {
+        return;
+    }
     const LLUUID id = row.mID;
     const LLUUID target = row.mTargetID;
     const bool is_folder = row.mIsFolder;
@@ -789,6 +822,17 @@ void SKInventoryColumnsView::drawColumn(const Column& column, S32 index, S32 hei
         }
 
         const SKInventoryRow& row = column.mRows[r];
+        if (row.mKind == SKInventoryRow::KIND_HEADER)
+        {
+            static LLUIColor bright_color = LLUIColorTable::instance().getColor("White");
+            font->renderUTF8(row.mName, 0, (F32)(left + CELL_PAD), (F32)middle, bright_color.get(), LLFontGL::LEFT, LLFontGL::VCENTER,
+                             LLFontGL::BOLD, LLFontGL::NO_SHADOW, S32_MAX, column.mWidth - 40, nullptr, true);
+            const S32 name_width = llmin((S32)LLFontGL::getFontSansSerifSmallBold()->getWidthF32(row.mName), column.mWidth - 40);
+            font->renderUTF8(llformat("%d", row.mGroupCount), 0, left + 2 * CELL_PAD + name_width, middle, dim_color.get(),
+                             LLFontGL::LEFT, LLFontGL::VCENTER);
+            gl_line_2d(left + CELL_PAD, top - ROW_HEIGHT + 1, right - CELL_PAD, top - ROW_HEIGHT + 1, rule_color.get());
+            continue;
+        }
         if (is_current && r < (S32)mSelected.size() && mSelected[r])
         {
             gl_rect_2d(left, top, right - 1, top - ROW_HEIGHT, selected);
@@ -978,7 +1022,7 @@ bool SKInventoryColumnsView::handleRightMouseDown(S32 x, S32 y, MASK mask)
     {
         const Column& column = mColumns[index];
         const S32 row = rowAt(column, y);
-        if (row >= 0)
+        if (row >= 0 && column.mRows[row].isEntry())
         {
             if (index == mCurrent)
             {
@@ -1149,7 +1193,7 @@ bool SKInventoryColumnsView::handleKeyHere(KEY key, MASK mask)
             const uuid_vec_t selection = getSelection();
             if (selection.size() == 1)
             {
-                SKInventoryExplorerActions::rename(selection.front());
+                startRename(selection.front());
             }
             return true;
         }
@@ -1210,7 +1254,11 @@ void SKInventoryColumnsView::selectAll()
 {
     if (currentColumn())
     {
-        mSelected.assign(mSelected.size(), true);
+        const Column* current = currentColumn();
+        for (size_t r = 0; r < mSelected.size(); ++r)
+        {
+            mSelected[r] = current->mRows[r].isEntry();
+        }
         notifySelection(true);
     }
 }
@@ -1219,4 +1267,42 @@ bool SKInventoryColumnsView::canSelectAll() const
 {
     const Column* current = currentColumn();
     return current && !current->mRows.empty();
+}
+
+void SKInventoryColumnsView::deselect()
+{
+    clearSelection();
+}
+
+void SKInventoryColumnsView::setGroup(SKInventoryFlatView::EGroup group)
+{
+    if (group != mGroup)
+    {
+        mGroup = group;
+        mDirty = true;
+    }
+}
+
+void SKInventoryColumnsView::startRename(const LLUUID& id)
+{
+    SKInventoryRename::finish(mRenameEditor);
+    const Column* current = currentColumn();
+    if (!current)
+    {
+        return;
+    }
+    for (S32 r = 0; r < (S32)current->mRows.size(); ++r)
+    {
+        if (current->mRows[r].isEntry() && current->mRows[r].mID == id)
+        {
+            scrollRowIntoView(*current, r);
+            revealColumns(false);
+            const S32 top = getRect().getHeight() - TOP_PAD - (r - columnScroll(*current)) * ROW_HEIGHT;
+            const S32 left = current->mLeft - mStripX + CELL_PAD + ICON_SIZE + CELL_PAD - 2;
+            const S32 text = (S32)LLFontGL::getFontSansSerifSmall()->getWidthF32(current->mRows[r].mName) + 2 * CELL_PAD;
+            const S32 width = llmax(120, llmin(text, current->mWidth - (left - (current->mLeft - mStripX)) - CELL_PAD));
+            mRenameEditor = SKInventoryRename::start(this, id, LLRect(left, top, left + width, top - ROW_HEIGHT), false, nullptr);
+            return;
+        }
+    }
 }

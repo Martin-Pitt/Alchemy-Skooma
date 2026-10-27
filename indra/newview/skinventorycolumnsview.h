@@ -77,6 +77,10 @@ public:
 
     void setSort(SKInventoryListView::EColumn key, bool ascending);
     void setDetailsShown(bool shown);
+    // Grouping adds headers to the current column only.
+    void setGroup(SKInventoryFlatView::EGroup group);
+    // Opens the inline editor over a current-column row's name.
+    void startRename(const LLUUID& id);
 
     // Reads every column again on the next draw, keeping selection and scrolls.
     void markDirty() { mDirty = true; ++mContentGeneration; }
@@ -186,6 +190,8 @@ protected:
     U32 mGeneration;
     SKInventoryListView::EColumn mSortKey;
     bool mSortAscending;
+    SKInventoryFlatView::EGroup mGroup;
+    LLHandle<LLView> mRenameEditor;
     std::unordered_set<LLUUID> mListedIDs;
     std::vector<LLUUID> mPath;
     U32 mContentGeneration;     // bumped by every live change
