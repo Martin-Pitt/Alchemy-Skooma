@@ -54,7 +54,7 @@
      layout="topleft"
      left="4"
      name="back_btn"
-     tool_tip="Back (Alt+←)"
+     tool_tip="Back"
      top="29"
      width="24" />
     <button
@@ -66,7 +66,7 @@
      layout="topleft"
      left_pad="2"
      name="forward_btn"
-     tool_tip="Forward (Alt+→)"
+     tool_tip="Forward"
      top="29"
      width="24" />
     <button
@@ -78,7 +78,7 @@
      layout="topleft"
      left_pad="2"
      name="up_btn"
-     tool_tip="Up (Alt+↑)"
+     tool_tip="Up (Backspace)"
      top="29"
      width="24" />
     <text

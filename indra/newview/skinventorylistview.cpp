@@ -754,17 +754,18 @@ bool SKInventoryListView::handleKeyHere(KEY key, MASK mask)
 {
     if (mask & MASK_ALT)
     {
-        return false; // Alt+arrows are the floater's history keys
+        return false;
     }
     const S32 page = rowsPerPage();
     const S32 last = (S32)mRows.size() - 1;
     switch (key)
     {
         case KEY_UP:
-            moveCursor(mCursor < 0 ? 0 : mCursor - 1, mask);
+            // Ctrl jumps to the first row, as Home does.
+            moveCursor((mask & MASK_CONTROL) || mCursor < 0 ? 0 : mCursor - 1, mask);
             return true;
         case KEY_DOWN:
-            moveCursor(mCursor < 0 ? 0 : mCursor + 1, mask);
+            moveCursor((mask & MASK_CONTROL) ? last : (mCursor < 0 ? 0 : mCursor + 1), mask);
             return true;
         case KEY_HOME:
             moveCursor(0, mask);
