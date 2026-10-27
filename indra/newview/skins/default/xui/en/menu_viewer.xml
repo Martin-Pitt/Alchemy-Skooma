@@ -27,6 +27,18 @@
          function="Floater.Toggle"
          parameter="inventory" />
       </menu_item_check>
+      <!-- <SK:Nexii> Inventory Explorer -->
+      <menu_item_check
+       label="Inventory Explorer..."
+       name="SKInventoryExplorer">
+        <menu_item_check.on_check
+         function="Floater.Visible"
+         parameter="sk_inventory_explorer" />
+        <menu_item_check.on_click
+         function="Floater.Toggle"
+         parameter="sk_inventory_explorer" />
+      </menu_item_check>
+      <!-- </SK:Nexii> -->
       <menu_item_call
        label="New Inventory Window"
        name="NewInventoryWindow"

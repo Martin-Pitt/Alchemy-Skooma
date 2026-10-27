@@ -478,12 +478,6 @@ bool SKFloaterInventoryExplorer::postBuild()
 
 void SKFloaterInventoryExplorer::onOpen(const LLSD& key)
 {
-    // Out of menus until it is finished; the debug setting is the only way in.
-    if (!gSavedSettings.getBOOL("SkoomaInventoryExplorer"))
-    {
-        closeFloater();
-        return;
-    }
     LLFloater::onOpen(key);
 }
 
