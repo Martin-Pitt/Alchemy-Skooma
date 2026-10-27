@@ -111,6 +111,7 @@ SKInventoryListView::SKInventoryListView(const Params& p)
     mAnchor(-1),
     mSortKey(COL_ACQUIRED),
     mSortAscending(false),
+    mHeaderClicks(0),
     mDirty(false),
     mLoading(false),
     mNamesArrived(false),
@@ -663,8 +664,22 @@ bool SKInventoryListView::handleMouseDown(S32 x, S32 y, MASK mask)
         const S32 col = columnAt(x);
         if (col >= 0)
         {
-            const bool ascending = (col == mSortKey) ? !mSortAscending : (col != COL_ACQUIRED);
-            setSort((EColumn)col, ascending);
+            // Each header cycles: its first direction, flipped, then back to the default sort.
+            if (col != mSortKey)
+            {
+                mHeaderClicks = 1;
+                setSort((EColumn)col, col != COL_ACQUIRED);
+            }
+            else if (mHeaderClicks < 2)
+            {
+                mHeaderClicks = 2;
+                setSort(mSortKey, !mSortAscending);
+            }
+            else
+            {
+                mHeaderClicks = 0;
+                setSort(COL_ACQUIRED, false);
+            }
             if (mSortCallback)
             {
                 mSortCallback();

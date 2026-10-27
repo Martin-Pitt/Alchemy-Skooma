@@ -187,6 +187,7 @@ protected:
     S32 mAnchor;
     EColumn mSortKey;
     bool mSortAscending;
+    S32 mHeaderClicks;  // clicks on the sorted header since it was chosen, 0 for the default sort
     bool mDirty;
     bool mLoading;
     S32 mColumnWidths[COL_COUNT];
