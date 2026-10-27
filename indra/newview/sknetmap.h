@@ -239,7 +239,10 @@ private:
     /// What the view centres on: the agent's region's centre in region mode, else anchorGlobal().
     LLVector3d viewAnchor() const;
     /// Region mode's fit, by SKMapRegionFit: -1 a 32 m box around the anchor, 0 a region's box sliding between loaded regions' centres, 1 every loaded neighbour; returns its centre.
-    static LLVector3d regionFit(const LLViewerRegion* region, F32* span);
+    static LLVector3d regionFit(const LLViewerRegion* region, F32* span, const LLVector3d& ease = LLVector3d::zero,
+                                LLVector3d* slide_out = nullptr);
+    /// What is left of Boundary's ease over a crossing, added to the region's box.
+    LLVector3d slideEase() const;
     /// Region mode's fitted view again: no pan.
     void refitRegion();
     /// Whether region mode's view has been panned away from its fit.
@@ -249,6 +252,9 @@ private:
     U64 mRegionHandle = 0;              ///< the region region mode last fitted
     LLVector2 mEaseFrom;
     F64 mEaseStart = -1.0;
+    LLVector3d mLastSlide;              ///< the region box's centre last frame, eased
+    LLVector3d mSlideEaseFrom;          ///< Boundary's offset at a crossing, easing to none
+    F64 mSlideEaseStart = -1.0;
     bool mPanning = false;
     LLCoordGL mMouseDown;
 };

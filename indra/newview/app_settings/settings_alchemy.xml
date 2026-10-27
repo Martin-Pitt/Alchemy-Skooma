@@ -6722,6 +6722,17 @@
             <string>How the mini-map follows: 0 around the avatar or camera, turning with it; 1 north up over the current region.</string>
             <string>U32</string>
             <integer>0</integer>
+        <key>SKMapRegionCrossing</key>
+        <map>
+            <key>Comment</key>
+            <string>In region view at a fit of 0, how the map moves between neighbouring regions: 0 snapping, it jumps to the camera's region; 1 boundary, it reaches up to 32 m into a loaded neighbour near its edge and eases to the new region over half a second at a crossing; 2 boundary sliding, it holds on a region and slides between centres within 64 m of the border; 3 linear sliding, it slides all the way between centres.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>2</integer>
+        </map>
         <key>SKMapRegionFit</key>
             <string>In region view, what the map fits: -1 a 32 m box around the camera (the avatar in mouselook or over the shoulder), 0 the region, 1 the region and every loaded neighbour; values between blend the boxes.</string>
             <real>0.1</real>
