@@ -83,7 +83,7 @@ namespace
     constexpr F64 RECENTRE_S = 0.25;
     // SKMapRegionFit's range, as the settings slider has it, one wheel notch of it, and the side of its closest box.
     constexpr F32 REGION_FIT_MIN = -1.f, REGION_FIT_MAX = 1.f, REGION_FIT_NOTCH = 0.05f;
-    constexpr F64 REGION_FIT_CLOSE = 32.0, REGION_FIT_GROWN = -0.2;
+    constexpr F64 REGION_FIT_CLOSE = 32.0;
 
     LLPointer<LLViewerTexture> sShadowSprite;
 
@@ -594,7 +594,7 @@ LLVector3d SKNetMap::regionFit(const LLViewerRegion* region, F32* span)
         }
     }
     // From 0 to 1 the region's box grows into every side with a loaded neighbour, diagonals included;
-    // from 0 to -0.2 it grows 32 m on every side, and from there to -1 closes on a 32 m box around the anchor.
+    // from 0 to -1 it zooms to a 32 m box around the anchor, kept within the region and up to 32 m past it.
     F64 extent = 0.0;
     for (S32 axis : { VX, VY })
     {
@@ -614,13 +614,15 @@ LLVector3d SKNetMap::regionFit(const LLViewerRegion* region, F32* span)
         }
         else
         {
-            // Down to REGION_FIT_GROWN the region grows by the close box's size, so that closing in can leave it near an edge.
-            const F64 grow = REGION_FIT_CLOSE * llmin(-t / -REGION_FIT_GROWN, 1.0);
-            min -= grow;
-            max += grow;
-            const F64 close = llmax((-t + REGION_FIT_GROWN) / (1.0 + REGION_FIT_GROWN), 0.0);
-            min += (anchor.mdV[axis] - REGION_FIT_CLOSE * 0.5 - min) * close;
-            max += (anchor.mdV[axis] + REGION_FIT_CLOSE * 0.5 - max) * close;
+            // The box zooms from the region's size to the close box's around the anchor, held inside the region
+            // grown by up to the close box's size, so that near an edge it can leave the region.
+            const F64 s = -t;
+            const F64 size = width * pow(REGION_FIT_CLOSE / width, s);
+            const F64 bound_min = min - REGION_FIT_CLOSE * s;
+            const F64 bound_max = max + REGION_FIT_CLOSE * s;
+            const F64 mid = llclamp(anchor.mdV[axis], bound_min + size * 0.5, bound_max - size * 0.5);
+            min = mid - size * 0.5;
+            max = mid + size * 0.5;
         }
         centre.mdV[axis] = (min + max) * 0.5;
         extent = llmax(extent, max - min);
