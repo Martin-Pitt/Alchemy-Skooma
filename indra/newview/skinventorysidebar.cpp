@@ -30,6 +30,7 @@
 
 #include "llfolderview.h"
 #include "llfolderviewitem.h"
+#include "llinventorybridge.h"
 #include "llinventoryfunctions.h"
 #include "llinventorymodel.h"
 #include "llinventoryobserver.h"
@@ -62,6 +63,25 @@ namespace
         }
         return (cat && cat->getParentUUID() == root_id) ? cat : nullptr;
     }
+}
+
+//
+// SKSidebarFolderView
+//
+
+SKSidebarFolderView::SKSidebarFolderView(const LLFolderView::Params& p)
+:   LLFolderView(p)
+{
+}
+
+bool SKSidebarFolderView::handleKeyHere(KEY key, MASK mask)
+{
+    SKInventorySidebarPanel* panel = dynamic_cast<SKInventorySidebarPanel*>(getParentPanel());
+    if (panel && panel->handleSidebarKey(key, mask))
+    {
+        return true;
+    }
+    return LLFolderView::handleKeyHere(key, mask);
 }
 
 //
@@ -109,6 +129,36 @@ void SKInventorySidebarPanel::initFromParams(const Params& p)
                                            | (1ULL << LLFolderType::FT_INBOX) | (1ULL << LLFolderType::FT_MARKETPLACE_LISTINGS));
     }
     setSortOrder(SIDEBAR_SORT);
+}
+
+LLFolderView* SKInventorySidebarPanel::createFolderRoot(LLUUID root_id)
+{
+    // As the stock root, built as our subclass so the sidebar can take keys first.
+    LLFolderView::Params base(mParams.folder_view);
+    base.name = getName();
+    base.title = getLabel();
+    base.rect = LLRect(0, 0, getRect().getWidth(), 0);
+    base.parent_panel = this;
+    base.listener = mInvFVBridgeBuilder->createBridge(LLAssetType::AT_CATEGORY, LLAssetType::AT_CATEGORY, LLInventoryType::IT_CATEGORY,
+                                                      this, &mInventoryViewModel, NULL, root_id);
+    base.view_model = &mInventoryViewModel;
+    base.grouped_item_model = mGroupedItemBridge;
+    base.use_label_suffix = mParams.use_label_suffix;
+    base.allow_multiselect = mAllowMultiSelect;
+    base.allow_drag = mAllowDrag;
+    base.show_empty_message = mShowEmptyMessage;
+    base.suppress_folder_menu = mSuppressFolderMenu;
+    base.show_item_link_overlays = mShowItemLinkOverlays;
+    base.root = NULL;
+    base.allow_drop = mParams.allow_drop_on_root;
+    base.options_menu = "menu_inventory.xml";
+
+    SKSidebarFolderView::Params p;
+    static_cast<LLFolderView::Params&>(p).overwriteFrom(base);
+    SKSidebarFolderView* fv = LLUICtrlFactory::create<SKSidebarFolderView>(p);
+    fv->setCallbackRegistrar(&mCommitCallbackRegistrar);
+    fv->setEnableRegistrar(&mEnableCallbackRegistrar);
+    return fv;
 }
 
 bool SKInventorySidebarPanel::typedViewsFilter(const LLUUID& id, LLInventoryObject const* objectp)
@@ -330,6 +380,7 @@ void SKInventoryFavoritesPanel::itemChanged(const LLUUID& id, U32 mask, const LL
 SKInventorySidebar::SKInventorySidebar(const Params& p)
 :   LLPanel(p),
     mFavoritesHint(nullptr),
+    mFlat(false),
     mRevealing(false),
     mPendingPanel(nullptr)
 {
@@ -350,14 +401,56 @@ bool SKInventorySidebar::postBuild()
                                      {
                                          onPanelSelect(panel, items, user_action);
                                      });
+            panel->setKeyCallback([this](KEY key, MASK mask) { return mKeyCallback && mKeyCallback(key, mask); });
         }
     }
     mFavoritesHint = findChild<LLTextBox>("favorites_hint");
     return true;
 }
 
+void SKInventorySidebar::setFlat(bool flat)
+{
+    mFlat = flat;
+}
+
+void SKInventorySidebar::focusSelection()
+{
+    for (SKInventorySidebarPanel* panel : mPanels)
+    {
+        LLFolderView* root = panel ? panel->getRootFolder() : nullptr;
+        if (root && !root->getSelectionList().empty())
+        {
+            root->setFocus(true);
+            return;
+        }
+    }
+    if (!mPanels.empty() && mPanels[1] && mPanels[1]->getRootFolder())
+    {
+        mPanels[1]->getRootFolder()->setFocus(true);
+    }
+}
+
 void SKInventorySidebar::draw()
 {
+    if (mFlat)
+    {
+        // Flat as a column: whatever an arrow or a double-click opened closes again.
+        for (SKInventorySidebarPanel* panel : mPanels)
+        {
+            LLFolderView* root = panel ? panel->getRootFolder() : nullptr;
+            if (!root)
+            {
+                continue;
+            }
+            for (auto it = root->getFoldersBegin(); it != root->getFoldersEnd(); ++it)
+            {
+                if ((*it)->isOpen())
+                {
+                    (*it)->setOpen(false);
+                }
+            }
+        }
+    }
     arrangePanels();
     scrollToPendingReveal();
     LLPanel::draw();
