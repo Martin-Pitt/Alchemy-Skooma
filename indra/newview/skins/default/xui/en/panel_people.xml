@@ -195,26 +195,7 @@ Learn about [https://community.secondlife.com/knowledgebase/joining-and-particip
            orientation="vertical"
            right="-1"
            top_pad="1">
-           <layout_panel
-             height="142"
-             layout="topleft"
-             min_dim="100"
-             mouse_opaque="false"
-             name="Net Map Panel"
-             user_resize="true"
-             visibility_control="NearbyListShowMap"
-             width="313">
-             <net_map
-               bg_color="NetMapBackgroundColor"
-               follows="all"
-               height="140"
-               layout="topleft"
-               left="3"
-               mouse_opaque="false"
-               name="Net Map"
-               right="-1"
-               top="4" />
-           </layout_panel>
+           <!-- <SK:Nexii> SKNetMap retired the classic mini-map; its Net Map Panel is gone -->
            <layout_panel
              height="213"
              layout="topleft"

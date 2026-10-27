@@ -1090,6 +1090,116 @@ void LLVertexBuffer::drawArrays(U32 mode, U32 first, U32 count) const
     LLRender::sDrawElements += count;
 }
 
+// <SK:Nexii> combat/minimap: several ranges of the bound buffer in one call
+void LLVertexBuffer::multiDrawArrays(U32 mode, const GLint* first, const GLsizei* count, GLsizei draw_count) const
+{
+    llassert(validate_bound_samplers());
+    llassert(mGLBuffer == sGLRenderBuffer);
+    llassert(mGLIndices == sGLRenderIndices);
+    if (draw_count <= 0)
+    {
+        return;
+    }
+    U32 total = 0;
+    for (GLsizei i = 0; i < draw_count; ++i)
+    {
+        llassert(first[i] >= 0 && count[i] >= 0 && (U32)first[i] + (U32)count[i] <= mNumVerts);
+        total += (U32)count[i];
+    }
+
+    gGL.syncMatrices();
+    STOP_GLERROR;
+    glMultiDrawArrays(sGLMode[mode], first, count, draw_count);
+    STOP_GLERROR;
+    ++LLRender::sDrawCalls;
+    LLRender::sDrawElements += total;
+}
+
+// <SK:Nexii> combat/minimap: commands a shader wrote, over the bound buffer
+void LLVertexBuffer::multiDrawArraysIndirect(U32 mode, const ALGPUBuffer& commands, size_t offset, GLsizei draw_count,
+                                             GLsizei stride) const
+{
+    llassert(validate_bound_samplers());
+    llassert(mGLBuffer == sGLRenderBuffer);
+    llassert(mGLIndices == sGLRenderIndices);
+    // GL reads each command a whole number of GLuints in, and all four of its words.
+    llassert(offset % sizeof(U32) == 0 && stride >= 0 && stride % sizeof(U32) == 0);
+    if (draw_count <= 0)
+    {
+        return;
+    }
+    const size_t step = stride ? (size_t)stride : sizeof(ALDrawArraysIndirectCommand);
+    if (!glMultiDrawArraysIndirect || !commands.isAllocated() ||
+        offset + (size_t)(draw_count - 1) * step + sizeof(ALDrawArraysIndirectCommand) > commands.size())
+    {
+        llassert(false);
+        return;
+    }
+
+    gGL.syncMatrices();
+    gGL.bindDrawIndirect(commands);
+    STOP_GLERROR;
+    glMultiDrawArraysIndirect(sGLMode[mode], reinterpret_cast<const void*>(offset), draw_count, stride);
+    STOP_GLERROR;
+    ++LLRender::sDrawCalls; // its counts are the GPU's to know
+}
+
+void LLVertexBuffer::multiDrawElements(U32 mode, const GLint* first, const GLsizei* count, GLsizei draw_count) const
+{
+    llassert(validate_bound_samplers());
+    llassert(mGLBuffer == sGLRenderBuffer);
+    llassert(mGLIndices == sGLRenderIndices);
+    if (draw_count <= 0)
+    {
+        return;
+    }
+    // glMultiDrawElements takes each first as a byte offset into the index buffer; the scratch outlives the call.
+    static thread_local std::vector<const void*> offsets;
+    offsets.resize((size_t)draw_count);
+    U32 total = 0;
+    for (GLsizei i = 0; i < draw_count; ++i)
+    {
+        llassert(first[i] >= 0 && count[i] >= 0 && (U32)first[i] + (U32)count[i] <= mNumIndices);
+        offsets[i] = reinterpret_cast<const void*>((size_t)first[i] * mIndicesStride);
+        total += (U32)count[i];
+    }
+
+    gGL.syncMatrices();
+    STOP_GLERROR;
+    glMultiDrawElements(sGLMode[mode], count, mIndicesType, offsets.data(), draw_count);
+    STOP_GLERROR;
+    ++LLRender::sDrawCalls;
+    LLRender::sDrawElements += total;
+}
+
+void LLVertexBuffer::multiDrawElementsIndirect(U32 mode, const ALGPUBuffer& commands, size_t offset, GLsizei draw_count,
+                                               GLsizei stride) const
+{
+    llassert(validate_bound_samplers());
+    llassert(mGLBuffer == sGLRenderBuffer);
+    llassert(mGLIndices == sGLRenderIndices);
+    llassert(offset % sizeof(U32) == 0 && stride >= 0 && stride % sizeof(U32) == 0);
+    if (draw_count <= 0)
+    {
+        return;
+    }
+    const size_t step = stride ? (size_t)stride : sizeof(ALDrawElementsIndirectCommand);
+    if (!glMultiDrawElementsIndirect || !commands.isAllocated() ||
+        offset + (size_t)(draw_count - 1) * step + sizeof(ALDrawElementsIndirectCommand) > commands.size())
+    {
+        llassert(false);
+        return;
+    }
+
+    gGL.syncMatrices();
+    gGL.bindDrawIndirect(commands);
+    STOP_GLERROR;
+    glMultiDrawElementsIndirect(sGLMode[mode], mIndicesType, reinterpret_cast<const void*>(offset), draw_count, stride);
+    STOP_GLERROR;
+    ++LLRender::sDrawCalls; // its counts are the GPU's to know
+}
+// </SK:Nexii>
+
 //static
 void LLVertexBuffer::initClass(LLWindow* window)
 {
@@ -1816,6 +1926,19 @@ bool LLVertexBuffer::getIndexStrider(LLStrider<U16>& strider, U32 index, S32 cou
     llassert(mIndicesType == GL_UNSIGNED_SHORT);
     return VertexBufferStrider<U16,TYPE_INDEX>::get(*this, strider, index, count);
 }
+// <SK:Nexii> combat/minimap: 32-bit indices through the same map, which counts in 16-bit ones
+bool LLVertexBuffer::getIndexStrider(LLStrider<U32>& strider, U32 index, S32 count)
+{
+    if (mIndicesType != GL_UNSIGNED_INT)
+    {
+        mIndicesType = GL_UNSIGNED_INT;
+        mIndicesStride = 4;
+        mNumIndices /= 2;
+    }
+    llassert(count >= 0 && index + (U32)count <= mNumIndices);
+    return VertexBufferStrider<U32,TYPE_INDEX>::get(*this, strider, (S32)index * 2, count * 2);
+}
+// </SK:Nexii>
 bool LLVertexBuffer::getTexCoord0Strider(LLStrider<LLVector2>& strider, U32 index, S32 count)
 {
     return VertexBufferStrider<LLVector2,TYPE_TEXCOORD0>::get(*this, strider, index, count);

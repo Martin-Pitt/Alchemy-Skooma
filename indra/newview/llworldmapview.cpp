@@ -42,7 +42,7 @@
 #include "llcallingcard.h"
 #include "llcommandhandler.h"
 #include "llviewercontrol.h"
-#include "llfloatermap.h"
+//#include "llfloatermap.h" // <SK:Nexii> SKNetMap retired the classic mini-map floater
 #include "llfloaterworldmap.h"
 #include "llfocusmgr.h"
 #include "lllocalcliprect.h"

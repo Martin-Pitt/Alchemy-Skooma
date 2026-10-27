@@ -48,6 +48,9 @@
 #include "alfloaterprofilelegacy.h"
 #include "alfloaterprogressview.h"
 #include "alfloaterscopes.h"
+#include "skfloatermap.h" // <SK:Nexii> SKNetMap mini-map
+#include "skfloatermapsettings.h" // <SK:Nexii> SKNetMap settings
+#include "skfloatertacticaloptions.h" // <SK:Nexii> tactical overview options
 #include "alfloaterregiontracker.h"
 #include "alfloatertransactionlog.h"
 #include "alfloaterwebprofile.h"
@@ -125,7 +128,7 @@
 #include "llfloaterlinkreplace.h"
 #include "llfloaterloadprefpreset.h"
 #include "llfloaterlocalassets.h"
-#include "llfloatermap.h"
+//#include "llfloatermap.h" // <SK:Nexii> SKNetMap retired the classic mini-map floater
 #include "llfloatermarketplace.h"
 #include "llfloatermarketplacelistings.h"
 #include "llfloatermaturitydialog.h"
@@ -466,7 +469,10 @@ void LLViewerFloaterReg::registerFloaters()
     LLFloaterReg::add("message_tos", "floater_tos.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloaterTOS>);
     LLFloaterReg::add("moveview", "floater_moveview.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloaterMove>);
     LLFloaterReg::add("mute_object_by_name", "floater_mute_object.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloaterGetBlockedObjectName>);
-    LLFloaterReg::add("mini_map", "floater_map.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloaterMap>);
+    // <SK:Nexii> SKNetMap replaces the classic mini-map
+    //LLFloaterReg::add("mini_map", "floater_map.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloaterMap>);
+    LLFloaterReg::add("mini_map", "floater_sk_map.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SKFloaterMap>);
+    // </SK:Nexii>
     LLFloaterReg::add("new_feature_notification", "floater_new_feature_notification.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloaterNewFeatureNotification>);
 
 
@@ -596,6 +602,8 @@ void LLViewerFloaterReg::registerFloaters()
     LLFloaterReg::add("legacy_profile", "floater_al_profile_legacy.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<ALFloaterProfileLegacy>);
     LLFloaterReg::add("lightbox", "floater_lightbox_settings.xml", (LLFloaterBuildFunc) &LLFloaterReg::build<ALFloaterLightBox>);
     LLFloaterReg::add("scopes", "floater_scopes.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<ALFloaterScopes>);
+    LLFloaterReg::add("sk_map_settings", "floater_sk_map_settings.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SKFloaterMapSettings>); // <SK:Nexii> SKNetMap settings
+    LLFloaterReg::add("sk_tactical_options", "floater_sk_tactical_options.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SKFloaterTacticalOptions>); // <SK:Nexii> tactical overview options
     LLFloaterReg::add("message_builder", "floater_message_builder.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloaterMessageBuilder>);
     LLFloaterReg::add("message_log", "floater_message_log.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloaterMessageLog>);
     LLFloaterReg::add("message_rewriter", "floater_message_rewriter.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloaterMessageRewriter>);

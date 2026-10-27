@@ -50,6 +50,8 @@ public:
 
     static void processViewerEffect(LLMessageSystem *mesgsys, void **user_data);
 
+    const std::vector<LLPointer<LLHUDEffect> >& getEffects() const { return mHUDEffects; } // <SK:Nexii> The mini-map's firing lines read each avatar's mouselook LookAt
+
 protected:
     std::vector<LLPointer<LLHUDEffect> > mHUDEffects;
 };

@@ -361,6 +361,18 @@ void LLResizeHandle::draw()
 {
     if( mImage.notNull() && getVisible() && (RIGHT_BOTTOM == mCorner) )
     {
+        // <SK:Nexii> Transparent floaters show the grip only while hovered, focused or resizing.
+        const LLFloater* floater = dynamic_cast<const LLFloater*>(getParent());
+        if (floater && !floater->isBackgroundVisible() && !hasMouseCapture() && !gFocusMgr.childHasKeyboardFocus(floater))
+        {
+            S32 x = 0, y = 0;
+            LLUI::getInstance()->getMousePositionLocal(floater, &x, &y);
+            if (!floater->pointInView(x, y))
+            {
+                return;
+            }
+        }
+        // </SK:Nexii>
         mImage->draw(0, 0);
     }
 }

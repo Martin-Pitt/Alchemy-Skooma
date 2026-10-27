@@ -280,10 +280,10 @@ public:
     U32 skRenderOutlineCoverage(LLSpatialBridge* bridge, const LLMatrix4a& view, const LLMatrix4a& proj, LLCamera& camera, F32 alpha_cutoff,
                                 const std::function<bool(const LLDrawInfo*)>& skip = nullptr);
     // </SK:Nexii>
-    // The avatar's impostor target, made at the size a bake from the viewer's camera now wants where it is not that
-    // already. Making one asks GL for names and errors, which a threaded driver answers only once its thread has run
-    // everything queued before them, so LLVOAvatar::allocateImpostors makes the frame's before its first draw.
-    void allocateImpostorTarget(LLVOAvatar& avatar);
+    // <SK:Nexii> overview capture: terrain, then census() under the clip program, all below cut_z, a class code per pass in R; returns the draws made.
+    U32 skRenderOverview(const LLMatrix4a& view, const LLMatrix4a& proj, LLCamera& camera, F32 cut_z,
+                         const std::function<void()>& census);
+    // </SK:Nexii>
 
     // A full-screen quad at the far plane, depth-tested against the bound
     // target's depth and never writing it: GL_GREATER reaches every texel that

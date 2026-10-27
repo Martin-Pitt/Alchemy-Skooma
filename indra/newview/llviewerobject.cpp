@@ -1292,8 +1292,7 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
         }
 
         if (stale_update && update_type == OUT_TERSE_IMPROVED)
-        {
-            return retval;
+        {            return retval;
         }
     }
 
@@ -2367,8 +2366,7 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
     {
         setVelocity(old_vel);
         setAcceleration(old_acc);
-        setAngularVelocity(old_angv);
-        return retval;
+        setAngularVelocity(old_angv);        return retval;
     }
 
     // Set the change flags for scale
@@ -2549,8 +2547,7 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
     setVelocity(ALMotionPredictor::finalVelocity(getVelocity(), getAcceleration()));
 
     mLastInterpUpdateSecs = (F64Seconds)update_time;
-    mLastMessageUpdateSecs = mLastInterpUpdateSecs;
-    if (mDrawable.notNull())
+    mLastMessageUpdateSecs = mLastInterpUpdateSecs;    if (mDrawable.notNull())
     {
         // Don't clear invisibility flag on update if still orphaned!
         if (mDrawable->isState(LLDrawable::FORCE_INVISIBLE) && !mOrphaned)
@@ -2616,9 +2613,7 @@ void LLViewerObject::idleUpdate(LLAgent &agent, const F64 &frame_time)
             else
             {   // Move object based on it's velocity and rotation
                 interpolateLinearMotion(frame_time, dt);
-            }
-        }
-
+            }        }
         updateDrawable(false);
     }
 }
@@ -4878,6 +4873,28 @@ const LLQuaternion LLViewerObject::getRotationRegion() const
     }
     return global_rotation;
 }
+
+// <SK:Nexii> tactical overview and minimap: the sim's rotation, extrapolated like other physics updates
+LLQuaternion LLViewerObject::skPredictedRotationRegion() const
+{
+    LLQuaternion rotation = getRotationSim();
+    const LLVector3& omega = getAngularVelocity();
+    const F32 speed = omega.magVec();
+    if (speed > 1e-4f)
+    {
+        const F32 dilation = mRegionp ? mRegionp->getTimeDilation() : 1.f;
+        const F64 age = LLFrameTimer::getUptimeSeconds() - mLastMessageUpdateSecs.value();
+        const F32 dt = llclamp((F32)age, 0.f, sPredictionTuning.mMaxTime) * dilation;
+        rotation = rotation * LLQuaternion(speed * dt, omega / speed);
+        rotation.normalize();
+    }
+    if (!((LLXform*)this)->isRoot())
+    {
+        rotation = rotation * getParent()->getRotation();
+    }
+    return rotation;
+}
+// </SK:Nexii>
 
 const LLQuaternion LLViewerObject::getRotationEdit() const
 {

@@ -5671,6 +5671,13 @@
             <key>Value</key>
             <integer>0</integer>
         </map>
+        <map>
+            <key>Comment</key>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <key>Value</key>
+        </map>
         <key>RenderDepthOfFieldNearBlur</key>
         <map>
             <key>Comment</key>
@@ -5936,6 +5943,19 @@
             <string>Boolean</string>
             <key>Value</key>
             <integer>0</integer>
+        <map>
+            <key>Comment</key>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <key>Value</key>
+        </map>
+        <map>
+            <key>Comment</key>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <key>Value</key>
         </map>
         <key>ChatOOCPrefix</key>
         <map>
@@ -6098,6 +6118,843 @@
             <key>Value</key>
             <string>All</string>
         </map>
+        <key>SKMapZoomMeters</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres the mini-map shows across its short side, 4 to 2048.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>128.0</real>
+        </map>
+        <key>SKMapAutoCenter</key>
+        <map>
+            <key>Comment</key>
+            <string>Ease the mini-map back onto you after a shift-drag pan.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKMapCompassRing</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw a compass ring with the four cardinal letters in place of the single N on the mini-map.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKMapAvatarColors</key>
+        <map>
+            <key>Comment</key>
+            <string>Colour mini-map dots by friend, muted and contact-set colours outside combat.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKMapHeadingTriangles</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw a small triangle ahead of each mini-map dot along the way the avatar faces.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKMapEdgeChevrons</key>
+        <map>
+            <key>Comment</key>
+            <string>Point to people off the mini-map with chevrons on its edge.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKMapFloorChevrons</key>
+        <map>
+            <key>Comment</key>
+            <string>Mark mini-map dots on the floor above or below yours with a chevron.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <!-- <SK:Nexii> mini-map floor chevron bands -->
+        <key>SKMapFloorChevronBand1</key>
+        <map>
+            <key>Comment</key>
+            <string>Height difference in metres from which a mini-map dot shows one chevron, and from which it counts as above or below yours.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>8.0</real>
+        </map>
+        <key>SKMapFloorChevronBand2</key>
+        <map>
+            <key>Comment</key>
+            <string>Height difference in metres from which a mini-map dot shows two chevrons.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>16.0</real>
+        </map>
+        <key>SKMapFloorChevronBand3</key>
+        <map>
+            <key>Comment</key>
+            <string>Height difference in metres from which a mini-map dot shows three chevrons.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>32.0</real>
+        </map>
+        <key>SKMapFloorChevronBand4</key>
+        <map>
+            <key>Comment</key>
+            <string>Height difference in metres from which a mini-map dot shows three chevrons that start to grow steeper and thicker.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>64.0</real>
+        </map>
+        <key>SKMapFloorChevronBand5</key>
+        <map>
+            <key>Comment</key>
+            <string>Height difference in metres from which a mini-map dot shows its steepest and thickest chevrons.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>128.0</real>
+        </map>
+        <!-- </SK:Nexii> -->
+        <key>SKMapLayerChatRings</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw the whisper, chat and shout ranges round you on the mini-map.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKMapLayerParcels</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw parcel boundary lines on the mini-map.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKMapLayerParcelsForSale</key>
+        <map>
+            <key>Comment</key>
+            <string>Shade parcels for sale and at auction on the mini-map.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKMapLayerParcelsCollision</key>
+        <map>
+            <key>Comment</key>
+            <string>Shade the parcels you are banned from or not allowed on, on the mini-map.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <!-- <SK:Nexii> Mini-map recorder: why the map and the census and air under it update -->
+        <key>SKMapRecord</key>
+        <map>
+            <key>Comment</key>
+            <string>Record why the mini-map and the census and air update to a JSON lines file while on.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKMapRecordPath</key>
+        <map>
+            <key>Comment</key>
+            <string>Folder for mini-map recordings; empty for the logs folder.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>String</string>
+            <key>Value</key>
+            <string></string>
+        </map>
+        <key>SKMapRecordMaxMB</key>
+        <map>
+            <key>Comment</key>
+            <string>A mini-map recording stops once its file reaches this many megabytes.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>256</integer>
+        </map>
+        <!-- </SK:Nexii> -->
+        <key>SKMapDebugReadout</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw the mini-map's timings and counts in its corner.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <!-- <SK:Nexii> Mouselook map (Automap) -->
+        <key>SKMapMLEnable</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw the Mouselook map, the mini-map faintly over the world, while in mouselook.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKMapMLSize</key>
+        <map>
+            <key>Comment</key>
+            <string>The Mouselook map's size as a fraction of the window height.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.8</real>
+        </map>
+        <key>SKMapMLSurfaceOpacity</key>
+        <map>
+            <key>Comment</key>
+            <string>Opacity of the Mouselook map's floors, 0.02 to 0.5.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.2</real>
+        </map>
+        <key>SKMapMLCentreFade</key>
+        <map>
+            <key>Comment</key>
+            <string>Radius the Mouselook map clears around the crosshair, as a fraction of the window height.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.18</real>
+        </map>
+        <key>SKMapMLRotate</key>
+        <map>
+            <key>Comment</key>
+            <string>Turn the Mouselook map with the camera instead of keeping north up.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKMapMLSelfFadePx</key>
+        <map>
+            <key>Comment</key>
+            <string>Radius in pixels the Mouselook map clears of your own dot and sight cone.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>28.0</real>
+        </map>
+        <key>SKMapMLOuterFade</key>
+        <map>
+            <key>Comment</key>
+            <string>Breadth of the Mouselook map's soft outer edge, as a fraction of its radius.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.38</real>
+        </map>
+        <!-- </SK:Nexii> -->
+        <!-- <SK:Nexii> overview capture: the mini-map base rendered from above -->
+        <key>SKOverviewCutHeight</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres above the air cells' floor under the agent (or above the agent's feet where they have none) where the overview cuts the world, so ceilings and roofs above do not hide the floor.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>2.5</real>
+        </map>
+        <key>SKOverviewCutReleaseSeconds</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds a tactical cut must stay released before a cut or hidden building is drawn whole again; cutting applies at once.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.5</real>
+        </map>
+        <key>SKOverviewProbeBudget</key>
+        <map>
+            <key>Comment</key>
+            <string>People the tactical cut asks the GPU about in one frame (their room, column, roof and cover), the agent first; the rest are asked the next frame.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>8</integer>
+        </map>
+        <key>SKOverviewProbeQueries</key>
+        <map>
+            <key>Comment</key>
+            <string>Occlusion queries the tactical cut's probes issue in one frame, a query per candidate building; the first person of a frame is asked about whatever it takes.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>256</integer>
+        </map>
+        <key>SKOverviewProbeDump</key>
+        <map>
+            <key>Comment</key>
+            <string>Write each room probe's id render as room-ids-[who].ppm, in SK_PROBE_DUMP_DIR or the log folder, with its mask outlined.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKOverviewRefresh</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds between top-down captures of the agent's region.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>1.0</real>
+        </map>
+        <key>SKOverviewCensusRange</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres around the agent the census covers for the mini-map's region maps, so the neighbouring regions show their buildings.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>384.0</real>
+        </map>
+        <key>SKOverviewPageVertices</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Most vertices in one of the overview census's pages, a vertex buffer per region and class
+                holding a run per linkset; a multiple of 3. A run larger than this gets a page of its own
+                size, up to 16777216.
+            </string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>3145728</integer>
+        </map>
+        <key>SKOverviewSurroundsRefresh</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds between looks for parts at least a region on some axis, or reaching into the void, that the census holds no shape for (megasculpts, phantom meshes and megaprims) anywhere in the loaded regions; the overview draws them from their rendered geometry.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>15.0</real>
+        </map>
+        <key>SKOverviewQueueInterval</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds between captures of regions other than the agent's, which take turns round robin; a region with no capture yet is taken at once.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.25</real>
+        </map>
+        <key>SKOverviewNeighbourRefresh</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds between top-down captures of a region touching the agent's; it is not cut, but keeps only the clusters at the agent's level, the ground's when the agent is on it.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>5.0</real>
+        </map>
+        <key>SKOverviewFarRefresh</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds between top-down captures of a region one region width beyond the neighbours, multiplied for each further width.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>30.0</real>
+        </map>
+        <key>SKOverviewResolution</key>
+        <map>
+            <key>Comment</key>
+            <string>Texels along a side of the top-down capture of the region.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>1024</integer>
+        </map>
+        <key>SKTacticalInterestFarCap</key>
+        <map>
+            <key>Comment</key>
+            <string>The most the tactical overview raises the interest list range to, in metres; a draw distance at or above it is sent unchanged.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>1024.0</real>
+        </map>
+        <key>SKTacticalInterestFarScale</key>
+        <map>
+            <key>Comment</key>
+            <string>How much the tactical overview widens the draw distance it sends the sim while it steers the interest list.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>1.5</real>
+        </map>
+        <key>SKTacticalSendCamera</key>
+        <map>
+            <key>Comment</key>
+            <string>While the tactical overview is shown, tell the sim its camera, a wider range and whole-region updates, so the battlefield around it is sent.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKTacticalOverview</key>
+            <string>Draw the overview into the main view from a tilted orbit camera around the agent.</string>
+        <key>SKTacticalDistance</key>
+            <string>Metres from the agent to the tactical overview's camera; the mouse wheel changes it.</string>
+            <real>60.0</real>
+        <key>SKTacticalCameraMode</key>
+            <string>Tactical overview camera: 0 battlefield, a fixed north-up view fitting the region; 1 follow, the orbit over the agent.</string>
+            <string>U32</string>
+            <integer>0</integer>
+        <key>SKTacticalBattlefieldNeighbours</key>
+            <string>The battlefield camera fits the agent's region and the connected regions that touch it, not the region alone.</string>
+            <integer>0</integer>
+        </map>
+        <key>SKOverviewMaxAbove</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres over the agent's floor above which the mini-map and tactical overview never draw census geometry.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>500.0</real>
+        </map>
+        <key>SKTacticalDissolve</key>
+        <map>
+            <key>Comment</key>
+            <string>Dissolves a circle through whatever stands between the tactical overview's eye and the agent or a marked person.</string>
+        <key>SKTacticalDissolveReach</key>
+            <string>Furthest distance in metres from the tactical camera at which someone standing in outdoor air gets a see-through dissolve.</string>
+            <real>64.0</real>
+        <key>SKTacticalDissolveRadius</key>
+            <string>Radius of the tactical overview's see-through circle, as a multiple of the person's height on screen.</string>
+            <real>1.25</real>
+        <key>SKTacticalDissolveSoftness</key>
+            <string>Fraction of the see-through circle's radius its dithered edge fades over.</string>
+            <real>0.25</real>
+        <key>SKTacticalBattlefieldPitch</key>
+            <string>Degrees the tactical overview's Battlefield camera looks down from the horizon, north up from the south of the area; 89 is straight down.</string>
+            <real>89.0</real>
+        <key>SKOverviewPanDebug</key>
+            <string>Log why a left press or drag on the tactical overview did not pan it (SKOverviewPan).</string>
+            <integer>0</integer>
+            <string>Boolean</string>
+            <integer>0</integer>
+        <key>SKTacticalKeyPanSpeed</key>
+            <string>How fast the movement keys pan the tactical overview, in widths of the visible ground a second; Shift or a run binding triples it.</string>
+        <key>SKTacticalTapSeconds</key>
+            <string>A tactical overview key press released within this many seconds, or within two frames, is a tap that latches the view open; longer is a hold that closes it on release.</string>
+            <real>0.35</real>
+        <key>SKTacticalPitch</key>
+        <map>
+            <key>Comment</key>
+            <string>Degrees the tactical overview's camera looks down from the horizon.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>55.0</real>
+        <key>SKOverviewForceRecapture</key>
+            <string>Debug: capture the tactical overview again every frame instead of only when what it shows changed.</string>
+            <integer>0</integer>
+            <string>Boolean</string>
+            <integer>0</integer>
+        </map>
+        <key>SKOverviewDebugView</key>
+        <map>
+            <key>Comment</key>
+            <string>Overview debug view: 0 off, 1 class codes as flat colours, 2 distance in 2 m bands, 3 normals, 4 which shading term fired (red occlusion, green crease, blue cut edge), 5 each part's own cut in the tactical view (blue whole, magenta hidden, hue by cut height in 4 m bands, red the cut edge).</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKTacticalFlatMarkerPixelsPerMetre</key>
+        <map>
+            <key>Comment</key>
+            <string>On the tactical overview, an avatar shown at fewer screen pixels per metre than this is drawn as the mini-map's flat marker instead of its body (Battlefield is about 4).</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>10.0</real>
+        </map>
+        <key>SKTacticalNametagPixelsPerMetre</key>
+        <map>
+            <key>Comment</key>
+            <string>On the tactical overview, an avatar shown at this many screen pixels per metre or more gets its in-world name tag instead of the compact marker label; 0 always shows the tags.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>8.0</real>
+        <key>SKTacticalTiltShift</key>
+            <string>Pixels of blur at the top and bottom edges of the tactical overview, 0 for none.</string>
+            <string>F32</string>
+            <real>4.0</real>
+        <!-- </SK:Nexii> -->
+        <key>SKMapLayerFloorplan</key>
+            <string>Draw the census floorplan on the mini-map.</string>
+        <key>SKMapLayerDoors</key>
+            <string>Highlight doors on the mini-map and the Mouselook map.</string>
+            <string>Boolean</string>
+            <integer>0</integer>
+        <key>SKMapLayerStairs</key>
+            <string>Highlight stairs and ramps on the mini-map and the Mouselook map.</string>
+            <string>Boolean</string>
+        <key>SKMapLayerContours</key>
+            <string>Draw height contours on floors, ramps and terrain on the mini-map and the Mouselook map.</string>
+            <string>Boolean</string>
+            <integer>0</integer>
+        <key>SKMapViewMode</key>
+            <string>How the mini-map follows: 0 around the avatar or camera, turning with it; 1 north up over the current region.</string>
+            <string>U32</string>
+            <integer>0</integer>
+        <key>SKMapRegionFit</key>
+            <string>In region view, what the map fits: -1 a 32 m box around the camera (the avatar in mouselook or over the shoulder), 0 the region, 1 the region and every loaded neighbour; values between blend the boxes.</string>
+            <real>0.1</real>
+        <key>SKMapLayerLadders</key>
+            <string>Highlight ladders on the mini-map and the Mouselook map.</string>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+        </map>
+        <key>SKMapLayerElevators</key>
+        <map>
+            <key>Comment</key>
+            <string>Outline elevator cars at their live position on the mini-map and the Mouselook map.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+        <key>SKMapMLFloorplan</key>
+            <string>Draw the floorplan under the Mouselook map; off leaves only the markers.</string>
+            <integer>1</integer>
+            <string>Boolean</string>
+            <integer>1</integer>
+        <key>SKMapHoverEnterPx</key>
+            <string>Pixels from a mini-map dot at which its name shows.</string>
+            <real>10.0</real>
+        <key>SKMapHoverExitPx</key>
+            <string>Pixels from a mini-map dot past which a shown name goes; more than the enter distance, so names do not flicker.</string>
+            <string>F32</string>
+            <real>12.0</real>
+        <key>SKMapNametagMaxWidth</key>
+            <string>The widest a mini-map nametag grows, in pixels; narrow windows use less.</string>
+            <string>U32</string>
+            <integer>190</integer>
+        <key>SKMapVehicleGrow</key>
+            <string>How much larger the mini-map draws vehicles once zoomed out past about 512 m, easing in from true size at 128 m (1 = always true size, up to 6).</string>
+            <real>4.0</real>
+        <key>SKMapVehicleGlyphs</key>
+            <string>Draw driven vehicles on the mini-map as their captured outline glyphs, falling back to their box until one is captured.</string>
+            <string>Boolean</string>
+            <integer>1</integer>
+        <key>SKMapLayerVehicles</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw vehicles the census has seen driven as outlines on the mini-map.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKMapDebugForceCombat</key>
+        <map>
+            <key>Comment</key>
+            <string>Debug: put the mini-map in combat mode on safe land. It only turns combat on; non-allies stay hidden.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKMapAllyProbeRate</key>
+            <string>Attachment group requests a second at most, for telling allies in combat.</string>
+            <real>4.0</real>
+        <key>SKMapAllyProbeUntitled</key>
+            <string>In combat, ask about avatars wearing no group title as well.</string>
+            <integer>1</integer>
+            <integer>0</integer>
+        <key>SKMapMarkerLabels</key>
+            <string>In combat, mark each ally's dot and nametag with a short code that stays with them.</string>
+        <key>SKMapMarkerFontPx</key>
+        <map>
+            <key>Comment</key>
+            <string>Pixel size of the codes on mini-map dots, 8 to 11.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>8</integer>
+        </map>
+        <key>SKMapMarkerPaddingPx</key>
+            <string>Pixels between a code and the edge of its mini-map dot, 0 to 3.</string>
+            <integer>1</integer>
+            <string>F32</string>
+            <real>0.5</real>
+        <key>SKMapMarkerCodeHold</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds an ally keeps their code after leaving the mini-map.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>120.0</real>
+        </map>
+        <key>SKMapPing</key>
+        <map>
+            <key>Comment</key>
+            <string>Offer Ping in the mini-map menu in combat: a marker on your own map, sent to nobody.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKMapKillLineSeconds</key>
+            <string>Seconds a combat event's line from shooter to target fades over on the mini-map.</string>
+            <string>F32</string>
+            <real>0.5</real>
+        <key>SKMapDeathIconSeconds</key>
+            <string>Seconds a kill or death mark stays on the mini-map.</string>
+            <string>F32</string>
+            <real>2.0</real>
+        <key>SKMapLayerFiringLines</key>
+            <string>Draw a faint line on the mini-map from each person drawn to what they aim at; in combat, allies only.</string>
+            <string>Boolean</string>
+            <integer>1</integer>
+        <key>SKMapLayerProjectiles</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw fast physical objects on the mini-map and tactical overview as streaks along their flight, the prim's own length.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKMapTrailMinSpeed</key>
+        <map>
+            <key>Comment</key>
+            <string>Speed in metres per second from which any object leaves a trail on the tactical overview.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>80.0</real>
+        </map>
+        <key>SKMapTrailMaxSpeed</key>
+        <map>
+            <key>Comment</key>
+            <string>Speed in metres per second at which a tactical overview trail is at its longest and strongest.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>200.0</real>
+        </map>
+        <key>SKMapTrailAlphaSlow</key>
+        <map>
+            <key>Comment</key>
+            <string>Opacity at the head of a trail at the slowest trail speed.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.05</real>
+        </map>
+        <key>SKMapTrailAlphaFast</key>
+            <string>Opacity at the head of a trail at the fastest trail speed.</string>
+            <integer>1</integer>
+            <string>F32</string>
+            <real>0.35</real>
+        <key>SKMapTrailLifeSlow</key>
+            <string>Seconds a trail reaches back at the slowest trail speed.</string>
+            <string>F32</string>
+            <real>0.02</real>
+        <key>SKMapTrailLifeFast</key>
+            <string>Seconds a trail reaches back at the fastest trail speed.</string>
+            <string>F32</string>
+            <real>0.08</real>
+        <key>SKMapProjectileMinSpeed</key>
+            <string>Speed in metres per second from which a moving physical object or needle is drawn as a projectile; low enough for a lobbed grenade, above an avatar's run.</string>
+            <real>8.0</real>
+        <key>SKMapProjectileMaxLength</key>
+            <string>Longest side in metres a moving physical object may have to be drawn as a projectile, so vehicles and debris do not count.</string>
+            <integer>1</integer>
+            <real>10.0</real>
+        <key>SKMapProjectileBulletSize</key>
+            <string>Longest side in metres up to which a fast projectile is drawn as a bullet streak rather than its footprint.</string>
+            <integer>1</integer>
+            <string>F32</string>
+            <real>0.5</real>
+        <key>SKMapProjectileBulletSpeed</key>
+            <string>Speed in metres per second from which a small projectile is drawn as a bullet streak rather than its footprint.</string>
+            <string>F32</string>
+            <real>40.0</real>
+        <key>SKMapProjectileMinFootprintPx</key>
+            <string>Smallest size in pixels of a non-bullet projectile's footprint, so a grenade stays visible.</string>
+            <real>4.0</real>
+        <key>SKMapProjectileNeedleLength</key>
+            <string>Shortest longest side in metres of a needle-shaped moving object drawn as a projectile, physical or not.</string>
+            <integer>1</integer>
+            <string>F32</string>
+            <real>3.0</real>
+        <key>SKMapProjectileNeedleThickness</key>
+            <string>Largest of the two shorter sides in metres of a needle-shaped moving object drawn as a projectile.</string>
+            <real>0.2</real>
+        <key>SKMapProjectileMinLengthPx</key>
+            <string>Shortest a projectile streak is drawn, in pixels.</string>
+            <real>10.0</real>
+        <key>SKMapProjectileMinWidthPx</key>
+            <string>Thinnest a projectile streak is drawn, in pixels.</string>
+            <real>2.0</real>
+        <key>SKMapProjectileMaxWidthPx</key>
+            <string>Thickest a projectile streak is drawn, in pixels.</string>
+        <!-- <SK:Nexii> SKNetMap mini-map section cut -->
+        <!-- </SK:Nexii> -->
+        <!-- <SK:Nexii> Rooms pass reflection probes -->
+        <key>SKRoomProbes</key>
+            <string>Give each part of an indoor space the rooms pass cut an automatic reflection probe sphere of its own, in place of the octree's automatic probes there. Placed probes always win. Keeps the air cells building.</string>
+        <key>SKRoomProbesMax</key>
+        <key>SKClusterProbes</key>
+            <string>Give each census cluster near the camera automatic reflection probes over a 1x1 to 3x3 grid of its footprint, high in its volume. They blend over the sky probe and under every other probe, so no surface in a structure falls back to the sky. Probe level 3 only.</string>
+            <integer>1</integer>
+        <key>SKClusterProbesMax</key>
+            <string>At most this many cluster probes, the nearest kept; the probe array's own cap applies as well.</string>
+            <integer>1</integer>
+            <string>U32</string>
+            <integer>24</integer>
+        <key>SKClusterProbesCellM</key>
+            <string>Metres of cluster footprint per grid cell along each axis before it splits, up to three cells.</string>
+            <string>F32</string>
+            <real>32.0</real>
+        <key>SKClusterProbesHeight</key>
+            <string>How high in a grid cell's occupied height its probe sits: 0 at the bottom, 1 at the top.</string>
+            <real>0.65</real>
         <key>ShowAdvancedHoverTips</key>
         <map>
             <key>Comment</key>

@@ -34,52 +34,49 @@
 #include "llviewerobject.h"
 #include "llviewertexture.h"
 
-namespace
+// The image a face draws: a PBR face its material's base colour, any other its own texture.
+const LLViewerTexture* skFaceImage(const LLViewerObject* object, U8 f)
 {
-    // The image a face draws: a PBR face its material's base colour, any other its own texture.
-    const LLViewerTexture* faceImage(const LLViewerObject* object, U8 f)
+    const LLTextureEntry* te = object->getTE(f);
+    if (const LLFetchedGLTFMaterial* gltf = te ? dynamic_cast<const LLFetchedGLTFMaterial*>(te->getGLTFRenderMaterial()) : nullptr)
     {
-        const LLTextureEntry* te = object->getTE(f);
-        if (const LLFetchedGLTFMaterial* gltf = te ? dynamic_cast<const LLFetchedGLTFMaterial*>(te->getGLTFRenderMaterial()) : nullptr)
-        {
-            return gltf->mBaseColorTexture.get();
-        }
-        return object->getTEImage(f);
+        return gltf->mBaseColorTexture.get();
     }
+    return object->getTEImage(f);
+}
 
-    // Whether one face can be seen through: set to blend whatever its tint,
-    // faint under blend, or the stock transparent texture.
-    bool faceSeeThrough(const LLViewerObject* object, U8 f)
+// Whether one face can be seen through: set to blend whatever its tint,
+// faint under blend, or the stock transparent texture.
+bool skFaceSeeThrough(const LLViewerObject* object, U8 f)
+{
+    const LLTextureEntry* te = object->getTE(f);
+    if (!te)
     {
-        const LLTextureEntry* te = object->getTE(f);
-        if (!te)
-        {
-            return false;
-        }
-        F32 alpha = te->getColor().mV[VALPHA];
-        bool blended = true;
-        bool blend_mode = false;
-        if (const LLGLTFMaterial* gltf = te->getGLTFRenderMaterial())
-        {
-            // A PBR face draws its material's base colour texture, not the face's own texture.
-            if (gltf->mTextureId[LLGLTFMaterial::GLTF_TEXTURE_INFO_BASE_COLOR] == IMG_TRANSPARENT)
-            {
-                return true;
-            }
-            alpha *= gltf->mBaseColor.mV[VW];
-            blended = gltf->mAlphaMode == LLGLTFMaterial::ALPHA_MODE_BLEND;
-            blend_mode = blended;
-        }
-        else if (const LLMaterialPtr material = te->getMaterialParams(); material.notNull())
-        {
-            // A legacy material defaults to blend, so an opaque door with a
-            // normal map reads as blended; only a texture with alpha is glass.
-            const LLViewerTexture* image = faceImage(object, f);
-            blend_mode = material->getDiffuseAlphaMode() == LLMaterial::DIFFUSE_ALPHA_MODE_BLEND && image &&
-                         image->getComponents() == 4;
-        }
-        return te->getID() == IMG_TRANSPARENT || blend_mode || (blended && alpha < 0.95f);
+        return false;
     }
+    F32 alpha = te->getColor().mV[VALPHA];
+    bool blended = true;
+    bool blend_mode = false;
+    if (const LLGLTFMaterial* gltf = te->getGLTFRenderMaterial())
+    {
+        // A PBR face draws its material's base colour texture, not the face's own texture.
+        if (gltf->mTextureId[LLGLTFMaterial::GLTF_TEXTURE_INFO_BASE_COLOR] == IMG_TRANSPARENT)
+        {
+            return true;
+        }
+        alpha *= gltf->mBaseColor.mV[VW];
+        blended = gltf->mAlphaMode == LLGLTFMaterial::ALPHA_MODE_BLEND;
+        blend_mode = blended;
+    }
+    else if (const LLMaterialPtr material = te->getMaterialParams(); material.notNull())
+    {
+        // A legacy material defaults to blend, so an opaque door with a
+        // normal map reads as blended; only a texture with alpha is glass.
+        const LLViewerTexture* image = skFaceImage(object, f);
+        blend_mode = material->getDiffuseAlphaMode() == LLMaterial::DIFFUSE_ALPHA_MODE_BLEND && image &&
+                     image->getComponents() == 4;
+    }
+    return te->getID() == IMG_TRANSPARENT || blend_mode || (blended && alpha < 0.95f);
 }
 
 // A PBR material's own mode wins over a legacy material's, and with
@@ -148,7 +145,7 @@ F32 skSeeThroughShare(const LLViewerObject* object)
     U32 clear = 0;
     for (U8 f = 0; f < faces; ++f)
     {
-        clear += faceSeeThrough(object, f) ? 1 : 0;
+        clear += skFaceSeeThrough(object, f) ? 1 : 0;
     }
     return static_cast<F32>(clear) / faces;
 }

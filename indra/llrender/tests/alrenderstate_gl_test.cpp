@@ -381,6 +381,54 @@ namespace
         CHECK((U32)glGetError() == (U32)GL_NO_ERROR);
     }
 
+    // <SK:Nexii> Overview capture: each face's stencil ops are issued, kept apart, put back by refreshState, and
+    // setStencilOp sets both again.
+    TEST_CASE_METHOD(alrenderstate_data, "alrenderstate_gl: separate stencil ops per face are issued and put back by refreshState", "[alrenderstate_gl]")
+    {
+        const auto check_separate = []
+        {
+            CHECK((U32)glInteger(GL_STENCIL_FAIL) == (U32)GL_KEEP);
+            CHECK((U32)glInteger(GL_STENCIL_PASS_DEPTH_FAIL) == (U32)GL_DECR_WRAP);
+            CHECK((U32)glInteger(GL_STENCIL_PASS_DEPTH_PASS) == (U32)GL_DECR_WRAP);
+            CHECK((U32)glInteger(GL_STENCIL_BACK_FAIL) == (U32)GL_KEEP);
+            CHECK((U32)glInteger(GL_STENCIL_BACK_PASS_DEPTH_FAIL) == (U32)GL_INCR_WRAP);
+            CHECK((U32)glInteger(GL_STENCIL_BACK_PASS_DEPTH_PASS) == (U32)GL_INCR_WRAP);
+        };
+
+        setUp(true);
+        mTarget.bindTarget();
+        mTarget.clear();
+        gGL.setStencilOpSeparate(GL_BACK, GL_KEEP, GL_INCR_WRAP, GL_INCR_WRAP);
+        gGL.setStencilOpSeparate(GL_FRONT, GL_KEEP, GL_DECR_WRAP, GL_DECR_WRAP);
+        {
+            INFO("each face holds its own");
+            check_separate();
+        }
+        U32 fail = 0, depth_fail = 0, pass = 0;
+        gGL.getStencilOp(fail, depth_fail, pass);
+        CHECK(pass == (U32)GL_DECR_WRAP);
+        gGL.getStencilOpBack(fail, depth_fail, pass);
+        CHECK(pass == (U32)GL_INCR_WRAP);
+
+        glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+        gGL.refreshState();
+        {
+            INFO("refreshState puts back both faces");
+            check_separate();
+        }
+
+        gGL.setStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+        {
+            INFO("setStencilOp sets both faces");
+            CHECK((U32)glInteger(GL_STENCIL_PASS_DEPTH_PASS) == (U32)GL_KEEP);
+            CHECK((U32)glInteger(GL_STENCIL_BACK_PASS_DEPTH_PASS) == (U32)GL_KEEP);
+            CHECK((U32)glInteger(GL_STENCIL_BACK_PASS_DEPTH_FAIL) == (U32)GL_KEEP);
+        }
+        mTarget.flush();
+        CHECK((U32)glGetError() == (U32)GL_NO_ERROR);
+    }
+    // </SK:Nexii>
+
     // A change of any of it draws what gGL has batched under the state before; a set the cache agrees with leaves the
     // batch where it is.
     TEST_CASE_METHOD(alrenderstate_data, "alrenderstate_gl: a change of raster state draws what is batched first, and a redundant set does not", "[alrenderstate_gl]")

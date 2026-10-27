@@ -91,6 +91,7 @@
 #include "pipeline.h"
 #include "skmodalview.h" // <SK:Nexii> modal view
 #include "skoutlinecapture.h" // <SK:Nexii> outline capture
+#include "skoverviewcapture.h" // <SK:Nexii> overview capture
 
 #include <filesystem>
 #include <iomanip>
@@ -99,6 +100,7 @@
 #include "llvisualeffect.h"
 #include "rlvactions.h"
 #include "rlvlocks.h"
+#include "skoverlay.h" // <SK:Nexii> overlay registry
 // [/RLVa:KB]
 
 
@@ -166,8 +168,10 @@ static void sk_display_modal(bool rebuild)
     gGLTFMaterialList.flushMaterials();
 
     gGL.setColorMask(true, true);
-    glClearColor(0.f, 0.f, 0.f, 0.f);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    const LLColor4 saved_clear = gGL.getClearColor();
+    gGL.setClearColor(LLColor4::transparent);
+    gGL.clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    gGL.setClearColor(saved_clear);
     SKModalView::instance().render(gViewerWindow->getWorldViewRectRaw());
 
     sSKModalFrame = true;
@@ -1191,6 +1195,7 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
         if (!for_snapshot)
         {
             SKOutlineCapture::onFrame(); // <SK:Nexii> outline capture: coverage renders after the world, before the UI
+            SKOverviewCapture::onFrame(); // <SK:Nexii> overview capture: the mini-map base from above, on its timer
             render_ui();
             presented = gDisplaySwapBuffers;
             swap();
@@ -1996,7 +2001,11 @@ void render_ui_2d()
         stop_glerror();
     }
 
+    SKOverlays::draw(SKOverlayLayer::ScreenUnderUI); // <SK:Nexii> overlay registry: 2.5D/2D under the UI
+
     gViewerWindow->draw();
+
+    SKOverlays::draw(SKOverlayLayer::ScreenOverUI); // <SK:Nexii> overlay registry: 2D over the UI
 
     // reset current origin for font rendering, in case of tiling render
     LLFontGL::sCurOrigin.set(0, 0);

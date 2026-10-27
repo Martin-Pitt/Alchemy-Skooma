@@ -69,7 +69,7 @@ public:
 
     // Returns the number of vertices drawn
     void            renderPropertyLines();
-    void            renderPropertyLinesOnMinimap(F32 scale_pixels_per_meter, const F32* parcel_outline_color);
+    // <SK:Nexii> renderPropertyLinesOnMinimap removed with the classic mini-map
 
     U8              ownership(const LLVector3& pos) const;
     U8              parcelLineFlags(const LLVector3& pos) const;

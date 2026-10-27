@@ -35,7 +35,7 @@
 #include "llfilepicker.h"
 #include "llfloaterreg.h"
 #include "llbuycurrencyhtml.h"
-#include "llfloatermap.h"
+//#include "llfloatermap.h" // <SK:Nexii> SKNetMap retired the classic mini-map floater
 #include "llfloatermodelpreview.h"
 #include "llmaterialeditor.h"
 #include "llfloaterperms.h"

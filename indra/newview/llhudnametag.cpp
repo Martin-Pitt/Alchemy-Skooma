@@ -1041,6 +1041,47 @@ void LLHUDNameTag::releaseTextGeometry()
     }
 }
 
+// <SK:Nexii> Tactical overview: the tag's own lines, colours and background, drawn flat at a point on the overview.
+void LLHUDNameTag::drawFlat(F32 x, F32 y)
+{
+    if (mHidden || mTextSegments.empty() || mColor.mV[VALPHA] < 0.01f)
+    {
+        return;
+    }
+    static LLCachedControl<F32> name_tag_hpad(gSavedSettings, "NameTagHPad", 16.f);
+    static LLCachedControl<F32> name_tag_vpad(gSavedSettings, "NameTagVPad", 12.f);
+    static LLCachedControl<F32> name_tag_linepad(gSavedSettings, "NameTagLinePad", 3.f);
+    static LLCachedControl<F32> bubble_opacity(gSavedSettings, "ChatBubbleOpacity");
+    static LLUIColor nametag_bg_color = LLUIColorTable::instance().getColor("NameTagBackground");
+    updateSize();
+    const F32 alpha = mColor.mV[VALPHA];
+    LLColor4 bg_color = nametag_bg_color;
+    bg_color.setAlpha(bubble_opacity * alpha);
+    const S32 left = ll_round(x - mWidth * 0.5f), bottom = ll_round(y);
+    const LLRect rect(left, bottom + ll_round(mHeight), left + ll_round(mWidth), bottom);
+    mRoundedRectImgp->draw(rect, bg_color);
+    F32 y_offset = (F32)rect.mTop - name_tag_vpad * 0.5f;
+    for (const LLHUDTextSegment& segment : mLabelSegments)
+    {
+        const LLFontGL* fontp = (segment.mStyle == LLFontGL::BOLD) ? mBoldFontp : mFontp;
+        y_offset -= fontp->getLineHeight();
+        fontp->renderUTF8(segment.getText(), 0, x, y_offset, LLColor4(0.f, 0.f, 0.f, alpha), LLFontGL::HCENTER,
+                          LLFontGL::BOTTOM, segment.mStyle, LLFontGL::NO_SHADOW);
+    }
+    const S32 max_lines = getMaxLines();
+    const size_t start = max_lines < 0 ? 0 : (size_t)llmax(0, (S32)mTextSegments.size() - max_lines);
+    for (size_t i = start; i < mTextSegments.size(); ++i)
+    {
+        const LLHUDTextSegment& segment = mTextSegments[i];
+        y_offset -= segment.mFont->getLineHeight();
+        segment.mFont->renderUTF8(segment.getText(), 0, x, y_offset, segment.mColor, LLFontGL::HCENTER, LLFontGL::BOTTOM,
+                                  segment.mStyle, LLFontGL::DROP_SHADOW);
+        y_offset -= name_tag_linepad;
+    }
+    gGL.color4f(1.f, 1.f, 1.f, 1.f);
+}
+// </SK:Nexii>
+
 void LLHUDNameTag::LLHUDTextSegment::draw(LLHUDTextScope& scope, const LLFontGL& font, U8 style,
                                           LLFontGL::ShadowType shadow, F32 x_offset, F32 y_offset,
                                           const LLColor4& color) const

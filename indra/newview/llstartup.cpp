@@ -267,7 +267,7 @@
 #include "llxfermanager.h"
 #include "pipeline.h"
 #include "llappviewer.h"
-#include "llfloatermap.h"
+//#include "llfloatermap.h" // <SK:Nexii> SKNetMap retired the classic mini-map floater
 #include "llweb.h"
 #include "llvoiceclient.h"
 #include "llnamelistctrl.h"

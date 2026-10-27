@@ -27,6 +27,7 @@
 #include "llviewerprecompiledheaders.h"
 
 #include "llviewerinput.h"
+#include "skoverviewcapture.h" // <SK:Nexii> tactical overview
 #include "skmodalview.h" // <SK:Nexii> modal view
 
 #include "alchatbar.h"
@@ -496,6 +497,17 @@ bool camera_roll_right(EKeystate s)
     gAgentCamera.setRollRightKey(get_orbit_rate());
     return true;
 }
+
+// <SK:Nexii> tactical overview: hold to show, tap to latch
+bool sk_tactical_overview(EKeystate s)
+{
+    if (KEYSTATE_DOWN == s || KEYSTATE_UP == s)
+    {
+        SKOverviewCapture::handleTacticalKey(KEYSTATE_DOWN == s);
+    }
+    return true;
+}
+// </SK:Nexii>
 
 bool camera_roll_reset(EKeystate s)
 {
@@ -1112,6 +1124,7 @@ REGISTER_KEYBOARD_ACTION(script_mouse_handler_name, script_trigger_lbutton);
 REGISTER_KEYBOARD_ACTION("roll_left", camera_roll_left);
 REGISTER_KEYBOARD_ACTION("roll_right", camera_roll_right);
 REGISTER_KEYBOARD_ACTION("roll_reset", camera_roll_reset);
+REGISTER_KEYBOARD_ACTION("tactical_overview", sk_tactical_overview); // <SK:Nexii> tactical overview
 #undef REGISTER_KEYBOARD_ACTION
 
 LLViewerInput::LLViewerInput()
@@ -1705,6 +1718,13 @@ bool LLViewerInput::scanKey(const std::vector<LLKeyboardBinding> &binding,
     {
         if (binding[i].mKey == key)
         {
+            // <SK:Nexii> tactical overview: held movement keys pan the map instead of moving the avatar
+            if ((key_down || key_level) && (binding[i].mMask & mask) == binding[i].mMask &&
+                SKOverviewCapture::handleKeyPan(binding[i].mFunctionName, (mask & MASK_SHIFT) != 0))
+            {
+                continue;
+            }
+            // </SK:Nexii>
             if (SKModalView::blocksAction(binding[i].mFunctionName) && !(key_up && !key_down && !key_level)) // <SK:Nexii> modal view: the avatar stays put; only a release passes, to stop it
             {
                 continue;

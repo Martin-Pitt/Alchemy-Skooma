@@ -61,7 +61,7 @@
 #include "llgroupactions.h"
 #include "llgrouplist.h"
 #include "llinventoryobserver.h"
-#include "llnetmap.h"
+//#include "llnetmap.h" // <SK:Nexii> SKNetMap retired the classic mini-map
 #include "llpanelpeoplemenus.h"
 #include "llparticipantlist.h"
 #include "llsidetraypanelcontainer.h"
@@ -540,8 +540,8 @@ LLPanelPeople::LLPanelPeople()
         mAllFriendList(NULL),
         mNearbyList(NULL),
         mRecentList(NULL),
-        mGroupList(NULL),
-        mMiniMap(NULL)
+        mGroupList(NULL)//, // <SK:Nexii> SKNetMap retired the classic mini-map
+        //mMiniMap(NULL) // <SK:Nexii> SKNetMap retired the classic mini-map
 {
     mFriendListUpdater = new LLFriendListUpdater(boost::bind(&LLPanelPeople::updateFriendList,  this));
     mNearbyListUpdater = new LLNearbyListUpdater(boost::bind(&LLPanelPeople::updateNearbyList,  this));
@@ -667,15 +667,17 @@ bool LLPanelPeople::postBuild()
 // [RLVa:KB] - Checked: RLVa-1.2.0
     mNearbyList->setRlvCheckShowNames(true);
 // [/RLVa:KB]
-    mMiniMap = nearby_tab->getChild<LLNetMap>("Net Map", true);
-    mMiniMap->setToolTipMsg(LLTrans::getString("MinimapToolTipMsg"));
-    mMiniMap->setParcelNameMsg(LLTrans::getString("MinimapParcelNameMsg"));
-    mMiniMap->setParcelSalePriceMsg(LLTrans::getString("MinimapParcelSalePriceMsg"));
-    mMiniMap->setParcelSaleAreaMsg(LLTrans::getString("MinimapParcelSaleAreaMsg"));
-    mMiniMap->setParcelOwnerMsg(LLTrans::getString("MinimapParcelOwnerMsg"));
-    mMiniMap->setRegionNameMsg(LLTrans::getString("MinimapRegionNameMsg"));
-    mMiniMap->setToolTipHintMsg(LLTrans::getString("MinimapToolTipHintMsg"));
-    mMiniMap->setAltToolTipHintMsg(LLTrans::getString("MinimapAltToolTipHintMsg"));
+    // <SK:Nexii> SKNetMap retired the classic mini-map
+    //mMiniMap = nearby_tab->getChild<LLNetMap>("Net Map", true);
+    //mMiniMap->setToolTipMsg(LLTrans::getString("MinimapToolTipMsg"));
+    //mMiniMap->setParcelNameMsg(LLTrans::getString("MinimapParcelNameMsg"));
+    //mMiniMap->setParcelSalePriceMsg(LLTrans::getString("MinimapParcelSalePriceMsg"));
+    //mMiniMap->setParcelSaleAreaMsg(LLTrans::getString("MinimapParcelSaleAreaMsg"));
+    //mMiniMap->setParcelOwnerMsg(LLTrans::getString("MinimapParcelOwnerMsg"));
+    //mMiniMap->setRegionNameMsg(LLTrans::getString("MinimapRegionNameMsg"));
+    //mMiniMap->setToolTipHintMsg(LLTrans::getString("MinimapToolTipHintMsg"));
+    //mMiniMap->setAltToolTipHintMsg(LLTrans::getString("MinimapAltToolTipHintMsg"));
+    // </SK:Nexii>
 
     mNearbyGearBtn = nearby_tab->getChild<LLButton>("gear_btn");
     mNearbyAddFriendBtn = nearby_tab->getChild<LLButton>("add_friend_btn");
@@ -1240,7 +1242,7 @@ void LLPanelPeople::onAvatarListCommitted(LLAvatarList* list)
     {
         uuid_vec_t selected_uuids;
         getCurrentItemIDs(selected_uuids);
-        mMiniMap->setSelected(selected_uuids);
+        //mMiniMap->setSelected(selected_uuids); // <SK:Nexii> SKNetMap retired the classic mini-map
     }
     // Make sure only one of the friends lists (online/all) has selection.
     else if (getActiveTabName() == FRIENDS_TAB_NAME)

@@ -419,6 +419,43 @@ void ALAvatarActions::parcelEjectMultiple(const uuid_vec_t& ids)
     LLNotificationsUtil::add(notification, args, payload, handleParcelEject);
 }
 
+// <SK:Nexii> SKNetMap Moderate gate: eject with the ban option the caller already knows, without selecting the parcel
+// static
+void ALAvatarActions::parcelEjectWithBan(const uuid_vec_t& ids, bool ban_enabled)
+{
+    LLSD payload;
+    payload["avatar_ids"] = LLSD::emptyArray();
+    std::string avatars;
+    for (const LLUUID& id : ids)
+    {
+        if (id.notNull())
+        {
+            payload["avatar_ids"].append(id);
+            if (!avatars.empty())
+                avatars += "\n";
+            avatars += LLSLURL("agent", id, "about").getSLURLString();
+        }
+    }
+    if (payload["avatar_ids"].size() == 0)
+        return;
+    payload["ban_enabled"] = ban_enabled;
+
+    LLSD args;
+    args["AVATAR_NAMES"] = avatars;
+    const bool is_single = (payload["avatar_ids"].size() == 1);
+    std::string notification;
+    if (ban_enabled)
+    {
+        notification = is_single ? "EjectAvatarFullname" : "EjectAvatarMultiple";
+    }
+    else
+    {
+        notification = is_single ? "EjectAvatarFullnameNoBan" : "EjectAvatarMultipleNoBan";
+    }
+    LLNotificationsUtil::add(notification, args, payload, handleParcelEject);
+}
+// </SK:Nexii>
+
 // static
 bool ALAvatarActions::canManageAvatarsEstate(const LLUUID& avatar_id)
 {

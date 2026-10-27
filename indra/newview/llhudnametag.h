@@ -162,6 +162,10 @@ public:
     // when the tag leaves the screen, so only what is on it holds geometry.
     void releaseTextGeometry();
 
+    // <SK:Nexii> Tactical overview: draws this tag in UI pixels, bottom-centred on (x, y), without the camera's fades.
+    void drawFlat(F32 x, F32 y);
+    // </SK:Nexii>
+
     void shift(const LLVector3& offset);
     F32 getWorldHeight() const;
 
