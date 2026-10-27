@@ -6646,7 +6646,7 @@
         <key>SKMapRegionFit</key>
         <map>
             <key>Comment</key>
-            <string>In region view, what the map fits: -1 a 32 m box around the camera (the avatar in mouselook or over the shoulder), 0 the region, 1 the region and every loaded neighbour; values between blend the boxes.</string>
+            <string>In region view, what the map fits: -1 a 32 m box around the camera (the avatar in mouselook or over the shoulder), -0.2 the region and 32 m round it, 0 the region, 1 the region and every loaded neighbour; values between blend the boxes.</string>
             <key>Persist</key>
             <integer>1</integer>
             <key>Type</key>
