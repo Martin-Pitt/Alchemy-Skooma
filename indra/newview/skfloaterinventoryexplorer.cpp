@@ -542,23 +542,6 @@ bool SKFloaterInventoryExplorer::handleKeyHere(KEY key, MASK mask)
         activateTab((mActiveTab + (S32)mTabs.size() - 1) % (S32)mTabs.size());
         return true;
     }
-    else if (mask == MASK_ALT)
-    {
-        switch (key)
-        {
-            case KEY_LEFT:
-                goBack();
-                return true;
-            case KEY_RIGHT:
-                goForward();
-                return true;
-            case KEY_UP:
-                goUp();
-                return true;
-            default:
-                break;
-        }
-    }
     return LLFloater::handleKeyHere(key, mask);
 }
 
