@@ -261,6 +261,24 @@
     <menu_item_call.on_enable
      function="Avatar.EnableTeleportTo" />
   </menu_item_call>
+  <!-- <SK:Nexii> Offer and request teleports from the avatar context menu. -->
+  <menu_item_call
+   label="Offer Teleport"
+   name="Offer Teleport">
+    <menu_item_call.on_click
+     function="Avatar.OfferTeleport" />
+    <menu_item_call.on_enable
+     function="Avatar.EnableOfferTeleport" />
+  </menu_item_call>
+  <menu_item_call
+   label="Request Teleport"
+   name="Request Teleport">
+    <menu_item_call.on_click
+     function="Avatar.TeleportRequest" />
+    <menu_item_call.on_enable
+     function="Avatar.EnableTeleportRequest" />
+  </menu_item_call>
+  <!-- </SK:Nexii> -->
   <menu_item_call
     enabled="false"
     label="Pay"

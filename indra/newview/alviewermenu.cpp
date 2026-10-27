@@ -34,6 +34,7 @@
 #include "alfeedback.h"
 #include "alfloaterblocked.h"
 #include "alfloaterparticleeditor.h"
+#include "llavataractions.h"
 #include "llagent.h"
 #include "llagentcamera.h"
 #include "llappviewer.h"
@@ -186,6 +187,14 @@ namespace
             ALAvatarActions::teleportTo(avatarp->getID());
         }
     }
+
+    // <SK:Nexii> Offer and request teleports from the avatar context menu.
+    LLUUID selected_other_avatar()
+    {
+        LLVOAvatar* avatarp = find_avatar_from_object(LLSelectMgr::getInstance()->getSelection()->getPrimaryObject());
+        return (avatarp && !avatarp->isSelf()) ? avatarp->getID() : LLUUID::null;
+    }
+    // </SK:Nexii>
 
     bool can_manage_avatar_estate()
     {
@@ -648,6 +657,13 @@ void ALViewerMenu::initialize_menus()
     enable.add("Alchemy.PowerfulWizardObject", [](LLUICtrl* ctrl, const LLSD& param) { return is_powerful_wizard_object(); });
     enable.add("Avatar.EnableManageEstate", [](LLUICtrl* ctrl, const LLSD& param) { return can_manage_avatar_estate(); });
     enable.add("Avatar.EnableTeleportTo", [](LLUICtrl* ctrl, const LLSD& param) { return can_teleport_to(); });
+    // <SK:Nexii> Offer and request teleports from the avatar context menu.
+    enable.add("Avatar.EnableOfferTeleport", [](LLUICtrl* ctrl, const LLSD& param) {
+        const LLUUID id = selected_other_avatar();
+        return id.notNull() && LLAvatarActions::canOfferTeleport(id);
+    });
+    enable.add("Avatar.EnableTeleportRequest", [](LLUICtrl* ctrl, const LLSD& param) { return selected_other_avatar().notNull(); });
+    // </SK:Nexii>
     enable.add("Object.EnableEditParticles", [](LLUICtrl* ctrl, const LLSD& param) { return enable_edit_particle_source(); });
     enable.add("SavedSetting", [](LLUICtrl* ctrl, const LLSD& param) { return get_saved_setting(param); });
     enable.add("Feedback.CanSend",
@@ -657,6 +673,18 @@ void ALViewerMenu::initialize_menus()
     commit.add("Avatar.CopyData",       [](LLUICtrl* ctrl, const LLSD& param) { avatar_copy_data(param); });
     commit.add("Avatar.ManageEstate", [](LLUICtrl* ctrl, const LLSD& param) { manage_estate(param); });
     commit.add("Avatar.TeleportTo", [](LLUICtrl* ctrl, const LLSD& param) { teleport_to(); });
+    // <SK:Nexii> Offer and request teleports from the avatar context menu.
+    commit.add("Avatar.OfferTeleport", [](LLUICtrl* ctrl, const LLSD& param) {
+        const LLUUID id = selected_other_avatar();
+        if (id.notNull())
+            LLAvatarActions::offerTeleport(id);
+    });
+    commit.add("Avatar.TeleportRequest", [](LLUICtrl* ctrl, const LLSD& param) {
+        const LLUUID id = selected_other_avatar();
+        if (id.notNull())
+            LLAvatarActions::teleportRequest(id);
+    });
+    // </SK:Nexii>
     commit.add("Avatar.RefreshTexture", [](LLUICtrl* ctrl, const LLSD& param) { avatar_texture_refresh(); });
 
     commit.add("Advanced.DebugSimFeatures", [](LLUICtrl* ctrl, const LLSD& param) { spawn_debug_simfeatures(); });
