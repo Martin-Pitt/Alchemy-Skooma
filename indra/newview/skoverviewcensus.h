@@ -437,6 +437,11 @@ private:
     };
     static constexpr U32 SEEN_REVERIFY_PASSES = 32; ///< each kept verdict is worked again once in this many passes
     std::unordered_map<LLUUID, SeenEntry> mSeen;
+    /// The last walk's known looks by record address, sorted; its snapshot holds the records so no address is reused.
+    std::vector<std::pair<const skworld::Record*, skoverview::Seen>> mSeenByRecord;
+    std::shared_ptr<const struct SKCensusSnapshot> mSeenSnapshot;
+    static constexpr U32 SEEN_CARRY_PASSES = 8; ///< an unchanged record's look is worked again once in this many walks
+    skoverview::Seen carriedSeen(const skworld::Record* rec);
     std::unordered_map<LLUUID, U32> mSeenUnknown; ///< the parts whose look was not known yet, by the pass that asked
     U32 mSeenPass = 0;
     /// A sculpt's region-local triangles, kept while its volume, map and placement stay the same.

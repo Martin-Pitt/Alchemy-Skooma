@@ -149,6 +149,10 @@ void SKOverviewCensus::release()
     mCache = std::make_shared<const Cache>();
     mCutTable.release();
     mLargeLogged.clear();
+    mSeenByRecord.clear();
+    mSeenSnapshot.reset();
+    mCoverCache.clear();
+    mCoverCacheCands.clear();
     mCoverLogged.clear();
     mUploadLogged.clear();
     mStamp = 0;
@@ -492,6 +496,27 @@ skoverview::Seen SKOverviewCensus::seenOf(const LLUUID& part)
     mSeenUnknown.erase(part);
     mSeen[part] = { key, mSeenPass, seen };
     return seen;
+}
+
+skoverview::Seen SKOverviewCensus::carriedSeen(const skworld::Record* rec)
+{
+    // A record the census kept since the last walk keeps its look, but for a slice worked again each walk.
+    if ((hash_value(rec->mPart) + mSeenPass) % SEEN_CARRY_PASSES != 0)
+    {
+        const auto it = std::lower_bound(mSeenByRecord.begin(), mSeenByRecord.end(), rec,
+                                         [](const std::pair<const skworld::Record*, Seen>& a, const skworld::Record* b)
+                                         { return a.first < b; });
+        if (it != mSeenByRecord.end() && it->first == rec)
+        {
+            const auto seen = mSeen.find(rec->mPart);
+            if (seen != mSeen.end() && seen->second.mSeen == it->second)
+            {
+                seen->second.mPass = mSeenPass;
+                return it->second;
+            }
+        }
+    }
+    return seenOf(rec->mPart);
 }
 
 U8 SKOverviewCensus::lastSeen(const LLUUID& part) const
@@ -840,7 +865,7 @@ bool SKOverviewCensus::update()
             {
                 continue;
             }
-            mCoverSeen[index] = seenOf(rec->mPart);
+            mCoverSeen[index] = carriedSeen(rec);
             mUnknownLook |= mCoverSeen[index] == Seen::UNKNOWN;
             // A restless part rekeys every pass; it is drawn live and covers nothing in the static buffers.
             if (!skoverview::coverPoolRecord(*rec) || isRestless(rec->mPart))
@@ -876,6 +901,18 @@ bool SKOverviewCensus::update()
             }
         }
         std::sort(mCoverGrid.begin(), mCoverGrid.end());
+        // This walk's looks, by record, for the next to carry; the snapshot keeps the records' addresses theirs.
+        mSeenByRecord.clear();
+        for (U32 index = 0; index < (U32)snap->mRecords.size(); ++index)
+        {
+            if (mCoverSeen[index] != Seen::UNKNOWN)
+            {
+                mSeenByRecord.emplace_back(snap->mRecords[index].get(), mCoverSeen[index]);
+            }
+        }
+        std::sort(mSeenByRecord.begin(), mSeenByRecord.end(),
+                  [](const auto& a, const auto& b) { return a.first < b.first; });
+        mSeenSnapshot = snap;
         if (version != mCoverVersion)
         {
             mCoverVersion = version;
