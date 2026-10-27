@@ -206,6 +206,8 @@ public:
 
     eTextureType getCurrType(void) const { return mCurrTexType; }
 
+    U32 getCurrSampler(void) const { return mCurrSampler; }
+
 protected:
     friend class LLRender;
 
