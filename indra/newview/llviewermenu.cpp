@@ -142,6 +142,7 @@
 #include "skaircells.h" // <SK:Nexii> air cells menu
 #include "skrooms.h" // <SK:Nexii> rooms menu
 #include "skworldcensus.h" // <SK:Nexii> census export
+#include "skmodalview.h" // <SK:Nexii> modal view
 #include "llviewerjoystick.h"
 #include "llfloatercamera.h"
 #include "lluilistener.h"
@@ -4927,6 +4928,13 @@ void reset_view_final(bool proceed);
 
 void handle_reset_view()
 {
+    // <SK:Nexii> modal view: Esc, Reset View's shortcut, closes the modal view on top rather than resetting the camera.
+    if (SKModalView::worldCovered())
+    {
+        SKModalView::instance().closeTop();
+        return;
+    }
+    // </SK:Nexii>
     if (gAgentCamera.cameraCustomizeAvatar())
     {
         // switching to outfit selector should automagically save any currently edited wearable

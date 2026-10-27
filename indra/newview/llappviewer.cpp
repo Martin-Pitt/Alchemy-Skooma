@@ -211,6 +211,7 @@
 #include "lltracker.h"
 #include "llviewerparcelmgr.h"
 #include "llworldmapview.h"
+#include "skmodalview.h" // <SK:Nexii> modal view
 
 #include "lldebugview.h"
 #include "llconsole.h"
@@ -1588,7 +1589,7 @@ bool LLAppViewer::doFrame()
                     pingMainloopTimeout("Main:Snapshot");
                     // Probes are captured only while the world is drawn: a hidden or minimized window shows none of
                     // them, so their captures would be GPU work for nothing.
-                    if (!display_window_hidden())
+                    if (!display_window_hidden() && !SKModalView::worldCovered()) // <SK:Nexii> modal view: no probe faces (each a full scene render) under a modal view
                     {
                         gPipeline.mReflectionMapManager.update();
                     }
@@ -1945,6 +1946,13 @@ bool LLAppViewer::cleanup()
     {
         LLWorldMap::getInstance()->reset(); // release any images
     }
+
+    // <SK:Nexii> modal view: its modes' views and targets go while the texture list and GL are still up.
+    if (SKModalView::instanceExists())
+    {
+        SKModalView::getInstance()->shutdown();
+    }
+    // </SK:Nexii>
 
     LLCalc::cleanUp();
 

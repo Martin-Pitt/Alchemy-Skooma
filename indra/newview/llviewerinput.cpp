@@ -27,6 +27,7 @@
 #include "llviewerprecompiledheaders.h"
 
 #include "llviewerinput.h"
+#include "skmodalview.h" // <SK:Nexii> modal view
 
 #include "alchatbar.h"
 #include "llappviewer.h"
@@ -1704,6 +1705,10 @@ bool LLViewerInput::scanKey(const std::vector<LLKeyboardBinding> &binding,
     {
         if (binding[i].mKey == key)
         {
+            if (SKModalView::blocksAction(binding[i].mFunctionName) && !(key_up && !key_down && !key_level)) // <SK:Nexii> modal view: the avatar stays put; only a release passes, to stop it
+            {
+                continue;
+            }
             if ((binding[i].mMask & mask) == binding[i].mMask)
             {
                 bool res = false;
@@ -1853,6 +1858,10 @@ bool LLViewerInput::scanMouse(
     {
         if (binding[i].mMouse == mouse && (ignore_additional_masks ? (binding[i].mMask & mask) == binding[i].mMask : binding[i].mMask == mask))
         {
+            if (SKModalView::blocksAction(binding[i].mFunctionName)) // <SK:Nexii> modal view: the avatar stays put
+            {
+                continue;
+            }
             bool res = false;
             switch (state)
             {

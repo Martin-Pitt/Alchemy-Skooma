@@ -26,6 +26,7 @@
 
 #include "llviewerprecompiledheaders.h"
 #include "llagentcamera.h"
+#include "skmodalview.h" // <SK:Nexii> modal view
 
 #include "pipeline.h"
 
@@ -111,7 +112,7 @@ const F32 OBJECT_EXTENTS_PADDING = 0.5f;
 static bool isDisableCameraConstraints()
 {
     static LLCachedControl<bool> sDisableCameraConstraints(gSavedSettings, "DisableCameraConstraints", false);
-    return sDisableCameraConstraints;
+    return sDisableCameraConstraints || SKModalView::worldCovered(); // <SK:Nexii> modal view: a modal camera roams the grid
 }
 
 // The agent instance.
@@ -2264,7 +2265,7 @@ F32 LLAgentCamera::getCameraMaxZoomDistance()
 {
     // SL-14706 / SL-14885 TPV have relaxed camera constraints allowing you to mousewheeel zoom WAY out.
     static LLCachedControl<bool> s_disable_camera_constraints(gSavedSettings, "DisableCameraConstraints", false);
-    if (s_disable_camera_constraints)
+    if (s_disable_camera_constraints || SKModalView::worldCovered()) // <SK:Nexii> modal view: a modal camera roams the grid
     {
         return (F32)INT_MAX;
     }
@@ -2397,7 +2398,8 @@ void LLAgentCamera::changeCameraToMouselook(bool animate)
 // [RLVa:KB] - Checked: RLVa-2.0.0
         || ( (RlvActions::isRlvEnabled()) && (!RlvActions::canChangeToMouselook()) )
 // [/RLVa:KB]
-        || LLViewerJoystick::getInstance()->getOverrideCamera())
+        || LLViewerJoystick::getInstance()->getOverrideCamera()
+        || SKModalView::worldCovered()) // <SK:Nexii> modal view: no mouselook over a modal view
     {
         return;
     }
@@ -2761,6 +2763,14 @@ void LLAgentCamera::stopCameraAnimation()
 {
     mCameraAnimating = false;
 }
+
+// <SK:Nexii> modal view: the next update puts the camera on its target, as LL's own pans do.
+void LLAgentCamera::skipCameraSmoothing()
+{
+    mCameraSmoothingStop = true;
+    mCameraSmoothingLastPositionGlobal = calcCameraPositionTargetGlobal();
+}
+// </SK:Nexii>
 
 void LLAgentCamera::clearFocusObject()
 {
