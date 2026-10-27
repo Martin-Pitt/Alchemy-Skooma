@@ -3552,6 +3552,28 @@
             <key>Value</key>
             <string></string>
         </map>
+        <key>SKModalWorldTickFrames</key>
+        <map>
+            <key>Comment</key>
+            <string>While a modal view covers the world, cull and sort the world from its saved camera, without drawing it, once every this many frames, so LOD, avatar visibility, texture priorities and cached objects keep up. 0 stops it.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>16</integer>
+        </map>
+        <key>SKModalEnvironmentTickFrames</key>
+        <map>
+            <key>Comment</key>
+            <string>While a modal view covers the world, update the environment once every this many frames, half a period apart from the world tick. 0 stops it.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>16</integer>
+        </map>
         <key>RenderAvatarShadowDetail</key>
         <map>
             <key>Comment</key>

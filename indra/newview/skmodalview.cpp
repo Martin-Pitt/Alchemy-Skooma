@@ -36,6 +36,7 @@
 #include "llviewerobject.h"
 #include "llviewerwindow.h"
 #include "llviewerregion.h"
+#include "pipeline.h"
 #include "skoverviewcapture.h"
 #include "rlvactions.h"
 #include "rlvhandler.h"
@@ -253,6 +254,8 @@ void SKModalView::restoreWorldCamera()
     }
     gAgentCamera.stopCameraAnimation();
     gAgentCamera.skipCameraSmoothing();
+    // The exposure adapted to a scene not drawn since; the world's first frame meters afresh.
+    gPipeline.resetExposureHistory();
     if (mWorld.mMouselook)
     {
         gAgentCamera.changeCameraToMouselook(false);
