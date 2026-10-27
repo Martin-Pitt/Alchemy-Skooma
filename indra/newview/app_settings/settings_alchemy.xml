@@ -6961,6 +6961,17 @@
             <key>Value</key>
             <integer>0</integer>
         </map>
+        <key>SKMapRegionCrossing</key>
+        <map>
+            <key>Comment</key>
+            <string>In region view at a fit of 0, how the map moves between neighbouring regions: 0 snapping, it jumps to the camera's region; 1 boundary, it reaches up to 32 m into a loaded neighbour near its edge and eases to the new region over half a second at a crossing; 2 boundary sliding, it holds on a region and slides between centres within 64 m of the border; 3 linear sliding, it slides all the way between centres.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>2</integer>
+        </map>
         <key>SKMapRegionFit</key>
         <map>
             <key>Comment</key>

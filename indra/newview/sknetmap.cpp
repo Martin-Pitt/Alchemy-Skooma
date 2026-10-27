@@ -84,6 +84,10 @@ namespace
     // SKMapRegionFit's range, as the settings slider has it, one wheel notch of it, and the side of its closest box.
     constexpr F32 REGION_FIT_MIN = -1.f, REGION_FIT_MAX = 1.f, REGION_FIT_NOTCH = 0.05f;
     constexpr F64 REGION_FIT_CLOSE = 32.0, REGION_FIT_CROSSING = 64.0;
+    // SKMapRegionCrossing's modes, how far Boundary reaches into a neighbour, how long it eases over a crossing,
+    // and how wide Linear sliding's corner blend is.
+    enum ERegionCrossing : U32 { CROSSING_SNAP = 0, CROSSING_BOUNDARY, CROSSING_BOUNDARY_SLIDE, CROSSING_LINEAR };
+    constexpr F64 REGION_BOUNDARY_REACH = 32.0, REGION_CROSSING_EASE_S = 0.5, REGION_LINEAR_BLEND = 16.0;
 
     LLPointer<LLViewerTexture> sShadowSprite;
 
@@ -490,13 +494,26 @@ void SKNetMap::updateView()
     {
         // North up over the camera's region, its whole width and a margin into each connected neighbour.
         const LLViewerRegion* region = viewRegion();
-        if (region->getHandle() != mRegionHandle)
+        const bool crossed = region->getHandle() != mRegionHandle;
+        if (crossed)
         {
             mRegionHandle = region->getHandle();
             refitRegion();
         }
         F32 fit = 0.f;
-        regionFit(region, &fit);
+        LLVector3d slide;
+        regionFit(region, &fit, slideEase(), &slide);
+        if (crossed)
+        {
+            // Boundary eases from where the box was to the new region's, unless the jump is a teleport's.
+            static LLCachedControl<U32> crossing(gSavedSettings, "SKMapRegionCrossing", CROSSING_BOUNDARY_SLIDE);
+            const LLVector3d from = mLastSlide - slide;
+            const bool adjacent = mLastSlide.isExactlyZero() ? false : from.magVec() < region->getWidth() * 1.5;
+            mSlideEaseFrom = (crossing == CROSSING_BOUNDARY && adjacent) ? from : LLVector3d::zero;
+            mSlideEaseStart = LLFrameTimer::getUptimeSeconds().value();
+            regionFit(region, &fit, slideEase());
+        }
+        mLastSlide = slide + slideEase();
         const LLVector3d centre = viewAnchor() + LLVector3d(mPan.mV[VX], mPan.mV[VY], 0.0);
         mView.set(centre, fit, 0.f, static_cast<F32>(getRect().getWidth()),
                   static_cast<F32>(getRect().getHeight()));
@@ -507,6 +524,8 @@ void SKNetMap::updateView()
         // Leaving region mode drops its pan.
         refitRegion();
         mRegionHandle = 0;
+        mLastSlide.setZero();
+        mSlideEaseFrom.setZero();
     }
 
     // The map centres on its anchor and turns so the camera's facing is up.
@@ -542,7 +561,18 @@ LLVector3d SKNetMap::viewAnchor() const
     {
         return anchorGlobal();
     }
-    return regionFit(region, nullptr);
+    return regionFit(region, nullptr, slideEase());
+}
+
+LLVector3d SKNetMap::slideEase() const
+{
+    const F64 t = (LLFrameTimer::getUptimeSeconds().value() - mSlideEaseStart) / REGION_CROSSING_EASE_S;
+    if (mSlideEaseFrom.isExactlyZero() || t >= 1.0)
+    {
+        return LLVector3d::zero;
+    }
+    const F64 k = 1.0 - llmax(t, 0.0);
+    return mSlideEaseFrom * (k * k * (3.0 - 2.0 * k));
 }
 
 // static
@@ -574,8 +604,9 @@ const LLViewerRegion* SKNetMap::viewRegion()
 }
 
 // static
-LLVector3d SKNetMap::regionFit(const LLViewerRegion* region, F32* span)
+LLVector3d SKNetMap::regionFit(const LLViewerRegion* region, F32* span, const LLVector3d& ease, LLVector3d* slide_out)
 {
+    static LLCachedControl<U32> crossing(gSavedSettings, "SKMapRegionCrossing", CROSSING_BOUNDARY_SLIDE);
     static LLCachedControl<F32> fit(gSavedSettings, "SKMapRegionFit", 0.1f);
     const F64 t = llclamp((F32)fit, REGION_FIT_MIN, REGION_FIT_MAX);
     const F64 width = region->getWidth();
@@ -593,10 +624,28 @@ LLVector3d SKNetMap::regionFit(const LLViewerRegion* region, F32* span)
             loaded[i][j] = (i != 1 || j != 1) && world->getRegionFromPosGlobal(probe);
         }
     }
-    // At 0 a region's box slides with the anchor along the lines joining the centres of edge-adjacent loaded regions,
-    // so an L of regions is walked through its corner; where two lines are near as close, it blends between them
-    // rather than snapping from one leg to the other.
+    // At 0 the box is the camera's region, moved towards its neighbours as SKMapRegionCrossing says.
     LLVector3d slide = origin + LLVector3d(width * 0.5, width * 0.5, 0.0);
+    if (crossing == CROSSING_BOUNDARY)
+    {
+        // Within REGION_BOUNDARY_REACH of an edge with a loaded neighbour, the box reaches as far past it.
+        for (S32 axis : { VX, VY })
+        {
+            const bool lo = axis == VX ? loaded[0][1] : loaded[1][0];
+            const bool hi = axis == VX ? loaded[2][1] : loaded[1][2];
+            const F64 from_lo = anchor.mdV[axis] - origin.mdV[axis];
+            const F64 from_hi = origin.mdV[axis] + width - anchor.mdV[axis];
+            if (lo)
+            {
+                slide.mdV[axis] -= llclamp(REGION_BOUNDARY_REACH - from_lo, 0.0, REGION_BOUNDARY_REACH);
+            }
+            if (hi)
+            {
+                slide.mdV[axis] += llclamp(REGION_BOUNDARY_REACH - from_hi, 0.0, REGION_BOUNDARY_REACH);
+            }
+        }
+    }
+    else if (crossing == CROSSING_BOUNDARY_SLIDE || crossing == CROSSING_LINEAR)
     {
         struct Candidate { F64 x, y, d; };
         std::vector<Candidate> candidates;
@@ -606,10 +655,15 @@ LLVector3d SKNetMap::regionFit(const LLViewerRegion* region, F32* span)
             const F64 length2 = dx * dx + dy * dy;
             const F64 u = length2 > 0.0 ? llclamp(((anchor.mdV[VX] - a.mdV[VX]) * dx + (anchor.mdV[VY] - a.mdV[VY]) * dy) / length2, 0.0, 1.0) : 0.0;
             const F64 px = a.mdV[VX] + dx * u, py = a.mdV[VY] + dy * u;
-            // The box holds on a region's centre and crosses only while the anchor is within REGION_FIT_CROSSING of the border.
-            const F64 zone = length2 > 0.0 ? REGION_FIT_CROSSING / sqrt(length2) : 0.5;
-            const F64 k = llclamp((u - 0.5 + zone) / (2.0 * zone), 0.0, 1.0);
-            const F64 v = k * k * (3.0 - 2.0 * k);
+            // Boundary sliding holds on a region's centre and crosses only while the anchor is within
+            // REGION_FIT_CROSSING of the border; linear sliding follows the anchor the whole way.
+            F64 v = u;
+            if (crossing == CROSSING_BOUNDARY_SLIDE)
+            {
+                const F64 zone = length2 > 0.0 ? REGION_FIT_CROSSING / sqrt(length2) : 0.5;
+                const F64 k = llclamp((u - 0.5 + zone) / (2.0 * zone), 0.0, 1.0);
+                v = k * k * (3.0 - 2.0 * k);
+            }
             candidates.push_back({ a.mdV[VX] + dx * v, a.mdV[VY] + dy * v,
                                    sqrt((anchor.mdV[VX] - px) * (anchor.mdV[VX] - px) + (anchor.mdV[VY] - py) * (anchor.mdV[VY] - py)) });
         };
@@ -637,8 +691,9 @@ LLVector3d SKNetMap::regionFit(const LLViewerRegion* region, F32* span)
             {
                 nearest = llmin(nearest, c.d);
             }
-            // A line within a quarter region of the nearest shares the box, its weight easing to none at that distance.
-            const F64 blend = width * 0.25;
+            // A line near as close as the nearest shares the box, so the box blends through an L's corner rather
+            // than snapping between its legs; linear sliding keeps the blend to a narrow band about the corner's bisector.
+            const F64 blend = crossing == CROSSING_LINEAR ? REGION_LINEAR_BLEND : width * 0.25;
             F64 sx = 0.0, sy = 0.0, sw = 0.0;
             for (const Candidate& c : candidates)
             {
@@ -651,6 +706,11 @@ LLVector3d SKNetMap::regionFit(const LLViewerRegion* region, F32* span)
             slide.mdV[VX] = sx / sw;
             slide.mdV[VY] = sy / sw;
         }
+    }
+    slide += ease;
+    if (slide_out)
+    {
+        *slide_out = slide - ease;
     }
     // From 0 to 1 the sliding box grows to the region and every side with a loaded neighbour, diagonals included;
     // from 0 to -1 it zooms to a 32 m box around the anchor, kept within the sliding box and up to 32 m past it.

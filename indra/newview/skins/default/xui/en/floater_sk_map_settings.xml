@@ -75,6 +75,57 @@
              tool_tip="What the map fits: -1 a 32 m box around you, 0 the region, 1 every loaded neighbouring region"
              top_pad="5"
              width="308" />
+            <radio_group
+             control_name="SKMapRegionCrossing"
+             follows="left|top"
+             height="72"
+             layout="topleft"
+             left="118"
+             name="sk_region_crossing"
+             tool_tip="How the region view moves between neighbouring regions"
+             top_pad="3"
+             width="198">
+                <radio_item
+                 height="18"
+                 label="Snapping"
+                 layout="topleft"
+                 left="0"
+                 name="sk_crossing_snap"
+                 tool_tip="Fits the region the camera is in, and jumps at a crossing"
+                 top="0"
+                 value="0"
+                 width="198" />
+                <radio_item
+                 height="18"
+                 label="Boundary"
+                 layout="topleft"
+                 left="0"
+                 name="sk_crossing_boundary"
+                 tool_tip="Reaches up to 32 m into a neighbour near its edge, and eases over at a crossing"
+                 top="18"
+                 value="1"
+                 width="198" />
+                <radio_item
+                 height="18"
+                 label="Boundary sliding"
+                 layout="topleft"
+                 left="0"
+                 name="sk_crossing_boundary_slide"
+                 tool_tip="Holds on the region, and slides to the next one's centre within 64 m of the border"
+                 top="36"
+                 value="2"
+                 width="198" />
+                <radio_item
+                 height="18"
+                 label="Linear sliding"
+                 layout="topleft"
+                 left="0"
+                 name="sk_crossing_linear"
+                 tool_tip="Slides all the way between neighbouring regions' centres"
+                 top="54"
+                 value="3"
+                 width="198" />
+            </radio_group>
             <slider
              control_name="SKMapZoomMeters"
              decimal_digits="0"

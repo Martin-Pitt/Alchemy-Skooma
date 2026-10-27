@@ -72,6 +72,7 @@ void SKFloaterMapSettings::updateModeControls()
     getChild<LLUICtrl>("sk_auto_center")->setEnabled(!region);
     getChild<LLUICtrl>("sk_zoom_meters")->setEnabled(!region);
     getChild<LLUICtrl>("sk_region_fit")->setEnabled(region);
+    getChild<LLUICtrl>("sk_region_crossing")->setEnabled(region);
 }
 
 void SKFloaterMapSettings::placeBesideMap()
