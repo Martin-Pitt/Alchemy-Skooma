@@ -3997,6 +3997,53 @@ function="World.EnvPreset"
              function="SK.ShowAirStatus" />
           </menu_item_call>
           <!-- </SK:Nexii> -->
+          <!-- <SK:Nexii> rooms: the spaces, wind and enclosure overlays and status -->
+          <menu_item_check
+           label="Rooms Spaces"
+           name="SKRoomsOverlaySpaces">
+            <menu_item_check.on_check
+             control="SKRoomsOverlaySpaces" />
+            <menu_item_check.on_click
+             function="ToggleControl"
+             parameter="SKRoomsOverlaySpaces" />
+          </menu_item_check>
+          <menu_item_check
+           label="Air by Space"
+           name="SKAirOverlay3">
+            <menu_item_check.on_check
+             function="SK.CheckAirOverlay"
+             parameter="3" />
+            <menu_item_check.on_click
+             function="SK.SetAirOverlay"
+             parameter="3" />
+          </menu_item_check>
+          <menu_item_check
+           label="Air by Indoorness"
+           name="SKAirOverlay7">
+            <menu_item_check.on_check
+             function="SK.CheckAirOverlay"
+             parameter="7" />
+            <menu_item_check.on_click
+             function="SK.SetAirOverlay"
+             parameter="7" />
+          </menu_item_check>
+          <menu_item_check
+           label="Rooms Wind"
+           name="SKRoomsOverlayWind">
+            <menu_item_check.on_check
+             control="SKRoomsOverlayWind" />
+            <menu_item_check.on_click
+             function="ToggleControl"
+             parameter="SKRoomsOverlayWind" />
+          </menu_item_check>
+          <menu_item_call
+           label="Rooms Status"
+           name="SKShowRoomsStatus"
+           tool_tip="Show the rooms passes' meshes, timings, spaces, rooms and wind slabs">
+            <menu_item_call.on_click
+             function="SK.ShowRoomsStatus" />
+          </menu_item_call>
+          <!-- </SK:Nexii> -->
           <menu_item_call
            label="Export Census"
            name="SKExportWorldCensus"
