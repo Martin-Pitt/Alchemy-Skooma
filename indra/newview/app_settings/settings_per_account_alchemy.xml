@@ -222,6 +222,129 @@
             <key>Value</key>
             <string></string>
         </map>
+        <!-- <SK:Nexii> Inventory Explorer -->
+        <key>SkoomaInvExplorerView</key>
+        <map>
+            <key>Comment</key>
+            <string>Inventory Explorer: the view a new tab opens in (0 Columns, 1 Icons, 2 List, 3 Gallery).</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>S32</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SkoomaInvExplorerSortKey</key>
+        <map>
+            <key>Comment</key>
+            <string>Inventory Explorer: the sort key (name, type, creator, acquired, perms, worn, description).</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>String</string>
+            <key>Value</key>
+            <string>acquired</string>
+        </map>
+        <key>SkoomaInvExplorerSortAscending</key>
+        <map>
+            <key>Comment</key>
+            <string>Inventory Explorer: sort ascending rather than descending.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SkoomaInvExplorerGroup</key>
+        <map>
+            <key>Comment</key>
+            <string>Inventory Explorer: what rows are grouped by (none, type, date, brand, perms, worn, creator).</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>String</string>
+            <key>Value</key>
+            <string>none</string>
+        </map>
+        <key>SkoomaInvExplorerSidebarWidth</key>
+        <map>
+            <key>Comment</key>
+            <string>Inventory Explorer: the sidebar's width in pixels.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>S32</string>
+            <key>Value</key>
+            <integer>220</integer>
+        </map>
+        <key>SkoomaInvExplorerDetailsWidth</key>
+        <map>
+            <key>Comment</key>
+            <string>Inventory Explorer: the details pane's width in pixels.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>S32</string>
+            <key>Value</key>
+            <integer>250</integer>
+        </map>
+        <key>SkoomaInvExplorerDetailsShown</key>
+        <map>
+            <key>Comment</key>
+            <string>Inventory Explorer: show the details pane.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SkoomaInvExplorerHiddenColumns</key>
+        <map>
+            <key>Comment</key>
+            <string>Inventory Explorer: the List view's hidden columns, by key.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>LLSD</string>
+            <key>Value</key>
+            <array />
+        </map>
+        <key>SkoomaInvExplorerSavedSearches</key>
+        <map>
+            <key>Comment</key>
+            <string>Inventory Explorer: searches saved to Favorites, each a map of query and folder (null for everywhere).</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>LLSD</string>
+            <key>Value</key>
+            <array />
+        </map>
+        <key>SkoomaInvExplorerRecentSearches</key>
+        <map>
+            <key>Comment</key>
+            <string>Inventory Explorer: the last searches that settled, newest first.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>LLSD</string>
+            <key>Value</key>
+            <array />
+        </map>
+        <key>SkoomaInvExplorerIconSize</key>
+        <map>
+            <key>Comment</key>
+            <string>Inventory Explorer: the Icons view's tile size in pixels (64 to 180).</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>S32</string>
+            <key>Value</key>
+            <integer>96</integer>
+        </map>
+        <!-- </SK:Nexii> -->
         <key>ALRejectFriendshipRequestsChanged</key>
         <map>
             <key>Comment</key>
