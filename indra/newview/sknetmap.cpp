@@ -81,8 +81,9 @@ namespace
 {
     constexpr S32 MOUSE_DRAG_SLOP = 2;
     constexpr F64 RECENTRE_S = 0.25;
-    // SKMapRegionMargin's range, as the settings slider has it, and one wheel notch of it.
-    constexpr F32 REGION_MARGIN_MIN = 0.05f, REGION_MARGIN_MAX = 1.f, REGION_MARGIN_NOTCH = 0.05f;
+    // SKMapRegionFit's range, as the settings slider has it, one wheel notch of it, and the side of its closest box.
+    constexpr F32 REGION_FIT_MIN = -1.f, REGION_FIT_MAX = 1.f, REGION_FIT_NOTCH = 0.05f;
+    constexpr F64 REGION_FIT_CLOSE = 32.0;
 
     LLPointer<LLViewerTexture> sShadowSprite;
 
@@ -575,10 +576,11 @@ const LLViewerRegion* SKNetMap::viewRegion()
 // static
 LLVector3d SKNetMap::regionFit(const LLViewerRegion* region, F32* span)
 {
-    static LLCachedControl<F32> margin(gSavedSettings, "SKMapRegionMargin", 0.1f);
+    static LLCachedControl<F32> fit(gSavedSettings, "SKMapRegionFit", 0.1f);
+    const F64 t = llclamp((F32)fit, REGION_FIT_MIN, REGION_FIT_MAX);
     const F64 width = region->getWidth();
-    const F64 reach = width * llclamp((F32)margin, REGION_MARGIN_MIN, REGION_MARGIN_MAX);
     const LLVector3d origin = region->getOriginGlobal();
+    const LLVector3d anchor = anchorGlobal();
     LLWorld* world = LLWorld::getInstance();
     LLVector3d centre = origin;
     // Which of the eight neighbours are loaded, probed at the middle of each.
@@ -591,7 +593,8 @@ LLVector3d SKNetMap::regionFit(const LLViewerRegion* region, F32* span)
             loaded[i][j] = (i != 1 || j != 1) && world->getRegionFromPosGlobal(probe);
         }
     }
-    // The box takes the margin into a side wherever a neighbour on it, diagonals included, is loaded.
+    // From 0 to 1 the region's box grows into every side with a loaded neighbour, diagonals included;
+    // from 0 to -1 it closes on a 32 m box around the anchor.
     F64 extent = 0.0;
     for (S32 axis : { VX, VY })
     {
@@ -602,8 +605,18 @@ LLVector3d SKNetMap::regionFit(const LLViewerRegion* region, F32* span)
             lo |= axis == VX ? loaded[0][k] : loaded[k][0];
             hi |= axis == VX ? loaded[2][k] : loaded[k][2];
         }
-        const F64 min = origin.mdV[axis] - (lo ? reach : 0.0);
-        const F64 max = origin.mdV[axis] + width + (hi ? reach : 0.0);
+        F64 min = origin.mdV[axis];
+        F64 max = origin.mdV[axis] + width;
+        if (t >= 0.0)
+        {
+            min -= lo ? t * width : 0.0;
+            max += hi ? t * width : 0.0;
+        }
+        else
+        {
+            min += (anchor.mdV[axis] - REGION_FIT_CLOSE * 0.5 - min) * -t;
+            max += (anchor.mdV[axis] + REGION_FIT_CLOSE * 0.5 - max) * -t;
+        }
         centre.mdV[axis] = (min + max) * 0.5;
         extent = llmax(extent, max - min);
     }
@@ -2078,11 +2091,11 @@ void SKNetMap::onPanesClosed()
 
 bool SKNetMap::handleScrollWheel(S32 x, S32 y, LLScrollDelta delta)
 {
-    // Positive clicks zoom out, as the classic map; in region mode they widen the region margin.
+    // Positive clicks zoom out, as the classic map; in region mode they widen the region fit.
     if (regionMode())
     {
-        const F32 margin = gSavedSettings.getF32("SKMapRegionMargin") + REGION_MARGIN_NOTCH * delta.mPrecise;
-        gSavedSettings.setF32("SKMapRegionMargin", llclamp(margin, REGION_MARGIN_MIN, REGION_MARGIN_MAX));
+        const F32 fit = gSavedSettings.getF32("SKMapRegionFit") + REGION_FIT_NOTCH * delta.mPrecise;
+        gSavedSettings.setF32("SKMapRegionFit", llclamp(ll_round(fit / REGION_FIT_NOTCH) * REGION_FIT_NOTCH, REGION_FIT_MIN, REGION_FIT_MAX));
         return true;
     }
     const F32 span = skmap::zoomByNotches(gSavedSettings.getF32("SKMapZoomMeters"), delta.mPrecise);

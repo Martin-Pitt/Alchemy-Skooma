@@ -6643,10 +6643,10 @@
             <key>Value</key>
             <integer>0</integer>
         </map>
-        <key>SKMapRegionMargin</key>
+        <key>SKMapRegionFit</key>
         <map>
             <key>Comment</key>
-            <string>In region view, how much of the neighbouring regions shows on each side, as a fraction of the region width (0.05 to 1, a whole region); sides with no region show none.</string>
+            <string>In region view, what the map fits: -1 a 32 m box around the camera (the avatar in mouselook or over the shoulder), 0 the region, 1 the region and every loaded neighbour; values between blend the boxes.</string>
             <key>Persist</key>
             <integer>1</integer>
             <key>Type</key>

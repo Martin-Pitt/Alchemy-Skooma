@@ -38,12 +38,21 @@ SKFloaterMapSettings::SKFloaterMapSettings(const LLSD& key)
 
 bool SKFloaterMapSettings::postBuild()
 {
-    // Region view is north up and fitted: the zoom and the ease back do not apply, the margin only does there.
+    // Region view is north up and fitted: the zoom and the ease back do not apply, the fit only does there.
     if (LLControlVariable* mode = gSavedSettings.getControl("SKMapViewMode"))
     {
         mModeConnection = mode->getSignal()->connect([this](LLControlVariable*, const LLSD&, const LLSD&) { updateModeControls(); });
     }
     updateModeControls();
+    // The fit snaps to the region alone, its middle, as the slider passes it.
+    getChild<LLUICtrl>("sk_region_fit")->setCommitCallback([](LLUICtrl* ctrl, const LLSD&) {
+        constexpr F32 SNAP = 0.06f;
+        if (const F32 fit = (F32)ctrl->getValue().asReal(); fit != 0.f && fabsf(fit) < SNAP)
+        {
+            ctrl->setValue(0.f);
+            gSavedSettings.setF32("SKMapRegionFit", 0.f);
+        }
+    });
     mHadSavedRect = !mRectControl.empty() && getControlGroup()->getRect(mRectControl).notEmpty();
     return true;
 }
@@ -62,7 +71,7 @@ void SKFloaterMapSettings::updateModeControls()
     const bool region = gSavedSettings.getU32("SKMapViewMode") == 1;
     getChild<LLUICtrl>("sk_auto_center")->setEnabled(!region);
     getChild<LLUICtrl>("sk_zoom_meters")->setEnabled(!region);
-    getChild<LLUICtrl>("sk_region_margin")->setEnabled(region);
+    getChild<LLUICtrl>("sk_region_fit")->setEnabled(region);
 }
 
 void SKFloaterMapSettings::placeBesideMap()
