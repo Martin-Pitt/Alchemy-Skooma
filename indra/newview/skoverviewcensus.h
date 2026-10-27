@@ -276,6 +276,7 @@ private:
         F32 mHeight = 0.f;
         skoverview::CensusClass mFixed = skoverview::NUM_CENSUS_CLASSES;
         bool mSurround = false;         ///< a surround (gatherSurrounds), not a near sculpt
+        bool mVoidOnly = false;         ///< a region wide or more: drawn only over no connected region
         U64 mKey = 0;                   ///< what its triangles were worked from: its volume, map and placement
     };
     void gatherSurrounds(const struct SKCensusSnapshot& snap);
@@ -297,6 +298,24 @@ private:
     std::vector<U32> mCoverLarge;                   ///< those spanning too many cells to file
     std::vector<skoverview::Seen> mCoverSeen;      ///< per snapshot record; UNKNOWN when not a candidate
     static constexpr F64 COVER_CELL_M = 16.0;
+    /// Each record visited once per coverInputFor, by stamp; indexed as the snapshot's records.
+    std::vector<U32> mCoverStamp;
+    U32 mCoverStampGen = 0;
+    /// The pool's content hash; coverInputFor's answers are kept while it holds, by part and box.
+    U64 mCoverVersion = 0;
+    struct CoverCached
+    {
+        U64 mBox = 0;
+        U64 mKey = 0;
+        U64 mVersion = 0;
+        U32 mFirst = 0;         ///< its candidates in mCoverCacheCands
+        U32 mCount = 0;
+        U32 mPass = 0;
+        bool mPending = false;
+    };
+    std::unordered_map<LLUUID, CoverCached> mCoverCache;
+    std::vector<const skworld::Record*> mCoverCacheCands;
+    static constexpr size_t COVER_CACHE_MAX = 1u << 22;
     /// The worker's verdicts kept across builds by part; each build reads the last landed map and makes the next.
     struct Verdict
     {
@@ -418,6 +437,11 @@ private:
     };
     static constexpr U32 SEEN_REVERIFY_PASSES = 32; ///< each kept verdict is worked again once in this many passes
     std::unordered_map<LLUUID, SeenEntry> mSeen;
+    /// The last walk's known looks by record address, sorted; its snapshot holds the records so no address is reused.
+    std::vector<std::pair<const skworld::Record*, skoverview::Seen>> mSeenByRecord;
+    std::shared_ptr<const struct SKCensusSnapshot> mSeenSnapshot;
+    static constexpr U32 SEEN_CARRY_PASSES = 8; ///< an unchanged record's look is worked again once in this many walks
+    skoverview::Seen carriedSeen(const skworld::Record* rec);
     std::unordered_map<LLUUID, U32> mSeenUnknown; ///< the parts whose look was not known yet, by the pass that asked
     U32 mSeenPass = 0;
     /// A sculpt's region-local triangles, kept while its volume, map and placement stay the same.
@@ -448,7 +472,7 @@ private:
     /// and turns parts that moved twice within the window restless, from their shape and place alone (moves).
     /// Returns how many record and linkset entries (R, C) of settled parts moved.
     U32 logChurn(std::vector<std::pair<U64, std::pair<char, LLUUID>>>& entries,
-                  std::vector<std::pair<U64, std::pair<char, LLUUID>>>& moves);
+                  std::vector<std::pair<U64, std::pair<char, LLUUID>>>& moves, const std::string& sculpt_moved);
     std::vector<std::pair<U64, std::pair<char, LLUUID>>> mLastEntries;
     std::vector<std::pair<U64, std::pair<char, LLUUID>>> mLastMoves;
     static constexpr F64 RESTLESS_WINDOW_S = 20.0;  ///< a second change within this turns a part restless

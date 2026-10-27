@@ -149,6 +149,10 @@ void SKOverviewCensus::release()
     mCache = std::make_shared<const Cache>();
     mCutTable.release();
     mLargeLogged.clear();
+    mSeenByRecord.clear();
+    mSeenSnapshot.reset();
+    mCoverCache.clear();
+    mCoverCacheCands.clear();
     mCoverLogged.clear();
     mUploadLogged.clear();
     mStamp = 0;
@@ -182,7 +186,8 @@ std::vector<LLUUID> SKOverviewCensus::restlessParts() const
 }
 
 U32 SKOverviewCensus::logChurn(std::vector<std::pair<U64, std::pair<char, LLUUID>>>& entries,
-                               std::vector<std::pair<U64, std::pair<char, LLUUID>>>& moves)
+                               std::vector<std::pair<U64, std::pair<char, LLUUID>>>& moves,
+                               const std::string& sculpt_moved)
 {
     LL_PROFILE_ZONE_SCOPED;
     // What came and went since the last rebuild, by kind (S sculpt, U surrounds, V void surround, R record, C a part's
@@ -193,27 +198,37 @@ U32 SKOverviewCensus::logChurn(std::vector<std::pair<U64, std::pair<char, LLUUID
     std::set_difference(mLastEntries.begin(), mLastEntries.end(), entries.begin(), entries.end(), std::back_inserter(gone));
     std::set_difference(entries.begin(), entries.end(), mLastEntries.begin(), mLastEntries.end(), std::back_inserter(came));
     const bool first = mLastEntries.empty();
-    mLastEntries = entries;
+    mLastEntries.swap(entries);
+    const size_t entry_count = mLastEntries.size();
     // Restlessness is judged on shape and place alone: an invisible part's look and cover churn as its neighbours load.
     std::sort(moves.begin(), moves.end());
     std::vector<std::pair<U64, std::pair<char, LLUUID>>> moved_from, moved_to;
     std::set_difference(mLastMoves.begin(), mLastMoves.end(), moves.begin(), moves.end(), std::back_inserter(moved_from));
     std::set_difference(moves.begin(), moves.end(), mLastMoves.begin(), mLastMoves.end(), std::back_inserter(moved_to));
-    mLastMoves = moves;
+    mLastMoves.swap(moves);
     if (first)
     {
         return 0;
     }
-    std::set<std::pair<char, LLUUID>> moved;
-    for (const auto& g : moved_from)
+    // The differences are few: sorted flat lists of who, searched, rather than node sets.
+    auto whoSorted = [](const std::vector<std::pair<U64, std::pair<char, LLUUID>>>& from)
     {
-        moved.insert(g.second);
-    }
+        std::vector<std::pair<char, LLUUID>> who;
+        who.reserve(from.size());
+        for (const auto& e : from)
+        {
+            who.push_back(e.second);
+        }
+        std::sort(who.begin(), who.end());
+        return who;
+    };
+    const std::vector<std::pair<char, LLUUID>> moved = whoSorted(moved_from);
     for (const auto& c : moved_to)
     {
         // A part moved again within the window turns restless: drawn live, out of the static buffers.
         const char kind = c.second.first;
-        if ((kind == 'R' || kind == 'S' || kind == 'V') && c.second.second.notNull() && moved.count(c.second))
+        if ((kind == 'R' || kind == 'S' || kind == 'V') && c.second.second.notNull() &&
+            std::binary_search(moved.begin(), moved.end(), c.second))
         {
             Restless& r = mRestless[c.second.second];
             r.mChanges = now - r.mLast <= RESTLESS_WINDOW_S ? r.mChanges + 1 : 1;
@@ -233,42 +248,65 @@ U32 SKOverviewCensus::logChurn(std::vector<std::pair<U64, std::pair<char, LLUUID
         const char kind = c.second.first;
         moved_records += (kind == 'R' || kind == 'C') && !isRestless(c.second.second) ? 1 : 0;
     }
-    std::map<char, U32> gone_n, came_n, changed_n;
-    std::map<char, std::vector<LLUUID>> changed;
-    std::set<std::pair<char, LLUUID>> went;
-    for (const auto& g : gone)
+    static const char KINDS[] = { 'S', 'U', 'V', 'R', 'C', 'L' };
+    auto kindIndex = [](char kind) -> S32
     {
-        ++gone_n[g.second.first];
-        went.insert(g.second);
-    }
-    for (const auto& c : came)
-    {
-        ++came_n[c.second.first];
-        if (went.count(c.second))
+        for (S32 k = 0; k < 6; ++k)
         {
-            ++changed_n[c.second.first];
-            std::vector<LLUUID>& ids = changed[c.second.first];
-            if (ids.size() < 4)
+            if (KINDS[k] == kind)
             {
-                ids.push_back(c.second.second);
+                return k;
             }
         }
-    }
-    std::string what;
-    for (const char kind : { 'S', 'U', 'V', 'R', 'C', 'L' })
+        return -1;
+    };
+    U32 gone_n[6] = {}, came_n[6] = {}, changed_n[6] = {};
+    LLUUID changed[6][4];
+    for (const auto& g : gone)
     {
-        if (!gone_n[kind] && !came_n[kind])
+        const S32 k = kindIndex(g.second.first);
+        if (k >= 0)
+        {
+            ++gone_n[k];
+        }
+    }
+    const std::vector<std::pair<char, LLUUID>> went = whoSorted(gone);
+    for (const auto& c : came)
+    {
+        const S32 k = kindIndex(c.second.first);
+        if (k < 0)
         {
             continue;
         }
-        what += llformat(" %c -%u +%u (%u changed", kind, gone_n[kind], came_n[kind], changed_n[kind]);
-        for (const LLUUID& id : changed[kind])
+        ++came_n[k];
+        if (std::binary_search(went.begin(), went.end(), c.second))
         {
-            what += " " + id.asString();
+            if (changed_n[k] < 4)
+            {
+                changed[k][changed_n[k]] = c.second.second;
+            }
+            ++changed_n[k];
+        }
+    }
+    std::string what;
+    for (S32 k = 0; k < 6; ++k)
+    {
+        if (!gone_n[k] && !came_n[k])
+        {
+            continue;
+        }
+        what += llformat(" %c -%u +%u (%u changed", KINDS[k], gone_n[k], came_n[k], changed_n[k]);
+        for (U32 j = 0; j < llmin(changed_n[k], 4u); ++j)
+        {
+            what += " " + changed[k][j].asString();
         }
         what += ")";
     }
-    LL_INFOS("SKOverview") << "census rebuild of " << entries.size() << " entries:" << what << LL_ENDL;
+    if (!sculpt_moved.empty())
+    {
+        what += " sculpt inputs:" + sculpt_moved;
+    }
+    LL_INFOS("SKOverview") << "census rebuild of " << entry_count << " entries:" << what << LL_ENDL;
     return moved_records;
 }
 
@@ -489,6 +527,27 @@ skoverview::Seen SKOverviewCensus::seenOf(const LLUUID& part)
     return seen;
 }
 
+skoverview::Seen SKOverviewCensus::carriedSeen(const skworld::Record* rec)
+{
+    // A record the census kept since the last walk keeps its look, but for a slice worked again each walk.
+    if ((hash_value(rec->mPart) + mSeenPass) % SEEN_CARRY_PASSES != 0)
+    {
+        const auto it = std::lower_bound(mSeenByRecord.begin(), mSeenByRecord.end(), rec,
+                                         [](const std::pair<const skworld::Record*, Seen>& a, const skworld::Record* b)
+                                         { return a.first < b; });
+        if (it != mSeenByRecord.end() && it->first == rec)
+        {
+            const auto seen = mSeen.find(rec->mPart);
+            if (seen != mSeen.end() && seen->second.mSeen == it->second)
+            {
+                seen->second.mPass = mSeenPass;
+                return it->second;
+            }
+        }
+    }
+    return seenOf(rec->mPart);
+}
+
 U8 SKOverviewCensus::lastSeen(const LLUUID& part) const
 {
     const auto it = mSeen.find(part);
@@ -509,6 +568,10 @@ void SKOverviewCensus::pruneSeen()
     {
         it = it->second != mSeenPass ? mSeenUnknown.erase(it) : std::next(it);
     }
+    for (auto it = mCoverCache.begin(); it != mCoverCache.end();)
+    {
+        it = it->second.mPass != mSeenPass ? mCoverCache.erase(it) : std::next(it);
+    }
     ++mSeenPass;
 }
 
@@ -519,41 +582,52 @@ SKOverviewCensus::CoverInput SKOverviewCensus::coverInputFor(const LLUUID& part,
     CoverInput in;
     in.mTest = true;
     const F64 reach = skoverview::InvisibleParams().mProxyTolerance;
-    std::vector<U32> nearby = mCoverLarge;
-    const S64 x0 = (S64)std::floor((lo.mdV[VX] - reach) / COVER_CELL_M);
-    const S64 x1 = (S64)std::floor((hi.mdV[VX] + reach) / COVER_CELL_M);
-    const S64 y0 = (S64)std::floor((lo.mdV[VY] - reach) / COVER_CELL_M);
-    const S64 y1 = (S64)std::floor((hi.mdV[VY] + reach) / COVER_CELL_M);
-    for (S64 x = x0; x <= x1; ++x)
+    // The grid holds the same records with the same looks as when this box was last asked: the same answer.
+    auto bitsOf = [](F64 v)
     {
-        for (S64 y = y0; y <= y1; ++y)
-        {
-            const U64 cell = ((U64)(U32)(S32)x << 32) | (U32)(S32)y;
-            auto it = std::lower_bound(mCoverGrid.begin(), mCoverGrid.end(), std::make_pair(cell, (U32)0));
-            for (; it != mCoverGrid.end() && it->first == cell; ++it)
-            {
-                nearby.push_back(it->second);
-            }
-        }
+        U64 bits;
+        std::memcpy(&bits, &v, sizeof(bits));
+        return bits;
+    };
+    U64 box = skoverview::scramble((U64)large ^ 0xb0c5u);
+    for (S32 a = 0; a < 3; ++a)
+    {
+        box = skoverview::scramble(box ^ bitsOf(lo.mdV[a]) ^ skoverview::scramble(bitsOf(hi.mdV[a])));
     }
-    std::sort(nearby.begin(), nearby.end());
-    nearby.erase(std::unique(nearby.begin(), nearby.end()), nearby.end());
-    U64 key = 0; // summed: the records follow the object list's order, which churns
-    for (const U32 index : nearby)
+    CoverCached& cached = mCoverCache[part];
+    cached.mPass = mSeenPass;
+    if (cached.mVersion == mCoverVersion && cached.mBox == box)
     {
+        in.mPending = cached.mPending;
+        in.mKey = cached.mKey;
+        in.mCandidates.assign(mCoverCacheCands.begin() + cached.mFirst, mCoverCacheCands.begin() + cached.mFirst + cached.mCount);
+        return in;
+    }
+    // Each record once, by a stamp per record rather than a sort of the cells' lists.
+    if (++mCoverStampGen == 0)
+    {
+        std::fill(mCoverStamp.begin(), mCoverStamp.end(), 0u);
+        mCoverStampGen = 1;
+    }
+    U64 key = 0; // summed: the records follow the object list's order, which churns
+    auto visit = [&](U32 index)
+    {
+        if (mCoverStamp[index] == mCoverStampGen)
+        {
+            return;
+        }
+        mCoverStamp[index] = mCoverStampGen;
         const skworld::Record& rec = *snap.mRecords[index];
         if (rec.mPart == part)
         {
-            continue;
+            return;
         }
-        bool meets = true;
-        for (S32 a = 0; a < 3 && meets; ++a)
+        for (S32 a = 0; a < 3; ++a)
         {
-            meets = rec.mMax.mdV[a] + reach >= lo.mdV[a] && rec.mMin.mdV[a] - reach <= hi.mdV[a];
-        }
-        if (!meets)
-        {
-            continue;
+            if (rec.mMax.mdV[a] + reach < lo.mdV[a] || rec.mMin.mdV[a] - reach > hi.mdV[a])
+            {
+                return;
+            }
         }
         const Seen seen = mCoverSeen[index];
         if (large)
@@ -565,7 +639,7 @@ SKOverviewCensus::CoverInput SKOverviewCensus::coverInputFor(const LLUUID& part,
             if (seen != Seen::VISIBLE || rec.mCollides || !rec.mPhysicsKnown ||
                 span + 2.0 * reach < skoverview::INVISIBLE_WALL_M)
             {
-                continue;
+                return;
             }
         }
         if (seen == Seen::UNKNOWN)
@@ -579,12 +653,38 @@ SKOverviewCensus::CoverInput SKOverviewCensus::coverInputFor(const LLUUID& part,
             in.mCandidates.push_back(&rec);
             key += skoverview::scramble(rec.mSignature ^ (rec.mPhysicsKnown ? 0x1u : 0x5u) ^ (rec.mCollides ? 0x0u : 0x2u));
         }
+    };
+    for (const U32 index : mCoverLarge)
+    {
+        visit(index);
+    }
+    const S64 x0 = (S64)std::floor((lo.mdV[VX] - reach) / COVER_CELL_M);
+    const S64 x1 = (S64)std::floor((hi.mdV[VX] + reach) / COVER_CELL_M);
+    const S64 y0 = (S64)std::floor((lo.mdV[VY] - reach) / COVER_CELL_M);
+    const S64 y1 = (S64)std::floor((hi.mdV[VY] + reach) / COVER_CELL_M);
+    for (S64 x = x0; x <= x1; ++x)
+    {
+        for (S64 y = y0; y <= y1; ++y)
+        {
+            const U64 cell = ((U64)(U32)(S32)x << 32) | (U32)(S32)y;
+            auto it = std::lower_bound(mCoverGrid.begin(), mCoverGrid.end(), std::make_pair(cell, (U32)0));
+            for (; it != mCoverGrid.end() && it->first == cell; ++it)
+            {
+                visit(it->second);
+            }
+        }
     }
     // The verdict does not depend on their order, the pieces the worker cuts do: by part, a surround after its twin.
     std::sort(in.mCandidates.begin(), in.mCandidates.end(),
               [](const skworld::Record* a, const skworld::Record* b)
               { return a->mPart < b->mPart || (a->mPart == b->mPart && a->mRole < b->mRole); });
     in.mKey = skoverview::scramble(key ^ part.getCRC32());
+    if (mCoverCacheCands.size() > COVER_CACHE_MAX)
+    {
+        return in; // full until the grid changes: asked again each walk, as before the cache
+    }
+    cached = { box, in.mKey, mCoverVersion, (U32)mCoverCacheCands.size(), (U32)in.mCandidates.size(), mSeenPass, in.mPending };
+    mCoverCacheCands.insert(mCoverCacheCands.end(), in.mCandidates.begin(), in.mCandidates.end());
     return in;
 }
 
@@ -785,6 +885,7 @@ bool SKOverviewCensus::update()
     mCoverSeen.assign(snap->mRecords.size(), Seen::UNKNOWN);
     {
         LL_PROFILE_ZONE_NAMED("sk overview census cover grid");
+        U64 version = 0; // summed over the pool: its order churns
         for (U32 index = 0; index < (U32)snap->mRecords.size(); ++index)
         {
             const skworld::Record* rec = snap->mRecords[index].get();
@@ -793,12 +894,23 @@ bool SKOverviewCensus::update()
             {
                 continue;
             }
-            mCoverSeen[index] = seenOf(rec->mPart);
+            mCoverSeen[index] = carriedSeen(rec);
             mUnknownLook |= mCoverSeen[index] == Seen::UNKNOWN;
             // A restless part rekeys every pass; it is drawn live and covers nothing in the static buffers.
             if (!skoverview::coverPoolRecord(*rec) || isRestless(rec->mPart))
             {
                 continue;
+            }
+            {
+                // What every cover answer reads of it: who, its box and look. Moved, the cached answers go.
+                U64 h = skoverview::scramble((U64)(uintptr_t)rec ^ rec->mSignature ^ ((U64)mCoverSeen[index] << 60) ^
+                                             ((U64)rec->mCollides << 56) ^ ((U64)rec->mPhysicsKnown << 57));
+                for (S32 a = 0; a < 3; ++a)
+                {
+                    h = skoverview::scramble(h ^ (U64)(S64)std::llround(rec->mMin.mdV[a] * 64.0) ^
+                                             ((U64)(S64)std::llround(rec->mMax.mdV[a] * 64.0) << 32));
+                }
+                version += h;
             }
             const S64 x0 = (S64)std::floor(rec->mMin.mdV[VX] / COVER_CELL_M);
             const S64 x1 = (S64)std::floor(rec->mMax.mdV[VX] / COVER_CELL_M);
@@ -818,8 +930,33 @@ bool SKOverviewCensus::update()
             }
         }
         std::sort(mCoverGrid.begin(), mCoverGrid.end());
+        // This walk's looks, by record, for the next to carry; the snapshot keeps the records' addresses theirs.
+        mSeenByRecord.clear();
+        for (U32 index = 0; index < (U32)snap->mRecords.size(); ++index)
+        {
+            if (mCoverSeen[index] != Seen::UNKNOWN)
+            {
+                mSeenByRecord.emplace_back(snap->mRecords[index].get(), mCoverSeen[index]);
+            }
+        }
+        std::sort(mSeenByRecord.begin(), mSeenByRecord.end(),
+                  [](const auto& a, const auto& b) { return a.first < b.first; });
+        mSeenSnapshot = snap;
+        if (version != mCoverVersion)
+        {
+            mCoverVersion = version;
+            mCoverCache.clear();
+            mCoverCacheCands.clear();
+        }
+        if (mCoverStamp.size() != snap->mRecords.size())
+        {
+            mCoverStamp.assign(snap->mRecords.size(), 0u);
+            mCoverStampGen = 0;
+        }
     }
     std::vector<CoverInput> sculpt_cover;
+    std::string sculpt_moved; // which inputs of which sculpts' entries moved since the last walk
+    U32 sculpt_moved_n = 0;
     {
         LL_PROFILE_ZONE_NAMED("sk overview census sculpts");
         for (const LLUUID& candidate : mSculptCandidates)
@@ -897,8 +1034,14 @@ bool SKOverviewCensus::update()
             sc.mTris = cached.mTris;
             sc.mHeight = cached.mHeight;
             sc.mKey = cached.mKey;
+            // A region wide or more is never terrain in a region (mesh is): the void's land alone, as a surround record is.
+            sc.mVoidOnly = llmax(scale.mV[VX], llmax(scale.mV[VY], scale.mV[VZ])) >= volume->getRegion()->getWidth();
             const Seen seen = seenOf(sc.mPart);
             mUnknownLook |= seen == Seen::UNKNOWN;
+            if (sc.mVoidOnly && seen != Seen::VISIBLE)
+            {
+                continue; // no cover test: only a visible one is land
+            }
             CoverInput cover;
             if (seen == Seen::INVISIBLE)
             {
@@ -926,10 +1069,10 @@ bool SKOverviewCensus::update()
                     what += was.mCover != now.mCover ? llformat(" cover key (%u->%u candidates)", (U32)was.mCandidates,
                                                                 (U32)now.mCandidates) : "";
                     what += was.mPending != now.mPending ? llformat(" pending %d->%d", was.mPending, now.mPending) : "";
-                    if (!what.empty())
+                    if (!what.empty() && sculpt_moved_n++ < 4)
                     {
-                        LL_DEBUGS("SKOverviewChurn") << "census sculpt " << sc.mPart << " root " << sc.mRoot << " entry moved:" << what
-                                                    << LL_ENDL;
+                        // On the rebuild line, so a capture names the input that re-signs it.
+                        sculpt_moved += " " + sc.mPart.asString().substr(0, 8) + what + (sc.mVoidOnly ? " void" : "") + ";";
                     }
                 }
                 mSculptInputs[sc.mPart] = now;
@@ -1122,7 +1265,7 @@ bool SKOverviewCensus::update()
     {
         return !mRegions.empty();
     }
-    const U32 missed = logChurn(entries, moves);
+    const U32 missed = logChurn(entries, moves, sculpt_moved);
     if (!announced && missed)
     {
         LL_WARNS("SKOverview") << "census full walk found " << missed << " record entries the stamp missed" << LL_ENDL;
@@ -1159,6 +1302,8 @@ bool SKOverviewCensus::update()
     job->mGroupCluster = std::move(group_cluster);
     job->mAnchors.resize(job->mRoots.size());
     std::vector<bool> anchored(job->mRoots.size(), false);
+    auto voidOnlyOf = [&job](size_t i)
+    { return i < job->mKept.size() ? (bool)job->mVoidOnly[i] : job->mSculpts[i - job->mKept.size()].mVoidOnly; };
     for (size_t i = 0; i < job->mGroupOf.size(); ++i)
     {
         const U32 group = job->mGroupOf[i];
@@ -1166,7 +1311,7 @@ bool SKOverviewCensus::update()
         {
             // A linkset is whole only when all of it is a surround in the void: a part's physics record beside its
             // surround record is land.
-            job->mAnchors[group].second = job->mAnchors[group].second && i < job->mKept.size() && job->mVoidOnly[i];
+            job->mAnchors[group].second = job->mAnchors[group].second && voidOnlyOf(i);
             continue; // once per linkset
         }
         anchored[group] = true;
@@ -1183,7 +1328,7 @@ bool SKOverviewCensus::update()
             const LLViewerObject* root = gObjectList.findObject(rec.mRoot);
             anchor = root && !root->isDead() ? root->getPositionGlobal() : (rec.mMin + rec.mMax) * 0.5;
         }
-        job->mAnchors[group] = { anchor, i < job->mKept.size() && job->mVoidOnly[i] };
+        job->mAnchors[group] = { anchor, voidOnlyOf(i) };
     }
     for (const LLViewerRegion* region : LLWorld::getInstance()->getRegionList())
     {
@@ -1313,7 +1458,7 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildLinksets(const J
             part_height = (F32)(rec.mMax.mdV[VZ] - rec.mMin.mdV[VZ]);
             fixed_class = job.mFixed[i];
         }
-        const bool in_void_only = i < kept.size() && job.mVoidOnly[i];
+        const bool in_void_only = i < kept.size() ? job.mVoidOnly[i] : sculpts[i - kept.size()].mVoidOnly;
         // An invisible part a visible neighbour that collides with nothing holds, or that sticks out of the colliding
         // ones by no more than a sliver, stands in for them; one sticking out further is extra, hatched where it does;
         // one with nothing visible near it is a barrier, hatched whole. While a neighbour's type or look is not known
@@ -1543,6 +1688,10 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildLinksets(const J
                 {
                     const RenderedPart& sc = sculpts[i - kept.size()];
                     key = skoverview::scramble(key ^ sc.mKey ^ ((U64)sc.mFixed << 48) ^ ((U64)sc.mSurround << 56));
+                    if (sc.mVoidOnly)
+                    {
+                        key = skoverview::scramble(key ^ regions_key ^ 0x766f6964ull);
+                    }
                 }
                 else
                 {
@@ -2343,6 +2492,7 @@ void SKOverviewCensus::gatherSurrounds(const SKCensusSnapshot& snap)
         part.mHeight = hi - lo;
         part.mTris = std::move(tris);
         part.mSurround = true;
+        part.mVoidOnly = size >= volume->getRegion()->getWidth(); // never in-region terrain at that size
         const LLVector3d centre = volume->getPositionGlobal();
         U64 h = 1469598103934665603ull;
         h = (h ^ part.mPart.getCRC32()) * 1099511628211ull;
