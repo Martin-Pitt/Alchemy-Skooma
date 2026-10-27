@@ -184,6 +184,7 @@ std::vector<LLUUID> SKOverviewCensus::restlessParts() const
 U32 SKOverviewCensus::logChurn(std::vector<std::pair<U64, std::pair<char, LLUUID>>>& entries,
                                std::vector<std::pair<U64, std::pair<char, LLUUID>>>& moves)
 {
+    LL_PROFILE_ZONE_SCOPED;
     // What came and went since the last rebuild, by kind (S sculpt, U surrounds, V void surround, R record, C a part's
     // linkset and cluster, L land): a part both gone and come is one that changed.
     const F64 now = LLFrameTimer::getUptimeSeconds().value();
@@ -512,8 +513,9 @@ void SKOverviewCensus::pruneSeen()
 }
 
 SKOverviewCensus::CoverInput SKOverviewCensus::coverInputFor(const LLUUID& part, const LLVector3d& lo, const LLVector3d& hi,
-                                                             const SKCensusSnapshot& snap)
+                                                             const SKCensusSnapshot& snap, bool large)
 {
+    LL_PROFILE_ZONE_SCOPED;
     CoverInput in;
     in.mTest = true;
     const F64 reach = skoverview::InvisibleParams().mProxyTolerance;
@@ -526,10 +528,11 @@ SKOverviewCensus::CoverInput SKOverviewCensus::coverInputFor(const LLUUID& part,
     {
         for (S64 y = y0; y <= y1; ++y)
         {
-            const auto it = mCoverGrid.find(((U64)(U32)(S32)x << 32) | (U32)(S32)y);
-            if (it != mCoverGrid.end())
+            const U64 cell = ((U64)(U32)(S32)x << 32) | (U32)(S32)y;
+            auto it = std::lower_bound(mCoverGrid.begin(), mCoverGrid.end(), std::make_pair(cell, (U32)0));
+            for (; it != mCoverGrid.end() && it->first == cell; ++it)
             {
-                nearby.insert(nearby.end(), it->second.begin(), it->second.end());
+                nearby.push_back(it->second);
             }
         }
     }
@@ -553,6 +556,18 @@ SKOverviewCensus::CoverInput SKOverviewCensus::coverInputFor(const LLUUID& part,
             continue;
         }
         const Seen seen = mCoverSeen[index];
+        if (large)
+        {
+            // A part over INVISIBLE_WALL_M is drawn only as a proxy, and only a visible shell as large as it can hold
+            // it: the rest of its neighbours, which churn, decide nothing it shows.
+            const LLVector3d extent = rec.mMax - rec.mMin;
+            const F64 span = llmax(extent.mdV[VX], llmax(extent.mdV[VY], extent.mdV[VZ]));
+            if (seen != Seen::VISIBLE || rec.mCollides || !rec.mPhysicsKnown ||
+                span + 2.0 * reach < skoverview::INVISIBLE_WALL_M)
+            {
+                continue;
+            }
+        }
         if (seen == Seen::UNKNOWN)
         {
             // Its look may yet show it: no hatch until it is known.
@@ -588,6 +603,9 @@ bool SKOverviewCensus::update()
             mVerdicts = built->mVerdicts;
             mCache = built->mCache;
             swapIn(*built);
+            // The landing frame carries the swap alone; the next walk waits a frame and the walk interval.
+            mWalkAt = llmax(mWalkAt, LLFrameTimer::getUptimeSeconds().value() + WALK_INTERVAL_S);
+            return !mRegions.empty();
         }
     }
     if (!SKWorldCensus::instanceExists())
@@ -606,15 +624,26 @@ bool SKOverviewCensus::update()
     if (snap->mStamp != mStamp)
     {
         mStamp = snap->mStamp;
-        // A sum, blind to order: the records follow the object list, which reorders whenever an object comes or goes.
+        // A sum of what each record holds, blind to order (the records follow the object list, which reorders) and to
+        // a rescan that replaces a record with an equal one.
         U64 records = 0;
         for (const skworld::RecordPtr& rec : snap->mRecords)
         {
-            if (rec && isRestless(rec->mPart))
+            if (!rec || isRestless(rec->mPart))
             {
                 continue; // re-signed every scan: watched at the passes the rest call for, not a reason for one
             }
-            records += skoverview::scramble((U64)(uintptr_t)rec.get());
+            U64 h = skoverview::scramble(rec->mSignature ^ ((U64)rec->mPart.getCRC32() << 32) ^ rec->mRoot.getCRC32());
+            h = skoverview::scramble(h ^ (U64)rec->mRole ^ ((U64)rec->mProvenance << 8) ^ ((U64)rec->mShape << 16) ^
+                                     ((U64)rec->mFeature << 24) ^ ((U64)rec->mExclude << 32) ^
+                                     ((U64)rec->mDynamic << 40) ^ ((U64)rec->mSolid << 41) ^ ((U64)rec->mCollides << 42) ^
+                                     ((U64)rec->mPhysicsKnown << 43) ^ ((U64)rec->mNavRole << 48));
+            for (S32 a = 0; a < 3; ++a)
+            {
+                h = skoverview::scramble(h ^ (U64)(S64)std::llround(rec->mMin.mdV[a] * 64.0) ^
+                                         ((U64)(S64)std::llround(rec->mMax.mdV[a] * 64.0) << 32));
+            }
+            records += h;
         }
         mRecordsChanged |= records != mRecordsKey;
         mRecordsKey = records;
@@ -669,14 +698,16 @@ bool SKOverviewCensus::update()
         gatherSurrounds(*snap);
         mRecordsChanged |= mSurroundsSig != before;
     }
-    if (!mRecordsChanged && !recheck && !sculpts_due && mBuilt)
+    if ((!mRecordsChanged && !recheck && !sculpts_due && mBuilt) || now < mWalkAt)
     {
         return !mRegions.empty();
     }
+    mWalkAt = now + WALK_INTERVAL_S;
     const bool announced = mRecordsChanged || !mBuilt; // a walk the census stamp did not ask for checks the stamp
     mRecordsChanged = false;
     mUnknownLook = false;
-    mRecheckAt = now + 2.0;
+    // Parts that stay unknown are asked less and less often; a walk that finds none starts the delay over.
+    mRecheckAt = now + mRecheckDelay;
     mSculptsAt = now + 5.0;
     // A restless part that has held still a while rejoins the census.
     for (auto it = mRestless.begin(); it != mRestless.end();)
@@ -752,160 +783,168 @@ bool SKOverviewCensus::update()
     mCoverGrid.clear();
     mCoverLarge.clear();
     mCoverSeen.assign(snap->mRecords.size(), Seen::UNKNOWN);
-    for (U32 index = 0; index < (U32)snap->mRecords.size(); ++index)
     {
-        const skworld::Record* rec = snap->mRecords[index].get();
-        skoverview::CensusClass fixed;
-        if (!rec || (!skoverview::coverPoolRecord(*rec) && !skoverview::keepRecord(*rec, fixed)))
+        LL_PROFILE_ZONE_NAMED("sk overview census cover grid");
+        for (U32 index = 0; index < (U32)snap->mRecords.size(); ++index)
         {
-            continue;
-        }
-        mCoverSeen[index] = seenOf(rec->mPart);
-        mUnknownLook |= mCoverSeen[index] == Seen::UNKNOWN;
-        // A restless part rekeys every pass; it is drawn live and covers nothing in the static buffers.
-        if (!skoverview::coverPoolRecord(*rec) || isRestless(rec->mPart))
-        {
-            continue;
-        }
-        const S64 x0 = (S64)std::floor(rec->mMin.mdV[VX] / COVER_CELL_M);
-        const S64 x1 = (S64)std::floor(rec->mMax.mdV[VX] / COVER_CELL_M);
-        const S64 y0 = (S64)std::floor(rec->mMin.mdV[VY] / COVER_CELL_M);
-        const S64 y1 = (S64)std::floor(rec->mMax.mdV[VY] / COVER_CELL_M);
-        if (x1 < x0 || y1 < y0 || (x1 - x0 + 1) * (y1 - y0 + 1) > 64)
-        {
-            mCoverLarge.push_back(index);
-            continue;
-        }
-        for (S64 x = x0; x <= x1; ++x)
-        {
-            for (S64 y = y0; y <= y1; ++y)
+            const skworld::Record* rec = snap->mRecords[index].get();
+            skoverview::CensusClass fixed;
+            if (!rec || (!skoverview::coverPoolRecord(*rec) && !skoverview::keepRecord(*rec, fixed)))
             {
-                mCoverGrid[((U64)(U32)(S32)x << 32) | (U32)(S32)y].push_back(index);
+                continue;
+            }
+            mCoverSeen[index] = seenOf(rec->mPart);
+            mUnknownLook |= mCoverSeen[index] == Seen::UNKNOWN;
+            // A restless part rekeys every pass; it is drawn live and covers nothing in the static buffers.
+            if (!skoverview::coverPoolRecord(*rec) || isRestless(rec->mPart))
+            {
+                continue;
+            }
+            const S64 x0 = (S64)std::floor(rec->mMin.mdV[VX] / COVER_CELL_M);
+            const S64 x1 = (S64)std::floor(rec->mMax.mdV[VX] / COVER_CELL_M);
+            const S64 y0 = (S64)std::floor(rec->mMin.mdV[VY] / COVER_CELL_M);
+            const S64 y1 = (S64)std::floor(rec->mMax.mdV[VY] / COVER_CELL_M);
+            if (x1 < x0 || y1 < y0 || (x1 - x0 + 1) * (y1 - y0 + 1) > 64)
+            {
+                mCoverLarge.push_back(index);
+                continue;
+            }
+            for (S64 x = x0; x <= x1; ++x)
+            {
+                for (S64 y = y0; y <= y1; ++y)
+                {
+                    mCoverGrid.emplace_back(((U64)(U32)(S32)x << 32) | (U32)(S32)y, index);
+                }
             }
         }
+        std::sort(mCoverGrid.begin(), mCoverGrid.end());
     }
     std::vector<CoverInput> sculpt_cover;
-    for (const LLUUID& candidate : mSculptCandidates)
     {
-        LLVOVolume* volume = dynamic_cast<LLVOVolume*>(gObjectList.findObject(candidate));
-        if (!isSculpt(volume))
+        LL_PROFILE_ZONE_NAMED("sk overview census sculpts");
+        for (const LLUUID& candidate : mSculptCandidates)
         {
-            continue;
-        }
-        sculpted.insert(volume->getID());
-        // A sculpt whose map has not loaded is a stretched placeholder sphere: nothing until it has.
-        if (volume->getVolume()->getSculptLevel() != 0)
-        {
-            mUnknownLook = true;
-            continue;
-        }
-        const LLVector3d centre = volume->getPositionGlobal();
-        const F64 reach = snap->mRange + volume->getScale().magVec();
-        if ((centre - snap->mCenter).magVec() > reach && (centre - snap->mCamera).magVec() > reach)
-        {
-            continue;
-        }
-        // Its triangles are worked again only when what they come from moved: the volume (recycled, so with its map
-        // and level), its placement in its region to 1/64 m, and the region.
-        const LLVolume* lod = volume->getVolume();
-        const LLVolumeParams& params = lod->getParams();
-        const LLVector3 pos = volume->getPositionRegion();
-        const LLQuaternion rot = volume->getRotationRegion();
-        const LLVector3 scale = volume->getScale();
-        // Not the volume itself: a LOD switch replaces it and the top-LOD shape does not change with it.
-        U64 key = skoverview::scramble(((U64)(U8)lod->getSculptLevel() << 56) ^ ((U64)params.getSculptType() << 48));
-        key = skoverview::scramble(key ^ hash_value(params.getSculptID()) ^ volume->getRegion()->getHandle());
-        for (S32 a = 0; a < 3; ++a)
-        {
-            key = skoverview::scramble(key ^ (U64)(S64)std::llround(pos.mV[a] * 64.f) ^
-                                       ((U64)(S64)std::llround(scale.mV[a] * 64.f) << 24) ^
-                                       ((U64)(S64)std::llround(rot.mQ[a] * 4096.f) << 48));
-        }
-        key = skoverview::scramble(key ^ (U64)(S64)std::llround(rot.mQ[VW] * 4096.f));
-        SculptEntry& cached = mSculptGeom[candidate];
-        cached.mPass = mSeenPass;
-        if (cached.mKey != key)
-        {
-            cached.mKey = key;
-            cached.mTris.reset();
-            SKShapeGeometry geom;
-            cached.mValid = skCensusRenderGeometry(volume, geom);
-            if (cached.mValid)
+            LLVOVolume* volume = dynamic_cast<LLVOVolume*>(gObjectList.findObject(candidate));
+            if (!isSculpt(volume))
             {
-                const LLVector3 region_agent = volume->getRegion()->getOriginAgent();
-                auto tris = std::make_shared<std::vector<LLVector3>>();
-                tris->reserve(geom.mTriangles.size());
-                F32 lo = 1e30f, hi = -1e30f;
-                for (const LLVector3& v : geom.mTriangles)
-                {
-                    const LLVector3 local = volume->volumePositionToAgent(v) - region_agent;
-                    lo = llmin(lo, local.mV[VZ]);
-                    hi = llmax(hi, local.mV[VZ]);
-                    tris->push_back(local);
-                }
-                cached.mHeight = hi - lo;
-                cached.mTris = std::move(tris);
+                continue;
             }
-        }
-        if (!cached.mValid)
-        {
-            continue;
-        }
-        RenderedPart sc;
-        sc.mPart = volume->getID();
-        sc.mOrigin = volume->getRegion()->getOriginGlobal();
-        sc.mAnchor = volume->getRootEdit()->getPositionGlobal();
-        sc.mRoot = volume->getRootEdit()->getID();
-        sc.mTris = cached.mTris;
-        sc.mHeight = cached.mHeight;
-        sc.mKey = cached.mKey;
-        const Seen seen = seenOf(sc.mPart);
-        mUnknownLook |= seen == Seen::UNKNOWN;
-        CoverInput cover;
-        if (seen == Seen::INVISIBLE)
-        {
-            // Judged by the visible records near it; the worker drops it when large and not a proxy.
-            const F64 reach = 0.5 * scale.magVec();
-            cover = coverInputFor(sc.mPart, centre - LLVector3d(reach, reach, reach), centre + LLVector3d(reach, reach, reach),
-                                  *snap);
-        }
-        const U64 centre_key = (U64)(S64)std::llround(centre.mdV[VX] * 64.0) ^
-                               ((U64)(S64)std::llround(centre.mdV[VY] * 64.0) << 21) ^
-                               ((U64)(S64)std::llround(centre.mdV[VZ] * 64.0) << 42);
-        {
-            // Which input of the entry moved since the last pass, while the census churns with nothing moving.
-            const SculptInputs now{ sc.mKey, (U64)sc.mTris->size(), centre_key, (U8)seen, cover.mKey, cover.mPending,
-                                    cover.mCandidates.size() };
-            const auto last = mSculptInputs.find(sc.mPart);
-            if (last != mSculptInputs.end())
+            sculpted.insert(volume->getID());
+            // A sculpt whose map has not loaded is a stretched placeholder sphere: nothing until it has.
+            if (volume->getVolume()->getSculptLevel() != 0)
             {
-                const SculptInputs& was = last->second;
-                std::string what;
-                what += was.mShape != now.mShape ? " shape" : "";
-                what += was.mTris != now.mTris ? llformat(" tris %llu->%llu", was.mTris, now.mTris) : "";
-                what += was.mCentre != now.mCentre ? " centre" : "";
-                what += was.mSeen != now.mSeen ? llformat(" seen %u->%u", (U32)was.mSeen, (U32)now.mSeen) : "";
-                what += was.mCover != now.mCover ? llformat(" cover key (%u->%u candidates)", (U32)was.mCandidates,
-                                                            (U32)now.mCandidates) : "";
-                what += was.mPending != now.mPending ? llformat(" pending %d->%d", was.mPending, now.mPending) : "";
-                if (!what.empty())
+                mUnknownLook = true;
+                continue;
+            }
+            const LLVector3d centre = volume->getPositionGlobal();
+            const F64 reach = snap->mRange + volume->getScale().magVec();
+            if ((centre - snap->mCenter).magVec() > reach && (centre - snap->mCamera).magVec() > reach)
+            {
+                continue;
+            }
+            // Its triangles are worked again only when what they come from moved: the volume (recycled, so with its map
+            // and level), its placement in its region to 1/64 m, and the region.
+            const LLVolume* lod = volume->getVolume();
+            const LLVolumeParams& params = lod->getParams();
+            const LLVector3 pos = volume->getPositionRegion();
+            const LLQuaternion rot = volume->getRotationRegion();
+            const LLVector3 scale = volume->getScale();
+            // Not the volume itself: a LOD switch replaces it and the top-LOD shape does not change with it.
+            U64 key = skoverview::scramble(((U64)(U8)lod->getSculptLevel() << 56) ^ ((U64)params.getSculptType() << 48));
+            key = skoverview::scramble(key ^ hash_value(params.getSculptID()) ^ volume->getRegion()->getHandle());
+            for (S32 a = 0; a < 3; ++a)
+            {
+                key = skoverview::scramble(key ^ (U64)(S64)std::llround(pos.mV[a] * 64.f) ^
+                                           ((U64)(S64)std::llround(scale.mV[a] * 64.f) << 24) ^
+                                           ((U64)(S64)std::llround(rot.mQ[a] * 4096.f) << 48));
+            }
+            key = skoverview::scramble(key ^ (U64)(S64)std::llround(rot.mQ[VW] * 4096.f));
+            SculptEntry& cached = mSculptGeom[candidate];
+            cached.mPass = mSeenPass;
+            if (cached.mKey != key)
+            {
+                cached.mKey = key;
+                cached.mTris.reset();
+                SKShapeGeometry geom;
+                cached.mValid = skCensusRenderGeometry(volume, geom);
+                if (cached.mValid)
                 {
-                    LL_INFOS("SKOverviewChurn") << "census sculpt " << sc.mPart << " root " << sc.mRoot << " entry moved:" << what
-                                                << LL_ENDL;
+                    const LLVector3 region_agent = volume->getRegion()->getOriginAgent();
+                    auto tris = std::make_shared<std::vector<LLVector3>>();
+                    tris->reserve(geom.mTriangles.size());
+                    LLVector3 lo(1e30f, 1e30f, 1e30f), hi(-1e30f, -1e30f, -1e30f);
+                    for (const LLVector3& v : geom.mTriangles)
+                    {
+                        const LLVector3 local = volume->volumePositionToAgent(v) - region_agent;
+                        update_min_max(lo, hi, local);
+                        tris->push_back(local);
+                    }
+                    const LLVector3 size = hi - lo;
+                    cached.mHeight = size.mV[VZ];
+                    cached.mSpan = llmax(size.mV[VX], llmax(size.mV[VY], size.mV[VZ]));
+                    cached.mTris = std::move(tris);
                 }
             }
-            mSculptInputs[sc.mPart] = now;
+            if (!cached.mValid)
+            {
+                continue;
+            }
+            RenderedPart sc;
+            sc.mPart = volume->getID();
+            sc.mOrigin = volume->getRegion()->getOriginGlobal();
+            sc.mAnchor = volume->getRootEdit()->getPositionGlobal();
+            sc.mRoot = volume->getRootEdit()->getID();
+            sc.mTris = cached.mTris;
+            sc.mHeight = cached.mHeight;
+            sc.mKey = cached.mKey;
+            const Seen seen = seenOf(sc.mPart);
+            mUnknownLook |= seen == Seen::UNKNOWN;
+            CoverInput cover;
+            if (seen == Seen::INVISIBLE)
+            {
+                // Judged by the visible records near it; the worker drops it when large and not a proxy.
+                const F64 reach = 0.5 * scale.magVec();
+                cover = coverInputFor(sc.mPart, centre - LLVector3d(reach, reach, reach), centre + LLVector3d(reach, reach, reach),
+                                      *snap, cached.mSpan > skoverview::INVISIBLE_WALL_M);
+            }
+            const U64 centre_key = (U64)(S64)std::llround(centre.mdV[VX] * 64.0) ^
+                                   ((U64)(S64)std::llround(centre.mdV[VY] * 64.0) << 21) ^
+                                   ((U64)(S64)std::llround(centre.mdV[VZ] * 64.0) << 42);
+            {
+                // Which input of the entry moved since the last pass, while the census churns with nothing moving.
+                const SculptInputs now{ sc.mKey, (U64)sc.mTris->size(), centre_key, (U8)seen, cover.mKey, cover.mPending,
+                                        cover.mCandidates.size() };
+                const auto last = mSculptInputs.find(sc.mPart);
+                if (last != mSculptInputs.end())
+                {
+                    const SculptInputs& was = last->second;
+                    std::string what;
+                    what += was.mShape != now.mShape ? " shape" : "";
+                    what += was.mTris != now.mTris ? llformat(" tris %llu->%llu", was.mTris, now.mTris) : "";
+                    what += was.mCentre != now.mCentre ? " centre" : "";
+                    what += was.mSeen != now.mSeen ? llformat(" seen %u->%u", (U32)was.mSeen, (U32)now.mSeen) : "";
+                    what += was.mCover != now.mCover ? llformat(" cover key (%u->%u candidates)", (U32)was.mCandidates,
+                                                                (U32)now.mCandidates) : "";
+                    what += was.mPending != now.mPending ? llformat(" pending %d->%d", was.mPending, now.mPending) : "";
+                    if (!what.empty())
+                    {
+                        LL_DEBUGS("SKOverviewChurn") << "census sculpt " << sc.mPart << " root " << sc.mRoot << " entry moved:" << what
+                                                    << LL_ENDL;
+                    }
+                }
+                mSculptInputs[sc.mPart] = now;
+            }
+            mix(sc.mPart.getCRC32());
+            mixLook(seen == Seen::INVISIBLE ? 0x7a11u ^ cover.mKey ^ (cover.mPending ? 0x9e11u : 0x0u) : 0x0u);
+            mix((U64)sc.mTris->size());
+            mix(centre_key);
+            if (endEntry('S', sc.mPart))
+            {
+                continue; // drawn live by the movers
+            }
+            sculpts.push_back(std::move(sc));
+            sculpt_cover.push_back(std::move(cover));
         }
-        mix(sc.mPart.getCRC32());
-        mixLook(seen == Seen::INVISIBLE ? 0x7a11u ^ cover.mKey ^ (cover.mPending ? 0x9e11u : 0x0u) : 0x0u);
-        mix((U64)sc.mTris->size());
-        mix(centre_key);
-        if (endEntry('S', sc.mPart))
-        {
-            continue; // drawn live by the movers
-        }
-        sculpts.push_back(std::move(sc));
-        sculpt_cover.push_back(std::move(cover));
     }
     for (auto it = mSculptGeom.begin(); it != mSculptGeom.end();)
     {
@@ -943,85 +982,91 @@ bool SKOverviewCensus::update()
     std::vector<CoverInput> kept_cover;
     kept.reserve(snap->mRecords.size());
     std::unordered_map<LLUUID, Seen> large_logged; // this pass's large parts, so dropped parts leave the log's memory
-    for (size_t index = 0; index < snap->mRecords.size(); ++index)
     {
-        const skworld::RecordPtr& rec = snap->mRecords[index];
-        skoverview::CensusClass fixed;
-        if (!rec || sculpted.count(rec->mPart))
+        LL_PROFILE_ZONE_NAMED("sk overview census records");
+        for (size_t index = 0; index < snap->mRecords.size(); ++index)
         {
-            continue;
-        }
-        if (rec->mRole == skworld::Role::SURROUND)
-        {
-            // A sim surround's rendered shape, in the void only: over land a phantom megasculpt would roof the region.
-            if (rendered.count(rec->mPart))
+            const skworld::RecordPtr& rec = snap->mRecords[index];
+            skoverview::CensusClass fixed;
+            if (!rec || sculpted.count(rec->mPart))
             {
                 continue;
             }
-            CoverInput cover;
-            if (seenOf(rec->mPart) == Seen::INVISIBLE)
+            if (rec->mRole == skworld::Role::SURROUND)
             {
-                cover = coverInputFor(rec->mPart, rec->mMin, rec->mMax, *snap);
-                mixLook(0x7a11u ^ cover.mKey ^ (cover.mPending ? 0x9e11u : 0x0u));
+                // A sim surround's rendered shape, in the void only: over land a phantom megasculpt would roof the region.
+                if (rendered.count(rec->mPart))
+                {
+                    continue;
+                }
+                CoverInput cover;
+                if (seenOf(rec->mPart) == Seen::INVISIBLE)
+                {
+                    const LLVector3d extent = rec->mMax - rec->mMin;
+                    cover = coverInputFor(rec->mPart, rec->mMin, rec->mMax, *snap,
+                                          llmax(extent.mdV[VX], llmax(extent.mdV[VY], extent.mdV[VZ])) > skoverview::INVISIBLE_WALL_M);
+                    mixLook(0x7a11u ^ cover.mKey ^ (cover.mPending ? 0x9e11u : 0x0u));
+                }
+                kept.push_back(rec.get());
+                fixed_classes.push_back(skoverview::NUM_CENSUS_CLASSES);
+                void_only.push_back(true);
+                kept_cover.push_back(std::move(cover));
+                mix(rec->mSignature);
+                mix(rec->mPart.getCRC32());
+                endEntry('V', rec->mPart);
+                continue;
             }
+            if (!skoverview::keepRecord(*rec, fixed))
+            {
+                continue;
+            }
+            const LLVector3d extent = rec->mMax - rec->mMin;
+            const bool large = llmax(extent.mdV[VX], llmax(extent.mdV[VY], extent.mdV[VZ])) > skoverview::INVISIBLE_WALL_M;
+            const Seen seen = mCoverSeen[index]; // asked with the cover candidates
+            const bool transparent = seen == Seen::INVISIBLE;
+            if (large)
+            {
+                // Once per part and verdict: the large ones are those that cover the view when misjudged.
+                large_logged[rec->mPart] = seen;
+                const auto it = mLargeLogged.find(rec->mPart);
+                if (it == mLargeLogged.end() || it->second != seen)
+                {
+                    std::string report; // only when logged: formatting every face of every large part each pass is not free
+                    partSeen(rec->mPart, &report);
+                    LL_INFOS("SKOverview") << "large census part " << rec->mPart << " " << extent << " m: "
+                                           << (seen == Seen::INVISIBLE ? "invisible, drawn only if it stands in" : seen == Seen::VISIBLE ? "visible, drawn" : "not known yet, drawn")
+                                           << " " << report << LL_ENDL;
+                }
+            }
+            // An invisible part keeps its class: the worker tells a stand-in on visible geometry from a barrier to hatch.
+            CoverInput cover;
+            if (transparent)
+            {
+                cover = coverInputFor(rec->mPart, rec->mMin, rec->mMax, *snap, large);
+            }
+            mixLook(transparent ? 0x7a11u ^ cover.mKey ^ (cover.mPending ? 0x9e11u : 0x0u) : 0x0u);
             kept.push_back(rec.get());
-            fixed_classes.push_back(skoverview::NUM_CENSUS_CLASSES);
-            void_only.push_back(true);
+            fixed_classes.push_back(fixed);
+            void_only.push_back(false);
             kept_cover.push_back(std::move(cover));
             mix(rec->mSignature);
             mix(rec->mPart.getCRC32());
-            endEntry('V', rec->mPart);
-            continue;
-        }
-        if (!skoverview::keepRecord(*rec, fixed))
-        {
-            continue;
-        }
-        const LLVector3d extent = rec->mMax - rec->mMin;
-        const bool large = llmax(extent.mdV[VX], llmax(extent.mdV[VY], extent.mdV[VZ])) > skoverview::INVISIBLE_WALL_M;
-        const Seen seen = mCoverSeen[index]; // asked with the cover candidates
-        const bool transparent = seen == Seen::INVISIBLE;
-        if (large)
-        {
-            // Once per part and verdict: the large ones are those that cover the view when misjudged.
-            large_logged[rec->mPart] = seen;
-            const auto it = mLargeLogged.find(rec->mPart);
-            if (it == mLargeLogged.end() || it->second != seen)
+            mix((U64)(S64)std::llround(rec->mMin.mdV[VX] * 64.0) ^ ((U64)(S64)std::llround(rec->mMin.mdV[VY] * 64.0) << 21) ^
+                ((U64)(S64)std::llround(rec->mMin.mdV[VZ] * 64.0) << 42));
+            mix((U64)rec->mFeature | ((U64)rec->mExclude << 8));
+            if (endEntry('R', rec->mPart))
             {
-                std::string report; // only when logged: formatting every face of every large part each pass is not free
-                partSeen(rec->mPart, &report);
-                LL_INFOS("SKOverview") << "large census part " << rec->mPart << " " << extent << " m: "
-                                       << (seen == Seen::INVISIBLE ? "invisible, drawn only if it stands in" : seen == Seen::VISIBLE ? "visible, drawn" : "not known yet, drawn")
-                                       << " " << report << LL_ENDL;
+                // Drawn live by the movers.
+                kept.pop_back();
+                fixed_classes.pop_back();
+                void_only.pop_back();
+                kept_cover.pop_back();
             }
-        }
-        // An invisible part keeps its class: the worker tells a stand-in on visible geometry from a barrier to hatch.
-        CoverInput cover;
-        if (transparent)
-        {
-            cover = coverInputFor(rec->mPart, rec->mMin, rec->mMax, *snap);
-        }
-        mixLook(transparent ? 0x7a11u ^ cover.mKey ^ (cover.mPending ? 0x9e11u : 0x0u) : 0x0u);
-        kept.push_back(rec.get());
-        fixed_classes.push_back(fixed);
-        void_only.push_back(false);
-        kept_cover.push_back(std::move(cover));
-        mix(rec->mSignature);
-        mix(rec->mPart.getCRC32());
-        mix((U64)(S64)std::llround(rec->mMin.mdV[VX] * 64.0) ^ ((U64)(S64)std::llround(rec->mMin.mdV[VY] * 64.0) << 21) ^
-            ((U64)(S64)std::llround(rec->mMin.mdV[VZ] * 64.0) << 42));
-        mix((U64)rec->mFeature | ((U64)rec->mExclude << 8));
-        if (endEntry('R', rec->mPart))
-        {
-            // Drawn live by the movers.
-            kept.pop_back();
-            fixed_classes.pop_back();
-            void_only.pop_back();
-            kept_cover.pop_back();
         }
     }
     mLargeLogged = std::move(large_logged);
     pruneSeen();
+    mRecheckDelay = mUnknownLook ? llmin(mRecheckDelay * 2.0, RECHECK_MAX_S) : RECHECK_MIN_S;
     // Each linkset is a group, so the tactical cut can take a building's linksets and leave its neighbours whole: a
     // cluster joins whatever touches, often a whole block. A level still keeps whole clusters, by the heights of the
     // cluster a linkset is in.
