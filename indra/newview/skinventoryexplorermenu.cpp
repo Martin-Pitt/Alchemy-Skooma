@@ -170,7 +170,7 @@ static void on_delete(const LLSD& notification, const LLSD& response, const uuid
                 gInventory.collectDescendents(id, cats, items, false);
                 for (LLViewerInventoryItem* item : items)
                 {
-                    if (get_is_item_worn(item))
+                    if (!item->getIsLinkType() && get_is_item_worn(item))
                     {
                         worn.push_back(item->getUUID());
                         cat_has_worn = true;
@@ -189,7 +189,8 @@ static void on_delete(const LLSD& notification, const LLSD& response, const uuid
         LLViewerInventoryItem* item = gInventory.getItem(id);
         if (item)
         {
-            if (has_worn && get_is_item_worn(item))
+            // A link is only removed; its target stays worn.
+            if (has_worn && !item->getIsLinkType() && get_is_item_worn(item))
             {
                 worn.push_back(id);
                 item_deletion_list.push_back(id);
@@ -203,16 +204,17 @@ static void on_delete(const LLSD& notification, const LLSD& response, const uuid
 
     if (!worn.empty())
     {
+        // Moved to Trash once detached, as LLInventoryAction::onItemsRemovalConfirmation does.
         LLAppearanceMgr::instance().removeItemsFromAvatar(worn,
                                                           [item_deletion_list, cat_deletion_list]()
                                                           {
                                                               for (const LLUUID& id : item_deletion_list)
                                                               {
-                                                                  remove_inventory_item(id, nullptr);
+                                                                  gInventory.removeItem(id);
                                                               }
                                                               for (const LLUUID& id : cat_deletion_list)
                                                               {
-                                                                  remove_inventory_category(id, nullptr);
+                                                                  gInventory.removeCategory(id);
                                                               }
                                                           });
     }
