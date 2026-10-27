@@ -70,6 +70,8 @@ public:
     F64 flycamScale(const LLVector3d& eye) const override;
     /// RLVa hides the world map; the camera locks are the modal view's.
     bool rlvRestricted() const override;
+    /// The map stands in for the minimap, as the tactical overview does.
+    std::vector<std::string> coveredFloaters() const override { return { "mini_map" }; }
 
     /// Moves the camera and its focus across the map until the focus is over the agent.
     void recentre();
