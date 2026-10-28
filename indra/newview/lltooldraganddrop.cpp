@@ -64,6 +64,8 @@
 #include "llvoavatarself.h"
 #include "llworld.h"
 #include "llpanelface.h"
+#include "skdragfeedback.h" // <SK:Nexii> Drag feedback
+#include "skdragverdict.h" // <SK:Nexii> Drag feedback
 // [RLVa:KB] - Checked: 2011-05-22 (RLVa-1.3.1)
 #include "rlvactions.h"
 #include "rlvhandler.h"
@@ -364,6 +366,7 @@ void LLToolDragAndDrop::beginDrag(EDragAndDropType type,
     setMouseCapture( true );
     LLToolMgr::getInstance()->setTransientTool( this );
     mCursor = UI_CURSOR_NO;
+    SKDragVerdict::beginDrag(mCargoTypes, mCargoIDs, mSource, mSourceID); // <SK:Nexii> Drag feedback: the ghost
     if ((mCargoTypes[0] == DAD_CATEGORY)
        && ((mSource == SOURCE_AGENT) || (mSource == SOURCE_LIBRARY)))
     {
@@ -431,6 +434,7 @@ void LLToolDragAndDrop::beginMultiDrag(
     setMouseCapture( true );
     LLToolMgr::getInstance()->setTransientTool( this );
     mCursor = UI_CURSOR_NO;
+    SKDragVerdict::beginDrag(mCargoTypes, mCargoIDs, mSource, mSourceID); // <SK:Nexii> Drag feedback: the ghost
     if ((mSource == SOURCE_AGENT) || (mSource == SOURCE_LIBRARY))
     {
         // find categories (i.e. inventory folders) in the cargo.
@@ -489,6 +493,11 @@ void LLToolDragAndDrop::onMouseCaptureLost()
     mSourceID.setNull();
     mObjectID.setNull();
     mCustomMsg.clear();
+    // <SK:Nexii> Drag feedback: a lost capture ends the drag's tooltip and feedback too
+    mToolTipMsg.clear();
+    LLDragFeedback::end();
+    SKDragVerdict::clearWorld();
+    // </SK:Nexii>
 }
 
 bool LLToolDragAndDrop::handleMouseUp( S32 x, S32 y, MASK mask )
@@ -569,6 +578,7 @@ ECursorType LLToolDragAndDrop::acceptanceToCursor( EAcceptance acceptance )
         llassert( false );
     }
 
+    mCursor = SKDragVerdict::cursorFor(acceptance, mCursor, (U32)mCargoIDs.size()); // <SK:Nexii> Drag feedback: copies show the copy cursor
     return mCursor;
 }
 
@@ -579,6 +589,7 @@ bool LLToolDragAndDrop::handleHover( S32 x, S32 y, MASK mask )
 
     ECursorType cursor = acceptanceToCursor(acceptance);
     gViewerWindow->getWindow()->setCursor( cursor );
+    SKDragVerdict::compose(acceptance, mToolTipMsg, mSource, getCargoCount()); // <SK:Nexii> Drag feedback: the chip
 
     LL_DEBUGS("UserInput") << "hover handled by LLToolDragAndDrop" << LL_ENDL;
     return true;
@@ -599,6 +610,12 @@ bool LLToolDragAndDrop::handleKey(KEY key, MASK mask)
 bool LLToolDragAndDrop::handleToolTip(S32 x, S32 y, MASK mask)
 {
     const F32 DRAG_N_DROP_TOOLTIP_DELAY = 0.1f;
+    // <SK:Nexii> Drag feedback: the chip says it, no tooltip besides
+    if (LLDragFeedback::shown())
+    {
+        return true;
+    }
+    // </SK:Nexii>
     if (!mToolTipMsg.empty())
     {
         LLToolTipMgr::instance().unblockToolTips();
@@ -631,6 +648,7 @@ void LLToolDragAndDrop::dragOrDrop( S32 x, S32 y, MASK mask, bool drop,
     LLViewerInventoryCategory* cat;
 
     mToolTipMsg.clear();
+    LLDragFeedback::beginPass(); // <SK:Nexii> Drag feedback
 
     // Increment the operation id for every drop
     if (drop)
@@ -834,6 +852,7 @@ void LLToolDragAndDrop::dragOrDrop3D( S32 x, S32 y, MASK mask, bool drop, EAccep
     }
 
     *acceptance = mLastAccept;
+    SKDragVerdict::reportWorld(); // <SK:Nexii> Drag feedback: the last pick's verdict
 }
 
 void LLToolDragAndDrop::pickCallback(const LLPickInfo& pick_info)
@@ -851,6 +870,7 @@ void LLToolDragAndDrop::pick(const LLPickInfo& pick_info)
 
     LLViewerObject* hit_obj = pick_info.getObject();
     LLSelectMgr::getInstance()->unhighlightAll();
+    SKDragVerdict::clearWorld(); // <SK:Nexii> Drag feedback
     bool highlight_object = false;
     // Treat attachments as part of the avatar they are attached to.
     if (hit_obj != NULL)
@@ -938,6 +958,18 @@ void LLToolDragAndDrop::pick(const LLPickInfo& pick_info)
         }
     }
 
+    // <SK:Nexii> Drag feedback: the world's verdict, and its mark instead of the highlight
+    if (!mCargoIDs.empty())
+    {
+        SKDragVerdict::pickWorld(mCargoTypes[0], target, hit_obj, hit_face, pick_info.mKeyMask, mLastAccept);
+        LLDragFeedback::beginPass();
+        SKDragVerdict::reportWorld();
+    }
+    if (LLDragFeedback::shown())
+    {
+        highlight_object = false;
+    }
+    // </SK:Nexii>
     if (highlight_object && mLastAccept > ACCEPT_NO_LOCKED)
     {
         // if any item being dragged will be applied to the object under our cursor
@@ -2347,9 +2379,11 @@ bool LLToolDragAndDrop::handleGiveDragAndDrop(LLUUID dest_agent, LLUUID session_
     if ( (RlvActions::isRlvEnabled()) && (!RlvActions::canGiveInventory(dest_agent)) )
     {
         *accept = ACCEPT_NO_LOCKED;
+        LLDragFeedback::refuse("", true); // <SK:Nexii> Drag feedback: RLVa refuses quietly
         return true;
     }
 // [/RLVa:KB]
+    LLDragFeedback::report(EDragAction::Give, SKDragVerdict::avatarName(dest_agent)); // <SK:Nexii> Drag feedback
 
     // check the type
     switch(cargo_type)
