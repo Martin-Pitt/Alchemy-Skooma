@@ -188,10 +188,14 @@
     <string name="sort_up">&#8593;</string>
     <string name="sort_down">&#8595;</string>
     <string name="group_label">Group: [GROUP]</string>
+    <string name="drag_move">Move to [FOLDER]</string>
+    <string name="drag_link">&#8618; Link into [FOLDER]</string>
+    <string name="drag_add_favorites">Add to Favorites</string>
     <string name="drag_only_folders">Only folders go in Favorites</string>
     <string name="drag_library_readonly">The Library is read-only</string>
     <string name="drag_into_itself">Can't move a folder into itself</string>
     <string name="drag_system_folders">System folders don't move</string>
+    <string name="drag_library_copies">Library items copy, not move</string>
     <string name="drag_favorites_unavailable">Favorites need the inventory service, which is unavailable</string>
     <string name="drag_links_off">Inventory linking is turned off</string>
     <string name="drag_link_own_only">Only your own inventory can be linked</string>
