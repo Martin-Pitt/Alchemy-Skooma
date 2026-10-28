@@ -36,6 +36,7 @@
 #include "llui.h"
 #include "llviewertexture.h"
 #include "llviewertexturelist.h"
+#include "skinventorydetails.h"
 
 static LLDefaultChildRegistry::Register<SKInventoryIconsView> r_sk_inventory_icons("sk_inventory_icons");
 
@@ -403,13 +404,22 @@ void SKInventoryIconsView::drawTile(const SKInventoryRow& row, const LLRect& rec
         // The picture at its own aspect, letterboxed in the square.
         S32 w = art;
         S32 h = art;
-        if (row.mAspect > 1.f)
+        F32 aspect = row.mAspect;
+        // A texture without an aspect tail shows at its own width:height once its size is known.
+        S32 tail_w = 1;
+        S32 tail_h = 1;
+        if (row.mImageIsAsset && !SKInventoryDetails::aspectOf(row.mDescription, tail_w, tail_h) && texture->getFullWidth() > 0
+            && texture->getFullHeight() > 0)
         {
-            h = llmax(1, (S32)(art / row.mAspect));
+            aspect = (F32)texture->getFullWidth() / (F32)texture->getFullHeight();
         }
-        else if (row.mAspect < 1.f)
+        if (aspect > 1.f)
         {
-            w = llmax(1, (S32)(art * row.mAspect));
+            h = llmax(1, (S32)(art / aspect));
+        }
+        else if (aspect < 1.f)
+        {
+            w = llmax(1, (S32)(art * aspect));
         }
         gl_draw_scaled_image(art_rect.getCenterX() - w / 2, art_rect.getCenterY() - h / 2, w, h, texture);
         badge_type = !row.mImageIsAsset && row.mAssetType != LLAssetType::AT_TEXTURE && row.mAssetType != LLAssetType::AT_MATERIAL;
