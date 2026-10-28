@@ -46,7 +46,9 @@ function Show-Help {
     Say '                      --base <branch>  --tests (configure a local tests tree)'
     Say '  new <area>/<x> --amend [--base <feature>]  amend-<area>/<x>: a follow-up that lands'
     Say '                      into an existing feature (default feature-<area>/<x>), never a PR alone'
-    Say '  sync                fetch upstream -> develop -> main + every worktree'
+    Say '  sync [name|.]       fetch upstream -> develop -> main, then that branch and its chain'
+    Say '                      all  every active worktree (never the default)'
+    Say '                      each synced branch takes develop''s submodule pointers'
     Say '  check [name|.]      validate a branch before it lands (--full: re-check merges main has)'
     Say '  integrate <name|.>  land one branch along its chain (amend -> feature -> trunk -> main)'
     Say '                      all  land every ready worktree branch (never the default)'
@@ -1253,7 +1255,37 @@ function Invoke-New {
 
 # ---------------------------------------------------------------------- sync
 
-function Invoke-Sync { param([switch]$Quiet, [switch]$NextOnly)
+# Submodules are upstream's: vcpkg's pointer moves with indra/vcpkg.json's builtin-baseline,
+# and a pointer left behind it fails configure ("no version database entry"). A branch whose
+# pointer differs from develop's takes develop's.
+function Get-StaleSubmodules { param([string]$branch)
+    $paths = (G config --blob develop:.gitmodules --get-regexp '^submodule\..*\.path$') -split "`n" |
+        Where-Object { $_ } | ForEach-Object { ($_ -split '\s+', 2)[1] }
+    foreach ($p in $paths) {
+        $want = G rev-parse --verify --quiet "develop:$p"
+        $have = G rev-parse --verify --quiet "${branch}:$p"
+        if ($want -and $have -and $want -ne $have) { $p }
+    }
+}
+
+function Sync-SubmodulePointers { param([string]$path, [string]$branch)
+    $stale = @(Get-StaleSubmodules $branch)
+    if (-not $stale) { return }
+    foreach ($p in $stale) {
+        $want = G rev-parse "develop:$p"
+        $null = GG -C $path update-index --cacheinfo "160000,$want,$p"
+        if ($script:GitExit -ne 0) { Warn "could not set $p in $branch"; return }
+    }
+    $null = GG -C $path commit --quiet -m "Match $($stale -join ', ') to develop"
+    if ($script:GitExit -ne 0) { Warn "could not commit the submodule pointers in $branch"; return }
+    Info "  $branch now has develop's $($stale -join ', ')"
+}
+
+function Invoke-Sync { param([switch]$Quiet, [switch]$NextOnly, [string]$Scope = '')
+    # Merging into every worktree is never the default: it leaves other sessions' branches
+    # mid-merge on a conflict. A bare sync takes develop and main; a name adds that branch's chain.
+    $scopeBranch = ''
+    if ($Scope -and $Scope -ne 'all') { $scopeBranch = Resolve-Target $Scope }
     if (-not $Quiet) { Say '' ; Say 'Fetching upstream...' }
 
     $null = G fetch upstream --prune
@@ -1309,7 +1341,14 @@ Either upstream rewrote history, or a commit was made on develop.
     }
     $ordered = @()
     if ($byBranch.ContainsKey('main')) { $ordered += 'main' }
-    $ordered += Sort-ByDependency @($byBranch.Keys | Where-Object { $_ -ne 'main' -and (Get-Role $_) })
+    $inScope = @($byBranch.Keys | Where-Object { $_ -ne 'main' -and (Get-Role $_) })
+    if ($Scope -ne 'all') {
+        $chain = @()
+        $x = $scopeBranch
+        while ($x -and $x -ne 'develop' -and $x -ne 'main' -and $chain.Count -lt 16) { $chain += $x; $x = Get-Base $x }
+        $inScope = @($inScope | Where-Object { $chain -contains $_ })
+    }
+    $ordered += Sort-ByDependency $inScope
 
     foreach ($branch in $ordered) {
         $w = $byBranch[$branch]
@@ -1318,22 +1357,26 @@ Either upstream rewrote history, or a commit was made on develop.
 
         $mergeFrom = if ($branch -eq 'main') { 'develop' } else { Get-Base $branch }
         $behind = (Get-Counts $branch $mergeFrom).Ahead
-        if ($behind -eq 0) { continue }
+        $stale = @(Get-StaleSubmodules $branch)
+        if ($behind -eq 0 -and $stale.Count -eq 0) { continue }
 
         $op = Test-MidOperation $w.Path
         if ($op) { $skipped += "$branch (mid-$op)"; continue }
         if (Test-Dirty $w.Path) { $skipped += "$branch (uncommitted changes)"; continue }
 
-        Info "merging $mergeFrom into $branch ($behind commits)"
-        $out = GG -C $w.Path merge --no-edit $mergeFrom
-        if ($script:GitExit -ne 0) {
-            Say ''
-            Warn "CONFLICT merging $mergeFrom into $branch"
-            Info "  resolve in: $($w.Path)"
-            Info '  then: git commit  and re-run  git skooma sync'
-            Say $out
-            return
+        if ($behind -gt 0) {
+            Info "merging $mergeFrom into $branch ($behind commits)"
+            $out = GG -C $w.Path merge --no-edit $mergeFrom
+            if ($script:GitExit -ne 0) {
+                Say ''
+                Warn "CONFLICT merging $mergeFrom into $branch"
+                Info "  resolve in: $($w.Path)"
+                Info "  then: git commit  and re-run  git skooma sync $(if ($Scope) { $Scope })"
+                Say $out
+                return
+            }
         }
+        Sync-SubmodulePointers $w.Path $branch
         $null = G -C $w.Path submodule update --init --recursive
         Good "$branch updated"
     }
@@ -2021,7 +2064,7 @@ switch ($Command.ToLowerInvariant()) {
     'new'       { Invoke-New }
     'wt-new'    { $script:Porcelain = $true; Invoke-New }
     'wt-setup'  { $p = if ($Rest) { $Rest[0] } else { $Here }; Invoke-WtSetup $p }
-    'sync'      { Invoke-Sync }
+    'sync'      { Invoke-Sync -Scope $(if ($Rest -and $Rest[0] -notlike '--*') { $Rest[0] } else { '' }) }
     'check' {
         # `check` with no argument from a feature worktree checks that branch; from the
         # main checkout (or anywhere not on a Skooma branch) it checks every worktree,
