@@ -154,6 +154,10 @@ public:
     virtual void setReverbPreset(const std::string& /*name*/) {}
     virtual void setReverbSendScale(float /*scale*/) {}
 
+    // <SK:Nexii> Audio preview control: whether sources can start partway and be re-seeked.
+    virtual bool canSeek() const { return false; }
+    // </SK:Nexii>
+
     // The reverb-wet scalar maps to three different DSP scales across
     // backends — FAudio writes it as a matrix coefficient on top of
     // F3DAudio's dsp.ReverbLevel; OpenAL writes it directly to AL_
@@ -210,6 +214,10 @@ public:
                       const LLUUID& source_object = LLUUID::null,
                       const LLUUID& audio_source_id = LLUUID::null);
     void triggerSound(const SoundData& soundData);
+
+    // <SK:Nexii> Audio preview control: stops local playback of matching triggered sounds, sending nothing.
+    void stopTriggeredSounds(const LLUUID& audio_uuid, const LLUUID& owner_id);
+    // </SK:Nexii>
 
     bool preloadSound(const LLUUID &id);
 
@@ -469,6 +477,16 @@ public:
     // takes mute into account to preserve previous id if nessesary
     bool play(const LLUUID &audio_id);
 
+    // <SK:Nexii> Audio preview control: start offset_seconds in, kept until the sound starts if it is still loading.
+    bool play(const LLUUID& audio_id, F32 offset_seconds);
+    // Moves a playing source to seconds in, or sets where it will start; false where the engine cannot seek.
+    bool seek(F32 seconds);
+    // Seconds into the playing sound, or a negative value when not playing or the backend cannot tell.
+    F32 getPlayPosition() const;
+    bool isTrigger() const { return mIsTrigger; }
+    const LLUUID& getOwnerID() const { return mOwnerID; }
+    // </SK:Nexii>
+
     bool hasPendingPreloads() const;    // Has preloads that haven't been done yet
 
     friend class LLAudioEngine;
@@ -496,6 +514,7 @@ protected:
     LLUUID          mLogID;
     LLUUID          mSourceID;
     bool            mIsTrigger;
+    F32             mStartOffset = 0.f; // <SK:Nexii> Audio preview control
 
     //LLAudioSource *mSyncMasterp;  // If we're a slave, the source that we're synced to.
     LLAudioChannel  *mChannelp;     // If we're currently playing back, this is the channel that we're assigned to.
@@ -585,6 +604,12 @@ protected:
     virtual bool updateBuffer(); // Check to see if the buffer associated with the source changed, and update if necessary.
     virtual void update3DPosition() = 0;
     virtual void updateLoop() = 0; // Update your loop/completion status, for use by queueing/syncing.
+
+    // <SK:Nexii> Audio preview control: moves the playing sound to seconds in, clamped to its length.
+    virtual bool seek(F32 /*seconds*/) { return false; }
+    // Seconds into the playing sound, negative where unknown.
+    virtual F32 getPlayPosition() { return -1.f; }
+    // </SK:Nexii>
 protected:
     LLAudioSource   *mCurrentSourcep;
     LLAudioBuffer   *mCurrentBufferp;
