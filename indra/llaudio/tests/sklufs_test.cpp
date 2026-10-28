@@ -40,45 +40,22 @@ namespace
 {
     const U32 TEST_SAMPLE_RATE = 44100;
 
-    // The two K-weighting biquads, evaluated on the unit circle. Duplicated
-    // from sklufs.cpp deliberately: the point is to check the meter against
-    // the transfer function the coefficients describe, so the expected values
-    // come from frequency-domain arithmetic rather than from a second copy of
-    // the time-domain filter.
-    F64 biquad_gain(F64 b0, F64 b1, F64 b2, F64 a1, F64 a2, F64 freq, F64 fs)
+    // The meter's K-weighting evaluated on the unit circle, so steady sines can be checked against
+    // frequency-domain arithmetic; the coefficients themselves are checked against BS.1770-4's table.
+    F64 biquad_gain(const F64 c[5], F64 freq, F64 fs)
     {
         const std::complex<F64> z = std::exp(std::complex<F64>(0.0, -2.0 * F_PI * freq / fs));
-        const std::complex<F64> num = b0 + b1 * z + b2 * z * z;
-        const std::complex<F64> den = 1.0 + a1 * z + a2 * z * z;
+        const std::complex<F64> num = c[0] + c[1] * z + c[2] * z * z;
+        const std::complex<F64> den = 1.0 + c[3] * z + c[4] * z * z;
         return std::abs(num / den);
     }
 
     F64 k_weighting_gain(F64 freq, F64 fs)
     {
-        F64 shelf;
-        {
-            const F64 f0 = 1681.974450955533;
-            const F64 G  = 3.999843853973347;
-            const F64 Q  = 0.7071752369554196;
-            const F64 K  = tan(F_PI * f0 / fs);
-            const F64 Vh = pow(10.0, G / 20.0);
-            const F64 Vb = pow(Vh, 0.4996667741545416);
-            const F64 a0 = 1.0 + K / Q + K * K;
-            shelf = biquad_gain((Vh + Vb * K / Q + K * K) / a0, 2.0 * (K * K - Vh) / a0,
-                                (Vh - Vb * K / Q + K * K) / a0, 2.0 * (K * K - 1.0) / a0,
-                                (1.0 - K / Q + K * K) / a0, freq, fs);
-        }
-
-        F64 highpass;
-        {
-            const F64 f0 = 38.13547087602444;
-            const F64 Q  = 0.5003270373238773;
-            const F64 K  = tan(F_PI * f0 / fs);
-            const F64 a0 = 1.0 + K / Q + K * K;
-            highpass = biquad_gain(1.0, -2.0, 1.0, 2.0 * (K * K - 1.0) / a0, (1.0 - K / Q + K * K) / a0, freq, fs);
-        }
-
-        return shelf * highpass;
+        F64 shelf[5];
+        F64 highpass[5];
+        SKLufsMeter::kWeighting(fs, shelf, highpass);
+        return biquad_gain(shelf, freq, fs) * biquad_gain(highpass, freq, fs);
     }
 
     // Loudness a steady sine of this peak amplitude must measure, per BS.1770:
@@ -105,6 +82,71 @@ namespace
             }
         }
         return out;
+    }
+
+    F32 measure_mono(const std::vector<F64>& x, U32 fs = TEST_SAMPLE_RATE)
+    {
+        std::vector<S16> pcm(x.size());
+        for (size_t i = 0; i < x.size(); ++i)
+        {
+            pcm[i] = (S16)llclamp((S32)ll_round((F32)(x[i] * 32768.0)), -32768, 32767);
+        }
+        SKLufsMeter meter(fs, 1);
+        meter.feed(pcm.data(), pcm.size());
+        return meter.close();
+    }
+
+    // 60 ms 2 kHz click with a 12 ms decay.
+    std::vector<F64> make_click()
+    {
+        const size_t n = TEST_SAMPLE_RATE * 6 / 100;
+        std::vector<F64> x(n);
+        for (size_t i = 0; i < n; ++i)
+        {
+            const F64 t = (F64)i / TEST_SAMPLE_RATE;
+            x[i] = 0.9 * sin(2.0 * F_PI * 2000.0 * t) * exp(-t / 0.012);
+        }
+        return x;
+    }
+
+    // 300 ms decaying noise hit, from a fixed-seed generator so the test is deterministic.
+    std::vector<F64> make_hit()
+    {
+        const size_t n = TEST_SAMPLE_RATE * 3 / 10;
+        std::vector<F64> x(n);
+        U32 state = 1;
+        for (size_t i = 0; i < n; ++i)
+        {
+            F64 sum = 0.0;
+            for (int k = 0; k < 12; ++k)
+            {
+                state = state * 1664525u + 1013904223u;
+                sum += (F64)state / 4294967296.0;
+            }
+            x[i] = (sum - 6.0) * 0.3 * exp(-(F64)i / (TEST_SAMPLE_RATE * 0.08));
+        }
+        return x;
+    }
+
+    // Spread of the reading as the sound is padded with trailing silence from 0.1 s to 4 s.
+    F32 padding_spread(const std::vector<F64>& sound)
+    {
+        F32 lo = 1000.f;
+        F32 hi = -1000.f;
+        for (int step = 0; step <= 195; ++step)
+        {
+            const size_t total = (size_t)(TEST_SAMPLE_RATE * (0.1 + 0.02 * step));
+            if (total < sound.size())
+            {
+                continue;
+            }
+            std::vector<F64> x(sound);
+            x.resize(total, 0.0);
+            const F32 l = measure_mono(x);
+            lo = llmin(lo, l);
+            hi = llmax(hi, l);
+        }
+        return hi - lo;
     }
 
     // Minimal RIFF/WAVE writer, so the on-disk path can be exercised without
@@ -167,8 +209,7 @@ namespace tut
     tut::sklufs_t tut_sklufs("SKLufsMeter");
 
     // Steady sines land on the analytic prediction, across frequency and
-    // channel count. Tolerance covers filter warm-up and the discarded
-    // partial block at the tail.
+    // channel count. Tolerance covers filter warm-up.
     template<> template<>
     void sklufs_object_t::test<1>()
     {
@@ -201,8 +242,8 @@ namespace tut
         ensure_approximately_equals("1 kHz at 0.1 peak measures -23 LUFS", meter.close(), -23.f, 6);
     }
 
-    // Most SL sounds are shorter than one 400 ms gating block. They must still
-    // measure, not report silence.
+    // A clip shorter than one 400 ms block is padded to one: 200 ms of a
+    // -23 LUFS tone reads 3 LU under it, not silence.
     template<> template<>
     void sklufs_object_t::test<3>()
     {
@@ -212,7 +253,7 @@ namespace tut
 
         const F32 lufs = meter.close();
         ensure("short clip is not reported as silence", lufs > SK_LUFS_SILENCE);
-        ensure_approximately_equals("short clip measures correctly", lufs, -23.f, 5);
+        ensure_approximately_equals("short clip reads its energy over 400 ms", lufs, -23.f - 3.01f, 4);
     }
 
     // The decode loop feeds whatever chunking ov_read() hands back, so chunked
@@ -276,8 +317,7 @@ namespace tut
                                     powf(10.f, SK_LUFS_MAX_CUT_DB / 20.f), 16);
     }
 
-    // Applying the solved gain re-measures on target: the round trip the
-    // upload path depends on.
+    // Applying the solved gain re-measures on target.
     template<> template<>
     void sklufs_object_t::test<7>()
     {
@@ -287,15 +327,18 @@ namespace tut
         before.feed(pcm.data(), pcm.size());
         const F32 measured = before.close();
 
-        sk_lufs_apply_gain16(pcm.data(), pcm.size(), sk_lufs_gain_for_target(measured, -18.f));
+        const F32 gain = sk_lufs_gain_for_target(measured, -18.f);
+        for (S16& v : pcm)
+        {
+            v = (S16)llclamp((S32)ll_round((F32)v * gain), -32768, 32767);
+        }
 
         SKLufsMeter after(TEST_SAMPLE_RATE, 1);
         after.feed(pcm.data(), pcm.size());
         ensure_approximately_equals("gain round trip lands on target", after.close(), -18.f, 6);
     }
 
-    // The on-disk path, used both for cache hits and for pre-upload
-    // measurement, including the mono downmix the vorbis encoder performs.
+    // The on-disk path the cache hits use, measured as the header describes the file.
     template<> template<>
     void sklufs_object_t::test<8>()
     {
@@ -309,18 +352,13 @@ namespace tut
         ensure("measured mono wav from disk", sk_lufs_measure_wav_file(path, lufs, peak));
         ensure_approximately_equals("mono wav measures -23 LUFS", lufs, -23.f, 6);
 
-        // Identical channels: as stereo the powers sum (+3 LU); downmixed they
-        // average back to the mono level.
+        // Identical channels: as stereo the powers sum (+3 LU).
         std::vector<S16> stereo = make_sine(1000.0, 0.1, 2, 1.0);
         ensure("wrote stereo test wav", write_wav(path, stereo, 2, TEST_SAMPLE_RATE));
 
         F32 as_stereo = SK_LUFS_SILENCE;
-        ensure("measured stereo wav", sk_lufs_measure_wav_file(path, as_stereo, peak, false));
+        ensure("measured stereo wav", sk_lufs_measure_wav_file(path, as_stereo, peak));
         ensure_approximately_equals("correlated stereo is 3 LU hotter", as_stereo, -20.f, 6);
-
-        F32 downmixed = SK_LUFS_SILENCE;
-        ensure("measured stereo wav downmixed", sk_lufs_measure_wav_file(path, downmixed, peak, true));
-        ensure_approximately_equals("downmix matches the mono level", downmixed, -23.f, 6);
 
         std::remove(path.c_str());
 
@@ -399,19 +437,136 @@ namespace tut
         ensure_equals("silence peaks at zero", quiet.peak(), 0.f);
     }
 
-    // A padded one-shot -- too short for a 400 ms gating block -- must measure
-    // its own level, not the average including its trailing silence. The
-    // whole-clip mean this replaced read about 4.8 dB low here.
+    // A 100 ms burst reads its energy over one 400 ms block however much
+    // silence follows it, within the 3 s momentary tier.
     template<> template<>
     void sklufs_object_t::test<12>()
     {
-        std::vector<S16> clip(TEST_SAMPLE_RATE * 3 / 10, 0);        // 300 ms
-        std::vector<S16> burst = make_sine(1000.0, 0.1, 1, 0.1);    // 100 ms at -23 LUFS
-        std::copy(burst.begin(), burst.end(), clip.begin());
+        std::vector<S16> burst = make_sine(1000.0, 0.1, 1, 0.1);
+        for (F64 seconds : { 0.1, 0.3, 1.0, 2.0, 3.0 })
+        {
+            std::vector<S16> clip(burst);
+            clip.resize((size_t)(TEST_SAMPLE_RATE * seconds), 0);
+            SKLufsMeter meter(TEST_SAMPLE_RATE, 1);
+            meter.feed(clip.data(), clip.size());
+            std::string what = llformat("100 ms burst padded to %.1f s", seconds);
+            ensure_approximately_equals(what.c_str(), meter.close(), -23.f - 6.02f, 4);
+        }
+    }
+
+    // The K-weighting at 48 kHz is BS.1770-4's published table.
+    template<> template<>
+    void sklufs_object_t::test<13>()
+    {
+        const F64 shelf_ref[5] = { 1.53512485958697, -2.69169618940638, 1.19839281085285,
+                                   -1.69065929318241, 0.73248077421585 };
+        const F64 highpass_ref[5] = { 1.0, -2.0, 1.0, -1.99004745483398, 0.99007225036621 };
+
+        F64 shelf[5];
+        F64 highpass[5];
+        SKLufsMeter::kWeighting(48000.0, shelf, highpass);
+        for (int i = 0; i < 5; ++i)
+        {
+            ensure(llformat("shelf coefficient %d", i), fabs(shelf[i] - shelf_ref[i]) < 1e-12);
+            ensure(llformat("high pass coefficient %d", i), fabs(highpass[i] - highpass_ref[i]) < 1e-12);
+        }
+    }
+
+    // EBU Tech 3341 cases 1 and 2: 20 s of stereo 1 kHz at -23 and -33 dBFS.
+    template<> template<>
+    void sklufs_object_t::test<14>()
+    {
+        for (F64 dbfs : { -23.0, -33.0 })
+        {
+            std::vector<S16> pcm = make_sine(1000.0, pow(10.0, dbfs / 20.0), 2, 20.0, 48000);
+            SKLufsMeter meter(48000, 2);
+            meter.feed(pcm.data(), pcm.size() / 2);
+            const F32 lufs = meter.close();
+            ensure(llformat("Tech 3341 at %.0f dBFS reads %.2f", dbfs, lufs), fabs(lufs - (F32)dbfs) <= 0.1f);
+        }
+    }
+
+    // Padding a click or a hit with silence from 0.1 s to 4 s moves its reading by at most 0.5 LU.
+    template<> template<>
+    void sklufs_object_t::test<15>()
+    {
+        const F32 click = padding_spread(make_click());
+        ensure(llformat("60 ms click padding spread %.2f LU", click), click <= 0.5f);
+
+        const F32 hit = padding_spread(make_hit());
+        ensure(llformat("300 ms hit padding spread %.2f LU", hit), hit <= 0.5f);
+    }
+
+    // A hit ending inside the unfinished last sub-block still counts, wherever it sits.
+    template<> template<>
+    void sklufs_object_t::test<16>()
+    {
+        const size_t total = TEST_SAMPLE_RATE * 35 / 100;
+        const size_t hit_len = TEST_SAMPLE_RATE * 5 / 100;
+        F32 lo = 1000.f;
+        F32 hi = -1000.f;
+        for (size_t offset = 0; offset + hit_len <= total; offset += TEST_SAMPLE_RATE / 100)
+        {
+            std::vector<F64> x(total, 0.0);
+            for (size_t i = 0; i < hit_len; ++i)
+            {
+                x[offset + i] = 0.5 * sin(2.0 * F_PI * 1000.0 * (F64)i / TEST_SAMPLE_RATE);
+            }
+            const F32 l = measure_mono(x);
+            lo = llmin(lo, l);
+            hi = llmax(hi, l);
+        }
+        ensure(llformat("hit is never lost to the tail (lowest %.2f)", lo), lo > -30.f);
+        ensure(llformat("tail position swing %.2f LU", hi - lo), hi - lo <= 0.5f);
+    }
+
+    // Content wholly under the -70 LUFS absolute gate reads silent in every tier.
+    template<> template<>
+    void sklufs_object_t::test<17>()
+    {
+        for (F64 seconds : { 0.2, 2.0, 6.0, 12.0 })
+        {
+            std::vector<S16> pcm = make_sine(1000.0, pow(10.0, -76.0 / 20.0), 1, seconds);
+            SKLufsMeter meter(TEST_SAMPLE_RATE, 1);
+            meter.feed(pcm.data(), pcm.size());
+            ensure_equals(llformat("sub-gate %.1f s clip is silent", seconds).c_str(), meter.close(), SK_LUFS_SILENCE);
+        }
+    }
+
+    // A long clip with one loud block over a quiet bed reads no lower than 8 LU under that block.
+    template<> template<>
+    void sklufs_object_t::test<18>()
+    {
+        std::vector<S16> pcm = make_sine(1000.0, 0.1, 1, 0.4);
+        std::vector<S16> bed = make_sine(1000.0, 0.008, 1, 19.6); // about -45 LUFS, inside the relative gate
+        pcm.insert(pcm.end(), bed.begin(), bed.end());
 
         SKLufsMeter meter(TEST_SAMPLE_RATE, 1);
-        meter.feed(clip.data(), clip.size());
-        ensure_approximately_equals("padded one-shot measures its own level",
-                                    meter.close(), -23.f, 5);
+        meter.feed(pcm.data(), pcm.size());
+        ensure_approximately_equals("integrated is floored at M - 8", meter.close(), -23.f - 8.f, 3);
+    }
+
+    // The solver scales by strength, then applies the tolerance, then the clamps, then the peak cap.
+    template<> template<>
+    void sklufs_object_t::test<19>()
+    {
+        // 0.8 LU off at half strength is 0.4 dB, inside the tolerance.
+        ensure_equals("strength applies before the tolerance",
+                      sk_lufs_gain_for_target(-23.8f, -23.f, 0.5f), 1.f);
+        // 1.2 LU off at half strength is 0.6 dB, outside it.
+        ensure_approximately_equals("just past the tolerance is corrected",
+                                    sk_lufs_gain_for_target(-24.2f, -23.f, 0.5f), powf(10.f, 0.6f / 20.f), 12);
+        // 40 LU at half strength is 20 dB, clamped to the boost limit.
+        ensure_approximately_equals("strength applies before the clamp",
+                                    sk_lufs_gain_for_target(-63.f, -23.f, 0.5f),
+                                    powf(10.f, SK_LUFS_MAX_BOOST_DB / 20.f), 12);
+        // The clamped 12 dB boost then meets a peak with 6 dB of headroom.
+        const F32 peak = SK_LUFS_PEAK_CEILING * powf(10.f, -6.f / 20.f);
+        ensure_approximately_equals("the peak cap applies after the clamp",
+                                    sk_lufs_gain_for_target(-63.f, -23.f, 0.5f, peak), powf(10.f, 6.f / 20.f), 12);
+        // 50 LU hot at half strength is -25 dB, clamped to the cut limit, which no peak caps.
+        ensure_approximately_equals("cuts clamp and ignore the cap",
+                                    sk_lufs_gain_for_target(27.f, -23.f, 0.5f, 1.f),
+                                    powf(10.f, SK_LUFS_MAX_CUT_DB / 20.f), 12);
     }
 }
