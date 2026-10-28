@@ -3,7 +3,7 @@
 **Humans: read [DEVELOPING.md](DEVELOPING.md) instead** — this file is the terse reference.
 
 Compact index. Full rationale, algorithms and open items: `doc/skooma/.workflow-design.md` (untracked).
-Status (2026-10-18): **implemented and in daily use.** `git skooma status|new|wt-setup|sync|check|integrate|trunk|undo|retire|build|test|clean|bootstrap` works; `develop` is hook-protected; agent stubs and the Claude worktree redirect are installed. `main` is deliberately left **unlocked** for direct commits during fork setup. Deferred: `publish`, CI. Reviews: `.review-verdict.md`. Docs backed up to `V:\Scratch\skooma-docs`.
+Status (2026-10-18): **implemented and in daily use.** `git skooma status|new|wt-setup|sync|check|integrate|trunk|undo|retire|park|unpark|build|test|clean|bootstrap` works; `develop` is hook-protected; agent stubs and the Claude worktree redirect are installed. `main` is deliberately left **unlocked** for direct commits during fork setup. Deferred: `publish`, CI. Reviews: `.review-verdict.md`. Docs backed up to `V:\Scratch\skooma-docs`.
 
 ## Remotes
 
@@ -29,6 +29,7 @@ Status (2026-10-18): **implemented and in daily use.** `git skooma status|new|wt
 | `amend-<area>/<x>` | A follow-up to an existing feature by another agent. Cut from, and landed into, that feature (`skooma-base`); never a PR on its own; retired routinely once its parent holds its work | `.worktrees/amend/<area>/<x>` | Commits; `git merge <parent>` |
 | `foundation-<name>` | A shared base other features build on, cut from `develop` and in no trunk. Any branch of any trunk may `git merge` it: `check` accepts a merge parent whose commits beyond the base and `develop` all come from `foundation-*` branches. Its own PR goes first | `.worktrees/<name>` | Commits; `git merge develop` |
 | `spike-<name>` | Throwaway instrumentation answering one question. May be integrated into `main` so it runs in the F5 build; never upstreamable | `.worktrees/<name>` | Commits; `git merge develop` |
+| `backup/<branch>` | A **snapshot** (a safety copy before a rewrite, e.g. `*-polluted`; never resumed) or a **parked** branch (`git skooma park`, keeping its markers and trunk as `parked-*` keys; `unpark` restores it). Carries no marker, so sync, check, integrate and retire skip it; `status` lists both kinds | its old worktree, if any | Nothing |
 | `skooma-<name>` | Optional fork-side sidecar for one feature (settings defaults, skin placement) | `.worktrees/<name>-sk` | Commits; `git merge feature-<name>` |
 | `publish` | Release pointer for CI (deferred: not created yet) | Never | `git merge --ff-only main` |
 
