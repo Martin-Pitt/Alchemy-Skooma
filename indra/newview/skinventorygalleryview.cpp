@@ -263,7 +263,7 @@ void SKInventoryGalleryView::draw()
             const std::string& resolution = mResolution;
             S32 w = 1;
             S32 h = 1;
-            SKInventoryDetails::aspectOf(target->getDescription(), w, h);
+            SKInventoryDetails::aspectFor(target, w, h);
             const std::string aspect = llformat("%d:%d \xE2\x96\xBE", w, h);
             S32 right = stage.mRight - CHIP_MARGIN;
             if (!resolution.empty())

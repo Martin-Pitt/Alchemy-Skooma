@@ -49,6 +49,10 @@ namespace SKInventoryDetails
 
     // A strict trailing "(w:h)", one or two digits each; false (and 1:1) for none.
     bool aspectOf(const std::string& desc, S32& w, S32& h);
+    // A texture's own width:height, reduced, once its size is known; false (and 1:1) before.
+    bool naturalAspect(const LLUUID& image_id, S32& w, S32& h);
+    // A texture's aspect: its description's tail, else its own width:height, else 1:1.
+    void aspectFor(const LLInventoryItem* item, S32& w, S32& h);
     // Modify permission, outside the Library; the tooltip says why not.
     bool canSetAspect(const LLUUID& item_id, std::string* why = nullptr);
     void setAspect(const LLUUID& item_id, S32 w, S32 h);

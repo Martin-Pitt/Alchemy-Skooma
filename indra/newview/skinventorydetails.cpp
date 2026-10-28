@@ -62,6 +62,8 @@
 #include "skinventoryexplorerassets.h"
 #include "skinventoryexplorerpopup.h"
 
+#include <numeric>
+
 static LLDefaultChildRegistry::Register<SKInventoryDetailsView> r_sk_inventory_details("sk_inventory_details");
 
 namespace
@@ -279,6 +281,33 @@ namespace SKInventoryDetails
         return true;
     }
 
+    bool naturalAspect(const LLUUID& image_id, S32& w, S32& h)
+    {
+        w = 1;
+        h = 1;
+        // Only a texture already known is looked at; this asks for no fetch.
+        LLViewerFetchedTexture* texture = image_id.notNull() ? LLViewerTextureManager::findFetchedTexture(image_id, TEX_LIST_STANDARD) : nullptr;
+        if (!texture || texture->getFullWidth() <= 0 || texture->getFullHeight() <= 0)
+        {
+            return false;
+        }
+        const S32 divisor = std::gcd(texture->getFullWidth(), texture->getFullHeight());
+        w = texture->getFullWidth() / divisor;
+        h = texture->getFullHeight() / divisor;
+        return true;
+    }
+
+    void aspectFor(const LLInventoryItem* item, S32& w, S32& h)
+    {
+        w = 1;
+        h = 1;
+        if (!item || aspectOf(item->getDescription(), w, h) || item->getType() != LLAssetType::AT_TEXTURE)
+        {
+            return;
+        }
+        naturalAspect(item->getAssetUUID(), w, h);
+    }
+
     bool canSetAspect(const LLUUID& item_id, std::string* why)
     {
         LLViewerInventoryItem* item = gInventory.getItem(item_id);
@@ -330,9 +359,12 @@ namespace SKInventoryDetails
         {
             return;
         }
-        // Only the tail changes: the old one goes, and 1:1 leaves none.
+        // Only the tail changes: the old one goes, and the texture's own width:height (1:1 until known) leaves none.
+        S32 nw = 1;
+        S32 nh = 1;
+        naturalAspect(item->getAssetUUID(), nw, nh);
         const std::string base = without_aspect(item->getDescription());
-        const std::string tail = (w == 1 && h == 1) ? std::string() : llformat("(%d:%d)", w, h);
+        const std::string tail = (w * nh == h * nw) ? std::string() : llformat("(%d:%d)", w, h);
         const std::string result = tail.empty() ? base : (base.empty() ? tail : base + " " + tail);
         if (result == item->getDescription())
         {
@@ -369,12 +401,12 @@ namespace SKInventoryDetails
         LLViewerInventoryItem* item = gInventory.getItem(item_id);
         S32 cur_w = 1;
         S32 cur_h = 1;
-        aspectOf(item ? item->getDescription() : std::string(), cur_w, cur_h);
+        aspectFor(item, cur_w, cur_h);
         std::vector<SKPopupRow> rows;
         for (const auto& aspect : ASPECTS)
         {
             SKPopupRow row;
-            const bool current = aspect[0] == cur_w && aspect[1] == cur_h;
+            const bool current = aspect[0] * cur_h == aspect[1] * cur_w;
             row.mLabel = (current ? "\xE2\x9C\x93 " : "    ") + llformat("%d:%d", aspect[0], aspect[1]);
             row.mValue = LLSD().with("w", aspect[0]).with("h", aspect[1]);
             rows.push_back(row);
@@ -515,7 +547,15 @@ void SKInventoryPlayer::setItem(const LLUUID& item_id, const LLUUID& image_id)
         S32 h = 1;
         if (mKind == KIND_IMAGE && item && item->getType() == LLAssetType::AT_TEXTURE)
         {
-            mAspect = SKInventoryDetails::aspectOf(item->getDescription(), w, h) ? (F32)w / (F32)h : 1.f;
+            if (mImageID == mAssetID)
+            {
+                SKInventoryDetails::aspectFor(item, w, h);
+                mAspect = (F32)w / (F32)h;
+            }
+            else
+            {
+                mAspect = SKInventoryDetails::aspectOf(item->getDescription(), w, h) ? (F32)w / (F32)h : 1.f;
+            }
         }
         return;
     }
@@ -553,7 +593,7 @@ void SKInventoryPlayer::setItem(const LLUUID& item_id, const LLUUID& image_id)
         case LLAssetType::AT_TEXTURE:
             mKind = KIND_IMAGE;
             mImageID = asset_id;
-            SKInventoryDetails::aspectOf(item->getDescription(), w, h);
+            SKInventoryDetails::aspectFor(item, w, h);
             mAspect = (F32)w / (F32)h;
             break;
         case LLAssetType::AT_SOUND:
@@ -641,6 +681,14 @@ void SKInventoryPlayer::drawImage(const LLRect& rect)
     {
         // No boost: the texture may be shared with the world, and a boost would shrink it for everyone.
         mTexture = LLViewerTextureManager::getFetchedTexture(mImageID, FTT_DEFAULT, MIPMAP_YES, LLGLTexture::BOOST_NONE);
+    }
+    // A texture without an aspect tail takes its own width:height once its size arrives.
+    if (mImageID == mAssetID && mTexture && mTexture->getFullWidth() > 0)
+    {
+        S32 w = 1;
+        S32 h = 1;
+        SKInventoryDetails::aspectFor(target_item(mItemID), w, h);
+        mAspect = (F32)w / (F32)h;
     }
     // Fit: min(96% of the width, 92% of the height × aspect) in the Gallery; the whole rect in the details.
     const F32 fit_w = mZoomable ? llmin(rect.getWidth() * 0.96f, rect.getHeight() * 0.92f * mAspect) : llmin((F32)rect.getWidth(), rect.getHeight() * mAspect);
@@ -1285,7 +1333,7 @@ void SKInventoryDetailsView::addTypeRows(LLViewerInventoryItem* item, LLViewerIn
             }
             S32 w = 1;
             S32 h = 1;
-            SKInventoryDetails::aspectOf(target->getDescription(), w, h);
+            SKInventoryDetails::aspectFor(target, w, h);
             std::string why;
             const bool can = SKInventoryDetails::canSetAspect(target->getUUID(), &why);
             addRow("row_aspect", llformat("%d:%d \xE2\x96\xBE", w, h), can ? "aspect:" : std::string(),
