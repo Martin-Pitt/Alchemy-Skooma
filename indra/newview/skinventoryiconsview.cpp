@@ -68,7 +68,7 @@ SKInventoryIconsView::~SKInventoryIconsView()
 
 void SKInventoryIconsView::onVisibilityChange(bool new_visibility)
 {
-    // A hidden view holds no priority on its tiles.
+    // A hidden view keeps no references to its tiles' textures.
     if (!new_visibility)
     {
         mVisibleImages.clear();
@@ -346,11 +346,6 @@ void SKInventoryIconsView::releaseHiddenTextures()
     {
         if (std::find(mVisibleImages.begin(), mVisibleImages.end(), it->first) == mVisibleImages.end())
         {
-            // Only the hold this view put on it goes; the texture's own level and others' holds stay.
-            if (it->second.mHeld)
-            {
-                it->second.mTexture->removeBoostHold(LLGLTexture::BOOST_THUMBNAIL);
-            }
             it = mTextures.erase(it);
         }
         else
@@ -387,19 +382,14 @@ void SKInventoryIconsView::drawTile(const SKInventoryRow& row, const LLRect& rec
         auto it = mTextures.find(row.mImageID);
         if (it == mTextures.end())
         {
-            Image image;
-            image.mTexture = LLViewerTextureManager::getFetchedTexture(row.mImageID, FTT_DEFAULT, MIPMAP_YES, LLGLTexture::BOOST_NONE);
-            it = mTextures.emplace(row.mImageID, image).first;
-        }
-        // Only a real thumbnail takes the thumbnail boost: it scales decoded images down to the drawn size, which on a
-        // texture's own asset would leave the world and its preview with the tile's resolution.
-        if (!row.mImageIsAsset && !it->second.mHeld)
-        {
-            it->second.mTexture->addBoostHold(LLGLTexture::BOOST_THUMBNAIL);
-            it->second.mHeld = true;
+            // No boost: a thumbnail boost scales decoded images down to the drawn size, and any of these textures may be
+            // shared with the world or a preview.
+            LLViewerFetchedTexture* texture = LLViewerTextureManager::getFetchedTexture(row.mImageID, FTT_DEFAULT, MIPMAP_YES,
+                                                                                        LLGLTexture::BOOST_NONE);
+            it = mTextures.emplace(row.mImageID, texture).first;
         }
         mVisibleImages.push_back(row.mImageID);
-        LLViewerFetchedTexture* texture = it->second.mTexture;
+        LLViewerFetchedTexture* texture = it->second;
         // The pixels the tile really covers, HiDPI included, asked for each draw as a world face asks.
         const S32 pixels = llceil(art * LLUI::getScaleFactor().mV[VX]);
         texture->setKnownDrawSize(pixels, pixels);
