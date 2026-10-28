@@ -34,6 +34,7 @@
 #include "lltextbox.h"
 #include "lltextutil.h"
 #include "lluictrl.h"
+#include "llfolderview.h" // <SK:Nexii> Drag feedback: FolderAutoOpenDelay
 
 static const std::string DD_BUTTON_NAME = "dd_button";
 static const std::string DD_TEXTBOX_NAME = "dd_textbox";
@@ -42,7 +43,6 @@ static const std::string DD_HEADER_NAME = "dd_header";
 static const S32 HEADER_HEIGHT = 25;
 static const S32 HEADER_IMAGE_LEFT_OFFSET = 5;
 static const S32 HEADER_TEXT_LEFT_OFFSET = 30;
-static const F32 AUTO_OPEN_TIME = 1.f;
 static const S32 VERTICAL_MULTIPLE = 16;
 static const S32 PARENT_BORDER_MARGIN = 5;
 
@@ -370,7 +370,7 @@ bool LLAccordionCtrlTab::LLAccordionCtrlTabHeader::handleDragAndDrop(S32 x, S32 
     {
         if (mAutoOpenTimer.getStarted())
         {
-            if (mAutoOpenTimer.getElapsedTimeF32() > AUTO_OPEN_TIME)
+            if (mAutoOpenTimer.getElapsedTimeF32() > LLFolderView::sAutoOpenTime) // <SK:Nexii> Drag feedback: as folders spring open
             {
                 parent->changeOpenClose(false);
                 mAutoOpenTimer.stop();
