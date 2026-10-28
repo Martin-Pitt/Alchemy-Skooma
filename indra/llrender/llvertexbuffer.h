@@ -284,6 +284,8 @@ public:
     // (glMultiDrawElements), and ALDrawElementsIndirectCommands (glMultiDrawElementsIndirect, GL 4.3).
     void multiDrawElements(U32 mode, const GLint* first, const GLsizei* count, GLsizei draw_count) const;
     void multiDrawElementsIndirect(U32 mode, const ALGPUBuffer& commands, size_t offset, GLsizei draw_count, GLsizei stride = 0) const;
+    // Draws `draws` runs of vertices in one call, run i the count[i] vertices from first[i].
+    void drawMultiArrays(U32 mode, const S32* first, const S32* count, U32 draws) const;
     void drawRange(U32 mode, U32 start, U32 end, U32 count, U32 indices_offset) const;
 
     // draw without syncing matrices.  If you're positive there have been no matrix
