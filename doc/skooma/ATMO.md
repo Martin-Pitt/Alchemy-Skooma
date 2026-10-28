@@ -54,6 +54,13 @@ What I'd most like your eyes on is the format, because the client side is the ea
 
 
 
+## Paused (2026-10-08)
+
+No Atmo briefs or branches unless Nexii names Atmo; a "continue buildout" that doesn't name it means other
+work. 2026-10-28 the trunk was parked as `backup/atmo-magic` (tip `c9bd8f70a7`, worktree
+`.worktrees/atmo-magic`), its markers and `skooma-trunk.atmo` removed. To resume: rename it back,
+`git config branch.atmo-magic.skooma feature`, `skooma-base develop`, `git skooma trunk atmo atmo-magic`.
+Unlanded at the pause: rulings-oct5, base-fixes, thunder-port.
 
 ## What it is
 
@@ -148,3 +155,50 @@ Roots: `sky/seeded` · `atmo/registry` · `sky/layers` · `render/farplane`. Sta
 - Review rounds: `.atmo-review-adversarial-<x>.md` → `.atmo-judge-{technical,pragmatic}.md` →
   `.atmo-review-verdict.md` → spec revision; scope rounds: `.atmo-scope.md`. Tests in `V:\Scratch\atmo-*\`.
 - Keep this file current when the spec's decisions or the branch sequence change.
+- `.atmo-status.md` first, updated at milestones; `.atmo-spec.md` v3 is authoritative (v2 → v3 section map
+  at its top). Check `.atmo-open-questions-2026-10-04.md`, this file and git before re-asking anything.
+- **Atmo owns the sky:** Atmo computing and driving the sky is the intent, not a cost; present "Atmo drives
+  this" as the baseline. Deference stays (open editor wins, ENV_EDIT Skip).
+- **Parameters are constant, keyframes or driver.** Never "curve".
+- **A param is applied to a consumer** (the sky, a renderer); driver/module configuration (latitude,
+  obliquity, year length, daylight bias) is document settings beside `params`, never registry params.
+  Apparent size is a param.
+- **No time warp:** one plain document clock; the daylight bias only speeds the orbits inside the orbital
+  driver. Asked four times.
+- **No RLVa** anywhere in Atmo: no `@setenv` gate, no "parity" version.
+
+## Weather and clouds (rulings)
+
+Research lives in `V:\Scratch\web\` (`puff-lab`, `cb-shape`, `world-weather`); handoff `.puff-lab-handoff.md`.
+
+- **The production raymarcher ("prod") is the cloud renderer** (lab verdict 2026-09-30, look signed off in
+  `puff-lab/savepoints/2026-09-30-ideal/`): column cells never reached 1.5× at equal error; puff sprites,
+  impostors and libraries dropped, as overlapping sprites cannot make tall decks. Model: 2D cover + per-deck
+  `D(cover, height-fraction)` tables + 64³ detail with Nubis erosion (a 1D height profile cannot make
+  anvils). `atmo/clouds-raymarch` ports it; puffs stay only as a fallback until viewer timing exists.
+- **Cloud lighting does not depend on Rye's atmosphere** (2026-10-04): sun/sky radiance are inputs.
+  Bruneton shell tables don't fit a cylinder interior; Hillaire-2020 per-frame camera-relative LUTs can take
+  habitat geometry. 2026-10-05: mode-1 cumulus look approved (darker bases, more contrast); next a
+  multi-scatter LUT with a finite-cloud escape term. Lab branch `cb-light`.
+- **Storm shape** (2026-10-02): lab branch `cb-shape` (`V:\Scratch\web\puff-lab-wt\cbshape`, round 4
+  approved "for now": fluid, not a mushroom) is the reference; `atmo/storm-shape` ports it. Needs are in the
+  handoff's "Storm shape follow-up".
+- **Storm features are density terms in the same field** (2026-10-01): tornado, funnel, wall/shelf cloud,
+  waterspout, rain shafts share the raymarch, shadow, lighting and occupancy; never a separate pass, sprite
+  or mesh, since Soapstorm's separate tornado render failed to look part of the cloud. Soapstorm's storm
+  systems (mesocyclone, lifecycle, placement) carry forward as density terms.
+- **The weather cube pins the region only** (2026-10-01): the world field generates, the cube is a hard
+  constraint it matches at the region and blends out from; no world driver overrides the cube; one
+  continuous field into the same cover + table inputs. Tiling one local noise worldwide looked "horrible".
+- **Far weather is resolved where observed** (2026-10-02): reach follows visibility and the observer's
+  situation (near nothing indoors, the whole disk from orbit); world state stays cheap, seeded and
+  deterministic. `world-weather/DRIVER.md` §0.
+- **Pressure is the world state** (2026-10-03): MSL pressure = climatology + analytic anomalies; wind from
+  gradient balance + Ekman, cloud from convergence + humidity, fronts as troughs. Calibrate on ERA5 and
+  IBTrACS; Zoom Earth is the reference viewer.
+- **World surface is pluggable** (2026-10-02): Earth, Mars, exoplanets, fiction or creator-procedural;
+  never assume Earth. Procedural uses Minecraft-style multi-noise, and weather reads the same climate fields
+  so weather, biomes and terrain agree (`DRIVER.md` §0a, `MULTINOISE.md`).
+- **Places** (2026-10-02): the world layer exists to make places and contrast (oasis city + sandstorm,
+  mountain fort + valley + ocean); a civilisational-fingerprint preset (historical → sci-fi) and OSM-derived
+  but greatly simplified authoring, auto by default with overrides like the cube (`PLACES.md`).

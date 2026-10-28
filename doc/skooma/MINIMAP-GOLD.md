@@ -8,9 +8,9 @@ against it per layer, per class and per wall. It is the fixed target the fast ma
 against: "here is a wall per the census, your render is 0.5 m off", "this doorway is sealed", "this floor is drawn
 on the storey below".
 
-Lives in `V:\Scratch\minimap-gold\` (nothing in the repo). Built 2026-10-12. The parallel `V:\Scratch\minimap-reference\`
+Lives in `V:\Scratch\web\minimap-gold\` (nothing in the repo). Built 2026-10-12. The parallel `V:\Scratch\web\minimap-reference\`
 (another session's DeepSeek workers, same day) is an independent second reference with the same aim; the two can be
-cross-checked, which is what the contract there asks for.
+cross-checked, which is what the contract there asks for, and neither edits the other's folder.
 
 ## Read in this order
 
@@ -59,4 +59,9 @@ navmesh export scores median floor IoU 0.86, wall-face recall 0.96, precision 0.
 
 - The navmesh export is a **candidate**, never an input of the gold.
 - Fixture expectations come from construction inequalities, never from a slicing algorithm.
+- Score mini-map work through an adapter onto the case grids, per class and per wall, never one number; quote
+  medians over layers ≥ 20 m² (`tools/summary_stats.py`), as 2 m² wall tops are storeys too. Adapters may read only
+  `floor_ref_z`/`floor_z` of the reference. Navmesh adapters are historical.
+- Run `tests/run_all.py` after any engine change. Agents developing adapters while a scene rebuilds get a copy
+  (`out/dev-scene`); benchmark adapters freeze as `*_base.py`.
 - Keep this file and `.minimap-gold-design.md` current when the contract or the model changes.

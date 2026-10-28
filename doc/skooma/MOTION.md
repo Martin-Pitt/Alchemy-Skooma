@@ -10,7 +10,7 @@ Recording, replaying and improving how the viewer moves objects between network 
 | `.motion-unclamp-brief.md` | builder brief for `feature-motion/unclamp`: ratio-method recovery of velocities clamped to ±128 m/s by the terse encoding | 2026-09-30 |
 | `.camera-follow-brief.md` | builder brief for `feature-camera/follow`: alt-cam focus follower (object track filtered, offset after, feed-forward v + ω×r, τ 0.12 s) | 2026-09-30 |
 | `.motion-smooth-brief.md` | builder brief for `feature-motion/smooth`: bleed update position errors out exponentially (τ 0.15 s) instead of snapping; oracle `interp_variants.py` V1 | 2026-09-30 |
-| Soapstorm `feature-ss-timing-inversion` (`82a34092c8`, `8ec57e07c6`) | the earlier timestamp-inference attempt; no results recorded | lessons only |
+| Soapstorm `feature-ss-timing-inversion` (`82a34092c8`, `8ec57e07c6`) | the earlier timestamp-inference attempt (update age from the along-track residual); no results recorded, tuning script lost. Ruled 2026-09-29 it missed the real stutter: an idea, not evidence; measure with the recorder first | lessons only |
 
 ## Status
 
