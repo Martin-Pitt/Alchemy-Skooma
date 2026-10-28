@@ -30,6 +30,7 @@
 #include "llframetimer.h"
 #include "llrect.h"
 #include "lltooldraganddrop.h"
+#include "skdragfeedback.h"
 
 #include <functional>
 #include <map>
@@ -40,7 +41,6 @@ namespace SKInventoryExplorerDrag
 {
     constexpr S32 DRAG_THRESHOLD = 5;       // pixels before a press on an item lifts it
     constexpr S32 LASSO_THRESHOLD = 4;      // |dx| + |dy| before a press elsewhere draws a rectangle
-    constexpr F32 SPRING_SECONDS = 0.8f;
     constexpr F32 TAB_SPRING_SECONDS = 0.5f;
     constexpr F32 TICK_SECONDS = 0.04f;     // spring and pane autoscroll checks
     constexpr S32 SCROLL_BAND = 24;
@@ -85,8 +85,14 @@ namespace SKInventoryExplorerDrag
     bool canUndo();
     void undo();
 
-    // Draws a drop target's mark: a blue outline and fill, or a dashed red outline for a refusal.
-    void drawTargetMark(const LLRect& rect, const Verdict& verdict);
+    // How long a folder is held before it springs open: the folder view's FolderAutoOpenDelay.
+    F32 springSeconds();
+    // The mark the last verdict takes: accepted, refused with a reason, or quiet (a dragged folder is never marked).
+    EDragMark markKind();
+    // Marks the rect the view would light for the last verdict, for this frame's pass.
+    void mark(const LLView* view, const LLRect& local_rect);
+    // Draws the view's mark of this frame, if it has one, under its text; the open folder's space takes no fill.
+    void drawMark(const LLView* view, bool fill = true);
 }
 
 // Hover timing one widget keeps while a drag is over it: springs open after a delay, checked every 40 ms; after an

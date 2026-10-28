@@ -131,7 +131,6 @@ SKInventoryTreeView::SKInventoryTreeView(const Params& p)
     mPressIndex(-1),
     mPressX(0),
     mPressY(0),
-    mDropIndex(-1),
     mScrollbar(nullptr),
     mBridgePanel(nullptr)
 {
@@ -723,10 +722,7 @@ void SKInventoryTreeView::draw()
             }
             drawRow(i, rect);
         }
-        if (mDropHover.isActive() && mDropRect.notEmpty())
-        {
-            SKInventoryExplorerDrag::drawTargetMark(mDropRect, mDropVerdict);
-        }
+        SKInventoryExplorerDrag::drawMark(this);
     }
     LLUICtrl::draw();
 }
@@ -1262,7 +1258,7 @@ bool SKInventoryTreeView::handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop, 
         S32 sy = 0;
         localPointToScreen(x, y, &sx, &sy);
         if (!drop && first_cargo && !SKInventoryExplorerDrag::verdict().mOntoCargo
-            && mDropHover.spring(row.mID, sx, sy, SKInventoryExplorerDrag::SPRING_SECONDS) && row.mHasChildren && !row.mExpanded)
+            && mDropHover.spring(row.mID, sx, sy, SKInventoryExplorerDrag::springSeconds()) && row.mHasChildren && !row.mExpanded)
         {
             setExpanded(index, true);
         }
@@ -1272,9 +1268,7 @@ bool SKInventoryTreeView::handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop, 
         *accept = ACCEPT_NO;
         return true;
     }
-    mDropRect = rect;
-    mDropIndex = index;
-    mDropVerdict = SKInventoryExplorerDrag::verdict();
+    SKInventoryExplorerDrag::mark(this, rect);
     if (!drop && first_cargo)
     {
         mDropHover.touch();

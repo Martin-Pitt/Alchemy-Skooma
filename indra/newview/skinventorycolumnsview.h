@@ -249,7 +249,6 @@ protected:
     SKDragHover mDropHover;
     S32 mDropColumn;    // -1 for the open folder's space past the columns
     S32 mDropRow;       // a folder row, -1 for the column's own space
-    SKInventoryExplorerDrag::Verdict mDropVerdict;
     S32 mDropScrollResidue;
     S32 mEdgeDir;       // the strip edge the pointer rests by, -1, 0 or 1
     bool mEdgeScrolling;

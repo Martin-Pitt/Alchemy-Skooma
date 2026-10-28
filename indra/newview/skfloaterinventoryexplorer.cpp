@@ -88,8 +88,7 @@ namespace
 SKExplorerTabStrip::SKExplorerTabStrip(const Params& p)
 :   LLUICtrl(p),
     mActive(0),
-    mHover(-1),
-    mDropTab(-1)
+    mHover(-1)
 {
 }
 
@@ -193,10 +192,7 @@ void SKExplorerTabStrip::draw()
     }
     font->renderUTF8("+", 0, plus.getCenterX(), height / 2, text_active.get(), LLFontGL::HCENTER, LLFontGL::VCENTER);
 
-    if (mDropHover.isActive() && mDropTab >= 0 && mDropTab < (S32)mTabs.size())
-    {
-        SKInventoryExplorerDrag::drawTargetMark(LLRect(mDropTab * width, height, (mDropTab + 1) * width, 0), mDropVerdict);
-    }
+    SKInventoryExplorerDrag::drawMark(this);
 
     LLUICtrl::draw();
 }
@@ -268,8 +264,8 @@ bool SKExplorerTabStrip::handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop, E
         return false;
     }
     SKInventoryExplorerDrag::dropOnFolder(mTabs[tab].mFolderID, mask, drop, cargo_type, cargo_data, accept, tooltip_msg);
-    mDropTab = tab;
-    mDropVerdict = SKInventoryExplorerDrag::verdict();
+    const S32 width = tabWidth();
+    SKInventoryExplorerDrag::mark(this, LLRect(tab * width, getRect().getHeight(), (tab + 1) * width, 0));
     if (drop || LLToolDragAndDrop::getInstance()->getCargoIndex() != 0)
     {
         return true;
@@ -498,9 +494,8 @@ bool SKFloaterInventoryExplorer::postBuild()
 
     mTabStrip->setNewTabToolTip(getString("new_tab_tooltip"));
     std::map<std::string, std::string> drag_strings;
-    for (const char* key : { "drag_move", "drag_link", "drag_add_favorites", "drag_only_folders", "drag_already_favorites",
-                             "drag_library_readonly", "drag_into_itself", "drag_system_folders", "drag_library_copies",
-                             "drag_already_here", "drag_favorites_unavailable", "drag_links_off", "drag_link_own_only",
+    for (const char* key : { "drag_only_folders", "drag_library_readonly", "drag_into_itself", "drag_system_folders",
+                             "drag_favorites_unavailable", "drag_links_off", "drag_link_own_only",
                              "drag_folder_link", "drag_no_link_here", "status_copied", "status_copied_one",
                              "status_moved_no_undo", "status_moved_no_undo_one", "status_moved", "status_moved_one", "status_linked", "status_linked_one",
                              "status_favorites_added", "status_favorites_removed", "status_undone", "status_cant_undo",
