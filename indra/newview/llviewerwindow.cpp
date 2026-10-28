@@ -226,6 +226,7 @@
 #include "rlveffects.h"
 #include "rlvhandler.h"
 // [/RLVa:KB]
+#include "skdragfeedback.h" // <SK:Nexii> Drag feedback
 
 #if LL_WINDOWS
 #include <tchar.h> // For Unicode conversion methods
@@ -3136,6 +3137,9 @@ void LLViewerWindow::draw()
             LLUI::popMatrix();
         }
 
+        // <SK:Nexii> Drag feedback: the ghost and the verdict chip over everything
+        LLDragFeedback::draw(getCurrentMouseX(), getCurrentMouseY(), getWindowRectScaled());
+        // </SK:Nexii>
 
         if( gShowOverlayTitle && !mOverlayTitle.empty() )
         {

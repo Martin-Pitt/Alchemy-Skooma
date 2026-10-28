@@ -1576,11 +1576,20 @@ bool SKInventoryColumnsView::handleDragAndDrop(S32 x, S32 y, MASK mask, bool dro
     SKInventoryExplorerDrag::dropOnFolder(dest, mask, drop, cargo_type, cargo_data, accept, tooltip_msg);
     mDropColumn = row >= 0 || (index >= 0 && (mColumns[index].mKind == KIND_PATH || mColumns[index].mKind == KIND_GHOST)) ? index : -1;
     mDropRow = row;
-    mDropVerdict = SKInventoryExplorerDrag::verdict();
-    if (mDropColumn < 0 && mDropVerdict.mQuiet)
+    const S32 height = getRect().getHeight();
+    LLRect mark_rect(0, height, getRect().getWidth(), 0);
+    if (mDropColumn >= 0)
     {
-        tooltip_msg.clear(); // no label over the open folder's own space
+        const Column& column = mColumns[mDropColumn];
+        const S32 left = column.mLeft - mStripX;
+        mark_rect = LLRect(left, height, left + column.mWidth - 1, 0);
+        if (row >= 0)
+        {
+            const S32 top = height - TOP_PAD - (row - columnScroll(column)) * ROW_HEIGHT;
+            mark_rect = LLRect(left, top, left + column.mWidth - 1, top - ROW_HEIGHT);
+        }
     }
+    SKInventoryExplorerDrag::mark(this, mark_rect);
     if (drop || LLToolDragAndDrop::getInstance()->getCargoIndex() != 0)
     {
         return true;
@@ -1590,8 +1599,8 @@ bool SKInventoryColumnsView::handleDragAndDrop(S32 x, S32 y, MASK mask, bool dro
     S32 screen_x = 0;
     S32 screen_y = 0;
     localPointToScreen(x, y, &screen_x, &screen_y);
-    const LLUUID spring_id = row >= 0 && !mDropVerdict.mOntoCargo ? mColumns[index].mRows[row].mID : LLUUID::null;
-    if (mDropHover.spring(spring_id, screen_x, screen_y, SKInventoryExplorerDrag::SPRING_SECONDS) && mOpenCallback)
+    const LLUUID spring_id = row >= 0 && !SKInventoryExplorerDrag::verdict().mOntoCargo ? mColumns[index].mRows[row].mID : LLUUID::null;
+    if (mDropHover.spring(spring_id, screen_x, screen_y, SKInventoryExplorerDrag::springSeconds()) && mOpenCallback)
     {
         mOpenCallback(spring_id);
         return true;
@@ -1686,20 +1695,13 @@ void SKInventoryColumnsView::drawDropTarget(S32 height)
     {
         const Column& column = mColumns[mDropColumn];
         const S32 left = column.mLeft - mStripX;
-        LLRect rect(left, height, left + column.mWidth - 1, 0);
-        if (mDropRow >= 0)
-        {
-            const S32 top = height - TOP_PAD - (mDropRow - columnScroll(column)) * ROW_HEIGHT;
-            rect = LLRect(left, top, left + column.mWidth - 1, top - ROW_HEIGHT);
-        }
         LLLocalClipRect clip(LLRect(left, height, left + column.mWidth, 0));
-        SKInventoryExplorerDrag::drawTargetMark(rect, mDropVerdict);
+        SKInventoryExplorerDrag::drawMark(this);
     }
-    else if (mDropVerdict.mOK)
+    else
     {
-        static LLUIColor accent = LLUIColorTable::instance().getColor("EmphasisColor");
-        gl_rect_2d(1, height - 1, getRect().getWidth() - 1, 1, accent.get(), false);
-        gl_rect_2d(2, height - 2, getRect().getWidth() - 2, 2, accent.get(), false);
+        // The open folder's own space takes the outline alone.
+        SKInventoryExplorerDrag::drawMark(this, false);
     }
 }
 

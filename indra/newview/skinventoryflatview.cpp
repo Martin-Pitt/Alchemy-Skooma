@@ -1472,23 +1472,9 @@ void SKInventoryFlatView::drawLasso()
 
 void SKInventoryFlatView::drawDropTarget()
 {
-    if (!mDropHover.isActive())
-    {
-        return;
-    }
+    // The open folder's own space takes the outline alone.
     LLLocalClipRect clip(rowsArea());
-    if (mDropRow >= 0 && mDropRow < (S32)mRows.size())
-    {
-        SKInventoryExplorerDrag::drawTargetMark(rowRect(mDropRow), mDropVerdict);
-    }
-    else if (mDropVerdict.mOK)
-    {
-        // The open folder's own space takes the outline alone.
-        static LLUIColor accent = LLUIColorTable::instance().getColor("EmphasisColor");
-        const LLRect area = rowsArea();
-        gl_rect_2d(area.mLeft + 1, area.mTop - 1, area.mRight - 1, area.mBottom + 1, accent.get(), false);
-        gl_rect_2d(area.mLeft + 2, area.mTop - 2, area.mRight - 2, area.mBottom + 2, accent.get(), false);
-    }
+    SKInventoryExplorerDrag::drawMark(this, mDropRow >= 0);
 }
 
 bool SKInventoryFlatView::handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop, EDragAndDropType cargo_type, void* cargo_data,
@@ -1511,11 +1497,7 @@ bool SKInventoryFlatView::handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop, 
         SKInventoryExplorerDrag::dropOnFolder(dest, mask, drop, cargo_type, cargo_data, accept, tooltip_msg);
     }
     mDropRow = on_folder ? row : -1;
-    mDropVerdict = SKInventoryExplorerDrag::verdict();
-    if (!on_folder && mDropVerdict.mQuiet)
-    {
-        tooltip_msg.clear(); // no label over the open folder's own space
-    }
+    SKInventoryExplorerDrag::mark(this, on_folder ? rowRect(row) : rowsArea());
     if (drop || LLToolDragAndDrop::getInstance()->getCargoIndex() != 0)
     {
         return true;
@@ -1526,8 +1508,8 @@ bool SKInventoryFlatView::handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop, 
     S32 screen_x = 0;
     S32 screen_y = 0;
     localPointToScreen(x, y, &screen_x, &screen_y);
-    const LLUUID spring_id = on_folder && !mDropVerdict.mOntoCargo ? mRows[row].mID : LLUUID::null;
-    if (mDropHover.spring(spring_id, screen_x, screen_y, SKInventoryExplorerDrag::SPRING_SECONDS) && mOpenCallback)
+    const LLUUID spring_id = on_folder && !SKInventoryExplorerDrag::verdict().mOntoCargo ? mRows[row].mID : LLUUID::null;
+    if (mDropHover.spring(spring_id, screen_x, screen_y, SKInventoryExplorerDrag::springSeconds()) && mOpenCallback)
     {
         mOpenCallback(spring_id);
         return true;

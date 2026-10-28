@@ -140,8 +140,6 @@ protected:
     void_callback_t mDoubleClickCallback;
     // A drag held over a tab drops into its folder, and switches to it after 500 ms.
     SKDragHover mDropHover;
-    S32 mDropTab;
-    SKInventoryExplorerDrag::Verdict mDropVerdict;
 };
 
 // A pane's 6 px resize edge: drag to resize, double-click for the default, saved on release.

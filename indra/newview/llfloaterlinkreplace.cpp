@@ -412,6 +412,7 @@ bool LLInventoryLinkReplaceDropTarget::handleDragAndDrop(S32 x, S32 y, MASK mask
             (item->getType() == LLAssetType::AT_LINK && !gInventory.getObject(item->getLinkedUUID())) // Broken Link!
         ))
     {
+        *accept = ACCEPT_YES_SINGLE; // <SK:Nexii> Drag feedback: accepted on the drop too
         if (drop)
         {
             setItem(item);
@@ -420,10 +421,12 @@ bool LLInventoryLinkReplaceDropTarget::handleDragAndDrop(S32 x, S32 y, MASK mask
                 mDADSignal(mItemID);
             }
         }
-        else
-        {
-            *accept = ACCEPT_YES_SINGLE;
-        }
+        // <SK:Nexii> Drag feedback: the acceptance is set above, for the drop too
+        //else
+        //{
+        //    *accept = ACCEPT_YES_SINGLE;
+        //}
+        // </SK:Nexii>
     }
     else
     {
