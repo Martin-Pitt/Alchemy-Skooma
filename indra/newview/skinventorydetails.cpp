@@ -1584,15 +1584,15 @@ void SKInventoryDetailsView::rebuild()
         mPlayer.setItem(LLUUID::null);
         mInfoTexture = nullptr;
         LLViewerInventoryCategory* cat = mItemID.notNull() ? gInventory.getCategory(mItemID) : nullptr;
-        if (!cat || !mMessage.empty())
+        // A folder shows only when it has a thumbnail: the picture, then its name and type.
+        if (!cat || !mMessage.empty() || cat->getThumbnailUUID().isNull())
         {
             mThumb.setItem(LLUUID::null);
             mLaidWidth = -1;
             return;
         }
-        // A folder: its thumbnail on top when it has one, then its name and type.
-        mThumbnail = cat->getThumbnailUUID().notNull();
-        mThumb.setItem(mThumbnail ? mItemID : LLUUID::null, cat->getThumbnailUUID());
+        mThumbnail = true;
+        mThumb.setItem(mItemID, cat->getThumbnailUUID());
         mThumb.setFetching(mFetching);
         SKInventoryRow row;
         SKInventoryFlatView::readRow(mItemID, SKInventoryDetails::labels(), row);
