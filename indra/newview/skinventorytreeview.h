@@ -213,9 +213,6 @@ protected:
     LLFrameTimer mTypeAheadTimer;
 
     SKDragHover mDropHover;
-    S32 mDropIndex;     // the row under a drag; -1 for none
-    LLRect mDropRect;
-    SKInventoryExplorerDrag::Verdict mDropVerdict;
 
     LLScrollbar* mScrollbar;
     LLInventoryPanel* mBridgePanel;

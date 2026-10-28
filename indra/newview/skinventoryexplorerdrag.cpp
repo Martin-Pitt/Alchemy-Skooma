@@ -29,6 +29,7 @@
 #include "skinventoryexplorerdrag.h"
 
 #include "llaisapi.h"
+#include "llfolderview.h"
 #include "llfriendcard.h"
 #include "llinventoryfunctions.h"
 #include "llinventorymodel.h"
@@ -192,12 +193,12 @@ namespace
         }
     }
 
+    // The tool's tooltip carries refusals alone; an accept is reported to the drag feedback, which words the chip.
     void finishVerdict(std::string& tooltip_msg)
     {
-        LLStringUtil::format_map_t args;
-        args["[FOLDER]"] = folderName(sPass.mDest);
         sVerdict = Verdict();
         sVerdict.mOntoCargo = sPass.mOntoCargo;
+        tooltip_msg.clear();
         if (sPass.mFavorites)
         {
             if (sPass.mAnyNotFolder)
@@ -206,7 +207,6 @@ namespace
             }
             else if (sPass.mAllFavorite)
             {
-                tooltip_msg = string("drag_already_favorites");
                 sVerdict.mQuiet = true;
             }
             else if (!AISAPI::isAvailable())
@@ -215,25 +215,32 @@ namespace
             }
             else
             {
-                tooltip_msg = string("drag_add_favorites");
-                sVerdict.mOK = true;
+                sVerdict.mOK = true;    // the feedback has no verb for a favourite: its chip says "Drop here"
             }
-            return;
         }
-        if (sPass.mAllOK)
+        else if (sPass.mAllOK)
         {
             sVerdict.mOK = true;
-            const bool library = LLToolDragAndDrop::getInstance()->getSource() == LLToolDragAndDrop::SOURCE_LIBRARY;
-            tooltip_msg = string(sPass.mLink ? "drag_link" : library ? "drag_library_copies" : "drag_move", args);
+            // The stock rules' own report (a link into an outfit, a wear) stands; a plain move or copy is named here.
+            if (LLDragFeedback::reportedAction() == EDragAction::None)
+            {
+                const bool library = LLToolDragAndDrop::getInstance()->getSource() == LLToolDragAndDrop::SOURCE_LIBRARY;
+                LLDragFeedback::report(sPass.mLink ? EDragAction::Link : library ? EDragAction::Copy : EDragAction::Move,
+                                       folderName(sPass.mDest));
+            }
         }
         else if (sPass.mAllHere)
         {
-            tooltip_msg = string("drag_already_here");
             sVerdict.mQuiet = true;
         }
         else
         {
             tooltip_msg = sPass.mReason;
+        }
+        if (!sVerdict.mOK)
+        {
+            // A quiet refusal says nothing; a reason overrides a quiet one a stock rule gave for an earlier object.
+            LLDragFeedback::refuse(tooltip_msg, sVerdict.mQuiet || tooltip_msg.empty());
         }
     }
 
@@ -605,6 +612,7 @@ bool refuse(const std::string& key, EAcceptance* accept, std::string& tooltip_ms
     sVerdict = Verdict();
     *accept = ACCEPT_NO;
     tooltip_msg = string(key);
+    LLDragFeedback::refuse(tooltip_msg);
     return true;
 }
 
@@ -683,37 +691,30 @@ void undo()
     status(string("status_undone"));
 }
 
-void drawTargetMark(const LLRect& rect, const Verdict& verdict)
+F32 springSeconds()
 {
-    static LLUIColor accent = LLUIColorTable::instance().getColor("EmphasisColor");
-    static LLUIColor fill = LLUIColorTable::instance().getColor("EmphasisColor_35");
-    static const LLColor4 refusal(0.71f, 0.33f, 0.33f, 1.f);
-    if (verdict.mOntoCargo || (!verdict.mOK && verdict.mQuiet))
+    return LLFolderView::sAutoOpenTime;
+}
+
+EDragMark markKind()
+{
+    if (sVerdict.mOntoCargo)
     {
-        return;
+        return EDragMark::Quiet;
     }
-    if (verdict.mOK)
-    {
-        gl_rect_2d(rect, fill.get(), true);
-        gl_rect_2d(rect, accent.get(), false);
-        gl_rect_2d(rect.mLeft + 1, rect.mTop - 1, rect.mRight - 1, rect.mBottom + 1, accent.get(), false);
-        return;
-    }
-    // A dashed outline, 4 px on and 3 off.
-    constexpr S32 ON = 4;
-    constexpr S32 STEP = 7;
-    for (S32 x = rect.mLeft; x < rect.mRight; x += STEP)
-    {
-        const S32 end = llmin(x + ON, rect.mRight);
-        gl_line_2d(x, rect.mTop - 1, end, rect.mTop - 1, refusal);
-        gl_line_2d(x, rect.mBottom, end, rect.mBottom, refusal);
-    }
-    for (S32 y = rect.mBottom; y < rect.mTop; y += STEP)
-    {
-        const S32 end = llmin(y + ON, rect.mTop);
-        gl_line_2d(rect.mLeft, y, rect.mLeft, end, refusal);
-        gl_line_2d(rect.mRight - 1, y, rect.mRight - 1, end, refusal);
-    }
+    return sVerdict.mOK ? EDragMark::Accept : sVerdict.mQuiet ? EDragMark::Quiet : EDragMark::Refuse;
+}
+
+void mark(const LLView* view, const LLRect& local_rect)
+{
+    LLDragFeedback::mark(view, local_rect, markKind());
+}
+
+void drawMark(const LLView* view, bool fill)
+{
+    LLRect rect;
+    const EDragMark kind = LLDragFeedback::markFor(view, &rect);
+    LLDragFeedback::drawTargetMark(rect, kind, fill);
 }
 }
 

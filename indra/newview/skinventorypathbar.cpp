@@ -90,8 +90,7 @@ SKInventoryPathBar::SKInventoryPathBar(const Params& p)
     mMenuClosedCrumb(-1),
     mPressCrumb(-1),
     mPressX(0),
-    mPressY(0),
-    mDropCrumb(-1)
+    mPressY(0)
 {
 }
 
@@ -300,10 +299,7 @@ void SKInventoryPathBar::draw()
             }
         }
     }
-    if (mDropHover.isActive() && mDropCrumb >= 0 && mDropCrumb < (S32)mCrumbs.size())
-    {
-        SKInventoryExplorerDrag::drawTargetMark(mCrumbs[mDropCrumb].mRect, mDropVerdict);
-    }
+    SKInventoryExplorerDrag::drawMark(this);
     LLUICtrl::draw();
 }
 
@@ -480,11 +476,6 @@ bool SKInventoryPathBar::handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop, E
     }
     // A crumb takes the drop into its folder; it never springs open.
     SKInventoryExplorerDrag::dropOnFolder(mCrumbs[index].mID, mask, drop, cargo_type, cargo_data, accept, tooltip_msg);
-    mDropCrumb = index;
-    mDropVerdict = SKInventoryExplorerDrag::verdict();
-    if (!drop && LLToolDragAndDrop::getInstance()->getCargoIndex() == 0)
-    {
-        mDropHover.touch();
-    }
+    SKInventoryExplorerDrag::mark(this, mCrumbs[index].mRect);
     return true;
 }

@@ -107,10 +107,6 @@ protected:
     S32 mPressCrumb;
     S32 mPressX;
     S32 mPressY;
-
-    SKDragHover mDropHover;
-    S32 mDropCrumb;
-    SKInventoryExplorerDrag::Verdict mDropVerdict;
 };
 
 #endif // SK_SKINVENTORYPATHBAR_H
