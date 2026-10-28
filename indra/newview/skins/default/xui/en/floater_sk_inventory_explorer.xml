@@ -132,7 +132,7 @@
     <string name="details_aspect_no_modify">You can't modify this texture</string>
     <string name="details_aspect_too_long">Description too long for an aspect tag</string>
     <string name="details_aspect_bad_chars">Description has characters the server won't keep</string>
-    <string name="details_gallery_by"> by [NAME]</string>
+    <string name="details_gallery_by">by [NAME]</string>
     <string name="details_gallery_resolution">[W]×[H]</string>
     <string name="details_gallery_resolution_full">[W]×[H] · full resolution</string>
     <string name="no_selection">No item selected</string>
