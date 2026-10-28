@@ -293,6 +293,11 @@ If you feel this is an error, please contact support@secondlife.com</string>
 	<string name="DragVerdictApply">Apply to this face</string>
 	<string name="DragVerdictApplyAll">Apply to all faces</string>
 	<string name="DragVerdictMakeOutfit">Make an outfit</string>
+	<string name="DragVerdictFavorite">Add to [TARGET]</string>
+	<string name="DragVerdictFavoriteHere">Add to Favorites</string>
+	<string name="DragNoteLibraryCopies">Library items copy, not move</string>
+	<string name="DragNoteNoCopyMoves">It can't be copied, so it moves out of the object</string>
+	<string name="DragNoteFavoritesCopy">Favorites keep a copy; the original stays</string>
 	<string name="DragVerdictReorder">Move here</string>
 	<string name="DragVerdictSet">Use here</string>
 	<string name="DragVerdictDropHere">Drop here</string>
