@@ -684,6 +684,38 @@
     <color
      name="MenuItemFlashBgColor"
      reference="BeaconColor" />
+    <!-- <SK:Nexii> Drag feedback -->
+    <color
+     name="DragAcceptOutlineColor"
+     reference="EmphasisColor" />
+    <color
+     name="DragAcceptFillColor"
+     value="0.3 0.82 1 0.25" />
+    <color
+     name="DragRefuseOutlineColor"
+     value="0.71 0.33 0.33 1" />
+    <color
+     name="DragGhostBgColor"
+     value="0.165 0.165 0.165 1" />
+    <color
+     name="DragGhostBorderColor"
+     reference="Black" />
+    <color
+     name="DragGhostBadgeColor"
+     reference="EmphasisColor" />
+    <color
+     name="DragChipBgColor"
+     value="0.08 0.08 0.08 0.92" />
+    <color
+     name="DragChipTextColor"
+     value="0.796 0.804 0.804 1" />
+    <color
+     name="DragChipRefuseTextColor"
+     value="1 0.55 0.55 1" />
+    <color
+     name="DragChipHintTextColor"
+     value="0.624 0.635 0.639 1" />
+    <!-- </SK:Nexii> -->
     <color
      name="MenuItemHighlightFgColor"
      reference="White" />
