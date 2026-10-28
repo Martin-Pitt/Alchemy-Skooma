@@ -450,7 +450,7 @@
          layout="topleft"
          min_width="140"
          name="sidebar_panel"
-         width="220">
+         width="226">
             <sk_inventory_tree
              follows="all"
              height="442"
@@ -470,18 +470,12 @@
              top="0"
              visible="false"
              width="10" />
-        </layout_panel>
-        <layout_panel
-         height="442"
-         auto_resize="false"
-         layout="topleft"
-         name="sidebar_edge_panel"
-         width="6">
+            <!-- The edge sits inside the sidebar's panel: a panel of its own would take the stack's resize, not the content. -->
             <sk_pane_edge
-             follows="all"
+             follows="top|bottom|right"
              height="442"
              layout="topleft"
-             left="0"
+             left="220"
              name="sidebar_edge"
              pane="sidebar"
              tool_tip="Drag to resize; double-click for the default"
