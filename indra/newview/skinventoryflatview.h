@@ -155,6 +155,8 @@ public:
     static std::string brandOf(const std::string& name);
     // The small link badge over the corner of an icon drawn at the rect.
     static void drawLinkBadge(const LLRect& icon);
+    // A row in view that has a picture asks for its smallest version, so the details have it before it is selected.
+    static void prefetchPicture(const SKInventoryRow& row);
     // Folders first (system folders first, then by name), items by the key.
     static void sortRows(std::vector<SKInventoryRow>& rows, EColumn key, bool ascending);
     // Orders sorted rows by group, keeping the sort within each, and puts a header before each group.
