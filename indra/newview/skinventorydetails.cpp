@@ -1057,7 +1057,8 @@ bool SKInventoryPlayer::handleDoubleClick(S32 x, S32 y)
 
 void SKInventoryPlayer::handleHover(S32 x, S32 y)
 {
-    mHoverX = x;
+    // Only the waveform or timeline itself previews a seek, not the buttons under it.
+    mHoverX = (mWaveDrag || waveRect().pointInRect(x, y)) ? x : -1;
     mHoverButton = -1;
     if (mWaveDrag)
     {
