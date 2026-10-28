@@ -100,6 +100,22 @@ namespace
         { 0x006c96, 0x00a1df, 0x62c9f0 },
     };
 
+    constexpr size_t LONGEST_TAG = 7;   // " (16:9)"
+
+    // The description with any aspect tail taken off.
+    std::string without_aspect(const std::string& desc)
+    {
+        S32 w = 1;
+        S32 h = 1;
+        std::string base = desc;
+        if (SKInventoryDetails::aspectOf(desc, w, h))
+        {
+            base.erase(base.rfind('('));
+            LLStringUtil::trimTail(base);
+        }
+        return base;
+    }
+
     const S32 ASPECTS[][2] = { { 1, 1 }, { 4, 3 }, { 3, 2 }, { 16, 9 }, { 2, 1 }, { 3, 4 }, { 2, 3 }, { 9, 16 }, { 1, 2 } };
 
     // A link resolved to what it points at.
@@ -270,6 +286,24 @@ namespace SKInventoryDetails
             }
             return false;
         }
+        // The user's text is never rewritten: refused rather than trimmed or cleaned.
+        const std::string base = without_aspect(item->getDescription());
+        if (std::any_of(base.begin(), base.end(), [](char c) { return c < 0x20 || c >= 0x7f || c == '|'; }))
+        {
+            if (why)
+            {
+                *why = str("aspect_bad_chars");
+            }
+            return false;
+        }
+        if (base.size() + LONGEST_TAG > (size_t)DB_INV_ITEM_DESC_STR_LEN)
+        {
+            if (why)
+            {
+                *why = str("aspect_too_long");
+            }
+            return false;
+        }
         return true;
     }
 
@@ -281,28 +315,9 @@ namespace SKInventoryDetails
             return;
         }
         // Only the tail changes: the old one goes, and 1:1 leaves none.
-        std::string desc = item->getDescription();
-        S32 old_w = 1;
-        S32 old_h = 1;
-        if (aspectOf(desc, old_w, old_h))
-        {
-            desc.erase(desc.rfind('('));
-            LLStringUtil::trimTail(desc);
-        }
-        // ASCII-printable with no pipes, as the server keeps descriptions.
-        std::string clean;
-        for (char c : desc)
-        {
-            clean += (c >= 0x20 && c < 0x7f && c != '|') ? c : '?';
-        }
+        const std::string base = without_aspect(item->getDescription());
         const std::string tail = (w == 1 && h == 1) ? std::string() : llformat("(%d:%d)", w, h);
-        const size_t room = (size_t)DB_INV_ITEM_DESC_STR_LEN - tail.size() - (clean.empty() || tail.empty() ? 0 : 1);
-        if (clean.size() > room)
-        {
-            clean.resize(room);
-            LLStringUtil::trimTail(clean);
-        }
-        const std::string result = tail.empty() ? clean : (clean.empty() ? tail : clean + " " + tail);
+        const std::string result = tail.empty() ? base : (base.empty() ? tail : base + " " + tail);
         if (result == item->getDescription())
         {
             return;

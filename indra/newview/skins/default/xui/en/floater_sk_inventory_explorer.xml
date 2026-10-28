@@ -130,6 +130,8 @@
     <string name="details_tip_aspect">The shape it's meant to be seen at; kept in the description</string>
     <string name="details_aspect_library">Library items can't be changed</string>
     <string name="details_aspect_no_modify">You can't modify this texture</string>
+    <string name="details_aspect_too_long">Description too long for an aspect tag</string>
+    <string name="details_aspect_bad_chars">Description has characters the server won't keep</string>
     <string name="details_gallery_by"> by [NAME]</string>
     <string name="details_gallery_resolution">[W]×[H]</string>
     <string name="details_gallery_resolution_full">[W]×[H] · full resolution</string>
