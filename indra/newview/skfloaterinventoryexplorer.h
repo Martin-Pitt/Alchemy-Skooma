@@ -50,7 +50,7 @@ class SKInventoryExplorerContextMenu;
 class SKInventoryGalleryView;
 class SKInventoryPathBar;
 class SKInventorySearchBox;
-class SKInventorySidebar;
+class SKInventoryTreeView;
 class SKSearchDropdown;
 
 // Everything one tab keeps: its folder, view, history, sort, group, selection and scroll.
@@ -280,7 +280,7 @@ private:
     S32 mActiveTab;
 
     SKExplorerTabStrip* mTabStrip;
-    SKInventorySidebar* mSidebar;
+    SKInventoryTreeView* mSidebar;
     SKInventoryListView* mList;
     SKInventoryColumnsView* mColumns;
     SKInventoryIconsView* mIcons;

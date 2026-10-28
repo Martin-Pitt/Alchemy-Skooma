@@ -221,6 +221,12 @@
     <string name="path_arrow_tooltip">Folders in [FOLDER]</string>
     <string name="path_no_subfolders">No subfolders</string>
     <string name="tip_remove_favorite">Remove from Favorites</string>
+    <string name="sidebar_heading_favorites">Favorites</string>
+    <string name="sidebar_heading_inventory">Inventory</string>
+    <string name="sidebar_heading_marketplace">Marketplace</string>
+    <string name="sidebar_heading_library">Library</string>
+    <string name="sidebar_favorites_hint">Drag folders here, or star a search</string>
+    <string name="sidebar_count_tooltip">[COUNT] items</string>
     <string name="saved_search_suffix"> in [FOLDER]</string>
     <string name="saved_search_in">Search in [FOLDER]</string>
     <string name="saved_search_everywhere">Search everywhere</string>
@@ -447,148 +453,24 @@
          min_width="140"
          name="sidebar_panel"
          width="220">
-            <scroll_container
+            <sk_inventory_tree
              follows="all"
              height="442"
              layout="topleft"
              left="0"
-             name="sidebar_scroll"
-             thin_scrollbars="true"
-             reserve_scroll_corner="false"
+             name="sidebar"
+             tab_stop="true"
              top="0"
-             width="220">
-                <sk_inventory_sidebar
-                 follows="left|top|right"
-                 height="442"
-                 layout="topleft"
-                 left="0"
-                 name="sidebar"
-                 top="0"
-                 width="220">
-                    <text
-                     follows="left|top"
-                     font="SansSerifSmall"
-                     height="14"
-                     layout="topleft"
-                     left="8"
-                     name="heading_favorites"
-                     text_color="LtGray_50"
-                     top="0"
-                     width="190">FAVORITES</text>
-                    <text
-                     follows="left|top"
-                     height="32"
-                     layout="topleft"
-                     left="12"
-                     name="favorites_hint"
-                     text_color="LtGray_50"
-                     top_pad="0"
-                     width="186"
-                     word_wrap="true">Drag folders here, or star a search</text>
-                    <sk_inventory_favorites_panel
-                     allow_multi_select="false"
-                     follows="left|top"
-                     height="20"
-                     layout="topleft"
-                     left="0"
-                     name="panel_favorites"
-                     section="favorites"
-                     top_pad="0"
-                     width="205">
-                        <scroll
-                         follows="all"
-                         hide_scrollbar="true"
-                         name="favorites_frame"
-                         reserve_scroll_corner="false" />
-                    </sk_inventory_favorites_panel>
-                    <sk_saved_search_rows
-                     follows="left|top"
-                     height="0"
-                     layout="topleft"
-                     left="0"
-                     name="saved_searches"
-                     top_pad="0"
-                     width="205" />
-                    <text
-                     follows="left|top"
-                     font="SansSerifSmall"
-                     height="14"
-                     layout="topleft"
-                     left="8"
-                     name="heading_inventory"
-                     text_color="LtGray_50"
-                     top_pad="0"
-                     width="190">INVENTORY</text>
-                    <sk_inventory_sidebar_panel
-                     allow_multi_select="false"
-                     follows="left|top"
-                     height="20"
-                     layout="topleft"
-                     left="0"
-                     name="panel_inventory"
-                     section="inventory"
-                     top_pad="0"
-                     width="205">
-                        <scroll
-                         follows="all"
-                         hide_scrollbar="true"
-                         name="inventory_frame"
-                         reserve_scroll_corner="false" />
-                    </sk_inventory_sidebar_panel>
-                    <text
-                     follows="left|top"
-                     font="SansSerifSmall"
-                     height="14"
-                     layout="topleft"
-                     left="8"
-                     name="heading_marketplace"
-                     text_color="LtGray_50"
-                     top_pad="0"
-                     width="190">MARKETPLACE</text>
-                    <sk_inventory_sidebar_panel
-                     allow_multi_select="false"
-                     follows="left|top"
-                     height="20"
-                     layout="topleft"
-                     left="0"
-                     name="panel_marketplace"
-                     section="marketplace"
-                     top_pad="0"
-                     width="205">
-                        <scroll
-                         follows="all"
-                         hide_scrollbar="true"
-                         name="marketplace_frame"
-                         reserve_scroll_corner="false" />
-                    </sk_inventory_sidebar_panel>
-                    <text
-                     follows="left|top"
-                     font="SansSerifSmall"
-                     height="14"
-                     layout="topleft"
-                     left="8"
-                     name="heading_library"
-                     text_color="LtGray_50"
-                     top_pad="0"
-                     width="190">LIBRARY</text>
-                    <sk_inventory_sidebar_panel
-                     allow_multi_select="false"
-                     follows="left|top"
-                     height="20"
-                     layout="topleft"
-                     left="0"
-                     name="panel_library"
-                     section="library"
-                     top_pad="0"
-                     width="205">
-                        <scroll
-                         follows="all"
-                         hide_scrollbar="true"
-                         name="library_frame"
-                         reserve_scroll_corner="false" />
-                    </sk_inventory_sidebar_panel>
-                </sk_inventory_sidebar>
-            </scroll_container>
+             width="220" />
+            <inventory_panel
+             follows="all"
+             height="10"
+             layout="topleft"
+             left="0"
+             name="bridge_panel"
+             top="0"
+             visible="false"
+             width="10" />
         </layout_panel>
         <layout_panel
          height="442"
