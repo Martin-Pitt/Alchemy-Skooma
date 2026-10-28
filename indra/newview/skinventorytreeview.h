@@ -183,6 +183,7 @@ protected:
     std::set<std::string> mExpandedBeforeFlat;
     std::vector<LLUUID> mFavorites;     // favourite folders, sorted, outermost only
     bool mFavoritesDirty;
+    bool mFavoritesWalked;            // walked at least once: later walks wait out the second
     LLFrameTimer mFavoritesTimer;
     std::vector<SavedSearch> mSavedSearches;
     S32 mSavedSelected;
@@ -191,11 +192,14 @@ protected:
     std::string mSelectedKey;
     LLUUID mSelectedID;
     S32 mHover;
+    std::string mHoverKey;            // the hovered row survives a rebuild
     bool mHoverArrow;
     std::string mPendingScrollKey;      // a reveal scrolls once the rows are laid out
 
     // Counts per folder for the session; dropped when the inventory changes.
     std::map<LLUUID, std::pair<S32, bool>> mCounts;
+    bool mCountsStale;
+    LLFrameTimer mCountsTimer;
 
     // A press that may become a drag of the row.
     S32 mPressIndex;

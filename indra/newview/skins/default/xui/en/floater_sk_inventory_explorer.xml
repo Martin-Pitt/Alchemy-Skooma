@@ -468,6 +468,7 @@
              layout="topleft"
              left="0"
              name="bridge_panel"
+             preinitialize_views="false"
              top="0"
              visible="false"
              width="10" />

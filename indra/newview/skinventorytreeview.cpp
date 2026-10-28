@@ -124,10 +124,12 @@ SKInventoryTreeView::SKInventoryTreeView(const Params& p)
     mLaidOut(false),
     mContentHeight(0),
     mFavoritesDirty(true),
+    mFavoritesWalked(false),
     mSavedSelected(-1),
     mFlat(false),
     mHover(-1),
     mHoverArrow(false),
+    mCountsStale(false),
     mPressIndex(-1),
     mPressX(0),
     mPressY(0),
@@ -163,7 +165,8 @@ void SKInventoryTreeView::markDirty()
 {
     mDirty = true;
     mFavoritesDirty = true;
-    mCounts.clear();
+    // Counts are dropped at most once a second, so a fetch landing folder by folder does not recount every frame.
+    mCountsStale = true;
 }
 
 void SKInventoryTreeView::setSavedSearches(const std::vector<SavedSearch>& searches, S32 selected)
@@ -214,6 +217,7 @@ void SKInventoryTreeView::refreshFavorites()
 {
     // A walk of the folders alone, only when the inventory changed and at most once a second.
     mFavoritesDirty = false;
+    mFavoritesWalked = true;
     mFavoritesTimer.reset();
     mFavorites.clear();
     const LLUUID trash_id = gInventory.findCategoryUUIDForType(LLFolderType::FT_TRASH);
@@ -268,9 +272,11 @@ void SKInventoryTreeView::addFolderRow(const LLUUID& folder_id, ESection section
     row.mKey = key;
     row.mDepth = depth;
     row.mName = cat->getName();
-    std::vector<LLViewerInventoryCategory*> children;
-    const bool fetched = subfolders(folder_id, children);
-    row.mHasChildren = !mFlat && (!children.empty() || !fetched);
+    LLInventoryModel::cat_array_t* cats = nullptr;
+    LLInventoryModel::item_array_t* items = nullptr;
+    gInventory.getDirectDescendentsOf(folder_id, cats, items);
+    const bool fetched = cat->getVersion() != LLViewerInventoryCategory::VERSION_UNKNOWN;
+    row.mHasChildren = !mFlat && ((cats && !cats->empty()) || !fetched);
     row.mExpanded = row.mHasChildren && mExpanded.count(key) > 0;
     row.mIcon = LLUI::getUIImage(std::string(LLViewerFolderType::lookupIconName(cat->getPreferredType(), row.mExpanded)));
     mRows.push_back(row);
@@ -293,13 +299,10 @@ void SKInventoryTreeView::addFolderRows(const LLUUID& folder_id, ESection sectio
 void SKInventoryTreeView::rebuild()
 {
     mDirty = false;
-    if (mFavoritesDirty && (mFavorites.empty() || mFavoritesTimer.getElapsedTimeF32() >= FAVORITES_REFRESH_SECONDS))
+    // The old favourites stand until the second is up; draw() rebuilds once it is.
+    if (mFavoritesDirty && (!mFavoritesWalked || mFavoritesTimer.getElapsedTimeF32() >= FAVORITES_REFRESH_SECONDS))
     {
         refreshFavorites();
-    }
-    else if (mFavoritesDirty)
-    {
-        mDirty = true; // read again once the second is up
     }
     mRows.clear();
     auto heading = [this](ESection section, const char* key)
@@ -385,7 +388,7 @@ void SKInventoryTreeView::rebuild()
         mSelectedKey.clear();
         mSelectedID.setNull();
     }
-    mHover = -1;
+    mHover = mHoverKey.empty() ? -1 : indexOfKey(mHoverKey);
     mLaidOut = false;
 }
 
@@ -477,6 +480,12 @@ S32 SKInventoryTreeView::stepSelectable(S32 from, S32 step) const
 std::string SKInventoryTreeView::countLabel(const LLUUID& folder_id, std::string* exact)
 {
     // Worked out once per folder until the inventory changes: only for the selected row.
+    if (mCountsStale && mCountsTimer.getElapsedTimeF32() >= 1.f)
+    {
+        mCounts.clear();
+        mCountsStale = false;
+        mCountsTimer.reset();
+    }
     auto it = mCounts.find(folder_id);
     if (it == mCounts.end())
     {
@@ -593,6 +602,10 @@ void SKInventoryTreeView::drawRow(S32 index, const LLRect& rect)
 
 void SKInventoryTreeView::draw()
 {
+    if (mFavoritesDirty && mFavoritesTimer.getElapsedTimeF32() >= FAVORITES_REFRESH_SECONDS)
+    {
+        mDirty = true;
+    }
     if (mDirty)
     {
         rebuild();
@@ -600,7 +613,6 @@ void SKInventoryTreeView::draw()
     if (!mLaidOut)
     {
         layout();
-        // Showing the bar narrows the rows; nothing else depends on the width.
     }
     if (!mPendingScrollKey.empty())
     {
@@ -877,23 +889,25 @@ bool SKInventoryTreeView::handleMouseDown(S32 x, S32 y, MASK mask)
         return true;
     }
     make_ui_sound("UISndClick");
-    const Row& row = mRows[index];
-    if (row.mKind == Row::KIND_SAVED && index == mHover && removeRect(index).pointInRect(x, y))
+    // Copied: opening can rebuild the rows.
+    const Row::EKind kind = mRows[index].mKind;
+    const S32 saved = mRows[index].mSaved;
+    if (kind == Row::KIND_SAVED && index == mHover && removeRect(index).pointInRect(x, y))
     {
         if (mRemoveSavedSearch)
         {
-            mRemoveSavedSearch(row.mSaved);
+            mRemoveSavedSearch(saved);
         }
         return true;
     }
-    if (row.mHasChildren && arrowRect(index).pointInRect(x, y))
+    if (mRows[index].mHasChildren && arrowRect(index).pointInRect(x, y))
     {
-        setExpanded(index, !row.mExpanded);
+        setExpanded(index, !mRows[index].mExpanded);
         return true;
     }
     // A click opens the folder; it never expands.
     selectIndex(index, true);
-    if (row.mKind == Row::KIND_FOLDER)
+    if (kind == Row::KIND_FOLDER)
     {
         mPressIndex = indexOfKey(mSelectedKey);
         mPressX = x;
@@ -937,13 +951,14 @@ bool SKInventoryTreeView::handleRightMouseDown(S32 x, S32 y, MASK mask)
     {
         return true;
     }
+    const LLUUID id = mRows[index].mID;
     if (mRows[index].mKey != mSelectedKey)
     {
         selectIndex(index, true);
     }
     if (mMenuCallback)
     {
-        mMenuCallback(x, y, mRows[index].mID);
+        mMenuCallback(x, y, id);
     }
     return true;
 }
@@ -968,12 +983,14 @@ bool SKInventoryTreeView::handleHover(S32 x, S32 y, MASK mask)
     {
         mHover = -1;
     }
+    mHoverKey = mHover >= 0 ? mRows[mHover].mKey : std::string();
     return LLUICtrl::handleHover(x, y, mask);
 }
 
 void SKInventoryTreeView::onMouseLeave(S32 x, S32 y, MASK mask)
 {
     mHover = -1;
+    mHoverKey.clear();
     LLUICtrl::onMouseLeave(x, y, mask);
 }
 
@@ -1029,16 +1046,22 @@ bool SKInventoryTreeView::handleKeyHere(KEY key, MASK mask)
             const S32 next = cur < 0 ? stepSelectable(-1, 1) : stepSelectable(cur, key == KEY_DOWN ? 1 : -1);
             if (next >= 0)
             {
-                selectIndex(next, true);
+                selectIndex(next, mRows[next].mKind != Row::KIND_SAVED);
             }
             return true;
         }
         case KEY_HOME:
-            selectIndex(stepSelectable(-1, 1), true);
+        {
+            const S32 first = stepSelectable(-1, 1);
+            selectIndex(first, first >= 0 && mRows[first].mKind != Row::KIND_SAVED);
             return true;
+        }
         case KEY_END:
-            selectIndex(stepSelectable((S32)mRows.size(), -1), true);
+        {
+            const S32 last = stepSelectable((S32)mRows.size(), -1);
+            selectIndex(last, last >= 0 && mRows[last].mKind != Row::KIND_SAVED);
             return true;
+        }
         case KEY_RIGHT:
             // Expands, then enters.
             if (cur >= 0 && mRows[cur].mHasChildren)
@@ -1072,6 +1095,12 @@ bool SKInventoryTreeView::handleKeyHere(KEY key, MASK mask)
             }
             return true;
         case KEY_RETURN:
+            // Enter runs a saved search the keys moved onto.
+            if (cur >= 0 && mRows[cur].mKind == Row::KIND_SAVED && mRunSavedSearch)
+            {
+                mRunSavedSearch(mRows[cur].mSaved);
+            }
+            [[fallthrough]];
         case KEY_TAB:
             if (mFocusContentCallback)
             {
@@ -1115,7 +1144,7 @@ bool SKInventoryTreeView::handleUnicodeCharHere(llwchar uni_char)
         LLStringUtil::toLower(name);
         if (name.compare(0, prefix.size(), prefix) == 0)
         {
-            selectIndex(i, true);
+            selectIndex(i, mRows[i].mKind != Row::KIND_SAVED);
             break;
         }
     }
