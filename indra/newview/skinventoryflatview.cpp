@@ -732,9 +732,12 @@ void SKInventoryFlatView::prefetchPicture(const SKInventoryRow& row)
                                                                                 LLGLTexture::BOOST_NONE);
     if (texture)
     {
-        const S32 pixels = llceil(PREFETCH_SIZE * LLUI::getScaleFactor().mV[VX]);
-        texture->setKnownDrawSize(pixels, pixels);
-        texture->addTextureStats((F32)(pixels * pixels));
+        // What is already decoded is asked for again, so a picture seen larger keeps its detail while its row is near.
+        const S32 small = llceil(PREFETCH_SIZE * LLUI::getScaleFactor().mV[VX]);
+        const S32 w = llmax(small, (S32)texture->getWidth());
+        const S32 h = llmax(small, (S32)texture->getHeight());
+        texture->setKnownDrawSize(w, h);
+        texture->addTextureStats((F32)(w * h));
     }
 }
 
