@@ -965,7 +965,7 @@ void SKFloaterInventoryExplorer::onInventoryChanged(U32 mask)
 {
     constexpr U32 RELEVANT = LLInventoryObserver::ADD | LLInventoryObserver::REMOVE | LLInventoryObserver::LABEL
         | LLInventoryObserver::STRUCTURE | LLInventoryObserver::INTERNAL | LLInventoryObserver::REBUILD
-        | LLInventoryObserver::UPDATE_CREATE;
+        | LLInventoryObserver::UPDATE_CREATE | LLInventoryObserver::UPDATE_FAVORITE;
     if (!(mask & RELEVANT) || mTabs.empty())
     {
         return;
@@ -1029,8 +1029,8 @@ void SKFloaterInventoryExplorer::onInventoryChanged(U32 mask)
             }
         }
     }
-    // The sidebar reads its rows again on its next draw.
-    mSidebar->markDirty();
+    // The sidebar follows only what changed.
+    mSidebar->onInventoryChanged(gInventory.getChangedIDs(), mask);
     // The details read the item again when it changed: a rename, a description, an aspect.
     for (SKInventoryDetailsView* details : { mDetails, mColumns->getDetailsView() })
     {

@@ -32,6 +32,7 @@
 #include "llfontgl.h"
 #include "llinventorymodel.h"
 #include "llinventorymodelbackgroundfetch.h"
+#include "llinventoryobserver.h"
 #include "lllocalcliprect.h"
 #include "llrender2dutils.h"
 #include "llscrollbar.h"
@@ -60,7 +61,6 @@ namespace
     constexpr S32 ARROW_SIZE = 12;
     constexpr S32 WHEEL_ROWS = 3;
     constexpr F32 TYPE_AHEAD_SECONDS = 1.f;
-    constexpr F32 FAVORITES_REFRESH_SECONDS = 1.f;
 
     bool is_marketplace_top(const LLViewerInventoryCategory* cat)
     {
@@ -123,13 +123,11 @@ SKInventoryTreeView::SKInventoryTreeView(const Params& p)
     mDirty(true),
     mLaidOut(false),
     mContentHeight(0),
-    mFavoritesDirty(true),
     mFavoritesWalked(false),
     mSavedSelected(-1),
     mFlat(false),
     mHover(-1),
     mHoverArrow(false),
-    mCountsStale(false),
     mPressIndex(-1),
     mPressX(0),
     mPressY(0),
@@ -161,12 +159,88 @@ const std::string& SKInventoryTreeView::str(const std::string& key) const
     return it != mStrings.end() ? it->second : LLStringUtil::null;
 }
 
-void SKInventoryTreeView::markDirty()
+void SKInventoryTreeView::dropCounts(const LLUUID& id)
 {
-    mDirty = true;
-    mFavoritesDirty = true;
-    // Counts are dropped at most once a second, so a fetch landing folder by folder does not recount every frame.
-    mCountsStale = true;
+    // Up the model's chain, and up the chain the folder had when it was counted.
+    for (LLUUID cur = id; cur.notNull();)
+    {
+        mCounts.erase(cur);
+        auto known = mCountedParents.find(cur);
+        const LLUUID old_parent = known != mCountedParents.end() ? known->second : LLUUID::null;
+        const LLInventoryObject* obj = gInventory.getObject(cur);
+        const LLUUID parent = obj ? obj->getParentUUID() : LLUUID::null;
+        if (old_parent.notNull() && old_parent != parent)
+        {
+            dropCounts(old_parent);
+        }
+        cur = parent.notNull() ? parent : old_parent;
+        if (cur == old_parent && old_parent.notNull() && !obj)
+        {
+            mCountedParents.erase(known);
+        }
+    }
+}
+
+void SKInventoryTreeView::onInventoryChanged(const std::set<LLUUID>& changed_ids, U32 mask)
+{
+    if (mask & LLInventoryObserver::REBUILD)
+    {
+        // The model was rebuilt: everything is read again, the favourites once more with it.
+        mFavoriteSet.clear();
+        mFavoritesWalked = false;
+        mCounts.clear();
+        mCountedParents.clear();
+        mDirty = true;
+        return;
+    }
+    const LLUUID& root_id = gInventory.getRootFolderID();
+    const LLUUID& library_id = gInventory.getLibraryRootFolderID();
+    bool favorites_changed = false;
+    for (const LLUUID& id : changed_ids)
+    {
+        const LLViewerInventoryCategory* cat = gInventory.getCategory(id);
+        const LLInventoryObject* obj = cat ? cat : gInventory.getObject(id);
+
+        // Favourites: added, removed, renamed or moved, and nothing else.
+        if (mFavoritesWalked)
+        {
+            const bool known = mFavoriteSet.count(id) > 0;
+            const bool favorite = cat && cat->getIsFavorite()
+                                  && !gInventory.isObjectDescendentOf(id, gInventory.findCategoryUUIDForType(LLFolderType::FT_TRASH));
+            if (favorite && !known)
+            {
+                mFavoriteSet.insert(id);
+                favorites_changed = true;
+            }
+            else if (!favorite && known)
+            {
+                mFavoriteSet.erase(id);
+                favorites_changed = true;
+            }
+            else if (known)
+            {
+                favorites_changed = true; // its name or place may have changed
+            }
+        }
+
+        // Counts: only the chains of folders that were counted.
+        if (!mCounts.empty())
+        {
+            dropCounts(id);
+        }
+
+        // Rows: only where a changed object is a row, or sits in a folder a row shows or a section lists.
+        const LLUUID parent = obj ? obj->getParentUUID() : LLUUID::null;
+        if (mRowIDs.count(id) || (parent.notNull() && (mRowIDs.count(parent) || parent == root_id || parent == library_id)))
+        {
+            mDirty = true;
+        }
+    }
+    if (favorites_changed)
+    {
+        sortFavorites();
+        mDirty = true;
+    }
 }
 
 void SKInventoryTreeView::setSavedSearches(const std::vector<SavedSearch>& searches, S32 selected)
@@ -213,15 +287,12 @@ void SKInventoryTreeView::setFlat(bool flat)
     mDirty = true;
 }
 
-void SKInventoryTreeView::refreshFavorites()
+void SKInventoryTreeView::walkFavorites()
 {
-    // A walk of the folders alone, only when the inventory changed and at most once a second.
-    mFavoritesDirty = false;
+    // The one walk, of folders alone, at first use; the changes keep the set from then on.
     mFavoritesWalked = true;
-    mFavoritesTimer.reset();
-    mFavorites.clear();
+    mFavoriteSet.clear();
     const LLUUID trash_id = gInventory.findCategoryUUIDForType(LLFolderType::FT_TRASH);
-    std::vector<LLViewerInventoryCategory*> found;
     std::vector<LLUUID> stack{ gInventory.getRootFolderID() };
     while (!stack.empty())
     {
@@ -242,17 +313,40 @@ void SKInventoryTreeView::refreshFavorites()
             }
             if (cat->getIsFavorite())
             {
-                found.push_back(cat); // the outermost favourite; its own favourites show inside it
+                mFavoriteSet.insert(cat->getUUID());
             }
-            else
-            {
-                stack.push_back(cat->getUUID());
-            }
+            stack.push_back(cat->getUUID());
         }
     }
-    std::sort(found.begin(), found.end(), [](const LLViewerInventoryCategory* a, const LLViewerInventoryCategory* b)
+    sortFavorites();
+}
+
+void SKInventoryTreeView::sortFavorites()
+{
+    // The outermost favourites, by name; a favourite inside another shows within it.
+    std::vector<LLViewerInventoryCategory*> outer;
+    for (const LLUUID& id : mFavoriteSet)
+    {
+        LLViewerInventoryCategory* cat = gInventory.getCategory(id);
+        if (!cat)
+        {
+            continue;
+        }
+        bool inside = false;
+        for (const LLViewerInventoryCategory* up = gInventory.getCategory(cat->getParentUUID()); up && !inside;
+             up = gInventory.getCategory(up->getParentUUID()))
+        {
+            inside = mFavoriteSet.count(up->getUUID()) > 0;
+        }
+        if (!inside)
+        {
+            outer.push_back(cat);
+        }
+    }
+    std::sort(outer.begin(), outer.end(), [](const LLViewerInventoryCategory* a, const LLViewerInventoryCategory* b)
               { return LLStringUtil::compareDict(a->getName(), b->getName()) < 0; });
-    for (const LLViewerInventoryCategory* cat : found)
+    mFavorites.clear();
+    for (const LLViewerInventoryCategory* cat : outer)
     {
         mFavorites.push_back(cat->getUUID());
     }
@@ -280,6 +374,7 @@ void SKInventoryTreeView::addFolderRow(const LLUUID& folder_id, ESection section
     row.mExpanded = row.mHasChildren && mExpanded.count(key) > 0;
     row.mIcon = LLUI::getUIImage(std::string(LLViewerFolderType::lookupIconName(cat->getPreferredType(), row.mExpanded)));
     mRows.push_back(row);
+    mRowIDs.insert(folder_id);
     if (row.mExpanded)
     {
         addFolderRows(folder_id, section, key, depth + 1);
@@ -299,12 +394,12 @@ void SKInventoryTreeView::addFolderRows(const LLUUID& folder_id, ESection sectio
 void SKInventoryTreeView::rebuild()
 {
     mDirty = false;
-    // The old favourites stand until the second is up; draw() rebuilds once it is.
-    if (mFavoritesDirty && (!mFavoritesWalked || mFavoritesTimer.getElapsedTimeF32() >= FAVORITES_REFRESH_SECONDS))
+    if (!mFavoritesWalked)
     {
-        refreshFavorites();
+        walkFavorites();
     }
     mRows.clear();
+    mRowIDs.clear();
     auto heading = [this](ESection section, const char* key)
     {
         Row row;
@@ -480,12 +575,6 @@ S32 SKInventoryTreeView::stepSelectable(S32 from, S32 step) const
 std::string SKInventoryTreeView::countLabel(const LLUUID& folder_id, std::string* exact)
 {
     // Worked out once per folder until the inventory changes: only for the selected row.
-    if (mCountsStale && mCountsTimer.getElapsedTimeF32() >= 1.f)
-    {
-        mCounts.clear();
-        mCountsStale = false;
-        mCountsTimer.reset();
-    }
     auto it = mCounts.find(folder_id);
     if (it == mCounts.end())
     {
@@ -497,6 +586,7 @@ std::string SKInventoryTreeView::countLabel(const LLUUID& folder_id, std::string
         for (const LLViewerInventoryCategory* cat : cats)
         {
             loading = loading || cat->getVersion() == LLViewerInventoryCategory::VERSION_UNKNOWN;
+            mCountedParents[cat->getUUID()] = cat->getParentUUID();
         }
         it = mCounts.emplace(folder_id, std::make_pair((S32)items.size(), loading)).first;
     }
@@ -602,10 +692,6 @@ void SKInventoryTreeView::drawRow(S32 index, const LLRect& rect)
 
 void SKInventoryTreeView::draw()
 {
-    if (mFavoritesDirty && mFavoritesTimer.getElapsedTimeF32() >= FAVORITES_REFRESH_SECONDS)
-    {
-        mDirty = true;
-    }
     if (mDirty)
     {
         rebuild();
