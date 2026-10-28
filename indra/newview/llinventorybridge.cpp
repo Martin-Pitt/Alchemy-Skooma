@@ -7028,13 +7028,21 @@ bool LLCallingCardBridge::dragOrDrop(MASK mask, bool drop,
 // [RLVa:KB] - @share
         if ( (RlvActions::isRlvEnabled()) && (!RlvActions::canGiveInventory(item->getCreatorUUID())) )
         {
-            if (drop)
-            {
-                RlvUtil::notifyBlocked(RlvStringKeys::Blocked::Share, LLSD().with("RECIPIENT", LLSLURL("agent", item->getCreatorUUID(), "completename").getSLURLString()));
-            }
+            // <SK:Nexii> Drag feedback: a locked row gets no drop pass, so the tool gives the notice on release
+            //if (drop)
+            //{
+            //    RlvUtil::notifyBlocked(RlvStringKeys::Blocked::Share, LLSD().with("RECIPIENT", LLSLURL("agent", item->getCreatorUUID(), "completename").getSLURLString()));
+            //}
+            // </SK:Nexii>
             // We should return false but our caller uses the return value as both 'will accept' *and* 'was handled' so
             // returning false will result in the dropped item being moved when it is blocked.
-            LLDragFeedback::block(); // <SK:Nexii> Drag feedback: handled, but refused as locked, quietly
+            // <SK:Nexii> Drag feedback: handled, but refused as locked, quietly
+            const LLUUID recipient = item->getCreatorUUID();
+            LLDragFeedback::block([recipient]()
+            {
+                RlvUtil::notifyBlocked(RlvStringKeys::Blocked::Share, LLSD().with("RECIPIENT", LLSLURL("agent", recipient, "completename").getSLURLString()));
+            });
+            // </SK:Nexii>
             return true;
         }
 // [/RLVa:KB]

@@ -697,6 +697,12 @@ void LLToolDragAndDrop::dragOrDrop( S32 x, S32 y, MASK mask, bool drop,
                 *acceptance = (EAcceptance)llmin((U32)item_acceptance, (U32)*acceptance);
             }
         }
+        // <SK:Nexii> Drag feedback: a release on a locked target says why
+        if (handled && drop)
+        {
+            LLDragFeedback::dropBlocked();
+        }
+        // </SK:Nexii>
 
         // all objects passed, go ahead and perform drop if necessary
         if (handled && drop && (U32)*acceptance >= ACCEPT_YES_COPY_SINGLE)
@@ -775,6 +781,12 @@ void LLToolDragAndDrop::dragOrDrop( S32 x, S32 y, MASK mask, bool drop,
                 *acceptance = (EAcceptance)llmin((U32)item_acceptance, (U32)*acceptance);
             }
         }
+        // <SK:Nexii> Drag feedback: a release on a locked target says why
+        if (handled && drop)
+        {
+            LLDragFeedback::dropBlocked();
+        }
+        // </SK:Nexii>
         // all objects passed, go ahead and perform drop if necessary
         if (handled && drop && (U32)*acceptance > ACCEPT_NO_LOCKED)
         {

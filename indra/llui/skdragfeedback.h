@@ -28,6 +28,7 @@
 #include "llrect.h"
 #include "lluuid.h"
 
+#include <functional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -113,8 +114,11 @@ public:
     static void report(EDragAction action, std::string_view target_name = {});
     static void refuse(std::string_view message, bool quiet = false);
     // A target that handles the drag but is locked against it (RLVa): refused quietly, as ACCEPT_NO_LOCKED.
-    static void block();
+    // notice_on_drop is what a release there says (RLVa's "blocked" notice): the tool calls it on the drop
+    // (dropBlocked), since a locked target is never given the drop pass.
+    static void block(std::function<void()> notice_on_drop = nullptr);
     static bool blocked();
+    static void dropBlocked();
     static EDragAction reportedAction();
     static const std::string& reportedTarget();
     static const std::string& refusal();

@@ -78,6 +78,7 @@ namespace
         std::string mRefusal;
         bool mQuiet = false;
         bool mBlocked = false;
+        std::function<void()> mBlockedNotice;
 
         std::string mChip;
         bool mChipRefused = false;
@@ -186,13 +187,15 @@ void LLDragFeedback::beginPass()
     s.mRefusal.clear();
     s.mQuiet = false;
     s.mBlocked = false;
+    s.mBlockedNotice = nullptr;
     s.mMark = Mark();
 }
 
-void LLDragFeedback::block()
+void LLDragFeedback::block(std::function<void()> notice_on_drop)
 {
     State& s = state();
     s.mBlocked = true;
+    s.mBlockedNotice = std::move(notice_on_drop);
     s.mRefusal.clear();
     s.mQuiet = true;
 }
@@ -200,6 +203,17 @@ void LLDragFeedback::block()
 bool LLDragFeedback::blocked()
 {
     return state().mBlocked;
+}
+
+void LLDragFeedback::dropBlocked()
+{
+    State& s = state();
+    if (s.mBlocked && s.mBlockedNotice)
+    {
+        std::function<void()> notice;
+        notice.swap(s.mBlockedNotice);
+        notice();
+    }
 }
 
 void LLDragFeedback::report(EDragAction action, std::string_view target_name)
@@ -213,7 +227,8 @@ void LLDragFeedback::refuse(std::string_view message, bool quiet)
 {
     State& s = state();
     s.mRefusal = message;
-    s.mQuiet = quiet;
+    // A locked target stays quiet whatever another cargo item is refused for.
+    s.mQuiet = quiet || s.mBlocked;
 }
 
 EDragAction LLDragFeedback::reportedAction()
