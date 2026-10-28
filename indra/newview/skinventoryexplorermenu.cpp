@@ -439,9 +439,39 @@ void toggleFavorite(const uuid_vec_t& ids)
     SKInventoryExplorerDrag::recordFavorites(ids, favorite);
 }
 
-void create(const LLUUID& dest_id, const std::string& kind)
+// Creations asked for here: the folder each lands in, and when it was asked.
+static std::vector<std::pair<LLUUID, F64>> s_pending_creations;
+constexpr F64 CREATION_WAIT_SECONDS = 60.0;
+
+void create(const LLUUID& dest_id, const std::string& kind, const std::function<void(const LLUUID&)>& created_cb)
 {
-    menu_create_inventory_item(nullptr, dest_id, LLSD(kind));
+    const LLUUID folder_id = folderOf(dest_id).notNull() ? folderOf(dest_id) : dest_id;
+    // Folders arrive through AIS, which the stock "show new inventory" does not watch.
+    if (kind != "category")
+    {
+        s_pending_creations.emplace_back(folder_id, LLTimer::getTotalSeconds());
+    }
+    menu_create_inventory_item(nullptr, folder_id, LLSD(kind), LLUUID::null, created_cb);
+}
+
+bool claimCreated(const LLUUID& id)
+{
+    const LLInventoryObject* obj = gInventory.getObject(id);
+    const F64 now = LLTimer::getTotalSeconds();
+    std::erase_if(s_pending_creations, [now](const auto& pending) { return now - pending.second > CREATION_WAIT_SECONDS; });
+    if (!obj)
+    {
+        return false;
+    }
+    for (auto it = s_pending_creations.begin(); it != s_pending_creations.end(); ++it)
+    {
+        if (it->first == obj->getParentUUID())
+        {
+            s_pending_creations.erase(it);
+            return true;
+        }
+    }
+    return false;
 }
 
 void bridgeAction(const LLUUID& id, const std::string& action)
@@ -619,7 +649,7 @@ LLContextMenu* SKInventoryExplorerContextMenu::createMenu()
 
     registrar.add("SKInvExplorer.Do", [this](LLUICtrl*, const LLSD& param) { doToSelected(param.asString()); });
     registrar.add("SKInvExplorer.Create", [this](LLUICtrl*, const LLSD& param)
-                  { SKInventoryExplorerActions::create(mUUIDs.front(), param.asString()); });
+                  { SKInventoryExplorerActions::create(mUUIDs.front(), param.asString(), mCreatedCallback); });
     registrar.add("SKInvExplorer.Upload", [this](LLUICtrl*, const LLSD& param)
                   { LLInventoryAction::fileUploadLocation(mUUIDs.front(), param.asString()); });
     registrar.add("SKInvExplorer.Attach", [this](LLUICtrl*, const LLSD& param)
@@ -633,6 +663,51 @@ LLContextMenu* SKInventoryExplorerContextMenu::createMenu()
         addIconRow(menu);
     }
     return menu;
+}
+
+void SKInventoryExplorerContextMenu::show(LLView* spawning_view, const uuid_vec_t& uuids, S32 x, S32 y)
+{
+    mSpawnView = spawning_view ? spawning_view->getHandle() : LLHandle<LLView>();
+    mSpawnX = x;
+    mSpawnY = y;
+    LLListContextMenu::show(spawning_view, uuids, x, y);
+}
+
+void SKInventoryExplorerContextMenu::placeNearSpawn(LLFloater* floater)
+{
+    LLView* spawn = mSpawnView.get();
+    if (!floater || !spawn || !gFloaterView || floater->getHost() || floater->getParent() != gFloaterView)
+    {
+        return;
+    }
+    constexpr S32 GAP = 16;
+    const LLRect screen = gFloaterView->getSnapRect();
+    const S32 width = floater->getRect().getWidth();
+    const S32 height = floater->getRect().getHeight();
+    S32 x = 0;
+    S32 y = 0;
+    spawn->localPointToOtherView(mSpawnX, mSpawnY, &x, &y, gFloaterView);
+    // Beside the item where the screen has room, else beside the Explorer on the side with room.
+    S32 left = x + GAP;
+    if (left + width > screen.mRight)
+    {
+        left = x - GAP - width;
+    }
+    if (left < screen.mLeft)
+    {
+        LLRect explorer = spawn->calcScreenRect();
+        if (LLFloater* owner = spawn->getParentByType<LLFloater>())
+        {
+            explorer = owner->getRect();
+        }
+        left = (screen.mRight - explorer.mRight >= width + 4) ? explorer.mRight + 4 : explorer.mLeft - 4 - width;
+    }
+    LLRect rect(left, y + height / 2, left + width, y + height / 2 - height);
+    rect.translate(0, llmin(0, screen.mTop - rect.mTop));
+    rect.translate(0, llmax(0, screen.mBottom - rect.mBottom));
+    rect.translate(llmax(0, screen.mLeft - rect.mLeft), 0);
+    rect.translate(llmin(0, screen.mRight - rect.mRight), 0);
+    floater->setOrigin(rect.mLeft, rect.mBottom);
 }
 
 void SKInventoryExplorerContextMenu::addIconRow(LLContextMenu* menu)
@@ -670,6 +745,12 @@ void SKInventoryExplorerContextMenu::addIconRow(LLContextMenu* menu)
                                    gInventory.isObjectDescendentOf(first, gInventory.getRootFolderID())));
         row->mIcons.push_back(icon("delete", string("tip_delete"), "TrashItem_Off",
                                    SKInventoryExplorerActions::canDelete(mUUIDs, mListedFolderID)));
+    }
+    // A row with nothing to press (the empty space's Paste with an empty clipboard) is left out.
+    if (std::none_of(row->mIcons.begin(), row->mIcons.end(), [](const SKMenuIconRow::Icon& i) { return i.mEnabled; }))
+    {
+        delete row;
+        return;
     }
     row->mAction = [this](const std::string& action) { doToSelected(action); };
     menu->insert(0, row);
@@ -1233,7 +1314,8 @@ void SKInventoryExplorerContextMenu::doToSelected(const std::string& action)
     }
     else if (action == "properties")
     {
-        show_item_profile(id);
+        // As show_item_profile, then placed by the item.
+        placeNearSpawn(LLFloaterReg::showInstance("item_properties", LLSD().with("id", gInventory.getLinkedItemID(id))));
     }
     else if (action == "thumbnail")
     {
@@ -1242,7 +1324,7 @@ void SKInventoryExplorerContextMenu::doToSelected(const std::string& action)
         {
             data.append(selected);
         }
-        LLFloaterReg::showInstance("change_item_thumbnail", data);
+        placeNearSpawn(LLFloaterReg::showInstance("change_item_thumbnail", data));
     }
     else if (action == "copy_inventory_uuid")
     {

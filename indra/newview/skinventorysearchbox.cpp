@@ -138,6 +138,7 @@ SKSearchDropdown::SKSearchDropdown(SKInventorySearchBox* box)
     mPopup(SKExplorerPopupList::create()),
     mSettling(false)
 {
+    mPopupHandle = mPopup->getHandle();
     mPopup->setPickCallback([this](S32 index) { pick(index); });
     mPopup->setRemoveCallback([this](S32 index)
                               {
@@ -155,8 +156,7 @@ SKSearchDropdown::~SKSearchDropdown()
     {
         request.second.disconnect();
     }
-    mPopup->hide();
-    delete mPopup;
+    SKExplorerPopupList::destroy(mPopupHandle);
 }
 
 std::string SKSearchDropdown::string(const std::string& key) const

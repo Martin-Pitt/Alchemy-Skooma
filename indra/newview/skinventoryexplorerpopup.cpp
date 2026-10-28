@@ -31,6 +31,7 @@
 #include "llfontgl.h"
 #include "lllocalcliprect.h"
 #include "llrender2dutils.h"
+#include "llrootview.h"
 #include "lltooltip.h"
 #include "llui.h"
 #include "lluicolortable.h"
@@ -55,7 +56,25 @@ SKExplorerPopupList* SKExplorerPopupList::create()
     p.rect(LLRect(0, 1, 1, 0));
     p.visible(false);
     p.mouse_opaque(true);
-    return LLUICtrlFactory::create<SKExplorerPopupList>(p);
+    SKExplorerPopupList* popup = LLUICtrlFactory::create<SKExplorerPopupList>(p);
+    // The popup layer reaches a popup only through a view tree it shares, so the list hangs off the root view, whose
+    // coordinates are the screen's.
+    if (gViewerWindow && gViewerWindow->getRootView())
+    {
+        gViewerWindow->getRootView()->addChild(popup);
+    }
+    return popup;
+}
+
+void SKExplorerPopupList::destroy(const LLHandle<LLView>& handle)
+{
+    // The root view may have deleted it first, at shutdown.
+    if (SKExplorerPopupList* popup = static_cast<SKExplorerPopupList*>(handle.get()))
+    {
+        popup->setCloseCallback(nullptr);
+        popup->hide();
+        delete popup;
+    }
 }
 
 SKExplorerPopupList::SKExplorerPopupList(const LLUICtrl::Params& p)
@@ -240,11 +259,18 @@ void SKExplorerPopupList::draw()
     static LLUIColor bg = LLUIColorTable::instance().getColor("MenuDefaultBgColor");
     static LLUIColor border = LLUIColorTable::instance().getColor("MenuItemDisabledColor");
     static LLUIColor highlight = LLUIColorTable::instance().getColor("MenuItemHighlightBgColor");
-    static LLUIColor hover = LLUIColorTable::instance().getColor("White_10");
     static LLUIColor text = LLUIColorTable::instance().getColor("MenuItemEnabledColor");
     static LLUIColor disabled = LLUIColorTable::instance().getColor("MenuItemDisabledColor");
     static LLUIColor dim = LLUIColorTable::instance().getColor("LtGray_50");
     static LLPointer<LLUIImage> close = LLUI::getUIImage("Icon_Close_Foreground");
+
+    // Drawn once a frame: by the root view and again by the popup layer, which puts it over everything.
+    const U32 frame = LLFrameTimer::getFrameCount();
+    if (frame == mDrawnFrame)
+    {
+        return;
+    }
+    mDrawnFrame = frame;
 
     const LLFontGL* font = LLFontGL::getFontSansSerifSmall();
     const LLRect local = getLocalRect();
@@ -275,10 +301,6 @@ void SKExplorerPopupList::draw()
         if (i == mHighlight)
         {
             gl_rect_2d(rect, highlight.get(), true);
-        }
-        else if (i == mHover && row.mEnabled)
-        {
-            gl_rect_2d(rect, hover.get(), true);
         }
         S32 x = rect.mLeft + PAD;
         if (row.mIcon.notNull())
@@ -347,6 +369,11 @@ bool SKExplorerPopupList::handleMouseUp(S32 x, S32 y, MASK mask)
 bool SKExplorerPopupList::handleHover(S32 x, S32 y, MASK mask)
 {
     mHover = rowAt(y);
+    // As in menus, the row under the pointer is the highlighted one.
+    if (mHover >= 0 && mRows[mHover].isOption())
+    {
+        mHighlight = mHover;
+    }
     getWindow()->setCursor(UI_CURSOR_ARROW);
     return true;
 }
@@ -354,6 +381,7 @@ bool SKExplorerPopupList::handleHover(S32 x, S32 y, MASK mask)
 void SKExplorerPopupList::onMouseLeave(S32 x, S32 y, MASK mask)
 {
     mHover = -1;
+    mHighlight = -1;
     LLUICtrl::onMouseLeave(x, y, mask);
 }
 

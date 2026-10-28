@@ -201,6 +201,23 @@ LLFolderView* SKInventorySidebarPanel::createFolderRoot(LLUUID root_id)
     return fv;
 }
 
+bool SKInventorySidebarPanel::handleKeyHere(KEY key, MASK mask)
+{
+    // Focus may rest on the panel rather than its folder view (LLPanel::setFocus passes it on only to a tab stop):
+    // the sidebar takes the key first, then the folder view moves as if it had focus.
+    if (handleSidebarKey(key, mask))
+    {
+        return true;
+    }
+    LLFolderView* root = getRootFolder();
+    if (root && !root->hasFocus() && mask == MASK_NONE
+        && (key == KEY_UP || key == KEY_DOWN || key == KEY_LEFT || key == KEY_RIGHT || key == KEY_HOME || key == KEY_END))
+    {
+        return root->handleKeyHere(key, mask);
+    }
+    return LLInventoryPanel::handleKeyHere(key, mask);
+}
+
 bool SKInventorySidebarPanel::typedViewsFilter(const LLUUID& id, LLInventoryObject const* objectp)
 {
     const LLViewerInventoryCategory* cat = dynamic_cast<const LLViewerInventoryCategory*>(objectp);
@@ -781,7 +798,8 @@ void SKInventorySidebar::selectRow(SKInventorySidebarPanel* panel, LLFolderViewI
 bool SKInventorySidebar::handlePanelKey(SKInventorySidebarPanel* panel, KEY key, MASK mask)
 {
     // The sections are one list to the keys: ↑/↓ cross their edges, Home/End reach the whole sidebar's ends.
-    if (mask != MASK_NONE || mFlat)
+    // In Columns too, where the sidebar is the first column and Columns is the default view.
+    if (mask != MASK_NONE)
     {
         return false;
     }

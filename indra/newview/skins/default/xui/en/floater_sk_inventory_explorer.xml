@@ -127,6 +127,7 @@
     <string name="saved_search_in">Search in [FOLDER]</string>
     <string name="saved_search_everywhere">Search everywhere</string>
     <string name="search_tab_tooltip">Search "[QUERY]" in [PATH]</string>
+    <string name="search_placeholder">Search [FOLDER]</string>
     <string name="search_walking">Searching…</string>
     <string name="search_no_results">Nothing found</string>
     <string name="search_loading">Searching… (loading [COUNT] folders)</string>
@@ -296,7 +297,7 @@
      commit_on_focus_lost="false"
      follows="top|right"
      height="22"
-     label="Search this folder and below…"
+     label="Search"
      layout="topleft"
      max_length_bytes="254"
      name="search_box"

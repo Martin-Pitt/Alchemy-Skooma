@@ -67,6 +67,8 @@ public:
     typedef std::function<void()> void_callback_t;
 
     static SKExplorerPopupList* create();
+    // Deletes the list if the root view has not already.
+    static void destroy(const LLHandle<LLView>& handle);
 
     void setRows(const std::vector<SKPopupRow>& rows);
     const std::vector<SKPopupRow>& getRows() const { return mRows; }
@@ -111,6 +113,7 @@ protected:
     S32 mHighlight;
     S32 mHover;
     S32 mScroll;    // pixels hidden above the top
+    U32 mDrawnFrame = 0;
     index_callback_t mPickCallback;
     index_callback_t mRemoveCallback;
     void_callback_t mCloseCallback;

@@ -99,9 +99,7 @@ SKInventoryPathBar::~SKInventoryPathBar()
 {
     if (mMenu)
     {
-        mMenu->setCloseCallback(nullptr);
-        mMenu->hide();
-        delete mMenu;
+        SKExplorerPopupList::destroy(mMenuHandle);
     }
 }
 
@@ -328,6 +326,7 @@ void SKInventoryPathBar::toggleMenu(S32 index)
     if (!mMenu)
     {
         mMenu = SKExplorerPopupList::create();
+        mMenuHandle = mMenu->getHandle();
         mMenu->setCloseCallback([this]()
                                 {
                                     mMenuClosedCrumb = mMenuCrumb;

@@ -95,6 +95,7 @@ public:
     typedef std::function<bool(KEY key, MASK mask)> key_callback_t;
     void setKeyCallback(const key_callback_t& cb) { mKeyCallback = cb; }
     bool handleSidebarKey(KEY key, MASK mask) { return mKeyCallback && mKeyCallback(key, mask); }
+    bool handleKeyHere(KEY key, MASK mask) override;
 
 protected:
     SKInventorySidebarPanel(const Params& p);
