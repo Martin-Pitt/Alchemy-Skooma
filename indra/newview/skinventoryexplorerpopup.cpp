@@ -138,6 +138,23 @@ void SKExplorerPopupList::showBelow(LLView* spawn, const LLRect& spawn_rect, S32
     }
 }
 
+void SKExplorerPopupList::showAbove(LLView* spawn, const LLRect& spawn_rect, S32 width, S32 dx, S32 dy)
+{
+    S32 left = 0;
+    S32 bottom = 0;
+    spawn->localPointToScreen(spawn_rect.mLeft + dx, spawn_rect.mTop + dy, &left, &bottom);
+    const LLRect window = gViewerWindow->getWorldViewRectScaled();
+    const S32 height = llmin(contentHeight(), llmax(OPTION_HEIGHT, window.mTop - bottom - EDGE));
+    left = llclamp(left, window.mLeft + EDGE, llmax(window.mLeft + EDGE, window.mRight - width - EDGE));
+    setRect(LLRect(left, bottom + height, left + width, bottom));
+    clampScroll();
+    if (!getVisible())
+    {
+        setVisible(true);
+        LLUI::getInstance()->addPopup(this);
+    }
+}
+
 void SKExplorerPopupList::hide()
 {
     if (getVisible())
