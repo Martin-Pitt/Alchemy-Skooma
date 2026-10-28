@@ -43,7 +43,9 @@
 #include "llviewercontrol.h"
 #include "llviewerfoldertype.h"
 #include "llviewerinventory.h"
+#include "skinventorydetails.h"
 #include "skinventoryexplorermenu.h"
+#include "skinventorygalleryview.h"
 #include "skinventorypathbar.h"
 #include "skinventorysearchbox.h"
 #include "skinventorysidebar.h"
@@ -435,7 +437,9 @@ SKFloaterInventoryExplorer::SKFloaterInventoryExplorer(const LLSD& key)
     mSearchClearBtn(nullptr),
     mSearchPending(false),
     mStatusText(nullptr),
-    mDetailsText(nullptr),
+    mDetails(nullptr),
+    mGallery(nullptr),
+    mGalleryStrip(nullptr),
     mSidebarPanel(nullptr),
     mDetailsPanel(nullptr),
     mDetailsEdgePanel(nullptr),
@@ -474,7 +478,9 @@ bool SKFloaterInventoryExplorer::postBuild()
     mSearchBox = getChild<SKInventorySearchBox>("search_box");
     mSearchClearBtn = getChild<LLButton>("search_clear_btn");
     mStatusText = getChild<LLTextBox>("status_text");
-    mDetailsText = getChild<LLTextBox>("details_text");
+    mDetails = getChild<SKInventoryDetailsView>("details_view");
+    mGallery = getChild<SKInventoryGalleryView>("gallery_view");
+    mGalleryStrip = mGallery->getStrip();
     mSidebarPanel = getChild<LLLayoutPanel>("sidebar_panel");
     mDetailsPanel = getChild<LLLayoutPanel>("details_panel");
     mDetailsEdgePanel = getChild<LLLayoutPanel>("details_edge_panel");
@@ -531,10 +537,7 @@ bool SKFloaterInventoryExplorer::postBuild()
     mUpBtn->setCommitCallback([this](LLUICtrl*, const LLSD&) { goUp(); });
     mDetailsBtn->setCommitCallback([this](LLUICtrl*, const LLSD&) { onToggleDetails(); });
 
-    // Gallery is not built yet; it says so.
-    LLButton* gallery_btn = getChild<LLButton>("view_gallery_btn");
-    gallery_btn->setToolTip(gallery_btn->getToolTip() + " " + getString("view_unavailable"));
-    gallery_btn->setEnabled(false);
+    getChild<LLButton>("view_gallery_btn")->setCommitCallback([this](LLUICtrl*, const LLSD&) { setView(SKExplorerTab::VIEW_GALLERY); });
     getChild<LLButton>("view_icons_btn")->setCommitCallback([this](LLUICtrl*, const LLSD&) { setView(SKExplorerTab::VIEW_ICONS); });
 
     mOptions.mSet = [this](const std::string& option) { setOption(option); };
@@ -593,7 +596,31 @@ bool SKFloaterInventoryExplorer::postBuild()
         labels.mGroups[key] = getString(std::string("group_") + key);
     }
     mColumns->setLabels(labels);
-    for (SKInventoryFlatView* view : { (SKInventoryFlatView*)mList, (SKInventoryFlatView*)mIcons })
+    std::map<std::string, std::string> details_strings;
+    for (const char* key : { "no_selection", "n_selected", "loading", "link_suffix", "yes", "perm_full", "perm_modify", "perm_copy",
+                             "perm_transfer", "row_folder", "row_type", "row_creator", "row_acquired", "row_you", "row_next_owner",
+                             "row_worn", "row_attaches_to", "row_description", "row_resolution", "row_channels", "row_aspect",
+                             "row_length", "row_format", "row_loops", "row_priority", "row_ease", "row_joints", "row_hand_pose",
+                             "row_expression", "row_base_colour", "row_metallic", "row_roughness", "row_alpha_mode",
+                             "row_double_sided", "row_textures", "row_location", "row_region", "row_parcel", "row_position",
+                             "row_maturity", "row_slurl", "row_runtime", "row_experience", "section_image", "section_sound",
+                             "section_animation", "section_material", "section_landmark", "channels_rgb", "channels_rgba",
+                             "sound_format", "sound_mono", "sound_stereo", "sound_failed", "animation_failed", "material_failed",
+                             "anim_loop", "anim_loops_no", "anim_loops_whole", "anim_loops_range", "anim_overrides", "region_body",
+                             "region_hands", "region_face", "region_wings", "region_tail", "region_hind", "alpha_opaque",
+                             "alpha_mask", "alpha_blend", "tex_base", "tex_normal", "tex_mr", "tex_emissive", "landmark_loads",
+                             "tip_landmark_loads", "map_loading", "runtime_mono", "runtime_lso", "runtime_lsl_luau", "runtime_slua",
+                             "runtime_lsl", "tip_runtime_unknown", "experience_no_cap", "player_locally", "player_inworld",
+                             "player_stop", "tip_sound_local", "tip_sound_inworld", "tip_anim_local", "tip_anim_inworld",
+                             "tip_aspect", "aspect_library", "aspect_no_modify", "gallery_by", "gallery_resolution",
+                             "gallery_resolution_full" })
+    {
+        details_strings[key] = getString(std::string("details_") + key);
+    }
+    SKInventoryDetails::setStrings(details_strings, labels);
+    // Esc in the Gallery leaves for the view it came from.
+    mGalleryStrip->setEscapeCallback([this]() { setView(currentTab().mPrevView); });
+    for (SKInventoryFlatView* view : { (SKInventoryFlatView*)mList, (SKInventoryFlatView*)mIcons, (SKInventoryFlatView*)mGalleryStrip })
     {
         view->setLabels(labels);
         view->setOpenCallback([this](const LLUUID& id) { openObject(id, false); });
@@ -901,10 +928,16 @@ bool SKFloaterInventoryExplorer::handleKeyHere(KEY key, MASK mask)
                 setView(SKExplorerTab::VIEW_LIST);
                 return true;
             case '4':
-                return true; // Gallery is not built yet
+                setView(SKExplorerTab::VIEW_GALLERY);
+                return true;
             default:
                 break;
         }
+    }
+    else if (mask == MASK_NONE && key == KEY_ESCAPE && !mTabs.empty() && currentTab().mView == SKExplorerTab::VIEW_GALLERY)
+    {
+        setView(currentTab().mPrevView);
+        return true;
     }
     else if (mask == (MASK_CONTROL | MASK_SHIFT) && key == KEY_TAB)
     {
@@ -924,7 +957,7 @@ void SKFloaterInventoryExplorer::onInventoryChanged(U32 mask)
         return;
     }
 
-    for (SKInventoryFlatView* view : { (SKInventoryFlatView*)mList, (SKInventoryFlatView*)mIcons })
+    for (SKInventoryFlatView* view : { (SKInventoryFlatView*)mList, (SKInventoryFlatView*)mIcons, (SKInventoryFlatView*)mGalleryStrip })
     {
         const LLUUID& folder_id = view->getFolder();
         bool affects_view = (mask & LLInventoryObserver::REBUILD) != 0;
@@ -982,6 +1015,14 @@ void SKFloaterInventoryExplorer::onInventoryChanged(U32 mask)
             }
         }
     }
+    // The details read the item again when it changed: a rename, a description, an aspect.
+    for (SKInventoryDetailsView* details : { mDetails, mColumns->getDetailsView() })
+    {
+        if (details->getItemID().notNull() && gInventory.getChangedIDs().contains(details->getItemID()))
+        {
+            details->refresh();
+        }
+    }
     mNeedsRefresh = true;
 }
 
@@ -1013,6 +1054,12 @@ void SKFloaterInventoryExplorer::showCurrentTab()
     mList->setVisible(flat == mList);
     mIcons->setVisible(flat == mIcons);
     mColumns->setVisible(columns);
+    // The Gallery takes the whole floater: no sidebar and no details pane.
+    const bool gallery = flat == mGalleryStrip;
+    mGallery->setVisible(gallery);
+    mSidebarPanel->setVisible(!gallery);
+    getChild<LLLayoutPanel>("sidebar_edge_panel")->setVisible(!gallery);
+    getChild<LLButton>("view_gallery_btn")->setToggleState(gallery);
     // The size slider shows in Icons alone; its space stays.
     mSizeSlider->setVisible(flat == mIcons);
     getChild<LLButton>("view_columns_btn")->setToggleState(columns);
@@ -1020,8 +1067,8 @@ void SKFloaterInventoryExplorer::showCurrentTab()
     getChild<LLButton>("view_list_btn")->setToggleState(flat == mList);
     // Columns shows details as a column of its own, in place of the pane.
     const bool details = mDetailsBtn->getToggleState();
-    mDetailsPanel->setVisible(details && !columns);
-    mDetailsEdgePanel->setVisible(details && !columns);
+    mDetailsPanel->setVisible(details && !columns && !gallery);
+    mDetailsEdgePanel->setVisible(details && !columns && !gallery);
     mSidebar->setFlat(columns);
     if (columns)
     {
@@ -1100,6 +1147,10 @@ void SKFloaterInventoryExplorer::setView(SKExplorerTab::EView view)
         return;
     }
     saveListState();
+    if (currentTab().mView != SKExplorerTab::VIEW_GALLERY)
+    {
+        currentTab().mPrevView = currentTab().mView;
+    }
     currentTab().mView = view;
     gSavedPerAccountSettings.setS32("SkoomaInvExplorerView", (S32)view);
     showCurrentTab();
@@ -1229,10 +1280,6 @@ void SKFloaterInventoryExplorer::newTab(const LLUUID& folder_id)
     tab.mFolderID = folder_id;
     tab.mView = mTabs.empty() ? (SKExplorerTab::EView)llclamp(gSavedPerAccountSettings.getS32("SkoomaInvExplorerView"), 0, 3)
                               : currentTab().mView;
-    if (tab.mView == SKExplorerTab::VIEW_GALLERY)
-    {
-        tab.mView = SKExplorerTab::VIEW_COLUMNS; // Gallery is not built yet
-    }
     tab.mSortKey = SKInventoryListView::columnFromKey(gSavedPerAccountSettings.getString("SkoomaInvExplorerSortKey"));
     tab.mSortAscending = gSavedPerAccountSettings.getBOOL("SkoomaInvExplorerSortAscending");
     tab.mGroup = SKInventoryFlatView::groupFromKey(gSavedPerAccountSettings.getString("SkoomaInvExplorerGroup"));
@@ -1417,23 +1464,20 @@ void SKFloaterInventoryExplorer::refreshStatus()
 void SKFloaterInventoryExplorer::refreshDetails()
 {
     const uuid_vec_t selection = activeSelection();
-    std::string text;
-    if (selection.empty())
+    std::string path;
+    if (isSearching() && selection.size() == 1)
     {
-        text = getString("no_selection");
+        if (const LLInventoryObject* obj = gInventory.getObject(selection.front()))
+        {
+            path = folderPath(obj->getParentUUID());
+        }
     }
-    else if (selection.size() > 1)
+    mDetails->setSelection(selection, path);
+    // The stage shows the selection, or the folder's first item while nothing is selected.
+    if (flatView() == mGalleryStrip)
     {
-        LLStringUtil::format_map_t args;
-        args["[COUNT]"] = llformat("%d", (S32)selection.size());
-        text = getString("n_selected", args);
+        mGallery->setItem(selection.size() == 1 ? selection.front() : (selection.empty() ? mGalleryStrip->firstItem() : LLUUID::null));
     }
-    else if (const LLInventoryObject* obj = gInventory.getObject(selection.front()))
-    {
-        // The per-type rows arrive with the details pane; the name stands in for them.
-        text = obj->getName();
-    }
-    mDetailsText->setText(text);
 }
 
 void SKFloaterInventoryExplorer::onPaneDragStart(const std::string& pane)
@@ -1483,8 +1527,9 @@ void SKFloaterInventoryExplorer::onToggleDetails()
 {
     const bool shown = !mDetailsBtn->getToggleState();
     mDetailsBtn->setToggleState(shown);
-    mDetailsPanel->setVisible(shown && !isColumns());
-    mDetailsEdgePanel->setVisible(shown && !isColumns());
+    const bool pane = shown && !isColumns() && flatView() != mGalleryStrip;
+    mDetailsPanel->setVisible(pane);
+    mDetailsEdgePanel->setVisible(pane);
     mColumns->setDetailsShown(shown);
     gSavedPerAccountSettings.setBOOL("SkoomaInvExplorerDetailsShown", shown);
 }
@@ -1530,6 +1575,7 @@ SKInventoryFlatView* SKFloaterInventoryExplorer::flatView() const
     {
         case SKExplorerTab::VIEW_ICONS: return mIcons;
         case SKExplorerTab::VIEW_LIST:  return mList;
+        case SKExplorerTab::VIEW_GALLERY: return mGalleryStrip;
         default:                        return isSearching() ? mList : nullptr;
     }
 }

@@ -715,6 +715,23 @@ S32 SKInventoryFlatView::getScroll() const
     return mScrollbar->getDocPos();
 }
 
+void SKInventoryFlatView::setScroll(S32 pos)
+{
+    mScrollbar->setDocPos(pos);
+}
+
+LLUUID SKInventoryFlatView::firstItem() const
+{
+    for (const SKInventoryRow& row : mRows)
+    {
+        if (row.isEntry() && !row.mIsFolder)
+        {
+            return row.mID;
+        }
+    }
+    return LLUUID::null;
+}
+
 void SKInventoryFlatView::rebuild()
 {
     mDirty = false;
@@ -1646,6 +1663,11 @@ bool SKInventoryFlatView::handleKeyHere(KEY key, MASK mask)
             {
                 endPress(true);
                 gFocusMgr.setMouseCapture(nullptr);
+                return true;
+            }
+            if (mEscapeCallback)
+            {
+                mEscapeCallback();
                 return true;
             }
             if (mSelectedCount > 0)

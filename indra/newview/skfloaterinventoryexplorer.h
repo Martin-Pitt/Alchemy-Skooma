@@ -45,7 +45,9 @@ class LLInventoryObserver;
 class LLLayoutPanel;
 class LLSliderCtrl;
 class LLTextBox;
+class SKInventoryDetailsView;
 class SKInventoryExplorerContextMenu;
+class SKInventoryGalleryView;
 class SKInventoryPathBar;
 class SKInventorySearchBox;
 class SKInventorySidebar;
@@ -66,6 +68,7 @@ struct SKExplorerTab
     std::vector<LLUUID> mBack;
     std::vector<LLUUID> mForward;
     EView mView = VIEW_COLUMNS;
+    EView mPrevView = VIEW_COLUMNS;     // where Esc leaves the Gallery for
     SKInventoryListView::EColumn mSortKey = SKInventoryListView::COL_ACQUIRED;
     bool mSortAscending = false;
     SKInventoryFlatView::EGroup mGroup = SKInventoryFlatView::GROUP_NONE;
@@ -308,7 +311,9 @@ private:
     LLFrameTimer mPendingRenameTimer;
     U32 mSearchStatusKey = U32_MAX;
     LLTextBox* mStatusText;
-    LLTextBox* mDetailsText;
+    SKInventoryDetailsView* mDetails;
+    SKInventoryGalleryView* mGallery;
+    SKInventoryIconsView* mGalleryStrip;
     LLLayoutPanel* mSidebarPanel;
     LLLayoutPanel* mDetailsPanel;
     LLLayoutPanel* mDetailsEdgePanel;
