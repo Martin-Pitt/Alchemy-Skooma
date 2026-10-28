@@ -1045,7 +1045,7 @@ if(AL_BUILD_VIEWER)
     skinventorypathbar.cpp # <SK:Nexii> Inventory Explorer
     skinventoryrenameeditor.cpp # <SK:Nexii> Inventory Explorer
     skinventorysearchbox.cpp # <SK:Nexii> Inventory Explorer
-    skinventorysidebar.cpp # <SK:Nexii> Inventory Explorer
+    skinventorytreeview.cpp # <SK:Nexii> Inventory Explorer
   )
 
   set(
@@ -1969,7 +1969,7 @@ if(AL_BUILD_VIEWER)
     skinventorypathbar.h # <SK:Nexii> Inventory Explorer
     skinventoryrenameeditor.h # <SK:Nexii> Inventory Explorer
     skinventorysearchbox.h # <SK:Nexii> Inventory Explorer
-    skinventorysidebar.h # <SK:Nexii> Inventory Explorer
+    skinventorytreeview.h # <SK:Nexii> Inventory Explorer
   )
 
   # <SK:Nexii> SKNetMap mini-map sources
