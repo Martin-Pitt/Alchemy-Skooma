@@ -50,6 +50,12 @@ struct LLFontFallbackMatch
 class LLWindow
 {
 public:
+    // <SK:Nexii> smooth scroll
+    // Read a fast stream of sub-notch wheel messages as a precise device, where the backend cannot tell.
+    static inline bool sPreciseWheelHeuristic = true;
+    // Off, wheel events carry only the clicks and fractions upstream gives them (the viewer's SkoomaScroll).
+    static inline bool sSmoothScroll = true;
+    // </SK:Nexii>
 
     struct LLWindowResolution
     {

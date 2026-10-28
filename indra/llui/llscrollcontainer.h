@@ -68,7 +68,8 @@ public:
                             hide_scrollbar,
                             ignore_arrow_keys,
                             keep_scroll_pos,
-                            thin_scrollbars; // <SK:Nexii> Thin scrollbars
+                            thin_scrollbars, // <SK:Nexii> Thin scrollbars
+                            smooth_scroll; // <SK:Nexii> smooth scroll: false moves the wheel's distance at once
         Optional<F32>       min_auto_scroll_rate,
                             max_auto_scroll_rate;
         Optional<U32>       max_auto_scroll_zone;

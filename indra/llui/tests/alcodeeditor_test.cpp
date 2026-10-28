@@ -41,6 +41,7 @@
 #include "alheadlessui_fixture.h"
 #include "aluistatescope.h"
 #include "altextviewprobe.h"
+#include "skscrolldistance.h" // <SK:Nexii> smooth scroll
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -2362,6 +2363,11 @@ namespace
             text += "llSay(0, \"line " + std::to_string(i) + "\");\n";
         }
         ALCodeEditor& e = make(text.c_str());
+        // <SK:Nexii> smooth scroll: the wheel moves at once with smoothing off, so the text is where it went
+        ll_test::SettingsScope settings;
+        SKScrollDistance::config();
+        settings.keep(LLUI::getInstance()->getControlControlGroup("SkoomaScrollSmooth").getControl("SkoomaScrollSmooth").get())->setValue(false);
+        // </SK:Nexii>
         std::string   said;
         e.setHoverProvider([&said](const ALTextPos&, std::string_view word, std::string& out) {
             if (word != "llSay")
