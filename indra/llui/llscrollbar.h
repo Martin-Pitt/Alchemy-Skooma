@@ -60,10 +60,18 @@ public:
                                         track_image_vertical;
 
         Optional<bool>                  bg_visible;
+        Optional<bool>                  thin; // <SK:Nexii> Thin scrollbars: no arrows, a narrow track and a rounded inset thumb
 
         Optional<LLUIColor>             track_color,
                                         thumb_color,
                                         bg_color;
+
+        // <SK:Nexii> Thin scrollbars
+        Optional<LLUIColor>             thin_track_color,
+                                        thin_thumb_color,
+                                        thin_thumb_hover_color,
+                                        thin_thumb_pressed_color;
+        // </SK:Nexii>
 
         Optional<LLButton::Params>      up_button;
         Optional<LLButton::Params>      down_button;
@@ -128,10 +136,19 @@ public:
     S32                 getThickness() const { return mThickness; }
     void                setThickness(S32 thickness);
 
+    // <SK:Nexii> Thin scrollbars
+    static constexpr S32 THIN_THICKNESS = 8;
+    bool                isThin() const { return mThin; }
+    // </SK:Nexii>
+
 private:
     void                updateThumbRect();
     bool                changeLine(S32 delta, bool update_thumb );
     bool                scrollByWheel(F32 precise); // precise sub-notch wheel delta -> whole lines + residue
+    // <SK:Nexii> Thin scrollbars
+    S32                 arrowLength() const { return mThin ? 0 : mThickness; }
+    void                drawThin();
+    // </SK:Nexii>
 
     callback_t          mChangeCallback;
 
@@ -167,6 +184,14 @@ private:
 
     LLButton*           mLineUpBtn = nullptr;
     LLButton*           mLineDownBtn = nullptr;
+
+    // <SK:Nexii> Thin scrollbars
+    bool                mThin = false;
+    LLUIColor           mThinTrackColor;
+    LLUIColor           mThinThumbColor;
+    LLUIColor           mThinThumbHoverColor;
+    LLUIColor           mThinThumbPressedColor;
+    // </SK:Nexii>
 };
 
 
