@@ -731,14 +731,14 @@ void SKInventoryExplorerContextMenu::addIconRow(LLContextMenu* menu)
     if (mRootMode)
     {
         // Over empty space only Paste, into the open folder.
-        row->mIcons.push_back(icon("paste", string("tip_paste"), "Icon_Paste", SKInventoryExplorerActions::canPaste(first)));
+        row->mIcons.push_back(icon("paste", string("tip_paste"), "Clipboard_Paste", SKInventoryExplorerActions::canPaste(first)));
     }
     else
     {
         const bool favorite = get_is_favorite(first);
         row->mIcons.push_back(icon("cut", string("tip_cut"), "Clipboard_Cut", SKInventoryExplorerActions::canCut(mUUIDs)));
-        row->mIcons.push_back(icon("copy", string("tip_copy"), "Icon_Copy", SKInventoryExplorerActions::canCopy(mUUIDs)));
-        row->mIcons.push_back(icon("paste", string("tip_paste"), "Icon_Paste",
+        row->mIcons.push_back(icon("copy", string("tip_copy"), "Clipboard_Copy", SKInventoryExplorerActions::canCopy(mUUIDs)));
+        row->mIcons.push_back(icon("paste", string("tip_paste"), "Clipboard_Paste",
                                    single_folder && SKInventoryExplorerActions::canPaste(SKInventoryExplorerActions::folderOf(first))));
         row->mIcons.push_back(icon("favorite", string(favorite ? "tip_unfavorite" : "tip_favorite"),
                                    favorite ? "Inv_Favorite_Star_Full" : "Inv_Favorite_Star_Content",
