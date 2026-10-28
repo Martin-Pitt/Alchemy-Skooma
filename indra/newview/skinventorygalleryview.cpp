@@ -56,7 +56,9 @@ namespace
         static LLUIColor dim_color = LLUIColorTable::instance().getColor("LtGray_50");
         const LLFontGL* font = LLFontGL::getFontSansSerifSmall();
         const S32 text_w = font->getWidth(text);
-        const S32 dim_w = dim.empty() ? 0 : font->getWidth(dim);
+        // XUI trims a string's leading space, so the gap before the dim part is drawn here.
+        const S32 gap = dim.empty() ? 0 : font->getWidth(std::string(" "));
+        const S32 dim_w = dim.empty() ? 0 : gap + font->getWidth(dim);
         const S32 width = llmin(max_width, text_w + dim_w + 12);
         const LLRect rect(left, bottom + CHIP_HEIGHT, left + width, bottom);
         gl_rect_2d(rect, LLColor4(0.f, 0.f, 0.f, 0.6f), true);
@@ -64,10 +66,10 @@ namespace
         F32 right = 0.f;
         font->renderUTF8(text, 0, (F32)(left + 6), (F32)(bottom + CHIP_HEIGHT / 2), text_color.get(), LLFontGL::LEFT, LLFontGL::VCENTER,
                          LLFontGL::NORMAL, LLFontGL::NO_SHADOW, S32_MAX, room, &right, true);
-        if (!dim.empty() && text_w < room)
+        if (!dim.empty() && text_w + gap < room)
         {
-            font->renderUTF8(dim, 0, right, (F32)(bottom + CHIP_HEIGHT / 2), dim_color.get(), LLFontGL::LEFT, LLFontGL::VCENTER,
-                             LLFontGL::NORMAL, LLFontGL::NO_SHADOW, S32_MAX, room - text_w, nullptr, true);
+            font->renderUTF8(dim, 0, right + gap, (F32)(bottom + CHIP_HEIGHT / 2), dim_color.get(), LLFontGL::LEFT, LLFontGL::VCENTER,
+                             LLFontGL::NORMAL, LLFontGL::NO_SHADOW, S32_MAX, room - text_w - gap, nullptr, true);
         }
         return rect;
     }
