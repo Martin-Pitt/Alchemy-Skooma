@@ -419,6 +419,10 @@ void SKInventoryFlatView::readItemRow(LLViewerInventoryItem* item, const SKInven
     row.mAspect = aspect_of(row.mDescription);
     // A thumbnail wins; a texture or photo is its own picture.
     row.mImageID = info->getThumbnailUUID();
+    if (row.mAssetType == LLAssetType::AT_TEXTURE)
+    {
+        row.mTextureID = info->getAssetUUID();
+    }
     if (row.mImageID.isNull() && row.mAssetType == LLAssetType::AT_TEXTURE)
     {
         row.mImageID = info->getAssetUUID();
@@ -721,14 +725,24 @@ S32 SKInventoryFlatView::getScroll() const
 
 void SKInventoryFlatView::prefetchPicture(const SKInventoryRow& row)
 {
-    if (row.mImageID.isNull())
+    // Textures, photos and thumbnails: the row's picture, and a texture's own image when a thumbnail stands in for it.
+    prefetchImage(row.mImageID);
+    if (row.mTextureID != row.mImageID)
+    {
+        prefetchImage(row.mTextureID);
+    }
+}
+
+void SKInventoryFlatView::prefetchImage(const LLUUID& image_id)
+{
+    if (image_id.isNull())
     {
         return;
     }
-    // Asked each frame the row is in view, as a world face asks: a tiny draw size fetches only the smallest discard.
+    // Asked each frame the row is near the view, as a world face asks: a tiny draw size fetches only the smallest discard.
     // No boost, which would shrink a texture shared with the world.
     constexpr S32 PREFETCH_SIZE = 16;
-    LLViewerFetchedTexture* texture = LLViewerTextureManager::getFetchedTexture(row.mImageID, FTT_DEFAULT, MIPMAP_YES,
+    LLViewerFetchedTexture* texture = LLViewerTextureManager::getFetchedTexture(image_id, FTT_DEFAULT, MIPMAP_YES,
                                                                                 LLGLTexture::BOOST_NONE);
     if (texture)
     {
