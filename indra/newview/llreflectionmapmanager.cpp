@@ -1020,7 +1020,7 @@ void LLReflectionMapManager::writeCensusProbes(std::ostream& out) const
 void LLReflectionMapManager::updateClusterProbes()
 {
     const auto census = SKWorldCensus::instance().snapshot();
-    static LLCachedControl<bool> enabled(gSavedSettings, "SKClusterProbes", true);
+    static LLCachedControl<bool> enabled(gSavedSettings, "SKClusterProbes", false);
     if (!enabled || mRenderReflectionProbeLevel < 3)
     {
         mClusterProbes->clear();
@@ -1062,7 +1062,10 @@ void LLReflectionMapManager::updateCensusPlacement()
 {
     LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("rmmu - census placement");
     auto census = SKWorldCensus::instance().snapshot();
-    if (mRenderReflectionProbeLevel < 2)
+    static LLCachedControl<bool> placement(gSavedSettings, "SKCensusProbePlacement", false);
+    static LLCachedControl<bool> rooms(gSavedSettings, "SKRoomProbes", false);
+    static LLCachedControl<bool> clusters(gSavedSettings, "SKClusterProbes", false);
+    if (mRenderReflectionProbeLevel < 2 || (!placement && !rooms && !clusters))
     {
         return;
     }
