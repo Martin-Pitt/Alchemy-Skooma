@@ -178,6 +178,21 @@
             <key>Value</key>
             <integer>0</integer>
         </map>
+        <key>SKMeshUploadPivotOffset</key>
+        <map>
+            <key>Comment</key>
+            <string>Spike: shifts uploaded mesh LODs off the prim origin, in fractions of the bounding box (0.5,0,0 puts the origin on the -X face). Convex hulls are not shifted.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Vector3</string>
+            <key>Value</key>
+            <array>
+                <real>0.0</real>
+                <real>0.0</real>
+                <real>0.0</real>
+            </array>
+        </map>
         <key>ALMeshNotifyBudgetMs</key>
         <map>
             <key>Comment</key>
