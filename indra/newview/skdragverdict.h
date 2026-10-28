@@ -58,6 +58,10 @@ namespace SKDragVerdict
     void reportWorld();
     void clearWorld();
 
+    // Before each pass over the targets: clears the verdict and the marks, and the world's mark until the pass
+    // reaches the world again.
+    void beginPass();
+
     // The world mark for the frame: the face, the faces or the object, accepted or refused (ALSelectionOutline).
     void addWorldMark(ALSelectionOutline& outline);
 

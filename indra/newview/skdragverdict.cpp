@@ -66,6 +66,8 @@ namespace
 
     World sWorld;
     std::vector<std::string> sHints;
+    // Whether the last pass reached the world, so a pick landing late does not mark it under a floater.
+    bool sInWorld = false;
 
     // The width over height a texture's description names in a "(w:h)" tail, or 0.
     F32 aspect_of(const std::string& desc)
@@ -411,8 +413,15 @@ namespace SKDragVerdict
         }
     }
 
+    void beginPass()
+    {
+        LLDragFeedback::beginPass();
+        sInWorld = false;
+    }
+
     void reportWorld()
     {
+        sInWorld = true;
         if (!sWorld.mValid)
         {
             return;
@@ -426,7 +435,7 @@ namespace SKDragVerdict
 
     void addWorldMark(ALSelectionOutline& outline)
     {
-        if (!LLDragFeedback::shown() || sWorld.mMark != EDragMark::Accept || sWorld.mObjectID.isNull())
+        if (!LLDragFeedback::shown() || !sInWorld || sWorld.mMark != EDragMark::Accept || sWorld.mObjectID.isNull())
         {
             return;
         }

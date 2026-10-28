@@ -252,7 +252,12 @@ const std::string& LLDragFeedback::chipText()
 void LLDragFeedback::mark(const LLView* view, const LLRect& local_rect, EDragMark kind)
 {
     State& s = state();
-    if (!s.mDragging || s.mMark.mView || !view)
+    if (!s.mDragging || !view)
+    {
+        return;
+    }
+    // The first view of a pass keeps the mark; each cargo item it refuses takes the accept away.
+    if (s.mMark.mView && (s.mMark.mView != view || kind == EDragMark::Accept || s.mMark.mKind == EDragMark::Refuse))
     {
         return;
     }
@@ -273,6 +278,11 @@ EDragMark LLDragFeedback::markFor(const LLView* view, LLRect* local_rect)
     return s.mMark.mKind;
 }
 
+void LLDragFeedback::unmark()
+{
+    state().mMark = Mark();
+}
+
 EDragMark LLDragFeedback::markKind(bool accepted, const std::string& tooltip_msg)
 {
     if (accepted)
@@ -287,7 +297,7 @@ EDragMark LLDragFeedback::markKind(bool accepted, const std::string& tooltip_msg
     return (!tooltip_msg.empty() || !s.mRefusal.empty()) ? EDragMark::Refuse : EDragMark::Quiet;
 }
 
-void LLDragFeedback::drawTargetMark(const LLRect& rect, EDragMark kind)
+void LLDragFeedback::drawTargetMark(const LLRect& rect, EDragMark kind, bool fill)
 {
     if (kind != EDragMark::Accept && kind != EDragMark::Refuse)
     {
@@ -298,7 +308,10 @@ void LLDragFeedback::drawTargetMark(const LLRect& rect, EDragMark kind)
     {
         static const LLColor4 accept_fill(0.3f, 0.82f, 1.f, 0.25f);
         static const LLColor4 accept_line(0.3f, 0.82f, 1.f, 1.f);
-        gl_rect_2d(rect, colour("DragAcceptFillColor", accept_fill), true);
+        if (fill)
+        {
+            gl_rect_2d(rect, colour("DragAcceptFillColor", accept_fill), true);
+        }
         const LLColor4 line = colour("DragAcceptOutlineColor", accept_line);
         gl_rect_2d(rect, line, false);
         gl_rect_2d(rect.mLeft + 1, rect.mTop - 1, rect.mRight - 1, rect.mBottom + 1, line, false);

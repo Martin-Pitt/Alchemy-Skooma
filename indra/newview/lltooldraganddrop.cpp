@@ -648,7 +648,7 @@ void LLToolDragAndDrop::dragOrDrop( S32 x, S32 y, MASK mask, bool drop,
     LLViewerInventoryCategory* cat;
 
     mToolTipMsg.clear();
-    LLDragFeedback::beginPass(); // <SK:Nexii> Drag feedback
+    SKDragVerdict::beginPass(); // <SK:Nexii> Drag feedback
 
     // Increment the operation id for every drop
     if (drop)
@@ -962,8 +962,6 @@ void LLToolDragAndDrop::pick(const LLPickInfo& pick_info)
     if (!mCargoIDs.empty())
     {
         SKDragVerdict::pickWorld(mCargoTypes[0], target, hit_obj, hit_face, pick_info.mKeyMask, mLastAccept);
-        LLDragFeedback::beginPass();
-        SKDragVerdict::reportWorld();
     }
     if (LLDragFeedback::shown())
     {

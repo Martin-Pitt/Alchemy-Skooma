@@ -114,9 +114,11 @@ public:
     // that frame only. The first mark of a pass wins. The widget draws it itself, under its text (markFor).
     static void mark(const LLView* view, const LLRect& local_rect, EDragMark kind);
     static EDragMark markFor(const LLView* view, LLRect* local_rect = nullptr);
+    // Takes the pass's mark back, for a container whose drop falls through a refusing child to itself.
+    static void unmark();
     // The mark a folder-like target takes for its verdict: accepted; refused with a message; else quiet.
     static EDragMark markKind(bool accepted, const std::string& tooltip_msg);
-    static void drawTargetMark(const LLRect& rect, EDragMark kind);
+    static void drawTargetMark(const LLRect& rect, EDragMark kind, bool fill = true);
 
     // The overlay, from the window after every other view, at the pointer in UI coordinates.
     static void draw(S32 x, S32 y, const LLRect& window_rect);
