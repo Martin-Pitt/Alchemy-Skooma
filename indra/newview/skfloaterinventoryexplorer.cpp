@@ -72,7 +72,8 @@ namespace
 SKExplorerTabStrip::SKExplorerTabStrip(const Params& p)
 :   LLUICtrl(p),
     mActive(0),
-    mHover(-1)
+    mHover(-1),
+    mDropTab(-1)
 {
 }
 
@@ -176,6 +177,11 @@ void SKExplorerTabStrip::draw()
     }
     font->renderUTF8("+", 0, plus.getCenterX(), height / 2, text_active.get(), LLFontGL::HCENTER, LLFontGL::VCENTER);
 
+    if (mDropHover.isActive() && mDropTab >= 0 && mDropTab < (S32)mTabs.size())
+    {
+        SKInventoryExplorerDrag::drawTargetMark(LLRect(mDropTab * width, height, (mDropTab + 1) * width, 0), mDropVerdict);
+    }
+
     LLUICtrl::draw();
 }
 
@@ -235,6 +241,34 @@ void SKExplorerTabStrip::onMouseLeave(S32 x, S32 y, MASK mask)
 {
     mHover = -1;
     LLUICtrl::onMouseLeave(x, y, mask);
+}
+
+bool SKExplorerTabStrip::handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop, EDragAndDropType cargo_type, void* cargo_data,
+                                           EAcceptance* accept, std::string& tooltip_msg)
+{
+    const S32 tab = tabAt(x);
+    if (tab < 0)
+    {
+        return false;
+    }
+    SKInventoryExplorerDrag::dropOnFolder(mTabs[tab].mFolderID, mask, drop, cargo_type, cargo_data, accept, tooltip_msg);
+    mDropTab = tab;
+    mDropVerdict = SKInventoryExplorerDrag::verdict();
+    if (drop || LLToolDragAndDrop::getInstance()->getCargoIndex() != 0)
+    {
+        return true;
+    }
+    mDropHover.touch();
+    S32 screen_x = 0;
+    S32 screen_y = 0;
+    localPointToScreen(x, y, &screen_x, &screen_y);
+    LLUUID key;
+    key.mData[0] = (U8)(tab + 1);
+    if (mDropHover.spring(key, screen_x, screen_y, SKInventoryExplorerDrag::TAB_SPRING_SECONDS) && tab != mActive && mActivateCallback)
+    {
+        mActivateCallback(tab);
+    }
+    return true;
 }
 
 bool SKExplorerTabStrip::handleToolTip(S32 x, S32 y, MASK mask)
@@ -398,6 +432,7 @@ SKFloaterInventoryExplorer::SKFloaterInventoryExplorer(const LLSD& key)
 
 SKFloaterInventoryExplorer::~SKFloaterInventoryExplorer()
 {
+    SKInventoryExplorerDrag::setStatusCallback(nullptr);
     SKInventoryExplorerContextMenu::closeOptionsMenu();
     if (mObserver)
     {
@@ -427,6 +462,24 @@ bool SKFloaterInventoryExplorer::postBuild()
     mDetailsEdgePanel = getChild<LLLayoutPanel>("details_edge_panel");
 
     mTabStrip->setNewTabToolTip(getString("new_tab_tooltip"));
+    std::map<std::string, std::string> drag_strings;
+    for (const char* key : { "drag_move", "drag_link", "drag_add_favorites", "drag_only_folders", "drag_already_favorites",
+                             "drag_library_readonly", "drag_into_itself", "drag_system_folders", "drag_library_copies",
+                             "drag_already_here", "status_moved", "status_moved_one", "status_linked", "status_linked_one",
+                             "status_favorites_added", "status_favorites_removed", "status_undone", "status_cant_undo" })
+    {
+        drag_strings[key] = getString(key);
+    }
+    SKInventoryExplorerDrag::setStrings(drag_strings);
+    LLHandle<LLFloater> status_handle = getHandle();
+    SKInventoryExplorerDrag::setStatusCallback([status_handle](const std::string& text)
+                                               {
+                                                   if (SKFloaterInventoryExplorer* self = (SKFloaterInventoryExplorer*)status_handle.get())
+                                                   {
+                                                       self->mLastAction = text;
+                                                       self->refreshStatus();
+                                                   }
+                                               });
     // The strip runs the full width; the floater's buttons sit on it, as on a header.
     for (const char* name : { "llfloater_close_btn", "llfloater_minimize_btn", "llfloater_collapse_btn", "llfloater_restore_btn" })
     {
@@ -593,6 +646,10 @@ void SKFloaterInventoryExplorer::draw()
     const S32 selected = flat ? flat->getSelectedCount() : mColumns->getSelectedCount();
     if (generation != mStatusGeneration || selected != mStatusSelected)
     {
+        if (selected != mStatusSelected && selected > 0)
+        {
+            mLastAction.clear();
+        }
         mStatusGeneration = generation;
         mStatusSelected = selected;
         refreshStatus();
@@ -653,6 +710,9 @@ bool SKFloaterInventoryExplorer::handleKeyHere(KEY key, MASK mask)
         {
             case 'T':
                 newTab(currentTab().mFolderID);
+                return true;
+            case 'Z':
+                SKInventoryExplorerDrag::undo();
                 return true;
             case 'W':
                 closeTab(mActiveTab);
@@ -1089,6 +1149,7 @@ void SKFloaterInventoryExplorer::refreshTabStrip()
         strip_tab.mTitle = cat ? cat->getName() : std::string();
         strip_tab.mToolTip = folderPath(tab.mFolderID);
         strip_tab.mIcon = folderIcon(tab.mFolderID);
+        strip_tab.mFolderID = tab.mFolderID;
         tabs.push_back(strip_tab);
     }
     mTabStrip->setTabs(tabs, mActiveTab);
@@ -1126,7 +1187,14 @@ void SKFloaterInventoryExplorer::refreshStatus()
     else
     {
         text = countLabel(folders, items);
-        if (selected > 0)
+        if (!mLastAction.empty() && selected == 0)
+        {
+            LLStringUtil::format_map_t parts;
+            parts["[A]"] = text;
+            parts["[B]"] = mLastAction;
+            text = getString("status_join", parts);
+        }
+        else if (selected > 0)
         {
             LLStringUtil::format_map_t args;
             args["[COUNT]"] = llformat("%d", selected);

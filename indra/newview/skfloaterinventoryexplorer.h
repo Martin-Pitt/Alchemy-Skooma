@@ -30,6 +30,7 @@
 #include "llfloater.h"
 #include "lluiimage.h"
 #include "skinventorycolumnsview.h"
+#include "skinventoryexplorerdrag.h"
 #include "skinventoryexplorermenu.h"
 #include "skinventoryiconsview.h"
 #include "skinventorylistview.h"
@@ -85,6 +86,7 @@ public:
         std::string mTitle;
         std::string mToolTip;
         LLPointer<LLUIImage> mIcon;
+        LLUUID mFolderID;
     };
 
     typedef std::function<void(S32 index)> index_callback_t;
@@ -106,6 +108,8 @@ public:
     bool handleHover(S32 x, S32 y, MASK mask) override;
     void onMouseLeave(S32 x, S32 y, MASK mask) override;
     bool handleToolTip(S32 x, S32 y, MASK mask) override;
+    bool handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop, EDragAndDropType cargo_type, void* cargo_data,
+                           EAcceptance* accept, std::string& tooltip_msg) override;
 
 protected:
     SKExplorerTabStrip(const Params& p);
@@ -125,6 +129,10 @@ protected:
     void_callback_t mNewTabCallback;
     drag_callback_t mDragCallback;
     void_callback_t mDoubleClickCallback;
+    // A drag held over a tab drops into its folder, and switches to it after 500 ms.
+    SKDragHover mDropHover;
+    S32 mDropTab;
+    SKInventoryExplorerDrag::Verdict mDropVerdict;
 };
 
 // A pane's 6 px resize edge: drag to resize, double-click for the default, saved on release.
@@ -262,6 +270,7 @@ private:
     bool mNeedsRefresh;
     U32 mStatusGeneration;
     S32 mStatusSelected;
+    std::string mLastAction;    // shown in place of the selection count until something is selected
 };
 
 #endif // SK_SKFLOATERINVENTORYEXPLORER_H
