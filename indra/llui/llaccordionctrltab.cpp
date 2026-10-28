@@ -43,6 +43,9 @@ static const std::string DD_HEADER_NAME = "dd_header";
 static const S32 HEADER_HEIGHT = 25;
 static const S32 HEADER_IMAGE_LEFT_OFFSET = 5;
 static const S32 HEADER_TEXT_LEFT_OFFSET = 30;
+// <SK:Nexii> Drag feedback: LLFolderView::sAutoOpenTime (FolderAutoOpenDelay) instead
+//static const F32 AUTO_OPEN_TIME = 1.f;
+// </SK:Nexii>
 static const S32 VERTICAL_MULTIPLE = 16;
 static const S32 PARENT_BORDER_MARGIN = 5;
 

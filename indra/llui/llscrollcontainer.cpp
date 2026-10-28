@@ -50,6 +50,9 @@
 ///----------------------------------------------------------------------------
 
 static const S32 VERTICAL_MULTIPLE = 16;
+// <SK:Nexii> Drag feedback: the acceleration is LLDragAutoScroll::ACCEL, the curve every autoscroll shares
+//static const F32 AUTO_SCROLL_RATE_ACCEL = 120.f;
+// </SK:Nexii>
 
 ///----------------------------------------------------------------------------
 /// Class LLScrollContainer
@@ -491,6 +494,16 @@ void LLScrollContainer::draw()
     S32 scrollbar_size = (mSize == -1 ? scrollbar_size_control : mSize);
 
     // <SK:Nexii> Drag feedback: the one autoscroll curve
+    //if (mAutoScrolling)
+    //{
+    //    // add acceleration to autoscroll
+    //    mAutoScrollRate = llmin(mAutoScrollRate + (LLFrameTimer::getFrameDeltaTimeF32() * AUTO_SCROLL_RATE_ACCEL), mMaxAutoScrollRate);
+    //}
+    //else
+    //{
+    //    // reset to minimum for next time
+    //    mAutoScrollRate = mMinAutoScrollRate;
+    //}
     mAutoScrollRate = LLDragAutoScroll::next(mAutoScrollRate, mAutoScrolling, LLFrameTimer::getFrameDeltaTimeF32(),
                                              (F32)mMinAutoScrollRate, (F32)mMaxAutoScrollRate);
     // </SK:Nexii>
