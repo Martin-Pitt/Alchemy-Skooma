@@ -61,6 +61,9 @@ namespace
         std::vector<Move> mMoves;
         uuid_vec_t mFavorites;
         bool mAdded = false;    // favourites added, else removed
+        std::function<void()> mUndo;    // any other action's own undo
+
+        bool empty() const { return mMoves.empty() && mFavorites.empty() && !mUndo; }
     };
 
     // A refusal's weight: the most telling reason wins when the cargo is refused for several.
@@ -160,7 +163,7 @@ namespace
     // A new history entry, dropping empty ones and the oldest past the limit.
     void pushUndo(const UndoEntry& entry)
     {
-        std::erase_if(sUndo, [](const UndoEntry& e) { return e.mMoves.empty() && e.mFavorites.empty(); });
+        std::erase_if(sUndo, [](const UndoEntry& e) { return e.empty(); });
         sUndo.push_back(entry);
         if (sUndo.size() > UNDO_LIMIT)
         {
@@ -589,11 +592,27 @@ void recordFavorites(const uuid_vec_t& ids, bool added)
     status(string(added ? "status_favorites_added" : "status_favorites_removed", args));
 }
 
+void recordAction(const std::function<void()>& undo_fn, const std::string& text)
+{
+    UndoEntry entry;
+    entry.mUndo = undo_fn;
+    pushUndo(entry);
+    status(text);
+}
+
+bool refuse(const std::string& key, EAcceptance* accept, std::string& tooltip_msg)
+{
+    sVerdict = Verdict();
+    *accept = ACCEPT_NO;
+    tooltip_msg = string(key);
+    return true;
+}
+
 bool canUndo()
 {
     for (const UndoEntry& entry : sUndo)
     {
-        if (!entry.mMoves.empty() || !entry.mFavorites.empty())
+        if (!entry.empty())
         {
             return true;
         }
@@ -603,7 +622,7 @@ bool canUndo()
 
 void undo()
 {
-    while (!sUndo.empty() && sUndo.back().mMoves.empty() && sUndo.back().mFavorites.empty())
+    while (!sUndo.empty() && sUndo.back().empty())
     {
         sUndo.pop_back();
     }
@@ -656,6 +675,10 @@ void undo()
     for (const LLUUID& id : entry.mFavorites)
     {
         set_favorite(id, !entry.mAdded);
+    }
+    if (entry.mUndo)
+    {
+        entry.mUndo();
     }
     status(string("status_undone"));
 }

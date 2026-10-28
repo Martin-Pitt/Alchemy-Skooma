@@ -44,6 +44,8 @@
 #include "llviewerfoldertype.h"
 #include "llviewerinventory.h"
 #include "skinventoryexplorermenu.h"
+#include "skinventorypathbar.h"
+#include "skinventorysearchbox.h"
 #include "skinventorysidebar.h"
 
 static LLDefaultChildRegistry::Register<SKExplorerTabStrip> r_sk_tab_strip("sk_explorer_tab_strip");
@@ -63,6 +65,17 @@ namespace
     constexpr S32 DETAILS_DEFAULT = 250;
     constexpr S32 SIZE_LABEL_WIDTH = 26; // the size slider label_width in XUI
     const char* const PATH_SEPARATOR = " \xE2\x80\xBA ";
+    constexpr F32 SEARCH_DELAY_SHORT = 0.25f;   // a query under 3 characters
+    constexpr F32 SEARCH_DELAY = 0.12f;
+    constexpr F32 SEARCH_SHOW_SECONDS = 0.25f;
+    constexpr F32 SEARCH_SORT_SECONDS = 1.f;      // a full sort after appended hits, at most once a second
+    const char* const SAVED_SEARCHES = "SkoomaInvExplorerSavedSearches";
+
+    std::string trimmed(std::string text)
+    {
+        LLStringUtil::trim(text);
+        return text;
+    }
 }
 
 //
@@ -417,7 +430,10 @@ SKFloaterInventoryExplorer::SKFloaterInventoryExplorer(const LLSD& key)
     mForwardBtn(nullptr),
     mUpBtn(nullptr),
     mDetailsBtn(nullptr),
-    mPathText(nullptr),
+    mPathBar(nullptr),
+    mSearchBox(nullptr),
+    mSearchClearBtn(nullptr),
+    mSearchPending(false),
     mStatusText(nullptr),
     mDetailsText(nullptr),
     mSidebarPanel(nullptr),
@@ -454,7 +470,9 @@ bool SKFloaterInventoryExplorer::postBuild()
     mForwardBtn = getChild<LLButton>("forward_btn");
     mUpBtn = getChild<LLButton>("up_btn");
     mDetailsBtn = getChild<LLButton>("details_btn");
-    mPathText = getChild<LLTextBox>("path_text");
+    mPathBar = getChild<SKInventoryPathBar>("path_bar");
+    mSearchBox = getChild<SKInventorySearchBox>("search_box");
+    mSearchClearBtn = getChild<LLButton>("search_clear_btn");
     mStatusText = getChild<LLTextBox>("status_text");
     mDetailsText = getChild<LLTextBox>("details_text");
     mSidebarPanel = getChild<LLLayoutPanel>("sidebar_panel");
@@ -468,7 +486,8 @@ bool SKFloaterInventoryExplorer::postBuild()
                              "drag_already_here", "drag_favorites_unavailable", "drag_links_off", "drag_link_own_only",
                              "drag_folder_link", "drag_no_link_here", "status_copied", "status_copied_one",
                              "status_moved_no_undo", "status_moved_no_undo_one", "status_moved", "status_moved_one", "status_linked", "status_linked_one",
-                             "status_favorites_added", "status_favorites_removed", "status_undone", "status_cant_undo" })
+                             "status_favorites_added", "status_favorites_removed", "status_undone", "status_cant_undo",
+                             "drag_into_search" })
     {
         drag_strings[key] = getString(key);
     }
@@ -562,6 +581,7 @@ bool SKFloaterInventoryExplorer::postBuild()
     labels.mDateFormat = getString("date_format");
     labels.mLoading = getString("loading");
     labels.mEmpty = getString("empty_folder");
+    labels.mNoResults = getString("search_no_results");
     labels.mWorn = getString("worn");
     labels.mMore = getString("n_more");
     labels.mShowAll = getString("show_all");
@@ -594,7 +614,64 @@ bool SKFloaterInventoryExplorer::postBuild()
     mColumns->setMenuCallback([this](S32 x, S32 y, const uuid_vec_t& ids, const LLUUID& folder_id)
                               { showContextMenu(mColumns, x, y, ids, folder_id); });
 
-    mSidebar->setOpenCallback([this](const LLUUID& folder_id) { navigateTo(folder_id, true); });
+    mSidebar->setOpenCallback([this](const LLUUID& folder_id)
+                              {
+                                  // A saved search lasts until anything else in the sidebar is clicked.
+                                  if (!mTabs.empty() && currentTab().mSearchSaved)
+                                  {
+                                      commitSearch(std::string(), false);
+                                  }
+                                  navigateTo(folder_id, true);
+                              });
+    if (SKSavedSearchRows* saved = mSidebar->getSavedSearches())
+    {
+        saved->setRemoveToolTip(getString("tip_remove_favorite"));
+        saved->setRunCallback([this](S32 index) { runSavedSearch(index); });
+        saved->setRemoveCallback([this](S32 index)
+                                 {
+                                     const LLSD list = gSavedPerAccountSettings.getLLSD(SAVED_SEARCHES);
+                                     if (index >= 0 && index < list.size())
+                                     {
+                                         setSavedSearch(list[index]["query"].asString(), list[index]["folder"].asUUID(), false, true);
+                                     }
+                                 });
+    }
+
+    mPathBar->setStrings(getString("path_arrow_tooltip"), getString("path_no_subfolders"));
+    mPathBar->setNavigateCallback([this](const LLUUID& folder_id) { navigateTo(folder_id, true); });
+
+    mSearchBox->setKeystrokeCallback([this](LLLineEditor*, void*) { onSearchTyped(); }, nullptr);
+    mSearchClearBtn->setCommitCallback([this](LLUICtrl*, const LLSD&)
+                                       {
+                                           // The clear x keeps focus in the box.
+                                           mSearchBox->setText(LLStringUtil::null);
+                                           commitSearch(std::string(), false);
+                                           mSearchBox->setFocus(true);
+                                           mDropdown->refresh();
+                                       });
+    mDropdown = std::make_unique<SKSearchDropdown>(mSearchBox);
+    std::map<std::string, std::string> search_strings;
+    for (const char* key : { "title", "recent", "add_favorite", "remove_favorite", "everywhere", "in_folder", "remove_history",
+                             "key_type", "key_brand", "key_creator", "key_perm", "key_is", "key_after", "key_before", "perm_full",
+                             "perm_copy", "perm_nocopy", "perm_mod", "perm_nomod", "perm_trans", "perm_notrans", "is_worn", "is_link",
+                             "is_favorite", "is_folder", "is_item", "date_1d", "date_7d", "date_30d", "date_365d", "date_jan1",
+                             "date_today" })
+    {
+        search_strings[key] = getString(std::string("search_") + key);
+    }
+    mDropdown->setStrings(search_strings);
+    mDropdown->setEditCallback([this]() { onSearchTyped(); });
+    mDropdown->setFolderCallback([this]() { return mTabs.empty() ? LLUUID::null : currentTab().mFolderID; });
+    mDropdown->setSavedCallbacks([this]()
+                                 {
+                                     return !mTabs.empty()
+                                            && savedSearchIndex(trimmed(mSearchBox->getText()), currentTab().mFolderID) >= 0;
+                                 },
+                                 [this]() { toggleSavedSearch(); });
+    mDropdown->setLeaveCallbacks([this]() { focusContent(true); }, [this]() { focusContent(false); });
+    mSearchBox->setKeyHook([this](KEY key, MASK mask) { return mDropdown->handleKey(key, mask); });
+    mSearchBox->setFocusCallback([this]() { mDropdown->refresh(); });
+    mSearchBox->setClickCallback([this]() { mDropdown->refresh(); });
     mSidebar->setKeyCallback([this](KEY key, MASK mask) { return onSidebarKey(key, mask); });
 
     mMenu = std::make_unique<SKInventoryExplorerContextMenu>([this](const LLUUID& id, bool new_tab) { openObject(id, new_tab); },
@@ -632,8 +709,52 @@ void SKFloaterInventoryExplorer::onOpen(const LLSD& key)
     LLFloater::onOpen(key);
 }
 
+void SKFloaterInventoryExplorer::onVisibilityChange(bool new_visibility)
+{
+    // The popups belong to no view, so they are closed with the floater.
+    if (!new_visibility)
+    {
+        if (mDropdown)
+        {
+            mDropdown->hide();
+        }
+        if (mPathBar)
+        {
+            mPathBar->hideMenu();
+        }
+    }
+    LLFloater::onVisibilityChange(new_visibility);
+}
+
+void SKFloaterInventoryExplorer::onClose(bool app_quitting)
+{
+    if (mDropdown)
+    {
+        mDropdown->hide();
+    }
+    if (mPathBar)
+    {
+        mPathBar->hideMenu();
+    }
+    LLFloater::onClose(app_quitting);
+}
+
 void SKFloaterInventoryExplorer::draw()
 {
+    // The typed text is searched once typing pauses: longer while it is short.
+    if (mSearchPending)
+    {
+        const std::string text = trimmed(mSearchBox->getText());
+        if (mSearchTyped.getElapsedTimeF32() >= (text.size() < 3 ? SEARCH_DELAY_SHORT : SEARCH_DELAY))
+        {
+            mSearchPending = false;
+            commitSearch(text, false);
+        }
+    }
+    stepSearch();
+    mDropdown->update();
+    mSearchClearBtn->setVisible(!mSearchBox->getText().empty());
+
     if (mNeedsRefresh)
     {
         mNeedsRefresh = false;
@@ -646,7 +767,8 @@ void SKFloaterInventoryExplorer::draw()
     SKInventoryFlatView* flat = flatView();
     const U32 generation = flat ? flat->getGeneration() : mColumns->getGeneration();
     const S32 selected = flat ? flat->getSelectedCount() : mColumns->getSelectedCount();
-    if (generation != mStatusGeneration || selected != mStatusSelected)
+    const bool search_status_changed = refreshSearchStatus();
+    if (generation != mStatusGeneration || selected != mStatusSelected || search_status_changed)
     {
         if (selected != mStatusSelected && selected > 0)
         {
@@ -715,6 +837,10 @@ bool SKFloaterInventoryExplorer::handleKeyHere(KEY key, MASK mask)
                 return true;
             case 'Z':
                 SKInventoryExplorerDrag::undo();
+                return true;
+            case 'F':
+                mSearchBox->setFocus(true);
+                mSearchBox->selectAll();
                 return true;
             case 'W':
                 closeTab(mActiveTab);
@@ -796,6 +922,12 @@ void SKFloaterInventoryExplorer::onInventoryChanged(U32 mask)
     {
         mColumns->markDirty();
     }
+    // A search checks the changed hits again and walks the changed folders, so it follows without starting over.
+    if (mSearch.isActive())
+    {
+        mSearch.noteChanges(gInventory.getChangedIDs());
+    }
+    mDropdown->onInventoryChanged();
 
     // A tab whose folder is gone goes back to its nearest live ancestor the columns know of, else My Inventory,
     // and its history forgets folders that are gone.
@@ -868,8 +1000,20 @@ void SKFloaterInventoryExplorer::showCurrentTab()
     {
         flat->setSort(tab.mSortKey, tab.mSortAscending);
         flat->setGroup(tab.mGroup);
+        if (!isSearching())
+        {
+            flat->clearSearch();
+        }
         flat->setFolder(tab.mFolderID, tab.mSelection, tab.mListScroll);
     }
+    mList->setSearching(isSearching() && flat == mList);
+    // The box shows the tab's own query.
+    mSearchPending = false;
+    if (trimmed(mSearchBox->getText()) != tab.mSearch)
+    {
+        mSearchBox->setText(tab.mSearch);
+    }
+    applySearch();
     refreshSortAndGroupButtons();
     revealInSidebar();
     mNeedsRefresh = true;
@@ -886,6 +1030,8 @@ void SKFloaterInventoryExplorer::showFolder()
     {
         flatView()->setFolder(tab.mFolderID);
     }
+    // A typed search stays while browsing, now under the new folder.
+    applySearch();
     revealInSidebar();
     mNeedsRefresh = true;
 }
@@ -1138,7 +1284,8 @@ void SKFloaterInventoryExplorer::refreshToolbar()
     mBackBtn->setEnabled(!tab.mBack.empty());
     mForwardBtn->setEnabled(!tab.mForward.empty());
     mUpBtn->setEnabled(cat && cat->getParentUUID().notNull());
-    mPathText->setText(folderPath(tab.mFolderID));
+    mPathBar->setFolder(tab.mFolderID);
+    refreshSavedSearches();
 }
 
 void SKFloaterInventoryExplorer::refreshTabStrip()
@@ -1151,6 +1298,16 @@ void SKFloaterInventoryExplorer::refreshTabStrip()
         strip_tab.mTitle = cat ? cat->getName() : std::string();
         strip_tab.mToolTip = folderPath(tab.mFolderID);
         strip_tab.mIcon = folderIcon(tab.mFolderID);
+        if (!tab.mSearch.empty())
+        {
+            // While searching: the search icon and the query, and where it searches.
+            LLStringUtil::format_map_t args;
+            args["[QUERY]"] = tab.mSearch;
+            args["[PATH]"] = strip_tab.mToolTip;
+            strip_tab.mTitle = tab.mSearch;
+            strip_tab.mToolTip = getString("search_tab_tooltip", args);
+            strip_tab.mIcon = LLUI::getUIImage("Search_Icon");
+        }
         strip_tab.mFolderID = tab.mFolderID;
         tabs.push_back(strip_tab);
     }
@@ -1185,6 +1342,13 @@ void SKFloaterInventoryExplorer::refreshStatus()
     if (loading && folders + items == 0)
     {
         text = getString("loading");
+    }
+    else if (!mSearchStatus.empty())
+    {
+        LLStringUtil::format_map_t parts;
+        parts["[A]"] = countLabel(folders, items);
+        parts["[B]"] = mSearchStatus;
+        text = getString("status_join", parts);
     }
     else
     {
@@ -1328,7 +1492,7 @@ SKInventoryFlatView* SKFloaterInventoryExplorer::flatView() const
     {
         case SKExplorerTab::VIEW_ICONS: return mIcons;
         case SKExplorerTab::VIEW_LIST:  return mList;
-        default:                        return nullptr;
+        default:                        return isSearching() ? mList : nullptr;
     }
 }
 
@@ -1471,6 +1635,15 @@ void SKFloaterInventoryExplorer::onIconSizeChanged()
 
 void SKFloaterInventoryExplorer::showContextMenu(LLView* view, S32 x, S32 y, const uuid_vec_t& ids, const LLUUID& folder_id)
 {
+    // Search results offer Show in Folder.
+    if (isSearching())
+    {
+        mMenu->setShowInFolderCallback([this](const LLUUID& id) { showInFolder(id); });
+    }
+    else
+    {
+        mMenu->setShowInFolderCallback(nullptr);
+    }
     if (ids.empty())
     {
         // Empty space gives the folder's own menu.
@@ -1482,4 +1655,329 @@ void SKFloaterInventoryExplorer::showContextMenu(LLView* view, S32 x, S32 y, con
         mMenu->setListedFolder(folder_id, false);
         mMenu->show(view, ids, x, y);
     }
+}
+
+void SKFloaterInventoryExplorer::onSearchTyped()
+{
+    if (mTabs.empty())
+    {
+        return;
+    }
+    mDropdown->onTyped();
+    // The caret moving changes nothing; an edit waits for typing to pause, and makes a saved search a typed one.
+    if (!mSearchPending && trimmed(mSearchBox->getText()) == currentTab().mSearch)
+    {
+        return;
+    }
+    currentTab().mSearchSaved = false;
+    mSearchPending = true;
+    mSearchTyped.reset();
+}
+
+void SKFloaterInventoryExplorer::commitSearch(const std::string& text, bool saved)
+{
+    if (mTabs.empty())
+    {
+        return;
+    }
+    mSearchPending = false;
+    SKExplorerTab& tab = currentTab();
+    tab.mSearchSaved = saved && !text.empty();
+    mNeedsRefresh = true;
+    if (tab.mSearch == text)
+    {
+        return;
+    }
+    // Starting or ending a search swaps Columns for the flat List, so the state is saved first.
+    const bool mode_changes = tab.mSearch.empty() != text.empty();
+    if (mode_changes)
+    {
+        saveListState();
+    }
+    tab.mSearch = text;
+    if (mode_changes)
+    {
+        tab.mSelection.clear();
+        tab.mListScroll = 0;
+        showCurrentTab();
+    }
+    else
+    {
+        applySearch();
+    }
+}
+
+void SKFloaterInventoryExplorer::applySearch()
+{
+    SKInventoryFlatView* flat = flatView();
+    if (!isSearching() || !flat)
+    {
+        mSearch.stop();
+        return;
+    }
+    const SKExplorerTab& tab = currentTab();
+    if (!mSearch.isActive() || mSearch.folder() != tab.mFolderID || mSearch.text() != tab.mSearch)
+    {
+        mSearch.start(tab.mFolderID, tab.mSearch);
+    }
+    pushSearchResults();
+}
+
+void SKFloaterInventoryExplorer::stepSearch()
+{
+    if (!mSearch.isActive())
+    {
+        return;
+    }
+    mSearch.step();
+    SKInventoryFlatView* flat = flatView();
+    if (!flat || !isSearching() || mSearchShown.getElapsedTimeF32() < SEARCH_SHOW_SECONDS)
+    {
+        return;
+    }
+    const std::vector<SKInventorySearch::hit_t>& hits = mSearch.hits();
+    if (mSearch.getRemovals() != mSearchShownRemovals)
+    {
+        // Hits left or changed rank: the list is read again whole.
+        pushSearchResults();
+    }
+    else if (hits.size() > mSearchShownCount)
+    {
+        // While the walk runs, new hits are added at the end; the list sorts once the walk ends.
+        flat->appendSearchResults(std::vector<SKInventorySearch::hit_t>(hits.begin() + mSearchShownCount, hits.end()));
+        mSearchShownCount = hits.size();
+        mSearchUnsorted = true;
+        mSearchShown.reset();
+    }
+    else if (mSearchUnsorted && mSearch.isDone() && mSearchSorted.getElapsedTimeF32() >= SEARCH_SORT_SECONDS)
+    {
+        pushSearchResults();
+    }
+}
+
+void SKFloaterInventoryExplorer::pushSearchResults()
+{
+    mSearchShown.reset();
+    mSearchSorted.reset();
+    mSearchUnsorted = false;
+    mSearchShownCount = mSearch.hits().size();
+    mSearchShownRemovals = mSearch.getRemovals();
+    if (SKInventoryFlatView* flat = flatView(); flat && isSearching())
+    {
+        flat->setSearchResults(mSearch.hits());
+    }
+}
+
+bool SKFloaterInventoryExplorer::refreshSearchStatus()
+{
+    const U32 key = isSearching() ? mSearch.getStateGeneration() : U32_MAX - 1;
+    if (key == mSearchStatusKey)
+    {
+        return false;
+    }
+    mSearchStatusKey = key;
+    mSearchStatus.clear();
+    if (!isSearching())
+    {
+        return true;
+    }
+    const std::string flagged = mSearch.query().flaggedTerm();
+    if (!flagged.empty())
+    {
+        LLStringUtil::format_map_t args;
+        args["[TERM]"] = flagged;
+        mSearchStatus = getString("search_flagged", args);
+    }
+    else if (mSearch.isActive() && mSearch.getLoadingCount() > 0)
+    {
+        LLStringUtil::format_map_t args;
+        args["[COUNT]"] = llformat("%d", mSearch.getLoadingCount());
+        mSearchStatus = getString("search_loading", args);
+    }
+    else if (mSearch.isActive() && !mSearch.isDone())
+    {
+        mSearchStatus = getString("search_walking");
+    }
+    return true;
+}
+
+void SKFloaterInventoryExplorer::showInFolder(const LLUUID& id)
+{
+    const LLInventoryObject* obj = gInventory.getObject(id);
+    if (!obj || mTabs.empty())
+    {
+        return;
+    }
+    const LLUUID parent_id = obj->getParentUUID();
+    // Clears the search, opens the folder, selects the object and scrolls it to the middle.
+    mSearchBox->setText(LLStringUtil::null);
+    commitSearch(std::string(), false);
+    navigateTo(parent_id, true);
+    setActiveSelection({ id });
+    if (SKInventoryFlatView* flat = flatView())
+    {
+        flat->centerSelection();
+    }
+    focusContent(false);
+}
+
+void SKFloaterInventoryExplorer::focusContent(bool select_first)
+{
+    mDropdown->hide();
+    if (SKInventoryFlatView* flat = flatView())
+    {
+        flat->focusContent(select_first);
+    }
+    else if (select_first)
+    {
+        mColumns->focusFirstColumn();
+    }
+    else
+    {
+        mColumns->setFocus(true);
+    }
+}
+
+S32 SKFloaterInventoryExplorer::savedSearchIndex(const std::string& query, const LLUUID& folder_id) const
+{
+    if (query.empty())
+    {
+        return -1;
+    }
+    // Both sides in saved form, so "everywhere" and a deleted folder compare alike.
+    const LLUUID wanted = savedFolder(folder_id);
+    const LLSD list = gSavedPerAccountSettings.getLLSD(SAVED_SEARCHES);
+    for (S32 i = 0; i < list.size(); ++i)
+    {
+        if (list[i]["query"].asString() == query && savedFolder(list[i]["folder"].asUUID()) == wanted)
+        {
+            return i;
+        }
+    }
+    return -1;
+}
+
+LLUUID SKFloaterInventoryExplorer::savedFolder(const LLUUID& folder_id)
+{
+    if (folder_id.isNull() || folder_id == gInventory.getRootFolderID() || !gInventory.getCategory(folder_id))
+    {
+        return LLUUID::null;
+    }
+    return folder_id;
+}
+
+void SKFloaterInventoryExplorer::toggleSavedSearch()
+{
+    const std::string query = trimmed(mSearchBox->getText());
+    if (query.empty() || mTabs.empty())
+    {
+        return;
+    }
+    const LLUUID& folder_id = currentTab().mFolderID;
+    setSavedSearch(query, folder_id, savedSearchIndex(query, folder_id) < 0, true);
+}
+
+void SKFloaterInventoryExplorer::setSavedSearch(const std::string& query, const LLUUID& folder_id, bool saved, bool record)
+{
+    const S32 index = savedSearchIndex(query, folder_id);
+    LLSD list = gSavedPerAccountSettings.getLLSD(SAVED_SEARCHES);
+    if (!list.isArray())
+    {
+        list = LLSD::emptyArray();
+    }
+    if (saved && index < 0)
+    {
+        LLSD entry;
+        entry["query"] = query;
+        // Searches of My Inventory itself are saved as everywhere.
+        entry["folder"] = savedFolder(folder_id);
+        list.append(entry);
+    }
+    else if (!saved && index >= 0)
+    {
+        LLSD kept = LLSD::emptyArray();
+        for (S32 i = 0; i < list.size(); ++i)
+        {
+            if (i != index)
+            {
+                kept.append(list[i]);
+            }
+        }
+        list = kept;
+    }
+    else
+    {
+        return;
+    }
+    gSavedPerAccountSettings.setLLSD(SAVED_SEARCHES, list);
+    refreshSavedSearches();
+    if (record)
+    {
+        LLHandle<LLFloater> handle = getHandle();
+        SKInventoryExplorerDrag::recordAction([handle, query, folder_id, saved]()
+                                              {
+                                                  if (SKFloaterInventoryExplorer* self = (SKFloaterInventoryExplorer*)handle.get())
+                                                  {
+                                                      self->setSavedSearch(query, folder_id, !saved, false);
+                                                  }
+                                              },
+                                              getString(saved ? "status_search_saved" : "status_search_removed"));
+    }
+}
+
+void SKFloaterInventoryExplorer::runSavedSearch(S32 index)
+{
+    const LLSD list = gSavedPerAccountSettings.getLLSD(SAVED_SEARCHES);
+    if (index < 0 || index >= list.size() || mTabs.empty())
+    {
+        return;
+    }
+    const std::string query = list[index]["query"].asString();
+    LLUUID folder_id = list[index]["folder"].asUUID();
+    if (folder_id.isNull() || !gInventory.getCategory(folder_id))
+    {
+        folder_id = gInventory.getRootFolderID();
+    }
+    mSearchBox->setText(query);
+    commitSearch(query, true);
+    navigateTo(folder_id, true);
+}
+
+void SKFloaterInventoryExplorer::refreshSavedSearches()
+{
+    SKSavedSearchRows* rows_view = mSidebar ? mSidebar->getSavedSearches() : nullptr;
+    if (!rows_view || mTabs.empty())
+    {
+        return;
+    }
+    const SKExplorerTab& tab = currentTab();
+    const LLSD list = gSavedPerAccountSettings.getLLSD(SAVED_SEARCHES);
+    std::vector<SKSavedSearchRows::Row> rows;
+    S32 selected = -1;
+    for (S32 i = 0; i < list.size(); ++i)
+    {
+        SKSavedSearchRows::Row row;
+        row.mQuery = list[i]["query"].asString();
+        const LLUUID folder_id = list[i]["folder"].asUUID();
+        const LLViewerInventoryCategory* cat = folder_id.notNull() ? gInventory.getCategory(folder_id) : nullptr;
+        if (cat && folder_id != gInventory.getRootFolderID())
+        {
+            LLStringUtil::format_map_t args;
+            args["[FOLDER]"] = cat->getName();
+            row.mSuffix = getString("saved_search_suffix", args);
+            row.mToolTip = getString("saved_search_in", args);
+        }
+        else
+        {
+            row.mToolTip = getString("saved_search_everywhere");
+        }
+        // Selected while both its folder and its query are the tab's.
+        const LLUUID runs_in = cat ? folder_id : gInventory.getRootFolderID();
+        if (selected < 0 && row.mQuery == tab.mSearch && runs_in == tab.mFolderID)
+        {
+            selected = i;
+        }
+        rows.push_back(row);
+    }
+    rows_view->setRows(rows, selected);
 }

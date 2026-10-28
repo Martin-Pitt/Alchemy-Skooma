@@ -104,6 +104,8 @@ public:
 
     // The folder listed, and whether the menu was opened over empty space (its id is then the folder's).
     void setListedFolder(const LLUUID& folder_id, bool root_mode) { mListedFolderID = folder_id; mRootMode = root_mode; }
+    // Set while the menu is over search results: "Show in Folder" is offered and runs this.
+    void setShowInFolderCallback(const id_callback_t& cb) { mShowInFolderCallback = cb; }
 
     // A menu of options alone (the List's header menu, the toolbar's Sort and Group), shown under spawn at x, y.
     static void showOptionsMenu(const std::string& filename, const SKExplorerOptions& options, LLView* spawn, S32 x, S32 y);
@@ -125,6 +127,7 @@ protected:
 
     open_callback_t mOpenCallback;
     id_callback_t mRenameCallback;
+    id_callback_t mShowInFolderCallback;
     SKExplorerOptions mOptions;
     LLUUID mListedFolderID;
     bool mRootMode;

@@ -8,7 +8,7 @@
  height="520"
  width="900"
  min_height="320"
- min_width="600"
+ min_width="720"
  layout="topleft"
  name="sk_inventory_explorer"
  save_rect="true"
@@ -117,6 +117,52 @@
     <string name="status_favorites_removed">Removed [COUNT] from Favorites · Ctrl+Z to undo</string>
     <string name="status_undone">Undone</string>
     <string name="status_cant_undo">Can't undo: [NAME] changed</string>
+    <string name="drag_into_search">Can't drop into a search</string>
+    <string name="status_search_saved">Added search to Favorites · Ctrl+Z to undo</string>
+    <string name="status_search_removed">Removed search from Favorites · Ctrl+Z to undo</string>
+    <string name="path_arrow_tooltip">Folders in [FOLDER]</string>
+    <string name="path_no_subfolders">No subfolders</string>
+    <string name="tip_remove_favorite">Remove from Favorites</string>
+    <string name="saved_search_suffix"> in [FOLDER]</string>
+    <string name="saved_search_in">Search in [FOLDER]</string>
+    <string name="saved_search_everywhere">Search everywhere</string>
+    <string name="search_tab_tooltip">Search "[QUERY]" in [PATH]</string>
+    <string name="search_walking">Searching…</string>
+    <string name="search_no_results">Nothing found</string>
+    <string name="search_loading">Searching… (loading [COUNT] folders)</string>
+    <string name="search_flagged">Nothing matches [TERM]</string>
+    <string name="search_title">Search options</string>
+    <string name="search_recent">Recent</string>
+    <string name="search_add_favorite">Add search to Favorites</string>
+    <string name="search_remove_favorite">Remove from Favorites</string>
+    <string name="search_everywhere">everywhere</string>
+    <string name="search_in_folder">in [FOLDER]</string>
+    <string name="search_remove_history">Remove from history</string>
+    <string name="search_key_type">Kind of item</string>
+    <string name="search_key_brand">Store tag at the start of a name</string>
+    <string name="search_key_creator">Who made it</string>
+    <string name="search_key_perm">What you may do with it</string>
+    <string name="search_key_is">Worn, a link, a favourite, a folder</string>
+    <string name="search_key_after">Acquired on or after a date</string>
+    <string name="search_key_before">Acquired before a date</string>
+    <string name="search_perm_full">Modify, copy and transfer</string>
+    <string name="search_perm_copy">Can copy</string>
+    <string name="search_perm_nocopy">No copy</string>
+    <string name="search_perm_mod">Can modify</string>
+    <string name="search_perm_nomod">No modify</string>
+    <string name="search_perm_trans">Can transfer</string>
+    <string name="search_perm_notrans">No transfer</string>
+    <string name="search_is_worn">Worn or active now</string>
+    <string name="search_is_link">Links</string>
+    <string name="search_is_favorite">Favourites</string>
+    <string name="search_is_folder">Folders only</string>
+    <string name="search_is_item">Items only</string>
+    <string name="search_date_1d">Yesterday</string>
+    <string name="search_date_7d">A week ago</string>
+    <string name="search_date_30d">A month ago</string>
+    <string name="search_date_365d">A year ago</string>
+    <string name="search_date_jan1">Start of this year</string>
+    <string name="search_date_today">Today, as a date</string>
     <sk_explorer_tab_strip
      follows="left|top|right"
      height="26"
@@ -161,15 +207,14 @@
      tool_tip="Up (Backspace)"
      top="29"
      width="24" />
-    <text
+    <sk_inventory_path_bar
      follows="left|top|right"
-     height="16"
+     height="22"
      layout="topleft"
-     left_pad="8"
-     name="path_text"
-     right="-332"
-     top="33"
-     use_ellipses="true" />
+     left_pad="6"
+     name="path_bar"
+     right="-540"
+     top="29" />
     <button
      follows="top|right"
      height="22"
@@ -179,7 +224,7 @@
      label="Group: None"
      layout="topleft"
      name="group_btn"
-     right="-238"
+     right="-444"
      tool_tip="Group by"
      top="29"
      width="90" />
@@ -191,7 +236,7 @@
      label="Sort: Acquired"
      layout="topleft"
      name="sort_btn"
-     right="-134"
+     right="-340"
      tool_tip="Sort by"
      top="29"
      width="100" />
@@ -204,7 +249,7 @@
      is_toggle="true"
      layout="topleft"
      name="view_columns_btn"
-     right="-106"
+     right="-312"
      tool_tip="Columns (Ctrl+1)"
      top="29"
      width="24" />
@@ -217,7 +262,7 @@
      is_toggle="true"
      layout="topleft"
      name="view_icons_btn"
-     right="-82"
+     right="-288"
      tool_tip="Icons (Ctrl+2)"
      top="29"
      width="24" />
@@ -230,7 +275,7 @@
      is_toggle="true"
      layout="topleft"
      name="view_list_btn"
-     right="-58"
+     right="-264"
      tool_tip="List (Ctrl+3)"
      top="29"
      width="24" />
@@ -243,10 +288,36 @@
      is_toggle="true"
      layout="topleft"
      name="view_gallery_btn"
-     right="-34"
+     right="-240"
      tool_tip="Gallery (Ctrl+4)"
      top="29"
      width="24" />
+    <sk_inventory_search_box
+     commit_on_focus_lost="false"
+     follows="top|right"
+     height="22"
+     label="Search this folder and below…"
+     layout="topleft"
+     max_length_bytes="254"
+     name="search_box"
+     right="-34"
+     text_pad_right="20"
+     top="29"
+     width="200" />
+    <button
+     follows="top|right"
+     height="16"
+     image_selected="Icon_Close_Foreground"
+     image_unselected="Icon_Close_Foreground"
+     label=""
+     layout="topleft"
+     name="search_clear_btn"
+     right="-38"
+     tab_stop="false"
+     tool_tip="Clear search"
+     top="32"
+     visible="false"
+     width="16" />
     <button
      follows="top|right"
      height="22"
@@ -331,6 +402,14 @@
                          name="favorites_frame"
                          reserve_scroll_corner="false" />
                     </sk_inventory_favorites_panel>
+                    <sk_saved_search_rows
+                     follows="left|top"
+                     height="0"
+                     layout="topleft"
+                     left="0"
+                     name="saved_searches"
+                     top_pad="0"
+                     width="205" />
                     <text
                      follows="left|top"
                      font="SansSerifSmallBold"

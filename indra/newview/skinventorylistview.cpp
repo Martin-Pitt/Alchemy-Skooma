@@ -257,7 +257,7 @@ void SKInventoryListView::drawContent()
 
     if (mRows.empty())
     {
-        const std::string& message = mLoading ? mLabels.mLoading : mLabels.mEmpty;
+        const std::string& message = mLoading ? mLabels.mLoading : (mSearching ? mLabels.mNoResults : mLabels.mEmpty);
         font->renderUTF8(message, 0, width / 2, height - HEADER_HEIGHT - 2 * ROW_HEIGHT, dim_color.get(),
                          LLFontGL::HCENTER, LLFontGL::VCENTER);
         return;

@@ -32,6 +32,7 @@
 #include "skinventorycolumnsview.h"
 #include "skinventoryexplorerdrag.h"
 #include "skinventoryexplorermenu.h"
+#include "skinventoryexplorersearch.h"
 #include "skinventoryiconsview.h"
 #include "skinventorylistview.h"
 
@@ -45,7 +46,10 @@ class LLLayoutPanel;
 class LLSliderCtrl;
 class LLTextBox;
 class SKInventoryExplorerContextMenu;
+class SKInventoryPathBar;
+class SKInventorySearchBox;
 class SKInventorySidebar;
+class SKSearchDropdown;
 
 // Everything one tab keeps: its folder, view, history, sort, group, selection and scroll.
 struct SKExplorerTab
@@ -69,6 +73,8 @@ struct SKExplorerTab
     S32 mListScroll = 0;
     S32 mStripScroll = 0;
     SKInventoryColumnsView::scroll_map_t mColumnScrolls;
+    std::string mSearch;        // the query searched under the folder, kept while browsing
+    bool mSearchSaved = false;  // run from a saved search: anything else clicked in the sidebar clears it
 };
 
 // The top row: flat square tabs, the new-tab button, and empty space that drags the floater.
@@ -190,6 +196,8 @@ public:
     bool handleDoubleClick(S32 x, S32 y, MASK mask) override;
 
     void onInventoryChanged(U32 mask);
+    void onVisibilityChange(bool new_visibility) override;
+    void onClose(bool app_quitting) override;
 
 private:
     SKExplorerTab& currentTab() { return mTabs[mActiveTab]; }
@@ -207,7 +215,12 @@ private:
     void showCurrentTab();
     void showFolder();
     void setView(SKExplorerTab::EView view);
-    bool isColumns() const { return !mTabs.empty() && mTabs[mActiveTab].mView == SKExplorerTab::VIEW_COLUMNS; }
+    // Columns shows search results flat, in the List.
+    bool isColumns() const
+    {
+        return !mTabs.empty() && mTabs[mActiveTab].mView == SKExplorerTab::VIEW_COLUMNS && mTabs[mActiveTab].mSearch.empty();
+    }
+    bool isSearching() const { return !mTabs.empty() && !mTabs[mActiveTab].mSearch.empty(); }
     // The List or the Icons view while one shows, else null.
     SKInventoryFlatView* flatView() const;
     void setOption(const std::string& option);
@@ -236,6 +249,26 @@ private:
     void refreshSortAndGroupButtons();
     void showContextMenu(LLView* view, S32 x, S32 y, const uuid_vec_t& ids, const LLUUID& folder_id);
 
+    // Search: the box's text is taken after a pause, then walked under the tab's folder a slice a frame.
+    void onSearchTyped();
+    void commitSearch(const std::string& text, bool saved);
+    void applySearch();
+    void stepSearch();
+    void pushSearchResults();
+    void showInFolder(const LLUUID& id);
+    void focusContent(bool select_first);
+    // Builds the status text only when the search's state moved; true when it did.
+    bool refreshSearchStatus();
+    // The search's saved form: My Inventory, and a folder since deleted, are both "everywhere".
+    static LLUUID savedFolder(const LLUUID& folder_id);
+
+    // Saved searches: {query, folder} in a per-account setting, listed under Favorites.
+    S32 savedSearchIndex(const std::string& query, const LLUUID& folder_id) const;
+    void toggleSavedSearch();
+    void setSavedSearch(const std::string& query, const LLUUID& folder_id, bool saved, bool record);
+    void runSavedSearch(S32 index);
+    void refreshSavedSearches();
+
     std::string folderPath(const LLUUID& folder_id) const;
     LLPointer<LLUIImage> folderIcon(const LLUUID& folder_id) const;
     std::string countLabel(S32 folders, S32 items) const;
@@ -257,7 +290,20 @@ private:
     LLButton* mForwardBtn;
     LLButton* mUpBtn;
     LLButton* mDetailsBtn;
-    LLTextBox* mPathText;
+    SKInventoryPathBar* mPathBar;
+    SKInventorySearchBox* mSearchBox;
+    LLButton* mSearchClearBtn;
+    std::unique_ptr<SKSearchDropdown> mDropdown;
+    SKInventorySearch mSearch;
+    LLFrameTimer mSearchTyped;      // the pause before the typed text is searched
+    bool mSearchPending;
+    LLFrameTimer mSearchShown;      // results reach the view at most four times a second while walking
+    size_t mSearchShownCount = 0;   // hits the view lists
+    U32 mSearchShownRemovals = 0;
+    bool mSearchUnsorted = false;   // hits were appended unsorted; sorted once the walk ends
+    LLFrameTimer mSearchSorted;
+    std::string mSearchStatus;
+    U32 mSearchStatusKey = U32_MAX;
     LLTextBox* mStatusText;
     LLTextBox* mDetailsText;
     LLLayoutPanel* mSidebarPanel;
