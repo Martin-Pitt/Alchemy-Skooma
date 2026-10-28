@@ -161,7 +161,7 @@ public:
     // A live inventory panel, for the bridges the content views' menu runs actions through.
     LLInventoryPanel* getInventoryPanel() const;
     // Gives keyboard focus to the panel holding the selected row.
-    void focusSelection();
+    void focusSelection(const LLUUID& folder_id = LLUUID::null);
 
     // Selects the folder's row in the panel that should show it, expanding to it,
     // and scrolls only if no copy of the row is in view.

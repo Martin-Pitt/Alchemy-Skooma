@@ -488,20 +488,34 @@ void SKInventorySidebar::setFlat(bool flat)
     }
 }
 
-void SKInventorySidebar::focusSelection()
+void SKInventorySidebar::focusSelection(const LLUUID& folder_id)
 {
+    if (folder_id.notNull())
+    {
+        reveal(folder_id);
+    }
+    // Focus goes to the panel, as LLFolderView gives it on a click, so its folder view gets the keys.
+    SKInventorySidebarPanel* target = nullptr;
     for (SKInventorySidebarPanel* panel : mPanels)
     {
         LLFolderView* root = panel ? panel->getRootFolder() : nullptr;
-        if (root && !root->getSelectionList().empty())
+        if (!root || root->getSelectionList().empty())
         {
-            root->setFocus(true);
-            return;
+            continue;
+        }
+        LLFolderViewItem* row = folder_id.notNull() ? panel->getItemByID(folder_id) : nullptr;
+        if (!target || (row && row->isSelected()))
+        {
+            target = panel;
         }
     }
-    if (!mPanels.empty() && mPanels[1] && mPanels[1]->getRootFolder())
+    if (!target)
     {
-        mPanels[1]->getRootFolder()->setFocus(true);
+        target = getInventoryPanel() ? static_cast<SKInventorySidebarPanel*>(getInventoryPanel()) : nullptr;
+    }
+    if (target)
+    {
+        target->setFocus(true);
     }
 }
 

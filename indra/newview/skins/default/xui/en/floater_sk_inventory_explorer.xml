@@ -96,7 +96,7 @@
      layout="topleft"
      left="0"
      name="tab_strip"
-     right="-40"
+     right="-1"
      top="0" />
     <button
      follows="top|left"

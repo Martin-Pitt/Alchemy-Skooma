@@ -995,6 +995,7 @@ bool SKInventoryFlatView::handleMouseDown(S32 x, S32 y, MASK mask)
     {
         return true;
     }
+    make_ui_sound("UISndClick");
 
     const bool was_only = mSelectedCount == 1 && mSelected[row];
     if (mask & MASK_CONTROL)
@@ -1056,6 +1057,10 @@ bool SKInventoryFlatView::handleRightMouseDown(S32 x, S32 y, MASK mask)
     else if (!mSelected[row])
     {
         moveCursor(row, MASK_NONE);
+    }
+    if (row >= 0 && mRows[row].isEntry())
+    {
+        make_ui_sound("UISndClick");
     }
     if (mMenuCallback)
     {
