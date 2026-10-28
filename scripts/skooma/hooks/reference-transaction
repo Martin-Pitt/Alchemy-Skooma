@@ -1,10 +1,16 @@
 #!/bin/sh
-# Skooma: protect refs/heads/develop, the upstream mirror.  Installed to .git/hooks by `git skooma bootstrap`.
+# Skooma: protect refs/heads/develop, the upstream mirror, and keep fork-only files out of
+# upstream-bound branches however they arrive.  Installed to .git/hooks by `git skooma bootstrap`.
 #
 # develop must always equal upstream/<skooma.upstreamBranch>.  Only `git skooma sync`
 # may move it (a one-time rename: SKOOMA_SCRIPT=1 git branch -m next develop), and it verifies the fast-forward itself before calling update-ref.
 # Written in sh, not pwsh: this fires hundreds of times during a rebase
 # (sh ~19 ms vs pwsh ~190 ms per spawn).
+#
+# A working branch (feature-, fix-, ... any skooma.class) is a pull request in waiting.
+# pre-commit keeps fork-only files out of its commits, but a fast-forward merge of main
+# makes no commit, so the ref itself is checked here: it may not move to a commit that
+# carries AGENTS.md, the fork's root marker.
 #
 # main/publish are deliberately NOT guarded — glue and setup commits land on main.  To lock them later, add them to the case
 # below and use `git skooma` (or SKOOMA_SCRIPT=1) for legitimate moves.
@@ -18,16 +24,31 @@ if [ "$SKOOMA_SCRIPT" = "1" ]; then
 fi
 
 blocked=
+tainted=
 while read -r old new ref; do
     case "$ref" in
     refs/heads/develop) blocked="$old $new" ;;
+    refs/heads/main | refs/heads/publish | refs/heads/glue | refs/heads/skooma-*) continue ;;
+    refs/heads/*)
+        case "$new" in 0000000000000000000000000000000000000000) continue ;; esac
+        branch=${ref#refs/heads/}
+        class=$(git config --get "branch.$branch.skooma" 2>/dev/null)
+        if [ -z "$class" ]; then
+            for c in feature fix workaround amend foundation $(git config --get-all skooma.class 2>/dev/null); do
+                case "$branch" in "$c"-*) class=$c ; break ;; esac
+            done
+        fi
+        case "$class" in '' | glue | sidecar) continue ;; esac
+        if git cat-file -e "$new:AGENTS.md" 2>/dev/null; then
+            tainted="$tainted $branch"
+        fi
+        ;;
     *) continue ;;
     esac
 done
 
-[ -n "$blocked" ] || exit 0
-
-cat >&2 <<'MSG'
+if [ -n "$blocked" ]; then
+    cat >&2 <<'MSG'
 
   Refused: refs/heads/develop is a read-only mirror of upstream.
 
@@ -37,4 +58,20 @@ cat >&2 <<'MSG'
     land work            :  git skooma integrate <name>
 
 MSG
-exit 1
+    exit 1
+fi
+
+if [ -n "$tainted" ]; then
+    cat >&2 <<MSG
+
+  Refused: upstream-bound branch$tainted would take fork-only files (AGENTS.md is in the target commit).
+
+  A feature branch updates from develop, never from main:
+    git merge develop
+  Fork-only files belong on glue or a skooma-<name> sidecar.
+
+MSG
+    exit 1
+fi
+
+exit 0
