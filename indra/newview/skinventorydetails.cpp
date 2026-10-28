@@ -572,20 +572,20 @@ void SKInventoryPlayer::setItem(const LLUUID& item_id, const LLUUID& image_id)
     mZoomOrigin.set(0.5f, 0.5f);
     mAspect = 1.f;
     mKind = KIND_NONE;
-    if (!item)
-    {
-        return;
-    }
     S32 w = 1;
     S32 h = 1;
     if (image_id.notNull())
     {
+        // A thumbnail, an item's or a folder's, is square unless a texture says otherwise.
         mKind = KIND_IMAGE;
-        // A thumbnail is square unless the texture says otherwise.
-        if (item->getType() == LLAssetType::AT_TEXTURE && SKInventoryDetails::aspectOf(item->getDescription(), w, h))
+        if (item && item->getType() == LLAssetType::AT_TEXTURE && SKInventoryDetails::aspectOf(item->getDescription(), w, h))
         {
             mAspect = (F32)w / (F32)h;
         }
+        return;
+    }
+    if (!item)
+    {
         return;
     }
     switch (item->getType())
@@ -1581,10 +1581,37 @@ void SKInventoryDetailsView::rebuild()
     const bool broken = item && item->getIsLinkType() && target == item;
     if (!item || !target)
     {
-        // A folder shows nothing.
         mPlayer.setItem(LLUUID::null);
-        mThumb.setItem(LLUUID::null);
         mInfoTexture = nullptr;
+        LLViewerInventoryCategory* cat = mItemID.notNull() ? gInventory.getCategory(mItemID) : nullptr;
+        if (!cat || !mMessage.empty())
+        {
+            mThumb.setItem(LLUUID::null);
+            mLaidWidth = -1;
+            return;
+        }
+        // A folder: its thumbnail on top when it has one, its name, type and what it holds.
+        mThumbnail = cat->getThumbnailUUID().notNull();
+        mThumb.setItem(mThumbnail ? mItemID : LLUUID::null, cat->getThumbnailUUID());
+        mThumb.setFetching(mFetching);
+        SKInventoryRow row;
+        SKInventoryFlatView::readRow(mItemID, SKInventoryDetails::labels(), row);
+        Line name;
+        name.mKind = Line::LINE_NAME;
+        name.mValue.push_back({ cat->getName() });
+        mLines.push_back(name);
+        addRow("row_folder", mFolderPath);
+        addRow("row_type", row.mType);
+        LLInventoryModel::cat_array_t* cats = nullptr;
+        LLInventoryModel::item_array_t* items = nullptr;
+        gInventory.getDirectDescendentsOf(mItemID, cats, items);
+        if (cats || items)
+        {
+            LLStringUtil::format_map_t args;
+            args["[FOLDERS]"] = llformat("%d", cats ? (S32)cats->size() : 0);
+            args["[ITEMS]"] = llformat("%d", items ? (S32)items->size() : 0);
+            addRow("row_contents", format_args(SKInventoryDetails::str("contents_counts"), args));
+        }
         mLaidWidth = -1;
         return;
     }
