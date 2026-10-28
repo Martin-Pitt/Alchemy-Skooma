@@ -421,6 +421,12 @@ bool LLInventoryLinkReplaceDropTarget::handleDragAndDrop(S32 x, S32 y, MASK mask
                 mDADSignal(mItemID);
             }
         }
+        // <SK:Nexii> Drag feedback: the acceptance is set above, for the drop too
+        //else
+        //{
+        //    *accept = ACCEPT_YES_SINGLE;
+        //}
+        // </SK:Nexii>
     }
     else
     {

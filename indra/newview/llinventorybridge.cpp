@@ -2848,6 +2848,7 @@ bool LLFolderBridge::dragCategoryIntoFolder(LLInventoryCategory* inv_cat,
         if (is_movable && LLFolderType::lookupIsProtectedType(inv_cat->getPreferredType()))
         {
             is_movable = false;
+            // tooltip?
             LLDragFeedback::refuse(LLTrans::getString("TooltipDragSystemFolder")); // <SK:Nexii> Drag feedback
         }
 
@@ -6035,7 +6036,7 @@ bool LLFolderBridge::dragItemIntoFolder(LLInventoryItem* inv_item,
         {
             LLDragFeedback::refuse(LLTrans::getString("TooltipDragWornToTrash"));
         }
-        else if (mUUID == inv_item->getParentUUID())
+        else if (mUUID == inv_item->getParentUUID() && tooltip_msg.empty() && LLDragFeedback::refusal().empty())
         {
             LLDragFeedback::refuse("", true);
         }
