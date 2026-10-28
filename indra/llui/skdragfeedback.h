@@ -56,6 +56,7 @@ enum class EDragAction : U8
     Apply,
     ApplyAll,
     MakeOutfit,
+    Favorite,
     Reorder,
     Set,
     Count
@@ -97,7 +98,11 @@ public:
 
     // One pass over the targets.
     static void beginPass();
-    static void report(EDragAction action, std::string_view target_name = {});
+    // A target's own `text` is the chip's line; without it the line is built from the action and the target's name.
+    // `note` is a dimmer second line saying why (a Library item copies rather than moves). The action also picks
+    // the cursor and the modifier hints.
+    static void report(EDragAction action, std::string_view target_name = {}, std::string_view text = {},
+                       std::string_view note = {});
     static void refuse(std::string_view message, bool quiet = false);
     // A target that handles the drag but is locked against it (RLVa): refused quietly, as ACCEPT_NO_LOCKED.
     // notice_on_drop is what a release there says (RLVa's "blocked" notice): the tool calls it on the drop
@@ -107,11 +112,14 @@ public:
     static void dropBlocked();
     static EDragAction reportedAction();
     static const std::string& reportedTarget();
+    static const std::string& reportedText();
+    static const std::string& reportedNote();
     static const std::string& refusal();
     static bool refusedQuietly();
 
     // The chip, set by the tool after each pass: its line, whether it refuses, and the modifier hints under it.
-    static void setChip(const std::string& text, bool refused, const std::vector<std::string>& hints);
+    static void setChip(const std::string& text, bool refused, const std::string& note,
+                        const std::vector<std::string>& hints);
     static const std::string& chipText();
 
     // Marks: a target marks the rect it would light, in its own coordinates, during the hover pass; it is good for

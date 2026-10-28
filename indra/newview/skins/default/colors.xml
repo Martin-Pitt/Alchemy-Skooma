@@ -713,6 +713,9 @@
      name="DragChipRefuseTextColor"
      value="1 0.55 0.55 1" />
     <color
+     name="DragChipNoteTextColor"
+     value="0.7 0.71 0.71 1" />
+    <color
      name="DragChipHintTextColor"
      value="0.624 0.635 0.639 1" />
     <!-- </SK:Nexii> -->

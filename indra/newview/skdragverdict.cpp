@@ -213,6 +213,7 @@ namespace
         case EDragAction::Apply:            key = "DragVerdictApply"; break;
         case EDragAction::ApplyAll:         key = "DragVerdictApplyAll"; break;
         case EDragAction::MakeOutfit:       key = "DragVerdictMakeOutfit"; break;
+        case EDragAction::Favorite:         key = named ? "DragVerdictFavorite" : "DragVerdictFavoriteHere"; break;
         case EDragAction::Reorder:          key = "DragVerdictReorder"; break;
         case EDragAction::Set:              key = "DragVerdictSet"; break;
         default:                            return std::string();
@@ -496,10 +497,17 @@ namespace SKDragVerdict
             std::string text = tooltip_msg.empty() ? LLDragFeedback::refusal() : tooltip_msg;
             const bool quiet = LLDragFeedback::refusedQuietly() || text.empty();
             // Only a refusal for want of a modifier keeps its hint.
-            LLDragFeedback::setChip(text, !quiet, hints);
+            LLDragFeedback::setChip(text, !quiet, std::string(), hints);
             return;
         }
 
+        // A target's own words lead; the verb is the fallback.
+        const std::string& note = LLDragFeedback::reportedNote();
+        if (!LLDragFeedback::reportedText().empty())
+        {
+            LLDragFeedback::setChip(LLDragFeedback::reportedText(), false, note, hints);
+            return;
+        }
         EDragAction action = LLDragFeedback::reportedAction();
         std::string target = LLDragFeedback::reportedTarget();
         if (action == EDragAction::None)
@@ -514,11 +522,11 @@ namespace SKDragVerdict
             }
             else
             {
-                LLDragFeedback::setChip(LLTrans::getString("DragVerdictDropHere"), false, hints);
+                LLDragFeedback::setChip(LLTrans::getString("DragVerdictDropHere"), false, note, hints);
                 return;
             }
         }
-        LLDragFeedback::setChip(verdict_text(action, target), false, hints);
+        LLDragFeedback::setChip(verdict_text(action, target), false, note, hints);
     }
 
     ECursorType cursorFor(EAcceptance accept, ECursorType cursor, U32 cargo_count)
@@ -532,7 +540,7 @@ namespace SKDragVerdict
             return cursor;
         }
         const EDragAction action = LLDragFeedback::reportedAction();
-        if (action == EDragAction::Copy || action == EDragAction::Link)
+        if (action == EDragAction::Copy || action == EDragAction::Link || action == EDragAction::Favorite)
         {
             return cargo_count > 1 ? UI_CURSOR_ARROWCOPYMULTI : UI_CURSOR_ARROWCOPY;
         }

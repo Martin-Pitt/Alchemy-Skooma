@@ -6026,11 +6026,12 @@ bool LLFolderBridge::dragItemIntoFolder(LLInventoryItem* inv_item,
         {
             const bool reorder = move_is_into_favorites && (mUUID == inv_item->getParentUUID());
             LLDragFeedback::report(reorder ? EDragAction::Reorder
-                                   : move_is_into_favorites ? EDragAction::Copy
+                                   : move_is_into_favorites ? EDragAction::Favorite
                                    : move_is_into_current_outfit ? EDragAction::Wear
                                    : move_is_into_outfit ? EDragAction::Link
                                    : EDragAction::Move,
-                                   getDisplayName());
+                                   getDisplayName(), {},
+                                   (move_is_into_favorites && !reorder) ? LLTrans::getString("DragNoteFavoritesCopy") : std::string());
         }
         else if (move_is_into_trash && !inv_item->getIsLinkType() && get_is_item_worn(inv_item->getUUID()))
         {
@@ -6210,7 +6211,8 @@ bool LLFolderBridge::dragItemIntoFolder(LLInventoryItem* inv_item,
 
         if (accept)
         {
-            LLDragFeedback::report(is_move ? EDragAction::Move : EDragAction::Copy, getDisplayName()); // <SK:Nexii> Drag feedback
+            LLDragFeedback::report(is_move ? EDragAction::Move : EDragAction::Copy, getDisplayName(), {},
+                                   is_move ? LLTrans::getString("DragNoteNoCopyMoves") : std::string()); // <SK:Nexii> Drag feedback
         }
 
         if (accept && drop)
@@ -6318,10 +6320,13 @@ bool LLFolderBridge::dragItemIntoFolder(LLInventoryItem* inv_item,
             // <SK:Nexii> Drag feedback: a Library item is copied, linked into an outfit or worn
             if (accept)
             {
+                const bool copies = !(move_is_into_current_outfit || move_is_into_outfit);
                 LLDragFeedback::report(move_is_into_current_outfit ? EDragAction::Wear
                                        : move_is_into_outfit ? EDragAction::Link
+                                       : move_is_into_favorites ? EDragAction::Favorite
                                        : EDragAction::Copy,
-                                       getDisplayName());
+                                       getDisplayName(), {},
+                                       copies ? LLTrans::getString("DragNoteLibraryCopies") : std::string());
             }
             // </SK:Nexii>
 
