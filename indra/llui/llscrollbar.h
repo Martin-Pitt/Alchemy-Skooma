@@ -60,7 +60,7 @@ public:
                                         track_image_vertical;
 
         Optional<bool>                  bg_visible;
-        Optional<bool>                  thin; // <SK:Nexii> Thin scrollbars: no arrows, a narrow track and a rounded inset thumb
+        Optional<bool>                  thin; // <SK:Nexii> Thin scrollbars: a narrow track, a pill thumb and drawn arrows
 
         Optional<LLUIColor>             track_color,
                                         thumb_color,
@@ -137,7 +137,7 @@ public:
     void                setThickness(S32 thickness);
 
     // <SK:Nexii> Thin scrollbars
-    static constexpr S32 THIN_THICKNESS = 8;
+    static constexpr S32 THIN_THICKNESS = 10;
     bool                isThin() const { return mThin; }
     // </SK:Nexii>
 
@@ -146,7 +146,7 @@ private:
     bool                changeLine(S32 delta, bool update_thumb );
     bool                scrollByWheel(F32 precise); // precise sub-notch wheel delta -> whole lines + residue
     // <SK:Nexii> Thin scrollbars
-    S32                 arrowLength() const { return mThin ? 0 : mThickness; }
+    S32                 arrowLength() const { return mThin ? mThickness + 2 : mThickness; } // thin: the arrow square and a 2 px gap
     void                drawThin();
     // </SK:Nexii>
 
