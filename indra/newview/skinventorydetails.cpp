@@ -195,6 +195,22 @@ namespace
         gGL.getTextureSlot(0)->unbind();
     }
 
+    // The types the player previews: textures and photos, sounds, animations, materials and landmarks.
+    bool has_asset_preview(LLAssetType::EType type)
+    {
+        switch (type)
+        {
+            case LLAssetType::AT_TEXTURE:
+            case LLAssetType::AT_SOUND:
+            case LLAssetType::AT_ANIMATION:
+            case LLAssetType::AT_MATERIAL:
+            case LLAssetType::AT_LANDMARK:
+                return true;
+            default:
+                return false;
+        }
+    }
+
     // The texture is asked for the pixels it covers, HiDPI included, with no boost.
     void report_drawn(LLViewerFetchedTexture* texture, S32 width, S32 height)
     {
@@ -1530,7 +1546,8 @@ void SKInventoryDetailsView::rebuild()
     // A thumbnail goes on top, and the player moves below the rows.
     const LLUUID thumbnail = item->getThumbnailUUID().notNull() ? item->getThumbnailUUID() : target->getThumbnailUUID();
     mThumbnail = thumbnail.notNull();
-    mThumbBelow = mThumbnail && !broken && target->getType() == LLAssetType::AT_TEXTURE;
+    // The asset's own preview leads wherever its type has one; the thumbnail then follows below the rows.
+    mThumbBelow = mThumbnail && !broken && has_asset_preview(target->getType());
     if (broken)
     {
         mThumbnail = false;
@@ -1614,21 +1631,11 @@ void SKInventoryDetailsView::rebuild()
 
     if (mThumbBelow)
     {
-        // A texture or photo shows itself on top and its thumbnail in a section of its own below.
+        // The asset's preview took the top; its thumbnail has a section of its own below.
         addHeading("section_thumbnail");
         Line thumb;
         thumb.mKind = Line::LINE_PLAYER;
         mLines.push_back(thumb);
-    }
-    else if (mThumbnail)
-    {
-        // The player in its own section below the rows.
-        if (mPlayer.getKind() != SKInventoryPlayer::KIND_NONE && mPlayer.getKind() != SKInventoryPlayer::KIND_IMAGE)
-        {
-            Line player;
-            player.mKind = Line::LINE_PLAYER;
-            mLines.push_back(player);
-        }
     }
     mLaidWidth = -1;
 }
