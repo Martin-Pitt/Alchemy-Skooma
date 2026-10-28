@@ -427,7 +427,7 @@ void SKInventoryIconsView::drawTile(const SKInventoryRow& row, const LLRect& rec
                    badge_bg.get(), true);
         row.mIcon->draw(art_rect.mLeft, art_rect.mBottom, BADGE_SIZE, BADGE_SIZE);
     }
-    if (mBadges && row.mIsLink && link_badge.notNull())
+    if (row.hasLinkBadge() && link_badge.notNull())
     {
         link_badge->draw(art_rect.mRight - BADGE_SIZE + 3, art_rect.mBottom - 3, BADGE_SIZE, BADGE_SIZE);
     }

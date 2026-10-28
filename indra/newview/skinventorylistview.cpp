@@ -313,6 +313,10 @@ void SKInventoryListView::drawContent()
             if (col == COL_NAME && row.mIcon.notNull())
             {
                 row.mIcon->draw(x, middle - ICON_SIZE / 2, ICON_SIZE, ICON_SIZE);
+                if (row.hasLinkBadge())
+                {
+                    drawLinkBadge(LLRect(x, middle + ICON_SIZE / 2, x + ICON_SIZE, middle - ICON_SIZE / 2));
+                }
                 x += ICON_SIZE + CELL_PAD;
             }
             const std::string text = cellText(row, col);

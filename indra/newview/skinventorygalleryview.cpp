@@ -214,6 +214,11 @@ void SKInventoryGalleryView::draw()
                 if (mHasRow && mRow.mIcon.notNull())
                 {
                     mRow.mIcon->draw(stage.getCenterX() - ICON_SIZE / 2, stage.getCenterY() - ICON_SIZE / 2, ICON_SIZE, ICON_SIZE);
+                    if (mRow.hasLinkBadge())
+                    {
+                        SKInventoryFlatView::drawLinkBadge(LLRect(stage.getCenterX() - ICON_SIZE / 2, stage.getCenterY() + ICON_SIZE / 2,
+                                                                  stage.getCenterX() + ICON_SIZE / 2, stage.getCenterY() - ICON_SIZE / 2));
+                    }
                 }
                 break;
             }

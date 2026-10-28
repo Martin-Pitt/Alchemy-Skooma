@@ -890,6 +890,10 @@ void SKInventoryColumnsView::drawColumn(const Column& column, S32 index, S32 hei
         if (row.mIcon.notNull())
         {
             row.mIcon->draw(x, middle - ICON_SIZE / 2, ICON_SIZE, ICON_SIZE);
+            if (row.hasLinkBadge())
+            {
+                SKInventoryFlatView::drawLinkBadge(LLRect(x, middle + ICON_SIZE / 2, x + ICON_SIZE, middle - ICON_SIZE / 2));
+            }
             x += ICON_SIZE + CELL_PAD;
         }
         S32 text_right = inner_right - CELL_PAD;
