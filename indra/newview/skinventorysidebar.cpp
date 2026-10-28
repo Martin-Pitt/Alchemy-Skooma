@@ -525,6 +525,35 @@ void SKInventorySidebar::draw()
     arrangePanels();
     scrollToPendingReveal();
     LLPanel::draw();
+    if (mDropHover.isActive())
+    {
+        SKInventoryExplorerDrag::drawTargetMark(mDropRect, mDropVerdict);
+    }
+}
+
+bool SKInventorySidebar::handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop, EDragAndDropType cargo_type, void* cargo_data,
+                                           EAcceptance* accept, std::string& tooltip_msg)
+{
+    LLRect target;
+    for (LLView* view : { mHeadings.empty() ? nullptr : (LLView*)mHeadings.front(), (LLView*)mFavoritesHint })
+    {
+        if (view && view->getVisible() && view->getRect().pointInRect(x, y))
+        {
+            target = LLRect(0, view->getRect().mTop, getRect().getWidth(), view->getRect().mBottom);
+        }
+    }
+    if (target.isEmpty())
+    {
+        return LLPanel::handleDragAndDrop(x, y, mask, drop, cargo_type, cargo_data, accept, tooltip_msg);
+    }
+    SKInventoryExplorerDrag::dropOnFavorites(drop, cargo_type, cargo_data, accept, tooltip_msg);
+    mDropRect = target;
+    mDropVerdict = SKInventoryExplorerDrag::verdict();
+    if (!drop && LLToolDragAndDrop::getInstance()->getCargoIndex() == 0)
+    {
+        mDropHover.touch();
+    }
+    return true;
 }
 
 void SKInventorySidebar::arrangePanels()
