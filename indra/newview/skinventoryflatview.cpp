@@ -44,6 +44,8 @@
 #include "llviewerfoldertype.h"
 #include "llviewerinventory.h"
 #include "llviewerjointattachment.h"
+#include "llviewertexture.h"
+#include "llviewertexturelist.h"
 #include "llvoavatarself.h"
 #include "llwearabletype.h"
 #include "skinventoryexplorermenu.h"
@@ -715,6 +717,25 @@ void SKInventoryFlatView::setSelection(const uuid_vec_t& ids)
 S32 SKInventoryFlatView::getScroll() const
 {
     return mScrollbar->getDocPos();
+}
+
+void SKInventoryFlatView::prefetchPicture(const SKInventoryRow& row)
+{
+    if (row.mImageID.isNull())
+    {
+        return;
+    }
+    // Asked each frame the row is in view, as a world face asks: a tiny draw size fetches only the smallest discard.
+    // No boost, which would shrink a texture shared with the world.
+    constexpr S32 PREFETCH_SIZE = 16;
+    LLViewerFetchedTexture* texture = LLViewerTextureManager::getFetchedTexture(row.mImageID, FTT_DEFAULT, MIPMAP_YES,
+                                                                                LLGLTexture::BOOST_NONE);
+    if (texture)
+    {
+        const S32 pixels = llceil(PREFETCH_SIZE * LLUI::getScaleFactor().mV[VX]);
+        texture->setKnownDrawSize(pixels, pixels);
+        texture->addTextureStats((F32)(pixels * pixels));
+    }
 }
 
 void SKInventoryFlatView::drawLinkBadge(const LLRect& icon)

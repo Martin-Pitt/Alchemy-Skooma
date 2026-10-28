@@ -855,6 +855,12 @@ void SKInventoryColumnsView::drawColumn(const Column& column, S32 index, S32 hei
     const S32 first = columnScroll(column);
     const S32 rows = (S32)column.mRows.size();
     const S32 last = llmin(rows + (column.mMore > 0 ? 1 : 0), first + rowsPerPage() + 1);
+    // The pictures in view and half a page either side are fetched at their smallest ahead of a selection.
+    const S32 margin = rowsPerPage() / 2;
+    for (S32 r = llmax(0, first - margin); r < llmin(rows, last + margin); ++r)
+    {
+        SKInventoryFlatView::prefetchPicture(column.mRows[r]);
+    }
     // A column that scrolls leaves its bar a column of its own.
     const S32 inner_right = right - ((rows + (column.mMore > 0 ? 1 : 0)) > rowsPerPage() ? 1 + LLScrollbar::THIN_THICKNESS : 0);
     for (S32 r = first; r < last; ++r)

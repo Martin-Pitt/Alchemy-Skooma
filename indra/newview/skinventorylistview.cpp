@@ -268,6 +268,12 @@ void SKInventoryListView::drawContent()
     const bool focused = hasFocus();
     const S32 first = mScrollbar->getDocPos();
     const S32 last = llmin((S32)mRows.size(), first + rowsPerPage() + 1);
+    // The pictures in view and half a page either side are fetched at their smallest ahead of a selection.
+    const S32 margin = rowsPerPage() / 2;
+    for (S32 r = llmax(0, first - margin); r < llmin((S32)mRows.size(), last + margin); ++r)
+    {
+        prefetchPicture(mRows[r]);
+    }
     LLLocalClipRect clip(LLRect(0, height - HEADER_HEIGHT, width, 0));
     for (S32 r = first; r < last; ++r)
     {
