@@ -609,7 +609,7 @@ bool SKFloaterInventoryExplorer::postBuild()
                              "row_length", "row_format", "row_loops", "row_priority", "row_ease", "row_joints", "row_hand_pose",
                              "row_expression", "row_base_colour", "row_metallic", "row_roughness", "row_alpha_mode",
                              "row_double_sided", "row_textures", "row_location", "row_region", "row_parcel", "row_position",
-                             "row_maturity", "row_slurl", "row_runtime", "row_experience", "section_image", "section_sound",
+                             "row_maturity", "row_slurl", "row_runtime", "row_experience", "section_image", "section_thumbnail", "section_sound",
                              "section_animation", "section_material", "section_landmark", "channels_rgb", "channels_rgba",
                              "sound_format", "sound_mono", "sound_stereo", "sound_failed", "animation_failed", "material_failed",
                              "anim_loop", "anim_loops_no", "anim_loops_whole", "anim_loops_range", "anim_overrides", "region_body",
