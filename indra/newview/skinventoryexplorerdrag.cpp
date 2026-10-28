@@ -215,18 +215,27 @@ namespace
             }
             else
             {
-                sVerdict.mOK = true;    // the feedback has no verb for a favourite: its chip says "Drop here"
+                sVerdict.mOK = true;
+                LLDragFeedback::report(EDragAction::Favorite, {}, string("drag_add_favorites"));
             }
         }
         else if (sPass.mAllOK)
         {
             sVerdict.mOK = true;
-            // The stock rules' own report (a link into an outfit, a wear) stands; a plain move or copy is named here.
-            if (LLDragFeedback::reportedAction() == EDragAction::None)
+            // The stock rules' own report (a link into an outfit, a wear) stands; a plain move, copy or link takes
+            // the Explorer's words, and a note only where the stock rules gave none.
+            const bool library = LLToolDragAndDrop::getInstance()->getSource() == LLToolDragAndDrop::SOURCE_LIBRARY;
+            const EDragAction ours = sPass.mLink ? EDragAction::Link : library ? EDragAction::Copy : EDragAction::Move;
+            const EDragAction reported = LLDragFeedback::reportedAction();
+            if (reported == EDragAction::None || (reported == ours && LLDragFeedback::reportedText().empty()))
             {
-                const bool library = LLToolDragAndDrop::getInstance()->getSource() == LLToolDragAndDrop::SOURCE_LIBRARY;
-                LLDragFeedback::report(sPass.mLink ? EDragAction::Link : library ? EDragAction::Copy : EDragAction::Move,
-                                       folderName(sPass.mDest));
+                LLStringUtil::format_map_t args;
+                args["[FOLDER]"] = folderName(sPass.mDest);
+                const std::string text = ours == EDragAction::Link ? string("drag_link", args)
+                                       : ours == EDragAction::Move ? string("drag_move", args) : std::string();
+                const std::string note = !LLDragFeedback::reportedNote().empty() ? LLDragFeedback::reportedNote()
+                                       : library ? string("drag_library_copies") : std::string();
+                LLDragFeedback::report(ours, folderName(sPass.mDest), text, note);
             }
         }
         else if (sPass.mAllHere)

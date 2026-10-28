@@ -494,8 +494,8 @@ bool SKFloaterInventoryExplorer::postBuild()
 
     mTabStrip->setNewTabToolTip(getString("new_tab_tooltip"));
     std::map<std::string, std::string> drag_strings;
-    for (const char* key : { "drag_only_folders", "drag_library_readonly", "drag_into_itself", "drag_system_folders",
-                             "drag_favorites_unavailable", "drag_links_off", "drag_link_own_only",
+    for (const char* key : { "drag_move", "drag_link", "drag_add_favorites", "drag_only_folders", "drag_library_readonly",
+                             "drag_into_itself", "drag_system_folders", "drag_library_copies", "drag_favorites_unavailable", "drag_links_off", "drag_link_own_only",
                              "drag_folder_link", "drag_no_link_here", "status_copied", "status_copied_one",
                              "status_moved_no_undo", "status_moved_no_undo_one", "status_moved", "status_moved_one", "status_linked", "status_linked_one",
                              "status_favorites_added", "status_favorites_removed", "status_undone", "status_cant_undo",
