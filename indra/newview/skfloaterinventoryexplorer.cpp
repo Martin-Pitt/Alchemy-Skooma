@@ -1073,7 +1073,6 @@ void SKFloaterInventoryExplorer::showCurrentTab()
     const bool gallery = flat == mGalleryStrip;
     mGallery->setVisible(gallery);
     mSidebarPanel->setVisible(!gallery);
-    getChild<LLLayoutPanel>("sidebar_edge_panel")->setVisible(!gallery);
     getChild<LLButton>("view_gallery_btn")->setToggleState(gallery);
     // The size slider shows in Icons alone; its space stays.
     mSizeSlider->setVisible(flat == mIcons);
@@ -1540,8 +1539,8 @@ void SKFloaterInventoryExplorer::setPaneWidth(const std::string& pane, S32 width
 
 void SKFloaterInventoryExplorer::onToggleDetails()
 {
-    const bool shown = !mDetailsBtn->getToggleState();
-    mDetailsBtn->setToggleState(shown);
+    // The button is a toggle: its click has already flipped the state.
+    const bool shown = mDetailsBtn->getToggleState();
     const bool pane = shown && !isColumns() && flatView() != mGalleryStrip;
     mDetailsPanel->setVisible(pane);
     mDetailsEdgePanel->setVisible(pane);
