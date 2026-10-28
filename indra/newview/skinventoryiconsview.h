@@ -89,7 +89,12 @@ protected:
     std::vector<std::pair<std::string, std::string>> mNameLines;   // each row's name cut to two lines
 
     // Fetched only for tiles in view; one going out of view loses its priority.
-    std::map<LLUUID, LLPointer<LLViewerFetchedTexture>> mTextures;
+    struct Image
+    {
+        LLPointer<LLViewerFetchedTexture> mTexture;
+        bool mHeld = false;     // a thumbnail boost hold this view put on it
+    };
+    std::map<LLUUID, Image> mTextures;
     std::vector<LLUUID> mVisibleImages;
 };
 

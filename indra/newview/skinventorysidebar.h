@@ -174,6 +174,9 @@ protected:
     void arrangePanels();
     void scrollToPendingReveal();
     void onPanelSelect(SKInventorySidebarPanel* panel, const std::deque<LLFolderViewItem*>& items, bool user_action);
+    void clearOtherSelections(SKInventorySidebarPanel* keep);
+    bool handlePanelKey(SKInventorySidebarPanel* panel, KEY key, MASK mask);
+    void selectRow(SKInventorySidebarPanel* panel, LLFolderViewItem* row);
     bool isRowInView(LLFolderViewItem* row) const;
 
     std::vector<SKInventorySidebarPanel*> mPanels;
