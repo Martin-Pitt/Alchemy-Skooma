@@ -63,7 +63,7 @@ public:
         Optional<bool>                  bg_visible;
         Optional<bool>                  overlay; // <SK:Nexii> Overlay scroll bar: thin fading thumb over the content; a dwell expands it to a track with arrows
         Optional<bool>                  smooth_scroll; // <SK:Nexii> smooth scroll: false moves the wheel's distance at once
-        Optional<bool>                  thin; // <SK:Nexii> Thin scrollbars: no arrows, a narrow track and a rounded inset thumb
+        Optional<bool>                  thin; // <SK:Nexii> Thin scrollbars: a narrow track, a pill thumb and drawn arrows
 
         Optional<LLUIColor>             track_color,
                                         thumb_color,
@@ -156,15 +156,20 @@ public:
     void                setSmoothScroll(bool smooth) { mSmoothScroll = smooth; } // <SK:Nexii> smooth scroll
     bool                scrollByWheel(const LLScrollDelta& delta);
     // <SK:Nexii> Thin scrollbars
-    static constexpr S32 THIN_THICKNESS = 8;
+    static constexpr S32 THIN_THICKNESS = 10;
     bool                isThin() const { return mThin; }
     // </SK:Nexii>
 
 private:
     void                updateThumbRect();
     bool                changeLine(S32 delta, bool update_thumb );
-    // <SK:Nexii> Overlay scroll bar and thin scrollbars: neither has arrows, unless an overlay bar is expanded
-    S32                 arrowLength() const { return (mThin || (mOverlay && !mOverlayExpanded)) ? 0 : mThickness; }
+    // <SK:Nexii> Overlay scroll bar and thin scrollbars: an overlay bar has arrows only expanded (overlay wins);
+    // a thin bar's arrow square is followed by a 2 px gap
+    S32                 arrowLength() const
+    {
+        if (mOverlay) return mOverlayExpanded ? mThickness : 0;
+        return mThin ? mThickness + 2 : mThickness;
+    }
     void                overlaySetExpanded(bool expanded);
     F32                 overlayAlpha(F64 now) const;
     void                overlayTouch();
