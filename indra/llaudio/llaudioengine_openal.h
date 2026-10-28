@@ -99,6 +99,7 @@ class LLAudioEngine_OpenAL : public LLAudioEngine
         // ship EFX. The preset name set mirrors FAudio's I3DL2 list (case-
         // insensitive); unknown -> EFX_REVERB_PRESET_PLAIN with a warn.
         bool supportsReverb() const override { return mEfxAvailable; }
+        bool canSeek() const override { return true; } // <SK:Nexii> Audio preview control
         void setReverbPreset(const std::string& preset_name) override;
         void setReverbSendScale(float scale) override;
         std::string getReverbSendScaleSettingName() const override
@@ -240,6 +241,11 @@ class LLAudioChannelOpenAL : public LLAudioChannel
         /*virtual*/ bool updateBuffer();
         /*virtual*/ void update3DPosition();
         /*virtual*/ void updateLoop();
+
+        // <SK:Nexii> Audio preview control
+        bool seek(F32 seconds) override;
+        F32 getPlayPosition() override;
+        // </SK:Nexii>
 
         ALuint mALSource;
             ALint mLastSamplePos;

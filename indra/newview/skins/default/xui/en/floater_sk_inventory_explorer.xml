@@ -125,6 +125,8 @@
     <string name="details_player_stop">Stop</string>
     <string name="details_tip_sound_local">Only you hear it</string>
     <string name="details_tip_sound_inworld">Everyone nearby hears it</string>
+    <string name="details_player_stop_for_me">Stop for me</string>
+    <string name="details_tip_sound_stop_for_me">Stops it for you only; others nearby hear it until it ends</string>
     <string name="details_tip_anim_local">Only you see it</string>
     <string name="details_tip_anim_inworld">Everyone nearby sees it</string>
     <string name="details_tip_aspect">The shape it's meant to be seen at; kept in the description</string>
