@@ -1004,6 +1004,7 @@ if(AL_BUILD_VIEWER)
     rlvui.cpp
     skfloaterinventoryexplorer.cpp # <SK:Nexii> Inventory Explorer
     skinventorycolumnsview.cpp # <SK:Nexii> Inventory Explorer
+    skinventoryexplorerdrag.cpp # <SK:Nexii> Inventory Explorer
     skinventoryexplorermenu.cpp # <SK:Nexii> Inventory Explorer
     skinventoryflatview.cpp # <SK:Nexii> Inventory Explorer
     skinventoryiconsview.cpp # <SK:Nexii> Inventory Explorer
@@ -1893,6 +1894,7 @@ if(AL_BUILD_VIEWER)
     roles_constants.h
     skfloaterinventoryexplorer.h # <SK:Nexii> Inventory Explorer
     skinventorycolumnsview.h # <SK:Nexii> Inventory Explorer
+    skinventoryexplorerdrag.h # <SK:Nexii> Inventory Explorer
     skinventoryexplorermenu.h # <SK:Nexii> Inventory Explorer
     skinventoryflatview.h # <SK:Nexii> Inventory Explorer
     skinventoryiconsview.h # <SK:Nexii> Inventory Explorer
