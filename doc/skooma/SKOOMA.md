@@ -81,6 +81,18 @@ The world foundations stack in processing order, each built on the one before an
 | **LSL Bridge** *(planned)* | A script bridge for data only LSL can reach: combat log listening, notecard fetching, and more | Combat | — | Nexii |
 | **Local objects** (`render/local-objects`, planned) | Better support for viewer-local objects: the far flag (drawn past the draw distance out to the 8 km reach under the infinite projection), a purple selection outline and related polish. Sits between the far plane work and Atmo's surround | Atmo surround | — | Nexii |
 
+## Fixes
+
+Small `fix-*` branches cut from `develop`, each a PR in waiting.
+
+| Fix | What it fixes | Status |
+|---|---|---|
+| **Normals debug mask** (`fix-normals-debug-mask`) | Crash when the normals debug overlay meets a face without normals | landed |
+| **Parcel panel disconnect** (`fix-panelland-disconnect`) | Crash when the parcel panel refreshes after the world is gone | landed |
+| **Tracy memory option** (`fix-tracy/memory-option`) | Tracy allocation tracking is a build option, off by default, since it balloons the viewer's memory | landed |
+| **All hover tips** (`fix-all-hover-tips`) | `ShowAllObjectHoverTip` is honoured for non-interactive objects | landed |
+| **Chat focus** (`fix-chat/focus`) | The chat bar takes focus when Conversations is closed | landed |
+
 
 ## Working on Skooma
 
