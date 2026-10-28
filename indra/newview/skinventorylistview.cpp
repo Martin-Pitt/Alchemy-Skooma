@@ -45,6 +45,18 @@ namespace
     constexpr S32 ICON_SIZE = 16;
     constexpr S32 RENAME_MIN_WIDTH = 120;
     constexpr S32 DEFAULT_WIDTHS[SKInventoryFlatView::COL_COUNT] = { 220, 160, 110, 130, 120, 50, 100, 220 };
+
+    // Builds with smooth scrolling have LLScrollbar::setSmoothScroll; the List steps by whole rows there too.
+    template <class T>
+    auto step_by_rows(T* bar, int) -> decltype(bar->setSmoothScroll(false), void())
+    {
+        bar->setSmoothScroll(false);
+    }
+
+    template <class T>
+    void step_by_rows(T*, long)
+    {
+    }
 }
 
 SKInventoryListView::SKInventoryListView(const Params& p)
@@ -54,6 +66,8 @@ SKInventoryListView::SKInventoryListView(const Params& p)
 {
     std::copy(std::begin(DEFAULT_WIDTHS), std::end(DEFAULT_WIDTHS), mColumnWidths);
     std::fill(std::begin(mHidden), std::end(mHidden), false);
+    // Rows, not pixels: the wheel and page keys move instantly, with no glide.
+    step_by_rows(mScrollbar, 0);
     updateColumns();
 }
 
