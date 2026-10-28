@@ -347,7 +347,10 @@ void SKInventoryIconsView::releaseHiddenTextures()
         if (std::find(mVisibleImages.begin(), mVisibleImages.end(), it->first) == mVisibleImages.end())
         {
             // Only the hold this view put on it goes; the texture's own level and others' holds stay.
-            it->second->removeBoostHold(LLGLTexture::BOOST_THUMBNAIL);
+            if (it->second.mHeld)
+            {
+                it->second.mTexture->removeBoostHold(LLGLTexture::BOOST_THUMBNAIL);
+            }
             it = mTextures.erase(it);
         }
         else
@@ -384,14 +387,23 @@ void SKInventoryIconsView::drawTile(const SKInventoryRow& row, const LLRect& rec
         auto it = mTextures.find(row.mImageID);
         if (it == mTextures.end())
         {
-            LLViewerFetchedTexture* texture = LLViewerTextureManager::getFetchedTexture(row.mImageID, FTT_DEFAULT, MIPMAP_YES,
-                                                                                        LLGLTexture::BOOST_NONE);
-            texture->addBoostHold(LLGLTexture::BOOST_THUMBNAIL);
-            it = mTextures.emplace(row.mImageID, texture).first;
+            Image image;
+            image.mTexture = LLViewerTextureManager::getFetchedTexture(row.mImageID, FTT_DEFAULT, MIPMAP_YES, LLGLTexture::BOOST_NONE);
+            it = mTextures.emplace(row.mImageID, image).first;
+        }
+        // Only a real thumbnail takes the thumbnail boost: it scales decoded images down to the drawn size, which on a
+        // texture's own asset would leave the world and its preview with the tile's resolution.
+        if (!row.mImageIsAsset && !it->second.mHeld)
+        {
+            it->second.mTexture->addBoostHold(LLGLTexture::BOOST_THUMBNAIL);
+            it->second.mHeld = true;
         }
         mVisibleImages.push_back(row.mImageID);
-        LLViewerFetchedTexture* texture = it->second;
-        texture->setKnownDrawSize(art, art);
+        LLViewerFetchedTexture* texture = it->second.mTexture;
+        // The pixels the tile really covers, HiDPI included, asked for each draw as a world face asks.
+        const S32 pixels = llceil(art * LLUI::getScaleFactor().mV[VX]);
+        texture->setKnownDrawSize(pixels, pixels);
+        texture->addTextureStats((F32)(pixels * pixels));
         // The picture at its own aspect, letterboxed in the square.
         S32 w = art;
         S32 h = art;
