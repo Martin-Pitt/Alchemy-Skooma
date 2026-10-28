@@ -626,7 +626,8 @@ void SKFloaterInventoryExplorer::onHeaderDoubleClick()
     {
         setCollapsed(true);
     }
-    else if (isMinimizeable())
+    // Asked of the button, not isMinimizeable(), which builds that replace minimize with collapse do not have.
+    else if (LLView* minimize = findChildView("llfloater_minimize_btn", false); minimize && minimize->getVisible() && minimize->getEnabled())
     {
         setMinimized(true);
     }
