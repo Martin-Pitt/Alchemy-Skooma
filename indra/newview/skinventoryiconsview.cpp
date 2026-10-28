@@ -96,7 +96,7 @@ void SKInventoryIconsView::setTileSize(S32 size)
 
 S32 SKInventoryIconsView::viewWidth() const
 {
-    return getRect().getWidth() - (mScrollbar->getVisible() ? mScrollbar->getRect().getWidth() : 0);
+    return getRect().getWidth(); // the overlay scroll bar takes no gutter
 }
 
 S32 SKInventoryIconsView::tileHeight() const
@@ -109,7 +109,7 @@ void SKInventoryIconsView::layoutRows()
 {
     const S32 bar = mScrollbar->getRect().getWidth();
     mScrollbar->setRect(LLRect(getRect().getWidth() - bar, getRect().getHeight(), getRect().getWidth(), 0));
-    const S32 width = getRect().getWidth() - bar;
+    const S32 width = getRect().getWidth();
     mPerLine = llmax(1, (width - GAP) / (mTileSize + GAP));
 
     mLines.clear();

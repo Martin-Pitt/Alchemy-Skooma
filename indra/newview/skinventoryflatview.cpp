@@ -250,6 +250,7 @@ SKInventoryFlatView::SKInventoryFlatView(const LLUICtrl::Params& p)
     sbparams.page_size(1);
     sbparams.follows.flags(FOLLOWS_RIGHT | FOLLOWS_TOP | FOLLOWS_BOTTOM);
     sbparams.visible(false);
+    sbparams.overlay(true); // drawn over the rows, which keep the full width
     mScrollbar = LLUICtrlFactory::create<LLScrollbar>(sbparams);
     addChild(mScrollbar);
 }

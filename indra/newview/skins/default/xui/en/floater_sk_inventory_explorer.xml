@@ -256,6 +256,7 @@
              layout="topleft"
              left="0"
              name="sidebar_scroll"
+             overlay_scrollbars="true"
              reserve_scroll_corner="false"
              top="0"
              width="220">
@@ -266,7 +267,7 @@
                  left="0"
                  name="sidebar"
                  top="0"
-                 width="205">
+                 width="220">
                     <text
                      follows="left|top"
                      font="SansSerifSmallBold"
