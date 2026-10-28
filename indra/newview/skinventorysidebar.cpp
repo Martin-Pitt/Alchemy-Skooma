@@ -436,7 +436,8 @@ bool SKInventorySidebar::postBuild()
                                      {
                                          onPanelSelect(panel, items, user_action);
                                      });
-            panel->setKeyCallback([this](KEY key, MASK mask) { return mKeyCallback && mKeyCallback(key, mask); });
+            panel->setKeyCallback([this, panel](KEY key, MASK mask)
+                                  { return handlePanelKey(panel, key, mask) || (mKeyCallback && mKeyCallback(key, mask)); });
         }
     }
     mFavoritesHint = findChild<LLTextBox>("favorites_hint");
@@ -603,13 +604,7 @@ void SKInventorySidebar::reveal(const LLUUID& folder_id)
     }
 
     mRevealing = true;
-    for (SKInventorySidebarPanel* panel : mPanels)
-    {
-        if (panel && panel != target)
-        {
-            panel->clearSelection();
-        }
-    }
+    clearOtherSelections(target);
     if (target)
     {
         target->setSelection(folder_id, false);
@@ -669,28 +664,124 @@ void SKInventorySidebar::scrollToPendingReveal()
 
 void SKInventorySidebar::onPanelSelect(SKInventorySidebarPanel* panel, const std::deque<LLFolderViewItem*>& items, bool user_action)
 {
-    if (mRevealing || !user_action || items.empty())
+    if (mRevealing || items.empty())
     {
         return;
     }
-    LLFolderViewModelItemInventory* model = static_cast<LLFolderViewModelItemInventory*>(items.back()->getViewModelItem());
-    if (!model)
-    {
-        return;
-    }
+    // One sidebar row is selected at a time, however it was selected.
     mRevealing = true;
-    for (SKInventorySidebarPanel* other : mPanels)
-    {
-        if (other && other != panel)
-        {
-            other->clearSelection();
-        }
-    }
+    clearOtherSelections(panel);
     mRevealing = false;
+    LLFolderViewModelItemInventory* model = static_cast<LLFolderViewModelItemInventory*>(items.back()->getViewModelItem());
+    if (!model || !user_action)
+    {
+        return;
+    }
     if (mOpenCallback)
     {
         mOpenCallback(model->getUUID());
     }
+}
+
+void SKInventorySidebar::clearOtherSelections(SKInventorySidebarPanel* keep)
+{
+    for (SKInventorySidebarPanel* panel : mPanels)
+    {
+        if (panel && panel != keep)
+        {
+            panel->clearSelection();
+            if (LLFolderView* root = panel->getRootFolder())
+            {
+                root->clearSelection();
+            }
+        }
+    }
+}
+
+// The first or last row a panel shows, null when it shows none.
+static LLFolderViewItem* edge_row(SKInventorySidebarPanel* panel, bool last)
+{
+    LLFolderView* root = panel ? panel->getRootFolder() : nullptr;
+    if (!root || panel->getContentHeight() <= 0)
+    {
+        return nullptr;
+    }
+    LLFolderViewItem* row = root->getNextOpenNode(true);
+    if (!row || row == root || !last)
+    {
+        return row == root ? nullptr : row;
+    }
+    for (LLFolderViewItem* next = row->getNextOpenNode(true); next && next != row; next = row->getNextOpenNode(true))
+    {
+        row = next;
+    }
+    return row;
+}
+
+void SKInventorySidebar::selectRow(SKInventorySidebarPanel* panel, LLFolderViewItem* row)
+{
+    LLFolderView* root = panel->getRootFolder();
+    root->setSelection(row, false, true);
+    panel->setFocus(true);
+    clearOtherSelections(panel);
+    LLFolderViewModelItemInventory* model = static_cast<LLFolderViewModelItemInventory*>(row->getViewModelItem());
+    if (model)
+    {
+        mPendingReveal = model->getUUID();
+        mPendingPanel = panel;
+        if (mOpenCallback)
+        {
+            mOpenCallback(model->getUUID());
+        }
+    }
+}
+
+bool SKInventorySidebar::handlePanelKey(SKInventorySidebarPanel* panel, KEY key, MASK mask)
+{
+    // The sections are one list to the keys: ↑/↓ cross their edges, Home/End reach the whole sidebar's ends.
+    if (mask != MASK_NONE || mFlat)
+    {
+        return false;
+    }
+    const S32 index = (S32)(std::find(mPanels.begin(), mPanels.end(), panel) - mPanels.begin());
+    if (key == KEY_HOME || key == KEY_END)
+    {
+        const bool end = key == KEY_END;
+        for (S32 i = end ? (S32)mPanels.size() - 1 : 0; i >= 0 && i < (S32)mPanels.size(); i += end ? -1 : 1)
+        {
+            if (LLFolderViewItem* row = edge_row(mPanels[i], end))
+            {
+                selectRow(mPanels[i], row);
+                return true;
+            }
+        }
+        return false;
+    }
+    if (key != KEY_UP && key != KEY_DOWN)
+    {
+        return false;
+    }
+    LLFolderView* root = panel->getRootFolder();
+    LLFolderViewItem* cur = root ? root->getCurSelectedItem() : nullptr;
+    if (!cur)
+    {
+        return false;
+    }
+    const bool down = key == KEY_DOWN;
+    LLFolderViewItem* step = down ? cur->getNextOpenNode(true) : cur->getPreviousOpenNode(true);
+    if (step && step != cur && step != root)
+    {
+        return false; // still inside this section: the folder view moves
+    }
+    for (S32 i = index + (down ? 1 : -1); i >= 0 && i < (S32)mPanels.size(); i += down ? 1 : -1)
+    {
+        if (LLFolderViewItem* row = edge_row(mPanels[i], !down))
+        {
+            selectRow(mPanels[i], row);
+            return true;
+        }
+    }
+    return true; // the sidebar's first or last row: nowhere further
 }
 
 LLInventoryPanel* SKInventorySidebar::getInventoryPanel() const

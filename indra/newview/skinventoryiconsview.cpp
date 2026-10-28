@@ -370,7 +370,10 @@ void SKInventoryIconsView::drawTile(const SKInventoryRow& row, const LLRect& rec
     if (selected)
     {
         gl_rect_2d(rect, focused ? sel_focus.get() : sel_blur.get(), true);
-        gl_rect_2d(rect, border_color.get(), false);
+        if (focused)
+        {
+            gl_rect_2d(rect, border_color.get(), false);
+        }
     }
 
     const S32 art = (S32)(mTileSize * ART_FRACTION);
@@ -401,7 +404,7 @@ void SKInventoryIconsView::drawTile(const SKInventoryRow& row, const LLRect& rec
             w = llmax(1, (S32)(art * row.mAspect));
         }
         gl_draw_scaled_image(art_rect.getCenterX() - w / 2, art_rect.getCenterY() - h / 2, w, h, texture);
-        badge_type = !row.mImageIsAsset;
+        badge_type = !row.mImageIsAsset && row.mAssetType != LLAssetType::AT_TEXTURE && row.mAssetType != LLAssetType::AT_MATERIAL;
     }
     else if (row.mIcon.notNull())
     {
