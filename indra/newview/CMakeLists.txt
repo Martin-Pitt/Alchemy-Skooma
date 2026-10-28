@@ -865,6 +865,9 @@ if(AL_BUILD_VIEWER)
     lltoolbrush.cpp
     lltoolcomp.cpp
     lltooldraganddrop.cpp
+    # <SK:Nexii> Drag feedback
+    skdragverdict.cpp
+    # </SK:Nexii>
     lltoolface.cpp
     lltoolfocus.cpp
     lltoolgrab.cpp
@@ -1754,6 +1757,9 @@ if(AL_BUILD_VIEWER)
     lltoolbrush.h
     lltoolcomp.h
     lltooldraganddrop.h
+    # <SK:Nexii> Drag feedback
+    skdragverdict.h
+    # </SK:Nexii>
     lltoolface.h
     lltoolfocus.h
     lltoolgrab.h

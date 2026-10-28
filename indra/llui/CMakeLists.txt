@@ -131,6 +131,9 @@ target_sources(
     llvirtualtrackball.cpp
     llwindowshade.cpp
     llxuiparser.cpp
+    # <SK:Nexii> Drag feedback
+    skdragfeedback.cpp
+    # </SK:Nexii>
     xui/alcanvasview.cpp
     fields/alcolorfield.cpp
     fields/alcolortablepanel.cpp
@@ -368,6 +371,9 @@ target_sources(
         llvirtualtrackball.h
         llwindowshade.h
         llxuiparser.h
+        # <SK:Nexii> Drag feedback
+        skdragfeedback.h
+        # </SK:Nexii>
         xui/alcanvasview.h
         fields/alcolorfield.h
         fields/alcolortablepanel.h

@@ -273,6 +273,44 @@ If you feel this is an error, please contact support@secondlife.com</string>
 	
 	<string name="TooltipDragOntoOwnChild">You can't move a folder into its child</string>
 	<string name="TooltipDragOntoSelf">You can't move a folder into itself</string>
+	<!-- <SK:Nexii> Drag feedback: what a drop does, and why it can't -->
+	<string name="DragVerdictMove">Move to [TARGET]</string>
+	<string name="DragVerdictMoveHere">Move here</string>
+	<string name="DragVerdictCopy">Copy to [TARGET]</string>
+	<string name="DragVerdictCopyHere">Copy here</string>
+	<string name="DragVerdictLink">Link into [TARGET]</string>
+	<string name="DragVerdictLinkHere">Link here</string>
+	<string name="DragVerdictWear">Wear</string>
+	<string name="DragVerdictWearAdd">Add to what you wear</string>
+	<string name="DragVerdictAttach">Attach</string>
+	<string name="DragVerdictAttachAdd">Attach, keeping what is there</string>
+	<string name="DragVerdictActivate">Activate</string>
+	<string name="DragVerdictGive">Give to [TARGET]</string>
+	<string name="DragVerdictGiveHere">Give</string>
+	<string name="DragVerdictRez">Rez here</string>
+	<string name="DragVerdictContents">Put into the object's contents</string>
+	<string name="DragVerdictContentsInactive">Put into the object's contents, not running</string>
+	<string name="DragVerdictApply">Apply to this face</string>
+	<string name="DragVerdictApplyAll">Apply to all faces</string>
+	<string name="DragVerdictMakeOutfit">Make an outfit</string>
+	<string name="DragVerdictReorder">Move here</string>
+	<string name="DragVerdictSet">Use here</string>
+	<string name="DragVerdictDropHere">Drop here</string>
+	<string name="DragTargetObject">the object</string>
+	<string name="DragTargetLand">the ground</string>
+	<string name="DragHintContents">Ctrl: put into the object's contents</string>
+	<string name="DragHintContentsNeeded">Hold Ctrl to put it into the object's contents</string>
+	<string name="DragHintAllFaces">Shift: apply to all faces</string>
+	<string name="DragHintNoPBR">Alt: replace the PBR material</string>
+	<string name="DragHintInactive">Ctrl: put it in not running</string>
+	<string name="DragHintAttachAdd">Ctrl: keep what is attached there</string>
+	<string name="DragHintWearAdd">Ctrl: keep what you wear</string>
+	<string name="DragHintWearAddShift">Shift: add to what you wear</string>
+	<string name="TooltipDragIntoLibrary">The Library is read-only</string>
+	<string name="TooltipDragSystemFolder">System folders can't be moved</string>
+	<string name="TooltipDragWornToTrash">Take it off before deleting it</string>
+	<string name="TooltipDragOnlyLandmarks">Only landmarks go here</string>
+	<!-- </SK:Nexii> -->
 	
 	<!-- tooltips for Urls -->
 	<string name="TooltipHttpUrl">Click to view this web page</string>

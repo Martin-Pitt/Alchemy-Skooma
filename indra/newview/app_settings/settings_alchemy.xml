@@ -4885,6 +4885,17 @@
             <key>Value</key>
             <integer>0</integer>
         </map>
+        <key>SkoomaDragFeedbackClassic</key>
+        <map>
+            <key>Comment</key>
+            <string>Drag and drop shows the classic cursor and tooltip, without the ghost, the verdict chip and the target marks (a copy keeps the copy cursor either way)</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
         <key>SnapshotDetection</key>
         <map>
             <key>Comment</key>

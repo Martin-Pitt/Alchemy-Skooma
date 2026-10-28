@@ -56,6 +56,7 @@
 #include "alselectionoutline.h"
 #include "llagent.h"
 #include "llagentcamera.h"
+#include "skdragverdict.h" // <SK:Nexii> Drag feedback
 #include "llattachmentsmgr.h"
 #include "llviewerwindow.h"
 #include "lldrawable.h"
@@ -6853,6 +6854,7 @@ void LLSelectMgr::renderSilhouettes(bool for_hud)
     if (!for_hud)
     {
         ALHoverGlow::instance().addTo(outline);
+        SKDragVerdict::addWorldMark(outline); // <SK:Nexii> Drag feedback: the world target a drop would land on
     }
     outline.render(view);
 }
