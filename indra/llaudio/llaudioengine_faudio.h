@@ -116,6 +116,7 @@ public:
     void setMasterLimiterRelease(uint32_t ms);
     void setMasterLimiterLoudness(uint32_t value);
     bool supportsReverb() const override { return true; }
+    bool canSeek() const override { return true; } // <SK:Nexii> Audio preview control
     std::string getReverbSendScaleSettingName() const override
     {
         return "AudioFAudioReverbSendScale";
@@ -398,6 +399,11 @@ protected:
     void update3DPosition() override;
     void updateLoop() override;
 
+    // <SK:Nexii> Audio preview control
+    bool seek(F32 seconds) override;
+    F32 getPlayPosition() override;
+    // </SK:Nexii>
+
 private:
     bool ensureVoice(const FAudioWaveFormatEx& fmt);
     void destroyVoice();
@@ -410,6 +416,10 @@ private:
     // consumed and cleared by the next successful updateBuffer.
     uint32_t              mResumeFrames = 0;
     bool                  mResumePending = false;
+    // <SK:Nexii> Audio preview control: the voice's SamplesPlayed that precede the buffer (pre-roll), and the frame it began at.
+    uint64_t              mPositionSkipFrames = 0;
+    uint32_t              mPositionBaseFrames = 0;
+    // </SK:Nexii>
     // The voice this source routes to — either a per-type submix or the
     // mastering voice as a fallback. SetOutputMatrix must target whatever
     // is actually in the voice's send list.

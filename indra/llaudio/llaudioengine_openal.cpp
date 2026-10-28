@@ -938,6 +938,40 @@ void LLAudioChannelOpenAL::playSynced(LLAudioChannel *channelp)
     play();
 }
 
+// <SK:Nexii> Audio preview control: seek and position through AL_SEC_OFFSET.
+bool LLAudioChannelOpenAL::seek(F32 seconds)
+{
+    auto* buffer = static_cast<LLAudioBufferOpenAL*>(mCurrentBufferp);
+    if (mALSource == AL_NONE || !buffer || buffer->getBuffer() == AL_NONE)
+    {
+        return false;
+    }
+    ALint frequency = 0;
+    alGetBufferi(buffer->getBuffer(), AL_FREQUENCY, &frequency);
+    const U32 frames = buffer->getLength();
+    if (frequency <= 0 || frames == 0)
+    {
+        return false;
+    }
+    // AL_SEC_OFFSET must lie inside the buffer, so the last frame is as far as it goes.
+    const F32 last = (F32)(frames - 1) / (F32)frequency;
+    alGetError();
+    alSourcef(mALSource, AL_SEC_OFFSET, llclamp(seconds, 0.f, last));
+    return alGetError() == AL_NO_ERROR;
+}
+
+F32 LLAudioChannelOpenAL::getPlayPosition()
+{
+    if (mALSource == AL_NONE)
+    {
+        return -1.f;
+    }
+    ALfloat offset = -1.f;
+    alGetSourcef(mALSource, AL_SEC_OFFSET, &offset);
+    return offset;
+}
+// </SK:Nexii>
+
 bool LLAudioChannelOpenAL::isPlaying()
 {
     if (mALSource != AL_NONE)
