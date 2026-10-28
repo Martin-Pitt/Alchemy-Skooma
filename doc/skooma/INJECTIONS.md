@@ -1532,13 +1532,13 @@ Landed on `develop` in two merges of the same branch: `b7f8571b51` (as `feature-
 - `llui/CMakeLists.txt` (after llxuiparser), `newview/CMakeLists.txt` (after lltooldraganddrop).
 - `llviewerwindow.cpp` — `draw()` after the top-ctrl block: `LLDragFeedback::draw`.
 - `lltooldraganddrop.cpp` — `beginDrag`/`beginMultiDrag` (ghost); `onMouseCaptureLost` (clears `mToolTipMsg` — fix; ends feedback and world marks); `acceptanceToCursor` (copy/link → copy cursor); `handleHover` (chip); `handleToolTip` (none while the chip shows); `dragOrDrop` (pass start, blocked-drop notice); `dragOrDrop3D`, `pick` (world report and marks; legacy highlight skipped unless classic); `handleGiveDragAndDrop` (Give, RLVa name, RLVa refusals quiet).
-- `llinventorybridge.cpp` — `dragCategoryIntoFolder` / `dragItemIntoFolder`: refusal reasons (Library, system folder, worn to Trash, landmarks only, onto self quiet, same parent quiet unless a reason) and reports before the `accept && drop` branches; `LLCallingCardBridge::dragOrDrop`: `@share` blocks (fix), Give report.
+- `llinventorybridge.cpp` — `dragCategoryIntoFolder` / `dragItemIntoFolder`: refusal reasons (Library, system folder, worn to Trash, landmarks only, onto self quiet, same parent quiet unless a reason) and reports (with notes where the reason is already known: Library copies, no-copy moves out of objects, Favorites keep a copy) before the `accept && drop` branches; `LLCallingCardBridge::dragOrDrop`: `@share` blocks (fix), Give report.
 - `llfolderviewitem.cpp` — `handleDragAndDrop` (blocked → `ACCEPT_NO_LOCKED`, mark), `handleDragAndDropFromChild`/`ToThisFolder` (mark), `drawHighlight` (target mark; classic outline under the setting).
 - `llinventorygallery.cpp` — gallery space and folder tiles marked.
 - `llselectmgr.cpp` — `renderSilhouettes`: `SKDragVerdict::addWorldMark`.
 - `llaccordionctrltab.cpp` — header spring through `FolderAutoOpenDelay` (old `AUTO_OPEN_TIME` commented).
 - `llpaneloutfitedit.cpp` — links only when accepted (fix); `llfloaterlinkreplace.cpp` — the drop sets acceptance (fix).
-- Unmarked: `settings_alchemy.xml` (`SkoomaDragFeedbackClassic` before the `SkoomaFloaterCollapse*` keys); `colors.xml` (`Drag*` after `MenuItemFlashBgColor`); `strings.xml` (`DragVerdict*`, `DragTarget*`, `DragHint*`, `TooltipDrag{IntoLibrary,SystemFolder,WornToTrash,OnlyLandmarks}` after `TooltipDragOntoSelf`).
+- Unmarked: `settings_alchemy.xml` (`SkoomaDragFeedbackClassic` before the `SkoomaFloaterCollapse*` keys); `colors.xml` (`Drag*`, incl. `DragChipNoteTextColor`, after `MenuItemFlashBgColor`); `strings.xml` (`DragVerdict*` incl. Favorite, `DragNote*`, `DragTarget*`, `DragHint*`, `TooltipDrag{IntoLibrary,SystemFolder,WornToTrash,OnlyLandmarks}` after `TooltipDragOntoSelf`).
 
 ## Inventory Explorer
 
