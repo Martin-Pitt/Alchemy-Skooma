@@ -78,6 +78,10 @@ namespace SKInventoryExplorerDrag
 
     // Undo: plain moves inside My Inventory, and favourite adds and removals; the last 50 are kept.
     void recordFavorites(const uuid_vec_t& ids, bool added);
+    // Any other undoable action (a saved search added or removed), with its status text.
+    void recordAction(const std::function<void()>& undo_fn, const std::string& text);
+    // Refuses the drop with one of the strings, shown red: "drag_into_search".
+    bool refuse(const std::string& key, EAcceptance* accept, std::string& tooltip_msg);
     bool canUndo();
     void undo();
 

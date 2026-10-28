@@ -39,6 +39,8 @@
 #include <unordered_set>
 
 class LLScrollbar;
+class LLViewerInventoryCategory;
+class LLViewerInventoryItem;
 
 // One row of a folder's contents, read from the inventory model when the folder is listed.
 // Group headers and the paging row sit among the rows as rows of their own kind.
@@ -61,6 +63,7 @@ struct SKInventoryRow
     std::string mName;
     std::string mType;
     std::string mFolderPath; // the path below a searched folder, set by search
+    S32 mSearchRank = 0;     // 0 for a name hit, 1 for a description-only hit
     LLUUID mCreatorID;
     std::string mCreatorName;
     time_t mAcquired = 0;
@@ -90,6 +93,7 @@ struct SKInventoryListLabels
     std::string mDateFormat;
     std::string mLoading;
     std::string mEmpty;
+    std::string mNoResults;     // a search that found nothing
     std::string mWorn;
     std::string mMore;          // "and [COUNT] more"
     std::string mShowAll;       // "Show all [TOTAL] (showing [SHOWN])"
@@ -142,6 +146,10 @@ public:
     // Reads a folder's direct contents, starting a fetch while it is incomplete; true while it loads.
     static bool readRows(const LLUUID& folder_id, const SKInventoryListLabels& labels, std::vector<SKInventoryRow>& rows,
                          bool fetch = true);
+    // Reads one folder or item, false when the model has no such object.
+    static bool readRow(const LLUUID& id, const SKInventoryListLabels& labels, SKInventoryRow& row);
+    // The store tag at the start of a name (§3), empty for none.
+    static std::string brandOf(const std::string& name);
     // Folders first (system folders first, then by name), items by the key.
     static void sortRows(std::vector<SKInventoryRow>& rows, EColumn key, bool ascending);
     // Orders sorted rows by group, keeping the sort within each, and puts a header before each group.
@@ -156,6 +164,15 @@ public:
     // Lists the folder; the selection and scroll given are kept where their rows still exist.
     void setFolder(const LLUUID& folder_id, const uuid_vec_t& selection = uuid_vec_t(), S32 scroll = 0);
     const LLUUID& getFolder() const { return mFolderID; }
+
+    // Lists search hits under the folder in place of its contents: each id with its rank.
+    void setSearchResults(const std::vector<std::pair<LLUUID, S32>>& hits);
+    void clearSearch();
+    bool isSearching() const { return mSearching; }
+    // Takes keyboard focus, selecting the first entry when asked and nothing is selected.
+    void focusContent(bool select_first);
+    // Scrolls a selected row to the middle of the view.
+    void centerSelection();
 
     // Reads the folder again on the next draw, keeping selection and scroll.
     void markDirty() { mDirty = true; }
@@ -241,7 +258,11 @@ protected:
     virtual bool handleHeaderMouseDown(S32 x, S32 y, MASK mask) { return false; }
     virtual bool handleHeaderRightMouseDown(S32 x, S32 y, MASK mask) { return false; }
 
+    static void readFolderRow(LLViewerInventoryCategory* cat, const SKInventoryListLabels& labels, SKInventoryRow& row);
+    static void readItemRow(LLViewerInventoryItem* item, const SKInventoryListLabels& labels, SKInventoryRow& row);
+
     void rebuild();
+    void readSearchRows();
     void sortAndGroup();
     void selectRange(S32 from, S32 to, bool add);
     void moveCursor(S32 row, MASK mask);
@@ -275,6 +296,8 @@ protected:
     bool mShowAll;
     bool mDirty;
     bool mLoading;
+    bool mSearching;
+    std::vector<std::pair<LLUUID, S32>> mSearchHits;
 
     // A slow second click on the only selected row's name renames it.
     S32 mSlowClickRow;

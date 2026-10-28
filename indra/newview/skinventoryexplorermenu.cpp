@@ -861,6 +861,10 @@ void SKInventoryExplorerContextMenu::updateMenuItemsVisibility(LLContextMenu* me
         if (!mRootMode)
         {
             items.push_back("common_separator");
+            if (mShowInFolderCallback)
+            {
+                items.push_back("show_in_folder");
+            }
             items.push_back("rename");
             if (!SKInventoryExplorerActions::canRename(first))
             {
@@ -1006,6 +1010,10 @@ void SKInventoryExplorerContextMenu::updateMenuItemsVisibility(LLContextMenu* me
     items.push_back("common_separator");
     if (!many)
     {
+        if (mShowInFolderCallback)
+        {
+            items.push_back("show_in_folder");
+        }
         items.push_back("rename");
         if (!SKInventoryExplorerActions::canRename(first))
         {
@@ -1060,6 +1068,13 @@ void SKInventoryExplorerContextMenu::doToSelected(const std::string& action)
         if (folder_id.notNull() && mOpenCallback)
         {
             mOpenCallback(folder_id, action == "open_in_new_tab");
+        }
+    }
+    else if (action == "show_in_folder")
+    {
+        if (mShowInFolderCallback)
+        {
+            mShowInFolderCallback(id);
         }
     }
     else if (action == "open_item" || action == "open_original")

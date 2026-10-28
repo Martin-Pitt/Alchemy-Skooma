@@ -458,7 +458,7 @@ void SKInventoryIconsView::drawContent()
     mVisibleImages.clear();
     if (mRows.empty())
     {
-        const std::string& message = mLoading ? mLabels.mLoading : mLabels.mEmpty;
+        const std::string& message = mLoading ? mLabels.mLoading : (mSearching ? mLabels.mNoResults : mLabels.mEmpty);
         font->renderUTF8(message, 0, width / 2, height - 40, dim_color.get(), LLFontGL::HCENTER, LLFontGL::VCENTER);
         releaseHiddenTextures();
         return;

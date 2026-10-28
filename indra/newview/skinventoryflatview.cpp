@@ -240,6 +240,7 @@ SKInventoryFlatView::SKInventoryFlatView(const LLUICtrl::Params& p)
     mShowAll(false),
     mDirty(false),
     mLoading(false),
+    mSearching(false),
     mSlowClickRow(-1),
     mSlowClickArmed(false),
     mRenameRow(-1),
@@ -313,105 +314,131 @@ bool SKInventoryFlatView::readRows(const LLUUID& folder_id, const SKInventoryLis
     {
         for (LLViewerInventoryCategory* cat : *cats)
         {
-            SKInventoryRow row;
-            row.mID = cat->getUUID();
-            row.mTargetID = row.mID;
-            row.mIsFolder = true;
-            row.mAssetType = LLAssetType::AT_CATEGORY;
-            row.mIsSystem = LLFolderType::lookupIsProtectedType(cat->getPreferredType());
-            row.mName = cat->getName();
-            row.mImageID = cat->getThumbnailUUID();
-            const S32 count = cat->getDescendentCount();
-            if (count >= 0 && !labels.mFolderCount.empty())
-            {
-                LLStringUtil::format_map_t args;
-                args["[COUNT]"] = llformat("%d", count);
-                row.mType = labels.mFolderCount;
-                LLStringUtil::format(row.mType, args);
-            }
-            else
-            {
-                row.mType = labels.mFolder;
-            }
-            row.mIcon = LLUI::getUIImage(LLViewerFolderType::lookupIconName(cat->getPreferredType(), false));
-            rows.push_back(row);
+            rows.emplace_back();
+            readFolderRow(cat, labels, rows.back());
         }
     }
-
     if (items)
     {
         for (LLViewerInventoryItem* item : *items)
         {
-            SKInventoryRow row;
-            row.mID = item->getUUID();
-            row.mIsLink = item->getIsLinkType();
-            row.mTargetID = row.mIsLink ? item->getLinkedUUID() : row.mID;
-            row.mName = item->getName();
-
-            LLViewerInventoryCategory* linked_cat = row.mIsLink ? gInventory.getCategory(row.mTargetID) : nullptr;
-            if (linked_cat)
-            {
-                // A folder link lists as the folder it opens.
-                row.mIsFolder = true;
-                row.mAssetType = LLAssetType::AT_CATEGORY;
-                row.mType = labels.mFolder;
-                row.mImageID = linked_cat->getThumbnailUUID();
-                row.mIcon = LLUI::getUIImage(LLViewerFolderType::lookupIconName(linked_cat->getPreferredType(), false));
-                rows.push_back(row);
-                continue;
-            }
-
-            const LLViewerInventoryItem* target = row.mIsLink ? gInventory.getItem(row.mTargetID) : item;
-            const LLViewerInventoryItem* info = target ? target : item;
-            row.mAssetType = info->getType();
-            row.mType = std::string(LLInventoryType::lookupHumanReadable(info->getInventoryType()));
-            if (!row.mType.empty())
-            {
-                row.mType[0] = toupper(row.mType[0]);
-            }
-            row.mCreatorID = info->getCreatorUUID();
-            row.mAcquired = item->getCreationDate();
-            if (row.mAcquired > 0 && !labels.mDateFormat.empty())
-            {
-                row.mAcquiredLabel = labels.mDateFormat;
-                LLSD args;
-                args["datetime"] = (S32)row.mAcquired;
-                LLStringUtil::format(row.mAcquiredLabel, args);
-            }
-            const U32 mask = info->getPermissions().getMaskOwner();
-            row.mPermRank = perm_rank(mask);
-            row.mPerms = perm_letters(mask);
-            row.mDescription = info->getDescription();
-            row.mAspect = aspect_of(row.mDescription);
-            // A thumbnail wins; a texture or photo is its own picture.
-            row.mImageID = info->getThumbnailUUID();
-            if (row.mImageID.isNull() && row.mAssetType == LLAssetType::AT_TEXTURE)
-            {
-                row.mImageID = info->getAssetUUID();
-                row.mImageIsAsset = row.mImageID.notNull();
-            }
-            row.mIsWorn = get_is_item_worn(row.mTargetID);
-            if (row.mIsWorn)
-            {
-                row.mWornOn = labels.mWorn;
-                if (info->getType() == LLAssetType::AT_OBJECT && isAgentAvatarValid())
-                {
-                    const LLViewerJointAttachment* point = gAgentAvatarp->getWornAttachmentPoint(row.mTargetID);
-                    if (point)
-                    {
-                        row.mWornOn = point->getName();
-                    }
-                }
-                else if (info->isWearableType())
-                {
-                    row.mWornOn = LLWearableType::getInstance()->getTypeLabel(info->getWearableType());
-                }
-            }
-            row.mIcon = LLInventoryIcon::getIcon(info->getType(), info->getInventoryType(), info->getFlags(), false);
-            rows.push_back(row);
+            rows.emplace_back();
+            readItemRow(item, labels, rows.back());
         }
     }
     return loading;
+}
+
+bool SKInventoryFlatView::readRow(const LLUUID& id, const SKInventoryListLabels& labels, SKInventoryRow& row)
+{
+    if (LLViewerInventoryCategory* cat = gInventory.getCategory(id))
+    {
+        readFolderRow(cat, labels, row);
+        return true;
+    }
+    if (LLViewerInventoryItem* item = gInventory.getItem(id))
+    {
+        readItemRow(item, labels, row);
+        return true;
+    }
+    return false;
+}
+
+std::string SKInventoryFlatView::brandOf(const std::string& name)
+{
+    return brand_of(name);
+}
+
+void SKInventoryFlatView::readFolderRow(LLViewerInventoryCategory* cat, const SKInventoryListLabels& labels, SKInventoryRow& row)
+{
+    row.mID = cat->getUUID();
+    row.mTargetID = row.mID;
+    row.mIsFolder = true;
+    row.mAssetType = LLAssetType::AT_CATEGORY;
+    row.mIsSystem = LLFolderType::lookupIsProtectedType(cat->getPreferredType());
+    row.mName = cat->getName();
+    row.mImageID = cat->getThumbnailUUID();
+    const S32 count = cat->getDescendentCount();
+    if (count >= 0 && !labels.mFolderCount.empty())
+    {
+        LLStringUtil::format_map_t args;
+        args["[COUNT]"] = llformat("%d", count);
+        row.mType = labels.mFolderCount;
+        LLStringUtil::format(row.mType, args);
+    }
+    else
+    {
+        row.mType = labels.mFolder;
+    }
+    row.mIcon = LLUI::getUIImage(LLViewerFolderType::lookupIconName(cat->getPreferredType(), false));
+}
+
+void SKInventoryFlatView::readItemRow(LLViewerInventoryItem* item, const SKInventoryListLabels& labels, SKInventoryRow& row)
+{
+    row.mID = item->getUUID();
+    row.mIsLink = item->getIsLinkType();
+    row.mTargetID = row.mIsLink ? item->getLinkedUUID() : row.mID;
+    row.mName = item->getName();
+
+    LLViewerInventoryCategory* linked_cat = row.mIsLink ? gInventory.getCategory(row.mTargetID) : nullptr;
+    if (linked_cat)
+    {
+        // A folder link lists as the folder it opens.
+        row.mIsFolder = true;
+        row.mAssetType = LLAssetType::AT_CATEGORY;
+        row.mType = labels.mFolder;
+        row.mImageID = linked_cat->getThumbnailUUID();
+        row.mIcon = LLUI::getUIImage(LLViewerFolderType::lookupIconName(linked_cat->getPreferredType(), false));
+        return;
+    }
+
+    const LLViewerInventoryItem* target = row.mIsLink ? gInventory.getItem(row.mTargetID) : item;
+    const LLViewerInventoryItem* info = target ? target : item;
+    row.mAssetType = info->getType();
+    row.mType = std::string(LLInventoryType::lookupHumanReadable(info->getInventoryType()));
+    if (!row.mType.empty())
+    {
+        row.mType[0] = toupper(row.mType[0]);
+    }
+    row.mCreatorID = info->getCreatorUUID();
+    row.mAcquired = item->getCreationDate();
+    if (row.mAcquired > 0 && !labels.mDateFormat.empty())
+    {
+        row.mAcquiredLabel = labels.mDateFormat;
+        LLSD args;
+        args["datetime"] = (S32)row.mAcquired;
+        LLStringUtil::format(row.mAcquiredLabel, args);
+    }
+    const U32 mask = info->getPermissions().getMaskOwner();
+    row.mPermRank = perm_rank(mask);
+    row.mPerms = perm_letters(mask);
+    row.mDescription = info->getDescription();
+    row.mAspect = aspect_of(row.mDescription);
+    // A thumbnail wins; a texture or photo is its own picture.
+    row.mImageID = info->getThumbnailUUID();
+    if (row.mImageID.isNull() && row.mAssetType == LLAssetType::AT_TEXTURE)
+    {
+        row.mImageID = info->getAssetUUID();
+        row.mImageIsAsset = row.mImageID.notNull();
+    }
+    row.mIsWorn = get_is_item_worn(row.mTargetID);
+    if (row.mIsWorn)
+    {
+        row.mWornOn = labels.mWorn;
+        if (info->getType() == LLAssetType::AT_OBJECT && isAgentAvatarValid())
+        {
+            const LLViewerJointAttachment* point = gAgentAvatarp->getWornAttachmentPoint(row.mTargetID);
+            if (point)
+            {
+                row.mWornOn = point->getName();
+            }
+        }
+        else if (info->isWearableType())
+        {
+            row.mWornOn = LLWearableType::getInstance()->getTypeLabel(info->getWearableType());
+        }
+    }
+    row.mIcon = LLInventoryIcon::getIcon(info->getType(), info->getInventoryType(), info->getFlags(), false);
 }
 
 void SKInventoryFlatView::sortRows(std::vector<SKInventoryRow>& rows, EColumn key, bool ascending)
@@ -694,7 +721,14 @@ void SKInventoryFlatView::rebuild()
     const uuid_vec_t selection = getSelection();
     const LLUUID cursor_id = (mCursor >= 0 && mCursor < (S32)mRows.size()) ? mRows[mCursor].mID : LLUUID::null;
 
-    mLoading = readRows(mFolderID, mLabels, mAllRows);
+    if (mSearching)
+    {
+        readSearchRows();
+    }
+    else
+    {
+        mLoading = readRows(mFolderID, mLabels, mAllRows);
+    }
     mRowIDs.clear();
     mFolderCount = 0;
     mItemCount = 0;
@@ -717,11 +751,110 @@ void SKInventoryFlatView::rebuild()
     }
 }
 
+void SKInventoryFlatView::setSearchResults(const std::vector<std::pair<LLUUID, S32>>& hits)
+{
+    if (!mSearching)
+    {
+        mShowAll = false;
+        mScrollbar->setDocPos(0);
+    }
+    mSearching = true;
+    mSearchHits = hits;
+    rebuild();
+}
+
+void SKInventoryFlatView::focusContent(bool select_first)
+{
+    setFocus(true);
+    const S32 first = firstEntry();
+    if (select_first && mSelectedCount == 0 && first >= 0)
+    {
+        selectRange(first, first, false);
+        mCursor = first;
+        mAnchor = first;
+        scrollToRow(first);
+        notifySelection();
+    }
+}
+
+void SKInventoryFlatView::centerSelection()
+{
+    if (mCursor < 0 || mCursor >= (S32)mRows.size())
+    {
+        return;
+    }
+    const LLRect area = rowsArea();
+    const LLRect row = rowRect(mCursor);
+    scrollPixels((area.mTop + area.mBottom) / 2 - (row.mTop + row.mBottom) / 2);
+}
+
+void SKInventoryFlatView::clearSearch()
+{
+    if (!mSearching)
+    {
+        return;
+    }
+    mSearching = false;
+    mSearchHits.clear();
+    mShowAll = false;
+    rebuild();
+}
+
+void SKInventoryFlatView::readSearchRows()
+{
+    mAllRows.clear();
+    mLoading = false;
+    mAllRows.reserve(mSearchHits.size());
+    // The path below the searched folder, worked out once per parent.
+    std::map<LLUUID, std::string> paths;
+    auto path_of = [&](const LLUUID& parent_id) -> const std::string&
+    {
+        auto found = paths.find(parent_id);
+        if (found != paths.end())
+        {
+            return found->second;
+        }
+        std::vector<std::string> names;
+        const LLViewerInventoryCategory* cat = gInventory.getCategory(parent_id);
+        while (cat && cat->getUUID() != mFolderID)
+        {
+            names.push_back(cat->getName());
+            cat = gInventory.getCategory(cat->getParentUUID());
+        }
+        std::string path;
+        for (auto it = names.rbegin(); it != names.rend(); ++it)
+        {
+            path += (path.empty() ? "" : " \xE2\x80\xBA ") + *it;
+        }
+        return paths.emplace(parent_id, path).first->second;
+    };
+    for (const auto& [id, rank] : mSearchHits)
+    {
+        SKInventoryRow row;
+        if (!readRow(id, mLabels, row))
+        {
+            continue;
+        }
+        row.mSearchRank = rank;
+        if (const LLInventoryObject* obj = gInventory.getObject(id))
+        {
+            row.mFolderPath = path_of(obj->getParentUUID());
+        }
+        mAllRows.push_back(std::move(row));
+    }
+}
+
 void SKInventoryFlatView::sortAndGroup()
 {
     // Headers from an earlier grouping go before sorting again.
     std::erase_if(mAllRows, [](const SKInventoryRow& row) { return !row.isEntry(); });
     sortRows(mAllRows, mSortKey, mSortAscending);
+    if (mSearching)
+    {
+        // Description-only hits list after the name hits.
+        std::stable_sort(mAllRows.begin(), mAllRows.end(),
+                         [](const SKInventoryRow& a, const SKInventoryRow& b) { return a.mSearchRank < b.mSearchRank; });
+    }
     groupRows(mAllRows, mGroup, mLabels);
 
     // 600 entries, then a row to show the rest; group headers keep their full counts.
@@ -1286,7 +1419,15 @@ bool SKInventoryFlatView::handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop, 
     const S32 row = rowAt(x, y, nullptr);
     const bool on_folder = row >= 0 && mRows[row].isEntry() && mRows[row].mIsFolder;
     const LLUUID dest = on_folder ? mRows[row].mTargetID : mFolderID;
-    SKInventoryExplorerDrag::dropOnFolder(dest, mask, drop, cargo_type, cargo_data, accept, tooltip_msg);
+    if (!on_folder && mSearching)
+    {
+        // Results are not a folder: a folder row among them still takes the drop.
+        SKInventoryExplorerDrag::refuse("drag_into_search", accept, tooltip_msg);
+    }
+    else
+    {
+        SKInventoryExplorerDrag::dropOnFolder(dest, mask, drop, cargo_type, cargo_data, accept, tooltip_msg);
+    }
     mDropRow = on_folder ? row : -1;
     mDropVerdict = SKInventoryExplorerDrag::verdict();
     if (!on_folder && mDropVerdict.mQuiet)
