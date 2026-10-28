@@ -295,6 +295,12 @@ void SKInventoryListView::drawContent()
         {
             gl_rect_2d(0, top, width, top - ROW_HEIGHT, focused ? sel_focus.get() : sel_blur.get());
         }
+        else if (focused && r == mCursor)
+        {
+            // The keyboard cursor on an unselected row: a faint fill.
+            static LLUIColor cursor_color = LLUIColorTable::instance().getColor("White_10");
+            gl_rect_2d(0, top, width, top - ROW_HEIGHT, cursor_color.get());
+        }
         left = 0;
         for (EColumn col : mShown)
         {
