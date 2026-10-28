@@ -34,8 +34,13 @@
 #include "llinventoryicon.h"
 #include "llinventorymodel.h"
 #include "llinventorymodelbackgroundfetch.h"
+#include "llfocusmgr.h"
+#include "lllocalcliprect.h"
+#include "llrender2dutils.h"
 #include "llscrollbar.h"
 #include "llui.h"
+#include "lluicolortable.h"
+#include "llwindow.h"
 #include "llviewerfoldertype.h"
 #include "llviewerinventory.h"
 #include "llviewerjointattachment.h"
@@ -238,6 +243,17 @@ SKInventoryFlatView::SKInventoryFlatView(const LLUICtrl::Params& p)
     mSlowClickRow(-1),
     mSlowClickArmed(false),
     mRenameRow(-1),
+    mPress(PRESS_NONE),
+    mPressX(0),
+    mPressY(0),
+    mPressDown(0),
+    mPressRow(-1),
+    mPressMask(MASK_NONE),
+    mPressCollapse(false),
+    mLassoOn(false),
+    mLassoX(0),
+    mLassoY(0),
+    mDropRow(-1),
     mScrollbar(nullptr)
 {
     const S32 bar = LLUI::getInstance()->mSettingGroups["config"]->getS32("UIScrollbarSize");
@@ -858,6 +874,8 @@ void SKInventoryFlatView::draw()
         }
     }
     drawContent();
+    drawDropTarget();
+    drawLasso();
     LLUICtrl::draw();
 }
 
@@ -971,19 +989,12 @@ bool SKInventoryFlatView::handleMouseDown(S32 x, S32 y, MASK mask)
     {
         return true;
     }
-    bool on_name = false;
-    const S32 row = rowAt(x, y, &on_name);
-    if (row < 0)
+    if (!rowsArea().pointInRect(x, y))
     {
-        // A click on empty space clears the selection.
-        mSelected.assign(mRows.size(), false);
-        mCursor = -1;
-        mAnchor = -1;
-        notifySelection();
         return true;
     }
-    const SKInventoryRow& hit = mRows[row];
-    if (hit.mKind == SKInventoryRow::KIND_SHOW_ALL)
+    const S32 row = rowAt(x, y, nullptr);
+    if (row >= 0 && mRows[row].mKind == SKInventoryRow::KIND_SHOW_ALL)
     {
         mShowAll = true;
         const uuid_vec_t selection = getSelection();
@@ -991,13 +1002,50 @@ bool SKInventoryFlatView::handleMouseDown(S32 x, S32 y, MASK mask)
         setSelection(selection);
         return true;
     }
-    if (!hit.isEntry())
+
+    mPressX = x;
+    mPressY = y;
+    mPressDown = contentDown(y);
+    mPressRow = row;
+    mPressMask = mask;
+    mPressCollapse = false;
+    mLassoOn = false;
+    gFocusMgr.setMouseCapture(this);
+    if (row >= 0 && mRows[row].isEntry() && isDragHandle(x, y, row))
     {
+        make_ui_sound("UISndClick");
+        mPress = PRESS_ITEM;
+        if (mSelected[row] && !(mask & (MASK_CONTROL | MASK_SHIFT)))
+        {
+            // The selection stays whole so it can travel; a click without a drag selects the row alone.
+            mPressCollapse = mSelectedCount > 1;
+            bool on_name = false;
+            rowAt(x, y, &on_name);
+            if (mSelectedCount == 1 && on_name)
+            {
+                // A second, slow click on the only selected item's name renames it.
+                mSlowClickRow = row;
+                mSlowClickArmed = true;
+                mSlowClickTimer.reset();
+            }
+        }
+        else
+        {
+            clickRow(row, mask);
+        }
         return true;
     }
-    make_ui_sound("UISndClick");
+    if (row >= 0 && mRows[row].isEntry())
+    {
+        make_ui_sound("UISndClick");
+    }
+    // Anywhere else a press draws a selection rectangle once it moves, or is a click when it doesn't.
+    mPress = PRESS_LASSO;
+    return true;
+}
 
-    const bool was_only = mSelectedCount == 1 && mSelected[row];
+void SKInventoryFlatView::clickRow(S32 row, MASK mask)
+{
     if (mask & MASK_CONTROL)
     {
         mSelected[row] = !mSelected[row];
@@ -1008,15 +1056,279 @@ bool SKInventoryFlatView::handleMouseDown(S32 x, S32 y, MASK mask)
     else
     {
         moveCursor(row, mask);
-        // A second, slow click on the only selected item's name renames it.
-        if (was_only && on_name && mask == MASK_NONE)
+    }
+}
+
+bool SKInventoryFlatView::handleHover(S32 x, S32 y, MASK mask)
+{
+    if (!hasMouseCapture() || mPress == PRESS_NONE)
+    {
+        return LLUICtrl::handleHover(x, y, mask);
+    }
+    const S32 dx = x - mPressX;
+    const S32 dy = y - mPressY;
+    if (mPress == PRESS_ITEM)
+    {
+        if (dx * dx + dy * dy >= SKInventoryExplorerDrag::DRAG_THRESHOLD * SKInventoryExplorerDrag::DRAG_THRESHOLD)
         {
-            mSlowClickRow = row;
-            mSlowClickArmed = true;
-            mSlowClickTimer.reset();
+            const uuid_vec_t ids = getSelection();
+            mPress = PRESS_NONE;
+            mSlowClickArmed = false;
+            gFocusMgr.setMouseCapture(nullptr);
+            if (SKInventoryExplorerDrag::begin(ids))
+            {
+                return LLToolDragAndDrop::getInstance()->handleHover(x, y, mask);
+            }
+        }
+        return true;
+    }
+    if (!mLassoOn && llabs(dx) + llabs(dy) >= SKInventoryExplorerDrag::LASSO_THRESHOLD)
+    {
+        startLasso();
+    }
+    if (mLassoOn)
+    {
+        updateLasso(x, y);
+        // Near the top or bottom edge, or past it, the content scrolls under the rectangle.
+        const LLRect area = rowsArea();
+        const S32 band = SKInventoryExplorerDrag::SCROLL_BAND;
+        S32 step = 0;
+        if (y > area.mTop - band)
+        {
+            step = -llmin(30, y - (area.mTop - band));
+        }
+        else if (y < area.mBottom + band)
+        {
+            step = llmin(30, area.mBottom + band - y);
+        }
+        if (step != 0 && mLassoTick.getElapsedTimeF32() >= 0.03f)
+        {
+            mLassoTick.reset();
+            scrollPixels(step);
+            updateLasso(x, y);
+        }
+    }
+    getWindow()->setCursor(UI_CURSOR_ARROW);
+    return true;
+}
+
+void SKInventoryFlatView::startLasso()
+{
+    mLassoOn = true;
+    mSlowClickArmed = false;
+    endRename();
+    mLassoRestore = mSelected;
+    if (mPressMask & (MASK_CONTROL | MASK_SHIFT))
+    {
+        mLassoBase = mSelected;
+    }
+    else
+    {
+        mLassoBase.assign(mRows.size(), false);
+        mSelected.assign(mRows.size(), false);
+        mSelectedCount = 0;
+    }
+    mLassoSwept.clear();
+    mLassoTick.reset();
+}
+
+void SKInventoryFlatView::updateLasso(S32 x, S32 y)
+{
+    mLassoX = x;
+    mLassoY = y;
+    const S32 down = contentDown(y);
+    std::vector<S32> rows;
+    rowsInBand(llmin(mPressDown, down), llmax(mPressDown, down), llmin(mPressX, x), llmax(mPressX, x), rows);
+    // Only the rows entering or leaving the rectangle change, so a sweep costs what it covers.
+    for (S32 r : mLassoSwept)
+    {
+        if (r < (S32)mSelected.size() && mSelected[r] != mLassoBase[r])
+        {
+            mSelected[r] = mLassoBase[r];
+            mSelectedCount += mSelected[r] ? 1 : -1;
+        }
+    }
+    mLassoSwept.clear();
+    for (S32 r : rows)
+    {
+        if (r >= 0 && r < (S32)mRows.size() && r < (S32)mLassoBase.size() && mRows[r].isEntry())
+        {
+            mLassoSwept.push_back(r);
+            if (mSelected[r] == mLassoBase[r])
+            {
+                mSelected[r] = !mLassoBase[r];
+                mSelectedCount += mSelected[r] ? 1 : -1;
+            }
+        }
+    }
+    if (mSelectionCallback)
+    {
+        mSelectionCallback();
+    }
+}
+
+void SKInventoryFlatView::endPress(bool cancel)
+{
+    const EPress press = mPress;
+    mPress = PRESS_NONE;
+    if (press == PRESS_LASSO && mLassoOn)
+    {
+        mLassoOn = false;
+        if (cancel && mLassoRestore.size() == mRows.size())
+        {
+            mSelected = mLassoRestore;
+        }
+        else if (!mLassoSwept.empty())
+        {
+            mCursor = mAnchor = mLassoSwept.back();
+        }
+        notifySelection();
+    }
+    mLassoOn = false;
+    mLassoSwept.clear();
+}
+
+bool SKInventoryFlatView::handleMouseUp(S32 x, S32 y, MASK mask)
+{
+    if (!hasMouseCapture())
+    {
+        return LLUICtrl::handleMouseUp(x, y, mask);
+    }
+    const EPress press = mPress;
+    const bool lasso = mLassoOn;
+    endPress(false);
+    gFocusMgr.setMouseCapture(nullptr);
+    if (press == PRESS_ITEM && mPressCollapse && mPressRow >= 0 && mPressRow < (S32)mRows.size())
+    {
+        moveCursor(mPressRow, MASK_NONE);
+    }
+    else if (press == PRESS_LASSO && !lasso)
+    {
+        if (mPressRow >= 0 && mPressRow < (S32)mRows.size() && mRows[mPressRow].isEntry())
+        {
+            clickRow(mPressRow, mPressMask);
+        }
+        else if (!(mPressMask & (MASK_CONTROL | MASK_SHIFT)))
+        {
+            // A click on empty space clears the selection.
+            mSelected.assign(mRows.size(), false);
+            mCursor = -1;
+            mAnchor = -1;
+            notifySelection();
         }
     }
     return true;
+}
+
+void SKInventoryFlatView::onMouseCaptureLost()
+{
+    endPress(false);
+}
+
+void SKInventoryFlatView::drawLasso()
+{
+    if (!mLassoOn)
+    {
+        return;
+    }
+    static LLUIColor accent = LLUIColorTable::instance().getColor("EmphasisColor");
+    LLColor4 fill = accent.get();
+    fill.mV[VALPHA] = 0.15f;
+    const S32 top = contentToLocal(mPressDown);
+    LLRect rect(llmin(mPressX, mLassoX), llmax(top, mLassoY), llmax(mPressX, mLassoX), llmin(top, mLassoY));
+    rect.intersectWith(rowsArea());
+    if (rect.isEmpty())
+    {
+        return;
+    }
+    gl_rect_2d(rect, fill, true);
+    gl_rect_2d(rect, accent.get(), false);
+}
+
+void SKInventoryFlatView::drawDropTarget()
+{
+    if (!mDropHover.isActive())
+    {
+        return;
+    }
+    LLLocalClipRect clip(rowsArea());
+    if (mDropRow >= 0 && mDropRow < (S32)mRows.size())
+    {
+        SKInventoryExplorerDrag::drawTargetMark(rowRect(mDropRow), mDropVerdict);
+    }
+    else if (mDropVerdict.mOK)
+    {
+        // The open folder's own space takes the outline alone.
+        static LLUIColor accent = LLUIColorTable::instance().getColor("EmphasisColor");
+        const LLRect area = rowsArea();
+        gl_rect_2d(area.mLeft + 1, area.mTop - 1, area.mRight - 1, area.mBottom + 1, accent.get(), false);
+        gl_rect_2d(area.mLeft + 2, area.mTop - 2, area.mRight - 2, area.mBottom + 2, accent.get(), false);
+    }
+}
+
+bool SKInventoryFlatView::handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop, EDragAndDropType cargo_type, void* cargo_data,
+                                            EAcceptance* accept, std::string& tooltip_msg)
+{
+    if (childrenHandleDragAndDrop(x, y, mask, drop, cargo_type, cargo_data, accept, tooltip_msg))
+    {
+        return true;
+    }
+    const S32 row = rowAt(x, y, nullptr);
+    const bool on_folder = row >= 0 && mRows[row].isEntry() && mRows[row].mIsFolder;
+    const LLUUID dest = on_folder ? mRows[row].mTargetID : mFolderID;
+    SKInventoryExplorerDrag::dropOnFolder(dest, mask, drop, cargo_type, cargo_data, accept, tooltip_msg);
+    mDropRow = on_folder ? row : -1;
+    mDropVerdict = SKInventoryExplorerDrag::verdict();
+    if (!on_folder && mDropVerdict.mQuiet)
+    {
+        tooltip_msg.clear(); // no label over the open folder's own space
+    }
+    if (drop || LLToolDragAndDrop::getInstance()->getCargoIndex() != 0)
+    {
+        return true;
+    }
+    mDropHover.touch();
+
+    // Once a frame: spring a folder held under the pointer, and scroll near the top and bottom.
+    S32 screen_x = 0;
+    S32 screen_y = 0;
+    localPointToScreen(x, y, &screen_x, &screen_y);
+    const LLUUID spring_id = on_folder && !mDropVerdict.mOntoCargo ? mRows[row].mID : LLUUID::null;
+    if (mDropHover.spring(spring_id, screen_x, screen_y, SKInventoryExplorerDrag::SPRING_SECONDS) && mOpenCallback)
+    {
+        mOpenCallback(spring_id);
+        return true;
+    }
+    const LLRect area = rowsArea();
+    S32 step = 0;
+    if (y > area.mTop - SKInventoryExplorerDrag::SCROLL_BAND)
+    {
+        step = -SKInventoryExplorerDrag::SCROLL_STEP;
+    }
+    else if (y < area.mBottom + SKInventoryExplorerDrag::SCROLL_BAND)
+    {
+        step = SKInventoryExplorerDrag::SCROLL_STEP;
+    }
+    if (step != 0 && mDropHover.tick(SKInventoryExplorerDrag::TICK_SECONDS))
+    {
+        const S32 before = contentDown(y);
+        scrollPixels(step);
+        if (contentDown(y) != before)
+        {
+            mDropHover.scrolled(screen_x, screen_y);
+        }
+    }
+    return true;
+}
+
+void SKInventoryFlatView::undo()
+{
+    SKInventoryExplorerDrag::undo();
+}
+
+bool SKInventoryFlatView::canUndo() const
+{
+    return SKInventoryExplorerDrag::canUndo();
 }
 
 bool SKInventoryFlatView::handleDoubleClick(S32 x, S32 y, MASK mask)
@@ -1134,6 +1446,12 @@ bool SKInventoryFlatView::handleKeyHere(KEY key, MASK mask)
             }
             break;
         case KEY_ESCAPE:
+            if (mLassoOn)
+            {
+                endPress(true);
+                gFocusMgr.setMouseCapture(nullptr);
+                return true;
+            }
             if (mSelectedCount > 0)
             {
                 deselect();

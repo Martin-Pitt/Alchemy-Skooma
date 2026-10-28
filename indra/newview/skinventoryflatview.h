@@ -32,6 +32,7 @@
 #include "llhandle.h"
 #include "lluictrl.h"
 #include "lluiimage.h"
+#include "skinventoryexplorerdrag.h"
 
 #include <functional>
 #include <map>
@@ -188,8 +189,13 @@ public:
     bool handleMouseDown(S32 x, S32 y, MASK mask) override;
     bool handleDoubleClick(S32 x, S32 y, MASK mask) override;
     bool handleRightMouseDown(S32 x, S32 y, MASK mask) override;
+    bool handleMouseUp(S32 x, S32 y, MASK mask) override;
+    bool handleHover(S32 x, S32 y, MASK mask) override;
     bool handleScrollWheel(S32 x, S32 y, LLScrollDelta delta) override;
     bool handleKeyHere(KEY key, MASK mask) override;
+    bool handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop, EDragAndDropType cargo_type, void* cargo_data,
+                           EAcceptance* accept, std::string& tooltip_msg) override;
+    void onMouseCaptureLost() override;
     void onFocusReceived() override;
     void onFocusLost() override;
 
@@ -207,6 +213,8 @@ public:
     bool canSelectAll() const override { return mEntryCount > 0; }
     void deselect() override;
     bool canDeselect() const override { return mSelectedCount > 0; }
+    void undo() override;
+    bool canUndo() const override;
 
 protected:
     SKInventoryFlatView(const LLUICtrl::Params& p);
@@ -218,6 +226,18 @@ protected:
     virtual void scrollToRow(S32 row) = 0;
     virtual S32 rowFromKey(KEY key, MASK mask) const = 0;       // where an arrow or page key goes, -1 for nowhere
     virtual LLRect nameRect(S32 row, bool& multiline) const = 0;
+    // A press here lifts the row (Icons: the tile; List: the Name cell); elsewhere it draws a selection rectangle.
+    virtual bool isDragHandle(S32 x, S32 y, S32 row) const { return true; }
+    // Where the rows are drawn, below any header.
+    virtual LLRect rowsArea() const { return getLocalRect(); }
+    // Pixels from the top of the content, scroll included, and back.
+    virtual S32 contentDown(S32 y) const = 0;
+    virtual S32 contentToLocal(S32 down) const = 0;
+    // The rows meeting a band of the content, in content pixels and view x.
+    virtual void rowsInBand(S32 top, S32 bottom, S32 left, S32 right, std::vector<S32>& rows) const = 0;
+    virtual LLRect rowRect(S32 row) const = 0;
+    // Scrolls by pixels, positive downwards.
+    virtual void scrollPixels(S32 pixels) = 0;
     virtual bool handleHeaderMouseDown(S32 x, S32 y, MASK mask) { return false; }
     virtual bool handleHeaderRightMouseDown(S32 x, S32 y, MASK mask) { return false; }
 
@@ -263,6 +283,39 @@ protected:
     LLHandle<LLView> mRenameEditor;
     LLUUID mRenameID;
     S32 mRenameRow;
+
+    // A press that may become a drag of the selection or a selection rectangle.
+    enum EPress
+    {
+        PRESS_NONE,
+        PRESS_ITEM,
+        PRESS_LASSO,
+    };
+    void startLasso();
+    void updateLasso(S32 x, S32 y);
+    void endPress(bool cancel);
+    void clickRow(S32 row, MASK mask);
+    void drawLasso();
+    void drawDropTarget();
+
+    EPress mPress;
+    S32 mPressX;
+    S32 mPressY;
+    S32 mPressDown;             // the press in content pixels, so the rectangle stays put as it scrolls
+    S32 mPressRow;
+    MASK mPressMask;
+    bool mPressCollapse;        // a plain press on a selected row selects it alone if it is not dragged
+    bool mLassoOn;
+    S32 mLassoX;
+    S32 mLassoY;
+    std::vector<bool> mLassoBase;       // what each swept row toggles against
+    std::vector<bool> mLassoRestore;    // the selection at the press, for Esc
+    std::vector<S32> mLassoSwept;
+    LLFrameTimer mLassoTick;
+
+    SKDragHover mDropHover;
+    S32 mDropRow;               // the folder row under a drag, -1 for the open folder's space
+    SKInventoryExplorerDrag::Verdict mDropVerdict;
 
     LLScrollbar* mScrollbar;
     SKInventoryListLabels mLabels;

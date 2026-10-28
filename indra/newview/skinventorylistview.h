@@ -65,6 +65,13 @@ protected:
     void scrollToRow(S32 row) override;
     S32 rowFromKey(KEY key, MASK mask) const override;
     LLRect nameRect(S32 row, bool& multiline) const override;
+    bool isDragHandle(S32 x, S32 y, S32 row) const override;
+    LLRect rowsArea() const override;
+    S32 contentDown(S32 y) const override;
+    S32 contentToLocal(S32 down) const override;
+    void rowsInBand(S32 top, S32 bottom, S32 left, S32 right, std::vector<S32>& rows) const override;
+    LLRect rowRect(S32 row) const override;
+    void scrollPixels(S32 pixels) override;
     bool handleHeaderMouseDown(S32 x, S32 y, MASK mask) override;
     bool handleHeaderRightMouseDown(S32 x, S32 y, MASK mask) override;
 
