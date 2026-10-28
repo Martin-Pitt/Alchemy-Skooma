@@ -7595,19 +7595,6 @@
             <key>Value</key>
             <real>0.5</real>
         </map>
-        <key>SKSoundLoudnessNormalizeUploads</key>
-        <map>
-            <key>Comment</key>
-            <string>
-                Normalize sound uploads to the loudness target before encoding. Unlike playback normalization this alters the uploaded asset itself, so it is also exposed as a checkbox on the upload window.
-            </string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>Boolean</string>
-            <key>Value</key>
-            <integer>1</integer>
-        </map>
     </map>
 </llsd>
 
