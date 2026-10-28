@@ -72,7 +72,6 @@
 #include "llrendersphere.h"
 #include "llscriptruntimeperms.h"
 #include "llsdutil.h"
-#include "llsky.h"
 #include "llslurl.h"
 #include "llsmoothstep.h"
 #include "llstartup.h"
@@ -1136,13 +1135,6 @@ void LLAgent::setRegion(LLViewerRegion *regionp)
 
             // Update all of the regions.
             LLWorld::getInstance()->updateAgentOffset(agent_offset_global);
-
-            // Hack to keep sky in the agent's region, otherwise it may get deleted - DJS 08/02/02
-            // *TODO: possibly refactor into gSky->setAgentRegion(regionp)? -Brad
-            if (gSky.mVOSkyp)
-            {
-                gSky.mVOSkyp->setRegion(regionp);
-            }
 
             if (regionp->capabilitiesReceived())
             {

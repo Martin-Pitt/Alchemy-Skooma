@@ -5640,14 +5640,6 @@ void LLWindowWin32::LLWindowWin32Thread::run()
     LogChange logger("Window");
 #endif
 
-    //as good a place as any to up the MM timer resolution (see ms_sleep)
-    //attempt to set timer resolution to 1ms
-    TIMECAPS tc;
-    if (timeGetDevCaps(&tc, sizeof(TIMECAPS)) == TIMERR_NOERROR)
-    {
-        timeBeginPeriod(llclamp((U32) 1, tc.wPeriodMin, tc.wPeriodMax));
-    }
-
     // Normally won't exist yet, but in case of re-init, make sure it's cleaned up
     resumeTimeout("Window:WindowThread");
 
@@ -5706,7 +5698,7 @@ void LLWindowWin32::LLWindowWin32Thread::run()
         {
             LL_PROFILE_ZONE_NAMED_CATEGORY_WIN32("w32t - Sleep");
             logger.always("sleep(1)");
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            ms_sleep(1);
         }
 #endif
     }
