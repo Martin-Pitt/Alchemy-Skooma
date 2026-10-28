@@ -71,6 +71,11 @@ clarity between ledges vs walls, and a future combat-log feed for kill/death lin
 - 60 s recorded avatar motion from the nav console (shift-click Export) is requested, not built; it
   doubles as the bake-invalidation harness (M3).
 - Enemy spotting is deferred; team-mates, cover/ledges and relative elevation are the priority.
+- Combat mode (2026-10-04) turns on over a damage-enabled parcel. Allies: the user's own active group, matched
+  to an SLMC military in [SLMC.lsl](https://github.com/Martin-Pitt/SLMC/blob/main/SLMC.lsl) so that faction's
+  main/militia/land (and civilian) groups count; any other group is just itself. The viewer cannot see other
+  avatars' active group directly, so ally detection is a feasibility question; never infer enemies. Vehicles
+  show outside combat too, civilian green; in combat tinted only when an ally sits in them.
 - Fair play: `visibilityOf()` stays the one seam; its first body is classic behaviour.
 - Combat-log events enter through `SKNetMap::addEvent()` only; no parser in this branch. Logs are formatted JSON per http://wiki.secondlife.com/wiki/Combat_Log. Kill line 0.5 s, death icon 2 s.
 - Defaults: square, north-up, camera-FOV sight cone; object floors subtle grey, terrain subtle green, water subtle blue with edge gradients; void cross-hatched, void boundary thick solid, region boundary thick dotted.

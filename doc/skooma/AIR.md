@@ -11,6 +11,36 @@ portals, and derives wind slabs and room probes. With the census (`SKWorldCensus
 off) and being phased out. `skinteriorair*` and `skatmoinfoviewsair.cpp` are Atmo's interior haze and
 wind/weather debug views, not air cells, despite the names.
 
+## Foundation rulings (owner; current, override the stale parts below)
+
+- **Layering:** physics shapes → census → air → rooms, libraries `skcensus`/`skair`/`skrooms` (namespace
+  `skworld`, settings `SKCensus*`/`SKAir*`/`SKRooms*`), landed in `main` 2026-10-23; the Recast navmesh was
+  dropped 2026-10-22. Foundations never call their consumers (minimap, overview, probes), and their work never
+  goes on `combat/*` branches. Plan: `.foundations-plan.md` (its top section overrides the rest).
+- **Exact data, never coarse sampling** (2026-10-09): no 4 m blocks or point sampling where triangles,
+  polygons, portals, layer links or air cells exist; inventory the fields first and ask the producer for a
+  missing link. No invented methods unless intentional or upstreamable. Put this in every map/foundation brief.
+- **Cached objects as real shapes** (2026-10-25): decoded from the cache entry's ObjectUpdateCompressed body,
+  no live object created; a revived object links to its record (same UUID, same signature), never rebuilt;
+  cached and live share one signature function.
+- **Physics mesh as stored** (confirmed in-world 2026-10-25): the sim does not stretch `physics_mesh` or MOPP
+  triangles to the object's box (the uploader fits it, `normalizeVolumeFaces`; 2011-era assets collide where
+  stored); only the Convex Hull `BoundingVerts` fit stays. Settle doubts with the asset's
+  `MeshDecompMassProps` centre of mass; corpus `%APPDATA%\AlchemyNext\logs\mesh-full`, decoder
+  `V:\Scratch\door-domain\dump.py`.
+- **Havok parser is clean-room:** rules justified only by public sources (SL wiki, Hippolyzer,
+  node-metaverse, NifTools/pyffi) or corpus measurement, never Havok SDK trees; no SDK-only names in code,
+  comments, commits, tests or PRs (scrub history if any land). Implementer and reviewer agents get only public
+  sources and corpus. Details `.havok-block.md`.
+- **Avatar shapes:** measured polytopes (COMBAT.md P1), `skcensusavatarshape.*`, models in `V:\Scratch\avatar-shape\`.
+- **Test regions:** census exports (`%APPDATA%\AlchemyNext\logs\sknav-census-*.json`) from **Resdayn** (marks in
+  `V:\Scratch\archive\scratch-2026-10-21\nav-corrections-1007\`) and **Bad / Good / Outer Space** (sloping
+  streets, a bridge over water); report per region set; read names from the `regions` list with `python -I`
+  (a full JSON scan is slow).
+- **Benchmarks** build out of tree, never from the shared tree: `V:\Scratch\nav-bench\` (`build.ps1 <ref>
+  [-Tracy]` archives a commit and builds it; built the dropped navmesh, the pattern is what carries). Name the
+  build sha in reports; Tracy builds change float rounding, so check identity without Tracy.
+
 ## Where it lives
 
 | library | files | what |
