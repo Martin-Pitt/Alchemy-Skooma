@@ -91,6 +91,7 @@ protected:
 
     S32 mTileSize;
     bool mBadges = true;
+    bool mRelayingOut = false;
     S32 mPerLine;
     std::vector<Line> mLines;
     std::vector<S32> mRowLine;      // each row's line

@@ -1502,7 +1502,8 @@ void SKInventoryDetailsView::layout()
     const LLFontGL* font = LLFontGL::getFontSansSerifSmall();
     const LLFontGL* bold = LLFontGL::getFontSansSerifBold();
     const S32 line_height = (S32)font->getLineHeight();
-    const S32 inner = llmax(40, width - 2 * PAD);
+    // Laid out once without the bar; if the content then scrolls, again in the width beside it.
+    const S32 inner = llmax(40, width - 2 * PAD - (mScrollbar->getVisible() ? LLScrollbar::THIN_THICKNESS : 0));
     const S32 value_width = llmax(40, inner - LABEL_WIDTH);
 
     S32 top = PAD;
@@ -1578,8 +1579,14 @@ void SKInventoryDetailsView::layout()
     mScrollbar->setRect(LLRect(width - LLScrollbar::THIN_THICKNESS, getRect().getHeight(), width, 0));
     mScrollbar->setDocSize(mContentHeight);
     mScrollbar->setPageSize(getRect().getHeight());
-    mScrollbar->setVisible(mContentHeight > getRect().getHeight());
+    const bool scrolls = mContentHeight > getRect().getHeight();
+    const bool changed = scrolls != mScrollbar->getVisible();
+    mScrollbar->setVisible(scrolls);
     mScrollbar->setDocPos(mScrollbar->getDocPos());
+    if (changed)
+    {
+        mLaidWidth = -1;    // laid out again next frame in the new width
+    }
 }
 
 void SKInventoryDetailsView::reshape(S32 width, S32 height, bool called_from_parent)
@@ -1644,7 +1651,7 @@ void SKInventoryDetailsView::draw()
         LLLocalClipRect clip(getLocalRect());
         const S32 top = contentTop();
         const S32 inner_left = PAD;
-        const S32 inner_right = width - PAD;
+        const S32 inner_right = width - PAD - (mScrollbar->getVisible() ? LLScrollbar::THIN_THICKNESS : 0);
         if (mMediaHeight > 0)
         {
             const LLRect media(inner_left, top - PAD, inner_right, top - PAD - mMediaHeight);
@@ -1741,7 +1748,8 @@ bool SKInventoryDetailsView::handleMouseDown(S32 x, S32 y, MASK mask)
         if (mLines[index].mURL == "aspect:")
         {
             const S32 line_top = contentTop() - mLines[index].mTop;
-            const LLRect rect(PAD + LABEL_WIDTH, line_top, getRect().getWidth() - PAD, line_top - mLines[index].mHeight);
+            const LLRect rect(PAD + LABEL_WIDTH, line_top, getRect().getWidth() - PAD - (mScrollbar->getVisible() ? LLScrollbar::THIN_THICKNESS : 0),
+                              line_top - mLines[index].mHeight);
             SKInventoryDetails::showAspectMenu(this, rect, target_item(mItemID) ? target_item(mItemID)->getUUID() : mItemID, false);
         }
         else

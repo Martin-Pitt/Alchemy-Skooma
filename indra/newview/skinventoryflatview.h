@@ -262,6 +262,8 @@ protected:
     virtual LLRect rowRect(S32 row) const = 0;
     // Scrolls by pixels, positive downwards.
     virtual void scrollPixels(S32 pixels) = 0;
+    // The width rows are laid out in: the bar keeps its own column while the view scrolls.
+    S32 contentWidth() const;
     virtual bool handleHeaderMouseDown(S32 x, S32 y, MASK mask) { return false; }
     virtual bool handleHeaderRightMouseDown(S32 x, S32 y, MASK mask) { return false; }
 

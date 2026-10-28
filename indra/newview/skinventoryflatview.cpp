@@ -715,6 +715,12 @@ S32 SKInventoryFlatView::getScroll() const
     return mScrollbar->getDocPos();
 }
 
+S32 SKInventoryFlatView::contentWidth() const
+{
+    const bool scrolls = mScrollbar && mScrollbar->getVisible();
+    return llmax(0, getRect().getWidth() - (scrolls ? LLScrollbar::THIN_THICKNESS : 0));
+}
+
 void SKInventoryFlatView::setScroll(S32 pos)
 {
     mScrollbar->setDocPos(pos);
