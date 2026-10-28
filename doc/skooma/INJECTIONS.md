@@ -1526,6 +1526,13 @@ Landed on `develop` in two merges of the same branch: `b7f8571b51` (as `feature-
 - `indra/newview/llappviewer.cpp` — include + `sThinScrollbarsEverywhere` from the setting in UI setup.
 - Unmarked: `settings_alchemy.xml` (`SkoomaScrollbarThinEverywhere` before `MouseWheelScrollSensitivity`); `skins/{alchemy,default,gemini,heretic,ionic}/colors.xml` (`ScrollbarThinThumbColor`, `ScrollbarThinThumbHoverColor`, `ScrollbarThinThumbPressedColor`, `ScrollbarThinTrackColor` after `ScrollbarTrackColor`).
 
+## Audio preview control
+
+`foundation-audio/preview-control` (main `75a77da686`): start a sound partway, seek and read the position of a playing source, and stop our own copy of an in-world trigger without telling the server. Marked `<SK:Nexii> Audio preview control`:
+- `indra/llaudio/llaudioengine.h` — `LLAudioEngine::canSeek()`, `stopTriggeredSounds(audio_uuid, owner_id)`; `LLAudioSource::play(uuid, offset)`, `seek`, `getPlayPosition`, `isTrigger`, `getOwnerID`, `mStartOffset` (last member, clear of loudness's); channel `seek`/`getPlayPosition` virtuals.
+- `indra/llaudio/llaudioengine.cpp` — `stopTriggeredSounds`; the held offset applied once the channel plays, cleared in `stop()`; source play/seek/position.
+- `llaudioengine_openal.h/.cpp` — `AL_SEC_OFFSET`; `llaudioengine_fmodstudio.h/.cpp` — `Channel::setPosition`/`getPosition`; `llaudioengine_faudio.h/.cpp` — a seek rebuilds the voice at the frame (the device-swap path), position less the silent lead-in.
+
 ## Drag feedback
 
 `foundation-ui/drag-feedback` (main `e432fd6262`). Design `.drag-feedback.md`. Own: `indra/llui/skdragfeedback.*` (`LLDragFeedback`: ghost, chip, report/refuse/block, per-frame marks), `indra/newview/skdragverdict.*` (cargo ghosts, derived verbs, hint table, world table and `ALSelectionOutline` marks). Marked `<SK:Nexii> Drag feedback`:
