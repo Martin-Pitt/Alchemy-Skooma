@@ -1546,6 +1546,9 @@ Branch `feature-ui/inventory-explorer` (via `ui`, main `7b8ef524f4`). Spec: `.in
 | `indra/newview/skinventoryflatview.*` | Shared base of List and Icons: rows, sort, grouping, paging, selection, rename, clipboard |
 | `indra/newview/skinventoryiconsview.*` | Icons view: grid, visible-only thumbnails |
 | `indra/newview/skinventoryrenameeditor.*` | Inline rename editor |
+| `indra/newview/skinventorydetails.*` | Details pane and Columns details column: rows, players, aspect writer |
+| `indra/newview/skinventoryexplorerassets.*` | Session-only asset reads: sound decode + FFT bands on the General queue, animation rows, landmarks, experiences |
+| `indra/newview/skinventorygalleryview.*` | Gallery: stage, strip, zoom, chips |
 | `indra/newview/skinventoryexplorermenu.*` | Context menu and actions (gallery pattern) |
 | `skins/default/xui/en/floater_sk_inventory_explorer.xml`, `menu_sk_inventory_explorer.xml` | Layout and menu |
 
@@ -1554,7 +1557,7 @@ Branch `feature-ui/inventory-explorer` (via `ui`, main `7b8ef524f4`). Spec: `.in
 | File | What | Marked |
 |---|---|---|
 | `indra/newview/llviewerfloaterreg.cpp` | include beside `llfloaterinventorythumbnailshelper.h`; `LLFloaterReg::add("sk_inventory_explorer")` after `"inventory"` | trailing `// <SK:Nexii> Inventory Explorer` |
-| `indra/newview/CMakeLists.txt` | 13 sources and 13 headers in alphabetical order among the sk entries | trailing `# <SK:Nexii> Inventory Explorer` |
+| `indra/newview/CMakeLists.txt` | 16 sources and 16 headers in alphabetical order among the sk entries; `ll::pocketfft` linked beside `tinyexr` (the waveform's band split) | trailing `# <SK:Nexii> Inventory Explorer` |
 | `skins/default/xui/en/menu_viewer.xml` | Me menu: "Inventory Explorer..." directly below Inventory | `<!-- <SK:Nexii> Inventory Explorer -->` |
 | `app_settings/commands.xml` | toolbar command `sk_inventory_explorer` right after `inventory` (borrows `Command_Inventory_Icon`) | `<!-- <SK:Nexii> Inventory Explorer -->` |
 | `skins/default/xui/en/strings.xml` | `Command_SKInventoryExplorer_Label` / `_Tooltip` after `Command_Search_*` | trailing `<!-- <SK:Nexii> Inventory Explorer -->` |
