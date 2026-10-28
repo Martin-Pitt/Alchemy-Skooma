@@ -94,6 +94,8 @@
 #include "rlvactions.h"
 #include "rlvhandler.h"
 #include "rlvlocks.h"
+#include "skdragfeedback.h" // <SK:Nexii> Drag feedback
+#include "skdragverdict.h" // <SK:Nexii> Drag feedback
 // [/RLVa:KB]
 
 #include <fmt/format.h>
@@ -2768,7 +2770,10 @@ bool LLFolderBridge::dragCategoryIntoFolder(LLInventoryCategory* inv_cat,
     if (!isAgentAvatarValid())
         return false;
     if (!isAgentInventory())
+    {
+        LLDragFeedback::refuse(LLTrans::getString("TooltipDragIntoLibrary")); // <SK:Nexii> Drag feedback
         return false; // cannot drag categories into library
+    }
 
     LLInventoryPanel* destination_panel = mInventoryPanel.get();
     if (!destination_panel)
@@ -2833,6 +2838,7 @@ bool LLFolderBridge::dragCategoryIntoFolder(LLInventoryCategory* inv_cat,
         {
             is_movable = false;
             tooltip_msg = LLTrans::getString("TooltipDragOntoSelf");
+            LLDragFeedback::refuse(tooltip_msg, true); // <SK:Nexii> Drag feedback: a dragged folder is never its own target
         }
         if (is_movable && (model->isObjectDescendentOf(mUUID, cat_id)))
         {
@@ -2842,7 +2848,7 @@ bool LLFolderBridge::dragCategoryIntoFolder(LLInventoryCategory* inv_cat,
         if (is_movable && LLFolderType::lookupIsProtectedType(inv_cat->getPreferredType()))
         {
             is_movable = false;
-            // tooltip?
+            LLDragFeedback::refuse(LLTrans::getString("TooltipDragSystemFolder")); // <SK:Nexii> Drag feedback
         }
 
         U32 max_items_to_wear = gSavedSettings.getU32("WearFolderLimit");
@@ -2980,6 +2986,7 @@ bool LLFolderBridge::dragCategoryIntoFolder(LLInventoryCategory* inv_cat,
                 if (get_is_item_worn(item->getUUID()))
                 {
                     is_movable = false;
+                    LLDragFeedback::refuse(LLTrans::getString("TooltipDragWornToTrash")); // <SK:Nexii> Drag feedback
                     break; // It's generally movable, but not into the trash.
                 }
             }
@@ -2993,6 +3000,7 @@ bool LLFolderBridge::dragCategoryIntoFolder(LLInventoryCategory* inv_cat,
                 if (LLAssetType::AT_LANDMARK != item->getType() && LLAssetType::AT_CATEGORY != item->getType())
                 {
                     is_movable = false;
+                    LLDragFeedback::refuse(LLTrans::getString("TooltipDragOnlyLandmarks")); // <SK:Nexii> Drag feedback
                     break; // It's generally movable, but not into Landmarks.
                 }
             }
@@ -3051,6 +3059,17 @@ bool LLFolderBridge::dragCategoryIntoFolder(LLInventoryCategory* inv_cat,
         //--------------------------------------------------------------------------------
 
         accept = is_movable;
+
+        // <SK:Nexii> Drag feedback: what dropping the folder here does
+        if (accept)
+        {
+            const bool into_my_outfits_root = (mUUID == my_outifts_id);
+            LLDragFeedback::report(move_is_into_current_outfit ? EDragAction::WearAdd
+                                   : (into_my_outfits_root && create_outfit) ? EDragAction::MakeOutfit
+                                   : EDragAction::Move,
+                                   getDisplayName());
+        }
+        // </SK:Nexii>
 
         if (accept && drop)
         {
@@ -3279,6 +3298,10 @@ bool LLFolderBridge::dragCategoryIntoFolder(LLInventoryCategory* inv_cat,
                 }
             };
             accept = move_inv_category_world_to_agent(cat_id, mUUID, drop, callback, NULL, filter);
+            if (accept)
+            {
+                LLDragFeedback::report(EDragAction::Copy, getDisplayName()); // <SK:Nexii> Drag feedback
+            }
         }
     }
     else if (LLToolDragAndDrop::SOURCE_LIBRARY == source)
@@ -3292,6 +3315,11 @@ bool LLFolderBridge::dragCategoryIntoFolder(LLInventoryCategory* inv_cat,
         {
             // Accept folders that contain complete outfits.
             accept = move_is_into_current_outfit && LLAppearanceMgr::instance().getCanMakeFolderIntoOutfit(cat_id);
+        }
+
+        if (accept)
+        {
+            LLDragFeedback::report(EDragAction::Wear); // <SK:Nexii> Drag feedback: a Library outfit is copied and worn
         }
 
         if (accept && drop)
@@ -5846,7 +5874,11 @@ bool LLFolderBridge::dragItemIntoFolder(LLInventoryItem* inv_item,
     LLInventoryModel* model = getInventoryModel();
 
     if (!model || !inv_item) return false;
-    if (!isAgentInventory()) return false; // cannot drag into library
+    if (!isAgentInventory())
+    {
+        LLDragFeedback::refuse(LLTrans::getString("TooltipDragIntoLibrary")); // <SK:Nexii> Drag feedback
+        return false; // cannot drag into library
+    }
     if (!isAgentAvatarValid()) return false;
 
     LLInventoryPanel* destination_panel = mInventoryPanel.get();
@@ -5987,6 +6019,27 @@ bool LLFolderBridge::dragItemIntoFolder(LLInventoryItem* inv_item,
 
             accept = filter->check(fv_item->getViewModelItem());
         }
+
+        // <SK:Nexii> Drag feedback: what dropping the item here does
+        if (accept)
+        {
+            const bool reorder = move_is_into_favorites && (mUUID == inv_item->getParentUUID());
+            LLDragFeedback::report(reorder ? EDragAction::Reorder
+                                   : move_is_into_favorites ? EDragAction::Copy
+                                   : move_is_into_current_outfit ? EDragAction::Wear
+                                   : move_is_into_outfit ? EDragAction::Link
+                                   : EDragAction::Move,
+                                   getDisplayName());
+        }
+        else if (move_is_into_trash && !inv_item->getIsLinkType() && get_is_item_worn(inv_item->getUUID()))
+        {
+            LLDragFeedback::refuse(LLTrans::getString("TooltipDragWornToTrash"));
+        }
+        else if (mUUID == inv_item->getParentUUID())
+        {
+            LLDragFeedback::refuse("", true);
+        }
+        // </SK:Nexii>
 
         if (accept && drop)
         {
@@ -6154,6 +6207,11 @@ bool LLFolderBridge::dragItemIntoFolder(LLInventoryItem* inv_item,
             accept = filter->check(inv_item);
         }
 
+        if (accept)
+        {
+            LLDragFeedback::report(is_move ? EDragAction::Move : EDragAction::Copy, getDisplayName()); // <SK:Nexii> Drag feedback
+        }
+
         if (accept && drop)
         {
             LLUUID item_id = inv_item->getUUID();
@@ -6208,6 +6266,11 @@ bool LLFolderBridge::dragItemIntoFolder(LLInventoryItem* inv_item,
             accept = filter->check(inv_item);
         }
 
+        if (accept)
+        {
+            LLDragFeedback::report(EDragAction::Copy, getDisplayName()); // <SK:Nexii> Drag feedback
+        }
+
         if (accept && drop)
         {
             copy_inventory_from_notecard(mUUID,  // Drop to the chosen destination folder
@@ -6250,6 +6313,16 @@ bool LLFolderBridge::dragItemIntoFolder(LLInventoryItem* inv_item,
 
                 accept = filter->check(fv_item->getViewModelItem());
             }
+
+            // <SK:Nexii> Drag feedback: a Library item is copied, linked into an outfit or worn
+            if (accept)
+            {
+                LLDragFeedback::report(move_is_into_current_outfit ? EDragAction::Wear
+                                       : move_is_into_outfit ? EDragAction::Link
+                                       : EDragAction::Copy,
+                                       getDisplayName());
+            }
+            // </SK:Nexii>
 
             if (accept && drop)
             {
@@ -6961,9 +7034,11 @@ bool LLCallingCardBridge::dragOrDrop(MASK mask, bool drop,
             }
             // We should return false but our caller uses the return value as both 'will accept' *and* 'was handled' so
             // returning false will result in the dropped item being moved when it is blocked.
+            LLDragFeedback::block(); // <SK:Nexii> Drag feedback: handled, but refused as locked, quietly
             return true;
         }
 // [/RLVa:KB]
+        LLDragFeedback::report(EDragAction::Give, SKDragVerdict::avatarName(item->getCreatorUUID())); // <SK:Nexii> Drag feedback
 
         // check the type
         switch(cargo_type)

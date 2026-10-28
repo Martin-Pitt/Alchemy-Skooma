@@ -40,6 +40,7 @@
 #include "llpanel.h"
 #include "lltrans.h"
 #include "llwindow.h"
+#include "skdragfeedback.h" // <SK:Nexii> Drag feedback
 
 ///----------------------------------------------------------------------------
 /// Class LLFolderViewItem
@@ -865,6 +866,13 @@ bool LLFolderViewItem::handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop,
     bool handled = false;
     bool accepted = getViewModelItem()->dragOrDrop(mask,drop,cargo_type,cargo_data, tooltip_msg);
         handled = accepted;
+        // <SK:Nexii> Drag feedback: a target locked against the drag handles it but refuses it
+        if (accepted && LLDragFeedback::blocked())
+        {
+            *accept = ACCEPT_NO_LOCKED;
+        }
+        else
+        // </SK:Nexii>
         if (accepted)
         {
             mDragAndDropTarget = true;

@@ -77,6 +77,7 @@ namespace
         std::string mTarget;
         std::string mRefusal;
         bool mQuiet = false;
+        bool mBlocked = false;
 
         std::string mChip;
         bool mChipRefused = false;
@@ -184,7 +185,21 @@ void LLDragFeedback::beginPass()
     s.mTarget.clear();
     s.mRefusal.clear();
     s.mQuiet = false;
+    s.mBlocked = false;
     s.mMark = Mark();
+}
+
+void LLDragFeedback::block()
+{
+    State& s = state();
+    s.mBlocked = true;
+    s.mRefusal.clear();
+    s.mQuiet = true;
+}
+
+bool LLDragFeedback::blocked()
+{
+    return state().mBlocked;
 }
 
 void LLDragFeedback::report(EDragAction action, std::string_view target_name)

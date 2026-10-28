@@ -98,6 +98,9 @@ public:
     static void beginPass();
     static void report(EDragAction action, std::string_view target_name = {});
     static void refuse(std::string_view message, bool quiet = false);
+    // A target that handles the drag but is locked against it (RLVa): refused quietly, as ACCEPT_NO_LOCKED.
+    static void block();
+    static bool blocked();
     static EDragAction reportedAction();
     static const std::string& reportedTarget();
     static const std::string& refusal();
