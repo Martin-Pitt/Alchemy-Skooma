@@ -466,6 +466,11 @@ void SKInventoryColumnsView::revealColumns(bool trailing)
         if (trailing && (last.mKind == KIND_GHOST || last.mKind == KIND_DETAILS))
         {
             right = last.mLeft + last.mWidth;
+            // Opening details or a preview gives up the empty room left from a deeper strip, so none sits beside it.
+            if (right < mStripX + view)
+            {
+                mStripX = right - view;
+            }
         }
         if (right > mStripX + view)
         {
