@@ -66,7 +66,14 @@ LLScrollbar::Params::Params()
     right_button("right_button"),
     bg_visible("bg_visible", false),
     overlay("overlay", false), // <SK:Nexii> Overlay scroll bar
-    bg_color("bg_color", LLColor4::black)
+    thin("thin", false), // <SK:Nexii> Thin scrollbars
+    bg_color("bg_color", LLColor4::black),
+    // <SK:Nexii> Thin scrollbars
+    thin_track_color("thin_track_color"),
+    thin_thumb_color("thin_thumb_color"),
+    thin_thumb_hover_color("thin_thumb_hover_color"),
+    thin_thumb_pressed_color("thin_thumb_pressed_color")
+    // </SK:Nexii>
 {}
 
 LLScrollbar::LLScrollbar(const Params & p)
@@ -91,8 +98,23 @@ LLScrollbar::LLScrollbar(const Params & p)
         mThickness(p.thickness.isProvided() ? p.thickness : LLUI::getInstance()->mSettingGroups["config"]->getS32("UIScrollbarSize")),
         mBGVisible(p.bg_visible),
         mBGColor(p.bg_color),
-        mOverlay(p.overlay) // <SK:Nexii> Overlay scroll bar
+        mOverlay(p.overlay), // <SK:Nexii> Overlay scroll bar
+        mThin(p.thin) // <SK:Nexii> Thin scrollbars
 {
+    // <SK:Nexii> Thin scrollbars: skin colours unless the params give their own.
+    if (mThin)
+    {
+        LLUIColorTable& colors = LLUIColorTable::instance();
+        mThinTrackColor = p.thin_track_color.isProvided() ? p.thin_track_color() : colors.getColor("ScrollbarThinTrackColor");
+        mThinThumbColor = p.thin_thumb_color.isProvided() ? p.thin_thumb_color() : colors.getColor("ScrollbarThinThumbColor");
+        mThinThumbHoverColor = p.thin_thumb_hover_color.isProvided() ? p.thin_thumb_hover_color() : colors.getColor("ScrollbarThinThumbHoverColor");
+        mThinThumbPressedColor = p.thin_thumb_pressed_color.isProvided() ? p.thin_thumb_pressed_color() : colors.getColor("ScrollbarThinThumbPressedColor");
+        if (!p.thickness.isProvided())
+        {
+            mThickness = THIN_THICKNESS;
+        }
+    }
+    // </SK:Nexii>
     updateThumbRect();
 
     // Page up and page down buttons
@@ -109,8 +131,8 @@ LLScrollbar::LLScrollbar(const Params & p)
         line_up_rect.setOriginAndSize( 0, 0, mThickness, mThickness );
         line_down_rect.setOriginAndSize( getRect().getWidth() - mThickness, 0, mThickness, mThickness );
     }
-    // <SK:Nexii> Overlay scroll bar: arrows are hidden, their rects zero so the thumb has the whole length.
-    if (mOverlay)
+    // <SK:Nexii> Overlay scroll bar and thin scrollbars: arrows are hidden, their rects zero so the thumb has the whole length.
+    if (mOverlay || mThin)
     {
         line_up_rect = LLRect();
         line_down_rect = LLRect();
@@ -139,8 +161,8 @@ LLScrollbar::LLScrollbar(const Params & p)
     mLineDownBtn = LLUICtrlFactory::create<LLButton>(down_btn);
     addChild(mLineDownBtn);
 
-    // <SK:Nexii> Overlay scroll bar
-    if (mOverlay)
+    // <SK:Nexii> Overlay scroll bar and thin scrollbars
+    if (mOverlay || mThin)
     {
         mLineUpBtn->setVisible(false);
         mLineDownBtn->setVisible(false);
@@ -532,6 +554,7 @@ void LLScrollbar::reshape(S32 width, S32 height, bool called_from_parent)
     LLView::reshape( width, height, called_from_parent );
 
     if (mOverlay) overlaySetExpanded(mOverlayExpanded); // <SK:Nexii> Overlay scroll bar: lay the arrows out again
+    else if (mThin) {} // <SK:Nexii> Thin scrollbars: no arrows to lay out
     else if (mOrientation == VERTICAL)
     {
         mLineUpBtn->reshape(mLineUpBtn->getRect().getWidth(), llmin(getRect().getHeight() / 2, mThickness));
@@ -558,6 +581,14 @@ void LLScrollbar::draw()
     if (mOverlay)
     {
         drawOverlay();
+        return;
+    }
+    // </SK:Nexii>
+
+    // <SK:Nexii> Thin scrollbars
+    if (mThin)
+    {
+        drawThin();
         return;
     }
     // </SK:Nexii>
@@ -924,6 +955,70 @@ void LLScrollbar::drawOverlay()
                                ll_round(cx - h * dir), ll_round(cy), arrow, true);
             }
         }
+    }
+}
+// </SK:Nexii>
+
+// <SK:Nexii> Thin scrollbars: a browser-style thin bar, a rounded thumb inset in a narrow track.
+void LLScrollbar::drawThin()
+{
+    gl_rect_2d(getLocalRect(), mThinTrackColor.get(), true);
+    if (mDocSize <= mPageSize)
+    {
+        return;
+    }
+
+    S32 mouse_x, mouse_y;
+    LLUI::getInstance()->getMousePositionLocal(this, &mouse_x, &mouse_y);
+    LLMouseHandler* captor = gFocusMgr.getMouseCapture();
+    const bool pressed = captor == this;
+    const bool hovered = !captor && getEnabled() && mThumbRect.pointInRect(mouse_x, mouse_y);
+    const LLColor4 color = pressed ? mThinThumbPressedColor.get() : hovered ? mThinThumbHoverColor.get() : mThinThumbColor.get();
+
+    // One pixel of track on each side across the bar, and at each end along it.
+    LLRect thumb = mThumbRect;
+    if (mOrientation == VERTICAL)
+    {
+        thumb.mLeft = 1;
+        thumb.mRight = getRect().getWidth() - 1;
+        thumb.mTop = llmin(thumb.mTop, getRect().getHeight() - 1);
+        thumb.mBottom = llmax(thumb.mBottom, 1);
+    }
+    else
+    {
+        thumb.mBottom = 1;
+        thumb.mTop = getRect().getHeight() - 1;
+        thumb.mLeft = llmax(thumb.mLeft, 1);
+        thumb.mRight = llmin(thumb.mRight, getRect().getWidth() - 1);
+    }
+    if (thumb.getWidth() <= 4 || thumb.getHeight() <= 4)
+    {
+        return;
+    }
+
+    // Round the ends: the two rows (columns) nearest each end are inset by 2 and 1 pixels.
+    const S32 cap = 2;
+    for (S32 i = 0; i < cap; ++i)
+    {
+        const S32 inset = cap - i;
+        if (mOrientation == VERTICAL)
+        {
+            gl_rect_2d(thumb.mLeft + inset, thumb.mTop - i, thumb.mRight - inset, thumb.mTop - i - 1, color, true);
+            gl_rect_2d(thumb.mLeft + inset, thumb.mBottom + i + 1, thumb.mRight - inset, thumb.mBottom + i, color, true);
+        }
+        else
+        {
+            gl_rect_2d(thumb.mLeft + i, thumb.mTop - inset, thumb.mLeft + i + 1, thumb.mBottom + inset, color, true);
+            gl_rect_2d(thumb.mRight - i - 1, thumb.mTop - inset, thumb.mRight - i, thumb.mBottom + inset, color, true);
+        }
+    }
+    if (mOrientation == VERTICAL)
+    {
+        gl_rect_2d(thumb.mLeft, thumb.mTop - cap, thumb.mRight, thumb.mBottom + cap, color, true);
+    }
+    else
+    {
+        gl_rect_2d(thumb.mLeft + cap, thumb.mTop, thumb.mRight - cap, thumb.mBottom, color, true);
     }
 }
 // </SK:Nexii>

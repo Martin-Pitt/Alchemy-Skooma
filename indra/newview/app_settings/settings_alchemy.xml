@@ -3132,6 +3132,17 @@
             <key>Value</key>
             <integer>0</integer>
         </map>
+        <key>SkoomaScrollbarThinEverywhere</key>
+        <map>
+            <key>Comment</key>
+            <string>Give every scroll container thin scroll bars (no arrows, a narrow track). Read at startup.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
         <key>MouseWheelScrollSensitivity</key>
         <map>
             <key>Comment</key>
