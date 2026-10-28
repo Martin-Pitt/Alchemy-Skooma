@@ -135,9 +135,15 @@ private:
     // Sound: a marked time, and the playback clock.
     F32 mMark;
     bool mSoundPlaying;
-    bool mSoundLocal = false;   // only a local preview can be stopped; an inworld trigger plays out on the server
+    bool mSoundLocal = false;   // a local preview, else our own copy of an inworld trigger
+    bool mSoundHeard = false;   // the local preview has reported a position since it started
+    bool mWaveDrag = false;     // the mouse went down on the waveform and is held
+    F32 mSoundStart = 0.f;      // where the local preview started, for the clock where the engine reports none
     LLUUID mSoundSource;        // the local preview's audio source
     LLFrameTimer mSoundTimer;
+
+    void playLocal(F32 at);
+    void seekWave(S32 x);
 
     // Animation: which button plays it, when it started, and when it was stopped.
     S32 mAnimMode;  // -1 none, 0 locally, 1 inworld
