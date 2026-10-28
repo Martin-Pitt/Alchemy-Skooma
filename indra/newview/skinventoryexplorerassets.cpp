@@ -64,6 +64,8 @@ namespace
     constexpr F32 BASS_HZ = 250.f;
     constexpr F32 TREBLE_HZ = 4000.f;
     constexpr size_t MAX_FFT = 8192;
+    constexpr size_t FFT_WINDOWS = 3;       // spread across each slice, averaged
+    constexpr S64 MAX_SECONDS = 30;         // a sound asset's own limit; nothing past it is decoded
 
     bool read_cached_asset(const LLUUID& id, LLAssetType::EType type, std::vector<U8>& data)
     {
@@ -112,7 +114,7 @@ namespace
     }
 
     // Runs on a worker: the whole decode, then a peak and an FFT band split per slice.
-    std::shared_ptr<SKSoundInfo> decode_sound(const std::vector<U8>& data)
+    std::shared_ptr<SKSoundInfo> decode_sound_unguarded(const std::vector<U8>& data)
     {
         auto info = std::make_shared<SKSoundInfo>();
         info->mState = SK_ASSET_FAILED;
@@ -131,17 +133,15 @@ namespace
         }
         info->mRate = (S32)vi->rate;
         info->mChannels = vi->channels;
+        // The stream's own length is not trusted: the decode stops at the cap.
+        const size_t cap = (size_t)llclamp((S64)vi->rate, (S64)1, (S64)192000) * (size_t)MAX_SECONDS;
         std::vector<float> mono;
-        const ogg_int64_t total = ov_pcm_total(&vf, -1);
-        if (total > 0)
-        {
-            mono.reserve((size_t)total);
-        }
         float** pcm = nullptr;
         int section = 0;
         long frames = 0;
-        while ((frames = ov_read_float(&vf, &pcm, 4096, &section)) > 0)
+        while (mono.size() < cap && (frames = ov_read_float(&vf, &pcm, 4096, &section)) > 0)
         {
+            frames = (long)llmin((size_t)frames, cap - mono.size());
             for (long i = 0; i < frames; ++i)
             {
                 float sum = 0.f;
@@ -182,28 +182,34 @@ namespace
             info->mPeaks[s] = peak;
             loudest = llmax(loudest, peak);
 
-            // A Hann-windowed FFT of the slice, its energy summed per band.
-            const size_t n = llmin(end - begin, MAX_FFT);
+            // Hann-windowed FFTs spread across the slice, their energy summed per band.
+            const size_t length = end - begin;
+            const size_t n = llmin(length, MAX_FFT);
             if (n < 16)
             {
                 continue;
             }
-            window.resize(n);
-            for (size_t i = 0; i < n; ++i)
-            {
-                const float w = 0.5f - 0.5f * cosf(F_TWO_PI * (float)i / (float)(n - 1));
-                window[i] = mono[begin + i] * w;
-            }
-            spectrum.resize(n / 2 + 1);
-            pocketfft::shape_t shape{ n };
-            pocketfft::stride_t stride_in{ (ptrdiff_t)sizeof(float) };
-            pocketfft::stride_t stride_out{ (ptrdiff_t)sizeof(std::complex<float>) };
-            pocketfft::r2c(shape, stride_in, stride_out, 0, pocketfft::FORWARD, window.data(), spectrum.data(), 1.f);
+            const size_t windows = length > n ? FFT_WINDOWS : 1;
             F32 bands[3] = { 0.f, 0.f, 0.f };
-            for (size_t k = 1; k < spectrum.size(); ++k)
+            window.resize(n);
+            spectrum.resize(n / 2 + 1);
+            for (size_t wi = 0; wi < windows; ++wi)
             {
-                const F32 hz = (F32)k * (F32)info->mRate / (F32)n;
-                bands[hz < BASS_HZ ? 0 : hz < TREBLE_HZ ? 1 : 2] += std::norm(spectrum[k]);
+                const size_t start = begin + (windows > 1 ? wi * (length - n) / (windows - 1) : 0);
+                for (size_t i = 0; i < n; ++i)
+                {
+                    const float w = 0.5f - 0.5f * cosf(F_TWO_PI * (float)i / (float)(n - 1));
+                    window[i] = mono[start + i] * w;
+                }
+                pocketfft::shape_t shape{ n };
+                pocketfft::stride_t stride_in{ (ptrdiff_t)sizeof(float) };
+                pocketfft::stride_t stride_out{ (ptrdiff_t)sizeof(std::complex<float>) };
+                pocketfft::r2c(shape, stride_in, stride_out, 0, pocketfft::FORWARD, window.data(), spectrum.data(), 1.f);
+                for (size_t k = 1; k < spectrum.size(); ++k)
+                {
+                    const F32 hz = (F32)k * (F32)info->mRate / (F32)n;
+                    bands[hz < BASS_HZ ? 0 : hz < TREBLE_HZ ? 1 : 2] += std::norm(spectrum[k]);
+                }
             }
             const F32 sum = bands[0] + bands[1] + bands[2];
             if (sum > 0.f)
@@ -219,6 +225,26 @@ namespace
             }
         }
         info->mState = SK_ASSET_READY;
+        return info;
+    }
+
+    // A corrupt or hostile asset fails alone; the reply is always posted.
+    std::shared_ptr<SKSoundInfo> decode_sound(const std::vector<U8>& data)
+    {
+        try
+        {
+            return decode_sound_unguarded(data);
+        }
+        catch (const std::exception& e)
+        {
+            LL_WARNS("InventoryExplorer") << "A sound decode failed: " << e.what() << LL_ENDL;
+        }
+        catch (...)
+        {
+            LL_WARNS("InventoryExplorer") << "A sound decode failed" << LL_ENDL;
+        }
+        auto info = std::make_shared<SKSoundInfo>();
+        info->mState = SK_ASSET_FAILED;
         return info;
     }
 
@@ -323,6 +349,7 @@ namespace
         auto reader = std::make_unique<SKAnimReader>(id);
         reader->setCharacter(gAgentAvatarp);
         LLDataPackerBinaryBuffer dp(data.data(), (S32)data.size());
+        const bool was_cached = LLKeyframeDataCache::getKeyframeData(id) != nullptr;
         if (reader->deserialize(dp, id, true) && reader->list())
         {
             read_motion_list(reader->list(), it->second);
@@ -330,6 +357,12 @@ namespace
         else
         {
             it->second.mState = SK_ASSET_FAILED;
+        }
+        // Read for its rows only: the cache is left as it was.
+        reader.reset();
+        if (!was_cached)
+        {
+            LLKeyframeDataCache::removeKeyframeData(id);
         }
     }
 }
