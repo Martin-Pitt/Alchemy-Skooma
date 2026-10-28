@@ -1519,12 +1519,26 @@ Landed on `develop` in two merges of the same branch: `b7f8571b51` (as `feature-
 
 ## Thin scrollbars
 
-`foundation-ui/thin-scrollbars` (main `27f8ccdc5f`): a thin `LLScrollbar` style (no arrows, 8 px track, rounded inset thumb with hover/pressed colours). Combined with the overlay style: both hide the arrows (`arrowLength()` 0 for either), overlay wins in `draw()` and `reshape()` when both are set.
-- `indra/llui/llscrollbar.h` — `thin` param, `thin_*_color` params, `THIN_THICKNESS`/`isThin()`, `drawThin()`, the shared `arrowLength()`, members. `<SK:Nexii> Thin scrollbars`
-- `indra/llui/llscrollbar.cpp` — param defaults, ctor (skin colours, thickness, zero arrow rects and hidden buttons, shared with overlay), `reshape` skip, `draw` → `drawThin`, `drawThin()` after the overlay functions.
-- `indra/llui/llscrollcontainer.h/.cpp` — `thin_scrollbars` param, `sThinScrollbarsEverywhere`, `mThinScrollbars`/`hasThinScrollbars()`, ctor (8 px gutter), sbparams, `setSize`.
+`foundation-ui/thin-scrollbars` (main `27f8ccdc5f`, Chrome rework `a06fb3c50e`): a thin `LLScrollbar` style matching Chrome's (10 px track, 6 px pill thumb inset 2 px, 10 px arrow squares with drawn triangles and a 2 px gap, anti-aliased by coverage tables; arrows step half a wheel notch through the smooth-scroll path). Combined with the overlay style: overlay wins in `arrowLength()`, the ctor, `draw()` and `reshape()` when both are set.
+- `indra/llui/llscrollbar.h` — `thin` param, `thin_*_color` params, `THIN_THICKNESS`/`isThin()`, `drawThin()`, the shared `arrowLength()` (overlay first), members. `<SK:Nexii> Thin scrollbars`
+- `indra/llui/llscrollbar.cpp` — param defaults, ctor (skin colours, thickness; only overlay zeroes and hides the arrow buttons), `draw` → `drawThin`, coverage tables and `drawThin()` after the overlay functions, the arrow step in the line-button handlers.
+- `indra/llui/llscrollcontainer.h/.cpp` — `thin_scrollbars` param, `sThinScrollbarsEverywhere`, `mThinScrollbars`/`hasThinScrollbars()`, ctor (10 px gutter), sbparams, `setSize`.
 - `indra/newview/llappviewer.cpp` — include + `sThinScrollbarsEverywhere` from the setting in UI setup.
 - Unmarked: `settings_alchemy.xml` (`SkoomaScrollbarThinEverywhere` before `MouseWheelScrollSensitivity`); `skins/{alchemy,default,gemini,heretic,ionic}/colors.xml` (`ScrollbarThinThumbColor`, `ScrollbarThinThumbHoverColor`, `ScrollbarThinThumbPressedColor`, `ScrollbarThinTrackColor` after `ScrollbarTrackColor`).
+
+## Drag feedback
+
+`foundation-ui/drag-feedback` (main `e432fd6262`). Design `.drag-feedback.md`. Own: `indra/llui/skdragfeedback.*` (`LLDragFeedback`: ghost, chip, report/refuse/block, per-frame marks), `indra/newview/skdragverdict.*` (cargo ghosts, derived verbs, hint table, world table and `ALSelectionOutline` marks). Marked `<SK:Nexii> Drag feedback`:
+- `llui/CMakeLists.txt` (after llxuiparser), `newview/CMakeLists.txt` (after lltooldraganddrop).
+- `llviewerwindow.cpp` — `draw()` after the top-ctrl block: `LLDragFeedback::draw`.
+- `lltooldraganddrop.cpp` — `beginDrag`/`beginMultiDrag` (ghost); `onMouseCaptureLost` (clears `mToolTipMsg` — fix; ends feedback and world marks); `acceptanceToCursor` (copy/link → copy cursor); `handleHover` (chip); `handleToolTip` (none while the chip shows); `dragOrDrop` (pass start, blocked-drop notice); `dragOrDrop3D`, `pick` (world report and marks; legacy highlight skipped unless classic); `handleGiveDragAndDrop` (Give, RLVa name, RLVa refusals quiet).
+- `llinventorybridge.cpp` — `dragCategoryIntoFolder` / `dragItemIntoFolder`: refusal reasons (Library, system folder, worn to Trash, landmarks only, onto self quiet, same parent quiet unless a reason) and reports before the `accept && drop` branches; `LLCallingCardBridge::dragOrDrop`: `@share` blocks (fix), Give report.
+- `llfolderviewitem.cpp` — `handleDragAndDrop` (blocked → `ACCEPT_NO_LOCKED`, mark), `handleDragAndDropFromChild`/`ToThisFolder` (mark), `drawHighlight` (target mark; classic outline under the setting).
+- `llinventorygallery.cpp` — gallery space and folder tiles marked.
+- `llselectmgr.cpp` — `renderSilhouettes`: `SKDragVerdict::addWorldMark`.
+- `llaccordionctrltab.cpp` — header spring through `FolderAutoOpenDelay` (old `AUTO_OPEN_TIME` commented).
+- `llpaneloutfitedit.cpp` — links only when accepted (fix); `llfloaterlinkreplace.cpp` — the drop sets acceptance (fix).
+- Unmarked: `settings_alchemy.xml` (`SkoomaDragFeedbackClassic` before the `SkoomaFloaterCollapse*` keys); `colors.xml` (`Drag*` after `MenuItemFlashBgColor`); `strings.xml` (`DragVerdict*`, `DragTarget*`, `DragHint*`, `TooltipDrag{IntoLibrary,SystemFolder,WornToTrash,OnlyLandmarks}` after `TooltipDragOntoSelf`).
 
 ## Inventory Explorer
 
