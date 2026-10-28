@@ -494,6 +494,13 @@ void SKInventoryPlayer::setItem(const LLUUID& item_id, const LLUUID& image_id)
     const LLUUID asset_id = item ? item->getAssetUUID() : LLUUID::null;
     if (item_id == mItemID && image_id == mImageID && asset_id == mAssetID)
     {
+        // The same item: only its aspect, kept in the description, may have changed.
+        S32 w = 1;
+        S32 h = 1;
+        if (mKind == KIND_IMAGE && item && item->getType() == LLAssetType::AT_TEXTURE)
+        {
+            mAspect = SKInventoryDetails::aspectOf(item->getDescription(), w, h) ? (F32)w / (F32)h : 1.f;
+        }
         return;
     }
     stop();
