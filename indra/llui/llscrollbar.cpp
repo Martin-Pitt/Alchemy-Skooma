@@ -790,13 +790,13 @@ void LLScrollbar::pageDown(S32 overlap)
 
 void LLScrollbar::onLineUpBtnPressed( const LLSD& data )
 {
-    if (mThin) { scrollByWheel(-0.5f); return; } // <SK:Nexii> Thin scrollbars: half a wheel notch
+    if (mThin) { scrollByWheel(LLScrollDelta(0, -0.5f)); return; } // <SK:Nexii> Thin scrollbars: half a wheel notch, gliding as the wheel does
     changeLine( -mStepSize, true );
 }
 
 void LLScrollbar::onLineDownBtnPressed( const LLSD& data )
 {
-    if (mThin) { scrollByWheel(0.5f); return; } // <SK:Nexii> Thin scrollbars: half a wheel notch
+    if (mThin) { scrollByWheel(LLScrollDelta(0, 0.5f)); return; } // <SK:Nexii> Thin scrollbars: half a wheel notch, gliding as the wheel does
     changeLine( mStepSize, true );
 }
 
