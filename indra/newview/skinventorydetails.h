@@ -135,6 +135,8 @@ private:
     // Sound: a marked time, and the playback clock.
     F32 mMark;
     bool mSoundPlaying;
+    bool mSoundLocal = false;   // only a local preview can be stopped; an inworld trigger plays out on the server
+    LLUUID mSoundSource;        // the local preview's audio source
     LLFrameTimer mSoundTimer;
 
     // Animation: which button plays it, when it started, and when it was stopped.
