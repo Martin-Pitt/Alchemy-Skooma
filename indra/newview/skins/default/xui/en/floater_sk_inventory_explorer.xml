@@ -80,6 +80,7 @@
     <string name="details_row_runtime">Runtime</string>
     <string name="details_row_experience">Experience</string>
     <string name="details_section_image">Image</string>
+    <string name="details_section_thumbnail">Thumbnail</string>
     <string name="details_section_sound">Sound</string>
     <string name="details_section_animation">Animation</string>
     <string name="details_section_material">Material</string>

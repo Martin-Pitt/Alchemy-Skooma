@@ -1499,6 +1499,7 @@ void SKInventoryDetailsView::rebuild()
     mLines.clear();
     mMessage.clear();
     mThumbnail = false;
+    mThumbBelow = false;
 
     if (mSelection.empty())
     {
@@ -1529,6 +1530,7 @@ void SKInventoryDetailsView::rebuild()
     // A thumbnail goes on top, and the player moves below the rows.
     const LLUUID thumbnail = item->getThumbnailUUID().notNull() ? item->getThumbnailUUID() : target->getThumbnailUUID();
     mThumbnail = thumbnail.notNull();
+    mThumbBelow = mThumbnail && !broken && target->getType() == LLAssetType::AT_TEXTURE;
     if (broken)
     {
         mThumbnail = false;
@@ -1610,7 +1612,15 @@ void SKInventoryDetailsView::rebuild()
 
     addTypeRows(item, target);
 
-    if (mThumbnail && target->getType() != LLAssetType::AT_TEXTURE)
+    if (mThumbBelow)
+    {
+        // A texture or photo shows itself on top and its thumbnail in a section of its own below.
+        addHeading("section_thumbnail");
+        Line thumb;
+        thumb.mKind = Line::LINE_PLAYER;
+        mLines.push_back(thumb);
+    }
+    else if (mThumbnail)
     {
         // The player in its own section below the rows.
         if (mPlayer.getKind() != SKInventoryPlayer::KIND_NONE && mPlayer.getKind() != SKInventoryPlayer::KIND_IMAGE)
@@ -1640,7 +1650,7 @@ void SKInventoryDetailsView::layout()
     {
         if (mThumbnail || mPlayer.getKind() != SKInventoryPlayer::KIND_NONE)
         {
-            mMediaHeight = mThumbnail ? MEDIA_HEIGHT : mPlayer.height(inner);
+            mMediaHeight = (mThumbnail && !mThumbBelow) ? MEDIA_HEIGHT : mPlayer.height(inner);
             top += mMediaHeight + PAD;
         }
     }
@@ -1680,7 +1690,7 @@ void SKInventoryDetailsView::layout()
                 line.mHeight = line_height + 10;
                 break;
             case Line::LINE_PLAYER:
-                line.mHeight = mPlayer.height(inner) + PAD;
+                line.mHeight = (mThumbBelow ? mThumb : mPlayer).height(inner) + PAD;
                 break;
             default:
             {
@@ -1783,7 +1793,7 @@ void SKInventoryDetailsView::draw()
         if (mMediaHeight > 0)
         {
             const LLRect media(inner_left, top - PAD, inner_right, top - PAD - mMediaHeight);
-            (mThumbnail ? mThumb : mPlayer).draw(media, mHoverMedia);
+            ((mThumbnail && !mThumbBelow) ? mThumb : mPlayer).draw(media, mHoverMedia);
         }
         const S32 line_height = (S32)font->getLineHeight();
         for (S32 i = 0; i < (S32)mLines.size(); ++i)
@@ -1812,9 +1822,9 @@ void SKInventoryDetailsView::draw()
                     break;
                 case Line::LINE_PLAYER:
                 {
-                    // The player under the rows: the thumbnail took the top.
+                    // The player under the rows when the thumbnail took the top, or a texture's thumbnail under it.
                     const LLRect rect(inner_left, y, inner_right, y - line.mHeight + PAD);
-                    mPlayer.draw(rect, mHoverLine == i);
+                    (mThumbBelow ? mThumb : mPlayer).draw(rect, mHoverLine == i);
                     break;
                 }
                 default:
