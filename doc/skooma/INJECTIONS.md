@@ -1535,7 +1535,7 @@ Branch `feature-ui/inventory-explorer` (via `ui`, main `7b8ef524f4`). Spec: `.in
 | File | Role |
 |---|---|
 | `indra/newview/skfloaterinventoryexplorer.*` | The floater: tabs, toolbar, history, panes, status, observer |
-| `indra/newview/skinventorysidebar.*` | Favorites / Inventory / Marketplace / Library panels in one scroller |
+| `indra/newview/skinventorytreeview.*` | Sidebar: one custom tree across Favorites, Inventory, Marketplace and Library (replaced skinventorysidebar.*); a hidden stock panel only hosts bridge actions |
 | `indra/newview/skinventorylistview.*` | List view drawn from a flat model, visible rows only |
 | `indra/newview/skinventorycolumnsview.*` | Columns view: strip, ghost, details and spare columns |
 | `indra/newview/skinventoryexplorerdrag.*` | Drag and drop: start, drops through the stock folder functions, Alt links, spring, autoscroll, undo |
