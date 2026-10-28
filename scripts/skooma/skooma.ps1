@@ -62,7 +62,9 @@ function Show-Help {
     Say '  undo                reset main to the last-known-good commit'
     Say '  retire [name|.]     remove a worktree + branch whose work is already in its base'
     Say '                      --force  discard one that still carries work (prints the tip sha)'
-    Say '  wt-setup [path]     (re)create agent files in a worktree'
+    Say '  park [name|.]       move a branch to backup/<branch>; sync, check and integrate skip it'
+    Say '  unpark <name>       restore a parked branch with its markers and trunk'
+    Say '  wt-setup [path]    (re)create agent files in a worktree'
     Say '  bootstrap           install scripts, hooks and config'
     Say ''
     Say '  -h, --help          show this help (safe anywhere: never treated as a name/arg)'
@@ -913,6 +915,7 @@ function Invoke-Status {
     }
     foreach ($w in $Worktrees) {
         if ($w.Path -ieq $MainWt) { continue }
+        if ($w.Branch -like 'backup/*') { continue }
         if (-not ($w.Branch -and (Get-Role $w.Branch))) { $rows += $w }
     }
 
@@ -938,7 +941,85 @@ function Invoke-Status {
         $cell = if ($w.Branch) { "$indent$($w.Branch)" } else { '(detached)' }
         Say ("  {0,-34} {1,-30} {2,-9} {3} {4}" -f $name, $cell, $role, $ab, ($flags -join ','))
     }
+
+    # Backups: snapshots and parked branches under backup/, which nothing syncs or lands.
+    $backups = @((G for-each-ref --sort=-committerdate --format='%(refname:short)|%(committerdate:short)' 'refs/heads/backup/') -split "`n" | Where-Object { $_ })
+    if ($backups) {
+        Say ''
+        Say 'Backups                       (parked = git skooma unpark <name>)'
+        foreach ($l in $backups) {
+            $b, $date = $l -split '\|'
+            $kind = if (Cfg "branch.$b.parked-skooma") { "parked $(Cfg "branch.$b.parked-skooma")" } else { 'snapshot' }
+            $wt = $Worktrees | Where-Object { $_.Branch -eq $b } | Select-Object -First 1
+            $where = if ($wt) { $wt.Path.Replace($MainWt, '.') } else { '' }
+            Say ("  {0,-50} {1,-10} {2,-16} {3}" -f $b, $date, $kind, $where)
+        }
+    }
     Say ''
+}
+
+# --------------------------------------------------------------- park/unpark
+
+# Park: move a working branch to backup/<branch> so sync, check and integrate skip it.
+# Its skooma markers are kept as parked-* keys, and any trunk prefix pointing at it as
+# parked-trunk-prefix, so unpark restores it exactly. The worktree stays where it is.
+function Invoke-Park {
+    $named = @($Rest | Where-Object { $_ -notlike '--*' })
+    $branch = Resolve-Target ($(if ($named) { $named[0] } else { '' }))
+    if (-not (Get-Role $branch)) { Fail "$branch is not a Skooma branch (no branch.$branch.skooma marker)" }
+    if ($branch -in 'develop', 'main', 'glue') { Fail "$branch cannot be parked" }
+    $wt = $Worktrees | Where-Object { $_.Branch -eq $branch } | Select-Object -First 1
+    if ($wt -and $wt.Path -ieq $MainWt) { Fail "$branch is checked out in the main checkout" }
+    if ($wt -and (Test-Dirty $wt.Path)) { Fail "$($wt.Path) has uncommitted changes" }
+    $op = if ($wt) { Test-MidOperation $wt.Path } else { '' }
+    if ($op) { Fail "$($wt.Path) is mid-$op; finish or abort that first" }
+    $children = @(Get-WorkingBranches | Where-Object { $_ -ne $branch -and ((Get-Base $_) -eq $branch -or (Cfg "branch.$_.skooma-trunk") -eq $branch) })
+    if ($children) { Fail "these build on or land into ${branch}: $($children -join ', ')" }
+
+    $dst = "backup/$branch"
+    if (GitOk show-ref --verify --quiet "refs/heads/$dst") { Fail "$dst already exists" }
+    $null = G branch -m $branch $dst
+    if ($script:GitExit -ne 0) { Fail "could not rename $branch to $dst" }
+
+    foreach ($k in 'skooma', 'skooma-base', 'skooma-trunk') {
+        $v = Cfg "branch.$dst.$k"
+        if (-not $v) { continue }
+        $null = G config "branch.$dst.parked-$k" $v
+        $null = G config --unset "branch.$dst.$k"
+    }
+    $map = Get-TrunkMap
+    foreach ($p in @($map.Keys | Where-Object { $map[$_] -eq $branch })) {
+        $null = G config --add "branch.$dst.parked-trunk-prefix" $p
+        $null = G config --remove-section "skooma-trunk.$p"
+    }
+    Good "$branch parked as $dst (tip $(G rev-parse --short $dst))"
+}
+
+function Invoke-Unpark {
+    $named = @($Rest | Where-Object { $_ -notlike '--*' })
+    if (-not $named) { Fail 'usage: git skooma unpark <name>' }
+    $src = if ($named[0] -like 'backup/*') { $named[0] } else { "backup/$($named[0])" }
+    if (-not (GitOk show-ref --verify --quiet "refs/heads/$src")) {
+        $hits = @((G for-each-ref --format='%(refname:short)' 'refs/heads/backup/') -split "`n" | Where-Object { $_ -like "backup/*-$($named[0])" })
+        if ($hits.Count -eq 1) { $src = $hits[0] } else { Fail "no such backup: $src" }
+    }
+    if (-not (Cfg "branch.$src.parked-skooma")) { Fail "$src is a snapshot, not a parked branch; check it out by hand" }
+    $branch = $src -replace '^backup/', ''
+    if (GitOk show-ref --verify --quiet "refs/heads/$branch") { Fail "$branch already exists" }
+    $null = G branch -m $src $branch
+    if ($script:GitExit -ne 0) { Fail "could not rename $src to $branch" }
+
+    foreach ($k in 'skooma', 'skooma-base', 'skooma-trunk') {
+        $v = Cfg "branch.$branch.parked-$k"
+        if (-not $v) { continue }
+        $null = G config "branch.$branch.$k" $v
+        $null = G config --unset "branch.$branch.parked-$k"
+    }
+    foreach ($p in @((G config --get-all "branch.$branch.parked-trunk-prefix") -split "`n" | Where-Object { $_ })) {
+        $null = G config "skooma-trunk.$($p.Trim()).branch" $branch
+    }
+    $null = G config --unset-all "branch.$branch.parked-trunk-prefix"
+    Good "$branch restored; run git skooma sync to bring it up to date"
 }
 
 # ----------------------------------------------------------------------- new
@@ -1966,6 +2047,8 @@ switch ($Command.ToLowerInvariant()) {
     'trunk'     { Invoke-Trunk }
     'undo'      { Invoke-Undo }
     'retire'    { Invoke-Retire }
+    'park'      { Invoke-Park }
+    'unpark'    { Invoke-Unpark }
     'build'     { Invoke-Build }
     'test'      { Invoke-Test }
     'clean'     { Invoke-Clean }
