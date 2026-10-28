@@ -250,6 +250,7 @@ SKInventoryFlatView::SKInventoryFlatView(const LLUICtrl::Params& p)
     mPressRow(-1),
     mPressMask(MASK_NONE),
     mPressCollapse(false),
+    mPressToggle(false),
     mLassoOn(false),
     mLassoX(0),
     mLassoY(0),
@@ -1009,13 +1010,18 @@ bool SKInventoryFlatView::handleMouseDown(S32 x, S32 y, MASK mask)
     mPressRow = row;
     mPressMask = mask;
     mPressCollapse = false;
+    mPressToggle = false;
     mLassoOn = false;
     gFocusMgr.setMouseCapture(this);
     if (row >= 0 && mRows[row].isEntry() && isDragHandle(x, y, row))
     {
         make_ui_sound("UISndClick");
         mPress = PRESS_ITEM;
-        if (mSelected[row] && !(mask & (MASK_CONTROL | MASK_SHIFT)))
+        if (mSelected[row] && (mask & MASK_CONTROL))
+        {
+            mPressToggle = true;
+        }
+        else if (mSelected[row] && !(mask & (MASK_CONTROL | MASK_SHIFT)))
         {
             // The selection stays whole so it can travel; a click without a drag selects the row alone.
             mPressCollapse = mSelectedCount > 1;
@@ -1198,7 +1204,11 @@ bool SKInventoryFlatView::handleMouseUp(S32 x, S32 y, MASK mask)
     const bool lasso = mLassoOn;
     endPress(false);
     gFocusMgr.setMouseCapture(nullptr);
-    if (press == PRESS_ITEM && mPressCollapse && mPressRow >= 0 && mPressRow < (S32)mRows.size())
+    if (press == PRESS_ITEM && mPressToggle && mPressRow >= 0 && mPressRow < (S32)mRows.size())
+    {
+        clickRow(mPressRow, mPressMask);
+    }
+    else if (press == PRESS_ITEM && mPressCollapse && mPressRow >= 0 && mPressRow < (S32)mRows.size())
     {
         moveCursor(mPressRow, MASK_NONE);
     }

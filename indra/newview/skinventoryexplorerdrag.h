@@ -71,10 +71,12 @@ namespace SKInventoryExplorerDrag
 
     // Every string comes from the floater's XUI.
     void setStrings(const std::map<std::string, std::string>& strings);
-    // Where the last action goes: the floater's status bar.
-    void setStatusCallback(const std::function<void(const std::string&)>& cb);
+    // Where the last action goes: the owning floater's status bar.
+    void setStatusCallback(const void* owner, const std::function<void(const std::string&)>& cb);
+    // Drops the callback and the undo history, if the owner is still the one that set them.
+    void releaseOwner(const void* owner);
 
-    // Undo: plain moves inside My Inventory, and favourite adds and removals.
+    // Undo: plain moves inside My Inventory, and favourite adds and removals; the last 50 are kept.
     void recordFavorites(const uuid_vec_t& ids, bool added);
     bool canUndo();
     void undo();

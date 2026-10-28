@@ -47,6 +47,8 @@ namespace SKInventoryExplorerDrag
 {
 namespace
 {
+    constexpr size_t UNDO_LIMIT = 50;
+
     struct Move
     {
         LLUUID mID;
@@ -61,7 +63,19 @@ namespace
         bool mAdded = false;    // favourites added, else removed
     };
 
+    // A refusal's weight: the most telling reason wins when the cargo is refused for several.
+    enum EReason
+    {
+        REASON_NONE,
+        REASON_LINK,
+        REASON_STOCK,
+        REASON_SYSTEM,
+        REASON_LIBRARY,
+        REASON_INTO_ITSELF,
+    };
+
     std::map<std::string, std::string> sStrings;
+    const void* sOwner = nullptr;
     std::function<void(const std::string&)> sStatus;
     std::vector<UndoEntry> sUndo;
     Verdict sVerdict;
@@ -77,11 +91,10 @@ namespace
         bool mAllFavorite = true;
         bool mAnyNotFolder = false;
         bool mOntoCargo = false;
-        bool mIntoItself = false;
-        bool mSystem = false;
-        std::string mStockMessage;
-        S32 mDone = 0;      // objects moved, linked or favourited by a drop
-        bool mUndoable = true;
+        EReason mReasonRank = REASON_NONE;
+        std::string mReason;
+        S32 mDone = 0;          // objects moved, linked or favourited by a drop
+        bool mUndoable = true;  // every accepted object of the drop was recorded
     };
     Pass sPass;
 
@@ -107,24 +120,27 @@ namespace
         }
     }
 
+    bool within(const LLUUID& id, const LLUUID& folder_id)
+    {
+        return folder_id.notNull() && (id == folder_id || gInventory.isObjectDescendentOf(id, folder_id));
+    }
+
     bool inLibrary(const LLUUID& id)
     {
-        return id == gInventory.getLibraryRootFolderID() || gInventory.isObjectDescendentOf(id, gInventory.getLibraryRootFolderID());
+        return within(id, gInventory.getLibraryRootFolderID());
     }
 
     bool inPlainInventory(const LLUUID& id)
     {
-        const LLUUID& root = gInventory.getRootFolderID();
-        if (id != root && !gInventory.isObjectDescendentOf(id, root))
+        if (!within(id, gInventory.getRootFolderID()))
         {
             return false;
         }
-        const LLUUID& listings = gInventory.getMarketplaceListingsUUID();
-        const LLUUID trash = gInventory.findCategoryUUIDForType(LLFolderType::FT_TRASH);
-        const LLUUID cof = gInventory.findCategoryUUIDForType(LLFolderType::FT_CURRENT_OUTFIT);
-        for (const LLUUID& outside : { listings, trash, cof })
+        for (const LLUUID& outside : { gInventory.getMarketplaceListingsUUID(),
+                                       gInventory.findCategoryUUIDForType(LLFolderType::FT_TRASH),
+                                       gInventory.findCategoryUUIDForType(LLFolderType::FT_CURRENT_OUTFIT) })
         {
-            if (outside.notNull() && (id == outside || gInventory.isObjectDescendentOf(id, outside)))
+            if (within(id, outside))
             {
                 return false;
             }
@@ -132,11 +148,31 @@ namespace
         return true;
     }
 
-    // A pass starts at the first cargo object, or when the target or Alt changes mid-pass.
-    void startPass(const LLUUID& dest, bool favorites, bool link)
+    void refuse(EReason rank, const std::string& reason)
     {
-        if (LLToolDragAndDrop::getInstance()->getCargoIndex() != 0
-            && sPass.mDest == dest && sPass.mFavorites == favorites && sPass.mLink == link)
+        if (rank > sPass.mReasonRank && !reason.empty())
+        {
+            sPass.mReasonRank = rank;
+            sPass.mReason = reason;
+        }
+    }
+
+    // A new history entry, dropping empty ones and the oldest past the limit.
+    void pushUndo(const UndoEntry& entry)
+    {
+        std::erase_if(sUndo, [](const UndoEntry& e) { return e.mMoves.empty() && e.mFavorites.empty(); });
+        sUndo.push_back(entry);
+        if (sUndo.size() > UNDO_LIMIT)
+        {
+            sUndo.erase(sUndo.begin(), sUndo.begin() + (sUndo.size() - UNDO_LIMIT));
+        }
+    }
+
+    // A pass starts at the first cargo object, or when the target or Alt changes mid-pass.
+    void startPass(const LLUUID& dest, bool favorites, bool link, bool drop)
+    {
+        const bool first = LLToolDragAndDrop::getInstance()->getCargoIndex() == 0;
+        if (!first && sPass.mDest == dest && sPass.mFavorites == favorites && sPass.mLink == link)
         {
             return;
         }
@@ -144,6 +180,13 @@ namespace
         sPass.mDest = dest;
         sPass.mFavorites = favorites;
         sPass.mLink = link;
+        // A drop opens its own history entry before anything is accepted, so nothing lands in the last one.
+        if (drop && first && !link)
+        {
+            UndoEntry entry;
+            entry.mAdded = favorites;
+            pushUndo(entry);
+        }
     }
 
     void finishVerdict(std::string& tooltip_msg)
@@ -165,7 +208,7 @@ namespace
             }
             else if (!AISAPI::isAvailable())
             {
-                tooltip_msg.clear();
+                tooltip_msg = string("drag_favorites_unavailable");
             }
             else
             {
@@ -179,32 +222,15 @@ namespace
             sVerdict.mOK = true;
             const bool library = LLToolDragAndDrop::getInstance()->getSource() == LLToolDragAndDrop::SOURCE_LIBRARY;
             tooltip_msg = string(sPass.mLink ? "drag_link" : library ? "drag_library_copies" : "drag_move", args);
-            return;
         }
-        if (sPass.mAllHere && !sPass.mLink)
+        else if (sPass.mAllHere)
         {
             tooltip_msg = string("drag_already_here");
             sVerdict.mQuiet = true;
         }
-        else if (!sPass.mStockMessage.empty())
-        {
-            tooltip_msg = sPass.mStockMessage;
-        }
-        else if (inLibrary(sPass.mDest))
-        {
-            tooltip_msg = string("drag_library_readonly");
-        }
-        else if (sPass.mIntoItself)
-        {
-            tooltip_msg = string("drag_into_itself");
-        }
-        else if (sPass.mSystem)
-        {
-            tooltip_msg = string("drag_system_folders");
-        }
         else
         {
-            tooltip_msg.clear();
+            tooltip_msg = sPass.mReason;
         }
     }
 
@@ -219,12 +245,70 @@ namespace
         return (LLInventoryObject*)cargo_data;
     }
 
-    bool linkInto(const LLUUID& dest_id, LLInventoryObject* object, bool drop)
+    // Alt: a link, where the stock folder rules would take one.
+    bool linkInto(const LLUUID& dest_id, LLInventoryObject* object, EDragAndDropType cargo_type, bool drop)
     {
         static LLCachedControl<bool> inventory_linking(gSavedSettings, "InventoryLinking", true);
-        if (!inventory_linking || LLToolDragAndDrop::getInstance()->getSource() != LLToolDragAndDrop::SOURCE_AGENT
-            || !inPlainInventory(dest_id) || dest_id == object->getUUID())
+        LLStringUtil::format_map_t args;
+        args["[FOLDER]"] = folderName(dest_id);
+        if (!inventory_linking)
         {
+            refuse(REASON_LINK, string("drag_links_off"));
+            return false;
+        }
+        if (LLToolDragAndDrop::getInstance()->getSource() != LLToolDragAndDrop::SOURCE_AGENT)
+        {
+            refuse(REASON_LINK, string("drag_link_own_only"));
+            return false;
+        }
+        if (inLibrary(dest_id))
+        {
+            refuse(REASON_LIBRARY, string("drag_library_readonly"));
+            return false;
+        }
+        const LLUUID cof = gInventory.findCategoryUUIDForType(LLFolderType::FT_CURRENT_OUTFIT);
+        const LLViewerInventoryCategory* dest = gInventory.getCategory(dest_id);
+        const bool into_outfit = dest_id == cof || (dest && dest->getPreferredType() == LLFolderType::FT_OUTFIT);
+
+        // A folder links only where the stock rules link folders: the Current Outfit and outfits.
+        LLInventoryCategory* folder = gInventory.getCategory(object->getUUID());
+        if (!folder && object->getIsLinkType() && object->getActualType() == LLAssetType::AT_LINK_FOLDER)
+        {
+            folder = gInventory.getCategory(object->getLinkedUUID());
+        }
+        if (folder)
+        {
+            if (!into_outfit)
+            {
+                refuse(REASON_LINK, string("drag_folder_link", args));
+                return false;
+            }
+            std::string message;
+            const bool ok = dragCategoryIntoFolder(dest_id, folder, drop, message, true);
+            if (!ok)
+            {
+                refuse(REASON_STOCK, message.empty() ? string("drag_no_link_here", args) : message);
+            }
+            return ok;
+        }
+        if (into_outfit)
+        {
+            // The stock drop into an outfit or the Current Outfit already makes links.
+            std::string message;
+            const bool ok = dragItemIntoFolder(dest_id, (LLInventoryItem*)object, drop, message, true);
+            if (!ok)
+            {
+                refuse(REASON_STOCK, message.empty() ? string("drag_no_link_here", args) : message);
+            }
+            return ok;
+        }
+        const LLUUID calling_cards = gInventory.findCategoryUUIDForType(LLFolderType::FT_CALLINGCARD);
+        const LLUUID landmarks = gInventory.findCategoryUUIDForType(LLFolderType::FT_LANDMARK);
+        const bool landmark_ok = !within(dest_id, landmarks) || object->getType() == LLAssetType::AT_LANDMARK;
+        if (!inPlainInventory(dest_id) || within(dest_id, gInventory.findCategoryUUIDForType(LLFolderType::FT_LOST_AND_FOUND))
+            || within(dest_id, calling_cards) || !landmark_ok)
+        {
+            refuse(REASON_LINK, string("drag_no_link_here", args));
             return false;
         }
         if (drop)
@@ -240,17 +324,26 @@ namespace
         LLStringUtil::format_map_t args;
         args["[COUNT]"] = llformat("%d", sPass.mDone);
         args["[FOLDER]"] = folderName(sPass.mDest);
+        const bool one = sPass.mDone == 1;
         if (sPass.mFavorites)
         {
             status(string("status_favorites_added", args));
         }
         else if (sPass.mLink)
         {
-            status(string(sPass.mDone == 1 ? "status_linked_one" : "status_linked", args));
+            status(string(one ? "status_linked_one" : "status_linked", args));
         }
-        else if (sPass.mUndoable && !sUndo.empty() && !sUndo.back().mMoves.empty())
+        else if (LLToolDragAndDrop::getInstance()->getSource() == LLToolDragAndDrop::SOURCE_LIBRARY)
         {
-            status(string(sPass.mDone == 1 ? "status_moved_one" : "status_moved", args));
+            status(string(one ? "status_copied_one" : "status_copied", args));
+        }
+        else if (sPass.mUndoable)
+        {
+            status(string(one ? "status_moved_one" : "status_moved", args));
+        }
+        else
+        {
+            status(string(one ? "status_moved_no_undo_one" : "status_moved_no_undo", args));
         }
     }
 }
@@ -300,7 +393,7 @@ bool dropOnFolder(const LLUUID& dest_id, MASK mask, bool drop, EDragAndDropType 
                   EAcceptance* accept, std::string& tooltip_msg)
 {
     const bool link = (mask & MASK_ALT) != 0;
-    startPass(dest_id, false, link);
+    startPass(dest_id, false, link, drop);
     *accept = ACCEPT_NO;
     LLInventoryObject* object = cargoObject(cargo_data);
     if (!object)
@@ -314,14 +407,12 @@ bool dropOnFolder(const LLUUID& dest_id, MASK mask, bool drop, EDragAndDropType 
     const LLUUID id = object->getUUID();
     const LLUUID from = object->getParentUUID();
     LLViewerInventoryCategory* cargo_cat = gInventory.getCategory(id);
-    if (cargo_cat && (dest_id == id || gInventory.isObjectDescendentOf(dest_id, id)))
+    bool into_itself = false;
+    if (cargo_cat && within(dest_id, id))
     {
         sPass.mOntoCargo |= dest_id == id;
-        sPass.mIntoItself = true;
-    }
-    if (cargo_cat && LLFolderType::lookupIsProtectedType(cargo_cat->getPreferredType()))
-    {
-        sPass.mSystem = true;
+        into_itself = true;
+        refuse(REASON_INTO_ITSELF, string("drag_into_itself"));
     }
     if (from != dest_id)
     {
@@ -330,13 +421,13 @@ bool dropOnFolder(const LLUUID& dest_id, MASK mask, bool drop, EDragAndDropType 
 
     bool accepted = false;
     std::string message;
-    if (link)
-    {
-        accepted = !sPass.mIntoItself && linkInto(dest_id, object, drop);
-    }
-    else if (from == dest_id)
+    if (into_itself || from == dest_id)
     {
         accepted = false;
+    }
+    else if (link)
+    {
+        accepted = linkInto(dest_id, object, cargo_type, drop);
     }
     else
     {
@@ -373,14 +464,22 @@ bool dropOnFolder(const LLUUID& dest_id, MASK mask, bool drop, EDragAndDropType 
             default:
                 break;
         }
+        if (!accepted)
+        {
+            if (inLibrary(dest_id))
+            {
+                refuse(REASON_LIBRARY, string("drag_library_readonly"));
+            }
+            else if (cargo_cat && LLFolderType::lookupIsProtectedType(cargo_cat->getPreferredType()))
+            {
+                refuse(REASON_SYSTEM, string("drag_system_folders"));
+            }
+            refuse(REASON_STOCK, message);
+        }
     }
     if (!accepted)
     {
         sPass.mAllOK = false;
-        if (sPass.mStockMessage.empty())
-        {
-            sPass.mStockMessage = message;
-        }
     }
     finishVerdict(tooltip_msg);
     if (!accepted)
@@ -392,19 +491,22 @@ bool dropOnFolder(const LLUUID& dest_id, MASK mask, bool drop, EDragAndDropType 
     if (drop)
     {
         ++sPass.mDone;
-        // Only a plain move inside My Inventory that landed at once can be undone.
-        const LLInventoryObject* moved = gInventory.getObject(id);
-        const bool undoable = !link && LLToolDragAndDrop::getInstance()->getSource() == LLToolDragAndDrop::SOURCE_AGENT
-                            && moved && moved->getParentUUID() == dest_id && inPlainInventory(from) && inPlainInventory(dest_id);
-        if (LLToolDragAndDrop::getInstance()->getCargoIndex() == 0)
+        if (!link && !sUndo.empty())
         {
-            sUndo.emplace_back();
+            // Only plain moves inside My Inventory that landed at once are undone, and a drop is undone whole or not at all.
+            const LLInventoryObject* moved = gInventory.getObject(id);
+            const bool undoable = LLToolDragAndDrop::getInstance()->getSource() == LLToolDragAndDrop::SOURCE_AGENT
+                                && moved && moved->getParentUUID() == dest_id && inPlainInventory(from) && inPlainInventory(dest_id);
+            if (undoable && sPass.mUndoable)
+            {
+                sUndo.back().mMoves.push_back({ id, from, dest_id });
+            }
+            else
+            {
+                sPass.mUndoable = false;
+                sUndo.back().mMoves.clear();
+            }
         }
-        if (undoable && !sUndo.empty())
-        {
-            sUndo.back().mMoves.push_back({ id, from, dest_id });
-        }
-        sPass.mUndoable &= undoable;
         reportDrop();
     }
     return true;
@@ -412,7 +514,7 @@ bool dropOnFolder(const LLUUID& dest_id, MASK mask, bool drop, EDragAndDropType 
 
 bool dropOnFavorites(bool drop, EDragAndDropType cargo_type, void* cargo_data, EAcceptance* accept, std::string& tooltip_msg)
 {
-    startPass(LLUUID::null, true, false);
+    startPass(LLUUID::null, true, false, drop);
     *accept = ACCEPT_NO;
     LLInventoryObject* object = cargoObject(cargo_data);
     const LLUUID folder_id = object ? (object->getIsLinkType() ? object->getLinkedUUID() : object->getUUID()) : LLUUID::null;
@@ -432,12 +534,6 @@ bool dropOnFavorites(bool drop, EDragAndDropType cargo_type, void* cargo_data, E
         return false;
     }
     *accept = ACCEPT_YES_MULTI;
-    if (drop && LLToolDragAndDrop::getInstance()->getCargoIndex() == 0)
-    {
-        UndoEntry entry;
-        entry.mAdded = true;
-        sUndo.push_back(entry);
-    }
     if (drop && !get_is_favorite(folder_id))
     {
         set_favorite(folder_id, true);
@@ -461,9 +557,21 @@ void setStrings(const std::map<std::string, std::string>& strings)
     sStrings = strings;
 }
 
-void setStatusCallback(const std::function<void(const std::string&)>& cb)
+void setStatusCallback(const void* owner, const std::function<void(const std::string&)>& cb)
 {
+    sOwner = owner;
     sStatus = cb;
+}
+
+void releaseOwner(const void* owner)
+{
+    // The history belongs to the floater that made it; another instance's is left alone.
+    if (sOwner == owner)
+    {
+        sOwner = nullptr;
+        sStatus = nullptr;
+        sUndo.clear();
+    }
 }
 
 void recordFavorites(const uuid_vec_t& ids, bool added)
@@ -475,7 +583,7 @@ void recordFavorites(const uuid_vec_t& ids, bool added)
     UndoEntry entry;
     entry.mFavorites = ids;
     entry.mAdded = added;
-    sUndo.push_back(entry);
+    pushUndo(entry);
     LLStringUtil::format_map_t args;
     args["[COUNT]"] = llformat("%d", (S32)ids.size());
     status(string(added ? "status_favorites_added" : "status_favorites_removed", args));
@@ -483,31 +591,57 @@ void recordFavorites(const uuid_vec_t& ids, bool added)
 
 bool canUndo()
 {
-    std::erase_if(sUndo, [](const UndoEntry& entry) { return entry.mMoves.empty() && entry.mFavorites.empty(); });
-    return !sUndo.empty();
+    for (const UndoEntry& entry : sUndo)
+    {
+        if (!entry.mMoves.empty() || !entry.mFavorites.empty())
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 void undo()
 {
-    if (!canUndo())
+    while (!sUndo.empty() && sUndo.back().mMoves.empty() && sUndo.back().mFavorites.empty())
+    {
+        sUndo.pop_back();
+    }
+    if (sUndo.empty())
     {
         return;
     }
     const UndoEntry entry = sUndo.back();
-    // Every object must still be where the action left it, and every old parent still in place.
+    sUndo.pop_back();
+    // Every object must still be where the action left it, every old parent still in place and not inside what moves.
+    auto refuse_undo = [](const std::string& name)
+    {
+        LLStringUtil::format_map_t args;
+        args["[NAME]"] = name;
+        status(string("status_cant_undo", args));
+    };
     for (const Move& move : entry.mMoves)
     {
         const LLInventoryObject* object = gInventory.getObject(move.mID);
-        if (!object || object->getParentUUID() != move.mTo || !gInventory.getCategory(move.mFrom) || !inPlainInventory(move.mFrom))
+        if (!object || object->getParentUUID() != move.mTo)
         {
-            LLStringUtil::format_map_t args;
-            args["[NAME]"] = object ? object->getName() : folderName(move.mFrom);
-            status(string("status_cant_undo", args));
-            sUndo.pop_back();
+            refuse_undo(object ? object->getName() : folderName(move.mTo));
+            return;
+        }
+        if (!gInventory.getCategory(move.mFrom) || !inPlainInventory(move.mFrom) || gInventory.isObjectDescendentOf(move.mFrom, move.mID))
+        {
+            refuse_undo(folderName(move.mFrom).empty() ? object->getName() : folderName(move.mFrom));
             return;
         }
     }
-    sUndo.pop_back();
+    for (const LLUUID& id : entry.mFavorites)
+    {
+        if (!gInventory.getCategory(id))
+        {
+            refuse_undo(folderName(id));
+            return;
+        }
+    }
     for (const Move& move : entry.mMoves)
     {
         if (LLViewerInventoryCategory* cat = gInventory.getCategory(move.mID))

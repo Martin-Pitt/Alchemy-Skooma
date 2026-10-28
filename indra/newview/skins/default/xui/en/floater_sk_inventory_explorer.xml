@@ -100,8 +100,17 @@
     <string name="drag_system_folders">System folders don't move</string>
     <string name="drag_library_copies">Library items copy, not move</string>
     <string name="drag_already_here">Already here</string>
+    <string name="drag_favorites_unavailable">Favorites need the inventory service, which is unavailable</string>
+    <string name="drag_links_off">Inventory linking is turned off</string>
+    <string name="drag_link_own_only">Only your own inventory can be linked</string>
+    <string name="drag_folder_link">Folders link only into outfits</string>
+    <string name="drag_no_link_here">Links can't go into [FOLDER]</string>
     <string name="status_moved">Moved [COUNT] items to [FOLDER] · Ctrl+Z to undo</string>
     <string name="status_moved_one">Moved 1 item to [FOLDER] · Ctrl+Z to undo</string>
+    <string name="status_moved_no_undo">Moved [COUNT] items to [FOLDER]</string>
+    <string name="status_moved_no_undo_one">Moved 1 item to [FOLDER]</string>
+    <string name="status_copied">Copied [COUNT] items to [FOLDER]</string>
+    <string name="status_copied_one">Copied 1 item to [FOLDER]</string>
     <string name="status_linked">Linked [COUNT] items into [FOLDER]</string>
     <string name="status_linked_one">Linked 1 item into [FOLDER]</string>
     <string name="status_favorites_added">Added [COUNT] to Favorites · Ctrl+Z to undo</string>

@@ -432,7 +432,7 @@ SKFloaterInventoryExplorer::SKFloaterInventoryExplorer(const LLSD& key)
 
 SKFloaterInventoryExplorer::~SKFloaterInventoryExplorer()
 {
-    SKInventoryExplorerDrag::setStatusCallback(nullptr);
+    SKInventoryExplorerDrag::releaseOwner(this);
     SKInventoryExplorerContextMenu::closeOptionsMenu();
     if (mObserver)
     {
@@ -465,14 +465,16 @@ bool SKFloaterInventoryExplorer::postBuild()
     std::map<std::string, std::string> drag_strings;
     for (const char* key : { "drag_move", "drag_link", "drag_add_favorites", "drag_only_folders", "drag_already_favorites",
                              "drag_library_readonly", "drag_into_itself", "drag_system_folders", "drag_library_copies",
-                             "drag_already_here", "status_moved", "status_moved_one", "status_linked", "status_linked_one",
+                             "drag_already_here", "drag_favorites_unavailable", "drag_links_off", "drag_link_own_only",
+                             "drag_folder_link", "drag_no_link_here", "status_copied", "status_copied_one",
+                             "status_moved_no_undo", "status_moved_no_undo_one", "status_moved", "status_moved_one", "status_linked", "status_linked_one",
                              "status_favorites_added", "status_favorites_removed", "status_undone", "status_cant_undo" })
     {
         drag_strings[key] = getString(key);
     }
     SKInventoryExplorerDrag::setStrings(drag_strings);
     LLHandle<LLFloater> status_handle = getHandle();
-    SKInventoryExplorerDrag::setStatusCallback([status_handle](const std::string& text)
+    SKInventoryExplorerDrag::setStatusCallback(this, [status_handle](const std::string& text)
                                                {
                                                    if (SKFloaterInventoryExplorer* self = (SKFloaterInventoryExplorer*)status_handle.get())
                                                    {

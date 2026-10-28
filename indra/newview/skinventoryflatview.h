@@ -305,6 +305,7 @@ protected:
     S32 mPressRow;
     MASK mPressMask;
     bool mPressCollapse;        // a plain press on a selected row selects it alone if it is not dragged
+    bool mPressToggle;          // a Ctrl press on a selected row deselects it only if it is not dragged
     bool mLassoOn;
     S32 mLassoX;
     S32 mLassoY;
