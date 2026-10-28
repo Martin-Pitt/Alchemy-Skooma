@@ -75,6 +75,8 @@ namespace
 
         EDragAction mAction = EDragAction::None;
         std::string mTarget;
+        std::string mText;
+        std::string mNote;
         std::string mRefusal;
         bool mQuiet = false;
         bool mBlocked = false;
@@ -82,6 +84,7 @@ namespace
 
         std::string mChip;
         bool mChipRefused = false;
+        std::string mChipNote;
         std::vector<std::string> mHints;
 
         Mark mMark;
@@ -184,6 +187,8 @@ void LLDragFeedback::beginPass()
     State& s = state();
     s.mAction = EDragAction::None;
     s.mTarget.clear();
+    s.mText.clear();
+    s.mNote.clear();
     s.mRefusal.clear();
     s.mQuiet = false;
     s.mBlocked = false;
@@ -216,11 +221,24 @@ void LLDragFeedback::dropBlocked()
     }
 }
 
-void LLDragFeedback::report(EDragAction action, std::string_view target_name)
+void LLDragFeedback::report(EDragAction action, std::string_view target_name, std::string_view text,
+                            std::string_view note)
 {
     State& s = state();
     s.mAction = action;
     s.mTarget = target_name;
+    s.mText = text;
+    s.mNote = note;
+}
+
+const std::string& LLDragFeedback::reportedText()
+{
+    return state().mText;
+}
+
+const std::string& LLDragFeedback::reportedNote()
+{
+    return state().mNote;
 }
 
 void LLDragFeedback::refuse(std::string_view message, bool quiet)
@@ -251,11 +269,13 @@ bool LLDragFeedback::refusedQuietly()
     return state().mQuiet;
 }
 
-void LLDragFeedback::setChip(const std::string& text, bool refused, const std::vector<std::string>& hints)
+void LLDragFeedback::setChip(const std::string& text, bool refused, const std::string& note,
+                             const std::vector<std::string>& hints)
 {
     State& s = state();
     s.mChip = text;
     s.mChipRefused = refused;
+    s.mChipNote = note;
     s.mHints = hints;
 }
 
@@ -355,6 +375,7 @@ void LLDragFeedback::draw(S32 x, S32 y, const LLRect& window_rect)
     const LLColor4 chip_text = colour("DragChipTextColor", LLColor4(0.8f, 0.8f, 0.8f, 1.f));
     const LLColor4 chip_refuse = colour("DragChipRefuseTextColor", LLColor4(1.f, 0.55f, 0.55f, 1.f));
     const LLColor4 chip_hint = colour("DragChipHintTextColor", LLColor4(0.62f, 0.64f, 0.64f, 1.f));
+    const LLColor4 chip_note = colour("DragChipNoteTextColor", LLColor4(0.7f, 0.71f, 0.71f, 1.f));
     const LLFontGL* font = LLFontGL::getFontSansSerifSmall();
 
     gGL.getTextureSlot(0)->unbind();
@@ -430,6 +451,10 @@ void LLDragFeedback::draw(S32 x, S32 y, const LLRect& window_rect)
     if (!s.mChip.empty())
     {
         lines.emplace_back(s.mChip, s.mChipRefused ? chip_refuse : chip_text);
+    }
+    if (!s.mChipNote.empty())
+    {
+        lines.emplace_back(s.mChipNote, chip_note);
     }
     for (const std::string& hint : s.mHints)
     {
