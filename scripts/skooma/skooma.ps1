@@ -1867,7 +1867,7 @@ function Install-Tooling { param([switch]$Quiet)
     # Hooks (sh, shared by every worktree via .git/hooks).
     $hookDst = Join-Path $CommonDir 'hooks'
     New-Item -ItemType Directory -Force -Path $hookDst | Out-Null
-    foreach ($h in 'reference-transaction', 'pre-commit') {
+    foreach ($h in 'reference-transaction', 'pre-commit', 'pre-merge-commit') {
         $s = Join-Path $src "hooks\$h"
         if (-not (Test-Path $s)) { continue }
         $text = (Get-Content $s -Raw) -replace "`r`n", "`n"

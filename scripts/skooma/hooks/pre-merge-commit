@@ -1,0 +1,8 @@
+#!/bin/sh
+# Skooma: a merge commit takes the same checks as any other.  Git runs this hook, not
+# pre-commit, for `git merge`, so without it a merge of main into a feature branch would
+# commit fork-only files unchecked.  Installed to .git/hooks by `git skooma bootstrap`.
+
+hooks=$(git rev-parse --git-common-dir)/hooks
+[ -x "$hooks/pre-commit" ] && exec "$hooks/pre-commit" "$@"
+exit 0
