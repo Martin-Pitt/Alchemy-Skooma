@@ -156,6 +156,7 @@ protected:
     void fetchGhostWhenResting();
     void revealColumns(bool trailing);
     void updateStripScrollbar();
+    void updateColumnScrollbars();
     void notifySelection(bool reveal);
 
     Column* currentColumn();
@@ -209,6 +210,8 @@ protected:
     S32 mHoverRow;
 
     LLScrollbar* mStripScrollbar;
+    std::vector<LLScrollbar*> mColumnScrollbars;    // overlay bars for the columns that scroll, reused
+    std::vector<LLUUID> mColumnScrollbarFolders;    // the folder each bar scrolls this frame
     SKInventoryListLabels mLabels;
 
     id_callback_t mMoveCallback;

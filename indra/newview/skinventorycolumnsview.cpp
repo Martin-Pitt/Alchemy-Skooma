@@ -100,6 +100,7 @@ SKInventoryColumnsView::SKInventoryColumnsView(const Params& p)
     sbparams.page_size(1);
     sbparams.follows.flags(FOLLOWS_LEFT | FOLLOWS_RIGHT | FOLLOWS_BOTTOM);
     sbparams.visible(false);
+    sbparams.overlay(true); // drawn over the columns, which keep the full height
     sbparams.change_callback([this](S32 pos, LLScrollbar*) { mStripX = pos; });
     mStripScrollbar = LLUICtrlFactory::create<LLScrollbar>(sbparams);
     addChild(mStripScrollbar);
@@ -468,7 +469,7 @@ void SKInventoryColumnsView::reshape(S32 width, S32 height, bool called_from_par
 
 S32 SKInventoryColumnsView::rowsPerPage() const
 {
-    const S32 bar = (mStripScrollbar && mStripScrollbar->getVisible()) ? mStripScrollbar->getRect().getHeight() : 0;
+    const S32 bar = 0; // the overlay strip bar takes no room
     return llmax(1, (getRect().getHeight() - bar - TOP_PAD) / ROW_HEIGHT);
 }
 
@@ -524,7 +525,7 @@ S32 SKInventoryColumnsView::columnAt(S32 x) const
 
 S32 SKInventoryColumnsView::rowAt(const Column& column, S32 y) const
 {
-    const S32 bar = mStripScrollbar->getVisible() ? mStripScrollbar->getRect().getHeight() : 0;
+    const S32 bar = 0; // the overlay strip bar takes no room
     const S32 below_top = getRect().getHeight() - TOP_PAD - y;
     if (below_top < 0 || y < bar)
     {
@@ -722,8 +723,9 @@ void SKInventoryColumnsView::draw()
         rebuild(false);
     }
     fetchGhostWhenResting();
+    updateColumnScrollbars();
 
-    const S32 bar = mStripScrollbar->getVisible() ? mStripScrollbar->getRect().getHeight() : 0;
+    const S32 bar = 0; // the overlay strip bar takes no room
     const S32 height = getRect().getHeight();
     const bool focused = hasFocus();
     const S32 view = getRect().getWidth();
@@ -870,17 +872,77 @@ void SKInventoryColumnsView::drawColumn(const Column& column, S32 index, S32 hei
         font->renderUTF8(row.mName, 0, (F32)x, (F32)middle, color, LLFontGL::LEFT, LLFontGL::VCENTER, style,
                          LLFontGL::NO_SHADOW, S32_MAX, llmax(0, text_right - x), nullptr, true);
     }
+}
 
-    // A thin bar says where a column taller than the view is scrolled to.
+void SKInventoryColumnsView::updateColumnScrollbars()
+{
+    // One overlay bar a scrolling column, laid over its right edge; the pool only grows.
+    const S32 height = getRect().getHeight();
+    const S32 view = getRect().getWidth();
     const S32 page = rowsPerPage();
-    const S32 total = rows + (column.mMore > 0 ? 1 : 0);
-    if (total > page)
+    const S32 thickness = LLUI::getInstance()->mSettingGroups["config"]->getS32("UIScrollbarSize");
+    size_t used = 0;
+    for (S32 i = 0; i < (S32)mColumns.size(); ++i)
     {
-        const S32 bar = mStripScrollbar->getVisible() ? mStripScrollbar->getRect().getHeight() : 0;
-        const S32 track = height - TOP_PAD - bar;
-        const S32 thumb = llmax(16, track * page / total);
-        const S32 thumb_top = height - TOP_PAD - (track - thumb) * first / llmax(1, total - page);
-        gl_rect_2d(right - 5, thumb_top, right - 2, thumb_top - thumb, dim_color.get());
+        const Column& column = mColumns[i];
+        const bool rows_kind = column.mKind == KIND_PATH || column.mKind == KIND_GHOST;
+        const S32 total = (S32)column.mRows.size() + (column.mMore > 0 ? 1 : 0);
+        const S32 left = column.mLeft - mStripX;
+        if (!rows_kind || column.mWidth <= 0 || total <= page || left + column.mWidth <= 0 || left >= view)
+        {
+            continue;
+        }
+        if (used == mColumnScrollbars.size())
+        {
+            LLScrollbar::Params sbparams;
+            sbparams.name("column_scrollbar");
+            sbparams.rect(LLRect(0, height, thickness, 0));
+            sbparams.orientation(LLScrollbar::VERTICAL);
+            sbparams.doc_size(0);
+            sbparams.doc_pos(0);
+            sbparams.page_size(1);
+            sbparams.overlay(true);
+            sbparams.follows.flags(FOLLOWS_NONE);
+            const size_t slot = used;
+            sbparams.change_callback([this, slot](S32 pos, LLScrollbar*)
+                                     {
+                                         if (slot < mColumnScrollbarFolders.size())
+                                         {
+                                             for (const Column& c : mColumns)
+                                             {
+                                                 if (c.mFolderID == mColumnScrollbarFolders[slot])
+                                                 {
+                                                     setColumnScroll(c, pos);
+                                                     break;
+                                                 }
+                                             }
+                                         }
+                                     });
+            LLScrollbar* bar = LLUICtrlFactory::create<LLScrollbar>(sbparams);
+            addChild(bar);
+            mColumnScrollbars.push_back(bar);
+            mColumnScrollbarFolders.push_back(LLUUID::null);
+        }
+        LLScrollbar* bar = mColumnScrollbars[used];
+        mColumnScrollbarFolders[used] = column.mFolderID;
+        const LLRect rect(left + column.mWidth - thickness - 1, height - TOP_PAD, left + column.mWidth - 1, 0);
+        if (bar->getRect() != rect)
+        {
+            bar->setShape(rect);
+        }
+        bar->setDocSize(total);
+        bar->setPageSize(page);
+        if (bar->getDocPos() != columnScroll(column))
+        {
+            bar->setDocPos(columnScroll(column));
+        }
+        bar->setVisible(true);
+        ++used;
+    }
+    for (size_t i = used; i < mColumnScrollbars.size(); ++i)
+    {
+        mColumnScrollbars[i]->setVisible(false);
+        mColumnScrollbarFolders[i].setNull();
     }
 }
 
