@@ -2879,7 +2879,8 @@ void LLMeshUploadThread::packModelIntance(
             mLockScaleIfJointPosition,
             LLModel::WRITE_BINARY,
             false,
-            data.mBaseModel->mSubmodelID);
+            data.mBaseModel->mSubmodelID,
+            gSavedSettings.getVector3("SKMeshUploadPivotOffset")); // <SK:Nexii> Mesh pivot spike
 
         data.mAssetData = ostr.str();
         std::string str = ostr.str();
