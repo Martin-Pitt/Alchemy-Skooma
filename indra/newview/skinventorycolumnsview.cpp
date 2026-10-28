@@ -28,6 +28,7 @@
 
 #include "skinventorycolumnsview.h"
 
+#include "llfocusmgr.h"
 #include "llfontgl.h"
 #include "llinventorymodel.h"
 #include "llinventorymodelbackgroundfetch.h"
@@ -36,6 +37,7 @@
 #include "llscrollbar.h"
 #include "lltooltip.h"
 #include "llui.h"
+#include "lluicolortable.h"
 #include "llviewerinventory.h"
 #include "skinventoryexplorermenu.h"
 #include "skinventoryrenameeditor.h"
@@ -56,6 +58,8 @@ namespace
     constexpr S32 GHOST_ROWS = 600;
     constexpr S32 WHEEL_ROWS = 3;
     constexpr S32 HWHEEL_PIXELS = 30;
+    constexpr S32 EDGE_REACH = 40;
+    constexpr F32 EDGE_DELAY = 0.25f;
 
     bool is_root(const LLUUID& folder_id)
     {
@@ -88,6 +92,21 @@ SKInventoryColumnsView::SKInventoryColumnsView(const Params& p)
     mGhostSortKey(SKInventoryListView::COL_ACQUIRED),
     mGhostSortAscending(false),
     mGhostFetchPending(false),
+    mPress(PRESS_NONE),
+    mPressX(0),
+    mPressY(0),
+    mPressRow(-1),
+    mPressMask(MASK_NONE),
+    mPressCollapse(false),
+    mSweepLow(-1),
+    mSweepHigh(-1),
+    mDropColumn(-1),
+    mDropRow(-1),
+    mDropScrollResidue(0),
+    mEdgeDir(0),
+    mEdgeScrolling(false),
+    mGlowAlpha(0.f),
+    mGlowSide(0),
     mStripScrollbar(nullptr)
 {
     const S32 bar = LLUI::getInstance()->mSettingGroups["config"]->getS32("UIScrollbarSize");
@@ -739,6 +758,7 @@ void SKInventoryColumnsView::draw()
                 drawColumn(column, i, height, focused);
             }
         }
+        drawDropTarget(height);
     }
     LLUICtrl::draw();
 }
@@ -991,11 +1011,24 @@ bool SKInventoryColumnsView::handleMouseDown(S32 x, S32 y, MASK mask)
         const S32 row = rowAt(column, y);
         if (row >= 0)
         {
-            if (column.mRows[row].isEntry())
+            const bool entry = column.mRows[row].isEntry();
+            const LLUUID row_id = column.mRows[row].mID;
+            const bool is_current = index == mCurrent;
+            const bool selected = is_current && row < (S32)mSelected.size() && mSelected[row] && !(mask & (MASK_CONTROL | MASK_SHIFT));
+            const std::vector<bool> before = is_current ? mSelected : std::vector<bool>();
+            if (entry)
             {
                 make_ui_sound("UISndClick");
             }
-            return selectRow(index, row, mask);
+            if (!selected)
+            {
+                selectRow(index, row, mask);
+            }
+            if (entry)
+            {
+                pressRow(x, y, mask, row_id, selected, before);
+            }
+            return true;
         }
         if (index != mCurrent)
         {
@@ -1036,6 +1069,7 @@ bool SKInventoryColumnsView::handleMouseDown(S32 x, S32 y, MASK mask)
                 {
                     mSelectionCallback();
                 }
+                pressRow(x, y, MASK_NONE, row_id, false, std::vector<bool>());
             }
         }
     }
@@ -1123,6 +1157,47 @@ bool SKInventoryColumnsView::handleRightMouseDown(S32 x, S32 y, MASK mask)
 
 bool SKInventoryColumnsView::handleHover(S32 x, S32 y, MASK mask)
 {
+    if (hasMouseCapture() && mPress != PRESS_NONE)
+    {
+        const S32 dx = x - mPressX;
+        const S32 dy = y - mPressY;
+        if ((mPress == PRESS_ITEM || mPress == PRESS_DECIDE)
+            && dx * dx + dy * dy >= SKInventoryExplorerDrag::DRAG_THRESHOLD * SKInventoryExplorerDrag::DRAG_THRESHOLD)
+        {
+            if (mPress == PRESS_DECIDE && llabs(dy) >= llabs(dx))
+            {
+                mPress = PRESS_SWEEP;
+                mSweepTick.reset();
+            }
+            else
+            {
+                const uuid_vec_t ids = getSelection();
+                mPress = PRESS_NONE;
+                gFocusMgr.setMouseCapture(nullptr);
+                if (SKInventoryExplorerDrag::begin(ids))
+                {
+                    return LLToolDragAndDrop::getInstance()->handleHover(x, y, mask);
+                }
+                return true;
+            }
+        }
+        if (mPress == PRESS_SWEEP)
+        {
+            sweepTo(y);
+            // Past the column's top or bottom, it scrolls a row a step.
+            const S32 band = SKInventoryExplorerDrag::SCROLL_BAND;
+            const S32 dir = y > getRect().getHeight() - band ? -1 : y < band ? 1 : 0;
+            const Column* current = currentColumn();
+            if (dir != 0 && current && mSweepTick.getElapsedTimeF32() >= SKInventoryExplorerDrag::TICK_SECONDS)
+            {
+                mSweepTick.reset();
+                setColumnScroll(*current, columnScroll(*current) + dir);
+                sweepTo(y);
+            }
+        }
+        getWindow()->setCursor(UI_CURSOR_ARROW);
+        return true;
+    }
     mHoverColumn = columnAt(x);
     mHoverRow = mHoverColumn >= 0 ? rowAt(mColumns[mHoverColumn], y) : -1;
     return LLUICtrl::handleHover(x, y, mask);
@@ -1234,6 +1309,17 @@ bool SKInventoryColumnsView::handleKeyHere(KEY key, MASK mask)
             }
             break;
         case KEY_ESCAPE:
+            if (mPress == PRESS_SWEEP)
+            {
+                mPress = PRESS_NONE;
+                if (mSweepRestore.size() == mSelected.size())
+                {
+                    mSelected = mSweepRestore;
+                }
+                notifySelection(false);
+                gFocusMgr.setMouseCapture(nullptr);
+                return true;
+            }
             if (mSelectedCount > 0)
             {
                 clearSelection();
@@ -1363,4 +1449,254 @@ void SKInventoryColumnsView::startRename(const LLUUID& id)
             return;
         }
     }
+}
+
+void SKInventoryColumnsView::pressRow(S32 x, S32 y, MASK mask, const LLUUID& row_id, bool was_selected, const std::vector<bool>& before)
+{
+    // The row pressed, now in the current column, waits to see whether it is dragged or swept.
+    const Column* current = currentColumn();
+    if (!current)
+    {
+        return;
+    }
+    S32 row = -1;
+    for (S32 r = 0; r < (S32)current->mRows.size(); ++r)
+    {
+        if (current->mRows[r].mID == row_id)
+        {
+            row = r;
+            break;
+        }
+    }
+    if (row < 0)
+    {
+        return;
+    }
+    mPressX = x;
+    mPressY = y;
+    mPressRow = row;
+    mPressMask = mask;
+    mPressCollapse = was_selected && mSelectedCount > 1;
+    mPress = was_selected ? PRESS_ITEM : PRESS_DECIDE;
+    mSweepRestore = before.size() == current->mRows.size() ? before : mSelected;
+    mSweepBase = (mask & (MASK_CONTROL | MASK_SHIFT)) ? mSweepRestore : std::vector<bool>(current->mRows.size(), false);
+    mSweepLow = mSweepHigh = -1;
+    gFocusMgr.setMouseCapture(this);
+}
+
+void SKInventoryColumnsView::sweepTo(S32 y)
+{
+    const Column* current = currentColumn();
+    if (!current || current->mRows.empty() || mSweepBase.size() != current->mRows.size())
+    {
+        return;
+    }
+    const S32 below_top = getRect().getHeight() - TOP_PAD - y;
+    const S32 at = llclamp(columnScroll(*current) + (below_top >= 0 ? below_top / ROW_HEIGHT : -1), 0, (S32)current->mRows.size() - 1);
+    const S32 low = llmin(mPressRow, at);
+    const S32 high = llmax(mPressRow, at);
+    if (low == mSweepLow && high == mSweepHigh)
+    {
+        return;
+    }
+    // Rows leaving the range go back to the base, rows in it take the opposite; the cost is the range's.
+    for (S32 r = mSweepLow; r >= 0 && r <= mSweepHigh; ++r)
+    {
+        mSelected[r] = mSweepBase[r];
+    }
+    for (S32 r = low; r <= high; ++r)
+    {
+        mSelected[r] = current->mRows[r].isEntry() && !mSweepBase[r];
+    }
+    mSweepLow = low;
+    mSweepHigh = high;
+    mCursor = at;
+    mAnchor = mPressRow;
+    notifySelection(false);
+}
+
+bool SKInventoryColumnsView::handleMouseUp(S32 x, S32 y, MASK mask)
+{
+    if (!hasMouseCapture())
+    {
+        return LLUICtrl::handleMouseUp(x, y, mask);
+    }
+    const EPress press = mPress;
+    mPress = PRESS_NONE;
+    gFocusMgr.setMouseCapture(nullptr);
+    if (press == PRESS_ITEM && mPressCollapse)
+    {
+        moveCursor(mPressRow, MASK_NONE);
+    }
+    return true;
+}
+
+void SKInventoryColumnsView::onMouseCaptureLost()
+{
+    mPress = PRESS_NONE;
+}
+
+bool SKInventoryColumnsView::handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop, EDragAndDropType cargo_type, void* cargo_data,
+                                               EAcceptance* accept, std::string& tooltip_msg)
+{
+    if (childrenHandleDragAndDrop(x, y, mask, drop, cargo_type, cargo_data, accept, tooltip_msg))
+    {
+        return true;
+    }
+    // A folder row, or a column's own space (its folder); past the columns, the open folder.
+    const S32 index = columnAt(x);
+    S32 row = -1;
+    LLUUID dest = mFolderID;
+    if (index >= 0 && (mColumns[index].mKind == KIND_PATH || mColumns[index].mKind == KIND_GHOST))
+    {
+        const Column& column = mColumns[index];
+        dest = column.mFolderID;
+        row = rowAt(column, y);
+        if (row >= 0 && column.mRows[row].isEntry() && column.mRows[row].mIsFolder)
+        {
+            dest = column.mRows[row].mTargetID;
+        }
+        else
+        {
+            row = -1;
+        }
+    }
+    SKInventoryExplorerDrag::dropOnFolder(dest, mask, drop, cargo_type, cargo_data, accept, tooltip_msg);
+    mDropColumn = row >= 0 || (index >= 0 && (mColumns[index].mKind == KIND_PATH || mColumns[index].mKind == KIND_GHOST)) ? index : -1;
+    mDropRow = row;
+    mDropVerdict = SKInventoryExplorerDrag::verdict();
+    if (mDropColumn < 0 && mDropVerdict.mQuiet)
+    {
+        tooltip_msg.clear(); // no label over the open folder's own space
+    }
+    if (drop || LLToolDragAndDrop::getInstance()->getCargoIndex() != 0)
+    {
+        return true;
+    }
+    mDropHover.touch();
+
+    S32 screen_x = 0;
+    S32 screen_y = 0;
+    localPointToScreen(x, y, &screen_x, &screen_y);
+    const LLUUID spring_id = row >= 0 && !mDropVerdict.mOntoCargo ? mColumns[index].mRows[row].mID : LLUUID::null;
+    if (mDropHover.spring(spring_id, screen_x, screen_y, SKInventoryExplorerDrag::SPRING_SECONDS) && mOpenCallback)
+    {
+        mOpenCallback(spring_id);
+        return true;
+    }
+
+    // The column under the pointer scrolls near its top and bottom.
+    if (index >= 0 && (mColumns[index].mKind == KIND_PATH || mColumns[index].mKind == KIND_GHOST)
+        && mDropHover.tick(SKInventoryExplorerDrag::TICK_SECONDS))
+    {
+        const S32 band = SKInventoryExplorerDrag::SCROLL_BAND;
+        const S32 dir = y > getRect().getHeight() - band ? -1 : y < band ? 1 : 0;
+        if (dir != 0)
+        {
+            mDropScrollResidue += SKInventoryExplorerDrag::SCROLL_STEP;
+            const S32 rows = mDropScrollResidue / ROW_HEIGHT;
+            mDropScrollResidue %= ROW_HEIGHT;
+            const Column& column = mColumns[index];
+            const S32 before = columnScroll(column);
+            setColumnScroll(column, before + dir * rows);
+            if (columnScroll(column) != before)
+            {
+                mDropHover.scrolled(screen_x, screen_y);
+            }
+        }
+    }
+
+    // Resting near the strip's left or right edge scrolls it that way, under a glow.
+    const S32 view = getRect().getWidth();
+    const S32 total = mColumns.empty() ? 0 : mColumns.back().mLeft + mColumns.back().mWidth;
+    S32 dir = x < EDGE_REACH ? -1 : x >= view - EDGE_REACH ? 1 : 0;
+    if ((dir < 0 && mStripX <= 0) || (dir > 0 && mStripX + view >= total))
+    {
+        dir = 0;
+    }
+    if (dir != mEdgeDir)
+    {
+        mEdgeDir = dir;
+        mEdgeTimer.reset();
+    }
+    mEdgeScrolling = false;
+    const F32 rested = mEdgeTimer.getElapsedTimeF32() - EDGE_DELAY;
+    if (dir != 0 && rested > 0.f)
+    {
+        mEdgeScrolling = true;
+        if (mEdgeTick.getElapsedTimeF32() >= SKInventoryExplorerDrag::TICK_SECONDS)
+        {
+            mEdgeTick.reset();
+            const S32 step = (S32)llmin(24.f, 6.f + rested * 1000.f / 40.f);
+            mStripX = llclamp(mStripX + dir * step, 0, llmax(0, total - view));
+            updateStripScrollbar();
+            mDropHover.scrolled(screen_x, screen_y);
+        }
+    }
+    return true;
+}
+
+void SKInventoryColumnsView::drawDropTarget(S32 height)
+{
+    // The edge glow fades in and out over 0.15 s, faint in range and full while scrolling.
+    const bool active = mDropHover.isActive();
+    const F32 target = active && mEdgeDir != 0 ? (mEdgeScrolling ? 1.f : 0.45f) : 0.f;
+    const F32 dt = mGlowTimer.getElapsedTimeF32();
+    mGlowTimer.reset();
+    const F32 rate = dt / 0.15f;
+    mGlowAlpha = mGlowAlpha < target ? llmin(target, mGlowAlpha + rate) : llmax(target, mGlowAlpha - rate);
+    if (active && mEdgeDir != 0)
+    {
+        mGlowSide = mEdgeDir;
+    }
+    if (mGlowAlpha > 0.f && mGlowSide != 0)
+    {
+        static LLUIColor accent = LLUIColorTable::instance().getColor("EmphasisColor");
+        const S32 width = 56;
+        const S32 view = getRect().getWidth();
+        for (S32 i = 0; i < width; i += 2)
+        {
+            // An ellipse centred on the edge: each strip shorter and fainter away from it.
+            const F32 t = (F32)i / (F32)width;
+            const S32 half = (S32)(height * 0.5f * sqrtf(1.f - t * t));
+            LLColor4 color = accent.get();
+            color.mV[VALPHA] = 0.55f * mGlowAlpha * (1.f - t);
+            const S32 left = mGlowSide < 0 ? i : view - i - 2;
+            gl_rect_2d(left, height / 2 + half, left + 2, height / 2 - half, color);
+        }
+    }
+    if (!active)
+    {
+        mEdgeDir = 0;
+        return;
+    }
+    if (mDropColumn >= 0 && mDropColumn < (S32)mColumns.size())
+    {
+        const Column& column = mColumns[mDropColumn];
+        const S32 left = column.mLeft - mStripX;
+        LLRect rect(left, height, left + column.mWidth - 1, 0);
+        if (mDropRow >= 0)
+        {
+            const S32 top = height - TOP_PAD - (mDropRow - columnScroll(column)) * ROW_HEIGHT;
+            rect = LLRect(left, top, left + column.mWidth - 1, top - ROW_HEIGHT);
+        }
+        LLLocalClipRect clip(LLRect(left, height, left + column.mWidth, 0));
+        SKInventoryExplorerDrag::drawTargetMark(rect, mDropVerdict);
+    }
+    else if (mDropVerdict.mOK)
+    {
+        static LLUIColor accent = LLUIColorTable::instance().getColor("EmphasisColor");
+        gl_rect_2d(1, height - 1, getRect().getWidth() - 1, 1, accent.get(), false);
+        gl_rect_2d(2, height - 2, getRect().getWidth() - 2, 2, accent.get(), false);
+    }
+}
+
+void SKInventoryColumnsView::undo()
+{
+    SKInventoryExplorerDrag::undo();
+}
+
+bool SKInventoryColumnsView::canUndo() const
+{
+    return SKInventoryExplorerDrag::canUndo();
 }

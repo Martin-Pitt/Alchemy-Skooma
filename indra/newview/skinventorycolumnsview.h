@@ -30,6 +30,7 @@
 #include "lleditmenuhandler.h"
 #include "llframetimer.h"
 #include "lluictrl.h"
+#include "skinventoryexplorerdrag.h"
 #include "skinventorylistview.h"
 
 #include <functional>
@@ -107,7 +108,11 @@ public:
     bool handleMouseDown(S32 x, S32 y, MASK mask) override;
     bool handleDoubleClick(S32 x, S32 y, MASK mask) override;
     bool handleRightMouseDown(S32 x, S32 y, MASK mask) override;
+    bool handleMouseUp(S32 x, S32 y, MASK mask) override;
     bool handleHover(S32 x, S32 y, MASK mask) override;
+    bool handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop, EDragAndDropType cargo_type, void* cargo_data,
+                           EAcceptance* accept, std::string& tooltip_msg) override;
+    void onMouseCaptureLost() override;
     void onMouseLeave(S32 x, S32 y, MASK mask) override;
     bool handleScrollWheel(S32 x, S32 y, LLScrollDelta delta) override;
     bool handleScrollHWheel(S32 x, S32 y, LLScrollDelta delta) override;
@@ -124,6 +129,8 @@ public:
     bool canSelectAll() const override;
     void deselect() override;
     bool canDeselect() const override { return mSelectedCount > 0; }
+    void undo() override;
+    bool canUndo() const override;
 
 protected:
     SKInventoryColumnsView(const Params& p);
@@ -175,6 +182,19 @@ protected:
     void openRow(const SKInventoryRow& row);
     void drawColumn(const Column& column, S32 index, S32 height, bool focused);
     void drawDetails(const Column& column, S32 height);
+    void drawDropTarget(S32 height);
+
+    // A press on a row: a selected row lifts the selection; an unselected one decides at 5 px, sideways
+    // lifting it and up or down sweeping a selection by height.
+    enum EPress
+    {
+        PRESS_NONE,
+        PRESS_ITEM,
+        PRESS_DECIDE,
+        PRESS_SWEEP,
+    };
+    void pressRow(S32 x, S32 y, MASK mask, const LLUUID& row_id, bool was_selected, const std::vector<bool>& before);
+    void sweepTo(S32 y);
 
     LLUUID mFolderID;
     std::vector<Column> mColumns;
@@ -208,6 +228,31 @@ protected:
     scroll_map_t mScrolls;
     S32 mHoverColumn;
     S32 mHoverRow;
+
+    EPress mPress;
+    S32 mPressX;
+    S32 mPressY;
+    S32 mPressRow;
+    MASK mPressMask;
+    bool mPressCollapse;
+    std::vector<bool> mSweepBase;
+    std::vector<bool> mSweepRestore;
+    S32 mSweepLow;
+    S32 mSweepHigh;
+    LLFrameTimer mSweepTick;
+
+    SKDragHover mDropHover;
+    S32 mDropColumn;    // -1 for the open folder's space past the columns
+    S32 mDropRow;       // a folder row, -1 for the column's own space
+    SKInventoryExplorerDrag::Verdict mDropVerdict;
+    S32 mDropScrollResidue;
+    S32 mEdgeDir;       // the strip edge the pointer rests by, -1, 0 or 1
+    bool mEdgeScrolling;
+    LLFrameTimer mEdgeTimer;
+    LLFrameTimer mEdgeTick;
+    F32 mGlowAlpha;
+    S32 mGlowSide;
+    LLFrameTimer mGlowTimer;
 
     LLScrollbar* mStripScrollbar;
     std::vector<LLScrollbar*> mColumnScrollbars;    // overlay bars for the columns that scroll, reused
