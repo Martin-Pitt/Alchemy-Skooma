@@ -891,6 +891,11 @@ void SKInventoryTreeView::reveal(const LLUUID& folder_id)
     {
         rebuild();
     }
+    // The folder can be listed twice (Favorites and its own section); keep whichever copy is selected.
+    if (mSelectedID == folder_id && indexOfKey(mSelectedKey) >= 0)
+    {
+        return;
+    }
     ESection section;
     std::string key;
     std::vector<std::string> ancestors;
