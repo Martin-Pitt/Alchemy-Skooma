@@ -690,6 +690,14 @@ bool SKFloaterInventoryExplorer::postBuild()
         menu_strings[key] = getString(std::string("menu_") + key);
     }
     mMenu->setStrings(menu_strings);
+    mMenu->setCreatedCallback([handle](const LLUUID& id)
+                              {
+                                  if (SKFloaterInventoryExplorer* floater = static_cast<SKFloaterInventoryExplorer*>(handle.get()))
+                                  {
+                                      floater->mPendingRename = id;
+                                      floater->mPendingRenameTimer.reset();
+                                  }
+                              });
 
     const bool details = gSavedPerAccountSettings.getBOOL("SkoomaInvExplorerDetailsShown");
     mDetailsBtn->setToggleState(details);
@@ -753,6 +761,32 @@ void SKFloaterInventoryExplorer::draw()
     }
     stepSearch();
     mDropdown->update();
+    // A new object is opened where it landed, selected, and renamed in place.
+    if (mPendingRename.notNull() && !mTabs.empty())
+    {
+        const LLInventoryObject* obj = gInventory.getObject(mPendingRename);
+        if (!obj || mPendingRenameTimer.getElapsedTimeF32() > 10.f)
+        {
+            mPendingRename.setNull();
+        }
+        else if (obj->getParentUUID() != currentTab().mFolderID || isSearching())
+        {
+            commitSearch(std::string(), false);
+            mSearchBox->setText(LLStringUtil::null);
+            navigateTo(obj->getParentUUID(), true);
+        }
+        else
+        {
+            SKInventoryFlatView* flat = flatView();
+            if (flat ? flat->lists(mPendingRename) : mColumns->lists(mPendingRename))
+            {
+                const LLUUID id = mPendingRename;
+                mPendingRename.setNull();
+                setActiveSelection({ id });
+                startRename(id);
+            }
+        }
+    }
     mSearchClearBtn->setVisible(!mSearchBox->getText().empty());
 
     if (mNeedsRefresh)
@@ -1286,6 +1320,10 @@ void SKFloaterInventoryExplorer::refreshToolbar()
     mUpBtn->setEnabled(cat && cat->getParentUUID().notNull());
     mPathBar->setFolder(tab.mFolderID);
     refreshSavedSearches();
+    // The placeholder names what the box searches.
+    LLStringUtil::format_map_t args;
+    args["[FOLDER]"] = cat ? cat->getName() : std::string();
+    mSearchBox->setLabel(getString("search_placeholder", args));
 }
 
 void SKFloaterInventoryExplorer::refreshTabStrip()
