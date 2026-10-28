@@ -160,6 +160,8 @@ public:
     void setUpCallback(const void_callback_t& cb) { mUpCallback = cb; }
     void setSelectionCallback(const void_callback_t& cb) { mSelectionCallback = cb; }
     void setMenuCallback(const menu_callback_t& cb) { mMenuCallback = cb; }
+    // Esc calls this in place of clearing the selection (the Gallery leaves).
+    void setEscapeCallback(const void_callback_t& cb) { mEscapeCallback = cb; }
 
     // Lists the folder; the selection and scroll given are kept where their rows still exist.
     void setFolder(const LLUUID& folder_id, const uuid_vec_t& selection = uuid_vec_t(), S32 scroll = 0);
@@ -192,6 +194,9 @@ public:
     uuid_vec_t getSelection() const;
     void setSelection(const uuid_vec_t& ids);
     S32 getScroll() const;
+    void setScroll(S32 pos);
+    // The first entry that is not a folder, null for none.
+    LLUUID firstItem() const;
 
     S32 getFolderCount() const { return mFolderCount; }
     S32 getItemCount() const { return mItemCount; }
@@ -354,6 +359,7 @@ protected:
     void_callback_t mUpCallback;
     void_callback_t mSelectionCallback;
     menu_callback_t mMenuCallback;
+    void_callback_t mEscapeCallback;
 };
 
 #endif // SK_SKINVENTORYFLATVIEW_H

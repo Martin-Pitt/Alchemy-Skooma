@@ -74,6 +74,8 @@ public:
     const std::vector<SKPopupRow>& getRows() const { return mRows; }
     // Opens below a rect of the spawning view, its left edge held inside the window; max_height 0 is unlimited.
     void showBelow(LLView* spawn, const LLRect& spawn_rect, S32 width, S32 max_height, S32 dx, S32 dy);
+    // Opens above a rect of the spawning view, dy pixels over it.
+    void showAbove(LLView* spawn, const LLRect& spawn_rect, S32 width, S32 dx, S32 dy);
     void hide();
     bool isOpen() const { return getVisible(); }
 

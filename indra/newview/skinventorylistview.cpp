@@ -230,7 +230,7 @@ void SKInventoryListView::drawContent()
     static LLUIColor link_color = LLUIColorTable::instance().getColor("EmphasisColor");
 
     const LLFontGL* font = LLFontGL::getFontSansSerifSmall();
-    const S32 width = getRect().getWidth(); // the overlay scroll bar takes no gutter
+    const S32 width = getRect().getWidth(); // the thin scroll bar is drawn over the rows
     const S32 height = getRect().getHeight();
 
     // The header stays at the top, with the sort direction on the sorted column.

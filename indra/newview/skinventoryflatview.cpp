@@ -258,7 +258,7 @@ SKInventoryFlatView::SKInventoryFlatView(const LLUICtrl::Params& p)
     mDropRow(-1),
     mScrollbar(nullptr)
 {
-    const S32 bar = LLUI::getInstance()->mSettingGroups["config"]->getS32("UIScrollbarSize");
+    const S32 bar = LLScrollbar::THIN_THICKNESS;
     LLScrollbar::Params sbparams;
     sbparams.name("flat_scrollbar");
     sbparams.rect(LLRect(getRect().getWidth() - bar, getRect().getHeight(), getRect().getWidth(), 0));
@@ -268,7 +268,7 @@ SKInventoryFlatView::SKInventoryFlatView(const LLUICtrl::Params& p)
     sbparams.page_size(1);
     sbparams.follows.flags(FOLLOWS_RIGHT | FOLLOWS_TOP | FOLLOWS_BOTTOM);
     sbparams.visible(false);
-    sbparams.overlay(true); // drawn over the rows, which keep the full width
+    sbparams.thin(true); // drawn over the rows, which keep the full width
     mScrollbar = LLUICtrlFactory::create<LLScrollbar>(sbparams);
     addChild(mScrollbar);
 }
@@ -713,6 +713,23 @@ void SKInventoryFlatView::setSelection(const uuid_vec_t& ids)
 S32 SKInventoryFlatView::getScroll() const
 {
     return mScrollbar->getDocPos();
+}
+
+void SKInventoryFlatView::setScroll(S32 pos)
+{
+    mScrollbar->setDocPos(pos);
+}
+
+LLUUID SKInventoryFlatView::firstItem() const
+{
+    for (const SKInventoryRow& row : mRows)
+    {
+        if (row.isEntry() && !row.mIsFolder)
+        {
+            return row.mID;
+        }
+    }
+    return LLUUID::null;
 }
 
 void SKInventoryFlatView::rebuild()
@@ -1646,6 +1663,11 @@ bool SKInventoryFlatView::handleKeyHere(KEY key, MASK mask)
             {
                 endPress(true);
                 gFocusMgr.setMouseCapture(nullptr);
+                return true;
+            }
+            if (mEscapeCallback)
+            {
+                mEscapeCallback();
                 return true;
             }
             if (mSelectedCount > 0)
