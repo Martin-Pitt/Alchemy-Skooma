@@ -437,7 +437,55 @@ void SKInventoryPlayer::stop()
     }
     mSoundSource.setNull();
     mSoundLocal = false;
+    mSoundHeard = false;
     mSoundPlaying = false;
+}
+
+void SKInventoryPlayer::playLocal(F32 at)
+{
+    stop();
+    if (!gAudiop)
+    {
+        return;
+    }
+    mSoundSource.generate();
+    gAudiop->triggerSound(mAssetID, gAgentID, 1.f, LLAudioEngine::AUDIO_TYPE_UI, LLVector3d::zero, LLUUID::null, mSoundSource);
+    if (at > 0.f)
+    {
+        // Seeks once playing, or starts there once the sound has loaded.
+        if (LLAudioSource* source = gAudiop->findAudioSource(mSoundSource))
+        {
+            source->play(mAssetID, at);
+        }
+    }
+    mSoundLocal = true;
+    mSoundPlaying = true;
+    mSoundStart = gAudiop->canSeek() ? at : 0.f;
+    mSoundTimer.reset();
+}
+
+void SKInventoryPlayer::seekWave(S32 x)
+{
+    const SKSoundInfo* info = SKInventoryAssets::sound(mAssetID, false);
+    if (!info || info->mState != SK_ASSET_READY)
+    {
+        return;
+    }
+    const LLRect wave = waveRect();
+    mMark = llclamp(info->mLength * (F32)(x - wave.mLeft) / (F32)llmax(1, wave.getWidth()), 0.f, info->mLength);
+    if (mSoundPlaying && !mSoundLocal)
+    {
+        // Our inworld trigger always plays from the start: a click only marks a time.
+        return;
+    }
+    LLAudioSource* source = mSoundPlaying && gAudiop ? gAudiop->findAudioSource(mSoundSource) : nullptr;
+    if (source && source->seek(mMark))
+    {
+        mSoundStart = mMark;
+        mSoundTimer.reset();
+        return;
+    }
+    playLocal(mMark);
 }
 
 void SKInventoryPlayer::setItem(const LLUUID& item_id, const LLUUID& image_id)
@@ -623,7 +671,7 @@ void SKInventoryPlayer::drawButtons(const LLRect& rect)
         const S32 left = rect.mLeft + i * (half + BUTTON_GAP);
         mButtons[i].set(left, rect.mBottom + BUTTON_HEIGHT, left + half, rect.mBottom);
         const bool active = (mKind == KIND_ANIMATION && mAnimMode == i) ||
-                            (mKind == KIND_SOUND && i == 0 && mSoundPlaying && mSoundLocal);
+                            (mKind == KIND_SOUND && mSoundPlaying && mSoundLocal == (i == 0));
         LLUIImage* image = active ? on.get() : (mHoverButton == i ? over.get() : off.get());
         if (image)
         {
@@ -632,7 +680,7 @@ void SKInventoryPlayer::drawButtons(const LLRect& rect)
         std::string label = SKInventoryDetails::str(i == 0 ? "player_locally" : "player_inworld");
         if (active)
         {
-            label = SKInventoryDetails::str("player_stop");
+            label = SKInventoryDetails::str(mKind == KIND_SOUND && i == 1 ? "player_stop_for_me" : "player_stop");
         }
         const LLFontGL* font = LLFontGL::getFontSansSerifSmall();
         const S32 icon = 14;
@@ -664,13 +712,40 @@ void SKInventoryPlayer::drawSound(const LLRect& rect)
         return;
     }
 
-    // Played runs from 0 as playback goes: the engine can't start partway.
+    // The playhead is the engine's position for a local preview; our inworld copy runs on a clock from 0.
     F32 played = -1.f;
     F32 now_time = mMark;
     if (mSoundPlaying)
     {
-        now_time = mSoundTimer.getElapsedTimeF32();
-        if (now_time >= info->mLength)
+        bool ended = false;
+        if (mSoundLocal)
+        {
+            LLAudioSource* source = gAudiop ? gAudiop->findAudioSource(mSoundSource) : nullptr;
+            const F32 position = source ? source->getPlayPosition() : -1.f;
+            if (!source)
+            {
+                ended = true;
+            }
+            else if (position >= 0.f)
+            {
+                mSoundHeard = true;
+                now_time = position;
+            }
+            else if (mSoundHeard)
+            {
+                ended = true;
+            }
+            else
+            {
+                // Still loading where the engine reports a position; a clock where it reports none.
+                now_time = mSoundStart + (gAudiop->canSeek() ? 0.f : mSoundTimer.getElapsedTimeF32());
+            }
+        }
+        else
+        {
+            now_time = mSoundTimer.getElapsedTimeF32();
+        }
+        if (ended || now_time >= info->mLength)
         {
             mSoundPlaying = false;
             now_time = mMark;
@@ -886,27 +961,31 @@ void SKInventoryPlayer::pressButton(S32 index)
     make_ui_sound("UISndClick");
     if (mKind == KIND_SOUND)
     {
-        // Locally the button toggles play and stop; inworld a press restarts, as the server's trigger can't be stopped.
-        const bool was_local = mSoundPlaying && mSoundLocal;
-        stop();
+        // Each button toggles: locally from the marked time, inworld from the start.
         if (index == 0)
         {
-            if (was_local)
+            if (mSoundPlaying && mSoundLocal)
             {
-                return;
+                stop();
             }
+            else
+            {
+                playLocal(mMark);
+            }
+            return;
+        }
+        if (mSoundPlaying && !mSoundLocal)
+        {
+            // Stops only our copy: the server's trigger plays on for everyone else.
             if (gAudiop)
             {
-                mSoundSource.generate();
-                gAudiop->triggerSound(mAssetID, gAgentID, 1.f, LLAudioEngine::AUDIO_TYPE_UI, LLVector3d::zero, LLUUID::null,
-                                      mSoundSource);
-                mSoundLocal = true;
+                gAudiop->stopTriggeredSounds(mAssetID, gAgentID);
             }
+            stop();
+            return;
         }
-        else
-        {
-            send_sound_trigger(mAssetID, 1.f);
-        }
+        stop();
+        send_sound_trigger(mAssetID, 1.f);
         mSoundPlaying = true;
         mSoundTimer.reset();
         return;
@@ -959,13 +1038,8 @@ bool SKInventoryPlayer::handleMouseDown(S32 x, S32 y)
         }
         if (mKind == KIND_SOUND && waveRect().pointInRect(x, y))
         {
-            // The engine can't seek, so a click only marks a time.
-            if (const SKSoundInfo* info = SKInventoryAssets::sound(mAssetID, false))
-            {
-                const LLRect wave = waveRect();
-                mMark = info->mLength * (F32)(x - wave.mLeft) / (F32)llmax(1, wave.getWidth());
-                stop();
-            }
+            seekWave(x);
+            mWaveDrag = true;
         }
     }
     return true;
@@ -985,6 +1059,16 @@ void SKInventoryPlayer::handleHover(S32 x, S32 y)
 {
     mHoverX = x;
     mHoverButton = -1;
+    if (mWaveDrag)
+    {
+        // A drag along the waveform seeks as it goes.
+        mWaveDrag = mKind == KIND_SOUND && gViewerWindow->getLeftMouseDown();
+        const LLRect wave = waveRect();
+        if (mWaveDrag && x >= wave.mLeft && x < wave.mRight)
+        {
+            seekWave(x);
+        }
+    }
     for (S32 i = 0; i < 2; ++i)
     {
         if ((mKind == KIND_SOUND || mKind == KIND_ANIMATION) && mButtons[i].pointInRect(x, y))
@@ -1026,7 +1110,9 @@ bool SKInventoryPlayer::getToolTip(S32 x, S32 y, std::string& tip) const
     {
         if ((mKind == KIND_SOUND || mKind == KIND_ANIMATION) && mButtons[i].pointInRect(x, y))
         {
-            tip = SKInventoryDetails::str(mKind == KIND_SOUND ? (i == 0 ? "tip_sound_local" : "tip_sound_inworld")
+            const bool stop_for_me = mKind == KIND_SOUND && i == 1 && mSoundPlaying && !mSoundLocal;
+            tip = SKInventoryDetails::str(stop_for_me ? "tip_sound_stop_for_me"
+                                        : mKind == KIND_SOUND ? (i == 0 ? "tip_sound_local" : "tip_sound_inworld")
                                                               : (i == 0 ? "tip_anim_local" : "tip_anim_inworld"));
             return true;
         }
