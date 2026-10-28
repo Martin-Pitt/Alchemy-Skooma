@@ -76,6 +76,7 @@ struct SKInventoryRow
     LLAssetType::EType mAssetType = LLAssetType::AT_NONE;
     LLUUID mImageID;        // a thumbnail, or a texture's own image
     bool mImageIsAsset = false;
+    LLUUID mTextureID;      // a texture's or photo's own image, which the details show even when it has a thumbnail
     F32 mAspect = 1.f;      // width over height, from a "(w:h)" description tail
     LLPointer<LLUIImage> mIcon;
     std::string mGroup;
@@ -157,6 +158,7 @@ public:
     static void drawLinkBadge(const LLRect& icon);
     // A row in view that has a picture asks for its smallest version, so the details have it before it is selected.
     static void prefetchPicture(const SKInventoryRow& row);
+    static void prefetchImage(const LLUUID& image_id);
     // Folders first (system folders first, then by name), items by the key.
     static void sortRows(std::vector<SKInventoryRow>& rows, EColumn key, bool ascending);
     // Orders sorted rows by group, keeping the sort within each, and puts a header before each group.
