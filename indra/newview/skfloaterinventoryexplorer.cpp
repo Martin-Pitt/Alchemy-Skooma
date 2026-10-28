@@ -54,6 +54,7 @@ namespace
     constexpr S32 TAB_WIDTH = 180;
     constexpr S32 TAB_MIN_WIDTH = 60;
     constexpr S32 PLUS_WIDTH = 24;
+    constexpr S32 BUTTONS_WIDTH = 40;   // the floater's Minimize and Close, kept clear of tabs
     constexpr S32 CLOSE_WIDTH = 16;
     constexpr S32 PANE_MIN = 140;
     constexpr F32 PANE_MAX_FRACTION = 0.45f;
@@ -87,7 +88,7 @@ S32 SKExplorerTabStrip::tabWidth() const
     {
         return TAB_WIDTH;
     }
-    const S32 room = getRect().getWidth() - PLUS_WIDTH;
+    const S32 room = getRect().getWidth() - PLUS_WIDTH - BUTTONS_WIDTH;
     return llclamp(room / (S32)mTabs.size(), TAB_MIN_WIDTH, TAB_WIDTH);
 }
 
@@ -192,6 +193,7 @@ bool SKExplorerTabStrip::handleMouseDown(S32 x, S32 y, MASK mask)
         }
         else if (mActivateCallback)
         {
+            make_ui_sound("UISndClickRelease");
             mActivateCallback(tab);
         }
         return true;
@@ -207,6 +209,16 @@ bool SKExplorerTabStrip::handleMouseDown(S32 x, S32 y, MASK mask)
 
     // Empty space moves the floater, as a title bar would.
     return mDragCallback && mDragCallback(x, y, mask);
+}
+
+bool SKExplorerTabStrip::handleDoubleClick(S32 x, S32 y, MASK mask)
+{
+    if (tabAt(x) < 0 && !plusRect().pointInRect(x, y) && mDoubleClickCallback)
+    {
+        mDoubleClickCallback();
+        return true;
+    }
+    return LLUICtrl::handleDoubleClick(x, y, mask);
 }
 
 bool SKExplorerTabStrip::handleHover(S32 x, S32 y, MASK mask)
@@ -415,9 +427,18 @@ bool SKFloaterInventoryExplorer::postBuild()
     mDetailsEdgePanel = getChild<LLLayoutPanel>("details_edge_panel");
 
     mTabStrip->setNewTabToolTip(getString("new_tab_tooltip"));
+    // The strip runs the full width; the floater's buttons sit on it, as on a header.
+    for (const char* name : { "llfloater_close_btn", "llfloater_minimize_btn", "llfloater_collapse_btn", "llfloater_restore_btn" })
+    {
+        if (LLView* button = findChildView(name, false))
+        {
+            sendChildToFront(button);
+        }
+    }
     mTabStrip->setActivateCallback([this](S32 index) { activateTab(index); });
     mTabStrip->setCloseCallback([this](S32 index) { closeTab(index); });
     mTabStrip->setNewTabCallback([this]() { newTab(currentTab().mFolderID); });
+    mTabStrip->setDoubleClickCallback([this]() { onHeaderDoubleClick(); });
     mTabStrip->setDragCallback([this](S32 x, S32 y, MASK mask)
                                {
                                    LLDragHandle* handle = getDragHandle();
@@ -512,7 +533,8 @@ bool SKFloaterInventoryExplorer::postBuild()
     mColumns->setMoveCallback([this](const LLUUID& folder_id) { navigateTo(folder_id, false); });
     mColumns->setOpenCallback([this](const LLUUID& id) { openObject(id, false); });
     mColumns->setUpCallback([this]() { goUp(); });
-    mColumns->setSidebarCallback([this]() { mSidebar->focusSelection(); });
+    // ← from the first column: the sidebar takes focus on the top-level folder's row.
+    mColumns->setSidebarCallback([this]() { mSidebar->focusSelection(currentTab().mFolderID); });
     mColumns->setSelectionCallback([this]() { refreshDetails(); });
     mColumns->setMenuCallback([this](S32 x, S32 y, const uuid_vec_t& ids, const LLUUID& folder_id)
                               { showContextMenu(mColumns, x, y, ids, folder_id); });
@@ -589,6 +611,24 @@ void SKFloaterInventoryExplorer::draw()
         const S32 track_left = rect.mLeft + SIZE_LABEL_WIDTH;
         const S32 x = track_left + half + (S32)(t * (rect.mRight - track_left - 2 * half));
         gl_line_2d(x, rect.mBottom, x, rect.mBottom + 4, tick_color.get());
+    }
+}
+
+void SKFloaterInventoryExplorer::onHeaderDoubleClick()
+{
+    // The floater has no header of its own, so the strip's empty space stands in for it: LLFloater's header
+    // double-click restores a minimized floater and otherwise collapses it, where it can collapse.
+    if (isMinimized())
+    {
+        setMinimized(false);
+    }
+    else if (LLView* collapse = findChildView("llfloater_collapse_btn", false); collapse && collapse->getVisible() && collapse->getEnabled())
+    {
+        setCollapsed(true);
+    }
+    else if (isMinimizeable())
+    {
+        setMinimized(true);
     }
 }
 
@@ -955,6 +995,10 @@ void SKFloaterInventoryExplorer::newTab(const LLUUID& folder_id)
     tab.mGroup = SKInventoryFlatView::groupFromKey(gSavedPerAccountSettings.getString("SkoomaInvExplorerGroup"));
 
     saveListState();
+    if (!mTabs.empty())
+    {
+        make_ui_sound("UISndWindowOpen"); // as a floater opening
+    }
     const S32 index = mTabs.empty() ? 0 : mActiveTab + 1;
     mTabs.insert(mTabs.begin() + index, tab);
     mActiveTab = index;
@@ -972,6 +1016,7 @@ void SKFloaterInventoryExplorer::closeTab(S32 index)
         saveListState();
     }
     const bool closing_active = index == mActiveTab;
+    make_ui_sound("UISndWindowClose"); // as a floater closing
     mTabs.erase(mTabs.begin() + index);
     if (closing_active)
     {

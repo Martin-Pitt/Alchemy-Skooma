@@ -762,7 +762,6 @@ void SKInventoryColumnsView::drawColumn(const Column& column, S32 index, S32 hei
 {
     static LLUIColor sel_color = LLUIColorTable::instance().getColor("EmphasisColor_35");
     static LLUIColor path_color = LLUIColorTable::instance().getColor("LtGray_35");
-    static LLUIColor ghost_bg = LLUIColorTable::instance().getColor("Black_10");
     static LLUIColor text_color = LLUIColorTable::instance().getColor("LabelTextColor");
     static LLUIColor dim_color = LLUIColorTable::instance().getColor("LtGray_50");
     static LLUIColor rule_color = LLUIColorTable::instance().getColor("White_10");
@@ -773,10 +772,6 @@ void SKInventoryColumnsView::drawColumn(const Column& column, S32 index, S32 hei
     const S32 right = left + column.mWidth;
     LLLocalClipRect clip(LLRect(left, height, right, 0));
 
-    if (column.mKind == KIND_GHOST)
-    {
-        gl_rect_2d(left, height, right, 0, ghost_bg.get());
-    }
     gl_line_2d(right - 1, height, right - 1, 0, rule_color.get());
 
     if (column.mKind == KIND_DETAILS)
@@ -798,7 +793,6 @@ void SKInventoryColumnsView::drawColumn(const Column& column, S32 index, S32 hei
     }
 
     const bool is_current = index == mCurrent;
-    const bool is_ghost = column.mKind == KIND_GHOST;
     LLColor4 selected = sel_color.get();
     if (!focused)
     {
@@ -864,10 +858,6 @@ void SKInventoryColumnsView::drawColumn(const Column& column, S32 index, S32 hei
         {
             color = dim_color.get();
             style = LLFontGL::ITALIC;
-        }
-        if (is_ghost && !(mHoverColumn == index && mHoverRow == r))
-        {
-            color = dim_color.get();
         }
         font->renderUTF8(row.mName, 0, (F32)x, (F32)middle, color, LLFontGL::LEFT, LLFontGL::VCENTER, style,
                          LLFontGL::NO_SHADOW, S32_MAX, llmax(0, text_right - x), nullptr, true);
@@ -1001,6 +991,10 @@ bool SKInventoryColumnsView::handleMouseDown(S32 x, S32 y, MASK mask)
         const S32 row = rowAt(column, y);
         if (row >= 0)
         {
+            if (column.mRows[row].isEntry())
+            {
+                make_ui_sound("UISndClick");
+            }
             return selectRow(index, row, mask);
         }
         if (index != mCurrent)
@@ -1021,6 +1015,7 @@ bool SKInventoryColumnsView::handleMouseDown(S32 x, S32 y, MASK mask)
         const S32 row = rowAt(column, y);
         if (row >= 0)
         {
+            make_ui_sound("UISndClick");
             const LLUUID folder_id = column.mFolderID;
             const LLUUID row_id = column.mRows[row].mID;
             const LLViewerInventoryCategory* cat = gInventory.getCategory(folder_id);
@@ -1086,6 +1081,7 @@ bool SKInventoryColumnsView::handleRightMouseDown(S32 x, S32 y, MASK mask)
         const S32 row = rowAt(column, y);
         if (row >= 0 && column.mRows[row].isEntry())
         {
+            make_ui_sound("UISndClick");
             if (index == mCurrent)
             {
                 if (!mSelected[row])

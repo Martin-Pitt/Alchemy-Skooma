@@ -97,9 +97,12 @@ public:
     void setNewTabCallback(const void_callback_t& cb) { mNewTabCallback = cb; }
     void setNewTabToolTip(const std::string& tip) { mNewTabToolTip = tip; }
     void setDragCallback(const drag_callback_t& cb) { mDragCallback = cb; }
+    // A double-click on the empty space, as on a title bar.
+    void setDoubleClickCallback(const void_callback_t& cb) { mDoubleClickCallback = cb; }
 
     void draw() override;
     bool handleMouseDown(S32 x, S32 y, MASK mask) override;
+    bool handleDoubleClick(S32 x, S32 y, MASK mask) override;
     bool handleHover(S32 x, S32 y, MASK mask) override;
     void onMouseLeave(S32 x, S32 y, MASK mask) override;
     bool handleToolTip(S32 x, S32 y, MASK mask) override;
@@ -121,6 +124,7 @@ protected:
     index_callback_t mCloseCallback;
     void_callback_t mNewTabCallback;
     drag_callback_t mDragCallback;
+    void_callback_t mDoubleClickCallback;
 };
 
 // A pane's 6 px resize edge: drag to resize, double-click for the default, saved on release.
@@ -203,6 +207,7 @@ private:
     void applySortAndGroup();
     void startRename(const LLUUID& id);
     void onIconSizeChanged();
+    void onHeaderDoubleClick();
     uuid_vec_t activeSelection() const;
     void setActiveSelection(const uuid_vec_t& ids);
     void revealInSidebar();
