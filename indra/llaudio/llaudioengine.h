@@ -208,8 +208,8 @@ public:
     // meantime; the result is applied when it lands.
     void scheduleLoudnessMeasure(LLAudioData* adp);
 
-    // Remember a measurement for future sessions. First one wins, so replaying
-    // a known sound does not dirty the index.
+    // Remember a measurement, silent ones included, for future sessions. First
+    // one wins, so replaying a known sound does not dirty the index.
     void recordLoudnessMeasurement(const LLUUID& id, F32 lufs, F32 peak);
     // </SK:Nexii>
 
@@ -403,6 +403,7 @@ protected:
     struct LoudnessEntry { F32 lufs; F32 peak; };
     std::map<LLUUID, LoudnessEntry> mLoudnessIndex;
     bool mLoudnessIndexDirty;
+    U32  mLoudnessUnsaved; // inserts since the index was last written
     // </SK:Nexii>
 
     F32 mNextWindUpdate;
@@ -480,10 +481,10 @@ public:
     LLVector3 getVelocity() const                                   { return mVelocity; }
     F32 getPriority() const                                         { return mPriority; }
 
-    // Gain should always be clamped between 0 and 1.
-    // <SK:Nexii> loudness normalization -- the per-asset trim rides here rather
-    // than on the secondary (per-type) gain, which the FAudio backend applies on
-    // a shared group submix and skips per-voice. Every backend multiplies this.
+    // <SK:Nexii> loudness normalization -- setGain() clamps the source gain to
+    // 0..1, but the per-asset trim can boost, so getGain() may exceed 1. The trim
+    // rides here rather than on the secondary (per-type) gain, which the FAudio
+    // backend applies on a shared group submix and skips per-voice.
     F32 getGain() const                                             { return mGain * mLoudnessGain; }
     F32 getUntrimmedGain() const                                    { return mGain; }
     // </SK:Nexii>
@@ -537,8 +538,8 @@ protected:
     bool            mIsTrigger;
     // <SK:Nexii> loudness normalization -- current trim, and the data it was
     // resolved against. Snapped while the source is not yet holding a channel
-    // or has just switched asset; ramped only when the trim changes under a
-    // sound that is already audible.
+    // or has just switched asset; slewed in dB only when the trim changes under
+    // a sound that is already audible.
     F32             mLoudnessGain;
     LLAudioData    *mLoudnessDatap;
     // </SK:Nexii>
@@ -580,11 +581,11 @@ class LLAudioData
     bool hasWAVLoadFailed() const { return mHasWAVLoadFailed; }
 
     // <SK:Nexii> loudness normalization
-    // Integrated loudness of the decoded clip, or SK_LUFS_SILENCE when it has
-    // not been measured yet (a .dsf left by a build without this feature).
+    // Loudness of the decoded clip, SK_LUFS_SILENCE when it measured silent or
+    // has not been measured yet; hasLoudnessMeasurement() tells the two apart.
     F32  getLoudnessLUFS() const { return mLoudnessLUFS; }
     F32  getLoudnessPeak() const { return mLoudnessPeak; }
-    bool hasLoudnessMeasurement() const { return mLoudnessLUFS > SK_LUFS_SILENCE; }
+    bool hasLoudnessMeasurement() const { return mLoudnessMeasured; }
 
     // Playback trim derived from the measurement and the current target. 1.0
     // until a measurement exists, so an unmeasured sound plays immediately at
@@ -619,6 +620,7 @@ class LLAudioData
     F32  mLoudnessLUFS;
     F32  mLoudnessPeak;   // sample peak 0..1, caps the boost
     F32  mLoudnessGain;
+    bool mLoudnessMeasured;
     bool mLoudnessMeasurePending;
     // </SK:Nexii>
     bool mHasWAVLoadFailed;  // Set true if loading the decoded WAV file failed, meaning the sound asset should be decoded instead if

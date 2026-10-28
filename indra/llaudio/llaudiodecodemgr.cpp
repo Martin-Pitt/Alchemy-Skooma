@@ -280,10 +280,9 @@ bool LLVorbisDecodeState::initDecode()
         return false;
     }
 
-    // <SK:Nexii> loudness normalization -- measure against the stream's real
-    // geometry; the .wav header written below is hardcoded mono 44.1k, which
-    // is not necessarily what ov_read() is about to hand us.
-    mLoudnessMeter = std::make_unique<SKLufsMeter>((U32)vi->rate, (U32)vi->channels);
+    // <SK:Nexii> loudness normalization -- measure what plays: the .wav header
+    // written below is mono 44.1k whatever the stream is, as the cache-hit path reads it.
+    mLoudnessMeter = std::make_unique<SKLufsMeter>(44100, 1);
     // </SK:Nexii>
 
     try
