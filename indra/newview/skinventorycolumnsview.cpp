@@ -844,7 +844,7 @@ void SKInventoryColumnsView::drawColumn(const Column& column, S32 index, S32 hei
     const S32 rows = (S32)column.mRows.size();
     const S32 last = llmin(rows + (column.mMore > 0 ? 1 : 0), first + rowsPerPage() + 1);
     // A column that scrolls leaves its bar a column of its own.
-    const S32 inner_right = right - ((rows + (column.mMore > 0 ? 1 : 0)) > rowsPerPage() ? LLScrollbar::THIN_THICKNESS : 0);
+    const S32 inner_right = right - ((rows + (column.mMore > 0 ? 1 : 0)) > rowsPerPage() ? 1 + LLScrollbar::THIN_THICKNESS : 0);
     for (S32 r = first; r < last; ++r)
     {
         const S32 top = height - TOP_PAD - (r - first) * ROW_HEIGHT;
@@ -967,7 +967,7 @@ void SKInventoryColumnsView::updateColumnScrollbars()
         }
         LLScrollbar* bar = mColumnScrollbars[used];
         mColumnScrollbarFolders[used] = column.mFolderID;
-        const LLRect rect(left + column.mWidth - thickness - 1, height - TOP_PAD, left + column.mWidth - 1, 0);
+        const LLRect rect(left + column.mWidth - thickness - 1, height - TOP_PAD, left + column.mWidth - 1, stripBar());
         if (bar->getRect() != rect)
         {
             bar->setShape(rect);

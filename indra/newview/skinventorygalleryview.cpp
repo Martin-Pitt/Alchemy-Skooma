@@ -174,6 +174,8 @@ void SKInventoryGalleryView::draw()
     {
         target = item->getLinkedItem();
     }
+    // A broken link shows its icon only: the link is not the asset.
+    const bool broken = item && item->getIsLinkType() && target == item;
     if (target)
     {
         LLLocalClipRect clip(stage);
@@ -199,8 +201,8 @@ void SKInventoryGalleryView::draw()
         }
         const LLUUID thumbnail = item->getThumbnailUUID().notNull() ? item->getThumbnailUUID() : target->getThumbnailUUID();
         // A texture shows itself; anything else with a thumbnail shows that, else its player.
-        const bool texture = target->getType() == LLAssetType::AT_TEXTURE;
-        mPlayer.setItem(mItemID, texture ? LLUUID::null : thumbnail);
+        const bool texture = !broken && target->getType() == LLAssetType::AT_TEXTURE;
+        mPlayer.setItem(broken ? LLUUID::null : mItemID, (texture || broken) ? LLUUID::null : thumbnail);
         mPlayer.setFetching(mFetching);
         const LLRect inner(stage.mLeft + 8, stage.mTop - 8, stage.mRight - 8, stage.mBottom + CHIP_HEIGHT + 2 * CHIP_MARGIN);
         switch (mPlayer.getKind())

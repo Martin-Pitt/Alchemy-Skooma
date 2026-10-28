@@ -439,7 +439,8 @@ void SKInventoryFlatView::readItemRow(LLViewerInventoryItem* item, const SKInven
             row.mWornOn = LLWearableType::getInstance()->getTypeLabel(info->getWearableType());
         }
     }
-    row.mIcon = LLInventoryIcon::getIcon(info->getType(), info->getInventoryType(), info->getFlags(), false);
+    row.mIcon = row.mLinkBroken ? LLInventoryIcon::getIcon(LLInventoryType::ICONNAME_INVALID)
+                                : LLInventoryIcon::getIcon(info->getType(), info->getInventoryType(), info->getFlags(), false);
 }
 
 void SKInventoryFlatView::sortRows(std::vector<SKInventoryRow>& rows, EColumn key, bool ascending)

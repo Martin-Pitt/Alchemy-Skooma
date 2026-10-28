@@ -1399,6 +1399,8 @@ void SKInventoryDetailsView::rebuild()
     }
     LLViewerInventoryItem* item = mItemID.notNull() ? gInventory.getItem(mItemID) : nullptr;
     LLViewerInventoryItem* target = item ? target_item(mItemID) : nullptr;
+    // A link with no target: its name and type only, nothing read as if the link were the asset.
+    const bool broken = item && item->getIsLinkType() && target == item;
     if (!item || !target)
     {
         // A folder shows nothing.
@@ -1414,6 +1416,19 @@ void SKInventoryDetailsView::rebuild()
     // A thumbnail goes on top, and the player moves below the rows.
     const LLUUID thumbnail = item->getThumbnailUUID().notNull() ? item->getThumbnailUUID() : target->getThumbnailUUID();
     mThumbnail = thumbnail.notNull();
+    if (broken)
+    {
+        mThumbnail = false;
+        mThumb.setItem(LLUUID::null);
+        mPlayer.setItem(LLUUID::null);
+        Line name;
+        name.mKind = Line::LINE_NAME;
+        name.mValue.push_back({ item->getName() });
+        mLines.push_back(name);
+        addRow("row_type", row.mType + " " + SKInventoryDetails::str("link_suffix"));
+        mLaidWidth = -1;
+        return;
+    }
     mThumb.setItem(mThumbnail ? mItemID : LLUUID::null, thumbnail);
     mThumb.setFetching(mFetching);
     mPlayer.setItem(mItemID);

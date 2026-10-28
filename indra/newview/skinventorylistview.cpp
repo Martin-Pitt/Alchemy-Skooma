@@ -234,7 +234,8 @@ void SKInventoryListView::drawContent()
     const S32 height = getRect().getHeight();
 
     // The header stays at the top, with the sort direction on the sorted column.
-    gl_rect_2d(0, height, width, height - HEADER_HEIGHT, header_bg.get());
+    // The header's background runs over the bar's column too.
+    gl_rect_2d(0, height, getRect().getWidth(), height - HEADER_HEIGHT, header_bg.get());
     S32 left = 0;
     for (EColumn col : mShown)
     {
