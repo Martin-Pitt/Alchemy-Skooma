@@ -88,13 +88,8 @@ protected:
     std::vector<S32> mRowLine;      // each row's line
     std::vector<std::pair<std::string, std::string>> mNameLines;   // each row's name cut to two lines
 
-    // Fetched only for tiles in view; one going out of view loses its priority.
-    struct Image
-    {
-        LLPointer<LLViewerFetchedTexture> mTexture;
-        bool mHeld = false;     // a thumbnail boost hold this view put on it
-    };
-    std::map<LLUUID, Image> mTextures;
+    // Referenced only for tiles in view; each asks for the pixels it draws, with no boost.
+    std::map<LLUUID, LLPointer<LLViewerFetchedTexture>> mTextures;
     std::vector<LLUUID> mVisibleImages;
 };
 
