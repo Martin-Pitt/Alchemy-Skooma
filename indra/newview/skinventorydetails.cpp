@@ -428,6 +428,15 @@ void SKInventoryPlayer::stop()
         }
     }
     mAnimMode = -1;
+    if (mSoundLocal && mSoundSource.notNull() && gAudiop)
+    {
+        if (LLAudioSource* source = gAudiop->findAudioSource(mSoundSource))
+        {
+            source->stop();
+        }
+    }
+    mSoundSource.setNull();
+    mSoundLocal = false;
     mSoundPlaying = false;
 }
 
@@ -613,7 +622,8 @@ void SKInventoryPlayer::drawButtons(const LLRect& rect)
     {
         const S32 left = rect.mLeft + i * (half + BUTTON_GAP);
         mButtons[i].set(left, rect.mBottom + BUTTON_HEIGHT, left + half, rect.mBottom);
-        const bool active = mKind == KIND_ANIMATION && mAnimMode == i;
+        const bool active = (mKind == KIND_ANIMATION && mAnimMode == i) ||
+                            (mKind == KIND_SOUND && i == 0 && mSoundPlaying && mSoundLocal);
         LLUIImage* image = active ? on.get() : (mHoverButton == i ? over.get() : off.get());
         if (image)
         {
@@ -876,12 +886,21 @@ void SKInventoryPlayer::pressButton(S32 index)
     make_ui_sound("UISndClick");
     if (mKind == KIND_SOUND)
     {
-        // A second press restarts: playback always starts at 0.
+        // Locally the button toggles play and stop; inworld a press restarts, as the server's trigger can't be stopped.
+        const bool was_local = mSoundPlaying && mSoundLocal;
+        stop();
         if (index == 0)
         {
+            if (was_local)
+            {
+                return;
+            }
             if (gAudiop)
             {
-                gAudiop->triggerSound(mAssetID, gAgentID, 1.f, LLAudioEngine::AUDIO_TYPE_UI);
+                mSoundSource.generate();
+                gAudiop->triggerSound(mAssetID, gAgentID, 1.f, LLAudioEngine::AUDIO_TYPE_UI, LLVector3d::zero, LLUUID::null,
+                                      mSoundSource);
+                mSoundLocal = true;
             }
         }
         else
@@ -945,7 +964,7 @@ bool SKInventoryPlayer::handleMouseDown(S32 x, S32 y)
             {
                 const LLRect wave = waveRect();
                 mMark = info->mLength * (F32)(x - wave.mLeft) / (F32)llmax(1, wave.getWidth());
-                mSoundPlaying = false;
+                stop();
             }
         }
     }
