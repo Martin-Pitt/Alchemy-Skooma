@@ -22,18 +22,16 @@ Branch `feature-audio/loudness-normalization`. Design note: `.audio-loudness-des
 
 | File | Role |
 |---|---|
-| `indra/llaudio/sklufs.h` / `.cpp` | BS.1770-4 integrated loudness meter, gain solving, WAV measurement |
-| `indra/llaudio/tests/sklufs_test.cpp` | Unit tests for the above |
+| `indra/llaudio/sklufs.h` / `.cpp` | BS.1770-4 meter: max momentary up to 3 s, blending into gated integrated by 10 s; gain solving; `.dsf` measurement for the cache-hit path |
+| `indra/llaudio/tests/sklufs_test.cpp` | Catch2 tests (`llaudio_tests`): published coefficients, Tech 3341, padding and tail invariance, solver order |
 
 ### Injection sites
 
 | File | What | Why there |
 |---|---|---|
-| `indra/llaudio/llaudiodecodemgr.cpp` | Meter member on `LLVorbisDecodeState`; fed in `decodeSection()`, closed in `finishDecode()`, handed to `LLAudioData` in `tryFinishAudio()` | The decode already streams the whole clip past, so measuring costs no extra pass. Closed before the loop-point crossfade rewrites head and tail samples |
-| `indra/llaudio/llaudioengine.h` / `.cpp` | `LLAudioSource::getGain()` multiplies by a slewed `mLoudnessGain`; `LLAudioData` holds the measurement and derived trim; engine holds the target, the background measure and the persisted index | Source gain is the one multiply all three backends apply unconditionally. The per-type secondary gain is **not** usable — FAudio applies it on a shared group submix and skips it per-voice |
+| `indra/llaudio/llaudiodecodemgr.cpp` | Meter member on `LLVorbisDecodeState`, built as mono 44.1 kHz; fed in `decodeSection()`, closed in `finishDecode()`, handed to `LLAudioData` in `tryFinishAudio()` | The decode already streams the whole clip past, so measuring costs no extra pass. Mono 44.1 kHz is what the `.dsf` header plays, so it agrees with the cache-hit measurement |
+| `indra/llaudio/llaudioengine.h` / `.cpp` | `LLAudioSource::getGain()` multiplies by a slewed `mLoudnessGain`; `LLAudioData` holds the measurement and derived trim; engine holds the target, the background measure (run whether or not enabled) and the versioned, periodically saved index; replaces upstream's "gain clamped 0..1" comment | Source gain is the one multiply all three backends apply unconditionally. The per-type secondary gain is **not** usable — FAudio applies it on a shared group submix and skips it per-voice |
 | `indra/llaudio/llaudioengine_openal.cpp` | `AL_MAX_GAIN` raised from its 1.0 default at source creation | OpenAL would otherwise silently discard the boost half of a trim |
-| `indra/llaudio/llvorbisencode.h` / `.cpp` | `encode_vorbis_file()` takes an optional gain, applied to the float samples before analysis | One place covering all four WAV unpack branches; float domain means a boost cannot clip against the 16-bit input |
-| `indra/newview/llviewerassetupload.cpp` | Measures the source WAV (mono downmix) and passes the solved gain to the encoder | Uploads bake the correction into the asset, unlike playback |
 | `indra/newview/llvieweraudio.cpp` | Pushes `SKSoundLoudnessNormalize` / `SKSoundLoudnessTargetLUFS` to the engine each tick | Alongside the existing secondary-gain push; the setter early-outs when unchanged |
 
 ### Unmarked additions
@@ -41,10 +39,8 @@ Branch `feature-audio/loudness-normalization`. Design note: `.audio-loudness-des
 XML has no comment convention here, so these are identified by their `SK` prefix instead:
 
 - `indra/newview/app_settings/settings_alchemy.xml` — `SKSoundLoudnessNormalize`,
-  `SKSoundLoudnessTargetLUFS`, `SKSoundLoudnessStrength`, `SKSoundLoudnessNormalizeUploads`
-- `indra/newview/skins/default/xui/en/floater_sound_preview.xml` — `normalize_loudness`
-  checkbox bound to `SKSoundLoudnessNormalizeUploads`
-- `indra/llaudio/CMakeLists.txt` — `sklufs.cpp` / `sklufs.h` sources, `al_add_test(sklufs …)`
+  `SKSoundLoudnessTargetLUFS`, `SKSoundLoudnessStrength` (upload normalization was removed 2026-10-28)
+- `indra/llaudio/CMakeLists.txt` — `sklufs.cpp` / `sklufs.h` sources, `al_add_test_binary(llaudio_tests …)`
 
 ---
 
