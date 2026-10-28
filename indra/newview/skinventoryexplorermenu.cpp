@@ -359,7 +359,7 @@ void cut(const uuid_vec_t& ids)
     }
 }
 
-// Finds the panel the bridges are built over (the sidebar's Inventory panel), asked at action time.
+// Finds the panel the bridges are built over (the floater's hidden bridge panel), asked at action time.
 static bridge_panel_getter_t sBridgePanelGetter;
 
 void setBridgePanelGetter(const bridge_panel_getter_t& getter)

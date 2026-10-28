@@ -59,6 +59,7 @@ struct SKInventoryRow
     bool mIsFolder = false;
     bool mIsSystem = false;
     bool mIsLink = false;
+    bool mLinkBroken = false;   // a link with no target keeps the broken-link icon and no badge
     bool mIsWorn = false;
     std::string mName;
     std::string mType;
@@ -82,6 +83,8 @@ struct SKInventoryRow
     S32 mGroupCount = 0;
 
     bool isEntry() const { return mKind == KIND_ENTRY; }
+    // A link shows its original's icon with this badge in the corner.
+    bool hasLinkBadge() const { return mIsLink && !mLinkBroken; }
 };
 
 // The labels the views draw, handed in by the floater so every string stays in XUI.
@@ -150,6 +153,8 @@ public:
     static bool readRow(const LLUUID& id, const SKInventoryListLabels& labels, SKInventoryRow& row);
     // The store tag at the start of a name (§3), empty for none.
     static std::string brandOf(const std::string& name);
+    // The small link badge over the corner of an icon drawn at the rect.
+    static void drawLinkBadge(const LLRect& icon);
     // Folders first (system folders first, then by name), items by the key.
     static void sortRows(std::vector<SKInventoryRow>& rows, EColumn key, bool ascending);
     // Orders sorted rows by group, keeping the sort within each, and puts a header before each group.
@@ -262,6 +267,8 @@ protected:
     virtual LLRect rowRect(S32 row) const = 0;
     // Scrolls by pixels, positive downwards.
     virtual void scrollPixels(S32 pixels) = 0;
+    // The width rows are laid out in: the bar keeps its own column while the view scrolls.
+    S32 contentWidth() const;
     virtual bool handleHeaderMouseDown(S32 x, S32 y, MASK mask) { return false; }
     virtual bool handleHeaderRightMouseDown(S32 x, S32 y, MASK mask) { return false; }
 

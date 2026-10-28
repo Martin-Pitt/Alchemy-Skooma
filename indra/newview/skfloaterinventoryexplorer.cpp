@@ -33,6 +33,7 @@
 #include "llfontgl.h"
 #include "llinventorymodel.h"
 #include "llinventoryobserver.h"
+#include "llinventorypanel.h"
 #include "lllocalcliprect.h"
 #include "lllayoutstack.h"
 #include "llrender2dutils.h"
@@ -48,7 +49,7 @@
 #include "skinventorygalleryview.h"
 #include "skinventorypathbar.h"
 #include "skinventorysearchbox.h"
-#include "skinventorysidebar.h"
+#include "skinventorytreeview.h"
 
 static LLDefaultChildRegistry::Register<SKExplorerTabStrip> r_sk_tab_strip("sk_explorer_tab_strip");
 static LLDefaultChildRegistry::Register<SKPaneEdge> r_sk_pane_edge("sk_pane_edge");
@@ -463,7 +464,17 @@ SKFloaterInventoryExplorer::~SKFloaterInventoryExplorer()
 bool SKFloaterInventoryExplorer::postBuild()
 {
     mTabStrip = getChild<SKExplorerTabStrip>("tab_strip");
-    mSidebar = getChild<SKInventorySidebar>("sidebar");
+    mSidebar = getChild<SKInventoryTreeView>("sidebar");
+    // One hidden stock panel, never drawn or focused, hosts the bridges the menus' stock actions run through.
+    mSidebar->setBridgePanel(getChild<LLInventoryPanel>("bridge_panel"));
+    std::map<std::string, std::string> tree_strings;
+    for (const char* key : { "heading_favorites", "heading_inventory", "heading_marketplace", "heading_library", "favorites_hint",
+                             "count_tooltip" })
+    {
+        tree_strings[key] = getString(std::string("sidebar_") + key);
+    }
+    tree_strings["remove_favorite"] = getString("tip_remove_favorite");
+    mSidebar->setStrings(tree_strings);
     mList = getChild<SKInventoryListView>("list_view");
     mColumns = getChild<SKInventoryColumnsView>("columns_view");
     mIcons = getChild<SKInventoryIconsView>("icons_view");
@@ -650,19 +661,22 @@ bool SKFloaterInventoryExplorer::postBuild()
                                   }
                                   navigateTo(folder_id, true);
                               });
-    if (SKSavedSearchRows* saved = mSidebar->getSavedSearches())
-    {
-        saved->setRemoveToolTip(getString("tip_remove_favorite"));
-        saved->setRunCallback([this](S32 index) { runSavedSearch(index); });
-        saved->setRemoveCallback([this](S32 index)
-                                 {
-                                     const LLSD list = gSavedPerAccountSettings.getLLSD(SAVED_SEARCHES);
-                                     if (index >= 0 && index < list.size())
-                                     {
-                                         setSavedSearch(list[index]["query"].asString(), list[index]["folder"].asUUID(), false, true);
-                                     }
-                                 });
-    }
+    mSidebar->setSavedSearchCallbacks([this](S32 index) { runSavedSearch(index); },
+                                      [this](S32 index)
+                                      {
+                                          const LLSD list = gSavedPerAccountSettings.getLLSD(SAVED_SEARCHES);
+                                          if (index >= 0 && index < list.size())
+                                          {
+                                              setSavedSearch(list[index]["query"].asString(), list[index]["folder"].asUUID(), false, true);
+                                          }
+                                      });
+    mSidebar->setFocusContentCallback([this]() { focusContent(true); });
+    // A sidebar row's menu is the folder's, as the content views give it.
+    mSidebar->setMenuCallback([this](S32 x, S32 y, const LLUUID& folder_id)
+                              {
+                                  const LLViewerInventoryCategory* cat = gInventory.getCategory(folder_id);
+                                  showContextMenu(mSidebar, x, y, { folder_id }, cat ? cat->getParentUUID() : LLUUID::null);
+                              });
 
     mPathBar->setStrings(getString("path_arrow_tooltip"), getString("path_no_subfolders"));
     mPathBar->setNavigateCallback([this](const LLUUID& folder_id) { navigateTo(folder_id, true); });
@@ -1015,6 +1029,8 @@ void SKFloaterInventoryExplorer::onInventoryChanged(U32 mask)
             }
         }
     }
+    // The sidebar reads its rows again on its next draw.
+    mSidebar->markDirty();
     // The details read the item again when it changed: a rename, a description, an aspect.
     for (SKInventoryDetailsView* details : { mDetails, mColumns->getDetailsView() })
     {
@@ -2033,18 +2049,17 @@ void SKFloaterInventoryExplorer::runSavedSearch(S32 index)
 
 void SKFloaterInventoryExplorer::refreshSavedSearches()
 {
-    SKSavedSearchRows* rows_view = mSidebar ? mSidebar->getSavedSearches() : nullptr;
-    if (!rows_view || mTabs.empty())
+    if (!mSidebar || mTabs.empty())
     {
         return;
     }
     const SKExplorerTab& tab = currentTab();
     const LLSD list = gSavedPerAccountSettings.getLLSD(SAVED_SEARCHES);
-    std::vector<SKSavedSearchRows::Row> rows;
+    std::vector<SKInventoryTreeView::SavedSearch> rows;
     S32 selected = -1;
     for (S32 i = 0; i < list.size(); ++i)
     {
-        SKSavedSearchRows::Row row;
+        SKInventoryTreeView::SavedSearch row;
         row.mQuery = list[i]["query"].asString();
         const LLUUID folder_id = list[i]["folder"].asUUID();
         const LLViewerInventoryCategory* cat = folder_id.notNull() ? gInventory.getCategory(folder_id) : nullptr;
@@ -2067,5 +2082,5 @@ void SKFloaterInventoryExplorer::refreshSavedSearches()
         }
         rows.push_back(row);
     }
-    rows_view->setRows(rows, selected);
+    mSidebar->setSavedSearches(rows, selected);
 }

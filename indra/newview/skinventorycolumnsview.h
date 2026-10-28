@@ -174,6 +174,8 @@ protected:
     S32 columnAt(S32 x) const;
     S32 rowAt(const Column& column, S32 y) const;
     S32 rowsPerPage() const;
+    // The strip bar's height while the strip scrolls, else 0.
+    S32 stripBar() const;
     S32 columnScroll(const Column& column) const;
     void setColumnScroll(const Column& column, S32 first);
     void scrollRowIntoView(const Column& column, S32 row);

@@ -496,9 +496,14 @@ void SKInventoryColumnsView::reshape(S32 width, S32 height, bool called_from_par
     updateStripScrollbar();
 }
 
+S32 SKInventoryColumnsView::stripBar() const
+{
+    return mStripScrollbar && mStripScrollbar->getVisible() ? LLScrollbar::THIN_THICKNESS : 0;
+}
+
 S32 SKInventoryColumnsView::rowsPerPage() const
 {
-    const S32 bar = 0; // the thin strip bar is drawn over the columns
+    const S32 bar = stripBar();
     return llmax(1, (getRect().getHeight() - bar - TOP_PAD) / ROW_HEIGHT);
 }
 
@@ -554,7 +559,7 @@ S32 SKInventoryColumnsView::columnAt(S32 x) const
 
 S32 SKInventoryColumnsView::rowAt(const Column& column, S32 y) const
 {
-    const S32 bar = 0; // the thin strip bar is drawn over the columns
+    const S32 bar = stripBar();
     const S32 below_top = getRect().getHeight() - TOP_PAD - y;
     if (below_top < 0 || y < bar)
     {
@@ -754,7 +759,7 @@ void SKInventoryColumnsView::draw()
     fetchGhostWhenResting();
     updateColumnScrollbars();
 
-    const S32 bar = 0; // the thin strip bar is drawn over the columns
+    const S32 bar = stripBar();
     const S32 height = getRect().getHeight();
     const bool focused = hasFocus();
     const S32 view = getRect().getWidth();
@@ -838,6 +843,8 @@ void SKInventoryColumnsView::drawColumn(const Column& column, S32 index, S32 hei
     const S32 first = columnScroll(column);
     const S32 rows = (S32)column.mRows.size();
     const S32 last = llmin(rows + (column.mMore > 0 ? 1 : 0), first + rowsPerPage() + 1);
+    // A column that scrolls leaves its bar a column of its own.
+    const S32 inner_right = right - ((rows + (column.mMore > 0 ? 1 : 0)) > rowsPerPage() ? 1 + LLScrollbar::THIN_THICKNESS : 0);
     for (S32 r = first; r < last; ++r)
     {
         const S32 top = height - TOP_PAD - (r - first) * ROW_HEIGHT;
@@ -857,39 +864,43 @@ void SKInventoryColumnsView::drawColumn(const Column& column, S32 index, S32 hei
         {
             static LLUIColor bright_color = LLUIColorTable::instance().getColor("White");
             font->renderUTF8(row.mName, 0, (F32)(left + CELL_PAD), (F32)middle, bright_color.get(), LLFontGL::LEFT, LLFontGL::VCENTER,
-                             LLFontGL::BOLD, LLFontGL::NO_SHADOW, S32_MAX, column.mWidth - 40, nullptr, true);
-            const S32 name_width = llmin((S32)LLFontGL::getFontSansSerifSmallBold()->getWidthF32(row.mName), column.mWidth - 40);
+                             LLFontGL::BOLD, LLFontGL::NO_SHADOW, S32_MAX, inner_right - left - 40, nullptr, true);
+            const S32 name_width = llmin((S32)LLFontGL::getFontSansSerifSmallBold()->getWidthF32(row.mName), inner_right - left - 40);
             font->renderUTF8(llformat("%d", row.mGroupCount), 0, left + 2 * CELL_PAD + name_width, middle, dim_color.get(),
                              LLFontGL::LEFT, LLFontGL::VCENTER);
-            gl_line_2d(left + CELL_PAD, top - ROW_HEIGHT + 1, right - CELL_PAD, top - ROW_HEIGHT + 1, rule_color.get());
+            gl_line_2d(left + CELL_PAD, top - ROW_HEIGHT + 1, inner_right - CELL_PAD, top - ROW_HEIGHT + 1, rule_color.get());
             continue;
         }
         if (is_current && r < (S32)mSelected.size() && mSelected[r])
         {
-            gl_rect_2d(left, top, right - 1, top - ROW_HEIGHT, selected);
+            gl_rect_2d(left, top, inner_right - 1, top - ROW_HEIGHT, selected);
         }
         else if (is_current && focused && r == mCursor)
         {
             // The keyboard cursor on an unselected row: a faint fill.
             static LLUIColor cursor_color = LLUIColorTable::instance().getColor("White_10");
-            gl_rect_2d(left, top, right - 1, top - ROW_HEIGHT, cursor_color.get());
+            gl_rect_2d(left, top, inner_right - 1, top - ROW_HEIGHT, cursor_color.get());
         }
         else if (row.mID == column.mPathID)
         {
-            gl_rect_2d(left, top, right - 1, top - ROW_HEIGHT, path_color.get());
+            gl_rect_2d(left, top, inner_right - 1, top - ROW_HEIGHT, path_color.get());
         }
 
         S32 x = left + CELL_PAD;
         if (row.mIcon.notNull())
         {
             row.mIcon->draw(x, middle - ICON_SIZE / 2, ICON_SIZE, ICON_SIZE);
+            if (row.hasLinkBadge())
+            {
+                SKInventoryFlatView::drawLinkBadge(LLRect(x, middle + ICON_SIZE / 2, x + ICON_SIZE, middle - ICON_SIZE / 2));
+            }
             x += ICON_SIZE + CELL_PAD;
         }
-        S32 text_right = right - CELL_PAD;
+        S32 text_right = inner_right - CELL_PAD;
         if (row.mIsFolder && !row.mIsLink && arrow.notNull())
         {
             text_right -= arrow->getWidth() + CELL_PAD;
-            arrow->draw(right - CELL_PAD - arrow->getWidth(), middle - arrow->getHeight() / 2);
+            arrow->draw(inner_right - CELL_PAD - arrow->getWidth(), middle - arrow->getHeight() / 2);
         }
 
         // The ghost's text is dim, brightening under the pointer.
@@ -956,7 +967,7 @@ void SKInventoryColumnsView::updateColumnScrollbars()
         }
         LLScrollbar* bar = mColumnScrollbars[used];
         mColumnScrollbarFolders[used] = column.mFolderID;
-        const LLRect rect(left + column.mWidth - thickness - 1, height - TOP_PAD, left + column.mWidth - 1, 0);
+        const LLRect rect(left + column.mWidth - thickness - 1, height - TOP_PAD, left + column.mWidth - 1, stripBar());
         if (bar->getRect() != rect)
         {
             bar->setShape(rect);
@@ -981,7 +992,7 @@ void SKInventoryColumnsView::drawDetails(const Column& column, S32 height)
 {
     // The details view is a child laid over the column, drawn with the children.
     const S32 left = column.mLeft - mStripX;
-    mDetailsView->setRect(LLRect(left, height, left + column.mWidth - 1, 0));
+    mDetailsView->setRect(LLRect(left, height, left + column.mWidth - 1, stripBar()));
     mDetailsView->setSelection(column.mRows.empty() ? uuid_vec_t() : uuid_vec_t{ column.mRows.front().mID });
     mDetailsView->setVisible(true);
     mDetailsPlaced = true;

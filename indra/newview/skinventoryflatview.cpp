@@ -394,6 +394,7 @@ void SKInventoryFlatView::readItemRow(LLViewerInventoryItem* item, const SKInven
 
     const LLViewerInventoryItem* target = row.mIsLink ? gInventory.getItem(row.mTargetID) : item;
     const LLViewerInventoryItem* info = target ? target : item;
+    row.mLinkBroken = row.mIsLink && !target;
     row.mAssetType = info->getType();
     row.mType = std::string(LLInventoryType::lookupHumanReadable(info->getInventoryType()));
     if (!row.mType.empty())
@@ -438,7 +439,8 @@ void SKInventoryFlatView::readItemRow(LLViewerInventoryItem* item, const SKInven
             row.mWornOn = LLWearableType::getInstance()->getTypeLabel(info->getWearableType());
         }
     }
-    row.mIcon = LLInventoryIcon::getIcon(info->getType(), info->getInventoryType(), info->getFlags(), false);
+    row.mIcon = row.mLinkBroken ? LLInventoryIcon::getIcon(LLInventoryType::ICONNAME_INVALID)
+                                : LLInventoryIcon::getIcon(info->getType(), info->getInventoryType(), info->getFlags(), false);
 }
 
 void SKInventoryFlatView::sortRows(std::vector<SKInventoryRow>& rows, EColumn key, bool ascending)
@@ -713,6 +715,24 @@ void SKInventoryFlatView::setSelection(const uuid_vec_t& ids)
 S32 SKInventoryFlatView::getScroll() const
 {
     return mScrollbar->getDocPos();
+}
+
+void SKInventoryFlatView::drawLinkBadge(const LLRect& icon)
+{
+    static LLPointer<LLUIImage> badge = LLUI::getUIImage("Inv_Link");
+    if (badge.isNull())
+    {
+        return;
+    }
+    // Half the icon, at its bottom-right corner.
+    const S32 size = llmax(8, icon.getWidth() / 2);
+    badge->draw(icon.mRight - size + 2, icon.mBottom - 2, size, size);
+}
+
+S32 SKInventoryFlatView::contentWidth() const
+{
+    const bool scrolls = mScrollbar && mScrollbar->getVisible();
+    return llmax(0, getRect().getWidth() - (scrolls ? LLScrollbar::THIN_THICKNESS : 0));
 }
 
 void SKInventoryFlatView::setScroll(S32 pos)

@@ -96,7 +96,7 @@ void SKInventoryIconsView::setTileSize(S32 size)
 
 S32 SKInventoryIconsView::viewWidth() const
 {
-    return getRect().getWidth(); // the thin scroll bar is drawn over the tiles
+    return contentWidth();
 }
 
 S32 SKInventoryIconsView::tileHeight() const
@@ -107,9 +107,9 @@ S32 SKInventoryIconsView::tileHeight() const
 
 void SKInventoryIconsView::layoutRows()
 {
-    const S32 bar = mScrollbar->getRect().getWidth();
+    const S32 bar = LLScrollbar::THIN_THICKNESS;
     mScrollbar->setRect(LLRect(getRect().getWidth() - bar, getRect().getHeight(), getRect().getWidth(), 0));
-    const S32 width = getRect().getWidth();
+    const S32 width = viewWidth();
     mPerLine = llmax(1, (width - GAP) / (mTileSize + GAP));
 
     mLines.clear();
@@ -166,8 +166,17 @@ void SKInventoryIconsView::layoutRows()
     const S32 total = top;
     mScrollbar->setDocSize(total);
     mScrollbar->setPageSize(getRect().getHeight());
-    mScrollbar->setVisible(total > getRect().getHeight());
+    // Whether the bar shows changes the width the tiles fit in, so a change lays them out once more.
+    const bool scrolls = total > getRect().getHeight();
+    const bool changed = scrolls != mScrollbar->getVisible();
+    mScrollbar->setVisible(scrolls);
     mScrollbar->setDocPos(mScrollbar->getDocPos());
+    if (changed && !mRelayingOut)
+    {
+        mRelayingOut = true;
+        layoutRows();
+        mRelayingOut = false;
+    }
 }
 
 S32 SKInventoryIconsView::lineAt(S32 y) const
@@ -418,7 +427,7 @@ void SKInventoryIconsView::drawTile(const SKInventoryRow& row, const LLRect& rec
                    badge_bg.get(), true);
         row.mIcon->draw(art_rect.mLeft, art_rect.mBottom, BADGE_SIZE, BADGE_SIZE);
     }
-    if (mBadges && row.mIsLink && link_badge.notNull())
+    if (row.hasLinkBadge() && link_badge.notNull())
     {
         link_badge->draw(art_rect.mRight - BADGE_SIZE + 3, art_rect.mBottom - 3, BADGE_SIZE, BADGE_SIZE);
     }

@@ -112,7 +112,7 @@ S32 SKInventoryListView::rowsPerPage() const
 
 void SKInventoryListView::layoutRows()
 {
-    const S32 bar = mScrollbar->getRect().getWidth();
+    const S32 bar = LLScrollbar::THIN_THICKNESS;
     mScrollbar->setRect(LLRect(getRect().getWidth() - bar, getRect().getHeight() - HEADER_HEIGHT, getRect().getWidth(), 0));
     mScrollbar->setDocSize((S32)mRows.size());
     mScrollbar->setPageSize(rowsPerPage());
@@ -230,11 +230,12 @@ void SKInventoryListView::drawContent()
     static LLUIColor link_color = LLUIColorTable::instance().getColor("EmphasisColor");
 
     const LLFontGL* font = LLFontGL::getFontSansSerifSmall();
-    const S32 width = getRect().getWidth(); // the thin scroll bar is drawn over the rows
+    const S32 width = contentWidth();
     const S32 height = getRect().getHeight();
 
     // The header stays at the top, with the sort direction on the sorted column.
-    gl_rect_2d(0, height, width, height - HEADER_HEIGHT, header_bg.get());
+    // The header's background runs over the bar's column too.
+    gl_rect_2d(0, height, getRect().getWidth(), height - HEADER_HEIGHT, header_bg.get());
     S32 left = 0;
     for (EColumn col : mShown)
     {
@@ -313,6 +314,10 @@ void SKInventoryListView::drawContent()
             if (col == COL_NAME && row.mIcon.notNull())
             {
                 row.mIcon->draw(x, middle - ICON_SIZE / 2, ICON_SIZE, ICON_SIZE);
+                if (row.hasLinkBadge())
+                {
+                    drawLinkBadge(LLRect(x, middle + ICON_SIZE / 2, x + ICON_SIZE, middle - ICON_SIZE / 2));
+                }
                 x += ICON_SIZE + CELL_PAD;
             }
             const std::string text = cellText(row, col);
@@ -411,7 +416,7 @@ bool SKInventoryListView::isDragHandle(S32 x, S32 y, S32 row) const
 
 LLRect SKInventoryListView::rowsArea() const
 {
-    return LLRect(0, getRect().getHeight() - HEADER_HEIGHT, getRect().getWidth(), 0);
+    return LLRect(0, getRect().getHeight() - HEADER_HEIGHT, contentWidth(), 0);
 }
 
 S32 SKInventoryListView::contentDown(S32 y) const
@@ -438,7 +443,7 @@ void SKInventoryListView::rowsInBand(S32 top, S32 bottom, S32 left, S32 right, s
 LLRect SKInventoryListView::rowRect(S32 row) const
 {
     const S32 top = getRect().getHeight() - HEADER_HEIGHT - (row - mScrollbar->getDocPos()) * ROW_HEIGHT;
-    return LLRect(0, top, getRect().getWidth(), top - ROW_HEIGHT);
+    return LLRect(0, top, contentWidth(), top - ROW_HEIGHT);
 }
 
 void SKInventoryListView::scrollPixels(S32 pixels)
