@@ -363,7 +363,8 @@ namespace SKDragVerdict
                 break;
             case DAD_OBJECT:
                 action = ctrl ? EDragAction::Contents : EDragAction::Rez;
-                whole = true;
+                // A rez lands on the surface: the face, not the object.
+                whole = ctrl;
                 if (!ctrl) add_hint("DragHintContents");
                 break;
             case DAD_CATEGORY:

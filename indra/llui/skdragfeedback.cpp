@@ -341,7 +341,8 @@ void LLDragFeedback::drawTargetMark(const LLRect& rect, EDragMark kind, bool fil
 void LLDragFeedback::draw(S32 x, S32 y, const LLRect& window_rect)
 {
     State& s = state();
-    if (!shown() || !window_rect.pointInRect(x, y))
+    // The window clamps a pointer outside it to its edges, so a pointer on any edge has left.
+    if (!shown() || x <= window_rect.mLeft || x >= window_rect.mRight || y <= window_rect.mBottom || y >= window_rect.mTop)
     {
         return;
     }
