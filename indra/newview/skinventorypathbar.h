@@ -99,6 +99,7 @@ protected:
     navigate_callback_t mNavigateCallback;
 
     SKExplorerPopupList* mMenu;
+    LLHandle<LLView> mMenuHandle;
     S32 mMenuCrumb;             // the crumb whose menu is open, -1 for none
     U32 mMenuClosedFrame;       // a click on the arrow that closed it does not open it again
     S32 mMenuClosedCrumb;

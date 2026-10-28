@@ -127,6 +127,7 @@
 #include "llpanelplaceprofile.h"
 #include "llviewerregion.h"
 #include "llfloaterregionrestarting.h"
+#include "skinventoryexplorermenu.h" // <SK:Nexii> Inventory Explorer
 // [RLVa:KB] - Checked: 2010-03-09 (RLVa-1.2.0a)
 #include "rlvactions.h"
 #include "rlvhandler.h"
@@ -1091,6 +1092,9 @@ protected:
                 }
             }
 
+            // <SK:Nexii> Inventory Explorer: what it created is shown there, not in the Inventory floater
+            was_moved = was_moved || SKInventoryExplorerActions::claimCreated(item_uuid);
+            // </SK:Nexii>
             if (was_moved)
             {
                 it = added.erase(it);

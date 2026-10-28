@@ -303,6 +303,9 @@ private:
     bool mSearchUnsorted = false;   // hits were appended unsorted; sorted once the walk ends
     LLFrameTimer mSearchSorted;
     std::string mSearchStatus;
+    // An object New made: selected and renamed once a view lists it.
+    LLUUID mPendingRename;
+    LLFrameTimer mPendingRenameTimer;
     U32 mSearchStatusKey = U32_MAX;
     LLTextBox* mStatusText;
     LLTextBox* mDetailsText;

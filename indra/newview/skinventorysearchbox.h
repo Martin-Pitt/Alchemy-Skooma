@@ -142,6 +142,7 @@ private:
 
     SKInventorySearchBox* mBox;
     SKExplorerPopupList* mPopup;
+    LLHandle<LLView> mPopupHandle;
     std::vector<Option> mOptions;
     std::map<std::string, std::string> mStrings;
     void_callback_t mEditCallback;

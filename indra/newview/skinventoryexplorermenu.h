@@ -33,6 +33,7 @@
 #include <map>
 
 class LLContextMenu;
+class LLFloater;
 class LLInventoryPanel;
 
 // What the content views do to inventory, through the same model calls, free functions
@@ -68,7 +69,11 @@ namespace SKInventoryExplorerActions
     void toggleFavorite(const uuid_vec_t& ids);
 
     // One of the Inventory floater's "New" kinds (category, lsl, notecard, shirt, sky, ...) in the folder.
-    void create(const LLUUID& dest_id, const std::string& kind);
+    // The callback gets the new object's id; the Inventory floater is not opened for it.
+    void create(const LLUUID& dest_id, const std::string& kind,
+                const std::function<void(const LLUUID&)>& created_cb = std::function<void(const LLUUID&)>());
+    // True once for an item a create() here asked for, so the stock "show new inventory" passes it by.
+    bool claimCreated(const LLUUID& id);
 
     // Finds the live inventory panel the stock bridges are built over, null while there is none.
     typedef std::function<LLInventoryPanel*()> bridge_panel_getter_t;
@@ -106,6 +111,11 @@ public:
     void setListedFolder(const LLUUID& folder_id, bool root_mode) { mListedFolderID = folder_id; mRootMode = root_mode; }
     // Set while the menu is over search results: "Show in Folder" is offered and runs this.
     void setShowInFolderCallback(const id_callback_t& cb) { mShowInFolderCallback = cb; }
+    // Gets each object New made, to select and rename it.
+    void setCreatedCallback(const id_callback_t& cb) { mCreatedCallback = cb; }
+
+    // Remembers where the menu opened, so Properties and Image… open by the item.
+    void show(LLView* spawning_view, const uuid_vec_t& uuids, S32 x, S32 y) override;
 
     // A menu of options alone (the List's header menu, the toolbar's Sort and Group), shown under spawn at x, y.
     static void showOptionsMenu(const std::string& filename, const SKExplorerOptions& options, LLView* spawn, S32 x, S32 y);
@@ -118,6 +128,8 @@ protected:
     void doToSelected(const std::string& action);
     void updateMenuItemsVisibility(LLContextMenu* menu);
     void addIconRow(LLContextMenu* menu);
+    // Next to the point the menu opened at if the screen has room there, else beside the Explorer, on screen.
+    void placeNearSpawn(LLFloater* floater);
     void addAttachmentPoints(LLContextMenu* menu);
     std::string string(const std::string& key) const
     {
@@ -128,6 +140,10 @@ protected:
     open_callback_t mOpenCallback;
     id_callback_t mRenameCallback;
     id_callback_t mShowInFolderCallback;
+    id_callback_t mCreatedCallback;
+    LLHandle<LLView> mSpawnView;
+    S32 mSpawnX = 0;
+    S32 mSpawnY = 0;
     SKExplorerOptions mOptions;
     LLUUID mListedFolderID;
     bool mRootMode;
