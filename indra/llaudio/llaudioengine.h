@@ -514,7 +514,6 @@ protected:
     LLUUID          mLogID;
     LLUUID          mSourceID;
     bool            mIsTrigger;
-    F32             mStartOffset = 0.f; // <SK:Nexii> Audio preview control
 
     //LLAudioSource *mSyncMasterp;  // If we're a slave, the source that we're synced to.
     LLAudioChannel  *mChannelp;     // If we're currently playing back, this is the channel that we're assigned to.
@@ -525,6 +524,8 @@ protected:
     data_map mPreloadMap;
 
     LLFrameTimer mAgeTimer;
+
+    F32 mStartOffset = 0.f; // <SK:Nexii> Audio preview control: seconds in to start at once the sound plays
 };
 
 
