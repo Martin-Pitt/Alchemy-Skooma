@@ -1549,4 +1549,5 @@ Branch `feature-ui/inventory-explorer` (via `ui`, main `7b8ef524f4`). Spec: `.in
 | `skins/default/xui/en/menu_viewer.xml` | Me menu: "Inventory Explorer..." directly below Inventory | `<!-- <SK:Nexii> Inventory Explorer -->` |
 | `app_settings/commands.xml` | toolbar command `sk_inventory_explorer` right after `inventory` (borrows `Command_Inventory_Icon`) | `<!-- <SK:Nexii> Inventory Explorer -->` |
 | `skins/default/xui/en/strings.xml` | `Command_SKInventoryExplorer_Label` / `_Tooltip` after `Command_Search_*` | trailing `<!-- <SK:Nexii> Inventory Explorer -->` |
+| `indra/newview/llviewermessage.cpp` | `LLOpenTaskOffer` skips items the Explorer created, so the stock Inventory floater doesn't open for them | `<SK:Nexii> Inventory Explorer` |
 | `app_settings/settings_per_account_alchemy.xml` | `SkoomaInvExplorer*` preferences (view, sort, group, panes, columns, saved and recent searches, icon size) after `ALScriptStudioVimrcNotecard` | `<!-- <SK:Nexii> Inventory Explorer -->` |
