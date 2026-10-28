@@ -604,7 +604,7 @@ bool SKFloaterInventoryExplorer::postBuild()
     mColumns->setLabels(labels);
     std::map<std::string, std::string> details_strings;
     for (const char* key : { "no_selection", "n_selected", "loading", "link_suffix", "yes", "perm_full", "perm_modify", "perm_copy",
-                             "perm_transfer", "row_folder", "row_type", "row_contents", "contents_counts", "row_creator", "row_acquired", "row_you", "row_next_owner",
+                             "perm_transfer", "row_folder", "row_type", "row_creator", "row_acquired", "row_you", "row_next_owner",
                              "row_worn", "row_attaches_to", "row_description", "row_resolution", "row_channels", "row_aspect",
                              "row_length", "row_format", "row_loops", "row_priority", "row_ease", "row_joints", "row_hand_pose",
                              "row_expression", "row_base_colour", "row_metallic", "row_roughness", "row_alpha_mode",

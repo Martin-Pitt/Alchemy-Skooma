@@ -1590,7 +1590,7 @@ void SKInventoryDetailsView::rebuild()
             mLaidWidth = -1;
             return;
         }
-        // A folder: its thumbnail on top when it has one, its name, type and what it holds.
+        // A folder: its thumbnail on top when it has one, then its name and type.
         mThumbnail = cat->getThumbnailUUID().notNull();
         mThumb.setItem(mThumbnail ? mItemID : LLUUID::null, cat->getThumbnailUUID());
         mThumb.setFetching(mFetching);
@@ -1600,18 +1600,7 @@ void SKInventoryDetailsView::rebuild()
         name.mKind = Line::LINE_NAME;
         name.mValue.push_back({ cat->getName() });
         mLines.push_back(name);
-        addRow("row_folder", mFolderPath);
         addRow("row_type", row.mType);
-        LLInventoryModel::cat_array_t* cats = nullptr;
-        LLInventoryModel::item_array_t* items = nullptr;
-        gInventory.getDirectDescendentsOf(mItemID, cats, items);
-        if (cats || items)
-        {
-            LLStringUtil::format_map_t args;
-            args["[FOLDERS]"] = llformat("%d", cats ? (S32)cats->size() : 0);
-            args["[ITEMS]"] = llformat("%d", items ? (S32)items->size() : 0);
-            addRow("row_contents", format_args(SKInventoryDetails::str("contents_counts"), args));
-        }
         mLaidWidth = -1;
         return;
     }

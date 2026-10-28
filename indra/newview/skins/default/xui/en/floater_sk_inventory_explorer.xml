@@ -46,10 +46,7 @@
     <string name="details_perm_copy">Copy</string>
     <string name="details_perm_transfer">Transfer</string>
     <string name="details_row_folder">Folder</string>
-    <string name="details_row_type">Type</string>
-    <string name="details_row_contents">Contains</string>
-    <string name="details_contents_counts">[FOLDERS] folders, [ITEMS] items</string>
-    <string name="details_row_creator">Creator</string>
+    <string name="details_row_type">Type</string>    <string name="details_row_creator">Creator</string>
     <string name="details_row_acquired">Acquired</string>
     <string name="details_row_you">You</string>
     <string name="details_row_next_owner">Next owner</string>
