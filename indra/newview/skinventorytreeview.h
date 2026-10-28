@@ -101,8 +101,8 @@ public:
     // Selects the folder's row in the section that should show it, expanding to it, and scrolls
     // only if no copy of the row is in view.
     void reveal(const LLUUID& folder_id);
-    // The inventory changed: the rows are read again on the next draw.
-    void markDirty();
+    // Follows what the inventory says changed: favourites, counts and rows are updated only where it touches them.
+    void onInventoryChanged(const std::set<LLUUID>& changed_ids, U32 mask);
 
     void draw() override;
     void reshape(S32 width, S32 height, bool called_from_parent = true) override;
@@ -152,7 +152,10 @@ protected:
     };
 
     void rebuild();
-    void refreshFavorites();
+    void walkFavorites();
+    void sortFavorites();
+    // Drops the cached counts of the folder and every folder above it, as the model has it now and as it had it.
+    void dropCounts(const LLUUID& id);
     void addFolderRows(const LLUUID& folder_id, ESection section, const std::string& parent_key, S32 depth);
     void addFolderRow(const LLUUID& folder_id, ESection section, const std::string& key, S32 depth);
     void layout();
@@ -181,10 +184,10 @@ protected:
     S32 mContentHeight;
     std::set<std::string> mExpanded;
     std::set<std::string> mExpandedBeforeFlat;
-    std::vector<LLUUID> mFavorites;     // favourite folders, sorted, outermost only
-    bool mFavoritesDirty;
-    bool mFavoritesWalked;            // walked at least once: later walks wait out the second
-    LLFrameTimer mFavoritesTimer;
+    std::set<LLUUID> mFavoriteSet;      // every favourite folder: one walk at first use, then kept by the changes
+    std::vector<LLUUID> mFavorites;     // the outermost ones, sorted by name
+    bool mFavoritesWalked;
+    std::set<LLUUID> mRowIDs;           // the folders the rows show
     std::vector<SavedSearch> mSavedSearches;
     S32 mSavedSelected;
     bool mFlat;
@@ -198,8 +201,8 @@ protected:
 
     // Counts per folder for the session; dropped when the inventory changes.
     std::map<LLUUID, std::pair<S32, bool>> mCounts;
-    bool mCountsStale;
-    LLFrameTimer mCountsTimer;
+    // Each folder under a counted one, to its parent as it was counted: a removed or moved folder's old ancestors.
+    std::map<LLUUID, LLUUID> mCountedParents;
 
     // A press that may become a drag of the row.
     S32 mPressIndex;
