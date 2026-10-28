@@ -467,8 +467,8 @@
                  width="220">
                     <text
                      follows="left|top"
-                     font="SansSerifSmallBold"
-                     height="18"
+                     font="SansSerifSmall"
+                     height="14"
                      layout="topleft"
                      left="8"
                      name="heading_favorites"
@@ -511,8 +511,8 @@
                      width="205" />
                     <text
                      follows="left|top"
-                     font="SansSerifSmallBold"
-                     height="18"
+                     font="SansSerifSmall"
+                     height="14"
                      layout="topleft"
                      left="8"
                      name="heading_inventory"
@@ -537,8 +537,8 @@
                     </sk_inventory_sidebar_panel>
                     <text
                      follows="left|top"
-                     font="SansSerifSmallBold"
-                     height="18"
+                     font="SansSerifSmall"
+                     height="14"
                      layout="topleft"
                      left="8"
                      name="heading_marketplace"
@@ -563,8 +563,8 @@
                     </sk_inventory_sidebar_panel>
                     <text
                      follows="left|top"
-                     font="SansSerifSmallBold"
-                     height="18"
+                     font="SansSerifSmall"
+                     height="14"
                      layout="topleft"
                      left="8"
                      name="heading_library"

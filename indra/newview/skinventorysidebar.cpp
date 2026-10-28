@@ -34,6 +34,7 @@
 #include "llinventoryfunctions.h"
 #include "llinventorymodel.h"
 #include "llinventoryobserver.h"
+#include "llscrollbar.h"
 #include "llscrollcontainer.h"
 #include "llfontgl.h"
 #include "llrender2dutils.h"
@@ -583,7 +584,11 @@ bool SKInventorySidebar::handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop, E
 void SKInventorySidebar::arrangePanels()
 {
     // Content height is known only to the folder views, so the stacking is done here.
-    struct Row { LLView* view; S32 height; };
+    // Each row may keep a gap above it: a heading's 8 px top margin (the prototype's .side h4).
+    struct Row { LLView* view; S32 height; S32 gap = 0; };
+    constexpr S32 SIDEBAR_TOP_PAD = 4;
+    constexpr S32 HEADING_GAP = 8;
+    constexpr S32 HEADING_SIDE = 8;
     std::vector<Row> rows;
     for (size_t i = 0; i < mPanels.size(); ++i)
     {
@@ -597,7 +602,7 @@ void SKInventorySidebar::arrangePanels()
             heading->setVisible(show_section);
             if (show_section)
             {
-                rows.push_back({ heading, heading->getRect().getHeight() });
+                rows.push_back({ heading, heading->getRect().getHeight(), HEADING_GAP });
             }
         }
         const S32 saved = (is_favorites && mSavedSearches) ? mSavedSearches->getContentHeight() : 0;
@@ -620,26 +625,36 @@ void SKInventorySidebar::arrangePanels()
         }
     }
 
-    S32 height = 0;
+    S32 height = SIDEBAR_TOP_PAD;
     for (const Row& row : rows)
     {
-        height += row.height;
+        height += row.gap + row.height;
     }
     height = llmax(height, 1);
 
     LLRect rect = getRect();
-    if (rect.getHeight() != height)
+    // The rows stop at the outer scroller's bar, which keeps a column of its own while it shows.
+    S32 visible_width = rect.getWidth();
+    if (LLScrollContainer* scroller = dynamic_cast<LLScrollContainer*>(getParent()))
+    {
+        const LLRect window = scroller->getContentWindowRect();
+        visible_width = scroller->getRect().getWidth() - (height > window.getHeight() ? LLScrollbar::THIN_THICKNESS : 0);
+    }
+    if (rect.getHeight() != height || rect.getWidth() != visible_width)
     {
         rect.mBottom = rect.mTop - height;
+        rect.mRight = rect.mLeft + visible_width;
         setShape(rect);
     }
 
     const S32 width = rect.getWidth();
-    S32 top = height;
+    S32 top = height - SIDEBAR_TOP_PAD;
     for (const Row& row : rows)
     {
-        const S32 left = row.view->getRect().mLeft;
-        const S32 right = (dynamic_cast<SKInventorySidebarPanel*>(row.view) || row.view == mSavedSearches) ? width : width - 4;
+        top -= row.gap;
+        const bool full = dynamic_cast<SKInventorySidebarPanel*>(row.view) || row.view == mSavedSearches;
+        const S32 left = full ? row.view->getRect().mLeft : HEADING_SIDE;
+        const S32 right = full ? width : width - HEADING_SIDE;
         LLRect shape(left, top, right, top - row.height);
         if (row.view->getRect() != shape)
         {
