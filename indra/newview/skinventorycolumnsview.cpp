@@ -109,7 +109,7 @@ SKInventoryColumnsView::SKInventoryColumnsView(const Params& p)
     mGlowSide(0),
     mStripScrollbar(nullptr)
 {
-    const S32 bar = LLUI::getInstance()->mSettingGroups["config"]->getS32("UIScrollbarSize");
+    const S32 bar = LLScrollbar::THIN_THICKNESS;
     LLScrollbar::Params sbparams;
     sbparams.name("strip_scrollbar");
     sbparams.rect(LLRect(0, bar, getRect().getWidth(), 0));
@@ -119,7 +119,7 @@ SKInventoryColumnsView::SKInventoryColumnsView(const Params& p)
     sbparams.page_size(1);
     sbparams.follows.flags(FOLLOWS_LEFT | FOLLOWS_RIGHT | FOLLOWS_BOTTOM);
     sbparams.visible(false);
-    sbparams.overlay(true); // drawn over the columns, which keep the full height
+    sbparams.thin(true); // drawn over the columns, which keep the full height
     sbparams.change_callback([this](S32 pos, LLScrollbar*) { mStripX = pos; });
     mStripScrollbar = LLUICtrlFactory::create<LLScrollbar>(sbparams);
     addChild(mStripScrollbar);
@@ -488,7 +488,7 @@ void SKInventoryColumnsView::reshape(S32 width, S32 height, bool called_from_par
 
 S32 SKInventoryColumnsView::rowsPerPage() const
 {
-    const S32 bar = 0; // the overlay strip bar takes no room
+    const S32 bar = 0; // the thin strip bar is drawn over the columns
     return llmax(1, (getRect().getHeight() - bar - TOP_PAD) / ROW_HEIGHT);
 }
 
@@ -544,7 +544,7 @@ S32 SKInventoryColumnsView::columnAt(S32 x) const
 
 S32 SKInventoryColumnsView::rowAt(const Column& column, S32 y) const
 {
-    const S32 bar = 0; // the overlay strip bar takes no room
+    const S32 bar = 0; // the thin strip bar is drawn over the columns
     const S32 below_top = getRect().getHeight() - TOP_PAD - y;
     if (below_top < 0 || y < bar)
     {
@@ -744,7 +744,7 @@ void SKInventoryColumnsView::draw()
     fetchGhostWhenResting();
     updateColumnScrollbars();
 
-    const S32 bar = 0; // the overlay strip bar takes no room
+    const S32 bar = 0; // the thin strip bar is drawn over the columns
     const S32 height = getRect().getHeight();
     const bool focused = hasFocus();
     const S32 view = getRect().getWidth();
@@ -892,11 +892,11 @@ void SKInventoryColumnsView::drawColumn(const Column& column, S32 index, S32 hei
 
 void SKInventoryColumnsView::updateColumnScrollbars()
 {
-    // One overlay bar a scrolling column, laid over its right edge; the pool only grows.
+    // One thin bar a scrolling column, laid over its right edge; the pool only grows.
     const S32 height = getRect().getHeight();
     const S32 view = getRect().getWidth();
     const S32 page = rowsPerPage();
-    const S32 thickness = LLUI::getInstance()->mSettingGroups["config"]->getS32("UIScrollbarSize");
+    const S32 thickness = LLScrollbar::THIN_THICKNESS;
     size_t used = 0;
     for (S32 i = 0; i < (S32)mColumns.size(); ++i)
     {
@@ -917,7 +917,7 @@ void SKInventoryColumnsView::updateColumnScrollbars()
             sbparams.doc_size(0);
             sbparams.doc_pos(0);
             sbparams.page_size(1);
-            sbparams.overlay(true);
+            sbparams.thin(true);
             sbparams.follows.flags(FOLLOWS_NONE);
             const size_t slot = used;
             sbparams.change_callback([this, slot](S32 pos, LLScrollbar*)

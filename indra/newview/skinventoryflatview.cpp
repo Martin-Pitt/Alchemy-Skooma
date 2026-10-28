@@ -258,7 +258,7 @@ SKInventoryFlatView::SKInventoryFlatView(const LLUICtrl::Params& p)
     mDropRow(-1),
     mScrollbar(nullptr)
 {
-    const S32 bar = LLUI::getInstance()->mSettingGroups["config"]->getS32("UIScrollbarSize");
+    const S32 bar = LLScrollbar::THIN_THICKNESS;
     LLScrollbar::Params sbparams;
     sbparams.name("flat_scrollbar");
     sbparams.rect(LLRect(getRect().getWidth() - bar, getRect().getHeight(), getRect().getWidth(), 0));
@@ -268,7 +268,7 @@ SKInventoryFlatView::SKInventoryFlatView(const LLUICtrl::Params& p)
     sbparams.page_size(1);
     sbparams.follows.flags(FOLLOWS_RIGHT | FOLLOWS_TOP | FOLLOWS_BOTTOM);
     sbparams.visible(false);
-    sbparams.overlay(true); // drawn over the rows, which keep the full width
+    sbparams.thin(true); // drawn over the rows, which keep the full width
     mScrollbar = LLUICtrlFactory::create<LLScrollbar>(sbparams);
     addChild(mScrollbar);
 }

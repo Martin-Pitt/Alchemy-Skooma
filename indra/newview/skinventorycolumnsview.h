@@ -255,7 +255,7 @@ protected:
     LLFrameTimer mGlowTimer;
 
     LLScrollbar* mStripScrollbar;
-    std::vector<LLScrollbar*> mColumnScrollbars;    // overlay bars for the columns that scroll, reused
+    std::vector<LLScrollbar*> mColumnScrollbars;    // thin bars for the columns that scroll, reused
     std::vector<LLUUID> mColumnScrollbarFolders;    // the folder each bar scrolls this frame
     SKInventoryListLabels mLabels;
 

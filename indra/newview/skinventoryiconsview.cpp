@@ -96,7 +96,7 @@ void SKInventoryIconsView::setTileSize(S32 size)
 
 S32 SKInventoryIconsView::viewWidth() const
 {
-    return getRect().getWidth(); // the overlay scroll bar takes no gutter
+    return getRect().getWidth(); // the thin scroll bar is drawn over the tiles
 }
 
 S32 SKInventoryIconsView::tileHeight() const
