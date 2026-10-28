@@ -65,6 +65,8 @@ static ScrollContainerRegistry::Register<LLScrollingPanelList> r1("scrolling_pan
 static ScrollContainerRegistry::Register<LLContainerView> r2("container_view");
 static ScrollContainerRegistry::Register<LLPanel> r3("panel", &LLPanel::fromXML);
 
+bool LLScrollContainer::sThinScrollbarsEverywhere = false; // <SK:Nexii> Thin scrollbars
+
 LLScrollContainer::Params::Params()
 :   is_opaque("opaque"),
     bg_color("color"),
@@ -76,6 +78,7 @@ LLScrollContainer::Params::Params()
     max_auto_scroll_zone("max_auto_scroll_zone", 16),
     reserve_scroll_corner("reserve_scroll_corner", false),
     keep_scroll_pos("keep_scroll_pos", false),
+    thin_scrollbars("thin_scrollbars", false), // <SK:Nexii> Thin scrollbars
     size("size", -1)
 {}
 
@@ -97,6 +100,13 @@ LLScrollContainer::LLScrollContainer(const LLScrollContainer::Params& p)
     mKeepScrollPos(p.keep_scroll_pos),
     mSize(p.size)
 {
+    // <SK:Nexii> Thin scrollbars: per container, or everywhere; the gutter is only the thin width.
+    mThinScrollbars = p.thin_scrollbars || sThinScrollbarsEverywhere;
+    if (mThinScrollbars && mSize < 0)
+    {
+        mSize = LLScrollbar::THIN_THICKNESS;
+    }
+    // </SK:Nexii>
     mStoredDocPos[VERTICAL] = 0;
     mStoredDocPos[HORIZONTAL] = 0;
 
@@ -128,6 +138,8 @@ LLScrollContainer::LLScrollContainer(const LLScrollContainer::Params& p)
     sbparams.follows.flags(FOLLOWS_RIGHT | FOLLOWS_TOP | FOLLOWS_BOTTOM);
     sbparams.visible(false);
     sbparams.change_callback(p.scroll_callback);
+    sbparams.thin(mThinScrollbars); // <SK:Nexii> Thin scrollbars
+    if (mThinScrollbars) sbparams.thickness(scrollbar_size); // <SK:Nexii> Thin scrollbars
     mScrollbar[VERTICAL] = LLUICtrlFactory::create<LLScrollbar> (sbparams);
     LLView::addChild( mScrollbar[VERTICAL] );
 
@@ -845,6 +857,7 @@ S32 LLScrollContainer::getBorderWidth() const
 
 void LLScrollContainer::setSize(S32 size)
 {
+    if (mThinScrollbars && size < 0) size = LLScrollbar::THIN_THICKNESS; // <SK:Nexii> Thin scrollbars
     mSize = size;
     mScrollbar[VERTICAL]->setThickness(size);
     mScrollbar[HORIZONTAL]->setThickness(size);

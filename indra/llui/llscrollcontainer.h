@@ -67,7 +67,8 @@ public:
                             border_visible,
                             hide_scrollbar,
                             ignore_arrow_keys,
-                            keep_scroll_pos;
+                            keep_scroll_pos,
+                            thin_scrollbars; // <SK:Nexii> Thin scrollbars
         Optional<F32>       min_auto_scroll_rate,
                             max_auto_scroll_rate;
         Optional<U32>       max_auto_scroll_zone;
@@ -137,6 +138,11 @@ public:
     bool autoScroll(S32 x, S32 y);
 
     S32 getSize() const { return mSize; }
+
+    // <SK:Nexii> Thin scrollbars: set by the viewer from SkoomaScrollbarThinEverywhere before any window is built.
+    static bool sThinScrollbarsEverywhere;
+    bool hasThinScrollbars() const { return mThinScrollbars; }
+    // </SK:Nexii>
     void setSize(S32 thickness);
 
 protected:
@@ -154,6 +160,7 @@ private:
     S32         mStoredDocPos[ORIENTATION_COUNT];
     bool        mKeepScrollPos;
     S32         mSize;
+    bool        mThinScrollbars = false; // <SK:Nexii> Thin scrollbars
     bool        mIsOpaque;
     LLUIColor   mBackgroundColor;
     LLRect      mInnerRect;
