@@ -124,7 +124,7 @@ void SKRoomProbes::takeWorkerResults()
 
 void SKRoomProbes::update(const SKWorldViewPtr& view)
 {
-    static LLCachedControl<bool> enabled(gSavedSettings, "SKRoomProbes", true);
+    static LLCachedControl<bool> enabled(gSavedSettings, "SKRoomProbes", false);
     static LLCachedControl<U32> max_probes(gSavedSettings, "SKRoomProbesMax", 240);
     static LLCachedControl<S32> probe_level(gSavedSettings, "RenderReflectionProbeLevel", 3);
     if (!enabled || !LLPipeline::sReflectionProbesEnabled || probe_level < 3)
