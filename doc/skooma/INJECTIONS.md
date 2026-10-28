@@ -40,6 +40,8 @@ XML has no comment convention here, so these are identified by their `SK` prefix
 
 - `indra/newview/app_settings/settings_alchemy.xml` — `SKSoundLoudnessNormalize`,
   `SKSoundLoudnessTargetLUFS`, `SKSoundLoudnessStrength` (upload normalization was removed 2026-10-28)
+- `indra/newview/skins/default/xui/en/panel_preferences_sound.xml` — `loudness_strength` slider
+  ("Even out levels") bound to `SKSoundLoudnessStrength`, in an XML `<SK:Nexii>` comment pair
 - `indra/llaudio/CMakeLists.txt` — `sklufs.cpp` / `sklufs.h` sources, `al_add_test_binary(llaudio_tests …)`
 
 ---
