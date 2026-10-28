@@ -1530,6 +1530,10 @@ Branch `feature-ui/inventory-explorer` (via `ui`, main `7b8ef524f4`). Spec: `.in
 | `indra/newview/skinventorylistview.*` | List view drawn from a flat model, visible rows only |
 | `indra/newview/skinventorycolumnsview.*` | Columns view: strip, ghost, details and spare columns |
 | `indra/newview/skinventoryexplorerdrag.*` | Drag and drop: start, drops through the stock folder functions, Alt links, spring, autoscroll, undo |
+| `indra/newview/skinventoryexplorerpopup.*` | Popup list with icons, hints and remove buttons (crumb menu, search dropdown) |
+| `indra/newview/skinventorypathbar.*` | Path bar: crumbs, subfolder menus |
+| `indra/newview/skinventoryexplorersearch.*` | Search: parser, filters, sliced walk, incremental re-checks |
+| `indra/newview/skinventorysearchbox.*` | Search box and dropdown: options, values, recent, favourite line |
 | `indra/newview/skinventoryflatview.*` | Shared base of List and Icons: rows, sort, grouping, paging, selection, rename, clipboard |
 | `indra/newview/skinventoryiconsview.*` | Icons view: grid, visible-only thumbnails |
 | `indra/newview/skinventoryrenameeditor.*` | Inline rename editor |
@@ -1541,8 +1545,8 @@ Branch `feature-ui/inventory-explorer` (via `ui`, main `7b8ef524f4`). Spec: `.in
 | File | What | Marked |
 |---|---|---|
 | `indra/newview/llviewerfloaterreg.cpp` | include beside `llfloaterinventorythumbnailshelper.h`; `LLFloaterReg::add("sk_inventory_explorer")` after `"inventory"` | trailing `// <SK:Nexii> Inventory Explorer` |
-| `indra/newview/CMakeLists.txt` | 9 sources and 9 headers in alphabetical order among the sk entries | trailing `# <SK:Nexii> Inventory Explorer` |
+| `indra/newview/CMakeLists.txt` | 13 sources and 13 headers in alphabetical order among the sk entries | trailing `# <SK:Nexii> Inventory Explorer` |
 | `skins/default/xui/en/menu_viewer.xml` | Me menu: "Inventory Explorer..." directly below Inventory | `<!-- <SK:Nexii> Inventory Explorer -->` |
 | `app_settings/commands.xml` | toolbar command `sk_inventory_explorer` right after `inventory` (borrows `Command_Inventory_Icon`) | `<!-- <SK:Nexii> Inventory Explorer -->` |
 | `skins/default/xui/en/strings.xml` | `Command_SKInventoryExplorer_Label` / `_Tooltip` after `Command_Search_*` | trailing `<!-- <SK:Nexii> Inventory Explorer -->` |
-| `app_settings/settings_per_account_alchemy.xml` | 11 `SkoomaInvExplorer*` preferences after `ALScriptStudioVimrcNotecard` | `<!-- <SK:Nexii> Inventory Explorer -->` |
+| `app_settings/settings_per_account_alchemy.xml` | `SkoomaInvExplorer*` preferences (view, sort, group, panes, columns, saved and recent searches, icon size) after `ALScriptStudioVimrcNotecard` | `<!-- <SK:Nexii> Inventory Explorer -->` |
