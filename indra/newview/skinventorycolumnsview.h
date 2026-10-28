@@ -40,6 +40,8 @@
 class LLScrollbar;
 
 // One widget draws the whole strip, each column only over its visible rows.
+class SKInventoryDetailsView;
+
 class SKInventoryColumnsView : public LLUICtrl, public LLEditMenuHandler
 {
 public:
@@ -78,6 +80,7 @@ public:
 
     void setSort(SKInventoryListView::EColumn key, bool ascending);
     void setDetailsShown(bool shown);
+    SKInventoryDetailsView* getDetailsView() const { return mDetailsView; }
     // Grouping adds headers to the current column only.
     void setGroup(SKInventoryFlatView::EGroup group);
     // Opens the inline editor over a current-column row's name.
@@ -255,7 +258,9 @@ protected:
     LLFrameTimer mGlowTimer;
 
     LLScrollbar* mStripScrollbar;
-    std::vector<LLScrollbar*> mColumnScrollbars;    // overlay bars for the columns that scroll, reused
+    SKInventoryDetailsView* mDetailsView;   // laid over the details column
+    bool mDetailsPlaced;
+    std::vector<LLScrollbar*> mColumnScrollbars;    // thin bars for the columns that scroll, reused
     std::vector<LLUUID> mColumnScrollbarFolders;    // the folder each bar scrolls this frame
     SKInventoryListLabels mLabels;
 

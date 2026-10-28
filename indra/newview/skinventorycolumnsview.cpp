@@ -39,6 +39,7 @@
 #include "llui.h"
 #include "lluicolortable.h"
 #include "llviewerinventory.h"
+#include "skinventorydetails.h"
 #include "skinventoryexplorermenu.h"
 #include "skinventoryrenameeditor.h"
 
@@ -54,7 +55,6 @@ namespace
     constexpr S32 TOP_PAD = 4;
     constexpr S32 CELL_PAD = 4;
     constexpr S32 ICON_SIZE = 16;
-    constexpr S32 DETAILS_ICON_SIZE = 32;
     constexpr S32 GHOST_ROWS = 600;
     constexpr S32 WHEEL_ROWS = 3;
     constexpr S32 HWHEEL_PIXELS = 30;
@@ -107,9 +107,11 @@ SKInventoryColumnsView::SKInventoryColumnsView(const Params& p)
     mEdgeScrolling(false),
     mGlowAlpha(0.f),
     mGlowSide(0),
-    mStripScrollbar(nullptr)
+    mStripScrollbar(nullptr),
+    mDetailsView(nullptr),
+    mDetailsPlaced(false)
 {
-    const S32 bar = LLUI::getInstance()->mSettingGroups["config"]->getS32("UIScrollbarSize");
+    const S32 bar = LLScrollbar::THIN_THICKNESS;
     LLScrollbar::Params sbparams;
     sbparams.name("strip_scrollbar");
     sbparams.rect(LLRect(0, bar, getRect().getWidth(), 0));
@@ -119,10 +121,18 @@ SKInventoryColumnsView::SKInventoryColumnsView(const Params& p)
     sbparams.page_size(1);
     sbparams.follows.flags(FOLLOWS_LEFT | FOLLOWS_RIGHT | FOLLOWS_BOTTOM);
     sbparams.visible(false);
-    sbparams.overlay(true); // drawn over the columns, which keep the full height
+    sbparams.thin(true); // drawn over the columns, which keep the full height
     sbparams.change_callback([this](S32 pos, LLScrollbar*) { mStripX = pos; });
     mStripScrollbar = LLUICtrlFactory::create<LLScrollbar>(sbparams);
     addChild(mStripScrollbar);
+
+    SKInventoryDetailsView::Params dparams;
+    dparams.name("columns_details");
+    dparams.rect(LLRect(0, getRect().getHeight(), 280, 0));
+    dparams.follows.flags(FOLLOWS_NONE);
+    dparams.visible(false);
+    mDetailsView = LLUICtrlFactory::create<SKInventoryDetailsView>(dparams);
+    addChild(mDetailsView);
 }
 
 SKInventoryColumnsView::~SKInventoryColumnsView()
@@ -488,7 +498,7 @@ void SKInventoryColumnsView::reshape(S32 width, S32 height, bool called_from_par
 
 S32 SKInventoryColumnsView::rowsPerPage() const
 {
-    const S32 bar = 0; // the overlay strip bar takes no room
+    const S32 bar = 0; // the thin strip bar is drawn over the columns
     return llmax(1, (getRect().getHeight() - bar - TOP_PAD) / ROW_HEIGHT);
 }
 
@@ -544,7 +554,7 @@ S32 SKInventoryColumnsView::columnAt(S32 x) const
 
 S32 SKInventoryColumnsView::rowAt(const Column& column, S32 y) const
 {
-    const S32 bar = 0; // the overlay strip bar takes no room
+    const S32 bar = 0; // the thin strip bar is drawn over the columns
     const S32 below_top = getRect().getHeight() - TOP_PAD - y;
     if (below_top < 0 || y < bar)
     {
@@ -744,10 +754,11 @@ void SKInventoryColumnsView::draw()
     fetchGhostWhenResting();
     updateColumnScrollbars();
 
-    const S32 bar = 0; // the overlay strip bar takes no room
+    const S32 bar = 0; // the thin strip bar is drawn over the columns
     const S32 height = getRect().getHeight();
     const bool focused = hasFocus();
     const S32 view = getRect().getWidth();
+    mDetailsPlaced = false;
     {
         LLLocalClipRect clip(LLRect(0, height, view, bar));
         for (S32 i = 0; i < (S32)mColumns.size(); ++i)
@@ -759,6 +770,10 @@ void SKInventoryColumnsView::draw()
             }
         }
         drawDropTarget(height);
+    }
+    if (!mDetailsPlaced && mDetailsView->getVisible())
+    {
+        mDetailsView->setVisible(false);
     }
     LLUICtrl::draw();
 }
@@ -892,11 +907,11 @@ void SKInventoryColumnsView::drawColumn(const Column& column, S32 index, S32 hei
 
 void SKInventoryColumnsView::updateColumnScrollbars()
 {
-    // One overlay bar a scrolling column, laid over its right edge; the pool only grows.
+    // One thin bar a scrolling column, laid over its right edge; the pool only grows.
     const S32 height = getRect().getHeight();
     const S32 view = getRect().getWidth();
     const S32 page = rowsPerPage();
-    const S32 thickness = LLUI::getInstance()->mSettingGroups["config"]->getS32("UIScrollbarSize");
+    const S32 thickness = LLScrollbar::THIN_THICKNESS;
     size_t used = 0;
     for (S32 i = 0; i < (S32)mColumns.size(); ++i)
     {
@@ -917,7 +932,7 @@ void SKInventoryColumnsView::updateColumnScrollbars()
             sbparams.doc_size(0);
             sbparams.doc_pos(0);
             sbparams.page_size(1);
-            sbparams.overlay(true);
+            sbparams.thin(true);
             sbparams.follows.flags(FOLLOWS_NONE);
             const size_t slot = used;
             sbparams.change_callback([this, slot](S32 pos, LLScrollbar*)
@@ -964,37 +979,12 @@ void SKInventoryColumnsView::updateColumnScrollbars()
 
 void SKInventoryColumnsView::drawDetails(const Column& column, S32 height)
 {
-    static LLUIColor text_color = LLUIColorTable::instance().getColor("LabelTextColor");
-    static LLUIColor dim_color = LLUIColorTable::instance().getColor("LtGray_50");
-    if (column.mRows.empty())
-    {
-        return;
-    }
-    const SKInventoryRow& row = column.mRows.front();
+    // The details view is a child laid over the column, drawn with the children.
     const S32 left = column.mLeft - mStripX;
-    const S32 width = column.mWidth - 4 * CELL_PAD;
-    S32 top = height - 3 * CELL_PAD;
-    if (row.mIcon.notNull())
-    {
-        row.mIcon->draw(left + (column.mWidth - DETAILS_ICON_SIZE) / 2, top - DETAILS_ICON_SIZE, DETAILS_ICON_SIZE, DETAILS_ICON_SIZE);
-        top -= DETAILS_ICON_SIZE + 2 * CELL_PAD;
-    }
-
-    // The step-1 details content: the name, with the type and the date it was acquired.
-    const LLFontGL* bold = LLFontGL::getFontSansSerifBold();
-    const LLFontGL* font = LLFontGL::getFontSansSerifSmall();
-    bold->renderUTF8(row.mName, 0, (F32)(left + column.mWidth / 2), (F32)top, text_color.get(), LLFontGL::HCENTER, LLFontGL::TOP,
-                     LLFontGL::NORMAL, LLFontGL::NO_SHADOW, S32_MAX, width, nullptr, true);
-    top -= (S32)bold->getLineHeight() + CELL_PAD;
-    for (const std::string* line : { &row.mType, &row.mAcquiredLabel })
-    {
-        if (!line->empty())
-        {
-            font->renderUTF8(*line, 0, (F32)(left + column.mWidth / 2), (F32)top, dim_color.get(), LLFontGL::HCENTER, LLFontGL::TOP,
-                             LLFontGL::NORMAL, LLFontGL::NO_SHADOW, S32_MAX, width, nullptr, true);
-            top -= (S32)font->getLineHeight() + CELL_PAD;
-        }
-    }
+    mDetailsView->setRect(LLRect(left, height, left + column.mWidth - 1, 0));
+    mDetailsView->setSelection(column.mRows.empty() ? uuid_vec_t() : uuid_vec_t{ column.mRows.front().mID });
+    mDetailsView->setVisible(true);
+    mDetailsPlaced = true;
 }
 
 bool SKInventoryColumnsView::handleMouseDown(S32 x, S32 y, MASK mask)
@@ -1163,6 +1153,11 @@ bool SKInventoryColumnsView::handleRightMouseDown(S32 x, S32 y, MASK mask)
 
 bool SKInventoryColumnsView::handleHover(S32 x, S32 y, MASK mask)
 {
+    if (!hasMouseCapture() && mDetailsView->getVisible() && mDetailsView->getRect().pointInRect(x, y)
+        && childrenHandleHover(x, y, mask))
+    {
+        return true;
+    }
     if (hasMouseCapture() && mPress != PRESS_NONE)
     {
         const S32 dx = x - mPressX;

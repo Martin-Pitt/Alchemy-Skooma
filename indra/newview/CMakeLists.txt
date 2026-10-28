@@ -1032,11 +1032,14 @@ if(AL_BUILD_VIEWER)
     skcombatlockout.cpp
     skfloaterinventoryexplorer.cpp # <SK:Nexii> Inventory Explorer
     skinventorycolumnsview.cpp # <SK:Nexii> Inventory Explorer
+    skinventorydetails.cpp # <SK:Nexii> Inventory Explorer
+    skinventoryexplorerassets.cpp # <SK:Nexii> Inventory Explorer
     skinventoryexplorerdrag.cpp # <SK:Nexii> Inventory Explorer
     skinventoryexplorermenu.cpp # <SK:Nexii> Inventory Explorer
     skinventoryexplorerpopup.cpp # <SK:Nexii> Inventory Explorer
     skinventoryexplorersearch.cpp # <SK:Nexii> Inventory Explorer
     skinventoryflatview.cpp # <SK:Nexii> Inventory Explorer
+    skinventorygalleryview.cpp # <SK:Nexii> Inventory Explorer
     skinventoryiconsview.cpp # <SK:Nexii> Inventory Explorer
     skinventorylistview.cpp # <SK:Nexii> Inventory Explorer
     skinventorypathbar.cpp # <SK:Nexii> Inventory Explorer
@@ -1953,11 +1956,14 @@ if(AL_BUILD_VIEWER)
     skworldmaptiles.h # <SK:Nexii> 3D world map
     skfloaterinventoryexplorer.h # <SK:Nexii> Inventory Explorer
     skinventorycolumnsview.h # <SK:Nexii> Inventory Explorer
+    skinventorydetails.h # <SK:Nexii> Inventory Explorer
+    skinventoryexplorerassets.h # <SK:Nexii> Inventory Explorer
     skinventoryexplorerdrag.h # <SK:Nexii> Inventory Explorer
     skinventoryexplorermenu.h # <SK:Nexii> Inventory Explorer
     skinventoryexplorerpopup.h # <SK:Nexii> Inventory Explorer
     skinventoryexplorersearch.h # <SK:Nexii> Inventory Explorer
     skinventoryflatview.h # <SK:Nexii> Inventory Explorer
+    skinventorygalleryview.h # <SK:Nexii> Inventory Explorer
     skinventoryiconsview.h # <SK:Nexii> Inventory Explorer
     skinventorylistview.h # <SK:Nexii> Inventory Explorer
     skinventorypathbar.h # <SK:Nexii> Inventory Explorer
@@ -2296,6 +2302,7 @@ if(AL_BUILD_VIEWER)
       ll::nvapi
       ll::tinygltf
       ll::tinyexr
+      ll::pocketfft # <SK:Nexii> Inventory Explorer: the waveform's band split
       ll::minizip
       ll::pugixml
       ll::velopack

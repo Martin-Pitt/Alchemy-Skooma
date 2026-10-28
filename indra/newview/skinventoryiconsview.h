@@ -47,6 +47,8 @@ public:
     ~SKInventoryIconsView();
 
     void setTileSize(S32 size);
+    // The Gallery's strip: tiles carry no badges.
+    void setBadges(bool badges) { mBadges = badges; }
     S32 getTileSize() const { return mTileSize; }
 
     bool handleScrollWheel(S32 x, S32 y, LLScrollDelta delta) override;
@@ -88,6 +90,7 @@ protected:
     void releaseHiddenTextures();
 
     S32 mTileSize;
+    bool mBadges = true;
     S32 mPerLine;
     std::vector<Line> mLines;
     std::vector<S32> mRowLine;      // each row's line

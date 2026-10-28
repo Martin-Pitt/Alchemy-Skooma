@@ -96,7 +96,7 @@ void SKInventoryIconsView::setTileSize(S32 size)
 
 S32 SKInventoryIconsView::viewWidth() const
 {
-    return getRect().getWidth(); // the overlay scroll bar takes no gutter
+    return getRect().getWidth(); // the thin scroll bar is drawn over the tiles
 }
 
 S32 SKInventoryIconsView::tileHeight() const
@@ -412,17 +412,17 @@ void SKInventoryIconsView::drawTile(const SKInventoryRow& row, const LLRect& rec
     }
 
     // A thumbnail on anything but a texture keeps its type as a corner badge; links show theirs opposite.
-    if (badge_type && row.mIcon.notNull())
+    if (mBadges && badge_type && row.mIcon.notNull())
     {
         gl_rect_2d(art_rect.mLeft - 2, art_rect.mBottom + BADGE_SIZE + 2, art_rect.mLeft + BADGE_SIZE + 2, art_rect.mBottom - 2,
                    badge_bg.get(), true);
         row.mIcon->draw(art_rect.mLeft, art_rect.mBottom, BADGE_SIZE, BADGE_SIZE);
     }
-    if (row.mIsLink && link_badge.notNull())
+    if (mBadges && row.mIsLink && link_badge.notNull())
     {
         link_badge->draw(art_rect.mRight - BADGE_SIZE + 3, art_rect.mBottom - 3, BADGE_SIZE, BADGE_SIZE);
     }
-    if (row.mIsWorn)
+    if (mBadges && row.mIsWorn)
     {
         // No art for the worn dot yet, so a filled circle stands in.
         gGL.color4fv(border_color.get().mV);
