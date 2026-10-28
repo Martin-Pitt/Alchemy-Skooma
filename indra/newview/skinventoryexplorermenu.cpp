@@ -58,6 +58,7 @@
 #include "llwindow.h"
 #include "rlvactions.h"
 #include "rlvlocks.h"
+#include "skinventoryexplorerdrag.h"
 
 #include <deque>
 #include <fmt/format.h>
@@ -435,6 +436,7 @@ void toggleFavorite(const uuid_vec_t& ids)
     {
         set_favorite(id, favorite);
     }
+    SKInventoryExplorerDrag::recordFavorites(ids, favorite);
 }
 
 void create(const LLUUID& dest_id, const std::string& kind)

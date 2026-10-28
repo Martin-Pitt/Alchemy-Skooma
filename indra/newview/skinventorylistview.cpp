@@ -397,3 +397,51 @@ bool SKInventoryListView::handleToolTip(S32 x, S32 y, MASK mask)
     }
     return LLUICtrl::handleToolTip(x, y, mask);
 }
+
+bool SKInventoryListView::isDragHandle(S32 x, S32 y, S32 row) const
+{
+    return columnAt(x) == COL_NAME;
+}
+
+LLRect SKInventoryListView::rowsArea() const
+{
+    return LLRect(0, getRect().getHeight() - HEADER_HEIGHT, getRect().getWidth(), 0);
+}
+
+S32 SKInventoryListView::contentDown(S32 y) const
+{
+    return mScrollbar->getDocPos() * ROW_HEIGHT + (getRect().getHeight() - HEADER_HEIGHT - y);
+}
+
+S32 SKInventoryListView::contentToLocal(S32 down) const
+{
+    return getRect().getHeight() - HEADER_HEIGHT - (down - mScrollbar->getDocPos() * ROW_HEIGHT);
+}
+
+void SKInventoryListView::rowsInBand(S32 top, S32 bottom, S32 left, S32 right, std::vector<S32>& rows) const
+{
+    // Rows span the width, so any band across them meets them.
+    const S32 first = llmax(0, top / ROW_HEIGHT);
+    const S32 last = llmin((S32)mRows.size() - 1, bottom / ROW_HEIGHT);
+    for (S32 r = first; r <= last; ++r)
+    {
+        rows.push_back(r);
+    }
+}
+
+LLRect SKInventoryListView::rowRect(S32 row) const
+{
+    const S32 top = getRect().getHeight() - HEADER_HEIGHT - (row - mScrollbar->getDocPos()) * ROW_HEIGHT;
+    return LLRect(0, top, getRect().getWidth(), top - ROW_HEIGHT);
+}
+
+void SKInventoryListView::scrollPixels(S32 pixels)
+{
+    // The List steps by whole rows, at least one a step.
+    S32 rows = pixels / ROW_HEIGHT;
+    if (rows == 0 && pixels != 0)
+    {
+        rows = pixels > 0 ? 1 : -1;
+    }
+    mScrollbar->setDocPos(mScrollbar->getDocPos() + rows);
+}

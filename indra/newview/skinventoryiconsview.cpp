@@ -502,3 +502,48 @@ void SKInventoryIconsView::drawContent()
     }
     releaseHiddenTextures();
 }
+
+S32 SKInventoryIconsView::contentDown(S32 y) const
+{
+    return getRect().getHeight() - y + mScrollbar->getDocPos();
+}
+
+S32 SKInventoryIconsView::contentToLocal(S32 down) const
+{
+    return getRect().getHeight() - (down - mScrollbar->getDocPos());
+}
+
+void SKInventoryIconsView::rowsInBand(S32 top, S32 bottom, S32 left, S32 right, std::vector<S32>& rows) const
+{
+    // Lines are in order down the grid, so the band's first line is found by search.
+    auto it = std::upper_bound(mLines.begin(), mLines.end(), top, [](S32 value, const Line& line) { return value < line.mTop; });
+    if (it != mLines.begin())
+    {
+        --it;
+    }
+    for (; it != mLines.end() && it->mTop <= bottom; ++it)
+    {
+        if (!it->mTiles || it->mTop + tileHeight() < top)
+        {
+            continue;
+        }
+        for (S32 i = 0; i < it->mCount; ++i)
+        {
+            const S32 tile_left = GAP + i * (mTileSize + GAP);
+            if (tile_left <= right && tile_left + mTileSize >= left)
+            {
+                rows.push_back(it->mFirst + i);
+            }
+        }
+    }
+}
+
+LLRect SKInventoryIconsView::rowRect(S32 row) const
+{
+    return tileRect(row);
+}
+
+void SKInventoryIconsView::scrollPixels(S32 pixels)
+{
+    mScrollbar->setDocPos(mScrollbar->getDocPos() + pixels);
+}

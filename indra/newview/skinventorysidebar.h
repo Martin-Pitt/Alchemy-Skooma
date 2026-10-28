@@ -29,6 +29,7 @@
 
 #include "llfolderview.h"
 #include "llinventorypanel.h"
+#include "skinventoryexplorerdrag.h"
 
 #include <functional>
 #include <set>
@@ -151,6 +152,9 @@ public:
 
     bool postBuild() override;
     void draw() override;
+    // The Favorites heading and its empty hint take folders as favourites.
+    bool handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop, EDragAndDropType cargo_type, void* cargo_data,
+                           EAcceptance* accept, std::string& tooltip_msg) override;
 
     void setOpenCallback(const open_callback_t& cb) { mOpenCallback = cb; }
     // Keys a panel's folder view offers first, before its own handling.
@@ -189,6 +193,9 @@ protected:
     bool mRevealing;
     LLUUID mPendingReveal;
     SKInventorySidebarPanel* mPendingPanel;
+    SKDragHover mDropHover;
+    LLRect mDropRect;
+    SKInventoryExplorerDrag::Verdict mDropVerdict;
 };
 
 #endif // SK_SKINVENTORYSIDEBAR_H
