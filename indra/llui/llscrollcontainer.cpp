@@ -43,16 +43,13 @@
 #include "lluictrlfactory.h"
 #include "llpanel.h"
 #include "llfontgl.h"
-#include "skdragfeedback.h" // <SK:Nexii> Drag feedback
 
 ///----------------------------------------------------------------------------
 /// Local function declarations, constants, enums, and typedefs
 ///----------------------------------------------------------------------------
 
 static const S32 VERTICAL_MULTIPLE = 16;
-// <SK:Nexii> Drag feedback: the acceleration is LLDragAutoScroll::ACCEL, the curve every autoscroll shares
-//static const F32 AUTO_SCROLL_RATE_ACCEL = 120.f;
-// </SK:Nexii>
+static const F32 AUTO_SCROLL_RATE_ACCEL = 120.f;
 
 ///----------------------------------------------------------------------------
 /// Class LLScrollContainer
@@ -493,20 +490,16 @@ void LLScrollContainer::draw()
     static LLUICachedControl<S32> scrollbar_size_control ("UIScrollbarSize", 0);
     S32 scrollbar_size = (mSize == -1 ? scrollbar_size_control : mSize);
 
-    // <SK:Nexii> Drag feedback: the one autoscroll curve
-    //if (mAutoScrolling)
-    //{
-    //    // add acceleration to autoscroll
-    //    mAutoScrollRate = llmin(mAutoScrollRate + (LLFrameTimer::getFrameDeltaTimeF32() * AUTO_SCROLL_RATE_ACCEL), mMaxAutoScrollRate);
-    //}
-    //else
-    //{
-    //    // reset to minimum for next time
-    //    mAutoScrollRate = mMinAutoScrollRate;
-    //}
-    mAutoScrollRate = LLDragAutoScroll::next(mAutoScrollRate, mAutoScrolling, LLFrameTimer::getFrameDeltaTimeF32(),
-                                             (F32)mMinAutoScrollRate, (F32)mMaxAutoScrollRate);
-    // </SK:Nexii>
+    if (mAutoScrolling)
+    {
+        // add acceleration to autoscroll
+        mAutoScrollRate = llmin(mAutoScrollRate + (LLFrameTimer::getFrameDeltaTimeF32() * AUTO_SCROLL_RATE_ACCEL), mMaxAutoScrollRate);
+    }
+    else
+    {
+        // reset to minimum for next time
+        mAutoScrollRate = mMinAutoScrollRate;
+    }
     // clear this flag to be set on next call to autoScroll
     mAutoScrolling = false;
 

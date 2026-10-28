@@ -33,7 +33,6 @@
 #include "llwindow.h"
 #include "llfocusmgr.h"
 #include "lllocalcliprect.h"
-#include "skdragfeedback.h" // <SK:Nexii> Drag feedback
 
 #include "boost/bind.hpp"
 
@@ -42,9 +41,7 @@ static constexpr S32 PARENT_BORDER_MARGIN = 5;
 static constexpr S32 VERTICAL_MULTIPLE = 16;
 static constexpr F32 MIN_AUTO_SCROLL_RATE = 120.f;
 static constexpr F32 MAX_AUTO_SCROLL_RATE = 500.f;
-// <SK:Nexii> Drag feedback: the acceleration is LLDragAutoScroll::ACCEL, the curve every autoscroll shares
-//static constexpr F32 AUTO_SCROLL_RATE_ACCEL = 120.f;
-// </SK:Nexii>
+static constexpr F32 AUTO_SCROLL_RATE_ACCEL = 120.f;
 
 // LLAccordionCtrl =================================================================|
 
@@ -77,20 +74,16 @@ LLAccordionCtrl::LLAccordionCtrl() : LLPanel()
 //---------------------------------------------------------------------------------
 void LLAccordionCtrl::draw()
 {
-    // <SK:Nexii> Drag feedback: the one autoscroll curve, over the accordion's own range
-    //if (mAutoScrolling)
-    //{
-    //    // add acceleration to autoscroll
-    //    mAutoScrollRate = llmin(mAutoScrollRate + (LLFrameTimer::getFrameDeltaTimeF32() * AUTO_SCROLL_RATE_ACCEL), MAX_AUTO_SCROLL_RATE);
-    //}
-    //else
-    //{
-    //    // reset to minimum for next time
-    //    mAutoScrollRate = MIN_AUTO_SCROLL_RATE;
-    //}
-    mAutoScrollRate = LLDragAutoScroll::next(mAutoScrollRate, mAutoScrolling, LLFrameTimer::getFrameDeltaTimeF32(),
-                                             MIN_AUTO_SCROLL_RATE, MAX_AUTO_SCROLL_RATE);
-    // </SK:Nexii>
+    if (mAutoScrolling)
+    {
+        // add acceleration to autoscroll
+        mAutoScrollRate = llmin(mAutoScrollRate + (LLFrameTimer::getFrameDeltaTimeF32() * AUTO_SCROLL_RATE_ACCEL), MAX_AUTO_SCROLL_RATE);
+    }
+    else
+    {
+        // reset to minimum for next time
+        mAutoScrollRate = MIN_AUTO_SCROLL_RATE;
+    }
     // clear this flag to be set on next call to autoScroll
     mAutoScrolling = false;
 

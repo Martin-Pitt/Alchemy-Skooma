@@ -61,20 +61,6 @@ enum class EDragAction : U8
     Count
 };
 
-// The one curve every drag autoscroll follows, in pixels a second: from MIN_RATE, rising by ACCEL a second while
-// it scrolls, to MAX_RATE; back to MIN_RATE once it stops. A widget may narrow the range (min, max).
-struct LLDragAutoScroll
-{
-    static constexpr F32 MIN_RATE = 100.f;
-    static constexpr F32 MAX_RATE = 1000.f;
-    static constexpr F32 ACCEL = 120.f;
-
-    static F32 next(F32 rate, bool scrolling, F32 dt, F32 min_rate = MIN_RATE, F32 max_rate = MAX_RATE)
-    {
-        return scrolling ? (rate + dt * ACCEL < max_rate ? rate + dt * ACCEL : max_rate) : min_rate;
-    }
-};
-
 // How a target under the pointer is marked: accepted, refused with a reason, or refused quietly (no mark).
 enum class EDragMark : U8
 {
