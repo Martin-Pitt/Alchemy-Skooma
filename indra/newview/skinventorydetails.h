@@ -232,6 +232,7 @@ protected:
     std::string mFolderPath;
     std::string mMessage;
     bool mThumbnail;
+    bool mThumbBelow = false;   // a texture or photo with a thumbnail: the texture on top, the thumbnail below the rows
     std::vector<Line> mLines;
     S32 mMediaHeight;   // the picture or player at the top
     S32 mContentHeight;
