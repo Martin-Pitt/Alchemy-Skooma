@@ -110,6 +110,12 @@ LLRect SKInventoryGalleryView::stageRect() const
     return LLRect(0, getRect().getHeight(), llmax(0, getRect().getWidth() - STRIP_WIDTH - GAP), 0);
 }
 
+LLUUID SKInventoryGalleryView::targetID() const
+{
+    LLViewerInventoryItem* item = gInventory.getItem(mItemID);
+    return item && item->getIsLinkType() && item->getLinkedItem() ? item->getLinkedItem()->getUUID() : mItemID;
+}
+
 bool SKInventoryGalleryView::overStage(S32 x, S32 y) const
 {
     return stageRect().pointInRect(x, y);
@@ -122,6 +128,7 @@ void SKInventoryGalleryView::setItem(const LLUUID& item_id)
         return;
     }
     mItemID = item_id;
+    mCacheValid = false;
     mSettle.reset();
     mFetching = false;
     SKInventoryDetails::hideAspectMenu();
@@ -143,6 +150,12 @@ void SKInventoryGalleryView::draw()
     }
     if (mStrip && mStripFolder.notNull())
     {
+        // Kept for the folders visited this session, within reason.
+        constexpr size_t MAX_STRIP_SCROLLS = 64;
+        if (mStripScrolls.size() >= MAX_STRIP_SCROLLS && !mStripScrolls.contains(mStripFolder))
+        {
+            mStripScrolls.clear();
+        }
         mStripScrolls[mStripFolder] = mStrip->getScroll();
     }
 
@@ -164,6 +177,26 @@ void SKInventoryGalleryView::draw()
     if (target)
     {
         LLLocalClipRect clip(stage);
+        if (!mCacheValid)
+        {
+            mCacheValid = true;
+            mHasRow = SKInventoryFlatView::readRow(mItemID, SKInventoryDetails::labels(), mRow);
+            mBy.clear();
+            mResolution.clear();
+            mResolutionKey = -1;
+        }
+        // The creator's name may arrive later; asked of the cache only until it has it.
+        if (mBy.empty() && target->getCreatorUUID().notNull())
+        {
+            LLAvatarName av_name;
+            if (LLAvatarNameCache::get(target->getCreatorUUID(), &av_name))
+            {
+                LLStringUtil::format_map_t args;
+                args["[NAME]"] = av_name.getCompleteName();
+                mBy = SKInventoryDetails::str("gallery_by");
+                LLStringUtil::format(mBy, args);
+            }
+        }
         const LLUUID thumbnail = item->getThumbnailUUID().notNull() ? item->getThumbnailUUID() : target->getThumbnailUUID();
         // A texture shows itself; anything else with a thumbnail shows that, else its player.
         const bool texture = target->getType() == LLAssetType::AT_TEXTURE;
@@ -178,10 +211,9 @@ void SKInventoryGalleryView::draw()
             case SKInventoryPlayer::KIND_NONE:
             {
                 mPlayer.hide();
-                SKInventoryRow row;
-                if (SKInventoryFlatView::readRow(mItemID, SKInventoryDetails::labels(), row) && row.mIcon.notNull())
+                if (mHasRow && mRow.mIcon.notNull())
                 {
-                    row.mIcon->draw(stage.getCenterX() - ICON_SIZE / 2, stage.getCenterY() - ICON_SIZE / 2, ICON_SIZE, ICON_SIZE);
+                    mRow.mIcon->draw(stage.getCenterX() - ICON_SIZE / 2, stage.getCenterY() - ICON_SIZE / 2, ICON_SIZE, ICON_SIZE);
                 }
                 break;
             }
@@ -197,30 +229,29 @@ void SKInventoryGalleryView::draw()
         }
 
         // Bottom left: the name and a dimmed "by Creator", no wider than 55% of the stage.
-        std::string by;
-        LLAvatarName av_name;
-        if (target->getCreatorUUID().notNull() && LLAvatarNameCache::get(target->getCreatorUUID(), &av_name))
-        {
-            LLStringUtil::format_map_t args;
-            args["[NAME]"] = av_name.getCompleteName();
-            by = SKInventoryDetails::str("gallery_by");
-            LLStringUtil::format(by, args);
-        }
-        draw_chip(stage.mLeft + CHIP_MARGIN, stage.mBottom + CHIP_MARGIN, item->getName(), by, (S32)(stage.getWidth() * 0.55f));
+        draw_chip(stage.mLeft + CHIP_MARGIN, stage.mBottom + CHIP_MARGIN, item->getName(), mBy, (S32)(stage.getWidth() * 0.55f));
 
         // Bottom right: the aspect button, then the resolution (textures and photos).
         if (texture)
         {
-            std::string resolution;
             LLViewerFetchedTexture* image = mPlayer.getTexture();
-            if (image && image->getFullWidth() > 0)
+            const S32 key = image && image->getFullWidth() > 0
+                                ? (image->getFullWidth() * 8192 + image->getFullHeight()) * 2 + (image->getDiscardLevel() == 0 ? 1 : 0)
+                                : -1;
+            if (key != mResolutionKey)
             {
-                LLStringUtil::format_map_t args;
-                args["[W]"] = llformat("%d", image->getFullWidth());
-                args["[H]"] = llformat("%d", image->getFullHeight());
-                resolution = SKInventoryDetails::str(image->getDiscardLevel() == 0 ? "gallery_resolution_full" : "gallery_resolution");
-                LLStringUtil::format(resolution, args);
+                mResolutionKey = key;
+                mResolution.clear();
+                if (key >= 0)
+                {
+                    LLStringUtil::format_map_t args;
+                    args["[W]"] = llformat("%d", image->getFullWidth());
+                    args["[H]"] = llformat("%d", image->getFullHeight());
+                    mResolution = SKInventoryDetails::str(image->getDiscardLevel() == 0 ? "gallery_resolution_full" : "gallery_resolution");
+                    LLStringUtil::format(mResolution, args);
+                }
             }
+            const std::string& resolution = mResolution;
             S32 w = 1;
             S32 h = 1;
             SKInventoryDetails::aspectOf(target->getDescription(), w, h);
@@ -257,8 +288,7 @@ bool SKInventoryGalleryView::handleMouseDown(S32 x, S32 y, MASK mask)
     if (mAspectRect.pointInRect(x, y))
     {
         make_ui_sound("UISndClick");
-        LLViewerInventoryItem* item = gInventory.getItem(mItemID);
-        const LLUUID id = item && item->getIsLinkType() && item->getLinkedItem() ? item->getLinkedItem()->getUUID() : mItemID;
+        const LLUUID id = targetID();
         if (SKInventoryDetails::canSetAspect(id))
         {
             SKInventoryDetails::showAspectMenu(this, mAspectRect, id, true);
@@ -315,7 +345,7 @@ bool SKInventoryGalleryView::handleToolTip(S32 x, S32 y, MASK mask)
     if (mAspectRect.pointInRect(x, y))
     {
         std::string why;
-        LLToolTipMgr::instance().show(SKInventoryDetails::canSetAspect(mItemID, &why) ? SKInventoryDetails::str("tip_aspect") : why);
+        LLToolTipMgr::instance().show(SKInventoryDetails::canSetAspect(targetID(), &why) ? SKInventoryDetails::str("tip_aspect") : why);
         return true;
     }
     std::string tip;

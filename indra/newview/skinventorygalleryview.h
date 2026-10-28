@@ -51,6 +51,9 @@ public:
 
     // The selected item, or the folder's first item while nothing is selected.
     void setItem(const LLUUID& item_id);
+    // Reads the item again: it changed in the inventory.
+    void refresh() { mCacheValid = false; }
+    const LLUUID& getItemID() const { return mItemID; }
 
     void draw() override;
     bool handleMouseDown(S32 x, S32 y, MASK mask) override;
@@ -66,6 +69,8 @@ protected:
     friend class LLUICtrlFactory;
 
     LLRect stageRect() const;
+    // The item a link points at, else the item.
+    LLUUID targetID() const;
     bool overStage(S32 x, S32 y) const;
 
     SKInventoryIconsView* mStrip;
@@ -78,6 +83,13 @@ protected:
     // The strip's scroll per folder, kept for the session.
     std::map<LLUUID, S32> mStripScrolls;
     LLUUID mStripFolder;
+    // What the stage draws for the item, read when it changes rather than every frame.
+    bool mCacheValid = false;
+    SKInventoryRow mRow;
+    bool mHasRow = false;
+    std::string mBy;
+    std::string mResolution;
+    S32 mResolutionKey = -1;    // width, height and discard the resolution text was made from
 };
 
 #endif // SK_SKINVENTORYGALLERYVIEW_H

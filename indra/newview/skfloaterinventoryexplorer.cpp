@@ -612,7 +612,7 @@ bool SKFloaterInventoryExplorer::postBuild()
                              "tip_landmark_loads", "map_loading", "runtime_mono", "runtime_lso", "runtime_lsl_luau", "runtime_slua",
                              "runtime_lsl", "tip_runtime_unknown", "experience_no_cap", "player_locally", "player_inworld",
                              "player_stop", "tip_sound_local", "tip_sound_inworld", "tip_anim_local", "tip_anim_inworld",
-                             "tip_aspect", "aspect_library", "aspect_no_modify", "gallery_by", "gallery_resolution",
+                             "tip_aspect", "aspect_library", "aspect_no_modify", "aspect_too_long", "aspect_bad_chars", "gallery_by", "gallery_resolution",
                              "gallery_resolution_full" })
     {
         details_strings[key] = getString(std::string("details_") + key);
@@ -1022,6 +1022,10 @@ void SKFloaterInventoryExplorer::onInventoryChanged(U32 mask)
         {
             details->refresh();
         }
+    }
+    if (mGallery->getItemID().notNull() && gInventory.getChangedIDs().contains(mGallery->getItemID()))
+    {
+        mGallery->refresh();
     }
     mNeedsRefresh = true;
 }
