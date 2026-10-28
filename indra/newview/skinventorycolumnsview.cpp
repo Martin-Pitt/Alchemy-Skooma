@@ -853,6 +853,12 @@ void SKInventoryColumnsView::drawColumn(const Column& column, S32 index, S32 hei
         {
             gl_rect_2d(left, top, right - 1, top - ROW_HEIGHT, selected);
         }
+        else if (is_current && focused && r == mCursor)
+        {
+            // The keyboard cursor on an unselected row: a faint fill.
+            static LLUIColor cursor_color = LLUIColorTable::instance().getColor("White_10");
+            gl_rect_2d(left, top, right - 1, top - ROW_HEIGHT, cursor_color.get());
+        }
         else if (row.mID == column.mPathID)
         {
             gl_rect_2d(left, top, right - 1, top - ROW_HEIGHT, path_color.get());

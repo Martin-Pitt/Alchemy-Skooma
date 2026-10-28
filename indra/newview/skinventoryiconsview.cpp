@@ -365,13 +365,10 @@ void SKInventoryIconsView::drawTile(const SKInventoryRow& row, const LLRect& rec
     static LLUIColor badge_bg = LLUIColorTable::instance().getColor("DkGray");
     static LLPointer<LLUIImage> link_badge = LLUI::getUIImage("Inv_Link");
 
+    // Selection is a fill alone, never an outline.
     if (selected)
     {
         gl_rect_2d(rect, focused ? sel_focus.get() : sel_blur.get(), true);
-        if (focused)
-        {
-            gl_rect_2d(rect, border_color.get(), false);
-        }
     }
 
     const S32 art = (S32)(mTileSize * ART_FRACTION);
@@ -497,6 +494,12 @@ void SKInventoryIconsView::drawContent()
         }
         for (S32 r = line.mFirst; r < line.mFirst + line.mCount; ++r)
         {
+            if (focused && r == mCursor && !mSelected[r])
+            {
+                // The keyboard cursor on an unselected tile: a faint fill.
+                static LLUIColor cursor_color = LLUIColorTable::instance().getColor("White_10");
+                gl_rect_2d(tileRect(r), cursor_color.get(), true);
+            }
             drawTile(mRows[r], tileRect(r), mSelected[r], focused);
         }
     }
