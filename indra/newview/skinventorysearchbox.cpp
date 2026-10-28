@@ -151,6 +151,10 @@ SKSearchDropdown::SKSearchDropdown(SKInventorySearchBox* box)
 
 SKSearchDropdown::~SKSearchDropdown()
 {
+    for (auto& request : mNameRequests)
+    {
+        request.second.disconnect();
+    }
     mPopup->hide();
     delete mPopup;
 }
@@ -248,6 +252,22 @@ void SKSearchDropdown::update()
     {
         mPopup->hide();
     }
+    if (!mPopup->isOpen() || !mTallyWanted)
+    {
+        return;
+    }
+    if (mNamesArrived)
+    {
+        mNamesArrived = false;
+        refresh();
+    }
+    // A count the inventory changed under starts again once it ends, so a stream of changes cannot stall it.
+    if (mTallyStale && mTallyWalk.isDone())
+    {
+        mTallyStale = false;
+        mTallyKey.clear();
+        refresh();
+    }
     // The value counts fill in as the walk runs, shown at most four times a second.
     if (mTallyWalk.isStarted() && !mTallyWalk.isDone())
     {
@@ -335,6 +355,7 @@ void SKSearchDropdown::addValues(const std::string& key, const std::string& want
     else if (key == "brand" || key == "creator")
     {
         startTally(key);
+        mTallyWanted = true;
         std::vector<std::pair<std::string, S32>> counted;
         if (key == "brand")
         {
@@ -342,16 +363,32 @@ void SKSearchDropdown::addValues(const std::string& key, const std::string& want
             {
                 counted.emplace_back(entry.first, entry.second);
             }
+            std::stable_sort(counted.begin(), counted.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
         }
         else
         {
-            for (const auto& [id, count] : mCreatorTally)
+            // Counted by id; names are looked up for the twelve shown alone.
+            std::vector<std::pair<LLUUID, S32>> top(mCreatorTally.begin(), mCreatorTally.end());
+            std::stable_sort(top.begin(), top.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+            if (top.size() > TOP_VALUES)
+            {
+                top.resize(TOP_VALUES);
+            }
+            for (const auto& [id, count] : top)
             {
                 LLAvatarName name;
-                counted.emplace_back(LLAvatarNameCache::get(id, &name) ? name.getUserName() : id.asString(), count);
+                if (LLAvatarNameCache::get(id, &name))
+                {
+                    counted.emplace_back(name.getUserName(), count);
+                    continue;
+                }
+                if (!mNameRequests.contains(id))
+                {
+                    mNameRequests[id] = LLAvatarNameCache::get(id, [this](const LLUUID&, const LLAvatarName&) { mNamesArrived = true; });
+                }
+                counted.emplace_back(id.asString(), count);
             }
         }
-        std::stable_sort(counted.begin(), counted.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
         for (const auto& [value, count] : counted)
         {
             values.emplace_back(value, llformat("%d", count));
@@ -386,6 +423,12 @@ void SKSearchDropdown::refresh()
         mPopup->hide();
         return;
     }
+    // Counts are taken afresh each time the dropdown opens.
+    if (!mPopup->isOpen())
+    {
+        mTallyKey.clear();
+    }
+    mTallyWanted = false;
     mOptions.clear();
     std::vector<SKPopupRow> rows;
     size_t start = 0;

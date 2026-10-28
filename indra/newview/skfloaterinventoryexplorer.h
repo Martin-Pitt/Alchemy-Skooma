@@ -196,6 +196,8 @@ public:
     bool handleDoubleClick(S32 x, S32 y, MASK mask) override;
 
     void onInventoryChanged(U32 mask);
+    void onVisibilityChange(bool new_visibility) override;
+    void onClose(bool app_quitting) override;
 
 private:
     SKExplorerTab& currentTab() { return mTabs[mActiveTab]; }
@@ -255,7 +257,10 @@ private:
     void pushSearchResults();
     void showInFolder(const LLUUID& id);
     void focusContent(bool select_first);
-    std::string searchStatus() const;
+    // Builds the status text only when the search's state moved; true when it did.
+    bool refreshSearchStatus();
+    // The search's saved form: My Inventory, and a folder since deleted, are both "everywhere".
+    static LLUUID savedFolder(const LLUUID& folder_id);
 
     // Saved searches: {query, folder} in a per-account setting, listed under Favorites.
     S32 savedSearchIndex(const std::string& query, const LLUUID& folder_id) const;
@@ -293,10 +298,12 @@ private:
     LLFrameTimer mSearchTyped;      // the pause before the typed text is searched
     bool mSearchPending;
     LLFrameTimer mSearchShown;      // results reach the view at most four times a second while walking
-    bool mSearchUnshown = false;
-    bool mSearchDirty;              // the inventory changed under a search
-    LLFrameTimer mSearchRestarted;
+    size_t mSearchShownCount = 0;   // hits the view lists
+    U32 mSearchShownRemovals = 0;
+    bool mSearchUnsorted = false;   // hits were appended unsorted; sorted once the walk ends
+    LLFrameTimer mSearchSorted;
     std::string mSearchStatus;
+    U32 mSearchStatusKey = U32_MAX;
     LLTextBox* mStatusText;
     LLTextBox* mDetailsText;
     LLLayoutPanel* mSidebarPanel;

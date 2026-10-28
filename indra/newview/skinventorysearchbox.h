@@ -107,6 +107,8 @@ public:
     // Once a frame: closes when the box lost focus, keeps a settled search, follows the value counts.
     void update();
     bool handleKey(KEY key, MASK mask);
+    // The value counts are counted again once the running count ends.
+    void onInventoryChanged() { mTallyStale = true; }
 
     // Recent searches, newest first, per account.
     static std::vector<std::string> recent();
@@ -159,6 +161,11 @@ private:
     std::map<std::string, std::pair<std::string, S32>> mTally;   // lower case to the first spelling met and its count
     std::map<LLUUID, S32> mCreatorTally;
     LLFrameTimer mTallyShown;
+    bool mTallyWanted = false;  // the dropdown lists brand: or creator: values: only then does the count run
+    bool mTallyStale = false;
+    // Names asked for the creators listed, at most the top twelve.
+    std::map<LLUUID, boost::signals2::connection> mNameRequests;
+    bool mNamesArrived = false;
 };
 
 #endif // SK_SKINVENTORYSEARCHBOX_H

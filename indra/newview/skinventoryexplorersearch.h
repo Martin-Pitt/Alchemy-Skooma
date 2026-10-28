@@ -27,11 +27,14 @@
 #ifndef SK_SKINVENTORYEXPLORERSEARCH_H
 #define SK_SKINVENTORYEXPLORERSEARCH_H
 
+#include "llframetimer.h"
 #include "lluuid.h"
 
 #include <ctime>
 #include <functional>
+#include <set>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 class LLInventoryObject;
@@ -89,34 +92,45 @@ public:
     // A day's local midnight from "YYYY-MM-DD", "Nd" or "today"; 0 when it is none of those.
     static time_t parseDay(const std::string& value);
 
+    // A creator: name not in the name cache yet, which may resolve later.
+    bool waitsForCreator() const;
+
 private:
     std::vector<SKSearchTerm> mTerms;
 };
 
 // Walks a folder and everything below it a slice at a time, skipping the Trash unless the walk starts inside it.
-// Folders not yet loaded start a recursive background fetch and are counted.
+// Folders not yet loaded start a recursive background fetch and are counted until they have loaded.
 class SKInventoryWalk
 {
 public:
     typedef std::function<void(const LLInventoryObject* obj)> visit_t;
 
     void start(const LLUUID& root_id);
-    void stop() { mPending.clear(); mRoot.setNull(); }
-    // Visits objects for up to the budget; true once nothing is left.
+    void stop();
+    // Walks a changed folder and what is below it again, if it lies under the root.
+    void add(const LLUUID& folder_id);
+    // Visits objects for up to the budget, resuming inside a folder where the last slice stopped; true once done.
     bool step(F64 seconds, const visit_t& visit);
-    bool isDone() const { return mPending.empty(); }
+    bool isDone() const { return mPending.empty() && mCurrent.isNull(); }
     bool isStarted() const { return mRoot.notNull(); }
     const LLUUID& getRoot() const { return mRoot; }
-    S32 getLoadingCount() const { return mLoading; }
+    // Under the root, and not in a Trash the walk skips.
+    bool covers(const LLUUID& id) const;
+    S32 getLoadingCount() const { return (S32)mLoading.size(); }
 
 private:
     LLUUID mRoot;
     LLUUID mTrash;
     std::vector<LLUUID> mPending;
-    S32 mLoading = 0;
+    LLUUID mCurrent;            // the folder a slice stopped inside
+    size_t mCatIndex = 0;
+    size_t mItemIndex = 0;
+    std::set<LLUUID> mLoading;
 };
 
-// A query over a folder, its hits gathered across frames.
+// A query over a folder. Hits grow as the walk runs; inventory changes check the changed hits again and walk the
+// changed folders, so the results follow the inventory without starting over.
 class SKInventorySearch
 {
 public:
@@ -124,27 +138,39 @@ public:
 
     void start(const LLUUID& folder_id, const std::string& text);
     void stop();
-    // Walks again from the start, after the inventory changed.
-    void restart();
-    bool isActive() const { return mWalk.isStarted(); }
+    bool isActive() const { return mActive; }
+    void noteChanges(const std::set<LLUUID>& changed_ids);
 
-    // Walks for a slice; true when hits were added or the walk ended in it.
-    bool step();
+    // Walks for a slice.
+    void step();
     bool isDone() const { return mWalk.isDone(); }
     S32 getLoadingCount() const { return mWalk.getLoadingCount(); }
     const std::vector<hit_t>& hits() const { return mHits; }
+    // Moves when hits leave or change rank, so the shown list must be rebuilt rather than added to.
+    U32 getRemovals() const { return mRemovals; }
+    // Moves when the status the search shows would change.
+    U32 getStateGeneration() const { return mStateGeneration; }
     const SKInventorySearchQuery& query() const { return mQuery; }
     const std::string& text() const { return mText; }
     const LLUUID& folder() const { return mFolder; }
 
 private:
+    void startWalk();
+    void removeHit(const LLUUID& id);
+    void touchState();
+
     SKInventoryWalk mWalk;
     SKInventorySearchQuery mQuery;
     std::string mText;
     LLUUID mFolder;
+    bool mActive = false;
     std::vector<hit_t> mHits;
-    std::vector<hit_t> mWalking;   // hits of a restarted walk, shown once it ends
-    bool mRestarted = false;
+    std::unordered_set<LLUUID> mHitIDs;
+    U32 mRemovals = 0;
+    U32 mStateGeneration = 0;
+    bool mLastDone = true;
+    S32 mLastLoading = 0;
+    LLFrameTimer mCreatorRetry;
 };
 
 #endif // SK_SKINVENTORYEXPLORERSEARCH_H

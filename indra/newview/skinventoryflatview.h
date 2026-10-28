@@ -167,6 +167,8 @@ public:
 
     // Lists search hits under the folder in place of its contents: each id with its rank.
     void setSearchResults(const std::vector<std::pair<LLUUID, S32>>& hits);
+    // Adds hits at the end, unsorted, while a walk runs; setSearchResults sorts them once it ends.
+    void appendSearchResults(const std::vector<std::pair<LLUUID, S32>>& hits);
     void clearSearch();
     bool isSearching() const { return mSearching; }
     // Takes keyboard focus, selecting the first entry when asked and nothing is selected.
@@ -263,6 +265,9 @@ protected:
 
     void rebuild();
     void readSearchRows();
+    bool readSearchRow(const std::pair<LLUUID, S32>& hit, SKInventoryRow& row);
+    // The path below the searched folder, worked out once per parent while the search lasts.
+    const std::string& searchPath(const LLUUID& parent_id);
     void sortAndGroup();
     void selectRange(S32 from, S32 to, bool add);
     void moveCursor(S32 row, MASK mask);
@@ -298,6 +303,7 @@ protected:
     bool mLoading;
     bool mSearching;
     std::vector<std::pair<LLUUID, S32>> mSearchHits;
+    std::map<LLUUID, std::string> mSearchPaths;
 
     // A slow second click on the only selected row's name renames it.
     S32 mSlowClickRow;

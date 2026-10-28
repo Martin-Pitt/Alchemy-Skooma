@@ -53,6 +53,7 @@ public:
     void setFolder(const LLUUID& folder_id);
     // Names or folders changed: the crumbs are read again.
     void refresh();
+    void hideMenu();
     void setNavigateCallback(const navigate_callback_t& cb) { mNavigateCallback = cb; }
     // "arrow_tooltip" ("Folders in [FOLDER]") and "no_subfolders".
     void setStrings(const std::string& arrow_tooltip, const std::string& no_subfolders);

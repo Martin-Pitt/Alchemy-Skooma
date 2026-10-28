@@ -46,9 +46,15 @@ namespace
 {
     constexpr F64 SLICE_SECONDS = 0.002;
 
-    bool contains(const std::string& haystack_lower, const std::string& needle_lower)
+    constexpr S32 TIMER_CHECK_EVERY = 64;   // objects visited between looks at the clock
+    constexpr F32 CREATOR_RETRY_SECONDS = 1.f;
+
+    // A case-insensitive find of an already lower-case needle, with no allocation.
+    bool contains(std::string_view haystack, const std::string& needle_lower)
     {
-        return haystack_lower.find(needle_lower) != std::string::npos;
+        return std::search(haystack.begin(), haystack.end(), needle_lower.begin(), needle_lower.end(),
+                           [](char a, char b) { return (char)tolower((unsigned char)a) == b; })
+               != haystack.end();
     }
 
     std::string lower(std::string text)
@@ -86,11 +92,11 @@ namespace
     }
 
     // The subtype a type: value may also name: a wearable's kind or a settings kind.
-    std::string subtype_of(const LLViewerInventoryItem* info)
+    std::string_view subtype_of(const LLViewerInventoryItem* info)
     {
         if (info->isWearableType())
         {
-            return lower(std::string(LLWearableType::getTypeName(info->getWearableType())));
+            return LLWearableType::getTypeName(info->getWearableType());
         }
         if (info->getType() == LLAssetType::AT_SETTINGS)
         {
@@ -102,7 +108,7 @@ namespace
                 default:                          break;
             }
         }
-        return std::string();
+        return std::string_view();
     }
 
     // A creator: value: a UUID, "you", or a username, legacy "first.last" or "First Last" included.
@@ -361,8 +367,6 @@ S32 SKInventorySearchQuery::match(const LLInventoryObject* obj) const
     const LLViewerInventoryItem* info = item_info(obj);
     const bool folder = is_folder(obj);
     S32 rank = RANK_NAME;
-    std::string name_lower;
-    std::string desc_lower;
     for (const SKSearchTerm& term : mTerms)
     {
         if (term.mFlagged)
@@ -373,23 +377,11 @@ S32 SKInventorySearchQuery::match(const LLInventoryObject* obj) const
         {
             case SKSearchTerm::KIND_TEXT:
             {
-                if (name_lower.empty())
-                {
-                    name_lower = lower(obj->getName());
-                }
-                if (contains(name_lower, term.mValue))
+                if (contains(obj->getName(), term.mValue))
                 {
                     break;
                 }
-                if (!info)
-                {
-                    return NO_MATCH;
-                }
-                if (desc_lower.empty())
-                {
-                    desc_lower = lower(info->getDescription());
-                }
-                if (!contains(desc_lower, term.mValue))
+                if (!info || !contains(info->getDescription(), term.mValue))
                 {
                     return NO_MATCH;
                 }
@@ -403,7 +395,7 @@ S32 SKInventorySearchQuery::match(const LLInventoryObject* obj) const
                 }
                 break;
             case SKSearchTerm::KIND_BRAND:
-                if (!contains(lower(SKInventoryFlatView::brandOf(obj->getName())), term.mValue))
+                if (!contains(SKInventoryFlatView::brandOf(obj->getName()), term.mValue))
                 {
                     return NO_MATCH;
                 }
@@ -474,6 +466,12 @@ S32 SKInventorySearchQuery::match(const LLInventoryObject* obj) const
     return rank;
 }
 
+bool SKInventorySearchQuery::waitsForCreator() const
+{
+    return std::any_of(mTerms.begin(), mTerms.end(),
+                       [](const SKSearchTerm& term) { return term.mFlagged && term.mKind == SKSearchTerm::KIND_CREATOR; });
+}
+
 //
 // SKInventoryWalk
 //
@@ -482,7 +480,8 @@ void SKInventoryWalk::start(const LLUUID& root_id)
 {
     mRoot = root_id;
     mPending.assign(1, root_id);
-    mLoading = 0;
+    mCurrent.setNull();
+    mLoading.clear();
     // The Trash is left out, unless the walk starts inside it.
     mTrash = gInventory.findCategoryUUIDForType(LLFolderType::FT_TRASH);
     if (mTrash == root_id || gInventory.isObjectDescendentOf(root_id, mTrash))
@@ -491,52 +490,100 @@ void SKInventoryWalk::start(const LLUUID& root_id)
     }
 }
 
+void SKInventoryWalk::stop()
+{
+    mRoot.setNull();
+    mPending.clear();
+    mCurrent.setNull();
+    mLoading.clear();
+}
+
+bool SKInventoryWalk::covers(const LLUUID& id) const
+{
+    if (mRoot.isNull() || (id != mRoot && !gInventory.isObjectDescendentOf(id, mRoot)))
+    {
+        return false;
+    }
+    return mTrash.isNull() || (id != mTrash && !gInventory.isObjectDescendentOf(id, mTrash));
+}
+
+void SKInventoryWalk::add(const LLUUID& folder_id)
+{
+    if (gInventory.getCategory(folder_id) && covers(folder_id))
+    {
+        mPending.push_back(folder_id);
+    }
+}
+
 bool SKInventoryWalk::step(F64 seconds, const visit_t& visit)
 {
-    // Folders asked for once a session, so a walk started again does not ask again.
+    // Folders asked for once a session, so walking a folder again does not ask again.
     static std::set<LLUUID> s_fetched;
     LLTimer timer;
-    while (!mPending.empty() && timer.getElapsedTimeF64() < seconds)
+    S32 visited = 0;
+    auto out_of_time = [&]() { return ++visited % TIMER_CHECK_EVERY == 0 && timer.getElapsedTimeF64() >= seconds; };
+    while (!isDone())
     {
-        const LLUUID folder_id = mPending.back();
-        mPending.pop_back();
-        const LLViewerInventoryCategory* folder = gInventory.getCategory(folder_id);
-        if (!folder)
+        if (mCurrent.isNull())
         {
-            continue;
-        }
-        if (folder->getVersion() == LLViewerInventoryCategory::VERSION_UNKNOWN || !gInventory.isCategoryComplete(folder_id))
-        {
-            ++mLoading;
-            if (s_fetched.insert(folder_id).second)
+            mCurrent = mPending.back();
+            mPending.pop_back();
+            mCatIndex = 0;
+            mItemIndex = 0;
+            const LLViewerInventoryCategory* folder = gInventory.getCategory(mCurrent);
+            if (!folder)
             {
-                LLInventoryModelBackgroundFetch::instance().start(folder_id, true);
+                mLoading.erase(mCurrent);
+                mCurrent.setNull();
+                continue;
+            }
+            if (folder->getVersion() == LLViewerInventoryCategory::VERSION_UNKNOWN || !gInventory.isCategoryComplete(mCurrent))
+            {
+                mLoading.insert(mCurrent);
+                if (s_fetched.insert(mCurrent).second)
+                {
+                    LLInventoryModelBackgroundFetch::instance().start(mCurrent, true);
+                }
+            }
+            else
+            {
+                mLoading.erase(mCurrent);
             }
         }
         LLInventoryModel::cat_array_t* cats = nullptr;
         LLInventoryModel::item_array_t* items = nullptr;
-        gInventory.getDirectDescendentsOf(folder_id, cats, items);
-        if (cats)
+        gInventory.getDirectDescendentsOf(mCurrent, cats, items);
+        for (; cats && mCatIndex < cats->size(); ++mCatIndex)
         {
-            for (LLViewerInventoryCategory* cat : *cats)
+            LLViewerInventoryCategory* cat = cats->at(mCatIndex);
+            if (cat->getUUID() == mTrash)
             {
-                if (cat->getUUID() == mTrash)
-                {
-                    continue;
-                }
-                visit(cat);
-                mPending.push_back(cat->getUUID());
+                continue;
+            }
+            visit(cat);
+            mPending.push_back(cat->getUUID());
+            if (out_of_time())
+            {
+                ++mCatIndex;
+                return false;
             }
         }
-        if (items)
+        for (; items && mItemIndex < items->size(); ++mItemIndex)
         {
-            for (LLViewerInventoryItem* item : *items)
+            visit(items->at(mItemIndex));
+            if (out_of_time())
             {
-                visit(item);
+                ++mItemIndex;
+                return false;
             }
+        }
+        mCurrent.setNull();
+        if (timer.getElapsedTimeF64() >= seconds)
+        {
+            break;
         }
     }
-    return mPending.empty();
+    return isDone();
 }
 
 //
@@ -549,60 +596,167 @@ void SKInventorySearch::start(const LLUUID& folder_id, const std::string& text)
     mText = text;
     mQuery = SKInventorySearchQuery(text);
     mHits.clear();
-    mWalking.clear();
-    mRestarted = false;
-    if (mQuery.empty() || folder_id.isNull())
+    mHitIDs.clear();
+    ++mRemovals;
+    mActive = !mQuery.empty() && folder_id.notNull();
+    mCreatorRetry.reset();
+    startWalk();
+    touchState();
+    ++mStateGeneration;
+}
+
+void SKInventorySearch::startWalk()
+{
+    // A term naming nothing matches nothing: no walk until it names something.
+    if (mActive && mQuery.flaggedTerm().empty())
+    {
+        mWalk.start(mFolder);
+    }
+    else
     {
         mWalk.stop();
-        return;
     }
-    mWalk.start(folder_id);
 }
 
 void SKInventorySearch::stop()
 {
     mWalk.stop();
     mHits.clear();
-    mWalking.clear();
+    mHitIDs.clear();
+    ++mRemovals;
     mText.clear();
     mQuery = SKInventorySearchQuery();
     mFolder.setNull();
+    mActive = false;
+    ++mStateGeneration;
 }
 
-void SKInventorySearch::restart()
+void SKInventorySearch::removeHit(const LLUUID& id)
 {
-    if (!isActive() || mQuery.empty())
+    mHitIDs.erase(id);
+    std::erase_if(mHits, [&id](const hit_t& hit) { return hit.first == id; });
+    ++mRemovals;
+}
+
+void SKInventorySearch::noteChanges(const std::set<LLUUID>& changed_ids)
+{
+    if (!mActive || !mWalk.isStarted())
     {
         return;
     }
-    // The hits shown stay until the new walk ends, so the results do not empty and refill.
-    mWalking.clear();
-    mRestarted = true;
-    mWalk.start(mFolder);
+    bool moved_out = false;
+    for (const LLUUID& id : changed_ids)
+    {
+        const LLInventoryObject* obj = gInventory.getObject(id);
+        const bool covered = obj && mWalk.covers(id);
+        if (mHitIDs.contains(id))
+        {
+            // A hit that changed is checked again where it stands.
+            const S32 rank = covered ? mQuery.match(obj) : SKInventorySearchQuery::NO_MATCH;
+            if (rank == SKInventorySearchQuery::NO_MATCH)
+            {
+                removeHit(id);
+            }
+            else
+            {
+                for (hit_t& hit : mHits)
+                {
+                    if (hit.first == id && hit.second != rank)
+                    {
+                        hit.second = rank;
+                        ++mRemovals;
+                    }
+                }
+            }
+        }
+        if (!obj)
+        {
+            continue;
+        }
+        if (obj->getType() == LLAssetType::AT_CATEGORY)
+        {
+            if (covered)
+            {
+                mWalk.add(id);
+            }
+            else
+            {
+                moved_out = true;
+            }
+        }
+        else
+        {
+            mWalk.add(obj->getParentUUID());
+        }
+    }
+    // A folder that left the searched folder takes its hits with it.
+    if (moved_out)
+    {
+        std::vector<LLUUID> gone;
+        for (const hit_t& hit : mHits)
+        {
+            if (!gInventory.getObject(hit.first) || !mWalk.covers(hit.first))
+            {
+                gone.push_back(hit.first);
+            }
+        }
+        for (const LLUUID& id : gone)
+        {
+            removeHit(id);
+        }
+    }
+    touchState();
 }
 
-bool SKInventorySearch::step()
+void SKInventorySearch::step()
 {
-    if (!isActive() || mWalk.isDone())
+    if (!mActive)
     {
-        return false;
+        return;
     }
-    std::vector<hit_t>& into = mRestarted ? mWalking : mHits;
-    const size_t before = into.size();
-    const bool done = mWalk.step(SLICE_SECONDS, [&](const LLInventoryObject* obj)
-                                 {
-                                     const S32 rank = mQuery.match(obj);
-                                     if (rank != SKInventorySearchQuery::NO_MATCH)
-                                     {
-                                         into.emplace_back(obj->getUUID(), rank);
-                                     }
-                                 });
-    if (done && mRestarted)
+    // A creator not yet in the name cache is looked for again once a second.
+    if (!mWalk.isStarted())
     {
-        mHits.swap(mWalking);
-        mWalking.clear();
-        mRestarted = false;
-        return true;
+        if (mQuery.waitsForCreator() && mCreatorRetry.getElapsedTimeF32() >= CREATOR_RETRY_SECONDS)
+        {
+            mCreatorRetry.reset();
+            mQuery = SKInventorySearchQuery(mText);
+            if (mQuery.flaggedTerm().empty())
+            {
+                startWalk();
+                ++mStateGeneration;
+            }
+        }
+        return;
     }
-    return done || (!mRestarted && into.size() != before);
+    if (!mWalk.isDone())
+    {
+        mWalk.step(SLICE_SECONDS, [this](const LLInventoryObject* obj)
+                   {
+                       if (mHitIDs.contains(obj->getUUID()))
+                       {
+                           return;
+                       }
+                       const S32 rank = mQuery.match(obj);
+                       if (rank != SKInventorySearchQuery::NO_MATCH)
+                       {
+                           mHits.emplace_back(obj->getUUID(), rank);
+                           mHitIDs.insert(obj->getUUID());
+                       }
+                   });
+    }
+    touchState();
 }
+
+void SKInventorySearch::touchState()
+{
+    const bool done = mWalk.isDone();
+    const S32 loading = mWalk.getLoadingCount();
+    if (done != mLastDone || loading != mLastLoading)
+    {
+        mLastDone = done;
+        mLastLoading = loading;
+        ++mStateGeneration;
+    }
+}
+

@@ -800,47 +800,92 @@ void SKInventoryFlatView::clearSearch()
     rebuild();
 }
 
+const std::string& SKInventoryFlatView::searchPath(const LLUUID& parent_id)
+{
+    auto found = mSearchPaths.find(parent_id);
+    if (found != mSearchPaths.end())
+    {
+        return found->second;
+    }
+    std::vector<std::string> names;
+    const LLViewerInventoryCategory* cat = gInventory.getCategory(parent_id);
+    while (cat && cat->getUUID() != mFolderID)
+    {
+        names.push_back(cat->getName());
+        cat = gInventory.getCategory(cat->getParentUUID());
+    }
+    std::string path;
+    for (auto it = names.rbegin(); it != names.rend(); ++it)
+    {
+        path += (path.empty() ? "" : " \xE2\x80\xBA ") + *it;
+    }
+    return mSearchPaths.emplace(parent_id, path).first->second;
+}
+
+bool SKInventoryFlatView::readSearchRow(const std::pair<LLUUID, S32>& hit, SKInventoryRow& row)
+{
+    if (!readRow(hit.first, mLabels, row))
+    {
+        return false;
+    }
+    row.mSearchRank = hit.second;
+    if (const LLInventoryObject* obj = gInventory.getObject(hit.first))
+    {
+        row.mFolderPath = searchPath(obj->getParentUUID());
+    }
+    return true;
+}
+
 void SKInventoryFlatView::readSearchRows()
 {
     mAllRows.clear();
     mLoading = false;
+    // Names and places may have changed since the paths were worked out.
+    mSearchPaths.clear();
     mAllRows.reserve(mSearchHits.size());
-    // The path below the searched folder, worked out once per parent.
-    std::map<LLUUID, std::string> paths;
-    auto path_of = [&](const LLUUID& parent_id) -> const std::string&
-    {
-        auto found = paths.find(parent_id);
-        if (found != paths.end())
-        {
-            return found->second;
-        }
-        std::vector<std::string> names;
-        const LLViewerInventoryCategory* cat = gInventory.getCategory(parent_id);
-        while (cat && cat->getUUID() != mFolderID)
-        {
-            names.push_back(cat->getName());
-            cat = gInventory.getCategory(cat->getParentUUID());
-        }
-        std::string path;
-        for (auto it = names.rbegin(); it != names.rend(); ++it)
-        {
-            path += (path.empty() ? "" : " \xE2\x80\xBA ") + *it;
-        }
-        return paths.emplace(parent_id, path).first->second;
-    };
-    for (const auto& [id, rank] : mSearchHits)
+    for (const auto& hit : mSearchHits)
     {
         SKInventoryRow row;
-        if (!readRow(id, mLabels, row))
+        if (readSearchRow(hit, row))
+        {
+            mAllRows.push_back(std::move(row));
+        }
+    }
+}
+
+void SKInventoryFlatView::appendSearchResults(const std::vector<std::pair<LLUUID, S32>>& hits)
+{
+    if (!mSearching)
+    {
+        setSearchResults(hits);
+        return;
+    }
+    bool listed = false;
+    for (const auto& hit : hits)
+    {
+        SKInventoryRow row;
+        if (!readSearchRow(hit, row))
         {
             continue;
         }
-        row.mSearchRank = rank;
-        if (const LLInventoryObject* obj = gInventory.getObject(id))
+        mSearchHits.push_back(hit);
+        (row.mIsFolder ? mFolderCount : mItemCount)++;
+        mRowIDs.insert(row.mID);
+        requestCreatorName(row);
+        // Shown at once while the first page has room; the paging row comes with the sort at the end.
+        if (mShowAll || mEntryCount < PAGE_ROWS)
         {
-            row.mFolderPath = path_of(obj->getParentUUID());
+            mRows.push_back(row);
+            mSelected.push_back(false);
+            ++mEntryCount;
+            listed = true;
         }
         mAllRows.push_back(std::move(row));
+    }
+    ++mGeneration;
+    if (listed)
+    {
+        layoutRows();
     }
 }
 

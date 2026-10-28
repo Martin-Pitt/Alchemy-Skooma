@@ -68,7 +68,7 @@ namespace
     constexpr F32 SEARCH_DELAY_SHORT = 0.25f;   // a query under 3 characters
     constexpr F32 SEARCH_DELAY = 0.12f;
     constexpr F32 SEARCH_SHOW_SECONDS = 0.25f;
-    constexpr F32 SEARCH_RESTART_SECONDS = 1.f;
+    constexpr F32 SEARCH_SORT_SECONDS = 1.f;      // a full sort after appended hits, at most once a second
     const char* const SAVED_SEARCHES = "SkoomaInvExplorerSavedSearches";
 
     std::string trimmed(std::string text)
@@ -434,7 +434,6 @@ SKFloaterInventoryExplorer::SKFloaterInventoryExplorer(const LLSD& key)
     mSearchBox(nullptr),
     mSearchClearBtn(nullptr),
     mSearchPending(false),
-    mSearchDirty(false),
     mStatusText(nullptr),
     mDetailsText(nullptr),
     mSidebarPanel(nullptr),
@@ -710,6 +709,36 @@ void SKFloaterInventoryExplorer::onOpen(const LLSD& key)
     LLFloater::onOpen(key);
 }
 
+void SKFloaterInventoryExplorer::onVisibilityChange(bool new_visibility)
+{
+    // The popups belong to no view, so they are closed with the floater.
+    if (!new_visibility)
+    {
+        if (mDropdown)
+        {
+            mDropdown->hide();
+        }
+        if (mPathBar)
+        {
+            mPathBar->hideMenu();
+        }
+    }
+    LLFloater::onVisibilityChange(new_visibility);
+}
+
+void SKFloaterInventoryExplorer::onClose(bool app_quitting)
+{
+    if (mDropdown)
+    {
+        mDropdown->hide();
+    }
+    if (mPathBar)
+    {
+        mPathBar->hideMenu();
+    }
+    LLFloater::onClose(app_quitting);
+}
+
 void SKFloaterInventoryExplorer::draw()
 {
     // The typed text is searched once typing pauses: longer while it is short.
@@ -738,10 +767,9 @@ void SKFloaterInventoryExplorer::draw()
     SKInventoryFlatView* flat = flatView();
     const U32 generation = flat ? flat->getGeneration() : mColumns->getGeneration();
     const S32 selected = flat ? flat->getSelectedCount() : mColumns->getSelectedCount();
-    const std::string search_status = searchStatus();
-    if (generation != mStatusGeneration || selected != mStatusSelected || search_status != mSearchStatus)
+    const bool search_status_changed = refreshSearchStatus();
+    if (generation != mStatusGeneration || selected != mStatusSelected || search_status_changed)
     {
-        mSearchStatus = search_status;
         if (selected != mStatusSelected && selected > 0)
         {
             mLastAction.clear();
@@ -894,11 +922,12 @@ void SKFloaterInventoryExplorer::onInventoryChanged(U32 mask)
     {
         mColumns->markDirty();
     }
-    // A search walks again, at most once a second, so new and loaded objects join its results.
+    // A search checks the changed hits again and walks the changed folders, so it follows without starting over.
     if (mSearch.isActive())
     {
-        mSearchDirty = true;
+        mSearch.noteChanges(gInventory.getChangedIDs());
     }
+    mDropdown->onInventoryChanged();
 
     // A tab whose folder is gone goes back to its nearest live ancestor the columns know of, else My Inventory,
     // and its history forgets folders that are gone.
@@ -1684,15 +1713,12 @@ void SKFloaterInventoryExplorer::applySearch()
     if (!isSearching() || !flat)
     {
         mSearch.stop();
-        mSearchDirty = false;
         return;
     }
     const SKExplorerTab& tab = currentTab();
     if (!mSearch.isActive() || mSearch.folder() != tab.mFolderID || mSearch.text() != tab.mSearch)
     {
         mSearch.start(tab.mFolderID, tab.mSearch);
-        mSearchDirty = false;
-        mSearchRestarted.reset();
     }
     pushSearchResults();
 }
@@ -1703,17 +1729,27 @@ void SKFloaterInventoryExplorer::stepSearch()
     {
         return;
     }
-    if (mSearchDirty && mSearchRestarted.getElapsedTimeF32() >= SEARCH_RESTART_SECONDS)
+    mSearch.step();
+    SKInventoryFlatView* flat = flatView();
+    if (!flat || !isSearching() || mSearchShown.getElapsedTimeF32() < SEARCH_SHOW_SECONDS)
     {
-        mSearchDirty = false;
-        mSearchRestarted.reset();
-        mSearch.restart();
+        return;
     }
-    if (mSearch.step())
+    const std::vector<SKInventorySearch::hit_t>& hits = mSearch.hits();
+    if (mSearch.getRemovals() != mSearchShownRemovals)
     {
-        mSearchUnshown = true;
+        // Hits left or changed rank: the list is read again whole.
+        pushSearchResults();
     }
-    if (mSearchUnshown && (mSearch.isDone() || mSearchShown.getElapsedTimeF32() >= SEARCH_SHOW_SECONDS))
+    else if (hits.size() > mSearchShownCount)
+    {
+        // While the walk runs, new hits are added at the end; the list sorts once the walk ends.
+        flat->appendSearchResults(std::vector<SKInventorySearch::hit_t>(hits.begin() + mSearchShownCount, hits.end()));
+        mSearchShownCount = hits.size();
+        mSearchUnsorted = true;
+        mSearchShown.reset();
+    }
+    else if (mSearchUnsorted && mSearch.isDone() && mSearchSorted.getElapsedTimeF32() >= SEARCH_SORT_SECONDS)
     {
         pushSearchResults();
     }
@@ -1721,38 +1757,48 @@ void SKFloaterInventoryExplorer::stepSearch()
 
 void SKFloaterInventoryExplorer::pushSearchResults()
 {
-    mSearchUnshown = false;
     mSearchShown.reset();
+    mSearchSorted.reset();
+    mSearchUnsorted = false;
+    mSearchShownCount = mSearch.hits().size();
+    mSearchShownRemovals = mSearch.getRemovals();
     if (SKInventoryFlatView* flat = flatView(); flat && isSearching())
     {
         flat->setSearchResults(mSearch.hits());
     }
 }
 
-std::string SKFloaterInventoryExplorer::searchStatus() const
+bool SKFloaterInventoryExplorer::refreshSearchStatus()
 {
+    const U32 key = isSearching() ? mSearch.getStateGeneration() : U32_MAX - 1;
+    if (key == mSearchStatusKey)
+    {
+        return false;
+    }
+    mSearchStatusKey = key;
+    mSearchStatus.clear();
     if (!isSearching())
     {
-        return std::string();
+        return true;
     }
     const std::string flagged = mSearch.query().flaggedTerm();
     if (!flagged.empty())
     {
         LLStringUtil::format_map_t args;
         args["[TERM]"] = flagged;
-        return getString("search_flagged", args);
+        mSearchStatus = getString("search_flagged", args);
     }
-    if (!mSearch.isActive())
-    {
-        return std::string();
-    }
-    if (mSearch.getLoadingCount() > 0)
+    else if (mSearch.isActive() && mSearch.getLoadingCount() > 0)
     {
         LLStringUtil::format_map_t args;
         args["[COUNT]"] = llformat("%d", mSearch.getLoadingCount());
-        return getString("search_loading", args);
+        mSearchStatus = getString("search_loading", args);
     }
-    return mSearch.isDone() ? std::string() : getString("search_walking");
+    else if (mSearch.isActive() && !mSearch.isDone())
+    {
+        mSearchStatus = getString("search_walking");
+    }
+    return true;
 }
 
 void SKFloaterInventoryExplorer::showInFolder(const LLUUID& id)
@@ -1798,17 +1844,26 @@ S32 SKFloaterInventoryExplorer::savedSearchIndex(const std::string& query, const
     {
         return -1;
     }
+    // Both sides in saved form, so "everywhere" and a deleted folder compare alike.
+    const LLUUID wanted = savedFolder(folder_id);
     const LLSD list = gSavedPerAccountSettings.getLLSD(SAVED_SEARCHES);
     for (S32 i = 0; i < list.size(); ++i)
     {
-        const LLUUID saved_folder = list[i]["folder"].asUUID();
-        if (list[i]["query"].asString() == query
-            && (saved_folder.isNull() ? gInventory.getRootFolderID() : saved_folder) == folder_id)
+        if (list[i]["query"].asString() == query && savedFolder(list[i]["folder"].asUUID()) == wanted)
         {
             return i;
         }
     }
     return -1;
+}
+
+LLUUID SKFloaterInventoryExplorer::savedFolder(const LLUUID& folder_id)
+{
+    if (folder_id.isNull() || folder_id == gInventory.getRootFolderID() || !gInventory.getCategory(folder_id))
+    {
+        return LLUUID::null;
+    }
+    return folder_id;
 }
 
 void SKFloaterInventoryExplorer::toggleSavedSearch()
@@ -1835,7 +1890,7 @@ void SKFloaterInventoryExplorer::setSavedSearch(const std::string& query, const 
         LLSD entry;
         entry["query"] = query;
         // Searches of My Inventory itself are saved as everywhere.
-        entry["folder"] = folder_id == gInventory.getRootFolderID() ? LLUUID::null : folder_id;
+        entry["folder"] = savedFolder(folder_id);
         list.append(entry);
     }
     else if (!saved && index >= 0)

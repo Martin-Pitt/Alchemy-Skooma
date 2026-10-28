@@ -126,6 +126,14 @@ void SKInventoryPathBar::refresh()
     readCrumbs();
 }
 
+void SKInventoryPathBar::hideMenu()
+{
+    if (mMenu)
+    {
+        mMenu->hide();
+    }
+}
+
 void SKInventoryPathBar::readCrumbs()
 {
     mCrumbs.clear();
