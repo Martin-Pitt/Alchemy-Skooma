@@ -357,20 +357,6 @@ F32 sk_lufs_gain_for_target(F32 measured_lufs, F32 target_lufs, F32 strength, F3
     return gain;
 }
 
-void sk_lufs_apply_gain16(S16* samples, size_t count, F32 gain)
-{
-    if (!samples || gain == 1.f)
-    {
-        return;
-    }
-
-    for (size_t i = 0; i < count; ++i)
-    {
-        const S32 v = ll_round((F32)samples[i] * gain);
-        samples[i] = (S16)llclamp(v, -32768, 32767);
-    }
-}
-
 bool sk_lufs_measure_wav_file(const std::string& path, F32& out_lufs, F32& out_peak)
 {
     LLAudio::WavInfo info;

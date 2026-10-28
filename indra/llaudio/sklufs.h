@@ -167,10 +167,6 @@ F32 sk_lufs_gain_for_target(F32 measured_lufs,
                             F32 strength = 1.f,
                             F32 peak = 0.f);
 
-// In-place linear gain on 16-bit PCM, saturating rather than wrapping.
-// For the upload path, where the samples themselves are the deliverable.
-void sk_lufs_apply_gain16(S16* samples, size_t count, F32 gain);
-
 // Loudness of a RIFF/WAVE file on disk, measured as the file's header describes it.
 // Returns false when the file could not be read or is not 8/16-bit PCM.
 bool sk_lufs_measure_wav_file(const std::string& path, F32& out_lufs, F32& out_peak);
