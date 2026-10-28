@@ -949,6 +949,25 @@ void LLAudioEngine::triggerSound(const SoundData& soundData)
     triggerSound(soundData.audio_uuid, soundData.owner_id, soundData.gain, soundData.type, soundData.pos_global);
 }
 
+// <SK:Nexii> Audio preview control: stop our own copy of a triggered sound; others keep hearing theirs.
+void LLAudioEngine::stopTriggeredSounds(const LLUUID& audio_uuid, const LLUUID& owner_id)
+{
+    for (auto& [id, asp] : mAllSources)
+    {
+        if (!asp || !asp->isTrigger() || asp->getOwnerID() != owner_id)
+        {
+            continue;
+        }
+        LLAudioData* adp = asp->getCurrentData();
+        if (adp && adp->getID() == audio_uuid)
+        {
+            asp->stop();
+            asp->setPlayedOnce(true);
+        }
+    }
+}
+// </SK:Nexii>
+
 // All listener setters guard mListenerp because allocateListener can
 // fail (out of memory, a future backend with conditional support) and
 // because a mid-session backend swap could briefly leave it null
@@ -1653,6 +1672,7 @@ bool LLAudioSource::setupChannel()
 void LLAudioSource::stop()
 {
     play(LLUUID::null);
+    mStartOffset = 0.f; // <SK:Nexii> Audio preview control
     if (mCurrentDatap)
     {
         // always reset data if something wants us to stop
@@ -1723,8 +1743,43 @@ bool LLAudioSource::play(const LLUUID &audio_uuid)
     }
 
     getChannel()->play();
+    // <SK:Nexii> Audio preview control: a start offset applies once, when the sound actually starts.
+    if (mStartOffset > 0.f)
+    {
+        getChannel()->seek(mStartOffset);
+        mStartOffset = 0.f;
+    }
+    // </SK:Nexii>
     return true;
 }
+
+// <SK:Nexii> Audio preview control
+bool LLAudioSource::play(const LLUUID& audio_uuid, F32 offset_seconds)
+{
+    mStartOffset = (gAudiop && gAudiop->canSeek()) ? llmax(0.f, offset_seconds) : 0.f;
+    return play(audio_uuid);
+}
+
+bool LLAudioSource::seek(F32 seconds)
+{
+    if (!gAudiop || !gAudiop->canSeek())
+    {
+        return false;
+    }
+    seconds = llmax(0.f, seconds);
+    if (mChannelp && mChannelp->isPlaying())
+    {
+        return mChannelp->seek(seconds);
+    }
+    mStartOffset = seconds;
+    return true;
+}
+
+F32 LLAudioSource::getPlayPosition() const
+{
+    return (mChannelp && mChannelp->isPlaying()) ? mChannelp->getPlayPosition() : -1.f;
+}
+// </SK:Nexii>
 
 
 bool LLAudioSource::isDone() const
