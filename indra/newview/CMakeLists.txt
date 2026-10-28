@@ -1038,10 +1038,14 @@ if(AL_BUILD_VIEWER)
     skinventorycolumnsview.cpp # <SK:Nexii> Inventory Explorer
     skinventoryexplorerdrag.cpp # <SK:Nexii> Inventory Explorer
     skinventoryexplorermenu.cpp # <SK:Nexii> Inventory Explorer
+    skinventoryexplorerpopup.cpp # <SK:Nexii> Inventory Explorer
+    skinventoryexplorersearch.cpp # <SK:Nexii> Inventory Explorer
     skinventoryflatview.cpp # <SK:Nexii> Inventory Explorer
     skinventoryiconsview.cpp # <SK:Nexii> Inventory Explorer
     skinventorylistview.cpp # <SK:Nexii> Inventory Explorer
+    skinventorypathbar.cpp # <SK:Nexii> Inventory Explorer
     skinventoryrenameeditor.cpp # <SK:Nexii> Inventory Explorer
+    skinventorysearchbox.cpp # <SK:Nexii> Inventory Explorer
     skinventorysidebar.cpp # <SK:Nexii> Inventory Explorer
   )
 
@@ -1959,10 +1963,14 @@ if(AL_BUILD_VIEWER)
     skinventorycolumnsview.h # <SK:Nexii> Inventory Explorer
     skinventoryexplorerdrag.h # <SK:Nexii> Inventory Explorer
     skinventoryexplorermenu.h # <SK:Nexii> Inventory Explorer
+    skinventoryexplorerpopup.h # <SK:Nexii> Inventory Explorer
+    skinventoryexplorersearch.h # <SK:Nexii> Inventory Explorer
     skinventoryflatview.h # <SK:Nexii> Inventory Explorer
     skinventoryiconsview.h # <SK:Nexii> Inventory Explorer
     skinventorylistview.h # <SK:Nexii> Inventory Explorer
+    skinventorypathbar.h # <SK:Nexii> Inventory Explorer
     skinventoryrenameeditor.h # <SK:Nexii> Inventory Explorer
+    skinventorysearchbox.h # <SK:Nexii> Inventory Explorer
     skinventorysidebar.h # <SK:Nexii> Inventory Explorer
   )
 

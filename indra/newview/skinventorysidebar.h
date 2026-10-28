@@ -137,6 +137,54 @@ protected:
     std::set<LLUUID> mRootContentIDs;
 };
 
+// Saved searches, listed under the Favorites folders: a click runs one, the x on hover removes it.
+class SKSavedSearchRows : public LLUICtrl
+{
+public:
+    AL_VIEW_TYPE(SKSavedSearchRows, LLUICtrl);
+
+    struct Params : public LLInitParam::Block<Params, LLUICtrl::Params>
+    {
+    };
+
+    struct Row
+    {
+        std::string mQuery;
+        std::string mSuffix;    // " in Folder", dim
+        std::string mToolTip;
+    };
+
+    typedef std::function<void(S32 index)> index_callback_t;
+
+    static constexpr S32 ROW_HEIGHT = 21;
+
+    void setRows(const std::vector<Row>& rows, S32 selected);
+    void setRemoveToolTip(const std::string& tip) { mRemoveToolTip = tip; }
+    void setRunCallback(const index_callback_t& cb) { mRunCallback = cb; }
+    void setRemoveCallback(const index_callback_t& cb) { mRemoveCallback = cb; }
+    S32 getContentHeight() const { return (S32)mRows.size() * ROW_HEIGHT; }
+
+    void draw() override;
+    bool handleMouseDown(S32 x, S32 y, MASK mask) override;
+    bool handleHover(S32 x, S32 y, MASK mask) override;
+    bool handleToolTip(S32 x, S32 y, MASK mask) override;
+    void onMouseLeave(S32 x, S32 y, MASK mask) override;
+
+protected:
+    SKSavedSearchRows(const Params& p);
+    friend class LLUICtrlFactory;
+
+    S32 rowAt(S32 y) const;
+    LLRect removeRect(S32 index) const;
+
+    std::vector<Row> mRows;
+    S32 mSelected;
+    S32 mHover;
+    std::string mRemoveToolTip;
+    index_callback_t mRunCallback;
+    index_callback_t mRemoveCallback;
+};
+
 // Headings over the four panels, stacked by content height inside the outer scroller.
 class SKInventorySidebar : public LLPanel
 {
@@ -164,6 +212,8 @@ public:
     void setFlat(bool flat);
     // A live inventory panel, for the bridges the content views' menu runs actions through.
     LLInventoryPanel* getInventoryPanel() const;
+    // The saved search rows under Favorites.
+    SKSavedSearchRows* getSavedSearches() const { return mSavedSearches; }
     // Gives keyboard focus to the panel holding the selected row.
     void focusSelection(const LLUUID& folder_id = LLUUID::null);
 
@@ -186,6 +236,7 @@ protected:
     std::vector<SKInventorySidebarPanel*> mPanels;
     std::vector<LLTextBox*> mHeadings;
     LLTextBox* mFavoritesHint;
+    SKSavedSearchRows* mSavedSearches;
     open_callback_t mOpenCallback;
     key_callback_t mKeyCallback;
     bool mFlat;

@@ -35,12 +35,17 @@
 #include "llinventorymodel.h"
 #include "llinventoryobserver.h"
 #include "llscrollcontainer.h"
+#include "llfontgl.h"
+#include "llrender2dutils.h"
 #include "lltextbox.h"
+#include "lltooltip.h"
+#include "lluicolortable.h"
 #include "llviewerinventory.h"
 
 static LLDefaultChildRegistry::Register<SKInventorySidebarPanel> r_sk_sidebar_panel("sk_inventory_sidebar_panel");
 static LLDefaultChildRegistry::Register<SKInventoryFavoritesPanel> r_sk_favorites_panel("sk_inventory_favorites_panel");
 static LLDefaultChildRegistry::Register<SKInventorySidebar> r_sk_sidebar("sk_inventory_sidebar");
+static LLDefaultChildRegistry::Register<SKSavedSearchRows> r_sk_saved_searches("sk_saved_search_rows");
 // The sidebar sits in a scroll_container, which builds only children from its own registry.
 static ScrollContainerRegistry::Register<SKInventorySidebar> r_sk_sidebar_scrolled("sk_inventory_sidebar");
 
@@ -415,6 +420,7 @@ void SKInventoryFavoritesPanel::itemChanged(const LLUUID& id, U32 mask, const LL
 SKInventorySidebar::SKInventorySidebar(const Params& p)
 :   LLPanel(p),
     mFavoritesHint(nullptr),
+    mSavedSearches(nullptr),
     mFlat(false),
     mRevealing(false),
     mPendingPanel(nullptr)
@@ -441,6 +447,7 @@ bool SKInventorySidebar::postBuild()
         }
     }
     mFavoritesHint = findChild<LLTextBox>("favorites_hint");
+    mSavedSearches = findChild<SKSavedSearchRows>("saved_searches");
     return true;
 }
 
@@ -576,10 +583,11 @@ void SKInventorySidebar::arrangePanels()
                 rows.push_back({ heading, heading->getRect().getHeight() });
             }
         }
+        const S32 saved = (is_favorites && mSavedSearches) ? mSavedSearches->getContentHeight() : 0;
         if (is_favorites && mFavoritesHint)
         {
-            mFavoritesHint->setVisible(content == 0);
-            if (content == 0)
+            mFavoritesHint->setVisible(content == 0 && saved == 0);
+            if (content == 0 && saved == 0)
             {
                 rows.push_back({ mFavoritesHint, mFavoritesHint->getRect().getHeight() });
             }
@@ -587,6 +595,11 @@ void SKInventorySidebar::arrangePanels()
         if (panel)
         {
             rows.push_back({ panel, content });
+        }
+        if (is_favorites && mSavedSearches)
+        {
+            // Saved searches follow the favourite folders.
+            rows.push_back({ mSavedSearches, saved });
         }
     }
 
@@ -609,7 +622,7 @@ void SKInventorySidebar::arrangePanels()
     for (const Row& row : rows)
     {
         const S32 left = row.view->getRect().mLeft;
-        const S32 right = dynamic_cast<SKInventorySidebarPanel*>(row.view) ? width : width - 4;
+        const S32 right = (dynamic_cast<SKInventorySidebarPanel*>(row.view) || row.view == mSavedSearches) ? width : width - 4;
         LLRect shape(left, top, right, top - row.height);
         if (row.view->getRect() != shape)
         {
@@ -830,4 +843,131 @@ LLInventoryPanel* SKInventorySidebar::getInventoryPanel() const
         }
     }
     return nullptr;
+}
+
+//
+// SKSavedSearchRows
+//
+
+SKSavedSearchRows::SKSavedSearchRows(const Params& p)
+:   LLUICtrl(p),
+    mSelected(-1),
+    mHover(-1)
+{
+}
+
+void SKSavedSearchRows::setRows(const std::vector<Row>& rows, S32 selected)
+{
+    mRows = rows;
+    mSelected = selected;
+    if (mHover >= (S32)mRows.size())
+    {
+        mHover = -1;
+    }
+}
+
+S32 SKSavedSearchRows::rowAt(S32 y) const
+{
+    const S32 index = (getRect().getHeight() - 1 - y) / ROW_HEIGHT;
+    return (y >= 0 && index >= 0 && index < (S32)mRows.size()) ? index : -1;
+}
+
+LLRect SKSavedSearchRows::removeRect(S32 index) const
+{
+    const S32 top = getRect().getHeight() - index * ROW_HEIGHT;
+    return LLRect(getRect().getWidth() - 22, top, getRect().getWidth() - 4, top - ROW_HEIGHT);
+}
+
+void SKSavedSearchRows::draw()
+{
+    static LLUIColor selected_bg = LLUIColorTable::instance().getColor("EmphasisColor_35");
+    static LLUIColor hover_bg = LLUIColorTable::instance().getColor("White_10");
+    static LLUIColor text = LLUIColorTable::instance().getColor("LabelTextColor");
+    static LLUIColor dim = LLUIColorTable::instance().getColor("LtGray_50");
+    static LLPointer<LLUIImage> icon = LLUI::getUIImage("Search_Icon");
+    static LLPointer<LLUIImage> close = LLUI::getUIImage("Icon_Close_Foreground");
+
+    const LLFontGL* font = LLFontGL::getFontSansSerifSmall();
+    const S32 width = getRect().getWidth();
+    for (S32 i = 0; i < (S32)mRows.size(); ++i)
+    {
+        const S32 top = getRect().getHeight() - i * ROW_HEIGHT;
+        const LLRect rect(0, top, width, top - ROW_HEIGHT);
+        if (i == mSelected)
+        {
+            gl_rect_2d(rect, selected_bg.get(), true);
+        }
+        else if (i == mHover)
+        {
+            gl_rect_2d(rect, hover_bg.get(), true);
+        }
+        // Placed as a top-level row: the arrow's space, then the icon.
+        S32 x = 20;
+        if (icon.notNull())
+        {
+            icon->draw(x, rect.mBottom + (ROW_HEIGHT - 16) / 2, 16, 16);
+        }
+        x += 20;
+        const S32 right = width - (i == mHover ? 24 : 6);
+        const F32 mid = (F32)(rect.mBottom + ROW_HEIGHT / 2);
+        F32 query_right = 0.f;
+        font->renderUTF8(mRows[i].mQuery, 0, (F32)x, mid, text.get(), LLFontGL::LEFT, LLFontGL::VCENTER, LLFontGL::NORMAL,
+                         LLFontGL::NO_SHADOW, S32_MAX, llmax(0, right - x), &query_right, true);
+        if (!mRows[i].mSuffix.empty() && (S32)query_right < right)
+        {
+            font->renderUTF8(mRows[i].mSuffix, 0, query_right, mid, dim.get(), LLFontGL::LEFT, LLFontGL::VCENTER, LLFontGL::NORMAL,
+                             LLFontGL::NO_SHADOW, S32_MAX, right - (S32)query_right, nullptr, true);
+        }
+        if (i == mHover && close.notNull())
+        {
+            const LLRect remove = removeRect(i);
+            close->draw(remove.mLeft + 3, remove.mBottom + (ROW_HEIGHT - 12) / 2, 12, 12, text.get());
+        }
+    }
+    LLUICtrl::draw();
+}
+
+bool SKSavedSearchRows::handleMouseDown(S32 x, S32 y, MASK mask)
+{
+    const S32 index = rowAt(y);
+    if (index < 0)
+    {
+        return LLUICtrl::handleMouseDown(x, y, mask);
+    }
+    make_ui_sound("UISndClick");
+    if (removeRect(index).pointInRect(x, y))
+    {
+        if (mRemoveCallback)
+        {
+            mRemoveCallback(index);
+        }
+    }
+    else if (mRunCallback)
+    {
+        mRunCallback(index);
+    }
+    return true;
+}
+
+bool SKSavedSearchRows::handleHover(S32 x, S32 y, MASK mask)
+{
+    mHover = rowAt(y);
+    return LLUICtrl::handleHover(x, y, mask);
+}
+
+void SKSavedSearchRows::onMouseLeave(S32 x, S32 y, MASK mask)
+{
+    mHover = -1;
+    LLUICtrl::onMouseLeave(x, y, mask);
+}
+
+bool SKSavedSearchRows::handleToolTip(S32 x, S32 y, MASK mask)
+{
+    const S32 index = rowAt(y);
+    if (index < 0)
+    {
+        return LLUICtrl::handleToolTip(x, y, mask);
+    }
+    LLToolTipMgr::instance().show(removeRect(index).pointInRect(x, y) ? mRemoveToolTip : mRows[index].mToolTip);
+    return true;
 }
