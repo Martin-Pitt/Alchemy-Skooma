@@ -407,11 +407,18 @@ void SKInventoryColumnsView::rebuildTrailing()
         }
         trailing = mGhostCache;
     }
-    else if (single && mDetailsShown)
+    else if (mSelectedCount > 0 && mDetailsShown)
     {
+        // A single item, or a selection of several (folders among them), shows the details column.
         trailing.mKind = KIND_DETAILS;
-        trailing.mPathID = single->mID;
-        trailing.mRows.push_back(*single);
+        for (size_t r = 0; r < current.mRows.size(); ++r)
+        {
+            if (mSelected[r])
+            {
+                trailing.mRows.push_back(current.mRows[r]);
+            }
+        }
+        trailing.mPathID = trailing.mRows.empty() ? LLUUID::null : trailing.mRows.front().mID;
         trailing.mWidth = DETAILS_WIDTH;
     }
     else if (!current.mRows.empty())
@@ -993,7 +1000,12 @@ void SKInventoryColumnsView::drawDetails(const Column& column, S32 height)
     // The details view is a child laid over the column, drawn with the children.
     const S32 left = column.mLeft - mStripX;
     mDetailsView->setRect(LLRect(left, height, left + column.mWidth - 1, stripBar()));
-    mDetailsView->setSelection(column.mRows.empty() ? uuid_vec_t() : uuid_vec_t{ column.mRows.front().mID });
+    uuid_vec_t ids;
+    for (const SKInventoryRow& row : column.mRows)
+    {
+        ids.push_back(row.mID);
+    }
+    mDetailsView->setSelection(ids);
     mDetailsView->setVisible(true);
     mDetailsPlaced = true;
 }
