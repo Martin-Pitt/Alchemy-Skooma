@@ -4826,6 +4826,12 @@ void LLAppViewer::requestQuit()
     pingMainloopTimeout("Main:qFloaters");
     // Attempt to close all floaters that might be
     // editing things.
+    // <SK:Nexii> Reopen IMs: remember the chats open at logout, before closing their floaters ends them.
+    if (gIMMgr)
+    {
+        gIMMgr->saveOpenSessions();
+    }
+    // </SK:Nexii>
     if (gFloaterView)
     {
         // application is quitting
@@ -5984,12 +5990,6 @@ void LLAppViewer::idleShutdown()
         if (!mClosingFloaters)
         {
             // application is quitting
-            // <SK:Nexii> Reopen IMs: remember the chats open at logout, before closing their floaters ends them.
-            if (gIMMgr)
-            {
-                gIMMgr->saveOpenSessions();
-            }
-            // </SK:Nexii>
             gFloaterView->closeAllChildren(true);
             mClosingFloaters = true;
             return;
