@@ -593,7 +593,7 @@ Branch `feature-ui/reopen-ims` (via `ui`, main `65575fd429`). The IM and group c
 | File | What | Why there |
 |---|---|---|
 | `indra/newview/llimview.h` / `.cpp` | Marked `LLIMMgr::saveOpenSessions` / `reopenSavedSessions` | Sessions live in `LLIMModel`; adding goes through `LLIMMgr::addSession` |
-| `indra/newview/llappviewer.cpp` | Marked block calling `saveOpenSessions()` just before the per-account settings are saved in `cleanup()` | The list is a per-account setting, saved only after a successful login |
+| `indra/newview/llappviewer.cpp` | Marked block calling `saveOpenSessions()` in `idleShutdown()`, before `closeAllChildren` | Closing an IM floater ends its session, so the list must be taken before the floaters close; `cleanup()` saves it with the per-account settings |
 | `indra/newview/llstartup.cpp` | Marked include and `reopenSavedSessions()` after `STATE_STARTED` | Login is done; groups use the saved name, so the group list need not have arrived |
 | `indra/newview/app_settings/settings_per_account_alchemy.xml` | `SkoomaReopenIMSessions`, `SkoomaOpenIMSessions` (unmarked, after `AlchemyReportIgnoredAdHocSession`) | Settings |
 
