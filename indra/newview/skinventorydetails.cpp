@@ -1029,6 +1029,40 @@ void SKInventoryPlayer::drawLandmark(const LLRect& rect)
     const F32 ly = (F32)fmod(pos.mdV[VY], (F64)REGION_WIDTH_METERS) / REGION_WIDTH_METERS;
     const S32 px = mImageRect.mLeft + (S32)(lx * side);
     const S32 py = mImageRect.mBottom + (S32)(ly * side);
+    // The region's name in the bottom-left, as the world map labels a region, with its agent count once the map knows it.
+    std::string name;
+    S32 agents = 0;
+    LLSimInfo* info = LLWorldMap::getInstance()->simInfoFromPosGlobal(pos);
+    if (info)
+    {
+        name = info->getName();
+        if (mFetching && !info->isDown())
+        {
+            // The world map's own request for the region's agents, held to its rate.
+            info->updateAgentCount(LLTimer::getUptimeSeconds());
+        }
+        static LLUIColor avatar_color = LLUIColorTable::instance().getColor("MapAvatarColor", LLColor4::white);
+        static LLUIImagePtr dot = LLUI::getUIImage("map_avatar_8.tga");
+        for (const LLItemInfo& agent : info->getAgentLocation())
+        {
+            agents += agent.getCount();
+            if (dot.notNull())
+            {
+                const LLVector3d& at = agent.getGlobalPosition();
+                const S32 ax = mImageRect.mLeft + (S32)((F32)fmod(at.mdV[VX], (F64)REGION_WIDTH_METERS) / REGION_WIDTH_METERS * side);
+                const S32 ay = mImageRect.mBottom + (S32)((F32)fmod(at.mdV[VY], (F64)REGION_WIDTH_METERS) / REGION_WIDTH_METERS * side);
+                dot->draw(ax - dot->getWidth() / 2, ay - dot->getHeight() / 2, avatar_color.get());
+            }
+        }
+    }
+    else if (const LLViewerInventoryItem* item = target_item(mItemID))
+    {
+        std::string parcel, rating;
+        S32 hx = 0, hy = 0, hz = 0;
+        parse_location(item->getDescription(), parcel, name, hx, hy, hz, rating);
+    }
+
+    // Over the agents' dots.
     gGL.getTextureSlot(0)->unbind();
     gGL.color4fv(ACCENT.mV);
     gl_circle_2d((F32)px, (F32)(py + 9), 5.f, 16, true);
@@ -1036,9 +1070,15 @@ void SKInventoryPlayer::drawLandmark(const LLRect& rect)
     gGL.color4fv(LLColor4::white.mV);
     gl_circle_2d((F32)px, (F32)(py + 9), 2.f, 8, true);
 
-    if (LLSimInfo* info = LLWorldMap::getInstance()->simInfoFromPosGlobal(pos))
+    if (!name.empty())
     {
-        draw_chip(mImageRect.mLeft + 3, mImageRect.mTop - 3, info->getName());
+        if (agents > 0)
+        {
+            name += llformat(" (%d)", agents);
+        }
+        LLFontGL::getFontSansSerifSmallBold()->renderUTF8(name, 0, (F32)(mImageRect.mLeft + 4), (F32)(mImageRect.mBottom + 4),
+                                                          LLColor4::white, LLFontGL::LEFT, LLFontGL::BASELINE, LLFontGL::NORMAL,
+                                                          LLFontGL::DROP_SHADOW, S32_MAX, mImageRect.getWidth() - 8, nullptr, true);
     }
 }
 
