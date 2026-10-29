@@ -1631,3 +1631,27 @@ Branch `foundation-ui/legend` (main `abe381ef91`; merges `foundation-ui/hover`).
 | `skins/default/textures/textures.xml` | `SkDataVizHatch` | `<SK:Nexii> legend foundation` |
 | `skins/default/xui/en/main_view.xml` | `panel_sk_viz_hud.xml` beside `debug_view` | `<SK:Nexii> legend foundation` |
 | `skins/default/xui/en/menu_viewer.xml` | Develop > Render Tests > Legend Demo | `<!-- <SK:Nexii> legend foundation -->` |
+
+## UI saturation
+
+Branch `foundation-ui/saturation` (main `04f744bbdb`). Plan, critique and review: `V:\Scratch\ui-saturation\`. One UI saturation value on `LLRender`, set only through `ALUISaturation` scopes; first consumer: game-chat's fading cards.
+
+### Files we own
+
+| File | Role |
+|---|---|
+| `indra/llrender/tests/lluisaturation_test.cpp` | The scopes: restore, nesting, clamping |
+
+### Upstream edits
+
+| File | Change | Marker |
+|---|---|---|
+| `indra/llrender/llrender.h` | Saturation getters, private setter and fields, `ALUISaturation` scope | marked |
+| `indra/llrender/llrender.cpp` | `setUISaturation`; hash bump on context init | marked |
+| `indra/llrender/llglslshader.h` | `applyUIColorAdjust`, `mUIColorAdjustHash` | marked |
+| `indra/llrender/llglslshader.cpp` | `applyUIColorAdjust`, its call in `bind()`, hash resets on relink and after uniform mapping | marked |
+| `indra/llrender/llshadermgr.h` / `.cpp` | Reserved uniform `UI_SATURATION` / `"uiSaturation"` after `TEXT_SHADOW_MODE` | marked |
+| `shaders/class1/interface/uiF.glsl` | `uiSaturation` uniform, `ui_saturate()`, greying on both exits below 1 | marked |
+| `shaders/class1/interface/solidcolorF.glsl` | Same, one exit | marked |
+| `indra/newview/llviewerdisplay.cpp` | `render_ui` asserts the saturation is back to 1 | marked |
+| `indra/llrender/CMakeLists.txt` | `lluisaturation_test.cpp` in the test list | — |
