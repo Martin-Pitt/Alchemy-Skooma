@@ -58,8 +58,17 @@ namespace
         return detail;
     }
 
+    LLVolume* refVolumeZoned(const LLVolumeParams& params, S32 detail)
+    {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skshape - ref volume");
+        LL_PROFILE_ZONE_NUM(detail);
+        return LLPrimitive::sVolumeManager->refVolume(params, detail);
+    }
+
     void appendFaces(const LLVolume* volume, std::vector<LLVector3>& out)
     {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skshape - append faces");
+        LL_PROFILE_ZONE_NUM(volume->getNumVolumeFaces());
         for (S32 f = 0; f < volume->getNumVolumeFaces(); ++f)
         {
             const LLVolumeFace& face = volume->getVolumeFace(f);
@@ -77,6 +86,8 @@ namespace
 
     void appendSoup(const std::vector<LLVector3>& positions, std::vector<LLVector3>& out)
     {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skshape - append soup");
+        LL_PROFILE_ZONE_NUM(positions.size() / 3);
         // A PhysicsMesh is three positions per triangle already.
         out.insert(out.end(), positions.begin(), positions.end() - (positions.size() % 3));
     }
@@ -253,7 +264,7 @@ namespace
 
     F32 primHullCost(LLVOVolume* volume)
     {
-        LLVolume* phys = LLPrimitive::sVolumeManager->refVolume(volume->getVolume()->getParams(), physicsDetail(volume->getScale()));
+        LLVolume* phys = refVolumeZoned(volume->getVolume()->getParams(), physicsDetail(volume->getScale()));
         const S32 points = phys && phys->mHullPoints ? phys->mNumHullPoints : PRIM_HULL_UNKNOWN_VERTICES;
         LLPrimitive::sVolumeManager->unrefVolume(phys);
         return PRIM_HULL_BASE_COST + PRIM_HULL_VERTEX_COST * (F32)points;
@@ -279,7 +290,7 @@ F32 skPhysicsShapeCost(LLVOVolume* volume, const SKPhysicsShape& shape)
             return CYLINDER_COST;
         case Spec::PRIM_MESH:
         {
-            LLVolume* phys = LLPrimitive::sVolumeManager->refVolume(volume->getVolume()->getParams(), physicsDetail(scale));
+            LLVolume* phys = refVolumeZoned(volume->getVolume()->getParams(), physicsDetail(scale));
             F32 cost = MESH_MIN_COST;
             if (phys)
             {
@@ -522,7 +533,7 @@ bool skPhysicsShapeGeometry(const SKPhysicsShapeInput& in, const SKPhysicsShape&
                 // inside the single hull the overlay draws, and taking them at
                 // a fixed detail is what keeps the shape - and so the tiles
                 // built from it - from moving with the camera.
-                LLVolume* phys = LLPrimitive::sVolumeManager->refVolume(params, physicsDetail(scale));
+                LLVolume* phys = refVolumeZoned(params, physicsDetail(scale));
                 appendFaces(phys, out.mTriangles);
                 LLPrimitive::sVolumeManager->unrefVolume(phys);
             }
@@ -549,7 +560,7 @@ bool skPhysicsShapeGeometry(const SKPhysicsShapeInput& in, const SKPhysicsShape&
         }
         case Spec::PRIM_MESH:
         {
-            LLVolume* phys = LLPrimitive::sVolumeManager->refVolume(params, physicsDetail(scale));
+            LLVolume* phys = refVolumeZoned(params, physicsDetail(scale));
             appendFaces(phys, out.mTriangles);
             LLPrimitive::sVolumeManager->unrefVolume(phys);
             break;
@@ -563,7 +574,7 @@ bool skPhysicsShapeGeometry(const SKPhysicsShapeInput& in, const SKPhysicsShape&
             // The fixed-detail volume is shared and only sculpted by whatever
             // draws at that detail, so it can hold a lower-resolution texture
             // or none; a partial sculpt warps, so fall back to the loaded one.
-            LLVolume* phys = LLPrimitive::sVolumeManager->refVolume(params, physicsDetail(scale));
+            LLVolume* phys = refVolumeZoned(params, physicsDetail(scale));
             out.mProvenance = SKShapeProvenance::RENDER;
             if (phys->getSculptLevel() == 0)
             {
@@ -614,7 +625,7 @@ bool skCensusRenderGeometry(const SKPhysicsShapeInput& in, SKShapeGeometry& out)
     }
     const LLVolumeParams& params = *in.mParams;
     const S32 top = LLVolumeLODGroup::NUM_LODS - 1;
-    LLVolume* v = LLPrimitive::sVolumeManager->refVolume(params, top);
+    LLVolume* v = refVolumeZoned(params, top);
     if (!v)
     {
         return false;

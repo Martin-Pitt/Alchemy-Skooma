@@ -6948,6 +6948,8 @@ void LLPhysicsDecomp::Request::setStatusMessage(const std::string& msg)
 
 void LLMeshRepository::buildPhysicsMesh(LLModel::Decomposition& decomp)
 {
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_VOLUME; // <SK:Nexii>
+    LL_PROFILE_ZONE_NUM(decomp.mHull.size()); // <SK:Nexii>
     decomp.mMesh.resize(decomp.mHull.size());
 
     for (size_t i = 0; i < decomp.mHull.size(); ++i)
@@ -6961,6 +6963,8 @@ void LLMeshRepository::buildPhysicsMesh(LLModel::Decomposition& decomp)
         LLCDResult res = LLCD_OK;
         if (LLConvexDecomposition::getInstance() != NULL)
         {
+            LL_PROFILE_ZONE_NAMED_CATEGORY_VOLUME("buildPhysicsMesh hull"); // <SK:Nexii>
+            LL_PROFILE_ZONE_NUM(hull.mNumVertices); // <SK:Nexii>
             res = LLConvexDecomposition::getInstance()->getMeshFromHull(&hull, &mesh);
         }
         if (res == LLCD_OK)

@@ -316,6 +316,8 @@ LLVolume* LLVolumeLODGroup::refLOD(const S32 lod)
     mRefs++;
     if (mVolumeLODs[slot].isNull())
     {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_VOLUME("LLVolumeLODGroup::refLOD build"); // <SK:Nexii>
+        LL_PROFILE_ZONE_NUM(slot); // <SK:Nexii>
         mVolumeLODs[slot] = new LLVolume(mVolumeParams, mDetailScales[slot]);
         llassert(mVolumeLODs[slot]->isLODInvariant() == mLODInvariant);
     }

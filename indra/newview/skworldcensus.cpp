@@ -1651,19 +1651,38 @@ skworld::RecordPtr SKWorldCensus::record(const PartFacts& facts, skworld::Role r
     // A cached sculpt has no texture at all, and waits for its object.
     if (in.mSculpted && !in.mMesh && facts.mSculptLevel != 0)
     {
+        LL_PROFILE_ZONE_TEXT("sculpt wait", 11);
         return nullptr;
     }
     SKShapeGeometry geom;
     bool ok = false;
     if (role == Role::SURROUND)
     {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - shape render geometry");
         ok = skCensusRenderGeometry(in, geom);
     }
     else if (!in.mMesh || in.mObject || gMeshRepo.physicsMeshSize(in.mParams->getSculptID()) >= 0)
     {
         // A cached mesh's decomposition is asked for only once its header is in (visitPart asks for that).
         SKPhysicsShape shape;
-        ok = skPhysicsShapeClassify(in, shape) && skPhysicsShapeGeometry(in, shape, geom, sim);
+        {
+            LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - shape classify");
+            ok = skPhysicsShapeClassify(in, shape);
+        }
+        if (ok)
+        {
+            LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - shape physics geometry");
+            ok = skPhysicsShapeGeometry(in, shape, geom, sim);
+        }
+    }
+    {
+        // DO NOT LAND: which shape, from what, at how many triangles; failed builds too.
+        char text[160];
+        const int len = snprintf(text, sizeof(text), "%s ok=%d prov=%d shape=%d mesh=%d sculpt=%d tris=%zu id=%s",
+                                 role == Role::SURROUND ? "surround" : "nav", (int)ok, (int)geom.mProvenance, (int)geom.mShape,
+                                 (int)in.mMesh, (int)in.mSculpted, geom.mTriangles.size() / 3,
+                                 in.mParams->getSculptID().asString().c_str());
+        LL_PROFILE_ZONE_TEXT(text, len > 0 ? std::min<size_t>(len, sizeof(text) - 1) : 0);
     }
     if (!ok)
     {
@@ -1692,6 +1711,8 @@ skworld::RecordPtr SKWorldCensus::record(const PartFacts& facts, skworld::Role r
 
     if (geom.mShape == SKShapeKind::TRIANGLES)
     {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - shape transform");
+        LL_PROFILE_ZONE_NUM(geom.mTriangles.size() / 3);
         auto tris = std::make_shared<std::vector<LLVector3>>();
         tris->reserve(geom.mTriangles.size());
         for (const LLVector3& p : geom.mTriangles)
