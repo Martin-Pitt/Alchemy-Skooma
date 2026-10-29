@@ -140,9 +140,8 @@ bool SKMapMode::open()
 
     if (!mHasMapCamera)
     {
-        // Above the agent, looking the way the world camera did.
-        const LLVector3 at = LLViewerCamera::getInstance()->getAtAxis();
-        const F64 yaw = (std::fabs(at.mV[VX]) + std::fabs(at.mV[VY]) > 1.0e-3f) ? std::atan2(at.mV[VY], at.mV[VX]) : 0.0;
+        // Above the agent, looking north, so the map opens the way maps are read.
+        const F64 yaw = 0.5 * 3.141592653589793;
         mMapFocus = gAgent.getPositionGlobal();
         mMapFocus.mdV[VZ] = GROUND_Z;
         mMapPosition = mMapFocus - lookDirection(yaw, -START_ELEVATION) * START_DISTANCE;
