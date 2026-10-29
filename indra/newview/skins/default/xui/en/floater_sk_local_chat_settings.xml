@@ -166,6 +166,17 @@
              name="sk_timing_top"
              top="5"
              width="10" />
+            <check_box
+             control_name="SkoomaLocalChatFade"
+             follows="left|top"
+             height="16"
+             label="Fade messages"
+             layout="topleft"
+             left="8"
+             name="sk_fade"
+             tool_tip="Fade messages once read; off keeps them all visible"
+             top_pad="5"
+             width="292" />
             <slider
              control_name="SkoomaLocalChatFadeDelay"
              decimal_digits="1"
