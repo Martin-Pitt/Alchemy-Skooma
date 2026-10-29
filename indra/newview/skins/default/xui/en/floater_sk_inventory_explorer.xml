@@ -318,33 +318,41 @@
      layout="topleft"
      left_pad="6"
      name="path_bar"
-     right="-540"
+     right="-574"
      top="29" />
     <button
      follows="top|right"
      height="22"
+     image_overlay="SK_Group_By"
+     image_overlay_alignment="left"
      image_selected="Toolbar_Middle_Selected"
      image_unselected="Toolbar_Middle_Off"
+     imgoverlay_label_space="3"
      is_toggle="true"
      label="Group: None"
      layout="topleft"
      name="group_btn"
-     right="-444"
+     pad_left="4"
+     right="-464"
      tool_tip="Group by"
      top="29"
-     width="90" />
+     width="104" />
     <button
      follows="top|right"
      height="22"
+     image_overlay="Conv_toolbar_sort"
+     image_overlay_alignment="left"
      image_selected="Toolbar_Middle_Selected"
      image_unselected="Toolbar_Middle_Off"
+     imgoverlay_label_space="1"
      label="Sort: Acquired"
      layout="topleft"
      name="sort_btn"
+     pad_left="2"
      right="-340"
      tool_tip="Sort by"
      top="29"
-     width="100" />
+     width="120" />
     <button
      follows="top|right"
      height="22"

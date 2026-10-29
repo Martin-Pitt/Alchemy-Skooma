@@ -426,7 +426,8 @@ with the same filename but different name
 
   <texture name="List_View_Disabled" file_name="icons/List_View_Disabled.png" preload="false" />
   <texture name="List_View_On" file_name="icons/List_View_On.png" preload="false" />
-  <!-- <SK:Nexii> Inventory Explorer's view switcher -->
+  <!-- <SK:Nexii> Inventory Explorer's view switcher and Group button -->
+  <texture name="SK_Group_By" file_name="icons/sk_group_by.png" preload="false" />
   <texture name="SK_View_Columns" file_name="icons/sk_view_columns.png" preload="false" />
   <texture name="SK_View_Gallery" file_name="icons/sk_view_gallery.png" preload="false" />
   <texture name="SK_View_Icons" file_name="icons/sk_view_icons.png" preload="false" />
