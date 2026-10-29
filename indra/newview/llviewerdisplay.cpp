@@ -1657,6 +1657,8 @@ void render_ui(F32 zoom_factor, int subfield)
     LL_PROFILE_ZONE_SCOPED_CATEGORY_UI;
     LL_PROFILE_GPU_ZONE("ui");
     LLGLState::checkStates();
+    // <SK:Nexii> UI saturation: every ALUISaturation scope closes within the frame that opened it.
+    llassert(gGL.getUISaturation() == 1.f);
 
     // the world camera, as the scene just rendered with it
     const LLCamera saved_camera = LLViewerCamera::getCurrent();

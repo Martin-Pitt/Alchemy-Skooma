@@ -2191,6 +2191,7 @@ void LLShaderMgr::initAttribsAndUniforms()
 
     // Text Shadow
     mReservedUniforms.push_back("textShadowMode");
+    mReservedUniforms.push_back("uiSaturation"); // <SK:Nexii> UI saturation
 
     // End Alchemy Effects Stack
 
