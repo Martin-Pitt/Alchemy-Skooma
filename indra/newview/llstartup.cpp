@@ -225,7 +225,6 @@
 #include "llsecapi.h"
 #include "alobjectproperties.h"
 #include "llselectmgr.h"
-#include "llsky.h"
 #include "llstatview.h"
 #include "llstatusbar.h"        // sendMoneyBalanceRequest(), owns L$ balance
 #include "llbuycurrencyhtml.h"
@@ -1792,7 +1791,6 @@ bool idle_startup()
         // to hapen with caps granted
         gTextureList.doPrefetchImages();
 
-        // will init images, should be done with caps, but before gSky.init()
         LLEnvironment::getInstance()->initSingleton();
 
         do_startup_frame();
@@ -1902,17 +1900,6 @@ bool idle_startup()
         gAgent.resetAxes(gAgentStartLookAt);
         gAgentCamera.stopCameraAnimation();
         gAgentCamera.resetCamera();
-        do_startup_frame();
-
-        // Initialize global class data needed for surfaces (i.e. textures)
-        LL_DEBUGS("AppInit") << "Initializing sky..." << LL_ENDL;
-        // Initialize all of the viewer object classes for the first time (doing things like texture fetches.
-        LLGLState::checkStates();
-
-        gSky.init();
-
-        LLGLState::checkStates();
-
         do_startup_frame();
 
         LL_DEBUGS("AppInit") << "Decoding images..." << LL_ENDL;
@@ -3502,7 +3489,6 @@ void reset_login()
     gAgentWearables.cleanup();
     gAgentCamera.cleanup();
     gAgent.cleanup();
-    gSky.cleanup(); // mVOSkyp is an inworld object.
     LLWorld::getInstance()->resetClass();
     LLAppearanceMgr::getInstance()->cleanup();
 
