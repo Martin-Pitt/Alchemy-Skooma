@@ -666,6 +666,16 @@ LLSD LLModel::writeModel(
         model[LLModel::LOD_PHYSICS] = NULL;
     }
 
+    // <SK:Nexii> Mesh pivot spike: the hulls and bounding hull share one domain, shifted as the LODs are
+    if (mdl.has("physics_convex") && mdl["physics_convex"].has("Min"))
+    {
+        LLVector3 hull_min(mdl["physics_convex"]["Min"]);
+        LLVector3 hull_max(mdl["physics_convex"]["Max"]);
+        mdl["physics_convex"]["Min"] = (hull_min + position_offset).getValue();
+        mdl["physics_convex"]["Max"] = (hull_max + position_offset).getValue();
+    }
+    // </SK:Nexii>
+
     if (as_slm)
     { //save material list names
         for (U32 i = 0; i < high->mMaterialList.size(); ++i)
