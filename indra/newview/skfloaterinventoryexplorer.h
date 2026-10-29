@@ -64,9 +64,18 @@ struct SKExplorerTab
         VIEW_GALLERY,
     };
 
+    // One history entry: a folder seen in a view.
+    struct Place
+    {
+        LLUUID mFolderID;
+        EView mView = VIEW_COLUMNS;
+        bool operator==(const Place&) const = default;
+    };
+
     LLUUID mFolderID;
-    std::vector<LLUUID> mBack;
-    std::vector<LLUUID> mForward;
+    std::vector<Place> mBack;
+    std::vector<Place> mForward;
+    bool mViewOnlyEntry = false;        // the newest back entry is a view change in this folder, which later ones replace
     EView mView = VIEW_COLUMNS;
     EView mPrevView = VIEW_COLUMNS;     // where Esc leaves the Gallery for
     SKInventoryListView::EColumn mSortKey = SKInventoryListView::COL_ACQUIRED;
@@ -204,6 +213,7 @@ private:
     SKExplorerTab& currentTab() { return mTabs[mActiveTab]; }
 
     void navigateTo(const LLUUID& folder_id, bool record_history);
+    void goToPlace(const SKExplorerTab::Place& place);
     void goBack();
     void goForward();
     void goUp();
@@ -215,7 +225,7 @@ private:
     void saveListState();
     void showCurrentTab();
     void showFolder();
-    void setView(SKExplorerTab::EView view);
+    void setView(SKExplorerTab::EView view, bool record_history = true);
     // Columns shows search results flat, in the List.
     bool isColumns() const
     {
@@ -289,7 +299,6 @@ private:
     SKExplorerOptions mOptions;
     LLButton* mBackBtn;
     LLButton* mForwardBtn;
-    LLButton* mUpBtn;
     LLButton* mDetailsBtn;
     SKInventoryPathBar* mPathBar;
     SKInventorySearchBox* mSearchBox;
