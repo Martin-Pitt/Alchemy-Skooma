@@ -1625,7 +1625,6 @@ Branch `foundation-ui/legend` (main `abe381ef91`; merges `foundation-ui/hover`).
 |---|---|---|
 | `indra/llmath/CMakeLists.txt` | `skcolorscale` source/header/test | trailing `# <SK:Nexii> legend foundation` |
 | `indra/llui/CMakeLists.txt` | `dataviz/` sources, headers, include dir, tests | trailing `# <SK:Nexii> legend foundation` |
-| `indra/llui/utils/llwidgetreg.cpp` | registers `sk_legend` | `<SK:Nexii> legend foundation` |
 | `indra/newview/CMakeLists.txt` | `skvizhover`, `skfloaterlegenddemo` | trailing `# <SK:Nexii> legend foundation` |
 | `indra/newview/llviewerfloaterreg.cpp` | `sk_legend_demo` floater | `<SK:Nexii> legend foundation` |
 | `skins/default/colors.xml` | `SkDataViz*` colours | `<!-- <SK:Nexii> legend foundation -->` |
