@@ -399,6 +399,7 @@ bool LLRender::init(bool needs_vertex_buffer)
     // write.
     mLightsUBOBound   = false;
     mMatricesUBOBound = false;
+    ++mUIColorAdjustHash; // <SK:Nexii> UI saturation
     if (main_context)
     {
         ALUniformBuffer::forgetScratchBinding();
@@ -1490,6 +1491,26 @@ void LLRender::end()
         flush();
     }
 }
+
+// <SK:Nexii> UI saturation
+void LLRender::setUISaturation(F32 saturation)
+{
+    // NaN reads as unchanged.
+    saturation = saturation < 1.f ? llmax(saturation, 0.f) : 1.f;
+    if (saturation == mUISaturation)
+    {
+        return;
+    }
+
+    flush();
+    mUISaturation = saturation;
+    ++mUIColorAdjustHash;
+    if (LLGLSLShader::sCurBoundShaderPtr)
+    {
+        LLGLSLShader::sCurBoundShaderPtr->applyUIColorAdjust();
+    }
+}
+// </SK:Nexii>
 
 void LLRender::flush()
 {
