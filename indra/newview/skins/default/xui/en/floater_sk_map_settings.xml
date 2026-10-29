@@ -184,6 +184,17 @@
              top="8"
              width="308" />
             <check_box
+             control_name="SKMapVoidTiles"
+             follows="left|top"
+             height="16"
+             label="Map the void around regions"
+             layout="topleft"
+             left="8"
+             name="sk_void_tiles"
+             tool_tip="Also capture the empty squares within two regions of yours, so builds reaching out over the void show"
+             top_pad="5"
+             width="308" />
+            <check_box
              control_name="SKMapLayerStairs"
              follows="left|top"
              height="16"

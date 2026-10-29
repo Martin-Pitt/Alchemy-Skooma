@@ -189,8 +189,10 @@ private:
     /// way zoomed out to the mini-map's flat markers; fills the marks and labels' anchors with each marker's top.
     template <typename Project>
     void drawMarkers3D(const Project& project, S32 vw, S32 vh, std::vector<std::pair<size_t, LLVector2>>& drawn);
-    /// Captures the region maps that are due: the agent's on its timer, then the most overdue other one.
+    /// Captures the region maps that are due: the agent's on its timer, then the most overdue other one, the void tiles
+    /// beside the regions among them.
     void captureMaps(F64 now);
+    /// One map's top-down capture; region is none for a void tile, which takes its square from the map.
     bool captureMap(RegionMap& map, LLViewerRegion* region, bool agent);
     void tactical();
     void composite();
