@@ -7,7 +7,7 @@
  *        work group size, its dispatches direct, by thread count and indirect, the image units its reserved names
  *        get, arrays included, the fixed storage binding points a buffer bound once serves every program at, and a
  *        compaction drawn indirectly. The units every kind of sampler gets, integer textures read through reserved
- *        samplers, and what the debug validator says of images and stencil reads. And who owns a shader object: a program its own, deleted once it links,
+ *        samplers, a bind given no texture, and what the debug validator says of images and stencil reads. And who owns a shader object: a program its own, deleted once it links,
  *        the manager the shared ones.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
@@ -43,6 +43,7 @@
 #include "../llshadermgr.h"
 
 #include "llheadlessgl_fixture.h"
+#include "tests/wrapllerrs.h"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -55,6 +56,10 @@
 #include <string>
 #include <utility>
 #include <vector>
+
+// llgl.cpp's, which LLRender::init hands GL in a debug session.
+extern void APIENTRY gl_debug_callback(GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei length,
+                                       const GLchar* message, GLvoid* userParam);
 
 namespace
 {
@@ -2069,6 +2074,73 @@ namespace
         CHECK(glGetError() == GLenum(GL_NO_ERROR));
     }
 
+    // A program given no texture binds none. bindTexture with a null texture or render target, bindDepthTexture with a
+    // null target, and the slot's bindFast with a null texture each let the unit go, as the slot holding a texture
+    // another bind left there: its record says it holds nothing, GL's binding is no longer that texture, and the unit
+    // is returned as a bind returns it. The disable a reader pairs with its bind then finds nothing to release, under
+    // the debug checks too.
+    TEST_CASE_METHOD(llglslshader_data, "llglslshader_gl: bindTexture given no texture lets its unit go", "[llglslshader_gl]")
+    {
+        setUpShaders();
+        constexpr U32 W = 4;
+        constexpr U32 H = 4;
+        REQUIRE(mTargets[0].allocate(W, H, GL_RGBA8));
+        REQUIRE(buildProgram(mDraw, "null bind (test)",
+                             { { "test/fullscreenV.glsl", GL_VERTEX_SHADER }, { "test/sampleF.glsl", GL_FRAGMENT_SHADER } }));
+        const S32 unit = mDraw.getTextureChannel(TEST_SOURCE_MAP);
+        UNSCOPED_INFO("the sampler has a unit");
+        REQUIRE(unit >= 0);
+        mDraw.bind();
+
+        // The name GL holds on the unit's 2D target, read with the unit made active and the active one put back.
+        const auto bound_2d = [unit]()
+        {
+            glActiveTexture(GL_TEXTURE0 + unit);
+            GLint name = 0;
+            glGetIntegerv(GL_TEXTURE_BINDING_2D, &name);
+            glActiveTexture(GL_TEXTURE0 + gGL.getCurrentTexUnitIndex());
+            return (U32)name;
+        };
+        const auto hold_target = [&]()
+        {
+            UNSCOPED_INFO("the target is bound at the unit");
+            REQUIRE(mDraw.bindTexture(TEST_SOURCE_MAP, &mTargets[0], ALSamplers::PointClamp) == unit);
+            UNSCOPED_INFO("and GL holds it there");
+            REQUIRE(bound_2d() == mTargets[0].getTexture());
+        };
+        const auto check_let_go = [&](const char* what, S32 returned)
+        {
+            INFO(what);
+            CHECK(returned == unit);
+            const ALTextureSlot* slot = gGL.getTextureSlot(unit);
+            CHECK(slot->getCurrType() == ALTextureSlot::TT_NONE);
+            CHECK(slot->getCurrTexture() == 0);
+            CHECK(bound_2d() != mTargets[0].getTexture());
+        };
+
+        hold_target();
+        check_let_go("a null texture",
+                     mDraw.bindTexture(TEST_SOURCE_MAP, static_cast<LLTexture*>(nullptr), ALSamplers::PointClamp));
+
+        hold_target();
+        check_let_go("a null render target", mDraw.bindTexture(TEST_SOURCE_MAP, static_cast<LLRenderTarget*>(nullptr)));
+
+        hold_target();
+        check_let_go("a null depth target", mDraw.bindDepthTexture(TEST_SOURCE_MAP, nullptr));
+
+        hold_target();
+        gGL.getTextureSlot(unit)->bindFast(nullptr, ALSamplers::PointClamp);
+        check_let_go("a null texture through the slot", unit);
+
+        // A unit let go and then released, under the debug checks, whose expected target it does not hold.
+        gDebugGL = true;
+        S32 released = -1;
+        CHECK_NOTHROW(released = mDraw.disableTexture(TEST_SOURCE_MAP, ALTextureSlot::TT_CUBE_MAP));
+        gDebugGL = false;
+        CHECK(released == unit);
+        CHECK(glGetError() == GLenum(GL_NO_ERROR));
+    }
+
     // A shared object is the shader manager's, not the programs' that attach it. Two programs built through
     // createShader attach the same one, as every program with a feature attaches its object, and call into it. Once
     // linked a program holds no object, and its own are deleted: the count of live objects is what it was before the
@@ -2429,6 +2501,51 @@ namespace
         CHECK(validates(mDraw2, TEST_SOURCE_MAP, GL_DEPTH_COMPONENT));
 
         glDeleteTextures(1, &texture);
+        CHECK(glGetError() == GLenum(GL_NO_ERROR));
+    }
+
+    // The debug callback runs inside the GL call that raised its message, where a GL call of its own is undefined: it
+    // describes a unit as gGL caches it. A unit rebound behind the cache's back is reported as the cache has it, which
+    // a callback asking GL would not do.
+    TEST_CASE_METHOD(llglslshader_data, "llglslshader_gl: the debug callback describes the slots as cached and asks GL nothing", "[llglslshader_gl]")
+    {
+        GLuint textures[2] = {};
+        glGenTextures(2, textures);
+        for (const GLuint texture : textures)
+        {
+            glBindTexture(GL_TEXTURE_2D, texture);
+            glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, 4, 4);
+        }
+        glBindTexture(GL_TEXTURE_2D, 0);
+
+        constexpr U32 UNIT = 3;
+        ALTextureSlot* slot = gGL.getTextureSlot(UNIT);
+        slot->bindManual(ALTextureSlot::TT_TEXTURE, textures[0]);
+        // GL holds the other texture there, unknown to the cache.
+        glActiveTexture(GL_TEXTURE0 + UNIT);
+        glBindTexture(GL_TEXTURE_2D, textures[1]);
+        glActiveTexture(GL_TEXTURE0 + gGL.getCurrentTexUnitIndex());
+
+        std::string reported;
+        {
+            CaptureLog log(LLError::LEVEL_WARN);
+            const char message[] = "Pixel-path performance warning: raised by a test";
+            gl_debug_callback(GL_DEBUG_SOURCE_API, GL_DEBUG_TYPE_PERFORMANCE, 0x20072, GL_DEBUG_SEVERITY_MEDIUM,
+                              GLsizei(sizeof(message) - 1), message, nullptr);
+            reported = log.messageWith("unit " + std::to_string(UNIT) + " ", false);
+        }
+        INFO("the unit's line: " << reported);
+        UNSCOPED_INFO("the unit reported with the texture the cache holds");
+        CHECK(reported.find("tex=" + std::to_string(textures[0])) != std::string::npos);
+        UNSCOPED_INFO("not the one GL holds");
+        CHECK(reported.find("tex=" + std::to_string(textures[1])) == std::string::npos);
+
+        // GL as the cache has it again, and the slot let go.
+        glActiveTexture(GL_TEXTURE0 + UNIT);
+        glBindTexture(GL_TEXTURE_2D, textures[0]);
+        glActiveTexture(GL_TEXTURE0 + gGL.getCurrentTexUnitIndex());
+        slot->unbind();
+        glDeleteTextures(2, textures);
         CHECK(glGetError() == GLenum(GL_NO_ERROR));
     }
 

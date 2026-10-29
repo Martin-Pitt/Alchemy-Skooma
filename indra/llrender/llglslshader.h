@@ -147,14 +147,6 @@ public:
 class LLGLSLShader
 {
 public:
-    // NOTE: Keep gShaderConsts and LLGLSLShader::ShaderConsts_e in sync!
-    enum eShaderConsts
-    {
-        SHADER_CONST_CLOUD_MOON_DEPTH
-        , SHADER_CONST_STAR_DEPTH
-        , NUM_SHADER_CONSTS
-    };
-
     // enum primarily used to control application sky settings uniforms
     typedef enum
     {
@@ -178,7 +170,9 @@ public:
         UB_ENVIRONMENT,         // "Environment" (sky/water constants)
         UB_DEFERRED,            // "Deferred" (shadow/SSAO constants)
         UB_LIGHTS,              // "Lights" (forward fixed-function light array state)
-        UB_MATRICES,            // "Matrices" (modelview/projection/derived matrix stack state)
+        UB_MATRICES,            // "Matrices" (the modelview and what is derived from it, a draw's model matrix moves)
+        UB_PROJECTION_MATRICES, // "ProjectionMatrices" (the projection, its inverse and the texture matrix)
+        UB_OBJECT_SKIN,         // "ObjectSkin" (a rigged draw's joint palette, under OBJECT_SKIN_BLOCK)
         NUM_UNIFORM_BLOCKS
     };
 
@@ -195,6 +189,8 @@ public:
         "Deferred",         // UB_DEFERRED
         "Lights",           // UB_LIGHTS
         "Matrices",         // UB_MATRICES
+        "ProjectionMatrices", // UB_PROJECTION_MATRICES
+        "ObjectSkin",       // UB_OBJECT_SKIN
     };
 
     // Expected std140 layout of an engine UBO block, registered by the module that owns the
@@ -463,8 +459,6 @@ public:
     }
     void removePermutation(std::string name);
 
-    void addConstant(const LLGLSLShader::eShaderConsts shader_const);
-
     // Texture channel for the specified uniform, or -1 if the uniform is not used as a
     // texture. enableTexture only resolves it; disableTexture also releases the slot, and its
     // `mode` is the caller's expected target, checked against what was actually bound there
@@ -477,6 +471,8 @@ public:
 
     // bindTexture returns the texture unit we've bound the texture to.
     // You can reuse the return value to unbind a texture when required.
+    // A null texture or target binds nothing there, and the unit is let go of what it held; the
+    // unit is returned all the same. bindDepthTexture likewise.
     //
     // The sampler is NAMED BY THE CALLER, and there is no overload that infers it. How a pass
     // reads an image is a property of the pass: two materials can reference one texture and

@@ -753,6 +753,9 @@ public:
     void        cacheImpostorValues();
     void        setImpostorDim(const LLVector2& dim);
     static void resetImpostors();
+    // Makes the impostor targets updateImpostors will bake into this frame, before the frame's first draw
+    // (LLPipeline::allocateImpostorTarget).
+    static void allocateImpostors();
     static void updateImpostors();
     LLRenderTarget mImpostor;
 // [RLVa:KB] - Checked: RLVa-2.4 (@setcam_avdist)
@@ -937,6 +940,9 @@ public:
     virtual void    dirtyMesh(); // Dirty the avatar mesh
     void            updateMeshData();
     void            updateMeshVisibility();
+    // updateMeshVisibility at the avatar's next idle update, once however many of its attachments' faces
+    // ask before then: a material its body's faces share completes for all of them at once
+    void            dirtyMeshVisibility() { mMeshVisibilityDirty = true; }
     LLViewerTexture*        getBakedTexture(const U8 te);
 
     // Matrix palette cache entry
@@ -952,8 +958,16 @@ public:
         // Float array ready to be sent to GL: one vec4 rebase origin (agent space)
         // followed by count mat3x4 lines whose translations are relative to it. The
         // upload splits the two -- AVATAR_MATRIX takes the palette tail, SKIN_ORIGIN
-        // the origin (see apply_matrix_palette).
+        // the origin (see apply_matrix_palette) -- or, under LLRender::sObjectSkinBlock,
+        // writes it whole into the scratch UBO ring as the ObjectSkin block.
         std::vector<F32> mGLMp;
+
+        // Where mGLMp of mScratchFrame was written into the scratch UBO ring, in the
+        // ring's generation mScratchGeneration; -1 for nowhere. Written once a frame,
+        // and bound by every draw of the skin after (apply_matrix_palette).
+        mutable S64 mScratchOffset = -1;
+        mutable U32 mScratchGeneration = 0;
+        mutable U32 mScratchFrame = 0;
 
         MatrixPaletteCache() :
             mFrame(gFrameCount - 1)
@@ -978,6 +992,7 @@ private:
     LLViewerJoint*  getViewerJoint(S32 idx);
     S32             mDirtyMesh; // 0 -- not dirty, 1 -- morphed, 2 -- LOD
     bool            mMeshTexturesDirty;
+    bool            mMeshVisibilityDirty = false;
 
     //--------------------------------------------------------------------
     // Destroy invisible mesh
