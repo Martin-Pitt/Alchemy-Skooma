@@ -21,10 +21,10 @@ permissions:
   contents: read
 
 # A pull request or a branch analyses only its latest push. The schedule and
-# dispatches wait their turn rather than cancel one in flight.
+# dispatches have groups of their own, so no push cancels them.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event_name == 'push' && github.ref || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
   analyze:
