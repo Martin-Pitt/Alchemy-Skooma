@@ -1608,7 +1608,10 @@ void SKInventoryDetailsView::rebuild()
     SKInventoryRow row;
     SKInventoryFlatView::readRow(mItemID, SKInventoryDetails::labels(), row);
     // A thumbnail goes on top, and the player moves below the rows.
-    const LLUUID thumbnail = item->getThumbnailUUID().notNull() ? item->getThumbnailUUID() : target->getThumbnailUUID();
+    // A texture's own image is its preview, and its thumbnail is that image again: it has no thumbnail section.
+    const LLUUID thumbnail = target->getType() == LLAssetType::AT_TEXTURE ? LLUUID::null
+                             : item->getThumbnailUUID().notNull()         ? item->getThumbnailUUID()
+                                                                          : target->getThumbnailUUID();
     mThumbnail = thumbnail.notNull();
     // The asset's own preview leads wherever its type has one; the thumbnail then follows below the rows.
     mThumbBelow = mThumbnail && !broken && has_asset_preview(target->getType());
