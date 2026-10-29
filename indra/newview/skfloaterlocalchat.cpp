@@ -287,11 +287,22 @@ bool SKFloaterLocalChat::modernEnabled()
 }
 
 // static
+bool SKFloaterLocalChat::hidesForConversations()
+{
+    static LLCachedControl<bool> hide(gSavedSettings, "SkoomaLocalChatHideForConversations", false);
+    return hide;
+}
+
+// static
 bool SKFloaterLocalChat::shouldTakeChat()
 {
     if (!modernEnabled())
     {
         return false;
+    }
+    if (!hidesForConversations())
+    {
+        return true;
     }
     // As the chat bar: while Conversations is up, starting chat selects its nearby conversation instead.
     LLFloaterIMContainer* conversations = LLFloaterIMContainer::findInstance();
@@ -373,7 +384,7 @@ void SKFloaterLocalChat::onIdle(void* data)
     // Conversations carries nearby chat, so the chat steps aside while it is up and comes back after.
     SKFloaterLocalChat* self = static_cast<SKFloaterLocalChat*>(data);
     LLFloaterIMContainer* conversations = LLFloaterIMContainer::findInstance();
-    const bool conversations_up = conversations && conversations->getVisible() && !conversations->isMinimized();
+    const bool conversations_up = hidesForConversations() && conversations && conversations->getVisible() && !conversations->isMinimized();
     if (conversations_up && self->getVisible())
     {
         if (self->mInput && self->mInput->getVisible())

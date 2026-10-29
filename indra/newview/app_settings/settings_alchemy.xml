@@ -5276,6 +5276,17 @@
             <key>Value</key>
             <integer>1</integer>
         </map>
+        <key>SkoomaLocalChatHideForConversations</key>
+        <map>
+            <key>Comment</key>
+            <string>Hide the game-style local chat while the Conversations floater is open, leaving nearby chat to it.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
         <key>SkoomaLocalChatMask</key>
         <map>
             <key>Comment</key>

@@ -1,0 +1,203 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+<floater
+ can_resize="true"
+ height="290"
+ layout="topleft"
+ min_height="290"
+ min_width="320"
+ name="sk_local_chat_settings"
+ save_rect="true"
+ single_instance="true"
+ title="Local Chat Settings"
+ width="340">
+    <tab_container
+     follows="all"
+     height="256"
+     layout="topleft"
+     left="4"
+     name="sk_local_chat_settings_tabs"
+     right="-4"
+     tab_max_width="80"
+     tab_min_width="40"
+     tab_position="top"
+     top="30">
+        <panel
+         follows="all"
+         height="252"
+         label="General"
+         layout="topleft"
+         left="0"
+         name="sk_tab_general"
+         top="0"
+         width="332">
+            <text
+             follows="left|top"
+             height="16"
+             layout="topleft"
+             left="8"
+             name="sk_style_label"
+             top="10"
+             width="105">
+                Style
+            </text>
+            <combo_box
+             control_name="SkoomaLocalChatStyle"
+             follows="left|top"
+             height="23"
+             layout="topleft"
+             left_pad="5"
+             name="sk_style"
+             top_delta="-4"
+             width="198">
+                <combo_box.item
+                 label="Cards"
+                 name="sk_style_cards"
+                 value="0" />
+                <combo_box.item
+                 label="Minimal lines"
+                 name="sk_style_minimal"
+                 value="1" />
+            </combo_box>
+            <check_box
+             control_name="SkoomaLocalChatModern"
+             follows="left|top"
+             height="16"
+             label="Game-style local chat"
+             layout="topleft"
+             left="8"
+             name="sk_modern"
+             tool_tip="Show nearby chat here instead of toasts and the chat bar"
+             top_pad="5"
+             width="308" />
+            <check_box
+             control_name="SkoomaLocalChatHideForConversations"
+             follows="left|top"
+             height="16"
+             label="Hide while Conversations is open"
+             layout="topleft"
+             left="8"
+             name="sk_hide_for_conversations"
+             tool_tip="Step aside while the Conversations floater is up, and leave nearby chat to it"
+             top_pad="5"
+             width="308" />
+            <check_box
+             control_name="SkoomaLocalChatMask"
+             follows="left|top"
+             height="16"
+             label="Fade at the scroll edges"
+             layout="topleft"
+             left="8"
+             name="sk_mask"
+             tool_tip="Fade messages per pixel at the top and bottom edges"
+             top_pad="5"
+             width="308" />
+            <check_box
+             control_name="SkoomaLocalChatTyping"
+             follows="left|top"
+             height="16"
+             label="Show who is typing"
+             layout="topleft"
+             left="8"
+             name="sk_typing"
+             tool_tip="List who nearby is typing under the messages"
+             top_pad="5"
+             width="308" />
+            <check_box
+             control_name="SkoomaLocalChatUnfurl"
+             follows="left|top"
+             height="16"
+             label="Link previews"
+             layout="topleft"
+             left="8"
+             name="sk_unfurl"
+             tool_tip="Preview links to Second Life places, residents, groups, Marketplace listings and lsl.dev or slua.dev pages"
+             top_pad="5"
+             width="308" />
+        </panel>
+        <panel
+         follows="all"
+         height="252"
+         label="Timing"
+         layout="topleft"
+         left="0"
+         name="sk_tab_timing"
+         top="0"
+         width="332">
+            <view
+             height="5"
+             layout="topleft"
+             left="0"
+             name="sk_timing_top"
+             top="5"
+             width="10" />
+            <slider
+             control_name="SkoomaLocalChatFadeDelay"
+             decimal_digits="1"
+             follows="left|top|right"
+             height="16"
+             increment="0.5"
+             label="Fade after (s)"
+             label_width="130"
+             layout="topleft"
+             left="8"
+             max_val="60"
+             min_val="0"
+             name="sk_fade_delay"
+             text_width="40"
+             tool_tip="Seconds a message stays fully visible before it fades"
+             top_pad="5"
+             width="308" />
+            <slider
+             control_name="SkoomaLocalChatFadeTime"
+             decimal_digits="1"
+             follows="left|top|right"
+             height="16"
+             increment="0.1"
+             label="Fade over (s)"
+             label_width="130"
+             layout="topleft"
+             left="8"
+             max_val="10"
+             min_val="0"
+             name="sk_fade_time"
+             text_width="40"
+             tool_tip="Seconds a message takes to fade out"
+             top_pad="5"
+             width="308" />
+            <slider
+             control_name="SkoomaLocalChatHoverGrace"
+             decimal_digits="1"
+             follows="left|top|right"
+             height="16"
+             increment="0.5"
+             label="Hover grace (s)"
+             label_width="130"
+             layout="topleft"
+             left="8"
+             max_val="30"
+             min_val="0"
+             name="sk_hover_grace"
+             text_width="40"
+             tool_tip="Seconds the chat stays up after the mouse leaves or the input closes"
+             top_pad="5"
+             width="308" />
+            <slider
+             control_name="SkoomaLocalChatTypingGrace"
+             decimal_digits="1"
+             follows="left|top|right"
+             height="16"
+             increment="0.5"
+             label="Typing grace (s)"
+             label_width="130"
+             layout="topleft"
+             left="8"
+             max_val="10"
+             min_val="0"
+             name="sk_typing_grace"
+             text_width="40"
+             tool_tip="Seconds someone typing just out of range stays listed after they stop"
+             top_pad="5"
+             width="308" />
+        </panel>
+    </tab_container>
+</floater>

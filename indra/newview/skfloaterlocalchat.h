@@ -52,6 +52,8 @@ public:
 
     /// Whether this floater replaces the nearby toasts and chat bar (SkoomaLocalChatModern).
     static bool modernEnabled();
+    /// Whether the chat steps aside while Conversations is up (`SkoomaLocalChatHideForConversations`).
+    static bool hidesForConversations();
     /// Whether starting chat opens this floater: modern chat is on and Conversations is not up to take it.
     static bool shouldTakeChat();
     /// Takes a nearby chat message as the toasts would have.
