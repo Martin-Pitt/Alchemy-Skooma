@@ -37,7 +37,7 @@ namespace skworld
     /// The highest of height over a box's four plan corners and its middle,
     /// at the box's foot: the land a footprint stands on, so a slope does not
     /// hide under its low side.
-    F32 footprintMax(const LLVector3d& min, const LLVector3d& max, const std::function<F32(const LLVector3d&)>& height);
+    F32 floorFootprintMax(const LLVector3d& min, const LLVector3d& max, const std::function<F32(const LLVector3d&)>& height);
 
     /// The built floor among gaps whose floor lies in [lo, hi]: the highest
     /// one AVATAR walks, else the highest fine one, else the highest coarse
