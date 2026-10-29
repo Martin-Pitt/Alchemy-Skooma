@@ -2080,12 +2080,6 @@ bool LLAppViewer::cleanup()
     }
     else
     {
-        // <SK:Nexii> Reopen IMs: remember the chats open at logout.
-        if (LLIMModel::instanceExists() && LLIMMgr::instanceExists())
-        {
-            LLIMMgr::getInstance()->saveOpenSessions();
-        }
-        // </SK:Nexii>
         gSavedPerAccountSettings.saveToFile(gSavedSettings.getString("PerAccountSettingsFile"), true);
         LL_INFOS() << "Saved settings" << LL_ENDL;
 
@@ -6000,6 +5994,12 @@ void LLAppViewer::idleShutdown()
         if (!mClosingFloaters)
         {
             // application is quitting
+            // <SK:Nexii> Reopen IMs: remember the chats open at logout, before closing their floaters ends them.
+            if (gIMMgr)
+            {
+                gIMMgr->saveOpenSessions();
+            }
+            // </SK:Nexii>
             gFloaterView->closeAllChildren(true);
             mClosingFloaters = true;
             return;
