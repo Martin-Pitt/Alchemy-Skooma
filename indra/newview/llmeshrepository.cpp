@@ -7050,8 +7050,6 @@ static void fan_flat_hull(const std::vector<LLVector3>& points, LLModel::Physics
 
 void LLMeshRepository::buildPhysicsMesh(LLModel::Decomposition& decomp)
 {
-    LL_PROFILE_ZONE_SCOPED_CATEGORY_VOLUME; // <SK:Nexii>
-    LL_PROFILE_ZONE_NUM(decomp.mHull.size()); // <SK:Nexii>
     decomp.mMesh.resize(decomp.mHull.size());
 
     for (size_t i = 0; i < decomp.mHull.size(); ++i)
