@@ -23,4 +23,12 @@
          function="SKLocalChat.CheckStyle"
          parameter="minimal"/>
     </menu_item_check>
+    <menu_item_separator/>
+    <menu_item_call
+     label="Settings..."
+     name="sk_local_chat_settings">
+        <menu_item_call.on_click
+         function="Floater.Show"
+         parameter="sk_local_chat_settings"/>
+    </menu_item_call>
 </toggleable_menu>

@@ -200,4 +200,103 @@ TEST_CASE("skchatunfurl: page text is bounded and cleaned", "[skchatunfurl]")
     REQUIRE(parseOpenGraph("<meta property=\"og:title\" content=\"x>").mTitle.empty());
     REQUIRE(parseOpenGraph("").mTitle.empty());
 }
+
+TEST_CASE("skchatunfurl: YouTube videos by their id, in every link form", "[skchatunfurl]")
+{
+    const std::string key = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+    const Target t = classify("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=42s#c");
+    REQUIRE(t.mKind == EKind::YOUTUBE);
+    REQUIRE(t.mVideo == "dQw4w9WgXcQ");
+    REQUIRE(t.mKey == key);
+    REQUIRE(classify("https://youtube.com/watch?feature=share&v=dQw4w9WgXcQ").mKey == key);
+    REQUIRE(classify("https://m.youtube.com/watch?v=dQw4w9WgXcQ").mKey == key);
+    REQUIRE(classify("https://music.youtube.com/watch?v=dQw4w9WgXcQ").mKey == key);
+    REQUIRE(classify("https://youtu.be/dQw4w9WgXcQ?si=abc").mKey == key);
+    REQUIRE(classify("https://www.youtube.com/shorts/dQw4w9WgXcQ").mKey == key);
+    REQUIRE(classify("https://www.youtube.com/live/dQw4w9WgXcQ").mKey == key);
+    REQUIRE(classify("https://www.youtube.com/embed/dQw4w9WgXcQ").mKey == key);
+
+    REQUIRE(classify("http://www.youtube.com/watch?v=dQw4w9WgXcQ").mKind == EKind::NONE);
+    REQUIRE(classify("https://www.youtube.com/watch?v=short").mKind == EKind::NONE);
+    REQUIRE(classify("https://www.youtube.com/watch?v=dQw4w9WgXc!").mKind == EKind::NONE);
+    REQUIRE(classify("https://www.youtube.com/watch").mKind == EKind::NONE);
+    REQUIRE(classify("https://www.youtube.com/@channel").mKind == EKind::NONE);
+    REQUIRE(classify("https://youtu.be/dQw4w9WgXcQ/extra").mKind == EKind::NONE);
+    REQUIRE(classify("https://www.youtube.com.evil.example/watch?v=dQw4w9WgXcQ").mKind == EKind::NONE);
+
+    REQUIRE(youtubeThumbnailUrl("dQw4w9WgXcQ") == "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg");
+    REQUIRE(youtubeOEmbedUrl("dQw4w9WgXcQ") ==
+            "https://www.youtube.com/oembed?format=json&url=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3DdQw4w9WgXcQ");
+}
+
+TEST_CASE("skchatunfurl: an oEmbed answer gives the title and channel", "[skchatunfurl]")
+{
+    OpenGraph og = parseYouTubeOEmbed(R"({"title":"Never Gonna \"Give\"\nYou Up","author_name":"Rick Astley","thumbnail_url":"https://evil.example/x.jpg"})");
+    REQUIRE(og.mTitle == "Never Gonna \"Give\" You Up");
+    REQUIRE(og.mDescription == "Rick Astley");
+    REQUIRE(og.mImage.empty());
+    REQUIRE(parseYouTubeOEmbed("not json").mTitle.empty());
+    REQUIRE(parseYouTubeOEmbed(R"(["title"])").mTitle.empty());
+    REQUIRE(parseYouTubeOEmbed(R"({"title":7})").mTitle.empty());
+}
+
+TEST_CASE("skchatunfurl: GitHub repositories, issues and pull requests", "[skchatunfurl]")
+{
+    Target t = classify("https://github.com/AlchemyViewer/Alchemy?tab=readme#top");
+    REQUIRE(t.mKind == EKind::GITHUB_REPO);
+    REQUIRE(t.mRepo == "AlchemyViewer/Alchemy");
+    REQUIRE(t.mApi == "https://api.github.com/repos/AlchemyViewer/Alchemy");
+    REQUIRE(t.mKey == "https://github.com/AlchemyViewer/Alchemy");
+    REQUIRE(classify("https://www.github.com/AlchemyViewer/Alchemy/").mKey == t.mKey);
+
+    t = classify("https://github.com/AlchemyViewer/Alchemy/issues/42#issuecomment-1");
+    REQUIRE(t.mKind == EKind::GITHUB_ISSUE);
+    REQUIRE(t.mApi == "https://api.github.com/repos/AlchemyViewer/Alchemy/issues/42");
+    REQUIRE(t.mKey == "https://github.com/AlchemyViewer/Alchemy/issues/42");
+
+    t = classify("https://github.com/AlchemyViewer/Alchemy/pull/7/files");
+    REQUIRE(t.mKind == EKind::GITHUB_PULL);
+    REQUIRE(t.mApi == "https://api.github.com/repos/AlchemyViewer/Alchemy/pulls/7");
+    REQUIRE(t.mKey == "https://github.com/AlchemyViewer/Alchemy/pull/7");
+
+    REQUIRE(classify("https://github.com/AlchemyViewer").mKind == EKind::NONE);
+    REQUIRE(classify("https://github.com/AlchemyViewer/Alchemy/issues").mKind == EKind::NONE);
+    REQUIRE(classify("https://github.com/AlchemyViewer/Alchemy/issues/0").mKind == EKind::NONE);
+    REQUIRE(classify("https://github.com/AlchemyViewer/Alchemy/issues/4x").mKind == EKind::NONE);
+    REQUIRE(classify("https://github.com/AlchemyViewer/Alchemy/blob/main/README.md").mKind == EKind::NONE);
+    REQUIRE(classify("https://github.com/AlchemyViewer/..").mKind == EKind::NONE);
+    REQUIRE(classify("https://github.com/Alchemy_Viewer/Alchemy").mKind == EKind::NONE);
+    REQUIRE(classify("https://gist.github.com/AlchemyViewer/Alchemy").mKind == EKind::NONE);
+    REQUIRE(classify("http://github.com/AlchemyViewer/Alchemy").mKind == EKind::NONE);
+}
+
+TEST_CASE("skchatunfurl: GitHub answers make cards with their state", "[skchatunfurl]")
+{
+    const Target repo = classify("https://github.com/AlchemyViewer/Alchemy");
+    GitHubCard card = parseGitHub(repo, R"({"full_name":"AlchemyViewer/Alchemy","description":"A viewer","stargazers_count":1234,"language":"C++"})");
+    REQUIRE(card.mTitle == "AlchemyViewer/Alchemy");
+    REQUIRE(card.mDescription == "\xE2\x98\x85 1.2k \xC2\xB7 C++ \xC2\xB7 A viewer");
+    REQUIRE(card.mState == EGitHubState::NONE);
+
+    const Target pull = classify("https://github.com/AlchemyViewer/Alchemy/pull/7");
+    card = parseGitHub(pull, R"({"number":7,"title":"Fix it","state":"closed","merged":true,"draft":false,"user":{"login":"nexii"},"additions":120,"deletions":30,"comments":1})");
+    REQUIRE(card.mTitle == "#7 Fix it");
+    REQUIRE(card.mState == EGitHubState::MERGED);
+    REQUIRE(card.mDescription == "AlchemyViewer/Alchemy \xC2\xB7 @nexii \xC2\xB7 +120 \xE2\x88\x92" "30 \xC2\xB7 1 comment");
+    REQUIRE(parseGitHub(pull, R"({"number":7,"title":"x","state":"open","draft":true})").mState == EGitHubState::DRAFT);
+    REQUIRE(parseGitHub(pull, R"({"number":7,"title":"x","state":"closed","merged":false})").mState == EGitHubState::CLOSED);
+
+    const Target issue = classify("https://github.com/AlchemyViewer/Alchemy/issues/42");
+    REQUIRE(parseGitHub(issue, R"({"number":42,"title":"x","state":"open"})").mState == EGitHubState::OPEN);
+    REQUIRE(parseGitHub(issue, R"({"number":42,"title":"x","state":"closed","state_reason":"completed"})").mState == EGitHubState::COMPLETED);
+    REQUIRE(parseGitHub(issue, R"({"number":42,"title":"x","state":"closed","state_reason":"not_planned"})").mState == EGitHubState::NOT_PLANNED);
+
+    REQUIRE(parseGitHub(issue, R"({"message":"API rate limit exceeded"})").mTitle.empty());
+    REQUIRE(parseGitHub(repo, "[]").mTitle.empty());
+
+    REQUIRE(shortCount(999) == "999");
+    REQUIRE(shortCount(1000) == "1k");
+    REQUIRE(shortCount(12345) == "12k");
+    REQUIRE(shortCount(2500000) == "2.5M");
+}
 } // namespace
