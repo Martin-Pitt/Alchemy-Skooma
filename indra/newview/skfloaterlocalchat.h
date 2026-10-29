@@ -119,6 +119,7 @@ private:
         S32 mNameLen = 0;   // bytes of the name at the start of mBody, 0 for none
         EChatSourceType mSource = CHAT_SOURCE_SYSTEM;
         bool mEmote = false;
+        S8 mVoice = 0;      // 1 shouted, -1 whispered, drawn larger or smaller rather than prefixed
         F64 mArrival = 0.0;
         F32 mHoldExtra = 0.f; // seconds held past the fade delay, for its words and the messages before it
         std::string mTime;  // the timestamp after the name
@@ -146,6 +147,7 @@ private:
         S32 mBottom = 0;    // from the bottom of the content
         bool mEmbed = false; // the message's link preview rather than a line of it
         bool mQuote = false; // a line of a block quote, drawn indented behind a bar
+        F32 mScale = 1.f;    // its font against the chat font: a heading's, a shout's or a whisper's
         S32 height() const;
     };
 
@@ -189,6 +191,8 @@ private:
     /// A colour at a card's alpha, greyed as far as the card has faded.
     LLColor4 faded(LLColor4 color, F32 alpha) const;
     S32 lineHeight(const Row& row) const;
+    /// The font a line of a message draws in, the chat font at the row's scale.
+    static LLFontGL* rowFont(const Row& row);
     /// The url under a point in the floater, empty when none.
     std::string urlAt(S32 x, S32 y) const;
     /// A place in a message's text: its index and a byte of its body.
