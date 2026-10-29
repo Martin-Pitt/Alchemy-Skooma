@@ -103,6 +103,17 @@
              top_pad="5"
              width="308" />
             <check_box
+             control_name="SkoomaLocalChatVoiceSizes"
+             follows="left|top"
+             height="16"
+             label="Size shouts and whispers"
+             layout="topleft"
+             left="8"
+             name="sk_voice_sizes"
+             tool_tip="Draw shouts larger and bold and whispers smaller and italic, without the shouts: and whispers: prefixes"
+             top_pad="5"
+             width="308" />
+            <check_box
              control_name="SkoomaLocalChatUnfurl"
              follows="left|top"
              height="16"

@@ -150,6 +150,8 @@ constexpr U8 MD_FONT = LLFontGL::BOLD | LLFontGL::ITALIC | LLFontGL::UNDERLINE;
 constexpr U8 MD_STRIKE = 0x08;
 constexpr U8 MD_CODE = 0x10;
 constexpr U8 MD_QUOTE = 0x20;
+constexpr U8 MD_HEADING = 0xC0; // a heading's level, 1 to 3
+constexpr S32 MD_HEADING_SHIFT = 6;
 constexpr S32 CODE_PAD = 2;     // either side of an inline code run, inside its background
 constexpr S32 QUOTE_INDENT = 12; // a quoted line's text, past its bar
 constexpr S32 QUOTE_BAR = 3;
@@ -157,6 +159,14 @@ constexpr S32 QUOTE_BAR = 3;
 U8 style_at(const std::vector<U8>& style, S32 pos)
 {
     return pos >= 0 && pos < (S32)style.size() ? style[pos] : 0;
+}
+
+// A line's size against the chat font: a heading's level, then how loud it was said.
+F32 line_scale(U8 style, S32 voice)
+{
+    static constexpr F32 headings[4] = { 1.f, 1.5f, 1.25f, 1.f };
+    const F32 voiced = voice > 0 ? 1.2f : voice < 0 ? 0.85f : 1.f;
+    return headings[(style & MD_HEADING) >> MD_HEADING_SHIFT] * voiced;
 }
 
 // Where the run of one style that starts at pos ends, at most end.
@@ -628,16 +638,28 @@ void SKFloaterLocalChat::appendChat(const LLChat& chat, const LLSD& args, F64 ar
         text = text.substr(3);
     }
     static LLCachedControl<S32> style(gSavedSettings, "SkoomaLocalChatStyle", STYLE_CARDS);
+    static LLCachedControl<bool> voices(gSavedSettings, "SkoomaLocalChatVoiceSizes", true);
+    static const std::string shout = LLTrans::getString("shout");
+    static const std::string whisper = LLTrans::getString("whisper");
+    const bool shouted = chat.mChatType == CHAT_TYPE_SHOUT || text.compare(0, shout.length(), shout) == 0;
+    const bool whispered = chat.mChatType == CHAT_TYPE_WHISPER || text.compare(0, whisper.length(), whisper) == 0;
+    if (voices && !msg.mEmote && (shouted || whispered))
+    {
+        // Said louder or quieter: drawn larger or smaller, so the verb goes.
+        const std::string& verb = shouted ? shout : whisper;
+        if (text.compare(0, verb.length(), verb) == 0)
+        {
+            text.erase(0, llmin(text.size(), text.find_first_not_of(' ', verb.length())));
+            msg.mVoice = shouted ? 1 : -1;
+        }
+    }
     if (named)
     {
         msg.mName = chat.mFromName;
         if (msg.mEmote || style == STYLE_MINIMAL)
         {
-            static const std::string shout = LLTrans::getString("shout");
-            static const std::string whisper = LLTrans::getString("whisper");
             std::string delimiter = ": ";
-            if (msg.mEmote || chat.mChatType == CHAT_TYPE_SHOUT || chat.mChatType == CHAT_TYPE_WHISPER ||
-                text.compare(0, shout.length(), shout) == 0 || text.compare(0, whisper.length(), whisper) == 0)
+            if (msg.mEmote || (msg.mVoice == 0 && (shouted || whispered)))
             {
                 delimiter = msg.mEmote ? "" : " ";
             }
@@ -709,6 +731,19 @@ void SKFloaterLocalChat::appendChat(const LLChat& chat, const LLSD& args, F64 ar
             {
                 msg.mStyle[k] |= LLFontGL::ITALIC;
             }
+        }
+    }
+    if (msg.mVoice != 0)
+    {
+        // A shout bold, a whisper italic and dimmed, besides their sizes.
+        msg.mStyle.resize(msg.mBody.size(), 0);
+        for (S32 k = msg.mNameLen; k < (S32)msg.mBody.size(); ++k)
+        {
+            msg.mStyle[k] |= msg.mVoice > 0 ? LLFontGL::BOLD : LLFontGL::ITALIC;
+        }
+        if (msg.mVoice < 0)
+        {
+            msg.mTextColor.mV[VALPHA] *= 0.7f;
         }
     }
 
@@ -837,10 +872,10 @@ void SKFloaterLocalChat::applyMarkdown(Message& msg)
             }
             if (hashes > 0 && i + hashes + 1 < eol && body[i + hashes] == ' ')
             {
-                drop(line, i - line + hashes + 1); // a heading, drawn bold
+                drop(line, i - line + hashes + 1); // a heading, drawn bold and larger
                 for (S32 k = i + hashes + 1; k < eol; ++k)
                 {
-                    style[k] |= LLFontGL::BOLD;
+                    style[k] |= LLFontGL::BOLD | (U8)(hashes << MD_HEADING_SHIFT);
                 }
             }
             else if (i + 2 < eol && (body[i] == '-' || body[i] == '*') && body[i + 1] == ' ')
@@ -1242,7 +1277,21 @@ S32 SKFloaterLocalChat::lineHeight(const Row& row) const
     {
         return embed_height();
     }
-    return row.mMessage < 0 ? name_font()->getLineHeight() + 1 : LLViewerChat::getChatFont()->getLineHeight();
+    return row.mMessage < 0 ? name_font()->getLineHeight() + 1 : rowFont(row)->getLineHeight();
+}
+
+// static
+LLFontGL* SKFloaterLocalChat::rowFont(const Row& row)
+{
+    LLFontGL* font = LLViewerChat::getChatFont();
+    if (row.mScale == 1.f)
+    {
+        return font;
+    }
+    const LLFontDescriptor& desc = font->getFontDesc();
+    const F32 points = LLFontGL::pointsOf(desc.getName(), desc.getSize());
+    LLFontGL* scaled = points > 0.f ? LLFontGL::getFontAtPoints(desc.getName(), points * row.mScale, LLFontGL::NORMAL) : nullptr;
+    return scaled ? scaled : font;
 }
 
 void SKFloaterLocalChat::holdForReading(Message& msg) const
@@ -1369,12 +1418,11 @@ void SKFloaterLocalChat::layout()
     mRows.clear();
     mCards.clear();
 
-    LLFontGL* font = LLViewerChat::getChatFont();
     const S32 pad_x = cards ? CARD_PAD_X : PAD_X;
     const S32 text_x = cards ? pad_x + DISC + DISC_GAP : pad_x;
     const F32 wrap = (F32)llmax(16, width - text_x - pad_x);
     // How much wider a minimal line's bold name draws than the regular face measures it.
-    auto bold_extra = [font](const Message& msg)
+    auto bold_extra = [](const LLFontGL* font, const Message& msg)
     {
         const std::string_view name = std::string_view(msg.mBody).substr(0, msg.mNameLen);
         return llmax(0, bold_width(font, name) - font->getWidth(name));
@@ -1466,7 +1514,10 @@ void SKFloaterLocalChat::layout()
             }
             // A minimal line's timestamp sits in its first row, before the name.
             const bool quoted = (style_at(msg.mStyle, pos) & MD_QUOTE) != 0;
-            F32 row_wrap = pos == 0 && msg.mNameLen > 0 ? llmax(16.f, wrap - (F32)(msg.mTimeWidth + bold_extra(msg))) : wrap;
+            Row row;
+            row.mScale = line_scale(style_at(msg.mStyle, pos), msg.mVoice);
+            const LLFontGL* font = rowFont(row);
+            F32 row_wrap = pos == 0 && msg.mNameLen > 0 ? llmax(16.f, wrap - (F32)(msg.mTimeWidth + bold_extra(font, msg))) : wrap;
             if (quoted)
             {
                 row_wrap = llmax(16.f, row_wrap - (F32)QUOTE_INDENT);
@@ -1493,7 +1544,6 @@ void SKFloaterLocalChat::layout()
                     }
                 }
             }
-            Row row;
             row.mMessage = m;
             row.mCard = (S32)mCards.size() - 1;
             row.mBegin = pos;
@@ -1559,7 +1609,8 @@ void SKFloaterLocalChat::layout()
             else
             {
                 const Message& msg = mMessages[row.mMessage];
-                S32 lead = row.mBegin == 0 && msg.mNameLen > 0 ? msg.mTimeWidth + bold_extra(msg) : 0;
+                const LLFontGL* font = rowFont(row);
+                S32 lead = row.mBegin == 0 && msg.mNameLen > 0 ? msg.mTimeWidth + bold_extra(font, msg) : 0;
                 lead += row.mQuote ? QUOTE_INDENT : 0;
                 widest = llmax(widest, (S32)ceilf(styled_width(font, msg.mBody, msg.mStyle, row.mBegin, row.mLength)) + lead);
             }
@@ -1638,7 +1689,7 @@ void SKFloaterLocalChat::drawRowSelection(const Row& row, S32 x, S32 y, F32 alph
         return;
     }
     const Message& msg = mMessages[row.mMessage];
-    const LLFontGL* font = LLViewerChat::getChatFont();
+    const LLFontGL* font = rowFont(row);
     F32 left = (F32)x;
     // A minimal line's leading time is highlighted too when the selection takes it.
     if (!(row.mBegin == 0 && msg.mNameLen > 0 && selectedFrom(row.mMessage) < 0))
@@ -1660,7 +1711,7 @@ void SKFloaterLocalChat::drawRowText(const Row& row, S32 x, S32 y, F32 alpha, LL
 {
     const Message& msg = mMessages[row.mMessage];
     static LLUIColor link_color = LLUIColorTable::instance().getColor("HTMLLinkColor");
-    LLFontGL* font = LLViewerChat::getChatFont();
+    LLFontGL* font = rowFont(row);
     const std::string_view body(msg.mBody);
     const S32 end = row.mBegin + row.mLength;
     F32 pen = (F32)x;
@@ -2498,7 +2549,7 @@ std::string SKFloaterLocalChat::urlAt(S32 x, S32 y) const
         {
             return std::string();
         }
-        const S32 at = row.mBegin + styled_byte_at(LLViewerChat::getChatFont(), msg.mBody, msg.mStyle, row.mBegin, row.mLength, offset, false);
+        const S32 at = row.mBegin + styled_byte_at(rowFont(row), msg.mBody, msg.mStyle, row.mBegin, row.mLength, offset, false);
         if (at >= row.mBegin + row.mLength)
         {
             return std::string();
@@ -2584,7 +2635,7 @@ bool SKFloaterLocalChat::textPosAt(S32 x, S32 y, bool clamp, TextPos& pos) const
             return true;
         }
     }
-    const LLFontGL* font = LLViewerChat::getChatFont();
+    const LLFontGL* font = rowFont(row);
     if (!clamp && (offset < 0.f || offset > styled_width(font, msg.mBody, msg.mStyle, row.mBegin, row.mLength)))
     {
         return false; // beside the text, not on it
