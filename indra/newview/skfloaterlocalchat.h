@@ -115,6 +115,7 @@ private:
         EChatSourceType mSource = CHAT_SOURCE_SYSTEM;
         bool mEmote = false;
         F64 mArrival = 0.0;
+        F32 mHoldExtra = 0.f; // seconds held past the fade delay, for its words and the messages before it
         std::string mTime;  // the timestamp after the name
         S32 mNameWidth = 0; // measured at layout
         S32 mTimeWidth = 0; // the timestamp and its gap, 0 for none
@@ -159,6 +160,8 @@ private:
     void appendChat(const LLChat& chat, const LLSD& args, F64 arrival, S32 day = 0);
     /// Discord's subset of markdown: takes the markers out of the body and keeps the styles they asked for.
     static void applyMarkdown(Message& msg);
+    /// How much longer than the fade delay a message stays, from its words and the hold of the one before it.
+    void holdForReading(Message& msg) const;
     void showInput(bool show);
     void sendChat(EChatType type);
     void invalidateLayout() { mLayoutDirty = true; }

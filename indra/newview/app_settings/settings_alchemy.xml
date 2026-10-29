@@ -5353,6 +5353,39 @@
             <key>Value</key>
             <real>8.0</real>
         </map>
+        <key>SkoomaLocalChatReadPerWord</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds a game-style local chat message stays past the fade delay for each of its words.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.25</real>
+        </map>
+        <key>SkoomaLocalChatReadMax</key>
+        <map>
+            <key>Comment</key>
+            <string>Most seconds a game-style local chat message's words add to its fade delay.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>30.0</real>
+        </map>
+        <key>SkoomaLocalChatReadAfter</key>
+        <map>
+            <key>Comment</key>
+            <string>Least seconds a game-style local chat message stays after the one before it fades, so a short line under a long one is still read.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>2.0</real>
+        </map>
         <key>SkoomaLocalChatHoverGrace</key>
         <map>
             <key>Comment</key>

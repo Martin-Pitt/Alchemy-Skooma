@@ -701,6 +701,10 @@ void SKFloaterLocalChat::appendChat(const LLChat& chat, const LLSD& args, F64 ar
         }
     }
 
+    if (arrival > 0.0)
+    {
+        holdForReading(msg);
+    }
     mMessages.push_back(std::move(msg));
     ++mPendingMessages;
     if (arrival > 0.0 && isMinimized())
@@ -1218,6 +1222,31 @@ S32 SKFloaterLocalChat::lineHeight(const Row& row) const
     return row.mMessage < 0 ? name_font()->getLineHeight() + 1 : LLViewerChat::getChatFont()->getLineHeight();
 }
 
+void SKFloaterLocalChat::holdForReading(Message& msg) const
+{
+    static LLCachedControl<F32> delay(gSavedSettings, "SkoomaLocalChatFadeDelay", 8.f);
+    static LLCachedControl<F32> per_word(gSavedSettings, "SkoomaLocalChatReadPerWord", 0.25f);
+    static LLCachedControl<F32> read_max(gSavedSettings, "SkoomaLocalChatReadMax", 30.f);
+    static LLCachedControl<F32> read_min(gSavedSettings, "SkoomaLocalChatReadAfter", 2.f);
+    S32 words = 0;
+    bool in_word = false;
+    for (size_t k = msg.mNameLen; k < msg.mBody.size(); ++k)
+    {
+        const bool space = isspace((U8)msg.mBody[k]) != 0;
+        words += !space && !in_word;
+        in_word = !space;
+    }
+    const F32 read = llclamp(words * (F32)per_word, 0.f, (F32)read_max);
+    // Never gone before a message above it: it outlasts the last one by the time it takes to read.
+    F64 until = msg.mArrival + delay + read;
+    if (!mMessages.empty() && mMessages.back().mArrival > 0.0)
+    {
+        const Message& prev = mMessages.back();
+        until = llmax(until, prev.mArrival + delay + prev.mHoldExtra + llmax(read, (F32)read_min));
+    }
+    msg.mHoldExtra = (F32)(until - msg.mArrival - delay);
+}
+
 F32 SKFloaterLocalChat::cardAlpha(const Card& card, F64 now) const
 {
     static LLCachedControl<F32> delay(gSavedSettings, "SkoomaLocalChatFadeDelay", 8.f);
@@ -1232,7 +1261,7 @@ F32 SKFloaterLocalChat::cardAlpha(const Card& card, F64 now) const
         return fade <= 0.f ? 0.f : llclamp(1.f - (F32)((age - hold) / fade), 0.f, 1.f);
     };
     // After the log was shown whole it stays whole for the grace, then fades as one, as MMO chat does.
-    return llmax(fading(now - mMessages[card.mLastMessage].mArrival, delay), fading(now - mCollapsedAt, grace));
+    return llmax(fading(now - mMessages[card.mLastMessage].mArrival, delay + mMessages[card.mLastMessage].mHoldExtra), fading(now - mCollapsedAt, grace));
 }
 
 void SKFloaterLocalChat::layout()
