@@ -88,4 +88,18 @@ namespace
         }
         CHECK(gGL.getUISaturation() == 1.f);
     }
+
+    TEST_CASE("lluisaturation: a nested scope out of range never brightens the outer one", "[lluisaturation]")
+    {
+        ALUISaturation outer(0.5f);
+        {
+            ALUISaturation above(4.f);
+            CHECK(gGL.getUISaturation() == 0.5f);
+        }
+        {
+            ALUISaturation nan(std::numeric_limits<F32>::quiet_NaN());
+            CHECK(gGL.getUISaturation() == 0.5f);
+        }
+        CHECK(gGL.getUISaturation() == 0.5f);
+    }
 }
