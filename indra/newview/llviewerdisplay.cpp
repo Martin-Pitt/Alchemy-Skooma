@@ -63,7 +63,6 @@
 #include "llscenemonitor.h"
 #include "llsdjson.h"
 #include "llselectmgr.h"
-#include "llsky.h"
 #include "llspatialpartition.h"
 #include "llstartup.h"
 #include "llstartup.h"
@@ -774,6 +773,22 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
     // Actually push all of our triangles to the screen.
     //
 
+    // The impostor targets the world's bakes draw into below, made before the frame's first draw: made in the bakes,
+    // between the shadows and the scene, each name and error they ask GL for waits for a threaded driver's thread to run
+    // all the frame has queued before it.
+    if (!gDisconnected && !LLApp::isExiting() && !for_snapshot)
+    {
+        LLVOAvatar::allocateImpostors();
+    }
+
+    // The sky as the frame begins with it, before anything draws: the mirrors below draw it.
+    if (!gDisconnected && !LLApp::isExiting())
+    {
+        LLAppViewer::instance()->pingMainloopTimeout("Display:Sky");
+        LL_PROFILE_ZONE_NAMED_CATEGORY_ENVIRONMENT("update sky");
+        gPipeline.mSky.update();
+    }
+
     // do render-to-texture stuff here
     if (gPipeline.hasRenderDebugFeatureMask(LLPipeline::RENDER_DEBUG_FEATURE_DYNAMIC_TEXTURES))
     {
@@ -828,6 +843,9 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
             LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("Env Update");
             // update all the sky/atmospheric/water settings
             LLEnvironment::instance().update(LLViewerCamera::getInstance());
+            // The sky's bodies and textures as the update has moved it on, for the main view, and its fog colour and
+            // environment cube from the Environment block the main view takes.
+            gPipeline.mSky.followEnvironment();
         }
 
         // *TODO: merge these two methods
@@ -994,12 +1012,6 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
 
         LLPipeline::sUseOcclusion = occlusion;
 
-        {
-            LLAppViewer::instance()->pingMainloopTimeout("Display:Sky");
-            LL_PROFILE_ZONE_NAMED_CATEGORY_ENVIRONMENT("update sky");
-            gSky.updateSky();
-        }
-
         if(gUseWireframe)
         {
             gGL.setClearColor(LLColor4(0.5f, 0.5f, 0.5f, 0.f));
@@ -1064,6 +1076,7 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
             gGL.setClearColor(LLColor4::magenta);
         }
         gPipeline.mRT->deferredScreen.clear();
+        gPipeline.beginSkyView();
 
         gGL.setColorMask(true, false);
 
@@ -1350,6 +1363,7 @@ void display_cube_face()
         gGL.setClearColor(LLColor4::magenta);
     }
     gPipeline.mRT->deferredScreen.clear();
+    gPipeline.beginSkyView();
 
     LLViewerCamera::sCurCameraID = LLViewerCamera::CAMERA_WORLD;
 
@@ -1861,7 +1875,7 @@ void render_ui_3d()
         // Render debugging beacons.
         gObjectList.renderObjectBeacons();
         gObjectList.resetObjectBeacons();
-        gSky.addSunMoonBeacons();
+        gPipeline.mSky.addSunMoonBeacons();
     }
     else
     {
