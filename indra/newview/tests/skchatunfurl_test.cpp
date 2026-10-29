@@ -239,4 +239,64 @@ TEST_CASE("skchatunfurl: an oEmbed answer gives the title and channel", "[skchat
     REQUIRE(parseYouTubeOEmbed(R"(["title"])").mTitle.empty());
     REQUIRE(parseYouTubeOEmbed(R"({"title":7})").mTitle.empty());
 }
+
+TEST_CASE("skchatunfurl: GitHub repositories, issues and pull requests", "[skchatunfurl]")
+{
+    Target t = classify("https://github.com/AlchemyViewer/Alchemy?tab=readme#top");
+    REQUIRE(t.mKind == EKind::GITHUB_REPO);
+    REQUIRE(t.mRepo == "AlchemyViewer/Alchemy");
+    REQUIRE(t.mApi == "https://api.github.com/repos/AlchemyViewer/Alchemy");
+    REQUIRE(t.mKey == "https://github.com/AlchemyViewer/Alchemy");
+    REQUIRE(classify("https://www.github.com/AlchemyViewer/Alchemy/").mKey == t.mKey);
+
+    t = classify("https://github.com/AlchemyViewer/Alchemy/issues/42#issuecomment-1");
+    REQUIRE(t.mKind == EKind::GITHUB_ISSUE);
+    REQUIRE(t.mApi == "https://api.github.com/repos/AlchemyViewer/Alchemy/issues/42");
+    REQUIRE(t.mKey == "https://github.com/AlchemyViewer/Alchemy/issues/42");
+
+    t = classify("https://github.com/AlchemyViewer/Alchemy/pull/7/files");
+    REQUIRE(t.mKind == EKind::GITHUB_PULL);
+    REQUIRE(t.mApi == "https://api.github.com/repos/AlchemyViewer/Alchemy/pulls/7");
+    REQUIRE(t.mKey == "https://github.com/AlchemyViewer/Alchemy/pull/7");
+
+    REQUIRE(classify("https://github.com/AlchemyViewer").mKind == EKind::NONE);
+    REQUIRE(classify("https://github.com/AlchemyViewer/Alchemy/issues").mKind == EKind::NONE);
+    REQUIRE(classify("https://github.com/AlchemyViewer/Alchemy/issues/0").mKind == EKind::NONE);
+    REQUIRE(classify("https://github.com/AlchemyViewer/Alchemy/issues/4x").mKind == EKind::NONE);
+    REQUIRE(classify("https://github.com/AlchemyViewer/Alchemy/blob/main/README.md").mKind == EKind::NONE);
+    REQUIRE(classify("https://github.com/AlchemyViewer/..").mKind == EKind::NONE);
+    REQUIRE(classify("https://github.com/Alchemy_Viewer/Alchemy").mKind == EKind::NONE);
+    REQUIRE(classify("https://gist.github.com/AlchemyViewer/Alchemy").mKind == EKind::NONE);
+    REQUIRE(classify("http://github.com/AlchemyViewer/Alchemy").mKind == EKind::NONE);
+}
+
+TEST_CASE("skchatunfurl: GitHub answers make cards with their state", "[skchatunfurl]")
+{
+    const Target repo = classify("https://github.com/AlchemyViewer/Alchemy");
+    GitHubCard card = parseGitHub(repo, R"({"full_name":"AlchemyViewer/Alchemy","description":"A viewer","stargazers_count":1234,"language":"C++"})");
+    REQUIRE(card.mTitle == "AlchemyViewer/Alchemy");
+    REQUIRE(card.mDescription == "\xE2\x98\x85 1.2k \xC2\xB7 C++ \xC2\xB7 A viewer");
+    REQUIRE(card.mState == EGitHubState::NONE);
+
+    const Target pull = classify("https://github.com/AlchemyViewer/Alchemy/pull/7");
+    card = parseGitHub(pull, R"({"number":7,"title":"Fix it","state":"closed","merged":true,"draft":false,"user":{"login":"nexii"},"additions":120,"deletions":30,"comments":1})");
+    REQUIRE(card.mTitle == "#7 Fix it");
+    REQUIRE(card.mState == EGitHubState::MERGED);
+    REQUIRE(card.mDescription == "AlchemyViewer/Alchemy \xC2\xB7 @nexii \xC2\xB7 +120 \xE2\x88\x92" "30 \xC2\xB7 1 comment");
+    REQUIRE(parseGitHub(pull, R"({"number":7,"title":"x","state":"open","draft":true})").mState == EGitHubState::DRAFT);
+    REQUIRE(parseGitHub(pull, R"({"number":7,"title":"x","state":"closed","merged":false})").mState == EGitHubState::CLOSED);
+
+    const Target issue = classify("https://github.com/AlchemyViewer/Alchemy/issues/42");
+    REQUIRE(parseGitHub(issue, R"({"number":42,"title":"x","state":"open"})").mState == EGitHubState::OPEN);
+    REQUIRE(parseGitHub(issue, R"({"number":42,"title":"x","state":"closed","state_reason":"completed"})").mState == EGitHubState::COMPLETED);
+    REQUIRE(parseGitHub(issue, R"({"number":42,"title":"x","state":"closed","state_reason":"not_planned"})").mState == EGitHubState::NOT_PLANNED);
+
+    REQUIRE(parseGitHub(issue, R"({"message":"API rate limit exceeded"})").mTitle.empty());
+    REQUIRE(parseGitHub(repo, "[]").mTitle.empty());
+
+    REQUIRE(shortCount(999) == "999");
+    REQUIRE(shortCount(1000) == "1k");
+    REQUIRE(shortCount(12345) == "12k");
+    REQUIRE(shortCount(2500000) == "2.5M");
+}
 } // namespace

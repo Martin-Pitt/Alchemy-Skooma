@@ -110,7 +110,7 @@
              layout="topleft"
              left="8"
              name="sk_unfurl"
-             tool_tip="Preview links to Second Life places, residents, groups, Marketplace listings, lsl.dev or slua.dev pages and YouTube videos"
+             tool_tip="Preview links to Second Life places, residents, groups, Marketplace listings, lsl.dev or slua.dev pages, YouTube videos and GitHub repositories, issues and pull requests"
              top_pad="5"
              width="308" />
             <check_box
@@ -135,6 +135,18 @@
              enabled_control="SkoomaLocalChatUnfurl"
              name="sk_unfurl_youtube"
              tool_tip="Preview YouTube links with their title, channel and thumbnail"
+             top_pad="5"
+             width="292" />
+            <check_box
+             control_name="SkoomaLocalChatUnfurlGitHub"
+             follows="left|top"
+             height="16"
+             label="GitHub repositories, issues and pull requests"
+             layout="topleft"
+             left="24"
+             enabled_control="SkoomaLocalChatUnfurl"
+             name="sk_unfurl_github"
+             tool_tip="Preview GitHub links with their state, author and activity"
              top_pad="5"
              width="292" />
         </panel>

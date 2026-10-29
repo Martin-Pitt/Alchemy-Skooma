@@ -241,6 +241,29 @@ S32 embed_height()
     return 2 * embed_font()->getLineHeight() + EMBED_LINE_GAP + 2 * EMBED_PAD;
 }
 
+// GitHub's own colours for a state.
+LLColor4 github_state_color(SKChatUnfurl::EGitHubState state)
+{
+    using SKChatUnfurl::EGitHubState;
+    switch (state)
+    {
+    case EGitHubState::OPEN: return LLColor4(0.137f, 0.525f, 0.212f, 1.f);      // #238636
+    case EGitHubState::MERGED:
+    case EGitHubState::COMPLETED: return LLColor4(0.537f, 0.341f, 0.898f, 1.f); // #8957e5
+    case EGitHubState::CLOSED: return LLColor4(0.855f, 0.212f, 0.200f, 1.f);    // #da3633
+    default: return LLColor4(0.431f, 0.463f, 0.506f, 1.f);                      // #6e7681, draft and not planned
+    }
+}
+
+constexpr S32 EMBED_PILL_PAD = 5;
+
+// The state pill's width with its gap, 0 for none.
+S32 embed_pill_width(const SKChatEmbed& embed)
+{
+    const std::string_view label = SKChatUnfurl::gitHubStateLabel(embed.mGitHubState);
+    return label.empty() ? 0 : bold_width(embed_font(), label) + 2 * EMBED_PILL_PAD + EMBED_PAD;
+}
+
 S32 embed_thumb()
 {
     return embed_height() - 2 * EMBED_PAD;
@@ -1472,7 +1495,7 @@ void SKFloaterLocalChat::layout()
         if (embed_shown(msg.mEmbed))
         {
             const SKChatEmbed& embed = *msg.mEmbed;
-            const S32 text_w = llmax(embed_font()->getWidth(embed.mTitle) + 2, embed_font()->getWidth(embed.mDescription));
+            const S32 text_w = llmax(embed_pill_width(embed) + embed_font()->getWidth(embed.mTitle) + 2, embed_font()->getWidth(embed.mDescription));
             const S32 thumb = embed.mImage.notNull() ? embed_thumb() + EMBED_PAD : 0;
             const S32 room = llmax(16, llmin(EMBED_MAX_WIDTH, width - text_x - pad_x));
             msg.mEmbedWidth = llclamp(EMBED_ACCENT + 2 * EMBED_PAD + text_w + thumb, llmin(EMBED_MIN_WIDTH, room), room);
@@ -1735,7 +1758,8 @@ void SKFloaterLocalChat::drawEmbed(const Message& msg, S32 x, S32 y, F32 alpha) 
     card_image->draw(x, y, w, h, card_color.get() % (0.45f * alpha));
 
     gGL.getTextureSlot(0)->unbind();
-    LLColor4 accent = msg.mNameColor;
+    const bool has_state = embed.mGitHubState != SKChatUnfurl::EGitHubState::NONE;
+    LLColor4 accent = has_state ? github_state_color(embed.mGitHubState) : msg.mNameColor;
     accent.mV[VALPHA] *= alpha;
     gl_rect_2d(x + 1, y + h - 3, x + 1 + EMBED_ACCENT, y + 3, accent);
 
@@ -1756,10 +1780,22 @@ void SKFloaterLocalChat::drawEmbed(const Message& msg, S32 x, S32 y, F32 alpha) 
     const S32 left = x + EMBED_ACCENT + EMBED_PAD;
     const S32 max_px = llmax(0, right - left);
     const S32 line = font->getLineHeight();
+    const S32 title_y = y + EMBED_PAD + line + EMBED_LINE_GAP;
     LLColor4 title = title_color.get();
     title.mV[VALPHA] *= alpha;
-    font->renderUTF8(embed.mTitle, 0, (F32)left, (F32)(y + EMBED_PAD + line + EMBED_LINE_GAP), title, LLFontGL::LEFT, LLFontGL::BOTTOM,
-                     LLFontGL::BOLD, LLFontGL::NO_SHADOW, S32_MAX, max_px, nullptr, true);
+    S32 title_x = left;
+    if (const S32 pill = has_state ? llmin(embed_pill_width(embed), max_px) : 0; pill > 0)
+    {
+        // A GitHub state reads as its pill, white on the state's colour.
+        shape_blend();
+        static LLUIImagePtr pill_image = LLUI::getUIImage("Rounded_Square");
+        pill_image->draw(left, title_y - 1, pill - EMBED_PAD, line + 2, accent);
+        font->renderUTF8(std::string(SKChatUnfurl::gitHubStateLabel(embed.mGitHubState)), 0, (F32)(left + EMBED_PILL_PAD), (F32)title_y, title,
+                         LLFontGL::LEFT, LLFontGL::BOTTOM, LLFontGL::BOLD, LLFontGL::NO_SHADOW, S32_MAX, pill - EMBED_PAD - EMBED_PILL_PAD);
+        title_x += pill;
+    }
+    font->renderUTF8(embed.mTitle, 0, (F32)title_x, (F32)title_y, title, LLFontGL::LEFT, LLFontGL::BOTTOM,
+                     LLFontGL::BOLD, LLFontGL::NO_SHADOW, S32_MAX, llmax(0, right - title_x), nullptr, true);
     if (!embed.mDescription.empty())
     {
         LLColor4 desc = title;

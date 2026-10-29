@@ -177,9 +177,11 @@ SKChatEmbedPtr SKChatUnfurlCache::find(const std::string& url)
     SKChatUnfurl::Target target = SKChatUnfurl::classify(url);
     static LLCachedControl<bool> profiles(gSavedSettings, "SkoomaLocalChatUnfurlProfiles", false);
     static LLCachedControl<bool> youtube(gSavedSettings, "SkoomaLocalChatUnfurlYouTube", true);
+    static LLCachedControl<bool> github(gSavedSettings, "SkoomaLocalChatUnfurlGitHub", true);
     using SKChatUnfurl::EKind;
     if (target.mKind == EKind::NONE || (!profiles && (target.mKind == EKind::AGENT || target.mKind == EKind::GROUP)) ||
-        (!youtube && target.mKind == EKind::YOUTUBE))
+        (!youtube && target.mKind == EKind::YOUTUBE) ||
+        (!github && (target.mKind == EKind::GITHUB_REPO || target.mKind == EKind::GITHUB_ISSUE || target.mKind == EKind::GITHUB_PULL)))
     {
         return nullptr;
     }
@@ -284,6 +286,9 @@ void SKChatUnfurlCache::request(const SKChatEmbedPtr& embed)
     case EKind::MARKETPLACE:
     case EKind::DOCS:
     case EKind::YOUTUBE:
+    case EKind::GITHUB_REPO:
+    case EKind::GITHUB_ISSUE:
+    case EKind::GITHUB_PULL:
         requestPage(embed);
         break;
     default:
@@ -413,10 +418,12 @@ void SKChatUnfurlCache::requestPage(const SKChatEmbedPtr& embed)
 {
     std::weak_ptr<SKChatEmbed> weak = embed;
     std::weak_ptr<U32> generation = mGeneration;
-    // A video is read through oEmbed, a few hundred bytes of JSON rather than its page.
-    const std::string video = embed->mTarget.mKind == SKChatUnfurl::EKind::YOUTUBE ? embed->mTarget.mVideo : std::string();
-    const std::string url = video.empty() ? embed->mTarget.mKey : SKChatUnfurl::youtubeOEmbedUrl(video);
-    LLCoros::instance().launch("SKChatUnfurl::page", [weak, generation, url, video]()
+    // A video is read through oEmbed and GitHub through its REST API: small JSON rather than a page.
+    const SKChatUnfurl::Target target = embed->mTarget;
+    const bool github = !target.mApi.empty();
+    const std::string& video = target.mVideo;
+    const std::string url = github ? target.mApi : video.empty() ? target.mKey : SKChatUnfurl::youtubeOEmbedUrl(video);
+    LLCoros::instance().launch("SKChatUnfurl::page", [weak, generation, url, target, github]()
     {
         LLCoreHttpUtil::HttpCoroutineAdapter::ptr_t adapter =
             std::make_shared<LLCoreHttpUtil::HttpCoroutineAdapter>("SKChatUnfurl", LLCore::HttpRequest::DEFAULT_POLICY_ID);
@@ -428,8 +435,17 @@ void SKChatUnfurlCache::requestPage(const SKChatEmbedPtr& embed)
         options->setTransferTimeout(PAGE_TIMEOUT);
         options->setRetries(0);
         LLCore::HttpHeaders::ptr_t headers = std::make_shared<LLCore::HttpHeaders>();
-        headers->append(HTTP_OUT_HEADER_ACCEPT, video.empty() ? "text/html" : "application/json");
-        headers->append(HTTP_OUT_HEADER_RANGE, llformat("bytes=0-%u", (U32)SKChatUnfurl::MAX_PAGE_BYTES - 1));
+        const std::string& video = target.mVideo;
+        if (github)
+        {
+            headers->append(HTTP_OUT_HEADER_ACCEPT, "application/vnd.github+json");
+            headers->append("X-GitHub-Api-Version", "2022-11-28");
+        }
+        else
+        {
+            headers->append(HTTP_OUT_HEADER_ACCEPT, video.empty() ? "text/html" : "application/json");
+            headers->append(HTTP_OUT_HEADER_RANGE, llformat("bytes=0-%u", (U32)SKChatUnfurl::MAX_PAGE_BYTES - 1));
+        }
 
         LLSD result = adapter->getRawAndSuspend(request, url, options, headers);
 
@@ -446,6 +462,20 @@ void SKChatUnfurlCache::requestPage(const SKChatEmbedPtr& embed)
         if (status && code >= 200 && code < 300)
         {
             const LLSD::Binary& raw = result[LLCoreHttpUtil::HttpCoroutineAdapter::HTTP_RESULTS_RAW].asBinary();
+            if (github)
+            {
+                const std::string_view answer(reinterpret_cast<const char*>(raw.data()), raw.size());
+                SKChatUnfurl::GitHubCard card = SKChatUnfurl::parseGitHub(target, answer);
+                if (!card.mTitle.empty())
+                {
+                    embed->mTitle = std::move(card.mTitle);
+                    embed->mDescription = std::move(card.mDescription);
+                    embed->mGitHubState = card.mState;
+                    embed->mState = SKChatEmbed::READY;
+                }
+                ++*gen;
+                return;
+            }
             const std::string_view page(reinterpret_cast<const char*>(raw.data()), std::min(raw.size(), SKChatUnfurl::MAX_PAGE_BYTES));
             SKChatUnfurl::OpenGraph og = video.empty() ? SKChatUnfurl::parseOpenGraph(page) : SKChatUnfurl::parseYouTubeOEmbed(page);
             if (!og.mTitle.empty())
