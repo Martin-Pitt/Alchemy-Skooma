@@ -240,28 +240,27 @@ void SKWorldMapScene::drawGround(const SKWorldMapFrame& frame, S32 width, S32 he
 
     gUIProgram.bind();
     gGL.color4f(1.f, 1.f, 1.f, 1.f);
+    mDraws.clear();
     for (const SelectedTile& tile : mSelected)
     {
-        SKWorldMapTiles::Draw draw;
-        bool found = false;
         if (mSurfaces && tile.mKey.mLevel == 1)
         {
             const U64 handle = to_region_handle(static_cast<U32>(tile.mKey.mGridX * REGION_METRES), static_cast<U32>(tile.mKey.mGridY * REGION_METRES));
-            draw.mTexture = mSurfaces->surfaceFor(handle);
-            found = draw.mTexture != nullptr;
+            if (LLViewerTexture* surface = mSurfaces->surfaceFor(handle))
+            {
+                SKWorldMapTiles::Draw& d = mDraws.emplace_back();
+                d.mTexture = surface;
+                d.mCover = tile.mKey;
+                continue;
+            }
         }
-        if (!found)
-        {
-            found = mTiles.resolve(tile, now, draw);
-        }
-        if (!found)
-        {
-            continue;
-        }
-
-        const F64 x0 = tile.mKey.mGridX * REGION_METRES - frame.mEye.mdV[VX];
-        const F64 y0 = tile.mKey.mGridY * REGION_METRES - frame.mEye.mdV[VY];
-        const F64 w = tile.mKey.sideMetres();
+        mTiles.resolve(tile, now, mDraws);
+    }
+    for (const SKWorldMapTiles::Draw& draw : mDraws)
+    {
+        const F64 x0 = draw.mCover.mGridX * REGION_METRES - frame.mEye.mdV[VX];
+        const F64 y0 = draw.mCover.mGridY * REGION_METRES - frame.mEye.mdV[VY];
+        const F64 w = draw.mCover.sideMetres();
         const F32 z = static_cast<F32>(GROUND_Z - frame.mEye.mdV[VZ]);
         const F32 xa = static_cast<F32>(x0), xb = static_cast<F32>(x0 + w);
         const F32 ya = static_cast<F32>(y0), yb = static_cast<F32>(y0 + w);
