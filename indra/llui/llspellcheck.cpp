@@ -43,6 +43,7 @@ static const std::string DICT_FILE_MAIN = "dictionaries.xml";
 static const std::string DICT_FILE_USER = "user_dictionaries.xml";
 
 LLSpellChecker::settings_change_signal_t LLSpellChecker::sSettingsChangeSignal;
+LLSpellChecker::settings_change_signal_t LLSpellChecker::sWordsCheckedSignal;   // <SK:Nexii>
 
 namespace
 {
@@ -533,6 +534,22 @@ boost::signals2::connection LLSpellChecker::setSettingsChangeCallback(const sett
 {
     return sSettingsChangeSignal.connect(cb);
 }
+
+// <SK:Nexii> Run the Windows Spell Checking API on a worker thread so a stalled spelling service cannot freeze the viewer
+// static
+boost::signals2::connection LLSpellChecker::setWordsCheckedCallback(const settings_change_signal_t::slot_type& cb)
+{
+    return sWordsCheckedSignal.connect(cb);
+}
+
+void LLSpellChecker::update()
+{
+    if ( (mEngine) && (mEngine->takeCheckedWords()) )
+    {
+        sWordsCheckedSignal();
+    }
+}
+// </SK:Nexii>
 
 // static
 void LLSpellChecker::setUseSpellCheck(const std::string& dict_language)
