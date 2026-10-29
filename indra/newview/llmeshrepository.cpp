@@ -6962,6 +6962,8 @@ void LLMeshRepository::buildPhysicsMesh(LLModel::Decomposition& decomp)
         LLCDResult res = LLCD_OK;
         if (LLConvexDecomposition::getInstance() != NULL)
         {
+            LL_PROFILE_ZONE_NAMED_CATEGORY_VOLUME("buildPhysicsMesh hull"); // <SK:Nexii>
+            LL_PROFILE_ZONE_NUM(hull.mNumVertices); // <SK:Nexii>
             res = LLConvexDecomposition::getInstance()->getMeshFromHull(&hull, &mesh);
         }
         if (res == LLCD_OK)
