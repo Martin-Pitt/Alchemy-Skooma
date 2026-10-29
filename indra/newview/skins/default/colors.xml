@@ -1468,10 +1468,7 @@
   <!-- <SK:Nexii> legend foundation: data visualisation tokens -->
   <color
    name="SkDataVizBg"
-   value="0.063 0.063 0.078 1" />
-  <color
-   name="SkDataVizFrame"
-   value="0.227 0.227 0.259 1" />
+   value="0 0 0 1" />
   <color
    name="SkDataVizText"
    value="0.949 0.949 0.949 1" />

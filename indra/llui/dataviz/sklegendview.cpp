@@ -725,8 +725,7 @@ void SKLegendView::draw()
     gGL.getTextureSlot(0)->unbind();
     if (mFramed)
     {
-        gl_rect_2d(local, faded(bg(), (mHud ? HUD_ALPHA : BG_ALPHA) * alpha));
-        gl_rect_2d(local, faded(frame(), alpha), false);
+        gl_rect_2d(local, faded(bg(), BG_ALPHA * alpha));
     }
 
     const LLColor4 band = ALSurface::chosenOver(text());

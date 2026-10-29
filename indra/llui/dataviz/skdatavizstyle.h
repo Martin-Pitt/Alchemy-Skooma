@@ -41,8 +41,7 @@ namespace SKDataVizStyle
     inline constexpr S32 TICK       = 3;
     inline constexpr S32 CARET      = 5;
     inline constexpr S32 MIN_WIDTH  = 64;  // narrower than this says "too small"
-    inline constexpr F32 BG_ALPHA   = 0.92f;
-    inline constexpr F32 HUD_ALPHA  = 0.78f;
+    inline constexpr F32 BG_ALPHA   = 0.55f; // a transparent black under the content, no border
     inline constexpr F32 OTHER_DIM  = 0.25f; // what the unmatched classes fade to while one is hovered
 
     // The skin's colours, with the house values where the skin has none.
@@ -50,8 +49,7 @@ namespace SKDataVizStyle
     {
         return LLUIColorTable::instance().getColor(name, fallback).get();
     }
-    inline LLColor4 bg() { return colour("SkDataVizBg", LLColor4(0.063f, 0.063f, 0.078f, 1.f)); }
-    inline LLColor4 frame() { return colour("SkDataVizFrame", LLColor4(0.227f, 0.227f, 0.259f, 1.f)); }
+    inline LLColor4 bg() { return colour("SkDataVizBg", LLColor4(0.f, 0.f, 0.f, 1.f)); }
     inline LLColor4 text() { return colour("SkDataVizText", LLColor4(0.949f, 0.949f, 0.949f, 1.f)); }
     inline LLColor4 dim() { return colour("SkDataVizDim", LLColor4(0.627f, 0.627f, 0.659f, 1.f)); }
     inline LLColor4 unit() { return colour("SkDataVizUnit", LLColor4(0.471f, 0.471f, 0.502f, 1.f)); }
