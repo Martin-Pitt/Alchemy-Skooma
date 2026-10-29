@@ -972,6 +972,7 @@ bool LLGLSLShader::linkProgram(U32 variants)
 
     //reloading, reset light hash value
     mLightHash = 0xFFFFFFFF;
+    mUIColorAdjustHash = 0xFFFFFFFF; // <SK:Nexii> UI saturation
 
     // Derived, never hand-set: the LINEAR_DIFFUSE permutation is what the shader source
     // itself keys its colour-space behaviour on, so deriving the engine-side flag from the
@@ -1108,6 +1109,7 @@ bool LLGLSLShader::linkProgram(U32 variants)
         // viewer applies no environment before there is one (LLViewerShaderMgr::updateShaderUniforms):
         // gpu_benchmark() builds and binds a program during feature detection, long before LLEnvironment exists.
         mEnvUniformsGeneration = sEnvironmentGeneration - 1;
+        mUIColorAdjustHash = 0xFFFFFFFF; // <SK:Nexii> UI saturation: mapped only now, so the next bind uploads it
         if (mOnLink)
         {
             mOnLink(*this);
@@ -1905,6 +1907,8 @@ void LLGLSLShader::bind()
         mEnvUniformsGeneration = sEnvironmentGeneration;
     }
 
+    applyUIColorAdjust(); // <SK:Nexii> UI saturation
+
     warnIfVariantMissed();
 
     llassert_always(sCurBoundShaderPtr != nullptr);
@@ -1933,6 +1937,21 @@ void LLGLSLShader::warnIfVariantMissed() const
         LL_WARNS("Shader") << mName << " bound under classic lighting without selectVariant()" << LL_ENDL;
     }
 }
+
+// <SK:Nexii> UI saturation
+void LLGLSLShader::applyUIColorAdjust()
+{
+    if (mProgramObject == 0 || mUIColorAdjustHash == gGL.getUIColorAdjustHash())
+    {
+        return;
+    }
+    mUIColorAdjustHash = gGL.getUIColorAdjustHash();
+    if (hasUniform(LLShaderMgr::UI_SATURATION))
+    {
+        uniform1f(LLShaderMgr::UI_SATURATION, gGL.getUISaturation());
+    }
+}
+// </SK:Nexii>
 
 void LLGLSLShader::bind(bool rigged)
 {
