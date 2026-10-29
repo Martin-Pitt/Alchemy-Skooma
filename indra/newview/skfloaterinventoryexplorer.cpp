@@ -427,7 +427,6 @@ SKFloaterInventoryExplorer::SKFloaterInventoryExplorer(const LLSD& key)
     mSizeSlider(nullptr),
     mBackBtn(nullptr),
     mForwardBtn(nullptr),
-    mUpBtn(nullptr),
     mDetailsBtn(nullptr),
     mPathBar(nullptr),
     mSearchBox(nullptr),
@@ -479,7 +478,6 @@ bool SKFloaterInventoryExplorer::postBuild()
     mSizeSlider = getChild<LLSliderCtrl>("size_slider");
     mBackBtn = getChild<LLButton>("back_btn");
     mForwardBtn = getChild<LLButton>("forward_btn");
-    mUpBtn = getChild<LLButton>("up_btn");
     mDetailsBtn = getChild<LLButton>("details_btn");
     mPathBar = getChild<SKInventoryPathBar>("path_bar");
     mSearchBox = getChild<SKInventorySearchBox>("search_box");
@@ -540,7 +538,6 @@ bool SKFloaterInventoryExplorer::postBuild()
 
     mBackBtn->setCommitCallback([this](LLUICtrl*, const LLSD&) { goBack(); });
     mForwardBtn->setCommitCallback([this](LLUICtrl*, const LLSD&) { goForward(); });
-    mUpBtn->setCommitCallback([this](LLUICtrl*, const LLSD&) { goUp(); });
     mDetailsBtn->setCommitCallback([this](LLUICtrl*, const LLSD&) { onToggleDetails(); });
 
     getChild<LLButton>("view_gallery_btn")->setCommitCallback([this](LLUICtrl*, const LLSD&) { setView(SKExplorerTab::VIEW_GALLERY); });
@@ -1007,7 +1004,7 @@ void SKFloaterInventoryExplorer::onInventoryChanged(U32 mask)
 
     // A tab whose folder is gone goes back to its nearest live ancestor the columns know of, else My Inventory,
     // and its history forgets folders that are gone.
-    auto is_gone = [](const LLUUID& id) { return !gInventory.getCategory(id); };
+    auto is_gone = [](const SKExplorerTab::Place& place) { return !gInventory.getCategory(place.mFolderID); };
     for (S32 i = 0; i < (S32)mTabs.size(); ++i)
     {
         std::erase_if(mTabs[i].mBack, is_gone);
@@ -1154,11 +1151,27 @@ void SKFloaterInventoryExplorer::revealInSidebar()
     mSidebar->reveal(cat ? cat->getUUID() : top);
 }
 
-void SKFloaterInventoryExplorer::setView(SKExplorerTab::EView view)
+void SKFloaterInventoryExplorer::setView(SKExplorerTab::EView view, bool record_history)
 {
     if (mTabs.empty() || currentTab().mView == view)
     {
         return;
+    }
+    SKExplorerTab& tab = currentTab();
+    if (record_history)
+    {
+        // Consecutive view changes in one folder make one entry, as a browser replaces rather than stacks them.
+        if (!tab.mViewOnlyEntry)
+        {
+            tab.mBack.push_back({ tab.mFolderID, tab.mView });
+            tab.mViewOnlyEntry = true;
+        }
+        tab.mForward.clear();
+        if (!tab.mBack.empty() && tab.mBack.back() == SKExplorerTab::Place{ tab.mFolderID, view })
+        {
+            tab.mBack.pop_back();
+            tab.mViewOnlyEntry = false;
+        }
     }
     saveListState();
     if (currentTab().mView != SKExplorerTab::VIEW_GALLERY)
@@ -1213,49 +1226,59 @@ void SKFloaterInventoryExplorer::navigateTo(const LLUUID& folder_id, bool record
     }
     if (record_history)
     {
-        tab.mBack.push_back(tab.mFolderID);
+        tab.mBack.push_back({ tab.mFolderID, tab.mView });
         tab.mForward.clear();
     }
+    tab.mViewOnlyEntry = false;
     tab.mFolderID = folder_id;
     tab.mSelection.clear();
     tab.mListScroll = 0;
     showFolder();
 }
 
-// Steps through one history stack onto the next live folder that differs from the current one.
-static bool step_history(SKExplorerTab& tab, std::vector<LLUUID>& from, std::vector<LLUUID>& to, LLUUID& target)
+// Steps through one history stack onto the next live place that differs from the current one.
+static bool step_history(SKExplorerTab& tab, std::vector<SKExplorerTab::Place>& from, std::vector<SKExplorerTab::Place>& to,
+                         SKExplorerTab::Place& target)
 {
+    const SKExplorerTab::Place here{ tab.mFolderID, tab.mView };
     while (!from.empty())
     {
-        const LLUUID id = from.back();
+        const SKExplorerTab::Place place = from.back();
         from.pop_back();
-        if (id != tab.mFolderID && gInventory.getCategory(id))
+        if (place != here && gInventory.getCategory(place.mFolderID))
         {
-            to.push_back(tab.mFolderID);
-            target = id;
+            to.push_back(here);
+            tab.mViewOnlyEntry = false;
+            target = place;
             return true;
         }
     }
     return false;
 }
 
+void SKFloaterInventoryExplorer::goToPlace(const SKExplorerTab::Place& place)
+{
+    setView(place.mView, false);
+    navigateTo(place.mFolderID, false);
+}
+
 void SKFloaterInventoryExplorer::goBack()
 {
     SKExplorerTab& tab = currentTab();
-    LLUUID target;
+    SKExplorerTab::Place target;
     if (step_history(tab, tab.mBack, tab.mForward, target))
     {
-        navigateTo(target, false);
+        goToPlace(target);
     }
 }
 
 void SKFloaterInventoryExplorer::goForward()
 {
     SKExplorerTab& tab = currentTab();
-    LLUUID target;
+    SKExplorerTab::Place target;
     if (step_history(tab, tab.mForward, tab.mBack, target))
     {
-        navigateTo(target, false);
+        goToPlace(target);
     }
 }
 
@@ -1378,7 +1401,6 @@ void SKFloaterInventoryExplorer::refreshToolbar()
     const LLViewerInventoryCategory* cat = gInventory.getCategory(tab.mFolderID);
     mBackBtn->setEnabled(!tab.mBack.empty());
     mForwardBtn->setEnabled(!tab.mForward.empty());
-    mUpBtn->setEnabled(cat && cat->getParentUUID().notNull());
     mPathBar->setFolder(tab.mFolderID);
     refreshSavedSearches();
     // The placeholder names what the box searches.
