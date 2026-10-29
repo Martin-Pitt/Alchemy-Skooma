@@ -342,6 +342,13 @@ public:
     LLVector3 getUITranslation();
     LLVector3 getUIScale();
 
+    // <SK:Nexii> UI saturation
+    // The saturation the UI programs draw at: 1 draws unchanged, 0 luminance only. Changed only through ALUISaturation.
+    F32 getUISaturation() const { return mUISaturation; }
+    // Moves with the saturation and on refreshState, so a program bound later uploads it (LLGLSLShader::bind).
+    U32 getUIColorAdjustHash() const { return mUIColorAdjustHash; }
+    // </SK:Nexii>
+
     void flush();
 
     // if list is set, will store buffers in list for later use, if list isn't set, will use cache
@@ -701,6 +708,14 @@ private:
     friend class LLLightState;
     // The tests' state guard reads how deep each matrix stack is.
     friend struct ll_test::RenderProbe;
+    friend class ALUISaturation; // <SK:Nexii>
+
+    // <SK:Nexii> UI saturation
+    // Draws what is batched under the old value, then uploads the new one to the bound program.
+    void setUISaturation(F32 saturation);
+    F32 mUISaturation = 1.f;
+    U32 mUIColorAdjustHash = 0;
+    // </SK:Nexii>
 
     LLVertexBuffer* bufferfromCache(U32 attribute_mask, U32 count);
     LLVertexBuffer* genBuffer(U32 attribute_mask, S32 count);
@@ -835,6 +850,28 @@ private:
 extern S32 gGLViewport[4];
 
 extern thread_local LLRender gGL;
+
+// <SK:Nexii> UI saturation
+// Draws the UI at a saturation within its scope, a fraction of the saturation already in force, and puts that back on
+// leaving: 1 leaves it unchanged, 0 greys to luminance in near-linear light (uiF.glsl, solidcolorF.glsl).
+class ALUISaturation
+{
+public:
+    explicit ALUISaturation(F32 saturation)
+    :   mPrevious(gGL.getUISaturation())
+    {
+        gGL.setUISaturation(mPrevious * saturation);
+    }
+
+    ~ALUISaturation() { gGL.setUISaturation(mPrevious); }
+
+    ALUISaturation(const ALUISaturation&) = delete;
+    ALUISaturation& operator=(const ALUISaturation&) = delete;
+
+private:
+    F32 mPrevious;
+};
+// </SK:Nexii>
 
 // --- Reverse-Z projection helpers (gated on LLRender::sReverseZ) --------------
 // Rewrite a forward [-1,1] projection into reversed zero-to-one (near->1, far->0):
