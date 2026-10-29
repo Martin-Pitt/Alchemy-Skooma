@@ -20,11 +20,11 @@ on:
 permissions:
   contents: read
 
-# A pull request analyses only its latest push. A branch keeps one analysis
-# running and the newest waiting, so a busy develop still finishes some.
+# A pull request or a branch analyses only its latest push. The schedule and
+# dispatches wait their turn rather than cancel one in flight.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
 
 jobs:
   analyze:
