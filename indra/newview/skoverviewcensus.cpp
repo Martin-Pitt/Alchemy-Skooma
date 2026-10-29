@@ -154,7 +154,6 @@ void SKOverviewCensus::release()
     mCoverCache.clear();
     mCoverCacheCands.clear();
     mCoverLogged.clear();
-    mUploadLogged.clear();
     mStamp = 0;
     mSignature = 0;
     mTriangles = 0;
@@ -237,7 +236,7 @@ U32 SKOverviewCensus::logChurn(std::vector<std::pair<U64, std::pair<char, LLUUID
             if (!r.mOn && r.mChanges >= 2)
             {
                 r.mOn = true;
-                LL_INFOS("SKOverview") << "census part " << c.second.second << " (" << kind
+                LL_DEBUGS("SKOverview") << "census part " << c.second.second << " (" << kind
                                        << ") is restless: drawn live until it holds still" << LL_ENDL;
             }
         }
@@ -306,7 +305,7 @@ U32 SKOverviewCensus::logChurn(std::vector<std::pair<U64, std::pair<char, LLUUID
     {
         what += " sculpt inputs:" + sculpt_moved;
     }
-    LL_INFOS("SKOverview") << "census rebuild of " << entry_count << " entries:" << what << LL_ENDL;
+    LL_DEBUGS("SKOverview") << "census rebuild of " << entry_count << " entries:" << what << LL_ENDL;
     return moved_records;
 }
 
@@ -1176,7 +1175,7 @@ bool SKOverviewCensus::update()
                 {
                     std::string report; // only when logged: formatting every face of every large part each pass is not free
                     partSeen(rec->mPart, &report);
-                    LL_INFOS("SKOverview") << "large census part " << rec->mPart << " " << extent << " m: "
+                    LL_DEBUGS("SKOverview") << "large census part " << rec->mPart << " " << extent << " m: "
                                            << (seen == Seen::INVISIBLE ? "invisible, drawn only if it stands in" : seen == Seen::VISIBLE ? "visible, drawn" : "not known yet, drawn")
                                            << " " << report << LL_ENDL;
                 }
@@ -2288,7 +2287,7 @@ void SKOverviewCensus::swapIn(Built& built)
     mCutSignature = 0;
     ++mCutStamp;
     {
-        // Where the triangles come from: logged when the totals move, so a region's millions can be told apart.
+        // Where the triangles come from, so a region's millions can be told apart.
         const Built::Sources& s = built.mSources;
         const std::string totals = llformat("%u regions, %u triangles (records %llu, sculpts %llu, surrounds %llu, hatch copies %llu)",
                                             (U32)mRegions.size(), mTriangles, (unsigned long long)s.mRecords,
@@ -2299,24 +2298,15 @@ void SKOverviewCensus::swapIn(Built& built)
         {
             largest += llformat("%s%s %llu", largest.empty() ? "" : ", ", l.first.asString().c_str(), (unsigned long long)l.second);
         }
-        if (totals != mUploadLogged)
-        {
-            mUploadLogged = totals;
-            LL_INFOS("SKOverview") << "census upload: " << totals << "; ten largest linksets: " << largest << LL_ENDL;
-        }
-        else
-        {
-            LL_DEBUGS("SKOverview") << "census upload: " << totals << "; ten largest linksets: " << largest << LL_ENDL;
-        }
-        LL_INFOS("SKOverview") << "census upload: " << changed << " linksets (" << built.mLinksetsEmitted << " emitted), "
+        LL_DEBUGS("SKOverview") << "census upload: " << totals << "; ten largest linksets: " << largest << LL_ENDL;
+        LL_DEBUGS("SKOverview") << "census upload: " << changed << " linksets (" << built.mLinksetsEmitted << " emitted), "
                                << uploaded << " indices sub-uploaded of " << total << LL_ENDL;
         LL_PROFILE_PLOT("census indices uploaded", (int64_t)uploaded);
         LL_PROFILE_PLOT("census indices total", (int64_t)total);
         LL_PROFILE_PLOT("census linksets emitted", (int64_t)built.mLinksetsEmitted);
     }
     {
-        // Each page's fill: told when a page was made or freed, kept to the debug log otherwise.
-        const bool news = mPagesMade || mPagesFreed || mPagesCompacted;
+        // Each page's fill, for the debug log.
         size_t pages = 0, slots = 0;
         U64 page_used = 0, page_capacity = 0;
         for (const Region& region : mRegions)
@@ -2328,14 +2318,7 @@ void SKOverviewCensus::swapIn(Built& built)
                                                   region.mOrigin.mdV[VX], region.mOrigin.mdV[VY], (U32)page.mClass, (U32)p,
                                                   page.mRuns.used(), page.mRuns.capacity(), (U32)page.mSlots.size(),
                                                   (U32)page.mRuns.freeRuns().size());
-                if (news)
-                {
-                    LL_INFOS("SKOverview") << line << LL_ENDL;
-                }
-                else
-                {
-                    LL_DEBUGS("SKOverview") << line << LL_ENDL;
-                }
+                LL_DEBUGS("SKOverview") << line << LL_ENDL;
                 ++pages;
                 slots += page.mSlots.size();
                 page_used += page.mRuns.used();
@@ -2355,14 +2338,7 @@ void SKOverviewCensus::swapIn(Built& built)
         (void)fill_configured;
         LL_PROFILE_PLOT("census pages", (int64_t)pages);
         LL_PROFILE_PLOT("census page fill %", page_capacity ? 100.0 * (F64)page_used / (F64)page_capacity : 0.0);
-        if (news)
-        {
-            LL_INFOS("SKOverview") << summary << LL_ENDL;
-        }
-        else
-        {
-            LL_DEBUGS("SKOverview") << summary << LL_ENDL;
-        }
+        LL_DEBUGS("SKOverview") << summary << LL_ENDL;
     }
     const Built::CoverStats& c = built.mCover;
     LL_PROFILE_PLOT("cover unknown", (int64_t)c.mUnknown);
@@ -2384,7 +2360,7 @@ void SKOverviewCensus::swapIn(Built& built)
             {
                 where += (where.empty() ? "" : ", ") + region->getName();
             }
-            LL_INFOS("SKOverview") << "census cover in " << where << ": " << counts << ", " << c.mJudged << " judged in "
+            LL_DEBUGS("SKOverview") << "census cover in " << where << ": " << counts << ", " << c.mJudged << " judged in "
                                    << llformat("%.2f ms of verdicts, build %.2f ms", c.mVerdictSeconds * 1000.0,
                                                c.mBuildSeconds * 1000.0) << LL_ENDL;
         }
@@ -3098,7 +3074,7 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
                         {
                             ids += llformat("%s%u", ids.empty() ? "" : " ", id);
                         }
-                        LL_INFOS("SKOverview") << "probe " << cache.mMarkRule << " for " << occupant->mId << ": " << passed.size() << " of "
+                        LL_DEBUGS("SKOverview") << "probe " << cache.mMarkRule << " for " << occupant->mId << ": " << passed.size() << " of "
                                                << cache.mMarkCandidates.size() << " linksets [" << ids << "], " << late << " frames late"
                                                << LL_ENDL;
                     }
@@ -3177,7 +3153,7 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
             LL_PROFILE_PLOT("census readback latency", (F64)latency);
             if (mProbeStats.mIssued || pending || mProbeStats.mRefused)
             {
-                LL_INFOS("SKOverview") << "probe: " << mProbeStats.mIssued << " issued, " << pending << " pending, "
+                LL_DEBUGS("SKOverview") << "probe: " << mProbeStats.mIssued << " issued, " << pending << " pending, "
                                        << mProbeStats.mQueries << " queries (" << mProbeStats.mMostQueries
                                        << " in a frame at most, " << mProbeStats.mRefused << " refused), "
                                        << llformat("%.1f", latency)
