@@ -387,6 +387,10 @@ public:
     /*virtual*/ S32     setTEMaterialID(const U8 te, const LLMaterialID& pMaterialID);
     /*virtual*/ S32     setTEMaterialParams(const U8 te, const LLMaterialPtr pMaterialParams);
     S32 initRenderMaterial(const U8 te);
+    // The material face te took while it was still fetching has completed: give the face its own
+    // copy where it needs one (initRenderMaterial), so the bakes it names are resolved for this
+    // object's avatar and not into the material every object using it shares
+    void onRenderMaterialFetched(const U8 te);
     virtual     S32     setTEGLTFMaterialOverride(U8 te, LLGLTFMaterial* mat);
 
     // Used by Materials update functions to properly kick off rebuilds
@@ -399,6 +403,9 @@ public:
     virtual     void    changeTEImage(S32 index, LLViewerTexture* new_image)  ;
     virtual     void    changeTENormalMap(S32 index, LLViewerTexture* new_image)  ;
     virtual     void    changeTESpecularMap(S32 index, LLViewerTexture* new_image)  ;
+    // Resolve a face's render material textures again (updateTEMaterialTextures), as when a bake
+    // proxy it names resolves to another texture
+    virtual     void    changeTEMaterialTextures(S32 index);
     LLViewerTexture     *getTEImage(const U8 te) const;
     LLViewerTexture     *getTENormalMap(const U8 te) const;
     LLViewerTexture     *getTESpecularMap(const U8 te) const;
@@ -693,6 +700,8 @@ public:
     const LLVector3& getSKPendingCorrection() const { return mSKPendingCorrection; } // <SK:Nexii> smoothed update corrections
     LLViewerTexture* getBakedTextureForMagicId(const LLUUID& id);
     void updateAvatarMeshVisibility(const LLUUID& id, const LLUUID& old_id);
+    // As above, for a face's PBR material: old_material is the render material it had before
+    void updateAvatarMeshVisibility(U8 te, const LLGLTFMaterial* old_material);
     void refreshBakeTexture();
 public:
     static void unpackVector3(LLDataPackerBinaryBuffer* dp, LLVector3& value, std::string name);
@@ -775,9 +784,7 @@ public:
     {
         LL_VO_CLOUDS =              LL_PCODE_APP | 0x20, // no longer used
         LL_VO_SURFACE_PATCH =       LL_PCODE_APP | 0x30,
-        LL_VO_WL_SKY =              LL_PCODE_APP | 0x40,
         LL_VO_SQUARE_TORUS =        LL_PCODE_APP | 0x50,
-        LL_VO_SKY =                 LL_PCODE_APP | 0x60,
         LL_VO_PART_GROUP =          LL_PCODE_APP | 0xa0,
         LL_VO_TRIANGLE_TORUS =      LL_PCODE_APP | 0xb0,
         LL_VO_HUD_PART_GROUP =      LL_PCODE_APP | 0xc0,
