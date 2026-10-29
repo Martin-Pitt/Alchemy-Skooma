@@ -102,6 +102,7 @@ public:
         Optional<const LLFontGL*>   font;
         Optional<LLColor4>          font_color;
         Optional<LLFontGL::HAlign>  font_halign;
+        Optional<LLFontGL::EEllipsisMode> ellipsis; // <SK:Nexii> where a text cell's ellipsis goes
 
         Optional<LLColor4>          color;
 
@@ -121,6 +122,7 @@ public:
             font("font", LLFontGL::getFontSansSerifSmall()),
             font_color("font_color", LLColor4::black),
             color("color", LLColor4::white),
+            ellipsis("ellipsis", LLFontGL::ELLIPSIS_END), // <SK:Nexii>
             font_halign("halign", LLFontGL::LEFT)
         {
             addSynonym(column, "name");
@@ -214,6 +216,7 @@ public:
     void            setText(ALStringViewExplicit text);
     void            setFontStyle(const U8 font_style);
     void            setAlignment(LLFontGL::HAlign align);
+    LLFontGL::Ellipsis getEllipsis() const { return mEllipsis; } // <SK:Nexii>
 
 protected:
 
@@ -228,6 +231,7 @@ protected:
     LLColor4        mHighlightColor;
     U8              mUseColor;
     LLFontGL::HAlign mFontAlignment;
+    LLFontGL::Ellipsis mEllipsis; // <SK:Nexii>
     bool            mVisible;
     S32             mHighlightCount;
     S32             mHighlightOffset;

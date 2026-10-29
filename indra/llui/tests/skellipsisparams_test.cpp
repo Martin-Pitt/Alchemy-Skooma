@@ -1,7 +1,7 @@
 /**
  * @file skellipsisparams_test.cpp
  * @brief Tests for the ellipsis mode as XUI names it and as text, buttons
- *        and tab containers take it from their parameters.
+ *        tab containers and scroll lists take it from their parameters.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Second Life Viewer Source Code
@@ -27,6 +27,10 @@
 
 #include "../llbutton.h"
 #include "../llpanel.h"
+#include "../llscrolllistcell.h"
+#include "../llscrolllistcolumn.h"
+#include "../llscrolllistctrl.h"
+#include "../llscrolllistitem.h"
 #include "../lltabcontainer.h"
 #include "../lltextbox.h"
 #include "../llui.h"
@@ -151,5 +155,54 @@ namespace
         const LLButton* button = tabs->findChild<LLButton>("htab_page", true);
         REQUIRE(button != nullptr);
         CHECK(button->getEllipsis() == LLFontGL::ELLIPSIS_START);
+    }
+
+    TEST_CASE_METHOD(skellipsisparams_data, "skellipsisparams: a scroll list cell takes its column's mode unless it names one", "[skellipsisparams]")
+    {
+        requireUI();
+        CHECK(LLScrollListCell::Params().ellipsis() == LLFontGL::ELLIPSIS_END);
+
+        LLScrollListColumn::Params middle;
+        read("<column name=\"mid\" ellipsis=\"middle\"/>", middle);
+        middle.header.label = "Mid";
+        middle.width.dynamic_width = true;
+        LLScrollListColumn::Params plain;
+        plain.name = "plain";
+        plain.header.label = "Plain";
+        plain.width.dynamic_width = true;
+
+        LLScrollListCtrl::Params p(LLUICtrlFactory::getDefaultParams<LLScrollListCtrl>());
+        p.name = "list";
+        p.rect = LLRect(0, 200, 300, 0);
+        p.contents.columns.add(middle);
+        p.contents.columns.add(plain);
+        std::unique_ptr<LLScrollListCtrl> list(LLUICtrlFactory::create<LLScrollListCtrl>(p));
+        REQUIRE(list->getColumn("mid") != nullptr);
+        REQUIRE(list->getColumn("plain") != nullptr);
+        const S32 mid_index   = list->getColumn("mid")->mIndex;
+        const S32 plain_index = list->getColumn("plain")->mIndex;
+
+        auto ellipsisOf = [](LLScrollListItem* item, S32 index)
+        {
+            REQUIRE(item != nullptr);
+            const LLScrollListText* cell = dynamic_cast<const LLScrollListText*>(item->getColumn(index));
+            REQUIRE(cell != nullptr);
+            return cell->getEllipsis();
+        };
+
+        LLSD row;
+        row["columns"][0]["column"] = "mid";
+        row["columns"][0]["value"]  = "Hair v2 - RIGGED";
+        row["columns"][1]["column"] = "plain";
+        row["columns"][1]["value"]  = "Plain";
+        LLScrollListItem* item = list->addElement(row);
+        CHECK(ellipsisOf(item, mid_index) == LLFontGL::ELLIPSIS_MIDDLE);
+        CHECK(ellipsisOf(item, plain_index) == LLFontGL::ELLIPSIS_END);
+
+        LLSD named;
+        named["columns"][0]["column"]   = "mid";
+        named["columns"][0]["value"]    = "Hair v2 - RIGGED";
+        named["columns"][0]["ellipsis"] = "start";
+        CHECK(ellipsisOf(list->addElement(named), mid_index) == LLFontGL::ELLIPSIS_START);
     }
 }
