@@ -5765,6 +5765,17 @@
             <key>Value</key>
             <integer>1</integer>
         </map>
+        <key>SkoomaLocalChatVoiceSizes</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw shouts larger and bold and whispers smaller and italic in the game-style local chat, rather than prefixing them.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
         <key>SkoomaLocalChatTyping</key>
         <map>
             <key>Comment</key>
