@@ -108,6 +108,8 @@ constexpr S32 DIVIDER_PAD = 8;    // above and below a day divider
 constexpr S32 DIVIDER_GAP = 8;    // between a day divider's lines and its label
 constexpr F32 DIVIDER_ALPHA = 0.45f;
 constexpr F32 DIVIDER_LINE_ALPHA = 0.15f;
+constexpr F32 FADE_OPACITY_DELAY = 0.25f; // the part of a message's fade before its opacity starts to go
+constexpr F32 FADE_GREY_SPAN = 0.4f;      // the part of it over which its colour goes to grey
 constexpr F32 CHROME_FADE = 0.15f; // the hover backdrop's and border's ease, in seconds
 constexpr S32 EDGE_REACH = 6;      // how near the floater's edge the pointer shows the border
 constexpr F64 EDGE_REST = 0.08;    // and how long it rests there first
@@ -1345,7 +1347,15 @@ F32 SKFloaterLocalChat::cardAlpha(const Card& card, F64 now) const
 {
     static LLCachedControl<F32> floor(gSavedSettings, "SkoomaLocalChatFadeFloor", 0.f);
     const F32 rest = llclamp((F32)floor, 0.f, 1.f);
-    return rest + (1.f - rest) * cardFade(card, now);
+    // The colour goes first: opacity holds for the first quarter of the fade, then fades over the rest.
+    const F32 fade = llclamp(cardFade(card, now) / (1.f - FADE_OPACITY_DELAY), 0.f, 1.f);
+    return rest + (1.f - rest) * fade;
+}
+
+F32 SKFloaterLocalChat::cardSaturation(const Card& card, F64 now) const
+{
+    // Grey within the first part of the fade, so a message reads as history before it dims.
+    return llclamp(1.f - (1.f - cardFade(card, now)) / FADE_GREY_SPAN, 0.f, 1.f);
 }
 
 LLColor4 SKFloaterLocalChat::faded(LLColor4 color, F32 alpha) const
@@ -1890,7 +1900,7 @@ void SKFloaterLocalChat::drawMessages(const LLRect& content, F64 now, bool full,
             break; // older cards arrived earlier, so they have faded too
         }
         // Faded history reads as grey, the cue that it is no longer live: everything the card draws, pictures included.
-        ALUISaturation grey(full ? 1.f : cardFade(card, now));
+        ALUISaturation grey(full ? 1.f : cardSaturation(card, now));
         const Row& top_row = mRows[card.mFirstRow];
         const Row& bottom_row = mRows[card.mLastRow];
         const S32 card_bottom = base + bottom_row.mBottom + bottom_row.mGap;
@@ -2003,7 +2013,7 @@ void SKFloaterLocalChat::drawMaskedMessages(const LLRect& content, F64 now, bool
         in_band |= card_top > top_band || (scrolled && card_bottom < bottom_band);
         fades = (fades ^ (U64)(c * 256 + ll_round(alpha * 255.f))) * 1099511628211ULL;
         // The greying follows the fade, which moves under a constant alpha when the fade's floor is 1.
-        fades = (fades ^ (U64)ll_round((full ? 1.f : cardFade(card, now)) * 255.f)) * 1099511628211ULL;
+        fades = (fades ^ (U64)ll_round((full ? 1.f : cardSaturation(card, now)) * 255.f)) * 1099511628211ULL;
         if (card.mDivider)
         {
             continue;

@@ -181,6 +181,7 @@ private:
     /// How far a card has yet to fade: 1 while held, 0 once gone.
     F32 cardFade(const Card& card, F64 now) const;
     F32 cardAlpha(const Card& card, F64 now) const;
+    F32 cardSaturation(const Card& card, F64 now) const;
     /// A colour at a card's alpha.
     LLColor4 faded(LLColor4 color, F32 alpha) const;
     S32 lineHeight(const Row& row) const;
