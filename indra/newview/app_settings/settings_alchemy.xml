@@ -5361,6 +5361,19 @@
             <key>Value</key>
             <integer>1</integer>
         </map>
+        <key>SKSoundLoudnessBoost</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Let loudness normalization raise sounds that measure below the target. Off, it only cuts loud sounds: the loudness weighting discounts sub-bass, so a boost can turn a quiet rumble up far past how loud it already sounds.
+            </string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
         <key>SKSoundLoudnessNormalize</key>
         <map>
             <key>Comment</key>
