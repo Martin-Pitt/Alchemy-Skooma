@@ -2903,6 +2903,16 @@ bool LLMeshRepoThread::decompositionReceived(const LLUUID& mesh_id, U8* data, S3
     {
         auto d = std::make_unique<LLModel::Decomposition>(decomp);
         d->mMeshID = mesh_id;
+
+        // <SK:Nexii> physics shapes: the sim keeps analyzed hulls in their stored domain but fits the bounding hull to the object's box
+        if (decomp.has("BoundingVerts") && decomp.has("Min"))
+        {
+            LLSD bounding;
+            bounding["BoundingVerts"] = decomp["BoundingVerts"];
+            d->mBaseHull = LLModel::Decomposition(bounding).mBaseHull;
+        }
+        // </SK:Nexii>
+
         {
             LLMutexLock lock(mLoadedMutex);
             mDecompositionQ.push_back(std::move(d));
