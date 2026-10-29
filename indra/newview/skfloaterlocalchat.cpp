@@ -1418,6 +1418,7 @@ void SKFloaterLocalChat::layout()
     mRows.clear();
     mCards.clear();
 
+    LLFontGL* font = LLViewerChat::getChatFont();
     const S32 pad_x = cards ? CARD_PAD_X : PAD_X;
     const S32 text_x = cards ? pad_x + DISC + DISC_GAP : pad_x;
     const F32 wrap = (F32)llmax(16, width - text_x - pad_x);
