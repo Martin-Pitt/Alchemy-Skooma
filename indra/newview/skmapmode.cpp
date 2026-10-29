@@ -154,6 +154,8 @@ bool SKMapMode::open()
     {
         gAgentCamera.setFocusOnAvatar(false, false);
         gAgentCamera.setCameraPosAndFocusGlobal(mMapPosition, mMapFocus, LLUUID::null);
+        // Turns up and away from the world camera onto the map's, rather than sliding across.
+        gAgentCamera.orbitCameraAnimation();
     }
 
     LLRootView* root = gViewerWindow->getRootView();

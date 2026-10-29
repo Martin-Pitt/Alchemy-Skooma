@@ -202,6 +202,7 @@ public:
     void            setAnimationDuration(F32 seconds);
     void            startCameraAnimation();
     void            stopCameraAnimation();
+    void            orbitCameraAnimation(); // <SK:Nexii> 3D world map: the running animation turns and backs away rather than sliding
     void            skipCameraSmoothing(); // <SK:Nexii> modal view: a pan moves the camera rigidly
 private:
     LLFrameTimer    mAnimationTimer;    // Seconds that transition animation has been active
@@ -209,6 +210,7 @@ private:
     bool            mCameraAnimating;                   // Camera is transitioning from one mode to another
     LLVector3d      mAnimationCameraStartGlobal;        // Camera start position, global coords
     LLVector3d      mAnimationFocusStartGlobal;         // Camera focus point, global coords
+    bool            mCameraOrbiting = false;            // <SK:Nexii> 3D world map: the animation orbits (skworldmap::orbitCamera)
 
     //--------------------------------------------------------------------
     // Focus
