@@ -5549,6 +5549,13 @@ void LLAppViewer::idle()
         LLWebsocketMgr::instance().update();
     }
 
+    // <SK:Nexii> Run the Windows Spell Checking API on a worker thread so a stalled spelling service cannot freeze the viewer
+    if (LLSpellChecker::instanceExists())
+    {
+        LLSpellChecker::instance().update();
+    }
+    // </SK:Nexii>
+
     LLGLTFMaterialList::flushUpdates();
 
     static LLCachedControl<U32> downscale_method(gSavedSettings, "RenderDownScaleMethod");

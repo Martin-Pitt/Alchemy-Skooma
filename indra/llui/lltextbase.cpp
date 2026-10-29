@@ -290,6 +290,7 @@ LLTextBase::LLTextBase(const LLTextBase::Params &p)
     if (mSpellCheck)
     {
         LLSpellChecker::setSettingsChangeCallback(boost::bind(&LLTextBase::onSpellCheckSettingsChange, this));
+        LLSpellChecker::setWordsCheckedCallback(boost::bind(&LLTextBase::onSpellCheckSettingsChange, this));   // <SK:Nexii>
     }
     mSpellCheckTimer.reset();
 
