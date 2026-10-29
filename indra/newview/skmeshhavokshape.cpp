@@ -4,6 +4,7 @@
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Second Life Viewer Source Code
+ * Copyright (C) 2026, Martin "Nexii" Pitt <martin.r.pitt@gmail.com>
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -14,6 +15,10 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  * $/LicenseInfo$
  */
 
@@ -81,25 +86,8 @@ namespace
                 }
             }
 
-            // The simulator fits the physics mesh's bounds to the object's box, each axis on its own: the same block
-            // comes back for an upload at any scale, and its MOPP origin is the physics mesh's lowest corner.
-            LLVector3 lo(F32_MAX, F32_MAX, F32_MAX);
-            LLVector3 hi(-F32_MAX, -F32_MAX, -F32_MAX);
-            for (const SKPhysicsMeshSubmesh& submesh : physics_mesh.mSubmeshes)
-            {
-                for (const LLVector3& p : submesh.mPositions)
-                {
-                    update_min_max(lo, hi, p);
-                }
-            }
-            for (LLVector3& p : shape->mTriangles)
-            {
-                for (S32 k = 0; k < 3; ++k)
-                {
-                    const F32 range = hi.mV[k] - lo.mV[k];
-                    p.mV[k] = range > 1e-6f ? (p.mV[k] - lo.mV[k]) / range - 0.5f : 0.f;
-                }
-            }
+            // The triangles stay where the asset stores them: the uploader fits the physics mesh to the box, and
+            // older assets that it never fitted collide as stored.
             shape->mHasMopp = true;
         }
         out = shape;

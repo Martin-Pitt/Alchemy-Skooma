@@ -3,8 +3,8 @@
  * @brief The census: every declared physics shape near the agent, as the world layers see it.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
- * Alchemy Viewer Source Code
- * Copyright (C) 2026, Alchemy Viewer Project.
+ * Second Life Viewer Source Code
+ * Copyright (C) 2026, Martin "Nexii" Pitt <martin.r.pitt@gmail.com>
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -104,10 +104,8 @@ namespace
     // A dirty scan gathers no sooner than this after the last: its finish costs ~10 ms of feature rules on the main thread.
     constexpr F64 DIRTY_SCAN_S = 0.25;
 
-    // What the region's object cache knows by its local id: no asset id is
-    // ever going to arrive for something we have not drawn, so the record is
-    // keyed by the region and the local id, tagged so it cannot collide with
-    // a real one.
+    // A cached body's key: the region and the local id, tagged so it cannot
+    // collide with a real id.
     LLUUID placeholderId(U64 handle, U32 local)
     {
         LLUUID id;
@@ -507,16 +505,8 @@ void SKWorldCensus::noteObjectUpdate(LLViewerObject* object)
         mForceSweep = true;
         return;
     }
+    // A part revived from the object cache signs as it did there, so its records stay.
     dirtyLinkset(object);
-    // A root drawn at last replaces the box the region's object cache gave it.
-    if (object->isRoot() && object->getRegion())
-    {
-        const LLUUID box = placeholderId(object->getRegion()->getHandle(), object->getLocalID());
-        if (mParts.count(box))
-        {
-            mGone.insert(box);
-        }
-    }
 }
 
 void SKWorldCensus::noteObjectGone(LLViewerObject* object)
@@ -531,7 +521,8 @@ void SKWorldCensus::noteObjectGone(LLViewerObject* object)
         mForceSweep = true;
         return;
     }
-    mGone.insert(object->getID());
+    const U64 region = object->getRegion() ? object->getRegion()->getHandle() : 0;
+    mGone[object->getID()] = { region, object->getLocalID() };
     if (!object->isRoot())
     {
         // The linkset it leaves is another shape now.
@@ -547,7 +538,7 @@ void SKWorldCensus::noteObjectGone(LLViewerObject* object)
     {
         if (child && !child->isAvatar())
         {
-            mGone.insert(child->getID());
+            mGone[child->getID()] = { region, child->getLocalID() };
         }
     }
 }
@@ -615,9 +606,21 @@ void SKWorldCensus::gatherNow()
     mLastGather = now;
     mScanBegan = now;
 
-    // What was killed leaves the caches first, so a part made again under its id is visited fresh.
-    for (const LLUUID& id : mGone)
+    // What was killed leaves the caches first, so a part made again under its id
+    // is visited fresh; what was killed back into the object cache stays, and
+    // is taken from there as it was taken live.
+    LLWorld* world = LLWorld::instanceExists() ? LLWorld::getInstance() : nullptr;
+    for (const auto& [id, from] : mGone)
     {
+        LLViewerRegion* region = world && from.mRegion ? world->getRegionFromHandle(from.mRegion) : nullptr;
+        LLVOCacheEntry* entry = region ? region->getCacheEntry(from.mLocalId) : nullptr;
+        const LLDataPackerBinaryBuffer* dp = entry ? entry->getDP() : nullptr;
+        const auto part = mParts.find(id);
+        if (part != mParts.end() && dp && dp->getBufferSize() >= UUID_BYTES && !memcmp(dp->getBuffer(), id.mData, UUID_BYTES))
+        {
+            part->second.mFromObjectCache = true;
+            continue;
+        }
         mParts.erase(id);
     }
     mGone.clear();
@@ -648,9 +651,10 @@ void SKWorldCensus::gatherNow()
             {
                 mScan.mObjects.push_back(object);
             }
-            else
+            else if (const auto part = mParts.find(id); part != mParts.end() && !part->second.mFromObjectCache)
             {
-                mParts.erase(id);
+                // Killed back into the object cache keeps its records, as the gone pass above decided.
+                mParts.erase(part);
             }
         }
     }
@@ -765,15 +769,43 @@ bool SKWorldCensus::pending(LLViewerObject* object, const PartCache& cache) cons
 
 void SKWorldCensus::visitCachedTracked(const CachedPart& part)
 {
-    visitCached(part);
-    PartCache& cache = mParts[part.mId];
+    SKCensusSnapshot& snap = *mScan.mPending;
+    const size_t records = snap.mRecords.size();
+    const LLUUID id = visitCached(part);
+    const auto it = id.isNull() ? mParts.end() : mParts.find(id);
+    if (it == mParts.end())
+    {
+        return;
+    }
+    PartCache& cache = it->second;
     cache.mVisitedScan = mScanSerial;
-    cache.mTaken.assign(1, cache.mRecord);
+    cache.mTaken.assign(snap.mRecords.begin() + records, snap.mRecords.end());
     cache.mHasFeature = false;
-    cache.mHasLeaf = false;
+    const auto leaf = mLeafTransforms.find(id);
+    cache.mHasLeaf = leaf != mLeafTransforms.end();
+    if (cache.mHasLeaf)
+    {
+        cache.mLeafPos = leaf->second.mPos;
+        cache.mLeafRot = leaf->second.mRot;
+        cache.mLeafRegion = leaf->second.mRegion;
+    }
     cache.mFromObjectCache = true;
-    cache.mReachCenter = part.mOrigin + LLVector3d(part.mCenter);
-    cache.mReachPad = part.mHalf.magVec();
+    if (const SKCachedObject* object = decoded(part.mRegion, *part.mEntry))
+    {
+        cache.mReachCenter = part.mOrigin + LLVector3d(object->mPos);
+        if (part.mRoot)
+        {
+            if (const SKCachedObject* root = decoded(part.mRegion, *part.mRoot))
+            {
+                cache.mReachCenter = part.mOrigin + LLVector3d(root->mPos + object->mPos * root->mRot);
+            }
+        }
+        cache.mReachPad = 0.5 * object->mScale.magVec();
+    }
+    if (!cache.mTaken.empty())
+    {
+        snap.mStats.mFromObjectCache++;
+    }
 }
 
 bool SKWorldCensus::retakes(const LLUUID& id, const PartCache& cache) const
@@ -966,6 +998,10 @@ void SKWorldCensus::finishScan()
         {
             it = (gFrameTimeSeconds - it->second.mLastSeen > 60.f) ? mParts.erase(it) : std::next(it);
         }
+        for (auto it = mDecoded.begin(); it != mDecoded.end();)
+        {
+            it = (gFrameTimeSeconds - it->second.mUsed > 60.f) ? mDecoded.erase(it) : std::next(it);
+        }
         for (auto it = mUnknownSince.begin(); it != mUnknownSince.end();)
         {
             it = mParts.count(it->first) ? std::next(it) : mUnknownSince.erase(it);
@@ -1012,14 +1048,14 @@ void SKWorldCensus::finishScan()
     mDiscardClusterJob = false;
 }
 
-bool SKWorldCensus::classifyRest(LLViewerObject* root, const LLVector3d& pos, const LLQuaternion& rot)
+bool SKWorldCensus::classifyRest(const LLUUID& root, const LLVector3d& pos, const LLQuaternion& rot)
 {
     static LLCachedControl<F32> settle(gSavedSettings, "SKCensusSettleSeconds", 4.f);
     // The baseline moves only when the root is seen to have moved, so a slow
     // drift adds up to a move instead of hiding under the epsilon each frame.
     // A door swinging on its hinge by steps turns without going anywhere, so
     // the turn counts as a move too.
-    Rest& rest = mRest[root->getID()];
+    Rest& rest = mRest[root];
     const F32 turned = 2.f * std::acos(llclamp(std::fabs(dot(rest.mRotation, rot)), 0.f, 1.f));
     const F64 shifted = rest.mKnown ? dist_vec(rest.mPosition, pos) : 0.0;
     if (!rest.mKnown || shifted > MOVED_EPSILON || turned > MOVED_ANGLE)
@@ -1041,7 +1077,7 @@ bool SKWorldCensus::classifyRest(LLViewerObject* root, const LLVector3d& pos, co
                 rest.mMoverUntil = now + MOVER_WINDOW_SECONDS;
             }
             rest.mMovedAt = now;
-            RootHistory& history = mHistory[root->getID()];
+            RootHistory& history = mHistory[root];
             history.mEverMoved = true;
             history.mTravel += static_cast<F32>(shifted);
         }
@@ -1050,7 +1086,7 @@ bool SKWorldCensus::classifyRest(LLViewerObject* root, const LLVector3d& pos, co
     }
     rest.mLastSeen = gFrameTimeSeconds;
     rest.mKnown = true;
-    if (const auto it = mHistory.find(root->getID()); it != mHistory.end())
+    if (const auto it = mHistory.find(root); it != mHistory.end())
     {
         it->second.mLastSeen = gFrameTimeSeconds;
     }
@@ -1058,9 +1094,9 @@ bool SKWorldCensus::classifyRest(LLViewerObject* root, const LLVector3d& pos, co
     return gFrameTimeSeconds < rest.mMoverUntil && rest.mMovedAt >= 0.f && gFrameTimeSeconds - rest.mMovedAt < settle;
 }
 
-bool SKWorldCensus::isSurround(LLViewerObject* root, const LLVector3d& mn, const LLVector3d& mx) const
+bool SKWorldCensus::isSurround(bool local_only, const LLVector3d& mn, const LLVector3d& mx) const
 {
-    if (root->isLocalOnly())
+    if (local_only)
     {
         return true;
     }
@@ -1126,38 +1162,62 @@ void SKWorldCensus::visit(LLViewerObject* object)
         }
     }
 
+    PartFacts facts;
+    facts.mPart = object->getID();
+    facts.mRoot = root->getID();
+    facts.mRegion = object->getRegion()->getHandle();
+    facts.mOrigin = object->getRegion()->getOriginGlobal();
+    facts.mCullPos = facts.mOrigin + LLVector3d(object->getPositionRegion());
+    // What the record is signed and built from: the sim-side transform, which
+    // holds still while a part spins on its own (simRegionTransform).
+    simRegionTransform(object, facts.mSimPos, facts.mSimRot);
+    facts.mRootPos = root->getRegion()->getOriginGlobal() + LLVector3d(root->getPositionRegion());
+    facts.mRootRot = root->getRotationSim();
+    facts.mRootFlags = (root->flagUsePhysics() ? FLAGS_USE_PHYSICS : 0) | (root->flagCharacter() ? FLAGS_CHARACTER : 0)
+        | (root->flagTemporaryOnRez() ? FLAGS_TEMPORARY_ON_REZ : 0) | (root->flagVolumeDetect() ? FLAGS_VOLUME_DETECT : 0)
+        | (root->flagPhantom() ? FLAGS_PHANTOM : 0) | (root->flagObjectPermanent() ? FLAGS_AFFECTS_NAVMESH : 0);
+    facts.mLocalOnly = root->isLocalOnly();
+    // The sim answers the linkset's type request rather than a child's own, so the root is asked as well.
+    volume->getRootEdit()->getPhysicsShapeType();
+    facts.mShape = skPhysicsShapeInput(volume);
+    facts.mPhysicsUnknown = object->isPhysicsShapeUnknown();
+    facts.mSculptLevel = volume->getVolume()->getSculptLevel();
+    visitPart(facts, volume);
+}
+
+void SKWorldCensus::visitPart(const PartFacts& facts, LLVOVolume* live)
+{
+    SKCensusSnapshot& snap = *mScan.mPending;
+
     // Movers and things that are not shapes.
-    if (root->flagUsePhysics() || root->flagCharacter() || root->flagTemporaryOnRez())
+    if (facts.mRootFlags & (FLAGS_USE_PHYSICS | FLAGS_CHARACTER | FLAGS_TEMPORARY_ON_REZ))
     {
         return;
     }
     // Nothing collides with a volume detect linkset: recorded visible only, as phantom is below.
-    bool collides = !root->flagVolumeDetect();
+    bool collides = !(facts.mRootFlags & FLAGS_VOLUME_DETECT);
 
     // Cull by the part's reach, not its centre: a 200 m surround whose centre
     // is far away still hangs into the range.
-    const LLVector3d pos = object->getRegion()->getOriginGlobal() + LLVector3d(object->getPositionRegion());
-    const F64 reach = snap.mRange + 0.5 * object->getScale().magVec();
+    const LLVector3& scale = facts.mShape.mScale;
+    const LLVector3d& pos = facts.mCullPos;
+    const F64 reach = snap.mRange + 0.5 * scale.magVec();
     if (dist_vec(pos, snap.mCenter) > reach && dist_vec(pos, snap.mCamera) > reach)
     {
         return;
     }
 
-    // What the record is signed and built from: the sim-side transform, which
-    // holds still while a part spins on its own (simRegionTransform).
-    LLVector3 sim_pos;
-    LLQuaternion sim_rot;
-    simRegionTransform(object, sim_pos, sim_rot);
+    LLVector3 sim_pos = facts.mSimPos;
+    LLQuaternion sim_rot = facts.mSimRot;
     // A door leaf whose doorway is established is recorded shut wherever it
     // swings, so opening a door re-signs no tile and refloods no air.
     bool held_shut = false;
-    if (const auto lit = mLeaves.find(object->getID()); lit != mLeaves.end())
+    if (const auto lit = mLeaves.find(facts.mPart); lit != mLeaves.end())
     {
-        const U64 handle = object->getRegion()->getHandle();
-        mLeafTransforms[object->getID()] = { sim_pos, sim_rot, handle };
-        const auto dit = mDoorways.find(object->getID());
+        mLeafTransforms[facts.mPart] = { sim_pos, sim_rot, facts.mRegion };
+        const auto dit = mDoorways.find(facts.mPart);
         FeaturePart doorway;
-        if (dit != mDoorways.end() && dit->second.mRegion == handle && establishedDoorway(lit->second, doorway))
+        if (dit != mDoorways.end() && dit->second.mRegion == facts.mRegion && establishedDoorway(lit->second, doorway))
         {
             sim_pos = dit->second.mPos;
             sim_rot = dit->second.mRot;
@@ -1169,7 +1229,7 @@ void SKWorldCensus::visit(LLViewerObject* object)
     // thin tower is not a wide one, and smearing it calls an ordinary
     // structure a surround because a corner of the smear pokes outside the
     // region.
-    const LLVector3 half = object->getScale() * 0.5f;
+    const LLVector3 half = scale * 0.5f;
     const LLQuaternion rot = sim_rot;
     const LLVector3 axis[3] = { LLVector3(1.f, 0.f, 0.f) * rot, LLVector3(0.f, 1.f, 0.f) * rot, LLVector3(0.f, 0.f, 1.f) * rot };
     LLVector3 extent;
@@ -1179,8 +1239,8 @@ void SKWorldCensus::visit(LLViewerObject* object)
                      + std::fabs(axis[2].mV[i]) * half.mV[2];
     }
 
-    const NavRole navRole = roleOf(root->getID());
-    if (root->flagObjectPermanent() && navRole == NavRole::UNKNOWN)
+    const NavRole navRole = roleOf(facts.mRoot);
+    if ((facts.mRootFlags & FLAGS_AFFECTS_NAVMESH) && navRole == NavRole::UNKNOWN)
     {
         mRolesWanted = true;
     }
@@ -1201,12 +1261,11 @@ void SKWorldCensus::visit(LLViewerObject* object)
     }
 
     // The sim's rotation, not the rendered one: llTargetOmega spin is not motion.
-    const bool moving = classifyRest(root, root->getRegion()->getOriginGlobal() + LLVector3d(root->getPositionRegion()),
-                                     root->getRotationSim());
+    const bool moving = classifyRest(facts.mRoot, facts.mRootPos, facts.mRootRot);
     // The kind the feature rules gave the part at the last scan. A vehicle is
     // out of every class parked or driving, so its rest state says nothing.
     PartFeature feature;
-    if (const auto fit = mPartFeatures.find(object->getID()); fit != mPartFeatures.end())
+    if (const auto fit = mPartFeatures.find(facts.mPart); fit != mPartFeatures.end())
     {
         feature = fit->second;
     }
@@ -1217,16 +1276,16 @@ void SKWorldCensus::visit(LLViewerObject* object)
     // surround stays in whatever its flags, as its rendered shape. A part with
     // no physics shape is visible only as well: the overview's cover test asks
     // whether what is seen collides, and nav never sees such a record.
-    const bool phantom = root->flagPhantom();
+    const bool phantom = (facts.mRootFlags & FLAGS_PHANTOM) != 0;
     const LLVector3d span(extent);
-    const bool surround = isSurround(root, pos - span, pos + span);
+    const bool surround = isSurround(facts.mLocalOnly, pos - span, pos + span);
     if (phantom && navRole != NavRole::EXCLUSION_VOLUME && !surround)
     {
         collides = false;
     }
 
     SKPhysicsShape shape;
-    const bool hasPhysics = skPhysicsShapeClassify(volume, shape);
+    const bool hasPhysics = skPhysicsShapeClassify(facts.mShape, shape);
     if (!hasPhysics && !surround)
     {
         collides = false;
@@ -1235,11 +1294,11 @@ void SKWorldCensus::visit(LLViewerObject* object)
     U64 sig = SEED;
     // The root is part of the signature: relinking changes the cluster a part
     // belongs to without moving it.
-    sig = mix(sig, *reinterpret_cast<const U64*>(root->getID().mData));
-    sig = mix(sig, *reinterpret_cast<const U64*>(root->getID().mData + 8));
+    sig = mix(sig, *reinterpret_cast<const U64*>(facts.mRoot.mData));
+    sig = mix(sig, *reinterpret_cast<const U64*>(facts.mRoot.mData + 8));
     sig = mixVec(sig, sim_pos);
     sig = mixQuat(sig, sim_rot);
-    sig = mixVec(sig, object->getScale());
+    sig = mixVec(sig, scale);
     sig = mix(sig, shape.mPhysicsType);
     sig = mix(sig, hasPhysics ? static_cast<U64>(shape.mSpec.getType()) : 99);
     sig = mix(sig, phantom);
@@ -1248,7 +1307,7 @@ void SKWorldCensus::visit(LLViewerObject* object)
     // A newly classified leaf must re-record, or its tile never hears of it.
     sig = mix(sig, static_cast<U64>(feature.mKind));
     sig = mix(sig, feature.mExclude);
-    sig = mix(sig, object->isPhysicsShapeUnknown());
+    sig = mix(sig, facts.mPhysicsUnknown);
     if (!collides)
     {
         sig = mix(sig, 0x76697369626c65ull); // volume detect has no other say in the signature
@@ -1260,12 +1319,11 @@ void SKWorldCensus::visit(LLViewerObject* object)
     // while you walk; the display volume's face count and the hull the
     // physics-shapes overlay caches on it are the same trap.
     {
-        const LLVolume* v = volume->getVolume();
-        sig = mixF64(sig, object->getRegion()->getOriginGlobal().mdV[VX]);
-        sig = mixF64(sig, object->getRegion()->getOriginGlobal().mdV[VY]);
+        sig = mixF64(sig, facts.mOrigin.mdV[VX]);
+        sig = mixF64(sig, facts.mOrigin.mdV[VY]);
         // The volume parameters: a cut, hollow or twist edit keeps position,
         // scale and face count and still changes every triangle.
-        const LLVolumeParams& vp = v->getParams();
+        const LLVolumeParams& vp = *facts.mShape.mParams;
         const LLPathParams& path = vp.getPathParams();
         const LLProfileParams& profile = vp.getProfileParams();
         sig = mix(sig, path.getCurveType());
@@ -1291,29 +1349,34 @@ void SKWorldCensus::visit(LLViewerObject* object)
         sig = mix(sig, *reinterpret_cast<const U64*>(sculpt.mData + 8));
         // A mesh's decomposition arriving is what turns a placeholder box into
         // hulls; its state has to move the signature or the box stays for ever.
-        if (volume->isMesh())
+        if (facts.mShape.mMesh)
         {
-            const LLModel::Decomposition* decomp = gMeshRepo.getDecomposition(sculpt);
+            // A decomposition asked for before its header is in is dropped
+            // after its retries and never asked for again; a live object has
+            // asked for the header with its LOD, a cached part asks here.
+            const bool header = gMeshRepo.physicsMeshSize(sculpt) >= 0;
+            if (!header && !live)
+            {
+                gMeshRepo.fetchMeshHeader(vp);
+            }
+            const LLModel::Decomposition* decomp = header || live ? gMeshRepo.getDecomposition(sculpt) : nullptr;
             sig = mix(sig, decomp ? 1 + decomp->mMesh.size() * 4 + decomp->mPhysicsShapeMesh.mPositions.size() + decomp->mBaseHullMesh.mPositions.size() : 0);
             // The simulator's triangles arriving replace the physics mesh once, and stay held after.
-            PartCache& held = mParts[object->getID()];
-            if (held.mSimMesh != sculpt || object->getPhysicsShapeType() != LLViewerObject::PHYSICS_SHAPE_PRIM)
+            PartCache& held = mParts[facts.mPart];
+            if (held.mSimMesh != sculpt || shape.mPhysicsType != LLViewerObject::PHYSICS_SHAPE_PRIM)
             {
                 held.mSim.reset();
                 held.mSimMesh = sculpt;
             }
             if (!held.mSim && collides && (!surround || (hasPhysics && !phantom)))
             {
-                held.mSim = skPhysicsShapeSimTriangles(volume);
+                held.mSim = skPhysicsShapeSimTriangles(facts.mShape);
             }
             sig = mix(sig, held.mSim ? 1 + held.mSim->mTriangles.size() : 0);
         }
-        // A sculpt's texture arriving replaces the stretched placeholder, so
-        // its level has to move the signature or the placeholder never leaves.
-        else if (volume->isSculpted())
-        {
-            sig = mix(sig, static_cast<U64>(v->getSculptLevel() + 3));
-        }
+        // No sculpt level: a sculpt is recorded only at level 0 (record), and its
+        // texture's discard follows the camera, or is none at all from the object
+        // cache, so the level re-signed and dropped static sculpts every few scans.
     }
 
     // A record every class leaves out shapes nothing and stays out of every
@@ -1322,13 +1385,13 @@ void SKWorldCensus::visit(LLViewerObject* object)
     U64 record_sig = sig;
     if (excluded)
     {
-        record_sig = mix(SEED, *reinterpret_cast<const U64*>(object->getID().mData));
-        record_sig = mix(record_sig, *reinterpret_cast<const U64*>(object->getID().mData + 8));
+        record_sig = mix(SEED, *reinterpret_cast<const U64*>(facts.mPart.mData));
+        record_sig = mix(record_sig, *reinterpret_cast<const U64*>(facts.mPart.mData + 8));
         record_sig = mix(record_sig, static_cast<U64>(feature.mKind));
         record_sig = mix(record_sig, feature.mExclude);
     }
 
-    PartCache& cache = mParts[object->getID()];
+    PartCache& cache = mParts[facts.mPart];
     cache.mLastSeen = gFrameTimeSeconds;
     const bool fresh = cache.mRecord && cache.mSignature == sig && cache.mRecord->mDynamic == (collides && dynamic);
     RecordPtr rec;
@@ -1341,8 +1404,8 @@ void SKWorldCensus::visit(LLViewerObject* object)
     {
         // Visible only: its box for the overview's cover test, never a shape nav builds with.
         auto box = std::make_shared<Record>();
-        box->mRoot = root->getID();
-        box->mPart = object->getID();
+        box->mRoot = facts.mRoot;
+        box->mPart = facts.mPart;
         box->mProvenance = Provenance::RENDER;
         box->mNavRole = navRole;
         box->mShape = Shape::BOX;
@@ -1350,7 +1413,7 @@ void SKWorldCensus::visit(LLViewerObject* object)
         // Phantom, volume detect or shapeless at any type: the type arriving cannot make it collide.
         box->mPhysicsKnown = true;
         box->mSignature = sig;
-        box->mOrigin = object->getRegion()->getOriginGlobal();
+        box->mOrigin = facts.mOrigin;
         box->mCenter = sim_pos;
         for (S32 k = 0; k < 3; ++k)
         {
@@ -1366,7 +1429,7 @@ void SKWorldCensus::visit(LLViewerObject* object)
     }
     else
     {
-        rec = record(volume, root, surround ? Role::SURROUND : Role::NAV, dynamic, record_sig, sim_pos, sim_rot, feature.mKind,
+        rec = record(facts, surround ? Role::SURROUND : Role::NAV, dynamic, record_sig, sim_pos, sim_rot, feature.mKind,
                      feature.mExclude, cache.mSim);
         if (!rec)
         {
@@ -1378,15 +1441,15 @@ void SKWorldCensus::visit(LLViewerObject* object)
     }
     take(snap, rec);
     // Only a mesh has its type asked for above; a prim's stays unknown until someone edits it.
-    if (volume->isMesh())
+    if (facts.mShape.mMesh)
     {
         snap.mStats.mPhysicsMeshes++;
-        if (object->isPhysicsShapeUnknown())
+        if (facts.mPhysicsUnknown)
         {
             snap.mStats.mPhysicsUnknown++;
-            mUnknownSince.try_emplace(object->getID(), gFrameTimeSeconds);
+            mUnknownSince.try_emplace(facts.mPart, gFrameTimeSeconds);
         }
-        else if (const auto since = mUnknownSince.find(object->getID()); since != mUnknownSince.end())
+        else if (const auto since = mUnknownSince.find(facts.mPart); since != mUnknownSince.end())
         {
             const F64 waited = gFrameTimeSeconds - since->second;
             mKnownAfterCount++;
@@ -1396,12 +1459,14 @@ void SKWorldCensus::visit(LLViewerObject* object)
         }
     }
 
-    if (collides && !surround)
+    // The feature rules read faces and flags only a live object has; a cached
+    // part keeps the kind it was last given live (classify).
+    if (live && collides && !surround)
     {
         FeaturePart fp;
-        fp.mPart = object->getID();
-        fp.mRoot = root->getID();
-        fp.mCenter = object->getRegion()->getOriginGlobal() + LLVector3d(sim_pos);
+        fp.mPart = facts.mPart;
+        fp.mRoot = facts.mRoot;
+        fp.mCenter = facts.mOrigin + LLVector3d(sim_pos);
         fp.mMin = fp.mCenter - span;
         fp.mMax = fp.mCenter + span;
         for (S32 k = 0; k < 3; ++k)
@@ -1409,13 +1474,13 @@ void SKWorldCensus::visit(LLViewerObject* object)
             fp.mAxes[k] = axis[k];
         }
         fp.mHalf = half;
-        if (const ALObjectPropertiesCache::ServerProps* props = ALObjectPropertiesCache::instance().get(object->getID()))
+        if (const ALObjectPropertiesCache::ServerProps* props = ALObjectPropertiesCache::instance().get(facts.mPart))
         {
             fp.mName = props->mName;
         }
-        fp.mScripted = object->flagScripted();
-        fp.mTouch = object->flagHandleTouch();
-        fp.mSeeThrough = seeThrough(object);
+        fp.mScripted = live->flagScripted();
+        fp.mTouch = live->flagHandleTouch();
+        fp.mSeeThrough = seeThrough(live);
         mScan.mFeatureParts.push_back(std::move(fp));
     }
 
@@ -1428,7 +1493,7 @@ void SKWorldCensus::visit(LLViewerObject* object)
     {
         if (!fresh || !cache.mPhysics)
         {
-            cache.mPhysics = record(volume, root, Role::NAV, dynamic, record_sig, sim_pos, sim_rot, feature.mKind, feature.mExclude, cache.mSim);
+            cache.mPhysics = record(facts, Role::NAV, dynamic, record_sig, sim_pos, sim_rot, feature.mKind, feature.mExclude, cache.mSim);
         }
         if (cache.mPhysics)
         {
@@ -1451,14 +1516,14 @@ void SKWorldCensus::gatherCached()
 {
     LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - gather cached");
     static LLCachedControl<bool> use_cache(gSavedSettings, "SKCensusObjectCache", true);
-    // A dirty scan takes its boxes from the caches with the rest.
+    // A dirty scan takes cached parts from the caches with the rest.
     if (!mScanFull || !use_cache || !LLWorld::instanceExists())
     {
         return;
     }
     const SKCensusSnapshot& snap = *mScan.mPending;
-    // One box around both centres for the octree, then the round test per
-    // entry, the same way the live pass culls.
+    // One box around both centres for the octree; each part is read and
+    // range tested when the scan reaches it, under the scan's budget.
     LLVector3d gmin, gmax;
     for (S32 a = 0; a < 3; ++a)
     {
@@ -1485,92 +1550,106 @@ void SKWorldCensus::gatherCached()
         const U64 handle = region->getHandle();
         for (LLVOCacheEntry* entry : found)
         {
-            if (!entry || !entry->isValid() || entry->isState(LLVOCacheEntry::ACTIVE) || !entry->getEntry())
+            if (!entry || !entry->isValid() || entry->isState(LLVOCacheEntry::ACTIVE) || !entry->getEntry() || !entry->getDP())
             {
                 continue;
             }
-            const LLVector4a* extents = entry->getSpatialExtents();
-            CachedPart part;
-            part.mOrigin = origin;
-            part.mCenter.set((extents[0][0] + extents[1][0]) * 0.5f, (extents[0][1] + extents[1][1]) * 0.5f,
-                             (extents[0][2] + extents[1][2]) * 0.5f);
-            part.mHalf.set((extents[1][0] - extents[0][0]) * 0.5f, (extents[1][1] - extents[0][1]) * 0.5f,
-                           (extents[1][2] - extents[0][2]) * 0.5f);
-            if (part.mHalf.mV[VX] <= 0.f || part.mHalf.mV[VY] <= 0.f || part.mHalf.mV[VZ] <= 0.f)
+            mScan.mCached.push_back({ entry, nullptr, origin, handle });
+            for (auto it = entry->getChildrenBegin(); it != entry->getChildrenEnd(); ++it)
             {
-                continue;
+                LLVOCacheEntry* child = *it;
+                if (child && child->isValid() && child->getDP())
+                {
+                    mScan.mCached.push_back({ child, entry, origin, handle });
+                }
             }
-            const LLVector3d pos = origin + LLVector3d(part.mCenter);
-            const F64 reach = snap.mRange + part.mHalf.magVec();
-            if (dist_vec(pos, snap.mCenter) > reach && dist_vec(pos, snap.mCamera) > reach)
-            {
-                continue;
-            }
-            part.mId = placeholderId(handle, entry->getLocalID());
-            mScan.mCached.push_back(part);
         }
     }
 }
 
-void SKWorldCensus::visitCached(const CachedPart& part)
+const SKCachedObject* SKWorldCensus::decoded(U64 region, LLVOCacheEntry& entry)
 {
+    CachedDecode& decode = mDecoded[placeholderId(region, entry.getLocalID())];
+    decode.mUsed = gFrameTimeSeconds;
+    if (decode.mCRC != entry.getCRC() || decode.mObject.mLocalId != entry.getLocalID())
+    {
+        decode.mCRC = entry.getCRC();
+        decode.mOk = skDecodeCachedObject(entry, decode.mObject);
+        decode.mObject.mLocalId = entry.getLocalID();
+    }
+    return decode.mOk ? &decode.mObject : nullptr;
+}
+
+LLUUID SKWorldCensus::visitCached(const CachedPart& part)
+{
+    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - visit cached");
     SKCensusSnapshot& snap = *mScan.mPending;
     snap.mStats.mObjectsSeen++;
 
-    U64 sig = SEED;
-    sig = mix(sig, *reinterpret_cast<const U64*>(part.mId.mData));
-    sig = mix(sig, *reinterpret_cast<const U64*>(part.mId.mData + 8));
-    sig = mixVec(sig, part.mCenter);
-    sig = mixVec(sig, part.mHalf);
-    sig = mixF64(sig, part.mOrigin.mdV[VX]);
-    sig = mixF64(sig, part.mOrigin.mdV[VY]);
-
-    PartCache& cache = mParts[part.mId];
-    cache.mLastSeen = gFrameTimeSeconds;
-    RecordPtr rec;
-    if (cache.mRecord && cache.mSignature == sig)
+    // Revived or killed since the gather: the live pass or nothing has it now.
+    LLVOCacheEntry* root_entry = part.mRoot ? part.mRoot.get() : part.mEntry.get();
+    if (!part.mEntry->isValid() || !root_entry->isValid() || root_entry->isState(LLVOCacheEntry::ACTIVE))
     {
-        rec = cache.mRecord;
-        snap.mStats.mCached++;
+        return LLUUID::null;
+    }
+    const SKCachedObject* object = decoded(part.mRegion, *part.mEntry);
+    const SKCachedObject* root = part.mRoot ? decoded(part.mRegion, *part.mRoot) : object;
+    if (!object || !root || gObjectList.findObject(object->mId))
+    {
+        return LLUUID::null;
+    }
+
+    PartFacts facts;
+    facts.mPart = object->mId;
+    facts.mRoot = root->mId;
+    facts.mRegion = part.mRegion;
+    facts.mOrigin = part.mOrigin;
+    // The transform simRegionTransform reads off the object once it is revived.
+    if (part.mRoot)
+    {
+        facts.mSimPos = root->mPos + object->mPos * root->mRot;
+        facts.mSimRot = object->mRot * root->mRot;
     }
     else
     {
-        std::shared_ptr<Record> made = std::make_shared<Record>();
-        made->mRoot = part.mId;
-        made->mPart = part.mId;
-        made->mRole = Role::NAV;
-        // The same meaning BOX already carries: a stand-in until the real
-        // shape turns up, which here is when you get close enough to draw it.
-        made->mProvenance = Provenance::BOX;
-        made->mShape = Shape::BOX;
-        made->mSolid = true;
-        made->mOrigin = part.mOrigin;
-        made->mCenter = part.mCenter;
-        made->mAxes[0].set(1.f, 0.f, 0.f);
-        made->mAxes[1].set(0.f, 1.f, 0.f);
-        made->mAxes[2].set(0.f, 0.f, 1.f);
-        made->mHalf = part.mHalf;
-        made->mMin = part.mOrigin + LLVector3d(part.mCenter - part.mHalf);
-        made->mMax = part.mOrigin + LLVector3d(part.mCenter + part.mHalf);
-        made->mSignature = sig;
-        rec = made;
-        cache.mRecord = rec;
-        cache.mSignature = sig;
+        facts.mSimPos = object->mPos;
+        facts.mSimRot = object->mRot;
     }
-
-    snap.mRecords.push_back(rec);
-    snap.mStats.mPlaceholders++;
-    snap.mStats.mFromObjectCache++;
+    facts.mCullPos = facts.mOrigin + LLVector3d(facts.mSimPos);
+    facts.mRootPos = facts.mOrigin + LLVector3d(root->mPos);
+    facts.mRootRot = root->mRot;
+    // A revived object loads exactly these flags from its entry.
+    facts.mRootFlags = root_entry->getUpdateFlags()
+        & (FLAGS_USE_PHYSICS | FLAGS_CHARACTER | FLAGS_TEMPORARY_ON_REZ | FLAGS_VOLUME_DETECT | FLAGS_PHANTOM | FLAGS_AFFECTS_NAVMESH);
+    facts.mShape.mId = object->mId;
+    facts.mShape.mParams = &object->mParams;
+    facts.mShape.mScale = object->mScale;
+    facts.mShape.mFlexible = object->mFlexible;
+    facts.mShape.mSculpted = object->mSculpted;
+    facts.mShape.mMesh = object->mMesh;
+    // The type the sim gave for the id, which a revived object takes too; a
+    // mesh asks for it as a live one does, a prim stays unknown as a live one does.
+    U8 type = LLViewerObject::PHYSICS_SHAPE_PRIM;
+    facts.mPhysicsUnknown = !gObjectList.knownPhysicsShapeType(object->mId, type);
+    facts.mShape.mPhysicsType = facts.mPhysicsUnknown ? (U8)LLViewerObject::PHYSICS_SHAPE_PRIM : type;
+    if (facts.mPhysicsUnknown && object->mMesh)
+    {
+        gObjectList.requestPhysicsShapeType(object->mId);
+    }
+    visitPart(facts, nullptr);
+    return object->mId;
 }
 
-skworld::RecordPtr SKWorldCensus::record(LLVOVolume* volume, LLViewerObject* root, skworld::Role role, bool dynamic, U64 signature,
+skworld::RecordPtr SKWorldCensus::record(const PartFacts& facts, skworld::Role role, bool dynamic, U64 signature,
                                        const LLVector3& pos, const LLQuaternion& rot, skworld::FeatureKind feature, U8 exclude,
                                        const std::shared_ptr<const SKPhysicsHavokShape>& sim)
 {
     LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - shape");
+    const SKPhysicsShapeInput& in = facts.mShape;
     // An unloaded sculpt is a placeholder sphere stretched over its whole
     // scale; a megasculpty's would floor the region, so it waits for level 0.
-    if (volume->isSculpted() && !volume->isMesh() && (!volume->getVolume() || volume->getVolume()->getSculptLevel() != 0))
+    // A cached sculpt has no texture at all, and waits for its object.
+    if (in.mSculpted && !in.mMesh && facts.mSculptLevel != 0)
     {
         return nullptr;
     }
@@ -1578,12 +1657,13 @@ skworld::RecordPtr SKWorldCensus::record(LLVOVolume* volume, LLViewerObject* roo
     bool ok = false;
     if (role == Role::SURROUND)
     {
-        ok = skCensusRenderGeometry(volume, geom);
+        ok = skCensusRenderGeometry(in, geom);
     }
-    else
+    else if (!in.mMesh || in.mObject || gMeshRepo.physicsMeshSize(in.mParams->getSculptID()) >= 0)
     {
+        // A cached mesh's decomposition is asked for only once its header is in (visitPart asks for that).
         SKPhysicsShape shape;
-        ok = skPhysicsShapeClassify(volume, shape) && skPhysicsShapeGeometry(volume, shape, geom, sim);
+        ok = skPhysicsShapeClassify(in, shape) && skPhysicsShapeGeometry(in, shape, geom, sim);
     }
     if (!ok)
     {
@@ -1591,21 +1671,21 @@ skworld::RecordPtr SKWorldCensus::record(LLVOVolume* volume, LLViewerObject* roo
     }
 
     auto rec = std::make_shared<Record>();
-    rec->mRoot = root->getID();
-    rec->mPart = volume->getID();
+    rec->mRoot = facts.mRoot;
+    rec->mPart = facts.mPart;
     rec->mRole = role;
     rec->mProvenance = static_cast<Provenance>(geom.mProvenance);
-    rec->mNavRole = roleOf(root->getID());
+    rec->mNavRole = roleOf(facts.mRoot);
     rec->mShape = static_cast<Shape>(geom.mShape);
     rec->mSolid = geom.mSolid;
     rec->mDynamic = dynamic;
     rec->mFeature = feature;
     rec->mExclude = exclude;
     rec->mSignature = signature;
-    rec->mPhysicsKnown = !volume->isPhysicsShapeUnknown();
-    rec->mOrigin = volume->getRegion()->getOriginGlobal();
+    rec->mPhysicsKnown = !facts.mPhysicsUnknown;
+    rec->mOrigin = facts.mOrigin;
 
-    const LLVector3 scale = volume->getScale();
+    const LLVector3 scale = in.mScale;
 
     rec->mMin.set(1e30, 1e30, 1e30);
     rec->mMax.set(-1e30, -1e30, -1e30);
@@ -1864,6 +1944,15 @@ void SKWorldCensus::classify(SKCensusSnapshot& snap)
                 history.mKind = f.mKind;
                 history.mWorkingElevator = history.mWorkingElevator || f.mKind == FeatureKind::ELEVATOR;
             }
+        }
+    }
+    // A part the object cache holds keeps the kind it was last given live, so
+    // going into the cache and coming back re-signs nothing.
+    for (const auto& entry : before)
+    {
+        if (const auto part = mParts.find(entry.first); part != mParts.end() && part->second.mFromObjectCache)
+        {
+            mPartFeatures.insert(entry);
         }
     }
     // A part is recorded with its kind, so one whose kind moved is visited again.
