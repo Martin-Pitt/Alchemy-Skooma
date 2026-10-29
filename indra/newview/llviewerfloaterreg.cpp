@@ -591,6 +591,7 @@ void LLViewerFloaterReg::registerFloaters()
 // [/SL:KB]
     LLFloaterReg::add("chatbar", "floater_al_chatbar.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<ALChatBar>);
     LLFloaterReg::add("sk_local_chat", "floater_sk_local_chat.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SKFloaterLocalChat>); // <SK:Nexii> Modern local chat
+    LLFloaterReg::add("sk_local_chat_settings", "floater_sk_local_chat_settings.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloater>); // <SK:Nexii> Modern local chat settings
     LLFloaterReg::add("chat_alerts", "floater_chat_alerts.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloaterChatAlerts>);
     LLFloaterReg::add("delete_queue", "floater_script_queue.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloaterDeleteQueue>);
     LLFloaterReg::add("feedback", "floater_al_feedback.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<ALFloaterFeedback>);

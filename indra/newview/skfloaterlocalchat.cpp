@@ -247,6 +247,29 @@ S32 embed_height()
     return 2 * embed_font()->getLineHeight() + EMBED_LINE_GAP + 2 * EMBED_PAD;
 }
 
+// GitHub's own colours for a state.
+LLColor4 github_state_color(SKChatUnfurl::EGitHubState state)
+{
+    using SKChatUnfurl::EGitHubState;
+    switch (state)
+    {
+    case EGitHubState::OPEN: return LLColor4(0.137f, 0.525f, 0.212f, 1.f);      // #238636
+    case EGitHubState::MERGED:
+    case EGitHubState::COMPLETED: return LLColor4(0.537f, 0.341f, 0.898f, 1.f); // #8957e5
+    case EGitHubState::CLOSED: return LLColor4(0.855f, 0.212f, 0.200f, 1.f);    // #da3633
+    default: return LLColor4(0.431f, 0.463f, 0.506f, 1.f);                      // #6e7681, draft and not planned
+    }
+}
+
+constexpr S32 EMBED_PILL_PAD = 5;
+
+// The state pill's width with its gap, 0 for none.
+S32 embed_pill_width(const SKChatEmbed& embed)
+{
+    const std::string_view label = SKChatUnfurl::gitHubStateLabel(embed.mGitHubState);
+    return label.empty() ? 0 : bold_width(embed_font(), label) + 2 * EMBED_PILL_PAD + EMBED_PAD;
+}
+
 S32 embed_thumb()
 {
     return embed_height() - 2 * EMBED_PAD;
@@ -303,11 +326,22 @@ bool SKFloaterLocalChat::modernEnabled()
 }
 
 // static
+bool SKFloaterLocalChat::hidesForConversations()
+{
+    static LLCachedControl<bool> hide(gSavedSettings, "SkoomaLocalChatHideForConversations", false);
+    return hide;
+}
+
+// static
 bool SKFloaterLocalChat::shouldTakeChat()
 {
     if (!modernEnabled())
     {
         return false;
+    }
+    if (!hidesForConversations())
+    {
+        return true;
     }
     // As the chat bar: while Conversations is up, starting chat selects its nearby conversation instead.
     LLFloaterIMContainer* conversations = LLFloaterIMContainer::findInstance();
@@ -389,7 +423,7 @@ void SKFloaterLocalChat::onIdle(void* data)
     // Conversations carries nearby chat, so the chat steps aside while it is up and comes back after.
     SKFloaterLocalChat* self = static_cast<SKFloaterLocalChat*>(data);
     LLFloaterIMContainer* conversations = LLFloaterIMContainer::findInstance();
-    const bool conversations_up = conversations && conversations->getVisible() && !conversations->isMinimized();
+    const bool conversations_up = hidesForConversations() && conversations && conversations->getVisible() && !conversations->isMinimized();
     if (conversations_up && self->getVisible())
     {
         if (self->mInput && self->mInput->getVisible())
@@ -706,6 +740,10 @@ void SKFloaterLocalChat::appendChat(const LLChat& chat, const LLSD& args, F64 ar
         }
     }
 
+    if (arrival > 0.0)
+    {
+        holdForReading(msg);
+    }
     mMessages.push_back(std::move(msg));
     ++mPendingMessages;
     if (arrival > 0.0 && isMinimized())
@@ -1223,6 +1261,31 @@ S32 SKFloaterLocalChat::lineHeight(const Row& row) const
     return row.mMessage < 0 ? name_font()->getLineHeight() + 1 : LLViewerChat::getChatFont()->getLineHeight();
 }
 
+void SKFloaterLocalChat::holdForReading(Message& msg) const
+{
+    static LLCachedControl<F32> delay(gSavedSettings, "SkoomaLocalChatFadeDelay", 8.f);
+    static LLCachedControl<F32> per_word(gSavedSettings, "SkoomaLocalChatReadPerWord", 0.25f);
+    static LLCachedControl<F32> read_max(gSavedSettings, "SkoomaLocalChatReadMax", 30.f);
+    static LLCachedControl<F32> read_min(gSavedSettings, "SkoomaLocalChatReadAfter", 2.f);
+    S32 words = 0;
+    bool in_word = false;
+    for (size_t k = msg.mNameLen; k < msg.mBody.size(); ++k)
+    {
+        const bool space = isspace((U8)msg.mBody[k]) != 0;
+        words += !space && !in_word;
+        in_word = !space;
+    }
+    const F32 read = llclamp(words * (F32)per_word, 0.f, (F32)read_max);
+    // Never gone before a message above it: it outlasts the last one by the time it takes to read.
+    F64 until = msg.mArrival + delay + read;
+    if (!mMessages.empty() && mMessages.back().mArrival > 0.0)
+    {
+        const Message& prev = mMessages.back();
+        until = llmax(until, prev.mArrival + delay + prev.mHoldExtra + llmax(read, (F32)read_min));
+    }
+    msg.mHoldExtra = (F32)(until - msg.mArrival - delay);
+}
+
 F32 SKFloaterLocalChat::cardAlpha(const Card& card, F64 now) const
 {
     static LLCachedControl<F32> delay(gSavedSettings, "SkoomaLocalChatFadeDelay", 8.f);
@@ -1237,7 +1300,7 @@ F32 SKFloaterLocalChat::cardAlpha(const Card& card, F64 now) const
         return fade <= 0.f ? 0.f : llclamp(1.f - (F32)((age - hold) / fade), 0.f, 1.f);
     };
     // After the log was shown whole it stays whole for the grace, then fades as one, as MMO chat does.
-    return llmax(fading(now - mMessages[card.mLastMessage].mArrival, delay), fading(now - mCollapsedAt, grace));
+    return llmax(fading(now - mMessages[card.mLastMessage].mArrival, delay + mMessages[card.mLastMessage].mHoldExtra), fading(now - mCollapsedAt, grace));
 }
 
 void SKFloaterLocalChat::layout()
@@ -1451,7 +1514,7 @@ void SKFloaterLocalChat::layout()
         if (embed_shown(msg.mEmbed))
         {
             const SKChatEmbed& embed = *msg.mEmbed;
-            const S32 text_w = llmax(embed_font()->getWidth(embed.mTitle) + 2, embed_font()->getWidth(embed.mDescription));
+            const S32 text_w = llmax(embed_pill_width(embed) + embed_font()->getWidth(embed.mTitle) + 2, embed_font()->getWidth(embed.mDescription));
             const S32 thumb = embed.mImage.notNull() ? embed_thumb() + EMBED_PAD : 0;
             const S32 room = llmax(16, llmin(EMBED_MAX_WIDTH, width - mCards.back().mTextX - pad_x));
             msg.mEmbedWidth = llclamp(EMBED_ACCENT + 2 * EMBED_PAD + text_w + thumb, llmin(EMBED_MIN_WIDTH, room), room);
@@ -1725,7 +1788,8 @@ void SKFloaterLocalChat::drawEmbed(const Message& msg, S32 x, S32 y, F32 alpha) 
     card_image->draw(x, y, w, h, card_color.get() % (0.45f * alpha));
 
     gGL.getTextureSlot(0)->unbind();
-    LLColor4 accent = msg.mNameColor;
+    const bool has_state = embed.mGitHubState != SKChatUnfurl::EGitHubState::NONE;
+    LLColor4 accent = has_state ? github_state_color(embed.mGitHubState) : msg.mNameColor;
     accent.mV[VALPHA] *= alpha;
     gl_rect_2d(x + 1, y + h - 3, x + 1 + EMBED_ACCENT, y + 3, accent);
 
@@ -1746,10 +1810,22 @@ void SKFloaterLocalChat::drawEmbed(const Message& msg, S32 x, S32 y, F32 alpha) 
     const S32 left = x + EMBED_ACCENT + EMBED_PAD;
     const S32 max_px = llmax(0, right - left);
     const S32 line = font->getLineHeight();
+    const S32 title_y = y + EMBED_PAD + line + EMBED_LINE_GAP;
     LLColor4 title = title_color.get();
     title.mV[VALPHA] *= alpha;
-    font->renderUTF8(embed.mTitle, 0, (F32)left, (F32)(y + EMBED_PAD + line + EMBED_LINE_GAP), title, LLFontGL::LEFT, LLFontGL::BOTTOM,
-                     LLFontGL::BOLD, LLFontGL::NO_SHADOW, S32_MAX, max_px, nullptr, true);
+    S32 title_x = left;
+    if (const S32 pill = has_state ? llmin(embed_pill_width(embed), max_px) : 0; pill > 0)
+    {
+        // A GitHub state reads as its pill, white on the state's colour.
+        shape_blend();
+        static LLUIImagePtr pill_image = LLUI::getUIImage("Rounded_Square");
+        pill_image->draw(left, title_y - 1, pill - EMBED_PAD, line + 2, accent);
+        font->renderUTF8(std::string(SKChatUnfurl::gitHubStateLabel(embed.mGitHubState)), 0, (F32)(left + EMBED_PILL_PAD), (F32)title_y, title,
+                         LLFontGL::LEFT, LLFontGL::BOTTOM, LLFontGL::BOLD, LLFontGL::NO_SHADOW, S32_MAX, pill - EMBED_PAD - EMBED_PILL_PAD);
+        title_x += pill;
+    }
+    font->renderUTF8(embed.mTitle, 0, (F32)title_x, (F32)title_y, title, LLFontGL::LEFT, LLFontGL::BOTTOM,
+                     LLFontGL::BOLD, LLFontGL::NO_SHADOW, S32_MAX, llmax(0, right - title_x), nullptr, true);
     if (!embed.mDescription.empty())
     {
         LLColor4 desc = title;
