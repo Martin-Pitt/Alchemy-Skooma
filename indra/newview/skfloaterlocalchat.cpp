@@ -1366,15 +1366,6 @@ F32 SKFloaterLocalChat::cardAlpha(const Card& card, F64 now) const
 
 LLColor4 SKFloaterLocalChat::faded(LLColor4 color, F32 alpha) const
 {
-    // Faded history reads as grey, the cue that it is no longer live.
-    // Mixed in near-linear light (gamma 2 rather than sRGB's curve) toward its luminance, so saturated colours keep their brightness.
-    const F32 r = color.mV[VRED] * color.mV[VRED];
-    const F32 g = color.mV[VGREEN] * color.mV[VGREEN];
-    const F32 b = color.mV[VBLUE] * color.mV[VBLUE];
-    const F32 luminance = r * 0.2126f + g * 0.7152f + b * 0.0722f;
-    color.mV[VRED] = sqrtf(lerp(r, luminance, mGrey));
-    color.mV[VGREEN] = sqrtf(lerp(g, luminance, mGrey));
-    color.mV[VBLUE] = sqrtf(lerp(b, luminance, mGrey));
     color.mV[VALPHA] *= alpha;
     return color;
 }
@@ -1927,7 +1918,8 @@ void SKFloaterLocalChat::drawMessages(const LLRect& content, F64 now, bool full,
         {
             break; // older cards arrived earlier, so they have faded too
         }
-        mGrey = full ? 0.f : 1.f - cardFade(card, now);
+        // Faded history reads as grey, the cue that it is no longer live: everything the card draws, pictures included.
+        ALUISaturation grey(full ? 1.f : cardFade(card, now));
         const Row& top_row = mRows[card.mFirstRow];
         const Row& bottom_row = mRows[card.mLastRow];
         const S32 card_bottom = base + bottom_row.mBottom + bottom_row.mGap;
@@ -2040,6 +2032,8 @@ void SKFloaterLocalChat::drawMaskedMessages(const LLRect& content, F64 now, bool
         }
         in_band |= card_top > top_band || (scrolled && card_bottom < bottom_band);
         fades = (fades ^ (U64)(c * 256 + ll_round(alpha * 255.f))) * 1099511628211ULL;
+        // The greying follows the fade, which moves under a constant alpha when the fade's floor is 1.
+        fades = (fades ^ (U64)ll_round((full ? 1.f : cardFade(card, now)) * 255.f)) * 1099511628211ULL;
         if (card.mDivider)
         {
             continue;

@@ -188,7 +188,7 @@ private:
     /// How far a card has yet to fade: 1 while held, 0 once gone.
     F32 cardFade(const Card& card, F64 now) const;
     F32 cardAlpha(const Card& card, F64 now) const;
-    /// A colour at a card's alpha, greyed as far as the card has faded.
+    /// A colour at a card's alpha.
     LLColor4 faded(LLColor4 color, F32 alpha) const;
     S32 lineHeight(const Row& row) const;
     /// The font a line of a message draws in, the chat font at the row's scale.
@@ -277,7 +277,6 @@ private:
     bool mBarSyncing = false;   // while layoutBar pushes the chat's position, the bar's callback ignores it
     F32 mBackdrop = 0.f;        // the hover tint, 0 to 1, eased in and out
     F32 mBorder = 0.f;          // the edge border, likewise
-    mutable F32 mGrey = 0.f;    // how grey the card being drawn has faded
     F64 mEdgeSince = -1.0;      // when the pointer reached the floater's edge, -1 while it is elsewhere
     F64 mChromeDrawnAt = 0.0;
     S32 mCollapsedUnread = 0;   // arrived since the chat was collapsed
