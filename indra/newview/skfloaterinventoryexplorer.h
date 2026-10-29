@@ -289,7 +289,6 @@ private:
     SKExplorerOptions mOptions;
     LLButton* mBackBtn;
     LLButton* mForwardBtn;
-    LLButton* mUpBtn;
     LLButton* mDetailsBtn;
     SKInventoryPathBar* mPathBar;
     SKInventorySearchBox* mSearchBox;

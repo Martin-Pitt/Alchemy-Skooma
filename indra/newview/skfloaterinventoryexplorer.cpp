@@ -427,7 +427,6 @@ SKFloaterInventoryExplorer::SKFloaterInventoryExplorer(const LLSD& key)
     mSizeSlider(nullptr),
     mBackBtn(nullptr),
     mForwardBtn(nullptr),
-    mUpBtn(nullptr),
     mDetailsBtn(nullptr),
     mPathBar(nullptr),
     mSearchBox(nullptr),
@@ -479,7 +478,6 @@ bool SKFloaterInventoryExplorer::postBuild()
     mSizeSlider = getChild<LLSliderCtrl>("size_slider");
     mBackBtn = getChild<LLButton>("back_btn");
     mForwardBtn = getChild<LLButton>("forward_btn");
-    mUpBtn = getChild<LLButton>("up_btn");
     mDetailsBtn = getChild<LLButton>("details_btn");
     mPathBar = getChild<SKInventoryPathBar>("path_bar");
     mSearchBox = getChild<SKInventorySearchBox>("search_box");
@@ -540,7 +538,6 @@ bool SKFloaterInventoryExplorer::postBuild()
 
     mBackBtn->setCommitCallback([this](LLUICtrl*, const LLSD&) { goBack(); });
     mForwardBtn->setCommitCallback([this](LLUICtrl*, const LLSD&) { goForward(); });
-    mUpBtn->setCommitCallback([this](LLUICtrl*, const LLSD&) { goUp(); });
     mDetailsBtn->setCommitCallback([this](LLUICtrl*, const LLSD&) { onToggleDetails(); });
 
     getChild<LLButton>("view_gallery_btn")->setCommitCallback([this](LLUICtrl*, const LLSD&) { setView(SKExplorerTab::VIEW_GALLERY); });
@@ -1378,7 +1375,6 @@ void SKFloaterInventoryExplorer::refreshToolbar()
     const LLViewerInventoryCategory* cat = gInventory.getCategory(tab.mFolderID);
     mBackBtn->setEnabled(!tab.mBack.empty());
     mForwardBtn->setEnabled(!tab.mForward.empty());
-    mUpBtn->setEnabled(cat && cat->getParentUUID().notNull());
     mPathBar->setFolder(tab.mFolderID);
     refreshSavedSearches();
     // The placeholder names what the box searches.

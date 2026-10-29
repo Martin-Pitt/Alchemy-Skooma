@@ -300,18 +300,6 @@
      tool_tip="Forward"
      top="29"
      width="24" />
-    <button
-     follows="top|left"
-     height="22"
-     image_overlay="Single_Folder_Up"
-     image_selected="Toolbar_Middle_Selected"
-     image_unselected="Toolbar_Middle_Off"
-     layout="topleft"
-     left_pad="2"
-     name="up_btn"
-     tool_tip="Up (Backspace)"
-     top="29"
-     width="24" />
     <sk_inventory_path_bar
      follows="left|top|right"
      height="22"
