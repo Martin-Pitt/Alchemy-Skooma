@@ -390,6 +390,8 @@ public:
                                 trusted_content,
                                 always_show_icons;
 
+        Optional<LLFontGL::EEllipsisMode> ellipsis; // <SK:Nexii> where the ellipsis goes; wins over use_ellipses
+
         Optional<S32>           v_pad,
                                 h_pad;
 
@@ -464,7 +466,10 @@ public:
 
     // used by LLTextSegment layout code
     bool                    getWordWrap() const { return mWordWrap; }
-    bool                    getUseEllipses() const { return mUseEllipses; }
+    bool                    getUseEllipses() const { return mEllipsis.mode != LLFontGL::ELLIPSIS_NONE; } // <SK:Nexii>
+    // <SK:Nexii> Where the ellipsis goes; LLExpandableTextBox reads getUseEllipses and so still cuts at the end.
+    LLFontGL::Ellipsis      getEllipsis() const { return mEllipsis; }
+    // </SK:Nexii>
     void                    setUseEmoji(bool value) { mUseEmoji = value; }
     bool                    getUseColor() const { return mUseColor; }
     bool                    truncate(); // returns true of truncation occurred
@@ -848,7 +853,7 @@ protected:
     bool                        mForceUrlsExternal; // URLs from this textbox will be opened in external browser
     bool                        mParseHighlights;   // highlight user-defined keywords
     bool                        mWordWrap;
-    bool                        mUseEllipses;
+    LLFontGL::Ellipsis          mEllipsis; // <SK:Nexii>
     bool                        mUseEmoji;
     bool                        mUseColor;
     bool                        mTrackEnd;          // if true, keeps scroll position at end of document during resize
