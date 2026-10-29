@@ -473,6 +473,10 @@ void SKChatUnfurlCache::requestPage(const SKChatEmbedPtr& embed)
                     embed->mGitHubState = card.mState;
                     embed->mState = SKChatEmbed::READY;
                 }
+                else
+                {
+                    LL_WARNS("SKChatUnfurl") << "no preview from " << url << ": " << raw.size() << " bytes without a title" << LL_ENDL;
+                }
                 ++*gen;
                 return;
             }
@@ -489,6 +493,11 @@ void SKChatUnfurlCache::requestPage(const SKChatEmbedPtr& embed)
                 }
                 embed->mState = SKChatEmbed::READY;
             }
+        }
+        if (embed->mState == SKChatEmbed::FAILED)
+        {
+            LL_WARNS("SKChatUnfurl") << "no preview from " << url << ": " << status.toString() << " (" << code << "), "
+                                     << result[LLCoreHttpUtil::HttpCoroutineAdapter::HTTP_RESULTS_RAW].size() << " bytes" << LL_ENDL;
         }
         ++*gen;
     });
