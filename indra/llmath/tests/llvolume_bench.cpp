@@ -41,7 +41,6 @@
 #include "alscratcharena.h"
 #include "alsimdkernels.h"
 #include "llmath.h"
-#include "llmeshoptimizer.h"
 #include "llquaternion.h"
 #include "m3math.h"
 #include "v2math.h"
@@ -155,6 +154,51 @@ namespace
                         break;
                 }
                 U8* out = &map.rgb[((size_t)y * map.width + x) * 3];
+                out[0] = toByte(p.mV[0]);
+                out[1] = toByte(p.mV[1]);
+                out[2] = toByte(p.mV[2]);
+            }
+        }
+        return map;
+    }
+
+    // A 64 by 64 plane whose middle rows are one colour: the mesh rows
+    // sampled from them are one place, a thread, and their triangles have
+    // two corners at one point.
+    SculptMap pinchedSculptMap()
+    {
+        SculptMap map;
+        map.rgb.resize((size_t)map.width * map.height * 3);
+        for (U16 y = 0; y < map.height; ++y)
+        {
+            for (U16 x = 0; x < map.width; ++x)
+            {
+                const U16 row = (y >= 16 && y <= 48) ? 16 : y;
+                U8* out = &map.rgb[((size_t)y * map.width + x) * 3];
+                out[0] = toByte((F32)x / (map.width - 1) - 0.5f);
+                out[1] = toByte((F32)row / (map.height - 1) - 0.5f);
+                out[2] = toByte(0.f);
+            }
+        }
+        return map;
+    }
+
+    // A map as large as a decode on screen hands a sculpt, each pixel what
+    // pixel gives: its samples have no area, and the map is averaged down
+    // until they have or none is left to average.
+    template <typename Pixel>
+    SculptMap largeSculptMap(U16 size, Pixel pixel)
+    {
+        SculptMap map;
+        map.width = size;
+        map.height = size;
+        map.rgb.resize((size_t)size * size * 3);
+        for (U16 y = 0; y < size; ++y)
+        {
+            for (U16 x = 0; x < size; ++x)
+            {
+                const LLVector3 p = pixel(x, y);
+                U8* out = &map.rgb[((size_t)y * size + x) * 3];
                 out[0] = toByte(p.mV[0]);
                 out[1] = toByte(p.mV[1]);
                 out[2] = toByte(p.mV[2]);
@@ -567,7 +611,7 @@ namespace
         static void* MESHOPTIMIZER_ALLOC_CALLCONV newBlock(size_t bytes) { return ::operator new(bytes); }
         static void MESHOPTIMIZER_ALLOC_CALLCONV deleteBlock(void* block) { ::operator delete(block); }
 
-        ArenaInstalled() { LLMeshOptimizer::initClass(); }
+        ArenaInstalled() { meshopt_setAllocator(ALScratchArena::allocate, ALScratchArena::deallocate); }
         ~ArenaInstalled() { meshopt_setAllocator(newBlock, deleteBlock); }
     };
 
@@ -640,6 +684,41 @@ namespace
                     return volume->getNumVolumeFaces();
                 };
             }
+        }
+        const SculptMap pinched = pinchedSculptMap();
+        for (S32 lod = 0; lod < LOD_COUNT; ++lod)
+        {
+            LLPointer<LLVolume> volume = sculptVolume(LL_SCULPT_TYPE_PLANE, lod);
+            volume->sculpt(pinched.width, pinched.height, 3, pinched.rgb.data(), 0, false);
+            BENCHMARK(fmt::format("pinched plane sculpt, LOD {}, 64 by 64 map, {}", lod, counts(*volume)))
+            {
+                volume->sculpt(pinched.width, pinched.height, 3, pinched.rgb.data(), 0, false);
+                return volume->getNumVolumeFaces();
+            };
+        }
+
+        // Large maps whose samples have no area: one colour and one of rows
+        // alike, which no averaging gives any, and one of two halves either
+        // side of a diagonal, which is averaged down to the end.
+        constexpr U16 LARGE = 2048;
+        const struct
+        {
+            const char* name;
+            SculptMap map;
+        } arealess[] = {
+            { "one colour", largeSculptMap(LARGE, [](U16, U16) { return LLVector3(0.1f, -0.2f, 0.3f); }) },
+            { "rows alike", largeSculptMap(LARGE, [](U16 x, U16) { return LLVector3((F32)x / (LARGE - 1) - 0.5f, 0.f, 0.f); }) },
+            { "diagonal halves",
+              largeSculptMap(LARGE, [](U16 x, U16 y) { return x + y < LARGE ? LLVector3(-0.25f, 0.f, 0.f) : LLVector3(0.25f, 0.f, 0.f); }) },
+        };
+        for (const auto& [name, map] : arealess)
+        {
+            LLPointer<LLVolume> volume = sculptVolume(LL_SCULPT_TYPE_PLANE, 3);
+            BENCHMARK(fmt::format("plane sculpt, LOD 3, {} by {} map of {}", map.width, map.height, name))
+            {
+                volume->sculpt(map.width, map.height, 3, map.rgb.data(), 0, true);
+                return volume->getNumVolumeFaces();
+            };
         }
     }
 

@@ -40,10 +40,10 @@
 
 #include "lldrawpoolavatar.h"
 #include "lldrawpoolbump.h"
+#include "llenvironment.h"
 #include "llgl.h"
 #include "llrender.h"
 #include "lllightconstants.h"
-#include "llsky.h"
 #include "llviewercamera.h"
 #include "llviewertexturelist.h"
 #include "llvopartgroup.h"
@@ -1118,6 +1118,21 @@ bool LLFace::getGeometryVolume(const LLVolume& volume,
 
     if (mVertexBuffer.notNull())
     {
+        // A face fills the slots its batch laid out for it, as large as its
+        // volume face was then. A shared sculpt built again from a better map
+        // keeps its grid but may leave out other triangles, and its faces
+        // filled into slots of another size would write into the next face's
+        // or leave their own tails drawn: the batch is laid out again.
+        if (num_indices != mIndicesCount || num_vertices > mGeomCount)
+        {
+            if (gDebugGL)
+            {
+                LL_WARNS() << "Face slots no longer fit: " << num_vertices << " vertices and " << num_indices << " indices into "
+                           << mGeomCount << " and " << mIndicesCount << LL_ENDL;
+            }
+            return false;
+        }
+
         if (num_indices + mIndicesIndex > mVertexBuffer->getNumIndices())
         {
             if (gDebugGL)
@@ -1475,8 +1490,8 @@ bool LLFace::getGeometryVolume(const LLVolume& volume,
                 // Use the nudged south when coming from above sun angle, such
                 // that emboss mapping always shows up on the upward faces of cubes when
                 // it's noon (since a lot of builders build with the sun forced to noon).
-                LLVector3   sun_ray  = gSky.mVOSkyp->mBumpSunDir;
-                LLVector3   moon_ray = gSky.mVOSkyp->getMoon().getDirection();
+                LLVector3   sun_ray  = gPipeline.mSky.getBumpSunDir();
+                LLVector3   moon_ray = LLEnvironment::instance().getMoonDirection();
                 LLVector3& primary_light_ray = (sun_ray.mV[VZ] > 0) ? sun_ray : moon_ray;
 
                 bump_s_primary_light_ray.load3((offset_multiple * s_scale * primary_light_ray).mV);

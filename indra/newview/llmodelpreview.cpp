@@ -230,6 +230,7 @@ LLModelPreview::~LLModelPreview()
     {
         clearModel(i);
     }
+    mSimplifiers.clear();
     mBaseModel.clear();
     mBaseScene.clear();
 
@@ -716,6 +717,7 @@ void LLModelPreview::clearModel(S32 lod)
     mVertexBuffer[lod].clear();
     mModel[lod].clear();
     mScene[lod].clear();
+    dropFacesCopiesOfLostModels();
 }
 
 void LLModelPreview::getJointAliases(JointMap& joint_map)
@@ -919,6 +921,7 @@ void LLModelPreview::clearIncompatible(S32 lod)
 
                 if (i == LLModel::LOD_HIGH)
                 {
+                    mSimplifiers.clear();
                     mBaseModel = mModel[lod];
                     mBaseScene = mScene[lod];
                     mVertexBuffer[LLModel::NUM_LODS].clear();
@@ -927,6 +930,7 @@ void LLModelPreview::clearIncompatible(S32 lod)
             }
         }
     }
+    dropFacesCopiesOfLostModels();
 
     if (replaced_base_model && !mGenLOD)
     {
@@ -1002,6 +1006,7 @@ void LLModelPreview::loadModelCallback(S32 loaded_lod)
 
     if (loaded_lod == -1)
     { //populate all LoDs from model loader scene
+        mSimplifiers.clear();
         mBaseModel.clear();
         mBaseScene.clear();
 
@@ -1142,6 +1147,7 @@ void LLModelPreview::loadModelCallback(S32 loaded_lod)
                 mGenLOD = true;
             }
 
+            mSimplifiers.clear();
             mBaseModel = mModel[loaded_lod];
 
             mBaseScene = mScene[loaded_lod];
@@ -1272,6 +1278,7 @@ void LLModelPreview::loadModelCallback(S32 loaded_lod)
             LLFloaterModelPreview::addStringToLog("ModelLoaded", args, false, loaded_lod);
         }
     }
+    dropFacesCopiesOfLostModels();
     refresh();
 
     mModelLoadedSignal();
@@ -1306,22 +1313,33 @@ void LLModelPreview::generateNormals()
 
     F32 angle_cutoff = (F32)mFMP->childGetValue("crease_angle").asReal();
 
+    // The faces rewritten here may be the base models', as their
+    // simplifiers took them.
+    mSimplifiers.clear();
+
     mRequestedCreaseAngle[which_lod] = angle_cutoff;
 
     angle_cutoff *= DEG_TO_RAD;
 
-    if (which_lod == 3 && !mBaseModel.empty())
+    // Every model's faces are copied before any is rewritten: the base's
+    // models are the high LOD's own.
+    const auto keep = [](faces_copy_t& copy, const LLModelLoader::model_list& models)
     {
-        if (mBaseModelFacesCopy.empty())
+        for (const LLPointer<LLModel>& model : models)
         {
-            mBaseModelFacesCopy.reserve(mBaseModel.size());
-            for (LLModelLoader::model_list::iterator it = mBaseModel.begin(), itE = mBaseModel.end(); it != itE; ++it)
+            if (std::none_of(copy.begin(), copy.end(), [&](const faces_copy_t::value_type& kept) { return kept.first == model; }))
             {
                 v_LLVolumeFace_t faces;
-                (*it)->copyFacesTo(faces);
-                mBaseModelFacesCopy.push_back(faces);
+                model->copyFacesTo(faces);
+                copy.emplace_back(model, std::move(faces));
             }
         }
+    };
+    keep(mModelFacesCopy[which_lod], mModel[which_lod]);
+
+    if (which_lod == 3 && !mBaseModel.empty())
+    {
+        keep(mBaseModelFacesCopy, mBaseModel);
 
         for (LLModelLoader::model_list::iterator it = mBaseModel.begin(), itE = mBaseModel.end(); it != itE; ++it)
         {
@@ -1331,20 +1349,8 @@ void LLModelPreview::generateNormals()
         mVertexBuffer[LLModel::NUM_LODS].clear();
     }
 
-    bool perform_copy = mModelFacesCopy[which_lod].empty();
-    if (perform_copy) {
-        mModelFacesCopy[which_lod].reserve(mModel[which_lod].size());
-    }
-
     for (LLModelLoader::model_list::iterator it = mModel[which_lod].begin(), itE = mModel[which_lod].end(); it != itE; ++it)
     {
-        if (perform_copy)
-        {
-            v_LLVolumeFace_t faces;
-            (*it)->copyFacesTo(faces);
-            mModelFacesCopy[which_lod].push_back(faces);
-        }
-
         (*it)->generateNormals(angle_cutoff);
     }
 
@@ -1363,33 +1369,73 @@ void LLModelPreview::restoreNormals()
         return;
     }
 
-    if (!mBaseModelFacesCopy.empty())
+    // The faces restored here may be the base models', as in
+    // generateNormals.
+    mSimplifiers.clear();
+
+    // Each model takes back its own faces, whatever the LOD's models are now.
+    const auto restore = [](faces_copy_t& copy)
     {
-        llassert(mBaseModelFacesCopy.size() == mBaseModel.size());
-
-        vv_LLVolumeFace_t::const_iterator itF = mBaseModelFacesCopy.begin();
-        for (LLModelLoader::model_list::iterator it = mBaseModel.begin(), itE = mBaseModel.end(); it != itE; ++it, ++itF)
+        for (const faces_copy_t::value_type& kept : copy)
         {
-            (*it)->copyFacesFrom((*itF));
+            kept.first->copyFacesFrom(kept.second);
         }
-
-        mBaseModelFacesCopy.clear();
-    }
-
-    if (!mModelFacesCopy[which_lod].empty())
-    {
-        vv_LLVolumeFace_t::const_iterator itF = mModelFacesCopy[which_lod].begin();
-        for (LLModelLoader::model_list::iterator it = mModel[which_lod].begin(), itE = mModel[which_lod].end(); it != itE; ++it, ++itF)
-        {
-            (*it)->copyFacesFrom((*itF));
-        }
-
-        mModelFacesCopy[which_lod].clear();
-    }
+        copy.clear();
+    };
+    restore(mBaseModelFacesCopy);
+    restore(mModelFacesCopy[which_lod]);
 
     mVertexBuffer[which_lod].clear();
     refresh();
     updateStatusMessages();
+}
+
+const ALMeshSimplifier& LLModelPreview::simplifierFor(U32 mdl_idx)
+{
+    // A model's faces change in place where generateNormals and
+    // restoreNormals rewrite them, which drop every simplifier, and where
+    // rebuildUploadData puts them in another model's material order, which
+    // puts the model's material list in that order too.
+    mSimplifiers.resize(mBaseModel.size());
+    BaseSimplifier& kept = mSimplifiers[mdl_idx];
+    LLModel* base = mBaseModel[mdl_idx];
+    if (!kept.mSimplifier || kept.mModel != base || kept.mMaterialList != base->mMaterialList)
+    {
+        kept.mSimplifier.reset();
+        kept.mModel = base;
+        kept.mMaterialList = base->mMaterialList;
+        kept.mSimplifier = std::make_unique<const ALMeshSimplifier>(*base);
+    }
+    return *kept.mSimplifier;
+}
+
+void LLModelPreview::dropFacesCopiesOfLostModels()
+{
+    const auto held = [this](const LLPointer<LLModel>& model)
+    {
+        if (std::find(mBaseModel.begin(), mBaseModel.end(), model) != mBaseModel.end())
+        {
+            return true;
+        }
+        for (const LLModelLoader::model_list& models : mModel)
+        {
+            if (std::find(models.begin(), models.end(), model) != models.end())
+            {
+                return true;
+            }
+        }
+        return false;
+    };
+    const auto drop = [&](faces_copy_t& copy)
+    {
+        copy.erase(std::remove_if(copy.begin(), copy.end(), [&](const faces_copy_t::value_type& kept) { return !held(kept.first); }),
+                   copy.end());
+    };
+    drop(mBaseModelFacesCopy);
+    for (faces_copy_t& copy : mModelFacesCopy)
+    {
+        drop(copy);
+    }
 }
 
 void LLModelPreview::genMeshOptimizerLODs(S32 which_lod, S32 meshopt_mode, U32 decimation, bool enforce_tri_limit)
@@ -1539,7 +1585,7 @@ void LLModelPreview::genMeshOptimizerLODs(S32 which_lod, S32 meshopt_mode, U32 d
             goal.decimator = indices_decimator;
             goal.error = lod_error_threshold;
             goal.distant = lod <= LLModel::LOD_LOW;
-            const ALMeshSimplifier simplifier(*base);
+            const ALMeshSimplifier& simplifier = simplifierFor(mdl_idx);
             auto simplify_model = [&](F32 decimator, ALMeshSimplifier::Seams seams)
             {
                 ALMeshSimplifier::Target at = goal;
@@ -1602,22 +1648,33 @@ void LLModelPreview::genMeshOptimizerLODs(S32 which_lod, S32 meshopt_mode, U32 d
             {
                 // Remove progressively more data if we can't reach the target,
                 // keeping the closest a mode came: target_model holds the
-                // last mode's.
+                // last mode's, and closest a copy of the faces of the closest
+                // that fell short, as the passes after it replace them.
                 F32 allowed_ratio_drift = 1.8f;
                 using Seams = ALMeshSimplifier::Seams;
                 F32 precise_ratio = -1.f;
-                Seams precise_seams = Seams::ALL;
+                std::vector<LLVolumeFace> closest;
                 for (Seams seams : { Seams::ALL, Seams::UV, Seams::NONE })
                 {
+                    // NONE simplifies as UV, which fell short, where it
+                    // holds the same seams.
+                    if (seams == Seams::NONE && simplifier.same(Seams::UV, Seams::NONE))
+                    {
+                        break;
+                    }
                     const F32 ratio = simplify_model(indices_decimator, seams);
-                    if (ratio > precise_ratio)
+                    const bool closer = ratio > precise_ratio;
+                    if (closer)
                     {
                         precise_ratio = ratio;
-                        precise_seams = seams;
                     }
                     if (ratio >= 0 && ratio * allowed_ratio_drift >= indices_decimator)
                     {
                         break;
+                    }
+                    if (closer)
+                    {
+                        target_model->copyFacesTo(closest);
                     }
                 }
 
@@ -1699,8 +1756,12 @@ void LLModelPreview::genMeshOptimizerLODs(S32 which_lod, S32 meshopt_mode, U32 d
                         }
                         else
                         {
-                            // Fallback to normal method, in the mode that came closest
-                            precise_ratio = simplify_model(indices_decimator, precise_seams);
+                            // Fallback to normal method: the faces of the mode that came closest
+                            llassert(closest.size() == (size_t)target_model->getNumVolumeFaces());
+                            for (S32 face_idx = 0; face_idx < (S32)closest.size(); ++face_idx)
+                            {
+                                target_model->getVolumeFace(face_idx) = closest[face_idx];
+                            }
                         }
 
                         LL_DEBUGS("Upload") << "Model " << target_model->getName()
@@ -1769,6 +1830,8 @@ void LLModelPreview::genMeshOptimizerLODs(S32 which_lod, S32 meshopt_mode, U32 d
             }
         }
     }
+
+    dropFacesCopiesOfLostModels();
 
     LL_INFOS("Upload") << "LOD " << which_lod << ", Mesh optimizer processed meshes : " << meshes_processed
         <<" simplified: " << meshes_simplified
@@ -2375,6 +2438,7 @@ void LLModelPreview::updateLodControls(S32 lod)
             mModel[lod] = mModel[lod + 1];
             mScene[lod] = mScene[lod + 1];
             mVertexBuffer[lod].clear();
+            dropFacesCopiesOfLostModels();
 
             // Also update lower LoD
             if (lod > LLModel::LOD_IMPOSTOR)
