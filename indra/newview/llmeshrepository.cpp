@@ -2900,12 +2900,6 @@ bool LLMeshRepoThread::decompositionReceived(const LLUUID& mesh_id, U8* data, S3
         }
     }
 
-    // <SK:Nexii> physics shapes: the sim stretches the
-    // hulls to the object's box, so decode their domain to it, not to Min/Max.
-    decomp.erase("Min");
-    decomp.erase("Max");
-    // </SK:Nexii>
-
     {
         auto d = std::make_unique<LLModel::Decomposition>(decomp);
         d->mMeshID = mesh_id;
