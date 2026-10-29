@@ -31,9 +31,23 @@ uniform vec4 color;
 
 in vec2 vary_texcoord0;
 
+// <SK:Nexii> UI saturation
+// 1 draws unchanged and skips the greying; 0 draws Rec.709 luminance, worked in near-linear light (gamma 2): the UI's
+// bytes are sRGB-encoded and the window takes them back as they are.
+uniform float uiSaturation = 1.0;
+
+vec3 ui_saturate(vec3 c)
+{
+    vec3 lin = c * c;
+    float y = dot(lin, vec3(0.2126, 0.7152, 0.0722));
+    return sqrt(mix(vec3(y), lin, uiSaturation));
+}
+// </SK:Nexii>
+
 void main()
 {
     float alpha = texture(tex0, vary_texcoord0.xy).a * color.a;
 
     frag_color = vec4(color.rgb, alpha);
+    if (uiSaturation < 1.0) frag_color.rgb = ui_saturate(frag_color.rgb); // <SK:Nexii>
 }
