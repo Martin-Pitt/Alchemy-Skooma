@@ -1351,11 +1351,14 @@ F32 SKFloaterLocalChat::cardAlpha(const Card& card, F64 now) const
 LLColor4 SKFloaterLocalChat::faded(LLColor4 color, F32 alpha) const
 {
     // Faded history reads as grey, the cue that it is no longer live.
-    const F32 luma = color.mV[VRED] * 0.299f + color.mV[VGREEN] * 0.587f + color.mV[VBLUE] * 0.114f;
-    for (S32 i = 0; i < 3; ++i)
-    {
-        color.mV[i] = lerp(color.mV[i], luma, mGrey);
-    }
+    // Mixed in near-linear light (gamma 2 rather than sRGB's curve) toward its luminance, so saturated colours keep their brightness.
+    const F32 r = color.mV[VRED] * color.mV[VRED];
+    const F32 g = color.mV[VGREEN] * color.mV[VGREEN];
+    const F32 b = color.mV[VBLUE] * color.mV[VBLUE];
+    const F32 luminance = r * 0.2126f + g * 0.7152f + b * 0.0722f;
+    color.mV[VRED] = sqrtf(lerp(r, luminance, mGrey));
+    color.mV[VGREEN] = sqrtf(lerp(g, luminance, mGrey));
+    color.mV[VBLUE] = sqrtf(lerp(b, luminance, mGrey));
     color.mV[VALPHA] *= alpha;
     return color;
 }
