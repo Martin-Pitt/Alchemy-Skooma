@@ -718,6 +718,7 @@ public:
     void loadMeshDecomposition(const LLUUID& mesh_id);
     void loadMeshPhysicsShape(const LLUUID& mesh_id);
     void loadMeshPhysicsHavok(const LLUUID& mesh_id); // <SK:Nexii> physics_havok block
+    void loadMeshHeader(const LLVolumeParams& mesh_params); // <SK:Nexii> census: a header with no LOD asked for
 
     //send request for skin info, returns true if header info exists
     //  (should hold onto mesh_id and try again later if header info does not exist)
@@ -1031,6 +1032,9 @@ public:
     LLModel::Decomposition* getDecomposition(const LLUUID& mesh_id);
     void fetchPhysicsShape(const LLUUID& mesh_id);
     bool hasPhysicsShape(const LLUUID& mesh_id);
+    // <SK:Nexii> census: the header of a mesh no object has asked a LOD of, for a part the region has only cached
+    void fetchMeshHeader(const LLVolumeParams& mesh_params);
+    // </SK:Nexii>
     // <SK:Nexii> physics shapes (skphysicsshape.cpp): the asset's physics mesh block size, 0 when it has none and -1 until its header is in
     S32 physicsMeshSize(const LLUUID& mesh_id) const
     {

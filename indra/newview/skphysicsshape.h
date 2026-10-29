@@ -3,8 +3,8 @@
  * @brief What a volume's physics shape is, decided once for the physics display and whatever else reads it.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
- * Alchemy Viewer Source Code
- * Copyright (C) 2026, Alchemy Viewer Project.
+ * Second Life Viewer Source Code
+ * Copyright (C) 2026, Martin "Nexii" Pitt <martin.r.pitt@gmail.com>
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -30,6 +30,8 @@
 #include <memory>
 #include <vector>
 
+class LLVolume;
+class LLVolumeParams;
 class LLVOVolume;
 class SKPhysicsHavokShape;
 
@@ -55,9 +57,32 @@ struct SKPhysicsShape
     LLPhysicsShapeBuilderUtil::PhysicsShapeSpecification mSpec;
 };
 
+/// What a shape is decided and built from: a live volume's, or what the
+/// region's object cache holds for a part it never instantiated, so both are
+/// shaped alike.
+struct SKPhysicsShapeInput
+{
+    LLUUID mId;                                 ///< the part
+    const LLVolumeParams* mParams = nullptr;    ///< null while a live volume has no LLVolume yet
+    LLVector3 mScale;
+    U8 mPhysicsType = 0;
+    bool mFlexible = false;
+    bool mSculpted = false;
+    bool mMesh = false;
+    /// The live object and its loaded volume, both null for a cached part: a
+    /// sculpt falls back to the loaded volume, and a mesh LOD request names
+    /// the object waiting for it.
+    LLVOVolume* mObject = nullptr;
+    const LLVolume* mVolume = nullptr;
+};
+
+/// The input of a live volume, asking for its physics shape type as reading it always has.
+SKPhysicsShapeInput skPhysicsShapeInput(LLVOVolume* volume);
+
 /// False when the volume has no physics shape at all (type NONE, or flexible).
 /// Otherwise fills the decision. This is the only place that decision is made,
 /// so the physics-shape overlay and its other readers cannot disagree.
+bool skPhysicsShapeClassify(const SKPhysicsShapeInput& in, SKPhysicsShape& out);
 bool skPhysicsShapeClassify(LLVOVolume* volume, SKPhysicsShape& out);
 
 /// An estimate of the server's physics weight for the shape, fitted to
@@ -97,6 +122,8 @@ struct SKShapeGeometry
 /// when there is nothing to emit: nothing stands in for a fetch.
 /// sim: the simulator's triangles from skPhysicsShapeSimTriangles, used in
 /// place of the physics mesh when given; null keeps the uploaded shapes.
+bool skPhysicsShapeGeometry(const SKPhysicsShapeInput& in, const SKPhysicsShape& shape, SKShapeGeometry& out,
+                            const std::shared_ptr<const SKPhysicsHavokShape>& sim = nullptr);
 bool skPhysicsShapeGeometry(LLVOVolume* volume, const SKPhysicsShape& shape, SKShapeGeometry& out,
                             const std::shared_ptr<const SKPhysicsHavokShape>& sim = nullptr);
 
@@ -104,10 +131,12 @@ bool skPhysicsShapeGeometry(LLVOVolume* volume, const SKPhysicsShape& shape, SKS
 /// physics mesh and has no decomposition hulls, asking for them the first
 /// time. Null for any other volume, while they are on their way, and when the
 /// asset has none (too few triangles, absent section, failed fetch).
+std::shared_ptr<const SKPhysicsHavokShape> skPhysicsShapeSimTriangles(const SKPhysicsShapeInput& in);
 std::shared_ptr<const SKPhysicsHavokShape> skPhysicsShapeSimTriangles(LLVOVolume* volume);
 
 /// A mesh under 0.5 m on any axis never collides as its physics mesh: the sim
 /// uses its hulls, or its single hull without them, whatever the type says.
+bool skPhysicsMeshTooSmallForTriangles(const SKPhysicsShapeInput& in);
 bool skPhysicsMeshTooSmallForTriangles(LLVOVolume* volume);
 
 /// The rendered geometry: the volume's faces at whatever LOD is loaded, with
@@ -116,7 +145,9 @@ bool skRenderShapeGeometry(LLVOVolume* volume, SKShapeGeometry& out);
 
 /// The rendered geometry at the top LOD whatever is drawn, so the census never moves with the camera: a prim's
 /// top-detail faces, a sculpt's once shaped at that detail (the loaded one until then), a mesh's top LOD, asked for
-/// and false until it arrives. Provenance RENDER.
+/// and false until it arrives. Provenance RENDER. A cached part asks for no LOD: it takes the top one only once
+/// something else has loaded it.
+bool skCensusRenderGeometry(const SKPhysicsShapeInput& in, SKShapeGeometry& out);
 bool skCensusRenderGeometry(LLVOVolume* volume, SKShapeGeometry& out);
 
 #endif // SK_PHYSICSSHAPE_H

@@ -102,6 +102,8 @@ namespace
         check("terrain detail", s, [](Settings& x) { x.mTerrainPBRDetail = -3; }, Cost::Global);
         check("terrain hex tiling", s, [](Settings& x) { x.mTerrainHexTiling = !x.mTerrainHexTiling; }, Cost::Global);
         check("water hextile", s, [](Settings& x) { x.mWaterHextile = 2; }, Cost::Global);
+        check("buffer storage, which the skinning palette's block takes", s,
+              [](Settings& x) { x.mHasBufferStorage = !x.mHasBufferStorage; }, Cost::Global);
     }
 
     TEST_CASE("alshaderinputs: HDR changes the normal layout every program reads, and the post chain's permutations",
@@ -119,6 +121,7 @@ namespace
         check("glow noise", s, [](Settings& x) { x.mGlowNoise = !x.mGlowNoise; }, Cost::Local);
         check("bloom halation", s, [](Settings& x) { x.mBloomHalation = !x.mBloomHalation; }, Cost::Local);
         check("SMAA predication", s, [](Settings& x) { x.mSMAAPredication = !x.mSMAAPredication; }, Cost::Local);
+        check("sun bloom", s, [](Settings& x) { x.mSunBloom = !x.mSunBloom; }, Cost::Local);
         check("terrain normals", s, [](Settings& x) { x.mTerrainPBRNormals = !x.mTerrainPBRNormals; }, Cost::Local);
         check("dynamic LOD", s, [](Settings& x) { x.mDynamicLOD = !x.mDynamicLOD; }, Cost::Local);
         check("water waves", s, [](Settings& x) { x.mWaterWaves = !x.mWaterWaves; }, Cost::Local);
@@ -190,6 +193,7 @@ namespace
         CHECK(digest_after([](Settings& x) { x.mLightingMaxLevel = 2; }) != base);
         CHECK(digest_after([](Settings& x) { x.mReservedTextureIndices = 10; }) != base);
         CHECK(digest_after([](Settings& x) { x.mWaterHextile = 2; }) != base);
+        CHECK(digest_after([](Settings& x) { x.mHasBufferStorage = !x.mHasBufferStorage; }) != base);
         CHECK(digest_after([](Settings& x) { x.mSSR = !x.mSSR; }) != base);
         CHECK(digest_after([](Settings& x) { x.mAvatarCloth = !x.mAvatarCloth; }) == base);
         CHECK(digest_after([](Settings& x) { x.mWaterWaves = !x.mWaterWaves; }) == base);
