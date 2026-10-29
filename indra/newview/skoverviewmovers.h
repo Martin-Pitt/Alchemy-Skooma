@@ -28,6 +28,7 @@
 #include "llmatrix4a.h"
 #include "llpointer.h"
 #include "llrect.h"
+#include "llvolume.h"
 #include "lluuid.h"
 #include "skmappeople.h"
 
@@ -69,7 +70,8 @@ public:
 private:
     struct Mesh
     {
-        LLPointer<const LLVolume> mVolume;  ///< what the buffer was built from, null until a build works; a new LOD builds again
+        LLVolumeParams mParams;  ///< the shape the buffer was built from at its top LOD, whatever LOD the world draws it at
+        bool mBuilt = false;     ///< false until a build works, so the next update tries again
         LLPointer<LLVertexBuffer> mBuffer;
         U32 mCount = 0;
     };
