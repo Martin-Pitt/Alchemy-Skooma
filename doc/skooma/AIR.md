@@ -25,7 +25,9 @@ wind/weather debug views, not air cells, despite the names.
   cached and live share one signature function.
 - **Physics mesh as stored** (confirmed in-world 2026-10-25): the sim does not stretch `physics_mesh` or MOPP
   triangles to the object's box (the uploader fits it, `normalizeVolumeFaces`; 2011-era assets collide where
-  stored); only the Convex Hull `BoundingVerts` fit stays. Settle doubts with the asset's
+  stored). Nor are analyzed hulls (`physics_convex` HullList): an upload with an off-centre Min/Max collides
+  where the domain puts it (spike-mesh-pivot, 2026-10-29), so hulls decode to their stored domain; the
+  `BoundingVerts` case with an off-centre domain is untested. Settle doubts with the asset's
   `MeshDecompMassProps` centre of mass; corpus `%APPDATA%\AlchemyNext\logs\mesh-full`, decoder
   `V:\Scratch\door-domain\dump.py`.
 - **Havok parser is clean-room:** rules justified only by public sources (SL wiki, Hippolyzer,
