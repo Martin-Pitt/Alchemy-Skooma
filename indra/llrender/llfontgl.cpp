@@ -487,7 +487,7 @@ S32 LLFontGL::renderBytes(std::string_view utf8text, S32 begin_offset, F32 x, F3
     if ((ellipsis.mode == ELLIPSIS_MIDDLE || ellipsis.mode == ELLIPSIS_START) && max_pixels != S32_MAX)
     {
         const S32 rest = (S32)utf8text.length() - begin_offset;
-        const S32 slice_bytes = max_bytes == -1 ? rest : llmin(rest, max_bytes);
+        const S32 slice_bytes = max_bytes == -1 ? rest : llclamp(max_bytes, 0, rest);
         static thread_local std::string shortened;
         const SKTextEllipsis::Cut cut = SKTextEllipsis::shorten(*this, utf8text.substr((size_t)begin_offset, (size_t)slice_bytes),
                                                                 (F32)max_pixels, ellipsis.mode, shortened);
