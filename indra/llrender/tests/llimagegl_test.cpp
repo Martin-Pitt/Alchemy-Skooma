@@ -7,7 +7,10 @@
  * core texture lifecycle, the setSubImage bind-preservation
  * invariant, the deprecated-format resolution path, downscaling,
  * the published view of an upload in flight, the bind state
- * edits rely on, and the integer formats.
+ * edits rely on, the integer formats, uploads read from the
+ * staging ring, the levels a readback reads, readbacks collected
+ * once the GPU has written them, and the bytes each allocation is
+ * counted at.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Alchemy Viewer Source Code
@@ -31,6 +34,9 @@
 
 #include "linden_common.h"
 
+#include "../algpubuffer.h"
+#include "../alstagingring.h"
+#include "../alvramusage.h"
 #include "../llimagegl.h"
 #include "../llgl.h"
 #include "../llrender.h"
@@ -38,7 +44,9 @@
 
 #include "llheadlessgl_fixture.h"
 
+#include "altestfatal.h"
 #include "llimage.h"
+#include "lltimer.h"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -46,6 +54,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstring>
+#include <future>
 #include <string>
 #include <thread>
 #include <utility>
@@ -274,15 +283,301 @@ namespace
         CHECK(LLImageGL::dataFormatVRAMBits(GL_RGB32F) == 128);
         CHECK(LLImageGL::dataFormatBits(GL_DEPTH_COMPONENT24) == 24);
         CHECK(LLImageGL::dataFormatVRAMBits(GL_DEPTH_COMPONENT24) == 32);
+        UNSCOPED_INFO("the other sized depth formats");
+        CHECK(LLImageGL::dataFormatVRAMBits(GL_DEPTH_COMPONENT16) == 16);
+        CHECK(LLImageGL::dataFormatVRAMBits(GL_DEPTH_COMPONENT32) == 32);
 
-        // VRAM bytes path applies the same 4-byte alignment as the
-        // host bytes path and routes unpadded formats through the
-        // host table — so RGBA8 matches between the two.
+        // The VRAM bytes path routes unpadded formats through the host
+        // table, so RGBA8 matches between the two where the host
+        // layout's 4-byte rounding has nothing to round.
         UNSCOPED_INFO("matches the host bytes");
         CHECK((S32)LLImageGL::dataFormatVRAMBytes(GL_RGBA8, 16, 16) == 1024);
         // 16x16 RGB8: host 16*16*3 = 768; VRAM 16*16*4 = 1024.
         CHECK((S32)LLImageGL::dataFormatBytes(GL_RGB8, 16, 16) == 768);
         CHECK((S32)LLImageGL::dataFormatVRAMBytes(GL_RGB8, 16, 16) == 1024);
+    }
+
+    // The bytes of a chain of levels, each level's sides halved and held at 1: the chain glTexStorage* allocates. A
+    // side reaching 1 does not end it while the other is longer, it stops at the levels asked, short of 1x1 or not,
+    // VRAM rounds nothing, and a block-compressed level is the whole 4x4 blocks that cover it.
+    TEST_CASE_METHOD(llimagegl_data, "LLImageGL: dataFormatVRAMBytes counts exactly the levels asked", "[LLImageGL]")
+    {
+        UNSCOPED_INFO("square: 256x256 RGBA8 to 1x1, 9 levels");
+        // 65536 + 16384 + 4096 + 1024 + 256 + 64 + 16 + 4 + 1 texels
+        CHECK(LLImageGL::dataFormatVRAMBytes(GL_RGBA8, 256, 256, 9) == 87381 * 4);
+        UNSCOPED_INFO("non-square: 1024x16 RGBA8 to 1x1, 11 levels, the last six a texel high");
+        // 16384 + 4096 + 1024 + 256 + 64 + 32 + 16 + 8 + 4 + 2 + 1
+        CHECK(LLImageGL::dataFormatVRAMBytes(GL_RGBA8, 1024, 16, 11) == 21887 * 4);
+        UNSCOPED_INFO("partial: 512x512 RGBA8, 3 levels");
+        // 262144 + 65536 + 16384
+        CHECK(LLImageGL::dataFormatVRAMBytes(GL_RGBA8, 512, 512, 3) == 344064 * 4);
+        UNSCOPED_INFO("padded: 4x2 RGB8 at four bytes a texel, 3 levels");
+        // 8 + 2 + 1
+        CHECK(LLImageGL::dataFormatVRAMBytes(GL_RGB8, 4, 2, 3) == 11 * 4);
+        UNSCOPED_INFO("odd sides: 13x7 R8, 4 levels, nothing rounded");
+        // 13x7, 6x3, 3x1, 1x1: 91 + 18 + 3 + 1
+        CHECK(LLImageGL::dataFormatVRAMBytes(GL_R8, 13, 7, 4) == 113);
+        UNSCOPED_INFO("compressed: 256x256 DXT1 to 1x1, the last three levels a block each");
+        // 4096 + 1024 + 256 + 64 + 16 + 4 + 1 + 1 + 1 blocks of 8 bytes
+        CHECK(LLImageGL::dataFormatVRAMBytes(GL_COMPRESSED_RGBA_S3TC_DXT1_EXT, 256, 256, 9) == 5463 * 8);
+        UNSCOPED_INFO("compressed, sides not whole blocks: 12x20 DXT5 to 1x1, 5 levels");
+        // 12x20, 6x10, 3x5, 1x2, 1x1: 3x5 + 2x3 + 1x2 + 1 + 1 blocks of 16 bytes
+        CHECK(LLImageGL::dataFormatVRAMBytes(GL_COMPRESSED_RGBA_S3TC_DXT5_EXT, 12, 20, 5) == 25 * 16);
+        UNSCOPED_INFO("one level unless asked");
+        CHECK(LLImageGL::dataFormatVRAMBytes(GL_RGBA16F, 16, 8) == 16 * 8 * 8);
+    }
+
+    // One of gGLManager's settings, set for a block and put back as the block ends, however it ends.
+    template <typename T>
+    struct GLManagerSetting
+    {
+        GLManagerSetting(T& setting, T value) : mSetting(setting), mWas(setting) { mSetting = value; }
+        ~GLManagerSetting() { mSetting = mWas; }
+        GLManagerSetting(const GLManagerSetting&)            = delete;
+        GLManagerSetting& operator=(const GLManagerSetting&) = delete;
+
+        T&      mSetting;
+        const T mWas;
+    };
+
+    // allocateTexture2D records the levels it allocates: one, every level of a texture one side of which is far
+    // shorter than the other, and a chain stopped short of 1x1.
+    TEST_CASE_METHOD(llimagegl_data, "LLImageGL: allocateTexture2D records exactly the levels it allocates", "[LLImageGL]")
+    {
+        struct Case
+        {
+            const char* what;
+            S32         width;
+            S32         height;
+            S32         levels;
+            S64         bytes;
+        };
+        const Case cases[] = {
+            { "one level", 64, 32, 1, 64 * 32 * 4 },
+            { "1024x16 to 1x1", 1024, 16, 11, 21887 * 4 },
+            { "512x512, three levels", 512, 512, 3, 344064 * 4 },
+        };
+        for (const Case& c : cases)
+        {
+            CAPTURE(c.what);
+            U32 name = 0;
+            LLImageGL::generateTextures(1, &name);
+            gGL.getTextureSlot(0)->bindManual(ALTextureSlot::TT_TEXTURE, name);
+            const U64 before = LLImageGL::getTextureBytesAllocated();
+            LLImageGL::allocateTexture2D(GL_TEXTURE_2D, GL_RGBA8, c.width, c.height, GL_RGBA, GL_UNSIGNED_BYTE, nullptr,
+                                         c.levels);
+            CHECK((S64)(LLImageGL::getTextureBytesAllocated() - before) == c.bytes);
+            CHECK(ll_test::boundTextureLevels() == c.levels);
+            gGL.getTextureSlot(0)->unbind();
+            LLImageGL::deleteTextures(1, &name);
+        }
+        CHECK((U32)glGetError() == (U32)GL_NO_ERROR);
+    }
+
+    // A texture's bytes are what the global count records for it, and both are its storage's: every level of a mipped
+    // texture one side of which is far shorter than the other, a three-component texture at the four bytes a texel its
+    // storage pads to, and a texture scaled down at its new storage.
+    TEST_CASE_METHOD(llimagegl_data, "LLImageGL: a texture's bytes are its storage's and the global count's", "[LLImageGL]")
+    {
+        {
+            INFO("64x4 RGBA with mips: 7 levels");
+            LLPointer<LLImageGL> img = new LLImageGL(/*usemipmaps=*/true);
+            const U64 before = LLImageGL::getTextureBytesAllocated();
+            REQUIRE(img->createGLTexture(0, makeRaw(64, 4, 4, 0x80).get()));
+            // 256 + 64 + 16 + 8 + 4 + 2 + 1 texels
+            CHECK(img->getTextureMemory().value() == 351 * 4);
+            CHECK((S64)(LLImageGL::getTextureBytesAllocated() - before) == 351 * 4);
+        }
+        {
+            INFO("8x8 RGB, padded to four bytes a texel");
+            LLPointer<LLImageGL> img = new LLImageGL(/*usemipmaps=*/false);
+            const U64 before = LLImageGL::getTextureBytesAllocated();
+            REQUIRE(img->createGLTexture(0, makeRaw(8, 8, 3, 0x80).get()));
+            CHECK(img->getTextureMemory().value() == 8 * 8 * 4);
+            CHECK((S64)(LLImageGL::getTextureBytesAllocated() - before) == 8 * 8 * 4);
+        }
+        {
+            INFO("64x64 RGBA with mips, scaled down to 32x32");
+            LLPointer<LLImageGL> img = new LLImageGL(/*usemipmaps=*/true);
+            const U64 before = LLImageGL::getTextureBytesAllocated();
+            REQUIRE(img->createGLTexture(0, makeRaw(64, 64, 4, 0x80).get()));
+            // 4096 + 1024 + 256 + 64 + 16 + 4 + 1 texels
+            CHECK(img->getTextureMemory().value() == 5461 * 4);
+
+            // The PBO copy needs no framebuffer of its own. Its buffer, which each case starts with empty, grows to
+            // the level read back, and is counted with the GPU buffers.
+            const ALVRAMUsage usage = ALVRAMUsage::current();
+            REQUIRE(LLImageGL::getScratchBufferBytes() == 0);
+            const GLManagerSetting<U32> pbo(gGLManager.mDownScaleMethod, 1u);
+            REQUIRE(img->scaleDown(1));
+            // 1024 + 256 + 64 + 16 + 4 + 1
+            CHECK(img->getTextureMemory().value() == 1365 * 4);
+            CHECK((S64)(LLImageGL::getTextureBytesAllocated() - before) == 1365 * 4);
+            UNSCOPED_INFO("the readback buffer, a 32x32 level of 4 bytes a texel");
+            CHECK(LLImageGL::getScratchBufferBytes() == 32 * 32 * 4);
+            CHECK(ALVRAMUsage::current().mGPUBuffers - usage.mGPUBuffers == 32 * 32 * 4);
+        }
+        CHECK((U32)glGetError() == (U32)GL_NO_ERROR);
+    }
+
+    // A texture deleted or replaced leaves the count as it goes, not once the deferred delete frees its name frames
+    // later: a main-thread upload of another size swaps a new texture in, a publish puts a texture built elsewhere in
+    // place of the one on screen, and destroyGLTexture lets it go.
+    TEST_CASE_METHOD(llimagegl_data, "LLImageGL: a replaced or deleted texture leaves the count at once", "[LLImageGL]")
+    {
+        const U64 before = LLImageGL::getTextureBytesAllocated();
+        LLPointer<LLImageGL> img = new LLImageGL(/*usemipmaps=*/false);
+        REQUIRE(img->createGLTexture(0, makeRaw(16, 16, 4, 0x80).get()));
+        CHECK((S64)(LLImageGL::getTextureBytesAllocated() - before) == 16 * 16 * 4);
+
+        UNSCOPED_INFO("swapped for an upload of another size");
+        const U32 first = img->getTexName();
+        REQUIRE(img->createGLTexture(0, makeRaw(32, 8, 4, 0x80).get()));
+        REQUIRE(img->getTexName() != first);
+        CHECK((S64)(LLImageGL::getTextureBytesAllocated() - before) == 32 * 8 * 4);
+
+        UNSCOPED_INFO("replaced by a texture published in its place");
+        U32 published = 0;
+        LLImageGL::generateTextures(1, &published);
+        gGL.getTextureSlot(0)->bindManual(ALTextureSlot::TT_TEXTURE, published);
+        LLImageGL::allocateTexture2D(GL_TEXTURE_2D, GL_RGBA8, 8, 8, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        gGL.getTextureSlot(0)->unbind();
+        img->beginUpload();
+        img->syncTexName(published);
+        CHECK((S64)(LLImageGL::getTextureBytesAllocated() - before) == 8 * 8 * 4);
+
+        UNSCOPED_INFO("destroyed");
+        img->destroyGLTexture();
+        CHECK(LLImageGL::getTextureBytesAllocated() == before);
+        CHECK((U32)glGetError() == (U32)GL_NO_ERROR);
+    }
+
+#ifdef SHOW_ASSERT
+    // A deleted texture's name waits in the deferred-delete ring, counted for nothing, until GL frees it: storage
+    // recorded on it before then is an owner using a texture it let go of, and asserts.
+    TEST_CASE_METHOD(llimagegl_data, "LLImageGL: storage recorded on a deleted name asserts until the ring frees it", "[LLImageGL]")
+    {
+        U32 name = 0;
+        LLImageGL::generateTextures(1, &name);
+        gGL.getTextureSlot(0)->bindManual(ALTextureSlot::TT_TEXTURE, name);
+        LLImageGL::allocateTexture2D(GL_TEXTURE_2D, GL_RGBA8, 4, 4, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        const U64 allocated = LLImageGL::getTextureBytesAllocated();
+        LLImageGL::deleteTextures(1, &name);
+        UNSCOPED_INFO("out of the count as it is deleted");
+        CHECK(allocated - LLImageGL::getTextureBytesAllocated() == 4 * 4 * 4);
+
+        // Still bound on slot 0. GL refuses the second storage of an immutable texture; the accounting asserts.
+        const auto allocate_again = [] {
+            LLImageGL::allocateTexture2D(GL_TEXTURE_2D, GL_RGBA8, 4, 4, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        };
+        UNSCOPED_INFO("storage recorded on the deleted name");
+        CHECK_THROWS_AS(allocate_again(), ll_test::FatalError);
+        gGL.getTextureSlot(0)->unbind();
+        for (U32 i = 0; i < 8 && glGetError() != GL_NO_ERROR; ++i)
+        {
+        }
+    }
+#endif
+
+    // Each texture's storage is counted in one class: an image's in OTHER_TEXTURE unless it is told otherwise, before its
+    // storage is made or after, when the storage moves with it, and kept by every upload after; allocateTexture2D's in
+    // the class it is given; and each leaves its class as it is deleted. A class told while an upload is in flight
+    // reaches the texture the upload publishes.
+    TEST_CASE_METHOD(llimagegl_data, "LLImageGL: each texture's storage is counted in its class", "[LLImageGL]")
+    {
+        using namespace LLImageGLMemory;
+        U64 before[NUM_CLASSES];
+        for (U32 cls = 0; cls < NUM_CLASSES; ++cls)
+        {
+            before[cls] = LLImageGL::getTextureBytesAllocated((EClass)cls);
+        }
+        auto delta = [&before](EClass cls) { return (S64)(LLImageGL::getTextureBytesAllocated(cls) - before[cls]); };
+
+        LLPointer<LLImageGL> other = new LLImageGL(/*usemipmaps=*/false);
+        REQUIRE(other->createGLTexture(0, makeRaw(8, 8, 4, 0x80).get()));
+        UNSCOPED_INFO("an image is other unless told");
+        CHECK(delta(OTHER_TEXTURE) == 8 * 8 * 4);
+        CHECK(delta(STREAMED_TEXTURE) == 0);
+        CHECK(delta(RENDER_TARGET) == 0);
+
+        LLPointer<LLImageGL> streamed = new LLImageGL(/*usemipmaps=*/false);
+        streamed->setVRAMClass(STREAMED_TEXTURE);
+        REQUIRE(streamed->createGLTexture(0, makeRaw(16, 8, 4, 0x80).get()));
+        UNSCOPED_INFO("told before its storage is made");
+        CHECK(delta(STREAMED_TEXTURE) == 16 * 8 * 4);
+        CHECK(delta(OTHER_TEXTURE) == 8 * 8 * 4);
+
+        other->setVRAMClass(STREAMED_TEXTURE);
+        UNSCOPED_INFO("told after: the storage moves");
+        CHECK(delta(STREAMED_TEXTURE) == 16 * 8 * 4 + 8 * 8 * 4);
+        CHECK(delta(OTHER_TEXTURE) == 0);
+
+        REQUIRE(streamed->createGLTexture(0, makeRaw(32, 8, 4, 0x80).get()));
+        UNSCOPED_INFO("a new upload of another size keeps the class");
+        CHECK(delta(STREAMED_TEXTURE) == 32 * 8 * 4 + 8 * 8 * 4);
+        CHECK(delta(OTHER_TEXTURE) == 0);
+
+        U32 name = 0;
+        LLImageGL::generateTextures(1, &name);
+        gGL.getTextureSlot(0)->bindManual(ALTextureSlot::TT_TEXTURE, name);
+        LLImageGL::allocateTexture2D(GL_TEXTURE_2D, GL_RGBA16F, 4, 4, GL_RGBA, GL_FLOAT, nullptr, 1, RENDER_TARGET);
+        gGL.getTextureSlot(0)->unbind();
+        UNSCOPED_INFO("allocateTexture2D in the class it is given");
+        CHECK(delta(RENDER_TARGET) == 4 * 4 * 8);
+
+        LLImageGL::deleteTextures(1, &name);
+        streamed->destroyGLTexture();
+        other->destroyGLTexture();
+        UNSCOPED_INFO("each leaves its class");
+        CHECK(delta(RENDER_TARGET) == 0);
+        CHECK(delta(STREAMED_TEXTURE) == 0);
+        CHECK(delta(OTHER_TEXTURE) == 0);
+
+        // An upload in flight that allocated under the class before: told while it is in flight, its texture takes
+        // the class as it publishes, and the texture on screen at once.
+        REQUIRE(other->createGLTexture(0, makeRaw(8, 8, 4, 0x80).get()));
+        other->beginUpload();
+        U32 built = 0;
+        LLImageGL::generateTextures(1, &built);
+        gGL.getTextureSlot(0)->bindManual(ALTextureSlot::TT_TEXTURE, built);
+        LLImageGL::allocateTexture2D(GL_TEXTURE_2D, GL_RGBA8, 16, 16, GL_RGBA, GL_UNSIGNED_BYTE, nullptr, 1,
+                                     other->getVRAMClass());
+        gGL.getTextureSlot(0)->unbind();
+        other->setVRAMClass(OTHER_TEXTURE);
+        UNSCOPED_INFO("told while in flight: the texture on screen moves");
+        CHECK(delta(OTHER_TEXTURE) == 8 * 8 * 4);
+        CHECK(delta(STREAMED_TEXTURE) == 16 * 16 * 4);
+        other->syncTexName(built);
+        UNSCOPED_INFO("the texture it published takes the class");
+        CHECK(delta(OTHER_TEXTURE) == 16 * 16 * 4);
+        CHECK(delta(STREAMED_TEXTURE) == 0);
+        other->destroyGLTexture();
+        CHECK(delta(RENDER_TARGET) == 0);
+        CHECK(delta(STREAMED_TEXTURE) == 0);
+        CHECK(delta(OTHER_TEXTURE) == 0);
+        CHECK((U32)glGetError() == (U32)GL_NO_ERROR);
+    }
+
+    // A block-compressed texture keeps its sized compressed format as its primary format, and that is its storage: it
+    // is counted at its blocks, whatever its internal format names.
+    TEST_CASE_METHOD(llimagegl_data, "LLImageGL: a block-compressed texture is counted at its blocks", "[LLImageGL]")
+    {
+        if (!gGLManager.mGLExtensions.contains("GL_EXT_texture_compression_s3tc"))
+        {
+            SKIP("the context has no GL_EXT_texture_compression_s3tc");
+        }
+
+        constexpr U16 W = 16, H = 16;
+        // 4x4 blocks of 8 bytes
+        constexpr S64 BYTES = 16 * 8;
+        const std::vector<U8> blocks((size_t)BYTES, 0);
+        LLPointer<LLImageGL> img = new LLImageGL(W, H, 4, /*usemipmaps=*/false);
+        img->setExplicitFormat(GL_COMPRESSED_RGBA, GL_COMPRESSED_RGBA_S3TC_DXT1_EXT);
+        const U64 before = LLImageGL::getTextureBytesAllocated();
+        REQUIRE(img->createGLTexture(0, blocks.data()));
+        CHECK(img->getTextureMemory().value() == BYTES);
+        CHECK((S64)(LLImageGL::getTextureBytesAllocated() - before) == BYTES);
+        CHECK((U32)glGetError() == (U32)GL_NO_ERROR);
     }
 
     // When no explicit format is set, createGLTexture derives one from
@@ -388,6 +683,109 @@ namespace
                       0);
     }
 
+    // readBackRaw knows the levels a texture holds without asking GL, reads only those, and
+    // counts each read it makes, and the time it took, for the frame's plot; the frame's
+    // stats start both again.
+    TEST_CASE_METHOD(llimagegl_data, "LLImageGL: readBackRaw reads only the levels a texture holds, and counts each read", "[LLImageGL]")
+    {
+        constexpr U16 W = 8, H = 8;
+        LLPointer<LLImageRaw> src = makeRaw(W, H, 4, /*fill=*/0x40);
+        LLPointer<LLImageGL> flat = new LLImageGL(/*usemipmaps=*/false);
+        REQUIRE(flat->createGLTexture(0, src.get()));
+        LLPointer<LLImageGL> mipped = new LLImageGL(/*usemipmaps=*/true);
+        REQUIRE(mipped->createGLTexture(0, src.get()));
+
+        LLImageGL::sReadbacks = 0;
+        LLImageGL::sReadbackSeconds = 0.0;
+        LLPointer<LLImageRaw> dst = new LLImageRaw();
+        CHECK(flat->readBackRaw(0, dst.get(), /*compressed_ok=*/false));
+        CHECK((S32)dst->getWidth() == (S32)W);
+        UNSCOPED_INFO("a texture without mips holds no level 1");
+        CHECK_FALSE(flat->readBackRaw(1, dst.get(), /*compressed_ok=*/false));
+
+        CHECK(mipped->readBackRaw(1, dst.get(), /*compressed_ok=*/false));
+        CHECK((S32)dst->getWidth() == (S32)W / 2);
+        CHECK((S32)dst->getHeight() == (S32)H / 2);
+        CHECK(mipped->readBackRaw(3, dst.get(), /*compressed_ok=*/false));
+        CHECK((S32)dst->getWidth() == 1);
+        CHECK((S32)dst->getHeight() == 1);
+        UNSCOPED_INFO("its smallest level is the colour it was given");
+        CHECK(dst->getData()[0] == 0x40);
+
+        CHECK(LLImageGL::sReadbacks == 3);
+        CHECK(LLImageGL::sReadbackSeconds >= 0.0);
+        LLImageGL::updateStats(LLImageGL::sLastFrameTime);
+        CHECK(LLImageGL::sReadbacks == 0);
+        CHECK(LLImageGL::sReadbackSeconds == 0.0);
+        CHECK(glGetError() == GLenum(GL_NO_ERROR));
+    }
+
+    // A readback requested is the GPU's until a later frame's end has shown its frame finished; collected then, it
+    // holds the level readBackRaw would have read, and nothing waited for it. A texture destroyed gives its read up.
+    TEST_CASE_METHOD(llimagegl_data, "LLImageGL: a readback requested is collected once the GPU has written it", "[LLImageGL]")
+    {
+        constexpr U16 W = 8, H = 8;
+        LLPointer<LLImageRaw> src = new LLImageRaw(W, H, 4);
+        U8* sd = src->getData();
+        for (size_t i = 0; i < (size_t)W * H * 4; ++i)
+            sd[i] = (U8)(i * 3 + 1);
+        LLPointer<LLImageGL> img = new LLImageGL(/*usemipmaps=*/false);
+        REQUIRE(img->createGLTexture(0, src.get()));
+
+        LLImageGL::sReadbacks = 0;
+        REQUIRE(img->requestReadBack());
+        CHECK(img->isReadBackRequested());
+        LLPointer<LLImageRaw> dst = new LLImageRaw();
+        S32 discard = -1;
+        UNSCOPED_INFO("the open frame's read is the GPU's");
+        CHECK(img->collectReadBack(dst.get(), discard) == LLImageGL::READBACK_PENDING);
+
+        gGL.endFrame();
+        glFinish();
+        gGL.endFrame();
+        REQUIRE(img->collectReadBack(dst.get(), discard) == LLImageGL::READBACK_READY);
+        CHECK(discard == 0);
+        REQUIRE((S32)dst->getWidth() == (S32)W);
+        REQUIRE((S32)dst->getHeight() == (S32)H);
+        REQUIRE((S32)dst->getComponents() == 4);
+        CHECK(std::memcmp(dst->getData(), sd, (size_t)W * H * 4) == 0);
+        CHECK_FALSE(img->isReadBackRequested());
+        CHECK(img->collectReadBack(dst.get(), discard) == LLImageGL::READBACK_NONE);
+        UNSCOPED_INFO("no read waited");
+        CHECK(LLImageGL::sReadbacks == 0);
+
+        REQUIRE(img->requestReadBack());
+        const U32 reads = gGL.textureReadback().getReads();
+        img->destroyGLTexture();
+        CHECK_FALSE(img->isReadBackRequested());
+        CHECK(gGL.textureReadback().getReads() == reads - 1);
+        UNSCOPED_INFO("no texture, nothing to read");
+        CHECK_FALSE(img->requestReadBack());
+        CHECK(glGetError() == GLenum(GL_NO_ERROR));
+    }
+
+    // As large as an image the viewer takes: a sculpt map or a callback's texture 4096 wide, as OpenSim serves them, is
+    // read back like any other, where it once halted the viewer as bogus past 2048.
+    TEST_CASE_METHOD(llimagegl_data, "LLImageGL: a level 4096 wide reads back", "[LLImageGL]")
+    {
+        constexpr U16 W = 4096, H = 4;
+        LLPointer<LLImageRaw> src = makeRaw(W, H, 4, 0x5a);
+        LLPointer<LLImageGL> img = new LLImageGL(/*usemipmaps=*/false);
+        REQUIRE(img->createGLTexture(0, src.get()));
+
+        REQUIRE(img->requestReadBack());
+        gGL.endFrame();
+        glFinish();
+        gGL.endFrame();
+        LLPointer<LLImageRaw> dst = new LLImageRaw();
+        S32 discard = -1;
+        REQUIRE(img->collectReadBack(dst.get(), discard) == LLImageGL::READBACK_READY);
+        REQUIRE((S32)dst->getWidth() == (S32)W);
+        REQUIRE((S32)dst->getHeight() == (S32)H);
+        CHECK(std::memcmp(dst->getData(), src->getData(), (size_t)W * H * 4) == 0);
+        CHECK(glGetError() == GLenum(GL_NO_ERROR));
+    }
+
     // A packed pixel type is one value a pixel, whatever the format's component
     // count. GStreamer hands its frames over as GL_BGRA /
     // GL_UNSIGNED_INT_8_8_8_8_REV, and the upload that slices by scanline -- on the
@@ -434,6 +832,152 @@ namespace
         }
         UNSCOPED_INFO("the update lands where it was asked and nowhere else");
         CHECK(match);
+    }
+
+    // On the main thread an upload a segment of the staging ring holds is read from the ring, a rectangle narrower than
+    // its source among them, its rows packed tight there, and one larger than a segment is sent from client memory.
+    // Either way the texture holds what it was given, and no unpack state is left behind.
+    TEST_CASE_METHOD(llimagegl_data, "LLImageGL: main-thread uploads are read from the staging ring where it has room", "[LLImageGL]")
+    {
+        if (!ALGPUBuffer::canMapPersistently())
+        {
+            SKIP("the context maps no buffer persistently");
+        }
+        ALStagingRing& ring = gGL.stagingRing();
+        // The ring packs rows tight, which is how the context reads them once LLRender::init has set the alignment.
+        REQUIRE(gGL.unpacksTightRows());
+        GLint alignment = 0;
+        glGetIntegerv(GL_UNPACK_ALIGNMENT, &alignment);
+        REQUIRE(alignment == 1);
+        const auto unpackState = []()
+        {
+            GLint row_length = -1;
+            GLint buffer = -1;
+            glGetIntegerv(GL_UNPACK_ROW_LENGTH, &row_length);
+            glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING, &buffer);
+            return std::make_pair(row_length, buffer);
+        };
+
+        // Three bytes a pixel and an odd width: no row starts on a multiple of four.
+        constexpr U16 W = 13, H = 9;
+        LLPointer<LLImageRaw> src = new LLImageRaw(W, H, 3);
+        U8* sd = src->getData();
+        for (size_t i = 0; i < (size_t)W * H * 3; ++i)
+            sd[i] = (U8)(i * 5 + 1);
+
+        LLPointer<LLImageGL> img = new LLImageGL(/*usemipmaps=*/false);
+        U64 taken = ring.getTaken();
+        REQUIRE(img->createGLTexture(0, src.get()));
+        CHECK(ring.getTaken() > taken);
+        CHECK(unpackState() == std::make_pair(0, 0));
+
+        std::vector<U8> got((size_t)W * H * 3);
+        readTexture(img, GL_RGB, GL_UNSIGNED_BYTE, got.data());
+        UNSCOPED_INFO("the whole level");
+        CHECK(std::memcmp(got.data(), sd, got.size()) == 0);
+
+        LLPointer<LLImageRaw> patch = new LLImageRaw(W, H, 3);
+        U8* pd = patch->getData();
+        for (size_t i = 0; i < (size_t)W * H * 3; ++i)
+            pd[i] = (U8)(0xFF - i * 3);
+        taken = ring.getTaken();
+        CHECK(img->setSubImage(patch.get(), /*x_pos=*/2, /*y_pos=*/3, /*width=*/7, /*height=*/4,
+                               /*force_fast_update=*/true));
+        CHECK(ring.getTaken() == taken + 1);
+        CHECK(unpackState() == std::make_pair(0, 0));
+
+        readTexture(img, GL_RGB, GL_UNSIGNED_BYTE, got.data());
+        bool match = true;
+        for (U32 y = 0; y < H && match; ++y)
+        {
+            for (U32 x = 0; x < W && match; ++x)
+            {
+                const bool in_patch = x >= 2 && x < 9 && y >= 3 && y < 7;
+                const size_t at = ((size_t)y * W + x) * 3;
+                match = std::memcmp(got.data() + at, (in_patch ? pd : sd) + at, 3) == 0;
+            }
+        }
+        UNSCOPED_INFO("the rectangle lands where it was asked and nowhere else");
+        CHECK(match);
+
+        // A level larger than a segment: refused by the ring, sent as before.
+        U16 side = 16;
+        while ((size_t)side * side * 4 <= ring.size() / ALStagingRing::SEGMENTS)
+            side *= 2;
+        LLPointer<LLImageRaw> large = new LLImageRaw(side, side, 4);
+        U8* ld = large->getData();
+        for (size_t i = 0; i < (size_t)side * side * 4; ++i)
+            ld[i] = (U8)(i * 11 + 7);
+        LLPointer<LLImageGL> big = new LLImageGL(/*usemipmaps=*/false);
+        const U64 too_large = ring.getTooLarge();
+        taken = ring.getTaken();
+        REQUIRE(big->createGLTexture(0, large.get()));
+        CHECK(ring.getTooLarge() > too_large);
+        CHECK(ring.getTaken() == taken);
+        CHECK(unpackState() == std::make_pair(0, 0));
+        std::vector<U8> big_got((size_t)side * side * 4);
+        readTexture(big, GL_RGBA, GL_UNSIGNED_BYTE, big_got.data());
+        UNSCOPED_INFO("the level sent from client memory");
+        CHECK(std::memcmp(big_got.data(), ld, big_got.size()) == 0);
+        CHECK(glGetError() == GLenum(GL_NO_ERROR));
+    }
+
+    // Before LLRender::init has set the unpack alignment to 1 -- LLViewerWindow::initFonts rasterizes its ASCII glyphs
+    // then -- the context reads rows at GL's default of 4, and the ring, which packs a rectangle's rows tight, stages
+    // nothing. A glyph two bytes a pixel and an odd number wide goes from client memory, strided by its atlas's rows,
+    // which keep to four bytes; from the ring its rows, tight at 14 bytes, would each be read two bytes askew.
+    TEST_CASE_METHOD(llimagegl_data, "LLImageGL: an upload before LLRender::init reads client memory and not the ring", "[LLImageGL]")
+    {
+        if (!ALGPUBuffer::canMapPersistently())
+        {
+            SKIP("the context maps no buffer persistently");
+        }
+        // The atlas, 16 wide at two bytes a pixel: rows of 32 bytes, which keep to any alignment.
+        constexpr U16 W = 16, H = 8;
+        LLPointer<LLImageRaw> atlas = new LLImageRaw(W, H, 2);
+        U8* ad = atlas->getData();
+        for (size_t i = 0; i < (size_t)W * H * 2; ++i)
+            ad[i] = (U8)(i * 3 + 1);
+        LLPointer<LLImageGL> img = new LLImageGL(/*usemipmaps=*/false);
+        REQUIRE(img->createGLTexture(0, atlas.get()));
+
+        // The context as it is before init: gGL takes it to read no tight rows, and GL reads at its default alignment.
+        gGL.shutdown();
+        struct InitAgain
+        {
+            ~InitAgain() { gGL.init(true); }
+        } init_again;
+        REQUIRE_FALSE(gGL.unpacksTightRows());
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+
+        LLPointer<LLImageRaw> glyph = new LLImageRaw(W, H, 2);
+        U8* gd = glyph->getData();
+        for (size_t i = 0; i < (size_t)W * H * 2; ++i)
+            gd[i] = (U8)(0xFF - i * 5);
+        ALStagingRing& ring = gGL.stagingRing();
+        const U64 taken = ring.getTaken();
+        // Seven wide: 14 bytes a row.
+        CHECK(img->setSubImage(glyph.get(), /*x_pos=*/3, /*y_pos=*/2, /*width=*/7, /*height=*/4,
+                               /*force_fast_update=*/true));
+        UNSCOPED_INFO("nothing staged before init");
+        CHECK(ring.getTaken() == taken);
+
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        std::vector<U8> got((size_t)W * H * 2);
+        readTexture(img, GL_RG, GL_UNSIGNED_BYTE, got.data());
+        bool match = true;
+        for (U32 y = 0; y < H && match; ++y)
+        {
+            for (U32 x = 0; x < W && match; ++x)
+            {
+                const bool in_glyph = x >= 3 && x < 10 && y >= 2 && y < 6;
+                const size_t at = ((size_t)y * W + x) * 2;
+                match = std::memcmp(got.data() + at, (in_glyph ? gd : ad) + at, 2) == 0;
+            }
+        }
+        UNSCOPED_INFO("the glyph lands where it was asked, its rows unskewed");
+        CHECK(match);
+        CHECK(glGetError() == GLenum(GL_NO_ERROR));
     }
 
     // scaleDown builds a new texture object, and texture-object state does not
@@ -973,7 +1517,7 @@ namespace
         while (!worker_done && std::chrono::steady_clock::now() < deadline)
         {
             mainloop.runPending();
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            ms_sleep(1);
         }
         // The handover was posted before worker_done was raised.
         mainloop.runPending();
@@ -998,7 +1542,7 @@ namespace
 
         while (LLImageGL::publishUploads() > 0 && std::chrono::steady_clock::now() < deadline)
         {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            ms_sleep(1);
         }
 
         LLImageGLThread::deleteSingleton();
@@ -1044,7 +1588,7 @@ namespace
         while (!worker_done && std::chrono::steady_clock::now() < deadline)
         {
             mainloop.runPending();
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            ms_sleep(1);
         }
         mainloop.runPending();
         REQUIRE(worker_done.load());
@@ -1057,7 +1601,7 @@ namespace
         while (std::chrono::steady_clock::now() < idle_until)
         {
             LLImageGL::updateClass();
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            ms_sleep(1);
         }
         UNSCOPED_INFO("idle polls no fence, so nothing is published without a frame's end");
         CHECK_FALSE(completed);
@@ -1066,11 +1610,137 @@ namespace
         {
             gGL.endFrame();
             LLImageGL::updateClass();
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            ms_sleep(1);
         }
         LLImageGLThread::deleteSingleton();
 
         UNSCOPED_INFO("published by idle once a frame's end saw its fence signalled");
+        CHECK(completed);
+        UNSCOPED_INFO("at the new size");
+        CHECK(img->getWidth() == 32);
+    }
+
+    // An upload is published at the first frame's end after the LLImageGL thread has seen its fence signalled, which it
+    // does on its own context behind the work queued after the upload: not a frame or more later.
+    TEST_CASE_METHOD(llimagegl_data, "LLImageGL: an upload publishes at the first frame's end after its thread has seen it finished", "[LLImageGL]")
+    {
+        LL::WorkQueue mainloop("mainloop");
+        std::atomic<bool> worker_done{ false };
+        LLImageGLThread::createInstance(gl->window());
+        struct ThreadEnd
+        {
+            ~ThreadEnd() { LLImageGLThread::deleteSingleton(); }
+        } thread_end;
+
+        LLPointer<LLImageGL> img = new LLImageGL(/*usemipmaps=*/false);
+        REQUIRE(img->createGLTexture(0, makeRaw(16, 16, 4, 0x11).get()));
+        LLPointer<LLImageRaw> raw = makeRaw(32, 32, 4, 0x55);
+
+        img->beginUpload();
+        LLImageGLThread::instance().post(
+            [img, raw, &worker_done]()
+            {
+                img->createGLTexture(0, raw.get());
+                worker_done = true;
+            });
+
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (!worker_done && std::chrono::steady_clock::now() < deadline)
+        {
+            mainloop.runPending();
+            ms_sleep(1);
+        }
+        mainloop.runPending();
+        REQUIRE(worker_done.load());
+
+        bool completed = false;
+        img->afterPublish([&]() { completed = true; });
+
+        // Long enough for the GPU to have finished the upload and the thread, with nothing else queued, to have seen it;
+        // then one frame's end.
+        ms_sleep(100);
+        gGL.endFrame();
+        LLImageGL::updateClass();
+        UNSCOPED_INFO("published at the first frame's end");
+        CHECK(completed);
+        UNSCOPED_INFO("at the new size");
+        CHECK(img->getWidth() == 32);
+    }
+
+    // The main thread polls an upload's fence only once the LLImageGL thread has seen it signalled: a poll of a fence not
+    // yet signalled waits for a threaded driver's own thread to catch up. Held after it hands the upload over, the thread
+    // cannot look at the fence, and frames' ends publish nothing however long the GPU has had; let go, it sees the fence,
+    // and the next frame's end publishes the upload.
+    TEST_CASE_METHOD(llimagegl_data, "LLImageGL: an upload's fence is polled only once its thread has seen it signalled", "[LLImageGL]")
+    {
+        LL::WorkQueue mainloop("mainloop");
+        std::atomic<bool> worker_done{ false };
+        LLImageGLThread::createInstance(gl->window());
+        struct ThreadEnd
+        {
+            ~ThreadEnd() { LLImageGLThread::deleteSingleton(); }
+        } thread_end;
+        // Let go however the case ends, before the thread is joined.
+        std::promise<void> release;
+        std::shared_future<void> released = release.get_future().share();
+        struct Hold
+        {
+            std::promise<void>& mRelease;
+            bool mReleased = false;
+            void letGo()
+            {
+                if (!mReleased)
+                {
+                    mReleased = true;
+                    mRelease.set_value();
+                }
+            }
+            ~Hold() { letGo(); }
+        } hold{ release };
+
+        LLPointer<LLImageGL> img = new LLImageGL(/*usemipmaps=*/false);
+        REQUIRE(img->createGLTexture(0, makeRaw(16, 16, 4, 0x11).get()));
+        LLPointer<LLImageRaw> raw = makeRaw(32, 32, 4, 0x55);
+
+        img->beginUpload();
+        LLImageGLThread::instance().post(
+            [img, raw, &worker_done, released]()
+            {
+                img->createGLTexture(0, raw.get());
+                worker_done = true;
+                // The thread's look at the upload's fence is queued behind this, until the case lets it go.
+                released.wait();
+            });
+
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (!worker_done && std::chrono::steady_clock::now() < deadline)
+        {
+            mainloop.runPending();
+            ms_sleep(1);
+        }
+        mainloop.runPending();
+        REQUIRE(worker_done.load());
+
+        bool completed = false;
+        img->afterPublish([&]() { completed = true; });
+
+        ms_sleep(100);
+        for (int frame = 0; frame < 3; ++frame)
+        {
+            gGL.endFrame();
+            LLImageGL::updateClass();
+        }
+        UNSCOPED_INFO("not polled, so not published, while its thread has not seen it, however long the GPU has had");
+        CHECK_FALSE(completed);
+
+        hold.letGo();
+        while (!completed && std::chrono::steady_clock::now() < deadline)
+        {
+            gGL.endFrame();
+            LLImageGL::updateClass();
+            ms_sleep(1);
+        }
+        UNSCOPED_INFO("published once its thread has seen it");
         CHECK(completed);
         UNSCOPED_INFO("at the new size");
         CHECK(img->getWidth() == 32);
@@ -1169,7 +1839,9 @@ namespace
         REQUIRE(r32ui->createGLTexture(0, reinterpret_cast<const U8*>(uints.data())));
         UNSCOPED_INFO("R32UI accounted at four bytes a texel");
         CHECK((S64)(LLImageGL::getTextureBytesAllocated() - before) == (S64)N * 4);
-        CHECK((S64)r32ui->getMipBytes(0) == (S64)N * 4);
+        CHECK((S64)r32ui->getTextureMemory().value() == (S64)N * 4);
+        UNSCOPED_INFO("its level's bytes by its pixel format and type: four a texel, which GL_RED_INTEGER alone cannot say");
+        CHECK(r32ui->getBytes(0) == (S64)N * 4);
         UNSCOPED_INFO("an integer texture asked for mips takes none");
         CHECK_FALSE(r32ui->getUseMipMaps());
 

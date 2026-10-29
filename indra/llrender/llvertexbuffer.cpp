@@ -35,6 +35,7 @@
 #include "llshadermgr.h"
 #include "llglslshader.h"
 #include "llmemory.h"
+#include "llthread.h"
 
 #include <atomic>
 #include <boost/unordered_map.hpp>
@@ -76,6 +77,8 @@ struct CompareMappedRegion
 
 #if ENABLE_GL_WORK_QUEUE
 
+#include "llmutex.h"
+
 #define THREAD_COUNT 1
 
 //============================================================================
@@ -110,8 +113,8 @@ public:
     void syncGL();
 
 private:
-    std::mutex mMutex;
-    std::condition_variable mCondition;
+    // Guards mQueue and mClosed, and the workers sleep on it.
+    LLCondition mCondition;
     std::queue<Work> mQueue;
     bool mClosed = false;
 };
@@ -125,7 +128,7 @@ void GLWorkQueue::syncGL()
 {
     /*if (mSync)
     {
-        std::lock_guard<std::mutex> lock(mMutex);
+        LLMutexLock lock(&mCondition);
         glWaitSync(mSync, 0, GL_TIMEOUT_IGNORED);
         mSync = 0;
     }*/
@@ -134,7 +137,7 @@ void GLWorkQueue::syncGL()
 size_t GLWorkQueue::size()
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_THREAD;
-    std::lock_guard<std::mutex> lock(mMutex);
+    LLMutexLock lock(&mCondition);
     return mQueue.size();
 }
 
@@ -147,42 +150,35 @@ void GLWorkQueue::post(const GLWorkQueue::Work& value)
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_THREAD;
     {
-        std::lock_guard<std::mutex> lock(mMutex);
+        LLMutexLock lock(&mCondition);
         mQueue.push(std::move(value));
     }
 
-    mCondition.notify_one();
+    mCondition.signal();
 }
 
 // Get the next element from the queue
 GLWorkQueue::Work GLWorkQueue::pop()
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_THREAD;
-    // Lock the mutex
-    {
-        std::unique_lock<std::mutex> lock(mMutex);
-
-        // Wait for a new element to become available or for the queue to close
-        {
-            mCondition.wait(lock, [=] { return !mQueue.empty() || mClosed; });
-        }
-    }
-
     Work ret;
 
-    {
-        std::lock_guard<std::mutex> lock(mMutex);
+    // Wait for a new element to become available or for the queue to close,
+    // and take the next element under the same hold
+    mCondition.wait([&]
+        {
+            if (mQueue.size() > 0)
+            {
+                ret = mQueue.front();
+                mQueue.pop();
+                return true;
+            }
+            return mClosed;
+        });
 
-        // Get the next element from the queue
-        if (mQueue.size() > 0)
-        {
-            ret = mQueue.front();
-            mQueue.pop();
-        }
-        else
-        {
-            ret = []() {};
-        }
+    if (!ret)
+    {
+        ret = []() {};
     }
 
     return ret;
@@ -208,17 +204,17 @@ void GLWorkQueue::close()
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_THREAD;
     {
-        std::lock_guard<std::mutex> lock(mMutex);
+        LLMutexLock lock(&mCondition);
         mClosed = true;
     }
 
-    mCondition.notify_all();
+    mCondition.broadcast();
 }
 
 bool GLWorkQueue::isClosed()
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_THREAD;
-    std::lock_guard<std::mutex> lock(mMutex);
+    LLMutexLock lock(&mCondition);
     return mClosed;
 }
 
@@ -298,7 +294,9 @@ static GLuint gen_buffer()
         }
         sIndex = pool_size;
 #if !LL_DARWIN
-        if (!gGLManager.mIsAMD)
+        // AMD's own drivers are given the names one at a time. Mesa's radeonsi, which mIsAMD takes in on Linux too, is
+        // not: under glthread each call is one the application waits on, so the pool would refill in pool_size waits.
+        if (!gGLManager.mIsAMD || gGLManager.mIsMesa)
         {
             glGenBuffers(pool_size, sNamePool.get());
         }
@@ -375,6 +373,9 @@ class LLVBOPool
     virtual void allocateVBO(GLenum type, U32 size, GLuint& name, U8*& data) = 0;
     virtual void freeVBO(GLenum type, U32 size, GLuint name, U8* data) = 0;
     virtual U64 getVramBytesUsed() = 0;
+    // Of those, the stores kept for reuse.
+    virtual U64 getVramBytesPooled() const = 0;
+    virtual LLVertexBuffer::PoolStats getStats() const = 0;
 };
 
 // VBO Pool for Apple GPUs (as in M1/M2 etc, not Intel macs)
@@ -383,10 +384,23 @@ class LLAppleVBOPool final: public LLVBOPool
 {
 public:
     U64 mAllocated = 0;
+    U32 mMisses = 0;
 
     U64 getVramBytesUsed() override
     {
         return mAllocated;
+    }
+
+    U64 getVramBytesPooled() const override
+    {
+        return 0;
+    }
+
+    LLVertexBuffer::PoolStats getStats() const override
+    {
+        LLVertexBuffer::PoolStats stats;
+        stats.mMisses = mMisses;
+        return stats;
     }
 
     void allocateVBO(GLenum type, U32 size, GLuint& name, U8*& data) override
@@ -399,6 +413,7 @@ public:
         llassert(size >= 2);  // any buffer size smaller than a single index is nonsensical
 
         mAllocated += size;
+        ++mMisses;
 
         { //allocate a new buffer
             LL_PROFILE_GPU_ZONE("vbo alloc");
@@ -440,7 +455,21 @@ public:
         U8* mData;
         GLuint mGLName;
         Time mAge;
+        U32 mFrame; // the frame it was freed in (freed_in_frame())
     };
+
+    // The frame a buffer freed now may last have been drawn in, as the main context's frame fences count it. Off the
+    // main thread, whose gGL ends no frames, 0: a frame every frame fences take as finished.
+    static U32 freed_in_frame()
+    {
+        return on_main_thread() ? gGL.frameFences().frame() : 0;
+    }
+
+    // Whether the GPU has been shown finished with every draw issued up to `frame`.
+    static bool finished_with(U32 frame)
+    {
+        return frame == 0 || !on_main_thread() || gGL.frameFences().isComplete(frame);
+    }
 
     ~LLDefaultVBOPool() override
     {
@@ -459,10 +488,25 @@ public:
     U64 mReserved = 0;
     U32 mMisses = 0;
     U32 mHits = 0;
+    U32 mOrphans = 0;
 
     U64 getVramBytesUsed() override
     {
         return mAllocated + mReserved;
+    }
+
+    U64 getVramBytesPooled() const override
+    {
+        return mReserved;
+    }
+
+    LLVertexBuffer::PoolStats getStats() const override
+    {
+        LLVertexBuffer::PoolStats stats;
+        stats.mMisses  = mMisses;
+        stats.mHits    = mHits;
+        stats.mOrphans = mOrphans;
+        return stats;
     }
 
     // increase the size to some common value (e.g. a power of two) to increase hit rate
@@ -529,11 +573,31 @@ public:
             Entry& entry = entries.back();
             name = entry.mGLName;
             data = entry.mData;
+            const bool in_flight = !finished_with(entry.mFrame);
 
             entries.pop_back();
             if (entries.empty())
             {
                 pool.erase(iter);
+            }
+
+            if (in_flight)
+            {
+                // Freed in a frame the GPU may still be drawing, the oldest of its size. Written as it is, its store
+                // would make the driver wait for the GPU or copy it; a new store under the same name keeps the name,
+                // and the CPU copy, and waits for neither. The old one goes once the GPU is done with it.
+                LL_PROFILE_ZONE_NAMED_CATEGORY_VERTEX("vbo pool orphan");
+                mOrphans++;
+                glBindBuffer(type, name);
+                glBufferData(type, size, nullptr, GL_DYNAMIC_DRAW);
+                if (type == GL_ELEMENT_ARRAY_BUFFER)
+                {
+                    LLVertexBuffer::sGLRenderIndices = name;
+                }
+                else
+                {
+                    LLVertexBuffer::sGLRenderBuffer = name;
+                }
             }
         }
 
@@ -561,15 +625,16 @@ public:
 
         Pool::iterator iter = pool.find(size);
 
+        const Entry entry{ data, name, std::chrono::steady_clock::now(), freed_in_frame() };
         if (iter == pool.end())
         {
             std::list<Entry> newlist;
-            newlist.push_front({ data, name, std::chrono::steady_clock::now() });
+            newlist.push_front(entry);
             pool[size] = newlist;
         }
         else
         {
-            iter->second.push_front({ data, name, std::chrono::steady_clock::now() });
+            iter->second.push_front(entry);
         }
 
     }
@@ -727,6 +792,18 @@ void LLVertexBufferData::draw()
 U64 LLVertexBuffer::getBytesAllocated()
 {
     return sVBOPool ? sVBOPool->getVramBytesUsed() : 0;
+}
+
+//static
+U64 LLVertexBuffer::getBytesPooled()
+{
+    return sVBOPool ? sVBOPool->getVramBytesPooled() : 0;
+}
+
+//static
+LLVertexBuffer::PoolStats LLVertexBuffer::getPoolStats()
+{
+    return sVBOPool ? sVBOPool->getStats() : PoolStats();
 }
 
 //============================================================================
@@ -1006,6 +1083,28 @@ void LLVertexBuffer::drawArrays(U32 mode, U32 first, U32 count) const
     STOP_GLERROR;
     ++LLRender::sDrawCalls;
     LLRender::sDrawElements += count;
+}
+
+void LLVertexBuffer::drawMultiArrays(U32 mode, const S32* first, const S32* count, U32 draws) const
+{
+    llassert(validate_bound_samplers());
+    llassert(mGLBuffer == sGLRenderBuffer);
+    llassert(mGLIndices == sGLRenderIndices);
+    if (draws == 0)
+    {
+        return;
+    }
+
+    gGL.syncMatrices();
+    STOP_GLERROR;
+    glMultiDrawArrays(sGLMode[mode], first, count, draws);
+    STOP_GLERROR;
+    ++LLRender::sDrawCalls;
+    for (U32 i = 0; i < draws; ++i)
+    {
+        llassert(first[i] >= 0 && count[i] >= 0 && (U32)(first[i] + count[i]) <= mNumVerts);
+        LLRender::sDrawElements += count[i];
+    }
 }
 
 //static

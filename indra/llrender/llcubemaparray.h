@@ -28,6 +28,11 @@
 
 #include "llgl.h"
 
+namespace LLImageGLMemory
+{
+    enum EClass : U8;
+}
+
 #include <vector>
 
 class LLVector3;
@@ -52,8 +57,13 @@ public:
     // res - resolution of each cube face
     // components - number of components per pixel
     // count - number of cube maps in the array
+    // cls - what the VRAM accounting counts the array's storage as
     // use_mips - if true, mipmaps will be allocated for this cube map array and anisotropic filtering will be used
-    void allocate(U32 res, U32 components, U32 count, bool use_mips = true, bool hdr = true);
+    // mip_levels - with use_mips, how many levels to allocate, 0 for the whole chain down to 1x1. A caller that writes
+    //              fewer gives the count it writes: sampling clamps to the last level allocated, so it never reaches
+    //              one that holds nothing.
+    void allocate(U32 res, U32 components, U32 count, LLImageGLMemory::EClass cls, bool use_mips = true, bool hdr = true,
+                  U32 mip_levels = 0);
     void bind(S32 stage);
     void unbind();
 
@@ -78,6 +88,8 @@ protected:
     LLPointer<LLImageGL> mImage;
     U32 mWidth = 0;
     U32 mCount = 0;
+    LLImageGLMemory::EClass mClass{}; // what allocate was told to count the storage as
+    U32 mLevels = 1; // the mip levels allocated
     S32 mTextureStage;
     bool mHDR;
 };
