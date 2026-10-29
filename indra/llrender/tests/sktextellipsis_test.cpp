@@ -336,6 +336,33 @@ namespace
         }
     }
 
+    TEST_CASE("SKTextEllipsis: a grapheme the font draws as several glyphs is not split", "[SKTextEllipsis]")
+    {
+        const LLFontGL& font = fontOrSkip();
+        // ZWJ sequences no emoji font draws as one glyph, and an odd run of regional indicators.
+        const std::string bird_rocket = utf8({ 0x1F426, 0x200D, 0x1F680, 0x200D, 0x1F955 });
+        const std::string tree_ship   = utf8({ 0x1F332, 0x200D, 0x1F6A2, 0x200D, 0x1F332, 0x200D, 0x1F6A2 });
+        const std::string flags       = utf8({ 0x1F1EF, 0x1F1F5, 0x1F1E9, 0x1F1EA, 0x1F1EB });
+        const std::string texts[] = {
+            "Odd " + bird_rocket + bird_rocket + " pair " + tree_ship + tree_ship + " end",
+            "Flags " + flags + flags + flags + " and more flags " + flags,
+            bird_rocket + tree_ship + bird_rocket + tree_ship + bird_rocket + tree_ship,
+        };
+        for (const std::string& text : texts)
+        {
+            const F32 full = font.getWidthF32(text);
+            for (LLFontGL::EEllipsisMode mode : kCutModes)
+            {
+                for (F32 max_pixels = 0.f; max_pixels < full; max_pixels += 1.f)
+                {
+                    std::string out;
+                    const Cut cut = SKTextEllipsis::shorten(font, text, max_pixels, mode, out);
+                    checkCut(font, text, max_pixels, cut, out);
+                }
+            }
+        }
+    }
+
     TEST_CASE("SKTextEllipsis: a right-to-left string is cut into a logical head and tail", "[SKTextEllipsis]")
     {
         const LLFontGL& font = fontOrSkip();

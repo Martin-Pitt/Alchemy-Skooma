@@ -53,8 +53,8 @@ namespace
         return ll_round(width * LLFontGL::sScaleX) <= llceil(max_pixels * LLFontGL::sScaleX);
     }
 
-    // Whether pos falls between two grapheme clusters; ASCII on both sides always does, but for CR LF.
-    bool is_cluster_start(std::string_view text, S32 pos)
+    // Whether pos plainly falls between two grapheme clusters: an end, or ASCII on both sides but for CR LF.
+    bool is_ascii_boundary(std::string_view text, S32 pos)
     {
         if (pos <= 0 || pos >= (S32)text.size())
         {
@@ -62,11 +62,23 @@ namespace
         }
         const unsigned char prev = (unsigned char)text[pos - 1];
         const unsigned char next = (unsigned char)text[pos];
-        if (prev < 0x80 && next < 0x80 && !(prev == '\r' && next == '\n'))
-        {
-            return true;
-        }
-        return utf8str_grapheme_align_backward(text, (size_t)pos) == (size_t)pos;
+        return prev < 0x80 && next < 0x80 && !(prev == '\r' && next == '\n');
+    }
+
+    bool is_cluster_start(std::string_view text, S32 pos)
+    {
+        return is_ascii_boundary(text, pos) || utf8str_grapheme_align_backward(text, (size_t)pos) == (size_t)pos;
+    }
+
+    // The font's walks stop on its shaping clusters, which split a grapheme the font draws as several glyphs.
+    S32 align_head(std::string_view text, S32 pos)
+    {
+        return is_ascii_boundary(text, pos) ? pos : (S32)utf8str_grapheme_align_backward(text, (size_t)pos);
+    }
+
+    S32 align_tail(std::string_view text, S32 pos)
+    {
+        return is_ascii_boundary(text, pos) ? pos : (S32)utf8str_grapheme_align_forward(text, (size_t)pos);
     }
 }
 
@@ -97,7 +109,7 @@ SKTextEllipsis::Cut SKTextEllipsis::shorten(const LLFontGL& font, std::string_vi
         // firstDrawableByte hands back the last cluster even where it does not fit, and then there is no tail.
         auto tail_in = [&](F32 room) -> S32
         {
-            const S32 tail = font.firstDrawableByte(text, room, size - 1);
+            const S32 tail = align_tail(text, font.firstDrawableByte(text, room, size - 1));
             return font.getWidthF32Bytes(text, tail, size - tail) > room ? size : tail;
         };
 
@@ -110,11 +122,11 @@ SKTextEllipsis::Cut SKTextEllipsis::shorten(const LLFontGL& font, std::string_vi
         {
             tail_begin = tail_in(budget * TAIL_SHARE);
             const F32 head_room = budget - font.getWidthF32Bytes(text, tail_begin, size - tail_begin);
-            head_end = head_room > 0.f ? font.maxDrawableBytes(text, head_room, tail_begin) : 0;
+            head_end = head_room > 0.f ? align_head(text, font.maxDrawableBytes(text, head_room, tail_begin)) : 0;
             break;
         }
         default:
-            head_end = font.maxDrawableBytes(text, budget, size);
+            head_end = align_head(text, font.maxDrawableBytes(text, budget, size));
             break;
         }
 
