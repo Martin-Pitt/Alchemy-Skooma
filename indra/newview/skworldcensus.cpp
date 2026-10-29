@@ -1290,6 +1290,13 @@ void SKWorldCensus::visitPart(const PartFacts& facts, LLVOVolume* live)
     {
         collides = false;
     }
+    // TODO: a sculpt collides as its sculpted shape unless its type is None,
+    // which only the sim knows; until that is probed (llCastRay) or guessed
+    // (a sphere, say), sculpts are taken as None, being rare and often shapeless.
+    if (facts.mShape.mSculpted && !facts.mShape.mMesh && !surround)
+    {
+        collides = false;
+    }
 
     U64 sig = SEED;
     // The root is part of the signature: relinking changes the cluster a part
