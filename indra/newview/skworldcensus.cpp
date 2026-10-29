@@ -1663,8 +1663,6 @@ skworld::RecordPtr SKWorldCensus::record(const PartFacts& facts, skworld::Role r
     }
     SKShapeGeometry geom;
     bool ok = false;
-    extern thread_local const char* gSKShapeWhy; // DO NOT LAND
-    gSKShapeWhy = role == Role::SURROUND ? "render" : "no header";
     if (role == Role::SURROUND)
     {
         LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - shape render geometry");
@@ -1673,7 +1671,6 @@ skworld::RecordPtr SKWorldCensus::record(const PartFacts& facts, skworld::Role r
     else if (!in.mMesh || in.mObject || gMeshRepo.physicsMeshSize(in.mParams->getSculptID()) >= 0)
     {
         // A cached mesh's decomposition is asked for only once its header is in (visitPart asks for that).
-        gSKShapeWhy = "empty"; // DO NOT LAND: no tagged return, so the geometry came out empty
         SKPhysicsShape shape;
         {
             LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - shape classify");
@@ -1687,9 +1684,9 @@ skworld::RecordPtr SKWorldCensus::record(const PartFacts& facts, skworld::Role r
     }
     {
         // DO NOT LAND: which shape, from what, at how many triangles; failed builds too.
-        char text[224];
-        const int len = snprintf(text, sizeof(text), "%s ok=%d why=%s live=%d prov=%d shape=%d mesh=%d sculpt=%d tris=%zu id=%s",
-                                 role == Role::SURROUND ? "surround" : "nav", (int)ok, ok ? "" : gSKShapeWhy, (int)(in.mObject != nullptr), (int)geom.mProvenance, (int)geom.mShape,
+        char text[160];
+        const int len = snprintf(text, sizeof(text), "%s ok=%d prov=%d shape=%d mesh=%d sculpt=%d tris=%zu id=%s",
+                                 role == Role::SURROUND ? "surround" : "nav", (int)ok, (int)geom.mProvenance, (int)geom.mShape,
                                  (int)in.mMesh, (int)in.mSculpted, geom.mTriangles.size() / 3,
                                  in.mParams->getSculptID().asString().c_str());
         LL_PROFILE_ZONE_TEXT(text, len > 0 ? std::min<size_t>(len, sizeof(text) - 1) : 0);

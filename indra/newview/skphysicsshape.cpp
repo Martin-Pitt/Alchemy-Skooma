@@ -108,16 +108,13 @@ SKPhysicsShapeInput skPhysicsShapeInput(LLVOVolume* volume)
     return in;
 }
 
-// DO NOT LAND: which return failed the last shape build, for the census zone text.
-thread_local const char* gSKShapeWhy = "";
-
 bool skPhysicsShapeClassify(const SKPhysicsShapeInput& in, SKPhysicsShape& out)
 {
     out.mPhysicsType = in.mPhysicsType;
     // A volume arrives before its full update gives it an LLVolume; nothing to say yet.
     if (out.mPhysicsType == LLViewerObject::PHYSICS_SHAPE_NONE || in.mFlexible || !in.mParams)
     {
-        { gSKShapeWhy = "L116"; return false; }
+        return false;
     }
     const LLPhysicsVolumeParams physics_params(*in.mParams, out.mPhysicsType == LLViewerObject::PHYSICS_SHAPE_CONVEX_HULL);
     LLPhysicsShapeBuilderUtil::determinePhysicsShape(physics_params, in.mScale, out.mSpec);
@@ -408,7 +405,7 @@ bool skPhysicsShapeGeometry(const SKPhysicsShapeInput& in, const SKPhysicsShape&
     Spec spec = shape.mSpec;
     if (!in.mParams)
     {
-        { gSKShapeWhy = "L392"; return false; }
+        return false;
     }
     const LLVolumeParams& params = *in.mParams;
     const LLVector3 scale = in.mScale;
@@ -432,7 +429,7 @@ bool skPhysicsShapeGeometry(const SKPhysicsShapeInput& in, const SKPhysicsShape&
                 const S32 physics_mesh = gMeshRepo.physicsMeshSize(params.getSculptID());
                 if (physics_mesh < 0)
                 {
-                    { gSKShapeWhy = "L416"; return false; }   // header on its way: which shape it collides as is unknown
+                    return false;   // header on its way: which shape it collides as is unknown
                 }
                 if (physics_mesh > 0 && !skPhysicsMeshTooSmallForTriangles(in))
                 {
@@ -447,7 +444,7 @@ bool skPhysicsShapeGeometry(const SKPhysicsShapeInput& in, const SKPhysicsShape&
                     }
                     if (!decomp || decomp->mPhysicsShapeMesh.empty())
                     {
-                        { gSKShapeWhy = "L431"; return false; }   // the physics mesh is on its way
+                        return false;   // the physics mesh is on its way
                     }
                     appendSoup(decomp->mPhysicsShapeMesh.mPositions, out.mTriangles);
                     out.mSolid = false;
@@ -456,7 +453,7 @@ bool skPhysicsShapeGeometry(const SKPhysicsShapeInput& in, const SKPhysicsShape&
             }
             if (!decomp)
             {
-                { gSKShapeWhy = "L440"; return false; }   // the decomposition is on its way
+                return false;   // the decomposition is on its way
             }
             if (!decomp->mHull.empty())
             {
@@ -478,7 +475,7 @@ bool skPhysicsShapeGeometry(const SKPhysicsShapeInput& in, const SKPhysicsShape&
                     // either. The asset has arrived and has nothing to say, so
                     // say nothing: the object's box is no stand-in for a large
                     // sparse mesh, whose box top is a floor in mid-air.
-                    { gSKShapeWhy = "L462"; return false; }
+                    return false;
                 }
             }
             else
@@ -489,14 +486,14 @@ bool skPhysicsShapeGeometry(const SKPhysicsShapeInput& in, const SKPhysicsShape&
                 }
                 if (decomp->mBaseHullMesh.empty())
                 {
-                    { gSKShapeWhy = "L473"; return false; }
+                    return false;
                 }
                 // The single hull of a shape with no decomposition.
                 out.mProvenance = SKShapeProvenance::BASE_HULL;
                 appendSoup(decomp->mBaseHullMesh.mPositions, out.mTriangles);
                 if (out.mTriangles.empty())
                 {
-                    { gSKShapeWhy = "L480"; return false; }
+                    return false;
                 }
             }
             break;
@@ -509,7 +506,7 @@ bool skPhysicsShapeGeometry(const SKPhysicsShapeInput& in, const SKPhysicsShape&
                 LLModel::Decomposition* decomp = gMeshRepo.getDecomposition(params.getSculptID());
                 if (!decomp)
                 {
-                    { gSKShapeWhy = "L493"; return false; }   // the hull is on its way; nothing stands in
+                    return false;   // the hull is on its way; nothing stands in
                 }
                 if (decomp->mBaseHullMesh.empty() || decomp->mMesh.empty())
                 {
@@ -521,13 +518,13 @@ bool skPhysicsShapeGeometry(const SKPhysicsShapeInput& in, const SKPhysicsShape&
                 // in mid-air over whatever the object draws.
                 if (decomp->mBaseHullMesh.empty())
                 {
-                    { gSKShapeWhy = "L505"; return false; }
+                    return false;
                 }
                 out.mProvenance = SKShapeProvenance::HULL;
                 appendSoup(decomp->mBaseHullMesh.mPositions, out.mTriangles);
                 if (out.mTriangles.empty())
                 {
-                    { gSKShapeWhy = "L511"; return false; }
+                    return false;
                 }
             }
             else
@@ -591,7 +588,7 @@ bool skPhysicsShapeGeometry(const SKPhysicsShapeInput& in, const SKPhysicsShape&
             break;
         }
         default:
-            { gSKShapeWhy = "L575"; return false; }
+            return false;
     }
     return out.mShape != SKShapeKind::TRIANGLES || !out.mTriangles.empty();
 }
