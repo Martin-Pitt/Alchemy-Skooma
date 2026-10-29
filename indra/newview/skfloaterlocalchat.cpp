@@ -746,7 +746,14 @@ void SKFloaterLocalChat::applyMarkdown(Message& msg)
             ++i;
         }
         const S32 indent = i - line;
-        if (body.compare(i, 3, "```") == 0 && !fixed[i] && body.find("```", i + 3) >= (size_t)eol)
+        // A fence line is a run of three or more backticks alone, or with a language word after it.
+        S32 ticks = 0;
+        while (i + ticks < eol && body[i + ticks] == '`')
+        {
+            ++ticks;
+        }
+        const bool fence_line = ticks >= 3 && !fixed[i] && body.find_first_of(" `", i + ticks) >= (size_t)eol;
+        if (fence_line)
         {
             fence = !fence; // a fence line opens or closes a code block and is not shown
             drop(line, next - line);
@@ -821,7 +828,7 @@ void SKFloaterLocalChat::applyMarkdown(Message& msg)
         }
     }
 
-    // Inline pairs, code first so nothing inside it is read as a marker.
+    // Inline pairs.
     auto pairs = [&](std::string_view mark, U8 flag, bool code, bool tight, bool word_bound)
     {
         const S32 len = (S32)mark.size();
@@ -867,8 +874,54 @@ void SKFloaterLocalChat::applyMarkdown(Message& msg)
             }
         }
     };
-    pairs("```", MD_CODE, true, false, false);
-    pairs("`", MD_CODE, true, false, false);
+    // Code first, so nothing inside it is read as a marker: a run of backticks closes at the next run as long, across lines.
+    for (S32 i = from; i < n; ++i)
+    {
+        auto run_at = [&](S32 k)
+        {
+            S32 len = 0;
+            while (k + len < n && body[k + len] == '`' && free_at(k + len))
+            {
+                ++len;
+            }
+            return len;
+        };
+        const S32 len = body[i] == '`' ? run_at(i) : 0;
+        if (len == 0)
+        {
+            continue;
+        }
+        S32 j = i + len;
+        while (j < n)
+        {
+            const S32 other = body[j] == '`' ? run_at(j) : 0;
+            if (other == 0)
+            {
+                ++j;
+                continue;
+            }
+            if (other == len)
+            {
+                break;
+            }
+            j += other;
+        }
+        if (j < n && j > i + len)
+        {
+            drop(i, len);
+            drop(j, len);
+            for (S32 k = i + len; k < j; ++k)
+            {
+                style[k] |= MD_CODE;
+                fixed[k] = 1;
+            }
+            i = j + len - 1;
+        }
+        else
+        {
+            i += len - 1;
+        }
+    }
     pairs("**", LLFontGL::BOLD, false, false, false);
     pairs("__", LLFontGL::UNDERLINE, false, false, false);
     pairs("~~", MD_STRIKE, false, false, false);
