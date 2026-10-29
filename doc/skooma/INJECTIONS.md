@@ -1527,6 +1527,16 @@ Landed on `develop` in two merges of the same branch: `b7f8571b51` (as `feature-
 - `indra/newview/llappviewer.cpp` — include + `sThinScrollbarsEverywhere` from the setting in UI setup.
 - Unmarked: `settings_alchemy.xml` (`SkoomaScrollbarThinEverywhere` before `MouseWheelScrollSensitivity`); `skins/{alchemy,default,gemini,heretic,ionic}/colors.xml` (`ScrollbarThinThumbColor`, `ScrollbarThinThumbHoverColor`, `ScrollbarThinThumbPressedColor`, `ScrollbarThinTrackColor` after `ScrollbarTrackColor`).
 
+## Spell check worker
+
+`fix-ui/spellcheck-async` (main `41a8609fec`): the Windows Spell Checking API runs on a worker thread of its own, so a stalled spelling service no longer freezes the viewer in `checkWord` while drawing. Marked `<SK:Nexii> Run the Windows Spell Checking API on a worker thread…`:
+- `indra/llui/llspellcheckengine_win32.cpp` — COM objects moved to `WinSpellCom` on the worker (MTA); `LLWinSpellEngine` answers words from a cache, posts the ones it has not seen, and waits on the language and suggestion calls only up to a timeout; `takeCheckedWords()`.
+- `indra/llui/llspellcheckengine.h` — `takeCheckedWords()` virtual, false by default.
+- `indra/llui/llspellcheck.h/.cpp` — `setWordsCheckedCallback`, `sWordsCheckedSignal`, `update()`.
+- `indra/llui/lltextbase.cpp`, `lllineeditor.cpp` — one line each connecting the recheck to the words-checked signal.
+- `indra/llui/text/altextview.h/.cpp` — `mSpellCheckedConnection` and its two connections.
+- `indra/newview/llappviewer.cpp` — `LLSpellChecker::instance().update()` in `idle()` after the websocket update.
+
 ## Audio preview control
 
 `foundation-audio/preview-control` (main `75a77da686`): start a sound partway, seek and read the position of a playing source, and stop our own copy of an in-world trigger without telling the server. Marked `<SK:Nexii> Audio preview control`:

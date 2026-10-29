@@ -23,6 +23,7 @@ lands, is offered or is merged.
 | `atmo/water` | Atmo Magic | Water renderer | `atmo/weather` | ask Rye first |
 | `render/prim-split` | Its own feature | Untwisted flat-sided prims without the legacy edge splits; Render Tests A/B toggle; geometry-equivalence test | `render` | yes |
 | `audio/loudness-normalization` | Its own feature | BS.1770 loudness measured during decode, gain trim on playback | `develop` | undecided |
+| `ui/spellcheck-async` | Its own fix | Windows Spell Checking API on a worker thread with a word cache and timeouts, so a hung spelling service cannot freeze the viewer | `develop` | yes |
 
 Fork-only (not offered): the Atmo editor and keyframes UI, notecard and parcel transport,
 mini-map, and everything under `doc/skooma/` and `scripts/skooma/`.
