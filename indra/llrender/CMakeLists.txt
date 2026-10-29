@@ -26,6 +26,7 @@ set(
   llfontbitmapcache.cpp
   llfontfreetype.cpp
   llfontgl.cpp
+  sktextellipsis.cpp # <SK:Nexii> text ellipsis foundation
   llfonttextcache.cpp
   llfontregistry.cpp
   llgl.cpp
@@ -70,6 +71,7 @@ set(
   llcubemap.h
   llcubemaparray.h
   llfontgl.h
+  sktextellipsis.h # <SK:Nexii> text ellipsis foundation
   llfonttextcache.h
   llfontfreetype.h
   llfontbitmapcache.h
@@ -175,10 +177,12 @@ if(AL_BUILD_TESTS)
       tests/alrendertargetdesc_test.cpp
       tests/llfontbitmapcache_test.cpp
       tests/llfontfreetype_test.cpp
+      tests/sktextellipsis_test.cpp # <SK:Nexii> text ellipsis foundation
       tests/llfontregistry_test.cpp
       tests/llglfloor_test.cpp
       tests/llrendermatrix_test.cpp
       tests/lluitransform_test.cpp
+    BENCH_SOURCES tests/sktextellipsis_bench.cpp # <SK:Nexii> text ellipsis foundation
     LIBRARIES llrender ll::icu
     SUPPORT llrender_test_checks llcommon_test_checks
     DEFINES ${font_defines}

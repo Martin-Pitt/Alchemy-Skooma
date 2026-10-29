@@ -82,6 +82,30 @@ public:
         DROP_SHADOW_SOFT
     };
 
+    // <SK:Nexii> Where an ellipsis goes in text too wide for its room.
+    enum EEllipsisMode
+    {
+        ELLIPSIS_NONE = 0,
+        ELLIPSIS_END,       // what use_ellipses = true has always meant
+        ELLIPSIS_MIDDLE,
+        ELLIPSIS_START
+    };
+
+    // The draw's ellipsis parameter: a mode, or the bool every caller passed before there were modes.
+    struct Ellipsis
+    {
+        EEllipsisMode mode = ELLIPSIS_NONE;
+
+        constexpr Ellipsis() = default;
+        // Implicit so that the callers passing true or false compile unchanged.
+        constexpr Ellipsis(bool use) : mode(use ? ELLIPSIS_END : ELLIPSIS_NONE) {}
+        constexpr Ellipsis(EEllipsisMode m) : mode(m) {}
+
+        constexpr bool operator==(Ellipsis o) const { return mode == o.mode; }
+        constexpr bool operator!=(Ellipsis o) const { return mode != o.mode; }
+    };
+    // </SK:Nexii>
+
     LLFontGL();
     ~LLFontGL();
 
