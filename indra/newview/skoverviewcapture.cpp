@@ -60,6 +60,7 @@
 #include "llvertexbuffer.h"
 #include "llviewercamera.h"
 #include "llviewercontrol.h"
+#include "llregionhandle.h"
 #include "llsurface.h"
 #include "llviewerregion.h"
 #include "llviewershadermgr.h"
@@ -319,7 +320,7 @@ const LLStaticHashedString SK_PATCH("sk_patch");
 struct SKOverviewCapture::RegionMap
 {
     U64 mHandle = 0;
-    LLViewerRegion* mRegion = nullptr; // this frame's, set before any capture
+    LLViewerRegion* mRegion = nullptr; // this frame's, set before any capture; none for a void tile
     LLRenderTarget mResolved; // the map, RGBA8
     LLVector3d mOrigin;
     F32 mWidth = 0.f;
@@ -327,6 +328,7 @@ struct SKOverviewCapture::RegionMap
     U32 mRing = 0;            // 0 the agent's region, 1 a neighbour, more the further off
     bool mCut = false;        // whether it was taken through the agent's cut
     U64 mCutStamp = 0;        // the census cut it was taken with
+    bool mVoid = false;       // a square with no region in it near the agent's (SKMapVoidTiles)
     bool mValid = false;
 };
 
@@ -1728,18 +1730,73 @@ void SKOverviewCapture::captureMaps(F64 now)
 {
     LLViewerRegion* agent_region = gAgent.getRegion();
     const auto& regions = LLWorld::getInstance()->getRegionList();
-    // Regions that left the world take their maps with them.
+    const LLVector3d agent_min = agent_region->getOriginGlobal();
+    const F64 agent_w = agent_region->getWidth();
+
+    // The void tiles: the squares of the agent region's grid within VOID_RINGS of it that no region covers, so what
+    // stands or reaches out over the void beside the regions is mapped too.
+    static LLCachedControl<bool> void_tiles(gSavedSettings, "SKMapVoidTiles", true);
+    const S32 VOID_RINGS = 2;
+    std::vector<LLVector3d> voids;
+    if (void_tiles)
+    {
+        for (S32 dy = -VOID_RINGS; dy <= VOID_RINGS; ++dy)
+        {
+            for (S32 dx = -VOID_RINGS; dx <= VOID_RINGS; ++dx)
+            {
+                const LLVector3d min = agent_min + LLVector3d(dx * agent_w, dy * agent_w, 0.0);
+                const bool covered = std::any_of(regions.begin(), regions.end(),
+                                                 [&](LLViewerRegion* r)
+                                                 {
+                                                     const LLVector3d o = r->getOriginGlobal();
+                                                     const F64 w = r->getWidth();
+                                                     return o.mdV[VX] < min.mdV[VX] + agent_w - 0.5 && o.mdV[VX] + w > min.mdV[VX] + 0.5 &&
+                                                            o.mdV[VY] < min.mdV[VY] + agent_w - 0.5 && o.mdV[VY] + w > min.mdV[VY] + 0.5;
+                                                 });
+                if (!covered)
+                {
+                    voids.push_back(min);
+                }
+            }
+        }
+    }
+    auto voidAt = [&voids](const RegionMap& map)
+    { return std::any_of(voids.begin(), voids.end(), [&map](const LLVector3d& v) { return to_region_handle(v) == map.mHandle; }); };
+
+    // Regions that left the world take their maps with them, and void tiles a region now covers or the agent left.
     mMaps.erase(std::remove_if(mMaps.begin(), mMaps.end(),
-                               [&regions](const std::unique_ptr<RegionMap>& map)
+                               [&](const std::unique_ptr<RegionMap>& map)
                                {
+                                   if (map->mVoid)
+                                   {
+                                       return !voidAt(*map);
+                                   }
                                    return std::none_of(regions.begin(), regions.end(), [&map](LLViewerRegion* r)
                                                        { return r->getHandle() == map->mHandle; });
                                }),
                  mMaps.end());
+    for (const LLVector3d& min : voids)
+    {
+        const U64 handle = to_region_handle(min);
+        auto it = std::find_if(mMaps.begin(), mMaps.end(),
+                               [handle](const std::unique_ptr<RegionMap>& map) { return map->mVoid && map->mHandle == handle; });
+        if (it == mMaps.end())
+        {
+            mMaps.push_back(std::make_unique<RegionMap>());
+            RegionMap& map = *mMaps.back();
+            map.mHandle = handle;
+            map.mVoid = true;
+            map.mOrigin = min;
+            map.mWidth = (F32)agent_w;
+            it = std::prev(mMaps.end());
+        }
+        const S32 dx = ll_round((F32)((min.mdV[VX] - agent_min.mdV[VX]) / agent_w));
+        const S32 dy = ll_round((F32)((min.mdV[VY] - agent_min.mdV[VY]) / agent_w));
+        (*it)->mRing = (U32)llmax(std::abs(dx), std::abs(dy));
+        (*it)->mRegion = nullptr;
+    }
 
     // A region's ring: 0 the agent's, 1 one touching it, then one more per region width of gap between them.
-    const LLVector3d agent_min = agent_region->getOriginGlobal();
-    const F64 agent_w = agent_region->getWidth();
     auto ringOf = [&](LLViewerRegion* region) -> U32
     {
         if (region == agent_region)
@@ -1771,7 +1828,7 @@ void SKOverviewCapture::captureMaps(F64 now)
     for (LLViewerRegion* region : regions)
     {
         auto it = std::find_if(mMaps.begin(), mMaps.end(),
-                               [region](const std::unique_ptr<RegionMap>& map) { return map->mHandle == region->getHandle(); });
+                               [region](const std::unique_ptr<RegionMap>& map) { return !map->mVoid && map->mHandle == region->getHandle(); });
         if (it == mMaps.end())
         {
             mMaps.push_back(std::make_unique<RegionMap>());
@@ -1801,6 +1858,14 @@ void SKOverviewCapture::captureMaps(F64 now)
             missing_region = region;
         }
     }
+    for (std::unique_ptr<RegionMap>& map : mMaps)
+    {
+        if (map->mVoid && map->mLast < 0.0 && (!missing || map->mRing < missing->mRing))
+        {
+            missing = map.get();
+            missing_region = nullptr;
+        }
+    }
     if (missing)
     {
         // One a frame, so a ring coming into view does not cost a burst.
@@ -1821,7 +1886,7 @@ void SKOverviewCapture::captureMaps(F64 now)
     {
         const size_t at = (mCursor + step) % n;
         RegionMap& map = *mMaps[at];
-        if (map.mRing == 0 || !map.mRegion)
+        if (map.mRing == 0 || (!map.mRegion && !map.mVoid))
         {
             continue;
         }
@@ -1852,8 +1917,11 @@ bool SKOverviewCapture::captureMap(RegionMap& map, LLViewerRegion* region, bool 
     }
 
     LLTimer cpu_timer;
-    const F32 width = region->getWidth();
-    const LLVector3 origin = region->getOriginAgent();
+    // A void tile has no region of its own: its square is the map's, its water the agent region's, and it has no land.
+    const F32 width = region ? region->getWidth() : map.mWidth;
+    const LLVector3 origin = region ? region->getOriginAgent() : gAgent.getPosAgentFromGlobal(map.mOrigin);
+    const F32 water = (region ? region : gAgent.getRegion())->getWaterHeight();
+    const F32 land_max = region ? region->getLand().getMaxZ() : water;
     F32 floor_z, cut_z;
     cutHeights(gAgent.getPositionGlobal(), gAgent.getPositionAgent().mV[VZ], floor_z, cut_z);
     Shot shot;
@@ -1884,8 +1952,7 @@ bool SKOverviewCapture::captureMap(RegionMap& map, LLViewerRegion* region, bool 
             }
         }
     }
-    const F32 top = agent ? llmax(region_top, region->getLand().getMaxZ()) + 1.f
-                          : llmax(mCensus.levelTop(shot.mLevel, cut_z), region->getLand().getMaxZ()) + 1.f;
+    const F32 top = agent ? llmax(region_top, land_max) + 1.f : llmax(mCensus.levelTop(shot.mLevel, cut_z), land_max) + 1.f;
     const F32 bottom = llmin(top - 64.f, -32.f);
     const LLVector3 centre(origin.mV[VX] + width * 0.5f, origin.mV[VY] + width * 0.5f, top);
 
@@ -1902,7 +1969,7 @@ bool SKOverviewCapture::captureMap(RegionMap& map, LLViewerRegion* region, bool 
     shot.mPartCuts = agent;
     shot.mFocus = LLVector3(centre.mV[VX], centre.mV[VY], floor_z);
     shot.mLevelTop = cut_z;
-    shot.mWater = region->getWaterHeight();
+    shot.mWater = water;
     // Another region is neither dimmed as outside the agent's nor edged as it is: its rectangle is unbounded.
     shot.mRegion = agent ? LLVector4(origin.mV[VX], origin.mV[VY], origin.mV[VX] + width, origin.mV[VY] + width)
                          : LLVector4(-1.0e6f, -1.0e6f, 1.0e6f, 1.0e6f);
@@ -1927,7 +1994,10 @@ bool SKOverviewCapture::captureMap(RegionMap& map, LLViewerRegion* region, bool 
     const U32 draws = render(capture, map.mResolved, shot);
     endSpan(SpanKind::Map, span);
 
-    map.mOrigin = region->getOriginGlobal();
+    if (region)
+    {
+        map.mOrigin = region->getOriginGlobal();
+    }
     map.mWidth = width;
     map.mCut = agent;
     map.mCutStamp = agent ? mCensus.cutStamp() : 0;

@@ -6591,6 +6591,17 @@
             <key>Value</key>
             <real>30.0</real>
         </map>
+        <key>SKMapVoidTiles</key>
+        <map>
+            <key>Comment</key>
+            <string>Capture the squares with no region within two region widths of the agent's for the mini-map, as the regions are.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
         <key>SKOverviewResolution</key>
         <map>
             <key>Comment</key>
