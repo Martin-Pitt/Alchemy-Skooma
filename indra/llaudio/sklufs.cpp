@@ -4,7 +4,7 @@
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Second Life Viewer Source Code
- * Copyright (C) 2026, Alchemy Viewer Project
+ * Copyright (C) 2026, Martin "Nexii" Pitt <martin.r.pitt@gmail.com>
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -37,8 +37,21 @@ namespace
     // the leftover buffer and frame scratch are sized for this.
     constexpr U32 SK_LUFS_MAX_CHANNELS = 8;
 
+    // F_PI is single precision, which moves the K-weighting off BS.1770-4's table.
+    constexpr F64 SK_LUFS_PI = 3.14159265358979323846;
+
     constexpr F64 SK_LUFS_ABS_GATE     = -70.0;
     constexpr F64 SK_LUFS_REL_GATE_LU  = -10.0;
+
+    // Clips up to this long read as their loudest 400 ms; from the long bound
+    // up they read as integrated loudness, blended in between.
+    constexpr F64 SK_LUFS_SHORT_SECONDS = 3.0;
+    constexpr F64 SK_LUFS_LONG_SECONDS  = 10.0;
+
+    // Integrated loudness is held no lower than this far under the loudest momentary block.
+    constexpr F64 SK_LUFS_MOMENTARY_FLOOR_LU = 8.0;
+
+    constexpr size_t SUB_BLOCKS_PER_BLOCK = 4;
 
     // BS.1770-4 block loudness from mean square.
     inline F64 block_loudness(F64 power)
@@ -54,6 +67,43 @@ namespace
     }
 }
 
+// static
+void SKLufsMeter::kWeighting(F64 fs, F64 shelf[5], F64 highpass[5])
+{
+    // Stage 1: high shelf.
+    {
+        const F64 f0 = 1681.974450955533;
+        const F64 G  = 3.999843853973347;
+        const F64 Q  = 0.7071752369554196;
+
+        const F64 K  = tan(SK_LUFS_PI * f0 / fs);
+        const F64 Vh = pow(10.0, G / 20.0);
+        const F64 Vb = pow(Vh, 0.4996667741545416);
+        const F64 a0 = 1.0 + K / Q + K * K;
+
+        shelf[0] = (Vh + Vb * K / Q + K * K) / a0;
+        shelf[1] = 2.0 * (K * K - Vh) / a0;
+        shelf[2] = (Vh - Vb * K / Q + K * K) / a0;
+        shelf[3] = 2.0 * (K * K - 1.0) / a0;
+        shelf[4] = (1.0 - K / Q + K * K) / a0;
+    }
+
+    // Stage 2: RLB high pass.
+    {
+        const F64 f0 = 38.13547087602444;
+        const F64 Q  = 0.5003270373238773;
+
+        const F64 K  = tan(SK_LUFS_PI * f0 / fs);
+        const F64 a0 = 1.0 + K / Q + K * K;
+
+        highpass[0] = 1.0;
+        highpass[1] = -2.0;
+        highpass[2] = 1.0;
+        highpass[3] = 2.0 * (K * K - 1.0) / a0;
+        highpass[4] = (1.0 - K / Q + K * K) / a0;
+    }
+}
+
 SKLufsMeter::SKLufsMeter(U32 sample_rate, U32 num_channels)
 :   mSampleRate(sample_rate),
     mChannels(num_channels),
@@ -61,7 +111,6 @@ SKLufsMeter::SKLufsMeter(U32 sample_rate, U32 num_channels)
     mSubBlockLen(0),
     mSubBlockFill(0),
     mSubBlockAcc(0.0),
-    mTotalAcc(0.0),
     mTotalFrames(0),
     mPeak(0.f),
     mLeftoverBytes(0)
@@ -71,42 +120,13 @@ SKLufsMeter::SKLufsMeter(U32 sample_rate, U32 num_channels)
         return;
     }
 
-    const F64 fs = (F64)mSampleRate;
-
-    // Stage 1: high shelf.
     Biquad shelf;
-    {
-        const F64 f0 = 1681.974450955533;
-        const F64 G  = 3.999843853973347;
-        const F64 Q  = 0.7071752369554196;
-
-        const F64 K  = tan(F_PI * f0 / fs);
-        const F64 Vh = pow(10.0, G / 20.0);
-        const F64 Vb = pow(Vh, 0.4996667741545416);
-        const F64 a0 = 1.0 + K / Q + K * K;
-
-        shelf.b0 = (Vh + Vb * K / Q + K * K) / a0;
-        shelf.b1 = 2.0 * (K * K - Vh) / a0;
-        shelf.b2 = (Vh - Vb * K / Q + K * K) / a0;
-        shelf.a1 = 2.0 * (K * K - 1.0) / a0;
-        shelf.a2 = (1.0 - K / Q + K * K) / a0;
-    }
-
-    // Stage 2: RLB high pass.
     Biquad highpass;
-    {
-        const F64 f0 = 38.13547087602444;
-        const F64 Q  = 0.5003270373238773;
-
-        const F64 K  = tan(F_PI * f0 / fs);
-        const F64 a0 = 1.0 + K / Q + K * K;
-
-        highpass.b0 = 1.0;
-        highpass.b1 = -2.0;
-        highpass.b2 = 1.0;
-        highpass.a1 = 2.0 * (K * K - 1.0) / a0;
-        highpass.a2 = (1.0 - K / Q + K * K) / a0;
-    }
+    F64 sc[5];
+    F64 hc[5];
+    kWeighting((F64)mSampleRate, sc, hc);
+    shelf.b0 = sc[0]; shelf.b1 = sc[1]; shelf.b2 = sc[2]; shelf.a1 = sc[3]; shelf.a2 = sc[4];
+    highpass.b0 = hc[0]; highpass.b1 = hc[1]; highpass.b2 = hc[2]; highpass.a1 = hc[3]; highpass.a2 = hc[4];
 
     mShelf.assign(mChannels, shelf);
     mHighpass.assign(mChannels, highpass);
@@ -132,7 +152,6 @@ void SKLufsMeter::pushFrame(const S16* frame)
     }
 
     mSubBlockAcc += frame_power;
-    mTotalAcc += frame_power;
     mTotalFrames++;
 
     if (++mSubBlockFill == mSubBlockLen)
@@ -202,26 +221,8 @@ void SKLufsMeter::feedBytesLE(const U8* bytes, size_t byte_count)
     }
 }
 
-F32 SKLufsMeter::gatedLoudness(size_t per_block) const
+F32 SKLufsMeter::gatedLoudness(const std::vector<F64>& powers)
 {
-    if (!per_block || mSubBlockEnergy.size() < per_block)
-    {
-        return SK_LUFS_SILENCE;
-    }
-
-    const F64 block_div = (F64)(per_block * mSubBlockLen);
-    std::vector<F64> powers;
-    powers.reserve(mSubBlockEnergy.size() - per_block + 1);
-    for (size_t j = 0; j + per_block <= mSubBlockEnergy.size(); ++j)
-    {
-        F64 sum = 0.0;
-        for (size_t k = 0; k < per_block; ++k)
-        {
-            sum += mSubBlockEnergy[j + k];
-        }
-        powers.push_back(sum / block_div);
-    }
-
     // First pass: absolute gate only, to establish the relative threshold.
     F64    sum = 0.0;
     size_t count = 0;
@@ -270,35 +271,59 @@ F32 SKLufsMeter::close() const
         return SK_LUFS_SILENCE;
     }
 
-    // Full-size 400 ms gating blocks at 75% overlap: the BS.1770 measurement.
-    const F32 full = gatedLoudness(4);
-    if (full > SK_LUFS_SILENCE)
+    // The unfinished tail counts as a zero-padded sub-block, and a clip shorter
+    // than one gating block is padded out to one, so padding never moves M.
+    std::vector<F64> energy = mSubBlockEnergy;
+    if (mSubBlockFill)
     {
-        return full;
+        energy.push_back(mSubBlockAcc);
+    }
+    while (energy.size() < SUB_BLOCKS_PER_BLOCK)
+    {
+        energy.push_back(0.0);
     }
 
-    // Too short to fill a 400 ms gating block, which most SL sounds are. Gate
-    // the 100 ms sub-blocks directly instead of averaging the whole clip: the
-    // whole-clip mean counts trailing silence as signal, so a padded one-shot
-    // reads below its own level and earns a boost it does not need.
-    //
-    // This only helps below 400 ms. Above that the standard blocks apply and a
-    // brief transient in a longer clip still measures diluted -- that is what
-    // integrated loudness means, and the peak cap is what keeps such a clip
-    // from being boosted into distortion.
-    const F32 partial = gatedLoudness(1);
-    if (partial > SK_LUFS_SILENCE)
+    // 400 ms gating blocks at a 100 ms hop.
+    const F64 block_div = (F64)(SUB_BLOCKS_PER_BLOCK * mSubBlockLen);
+    std::vector<F64> powers;
+    powers.reserve(energy.size() - SUB_BLOCKS_PER_BLOCK + 1);
+    F64 loudest = 0.0;
+    for (size_t j = 0; j + SUB_BLOCKS_PER_BLOCK <= energy.size(); ++j)
     {
-        return partial;
+        F64 sum = 0.0;
+        for (size_t k = 0; k < SUB_BLOCKS_PER_BLOCK; ++k)
+        {
+            sum += energy[j + k];
+        }
+        powers.push_back(sum / block_div);
+        loudest = llmax(loudest, powers.back());
     }
 
-    // Shorter than a single sub-block, or silent. The whole-clip mean is all
-    // that is left; guard the log, since digital silence has zero power.
-    if (mTotalAcc <= 0.0)
+    // Maximum momentary loudness, under the absolute gate like every reading.
+    if (loudest <= 0.0 || block_loudness(loudest) <= SK_LUFS_ABS_GATE)
     {
         return SK_LUFS_SILENCE;
     }
-    return llmax(SK_LUFS_SILENCE, (F32)block_loudness(mTotalAcc / (F64)mTotalFrames));
+    const F64 momentary = block_loudness(loudest);
+
+    const F64 seconds = (F64)mTotalFrames / (F64)mSampleRate;
+    if (seconds <= SK_LUFS_SHORT_SECONDS)
+    {
+        return (F32)momentary;
+    }
+
+    // Integrated loudness, floored so a lone hit in a long quiet clip is not diluted to nothing.
+    const F32 integrated = gatedLoudness(powers);
+    const F64 floored = integrated > SK_LUFS_SILENCE
+        ? llmax((F64)integrated, momentary - SK_LUFS_MOMENTARY_FLOOR_LU)
+        : momentary - SK_LUFS_MOMENTARY_FLOOR_LU;
+    if (seconds >= SK_LUFS_LONG_SECONDS)
+    {
+        return (F32)floored;
+    }
+
+    const F64 w = (seconds - SK_LUFS_SHORT_SECONDS) / (SK_LUFS_LONG_SECONDS - SK_LUFS_SHORT_SECONDS);
+    return (F32)((1.0 - w) * momentary + w * floored);
 }
 
 F32 sk_lufs_gain_for_target(F32 measured_lufs, F32 target_lufs, F32 strength, F32 peak)
@@ -332,21 +357,7 @@ F32 sk_lufs_gain_for_target(F32 measured_lufs, F32 target_lufs, F32 strength, F3
     return gain;
 }
 
-void sk_lufs_apply_gain16(S16* samples, size_t count, F32 gain)
-{
-    if (!samples || gain == 1.f)
-    {
-        return;
-    }
-
-    for (size_t i = 0; i < count; ++i)
-    {
-        const S32 v = ll_round((F32)samples[i] * gain);
-        samples[i] = (S16)llclamp(v, -32768, 32767);
-    }
-}
-
-bool sk_lufs_measure_wav_file(const std::string& path, F32& out_lufs, F32& out_peak, bool downmix_to_mono)
+bool sk_lufs_measure_wav_file(const std::string& path, F32& out_lufs, F32& out_peak)
 {
     LLAudio::WavInfo info;
     if (!LLAudio::parseWav(path, info) || info.format_tag != 1 || info.pcm.empty())
@@ -390,30 +401,13 @@ bool sk_lufs_measure_wav_file(const std::string& path, F32& out_lufs, F32& out_p
         }
     }
 
-    U32 measure_channels = info.channels;
-    if (downmix_to_mono && info.channels > 1)
-    {
-        std::vector<S16> mono(frames);
-        for (size_t f = 0; f < frames; ++f)
-        {
-            S32 sum = 0;
-            for (U32 c = 0; c < info.channels; ++c)
-            {
-                sum += pcm[f * info.channels + c];
-            }
-            mono[f] = (S16)llclamp(sum / (S32)info.channels, -32768, 32767);
-        }
-        pcm.swap(mono);
-        measure_channels = 1;
-    }
-
-    SKLufsMeter meter(info.sample_rate, measure_channels);
+    SKLufsMeter meter(info.sample_rate, info.channels);
     if (!meter.isValid())
     {
         return false;
     }
 
-    meter.feed(pcm.data(), pcm.size() / measure_channels);
+    meter.feed(pcm.data(), frames);
     out_lufs = meter.close();
     out_peak = meter.peak();
     return true;

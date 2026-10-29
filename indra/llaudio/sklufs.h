@@ -4,7 +4,7 @@
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Second Life Viewer Source Code
- * Copyright (C) 2026, Alchemy Viewer Project
+ * Copyright (C) 2026, Martin "Nexii" Pitt <martin.r.pitt@gmail.com>
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -66,11 +66,16 @@ constexpr F32 SK_LUFS_PEAK_CEILING    = 0.891251f; // 10^(-1/20)
 constexpr F32 SK_LUFS_STRENGTH_DEFAULT = 0.5f;
 
 /**
- * Incremental integrated-loudness meter, BS.1770-4.
+ * Incremental loudness meter over BS.1770-4 K-weighted 400 ms blocks.
  *
  * K-weighting (high shelf + RLB high pass) per channel, mean square over 400 ms
- * gating blocks at 75% overlap, absolute gate at -70 LUFS and a relative gate
- * 10 LU below the ungated mean.
+ * gating blocks at a 100 ms hop. The reading depends on the clip's length:
+ * up to 3 s it is the maximum momentary loudness M, from 10 s it is the gated
+ * integrated loudness I held no lower than M - 8, and in between a linear
+ * blend of the two. The unfinished last sub-block counts zero-padded, a clip
+ * shorter than 400 ms is padded to one block, and every reading is under the
+ * -70 LUFS absolute gate, so trailing silence never changes a short clip's
+ * reading.
  *
  * Incremental so it can be driven from a decode loop that is already streaming
  * the samples past, rather than costing a second pass over the buffer. Feed
@@ -89,7 +94,7 @@ public:
     // buffered until the next call.
     void feedBytesLE(const U8* bytes, size_t byte_count);
 
-    // Integrated loudness over everything fed so far, or SK_LUFS_SILENCE.
+    // Loudness over everything fed so far, or SK_LUFS_SILENCE when nothing is above the absolute gate.
     // Non-destructive: feeding may continue afterwards.
     F32 close() const;
 
@@ -99,6 +104,9 @@ public:
     F32 peak() const { return mPeak; }
 
     bool isValid() const { return mValid; }
+
+    // K-weighting biquads at a sample rate, each as b0, b1, b2, a1, a2 with a0 normalised to 1.
+    static void kWeighting(F64 sample_rate, F64 shelf[5], F64 highpass[5]);
 
 private:
     // Direct-form-I biquad, one per channel per K-weighting stage.
@@ -120,9 +128,8 @@ private:
 
     void pushFrame(const S16* frame);
 
-    // Gated loudness over sub-block energies grouped `per_block` at a time.
-    // Returns SK_LUFS_SILENCE when nothing survives the gates.
-    F32 gatedLoudness(size_t per_block) const;
+    // BS.1770-4 gated integrated loudness over block mean squares, or SK_LUFS_SILENCE.
+    static F32 gatedLoudness(const std::vector<F64>& powers);
 
     U32  mSampleRate;
     U32  mChannels;
@@ -136,8 +143,6 @@ private:
     F64    mSubBlockAcc;    // channel-weighted mean square, summed over the sub-block
     std::vector<F64> mSubBlockEnergy;
 
-    // Whole-clip fallback for material too short to fill even one sub-block.
-    F64    mTotalAcc;
     size_t mTotalFrames;
 
     F32    mPeak;
@@ -162,20 +167,8 @@ F32 sk_lufs_gain_for_target(F32 measured_lufs,
                             F32 strength = 1.f,
                             F32 peak = 0.f);
 
-// In-place linear gain on 16-bit PCM, saturating rather than wrapping.
-// For the upload path, where the samples themselves are the deliverable.
-void sk_lufs_apply_gain16(S16* samples, size_t count, F32 gain);
-
-// Integrated loudness of a RIFF/WAVE file on disk, for pre-upload measurement.
+// Loudness of a RIFF/WAVE file on disk, measured as the file's header describes it.
 // Returns false when the file could not be read or is not 8/16-bit PCM.
-//
-// Set downmix_to_mono to measure the channel average rather than the file as
-// multichannel. The vorbis encoder downmixes on upload, and a correlated stereo
-// pair measures up to 3 LU hotter than its own downmix, so measuring the file
-// as-is would solve for a gain the encoded asset never sees.
-bool sk_lufs_measure_wav_file(const std::string& path,
-                              F32&               out_lufs,
-                              F32&               out_peak,
-                              bool               downmix_to_mono = false);
+bool sk_lufs_measure_wav_file(const std::string& path, F32& out_lufs, F32& out_peak);
 
 #endif // SK_LUFS_H

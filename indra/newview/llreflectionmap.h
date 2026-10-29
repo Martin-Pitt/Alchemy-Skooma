@@ -26,6 +26,7 @@
 
 #pragma once
 
+#include "alprobeeclipse.h"
 #include "alquerypool.h"
 #include "llcubemaparray.h"
 #include "llmemory.h"
@@ -60,11 +61,10 @@ public:
     // return true if given Reflection Map's influence volume intersect's with this one's
     bool intersects(LLReflectionMap* other) const;
 
-    // True if this probe's influence volume completely swallows other's, to the point where
-    // other cannot change any pixel this one already covers. Stricter than plain containment
-    // for sphere volumes -- see the implementation.
-    //  margin - metres of slack added to this probe's volume, for hysteresis
-    bool eclipses(const LLReflectionMap* other, F32 margin) const;
+    // Adds this probe's influence volume to `eclipse`, as a box or a sphere, for the automatic probes it may swallow
+    // (ALProbeEclipse says what swallowing means for each shape). False, and nothing added, for a probe with no live
+    // viewer object.
+    bool addEclipser(ALProbeEclipse& eclipse) const;
 
     // Refresh origin and radius from the viewer object this probe is attached to, if any.
     // Manual probes ride on objects that move and resize, and several passes derive depths,
@@ -105,6 +105,7 @@ public:
     void clearOcclusion()
     {
         mOccluded       = false;
+        mOutOfView      = false;
         mOcclusionQuery = {};
     }
 
@@ -177,6 +178,10 @@ public:
     // occlusion culling state: the last query of gGL's pool, and what the last one read said
     ALQueryTicket mOcclusionQuery;
     bool mOccluded = false;
+
+    // outside the main view when its occlusion was last asked, which takes no query: the update scheduler passes it
+    // over as it does an occluded probe, and getReflectionMaps judges the view on its own frame instead
+    bool mOutOfView = false;
 
     ProbeType mType;
 };

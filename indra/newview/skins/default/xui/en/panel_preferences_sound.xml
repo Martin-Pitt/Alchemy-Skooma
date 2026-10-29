@@ -191,6 +191,27 @@
       <button.commit_callback
       function="Pref.SetSounds"/>
     </button>
+    <!-- <SK:Nexii> loudness normalization: one slider, the strength of the correction -->
+    <slider
+     control_name="SKSoundLoudnessStrength"
+     disabled_control="MuteAudio"
+     follows="left|top"
+     height="15"
+     increment="0.05"
+     initial_value="0.5"
+     label="Even out levels"
+     label_width="120"
+     layout="topleft"
+     left="0"
+     max_val="1.0"
+     min_val="0.0"
+     name="loudness_strength"
+     show_text="false"
+     slider_label.halign="right"
+     tool_tip="Brings loud and quiet sound effects closer together. Halfway, the gap between the loudest and quietest sounds is halved; at the far right every sound plays at about the same level. Takes effect on sounds already playing."
+     top_pad="4"
+     width="300" />
+    <!-- </SK:Nexii> -->
     <slider
      control_name="AudioLevelMusic"
      disabled_control="MuteAudio"
