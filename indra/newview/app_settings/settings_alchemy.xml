@@ -5798,6 +5798,17 @@
             <key>Value</key>
             <integer>1</integer>
         </map>
+        <key>SkoomaLocalChatFadeFloor</key>
+        <map>
+            <key>Comment</key>
+            <string>Opacity a faded message in the game-style local chat rests at; 0 lets it disappear.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.0</real>
+        </map>
         <key>SkoomaLocalChatFadeDelay</key>
         <map>
             <key>Comment</key>

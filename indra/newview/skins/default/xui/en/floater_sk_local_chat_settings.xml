@@ -178,6 +178,23 @@
              top_pad="5"
              width="292" />
             <slider
+             control_name="SkoomaLocalChatFadeFloor"
+             decimal_digits="2"
+             follows="left|top|right"
+             height="16"
+             increment="0.05"
+             label="Fade off to"
+             label_width="130"
+             layout="topleft"
+             left="8"
+             max_val="1"
+             min_val="0"
+             name="sk_fade_floor"
+             text_width="40"
+             tool_tip="Opacity a faded message rests at; 0 lets it disappear"
+             top_pad="5"
+             width="308" />
+            <slider
              control_name="SkoomaLocalChatFadeDelay"
              decimal_digits="1"
              follows="left|top|right"
