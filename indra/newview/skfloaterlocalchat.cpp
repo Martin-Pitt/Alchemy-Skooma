@@ -654,6 +654,29 @@ void SKFloaterLocalChat::appendChat(const LLChat& chat, const LLSD& args, F64 ar
     out += rest;
     msg.mBody = std::move(out);
     applyMarkdown(msg);
+    if (msg.mEmote)
+    {
+        // An emote reads as narration: italic after the name, the speech in its quotes upright.
+        const std::string& body = msg.mBody;
+        msg.mStyle.resize(body.size(), 0);
+        bool speech = false;
+        for (S32 k = msg.mNameLen; k < (S32)body.size(); ++k)
+        {
+            const bool open = body[k] == '"' || body.compare(k, 3, "\xE2\x80\x9C") == 0;
+            const bool close = body[k] == '"' || body.compare(k, 3, "\xE2\x80\x9D") == 0;
+            if (speech ? close : open)
+            {
+                const S32 len = body[k] == '"' ? 1 : 3;
+                speech = !speech;
+                k += len - 1;
+                continue;
+            }
+            if (!speech)
+            {
+                msg.mStyle[k] |= LLFontGL::ITALIC;
+            }
+        }
+    }
 
     // One preview a message, for its first link that has one; nothing is looked up until it is drawn.
     if (unfurl_enabled())
@@ -1221,7 +1244,9 @@ void SKFloaterLocalChat::layout()
     {
         Message& msg = mMessages[m];
         msg.mNameWidth = bold_width(name_font(), msg.mName);
-        msg.mTimeWidth = msg.mName.empty() || msg.mTime.empty() ? 0 : time_font()->getWidth(msg.mTime) + (cards ? TIME_GAP : LEAD_TIME_GAP);
+        // A card's emote is one line of its own, its name leading and no time.
+        const bool emote_line = cards && msg.mEmote;
+        msg.mTimeWidth = msg.mName.empty() || msg.mTime.empty() || emote_line ? 0 : time_font()->getWidth(msg.mTime) + (cards ? TIME_GAP : LEAD_TIME_GAP);
         // Cards gather one speaker's run of messages; a minimal line stands alone.
         // A new day, or the step from the log's history to what was heard this session.
         const bool new_day = m > 0 && msg.mDay != 0 && ((mMessages[m - 1].mDay != 0 && msg.mDay != mMessages[m - 1].mDay) || (mMessages[m - 1].mHistory && !msg.mHistory));
@@ -1230,7 +1255,7 @@ void SKFloaterLocalChat::layout()
         {
             const Card& last = mCards.back();
             const Message& prev = mMessages[last.mLastMessage];
-            join = prev.mFromID == msg.mFromID && prev.mSource == msg.mSource && !prev.mName.empty() &&
+            join = !emote_line && !prev.mEmote && prev.mFromID == msg.mFromID && prev.mSource == msg.mSource && !prev.mName.empty() &&
                    msg.mArrival - prev.mArrival < CARD_JOIN_SECONDS && last.mLastMessage - last.mFirstMessage + 1 < MAX_CARD_MESSAGES;
         }
         if (join)
@@ -1276,7 +1301,7 @@ void SKFloaterLocalChat::layout()
             card.mFirstMessage = card.mLastMessage = m;
             card.mFirstRow = (S32)mRows.size();
             mCards.push_back(card);
-            if (cards && !msg.mName.empty())
+            if (cards && !msg.mName.empty() && !emote_line)
             {
                 Row header;
                 header.mMessage = -1;
@@ -1334,7 +1359,7 @@ void SKFloaterLocalChat::layout()
             row.mBegin = pos;
             row.mLength = count;
             row.mQuote = quoted;
-            if (first && !join && !(cards && !msg.mName.empty()))
+            if (first && !join && !(cards && !msg.mName.empty() && !emote_line))
             {
                 row.mPadTop = cards ? CARD_PAD_Y : 0;
             }
