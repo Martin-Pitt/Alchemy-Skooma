@@ -7439,7 +7439,7 @@ void LLViewerObject::skRecoverClampedVelocity(const LLVector3& new_pos)
 // Keep a moving object where it is shown and bleed the difference to the update out over time.
 void LLViewerObject::skSmoothUpdate(const LLVector3& old_pos, const LLVector3& old_vel, const LLVector3& old_acc, F64 since_interp)
 {
-    static LLCachedControl<bool> smooth(gSavedSettings, "SKMotionSmoothCorrections", true);
+    static LLCachedControl<bool> smooth(gSavedSettings, "SKMotionSmoothCorrections", false);
     const bool eligible = smooth && sVelocityInterpolate && !mStatic && !mParent
                        && !isSelected() && !(isAvatar() && asAvatar()->isSelf());
     if (!eligible)
@@ -7453,8 +7453,9 @@ void LLViewerObject::skSmoothUpdate(const LLVector3& old_pos, const LLVector3& o
     LLVector3 correction = received - shown_pos;
     const F32 interval = mMotionPredictor.hasCadence() ? mMotionPredictor.getUpdateInterval() : 0.1f;
     const F32 limit = llmax(2.f, 3.f * getVelocity().length() * interval);
-    // Rotation is never smoothed, so a spinning or stopped object snaps to keep its position with its rotation.
-    const bool spinning_or_stopped = getAngularVelocity().magVecSquared() > 1e-4f || getVelocity().magVecSquared() < 1e-4f;
+    // Rotation is never smoothed, so an object turning faster than it travels (a door on its hinge) or stopped snaps.
+    const F32 speed = getVelocity().length();
+    const bool spinning_or_stopped = getAngularVelocity().length() * getScale().length() * 0.5f > speed || speed < 0.01f;
     const bool snapped = !eligible || !mSKHasMotionState || spinning_or_stopped || !correction.isFinite() || correction.length() > limit;
     if (snapped)
     {
