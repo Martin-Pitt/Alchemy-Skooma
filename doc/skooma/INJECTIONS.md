@@ -1551,6 +1551,7 @@ Landed on `develop` in two merges of the same branch: `b7f8571b51` (as `feature-
 ## Inventory Explorer
 
 Branch `feature-ui/inventory-explorer` (via `ui`, main `7b8ef524f4`). Spec: `.inventory-explorer.md`; index [INVENTORY-EXPLORER.md](INVENTORY-EXPLORER.md).
+- `skins/default/textures/textures.xml` — `SK_View_Columns`, `SK_View_Icons`, `SK_View_Gallery`, `SK_Group_By` after `List_View_On`, in `<SK:Nexii> Inventory Explorer` markers (main `e6a09c2444`); PNGs in `textures/icons/sk_*.png`.
 
 ### Files we own
 
