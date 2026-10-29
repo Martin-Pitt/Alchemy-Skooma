@@ -716,7 +716,13 @@ void SKFloaterLocalChat::applyMarkdown(Message& msg)
         size_t found = body.find('\n', line);
         const S32 eol = found == std::string::npos ? n : (S32)found;
         const S32 next = eol < n ? eol + 1 : n;
+        // Markers are read past leading spaces, which a list keeps for its nesting.
         S32 i = line;
+        while (i < eol && body[i] == ' ')
+        {
+            ++i;
+        }
+        const S32 indent = i - line;
         if (body.compare(i, 3, "```") == 0 && !fixed[i] && body.find("```", i + 3) >= (size_t)eol)
         {
             fence = !fence; // a fence line opens or closes a code block and is not shown
@@ -740,13 +746,13 @@ void SKFloaterLocalChat::applyMarkdown(Message& msg)
             if (!quoted && body.compare(i, 4, ">>> ") == 0)
             {
                 quote_rest = quoted = true; // the rest of the message
-                drop(i, 4);
+                drop(line, indent + 4);
                 i += 4;
             }
             else if (!quoted && body.compare(i, 2, "> ") == 0)
             {
                 quoted = true;
-                drop(i, 2);
+                drop(line, indent + 2);
                 i += 2;
             }
             if (quoted)
@@ -763,7 +769,7 @@ void SKFloaterLocalChat::applyMarkdown(Message& msg)
             }
             if (hashes > 0 && i + hashes + 1 < eol && body[i + hashes] == ' ')
             {
-                drop(i, hashes + 1); // a heading, drawn bold
+                drop(line, i - line + hashes + 1); // a heading, drawn bold
                 for (S32 k = i + hashes + 1; k < eol; ++k)
                 {
                     style[k] |= LLFontGL::BOLD;
