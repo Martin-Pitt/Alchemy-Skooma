@@ -378,6 +378,34 @@ namespace
         CHECK(cut.tail_begin < cut.size);
     }
 
+    TEST_CASE("SKTextEllipsis: a tail shaped wider alone loses a cluster, not the whole tail", "[SKTextEllipsis]")
+    {
+        const LLFontGL& font = fontOrSkip();
+        // Arabic joins, so a tail shaped on its own takes other forms than it had in the run.
+        const std::string last_word = utf8({ 0x0648, 0x0628, 0x0631, 0x0643, 0x0627, 0x062A, 0x0647 });
+        const std::string text = utf8({ 0x0627, 0x0644, 0x0633, 0x0644, 0x0627, 0x0645, 0x20, 0x0639, 0x0644, 0x064A,
+                                        0x0643, 0x0645, 0x20, 0x0648, 0x0631, 0x062D, 0x0645, 0x0629, 0x20, 0x0627,
+                                        0x0644, 0x0644, 0x0647, 0x20 }) + last_word;
+        const S32 last_word_begin = (S32)(text.size() - last_word.size());
+        const F32 full    = font.getWidthF32(text);
+        const F32 reserve = font.getWidthF32(SKTextEllipsis::ELLIPSIS_RESERVE);
+        const F32 wide    = font.getWidthF32("W");
+        for (F32 max_pixels = reserve + font.getWidthF32(last_word) + wide; max_pixels < full; max_pixels += 1.f)
+        {
+            std::string out;
+            Cut cut = SKTextEllipsis::shorten(font, text, max_pixels, LLFontGL::ELLIPSIS_START, out);
+            checkCut(font, text, max_pixels, cut, out);
+            CHECK(cut.tail_begin <= last_word_begin);
+
+            if (max_pixels >= full * 0.7f)
+            {
+                cut = SKTextEllipsis::shorten(font, text, max_pixels, LLFontGL::ELLIPSIS_MIDDLE, out);
+                checkCut(font, text, max_pixels, cut, out);
+                CHECK(cut.tail_begin < cut.size);
+            }
+        }
+    }
+
     TEST_CASE("SKTextEllipsis: malformed UTF-8 is cut without a fault", "[SKTextEllipsis]")
     {
         const LLFontGL& font = fontOrSkip();

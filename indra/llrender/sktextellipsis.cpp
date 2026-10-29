@@ -106,11 +106,15 @@ SKTextEllipsis::Cut SKTextEllipsis::shorten(const LLFontGL& font, std::string_vi
     const F32 budget = max_pixels - font.getWidthF32(ELLIPSIS_RESERVE);
     if (budget > 0.f)
     {
-        // firstDrawableByte hands back the last cluster even where it does not fit, and then there is no tail.
+        // The walk sums advances shaped in the whole run; the tail shaped alone can be wider, or be a last cluster that never fit.
         auto tail_in = [&](F32 room) -> S32
         {
-            const S32 tail = align_tail(text, font.firstDrawableByte(text, room, size - 1));
-            return font.getWidthF32Bytes(text, tail, size - tail) > room ? size : tail;
+            S32 tail = align_tail(text, font.firstDrawableByte(text, room, size - 1));
+            while (tail < size && font.getWidthF32Bytes(text, tail, size - tail) > room)
+            {
+                tail = (S32)utf8str_step_grapheme_forward(text, (size_t)tail);
+            }
+            return tail;
         };
 
         switch (mode)
