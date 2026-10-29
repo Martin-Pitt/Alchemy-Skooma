@@ -77,7 +77,11 @@ namespace
         }
     };
 
-    const std::string kLabel = "Hair v2 - RIGGED (no copy) Lumipro Body #12";
+    const std::string& label()
+    {
+        static const std::string text = "Hair v2 - RIGGED (no copy) Lumipro Body #12";
+        return text;
+    }
 
     TEST_CASE_METHOD(sktextellipsis_gl_data, "SKTextEllipsisGL: a middle cut draws within its room and counts the original's bytes", "[SKTextEllipsisGL]")
     {
@@ -86,43 +90,41 @@ namespace
         const LLFontGL* font = LLFontGL::getFontSansSerif();
         REQUIRE(font != nullptr);
 
-        const S32 max_pixels = (S32)(font->getWidthF32(kLabel) * 0.5f);
+        const S32 max_pixels = (S32)(font->getWidthF32(label()) * 0.5f);
         for (LLFontGL::EEllipsisMode mode : { LLFontGL::ELLIPSIS_MIDDLE, LLFontGL::ELLIPSIS_START })
         {
             CAPTURE(mode);
             F32 right_x = 0.f;
-            const S32 drawn = font->renderBytes(kLabel, 0, 10.f, 100.f, LLColor4::white, LLFontGL::LEFT,
+            const S32 drawn = font->renderBytes(label(), 0, 10.f, 100.f, LLColor4::white, LLFontGL::LEFT,
                                                 LLFontGL::BASELINE, LLFontGL::NORMAL, LLFontGL::NO_SHADOW,
                                                 S32_MAX, max_pixels, &right_x, mode);
             CHECK(drawn > 0);
-            CHECK(drawn < (S32)kLabel.size());
+            CHECK(drawn < (S32)label().size());
             CHECK(right_x - 10.f <= (F32)max_pixels + 1.f);
 
             std::string out;
-            const SKTextEllipsis::Cut cut = SKTextEllipsis::shorten(*font, kLabel, (F32)max_pixels, mode, out);
+            const SKTextEllipsis::Cut cut = SKTextEllipsis::shorten(*font, label(), (F32)max_pixels, mode, out);
             CHECK(drawn == cut.drawnBytes());
         }
     }
 
-    TEST_CASE_METHOD(sktextellipsis_gl_data, "SKTextEllipsisGL: true draws exactly what ELLIPSIS_END draws", "[SKTextEllipsisGL]")
+    TEST_CASE_METHOD(sktextellipsis_gl_data, "SKTextEllipsisGL: a negative byte count draws nothing in every mode", "[SKTextEllipsisGL]")
     {
         if (!fileExists(kFontsXml))
             SKIP("fonts.xml not present in test data dir");
         const LLFontGL* font = LLFontGL::getFontSansSerif();
         REQUIRE(font != nullptr);
 
-        const S32 max_pixels = (S32)(font->getWidthF32(kLabel) * 0.5f);
-        F32 right_bool = 0.f;
-        F32 right_mode = 0.f;
-        const S32 by_bool = font->renderBytes(kLabel, 0, 10.f, 100.f, LLColor4::white, LLFontGL::LEFT,
-                                              LLFontGL::BASELINE, LLFontGL::NORMAL, LLFontGL::NO_SHADOW,
-                                              S32_MAX, max_pixels, &right_bool, true);
-        const S32 by_mode = font->renderBytes(kLabel, 0, 10.f, 100.f, LLColor4::white, LLFontGL::LEFT,
-                                              LLFontGL::BASELINE, LLFontGL::NORMAL, LLFontGL::NO_SHADOW,
-                                              S32_MAX, max_pixels, &right_mode, LLFontGL::ELLIPSIS_END);
-        CHECK(by_bool < (S32)kLabel.size());
-        CHECK(by_bool == by_mode);
-        CHECK(right_bool == right_mode);
+        const S32 max_pixels = (S32)(font->getWidthF32(label()) * 0.5f);
+        for (LLFontGL::EEllipsisMode mode : { LLFontGL::ELLIPSIS_NONE, LLFontGL::ELLIPSIS_END,
+                                              LLFontGL::ELLIPSIS_MIDDLE, LLFontGL::ELLIPSIS_START })
+        {
+            CAPTURE(mode);
+            const S32 drawn = font->renderBytes(label(), 0, 10.f, 100.f, LLColor4::white, LLFontGL::LEFT,
+                                                LLFontGL::BASELINE, LLFontGL::NORMAL, LLFontGL::NO_SHADOW,
+                                                -2, max_pixels, nullptr, mode);
+            CHECK(drawn == 0);
+        }
     }
 
     TEST_CASE_METHOD(sktextellipsis_gl_data, "SKTextEllipsisGL: a cache rebuilds when the mode changes and replays when it does not", "[SKTextEllipsisGL]")
@@ -132,11 +134,11 @@ namespace
         const LLFontGL* font = LLFontGL::getFontSansSerif();
         REQUIRE(font != nullptr);
 
-        const S32 max_pixels = (S32)(font->getWidthF32(kLabel) * 0.5f);
+        const S32 max_pixels = (S32)(font->getWidthF32(label()) * 0.5f);
         LLFontTextCache cache;
         auto draw = [&](LLFontGL::Ellipsis ellipsis)
         {
-            return cache.renderBytes(font, kLabel, 0, 10.f, 100.f, LLColor4::white, LLFontGL::LEFT,
+            return cache.renderBytes(font, label(), 0, 10.f, 100.f, LLColor4::white, LLFontGL::LEFT,
                                      LLFontGL::BASELINE, LLFontGL::NORMAL, LLFontGL::NO_SHADOW, S32_MAX,
                                      max_pixels, nullptr, ellipsis);
         };
@@ -159,7 +161,7 @@ namespace
         CHECK(LLFontTextCache::regenCount() == before);
 
         std::string out;
-        CHECK(replayed == SKTextEllipsis::shorten(*font, kLabel, (F32)max_pixels, LLFontGL::ELLIPSIS_MIDDLE, out).drawnBytes());
+        CHECK(replayed == SKTextEllipsis::shorten(*font, label(), (F32)max_pixels, LLFontGL::ELLIPSIS_MIDDLE, out).drawnBytes());
     }
 
     TEST_CASE_METHOD(sktextellipsis_gl_data, "SKTextEllipsisGL: a shadowed middle cut captures one shadow list and one foreground list", "[SKTextEllipsisGL]")
@@ -169,9 +171,9 @@ namespace
         const LLFontGL* font = LLFontGL::getFontSansSerif();
         REQUIRE(font != nullptr);
 
-        const S32 max_pixels = (S32)(font->getWidthF32(kLabel) * 0.5f);
+        const S32 max_pixels = (S32)(font->getWidthF32(label()) * 0.5f);
         LLFontTextCache cache;
-        cache.renderBytes(font, kLabel, 0, 10.f, 100.f, LLColor4::white, LLFontGL::LEFT, LLFontGL::BASELINE,
+        cache.renderBytes(font, label(), 0, 10.f, 100.f, LLColor4::white, LLFontGL::LEFT, LLFontGL::BASELINE,
                           LLFontGL::NORMAL, LLFontGL::DROP_SHADOW_SOFT, S32_MAX, max_pixels, nullptr,
                           LLFontGL::ELLIPSIS_MIDDLE);
         const auto counts = ll_test::VertexBufferProbe::count(cache);
