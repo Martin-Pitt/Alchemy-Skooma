@@ -272,6 +272,8 @@ public:
     // Detailed error checking can be enabled by setting gDebugGL to true
     void draw(U32 mode, U32 count, U32 indices_offset) const;
     void drawArrays(U32 mode, U32 offset, U32 count) const;
+    // Draws `draws` runs of vertices in one call, run i the count[i] vertices from first[i].
+    void drawMultiArrays(U32 mode, const S32* first, const S32* count, U32 draws) const;
     void drawRange(U32 mode, U32 start, U32 end, U32 count, U32 indices_offset) const;
 
     // draw without syncing matrices.  If you're positive there have been no matrix
@@ -342,7 +344,22 @@ private:
 
 public:
 
+    // The bytes of every vertex and index store the pool has made and not yet freed: those in use, at the size the
+    // pool rounds them to, and those it keeps for reuse.
     static U64 getBytesAllocated();
+    // Of those, the ones it keeps for reuse.
+    static U64 getBytesPooled();
+
+    // What the buffer pool has handed out since it was made: stores it had to make, stores it reused, and of those the
+    // ones freed in a frame the GPU had not been shown finished with, which it gave a new store under the same name.
+    struct PoolStats
+    {
+        U32 mMisses  = 0;
+        U32 mHits    = 0;
+        U32 mOrphans = 0;
+    };
+    static PoolStats getPoolStats();
+
     static const U32 sTypeSize[TYPE_MAX];
     static const U32 sGLMode[LLRender::NUM_MODES];
     static U32 sGLRenderBuffer;
