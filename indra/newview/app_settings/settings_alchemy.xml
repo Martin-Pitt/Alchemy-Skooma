@@ -4924,13 +4924,13 @@
         <key>SKMotionSmoothCorrections</key>
         <map>
             <key>Comment</key>
-            <string>Keep a moving object where it is shown when an update arrives and bleed the difference to the received position out over SKMotionSmoothTau, instead of snapping.</string>
+            <string>Keep a moving object where it is shown when an update arrives and bleed the difference to the received position out over SKMotionSmoothTau, instead of snapping. Off by default.</string>
             <key>Persist</key>
             <integer>1</integer>
             <key>Type</key>
             <string>Boolean</string>
             <key>Value</key>
-            <integer>1</integer>
+            <integer>0</integer>
         </map>
         <key>SKMotionSmoothTau</key>
         <map>
