@@ -175,7 +175,7 @@ namespace
 
     TEST_CASE("skcolorscale: a degenerate domain gives finite uniforms and positions", "[skcolorscale]")
     {
-        for (const std::string& name : { "logzero", "divend", "flat" })
+        for (const char* name : { "logzero", "divend", "flat" })
         {
             CAPTURE(name);
             const SKColorScale           s = custom(name);
