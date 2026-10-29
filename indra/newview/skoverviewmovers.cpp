@@ -223,12 +223,13 @@ void SKOverviewMovers::addPart(LLViewerObject* object, U8 code, std::set<LLUUID>
         return;
     }
     Mesh& mesh = mMeshes[volume->getID()];
-    if (mesh.mVolume != volume->getVolume())
+    const LLVolumeParams& params = volume->getVolume()->getParams();
+    if (!mesh.mBuilt || mesh.mParams != params)
     {
         mesh = Mesh();
-        // A failed build leaves mVolume null, so the next update tries again.
+        // The top LOD: the world's LOD follows its own camera, not the overview's, and left the hull coarse up close.
         SKShapeGeometry geom;
-        if (skRenderShapeGeometry(volume, geom))
+        if (skCensusRenderGeometry(volume, geom))
         {
             LLPointer<LLVertexBuffer> buffer = new LLVertexBuffer(LLVertexBuffer::MAP_VERTEX);
             LLStrider<LLVector3> verts;
@@ -241,7 +242,8 @@ void SKOverviewMovers::addPart(LLViewerObject* object, U8 code, std::set<LLUUID>
                 buffer->unmapBuffer();
                 mesh.mBuffer = buffer;
                 mesh.mCount = (U32)geom.mTriangles.size();
-                mesh.mVolume = volume->getVolume();
+                mesh.mParams = params;
+                mesh.mBuilt = true;
             }
         }
     }
