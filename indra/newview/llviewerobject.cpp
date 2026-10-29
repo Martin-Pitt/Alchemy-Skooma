@@ -7453,7 +7453,9 @@ void LLViewerObject::skSmoothUpdate(const LLVector3& old_pos, const LLVector3& o
     LLVector3 correction = received - shown_pos;
     const F32 interval = mMotionPredictor.hasCadence() ? mMotionPredictor.getUpdateInterval() : 0.1f;
     const F32 limit = llmax(2.f, 3.f * getVelocity().length() * interval);
-    const bool snapped = !eligible || !mSKHasMotionState || !correction.isFinite() || correction.length() > limit;
+    // Rotation is never smoothed, so a spinning or stopped object snaps to keep its position with its rotation.
+    const bool spinning_or_stopped = getAngularVelocity().magVecSquared() > 1e-4f || getVelocity().magVecSquared() < 1e-4f;
+    const bool snapped = !eligible || !mSKHasMotionState || spinning_or_stopped || !correction.isFinite() || correction.length() > limit;
     if (snapped)
     {
         correction.clear();
