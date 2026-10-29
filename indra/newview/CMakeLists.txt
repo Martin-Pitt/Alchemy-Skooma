@@ -2463,11 +2463,6 @@ if(AL_BUILD_TESTS)
     alrender
   )
   set(test_project ${AL_VIEWER_BINARY_NAME})
-  # <SK:Nexii> outline capture's TUT test, kept registered until it is ported to Catch2
-  if(COMMAND al_add_test)
-    al_add_test(skoutlinepolicy UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
-  endif()
-  # </SK:Nexii>
 
   get_property(newview_includes TARGET ${test_project} PROPERTY INTERFACE_INCLUDE_DIRECTORIES)
 
@@ -2611,6 +2606,7 @@ if(AL_BUILD_TESTS)
       tests/llvocache_test.cpp
       tests/lutcube_test.cpp
       tests/noise_test.cpp
+      tests/skoutlinepolicy_test.cpp # <SK:Nexii> outline capture
     UNIT
       alagentlocationformat.cpp
       albakeproxies.cpp
@@ -2687,6 +2683,7 @@ if(AL_BUILD_TESTS)
       llviewercontrollistener.cpp
       lutcube.cpp
       noise.cpp
+      skoutlinepolicy.cpp # <SK:Nexii> outline capture
     LIBRARIES llui alscript ll::slua llxml ${test_libs}
     SUPPORT
       newview_test_fakes
