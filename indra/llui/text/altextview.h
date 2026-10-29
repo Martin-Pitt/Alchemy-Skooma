@@ -1633,4 +1633,5 @@ private:
     std::string                             mPlaceholder;
     LLFrameTimer                            mSpellTimer;
     boost::signals2::scoped_connection      mSpellSettingsConnection;
+    boost::signals2::scoped_connection      mSpellCheckedConnection;    // <SK:Nexii>
 };

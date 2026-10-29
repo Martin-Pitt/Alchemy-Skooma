@@ -417,6 +417,7 @@ ALTextView::ALTextView(const Params& p)
     if (mSpellCheck)
     {
         mSpellSettingsConnection = LLSpellChecker::setSettingsChangeCallback([this]() { recheckSpelling(); });
+        mSpellCheckedConnection = LLSpellChecker::setWordsCheckedCallback([this]() { recheckSpelling(); });   // <SK:Nexii>
     }
 
     if (p.syntax.isProvided())
@@ -2006,6 +2007,7 @@ void ALTextView::setSpellCheck(bool check)
     if (check && !mSpellSettingsConnection.connected())
     {
         mSpellSettingsConnection = LLSpellChecker::setSettingsChangeCallback([this]() { recheckSpelling(); });
+        mSpellCheckedConnection = LLSpellChecker::setWordsCheckedCallback([this]() { recheckSpelling(); });   // <SK:Nexii>
     }
     recheckSpelling();
 }
