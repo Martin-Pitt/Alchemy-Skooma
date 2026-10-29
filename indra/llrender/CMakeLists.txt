@@ -286,6 +286,7 @@ if(AL_BUILD_TESTS)
       tests/alwindowsdlheadless_test.cpp
       tests/llfontgl_test.cpp
       tests/llfonttextcache_test.cpp
+      tests/sktextellipsis_gl_test.cpp # <SK:Nexii> text ellipsis foundation
       tests/llglslshader_gl_test.cpp
       tests/llrender2dutils_gl_test.cpp
       tests/llrendertarget_gl_test.cpp
