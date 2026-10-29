@@ -26,6 +26,8 @@
 
 #include "skchatunfurl.h"
 
+#include "llsdjson.h"
+
 #include <algorithm>
 #include <cstdlib>
 
@@ -39,6 +41,10 @@ constexpr std::string_view MARKETPLACE_HOST = "marketplace.secondlife.com";
 constexpr std::string_view MARKETPLACE_IMAGE_HOST = "slm-assets.secondlife.com";
 constexpr std::string_view LSL_DOCS_HOST = "lsl.dev";
 constexpr std::string_view SLUA_DOCS_HOST = "slua.dev";
+constexpr std::string_view YOUTUBE_HOST = "www.youtube.com";
+constexpr std::string_view YOUTUBE_SHORT_HOST = "youtu.be";
+constexpr std::string_view YOUTUBE_IMAGE_HOST = "i.ytimg.com";
+constexpr size_t YOUTUBE_ID_LENGTH = 11;
 constexpr size_t MAX_REGION_NAME = 64;
 
 char lower(char c)
@@ -465,6 +471,49 @@ std::string imageUrl(std::string_view url)
     return "https://" + host + path;
 }
 
+Target youtube(std::string_view id)
+{
+    if (id.size() != YOUTUBE_ID_LENGTH)
+    {
+        return {};
+    }
+    for (char c : id)
+    {
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_'))
+        {
+            return {};
+        }
+    }
+    Target target;
+    target.mKind = EKind::YOUTUBE;
+    target.mVideo = std::string(id);
+    target.mKey = "https://www.youtube.com/watch?v=" + target.mVideo;
+    return target;
+}
+
+// The v parameter of a watch link's query.
+std::string_view query_video(std::string_view path)
+{
+    const size_t q = path.find('?');
+    if (q == std::string_view::npos)
+    {
+        return {};
+    }
+    std::string_view query = path.substr(q + 1);
+    query = query.substr(0, std::min(query.find('#'), query.size()));
+    while (!query.empty())
+    {
+        const size_t amp = std::min(query.find('&'), query.size());
+        const std::string_view pair = query.substr(0, amp);
+        if (pair.size() > 2 && pair[0] == 'v' && pair[1] == '=')
+        {
+            return pair.substr(2);
+        }
+        query.remove_prefix(std::min(amp + 1, query.size()));
+    }
+    return {};
+}
+
 Target classify(std::string_view url)
 {
     constexpr size_t MAX_SEGMENTS = 8;
@@ -552,6 +601,22 @@ Target classify(std::string_view url)
         target.mKey = "https://marketplace.secondlife.com/p/" + std::string(seg[1]) + "/" + std::string(seg[2]);
         return target;
     }
+    if (host == YOUTUBE_SHORT_HOST)
+    {
+        return count == 1 ? youtube(seg[0]) : Target();
+    }
+    if (host == YOUTUBE_HOST || host == "youtube.com" || host == "m.youtube.com" || host == "music.youtube.com")
+    {
+        if (count == 1 && seg[0] == "watch")
+        {
+            return youtube(query_video(path));
+        }
+        if (count == 2 && (seg[0] == "shorts" || seg[0] == "live" || seg[0] == "embed"))
+        {
+            return youtube(seg[1]);
+        }
+        return {};
+    }
     if (host == LSL_DOCS_HOST || host == SLUA_DOCS_HOST)
     {
         Target target;
@@ -582,6 +647,35 @@ Target classify(std::string_view url)
         return target;
     }
     return {};
+}
+
+std::string youtubeOEmbedUrl(std::string_view video)
+{
+    return "https://www.youtube.com/oembed?format=json&url=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3D" + std::string(video);
+}
+
+std::string youtubeThumbnailUrl(std::string_view video)
+{
+    return "https://" + std::string(YOUTUBE_IMAGE_HOST) + "/vi/" + std::string(video) + "/hqdefault.jpg";
+}
+
+OpenGraph parseYouTubeOEmbed(std::string_view json)
+{
+    OpenGraph og;
+    LLSD doc;
+    if (json.size() > MAX_PAGE_BYTES || !LlsdFromJsonString(json, doc) || !doc.isMap())
+    {
+        return og;
+    }
+    if (doc["title"].isString())
+    {
+        og.mTitle = decode_entities(doc["title"].asStringRef(), MAX_TITLE_BYTES);
+    }
+    if (doc["author_name"].isString())
+    {
+        og.mDescription = decode_entities(doc["author_name"].asStringRef(), MAX_DESCRIPTION_BYTES);
+    }
+    return og;
 }
 
 OpenGraph parseOpenGraph(std::string_view html)

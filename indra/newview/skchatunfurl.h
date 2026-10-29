@@ -30,10 +30,9 @@
 #include <string>
 #include <string_view>
 
-// Every viewer in chat range would fetch a previewed link, so a link to any other host would
-// let its owner log their addresses. Only Linden Lab's own hosts are previewed, and only those
-// a viewer talks to anyway, besides the LSL and SLua documentation sites (lsl.dev, slua.dev),
-// which Nexii runs; nothing here touches the network.
+// Every viewer in chat range fetches a previewed link, so a link to an unknown host could be its
+// owner's logger for their addresses. Only well-known hosts are previewed: Linden Lab's own, the
+// LSL and SLua documentation sites (lsl.dev, slua.dev) and YouTube; nothing here touches the network.
 namespace SKChatUnfurl
 {
 enum class EKind
@@ -45,6 +44,7 @@ enum class EKind
     GROUP,
     MARKETPLACE, // a listing page, read for its Open Graph tags
     DOCS,        // a page of lsl.dev or slua.dev, read for its Open Graph tags
+    YOUTUBE,     // a video, read through YouTube's oEmbed
 };
 
 struct Target
@@ -54,6 +54,7 @@ struct Target
     std::string mRegion; // PLACE
     F32 mX = 128.f, mY = 128.f, mZ = 0.f;
     LLUUID mID;          // PARCEL, AGENT, GROUP
+    std::string mVideo;  // YOUTUBE, the video's id
 };
 
 /// What a chat link would preview, NONE for anything not on the allowlist.
@@ -85,6 +86,12 @@ struct OpenGraph
 constexpr size_t MAX_PAGE_BYTES = 256 * 1024;
 constexpr size_t MAX_TITLE_BYTES = 200;
 constexpr size_t MAX_DESCRIPTION_BYTES = 400;
+
+/// The oEmbed request for a video, and its thumbnail on YouTube's image host.
+std::string youtubeOEmbedUrl(std::string_view video);
+std::string youtubeThumbnailUrl(std::string_view video);
+/// The title and channel of an oEmbed answer, as mTitle and mDescription, cleaned as page text is.
+OpenGraph parseYouTubeOEmbed(std::string_view json);
 
 /// og:title, og:description (or the description meta) and og:image from the head of a page,
 /// read from at most MAX_PAGE_BYTES, entities decoded, control characters dropped.

@@ -200,4 +200,43 @@ TEST_CASE("skchatunfurl: page text is bounded and cleaned", "[skchatunfurl]")
     REQUIRE(parseOpenGraph("<meta property=\"og:title\" content=\"x>").mTitle.empty());
     REQUIRE(parseOpenGraph("").mTitle.empty());
 }
+
+TEST_CASE("skchatunfurl: YouTube videos by their id, in every link form", "[skchatunfurl]")
+{
+    const std::string key = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+    const Target t = classify("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=42s#c");
+    REQUIRE(t.mKind == EKind::YOUTUBE);
+    REQUIRE(t.mVideo == "dQw4w9WgXcQ");
+    REQUIRE(t.mKey == key);
+    REQUIRE(classify("https://youtube.com/watch?feature=share&v=dQw4w9WgXcQ").mKey == key);
+    REQUIRE(classify("https://m.youtube.com/watch?v=dQw4w9WgXcQ").mKey == key);
+    REQUIRE(classify("https://music.youtube.com/watch?v=dQw4w9WgXcQ").mKey == key);
+    REQUIRE(classify("https://youtu.be/dQw4w9WgXcQ?si=abc").mKey == key);
+    REQUIRE(classify("https://www.youtube.com/shorts/dQw4w9WgXcQ").mKey == key);
+    REQUIRE(classify("https://www.youtube.com/live/dQw4w9WgXcQ").mKey == key);
+    REQUIRE(classify("https://www.youtube.com/embed/dQw4w9WgXcQ").mKey == key);
+
+    REQUIRE(classify("http://www.youtube.com/watch?v=dQw4w9WgXcQ").mKind == EKind::NONE);
+    REQUIRE(classify("https://www.youtube.com/watch?v=short").mKind == EKind::NONE);
+    REQUIRE(classify("https://www.youtube.com/watch?v=dQw4w9WgXc!").mKind == EKind::NONE);
+    REQUIRE(classify("https://www.youtube.com/watch").mKind == EKind::NONE);
+    REQUIRE(classify("https://www.youtube.com/@channel").mKind == EKind::NONE);
+    REQUIRE(classify("https://youtu.be/dQw4w9WgXcQ/extra").mKind == EKind::NONE);
+    REQUIRE(classify("https://www.youtube.com.evil.example/watch?v=dQw4w9WgXcQ").mKind == EKind::NONE);
+
+    REQUIRE(youtubeThumbnailUrl("dQw4w9WgXcQ") == "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg");
+    REQUIRE(youtubeOEmbedUrl("dQw4w9WgXcQ") ==
+            "https://www.youtube.com/oembed?format=json&url=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3DdQw4w9WgXcQ");
+}
+
+TEST_CASE("skchatunfurl: an oEmbed answer gives the title and channel", "[skchatunfurl]")
+{
+    OpenGraph og = parseYouTubeOEmbed(R"({"title":"Never Gonna \"Give\"\nYou Up","author_name":"Rick Astley","thumbnail_url":"https://evil.example/x.jpg"})");
+    REQUIRE(og.mTitle == "Never Gonna \"Give\" You Up");
+    REQUIRE(og.mDescription == "Rick Astley");
+    REQUIRE(og.mImage.empty());
+    REQUIRE(parseYouTubeOEmbed("not json").mTitle.empty());
+    REQUIRE(parseYouTubeOEmbed(R"(["title"])").mTitle.empty());
+    REQUIRE(parseYouTubeOEmbed(R"({"title":7})").mTitle.empty());
+}
 } // namespace
