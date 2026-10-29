@@ -26,8 +26,11 @@
 
 #include "skchatunfurl.h"
 
+#include "llsdjson.h"
+
 #include <algorithm>
 #include <cstdlib>
+#include <vector>
 
 namespace SKChatUnfurl
 {
@@ -39,6 +42,12 @@ constexpr std::string_view MARKETPLACE_HOST = "marketplace.secondlife.com";
 constexpr std::string_view MARKETPLACE_IMAGE_HOST = "slm-assets.secondlife.com";
 constexpr std::string_view LSL_DOCS_HOST = "lsl.dev";
 constexpr std::string_view SLUA_DOCS_HOST = "slua.dev";
+constexpr std::string_view GITHUB_HOST = "github.com";
+constexpr std::string_view GITHUB_API = "https://api.github.com/repos/";
+constexpr std::string_view YOUTUBE_HOST = "www.youtube.com";
+constexpr std::string_view YOUTUBE_SHORT_HOST = "youtu.be";
+constexpr std::string_view YOUTUBE_IMAGE_HOST = "i.ytimg.com";
+constexpr size_t YOUTUBE_ID_LENGTH = 11;
 constexpr size_t MAX_REGION_NAME = 64;
 
 char lower(char c)
@@ -465,6 +474,100 @@ std::string imageUrl(std::string_view url)
     return "https://" + host + path;
 }
 
+Target youtube(std::string_view id)
+{
+    if (id.size() != YOUTUBE_ID_LENGTH)
+    {
+        return {};
+    }
+    for (char c : id)
+    {
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_'))
+        {
+            return {};
+        }
+    }
+    Target target;
+    target.mKind = EKind::YOUTUBE;
+    target.mVideo = std::string(id);
+    target.mKey = "https://www.youtube.com/watch?v=" + target.mVideo;
+    return target;
+}
+
+bool github_name(std::string_view name, bool owner)
+{
+    if (name.empty() || name.size() > (owner ? 39u : 100u) || name == "." || name == "..")
+    {
+        return false;
+    }
+    for (char c : name)
+    {
+        const bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || (!owner && (c == '_' || c == '.'));
+        if (!ok)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+Target github(const std::string_view* seg, size_t count)
+{
+    if (count < 2 || !github_name(seg[0], true) || !github_name(seg[1], false))
+    {
+        return {};
+    }
+    Target target;
+    target.mRepo = std::string(seg[0]) + "/" + std::string(seg[1]);
+    target.mApi = std::string(GITHUB_API) + target.mRepo;
+    target.mKey = "https://github.com/" + target.mRepo;
+    if (count == 2)
+    {
+        target.mKind = EKind::GITHUB_REPO;
+        return target;
+    }
+    // A pull request's tabs (files, commits) preview the pull request.
+    const bool pull = seg[2] == "pull";
+    if ((!pull && seg[2] != "issues") || (pull ? count > 5 : count != 4) || seg[3].empty() || seg[3].size() > 9 || seg[3][0] == '0')
+    {
+        return {};
+    }
+    for (char c : seg[3])
+    {
+        if (c < '0' || c > '9')
+        {
+            return {};
+        }
+    }
+    target.mKind = pull ? EKind::GITHUB_PULL : EKind::GITHUB_ISSUE;
+    target.mApi += (pull ? "/pulls/" : "/issues/") + std::string(seg[3]);
+    target.mKey += (pull ? "/pull/" : "/issues/") + std::string(seg[3]);
+    return target;
+}
+
+// The v parameter of a watch link's query.
+std::string_view query_video(std::string_view path)
+{
+    const size_t q = path.find('?');
+    if (q == std::string_view::npos)
+    {
+        return {};
+    }
+    std::string_view query = path.substr(q + 1);
+    query = query.substr(0, std::min(query.find('#'), query.size()));
+    while (!query.empty())
+    {
+        const size_t amp = std::min(query.find('&'), query.size());
+        const std::string_view pair = query.substr(0, amp);
+        if (pair.size() > 2 && pair[0] == 'v' && pair[1] == '=')
+        {
+            return pair.substr(2);
+        }
+        query.remove_prefix(std::min(amp + 1, query.size()));
+    }
+    return {};
+}
+
 Target classify(std::string_view url)
 {
     constexpr size_t MAX_SEGMENTS = 8;
@@ -552,6 +655,26 @@ Target classify(std::string_view url)
         target.mKey = "https://marketplace.secondlife.com/p/" + std::string(seg[1]) + "/" + std::string(seg[2]);
         return target;
     }
+    if (host == GITHUB_HOST || host == "www.github.com")
+    {
+        return github(seg, count);
+    }
+    if (host == YOUTUBE_SHORT_HOST)
+    {
+        return count == 1 ? youtube(seg[0]) : Target();
+    }
+    if (host == YOUTUBE_HOST || host == "youtube.com" || host == "m.youtube.com" || host == "music.youtube.com")
+    {
+        if (count == 1 && seg[0] == "watch")
+        {
+            return youtube(query_video(path));
+        }
+        if (count == 2 && (seg[0] == "shorts" || seg[0] == "live" || seg[0] == "embed"))
+        {
+            return youtube(seg[1]);
+        }
+        return {};
+    }
     if (host == LSL_DOCS_HOST || host == SLUA_DOCS_HOST)
     {
         Target target;
@@ -582,6 +705,157 @@ Target classify(std::string_view url)
         return target;
     }
     return {};
+}
+
+std::string youtubeOEmbedUrl(std::string_view video)
+{
+    return "https://www.youtube.com/oembed?format=json&url=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3D" + std::string(video);
+}
+
+std::string youtubeThumbnailUrl(std::string_view video)
+{
+    return "https://" + std::string(YOUTUBE_IMAGE_HOST) + "/vi/" + std::string(video) + "/hqdefault.jpg";
+}
+
+OpenGraph parseYouTubeOEmbed(std::string_view json)
+{
+    OpenGraph og;
+    LLSD doc;
+    if (json.size() > MAX_PAGE_BYTES || !LlsdFromJsonString(json, doc) || !doc.isMap())
+    {
+        return og;
+    }
+    if (doc["title"].isString())
+    {
+        og.mTitle = decode_entities(doc["title"].asStringRef(), MAX_TITLE_BYTES);
+    }
+    if (doc["author_name"].isString())
+    {
+        og.mDescription = decode_entities(doc["author_name"].asStringRef(), MAX_DESCRIPTION_BYTES);
+    }
+    return og;
+}
+
+std::string shortCount(S64 count)
+{
+    if (count < 1000)
+    {
+        return llformat("%lld", (long long)llmax<S64>(count, 0));
+    }
+    const bool mega = count >= 1000000;
+    const F64 scaled = (F64)count / (mega ? 1e6 : 1e3);
+    // One decimal below ten, as GitHub shows 1.2k but 12k.
+    std::string text = scaled < 9.95 ? llformat("%.1f", scaled) : llformat("%.0f", scaled);
+    if (text.size() > 2 && text.compare(text.size() - 2, 2, ".0") == 0)
+    {
+        text.resize(text.size() - 2);
+    }
+    return text + (mega ? "M" : "k");
+}
+
+std::string_view gitHubStateLabel(EGitHubState state)
+{
+    switch (state)
+    {
+    case EGitHubState::OPEN: return "Open";
+    case EGitHubState::DRAFT: return "Draft";
+    case EGitHubState::MERGED: return "Merged";
+    case EGitHubState::CLOSED: return "Closed";
+    case EGitHubState::COMPLETED: return "Closed";
+    case EGitHubState::NOT_PLANNED: return "Not planned";
+    default: return {};
+    }
+}
+
+GitHubCard parseGitHub(const Target& target, std::string_view json)
+{
+    GitHubCard card;
+    LLSD doc;
+    if (json.size() > MAX_API_BYTES || !LlsdFromJsonString(json, doc) || !doc.isMap())
+    {
+        return card;
+    }
+    auto text = [&](const LLSD& value, size_t max) { return value.isString() ? decode_entities(value.asStringRef(), max) : std::string(); };
+    std::vector<std::string> parts;
+    if (target.mKind == EKind::GITHUB_REPO)
+    {
+        card.mTitle = text(doc["full_name"], MAX_TITLE_BYTES);
+        if (card.mTitle.empty())
+        {
+            return card;
+        }
+        if (doc["archived"].asBoolean())
+        {
+            parts.emplace_back("Archived");
+        }
+        parts.push_back("\xE2\x98\x85 " + shortCount(doc["stargazers_count"].asInteger())); // a star
+        if (const std::string language = text(doc["language"], 40); !language.empty())
+        {
+            parts.push_back(language);
+        }
+        if (const std::string about = text(doc["description"], MAX_DESCRIPTION_BYTES); !about.empty())
+        {
+            parts.push_back(about);
+        }
+    }
+    else
+    {
+        const std::string title = text(doc["title"], MAX_TITLE_BYTES);
+        const LLSD& number = doc["number"];
+        if (title.empty() || !number.isInteger())
+        {
+            return card;
+        }
+        card.mTitle = llformat("#%d ", number.asInteger()) + title;
+        const bool open = doc["state"].asString() == "open";
+        if (target.mKind == EKind::GITHUB_PULL)
+        {
+            card.mState = doc["merged"].asBoolean() ? EGitHubState::MERGED
+                        : !open                     ? EGitHubState::CLOSED
+                        : doc["draft"].asBoolean()  ? EGitHubState::DRAFT
+                                                    : EGitHubState::OPEN;
+        }
+        else
+        {
+            const std::string reason = doc["state_reason"].asString();
+            card.mState = open                    ? EGitHubState::OPEN
+                        : reason == "completed"   ? EGitHubState::COMPLETED
+                        : reason == "not_planned" ? EGitHubState::NOT_PLANNED
+                                                  : EGitHubState::CLOSED;
+        }
+        parts.push_back(target.mRepo);
+        if (const std::string login = text(doc["user"]["login"], 40); !login.empty())
+        {
+            parts.push_back("@" + login);
+        }
+        if (target.mKind == EKind::GITHUB_PULL && doc.has("additions"))
+        {
+            parts.push_back("+" + shortCount(doc["additions"].asInteger()) + " \xE2\x88\x92" + shortCount(doc["deletions"].asInteger()));
+        }
+        if (const S32 comments = doc["comments"].asInteger(); comments > 0)
+        {
+            parts.push_back(llformat("%d comment%s", comments, comments == 1 ? "" : "s"));
+        }
+    }
+    for (const std::string& part : parts)
+    {
+        if (!card.mDescription.empty())
+        {
+            card.mDescription += " \xC2\xB7 "; // a middle dot
+        }
+        card.mDescription += part;
+    }
+    if (card.mDescription.size() > MAX_DESCRIPTION_BYTES)
+    {
+        // Cut on a character, not inside one.
+        size_t cut = MAX_DESCRIPTION_BYTES;
+        while (cut > 0 && ((unsigned char)card.mDescription[cut] & 0xC0) == 0x80)
+        {
+            --cut;
+        }
+        card.mDescription.resize(cut);
+    }
+    return card;
 }
 
 OpenGraph parseOpenGraph(std::string_view html)

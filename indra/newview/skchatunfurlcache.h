@@ -47,6 +47,7 @@ struct SKChatEmbed
     std::string mDescription;  // one line
     LLPointer<LLViewerFetchedTexture> mImage;
     bool mRoundImage = false;  // a resident's picture
+    SKChatUnfurl::EGitHubState mGitHubState = SKChatUnfurl::EGitHubState::NONE; // drawn as a pill before the title
     F64 mDeadline = 0.0;       // a region lookup gives up after this
 };
 using SKChatEmbedPtr = std::shared_ptr<SKChatEmbed>;
