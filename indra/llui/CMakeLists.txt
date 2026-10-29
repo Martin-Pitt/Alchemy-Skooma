@@ -174,6 +174,10 @@ target_sources(
     widgets/alspecimenlist.cpp
     studio/alstudiofloater.cpp
     base/alsurface.cpp
+    dataviz/sklegendmodel.cpp # <SK:Nexii> legend foundation
+    dataviz/sklegendsamples.cpp # <SK:Nexii> legend foundation
+    dataviz/sklegendview.cpp # <SK:Nexii> legend foundation
+    dataviz/skticks.cpp # <SK:Nexii> legend foundation
     code/alcodecards.cpp
     code/alcodeliterals.cpp
     code/alchangepeek.cpp
@@ -255,6 +259,12 @@ target_sources(
         studio/alpaneroom.h
         text/altextcaret.h
         base/alviewtype.h
+        dataviz/skdatavizstyle.h # <SK:Nexii> legend foundation
+        dataviz/sklegendmodel.h # <SK:Nexii> legend foundation
+        dataviz/sklegendsamples.h # <SK:Nexii> legend foundation
+        dataviz/sklegendview.h # <SK:Nexii> legend foundation
+        dataviz/skticks.h # <SK:Nexii> legend foundation
+        dataviz/skvizkey.h # <SK:Nexii> legend foundation
         fsvirtualtrackpad.h
         llaccordionctrl.h
         llaccordionctrltab.h
@@ -520,7 +530,7 @@ endif()
 
 target_include_directories(
   llui
-  PUBLIC base text code diff vim xui fields studio widgets
+  PUBLIC base text code diff vim xui fields studio widgets dataviz # <SK:Nexii> legend foundation
 )
 
 target_link_libraries(
@@ -725,6 +735,9 @@ if(AL_BUILD_TESTS)
       tests/llxuiparser_test.cpp
       tests/skscrollanimator_test.cpp
       tests/skscrollsnap_test.cpp
+      tests/sklegendview_test.cpp # <SK:Nexii> legend foundation
+      tests/skticks_test.cpp # <SK:Nexii> legend foundation
+      tests/skvizkey_test.cpp # <SK:Nexii> legend foundation
     # The benchmarks: comparing big scripts, by lines and laid out, and what
     # each comparison says of some edits, which each change to how texts are
     # compared is measured and judged by; and the code editor over
@@ -753,7 +766,11 @@ if(AL_BUILD_TESTS)
   al_add_test_binary(
     llui_gl_tests
     PROJECT llui
-    SOURCES tests/aldiffview_gl_test.cpp tests/alsurface_gl_test.cpp tests/altextview_gl_test.cpp
+    SOURCES
+      tests/aldiffview_gl_test.cpp
+      tests/alsurface_gl_test.cpp
+      tests/altextview_gl_test.cpp
+      tests/sklegendview_gl_test.cpp # <SK:Nexii> legend foundation
     # The same editor drawn, a frame at a time, into llrender's hidden
     # window: what the drawing steps are measured by.
     BENCH_SOURCES tests/altextdraw_bench.cpp

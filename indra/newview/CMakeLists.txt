@@ -1021,8 +1021,10 @@ if(AL_BUILD_VIEWER)
     skchatunfurlcache.cpp
     skemojicomplete.cpp
     skfloaterlocalchat.cpp
+    skfloaterlegenddemo.cpp # <SK:Nexii> legend foundation
     skhover.cpp
     skoverlay.cpp
+    skvizhover.cpp # <SK:Nexii> legend foundation
     rlvlocks.cpp
     rlvui.cpp
     skmodalview.cpp # <SK:Nexii> modal view
@@ -1946,8 +1948,10 @@ if(AL_BUILD_VIEWER)
     skchatunfurlcache.h
     skemojicomplete.h
     skfloaterlocalchat.h
+    skfloaterlegenddemo.h # <SK:Nexii> legend foundation
     skhover.h
     skoverlay.h
+    skvizhover.h # <SK:Nexii> legend foundation
     rlvlocks.h
     rlvmodifiers.h
     rlvui.h
