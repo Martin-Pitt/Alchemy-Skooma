@@ -1584,3 +1584,31 @@ Branch `feature-ui/inventory-explorer` (via `ui`, main `7b8ef524f4`). Spec: `.in
 | `skins/default/xui/en/strings.xml` | `Command_SKInventoryExplorer_Label` / `_Tooltip` after `Command_Search_*` | trailing `<!-- <SK:Nexii> Inventory Explorer -->` |
 | `indra/newview/llviewermessage.cpp` | `LLOpenTaskOffer` skips items the Explorer created, so the stock Inventory floater doesn't open for them | `<SK:Nexii> Inventory Explorer` |
 | `app_settings/settings_per_account_alchemy.xml` | `SkoomaInvExplorer*` preferences (view, sort, group, panes, columns, saved and recent searches, icon size) after `ALScriptStudioVimrcNotecard` | `<!-- <SK:Nexii> Inventory Explorer -->` |
+
+## Legend foundation
+
+Branch `foundation-ui/legend` (main `abe381ef91`; merges `foundation-ui/hover`). Plan: `.legend-foundation-plan.md`. Shared colour scales and the `sk_legend` widget for every data-viz and debug view.
+
+### Files we own
+
+| File | Role |
+|---|---|
+| `indra/llmath/skcolorscale.*` | `SKColorScale`: the one value-to-colour mapping geometry, shaders and legends share; built-in scales |
+| `indra/llui/dataviz/` | `sk_legend` widget, legend model, ticks, `SKVizKey` hover key, style tokens, demo/test sample legends |
+| `indra/newview/skvizhover.*` | Bridges `SKVizKey` to `SKHover` (`viz.key`); HUD legend slots |
+| `indra/newview/skfloaterlegenddemo.*`, `floater_sk_legend_demo.xml`, `panel_sk_viz_hud.xml`, `textures/widgets/SkDataVizHatch.png` | Demo floater, in-viewport legend panel, state hatch |
+| tests: `skcolorscale_test`, `sklegendview_test`, `sklegendview_gl_test`, `skticks_test`, `skvizkey_test` (+ oracle `.inc`) | Pinned to `V:\Scratch\ui-legend\oracle` |
+
+### Upstream edits
+
+| File | Change | Marker |
+|---|---|---|
+| `indra/llmath/CMakeLists.txt` | `skcolorscale` source/header/test | trailing `# <SK:Nexii> legend foundation` |
+| `indra/llui/CMakeLists.txt` | `dataviz/` sources, headers, include dir, tests | trailing `# <SK:Nexii> legend foundation` |
+| `indra/llui/utils/llwidgetreg.cpp` | registers `sk_legend` | `<SK:Nexii> legend foundation` |
+| `indra/newview/CMakeLists.txt` | `skvizhover`, `skfloaterlegenddemo` | trailing `# <SK:Nexii> legend foundation` |
+| `indra/newview/llviewerfloaterreg.cpp` | `sk_legend_demo` floater | `<SK:Nexii> legend foundation` |
+| `skins/default/colors.xml` | `SkDataViz*` colours | `<!-- <SK:Nexii> legend foundation -->` |
+| `skins/default/textures/textures.xml` | `SkDataVizHatch` | `<SK:Nexii> legend foundation` |
+| `skins/default/xui/en/main_view.xml` | `panel_sk_viz_hud.xml` beside `debug_view` | `<SK:Nexii> legend foundation` |
+| `skins/default/xui/en/menu_viewer.xml` | Develop > Render Tests > Legend Demo | `<!-- <SK:Nexii> legend foundation -->` |
