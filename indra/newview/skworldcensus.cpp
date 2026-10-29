@@ -1658,7 +1658,6 @@ skworld::RecordPtr SKWorldCensus::record(const PartFacts& facts, skworld::Role r
     // A cached sculpt has no texture at all, and waits for its object.
     if (in.mSculpted && !in.mMesh && facts.mSculptLevel != 0)
     {
-        LL_PROFILE_ZONE_TEXT("sculpt wait", 11);
         return nullptr;
     }
     SKShapeGeometry geom;
@@ -1682,18 +1681,18 @@ skworld::RecordPtr SKWorldCensus::record(const PartFacts& facts, skworld::Role r
             ok = skPhysicsShapeGeometry(in, shape, geom, sim);
         }
     }
-    {
-        // DO NOT LAND: which shape, from what, at how many triangles; failed builds too.
-        char text[160];
-        const int len = snprintf(text, sizeof(text), "%s ok=%d prov=%d shape=%d mesh=%d sculpt=%d tris=%zu id=%s",
-                                 role == Role::SURROUND ? "surround" : "nav", (int)ok, (int)geom.mProvenance, (int)geom.mShape,
-                                 (int)in.mMesh, (int)in.mSculpted, geom.mTriangles.size() / 3,
-                                 in.mParams->getSculptID().asString().c_str());
-        LL_PROFILE_ZONE_TEXT(text, len > 0 ? std::min<size_t>(len, sizeof(text) - 1) : 0);
-    }
     if (!ok)
     {
         return nullptr;
+    }
+    {
+        // DO NOT LAND: which shape, from what, at how many triangles.
+        char text[160];
+        const int len = snprintf(text, sizeof(text), "%s prov=%d shape=%d mesh=%d sculpt=%d tris=%zu id=%s",
+                                 role == Role::SURROUND ? "surround" : "nav", (int)geom.mProvenance, (int)geom.mShape,
+                                 (int)in.mMesh, (int)in.mSculpted, geom.mTriangles.size() / 3,
+                                 in.mParams->getSculptID().asString().c_str());
+        LL_PROFILE_ZONE_TEXT(text, len > 0 ? std::min<size_t>(len, sizeof(text) - 1) : 0);
     }
 
     auto rec = std::make_shared<Record>();
