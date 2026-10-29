@@ -1291,6 +1291,11 @@ F32 SKFloaterLocalChat::cardAlpha(const Card& card, F64 now) const
     static LLCachedControl<F32> delay(gSavedSettings, "SkoomaLocalChatFadeDelay", 8.f);
     static LLCachedControl<F32> fade(gSavedSettings, "SkoomaLocalChatFadeTime", 2.f);
     static LLCachedControl<F32> grace(gSavedSettings, "SkoomaLocalChatHoverGrace", 5.f);
+    static LLCachedControl<bool> fades(gSavedSettings, "SkoomaLocalChatFade", true);
+    if (!fades)
+    {
+        return 1.f;
+    }
     auto fading = [&](F64 age, F32 hold)
     {
         if (age <= hold)
