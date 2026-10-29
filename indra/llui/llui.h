@@ -444,6 +444,14 @@ namespace LLInitParam
         static void declareValues();
     };
 
+    // <SK:Nexii> XUI's names for where an ellipsis goes.
+    template<>
+    struct TypeValues<LLFontGL::EEllipsisMode> : public TypeValuesHelper<LLFontGL::EEllipsisMode>
+    {
+        static void declareValues();
+    };
+    // </SK:Nexii>
+
     template<>
     struct ParamCompare<const LLFontGL*, false>
     {
