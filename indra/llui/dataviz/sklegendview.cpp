@@ -86,6 +86,8 @@ namespace
     }
 }
 
+static LLDefaultChildRegistry::Register<SKLegendView> r("sk_legend");
+
 SKLegendView::Params::Params() : hud("hud", false), framed("framed", true)
 {
     mouse_opaque = false;
