@@ -345,7 +345,7 @@ public:
     // <SK:Nexii> UI saturation
     // The saturation the UI programs draw at: 1 draws unchanged, 0 luminance only. Changed only through ALUISaturation.
     F32 getUISaturation() const { return mUISaturation; }
-    // Moves with the saturation and on refreshState, so a program bound later uploads it (LLGLSLShader::bind).
+    // Moves with the saturation and on a context's init, so a program bound later uploads it (LLGLSLShader::bind).
     U32 getUIColorAdjustHash() const { return mUIColorAdjustHash; }
     // </SK:Nexii>
 
@@ -860,7 +860,8 @@ public:
     explicit ALUISaturation(F32 saturation)
     :   mPrevious(gGL.getUISaturation())
     {
-        gGL.setUISaturation(mPrevious * saturation);
+        // The fraction is held to [0, 1] first, NaN reading as 1, so a scope never brightens an outer one.
+        gGL.setUISaturation(mPrevious * (saturation < 1.f ? llmax(saturation, 0.f) : 1.f));
     }
 
     ~ALUISaturation() { gGL.setUISaturation(mPrevious); }
