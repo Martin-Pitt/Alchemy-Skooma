@@ -27,8 +27,10 @@
 #include "sktoolmappan.h"
 
 #include "llframetimer.h"
+#include "llselectmgr.h"
 #include "lltoolpie.h"
 #include "llviewercontrol.h"
+#include "llviewerobject.h"
 #include "llviewerwindow.h"
 #include "llwindow.h"
 #include "skmodalview.h"
