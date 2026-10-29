@@ -1270,7 +1270,7 @@ void SKFloaterLocalChat::holdForReading(Message& msg) const
     msg.mHoldExtra = (F32)(until - msg.mArrival - delay);
 }
 
-F32 SKFloaterLocalChat::cardAlpha(const Card& card, F64 now) const
+F32 SKFloaterLocalChat::cardFade(const Card& card, F64 now) const
 {
     static LLCachedControl<F32> delay(gSavedSettings, "SkoomaLocalChatFadeDelay", 8.f);
     static LLCachedControl<F32> fade(gSavedSettings, "SkoomaLocalChatFadeTime", 2.f);
@@ -1290,6 +1290,25 @@ F32 SKFloaterLocalChat::cardAlpha(const Card& card, F64 now) const
     };
     // After the log was shown whole it stays whole for the grace, then fades as one, as MMO chat does.
     return llmax(fading(now - mMessages[card.mLastMessage].mArrival, delay + mMessages[card.mLastMessage].mHoldExtra), fading(now - mCollapsedAt, grace));
+}
+
+F32 SKFloaterLocalChat::cardAlpha(const Card& card, F64 now) const
+{
+    static LLCachedControl<F32> floor(gSavedSettings, "SkoomaLocalChatFadeFloor", 0.f);
+    const F32 rest = llclamp((F32)floor, 0.f, 1.f);
+    return rest + (1.f - rest) * cardFade(card, now);
+}
+
+LLColor4 SKFloaterLocalChat::faded(LLColor4 color, F32 alpha) const
+{
+    // Faded history reads as grey, the cue that it is no longer live.
+    const F32 luma = color.mV[VRED] * 0.299f + color.mV[VGREEN] * 0.587f + color.mV[VBLUE] * 0.114f;
+    for (S32 i = 0; i < 3; ++i)
+    {
+        color.mV[i] = lerp(color.mV[i], luma, mGrey);
+    }
+    color.mV[VALPHA] *= alpha;
+    return color;
 }
 
 void SKFloaterLocalChat::layout()
@@ -1578,8 +1597,7 @@ void SKFloaterLocalChat::layout()
 
 void SKFloaterLocalChat::drawTime(const Message& msg, F32 x, S32 y, F32 alpha, LLFontGL::ShadowType shadow) const
 {
-    LLColor4 color = msg.mNameColor;
-    color.mV[VALPHA] *= TIME_ALPHA * alpha;
+    const LLColor4 color = faded(msg.mNameColor, TIME_ALPHA * alpha);
     time_font()->renderUTF8(msg.mTime, 0, x, (F32)y, color, LLFontGL::LEFT, LLFontGL::BOTTOM, LLFontGL::NORMAL, shadow);
 }
 
@@ -1688,7 +1706,7 @@ void SKFloaterLocalChat::drawRowText(const Row& row, S32 x, S32 y, F32 alpha, LL
             run_end = llmin(run_end, style_run(msg.mStyle, pos, run_end));
             style |= md & MD_FONT;
         }
-        color.mV[VALPHA] *= alpha;
+        color = faded(color, alpha);
         if (md & MD_CODE)
         {
             // Inline code on a darker ground, as Discord's.
@@ -1765,7 +1783,7 @@ void SKFloaterLocalChat::drawEmbed(const Message& msg, S32 x, S32 y, F32 alpha) 
     gGL.getTextureSlot(0)->unbind();
     const bool has_state = embed.mGitHubState != SKChatUnfurl::EGitHubState::NONE;
     LLColor4 accent = has_state ? github_state_color(embed.mGitHubState) : msg.mNameColor;
-    accent.mV[VALPHA] *= alpha;
+    accent = faded(accent, alpha);
     gl_rect_2d(x + 1, y + h - 3, x + 1 + EMBED_ACCENT, y + 3, accent);
 
     S32 right = x + w - EMBED_PAD;
@@ -1825,6 +1843,7 @@ void SKFloaterLocalChat::drawMessages(const LLRect& content, F64 now, bool full,
         {
             break; // older cards arrived earlier, so they have faded too
         }
+        mGrey = full ? 0.f : 1.f - cardFade(card, now);
         const Row& top_row = mRows[card.mFirstRow];
         const Row& bottom_row = mRows[card.mLastRow];
         const S32 card_bottom = base + bottom_row.mBottom + bottom_row.mGap;
@@ -1853,8 +1872,7 @@ void SKFloaterLocalChat::drawMessages(const LLRect& content, F64 now, bool full,
                 // Round for people, square for objects.
                 gGL.getTextureSlot(0)->unbind();
                 const S32 disc_top = card_top - CARD_PAD_Y - 1;
-                LLColor4 disc = first.mNameColor;
-                disc.mV[VALPHA] *= alpha;
+                const LLColor4 disc = faded(first.mNameColor, alpha);
                 if (first.mSource == CHAT_SOURCE_OBJECT)
                 {
                     gl_rect_2d(content.mLeft + CARD_PAD_X, disc_top, content.mLeft + CARD_PAD_X + DISC, disc_top - DISC, disc);
@@ -1878,8 +1896,7 @@ void SKFloaterLocalChat::drawMessages(const LLRect& content, F64 now, bool full,
             if (row.mMessage < 0)
             {
                 drawHeaderSelection(card, text_x, y, alpha);
-                LLColor4 color = first.mNameColor;
-                color.mV[VALPHA] *= alpha;
+                const LLColor4 color = faded(first.mNameColor, alpha);
                 name_font()->renderUTF8(first.mName, 0, (F32)text_x, (F32)y, color, LLFontGL::LEFT, LLFontGL::BOTTOM, LLFontGL::BOLD, LLFontGL::NO_SHADOW);
                 if (first.mTimeWidth > 0)
                 {
