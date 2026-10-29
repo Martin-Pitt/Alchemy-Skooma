@@ -197,6 +197,21 @@ namespace
         gGL.getTextureSlot(0)->unbind();
     }
 
+    // A texture already decoded draws at once; only a new fetch waits for the selection to settle.
+    LLViewerFetchedTexture* known_texture(const LLUUID& id, bool fetching)
+    {
+        if (id.isNull())
+        {
+            return nullptr;
+        }
+        LLViewerFetchedTexture* texture = LLViewerTextureManager::findFetchedTexture(id, TEX_LIST_STANDARD);
+        if (texture && (fetching || texture->getDiscardLevel() >= 0))
+        {
+            return texture;
+        }
+        return fetching ? LLViewerTextureManager::getFetchedTexture(id, FTT_DEFAULT, MIPMAP_YES, LLGLTexture::BOOST_NONE) : nullptr;
+    }
+
     // The types the player previews: textures and photos, sounds, animations, materials and landmarks.
     bool has_asset_preview(LLAssetType::EType type)
     {
@@ -677,10 +692,10 @@ void SKInventoryPlayer::drawImage(const LLRect& rect)
     {
         return;
     }
-    if (!mTexture && mFetching)
+    if (!mTexture)
     {
         // No boost: the texture may be shared with the world, and a boost would shrink it for everyone.
-        mTexture = LLViewerTextureManager::getFetchedTexture(mImageID, FTT_DEFAULT, MIPMAP_YES, LLGLTexture::BOOST_NONE);
+        mTexture = known_texture(mImageID, mFetching);
     }
     // A texture without an aspect tail takes its own width:height once its size arrives.
     if (mImageID == mAssetID && mTexture && mTexture->getFullWidth() > 0)
@@ -1316,9 +1331,9 @@ void SKInventoryDetailsView::addTypeRows(LLViewerInventoryItem* item, LLViewerIn
         case LLAssetType::AT_TEXTURE:
         {
             addHeading("section_image");
-            if (mFetching && (!mInfoTexture || mInfoTexture->getID() != asset_id))
+            if (!mInfoTexture || mInfoTexture->getID() != asset_id)
             {
-                mInfoTexture = LLViewerTextureManager::getFetchedTexture(asset_id, FTT_DEFAULT, MIPMAP_YES, LLGLTexture::BOOST_NONE);
+                mInfoTexture = known_texture(asset_id, mFetching);
             }
             LLViewerFetchedTexture* texture = mInfoTexture && mInfoTexture->getID() == asset_id ? mInfoTexture.get() : nullptr;
             if (texture && texture->getFullWidth() > 0)
