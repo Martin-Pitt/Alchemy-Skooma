@@ -348,7 +348,7 @@
     <button
      follows="top|right"
      height="22"
-     image_overlay="Hierarchy_View_On"
+     image_overlay="SK_View_Columns"
      image_selected="Toolbar_Middle_Selected"
      image_unselected="Toolbar_Middle_Off"
      is_toggle="true"
@@ -361,7 +361,7 @@
     <button
      follows="top|right"
      height="22"
-     image_overlay="Thumbnail_Fallback"
+     image_overlay="SK_View_Icons"
      image_selected="Toolbar_Middle_Selected"
      image_unselected="Toolbar_Middle_Off"
      is_toggle="true"
@@ -387,7 +387,7 @@
     <button
      follows="top|right"
      height="22"
-     image_overlay="Icon_Snapshot"
+     image_overlay="SK_View_Gallery"
      image_selected="Toolbar_Middle_Selected"
      image_unselected="Toolbar_Middle_Off"
      is_toggle="true"
