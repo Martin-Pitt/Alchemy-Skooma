@@ -156,7 +156,7 @@ SKTextEllipsis::Cut SKTextEllipsis::shorten(const LLFontGL& font, std::string_vi
             {
                 ++q;
             }
-            // The tail keeps a separator ("-RIGGED", "/textures") but starts past a space or a dot.
+            // The tail starts at the next separator ("-RIGGED", "/textures"), or just past it if that is a space or a dot.
             const S32 start = (q < size && is_edge_filler(text[q])) ? q + 1 : q;
             if (start < size && is_cluster_start(text, start)
                 && font.getWidthF32Bytes(text, tail_begin, start - tail_begin) <= slack)
