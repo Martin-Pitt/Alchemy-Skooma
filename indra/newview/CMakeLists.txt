@@ -135,6 +135,7 @@ if(AL_BUILD_VIEWER)
     alassetblocklist.cpp
     alavataractions.cpp
     alavatargroups.cpp
+    albakeproxies.cpp
     alchatautocomplete.cpp
     alchatbar.cpp
     alchatcommand.cpp
@@ -249,7 +250,9 @@ if(AL_BUILD_VIEWER)
     alscripttypes.cpp
     alscriptweightspane.cpp
     alscriptworkspace.cpp
+    alsky.cpp
     alterrainsurfacemaps.cpp
+    altextureboost.cpp
     alwatersurface.cpp
     alfloaterscriptstudio.cpp
     alfloaterwebprofile.cpp
@@ -390,11 +393,9 @@ if(AL_BUILD_VIEWER)
     lldrawpoolmaterials.cpp
     lldrawpoolpbropaque.cpp
     lldrawpoolsimple.cpp
-    lldrawpoolsky.cpp
     lldrawpoolterrain.cpp
     lldrawpooltree.cpp
     lldrawpoolwater.cpp
-    lldrawpoolwlsky.cpp
     lldrawpoolwaterexclusion.cpp
     lldynamictexture.cpp
     lleasymessagelogentry.cpp
@@ -822,7 +823,6 @@ if(AL_BUILD_VIEWER)
     llsidepaneltaskinfo.cpp
     llsidetraypanelcontainer.cpp
     llskinningutil.cpp
-    llsky.cpp
     llslurl.cpp
     llsnapshotlivepreview.cpp
     llspatialpartition.cpp
@@ -967,11 +967,9 @@ if(AL_BUILD_VIEWER)
     llvoicewebrtc.cpp
     llvoinventorylistener.cpp
     llvopartgroup.cpp
-    llvosky.cpp
     llvosurfacepatch.cpp
     llvotree.cpp
     llvovolume.cpp
-    llvowlsky.cpp
     llwearableitemslist.cpp
     llwearablelist.cpp
     llweb.cpp
@@ -1014,6 +1012,7 @@ if(AL_BUILD_VIEWER)
     alassetblocklist.h
     alavataractions.h
     alavatargroups.h
+    albakeproxies.h
     alchatautocomplete.h
     alchatbar.h
     alchatcommand.h
@@ -1134,8 +1133,10 @@ if(AL_BUILD_VIEWER)
     alscripttypes.h
     alscriptweightspane.h
     alscriptworkspace.h
+    alsky.h
     alterrainsurfacemaps.h
     alwatersurface.h
+    altextureboost.h
     altexturetable.h
     alfloaterscriptstudio.h
     alfloaterwebprofile.h
@@ -1276,11 +1277,9 @@ if(AL_BUILD_VIEWER)
     lldrawpoolmaterials.h
     lldrawpoolpbropaque.h
     lldrawpoolsimple.h
-    lldrawpoolsky.h
     lldrawpoolterrain.h
     lldrawpooltree.h
     lldrawpoolwater.h
-    lldrawpoolwlsky.h
     lldrawpoolwaterexclusion.h
     lldynamictexture.h
     lleasymessagelogentry.h
@@ -1699,7 +1698,6 @@ if(AL_BUILD_VIEWER)
     llsidepaneltaskinfo.h
     llsidetraypanelcontainer.h
     llskinningutil.h
-    llsky.h
     llslurl.h
     llsnapshotlivepreview.h
     llsnapshotmodel.h
@@ -1847,11 +1845,9 @@ if(AL_BUILD_VIEWER)
     llvoicewebrtc.h
     llvoinventorylistener.h
     llvopartgroup.h
-    llvosky.h
     llvosurfacepatch.h
     llvotree.h
     llvovolume.h
-    llvowlsky.h
     llwearableitemslist.h
     llwearablelist.h
     llweb.h
@@ -2059,7 +2055,6 @@ if(AL_BUILD_VIEWER)
     app_settings/cmd_line.xml
     app_settings/commands.xml
     app_settings/emoji_groups.xml
-    app_settings/foldertypes.xml
     app_settings/grass.xml
     app_settings/ignorable_dialogs.xml
     app_settings/key_bindings.xml
@@ -2073,7 +2068,6 @@ if(AL_BUILD_VIEWER)
     app_settings/std_bump.ini
     app_settings/toolbars.xml
     app_settings/trees.xml
-    app_settings/viewerart.xml
     app_settings/message.xml
     ${SCRIPTS_DIR}/messages/message_template.msg
     featuretable.txt
@@ -2541,6 +2535,7 @@ if(AL_BUILD_TESTS)
     PROJECT ${test_project}
     SOURCES
       tests/alagentlocationformat_test.cpp
+      tests/albakeproxies_test.cpp
       tests/alchattimestamp_test.cpp
       tests/alcolorwheelmodel_test.cpp
       tests/alcrashreporter_test.cpp
@@ -2600,6 +2595,7 @@ if(AL_BUILD_TESTS)
       tests/alscripttypes_test.cpp
       tests/alscriptweightspane_test.cpp
       tests/alterrainsurfacemaps_test.cpp
+      tests/altextureboost_test.cpp
       tests/altexturetable_test.cpp
       tests/alwhitebalancesolver_test.cpp
       tests/cppfeatures_test.cpp
@@ -2614,6 +2610,7 @@ if(AL_BUILD_TESTS)
       tests/noise_test.cpp
     UNIT
       alagentlocationformat.cpp
+      albakeproxies.cpp
       alchattimestamp.cpp
       alcolorwheelmodel.cpp
       alcrashreporter.cpp
@@ -2702,10 +2699,11 @@ if(AL_BUILD_TESTS)
   )
 
   # The selection outline's id and edge passes, the shadow samplers over a
-  # map the pass has none of, and the post chain's passes held against what
-  # they replaced: the viewer's own shader files read from the source tree,
-  # on llrender's shared hidden window. The post chain's passes are timed
-  # there too, by the GPU's own clock.
+  # map the pass has none of, the exposure meter over the water, and the
+  # post chain's passes held against what they replaced: the viewer's own
+  # shader files read from the source tree, on llrender's shared hidden
+  # window. The post chain's passes are timed there too, by the GPU's own
+  # clock.
   al_add_test_binary(
     newview_gl_tests
     PROJECT ${test_project}
@@ -2714,12 +2712,13 @@ if(AL_BUILD_TESTS)
       tests/aldof_gl_test.cpp
       tests/alselectionoutline_gl_test.cpp
       tests/copycolor_gl_test.cpp
+      tests/luminance_gl_test.cpp
       tests/objectskinblock_gl_test.cpp
       tests/shadowutil_gl_test.cpp
     BENCH_SOURCES tests/alcasfold_bench.cpp tests/aldof_bench.cpp tests/alssrhistory_bench.cpp
     LIBRARIES llrender
     SUPPORT llrender_test_checks llcommon_test_checks
-    INCLUDES ${INDRA_SOURCE_DIR}/llprimitive
+    INCLUDES ${INDRA_SOURCE_DIR}/llprimitive ${INDRA_SOURCE_DIR}/alrender
     DEFINES "AL_TEST_SHADER_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/app_settings/shaders\""
     GL
   )

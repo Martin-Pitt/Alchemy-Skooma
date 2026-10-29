@@ -67,6 +67,7 @@
 #include <map>
 #include <numeric>
 #include <optional>
+#include <random>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -860,6 +861,25 @@ namespace
         }
     }
 
+    // A cap's texture reads the right way round from the side it faces, a
+    // bottom cap's as a top cap's: its triangles wind the same way in UV as
+    // they do seen from in front, whichever way the cap faces.
+    void checkCapUV(const LLVolumeFace& face, Report& report, const std::string& where)
+    {
+        for (S32 t = 0; t + 2 < face.mNumIndices; t += 3)
+        {
+            const LLVector2& a = face.mTexCoords[face.mIndices[t]];
+            const LLVector2& b = face.mTexCoords[face.mIndices[t + 1]];
+            const LLVector2& c = face.mTexCoords[face.mIndices[t + 2]];
+            const F32 area = (b.mV[0] - a.mV[0]) * (c.mV[1] - a.mV[1]) - (c.mV[0] - a.mV[0]) * (b.mV[1] - a.mV[1]);
+            if (area < -1e-6f)
+            {
+                report.fail(fmt::format("{}: triangle {} winds against its UVs: the texture reads mirrored from in front", where, t / 3));
+                return;
+            }
+        }
+    }
+
     // A face whose positions lie in a plane and, for a side, whose every
     // grid quad is a parallelogram, maps its UVs as an affine function of
     // position: least squares over the plane must fit every vertex.
@@ -1627,6 +1647,7 @@ namespace
             if ((state.checks & Checks::CapFacing) && isCap(face))
             {
                 checkCapFacing(volume, face, state.raw, report, where);
+                checkCapUV(face, report, where);
             }
             // A sculpt's UVs are its grid, wherever the map puts the points.
             if ((state.checks & Checks::AffineUV) && !isSculpt(volume))
@@ -3100,6 +3121,202 @@ namespace
         return sculptMap(32, 32, [](U16, U16) { return LLVector3(0.1f, 0.1f, 0.1f); });
     }
 
+    // The quads of a num_s by num_t grid, as column and row, in the order a
+    // side lists them: a grid of up to seven rows a column at a time, every
+    // row of a column before the next; a taller one in bands, one of up to
+    // seven quads across or as many of at most six as near equal as the
+    // quads divide, the wider first, each band row by row and every other
+    // band from its last row back to its first.
+    std::vector<std::array<S32, 2>> sideQuadOrder(S32 num_s, S32 num_t)
+    {
+        const S32 quads = num_s - 1;
+        const S32 rows = num_t - 1;
+        std::vector<std::array<S32, 2>> order;
+        if (num_t <= 7)
+        {
+            for (S32 s = 0; s < quads; ++s)
+            {
+                for (S32 t = 0; t < rows; ++t)
+                {
+                    order.push_back({ s, t });
+                }
+            }
+            return order;
+        }
+        const S32 bands = quads <= 7 ? 1 : (quads + 5) / 6;
+        S32 first = 0;
+        for (S32 band = 0; band < bands; ++band)
+        {
+            const S32 width = quads / bands + (band < quads % bands ? 1 : 0);
+            for (S32 row = 0; row < rows; ++row)
+            {
+                const S32 t = (band & 1) ? rows - 1 - row : row;
+                for (S32 s = first; s < first + width; ++s)
+                {
+                    order.push_back({ s, t });
+                }
+            }
+            first += width;
+        }
+        return order;
+    }
+
+    // A sculpt side's indices: its quads in the order above, each as bottom
+    // left, top right, top left and bottom left, bottom right, top right,
+    // and where leave_out is set, but for the triangles two of whose
+    // corners are one point, unless that would leave none.
+    std::vector<U16> sculptSideIndices(const LLVolumeFace& face, bool leave_out)
+    {
+        std::vector<U16> all, kept;
+        const LLVector4a* pos = face.mPositions;
+        for (const auto& [s, t] : sideQuadOrder(face.mNumS, face.mNumT))
+        {
+            const U16 bl = (U16)gridIndex(face, s, t), br = (U16)(bl + 1);
+            const U16 tl = (U16)gridIndex(face, s, t + 1), tr = (U16)(tl + 1);
+            for (const std::array<U16, 3>& tri : { std::array<U16, 3>{ bl, tr, tl }, std::array<U16, 3>{ bl, br, tr } })
+            {
+                all.insert(all.end(), tri.begin(), tri.end());
+                if (!samePoint(pos[tri[0]], pos[tri[1]]) && !samePoint(pos[tri[1]], pos[tri[2]]) && !samePoint(pos[tri[0]], pos[tri[2]]))
+                {
+                    kept.insert(kept.end(), tri.begin(), tri.end());
+                }
+            }
+        }
+        return leave_out && !kept.empty() ? kept : all;
+    }
+
+    // A map of a few colours, scattered: samples meet everywhere, in no
+    // pattern.
+    SculptMap fewColoursMap(U32 colours)
+    {
+        return sculptMap(64, 64, [&](U16 x, U16 y)
+        {
+            U32 h = (U32(y) * 64u + x) * 0x9e3779b9u;
+            h ^= h >> 15;
+            const U32 c = h % colours;
+            return LLVector3((F32)c / colours - 0.5f, (F32)(c * 7 % colours) / colours - 0.5f, 0.25f);
+        });
+    }
+
+    // A plane drawn in steps, each value held for three columns and five
+    // rows: some samples meet their neighbours along a row, some down a
+    // column, depending on the detail.
+    SculptMap steppedMap()
+    {
+        return sculptMap(64, 64, [](U16 x, U16 y)
+        {
+            const F32 u = (F32)(x / 3 * 3) / 63, v = (F32)(y / 5 * 5) / 63;
+            return LLVector3(u - 0.5f, v - 0.5f, 0.1f * sinf(F_TWO_PI * u));
+        });
+    }
+
+    // Every side of a sculpt lists its quads in the side order, a quad's two
+    // triangles in turn, and a shared volume's leave out the triangles two
+    // of whose corners are one point: the indices word for word, whatever
+    // the stitching, flags and detail, for maps whose samples meet along
+    // rows, columns and folds, at single points, in no pattern or not at
+    // all, for the placeholders, and for parameters with a hole or a cut. A
+    // flat inner side with its corners doubled lists its runs of quads
+    // apart, and keeps all of them; it is left out here.
+    TEST_CASE("llvolume: a sculpt lists its quads in order less the triangles with two corners at one point", "[llvolume]")
+    {
+        std::vector<std::pair<std::string, SculptMap>> maps;
+        const std::array<U16, 2> sizes[] = { { 64, 64 }, { 128, 32 }, { 32, 128 }, { 64, 16 }, { 32, 32 }, { 8, 8 } };
+        for (const auto& size : sizes)
+        {
+            maps.push_back({ fmt::format("own surface {} by {}", size[0], size[1]), {} });
+        }
+        maps.push_back({ "pinched", pinchedMap() });
+        maps.push_back({ "folded", foldedMap() });
+        maps.push_back({ "pinwheel", pinwheelMap() });
+        maps.push_back({ "stepped", steppedMap() });
+        maps.push_back({ "three colours", fewColoursMap(3) });
+        maps.push_back({ "seventeen colours", fewColoursMap(17) });
+        maps.push_back({ "one colour", oneColourMap() });
+        maps.push_back({ "no map, sphere placeholder", SculptMap() });
+        maps.push_back({ "no map, empty placeholder", SculptMap() });
+
+        struct Shape
+        {
+            const char* name;
+            U8 profile;
+            F32 hollow;
+            F32 begin;
+        };
+        const Shape shapes[] = {
+            { "", LL_PCODE_PROFILE_CIRCLE, 0.f, 0.f },
+            { ", circle hole", LL_PCODE_PROFILE_CIRCLE | LL_PCODE_HOLE_CIRCLE, 0.5f, 0.f },
+            { ", square hole", LL_PCODE_PROFILE_CIRCLE | LL_PCODE_HOLE_SQUARE, 0.4f, 0.f },
+            { ", profile cut", LL_PCODE_PROFILE_CIRCLE, 0.f, 0.2f },
+        };
+        const U8 flags[] = { 0, LL_SCULPT_FLAG_MIRROR, LL_SCULPT_FLAG_INVERT, LL_SCULPT_FLAG_MIRROR | LL_SCULPT_FLAG_INVERT };
+
+        Report report;
+        S32 sides = 0;
+        S32 sides_left_out = 0;
+        for (U8 stitching : STITCHINGS)
+        {
+            for (size_t m = 0; m < maps.size(); ++m)
+            {
+                const SculptMap map = m < std::size(sizes) ? mapFor(stitching, sizes[m][0], sizes[m][1]) : maps[m].second;
+                const bool visible = maps[m].first != "no map, empty placeholder";
+                for (const Shape& shape : shapes)
+                {
+                    // A hole or a cut on the stitchings' own surfaces and the
+                    // stepped map.
+                    if (shape.name[0] && m >= std::size(sizes) && maps[m].first != "stepped")
+                    {
+                        continue;
+                    }
+                    for (U8 flag : flags)
+                    {
+                        for (S32 lod = 0; lod < LOD_COUNT; ++lod)
+                        {
+                            for (bool unique : { false, true })
+                            {
+                                if (unique && flag != 0)
+                                {
+                                    continue;
+                                }
+                                LLVolumeParams p;
+                                p.setType(shape.profile, LL_PCODE_PATH_CIRCLE);
+                                p.setRatio(1.f, 0.5f);
+                                p.setHollow(shape.hollow);
+                                p.setBeginAndEndS(shape.begin, 1.f);
+                                p.setSculptID(LLUUID("c8b26d0b-6f5a-4f10-8d1e-5c3b3e4a9a01"), (U8)(stitching | flag));
+                                LLPointer<LLVolume> volume = new LLVolume(p, LOD_DETAIL[lod], false, unique);
+                                volume->sculpt(map.width, map.height, 3, map.rgb.empty() ? nullptr : map.rgb.data(), 0, visible);
+                                for (S32 f = 0; f < volume->getNumVolumeFaces(); ++f)
+                                {
+                                    const LLVolumeFace& face = volume->getVolumeFace(f);
+                                    if (!isGrid(face) || isDoubled(face))
+                                    {
+                                        continue;
+                                    }
+                                    const std::vector<U16> want = sculptSideIndices(face, !unique);
+                                    const std::vector<U16> got(face.mIndices, face.mIndices + face.mNumIndices);
+                                    ++sides;
+                                    sides_left_out += want.size() < 6u * (face.mNumS - 1) * (face.mNumT - 1) ? 1 : 0;
+                                    if (got != want)
+                                    {
+                                        const size_t at = std::mismatch(got.begin(), got.end(), want.begin(), want.end()).first - got.begin();
+                                        report.fail(fmt::format("{} sculpt, {}{}, flags {}, LOD {}{}, face {}: {} indices where {} are listed, first apart at {}",
+                                                                stitchingName(stitching), maps[m].first, shape.name, flag, lod, unique ? ", unique" : "", f,
+                                                                got.size(), want.size(), at));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        INFO(fmt::format("{} sides, {} with triangles left out", sides, sides_left_out));
+        INFO(report.text());
+        CHECK(sides_left_out > 0);
+        CHECK(report.failures == 0);
+    }
+
     // The sphere a sculpt shows while its map is missing or has no area,
     // whatever its stitching, and the empty one it shows otherwise.
     void inspectPlaceholders(const Inspect& how, bool spheres_only, Report& report)
@@ -3134,6 +3351,59 @@ namespace
     }
 
     // The placeholders' normals have a case of their own, below.
+    // A sculpt block of no stitching with a map builds from the map, on
+    // whatever parameters its prim has. None of its rows or columns is the
+    // pole or apex those parameters would make of a prim's, and it keeps
+    // every triangle of its grid, as it always has.
+    TEST_CASE("llvolume: a sculpt of no stitching keeps every triangle of its map", "[llvolume]")
+    {
+        struct Shape
+        {
+            const char* name;
+            U8 profile;
+            U8 path;
+            F32 ratio;
+        };
+        const Shape shapes[] = {
+            { "sphere", LL_PCODE_PROFILE_CIRCLE_HALF, LL_PCODE_PATH_CIRCLE, 1.f },
+            { "line tapered to its end", LL_PCODE_PROFILE_CIRCLE, LL_PCODE_PATH_LINE, 0.f },
+            { "line tapered from its beginning", LL_PCODE_PROFILE_CIRCLE, LL_PCODE_PATH_LINE, 2.f },
+        };
+        const SculptMap map = sphereMap(64, 64);
+        Report report;
+        for (const Shape& shape : shapes)
+        {
+            for (S32 lod = 0; lod < LOD_COUNT; ++lod)
+            {
+                LLVolumeParams p;
+                p.setType(shape.profile, shape.path);
+                p.setRatio(shape.ratio, shape.ratio);
+                p.setSculptID(LLUUID("c8b26d0b-6f5a-4f10-8d1e-5c3b3e4a9a01"), LL_SCULPT_TYPE_NONE);
+                LLPointer<LLVolume> volume = new LLVolume(p, LOD_DETAIL[lod]);
+                volume->sculpt(map.width, map.height, 3, map.rgb.data(), 0, true);
+                S32 sides = 0;
+                for (S32 f = 0; f < volume->getNumVolumeFaces(); ++f)
+                {
+                    const LLVolumeFace& face = volume->getVolumeFace(f);
+                    if ((face.mTypeMask & LLVolumeFace::CAP_MASK) || (face.mTypeMask & LLVolumeFace::FLAT_MASK))
+                    {
+                        continue;
+                    }
+                    ++sides;
+                    const S32 grid = 6 * (face.mNumS - 1) * (face.mNumT - 1);
+                    if (face.mNumIndices != grid)
+                    {
+                        report.fail(fmt::format("{} at LOD {}: {} has {} indices of its grid's {}", shape.name, lod, faceName(face),
+                                                face.mNumIndices, grid));
+                    }
+                }
+                CHECK(sides > 0);
+            }
+        }
+        INFO(report.text());
+        CHECK(report.failures == 0);
+    }
+
     TEST_CASE("llvolume: an empty sculpt map makes a placeholder", "[llvolume]")
     {
         Inspect how;
@@ -3279,6 +3549,50 @@ namespace
             INFO(report.text());
             CHECK(report.failures == 0);
         }
+    }
+
+    // A fan of 60,000 triangles round one vertex, in shuffled order: a vertex
+    // cache order would score that vertex's triangles again for each it
+    // takes, some 1.8 billion times, so the face keeps the order it has.
+    TEST_CASE("llvolume: cacheOptimize keeps the order of a face with a vertex under too many triangles", "[llvolume]")
+    {
+        constexpr U32 RIM = 60000;
+        CorpusMesh mesh;
+        mesh.name = "fan";
+        mesh.positions.emplace_back(0.f, 0.f, 0.f);
+        for (U32 i = 0; i < RIM; ++i)
+        {
+            const F32 angle = F_TWO_PI * (F32)i / (F32)RIM;
+            mesh.positions.emplace_back(0.5f * cosf(angle), 0.5f * sinf(angle), 0.f);
+        }
+        for (const LLVector3& p : mesh.positions)
+        {
+            mesh.normals.emplace_back(0.f, 0.f, 1.f);
+            mesh.uvs.emplace_back(p.mV[0] + 0.5f, p.mV[1] + 0.5f);
+        }
+        std::vector<U32> order(RIM);
+        std::iota(order.begin(), order.end(), 0u);
+        std::shuffle(order.begin(), order.end(), std::mt19937(7));
+        for (U32 t : order)
+        {
+            mesh.indices.push_back(0);
+            mesh.indices.push_back((U16)(1 + t));
+            mesh.indices.push_back((U16)(1 + (t + 1) % RIM));
+        }
+
+        const LLVolumeFace before = mesh.face();
+        LLVolumeFace after = mesh.face();
+        REQUIRE(after.cacheOptimize(true));
+        REQUIRE(after.mNumIndices == before.mNumIndices);
+        S32 moved = 0;
+        for (S32 i = 0; i < before.mNumIndices; ++i)
+        {
+            if (bitsOf(after.mPositions[after.mIndices[i]]) != bitsOf(before.mPositions[before.mIndices[i]]))
+            {
+                ++moved;
+            }
+        }
+        CHECK(moved == 0);
     }
 
     TEST_CASE("llvolume: cacheOptimize splits the vertices a mirrored UV seam joins", "[llvolume]")

@@ -231,7 +231,6 @@
 #include "llbutton.h"
 #include "llstatusbar.h"
 #include "llsurface.h"
-#include "llvosky.h"
 #include "llvotree.h"
 #include "llvoavatar.h"
 #include "llfolderview.h"
@@ -254,7 +253,6 @@
 #include "lldeferredsounds.h"
 #include "pipeline.h"
 #include "llgesturemgr.h"
-#include "llsky.h"
 #include "llvlcomposition.h"
 #include "llvlmanager.h"
 #include "llviewercamera.h"
@@ -3903,7 +3901,7 @@ LLSD LLAppViewer::getViewerInfo() const
     info["NET_BANDWITH"] = LLViewerThrottle::getMaxBandwidthKbps();
     info["LOD_FACTOR"] = gSavedSettings.getF32("RenderVolumeLODFactor");
     info["RENDER_QUALITY"] = (F32)gSavedSettings.getU32("RenderQualityPerformance");
-    info["TEXTURE_MEMORY"] = LLSD::Integer(gGLManager.mVRAM);
+    info["VIDEO_MEMORY"] = LLSD::Integer(gGLManager.mVRAM);
 
 #if LL_DARWIN || LL_SDL_WINDOW
     info["HIDPI"] = gHiDPISupport;
@@ -5884,18 +5882,12 @@ void LLAppViewer::idle()
 
     // Update wind vector
     LLVector3 wind_position_region;
-    static LLVector3 average_wind;
 
     LLViewerRegion *regionp;
     regionp = LLWorld::getInstance()->resolveRegionGlobal(wind_position_region, gAgent.getPositionGlobal());    // puts agent's local coords into wind_position
     if (regionp)
     {
         gWindVec = regionp->mWind.getVelocity(wind_position_region);
-
-        // Compute average wind and use to drive motion of water
-
-        average_wind = regionp->mWind.getAverage();
-        gSky.setWind(average_wind);
     }
     else
     {

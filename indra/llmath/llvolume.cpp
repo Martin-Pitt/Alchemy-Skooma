@@ -3641,31 +3641,77 @@ void sculpt_calc_mesh_resolution(U16 width, U16 height, U8 type, F32 detail, S32
 // A sculpt map averaged down by two along x, y or both: each pixel the rounded mean of the two or four it covers.
 static std::vector<U8> sculpt_map_averaged_down(const U8* data, U16 width, U16 height, S8 components, bool along_x, bool along_y)
 {
-    const S32 step_x = along_x ? 2 : 1;
-    const S32 step_y = along_y ? 2 : 1;
-    const S32 out_width = width / step_x;
-    const S32 out_height = height / step_y;
-    std::vector<U8> out((size_t)out_width * out_height * components);
-    for (S32 y = 0; y < out_height; ++y)
+    const size_t pixel = (size_t)components;
+    const size_t out_width = along_x ? width / 2 : width;
+    const size_t out_height = along_y ? height / 2 : height;
+    const size_t in_row = (size_t)width * pixel;
+    const size_t out_row = out_width * pixel;
+    std::vector<U8> out(out_row * out_height);
+    for (size_t y = 0; y < out_height; ++y)
     {
-        for (S32 x = 0; x < out_width; ++x)
+        const U8* upper = data + (along_y ? 2 * y : y) * in_row;
+        const U8* lower = along_y ? upper + in_row : upper;
+        U8* to = out.data() + y * out_row;
+        if (along_x && along_y)
         {
-            for (S32 c = 0; c < components; ++c)
+            for (size_t x = 0; x < out_width; ++x, upper += 2 * pixel, lower += 2 * pixel)
             {
-                S32 sum = 0;
-                for (S32 dy = 0; dy < step_y; ++dy)
+                for (size_t c = 0; c < pixel; ++c)
                 {
-                    for (S32 dx = 0; dx < step_x; ++dx)
-                    {
-                        sum += data[((size_t)(y * step_y + dy) * width + (x * step_x + dx)) * components + c];
-                    }
+                    *to++ = (U8)((upper[c] + upper[pixel + c] + lower[c] + lower[pixel + c] + 2) >> 2);
                 }
-                const S32 count = step_x * step_y;
-                out[((size_t)y * out_width + x) * components + c] = (U8)((sum + count / 2) / count);
+            }
+        }
+        else if (along_x)
+        {
+            for (size_t x = 0; x < out_width; ++x, upper += 2 * pixel)
+            {
+                for (size_t c = 0; c < pixel; ++c)
+                {
+                    *to++ = (U8)((upper[c] + upper[pixel + c] + 1) >> 1);
+                }
+            }
+        }
+        else
+        {
+            for (size_t i = 0; i < out_row; ++i)
+            {
+                to[i] = (U8)((upper[i] + lower[i] + 1) >> 1);
             }
         }
     }
     return out;
+}
+
+// Whether every pixel of each row of a sculpt map is its row's first, or, where the stitching does not pinch its first
+// and last rows to their middle pixels, every row is the first: each mesh row of such a map samples one point, or
+// every mesh row the same points, and so does each of the map averaged down any number of times, which has each row one
+// colour or its rows alike as it does.
+static bool sculpt_map_has_no_area_at_any_size(const U8* data, U16 width, U16 height, S8 components, U8 sculpt_stitching)
+{
+    const size_t row = (size_t)width * components;
+    if (sculpt_stitching != LL_SCULPT_TYPE_SPHERE)
+    {
+        bool rows_alike = true;
+        for (U16 y = 1; y < height && rows_alike; ++y)
+        {
+            rows_alike = std::memcmp(data + y * row, data, row) == 0;
+        }
+        if (rows_alike)
+        {
+            return true;
+        }
+    }
+    for (U16 y = 0; y < height; ++y)
+    {
+        // Each pixel the one before it: the row from its second pixel on is the row up to its last.
+        const U8* start = data + y * row;
+        if (std::memcmp(start + components, start, row - components) != 0)
+        {
+            return false;
+        }
+    }
+    return true;
 }
 
 // sculpt replaces generate() for sculpted surfaces
@@ -3687,10 +3733,13 @@ void LLVolume::sculpt(U16 sculpt_width, U16 sculpt_height, S8 sculpt_components,
     // detail nothing but the collapsed lines, and no area. Where the samples have no area, the map averaged down by
     // two along each such axis is sampled instead, as the level below it would be, until one has or no axis is left
     // to average; a map whose samples have their area builds as it always has.
+    // A map that no averaging down gives area is not averaged, and the sizes it would go through are taken as they
+    // would be, so that the sphere it ends as is the one it would.
     U16 width = sculpt_width;
     U16 height = sculpt_height;
     const U8* data = sculpt_data;
     std::vector<U8> averaged;
+    bool never_has_area = false;
     while (true)
     {
         S32 requested_sizeS = 0;
@@ -3718,7 +3767,10 @@ void LLVolume::sculpt(U16 sculpt_width, U16 sculpt_height, S8 sculpt_components,
             break;
         }
 
-        sculptGenerateMapVertices(width, height, sculpt_components, data, sculpt_type);
+        if (!never_has_area)
+        {
+            sculptGenerateMapVertices(width, height, sculpt_components, data, sculpt_type);
+        }
 
         // don't test lowest LOD to support legacy content DEV-33670
         if (mDetail <= SCULPT_MIN_AREA_DETAIL)
@@ -3726,7 +3778,7 @@ void LLVolume::sculpt(U16 sculpt_width, U16 sculpt_height, S8 sculpt_components,
             break;
         }
 
-        F32 area = sculptGetSurfaceArea();
+        F32 area = never_has_area ? 0.f : sculptGetSurfaceArea();
 
         mSurfaceArea = area;
 
@@ -3747,8 +3799,13 @@ void LLVolume::sculpt(U16 sculpt_width, U16 sculpt_height, S8 sculpt_components,
             visible_placeholder = true;
             break;
         }
-        averaged = sculpt_map_averaged_down(data, width, height, sculpt_components, along_x, along_y);
-        data = averaged.data();
+        never_has_area =
+            never_has_area || sculpt_map_has_no_area_at_any_size(data, width, height, sculpt_components, sculpt_type & LL_SCULPT_TYPE_MASK);
+        if (!never_has_area)
+        {
+            averaged = sculpt_map_averaged_down(data, width, height, sculpt_components, along_x, along_y);
+            data = averaged.data();
+        }
         width = along_x ? width / 2 : width;
         height = along_y ? height / 2 : height;
     }
@@ -5326,6 +5383,36 @@ namespace
         unit.normalize3();
         v.setSelectWithMask(length2.greaterThan(LLVector4a(FLT_MIN)), unit, LLVector4a::getZero());
     }
+
+    // meshoptimizer's vertex cache order scores again every triangle a vertex
+    // in its cache has left whenever it takes a triangle, so a vertex of n
+    // triangles costs it about n squared: one vertex under the most
+    // triangles a decoded face may have would take it minutes. Past this
+    // sum, over the vertices, of each one's triangles squared, some tens of
+    // milliseconds of scoring, a face keeps the order it has. An ordinary face of 65,535
+    // vertices, six triangles each, sums to under 2.4 million.
+    constexpr U64 CACHE_ORDER_BUDGET = 1ull << 26;
+
+    bool cache_order_affordable(const U32* indices, size_t index_count, size_t vertex_count)
+    {
+        ALScratchArena::Scope scratch;
+        U32* triangles = scratch.allocate<U32>(vertex_count);
+        std::fill_n(triangles, vertex_count, 0u);
+        for (size_t i = 0; i < index_count; ++i)
+        {
+            ++triangles[indices[i]];
+        }
+        U64 cost = 0;
+        for (size_t v = 0; v < vertex_count; ++v)
+        {
+            cost += (U64)triangles[v] * triangles[v];
+            if (cost > CACHE_ORDER_BUDGET)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
 } // namespace
 
 // A decoded mesh LOD face made ready to draw: MikkTSpace's tangents, as
@@ -5531,7 +5618,14 @@ bool LLVolumeFace::cacheOptimize(bool gen_tangents)
         U32* ordered = scratch.allocate<U32>(index_count);
         {
             LL_PROFILE_ZONE_NAMED_CATEGORY_VOLUME("cacheOptimize - cache order");
-            meshopt_optimizeVertexCache(ordered, welded_indices, index_count, welded_count);
+            if (cache_order_affordable(welded_indices, index_count, welded_count))
+            {
+                meshopt_optimizeVertexCache(ordered, welded_indices, index_count, welded_count);
+            }
+            else
+            {
+                std::copy_n(welded_indices, index_count, ordered);
+            }
         }
 
         // Each vertex's final place, in the order the reordered triangles
@@ -5557,18 +5651,27 @@ bool LLVolumeFace::cacheOptimize(bool gen_tangents)
         }
 
         resizeVertices((S32)kept);
-        if (!mPositions)
-        {
-            LLError::LLUserWarningMsg::showOutOfMemory();
-            LL_ERRS("LLVolume") << "Failed to allocate memory for resizeVertices(" << kept << ")" << LL_ENDL;
-        }
-        if (old_weights)
+        if (mPositions && old_weights)
         {
             allocateWeights((S32)kept);
         }
-        if (tangents || old_tangents)
+        if (mPositions && (tangents || old_tangents))
         {
             allocateTangents((S32)kept);
+        }
+        if (!mPositions || (old_weights && !mWeights) || ((tangents || old_tangents) && !mTangents))
+        {
+            // The face has given up its buffers, and keeps none. This runs on
+            // the mesh threads, where a fatal error may not be raised.
+            ll_aligned_free<64>(old_positions);
+            ll_aligned_free_16(old_weights);
+            ll_aligned_free_16(old_tangents);
+            ll_aligned_free_16(mWeights);
+            mWeights = nullptr;
+            resizeVertices(0);
+            resizeIndices(0);
+            LL_WARNS("LLVolume") << "Failed to allocate memory for " << kept << " vertices in cacheOptimize" << LL_ENDL;
+            return false;
         }
 
         for (size_t u = 0; u < welded_count; ++u)
@@ -6350,8 +6453,12 @@ namespace
         // The rows' frames, each in its station.
         static_assert(sizeof(LLPath::PathFrame) == 5 * sizeof(LLVector4a), "a frame is five vectors");
         static_assert(sizeof(LLPath::PathPt) % sizeof(LLVector4a) == 0, "stations are a whole number of vectors apart");
+        static_assert(offsetof(LLPath::PathPt, mFrame) % sizeof(LLVector4a) == 0, "a frame starts on a vector");
         constexpr size_t STRIDE = sizeof(LLPath::PathPt) / sizeof(LLVector4a);
-        const LLVector4a* const frames = stations[begin_t].mFrame.mRow;
+        // A run of vectors over the stations, taken from the station rather
+        // than its frame's two rows, which the reads run past.
+        const LLVector4a* const frames =
+            reinterpret_cast<const LLVector4a*>(stations + begin_t) + offsetof(LLPath::PathPt, mFrame) / sizeof(LLVector4a);
 
         // A first or last row the path's scale narrows to a line or a point
         // takes its frame a step into the face.
@@ -6774,11 +6881,13 @@ namespace
     // as having two corners in one place. whole(t) is whether every
     // triangle of row t is kept. WHOLE_ROWS is whether rows are whole often
     // enough to write a band's row at once: a sphere's collapsed poles
-    // leave a triangle out of every row.
+    // leave a triangle out of every row. COLUMN_UNITS is whether a grid of
+    // a few rows writes a column at once.
     struct KeepAll
     {
         static constexpr bool ALL = true;
         static constexpr bool WHOLE_ROWS = true;
+        static constexpr bool COLUMN_UNITS = true;
 
         bool upper(S32, S32) const { return true; }
         bool lower(S32, S32) const { return true; }
@@ -6789,6 +6898,7 @@ namespace
     {
         static constexpr bool ALL = false;
         static constexpr bool WHOLE_ROWS = false;
+        static constexpr bool COLUMN_UNITS = false;
 
         bool first_row;
         bool last_row;
@@ -6802,27 +6912,101 @@ namespace
         bool whole(S32 t) const { return !first_column && !last_column && !(first_row && t == 0) && !(last_row && t == last_quad_row); }
     };
 
+    // Bit i of a set held in 64-bit words.
+    LL_FORCE_INLINE bool bit_set(const U64* set, U32 i)
+    {
+        return (set[i / 64] >> (i % 64)) & 1;
+    }
+
+    // A keep that names the rows that are not whole, rather than saying
+    // whole(t) of each: partial_from(t, rows) is the first from row t up,
+    // or rows, and partial_to(t) the last from row t down, or -1. column(s,
+    // rows) is what it keeps of column s, bit 2t for the first triangle of
+    // its quad at row t and 2t + 1 for the second, and column_change(s, end,
+    // rows) the first column from s on that keeps other triangles than the
+    // one before it, or end.
     struct Unpinched
     {
         static constexpr bool ALL = false;
         static constexpr bool WHOLE_ROWS = true;
+        static constexpr bool COLUMN_UNITS = true;
 
-        // Bit s % 64 of word t * words + s / 64 for the quad at column s
-        // and row t.
+        // Bit s of the words from t * words on for the quad at column s and
+        // row t, and bit t of flagged_rows for a row with any of them set.
         const U64* upper_pinched;
         const U64* lower_pinched;
-        S32 words;
+        const U64* flagged_rows;
+        U32 words;
 
-        bool upper(S32 s, S32 t) const { return !((upper_pinched[t * words + s / 64] >> (s % 64)) & 1); }
-        bool lower(S32 s, S32 t) const { return !((lower_pinched[t * words + s / 64] >> (s % 64)) & 1); }
-        bool whole(S32 t) const
+        bool upper(S32 s, S32 t) const { return !bit_set(upper_pinched + (U32)t * words, (U32)s); }
+        bool lower(S32 s, S32 t) const { return !bit_set(lower_pinched + (U32)t * words, (U32)s); }
+
+        S32 partial_from(S32 t, S32 rows) const
         {
-            U64 any = 0;
-            for (S32 w = 0; w < words; ++w)
+            U32 w = (U32)t / 64;
+            U64 bits = flagged_rows[w] & (~U64(0) << ((U32)t % 64));
+            while (bits == 0)
             {
-                any |= upper_pinched[t * words + w] | lower_pinched[t * words + w];
+                if (++w * 64 >= (U32)rows)
+                {
+                    return rows;
+                }
+                bits = flagged_rows[w];
             }
-            return any == 0;
+            return (S32)(w * 64 + std::countr_zero(bits));
+        }
+
+        S32 partial_to(S32 t) const
+        {
+            S32 w = t / 64;
+            U64 bits = flagged_rows[w] & (~U64(0) >> (63 - t % 64));
+            while (bits == 0)
+            {
+                if (--w < 0)
+                {
+                    return -1;
+                }
+                bits = flagged_rows[w];
+            }
+            return w * 64 + 63 - std::countl_zero(bits);
+        }
+
+        U32 column(S32 s, S32 rows) const
+        {
+            const U32 w = (U32)s / 64;
+            const U32 b = (U32)s % 64;
+            U32 kept = 0;
+            for (S32 t = 0; t < rows; ++t)
+            {
+                kept |= (U32)(~(upper_pinched[t * words + w] >> b) & 1) << (2 * t);
+                kept |= (U32)(~(lower_pinched[t * words + w] >> b) & 1) << (2 * t + 1);
+            }
+            return kept;
+        }
+
+        // s is at least 1.
+        S32 column_change(S32 s, S32 end, S32 rows) const
+        {
+            for (U32 w = (U32)s / 64; w * 64 < (U32)end; ++w)
+            {
+                U64 changes = 0;
+                for (S32 t = 0; t < rows; ++t)
+                {
+                    const U64* up = upper_pinched + t * words;
+                    const U64* lo = lower_pinched + t * words;
+                    changes |= up[w] ^ ((up[w] << 1) | (w > 0 ? up[w - 1] >> 63 : 0));
+                    changes |= lo[w] ^ ((lo[w] << 1) | (w > 0 ? lo[w - 1] >> 63 : 0));
+                }
+                if (w == (U32)s / 64)
+                {
+                    changes &= ~U64(0) << ((U32)s % 64);
+                }
+                if (changes != 0)
+                {
+                    return llmin((S32)(w * 64 + std::countr_zero(changes)), end);
+                }
+            }
+            return end;
         }
     };
 
@@ -6884,6 +7068,32 @@ namespace
             std::fill(offsets + length, offsets + vectors * 8, (U16)0);
         }
 
+        // The same quads but for the triangles kept leaves out: bit 2q
+        // keeps quad q's first triangle, and 2q + 1 its second. A unit
+        // that keeps none has no length.
+        QuadUnit(S32 quad_count, S32 step, S32 num_s, U32 kept)
+            : quads(quad_count), length(0)
+        {
+            for (S32 q = 0; q < quads; ++q)
+            {
+                const S32 bottom = q * step;
+                const S32 top = bottom + num_s;
+                if (kept & (1u << (2 * q)))
+                {
+                    offsets[length++] = (U16)bottom;       //bottom left
+                    offsets[length++] = (U16)(top + 1);    //top right
+                    offsets[length++] = (U16)top;          //top left
+                }
+                if (kept & (2u << (2 * q)))
+                {
+                    offsets[length++] = (U16)bottom;       //bottom left
+                    offsets[length++] = (U16)(bottom + 1); //bottom right
+                    offsets[length++] = (U16)(top + 1);    //top right
+                }
+            }
+            vectors = (length + 7) / 8;
+            std::fill(offsets + length, offsets + vectors * 8, (U16)0);
+        }
     };
 
     // A unit while it is written, its offsets held as values: a store of an
@@ -6960,6 +7170,30 @@ namespace
         return out;
     }
 
+    // The first count columns of rows quads, each a unit of what keep keeps
+    // of it: one unit for each run of columns that keep the same
+    // triangles. Nothing is written past limit. Returns the end of what it
+    // wrote.
+    template <class KEEP>
+    VOLUME_NOINLINE U16* kept_columns(U16* out, const U16* limit, S32 count, S32 num_s, S32 rows, const KEEP& keep)
+    {
+        for (S32 q = 0; q < count;)
+        {
+            const QuadUnit column(rows, num_s, num_s, keep.column(q, rows));
+            const UnitWriter writer(column);
+            const S32 end = keep.column_change(q + 1, count, rows);
+            if (column.length == 0)
+            {
+                q = end;
+            }
+            for (; q < end; ++q)
+            {
+                out = writer.write(out, q, limit);
+            }
+        }
+        return out;
+    }
+
     // The quads from grid column begin on in bands, the first wide of them
     // a quad wider than narrow, of rows quads up: each band row by row,
     // every other band down, a unit a band's row where keep keeps the whole
@@ -7006,6 +7240,59 @@ namespace
         return out;
     }
 
+    // The same bands for a keep that names the rows it leaves triangles out
+    // of: the whole rows between them a unit each, in a run.
+    template <class KEEP>
+    VOLUME_NOINLINE U16* kept_bands(U16* out, const U16* limit, S32 begin, S32 bands, S32 narrow, S32 wide, S32 num_s, S32 rows, const KEEP& keep)
+    {
+        const QuadUnit narrow_row(narrow, 1, num_s);
+        const QuadUnit wide_row(wide > 0 ? narrow + 1 : narrow, 1, num_s);
+        S32 first = begin;
+        for (S32 band = 0; band < bands; ++band)
+        {
+            const S32 width = band < wide ? narrow + 1 : narrow;
+            const UnitWriter writer(band < wide ? wide_row : narrow_row);
+            const auto partial_row = [&](U16* at, S32 t)
+            {
+                for (S32 s = first; s < first + width; ++s)
+                {
+                    at = quad_indices<KEEP>(at, s, t, num_s, keep);
+                }
+                return at;
+            };
+            if (band & 1)
+            {
+                for (S32 t = rows - 1; t >= 0;)
+                {
+                    for (const S32 partial = keep.partial_to(t); t > partial; --t)
+                    {
+                        out = writer.write(out, first + num_s * t, limit);
+                    }
+                    if (t >= 0)
+                    {
+                        out = partial_row(out, t--);
+                    }
+                }
+            }
+            else
+            {
+                for (S32 t = 0; t < rows;)
+                {
+                    for (const S32 partial = keep.partial_from(t, rows); t < partial; ++t)
+                    {
+                        out = writer.write(out, first + num_s * t, limit);
+                    }
+                    if (t < rows)
+                    {
+                        out = partial_row(out, t++);
+                    }
+                }
+            }
+            first += width;
+        }
+        return out;
+    }
+
     // A grid of up to COLUMN_ROWS rows, a column of quads at a time: the
     // count columns listed, or the first count. Nothing is written past
     // limit. Returns the end of what it wrote.
@@ -7015,6 +7302,13 @@ namespace
         if (KEEP::ALL && rows >= UNIT_QUADS && count >= UNIT_USES)
         {
             return unit_columns<LISTED>(out, limit, lefts, count, num_s, rows);
+        }
+        if constexpr (!KEEP::ALL && KEEP::COLUMN_UNITS && !LISTED)
+        {
+            if (rows >= UNIT_QUADS && count >= UNIT_USES)
+            {
+                return kept_columns<KEEP>(out, limit, count, num_s, rows, keep);
+            }
         }
         if (rows == 1)
         {
@@ -7049,7 +7343,14 @@ namespace
         {
             if (narrow >= UNIT_QUADS)
             {
-                return unit_bands<KEEP>(out, limit, begin, bands, narrow, wide, num_s, rows, keep);
+                if constexpr (KEEP::ALL)
+                {
+                    return unit_bands<KEEP>(out, limit, begin, bands, narrow, wide, num_s, rows, keep);
+                }
+                else
+                {
+                    return kept_bands<KEEP>(out, limit, begin, bands, narrow, wide, num_s, rows, keep);
+                }
             }
         }
         if (bands == 1)
@@ -7151,6 +7452,74 @@ namespace
             }
         }
         return pinched;
+    }
+
+    // Sets bit t of flagged, and clears the rest of its words, for each of
+    // rows rows of words words whose upper or lower flags have any set.
+    void flag_rows(const U64* upper, const U64* lower, S32 words, S32 rows, U64* flagged)
+    {
+        std::fill(flagged, flagged + (rows + 63) / 64, U64(0));
+        for (S32 t = 0; t < rows; ++t)
+        {
+            U64 any = 0;
+            for (S32 w = 0; w < words; ++w)
+            {
+                any |= upper[t * words + w] | lower[t * words + w];
+            }
+            flagged[t / 64] |= U64(any != 0) << (t % 64);
+        }
+    }
+
+    // Whether a sculpt's points are its map's samples, each axis one of the
+    // 256 values a byte takes it to, mirrored or not. unit_cube_codes gives
+    // such points a code each, so two are one point exactly where their
+    // codes are one code. A shared sculpt's faces are built as
+    // LLVolume::sculpt ends, from the map or from a placeholder, whose
+    // points are not samples.
+    bool points_are_samples(const LLVolume& volume)
+    {
+        return volume.getSculptPixels() > 0 && !volume.isSculptSpherePlaceholder();
+    }
+
+    // A sculpt side's triangles, from its num_s by num_t grid of points, in
+    // the order above, but for those two of whose corners are one point:
+    // they have no area. The points' codes find them, and where the points
+    // are not the map's samples the points confirm them. A side keeps at
+    // least one triangle, of the triangles it has. Nothing is written past
+    // limit. The work space is room where it fits, as it does a small
+    // grid's, and the scratch arena where it does not. Returns the end of
+    // what it wrote.
+    LL_FORCE_INLINE U16* sculpt_indices(U16* out, const U16* limit, const LLVolume& volume, const LLVector4a* pos, S32 num_s, S32 num_t, S32 triangles,
+                                        std::byte* room, size_t room_bytes)
+    {
+        const S32 quads = num_s - 1;
+        const S32 rows = num_t - 1;
+        const S32 num_vertices = num_s * num_t;
+        const S32 words = (quads + 63) / 64;
+        const size_t flag_words = (size_t)words * rows;
+        // The codes, and the eight past them the kernel reads, in whole
+        // words, then the flags and the rows that have any.
+        const size_t code_words = ((size_t)num_vertices + 9) / 2;
+        const size_t block_words = code_words + 2 * flag_words + (rows + 63) / 64;
+        ALScratchArena::Scope scratch;
+        U64* block = block_words * sizeof(U64) <= room_bytes ? reinterpret_cast<U64*>(room) : scratch.allocate<U64>(block_words);
+        U32* codes = reinterpret_cast<U32*>(block);
+        U64* upper = block + code_words;
+        U64* lower = upper + flag_words;
+        U64* flagged_rows = lower + flag_words;
+        alsimd::unit_cube_codes(pos, num_vertices, codes);
+        std::fill(codes + num_vertices, codes + num_vertices + 8, 0u);
+        S32 pinched = (S32)alsimd::grid_coincident_triangles(codes, num_s, num_t, upper, lower, words, flagged_rows);
+        if (pinched > 0 && !points_are_samples(volume))
+        {
+            pinched = confirm_pinches(pos, num_s, num_t, upper, lower, words);
+            flag_rows(upper, lower, words, rows, flagged_rows);
+        }
+        if (pinched > 0 && pinched < triangles)
+        {
+            return grid_indices<false>(out, limit, num_s, num_t, nullptr, quads, Unpinched{ upper, lower, flagged_rows, (U32)words });
+        }
+        return grid_indices<false>(out, limit, num_s, num_t, nullptr, quads, KeepAll());
     }
 
     // The path station a cap closes: the last for a top cap, the first for a
@@ -7673,6 +8042,16 @@ bool LLVolumeFace::createCap(LLVolume* volume, bool partial_build)
     }
 
     const LLVector4a normal = cap_normal(volume, mTypeMask & TOP_MASK, !partial_build, mReversed);
+    if (mReversed)
+    {
+        // Seen from the side it faces, a reversed cap is the other cap seen
+        // from its front, and takes that cap's mapping, mirrored in v, so
+        // that its texture reads the right way round as a bottom cap's does.
+        for (S32 i = 0; i < num_vertices; ++i)
+        {
+            mTexCoords[i].mV[1] = 1.f - mTexCoords[i].mV[1];
+        }
+    }
     if (mFlexible)
     {
         // mCapTangent is plain floats, not aligned as a vector stores.
@@ -8118,10 +8497,12 @@ bool LLVolumeFace::createSide(LLVolume* volume, bool partial_build)
     Column stack_columns[STACK_COLUMNS];
     std::vector<Column> heap_columns;
     Column* columns = stack_columns;
-    // A flat inner side's quads with area, by their left columns.
-    S32 stack_lefts[STACK_COLUMNS];
+    // A flat inner side's quads with area, by their left columns. A
+    // sculpt's side, which copies no corners, takes the room for its pinch
+    // test instead.
+    alignas(16) std::byte stack_room[STACK_COLUMNS * sizeof(S32)];
     std::vector<S32> heap_lefts;
-    S32* lefts = stack_lefts;
+    S32* lefts = reinterpret_cast<S32*>(stack_room);
     if (mNumS > STACK_COLUMNS)
     {
         heap_columns.resize(mNumS);
@@ -8193,9 +8574,10 @@ bool LLVolumeFace::createSide(LLVolume* volume, bool partial_build)
     // quad's two triangles, bottom left, top right, top left has two corners
     // on its left column and on its top row, and bottom left, bottom right,
     // top right on its right column and its bottom row. A face that would be
-    // left with none keeps them all.
+    // left with none keeps them all. A sculpt of no stitching is built from
+    // its map, whatever its parameters would make.
     Collapse collapse;
-    if (!volume->isUnique() && sculpt_stitching == LL_SCULPT_TYPE_NONE)
+    if (!volume->isUnique() && sculpt_stitching == LL_SCULPT_TYPE_NONE && volume->getParams().getSculptID().isNull())
     {
         collapse = collapse_of(volume, mTypeMask & INNER_MASK);
         if (mTypeMask & END_MASK)
@@ -8310,33 +8692,11 @@ bool LLVolumeFace::createSide(LLVolume* volume, bool partial_build)
         }
         else if (sculpt_stitching != LL_SCULPT_TYPE_NONE && !volume->isUnique() && !doubled && quads > 0 && rows > 0)
         {
-            // A sculpt's triangles two of whose corners are one point have
-            // no area, and are left out: the points' codes find them and the
-            // points confirm them. A flexible sculpt's points move after its
-            // full build, and it keeps them. A face keeps at least one
-            // triangle. The flat inner side of a sculpt whose parameters
-            // carry a square or triangle hole has its corners doubled, and
-            // keeps all of its quads.
-            ALScratchArena::Scope scratch;
-            U32* codes = scratch.allocate<U32>(num_vertices + 8);
-            alsimd::unit_cube_codes(pos, num_vertices, codes);
-            std::fill(codes + num_vertices, codes + num_vertices + 8, 0u);
-            const S32 words = (quads + 63) / 64;
-            U64* upper = scratch.allocate<U64>((size_t)words * rows);
-            U64* lower = scratch.allocate<U64>((size_t)words * rows);
-            S32 pinched = 0;
-            if (alsimd::grid_coincident_triangles(codes, mNumS, mNumT, upper, lower, words) > 0)
-            {
-                pinched = confirm_pinches(pos, mNumS, mNumT, upper, lower, words);
-            }
-            if (pinched > 0 && pinched < triangles)
-            {
-                end_index = grid_indices<false>(mIndices, limit, mNumS, mNumT, lefts, quads, Unpinched{ upper, lower, words });
-            }
-            else
-            {
-                end_index = grid_indices<false>(mIndices, limit, mNumS, mNumT, lefts, quads, KeepAll());
-            }
+            // A flexible sculpt's points move after its full build, and it
+            // keeps every triangle. The flat inner side of a sculpt whose
+            // parameters carry a square or triangle hole has its corners
+            // doubled, and keeps all of its quads.
+            end_index = sculpt_indices(mIndices, limit, *volume, pos, mNumS, mNumT, triangles, stack_room, sizeof(stack_room));
         }
         else
         {

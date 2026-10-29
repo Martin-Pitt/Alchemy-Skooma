@@ -37,7 +37,6 @@
 #include "lldrawpoolmaterials.h"
 #include "lldrawpoolpbropaque.h"
 #include "lldrawpoolsimple.h"
-#include "lldrawpoolsky.h"
 #include "lldrawpooltree.h"
 #include "lldrawpoolterrain.h"
 #include "lldrawpoolwater.h"
@@ -47,7 +46,6 @@
 #include "pipeline.h"
 #include "llspatialpartition.h"
 #include "llviewercamera.h"
-#include "lldrawpoolwlsky.h"
 #include "llglslshader.h"
 #include "llglcommonfunc.h"
 #include "llimagegl.h"
@@ -102,9 +100,6 @@ LLDrawPool *LLDrawPool::createPool(const U32 type, LLViewerTexture *tex0)
     case POOL_TERRAIN:
         poolp = new LLDrawPoolTerrain(tex0);
         break;
-    case POOL_SKY:
-        poolp = new LLDrawPoolSky();
-        break;
     case POOL_WATER:
         poolp = new LLDrawPoolWater();
         break;
@@ -113,9 +108,6 @@ LLDrawPool *LLDrawPool::createPool(const U32 type, LLViewerTexture *tex0)
         break;
     case POOL_MATERIALS:
         poolp = new LLDrawPoolMaterials();
-        break;
-    case POOL_WL_SKY:
-        poolp = new LLDrawPoolWLSky();
         break;
     case POOL_GLTF_PBR:
         poolp = new LLDrawPoolGLTFPBR();
@@ -1220,7 +1212,8 @@ void LLRenderPass::pushGLTFBatchIndexed(LLDrawInfo& params, eGLTFIndexedMaps map
         // vs data split LLFetchedGLTFMaterial::bind makes, and it has to match: a batched and
         // an unbatched copy of the same material must sample identically, or they shade
         // differently for no reason the content author can see.
-        LLViewerTexture* base = mat->mBaseColorTexture.notNull() ? mat->mBaseColorTexture.get() : LLViewerFetchedTexture::sWhiteImagep.get();
+        LLViewerTexture* base = mat->getRenderTexture(LLGLTFMaterial::GLTF_TEXTURE_INFO_BASE_COLOR);
+        base = base ? base : LLViewerFetchedTexture::sWhiteImagep.get();
         gGL.getTextureSlot(s)->bindFast(base, ALSamplers::AnisoWrapSRGB);
 
         min_alpha[s] = (mat->mAlphaMode == LLGLTFMaterial::ALPHA_MODE_MASK) ? mat->mAlphaCutoff : -1.f;
@@ -1236,7 +1229,8 @@ void LLRenderPass::pushGLTFBatchIndexed(LLDrawInfo& params, eGLTFIndexedMaps map
         }
 
         // emissive map/color/transform -- needed by both the glow and GBuffer passes
-        LLViewerTexture* em = mat->mEmissiveTexture.notNull() ? mat->mEmissiveTexture.get() : LLViewerFetchedTexture::sWhiteImagep.get();
+        LLViewerTexture* em = mat->getRenderTexture(LLGLTFMaterial::GLTF_TEXTURE_INFO_EMISSIVE);
+        em = em ? em : LLViewerFetchedTexture::sWhiteImagep.get();
         gGL.getTextureSlot(3 * N + s)->bindFast(em, ALSamplers::AnisoWrapSRGB);
 
         emissive[3 * s + 0] = mat->mEmissiveColor.mV[0];
@@ -1254,8 +1248,10 @@ void LLRenderPass::pushGLTFBatchIndexed(LLDrawInfo& params, eGLTFIndexedMaps map
             continue;
         }
 
-        LLViewerTexture* norm = (mat->mNormalTexture.notNull() && mat->mNormalTexture->getDiscardLevel() <= 4) ? mat->mNormalTexture.get() : LLViewerFetchedTexture::sFlatNormalImagep.get();
-        LLViewerTexture* orm  = mat->mMetallicRoughnessTexture.notNull() ? mat->mMetallicRoughnessTexture.get() : LLViewerFetchedTexture::sWhiteImagep.get();
+        LLViewerTexture* norm = mat->getRenderTexture(LLGLTFMaterial::GLTF_TEXTURE_INFO_NORMAL);
+        norm = (norm && norm->getDiscardLevel() <= 4) ? norm : LLViewerFetchedTexture::sFlatNormalImagep.get();
+        LLViewerTexture* orm  = mat->getRenderTexture(LLGLTFMaterial::GLTF_TEXTURE_INFO_METALLIC_ROUGHNESS);
+        orm = orm ? orm : LLViewerFetchedTexture::sWhiteImagep.get();
 
         gGL.getTextureSlot(N + s)->bindFast(norm, ALSamplers::AnisoWrap);
         gGL.getTextureSlot(2 * N + s)->bindFast(orm, ALSamplers::AnisoWrap);
