@@ -1597,14 +1597,6 @@ Branch `feature-ui/inventory-explorer` (via `ui`, main `7b8ef524f4`). Spec: `.in
 | `indra/newview/llviewermessage.cpp` | `LLOpenTaskOffer` skips items the Explorer created, so the stock Inventory floater doesn't open for them | `<SK:Nexii> Inventory Explorer` |
 | `app_settings/settings_per_account_alchemy.xml` | `SkoomaInvExplorer*` preferences (view, sort, group, panes, columns, saved and recent searches, icon size) after `ALScriptStudioVimrcNotecard` | `<!-- <SK:Nexii> Inventory Explorer -->` |
 
-## COLRv1 stale surface fix
-
-Branch `fix-font/colrv1-stale-surface`; PR AlchemyViewer/Alchemy#600.
-
-| File | Change | Marker |
-|---|---|---|
-| `indra/llrender/alfontcolrv1.cpp` | `hb_raster_paint_clear(p)` in `ALFontColrV1Painter::paintGlyph` before the extents are set | none (upstream fix) |
-
 ## Legend foundation
 
 Branch `foundation-ui/legend` (main `abe381ef91`; merges `foundation-ui/hover`). Plan: `.legend-foundation-plan.md`. Shared colour scales and the `sk_legend` widget for every data-viz and debug view.
