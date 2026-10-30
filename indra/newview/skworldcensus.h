@@ -207,11 +207,6 @@ public:
     /// The fraction of a metre the land is sampled at in an export, so a layer's terrain windows read it exactly.
     void setTerrainPhase(F32 phase) { mTerrainPhase = phase; }
 
-    /// The last snapshot, each region's land, and every registered section, to logs/sk-census-<UTC>.json
-    /// (skcensusio.h), for reading offline. Returns a line for the console with the counts, the size and the
-    /// full path, or why nothing was written.
-    std::string exportCensus() const;
-
 private:
     /// The clusters overlay: each cluster in its own colour, its parts tinted, a label over it.
     void renderClusters(const SKCensusSnapshot& snap, class SKWorldOverlayGeom& geom, const LLVector3d& camera, F64 reach);
