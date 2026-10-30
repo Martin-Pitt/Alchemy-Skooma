@@ -1759,16 +1759,30 @@ void SKOverviewCapture::captureMaps(F64 now)
     const LLVector3d agent_min = agent_region->getOriginGlobal();
     const F64 agent_w = agent_region->getWidth();
 
-    // The void tiles: the squares of the agent region's grid within VOID_RINGS of it that no region covers, so what
-    // stands or reaches out over the void beside the regions is mapped too.
+    // The void tiles: the squares of the agent region's grid that no region covers, over the loaded regions' bounds
+    // and one square past them, so the void between and around them is mapped and nothing beside a region is a hole.
     static LLCachedControl<bool> void_tiles(gSavedSettings, "SKMapVoidTiles", true);
-    const S32 VOID_RINGS = 2;
+    const S32 VOID_RINGS_MAX = 8; // a 17 x 17 square at most, however far the regions reach
     std::vector<LLVector3d> voids;
     if (void_tiles)
     {
-        for (S32 dy = -VOID_RINGS; dy <= VOID_RINGS; ++dy)
+        S32 lo_x = 0, lo_y = 0, hi_x = 0, hi_y = 0;
+        for (LLViewerRegion* r : regions)
         {
-            for (S32 dx = -VOID_RINGS; dx <= VOID_RINGS; ++dx)
+            const LLVector3d o = r->getOriginGlobal() - agent_min;
+            const F64 w = r->getWidth();
+            lo_x = llmin(lo_x, (S32)std::floor(o.mdV[VX] / agent_w + 0.001));
+            lo_y = llmin(lo_y, (S32)std::floor(o.mdV[VY] / agent_w + 0.001));
+            hi_x = llmax(hi_x, (S32)std::ceil((o.mdV[VX] + w) / agent_w - 0.001) - 1);
+            hi_y = llmax(hi_y, (S32)std::ceil((o.mdV[VY] + w) / agent_w - 0.001) - 1);
+        }
+        lo_x = llmax(lo_x - 1, -VOID_RINGS_MAX);
+        lo_y = llmax(lo_y - 1, -VOID_RINGS_MAX);
+        hi_x = llmin(hi_x + 1, VOID_RINGS_MAX);
+        hi_y = llmin(hi_y + 1, VOID_RINGS_MAX);
+        for (S32 dy = lo_y; dy <= hi_y; ++dy)
+        {
+            for (S32 dx = lo_x; dx <= hi_x; ++dx)
             {
                 const LLVector3d min = agent_min + LLVector3d(dx * agent_w, dy * agent_w, 0.0);
                 const bool covered = std::any_of(regions.begin(), regions.end(),
