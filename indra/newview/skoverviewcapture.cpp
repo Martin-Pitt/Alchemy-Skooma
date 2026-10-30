@@ -300,6 +300,32 @@ const LLStaticHashedString SK_PATCH("sk_patch");
         return dir.normVec() > 1e-6f;
     }
 
+    /// The territory the resolve styles as inside, in agent space: every connected region, the agent's first, so the
+    /// void beyond them dims over its grid and their outer edge glows wherever a capture looks.
+    std::vector<LLVector4> territory()
+    {
+        std::vector<LLVector4> out;
+        LLViewerRegion* region = gAgent.getRegion();
+        auto add = [&out](LLViewerRegion* r)
+        {
+            const LLVector3 o = r->getOriginAgent();
+            const F32 w = r->getWidth();
+            out.push_back(LLVector4(o.mV[VX], o.mV[VY], o.mV[VX] + w, o.mV[VY] + w));
+        };
+        if (region)
+        {
+            add(region);
+        }
+        for (LLViewerRegion* other : LLWorld::getInstance()->getRegionList())
+        {
+            if (other != region && out.size() < SK_MAX_TERRITORY)
+            {
+                add(other);
+            }
+        }
+        return out;
+    }
+
     /// Where a ray meets the plane z = plane_z ahead of it.
     bool rayPlane(const LLVector3& from, const LLVector3& dir, F32 plane_z, LLVector3& hit)
     {
@@ -1969,9 +1995,10 @@ bool SKOverviewCapture::captureMap(RegionMap& map, LLViewerRegion* region, bool 
     shot.mFocus = LLVector3(centre.mV[VX], centre.mV[VY], floor_z);
     shot.mLevelTop = cut_z;
     shot.mWater = water;
-    // Another region is neither dimmed as outside the agent's nor edged as it is: its rectangle is unbounded.
-    shot.mRegion = agent ? LLVector4(origin.mV[VX], origin.mV[VY], origin.mV[VX] + width, origin.mV[VY] + width)
-                         : LLVector4(-1.0e6f, -1.0e6f, 1.0e6f, 1.0e6f);
+    // Styled as the tactical overview is: the void dimmed over its grid, the regions' outer edge glowing and the
+    // borders between them dashed, the same in every map so the tiles meet.
+    shot.mRegion = LLVector4(origin.mV[VX], origin.mV[VY], origin.mV[VX] + width, origin.mV[VY] + width);
+    shot.mTerritory = territory();
     shot.mTopDown = true;
 
     // The cull camera: ortho planes for the partitions, and a perspective far enough above to hold the region for
@@ -2443,18 +2470,7 @@ void SKOverviewCapture::tactical()
         shot.mWater = region->getWaterHeight();
         shot.mRegion = LLVector4(region_min.mV[VX], region_min.mV[VY], region_min.mV[VX] + region_width,
                                  region_min.mV[VY] + region_width);
-        // Every connected region is territory: the agent's first, then its neighbours.
-        shot.mTerritory.push_back(shot.mRegion);
-        for (LLViewerRegion* other : LLWorld::getInstance()->getRegionList())
-        {
-            if (other == region || shot.mTerritory.size() >= SK_MAX_TERRITORY)
-            {
-                continue;
-            }
-            const LLVector3 o = other->getOriginAgent();
-            const F32 w = other->getWidth();
-            shot.mTerritory.push_back(LLVector4(o.mV[VX], o.mV[VY], o.mV[VX] + w, o.mV[VY] + w));
-        }
+        shot.mTerritory = territory();
     }
     shot.mTopDown = false;
     shot.mCull = *camera;
