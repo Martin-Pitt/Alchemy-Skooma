@@ -197,6 +197,7 @@ protected:
     S32 mHover;
     std::string mHoverKey;            // the hovered row survives a rebuild
     bool mHoverArrow;
+    bool mHoverRemove = false;
     std::string mPendingScrollKey;      // a reveal scrolls once the rows are laid out
 
     // Counts per folder for the session; dropped when the inventory changes.
