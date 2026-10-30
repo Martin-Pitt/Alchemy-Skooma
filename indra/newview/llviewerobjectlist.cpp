@@ -2191,6 +2191,12 @@ LLViewerObject *LLViewerObjectList::replaceObject(const LLUUID &id, const LLPCod
     if (old_instance)
     {
         //cleanupReferences(old_instance);
+        // <SK:Nexii> census dirty set: the old instance and its children die here without killObject.
+        if (SKWorldCensus::instanceExists())
+        {
+            SKWorldCensus::getInstance()->noteObjectGone(old_instance);
+        }
+        // </SK:Nexii>
         old_instance->markDead();
 
         return createObject(pcode, regionp, id, old_instance->getLocalID(), LLHost());
