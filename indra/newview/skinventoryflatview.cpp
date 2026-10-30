@@ -1513,6 +1513,7 @@ void SKInventoryFlatView::drawDropTarget()
     // The open folder's own space takes the outline alone.
     LLLocalClipRect clip(rowsArea());
     SKInventoryExplorerDrag::drawMark(this, mDropRow >= 0);
+    mEdgeGlow.draw(rowsArea(), false, mDropHover.isActive());
 }
 
 bool SKInventoryFlatView::handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop, EDragAndDropType cargo_type, void* cargo_data,
@@ -1562,14 +1563,20 @@ bool SKInventoryFlatView::handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop, 
     {
         step = SKInventoryExplorerDrag::SCROLL_STEP;
     }
-    if (step != 0 && mDropHover.tick(SKInventoryExplorerDrag::TICK_SECONDS))
+    if (step == 0)
+    {
+        mEdgeGlow.hover(0, false);
+    }
+    else if (mDropHover.tick(SKInventoryExplorerDrag::TICK_SECONDS))
     {
         const S32 before = contentDown(y);
         scrollPixels(step);
-        if (contentDown(y) != before)
+        const bool moved = contentDown(y) != before;
+        if (moved)
         {
             mDropHover.scrolled(screen_x, screen_y);
         }
+        mEdgeGlow.hover(step < 0 ? 1 : -1, moved);
     }
     return true;
 }

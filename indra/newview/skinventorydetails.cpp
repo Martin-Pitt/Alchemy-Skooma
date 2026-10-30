@@ -881,7 +881,7 @@ F32 SKInventoryPlayer::animTime(F64 now, F32& weight)
 {
     const SKAnimInfo* info = SKInventoryAssets::animation(mAssetID, false);
     weight = 0.f;
-    if (!info || info->mState != SK_ASSET_READY || mAnimMode < 0 && mAnimStop <= 0.0)
+    if (!info || info->mState != SK_ASSET_READY || (mAnimMode < 0 && mAnimStop <= 0.0))
     {
         return -1.f;
     }

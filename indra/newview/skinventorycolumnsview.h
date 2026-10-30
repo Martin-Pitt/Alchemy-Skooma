@@ -254,9 +254,9 @@ protected:
     bool mEdgeScrolling;
     LLFrameTimer mEdgeTimer;
     LLFrameTimer mEdgeTick;
-    F32 mGlowAlpha;
-    S32 mGlowSide;
-    LLFrameTimer mGlowTimer;
+    SKEdgeGlow mStripGlow;
+    SKEdgeGlow mColumnGlow;
+    S32 mGlowColumn;    // the column whose top or bottom glows
 
     LLScrollbar* mStripScrollbar;
     SKInventoryDetailsView* mDetailsView;   // laid over the details column
