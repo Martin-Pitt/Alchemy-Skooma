@@ -3365,6 +3365,12 @@ LLScrollListItem* LLScrollListCtrl::addRow(LLScrollListItem *new_item, const LLS
         {
             cell_p.width = columnp->getWidth();
         }
+        // <SK:Nexii> A cell that names no ellipsis takes its column's.
+        if (!cell_p.ellipsis.isProvided())
+        {
+            cell_p.ellipsis = columnp->mEllipsis;
+        }
+        // </SK:Nexii>
 
 // [SL:KB] - Patch: Control-ScrollList | Checked: Catznip-5.2
         if (item_p.commit_callback.isProvided())

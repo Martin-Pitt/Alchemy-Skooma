@@ -130,6 +130,7 @@ public:
         Optional<Header>                    header;
 
         Optional<LLFontGL::HAlign>          halign;
+        Optional<LLFontGL::EEllipsisMode>   ellipsis; // <SK:Nexii> where its text cells' ellipsis goes
 
         Params()
         :   name("name"),
@@ -140,6 +141,7 @@ public:
             sort_column("sort_column"),
             sort_direction("sort_direction"),
             sort_ascending("sort_ascending", true),
+            ellipsis("ellipsis", LLFontGL::ELLIPSIS_END), // <SK:Nexii>
             halign("halign", LLFontGL::LEFT)
         {
             // default choice to "dynamic_width"
@@ -175,6 +177,7 @@ public:
     LLScrollListCtrl*       mParentCtrl;
     LLScrollColumnHeader*   mHeader;
     LLFontGL::HAlign        mFontAlignment;
+    LLFontGL::EEllipsisMode mEllipsis; // <SK:Nexii>
 
 private:
     S32                     mWidth;

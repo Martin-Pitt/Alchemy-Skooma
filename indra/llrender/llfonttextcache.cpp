@@ -137,11 +137,11 @@ namespace
                     LLFontGL::HAlign halign, LLFontGL::VAlign valign,
                     U8 style, LLFontGL::ShadowType shadow,
                     S32 max_bytes, S32 max_pixels, F32* right_x,
-                    bool use_ellipses, bool use_color,
+                    LLFontGL::Ellipsis ellipsis, bool use_color, // <SK:Nexii>
                     LLFontGL::pass_boundary_cb_t on_pass_boundary = nullptr)
     {
         return fontp->renderBytes(text, begin_offset, x, y, color, halign, valign, style, shadow,
-                                  max_bytes, max_pixels, right_x, use_ellipses, use_color,
+                                  max_bytes, max_pixels, right_x, ellipsis, use_color, // <SK:Nexii>
                                   std::move(on_pass_boundary));
     }
 }
@@ -157,11 +157,11 @@ S32 LLFontTextCache::renderBytes(
     LLFontGL::ShadowType shadow,
     S32 max_bytes, S32 max_pixels,
     F32* right_x,
-    bool use_ellipses,
+    LLFontGL::Ellipsis ellipsis, // <SK:Nexii>
     bool use_color)
 {
     LLRectf rect_float((F32)rect.mLeft, (F32)rect.mTop, (F32)rect.mRight, (F32)rect.mBottom);
-    return renderBytes(fontp, text, begin_offset, rect_float, color, halign, valign, style, shadow, max_bytes, right_x, use_ellipses, use_color);
+    return renderBytes(fontp, text, begin_offset, rect_float, color, halign, valign, style, shadow, max_bytes, right_x, ellipsis, use_color); // <SK:Nexii>
 }
 
 S32 LLFontTextCache::renderBytes(
@@ -175,7 +175,7 @@ S32 LLFontTextCache::renderBytes(
     LLFontGL::ShadowType shadow,
     S32 max_bytes,
     F32* right_x,
-    bool use_ellipses,
+    LLFontGL::Ellipsis ellipsis, // <SK:Nexii>
     bool use_color)
 {
     F32 x = rect.mLeft;
@@ -197,7 +197,7 @@ S32 LLFontTextCache::renderBytes(
         y = rect.mBottom;
         break;
     }
-    return renderBytes(fontp, text, begin_offset, x, y, color, halign, valign, style, shadow, max_bytes, (S32)rect.getWidth(), right_x, use_ellipses, use_color);
+    return renderBytes(fontp, text, begin_offset, x, y, color, halign, valign, style, shadow, max_bytes, (S32)rect.getWidth(), right_x, ellipsis, use_color); // <SK:Nexii>
 }
 
 S32 LLFontTextCache::renderBytes(
@@ -211,11 +211,11 @@ S32 LLFontTextCache::renderBytes(
     LLFontGL::ShadowType shadow,
     S32 max_bytes, S32 max_pixels,
     F32* right_x,
-    bool use_ellipses,
+    LLFontGL::Ellipsis ellipsis, // <SK:Nexii>
     bool use_color )
 {
     return renderImpl(fontp, text, begin_offset, x, y, color, halign, valign, style, shadow,
-                      max_bytes, max_pixels, right_x, use_ellipses, use_color);
+                      max_bytes, max_pixels, right_x, ellipsis, use_color); // <SK:Nexii>
 }
 
 S32 LLFontTextCache::renderImpl(
@@ -229,7 +229,7 @@ S32 LLFontTextCache::renderImpl(
     LLFontGL::ShadowType shadow,
     S32 max_bytes , S32 max_pixels,
     F32* right_x,
-    bool use_ellipses,
+    LLFontGL::Ellipsis ellipsis, // <SK:Nexii>
     bool use_color )
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_UI;
@@ -248,7 +248,7 @@ S32 LLFontTextCache::renderImpl(
     if (!sEnableBufferCollection)
     {
         // For debug purposes and performance testing
-        return font_render(fontp, text, begin_offset, x, y, color, halign, valign, style, shadow, max_bytes, max_pixels, right_x, use_ellipses, use_color);
+        return font_render(fontp, text, begin_offset, x, y, color, halign, valign, style, shadow, max_bytes, max_pixels, right_x, ellipsis, use_color); // <SK:Nexii>
     }
     // One source, one text: see sameTextAsRecorded.
     llassert(sameTextAsRecorded(text));
@@ -299,7 +299,7 @@ S32 LLFontTextCache::renderImpl(
           // the tail of an overflowing string, and use_color decides whether the
           // caller's colour reaches the vertices at all. Neither was compared,
           // so a caller flipping one without reset() replayed the old geometry.
-          || mLastUseEllipses != use_ellipses
+          || mLastEllipsis != ellipsis // <SK:Nexii>
           || mLastUseColor != use_color)
     {
         reason = RegenReason::Style;
@@ -342,7 +342,7 @@ S32 LLFontTextCache::renderImpl(
     auto regen = [&]()
     {
         genBuffers(fontp, text, begin_offset, x, y, color, halign, valign,
-            style, shadow, max_bytes, max_pixels, right_x, use_ellipses, use_color);
+            style, shadow, max_bytes, max_pixels, right_x, ellipsis, use_color); // <SK:Nexii>
     };
 
     // One zone per reason. Tracy groups by zone name, so a reason carried as
@@ -378,7 +378,7 @@ void LLFontTextCache::genBuffers(
     U8 style, LLFontGL::ShadowType shadow,
     S32 max_bytes, S32 max_pixels,
     F32* right_x,
-    bool use_ellipses,
+    LLFontGL::Ellipsis ellipsis, // <SK:Nexii>
     bool use_color)
 {
     // The regeneration path: shapes, measures and rebuilds the geometry. Named
@@ -425,7 +425,7 @@ void LLFontTextCache::genBuffers(
     F32 local_right_x = x;
     F32* const right_x_out = right_x ? right_x : &local_right_x;
     mChars = font_render(fontp, text, begin_offset, x, y, color, halign, valign,
-        style, shadow, max_bytes, max_pixels, right_x_out, use_ellipses, use_color, pass_boundary);
+        style, shadow, max_bytes, max_pixels, right_x_out, ellipsis, use_color, pass_boundary); // <SK:Nexii>
     gGL.endList();
     mHasCapture = true;
 
@@ -490,7 +490,7 @@ void LLFontTextCache::genBuffers(
     mLastValign = valign;
     mLastStyle = style;
     mLastShadow = shadow;
-    mLastUseEllipses = use_ellipses;
+    mLastEllipsis = ellipsis; // <SK:Nexii>
     mLastUseColor = use_color;
 
     mLastRightX = *right_x_out;

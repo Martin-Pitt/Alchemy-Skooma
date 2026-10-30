@@ -69,6 +69,7 @@ LLButton::Params::Params()
     label_shadow("label_shadow", true),
     auto_resize("auto_resize", false),
     use_ellipses("use_ellipses", false),
+    ellipsis("ellipsis"), // <SK:Nexii>
     use_font_color("use_font_color", true),
     image_unselected("image_unselected"),
     image_selected("image_selected"),
@@ -166,7 +167,7 @@ LLButton::LLButton(const LLButton::Params& p)
     mScaleImage(p.scale_image),
     mDropShadowedText(p.label_shadow),
     mAutoResize(p.auto_resize),
-    mUseEllipses( p.use_ellipses ),
+    mEllipsis(p.ellipsis.isProvided() ? LLFontGL::Ellipsis(p.ellipsis()) : LLFontGL::Ellipsis(p.use_ellipses())), // <SK:Nexii>
     mUseFontColor( p.use_font_color),
     mHAlign(p.font_halign),
     mLeftHPad(p.pad_left),
@@ -343,7 +344,7 @@ void LLButton::setSelectedLabelColor(const LLUIColor& c)
 
 void LLButton::setUseEllipses(bool use_ellipses)
 {
-    mUseEllipses = use_ellipses;
+    mEllipsis = use_ellipses; // <SK:Nexii>
 }
 
 void LLButton::setUseFontColor(bool use_font_color)
@@ -1014,7 +1015,7 @@ void LLButton::draw()
             LLFontGL::NORMAL,
             mDropShadowedText ? LLFontGL::DROP_SHADOW_SOFT : LLFontGL::NO_SHADOW,
             S32_MAX, text_width,
-            NULL, mUseEllipses, mUseFontColor);
+            NULL, mEllipsis, mUseFontColor); // <SK:Nexii>
     }
 
     LLUICtrl::draw();

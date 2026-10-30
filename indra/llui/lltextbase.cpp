@@ -180,6 +180,7 @@ LLTextBase::Params::Params()
     trusted_content("trusted_content", true),
     always_show_icons("always_show_icons", false),
     use_ellipses("use_ellipses", false),
+    ellipsis("ellipsis"), // <SK:Nexii>
     use_emoji("use_emoji", true),
     use_color("use_color", true),
     parse_urls("parse_urls", false),
@@ -243,7 +244,7 @@ LLTextBase::LLTextBase(const LLTextBase::Params &p)
     mIsSelecting( false ),
     mPlainText ( p.plain_text ),
     mWordWrap(p.wrap),
-    mUseEllipses( p.use_ellipses ),
+    mEllipsis(p.ellipsis.isProvided() ? LLFontGL::Ellipsis(p.ellipsis()) : LLFontGL::Ellipsis(p.use_ellipses())), // <SK:Nexii>
     mUseEmoji(p.use_emoji),
     mUseColor(p.use_color),
     mParseHTML(p.parse_urls),
@@ -949,7 +950,7 @@ void LLTextBase::drawText()
         // itself; for word-wrapped lines that fit within the rect, render()
         // never sees overflow so we render the dots ourselves after the
         // segment loop, in the slack between line content and right edge.
-        const bool needs_ellipsis = mUseEllipses
+        const bool needs_ellipsis = mEllipsis.mode != LLFontGL::ELLIPSIS_NONE // <SK:Nexii>
                                  && next_line == last_line
                                  && last_line < (S32)mLineInfoList.size();
         const F32 saved_right = text_rect.mRight;
@@ -3980,7 +3981,7 @@ F32 LLNormalTextSegment::drawClippedSegment(S32 seg_start, S32 seg_end, S32 sele
                 mStyle->getShadowType(),
                 length,
                 &right_x,
-                mEditor.getUseEllipses(),
+                mEditor.getEllipsis(), // <SK:Nexii>
                 mEditor.getUseColor());
         }
         else
@@ -3998,7 +3999,7 @@ F32 LLNormalTextSegment::drawClippedSegment(S32 seg_start, S32 seg_end, S32 sele
                 mStyle->getShadowType(),
                 length,
                 &right_x,
-                mEditor.getUseEllipses(),
+                mEditor.getEllipsis(), // <SK:Nexii>
                 mEditor.getUseColor());
         }
     }
@@ -4023,7 +4024,7 @@ F32 LLNormalTextSegment::drawClippedSegment(S32 seg_start, S32 seg_end, S32 sele
                 LLFontGL::NO_SHADOW,
                 length,
                 &right_x,
-                mEditor.getUseEllipses(),
+                mEditor.getEllipsis(), // <SK:Nexii>
                 mEditor.getUseColor());
         }
         else
@@ -4037,7 +4038,7 @@ F32 LLNormalTextSegment::drawClippedSegment(S32 seg_start, S32 seg_end, S32 sele
                 LLFontGL::NO_SHADOW,
                 length,
                 &right_x,
-                mEditor.getUseEllipses(),
+                mEditor.getEllipsis(), // <SK:Nexii>
                 mEditor.getUseColor());
         }
     }
@@ -4060,7 +4061,7 @@ F32 LLNormalTextSegment::drawClippedSegment(S32 seg_start, S32 seg_end, S32 sele
                 mStyle->getShadowType(),
                 length,
                 &right_x,
-                mEditor.getUseEllipses(),
+                mEditor.getEllipsis(), // <SK:Nexii>
                 mEditor.getUseColor());
         }
         else
@@ -4074,7 +4075,7 @@ F32 LLNormalTextSegment::drawClippedSegment(S32 seg_start, S32 seg_end, S32 sele
                 mStyle->getShadowType(),
                 length,
                 &right_x,
-                mEditor.getUseEllipses(),
+                mEditor.getEllipsis(), // <SK:Nexii>
                 mEditor.getUseColor());
 
         }

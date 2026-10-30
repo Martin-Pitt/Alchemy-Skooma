@@ -711,6 +711,7 @@ if(AL_BUILD_TESTS)
       tests/llspinctrl_test.cpp
       tests/llstatbar_test.cpp
       tests/lltabcontainer_test.cpp
+      tests/skellipsisparams_test.cpp # <SK:Nexii> text ellipsis foundation
       tests/lltextparser_test.cpp
       tests/lluistring_test.cpp
       tests/llurlentry_test.cpp
