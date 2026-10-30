@@ -3589,6 +3589,7 @@ void LLIMMgr::saveOpenSessions()
             sessions.append(LLSD().with("type", "group").with("id", session_id).with("name", session->mName));
         }
     }
+    LL_INFOS("IMVIEW") << "Saving " << sessions.size() << " of " << LLIMModel::getInstance()->mId2SessionMap.size() << " IM sessions to reopen" << LL_ENDL;
     gSavedPerAccountSettings.setLLSD("SkoomaOpenIMSessions", sessions);
 }
 
@@ -3600,6 +3601,7 @@ void LLIMMgr::reopenSavedSessions()
     }
 
     const LLSD sessions = gSavedPerAccountSettings.getLLSD("SkoomaOpenIMSessions");
+    LL_INFOS("IMVIEW") << "Reopening " << sessions.size() << " IM sessions" << LL_ENDL;
     for (const LLSD& entry : llsd::inArray(sessions))
     {
         const LLUUID id = entry["id"].asUUID();
