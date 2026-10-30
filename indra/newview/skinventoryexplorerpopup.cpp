@@ -334,8 +334,15 @@ void SKExplorerPopupList::draw()
         }
         if (show_remove && close.notNull())
         {
+            // Opacity .6 on the row's hover, 1 over a faint fill on its own.
+            static LLUIColor button_hover = LLUIColorTable::instance().getColor("White_10");
             const LLRect remove = removeRect(i);
-            close->draw(remove.mLeft, remove.mBottom + (remove.getHeight() - 12) / 2, 12, 12, text.get());
+            const bool own = mHoverRemove && i == mHover;
+            if (own)
+            {
+                gl_rect_2d(remove, button_hover.get(), true);
+            }
+            close->draw(remove.mLeft, remove.mBottom + (remove.getHeight() - 12) / 2, 12, 12, text.get() % (own ? 1.f : 0.6f));
         }
         if (!row.mExample.empty())
         {
@@ -387,6 +394,7 @@ bool SKExplorerPopupList::handleMouseUp(S32 x, S32 y, MASK mask)
 bool SKExplorerPopupList::handleHover(S32 x, S32 y, MASK mask)
 {
     mHover = rowAt(y);
+    mHoverRemove = mHover >= 0 && !mRows[mHover].mRemoveToolTip.empty() && removeRect(mHover).pointInRect(x, y);
     // As in menus, the row under the pointer is the highlighted one.
     if (mHover >= 0 && mRows[mHover].isOption())
     {
@@ -400,6 +408,7 @@ void SKExplorerPopupList::onMouseLeave(S32 x, S32 y, MASK mask)
 {
     mHover = -1;
     mHighlight = -1;
+    mHoverRemove = false;
     LLUICtrl::onMouseLeave(x, y, mask);
 }
 

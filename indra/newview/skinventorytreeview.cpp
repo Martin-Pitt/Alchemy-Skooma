@@ -662,8 +662,13 @@ void SKInventoryTreeView::drawRow(S32 index, const LLRect& rect)
     {
         if (index == mHover && close.notNull())
         {
+            // Opacity .6 on the row's hover, 1 over a faint fill on its own.
             const LLRect remove = removeRect(index);
-            close->draw(remove.mLeft + 3, mid - 6, 12, 12, text_color.get());
+            if (mHoverRemove)
+            {
+                gl_rect_2d(remove, hover_color.get(), true);
+            }
+            close->draw(remove.mLeft + 3, mid - 6, 12, 12, text_color.get() % (mHoverRemove ? 1.f : 0.6f));
             right = remove.mLeft - 2;
         }
         F32 query_right = 0.f;
@@ -678,8 +683,8 @@ void SKInventoryTreeView::drawRow(S32 index, const LLRect& rect)
         return;
     }
 
-    // The selected folder's recursive count, right-aligned.
-    if (selected && !mFlat)
+    // The selected folder's recursive count, right-aligned; in Columns only while the path's row is that folder itself.
+    if (selected && row.mID == mSelectedID)
     {
         const std::string count = countLabel(row.mID, nullptr);
         font->renderUTF8(count, 0, right, mid, dim_color.get(), LLFontGL::RIGHT, LLFontGL::VCENTER);
@@ -1072,6 +1077,7 @@ bool SKInventoryTreeView::handleHover(S32 x, S32 y, MASK mask)
         mHover = -1;
     }
     mHoverKey = mHover >= 0 ? mRows[mHover].mKey : std::string();
+    mHoverRemove = mHover >= 0 && mRows[mHover].mKind == Row::KIND_SAVED && removeRect(mHover).pointInRect(x, y);
     return LLUICtrl::handleHover(x, y, mask);
 }
 
@@ -1079,6 +1085,7 @@ void SKInventoryTreeView::onMouseLeave(S32 x, S32 y, MASK mask)
 {
     mHover = -1;
     mHoverKey.clear();
+    mHoverRemove = false;
     LLUICtrl::onMouseLeave(x, y, mask);
 }
 

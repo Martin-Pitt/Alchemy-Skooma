@@ -1322,6 +1322,7 @@ bool SKInventoryFlatView::handleHover(S32 x, S32 y, MASK mask)
 {
     if (!hasMouseCapture() || mPress == PRESS_NONE)
     {
+        mHoverRow = rowAt(x, y, nullptr);
         return LLUICtrl::handleHover(x, y, mask);
     }
     const S32 dx = x - mPressX;
@@ -1369,6 +1370,12 @@ bool SKInventoryFlatView::handleHover(S32 x, S32 y, MASK mask)
     }
     getWindow()->setCursor(UI_CURSOR_ARROW);
     return true;
+}
+
+void SKInventoryFlatView::onMouseLeave(S32 x, S32 y, MASK mask)
+{
+    mHoverRow = -1;
+    LLUICtrl::onMouseLeave(x, y, mask);
 }
 
 void SKInventoryFlatView::startLasso()

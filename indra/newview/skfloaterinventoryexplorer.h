@@ -141,6 +141,7 @@ protected:
     std::vector<Tab> mTabs;
     S32 mActive;
     S32 mHover;
+    bool mHoverClose = false;
     std::string mNewTabToolTip;
     index_callback_t mActivateCallback;
     index_callback_t mCloseCallback;

@@ -180,7 +180,15 @@ void SKExplorerTabStrip::draw()
                          llmax(0, text_right - x), nullptr, LLFontGL::ELLIPSIS_MIDDLE);
         if (show_close)
         {
-            font->renderUTF8("\xC3\x97", 0, left + width - CLOSE_WIDTH / 2 - 4, height / 2, text_active.get(),
+            // Opacity .6 on the tab's hover, 1 over a faint fill on its own.
+            static LLUIColor button_hover = LLUIColorTable::instance().getColor("White_10");
+            const bool own = mHoverClose && i == mHover;
+            if (own)
+            {
+                gl_rect_2d(left + width - CLOSE_WIDTH - 4, height / 2 + CLOSE_WIDTH / 2, left + width - 2, height / 2 - CLOSE_WIDTH / 2,
+                           button_hover.get());
+            }
+            font->renderUTF8("\xC3\x97", 0, left + width - CLOSE_WIDTH / 2 - 4, height / 2, text_active.get() % (own ? 1.f : 0.6f),
                              LLFontGL::HCENTER, LLFontGL::VCENTER);
         }
     }
@@ -246,12 +254,14 @@ bool SKExplorerTabStrip::handleHover(S32 x, S32 y, MASK mask)
     {
         mHover = (S32)mTabs.size();
     }
+    mHoverClose = overClose(mHover, x);
     return LLUICtrl::handleHover(x, y, mask);
 }
 
 void SKExplorerTabStrip::onMouseLeave(S32 x, S32 y, MASK mask)
 {
     mHover = -1;
+    mHoverClose = false;
     LLUICtrl::onMouseLeave(x, y, mask);
 }
 
