@@ -29,6 +29,7 @@
 #include "llapp.h"
 #include "lldir.h"
 #include "llframetimer.h"
+#include "lltimer.h"
 #include "llimagegl.h"
 #include "llmaterial.h"
 #include "llrender.h"
@@ -804,13 +805,14 @@ bool SKOverviewCensus::update()
     const bool sculpts_due = now >= mSculptsAt;
     // The surrounds are looked at least often: large rendered-only parts anywhere in the loaded regions.
     static LLCachedControl<F32> surrounds_every(gSavedSettings, "SKOverviewSurroundsRefresh", 15.f);
-    const bool surrounds_due = now >= mSurroundsAt;
-    if (surrounds_due)
+    if (mSurroundsCursor >= 0 || now >= mSurroundsAt)
     {
-        mSurroundsAt = now + llmax((F32)surrounds_every, 1.f);
         const U64 before = mSurroundsSig;
-        gatherSurrounds(*snap);
-        mRecordsChanged |= mSurroundsSig != before;
+        if (gatherSurrounds(*snap))
+        {
+            mSurroundsAt = now + llmax((F32)surrounds_every, 1.f);
+            mRecordsChanged |= mSurroundsSig != before;
+        }
     }
     if ((!mRecordsChanged && !recheck && !sculpts_due && mBuilt) || now < mWalkAt)
     {
@@ -2526,14 +2528,15 @@ F32 SKOverviewCensus::levelTop(const Level& level, F32 floor) const
 
 namespace
 {
-    // Whether a part reaching this far from its centre crosses into the void: no region under one of its sides.
-    bool reachesVoid(const LLVector3d& centre, F32 reach)
+    // Whether a part reaching this far from its centre crosses into the void: no region under one of its sides. Its
+    // own region is asked first, which answers for nearly every part without walking the region list.
+    bool reachesVoid(const LLViewerRegion* own, const LLVector3d& centre, F32 reach)
     {
         static const F64 SIDES[4][2] = { { 1.0, 0.0 }, { -1.0, 0.0 }, { 0.0, 1.0 }, { 0.0, -1.0 } };
         for (const auto& side : SIDES)
         {
             const LLVector3d at = centre + LLVector3d(side[0] * reach, side[1] * reach, 0.0);
-            if (!LLWorld::getInstance()->getRegionFromPosGlobal(at))
+            if (!own->pointInRegionGlobal(at) && !LLWorld::getInstance()->getRegionFromPosGlobal(at))
             {
                 return true;
             }
@@ -2542,38 +2545,53 @@ namespace
     }
 }
 
-void SKOverviewCensus::gatherSurrounds(const SKCensusSnapshot& snap)
+bool SKOverviewCensus::gatherSurrounds(const SKCensusSnapshot& snap)
 {
     LL_PROFILE_ZONE_SCOPED;
     // Mega parts, at least a region on some axis or reaching into the void, that the census holds no shape for
     // (megasculpts, phantom or physics-less meshes and megaprims) are drawn from what is rendered, wherever they are
-    // in the loaded regions, so the map shows the land they make.
-    std::set<LLUUID> recorded;
-    for (const skworld::RecordPtr& rec : snap.mRecords)
+    // in the loaded regions, so the map shows the land they make. The walk is sliced across frames.
+    if (mSurroundsCursor < 0)
     {
-        if (rec && rec->mCollides) // a visible-only record is a box, no shape
+        mSurroundsRecorded.clear();
+        for (const skworld::RecordPtr& rec : snap.mRecords)
         {
-            recorded.insert(rec->mPart);
+            if (rec && rec->mCollides) // a visible-only record is a box, no shape
+            {
+                mSurroundsRecorded.push_back(rec->mPart);
+            }
         }
+        std::sort(mSurroundsRecorded.begin(), mSurroundsRecorded.end());
+        mSurroundsGathered.clear();
+        mSurroundsCursor = 0;
     }
-    mSurrounds.clear();
-    U64 sig = 0; // summed per part: the object list's order churns
-    for (S32 i = 0; i < gObjectList.getNumObjects(); ++i)
+    LLTimer slice;
+    S32 visited = 0;
+    for (; mSurroundsCursor < gObjectList.getNumObjects(); ++mSurroundsCursor)
     {
-        LLVOVolume* volume = dynamic_cast<LLVOVolume*>(gObjectList.getObject(i));
-        if (!volume || volume->isDead() || volume->isAttachment() || volume->isAvatar() || !volume->getRegion() ||
-            !volume->getVolume() || volume->getAvatar())
+        if ((++visited & 63) == 0 && slice.getElapsedTimeF64() >= SURROUNDS_SLICE_S)
+        {
+            return false;
+        }
+        LLViewerObject* object = gObjectList.getObject(mSurroundsCursor);
+        if (!object || object->isDead() || !object->getRegion())
         {
             continue;
         }
-        const LLVector3 scale = volume->getScale();
+        const LLVector3 scale = object->getScale();
         const F32 size = llmax(scale.mV[VX], llmax(scale.mV[VY], scale.mV[VZ]));
-        if (size < volume->getRegion()->getWidth() && !reachesVoid(volume->getPositionGlobal(), size * 0.5f))
+        LLViewerRegion* region = object->getRegion();
+        if (size < region->getWidth() && !reachesVoid(region, object->getPositionGlobal(), size * 0.5f))
+        {
+            continue;
+        }
+        LLVOVolume* volume = dynamic_cast<LLVOVolume*>(object);
+        if (!volume || volume->isAttachment() || volume->isAvatar() || !volume->getVolume() || volume->getAvatar())
         {
             continue;
         }
         const bool sculpt = volume->isSculpted() && !volume->isMesh();
-        if (!sculpt && recorded.count(volume->getID()))
+        if (!sculpt && std::binary_search(mSurroundsRecorded.begin(), mSurroundsRecorded.end(), volume->getID()))
         {
             continue;
         }
@@ -2592,10 +2610,10 @@ void SKOverviewCensus::gatherSurrounds(const SKCensusSnapshot& snap)
         }
         RenderedPart part;
         part.mPart = volume->getID();
-        part.mOrigin = volume->getRegion()->getOriginGlobal();
+        part.mOrigin = region->getOriginGlobal();
         part.mAnchor = volume->getRootEdit()->getPositionGlobal();
         part.mRoot = volume->getRootEdit()->getID();
-        const LLVector3 region_agent = volume->getRegion()->getOriginAgent();
+        const LLVector3 region_agent = region->getOriginAgent();
         auto tris = std::make_shared<std::vector<LLVector3>>();
         tris->reserve(geom.mTriangles.size());
         F32 lo = 1e30f, hi = -1e30f;
@@ -2609,7 +2627,7 @@ void SKOverviewCensus::gatherSurrounds(const SKCensusSnapshot& snap)
         part.mHeight = hi - lo;
         part.mTris = std::move(tris);
         part.mSurround = true;
-        part.mVoidOnly = size >= volume->getRegion()->getWidth(); // never in-region terrain at that size
+        part.mVoidOnly = size >= region->getWidth(); // never in-region terrain at that size
         const LLVector3d centre = volume->getPositionGlobal();
         U64 h = 1469598103934665603ull;
         h = (h ^ part.mPart.getCRC32()) * 1099511628211ull;
@@ -2617,10 +2635,25 @@ void SKOverviewCensus::gatherSurrounds(const SKCensusSnapshot& snap)
         h = (h ^ ((U64)(S64)std::llround(centre.mdV[VX] * 64.0) ^ ((U64)(S64)std::llround(centre.mdV[VY] * 64.0) << 21) ^
                   ((U64)(S64)std::llround(centre.mdV[VZ] * 64.0) << 42))) * 1099511628211ull;
         part.mKey = skoverview::scramble(h);
-        sig += part.mKey;
-        mSurrounds.push_back(std::move(part));
+        mSurroundsGathered.push_back(std::move(part));
     }
+    // The list compacts dead objects between slices, which can bring a part to an index visited twice.
+    std::stable_sort(mSurroundsGathered.begin(), mSurroundsGathered.end(),
+                     [](const RenderedPart& a, const RenderedPart& b) { return a.mPart < b.mPart; });
+    mSurroundsGathered.erase(std::unique(mSurroundsGathered.begin(), mSurroundsGathered.end(),
+                                         [](const RenderedPart& a, const RenderedPart& b) { return a.mPart == b.mPart; }),
+                             mSurroundsGathered.end());
+    U64 sig = 0; // summed per part: the object list's order churns
+    for (const RenderedPart& part : mSurroundsGathered)
+    {
+        sig += part.mKey;
+    }
+    mSurrounds.swap(mSurroundsGathered);
+    mSurroundsGathered.clear();
+    mSurroundsRecorded.clear();
+    mSurroundsCursor = -1;
     mSurroundsSig = sig;
+    return true;
 }
 
 std::string SKOverviewCensus::Reason::text() const
