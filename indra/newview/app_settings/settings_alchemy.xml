@@ -6688,7 +6688,7 @@
         <key>SKMapVoidTiles</key>
         <map>
             <key>Comment</key>
-            <string>Capture the squares with no region within two region widths of the agent's for the mini-map, as the regions are.</string>
+            <string>Capture the squares with no region for the mini-map as the regions are, over the loaded regions' bounds and one square past them.</string>
             <key>Persist</key>
             <integer>1</integer>
             <key>Type</key>
