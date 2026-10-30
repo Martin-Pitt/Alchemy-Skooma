@@ -335,9 +335,8 @@ private:
                             const std::shared_ptr<const SKPhysicsHavokShape>& sim);
     /// Who is sitting on what, into the session history.
     void gatherCrew();
-    /// The feature rules over the finished scan's parts; the part kinds they
-    /// give are what the next scan records with.
-    void classify(SKCensusSnapshot& snap);
+    /// The roots the feature rules read, from live objects and the session history.
+    std::vector<skworld::FeatureRoot> featureRoots(const skworld::FeatureParams& params);
     /// A record into the pending snapshot, counted.
     void take(SKCensusSnapshot& snap, const skworld::RecordPtr& rec);
 
@@ -397,7 +396,6 @@ private:
     F64 mLastScanLog = 0.0;
     // Only one job in flight; no new scan until its snapshot is published or discarded.
     std::unique_ptr<LL::ThreadPool> mClusterWorkers;
-    std::future<std::shared_ptr<SKCensusSnapshot>> mClusterJob;
     std::vector<U64> mClusterRegions;
     bool mDiscardClusterJob = false;
     std::unordered_map<LLUUID, PartCache> mParts;
@@ -431,6 +429,21 @@ private:
     std::unordered_map<LLUUID, LeafTransform> mDoorways;
     /// This scan's sim transform of every leaf, kept until the scan finishes.
     std::unordered_map<LLUUID, LeafTransform> mLeafTransforms;
+    /// The finish's census state the worker holds while its job is in flight, returned with the snapshot.
+    struct FinishJob
+    {
+        std::shared_ptr<SKCensusSnapshot> mSnapshot;
+        skworld::FaceCoverCache mFaceCover;
+        skworld::LeafHistories mLeaves;
+        std::unordered_map<LLUUID, LeafTransform> mDoorways;
+        F64 mFinishedAt = 0.0;
+    };
+    /// Face cover, features, leaves and doors over the finished scan's parts; touches nothing but its arguments.
+    static void classifyJob(FinishJob& job, std::vector<skworld::FeaturePart>& parts, const std::vector<skworld::FeatureRoot>& roots,
+                            const skworld::FeatureParams& params, std::unordered_map<LLUUID, LeafTransform>& transforms);
+    /// What the worker's classify gives the next scan, and the caches' prune, as of when the scan finished.
+    void adoptFinish(FinishJob& job);
+    std::future<FinishJob> mClusterJob;
     /// Each door-shaped part's face cover, cast again only when it or its neighbours change.
     skworld::FaceCoverCache mFaceCover;
     std::map<std::string, F32> mDemands;
