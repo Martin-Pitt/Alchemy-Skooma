@@ -88,6 +88,7 @@ namespace
         const WindSlabPtr e = w.slab(0.f);
         { INFO("solid at the slab"); REQUIRE(((flags(e, 22.f, 32.f) & WindCell::BLOCKED) != 0)); }
         const F32 at8 = factor(e, 32.25f, 32.25f), at24 = factor(e, 48.25f, 32.25f), at40 = factor(e, 64.25f, 32.25f);
+        CAPTURE(at8, at24, at40);
         { INFO("sheltered at 8 m"); REQUIRE((at8 > 0.15f && at8 < 0.4f)); }
         { INFO("recovering at 24 m"); REQUIRE((at24 > 0.6f && at24 < 0.9f)); }
         { INFO("free at 40 m"); REQUIRE((at40 > 0.9f)); }
