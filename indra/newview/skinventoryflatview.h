@@ -224,6 +224,7 @@ public:
     bool handleRightMouseDown(S32 x, S32 y, MASK mask) override;
     bool handleMouseUp(S32 x, S32 y, MASK mask) override;
     bool handleHover(S32 x, S32 y, MASK mask) override;
+    void onMouseLeave(S32 x, S32 y, MASK mask) override;
     bool handleScrollWheel(S32 x, S32 y, LLScrollDelta delta) override;
     bool handleKeyHere(KEY key, MASK mask) override;
     bool handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop, EDragAndDropType cargo_type, void* cargo_data,
@@ -310,6 +311,7 @@ protected:
     S32 mFolderCount;
     S32 mItemCount;
     S32 mCursor;
+    S32 mHoverRow = -1;
     S32 mAnchor;
     EColumn mSortKey;
     bool mSortAscending;

@@ -114,6 +114,7 @@ protected:
     std::vector<SKPopupRow> mRows;
     S32 mHighlight;
     S32 mHover;
+    bool mHoverRemove = false;
     S32 mScroll;    // pixels hidden above the top
     U32 mDrawnFrame = 0;
     index_callback_t mPickCallback;

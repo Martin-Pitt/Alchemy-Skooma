@@ -513,9 +513,9 @@ void SKInventoryIconsView::drawContent()
         }
         for (S32 r = line.mFirst; r < line.mFirst + line.mCount; ++r)
         {
-            if (focused && r == mCursor && !mSelected[r])
+            if (((focused && r == mCursor) || r == mHoverRow) && !mSelected[r])
             {
-                // The keyboard cursor on an unselected tile: a faint fill.
+                // The keyboard cursor or the pointer on an unselected tile: a faint fill.
                 static LLUIColor cursor_color = LLUIColorTable::instance().getColor("White_10");
                 gl_rect_2d(tileRect(r), cursor_color.get(), true);
             }
