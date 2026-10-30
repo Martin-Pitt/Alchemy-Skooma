@@ -468,11 +468,16 @@ namespace
                 CHECK(gpu[i].mFirstIndex == slots[i].mFirst);
                 CHECK(gpu[i].mInstanceCount == 1u);
                 straddled += straddles ? 1 : 0;
-                // A rectangle edge that floors or ceils right on a pixel boundary rounds either way on the two.
+                // A rectangle edge that floors or ceils right on a pixel boundary rounds either way on the two: within
+                // the relative term's float rounding of the projection, or a ten-thousandth of a pixel near zero. Only
+                // an edge the clamp to the patch's screen leaves standing counts; one far off it, where a box near the
+                // eye projects and a float holds few or no fraction bits, gives the same clamped rectangle either way.
                 bool rounding = false;
                 for (S32 e = 0; projected && e < 4; ++e)
                 {
-                    rounding = rounding || std::fabs(edges[e] - std::round(edges[e])) < 1.0e-3f + 1.0e-5f * std::fabs(edges[e]);
+                    const F32 reach = F32(e % 2 ? patch.mH : patch.mW) + 1.f;
+                    rounding = rounding || (edges[e] > -2.f && edges[e] < reach &&
+                                            std::fabs(edges[e] - std::round(edges[e])) < 1.0e-4f + 1.0e-5f * std::fabs(edges[e]));
                 }
                 if (rounding)
                 {
