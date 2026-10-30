@@ -57,7 +57,7 @@
 namespace
 {
     constexpr F32 SLOW_CLICK_SECONDS = 0.55f;
-    const char* const COLUMN_KEYS[SKInventoryFlatView::COL_COUNT] = { "name", "folder", "type", "creator", "acquired", "perms", "worn", "description" };
+    const char* const COLUMN_KEYS[SKInventoryFlatView::COL_COUNT] = { "name", "folder", "type", "creator", "acquired", "perms", "next_perms", "worn", "description" };
     const char* const GROUP_KEYS[SKInventoryFlatView::GROUP_COUNT] = { "none", "type", "date", "brand", "perms", "worn", "creator" };
     const char* const TYPE_ORDER[] = { "folders", "objects", "clothing", "bodyparts", "textures", "sounds", "animations", "gestures",
                                        "landmarks", "notecards", "scripts", "materials", "settings", "callingcards", "other" };
@@ -415,6 +415,9 @@ void SKInventoryFlatView::readItemRow(LLViewerInventoryItem* item, const SKInven
     const U32 mask = info->getPermissions().getMaskOwner();
     row.mPermRank = perm_rank(mask);
     row.mPerms = perm_letters(mask);
+    const U32 next_mask = info->getPermissions().getMaskNextOwner();
+    row.mNextPermRank = perm_rank(next_mask);
+    row.mNextPerms = perm_letters(next_mask);
     row.mDescription = info->getDescription();
     row.mAspect = aspect_of(row.mDescription);
     // A thumbnail wins; a texture or photo is its own picture.
@@ -480,6 +483,7 @@ void SKInventoryFlatView::sortRows(std::vector<SKInventoryRow>& rows, EColumn ke
             case COL_CREATOR:     order = LLStringUtil::compareDict(a.mCreatorName, b.mCreatorName); break;
             case COL_ACQUIRED:    order = (a.mAcquired < b.mAcquired) ? -1 : (a.mAcquired > b.mAcquired ? 1 : 0); break;
             case COL_PERMS:       order = a.mPermRank - b.mPermRank; break;
+            case COL_NEXT_PERMS:  order = a.mNextPermRank - b.mNextPermRank; break;
             case COL_WORN:        order = (a.mIsWorn != b.mIsWorn) ? (a.mIsWorn ? -1 : 1) : LLStringUtil::compareDict(a.mWornOn, b.mWornOn); break;
             case COL_DESCRIPTION: order = LLStringUtil::compareDict(a.mDescription, b.mDescription); break;
             default:              order = LLStringUtil::compareDict(a.mName, b.mName); break;

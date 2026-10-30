@@ -588,7 +588,7 @@ bool SKFloaterInventoryExplorer::postBuild()
     }
 
     SKInventoryListLabels labels;
-    for (const char* key : { "col_name", "col_folder", "col_type", "col_creator", "col_acquired", "col_perms", "col_worn", "col_description" })
+    for (const char* key : { "col_name", "col_folder", "col_type", "col_creator", "col_acquired", "col_perms", "col_next_perms", "col_worn", "col_description" })
     {
         labels.mColumns.push_back(getString(key));
     }
