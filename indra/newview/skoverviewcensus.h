@@ -288,21 +288,6 @@ private:
         U64 mKey = 0;           ///< its candidates' signatures, kinds and looks
         std::vector<const skworld::Record*> mCandidates; ///< owned by the snapshot the job holds
     };
-    /// The pass's records near an invisible part's bounds (global) that it may stand in for or add to.
-    /// A large part (over INVISIBLE_WALL_M) takes only the visible shells that could hold it.
-    CoverInput coverInputFor(const LLUUID& part, const LLVector3d& lo, const LLVector3d& hi, const struct SKCensusSnapshot& snap,
-                             bool large);
-    /// The pass's cover candidates (skoverview::coverPoolRecord, not restless) by index into the snapshot's records, filed
-    /// by COVER_CELL_M cell in plan, with their looks.
-    std::vector<std::pair<U64, U32>> mCoverGrid;    ///< (cell, record index), sorted once filed
-    std::vector<U32> mCoverLarge;                   ///< those spanning too many cells to file
-    std::vector<skoverview::Seen> mCoverSeen;      ///< per snapshot record; UNKNOWN when not a candidate
-    static constexpr F64 COVER_CELL_M = 16.0;
-    /// Each record visited once per coverInputFor, by stamp; indexed as the snapshot's records.
-    std::vector<U32> mCoverStamp;
-    U32 mCoverStampGen = 0;
-    /// The pool's content hash; coverInputFor's answers are kept while it holds, by part and box.
-    U64 mCoverVersion = 0;
     struct CoverCached
     {
         U64 mBox = 0;
@@ -313,9 +298,55 @@ private:
         U32 mPass = 0;
         bool mPending = false;
     };
-    std::unordered_map<LLUUID, CoverCached> mCoverCache;
-    std::vector<const skworld::Record*> mCoverCacheCands;
+    /// What each sculpt's signature entry was mixed from last pass, to name the input that changed.
+    struct SculptInputs
+    {
+        U64 mShape = 0;
+        U64 mTris = 0;
+        U64 mCentre = 0;
+        U8 mSeen = 0;
+        U64 mCover = 0;
+        bool mPending = false;
+        size_t mCandidates = 0;
+    };
+    struct Restless
+    {
+        F64 mLast = 0.0;        ///< when it last changed
+        U32 mChanges = 0;
+        bool mOn = false;
+        bool mSurround = false; ///< a void surround: kept in the buffers, only its changes ignored
+        U64 mHash = 0;          ///< its shape and place when last seen, to tell when it holds still
+    };
+    using RestlessMap = std::map<LLUUID, Restless>;
+    static bool restlessIn(const RestlessMap& restless, const LLUUID& part);
+    /// What the walk keeps between passes that reads only the snapshot and the overview's own data: the worker's
+    /// alone, one job at a time on the pool's single thread.
+    struct Walk
+    {
+        /// The pass's cover candidates (skoverview::coverPoolRecord, not restless) by index into the snapshot's
+        /// records, filed by COVER_CELL_M cell in plan.
+        std::vector<std::pair<U64, U32>> mCoverGrid;    ///< (cell, record index), sorted once filed
+        std::vector<U32> mCoverLarge;                   ///< those spanning too many cells to file
+        /// Each record visited once per coverInputFor, by stamp; indexed as the snapshot's records.
+        std::vector<U32> mCoverStamp;
+        U32 mCoverStampGen = 0;
+        /// The pool's content hash; coverInputFor's answers are kept while it holds, by part and box.
+        U64 mCoverVersion = 0;
+        std::unordered_map<LLUUID, CoverCached> mCoverCache;
+        std::vector<const skworld::Record*> mCoverCacheCands;
+        std::unordered_map<LLUUID, SculptInputs> mSculptInputs;
+        std::vector<std::pair<U64, std::pair<char, LLUUID>>> mLastEntries;
+        std::vector<std::pair<U64, std::pair<char, LLUUID>>> mLastMoves;
+    };
+    std::shared_ptr<Walk> mWalk = std::make_shared<Walk>();
+    bool mResetCover = false;   ///< release() asks the next walk to drop the kept cover answers
+    static constexpr F64 COVER_CELL_M = 16.0;
     static constexpr size_t COVER_CACHE_MAX = 1u << 22;
+    /// The pass's records near an invisible part's bounds (global) that it may stand in for or add to, given the
+    /// records' looks. A large part (over INVISIBLE_WALL_M) takes only the visible shells that could hold it.
+    static CoverInput coverInputFor(Walk& walk, const std::vector<skoverview::Seen>& looks, U32 pass, const LLUUID& part,
+                                    const LLVector3d& lo, const LLVector3d& hi, const struct SKCensusSnapshot& snap,
+                                    bool large);
     /// The worker's verdicts kept across builds by part; each build reads the last landed map and makes the next.
     struct Verdict
     {
@@ -338,12 +369,43 @@ private:
         std::map<std::tuple<LLUUID, S64, S64>, std::shared_ptr<const LinksetGeom>> mByLinkset;
     };
     std::shared_ptr<const Cache> mCache = std::make_shared<const Cache>();
-    /// What a build needs, as values: the worker never touches viewer objects, the world, settings or GL.
+    /// A walked sculpt's look and the box its cover is asked over; the worker signs it.
+    struct SculptWalk
+    {
+        skoverview::Seen mSeen = skoverview::Seen::VISIBLE;
+        LLVector3d mLo;
+        LLVector3d mHi;
+        bool mLarge = false;
+        U64 mCentreKey = 0;
+    };
+    /// A kept record's root as the walk found it, for its linkset's anchor.
+    struct KeptWalk
+    {
+        LLVector3d mRootPos;
+        bool mRootLive = false;
+        bool mTest = false;     ///< invisible: its cover is asked
+    };
+    /// What a walk and its build need, as values: the worker never touches viewer objects, the world, settings or GL.
     struct Job
     {
         std::shared_ptr<const struct SKCensusSnapshot> mSnapshot; ///< owns the records and clusters below
         U64 mSignature = 0;
         U32 mGeneration = 0;
+        /// The walk's inputs, worked into the signature and the build's inputs below by walkAndBuild.
+        std::shared_ptr<Walk> mWalk;
+        bool mResetCover = false;
+        F64 mNow = 0.0;
+        U32 mPass = 0;
+        bool mAnnounced = false;
+        bool mBuiltBefore = false;
+        U64 mLastSignature = 0;
+        RestlessMap mRestless;
+        std::vector<skoverview::Seen> mLooks;   ///< per snapshot record; UNKNOWN when not a candidate
+        std::vector<KeptWalk> mKeptWalk;        ///< per kept record
+        std::vector<SculptWalk> mSculptWalk;    ///< per near sculpt, the first of mSculpts
+        std::vector<LLUUID> mSculptsGone;       ///< sculpts the walk no longer keeps
+        U64 mSurroundsSig = 0;
+        std::vector<U64> mRegionHandles;
         std::vector<const skworld::Record*> mKept;
         std::vector<U8> mFixed;
         std::vector<bool> mVoidOnly;
@@ -353,7 +415,6 @@ private:
         std::shared_ptr<const Cache> mCache;
         std::vector<U32> mGroupOf;      ///< per kept record then sculpt, its linkset's group
         std::vector<LLUUID> mRoots;     ///< per group
-        std::vector<U32> mIds;          ///< per group, its linkset's stable id
         std::map<U32, U32> mGroupCluster;
         std::vector<std::pair<LLVector3d, bool>> mAnchors; ///< per group: its root's position, and void-only
         std::vector<std::pair<LLVector3d, F64>> mRegions;  ///< connected regions' origins and widths
@@ -401,8 +462,17 @@ private:
         std::vector<LLUUID> mRoots;     ///< every root the build gave an id
         /// Linksets left out for a run of one class over MAX_PAGE_VERTICES: their roots and vertices.
         std::vector<std::pair<LLUUID, U64>> mOverflow;
+        /// The walk's: false when its signature matched the landed buffers' and nothing was built.
+        bool mRebuilt = false;
+        RestlessMap mRestless;
+        std::vector<std::pair<const skworld::Record*, skoverview::Seen>> mSeenByRecord;
+        std::shared_ptr<const struct SKCensusSnapshot> mSnapshot;
+        std::vector<LLUUID> mClusterRoots;
     };
     static std::shared_ptr<Built> buildLinksets(const Job& job);
+    /// The walk's snapshot-only half: files the cover pool, asks the invisible parts' covers, signs every entry, and
+    /// builds when the signature moved.
+    static std::shared_ptr<Built> walkAndBuild(Job& job);
     /// Lands a build in this frame: frees the runs of linksets gone or changed, and uploads the changed ones' runs.
     void swapIn(Built& built);
     /// A page of the region's class with room for count vertices, made when none has, sized for the want vertices the
@@ -455,37 +525,15 @@ private:
         F32 mSpan = 0.f;        ///< its triangles' largest extent
     };
     std::unordered_map<LLUUID, SculptEntry> mSculptGeom;
-    /// What each sculpt's signature entry was mixed from last pass, to name the input that changed.
-    struct SculptInputs
-    {
-        U64 mShape = 0;
-        U64 mTris = 0;
-        U64 mCentre = 0;
-        U8 mSeen = 0;
-        U64 mCover = 0;
-        bool mPending = false;
-        size_t mCandidates = 0;
-    };
-    std::unordered_map<LLUUID, SculptInputs> mSculptInputs;
     std::vector<LLUUID> mSculptCandidates;  ///< the sculpted volumes the last full object list walk found
     /// Logs which signature entries came and went since the last rebuild; sorts entries and keeps them.
     /// and turns parts that moved twice within the window restless, from their shape and place alone (moves).
     /// Returns how many record and linkset entries (R, C) of settled parts moved.
-    U32 logChurn(std::vector<std::pair<U64, std::pair<char, LLUUID>>>& entries,
-                  std::vector<std::pair<U64, std::pair<char, LLUUID>>>& moves, const std::string& sculpt_moved);
-    std::vector<std::pair<U64, std::pair<char, LLUUID>>> mLastEntries;
-    std::vector<std::pair<U64, std::pair<char, LLUUID>>> mLastMoves;
+    static U32 logChurn(Walk& walk, RestlessMap& restless, std::vector<std::pair<U64, std::pair<char, LLUUID>>>& entries,
+                        std::vector<std::pair<U64, std::pair<char, LLUUID>>>& moves, const std::string& sculpt_moved, F64 now);
     static constexpr F64 RESTLESS_WINDOW_S = 20.0;  ///< a second change within this turns a part restless
     static constexpr F64 RESTLESS_SETTLE_S = 30.0;  ///< a restless part unchanged this long rejoins the census
-    struct Restless
-    {
-        F64 mLast = 0.0;        ///< when it last changed
-        U32 mChanges = 0;
-        bool mOn = false;
-        bool mSurround = false; ///< a void surround: kept in the buffers, only its changes ignored
-        U64 mHash = 0;          ///< its shape and place when last seen, to tell when it holds still
-    };
-    std::map<LLUUID, Restless> mRestless;
+    RestlessMap mRestless;
     bool isRestless(const LLUUID& part) const;
 
     std::vector<Region> mRegions;
