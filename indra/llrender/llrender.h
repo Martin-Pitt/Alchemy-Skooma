@@ -883,7 +883,7 @@ public:
     :   mPrevious(gGL.getUISaturation())
     {
         // The fraction is held to [0, 1] first, NaN reading as 1, so a scope never brightens an outer one.
-        gGL.setUISaturation(mPrevious * (saturation < 1.f ? llmax(saturation, 0.f) : 1.f));
+        gGL.setUISaturation(mPrevious * (std::isnan(saturation) ? 1.f : llclamp(saturation, 0.f, 1.f)));
     }
 
     ~ALUISaturation() { gGL.setUISaturation(mPrevious); }
