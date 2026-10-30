@@ -678,8 +678,8 @@ void SKInventoryTreeView::drawRow(S32 index, const LLRect& rect)
         return;
     }
 
-    // The selected folder's recursive count, right-aligned.
-    if (selected && !mFlat)
+    // The selected folder's recursive count, right-aligned; in Columns only while the path's row is that folder itself.
+    if (selected && row.mID == mSelectedID)
     {
         const std::string count = countLabel(row.mID, nullptr);
         font->renderUTF8(count, 0, right, mid, dim_color.get(), LLFontGL::RIGHT, LLFontGL::VCENTER);
