@@ -279,7 +279,9 @@ private:
         bool mVoidOnly = false;         ///< a region wide or more: drawn only over no connected region
         U64 mKey = 0;                   ///< what its triangles were worked from: its volume, map and placement
     };
-    void gatherSurrounds(const struct SKCensusSnapshot& snap);
+    /// Walks the object list for surrounds from where the last call stopped, for about the slice's time; returns
+    /// true once a pass is whole and published into mSurrounds.
+    bool gatherSurrounds(const struct SKCensusSnapshot& snap);
     /// What decides an invisible part's verdict: the census records near it whose look is visible.
     struct CoverInput
     {
@@ -540,6 +542,11 @@ private:
     std::vector<RenderedPart> mSurrounds;
     U64 mSurroundsSig = 0;
     F64 mSurroundsAt = 0.0;     ///< when the surrounds are looked at again
+    /// The surrounds pass in progress, sliced across frames and published only whole.
+    std::vector<LLUUID> mSurroundsRecorded;     ///< the parts with a colliding record when the pass began, sorted
+    std::vector<RenderedPart> mSurroundsGathered;
+    S32 mSurroundsCursor = -1;  ///< the next object list index; -1 while no pass runs
+    static constexpr F64 SURROUNDS_SLICE_S = 0.001;
     U64 mStamp = 0;
     U64 mSignature = 0;
     bool mUnknownLook = false;  ///< some part's faces or images were not loaded at the last build
