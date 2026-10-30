@@ -213,6 +213,7 @@ protected:
     LLFrameTimer mTypeAheadTimer;
 
     SKDragHover mDropHover;
+    SKEdgeGlow mEdgeGlow;
 
     LLScrollbar* mScrollbar;
     LLInventoryPanel* mBridgePanel;

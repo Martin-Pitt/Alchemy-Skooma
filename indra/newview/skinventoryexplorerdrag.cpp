@@ -33,6 +33,7 @@
 #include "llfriendcard.h"
 #include "llinventoryfunctions.h"
 #include "llinventorymodel.h"
+#include "llrender.h"
 #include "llrender2dutils.h"
 #include "lluicolortable.h"
 #include "llviewerassettype.h"
@@ -795,4 +796,67 @@ void SKDragHover::reset()
     mTarget.setNull();
     mStill = false;
     mFrame = 0;
+}
+
+void SKEdgeGlow::hover(S32 side, bool scrolling)
+{
+    mHoverSide = side;
+    mScrolling = scrolling;
+}
+
+void SKEdgeGlow::draw(const LLRect& area, bool along_x, bool active)
+{
+    // Fades in and out over 0.15 s, faint in range and full while scrolling.
+    if (!active)
+    {
+        mHoverSide = 0;
+    }
+    const F32 target = mHoverSide != 0 ? (mScrolling ? 1.f : 0.45f) : 0.f;
+    const F32 rate = mTimer.getElapsedTimeF32() / 0.15f;
+    mTimer.reset();
+    mAlpha = mAlpha < target ? llmin(target, mAlpha + rate) : llmax(target, mAlpha - rate);
+    if (mHoverSide != 0)
+    {
+        mSide = mHoverSide;
+    }
+    if (mAlpha <= 0.f || mSide == 0)
+    {
+        return;
+    }
+
+    // A radial gradient on an ellipse centred on the edge, fading smoothly to nothing at its rim.
+    static LLUIColor accent = LLUIColorTable::instance().getColor("EmphasisColor");
+    constexpr S32 DEPTH_STEPS = 14;
+    constexpr S32 SPAN_STEPS = 24;
+    const F32 span = (F32)(along_x ? area.getHeight() : area.getWidth());
+    const F32 depth = llmin(56.f, (F32)(along_x ? area.getWidth() : area.getHeight()) * 0.5f);
+    const F32 edge = (F32)(along_x ? (mSide < 0 ? area.mLeft : area.mRight) : (mSide < 0 ? area.mBottom : area.mTop));
+    const F32 start = (F32)(along_x ? area.mBottom : area.mLeft);
+    const F32 inward = mSide < 0 ? 1.f : -1.f;
+    const LLColor4 base = accent.get();
+    auto vertex = [&](S32 d, S32 s)
+    {
+        const F32 td = (F32)d / DEPTH_STEPS;
+        const F32 ts = (F32)s / SPAN_STEPS * 2.f - 1.f;
+        const F32 fall = 1.f - llmin(1.f, sqrtf(td * td + ts * ts));
+        gGL.color4f(base.mV[VRED], base.mV[VGREEN], base.mV[VBLUE], 0.55f * mAlpha * fall * fall);
+        const F32 a = edge + inward * td * depth;
+        const F32 b = start + (ts + 1.f) * 0.5f * span;
+        gGL.vertex2f(along_x ? a : b, along_x ? b : a);
+    };
+    gGL.getTextureSlot(0)->unbind();
+    gGL.begin(LLRender::TRIANGLES);
+    for (S32 d = 0; d < DEPTH_STEPS; ++d)
+    {
+        for (S32 s = 0; s < SPAN_STEPS; ++s)
+        {
+            vertex(d, s);
+            vertex(d + 1, s);
+            vertex(d + 1, s + 1);
+            vertex(d, s);
+            vertex(d + 1, s + 1);
+            vertex(d, s + 1);
+        }
+    }
+    gGL.end();
 }

@@ -124,4 +124,21 @@ private:
     U32 mFrame;
 };
 
+// The glow along a scrolling edge while a drag rests by it: faint in range, full while it scrolls.
+class SKEdgeGlow
+{
+public:
+    // Each hover: the side the pointer rests by, -1 for left or bottom, 1 for right or top, 0 for none.
+    void hover(S32 side, bool scrolling);
+    // Every frame: fades toward the hover's level and draws on the area's left and right edges, or bottom and top.
+    void draw(const LLRect& area, bool along_x, bool active);
+
+private:
+    F32 mAlpha = 0.f;
+    S32 mSide = 0;      // the side drawn, kept while it fades out
+    S32 mHoverSide = 0;
+    bool mScrolling = false;
+    LLFrameTimer mTimer;
+};
+
 #endif // SK_SKINVENTORYEXPLORERDRAG_H

@@ -360,6 +360,7 @@ protected:
     LLFrameTimer mLassoTick;
 
     SKDragHover mDropHover;
+    SKEdgeGlow mEdgeGlow;
     S32 mDropRow;               // the folder row under a drag, -1 for the open folder's space
 
     LLScrollbar* mScrollbar;
