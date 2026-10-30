@@ -610,8 +610,8 @@ void SKInventoryTreeView::drawRow(S32 index, const LLRect& rect)
     static LLUIColor sel_focus = LLUIColorTable::instance().getColor("EmphasisColor_35");
     static LLUIColor sel_blur = LLUIColorTable::instance().getColor("LtGray_35");
     static LLUIColor hover_color = LLUIColorTable::instance().getColor("White_10");
-    static LLPointer<LLUIImage> arrow_closed = LLUI::getUIImage("Arrow_Small_Right");
-    static LLPointer<LLUIImage> arrow_open = LLUI::getUIImage("Arrow_Small_Down");
+    static LLUIColor arrow_color = LLUIColorTable::instance().getColor("MenuItemEnabledColor");
+    static LLPointer<LLUIImage> arrow = LLUI::getUIImage("Folder_Arrow");
     static LLPointer<LLUIImage> close = LLUI::getUIImage("Icon_Close_Foreground");
 
     const Row& row = mRows[index];
@@ -643,12 +643,12 @@ void SKInventoryTreeView::drawRow(S32 index, const LLRect& rect)
     const S32 mid = rect.getCenterY();
     if (row.mHasChildren)
     {
-        LLUIImage* arrow = (row.mExpanded ? arrow_open : arrow_closed).get();
-        if (arrow)
+        if (arrow.notNull())
         {
-            // Opacity .75, 1 on hover.
+            // The inventory floater's folder arrow, turned down when open; opacity .75, 1 on hover.
             const F32 alpha = (index == mHover && mHoverArrow) ? 1.f : 0.75f;
-            arrow->draw(icon_left - ARROW_SIZE - 2, mid - ARROW_SIZE / 2, ARROW_SIZE, ARROW_SIZE, LLColor4(1.f, 1.f, 1.f, alpha));
+            gl_draw_scaled_rotated_image(icon_left - ARROW_SIZE - 2, mid - ARROW_SIZE / 2, ARROW_SIZE, ARROW_SIZE, row.mExpanded ? -90.f : 0.f,
+                                         arrow->getImage(), arrow_color.get() % alpha);
         }
     }
     if (row.mIcon.notNull())
