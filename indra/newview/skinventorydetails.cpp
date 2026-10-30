@@ -1744,7 +1744,8 @@ void SKInventoryDetailsView::rebuild()
     S32 hx = 0, hy = 0, hz = 0;
     const bool location_text = target->getType() == LLAssetType::AT_LANDMARK
                                && parse_location(target->getDescription(), parcel, region, hx, hy, hz, rating);
-    if (!location_text)
+    // "(No Description)" is what objects taken into inventory carry by default, and says nothing.
+    if (!location_text && item->getDescription() != "(No Description)")
     {
         addRow("row_description", item->getDescription());
     }
