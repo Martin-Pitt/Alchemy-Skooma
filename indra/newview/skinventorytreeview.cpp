@@ -686,7 +686,7 @@ void SKInventoryTreeView::drawRow(S32 index, const LLRect& rect)
         right -= font->getWidth(count) + 6;
     }
     font->renderUTF8(row.mName, 0, (F32)text_left, (F32)mid, text_color.get(), LLFontGL::LEFT, LLFontGL::VCENTER, LLFontGL::NORMAL,
-                     LLFontGL::NO_SHADOW, S32_MAX, llmax(0, right - text_left), nullptr, true);
+                     LLFontGL::NO_SHADOW, S32_MAX, llmax(0, right - text_left), nullptr, LLFontGL::ELLIPSIS_MIDDLE);
 }
 
 void SKInventoryTreeView::draw()

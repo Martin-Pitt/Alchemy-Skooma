@@ -346,7 +346,8 @@ void SKInventoryListView::drawContent()
                     color = dim_color.get();
                 }
                 font->renderUTF8(text, 0, (F32)x, (F32)middle, color, LLFontGL::LEFT, LLFontGL::VCENTER, style,
-                                 LLFontGL::NO_SHADOW, S32_MAX, llmax(0, left + cell - CELL_PAD - x), nullptr, true);
+                                 LLFontGL::NO_SHADOW, S32_MAX, llmax(0, left + cell - CELL_PAD - x), nullptr,
+                                 col == COL_DESCRIPTION ? LLFontGL::ELLIPSIS_END : LLFontGL::ELLIPSIS_MIDDLE);
             }
             left += mColumnWidths[col];
         }

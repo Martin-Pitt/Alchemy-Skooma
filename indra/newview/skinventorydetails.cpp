@@ -1078,7 +1078,7 @@ void SKInventoryPlayer::drawLandmark(const LLRect& rect)
         }
         LLFontGL::getFontSansSerifSmallBold()->renderUTF8(name, 0, (F32)(mImageRect.mLeft + 4), (F32)(mImageRect.mBottom + 4),
                                                           LLColor4::white, LLFontGL::LEFT, LLFontGL::BASELINE, LLFontGL::NORMAL,
-                                                          LLFontGL::DROP_SHADOW, S32_MAX, mImageRect.getWidth() - 8, nullptr, true);
+                                                          LLFontGL::DROP_SHADOW, S32_MAX, mImageRect.getWidth() - 8, nullptr, LLFontGL::ELLIPSIS_MIDDLE);
     }
 }
 
