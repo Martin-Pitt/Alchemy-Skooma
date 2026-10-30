@@ -319,6 +319,7 @@ LLScrollListColumn::LLScrollListColumn(const Params& p, LLScrollListCtrl* parent
     mDynamicWidth(p.width.dynamic_width),
     mRelWidth(p.width.relative_width),
     mFontAlignment(p.halign),
+    mEllipsis(p.ellipsis), // <SK:Nexii>
 // [SL:KB] - Patch: Control-ScrollList | Checked: Catznip-5.2
     mCanSort(p.can_sort),
 // [/SL:KB]
