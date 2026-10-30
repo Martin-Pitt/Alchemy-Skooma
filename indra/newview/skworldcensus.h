@@ -247,6 +247,7 @@ private:
         F64 mMoverUntil = -1.f;     ///< it moves by habit until then
         F64 mLastSeen = 0.f;
         bool mKnown = false;
+        bool mMoving = false;       ///< what the last visit of a part of it returned
     };
 
     /// A part the region's object cache holds and has not instantiated, read
@@ -363,6 +364,9 @@ private:
     bool pending(LLViewerObject* object, const PartCache& cache) const;
     /// Whether a scan that did not visit the part would take it again.
     bool retakes(const LLUUID& id, const PartCache& cache) const;
+    /// SKCensusLogMissed: what a full sweep found changed in a part the dirty set missed.
+    void logMissed(LLViewerObject* object, const std::vector<skworld::RecordPtr>& before, bool before_cached,
+                   std::vector<skworld::RecordPtr>::const_iterator begin, std::vector<skworld::RecordPtr>::const_iterator end) const;
     /// Every part not visited this scan, from its cache, under the budget; false when out of time.
     bool retake(LLTimer& timer, F32 budget_ms);
     std::unordered_set<LLUUID> mDirty;

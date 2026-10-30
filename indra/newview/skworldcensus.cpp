@@ -682,11 +682,19 @@ void SKWorldCensus::visitTracked(LLViewerObject* object)
     const size_t features = mScan.mFeatureParts.size();
     // A full sweep checks what a re-take would have kept against what it finds; visit leaves mTaken as it was.
     bool watched = false;
+    static LLCachedControl<bool> log_missed(gSavedSettings, "SKCensusLogMissed", false);
+    std::vector<RecordPtr> before;
+    bool before_cached = false;
     if (mScanFull && !mScanDirty.count(id))
     {
         if (const auto it = mParts.find(id); it != mParts.end() && retakes(id, it->second))
         {
             watched = true;
+            if (log_missed)
+            {
+                before = it->second.mTaken;
+                before_cached = it->second.mFromObjectCache;
+            }
         }
     }
 
@@ -705,6 +713,10 @@ void SKWorldCensus::visitTracked(LLViewerObject* object)
     if (watched && !std::equal(cache.mTaken.begin(), cache.mTaken.end(), snap.mRecords.begin() + records, snap.mRecords.end()))
     {
         mScanMissed++;
+        if (log_missed)
+        {
+            logMissed(object, before, before_cached, snap.mRecords.begin() + records, snap.mRecords.end());
+        }
     }
     cache.mTaken.assign(snap.mRecords.begin() + records, snap.mRecords.end());
     cache.mHasFeature = mScan.mFeatureParts.size() > features;
@@ -731,6 +743,43 @@ void SKWorldCensus::visitTracked(LLViewerObject* object)
         mDirty.insert(id);
         mPendingQueued++;
     }
+}
+
+void SKWorldCensus::logMissed(LLViewerObject* object, const std::vector<RecordPtr>& before, bool before_cached,
+                              std::vector<RecordPtr>::const_iterator begin, std::vector<RecordPtr>::const_iterator end) const
+{
+    std::ostringstream diff;
+    const size_t after = static_cast<size_t>(end - begin);
+    if (before.size() != after)
+    {
+        diff << " records " << before.size() << "->" << after;
+    }
+    for (size_t i = 0; i < before.size() && i < after; ++i)
+    {
+        const Record& a = *before[i];
+        const Record& b = **(begin + i);
+        std::ostringstream fields;
+        if (a.mRoot != b.mRoot) fields << " root";
+        if (a.mRole != b.mRole) fields << " role " << S32(a.mRole) << "->" << S32(b.mRole);
+        if (a.mProvenance != b.mProvenance) fields << " provenance";
+        if (a.mNavRole != b.mNavRole) fields << " navrole " << S32(a.mNavRole) << "->" << S32(b.mNavRole);
+        if (a.mShape != b.mShape) fields << " shape " << S32(a.mShape) << "->" << S32(b.mShape);
+        if (a.mDynamic != b.mDynamic) fields << " dynamic " << a.mDynamic << "->" << b.mDynamic;
+        if (a.mSolid != b.mSolid) fields << " solid";
+        if (a.mCollides != b.mCollides) fields << " collides " << a.mCollides << "->" << b.mCollides;
+        if (a.mPhysicsKnown != b.mPhysicsKnown) fields << " physics-known " << a.mPhysicsKnown << "->" << b.mPhysicsKnown;
+        if (a.mFeature != b.mFeature) fields << " feature " << S32(a.mFeature) << "->" << S32(b.mFeature);
+        if (a.mExclude != b.mExclude) fields << " exclude " << S32(a.mExclude) << "->" << S32(b.mExclude);
+        if (a.mOrigin != b.mOrigin) fields << " origin";
+        if (a.mMin != b.mMin || a.mMax != b.mMax) fields << " bounds " << dist_vec(a.mMin, b.mMin) << "/" << dist_vec(a.mMax, b.mMax);
+        if (a.mSignature != b.mSignature) fields << " signature";
+        const std::string text = fields.str();
+        diff << " [" << i << ":" << (text.empty() ? " new pointer" : text) << "]";
+    }
+    LLViewerObject* root = rootOf(object);
+    LL_INFOS("SKCensus") << "census missed part " << object->getID() << " root " << root->getID() << " region "
+                         << (object->getRegion() ? object->getRegion()->getName() : std::string("-")) << " live, was "
+                         << (before_cached ? "from object cache" : "live") << ":" << diff.str() << LL_ENDL;
 }
 
 bool SKWorldCensus::pending(LLViewerObject* object, const PartCache& cache) const
@@ -1077,6 +1126,7 @@ bool SKWorldCensus::classifyRest(const LLUUID& root, const LLVector3d& pos, cons
         rest.mPosition = pos;
         rest.mRotation = rot;
     }
+    const bool was_known = rest.mKnown;
     rest.mLastSeen = gFrameTimeSeconds;
     rest.mKnown = true;
     if (const auto it = mHistory.find(root); it != mHistory.end())
@@ -1084,7 +1134,17 @@ bool SKWorldCensus::classifyRest(const LLUUID& root, const LLVector3d& pos, cons
         it->second.mLastSeen = gFrameTimeSeconds;
     }
     // A one-off move, an edit or a rez, is landscape at once where it now stands; only a mover waits out the settle.
-    return gFrameTimeSeconds < rest.mMoverUntil && rest.mMovedAt >= 0.f && gFrameTimeSeconds - rest.mMovedAt < settle;
+    const bool moving = gFrameTimeSeconds < rest.mMoverUntil && rest.mMovedAt >= 0.f && gFrameTimeSeconds - rest.mMovedAt < settle;
+    if (was_known && moving != rest.mMoving)
+    {
+        // Every part is signed dynamic by its root's rest, so the parts no update dirtied are stale too.
+        if (LLViewerObject* object = gObjectList.findObject(root); object && !object->isDead())
+        {
+            dirtyLinkset(object);
+        }
+    }
+    rest.mMoving = moving;
+    return moving;
 }
 
 bool SKWorldCensus::isSurround(bool local_only, const LLVector3d& mn, const LLVector3d& mx) const

@@ -7547,6 +7547,17 @@
             <key>Value</key>
             <integer>0</integer>
         </map>
+        <key>SKCensusLogMissed</key>
+        <map>
+            <key>Comment</key>
+            <string>Log each part a full census sweep found changed that the dirty set missed, with what differed.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
         <key>SKCensusMinShape</key>
         <map>
             <key>Comment</key>
