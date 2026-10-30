@@ -94,9 +94,10 @@ public:
     // The draw's ellipsis parameter: a mode, or the bool every caller passed before there were modes.
     struct Ellipsis
     {
-        EEllipsisMode mode = ELLIPSIS_NONE;
+        EEllipsisMode mode;
 
-        constexpr Ellipsis() = default;
+        // A constructor rather than a member initializer, which GCC and Clang refuse in a default argument inside LLFontGL.
+        constexpr Ellipsis() : mode(ELLIPSIS_NONE) {}
         // Implicit so that the callers passing true or false compile unchanged.
         constexpr Ellipsis(bool use) : mode(use ? ELLIPSIS_END : ELLIPSIS_NONE) {}
         constexpr Ellipsis(EEllipsisMode m) : mode(m) {}
