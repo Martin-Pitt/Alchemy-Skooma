@@ -1001,7 +1001,6 @@ if(AL_BUILD_VIEWER)
     pipeline.cpp
     rlvactions.cpp
     rlvenvironment.cpp
-    skcaptureexport.cpp # <SK:Nexii> mini-map: linkset and avatar capture export
     skclusterprobes.cpp # <SK:Nexii> cluster probes: reflection probes over census clusters
     skroomprobes.cpp # <SK:Nexii> room probes: reflection probes over the rooms layer's spaces
     skcensusavatarshape.cpp
@@ -1903,7 +1902,6 @@ if(AL_BUILD_VIEWER)
     pipeline.h
     rlvactions.h
     rlvcommon.h
-    skcaptureexport.h # <SK:Nexii> mini-map: linkset and avatar capture export
     skclusterprobes.h # <SK:Nexii> cluster probes: reflection probes over census clusters
     skroomprobes.h # <SK:Nexii> room probes: reflection probes over the rooms layer's spaces
     skcensusavatarshape.h
