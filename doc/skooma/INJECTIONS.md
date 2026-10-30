@@ -1650,6 +1650,31 @@ Branch `foundation-ui/saturation` (main `04f744bbdb`). Plan, critique and review
 
 ---
 
+## Text ellipsis
+
+Branch `foundation-ui/text-ellipsis` (main `c13c8153eb`). Plan, reviews and test logs: `V:\Scratch\ui-text-ellipsis\`. Text shortened to a pixel width with the ellipsis at the end, middle or start; no widget adopts the new modes yet.
+
+### Files we own
+
+| File | Role |
+|---|---|
+| `indra/llrender/sktextellipsis.h` / `.cpp` | `SKTextEllipsis::shorten`: grapheme-aligned cuts, word snapping, tail bias, no allocation |
+| `indra/llrender/tests/sktextellipsis_test.cpp`, `_gl_test.cpp`, `_bench.cpp`, `_fixture.h` | Shortener, renderer and cache tests; benchmark |
+| `indra/llui/tests/skellipsisparams_test.cpp` | XUI `ellipsis` and `use_ellipses` params |
+
+### Upstream edits
+
+| File | Change | Marker |
+|---|---|---|
+| `indra/llrender/llfontgl.h` / `.cpp` | `EEllipsisMode` and the bool-converting `Ellipsis` parameter; `renderBytes` shortens middle/start cuts before its transform, clamps negative byte counts | marked |
+| `indra/llrender/llfonttextcache.h` / `.cpp` | Ellipsis mode taken and keyed on regen | marked |
+| `indra/llui/llui.h` / `.cpp` | XUI names `none`/`end`/`middle`/`start` | marked |
+| `indra/llui/lltextbase.h` / `.cpp`, `llbutton.h` / `.cpp`, `lltabcontainer.h` / `.cpp` | `ellipsis` param beside `use_ellipses`, which it overrides | marked |
+| `indra/llui/llscrolllistcell.h` / `.cpp`, `llscrolllistcolumn.h` / `.cpp`, `llscrolllistctrl.cpp` | Cell and column `ellipsis`; `addRow` copies the column's to its cells | marked |
+| `indra/llrender/CMakeLists.txt`, `indra/llui/CMakeLists.txt` | New sources and tests in their lists | — |
+
+---
+
 ## Inventory icon weight
 
 `feature-ui/inventory-icon-weight`. Art only; image files carry no markers, so this table is

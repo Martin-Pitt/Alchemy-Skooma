@@ -24,6 +24,7 @@ lands, is offered or is merged.
 | `render/prim-split` | Its own feature | Untwisted flat-sided prims without the legacy edge splits; Render Tests A/B toggle; geometry-equivalence test | `render` | yes |
 | `audio/loudness-normalization` | Its own feature | BS.1770 loudness measured during decode, gain trim on playback | `develop` | undecided |
 | `ui/saturation` | Its own foundation | UI saturation on `LLRender` through `ALUISaturation` scopes; `uiF`/`solidcolorF` grey to Rec.709 luminance in gamma-2 light below 1, unchanged at 1 | `develop` | yes |
+| `ui/text-ellipsis` | Its own foundation | Text shortened to a width with the ellipsis at the end, middle (keeping both ends, biased to the end) or start; `LLFontGL` mode enum that still takes a bool, `ellipsis` XUI param on text, buttons, tabs and list cells/columns | `develop` | yes |
 | `ui/spellcheck-async` | Its own fix | Windows Spell Checking API on a worker thread with a word cache and timeouts, so a hung spelling service cannot freeze the viewer | `develop` | yes |
 | `font/colrv1-stale-surface` | Its own fix | Clear the per-thread COLRv1 raster paint before each glyph, so a glyph that failed mid-paint cannot leave a larger root surface for the next one to over-read | `develop` | merged upstream: AlchemyViewer/Alchemy#600 |
 
