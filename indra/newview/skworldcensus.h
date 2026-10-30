@@ -247,6 +247,7 @@ private:
         F64 mMoverUntil = -1.f;     ///< it moves by habit until then
         F64 mLastSeen = 0.f;
         bool mKnown = false;
+        bool mMoving = false;       ///< what the last visit of a part of it returned
     };
 
     /// A part the region's object cache holds and has not instantiated, read

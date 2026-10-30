@@ -1077,6 +1077,7 @@ bool SKWorldCensus::classifyRest(const LLUUID& root, const LLVector3d& pos, cons
         rest.mPosition = pos;
         rest.mRotation = rot;
     }
+    const bool was_known = rest.mKnown;
     rest.mLastSeen = gFrameTimeSeconds;
     rest.mKnown = true;
     if (const auto it = mHistory.find(root); it != mHistory.end())
@@ -1084,7 +1085,17 @@ bool SKWorldCensus::classifyRest(const LLUUID& root, const LLVector3d& pos, cons
         it->second.mLastSeen = gFrameTimeSeconds;
     }
     // A one-off move, an edit or a rez, is landscape at once where it now stands; only a mover waits out the settle.
-    return gFrameTimeSeconds < rest.mMoverUntil && rest.mMovedAt >= 0.f && gFrameTimeSeconds - rest.mMovedAt < settle;
+    const bool moving = gFrameTimeSeconds < rest.mMoverUntil && rest.mMovedAt >= 0.f && gFrameTimeSeconds - rest.mMovedAt < settle;
+    if (was_known && moving != rest.mMoving)
+    {
+        // Every part is signed dynamic by its root's rest, so the parts no update dirtied are stale too.
+        if (LLViewerObject* object = gObjectList.findObject(root); object && !object->isDead())
+        {
+            dirtyLinkset(object);
+        }
+    }
+    rest.mMoving = moving;
+    return moving;
 }
 
 bool SKWorldCensus::isSurround(bool local_only, const LLVector3d& mn, const LLVector3d& mx) const
