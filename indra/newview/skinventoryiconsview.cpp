@@ -488,6 +488,21 @@ void SKInventoryIconsView::drawContent()
     // Only the lines in view are drawn.
     const S32 first = llmax(0, lineAt(height));
     const S32 pos = mScrollbar->getDocPos();
+    // The pictures in view and half a page either side are fetched at their smallest ahead of a scroll.
+    const S32 margin = height / 2;
+    S32 ahead = first;
+    while (ahead > 0 && mLines[ahead - 1].mTop + mLines[ahead - 1].mHeight > pos - margin)
+    {
+        --ahead;
+    }
+    for (; ahead < (S32)mLines.size() && mLines[ahead].mTop - pos < height + margin; ++ahead)
+    {
+        const Line& line = mLines[ahead];
+        for (S32 r = line.mFirst; line.mTiles && r < line.mFirst + line.mCount; ++r)
+        {
+            prefetchPicture(mRows[r]);
+        }
+    }
     for (S32 l = first; l < (S32)mLines.size() && mLines[l].mTop - pos < height; ++l)
     {
         const Line& line = mLines[l];
