@@ -1300,19 +1300,8 @@ void LLViewerObjectList::fetchPhysicsFlags()
         it = mStalePhysicsFlags.erase(it);
         if (mPendingPhysicsFlags.count(id))
         {
-            std::string url = regionp->getCapability("GetObjectPhysicsData");
-
-            if (!url.empty())
-            {
-                LLCoros::instance().launch("LLViewerObjectList::fetchPhisicsFlagsCoro",
-                    boost::bind(&LLViewerObjectList::fetchPhisicsFlagsCoro, this, url));
-            }
-            else
-            {
-                mStalePhysicsFlags.clear();
-                mPendingPhysicsFlags.clear();
-            }
             continue;
+        }
         LLViewerObject* objectp = findObject(id);
         LLViewerRegion* regionp = objectp ? objectp->getRegion() : nullptr;
         if (!regionp)
@@ -1333,6 +1322,7 @@ void LLViewerObjectList::fetchPhysicsFlags()
     {
         LLCoros::instance().launch("LLViewerObjectList::fetchPhisicsFlagsCoro",
             boost::bind(&LLViewerObjectList::fetchPhisicsFlagsCoro, this, regionp->getCapability("GetObjectPhysicsData"), ids));
+    }
     // </SK:Nexii>
 }
 
