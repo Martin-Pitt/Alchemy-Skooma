@@ -148,6 +148,7 @@ public:
 
     inline S32 getNumObjects() { return (S32) mObjects.size(); }
     inline S32 getNumActiveObjects() { return (S32) mActiveObjects.size(); }
+    const std::vector<LLPointer<LLViewerObject>>& getActiveObjects() const { return mActiveObjects; } // <SK:Nexii> SKMapPeople finds projectiles on the active list
 
     void addToMap(LLViewerObject *objectp);
     void removeFromMap(LLViewerObject *objectp);
