@@ -278,7 +278,7 @@ namespace
     TEST_CASE("SKTextEllipsis: the dots never meet a space or another dot", "[SKTextEllipsis]")
     {
         const LLFontGL& font = fontOrSkip();
-        for (const std::string text : { std::string("My Great Model v2.blend"), std::string("Hair v2 - RIGGED (no copy) #12"),
+        for (const std::string& text : { std::string("My Great Model v2.blend"), std::string("Hair v2 - RIGGED (no copy) #12"),
                                         std::string("Wait. Then. Go. Now. Stop. Done."),
                                         std::string("assets/textures/rock_diffuse.v3.png") })
         {
