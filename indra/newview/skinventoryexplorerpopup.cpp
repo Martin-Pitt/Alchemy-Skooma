@@ -347,7 +347,7 @@ void SKExplorerPopupList::draw()
         F32 label_right = 0.f;
         font->renderUTF8(row.mLabel, 0, (F32)x, mid, color, LLFontGL::LEFT, LLFontGL::VCENTER,
                          row.mBold ? LLFontGL::BOLD : LLFontGL::NORMAL, LLFontGL::NO_SHADOW, S32_MAX, llmax(0, right - x),
-                         &label_right, true);
+                         &label_right, LLFontGL::ELLIPSIS_MIDDLE);
         if (!row.mHint.empty() && (S32)label_right + PAD < right)
         {
             const S32 hint_x = (S32)label_right + PAD;

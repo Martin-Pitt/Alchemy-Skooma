@@ -177,7 +177,7 @@ void SKExplorerTabStrip::draw()
         const S32 text_right = left + width - (show_close ? CLOSE_WIDTH + 6 : 6);
         font->renderUTF8(tab.mTitle, 0, (F32)x, (F32)(height / 2), (active || i == mHover) ? text_active.get() : text_dim.get(),
                          LLFontGL::LEFT, LLFontGL::VCENTER, LLFontGL::NORMAL, LLFontGL::NO_SHADOW, S32_MAX,
-                         llmax(0, text_right - x), nullptr, true);
+                         llmax(0, text_right - x), nullptr, LLFontGL::ELLIPSIS_MIDDLE);
         if (show_close)
         {
             font->renderUTF8("\xC3\x97", 0, left + width - CLOSE_WIDTH / 2 - 4, height / 2, text_active.get(),
