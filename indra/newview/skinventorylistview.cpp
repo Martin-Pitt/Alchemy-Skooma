@@ -44,7 +44,7 @@ namespace
     constexpr S32 CELL_PAD = 4;
     constexpr S32 ICON_SIZE = 16;
     constexpr S32 RENAME_MIN_WIDTH = 120;
-    constexpr S32 DEFAULT_WIDTHS[SKInventoryFlatView::COL_COUNT] = { 220, 160, 110, 130, 120, 50, 100, 220 };
+    constexpr S32 DEFAULT_WIDTHS[SKInventoryFlatView::COL_COUNT] = { 220, 160, 110, 130, 120, 50, 80, 100, 220 };
 
     // Builds with smooth scrolling have LLScrollbar::setSmoothScroll; the List steps by whole rows there too.
     template <class T>
@@ -212,6 +212,7 @@ std::string SKInventoryListView::cellText(const SKInventoryRow& row, EColumn col
         case COL_CREATOR:     return row.mCreatorName;
         case COL_ACQUIRED:    return row.mAcquiredLabel;
         case COL_PERMS:       return row.mPerms;
+        case COL_NEXT_PERMS:  return row.mNextPerms;
         case COL_WORN:        return row.mWornOn;
         case COL_DESCRIPTION: return row.mDescription;
         default:              return std::string();

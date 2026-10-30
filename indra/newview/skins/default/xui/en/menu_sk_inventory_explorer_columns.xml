@@ -247,6 +247,17 @@
          parameter="col:perms" />
     </menu_item_check>
     <menu_item_check
+     label="Next owner"
+     layout="topleft"
+     name="col_next_perms">
+        <menu_item_check.on_click
+         function="SKInvExplorer.Option"
+         parameter="col:next_perms" />
+        <menu_item_check.on_check
+         function="SKInvExplorer.OptionCheck"
+         parameter="col:next_perms" />
+    </menu_item_check>
+    <menu_item_check
      label="Worn on"
      layout="topleft"
      name="col_worn">

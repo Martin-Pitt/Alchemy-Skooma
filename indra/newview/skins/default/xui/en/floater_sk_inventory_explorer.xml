@@ -20,6 +20,7 @@
     <string name="col_creator">Creator</string>
     <string name="col_acquired">Acquired</string>
     <string name="col_perms">Perms</string>
+    <string name="col_next_perms">Next owner</string>
     <string name="col_worn">Worn on</string>
     <string name="col_description">Description</string>
     <string name="folder">Folder</string>
