@@ -282,7 +282,7 @@ void SKInventoryPathBar::draw()
             x += ICON_SIZE + 4;
         }
         font->renderUTF8(crumb.mName, 0, (F32)x, (F32)(height / 2), text.get(), LLFontGL::LEFT, LLFontGL::VCENTER, LLFontGL::NORMAL,
-                         LLFontGL::NO_SHADOW, S32_MAX, llmax(0, crumb.mRect.mRight - CRUMB_PAD - x), nullptr, true);
+                         LLFontGL::NO_SHADOW, S32_MAX, llmax(0, crumb.mRect.mRight - CRUMB_PAD - x), nullptr, LLFontGL::ELLIPSIS_MIDDLE);
         if (crumb.mArrow)
         {
             const bool open = i == mMenuCrumb && mMenu && mMenu->isOpen();

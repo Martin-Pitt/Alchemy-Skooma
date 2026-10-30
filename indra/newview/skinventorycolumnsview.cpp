@@ -929,7 +929,7 @@ void SKInventoryColumnsView::drawColumn(const Column& column, S32 index, S32 hei
             style = LLFontGL::ITALIC;
         }
         font->renderUTF8(row.mName, 0, (F32)x, (F32)middle, color, LLFontGL::LEFT, LLFontGL::VCENTER, style,
-                         LLFontGL::NO_SHADOW, S32_MAX, llmax(0, text_right - x), nullptr, true);
+                         LLFontGL::NO_SHADOW, S32_MAX, llmax(0, text_right - x), nullptr, LLFontGL::ELLIPSIS_MIDDLE);
     }
 }
 

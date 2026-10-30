@@ -82,6 +82,30 @@ public:
         DROP_SHADOW_SOFT
     };
 
+    // <SK:Nexii> Where an ellipsis goes in text too wide for its room.
+    enum EEllipsisMode
+    {
+        ELLIPSIS_NONE = 0,
+        ELLIPSIS_END,       // what use_ellipses = true has always meant
+        ELLIPSIS_MIDDLE,
+        ELLIPSIS_START
+    };
+
+    // The draw's ellipsis parameter: a mode, or the bool every caller passed before there were modes.
+    struct Ellipsis
+    {
+        EEllipsisMode mode = ELLIPSIS_NONE;
+
+        constexpr Ellipsis() = default;
+        // Implicit so that the callers passing true or false compile unchanged.
+        constexpr Ellipsis(bool use) : mode(use ? ELLIPSIS_END : ELLIPSIS_NONE) {}
+        constexpr Ellipsis(EEllipsisMode m) : mode(m) {}
+
+        constexpr bool operator==(Ellipsis o) const { return mode == o.mode; }
+        constexpr bool operator!=(Ellipsis o) const { return mode != o.mode; }
+    };
+    // </SK:Nexii>
+
     LLFontGL();
     ~LLFontGL();
 
@@ -179,7 +203,7 @@ public:
                 U8 style = NORMAL, ShadowType shadow = NO_SHADOW,
                 S32 max_bytes = S32_MAX,
                 F32* right_x=NULL,
-                bool use_ellipses = false,
+                Ellipsis ellipsis = {}, // <SK:Nexii>
                 bool use_color = true) const;
 
     S32 renderBytes(std::string_view utf8text, S32 begin_offset,
@@ -189,7 +213,7 @@ public:
                 U8 style = NORMAL, ShadowType shadow = NO_SHADOW,
                 S32 max_bytes = S32_MAX,
                 F32* right_x=NULL,
-                bool use_ellipses = false,
+                Ellipsis ellipsis = {}, // <SK:Nexii>
                 bool use_color = true) const;
 
     S32 renderBytes(std::string_view utf8text, S32 begin_offset,
@@ -199,13 +223,13 @@ public:
                 U8 style = NORMAL, ShadowType shadow = NO_SHADOW,
                 S32 max_bytes = S32_MAX, S32 max_pixels = S32_MAX,
                 F32* right_x=NULL,
-                bool use_ellipses = false,
+                Ellipsis ellipsis = {}, // <SK:Nexii>
                 bool use_color = true,
                 pass_boundary_cb_t on_pass_boundary = nullptr) const;
 
     // A convenience name for renderBytes: `begin_offset`, `max_bytes` and the
     // count returned all index the UTF-8.
-    S32 renderUTF8(std::string_view text, S32 begin_offset, F32 x, F32 y, const LLColor4 &color, HAlign halign,  VAlign valign, U8 style, ShadowType shadow, S32 max_bytes = S32_MAX, S32 max_pixels = S32_MAX,  F32* right_x = NULL, bool use_ellipses = false, bool use_color = true) const;
+    S32 renderUTF8(std::string_view text, S32 begin_offset, F32 x, F32 y, const LLColor4 &color, HAlign halign,  VAlign valign, U8 style, ShadowType shadow, S32 max_bytes = S32_MAX, S32 max_pixels = S32_MAX,  F32* right_x = NULL, Ellipsis ellipsis = {}, bool use_color = true) const; // <SK:Nexii>
     S32 renderUTF8(std::string_view text, S32 begin_offset, S32 x, S32 y, const LLColor4 &color) const;
     S32 renderUTF8(std::string_view text, S32 begin_offset, S32 x, S32 y, const LLColor4 &color, HAlign halign, VAlign valign, U8 style = NORMAL, ShadowType shadow = NO_SHADOW) const;
 

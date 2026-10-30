@@ -460,7 +460,7 @@ void SKInventoryIconsView::drawTile(const SKInventoryRow& row, const LLRect& rec
     if (!lines.second.empty())
     {
         font->renderUTF8(lines.second, 0, (F32)rect.getCenterX(), (F32)(y - line), color, LLFontGL::HCENTER, LLFontGL::TOP, style,
-                         LLFontGL::NO_SHADOW, S32_MAX, mTileSize - 2 * GAP, nullptr, true);
+                         LLFontGL::NO_SHADOW, S32_MAX, mTileSize - 2 * GAP, nullptr, LLFontGL::ELLIPSIS_MIDDLE);
     }
 }
 
