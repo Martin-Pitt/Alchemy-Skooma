@@ -89,6 +89,22 @@ namespace
     enum ERegionCrossing : U32 { CROSSING_SNAP = 0, CROSSING_BOUNDARY, CROSSING_BOUNDARY_SLIDE, CROSSING_LINEAR };
     constexpr F64 REGION_BOUNDARY_REACH = 32.0, REGION_CROSSING_EASE_S = 0.5, REGION_LINEAR_BLEND = 16.0;
 
+    // Regions a teleport left behind stay connected for a while; the fit ignores any more than this many widths
+    // from the agent's region.
+    constexpr F64 REGION_FIT_REACH = 16.0;
+
+    bool inFitReach(const LLViewerRegion* region)
+    {
+        const LLViewerRegion* agent = gAgent.getRegion();
+        if (!agent || region == agent)
+        {
+            return true;
+        }
+        const LLVector3d d = region->getOriginGlobal() - agent->getOriginGlobal();
+        const F64 reach = agent->getWidth() * REGION_FIT_REACH;
+        return fabs(d.mdV[VX]) <= reach && fabs(d.mdV[VY]) <= reach;
+    }
+
     LLPointer<LLViewerTexture> sShadowSprite;
 
     LLColor4 toColor4(const skmap::PaletteColour& c, F32 alpha = 1.f)
@@ -588,6 +604,10 @@ const LLViewerRegion* SKNetMap::viewRegion()
     F64 best = F64_MAX;
     for (const LLViewerRegion* region : world->getRegionList())
     {
+        if (!inFitReach(region))
+        {
+            continue;
+        }
         // Distance from the camera to the region's square, flat.
         const LLVector3d origin = region->getOriginGlobal();
         const F64 width = region->getWidth();
@@ -670,10 +690,18 @@ LLVector3d SKNetMap::regionFit(const LLViewerRegion* region, F32* span, const LL
         const LLWorld::region_list_t& regions = world->getRegionList();
         for (auto a = regions.begin(); a != regions.end(); ++a)
         {
+            if (!inFitReach(*a))
+            {
+                continue;
+            }
             const F64 wa = (*a)->getWidth();
             const LLVector3d ca = (*a)->getOriginGlobal() + LLVector3d(wa * 0.5, wa * 0.5, 0.0);
             for (auto b = std::next(a); b != regions.end(); ++b)
             {
+                if (!inFitReach(*b))
+                {
+                    continue;
+                }
                 const F64 wb = (*b)->getWidth();
                 const LLVector3d cb = (*b)->getOriginGlobal() + LLVector3d(wb * 0.5, wb * 0.5, 0.0);
                 const F64 dx = fabs(cb.mdV[VX] - ca.mdV[VX]), dy = fabs(cb.mdV[VY] - ca.mdV[VY]);
