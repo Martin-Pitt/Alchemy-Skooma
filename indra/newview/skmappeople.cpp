@@ -456,17 +456,20 @@ void SKMapPeople::updateProjectiles()
     std::vector<Projectile> found;
     std::map<LLUUID, LLUUID> shooters;
     std::map<LLUUID, FastTrail> trails;
-    // The whole object list: the map objects hold only large or owned prims, so a bullet never reached it.
-    for (S32 i = 0, n = gObjectList.getNumObjects(); i < n; ++i)
+    // An object moving faster than F_APPROXIMATELY_ZERO allows is never static, so it is on the active list; below that only the whole list is exact.
+    const F32 min_speed = llmin(llmax(static_cast<F32>(fast_speed), 0.5f), static_cast<F32>(trail_slow));
+    const bool active_only = min_speed > 0.f && min_speed * min_speed > F_APPROXIMATELY_ZERO;
+    const auto& active = gObjectList.getActiveObjects();
+    for (S32 i = 0, n = active_only ? static_cast<S32>(active.size()) : gObjectList.getNumObjects(); i < n; ++i)
     {
-        LLViewerObject* object = gObjectList.getObject(i);
+        LLViewerObject* object = active_only ? active[i].get() : gObjectList.getObject(i);
         if (!object || object->isDead() || !object->isRoot() || object->isAttachment() || object->isAvatar())
         {
             continue;
         }
         const LLVector3 velocity = object->getVelocity();
         const F32 speed = velocity.length();
-        if (speed < llmin(llmax(static_cast<F32>(fast_speed), 0.5f), static_cast<F32>(trail_slow)))
+        if (speed < min_speed)
         {
             continue;
         }
