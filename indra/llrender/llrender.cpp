@@ -1490,8 +1490,8 @@ void LLRender::end()
 // <SK:Nexii> UI saturation
 void LLRender::setUISaturation(F32 saturation)
 {
-    // NaN reads as unchanged.
-    saturation = saturation < 1.f ? llmax(saturation, 0.f) : 1.f;
+    // NaN reads as unchanged, tested apart: /fp:fast does not keep a comparison with NaN false.
+    saturation = std::isnan(saturation) ? 1.f : llclamp(saturation, 0.f, 1.f);
     if (saturation == mUISaturation)
     {
         return;
