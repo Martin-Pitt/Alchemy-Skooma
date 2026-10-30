@@ -1343,27 +1343,6 @@ void LLViewerObjectList::fetchPhisicsFlagsCoro(std::string url, LLSD idList) // 
         httpAdapter = std::make_shared<LLCoreHttpUtil::HttpCoroutineAdapter>("fetchPhisicsFlagsCoro", httpPolicy);
     LLCore::HttpRequest::ptr_t httpRequest = std::make_shared<LLCore::HttpRequest>();
 
-    LLSD idList;
-    U32 objectIndex = 0;
-
-    for (uuid_set_t::iterator it = mStalePhysicsFlags.begin(); it != mStalePhysicsFlags.end();)
-    {
-        // Check to see if a request for this object
-        // has already been made.
-        if (mPendingPhysicsFlags.find(*it) == mPendingPhysicsFlags.end())
-        {
-            mPendingPhysicsFlags.insert(*it);
-            idList[objectIndex++] = *it;
-        }
-
-        mStalePhysicsFlags.erase(it++);
-
-        if (objectIndex >= MAX_CONCURRENT_PHYSICS_REQUESTS)
-        {
-            break;
-        }
-    }
-
     if (idList.size() < 1)
     {
         LL_DEBUGS() << "No outstanding object physics flags to request." << LL_ENDL;
@@ -1777,6 +1756,25 @@ void LLViewerObjectList::updatePhysicsFlags(const LLViewerObject* object)
     if (sPhysicsFlagsRefused.count(object->getID())) // <SK:Nexii> Mini-map census: never re-ask a refused object.
     {
         return;
+    }
+    mStalePhysicsFlags.insert(object->getID());
+}
+
+// <SK:Nexii> census: physics shape types by id, for parts the region has cached but not instantiated
+void LLViewerObjectList::requestPhysicsShapeType(const LLUUID& object_id)
+{
+    if (object_id.notNull() && !mKnownPhysicsShapeTypes.count(object_id) && !mPendingPhysicsFlags.count(object_id))
+    {
+        mStalePhysicsFlags.insert(object_id);
+    }
+}
+
+bool LLViewerObjectList::knownPhysicsShapeType(const LLUUID& object_id, U8& type) const
+{
+    const auto it = mKnownPhysicsShapeTypes.find(object_id);
+    if (it == mKnownPhysicsShapeTypes.end())
+    {
+        return false;
     }
     type = it->second;
     return true;
