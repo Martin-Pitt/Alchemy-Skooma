@@ -1647,3 +1647,17 @@ Branch `foundation-ui/saturation` (main `04f744bbdb`). Plan, critique and review
 | `shaders/class1/interface/solidcolorF.glsl` | Same, one exit | marked |
 | `indra/newview/llviewerdisplay.cpp` | `render_ui` asserts the saturation is back to 1 | marked |
 | `indra/llrender/CMakeLists.txt` | `lluisaturation_test.cpp` in the test list | — |
+
+---
+
+## Inventory icon weight
+
+`feature-ui/inventory-icon-weight`. Art only; image files carry no markers, so this table is
+the record. Tools and the decision: `V:\Scratch\icon-weight\` (`DECISION.md`).
+
+### Upstream edits
+
+| File | Change | Marker |
+|---|---|---|
+| `indra/newview/skins/default/textures/icons/Inv_*.png` (55 row icons) | Redrawn at 14 px in the 16 px box, heavy icons shrunk halfway toward the median Oklab ΔE weight, centred by weight in whole pixels | none — image files |
+| `indra/newview/skins/default/textures/icons/Inv_Favorite_Star_Full.png`, `Inv_Favorite_Star_Content.png` | Same size and centring on their 14 px canvas | none — image files |
