@@ -274,7 +274,8 @@ void SKExplorerPopupList::scrollToRow(S32 index)
 void SKExplorerPopupList::draw()
 {
     static LLUIColor bg = LLUIColorTable::instance().getColor("MenuDefaultBgColor");
-    static LLUIColor border = LLUIColorTable::instance().getColor("MenuItemDisabledColor");
+    static LLUIColor shadow = LLUIColorTable::instance().getColor("ColorDropShadow");
+    static LLUIColor divider = LLUIColorTable::instance().getColor("MenuItemDisabledColor");
     static LLUIColor highlight = LLUIColorTable::instance().getColor("MenuItemHighlightBgColor");
     static LLUIColor text = LLUIColorTable::instance().getColor("MenuItemEnabledColor");
     static LLUIColor disabled = LLUIColorTable::instance().getColor("MenuItemDisabledColor");
@@ -291,11 +292,11 @@ void SKExplorerPopupList::draw()
 
     const LLFontGL* font = LLFontGL::getFontSansSerifSmall();
     const LLRect local = getLocalRect();
-    gl_drop_shadow(0, local.mTop, local.mRight, 0, LLColor4(0.f, 0.f, 0.f, 0.3f), 4);
+    // Background and shadow as LLMenuGL draws them, so it matches the toolbar's menus.
+    gl_drop_shadow(0, local.mTop, local.mRight, 0, shadow.get(), DROP_SHADOW_FLOATER);
     gl_rect_2d(local, bg.get(), true);
-    gl_rect_2d(local, border.get(), false);
 
-    LLLocalClipRect clip(LLRect(1, local.mTop - 1, local.mRight - 1, 1));
+    LLLocalClipRect clip(local);
     for (S32 i = 0; i < (S32)mRows.size(); ++i)
     {
         const SKPopupRow& row = mRows[i];
@@ -307,7 +308,7 @@ void SKExplorerPopupList::draw()
         const F32 mid = (F32)(rect.mBottom + rect.getHeight() / 2);
         if (row.mKind == SKPopupRow::ROW_DIVIDER)
         {
-            gl_line_2d(rect.mLeft + 4, (S32)mid, rect.mRight - 4, (S32)mid, border.get());
+            gl_line_2d(rect.mLeft + 4, (S32)mid, rect.mRight - 4, (S32)mid, divider.get());
             continue;
         }
         if (row.mKind == SKPopupRow::ROW_TITLE)
