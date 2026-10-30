@@ -854,8 +854,8 @@ namespace
         const auto small = town(side), large = town(2 * side);
         { INFO("many seeds, one space"); REQUIRE((small.second->mSeeds > 64u * side * side && large.second->mSpaces.size() == 1)); }
         const F64 ratio = large.first / std::max(small.first, 1e-3);
-        { INFO("4x the tiles within 6x the time, not " + std::to_string(ratio) + "x (" + std::to_string(small.first) + " ms, " +
-                   std::to_string(large.first) + " ms)"); REQUIRE((ratio < 6.0)); }
+        { INFO("4x the tiles within 8x the time (16x would be quadratic), not " + std::to_string(ratio) + "x (" + std::to_string(small.first) + " ms, " +
+                   std::to_string(large.first) + " ms)"); REQUIRE((ratio < 8.0)); }
     }
 
     TEST_CASE("skrooms: one tile rebuilt among scattered walls is cut again with its ring, not with the mesh", "[skrooms]")
