@@ -105,8 +105,7 @@ SKInventoryColumnsView::SKInventoryColumnsView(const Params& p)
     mDropScrollResidue(0),
     mEdgeDir(0),
     mEdgeScrolling(false),
-    mGlowAlpha(0.f),
-    mGlowSide(0),
+    mGlowColumn(-1),
     mStripScrollbar(nullptr),
     mDetailsView(nullptr),
     mDetailsPlaced(false)
@@ -1629,25 +1628,32 @@ bool SKInventoryColumnsView::handleDragAndDrop(S32 x, S32 y, MASK mask, bool dro
         return true;
     }
 
-    // The column under the pointer scrolls near its top and bottom.
-    if (index >= 0 && (mColumns[index].mKind == KIND_PATH || mColumns[index].mKind == KIND_GHOST)
-        && mDropHover.tick(SKInventoryExplorerDrag::TICK_SECONDS))
+    // The column under the pointer scrolls near its top and bottom, under a glow.
+    const bool scrolls = index >= 0 && (mColumns[index].mKind == KIND_PATH || mColumns[index].mKind == KIND_GHOST);
+    const S32 band = SKInventoryExplorerDrag::SCROLL_BAND;
+    const S32 rows_dir = !scrolls ? 0 : y > getRect().getHeight() - band ? -1 : y < band ? 1 : 0;
+    if (rows_dir == 0 || index != mGlowColumn)
     {
-        const S32 band = SKInventoryExplorerDrag::SCROLL_BAND;
-        const S32 dir = y > getRect().getHeight() - band ? -1 : y < band ? 1 : 0;
-        if (dir != 0)
+        mColumnGlow.hover(0, false);
+    }
+    if (rows_dir != 0)
+    {
+        mGlowColumn = index;
+    }
+    if (rows_dir != 0 && mDropHover.tick(SKInventoryExplorerDrag::TICK_SECONDS))
+    {
+        mDropScrollResidue += SKInventoryExplorerDrag::SCROLL_STEP;
+        const S32 rows = mDropScrollResidue / ROW_HEIGHT;
+        mDropScrollResidue %= ROW_HEIGHT;
+        const Column& column = mColumns[index];
+        const S32 before = columnScroll(column);
+        setColumnScroll(column, before + rows_dir * rows);
+        const bool moved = columnScroll(column) != before;
+        if (moved)
         {
-            mDropScrollResidue += SKInventoryExplorerDrag::SCROLL_STEP;
-            const S32 rows = mDropScrollResidue / ROW_HEIGHT;
-            mDropScrollResidue %= ROW_HEIGHT;
-            const Column& column = mColumns[index];
-            const S32 before = columnScroll(column);
-            setColumnScroll(column, before + dir * rows);
-            if (columnScroll(column) != before)
-            {
-                mDropHover.scrolled(screen_x, screen_y);
-            }
+            mDropHover.scrolled(screen_x, screen_y);
         }
+        mColumnGlow.hover(-rows_dir, moved || rows == 0);
     }
 
     // Resting near the strip's left or right edge scrolls it that way, under a glow.
@@ -1682,32 +1688,14 @@ bool SKInventoryColumnsView::handleDragAndDrop(S32 x, S32 y, MASK mask, bool dro
 
 void SKInventoryColumnsView::drawDropTarget(S32 height)
 {
-    // The edge glow fades in and out over 0.15 s, faint in range and full while scrolling.
     const bool active = mDropHover.isActive();
-    const F32 target = active && mEdgeDir != 0 ? (mEdgeScrolling ? 1.f : 0.45f) : 0.f;
-    const F32 dt = mGlowTimer.getElapsedTimeF32();
-    mGlowTimer.reset();
-    const F32 rate = dt / 0.15f;
-    mGlowAlpha = mGlowAlpha < target ? llmin(target, mGlowAlpha + rate) : llmax(target, mGlowAlpha - rate);
-    if (active && mEdgeDir != 0)
+    mStripGlow.hover(mEdgeDir, mEdgeScrolling);
+    mStripGlow.draw(LLRect(0, height, getRect().getWidth(), 0), true, active);
+    if (mGlowColumn >= 0 && mGlowColumn < (S32)mColumns.size())
     {
-        mGlowSide = mEdgeDir;
-    }
-    if (mGlowAlpha > 0.f && mGlowSide != 0)
-    {
-        static LLUIColor accent = LLUIColorTable::instance().getColor("EmphasisColor");
-        const S32 width = 56;
-        const S32 view = getRect().getWidth();
-        for (S32 i = 0; i < width; i += 2)
-        {
-            // An ellipse centred on the edge: each strip shorter and fainter away from it.
-            const F32 t = (F32)i / (F32)width;
-            const S32 half = (S32)(height * 0.5f * sqrtf(1.f - t * t));
-            LLColor4 color = accent.get();
-            color.mV[VALPHA] = 0.55f * mGlowAlpha * (1.f - t);
-            const S32 left = mGlowSide < 0 ? i : view - i - 2;
-            gl_rect_2d(left, height / 2 + half, left + 2, height / 2 - half, color);
-        }
+        const Column& column = mColumns[mGlowColumn];
+        const S32 left = column.mLeft - mStripX;
+        mColumnGlow.draw(LLRect(left, height, left + column.mWidth, 0), false, active);
     }
     if (!active)
     {

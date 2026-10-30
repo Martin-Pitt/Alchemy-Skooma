@@ -723,6 +723,7 @@ void SKInventoryTreeView::draw()
             drawRow(i, rect);
         }
         SKInventoryExplorerDrag::drawMark(this);
+        mEdgeGlow.draw(LLRect(0, height, contentWidth(), 0), false, mDropHover.isActive());
     }
     LLUICtrl::draw();
 }
@@ -1279,13 +1280,24 @@ bool SKInventoryTreeView::handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop, 
         mDropHover.touch();
         // Autoscroll near the edges.
         const S32 band = SKInventoryExplorerDrag::SCROLL_BAND;
-        if ((y < band || y > getRect().getHeight() - band) && mDropHover.tick(SKInventoryExplorerDrag::TICK_SECONDS))
+        const S32 side = y < band ? -1 : y > getRect().getHeight() - band ? 1 : 0;
+        if (side == 0)
         {
-            mScrollbar->setDocPos(mScrollbar->getDocPos() + (y < band ? 1 : -1) * SKInventoryExplorerDrag::SCROLL_STEP);
-            S32 sx = 0;
-            S32 sy = 0;
-            localPointToScreen(x, y, &sx, &sy);
-            mDropHover.scrolled(sx, sy);
+            mEdgeGlow.hover(0, false);
+        }
+        else if (mDropHover.tick(SKInventoryExplorerDrag::TICK_SECONDS))
+        {
+            const S32 before = mScrollbar->getDocPos();
+            mScrollbar->setDocPos(before - side * SKInventoryExplorerDrag::SCROLL_STEP);
+            const bool moved = mScrollbar->getDocPos() != before;
+            if (moved)
+            {
+                S32 sx = 0;
+                S32 sy = 0;
+                localPointToScreen(x, y, &sx, &sy);
+                mDropHover.scrolled(sx, sy);
+            }
+            mEdgeGlow.hover(side, moved);
         }
     }
     return true;
