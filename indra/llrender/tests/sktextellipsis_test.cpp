@@ -196,8 +196,13 @@ namespace
             std::string out;
             const Cut cut = SKTextEllipsis::shorten(font, text, max_pixels, LLFontGL::ELLIPSIS_MIDDLE, out);
             checkCut(font, text, max_pixels, cut, out);
-            CHECK(cut.shortened);
             CAPTURE(max_pixels, out);
+            // The renderer rounds the width, so a string a fraction wider than its room is drawn whole.
+            CHECK(cut.shortened == !drawsWhole(full, max_pixels));
+            if (!cut.shortened)
+            {
+                continue;
+            }
             if (max_pixels >= room_for_both)
             {
                 CHECK(cut.head_end > 0);
@@ -243,6 +248,11 @@ namespace
             const Cut cut = SKTextEllipsis::shorten(font, text, max_pixels, LLFontGL::ELLIPSIS_END, out);
             checkCut(font, text, max_pixels, cut, out);
             CAPTURE(max_pixels, out);
+            CHECK(cut.shortened == !drawsWhole(full, max_pixels));
+            if (!cut.shortened)
+            {
+                continue;
+            }
 
             // Where the plain walk ends, and the boundary a snap would move it to.
             const S32 walk = font.maxDrawableBytes(text, max_pixels - reserve);
