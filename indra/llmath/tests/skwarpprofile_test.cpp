@@ -26,6 +26,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
+#include "altestmatchers.h"
 #include "../skwarpprofile.h"
 
 using Catch::Matchers::WithinAbs;
@@ -73,7 +74,7 @@ namespace
     const SKWarp::Profile NEW[] = { { 0.35f, 0.5f, 80.f }, { 0.9f, 1.1f, 4000.f, 5.f }, SKWarp::SCROLL };
 }
 
-TEST_CASE("SKWarp: fraction is the camera's, bit for bit", "[SKWarp]")
+TEST_CASE("SKWarp: fraction is the camera's, to the last few bits", "[SKWarp]")
 {
     for (S32 i = 0; i < 3; ++i)
     {
@@ -82,7 +83,8 @@ TEST_CASE("SKWarp: fraction is the camera's, bit for bit", "[SKWarp]")
             for (S32 step = -1; step <= 220; ++step)
             {
                 const F32 t = step * NEW[i].duration() / 200.f;
-                CHECK(SKWarp::fraction(NEW[i], t, length) == old_fraction(OLD[i], t, length));
+                // Not bit for bit: contracted multiply-adds may round the two forms apart.
+                CHECK_THAT(SKWarp::fraction(NEW[i], t, length), ll_test::WithinBits(old_fraction(OLD[i], t, length), 20));
             }
         }
     }
