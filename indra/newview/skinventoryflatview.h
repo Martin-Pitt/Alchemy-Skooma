@@ -71,6 +71,8 @@ struct SKInventoryRow
     std::string mAcquiredLabel;
     S32 mPermRank = 0;      // Full Perm, Copy & Modify, Copy & Transfer, Copy Only, No Copy
     std::string mPerms;
+    S32 mNextPermRank = 0;  // the same ranks, for the next owner
+    std::string mNextPerms;
     std::string mWornOn;
     std::string mDescription;
     LLAssetType::EType mAssetType = LLAssetType::AT_NONE;
@@ -117,6 +119,7 @@ public:
         COL_CREATOR,
         COL_ACQUIRED,
         COL_PERMS,
+        COL_NEXT_PERMS,
         COL_WORN,
         COL_DESCRIPTION,
         COL_COUNT
