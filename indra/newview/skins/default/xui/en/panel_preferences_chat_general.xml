@@ -150,7 +150,7 @@
             follows="left|top"
             height="14"
             layout="topleft"
-            left="265"
+            left="255"
             name="contact_group_chat_label"
             top_delta="4"
             width="120">
@@ -161,10 +161,10 @@
             follows="left|top"
             height="23"
             layout="topleft"
-            left="385"
+            left="365"
             name="contact_group_chat_combo"
             top_delta="-4"
-            width="115">
+            width="110">
             <item label="Everyone" name="everyone" value="0"/>
             <item label="Nobody" name="nobody" value="2"/>
         </combo_box>
@@ -195,7 +195,7 @@
             follows="left|top"
             height="14"
             layout="topleft"
-            left="265"
+            left="255"
             name="contact_group_call_label"
             top_delta="4"
             width="120">
@@ -206,10 +206,10 @@
             follows="left|top"
             height="23"
             layout="topleft"
-            left="385"
+            left="365"
             name="contact_group_call_combo"
             top_delta="-4"
-            width="115">
+            width="110">
             <item label="Everyone" name="everyone" value="0"/>
             <item label="Nobody" name="nobody" value="2"/>
         </combo_box>
