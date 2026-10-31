@@ -1546,8 +1546,8 @@ function Invoke-IntegrateContinue {
     if (-not (Test-Path $ResolveState)) { Fail 'no integrate --resolve in progress' }
     $st = Get-Content $ResolveState -Raw | ConvertFrom-Json
     # An amend's conflict is left in its parent's worktree, anything else's in the main checkout.
-    $at = if ($st.Path) { $st.Path } else { $MainWt }
-    $into = if ($st.Into) { $st.Into } else { 'main' }
+    $at = if ($st.PSObject.Properties["Path"]) { $st.Path } else { $MainWt }
+    $into = if ($st.PSObject.Properties["Into"]) { $st.Into } else { 'main' }
     if (-not (Test-Path (Join-Path (G -C $at rev-parse --absolute-git-dir) 'MERGE_HEAD'))) { Fail "no merge in progress in $at; finish with git skooma integrate --abort" }
     $unmerged = @(Get-Unmerged $at)
     if ($unmerged) { Fail "still unmerged (resolve, then git add):`n    $($unmerged -join "`n    ")" }
@@ -1587,8 +1587,8 @@ function Invoke-IntegrateContinue {
 function Invoke-IntegrateAbort {
     if (-not (Test-Path $ResolveState)) { Fail 'no integrate --resolve in progress' }
     $st = Get-Content $ResolveState -Raw | ConvertFrom-Json
-    $at = if ($st.Path) { $st.Path } else { $MainWt }
-    $into = if ($st.Into) { $st.Into } else { 'main' }
+    $at = if ($st.PSObject.Properties["Path"]) { $st.Path } else { $MainWt }
+    $into = if ($st.PSObject.Properties["Into"]) { $st.Into } else { 'main' }
     if (Test-Path (Join-Path (G -C $at rev-parse --absolute-git-dir) 'MERGE_HEAD')) {
         $out = GG -C $at merge --abort
         if ($script:GitExit -ne 0) { Say $out; Fail 'merge --abort failed' }
