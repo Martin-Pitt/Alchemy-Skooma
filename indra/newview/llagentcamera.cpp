@@ -2782,6 +2782,15 @@ void LLAgentCamera::startCameraWarp(const SKCameraWarp::Profile& profile)
 }
 // </SK:Nexii>
 
+// <SK:Nexii> camera warp: the next update puts the camera on its target with no animation or smoothing.
+void LLAgentCamera::snapCameraToTarget()
+{
+    stopCameraAnimation();
+    mCameraWarping = false;
+    skipCameraSmoothing();
+}
+// </SK:Nexii>
+
 //-----------------------------------------------------------------------------
 // stopCameraAnimation()
 //-----------------------------------------------------------------------------
