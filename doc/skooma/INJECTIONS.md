@@ -287,7 +287,7 @@ Branch `foundation-world/rooms` (merge `734706e258`). Enclosure, spaces, flights
 
 | File | Role |
 |---|---|
-| `indra/skrooms/*` | Enclosure, spaces, floors, flights, stair alignment, graph, wind, probe placement and cache, export; Catch2 tests |
+| `indra/skrooms/*` | Enclosure, spaces, floors, flights, stair alignment, graph, wind, probe placement and cache; Catch2 tests |
 | `indra/newview/skrooms.h` / `.cpp` | `SKRooms` singleton: spaces follow the air, overlays, status |
 
 ### Injection sites
