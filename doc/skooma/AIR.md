@@ -35,6 +35,11 @@ wind/weather debug views, not air cells, despite the names.
   node-metaverse, NifTools/pyffi) or corpus measurement, never Havok SDK trees; no SDK-only names in code,
   comments, commits, tests or PRs (scrub history if any land). Implementer and reviewer agents get only public
   sources and corpus. Details `.havok-block.md`.
+- **Wind leaves rooms** (2026-10-31): wind slabs do not belong in `foundation-world/rooms`; they are to be
+  removed from it entirely (`skroomswind.*`, `SKWind`, the wind overlay and passes, `SKRooms*Wind*` settings,
+  export), and wind done properly later as a foundation of its own. First root-cause the Windows arm64 defect
+  `skroomswind_test` found (half the speed 8 m behind a lone box, every other platform agreeing): it is taken as
+  potentially serious, never skipped, and anything it shows in shared air or rooms code is fixed there.
 - **Avatar shapes:** measured polytopes (COMBAT.md P1), `skcensusavatarshape.*`, models in `V:\Scratch\avatar-shape\`.
 - **Test regions:** census exports (`%APPDATA%\AlchemyNext\logs\sknav-census-*.json`) from **Resdayn** (marks in
   `V:\Scratch\archive\scratch-2026-10-21\nav-corrections-1007\`) and **Bad / Good / Outer Space** (sloping
