@@ -6736,6 +6736,12 @@ void LLSelectMgr::addOutlines(ALSelectionOutline& outline, bool for_hud, U32 par
             {
                 continue;
             }
+            // <SK:Nexii> Drag feedback: a drop's face mark is not lost under the selection's outline
+            if (SKDragVerdict::marksObject(objectp))
+            {
+                continue;
+            }
+            // </SK:Nexii>
 
             LLColor4 colour;
             bool show_hidden = sRenderHiddenSelections;

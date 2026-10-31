@@ -65,6 +65,9 @@ namespace SKDragVerdict
     // The world mark for the frame: the face, the faces or the object, accepted or refused (ALSelectionOutline).
     void addWorldMark(ALSelectionOutline& outline);
 
+    // Whether the frame's world mark draws over `object`, so its selection outline stands aside for the mark.
+    bool marksObject(const LLViewerObject* object);
+
     // The chip's text after a pass, from what was reported, the tooltip message and the acceptance.
     void compose(EAcceptance accept, const std::string& tooltip_msg, S32 source, U32 cargo_count);
 
