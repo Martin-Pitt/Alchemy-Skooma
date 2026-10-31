@@ -1250,7 +1250,14 @@ void SKInventoryExplorerContextMenu::doToSelected(const std::string& action)
     }
     else if (action == "find_original")
     {
-        show_item_original(id);
+        if (mFindOriginalCallback)
+        {
+            mFindOriginalCallback(id);
+        }
+        else
+        {
+            show_item_original(id);
+        }
     }
     else if (action == "empty_trash")
     {

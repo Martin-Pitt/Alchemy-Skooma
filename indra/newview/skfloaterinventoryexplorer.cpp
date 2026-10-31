@@ -28,6 +28,7 @@
 
 #include "skfloaterinventoryexplorer.h"
 
+#include "llappearancemgr.h"
 #include "llbutton.h"
 #include "lldraghandle.h"
 #include "llfontgl.h"
@@ -733,6 +734,7 @@ bool SKFloaterInventoryExplorer::postBuild()
         menu_strings[key] = getString(std::string("menu_") + key);
     }
     mMenu->setStrings(menu_strings);
+    mMenu->setFindOriginalCallback([this](const LLUUID& id) { findOriginal(id); });
     mMenu->setCreatedCallback([handle](const LLUUID& id)
                               {
                                   if (SKFloaterInventoryExplorer* floater = static_cast<SKFloaterInventoryExplorer*>(handle.get()))
@@ -973,10 +975,19 @@ void SKFloaterInventoryExplorer::onInventoryChanged(U32 mask)
         return;
     }
 
+    // Wearing or taking off changes the Current Outfit alone, and every listed row may show it worn.
+    const LLUUID cof_id = LLAppearanceMgr::instance().getCOF();
+    const LLInventoryModel::changed_items_t& changed = gInventory.getChangedIDs();
+    const bool worn_changed = std::any_of(changed.begin(), changed.end(), [&cof_id](const LLUUID& id)
+                                          {
+                                              const LLInventoryObject* obj = gInventory.getObject(id);
+                                              return id == cof_id || (obj && obj->getParentUUID() == cof_id);
+                                          });
+
     for (SKInventoryFlatView* view : { (SKInventoryFlatView*)mList, (SKInventoryFlatView*)mIcons, (SKInventoryFlatView*)mGalleryStrip })
     {
         const LLUUID& folder_id = view->getFolder();
-        bool affects_view = (mask & LLInventoryObserver::REBUILD) != 0;
+        bool affects_view = worn_changed || (mask & LLInventoryObserver::REBUILD) != 0;
         for (const LLUUID& id : gInventory.getChangedIDs())
         {
             const LLInventoryObject* obj = gInventory.getObject(id);
@@ -991,7 +1002,7 @@ void SKFloaterInventoryExplorer::onInventoryChanged(U32 mask)
             view->markDirty();
         }
     }
-    bool affects_columns = (mask & LLInventoryObserver::REBUILD) != 0;
+    bool affects_columns = worn_changed || (mask & LLInventoryObserver::REBUILD) != 0;
     for (const LLUUID& id : gInventory.getChangedIDs())
     {
         const LLInventoryObject* obj = gInventory.getObject(id);
@@ -1944,6 +1955,29 @@ void SKFloaterInventoryExplorer::showInFolder(const LLUUID& id)
     commitSearch(std::string(), false);
     navigateTo(parent_id, true);
     setActiveSelection({ id });
+    if (SKInventoryFlatView* flat = flatView())
+    {
+        flat->centerSelection();
+    }
+    focusContent(false);
+}
+
+void SKFloaterInventoryExplorer::findOriginal(const LLUUID& link_id)
+{
+    const LLViewerInventoryItem* link = gInventory.getItem(link_id);
+    const LLUUID original_id = link ? link->getLinkedUUID() : LLUUID::null;
+    const LLInventoryObject* original = gInventory.getObject(original_id);
+    if (!original || original_id == link_id || mTabs.empty())
+    {
+        return;
+    }
+    if (isSearching())
+    {
+        mSearchBox->setText(LLStringUtil::null);
+        commitSearch(std::string(), false);
+    }
+    newTab(original->getParentUUID());
+    setActiveSelection({ original_id });
     if (SKInventoryFlatView* flat = flatView())
     {
         flat->centerSelection();

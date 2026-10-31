@@ -159,6 +159,8 @@ public:
     static std::string brandOf(const std::string& name);
     // The small link badge over the corner of an icon drawn at the rect.
     static void drawLinkBadge(const LLRect& icon);
+    // How a row's name is drawn: worn items and the worn outfit blue and bold, as My Outfits draws them, and a copied row bold.
+    static void nameStyle(const SKInventoryRow& row, bool copied, LLColor4& color, U8& style);
     // A row in view that has a picture asks for its smallest version, so the details have it before it is selected.
     static void prefetchPicture(const SKInventoryRow& row);
     static void prefetchImage(const LLUUID& image_id);

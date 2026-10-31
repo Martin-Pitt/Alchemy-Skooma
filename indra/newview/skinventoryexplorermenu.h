@@ -120,6 +120,8 @@ public:
     void setListedFolder(const LLUUID& folder_id, bool root_mode) { mListedFolderID = folder_id; mRootMode = root_mode; }
     // Set while the menu is over search results: "Show in Folder" is offered and runs this.
     void setShowInFolderCallback(const id_callback_t& cb) { mShowInFolderCallback = cb; }
+    // Runs Find Original with the link's id: the floater opens the original in a tab of its own.
+    void setFindOriginalCallback(const id_callback_t& cb) { mFindOriginalCallback = cb; }
     // Gets each object New made, to select and rename it.
     void setCreatedCallback(const id_callback_t& cb) { mCreatedCallback = cb; }
 
@@ -149,6 +151,7 @@ protected:
     open_callback_t mOpenCallback;
     id_callback_t mRenameCallback;
     id_callback_t mShowInFolderCallback;
+    id_callback_t mFindOriginalCallback;
     id_callback_t mCreatedCallback;
     LLHandle<LLView> mSpawnView;
     S32 mSpawnX = 0;
