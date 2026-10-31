@@ -28,6 +28,7 @@ lands, is offered or is merged.
 | `ui/saturation` | Its own foundation | UI saturation on `LLRender` through `ALUISaturation` scopes; `uiF`/`solidcolorF` grey to Rec.709 luminance in gamma-2 light below 1, unchanged at 1 | `develop` | yes |
 | `ui/text-ellipsis` | Its own foundation | Text shortened to a width with the ellipsis at the end, middle (keeping both ends, biased to the end) or start; `LLFontGL` mode enum that still takes a bool, `ellipsis` XUI param on text, buttons, tabs and list cells/columns | `develop` | yes |
 | `ui/spellcheck-async` | Its own fix | Windows Spell Checking API on a worker thread with a word cache and timeouts, so a hung spelling service cannot freeze the viewer | `develop` | yes |
+| `chat/contact-filters` | Its own feature | Who can reach you per channel (IMs, calls, conferences incl. voice invites, group chat, group calls) as dropdowns on Chat > General, replacing the IM+call friends-only switch; chat notifications get their own tab | `develop` | yes |
 | `font/colrv1-stale-surface` | Its own fix | Clear the per-thread COLRv1 raster paint before each glyph, so a glyph that failed mid-paint cannot leave a larger root surface for the next one to over-read | `develop` | merged upstream: AlchemyViewer/Alchemy#600 |
 
 Fork-only (not offered): the Atmo editor and keyframes UI, notecard and parcel transport,

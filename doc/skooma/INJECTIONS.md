@@ -1701,3 +1701,21 @@ the record. Tools and the decision: `V:\Scratch\icon-weight\` (`DECISION.md`).
 |---|---|---|
 | `indra/newview/llpublishedobjectmgr.cpp` | `LLPublishedPrimListener::inventoryChanged` notifies the server directly on the main coroutine, else posts it to the main loop through a weak pointer; `notifyServer` helper | `<SK:Nexii>` block |
 | `indra/newview/llscripteditorws.h` / `.cpp` | `mConnectionsMutex` and `mHandshakeMutex` are `LLCoros::Mutex`, locked with `LLCoros::LockType`, since every async JSON-RPC handler runs on a coroutine; `llcoros.h` include | `<SK:Nexii>` block on the members, single-line on each lock and the include |
+
+## Contact filters
+
+`feature-chat/contact-filters`: who can reach you, chosen per channel (IMs, voice calls, conferences, group chat, group voice calls) on Chat > General; chat notifications moved to a tab of their own.
+
+### Upstream edits
+
+| File | Change | Marker |
+|---|---|---|
+| `indra/newview/llimview.h` / `.cpp` | `SKContact` and `sk_contact_allowed`; P2P IM skip, group chat leave on Nobody, conference filter on voice (`VoiceInviteAdHoc`) and immediate (`InviteAdHoc`) invites, per-channel call rejection in `inviteToSession` | `<SK:Nexii>` blocks, single-line on the skip |
+| `indra/newview/llimprocessing.cpp` | IMs and teleport lures read `SKContactIMs` instead of `VoiceCallsFriendsOnly` | single-line |
+| `indra/newview/llstartup.cpp` | Once at login, `VoiceCallsFriendsOnly` becomes `SKContactIMs` and `SKContactCalls` at friends only | `<SK:Nexii>` block |
+| `indra/newview/llfloaterpreference.h` / `.cpp` | Old "Only friends and groups can call or IM me" checkbox wiring removed (`showFriendsOnlyWarning`) | unmarked removal |
+| `indra/newview/app_settings/settings_per_account_alchemy.xml` | `SKContactCalls`, `SKContactGroupCalls`, `SKContactGroupChat`, `SKContactIMs` | unmarked |
+| `skins/default/xui/{en,ja}/panel_preferences_chat.xml` | Notifications tab | XML comment block (en) |
+| `skins/default/xui/{en,ja}/panel_preferences_chat_general.xml` | "Who can reach me" dropdowns; notification and sound panels moved out; old checkbox removed | unmarked |
+| `skins/default/xui/{en,ja}/panel_preferences_chat_notifications.xml` | New: the moved notification and sound panels | new file |
+| `skins/default/xui/{en,ja}/panel_preferences_chat_rejection.xml` | Ad-hoc dropdown removed (now on General) | XML comment (en) |
