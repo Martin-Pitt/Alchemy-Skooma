@@ -27,7 +27,6 @@
 #include <catch2/catch_test_macros.hpp>
 
 
-#include "../skroomsexport.h"
 #include "../skroomswind.h"
 #include "skroomstestscene.h"
 
@@ -36,7 +35,6 @@
 #include <chrono>
 #include <cmath>
 #include <fstream>
-#include <sstream>
 
 namespace
 {
@@ -213,27 +211,6 @@ namespace
         { INFO("open air above the platform"); REQUIRE((c && !(c->mFlags & WindCell::BLOCKED))); }
         { INFO("a wall on it"); REQUIRE(((e->at(30.25f, 16.f)->mFlags & WindCell::BLOCKED) != 0)); }
         { INFO("sheltered behind it"); REQUIRE((e->at(34.f, 16.f)->factor() < 0.5f)); }
-    }
-
-    TEST_CASE("skroomswind: the export carries no wall-clock time, so the same air exports the same bytes", "[skroomswind]")
-    {
-        Scene s;
-        s.box(0.f, 0.f, 64.f, 32.f, 0.f, 4.f);
-        s.wall(30.f, 0.f, 30.5f, 32.f, 7.f);
-        auto in = std::make_shared<WindInput>();
-        const Wind w(s.input(2));
-        in->mEnclosure = w.mEnc;
-        in->mRooms = w.mRooms;
-        in->mBands = { WindLevel() };
-        WindProduct a = *computeWind(in);
-        WindProduct b = a;
-        a.mMillis = 1.5f;
-        b.mMillis = 2500.25f;
-        std::ostringstream ea, eb;
-        writeExportSpaces(ea, LLVector3d(), *w.mRooms, &a);
-        writeExportSpaces(eb, LLVector3d(), *w.mRooms, &b);
-        { INFO("wind exported"); REQUIRE((ea.str().find("\"wind\"") != std::string::npos)); }
-        { INFO("byte-identical"); REQUIRE((ea.str() == eb.str())); }
     }
 
     TEST_CASE("skroomswind: a pass's slabs, sharing the band's weight blur, match slabs computed alone", "[skroomswind]")

@@ -41,7 +41,6 @@
 
 #include <atomic>
 #include <functional>
-#include <iosfwd>
 #include <map>
 #include <memory>
 #include <string>
@@ -255,17 +254,6 @@ public:
     /// coloured by speed factor: blue calm, cyan the free stream, yellow
     /// twice it. Agent coordinates.
     void gatherWind(SKWorldOverlayGeom& geom, const LLVector3d& camera, F64 reach, F32 heading_deg, bool opaque) const;
-
-    /// A tile's per-gap answers, when the view holds answers for exactly
-    /// this air, with the generation of the pass that gave them; else null.
-    const skworld::TileEnclosure* enclosureTile(const LLUUID& mesh, const skworld::TileKey& key, const skworld::TileAirPtr& air, U64& generation) const;
-    /// A mesh's spaces, portals and wind slabs as JSON members, leading comma included, global.
-    void writeSpaces(std::ostream& file, const LLUUID& mesh) const;
-    /// The products of a mesh's last landed pass; false when none has landed.
-    bool landed(const LLUUID& mesh, skworld::EnclosureProductPtr& enclosure, skworld::RoomsProductPtr& rooms) const;
-    /// Whether a mesh's spaces, or its wind slabs, are still to land over its air.
-    bool passPending(const LLUUID& mesh) const;
-    bool windPending(const LLUUID& mesh) const;
 private:
     struct Job;
     struct WindJob;
