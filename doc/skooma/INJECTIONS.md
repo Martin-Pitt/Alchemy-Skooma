@@ -1700,3 +1700,4 @@ the record. Tools and the decision: `V:\Scratch\icon-weight\` (`DECISION.md`).
 | File | Change | Marker |
 |---|---|---|
 | `indra/newview/llpublishedobjectmgr.cpp` | `LLPublishedPrimListener::inventoryChanged` notifies the server directly on the main coroutine, else posts it to the main loop through a weak pointer; `notifyServer` helper | `<SK:Nexii>` block |
+| `indra/newview/llscripteditorws.h` / `.cpp` | `mConnectionsMutex` and `mHandshakeMutex` are `LLCoros::Mutex`, locked with `LLCoros::LockType`, since every async JSON-RPC handler runs on a coroutine; `llcoros.h` include | `<SK:Nexii>` block on the members, single-line on each lock and the include |
