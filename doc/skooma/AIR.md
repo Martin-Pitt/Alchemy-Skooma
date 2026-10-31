@@ -40,6 +40,8 @@ wind/weather debug views, not air cells, despite the names.
   export), and wind done properly later as a foundation of its own. First root-cause the Windows arm64 defect
   `skroomswind_test` found (half the speed 8 m behind a lone box, every other platform agreeing): it is taken as
   potentially serious, never skipped, and anything it shows in shared air or rooms code is fixed there.
+- **Rooms export removed** (2026-10-31): `skroomsexport.*` and `SKRooms::writeSpaces` had no caller once the
+  census export was parked; `backup/spike-census-export` would need them back if it is unparked.
 - **Avatar shapes:** measured polytopes (COMBAT.md P1), `skcensusavatarshape.*`, models in `V:\Scratch\avatar-shape\`.
 - **Test regions:** census exports (`%APPDATA%\AlchemyNext\logs\sknav-census-*.json`) from **Resdayn** (marks in
   `V:\Scratch\archive\scratch-2026-10-21\nav-corrections-1007\`) and **Bad / Good / Outer Space** (sloping
