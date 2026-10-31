@@ -3372,6 +3372,7 @@ void process_agent_movement_complete(LLMessageSystem* msg, void**)
         // Force the camera back onto the agent, don't animate.
         gAgentCamera.setFocusOnAvatar(true, false);
         gAgentCamera.slamLookAt(look_at);
+        gAgentCamera.snapCameraToTarget(); // <SK:Nexii> camera warp: a teleport cuts to the arrival
         gAgentCamera.updateCamera();
 
         LL_INFOS("Teleport") << "Agent movement complete, setting state to TELEPORT_START_ARRIVAL" << LL_ENDL;
@@ -6621,6 +6622,7 @@ void process_teleport_local(LLMessageSystem *msg,void**)
     if ( !(gAgent.getTeleportKeepsLookAt() && LLViewerJoystick::getInstance()->getOverrideCamera()) )
     {
         gAgentCamera.resetView(true, true);
+        gAgentCamera.snapCameraToTarget(); // <SK:Nexii> camera warp: a teleport cuts to the arrival
     }
 
     // send camera update to new region
