@@ -42,6 +42,7 @@
 #include "llviewerfoldertype.h"
 #include "llviewerinventory.h"
 #include "llwindow.h"
+#include "skinventoryexplorermenu.h"
 
 static LLDefaultChildRegistry::Register<SKInventoryTreeView> r_sk_inventory_tree("sk_inventory_tree");
 
@@ -651,9 +652,12 @@ void SKInventoryTreeView::drawRow(S32 index, const LLRect& rect)
                                          arrow->getImage(), arrow_color.get() % alpha);
         }
     }
+    const SKInventoryExplorerActions::EClipboardMark mark =
+        row.mKind == Row::KIND_SAVED ? SKInventoryExplorerActions::MARK_NONE : SKInventoryExplorerActions::clipboardMark(row.mID);
+    const F32 fade = mark == SKInventoryExplorerActions::MARK_CUT ? 0.5f : 1.f;
     if (row.mIcon.notNull())
     {
-        row.mIcon->draw(icon_left, mid - ICON_SIZE / 2, ICON_SIZE, ICON_SIZE);
+        row.mIcon->draw(icon_left, mid - ICON_SIZE / 2, ICON_SIZE, ICON_SIZE, LLColor4::white % fade);
     }
     const S32 text_left = icon_left + ICON_SIZE + 4;
     S32 right = rect.mRight - 6;
@@ -690,8 +694,9 @@ void SKInventoryTreeView::drawRow(S32 index, const LLRect& rect)
         font->renderUTF8(count, 0, right, mid, dim_color.get(), LLFontGL::RIGHT, LLFontGL::VCENTER);
         right -= font->getWidth(count) + 6;
     }
-    font->renderUTF8(row.mName, 0, (F32)text_left, (F32)mid, text_color.get(), LLFontGL::LEFT, LLFontGL::VCENTER, LLFontGL::NORMAL,
-                     LLFontGL::NO_SHADOW, S32_MAX, llmax(0, right - text_left), nullptr, LLFontGL::ELLIPSIS_MIDDLE);
+    font->renderUTF8(row.mName, 0, (F32)text_left, (F32)mid, text_color.get() % fade, LLFontGL::LEFT, LLFontGL::VCENTER,
+                     mark == SKInventoryExplorerActions::MARK_COPY ? LLFontGL::BOLD : LLFontGL::NORMAL, LLFontGL::NO_SHADOW, S32_MAX,
+                     llmax(0, right - text_left), nullptr, LLFontGL::ELLIPSIS_MIDDLE);
 }
 
 void SKInventoryTreeView::draw()

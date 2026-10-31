@@ -37,6 +37,7 @@
 #include "llviewertexture.h"
 #include "llviewertexturelist.h"
 #include "skinventorydetails.h"
+#include "skinventoryexplorermenu.h"
 
 static LLDefaultChildRegistry::Register<SKInventoryIconsView> r_sk_inventory_icons("sk_inventory_icons");
 
@@ -381,6 +382,8 @@ void SKInventoryIconsView::drawTile(const SKInventoryRow& row, const LLRect& rec
         gl_rect_2d(rect, focused ? sel_focus.get() : sel_blur.get(), true);
     }
 
+    const SKInventoryExplorerActions::EClipboardMark mark = SKInventoryExplorerActions::clipboardMark(row.mID);
+    const LLColor4 tint = LLColor4::white % (mark == SKInventoryExplorerActions::MARK_CUT ? 0.5f : 1.f);
     const S32 art = (S32)(mTileSize * ART_FRACTION);
     const LLRect art_rect(rect.getCenterX() - art / 2, rect.mTop - PAD, rect.getCenterX() - art / 2 + art, rect.mTop - PAD - art);
     bool badge_type = false;
@@ -421,13 +424,13 @@ void SKInventoryIconsView::drawTile(const SKInventoryRow& row, const LLRect& rec
         {
             w = llmax(1, (S32)(art * aspect));
         }
-        gl_draw_scaled_image(art_rect.getCenterX() - w / 2, art_rect.getCenterY() - h / 2, w, h, texture);
+        gl_draw_scaled_image(art_rect.getCenterX() - w / 2, art_rect.getCenterY() - h / 2, w, h, texture, tint);
         badge_type = !row.mImageIsAsset && row.mAssetType != LLAssetType::AT_TEXTURE && row.mAssetType != LLAssetType::AT_MATERIAL;
     }
     else if (row.mIcon.notNull())
     {
         const S32 icon = (S32)(art * TYPE_ICON_FRACTION);
-        row.mIcon->draw(art_rect.getCenterX() - icon / 2, art_rect.getCenterY() - icon / 2, icon, icon);
+        row.mIcon->draw(art_rect.getCenterX() - icon / 2, art_rect.getCenterY() - icon / 2, icon, icon, tint);
     }
 
     // A thumbnail on anything but a texture keeps its type as a corner badge; links show theirs opposite.
@@ -435,7 +438,7 @@ void SKInventoryIconsView::drawTile(const SKInventoryRow& row, const LLRect& rec
     {
         gl_rect_2d(art_rect.mLeft - 2, art_rect.mBottom + BADGE_SIZE + 2, art_rect.mLeft + BADGE_SIZE + 2, art_rect.mBottom - 2,
                    badge_bg.get(), true);
-        row.mIcon->draw(art_rect.mLeft, art_rect.mBottom, BADGE_SIZE, BADGE_SIZE);
+        row.mIcon->draw(art_rect.mLeft, art_rect.mBottom, BADGE_SIZE, BADGE_SIZE, tint);
     }
     if (row.hasLinkBadge() && link_badge.notNull())
     {
@@ -449,8 +452,8 @@ void SKInventoryIconsView::drawTile(const SKInventoryRow& row, const LLRect& rec
     }
 
     const LLFontGL* font = LLFontGL::getFontSansSerifSmall();
-    const LLColor4 color = row.mIsLink ? dim_color.get() : text_color.get();
-    const U8 style = row.mIsLink ? LLFontGL::ITALIC : LLFontGL::NORMAL;
+    const LLColor4 color = (row.mIsLink ? dim_color.get() : text_color.get()) % tint.mV[VALPHA];
+    const U8 style = (row.mIsLink ? LLFontGL::ITALIC : LLFontGL::NORMAL) | (mark == SKInventoryExplorerActions::MARK_COPY ? LLFontGL::BOLD : 0);
     const S32 line = (S32)font->getLineHeight();
     S32 y = art_rect.mBottom - NAME_GAP;
     const size_t index = &row - mRows.data();

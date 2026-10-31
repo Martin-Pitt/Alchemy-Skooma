@@ -425,6 +425,34 @@ void pasteLink(const LLUUID& dest_id)
     }
 }
 
+EClipboardMark clipboardMark(const LLUUID& id)
+{
+    const LLClipboard& clipboard = LLClipboard::instance();
+    if (!clipboard.hasContents() || id.isNull())
+    {
+        return MARK_NONE;
+    }
+    if (clipboard.isOnClipboard(id))
+    {
+        return clipboard.isCutMode() ? MARK_CUT : MARK_COPY;
+    }
+    // What a cut folder holds dims with it, as LLFolderViewItem::isFadeItem has it.
+    if (clipboard.isCutMode())
+    {
+        const LLInventoryObject* object = gInventory.getObject(id);
+        for (LLUUID parent_id = object ? object->getParentUUID() : LLUUID::null; parent_id.notNull();)
+        {
+            if (clipboard.isOnClipboard(parent_id))
+            {
+                return MARK_CUT;
+            }
+            const LLViewerInventoryCategory* parent = gInventory.getCategory(parent_id);
+            parent_id = parent ? parent->getParentUUID() : LLUUID::null;
+        }
+    }
+    return MARK_NONE;
+}
+
 void toggleFavorite(const uuid_vec_t& ids)
 {
     if (ids.empty())
@@ -951,8 +979,6 @@ void SKInventoryExplorerContextMenu::updateMenuItemsVisibility(LLContextMenu* me
             {
                 disabled.push_back("rename");
             }
-            items.push_back("copy_uuid");
-            items.push_back("copy_inventory_uuid");
             if (!is_link && cat)
             {
                 items.push_back("thumbnail");
@@ -1110,17 +1136,9 @@ void SKInventoryExplorerContextMenu::updateMenuItemsVisibility(LLContextMenu* me
             }
         }
     }
-    items.push_back("copy_uuid");
-    items.push_back("copy_inventory_uuid");
-    if (!many && item)
+    if (!many && item && LLAssetType::lookupIsAssetIDKnowable(obj->getType()) && (item->getIsFullPerm() || gAgent.isGodlike()))
     {
         items.push_back("copy_asset_uuid");
-        if (!LLAssetType::lookupIsAssetIDKnowable(obj->getType()) || !(item->getIsFullPerm() || gAgent.isGodlike()))
-        {
-            disabled.push_back("copy_asset_uuid");
-            LLMenuItemGL* asset = menu->getChild<LLMenuItemGL>("copy_asset_uuid");
-            asset->setLabel(asset->getLabel() + "  " + string("full_perm_only"));
-        }
     }
     if (many && is_agent_inventory)
     {
@@ -1325,10 +1343,6 @@ void SKInventoryExplorerContextMenu::doToSelected(const std::string& action)
             data.append(selected);
         }
         placeNearSpawn(LLFloaterReg::showInstance("change_item_thumbnail", data));
-    }
-    else if (action == "copy_inventory_uuid")
-    {
-        gViewerWindow->getWindow()->copyTextToClipboard(id.asString());
     }
     else if (action == "copy_asset_uuid")
     {
