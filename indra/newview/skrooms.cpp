@@ -28,7 +28,6 @@
 
 #include "skairdebug.h"
 #include "skroomscensus.h"
-#include "skroomsexport.h"
 #include "skroomsfloors.h"
 
 #include "llagent.h"
@@ -49,7 +48,6 @@
 #include <chrono>
 #include <cmath>
 #include <limits>
-#include <ostream>
 
 using namespace skworld;
 
@@ -1849,69 +1847,6 @@ void SKRooms::gatherSpaces(SKWorldOverlayGeom& geom, const LLVector3d& camera, F
             geom.edge(base, base + LLVector3(0.f, 0.f, 1.2f), color);
         }
     }
-}
-
-void SKRooms::writeSpaces(std::ostream& file, const LLUUID& mesh) const
-{
-    if (!mView)
-    {
-        return;
-    }
-    for (const SKWorldView::Mesh& m : mView->meshes())
-    {
-        if (m.mId == mesh && m.mRooms)
-        {
-            writeExportSpaces(file, m.mOrigin, *m.mRooms, m.mWind.get());
-            return;
-        }
-    }
-}
-
-bool SKRooms::landed(const LLUUID& mesh, EnclosureProductPtr& enclosure, RoomsProductPtr& rooms) const
-{
-    const auto it = mMeshes.find(mesh);
-    if (it == mMeshes.end() || !it->second.mProduct || !it->second.mRooms)
-    {
-        return false;
-    }
-    enclosure = it->second.mProduct;
-    rooms = it->second.mRooms;
-    return true;
-}
-
-bool SKRooms::passPending(const LLUUID& mesh) const
-{
-    const auto it = mMeshes.find(mesh);
-    return it != mMeshes.end() && (it->second.mDirty || it->second.mInFlight || (!it->second.mProduct && it->second.mAirSignature != SEED));
-}
-
-bool SKRooms::windPending(const LLUUID& mesh) const
-{
-    const auto it = mMeshes.find(mesh);
-    return it != mMeshes.end() && it->second.mProduct && (it->second.mWindDirty || it->second.mWindInFlight);
-}
-
-const TileEnclosure* SKRooms::enclosureTile(const LLUUID& mesh, const TileKey& key, const TileAirPtr& air, U64& generation) const
-{
-    if (!mView || !air)
-    {
-        return nullptr;
-    }
-    for (const SKWorldView::Mesh& m : mView->meshes())
-    {
-        if (m.mId != mesh)
-        {
-            continue;
-        }
-        const TileEnclosure* t = m.mProduct->tile(key);
-        if (!t || t->mAir != air || t->mGaps.size() != air->mGaps.size())
-        {
-            return nullptr;
-        }
-        generation = m.mProduct->mGeneration;
-        return t;
-    }
-    return nullptr;
 }
 
 // ---------------------------------------------------------------- overlays

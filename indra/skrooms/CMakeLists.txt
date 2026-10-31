@@ -12,7 +12,6 @@ target_sources(
   PRIVATE
     skroomscensus.cpp
     skroomsenclosure.cpp
-    skroomsexport.cpp
     skroomsflights.cpp
     skroomsfloors.cpp
     skroomsgraph.cpp
@@ -31,7 +30,6 @@ target_sources(
       FILES
         skroomscensus.h
         skroomsenclosure.h
-        skroomsexport.h
         skroomsflights.h
         skroomsfloors.h
         skroomsgraph.h
