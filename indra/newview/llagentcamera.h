@@ -204,6 +204,7 @@ public:
     void            startCameraAnimation();
     void            stopCameraAnimation();
     void            skipCameraSmoothing(); // <SK:Nexii> modal view: a pan moves the camera rigidly
+    void            snapCameraToTarget(); // <SK:Nexii> camera warp: ends any animation or smoothing, as a teleport arrives
     void            startCameraWarp(const SKCameraWarp::Profile& profile); // <SK:Nexii> camera warp: restarts the animation as a warp (skcamerawarp.h)
 private:
     // <SK:Nexii> camera warp: the animation follows mWarpProfile while set
