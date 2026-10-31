@@ -25,6 +25,7 @@ Regions you visit are cached as G-buffer impostors, relit with the current sun.
 | `feature-modal-view` | **integrated** 2026-10-16 (`a639a27c1d`): `SKModalView` (`skmodalview.*`, `skmodalviewmath.*`), the shared world-render gate, camera snapshot/restore and input routing; the tactical overview uses it too |
 | `feature-worldmap` | **integrated** 2026-10-16 (`562f6607dc`) on the modal view: `SKWorldMapScene` (`skworldmapscene.*`, `skworldmaptiles.*`, `skworldmapmath.*`) with ground tiles, tilt-shift and agent dots; the G-buffer impostor cache and the tabs are not built |
 | map pan tool | **integrated** 2026-10-18 (`42e2e8c245`): both modal maps pan through `sktoolmappan` instead of a click hook |
+| region overview snapshot | **planned** 2026-10-31: `foundation-render/region-capture` (load-and-capture machinery, shared with the impostor cache) + `feature-worldmap/region-snapshot` (Advanced menu export: lit, Three.js PBR set, height, glb, tacmap views, bulk upload). Plan `.region-snapshot-plan.md` |
 
 ## Rulings
 
