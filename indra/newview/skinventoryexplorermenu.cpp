@@ -951,8 +951,6 @@ void SKInventoryExplorerContextMenu::updateMenuItemsVisibility(LLContextMenu* me
             {
                 disabled.push_back("rename");
             }
-            items.push_back("copy_uuid");
-            items.push_back("copy_inventory_uuid");
             if (!is_link && cat)
             {
                 items.push_back("thumbnail");
@@ -1110,17 +1108,9 @@ void SKInventoryExplorerContextMenu::updateMenuItemsVisibility(LLContextMenu* me
             }
         }
     }
-    items.push_back("copy_uuid");
-    items.push_back("copy_inventory_uuid");
-    if (!many && item)
+    if (!many && item && LLAssetType::lookupIsAssetIDKnowable(obj->getType()) && (item->getIsFullPerm() || gAgent.isGodlike()))
     {
         items.push_back("copy_asset_uuid");
-        if (!LLAssetType::lookupIsAssetIDKnowable(obj->getType()) || !(item->getIsFullPerm() || gAgent.isGodlike()))
-        {
-            disabled.push_back("copy_asset_uuid");
-            LLMenuItemGL* asset = menu->getChild<LLMenuItemGL>("copy_asset_uuid");
-            asset->setLabel(asset->getLabel() + "  " + string("full_perm_only"));
-        }
     }
     if (many && is_agent_inventory)
     {
@@ -1325,10 +1315,6 @@ void SKInventoryExplorerContextMenu::doToSelected(const std::string& action)
             data.append(selected);
         }
         placeNearSpawn(LLFloaterReg::showInstance("change_item_thumbnail", data));
-    }
-    else if (action == "copy_inventory_uuid")
-    {
-        gViewerWindow->getWindow()->copyTextToClipboard(id.asString());
     }
     else if (action == "copy_asset_uuid")
     {
