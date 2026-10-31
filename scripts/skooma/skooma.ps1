@@ -1354,6 +1354,9 @@ Either upstream rewrote history, or a commit was made on develop.
         $w = $byBranch[$branch]
         $isMain = $w.Path -ieq $MainWt
         if ($isMain -and $branch -ne 'main') { $skipped += "$($w.Path) (on $branch, not main)"; continue }
+        # An amend stays a few commits on its parent: merging the parent in, then landing it
+        # by fast-forward, would put that merge on the parent's own line.
+        if (Test-IsAmend $branch) { continue }
 
         $mergeFrom = if ($branch -eq 'main') { 'develop' } else { Get-Base $branch }
         $behind = (Get-Counts $branch $mergeFrom).Ahead
@@ -1442,8 +1445,15 @@ function Invoke-Check { param([string]$branch, [switch]$Quiet)
     if (-not ($Rest -contains '--full')) { $range += '^main' }
     foreach ($sha in (G rev-list --merges @range) -split "`n" | Where-Object { $_ }) {
         $parents = (G rev-list --parents -n 1 $sha) -split '\s+'
-        # An amend landed into this feature is part of it, judged like a trunk's merges.
-        $takesAmend = (G log -1 --format=%s $sha) -like "Merge amend '*"
+        $subject = G log -1 --format=%s $sha
+        # An amend merges nothing: a conflict with its parent is resolved by integrate --resolve.
+        if (Test-IsAmend $branch) {
+            $problems += "merge $($sha.Substring(0,9)) in an amend; drop it and land with git skooma integrate $branch --resolve"
+            continue
+        }
+        # An amend landed into this feature is part of it, judged like a trunk's merges, and so is
+        # this feature merged into one of its amends before sync stopped syncing them.
+        $takesAmend = $subject -like "Merge amend '*" -or $subject -like "Merge branch '$branch' into amend-*"
         foreach ($p in $parents[2..($parents.Count - 1)]) {
             if (($isTrunk -or $takesAmend) -and -not (GitOk merge-base --is-ancestor $p $base)) {
                 if ($null -eq $developOnly) {
@@ -1535,27 +1545,38 @@ function Get-Unmerged { param([string]$path)
 function Invoke-IntegrateContinue {
     if (-not (Test-Path $ResolveState)) { Fail 'no integrate --resolve in progress' }
     $st = Get-Content $ResolveState -Raw | ConvertFrom-Json
-    if (-not (Test-Path (Join-Path $CommonDir 'MERGE_HEAD'))) { Fail "no merge in progress in $MainWt; finish with git skooma integrate --abort" }
-    $unmerged = @(Get-Unmerged $MainWt)
+    # An amend's conflict is left in its parent's worktree, anything else's in the main checkout.
+    $at = if ($st.Path) { $st.Path } else { $MainWt }
+    $into = if ($st.Into) { $st.Into } else { 'main' }
+    if (-not (Test-Path (Join-Path (G -C $at rev-parse --absolute-git-dir) 'MERGE_HEAD'))) { Fail "no merge in progress in $at; finish with git skooma integrate --abort" }
+    $unmerged = @(Get-Unmerged $at)
     if ($unmerged) { Fail "still unmerged (resolve, then git add):`n    $($unmerged -join "`n    ")" }
     $marked = @()
     foreach ($f in @($st.Files)) {
-        $p = Join-Path $MainWt $f
+        $p = Join-Path $at $f
         if ((Test-Path $p -PathType Leaf) -and (Select-String -Path $p -Pattern '^(<{7}|>{7})( |$)' -Quiet)) { $marked += $f }
     }
     if ($marked) { Fail "conflict markers left in:`n    $($marked -join "`n    ")" }
 
-    $msg = "Merge branch '$($st.Branch)' into main`n`nResolved conflicts with main-only code in:`n" + ((@($st.Files) | ForEach-Object { "  $_" }) -join "`n") + "`n"
+    # check recognises an amend's merge into its parent by its subject.
+    $files = (@($st.Files) | ForEach-Object { "  $_" }) -join "`n"
+    $msg = if ($into -ne 'main') { "Merge amend '$($st.Branch)' into $into`n`nResolved conflicts with $into in:`n$files`n" }
+           else { "Merge branch '$($st.Branch)' into main`n`nResolved conflicts with main-only code in:`n$files`n" }
     $tmp = Join-Path $CommonDir 'skooma-resolve-msg.txt'
     [IO.File]::WriteAllText($tmp, $msg)
-    $out = GG -C $MainWt commit --no-edit -F $tmp
+    $out = GG -C $at commit --no-edit -F $tmp
     Remove-Item $tmp -ErrorAction SilentlyContinue
     if ($script:GitExit -ne 0) { Say $out; Fail 'commit failed; the merge is still in progress' }
     Remove-Item $ResolveState
-    $null = G -C $MainWt submodule update --init --recursive
+    $null = G -C $at submodule update --init --recursive
 
     Say ''
-    Good "$($st.Branch) -> main (merge commit, $(@($st.Files).Count) resolved file(s))"
+    Good "$($st.Branch) -> $into (merge commit, $(@($st.Files).Count) resolved file(s))"
+    if ($into -ne 'main') {
+        Info "carry it on with:  git skooma integrate $into"
+        Say ''
+        return
+    }
     Info "main is now $(G rev-parse --short main)"
     Install-Tooling -Quiet
     Info "if the build breaks:  git skooma undo   (back to $($st.LastGood.Substring(0,9)))"
@@ -1566,13 +1587,17 @@ function Invoke-IntegrateContinue {
 function Invoke-IntegrateAbort {
     if (-not (Test-Path $ResolveState)) { Fail 'no integrate --resolve in progress' }
     $st = Get-Content $ResolveState -Raw | ConvertFrom-Json
-    if (Test-Path (Join-Path $CommonDir 'MERGE_HEAD')) {
-        $out = GG -C $MainWt merge --abort
+    $at = if ($st.Path) { $st.Path } else { $MainWt }
+    $into = if ($st.Into) { $st.Into } else { 'main' }
+    if (Test-Path (Join-Path (G -C $at rev-parse --absolute-git-dir) 'MERGE_HEAD')) {
+        $out = GG -C $at merge --abort
         if ($script:GitExit -ne 0) { Say $out; Fail 'merge --abort failed' }
     }
-    if ($st.PrevLastGood) { $null = G config 'skooma.lastgood' $st.PrevLastGood } else { $null = G config --unset 'skooma.lastgood' }
+    if ($into -eq 'main') {
+        if ($st.PrevLastGood) { $null = G config 'skooma.lastgood' $st.PrevLastGood } else { $null = G config --unset 'skooma.lastgood' }
+    }
     Remove-Item $ResolveState
-    Good "aborted; main stays at $(G rev-parse --short main)"
+    Good "aborted; $into stays at $(G rev-parse --short $into)"
 }
 
 function Invoke-Integrate {
@@ -1601,7 +1626,7 @@ function Invoke-Integrate {
     $targets = @()
     if ($arg) {
         $targets = @(Resolve-Target $arg)
-        if ($resolve -and (Get-LandTarget $targets[0]) -ne 'main') { Fail "--resolve only lands into main; $($targets[0]) lands into $(Get-LandTarget $targets[0])" }
+        if ($resolve -and (Get-LandTarget $targets[0]) -ne 'main' -and -not (Test-IsAmend $targets[0])) { Fail "--resolve only lands into main or an amend's parent; $($targets[0]) lands into $(Get-LandTarget $targets[0])" }
     }
     else {
         foreach ($w in $Worktrees) {
@@ -1671,8 +1696,31 @@ function Invoke-Integrate {
                 Say ''
                 return
             }
+            # An amend never merges its parent, so its conflict is resolved in the parent's worktree.
+            if ($resolve -and (Test-IsAmend $b)) {
+                $pw = $Worktrees | Where-Object { $_.Branch -eq $into } | Select-Object -First 1
+                if (-not $pw) { Fail "parent $into has no worktree to resolve in; open one for it (git worktree add) and integrate again" }
+                $op = Test-MidOperation $pw.Path
+                if ($op -or (Test-Dirty $pw.Path)) { Fail "parent $into worktree ($($pw.Path)) is $(if ($op) { "mid-$op" } else { 'dirty' })" }
+                $null = GG -C $pw.Path merge --no-edit $b
+                $files = @(Get-Unmerged $pw.Path)
+                if (-not $files) {
+                    $null = G -C $pw.Path merge --abort
+                    Fail "merging $b failed without conflicted files; aborted"
+                }
+                [IO.File]::WriteAllText($ResolveState, (@{ Branch = $b; Into = $into; Path = $pw.Path; Files = @($files) } | ConvertTo-Json))
+                Say ''
+                Warn "$b conflicts with $into; the merge is left in $($pw.Path)"
+                foreach ($f in $files) { Say "    $f" }
+                Say ''
+                Info 'resolve each file, git add it, then:  git skooma integrate --continue'
+                Info "to give up and leave $into as it was:  git skooma integrate --abort"
+                Say ''
+                return
+            }
             $results += [pscustomobject]@{ Branch = $b; Result = 'SKIPPED (conflict)'; Detail = "conflicts with $into" }
-            Warn "$b would conflict with $into; merge $into's base into it first (git skooma sync), or land it with integrate $b --resolve if the conflict is with main-only code"
+            if (Test-IsAmend $b) { Warn "$b would conflict with its parent $into; land it with integrate $b --resolve" }
+            else { Warn "$b would conflict with $into; merge $into's base into it first (git skooma sync), or land it with integrate $b --resolve if the conflict is with main-only code" }
             continue
         }
 
