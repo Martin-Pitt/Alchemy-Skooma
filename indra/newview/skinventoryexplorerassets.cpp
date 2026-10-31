@@ -1,6 +1,6 @@
 /**
  * @file skinventoryexplorerassets.cpp
- * @brief Inventory Explorer's asset reads for the details: sounds, animations, experiences and landmarks
+ * @brief Inventory Explorer's asset reads for the details: sounds, animations, gestures, experiences and landmarks
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Second Life Viewer Source Code
@@ -35,6 +35,7 @@
 #include "llfilesystem.h"
 #include "llinventorymodel.h"
 #include "llkeyframemotion.h"
+#include "llmultigesture.h"
 #include "lllandmarklist.h"
 #include "llviewerinventory.h"
 #include "llviewerregion.h"
@@ -58,6 +59,7 @@ namespace
     U32 sRevision = 1;
     std::map<LLUUID, SKSoundInfo> sSounds;
     std::map<LLUUID, SKAnimInfo> sAnimations;
+    std::map<LLUUID, SKGestureInfo> sGestures;
     std::map<LLUUID, SKExperienceInfo> sExperiences;
 
     // Band split points, to tune on real sounds.
@@ -331,6 +333,41 @@ namespace
         info.mState = SK_ASSET_READY;
     }
 
+    // Gestures are ASCII, read as LLGestureMgr reads them.
+    std::unique_ptr<LLMultiGesture> read_gesture(const LLUUID& id)
+    {
+        std::vector<U8> data;
+        if (!read_cached_asset(id, LLAssetType::AT_GESTURE, data))
+        {
+            return nullptr;
+        }
+        data.push_back(0);
+        auto gesture = std::make_unique<LLMultiGesture>();
+        LLDataPackerAsciiBuffer dp((char*)data.data(), (S32)data.size());
+        return gesture->deserialize(dp) ? std::move(gesture) : nullptr;
+    }
+
+    void on_gesture_fetched(const LLUUID& id, S32 status)
+    {
+        auto it = sGestures.find(id);
+        if (it == sGestures.end())
+        {
+            return;
+        }
+        ++sRevision;
+        std::unique_ptr<LLMultiGesture> gesture = status == LL_ERR_NOERR ? read_gesture(id) : nullptr;
+        if (!gesture)
+        {
+            it->second.mState = SK_ASSET_FAILED;
+            return;
+        }
+        it->second.mTrigger = gesture->mTrigger;
+        it->second.mReplace = gesture->mReplaceText;
+        it->second.mKey = gesture->mKey;
+        it->second.mMask = gesture->mMask;
+        it->second.mState = SK_ASSET_READY;
+    }
+
     void on_animation_fetched(const LLUUID& id, S32 status)
     {
         auto it = sAnimations.find(id);
@@ -414,6 +451,30 @@ namespace SKInventoryAssets
                                     [](const LLUUID& id, LLAssetType::EType, void*, S32 status, LLExtStat) { on_animation_fetched(id, status); },
                                     nullptr, true);
         return &info;
+    }
+
+    const SKGestureInfo* gesture(const LLUUID& asset_id, bool fetch)
+    {
+        auto it = sGestures.find(asset_id);
+        if (it != sGestures.end())
+        {
+            return &it->second;
+        }
+        if (!fetch || asset_id.isNull() || !gAssetStorage)
+        {
+            return nullptr;
+        }
+        SKGestureInfo& info = sGestures[asset_id];
+        gAssetStorage->getAssetData(asset_id, LLAssetType::AT_GESTURE,
+                                    [](const LLUUID& id, LLAssetType::EType, void*, S32 status, LLExtStat) { on_gesture_fetched(id, status); },
+                                    nullptr, true);
+        return &info;
+    }
+
+    std::unique_ptr<LLMultiGesture> makeGesture(const LLUUID& asset_id)
+    {
+        auto it = sGestures.find(asset_id);
+        return it != sGestures.end() && it->second.mState == SK_ASSET_READY ? read_gesture(asset_id) : nullptr;
     }
 
     const SKExperienceInfo* experience(const LLUUID& item_id, bool fetch)

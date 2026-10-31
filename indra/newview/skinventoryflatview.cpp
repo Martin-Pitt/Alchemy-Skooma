@@ -29,6 +29,7 @@
 #include "skinventoryflatview.h"
 
 #include "llagent.h"
+#include "llappearancemgr.h"
 #include "llavatarnamecache.h"
 #include "llinventoryfunctions.h"
 #include "llinventoryicon.h"
@@ -359,6 +360,12 @@ void SKInventoryFlatView::readFolderRow(LLViewerInventoryCategory* cat, const SK
     row.mAssetType = LLAssetType::AT_CATEGORY;
     row.mIsSystem = LLFolderType::lookupIsProtectedType(cat->getPreferredType());
     row.mName = cat->getName();
+    // The outfit worn last, as the My Outfits list marks it.
+    row.mIsWorn = row.mID == LLAppearanceMgr::instance().getBaseOutfitUUID();
+    if (row.mIsWorn)
+    {
+        row.mWornOn = labels.mWorn;
+    }
     row.mImageID = cat->getThumbnailUUID();
     const S32 count = cat->getDescendentCount();
     if (count >= 0 && !labels.mFolderCount.empty())
@@ -391,6 +398,11 @@ void SKInventoryFlatView::readItemRow(LLViewerInventoryItem* item, const SKInven
         row.mType = labels.mFolder;
         row.mImageID = linked_cat->getThumbnailUUID();
         row.mIcon = LLUI::getUIImage(LLViewerFolderType::lookupIconName(linked_cat->getPreferredType(), false));
+        row.mIsWorn = row.mTargetID == LLAppearanceMgr::instance().getBaseOutfitUUID();
+        if (row.mIsWorn)
+        {
+            row.mWornOn = labels.mWorn;
+        }
         return;
     }
 
@@ -756,6 +768,21 @@ void SKInventoryFlatView::prefetchImage(const LLUUID& image_id)
         const S32 h = llmax(small, (S32)texture->getHeight());
         texture->setKnownDrawSize(w, h);
         texture->addTextureStats((F32)(w * h));
+    }
+}
+
+void SKInventoryFlatView::nameStyle(const SKInventoryRow& row, bool copied, LLColor4& color, U8& style)
+{
+    static LLUIColor worn_color = LLUIColorTable::instance().getColor("WornOutfitTextColor");
+    style = LLFontGL::NORMAL;
+    if (row.mIsWorn)
+    {
+        color = worn_color.get();
+        style = LLFontGL::BOLD;
+    }
+    if (copied)
+    {
+        style |= LLFontGL::BOLD;
     }
 }
 

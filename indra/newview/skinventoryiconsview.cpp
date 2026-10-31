@@ -452,8 +452,10 @@ void SKInventoryIconsView::drawTile(const SKInventoryRow& row, const LLRect& rec
     }
 
     const LLFontGL* font = LLFontGL::getFontSansSerifSmall();
-    const LLColor4 color = (row.mIsLink ? dim_color.get() : text_color.get()) % tint.mV[VALPHA];
-    const U8 style = (row.mIsLink ? LLFontGL::ITALIC : LLFontGL::NORMAL) | (mark == SKInventoryExplorerActions::MARK_COPY ? LLFontGL::BOLD : 0);
+    LLColor4 color = text_color.get();
+    U8 style;
+    nameStyle(row, mark == SKInventoryExplorerActions::MARK_COPY, color, style);
+    color.mV[VALPHA] *= tint.mV[VALPHA];
     const S32 line = (S32)font->getLineHeight();
     S32 y = art_rect.mBottom - NAME_GAP;
     const size_t index = &row - mRows.data();

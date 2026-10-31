@@ -335,10 +335,9 @@ void SKInventoryListView::drawContent()
             {
                 LLColor4 color = text_color.get();
                 U8 style = LLFontGL::NORMAL;
-                if (col == COL_NAME && row.mIsLink)
+                if (col == COL_NAME)
                 {
-                    color = dim_color.get();
-                    style = LLFontGL::ITALIC;
+                    nameStyle(row, mark == SKInventoryExplorerActions::MARK_COPY, color, style);
                 }
                 else if (col == COL_WORN)
                 {
@@ -348,10 +347,6 @@ void SKInventoryListView::drawContent()
                 else if (col == COL_DESCRIPTION || col == COL_TYPE || col == COL_FOLDER)
                 {
                     color = dim_color.get();
-                }
-                if (col == COL_NAME && mark == SKInventoryExplorerActions::MARK_COPY)
-                {
-                    style |= LLFontGL::BOLD;
                 }
                 color.mV[VALPHA] *= fade;
                 font->renderUTF8(text, 0, (F32)x, (F32)middle, color, LLFontGL::LEFT, LLFontGL::VCENTER, style,

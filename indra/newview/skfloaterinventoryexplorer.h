@@ -268,6 +268,8 @@ private:
     void stepSearch();
     void pushSearchResults();
     void showInFolder(const LLUUID& id);
+    // Opens the folder of the object a link points to in a new tab, with the object selected.
+    void findOriginal(const LLUUID& link_id);
     void focusContent(bool select_first);
     // Builds the status text only when the search's state moved; true when it did.
     bool refreshSearchStatus();

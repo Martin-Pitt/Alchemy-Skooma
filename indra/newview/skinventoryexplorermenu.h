@@ -54,6 +54,12 @@ namespace SKInventoryExplorerActions
     bool canDelete(const uuid_vec_t& ids, const LLUUID& listed_folder_id);
     void deleteObjects(const uuid_vec_t& ids);
 
+    // Whether every one of ids is in the Trash, below its folder.
+    bool allInTrash(const uuid_vec_t& ids);
+    // As the bridges' "purge" and "restore": deletes for good, or moves an item back to its type's folder and a folder to the root.
+    void purge(const uuid_vec_t& ids);
+    void restore(const uuid_vec_t& ids);
+
     // The clipboard, as LLInventoryGallery's cut, copy and paste use it.
     bool canCopy(const uuid_vec_t& ids);
     void copy(const uuid_vec_t& ids);
@@ -114,6 +120,8 @@ public:
     void setListedFolder(const LLUUID& folder_id, bool root_mode) { mListedFolderID = folder_id; mRootMode = root_mode; }
     // Set while the menu is over search results: "Show in Folder" is offered and runs this.
     void setShowInFolderCallback(const id_callback_t& cb) { mShowInFolderCallback = cb; }
+    // Runs Find Original with the link's id: the floater opens the original in a tab of its own.
+    void setFindOriginalCallback(const id_callback_t& cb) { mFindOriginalCallback = cb; }
     // Gets each object New made, to select and rename it.
     void setCreatedCallback(const id_callback_t& cb) { mCreatedCallback = cb; }
 
@@ -131,6 +139,9 @@ protected:
     void doToSelected(const std::string& action);
     void updateMenuItemsVisibility(LLContextMenu* menu);
     void addIconRow(LLContextMenu* menu);
+    // Menus short enough to go without the icon row: the Trash's and what is in it, and an outfit's, as My Outfits gives it.
+    bool isTrashMenu() const;
+    bool isOutfitMenu() const;
     // Next to the point the menu opened at if the screen has room there, else beside the Explorer, on screen.
     void placeNearSpawn(LLFloater* floater);
     void addAttachmentPoints(LLContextMenu* menu);
@@ -143,6 +154,7 @@ protected:
     open_callback_t mOpenCallback;
     id_callback_t mRenameCallback;
     id_callback_t mShowInFolderCallback;
+    id_callback_t mFindOriginalCallback;
     id_callback_t mCreatedCallback;
     LLHandle<LLView> mSpawnView;
     S32 mSpawnX = 0;

@@ -924,16 +924,8 @@ void SKInventoryColumnsView::drawColumn(const Column& column, S32 index, S32 hei
 
         // The ghost's text is dim, brightening under the pointer.
         LLColor4 color = text_color.get();
-        U8 style = LLFontGL::NORMAL;
-        if (row.mIsLink)
-        {
-            color = dim_color.get();
-            style = LLFontGL::ITALIC;
-        }
-        if (mark == SKInventoryExplorerActions::MARK_COPY)
-        {
-            style |= LLFontGL::BOLD;
-        }
+        U8 style;
+        SKInventoryFlatView::nameStyle(row, mark == SKInventoryExplorerActions::MARK_COPY, color, style);
         color.mV[VALPHA] *= fade;
         font->renderUTF8(row.mName, 0, (F32)x, (F32)middle, color, LLFontGL::LEFT, LLFontGL::VCENTER, style,
                          LLFontGL::NO_SHADOW, S32_MAX, llmax(0, text_right - x), nullptr, LLFontGL::ELLIPSIS_MIDDLE);
