@@ -36,10 +36,13 @@
 #include "llfontgl.h"
 #include "llgltfmateriallist.h"
 #include "llgltfmaterialpreviewmgr.h"
+#include "llgesturemgr.h"
 #include "llhandmotion.h"
 #include "llinventorymodel.h"
+#include "llkeyboard.h"
 #include "lllandmark.h"
 #include "lllocalcliprect.h"
+#include "llmultigesture.h"
 #include "llrender2dutils.h"
 #include "llscrollbar.h"
 #include "lltooltip.h"
@@ -212,7 +215,7 @@ namespace
         return fetching ? LLViewerTextureManager::getFetchedTexture(id, FTT_DEFAULT, MIPMAP_YES, LLGLTexture::BOOST_NONE) : nullptr;
     }
 
-    // The types the player previews: textures and photos, sounds, animations, materials and landmarks.
+    // The types the player previews: textures and photos, sounds, animations, materials, landmarks and gestures.
     bool has_asset_preview(LLAssetType::EType type)
     {
         switch (type)
@@ -222,6 +225,7 @@ namespace
             case LLAssetType::AT_ANIMATION:
             case LLAssetType::AT_MATERIAL:
             case LLAssetType::AT_LANDMARK:
+            case LLAssetType::AT_GESTURE:
                 return true;
             default:
                 return false;
@@ -491,6 +495,10 @@ void SKInventoryPlayer::stop()
         }
     }
     mAnimMode = -1;
+    if (mGesture && LLGestureMgr::instanceExists())
+    {
+        LLGestureMgr::instance().stopGesture(mGesture.get());
+    }
     if (mSoundLocal && mSoundSource.notNull() && gAudiop)
     {
         if (LLAudioSource* source = gAudiop->findAudioSource(mSoundSource))
@@ -581,6 +589,7 @@ void SKInventoryPlayer::setItem(const LLUUID& item_id, const LLUUID& image_id)
     mTexture = nullptr;
     mMaterial = nullptr;
     mMaterialPreview = nullptr;
+    mGesture.reset();
     mMark = 0.f;
     mZoom = 1.f;
     mZoomShown = 1.f;
@@ -623,6 +632,9 @@ void SKInventoryPlayer::setItem(const LLUUID& item_id, const LLUUID& image_id)
         case LLAssetType::AT_LANDMARK:
             mKind = KIND_LANDMARK;
             break;
+        case LLAssetType::AT_GESTURE:
+            mKind = KIND_GESTURE;
+            break;
         default:
             break;
     }
@@ -642,6 +654,8 @@ S32 SKInventoryPlayer::height(S32 width) const
             return MEDIA_HEIGHT;
         case KIND_LANDMARK:
             return MAP_HEIGHT;
+        case KIND_GESTURE:
+            return BUTTON_HEIGHT;
         default:
             return 0;
     }
@@ -680,6 +694,9 @@ void SKInventoryPlayer::draw(const LLRect& rect, bool hovered)
             break;
         case KIND_LANDMARK:
             drawLandmark(rect);
+            break;
+        case KIND_GESTURE:
+            drawGesture(rect);
             break;
         default:
             break;
@@ -972,6 +989,47 @@ void SKInventoryPlayer::drawAnimation(const LLRect& rect)
     gl_rect_2d(x - 1, line.mTop - 3, x + 1, line.mBottom + 16, LLColor4(ACCENT.mV[0], ACCENT.mV[1], ACCENT.mV[2], weight), true);
 }
 
+void SKInventoryPlayer::drawGesture(const LLRect& rect)
+{
+    static LLPointer<LLUIImage> off = LLUI::getUIImage("PushButton_Off");
+    static LLPointer<LLUIImage> over = LLUI::getUIImage("PushButton_Over");
+    static LLPointer<LLUIImage> on = LLUI::getUIImage("PushButton_Selected");
+    static LLPointer<LLUIImage> play = LLUI::getUIImage("Play_Off");
+    static LLPointer<LLUIImage> stop_icon = LLUI::getUIImage("Stop_Off");
+    static LLPointer<LLUIImage> check_on = LLUI::getUIImage("Checkbox_On");
+    static LLPointer<LLUIImage> check_off = LLUI::getUIImage("Checkbox_Off");
+    static LLUIColor text_color = LLUIColorTable::instance().getColor("LabelTextColor");
+    static LLUIColor dim_color = LLUIColorTable::instance().getColor("LtGray_50");
+    const SKGestureInfo* info = SKInventoryAssets::gesture(mAssetID, mFetching);
+    const bool ready = info && info->mState == SK_ASSET_READY;
+    const bool playing = mGesture && LLGestureMgr::instance().isGesturePlaying(mGesture.get());
+    const bool active = LLGestureMgr::instance().isGestureActive(mItemID);
+    const S32 half = (rect.getWidth() - BUTTON_GAP) / 2;
+    const LLFontGL* font = LLFontGL::getFontSansSerifSmall();
+    const S32 icon = 14;
+    for (S32 i = 0; i < 2; ++i)
+    {
+        const S32 left = rect.mLeft + i * (half + BUTTON_GAP);
+        mButtons[i].set(left, rect.mBottom + BUTTON_HEIGHT, left + half, rect.mBottom);
+        LLUIImage* image = i == 0 && playing ? on.get() : (mHoverButton == i ? over.get() : off.get());
+        if (image)
+        {
+            image->draw(mButtons[i]);
+        }
+        const std::string label = SKInventoryDetails::str(i == 1 ? "gesture_active" : playing ? "player_stop" : "gesture_play");
+        LLUIImage* glyph = i == 1 ? (active ? check_on.get() : check_off.get()) : (playing ? stop_icon.get() : play.get());
+        const S32 total = icon + 4 + font->getWidth(label);
+        const S32 x = mButtons[i].getCenterX() - total / 2;
+        if (glyph)
+        {
+            glyph->draw(x, mButtons[i].getCenterY() - icon / 2, icon, icon);
+        }
+        // Play waits for the asset; Active does not need it.
+        const LLColor4 color = i == 0 && !ready ? dim_color.get() : text_color.get();
+        font->renderUTF8(label, 0, (S32)(x + icon + 4), (S32)mButtons[i].getCenterY(), color, LLFontGL::LEFT, LLFontGL::VCENTER);
+    }
+}
+
 void SKInventoryPlayer::drawMaterial(const LLRect& rect)
 {
     if (!mMaterial && mFetching && mAssetID.notNull())
@@ -1116,6 +1174,33 @@ void SKInventoryPlayer::pressButton(S32 index)
         mSoundTimer.reset();
         return;
     }
+    if (mKind == KIND_GESTURE)
+    {
+        if (index == 1)
+        {
+            if (LLGestureMgr::instance().isGestureActive(mItemID))
+            {
+                LLGestureMgr::instance().deactivateGesture(mItemID);
+            }
+            else
+            {
+                LLGestureMgr::instance().activateGesture(mItemID);
+            }
+            return;
+        }
+        const bool playing = mGesture && LLGestureMgr::instance().isGesturePlaying(mGesture.get());
+        stop();
+        if (playing)
+        {
+            return;
+        }
+        mGesture = SKInventoryAssets::makeGesture(mAssetID);
+        if (mGesture)
+        {
+            LLGestureMgr::instance().playGesture(mGesture.get());
+        }
+        return;
+    }
     if (mKind != KIND_ANIMATION)
     {
         return;
@@ -1152,7 +1237,7 @@ bool SKInventoryPlayer::handleMouseDown(S32 x, S32 y)
     {
         return false;
     }
-    if (mKind == KIND_SOUND || mKind == KIND_ANIMATION)
+    if (mKind == KIND_SOUND || mKind == KIND_ANIMATION || mKind == KIND_GESTURE)
     {
         for (S32 i = 0; i < 2; ++i)
         {
@@ -1198,7 +1283,7 @@ void SKInventoryPlayer::handleHover(S32 x, S32 y)
     }
     for (S32 i = 0; i < 2; ++i)
     {
-        if ((mKind == KIND_SOUND || mKind == KIND_ANIMATION) && mButtons[i].pointInRect(x, y))
+        if ((mKind == KIND_SOUND || mKind == KIND_ANIMATION || mKind == KIND_GESTURE) && mButtons[i].pointInRect(x, y))
         {
             mHoverButton = i;
         }
@@ -1233,6 +1318,18 @@ bool SKInventoryPlayer::handleScrollWheel(S32 x, S32 y, S32 clicks)
 
 bool SKInventoryPlayer::getToolTip(S32 x, S32 y, std::string& tip) const
 {
+    if (mKind == KIND_GESTURE)
+    {
+        for (S32 i = 0; i < 2; ++i)
+        {
+            if (mButtons[i].pointInRect(x, y))
+            {
+                tip = SKInventoryDetails::str(i == 0 ? "tip_gesture_play" : "tip_gesture_active");
+                return true;
+            }
+        }
+        return false;
+    }
     for (S32 i = 0; i < 2; ++i)
     {
         if ((mKind == KIND_SOUND || mKind == KIND_ANIMATION) && mButtons[i].pointInRect(x, y))
@@ -1538,6 +1635,24 @@ void SKInventoryDetailsView::addTypeRows(LLViewerInventoryItem* item, LLViewerIn
             {
                 const std::string path = llformat("%s/%d/%d/%d", region.c_str(), x, y, z);
                 addRow("row_slurl", path, "secondlife:///app/teleport/" + LLURI::escape(region) + llformat("/%d/%d/%d", x, y, z));
+            }
+            break;
+        }
+        case LLAssetType::AT_GESTURE:
+        {
+            addHeading("section_gesture");
+            const SKGestureInfo* info = SKInventoryAssets::gesture(asset_id, mFetching);
+            if (!info || info->mState != SK_ASSET_READY)
+            {
+                addRow("row_trigger", SKInventoryDetails::str(info && info->mState == SK_ASSET_FAILED ? "gesture_failed" : "loading"));
+                mPending = !info || info->mState == SK_ASSET_LOADING;
+                break;
+            }
+            addRow("row_trigger", info->mTrigger);
+            addRow("row_replace", info->mReplace);
+            if (info->mKey != KEY_NONE)
+            {
+                addRow("row_shortcut", LLKeyboard::stringFromAccelerator(info->mMask, info->mKey));
             }
             break;
         }

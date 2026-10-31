@@ -32,8 +32,10 @@
 #include "skinventoryflatview.h"
 
 #include <map>
+#include <memory>
 
 class LLFetchedGLTFMaterial;
+class LLMultiGesture;
 class LLScrollbar;
 class LLViewerFetchedTexture;
 class LLViewerInventoryItem;
@@ -61,8 +63,8 @@ namespace SKInventoryDetails
     void hideAspectMenu();
 }
 
-// Previews one item in a rect: an image, a sound's waveform, an animation's timeline, a material's sphere or a
-// landmark's map. Plays through the same calls the preview floaters make, without them.
+// Previews one item in a rect: an image, a sound's waveform, an animation's timeline, a material's sphere, a
+// landmark's map or a gesture's play and active buttons. Plays through the same calls the preview floaters make, without them.
 class SKInventoryPlayer
 {
 public:
@@ -74,6 +76,7 @@ public:
         KIND_ANIMATION,
         KIND_MATERIAL,
         KIND_LANDMARK,
+        KIND_GESTURE,
     };
 
     SKInventoryPlayer();
@@ -113,6 +116,7 @@ private:
     void drawAnimation(const LLRect& rect);
     void drawMaterial(const LLRect& rect);
     void drawLandmark(const LLRect& rect);
+    void drawGesture(const LLRect& rect);
     void drawButtons(const LLRect& rect);
     void drawMessage(const LLRect& rect, const std::string& text);
     LLRect waveRect() const;
@@ -153,6 +157,9 @@ private:
     S32 mAnimMode;  // -1 none, 0 locally, 1 inworld
     F64 mAnimStart;
     F64 mAnimStop;
+
+    // Gesture: our own copy, played whether or not the gesture is active.
+    std::unique_ptr<LLMultiGesture> mGesture;
 
     // Gallery zoom: eased to its target; the pointer's place over the stage picks the part shown.
     F32 mZoom;

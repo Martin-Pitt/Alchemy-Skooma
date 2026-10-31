@@ -617,8 +617,9 @@ bool SKFloaterInventoryExplorer::postBuild()
                              "row_length", "row_format", "row_loops", "row_priority", "row_ease", "row_joints", "row_hand_pose",
                              "row_expression", "row_base_colour", "row_metallic", "row_roughness", "row_alpha_mode",
                              "row_double_sided", "row_textures", "row_location", "row_region", "row_parcel", "row_position",
-                             "row_maturity", "row_slurl", "row_runtime", "row_experience", "section_image", "section_thumbnail", "section_sound",
-                             "section_animation", "section_material", "section_landmark", "channels_rgb", "channels_rgba",
+                             "row_maturity", "row_slurl", "row_runtime", "row_experience", "row_trigger", "row_replace", "row_shortcut",
+                             "section_image", "section_thumbnail", "section_sound",
+                             "section_animation", "section_material", "section_landmark", "section_gesture", "channels_rgb", "channels_rgba",
                              "sound_format", "sound_mono", "sound_stereo", "sound_failed", "animation_failed", "material_failed",
                              "anim_loop", "anim_loops_no", "anim_loops_whole", "anim_loops_range", "anim_overrides", "region_body",
                              "region_hands", "region_face", "region_wings", "region_tail", "region_hind", "alpha_opaque",
@@ -626,6 +627,7 @@ bool SKFloaterInventoryExplorer::postBuild()
                              "tip_landmark_loads", "map_loading", "runtime_mono", "runtime_lso", "runtime_lsl_luau", "runtime_slua",
                              "runtime_lsl", "tip_runtime_unknown", "experience_no_cap", "player_locally", "player_inworld",
                              "player_stop", "tip_sound_local", "tip_sound_inworld", "tip_anim_local", "tip_anim_inworld",
+                             "gesture_play", "gesture_active", "gesture_failed", "tip_gesture_play", "tip_gesture_active",
                              "tip_aspect", "aspect_library", "aspect_no_modify", "aspect_too_long", "aspect_bad_chars", "gallery_by", "gallery_resolution",
                              "gallery_resolution_full" })
     {
