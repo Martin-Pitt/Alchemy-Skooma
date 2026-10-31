@@ -22,6 +22,7 @@ lands, is offered or is merged.
 | `atmo/weather` | Atmo Magic | Weather cube, wind, precipitation | `atmo/clouds` | yes |
 | `atmo/water` | Atmo Magic | Water renderer | `atmo/weather` | ask Rye first |
 | `render/prim-split` | Its own feature | Untwisted flat-sided prims without the legacy edge splits; Render Tests A/B toggle; geometry-equivalence test | `render` | yes |
+| `fix-llcommon/queuedthread-wake-race` | Its own fix | `llqueuedthread_test` checks a woken request's turns only while its 250 ms fallback is not yet due (failed on stalled macOS CI) | `develop` | yes |
 | `audio/loudness-normalization` | Its own feature | BS.1770 loudness measured during decode, gain trim on playback | `develop` | undecided |
 | `ui/saturation` | Its own foundation | UI saturation on `LLRender` through `ALUISaturation` scopes; `uiF`/`solidcolorF` grey to Rec.709 luminance in gamma-2 light below 1, unchanged at 1 | `develop` | yes |
 | `ui/text-ellipsis` | Its own foundation | Text shortened to a width with the ellipsis at the end, middle (keeping both ends, biased to the end) or start; `LLFontGL` mode enum that still takes a bool, `ellipsis` XUI param on text, buttons, tabs and list cells/columns | `develop` | yes |
