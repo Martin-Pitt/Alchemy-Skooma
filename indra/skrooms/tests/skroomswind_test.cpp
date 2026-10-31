@@ -91,6 +91,13 @@ namespace
         const S32 flags8 = flags(e, 32.25f, 32.25f), spaces = static_cast<S32>(w.mRooms->mSpaces.size()),
                   courts = static_cast<S32>(w.mField->mCourt.size());
         CAPTURE(at8, at24, at40, flags8, spaces, courts);
+        // The lee is s / 32 here, so each factor over it is the venturi ratio along the lee.
+        std::string ratios;
+        for (F32 x = 24.25f; x < 40.f; x += 2.f)
+        {
+            ratios += llformat("%.1f:%.3f ", x, factor(e, x, 32.25f) / ((x - 24.f) / 32.f));
+        }
+        CAPTURE(ratios);
         { INFO("sheltered at 8 m"); REQUIRE((at8 > 0.15f && at8 < 0.4f)); }
         { INFO("recovering at 24 m"); REQUIRE((at24 > 0.6f && at24 < 0.9f)); }
         { INFO("free at 40 m"); REQUIRE((at40 > 0.9f)); }
