@@ -71,10 +71,10 @@ Every commit must be acceptable to the Alchemy project as-is. Every feature and 
 ```
 git skooma check .            # validate this branch
 git skooma integrate <name>   # land it along its chain (amend → feature → trunk → main); `.` for this branch
-git skooma sync .             # take develop into this branch's chain
+git skooma sync .             # take develop into this branch's chain (never an amend)
 ```
 
-The branch name comes first, flags after (`integrate <name> --force`). `integrate all`
+The branch name comes first, flags after (`integrate <name> --resolve`). `integrate all`
 and `sync all` touch every worktree and are the human's; never run them unasked. Read
 the landed list, and `git skooma undo` at once if it names a branch you did not mean.
 
@@ -88,6 +88,12 @@ merges it into the parent in the parent's worktree, then carries the parent on t
 trunk and `main`. An amend is never a PR on its own and is retired once its parent holds
 its work. Not a new branch from `develop`, not a new `feature-*`, not commits made ad hoc
 in another agent's feature worktree.
+
+An amend is only commits on its parent: `sync` skips it and it merges nothing, not even
+its parent (`check` refuses one that has). Where it conflicts with its parent,
+`integrate <amend> --resolve` leaves the merge in the parent's worktree for `--continue`.
+Integrating it is part of the job: an amend's work is done once it has landed, not once
+it is committed.
 
 Prefer clean lands: check first with `git merge-tree --write-tree --name-only main <branch>`.
 Where a main-bound land conflicts, resolving in the main checkout is allowed through
