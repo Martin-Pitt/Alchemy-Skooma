@@ -96,6 +96,19 @@ namespace
             ratios += llformat("%.1f:%.3f ", x, factor(e, x, 32.25f) / ((x - 24.f) / 32.f));
         }
         CAPTURE(ratios);
+        // The same slab with the venturi clamp opened, then shut at 1: the raw ratio, and the lee alone.
+        WindParams open_params, lee_params;
+        open_params.mVenturiMin = 0.f;
+        open_params.mVenturiMax = 8.f;
+        lee_params.mVenturiMin = lee_params.mVenturiMax = 1.f;
+        const WindSlabPtr open = computeWindSlab(*w.mField, w.mRooms.get(), 0.f, open_params);
+        const WindSlabPtr lee = computeWindSlab(*w.mField, w.mRooms.get(), 0.f, lee_params);
+        std::string raw;
+        for (F32 x = 24.25f; x < 40.f; x += 2.f)
+        {
+            raw += llformat("%.1f:%.3f/%.3f ", x, factor(open, x, 32.25f), factor(lee, x, 32.25f));
+        }
+        CAPTURE(raw);
         { INFO("sheltered at 8 m"); REQUIRE((at8 > 0.15f && at8 < 0.4f)); }
         { INFO("recovering at 24 m"); REQUIRE((at24 > 0.6f && at24 < 0.9f)); }
         { INFO("free at 40 m"); REQUIRE((at40 > 0.9f)); }
