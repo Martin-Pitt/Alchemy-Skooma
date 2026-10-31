@@ -824,7 +824,7 @@ namespace
     {
         // Level up to x = 21, then up at 40 %: the line runs through a 2 m, a 1 m and a 0.5 m block.
         const S32 crease = 21;
-        const AirGrid g = field([crease](S32 ix, S32) { return ix < crease ? 0 : static_cast<S32>(std::ceil(0.4 * (ix - crease + 0.5))); });
+        const AirGrid g = field([](S32 ix, S32) { return ix < crease ? 0 : static_cast<S32>(std::ceil(0.4 * (ix - crease + 0.5))); });
         TileAir air;
         distilAir(g, CLIMB, air);
         for (S32 iy = 0; iy < 64; ++iy)

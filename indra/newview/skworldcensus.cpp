@@ -357,7 +357,10 @@ void SKWorldCensus::update()
             if (enabled && mRolesWanted) requestRoles();
             return;
         }
-        auto done = mClusterJob.get();
+        FinishJob finished = mClusterJob.get();
+        // The finish's state stands whether or not its snapshot is published, as it did when the finish wrote it.
+        adoptFinish(finished);
+        auto done = std::move(finished.mSnapshot);
         SKCensusSnapshotPtr retired;
         if (!mDiscardClusterJob)
         {
@@ -679,11 +682,19 @@ void SKWorldCensus::visitTracked(LLViewerObject* object)
     const size_t features = mScan.mFeatureParts.size();
     // A full sweep checks what a re-take would have kept against what it finds; visit leaves mTaken as it was.
     bool watched = false;
+    static LLCachedControl<bool> log_missed(gSavedSettings, "SKCensusLogMissed", false);
+    std::vector<RecordPtr> before;
+    bool before_cached = false;
     if (mScanFull && !mScanDirty.count(id))
     {
         if (const auto it = mParts.find(id); it != mParts.end() && retakes(id, it->second))
         {
             watched = true;
+            if (log_missed)
+            {
+                before = it->second.mTaken;
+                before_cached = it->second.mFromObjectCache;
+            }
         }
     }
 
@@ -702,6 +713,10 @@ void SKWorldCensus::visitTracked(LLViewerObject* object)
     if (watched && !std::equal(cache.mTaken.begin(), cache.mTaken.end(), snap.mRecords.begin() + records, snap.mRecords.end()))
     {
         mScanMissed++;
+        if (log_missed)
+        {
+            logMissed(object, before, before_cached, snap.mRecords.begin() + records, snap.mRecords.end());
+        }
     }
     cache.mTaken.assign(snap.mRecords.begin() + records, snap.mRecords.end());
     cache.mHasFeature = mScan.mFeatureParts.size() > features;
@@ -728,6 +743,43 @@ void SKWorldCensus::visitTracked(LLViewerObject* object)
         mDirty.insert(id);
         mPendingQueued++;
     }
+}
+
+void SKWorldCensus::logMissed(LLViewerObject* object, const std::vector<RecordPtr>& before, bool before_cached,
+                              std::vector<RecordPtr>::const_iterator begin, std::vector<RecordPtr>::const_iterator end) const
+{
+    std::ostringstream diff;
+    const size_t after = static_cast<size_t>(end - begin);
+    if (before.size() != after)
+    {
+        diff << " records " << before.size() << "->" << after;
+    }
+    for (size_t i = 0; i < before.size() && i < after; ++i)
+    {
+        const Record& a = *before[i];
+        const Record& b = **(begin + i);
+        std::ostringstream fields;
+        if (a.mRoot != b.mRoot) fields << " root";
+        if (a.mRole != b.mRole) fields << " role " << S32(a.mRole) << "->" << S32(b.mRole);
+        if (a.mProvenance != b.mProvenance) fields << " provenance";
+        if (a.mNavRole != b.mNavRole) fields << " navrole " << S32(a.mNavRole) << "->" << S32(b.mNavRole);
+        if (a.mShape != b.mShape) fields << " shape " << S32(a.mShape) << "->" << S32(b.mShape);
+        if (a.mDynamic != b.mDynamic) fields << " dynamic " << a.mDynamic << "->" << b.mDynamic;
+        if (a.mSolid != b.mSolid) fields << " solid";
+        if (a.mCollides != b.mCollides) fields << " collides " << a.mCollides << "->" << b.mCollides;
+        if (a.mPhysicsKnown != b.mPhysicsKnown) fields << " physics-known " << a.mPhysicsKnown << "->" << b.mPhysicsKnown;
+        if (a.mFeature != b.mFeature) fields << " feature " << S32(a.mFeature) << "->" << S32(b.mFeature);
+        if (a.mExclude != b.mExclude) fields << " exclude " << S32(a.mExclude) << "->" << S32(b.mExclude);
+        if (a.mOrigin != b.mOrigin) fields << " origin";
+        if (a.mMin != b.mMin || a.mMax != b.mMax) fields << " bounds " << dist_vec(a.mMin, b.mMin) << "/" << dist_vec(a.mMax, b.mMax);
+        if (a.mSignature != b.mSignature) fields << " signature";
+        const std::string text = fields.str();
+        diff << " [" << i << ":" << (text.empty() ? " new pointer" : text) << "]";
+    }
+    LLViewerObject* root = rootOf(object);
+    LL_INFOS("SKCensus") << "census missed part " << object->getID() << " root " << root->getID() << " region "
+                         << (object->getRegion() ? object->getRegion()->getName() : std::string("-")) << " live, was "
+                         << (before_cached ? "from object cache" : "live") << ":" << diff.str() << LL_ENDL;
 }
 
 bool SKWorldCensus::pending(LLViewerObject* object, const PartCache& cache) const
@@ -969,58 +1021,48 @@ void SKWorldCensus::finishScan()
         LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - finish crew");
         gatherCrew();
     }
+    FeatureParams params;
+    params.mClassHeight = isAgentAvatarValid() ? llclamp(gAgentAvatarp->mBodySize.mV[VZ], 1.f, 3.f) : 2.f;
+    std::vector<FeatureRoot> roots;
     {
         LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - finish classify");
-        classify(*done);
+        roots = featureRoots(params);
     }
     done->mStats.mFeatureMs = timer.getElapsedTimeF32() * 1000.f;
 
-    {
-        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - finish prune");
-        // Parts and roots not seen for a minute leave the caches, and a root's
-        // history ten minutes out of sight unless it is a vehicle or a working
-        // car; a seat is cheap to find again.
-        for (auto it = mHistory.begin(); it != mHistory.end();)
-        {
-            const bool keep = it->second.mVehicle || it->second.mWorkingElevator
-                || gFrameTimeSeconds - it->second.mLastSeen <= HISTORY_KEEP_SECONDS;
-            it = keep ? std::next(it) : mHistory.erase(it);
-        }
-        for (auto it = mLeaves.begin(); it != mLeaves.end();)
-        {
-            it = (gFrameTimeSeconds - it->second.mLastSeen > HISTORY_KEEP_SECONDS) ? mLeaves.erase(it) : std::next(it);
-        }
-        for (auto it = mDoorways.begin(); it != mDoorways.end();)
-        {
-            it = mLeaves.count(it->first) ? std::next(it) : mDoorways.erase(it);
-        }
-        for (auto it = mParts.begin(); it != mParts.end();)
-        {
-            it = (gFrameTimeSeconds - it->second.mLastSeen > 60.f) ? mParts.erase(it) : std::next(it);
-        }
-        for (auto it = mDecoded.begin(); it != mDecoded.end();)
-        {
-            it = (gFrameTimeSeconds - it->second.mUsed > 60.f) ? mDecoded.erase(it) : std::next(it);
-        }
-        for (auto it = mUnknownSince.begin(); it != mUnknownSince.end();)
-        {
-            it = mParts.count(it->first) ? std::next(it) : mUnknownSince.erase(it);
-        }
-        for (auto it = mRest.begin(); it != mRest.end();)
-        {
-            it = (gFrameTimeSeconds - it->second.mLastSeen > 60.f) ? mRest.erase(it) : std::next(it);
-        }
-    }
     if (!mClusterWorkers)
     {
         mClusterWorkers = std::make_unique<LL::ThreadPool>("CensusClusters", 1);
         mClusterWorkers->start();
     }
+    // The caches the feature rules keep go with the job, and no scan runs until it returns them.
+    auto job = std::make_shared<FinishJob>();
+    job->mSnapshot = done;
+    job->mFaceCover = std::move(mFaceCover);
+    job->mLeaves = std::move(mLeaves);
+    job->mDoorways = std::move(mDoorways);
+    job->mFinishedAt = gFrameTimeSeconds.value();
+    mFaceCover = skworld::FaceCoverCache();
+    mLeaves.clear();
+    mDoorways.clear();
+    auto parts = std::make_shared<std::vector<FeaturePart>>(std::move(mScan.mFeatureParts));
+    auto transforms = std::make_shared<std::unordered_map<LLUUID, LeafTransform>>(std::move(mLeafTransforms));
+    mScan.mFeatureParts.clear();
+    mLeafTransforms.clear();
     // All viewer-derived data is now detached. The worker owns this unpublished
     // snapshot and never accesses the census, settings or live viewer objects.
-    auto task = std::make_shared<std::packaged_task<std::shared_ptr<SKCensusSnapshot>()>>(
-        [done, prev = mSnapshot, cluster_gap = static_cast<F32>(gap), window]() mutable
+    auto task = std::make_shared<std::packaged_task<FinishJob()>>(
+        [job, parts, transforms, roots = std::move(roots), params, prev = mSnapshot, cluster_gap = static_cast<F32>(gap), window]() mutable
         {
+            const std::shared_ptr<SKCensusSnapshot>& done = job->mSnapshot;
+            {
+                LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - classify worker");
+                LLTimer timer;
+                classifyJob(*job, *parts, roots, params, *transforms);
+                done->mStats.mFeatureMs += timer.getElapsedTimeF32() * 1000.f;
+                parts.reset();
+                transforms.reset();
+            }
             {
                 // The delta is against the snapshot published when this scan finished: one job is in flight at a time.
                 LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - delta worker");
@@ -1034,7 +1076,7 @@ void SKWorldCensus::finishScan()
             LLTimer timer;
             done->mClusters = cluster(done->mRecords, cluster_gap, skworld::TILE_M, window);
             done->mStats.mClusterMs = timer.getElapsedTimeF32() * 1000.f;
-            return done;
+            return std::move(*job);
         });
     auto future = task->get_future();
     if (!LL::WorkQueue::getInstance("CensusClusters")->tryPost([task]() { (*task)(); }))
@@ -1084,6 +1126,7 @@ bool SKWorldCensus::classifyRest(const LLUUID& root, const LLVector3d& pos, cons
         rest.mPosition = pos;
         rest.mRotation = rot;
     }
+    const bool was_known = rest.mKnown;
     rest.mLastSeen = gFrameTimeSeconds;
     rest.mKnown = true;
     if (const auto it = mHistory.find(root); it != mHistory.end())
@@ -1091,7 +1134,17 @@ bool SKWorldCensus::classifyRest(const LLUUID& root, const LLVector3d& pos, cons
         it->second.mLastSeen = gFrameTimeSeconds;
     }
     // A one-off move, an edit or a rez, is landscape at once where it now stands; only a mover waits out the settle.
-    return gFrameTimeSeconds < rest.mMoverUntil && rest.mMovedAt >= 0.f && gFrameTimeSeconds - rest.mMovedAt < settle;
+    const bool moving = gFrameTimeSeconds < rest.mMoverUntil && rest.mMovedAt >= 0.f && gFrameTimeSeconds - rest.mMovedAt < settle;
+    if (was_known && moving != rest.mMoving)
+    {
+        // Every part is signed dynamic by its root's rest, so the parts no update dirtied are stale too.
+        if (LLViewerObject* object = gObjectList.findObject(root); object && !object->isDead())
+        {
+            dirtyLinkset(object);
+        }
+    }
+    rest.mMoving = moving;
+    return moving;
 }
 
 bool SKWorldCensus::isSurround(bool local_only, const LLVector3d& mn, const LLVector3d& mx) const
@@ -1287,6 +1340,13 @@ void SKWorldCensus::visitPart(const PartFacts& facts, LLVOVolume* live)
     SKPhysicsShape shape;
     const bool hasPhysics = skPhysicsShapeClassify(facts.mShape, shape);
     if (!hasPhysics && !surround)
+    {
+        collides = false;
+    }
+    // TODO: a sculpt collides as its sculpted shape unless its type is None,
+    // which only the sim knows; until that is probed (llCastRay) or guessed
+    // (a sphere, say), sculpts are taken as None, being rare and often shapeless.
+    if (facts.mShape.mSculpted && !facts.mShape.mMesh && !surround)
     {
         collides = false;
     }
@@ -1756,11 +1816,8 @@ void SKWorldCensus::gatherCrew()
     }
 }
 
-void SKWorldCensus::classify(SKCensusSnapshot& snap)
+std::vector<FeatureRoot> SKWorldCensus::featureRoots(const FeatureParams& params)
 {
-    FeatureParams params;
-    params.mClassHeight = isAgentAvatarValid() ? llclamp(gAgentAvatarp->mBodySize.mV[VZ], 1.f, 3.f) : 2.f;
-
     // Every root with a part in the scan, and every root that has had crew:
     // a physical vehicle never passes the gate, and is still one.
     std::vector<LLUUID> ids;
@@ -1877,58 +1934,69 @@ void SKWorldCensus::classify(SKCensusSnapshot& snap)
             roots.push_back(std::move(r));
         }
     }
+    return roots;
+}
 
+void SKWorldCensus::classifyJob(FinishJob& job, std::vector<FeaturePart>& parts, const std::vector<FeatureRoot>& roots,
+                                const FeatureParams& params, std::unordered_map<LLUUID, LeafTransform>& transforms)
+{
     // Only a door-shaped part with something to say for it is worth the rays.
     {
         LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - classify face cover");
+        SKCensusSnapshot& snap = *job.mSnapshot;
         const skworld::RecordIndex index(snap.mRecords);
-        for (FeaturePart& p : mScan.mFeatureParts)
+        for (FeaturePart& p : parts)
         {
             if ((p.mScripted || p.mTouch || !p.mName.empty()) && doorShaped(p, params))
             {
-                p.mFaceCover = mFaceCover.measure(p, index, params);
+                p.mFaceCover = job.mFaceCover.measure(p, index, params);
             }
         }
-        mFaceCover.prune();
+        job.mFaceCover.prune();
     }
     {
         LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - classify features");
-        snap.mFeatures = classifyFeatures(mScan.mFeatureParts, roots, params);
+        job.mSnapshot->mFeatures = classifyFeatures(parts, roots, params);
     }
-    snap.mStats.mFeatures = static_cast<U32>(snap.mFeatures.size());
+    job.mSnapshot->mStats.mFeatures = static_cast<U32>(job.mSnapshot->mFeatures.size());
     // A leaf is watched from the scan it is first a door, and stays watched
     // while it swings, when the rules may not call it one.
     std::unordered_set<LLUUID> leaves;
-    for (const Feature& f : snap.mFeatures)
+    for (const Feature& f : job.mSnapshot->mFeatures)
     {
         if (f.mKind == FeatureKind::DOOR)
         {
             leaves.insert(f.mParts.begin(), f.mParts.end());
         }
     }
-    for (const FeaturePart& p : mScan.mFeatureParts)
+    for (const FeaturePart& p : parts)
     {
-        if (leaves.count(p.mPart) || mLeaves.count(p.mPart))
+        if (leaves.count(p.mPart) || job.mLeaves.count(p.mPart))
         {
-            LeafHistory& history = mLeaves[p.mPart];
-            observeLeaf(history, p, static_cast<F32>(gFrameTimeSeconds.value()));
-            if (const auto tit = mLeafTransforms.find(p.mPart); tit != mLeafTransforms.end() && atEstablishedDoorway(history))
+            LeafHistory& history = job.mLeaves[p.mPart];
+            observeLeaf(history, p, static_cast<F32>(job.mFinishedAt));
+            if (const auto tit = transforms.find(p.mPart); tit != transforms.end() && atEstablishedDoorway(history))
             {
-                mDoorways[p.mPart] = tit->second;
+                job.mDoorways[p.mPart] = tit->second;
             }
         }
     }
-    mLeafTransforms.clear();
     {
         LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - classify doors");
-        snap.mDoors = buildDoorEntities(snap.mFeatures, mScan.mFeatureParts, roots, &mLeaves);
+        job.mSnapshot->mDoors = buildDoorEntities(job.mSnapshot->mFeatures, parts, roots, &job.mLeaves);
     }
+}
 
+void SKWorldCensus::adoptFinish(FinishJob& job)
+{
+    mFaceCover = std::move(job.mFaceCover);
+    mLeaves = std::move(job.mLeaves);
+    mDoorways = std::move(job.mDoorways);
     // What the next scan records each part with, and what stays with a root
     // for the session: a vehicle stays one, a working car stays working.
     std::unordered_map<LLUUID, PartFeature> before = std::move(mPartFeatures);
     mPartFeatures.clear();
-    for (const Feature& f : snap.mFeatures)
+    for (const Feature& f : job.mSnapshot->mFeatures)
     {
         const U8 exclude = excludeFor(f.mKind);
         for (const LLUUID& part : f.mParts)
@@ -1971,7 +2039,45 @@ void SKWorldCensus::classify(SKCensusSnapshot& snap)
             mDirty.insert(entry.first);
         }
     }
-    mScan.mFeatureParts.clear();
+
+    // The caches age as of the finish, as they did when it pruned them.
+    const F64 now = job.mFinishedAt;
+    {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - finish prune");
+        // Parts and roots not seen for a minute leave the caches, and a root's
+        // history ten minutes out of sight unless it is a vehicle or a working
+        // car; a seat is cheap to find again.
+        for (auto it = mHistory.begin(); it != mHistory.end();)
+        {
+            const bool keep = it->second.mVehicle || it->second.mWorkingElevator
+                || now - it->second.mLastSeen <= HISTORY_KEEP_SECONDS;
+            it = keep ? std::next(it) : mHistory.erase(it);
+        }
+        for (auto it = mLeaves.begin(); it != mLeaves.end();)
+        {
+            it = (now - it->second.mLastSeen > HISTORY_KEEP_SECONDS) ? mLeaves.erase(it) : std::next(it);
+        }
+        for (auto it = mDoorways.begin(); it != mDoorways.end();)
+        {
+            it = mLeaves.count(it->first) ? std::next(it) : mDoorways.erase(it);
+        }
+        for (auto it = mParts.begin(); it != mParts.end();)
+        {
+            it = (now - it->second.mLastSeen > 60.f) ? mParts.erase(it) : std::next(it);
+        }
+        for (auto it = mDecoded.begin(); it != mDecoded.end();)
+        {
+            it = (now - it->second.mUsed > 60.f) ? mDecoded.erase(it) : std::next(it);
+        }
+        for (auto it = mUnknownSince.begin(); it != mUnknownSince.end();)
+        {
+            it = mParts.count(it->first) ? std::next(it) : mUnknownSince.erase(it);
+        }
+        for (auto it = mRest.begin(); it != mRest.end();)
+        {
+            it = (now - it->second.mLastSeen > 60.f) ? mRest.erase(it) : std::next(it);
+        }
+    }
 }
 
 void SKWorldCensus::requestRoles()
@@ -2298,154 +2404,4 @@ void SKWorldCensus::removeCensusSection(const std::string& name)
 {
     mSections.erase(std::remove_if(mSections.begin(), mSections.end(), [&name](const CensusSection& s) { return s.mName == name; }),
                     mSections.end());
-}
-
-namespace
-{
-    /// Every root the records name, with what the viewer already knows of it: the
-    /// region's linkset reply first, else the object properties cache. `named` counts those with a name.
-    std::vector<CensusRoot> rootTable(const SKWorldCensus& census, const std::vector<RecordPtr>& records, size_t& named)
-    {
-        std::vector<CensusRoot> out;
-        std::set<LLUUID> seen;
-        named = 0;
-        for (const RecordPtr& record : records)
-        {
-            if (!seen.insert(record->mRoot).second)
-            {
-                continue;
-            }
-            CensusRoot root;
-            root.mId = record->mRoot;
-            if (const SKWorldCensus::LinksetFacts* facts = census.linksetFactsOf(root.mId))
-            {
-                root.mScriptedKnown = facts->mScriptedKnown;
-                root.mScripted = facts->mScripted;
-                if (!facts->mName.empty())
-                {
-                    root.mName = facts->mName;
-                    root.mDescription = capDescription(facts->mDescription);
-                    root.mSource = NameSource::LINKSET;
-                }
-            }
-            if (root.mSource == NameSource::NONE)
-            {
-                if (const ALObjectPropertiesCache::ServerProps* props = ALObjectPropertiesCache::instance().get(root.mId))
-                {
-                    if (!props->mName.empty())
-                    {
-                        root.mName = props->mName;
-                        root.mDescription = capDescription(props->mDescription);
-                        root.mSource = NameSource::PROPERTIES;
-                    }
-                }
-            }
-            named += root.mSource != NameSource::NONE;
-            out.push_back(std::move(root));
-        }
-        return out;
-    }
-}
-
-std::string SKWorldCensus::exportCensus() const
-{
-    if (!LLWorld::instanceExists())
-    {
-        return "no world";
-    }
-    SKCensusSnapshotPtr snap = mSnapshot;
-    if (!snap)
-    {
-        return "no census yet";
-    }
-    static LLCachedControl<F32> gap(gSavedSettings, "SKCensusClusterGap", 0.5f);
-    static LLCachedControl<F32> void_margin(gSavedSettings, "SKCensusVoidMargin", 256.f);
-
-    LLTimer timer;
-    CensusFile census;
-    census.mExported = LLDate::now().asString();
-    census.mStamp = snap->mStamp;
-    census.mAgent = gAgent.getPositionGlobal();
-    census.mCamera = gAgent.getPosGlobalFromAgent(LLViewerCamera::getInstance()->getOrigin());
-    census.mRange = snap->mRange;
-    census.mClusterGap = gap;
-    census.mVoidMargin = void_margin;
-
-    // One phase for every region's samples: the one a layer's terrain windows read at.
-    const F64 phase = mTerrainPhase;
-    for (LLViewerRegion* region : LLWorld::getInstance()->getRegionList())
-    {
-        CensusRegion r;
-        r.mId = region->getRegionID();
-        r.mHandle = region->getHandle();
-        r.mOrigin = region->getOriginGlobal();
-        r.mName = region->getName();
-        r.mWidth = region->getWidth();
-        r.mWater = region->getWaterHeight();
-        LLSurface& land = region->getLand();
-        r.mLandMin = land.getMinZ();
-        r.mLandMax = land.getMaxZ();
-        r.mPhase = static_cast<F32>(phase);
-        r.mSamples = static_cast<S32>(std::ceil(r.mWidth - phase));
-        r.mZ.resize(static_cast<size_t>(r.mSamples) * r.mSamples);
-        for (S32 y = 0; y < r.mSamples; ++y)
-        {
-            for (S32 x = 0; x < r.mSamples; ++x)
-            {
-                const LLVector3d p(r.mOrigin.mdV[VX] + phase + x, r.mOrigin.mdV[VY] + phase + y, 0.0);
-                r.mZ[static_cast<size_t>(y) * r.mSamples + x] = land.resolveHeightGlobal(p);
-            }
-        }
-        census.mRegions.push_back(std::move(r));
-    }
-
-    census.mRecords = snap->mRecords;
-    std::unordered_map<const Record*, U32> index;
-    for (size_t i = 0; i < census.mRecords.size(); ++i)
-    {
-        index[census.mRecords[i].get()] = static_cast<U32>(i);
-    }
-    for (const ClusterPtr& c : snap->mClusters.mClusters)
-    {
-        CensusCluster cl;
-        cl.mId = c->mId;
-        cl.mGrounded = grounded(c->mMin, c->mMax);
-        for (const RecordPtr& r : c->mRecords)
-        {
-            const auto found = index.find(r.get());
-            if (found != index.end())
-            {
-                cl.mRecords.push_back(found->second);
-            }
-        }
-        census.mClusters.push_back(std::move(cl));
-    }
-    census.mFeatures = snap->mFeatures;
-    census.mDoors = snap->mDoors;
-    size_t named = 0;
-    census.mRoots = rootTable(*this, census.mRecords, named);
-
-    // Milliseconds in the name, so two exports in one second both survive.
-    const auto now = std::chrono::system_clock::now();
-    const std::time_t secs = std::chrono::system_clock::to_time_t(now);
-    const S32 millis = static_cast<S32>(std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count() % 1000);
-    char stamp[32];
-    std::strftime(stamp, sizeof(stamp), "%Y%m%dT%H%M%S", std::gmtime(&secs));
-    const std::string path = gDirUtilp->getExpandedFilename(LL_PATH_LOGS, llformat("sk-census-%s.%03dZ.json", stamp, millis));
-    llofstream file(path, std::ios::out | std::ios::binary | std::ios::trunc);
-    if (!file.is_open())
-    {
-        return llformat("could not write %s", path.c_str());
-    }
-    writeCensus(file, census, mSections);
-    const std::streamoff bytes = file.tellp();
-    file.close();
-
-    // All of it on the main thread, which a large census keeps well under half a second; the time is reported to keep that honest.
-    const F32 ms = timer.getElapsedTimeF32() * 1000.f;
-    LL_INFOS("SKCensus") << "wrote " << bytes << " bytes to " << path << " in " << ms << " ms, " << named << " of " << census.mRoots.size()
-                         << " roots named" << LL_ENDL;
-    return llformat("%zu records, %zu clusters, %zu regions, %zu doors, %zu features, %zu sections, %zu/%zu roots named (%.1f MB, %.0f ms) -> %s",
-                    census.mRecords.size(), census.mClusters.size(), census.mRegions.size(), census.mDoors.size(), census.mFeatures.size(),
-                    mSections.size(), named, census.mRoots.size(), static_cast<F64>(bytes) / (1024.0 * 1024.0), ms, path.c_str());
 }

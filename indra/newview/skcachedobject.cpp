@@ -135,7 +135,8 @@ bool skDecodeCachedObject(const LLVOCacheEntry& entry, SKCachedObject& out)
         S32 param_size = 0;
         ok = dp.unpackU16(param_type, "param_type")
             && dp.unpackBinaryData(param_block, MAX_PARAM_SIZE, param_size, "param_data");
-        if (ok && param_type == LLNetworkData::PARAMS_SCULPT)
+        // A mesh may carry its id under PARAMS_MESH, which unpackParameterEntry reads as the sculpt.
+        if (ok && (param_type == LLNetworkData::PARAMS_SCULPT || param_type == LLNetworkData::PARAMS_MESH))
         {
             LLSculptParams sculpt;
             LLDataPackerBinaryBuffer dp2(param_block, param_size);
