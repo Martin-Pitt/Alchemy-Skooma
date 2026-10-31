@@ -27,6 +27,7 @@
 #include "llviewerprecompiledheaders.h"
 #include "llagentcamera.h"
 #include "skmodalview.h" // <SK:Nexii> modal view
+#include "skworldmapmath.h" // <SK:Nexii> 3D world map
 
 #include "pipeline.h"
 
@@ -1486,6 +1487,13 @@ void LLAgentCamera::updateCamera()
             camera_pos_global = lerp(camera_start_global, camera_target_global, smooth_fraction_of_animation);
             mFocusGlobal = lerp(focus_start_global, focus_target_global, smooth_fraction_of_animation);
             // </SK:Nexii>
+            // <SK:Nexii> 3D world map: an orbiting animation turns and backs away instead of sliding.
+            if (mCameraOrbiting)
+            {
+                skworldmap::orbitCamera(mAnimationCameraStartGlobal, mAnimationFocusStartGlobal, camera_target_global, focus_target_global,
+                                        smooth_fraction_of_animation, camera_pos_global, mFocusGlobal);
+            }
+            // </SK:Nexii>
         }
         else
         {
@@ -2874,6 +2882,7 @@ void LLAgentCamera::startCameraAnimation()
     mAnimationTimer.reset();
     mCameraAnimating = true;
     mCameraWarping = false; // <SK:Nexii> camera warp
+    mCameraOrbiting = false; // <SK:Nexii> 3D world map
 }
 
 // <SK:Nexii> camera warp: restarts the animation from where the camera is, as a warp.
@@ -2902,6 +2911,13 @@ void LLAgentCamera::stopCameraAnimation()
 {
     mCameraAnimating = false;
 }
+
+// <SK:Nexii> 3D world map: the animation just started orbits rather than slides.
+void LLAgentCamera::orbitCameraAnimation()
+{
+    mCameraOrbiting = mCameraAnimating;
+}
+// </SK:Nexii>
 
 // <SK:Nexii> modal view: the next update puts the camera on its target, as LL's own pans do.
 void LLAgentCamera::skipCameraSmoothing()

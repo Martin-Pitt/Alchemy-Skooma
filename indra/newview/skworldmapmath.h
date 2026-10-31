@@ -131,6 +131,11 @@ namespace skworldmap
     /// The tile `up` levels coarser that contains `key`, and where `key` lies in its texture (u0, v0, u1, v1).
     TileKey ancestor(const TileKey& key, S32 up, F32 uv[4]);
 
+    /// The camera at fraction t of a move that orbits rather than slides: the focus glides, heading and pitch
+    /// turn the short way round and the distance scales geometrically, so the view turns while backing away.
+    void orbitCamera(const LLVector3d& eye0, const LLVector3d& focus0, const LLVector3d& eye1, const LLVector3d& focus1, F64 t,
+                     LLVector3d& eye, LLVector3d& focus);
+
     /// The screen direction a stack of dots grows in, from world up in view space (x right, y up,
     /// z toward the viewer). Seen from straight above world up has no screen direction, so it blends to screen up.
     LLVector2 stackDirection(const LLVector3d& up_in_view);

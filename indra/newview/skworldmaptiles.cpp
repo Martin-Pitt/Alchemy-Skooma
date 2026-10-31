@@ -64,33 +64,79 @@ SKWorldMapTiles::Entry* SKWorldMapTiles::find(const TileKey& key)
     return it == mTiles.end() ? nullptr : &it->second;
 }
 
-bool SKWorldMapTiles::resolve(const SelectedTile& tile, F64 now, Draw& out)
+void SKWorldMapTiles::use(Entry& e, const TileKey& cover, const F32 uv[4], F64 now, std::vector<Draw>& out)
+{
+    // A stand-in is kept loaded and fresh as long as it stands in, or it would leave before the tile it covers for.
+    e.mLastUsed = now;
+    e.raise();
+    Draw& d = out.emplace_back();
+    d.mTexture = e.mImage.get();
+    d.mCover = cover;
+    std::copy(uv, uv + 4, d.mUV);
+}
+
+void SKWorldMapTiles::addDescendants(const TileKey& key, S32 depth, F64 now, std::vector<Draw>& out)
+{
+    if (depth <= 0 || key.mLevel <= 1)
+    {
+        return;
+    }
+    static constexpr F32 FULL[4] = { 0.f, 0.f, 1.f, 1.f };
+    const S32 half = key.regionsPerSide() / 2;
+    for (S32 j = 0; j < 2; ++j)
+    {
+        for (S32 i = 0; i < 2; ++i)
+        {
+            TileKey child;
+            child.mLevel = key.mLevel - 1;
+            child.mGridX = key.mGridX + i * half;
+            child.mGridY = key.mGridY + j * half;
+            Entry* e = find(child);
+            if (e && isReady(*e))
+            {
+                use(*e, child, FULL, now, out);
+            }
+            else if (!e || !e->mMissing)
+            {
+                addDescendants(child, depth - 1, now, out);
+            }
+        }
+    }
+}
+
+bool SKWorldMapTiles::resolve(const SelectedTile& tile, F64 now, std::vector<Draw>& out)
 {
     mWanted.push_back(tile);
-    for (S32 up = 0; tile.mKey.mLevel + up <= TILE_LEVELS; ++up)
+    const size_t start = out.size();
+    if (Entry* e = find(tile.mKey))
     {
-        F32 uv[4] = { 0.f, 0.f, 1.f, 1.f };
-        const TileKey key = up == 0 ? tile.mKey : ancestor(tile.mKey, up, uv);
-        Entry* e = find(key);
-        if (!e)
-        {
-            continue;
-        }
-        if (up == 0 && e->mMissing)
+        if (e->mMissing)
         {
             // Nothing there: open water or no region. The background shows through.
             return false;
         }
         if (isReady(*e))
         {
-            e->mLastUsed = now;
-            e->raise();
-            out.mTexture = e->mImage.get();
-            std::copy(uv, uv + 4, out.mUV);
+            static constexpr F32 FULL[4] = { 0.f, 0.f, 1.f, 1.f };
+            use(*e, tile.mKey, FULL, now, out);
             return true;
         }
     }
-    return false;
+    // Zooming in: the coarser tile it shows a part of lies underneath.
+    for (S32 up = 1; tile.mKey.mLevel + up <= TILE_LEVELS; ++up)
+    {
+        F32 uv[4];
+        const TileKey key = ancestor(tile.mKey, up, uv);
+        Entry* e = find(key);
+        if (e && isReady(*e))
+        {
+            use(*e, tile.mKey, uv, now, out);
+            break;
+        }
+    }
+    // Zooming out: the finer tiles it is made of are drawn over that.
+    addDescendants(tile.mKey, FALLBACK_LEVELS_DOWN, now, out);
+    return out.size() > start;
 }
 
 void SKWorldMapTiles::update(F64 now)

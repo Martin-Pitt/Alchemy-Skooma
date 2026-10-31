@@ -249,6 +249,31 @@ TileKey ancestor(const TileKey& key, S32 up, F32 uv[4])
     return a;
 }
 
+void orbitCamera(const LLVector3d& eye0, const LLVector3d& focus0, const LLVector3d& eye1, const LLVector3d& focus1, F64 t,
+                 LLVector3d& eye, LLVector3d& focus)
+{
+    focus = focus0 + (focus1 - focus0) * t;
+    const LLVector3d d0 = eye0 - focus0;
+    const LLVector3d d1 = eye1 - focus1;
+    const F64 r0 = d0.magVec();
+    const F64 r1 = d1.magVec();
+    if (r0 < 1.0e-3 || r1 < 1.0e-3)
+    {
+        eye = eye0 + (eye1 - eye0) * t;
+        return;
+    }
+    const F64 yaw1 = std::atan2(d1.mdV[VY], d1.mdV[VX]);
+    // Looking straight up or down has no heading of its own; take the target's.
+    const bool level0 = std::fabs(d0.mdV[VX]) + std::fabs(d0.mdV[VY]) > 1.0e-6 * r0;
+    const F64 yaw0 = level0 ? std::atan2(d0.mdV[VY], d0.mdV[VX]) : yaw1;
+    const F64 yaw = yaw0 + std::remainder(yaw1 - yaw0, 2.0 * 3.141592653589793) * t;
+    const F64 pitch0 = std::asin(clampd(d0.mdV[VZ] / r0, -1.0, 1.0));
+    const F64 pitch1 = std::asin(clampd(d1.mdV[VZ] / r1, -1.0, 1.0));
+    const F64 pitch = pitch0 + (pitch1 - pitch0) * t;
+    const F64 r = r0 * std::pow(r1 / r0, t);
+    eye = focus + LLVector3d(std::cos(pitch) * std::cos(yaw), std::cos(pitch) * std::sin(yaw), std::sin(pitch)) * r;
+}
+
 LLVector2 stackDirection(const LLVector3d& up_in_view)
 {
     const F64 ux = up_in_view.mdV[VX];

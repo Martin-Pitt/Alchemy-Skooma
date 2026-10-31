@@ -79,5 +79,6 @@ private:
     SKWorldMapTiles mTiles;
     SKWorldMapSurfaceSource* mSurfaces = nullptr;
     std::vector<skworldmap::SelectedTile> mSelected;
+    std::vector<SKWorldMapTiles::Draw> mDraws;    ///< this frame's ground draws, kept to reuse its storage
     std::vector<U64> mPolled;
 };
