@@ -64,6 +64,9 @@ namespace SKInventoryExplorerActions
     void paste(const LLUUID& dest_id);
     bool canPasteLink(const LLUUID& dest_id);
     void pasteLink(const LLUUID& dest_id);
+    // How a row shows it is on the clipboard: cut rows dim, as the stock inventory's do, and copied ones go bold.
+    enum EClipboardMark { MARK_NONE, MARK_CUT, MARK_COPY };
+    EClipboardMark clipboardMark(const LLUUID& id);
 
     // Every selected object takes the opposite of the first one's favourite state.
     void toggleFavorite(const uuid_vec_t& ids);

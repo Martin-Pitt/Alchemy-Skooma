@@ -425,6 +425,34 @@ void pasteLink(const LLUUID& dest_id)
     }
 }
 
+EClipboardMark clipboardMark(const LLUUID& id)
+{
+    const LLClipboard& clipboard = LLClipboard::instance();
+    if (!clipboard.hasContents() || id.isNull())
+    {
+        return MARK_NONE;
+    }
+    if (clipboard.isOnClipboard(id))
+    {
+        return clipboard.isCutMode() ? MARK_CUT : MARK_COPY;
+    }
+    // What a cut folder holds dims with it, as LLFolderViewItem::isFadeItem has it.
+    if (clipboard.isCutMode())
+    {
+        const LLInventoryObject* object = gInventory.getObject(id);
+        for (LLUUID parent_id = object ? object->getParentUUID() : LLUUID::null; parent_id.notNull();)
+        {
+            if (clipboard.isOnClipboard(parent_id))
+            {
+                return MARK_CUT;
+            }
+            const LLViewerInventoryCategory* parent = gInventory.getCategory(parent_id);
+            parent_id = parent ? parent->getParentUUID() : LLUUID::null;
+        }
+    }
+    return MARK_NONE;
+}
+
 void toggleFavorite(const uuid_vec_t& ids)
 {
     if (ids.empty())

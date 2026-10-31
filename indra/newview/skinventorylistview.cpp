@@ -34,6 +34,7 @@
 #include "llscrollbar.h"
 #include "lltooltip.h"
 #include "llui.h"
+#include "skinventoryexplorermenu.h"
 
 static LLDefaultChildRegistry::Register<SKInventoryListView> r_sk_inventory_list("sk_inventory_list");
 
@@ -309,6 +310,8 @@ void SKInventoryListView::drawContent()
             static LLUIColor cursor_color = LLUIColorTable::instance().getColor("White_10");
             gl_rect_2d(0, top, width, top - ROW_HEIGHT, cursor_color.get());
         }
+        const SKInventoryExplorerActions::EClipboardMark mark = SKInventoryExplorerActions::clipboardMark(row.mID);
+        const F32 fade = mark == SKInventoryExplorerActions::MARK_CUT ? 0.5f : 1.f;
         left = 0;
         for (EColumn col : mShown)
         {
@@ -320,7 +323,7 @@ void SKInventoryListView::drawContent()
             const S32 cell = llmin(mColumnWidths[col], width - left);
             if (col == COL_NAME && row.mIcon.notNull())
             {
-                row.mIcon->draw(x, middle - ICON_SIZE / 2, ICON_SIZE, ICON_SIZE);
+                row.mIcon->draw(x, middle - ICON_SIZE / 2, ICON_SIZE, ICON_SIZE, LLColor4::white % fade);
                 if (row.hasLinkBadge())
                 {
                     drawLinkBadge(LLRect(x, middle + ICON_SIZE / 2, x + ICON_SIZE, middle - ICON_SIZE / 2));
@@ -346,6 +349,11 @@ void SKInventoryListView::drawContent()
                 {
                     color = dim_color.get();
                 }
+                if (col == COL_NAME && mark == SKInventoryExplorerActions::MARK_COPY)
+                {
+                    style |= LLFontGL::BOLD;
+                }
+                color.mV[VALPHA] *= fade;
                 font->renderUTF8(text, 0, (F32)x, (F32)middle, color, LLFontGL::LEFT, LLFontGL::VCENTER, style,
                                  LLFontGL::NO_SHADOW, S32_MAX, llmax(0, left + cell - CELL_PAD - x), nullptr,
                                  col == COL_DESCRIPTION ? LLFontGL::ELLIPSIS_END : LLFontGL::ELLIPSIS_MIDDLE);
