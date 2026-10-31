@@ -103,6 +103,17 @@
              top_pad="5"
              width="308" />
             <check_box
+             control_name="SkoomaLocalChatVoiceSizes"
+             follows="left|top"
+             height="16"
+             label="Size shouts and whispers"
+             layout="topleft"
+             left="8"
+             name="sk_voice_sizes"
+             tool_tip="Draw shouts larger and bold and whispers smaller and italic, without the shouts: and whispers: prefixes"
+             top_pad="5"
+             width="308" />
+            <check_box
              control_name="SkoomaLocalChatUnfurl"
              follows="left|top"
              height="16"
@@ -166,6 +177,34 @@
              name="sk_timing_top"
              top="5"
              width="10" />
+            <check_box
+             control_name="SkoomaLocalChatFade"
+             follows="left|top"
+             height="16"
+             label="Fade messages"
+             layout="topleft"
+             left="8"
+             name="sk_fade"
+             tool_tip="Fade messages once read; off keeps them all visible"
+             top_pad="5"
+             width="292" />
+            <slider
+             control_name="SkoomaLocalChatFadeFloor"
+             decimal_digits="2"
+             follows="left|top|right"
+             height="16"
+             increment="0.05"
+             label="Fade off to"
+             label_width="130"
+             layout="topleft"
+             left="8"
+             max_val="1"
+             min_val="0"
+             name="sk_fade_floor"
+             text_width="40"
+             tool_tip="Opacity a faded message rests at; 0 lets it disappear"
+             top_pad="5"
+             width="308" />
             <slider
              control_name="SkoomaLocalChatFadeDelay"
              decimal_digits="1"

@@ -457,11 +457,12 @@ void SKChatUnfurlCache::requestPage(const SKChatEmbedPtr& embed)
         }
         const LLSD& http = result[LLCoreHttpUtil::HttpCoroutineAdapter::HTTP_RESULTS];
         const LLCore::HttpStatus status = LLCoreHttpUtil::HttpCoroutineAdapter::getStatusFromLLSD(http);
-        const S32 code = http["status"].asInteger();
+        // An HTTP reply's code is the status's type; its status is 0, and success means a 2xx.
+        const S32 code = status.isHttpStatus() ? (S32)status.getType() : 0;
+        const LLSD::Binary& raw = result[LLCoreHttpUtil::HttpCoroutineAdapter::HTTP_RESULTS_RAW].asBinary();
         embed->mState = SKChatEmbed::FAILED;
-        if (status && code >= 200 && code < 300)
+        if (status && status.isHttpStatus())
         {
-            const LLSD::Binary& raw = result[LLCoreHttpUtil::HttpCoroutineAdapter::HTTP_RESULTS_RAW].asBinary();
             if (github)
             {
                 const std::string_view answer(reinterpret_cast<const char*>(raw.data()), raw.size());
@@ -472,6 +473,10 @@ void SKChatUnfurlCache::requestPage(const SKChatEmbedPtr& embed)
                     embed->mDescription = std::move(card.mDescription);
                     embed->mGitHubState = card.mState;
                     embed->mState = SKChatEmbed::READY;
+                }
+                else
+                {
+                    LL_WARNS("SKChatUnfurl") << "no preview from " << url << ": " << raw.size() << " bytes without a title" << LL_ENDL;
                 }
                 ++*gen;
                 return;
@@ -489,6 +494,10 @@ void SKChatUnfurlCache::requestPage(const SKChatEmbedPtr& embed)
                 }
                 embed->mState = SKChatEmbed::READY;
             }
+        }
+        if (embed->mState == SKChatEmbed::FAILED)
+        {
+            LL_WARNS("SKChatUnfurl") << "no preview from " << url << ": " << status.toString() << " (" << code << "), " << raw.size() << " bytes" << LL_ENDL;
         }
         ++*gen;
     });

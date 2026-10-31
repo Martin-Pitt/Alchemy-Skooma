@@ -1019,6 +1019,17 @@
             <key>Value</key>
             <integer>4</integer>
         </map>
+        <key>AssetFetchConcurrency</key>
+        <map>
+            <key>Comment</key>
+            <string>Maximum number of HTTP connections used for fetching assets other than textures and meshes (sounds, animations, gestures and the rest); 0 uses the default.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
         <key>ALScriptStudioVimClipboard</key>
         <map>
             <key>Comment</key>
@@ -2992,6 +3003,17 @@
             <string>S32</string>
             <key>Value</key>
             <integer>4</integer>
+        </map>
+        <key>AlchemyRetireDepartedRegions</key>
+        <map>
+            <key>Comment</key>
+            <string>Once a teleport's arrival has settled, remove the regions it left behind that are neither the agent's, a neighbour of it, nor within draw distance plus a region width, instead of keeping them until their simulators disconnect them about a minute later. Their objects are killed a few each frame first.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <boolean>1</boolean>
         </map>
         <key>AlchemyRevokeObjectPerms</key>
         <map>
@@ -5485,6 +5507,17 @@
             <key>Value</key>
             <integer>1</integer>
         </map>
+        <key>SkoomaLocalChatVoiceSizes</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw shouts larger and bold and whispers smaller and italic in the game-style local chat, rather than prefixing them.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
         <key>SkoomaLocalChatTyping</key>
         <map>
             <key>Comment</key>
@@ -5506,6 +5539,28 @@
             <string>F32</string>
             <key>Value</key>
             <real>2.0</real>
+        </map>
+        <key>SkoomaLocalChatFade</key>
+        <map>
+            <key>Comment</key>
+            <string>Fade messages in the game-style local chat once they have been read; off keeps them all visible.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SkoomaLocalChatFadeFloor</key>
+        <map>
+            <key>Comment</key>
+            <string>Opacity a faded message in the game-style local chat rests at; 0 lets it disappear.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.0</real>
         </map>
         <key>SkoomaLocalChatFadeDelay</key>
         <map>
