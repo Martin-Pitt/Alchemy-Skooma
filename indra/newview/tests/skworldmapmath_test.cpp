@@ -247,4 +247,23 @@ namespace
         CHECK(flycamHeightScale(GROUND_Z + 50000.0) == 5000.0);
     }
 
+
+    TEST_CASE("skworldmapmath: An orbit starts and ends on its cameras, turning while it backs away", "[skworldmapmath]")
+    {
+        // From 10 m east of the avatar looking west, level, to 1500 m above and south of it looking north and down.
+        const LLVector3d focus0(100.0, 100.0, 30.0), eye0(110.0, 100.0, 30.0);
+        const LLVector3d focus1(100.0, 100.0, GROUND_Z), eye1(100.0, -800.0, GROUND_Z + 1200.0);
+        LLVector3d eye, focus;
+        orbitCamera(eye0, focus0, eye1, focus1, 0.0, eye, focus);
+        CHECK((eye - eye0).magVec() < 1.0e-6);
+        orbitCamera(eye0, focus0, eye1, focus1, 1.0, eye, focus);
+        CHECK((eye - eye1).magVec() < 1.0e-6);
+        CHECK((focus - focus1).magVec() < 1.0e-6);
+
+        // Halfway it has turned half the quarter turn and backed out to the geometric mean distance.
+        orbitCamera(eye0, focus0, eye1, focus1, 0.5, eye, focus);
+        const LLVector3d d = eye - focus;
+        CHECK(std::fabs(d.magVec() - std::sqrt(10.0 * 1500.0)) < 1.0e-6);
+        CHECK(std::fabs(std::atan2(d.mdV[VY], d.mdV[VX]) + 0.25 * 3.141592653589793) < 1.0e-9);
+    }
 } // namespace
