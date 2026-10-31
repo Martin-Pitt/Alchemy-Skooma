@@ -11283,7 +11283,7 @@ void LLPipeline::renderFinalize()
         SKAirCells::instance().renderDebug();
     }
     // </SK:Nexii>
-    // <SK:Nexii> rooms overlay: spaces, portals, wind and the air's space and indoor modes, under the world debug mask
+    // <SK:Nexii> rooms overlay: spaces, portals and the air's space and indoor modes, under the world debug mask
     if (!cutout && SKRooms::instanceExists())
     {
         SKRooms::instance().renderDebug();
