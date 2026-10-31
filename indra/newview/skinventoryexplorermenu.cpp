@@ -39,6 +39,7 @@
 #include "llfriendcard.h"
 #include "llgesturemgr.h"
 #include "llinventorybridge.h"
+#include "llfloatersidepanelcontainer.h"
 #include "llinventoryfunctions.h"
 #include "llinventorygallery.h"
 #include "llinventorymodel.h"
@@ -726,14 +727,30 @@ LLContextMenu* SKInventoryExplorerContextMenu::createMenu()
     if (menu)
     {
         updateMenuItemsVisibility(menu);
-        // The Trash's menus are their one or two entries.
-        const LLUUID trash_id = gInventory.findCategoryUUIDForType(LLFolderType::FT_TRASH);
-        if (!mUUIDs.empty() && mUUIDs.front() != trash_id && !gInventory.isObjectDescendentOf(mUUIDs.front(), trash_id))
+        if (!isTrashMenu() && !isOutfitMenu())
         {
             addIconRow(menu);
         }
     }
     return menu;
+}
+
+bool SKInventoryExplorerContextMenu::isTrashMenu() const
+{
+    const LLUUID trash_id = gInventory.findCategoryUUIDForType(LLFolderType::FT_TRASH);
+    return !mUUIDs.empty() && (mUUIDs.front() == trash_id || gInventory.isObjectDescendentOf(mUUIDs.front(), trash_id));
+}
+
+bool SKInventoryExplorerContextMenu::isOutfitMenu() const
+{
+    // One folder of My Outfits, itself rather than a link to it.
+    if (mRootMode || mUUIDs.size() != 1)
+    {
+        return false;
+    }
+    const LLViewerInventoryCategory* cat = gInventory.getCategory(mUUIDs.front());
+    const LLUUID my_outfits_id = gInventory.findCategoryUUIDForType(LLFolderType::FT_MY_OUTFITS);
+    return cat && my_outfits_id.notNull() && cat->getParentUUID() == my_outfits_id;
 }
 
 void SKInventoryExplorerContextMenu::show(LLView* spawning_view, const uuid_vec_t& uuids, S32 x, S32 y)
@@ -946,6 +963,48 @@ void SKInventoryExplorerContextMenu::updateMenuItemsVisibility(LLContextMenu* me
             items.push_back("restore");
             menu->getChild<LLMenuItemGL>("purge")->setLabel(string(many ? "purge_many" : "purge_one"));
             menu->getChild<LLMenuItemGL>("restore")->setLabel(string(many ? "restore_many" : "restore_one"));
+        }
+        hide_context_entries(*menu, items, disabled);
+        return;
+    }
+
+    // An outfit gets the My Outfits list's menu (LLOutfitContextMenu).
+    if (isOutfitMenu())
+    {
+        LLAppearanceMgr& appearance = LLAppearanceMgr::instance();
+        items.push_back("outfit_replace");
+        if (!appearance.getCanReplaceCOF(first))
+        {
+            disabled.push_back("outfit_replace");
+        }
+        items.push_back("outfit_add");
+        if (!LLAppearanceMgr::getCanAddToCOF(first))
+        {
+            disabled.push_back("outfit_add");
+        }
+        items.push_back("outfit_take_off");
+        if (!LLAppearanceMgr::getCanRemoveFromCOF(first))
+        {
+            disabled.push_back("outfit_take_off");
+        }
+        items.push_back("outfit_wear_separator");
+        items.push_back("outfit_thumbnail");
+        items.push_back("outfit_favorite");
+        menu->getChild<LLMenuItemGL>("outfit_favorite")->setLabel(string(cat->getIsFavorite() ? "favorite_remove" : "favorite_add"));
+        if (appearance.getBaseOutfitUUID() == first)
+        {
+            items.push_back("outfit_edit");
+        }
+        items.push_back("outfit_rename");
+        if (!get_is_category_renameable(&gInventory, first))
+        {
+            disabled.push_back("outfit_rename");
+        }
+        items.push_back("outfit_save");
+        if (appearance.getCanRemoveOutfit(first))
+        {
+            items.push_back("outfit_delete_separator");
+            items.push_back("outfit_delete");
         }
         hide_context_entries(*menu, items, disabled);
         return;
@@ -1270,6 +1329,45 @@ void SKInventoryExplorerContextMenu::doToSelected(const std::string& action)
     else if (action == "restore")
     {
         SKInventoryExplorerActions::restore(ids);
+    }
+    else if (action == "outfit_replace")
+    {
+        LLAppearanceMgr::instance().replaceCurrentOutfit(id);
+    }
+    else if (action == "outfit_add")
+    {
+        LLAppearanceMgr::instance().addCategoryToCurrentOutfit(id);
+    }
+    else if (action == "outfit_take_off")
+    {
+        LLAppearanceMgr::instance().takeOffOutfit(id);
+    }
+    else if (action == "outfit_edit")
+    {
+        LLFloaterSidePanelContainer::showPanel("appearance", LLSD().with("type", "edit_outfit"));
+    }
+    else if (action == "outfit_save")
+    {
+        LLNotificationsUtil::add("ConfirmOverwriteOutfit", LLSD(), LLSD(),
+                                 [id](const LLSD& notification, const LLSD& response)
+                                 {
+                                     if (LLNotificationsUtil::getSelectedOption(notification, response) == 0)
+                                     {
+                                         LLAppearanceMgr::instance().onOutfitFolderCreated(id, true);
+                                     }
+                                 });
+    }
+    else if (action == "outfit_delete")
+    {
+        // As LLOutfitListBase::removeSelected asks it.
+        LLNotificationsUtil::add("DeleteOutfits", LLSD(), LLSD(),
+                                 [id](const LLSD& notification, const LLSD& response)
+                                 {
+                                     if (LLNotificationsUtil::getSelectedOption(notification, response) == 0)
+                                     {
+                                         gInventory.removeCategory(id);
+                                     }
+                                 });
     }
     else if (action == "empty_lost_and_found")
     {

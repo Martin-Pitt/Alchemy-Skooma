@@ -144,6 +144,8 @@
     <string name="menu_purge_many">Purge Items</string>
     <string name="menu_restore_one">Restore Item</string>
     <string name="menu_restore_many">Restore Items</string>
+    <string name="menu_favorite_add">Add to favorites</string>
+    <string name="menu_favorite_remove">Remove from favorites</string>
     <string name="menu_full_perm_only">(Full perm only)</string>
     <string name="menu_tip_cut">Cut  (Ctrl+X)</string>
     <string name="menu_tip_copy">Copy  (Ctrl+C)</string>

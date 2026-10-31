@@ -139,6 +139,9 @@ protected:
     void doToSelected(const std::string& action);
     void updateMenuItemsVisibility(LLContextMenu* menu);
     void addIconRow(LLContextMenu* menu);
+    // Menus short enough to go without the icon row: the Trash's and what is in it, and an outfit's, as My Outfits gives it.
+    bool isTrashMenu() const;
+    bool isOutfitMenu() const;
     // Next to the point the menu opened at if the screen has room there, else beside the Explorer, on screen.
     void placeNearSpawn(LLFloater* floater);
     void addAttachmentPoints(LLContextMenu* menu);
