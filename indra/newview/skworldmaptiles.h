@@ -53,16 +53,19 @@ public:
     static constexpr S32 MAX_IN_FLIGHT = 24;
     static constexpr S32 MAX_KEPT = 1536;           ///< tiles kept after they leave the view, least recently used dropped
     static constexpr F64 FETCH_TIMEOUT = 30.0;      ///< seconds before a fetch stops counting against the cap
+    static constexpr S32 FALLBACK_LEVELS_DOWN = 3;  ///< how many finer levels may stand in for a tile still loading
 
     struct Draw
     {
         LLViewerTexture* mTexture = nullptr;
+        skworldmap::TileKey mCover;                 ///< the ground the texture is drawn over
         F32 mUV[4] = { 0.f, 0.f, 1.f, 1.f };        ///< u0, v0, u1, v1; v grows north
     };
 
-    /// The texture to draw for a selected tile: the tile itself once it has arrived, else its nearest
-    /// loaded ancestor, else nothing. Records the tile as wanted for this frame.
-    bool resolve(const skworldmap::SelectedTile& tile, F64 now, Draw& out);
+    /// Appends what to draw for a selected tile, in order: the tile itself once it has arrived; else its
+    /// nearest loaded ancestor, then its loaded finer tiles over it, so the map keeps what it showed while
+    /// a zoom loads the new level. Records the tile as wanted for this frame; false when nothing is drawn.
+    bool resolve(const skworldmap::SelectedTile& tile, F64 now, std::vector<Draw>& out);
 
     /// Starts this frame's fetches, nearest wanted tile first, and drops the oldest unused tiles.
     void update(F64 now);
@@ -90,6 +93,8 @@ private:
     };
 
     bool isReady(const Entry& e) const;
+    void use(Entry& e, const skworldmap::TileKey& cover, const F32 uv[4], F64 now, std::vector<Draw>& out);
+    void addDescendants(const skworldmap::TileKey& key, S32 depth, F64 now, std::vector<Draw>& out);
     Entry* find(const skworldmap::TileKey& key);
 
     std::map<skworldmap::TileKey, Entry> mTiles;
