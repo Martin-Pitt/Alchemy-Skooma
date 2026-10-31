@@ -1,6 +1,6 @@
 /**
  * @file skroomsairunknown_test.cpp
- * @brief Tests that air with no enclosure answer is never read as open: depth, wind and the sky map.
+ * @brief Tests that air with no enclosure answer is never read as open: depth and the sky map.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Second Life Viewer Source Code
@@ -28,7 +28,6 @@
 
 #include "skroomstestscene.h"
 #include "skairskymap.h"
-#include "../skroomswind.h"
 
 namespace
 {
@@ -92,43 +91,6 @@ TEST_CASE("skroomsairunknown: a gap with no walk to the outside reads its depth 
     CHECK(field.mBucket == EnclosureBucket::OUTDOORS);
     CHECK(field.depthKnown());
     CHECK(field.mD == 0.f);
-}
-
-TEST_CASE("skroomsairunknown: air whose enclosure is UNKNOWN is calm and never a courtyard", "[skroomsairunknown]")
-{
-    // A closed room with sealing off: no way in, so its air has no answer.
-    Scene s;
-    s.wall(4.f, 4.f, 16.f, 4.25f);
-    s.wall(4.f, 15.75f, 16.f, 16.f);
-    s.wall(4.f, 4.f, 4.25f, 16.f);
-    s.wall(15.75f, 4.f, 16.f, 16.f);
-    s.box(4.f, 4.f, 16.f, 16.f, 3.f, 3.25f);
-    auto in = s.input(1);
-    in->mParams.mSealedIndoors = false;
-    EnclosurePass pass(in);
-    while (!pass.step(1u << 30))
-    {
-    }
-    const std::shared_ptr<EnclosureProduct> enc = pass.takeProduct();
-    const RoomsProductPtr rooms = computeSpaces(std::make_shared<RoomsInput>(), enc);
-    const WindFieldPtr field = buildWindField(*enc, rooms.get(), WindLevel(), WindParams());
-    Enclosure e;
-    REQUIRE(enc->enclosureAt(LLVector3(10.f, 10.f, 0.5f), e));
-    REQUIRE(e.mBucket == EnclosureBucket::UNKNOWN);
-    for (F32 heading : { 0.f, 135.f })
-    {
-        const WindSlabPtr slab = computeWindSlab(*field, rooms.get(), heading, WindParams());
-        const WindCell* inside = slab->at(10.f, 10.f);
-        const WindCell* outside = slab->at(25.f, 25.f);
-        REQUIRE(inside);
-        REQUIRE(outside);
-        CHECK((inside->mFlags & WindCell::UNKNOWN) != 0);
-        CHECK((inside->mFlags & WindCell::INDOORS) == 0);
-        CHECK((inside->mFlags & WindCell::COURTYARD) == 0);
-        CHECK(inside->factor() < 0.1f);
-        CHECK((outside->mFlags & WindCell::UNKNOWN) == 0);
-        CHECK(outside->factor() > 0.5f);
-    }
 }
 
 TEST_CASE("skroomsairunknown: the sky map reads air no tile published as not open, and known bare ground as open", "[skroomsairunknown]")

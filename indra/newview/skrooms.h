@@ -1,6 +1,6 @@
 /**
  * @file skrooms.h
- * @brief The rooms layer in the viewer: the per-mesh enclosure, spaces and wind passes over the air cells, scheduled off
+ * @brief The rooms layer in the viewer: the per-mesh enclosure and spaces passes over the air cells, scheduled off
  *        the main thread, and the view their answers are read through.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
@@ -34,7 +34,6 @@
 #include "skroomsschedule.h"
 #include "skroomsspaceproducts.h"
 #include "skroomsspaces.h"
-#include "skroomswind.h"
 #include "skworldoverlay.h"
 #include "threadpool.h"
 #include "v3dmath.h"
@@ -63,7 +62,6 @@ public:
         skworld::EnclosureProductPtr mProduct;
         skworld::RoomsProductPtr mRooms;
         skworld::RoomGraphPtr mRoomGraph; ///< its spaces grouped into rooms, with mRooms
-        skworld::WindProductPtr mWind;    ///< null until its slabs are built
     };
 
     /// A space: its mesh and its id there.
@@ -105,8 +103,6 @@ public:
     /// Moves whenever a mesh's air answers change: enclosure, spaces or rooms. The air revision.
     U64 revision() const { return mAirRevision; }
     U64 airRevision() const { return mAirRevision; }
-    /// Moves whenever a mesh's wind slabs change, and only then.
-    U64 windRevision() const { return mWindRevision; }
 
     /// The gap holding pos, over every mesh: an answer beats UNKNOWN, and
     /// the higher floor wins among answers. False where no mesh has air.
@@ -163,48 +159,10 @@ public:
 private:
     friend class SKRooms;
     U64 mAirRevision = 0;
-    U64 mWindRevision = 0;
     std::vector<Mesh> mMeshes;
     std::shared_ptr<const skworld::SkyMap> mSky;
 };
 typedef std::shared_ptr<const SKWorldView> SKWorldViewPtr;
-
-/// Wind near the camera, from each mesh's slabs: 16 headings by height
-/// band, each a speed factor and a deflection per 0.5 m cell. Immutable,
-/// like the view it reads, so any thread may hold one. A heading is where
-/// the wind blows toward, in degrees counter-clockwise from east. Beyond
-/// the slabs there is no answer, and the caller uses its own wind.
-class SKWind
-{
-public:
-    struct Sample
-    {
-        F32 mFactor = 1.f;          ///< of the free stream's speed
-        LLVector2 mDeflect;         ///< the local wind blows along the heading plus this, normalised
-        U8 mFlags = 0;              ///< skworld::WindCell's
-    };
-
-    explicit SKWind(SKWorldViewPtr view);
-
-    /// Moves whenever a mesh's slabs change: the view's wind revision.
-    U64 revision() const;
-
-    /// The slab of one heading bucket over the box: from the mesh standing
-    /// under the box's centre, in the band nearest 1.5 m above the box's
-    /// bottom. Its positions are relative to the mesh's origin, given back
-    /// in origin. Null where no mesh has slabs.
-    skworld::WindSlabPtr slab(S32 heading, const LLVector3d& min, const LLVector3d& max, LLVector3d* origin = nullptr) const;
-
-    /// The wind at a point for a heading, between the two nearest buckets
-    /// and the two bands around the point. False where no slab covers it.
-    bool sampleAt(const LLVector3d& pos, F32 heading_deg, Sample& out) const;
-
-private:
-    const SKWorldView::Mesh* meshAt(const LLVector3d& pos, S32* cell = nullptr) const;
-
-    SKWorldViewPtr mView;
-};
-typedef std::shared_ptr<const SKWind> SKWindPtr;
 
 /// Schedules the enclosure pass over the air cells (SKAirCells). A mesh whose air changed is marked dirty,
 /// and once it has been quiet for SKRoomsSettleMs its tiles' air and the
@@ -230,17 +188,15 @@ public:
     static bool enabled();
     /// Whether a rooms overlay is drawn: the world debug mask and one of the rooms' own switches.
     static bool overlayActive();
-    /// The rooms overlays: spaces, wind, and the air overlay's space and indoor modes.
+    /// The rooms overlays: spaces, and the air overlay's space and indoor modes.
     void renderDebug();
 
-    /// Main thread only, as mView and mWind are swapped there. What they hand
-    /// out is immutable, so a worker may be given it and keep it.
+    /// Main thread only, as mView is swapped there. What it hands out is
+    /// immutable, so a worker may be given it and keep it.
     SKWorldViewPtr view() const;
-    SKWindPtr wind() const;
-    /// The view's air revision; the wind's moves on its own.
+    /// The view's air revision.
     U64 revision() const { return airRevision(); }
     U64 airRevision() const { return mView ? mView->airRevision() : 0; }
-    U64 windRevision() const { return mView ? mView->windRevision() : 0; }
     /// Whether a mesh meeting the global box has a pass pending or running.
     bool settlingIn(const LLVector3d& min, const LLVector3d& max) const;
     std::string statsLine() const;
@@ -249,14 +205,8 @@ public:
     /// the coarse answers, and draw its portals: doors red, stairs lime,
     /// openings cyan, dashed without a lintel. Agent coordinates.
     void gatherSpaces(SKWorldOverlayGeom& geom, const LLVector3d& camera, F64 reach, bool opaque) const;
-
-    /// Arrows over the lowest wind band near the camera for a heading,
-    /// coloured by speed factor: blue calm, cyan the free stream, yellow
-    /// twice it. Agent coordinates.
-    void gatherWind(SKWorldOverlayGeom& geom, const LLVector3d& camera, F64 reach, F32 heading_deg, bool opaque) const;
 private:
     struct Job;
-    struct WindJob;
     /// Where a mesh's answers may still move: the plan of the tiles that changed, or all of it.
     struct SettleBox
     {
@@ -292,13 +242,6 @@ private:
         skworld::EnclosureProductPtr mProduct;
         skworld::RoomsProductPtr mRooms;
         skworld::RoomGraphPtr mRoomGraph;     ///< built from mRooms on the rooms thread
-        skworld::WindProductPtr mWind;
-        bool mWindDirty = false;            ///< its rooms landed since its slabs were built
-        bool mWindInFlight = false;
-        F64 mWindChanged = 0.0;             ///< when its answers last moved
-        F64 mWindDirtySince = 0.0;          ///< when its slabs last went stale: churn delays a refresh this long at most
-        U64 mWindGeneration = 0;
-        std::shared_ptr<std::atomic<U64>> mWindLatest;  ///< what cancels a wind pass: only a preemption, never the air moving
         U32 mEvicted = 0;                   ///< tiles whose detail the air budget let go
         U8 mPriority = 3;                   ///< the air's order for it: the agent's region first
 
@@ -306,26 +249,9 @@ private:
         {
             return { mProduct != nullptr, mDirty, mInFlight, mChanged, mDirtySince, mLastPosted, mPriority };
         }
-        /// Wind is scheduled as the rooms are: a mesh with no slabs builds them on the rooms it has.
-        skworld::RoomsSchedule windSchedule() const
-        {
-            return { mWind != nullptr, mWindDirty, mWindInFlight, mWindChanged, mWindDirtySince, 0.0, mPriority };
-        }
-        void windStale(F64 now)
-        {
-            if (!mWindDirty)
-            {
-                mWindDirtySince = now;
-            }
-            mWindDirty = true;
-            mWindChanged = now;
-        }
     };
 
     void post(MeshState& state);
-    void postWind(MeshState& state);
-    void runWind(const std::shared_ptr<WindJob>& job, const std::weak_ptr<bool>& alive);
-    void finishWind(const std::shared_ptr<WindJob>& job);
     void runChunk(const std::shared_ptr<Job>& job, const std::weak_ptr<bool>& alive);
     void finish(const std::shared_ptr<Job>& job);
     void rebuildView();
@@ -341,11 +267,8 @@ private:
     U64 mSeenFeatures = ~0ull;
     F64 mLastFullWalk = -1.0;               ///< when every mesh was last walked, the change list's backstop
     SKWorldViewPtr mView;
-    SKWindPtr mWind;
     U64 mViewAirRevision = 0;
-    U64 mViewWindRevision = 0;
     bool mViewAirDirty = false;             ///< a mesh's enclosure, spaces or rooms changed since the view was built
-    bool mViewWindDirty = false;            ///< a mesh's wind slabs changed since
 
     // stats
     F32 mLastMs = 0.f;
@@ -360,9 +283,6 @@ private:
     U32 mLastAnswered = 0;                  ///< tiles the last pass answered again
     F32 mLastRoomGraphMs = 0.f;
     F32 mLastFlightMs = 0.f;                ///< the last spaces pass's flight detection
-    F32 mLastWindMs = 0.f;
-    size_t mLastWindBytes = 0;
-    U32 mWindPasses = 0;
 
     /// What the census file's rooms section writes: the parameters of the last pass posted.
     skworld::EnclosureParams mCensusEnclosure;

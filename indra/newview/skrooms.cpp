@@ -78,15 +78,6 @@ struct SKRooms::Job
     bool mCancelled = false;
 };
 
-struct SKRooms::WindJob
-{
-    LLUUID mId;
-    U64 mGeneration = 0;
-    std::shared_ptr<std::atomic<U64>> mLatest;
-    std::unique_ptr<WindPass> mPass;
-    bool mCancelled = false;
-};
-
 // ---------------------------------------------------------------- the view
 
 void SKWorldView::columnAt(const LLVector3d& xy, AirColumn& out) const
@@ -468,17 +459,6 @@ void SKWorldView::sheet(const LLVector3d& min, const LLVector3d& max, F32 res, s
     }
 }
 
-// ---------------------------------------------------------------- wind
-
-namespace
-{
-    F32 wrapHeading(F32 deg)
-    {
-        deg = std::fmod(deg, 360.f);
-        return deg < 0.f ? deg + 360.f : deg;
-    }
-}
-
 void SKRooms::SettleBox::add(const LLVector3d& min, const LLVector3d& max)
 {
     for (S32 k = 0; k < 2; ++k)
@@ -525,202 +505,6 @@ SKWorldViewPtr SKRooms::view() const
 {
     llassert(on_main_thread());
     return mView;
-}
-
-SKWindPtr SKRooms::wind() const
-{
-    llassert(on_main_thread());
-    return mWind;
-}
-
-SKWind::SKWind(SKWorldViewPtr view)
-    : mView(std::move(view))
-{
-}
-
-U64 SKWind::revision() const
-{
-    return mView ? mView->windRevision() : 0;
-}
-
-const SKWorldView::Mesh* SKWind::meshAt(const LLVector3d& pos, S32* cell) const
-{
-    // The mesh whose ground is highest under the point without being above
-    // it: a skybox's own floor rather than the terrain far below.
-    const SKWorldView::Mesh* best = nullptr;
-    F64 best_ground = 0.0;
-    S32 best_cell = -1;
-    if (!mView)
-    {
-        return nullptr;
-    }
-    for (const SKWorldView::Mesh& m : mView->meshes())
-    {
-        if (!m.mWind || m.mWind->mBands.empty())
-        {
-            continue;
-        }
-        const WindSlabPtr s = m.mWind->slab(0, 0);
-        if (!s || !s->mZ)
-        {
-            continue;
-        }
-        const WindCell* c = s->at(static_cast<F32>(pos.mdV[VX] - m.mOrigin.mdV[VX]), static_cast<F32>(pos.mdV[VY] - m.mOrigin.mdV[VY]));
-        if (!c || (c->mFlags & WindCell::UNSEEN))
-        {
-            continue;
-        }
-        const S32 i = static_cast<S32>(c - s->mCells.data());
-        const F64 ground = (*s->mZ)[i] + m.mOrigin.mdV[VZ] - m.mWind->mBands[0].mOffsetM;
-        const bool under = ground <= pos.mdV[VZ] + 0.5, best_under = best && best_ground <= pos.mdV[VZ] + 0.5;
-        if (!best || (under && (!best_under || ground > best_ground)) || (!under && !best_under && ground < best_ground))
-        {
-            best = &m;
-            best_ground = ground;
-            best_cell = i;
-        }
-    }
-    if (cell)
-    {
-        *cell = best_cell;
-    }
-    return best;
-}
-
-WindSlabPtr SKWind::slab(S32 heading, const LLVector3d& min, const LLVector3d& max, LLVector3d* origin) const
-{
-    const LLVector3d centre((min.mdV[VX] + max.mdV[VX]) * 0.5, (min.mdV[VY] + max.mdV[VY]) * 0.5, min.mdV[VZ]);
-    S32 cell = -1;
-    const SKWorldView::Mesh* m = meshAt(centre, &cell);
-    if (!m)
-    {
-        return nullptr;
-    }
-    const F32 want = static_cast<F32>(min.mdV[VZ] - m->mOrigin.mdV[VZ]) + 1.5f;
-    S32 band = 0;
-    F32 best = std::numeric_limits<F32>::max();
-    for (S32 b = 0; b < static_cast<S32>(m->mWind->mBands.size()); ++b)
-    {
-        const WindSlabPtr s = m->mWind->slab(heading, b);
-        if (s && s->mZ && cell >= 0 && std::fabs((*s->mZ)[cell] - want) < best)
-        {
-            best = std::fabs((*s->mZ)[cell] - want);
-            band = b;
-        }
-    }
-    if (origin)
-    {
-        *origin = m->mOrigin;
-    }
-    return m->mWind->slab(heading, band);
-}
-
-bool SKWind::sampleAt(const LLVector3d& pos, F32 heading_deg, Sample& out) const
-{
-    S32 cell = -1;
-    const SKWorldView::Mesh* m = meshAt(pos, &cell);
-    if (!m || cell < 0)
-    {
-        return false;
-    }
-    const WindProduct& w = *m->mWind;
-    const F32 at = wrapHeading(heading_deg) / (360.f / WIND_HEADINGS);
-    const S32 h0 = static_cast<S32>(at) % WIND_HEADINGS, h1 = (h0 + 1) % WIND_HEADINGS;
-    const F32 th = at - std::floor(at);
-    // The bands around the point, by their heights at its cell.
-    const F32 z = static_cast<F32>(pos.mdV[VZ] - m->mOrigin.mdV[VZ]);
-    const S32 bands = static_cast<S32>(w.mBands.size());
-    S32 b0 = 0, b1 = 0;
-    F32 tb = 0.f;
-    for (S32 b = 0; b < bands; ++b)
-    {
-        const WindSlabPtr s = w.slab(h0, b);
-        if (!s || !s->mZ || (*s->mZ)[cell] > z)
-        {
-            continue;
-        }
-        b0 = b1 = b;
-        tb = 0.f;
-        const WindSlabPtr n = b + 1 < bands ? w.slab(h0, b + 1) : nullptr;
-        if (n && n->mZ && (*n->mZ)[cell] > z)
-        {
-            const F32 lo = (*s->mZ)[cell], hi = (*n->mZ)[cell];
-            b1 = b + 1;
-            tb = (z - lo) / (hi - lo);
-        }
-    }
-    F32 f[4];
-    LLVector2 d[4];
-    U8 fl[4];
-    const S32 hs[4] = { h0, h1, h0, h1 }, bs[4] = { b0, b0, b1, b1 };
-    for (S32 k = 0; k < 4; ++k)
-    {
-        const WindCell& c = w.slab(hs[k], bs[k])->mCells[cell];
-        f[k] = (c.mFlags & WindCell::BLOCKED) ? 0.f : c.factor();
-        d[k] = c.deflection();
-        fl[k] = c.mFlags;
-    }
-    out.mFactor = lerp(lerp(f[0], f[1], th), lerp(f[2], f[3], th), tb);
-    out.mDeflect = lerp(lerp(d[0], d[1], th), lerp(d[2], d[3], th), tb);
-    out.mFlags = fl[(th < 0.5f ? 0 : 1) + (tb < 0.5f ? 0 : 2)];
-    return true;
-}
-
-void SKRooms::gatherWind(SKWorldOverlayGeom& geom, const LLVector3d& camera, F64 reach, F32 heading_deg, bool opaque) const
-{
-    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skrooms - gather wind");
-    if (!mView)
-    {
-        return;
-    }
-    const S32 heading = static_cast<S32>(std::lround(wrapHeading(heading_deg) / (360.f / WIND_HEADINGS))) % WIND_HEADINGS;
-    const F32 rad = windHeadingDeg(heading) * DEG_TO_RAD;
-    const LLVector2 along(std::cos(rad), std::sin(rad));
-    const LLColor4 calm(0.15f, 0.2f, 0.9f, 0.9f), stream(0.1f, 0.9f, 0.9f, 0.9f), gust(1.f, 0.9f, 0.1f, 0.9f);
-    const LLColor4 unknown(0.5f, 0.5f, 0.5f, 0.9f);   ///< calm because nothing is known of the air there
-    const F64 reach2 = reach * reach;
-    constexpr S32 STRIDE = 4;       // an arrow every 2 m
-    for (const SKWorldView::Mesh& m : mView->meshes())
-    {
-        const WindSlabPtr s = m.mWind ? m.mWind->slab(heading, 0) : nullptr;
-        if (!s || !s->mZ)
-        {
-            continue;
-        }
-        for (S32 y = STRIDE / 2; y < s->mHeight; y += STRIDE)
-        {
-            for (S32 x = STRIDE / 2; x < s->mWidth; x += STRIDE)
-            {
-                const S32 i = x + y * s->mWidth;
-                const WindCell& c = s->mCells[i];
-                if (c.mFlags & (WindCell::BLOCKED | WindCell::UNSEEN))
-                {
-                    continue;
-                }
-                const LLVector3d at = m.mOrigin + LLVector3d(s->mOrigin.mV[VX] + (x + 0.5) * s->mCell, s->mOrigin.mV[VY] + (y + 0.5) * s->mCell,
-                                                             (*s->mZ)[i]);
-                if (dist_vec_squared2D(at, camera) > reach2)
-                {
-                    continue;
-                }
-                const F32 f = c.factor();
-                LLColor4 color = (c.mFlags & WindCell::UNKNOWN) ? unknown : f < 1.f ? lerp(calm, stream, f) : lerp(stream, gust, llmin(f - 1.f, 1.f));
-                if (opaque)
-                {
-                    color.mV[VALPHA] = 1.f;
-                }
-                LLVector2 dir = along + c.deflection();
-                dir.normalize();
-                const F32 len = 0.3f + 0.6f * llmin(f, 2.f);
-                const LLVector3 p = gAgent.getPosAgentFromGlobal(at);
-                const LLVector3 d(dir.mV[VX], dir.mV[VY], 0.f), side(-dir.mV[VY], dir.mV[VX], 0.f);
-                const LLVector3 tail = p - d * (len * 0.5f), tip = p + d * (len * 0.5f);
-                geom.line(tail, tip, color);
-                geom.line(tip, tip - d * 0.25f + side * 0.15f, color);
-                geom.line(tip, tip - d * 0.25f - side * 0.15f, color);
-            }
-        }
-    }
 }
 
 // ---------------------------------------------------------------- the scheduler
@@ -800,9 +584,8 @@ bool SKRooms::overlayActive()
         return false;
     }
     static LLCachedControl<bool> spaces(gSavedSettings, "SKRoomsOverlaySpaces", false);
-    static LLCachedControl<bool> wind(gSavedSettings, "SKRoomsOverlayWind", false);
     static LLCachedControl<U32> air(gSavedSettings, "SKAirOverlay", 0);
-    return spaces || wind || air == static_cast<U32>(AirDebugMode::SPACE) || air == static_cast<U32>(AirDebugMode::INDOOR);
+    return spaces || air == static_cast<U32>(AirDebugMode::SPACE) || air == static_cast<U32>(AirDebugMode::INDOOR);
 }
 
 bool SKRooms::touches(const MeshState& a, const MeshState& b) const
@@ -948,17 +731,6 @@ void SKRooms::update()
                     }
                 }
             }
-            // Slabs are built over detailed air: when the cache evicts some, they go with it.
-            if (evicted > state.mEvicted && state.mWind)
-            {
-                if (SKWorldTrace::tracing())
-                {
-                    SKWorldTrace::Line("wind.drop").mesh(state.mId).box(state.mMin, state.mMax).num("evicted", evicted);
-                }
-                state.mWind.reset();
-                state.windStale(now);
-                mViewWindDirty = true;
-            }
             state.mEvicted = evicted;
             if (state.mAirSignature != sig || state.mDoorSignature != doors)
             {
@@ -1021,13 +793,8 @@ void SKRooms::update()
                 {
                     it->second.mLatest->store(~0ull);   // cancel anything in flight
                 }
-                if (it->second.mWindLatest)
-                {
-                    it->second.mWindLatest->store(~0ull);
-                }
                 it = mMeshes.erase(it);
                 mViewAirDirty = true;
-                mViewWindDirty = true;
             }
             else
             {
@@ -1091,10 +858,7 @@ void SKRooms::update()
                     state.mProduct.reset();
                     state.mRooms.reset();
                     state.mRoomGraph.reset();
-                    state.mWind.reset();
-                    state.mWindDirty = false;
                     mViewAirDirty = true;
-                    mViewWindDirty = true;
                 }
                 continue;
             }
@@ -1126,7 +890,7 @@ void SKRooms::update()
         for (auto& entry : mMeshes)
         {
             MeshState& state = entry.second;
-            if (!(state.mInFlight || state.mWindInFlight) || state.mPriority <= best)
+            if (!state.mInFlight || state.mPriority <= best)
             {
                 continue;
             }
@@ -1149,34 +913,11 @@ void SKRooms::update()
                 }
                 state.mDirty = true;
             }
-            // So do slabs: only a refresh, to a better tier's first rooms; slabs a mesh has none of are never held back.
-            if (state.mWindInFlight && state.mWind && first.mPriority < state.mPriority && state.mWindLatest)
-            {
-                if (SKWorldTrace::tracing())
-                {
-                    SKWorldTrace::Line("wind.preempt").mesh(state.mId).box(state.mMin, state.mMax);
-                }
-                state.mWindLatest->store(++state.mWindGeneration);
-                state.windStale(now);
-            }
-        }
-    }
-
-    // Wind follows the rooms: a mesh whose spaces landed builds its slabs next, on the rooms it has.
-    // Churn delays only a refresh, and only boundedly; a mesh with no slabs builds them at once.
-    static LLCachedControl<U32> wind_settle_ms(gSavedSettings, "SKRoomsWindSettleMs", 1000);
-    for (auto& entry : mMeshes)
-    {
-        MeshState& state = entry.second;
-        if (state.mRooms && state.mProduct && roomsReady(state.windSchedule(), now, wind_settle_ms / 1000.0))
-        {
-            LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skrooms - post wind");
-            postWind(state);
         }
     }
 
     // The view's sky map is the copy the last pass was handed, not one per publish.
-    if (mViewAirDirty || mViewWindDirty)
+    if (mViewAirDirty)
     {
         LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skrooms - rebuild view");
         rebuildView();
@@ -1437,11 +1178,6 @@ void SKRooms::finish(const std::shared_ptr<Job>& job)
     state.mRooms = job->mSpacesKept ? job->mPreviousRooms : job->mSpaces->product();
     state.mRoomGraph = job->mRoomGraph;
     state.mRoomsDoorSignature = job->mDoorSignature;
-    // Only answers that moved, or none yet, are worth a new set of slabs.
-    if (moved || !state.mWind)
-    {
-        state.windStale(LLTimer::getTotalSeconds());
-    }
     mViewAirDirty = true;
     if (!moved)
     {
@@ -1471,128 +1207,14 @@ void SKRooms::finish(const std::shared_ptr<Job>& job)
     }
 }
 
-void SKRooms::postWind(MeshState& state)
-{
-    if (!mThread)
-    {
-        return;
-    }
-    if (!state.mWindLatest)
-    {
-        state.mWindLatest = std::make_shared<std::atomic<U64>>(0);
-    }
-    state.mWindLatest->store(++state.mWindGeneration);
-    auto input = std::make_shared<WindInput>();
-    input->mGeneration = state.mGeneration;
-    input->mEnclosure = state.mProduct;
-    input->mRooms = state.mRooms;
-    input->mBands = defaultWindBands();
-    auto job = std::make_shared<WindJob>();
-    job->mId = state.mId;
-    job->mGeneration = state.mWindGeneration;
-    job->mLatest = state.mWindLatest;
-    job->mPass = std::make_unique<WindPass>(input);
-    std::weak_ptr<bool> alive = mAlive;
-    const LL::WorkQueue::ptr_t queue = LL::WorkQueue::getInstance(QUEUE_NAME);
-    const bool posted = queue && queue->post([this, job, alive]() {
-        if (!alive.expired() && !LLApp::isExiting())
-        {
-            runWind(job, alive);
-        }
-    });
-    if (posted)
-    {
-        if (SKWorldTrace::tracing())
-        {
-            SKWorldTrace::Line("wind.start").mesh(state.mId).box(state.mMin, state.mMax).flag("first", state.mWind == nullptr);
-        }
-        state.mWindDirty = false;
-        state.mWindInFlight = true;
-    }
-}
-
-void SKRooms::runWind(const std::shared_ptr<WindJob>& job, const std::weak_ptr<bool>& alive)
-{
-    // On the rooms thread: a band's field or one slab per step, yielding between chunks like the passes.
-    auto land = [this, job, alive]() {
-        LL::WorkQueue::postMaybe(LL::WorkQueue::getInstance("mainloop"), [this, job, alive]() {
-            if (!alive.expired())
-            {
-                finishWind(job);
-            }
-        });
-    };
-    if (job->mLatest->load() != job->mGeneration)
-    {
-        job->mCancelled = true;
-        land();
-        return;
-    }
-    const auto start = std::chrono::steady_clock::now();
-    while (!job->mPass->step())
-    {
-        if (std::chrono::duration<F64, std::milli>(std::chrono::steady_clock::now() - start).count() >= CHUNK_MS)
-        {
-            const LL::WorkQueue::ptr_t queue = LL::WorkQueue::getInstance(QUEUE_NAME);
-            const bool posted = queue && queue->post([this, job, alive]() {
-                if (!alive.expired() && !LLApp::isExiting())
-                {
-                    runWind(job, alive);
-                }
-            });
-            if (!posted)
-            {
-                job->mCancelled = true;
-                land();
-            }
-            return;
-        }
-    }
-    land();
-}
-
-void SKRooms::finishWind(const std::shared_ptr<WindJob>& job)
-{
-    const auto it = mMeshes.find(job->mId);
-    if (it == mMeshes.end() || it->second.mWindLatest != job->mLatest)
-    {
-        return;
-    }
-    MeshState& state = it->second;
-    state.mWindInFlight = false;
-    if (job->mCancelled || state.mWindGeneration != job->mGeneration || !job->mPass->done())
-    {
-        if (SKWorldTrace::tracing())
-        {
-            SKWorldTrace::Line("wind.cancel").mesh(state.mId).box(state.mMin, state.mMax);
-        }
-        return;     // preempted: it runs again once the better tier has had the thread
-    }
-    // Slabs over the rooms it read land even if newer rooms have landed since: those set it stale again.
-    const WindProductPtr product = job->mPass->product();
-    ++mWindPasses;
-    mLastWindMs = product->mMillis;
-    mLastWindBytes = product->bytes();
-    state.mWind = product;
-    mViewWindDirty = true;
-    if (SKWorldTrace::tracing())
-    {
-        SKWorldTrace::Line("wind.publish").mesh(state.mId).box(state.mMin, state.mMax).real("ms", product->mMillis);
-    }
-}
-
-
 void SKRooms::rebuildView()
 {
-    // Each revision moves only for what changed: a wind publish leaves every air consumer's cache standing.
     auto view = std::make_shared<SKWorldView>();
-    view->mAirRevision = mViewAirDirty ? ++mViewAirRevision : mViewAirRevision;
-    view->mWindRevision = mViewWindDirty ? ++mViewWindRevision : mViewWindRevision;
+    view->mAirRevision = ++mViewAirRevision;
     mViewAirDirty = false;
-    mViewWindDirty = false;
     if (SKWorldTrace::tracing())
     {
-        SKWorldTrace::Line("view.rebuild").num("air", static_cast<S64>(view->mAirRevision)).num("wind", static_cast<S64>(view->mWindRevision));
+        SKWorldTrace::Line("view.rebuild").num("air", static_cast<S64>(view->mAirRevision));
     }
     view->mSky = mSky;
     for (const auto& entry : mMeshes)
@@ -1600,11 +1222,10 @@ void SKRooms::rebuildView()
         const MeshState& s = entry.second;
         if (s.mProduct)
         {
-            view->mMeshes.push_back({ s.mId, s.mOrigin, s.mMin, s.mMax, s.mProduct, s.mRooms, s.mRoomGraph, s.mWind });
+            view->mMeshes.push_back({ s.mId, s.mOrigin, s.mMin, s.mMax, s.mProduct, s.mRooms, s.mRoomGraph });
         }
     }
     mView = view;
-    mWind = std::make_shared<SKWind>(view);
 }
 
 std::string SKRooms::statsLine() const
@@ -1668,24 +1289,12 @@ std::string SKRooms::statsLine() const
         }
     }
     flight_ms = mLastFlightMs;
-    U32 winds = 0;
-    size_t wind_bytes = 0;
-    for (const auto& entry : mMeshes)
-    {
-        if (entry.second.mWind)
-        {
-            ++winds;
-            wind_bytes += entry.second.mWind->bytes();
-        }
-    }
     return llformat("enclosure: %u meshes, %u passes (%u repairs, %u keeping their spaces, %u dropped, %u running), last %.0f ms on the thread (%s, %u tiles answered), %.0f ms posted to landed, unknown %.1f%% and sealed %.1f%% of %llu gaps; %u spaces and %u portals, last %.0f ms (%s); "
-                    "flights: %u stairs, %u ramps, %u climbs, last %.1f ms; rooms %u (truncated %u), %.1f KB, graph %.1f ms view air %llu wind %llu; "
-                    "wind slabs over %u meshes, %.1f MB, %u builds, last %.0f ms for %.1f MB",
+                    "flights: %u stairs, %u ramps, %u climbs, last %.1f ms; rooms %u (truncated %u), %.1f KB, graph %.1f ms view air %llu",
                     meshes, mPasses, mRepairs, mSpacesKept, mCancelled, in_flight, mLastMs, stages.c_str(), mLastAnswered, mLastWallMs,
                     gaps ? 100.0 * unknown / gaps : 0.0, gaps ? 100.0 * sealed / gaps : 0.0, static_cast<unsigned long long>(gaps), spaces,
                     portals, mLastSpacesMs, space_stages.c_str(), flights[0], flights[1], flights[2], flight_ms, rooms, truncated, room_bytes / 1024.0, mLastRoomGraphMs,
-                    static_cast<unsigned long long>(mViewAirRevision), static_cast<unsigned long long>(mViewWindRevision), winds,
-                    wind_bytes / 1048576.0, mWindPasses, mLastWindMs, mLastWindBytes / 1048576.0);
+                    static_cast<unsigned long long>(mViewAirRevision));
 }
 
 void SKRooms::gatherSpaces(SKWorldOverlayGeom& geom, const LLVector3d& camera, F64 reach, bool opaque) const
@@ -1986,8 +1595,6 @@ void SKRooms::refreshOverlay()
 {
     static LLCachedControl<F32> range(gSavedSettings, "SKWorldOverlayRange", 96.f);
     static LLCachedControl<bool> show_spaces(gSavedSettings, "SKRoomsOverlaySpaces", false);
-    static LLCachedControl<bool> show_wind(gSavedSettings, "SKRoomsOverlayWind", false);
-    static LLCachedControl<F32> wind_heading(gSavedSettings, "SKRoomsOverlayWindHeading", -1.f);
     static LLCachedControl<U32> show_air(gSavedSettings, "SKAirOverlay", 0);
     const U32 air_mode = show_air == static_cast<U32>(AirDebugMode::SPACE) || show_air == static_cast<U32>(AirDebugMode::INDOOR) ? (U32)show_air : 0;
 
@@ -2000,25 +1607,10 @@ void SKRooms::refreshOverlay()
     const F32 fov_y = view->getView();
     const S32 viewport_height = gViewerWindow ? gViewerWindow->getWorldViewHeightRaw() : 0;
 
-    // The wind layer shows one heading: the setting's, or the region's wind where the camera is.
-    F32 heading = wind_heading;
-    if (show_wind && heading < 0.f)
-    {
-        heading = 0.f;
-        if (LLViewerRegion* region = gAgent.getRegion())
-        {
-            const LLVector3 v = region->mWind.getVelocity(region->getPosRegionFromGlobal(camera));
-            heading = v.lengthSquared() > 1e-6f ? std::atan2(v.mV[VY], v.mV[VX]) * RAD_TO_DEG : 0.f;
-        }
-    }
-    const S32 wind_bucket = static_cast<S32>(std::lround(heading / (360.f / WIND_HEADINGS)));
-
     U64 key = SEED;
-    key = mix(key, (show_spaces ? 1ull : 0ull) | (show_wind ? 2ull : 0ull));
+    key = mix(key, show_spaces ? 1ull : 0ull);
     key = mix(key, static_cast<U64>(air_mode));
     key = mix(key, show_spaces || air_mode ? airRevision() : 0ull);
-    key = mix(key, show_wind ? windRevision() : 0ull);
-    key = mix(key, show_wind ? static_cast<U64>(wind_bucket + 1000) : 0ull);
     key = mixF32(key, static_cast<F32>(reach));
     key = mixF32(key, fov_y);
     key = mix(key, static_cast<U64>(viewport_height));
@@ -2042,10 +1634,6 @@ void SKRooms::refreshOverlay()
     if (air_mode)
     {
         gatherAirModes(camera, reach, air_mode);
-    }
-    if (show_wind)
-    {
-        gatherWind(mOverlay, camera, reach, wind_bucket * (360.f / WIND_HEADINGS), false);
     }
     mOverlay.upload();
     mOverlayFresh = true;
