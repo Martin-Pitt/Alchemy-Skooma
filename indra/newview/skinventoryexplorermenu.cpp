@@ -39,6 +39,7 @@
 #include "llfriendcard.h"
 #include "llgesturemgr.h"
 #include "llinventorybridge.h"
+#include "llfloatersidepanelcontainer.h"
 #include "llinventoryfunctions.h"
 #include "llinventorygallery.h"
 #include "llinventorymodel.h"
@@ -520,6 +521,44 @@ void bridgeAction(const LLUUID& id, const std::string& action)
     }
 }
 
+bool allInTrash(const uuid_vec_t& ids)
+{
+    const LLUUID trash_id = gInventory.findCategoryUUIDForType(LLFolderType::FT_TRASH);
+    return !ids.empty() && std::all_of(ids.begin(), ids.end(), [&trash_id](const LLUUID& id)
+                                       { return id != trash_id && gInventory.isObjectDescendentOf(id, trash_id); });
+}
+
+void purge(const uuid_vec_t& ids)
+{
+    for (const LLUUID& id : ids)
+    {
+        // A selected object inside a selected folder has gone with it.
+        if (gInventory.getObject(id))
+        {
+            remove_inventory_object(id, nullptr);
+        }
+    }
+}
+
+void restore(const uuid_vec_t& ids)
+{
+    for (const LLUUID& id : ids)
+    {
+        // Not restamped, as LLItemBridge::restoreItem and LLFolderBridge::restoreItem leave them.
+        if (LLViewerInventoryItem* item = gInventory.getItem(id))
+        {
+            const LLFolderType::EType type = item->getInventoryType() == LLInventoryType::IT_SNAPSHOT
+                                                 ? LLFolderType::FT_SNAPSHOT_CATEGORY
+                                                 : LLFolderType::assetTypeToFolderType(item->getType());
+            gInventory.changeItemParent(item, gInventory.findCategoryUUIDForType(type), false);
+        }
+        else if (LLViewerInventoryCategory* cat = gInventory.getCategory(id))
+        {
+            gInventory.changeCategoryParent(cat, gInventory.getRootFolderID(), false);
+        }
+    }
+}
+
 } // namespace SKInventoryExplorerActions
 
 //
@@ -688,9 +727,30 @@ LLContextMenu* SKInventoryExplorerContextMenu::createMenu()
     if (menu)
     {
         updateMenuItemsVisibility(menu);
-        addIconRow(menu);
+        if (!isTrashMenu() && !isOutfitMenu())
+        {
+            addIconRow(menu);
+        }
     }
     return menu;
+}
+
+bool SKInventoryExplorerContextMenu::isTrashMenu() const
+{
+    const LLUUID trash_id = gInventory.findCategoryUUIDForType(LLFolderType::FT_TRASH);
+    return !mUUIDs.empty() && (mUUIDs.front() == trash_id || gInventory.isObjectDescendentOf(mUUIDs.front(), trash_id));
+}
+
+bool SKInventoryExplorerContextMenu::isOutfitMenu() const
+{
+    // One folder of My Outfits, itself rather than a link to it.
+    if (mRootMode || mUUIDs.size() != 1)
+    {
+        return false;
+    }
+    const LLViewerInventoryCategory* cat = gInventory.getCategory(mUUIDs.front());
+    const LLUUID my_outfits_id = gInventory.findCategoryUUIDForType(LLFolderType::FT_MY_OUTFITS);
+    return cat && my_outfits_id.notNull() && cat->getParentUUID() == my_outfits_id;
 }
 
 void SKInventoryExplorerContextMenu::show(LLView* spawning_view, const uuid_vec_t& uuids, S32 x, S32 y)
@@ -882,6 +942,73 @@ void SKInventoryExplorerContextMenu::updateMenuItemsVisibility(LLContextMenu* me
     const bool is_link = obj->getIsLinkType();
     const LLUUID folder_id = SKInventoryExplorerActions::folderOf(first);
     const LLViewerInventoryCategory* cat = gInventory.getCategory(first);
+
+    // The Trash has Empty Trash alone and what is in it Purge or Restore alone; empty space keeps the view's options.
+    if (first == trash_id || is_in_trash)
+    {
+        if (mRootMode)
+        {
+            for (const char* option : { "options_separator", "View", "Group By", "Sort By" })
+            {
+                items.push_back(option);
+            }
+        }
+        if (first == trash_id && !many)
+        {
+            items.push_back("empty_trash");
+        }
+        else if (!mRootMode && SKInventoryExplorerActions::allInTrash(mUUIDs))
+        {
+            items.push_back("purge");
+            items.push_back("restore");
+            menu->getChild<LLMenuItemGL>("purge")->setLabel(string(many ? "purge_many" : "purge_one"));
+            menu->getChild<LLMenuItemGL>("restore")->setLabel(string(many ? "restore_many" : "restore_one"));
+        }
+        hide_context_entries(*menu, items, disabled);
+        return;
+    }
+
+    // An outfit gets the My Outfits list's menu (LLOutfitContextMenu).
+    if (isOutfitMenu())
+    {
+        LLAppearanceMgr& appearance = LLAppearanceMgr::instance();
+        items.push_back("outfit_replace");
+        if (!appearance.getCanReplaceCOF(first))
+        {
+            disabled.push_back("outfit_replace");
+        }
+        items.push_back("outfit_add");
+        if (!LLAppearanceMgr::getCanAddToCOF(first))
+        {
+            disabled.push_back("outfit_add");
+        }
+        items.push_back("outfit_take_off");
+        if (!LLAppearanceMgr::getCanRemoveFromCOF(first))
+        {
+            disabled.push_back("outfit_take_off");
+        }
+        items.push_back("outfit_wear_separator");
+        items.push_back("outfit_thumbnail");
+        items.push_back("outfit_favorite");
+        menu->getChild<LLMenuItemGL>("outfit_favorite")->setLabel(string(cat->getIsFavorite() ? "favorite_remove" : "favorite_add"));
+        if (appearance.getBaseOutfitUUID() == first)
+        {
+            items.push_back("outfit_edit");
+        }
+        items.push_back("outfit_rename");
+        if (!get_is_category_renameable(&gInventory, first))
+        {
+            disabled.push_back("outfit_rename");
+        }
+        items.push_back("outfit_save");
+        if (appearance.getCanRemoveOutfit(first))
+        {
+            items.push_back("outfit_delete_separator");
+            items.push_back("outfit_delete");
+        }
+        hide_context_entries(*menu, items, disabled);
+        return;
+    }
 
     for (const char* option : { "options_separator", "View", "Group By", "Sort By" })
     {
@@ -1182,11 +1309,65 @@ void SKInventoryExplorerContextMenu::doToSelected(const std::string& action)
     }
     else if (action == "find_original")
     {
-        show_item_original(id);
+        if (mFindOriginalCallback)
+        {
+            mFindOriginalCallback(id);
+        }
+        else
+        {
+            show_item_original(id);
+        }
     }
     else if (action == "empty_trash")
     {
         gInventory.emptyFolderType("ConfirmEmptyTrash", LLFolderType::FT_TRASH);
+    }
+    else if (action == "purge")
+    {
+        SKInventoryExplorerActions::purge(ids);
+    }
+    else if (action == "restore")
+    {
+        SKInventoryExplorerActions::restore(ids);
+    }
+    else if (action == "outfit_replace")
+    {
+        LLAppearanceMgr::instance().replaceCurrentOutfit(id);
+    }
+    else if (action == "outfit_add")
+    {
+        LLAppearanceMgr::instance().addCategoryToCurrentOutfit(id);
+    }
+    else if (action == "outfit_take_off")
+    {
+        LLAppearanceMgr::instance().takeOffOutfit(id);
+    }
+    else if (action == "outfit_edit")
+    {
+        LLFloaterSidePanelContainer::showPanel("appearance", LLSD().with("type", "edit_outfit"));
+    }
+    else if (action == "outfit_save")
+    {
+        LLNotificationsUtil::add("ConfirmOverwriteOutfit", LLSD(), LLSD(),
+                                 [id](const LLSD& notification, const LLSD& response)
+                                 {
+                                     if (LLNotificationsUtil::getSelectedOption(notification, response) == 0)
+                                     {
+                                         LLAppearanceMgr::instance().onOutfitFolderCreated(id, true);
+                                     }
+                                 });
+    }
+    else if (action == "outfit_delete")
+    {
+        // As LLOutfitListBase::removeSelected asks it.
+        LLNotificationsUtil::add("DeleteOutfits", LLSD(), LLSD(),
+                                 [id](const LLSD& notification, const LLSD& response)
+                                 {
+                                     if (LLNotificationsUtil::getSelectedOption(notification, response) == 0)
+                                     {
+                                         gInventory.removeCategory(id);
+                                     }
+                                 });
     }
     else if (action == "empty_lost_and_found")
     {

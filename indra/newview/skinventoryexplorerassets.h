@@ -27,13 +27,16 @@
 #ifndef SK_SKINVENTORYEXPLORERASSETS_H
 #define SK_SKINVENTORYEXPLORERASSETS_H
 
+#include "indra_constants.h"
 #include "lluuid.h"
 #include "v3math.h"
 
+#include <memory>
 #include <string>
 #include <vector>
 
 class LLLandmark;
+class LLMultiGesture;
 
 enum ESKAssetState
 {
@@ -72,6 +75,16 @@ struct SKAnimInfo
     std::vector<std::string> mRegions;  // keys: body, hands, face, wings, tail, hind
 };
 
+// What a gesture asset says about how it is set off.
+struct SKGestureInfo
+{
+    ESKAssetState mState = SK_ASSET_LOADING;
+    std::string mTrigger;
+    std::string mReplace;
+    KEY mKey = 0;       // KEY_NONE for no shortcut
+    MASK mMask = 0;
+};
+
 // A script's experience, asked of the region once per item.
 struct SKExperienceInfo
 {
@@ -88,6 +101,9 @@ namespace SKInventoryAssets
 
     const SKSoundInfo* sound(const LLUUID& asset_id, bool fetch);
     const SKAnimInfo* animation(const LLUUID& asset_id, bool fetch);
+    const SKGestureInfo* gesture(const LLUUID& asset_id, bool fetch);
+    // A playable copy of a gesture already fetched; null before.
+    std::unique_ptr<LLMultiGesture> makeGesture(const LLUUID& asset_id);
     const SKExperienceInfo* experience(const LLUUID& item_id, bool fetch);
     LLLandmark* landmark(const LLUUID& asset_id, bool fetch);
 }
