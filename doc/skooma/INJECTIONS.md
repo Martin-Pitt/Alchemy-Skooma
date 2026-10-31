@@ -1690,3 +1690,13 @@ the record. Tools and the decision: `V:\Scratch\icon-weight\` (`DECISION.md`).
 |---|---|---|
 | `indra/newview/skins/default/textures/icons/Inv_*.png` (55 row icons) | Redrawn at 14 px in the 16 px box, heavy icons shrunk halfway toward the median Oklab ΔE weight, centred by weight in whole pixels | none — image files |
 | `indra/newview/skins/default/textures/icons/Inv_Favorite_Star_Full.png`, `Inv_Favorite_Star_Content.png` | Same size and centring on their 14 px canvas | none — image files |
+
+## Script editor publish off the coroutine
+
+`fix-scripteditor/publish-coro-mutex`: a prim inventory loaded by `fetchInventoryFromCapCoro` reached the server's `LLMutex` on that coroutine and aborted Explore in IDE.
+
+### Upstream edits
+
+| File | Change | Marker |
+|---|---|---|
+| `indra/newview/llpublishedobjectmgr.cpp` | `LLPublishedPrimListener::inventoryChanged` notifies the server directly on the main coroutine, else posts it to the main loop through a weak pointer; `notifyServer` helper | `<SK:Nexii>` block |
