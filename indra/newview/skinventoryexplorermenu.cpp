@@ -520,6 +520,44 @@ void bridgeAction(const LLUUID& id, const std::string& action)
     }
 }
 
+bool allInTrash(const uuid_vec_t& ids)
+{
+    const LLUUID trash_id = gInventory.findCategoryUUIDForType(LLFolderType::FT_TRASH);
+    return !ids.empty() && std::all_of(ids.begin(), ids.end(), [&trash_id](const LLUUID& id)
+                                       { return id != trash_id && gInventory.isObjectDescendentOf(id, trash_id); });
+}
+
+void purge(const uuid_vec_t& ids)
+{
+    for (const LLUUID& id : ids)
+    {
+        // A selected object inside a selected folder has gone with it.
+        if (gInventory.getObject(id))
+        {
+            remove_inventory_object(id, nullptr);
+        }
+    }
+}
+
+void restore(const uuid_vec_t& ids)
+{
+    for (const LLUUID& id : ids)
+    {
+        // Not restamped, as LLItemBridge::restoreItem and LLFolderBridge::restoreItem leave them.
+        if (LLViewerInventoryItem* item = gInventory.getItem(id))
+        {
+            const LLFolderType::EType type = item->getInventoryType() == LLInventoryType::IT_SNAPSHOT
+                                                 ? LLFolderType::FT_SNAPSHOT_CATEGORY
+                                                 : LLFolderType::assetTypeToFolderType(item->getType());
+            gInventory.changeItemParent(item, gInventory.findCategoryUUIDForType(type), false);
+        }
+        else if (LLViewerInventoryCategory* cat = gInventory.getCategory(id))
+        {
+            gInventory.changeCategoryParent(cat, gInventory.getRootFolderID(), false);
+        }
+    }
+}
+
 } // namespace SKInventoryExplorerActions
 
 //
@@ -688,7 +726,12 @@ LLContextMenu* SKInventoryExplorerContextMenu::createMenu()
     if (menu)
     {
         updateMenuItemsVisibility(menu);
-        addIconRow(menu);
+        // The Trash's menus are their one or two entries.
+        const LLUUID trash_id = gInventory.findCategoryUUIDForType(LLFolderType::FT_TRASH);
+        if (!mUUIDs.empty() && mUUIDs.front() != trash_id && !gInventory.isObjectDescendentOf(mUUIDs.front(), trash_id))
+        {
+            addIconRow(menu);
+        }
     }
     return menu;
 }
@@ -882,6 +925,31 @@ void SKInventoryExplorerContextMenu::updateMenuItemsVisibility(LLContextMenu* me
     const bool is_link = obj->getIsLinkType();
     const LLUUID folder_id = SKInventoryExplorerActions::folderOf(first);
     const LLViewerInventoryCategory* cat = gInventory.getCategory(first);
+
+    // The Trash has Empty Trash alone and what is in it Purge or Restore alone; empty space keeps the view's options.
+    if (first == trash_id || is_in_trash)
+    {
+        if (mRootMode)
+        {
+            for (const char* option : { "options_separator", "View", "Group By", "Sort By" })
+            {
+                items.push_back(option);
+            }
+        }
+        if (first == trash_id && !many)
+        {
+            items.push_back("empty_trash");
+        }
+        else if (!mRootMode && SKInventoryExplorerActions::allInTrash(mUUIDs))
+        {
+            items.push_back("purge");
+            items.push_back("restore");
+            menu->getChild<LLMenuItemGL>("purge")->setLabel(string(many ? "purge_many" : "purge_one"));
+            menu->getChild<LLMenuItemGL>("restore")->setLabel(string(many ? "restore_many" : "restore_one"));
+        }
+        hide_context_entries(*menu, items, disabled);
+        return;
+    }
 
     for (const char* option : { "options_separator", "View", "Group By", "Sort By" })
     {
@@ -1187,6 +1255,14 @@ void SKInventoryExplorerContextMenu::doToSelected(const std::string& action)
     else if (action == "empty_trash")
     {
         gInventory.emptyFolderType("ConfirmEmptyTrash", LLFolderType::FT_TRASH);
+    }
+    else if (action == "purge")
+    {
+        SKInventoryExplorerActions::purge(ids);
+    }
+    else if (action == "restore")
+    {
+        SKInventoryExplorerActions::restore(ids);
     }
     else if (action == "empty_lost_and_found")
     {

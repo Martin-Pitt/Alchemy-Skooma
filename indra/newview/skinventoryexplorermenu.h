@@ -54,6 +54,12 @@ namespace SKInventoryExplorerActions
     bool canDelete(const uuid_vec_t& ids, const LLUUID& listed_folder_id);
     void deleteObjects(const uuid_vec_t& ids);
 
+    // Whether every one of ids is in the Trash, below its folder.
+    bool allInTrash(const uuid_vec_t& ids);
+    // As the bridges' "purge" and "restore": deletes for good, or moves an item back to its type's folder and a folder to the root.
+    void purge(const uuid_vec_t& ids);
+    void restore(const uuid_vec_t& ids);
+
     // The clipboard, as LLInventoryGallery's cut, copy and paste use it.
     bool canCopy(const uuid_vec_t& ids);
     void copy(const uuid_vec_t& ids);

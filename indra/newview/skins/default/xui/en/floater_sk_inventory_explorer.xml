@@ -140,6 +140,10 @@
     <string name="details_gallery_resolution_full">[W]×[H] · full resolution</string>
     <string name="no_selection">No item selected</string>
     <string name="menu_menu_title">[COUNT] ITEMS</string>
+    <string name="menu_purge_one">Purge Item</string>
+    <string name="menu_purge_many">Purge Items</string>
+    <string name="menu_restore_one">Restore Item</string>
+    <string name="menu_restore_many">Restore Items</string>
     <string name="menu_full_perm_only">(Full perm only)</string>
     <string name="menu_tip_cut">Cut  (Ctrl+X)</string>
     <string name="menu_tip_copy">Copy  (Ctrl+C)</string>
