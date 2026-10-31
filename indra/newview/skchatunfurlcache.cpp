@@ -35,6 +35,7 @@
 #include "llregionhandle.h"
 #include "llremoteparcelrequest.h"
 #include "llviewercontrol.h"
+#include "llviewermedia.h"
 #include "llviewerregion.h"
 #include "llviewertexture.h"
 #include "llviewertexturelist.h"
@@ -435,6 +436,8 @@ void SKChatUnfurlCache::requestPage(const SKChatEmbedPtr& embed)
         options->setTransferTimeout(PAGE_TIMEOUT);
         options->setRetries(0);
         LLCore::HttpHeaders::ptr_t headers = std::make_shared<LLCore::HttpHeaders>();
+        // GitHub's API refuses a request that names no agent.
+        headers->append(HTTP_OUT_HEADER_USER_AGENT, LLViewerMedia::getInstance()->getCurrentUserAgent());
         const std::string& video = target.mVideo;
         if (github)
         {
