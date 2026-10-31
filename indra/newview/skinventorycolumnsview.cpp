@@ -903,10 +903,12 @@ void SKInventoryColumnsView::drawColumn(const Column& column, S32 index, S32 hei
             gl_rect_2d(left, top, inner_right - 1, top - ROW_HEIGHT, path_color.get());
         }
 
+        const SKInventoryExplorerActions::EClipboardMark mark = SKInventoryExplorerActions::clipboardMark(row.mID);
+        const F32 fade = mark == SKInventoryExplorerActions::MARK_CUT ? 0.5f : 1.f;
         S32 x = left + CELL_PAD;
         if (row.mIcon.notNull())
         {
-            row.mIcon->draw(x, middle - ICON_SIZE / 2, ICON_SIZE, ICON_SIZE);
+            row.mIcon->draw(x, middle - ICON_SIZE / 2, ICON_SIZE, ICON_SIZE, LLColor4::white % fade);
             if (row.hasLinkBadge())
             {
                 SKInventoryFlatView::drawLinkBadge(LLRect(x, middle + ICON_SIZE / 2, x + ICON_SIZE, middle - ICON_SIZE / 2));
@@ -928,6 +930,11 @@ void SKInventoryColumnsView::drawColumn(const Column& column, S32 index, S32 hei
             color = dim_color.get();
             style = LLFontGL::ITALIC;
         }
+        if (mark == SKInventoryExplorerActions::MARK_COPY)
+        {
+            style |= LLFontGL::BOLD;
+        }
+        color.mV[VALPHA] *= fade;
         font->renderUTF8(row.mName, 0, (F32)x, (F32)middle, color, LLFontGL::LEFT, LLFontGL::VCENTER, style,
                          LLFontGL::NO_SHADOW, S32_MAX, llmax(0, text_right - x), nullptr, LLFontGL::ELLIPSIS_MIDDLE);
     }
@@ -1416,6 +1423,41 @@ void SKInventoryColumnsView::onFocusLost()
         gEditMenuHandler = nullptr;
     }
     LLUICtrl::onFocusLost();
+}
+
+void SKInventoryColumnsView::cut()
+{
+    SKInventoryExplorerActions::cut(getSelection());
+}
+
+bool SKInventoryColumnsView::canCut() const
+{
+    return SKInventoryExplorerActions::canCut(getSelection());
+}
+
+void SKInventoryColumnsView::copy()
+{
+    SKInventoryExplorerActions::copy(getSelection());
+}
+
+bool SKInventoryColumnsView::canCopy() const
+{
+    return SKInventoryExplorerActions::canCopy(getSelection());
+}
+
+void SKInventoryColumnsView::paste()
+{
+    // Into a single selected folder, else into the current column's.
+    const uuid_vec_t selection = getSelection();
+    const LLUUID folder = selection.size() == 1 ? SKInventoryExplorerActions::folderOf(selection.front()) : LLUUID::null;
+    SKInventoryExplorerActions::paste(folder.notNull() ? folder : mFolderID);
+}
+
+bool SKInventoryColumnsView::canPaste() const
+{
+    const uuid_vec_t selection = getSelection();
+    const LLUUID folder = selection.size() == 1 ? SKInventoryExplorerActions::folderOf(selection.front()) : LLUUID::null;
+    return SKInventoryExplorerActions::canPaste(folder.notNull() ? folder : mFolderID);
 }
 
 void SKInventoryColumnsView::doDelete()

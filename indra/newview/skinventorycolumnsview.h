@@ -126,6 +126,12 @@ public:
 
     // LLEditMenuHandler
     LLView* asView() override { return this; }
+    void cut() override;
+    bool canCut() const override;
+    void copy() override;
+    bool canCopy() const override;
+    void paste() override;
+    bool canPaste() const override;
     void doDelete() override;
     bool canDoDelete() const override;
     void selectAll() override;
