@@ -30,7 +30,7 @@
 
 namespace skworld
 {
-    F32 footprintMax(const LLVector3d& min, const LLVector3d& max, const std::function<F32(const LLVector3d&)>& height)
+    F32 floorFootprintMax(const LLVector3d& min, const LLVector3d& max, const std::function<F32(const LLVector3d&)>& height)
     {
         const F64 z = min.mdV[VZ];
         const LLVector3d points[] = {

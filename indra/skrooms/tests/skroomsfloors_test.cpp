@@ -50,17 +50,17 @@ TEST_CASE("a footprint on a slope stands on its high corner")
 {
     // Land rising 0.5 m per metre along x.
     const auto slope = [](const LLVector3d& p) { return static_cast<F32>(p.mdV[VX] * 0.5); };
-    CHECK(footprintMax(LLVector3d(2.0, 0.0, 9.0), LLVector3d(6.0, 4.0, 11.0), slope) == 3.f);
+    CHECK(floorFootprintMax(LLVector3d(2.0, 0.0, 9.0), LLVector3d(6.0, 4.0, 11.0), slope) == 3.f);
 }
 
 TEST_CASE("an L of land under a footprint is read at the corner it raises")
 {
     // A 1 m step over the quarter x > 5, y > 5, which only the far corner sees.
     const auto ell = [](const LLVector3d& p) { return p.mdV[VX] > 5.0 && p.mdV[VY] > 5.0 ? 1.f : 0.f; };
-    CHECK(footprintMax(LLVector3d(0.0, 0.0, 0.0), LLVector3d(6.0, 6.0, 1.0), ell) == 1.f);
+    CHECK(floorFootprintMax(LLVector3d(0.0, 0.0, 0.0), LLVector3d(6.0, 6.0, 1.0), ell) == 1.f);
     // The middle alone sees a block under the footprint's centre.
     const auto centre = [](const LLVector3d& p) { return std::abs(p.mdV[VX] - 3.0) < 1.0 && std::abs(p.mdV[VY] - 3.0) < 1.0 ? 2.f : 0.f; };
-    CHECK(footprintMax(LLVector3d(0.0, 0.0, 0.0), LLVector3d(6.0, 6.0, 1.0), centre) == 2.f);
+    CHECK(floorFootprintMax(LLVector3d(0.0, 0.0, 0.0), LLVector3d(6.0, 6.0, 1.0), centre) == 2.f);
 }
 
 TEST_CASE("the floor pick prefers an avatar floor, then fine, then coarse")
