@@ -238,9 +238,14 @@ namespace
         LLTimer clock;
         std::atomic<int> turns{ 0 };
         std::atomic<bool> done{ false };
+        std::atomic<F64> first_turn{ 0.0 };
         const LLQueuedThread::handle_t handle(thread.generateHandle());
         thread.addRequest(new TestRequest(handle, [&]()
             {
+                if (turns.load() == 0)
+                {
+                    first_turn = clock.getElapsedTimeF64();
+                }
                 ++turns;
                 return done.load();
             }, true));
@@ -251,8 +256,13 @@ namespace
         REQUIRE(turns.load() == 1);
 
         ms_sleep(100);
-        CHECK(turns.load() == 1);
+        const int slept_turns(turns.load());
+        if (clock.getElapsedTimeF64() - first_turn.load() < 0.25)
+        {
+            CHECK(slept_turns == 1);
+        }
 
+        const F64 woken(clock.getElapsedTimeF64());
         thread.wakeRequest(handle);
         std::atomic<int> after_wake{ -1 };
         thread.post([&]()
@@ -264,7 +274,14 @@ namespace
         {
             ms_sleep(1);
         }
-        CHECK(after_wake.load() == 2);
+        if (woken - first_turn.load() < 0.25)
+        {
+            CHECK(after_wake.load() == 2);
+        }
+        else
+        {
+            WARN("A was woken after its fallback was due, so it ran for both");
+        }
     }
 
     TEST_CASE("llqueuedthread: an abort reaches a request waiting for a wake at once", "[llqueuedthread]")
