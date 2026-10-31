@@ -482,6 +482,30 @@ namespace SKDragVerdict
         outline.add(object, sWorld.mTEMask, colour, false, ALSelectionOutline::PRIORITY_CONTEXT, parts);
     }
 
+    bool marksObject(const LLViewerObject* object)
+    {
+        if (!object || !LLDragFeedback::shown() || !sInWorld || sWorld.mMark != EDragMark::Accept ||
+            sWorld.mObjectID.isNull())
+        {
+            return false;
+        }
+        const LLViewerObject* marked = gObjectList.findObject(sWorld.mObjectID);
+        if (!marked || marked->isDead())
+        {
+            return false;
+        }
+        if (marked->isAvatar())
+        {
+            // Outlined by what it wears.
+            return object->getAvatar() == marked && !object->isHUDAttachment();
+        }
+        if (sWorld.mWholeLinkset)
+        {
+            return object->getRootEdit() == marked->getRootEdit();
+        }
+        return object == marked;
+    }
+
     void compose(EAcceptance accept, const std::string& tooltip_msg, S32 source, U32 cargo_count)
     {
         std::vector<std::string> hints;
