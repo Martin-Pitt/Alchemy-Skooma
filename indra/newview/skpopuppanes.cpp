@@ -349,6 +349,7 @@ void SKPopupPanes::draw()
     }
 
     static LLUIColor bg_colour = LLUIColorTable::instance().getColor("MenuDefaultBgColor");
+    static LLUIColor shadow_colour = LLUIColorTable::instance().getColor("ColorDropShadow");
     static LLUIColor highlight_colour = LLUIColorTable::instance().getColor("MenuItemHighlightBgColor");
     static LLUIColor enabled_colour = LLUIColorTable::instance().getColor("MenuItemEnabledColor");
     static LLUIColor disabled_colour = LLUIColorTable::instance().getColor("MenuItemDisabledColor");
@@ -361,8 +362,9 @@ void SKPopupPanes::draw()
             continue;
         }
         const LLRect box = toLocal(mRects[i]);
+        // Styled as LLMenuGL draws a menu: a drop shadow, no outline.
+        gl_drop_shadow(box.mLeft, box.mTop, box.mRight, box.mBottom, shadow_colour.get(), DROP_SHADOW_FLOATER);
         gl_rect_2d(box, bg_colour.get(), true);
-        gl_rect_2d(box, disabled_colour.get() % 0.6f, false);
         LLLocalClipRect clip(box);
         const SKPopupPaneSpec& spec = mSpecs[i];
         for (S32 r = 0; r < static_cast<S32>(panes[i].mRows.size()) && r < static_cast<S32>(spec.mItems.size()); ++r)
@@ -377,7 +379,7 @@ void SKPopupPanes::draw()
             const F32 height = sk::PopupLayout::rowHeight(row);
             if (row.mKind == sk::PopupRow::Kind::SEPARATOR)
             {
-                gl_line_2d(box.mLeft + 4, ll_round(top - height * 0.5f), box.mRight - 4, ll_round(top - height * 0.5f), disabled_colour.get() % 0.5f);
+                gl_line_2d(box.mLeft + 6, ll_round(top - height * 0.5f), box.mRight - 6, ll_round(top - height * 0.5f), disabled_colour.get());
                 continue;
             }
             // The active row, and a row whose pane is open, are highlighted.
@@ -385,7 +387,7 @@ void SKPopupPanes::draw()
             const bool expanded = row.mOpens >= 0 && row.mOpens < static_cast<S32>(panes.size()) && panes[row.mOpens].mOpen;
             if (row.mKind == sk::PopupRow::Kind::ACTION && (active || expanded))
             {
-                gl_rect_2d(box.mLeft + 2, ll_round(top), box.mRight - 2, ll_round(top - height), highlight_colour.get(), true);
+                gl_rect_2d(box.mLeft, ll_round(top), box.mRight, ll_round(top - height), highlight_colour.get(), true);
             }
             const LLColor4 colour = row.mKind == sk::PopupRow::Kind::ACTION && row.mEnabled ? enabled_colour.get() : disabled_colour.get();
             const F32 mid = top - height * 0.5f;

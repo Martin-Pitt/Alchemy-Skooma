@@ -173,7 +173,7 @@ std::string SKMapMenu::label(const std::string& name)
     if (!loaded)
     {
         loaded = true;
-        static const char* NAMES[] = { "ping", "about_land", "place_profile", "world_map", "stop_tracking", "recenter", "settings", "tactical_settings",
+        static const char* NAMES[] = { "ping", "about_land", "place_profile", "world_map", "stop_tracking", "recenter", "settings", "tactical_settings", "lock", "unlock", "collapse", "close",
                                        "view_profile", "cam", "im", "offer_teleport", "request_teleport", "teleport_to", "block",
                                        "unblock", "derender", "report", "moderate", "freeze", "parcel_eject", "estate_kick",
                                        "estate_teleport_home", "estate_ban", "checking", "more" };
@@ -434,6 +434,35 @@ LLHandle<SKPopupPanes> SKMapMenu::open(LLView* spawner, S32 x, S32 y, const LLVe
     if (dynamic_cast<SKNetMap*>(spawner))
     {
         spec.mItems.push_back(action(label("settings"), []() { LLFloaterReg::showInstance("sk_map_settings"); }));
+        // The title buttons' work, here so the corner can stay the map's.
+        if (LLFloater* floater = spawner->getParentByType<LLFloater>())
+        {
+            LLHandle<LLFloater> handle = floater->getHandle();
+            if (floater->canLock())
+            {
+                spec.mItems.push_back(action(label(floater->isLocked() ? "unlock" : "lock"), [handle]() {
+                    LLFloater::onClickLock(handle.get());
+                }));
+            }
+            if (floater->isMinimizeable())
+            {
+                spec.mItems.push_back(action(label("collapse"), [handle]() {
+                    if (LLFloater* f = handle.get())
+                    {
+                        f->setMinimized(true);
+                    }
+                }));
+            }
+            if (floater->isCloseable())
+            {
+                spec.mItems.push_back(action(label("close"), [handle]() {
+                    if (LLFloater* f = handle.get())
+                    {
+                        f->closeFloater();
+                    }
+                }));
+            }
+        }
     }
     else
     {
