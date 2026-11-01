@@ -41,6 +41,8 @@ wind/weather debug views, not air cells, despite the names.
   wherever its upwind samples fell inside a solid (speed 0 with the clamp opened, the 0.5 floor with it), while
   the lee alone matched every platform. The NaN is in the Gaussian smoothing of the free width over blocked cells;
   the air and rooms inputs were shown correct.
+- **Probe placement leaves rooms** (2026-11-01): `skroomsprobes.*` and `skroomsprobecache.*` moved to library
+  `skprobes` on `foundation-world/probes`; a foundation never carries its consumers.
 - **Avatar shapes:** measured polytopes (COMBAT.md P1), `skcensusavatarshape.*`, models in `V:\Scratch\avatar-shape\`.
 - **Test regions:** census exports (`%APPDATA%\AlchemyNext\logs\sknav-census-*.json`) from **Resdayn** (marks in
   `V:\Scratch\archive\scratch-2026-10-21\nav-corrections-1007\`) and **Bad / Good / Outer Space** (sloping
