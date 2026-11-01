@@ -30,6 +30,7 @@
 #include "lldraghandle.h"
 #include "llfloaterreg.h"
 #include "llfocusmgr.h"
+#include "llkeyboard.h"
 #include "llresizebar.h"
 #include "llresizehandle.h"
 
@@ -163,23 +164,27 @@ void SKFloaterMap::draw()
         return;
     }
 
-    // Borderless at rest: the base buttons show only with the chrome.
+    // Borderless at rest. The buttons sit over the map's top right corner, where people crowd as much as anywhere, and
+    // the context menu does their work, so plain hover leaves the corner to the map: they show with Alt held, collapsed,
+    // or while the settings are open.
     const bool chrome = chromeWanted();
+    const bool buttons = chrome && (isMinimized() || LLFloaterReg::instanceVisible("sk_map_settings") ||
+                                    (gKeyboard && (gKeyboard->currentMask(true) & MASK_ALT)));
     for (S32 i = 0; i < BUTTON_COUNT; ++i)
     {
         if (mButtons[i])
         {
-            mButtons[i]->setVisible(chrome && mButtonShown[i]);
+            mButtons[i]->setVisible(buttons && mButtonShown[i]);
         }
     }
     if (mMap)
     {
-        // Locked, the buttons still show on hover so it can be unlocked, but the tint, frame and grip do not.
+        // Locked, the tint, frame and grip do not show; it unlocks from the menu or the Alt-held button.
         mMap->setChrome(chrome && !isLocked());
     }
     if (mCog)
     {
-        mCog->setVisible(chrome && !isMinimized() && !isLocked());
+        mCog->setVisible(buttons && !isMinimized() && !isLocked());
     }
     LLFloater::draw();
 }

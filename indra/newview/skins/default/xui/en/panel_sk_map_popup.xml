@@ -12,6 +12,10 @@
     <string name="recenter">Re-center Map</string>
     <string name="settings">Minimap Settings…</string>
     <string name="tactical_settings">Tactical Overview Options…</string>
+    <string name="lock">Lock Position</string>
+    <string name="unlock">Unlock Position</string>
+    <string name="collapse">Collapse</string>
+    <string name="close">Close</string>
     <string name="view_profile">View Profile</string>
     <string name="cam">Cam</string>
     <string name="im">IM</string>
