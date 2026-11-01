@@ -31,9 +31,9 @@
 #include <catch2/catch_test_macros.hpp>
 
 
-#include "skroomstestworld.h"
+#include "../../skrooms/tests/skroomstestworld.h"
 #include "../skroomsprobes.h"
-#include "../skroomsspaceproducts.h"
+#include "skroomsspaceproducts.h"
 
 #include <algorithm>
 #include <chrono>
