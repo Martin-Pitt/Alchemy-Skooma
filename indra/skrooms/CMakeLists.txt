@@ -16,8 +16,6 @@ target_sources(
     skroomsflights.cpp
     skroomsfloors.cpp
     skroomsgraph.cpp
-    skroomsprobecache.cpp
-    skroomsprobes.cpp
     skroomsspaceproducts.cpp
     skroomsspaces.cpp
     skroomsstairalign.cpp
@@ -35,8 +33,6 @@ target_sources(
         skroomsflights.h
         skroomsfloors.h
         skroomsgraph.h
-        skroomsprobecache.h
-        skroomsprobes.h
         skroomsschedule.h
         skroomsspaceproducts.h
         skroomsspaces.h
@@ -63,10 +59,6 @@ if(AL_BUILD_TESTS)
       tests/skroomsflights_test.cpp
       tests/skroomsfloors_test.cpp
       tests/skroomsgraph_test.cpp
-      tests/skroomsprobecache_test.cpp
-      tests/skroomsprobeinvariants_test.cpp
-      tests/skroomsprobes_test.cpp
-      tests/skroomsprobeseval_test.cpp
       tests/skroomsschedule_test.cpp
       tests/skroomsspaceproducts_test.cpp
       tests/skroomsstairalign_test.cpp

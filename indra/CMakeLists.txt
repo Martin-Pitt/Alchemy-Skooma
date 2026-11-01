@@ -589,6 +589,7 @@ add_subdirectory(llrender)
 add_subdirectory(skcensus) # <SK:Nexii> census
 add_subdirectory(skair) # <SK:Nexii> air cells
 add_subdirectory(skrooms) # <SK:Nexii> rooms and spaces
+add_subdirectory(skprobes) # <SK:Nexii> room probe placement
 add_subdirectory(llfilesystem)
 if(AL_USE_WEBRTC)
   add_subdirectory(llwebrtc)

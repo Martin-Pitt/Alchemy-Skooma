@@ -26,7 +26,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include "skairlayout.h"
-#include "../skroomsprobes.h"
+#include "skcensuscluster.h"
+#include "skcensuslattice.h"
 #include "skroomstestscene.h"
 #include <future>
 #include <thread>
@@ -75,7 +76,7 @@ namespace
         { INFO("the old snapshot and dense view still have the roof"); REQUIRE((retained)); }
     }
 
-    TEST_CASE("skroomsasync: layout and solid-index jobs retain records after the producer releases its snapshot", "[skroomsasync]")
+    TEST_CASE("skroomsasync: layout jobs retain records after the producer releases its snapshot", "[skroomsasync]")
     {
         using namespace skworld;
         auto record = std::make_shared<Record>();
@@ -93,14 +94,12 @@ namespace
         auto snapshot = std::make_shared<const ClusterSet>(cluster({record}, 0.5f));
         std::promise<void> release;
         auto gate = release.get_future();
-        std::packaged_task<std::pair<size_t, bool>()> task([snapshot, gate = std::move(gate)]() mutable
+        std::packaged_task<size_t()> task([snapshot, gate = std::move(gate)]() mutable
         {
             gate.wait();
             std::vector<LaidTile> laid;
             layAirborne(*snapshot->mClusters.front(), LLVector3d(), 1.f, laid);
-            SolidLattice solids;
-            solids.rebuild(snapshot->mClusters.front()->mRecords);
-            return std::make_pair(laid.size(), solids.contains(LLVector3d(16., 16., 20.)));
+            return laid.size();
         });
         auto result = task.get_future();
         std::thread worker(std::move(task));
@@ -111,8 +110,7 @@ namespace
         worker.join();
         const auto built = result.get();
         { INFO("polling an unfinished job does not wait"); REQUIRE((pending)); }
-        { INFO("the retained cluster produces its tile"); REQUIRE((built.first) == (size_t(1))); }
-        { INFO("the retained body is indexed"); REQUIRE((built.second)); }
+        { INFO("the retained cluster produces its tile"); REQUIRE((built) == (size_t(1))); }
     }
     TEST_CASE("skroomsasync: census clustering retains detached records and matches synchronous output", "[skroomsasync]")
     {

@@ -2146,6 +2146,7 @@ if(AL_BUILD_VIEWER)
       llplugin
       llprimitive
       llrender
+      skprobes # <SK:Nexii> room probe placement
       skrooms # <SK:Nexii> rooms and spaces
       skair # <SK:Nexii> air cells
       skcensus # <SK:Nexii> census
