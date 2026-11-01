@@ -287,7 +287,7 @@ Branch `foundation-world/rooms` (merge `734706e258`). Enclosure, spaces, flights
 
 | File | Role |
 |---|---|
-| `indra/skrooms/*` | Enclosure, spaces, floors, flights, stair alignment, graph, probe placement and cache; Catch2 tests |
+| `indra/skrooms/*` | Enclosure, spaces, floors, flights, stair alignment, graph; Catch2 tests |
 | `indra/newview/skrooms.h` / `.cpp` | `SKRooms` singleton: spaces follow the air, overlays, status |
 
 ### Injection sites
@@ -395,6 +395,7 @@ Probes over the world layers. Moved off the navmesh by `5c567c6748` (combat, "Pl
 |---|---|
 | `indra/newview/skroomprobes.h` / `.cpp` | `SKRoomProbes`: a full sphere per walkable space of the rooms layer near the camera, census-anchored; solids pool |
 | `indra/newview/skclusterprobes.h` / `.cpp` | `SKClusterProbes`: a fill tier over each census cluster |
+| `indra/skprobes/*` | Library `skprobes`: probe placement over the rooms (`skroomsprobes`, `skroomsprobecache`) and its Catch2 tests; moved out of `skrooms` 2026-11-01 |
 
 ### Injection sites
 
@@ -417,7 +418,8 @@ Probes over the world layers. Moved off the navmesh by `5c567c6748` (combat, "Pl
 
 ### Unmarked additions
 
-- `indra/newview/CMakeLists.txt` — `skclusterprobes`, `skroomprobes` sources and headers (trailing markers)
+- `indra/newview/CMakeLists.txt` — `skclusterprobes`, `skroomprobes` sources and headers (trailing markers); `skprobes` linked
+- `indra/CMakeLists.txt` — `add_subdirectory(skprobes)` (trailing marker)
 - `indra/newview/app_settings/settings_alchemy.xml` — `SKClusterProbes`, `SKClusterProbesMax`, `SKClusterProbesCellM`, `SKClusterProbesHeight`, `SKRoomProbes`, `SKRoomProbesMax` (were `SKNavRoomProbes*`)
 
 ---
