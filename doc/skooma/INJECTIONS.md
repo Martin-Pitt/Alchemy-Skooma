@@ -281,13 +281,13 @@ Branch `foundation-world/air` (on `main` via the rooms merge `734706e258`). The 
 
 ## World foundations — rooms and spaces
 
-Branch `foundation-world/rooms` (merge `734706e258`). Enclosure, spaces, flights, room graph and wind over the air cells; written as the census's rooms section. Library `indra/skrooms`.
+Branch `foundation-world/rooms` (merge `734706e258`). Enclosure, spaces, flights and room graph over the air cells; written as the census's rooms section. Library `indra/skrooms`.
 
 ### Files we own
 
 | File | Role |
 |---|---|
-| `indra/skrooms/*` | Enclosure, spaces, floors, flights, stair alignment, graph, wind, probe placement and cache; Catch2 tests |
+| `indra/skrooms/*` | Enclosure, spaces, floors, flights, stair alignment, graph, probe placement and cache; Catch2 tests |
 | `indra/newview/skrooms.h` / `.cpp` | `SKRooms` singleton: spaces follow the air, overlays, status |
 
 ### Injection sites
@@ -303,7 +303,7 @@ Branch `foundation-world/rooms` (merge `734706e258`). Enclosure, spaces, flights
 
 ### Unmarked additions
 
-- `settings_alchemy.xml` — `SKRooms{Enabled,OverlaySpaces,OverlayWind,OverlayWindHeading,SealedIndoors,SettleMs,WindSettleMs}`.
+- `settings_alchemy.xml` — `SKRooms{Enabled,OverlaySpaces,SealedIndoors,SettleMs}`.
 
 ---
 
