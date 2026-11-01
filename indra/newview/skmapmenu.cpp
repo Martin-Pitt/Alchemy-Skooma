@@ -444,15 +444,13 @@ LLHandle<SKPopupPanes> SKMapMenu::open(LLView* spawner, S32 x, S32 y, const LLVe
                     LLFloater::onClickLock(handle.get());
                 }));
             }
-            if (floater->isMinimizeable())
-            {
-                spec.mItems.push_back(action(label("collapse"), [handle]() {
-                    if (LLFloater* f = handle.get())
-                    {
-                        f->setMinimized(true);
-                    }
-                }));
-            }
+            // The mini-map always collapses (can_minimize in its XUI).
+            spec.mItems.push_back(action(label("collapse"), [handle]() {
+                if (LLFloater* f = handle.get())
+                {
+                    f->setMinimized(true);
+                }
+            }));
             if (floater->isCloseable())
             {
                 spec.mItems.push_back(action(label("close"), [handle]() {
