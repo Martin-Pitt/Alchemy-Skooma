@@ -1564,6 +1564,155 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildLinksets(const J
         return bits;
     };
 
+    // An invisible part's verdict, kept from the last build while its key holds.
+    auto judge = [&](size_t i, const CoverInput& cover, const std::vector<LLVector3>& source) -> Verdict
+    {
+        const LLUUID& part = partOf(i);
+        const U64 part_key = verdictKey(i, cover, source);
+        const auto made = verdicts.find(part);
+        if (made != verdicts.end() && made->second.mKey == part_key)
+        {
+            return made->second;
+        }
+        Verdict judged;
+        bool known = false;
+        if (job.mVerdicts)
+        {
+            const auto it = job.mVerdicts->mByPart.find(part);
+            if (it != job.mVerdicts->mByPart.end() && it->second.mKey == part_key)
+            {
+                judged = it->second;
+                known = true;
+            }
+        }
+        if (!known)
+        {
+            ++stats.mJudged;
+            const auto verdict_began = std::chrono::steady_clock::now();
+            // The neighbours' shapes go into a scratch for this part alone: nothing of theirs outlives the verdict.
+            const std::vector<skoverview::CoverCandidate> candidates =
+                skoverview::coverCandidates(cover.mCandidates, originOf(i), cover_scratch);
+            skoverview::CoverResult result = skoverview::coverVerdict(source, candidates, cover_params);
+            stats.mVerdictSeconds += std::chrono::duration<F64>(std::chrono::steady_clock::now() - verdict_began).count();
+            judged.mKey = part_key;
+            judged.mVerdict = (U8)result.mVerdict;
+            judged.mTooFine = result.mTooFine;
+            judged.mOutsideM2 = result.mOutsideArea;
+            judged.mPartM2 = result.mPartArea;
+            if (!result.mProtruding.empty())
+            {
+                judged.mProtruding = std::make_shared<const std::vector<LLVector3>>(std::move(result.mProtruding));
+            }
+            LL_DEBUGS("SKOverviewCover") << part << " " << skoverview::coverVerdictName(result.mVerdict) << " "
+                                         << result.mOutsideArea << " " << result.mPartArea << " "
+                                         << (result.mSurfaceClip ? 1 : 0) << LL_ENDL;
+        }
+        verdicts[part] = judged;
+        return judged;
+    };
+
+    // Invisible parts hatched whole because they overlap a barrier, directly or through other invisible parts: two
+    // invisible colliders judged apart, one hatched and one not, fight for depth wherever their faces meet.
+    std::unordered_set<size_t> barrier_groups;
+    {
+        LL_PROFILE_ZONE_NAMED("sk overview invisible groups");
+        struct Tested
+        {
+            size_t mIndex;
+            LLVector3d mLo, mHi;
+            bool mBarrier;
+        };
+        std::vector<Tested> tested;
+        std::vector<LLVector3> scratch;
+        const size_t count = kept.size() + sculpts.size();
+        for (size_t i = 0; i < count; ++i)
+        {
+            const CoverInput* cover = i < job.mCover.size() ? &job.mCover[i] : nullptr;
+            if (!cover || !cover->mTest)
+            {
+                continue;
+            }
+            const std::vector<LLVector3>* source = &scratch;
+            if (i >= kept.size())
+            {
+                source = sculpts[i - kept.size()].mTris.get();
+            }
+            else
+            {
+                scratch.clear();
+                skworld::emitRecord(*kept[i], kept[i]->mOrigin, scratch);
+            }
+            if (!source || source->empty())
+            {
+                continue;
+            }
+            const Verdict judged = judge(i, *cover, *source);
+            const auto verdict = (skoverview::CoverVerdict)judged.mVerdict;
+            if (verdict == skoverview::CoverVerdict::PROXY)
+            {
+                continue;
+            }
+            LLVector3 lo(1e30f, 1e30f, 1e30f), hi(-1e30f, -1e30f, -1e30f);
+            for (const LLVector3& v : *source)
+            {
+                update_min_max(lo, hi, v);
+            }
+            const LLVector3d origin = originOf(i);
+            const F64 grow = cover_params.mCoplanarD;
+            tested.push_back({ i, origin + LLVector3d(lo) - LLVector3d(grow, grow, grow), origin + LLVector3d(hi) + LLVector3d(grow, grow, grow),
+                               verdict == skoverview::CoverVerdict::BARRIER && !cover->mPending });
+        }
+        // Union-find over the overlapping boxes, swept along x.
+        std::vector<U32> parent(tested.size());
+        for (U32 t = 0; t < (U32)tested.size(); ++t)
+        {
+            parent[t] = t;
+        }
+        auto find = [&](U32 t)
+        {
+            while (parent[t] != t)
+            {
+                parent[t] = parent[parent[t]];
+                t = parent[t];
+            }
+            return t;
+        };
+        std::vector<U32> order(tested.size());
+        for (U32 t = 0; t < (U32)order.size(); ++t)
+        {
+            order[t] = t;
+        }
+        std::sort(order.begin(), order.end(), [&](U32 a, U32 b) { return tested[a].mLo.mdV[VX] < tested[b].mLo.mdV[VX]; });
+        for (size_t a = 0; a < order.size(); ++a)
+        {
+            const Tested& ta = tested[order[a]];
+            for (size_t b = a + 1; b < order.size() && tested[order[b]].mLo.mdV[VX] <= ta.mHi.mdV[VX]; ++b)
+            {
+                const Tested& tb = tested[order[b]];
+                if (tb.mLo.mdV[VY] <= ta.mHi.mdV[VY] && tb.mHi.mdV[VY] >= ta.mLo.mdV[VY] &&
+                    tb.mLo.mdV[VZ] <= ta.mHi.mdV[VZ] && tb.mHi.mdV[VZ] >= ta.mLo.mdV[VZ])
+                {
+                    parent[find(order[a])] = find(order[b]);
+                }
+            }
+        }
+        std::vector<bool> group_barrier(tested.size(), false);
+        for (U32 t = 0; t < (U32)tested.size(); ++t)
+        {
+            if (tested[t].mBarrier)
+            {
+                group_barrier[find(t)] = true;
+            }
+        }
+        for (U32 t = 0; t < (U32)tested.size(); ++t)
+        {
+            if (!tested[t].mBarrier && group_barrier[find(t)])
+            {
+                barrier_groups.insert(tested[t].mIndex);
+            }
+        }
+    }
+
     // Emits one part into its linkset's triangles: the triangles of each class, the hatch copies, and its counts.
     auto emitPart = [&](size_t i, LinksetGeom& geom)
     {
@@ -1602,45 +1751,18 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildLinksets(const J
             const LLUUID& part = partOf(i);
             const U64 part_key = verdictKey(i, *cover, *source);
             ++geom.mCover.mParts;
-            Verdict judged;
-            bool known = false;
-            if (job.mVerdicts)
-            {
-                const auto it = job.mVerdicts->mByPart.find(part);
-                if (it != job.mVerdicts->mByPart.end() && it->second.mKey == part_key)
-                {
-                    judged = it->second;
-                    known = true;
-                }
-            }
-            if (!known)
-            {
-                ++stats.mJudged;
-                const auto verdict_began = std::chrono::steady_clock::now();
-                // The neighbours' shapes go into a scratch for this part alone: nothing of theirs outlives the verdict.
-                const std::vector<skoverview::CoverCandidate> candidates = skoverview::coverCandidates(cover->mCandidates, origin, cover_scratch);
-                skoverview::CoverResult result = skoverview::coverVerdict(*source, candidates, cover_params);
-                stats.mVerdictSeconds += std::chrono::duration<F64>(std::chrono::steady_clock::now() - verdict_began).count();
-                judged.mKey = part_key;
-                judged.mVerdict = (U8)result.mVerdict;
-                judged.mTooFine = result.mTooFine;
-                judged.mOutsideM2 = result.mOutsideArea;
-                judged.mPartM2 = result.mPartArea;
-                if (!result.mProtruding.empty())
-                {
-                    judged.mProtruding = std::make_shared<const std::vector<LLVector3>>(std::move(result.mProtruding));
-                }
-                LL_DEBUGS("SKOverviewCover") << part << " " << skoverview::coverVerdictName(result.mVerdict) << " "
-                                             << result.mOutsideArea << " " << result.mPartArea << " "
-                                             << (result.mSurfaceClip ? 1 : 0) << LL_ENDL;
-            }
-            verdicts[part] = judged;
+            const Verdict judged = judge(i, *cover, *source);
             geom.mJudged.emplace_back(part, part_key);
             skoverview::CoverVerdict verdict = (skoverview::CoverVerdict)judged.mVerdict;
             // A neighbour still showing its look may yet hold the part: a hatch waits for it.
             if (cover->mPending && (verdict == skoverview::CoverVerdict::EXTRA || verdict == skoverview::CoverVerdict::BARRIER))
             {
                 verdict = skoverview::CoverVerdict::UNKNOWN_PHYSICS;
+            }
+            // Touching a barrier, it is hatched whole too: its coplanar faces would otherwise fight the hatch for depth.
+            if (verdict != skoverview::CoverVerdict::PROXY && barrier_groups.count(i))
+            {
+                verdict = skoverview::CoverVerdict::BARRIER;
             }
             if (verdict != skoverview::CoverVerdict::PROXY)
             {
@@ -1845,7 +1967,8 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::buildLinksets(const J
                         tris.clear();
                         skworld::emitRecord(*kept[i], kept[i]->mOrigin, tris);
                     }
-                    key = skoverview::scramble(key ^ verdictKey(i, *cover, *source) ^ (cover->mPending ? 0x9e11u : 0x0u));
+                    key = skoverview::scramble(key ^ verdictKey(i, *cover, *source) ^ (cover->mPending ? 0x9e11u : 0x0u) ^
+                                               (barrier_groups.count(i) ? 0xba22u << 16 : 0x0u));
                 }
             }
             const LLUUID root = where.first < job.mRoots.size() ? job.mRoots[where.first] : LLUUID::null;
