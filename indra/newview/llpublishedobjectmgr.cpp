@@ -1414,7 +1414,32 @@ void LLPublishedObjectMgr::onObjectPropertyChanged(
         setInventoryRequestStart(prim_id, LLTimer::getTotalSeconds().value());
         prim->requestInventory();
     }
+    // <SK:Nexii> Refetch a published prim's inventory another path dropped
+    else if (getPublished(root_id))
+    {
+        refetchDroppedInventory(prim);
+    }
+    // </SK:Nexii>
 }
+
+// <SK:Nexii> Refetch a published prim's inventory another path dropped
+bool LLPublishedObjectMgr::refetchDroppedInventory(LLViewerObject* prim)
+{
+    if (prim->isInventoryPending())
+    {
+        return true;
+    }
+    if (!prim->isInventoryDirty())
+    {
+        return false;
+    }
+
+    // A request start no answer consumed would otherwise hold off every refresh after it.
+    setInventoryRequestStart(prim->getID(), LLTimer::getTotalSeconds().value());
+    prim->requestInventory();
+    return prim->isInventoryPending();
+}
+// </SK:Nexii>
 
 void LLPublishedObjectMgr::onObjectPermissionsReceived(
     const LLUUID& prim_id, const LLUUID& owner_id, U32 owner_mask, U32 next_owner_mask)
