@@ -627,8 +627,7 @@ LLSD LLModel::writeModel(
     bool lock_scale_if_joint_position,
     EWriteModelMode write_mode,
     bool as_slm,
-    int submodel_id,
-    const LLVector3& position_offset) // <SK:Nexii> Mesh pivot spike
+    int submodel_id)
 {
     LLSD mdl;
 
@@ -814,10 +813,8 @@ LLSD LLModel::writeModel(
                 }
 
                 //write out face data
-                // <SK:Nexii> Mesh pivot spike: the quantized positions stay, only their domain moves
-                mdl[model_names[idx]][i]["PositionDomain"]["Min"] = (min_pos + position_offset).getValue();
-                mdl[model_names[idx]][i]["PositionDomain"]["Max"] = (max_pos + position_offset).getValue();
-                // </SK:Nexii>
+                mdl[model_names[idx]][i]["PositionDomain"]["Min"] = min_pos.getValue();
+                mdl[model_names[idx]][i]["PositionDomain"]["Max"] = max_pos.getValue();
                 mdl[model_names[idx]][i]["NormalizedScale"] = face.mNormalizedScale.getValue();
 
                 mdl[model_names[idx]][i]["Position"] = verts;
