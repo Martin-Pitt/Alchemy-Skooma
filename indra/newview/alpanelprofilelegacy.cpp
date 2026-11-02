@@ -58,6 +58,7 @@
 #include "llagent.h"
 #include "llagentdata.h"
 #include "llagentpicksinfo.h"
+#include "llappviewer.h"
 #include "llavataractions.h"
 #include "llavatariconctrl.h"
 #include "llcallingcard.h" // for LLAvatarTracker
@@ -244,176 +245,8 @@ void ALPanelProfileLegacy::updateData()
     const std::string& cap_url = gAgent.getRegionCapability(AGENT_PROFILE_CAP);
     if (!cap_url.empty())
     {
-        const auto& agent_id = getAvatarId();
-        auto handle = getHandle();
-        LLCoros::instance().launch("requestAvatarProfileCoro", [cap_url, agent_id, handle]() {
-            LLCore::HttpRequest::policy_t httpPolicy(LLCore::HttpRequest::DEFAULT_POLICY_ID);
-            LLCoreHttpUtil::HttpCoroutineAdapter::ptr_t
-                httpAdapter(new LLCoreHttpUtil::HttpCoroutineAdapter("request_avatar_properties_coro", httpPolicy));
-            LLCore::HttpRequest::ptr_t httpRequest(new LLCore::HttpRequest);
-            LLCore::HttpHeaders::ptr_t httpHeaders;
-
-            LLCore::HttpOptions::ptr_t httpOpts(new LLCore::HttpOptions);
-            httpOpts->setFollowRedirects(true);
-
-            std::string finalUrl = cap_url + "/" + agent_id.asString();
-
-            LLSD result = httpAdapter->getAndSuspend(httpRequest, finalUrl, httpOpts, httpHeaders);
-
-            LLSD httpResults = result[LLCoreHttpUtil::HttpCoroutineAdapter::HTTP_RESULTS];
-            LLCore::HttpStatus status = LLCoreHttpUtil::HttpCoroutineAdapter::getStatusFromLLSD(httpResults);
-
-            LL_DEBUGS("AvatarProperties") << "Agent id: " << agent_id << " Result: " << httpResults << LL_ENDL;
-
-            if (!status
-                || !result.has("id")
-                || agent_id != result["id"].asUUID())
-            {
-                LL_WARNS("AvatarProperties") << "Failed to get agent information for id " << agent_id << LL_ENDL;
-                return;
-            }
-
-            if (handle.isDead())
-            {
-                // panel is dead
-                return;
-            }
-
-            ALPanelProfileLegacy* legacy_sidetray = static_cast<ALPanelProfileLegacy*>(handle.get());
-            if (!legacy_sidetray)
-            {
-                return;
-            }
-
-            // AgentProfile dumps all results into a big ol' map. Let's build some structs and make a bunch of calls
-            // to processProperties()
-            LLAvatarData avatar_data;
-
-            avatar_data.agent_id = agent_id;
-            avatar_data.avatar_id = agent_id;
-            avatar_data.image_id = result["sl_image_id"].asUUID();
-            avatar_data.fl_image_id = result["fl_image_id"].asUUID();
-            avatar_data.partner_id = result["partner_id"].asUUID();
-            avatar_data.about_text = result["sl_about_text"].asString();
-            avatar_data.fl_about_text = result["fl_about_text"].asString();
-            avatar_data.born_on = result["member_since"].asDate();
-            avatar_data.profile_url = result.has("home_page")
-                ? result["home_page"].asString() : getProfileURL(agent_id.asString());
-
-            avatar_data.flags = 0;
-            if (result["online"].asBoolean())
-            {
-                avatar_data.flags |= AVATAR_ONLINE;
-            }
-            if (result["allow_publish"].asBoolean())
-            {
-                avatar_data.flags |= AVATAR_ALLOW_PUBLISH;
-            }
-            if (result["identified"].asBoolean())
-            {
-                avatar_data.flags |= AVATAR_IDENTIFIED;
-            }
-            if (result["transacted"].asBoolean())
-            {
-                avatar_data.flags |= AVATAR_TRANSACTED;
-            }
-
-            avatar_data.caption_index = 0;
-            if (result.has("charter_member"))  // won't be present if "caption" is set
-            {
-                avatar_data.caption_index = result["charter_member"].asInteger();
-            }
-            else if (result.has("caption"))
-            {
-                avatar_data.caption_text = result["caption"].asString();
-            }
-            legacy_sidetray->processProperties(&avatar_data, APT_PROPERTIES);
-
-            LLSD groups_array = result["groups"];
-            LLAvatarGroups avatar_groups;
-            avatar_groups.agent_id = agent_id;
-            avatar_groups.avatar_id = agent_id;
-
-            for (LLSD::array_const_iterator it = groups_array.beginArray();
-                it != groups_array.endArray(); ++it)
-            {
-                const LLSD& group_info = *it;
-                LLAvatarGroups::LLGroupData group_data;
-                group_data.group_powers = 0;
-                group_data.group_title = group_info["name"].asString();
-                group_data.group_id = group_info["id"].asUUID();
-                group_data.group_name = group_info["name"].asString();
-                group_data.group_insignia_id = group_info["image_id"].asUUID();
-
-                avatar_groups.group_list.push_back(group_data);
-            }
-
-            auto* groups_panel = static_cast<ALPanelProfileGroups*>(legacy_sidetray->getChild<LLUICtrl>("avatar_groups_tab_panel"));
-
-            groups_panel->processProperties(&avatar_groups, APT_GROUPS);
-            legacy_sidetray->processProperties(&avatar_groups, APT_GROUPS);
-
-            LLAvatarNotes avatar_notes;
-            avatar_notes.agent_id = agent_id;
-            avatar_notes.target_id = agent_id;
-            avatar_notes.notes = result["notes"].asString();
-
-            legacy_sidetray->processProperties(&avatar_notes, APT_NOTES);
-
-            LLSD picks_array = result["picks"];
-            LLAvatarPicks avatar_picks;
-            avatar_picks.agent_id = agent_id;
-            avatar_picks.target_id = agent_id;
-            for (LLSD::array_const_iterator it = picks_array.beginArray();
-                it != picks_array.endArray(); ++it)
-            {
-                const LLSD& pick_data = *it;
-                avatar_picks.picks_list.emplace_back(pick_data["id"].asUUID(), pick_data["name"].asString());
-            }
-
-            legacy_sidetray->processProperties(&avatar_picks, APT_PICKS);
-
-            LLIconCtrl* badge = legacy_sidetray->getChild<LLIconCtrl>("badge_icon");
-            if (result.has("customer_type"))
-            {
-
-                const std::string& type = result["customer_type"].asStringRef();
-
-                if (boost::iequals(type, "Internal"))
-                {
-                    badge->setValue("Profile_Badge_Linden");
-                }
-                else if (avatar_data.born_on < sSecondLifeRelease)
-                {
-                    badge->setValue("Profile_Badge_Beta");
-                }
-                else if (boost::iequals(type, "Beta_Lifetime"))
-                {
-                    badge->setValue("Profile_Badge_Beta_Lifetime");
-                }
-                else if (boost::iequals(type, "Lifetime"))
-                {
-                    badge->setValue("Profile_Badge_Lifetime");
-                }
-                else if (boost::iequals(type, "Monthly") || boost::iequals(type, "Quarterly") || boost::iequals(type, "Annual"))
-                {
-                    badge->setValue("AccountLevel_Premium");
-                }
-                else if (type.substr(0, 12) == "Premium_Plus")
-                {
-                    badge->setValue("AccountLevel_Plus");
-                }
-                else /* if (type == "Base") */
-                {
-                    badge->setValue("");
-                }
-            }
-            else
-            {
-                badge->setValue("");
-            }
-
-            });
+        LLCoros::instance().launch("requestAvatarProfileCoro",
+            boost::bind(&ALPanelProfileLegacy::requestAvatarProfileCoro, cap_url, getAvatarId(), getHandle()));
     }
 
     mAvatarNameCacheConnection = LLAvatarNameCache::get(getAvatarId(),
@@ -431,12 +264,190 @@ void ALPanelProfileLegacy::updateData()
     }
 }
 
+// static
+void ALPanelProfileLegacy::requestAvatarProfileCoro(std::string cap_url, LLUUID agent_id, LLHandle<LLPanel> handle)
+{
+    LLCore::HttpRequest::policy_t httpPolicy(LLCore::HttpRequest::DEFAULT_POLICY_ID);
+    LLCoreHttpUtil::HttpCoroutineAdapter::ptr_t
+        httpAdapter(new LLCoreHttpUtil::HttpCoroutineAdapter("request_avatar_properties_coro", httpPolicy));
+    LLCore::HttpRequest::ptr_t httpRequest(new LLCore::HttpRequest);
+    LLCore::HttpHeaders::ptr_t httpHeaders;
+
+    LLCore::HttpOptions::ptr_t httpOpts(new LLCore::HttpOptions);
+    httpOpts->setFollowRedirects(true);
+
+    std::string finalUrl = cap_url + "/" + agent_id.asString();
+
+    LLSD result = httpAdapter->getAndSuspend(httpRequest, finalUrl, httpOpts, httpHeaders);
+
+    LLSD httpResults = result[LLCoreHttpUtil::HttpCoroutineAdapter::HTTP_RESULTS];
+    LLCore::HttpStatus status = LLCoreHttpUtil::HttpCoroutineAdapter::getStatusFromLLSD(httpResults);
+
+    LL_DEBUGS("AvatarProperties") << "Agent id: " << agent_id << " Result: " << httpResults << LL_ENDL;
+
+    if (!status
+        || !result.has("id")
+        || agent_id != result["id"].asUUID())
+    {
+        LL_WARNS("AvatarProperties") << "Failed to get agent information for id " << agent_id << LL_ENDL;
+        return;
+    }
+
+    // The panel is updated on the main coroutine: widgets and the textures they boost are not coroutine safe.
+    LLAppViewer::instance()->postToMainCoro([agent_id, handle, result = std::move(result)]()
+        {
+            if (auto* panel = static_cast<ALPanelProfileLegacy*>(handle.get()))
+            {
+                panel->applyAvatarProfile(agent_id, result);
+            }
+        });
+}
+
+void ALPanelProfileLegacy::applyAvatarProfile(const LLUUID& agent_id, const LLSD& result)
+{
+    // A reply for an avatar the panel has since moved off.
+    if (agent_id != getAvatarId())
+    {
+        return;
+    }
+
+    // AgentProfile dumps all results into a big ol' map. Let's build some structs and make a bunch of calls
+    // to processProperties()
+    LLAvatarData avatar_data;
+
+    avatar_data.agent_id = agent_id;
+    avatar_data.avatar_id = agent_id;
+    avatar_data.image_id = result["sl_image_id"].asUUID();
+    avatar_data.fl_image_id = result["fl_image_id"].asUUID();
+    avatar_data.partner_id = result["partner_id"].asUUID();
+    avatar_data.about_text = result["sl_about_text"].asString();
+    avatar_data.fl_about_text = result["fl_about_text"].asString();
+    avatar_data.born_on = result["member_since"].asDate();
+    avatar_data.profile_url = result.has("home_page")
+        ? result["home_page"].asString() : getProfileURL(agent_id.asString());
+
+    avatar_data.flags = 0;
+    if (result["online"].asBoolean())
+    {
+        avatar_data.flags |= AVATAR_ONLINE;
+    }
+    if (result["allow_publish"].asBoolean())
+    {
+        avatar_data.flags |= AVATAR_ALLOW_PUBLISH;
+    }
+    if (result["identified"].asBoolean())
+    {
+        avatar_data.flags |= AVATAR_IDENTIFIED;
+    }
+    if (result["transacted"].asBoolean())
+    {
+        avatar_data.flags |= AVATAR_TRANSACTED;
+    }
+
+    avatar_data.caption_index = 0;
+    if (result.has("charter_member"))  // won't be present if "caption" is set
+    {
+        avatar_data.caption_index = result["charter_member"].asInteger();
+    }
+    else if (result.has("caption"))
+    {
+        avatar_data.caption_text = result["caption"].asString();
+    }
+    processProperties(&avatar_data, APT_PROPERTIES);
+
+    LLSD groups_array = result["groups"];
+    LLAvatarGroups avatar_groups;
+    avatar_groups.agent_id = agent_id;
+    avatar_groups.avatar_id = agent_id;
+
+    for (LLSD::array_const_iterator it = groups_array.beginArray();
+        it != groups_array.endArray(); ++it)
+    {
+        const LLSD& group_info = *it;
+        LLAvatarGroups::LLGroupData group_data;
+        group_data.group_powers = 0;
+        group_data.group_title = group_info["name"].asString();
+        group_data.group_id = group_info["id"].asUUID();
+        group_data.group_name = group_info["name"].asString();
+        group_data.group_insignia_id = group_info["image_id"].asUUID();
+
+        avatar_groups.group_list.push_back(group_data);
+    }
+
+    auto* groups_panel = static_cast<ALPanelProfileGroups*>(getChild<LLUICtrl>("avatar_groups_tab_panel"));
+
+    groups_panel->processProperties(&avatar_groups, APT_GROUPS);
+    processProperties(&avatar_groups, APT_GROUPS);
+
+    LLAvatarNotes avatar_notes;
+    avatar_notes.agent_id = agent_id;
+    avatar_notes.target_id = agent_id;
+    avatar_notes.notes = result["notes"].asString();
+
+    processProperties(&avatar_notes, APT_NOTES);
+
+    LLSD picks_array = result["picks"];
+    LLAvatarPicks avatar_picks;
+    avatar_picks.agent_id = agent_id;
+    avatar_picks.target_id = agent_id;
+    for (LLSD::array_const_iterator it = picks_array.beginArray();
+        it != picks_array.endArray(); ++it)
+    {
+        const LLSD& pick_data = *it;
+        avatar_picks.picks_list.emplace_back(pick_data["id"].asUUID(), pick_data["name"].asString());
+    }
+
+    processProperties(&avatar_picks, APT_PICKS);
+
+    LLIconCtrl* badge = getChild<LLIconCtrl>("badge_icon");
+    if (result.has("customer_type"))
+    {
+
+        const std::string& type = result["customer_type"].asStringRef();
+
+        if (boost::iequals(type, "Internal"))
+        {
+            badge->setValue("Profile_Badge_Linden");
+        }
+        else if (avatar_data.born_on < sSecondLifeRelease)
+        {
+            badge->setValue("Profile_Badge_Beta");
+        }
+        else if (boost::iequals(type, "Beta_Lifetime"))
+        {
+            badge->setValue("Profile_Badge_Beta_Lifetime");
+        }
+        else if (boost::iequals(type, "Lifetime"))
+        {
+            badge->setValue("Profile_Badge_Lifetime");
+        }
+        else if (boost::iequals(type, "Monthly") || boost::iequals(type, "Quarterly") || boost::iequals(type, "Annual"))
+        {
+            badge->setValue("AccountLevel_Premium");
+        }
+        else if (type.substr(0, 12) == "Premium_Plus")
+        {
+            badge->setValue("AccountLevel_Plus");
+        }
+        else /* if (type == "Base") */
+        {
+            badge->setValue("");
+        }
+    }
+    else
+    {
+        badge->setValue("");
+    }
+
+}
+
 void ALPanelProfileLegacy::onAvatarNameCache(const LLUUID& agent_id, const LLAvatarName& av_name)
 {
     getChild<LLTextEditor>("avatar_name")->setText(av_name.getCompleteName());
 }
 
-void ALPanelProfileLegacy::sendAvatarProfileCoro(std::string url, LLSD payload)
+// static
+void ALPanelProfileLegacy::sendAvatarProfileCoro(std::string url, LLUUID agent_id, LLSD payload)
 {
     LLCore::HttpRequest::policy_t httpPolicy(LLCore::HttpRequest::DEFAULT_POLICY_ID);
     LLCoreHttpUtil::HttpCoroutineAdapter::ptr_t
@@ -447,7 +458,7 @@ void ALPanelProfileLegacy::sendAvatarProfileCoro(std::string url, LLSD payload)
     LLCore::HttpOptions::ptr_t httpOpts(new LLCore::HttpOptions);
     httpOpts->setFollowRedirects(true);
 
-    std::string full_url = url + "/" + getAvatarId().asString();
+    std::string full_url = url + "/" + agent_id.asString();
 
     LLSD result = httpAdapter->putAndSuspend(httpRequest, full_url, payload, httpOpts, httpHeaders);
 
@@ -456,11 +467,11 @@ void ALPanelProfileLegacy::sendAvatarProfileCoro(std::string url, LLSD payload)
 
     if (!status)
     {
-        LL_WARNS("LegacyProfiles") << "Failed to put agent information " << payload << " for id " << getAvatarId() << LL_ENDL;
+        LL_WARNS("LegacyProfiles") << "Failed to put agent information " << payload << " for id " << agent_id << LL_ENDL;
         return;
     }
 
-    LL_DEBUGS("LegacyProfiles") << "Agent id: " << getAvatarId() << " Payload: " << payload << " Result: " << httpResults << LL_ENDL;
+    LL_DEBUGS("LegacyProfiles") << "Agent id: " << agent_id << " Payload: " << payload << " Result: " << httpResults << LL_ENDL;
 }
 
 void ALPanelProfileLegacy::processProperties(void* data, const EAvatarProcessorType type)
@@ -711,7 +722,7 @@ void ALPanelProfileLegacy::onCommitAvatarProperties()
 
     LLCoros::instance().launch(
         "sendAvatarProfileCoro",
-        boost::bind(&ALPanelProfileLegacy::sendAvatarProfileCoro, this, cap, data));
+        boost::bind(&ALPanelProfileLegacy::sendAvatarProfileCoro, cap, getAvatarId(), data));
 }
 
 void ALPanelProfileLegacy::onCommitNotes(LLUICtrl* ctrl)
@@ -720,7 +731,7 @@ void ALPanelProfileLegacy::onCommitNotes(LLUICtrl* ctrl)
     if (!cap.empty())
     {
         LLCoros::instance().launch("sendAvatarProfileCoro",
-            boost::bind(&ALPanelProfileLegacy::sendAvatarProfileCoro, this, cap,
+            boost::bind(&ALPanelProfileLegacy::sendAvatarProfileCoro, cap, getAvatarId(),
             LLSD().with("notes", ctrl->getValue().asString())));
     }
 }
@@ -853,7 +864,7 @@ void ALPanelProfileLegacy::onProfileImageChanged(const LLUUID& id, LLProfileImag
     const std::string_view img = ctrl->getName() == "sl_profile_pic" ? "sl_image_id" : "fl_image_id";
     // *TODO: Do we want to verify that the changes were put?
     LLCoros::instance().launch("sendAvatarProfileImage",
-                               boost::bind(&ALPanelProfileLegacy::sendAvatarProfileCoro, this, cap, LLSD().with(img, id)));
+                               boost::bind(&ALPanelProfileLegacy::sendAvatarProfileCoro, cap, getAvatarId(), LLSD().with(img, id)));
     LLAvatarIconIDCache::getInstance()->add(gAgentID, id);
     LLAvatarPropertiesProcessor::getInstance()->sendAvatarPropertiesRequest(gAgentID);
 }
