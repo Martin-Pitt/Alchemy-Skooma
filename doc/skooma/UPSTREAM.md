@@ -24,6 +24,8 @@ lands, is offered or is merged.
 | `render/prim-split` | Its own feature | Untwisted flat-sided prims without the legacy edge splits; Render Tests A/B toggle; geometry-equivalence test | `render` | yes |
 | `fix-llcommon/queuedthread-wake-race` | Its own fix | `llqueuedthread_test` checks a woken request's turns only while its 250 ms fallback is not yet due (failed on stalled macOS CI) | `develop` | yes |
 | `fix-scripteditor/publish-coro-mutex` | Its own fix | Script editor server safe under its async handlers' coroutines: no `LLMutex` on their paths (Explore in IDE and `object.request` aborts), `object.item.create` no longer spins the main thread, subscribe and server-release races | `develop` | open: AlchemyViewer/Alchemy#606 |
+| `fix-scripteditor/published-inventory-refetch` | Its own fix | A published prim whose inventory another path dropped is fetched again; a save that misses while it loads gets a retryable error, not "Item not found" |
+| `fix-scripteditor/select-node-inventory-serial` | Its own fix | A new select node's first properties reply no longer deletes a prim's loaded inventory of the same serial |
 | `fix-render/texmem-coro-lock` | Its own fix | `sTexMemMutex` (texture VRAM accounting) a plain `std::mutex`, so a profile's coroutine retagging a boosted texture no longer asserts in `LLMutex` | `develop` | open: AlchemyViewer/Alchemy#618 |
 | `audio/loudness-normalization` | Its own feature | BS.1770 loudness measured during decode, gain trim on playback | `develop` | undecided |
 | `ui/saturation` | Its own foundation | UI saturation on `LLRender` through `ALUISaturation` scopes; `uiF`/`solidcolorF` grey to Rec.709 luminance in gamma-2 light below 1, unchanged at 1 | `develop` | yes |
