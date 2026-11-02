@@ -1704,6 +1704,18 @@ the record. Tools and the decision: `V:\Scratch\icon-weight\` (`DECISION.md`).
 | `indra/newview/llscripteditorws.h` | `mConnectionsMutex`, `mHandshakeMutex` are `std::mutex`; `bindHandler` releases the server reference on the main coroutine; `llcoros.h`, `<mutex>` includes | `<SK:Nexii>` blocks, single-line on the includes |
 | `indra/newview/llscripteditorws.cpp` | Locks are `std::lock_guard`; `script.subscribe` locks the subscribed connection once; `handleObjectItemCreate`'s wait consumes its events (`LLCoros::OverrideConsuming`) | single-line on each lock and the subscribe check, `<SK:Nexii>` block on the wait |
 
+## Published prims keep their inventory
+
+`fix-scripteditor/published-inventory-refetch` and `fix-scripteditor/select-node-inventory-serial`: a new select node's first properties reply deleted a published prim's inventory and nothing fetched it again, so saves failed with "Item not found" until a republish.
+
+### Upstream edits
+
+| File | Change | Marker |
+|---|---|---|
+| `indra/newview/llpublishedobjectmgr.h` / `.cpp` | `refetchDroppedInventory`: a published prim's dirty inventory with no request on the way is fetched again, called from `onObjectPropertyChanged` | `<SK:Nexii>` blocks |
+| `indra/newview/llscripteditorws.cpp` | `validatePublishedItem`: a miss while the inventory loads starts the fetch and answers a retryable "Prim inventory is loading, retry" | `<SK:Nexii>` block |
+| `indra/newview/llselectmgr.cpp` | `processObjectProperties`: dirties the inventory only when the reply's serial differs from the loaded inventory's, not the new node's 0 | `<SK:Nexii>` block |
+
 ## Contact filters
 
 `feature-chat/contact-filters`: who can reach you, chosen per channel (IMs, voice calls, conferences, group chat, group voice calls) on Chat > General; chat notifications moved to a tab of their own.
