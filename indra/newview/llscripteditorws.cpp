@@ -1712,6 +1712,10 @@ LLScriptEditorWSServer::ValidatedItem LLScriptEditorWSServer::validatePublishedI
     region_of(prim);
 
     LLInventoryItem* item = dynamic_cast<LLInventoryItem*>(prim->getInventoryObject(item_id));
+    // <SK:Nexii> Refetch a published prim's inventory another path dropped
+    if (!item && mPublishedObjectManager.refetchDroppedInventory(prim))
+        throw LLJSONRPCConnection::InternalError("Prim inventory is loading, retry");
+    // </SK:Nexii>
     if (!item)
         throw LLJSONRPCConnection::InvalidParams("Item not found in prim inventory");
 
