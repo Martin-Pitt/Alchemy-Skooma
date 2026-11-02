@@ -1693,6 +1693,21 @@ the record. Tools and the decision: `V:\Scratch\icon-weight\` (`DECISION.md`).
 | `indra/newview/skins/default/textures/icons/Inv_*.png` (55 row icons) | Redrawn at 14 px in the 16 px box, heavy icons shrunk halfway toward the median Oklab ΔE weight, centred by weight in whole pixels | none — image files |
 | `indra/newview/skins/default/textures/icons/Inv_Favorite_Star_Full.png`, `Inv_Favorite_Star_Content.png` | Same size and centring on their 14 px canvas | none — image files |
 
+## Mesh uploader pivot
+
+`feature-ui/mesh-uploader-pivot`: an unrigged mesh's origin placed anywhere in its bounding box from the Upload options tab; the stored position domains move, not the vertices.
+
+### Upstream edits
+
+| File | Change | Marker |
+|---|---|---|
+| `indra/llprimitive/llmodel.h` / `.cpp` | `writeModel` takes `position_offset`, added to every `PositionDomain` and, with analyzed hulls, the `physics_convex` bounds | `<SK:Nexii>` blocks, single-line on the parameter |
+| `indra/newview/llmeshrepository.h` / `.cpp` | `uploadModel` and `LLMeshUploadThread` carry the offset (`mPositionOffset`) to `writeModel` | single-line |
+| `indra/newview/llmodelpreview.h` / `.cpp` | `mUploadPivot`, held at the centre for rigged, several models or unanalyzed physics (`pivot_status`); Origin view option draws the pivot as the translate gizmo's arrows; pivot controls follow the dimensions | `<SK:Nexii>` blocks |
+| `indra/newview/llfloatermodelpreview.h` / `.cpp` | Pivot spinners and `pivot_units` (percent/metres) wiring, reset with the upload options, offset passed to `uploadModel` | `<SK:Nexii>` blocks |
+| `skins/default/xui/en/floater_model_preview.xml` | Pivot row and status strings on Upload options, `show_origin` check box | XML comment blocks |
+| `skins/default/xui/en/floater_model_preview.xml` | `right_panel` 140 → 208 tall and `preview_panel` 408 → 340, so the display check boxes are inside their panel | unmarked |
+
 ## Script editor server coroutine safety
 
 `fix-scripteditor/publish-coro-mutex`: the async JSON-RPC handlers run on coroutines, where `LLMutex` asserts; `object.request` and coroutine-loaded inventory aborted the viewer, and `object.item.create` spun the main thread until its timeout.
