@@ -1725,7 +1725,7 @@ bool LLViewerInput::scanKey(const std::vector<LLKeyboardBinding> &binding,
                 continue;
             }
             // </SK:Nexii>
-            if (SKModalView::blocksAction(binding[i].mFunctionName) && !(key_up && !key_down && !key_level)) // <SK:Nexii> modal view: the avatar stays put; only a release passes, to stop it
+            if (SKModalView::interceptsAction(binding[i].mFunctionName, key_up && !key_down && !key_level)) // <SK:Nexii> modal view: move actions move the view, not the avatar
             {
                 continue;
             }
@@ -1878,7 +1878,7 @@ bool LLViewerInput::scanMouse(
     {
         if (binding[i].mMouse == mouse && (ignore_additional_masks ? (binding[i].mMask & mask) == binding[i].mMask : binding[i].mMask == mask))
         {
-            if (SKModalView::blocksAction(binding[i].mFunctionName)) // <SK:Nexii> modal view: the avatar stays put
+            if (SKModalView::interceptsAction(binding[i].mFunctionName, state == MOUSE_STATE_UP)) // <SK:Nexii> modal view: move actions move the view, not the avatar
             {
                 continue;
             }
