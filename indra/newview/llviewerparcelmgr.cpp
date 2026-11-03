@@ -72,6 +72,7 @@
 #include "llcorehttputil.h"
 
 #include "llenvironment.h"
+#include "skmapparcelfacts.h" // <SK:Nexii> SKNetMap Moderate gate parcel replies
 
 const F32 PARCEL_BAN_LINES_DRAW_SECS_ON_COLLISION = 10.f;
 const F32 PARCEL_COLLISION_DRAW_SECS_ON_PROXIMITY = 1.f;
@@ -1608,6 +1609,13 @@ void LLViewerParcelMgr::processParcelProperties(LLMessageSystem *msg, void **use
 
     msg->getS32Fast(_PREHASH_ParcelData, _PREHASH_RequestResult, request_result);
     msg->getS32Fast(_PREHASH_ParcelData, _PREHASH_SequenceID, sequence_id);
+
+    // <SK:Nexii> SKNetMap Moderate gate: replies to the map's own parcel requests go to the map, never into a shared slot
+    if (SKMapParcelFacts::handleParcelProperties(msg, sequence_id, request_result))
+    {
+        return;
+    }
+    // </SK:Nexii>
 
     if (request_result == PARCEL_RESULT_NO_DATA)
     {

@@ -34,6 +34,7 @@
 
 #include "alheadlessui_fixture.h"
 #include "aluistatescope.h"
+#include "skscrolldistance.h" // <SK:Nexii> smooth scroll
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -409,6 +410,11 @@ namespace
         UNSCOPED_INFO("and pressable where it is drawn");
         CHECK(strip->at(last.getCenterX(), last.getCenterY()) == 5);
 
+        // <SK:Nexii> smooth scroll: the wheel moves at once with smoothing off, so the tabs are where it went
+        ll_test::SettingsScope settings;
+        SKScrollDistance::config();
+        settings.keep(LLUI::getInstance()->getControlControlGroup("SkoomaScrollSmooth").getControl("SkoomaScrollSmooth").get())->setValue(false);
+        // </SK:Nexii>
         strip->handleScrollWheel(10, HEIGHT / 2, LLScrollDelta(-10, -10.f));
         UNSCOPED_INFO("the wheel back to the start");
         CHECK(strip->rectOf(0).mLeft == 0);

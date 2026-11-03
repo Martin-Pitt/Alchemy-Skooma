@@ -157,6 +157,7 @@ public:
     static std::string getBaseControlName(const std::string& name);
     static std::string declareDockStateControl(const std::string& name);
     static std::string getDockStateControlName(const std::string& name);
+    static std::string declareLockControl(const std::string& name); // <SK:Nexii> Floater lock
 
     static void registerControlVariables();
 

@@ -44,7 +44,7 @@
 #include "llcoros.h"
 
 class LLCamera;
-class LLNetMap;
+//class LLNetMap; // <SK:Nexii> SKNetMap retired the classic mini-map
 class LLDebugBeacon;
 class LLVOCacheEntry;
 
@@ -118,6 +118,11 @@ public:
     void updatePhysicsFlags(const LLViewerObject* object);
     void onPhysicsFlagsFetchFailure(const LLUUID& object_id);
     void updatePhysicsShapeType(const LLUUID& object_id, S32 type);
+    // <SK:Nexii> census: physics shape types by id, for parts the region has cached but not instantiated
+    void requestPhysicsShapeType(const LLUUID& object_id);
+    bool knownPhysicsShapeType(const LLUUID& object_id, U8& type) const;
+    void notePhysicsShapeType(const LLUUID& object_id, U8 type) { mKnownPhysicsShapeTypes[object_id] = type; }
+    // </SK:Nexii>
     void updatePhysicsProperties(const LLUUID& object_id,
                                     F32 density,
                                     F32 friction,
@@ -129,7 +134,7 @@ public:
 
     bool hasMapObjectInRegion(LLViewerRegion* regionp) ;
     void clearAllMapObjectsInRegion(LLViewerRegion* regionp) ;
-    void renderObjectsForMap(LLNetMap &netmap);
+    // <SK:Nexii> renderObjectsForMap removed with the classic mini-map
     void renderObjectBounds(const LLVector3 &center);
 
     void addDebugBeacon(const LLVector3 &pos_agent, const std::string &string,
@@ -153,6 +158,7 @@ public:
     // Dead objects still in the list, waiting for cleanDeadObjects.
     inline S32 getNumDeadObjects() const { return (S32) mObjects.queued(); }
     inline S32 getNumActiveObjects() { return (S32) mActiveObjects.size(); }
+    const std::vector<LLPointer<LLViewerObject>>& getActiveObjects() const { return mActiveObjects; } // <SK:Nexii> SKMapPeople finds projectiles on the active list
 
     void addToMap(LLViewerObject *objectp);
     void removeFromMap(LLViewerObject *objectp);
@@ -215,6 +221,7 @@ public:
 
     S32 mNumUnknownUpdates;
     S32 mNumDeadObjectUpdates;
+    const std::vector<LLPointer<LLViewerObject>>& getMapObjects() const { return mMapObjects; } // <SK:Nexii> SKNetMap reads the map objects for its fallback layer
 protected:
     std::vector<U64>    mOrphanParents; // LocalID/ip,port of orphaned objects
     std::vector<OrphanInfo> mOrphanChildren;    // UUID's of orphaned objects
@@ -239,6 +246,7 @@ protected:
     //set of objects that need to update their physics flags
     uuid_set_t   mStalePhysicsFlags;
     uuid_set_t   mPendingPhysicsFlags;
+    boost::unordered_map<LLUUID, U8> mKnownPhysicsShapeTypes; // <SK:Nexii> census: every answer, kept for revival from the cache
 
     std::vector<LLDebugBeacon> mDebugBeacons;
 
@@ -256,7 +264,7 @@ private:
     void fetchObjectCostsCoro(std::string url);
 
     static void reportPhysicsFlagFailure(LLSD &obejectList);
-    void fetchPhisicsFlagsCoro(std::string url);
+    void fetchPhisicsFlagsCoro(std::string url, LLSD idList); // <SK:Nexii> Batch per region (mini-map census).
 
 };
 

@@ -151,6 +151,7 @@ public:
         BUTTON_TEAR_OFF,
         BUTTON_DOCK,
         BUTTON_HELP,
+        BUTTON_LOCK, // <SK:Nexii> Floater lock
         BUTTON_COUNT
     };
 
@@ -177,6 +178,7 @@ public:
                                 save_dock_state,
                                 can_dock,
                                 show_title,
+                                can_lock, // <SK:Nexii> Floater lock
                                 auto_close;
 
         Optional<LLFloaterEnums::EOpenPositioning>  positioning;
@@ -335,6 +337,19 @@ public:
     virtual bool    handleScrollWheel(S32 x, S32 y, LLScrollDelta delta) override;
     virtual bool    handleScrollHWheel(S32 x, S32 y, LLScrollDelta delta) override;
 
+    // <SK:Nexii> Floater lock: a locked floater neither moves nor resizes, and clicks off its content reach the world.
+    virtual bool    handleHover(S32 x, S32 y, MASK mask) override;
+    virtual bool    handleToolTip(S32 x, S32 y, MASK mask) override;
+    virtual bool    handleRightMouseUp(S32 x, S32 y, MASK mask) override;
+    virtual bool    handleMiddleMouseUp(S32 x, S32 y, MASK mask) override;
+    bool            canLock() const { return mCanLock; }
+    bool            isLocked() const { return mLocked; }
+    void            setLocked(bool locked);
+    static void     onClickLock(LLFloater* floater);
+    // Whether a point in local coordinates lands on content rather than empty background.
+    virtual bool    hitsContentAt(S32 x, S32 y);
+    // </SK:Nexii>
+
     virtual void    draw() override;
     virtual void    drawShadow(LLPanel* panel);
 
@@ -430,6 +445,7 @@ protected:
     void            storeRectControl();
     void            storeVisibilityControl();
     void            storeDockStateControl();
+    void            storeLockControl(); // <SK:Nexii> Floater lock
 
     void            setKey(const LLSD& key);
     void            setInstanceName(const std::string& name);
@@ -507,7 +523,8 @@ protected:
     std::string     mPosYControl;
     std::string     mVisibilityControl;
     std::string     mDocStateControl;
-    LLSD            mKey;               // Key used for retrieving instances; set (for now) by LLFLoaterReg
+    std::string     mLockControl; // <SK:Nexii> Floater lock
+    LLSD           mKey;               // Key used for retrieving instances; set (for now) by LLFLoaterReg
 
     LLDragHandle*   mDragHandle;
     LLResizeBar*    mResizeBar[4];
@@ -537,6 +554,10 @@ private:
     bool            mResizableHeight;
     bool            mResizableWidth;
     bool            mAutoClose;
+    // <SK:Nexii> Floater lock
+    bool            mCanLock { false };
+    bool            mLocked { false };
+    // </SK:Nexii>
 
     LLFloaterEnums::EOpenPositioning    mPositioning;
     LLCoordFloater  mPosition;

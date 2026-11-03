@@ -491,7 +491,7 @@ if(AL_BUILD_VIEWER)
     llfloaterloadprefpreset.cpp
     llfloaterlocalassets.cpp
     llfloatermarketplacelistings.cpp
-    llfloatermap.cpp
+    # llfloatermap.cpp # <SK:Nexii> SKNetMap retired the classic mini-map floater
     llfloatermaturitydialog.cpp
     llfloatermediasettings.cpp
     llfloatermemleak.cpp
@@ -642,6 +642,17 @@ if(AL_BUILD_VIEWER)
     llmediactrl.cpp
     llmediadataclient.cpp
     llmenuoptionpathfindingrebakenavmesh.cpp
+    skcachedobject.cpp # <SK:Nexii> census
+    skmeshhavokshape.cpp # <SK:Nexii> physics_havok block
+    skphysicsshape.cpp # <SK:Nexii> physics shapes
+    skaircells.cpp # <SK:Nexii> air cells
+    skairoverlay.cpp # <SK:Nexii> air cells
+    skrooms.cpp # <SK:Nexii> rooms and spaces
+    skobjectfaces.cpp # <SK:Nexii> census
+    skworldcensus.cpp # <SK:Nexii> census
+    skworldoverlay.cpp # <SK:Nexii> census
+    skworldpalette.cpp # <SK:Nexii> census
+    skworldtrace.cpp # <SK:Nexii> census
     llmeshrepository.cpp
     llmimetypes.cpp
     llmodelpreview.cpp
@@ -656,7 +667,7 @@ if(AL_BUILD_VIEWER)
     llfloaterimnearbychathandler.cpp
     llfloaterimnearbychatlistener.cpp
     llnearbyvoicemoderation.cpp
-    llnetmap.cpp
+    # llnetmap.cpp # <SK:Nexii> SKNetMap retired the classic mini-map
     llnotificationalerthandler.cpp
     llnotificationgrouphandler.cpp
     llnotificationhandlerutil.cpp
@@ -990,6 +1001,9 @@ if(AL_BUILD_VIEWER)
     pipeline.cpp
     rlvactions.cpp
     rlvenvironment.cpp
+    skclusterprobes.cpp # <SK:Nexii> cluster probes: reflection probes over census clusters
+    skroomprobes.cpp # <SK:Nexii> room probes: reflection probes over the rooms layer's spaces
+    skcensusavatarshape.cpp
     rlvcommon.cpp
     rlveffects.cpp
     rlvextensions.cpp
@@ -997,8 +1011,13 @@ if(AL_BUILD_VIEWER)
     rlvhandler.cpp
     rlvhelper.cpp
     rlvinventory.cpp
+    skhover.cpp
+    skoverlay.cpp
     rlvlocks.cpp
     rlvui.cpp
+    skmodalview.cpp # <SK:Nexii> modal view
+    skmodalviewmath.cpp # <SK:Nexii> modal view
+    sktoolmappan.cpp # <SK:Nexii> modal view
   )
 
   set(
@@ -1377,7 +1396,7 @@ if(AL_BUILD_VIEWER)
     llfloaterlinkreplace.h
     llfloaterloadprefpreset.h
     llfloaterlocalassets.h
-    llfloatermap.h
+    # llfloatermap.h # <SK:Nexii> SKNetMap retired the classic mini-map floater
     llfloatermarketplace.h
     llfloatermarketplacelistings.h
     llfloatermaturitydialog.h
@@ -1527,6 +1546,16 @@ if(AL_BUILD_VIEWER)
     llmediactrl.h
     llmediadataclient.h
     llmenuoptionpathfindingrebakenavmesh.h
+    skcachedobject.h # <SK:Nexii> census
+    skmeshhavokshape.h # <SK:Nexii> physics_havok block
+    skphysicsshape.h # <SK:Nexii> physics shapes
+    skaircells.h # <SK:Nexii> air cells
+    skrooms.h # <SK:Nexii> rooms and spaces
+    skobjectfaces.h # <SK:Nexii> census
+    skworldcensus.h # <SK:Nexii> census
+    skworldoverlay.h # <SK:Nexii> census
+    skworldpalette.h # <SK:Nexii> census
+    skworldtrace.h # <SK:Nexii> census
     llmeshrepository.h
     llmimetypes.h
     llmodelpreview.h
@@ -1538,7 +1567,7 @@ if(AL_BUILD_VIEWER)
     llnamelistctrl.h
     llnavigationbar.h
     llnearbyvoicemoderation.h
-    llnetmap.h
+    # llnetmap.h # <SK:Nexii> SKNetMap retired the classic mini-map
     llnotificationhandler.h
     llnotificationlistitem.h
     llnotificationlistview.h
@@ -1867,6 +1896,9 @@ if(AL_BUILD_VIEWER)
     pipeline.h
     rlvactions.h
     rlvcommon.h
+    skclusterprobes.h # <SK:Nexii> cluster probes: reflection probes over census clusters
+    skroomprobes.h # <SK:Nexii> room probes: reflection probes over the rooms layer's spaces
+    skcensusavatarshape.h
     rlvdefines.h
     rlveffects.h
     rlvenvironment.h
@@ -1875,11 +1907,81 @@ if(AL_BUILD_VIEWER)
     rlvhandler.h
     rlvhelper.h
     rlvinventory.h
+    skhover.h
+    skoverlay.h
     rlvlocks.h
     rlvmodifiers.h
     rlvui.h
     roles_constants.h
+    skmodalview.h # <SK:Nexii> modal view
+    skmodalviewmath.h # <SK:Nexii> modal view
+    sktoolmappan.h # <SK:Nexii> modal view
   )
+
+  # <SK:Nexii> SKNetMap mini-map sources
+  list(
+    APPEND viewer_SOURCES
+    skmapview.cpp
+    skmapplan.cpp
+    skmaplabels.cpp
+    skmapmarkers.cpp
+    skmapallies.cpp
+    skmappolicy.cpp
+    sknetmap.cpp
+    skmapml.cpp
+    skfloatermap.cpp
+    skmappeople.cpp
+    skmapparcels.cpp
+    skmapscene.cpp
+    skmaprecorder.cpp
+    skpopuplayout.cpp
+    skpopuppanes.cpp
+    skmapmenu.cpp
+    skmapparcelfacts.cpp
+    skmapallyresolver.cpp
+    skfloatermapsettings.cpp
+    skfloatertacticaloptions.cpp
+    skoverviewcapture.cpp
+    skoverviewcensus.cpp
+    skoverviewcover.cpp
+    skoverviewcuttable.cpp
+    skoverviewmovers.cpp
+    skoverviewprobes.cpp
+    skoverviewslots.cpp
+  )
+  list(
+    APPEND viewer_HEADERS
+    skmapview.h
+    skmapplan.h
+    skmappalette.h
+    skmaplabels.h
+    skmapmarkers.h
+    skmapallies.h
+    skmappolicy.h
+    sknetmap.h
+    skmapml.h
+    skfloatermap.h
+    skmappeople.h
+    skmapparcels.h
+    skmapscene.h
+    skmaprecorder.h
+    skpopuplayout.h
+    skoverviewcapture.h
+    skoverviewcensus.h
+    skoverviewcover.h
+    skoverviewcuttable.h
+    skoverviewmovers.h
+    skoverviewprobes.h
+    skoverviewprograms.h
+    skoverviewslots.h
+    skpopuppanes.h
+    skmapmenu.h
+    skmapparcelfacts.h
+    skmapallyresolver.h
+    skfloatermapsettings.h
+    skfloatertacticaloptions.h
+  )
+  # </SK:Nexii>
 
   # Discord rich presence, over the SDK from the private registry.
   if(AL_USE_DISCORD)
@@ -2097,6 +2199,11 @@ if(AL_BUILD_VIEWER)
       ${viewer_RESOURCE_FILES}
   )
 
+  # <SK:Nexii> outline capture
+  list(APPEND viewer_SOURCES skoutlinecapture.cpp skoutlinepolicy.cpp skfloateroutlinecapture.cpp)
+  list(APPEND viewer_HEADERS skoutlinecapture.h skoutlinepolicy.h skfloateroutlinecapture.h)
+  # </SK:Nexii>
+
   add_executable(${AL_VIEWER_BINARY_NAME} WIN32 MACOSX_BUNDLE)
 
   target_sources(${AL_VIEWER_BINARY_NAME} PRIVATE ${viewer_SOURCES} ${viewer_HEADERS})
@@ -2121,6 +2228,9 @@ if(AL_BUILD_VIEWER)
       llplugin
       llprimitive
       llrender
+      skrooms # <SK:Nexii> rooms and spaces
+      skair # <SK:Nexii> air cells
+      skcensus # <SK:Nexii> census
       llui
       llfilesystem
       llwindow
@@ -2462,6 +2572,12 @@ if(AL_BUILD_TESTS)
     alrender
   )
   set(test_project ${AL_VIEWER_BINARY_NAME})
+  # <SK:Nexii> outline capture's TUT test, kept registered until it is ported to Catch2
+  if(COMMAND al_add_test)
+    al_add_test(skoutlinepolicy UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
+  endif()
+  # </SK:Nexii>
+
   get_property(newview_includes TARGET ${test_project} PROPERTY INTERFACE_INCLUDE_DIRECTORIES)
 
   # What the tests take of the rest of the viewer, faked once. Objects, which
@@ -2607,6 +2723,13 @@ if(AL_BUILD_TESTS)
       tests/llvocache_test.cpp
       tests/lutcube_test.cpp
       tests/noise_test.cpp
+      tests/skmodalviewmath_test.cpp # <SK:Nexii> modal view
+      tests/skmapmarkers_test.cpp # <SK:Nexii> mini-map markers
+      tests/skoverviewshaders_test.cpp # <SK:Nexii> combat/minimap: the overview's shader permutations
+      tests/skoverviewcuttable_test.cpp # <SK:Nexii> combat/minimap: the overview's cut table
+      tests/skoverviewslots_test.cpp # <SK:Nexii> combat/minimap: the overview's census pages
+      tests/skoverviewprobes_test.cpp # <SK:Nexii> combat/minimap: the tactical cut's probes
+      tests/skoverviewcover_test.cpp # <SK:Nexii> combat/minimap: the overview's cover verdicts
     UNIT
       alagentlocationformat.cpp
       albakeproxies.cpp
@@ -2683,7 +2806,14 @@ if(AL_BUILD_TESTS)
       llviewercontrollistener.cpp
       lutcube.cpp
       noise.cpp
+      skmodalviewmath.cpp # <SK:Nexii> modal view
     LIBRARIES llui alscript ll::slua llxml ${test_libs}
+      skmapmarkers.cpp # <SK:Nexii> mini-map markers
+      skoverviewcuttable.cpp # <SK:Nexii> combat/minimap: the overview's cut table
+      skoverviewprobes.cpp # <SK:Nexii> combat/minimap: the tactical cut's probes
+      skoverviewslots.cpp # <SK:Nexii> combat/minimap: the overview's census pages
+      skoverviewcover.cpp # <SK:Nexii> combat/minimap: the overview's cover verdicts
+    LIBRARIES llui alscript ll::slua llxml skcensus ${test_libs}
     SUPPORT
       newview_test_fakes
       newview_test_settings
@@ -2714,7 +2844,15 @@ if(AL_BUILD_TESTS)
       tests/luminance_gl_test.cpp
       tests/objectskinblock_gl_test.cpp
       tests/shadowutil_gl_test.cpp
+      tests/skoverviewshaders_gl_test.cpp # <SK:Nexii> combat/minimap: the overview's programs link
+      tests/skoverviewcuttable_gl_test.cpp # <SK:Nexii> combat/minimap: the overview's cut table on the GPU
+      tests/skoverviewslots_gl_test.cpp # <SK:Nexii> combat/minimap: the census command list on the GPU
+      tests/skoverviewprobes_gl_test.cpp # <SK:Nexii> combat/minimap: the tactical cut's probes on the GPU
     BENCH_SOURCES tests/alcasfold_bench.cpp tests/aldof_bench.cpp tests/alssrhistory_bench.cpp
+    UNIT
+      skoverviewcuttable.cpp # <SK:Nexii> combat/minimap: the overview's cut table
+      skoverviewprobes.cpp # <SK:Nexii> combat/minimap: the tactical cut's probes
+      skoverviewslots.cpp # <SK:Nexii> combat/minimap: the overview's census pages
     LIBRARIES llrender
     SUPPORT llrender_test_checks llcommon_test_checks
     INCLUDES ${INDRA_SOURCE_DIR}/llprimitive ${INDRA_SOURCE_DIR}/alrender

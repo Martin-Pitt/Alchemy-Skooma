@@ -26,6 +26,7 @@
 
 #include "llviewerprecompiledheaders.h"
 #include "llagentcamera.h"
+#include "skmodalview.h" // <SK:Nexii> modal view
 
 #include "pipeline.h"
 
@@ -111,7 +112,7 @@ const F32 OBJECT_EXTENTS_PADDING = 0.5f;
 static bool isDisableCameraConstraints()
 {
     static LLCachedControl<bool> sDisableCameraConstraints(gSavedSettings, "DisableCameraConstraints", false);
-    return sDisableCameraConstraints;
+    return sDisableCameraConstraints || SKModalView::worldCovered(); // <SK:Nexii> modal view: a modal camera roams the grid
 }
 
 // The agent instance.
@@ -361,7 +362,15 @@ void LLAgentCamera::resetView(bool reset_camera, bool change_camera)
             gAgent.resetAxes(lerp(gAgent.getAtAxis(), agent_at_axis, LLSmoothInterpolation::getInterpolant(0.3f)));
         }
 
+        // <SK:Nexii> camera warp: a reset from far away (alt-cam) warps home like the mini-map's Cam.
+        const bool far_away = isAgentAvatarValid()
+            && (getCameraPositionGlobal() - gAgent.getPositionGlobal()).magVec() > SKCameraWarp::RESET_DISTANCE;
         setFocusOnAvatar(true, ANIMATE);
+        if (far_away && mCameraAnimating)
+        {
+            startCameraWarp(SKCameraWarp::AVATAR);
+        }
+        // </SK:Nexii>
 
         mCameraFOVZoomFactor = 0.f;
 
@@ -1457,6 +1466,12 @@ void LLAgentCamera::updateCamera()
             F32 smooth_fraction_of_animation = llsmoothstep(0.0f, 1.0f, fraction_of_animation);
             camera_pos_global = lerp(mAnimationCameraStartGlobal, camera_target_global, smooth_fraction_of_animation);
             mFocusGlobal = lerp(mAnimationFocusStartGlobal, focus_target_global, smooth_fraction_of_animation);
+            // <SK:Nexii> camera warp: a warp cuts the cruise out of a long move (skcamerawarp.h).
+            if (mCameraWarping)
+            {
+                smooth_fraction_of_animation = SKCameraWarp::fraction(mWarpProfile, time, (F32)(camera_target_global - mAnimationCameraStartGlobal).magVec());
+            }
+            // </SK:Nexii>
         }
         else
         {
@@ -1491,6 +1506,7 @@ void LLAgentCamera::updateCamera()
         // This turns off smoothing while editing. -MG
         bool in_build_mode = LLToolMgr::getInstance()->inBuildMode();
         mCameraSmoothingStop = mCameraSmoothingStop || in_build_mode;
+        mCameraSmoothingStop = mCameraSmoothingStop || (mCameraAnimating && mCameraWarping); // <SK:Nexii> camera warp: smoothing would smear the cut
 
         if (cameraThirdPerson() && !mCameraSmoothingStop)
         {
@@ -2264,7 +2280,7 @@ F32 LLAgentCamera::getCameraMaxZoomDistance()
 {
     // SL-14706 / SL-14885 TPV have relaxed camera constraints allowing you to mousewheeel zoom WAY out.
     static LLCachedControl<bool> s_disable_camera_constraints(gSavedSettings, "DisableCameraConstraints", false);
-    if (s_disable_camera_constraints)
+    if (s_disable_camera_constraints || SKModalView::worldCovered()) // <SK:Nexii> modal view: a modal camera roams the grid
     {
         return (F32)INT_MAX;
     }
@@ -2397,7 +2413,8 @@ void LLAgentCamera::changeCameraToMouselook(bool animate)
 // [RLVa:KB] - Checked: RLVa-2.0.0
         || ( (RlvActions::isRlvEnabled()) && (!RlvActions::canChangeToMouselook()) )
 // [/RLVa:KB]
-        || LLViewerJoystick::getInstance()->getOverrideCamera())
+        || LLViewerJoystick::getInstance()->getOverrideCamera()
+        || SKModalView::worldCovered()) // <SK:Nexii> modal view: no mouselook over a modal view
     {
         return;
     }
@@ -2752,7 +2769,27 @@ void LLAgentCamera::startCameraAnimation()
     setAnimationDuration(gSavedSettings.getF32("ZoomTime"));
     mAnimationTimer.reset();
     mCameraAnimating = true;
+    mCameraWarping = false; // <SK:Nexii> camera warp
 }
+
+// <SK:Nexii> camera warp: restarts the animation from where the camera is, as a warp.
+void LLAgentCamera::startCameraWarp(const SKCameraWarp::Profile& profile)
+{
+    startCameraAnimation();
+    mAnimationDuration = profile.duration();
+    mWarpProfile = profile;
+    mCameraWarping = true;
+}
+// </SK:Nexii>
+
+// <SK:Nexii> camera warp: the next update puts the camera on its target with no animation or smoothing.
+void LLAgentCamera::snapCameraToTarget()
+{
+    stopCameraAnimation();
+    mCameraWarping = false;
+    skipCameraSmoothing();
+}
+// </SK:Nexii>
 
 //-----------------------------------------------------------------------------
 // stopCameraAnimation()
@@ -2761,6 +2798,14 @@ void LLAgentCamera::stopCameraAnimation()
 {
     mCameraAnimating = false;
 }
+
+// <SK:Nexii> modal view: the next update puts the camera on its target, as LL's own pans do.
+void LLAgentCamera::skipCameraSmoothing()
+{
+    mCameraSmoothingStop = true;
+    mCameraSmoothingLastPositionGlobal = calcCameraPositionTargetGlobal();
+}
+// </SK:Nexii>
 
 void LLAgentCamera::clearFocusObject()
 {

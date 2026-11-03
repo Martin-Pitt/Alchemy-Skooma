@@ -110,7 +110,11 @@
 #include "llviewerparcelmgr.h"
 #include "llviewerregion.h" // for audio debugging.
 #include "llviewerwindow.h" // For getSpinAxis
+#include "skoverlay.h" // <SK:Nexii> overlay registry
 #include "llvoavatarself.h"
+#include "skaircells.h" // <SK:Nexii> air cells overlay
+#include "skrooms.h" // <SK:Nexii> rooms overlay
+#include "skworldcensus.h" // <SK:Nexii> census overlay
 #include "llvocache.h"
 #include "llvotree.h"
 #include "llvovolume.h"
@@ -120,6 +124,9 @@
 #include "llworld.h"
 #include "llcubemap.h"
 #include "llviewershadermgr.h"
+#include "skoutlinecapture.h" // <SK:Nexii> outline capture
+#include "skoverviewcapture.h" // <SK:Nexii> overview capture
+#include "skoverviewcensus.h" // <SK:Nexii> overview capture: class codes
 #include "llviewerstats.h"
 #include "llviewerjoystick.h"
 #include "llviewerdisplay.h"
@@ -148,6 +155,7 @@
 
 #include "SMAAAreaTex.h"
 #include "SMAASearchTex.h"
+#include "skmodalview.h" // <SK:Nexii> modal view
 #include "llerror.h"
 
 #if LL_CLANG
@@ -247,6 +255,8 @@ S32 LLPipeline::RenderHeroProbeConservativeUpdateMultiplier;
 const F32 BACKLIGHT_DAY_MAGNITUDE_OBJECT = 0.1f;
 const F32 BACKLIGHT_NIGHT_MAGNITUDE_OBJECT = 0.08f;
 const F32 ALPHA_BLEND_CUTOFF = 0.598f;
+static F32 sk_coverage_cutoff = 0.02f; // <SK:Nexii> outline capture: any rendered translucent surface covers
+static const std::function<bool(const LLDrawInfo*)>* sk_coverage_skip = nullptr; // <SK:Nexii> outline capture: draw infos a glyph leaves out
 const F32 DEFERRED_LIGHT_FALLOFF = 0.5f;
 const U32 DEFERRED_VB_MASK = LLVertexBuffer::MAP_VERTEX | LLVertexBuffer::MAP_TEXCOORD0 | LLVertexBuffer::MAP_TEXCOORD1;
 
@@ -306,6 +316,7 @@ bool    LLPipeline::sBakeSunlight = false;
 bool    LLPipeline::sNoAlpha = false;
 bool    LLPipeline::sUseFarClip = true;
 bool    LLPipeline::sShadowRender = false;
+bool    LLPipeline::sSKCoverageRender = false; // <SK:Nexii> outline capture
 bool    LLPipeline::sRenderGlow = false;
 bool    LLPipeline::sImpostorRender = false;
 bool    LLPipeline::sCutoutRender = false;
@@ -345,6 +356,7 @@ bool LLPipeline::suppressesLensAndPrintEffects()
 static LLPipelineListener sPipelineListener;
 
 static LLCullResult* sCull = NULL;
+static bool sSkOverviewCull = false; // <SK:Nexii> overview capture: set while its cull leaves avatars out
 
 // The colour attachments after the first that the main G-buffer has, in its formats: an avatar's impostor holds the
 // G-buffer's channels (generateImpostor).
@@ -789,7 +801,8 @@ void LLPipeline::applyRenderInputs()
     // login's frames draw no world, and the world's first frame takes what the reconcile readied for it rather than
     // building it mid-pass.
     mTransientTargets.setValidation(gDebugGL);
-    mTransientTargets.holdTrimming(LLStartUp::getStartupState() < STATE_STARTED);
+    mTransientTargets.holdTrimming(LLStartUp::getStartupState() < STATE_STARTED
+                                   || SKModalView::worldCovered()); // <SK:Nexii> modal view: the world comes back to the targets it left
     mTransientTargets.beginFrame();
     if (mTransientTargets.namesRecorded())
     {
@@ -1540,6 +1553,7 @@ void LLPipeline::releaseAllGLResources()
 {
     assertInitialized();
 
+    SKOutlineCapture::cleanupGL(); // <SK:Nexii> outline capture: the atlas goes with the context and every capture renders again
     releaseRenderTargets();
     releaseDepthDependents();
     mSky.releaseGL();
@@ -3944,6 +3958,12 @@ void LLPipeline::markVisible(LLDrawable *drawablep, LLCamera& camera)
             if (root && //  // this test may not be needed, see above
                     root->getVObj()->isAttachment())
             {
+                // <SK:Nexii> overview capture: attachments are part of the avatar, which markers replace.
+                if (sSkOverviewCull)
+                {
+                    return;
+                }
+                // </SK:Nexii>
                 LLDrawable* rootparent = root->getParent();
                 if (rootparent) // this IS sometimes NULL
                 {
@@ -5419,6 +5439,7 @@ void LLPipeline::renderGeomPostDeferred(LLCamera& camera)
         {
             ALFarPlaneOverlay::render();
         }
+        SKOverlays::draw(SKOverlayLayer::World); // <SK:Nexii> overlay registry: 3D layer
     }
 }
 
@@ -5974,6 +5995,7 @@ void LLPipeline::renderDebug()
         LL_PROFILE_ZONE_NAMED_CATEGORY_PIPELINE("probe debug display");
 
         bindDeferredShader(gReflectionProbeDisplayProgram, NULL);
+        gReflectionProbeDisplayProgram.uniformMatrix4fv(sk_probe_inv_view, 1, GL_FALSE, inv_view.getF32ptr());
         mScreenTriangleVB->setBuffer();
 
         LLGLEnable blend(GL_BLEND);
@@ -7991,7 +8013,7 @@ void LLPipeline::renderAlphaObjects(bool rigged)
             {
                 bound->uniform1f(LLShaderMgr::DEFERRED_SHADOW_STIPPLE, 1.f); // blended
             }
-            bound->setMinimumAlpha(ALPHA_BLEND_CUTOFF);
+            bound->setMinimumAlpha(sSKCoverageRender ? sk_coverage_cutoff : ALPHA_BLEND_CUTOFF); // <SK:Nexii> outline capture
         }
     };
 
@@ -11268,6 +11290,24 @@ void LLPipeline::renderFinalize()
     {
         renderPhysicsDisplay();
     }
+    // <SK:Nexii> census overlay: record, cluster and feature boxes, each layer behind its own setting
+    if (!cutout && SKWorldCensus::instanceExists())
+    {
+        SKWorldCensus::instance().renderDebug();
+    }
+    // </SK:Nexii>
+    // <SK:Nexii> air cells overlay: the air, wall faces, run-off and sky map, under the world debug mask
+    if (!cutout && SKAirCells::instanceExists())
+    {
+        SKAirCells::instance().renderDebug();
+    }
+    // </SK:Nexii>
+    // <SK:Nexii> rooms overlay: spaces, portals, wind and the air's space and indoor modes, under the world debug mask
+    if (!cutout && SKRooms::instanceExists())
+    {
+        SKRooms::instance().renderDebug();
+    }
+    // </SK:Nexii>
 
     /*if (LLRenderTarget::sUseFBO && !gCubeSnapshot)
     { // copy depth buffer from mRT->screen to framebuffer
@@ -12899,6 +12939,12 @@ void LLPipeline::sortShadow(LLCamera& shadow_cam, LLCullResult& result, bool do_
     }
 
     stateSort(shadow_cam, result);
+    // <SK:Nexii> outline capture: parts a glyph leaves out, such as thin alpha planes.
+    if (sSKCoverageRender && sk_coverage_skip && *sk_coverage_skip)
+    {
+        result.skEraseDrawInfos(*sk_coverage_skip);
+    }
+    // </SK:Nexii>
 
     sUseOcclusion = saved_occlusion;
     LLPipeline::sShadowRender = false;
@@ -12913,7 +12959,7 @@ void LLPipeline::drawShadow(const LLMatrix4a& view, const LLMatrix4a& proj, LLCa
     U32 saved_occlusion = sUseOcclusion;
     sUseOcclusion = occlusion;
 
-    LLGLEnable cull(GL_CULL_FACE);
+    LLGLEnable cull(sSKCoverageRender ? 0 : GL_CULL_FACE); // <SK:Nexii> outline capture: coverage is double-sided
 
     //enable depth clamping if available
     LLGLEnable clamp_depth(depth_clamp ? GL_DEPTH_CLAMP : 0);
@@ -13128,6 +13174,226 @@ void LLPipeline::drawShadow(const LLMatrix4a& view, const LLMatrix4a& proj, LLCa
     sUseOcclusion = saved_occlusion;
     LLPipeline::sShadowRender = false;
 }
+
+// <SK:Nexii> outline capture: renderShadow's depth-only passes over one bridge, culled and sorted with the capture camera.
+namespace
+{
+    // The coverage cutoff on the shadow alpha programs: 0 keeps their stripes and floor, above 0 replaces both.
+    void skSetCoverageCutoff(F32 cutoff)
+    {
+        for (LLGLSLShader* base : { &gDeferredShadowAlphaMaskProgram, &gDeferredShadowFullbrightAlphaMaskProgram,
+                                    &gDeferredShadowGLTFAlphaBlendProgram })
+        {
+            base->forEachVariant(
+                [cutoff](LLGLSLShader& shader)
+                {
+                    if (!shader.mProgramObject)
+                    {
+                        return;
+                    }
+                    const GLint loc = glGetUniformLocation(shader.mProgramObject, "sk_coverage_cutoff");
+                    if (loc >= 0)
+                    {
+                        shader.bind();
+                        glUniform1f(loc, cutoff);
+                    }
+                });
+        }
+        LLGLSLShader::unbind();
+    }
+}
+
+U32 LLPipeline::skRenderOutlineCoverage(LLSpatialBridge* bridge, const LLMatrix4a& view, const LLMatrix4a& proj, LLCamera& camera,
+                                        F32 alpha_cutoff, const std::function<bool(const LLDrawInfo*)>& skip)
+{
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_PIPELINE;
+    LL_PROFILE_GPU_ZONE("skRenderOutlineCoverage");
+
+    struct Restore
+    {
+        LLCullResult* cull = sCull;
+        LLViewerCamera::eCameraID camera_id = LLViewerCamera::sCurCameraID;
+        LLCamera current = LLViewerCamera::getCurrent();
+        S32 occlusion = sUseOcclusion;
+        bool shadow = sShadowRender;
+        bool impostor = sImpostorRender;
+        bool coverage = sSKCoverageRender;
+        const std::function<bool(const LLDrawInfo*)>* coverage_skip = sk_coverage_skip;
+        ~Restore()
+        {
+            skSetCoverageCutoff(0.f);
+            sSKCoverageRender = coverage;
+            sk_coverage_skip = coverage_skip;
+            sImpostorRender = impostor;
+            sShadowRender = shadow;
+            sUseOcclusion = occlusion;
+            LLViewerCamera::setCurrent(current);
+            LLViewerCamera::sCurCameraID = camera_id;
+            sCull = cull;
+        }
+    } restore;
+
+    // Avatars stay in the mask so stateSort resets their pools; otherwise this frame's bodies would draw.
+    pushRenderTypeMask();
+    clearRenderTypeMask(RENDER_TYPE_SKY, RENDER_TYPE_WL_SKY, RENDER_TYPE_TERRAIN, RENDER_TYPE_GRASS, RENDER_TYPE_TREE,
+                        RENDER_TYPE_VOIDWATER, RENDER_TYPE_WATER, RENDER_TYPE_PASS_GRASS, RENDER_TYPE_HUD, RENDER_TYPE_PARTICLES,
+                        RENDER_TYPE_CLOUDS, RENDER_TYPE_HUD_PARTICLES, END_RENDER_TYPES);
+
+    LLViewerCamera::sCurCameraID = LLViewerCamera::CAMERA_SK_COVERAGE;
+    sUseOcclusion = 0;
+    sShadowRender = true;
+    sImpostorRender = false;
+    sSKCoverageRender = true;
+    sk_coverage_skip = &skip;
+    sk_coverage_cutoff = llclamp(alpha_cutoff, 0.001f, 1.f);
+    skSetCoverageCutoff(sk_coverage_cutoff);
+    LLViewerCamera::setCurrent(camera);
+
+    static LLCullResult result;
+    result.clear();
+    grabReferences(result);
+    // Impostor-style acceptance for the bridge itself: no frustum or impostor-flag rejection of the subject.
+    sImpostorRender = true;
+    markVisible(bridge, camera);
+    sImpostorRender = false;
+
+    renderShadow(view, proj, camera, result, true, false);
+
+    U32 draw_infos = 0;
+    for (U32 type = 0; type < LLRenderPass::NUM_RENDER_TYPES; ++type)
+    {
+        for (LLCullResult::drawinfo_iterator i = result.beginRenderMap(type); i != result.endRenderMap(type); ++i)
+        {
+            ++draw_infos;
+        }
+    }
+
+    popRenderTypeMask();
+    return draw_infos;
+}
+// </SK:Nexii>
+
+// <SK:Nexii> overview capture: the world under a cut plane, one class code a pass in R, invisible faces flagged in B.
+U32 LLPipeline::skRenderOverview(const LLMatrix4a& view, const LLMatrix4a& proj, LLCamera& camera, F32 cut_z,
+                                 const std::function<void()>& census)
+{
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_PIPELINE;
+    LL_PROFILE_GPU_ZONE("skRenderOverview");
+
+    struct Restore
+    {
+        LLCullResult* cull = sCull;
+        LLViewerCamera::eCameraID camera_id = LLViewerCamera::sCurCameraID;
+        LLCamera current = LLViewerCamera::getCurrent();
+        S32 occlusion = sUseOcclusion;
+        bool shadow = sShadowRender;
+        bool impostor = sImpostorRender;
+        ~Restore()
+        {
+            sImpostorRender = impostor;
+            sShadowRender = shadow;
+            sUseOcclusion = occlusion;
+            LLViewerCamera::setCurrent(current);
+            LLViewerCamera::sCurCameraID = camera_id;
+            sCull = cull;
+        }
+    } restore;
+
+    pushRenderTypeMask();
+    // Terrain is the only rendered layer: the census draws everything else, so the cull and sort see terrain alone.
+    andRenderTypeMask(RENDER_TYPE_TERRAIN, END_RENDER_TYPES);
+
+    // The coverage camera's id: a non-world camera never updates LOD, so parts keep the LOD the agent's own view chose.
+    LLViewerCamera::sCurCameraID = LLViewerCamera::CAMERA_SK_COVERAGE;
+    sUseOcclusion = 0;
+    sShadowRender = true;
+    sImpostorRender = false;
+    LLViewerCamera::setCurrent(camera);
+
+    static LLCullResult result;
+    {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_PIPELINE("sk overview cull");
+        sSkOverviewCull = true;
+        updateCull(camera, result);
+        stateSort(camera, result);
+        sSkOverviewCull = false;
+    }
+
+    gGL.matrixMode(LLRender::MM_PROJECTION);
+    gGL.pushMatrix();
+    gGL.loadMatrix(proj);
+    gGL.matrixMode(LLRender::MM_MODELVIEW);
+    gGL.pushMatrix();
+    gGL.loadMatrix(view);
+    gGLLastMatrix = NULL;
+    gGL.getTextureSlot(0)->unbind();
+    LLVertexBuffer::unbind();
+
+    // The cut as an eye-space plane for the clip program: keep z <= cut_z.
+    // Built from the view's rotation and translation rather than a matrix product, whose transpose is easy to get wrong:
+    // in eye space n_e = R (0, 0, -1) and w = cut_z - n_e . t, so n_e . p_eye + w = cut_z - z_world.
+    LLVector4a down, normal_eye, origin_eye;
+    down.set(0.f, 0.f, -1.f, 0.f);
+    view.rotate(down, normal_eye);
+    LLVector4a zero;
+    zero.clear();
+    view.affineTransform(zero, origin_eye);
+    const F32 plane_w = cut_z - normal_eye.dot3(origin_eye).getF32();
+    LLVector4a clip_plane(normal_eye.getF32ptr()[0], normal_eye.getF32ptr()[1], normal_eye.getF32ptr()[2], plane_w);
+    auto bind_clip = [&](U8 code)
+    {
+        static const LLStaticHashedString sk_clip_plane("clip_plane");
+        gClipProgram.bind();
+        gClipProgram.uniform4fv(sk_clip_plane, 1, clip_plane.getF32ptr());
+        gGL.diffuseColor4f(code / 255.f, 0.f, 1.f, 1.f);
+    };
+
+    // Double-sided: a plane seen from below still has a top.
+    LLGLDisable cull_face(GL_CULL_FACE);
+    U32 draws = 0;
+    {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_PIPELINE("sk overview terrain");
+        LLGLDepthTest depth(GL_TRUE, GL_TRUE, GL_LESS);
+        gGL.setColorMask(true, false, false, false);
+        // The terrain's shadow program writes white; the clear left R at 0, so white is code 255, read as terrain.
+        for (LLDrawPool* pool : mPools)
+        {
+            if (pool->getType() != LLDrawPool::POOL_TERRAIN || !hasRenderType(pool->getType()))
+            {
+                continue;
+            }
+            pool->prerender();
+            gGLLastMatrix = NULL;
+            gGL.loadMatrix(view);
+            for (S32 i = 0; i < pool->getNumShadowPasses(); ++i)
+            {
+                pool->beginShadowPass(i);
+                pool->renderShadow(i);
+                pool->endShadowPass(i);
+            }
+            ++draws;
+        }
+    }
+    if (census)
+    {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_PIPELINE("sk overview census");
+        gGL.setColorMask(true, false, false, false);
+        bind_clip(skoverview::CODE_NONE);
+        census();
+        gGL.loadMatrix(view);
+        gGLLastMatrix = NULL;
+    }
+    gClipProgram.unbind();
+    gGL.setColorMask(true, true);
+    gGL.matrixMode(LLRender::MM_PROJECTION);
+    gGL.popMatrix();
+    gGL.matrixMode(LLRender::MM_MODELVIEW);
+    gGL.popMatrix();
+    gGLLastMatrix = NULL;
+    popRenderTypeMask();
+    return draws;
+}
+// </SK:Nexii>
 
 namespace
 {

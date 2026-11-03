@@ -26,6 +26,7 @@
 
 #include "llviewerprecompiledheaders.h"
 #include "llviewermessage.h"
+#include "skmodalview.h" // <SK:Nexii> modal view
 
 #include "alscriptstudio.h"
 #include "alscripttypes.h"
@@ -3367,6 +3368,7 @@ void process_agent_movement_complete(LLMessageSystem* msg, void**)
         // Force the camera back onto the agent, don't animate.
         gAgentCamera.setFocusOnAvatar(true, false);
         gAgentCamera.slamLookAt(look_at);
+        gAgentCamera.snapCameraToTarget(); // <SK:Nexii> camera warp: a teleport cuts to the arrival
         gAgentCamera.updateCamera();
 
         LL_INFOS("Teleport") << "Agent movement complete, setting state to TELEPORT_START_ARRIVAL" << LL_ENDL;
@@ -3584,6 +3586,11 @@ void send_agent_update(bool force_send, bool send_reliable)
 
     LLVector3 camera_pos_agent = gAgentCamera.getCameraPositionAgent(); // local to avatar's region
     LLVector3 camera_at = LLViewerCamera::getInstance()->getAtAxis();
+    // <SK:Nexii> modal view: the sim keeps the world camera while a modal view moves the viewer's.
+    LLVector3 camera_left = LLViewerCamera::getInstance()->getLeftAxis();
+    LLVector3 camera_up = LLViewerCamera::getInstance()->getUpAxis();
+    SKModalView::worldCameraForUpdate(camera_pos_agent, camera_at, camera_left, camera_up);
+    // </SK:Nexii>
     LLQuaternion body_rotation = gAgent.getFrameAgent().getQuaternion();
     LLQuaternion head_rotation = gAgent.getHeadRotation();
     U8 render_state = gAgent.getRenderState();
@@ -3708,11 +3715,12 @@ void send_agent_update(bool force_send, bool send_reliable)
 
     msg->addVector3Fast(_PREHASH_CameraCenter, camera_pos_agent);
     msg->addVector3Fast(_PREHASH_CameraAtAxis, camera_at);
-    msg->addVector3Fast(_PREHASH_CameraLeftAxis, LLViewerCamera::getInstance()->getLeftAxis());
-    msg->addVector3Fast(_PREHASH_CameraUpAxis, LLViewerCamera::getInstance()->getUpAxis());
+    msg->addVector3Fast(_PREHASH_CameraLeftAxis, camera_left); // <SK:Nexii> modal view
+    msg->addVector3Fast(_PREHASH_CameraUpAxis, camera_up); // <SK:Nexii> modal view
 
     static F32 last_draw_disatance_step = 1024;
     F32 memory_limited_draw_distance = gAgentCamera.mDrawDistance;
+    SKModalView::tacticalInterestFar(memory_limited_draw_distance); // <SK:Nexii> tactical overview: a wider Far while it steers the interest list
     const F32 mem_factor = LLMemory::getSystemMemoryBudgetFactor();
     if (mem_factor > 1.f)
     {
@@ -6603,6 +6611,7 @@ void process_teleport_local(LLMessageSystem *msg,void**)
     if ( !(gAgent.getTeleportKeepsLookAt() && LLViewerJoystick::getInstance()->getOverrideCamera()) )
     {
         gAgentCamera.resetView(true, true);
+        gAgentCamera.snapCameraToTarget(); // <SK:Nexii> camera warp: a teleport cuts to the arrival
     }
 
     // send camera update to new region

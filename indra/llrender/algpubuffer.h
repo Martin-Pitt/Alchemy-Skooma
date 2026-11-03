@@ -31,6 +31,7 @@
 #include <vector>
 
 class ALFrameFences;
+class ALTextureSlot; // <SK:Nexii> Overview cut table: ALGPUBufferTexture binds on a slot.
 
 // GL 4.3's minimum GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS, so every point here exists on every context that has
 // compute. LLRender keeps what each holds; the reserved storage blocks' fixed points all fall below it.
@@ -47,6 +48,18 @@ struct ALDrawArraysIndirectCommand
     U32 mBaseInstance  = 0;
 };
 static_assert(sizeof(ALDrawArraysIndirectCommand) == 16, "GL's DrawArraysIndirectCommand is four uints");
+
+// <SK:Nexii> combat/minimap: what glDrawElementsIndirect reads, GL's DrawElementsIndirectCommand word for word.
+struct ALDrawElementsIndirectCommand
+{
+    U32 mCount         = 0;
+    U32 mInstanceCount = 0;
+    U32 mFirstIndex    = 0;
+    S32 mBaseVertex    = 0;
+    U32 mBaseInstance  = 0;
+};
+static_assert(sizeof(ALDrawElementsIndirectCommand) == 20, "GL's DrawElementsIndirectCommand is five words");
+// </SK:Nexii>
 
 // What glDispatchComputeIndirect reads: the work group counts, x, y, z.
 struct ALDispatchIndirectCommand
@@ -286,3 +299,24 @@ private:
     U32                mNext         = 0;  // the region the next map() gives
     U32                mStalls       = 0;
 };
+
+// <SK:Nexii> Overview cut table: a buffer texture over a stream.
+// A GL_TEXTURE_BUFFER over an ALGPUBuffer, owning the texture name. attach() binds it on the slot it is given, as
+// glTexBuffer acts on the active unit; the caller attaches again whenever the buffer was reallocated, by its own flag,
+// not the buffer's name, which GL may reuse. Non-copyable.
+class ALGPUBufferTexture
+{
+public:
+    ALGPUBufferTexture() = default;
+    ALGPUBufferTexture(const ALGPUBufferTexture&) = delete;
+    ALGPUBufferTexture& operator=(const ALGPUBufferTexture&) = delete;
+
+    // Attach the texture to `buffer` as texels of `internal_format` (GL_RGBA32F and the rest), left bound on `slot`.
+    bool attach(ALTextureSlot* slot, const ALGPUBuffer& buffer, U32 internal_format);
+    U32  getTexture() const { return mTexture; }
+    void release();
+
+private:
+    U32 mTexture = 0;
+};
+// </SK:Nexii>

@@ -27,6 +27,7 @@
 #include "linden_common.h"
 
 #include "llwindowwin32.h"
+#include <atomic> // <SK:Nexii> tactical overview
 
 // LLWindow library includes
 #include "llkeyboardwin32.h"
@@ -94,6 +95,34 @@ const F32   ICON_FLASH_TIME = 0.5f;
 // Claim a couple unused GetMessage() message IDs
 const UINT WM_DUMMY_(WM_USER + 0x0017);
 const UINT WM_POST_FUNCTION_(WM_USER + 0x0018);
+
+// <SK:Nexii> tactical overview: a low-level hook takes Caps Lock before the OS toggles caps and hands it to the window.
+const UINT WM_SK_CAPSLOCK_(WM_APP + 0x0A57); // wParam 1 down, 0 up
+namespace
+{
+    std::atomic<bool> sSKCapsWanted{ false };
+    std::atomic<HWND> sSKCapsWindow{ nullptr };
+    HHOOK sSKCapsHook = nullptr; // window thread only
+
+    // Trivial and fast: Windows drops a low-level hook that overruns LowLevelHooksTimeout.
+    LRESULT CALLBACK skCapsLockHook(int code, WPARAM w_param, LPARAM l_param)
+    {
+        if (code == HC_ACTION)
+        {
+            const KBDLLHOOKSTRUCT* k = reinterpret_cast<const KBDLLHOOKSTRUCT*>(l_param);
+            HWND window = sSKCapsWindow.load(std::memory_order_relaxed);
+            if (k->vkCode == VK_CAPITAL && !(k->flags & LLKHF_INJECTED) && window &&
+                sSKCapsWanted.load(std::memory_order_relaxed) && GetForegroundWindow() == window)
+            {
+                const bool up = w_param == WM_KEYUP || w_param == WM_SYSKEYUP;
+                PostMessage(window, WM_SK_CAPSLOCK_, up ? 0 : 1, 0);
+                return 1;
+            }
+        }
+        return CallNextHookEx(nullptr, code, w_param, l_param);
+    }
+}
+// </SK:Nexii>
 
 extern bool gDebugWindowProc;
 
@@ -244,6 +273,76 @@ LLCoordWindow LLWindowWin32::sWinIMEWindowPosition(-1,-1);
 HMODULE LLWindowWin32::sGLDLLHandle = nullptr;
 
 static HWND sWindowHandleForMessageBox = NULL;
+
+// <SK:Nexii> smooth scroll
+// The wheel's OS distances and the precise-stream guess, kept on the window thread.
+namespace
+{
+    constexpr ULONGLONG PRECISE_STREAM_GAP_MS = 40;  // sub-notch messages this close together are one stream
+    constexpr ULONGLONG PRECISE_STREAM_HOLD_MS = 150; // a stream stays precise this long after its last message
+
+    UINT sWheelScrollLines = 3;
+    UINT sWheelScrollChars = 3;
+    bool sWheelSettingsStale = false;
+
+    void read_wheel_settings()
+    {
+        sWheelSettingsStale = false;
+        if (!SystemParametersInfo(SPI_GETWHEELSCROLLLINES, 0, &sWheelScrollLines, 0))
+        {
+            sWheelScrollLines = 3;
+        }
+        if (!SystemParametersInfo(SPI_GETWHEELSCROLLCHARS, 0, &sWheelScrollChars, 0))
+        {
+            sWheelScrollChars = 3;
+        }
+    }
+
+    struct WheelStream
+    {
+        ULONGLONG mLastMs = 0;
+        ULONGLONG mPreciseUntilMs = 0;
+    };
+
+    // Fills in a wheel message's distances, unless smooth scrolling is off: notches times the OS's lines (or characters), or a page.
+    LLScrollDelta wheel_delta(S32 clicks, S16 raw, F32 sign, bool horizontal, WheelStream& stream)
+    {
+        LLScrollDelta delta(clicks, sign * (F32)raw / (F32)WHEEL_DELTA);
+        if (!LLWindow::sSmoothScroll)
+        {
+            return delta; // upstream's clicks and fractions only
+        }
+        if (sWheelSettingsStale)
+        {
+            read_wheel_settings();
+        }
+        UINT per_notch = horizontal ? sWheelScrollChars : sWheelScrollLines;
+        const ULONGLONG now = GetTickCount64();
+        if (LLWindow::sPreciseWheelHeuristic && raw % WHEEL_DELTA != 0 && now - stream.mLastMs <= PRECISE_STREAM_GAP_MS)
+        {
+            stream.mPreciseUntilMs = now + PRECISE_STREAM_HOLD_MS;
+        }
+        stream.mLastMs = now;
+        if (per_notch == WHEEL_PAGESCROLL)
+        {
+            delta.mPage = true;
+            delta.mLines = delta.mPrecise;
+            per_notch = (UINT)LLScrollDelta::DEFAULT_LINES;
+        }
+        else
+        {
+            delta.mLines = delta.mPrecise * (F32)per_notch;
+        }
+        if (now < stream.mPreciseUntilMs)
+        {
+            delta.mIsPrecise = true;
+            delta.mPage = false;
+            delta.mPixels = delta.mPrecise * (F32)per_notch * LLScrollDelta::PIXELS_PER_LINE;
+        }
+        return delta;
+    }
+}
+// </SK:Nexii>
 
 // The following class LLWinImm delegates Windows IMM APIs.
 // It was originally introduced to support US Windows XP, on which we needed
@@ -622,6 +721,7 @@ LLWindowWin32::LLWindowWin32(LLWindowCallbacks* callbacks,
     {
         mMouseVanish = true;
     }
+    read_wheel_settings(); // <SK:Nexii> smooth scroll
 
     // Initialize the keyboard
     // One keyboard for the process, a window made after another replacing
@@ -1008,9 +1108,34 @@ bool destroy_window_handler(HWND hWnd)
 
 // close() destroys all OS-specific code associated with a window.
 // Usually called from LLWindowManager::destroyWindow()
+// <SK:Nexii> tactical overview: install the hook while wanted, on the window thread, which pumps its messages.
+void LLWindowWin32::skSetCapsLockCapture(bool want)
+{
+    if (want == sSKCapsWanted.load())
+    {
+        return;
+    }
+    sSKCapsWanted = want;
+    sSKCapsWindow = mWindowHandle;
+    mWindowThread->post([want]()
+        {
+            if (want && !sSKCapsHook)
+            {
+                sSKCapsHook = SetWindowsHookEx(WH_KEYBOARD_LL, skCapsLockHook, GetModuleHandle(nullptr), 0);
+            }
+            else if (!want && sSKCapsHook)
+            {
+                UnhookWindowsHookEx(sSKCapsHook);
+                sSKCapsHook = nullptr;
+            }
+        });
+}
+// </SK:Nexii>
+
 void LLWindowWin32::close()
 {
     LL_DEBUGS("Window") << "Closing LLWindowWin32" << LL_ENDL;
+    skSetCapsLockCapture(false); // <SK:Nexii> tactical overview: no hook outlives the window
     // Is window is already closed?
     if (!mWindowHandle)
     {
@@ -2955,6 +3080,24 @@ LRESULT CALLBACK LLWindowWin32::mainWindowProc(HWND h_wnd, UINT u_msg, WPARAM w_
             if (eat_keystroke) return 0;    // skip DefWindowProc() handling if we're consuming the keypress
             break;
         }
+        // <SK:Nexii> tactical overview: Caps Lock taken by the low-level hook, as a key press or release
+        case WM_SK_CAPSLOCK_:
+        {
+            const bool down = w_param != 0;
+            window_imp->post([=]()
+                {
+                    if (down)
+                    {
+                        gKeyboard->handleKeyDown((U16)VK_CAPITAL, 0);
+                    }
+                    else
+                    {
+                        gKeyboard->handleKeyUp((U16)VK_CAPITAL, 0);
+                    }
+                });
+            return 0;
+        }
+        // </SK:Nexii>
         case WM_SYSKEYUP:
             eat_keystroke = false;
             // intentional fall-through here
@@ -3273,8 +3416,11 @@ LRESULT CALLBACK LLWindowWin32::mainWindowProc(HWND h_wnd, UINT u_msg, WPARAM w_
                 clicks = -z_delta / WHEEL_DELTA;
                 z_delta = 0;
             }
-            WINDOW_IMP_POST(window_imp->mCallbacks->handleScrollWheel(window_imp,
-                LLScrollDelta(clicks, -(F32)incoming_z_delta / (F32)WHEEL_DELTA)));
+            // <SK:Nexii> smooth scroll
+            static WheelStream z_stream;
+            const LLScrollDelta delta = wheel_delta(clicks, incoming_z_delta, -1.f, false, z_stream);
+            WINDOW_IMP_POST(window_imp->mCallbacks->handleScrollWheel(window_imp, delta));
+            // </SK:Nexii>
             return 0;
         }
         /*
@@ -3329,8 +3475,11 @@ LRESULT CALLBACK LLWindowWin32::mainWindowProc(HWND h_wnd, UINT u_msg, WPARAM w_
                 h_clicks = h_delta / WHEEL_DELTA;
                 h_delta = 0;
             }
-            WINDOW_IMP_POST(window_imp->mCallbacks->handleScrollHWheel(window_imp,
-                LLScrollDelta(h_clicks, (F32)incoming_h_delta / (F32)WHEEL_DELTA)));
+            // <SK:Nexii> smooth scroll
+            static WheelStream h_stream;
+            const LLScrollDelta delta = wheel_delta(h_clicks, incoming_h_delta, 1.f, true, h_stream);
+            WINDOW_IMP_POST(window_imp->mCallbacks->handleScrollHWheel(window_imp, delta));
+            // </SK:Nexii>
             return 0;
         }
         // Handle mouse movement within the window
@@ -3516,6 +3665,20 @@ LRESULT CALLBACK LLWindowWin32::mainWindowProc(HWND h_wnd, UINT u_msg, WPARAM w_
                     WINDOW_IMP_POST(window_imp->mMouseVanish = true);
                 }
             }
+            // <SK:Nexii> smooth scroll
+            else if (w_param == SPI_SETWHEELSCROLLLINES || w_param == SPI_SETWHEELSCROLLCHARS)
+            {
+                // Switched off, read them on the first wheel message after it is on again.
+                if (LLWindow::sSmoothScroll)
+                {
+                    read_wheel_settings();
+                }
+                else
+                {
+                    sWheelSettingsStale = true;
+                }
+            }
+            // </SK:Nexii>
             // Check if theme-related settings changed
             else if (l_param && (wcscmp((LPCWSTR)l_param, L"ImmersiveColorSet") == 0))
             {

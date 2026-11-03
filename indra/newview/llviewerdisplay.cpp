@@ -88,6 +88,9 @@
 #include "llvograss.h"
 #include "llworld.h"
 #include "pipeline.h"
+#include "skmodalview.h" // <SK:Nexii> modal view
+#include "skoutlinecapture.h" // <SK:Nexii> outline capture
+#include "skoverviewcapture.h" // <SK:Nexii> overview capture
 
 #include <filesystem>
 #include <iomanip>
@@ -96,6 +99,7 @@
 #include "llvisualeffect.h"
 #include "rlvactions.h"
 #include "rlvlocks.h"
+#include "skoverlay.h" // <SK:Nexii> overlay registry
 // [/RLVa:KB]
 
 
@@ -137,6 +141,93 @@ void render_hud_attachments();
 void render_ui_3d();
 void render_ui_2d();
 void render_disconnected_background();
+
+// <SK:Nexii> modal view: a modal frame keeps a world frame's object and image work, so nothing piles up
+// for close, and draws the top modal view and the UI in place of the world.
+static bool sSKModalFrame = false;
+
+// The world's bookkeeping without its draw, thinned and on separate frames: a cull and sort from the saved world
+// camera on one, the environment half a period later.
+static void sk_modal_world_tick()
+{
+    static LLCachedControl<U32> world_frames(gSavedSettings, "SKModalWorldTickFrames", 16);
+    static LLCachedControl<U32> env_frames(gSavedSettings, "SKModalEnvironmentTickFrames", 16);
+    static U32 frame = 0;
+    ++frame;
+    const bool world = world_frames > 0 && frame % world_frames == 0;
+    const bool env = env_frames > 0 && (frame + env_frames / 2) % env_frames == 0;
+    LLVector3d eye;
+    LLVector3 at, left, up;
+    if ((!world && !env) || !SKModalView::worldCamera(eye, at, left, up))
+    {
+        return;
+    }
+    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("Modal World Tick");
+    LLViewerCamera* camera = LLViewerCamera::getInstance();
+    // The mode draws from the camera after this, so its own pose goes back once the tick is done.
+    const LLCamera saved_camera = *camera;
+    const LLCamera saved_current = LLViewerCamera::getCurrent();
+    camera->setOrigin(gAgent.getPosAgentFromGlobal(eye));
+    camera->setAxes(at, left, up);
+    camera->setModelview(camera->frameModelview());
+    LLViewerCamera::updateFrustumPlanes(*camera);
+    if (env)
+    {
+        LLEnvironment::instance().update(camera);
+    }
+    if (world)
+    {
+        // Nothing drew depth to test against, so no occlusion.
+        const S32 occlusion = LLPipeline::sUseOcclusion;
+        LLPipeline::sUseOcclusion = 0;
+        LLDrawable::incrementVisible();
+        LLSpatialGroup::sNoDelete = true;
+        static LLCullResult result;
+        LLViewerCamera::sCurCameraID = LLViewerCamera::CAMERA_WORLD;
+        LLPipeline::sUnderWaterRender = camera->cameraUnderWater();
+        gPipeline.updateCull(*camera, result);
+        gPipeline.stateSort(*camera, result);
+        LLSpatialGroup::sNoDelete = false;
+        LLPipeline::sUseOcclusion = occlusion;
+    }
+    static_cast<LLCamera&>(*camera) = saved_camera;
+    LLViewerCamera::setCurrent(saved_current);
+}
+
+static void sk_display_modal(bool rebuild)
+{
+    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("Modal View Frame");
+    sk_modal_world_tick();
+    LLHUDManager::getInstance()->updateEffects();
+    LLHUDObject::updateAll();
+    const F32 max_geom_update_time = llmin(0.005f * 10.f * gFrameIntervalSeconds.value(), 0.005f);
+    gPipeline.createObjects(max_geom_update_time);
+    gPipeline.processPartitionQ();
+    gPipeline.updateGeom(max_geom_update_time);
+    gPipeline.updateGL();
+    if (rebuild)
+    {
+        gPipeline.rebuildPools();
+    }
+    LLViewerTexture::updateClass();
+    gBumpImageList.updateImages();
+    const F32 max_image_decode_time = llclamp(0.050f * gFrameIntervalSeconds.value(), 0.002f, 0.005f);
+    gTextureList.updateImages(max_image_decode_time);
+    gGLTFMaterialList.flushMaterials();
+
+    gGL.setColorMask(true, true);
+    const LLColor4 saved_clear = gGL.getClearColor();
+    gGL.setClearColor(LLColor4::transparent);
+    gGL.clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    gGL.setClearColor(saved_clear);
+    SKModalView::instance().render(gViewerWindow->getWorldViewRectRaw());
+
+    sSKModalFrame = true;
+    render_ui();
+    sSKModalFrame = false;
+    swap();
+}
+// </SK:Nexii>
 
 void getProfileStatsContext(LLSD& stats);
 std::string getProfileStatsFilename();
@@ -804,10 +895,24 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
 
     gPipeline.resetFrameStats();    // Reset per-frame statistics.
 
+    // <SK:Nexii> modal view: a modal view draws in place of the world, as the disconnected screen does
+    // above; a teleport, a disconnect, logging out, a GL restore or RLVa closes it.
+    bool sk_modal_frame = false;
+    if (SKModalView::worldCovered())
+    {
+        const bool leaving_world = gTeleportDisplay || gDisconnected || gRestoreGL || LLApp::isExiting() || LLAppViewer::instance()->logoutRequestSent();
+        if (SKModalView::instance().closeIfNeeded(leaving_world) && !for_snapshot)
+        {
+            sk_modal_frame = true;
+            sk_display_modal(rebuild);
+        }
+    }
+    // </SK:Nexii>
+
     // Whether the world's frame reaches the screen: a capture holds its swap back, and a viewer on its way out draws
     // no world.
     bool presented = false;
-    if (!gDisconnected && !LLApp::isExiting())
+    if (!gDisconnected && !sk_modal_frame && !LLApp::isExiting()) // <SK:Nexii> modal view: no world in a modal frame
     {
         // The water's field around the main camera, before the mirrors, the shadow fit and the probes read it.
         gPipeline.mWaterSurface.update();
@@ -1143,6 +1248,8 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
         LLAppViewer::instance()->pingMainloopTimeout("Display:RenderUI");
         if (!for_snapshot)
         {
+            SKOutlineCapture::onFrame(); // <SK:Nexii> outline capture: coverage renders after the world, before the UI
+            SKOverviewCapture::onFrame(); // <SK:Nexii> overview capture: the mini-map base from above, on its timer
             render_ui();
             presented = gDisplaySwapBuffers;
             swap();
@@ -1676,7 +1783,10 @@ void render_ui(F32 zoom_factor, int subfield)
     }
 
     // apply gamma correction and post effects
-    gPipeline.renderFinalize();
+    if (!sSKModalFrame) // <SK:Nexii> modal view: the modal view has already drawn its frame
+    {
+        gPipeline.renderFinalize();
+    }
 
     // A cutout frame is its subject and nothing else. Nothing drawn over the
     // frame belongs to that, and the coverage the subject is lifted out by
@@ -1702,7 +1812,10 @@ static void render_ui_over_world()
 
 
         LL_PROFILE_ZONE_NAMED_CATEGORY_UI("HUD");
-        render_hud_elements();
+        if (!sSKModalFrame) // <SK:Nexii> modal view: no world overlays over a modal view
+        {
+            render_hud_elements();
+        }
         LLGLState::checkStates();
 // [RLVa:KB] - Checked: RLVa-2.2 (@setoverlay)
         if (RlvActions::hasBehaviour(RLV_BHVR_SETOVERLAY))
@@ -1710,7 +1823,10 @@ static void render_ui_over_world()
             LLVfxManager::instance().runEffect(EVisualEffect::RlvOverlay);
         }
 // [/RLVa:KB]
-        render_hud_attachments();
+        if (!sSKModalFrame) // <SK:Nexii> modal view: no HUD attachments over a modal view
+        {
+            render_hud_attachments();
+        }
 
         LLGLState::checkStates();
 
@@ -1744,7 +1860,10 @@ static void render_ui_over_world()
         if (render_ui)
         {
             LL_PROFILE_ZONE_NAMED_CATEGORY_UI("UI 2D");
-            LLHUDObject::renderAll();
+            if (!sSKModalFrame) // <SK:Nexii> modal view: hover text and name tags belong to the world
+            {
+                LLHUDObject::renderAll();
+            }
             render_ui_2d();
         }
 
@@ -1836,6 +1955,11 @@ void draw_axes()
 
 void render_ui_3d()
 {
+    if (sSKModalFrame) // <SK:Nexii> modal view: the world's 3D UI belongs to the world camera
+    {
+        return;
+    }
+
     LL_PROFILE_ZONE_SCOPED_CATEGORY_UI;
     LLGLSPipeline gls_pipeline;
 
@@ -1932,7 +2056,11 @@ void render_ui_2d()
         stop_glerror();
     }
 
+    SKOverlays::draw(SKOverlayLayer::ScreenUnderUI); // <SK:Nexii> overlay registry: 2.5D/2D under the UI
+
     gViewerWindow->draw();
+
+    SKOverlays::draw(SKOverlayLayer::ScreenOverUI); // <SK:Nexii> overlay registry: 2D over the UI
 
     // reset current origin for font rendering, in case of tiling render
     LLFontGL::sCurOrigin.set(0, 0);

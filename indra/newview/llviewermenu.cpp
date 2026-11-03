@@ -139,6 +139,10 @@
 #include "llworld.h"
 #include "llworldmap.h"
 #include "pipeline.h"
+#include "skaircells.h" // <SK:Nexii> air cells menu
+#include "skrooms.h" // <SK:Nexii> rooms menu
+#include "skworldcensus.h" // <SK:Nexii> census export
+#include "skmodalview.h" // <SK:Nexii> modal view
 #include "llviewerjoystick.h"
 #include "llfloatercamera.h"
 #include "lluilistener.h"
@@ -1200,6 +1204,10 @@ U64 info_display_from_string(std::string_view info_display)
     {
         return LLPipeline::RENDER_DEBUG_PHYSICS_SHAPES;
     }
+    else if ("world" == info_display) // <SK:Nexii> census: the world layers' debug overlays
+    {
+        return LLPipeline::RENDER_DEBUG_WORLD;
+    }
     else if ("occlusion" == info_display)
     {
         return LLPipeline::RENDER_DEBUG_OCCLUSION;
@@ -1336,6 +1344,90 @@ class LLAdvancedCheckInfoDisplay : public view_listener_t
         return new_value;
     }
 };
+
+// <SK:Nexii> Physics Shapes > Cost / Types: one overlay, two colourings; picking the shown one hides it
+class SKTogglePhysicsShapes : public view_listener_t
+{
+    bool handleEvent(const LLSD& userdata)
+    {
+        const bool types = userdata.asString() == "types";
+        const bool shown = gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_PHYSICS_SHAPES);
+        if (!shown || gSavedSettings.getBOOL("SKPhysicsShapeTypes") == types)
+        {
+            LLPipeline::toggleRenderDebug(LLPipeline::RENDER_DEBUG_PHYSICS_SHAPES);
+        }
+        gSavedSettings.setBOOL("SKPhysicsShapeTypes", types);
+        return true;
+    }
+};
+
+class SKCheckPhysicsShapes : public view_listener_t
+{
+    bool handleEvent(const LLSD& userdata)
+    {
+        const bool types = userdata.asString() == "types";
+        return gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_PHYSICS_SHAPES)
+            && gSavedSettings.getBOOL("SKPhysicsShapeTypes") == types;
+    }
+};
+// </SK:Nexii>
+
+// <SK:Nexii> census: the last snapshot and every layer's section to a file in the logs folder
+class SKExportWorldCensus : public view_listener_t
+{
+    bool handleEvent(const LLSD& userdata)
+    {
+        LLSD args;
+        args["MESSAGE"] = "World census: " + SKWorldCensus::instance().exportCensus();
+        LLNotificationsUtil::add("SystemMessageTip", args);
+        return true;
+    }
+};
+// </SK:Nexii>
+
+// <SK:Nexii> air cells: the air overlay's mode, picked like a radio group, and the status line as a tip
+class SKSetAirOverlay : public view_listener_t
+{
+    bool handleEvent(const LLSD& userdata)
+    {
+        const U32 mode = static_cast<U32>(userdata.asInteger());
+        gSavedSettings.setU32("SKAirOverlay", gSavedSettings.getU32("SKAirOverlay") == mode ? 0 : mode);
+        return true;
+    }
+};
+
+class SKCheckAirOverlay : public view_listener_t
+{
+    bool handleEvent(const LLSD& userdata)
+    {
+        return gSavedSettings.getU32("SKAirOverlay") == static_cast<U32>(userdata.asInteger());
+    }
+};
+
+class SKShowAirStatus : public view_listener_t
+{
+    bool handleEvent(const LLSD& userdata)
+    {
+        LLSD args;
+        args["MESSAGE"] = SKAirCells::instance().statsLine();
+        LLNotificationsUtil::add("SystemMessageTip", args);
+        return true;
+    }
+};
+// </SK:Nexii>
+
+// <SK:Nexii> rooms: the enclosure, spaces, room graph and wind passes' status
+class SKShowRoomsStatus : public view_listener_t
+{
+    bool handleEvent(const LLSD& userdata)
+    {
+        LLSD args;
+        args["MESSAGE"] = SKRooms::instance().statsLine();
+        LLNotificationsUtil::add("SystemMessageTip", args);
+        return true;
+    }
+};
+// </SK:Nexii>
 
 
 ///////////////////////////
@@ -4836,6 +4928,13 @@ void reset_view_final(bool proceed);
 
 void handle_reset_view()
 {
+    // <SK:Nexii> modal view: Esc, Reset View's shortcut, closes the modal view on top rather than resetting the camera.
+    if (SKModalView::worldCovered())
+    {
+        SKModalView::instance().closeTop();
+        return;
+    }
+    // </SK:Nexii>
     if (gAgentCamera.cameraCustomizeAvatar())
     {
         // switching to outfit selector should automagically save any currently edited wearable
@@ -10790,6 +10889,13 @@ void initialize_menus()
     // Advanced > Render > Info Displays
     view_listener_t::addMenu(new LLAdvancedToggleInfoDisplay(), "Advanced.ToggleInfoDisplay");
     view_listener_t::addMenu(new LLAdvancedCheckInfoDisplay(), "Advanced.CheckInfoDisplay");
+    view_listener_t::addMenu(new SKTogglePhysicsShapes(), "SK.TogglePhysicsShapes"); // <SK:Nexii> physics shape colourings
+    view_listener_t::addMenu(new SKCheckPhysicsShapes(), "SK.CheckPhysicsShapes"); // <SK:Nexii> physics shape colourings
+    view_listener_t::addMenu(new SKExportWorldCensus(), "SK.ExportWorldCensus"); // <SK:Nexii> census export
+    view_listener_t::addMenu(new SKSetAirOverlay(), "SK.SetAirOverlay"); // <SK:Nexii> air cells
+    view_listener_t::addMenu(new SKCheckAirOverlay(), "SK.CheckAirOverlay"); // <SK:Nexii> air cells
+    view_listener_t::addMenu(new SKShowAirStatus(), "SK.ShowAirStatus"); // <SK:Nexii> air cells
+    view_listener_t::addMenu(new SKShowRoomsStatus(), "SK.ShowRoomsStatus"); // <SK:Nexii> rooms
     view_listener_t::addMenu(new LLAdvancedSelectedTextureInfo(), "Advanced.SelectedTextureInfo");
     commit.add("Advanced.SelectedMaterialInfo", boost::bind(&handle_selected_material_info));
     view_listener_t::addMenu(new LLAdvancedToggleWireframe(), "Advanced.ToggleWireframe");

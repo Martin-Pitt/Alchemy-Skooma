@@ -37,7 +37,7 @@
 #include "llvoavatar.h"
 #include "llviewerobject.h"
 #include "llviewerwindow.h"
-#include "llnetmap.h"
+//#include "llnetmap.h" // <SK:Nexii> SKNetMap retired the classic mini-map
 #include "llagent.h"
 #include "llagentcamera.h"
 #include "pipeline.h"
@@ -80,6 +80,7 @@
 #include "llvocache.h"
 #include "llcorehttputil.h"
 #include "llstartup.h"
+#include "skworldcensus.h" // <SK:Nexii> census dirty set
 
 #include <algorithm>
 #include <iterator>
@@ -88,6 +89,10 @@ extern F32 gMinObjectDistance;
 extern bool gAnimateTextures;
 
 #define MAX_CONCURRENT_PHYSICS_REQUESTS 256
+
+// <SK:Nexii> Objects their region would not give physics flags for, kept out of the queue so a reader polling them (the mini-map census) cannot re-ask every frame.
+static uuid_set_t sPhysicsFlagsRefused;
+// </SK:Nexii>
 
 void dialog_refresh_all();
 
@@ -291,6 +296,13 @@ void LLViewerObjectList::processUpdateCore(LLViewerObject* objectp,
         gViewerWindow->getWindow()->decBusyCount();
         gViewerWindow->setCursor( UI_CURSOR_ARROW );
     }
+
+    // <SK:Nexii> census dirty set: every update and creation, once the object has its parent and children.
+    if (SKWorldCensus::instanceExists())
+    {
+        SKWorldCensus::getInstance()->noteObjectUpdate(objectp);
+    }
+    // </SK:Nexii>
 }
 
 LLViewerObject* LLViewerObjectList::processObjectUpdateFromCache(LLVOCacheEntry* entry, LLViewerRegion* regionp)
@@ -381,6 +393,13 @@ LLViewerObject* LLViewerObjectList::processObjectUpdateFromCache(LLVOCacheEntry*
 
     processUpdateCore(objectp, NULL, 0, OUT_FULL_CACHED, cached_dpp, justCreated, true);
     objectp->loadFlags(entry->getUpdateFlags()); //just in case, reload update flags from cache.
+    // <SK:Nexii> census: a revived object takes the physics shape type already answered for its id
+    U8 known_type = 0;
+    if (justCreated && knownPhysicsShapeType(fullid, known_type))
+    {
+        objectp->setPhysicsShapeType(known_type);
+    }
+    // </SK:Nexii>
 
     if(entry->getHitCount() > 0)
     {
@@ -961,6 +980,7 @@ void LLViewerObjectList::update(LLAgent &agent)
     mNumAvatars = 0;
 
     {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("vol - copy active"); // <SK:Nexii> sub-zones for the profiler
         for (std::vector<LLPointer<LLViewerObject> >::iterator active_iter = mActiveObjects.begin();
             active_iter != mActiveObjects.end(); active_iter++)
         {
@@ -1049,8 +1069,14 @@ void LLViewerObjectList::update(LLAgent &agent)
 
 
 
-    fetchObjectCosts();
-    fetchPhysicsFlags();
+    { // <SK:Nexii> sub-zones for the profiler
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("vol - fetch costs");
+        fetchObjectCosts();
+    }
+    {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("vol - fetch physics flags");
+        fetchPhysicsFlags();
+    } // </SK:Nexii>
 
     // update max computed render cost
     LLVOVolume::updateRenderComplexity();
@@ -1059,6 +1085,7 @@ void LLViewerObjectList::update(LLAgent &agent)
     // don't factor frames that were paused into the stats
     if (! mWasPaused)
     {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("vol - frame stats"); // <SK:Nexii> sub-zones for the profiler
         LLViewerStats::getInstance()->updateFrameStats(F64Seconds(gFrameIntervalSeconds.value()));
     }
     mWasPaused = mAgentPaused;
@@ -1271,27 +1298,39 @@ void LLViewerObjectList::fetchObjectCostsCoro(std::string url)
 
 void LLViewerObjectList::fetchPhysicsFlags()
 {
-    // issue http request for stale object physics flags
-    if (!mStalePhysicsFlags.empty())
+    // <SK:Nexii> Ask each object's own region rather than the agent's, which cannot answer for its neighbours (mini-map census).
+    std::map<LLViewerRegion*, LLSD> batches;
+    U32 batched = 0;
+    for (uuid_set_t::iterator it = mStalePhysicsFlags.begin(); it != mStalePhysicsFlags.end() && batched < MAX_CONCURRENT_PHYSICS_REQUESTS;)
     {
-        LLViewerRegion* regionp = gAgent.getRegion();
-
-        if (regionp)
+        const LLUUID id = *it;
+        it = mStalePhysicsFlags.erase(it);
+        if (mPendingPhysicsFlags.count(id))
         {
-            std::string url = regionp->getCapability("GetObjectPhysicsData");
-
-            if (!url.empty())
-            {
-                LLCoros::instance().launch("LLViewerObjectList::fetchPhisicsFlagsCoro",
-                    boost::bind(&LLViewerObjectList::fetchPhisicsFlagsCoro, this, url));
-            }
-            else
-            {
-                mStalePhysicsFlags.clear();
-                mPendingPhysicsFlags.clear();
-            }
+            continue;
         }
+        LLViewerObject* objectp = findObject(id);
+        LLViewerRegion* regionp = objectp ? objectp->getRegion() : nullptr;
+        if (!regionp)
+        {
+            continue;
+        }
+        if (regionp->getCapability("GetObjectPhysicsData").empty())
+        {
+            sPhysicsFlagsRefused.insert(id);
+            continue;
+        }
+        mPendingPhysicsFlags.insert(id);
+        LLSD& ids = batches[regionp];
+        ids.append(id);
+        ++batched;
     }
+    for (auto& [regionp, ids] : batches)
+    {
+        LLCoros::instance().launch("LLViewerObjectList::fetchPhisicsFlagsCoro",
+            boost::bind(&LLViewerObjectList::fetchPhisicsFlagsCoro, this, regionp->getCapability("GetObjectPhysicsData"), ids));
+    }
+    // </SK:Nexii>
 }
 
 /*static*/
@@ -1304,33 +1343,12 @@ void LLViewerObjectList::reportPhysicsFlagFailure(LLSD &objectList)
     }
 }
 
-void LLViewerObjectList::fetchPhisicsFlagsCoro(std::string url)
+void LLViewerObjectList::fetchPhisicsFlagsCoro(std::string url, LLSD idList) // <SK:Nexii> The batch is picked per region by fetchPhysicsFlags.
 {
     LLCore::HttpRequest::policy_t httpPolicy(LLCore::HttpRequest::DEFAULT_POLICY_ID);
     LLCoreHttpUtil::HttpCoroutineAdapter::ptr_t
         httpAdapter = std::make_shared<LLCoreHttpUtil::HttpCoroutineAdapter>("fetchPhisicsFlagsCoro", httpPolicy);
     LLCore::HttpRequest::ptr_t httpRequest = std::make_shared<LLCore::HttpRequest>();
-
-    LLSD idList;
-    U32 objectIndex = 0;
-
-    for (uuid_set_t::iterator it = mStalePhysicsFlags.begin(); it != mStalePhysicsFlags.end();)
-    {
-        // Check to see if a request for this object
-        // has already been made.
-        if (mPendingPhysicsFlags.find(*it) == mPendingPhysicsFlags.end())
-        {
-            mPendingPhysicsFlags.insert(*it);
-            idList[objectIndex++] = *it;
-        }
-
-        mStalePhysicsFlags.erase(it++);
-
-        if (objectIndex >= MAX_CONCURRENT_PHYSICS_REQUESTS)
-        {
-            break;
-        }
-    }
 
     if (idList.size() < 1)
     {
@@ -1421,6 +1439,7 @@ void LLViewerObjectList::cleanupReferences(LLViewerObject *objectp)
     {
         LL_INFOS() << "Object " << objectp->mID << " already on dead list!" << LL_ENDL;
     }
+    sPhysicsFlagsRefused.erase(objectp->mID); // <SK:Nexii> Mini-map census: the refused set holds only live objects.
 
     // Cleanup any references we have to this object
     // Remove from object map so noone can look it up.
@@ -1474,6 +1493,12 @@ bool LLViewerObjectList::killObject(LLViewerObject *objectp)
         // and object being NULLed while inside it's own function won't be pretty
         // so create a pointer to make sure object will stay alive untill markDead() finishes
         LLPointer<LLViewerObject> sp(objectp);
+        // <SK:Nexii> census dirty set: before markDead, while the parent is still known.
+        if (SKWorldCensus::instanceExists())
+        {
+            SKWorldCensus::getInstance()->noteObjectGone(objectp);
+        }
+        // </SK:Nexii>
         sp->markDead(); // does the right thing if object already dead
         return true;
     }
@@ -1573,6 +1598,7 @@ void LLViewerObjectList::killAllObjects()
     mIndexAndLocalIDToUUID.clear();
     mActiveObjects.clear();
     mMapObjects.clear();
+    sPhysicsFlagsRefused.clear(); // <SK:Nexii> Mini-map census
 
     LLViewerObject *objectp;
     for (vobj_list_t::const_iterator iter = mObjects.begin(); iter != mObjects.end(); ++iter)
@@ -1739,12 +1765,38 @@ void LLViewerObjectList::updatePhysicsFlags(const LLViewerObject* object)
     {
         return;
     }
+    if (sPhysicsFlagsRefused.count(object->getID())) // <SK:Nexii> Mini-map census: never re-ask a refused object.
+    {
+        return;
+    }
     mStalePhysicsFlags.insert(object->getID());
 }
+
+// <SK:Nexii> census: physics shape types by id, for parts the region has cached but not instantiated
+void LLViewerObjectList::requestPhysicsShapeType(const LLUUID& object_id)
+{
+    if (object_id.notNull() && !mKnownPhysicsShapeTypes.count(object_id) && !mPendingPhysicsFlags.count(object_id))
+    {
+        mStalePhysicsFlags.insert(object_id);
+    }
+}
+
+bool LLViewerObjectList::knownPhysicsShapeType(const LLUUID& object_id, U8& type) const
+{
+    const auto it = mKnownPhysicsShapeTypes.find(object_id);
+    if (it == mKnownPhysicsShapeTypes.end())
+    {
+        return false;
+    }
+    type = it->second;
+    return true;
+}
+// </SK:Nexii>
 
 void LLViewerObjectList::updatePhysicsShapeType(const LLUUID& object_id, S32 type)
 {
     mPendingPhysicsFlags.erase(object_id);
+    notePhysicsShapeType(object_id, (U8)type); // <SK:Nexii> census: kept for parts the cache holds
     LLViewerObject* object = findObject(object_id);
     if (object)
     {
@@ -1774,6 +1826,7 @@ void LLViewerObjectList::onPhysicsFlagsFetchFailure(const LLUUID& object_id)
 {
     //LL_WARNS() << "Failed to fetch physics flags for object: " << object_id << LL_ENDL;
     mPendingPhysicsFlags.erase(object_id);
+    sPhysicsFlagsRefused.insert(object_id); // <SK:Nexii> Mini-map census: a failed object is not queued again.
 }
 
 void LLViewerObjectList::shiftObjects(const LLVector3 &offset)
@@ -1884,156 +1937,7 @@ void LLViewerObjectList::clearAllMapObjectsInRegion(LLViewerRegion* regionp)
 }
 
 
-void LLViewerObjectList::renderObjectsForMap(LLNetMap &netmap)
-{
-    static const LLUIColor above_water_color = LLUIColorTable::instance().getColor( "NetMapOtherOwnAboveWater" );
-    static const LLUIColor below_water_color = LLUIColorTable::instance().getColor( "NetMapOtherOwnBelowWater" );
-    static const LLUIColor you_own_above_water_color =
-                        LLUIColorTable::instance().getColor( "NetMapYouOwnAboveWater" );
-    static const LLUIColor you_own_below_water_color =
-                        LLUIColorTable::instance().getColor( "NetMapYouOwnBelowWater" );
-    static const LLUIColor group_own_above_water_color =
-                        LLUIColorTable::instance().getColor( "NetMapGroupOwnAboveWater" );
-    static const LLUIColor group_own_below_water_color =
-                        LLUIColorTable::instance().getColor( "NetMapGroupOwnBelowWater" );
-    static const LLUIColor you_own_physical_color =
-                        LLUIColorTable::instance().getColor("NetMapYouPhysical", LLColor4::red);
-    static const LLUIColor group_own_physical_color =
-                        LLUIColorTable::instance().getColor("NetMapGroupPhysical", LLColor4::green);
-    static const LLUIColor other_own_physical_color =
-                        LLUIColorTable::instance().getColor("NetMapOtherPhysical", LLColor4::green);
-    static const LLUIColor scripted_object_color =
-                        LLUIColorTable::instance().getColor("NetMapScripted", LLColor4::orange);
-    static const LLUIColor temp_on_rez_object_color =
-                        LLUIColorTable::instance().getColor("NetMapTempOnRez", LLColor4::orange);
-
-    const F32 MIN_RADIUS_FOR_ACCENTED_OBJECTS = 2.f;
-
-    static LLCachedControl max_radius(gSavedSettings, "MiniMapPrimMaxRadius", 16.f);
-    static LLCachedControl max_zdistance_from_avatar(gSavedSettings, "MiniMapPrimMaxVertDistance", 256.f);
-    static LLCachedControl netmap_scripted(gSavedSettings, "MiniMapPrimScripted", false);
-    static LLCachedControl netmap_physical(gSavedSettings, "MiniMapPrimPhysical", true);
-    static LLCachedControl netmap_temp_on_rez(gSavedSettings, "MiniMapPrimTempOnRez", false);
-    static LLCachedControl netmap_phantom_opacity(gSavedSettings, "MiniMapPrimPhantomOpacity", 100U);
-
-    for (LLViewerObject* objectp : mMapObjects)
-    {
-        if(objectp->isDead())//some dead objects somehow not cleaned.
-        {
-            continue ;
-        }
-
-        if (!objectp->getRegion() || objectp->isOrphaned() || objectp->isAttachment())
-        {
-            continue;
-        }
-        const LLVector3& scale = objectp->getScale();
-        const LLVector3d pos = objectp->getPositionGlobal();
-        const F64 water_height = F64( objectp->getRegion()->getWaterHeight() );
-
-        // Skip all objects that are more than MiniMapPrimMaxVertDistance above or below the avatar
-        if (max_zdistance_from_avatar > 0.0)
-        {
-            F64 zdistance = pos.mdV[VZ] - gAgent.getPositionGlobal().mdV[VZ];
-            if (zdistance < (-max_zdistance_from_avatar) || zdistance > max_zdistance_from_avatar)
-            {
-                continue;
-            }
-        }
-
-        F32 approx_radius = (scale.mV[VX] + scale.mV[VY]) * 0.5f * 0.5f * 1.3f;  // 1.3 is a fudge
-
-        // Limit the size of megaprims so they don't blot out everything on the minimap.
-        // Attempting to draw very large megaprims also causes client lag.
-        // See DEV-17370 and DEV-29869/SNOW-79 for details.
-        approx_radius = llmin(approx_radius, (F32)max_radius());
-
-        LLColor4U color = above_water_color.get();
-        if( objectp->permYouOwner() )
-        {
-            const F32 MIN_RADIUS_FOR_OWNED_OBJECTS = 2.f;
-            if( approx_radius < MIN_RADIUS_FOR_OWNED_OBJECTS )
-            {
-                approx_radius = MIN_RADIUS_FOR_OWNED_OBJECTS;
-            }
-
-            if( pos.mdV[VZ] >= water_height )
-            {
-                if ( objectp->permGroupOwner() )
-                {
-                    color = group_own_above_water_color.get();
-                }
-                else
-                {
-                    color = you_own_above_water_color.get();
-                }
-            }
-            else
-            {
-                if ( objectp->permGroupOwner() )
-                {
-                    color = group_own_below_water_color.get();
-                }
-                else
-                {
-                    color = you_own_below_water_color.get();
-                }
-            }
-        }
-        else if( pos.mdV[VZ] < water_height )
-        {
-            color = below_water_color.get();
-        }
-
-        if (netmap_scripted && objectp->flagScripted())
-        {
-            color = scripted_object_color.get();
-            if( approx_radius < MIN_RADIUS_FOR_ACCENTED_OBJECTS )
-            {
-                approx_radius = MIN_RADIUS_FOR_ACCENTED_OBJECTS;
-            }
-        }
-
-        if (netmap_physical && objectp->flagUsePhysics())
-        {
-            if (objectp->permYouOwner())
-            {
-                color = you_own_physical_color.get();
-            }
-            else if (objectp->permGroupOwner())
-            {
-                color = group_own_physical_color.get();
-            }
-            else
-            {
-                color = other_own_physical_color.get();
-            }
-            if( approx_radius < MIN_RADIUS_FOR_ACCENTED_OBJECTS )
-            {
-                approx_radius = MIN_RADIUS_FOR_ACCENTED_OBJECTS;
-            }
-        }
-
-        if (netmap_temp_on_rez && objectp->flagTemporaryOnRez())
-        {
-            color = temp_on_rez_object_color.get();
-            if( approx_radius < MIN_RADIUS_FOR_ACCENTED_OBJECTS )
-            {
-                approx_radius = MIN_RADIUS_FOR_ACCENTED_OBJECTS;
-            }
-        }
-
-        if (objectp->flagPhantom())
-        {
-            color.setAlpha(llclampb(netmap_phantom_opacity()));
-        }
-
-        netmap.renderScaledPointGlobal(
-            pos,
-            color,
-            approx_radius );
-    }
-}
+// <SK:Nexii> renderObjectsForMap removed: SKNetMap retired the classic mini-map, its only caller
 
 void LLViewerObjectList::renderObjectBounds(const LLVector3 &center)
 {

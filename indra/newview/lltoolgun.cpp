@@ -52,7 +52,7 @@
 #include "alavatargroups.h"
 #include "llavatarnamecache.h"
 #include "llagent.h"
-#include "llnetmap.h"
+//#include "llnetmap.h" // <SK:Nexii> SKNetMap retired the classic mini-map
 #include "llworld.h"
 #include "lltrans.h"
 #include "lltracker.h"

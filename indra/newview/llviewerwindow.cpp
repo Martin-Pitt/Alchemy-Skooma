@@ -26,6 +26,8 @@
 
 #include "llviewerprecompiledheaders.h"
 #include "llviewerwindow.h"
+#include "skoverviewcapture.h" // <SK:Nexii> tactical overview
+#include "skmodalview.h" // <SK:Nexii> modal view
 
 
 // system library includes
@@ -80,6 +82,7 @@
 #include "object_flags.h"
 #include "lltimer.h"
 #include "lltooltip.h"
+#include "skhover.h" // <SK:Nexii> hover context
 #include "llmediaentry.h"
 #include "llurldispatcher.h"
 #include "raytrace.h"
@@ -113,7 +116,8 @@
 #include "llfloatercamera.h"
 #include "llfloaterland.h"
 #include "llfloaterinspect.h"
-#include "llfloatermap.h"
+//#include "llfloatermap.h" // <SK:Nexii> SKNetMap retired the classic mini-map floater
+#include "skmapml.h" // <SK:Nexii> The Mouselook map
 #include "llfloaternamedesc.h"
 #include "llfloaterpreference.h"
 #include "llfloatersnapshot.h"
@@ -1186,6 +1190,13 @@ bool LLViewerWindow::handleAnyMouseClick(LLWindow *window, LLCoordGL pos, MASK m
                 LL_INFOS() << buttonname << " Mouse " << buttonstatestr << " not handled by view" << LL_ENDL;
             }
     }
+
+    // <SK:Nexii> Tactical overview: world right-clicks open the mini-map's menus on it.
+    if (down && clicktype == CLICK_RIGHT && !gDisconnected && SKOverviewCapture::handleRightClick(x, y))
+    {
+        return true;
+    }
+    // </SK:Nexii>
 
     // Do not allow tool manager to handle mouseclicks if we have disconnected
     if(!gDisconnected && LLToolMgr::getInstance()->getCurrentTool()->handleAnyMouseClick( x, y, mask, clicktype, down ) )
@@ -2769,6 +2780,7 @@ void LLViewerWindow::shutdownGL()
     stop_glerror();
 
     LLWorldMapView::cleanupTextures();
+    SKMapML::cleanup(); // <SK:Nexii> The Mouselook map's GL objects
 
     LLViewerTextureManager::cleanup() ;
     SUBSYSTEM_CLEANUP(LLImageGL) ;
@@ -3101,6 +3113,13 @@ void LLViewerWindow::draw()
             gGL.scalef(zoom_factor, zoom_factor, 1.f);
             LLUI::getScaleFactor() *= zoom_factor;
         }
+
+        // <SK:Nexii> The Mouselook map, under the crosshair and mouselook text; not in tiled snapshots
+        if (zoom_factor <= 1.f)
+        {
+            SKMapML::draw();
+        }
+        // </SK:Nexii>
 
         // Draw tool specific overlay on world
         LLToolMgr::getInstance()->getCurrentTool()->draw();
@@ -3588,6 +3607,17 @@ void LLViewerWindow::handleScrollWheel(LLScrollDelta delta)
     // Discrete consumers read delta.mClicks and are intentionally left untouched.
     static LLCachedControl<F32> scroll_sensitivity(gSavedSettings, "MouseWheelScrollSensitivity", 1.f);
     delta.mPrecise *= scroll_sensitivity;
+    // <SK:Nexii> smooth scroll: off, the window sends upstream's deltas from the next wheel event on
+    static LLCachedControl<bool> smooth_scroll(gSavedSettings, "SkoomaScroll", true);
+    static LLCachedControl<bool> precise_heuristic(gSavedSettings, "SkoomaScrollWinPreciseHeuristic", true);
+    LLWindow::sSmoothScroll = smooth_scroll;
+    LLWindow::sPreciseWheelHeuristic = smooth_scroll && precise_heuristic;
+    if (smooth_scroll)
+    {
+        delta.mPixels *= scroll_sensitivity;
+        delta.mLines *= scroll_sensitivity;
+    }
+    // </SK:Nexii>
 
     LLMouseHandler* mouse_captor = gFocusMgr.getMouseCapture();
     if( mouse_captor )
@@ -3646,6 +3676,17 @@ void LLViewerWindow::handleScrollHWheel(LLScrollDelta delta)
 
     static LLCachedControl<F32> scroll_sensitivity(gSavedSettings, "MouseWheelScrollSensitivity", 1.f);
     delta.mPrecise *= scroll_sensitivity;
+    // <SK:Nexii> smooth scroll: off, the window sends upstream's deltas from the next wheel event on
+    static LLCachedControl<bool> smooth_scroll(gSavedSettings, "SkoomaScroll", true);
+    static LLCachedControl<bool> precise_heuristic(gSavedSettings, "SkoomaScrollWinPreciseHeuristic", true);
+    LLWindow::sSmoothScroll = smooth_scroll;
+    LLWindow::sPreciseWheelHeuristic = smooth_scroll && precise_heuristic;
+    if (smooth_scroll)
+    {
+        delta.mPixels *= scroll_sensitivity;
+        delta.mLines *= scroll_sensitivity;
+    }
+    // </SK:Nexii>
 
     LLMouseHandler* mouse_captor = gFocusMgr.getMouseCapture();
     if (mouse_captor)
@@ -4072,6 +4113,7 @@ void LLViewerWindow::updateUI()
 
     // store resulting hover set for next frame
     swap(mMouseHoverViews, mouse_hover_set);
+    SKHover::update(mMouseHoverViews); // <SK:Nexii> hover context: expose the hovered set
 
     // only handle hover events when UI is enabled
     if (gPipeline.hasRenderDebugFeatureMask(LLPipeline::RENDER_DEBUG_FEATURE_UI))
@@ -5540,7 +5582,7 @@ bool LLViewerWindow::rawSnapshot(LLImageRaw *raw, S32 image_width, S32 image_hei
     bool keep_window_aspect, bool is_texture, bool show_ui, bool show_hud, bool do_rebuild, bool no_post, bool show_balance, LLSnapshotModel::ESnapshotLayerType type, S32 max_size,
     const ALSnapshotCutout* cutout, bool* cutout_drawn)
 {
-    if (!raw)
+    if (!raw || SKModalView::worldCovered()) // <SK:Nexii> modal view: the world is not drawn while covered
     {
         return false;
     }
@@ -6045,6 +6087,10 @@ bool LLViewerWindow::rawSnapshot(LLImageRaw *raw, S32 image_width, S32 image_hei
 bool LLViewerWindow::simpleSnapshot(LLImageRaw* raw, S32 image_width, S32 image_height, const int num_render_passes)
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_APP;
+    if (SKModalView::worldCovered()) // <SK:Nexii> modal view: the world is not drawn while covered
+    {
+        return false;
+    }
     gDisplaySwapBuffers = false;
 
     gGL.clear(GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT); // stencil buffer is deprecated | GL_STENCIL_BUFFER_BIT);
@@ -6593,6 +6639,8 @@ void LLViewerWindow::stopGL()
         // Pause texture decode threads (will get unpaused during main loop)
         LLAppViewer::getTextureCache()->pause();
         LLAppViewer::getTextureFetch()->pause();
+
+        SKMapML::cleanup(); // <SK:Nexii> The Mouselook map's GL objects
 
         LLManipTranslate::destroyGL() ;
         stop_glerror();

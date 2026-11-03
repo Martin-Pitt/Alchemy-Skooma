@@ -118,6 +118,7 @@ public:
     S32 mGLMaxTextureSize;
     F32 mMaxAnisotropy = 0.f;
     S32 mMaxUniformBlockSize = 0;
+    S32 mMaxTextureBufferSize = 0; // <SK:Nexii> combat/minimap: texels a buffer texture may hold, for the overview's cut table
     S32 mMaxVaryingVectors = 0;
     LLVector2 mAliasedLineRange = LLVector2(1.f, 1.f);
 

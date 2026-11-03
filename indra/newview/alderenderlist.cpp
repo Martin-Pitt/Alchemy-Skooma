@@ -126,6 +126,33 @@ ALDerenderObject::ALDerenderObject(const LLSelectNode* pNode, bool fPersist)
     }
 }
 
+// <SK:Nexii> SKNetMap person menu: derender an avatar without touching the selection
+ALDerenderObject::ALDerenderObject(const LLViewerObject* pObj, const std::string& strName, bool fPersist)
+    : ALDerenderEntry(TYPE_OBJECT, fPersist), idRegion(0), idRootLocal(0)
+{
+    if (!pObj)
+        return;
+
+    m_idEntry = pObj->getID();
+    m_strEntryName = (!strName.empty()) ? strName : LLTrans::getString("Unknown");
+
+    idRootLocal = pObj->getLocalID();
+    for (LLViewerObject::const_child_list_t::const_iterator itChild = pObj->getChildren().begin(), endChild = pObj->getChildren().end(); itChild != endChild; ++itChild)
+        idsChildLocal.push_back((*itChild)->getLocalID());
+
+    if (const LLViewerRegion* pRegion = pObj->getRegion())
+    {
+        idRegion = pRegion->getHandle();
+        posRegion = pObj->getPositionRegion();
+        strRegionName = pRegion->getName();
+    }
+    if (strRegionName.empty())
+    {
+        strRegionName = LLTrans::getString("Unknown");
+    }
+}
+// </SK:Nexii>
+
 ALDerenderObject::ALDerenderObject(const LLSD& sdData)
     : ALDerenderEntry(TYPE_OBJECT, sdData), idRegion(0), idRootLocal(0)
 {
@@ -338,6 +365,31 @@ bool ALDerenderList::addSelection(bool fPersist, std::vector<LLUUID>* pIdList)
     s_ChangeSignal();
     return (!pIdList) || (!pIdList->empty());
 }
+
+// <SK:Nexii> SKNetMap person menu: derender an avatar without touching the selection
+bool ALDerenderList::addAvatar(const LLUUID& idAvatar, const std::string& strName)
+{
+    if ( (idAvatar.isNull()) || (gAgentID == idAvatar) || (isDerendered(idAvatar)) )
+        return false;
+    LLViewerObject* pObj = gObjectList.findObject(idAvatar);
+    if ( (!pObj) || (pObj->isDead()) || (!pObj->isAvatar()) )
+        return false;
+
+    // Session only; later updates of the avatar and its attachments are refused by the root's local id.
+    m_Entries.push_back(std::make_unique<ALDerenderObject>(pObj, strName, false));
+
+    // Keep the order of these the same as process_kill_object()
+    if (gShowObjectUpdates)
+        gPipeline.addDebugBlip(pObj->getPositionAgent(), LLColor4(0.f, 1.f, 0.f, 1.f));
+    LLViewerRegion* pObjRegion = pObj->getRegion(); U32 idObjLocal = pObj->getLocalID();
+    gObjectList.killObject(pObj);
+    if ( (LLViewerRegion::sVOCacheCullingEnabled) && (pObjRegion) )
+        pObjRegion->killCacheEntry(idObjLocal);
+
+    s_ChangeSignal();
+    return true;
+}
+// </SK:Nexii>
 
 bool ALDerenderList::canAdd(const LLViewerObject* pObj)
 {

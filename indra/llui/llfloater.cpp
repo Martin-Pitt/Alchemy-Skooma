@@ -88,7 +88,8 @@ std::string LLFloater::sButtonNames[BUTTON_COUNT] =
     "llfloater_minimize_btn",   //BUTTON_MINIMIZE
     "llfloater_tear_off_btn",   //BUTTON_TEAR_OFF
     "llfloater_dock_btn",       //BUTTON_DOCK
-    "llfloater_help_btn"        //BUTTON_HELP
+    "llfloater_help_btn",       //BUTTON_HELP
+    "llfloater_lock_btn"        //BUTTON_LOCK <SK:Nexii> Floater lock
 };
 
 std::string LLFloater::sButtonToolTips[BUTTON_COUNT];
@@ -107,7 +108,8 @@ std::string LLFloater::sButtonToolTipsIndex[BUTTON_COUNT]=
     "BUTTON_MINIMIZE",      //"Minimize",   //BUTTON_MINIMIZE
     "BUTTON_TEAR_OFF",      //"Tear Off",   //BUTTON_TEAR_OFF
     "BUTTON_DOCK",
-    "BUTTON_HELP"
+    "BUTTON_HELP",
+    "BUTTON_LOCK" // <SK:Nexii> Floater lock
 };
 
 LLFloater::click_callback LLFloater::sButtonCallbacks[BUTTON_COUNT] =
@@ -120,7 +122,8 @@ LLFloater::click_callback LLFloater::sButtonCallbacks[BUTTON_COUNT] =
     LLFloater::onClickMinimize, //BUTTON_MINIMIZE
     LLFloater::onClickTearOff,  //BUTTON_TEAR_OFF
     LLFloater::onClickDock,     //BUTTON_DOCK
-    LLFloater::onClickHelp      //BUTTON_HELP
+    LLFloater::onClickHelp,     //BUTTON_HELP
+    LLFloater::onClickLock      //BUTTON_LOCK <SK:Nexii> Floater lock
 };
 
 // [SL:KB] - Patch: UI-FloaterCollapse | Checked: Catznip-3.2
@@ -210,6 +213,7 @@ LLFloater::Params::Params()
     can_dock("can_dock", false),
     show_title("show_title", true),
     auto_close("auto_close", false),
+    can_lock("can_lock", false), // <SK:Nexii> Floater lock
     positioning("positioning", LLFloaterEnums::POSITIONING_RELATIVE),
     header_font("header_font", LLFontGL::getFontSansSerif()),
     header_height("header_height", 0),
@@ -1900,14 +1904,113 @@ bool LLFloater::offerClickToButton(S32 x, S32 y, MASK mask, EFloaterButton index
     return false;
 }
 
+// <SK:Nexii> Floater lock
+// A locked floater lets a point off its content fall through to whatever lies beneath.
+static bool passes_through(LLFloater* floater, S32 x, S32 y)
+{
+    return floater->isLocked() && !floater->isMinimized() && !floater->hitsContentAt(x, y);
+}
+
+// virtual
+bool LLFloater::hitsContentAt(S32 x, S32 y)
+{
+    for (LLView* child : *getChildList())
+    {
+        if (child == mDragHandle || !child->getVisible())
+        {
+            continue;
+        }
+        bool is_resize_ctrl = false;
+        for (S32 i = 0; i < 4; ++i)
+        {
+            is_resize_ctrl |= (child == mResizeBar[i] || child == mResizeHandle[i]);
+        }
+        if (!is_resize_ctrl && child->pointInView(x - child->getRect().mLeft, y - child->getRect().mBottom))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+void LLFloater::setLocked(bool locked)
+{
+    if (!mCanLock && !mLocked)
+    {
+        return; // leave floaters that never lock exactly as they were built
+    }
+    mLocked = locked && mCanLock;
+    // The floater blocks clicks only where hitsContentAt says it should.
+    setMouseOpaque(!mLocked);
+    if (mDragHandle)
+    {
+        setCanDrag(!mLocked);
+    }
+    if (mResizeBar[0])
+    {
+        enableResizeCtrls(mResizable && !mLocked, mResizableWidth, mResizableHeight);
+    }
+    if (LLButton* button = mButtons[BUTTON_LOCK])
+    {
+        button->setToggleState(mLocked);
+        button->setImageColor(LLColor4(1.f, 1.f, 1.f, mLocked ? 1.f : 0.45f));
+        button->setToolTip(LLTrans::getString(mLocked ? "BUTTON_UNLOCK" : "BUTTON_LOCK"));
+    }
+    storeLockControl();
+}
+
+void LLFloater::storeLockControl()
+{
+    if (!sQuitting && mLockControl.size() > 1)
+    {
+        getControlGroup()->setBOOL(mLockControl, mLocked);
+    }
+}
+
+// static
+void LLFloater::onClickLock(LLFloater* floater)
+{
+    if (floater)
+    {
+        floater->setLocked(!floater->isLocked());
+    }
+}
+
+bool LLFloater::handleHover(S32 x, S32 y, MASK mask)
+{
+    if (passes_through(this, x, y))
+    {
+        return false;
+    }
+    return LLPanel::handleHover(x, y, mask) || isLocked();
+}
+
+bool LLFloater::handleToolTip(S32 x, S32 y, MASK mask)
+{
+    return !passes_through(this, x, y) && LLPanel::handleToolTip(x, y, mask);
+}
+
+bool LLFloater::handleRightMouseUp(S32 x, S32 y, MASK mask)
+{
+    return !passes_through(this, x, y) && LLPanel::handleRightMouseUp(x, y, mask);
+}
+
+bool LLFloater::handleMiddleMouseUp(S32 x, S32 y, MASK mask)
+{
+    return !passes_through(this, x, y) && LLPanel::handleMiddleMouseUp(x, y, mask);
+}
+// </SK:Nexii>
+
 bool LLFloater::handleScrollWheel(S32 x, S32 y, LLScrollDelta delta)
 {
+    if (passes_through(this, x, y)) return false; // <SK:Nexii> Floater lock
     LLPanel::handleScrollWheel(x,y,delta);
     return true;//always
 }
 
 bool LLFloater::handleScrollHWheel(S32 x, S32 y, LLScrollDelta delta)
 {
+    if (passes_through(this, x, y)) return false; // <SK:Nexii> Floater lock
     LLPanel::handleScrollHWheel(x, y, delta);
     return true; // always
 }
@@ -1915,13 +2018,16 @@ bool LLFloater::handleScrollHWheel(S32 x, S32 y, LLScrollDelta delta)
 // virtual
 bool LLFloater::handleMouseUp(S32 x, S32 y, MASK mask)
 {
+    if (passes_through(this, x, y)) return false; // <SK:Nexii> Floater lock
     LL_DEBUGS() << "LLFloater::handleMouseUp calling LLPanel (really LLView)'s handleMouseUp (first initialized xui to: " << getPathname() << " )" << LL_ENDL;
-    return LLPanel::handleMouseUp(x, y, mask); // Not implemented in LLPanel so this actually calls LLView
+    return LLPanel::handleMouseUp(x, y, mask) || mLocked; // <SK:Nexii> Floater lock
+    // LLPanel does not implement handleMouseUp, so this actually calls LLView.
 }
 
 // virtual
 bool LLFloater::handleMouseDown(S32 x, S32 y, MASK mask)
 {
+    if (passes_through(this, x, y)) return false; // <SK:Nexii> Floater lock
     if( mMinimized )
     {
         // Offer the click to titlebar buttons.
@@ -1940,13 +2046,14 @@ bool LLFloater::handleMouseDown(S32 x, S32 y, MASK mask)
     else
     {
         bringToFront( x, y );
-        return LLPanel::handleMouseDown(x, y, mask);
+        return LLPanel::handleMouseDown(x, y, mask) || mLocked; // <SK:Nexii> Floater lock: content keeps its clicks
     }
 }
 
 // virtual
 bool LLFloater::handleRightMouseDown(S32 x, S32 y, MASK mask)
 {
+    if (passes_through(this, x, y)) return false; // <SK:Nexii> Floater lock
     bool was_minimized = mMinimized;
     bringToFront( x, y );
     return was_minimized || LLPanel::handleRightMouseDown( x, y, mask );
@@ -1954,6 +2061,7 @@ bool LLFloater::handleRightMouseDown(S32 x, S32 y, MASK mask)
 
 bool LLFloater::handleMiddleMouseDown(S32 x, S32 y, MASK mask)
 {
+    if (passes_through(this, x, y)) return false; // <SK:Nexii> Floater lock
     bringToFront( x, y );
     return LLPanel::handleMiddleMouseDown( x, y, mask );
 }
@@ -1964,6 +2072,7 @@ bool LLFloater::handleDoubleClick(S32 x, S32 y, MASK mask)
 {
 // [SL:KB] - Patch: UI-FloaterCollapse | Checked: Catznip-3.4
     // If currently minimized double-click always restores; otherwise, check for double-click in the header area
+    if (passes_through(this, x, y)) return false; // <SK:Nexii> Floater lock
     if (mMinimized)
     {
         setMinimized(false);
@@ -2447,7 +2556,7 @@ void    LLFloater::setCanTearOff(bool can_tear_off)
 void LLFloater::setCanResize(bool can_resize)
 {
     mResizable = can_resize;
-    enableResizeCtrls(can_resize, mResizableWidth, mResizableHeight);
+    enableResizeCtrls(can_resize && !mLocked, mResizableWidth, mResizableHeight); // <SK:Nexii> Floater lock
 }
 
 void LLFloater::setCanDrag(bool can_drag)
@@ -2492,6 +2601,10 @@ void LLFloater::updateTitleButtons()
             {
                 enabled = false;
             }
+        }
+        if (i == BUTTON_LOCK && isMinimized()) // <SK:Nexii> Floater lock
+        {
+            enabled = false;
         }
         if (i == BUTTON_CLOSE && mButtonScale != 1.f)
         {
@@ -2664,6 +2777,12 @@ void LLFloater::buildButtons(const Params& floater_params)
         mButtons[i] = buttonp;
     }
 
+    // <SK:Nexii> Floater lock: dress the rebuilt lock button
+    if (mCanLock)
+    {
+        setLocked(mLocked);
+    }
+    // </SK:Nexii>
     updateTitleButtons();
 }
 
@@ -2689,6 +2808,8 @@ LLUIImage* LLFloater::getButtonImage(const Params& p, EFloaterButton e)
             return p.dock_image;
         case BUTTON_HELP:
             return p.help_image;
+        case BUTTON_LOCK: // <SK:Nexii> Floater lock
+            return LLUI::getUIImage("Lock");
     }
 }
 
@@ -2714,6 +2835,8 @@ LLUIImage* LLFloater::getButtonPressedImage(const Params& p, EFloaterButton e)
             return p.dock_pressed_image;
         case BUTTON_HELP:
             return p.help_pressed_image;
+        case BUTTON_LOCK: // <SK:Nexii> Floater lock
+            return LLUI::getUIImage("Lock");
     }
 }
 
@@ -3614,6 +3737,13 @@ void LLFloater::setInstanceName(const std::string& name)
         {
             mDocStateControl = LLFloaterReg::declareDockStateControl(ctrl_name);
         }
+        // <SK:Nexii> Floater lock
+        if (!mLockControl.empty())
+        {
+            mLockControl = LLFloaterReg::declareLockControl(ctrl_name);
+            setLocked(getControlGroup()->getBOOL(mLockControl));
+        }
+        // </SK:Nexii>
     }
 }
 }
@@ -3676,6 +3806,15 @@ void LLFloater::initFromParams(const LLFloater::Params& p)
     {
         mDocStateControl = "t"; // flag to build mDocStateControl name once mInstanceName is set
     }
+
+    // <SK:Nexii> Floater lock: offered only to floaters that draw no background.
+    mCanLock = p.can_lock && !isBackgroundVisible();
+    mButtonsEnabled[BUTTON_LOCK] = mCanLock;
+    if (mCanLock)
+    {
+        mLockControl = "t"; // flag to build mLockControl name once mInstanceName is set
+    }
+    // </SK:Nexii>
 
     // open callback
     if (p.open_callback.isProvided())

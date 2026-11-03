@@ -101,4 +101,75 @@ void ll_sdl_macos_make_window_key_deferred(struct SDL_Window* window)
     });
 }
 
+// <SK:Nexii> smooth scroll
+#include "llscrolldelta.h"
+
+#include <deque>
+
+namespace
+{
+    // One per NSEvent, in order: a pump may send several before SDL's queue is read.
+    std::deque<LLSDLMacScroll> sScrolls;
+    id sScrollMonitor = nil;
+
+    unsigned char scroll_phase(NSEvent* event)
+    {
+        const NSEventPhase momentum = event.momentumPhase;
+        if (momentum != NSEventPhaseNone)
+        {
+            return (momentum & (NSEventPhaseEnded | NSEventPhaseCancelled)) ? LLScrollDelta::PHASE_MOMENTUM_ENDED
+                                                                            : LLScrollDelta::PHASE_MOMENTUM;
+        }
+        const NSEventPhase phase = event.phase;
+        if (phase & (NSEventPhaseBegan | NSEventPhaseMayBegin))
+        {
+            return LLScrollDelta::PHASE_BEGAN;
+        }
+        if (phase & NSEventPhaseChanged)
+        {
+            return LLScrollDelta::PHASE_CHANGED;
+        }
+        if (phase & (NSEventPhaseEnded | NSEventPhaseCancelled))
+        {
+            return LLScrollDelta::PHASE_ENDED;
+        }
+        return LLScrollDelta::PHASE_NONE;
+    }
+}
+
+void ll_sdl_macos_watch_scroll()
+{
+    if (sScrollMonitor)
+    {
+        return;
+    }
+    // SDL queues one wheel event per NSEvent it sends, so the stash and its queue stay in step.
+    sScrollMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskScrollWheel
+                                                           handler:^NSEvent*(NSEvent* event) {
+        LLSDLMacScroll scroll;
+        scroll.mPrecise = event.hasPreciseScrollingDeltas;
+        scroll.mDeltaX = (float)event.scrollingDeltaX;
+        scroll.mDeltaY = (float)event.scrollingDeltaY;
+        scroll.mPhase = scroll_phase(event);
+        // SDL sends no wheel event for a still one, so neither is stashed.
+        if ((scroll.mDeltaX != 0.f || scroll.mDeltaY != 0.f) && sScrolls.size() < 64)
+        {
+            sScrolls.push_back(scroll);
+        }
+        return event;
+    }];
+}
+
+bool ll_sdl_macos_take_scroll(LLSDLMacScroll& out)
+{
+    if (sScrolls.empty())
+    {
+        return false;
+    }
+    out = sScrolls.front();
+    sScrolls.pop_front();
+    return true;
+}
+// </SK:Nexii>
+
 #endif // LL_DARWIN

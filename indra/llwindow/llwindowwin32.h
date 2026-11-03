@@ -54,6 +54,7 @@ public:
     void show() override;
     void hide() override;
     void close() override;
+    void skSetCapsLockCapture(bool want) override; // <SK:Nexii> tactical overview
     bool getVisible() override;
     bool getMinimized() override;
     bool getMaximized() override;
