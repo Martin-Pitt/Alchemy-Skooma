@@ -6791,6 +6791,17 @@
             <key>Value</key>
             <real>0.5</real>
         </map>
+        <key>SKTacticalFlycamMaxScale</key>
+        <map>
+            <key>Comment</key>
+            <string>In the tactical overview, the most the flycam's travel is multiplied by high above the agent. It grows with height above 10 m and eases onto this.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>12.0</real>
+        </map>
         <key>SKTacticalTapSeconds</key>
         <map>
             <key>Comment</key>

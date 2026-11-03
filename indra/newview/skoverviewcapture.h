@@ -136,8 +136,10 @@ public:
     std::vector<std::string> coveredFloaters() const override { return { "mini_map" }; }
     /// Clicks reach the pie, which picks the people and objects the overview draws.
     bool passesClicks() const override { return true; }
-    /// The flycam's height above the agent over a person's scale, so it crosses the view quickly from high up.
-    F64 flycamScale(const LLVector3d& eye) const override;
+    /// The agent's height below `eye`, which the flycam's speed is measured from.
+    bool groundBelow(const LLVector3d& eye, LLVector3d& ground) const override;
+    /// Lower than the world map's, the battlefield being smaller than the grid (SKTacticalFlycamMaxScale).
+    F64 flycamMaxScale() const override;
 
 private:
     struct Shot

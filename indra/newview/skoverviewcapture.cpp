@@ -1055,11 +1055,16 @@ bool SKOverviewCapture::pickGround(S32 x, S32 y, LLVector3d& ground) const
     return groundAt(at, ground);
 }
 
-F64 SKOverviewCapture::flycamScale(const LLVector3d& eye) const
+bool SKOverviewCapture::groundBelow(const LLVector3d& eye, LLVector3d& ground) const
 {
-    // The flycam's speed multiplier: height above the agent over a 10 m reference, never below 1 (as the world map's).
-    constexpr F64 FLYCAM_REFERENCE_HEIGHT = 10.0;
-    return std::max(1.0, (eye.mdV[VZ] - gAgent.getPositionGlobal().mdV[VZ]) / FLYCAM_REFERENCE_HEIGHT);
+    ground.setVec(eye.mdV[VX], eye.mdV[VY], gAgent.getPositionGlobal().mdV[VZ]);
+    return true;
+}
+
+F64 SKOverviewCapture::flycamMaxScale() const
+{
+    static LLCachedControl<F32> max_scale(gSavedSettings, "SKTacticalFlycamMaxScale", 12.f);
+    return llmax((F64)max_scale, 1.0);
 }
 
 void SKOverviewCapture::tacticalCentre(LLVector3d& centre) const
