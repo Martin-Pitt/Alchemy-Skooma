@@ -1358,7 +1358,7 @@ Either upstream rewrote history, or a commit was made on develop.
         $relanded = @()
         if ($branch -eq 'main') {
             foreach ($b in $ordered) {
-                if ($b -eq 'main' -or (Test-IsAmend $b) -or -not (GitOk merge-base --is-ancestor develop $b)) { continue }
+                if ($b -eq 'main' -or (Test-IsAmend $b) -or (Test-IsTrunk $b) -or -not (GitOk merge-base --is-ancestor develop $b)) { continue }
                 $own = [int](G rev-list --count $b '^develop')
                 $missing = [int](G rev-list --count $b '^develop' '^main')
                 if ($missing -gt 0 -and $missing -lt $own) { $relanded += $b }
@@ -1378,6 +1378,8 @@ Either upstream rewrote history, or a commit was made on develop.
         # An amend stays a few commits on its parent: merging the parent in, then landing it
         # by fast-forward, would put that merge on the parent's own line.
         if (Test-IsAmend $branch) { continue }
+        # A trunk takes develop through its features landing into it, with their resolutions.
+        if (Test-IsTrunk $branch) { continue }
 
         $mergeFrom = if ($branch -eq 'main') { 'develop' } else { Get-Base $branch }
         $behind = (Get-Counts $branch $mergeFrom).Ahead
