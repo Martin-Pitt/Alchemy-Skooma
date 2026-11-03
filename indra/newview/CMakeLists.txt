@@ -1019,6 +1019,7 @@ if(AL_BUILD_VIEWER)
     skmodalview.cpp # <SK:Nexii> modal view
     skmodalviewmath.cpp # <SK:Nexii> modal view
     sktoolmappan.cpp # <SK:Nexii> modal view
+    skcombatlockout.cpp
   )
 
   set(
@@ -1914,6 +1915,7 @@ if(AL_BUILD_VIEWER)
     rlvlocks.h
     rlvmodifiers.h
     rlvui.h
+    skcombatlockout.h
     roles_constants.h
     skmodalview.h # <SK:Nexii> modal view
     skmodalviewmath.h # <SK:Nexii> modal view
