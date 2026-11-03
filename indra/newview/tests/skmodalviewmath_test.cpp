@@ -112,3 +112,45 @@ TEST_CASE("a camera that did not follow is restored where it was")
     CHECK(stored == eye);
     CHECK(restorePoint(stored, agent_now, false) == eye);
 }
+
+TEST_CASE("move actions add up to one step a direction")
+{
+    Move move;
+    CHECK(addMoveAction("push_forward", move));
+    CHECK(addMoveAction("run_forward", move));
+    CHECK(addMoveAction("turn_left", move));
+    CHECK(addMoveAction("jump", move));
+    CHECK(move.mForward == 1.f);
+    CHECK(move.mLeft == 1.f);
+    CHECK(move.mUp == 1.f);
+    CHECK(move.mFast);
+
+    CHECK(addMoveAction("slide_right", move));
+    CHECK(move.mLeft == 0.f);
+    CHECK_FALSE(addMoveAction("toggle_fly", move));
+    CHECK_FALSE(Move().any());
+}
+
+TEST_CASE("the ground direction is screen-up on the ground, even looking straight down")
+{
+    LLVector3 dir;
+    REQUIRE(groundDirection(LLVector3(0.f, 0.7071f, -0.7071f), LLVector3(0.f, 0.7071f, 0.7071f), 1.f, 0.f, dir));
+    CHECK(dir.mV[VY] > 0.999f);
+    REQUIRE(groundDirection(LLVector3(0.f, 1.f, 0.f), LLVector3::z_axis, 0.f, 1.f, dir));
+    CHECK(dir.mV[VX] < -0.999f); // left of north is west
+    REQUIRE(groundDirection(LLVector3(0.f, 0.f, -1.f), LLVector3(1.f, 0.f, 0.f), 1.f, 0.f, dir));
+    CHECK(dir.mV[VX] > 0.999f);
+    CHECK_FALSE(groundDirection(LLVector3(0.f, 0.f, -1.f), LLVector3(0.f, 0.f, 1.f), 1.f, 0.f, dir));
+}
+
+TEST_CASE("the flycam speeds up with height and eases onto its cap")
+{
+    CHECK(flycamSpeedScale(-50.0, 40.0) == 1.0);
+    CHECK(flycamSpeedScale(FLYCAM_REFERENCE_HEIGHT, 40.0) == 1.0);
+    CHECK(flycamSpeedScale(20.0, 40.0) > 1.9); // nearly linear just above the reference
+    CHECK(flycamSpeedScale(500.0, 40.0) < 40.0);
+    CHECK(flycamSpeedScale(1.0e6, 40.0) <= 40.0);
+    CHECK(flycamSpeedScale(1.0e6, 40.0) > 39.9);
+    CHECK(flycamSpeedScale(200.0, 40.0) > flycamSpeedScale(100.0, 40.0));
+    CHECK(flycamSpeedScale(1.0e6, 1.0) == 1.0);
+}

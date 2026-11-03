@@ -31,8 +31,10 @@
 #include "llagentcamera.h"
 #include "llfloater.h"
 #include "llfloaterreg.h"
+#include "llkeyboard.h"
 #include "llstartup.h"
 #include "llviewercamera.h"
+#include "llviewerjoystick.h"
 #include "llviewerobject.h"
 #include "llviewerwindow.h"
 #include "pipeline.h"
@@ -191,6 +193,7 @@ bool SKModalView::claim(SKModalMode* mode, S32 priority)
     if (mClaims.empty())
     {
         snapshotWorldCamera();
+        mMove = Move(); // nothing held under an earlier cover carries into this one
     }
     mClaims.claim(mode, priority);
     notifyTopChange(before, mode);
@@ -306,6 +309,14 @@ bool SKModalView::closeIfNeeded(bool leaving_world)
             release(mode);
         }
     }
+    // Held actions repeat every frame, so what was gathered since the last one is this frame's move.
+    const Move move = mMove;
+    mMove = Move();
+    SKModalMode* mode = top();
+    if (mode && move.any() && !flycamActive())
+    {
+        mode->move(move);
+    }
     return !mClaims.empty();
 }
 
@@ -330,7 +341,7 @@ void SKModalView::shutdown()
 }
 
 // static
-bool SKModalView::blocksAction(const std::string& function_name)
+bool SKModalView::interceptsAction(const std::string& function_name, bool released)
 {
     static const std::unordered_set<std::string> avatar_actions = {
         "jump", "push_down", "push_forward", "push_backward", "look_up", "look_down", "toggle_fly",
@@ -338,7 +349,43 @@ bool SKModalView::blocksAction(const std::string& function_name)
         "run_backward", "run_left", "run_right", "toggle_run", "toggle_down", "toggle_sit",
         "teleport_to", "walk_to",
     };
-    return worldCovered() && avatar_actions.count(function_name) > 0;
+    if (!worldCovered() || released || !avatar_actions.count(function_name))
+    {
+        return false;
+    }
+    // The action, not its key: whatever the bindings put on it moves the mode as it would the avatar.
+    SKModalView& self = instance();
+    if (addMoveAction(function_name, self.mMove) && gKeyboard && (gKeyboard->currentMask(false) & MASK_SHIFT))
+    {
+        self.mMove.mFast = true;
+    }
+    return true;
+}
+
+// static
+bool SKModalView::flycamActive()
+{
+    return LLViewerJoystick::getInstance()->getOverrideCamera();
+}
+
+// static
+bool SKModalView::viewFocus(LLVector3d& focus)
+{
+    if (!flycamActive())
+    {
+        focus = gAgentCamera.getFocusGlobal();
+        return true;
+    }
+    const SKModalMode* mode = top();
+    const LLVector3d eye = gAgent.getPosGlobalFromAgent(LLViewerCamera::getInstance()->getOrigin());
+    return mode && mode->groundBelow(eye, focus);
+}
+
+// static
+bool SKModalView::canPan()
+{
+    const SKModalMode* mode = top();
+    return mode && !flycamActive() && mode->canPan();
 }
 
 // static
@@ -352,7 +399,12 @@ bool SKModalView::pickGround(S32 x, S32 y, LLVector3d& ground)
 F64 SKModalView::flycamScale(const LLVector3d& eye)
 {
     const SKModalMode* mode = top();
-    return mode ? mode->flycamScale(eye) : 1.0;
+    LLVector3d ground;
+    if (!mode || !mode->groundBelow(eye, ground))
+    {
+        return 1.0;
+    }
+    return flycamSpeedScale(eye.mdV[VZ] - ground.mdV[VZ], mode->flycamMaxScale());
 }
 
 // static
