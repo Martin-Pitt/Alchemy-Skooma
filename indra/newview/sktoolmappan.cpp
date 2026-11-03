@@ -78,9 +78,11 @@ bool SKToolMapPan::handleMouseDown(S32 x, S32 y, MASK mask)
         return LLToolPie::getInstance()->handleMouseDown(x, y, mask);
     }
     // Modified presses keep the pie's meaning (alt-cam and grab never reach here: they are its override tools).
-    if (mask != MASK_NONE || !mode->beginPan(x, y))
+    if (mask != MASK_NONE || !SKModalView::canPan() || !mode->beginPan(x, y))
     {
-        panTrace(mask != MASK_NONE ? "press passed on: modifier held" : "press passed on: no ground under the cursor");
+        panTrace(mask != MASK_NONE ? "press passed on: modifier held"
+                 : !SKModalView::canPan() ? "press passed on: the view cannot pan now (the flycam holds the camera)"
+                 : "press passed on: no ground under the cursor");
         return passingMode() ? LLToolPie::getInstance()->handleMouseDown(x, y, mask) : true;
     }
     panTrace("press grabbed the ground");
@@ -116,7 +118,7 @@ bool SKToolMapPan::handleHover(S32 x, S32 y, MASK mask)
         }
         return true;
     }
-    // Over a mode that passes clicks on, the pie still shows what a click would do; elsewhere the map can be grabbed.
+    // Over a mode that passes clicks on, the pie still shows what a click would do; elsewhere the plain arrow.
     if (passingMode())
     {
         LLToolPie::getInstance()->handleHover(x, y, mask);
@@ -125,8 +127,7 @@ bool SKToolMapPan::handleHover(S32 x, S32 y, MASK mask)
             return true;
         }
     }
-    SKModalMode* mode = SKModalView::top();
-    gViewerWindow->setCursor(mode && !mode->canPan() ? UI_CURSOR_ARROW : UI_CURSOR_TOOLPAN);
+    gViewerWindow->setCursor(UI_CURSOR_ARROW);
     return true;
 }
 

@@ -64,12 +64,18 @@ public:
     virtual bool beginPan(S32 x, S32 y) { return false; }
     virtual void pan(S32 x, S32 y) {}
     virtual void endPan() {}
-    /// Whether a drag can pan the mode right now; the map tool shows its pan cursor only then.
+    /// Whether a drag can pan the mode right now. The flycam holding the camera stops every mode's pan.
     virtual bool canPan() const { return true; }
+    /// What the avatar's move actions ask this frame, given once a frame while any is held and the flycam
+    /// does not hold the camera. The mode moves its own camera however suits it.
+    virtual void move(const skmodalview::Move& move) {}
     /// Whether plain clicks that are not drags reach the world's tool, which picks what the mode draws.
     virtual bool passesClicks() const { return false; }
-    /// How much faster the flycam translates from `eye` while the mode is on top.
-    virtual F64 flycamScale(const LLVector3d& eye) const { return 1.0; }
+    /// The mode's ground straight below `eye`: what the view is about while the flycam leaves the camera's
+    /// focus behind, and what the flycam's speed is measured from. False where the mode has none.
+    virtual bool groundBelow(const LLVector3d& eye, LLVector3d& ground) const { return false; }
+    /// The most the flycam's travel may be multiplied by high above the mode's ground.
+    virtual F64 flycamMaxScale() const { return 1.0; }
     /// RLVa restrictions of the mode's own, on top of the camera locks every mode honours.
     virtual bool rlvRestricted() const { return false; }
     /// Floaters (registry names) the mode stands in for: hidden silently while it is on top, shown again after.
@@ -116,7 +122,8 @@ public:
     void closeTop();
     void closeAll();
     /// Called by the display loop each frame while covered: closes every mode on a teleport, disconnect,
-    /// logout or GL restore, and any mode RLVa no longer allows. Returns whether the world is still covered.
+    /// logout or GL restore, and any mode RLVa no longer allows, then hands the top mode the frame's held
+    /// move actions. Returns whether the world is still covered.
     bool closeIfNeeded(bool leaving_world);
 
     /// Draws the top mode.
@@ -124,11 +131,20 @@ public:
     /// Shuts every registered mode down while GL and the texture list are still up; no camera restore.
     void shutdown();
 
-    /// Key and mouse bindings that move the avatar, which do nothing while covered.
-    static bool blocksAction(const std::string& function_name);
+    /// Whether a key or mouse binding's action is taken from the avatar while covered: the move actions are
+    /// handed to the top mode instead, and the avatar's other actions do nothing. A release always passes,
+    /// so an avatar already moving stops.
+    static bool interceptsAction(const std::string& function_name, bool released);
+    /// Whether the flycam holds the camera.
+    static bool flycamActive();
+    /// The point the top mode's view is about: the agent camera's focus, or, while the flycam leaves that
+    /// behind, the mode's ground below the camera. False when there is neither.
+    static bool viewFocus(LLVector3d& focus);
+    /// Whether a drag may pan the top mode now.
+    static bool canPan();
     /// The top mode's ground under the cursor, for alt-click focus.
     static bool pickGround(S32 x, S32 y, LLVector3d& ground);
-    /// The top mode's flycam travel scale; 1 when uncovered.
+    /// The flycam's travel scale over the top mode's ground (skmodalview::flycamSpeedScale); 1 when uncovered.
     static F64 flycamScale(const LLVector3d& eye);
 
     /// The world camera while covered, carried along with the agent when it followed it, for whatever
@@ -163,6 +179,7 @@ private:
     skmodalview::Claims mClaims;
     std::vector<SKModalMode*> mModes;
     WorldCamera mWorld;
+    skmodalview::Move mMove; ///< the move actions held since the last frame
     bool mClosingAll = false; ///< no mode is handed the top while every mode is closing
     std::vector<std::string> mHiddenFloaters; ///< hidden by updateCoveredFloaters while visible
 };
