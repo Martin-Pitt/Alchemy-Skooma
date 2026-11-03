@@ -107,9 +107,10 @@ bool canRename(const LLUUID& id)
     {
         return get_is_category_renameable(&gInventory, id);
     }
-    // The checks LLItemBridge::isItemRenameable makes.
+    // The checks LLItemBridge::isItemRenameable makes, but for isFinished: that guarded the old whole-item
+    // update against a cached item's stale fields (EXT-8662), and a rename now sends AIS the name alone.
     const LLViewerInventoryItem* item = gInventory.getItem(id);
-    if (!item || item->getInventoryType() == LLInventoryType::IT_CALLINGCARD || !item->isFinished())
+    if (!item || item->getInventoryType() == LLInventoryType::IT_CALLINGCARD)
     {
         return false;
     }
