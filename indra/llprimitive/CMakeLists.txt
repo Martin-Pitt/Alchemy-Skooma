@@ -5,6 +5,7 @@ add_library(llprimitive STATIC)
 target_sources(
   llprimitive
   PRIVATE
+    alobjectmotion.cpp
     lldaeloader.cpp
     llgltfmaterial.cpp
     llmaterialid.cpp
@@ -24,6 +25,7 @@ target_sources(
   PUBLIC
     FILE_SET HEADERS
       FILES
+        alobjectmotion.h
         lldaeloader.h
         llgltfmaterial.h
         llgltfmaterial_templates.h
@@ -65,12 +67,14 @@ if(AL_BUILD_TESTS)
     llprimitive_tests
     PROJECT llprimitive
     SOURCES
+      tests/alobjectmotion_test.cpp
       tests/llgltfmaterial_test.cpp
       tests/llmaterial_test.cpp
       tests/llmaterialid_test.cpp
       tests/llmediaentry_test.cpp
       tests/skmeshhavok_test.cpp # <SK:Nexii> physics_havok block
       tests/llmodel_test.cpp
+      tests/llprimitivetemessage_test.cpp
     LIBRARIES llprimitive
   )
   # This one stubs LLMaterialID and LLPrimTextureList, which the library
