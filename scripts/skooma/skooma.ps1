@@ -1580,6 +1580,9 @@ function Invoke-Check { param([string]$branch, [switch]$Quiet)
             if (-not (GitOk merge-base --is-ancestor $p $base)) {
                 # A foundation is meant to be shared across trunks.
                 if (Test-FromFoundation $p $base) { continue }
+                # A feature this one declares it depends on (branch.<b>.skooma-deps) ships with it.
+                $dep = @((G config --get-all "branch.$branch.skooma-deps") -split "`n" | Where-Object { $_ -and (GitOk merge-base --is-ancestor $p $_) })
+                if ($dep) { continue }
                 if (GitOk merge-base --is-ancestor $p main) {
                     if ($null -eq $developSpine) { $developSpine = @{}; foreach ($d in (G rev-list --first-parent main) -split "`n") { if ($d) { $developSpine[$d] = $true } } }
                     if (-not $developSpine.ContainsKey($p)) {
