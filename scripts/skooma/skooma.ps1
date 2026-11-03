@@ -1339,8 +1339,9 @@ Either upstream rewrote history, or a commit was made on develop.
         $b = if ($w.Path -ieq $MainWt) { G -C $w.Path rev-parse --abbrev-ref HEAD } else { $w.Branch }
         if ($b) { $byBranch[$b] = $w }
     }
+    # main goes last: a feature conflicting with develop is resolved in its own worktree, and
+    # main then takes the resolved branches before develop, so the conflict is not met again there.
     $ordered = @()
-    if ($byBranch.ContainsKey('main')) { $ordered += 'main' }
     $inScope = @($byBranch.Keys | Where-Object { $_ -ne 'main' -and (Get-Role $_) })
     if ($Scope -ne 'all') {
         $chain = @()
@@ -1349,8 +1350,28 @@ Either upstream rewrote history, or a commit was made on develop.
         $inScope = @($inScope | Where-Object { $chain -contains $_ })
     }
     $ordered += Sort-ByDependency $inScope
+    if ($byBranch.ContainsKey('main')) { $ordered += 'main' }
 
     foreach ($branch in $ordered) {
+        # A branch that has taken develop and that main holds only part of (its merges of develop
+        # are missing) lands into main first, carrying the resolutions made in its worktree.
+        $relanded = @()
+        if ($branch -eq 'main') {
+            foreach ($b in $ordered) {
+                if ($b -eq 'main' -or (Test-IsAmend $b) -or -not (GitOk merge-base --is-ancestor develop $b)) { continue }
+                $own = [int](G rev-list --count $b '^develop')
+                $missing = [int](G rev-list --count $b '^develop' '^main')
+                if ($missing -gt 0 -and $missing -lt $own) { $relanded += $b }
+            }
+        }
+        if ($relanded) {
+            Info "landing into main what it held before this sync: $($relanded -join ', ')"
+            $pwsh = (Get-Process -Id $PID).Path
+            foreach ($b in $relanded) {
+                & $pwsh -NoProfile -File $PSCommandPath integrate $b
+                if ($LASTEXITCODE -ne 0) { Warn "integrate $b failed; main merges develop without it" }
+            }
+        }
         $w = $byBranch[$branch]
         $isMain = $w.Path -ieq $MainWt
         if ($isMain -and $branch -ne 'main') { $skipped += "$($w.Path) (on $branch, not main)"; continue }
