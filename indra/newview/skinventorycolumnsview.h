@@ -171,6 +171,7 @@ protected:
     void readColumn(Column& column, bool folders_too, bool fetch = true);
     void fetchGhostWhenResting();
     void revealColumns(bool trailing);
+    bool trailsSelection() const;   // the last column shows what the selection opened
     void updateStripScrollbar();
     void updateColumnScrollbars();
     void notifySelection(bool reveal);

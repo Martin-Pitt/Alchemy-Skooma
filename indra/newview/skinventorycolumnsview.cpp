@@ -554,6 +554,11 @@ void SKInventoryColumnsView::scrollRowIntoView(const Column& column, S32 row)
     }
 }
 
+bool SKInventoryColumnsView::trailsSelection() const
+{
+    return !mColumns.empty() && (mColumns.back().mKind == KIND_GHOST || mColumns.back().mKind == KIND_DETAILS);
+}
+
 S32 SKInventoryColumnsView::columnAt(S32 x) const
 {
     const S32 strip_x = x + mStripX;
@@ -1029,7 +1034,11 @@ bool SKInventoryColumnsView::handleMouseDown(S32 x, S32 y, MASK mask)
     const S32 index = columnAt(x);
     if (index < 0)
     {
-        clearSelection();
+        // Past a ghost or the details, the space belongs to what the selection opened, so it stays.
+        if (!trailsSelection())
+        {
+            clearSelection();
+        }
         return true;
     }
 
@@ -1172,7 +1181,7 @@ bool SKInventoryColumnsView::handleRightMouseDown(S32 x, S32 y, MASK mask)
             clearSelection();
         }
     }
-    else
+    else if (!trailsSelection())
     {
         clearSelection();
     }
