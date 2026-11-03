@@ -3150,7 +3150,7 @@
         <key>SKRoomsEnabled</key>
         <map>
             <key>Comment</key>
-            <string>Cut the air cells into enclosure answers, spaces, portals, rooms and wind slabs. Off, nothing reads the rooms layer.</string>
+            <string>Cut the air cells into enclosure answers, spaces, portals and rooms. Off, nothing reads the rooms layer.</string>
             <key>Persist</key>
             <integer>1</integer>
             <key>Type</key>
@@ -3168,28 +3168,6 @@
             <string>Boolean</string>
             <key>Value</key>
             <integer>0</integer>
-        </map>
-        <key>SKRoomsOverlayWind</key>
-        <map>
-            <key>Comment</key>
-            <string>Draw an arrow every 2 m over the lowest wind band near the camera, for one heading, coloured by speed factor: blue calm, cyan the free stream, yellow twice it. Under World overlays.</string>
-            <key>Persist</key>
-            <integer>0</integer>
-            <key>Type</key>
-            <string>Boolean</string>
-            <key>Value</key>
-            <integer>0</integer>
-        </map>
-        <key>SKRoomsOverlayWindHeading</key>
-        <map>
-            <key>Comment</key>
-            <string>The heading the wind overlay shows, in degrees the wind blows toward, counter-clockwise from east; negative follows the region's wind at the camera.</string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>F32</string>
-            <key>Value</key>
-            <real>-1.0</real>
         </map>
         <key>SKRoomsSealedIndoors</key>
         <map>
@@ -3212,17 +3190,6 @@
             <string>U32</string>
             <key>Value</key>
             <integer>100</integer>
-        </map>
-        <key>SKRoomsWindSettleMs</key>
-        <map>
-            <key>Comment</key>
-            <string>Milliseconds a mesh's rooms must be quiet before its wind slabs are rebuilt, so a mesh still streaming in builds them once.</string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>U32</string>
-            <key>Value</key>
-            <integer>1000</integer>
         </map>
         <key>AlchemyRenderWaterHextile</key>
         <map>
@@ -3531,6 +3498,17 @@
             <string>Boolean</string>
             <key>Value</key>
             <boolean>1</boolean>
+        </map>
+        <key>AlchemyRetireDepartedRegionsCloseCircuit</key>
+        <map>
+            <key>Comment</key>
+            <string>Close a retired region's circuit at once, telling its simulator with CloseCircuit, instead of leaving it for the simulator to close when it disconnects the region.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <boolean>0</boolean>
         </map>
         <key>AlchemyRevokeObjectPerms</key>
         <map>

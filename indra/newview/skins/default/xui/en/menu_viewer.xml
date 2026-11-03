@@ -3997,7 +3997,7 @@ function="World.EnvPreset"
              function="SK.ShowAirStatus" />
           </menu_item_call>
           <!-- </SK:Nexii> -->
-          <!-- <SK:Nexii> rooms: the spaces, wind and enclosure overlays and status -->
+          <!-- <SK:Nexii> rooms: the spaces and enclosure overlays and status -->
           <menu_item_check
            label="Rooms Spaces"
            name="SKRoomsOverlaySpaces">
@@ -4027,19 +4027,10 @@ function="World.EnvPreset"
              function="SK.SetAirOverlay"
              parameter="7" />
           </menu_item_check>
-          <menu_item_check
-           label="Rooms Wind"
-           name="SKRoomsOverlayWind">
-            <menu_item_check.on_check
-             control="SKRoomsOverlayWind" />
-            <menu_item_check.on_click
-             function="ToggleControl"
-             parameter="SKRoomsOverlayWind" />
-          </menu_item_check>
           <menu_item_call
            label="Rooms Status"
            name="SKShowRoomsStatus"
-           tool_tip="Show the rooms passes' meshes, timings, spaces, rooms and wind slabs">
+           tool_tip="Show the rooms passes' meshes, timings, spaces and rooms">
             <menu_item_call.on_click
              function="SK.ShowRoomsStatus" />
           </menu_item_call>

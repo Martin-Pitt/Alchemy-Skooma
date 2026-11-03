@@ -27,7 +27,6 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "skroomstestscene.h"
-#include "../skroomswind.h"
 
 #include "llstring.h"
 
@@ -494,7 +493,7 @@ namespace
         line("door shut, repair", shut_run);
         line("door open, full", full_open);
         line("door open, repair", open_run);
-        // What follows a landing: the spaces cut again, and the wind slabs built on them.
+        // What follows a landing: the spaces cut again.
         {
             auto rooms_in = std::make_shared<RoomsInput>();
             rooms_in->mMeshKey = 42;
@@ -502,15 +501,7 @@ namespace
             const auto t0 = std::chrono::steady_clock::now();
             const RoomsProductPtr rooms = computeSpaces(rooms_in, enc);
             const auto t1 = std::chrono::steady_clock::now();
-            auto wind_in = std::make_shared<WindInput>();
-            wind_in->mEnclosure = enc;
-            wind_in->mRooms = rooms;
-            wind_in->mBands = defaultWindBands();
-            const WindProductPtr wind = computeWind(wind_in);
-            const auto t2 = std::chrono::steady_clock::now();
-            o << "spaces pass: " << llformat("%.2f", std::chrono::duration<F64, std::milli>(t1 - t0).count()) << " ms; wind slabs: "
-              << llformat("%.2f", std::chrono::duration<F64, std::milli>(t2 - t1).count()) << " ms for " << llformat("%.2f", (wind ? wind->bytes() : 0) / 1048576.0)
-              << " MB\n";
+            o << "spaces pass: " << llformat("%.2f", std::chrono::duration<F64, std::milli>(t1 - t0).count()) << " ms\n";
         }
         std::cout << o.str();
         const std::string out = LLStringUtil::getenv("SKNAV_REPAIR_TIMES");

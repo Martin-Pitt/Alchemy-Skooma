@@ -1401,7 +1401,7 @@ class SKShowAirStatus : public view_listener_t
 };
 // </SK:Nexii>
 
-// <SK:Nexii> rooms: the enclosure, spaces, room graph and wind passes' status
+// <SK:Nexii> rooms: the enclosure, spaces and room graph passes' status
 class SKShowRoomsStatus : public view_listener_t
 {
     bool handleEvent(const LLSD& userdata)
