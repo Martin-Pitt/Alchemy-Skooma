@@ -65,9 +65,14 @@ public:
     void shutdownModal() override { shutdown(); }
     void renderModal(const LLRect& world_rect_raw) override { render(world_rect_raw); }
     bool pickGround(S32 x, S32 y, LLVector3d& ground) const override { return groundUnderCursor(x, y, ground); }
-    /// The flycam's height above the map over a person's scale, so it crosses regions low down and the
-    /// grid high up.
-    F64 flycamScale(const LLVector3d& eye) const override;
+    /// The map's tile plane below `eye`: the flycam's speed is measured from it, and the view is about it
+    /// while the flycam leaves the camera's focus behind.
+    bool groundBelow(const LLVector3d& eye, LLVector3d& ground) const override;
+    /// High enough to cross the grid from high up (SKWorldMapFlycamMaxScale).
+    F64 flycamMaxScale() const override;
+    /// The move actions slide the camera across the map at a share of the ground in view a second, and up
+    /// and down move it towards or away from its focus.
+    void move(const skmodalview::Move& move) override;
     /// RLVa hides the world map; the camera locks are the modal view's.
     bool rlvRestricted() const override;
     /// The map stands in for the minimap, as the tactical overview does.

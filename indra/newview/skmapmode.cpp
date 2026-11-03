@@ -27,6 +27,7 @@
 #include "skmapmode.h"
 
 #include "llagent.h"
+#include "llappviewer.h"
 #include "llagentcamera.h"
 #include "llcallbacklist.h"
 #include "llfocusmgr.h"
@@ -34,6 +35,7 @@
 #include "llrootview.h"
 #include "lluictrlfactory.h"
 #include "lltimer.h"
+#include "llviewercontrol.h"
 #include "llviewercamera.h"
 #include "llviewerjoystick.h"
 #include "llviewerwindow.h"
@@ -48,6 +50,8 @@ namespace
 {
     constexpr F64 START_DISTANCE = 1500.0;
     constexpr F64 START_ELEVATION = 50.0 * 3.141592653589793 / 180.0;
+    constexpr F64 MIN_MAP_DISTANCE = 20.0;      ///< the closest the up and down actions bring the camera to its focus
+    constexpr F64 MAX_MAP_DISTANCE = 200000.0;  ///< and the farthest, the grid's breadth
 
     /// Behind every other view, over the world view: right-clicks go nowhere, so nothing reaches the
     /// hidden world. The left button falls through to SKToolMapPan, the wheel to the camera's zoom.
@@ -97,9 +101,51 @@ bool SKMapMode::isOpen()
     return instanceExists() && getInstance()->mOpen;
 }
 
-F64 SKMapMode::flycamScale(const LLVector3d& eye) const
+bool SKMapMode::groundBelow(const LLVector3d& eye, LLVector3d& ground) const
 {
-    return flycamHeightScale(eye.mdV[VZ]);
+    ground.setVec(eye.mdV[VX], eye.mdV[VY], GROUND_Z);
+    return true;
+}
+
+F64 SKMapMode::flycamMaxScale() const
+{
+    static LLCachedControl<F32> max_scale(gSavedSettings, "SKWorldMapFlycamMaxScale", 60.f);
+    return llmax((F64)max_scale, 1.0);
+}
+
+void SKMapMode::move(const skmodalview::Move& move)
+{
+    if (!mOpen || mPanning || SKModalView::top() != this)
+    {
+        return;
+    }
+    static LLCachedControl<F32> speed(gSavedSettings, "SKWorldMapMoveSpeed", 0.5f);
+    const LLViewerCamera* view = LLViewerCamera::getInstance();
+    const LLVector3d eye = gAgentCamera.getCameraPositionGlobal();
+    const LLVector3d focus = gAgentCamera.getFocusGlobal();
+    const F64 distance = llmax((eye - focus).magVec(), 1.0);
+    // A share of the ground in view a second, so the map moves the same on screen at any height.
+    const F64 ground_width = 2.0 * distance * std::tan(view->getView() * view->getAspect() * 0.5);
+    const F64 seconds = llmin((F64)gFrameDTClamped, 0.1);
+    const F64 share = llmax((F64)speed, 0.0) * (move.mFast ? 3.0 : 1.0) * seconds;
+
+    LLVector3d step;
+    LLVector3 dir;
+    if (skmodalview::groundDirection(view->getAtAxis(), view->getUpAxis(), move.mForward, move.mLeft, dir))
+    {
+        step = LLVector3d(dir) * (ground_width * share);
+    }
+    LLVector3d new_eye = eye + step;
+    if (move.mUp != 0.f)
+    {
+        // Up backs away from the focus, down closes in; never through it.
+        const F64 new_distance = llclamp(distance * std::exp(move.mUp * share * 2.0), MIN_MAP_DISTANCE, llmax(MAX_MAP_DISTANCE, distance));
+        new_eye = focus + step + (eye - focus) * (new_distance / distance);
+    }
+    gAgentCamera.setFocusOnAvatar(false, false);
+    gAgentCamera.setCameraPosAndFocusGlobal(new_eye, focus + step, LLUUID::null);
+    gAgentCamera.stopCameraAnimation();
+    gAgentCamera.skipCameraSmoothing();
 }
 
 bool SKMapMode::rlvRestricted() const
@@ -349,11 +395,7 @@ SKWorldMapFrame SKMapMode::frame() const
     f.mYaw = std::atan2(at.mV[VY], at.mV[VX]);
     f.mPitch = std::asin(llclamp(at.mV[VZ], -1.f, 1.f));
     f.mFovY = view->getView();
-    if (!LLViewerJoystick::getInstance()->getOverrideCamera())
-    {
-        f.mFocus = gAgentCamera.getFocusGlobal();
-        f.mHasFocus = true;
-    }
+    f.mHasFocus = SKModalView::viewFocus(f.mFocus);
     return f;
 }
 

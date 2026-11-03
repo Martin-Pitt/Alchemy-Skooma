@@ -3253,6 +3253,28 @@
             <key>Value</key>
             <integer>16</integer>
         </map>
+        <key>SKWorldMapFlycamMaxScale</key>
+        <map>
+            <key>Comment</key>
+            <string>On the 3D world map, the most the flycam's travel is multiplied by high above the map. It grows with height above 10 m and eases onto this.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>60.0</real>
+        </map>
+        <key>SKWorldMapMoveSpeed</key>
+        <map>
+            <key>Comment</key>
+            <string>On the 3D world map, how fast the move actions slide the camera: the share of the ground in view crossed a second. Running triples it.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.5</real>
+        </map>
         <key>RenderAvatarShadowDetail</key>
         <map>
             <key>Comment</key>
