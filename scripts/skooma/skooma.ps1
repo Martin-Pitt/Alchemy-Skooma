@@ -460,75 +460,90 @@ function Get-BuildTree { param([string]$Path)
 # tree was last built against — close to whatever the next branch is cut from.
 function Get-BuildWorktreePath { return (Join-Path $WtRoot 'build') }
 
-# main takes develop in a sidecar worktree of its own, so a conflict is resolved there (by an
+# Merges into main happen in a sidecar worktree of its own, so a conflict is resolved there (by an
 # agent) and the main checkout only ever fast-forwards.
 $SyncBranch = 'skooma-sync'
 function Get-SyncWorktreePath { return (Join-Path $WtRoot 'sync') }
 
-function Show-SyncConflict { param([string]$path, [string[]]$files, [string]$again)
-    Say ''
-    Warn "CONFLICT merging develop into main (in the sync worktree)"
-    foreach ($f in $files) { Say "    $f" }
-    Info "  resolve in: $path"
-    Info "  then: git add the files and re-run  $again   (it commits and fast-forwards main)"
+function Initialize-SyncWorktree {
+    $path = Get-SyncWorktreePath
+    if ($Worktrees | Where-Object { $_.Path -ieq $path }) { return $path }
+    if (Test-Path $path) { Fail "$path exists but is not a registered worktree" }
+    $null = G branch -f $SyncBranch main
+    $out = G worktree add $path $SyncBranch
+    if ($script:GitExit -ne 0) { Fail "could not create the sync worktree at ${path}`n$out" }
+    $null = G config "branch.$SyncBranch.skooma" 'sidecar'
+    $null = G config "branch.$SyncBranch.skooma-base" 'develop'
+    $null = G config "branch.$SyncBranch.description" 'merges into main, which fast-forwards to it'
+    Initialize-Submodules $path
+    Good "created sync worktree: $path"
+    return $path
 }
 
-# Returns true once main holds develop.
-function Sync-MainThroughSidecar {
-    $again = 'git skooma sync'
-    $path = Get-SyncWorktreePath
-    $wt = $Worktrees | Where-Object { $_.Path -ieq $path } | Select-Object -First 1
-    if (-not $wt) {
-        if ((Get-Counts main develop).Ahead -eq 0) { return $true }
-        if (Test-Path $path) { Fail "$path exists but is not a registered worktree" }
-        $null = G branch -f $SyncBranch main
-        $out = G worktree add $path $SyncBranch
-        if ($script:GitExit -ne 0) { Fail "could not create the sync worktree at ${path}`n$out" }
-        $null = G config "branch.$SyncBranch.skooma" 'sidecar'
-        $null = G config "branch.$SyncBranch.skooma-base" 'develop'
-        $null = G config "branch.$SyncBranch.description" 'main taking develop; main fast-forwards to it'
-        Initialize-Submodules $path
-        Good "created sync worktree: $path"
-    }
-
+# Merge $From into main through the sidecar: 'landed' (main fast-forwarded, or had it already),
+# 'conflict' (left in the sidecar to resolve), 'busy' (the sidecar holds another merge), 'blocked'.
+# A resolved merge left there is committed first, whichever branch it was.
+function Merge-IntoMain { param([string]$From, [string]$Again)
+    $path = Initialize-SyncWorktree
     $op = Test-MidOperation $path
     if ($op -eq 'MERGE_HEAD') {
+        $pending = (Get-Content (G -C $path rev-parse --path-format=absolute --git-path MERGE_HEAD) | Select-Object -First 1).Trim()
         $files = @(Get-Unmerged $path)
-        if ($files) { Show-SyncConflict $path $files $again; return $false }
+        if ($files) {
+            $mine = $pending -eq (G rev-parse $From)
+            if (-not $mine) { Warn "the sync worktree holds an unresolved merge of $pending; resolve it first"; return 'busy' }
+            Show-SidecarConflict $From $path $files $Again
+            return 'conflict'
+        }
         $out = GG -C $path commit --no-edit
         if ($script:GitExit -ne 0) { Fail "could not commit the resolved merge in ${path}`n$out" }
-        Good 'committed the resolved merge'
+        Good 'committed the resolved merge in the sync worktree'
+        if (-not (Set-MainToSidecar)) { return 'blocked' }
     }
     elseif ($op) { Fail "$path is mid-$op; finish or abort it" }
     if (Test-Dirty $path) { Fail "$path has uncommitted changes" }
 
-    # Once main has moved past it, the sidecar starts again from main; rerere replays a resolution.
-    if (-not (GitOk merge-base --is-ancestor main $SyncBranch)) { $null = G -C $path reset --quiet --hard main }
-
-    $behind = (Get-Counts $SyncBranch develop).Ahead
-    if ($behind -gt 0) {
-        Info "merging develop into main through $path ($behind commits)"
-        $out = GG -C $path merge --no-edit develop
-        if ($script:GitExit -ne 0) {
-            $files = @(Get-Unmerged $path)
-            if ($files) { Show-SyncConflict $path $files $again; Say $out; return $false }
-            $out = GG -C $path commit --no-edit
-            if ($script:GitExit -ne 0) { Fail "could not commit the merge rerere resolved in ${path}`n$out" }
-            Good 'rerere resolved every conflict'
-        }
+    if ((Get-Counts main $From).Ahead -eq 0) { return 'landed' }
+    $null = G -C $path reset --quiet --hard main
+    $out = GG -C $path merge --no-edit $From
+    if ($script:GitExit -ne 0) {
+        $files = @(Get-Unmerged $path)
+        if ($files) { Show-SidecarConflict $From $path $files $Again; Say $out; return 'conflict' }
+        $out = GG -C $path commit --no-edit
+        if ($script:GitExit -ne 0) { Fail "could not commit the merge rerere resolved in ${path}`n$out" }
+        Good "rerere resolved every conflict merging $From"
     }
-    if ((Get-Counts main $SyncBranch).Ahead -eq 0) { return $true }
+    if (-not (Set-MainToSidecar)) { return 'blocked' }
+    return 'landed'
+}
 
+function Show-SidecarConflict { param([string]$From, [string]$path, [string[]]$files, [string]$Again)
+    Say ''
+    Warn "CONFLICT merging $From into main (in the sync worktree)"
+    foreach ($f in $files) { Say "    $f" }
+    Info "  resolve in: $path"
+    Info "  then: git add the files and re-run  $Again   (it commits and fast-forwards main)"
+}
+
+function Set-MainToSidecar {
+    if ((Get-Counts main $SyncBranch).Ahead -eq 0) { return $true }
     $op = Test-MidOperation $MainWt
     if ($op) { Warn "main checkout is mid-$op; main left where it was"; return $false }
     if (Test-Dirty $MainWt) { Warn 'main checkout has uncommitted changes; main left where it was'; return $false }
-    $lastGood = G rev-parse main
+    $before = G rev-parse --short main
     $out = GG -C $MainWt merge --ff-only $SyncBranch
     if ($script:GitExit -ne 0) { Warn "could not fast-forward main to ${SyncBranch}: $out"; return $false }
-    $null = G config 'skooma.lastgood' $lastGood
     $null = G -C $MainWt submodule update --init --recursive
-    Good "main $($lastGood.Substring(0,9)) -> $(G rev-parse --short main)  (undo: git skooma undo)"
+    Good "main $before -> $(G rev-parse --short main)"
     return $true
+}
+
+# Returns true once main holds develop.
+function Sync-MainThroughSidecar {
+    $lastGood = G rev-parse main
+    $r = Merge-IntoMain 'develop' 'git skooma sync'
+    if ((G rev-parse main) -ne $lastGood) { $null = G config 'skooma.lastgood' $lastGood; Info 'undo: git skooma undo' }
+    return $r -eq 'landed'
 }
 
 # Branches main holds only part of -- their merges of develop came after they landed -- land
@@ -1770,6 +1785,16 @@ function Invoke-Integrate {
 
         # Dry run first so a conflict never dirties the F5 tree or the trunk's worktree.
         $null = G merge-tree --write-tree --name-only $into $b
+        if ($script:GitExit -ne 0 -and $into -eq 'main' -and -not $resolve) {
+            # The sync worktree merges for real, with rerere, and leaves a conflict there to resolve.
+            $r = Merge-IntoMain $b "git skooma integrate $b"
+            if ($r -eq 'landed') {
+                $results += [pscustomobject]@{ Branch = $b; Result = 'landed in main (through sync worktree)'; Detail = "$ahead commits" }
+                continue
+            }
+            $results += [pscustomobject]@{ Branch = $b; Result = "SKIPPED ($r)"; Detail = "in $(Get-SyncWorktreePath)" }
+            continue
+        }
         if ($script:GitExit -ne 0) {
             # A conflict with main-only code cannot be synced away (features never merge
             # main), so --resolve leaves it in the main checkout for the user to finish.
