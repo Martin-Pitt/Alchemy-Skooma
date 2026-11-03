@@ -250,6 +250,7 @@ private:
     void refreshTabStrip();
     void refreshStatus();
     void refreshDetails();
+    void fetchSelection();   // asks the server for the selected items the cache left incomplete
 
     void onPaneDragStart(const std::string& pane);
     void onPaneDrag(const std::string& pane, S32 delta, bool done);

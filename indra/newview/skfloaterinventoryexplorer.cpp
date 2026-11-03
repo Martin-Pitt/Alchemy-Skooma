@@ -33,6 +33,7 @@
 #include "lldraghandle.h"
 #include "llfontgl.h"
 #include "llinventorymodel.h"
+#include "llinventorymodelbackgroundfetch.h"
 #include "llinventoryobserver.h"
 #include "llinventorypanel.h"
 #include "lllocalcliprect.h"
@@ -641,7 +642,7 @@ bool SKFloaterInventoryExplorer::postBuild()
         view->setLabels(labels);
         view->setOpenCallback([this](const LLUUID& id) { openObject(id, false); });
         view->setUpCallback([this]() { goUp(); });
-        view->setSelectionCallback([this]() { refreshDetails(); });
+        view->setSelectionCallback([this]() { fetchSelection(); refreshDetails(); });
         view->setMenuCallback([this, view](S32 x, S32 y, const uuid_vec_t& ids) { showContextMenu(view, x, y, ids, view->getFolder()); });
     }
     mList->setSortCallback([this]() { onListSortChanged(); });
@@ -653,7 +654,7 @@ bool SKFloaterInventoryExplorer::postBuild()
     mColumns->setUpCallback([this]() { goUp(); });
     // ← from the first column: the sidebar takes focus on the top-level folder's row.
     mColumns->setSidebarCallback([this]() { mSidebar->focusSelection(currentTab().mFolderID); });
-    mColumns->setSelectionCallback([this]() { refreshDetails(); });
+    mColumns->setSelectionCallback([this]() { fetchSelection(); refreshDetails(); });
     mColumns->setMenuCallback([this](S32 x, S32 y, const uuid_vec_t& ids, const LLUUID& folder_id)
                               { showContextMenu(mColumns, x, y, ids, folder_id); });
 
@@ -1517,6 +1518,21 @@ void SKFloaterInventoryExplorer::refreshStatus()
     if (mStatusText->getText() != text)
     {
         mStatusText->setText(text);
+    }
+}
+
+// An item read from the inventory cache is incomplete until the server sends it again; the stock inventory
+// fetches what it selects, once a selection, so this does too. Not from refreshDetails, which every inventory
+// change runs again and would ask again for every item still in flight.
+void SKFloaterInventoryExplorer::fetchSelection()
+{
+    for (const LLUUID& id : activeSelection())
+    {
+        const LLViewerInventoryItem* item = gInventory.getItem(id);
+        if (item && !item->isFinished())
+        {
+            LLInventoryModelBackgroundFetch::instance().start(id, false); // as LLItemBridge::selectItem
+        }
     }
 }
 
