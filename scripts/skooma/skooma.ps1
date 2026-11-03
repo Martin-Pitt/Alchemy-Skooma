@@ -46,7 +46,7 @@ function Show-Help {
     Say '                      --base <branch>  --tests (configure a local tests tree)'
     Say '  new <area>/<x> --amend [--base <feature>]  amend-<area>/<x>: a follow-up that lands'
     Say '                      into an existing feature (default feature-<area>/<x>), never a PR alone'
-    Say '  sync [name|.]       fetch upstream -> develop -> main, then that branch and its chain'
+    Say '  sync                fetch upstream -> develop, every branch from its base, then main'
     Say '                      all  every active worktree (never the default)'
     Say '                      each synced branch takes develop''s submodule pointers'
     Say '  check [name|.]      validate a branch before it lands (--full: re-check merges main has)'
@@ -459,6 +459,96 @@ function Get-BuildTree { param([string]$Path)
 # develop, so `git skooma sync` keeps its content — and therefore the baseline its build
 # tree was last built against — close to whatever the next branch is cut from.
 function Get-BuildWorktreePath { return (Join-Path $WtRoot 'build') }
+
+# main takes develop in a sidecar worktree of its own, so a conflict is resolved there (by an
+# agent) and the main checkout only ever fast-forwards.
+$SyncBranch = 'skooma-sync'
+function Get-SyncWorktreePath { return (Join-Path $WtRoot 'sync') }
+
+function Show-SyncConflict { param([string]$path, [string[]]$files, [string]$again)
+    Say ''
+    Warn "CONFLICT merging develop into main (in the sync worktree)"
+    foreach ($f in $files) { Say "    $f" }
+    Info "  resolve in: $path"
+    Info "  then: git add the files and re-run  $again   (it commits and fast-forwards main)"
+}
+
+# Returns true once main holds develop.
+function Sync-MainThroughSidecar {
+    $again = 'git skooma sync'
+    $path = Get-SyncWorktreePath
+    $wt = $Worktrees | Where-Object { $_.Path -ieq $path } | Select-Object -First 1
+    if (-not $wt) {
+        if ((Get-Counts main develop).Ahead -eq 0) { return $true }
+        if (Test-Path $path) { Fail "$path exists but is not a registered worktree" }
+        $null = G branch -f $SyncBranch main
+        $out = G worktree add $path $SyncBranch
+        if ($script:GitExit -ne 0) { Fail "could not create the sync worktree at ${path}`n$out" }
+        $null = G config "branch.$SyncBranch.skooma" 'sidecar'
+        $null = G config "branch.$SyncBranch.skooma-base" 'develop'
+        $null = G config "branch.$SyncBranch.description" 'main taking develop; main fast-forwards to it'
+        Initialize-Submodules $path
+        Good "created sync worktree: $path"
+    }
+
+    $op = Test-MidOperation $path
+    if ($op -eq 'MERGE_HEAD') {
+        $files = @(Get-Unmerged $path)
+        if ($files) { Show-SyncConflict $path $files $again; return $false }
+        $out = GG -C $path commit --no-edit
+        if ($script:GitExit -ne 0) { Fail "could not commit the resolved merge in ${path}`n$out" }
+        Good 'committed the resolved merge'
+    }
+    elseif ($op) { Fail "$path is mid-$op; finish or abort it" }
+    if (Test-Dirty $path) { Fail "$path has uncommitted changes" }
+
+    # Once main has moved past it, the sidecar starts again from main; rerere replays a resolution.
+    if (-not (GitOk merge-base --is-ancestor main $SyncBranch)) { $null = G -C $path reset --quiet --hard main }
+
+    $behind = (Get-Counts $SyncBranch develop).Ahead
+    if ($behind -gt 0) {
+        Info "merging develop into main through $path ($behind commits)"
+        $out = GG -C $path merge --no-edit develop
+        if ($script:GitExit -ne 0) {
+            $files = @(Get-Unmerged $path)
+            if ($files) { Show-SyncConflict $path $files $again; Say $out; return $false }
+            $out = GG -C $path commit --no-edit
+            if ($script:GitExit -ne 0) { Fail "could not commit the merge rerere resolved in ${path}`n$out" }
+            Good 'rerere resolved every conflict'
+        }
+    }
+    if ((Get-Counts main $SyncBranch).Ahead -eq 0) { return $true }
+
+    $op = Test-MidOperation $MainWt
+    if ($op) { Warn "main checkout is mid-$op; main left where it was"; return $false }
+    if (Test-Dirty $MainWt) { Warn 'main checkout has uncommitted changes; main left where it was'; return $false }
+    $lastGood = G rev-parse main
+    $out = GG -C $MainWt merge --ff-only $SyncBranch
+    if ($script:GitExit -ne 0) { Warn "could not fast-forward main to ${SyncBranch}: $out"; return $false }
+    $null = G config 'skooma.lastgood' $lastGood
+    $null = G -C $MainWt submodule update --init --recursive
+    Good "main $($lastGood.Substring(0,9)) -> $(G rev-parse --short main)  (undo: git skooma undo)"
+    return $true
+}
+
+# Branches main holds only part of -- their merges of develop came after they landed -- land
+# again, through their trunks, once main has develop.
+function Invoke-LandSynced {
+    $land = @()
+    foreach ($w in $Worktrees) {
+        $b = $w.Branch
+        if (-not $b -or $w.Path -ieq $MainWt -or (Test-IsAmend $b)) { continue }
+        if ((Get-Role $b) -notin 'feature', 'spike', 'glue' -and -not (Test-IsTrunk $b)) { continue }
+        if (-not (GitOk merge-base --is-ancestor develop $b)) { continue }
+        $own = [int](G rev-list --count $b '^develop')
+        $missing = [int](G rev-list --count $b '^develop' '^main')
+        if ($missing -gt 0 -and $missing -lt $own) { $land += $b }
+    }
+    if (-not $land) { return }
+    Info "landing again what main holds part of: $($land -join ', ')"
+    & (Get-Process -Id $PID).Path -NoProfile -File $PSCommandPath integrate @land
+    if ($LASTEXITCODE -ne 0) { Warn 'integrate failed; see above' }
+}
 
 # Create the shared build worktree on first use.
 function Initialize-BuildWorktree {
@@ -1281,11 +1371,9 @@ function Sync-SubmodulePointers { param([string]$path, [string]$branch)
     Info "  $branch now has develop's $($stale -join ', ')"
 }
 
-function Invoke-Sync { param([switch]$Quiet, [switch]$NextOnly, [string]$Scope = '')
-    # Merging into every worktree is never the default: it leaves other sessions' branches
-    # mid-merge on a conflict. A bare sync takes develop and main; a name adds that branch's chain.
-    $scopeBranch = ''
-    if ($Scope -and $Scope -ne 'all') { $scopeBranch = Resolve-Target $Scope }
+function Invoke-Sync { param([switch]$Quiet, [switch]$NextOnly)
+    # Every branch at once: each takes its base in its own worktree, where its conflicts are
+    # resolved, and main takes develop last, so nothing is resolved twice.
     if (-not $Quiet) { Say '' ; Say 'Fetching upstream...' }
 
     $null = G fetch upstream --prune
@@ -1342,35 +1430,15 @@ Either upstream rewrote history, or a commit was made on develop.
     # main goes last: a feature conflicting with develop is resolved in its own worktree, and
     # main then takes the resolved branches before develop, so the conflict is not met again there.
     $ordered = @()
-    $inScope = @($byBranch.Keys | Where-Object { $_ -ne 'main' -and (Get-Role $_) })
-    if ($Scope -ne 'all') {
-        $chain = @()
-        $x = $scopeBranch
-        while ($x -and $x -ne 'develop' -and $x -ne 'main' -and $chain.Count -lt 16) { $chain += $x; $x = Get-Base $x }
-        $inScope = @($inScope | Where-Object { $chain -contains $_ })
-    }
+    $inScope = @($byBranch.Keys | Where-Object { $_ -ne 'main' -and $_ -ne $SyncBranch -and (Get-Role $_) })
     $ordered += Sort-ByDependency $inScope
     if ($byBranch.ContainsKey('main')) { $ordered += 'main' }
 
     foreach ($branch in $ordered) {
-        # A branch that has taken develop and that main holds only part of (its merges of develop
-        # are missing) lands into main first, carrying the resolutions made in its worktree.
-        $relanded = @()
         if ($branch -eq 'main') {
-            foreach ($b in $ordered) {
-                if ($b -eq 'main' -or (Test-IsAmend $b) -or (Test-IsTrunk $b) -or -not (GitOk merge-base --is-ancestor develop $b)) { continue }
-                $own = [int](G rev-list --count $b '^develop')
-                $missing = [int](G rev-list --count $b '^develop' '^main')
-                if ($missing -gt 0 -and $missing -lt $own) { $relanded += $b }
-            }
-        }
-        if ($relanded) {
-            Info "landing into main what it held before this sync: $($relanded -join ', ')"
-            $pwsh = (Get-Process -Id $PID).Path
-            foreach ($b in $relanded) {
-                & $pwsh -NoProfile -File $PSCommandPath integrate $b
-                if ($LASTEXITCODE -ne 0) { Warn "integrate $b failed; main merges develop without it" }
-            }
+            if (-not (Sync-MainThroughSidecar)) { return }
+            Invoke-LandSynced
+            continue
         }
         $w = $byBranch[$branch]
         $isMain = $w.Path -ieq $MainWt
@@ -1397,7 +1465,7 @@ Either upstream rewrote history, or a commit was made on develop.
                 Say ''
                 Warn "CONFLICT merging $mergeFrom into $branch"
                 Info "  resolve in: $($w.Path)"
-                Info "  then: git commit  and re-run  git skooma sync $(if ($Scope) { $Scope })"
+                Info "  then: git commit  and re-run  git skooma sync"
                 Say $out
                 return
             }
@@ -1647,7 +1715,12 @@ function Invoke-Integrate {
     # Which branches? Each lands into its target: its trunk if it has one, else main.
     # A trunk that receives work then lands into main in the same run.
     $targets = @()
-    if ($arg) {
+    $names = @($Rest | Where-Object { $_ -notlike '--*' })
+    if ($names.Count -gt 1 -and -not $resolve) {
+        # Several names land together (sync re-lands what main holds part of), each trunk once.
+        $targets = @($names | ForEach-Object { Resolve-Target $_ } | Select-Object -Unique)
+    }
+    elseif ($arg) {
         $targets = @(Resolve-Target $arg)
         if ($resolve -and (Get-LandTarget $targets[0]) -ne 'main' -and -not (Test-IsAmend $targets[0])) { Fail "--resolve only lands into main or an amend's parent; $($targets[0]) lands into $(Get-LandTarget $targets[0])" }
     }
@@ -2135,7 +2208,10 @@ switch ($Command.ToLowerInvariant()) {
     'new'       { Invoke-New }
     'wt-new'    { $script:Porcelain = $true; Invoke-New }
     'wt-setup'  { $p = if ($Rest) { $Rest[0] } else { $Here }; Invoke-WtSetup $p }
-    'sync'      { Invoke-Sync -Scope $(if ($Rest -and $Rest[0] -notlike '--*') { $Rest[0] } else { '' }) }
+    'sync'      {
+        if ($Rest -and $Rest[0] -notlike '--*') { Warn "sync takes no name; it syncs every branch" }
+        Invoke-Sync
+    }
     'check' {
         # `check` with no argument from a feature worktree checks that branch; from the
         # main checkout (or anywhere not on a Skooma branch) it checks every worktree,
