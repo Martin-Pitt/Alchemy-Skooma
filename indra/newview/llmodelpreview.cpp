@@ -1906,11 +1906,6 @@ void LLModelPreview::splitSuffixedModels(const std::string& filename)
     {
         from_file = false;
     }
-    if (gSavedSettings.getBOOL("ImporterLegacyMatching"))
-    {
-        return;
-    }
-
     auto suffix_lod = [](const std::string& label) -> S32
     {
         for (S32 lod : { (S32)LLModel::LOD_IMPOSTOR, (S32)LLModel::LOD_LOW, (S32)LLModel::LOD_MEDIUM, (S32)LLModel::LOD_PHYSICS })
@@ -1924,6 +1919,7 @@ void LLModelPreview::splitSuffixedModels(const std::string& filename)
         return -1;
     };
 
+    const bool legacy = gSavedSettings.getBOOL("ImporterLegacyMatching");
     // Only a suffixed model whose base the file also has is a LOD; any other is a model of its own.
     std::set<std::string> bases;
     for (const LLPointer<LLModel>& model : mModel[LLModel::LOD_HIGH])
@@ -1940,8 +1936,21 @@ void LLModelPreview::splitSuffixedModels(const std::string& filename)
             return -1;
         }
         const S32 lod = suffix_lod(model->mLabel);
-        return lod >= 0 && bases.count(stripSuffix(model->mLabel)) ? lod : -1;
+        return lod >= 0 && bases.count(stripSuffix(model->mLabel)) && !legacy ? lod : -1;
     };
+
+    // A suffixed model with no base is named as the loader always named it, without its suffix.
+    for (auto& scene_pair : mScene[LLModel::LOD_HIGH])
+    {
+        for (LLModelInstance& instance : scene_pair.second)
+        {
+            if (instance.mModel && suffix_lod(instance.mModel->mLabel) >= 0 && lod_of(instance.mModel) < 0)
+            {
+                instance.mLabel = stripSuffix(instance.mLabel);
+                instance.mModel->mLabel = stripSuffix(instance.mModel->mLabel);
+            }
+        }
+    }
 
     bool split[LLModel::NUM_LODS] = {};
     for (const LLPointer<LLModel>& model : mModel[LLModel::LOD_HIGH])
