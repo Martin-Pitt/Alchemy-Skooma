@@ -198,10 +198,11 @@ public:
     // Per-asset playback trim toward a target integrated loudness. Changing
     // either value re-derives the trim on every known asset, so the UI can
     // drive it live.
-    void setLoudnessNormalization(bool enabled, F32 target_lufs, F32 strength);
+    void setLoudnessNormalization(bool enabled, F32 target_lufs, F32 strength, bool boost);
     bool isLoudnessNormalizationEnabled() const { return mLoudnessNormalize; }
     F32  getLoudnessTargetLUFS() const          { return mLoudnessTargetLUFS; }
     F32  getLoudnessStrength() const            { return mLoudnessStrength; }
+    bool isLoudnessBoostEnabled() const         { return mLoudnessBoost; }
 
     // Measure an already-decoded .dsf on a worker thread. Used for cache hits,
     // which carry no measurement from decode. The sound plays untrimmed in the
@@ -395,6 +396,7 @@ protected:
     bool mLoudnessNormalize;
     F32  mLoudnessTargetLUFS;
     F32  mLoudnessStrength;
+    bool mLoudnessBoost; // raise quiet sounds too, not only cut loud ones
 
     // Measurements survive the session so a cached sound is only ever measured
     // once, and the trim is not re-applied audibly on every restart.
@@ -593,7 +595,7 @@ class LLAudioData
     F32  getLoudnessGain() const { return mLoudnessGain; }
 
     void setLoudnessMeasurement(F32 lufs, F32 peak);
-    void refreshLoudnessGain(bool enabled, F32 target_lufs, F32 strength);
+    void refreshLoudnessGain(bool enabled, F32 target_lufs, F32 strength, bool boost);
 
     // Set while a background measurement of this asset is in flight, so the
     // engine schedules at most one per asset.

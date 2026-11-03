@@ -121,6 +121,7 @@ void LLAudioEngine::setDefaults()
     mLoudnessNormalize = false;
     mLoudnessTargetLUFS = SK_LUFS_TARGET_DEFAULT;
     mLoudnessStrength = SK_LUFS_STRENGTH_DEFAULT;
+    mLoudnessBoost = false;
     mLoudnessIndexDirty = false;
     mLoudnessUnsaved = 0;
     // </SK:Nexii>
@@ -817,10 +818,10 @@ static const S32 SK_LOUDNESS_INDEX_VERSION = 2;
 // Write the index every this many new measurements, so a crash loses few.
 static const U32 SK_LOUDNESS_INDEX_SAVE_EVERY = 64;
 
-void LLAudioEngine::setLoudnessNormalization(bool enabled, F32 target_lufs, F32 strength)
+void LLAudioEngine::setLoudnessNormalization(bool enabled, F32 target_lufs, F32 strength, bool boost)
 {
     if (mLoudnessNormalize == enabled && is_approx_equal(mLoudnessTargetLUFS, target_lufs) &&
-        is_approx_equal(mLoudnessStrength, strength))
+        is_approx_equal(mLoudnessStrength, strength) && mLoudnessBoost == boost)
     {
         return;
     }
@@ -829,6 +830,7 @@ void LLAudioEngine::setLoudnessNormalization(bool enabled, F32 target_lufs, F32 
     mLoudnessNormalize = enabled;
     mLoudnessTargetLUFS = target_lufs;
     mLoudnessStrength = strength;
+    mLoudnessBoost = boost;
 
     // Re-derive every known trim. Sources read the trim through their current
     // data every tick, so this takes effect without touching any channel.
@@ -839,7 +841,7 @@ void LLAudioEngine::setLoudnessNormalization(bool enabled, F32 target_lufs, F32 
         {
             continue;
         }
-        adp->refreshLoudnessGain(enabled, target_lufs, strength);
+        adp->refreshLoudnessGain(enabled, target_lufs, strength, boost);
         if (turned_on && adp->hasDecodedData() && !adp->hasLoudnessMeasurement())
         {
             scheduleLoudnessMeasure(adp);
@@ -2378,17 +2380,25 @@ void LLAudioData::setLoudnessMeasurement(F32 lufs, F32 peak)
         gAudiop->recordLoudnessMeasurement(mID, lufs, peak);
         refreshLoudnessGain(gAudiop->isLoudnessNormalizationEnabled(),
                             gAudiop->getLoudnessTargetLUFS(),
-                            gAudiop->getLoudnessStrength());
+                            gAudiop->getLoudnessStrength(),
+                            gAudiop->isLoudnessBoostEnabled());
     }
 }
 
-void LLAudioData::refreshLoudnessGain(bool enabled, F32 target_lufs, F32 strength)
+void LLAudioData::refreshLoudnessGain(bool enabled, F32 target_lufs, F32 strength, bool boost)
 {
     // Unmeasured assets stay at unity so they play at their natural level
     // rather than waiting on a measurement.
     mLoudnessGain = (enabled && hasLoudnessMeasurement())
         ? sk_lufs_gain_for_target(mLoudnessLUFS, target_lufs, strength, mLoudnessPeak)
         : 1.f;
+
+    // K-weighting discounts sub-bass, so a boost can drag a quiet rumble up far
+    // past how loud it already sounds.
+    if (!boost)
+    {
+        mLoudnessGain = llmin(mLoudnessGain, 1.f);
+    }
 }
 // </SK:Nexii>
 
