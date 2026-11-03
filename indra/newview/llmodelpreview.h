@@ -186,6 +186,9 @@ public:
     // What each model's stored domains are shifted by so that its origin lands on its pivot.
     LLMeshUploadThread::position_offsets_t getUploadPositionOffsets() const;
     // </SK:Nexii>
+    // <SK:Nexii> Mesh uploader LODs by name: a file's NAME_LOD0-2 and NAME_PHYS models fill those slots of NAME
+    void splitSuffixedModels(const std::string& filename);
+    // </SK:Nexii>
 
     //Is a rig valid so that it can be used as a criteria for allowing for uploading of joint positions
     //Accessors for joint position upload friendly rigs
@@ -290,6 +293,7 @@ protected:
     EPivotMode  mPivotMode{PIVOT_FILE};
     LLVector3   mCustomPivot;
     bool        mUploadPivotAllowed{true};
+    bool        mLODFromHighFile[LLModel::NUM_LODS]{}; // <SK:Nexii> Mesh uploader LODs by name
     // </SK:Nexii>
 
     std::map<std::string, bool> mViewOption;

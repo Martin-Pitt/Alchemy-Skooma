@@ -1120,6 +1120,12 @@ void LLModelPreview::loadModelCallback(S32 loaded_lod)
     { //only replace given LoD
         mModel[loaded_lod] = mModelLoader->mModelList;
         mScene[loaded_lod] = mModelLoader->mScene;
+        // <SK:Nexii> Mesh uploader LODs by name
+        if (loaded_lod == LLModel::LOD_HIGH)
+        {
+            splitSuffixedModels(mModelLoader->mFilename);
+        }
+        // </SK:Nexii>
 
         // Duplicate the model if it is an internal bounding box model
         if (loaded_lod == LLModel::LOD_PHYSICS &&
@@ -1892,6 +1898,149 @@ LLVector3 LLModelPreview::getWantedPivot(const LLModel* model) const
         return LLVector3::zero;
     }
 }
+
+// <SK:Nexii> Mesh uploader LODs by name
+void LLModelPreview::splitSuffixedModels(const std::string& filename)
+{
+    for (bool& from_file : mLODFromHighFile)
+    {
+        from_file = false;
+    }
+    if (gSavedSettings.getBOOL("ImporterLegacyMatching"))
+    {
+        return;
+    }
+
+    auto suffix_lod = [](const std::string& label) -> S32
+    {
+        for (S32 lod : { (S32)LLModel::LOD_IMPOSTOR, (S32)LLModel::LOD_LOW, (S32)LLModel::LOD_MEDIUM, (S32)LLModel::LOD_PHYSICS })
+        {
+            const std::string suffix = getLodSuffix(lod);
+            if (label.size() > suffix.size() && label.compare(label.size() - suffix.size(), suffix.size(), suffix) == 0)
+            {
+                return lod;
+            }
+        }
+        return -1;
+    };
+
+    // Only a suffixed model whose base the file also has is a LOD; any other is a model of its own.
+    std::set<std::string> bases;
+    for (const LLPointer<LLModel>& model : mModel[LLModel::LOD_HIGH])
+    {
+        if (model && suffix_lod(model->mLabel) < 0)
+        {
+            bases.insert(model->mLabel);
+        }
+    }
+    auto lod_of = [&](const LLModel* model) -> S32
+    {
+        if (!model)
+        {
+            return -1;
+        }
+        const S32 lod = suffix_lod(model->mLabel);
+        return lod >= 0 && bases.count(stripSuffix(model->mLabel)) ? lod : -1;
+    };
+
+    bool split[LLModel::NUM_LODS] = {};
+    for (const LLPointer<LLModel>& model : mModel[LLModel::LOD_HIGH])
+    {
+        const S32 lod = lod_of(model);
+        if (lod >= 0 && !split[lod])
+        {
+            split[lod] = true;
+            mModel[lod].clear();
+            mScene[lod].clear();
+        }
+    }
+    LLModelLoader::model_list kept;
+    for (const LLPointer<LLModel>& model : mModel[LLModel::LOD_HIGH])
+    {
+        const S32 lod = lod_of(model);
+        if (lod < 0)
+        {
+            kept.push_back(model);
+        }
+        else
+        {
+            mModel[lod].push_back(model);
+        }
+    }
+    if (kept.size() == mModel[LLModel::LOD_HIGH].size())
+    {
+        return;
+    }
+    mModel[LLModel::LOD_HIGH] = kept;
+    if (split[LLModel::LOD_PHYSICS])
+    {
+        mPhysicsSearchLOD = LLModel::LOD_PHYSICS;
+    }
+
+    for (auto scene_it = mScene[LLModel::LOD_HIGH].begin(); scene_it != mScene[LLModel::LOD_HIGH].end();)
+    {
+        LLModelLoader::model_instance_list& list = scene_it->second;
+        for (auto it = list.begin(); it != list.end();)
+        {
+            const S32 lod = lod_of(it->mModel);
+            if (lod < 0)
+            {
+                ++it;
+                continue;
+            }
+            mScene[lod][scene_it->first].push_back(*it);
+            it = list.erase(it);
+        }
+        scene_it = list.empty() ? mScene[LLModel::LOD_HIGH].erase(scene_it) : std::next(scene_it);
+    }
+
+    LLFloaterModelPreview* fmp = LLFloaterModelPreview::sInstance;
+    for (S32 lod = 0; lod < LLModel::NUM_LODS; ++lod)
+    {
+        if (!split[lod])
+        {
+            continue;
+        }
+        if (lod != LLModel::LOD_PHYSICS && countRootModels(mModel[lod]) != countRootModels(kept))
+        {
+            // A LOD needs every model; the file's partial set is dropped and the LOD generated.
+            mModel[lod].clear();
+            mScene[lod].clear();
+            if (fmp)
+            {
+                fmp->mLODMode[lod] = MESH_OPTIMIZER_AUTO;
+                if (LLComboBox* lod_combo = fmp->findChild<LLComboBox>("lod_source_" + lod_name[lod]))
+                {
+                    lod_combo->setCurrentByIndex(MESH_OPTIMIZER_AUTO);
+                }
+            }
+            std::ostringstream out;
+            out << "Only some models have a " << getLodSuffix(lod) << " model in the file; generating that LOD instead";
+            LLFloaterModelPreview::addStringToLog(out, true);
+            continue;
+        }
+        mLODFromHighFile[lod] = true;
+        mLODFile[lod] = filename;
+        mVertexBuffer[lod].clear();
+        if (fmp)
+        {
+            fmp->setCtrlLoadFromFile(lod);
+            if (lod == LLModel::LOD_PHYSICS)
+            {
+                fmp->childSetValue("physics_file", filename);
+            }
+            else
+            {
+                fmp->mLODMode[lod] = LOD_FROM_FILE;
+                fmp->childSetValue("lod_file_" + lod_name[lod], filename);
+            }
+        }
+        std::ostringstream out;
+        out << "Took " << mModel[lod].size() << " model(s) named " << getLodSuffix(lod) << " from the file for that slot";
+        LLFloaterModelPreview::addStringToLog(out, false);
+    }
+}
+// </SK:Nexii>
 
 LLMeshUploadThread::position_offsets_t LLModelPreview::getUploadPositionOffsets() const
 {
@@ -2814,7 +2963,10 @@ void LLModelPreview::update()
         for (S32 lod = LLModel::LOD_HIGH; lod >= 0; --lod)
         {
             // adding all lods into query for generation
-            mLodsQuery.push_back(lod);
+            if (!mLODFromHighFile[lod]) // <SK:Nexii> Mesh uploader LODs by name: the file gave this one
+            {
+                mLodsQuery.push_back(lod);
+            }
         }
 
         if (subscribe_for_generation)
@@ -3757,7 +3909,7 @@ bool LLModelPreview::render()
     }
 
     // <SK:Nexii> Mesh uploader pivot: the object's origin, drawn through the model
-    if (mViewOption["show_origin"])
+    if (mViewOption["show_origin"] && !mViewOption["show_skin_weight"]) // rigged mesh is drawn on the avatar
     {
         LLGLSLShader* shader = LLGLSLShader::sCurBoundShaderPtr;
         gUIProgram.bind(); // takes the vertex colours, which gDebugProgram replaces with one uniform
