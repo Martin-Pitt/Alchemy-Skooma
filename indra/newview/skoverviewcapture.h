@@ -99,8 +99,6 @@ public:
 
     /// The tactical overview key: held, it shows the view until released; tapped, it latches it until the next tap.
     static void handleTacticalKey(bool down);
-    /// A held movement binding while the overview is shown: it pans the map on the ground instead of moving the avatar.
-    static bool handleKeyPan(const std::string& action, bool fast);
 
     /// A map drew the region maps this frame: they are captured while one keeps asking.
     static void noteMapsWanted();
@@ -130,8 +128,6 @@ public:
     bool beginPan(S32 x, S32 y) override;
     void pan(S32 x, S32 y) override;
     void endPan() override { mPan = Pan(); }
-    /// The flycam holds the camera, so a drag cannot move it.
-    bool canPan() const override;
     /// The overview is the mini-map writ large.
     std::vector<std::string> coveredFloaters() const override { return { "mini_map" }; }
     /// Clicks reach the pie, which picks the people and objects the overview draws.
@@ -140,6 +136,9 @@ public:
     bool groundBelow(const LLVector3d& eye, LLVector3d& ground) const override;
     /// Lower than the world map's, the battlefield being smaller than the grid (SKTacticalFlycamMaxScale).
     F64 flycamMaxScale() const override;
+    /// The move actions pan the map on the ground, in widths of the visible ground a second
+    /// (SKTacticalKeyPanSpeed), kept over the battlefield. Up and down do nothing here.
+    void move(const skmodalview::Move& move) override;
 
 private:
     struct Shot
@@ -299,11 +298,6 @@ private:
         LLVector3d mEye;
         LLVector3d mFocus;
     } mPan;
-    /// The movement keys held this frame, as forward and left steps on the ground, applied and cleared each frame.
-    void applyKeyPan();
-    F32 mKeyForward = 0.f;
-    F32 mKeyLeft = 0.f;
-    bool mKeyFast = false;
     /// Works out the per-building cut (SKOverviewCensus::applyCut) for the agent and the people the overview marks.
     void updateCut();
     /// The air's room around a floor point, from its start gap's space; null where that space is in no room.
