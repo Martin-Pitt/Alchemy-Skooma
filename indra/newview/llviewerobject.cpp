@@ -29,6 +29,8 @@
 #include "llviewerobject.h"
 #include "llscripteditorws.h"
 
+#include "alcompressedupdate.h"
+
 #include "llaudioengine.h"
 #include "indra_constants.h"
 #include "llmath.h"
@@ -55,6 +57,8 @@
 
 #include "alassetblocklist.h"
 #include "albakeproxies.h"
+#include "alobjectmotion.h"
+#include "alobjectupdate.h"
 #include "llaudiosourcevo.h"
 #include "llagent.h"
 #include "llagentcamera.h"
@@ -145,7 +149,7 @@ boost::unordered_map<LLUUID, std::vector<LLViewerObject*>> LLViewerObject::sPend
 // JC 3/18/2003
 
 const U32 MAX_INV_FILE_READ_FAILS = 25;
-const S32 MAX_OBJECT_BINARY_DATA_SIZE = 60 + 16;
+const S32 MAX_OBJECT_BINARY_DATA_SIZE = ALObjectMotion::MAX_LENGTH;
 
 const F64 INVENTORY_UPDATE_WAIT_TIME_DESYNC = 5; // seconds
 const F64 INVENTORY_UPDATE_WAIT_TIME_OUTDATED = 1;
@@ -268,7 +272,6 @@ LLViewerObject::LLViewerObject(const LLUUID &id, const LLPCode pcode, LLViewerRe
     mLastMessageUpdateSecs(0.f),
     mLatestRecvPacketID(0),
     mRegionCrossExpire(0),
-    mData(NULL),
     mAudioSourcep(NULL),
     mAudioGain(1.f),
     mSoundCutOffRadius(0.f),
@@ -304,7 +307,7 @@ LLViewerObject::LLViewerObject(const LLUUID &id, const LLPCode pcode, LLViewerRe
     mAttachmentItemID(LLUUID::null),
     mLastUpdateType(OUT_UNKNOWN),
     mLastUpdateCached(false),
-    mExtraParameterList(LLNetworkData::PARAMS_MAX >> 4),
+    mExtraParameterList(LLNetworkData::SLOT_COUNT),
     mCachedMuteListUpdateTime(0),
     mCachedOwnerInMuteList(false),
     mRiggedAttachedWarned(false)
@@ -371,8 +374,8 @@ LLViewerObject::~LLViewerObject()
     for_each(mNameValuePairs.begin(), mNameValuePairs.end(), DeletePairedPointer()) ;
     mNameValuePairs.clear();
 
-    delete[] mData;
-    mData = NULL;
+    mData.clear();
+    mData.shrink_to_fit();
 
     delete mMedia;
     mMedia = NULL;
@@ -1229,19 +1232,10 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
 
     LL_DEBUGS("ObjectUpdate") << " mesgsys " << mesgsys << " dp " << dp << " id " << getID() << " update_type " << (S32) update_type << LL_ENDL;
 
-    // The new OBJECTDATA_FIELD_SIZE_124, OBJECTDATA_FIELD_SIZE_140, OBJECTDATA_FIELD_SIZE_80
-    // and OBJECTDATA_FIELD_SIZE_64 lengths should be supported in the existing cases below.
-    // Each case should start at the beginning of the buffer and extract all known
-    // values, and ignore any unknown data at the end of the buffer.
-    // This allows new data in the future without breaking current viewers.
-    const S32 OBJECTDATA_FIELD_SIZE_140 = 140;  // Full precision avatar update for future extended data
-    const S32 OBJECTDATA_FIELD_SIZE_124 = 124;  // Full precision object update for future extended data
-    const S32 OBJECTDATA_FIELD_SIZE_76  =  76;  // Full precision avatar update
-    const S32 OBJECTDATA_FIELD_SIZE_60  =  60;  // Full precision object update
-    const S32 OBJECTDATA_FIELD_SIZE_80 =   80;  // Terse avatar update, 16 bit precision for future extended data
-    const S32 OBJECTDATA_FIELD_SIZE_64  =  64;  // Terse object update, 16 bit precision for future extended data
-    const S32 OBJECTDATA_FIELD_SIZE_48  =  48;  // Terse avatar update, 16 bit precision
-    const S32 OBJECTDATA_FIELD_SIZE_32  =  32;  // Terse object update, 16 bit precision
+    // The ObjectData field's forms are ALObjectMotion's. Each starts at the
+    // beginning of the field, and a longer form of a kind is a shorter one
+    // followed by data this viewer does not read, which allows new data in the
+    // future without breaking current viewers.
 
     U32 retval = 0x0;
 
@@ -1301,8 +1295,10 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
             //this is the redundant position and region update, but it is necessary in case the viewer misses the following
             //position and region update messages from sim.
             //this redundant update should not cause any problems.
-            LLVector3 delta_pos =  mRegionp->getOriginAgent() - regionp->getOriginAgent();
-            setPositionParent(getPosition() + delta_pos); //update to the new region position immediately.
+            if (const auto position = ALObjectUpdate::positionOnCrossing(getPosition(), mRegionp->getOriginAgent(), regionp->getOriginAgent(), isRoot()))
+            {
+                setPositionParent(*position); //update to the new region position immediately.
+            }
             setRegion(regionp) ; //change the region.
         }
         else
@@ -1349,17 +1345,17 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
     // prediction residual logged at the end of this function.
     const LLVector3 predicted_pos_parent = test_pos_parent;
 
-    // This needs to match the largest size below. See switch(length)
+    // This needs to match the largest form ALObjectMotion decodes
     U8  data[MAX_OBJECT_BINARY_DATA_SIZE];
 
-    U16 valswizzle[4];
-    U16 *val;
     const F32 size = LLWorld::getInstance()->getRegionWidthInMeters();
     const F32 MAX_HEIGHT = LLWorld::getInstance()->getRegionMaxHeight();
     const F32 MIN_HEIGHT = LLWorld::getInstance()->getRegionMinHeight();
     S32 length = 0;
-    S32 count = 0;
     S32 this_update_precision = 32;     // in bits
+    // An ObjectData field of a length that is none of its forms leaves the
+    // object's motion as it was.
+    bool motion_read = true;
 
     // Temporaries, because we need to compare w/ previous to set dirty flags...
     LLVector3 new_pos_parent;
@@ -1423,8 +1419,10 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
                 mesgsys->getU8Fast(  _PREHASH_ObjectData, _PREHASH_ClickAction, click_action, block_num);
                 mesgsys->getVector3Fast(_PREHASH_ObjectData, _PREHASH_Scale, new_scale, block_num );
                 length = mesgsys->getSizeFast(_PREHASH_ObjectData, block_num, _PREHASH_ObjectData);
-                mesgsys->getBinaryDataFast(_PREHASH_ObjectData, _PREHASH_ObjectData, data, length, block_num, MAX_OBJECT_BINARY_DATA_SIZE);
-                length = llmin(length, MAX_OBJECT_BINARY_DATA_SIZE);  // getBinaryDataFast() safely fills the buffer to max_size
+                if (length > 0 && length <= MAX_OBJECT_BINARY_DATA_SIZE)
+                {
+                    mesgsys->getBinaryDataFast(_PREHASH_ObjectData, _PREHASH_ObjectData, data, length, block_num, MAX_OBJECT_BINARY_DATA_SIZE);
+                }
 
                 mTotalCRC = crc;
                 // Might need to update mSourceMuted here to properly pick up new radius
@@ -1444,52 +1442,35 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
                 }
                 setClickAction(click_action);
 
-                count = 0;
-                LLVector4 collision_plane;
-
-                switch(length)
+                ALObjectMotion motion;
+                if (motion.decodeFull(data, length))
                 {
-                case OBJECTDATA_FIELD_SIZE_140:
-                case OBJECTDATA_FIELD_SIZE_76:
                     // pull out collision normal for avatar
-                    htolememcpy(collision_plane.mV, &data[count], MVT_LLVector4, sizeof(LLVector4));
-                    ((LLVOAvatar*)this)->setFootPlane(collision_plane);
-                    count += sizeof(LLVector4);
-
-                case OBJECTDATA_FIELD_SIZE_124:
-                case OBJECTDATA_FIELD_SIZE_60:
-                    this_update_precision = 32;
-                    // this is a full precision update
-                    // pos
-                    htolememcpy(new_pos_parent.mV, &data[count], MVT_LLVector3, sizeof(LLVector3));
-                    count += sizeof(LLVector3);
-                    // vel
-                    htolememcpy((void*)getVelocity().mV, &data[count], MVT_LLVector3, sizeof(LLVector3));
-                    count += sizeof(LLVector3);
-                    // acc
-                    htolememcpy((void*)getAcceleration().mV, &data[count], MVT_LLVector3, sizeof(LLVector3));
-                    count += sizeof(LLVector3);
-                    // theta
+                    LLVOAvatar* avatar = asAvatar();
+                    if (motion.mHasFootPlane && avatar)
                     {
-                        LLVector3 vec;
-                        htolememcpy(vec.mV, &data[count], MVT_LLVector3, sizeof(LLVector3));
-                        new_rot.unpackFromVector3(vec);
+                        avatar->setFootPlane(motion.mFootPlane);
                     }
-                    count += sizeof(LLVector3);
-                    // omega
-                    htolememcpy((void*)new_angv.mV, &data[count], MVT_LLVector3, sizeof(LLVector3));
+
+                    // this is a full precision update
+                    this_update_precision = 32;
+                    new_pos_parent = motion.mPosition;
+                    setVelocity(motion.mVelocity);
+                    setAcceleration(motion.mAcceleration);
+                    new_rot = motion.mRotation;
+                    new_angv = motion.mAngularVelocity;
                     if (new_angv.isExactlyZero())
                     {
                         // reset rotation time
                         resetRot();
                     }
                     setAngularVelocity(new_angv);
-                    count += sizeof(LLVector3);
-                    break;
-
-                // length values 48, 32 and 16 were once in viewer code but
-                //   are never sent by the SL simulator
-                default:
+                }
+                else
+                {
+                    // length values 48, 32 and 16 were once in viewer code but
+                    //   are never sent by the SL simulator
+                    motion_read = false;
                     LL_WARNS("UpdateFail") << "Unexpected ObjectData buffer size " << length
                         << " for " << getID() << " with OUT_FULL message" << LL_ENDL;
                 }
@@ -1522,11 +1503,7 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
                 }
 
                 // Clear out any existing generic data
-                if (mData)
-                {
-                    delete [] mData;
-                    mData = NULL;
-                }
+                mData.clear();
 
                 // Dec 2023 new generic data:
                 //    Trees work as before, this field contains genome data
@@ -1544,16 +1521,20 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
                 {    // has generic data
                     if (getPCode() == LL_PCODE_LEGACY_TREE || getPCode() == LL_PCODE_TREE_NEW)
                     {
-                        mData = new U8[data_size];
-                        mesgsys->getBinaryDataFast(_PREHASH_ObjectData, _PREHASH_Data, mData, data_size, block_num);
+                        mData.resize(data_size);
+                        mesgsys->getBinaryDataFast(_PREHASH_ObjectData, _PREHASH_Data, mData.data(), data_size, block_num);
                         LL_DEBUGS("NewObjectData") << "Read " << data_size << " bytes tree genome data for " << getID() << ", pcode "
                                              << getPCodeString() << ", value " << (S32) mData[0] << LL_ENDL;
                     }
                     else
                     {   // Extract number of prims
-                        U8 generic_data[GENERIC_DATA_BUFFER_SIZE];
+                        // The field is read whole, its own size given as the
+                        // size to read: the reader holds any other to be an
+                        // error. A field of more than the buffer's bytes
+                        // takes them from the heap.
+                        boost::container::small_vector<U8, GENERIC_DATA_BUFFER_SIZE> generic_data(data_size);
                         mesgsys->getBinaryDataFast(_PREHASH_ObjectData, _PREHASH_Data,
-                            &generic_data[0], llmin(data_size, GENERIC_DATA_BUFFER_SIZE), block_num);
+                            generic_data.data(), data_size, block_num);
                         // This is sample code to extract the number of prims
                         //    Future viewers should use it for their own purposes
                         if (!isAvatar())
@@ -1626,29 +1607,25 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
                 S32 size = mesgsys->getSizeFast(_PREHASH_ObjectData, block_num, _PREHASH_ExtraParams);
                 if (size > 0)
                 {
-                    U8 *buffer = new(std::nothrow) U8[size];
-                    if (!buffer)
-                    {
-                        LLError::LLUserWarningMsg::showOutOfMemory();
-                        LL_ERRS() << "Bad memory allocation for buffer, size: " << size << LL_ENDL;
-                    }
-                    mesgsys->getBinaryDataFast(_PREHASH_ObjectData, _PREHASH_ExtraParams, buffer, size, block_num);
-                    LLDataPackerBinaryBuffer dp(buffer, size);
+                    // The field is at most 255 bytes, which fit in place.
+                    boost::container::small_vector<U8, 256> buffer(size);
+                    mesgsys->getBinaryDataFast(_PREHASH_ObjectData, _PREHASH_ExtraParams, buffer.data(), size, block_num);
+                    LLDataPackerBinaryBuffer dp(buffer.data(), size);
 
-                    U8 num_parameters;
-                    dp.unpackU8(num_parameters, "num_params");
-                    U8 param_block[MAX_OBJECT_PARAMS_SIZE];
-                    for (U8 param=0; param<num_parameters; ++param)
+                    // A block with an entry past its end has every parameter
+                    // switched off: each is marked unused above.
+                    LLNetworkData::Entries entries;
+                    if (LLNetworkData::unpackEntries(dp, entries))
                     {
-                        U16 param_type;
-                        S32 param_size;
-                        dp.unpackU16(param_type, "param_type");
-                        dp.unpackBinaryData(param_block, MAX_OBJECT_PARAMS_SIZE, param_size, "param_data");
-                        //LL_INFOS() << "Param type: " << param_type << ", Size: " << param_size << LL_ENDL;
-                        LLDataPackerBinaryBuffer dp2(param_block, param_size);
-                        unpackParameterEntry(param_type, &dp2);
+                        for (const LLNetworkData::Entries::Entry& entry : entries.mEntries)
+                        {
+                            unpackParameterEntry(entry.mType, entries.mBytes.data() + entry.mOffset, entry.mSize);
+                        }
                     }
-                    delete[] buffer;
+                    else
+                    {
+                        LL_WARNS("UpdateFail") << "Extra parameter past the end of its block for " << getID() << LL_ENDL;
+                    }
                 }
 
                 for (size_t i = 0; i < mExtraParameterList.size(); ++i)
@@ -1670,68 +1647,39 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
                 LL_INFOS() << "TI:" << getID() << LL_ENDL;
 #endif
                 length = mesgsys->getSizeFast(_PREHASH_ObjectData, block_num, _PREHASH_ObjectData);
-                mesgsys->getBinaryDataFast(_PREHASH_ObjectData, _PREHASH_ObjectData, data, length, block_num, MAX_OBJECT_BINARY_DATA_SIZE);
-                length = llmin(length, MAX_OBJECT_BINARY_DATA_SIZE);    // getBinaryDataFast() safely fills the buffer to max_size
-                count  = 0;
-                LLVector4 collision_plane;
-
-                switch(length)
+                if (length > 0 && length <= MAX_OBJECT_BINARY_DATA_SIZE)
                 {
-                    case OBJECTDATA_FIELD_SIZE_80:
-                    case OBJECTDATA_FIELD_SIZE_48:
-                    // pull out collision normal for avatar
-                    htolememcpy(collision_plane.mV, &data[count], MVT_LLVector4, sizeof(LLVector4));
-                    ((LLVOAvatar*)this)->setFootPlane(collision_plane);
-                    count += sizeof(LLVector4);
+                    mesgsys->getBinaryDataFast(_PREHASH_ObjectData, _PREHASH_ObjectData, data, length, block_num, MAX_OBJECT_BINARY_DATA_SIZE);
+                }
 
-                case OBJECTDATA_FIELD_SIZE_64:
-                case OBJECTDATA_FIELD_SIZE_32:
+                ALObjectMotion motion;
+                if (motion.decodeTerse(data, length, size, MIN_HEIGHT, MAX_HEIGHT))
+                {
+                    // pull out collision normal for avatar
+                    LLVOAvatar* avatar = asAvatar();
+                    if (motion.mHasFootPlane && avatar)
+                    {
+                        avatar->setFootPlane(motion.mFootPlane);
+                    }
+
                     // this is a terse 16 bit quantized update
                     this_update_precision = 16;
                     test_pos_parent.quantize16(-0.5f*size, 1.5f*size, MIN_HEIGHT, MAX_HEIGHT);
 
-                    htolememcpy(valswizzle, &data[count], MVT_U16Vec3, 6);
-                    val = valswizzle;
-                    count += sizeof(U16)*3;
-                    new_pos_parent.mV[VX] = U16_to_F32(val[VX], -0.5f*size, 1.5f*size);
-                    new_pos_parent.mV[VY] = U16_to_F32(val[VY], -0.5f*size, 1.5f*size);
-                    new_pos_parent.mV[VZ] = U16_to_F32(val[VZ], MIN_HEIGHT, MAX_HEIGHT);
-
-                    htolememcpy(valswizzle, &data[count], MVT_U16Vec3, 6);
-                    val = valswizzle;
-                    count += sizeof(U16)*3;
-                    setVelocity(U16_to_F32(val[VX], -size, size),
-                                U16_to_F32(val[VY], -size, size),
-                                U16_to_F32(val[VZ], -size, size));
-
-                    htolememcpy(valswizzle, &data[count], MVT_U16Vec3, 6);
-                    val = valswizzle;
-                    count += sizeof(U16)*3;
-                    setAcceleration(U16_to_F32(val[VX], -size, size),
-                                    U16_to_F32(val[VY], -size, size),
-                                    U16_to_F32(val[VZ], -size, size));
-
-                    htolememcpy(valswizzle, &data[count], MVT_U16Quat, 8);
-                    val = valswizzle;
-                    count += sizeof(U16)*4;
-                    new_rot.mQ[VX] = U16_to_F32(val[VX], -1.f, 1.f);
-                    new_rot.mQ[VY] = U16_to_F32(val[VY], -1.f, 1.f);
-                    new_rot.mQ[VZ] = U16_to_F32(val[VZ], -1.f, 1.f);
-                    new_rot.mQ[VW] = U16_to_F32(val[VW], -1.f, 1.f);
-
-                    htolememcpy(valswizzle, &data[count], MVT_U16Vec3, 6);
-                    val = valswizzle;
-                    new_angv.set(U16_to_F32(val[VX], -size, size),
-                                        U16_to_F32(val[VY], -size, size),
-                                        U16_to_F32(val[VZ], -size, size));
+                    new_pos_parent = motion.mPosition;
+                    setVelocity(motion.mVelocity);
+                    setAcceleration(motion.mAcceleration);
+                    new_rot = motion.mRotation;
+                    new_angv = motion.mAngularVelocity;
                     setAngularVelocity(new_angv);
-                    break;
-
-                // Previous viewers had code for length 76, 60 or 16 byte length
-                // with full precision or 8 bit quanitzation, but the
-                // SL servers will never send those data formats.  If you ever see this
-                // warning in Second Life, please file a bug report
-                default:
+                }
+                else
+                {
+                    // Previous viewers had code for length 76, 60 or 16 byte length
+                    // with full precision or 8 bit quanitzation, but the
+                    // SL servers will never send those data formats.  If you ever see this
+                    // warning in Second Life, please file a bug report
+                    motion_read = false;
                     LL_WARNS("UpdateFail") << "Unexpected ObjectData buffer size " << length << " for " << getID()
                                            << " with OUT_FULL message" << LL_ENDL;
                 }
@@ -1776,7 +1724,10 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
                 {
                     LLVector4 collision_plane;
                     dp->unpackVector4(collision_plane, "Plane");
-                    ((LLVOAvatar*)this)->setFootPlane(collision_plane);
+                    if (LLVOAvatar* avatar = asAvatar())
+                    {
+                        avatar->setFootPlane(collision_plane);
+                    }
                 }
                 test_pos_parent = getPosition();
                 dp->unpackVector3(new_pos_parent, "Pos");
@@ -1866,26 +1817,9 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
                     parent_id = 0;
                 }
 
-                S32 sp_size;
-                U32 size;
-                if (value & 0x2)
-                {
-                    sp_size = 1;
-                    delete [] mData;
-                    mData = new U8[1];
-                    dp->unpackU8(((U8*)mData)[0], "TreeData");
-                }
-                else if (value & 0x1)
-                {
-                    dp->unpackU32(size, "ScratchPadSize");
-                    delete [] mData;
-                    mData = new U8[size];
-                    dp->unpackBinaryData((U8 *)mData, size, sp_size, "PartData");
-                }
-                else
-                {
-                    mData = NULL;
-                }
+                // A tree's byte or a scratch pad, replacing the data before
+                // it, and none where the update holds neither.
+                unpackCompressedData(*dp, value, mData);
 
                 // Setup object text
                 if (!mText && (value & 0x4))
@@ -1944,25 +1878,40 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
                     deleteParticleSource();
                 }
 
+                // Unpack extra params. An entry past the end of the update
+                // leaves nothing after it to read, so the update is refused:
+                // the object is dropped and asked for whole again.
+                LLNetworkData::Entries entries;
+                if (!LLNetworkData::unpackEntries(*dp, entries))
+                {
+                    LL_WARNS("UpdateFail") << "Extra parameter past the end of the compressed update for " << getID()
+                                           << ", refusing the update" << LL_ENDL;
+                    mRegionp->addCacheMissFull(getLocalID());
+                    gObjectList.killObject(this);
+                    return retval;
+                }
+
+                // So is one whose sound or name values run past its end,
+                // before any of what follows the entries is applied.
+                ALCompressedSoundAndNames sound_and_names;
+                if (!sound_and_names.unpack(*dp, value))
+                {
+                    LL_WARNS("UpdateFail") << "Sound or name values past the end of the compressed update for " << getID()
+                                           << ", refusing the update" << LL_ENDL;
+                    mRegionp->addCacheMissFull(getLocalID());
+                    gObjectList.killObject(this);
+                    return retval;
+                }
+
                 // Mark all extra parameters not used
                 for (auto& entry : mExtraParameterList)
                 {
                     if (entry.in_use) *entry.in_use = false;
                 }
 
-                // Unpack extra params
-                U8 num_parameters;
-                dp->unpackU8(num_parameters, "num_params");
-                U8 param_block[MAX_OBJECT_PARAMS_SIZE];
-                for (U8 param=0; param<num_parameters; ++param)
+                for (const LLNetworkData::Entries::Entry& entry : entries.mEntries)
                 {
-                    U16 param_type;
-                    S32 param_size;
-                    dp->unpackU16(param_type, "param_type");
-                    dp->unpackBinaryData(param_block, MAX_OBJECT_PARAMS_SIZE, param_size, "param_data");
-                    //LL_INFOS() << "Param type: " << param_type << ", Size: " << param_size << LL_ENDL;
-                    LLDataPackerBinaryBuffer dp2(param_block, param_size);
-                    unpackParameterEntry(param_type, &dp2);
+                    unpackParameterEntry(entry.mType, entries.mBytes.data() + entry.mOffset, entry.mSize);
                 }
 
                 for (size_t i = 0; i < mExtraParameterList.size(); ++i)
@@ -1977,18 +1926,15 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
 
                 if (value & 0x10)
                 {
-                    dp->unpackUUID(sound_uuid, "SoundUUID");
-                    dp->unpackF32(gain, "SoundGain");
-                    dp->unpackU8(sound_flags, "SoundFlags");
-                    dp->unpackF32(cutoff, "SoundRadius");
+                    sound_uuid = sound_and_names.mSoundID;
+                    gain = sound_and_names.mSoundGain;
+                    sound_flags = sound_and_names.mSoundFlags;
+                    cutoff = sound_and_names.mSoundRadius;
                 }
 
                 if (value & 0x100)
                 {
-                    std::string name_value_list;
-                    dp->unpackString(name_value_list, "NV");
-
-                    setNameValueList(name_value_list);
+                    setNameValueList(sound_and_names.mNameValues);
                 }
 
                 mTotalCRC = crc;
@@ -2019,6 +1965,8 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
     // Fix object parenting.
     //
     bool b_changed_status = false;
+    // Whether this update names a parent the viewer has not got.
+    bool awaits_parent = false;
 
     if (OUT_TERSE_IMPROVED != update_type)
     {
@@ -2162,6 +2110,7 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
                         port = mRegionp->getHost().getPort();
                     }
                     gObjectList.orphanize(this, parent_id, ip, port);
+                    awaits_parent = true;
 
                     // Hide particles, icon and HUD
                     hideExtraDisplayItems( true );
@@ -2248,6 +2197,7 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
 
                         // We're an orphan, flag things appropriately.
                         gObjectList.orphanize(this, parent_id, ip, port);
+                        awaits_parent = true;
                     }
                 }
 
@@ -2324,11 +2274,18 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
                 }
             }
         }
+
+        // An orphan goes by what its latest update says: where that names no parent, or one the viewer has, it waits
+        // no longer for the one it was given before.
+        if (mOrphaned && !awaits_parent)
+        {
+            gObjectList.unorphanize(this);
+        }
     }
 
     new_rot.normQuat();
 
-    if (sPingInterpolate && mesgsys != NULL)
+    if (sPingInterpolate && mesgsys != NULL && motion_read)
     {
         LLCircuitData *cdp = gMessageSystem->mCircuitInfo.findCircuit(mesgsys->getSender());
         if (cdp)
@@ -2377,11 +2334,12 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
     F32 vel_mag_sq = getVelocity().magVecSquared();
     F32 accel_mag_sq = getAcceleration().magVecSquared();
 
-    if (  ((b_changed_status)||(test_pos_parent != new_pos_parent))
-        ||(  (!isSelected())
-           &&(  (vel_mag_sq != 0.f)
-              ||(accel_mag_sq != 0.f)
-              ||(this_update_precision > mBestUpdatePrecision))))
+    if (motion_read
+        && (  ((b_changed_status)||(test_pos_parent != new_pos_parent))
+            ||(  (!isSelected())
+               &&(  (vel_mag_sq != 0.f)
+                  ||(accel_mag_sq != 0.f)
+                  ||(this_update_precision > mBestUpdatePrecision)))))
     {
         mBestUpdatePrecision = this_update_precision;
 
@@ -2413,8 +2371,9 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
         }
     }
 
-    if ((new_rot.isNotEqualEps(getRotation(), F_ALMOST_ZERO))
-        || (new_angv != old_angv))
+    if (motion_read
+        && ((new_rot.isNotEqualEps(getRotation(), F_ALMOST_ZERO))
+            || (new_angv != old_angv)))
     {
         if (new_rot != mPreviousRotation)
         {
@@ -2532,16 +2491,19 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
                                  << "s, accel " << getAcceleration() << LL_ENDL;
     }
 
-    // Record the arrival before the velocity is converted, so the observed rate is a property of
-    // the stream and not of what we then do with it.
-    mMotionPredictor.noteUpdate(update_time);
+    if (motion_read)
+    {
+        // Record the arrival before the velocity is converted, so the observed rate is a property of
+        // the stream and not of what we then do with it.
+        mMotionPredictor.noteUpdate(update_time);
 
-    // The simulator reports velocity averaged over its own timestep. Convert once, here, rather
-    // than inside the per-frame integration where the correction picks up the viewer's frame rate.
-    setVelocity(ALMotionPredictor::finalVelocity(getVelocity(), getAcceleration()));
+        // The simulator reports velocity averaged over its own timestep. Convert once, here, rather
+        // than inside the per-frame integration where the correction picks up the viewer's frame rate.
+        setVelocity(ALMotionPredictor::finalVelocity(getVelocity(), getAcceleration()));
 
-    mLastInterpUpdateSecs = (F64Seconds)update_time;
-    mLastMessageUpdateSecs = mLastInterpUpdateSecs;
+        mLastInterpUpdateSecs = (F64Seconds)update_time;
+        mLastMessageUpdateSecs = mLastInterpUpdateSecs;
+    }
     if (mDrawable.notNull())
     {
         // Don't clear invisibility flag on update if still orphaned!
@@ -3501,7 +3463,11 @@ bool LLViewerObject::isAnimatedObject() const
 struct LLFilenameAndTask
 {
     LLUUID mTaskID;
+    // The simulator's name for the file, used only to ask for it.
     std::string mFilename;
+    // The name of the copy in the cache folder, which the viewer makes, so a
+    // simulator cannot pick a file there to overwrite, read or delete.
+    std::string mLocalFilename;
 
     // for sequencing in case of multiple updates
     S16 mSerial;
@@ -3617,7 +3583,8 @@ void LLViewerObject::processTaskInv(LLMessageSystem* msg, void** user_data)
             delete ft;
             return;
         }
-        U64 new_id = gXferManager->requestFile(gDirUtilp->getExpandedFilename(LL_PATH_CACHE, ft->mFilename),
+        ft->mLocalFilename = "inventory_" + LLUUID::generateNewID().asString() + ".tmp";
+        U64 new_id = gXferManager->requestFile(gDirUtilp->getExpandedFilename(LL_PATH_CACHE, ft->mLocalFilename),
             ft->mFilename, LL_PATH_CACHE,
             object->mRegionp->getHost(),
             true,
@@ -3659,7 +3626,7 @@ void LLViewerObject::processTaskInvFile(void** user_data, S32 error_code, LLExtS
             LL_DEBUGS() << "Processing file that is potentially out of date for task: " << ft->mTaskID << LL_ENDL;
         }
 
-        if (object->loadTaskInvFile(ft->mFilename))
+        if (object->loadTaskInvFile(ft->mLocalFilename))
         {
 
             LLInventoryObject::object_list_t::iterator it = object->mInventory->begin();
@@ -3693,6 +3660,14 @@ void LLViewerObject::processTaskInvFile(void** user_data, S32 error_code, LLExtS
         // has already handled it.
         LL_DEBUGS() << "Problem loading task inventory. Return code: "
                  << error_code << LL_ENDL;
+
+        // Its name is used for this request alone, so nothing else would
+        // remove a file that came for an object since gone or a serial since
+        // passed.
+        if (ft)
+        {
+            LLFile::remove(gDirUtilp->getExpandedFilename(LL_PATH_CACHE, ft->mLocalFilename), ENOENT);
+        }
     }
     delete ft;
 }
@@ -4623,6 +4598,12 @@ void LLViewerObject::addNVPair(const std::string& data)
 {
     // cout << "LLViewerObject::addNVPair() with ---" << data << "---" << endl;
     LLNameValue *nv = new LLNameValue(data.c_str());
+    if (!nv->mName)
+    {
+        // The line has no name or no type.
+        delete nv;
+        return;
+    }
 
 //  char splat[MAX_STRING];
 //  temp->printNameValue(splat);
@@ -5262,8 +5243,29 @@ void LLViewerObject::setNumTEs(const U8 num_tes)
         LLPrimitive::setNumTEs(num_tes);
         setChanged(TEXTURE);
 
+        if (hasTEEntry())
+        {
+            // The faces gained took their values from the texture entry last
+            // unpacked. Each takes the render material the parameter block
+            // names for it, and the override the region holds for it, rather
+            // than the last face's.
+            if (original_tes < getNumTEs())
+            {
+                for (int i = original_tes; i < getNumTEs(); ++i)
+                {
+                    LLTextureEntry* tep = getTE(i);
+                    const LLUUID id = getRenderMaterialID(i);
+                    tep->setGLTFMaterialOverride(nullptr);
+                    if (id.notNull() || tep->getGLTFMaterial())
+                    {
+                        setRenderMaterialID(i, id, false, false);
+                    }
+                }
+                gGLTFMaterialList.applyQueuedOverrides(this);
+            }
+        }
         // touch up GLTF materials
-        if (original_tes > 0)
+        else if (original_tes > 0)
         {
             for (int i = original_tes; i < getNumTEs(); ++i)
             {
@@ -6769,16 +6771,24 @@ void LLViewerObject::adjustAudioGain(const F32 gain)
 
 //----------------------------------------------------------------------------
 
-bool LLViewerObject::unpackParameterEntry(U16 param_type, LLDataPacker *dp)
+bool LLViewerObject::unpackParameterEntry(U16 param_type, U8* data, S32 size)
 {
     if (LLNetworkData::PARAMS_MESH == param_type)
     {
         param_type = LLNetworkData::PARAMS_SCULPT;
     }
+    if (!LLNetworkData::isValid(param_type, data, size))
+    {
+        // Once for each type and size, rather than for each object.
+        LL_WARNS_ONCE("UpdateFail") << "Extra parameter " << param_type << " of " << size
+                                    << " bytes is not the size of its type" << LL_ENDL;
+        return false;
+    }
     ExtraParameter* param = getExtraParameterEntryCreate(param_type);
     if (param)
     {
-        param->data->unpack(*dp);
+        LLDataPackerBinaryBuffer dp(data, size);
+        param->data->unpack(dp);
         *param->in_use = true;
         parameterChanged(param_type, param->data, true, false);
         return true;
@@ -6851,7 +6861,7 @@ LLViewerObject::ExtraParameter* LLViewerObject::createNewParameterEntry(U16 para
       }
     };
 
-    ExtraParameter& entry = mExtraParameterList[U32(param_type >> 4) - 1];
+    ExtraParameter& entry = getExtraParameterEntry(param_type);
     if (new_block)
     {
         entry.in_use = in_use;
@@ -6891,7 +6901,7 @@ bool LLViewerObject::setParameterEntry(U16 param_type, const LLNetworkData& new_
 // Should always return true.
 bool LLViewerObject::setParameterEntryInUse(U16 param_type, bool in_use, bool local_origin)
 {
-    if (param_type <= LLNetworkData::PARAMS_MAX)
+    if (LLNetworkData::slotOf(param_type) >= 0)
     {
         ExtraParameter* param = (in_use ? getExtraParameterEntryCreate(param_type) : &getExtraParameterEntry(param_type));
         if (param && param->data && *param->in_use != in_use)
@@ -6906,7 +6916,7 @@ bool LLViewerObject::setParameterEntryInUse(U16 param_type, bool in_use, bool lo
 
 void LLViewerObject::parameterChanged(U16 param_type, bool local_origin)
 {
-    if (param_type <= LLNetworkData::PARAMS_MAX)
+    if (LLNetworkData::slotOf(param_type) >= 0)
     {
         const ExtraParameter& param = getExtraParameterEntry(param_type);
         if (param.data)
@@ -7933,7 +7943,12 @@ void LLViewerObject::setRenderMaterialID(S32 te_in, const LLUUID& id, bool updat
     { // update existing parameter block
         for (S32 te = start_idx; te < end_idx; ++te)
         {
-            param_block->setMaterial(te, id);
+            // Only where the block names another material: a face given no
+            // material where it names none takes no entry for it.
+            if (param_block->getMaterial(te) != id)
+            {
+                param_block->setMaterial(te, id);
+            }
         }
     }
 

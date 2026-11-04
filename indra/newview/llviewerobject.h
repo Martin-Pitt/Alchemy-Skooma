@@ -28,6 +28,7 @@
 #pragma once
 
 #include <map>
+#include <boost/container/small_vector.hpp>
 #include <boost/unordered_map.hpp>
 
 #include "almotionpredictor.h"
@@ -123,6 +124,11 @@ class LLViewerObject
     public LLRefCount,
     public LLGLUpdate
 {
+#if AL_SESSION_CAPTURE
+    // Records the update flags, name-value pairs and particles as they are held.
+    friend class ALObjectCapture;
+#endif
+
 protected:
     virtual ~LLViewerObject(); // use unref()
 
@@ -729,17 +735,18 @@ private:
     bool isAssetInInventory(LLViewerInventoryItem* item, LLAssetType::EType type);
 
     ExtraParameter* createNewParameterEntry(U16 param_type);
+    // For a type with a slot of its own (LLNetworkData::slotOf).
     const ExtraParameter& getExtraParameterEntry(U16 param_type) const
     {
-        return mExtraParameterList[U32(param_type >> 4) - 1];
+        return mExtraParameterList[LLNetworkData::slotOf(param_type)];
     }
     ExtraParameter& getExtraParameterEntry(U16 param_type)
     {
-        return mExtraParameterList[U32(param_type >> 4) - 1];
+        return mExtraParameterList[LLNetworkData::slotOf(param_type)];
     }
     ExtraParameter* getExtraParameterEntryCreate(U16 param_type)
     {
-        if (param_type <= LLNetworkData::PARAMS_MAX)
+        if (LLNetworkData::slotOf(param_type) >= 0)
         {
             ExtraParameter& param = getExtraParameterEntry(param_type);
             if (!param.is_invalid)
@@ -754,7 +761,7 @@ private:
         }
         return nullptr;
     }
-    bool unpackParameterEntry(U16 param_type, LLDataPacker *dp);
+    bool unpackParameterEntry(U16 param_type, U8* data, S32 size);
 
     // This function checks to see if the given media URL has changed its version
     // and the update wasn't due to this agent's last action.
@@ -956,8 +963,9 @@ protected:
     F64SecondsImplicit mRegionCrossExpire;      // frame time we detected region crossing in + wait time
     ALMotionPredictor mMotionPredictor;         // this object's own update rate, and what to do with it
 
-    // extra data sent from the sim...currently only used for tree species info
-    U8* mData;
+    // extra data sent from the sim...currently only used for tree species info,
+    // which fits in the room this keeps in place
+    boost::container::small_vector<U8, 8> mData;
 
     LLPointer<LLViewerPartSourceScript>     mPartSourcep;   // Particle source associated with this object.
     LLAudioSourceVO* mAudioSourcep;

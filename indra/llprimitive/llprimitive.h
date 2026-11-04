@@ -36,6 +36,8 @@
 #include "lltextureentry.h"
 #include "llprimtexturelist.h"
 
+#include <boost/container/small_vector.hpp>
+
 // Moved to stdtypes.h --JC
 // typedef U8 LLPCode;
 class LLMessageSystem;
@@ -119,7 +121,35 @@ public:
     virtual bool unpack(LLDataPacker &dp) = 0;
     virtual bool operator==(const LLNetworkData& data) const = 0;
     virtual void copy(const LLNetworkData& data) = 0;
-    static bool isValid(U16 param_type, U32 size);
+    // Whether the size bytes at data are the size an extra parameter of the
+    // type is.
+    static bool isValid(U16 param_type, const U8* data, size_t size);
+
+    // The number of slots an object keeps its extra parameters in, one for
+    // each type up to PARAMS_MAX.
+    static constexpr S32 SLOT_COUNT = PARAMS_MAX >> 4;
+    // The slot an object keeps a type of extra parameter in, or -1 for a type
+    // with no slot of its own.
+    static S32 slotOf(U16 param_type);
+
+    // The extra parameters an object update holds: each one's type, and where
+    // its data lies in mBytes. An update's few parameters of a few dozen
+    // bytes each fit in the space each keeps in place.
+    struct Entries
+    {
+        struct Entry
+        {
+            U16 mType = 0;
+            U32 mOffset = 0;
+            U32 mSize = 0;
+        };
+        boost::container::small_vector<Entry, 16> mEntries;
+        boost::container::small_vector<U8, 1024> mBytes;
+    };
+    // Unpacks the extra parameters an object update holds: their count, then
+    // each one's type and data. False where the count or an entry runs past
+    // the data, which leaves entries empty.
+    static bool unpackEntries(LLDataPacker& dp, Entries& entries);
 };
 
 extern const F32 LIGHT_MIN_RADIUS;
@@ -418,9 +448,6 @@ struct LLTEContents
     U8     glow[MAX_TES];
     LLMaterialID material_ids[MAX_TES];
 
-    static const U32 MAX_TE_BUFFER = 4096;
-    U8 packed_buffer[MAX_TE_BUFFER];
-
     U32 size;
     U32 face_count;
 };
@@ -498,7 +525,10 @@ public:
     LLMaterialPtr getTEMaterialParams(const U8 index);
 
     void copyTEs(const LLPrimitive *primitive);
-    S32 packTEField(U8 *cur_ptr, U8 *data_ptr, U8 data_size, U8 last_face_index, EMsgVariableType type) const;
+    void packTEField(std::vector<U8>& packed, const U8 *data_ptr, U8 data_size, U8 last_face_index, EMsgVariableType type) const;
+    // The texture entries of the first LLTEContents::MAX_TES faces, packed as
+    // a TextureEntry field holds them.
+    std::vector<U8> packTEEntry() const;
     bool packTEMessage(LLMessageSystem *mesgsys) const;
     bool packTEMessage(LLDataPacker &dp) const;
     S32 unpackTEMessage(LLMessageSystem* mesgsys, char const* block_name, const S32 block_num); // Variable num of blocks
@@ -507,7 +537,28 @@ public:
     // Same as above, but usable before an instance exists to derive the face count from
     // (e.g. decoding a message for an object that hasn't been created yet).
     static S32 parseTEMessage(LLMessageSystem* mesgsys, char const* block_name, const S32 block_num, LLTEContents& tec, U8 face_count);
+    // Unpacks into data, in place of what it held, the data a compressed
+    // object update holds for its object where flags, the update's special
+    // code, has it: a tree's one byte for 0x2, or a scratch pad for 0x1, which
+    // takes the bytes its data holds whatever the size before it names. Empty
+    // for neither, or where the data is cut short.
+    static void unpackCompressedData(LLDataPacker& dp, U32 flags, boost::container::small_vector_base<U8>& data);
+
+    // A texture entry as a packer or a TextureEntry field holds it, with room
+    // in place for as long as the packers write for the most faces they pack,
+    // and the zero the parse puts after it.
+    static constexpr size_t TE_INLINE_BYTES = 4608;
+    typedef boost::container::small_vector<U8, TE_INLINE_BYTES> te_bytes_t;
+
+    // Applies a texture entry read whole from a packer, without the size
+    // before it, as unpackTEMessage applies one it reads.
+    S32 unpackTEEntry(boost::container::small_vector_base<U8>& packed);
+
     S32 applyParsedTEMessage(LLTEContents& tec);
+
+    // Whether the primitive keeps a texture entry it unpacked, whose values
+    // the faces it gains take (setNumTEs).
+    bool hasTEEntry() const { return !mTEEntry.empty(); }
 
 #ifdef CHECK_FOR_FINITE
     inline void setPosition(const LLVector3& pos);
@@ -587,6 +638,11 @@ public:
 private:
     void updateNumBumpmap(const U8 index, const U8 bump);
 
+    // Applies the faces of tec from first_face on.
+    S32 applyParsedTEFaces(LLTEContents& tec, U32 first_face);
+    // The faces from first_face on take the values mTEEntry gives them.
+    void applyTEEntry(U8 first_face);
+
 protected:
     LLPCode             mPrimitiveCode;     // Primitive code
     LLVector3           mVelocity;          // how fast are we moving?
@@ -598,6 +654,11 @@ protected:
     U8                  mNumTEs;            // # of faces on the primitve
     U8                  mNumBumpmapTEs;     // number of bumpmap TEs.
     U32                 mMiscFlags;         // home for misc bools
+
+    // The texture entry last unpacked, as it arrived. It gives a value for
+    // every face, so a face the primitive gains later, as a mesh's asset
+    // loads, takes its own value from it rather than the last face's.
+    std::vector<U8>     mTEEntry;
 
 public:
     static LLVolumeMgr* sVolumeManager;

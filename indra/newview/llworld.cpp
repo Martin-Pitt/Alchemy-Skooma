@@ -695,6 +695,13 @@ void LLWorld::updateRegions(F32 max_update_time)
     // Before the regions' updates, since it may remove one.
     mRegionRetirement.update();
 
+    // The cache removals object updates asked for, which let go of regions'
+    // cached objects, before the regions' updates walk them.
+    if (LLVOCache::instanceExists())
+    {
+        LLVOCache::getInstance()->removeRequestedEntries();
+    }
+
     LLViewerRegion::calcNewObjectCreationThrottle();
     if(LLViewerRegion::isNewObjectCreationThrottleDisabled())
     {
@@ -1094,7 +1101,11 @@ void process_disable_simulator(LLMessageSystem *mesgsys, void **user_data)
     LLHost host = mesgsys->getSender();
 
     //LL_INFOS() << "Disabling simulator with message from " << host << LL_ENDL;
-    LLWorld::getInstance()->removeRegion(host);
+    // A region retired before its simulator disabled it is gone already, and only its circuit is left.
+    if (LLWorld::getInstance()->getRegion(host))
+    {
+        LLWorld::getInstance()->removeRegion(host);
+    }
 
     mesgsys->disableCircuit(host);
 }

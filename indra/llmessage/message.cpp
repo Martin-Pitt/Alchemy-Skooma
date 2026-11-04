@@ -81,6 +81,9 @@
 #include "llmessagelog.h"
 #include "llpounceable.h"
 #include "llproxy.h"
+#if AL_SESSION_CAPTURE
+#include "alsessioncapture.h"
+#endif
 
 // Constants
 //const char* MESSAGE_LOG_FILENAME = "message.log";
@@ -521,12 +524,13 @@ bool LLMessageSystem::checkMessages(LockMessageChecker&, S64 frame_count,
         S32 num_acks = 0;
         S32 true_rcv_size = 0;
         bool recv_packet_id_checked = false;
+        bool recv_acked = false;
 
         U8* buffer = mTrueReceiveBuffer;
 
         if (!faked_message)
         {
-            mTrueReceiveSize = receivePacketOrDrop((char *)mTrueReceiveBuffer, recv_packet_id_checked);
+            mTrueReceiveSize = receivePacketOrDrop((char *)mTrueReceiveBuffer, recv_packet_id_checked, recv_acked);
             receive_size = mTrueReceiveSize;
         }
         else
@@ -604,6 +608,13 @@ bool LLMessageSystem::checkMessages(LockMessageChecker&, S64 frame_count,
                 mCurrentRecvPacketID = ntohl(packet_id_net);
             }
             host = getSender();
+#if AL_SESSION_CAPTURE
+            if (ALSessionCapture::capturing())
+            {
+                ALSessionCapture::instance().recordPacket(false, host, faked_message ? fake_buffer : mTrueReceiveBuffer,
+                                                          mTrueReceiveSize, buffer, receive_size, faked_message);
+            }
+#endif
 
             const bool resetPacketId = true;
             cdp = findCircuit(host, resetPacketId);
@@ -639,46 +650,40 @@ bool LLMessageSystem::checkMessages(LockMessageChecker&, S64 frame_count,
             if (buffer[0] & LL_RESENT_FLAG)
             {
                 recv_resent = true;
-                if (cdp && cdp->isDuplicateResend(mCurrentRecvPacketID))
-                {
-                    // We need to ACK here to suppress
-                    // further resends of packets we've
-                    // already seen.
-                    if (recv_reliable)
-                    {
-                        //mAckList.addData(new LLPacketAck(host, mCurrentRecvPacketID));
-                        // ***************************************
-                        // TESTING CODE
-                        //if(mCircuitInfo.mCurrentCircuit->mHost != host)
-                        //{
-                        //  LL_WARNS("Messaging") << "DISCARDED PACKET HOST MISMATCH! HOST: "
-                        //          << host << " CIRCUIT: "
-                        //          << mCircuitInfo.mCurrentCircuit->mHost
-                        //          << LL_ENDL;
-                        //}
-                        // ***************************************
-                        //mCircuitInfo.mCurrentCircuit->mAcks.put(mCurrentRecvPacketID);
-                        cdp->collectRAck(mCurrentRecvPacketID);
-                    }
+            }
 
-                    LL_DEBUGS("Messaging") << "Discarding duplicate resend from " << host << LL_ENDL;
-                    if(mVerboseLog)
-                    {
-                        std::ostringstream str;
-                        str << "MSG: <- " << host;
-                        std::string tbuf;
-                        tbuf = llformat( "\t%6d\t%6d\t%6d ", receive_size, (mIncomingCompressedSize ? mIncomingCompressedSize : receive_size), mCurrentRecvPacketID);
-                        str << tbuf << "(unknown)"
-                            << (recv_reliable ? " reliable" : "")
-                            << " resent "
-                            << ((num_acks > 0) ? "acks" : "")
-                            << " DISCARD DUPLICATE";
-                        LL_INFOS("Messaging") << str.str() << LL_ENDL;
-                    }
-                    mPacketsIn++;
-                    valid_packet = false;
-                    continue;
+            // A reliable packet the network delivers twice comes the second
+            // time without the resent flag, and is as much a duplicate as a
+            // resend. Only reliable packets' numbers are recorded, so an
+            // unreliable one is not looked up.
+            if (recv_reliable && cdp && cdp->checkDuplicate(mCurrentRecvPacketID, recv_resent))
+            {
+                // We need to ACK here to suppress
+                // further resends of packets we've
+                // already seen, unless this copy was
+                // acked as it came in.
+                if (!recv_acked)
+                {
+                    cdp->collectRAck(mCurrentRecvPacketID);
                 }
+
+                LL_DEBUGS("Messaging") << "Discarding duplicate from " << host << LL_ENDL;
+                if(mVerboseLog)
+                {
+                    std::ostringstream str;
+                    str << "MSG: <- " << host;
+                    std::string tbuf;
+                    tbuf = llformat( "\t%6d\t%6d\t%6d ", receive_size, (mIncomingCompressedSize ? mIncomingCompressedSize : receive_size), mCurrentRecvPacketID);
+                    str << tbuf << "(unknown)"
+                        << " reliable"
+                        << (recv_resent ? " resent " : " ")
+                        << ((num_acks > 0) ? "acks" : "")
+                        << " DISCARD DUPLICATE";
+                    LL_INFOS("Messaging") << str.str() << LL_ENDL;
+                }
+                mPacketsIn++;
+                valid_packet = false;
+                continue;
             }
 
             // UseCircuitCode can be a valid, off-circuit packet.
@@ -741,8 +746,12 @@ bool LLMessageSystem::checkMessages(LockMessageChecker&, S64 frame_count,
                     // Add to the recently received list for duplicate suppression
                     cdp->mRecentlyReceivedReliablePackets[mCurrentRecvPacketID] = getMessageTimeUsecs();
 
-                    // Put it onto the list of packets to be acked
-                    cdp->collectRAck(mCurrentRecvPacketID);
+                    // Put it onto the list of packets to be acked, unless
+                    // it was acked as it came in
+                    if (!recv_acked)
+                    {
+                        cdp->collectRAck(mCurrentRecvPacketID);
+                    }
                     mReliablePacketsIn++;
                 }
             }
@@ -975,9 +984,10 @@ void LLMessageSystem::setNetImpairment(F32 loss_percent, F32 burst_packets, F32 
 }
 #endif
 
-S32 LLMessageSystem::receivePacketOrDrop(char* datap, bool& packet_id_already_checked)
+S32 LLMessageSystem::receivePacketOrDrop(char* datap, bool& packet_id_already_checked, bool& already_acked)
 {
     packet_id_already_checked = false;
+    already_acked = false;
 
 #if AL_NET_IMPAIRMENT
     // Steady-state traffic arrives here, one direct socket read per call. The drain that feeds the
@@ -1005,6 +1015,7 @@ S32 LLMessageSystem::receivePacketOrDrop(char* datap, bool& packet_id_already_ch
         mLastSender      = pkt.getHost();
         mLastReceivingIF = pkt.getReceivingInterface();
         packet_id_already_checked = pkt.getPacketIDChecked();
+        already_acked = pkt.getAcked();
 
         if (packet_size > 0)
         {
@@ -1158,26 +1169,6 @@ S32 LLMessageSystem::bufferInboundPacket()
             }
         }
 
-        if (cdp)
-        {
-            // ACK inbound reliable packet ASAP
-            if ((data[0] & LL_RELIABLE_FLAG))
-            {
-                cdp->collectRAck(recv_packet_id);
-            }
-
-            // Check packet sequencing here, in true socket-arrival order, before
-            // this packet is sorted into the high/low priority inbound queue.
-            // Skip genuine duplicate resends, same as checkMessages()/logValidMsg()
-            // would do further downstream.
-            bool recv_resent = (data[0] & LL_RESENT_FLAG) != 0;
-            if (!recv_resent || !cdp->isDuplicateResend(recv_packet_id))
-            {
-                cdp->checkPacketInID(recv_packet_id, recv_resent);
-                pkt.setPacketIDChecked(true);
-            }
-        }
-
         auto enqueue = [this](const LLPacketBuffer& buffered)
         {
             if (isHighPriorityMessage(buffered))
@@ -1190,13 +1181,54 @@ S32 LLMessageSystem::bufferInboundPacket()
             }
         };
 
+        auto take = [&](LLPacketBuffer& arrived)
+        {
+            // A queue full at its ceiling has no room for the packet, which is
+            // left out as the network might have dropped it: neither acked nor
+            // its number recorded, so that its sender sends it again.
+            const bool has_room = (isHighPriorityMessage(arrived) ? mHighPriorityInbound : mLowPriorityInbound).hasRoom();
+
+            if (cdp)
+            {
+                // Skip duplicates of reliable packets already handled, marked resent
+                // or not, same as checkMessages()/logValidMsg() would do further
+                // downstream.
+                const bool recv_resent = (data[0] & LL_RESENT_FLAG) != 0;
+                const bool recv_reliable = (data[0] & LL_RELIABLE_FLAG) != 0;
+                const bool duplicate = recv_reliable && cdp->checkDuplicate(recv_packet_id, recv_resent);
+
+                // ACK inbound reliable packet ASAP, so its sender stops resending
+                // it while it waits in the queue, whatever checkMessages() makes
+                // of it, which does not ack it again. A copy of a packet already
+                // taken is acked with no room for it, as it would be with room.
+                if (recv_reliable && (has_room || duplicate))
+                {
+                    cdp->collectRAck(recv_packet_id);
+                    arrived.setAcked(true);
+                }
+
+                // Check packet sequencing here, in true socket-arrival order, before
+                // this packet is sorted into the high/low priority inbound queue.
+                if (has_room && !duplicate)
+                {
+                    cdp->checkPacketInID(recv_packet_id, recv_resent);
+                    arrived.setPacketIDChecked(true);
+                }
+            }
+
+            enqueue(arrived);
+        };
+
 #if AL_NET_IMPAIRMENT
         std::vector<LLPacketBuffer> released;
         mNetImpairment.advance(released);
 
+        // A packet held back arrives when it is released: checkMessages() acks
+        // it and checks its number as it reads it, and a queue with no room for
+        // it then leaves it out unacked.
         if (!mNetImpairment.hold(pkt))
         {
-            enqueue(pkt);
+            take(pkt);
         }
 
         // Anything released rejoins *behind* the packet that just arrived, which is what puts it
@@ -1206,7 +1238,7 @@ S32 LLMessageSystem::bufferInboundPacket()
             enqueue(late);
         }
 #else
-        enqueue(pkt);
+        take(pkt);
 #endif
     }
 
@@ -1651,9 +1683,10 @@ S32 LLMessageSystem::sendMessage(const LLHost &host)
         mReliablePacketsOut++;
     }
 
-    // tack packet acks onto the end of this message; signed math so an
-    // over-MTU payload yields a negative count instead of wrapping huge
-    S32 space_left = (MTUBYTES - (S32)buffer_length) / (S32)sizeof(TPACKETID); // space left for packet ids
+    // tack packet acks onto the end of this message, and the byte that counts
+    // them; signed math so an over-MTU payload yields a negative count
+    // instead of wrapping huge
+    S32 space_left = (MTUBYTES - (S32)buffer_length - 1) / (S32)sizeof(TPACKETID); // space left for packet ids
     S32 ack_count = (S32)cdp->mAcks.size();
     bool is_ack_appended = false;
     std::vector<TPACKETID> acks;
@@ -1708,6 +1741,14 @@ S32 LLMessageSystem::sendMessage(const LLHost &host)
         buf_ptr[buffer_length++] = count;
         is_ack_appended = true;
     }
+
+#if AL_SESSION_CAPTURE
+    if (ALSessionCapture::capturing())
+    {
+        ALSessionCapture::instance().recordPacket(true, host, buf_ptr, (S32)buffer_length, (const U8*)mSendBuffer,
+                                                  mSendSize, false);
+    }
+#endif
 
     bool success;
     success = sendPacketToSocket((char *)buf_ptr, buffer_length, host);
@@ -1976,6 +2017,19 @@ void LLMessageSystem::enableCircuit(const LLHost &host, bool trusted)
     cdp->setTrusted(trusted);
 }
 
+void LLMessageSystem::closeCircuit(const LLHost &host)
+{
+    // Sent once, unreliably: the circuit is disabled at once, so nothing
+    // waits on an ack, and where the packet is lost the other end times the
+    // circuit out as it would have.
+    if (mCircuitInfo.findCircuit(host))
+    {
+        newMessageFast(_PREHASH_CloseCircuit);
+        sendMessage(host);
+    }
+    disableCircuit(host);
+}
+
 void LLMessageSystem::disableCircuit(const LLHost &host)
 {
     LL_INFOS("Messaging") << "LLMessageSystem::disableCircuit for " << host << LL_ENDL;
@@ -2010,16 +2064,11 @@ void LLMessageSystem::disableCircuit(const LLHost &host)
             LL_INFOS("Messaging") << "Host " << LLHost(old_ip, old_port) << " circuit " << code << " removed from lookup table" << LL_ENDL;
             gMessageSystem->mIPPortToCircuitCode.erase(ip_port);
         }
-        mCircuitInfo.removeCircuitData(host);
-    }
-    else
-    {
-        // Sigh, since we can open circuits which don't have circuit
-        // codes, it's possible for this to happen...
-
-        LL_WARNS("Messaging") << "Couldn't find circuit code for " << host << LL_ENDL;
     }
 
+    // A circuit opened without a code, as the viewer opens every circuit to
+    // a simulator, goes too.
+    mCircuitInfo.removeCircuitData(host);
 }
 
 
