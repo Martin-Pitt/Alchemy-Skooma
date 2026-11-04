@@ -1287,14 +1287,18 @@ void SKNetMap::drawPings()
     gGL.end();
 }
 
-F32 SKNetMap::vehicleGrow() const
+F32 SKNetMap::vehicleGrow(const SKMapPeople::Vehicle& v) const
 {
     // The slider's factor once zoomed out past VEHICLE_GROW_FULL_M, eased in from true size at VEHICLE_GROW_FROM_M.
     static LLCachedControl<F32> grow(gSavedSettings, "SKMapVehicleGrow", 4.f);
     constexpr F32 VEHICLE_GROW_FROM_M = 128.f;
     constexpr F32 VEHICLE_GROW_FULL_M = 512.f;
+    // Growing is for small craft that would vanish zoomed out: none is grown past this length, a fleetship not at all.
+    constexpr F32 VEHICLE_GROW_CAP_M = 48.f;
     const F32 t = llclamp(logf(mView.span() / VEHICLE_GROW_FROM_M) / logf(VEHICLE_GROW_FULL_M / VEHICLE_GROW_FROM_M), 0.f, 1.f);
-    return lerp(1.f, llclamp(static_cast<F32>(grow), 1.f, 6.f), t * t * (3.f - 2.f * t));
+    const F32 longest = llmax(llmax(v.mMax.mV[VX] - v.mMin.mV[VX], v.mMax.mV[VY] - v.mMin.mV[VY]), 0.01f);
+    const F32 most = llclamp(VEHICLE_GROW_CAP_M / longest, 1.f, llclamp(static_cast<F32>(grow), 1.f, 6.f));
+    return lerp(1.f, most, t * t * (3.f - 2.f * t));
 }
 
 void SKNetMap::drawVehicles()
@@ -1316,7 +1320,7 @@ void SKNetMap::drawVehicles()
             continue;
         }
         drew[i] = true;
-        const F32 grow = vehicleGrow();
+        const F32 grow = vehicleGrow(v);
         gGL.blendFunc(LLRender::BF_ONE, LLRender::BF_ONE_MINUS_SOURCE_ALPHA);
         skmapdraw::colour(skmapdraw::vehicleHull(v.mLook));
         for (const skmapdraw::GlyphQuad& q : quads)
@@ -1340,7 +1344,7 @@ void SKNetMap::drawVehicles()
     {
         const SKMapPeople::Vehicle& v = vehicles[i];
         // The linkset's box at its live heading, unless its glyph drew: hull, and a nose tick at its front.
-        const F32 grow = vehicleGrow();
+        const F32 grow = vehicleGrow(v);
         auto at = [&](F32 x, F32 y) {
             const LLVector3 p = LLVector3(x * grow, y * grow, 0.f) * v.mRot;
             return mView.toWidget(v.mPos + LLVector3d(p.mV[VX], p.mV[VY], 0.0));
