@@ -138,6 +138,9 @@
 #include "alsanitizer.h"
 #include "alscriptstudio.h"
 #include "alxmlmergelog.h"
+#if AL_SESSION_CAPTURE
+#include "alobjectcapture.h"
+#endif
 #include "lldiriterator.h"
 #include "llexperiencecache.h"
 #include "llimagej2c.h"
@@ -892,6 +895,14 @@ bool LLAppViewer::init()
     mAppCoreHttp.init();
 
     LL_INFOS("InitInfo") << "LLCore::Http initialized." << LL_ENDL ;
+
+#if AL_SESSION_CAPTURE
+    // The GPU benchmark child records nothing: the session is its parent's.
+    if (!gGPUBenchmarkMode)
+    {
+        ALObjectCapture::start();
+    }
+#endif
 
     LLMachineID::init();
 
@@ -6572,6 +6583,10 @@ void LLAppViewer::disconnectViewer()
     // Save snapshot for next time, if we made it through initialization
 
     LL_INFOS() << "Disconnecting viewer!" << LL_ENDL;
+
+#if AL_SESSION_CAPTURE
+    ALObjectCapture::snapshot("logout");
+#endif
 
     // Dump our frame statistics
 
