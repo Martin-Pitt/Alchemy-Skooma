@@ -32,6 +32,7 @@
 #include "llviewerfloaterreg.h"
 
 #include "ao.h"
+#include "alapplinks.h"
 #include "alchatbar.h"
 #include "skfloaterlocalchat.h" // <SK:Nexii> Modern local chat
 // [SL:KB] - Patch: World-Derender | Checked: Catznip-3.2
@@ -235,8 +236,6 @@ public:
             return true; // will fail silently
         }
 
-        std::string fl_name = params[0].asString();
-
         // External browsers explicitly ask user about opening links
         // so treat "external" same as "clicked" in this case,
         // despite it being treated as untrusted.
@@ -267,7 +266,7 @@ public:
                 "upload_sound",
                 "bulk_upload"
             };
-            return std::find(blacklist_clicked.begin(), blacklist_clicked.end(), fl_name) == blacklist_clicked.end();
+            return !ALAppLinks::floaterNameIn(params, blacklist_clicked);
         }
         else
         {
@@ -317,7 +316,7 @@ public:
                 "bulk_upload",
                 "slapp_test"
             };
-            return std::find(blacklist_untrusted.begin(), blacklist_untrusted.end(), fl_name) == blacklist_untrusted.end();
+            return !ALAppLinks::floaterNameIn(params, blacklist_untrusted);
         }
 
 
@@ -335,7 +334,7 @@ public:
             return false;
         }
 
-        const std::string floater_name = LLURI::unescape(params[0].asString());
+        const std::string floater_name = ALAppLinks::floaterName(params);
         LLSD key = query_map;
         if (floater_name == FLOATER_PROFILE)
         {
