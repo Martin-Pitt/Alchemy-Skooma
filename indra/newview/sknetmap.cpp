@@ -1294,7 +1294,7 @@ F32 SKNetMap::vehicleGrow(const SKMapPeople::Vehicle& v) const
     constexpr F32 VEHICLE_GROW_FROM_M = 128.f;
     constexpr F32 VEHICLE_GROW_FULL_M = 512.f;
     // Growing is for small craft that would vanish zoomed out: none is grown past this length, a fleetship not at all.
-    constexpr F32 VEHICLE_GROW_CAP_M = 48.f;
+    constexpr F32 VEHICLE_GROW_CAP_M = 20.f;
     const F32 t = llclamp(logf(mView.span() / VEHICLE_GROW_FROM_M) / logf(VEHICLE_GROW_FULL_M / VEHICLE_GROW_FROM_M), 0.f, 1.f);
     const F32 longest = llmax(llmax(v.mMax.mV[VX] - v.mMin.mV[VX], v.mMax.mV[VY] - v.mMin.mV[VY]), 0.01f);
     const F32 most = llclamp(VEHICLE_GROW_CAP_M / longest, 1.f, llclamp(static_cast<F32>(grow), 1.f, 6.f));
