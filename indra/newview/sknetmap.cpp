@@ -1094,7 +1094,10 @@ void SKNetMap::drawSelf()
     else if (!gAgentCamera.cameraMouselook())
     {
         // Out of mouselook the camera's facing is not ours, so a triangle shows where the avatar faces.
-        const LLVector3 facing = gAgent.getAtAxis();
+        // Seated, the agent frame is the seat's; the avatar's render rotation is the world's, turning with the vehicle.
+        const LLVector3 facing = isAgentAvatarValid() && gAgentAvatarp->isSitting()
+                                     ? LLVector3::x_axis * gAgentAvatarp->getRenderRotation()
+                                     : gAgent.getAtAxis();
         LLVector2 ahead = mView.toWidgetOffset(facing.mV[VX], facing.mV[VY]);
         if (ahead.normVec() > 1e-6f)
         {
