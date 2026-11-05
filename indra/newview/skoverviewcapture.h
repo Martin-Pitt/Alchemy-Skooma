@@ -186,11 +186,12 @@ public:
 
     /// Renders the camera view for this frame: the cut, the circles, the movers and the pick. False when it could not.
     bool renderView(const skoverview::ViewShotParams& params);
-    /// Draws the last rendered view over rect (window pixels) of the bound target, blurred toward its top and bottom
-    /// over tilt_px; once a render, false when there is none.
+    /// Draws the view renderView rendered this frame over rect (window pixels) of the bound target, blurred toward its
+    /// top and bottom over tilt_px; once a render, false when there is none. A render it does not follow in the same
+    /// frame is not drawn.
     bool compositeView(const LLRect& rect, F32 tilt_px);
-    /// Whether a rendered view's camera and viewport are there for picks.
-    bool viewPickable() const { return mViewPickable; }
+    /// Whether the view rendered this frame or the last, so its camera and viewport are there for picks.
+    bool viewPickable() const;
     const LLMatrix4a& viewMatrix() const { return mViewView; }
     const LLMatrix4a& projMatrix() const { return mViewProj; }
     /// Window pixels: x, y, width, height.

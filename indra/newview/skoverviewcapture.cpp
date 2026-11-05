@@ -309,6 +309,11 @@ SKOverviewCapture::~SKOverviewCapture()
 
 void SKOverviewCapture::onFrame()
 {
+    // A view that closed without saying so, as on a teleport or a lost context, leaves the census at its usual pace.
+    if (!view_shown_now() && SKWorldCensus::instanceExists() && SKWorldCensus::instance().slowCadence())
+    {
+        SKWorldCensus::instance().setSlowCadence(false);
+    }
     // The census is kept only for maps or a camera view; the setting alone draws nothing.
     if (!mapsWanted() && !viewWanted())
     {
@@ -361,6 +366,17 @@ void SKOverviewCapture::releaseGL()
     mViewKey.mValid = false;
     mWorkValid = false;
     mGLFailed = false;
+    // The shown frame's depth went with the targets, and so did every read of it.
+    mSceneDepth = nullptr;
+    mPicksInFlight.clear();
+    mPick = PickSample();
+    mViewReady = false;
+    mViewPickable = false;
+}
+
+bool SKOverviewCapture::viewPickable() const
+{
+    return mViewPickable && LLFrameTimer::getFrameCount() - mViewFrame <= 1;
 }
 
 void SKOverviewCapture::updateDemand(bool wanted)
@@ -2028,6 +2044,7 @@ bool SKOverviewCapture::renderView(const skoverview::ViewShotParams& params)
 {
     LL_PROFILE_ZONE_SCOPED;
     mViewReady = false;
+    mViewPickable = false;
     const S32 vx = params.mViewport[0], vy = params.mViewport[1], vw = params.mViewport[2], vh = params.mViewport[3];
     if (vw < 16 || vh < 16)
     {
@@ -2281,6 +2298,11 @@ bool SKOverviewCapture::groundAt(const LLVector2& at, LLVector3d& world) const
 
 bool SKOverviewCapture::compositeView(const LLRect& rect, F32 tilt_px)
 {
+    // Only this frame's render: an earlier one's camera and viewport may have been taken since.
+    if (mViewReady && mViewFrame != LLFrameTimer::getFrameCount())
+    {
+        mViewReady = false;
+    }
     if (!mViewReady || !sComposite.mProgramObject || !sViewResolved.isComplete())
     {
         LL_WARNS_ONCE("SKOverview") << "camera view composite skipped: rendered " << mViewReady << ", shader "
