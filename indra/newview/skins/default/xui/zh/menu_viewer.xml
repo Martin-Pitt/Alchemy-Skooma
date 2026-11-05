@@ -257,7 +257,7 @@
 			<menu_item_check label="法線" name="Normals"/>
 			<menu_item_check label="八叉樹" name="Octree"/>
 			<menu_item_check label="陰影平截頭體" name="Shadow Frusta"/>
-			<menu_item_check label="物理形狀" name="Physics Shapes"/>
+			<menu label="物理形狀" name="Physics Shapes"/>
 			<menu_item_check label="遮蔽" name="Occlusion"/>
 			<menu_item_check label="呈像批次" name="Render Batches"/>
 			<menu_item_check label="更新類型" name="Update Type"/>
