@@ -95,10 +95,12 @@ namespace skoverview
         F32 mDrawDistance = 256.f;  ///< how far past the centre the census is culled
         LLVector3d mCentre;         ///< global: the fade and the cut's priorities follow it
         S32 mViewport[4] = {};      ///< window pixels: x, y, width, height
+        S32 mCursor[2] = {};        ///< the cursor in window pixels, as mViewport, for the pick
+        bool mPick = false;         ///< read the shown frame's depth under mCursor, for groundAt
         std::vector<Occupant> mOccupants;
         DissolveParams mDissolve;
 
-        /// The viewer camera and the GL viewport, centred on centre.
+        /// The viewer camera, the GL viewport and the window's cursor, centred on centre.
         static ViewShotParams fromViewerCamera(const LLVector3d& centre);
     };
 
@@ -265,8 +267,8 @@ private:
         U32 mFrame = 0;             ///< the probes' frame it was read in
         bool mValid = false;
     };
-    /// Reads this frame's texel under the cursor, and takes in the ones that landed.
-    void updatePick();
+    /// Reads this frame's texel under the shot's cursor, if it asks, and takes in the ones that landed.
+    void updatePick(const skoverview::ViewShotParams& params);
     std::vector<PickSample> mPicksInFlight;
     PickSample mPick;               ///< the newest landed
     /// How picks were answered over a second, for the log.

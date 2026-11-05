@@ -460,6 +460,10 @@ skoverview::ViewShotParams skoverview::ViewShotParams::fromViewerCamera(const LL
     params.mDrawDistance = camera->getFar();
     params.mCentre = centre;
     std::copy(std::begin(gGLViewport), std::end(gGLViewport), params.mViewport);
+    const LLVector2 scale = gViewerWindow->getDisplayScale();
+    params.mCursor[0] = (S32)std::floor(gViewerWindow->getCurrentMouseX() * scale.mV[VX]);
+    params.mCursor[1] = (S32)std::floor(gViewerWindow->getCurrentMouseY() * scale.mV[VY]);
+    params.mPick = true;
     return params;
 }
 
@@ -2177,7 +2181,7 @@ bool SKOverviewCapture::renderView(const skoverview::ViewShotParams& params)
     mViewViewport[1] = vy;
     mViewViewport[2] = vw;
     mViewViewport[3] = vh;
-    updatePick();
+    updatePick(params);
     mProbes.endFrame();
     mViewReady = true;
     mViewPickable = true;
@@ -2187,7 +2191,7 @@ bool SKOverviewCapture::renderView(const skoverview::ViewShotParams& params)
     return true;
 }
 
-void SKOverviewCapture::updatePick()
+void SKOverviewCapture::updatePick(const skoverview::ViewShotParams& params)
 {
     // The texels read in earlier frames, oldest first: the newest that landed is the one a pick reads.
     for (auto it = mPicksInFlight.begin(); it != mPicksInFlight.end();)
@@ -2207,10 +2211,9 @@ void SKOverviewCapture::updatePick()
         it = mPicksInFlight.erase(it);
     }
     // This frame's: the shown frame's depth (the static capture, or the work target with the circles and the movers).
-    const LLVector2 scale = gViewerWindow->getDisplayScale();
-    const S32 x = (S32)std::floor(gViewerWindow->getCurrentMouseX() * scale.mV[VX] - mViewViewport[0]);
-    const S32 y = (S32)std::floor(gViewerWindow->getCurrentMouseY() * scale.mV[VY] - mViewViewport[1]);
-    if (!mSceneDepth || mPicksInFlight.size() >= 4 || !mProbes.readDepth(*mSceneDepth, x, y))
+    const S32 x = params.mCursor[0] - mViewViewport[0];
+    const S32 y = params.mCursor[1] - mViewViewport[1];
+    if (!params.mPick || !mSceneDepth || mPicksInFlight.size() >= 4 || !mProbes.readDepth(*mSceneDepth, x, y))
     {
         return;
     }
