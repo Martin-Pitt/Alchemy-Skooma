@@ -83,7 +83,16 @@ namespace
     const F64 MAPS_WANTED_S = 2.0;  // the region maps keep capturing this long after a map last drew them
     F64 sMapsWantedAt = -1.0;
     F64 sViewWantedAt = -1.0;
+    bool sViewNoted = false;    // a view has been noted at all, so the frames below mean something
+    U32 sViewNotedFrame = 0;    // the frame a view was last noted in
+    U32 sViewNotedFrom = 0;     // the first frame of the run of frames it has been noted in, one after another
     F32 sViewReachM = 0.f;
+
+    // Whether a camera view was noted this frame or the last: shown now, not merely within the census's linger.
+    bool view_shown_now()
+    {
+        return sViewNoted && LLFrameTimer::getFrameCount() - sViewNotedFrame <= 1;
+    }
     skoverview::MapParams sMapParams;
 
     const F32 LEVEL_BELOW_M = 4.f;  // another region's map keeps the clusters reaching this far below the agent's floor
@@ -401,6 +410,13 @@ bool SKOverviewCapture::mapsWanted()
 void SKOverviewCapture::noteViewWanted()
 {
     sViewWantedAt = LLFrameTimer::getUptimeSeconds().value();
+    const U32 frame = LLFrameTimer::getFrameCount();
+    if (!sViewNoted || frame - sViewNotedFrame > 1)
+    {
+        sViewNotedFrom = frame;
+    }
+    sViewNotedFrame = frame;
+    sViewNoted = true;
 }
 
 // static
@@ -674,6 +690,14 @@ void SKOverviewCapture::cutHeights(const LLVector3d& at, F32 fallback_z, F32& fl
 
 void SKOverviewCapture::frame()
 {
+    // Once a frame, whether onFrame or a caller that hides the world runs it.
+    const U32 frame_no = LLFrameTimer::getFrameCount();
+    if (mFrameRan && mFrameNo == frame_no)
+    {
+        return;
+    }
+    mFrameRan = true;
+    mFrameNo = frame_no;
     if (gCubeSnapshot || !LLPipeline::sRenderDeferred || !gPipeline.shadersLoaded() || !gAgent.getRegion())
     {
         LL_INFOS_ONCE("SKOverview") << "overview waits: cube snapshot " << gCubeSnapshot << ", deferred "
@@ -692,8 +716,10 @@ void SKOverviewCapture::frame()
 
     if (mapsWanted())
     {
-        // A view rendered last frame works out the cut in its own render, which the maps then take.
-        if (LLFrameTimer::getFrameCount() - mViewFrame > 1)
+        // A view shown now works out the cut in its own render, which the maps then take: one that rendered last frame,
+        // or one just opened, whose render follows. Otherwise, a view that stopped rendering among them, they cut.
+        const bool view_cuts = view_shown_now() && (frame_no - mViewFrame <= 1 || sViewNotedFrom == frame_no);
+        if (!view_cuts)
         {
             // The cut's roofs, rooms and columns are GPU probes, so the maps run a probe frame of their own.
             static LLCachedControl<U32> probe_people(gSavedSettings, "SKOverviewProbeBudget", 8);

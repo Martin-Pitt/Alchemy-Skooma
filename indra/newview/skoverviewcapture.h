@@ -146,7 +146,8 @@ public:
     /// A map drew the region maps this frame, styled by params: they are captured while one keeps asking.
     static void noteMapsWanted(const skoverview::MapParams& params);
     static bool mapsWanted();
-    /// A camera view is shown this frame: the census is kept round it while one keeps asking.
+    /// A camera view is shown this frame: the census is kept round it while one keeps asking. Noted before frame(), so
+    /// the maps take the view's cut rather than working out their own as well.
     static void noteViewWanted();
     static bool viewWanted();
     /// How far from the agent the camera view looks, metres: the census reaches that far, in 64 m steps.
@@ -154,8 +155,8 @@ public:
     /// Whether the world is hidden behind the camera view, so the census may scan slowly.
     static void setWorldHidden(bool hidden);
 
-    /// The per-frame work: the census demand and update, and the maps that are due. onFrame runs it while the world
-    /// is drawn; a caller that hides the world runs it itself before renderView.
+    /// The per-frame work: the census demand and update, and the maps that are due, once a frame however often it is
+    /// called. onFrame runs it while the world is drawn; a caller that hides the world runs it itself before renderView.
     void frame();
 
     /// A region's resolved map: it covers the region at mOrigin by mWidth metres.
@@ -302,6 +303,8 @@ private:
     U32 mClassMask = 0;     // the layers the region maps were last styled with
     bool mGLFailed = false;
     bool mDemanding = false;
+    bool mFrameRan = false;         ///< frame() has run, in mFrameNo
+    U32 mFrameNo = 0;
     LLMatrix4a mViewView;
     LLMatrix4a mViewProj;
     S32 mViewViewport[4] = {};
