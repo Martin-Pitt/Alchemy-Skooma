@@ -2657,6 +2657,11 @@ if(AL_BUILD_TESTS)
       tests/llvocache_test.cpp
       tests/lutcube_test.cpp
       tests/noise_test.cpp
+      tests/skoverviewcover_test.cpp # <SK:Nexii> overview capture: the cover verdicts
+      tests/skoverviewcuttable_test.cpp # <SK:Nexii> overview capture: the cut table
+      tests/skoverviewprobes_test.cpp # <SK:Nexii> overview capture: the view cut's probes
+      tests/skoverviewshaders_test.cpp # <SK:Nexii> overview capture: the shader permutations
+      tests/skoverviewslots_test.cpp # <SK:Nexii> overview capture: the census pages
     UNIT
       alagentlocationformat.cpp
       alapplinks.cpp
@@ -2734,7 +2739,11 @@ if(AL_BUILD_TESTS)
       llviewercontrollistener.cpp
       lutcube.cpp
       noise.cpp
-    LIBRARIES llui alscript ll::slua llxml ${test_libs}
+      skoverviewcover.cpp # <SK:Nexii> overview capture: the cover verdicts
+      skoverviewcuttable.cpp # <SK:Nexii> overview capture: the cut table
+      skoverviewprobes.cpp # <SK:Nexii> overview capture: the view cut's probes
+      skoverviewslots.cpp # <SK:Nexii> overview capture: the census pages
+    LIBRARIES llui alscript ll::slua llxml skcensus ${test_libs} # <SK:Nexii> overview capture: skcensus
     SUPPORT
       newview_test_fakes
       newview_test_settings
@@ -2765,7 +2774,15 @@ if(AL_BUILD_TESTS)
       tests/luminance_gl_test.cpp
       tests/objectskinblock_gl_test.cpp
       tests/shadowutil_gl_test.cpp
+      tests/skoverviewcuttable_gl_test.cpp # <SK:Nexii> overview capture: the cut table on the GPU
+      tests/skoverviewprobes_gl_test.cpp # <SK:Nexii> overview capture: the view cut's probes on the GPU
+      tests/skoverviewshaders_gl_test.cpp # <SK:Nexii> overview capture: the programs link
+      tests/skoverviewslots_gl_test.cpp # <SK:Nexii> overview capture: the census command list on the GPU
     BENCH_SOURCES tests/alcasfold_bench.cpp tests/aldof_bench.cpp tests/alssrhistory_bench.cpp
+    UNIT
+      skoverviewcuttable.cpp # <SK:Nexii> overview capture: the cut table
+      skoverviewprobes.cpp # <SK:Nexii> overview capture: the view cut's probes
+      skoverviewslots.cpp # <SK:Nexii> overview capture: the census pages
     LIBRARIES llrender
     SUPPORT llrender_test_checks llcommon_test_checks
     INCLUDES ${INDRA_SOURCE_DIR}/llprimitive ${INDRA_SOURCE_DIR}/alrender
