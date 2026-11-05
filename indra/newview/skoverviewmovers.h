@@ -43,8 +43,9 @@ class LLVolume;
 
 namespace skoverview
 {
-    /// How a vehicle is styled: its hull colour, or not drawn as a vehicle at all.
-    enum class VehicleLook : U8 { HIDDEN, CIVILIAN, ALLY, NEUTRAL };
+    /// How a vehicle is styled: not drawn as one at all, in the movers' colour, or in one of two hull colours whose
+    /// meaning the mover source picks.
+    enum class VehicleLook : U8 { HIDDEN, PLAIN, PRIMARY, SECONDARY };
 
     /// A linkset driven as a vehicle, at its live pose.
     struct Vehicle
@@ -53,7 +54,7 @@ namespace skoverview
         LLVector3d mPos;
         LLQuaternion mRot;
         LLVector3 mMin, mMax;               ///< the linkset's box in the root's frame
-        VehicleLook mLook = VehicleLook::CIVILIAN;
+        VehicleLook mLook = VehicleLook::PLAIN;
     };
 
     /// Who knows the vehicles and whose they are: the people layer above the overview registers one. Main thread.
@@ -71,9 +72,9 @@ namespace skoverview
 
 /// What moves: physical objects, objects the census saw move (keyframed motion among them), elevator cars, and
 /// vehicles. The static census leaves them all out. Vehicles are the mover source's own plus any moving linkset
-/// someone sits on or that sits on click, styled by the source; with no source every one is civilian. Every mover,
-/// vehicles included, is drawn from its rendered faces at its live pose and true size, whole, never cut by the floor
-/// cut; vehicles in the hull colour of their look. Main thread only.
+/// someone sits on or that sits on click, styled by the source; with no source every one is plain, drawn as any mover
+/// is. Every mover, vehicles included, is drawn from its rendered faces at its live pose and true size, whole, never
+/// cut by the floor cut; vehicles in the hull colour of their look. Main thread only.
 class SKOverviewMovers
 {
 public:

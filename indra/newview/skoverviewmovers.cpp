@@ -151,7 +151,7 @@ bool SKOverviewMovers::update()
             v.mRot = root->getRotation();
             v.mMin = root->getScale() * -0.5f;
             v.mMax = root->getScale() * 0.5f;
-            v.mLook = mSource ? mSource->lookOf(crew) : skoverview::VehicleLook::CIVILIAN;
+            v.mLook = mSource ? mSource->lookOf(crew) : skoverview::VehicleLook::PLAIN;
             if (v.mLook != skoverview::VehicleLook::HIDDEN)
             {
                 mVehicles.push_back(v);
@@ -168,9 +168,9 @@ bool SKOverviewMovers::update()
         {
             continue;
         }
-        const U8 code = v.mLook == skoverview::VehicleLook::ALLY    ? (U8)skoverview::CODE_VEH_ALLY
-                      : v.mLook == skoverview::VehicleLook::NEUTRAL ? (U8)skoverview::CODE_VEH_NEUTRAL
-                                                                    : (U8)skoverview::CODE_VEH_CIVIL;
+        const U8 code = v.mLook == skoverview::VehicleLook::PRIMARY   ? (U8)skoverview::CODE_VEH_PRIMARY
+                      : v.mLook == skoverview::VehicleLook::SECONDARY ? (U8)skoverview::CODE_VEH_SECONDARY
+                                                                      : (U8)skoverview::CODE_VEH_PLAIN;
         addParts(root, code, live);
     }
     // Parts the census found restless, each on its own: a door that keeps opening, not its whole building.

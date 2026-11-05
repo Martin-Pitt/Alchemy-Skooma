@@ -60,12 +60,12 @@ const int CODE_VEHICLE = 22;
 const int CODE_SECTION = 23;
 const int CODE_PLACEHOLDER = 24;
 const int CODE_MOVER = 25;
-const int CODE_VEH_CIVIL = 26;
-const int CODE_VEH_ALLY = 27;
-const int CODE_VEH_NEUTRAL = 28;
-const vec3 VEH_ALLY = vec3(0.31, 0.62, 0.67);      // the allied vehicle hull
-const vec3 VEH_NEUTRAL = vec3(0.55, 0.58, 0.61);   // and neutral (VEH_NEUTRAL_HULL)
-const vec3 MOVER_GREEN = vec3(0.31, 0.60, 0.35);   // the civilian vehicle hull
+const int CODE_VEH_PLAIN = 26;
+const int CODE_VEH_PRIMARY = 27;
+const int CODE_VEH_SECONDARY = 28;
+const vec3 VEH_PRIMARY = vec3(0.31, 0.62, 0.67);   // the first vehicle hull a mover source may pick
+const vec3 VEH_SECONDARY = vec3(0.55, 0.58, 0.61); // and the second
+const vec3 MOVER_GREEN = vec3(0.31, 0.60, 0.35);   // movers and plain vehicles
 const int CODE_TERRAIN = 255;
 
 // The style's knobs.
@@ -362,17 +362,17 @@ void main()
     {
         c = layerHighlit(MASK_LADDERS) ? mix(SLATE_WALL, LADDER_TINT, 0.6) : layerOn(MASK_LADDERS) ? SLATE_WALL * 1.12 : SLATE_WALL;
     }
-    else if (code == CODE_MOVER || code == CODE_VEH_CIVIL)
+    else if (code == CODE_MOVER || code == CODE_VEH_PLAIN)
     {
         c = MOVER_GREEN;
     }
-    else if (code == CODE_VEH_ALLY)
+    else if (code == CODE_VEH_PRIMARY)
     {
-        c = VEH_ALLY;
+        c = VEH_PRIMARY;
     }
-    else if (code == CODE_VEH_NEUTRAL)
+    else if (code == CODE_VEH_SECONDARY)
     {
-        c = VEH_NEUTRAL;
+        c = VEH_SECONDARY;
     }
     else if (code == CODE_PLACEHOLDER)
     {
