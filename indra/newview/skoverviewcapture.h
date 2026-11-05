@@ -307,6 +307,7 @@ private:
     S32 mViewViewport[4] = {};
     bool mViewReady = false;        ///< rendered this frame, for the composite
     bool mViewPickable = false;     ///< the view and viewport are a shown frame's, for picks
+    U32 mViewFrame = 0;             ///< the frame the view last rendered in
     LLVector3 mViewCentre;          // agent space
     F32 mViewReach = 0.f;
     F32 mViewShadeZ = 0.f;          ///< agent-space z the height colours are relative to: the agent's floor, eased

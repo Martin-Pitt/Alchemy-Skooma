@@ -692,10 +692,10 @@ void SKOverviewCapture::frame()
 
     if (mapsWanted())
     {
-        if (!viewWanted())
+        // A view rendered last frame works out the cut in its own render, which the maps then take.
+        if (LLFrameTimer::getFrameCount() - mViewFrame > 1)
         {
-            // The cut's roofs, rooms and columns are GPU probes, so the maps run a probe frame of their own; a camera
-            // view works out the cut in its own render, which the maps then take.
+            // The cut's roofs, rooms and columns are GPU probes, so the maps run a probe frame of their own.
             static LLCachedControl<U32> probe_people(gSavedSettings, "SKOverviewProbeBudget", 8);
             mProbes.beginFrame(sGeomId, llmax((U32)probe_people, 1u));
             updateCut(gAgent.getPositionGlobal(), sMapParams.mOccupants);
@@ -2138,6 +2138,7 @@ bool SKOverviewCapture::renderView(const skoverview::ViewShotParams& params)
     mProbes.endFrame();
     mViewReady = true;
     mViewPickable = true;
+    mViewFrame = LLFrameTimer::getFrameCount();
     LL_INFOS_ONCE("SKOverview") << "camera view rendered " << vw << "x" << vh << ", census tris " << mCensus.triangles()
                                 << LL_ENDL;
     return true;
