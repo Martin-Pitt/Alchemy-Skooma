@@ -3059,6 +3059,186 @@
             <key>Value</key>
             <real>96.0</real>
         </map>
+        <key>SKOverviewCensusRange</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres around the agent the census covers for the overview's region maps, so the neighbouring regions show their buildings.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>384.0</real>
+        </map>
+        <key>SKOverviewCutHeight</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres above the air cells' floor under the agent (or above the agent's feet where they have none) where the overview cuts the world, so ceilings and roofs above do not hide the floor.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>2.5</real>
+        </map>
+        <key>SKOverviewCutReleaseSeconds</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds the overview's cut must stay released before a cut or hidden building is drawn whole again; cutting applies at once.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.5</real>
+        </map>
+        <key>SKOverviewDebugView</key>
+        <map>
+            <key>Comment</key>
+            <string>Overview debug view: 0 off, 1 class codes as flat colours, 2 distance in 2 m bands, 3 normals, 4 which shading term fired (red occlusion, green crease, blue cut edge), 5 each part's own cut in the camera view (blue whole, magenta hidden, hue by cut height in 4 m bands, red the cut edge).</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKOverviewFarRefresh</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds between top-down captures of a region one region width beyond the neighbours, multiplied for each further width.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>30.0</real>
+        </map>
+        <key>SKOverviewForceRecapture</key>
+        <map>
+            <key>Comment</key>
+            <string>Debug: capture the overview's camera view again every frame instead of only when what it shows changed.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKOverviewMaxAbove</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres over the agent's floor above which the overview's maps and camera view never draw census geometry.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>500.0</real>
+        </map>
+        <key>SKOverviewNeighbourRefresh</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds between top-down captures of a region touching the agent's; it is not cut, but keeps only the clusters at the agent's level, the ground's when the agent is on it.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>5.0</real>
+        </map>
+        <key>SKOverviewPageVertices</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Most vertices in one of the overview census's pages, a vertex buffer per region and class
+                holding a run per linkset; a multiple of 3. A run larger than this gets a page of its own
+                size, up to 16777216.
+            </string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>3145728</integer>
+        </map>
+        <key>SKOverviewProbeBudget</key>
+        <map>
+            <key>Comment</key>
+            <string>People the overview's cut asks the GPU about in one frame (their room, column, roof and cover), the agent first; the rest are asked the next frame.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>8</integer>
+        </map>
+        <key>SKOverviewProbeDump</key>
+        <map>
+            <key>Comment</key>
+            <string>Write each room probe's id render as room-ids-[who].ppm, in SK_PROBE_DUMP_DIR or the log folder, with its mask outlined.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKOverviewProbeQueries</key>
+        <map>
+            <key>Comment</key>
+            <string>Occlusion queries the overview cut's probes issue in one frame, a query per candidate building; the first person of a frame is asked about whatever it takes.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>256</integer>
+        </map>
+        <key>SKOverviewQueueInterval</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds between captures of regions other than the agent's, which take turns round robin; a region with no capture yet is taken at once.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.25</real>
+        </map>
+        <key>SKOverviewRefresh</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds between top-down captures of the agent's region.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>1.0</real>
+        </map>
+        <key>SKOverviewResolution</key>
+        <map>
+            <key>Comment</key>
+            <string>Texels along a side of the top-down capture of the region.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>1024</integer>
+        </map>
+        <key>SKOverviewSurroundsRefresh</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds between looks for parts at least a region on some axis, or reaching into the void, that the census holds no shape for (megasculpts, phantom meshes and megaprims) anywhere in the loaded regions; the overview draws them from their rendered geometry.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>15.0</real>
+        </map>
         <key>SKPhysicsShapeTypes</key>
         <map>
             <key>Comment</key>
