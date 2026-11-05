@@ -2743,7 +2743,8 @@ if(AL_BUILD_TESTS)
       skoverviewcuttable.cpp # <SK:Nexii> overview capture: the cut table
       skoverviewprobes.cpp # <SK:Nexii> overview capture: the view cut's probes
       skoverviewslots.cpp # <SK:Nexii> overview capture: the census pages
-    LIBRARIES llui alscript ll::slua llxml skcensus ${test_libs} # <SK:Nexii> overview capture: skcensus
+    # <SK:Nexii> overview capture: skcensus, for the cover verdicts' records
+    LIBRARIES llui alscript ll::slua llxml skcensus ${test_libs}
     SUPPORT
       newview_test_fakes
       newview_test_settings
