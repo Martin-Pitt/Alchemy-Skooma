@@ -654,6 +654,14 @@ if(AL_BUILD_VIEWER)
     skworldoverlay.cpp # <SK:Nexii> census
     skworldpalette.cpp # <SK:Nexii> census
     skworldtrace.cpp # <SK:Nexii> census
+    skoverviewcapture.cpp # <SK:Nexii> overview capture
+    skoverviewcensus.cpp # <SK:Nexii> overview capture
+    skoverviewcover.cpp # <SK:Nexii> overview capture
+    skoverviewcuttable.cpp # <SK:Nexii> overview capture
+    skoverviewmovers.cpp # <SK:Nexii> overview capture
+    skoverviewplace.cpp # <SK:Nexii> overview capture
+    skoverviewprobes.cpp # <SK:Nexii> overview capture
+    skoverviewslots.cpp # <SK:Nexii> overview capture
     llmeshrepository.cpp
     llmimetypes.cpp
     llmodelpreview.cpp
@@ -1550,6 +1558,15 @@ if(AL_BUILD_VIEWER)
     skworldoverlay.h # <SK:Nexii> census
     skworldpalette.h # <SK:Nexii> census
     skworldtrace.h # <SK:Nexii> census
+    skoverviewcapture.h # <SK:Nexii> overview capture
+    skoverviewcensus.h # <SK:Nexii> overview capture
+    skoverviewcover.h # <SK:Nexii> overview capture
+    skoverviewcuttable.h # <SK:Nexii> overview capture
+    skoverviewmovers.h # <SK:Nexii> overview capture
+    skoverviewplace.h # <SK:Nexii> overview capture
+    skoverviewprobes.h # <SK:Nexii> overview capture
+    skoverviewprograms.h # <SK:Nexii> overview capture
+    skoverviewslots.h # <SK:Nexii> overview capture
     llmeshrepository.h
     llmimetypes.h
     llmodelpreview.h
