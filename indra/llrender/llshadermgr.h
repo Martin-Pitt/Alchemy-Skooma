@@ -729,7 +729,7 @@ public:
         WATER_OCCLUSION,                    //  "waterOcclusion"  int, whether the control stage culls against the depth pyramid
         WATER_PATCH_ORDER,                  //  "waterPatchOrder"  ivec4, the order the patches are drawn in
 
-        // <SK:Nexii> Overview capture: its cut table where it is no storage block
+        // <SK:Nexii> overview capture: its cut table where it is no storage block
         SK_OVERVIEW_CUT_TABLE,              //  "sk_cut_table"  samplerBuffer
         // </SK:Nexii>
 
@@ -749,7 +749,7 @@ public:
     // there for every program, so a pass binds it once whatever it draws or dispatches between.
     typedef enum
     {                                       // Block name, element count
-        // <SK:Nexii> Overview capture: its cut table, one vec4 a linkset
+        // <SK:Nexii> overview capture: its cut table, one vec4 a linkset
         SK_OVERVIEW_CUT_BLOCK,              //  "SKOverviewCutBlock", 1
         // </SK:Nexii>
         END_RESERVED_STORAGE_BLOCKS

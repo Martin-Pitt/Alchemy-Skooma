@@ -47,7 +47,7 @@ static const GLenum sGLTextureType[] =
     GL_TEXTURE_CUBE_MAP_ARRAY,
     GL_TEXTURE_2D_MULTISAMPLE,
     GL_TEXTURE_3D,
-    GL_TEXTURE_BUFFER // <SK:Nexii> Overview capture: its cut table on GL 4.1
+    GL_TEXTURE_BUFFER // <SK:Nexii> overview capture: its cut table on GL 4.1
 };
 
 thread_local U32 ALTextureSlot::sSamplerBinds  = 0;

@@ -116,7 +116,7 @@ public:
         TT_CUBE_MAP_ARRAY,      // Array of cube maps
         TT_MULTISAMPLE_TEXTURE, // see GL_ARB_texture_multisample
         TT_TEXTURE_3D,          // standard 3D Texture
-        // <SK:Nexii> Overview capture: its cut table on GL 4.1
+        // <SK:Nexii> overview capture: its cut table on GL 4.1
         TT_BUFFER_TEXTURE,      // a buffer object's texels, read by texelFetch
         TT_NONE,                // Slot holds nothing
     } eTextureType;

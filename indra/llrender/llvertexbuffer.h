@@ -217,7 +217,7 @@ public:
     bool getVertexStrider(LLStrider<LLVector3>& strider, U32 index=0, S32 count = -1);
     bool getVertexStrider(LLStrider<LLVector4a>& strider, U32 index=0, S32 count = -1);
     bool getIndexStrider(LLStrider<U16>& strider, U32 index=0, S32 count = -1);
-    // <SK:Nexii> Overview capture: 32-bit indices, index and count in them; switches the buffer to GL_UNSIGNED_INT as
+    // <SK:Nexii> overview capture: 32-bit indices, index and count in them; switches the buffer to GL_UNSIGNED_INT as
     // setIndexData(const U32*) does, so allocate twice the indices wanted.
     bool getIndexStrider(LLStrider<U32>& strider, U32 index, S32 count);
     // </SK:Nexii>
@@ -276,7 +276,7 @@ public:
     // Detailed error checking can be enabled by setting gDebugGL to true
     void draw(U32 mode, U32 count, U32 indices_offset) const;
     void drawArrays(U32 mode, U32 offset, U32 count) const;
-    // <SK:Nexii> Overview capture: multi-draws.
+    // <SK:Nexii> overview capture: multi-draws.
     // Several ranges of the bound buffer in one call (glMultiDrawArrays).
     void multiDrawArrays(U32 mode, const GLint* first, const GLsizei* count, GLsizei draw_count) const;
     // draw_count ALDrawArraysIndirectCommands from offset in commands, over the bound buffer

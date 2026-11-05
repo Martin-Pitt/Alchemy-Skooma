@@ -381,7 +381,7 @@ namespace
         CHECK((U32)glGetError() == (U32)GL_NO_ERROR);
     }
 
-    // <SK:Nexii> Overview capture: each face's stencil ops are issued, kept apart, put back by refreshState, and
+    // <SK:Nexii> overview capture: each face's stencil ops are issued, kept apart, put back by refreshState, and
     // setStencilOp sets both again.
     TEST_CASE_METHOD(alrenderstate_data, "alrenderstate_gl: separate stencil ops per face are issued and put back by refreshState", "[alrenderstate_gl]")
     {
