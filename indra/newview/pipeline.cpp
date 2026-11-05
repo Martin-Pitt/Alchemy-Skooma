@@ -115,7 +115,6 @@
 #include "skrooms.h" // <SK:Nexii> rooms overlay
 #include "skworldcensus.h" // <SK:Nexii> census overlay
 #include "skoverviewcapture.h" // <SK:Nexii> overview capture
-#include "skoverviewcensus.h" // <SK:Nexii> overview capture: class codes
 #include "llvocache.h"
 #include "llvotree.h"
 #include "llvovolume.h"
@@ -1580,6 +1579,10 @@ void LLPipeline::releaseAllGLResources()
     mWaterPrimitives.release();
     mWaterPatchPrimitives.release();
     mAttachmentSpans.clear();
+
+    // <SK:Nexii> overview capture: its targets, buffers and spans go with the context.
+    SKOverviewCapture::cleanupGL();
+    // </SK:Nexii>
 
     mGLResourcesLive = false;
 }
@@ -3950,7 +3953,7 @@ void LLPipeline::markVisible(LLDrawable *drawablep, LLCamera& camera)
             if (root && //  // this test may not be needed, see above
                     root->getVObj()->isAttachment())
             {
-                // <SK:Nexii> overview capture: attachments are part of the avatar, which markers replace.
+                // <SK:Nexii> overview capture: attachments are part of the avatar, which the overview never draws.
                 if (sSkOverviewCull)
                 {
                     return;
@@ -15013,12 +15016,13 @@ U32 LLPipeline::skRenderOverview(const LLMatrix4a& view, const LLMatrix4a& proj,
     view.affineTransform(zero, origin_eye);
     const F32 plane_w = cut_z - normal_eye.dot3(origin_eye).getF32();
     LLVector4a clip_plane(normal_eye.getF32ptr()[0], normal_eye.getF32ptr()[1], normal_eye.getF32ptr()[2], plane_w);
-    auto bind_clip = [&](U8 code)
+    // The census sets each part's class code itself; R starts at 0, no code.
+    auto bind_clip = [&]()
     {
         static const LLStaticHashedString sk_clip_plane("clip_plane");
         gClipProgram.bind();
         gClipProgram.uniform4fv(sk_clip_plane, 1, clip_plane.getF32ptr());
-        gGL.diffuseColor4f(code / 255.f, 0.f, 1.f, 1.f);
+        gGL.diffuseColor4f(0.f, 0.f, 1.f, 1.f);
     };
 
     // Double-sided: a plane seen from below still has a top.
@@ -15051,7 +15055,7 @@ U32 LLPipeline::skRenderOverview(const LLMatrix4a& view, const LLMatrix4a& proj,
     {
         LL_PROFILE_ZONE_NAMED_CATEGORY_PIPELINE("sk overview census");
         gGL.setColorMask(true, false, false, false);
-        bind_clip(skoverview::CODE_NONE);
+        bind_clip();
         census();
         gGL.loadMatrix(view);
         gGLLastMatrix = NULL;
