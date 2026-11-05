@@ -46,6 +46,7 @@
 #include "llenvironment.h"
 #include "llerrorcontrol.h"
 #include "llworld.h"
+#include "skoverviewcapture.h" // <SK:Nexii> overview capture: its programs
 
 #include "pipeline.h"
 
@@ -3493,6 +3494,10 @@ void LLViewerShaderMgr::loadShadersDeferred()
         built(gRlvSphereProgram.createShader(), gRlvSphereProgram);
     }
     // [/RLV:KB]
+
+    // <SK:Nexii> overview capture: its programs; one that fails leaves only the overview off.
+    SKOverviewCapture::loadShaders(mShaderLevel[SHADER_DEFERRED]);
+    // </SK:Nexii>
 }
 
 void LLViewerShaderMgr::loadShadersObject()

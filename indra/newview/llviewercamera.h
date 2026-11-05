@@ -54,6 +54,7 @@ public:
         CAMERA_SPOT_SHADOW1,
         CAMERA_WATER0,
         CAMERA_WATER1,
+        CAMERA_SK_OVERVIEW, // <SK:Nexii> overview capture: its own id so its culls never update LOD distances
         NUM_CAMERAS
     } eCameraID;
 

@@ -82,6 +82,7 @@
 #include "llviewerparcelmgr.h"
 #include "llviewerregion.h"
 #include "llviewershadermgr.h"
+#include "skoverviewcapture.h" // <SK:Nexii> overview capture
 #include "llviewertexturelist.h"
 #include "llviewerwindow.h"
 #include "llvoavatarself.h"
@@ -1165,6 +1166,12 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
         }
 
         LLAppViewer::instance()->pingMainloopTimeout("Display:RenderUI");
+        // <SK:Nexii> overview capture: the region maps from above, on their timer, after the world and before the UI.
+        if (!for_snapshot)
+        {
+            SKOverviewCapture::onFrame();
+        }
+        // </SK:Nexii>
         if (!for_snapshot)
         {
             render_ui();
