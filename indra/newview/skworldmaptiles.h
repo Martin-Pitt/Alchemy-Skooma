@@ -54,6 +54,7 @@ public:
     static constexpr S32 MAX_KEPT = 1536;           ///< tiles kept after they leave the view, least recently used dropped
     static constexpr F64 FETCH_TIMEOUT = 30.0;      ///< seconds before a fetch stops counting against the cap
     static constexpr S32 FALLBACK_LEVELS_DOWN = 3;  ///< how many finer levels may stand in for a tile still loading
+    static constexpr F64 EDGE_MARGIN_REGIONS = 4.0;  ///< sea left past the outermost regions before the world's edge
     /// Coarse levels fetched under every selected tile ahead of the tiles themselves, so a fresh view or a
     /// turn shows a blurry map at once rather than an empty one: the coarsest everywhere, one step finer
     /// for detail while the selected levels arrive.
@@ -79,6 +80,12 @@ public:
 
     void clear();
 
+    /// The disc round every tile known to hold regions: from the coarsest level down, a tile is replaced by
+    /// its finer tiles wherever those are known, so it tightens as finer tiles arrive and grows as new coarse
+    /// ones do. A tile not yet known counts as holding regions, so the disc never cuts one off. False until
+    /// some coarsest-level tile has arrived.
+    bool occupiedDisc(skworldmap::WorldDisc& disc);
+
     S32 inFlight() const { return mInFlight; }
     size_t size() const { return mTiles.size(); }
 
@@ -101,7 +108,13 @@ private:
     void addDescendants(const skworldmap::TileKey& key, S32 depth, F64 now, std::vector<Draw>& out);
     Entry* find(const skworldmap::TileKey& key);
 
+    void cover(const skworldmap::TileKey& key, F64 bounds[4]) const;
+
     std::map<skworldmap::TileKey, Entry> mTiles;
+    std::map<skworldmap::TileKey, bool> mKnown;     ///< every tile settled this session: true when it holds regions
+    bool mKnownChanged = false;
+    bool mHasDisc = false;
+    skworldmap::WorldDisc mDisc;
     std::vector<skworldmap::SelectedTile> mWanted;
     std::map<skworldmap::TileKey, F64> mUnderlay;   ///< this frame's underlay tiles, by their nearest wanter's distance
     S32 mInFlight = 0;

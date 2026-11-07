@@ -150,12 +150,19 @@ bool SKWorldMapHippo::build(const std::string& asset)
     const LLColor4U ambient(AMBIENT);
     buffer->getIndexStrider(idx);
     U16 base = 0;
+    mMin.set(F32_MAX, F32_MAX, F32_MAX);
+    mMax.set(-F32_MAX, -F32_MAX, -F32_MAX);
     for (S32 f = 0; f < model->getNumVolumeFaces(); ++f)
     {
         const LLVolumeFace& face = model->getVolumeFace(f);
         for (S32 v = 0; v < face.mNumVertices; ++v)
         {
-            *pos++ = LLVector3(face.mPositions[v].getF32ptr());
+            // The upload keeps glTF's axes, y up, and its origin on the paw plane: turn y up into z up.
+            const F32* p = face.mPositions[v].getF32ptr();
+            const LLVector3 turned(p[VX], -p[VZ], p[VY]);
+            mMin.set(llmin(mMin.mV[VX], turned.mV[VX]), llmin(mMin.mV[VY], turned.mV[VY]), llmin(mMin.mV[VZ], turned.mV[VZ]));
+            mMax.set(llmax(mMax.mV[VX], turned.mV[VX]), llmax(mMax.mV[VY], turned.mV[VY]), llmax(mMax.mV[VZ], turned.mV[VZ]));
+            *pos++ = turned;
             *uv++ = face.mTexCoords ? face.mTexCoords[v] : LLVector2::zero;
             *colour++ = ambient;
         }
@@ -190,7 +197,8 @@ void SKWorldMapHippo::draw(const LLVector3d& eye, const WorldDisc& disc)
         mMeshId = mesh_id;
     }
 
-    // The mesh asset is stored in a unit box; its size restores the proportions, then it is scaled to the disc.
+    // The mesh asset is stored in a unit box; its size restores the proportions, then it is scaled to the disc,
+    // its origin, the middle of the paw plane, just under the disc's centre.
     const LLVector3 size = size_setting;
     if (size.mV[VX] <= 0.f || size.mV[VY] <= 0.f || size.mV[VZ] <= 0.f)
     {
@@ -198,9 +206,21 @@ void SKWorldMapHippo::draw(const LLVector3d& eye, const WorldDisc& disc)
     }
     const F64 metres = LENGTH_OVER_DIAMETER * 2.0 * disc.mRadius / size.mV[VX];
     const LLVector3d extent(size.mV[VX] * metres, size.mV[VY] * metres, size.mV[VZ] * metres);
-    const LLVector3d centre(disc.mCentreX, disc.mCentreY, disc.mZ - 0.5 * extent.mdV[VZ] - 0.001 * disc.mRadius);
-    if (hiddenUnderDisc(eye, disc, centre - extent * 0.5, centre + extent * 0.5))
+    const LLVector3d centre(disc.mCentreX, disc.mCentreY, disc.mZ - 0.001 * disc.mRadius);
+    if (mState == State::Ready)
     {
+        const LLVector3d lo(centre.mdV[VX] + mMin.mV[VX] * extent.mdV[VX], centre.mdV[VY] + mMin.mV[VY] * extent.mdV[VY],
+                            centre.mdV[VZ] + mMin.mV[VZ] * extent.mdV[VZ]);
+        const LLVector3d hi(centre.mdV[VX] + mMax.mV[VX] * extent.mdV[VX], centre.mdV[VY] + mMax.mV[VY] * extent.mdV[VY],
+                            centre.mdV[VZ] + mMax.mV[VZ] * extent.mdV[VZ]);
+        if (hiddenUnderDisc(eye, disc, lo, hi))
+        {
+            return;
+        }
+    }
+    else if (hiddenUnderDisc(eye, disc, centre - LLVector3d(extent.mdV[VX], extent.mdV[VY], 2.0 * extent.mdV[VZ]), centre))
+    {
+        // Before the mesh is in, a box twice its size, its top on the paw plane: fetched a little early, never late.
         return;
     }
 

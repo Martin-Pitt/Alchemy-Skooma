@@ -163,6 +163,11 @@ void SKWorldMapTiles::update(F64 now)
         {
             e.mMissing = true;
         }
+        if (e.mImage.notNull() && (e.mMissing || e.mImage->hasGLTexture()) && !mKnown.count(it->first))
+        {
+            mKnown[it->first] = !e.mMissing;
+            mKnownChanged = true;
+        }
         if (e.mImage.notNull() && !e.mMissing && !e.mImage->hasGLTexture())
         {
             if (now - e.mRequested >= FETCH_TIMEOUT)
@@ -260,6 +265,68 @@ void SKWorldMapTiles::dropPriorities()
             e.lower();
         }
     }
+}
+
+void SKWorldMapTiles::cover(const TileKey& key, F64 bounds[4]) const
+{
+    bool refined = false;
+    if (key.mLevel > 1)
+    {
+        const S32 half = key.regionsPerSide() / 2;
+        for (S32 i = 0; i < 4 && !refined; ++i)
+        {
+            const TileKey child{ key.mLevel - 1, key.mGridX + (i & 1) * half, key.mGridY + (i >> 1) * half };
+            refined = mKnown.count(child) > 0;
+        }
+        if (refined)
+        {
+            for (S32 i = 0; i < 4; ++i)
+            {
+                const TileKey child{ key.mLevel - 1, key.mGridX + (i & 1) * half, key.mGridY + (i >> 1) * half };
+                auto it = mKnown.find(child);
+                if (it == mKnown.end() || it->second)
+                {
+                    cover(child, bounds);
+                }
+            }
+        }
+    }
+    if (!refined)
+    {
+        const F64 x0 = key.mGridX * REGION_METRES, y0 = key.mGridY * REGION_METRES, side = key.sideMetres();
+        bounds[0] = std::min(bounds[0], x0);
+        bounds[1] = std::min(bounds[1], y0);
+        bounds[2] = std::max(bounds[2], x0 + side);
+        bounds[3] = std::max(bounds[3], y0 + side);
+    }
+}
+
+bool SKWorldMapTiles::occupiedDisc(WorldDisc& disc)
+{
+    if (mKnownChanged)
+    {
+        mKnownChanged = false;
+        F64 bounds[4] = { 1e30, 1e30, -1e30, -1e30 };
+        bool any = false;
+        for (const auto& [key, holds] : mKnown)
+        {
+            if (key.mLevel == TILE_LEVELS && holds)
+            {
+                cover(key, bounds);
+                any = true;
+            }
+        }
+        if (any)
+        {
+            // Round the box's corners, so every region inside it is inside the disc.
+            mDisc.mCentreX = 0.5 * (bounds[0] + bounds[2]);
+            mDisc.mCentreY = 0.5 * (bounds[1] + bounds[3]);
+            mDisc.mRadius = 0.5 * std::hypot(bounds[2] - bounds[0], bounds[3] - bounds[1]) + EDGE_MARGIN_REGIONS * REGION_METRES;
+            mHasDisc = true;
+        }
+    }
+    disc = mDisc;
+    return mHasDisc;
 }
 
 void SKWorldMapTiles::clear()

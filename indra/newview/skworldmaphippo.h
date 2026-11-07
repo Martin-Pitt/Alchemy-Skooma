@@ -26,6 +26,7 @@
 #define SK_WORLDMAPHIPPO_H
 
 #include "llpointer.h"
+#include "v3math.h"
 #include "lluuid.h"
 #include "skworldmapmath.h"
 
@@ -60,6 +61,7 @@ private:
     F64 mRetryAt = 0.0;
     LLPointer<LLVertexBuffer> mBuffer;
     U32 mIndexCount = 0;
+    LLVector3 mMin, mMax;                       ///< bounds of the turned vertices, in the asset's unit box
     LLPointer<LLViewerFetchedTexture> mTexture;
     LLPointer<LLFetchedGLTFMaterial> mMaterial;  ///< its base colour, once loaded, takes the texture's place
     std::shared_ptr<SKWorldMapHippo*> mSelf;    ///< the fetch coroutine's way back, cleared when this goes

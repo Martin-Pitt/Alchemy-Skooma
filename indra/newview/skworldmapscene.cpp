@@ -42,6 +42,7 @@
 #include <array>
 #include <tuple>
 #include <cmath>
+#include <limits>
 
 using namespace skworldmap;
 
@@ -55,20 +56,6 @@ namespace
     constexpr S32 EDGE_SEGMENTS = 256;
     constexpr F64 RIM_FRACTION = 0.004;     ///< the rim's width, as a fraction of the disc's radius
     constexpr F64 SPACE_REACH = 1.0e7;      ///< space is painted out to the far plane
-
-    /// The disc the sea ends at, from SKWorldMapEdgeCentre and SKWorldMapEdgeRadius (region coordinates);
-    /// a radius of zero leaves the sea endless.
-    WorldDisc worldDisc()
-    {
-        static LLCachedControl<LLVector3> centre(gSavedSettings, "SKWorldMapEdgeCentre", LLVector3(1080.f, 1080.f, 0.f));
-        static LLCachedControl<F32> radius(gSavedSettings, "SKWorldMapEdgeRadius", 260.f);
-        WorldDisc disc;
-        const LLVector3 c = centre;
-        disc.mCentreX = c.mV[VX] * REGION_METRES;
-        disc.mCentreY = c.mV[VY] * REGION_METRES;
-        disc.mRadius = std::max(0.f, (F32)radius) * REGION_METRES;
-        return disc;
-    }
 
     /// A flat ring on the disc's plane from radius `inner` to `outer`, relative to the eye; an inner radius
     /// of zero fills the disc.
@@ -230,7 +217,8 @@ bool SKWorldMapScene::allocateTargets(S32 width, S32 height)
     const U32 h = static_cast<U32>(height);
     if (mScene.getWidth() != w || mScene.getHeight() != h)
     {
-        if (!mScene.allocate(w, h, GL_RGBA8, true)
+        // Float depth: the hippo hangs tens of kilometres off, past what 24 bits resolve over this range.
+        if (!mScene.allocate(w, h, GL_RGBA8, true, false, ALTextureSlot::TT_TEXTURE, LLRenderTarget::MIPS_NONE, LLRenderTarget::DEPTH_FMT_32F)
             || !mBlurA.allocate(std::max(w / 2, 1u), std::max(h / 2, 1u), GL_RGBA8)
             || !mBlurB.allocate(std::max(w / 2, 1u), std::max(h / 2, 1u), GL_RGBA8))
         {
@@ -285,7 +273,12 @@ void SKWorldMapScene::drawGround(const SKWorldMapFrame& frame, S32 width, S32 he
     const F64 height_above = std::max(frame.mEye.mdV[VZ] - std::max(GROUND_Z, mTerrain.groundAt(frame.mEye, GROUND_Z)), 1.0);
     const F32 z_near = static_cast<F32>(std::max(0.5, 0.25 * height_above));
 
-    const WorldDisc disc = worldDisc();
+    // The sea stays endless until the first coarse tiles say where the regions are.
+    WorldDisc disc;
+    if (!mTiles.occupiedDisc(disc))
+    {
+        disc.mRadius = 0.0;
+    }
     const LLColor4& clear_colour = disc.mRadius > 0.0 ? SPACE_COLOUR : SEA_COLOUR;
 
     mScene.bindTarget();
@@ -298,7 +291,8 @@ void SKWorldMapScene::drawGround(const SKWorldMapFrame& frame, S32 width, S32 he
     // Vertices are relative to the eye, so single precision holds across the whole grid.
     gGL.matrixMode(LLRender::MM_PROJECTION);
     gGL.pushMatrix();
-    gGL.loadMatrix(al_perspective(static_cast<F32>(frame.mFovY), static_cast<F32>(width) / height, z_near, 1.0e7f));
+    gGL.loadMatrix(al_perspective(static_cast<F32>(frame.mFovY), static_cast<F32>(width) / height, z_near,
+                                  LLRender::sReverseZ ? std::numeric_limits<F32>::infinity() : 1.0e7f));
     gGL.matrixMode(LLRender::MM_MODELVIEW);
     gGL.pushMatrix();
     LLVector4a eye, at, up;
