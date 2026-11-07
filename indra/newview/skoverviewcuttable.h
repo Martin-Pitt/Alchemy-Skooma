@@ -1,6 +1,6 @@
 /**
  * @file skoverviewcuttable.h
- * @brief The tactical overview's per-linkset cut table: one row per census linkset, published to the GPU whole.
+ * @brief The overview capture's per-linkset cut table: one row per census linkset, published to the GPU whole.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Second Life Viewer Source Code

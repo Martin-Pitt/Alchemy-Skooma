@@ -27,18 +27,13 @@
 
 #include "../skoverviewcover.h"
 
-#include "llbase64.h"
 #include "llmath.h"
-#include "skcensusio.h"
 #include "skcensusrecord.h"
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
 #include <cmath>
-#include <cstdlib>
-#include <fstream>
-#include <iomanip>
 #include <memory>
 #include <vector>
 
@@ -309,109 +304,6 @@ namespace
         auto twin = boxRecord({ 0.f, 0.f, 1.f }, 0.f, { 0.5f, 0.5f, 0.5f });
         twin->mPart = surround->mPart;
         CHECK(judge(part, { surround, twin }).mVerdict == CoverVerdict::EXTRA);
-    }
-
-    // Judges a census export's invisible parts as the overview does, for the offline reference to diff against:
-    // SK_COVER_EXPORT names the file, SK_COVER_OUT the verdicts written, SK_COVER_LOO "all" or a file of record
-    // indices to judge each alone with every other record visible (else the file's seen sidecar decides).
-    TEST_CASE("skoverviewcover: a census export's verdicts for the reference", "[.coverdump]")
-    {
-        const char* path = std::getenv("SK_COVER_EXPORT");
-        const char* out_path = std::getenv("SK_COVER_OUT");
-        if (!path || !out_path)
-        {
-            SKIP("SK_COVER_EXPORT and SK_COVER_OUT name the export and the verdicts");
-        }
-        CensusFile census;
-        std::string error;
-        INFO(error);
-        // The overview's last look per record, as its census section holds it.
-        std::vector<U8> sidecar;
-        CensusSection seen_section;
-        seen_section.mName = "overview.seen";
-        seen_section.mRead = [&](const LLSD& value, U32)
-        {
-            const std::string bytes = LLBase64::decodeAsString(value.asString());
-            sidecar.assign(bytes.begin(), bytes.end());
-            return true;
-        };
-        REQUIRE(readCensusFile(path, census, &error, { seen_section }));
-        const size_t n = census.mRecords.size();
-        sidecar.resize(n, 0);
-        std::vector<size_t> order;
-        const char* loo = std::getenv("SK_COVER_LOO");
-        if (loo && std::string(loo) == "all")
-        {
-            for (size_t i = 0; i < n; ++i)
-            {
-                order.push_back(i);
-            }
-        }
-        else if (loo && *loo)
-        {
-            std::ifstream in(loo);
-            for (size_t i; in >> i;)
-            {
-                order.push_back(i);
-            }
-        }
-        const bool alone = !order.empty();
-        if (!alone)
-        {
-            for (size_t i = 0; i < n; ++i)
-            {
-                order.push_back(i);
-            }
-        }
-        const InvisibleParams params;
-        const F64 reach = params.mProxyTolerance;
-        std::ofstream out(out_path);
-        std::vector<LLVector3> tris, scratch;
-        for (const size_t i : order)
-        {
-            const Record& part = *census.mRecords[i];
-            std::vector<U8> seen = sidecar;
-            if (alone)
-            {
-                seen.assign(n, 0);
-                seen[i] = 1;
-            }
-            const bool judged = seen[i] == 1 &&
-                                (part.mRole == Role::SURROUND || (part.mRole == Role::NAV && part.mCollides && coverPoolRecord(part)));
-            if (!judged)
-            {
-                continue;
-            }
-            std::vector<const Record*> candidates;
-            bool pending = false;
-            for (size_t j = 0; j < n; ++j)
-            {
-                const Record& r = *census.mRecords[j];
-                if (r.mPart == part.mPart || !coverPoolRecord(r))
-                {
-                    continue;
-                }
-                bool meets = true;
-                for (S32 a = 0; a < 3 && meets; ++a)
-                {
-                    meets = r.mMax.mdV[a] + reach >= part.mMin.mdV[a] && r.mMin.mdV[a] - reach <= part.mMax.mdV[a];
-                }
-                if (meets && seen[j] == 0)
-                {
-                    candidates.push_back(&r);
-                }
-                pending |= meets && seen[j] == 2;
-            }
-            std::sort(candidates.begin(), candidates.end(), [](const Record* a, const Record* b)
-                      { return a->mPart < b->mPart || (a->mPart == b->mPart && a->mRole < b->mRole); });
-            tris.clear();
-            emitRecord(part, part.mOrigin, tris);
-            const CoverResult r = coverVerdict(tris, coverCandidates(candidates, part.mOrigin, scratch), params);
-            out << i << ' ' << part.mPart << ' ' << coverVerdictName(r.mVerdict) << ' ' << std::setprecision(9)
-                << r.mOutsideArea << ' ' << r.mPartArea << ' ' << (r.mSurfaceClip ? 1 : 0) << ' ' << (r.mTooFine ? 1 : 0) << ' '
-                << (pending ? 1 : 0) << ' ' << candidates.size() << '\n';
-        }
-        CHECK(out.good());
     }
 
     TEST_CASE("skoverviewcover: a box's triangles group into its six faces", "[skoverviewcover]")

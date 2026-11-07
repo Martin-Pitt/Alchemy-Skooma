@@ -914,7 +914,18 @@ void SKNetMap::drawOverlay(OverlayLayer layer, F32 span, F32 rotation, F32 side,
 
 bool SKNetMap::drawCaptureBase(F32 alpha)
 {
-    SKOverviewCapture::noteMapsWanted();
+    // The opt-in layers the region maps style (overviewResolveF.glsl's MASK_*), the void tiles and the people cut for.
+    static LLCachedControl<bool> stairs(gSavedSettings, "SKMapLayerStairs", false);
+    static LLCachedControl<bool> doors(gSavedSettings, "SKMapLayerDoors", false);
+    static LLCachedControl<bool> ladders(gSavedSettings, "SKMapLayerLadders", false);
+    static LLCachedControl<bool> contours(gSavedSettings, "SKMapLayerContours", false);
+    static LLCachedControl<bool> void_tiles(gSavedSettings, "SKMapVoidTiles", true);
+    skoverview::MapParams params;
+    params.mClassMask = (stairs ? 1u : 0u) | (doors ? 2u : 0u) | (ladders ? 4u : 0u) | (contours ? 8u : 0u);
+    params.mVoidTiles = void_tiles;
+    SKMapPeople::instance().occupants(params.mOccupants);
+    SKMapPeople::instance().feedOverview();
+    SKOverviewCapture::noteMapsWanted(params);
     if (!SKOverviewCapture::instanceExists())
     {
         return false;

@@ -1,7 +1,7 @@
 /**
  * @file skoverviewcapture.h
- * @brief The overview: the census as styled shapes over the terrain, for the mini-map's base and
- *        the tactical view.
+ * @brief The overview capture: the census as styled shapes over the terrain, as top-down region maps and as a
+ *        view from a camera.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Second Life Viewer Source Code
@@ -28,18 +28,17 @@
 
 #include "alquerypool.h"
 #include "llcamera.h"
-#include "llhandle.h"
 #include "llmatrix4a.h"
 #include "llrect.h"
 #include "llsingleton.h"
 #include "lltimer.h"
 #include "lluuid.h"
 #include "v2math.h"
-#include "skmaplabels.h"
-#include "skmodalview.h"
-#include "skmapplan.h"
 #include "skoverviewcensus.h"
 #include "skoverviewmovers.h"
+#include "skoverviewplace.h"
+#include "skrooms.h"
+#include "v3color.h"
 #include "v3dmath.h"
 #include "v4math.h"
 
@@ -47,25 +46,79 @@
 #include <memory>
 #include <string>
 #include <utility>
-#include <set>
 #include <vector>
 
+class LLGLSLShader;
 class LLRenderTarget;
 class LLViewerRegion;
-class LLVOAvatar;
-namespace skmapdraw
-{
-    struct TagText;
-}
-class SKPopupPanes;
 
-// Renders terrain and the census's shapes below a cut plane at the
-// air cells' floor under the agent plus SKOverviewCutHeight, each writing a class code, then resolves depth and codes
-// into an RGBA8 map. Two kinds of shot share the passes: straight-down maps of every connected region for the mini-map
-// (while a map draws them; the agent's region cut, every SKOverviewRefresh seconds, its neighbours uncut and less often,
-// regions further off rarer still) and the tactical view (SKTacticalOverview), a modal view drawn from the viewer's
-// own camera, which it tilts over the agent as it opens, so alt-cam and the wheel move it as they move the world camera.
-class SKOverviewCapture : public LLSingleton<SKOverviewCapture>, public SKModalMode
+namespace skoverview
+{
+    /// Someone besides the agent the cut is taken for, as a people layer knows them. Main thread.
+    struct Occupant
+    {
+        LLUUID mId;
+        LLVector3d mFeet;           ///< global; z means something only with mZKnown
+        bool mZKnown = false;       ///< false for someone placed only coarsely, who is left out
+        place::Whereabouts mWhere;  ///< their air gap, from place::whereabouts at their feet
+        bool mHidden = false;       ///< not shown by the caller, and so left out
+    };
+
+    /// What the region maps style: the opt-in layers (overviewResolveF.glsl's MASK_*) and whether the void past the
+    /// regions is mapped too; with the people the agent's region is cut for.
+    struct MapParams
+    {
+        U32 mClassMask = 0;
+        bool mVoidTiles = true;
+        std::vector<Occupant> mOccupants;
+    };
+
+    /// The see-through circles the camera view opens round people: one over each within mReach metres of the eye in
+    /// outdoor air, mRadius times their height on screen, its edge mSoftness of its radius.
+    struct DissolveParams
+    {
+        bool mEnabled = true;
+        F32 mRadius = 1.25f;
+        F32 mReach = 64.f;
+        F32 mSoftness = 0.25f;
+    };
+
+    /// One frame of the camera view: the camera, what it centres on, the people it cuts and opens circles for, and the
+    /// window viewport it covers.
+    struct ViewShotParams
+    {
+        LLVector3 mEye;             ///< agent space
+        LLVector3 mAt;              ///< the camera's axes, agent space
+        LLVector3 mLeft;
+        LLVector3 mUp;
+        F32 mFov = 1.f;             ///< vertical, radians
+        F32 mDrawDistance = 256.f;  ///< how far past the centre the census is culled
+        LLVector3d mCentre;         ///< global: the fade and the cut's priorities follow it
+        S32 mViewport[4] = {};      ///< window pixels: x, y, width, height
+        S32 mCursor[2] = {};        ///< the cursor in window pixels, as mViewport, for the pick
+        bool mPick = false;         ///< read the shown frame's depth under mCursor, for groundAt
+        std::vector<Occupant> mOccupants;
+        DissolveParams mDissolve;
+
+        /// The viewer camera, the GL viewport and the window's cursor, centred on centre.
+        static ViewShotParams fromViewerCamera(const LLVector3d& centre);
+    };
+
+    /// The colours and depths the overview styles with beside its shaders' own; a caller may set others.
+    struct Palette
+    {
+        F32 mWaterDepthM = 6.f;                                                      ///< water this deep reads as deep
+        LLColor3 mInvisible = LLColor3(240.f / 255.f, 180.f / 255.f, 76.f / 255.f);  ///< invisible barriers' hatch
+        LLColor3 mGround = LLColor3(16.f / 255.f, 16.f / 255.f, 20.f / 255.f);       ///< behind the camera view
+    };
+}
+
+// Renders terrain and the census's shapes below a cut plane at the air cells' floor under the agent plus
+// SKOverviewCutHeight, each writing a class code, then resolves depth and codes into an RGBA8 map. Two kinds of shot
+// share the passes: straight-down maps of every connected region, while a map draws them (the agent's region cut,
+// every SKOverviewRefresh seconds, its neighbours uncut and less often, regions further off rarer still), and a view
+// from a camera its caller places, composited over the window in place of the world. Main thread.
+class SKOverviewCapture : public LLSingleton<SKOverviewCapture>
 {
     LLSINGLETON(SKOverviewCapture);
     ~SKOverviewCapture() override;
@@ -74,35 +127,39 @@ public:
     struct Stats
     {
         S32 resolution = 0;
-        F32 cpu_ms = 0.f;    // cull, sort, draw submission and resolve on the CPU
-        F32 gpu_ms = -1.f;   // the agent's map: capture and resolve on the GPU, a few frames late
-        F32 gpu_tactical_ms = -1.f; // the tactical view's static render
+        F32 cpu_ms = 0.f;           // cull, sort, draw submission and resolve on the CPU
+        F32 gpu_ms = -1.f;          // the agent's map: capture and resolve on the GPU, a few frames late
+        F32 gpu_view_ms = -1.f;     // the camera view's static render
         F32 gpu_patch_ms = -1.f;    // its see-through circles' patch
         F32 gpu_movers_ms = -1.f;   // its movers
         F32 gpu_resolve_ms = -1.f;  // one of its resolves
-        U32 draws = 0;       // draw infos sorted for the capture, plus the terrain pool, plus the census's page draws
+        U32 draws = 0;              // draw infos sorted for the capture, plus the terrain pool, plus the census's page draws
         U32 census_tris = 0;
         U32 captures = 0;
     };
 
-    /// Called once a frame after the world has rendered, before the UI.
+    /// Called once a frame after the world has rendered, before the UI: the per-frame work while maps or a view want it.
     static void onFrame();
     static void cleanupGL();
     /// Builds the overview's programs, from LLViewerShaderMgr; a failure leaves the overview off until the next load.
     static bool loadShaders(S32 level);
     static void unloadShaders();
-    /// Whether the tactical overview is the modal view on top, drawn in place of the world.
-    static bool tacticalShown();
 
-    /// A world right-click at the root view's (x, y): opens the mini-map's menus on the overview; false when it is off.
-    static bool handleRightClick(S32 x, S32 y);
-
-    /// The tactical overview key: held, it shows the view until released; tapped, it latches it until the next tap.
-    static void handleTacticalKey(bool down);
-
-    /// A map drew the region maps this frame: they are captured while one keeps asking.
-    static void noteMapsWanted();
+    /// A map drew the region maps this frame, styled by params: they are captured while one keeps asking.
+    static void noteMapsWanted(const skoverview::MapParams& params);
     static bool mapsWanted();
+    /// A camera view is shown this frame: the census is kept round it while one keeps asking. Noted before frame(), so
+    /// the maps take the view's cut rather than working out their own as well.
+    static void noteViewWanted();
+    static bool viewWanted();
+    /// How far from the agent the camera view looks, metres: the census reaches that far, in 64 m steps.
+    static void setViewReach(F32 reach_m);
+    /// Whether the world is hidden behind the camera view, so the census may scan slowly.
+    static void setWorldHidden(bool hidden);
+
+    /// The per-frame work: the census demand and update, and the maps that are due, once a frame however often it is
+    /// called. onFrame runs it while the world is drawn; a caller that hides the world runs it itself before renderView.
+    void frame();
 
     /// A region's resolved map: it covers the region at mOrigin by mWidth metres.
     struct Tile
@@ -116,29 +173,41 @@ public:
     const Stats& stats() const { return mStats; }
     /// The census the overview draws, with the cut it last worked out.
     const SKOverviewCensus& census() const { return mCensus; }
+    /// The vehicles and their looks, or none; the caller keeps the source alive until it sets another.
+    void setMoverSource(const skoverview::MoverSource* source) { mMovers.setSource(source); }
+    /// The movers the camera view draws, live.
+    const SKOverviewMovers& movers() const { return mMovers; }
+    const skoverview::Palette& palette() const { return mPalette; }
+    void setPalette(const skoverview::Palette& palette) { mPalette = palette; }
 
-    // SKModalMode
-    const char* getModalName() const override { return "tactical overview"; }
-    /// Escape, a teleport or RLVa turn the overview off.
-    void closeModal() override;
-    void onTopChanged(bool on_top) override;
-    void renderModal(const LLRect& world_rect_raw) override;
-    bool pickGround(S32 x, S32 y, LLVector3d& ground) const override;
-    /// SKToolMapPan's drag: the ground point grabbed at the press stays under the cursor.
-    bool beginPan(S32 x, S32 y) override;
-    void pan(S32 x, S32 y) override;
-    void endPan() override { mPan = Pan(); }
-    /// The overview is the mini-map writ large.
-    std::vector<std::string> coveredFloaters() const override { return { "mini_map" }; }
-    /// Clicks reach the pie, which picks the people and objects the overview draws.
-    bool passesClicks() const override { return true; }
-    /// The agent's height below `eye`, which the flycam's speed is measured from.
-    bool groundBelow(const LLVector3d& eye, LLVector3d& ground) const override;
-    /// Lower than the world map's, the battlefield being smaller than the grid (SKTacticalFlycamMaxScale).
-    F64 flycamMaxScale() const override;
-    /// The move actions pan the map on the ground, in widths of the visible ground a second
-    /// (SKTacticalKeyPanSpeed), kept over the battlefield. Up and down do nothing here.
-    void move(const skmodalview::Move& move) override;
+    /// The floor under the agent from the air cells and the cut above it, or the agent's height and the old offset.
+    void cutHeights(const LLVector3d& at, F32 fallback_z, F32& floor_z, F32& cut_z) const;
+    /// Works out the per-building cut (SKOverviewCensus::applyCut) for the agent and the occupants, those nearest the
+    /// centre first. The camera view runs it every render; the maps, with the last map's occupants, otherwise.
+    void updateCut(const LLVector3d& centre, const std::vector<skoverview::Occupant>& occupants);
+
+    /// Renders the camera view for this frame: the cut, the circles, the movers and the pick. False when it could not.
+    bool renderView(const skoverview::ViewShotParams& params);
+    /// Draws the view renderView rendered this frame over rect (window pixels) of the bound target, blurred toward its
+    /// top and bottom over tilt_px; once a render, false when there is none. A render it does not follow in the same
+    /// frame is not drawn.
+    bool compositeView(const LLRect& rect, F32 tilt_px);
+    /// Whether the view rendered this frame or the last, so its camera and viewport are there for picks.
+    bool viewPickable() const;
+    const LLMatrix4a& viewMatrix() const { return mViewView; }
+    const LLMatrix4a& projMatrix() const { return mViewProj; }
+    /// Window pixels: x, y, width, height.
+    const S32* viewport() const { return mViewViewport; }
+    /// The view's centre, agent space, and how far its census reaches round it.
+    const LLVector3& viewCentre() const { return mViewCentre; }
+    F32 viewReach() const { return mViewReach; }
+    /// The target holding the shown frame's depth, which markers drawn over the view test against; null before one.
+    LLRenderTarget* sceneDepth() const { return mSceneDepth; }
+    /// The program the overview builds for depth-tested markers over the view (overviewMarkerF.glsl).
+    static LLGLSLShader& markerProgram();
+    /// What the view draws under a viewport pixel: the shown frame's depth there, read back a frame or two later,
+    /// while the cursor is still over it; else the terrain under the view camera's ray, else the agent's floor plane.
+    bool groundAt(const LLVector2& at, LLVector3d& world) const;
 
 private:
     struct Shot
@@ -149,7 +218,7 @@ private:
         LLVector3 mEye;     // agent space
         F32 mCut = 0.f;     // agent-space z
         LLVector3 mFocus;   // agent space: what the view centres on; distance fade and height colours are relative to it
-        bool mPartCuts = false; // each census part is cut at its own height (the tactical view), not at mCut
+        bool mPartCuts = false; // each census part is cut at its own height (the camera view), not at mCut
         F32 mLevelTop = 0.f; // the agent's cut height, the brightest the height colours go
         F32 mWater = 0.f;   // the water surface's height
         SKOverviewCensus::Level mLevel; // the census groups it draws
@@ -158,18 +227,12 @@ private:
         bool mTopDown = false;
         std::vector<LLVector4> mDissolve;   // the see-through circles: window x, y, eye depth, radius in pixels
         std::vector<F32> mDissolveFloor;    // each one's floor, agent z
+        F32 mDissolveSoft = 0.25f;          // their edge, a fraction of the radius
     };
     /// A region's top-down map and when it was last taken.
     struct RegionMap;
 
-    void frame();
     void updateDemand(bool wanted);
-    /// Caps Lock is taken from the OS while the tactical action is bound to it and the world has the keyboard.
-    static void updateCapsLockCapture();
-    /// The floor under the agent from the air cells and the cut above it, or the agent's height and the old offset.
-    void cutHeights(const LLVector3d& at, F32 fallback_z, F32& floor_z, F32& cut_z) const;
-    /// What the tactical orbit centres on: the avatar, the alt-cam focus target, or the surface under a flycam.
-    void tacticalCentre(LLVector3d& centre) const;
     bool ensureGL(LLRenderTarget& capture, LLRenderTarget& resolved, S32 w, S32 h);
     /// Whether every program loadShaders() builds is there; it builds nothing.
     bool ensureShaders();
@@ -179,28 +242,18 @@ private:
                const LLRect* patch = nullptr);
     /// The capture's depth and class codes to the styled map, whole or inside a rect.
     void resolve(LLRenderTarget& capture, LLRenderTarget& resolved, const Shot& shot, const LLRect* rect = nullptr);
-    /// The work target at the tactical capture's size: false when it would not allocate.
+    /// The work target at the view capture's size: false when it would not allocate.
     bool ensureWork();
     /// The movers into the work target, over the static scene restored under them.
     void drawMovers(const Shot& shot);
-    /// The tactical work target brought up to this frame: the static capture with the see-through circles' patch and
+    /// The view's work target brought up to this frame: the static capture with the see-through circles' patch and
     /// the movers, repaired and resolved by rect; static_new says the static capture was just rendered.
     void updateWork(const Shot& shot, bool static_new, U64 patch_key, const LLRect& patch_rect, bool movers);
-    /// The avatar markers as their lit physics shapes, hidden by the census (a faint silhouette where they are), giving
-    /// way zoomed out to the mini-map's flat markers; fills the marks and labels' anchors with each marker's top.
-    template <typename Project>
-    void drawMarkers3D(const Project& project, S32 vw, S32 vh, std::vector<std::pair<size_t, LLVector2>>& drawn);
     /// Captures the region maps that are due: the agent's on its timer, then the most overdue other one, the void tiles
     /// beside the regions among them.
     void captureMaps(F64 now);
     /// One map's top-down capture; region is none for a void tile, which takes its square from the map.
     bool captureMap(RegionMap& map, LLViewerRegion* region, bool agent);
-    void tactical();
-    void composite();
-    bool rightClick(S32 x, S32 y);
-    /// What the overview draws under a pixel: the shown frame's depth there, read back a frame or two later, while the
-    /// cursor is still over it; else the terrain under the tactical camera's ray, else the agent's floor plane.
-    bool groundAt(const LLVector2& at, LLVector3d& world) const;
     /// The depth texel under the cursor, with the camera the frame was drawn with.
     struct PickSample
     {
@@ -214,8 +267,8 @@ private:
         U32 mFrame = 0;             ///< the probes' frame it was read in
         bool mValid = false;
     };
-    /// Reads this frame's texel under the cursor, and takes in the ones that landed.
-    void updatePick();
+    /// Reads this frame's texel under the shot's cursor, if it asks, and takes in the ones that landed.
+    void updatePick(const skoverview::ViewShotParams& params);
     std::vector<PickSample> mPicksInFlight;
     PickSample mPick;               ///< the newest landed
     /// How picks were answered over a second, for the log.
@@ -226,7 +279,7 @@ private:
     enum class SpanKind : U8
     {
         Map,
-        Tactical,
+        View,
         Patch,
         Movers,
         Resolve
@@ -237,14 +290,14 @@ private:
     std::vector<std::pair<SpanKind, ALQuerySpan>> mSpans;
 
     SKOverviewCensus mCensus;
-    SKOverviewProbes mProbes;   ///< the tactical cut's and the pick's questions to the GPU
+    SKOverviewProbes mProbes;   ///< the view cut's and the pick's questions to the GPU
     SKOverviewMovers mMovers;
+    skoverview::Palette mPalette;
     LLRenderTarget* mSceneDepth = nullptr;   ///< the capture whose depth this frame's markers test against
     bool mWorkValid = false;    ///< the work target holds the static capture, with the rects below drawn over it
     LLRect mPatchRect;          ///< the window rect the circles' patch covers on the work target, empty for none
     LLRect mMoverRect;          ///< and the movers drawn last frame
     U64 mPatchKey = 0;          ///< the circles the patch was drawn for
-    F32 mTacticalDistance = 0.f;
     std::vector<std::unique_ptr<RegionMap>> mMaps;
     size_t mCursor = 0;     // where the next round-robin turn starts in mMaps
     F64 mNextSlot = 0.0;    // when the next turn may capture
@@ -253,16 +306,19 @@ private:
     U32 mClassMask = 0;     // the layers the region maps were last styled with
     bool mGLFailed = false;
     bool mDemanding = false;
-    LLMatrix4a mTacticalView;
-    LLMatrix4a mTacticalProj;
-    S32 mTacticalViewport[4] = {};
-    bool mTacticalReady = false;    ///< rendered this frame, for the composite
-    bool mTacticalPickable = false; ///< the tactical view and viewport are a shown frame's, for clicks
-    LLVector3 mTacticalCentre;   // agent space
-    F32 mTacticalReach = 0.f;
-    F32 mTacticalShadeZ = 0.f;      ///< agent-space z the height colours are relative to: the agent's floor, eased
-    F64 mTacticalShadeTime = -1.0;  ///< when it was last eased; negative until the first shot
-    /// A person's see-through circle on the tactical view, eased in and out so it never pops.
+    bool mFrameRan = false;         ///< frame() has run, in mFrameNo
+    U32 mFrameNo = 0;
+    LLMatrix4a mViewView;
+    LLMatrix4a mViewProj;
+    S32 mViewViewport[4] = {};
+    bool mViewReady = false;        ///< rendered this frame, for the composite
+    bool mViewPickable = false;     ///< the view and viewport are a shown frame's, for picks
+    U32 mViewFrame = 0;             ///< the frame the view last rendered in
+    LLVector3 mViewCentre;          // agent space
+    F32 mViewReach = 0.f;
+    F32 mViewShadeZ = 0.f;          ///< agent-space z the height colours are relative to: the agent's floor, eased
+    F64 mViewShadeTime = -1.0;      ///< when it was last eased; negative until the first shot
+    /// A person's see-through circle on the camera view, eased in and out so it never pops.
     struct Dissolve
     {
         LLVector3 mFloor;       ///< agent space, their feet
@@ -271,35 +327,9 @@ private:
     };
     std::map<LLUUID, Dissolve> mDissolves;
     F64 mDissolveTime = -1.0;
-    /// Fills the shot's see-through circles round the agent and the people the overview marks, and the window rect they
-    /// cover; the key of what it drew, which moves the patch, never the static capture.
-    U64 tacticalDissolve(Shot& shot, S32 w, S32 h, LLRect& rect);
-    bool mTacticalOpen = false;     ///< claims the modal view
-    /// Claims or releases the modal view to match SKTacticalOverview.
-    static void syncTactical();
-    void openTactical();
-    void closeTactical();
-    /// Puts the viewer camera at the overview's settings: tilted over the agent, looking the way the camera did.
-    void placeTacticalCamera(bool over_other_mode);
-    /// Battlefield mode: a fixed north-up camera over the region's centre, far enough to fit it in the window.
-    void placeBattlefieldCamera();
-    /// Puts the viewer camera there at once, without the ease LLAgentCamera gives a focus change.
-    void setTacticalCamera(const LLVector3d& eye, const LLVector3d& focus);
-    /// The agent's region, and with SKTacticalBattlefieldNeighbours the connected regions touching it, global.
-    bool battlefieldBounds(LLVector3d& lo, LLVector3d& hi) const;
-    /// A drag over the overview, from the press SKToolMapPan began it with.
-    struct Pan
-    {
-        bool mActive = false;
-        LLVector3 mGrab;        // agent space
-        LLMatrix4a mView;       // the tactical camera at the press
-        LLMatrix4a mProj;
-        S32 mViewport[4] = {};
-        LLVector3d mEye;
-        LLVector3d mFocus;
-    } mPan;
-    /// Works out the per-building cut (SKOverviewCensus::applyCut) for the agent and the people the overview marks.
-    void updateCut();
+    /// Fills the shot's see-through circles round the agent and the occupants, and the window rect they cover; the key
+    /// of what it drew, which moves the patch, never the static capture.
+    U64 viewDissolve(Shot& shot, const skoverview::ViewShotParams& params, S32 w, S32 h, LLRect& rect);
     /// The air's room around a floor point, from its start gap's space; null where that space is in no room.
     /// A room's footprint is built once per room hash and kept a few seconds while it is in use.
     std::shared_ptr<const SKOverviewCensus::RoomFootprint> roomAt(const LLVector3d& floor);
@@ -331,8 +361,8 @@ private:
         SKWorldView::AirColumn mColumn;
     };
     std::map<LLUUID, HeldColumn> mColumns;
-    /// What the last tactical capture showed: the same again reuses its image.
-    struct TacticalKey
+    /// What the last view capture showed: the same again reuses its image.
+    struct ViewKey
     {
         bool mValid = false;
         LLVector3 mEye;
@@ -345,15 +375,15 @@ private:
         U64 mCutStamp = 0;
         U32 mDebugView = 0;
         U64 mRegionHandle = 0;
-    } mTacticalKey;
-    /// CPU time of the tactical view, summed over a second and logged.
+    } mViewKey;
+    /// CPU time of the camera view, summed over a second and logged.
     struct Cost
     {
         F64 mSince = 0.0;
         F32 mCaptureMs = 0.f;
         F32 mResolveMs = 0.f;
         F32 mCompositeMs = 0.f;
-        F32 mGpuTacticalMs = 0.f;   // GPU spans read in this second, summed
+        F32 mGpuViewMs = 0.f;   // GPU spans read in this second, summed
         F32 mGpuPatchMs = 0.f;
         F32 mGpuMoversMs = 0.f;
         F32 mGpuResolveMs = 0.f;
@@ -362,24 +392,6 @@ private:
         U32 mReuses = 0;
         U32 mScansAtStart = 0;
     } mCost;
-    struct TacticalMark
-    {
-        LLUUID mId;
-        LLVector2 mAt;      // overview pixels
-    };
-    std::map<LLUUID, F32> mFlatBlend;       // each marker's crossfade from its body (0) to its flat marker (1)
-    F64 mMarkerFadeTime = -1.0;
-    std::vector<TacticalMark> mTacticalMarks;  // the markers drawn last frame, for picks
-    // The mini-map's hover nametags, laid out in UI pixels over the overview.
-    /// tagged runs alongside drawn: an avatar there shows its own name tag instead of the marker label.
-    void drawTacticalLabels(const std::vector<std::pair<size_t, LLVector2>>& drawn, const std::vector<LLVOAvatar*>& tagged,
-                            S32 vw, S32 vh);
-    skmap::HoverSet mTacticalHover;
-    skmap::LabelLayout mTacticalLabels;
-    std::vector<skmapdraw::TagText> mTacticalTagTexts;
-    bool mTacticalEscDown = false;
-    LLHandle<SKPopupPanes> mPopup;
-
 };
 
 #endif // SK_OVERVIEWCAPTURE_H

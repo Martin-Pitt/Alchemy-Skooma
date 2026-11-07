@@ -1,6 +1,6 @@
 /**
  * @file skoverviewprobes_test.cpp
- * @brief The tactical cut's probes: what a landed answer does, without GL.
+ * @brief The view cut's probes: what a landed answer does, without GL.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Second Life Viewer Source Code

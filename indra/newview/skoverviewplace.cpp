@@ -1,6 +1,6 @@
 /**
- * @file skmapplan.cpp
- * @brief Where someone stands in the rooms layer's air, for the mini-map and the overview.
+ * @file skoverviewplace.cpp
+ * @brief Where someone stands in the rooms layer's air, for the overview capture's cut.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Second Life Viewer Source Code
@@ -24,9 +24,9 @@
 
 #include "llviewerprecompiledheaders.h"
 
-#include "skmapplan.h"
+#include "skoverviewplace.h"
 
-using namespace skmap::plan;
+using namespace skoverview::place;
 
 namespace
 {
@@ -70,7 +70,7 @@ namespace
 
 }
 
-skmap::plan::Whereabouts skmap::plan::whereabouts(const LLVector3d& feet, F32 band_below, F32 band_above)
+skoverview::place::Whereabouts skoverview::place::whereabouts(const LLVector3d& feet, F32 band_below, F32 band_above)
 {
     const SKWorldViewPtr world = SKRooms::instanceExists() ? SKRooms::instance().view() : nullptr;
     if (!world)
@@ -79,11 +79,11 @@ skmap::plan::Whereabouts skmap::plan::whereabouts(const LLVector3d& feet, F32 ba
     }
     SKWorldView::AirColumn column;
     world->columnAt(feet, column);
-    return whereabouts(*world, column, feet, band_below, band_above);
+    return whereabouts(column, feet, band_below, band_above);
 }
 
-skmap::plan::Whereabouts skmap::plan::whereabouts(const SKWorldView& world, const SKWorldView::AirColumn& column,
-                                                  const LLVector3d& feet, F32 band_below, F32 band_above)
+skoverview::place::Whereabouts skoverview::place::whereabouts(const SKWorldView::AirColumn& column, const LLVector3d& feet,
+                                                              F32 band_below, F32 band_above)
 {
     const F64 LIFT_M = 0.3;
     Whereabouts out;
@@ -98,22 +98,14 @@ skmap::plan::Whereabouts skmap::plan::whereabouts(const SKWorldView& world, cons
         return out;
     }
     out.mFound = true;
-    out.mSpace.mMesh = id.mMesh;
-    out.mSpace.mId = id.mId;
     out.mBucket = bucketOf(gap.mBucket);
     out.mIndoor = out.mBucket == Bucket::INDOORS;
     out.mFloor = gap.mFloor;
     out.mCeiling = gap.mCeiling;
-    out.mFine = true;
-    if (const skworld::Space* space = id.mId ? world.space(id) : nullptr)
-    {
-        out.mBuilding = space->mBuilding;
-        out.mRoof = space->mRoof;
-    }
     return out;
 }
 
-bool skmap::plan::outdoorsIn(const SKWorldView::AirColumn& column, const LLVector3d& feet)
+bool skoverview::place::outdoorsIn(const SKWorldView::AirColumn& column, const LLVector3d& feet)
 {
     for (F64 lift : { 0.3, 0.8, 1.3 })
     {
@@ -126,7 +118,7 @@ bool skmap::plan::outdoorsIn(const SKWorldView::AirColumn& column, const LLVecto
     return false;
 }
 
-bool skmap::plan::agentFloor(const LLVector3d& at, F64 feet, F32& floor_out)
+bool skoverview::place::agentFloor(const LLVector3d& at, F64 feet, F32& floor_out)
 {
     const SKWorldViewPtr world = SKRooms::instanceExists() ? SKRooms::instance().view() : nullptr;
     SKWorldView::SpaceId space;

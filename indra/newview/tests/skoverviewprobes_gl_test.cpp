@@ -1,6 +1,6 @@
 /**
  * @file skoverviewprobes_gl_test.cpp
- * @brief The tactical cut's probes on the GPU: membership queries over a footprint mask, the feet texel, the pick, the
+ * @brief The view cut's probes on the GPU: membership queries over a footprint mask, the feet texel, the pick, the
  *        pack-buffer readback, with the overview's own id program.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
@@ -438,7 +438,7 @@ namespace
         }
     }
 
-    // The tactical view's pick: a shown frame's depth texel, read through the pack path a frame later, unprojected with
+    // The camera view's pick: a shown frame's depth texel, read through the pack path a frame later, unprojected with
     // that frame's camera (SKOverviewCapture::groundAt), lands on the surface the texel shows, under the infinite
     // reverse-Z projection as under the finite forward one.
     TEST_CASE_METHOD(skoverviewprobes_gl_data, "skoverviewprobes: a picked depth texel unprojects onto the surface it shows",
@@ -496,7 +496,7 @@ namespace
             gGL.matrixMode(LLRender::MM_MODELVIEW);
             gGL.popMatrix();
             mDepth.flush();
-            // A cursor path across the view, one texel a frame as the tactical view reads it.
+            // A cursor path across the view, one texel a frame as the camera view reads it.
             const S32 viewport[4] = { 0, 0, SIDE, SIDE };
             std::ofstream path_file;
             const std::string dir_out = dumpDir();

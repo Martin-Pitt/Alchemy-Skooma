@@ -46,7 +46,7 @@
 #include "llenvironment.h"
 #include "llerrorcontrol.h"
 #include "llworld.h"
-#include "skoverviewcapture.h" // <SK:Nexii> combat/minimap: the overview's programs
+#include "skoverviewcapture.h" // <SK:Nexii> overview capture: its programs
 
 #include "pipeline.h"
 
@@ -3496,11 +3496,8 @@ void LLViewerShaderMgr::loadShadersDeferred()
     }
     // [/RLV:KB]
 
-    // <SK:Nexii> combat/minimap: the overview's programs; a failure leaves only the overview off.
-    if (success)
-    {
-        SKOverviewCapture::loadShaders(mShaderLevel[SHADER_DEFERRED]);
-    }
+    // <SK:Nexii> overview capture: its programs; one that fails leaves only the overview off.
+    SKOverviewCapture::loadShaders(mShaderLevel[SHADER_DEFERRED]);
     // </SK:Nexii>
 }
 

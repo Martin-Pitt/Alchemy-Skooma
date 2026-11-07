@@ -756,7 +756,7 @@ void ALGPUStream::noteRead(size_t offset)
     mReadIn[region] = frames().frame();
 }
 
-// <SK:Nexii> Overview cut table: a buffer texture over a stream.
+// <SK:Nexii> overview capture: its cut table, a buffer texture over a stream.
 bool ALGPUBufferTexture::attach(ALTextureSlot* slot, const ALGPUBuffer& buffer, U32 internal_format)
 {
     if (!slot || !buffer.isAllocated())

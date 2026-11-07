@@ -1,6 +1,6 @@
 /**
  * @file skoverviewmovers.h
- * @brief Moving objects and vehicles for the tactical overview, at their live pose.
+ * @brief Moving objects and vehicles for the overview's camera view, at their live pose.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Second Life Viewer Source Code
@@ -27,10 +27,11 @@
 
 #include "llmatrix4a.h"
 #include "llpointer.h"
+#include "llquaternion.h"
 #include "llrect.h"
 #include "llvolume.h"
 #include "lluuid.h"
-#include "skmappeople.h"
+#include "v3dmath.h"
 
 #include <map>
 #include <set>
@@ -40,16 +41,48 @@ class LLVertexBuffer;
 class LLViewerObject;
 class LLVolume;
 
+namespace skoverview
+{
+    /// How a vehicle is styled: not drawn as one at all, in the movers' colour, or in one of two hull colours whose
+    /// meaning the mover source picks.
+    enum class VehicleLook : U8 { HIDDEN, PLAIN, PRIMARY, SECONDARY };
+
+    /// A linkset driven as a vehicle, at its live pose.
+    struct Vehicle
+    {
+        LLUUID mRoot;
+        LLVector3d mPos;
+        LLQuaternion mRot;
+        LLVector3 mMin, mMax;               ///< the linkset's box in the root's frame
+        VehicleLook mLook = VehicleLook::PLAIN;
+    };
+
+    /// Who knows the vehicles and whose they are: the people layer above the overview registers one. Main thread.
+    class MoverSource
+    {
+    public:
+        virtual ~MoverSource() = default;
+        /// The vehicles the source tracks this frame, with their looks.
+        virtual void vehicles(std::vector<Vehicle>& out) const = 0;
+        /// The look of a linkset the source does not track that someone sits on (crew, never empty) or that sits on
+        /// click (crew empty).
+        virtual VehicleLook lookOf(const std::vector<LLUUID>& crew) const = 0;
+    };
+}
+
 /// What moves: physical objects, objects the census saw move (keyframed motion among them), elevator cars, and
-/// vehicles. The static census leaves them all out. Vehicles are the mini-map's own (SKMapPeople) plus any moving
-/// linkset someone sits on or that sits on click, with the mini-map's look rules. Every mover, vehicles included, is
-/// drawn from its rendered faces at its live pose and true size, whole, never cut by the floor cut; vehicles in the
-/// mini-map's hull colour for their look. Main thread only.
+/// vehicles. The static census leaves them all out. Vehicles are the mover source's own plus any moving linkset
+/// someone sits on or that sits on click, styled by the source; with no source every one is plain, drawn as any mover
+/// is. Every mover, vehicles included, is drawn from its rendered faces at its live pose and true size, whole, never
+/// cut by the floor cut; vehicles in the hull colour of their look. Main thread only.
 class SKOverviewMovers
 {
 public:
     SKOverviewMovers();
     ~SKOverviewMovers();
+
+    /// The source of the vehicles and their looks, or none; the caller keeps it alive until it sets another.
+    void setSource(const skoverview::MoverSource* source) { mSource = source; }
 
     /// Who moves and where, this frame. True when anything is to be drawn.
     bool update();
@@ -64,7 +97,7 @@ public:
     /// box across the eye's plane, false for one wholly behind it.
     static bool screenRectOf(const LLMatrix4a& view_proj, const LLVector4a& lo, const LLVector4a& hi, S32 w, S32 h, LLRect& rect);
     /// The vehicles, live, with their looks; hidden ones are left out.
-    const std::vector<SKMapPeople::Vehicle>& vehicles() const { return mVehicles; }
+    const std::vector<skoverview::Vehicle>& vehicles() const { return mVehicles; }
     void release();
 
 private:
@@ -90,7 +123,8 @@ private:
 
     std::map<LLUUID, Mesh> mMeshes;
     std::vector<Part> mParts;
-    std::vector<SKMapPeople::Vehicle> mVehicles;
+    std::vector<skoverview::Vehicle> mVehicles;
+    const skoverview::MoverSource* mSource = nullptr;
     std::vector<LLUUID> mCandidates;    ///< roots that move, refreshed per census scan
     U64 mStamp = 0;
 };

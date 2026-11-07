@@ -38,7 +38,7 @@
 #include "skmapview.h"
 
 class LLVOAvatar;
-#include "skmapplan.h"
+#include "skoverviewcapture.h"
 #include "skoutlinecapture.h"
 
 #include <deque>
@@ -61,7 +61,7 @@ public:
 };
 
 /// Main thread only. Does nothing while no map has drawn for a couple of seconds.
-class SKMapPeople : public LLSingleton<SKMapPeople>
+class SKMapPeople : public LLSingleton<SKMapPeople>, public skoverview::MoverSource
 {
     LLSINGLETON(SKMapPeople);
     ~SKMapPeople() override;
@@ -81,7 +81,7 @@ public:
         bool mFriend = false;
         LLColor4 mColour;                   ///< the general dot colour
         skmap::FloorRelation mFloor = skmap::FloorRelation::SAME;   ///< UNKNOWN with no height; ABOVE or BELOW past SKMapFloorChevronBand1
-        skmap::plan::Whereabouts mWhere;    ///< their air gap's space and floor
+        skoverview::place::Whereabouts mWhere; ///< their air gap and floor
         F32 mFloorDelta = 0.f;              ///< their feet minus yours, m; meaningful only when mFloorKnown
         bool mFloorKnown = false;
         bool mAlly = false;
@@ -109,6 +109,15 @@ public:
     };
     /// Linksets the census has seen driven this session, at their live pose.
     const std::vector<Vehicle>& vehicles() const { return mVehicles; }
+
+    // skoverview::MoverSource: the overview's vehicles in the map's looks (civilian plain, allied primary, neutral
+    // secondary).
+    void vehicles(std::vector<skoverview::Vehicle>& out) const override;
+    skoverview::VehicleLook lookOf(const std::vector<LLUUID>& crew) const override;
+    /// The people the overview cuts and dissolves for, as its occupants.
+    void occupants(std::vector<skoverview::Occupant>& out) const;
+    /// Registers this layer as the overview's mover source; the map and the tactical overview call it before drawing.
+    void feedOverview() const;
     /// Whether the agent is engaged on land where it can be hurt, or the debug switch forces it.
     bool combat() const { return mCombat; }
     /// When combat last started or ended, for the map's brief notice.

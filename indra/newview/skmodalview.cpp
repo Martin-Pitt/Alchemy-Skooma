@@ -39,7 +39,7 @@
 #include "llviewerwindow.h"
 #include "llviewerregion.h"
 #include "pipeline.h"
-#include "skoverviewcapture.h"
+#include "sktacticaloverview.h"
 #include "rlvactions.h"
 #include "rlvhandler.h"
 
@@ -460,7 +460,7 @@ void SKModalView::worldCameraForUpdate(LLVector3& position_agent, LLVector3& at,
 bool SKModalView::tacticalInterest()
 {
     static LLCachedControl<bool> send_camera(gSavedSettings, "SKTacticalSendCamera", true);
-    return send_camera && SKOverviewCapture::tacticalShown();
+    return send_camera && SKTacticalOverview::shown();
 }
 
 // static

@@ -1147,7 +1147,7 @@ void LLVertexBuffer::drawArrays(U32 mode, U32 first, U32 count) const
     LLRender::sDrawElements += count;
 }
 
-// <SK:Nexii> combat/minimap: several ranges of the bound buffer in one call
+// <SK:Nexii> overview capture: multi-draws, several ranges of the bound buffer in one call
 void LLVertexBuffer::multiDrawArrays(U32 mode, const GLint* first, const GLsizei* count, GLsizei draw_count) const
 {
     llassert(validate_bound_samplers());
@@ -1172,7 +1172,7 @@ void LLVertexBuffer::multiDrawArrays(U32 mode, const GLint* first, const GLsizei
     LLRender::sDrawElements += total;
 }
 
-// <SK:Nexii> combat/minimap: commands a shader wrote, over the bound buffer
+// Commands a shader wrote, over the bound buffer
 void LLVertexBuffer::multiDrawArraysIndirect(U32 mode, const ALGPUBuffer& commands, size_t offset, GLsizei draw_count,
                                              GLsizei stride) const
 {
@@ -2004,7 +2004,7 @@ bool LLVertexBuffer::getIndexStrider(LLStrider<U16>& strider, U32 index, S32 cou
     llassert(mIndicesType == GL_UNSIGNED_SHORT);
     return VertexBufferStrider<U16,TYPE_INDEX>::get(*this, strider, index, count);
 }
-// <SK:Nexii> combat/minimap: 32-bit indices through the same map, which counts in 16-bit ones
+// <SK:Nexii> overview capture: 32-bit indices through the same map, which counts in 16-bit ones
 bool LLVertexBuffer::getIndexStrider(LLStrider<U32>& strider, U32 index, S32 count)
 {
     if (mIndicesType != GL_UNSIGNED_INT)

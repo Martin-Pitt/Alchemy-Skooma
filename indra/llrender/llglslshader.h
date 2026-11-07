@@ -415,7 +415,7 @@ public:
     void uniformMatrix3fv(U32 index, const LLMatrix3a& m);
 
     void uniform1i(const LLStaticHashedString& uniform, GLint i);
-    // <SK:Nexii> Hashed setters for Skooma programs whose uniform names are not reserved.
+    // <SK:Nexii> overview capture: hashed setters for programs whose uniform names are not reserved.
     void uniform1f(const LLStaticHashedString& uniform, GLfloat v);
     void uniform1ui(const LLStaticHashedString& uniform, GLuint v);
     void uniform2f(const LLStaticHashedString& uniform, GLfloat x, GLfloat y);

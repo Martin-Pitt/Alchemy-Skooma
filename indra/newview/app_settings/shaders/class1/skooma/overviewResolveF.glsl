@@ -47,7 +47,7 @@ uniform vec4 sk_regions[16];   // the territory: the regions styled as inside, m
 uniform int sk_region_count;
 uniform vec3 sk_invisible;
 uniform int sk_debug_view;      // SKOverviewDebugView
-uniform int sk_class_mask;      // the mini-map's opt-in layers, -1 for the tactical view's own style
+uniform int sk_class_mask;      // a map's opt-in layers, -1 for the camera view's own style
 
 const int CODE_NONE = 0;
 const int CODE_FLOOR = 16;
@@ -60,12 +60,12 @@ const int CODE_VEHICLE = 22;
 const int CODE_SECTION = 23;
 const int CODE_PLACEHOLDER = 24;
 const int CODE_MOVER = 25;
-const int CODE_VEH_CIVIL = 26;
-const int CODE_VEH_ALLY = 27;
-const int CODE_VEH_NEUTRAL = 28;
-const vec3 VEH_ALLY = vec3(0.31, 0.62, 0.67);      // the mini-map's allied vehicle hull (VEH_ALLY_HULL)
-const vec3 VEH_NEUTRAL = vec3(0.55, 0.58, 0.61);   // and neutral (VEH_NEUTRAL_HULL)
-const vec3 MOVER_GREEN = vec3(0.31, 0.60, 0.35);   // the mini-map's civilian vehicle hull (VEH_CIVIL_HULL)
+const int CODE_VEH_PLAIN = 26;
+const int CODE_VEH_PRIMARY = 27;
+const int CODE_VEH_SECONDARY = 28;
+const vec3 VEH_PRIMARY = vec3(0.31, 0.62, 0.67);   // the first vehicle hull a mover source may pick
+const vec3 VEH_SECONDARY = vec3(0.55, 0.58, 0.61); // and the second
+const vec3 MOVER_GREEN = vec3(0.31, 0.60, 0.35);   // movers and plain vehicles
 const int CODE_TERRAIN = 255;
 
 // The style's knobs.
@@ -98,13 +98,13 @@ const vec3 CONTOUR = vec3(0.85, 0.88, 0.80);
 const float CONTOUR_STEP_M = 0.5;
 const float TERRAIN_CONTOUR_STEP_M = 2.0;
 
-// Whether a mini-map layer is on; the tactical view keeps every class as styled.
+// Whether a map layer is on; the camera view keeps every class as styled.
 bool layerOn(int bit)
 {
     return sk_class_mask < 0 || (sk_class_mask & bit) != 0;
 }
 
-// Whether the mini-map highlights a layer beyond the tactical view's styling.
+// Whether a map highlights a layer beyond the camera view's styling.
 bool layerHighlit(int bit)
 {
     return sk_class_mask >= 0 && (sk_class_mask & bit) != 0;
@@ -303,7 +303,7 @@ void main()
     int code = int(cls.r * 255.0 + 0.5);
     bool invisible = cls.b > 0.5;
     bool capped = cls.b > 0.1 && cls.b < 0.5;
-    // Uncut geometry above the agent's level (another region's roofs, buildings the tactical view leaves whole)
+    // Uncut geometry above the agent's level (another region's roofs, buildings the camera view leaves whole)
     // shades as that level's top, never lighter.
     float rel = min(pos.z, sk_level_top) - sk_focus.z;
     float px_m = pixelMetres(pos);
@@ -362,17 +362,17 @@ void main()
     {
         c = layerHighlit(MASK_LADDERS) ? mix(SLATE_WALL, LADDER_TINT, 0.6) : layerOn(MASK_LADDERS) ? SLATE_WALL * 1.12 : SLATE_WALL;
     }
-    else if (code == CODE_MOVER || code == CODE_VEH_CIVIL)
+    else if (code == CODE_MOVER || code == CODE_VEH_PLAIN)
     {
         c = MOVER_GREEN;
     }
-    else if (code == CODE_VEH_ALLY)
+    else if (code == CODE_VEH_PRIMARY)
     {
-        c = VEH_ALLY;
+        c = VEH_PRIMARY;
     }
-    else if (code == CODE_VEH_NEUTRAL)
+    else if (code == CODE_VEH_SECONDARY)
     {
-        c = VEH_NEUTRAL;
+        c = VEH_SECONDARY;
     }
     else if (code == CODE_PLACEHOLDER)
     {

@@ -21,7 +21,7 @@
  * $/LicenseInfo$
  */
 
-// Tactical overview: the resolved overview over a near-black ground, blurred toward the top and bottom of the view
+// Overview camera view: the resolved overview over a near-black ground, blurred toward the top and bottom of the view
 // (tilt-shift) so the band around the agent stays sharp, darkened toward the corners.
 
 out vec4 frag_color;

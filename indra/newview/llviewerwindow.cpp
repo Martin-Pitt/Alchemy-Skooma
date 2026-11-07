@@ -26,7 +26,7 @@
 
 #include "llviewerprecompiledheaders.h"
 #include "llviewerwindow.h"
-#include "skoverviewcapture.h" // <SK:Nexii> tactical overview
+#include "sktacticaloverview.h" // <SK:Nexii> tactical overview
 #include "skmodalview.h" // <SK:Nexii> modal view
 
 
@@ -1192,7 +1192,7 @@ bool LLViewerWindow::handleAnyMouseClick(LLWindow *window, LLCoordGL pos, MASK m
     }
 
     // <SK:Nexii> Tactical overview: world right-clicks open the mini-map's menus on it.
-    if (down && clicktype == CLICK_RIGHT && !gDisconnected && SKOverviewCapture::handleRightClick(x, y))
+    if (down && clicktype == CLICK_RIGHT && !gDisconnected && SKTacticalOverview::handleRightClick(x, y))
     {
         return true;
     }

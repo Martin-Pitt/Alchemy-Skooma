@@ -1,6 +1,6 @@
 /**
  * @file skoverviewprobes.h
- * @brief The tactical cut's GPU probes: which census linksets stand round, over or under someone, by occlusion queries
+ * @brief The view cut's GPU probes: which census linksets stand round, over or under someone, by occlusion queries
  *        and a one-texel id render, and the depth under the cursor, each read back a frame or two later.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
@@ -115,7 +115,7 @@ namespace skoverview
     bool feetSurface(U32 texel, F32 depth, F32 near_z, F32 far_z, bool reverse_z, U32& id, F32& z);
 }
 
-/// The tactical cut's questions, put to the rasteriser: membership by one exact occlusion query per candidate linkset,
+/// The view cut's questions, put to the rasteriser: membership by one exact occlusion query per candidate linkset,
 /// the surface under someone's feet by a one-texel id render, and the depth under the cursor. Every answer reaches the
 /// CPU a frame or two later through one pixel-pack buffer and ALGPUReadback, or as a query result, so nothing waits on
 /// the GPU; GL 3.3 throughout, one path on every context. Owns one 256 x 256 GL_R32UI target with a 32-bit float depth,

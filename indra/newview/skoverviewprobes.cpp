@@ -1,6 +1,6 @@
 /**
  * @file skoverviewprobes.cpp
- * @brief The tactical cut's GPU probes.
+ * @brief The view cut's GPU probes.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Second Life Viewer Source Code
@@ -222,7 +222,7 @@ bool SKOverviewProbes::beginFrame(LLGLSLShader& program, U32 samples)
     if (!mTarget.isComplete() && !mTarget.allocate(SIZE, SIZE, GL_R32UI, true, false, ALTextureSlot::TT_TEXTURE,
                                                    LLRenderTarget::MIPS_NONE, LLRenderTarget::DEPTH_FMT_32F))
     {
-        LL_WARNS("SKOverview") << "probe target did not allocate; the tactical cut finds no rooms, columns or roofs" << LL_ENDL;
+        LL_WARNS("SKOverview") << "probe target did not allocate; the view cut finds no rooms, columns or roofs" << LL_ENDL;
         mFailed = true;
         return false;
     }
@@ -235,7 +235,7 @@ bool SKOverviewProbes::beginFrame(LLGLSLShader& program, U32 samples)
         mSamplesMax = samples;
         if (!mPack.allocate(bytes, 0, nullptr, "SK overview probe texels") || !mReadback.allocate(bytes, 4, "SK overview probe readback"))
         {
-            LL_WARNS("SKOverview") << "probe pack buffer did not allocate; the tactical cut finds no roofs" << LL_ENDL;
+            LL_WARNS("SKOverview") << "probe pack buffer did not allocate; the view cut finds no roofs" << LL_ENDL;
             mFailed = true;
             return false;
         }
