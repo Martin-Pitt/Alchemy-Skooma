@@ -104,6 +104,7 @@ bool SKMapMode::isOpen()
 bool SKMapMode::groundBelow(const LLVector3d& eye, LLVector3d& ground) const
 {
     ground.setVec(eye.mdV[VX], eye.mdV[VY], GROUND_Z);
+    ground.mdV[VZ] = mScene.groundAt(ground, GROUND_Z);
     return true;
 }
 
@@ -352,8 +353,51 @@ void SKMapMode::recentre()
 
 bool SKMapMode::groundUnderCursor(S32 x, S32 y, LLVector3d& ground) const
 {
+    // The map's surface where the cursor's ray first reaches it: terrain where the map has heights, the
+    // ground plane elsewhere. Near the horizon the ray is tilted down a little, as the pan's is, so it lands.
     const LLVector3d eye = gAgent.getPosGlobalFromAgent(LLViewerCamera::getInstance()->getOrigin());
-    return groundHit(eye, LLVector3d(gViewerWindow->mouseDirectionGlobal(x, y)), ground);
+    const LLVector3d dir = clampDip(LLVector3d(gViewerWindow->mouseDirectionGlobal(x, y)));
+    LLVector3d plane;
+    if (!groundHit(eye, dir, plane))
+    {
+        return false;
+    }
+    // March toward the plane hit in steps a fraction of the way, then bisect the step that went under.
+    // The surface is never below the water, so the ray meets it no later than the plane at the water.
+    constexpr S32 STEPS = 256;
+    constexpr S32 BISECTIONS = 24;
+    const F64 reach = (plane - eye).magVec() * 1.05;
+    const auto above = [&](F64 t) {
+        const LLVector3d p = eye + dir * t;
+        return p.mdV[VZ] > mScene.groundAt(p, GROUND_Z);
+    };
+    F64 t0 = 0.0;
+    for (S32 k = 1; k <= STEPS; ++k)
+    {
+        const F64 t1 = reach * k / STEPS;
+        if (!above(t1))
+        {
+            F64 lo = t0, hi = t1;
+            for (S32 b = 0; b < BISECTIONS; ++b)
+            {
+                const F64 mid = 0.5 * (lo + hi);
+                if (above(mid))
+                {
+                    lo = mid;
+                }
+                else
+                {
+                    hi = mid;
+                }
+            }
+            ground = eye + dir * hi;
+            ground.mdV[VZ] = mScene.groundAt(ground, GROUND_Z);
+            return true;
+        }
+        t0 = t1;
+    }
+    ground = plane;
+    return true;
 }
 
 bool SKMapMode::beginPan(S32 x, S32 y)
@@ -383,7 +427,8 @@ void SKMapMode::pan(S32 x, S32 y)
 {
     // Solved whole from the drag's start each time, never step by step, so it cannot drift or feed back.
     LLVector3d offset;
-    if (!mPanning || !panOffset(mPanView, clampDip(cursorRay(mPanBasis, x, y)), mPanGrabbed, offset))
+    // The grabbed point slides on the level through it, so a grab on a hill stays under the cursor.
+    if (!mPanning || !panOffset(mPanView, clampDip(cursorRay(mPanBasis, x, y)), mPanGrabbed, offset, mPanGrabbed.mdV[VZ]))
     {
         return;
     }

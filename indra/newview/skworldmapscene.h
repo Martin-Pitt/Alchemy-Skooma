@@ -68,6 +68,9 @@ public:
 
     const std::vector<skworldmap::SelectedTile>& selected() const { return mSelected; }
 
+    /// The surface the map draws at a global point, land or water: terrain where it has heights, else `fallback`.
+    F64 groundAt(const LLVector3d& p, F64 fallback) const { return mTerrain.groundAt(p, fallback); }
+
 private:
     bool allocateTargets(S32 width, S32 height);
     void drawGround(const SKWorldMapFrame& frame, S32 width, S32 height, F64 now);
