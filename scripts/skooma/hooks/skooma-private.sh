@@ -34,7 +34,18 @@ skooma_is_private() {
     case "$1" in
     local | private-* | spike-* | backup/local | backup/private-* | backup/spike-*) return 0 ;;
     esac
-    printf '%s\n' "$SKOOMA_SCAN" | grep -qxF "P $1"
+    printf '%s\n' "$SKOOMA_SCAN" | grep -qxF "P $1" && return 0
+    printf '%s\n' "$SKOOMA_SCAN" | grep -qxF "U $1" && return 1
+    # A branch being created is in no scan yet: its own config says (git skooma new sets it first).
+    _c=$(git config --get "branch.$1.skooma" 2>/dev/null)
+    case "$_c" in
+    private | spike) return 0 ;;
+    amend)
+        _p=$(git config --get "branch.$1.skooma-base" 2>/dev/null)
+        [ -n "$_p" ] && [ "$_p" != "$1" ] && skooma_is_private "$_p" && return 0
+        ;;
+    esac
+    return 1
 }
 
 # Prints the private branch whose commits $1 would carry beyond everything public, and

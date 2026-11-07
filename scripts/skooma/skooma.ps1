@@ -1407,6 +1407,13 @@ function Invoke-New {
     $branch = "$class-$name"
     $path   = Join-Path $WtRoot ($name -replace '/', '\')
     if ($class -eq 'amend') { $path = Join-Path $WtRoot ("amend\" + ($name -replace '/', '\')) }  # the feature holds .worktrees/<name>
+    # A worktree inside another worktree shows up there as an untracked folder: flatten the name instead.
+    $inside = { param($p) $Worktrees | Where-Object { $_.Path -ine $MainWt -and $p.StartsWith($_.Path.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase) } }
+    if (& $inside $path) {
+        $flat = Join-Path $(if ($class -eq 'amend') { Join-Path $WtRoot 'amend' } else { $WtRoot }) ($name -replace '/', '-')
+        Info "$path would sit inside another worktree; using $flat"
+        $path = $flat
+    }
 
     if (GitOk show-ref --verify --quiet "refs/heads/$branch") { Fail "branch $branch already exists" }
     if (Test-Path $path) { Fail "$path already exists" }
