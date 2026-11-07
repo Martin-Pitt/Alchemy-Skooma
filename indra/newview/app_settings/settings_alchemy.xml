@@ -6008,6 +6008,19 @@
             <key>Value</key>
             <integer>4</integer>
         </map>
+        <key>SKRoadAutopilotTurnRateMax</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                The car's sustainable yaw rate for bends, in degrees a second: the road autopilot takes a bend of radius r at no more than this rate times r (twomode measured 70-85 deg/s).
+            </string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>60</real>
+        </map>
         <key>SKRoadAutopilotArena</key>
         <map>
             <key>Comment</key>

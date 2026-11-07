@@ -1931,15 +1931,18 @@ namespace skroad::drive
     }
 
     // The speed the line allows now for the turns ahead, a junction's above all: at each point the speed that takes
-    // its bend at TURN_LAT_ACCEL (v = sqrt(a r)), plus what braking at TURN_PLAN_DECEL gains on the way there after
-    // the throttle's lag. Only bends tighter than TURN_R_MAX_M count; the gears handle the road's own curves. At a
+    // its bend at the car's sustainable yaw rate (v = rate r, SKRoadAutopilotTurnRateMax), plus what braking at
+    // TURN_PLAN_DECEL gains on the way there after the throttle's lag. Only bends that allow less than the target
+    // speed count, so a bend the car takes as it is neither slows nor logs. At a
     // T a resident comes down to a turning speed before the mouth (Nexii: a side road's car shot straight across
     // a main road into a wall with the line already turned onto it).
-    constexpr F64 TURN_LAT_ACCEL = 2.5, TURN_PLAN_DECEL = 4.0, TURN_R_MAX_M = 30.0, TURN_BASE_M = 3.0;
+    constexpr F64 TURN_PLAN_DECEL = 4.0, TURN_BASE_M = 3.0;
     constexpr F64 JUNCTION_TURN_MPS = 5.0;      // through a junction's turn, whatever its line's radius reads
     F64 sTurnAllowR = 0, sTurnAllowAt = 0;      // the bend that set the allowance: its radius and distance
-    F64 turnAllowance(const LLVector3d& pos, F64 speed, F64 dirx, F64 diry)
+    F64 turnAllowance(const LLVector3d& pos, F64 speed, F64 target, F64 dirx, F64 diry)
     {
+        static LLCachedControl<F32> turn_rate_c(gSavedSettings, "SKRoadAutopilotTurnRateMax", 60.f);
+        const F64 turn_rate = std::max(1.0, F64(turn_rate_c)) * PI / 180;
         const size_t n = sPath.size();
         F64 allow = 1e9;
         sTurnAllowR = 0;
@@ -1987,9 +1990,10 @@ namespace skroad::drive
                 const F64 h0 = std::atan2(sPath[j].y - sPath[i].y, sPath[j].x - sPath[i].x);
                 const F64 h1 = std::atan2(sPath[k].y - sPath[j].y, sPath[k].x - sPath[j].x);
                 const F64 curv = std::fabs(wrap(h1 - h0)) / std::max(1e-3, (arc[k] - arc[i]) / 2);
-                if (curv * TURN_R_MAX_M > 1.0)
+                const F64 v_turn = turn_rate / std::max(1e-6, curv);
+                if (v_turn < target)
                 {
-                    limit(std::sqrt(TURN_LAT_ACCEL / curv), at, 1.0 / curv);
+                    limit(v_turn, at, 1.0 / std::max(1e-6, curv));
                 }
             }
         }
@@ -7377,7 +7381,7 @@ void sk_road_driver::beforeAgentUpdate()
     {
         // the turns ahead (a junction's first): W let go above the speed they allow, braked well above it while no
         // turn key is held (braking while turning turns this car the other way)
-        const F64 allow = turnAllowance(pos, speed, sTravelX, sTravelY);
+        const F64 allow = turnAllowance(pos, speed, target, sTravelX, sTravelY);
         noteJunctionApproach(pos, speed, allow, sTravelX, sTravelY);
         if (speed > allow)
         {
