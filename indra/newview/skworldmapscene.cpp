@@ -33,6 +33,7 @@
 #include "llui.h"
 #include "llviewershadermgr.h"
 #include "llviewertexture.h"
+#include "llworld.h"
 #include "llworldmap.h"
 #include "pipeline.h"
 
@@ -123,6 +124,21 @@ namespace
             gGL.vertex2f(x + radius * std::cos(a1), y + radius * std::sin(a1));
         }
         gGL.end();
+    }
+
+    // A coarse location's height is in 4 m steps up to 1020 m; at 1020 the simulator is saying "higher".
+    constexpr F64 COARSE_HEIGHT_UNKNOWN = 1020.0;
+    const LLColor4 DROP_COLOUR(1.f, 1.f, 1.f, 0.45f);
+
+    /// A thin line from a dot down to the ground under it, so a tilted view shows how high it is.
+    void dropLine(F32 x, F32 y, F32 ground_x, F32 ground_y)
+    {
+        gGL.color4fv(DROP_COLOUR.mV);
+        gGL.begin(LLRender::LINES);
+        gGL.vertex2f(x, y);
+        gGL.vertex2f(ground_x, ground_y);
+        gGL.end();
+        disc(ground_x, ground_y, 1.5f, DROP_COLOUR);
     }
 
     void quad01(F32 alpha)
@@ -448,16 +464,62 @@ void SKWorldMapScene::drawAgents(const SKWorldMapFrame& frame, const LLRect& rec
     struct Cluster
     {
         F32 mX, mY;
+        F32 mGroundX = 0.f, mGroundY = 0.f;  ///< the ground under the dot, where it is above it
+        bool mLifted = false;
         S32 mCount;
     };
     std::vector<Cluster> clusters;
     std::vector<F64> distances;
     std::vector<S32> counts;
+    const auto add = [&](const LLVector3d& p, S32 count) {
+        F32 x, y;
+        F64 depth;
+        if (!proj.project(p, x, y, depth) || x < -8.f || y < -8.f || x > rect.getWidth() + 8.f || y > rect.getHeight() + 8.f)
+        {
+            return;
+        }
+        Cluster c{ x, y };
+        c.mCount = count;
+        LLVector3d ground = p;
+        ground.mdV[VZ] = GROUND_Z;
+        F32 gx, gy;
+        F64 gdepth;
+        if (p.mdV[VZ] > GROUND_Z + 2.0 && proj.project(ground, gx, gy, gdepth))
+        {
+            c.mGroundX = gx;
+            c.mGroundY = gy;
+            c.mLifted = true;
+        }
+        clusters.push_back(c);
+        distances.push_back(depth);
+        counts.push_back(count);
+    };
+
+    // People in the regions this viewer is connected to: where the avatar object is, else the coarse location.
+    // The coarse height stops at 1020 m; past it the height is unknown, so the dot goes on the ground.
+    uuid_vec_t ids;
+    std::vector<LLVector3d> positions;
+    LLWorld::getInstance()->getAvatars(&ids, &positions);
+    for (size_t i = 0; i < ids.size(); ++i)
+    {
+        if (ids[i] == gAgentID)
+        {
+            continue;
+        }
+        LLVector3d p = positions[i];
+        if (p.mdV[VZ] >= COARSE_HEIGHT_UNKNOWN)
+        {
+            p.mdV[VZ] = GROUND_Z;
+        }
+        add(p, 1);
+    }
+
+    // Everywhere else, the map server's clusters, on the ground.
     LLWorldMap* world_map = LLWorldMap::getInstance();
     for (U64 handle : mPolled)
     {
         const LLSimInfo* info = world_map->simInfoFromHandle(handle);
-        if (!info || info->isDown())
+        if (!info || info->isDown() || LLWorld::getInstance()->getRegionFromHandle(handle))
         {
             continue;
         }
@@ -465,15 +527,7 @@ void SKWorldMapScene::drawAgents(const SKWorldMapFrame& frame, const LLRect& rec
         {
             LLVector3d p = item.getGlobalPosition();
             p.mdV[VZ] = GROUND_Z;
-            F32 x, y;
-            F64 depth;
-            if (!proj.project(p, x, y, depth) || x < -8.f || y < -8.f || x > rect.getWidth() + 8.f || y > rect.getHeight() + 8.f)
-            {
-                continue;
-            }
-            clusters.push_back({ x, y, item.getCount() });
-            distances.push_back(depth);
-            counts.push_back(item.getCount());
+            add(p, item.getCount());
         }
     }
     const std::vector<S32> shown = stackBudget(distances, counts, DOTS_PER_STACK, DOT_BUDGET);
@@ -496,6 +550,10 @@ void SKWorldMapScene::drawAgents(const SKWorldMapFrame& frame, const LLRect& rec
     for (size_t i : order)
     {
         const Cluster& c = clusters[i];
+        if (c.mLifted)
+        {
+            dropLine(c.mX, c.mY, c.mGroundX, c.mGroundY);
+        }
         for (S32 k = 0; k < shown[i]; ++k)
         {
             const F32 x = c.mX + dir.mV[VX] * step * k;
@@ -510,13 +568,18 @@ void SKWorldMapScene::drawAgents(const SKWorldMapFrame& frame, const LLRect& rec
         }
     }
 
-    // You, in white, wherever the camera is.
-    LLVector3d self = gAgent.getPositionGlobal();
-    self.mdV[VZ] = GROUND_Z;
-    F32 sx, sy;
-    F64 depth;
+    // You, in white, at your own height, wherever the camera is.
+    const LLVector3d self = gAgent.getPositionGlobal();
+    LLVector3d self_ground = self;
+    self_ground.mdV[VZ] = GROUND_Z;
+    F32 sx, sy, gx, gy;
+    F64 depth, gdepth;
     if (proj.project(self, sx, sy, depth))
     {
+        if (self.mdV[VZ] > GROUND_Z + 2.0 && proj.project(self_ground, gx, gy, gdepth))
+        {
+            dropLine(sx, sy, gx, gy);
+        }
         disc(sx, sy, (SELF_RADIUS_PX + SHADOW_EXTRA_PX) * scale, SHADOW_COLOUR);
         disc(sx, sy, SELF_RADIUS_PX * scale, SELF_COLOUR);
     }
