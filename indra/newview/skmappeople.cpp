@@ -113,8 +113,82 @@ void SKMapPeople::initSingleton()
     });
 }
 
+namespace
+{
+    skoverview::VehicleLook overviewLook(skmap::VehicleLook look)
+    {
+        switch (look)
+        {
+            case skmap::VehicleLook::HIDDEN: return skoverview::VehicleLook::HIDDEN;
+            case skmap::VehicleLook::ALLY: return skoverview::VehicleLook::PRIMARY;
+            case skmap::VehicleLook::NEUTRAL: return skoverview::VehicleLook::SECONDARY;
+            default: return skoverview::VehicleLook::PLAIN;
+        }
+    }
+}
+
+void SKMapPeople::vehicles(std::vector<skoverview::Vehicle>& out) const
+{
+    for (const Vehicle& v : mVehicles)
+    {
+        skoverview::Vehicle o;
+        o.mRoot = v.mRoot;
+        o.mPos = v.mPos;
+        o.mRot = v.mRot;
+        o.mMin = v.mMin;
+        o.mMax = v.mMax;
+        o.mLook = overviewLook(v.mLook);
+        out.push_back(o);
+    }
+}
+
+skoverview::VehicleLook SKMapPeople::lookOf(const std::vector<LLUUID>& crew) const
+{
+    bool ally_aboard = false;
+    for (const LLUUID& id : crew)
+    {
+        for (const Person& p : mPeople)
+        {
+            ally_aboard = ally_aboard || (p.mId == id && p.mAlly);
+        }
+    }
+    return overviewLook(skmap::vehicleLook(mCombat, ally_aboard, !crew.empty()));
+}
+
+void SKMapPeople::occupants(std::vector<skoverview::Occupant>& out) const
+{
+    out.clear();
+    out.reserve(mPeople.size());
+    for (const Person& p : mPeople)
+    {
+        skoverview::Occupant o;
+        o.mId = p.mId;
+        o.mFeet = LLVector3d(p.mPos.mdV[VX], p.mPos.mdV[VY], p.mFeetZ);
+        o.mZKnown = p.mZKnown;
+        o.mWhere = p.mWhere;
+        o.mHidden = p.mVisibility == skmap::Visibility::HIDDEN;
+        out.push_back(o);
+    }
+}
+
+void SKMapPeople::feedOverview() const
+{
+    SKOverviewCapture& capture = SKOverviewCapture::instance();
+    capture.setMoverSource(this);
+    // The map's own colours for what the overview styles beside its shaders.
+    skoverview::Palette palette;
+    palette.mWaterDepthM = skmap::palette::WATER_DEPTH_M;
+    palette.mInvisible = LLColor3(skmap::palette::DROP_EDGE.mR, skmap::palette::DROP_EDGE.mG, skmap::palette::DROP_EDGE.mB);
+    palette.mGround = LLColor3(skmap::palette::CODE_INK.mR, skmap::palette::CODE_INK.mG, skmap::palette::CODE_INK.mB);
+    capture.setPalette(palette);
+}
+
 void SKMapPeople::cleanupSingleton()
 {
+    if (SKOverviewCapture::instanceExists())
+    {
+        SKOverviewCapture::instance().setMoverSource(nullptr);
+    }
     gIdleCallbacks.deleteFunction(&SKMapPeople::onIdle, nullptr);
     mTeleportConnection.disconnect();
     mResolver.clear();
@@ -779,7 +853,7 @@ void SKMapPeople::gatherPeople()
             // Their air gap, space and storey, the viewer's way; the map compares them with what it draws.
             // A coarse location's height is rough, so its floor may lie further from the guessed feet.
             const F32 band = p.mLoaded ? 1.0f : 2.0f;
-            p.mWhere = skmap::plan::whereabouts(LLVector3d(p.mPos.mdV[VX], p.mPos.mdV[VY], p.mFeetZ), band, band);
+            p.mWhere = skoverview::place::whereabouts(LLVector3d(p.mPos.mdV[VX], p.mPos.mdV[VY], p.mFeetZ), band, band);
             // The chevrons show plain height difference, feet to feet; floors are not needed.
             p.mFloorKnown = mSelfFeetKnown;
             if (p.mFloorKnown)
