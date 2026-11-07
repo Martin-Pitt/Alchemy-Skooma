@@ -839,6 +839,8 @@ if(AL_BUILD_VIEWER)
     llstylemap.cpp
     llsurface.cpp
     llsurfacepatch.cpp
+    skterraincache.cpp # <SK:Nexii> Region terrain cache
+    skterraincapture.cpp # <SK:Nexii> Region terrain cache
     llsyntaxid.cpp
     llsyswellitem.cpp
     llsyswellwindow.cpp
@@ -1000,8 +1002,6 @@ if(AL_BUILD_VIEWER)
     rlvinventory.cpp
     rlvlocks.cpp
     rlvui.cpp
-    skterraincache.cpp
-    skterraincapture.cpp
   )
 
   set(
@@ -1717,6 +1717,8 @@ if(AL_BUILD_VIEWER)
     llstylemap.h
     llsurface.h
     llsurfacepatch.h
+    skterraincache.h # <SK:Nexii> Region terrain cache
+    skterraincapture.h # <SK:Nexii> Region terrain cache
     llsyntaxid.h
     llsyswellitem.h
     llsyswellwindow.h
@@ -1883,8 +1885,6 @@ if(AL_BUILD_VIEWER)
     rlvmodifiers.h
     rlvui.h
     roles_constants.h
-    skterraincache.h
-    skterraincapture.h
   )
 
   # Discord rich presence, over the SDK from the private registry.
