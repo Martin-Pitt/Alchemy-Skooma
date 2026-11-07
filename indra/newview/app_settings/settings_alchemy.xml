@@ -5505,7 +5505,7 @@
             <key>Type</key>
             <string>F32</string>
             <key>Value</key>
-            <real>0.35</real>
+            <real>0.06</real>
         </map>
         <key>SkoomaLocalChatHoverGrace</key>
         <map>
