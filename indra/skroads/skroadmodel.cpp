@@ -8281,6 +8281,30 @@ namespace skroad
                     branches.swap(kept);
                 }
             }
+            // Overlapping pieces can expose both the next piece and its successor as exits.
+            if (branches.size() > 1)
+            {
+                std::vector<Branch> kept;
+                for (const Branch& b : branches)
+                {
+                    bool successor = false;
+                    for (const Branch& o : branches)
+                    {
+                        if (o.seg == b.seg || o.seg < 0 || b.seg < 0 || o.dx * b.dx + o.dy * b.dy <= 0)
+                            continue;
+                        for (const Continuation& c : sConts[o.seg])
+                        {
+                            if (c.other == b.seg && (c.x - o.x) * o.dx + (c.y - o.y) * o.dy > 0.5
+                                && (c.x - b.x) * b.dx + (c.y - b.y) * b.dy < 0)
+                                successor = true;
+                        }
+                    }
+                    if (!successor)
+                        kept.push_back(b);
+                }
+                if (!kept.empty())
+                    branches.swap(kept);
+            }
             if (branches.empty())
             {
                 // this half meets nothing on, while the road's other half alongside does: on a bend the next
