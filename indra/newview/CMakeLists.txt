@@ -648,6 +648,9 @@ if(AL_BUILD_VIEWER)
     skphysicsshape.cpp # <SK:Nexii> physics shapes
     skaircells.cpp # <SK:Nexii> air cells
     skairoverlay.cpp # <SK:Nexii> air cells
+    skroadhost.cpp # <SK:Nexii> roads
+    skroadkithost.cpp # <SK:Nexii> roads
+    skroadland.cpp # <SK:Nexii> roads
     skobjectfaces.cpp # <SK:Nexii> census
     skworldcensus.cpp # <SK:Nexii> census
     skworldoverlay.cpp # <SK:Nexii> census
@@ -1543,6 +1546,8 @@ if(AL_BUILD_VIEWER)
     skmeshhavokshape.h # <SK:Nexii> physics_havok block
     skphysicsshape.h # <SK:Nexii> physics shapes
     skaircells.h # <SK:Nexii> air cells
+    skroadhost.h # <SK:Nexii> roads
+    skroadland.h # <SK:Nexii> roads
     skobjectfaces.h # <SK:Nexii> census
     skworldcensus.h # <SK:Nexii> census
     skworldoverlay.h # <SK:Nexii> census
@@ -2150,6 +2155,7 @@ if(AL_BUILD_VIEWER)
       llrender
       skair # <SK:Nexii> air cells
       skcensus # <SK:Nexii> census
+      skroads # <SK:Nexii> roads
       llui
       llfilesystem
       llwindow

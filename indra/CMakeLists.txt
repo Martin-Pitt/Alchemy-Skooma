@@ -603,6 +603,7 @@ add_subdirectory(llprimitive)
 add_subdirectory(llrender)
 add_subdirectory(skcensus) # <SK:Nexii> census
 add_subdirectory(skair) # <SK:Nexii> air cells
+add_subdirectory(skroads) # <SK:Nexii> roads
 add_subdirectory(llfilesystem)
 if(AL_USE_WEBRTC)
   add_subdirectory(llwebrtc)
