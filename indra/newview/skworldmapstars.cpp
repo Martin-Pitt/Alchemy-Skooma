@@ -62,7 +62,7 @@ bool SKWorldMapStars::build(U32 count)
         return false;
     }
 
-    LLPointer<LLVertexBuffer> buffer = new LLVertexBuffer(LLVertexBuffer::MAP_VERTEX | LLVertexBuffer::MAP_COLOR);
+    LLPointer<LLVertexBuffer> buffer = new LLVertexBuffer(LLVertexBuffer::MAP_VERTEX | LLVertexBuffer::MAP_COLOR | LLVertexBuffer::MAP_TEXCOORD0);
     const U32 vertices = static_cast<U32>(stars.size()) * 2;
     if (!buffer->allocateBuffer(vertices, 0))
     {
@@ -70,8 +70,10 @@ bool SKWorldMapStars::build(U32 count)
     }
     LLStrider<LLVector3> pos;
     LLStrider<LLColor4U> colour;
+    LLStrider<LLVector2> uv;    // the UI program reads texture coordinates; untextured, they go unused
     buffer->getVertexStrider(pos);
     buffer->getColorStrider(colour);
+    buffer->getTexCoord0Strider(uv);
     for (const ALStarField::Star& star : stars)
     {
         LLVector3 d = star.mPosition;
@@ -82,8 +84,10 @@ bool SKWorldMapStars::build(U32 count)
                           static_cast<U8>(star.mColour.mV[VBLUE] * k), 255);
         *pos++ = d * STAR_DISTANCE;
         *colour++ = c;
+        *uv++ = LLVector2::zero;
         *pos++ = LLVector3(d.mV[VX], d.mV[VY], -d.mV[VZ]) * STAR_DISTANCE;
         *colour++ = c;
+        *uv++ = LLVector2::zero;
     }
     buffer->unmapBuffer();
 
