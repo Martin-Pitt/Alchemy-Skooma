@@ -242,6 +242,7 @@ Branch `foundation-world/census` (merge `91ec21954d`). The world census: a time-
 | `indra/newview/pipeline.h` / `.cpp` | `RENDER_DEBUG_WORLD` (`0x800000000`); include and census overlay call in `renderFinalize` | The world layers' debug overlays, one mask |
 | `indra/newview/llviewermenu.cpp` | Include; `"world"` info display → `RENDER_DEBUG_WORLD`; `SKExportWorldCensus` and its registration | Census export to the logs folder |
 | `indra/newview/skins/default/xui/en/menu_viewer.xml` | World overlays submenu (Census Shapes / Clusters / Features, export), XML comment marker | |
+| `indra/newview/llviewerobjectlist.h` / `.cpp` | `requestPhysicsShapeType(id, region_handle)`, `mStalePhysicsRegions`, `mPhysicsFlagsLoopStarted`; `fetchPhysicsFlags` starts one loop that batches stale ids per region every third of a second (`amend-world/census-physics-flags`) | A request launched from `update` ran every ready coroutine inside it (12–57 ms); a cached part has no object to find its region by |
 
 ### Unmarked additions
 
@@ -304,6 +305,66 @@ Branch `foundation-world/rooms` (merge `734706e258`). Enclosure, spaces, flights
 ### Unmarked additions
 
 - `settings_alchemy.xml` — `SKRooms{Enabled,OverlaySpaces,SealedIndoors,SettleMs}`.
+
+---
+
+## World — roads, pathfinding, ground autopilot, roads overlay
+
+Cut from `spike-road-parcels` on 2026-11-07: `foundation-world/roads` (on `foundation-world/air`), `foundation-world/pathfinding` (on roads), `foundation-world/ground-autopilot` (on pathfinding), `feature-world/roads-overlay` (on ground-autopilot). Library `indra/skroads`; the model asks the viewer through a host (`skroad::host`).
+
+### Files we own
+
+| File | Branch | Role |
+|---|---|---|
+| `indra/skroads/skroadmodel.*`, `skroadkits.*`, `skroadsigns.*`, `tests/skroadbench*` | roads | The road model, kit and sign libraries, the road bench |
+| `indra/newview/skroadhost.h` / `.cpp`, `skroadkithost.cpp` | roads | The model's host in the viewer: census, properties, LDPW, textures, meshes, air, kits |
+| `indra/newview/skroadland.h` / `.cpp` | roads | Land: Linden land, region-edge parcel map and owners, ban lines, private land, parcels by their lines |
+| `indra/skroads/skroadroute*`, `tests/skroadroute_test.cpp` | pathfinding | Route search, route data, route following (`setBranchPicker`) |
+| `indra/newview/skroaddriver.h` / `.cpp`, `skroaddriverkernels.inc`, `skroaddriveinternal.h`, `skroadrecord.cpp` | ground-autopilot | The driver, its tap kernels, its shared declarations, its survey records |
+| `indra/newview/skroadoverlay.cpp` | roads-overlay | `sk_road_driver::renderDebug` |
+
+### Injection sites
+
+| File | What | Branch |
+|---|---|---|
+| `indra/CMakeLists.txt` | `add_subdirectory(skroads)`, single-line marker | roads |
+| `indra/newview/CMakeLists.txt` | Each branch's sources/headers beside the air cells' lines; `skroads` linked; trailing markers | each |
+| `indra/newview/llappviewer.cpp` | Include; `sk_road_driver::beforeAgentUpdate()` just before `send_agent_update(false)` in `idle()` | ground-autopilot |
+| `indra/newview/llviewercontrol.cpp` | Include; `SKRoadAutopilot` listener | ground-autopilot |
+| `indra/newview/llviewermessage.cpp` | Include; `sk_road_driver::noteChat` in `process_chat_from_simulator` (a car saying its gear) | ground-autopilot |
+| `indra/newview/lltoolselect.cpp` | Seated, picking an object no longer turns the avatar | ground-autopilot |
+| `indra/newview/pipeline.cpp` | Include; `sk_road_driver::renderDebug()` in `renderFinalize` | roads-overlay |
+
+### Unmarked additions
+
+- `settings_alchemy.xml` — roads: `SKRoad{Kit,Sign}Library`; ground-autopilot: `SKRoadAutopilot*` but the overlay's; roads-overlay: `SKRoadAutopilotOverlay{,Detail}`.
+- Not settings: vehicle profiles in `sk-road-vehicles.json` in the user's settings folder; none ships.
+
+---
+
+## Worldmap — survey and bot (private, never upstream)
+
+`private-worldmap/survey` and `private-worldmap/bot`, both on `foundation-world/ground-autopilot`. They land into `local` only.
+
+### Files we own
+
+| File | Branch | Role |
+|---|---|---|
+| `indra/newview/skroadsurvey.h` / `.cpp`, `skroadkitsnaps.h` / `.cpp` | survey | Census recording, mesh keeps, sign survey, kit snapshots |
+| `indra/newview/skroadmission.h` / `.cpp`, `skroadbotapi.h` / `.cpp` | bot | The road mission and its local WebSocket API |
+
+### Injection sites
+
+| File | What | Branch |
+|---|---|---|
+| `indra/newview/llappviewer.cpp` | Includes; `sk_road_mission::beforeAgentUpdate()` and `sk_road_kit_snaps::idle()` before the driver's line; `sk_road_survey::noteControls` and `sk_road_bot_api::idle()` after `send_agent_update(false)`; `sk_road_mission::beforeLogout()` in both logout requests | survey, bot |
+| `indra/newview/llviewercontrol.cpp` | Includes; `SKRoadSurvey` and `SKRoadMission` listeners | survey, bot |
+| `indra/newview/llnotificationmanager.cpp` | Include; `sk_road_mission::noteChat` in `onChat` (security warnings) | bot |
+| `indra/newview/pipeline.h` / `.cpp` | `LLPipeline::sSKKeepGroup` / `sSKKeepDrawable` and `skKeeps()`: while set, the world's passes (not probe captures) keep only those groups and drawables; what they turn away is still marked visible. Checked beside the cutout's in the group cull, `markVisible` and `stateSort` (`amend-survey/kitsnap-clear`) | survey: a kit snapshot shows the road set alone |
+
+### Unmarked additions
+
+- `settings_alchemy.xml` — survey: `SKRoadSurvey{,Range}`, `SKRoadKitSnapshots`, `SKRoadSignSurvey`; bot: `SKRoadMission*`, `SKRoadBotApi{,Port}`.
 
 ---
 
