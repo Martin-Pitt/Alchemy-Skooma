@@ -166,6 +166,13 @@ bool skDecodeCachedObject(const LLVOCacheEntry& entry, SKCachedObject& out)
     {
         return false;
     }
+    // The faces' textures follow the volume parameters; a body cut short there still has its shape.
+    LLPrimitive::te_bytes_t te;
+    out.mTextureEntry.clear();
+    if (dp.unpackBinaryData(te, "TextureEntry"))
+    {
+        out.mTextureEntry.assign(te.begin(), te.end());
+    }
     out.mParams.setSculptID(sculpt_id, sculpt_type);
     out.mMesh = out.mSculpted && (sculpt_type & LL_SCULPT_TYPE_MASK) == LL_SCULPT_TYPE_MESH;
     // setVolume keeps the flexible parameter in use exactly while the path is flexible.

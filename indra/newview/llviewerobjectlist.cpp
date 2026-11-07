@@ -91,6 +91,10 @@ extern bool gAnimateTextures;
 
 #define MAX_CONCURRENT_PHYSICS_REQUESTS 256
 
+// <SK:Nexii> Objects their region would not give physics flags for, kept out of the queue so a reader polling them (the mini-map census) cannot re-ask every frame.
+static uuid_set_t sPhysicsFlagsRefused;
+// </SK:Nexii>
+
 void dialog_refresh_all();
 
 // Global lists of objects - should go away soon.
@@ -1333,27 +1337,39 @@ void LLViewerObjectList::fetchObjectCostsCoro(std::string url)
 
 void LLViewerObjectList::fetchPhysicsFlags()
 {
-    // issue http request for stale object physics flags
-    if (!mStalePhysicsFlags.empty())
+    // <SK:Nexii> Ask each object's own region rather than the agent's, which cannot answer for its neighbours (mini-map census).
+    std::map<LLViewerRegion*, LLSD> batches;
+    U32 batched = 0;
+    for (uuid_set_t::iterator it = mStalePhysicsFlags.begin(); it != mStalePhysicsFlags.end() && batched < MAX_CONCURRENT_PHYSICS_REQUESTS;)
     {
-        LLViewerRegion* regionp = gAgent.getRegion();
-
-        if (regionp)
+        const LLUUID id = *it;
+        it = mStalePhysicsFlags.erase(it);
+        if (mPendingPhysicsFlags.count(id))
         {
-            std::string url = regionp->getCapability("GetObjectPhysicsData");
-
-            if (!url.empty())
-            {
-                LLCoros::instance().launch("LLViewerObjectList::fetchPhisicsFlagsCoro",
-                    boost::bind(&LLViewerObjectList::fetchPhisicsFlagsCoro, this, url));
-            }
-            else
-            {
-                mStalePhysicsFlags.clear();
-                mPendingPhysicsFlags.clear();
-            }
+            continue;
         }
+        LLViewerObject* objectp = findObject(id);
+        LLViewerRegion* regionp = objectp ? objectp->getRegion() : nullptr;
+        if (!regionp)
+        {
+            continue;
+        }
+        if (regionp->getCapability("GetObjectPhysicsData").empty())
+        {
+            sPhysicsFlagsRefused.insert(id);
+            continue;
+        }
+        mPendingPhysicsFlags.insert(id);
+        LLSD& ids = batches[regionp];
+        ids.append(id);
+        ++batched;
     }
+    for (auto& [regionp, ids] : batches)
+    {
+        LLCoros::instance().launch("LLViewerObjectList::fetchPhisicsFlagsCoro",
+            boost::bind(&LLViewerObjectList::fetchPhisicsFlagsCoro, this, regionp->getCapability("GetObjectPhysicsData"), ids));
+    }
+    // </SK:Nexii>
 }
 
 /*static*/
@@ -1366,33 +1382,12 @@ void LLViewerObjectList::reportPhysicsFlagFailure(LLSD &objectList)
     }
 }
 
-void LLViewerObjectList::fetchPhisicsFlagsCoro(std::string url)
+void LLViewerObjectList::fetchPhisicsFlagsCoro(std::string url, LLSD idList) // <SK:Nexii> The batch is picked per region by fetchPhysicsFlags.
 {
     LLCore::HttpRequest::policy_t httpPolicy(LLCore::HttpRequest::DEFAULT_POLICY_ID);
     LLCoreHttpUtil::HttpCoroutineAdapter::ptr_t
         httpAdapter = std::make_shared<LLCoreHttpUtil::HttpCoroutineAdapter>("fetchPhisicsFlagsCoro", httpPolicy);
     LLCore::HttpRequest::ptr_t httpRequest = std::make_shared<LLCore::HttpRequest>();
-
-    LLSD idList;
-    U32 objectIndex = 0;
-
-    for (uuid_set_t::iterator it = mStalePhysicsFlags.begin(); it != mStalePhysicsFlags.end();)
-    {
-        // Check to see if a request for this object
-        // has already been made.
-        if (mPendingPhysicsFlags.find(*it) == mPendingPhysicsFlags.end())
-        {
-            mPendingPhysicsFlags.insert(*it);
-            idList[objectIndex++] = *it;
-        }
-
-        mStalePhysicsFlags.erase(it++);
-
-        if (objectIndex >= MAX_CONCURRENT_PHYSICS_REQUESTS)
-        {
-            break;
-        }
-    }
 
     if (idList.size() < 1)
     {
@@ -1483,6 +1478,7 @@ void LLViewerObjectList::cleanupReferences(LLViewerObject *objectp)
     {
         LL_INFOS() << "Object " << objectp->mID << " already on dead list!" << LL_ENDL;
     }
+    sPhysicsFlagsRefused.erase(objectp->mID); // <SK:Nexii> Mini-map census: the refused set holds only live objects.
 
     // Cleanup any references we have to this object
     // Remove from object map so noone can look it up.
@@ -1641,6 +1637,7 @@ void LLViewerObjectList::killAllObjects()
     mIndexAndLocalIDToUUID.clear();
     mActiveObjects.clear();
     mMapObjects.clear();
+    sPhysicsFlagsRefused.clear(); // <SK:Nexii> Mini-map census
 
     LLViewerObject *objectp;
     for (vobj_list_t::const_iterator iter = mObjects.begin(); iter != mObjects.end(); ++iter)
@@ -1807,6 +1804,10 @@ void LLViewerObjectList::updatePhysicsFlags(const LLViewerObject* object)
     {
         return;
     }
+    if (sPhysicsFlagsRefused.count(object->getID())) // <SK:Nexii> Mini-map census: never re-ask a refused object.
+    {
+        return;
+    }
     mStalePhysicsFlags.insert(object->getID());
 }
 
@@ -1864,6 +1865,7 @@ void LLViewerObjectList::onPhysicsFlagsFetchFailure(const LLUUID& object_id)
 {
     //LL_WARNS() << "Failed to fetch physics flags for object: " << object_id << LL_ENDL;
     mPendingPhysicsFlags.erase(object_id);
+    sPhysicsFlagsRefused.insert(object_id); // <SK:Nexii> Mini-map census: a failed object is not queued again.
 }
 
 void LLViewerObjectList::shiftObjects(const LLVector3 &offset)
