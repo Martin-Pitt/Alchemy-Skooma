@@ -14,18 +14,39 @@
 #
 # main/publish are deliberately NOT guarded — glue and setup commits land on main.  To lock them later, add them to the case
 # below and use `git skooma` (or SKOOMA_SCRIPT=1) for legitimate moves.
+#
+# No public branch (anything skooma-private.sh does not call private, main included) may move
+# to a commit that carries a private branch's commits.  That holds for the script too: only
+# SKOOMA_ALLOW_PRIVATE=1 waives it.
 
 [ "$1" = prepared ] || exit 0
 
-# Fast path: the script that legitimately moves develop sets this.
-if [ "$SKOOMA_SCRIPT" = "1" ]; then
-    cat >/dev/null
-    exit 0
-fi
-
+zero=0000000000000000000000000000000000000000
 blocked=
 tainted=
+leaked=
+guard=
+hooks=$(git rev-parse --git-common-dir)/hooks
+[ "$SKOOMA_ALLOW_PRIVATE" != "1" ] && [ -f "$hooks/skooma-private.sh" ] && guard=lazy
 while read -r old new ref; do
+    case "$ref" in refs/heads/*) ;; *) continue ;; esac
+    branch=${ref#refs/heads/}
+    # Loaded on the first branch move only: most transactions move HEAD alone.
+    if [ "$guard" = lazy ] && [ "$new" != "$zero" ]; then
+        . "$hooks/skooma-private.sh"
+        guard=1
+    fi
+    if [ "$guard" = 1 ] && [ "$new" != "$zero" ]; then
+        if ! skooma_is_private "$branch"; then
+            if [ "$old" = "$zero" ]; then
+                leak=$(skooma_private_leak "$new" "$branch") && leaked="$leaked $branch($leak)"
+            else
+                leak=$(skooma_private_leak "$new" "$branch" "$old") && leaked="$leaked $branch($leak)"
+            fi
+        fi
+    fi
+    # The script that legitimately moves develop sets this.
+    [ "$SKOOMA_SCRIPT" = "1" ] && continue
     case "$ref" in
     refs/heads/develop) blocked="$old $new" ;;
     refs/heads/main | refs/heads/publish | refs/heads/glue | refs/heads/skooma-*) continue ;;
@@ -38,7 +59,7 @@ while read -r old new ref; do
                 case "$branch" in "$c"-*) class=$c ; break ;; esac
             done
         fi
-        case "$class" in '' | glue | sidecar) continue ;; esac
+        case "$class" in '' | glue | sidecar | private | spike) continue ;; esac
         if git cat-file -e "$new:AGENTS.md" 2>/dev/null; then
             tainted="$tainted $branch"
         fi
@@ -46,6 +67,19 @@ while read -r old new ref; do
     *) continue ;;
     esac
 done
+
+if [ -n "$leaked" ]; then
+    cat >&2 <<MSG
+
+  Refused: public branch would take private commits:$leaked
+
+  Private work (local, private-*, spikes) lands only into local:
+    git skooma integrate <name>
+  A public branch never merges local or a private branch.
+
+MSG
+    exit 1
+fi
 
 if [ -n "$blocked" ]; then
     cat >&2 <<'MSG'

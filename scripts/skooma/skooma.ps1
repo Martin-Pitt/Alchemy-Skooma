@@ -2,7 +2,7 @@
 # Alchemy: Skooma workflow helper.  Invoke as:  git skooma <command> [args]
 # Design + rationale: doc/skooma/WORKFLOW.md
 #
-# Commands: status | new | wt-setup | sync | check | integrate | undo | retire | bootstrap
+# Commands: status | new | wt-setup | sync | check | integrate | local | undo | retire | bootstrap
 #
 # Never edit the copy in .git/skooma/ — it is overwritten by `git skooma bootstrap`.
 # The source of truth is scripts/skooma/skooma.ps1 on the main branch.
@@ -41,7 +41,8 @@ function Show-Help {
     Say ''
     Say '  status              where am I, what is ahead/behind, what is dirty'
     Say '  new <name> [desc]   create <class>-<name> + worktree in .worktrees/<name>'
-    Say '                      --class fix|workaround|foundation|<own>  (asked for when run with no name)'
+    Say '                      --class fix|workaround|foundation|private|<own>  (asked for when run with no name)'
+    Say '                      a private branch is never a PR or pushed publicly; it lands into local'
     Say '                      a foundation is shared: branches of any trunk may merge it'
     Say '                      --base <branch>  --tests (configure a local tests tree)'
     Say '  new <area>/<x> --amend [--base <feature>]  amend-<area>/<x>: a follow-up that lands'
@@ -61,7 +62,9 @@ function Show-Help {
     Say '                      --obj <file>  compile one translation unit'
     Say '  test [--match re] [--label l] [--bench]  build + run CTest here (needs new --tests)'
     Say '  clean [name|--all]  delete a build tree to reclaim disk (never the main one)'
-    Say '  undo                reset main to the last-known-good commit'
+    Say '  local               create local (main + private work and spikes, the F5 build) and'
+    Say '                      check it out in the main checkout; with local, say where it stands'
+    Say '  undo                reset main (and local) to the last-known-good commits'
     Say '  retire [name|.]     remove a worktree + branch whose work is already in its base'
     Say '                      --force  discard one that still carries work (prints the tip sha)'
     Say '  park [name|.]       move a branch to backup/<branch>; sync, check and integrate skip it'
@@ -163,7 +166,11 @@ function Test-Forbidden { param([string]$path)
 # skooma-base), never into a trunk or main directly, and is never a PR on its own.
 # 'foundation' is a shared base other features build on (SKWarp under the camera and
 # scrolling): cut from develop, it may be merged into any branch of any trunk.
-$BuiltinClasses = @('feature', 'fix', 'workaround', 'spike', 'amend', 'foundation')
+# 'private' is work that stays ours: never a PR, never pushed anywhere but the private
+# remote. It lands into `local` (main plus the private work, the F5 build) with the spikes,
+# and the hooks keep its commits out of every public branch (hooks/skooma-private.sh).
+$BuiltinClasses = @('feature', 'fix', 'workaround', 'spike', 'amend', 'foundation', 'private')
+$LocalBranch = 'local'
 
 # Whether everything merge parent $p brings beyond $base and develop comes from foundations.
 function Test-FromFoundation { param([string]$p, [string]$base)
@@ -176,7 +183,7 @@ function Test-IsAmend { param([string]$branch) return ((Get-Class $branch) -eq '
 
 # Branches an amend may never amend: the trunks and the shared lines.
 function Test-NotAmendable { param([string]$branch)
-    return ($branch -in 'develop', 'main', 'glue', 'publish' -or (Test-IsTrunk $branch) -or (Test-IsAmend $branch) -or (Get-Role $branch) -ne 'feature')
+    return ($branch -in 'develop', 'main', 'glue', 'publish', $LocalBranch -or (Test-IsTrunk $branch) -or (Test-IsAmend $branch) -or (Get-Role $branch) -notin 'feature', 'private')
 }
 
 function Get-Classes {
@@ -185,7 +192,7 @@ function Get-Classes {
 }
 $script:Classes = Get-Classes
 
-function Test-ClassOk { param([string]$c) return ($c -match '^[a-z][a-z0-9-]*$' -and $c -notin 'develop', 'main', 'glue', 'publish', 'skooma') }
+function Test-ClassOk { param([string]$c) return ($c -match '^[a-z][a-z0-9-]*$' -and $c -notin 'develop', 'main', 'glue', 'publish', 'skooma', $LocalBranch) }
 
 function Add-Class { param([string]$c)
     if ($script:Classes -contains $c) { return }
@@ -205,7 +212,7 @@ function Get-Class { param([string]$branch)
     return ''
 }
 
-# Branch role: 'feature' | 'spike' | 'glue' | 'sidecar' | '' (not ours).
+# Branch role: 'feature' | 'spike' | 'private' | 'glue' | 'sidecar' | '' (not ours).
 # Every working class (feature, fix, workaround, custom) has the 'feature' role:
 # the same rules apply to all of them, because all of them go upstream.
 # 'spike' is the exception. A spike may be integrated into main so its
@@ -216,9 +223,58 @@ function Get-Role { param([string]$branch)
     $c = Get-Class $branch
     if (-not $c) { return '' }
     if ($c -in 'glue', 'sidecar') { return $c }
-    if ($c -eq 'spike') { return 'spike' }
+    if ($c -in 'spike', 'private') { return $c }
     return 'feature'
 }
+
+# Private: never in a public branch or on a public remote. An amend is as private as its parent.
+function Test-IsPrivate { param([string]$branch)
+    if ($branch -eq $LocalBranch -or $branch -like "backup/$LocalBranch") { return $true }
+    $b = $branch -replace '^backup/', ''
+    for ($d = 0; $b -and $d -lt 8; $d++) {
+        if ((Get-Role $b) -in 'spike', 'private') { return $true }
+        if (-not (Test-IsAmend $b)) { return $false }
+        $p = Cfg "branch.$b.skooma-base"
+        if (-not $p -or $p -eq $b) { return $false }
+        $b = $p
+    }
+    return $false
+}
+
+# The private branch whose commits $tip would carry beyond every public branch, or ''.
+# The twin of skooma_private_leak in hooks/skooma-private.sh; $self is left out of the public set.
+function Find-PrivateLeak { param([string]$tip, [string]$self, [string[]]$also = @())
+    if ($null -eq $script:PrivateHeads) {
+        $all = @((G for-each-ref --format='%(refname:short)' refs/heads/) -split "`n" | Where-Object { $_ })
+        $script:AllHeads = $all
+        # local last, so a leak names the private branch it came from where there is one.
+        $script:PrivateHeads = @($all | Where-Object { Test-IsPrivate $_ } | Sort-Object { $_ -eq $LocalBranch })
+    }
+    $heads = @($script:AllHeads | Where-Object { $_ -ne $self })
+    $priv = @($script:PrivateHeads | Where-Object { $_ -ne $self })
+    if (-not $priv) { return '' }
+    $pub = @($heads | Where-Object { $priv -notcontains $_ } | ForEach-Object { "refs/heads/$_" }) + $also
+    $publicBase = Cfg 'skooma.publicBase'
+    if ($publicBase) { $pub += $publicBase }
+    foreach ($p in $priv) {
+        foreach ($mb in (G merge-base --all "refs/heads/$p" $tip) -split "`n" | Where-Object { $_ -match '^[0-9a-f]{40}$' }) {
+            if (G rev-list -n 1 $mb --not @pub) { return $p }
+        }
+    }
+    return ''
+}
+
+$script:PrivateHeads = $null
+
+function Test-HasLocal { return (GitOk show-ref --verify --quiet "refs/heads/$LocalBranch") }
+
+# The worktree a branch is checked out in, or $null.
+function Get-WorktreeOf { param([string]$branch)
+    return ($Worktrees | Where-Object { $_.Branch -eq $branch } | Select-Object -First 1)
+}
+
+# main and local end every landing chain.
+function Test-IsTerminal { param([string]$branch) return ($branch -in 'main', $LocalBranch) }
 
 # Every prefix a working branch can carry, for ref globs and name resolution.
 function Get-ClassPrefixes { return @($script:Classes | Where-Object { $_ -notin 'glue', 'sidecar' }) }
@@ -263,10 +319,13 @@ function Find-TrunkFor { param([string]$name)
 
 function Test-IsTrunk { param([string]$branch) return ((Get-TrunkMap).Values -contains $branch) }
 
-# Where a branch lands: its trunk if it has a live one, else main.
+# Where a branch lands: its trunk if it has a live one, else main; private work and spikes
+# land into local instead, or main for a spike while there is no local.
 function Get-LandTarget { param([string]$branch)
     $t = Cfg "branch.$branch.skooma-trunk"
     if ($t -and $t -ne $branch -and (GitOk show-ref --verify --quiet "refs/heads/$t")) { return $t }
+    if ((Get-Role $branch) -eq 'private') { return $LocalBranch }
+    if ((Get-Role $branch) -eq 'spike' -and (Test-HasLocal)) { return $LocalBranch }
     return 'main'
 }
 
@@ -527,22 +586,67 @@ function Show-SidecarConflict { param([string]$From, [string]$path, [string[]]$f
 
 function Set-MainToSidecar {
     if ((Get-Counts main $SyncBranch).Ahead -eq 0) { return $true }
-    $op = Test-MidOperation $MainWt
-    if ($op) { Warn "main checkout is mid-$op; main left where it was"; return $false }
-    if (Test-Dirty $MainWt) { Warn 'main checkout has uncommitted changes; main left where it was'; return $false }
     $before = G rev-parse --short main
-    $out = GG -C $MainWt merge --ff-only $SyncBranch
-    if ($script:GitExit -ne 0) { Warn "could not fast-forward main to ${SyncBranch}: $out"; return $false }
-    $null = G -C $MainWt submodule update --init --recursive
+    $mw = Get-WorktreeOf 'main'
+    if ($mw) {
+        $op = Test-MidOperation $mw.Path
+        if ($op) { Warn "$($mw.Path) is mid-$op; main left where it was"; return $false }
+        if (Test-Dirty $mw.Path) { Warn "$($mw.Path) has uncommitted changes; main left where it was"; return $false }
+        $out = GG -C $mw.Path merge --ff-only $SyncBranch
+        if ($script:GitExit -ne 0) { Warn "could not fast-forward main to ${SyncBranch}: $out"; return $false }
+        $null = G -C $mw.Path submodule update --init --recursive
+    }
+    else {
+        # Nothing has main checked out once the main checkout is on local: move the ref alone.
+        if (-not (GitOk merge-base --is-ancestor main $SyncBranch)) { Warn "main is not an ancestor of $SyncBranch; main left where it was"; return $false }
+        $out = GG update-ref refs/heads/main (G rev-parse $SyncBranch) (G rev-parse main)
+        if ($script:GitExit -ne 0) { Warn "could not move main to ${SyncBranch}: $out"; return $false }
+    }
     Good "main $before -> $(G rev-parse --short main)"
+    return $true
+}
+
+# local is main plus the private work: whenever main moves, local takes it, in the main
+# checkout where it is the F5 build. Returns false when local was left behind.
+function Update-Local {
+    if (-not (Test-HasLocal)) { return $true }
+    if ((Get-Counts $LocalBranch 'main').Ahead -eq 0) { return $true }
+    $lw = Get-WorktreeOf $LocalBranch
+    if (-not $lw) {
+        if (GitOk merge-base --is-ancestor $LocalBranch main) {
+            $null = GG update-ref "refs/heads/$LocalBranch" (G rev-parse main) (G rev-parse $LocalBranch)
+            if ($script:GitExit -eq 0) { Good "$LocalBranch fast-forwarded to main"; return $true }
+        }
+        Warn "$LocalBranch is checked out nowhere and needs a merge of main; check it out in the main checkout"
+        return $false
+    }
+    $op = Test-MidOperation $lw.Path
+    if ($op) { Warn "$($lw.Path) is mid-$op; $LocalBranch left without main's new work"; return $false }
+    if (Test-Dirty $lw.Path) { Warn "$($lw.Path) has uncommitted changes; $LocalBranch left without main's new work"; return $false }
+    $null = G merge-tree --write-tree --name-only $LocalBranch main
+    if ($script:GitExit -ne 0) {
+        Warn "main conflicts with $LocalBranch (private work); merge it by hand in $($lw.Path):  git merge main"
+        return $false
+    }
+    $before = G rev-parse --short $LocalBranch
+    $out = GG -C $lw.Path merge --no-edit main
+    if ($script:GitExit -ne 0) { Say $out; $null = G -C $lw.Path merge --abort; Warn "merging main into $LocalBranch failed; aborted"; return $false }
+    $null = G -C $lw.Path submodule update --init --recursive
+    Good "$LocalBranch $before -> $(G rev-parse --short $LocalBranch) (took main)"
     return $true
 }
 
 # Returns true once main holds develop.
 function Sync-MainThroughSidecar {
     $lastGood = G rev-parse main
+    $localGood = if (Test-HasLocal) { G rev-parse $LocalBranch } else { '' }
     $r = Merge-IntoMain 'develop' 'git skooma sync'
-    if ((G rev-parse main) -ne $lastGood) { $null = G config 'skooma.lastgood' $lastGood; Info 'undo: git skooma undo' }
+    if ((G rev-parse main) -ne $lastGood) {
+        $null = G config 'skooma.lastgood' $lastGood
+        if ($localGood) { $null = G config 'skooma.lastgood-local' $localGood }
+        Info 'undo: git skooma undo'
+    }
+    if ($r -eq 'landed') { $null = Update-Local }
     return $r -eq 'landed'
 }
 
@@ -553,10 +657,11 @@ function Invoke-LandSynced {
     foreach ($w in $Worktrees) {
         $b = $w.Branch
         if (-not $b -or $w.Path -ieq $MainWt -or (Test-IsAmend $b)) { continue }
-        if ((Get-Role $b) -notin 'feature', 'spike', 'glue' -and -not (Test-IsTrunk $b)) { continue }
+        if ((Get-Role $b) -notin 'feature', 'spike', 'private', 'glue' -and -not (Test-IsTrunk $b)) { continue }
         if (-not (GitOk merge-base --is-ancestor develop $b)) { continue }
+        $end = if ((Test-IsPrivate $b) -and (Test-HasLocal)) { $LocalBranch } else { 'main' }
         $own = [int](G rev-list --count $b '^develop')
-        $missing = [int](G rev-list --count $b '^develop' '^main')
+        $missing = [int](G rev-list --count $b '^develop' "^$end")
         if ($missing -gt 0 -and $missing -lt $own) { $land += $b }
     }
     if (-not $land) { return }
@@ -1074,7 +1179,7 @@ function Invoke-Park {
     $named = @($Rest | Where-Object { $_ -notlike '--*' })
     $branch = Resolve-Target ($(if ($named) { $named[0] } else { '' }))
     if (-not (Get-Role $branch)) { Fail "$branch is not a Skooma branch (no branch.$branch.skooma marker)" }
-    if ($branch -in 'develop', 'main', 'glue') { Fail "$branch cannot be parked" }
+    if ($branch -in 'develop', 'main', 'glue', $LocalBranch) { Fail "$branch cannot be parked" }
     $wt = $Worktrees | Where-Object { $_.Branch -eq $branch } | Select-Object -First 1
     if ($wt -and $wt.Path -ieq $MainWt) { Fail "$branch is checked out in the main checkout" }
     if ($wt -and (Test-Dirty $wt.Path)) { Fail "$($wt.Path) has uncommitted changes" }
@@ -1311,11 +1416,17 @@ function Invoke-New {
     if ($base -eq 'develop') { Invoke-Sync -Quiet -NextOnly }
     Say ''
     Info "creating worktree for $branch from $base"
-    $null = G worktree add --no-track -b $branch $path $base
-    if ($script:GitExit -ne 0) { Fail "git worktree add failed: $(G worktree add --no-track -b $branch $path $base)" }
-
+    # Class and base first: the ref hook judges the new branch by them, and an amend of
+    # private work is refused as a public branch until it is known to be one.
     $null = G config "branch.$branch.skooma" $class
     $null = G config "branch.$branch.skooma-base" $base
+    $null = G worktree add --no-track -b $branch $path $base
+    if ($script:GitExit -ne 0) {
+        $err = G worktree add --no-track -b $branch $path $base
+        $null = G config --unset "branch.$branch.skooma"; $null = G config --unset "branch.$branch.skooma-base"
+        Fail "git worktree add failed: $err"
+    }
+    if ((Test-IsPrivate $branch) -and (G remote get-url forgejo)) { $null = G config "branch.$branch.pushRemote" 'forgejo' }
     if ($trunk) { $null = G config "branch.$branch.skooma-trunk" $trunk }
     $null = G config "branch.$branch.remote" 'origin'
     $null = G config "branch.$branch.merge" "refs/heads/$base"  # a reflexive `git pull` takes the base, not main
@@ -1447,7 +1558,8 @@ Either upstream rewrote history, or a commit was made on develop.
     $ordered = @()
     $inScope = @($byBranch.Keys | Where-Object { $_ -ne 'main' -and $_ -ne $SyncBranch -and (Get-Role $_) })
     $ordered += Sort-ByDependency $inScope
-    if ($byBranch.ContainsKey('main')) { $ordered += 'main' }
+    # main moves through the sync sidecar, so it syncs whether or not any worktree has it out.
+    $ordered += 'main'
 
     foreach ($branch in $ordered) {
         if ($branch -eq 'main') {
@@ -1621,12 +1733,19 @@ function Invoke-Check { param([string]$branch, [switch]$Quiet)
     # does go upstream it is fatal, and on a spike it is only worth saying out loud.
     $dnl = @((G log --format='%h %s' --grep='DO NOT LAND' "$base..$branch") -split "`n" | Where-Object { $_ })
     if ($dnl) {
-        if ($role -eq 'spike') {
-            $warnings += "carries $($dnl.Count) DO NOT LAND commit(s): this branch may go to main, never to develop"
+        if ($role -in 'spike', 'private') {
+            $warnings += "carries $($dnl.Count) DO NOT LAND commit(s): this branch may go to $(Get-LandTarget $branch), never to develop"
         }
         else {
             foreach ($d in $dnl) { $problems += "DO NOT LAND commit on a $role branch: $d" }
         }
+    }
+
+    # 5. A public branch never carries private work (local, private-*, spikes); the hooks
+    # refuse the ref move and the push too, but say it here before anything lands.
+    if (-not (Test-IsPrivate $branch)) {
+        $leak = Find-PrivateLeak (G rev-parse $branch) $branch
+        if ($leak) { $problems += "carries commits of private branch $leak; a public branch never merges private work" }
     }
 
     if (-not $Quiet) {
@@ -1669,8 +1788,8 @@ function Invoke-IntegrateContinue {
 
     # check recognises an amend's merge into its parent by its subject.
     $files = (@($st.Files) | ForEach-Object { "  $_" }) -join "`n"
-    $msg = if ($into -ne 'main') { "Merge amend '$($st.Branch)' into $into`n`nResolved conflicts with $into in:`n$files`n" }
-           else { "Merge branch '$($st.Branch)' into main`n`nResolved conflicts with main-only code in:`n$files`n" }
+    $msg = if (Test-IsAmend $st.Branch) { "Merge amend '$($st.Branch)' into $into`n`nResolved conflicts with $into in:`n$files`n" }
+           else { "Merge branch '$($st.Branch)' into $into`n`nResolved conflicts with $into-only code in:`n$files`n" }
     $tmp = Join-Path $CommonDir 'skooma-resolve-msg.txt'
     [IO.File]::WriteAllText($tmp, $msg)
     $out = GG -C $at commit --no-edit -F $tmp
@@ -1681,7 +1800,8 @@ function Invoke-IntegrateContinue {
 
     Say ''
     Good "$($st.Branch) -> $into (merge commit, $(@($st.Files).Count) resolved file(s))"
-    if ($into -ne 'main') {
+    if ($into -eq 'main') { $null = Update-Local }
+    if (-not (Test-IsTerminal $into)) {
         Info "carry it on with:  git skooma integrate $into"
         Say ''
         return
@@ -1723,7 +1843,7 @@ function Invoke-Integrate {
     if ($resolve -and -not $arg) { Fail 'usage: git skooma integrate <name> --resolve' }
 
     $mainBranch = G -C $MainWt rev-parse --abbrev-ref HEAD
-    if ($mainBranch -ne 'main') { Fail "main checkout is on '$mainBranch', expected main" }
+    if (-not (Test-IsTerminal $mainBranch)) { Fail "main checkout is on '$mainBranch', expected main or $LocalBranch" }
     $op = Test-MidOperation $MainWt
     if ($op) { Fail "main checkout is mid-$op; finish or abort that first" }
     if (Test-Dirty $MainWt) { Fail "main checkout has uncommitted changes; commit or stash them first`n  (git -C $MainWt status)" }
@@ -1740,7 +1860,8 @@ function Invoke-Integrate {
     }
     elseif ($arg) {
         $targets = @(Resolve-Target $arg)
-        if ($resolve -and (Get-LandTarget $targets[0]) -ne 'main' -and -not (Test-IsAmend $targets[0])) { Fail "--resolve only lands into main or an amend's parent; $($targets[0]) lands into $(Get-LandTarget $targets[0])" }
+        if ($resolve -and -not (Test-IsTerminal (Get-LandTarget $targets[0])) -and -not (Test-IsAmend $targets[0])) { Fail "--resolve only lands into main, $LocalBranch or an amend's parent; $($targets[0]) lands into $(Get-LandTarget $targets[0])" }
+        if ($resolve -and (Get-LandTarget $targets[0]) -eq 'main' -and -not (Get-WorktreeOf 'main')) { Fail "main is checked out nowhere; integrate $($targets[0]) without --resolve and resolve in the sync worktree it names" }
     }
     else {
         foreach ($w in $Worktrees) {
@@ -1753,7 +1874,7 @@ function Invoke-Integrate {
     # Trunks go after everything that lands into them, wherever they came from.
     foreach ($b in @($targets)) {
         $t = Get-LandTarget $b
-        while ($t -ne 'main' -and $targets -notcontains $t) { $targets += $t; $t = Get-LandTarget $t }
+        while (-not (Test-IsTerminal $t) -and $targets -notcontains $t) { $targets += $t; $t = Get-LandTarget $t }
     }
     # Glue first (it carries the scripts and hooks), then parents before children:
     # landing a sub-feature before its parent would drag the parent in unannounced.
@@ -1761,21 +1882,34 @@ function Invoke-Integrate {
     $glue = @($targets | Where-Object { (Get-Role $_) -eq 'glue' } | Sort-Object)
     # Among those, the furthest from main lands first: a sub-trunk is a base of its own worktrees, and landing it
     # into its trunk by base order went before they had landed into it, leaving their work short of main.
-    $hops = { param($b) $n = 0; $t = Get-LandTarget $b; while ($t -ne 'main' -and $n -lt 16) { $n++; $t = Get-LandTarget $t }; $n }
-    $toTrunk = Sort-ByDependency @($targets | Where-Object { (Get-Role $_) -ne 'glue' -and (Get-LandTarget $_) -ne 'main' } | Sort-Object)
+    $hops = { param($b) $n = 0; $t = Get-LandTarget $b; while (-not (Test-IsTerminal $t) -and $n -lt 16) { $n++; $t = Get-LandTarget $t }; $n }
+    $toTrunk = Sort-ByDependency @($targets | Where-Object { (Get-Role $_) -ne 'glue' -and -not (Test-IsTerminal (Get-LandTarget $_)) } | Sort-Object)
     $toTrunk = @($toTrunk | Sort-Object -Stable -Descending { & $hops $_ })
     $toMain = Sort-ByDependency @($targets | Where-Object { (Get-Role $_) -ne 'glue' -and (Get-LandTarget $_) -eq 'main' } | Sort-Object)
-    $targets = @($glue) + @($toTrunk) + @($toMain)
+    # local takes main first, so the private work lands on what main now holds.
+    $toLocal = Sort-ByDependency @($targets | Where-Object { (Get-Role $_) -ne 'glue' -and (Get-LandTarget $_) -eq $LocalBranch } | Sort-Object)
+    $targets = @($glue) + @($toTrunk) + @($toMain) + @($toLocal)
 
     if (-not $targets) { Say ''; Info 'nothing to integrate'; Say ''; return }
 
     Say ''
     Say "Integrating: $(($targets | ForEach-Object { "$_ -> $(Get-LandTarget $_)" }) -join ', ')"
     $lastGood = G rev-parse main
+    $localGood = if (Test-HasLocal) { G rev-parse $LocalBranch } else { '' }
     $results = @()
+    $localTookMain = $false
 
     foreach ($b in $targets) {
         $into = Get-LandTarget $b
+        if ($into -eq $LocalBranch -and -not $localTookMain) { $null = Update-Local; $localTookMain = $true }
+        if (-not (Test-IsPrivate $into)) {
+            $leak = Find-PrivateLeak (G rev-parse $b) $into
+            if ($leak) {
+                $results += [pscustomobject]@{ Branch = $b; Result = 'SKIPPED (private)'; Detail = "carries $leak" }
+                Warn "$b carries commits of private branch $leak; it may not land into $into"
+                continue
+            }
+        }
         $ahead = (Get-Counts $into $b).Ahead
         if ($ahead -eq 0) { continue }   # a trunk whose work is already in main
 
@@ -1788,7 +1922,9 @@ function Invoke-Integrate {
 
         # Dry run first so a conflict never dirties the F5 tree or the trunk's worktree.
         $null = G merge-tree --write-tree --name-only $into $b
-        if ($script:GitExit -ne 0 -and $into -eq 'main' -and -not $resolve) {
+        $clean = $script:GitExit -eq 0
+        # With the main checkout on local nothing has main out, so main lands through the sidecar.
+        if ((-not $clean -or -not (Get-WorktreeOf 'main')) -and $into -eq 'main' -and -not $resolve) {
             # The sync worktree merges for real, with rerere, and leaves a conflict there to resolve.
             $r = Merge-IntoMain $b "git skooma integrate $b"
             if ($r -eq 'landed') {
@@ -1798,21 +1934,22 @@ function Invoke-Integrate {
             $results += [pscustomobject]@{ Branch = $b; Result = "SKIPPED ($r)"; Detail = "in $(Get-SyncWorktreePath)" }
             continue
         }
-        if ($script:GitExit -ne 0) {
+        if (-not $clean) {
             # A conflict with main-only code cannot be synced away (features never merge
             # main), so --resolve leaves it in the main checkout for the user to finish.
             if ($resolve -and $into -eq 'main') {
+                $mainAt = (Get-WorktreeOf 'main').Path
                 $prev = Cfg 'skooma.lastgood'
-                $null = GG -C $MainWt merge --no-edit $b
-                $files = @(Get-Unmerged $MainWt)
+                $null = GG -C $mainAt merge --no-edit $b
+                $files = @(Get-Unmerged $mainAt)
                 if (-not $files) {
-                    $null = G -C $MainWt merge --abort
+                    $null = G -C $mainAt merge --abort
                     Fail "merging $b failed without conflicted files; aborted"
                 }
                 $null = G config 'skooma.lastgood' $lastGood
-                [IO.File]::WriteAllText($ResolveState, (@{ Branch = $b; LastGood = $lastGood; PrevLastGood = $prev; Files = @($files) } | ConvertTo-Json))
+                [IO.File]::WriteAllText($ResolveState, (@{ Branch = $b; Path = $mainAt; LastGood = $lastGood; PrevLastGood = $prev; Files = @($files) } | ConvertTo-Json))
                 Say ''
-                Warn "$b conflicts with main; the merge is left in $MainWt"
+                Warn "$b conflicts with main; the merge is left in $mainAt"
                 foreach ($f in $files) { Say "    $f" }
                 Say ''
                 Info 'resolve each file, git add it, then:  git skooma integrate --continue'
@@ -1821,7 +1958,8 @@ function Invoke-Integrate {
                 return
             }
             # An amend never merges its parent, so its conflict is resolved in the parent's worktree.
-            if ($resolve -and (Test-IsAmend $b)) {
+            # local is resolved the same way, in the main checkout where it is out.
+            if ($resolve -and ((Test-IsAmend $b) -or $into -eq $LocalBranch)) {
                 $pw = $Worktrees | Where-Object { $_.Branch -eq $into } | Select-Object -First 1
                 if (-not $pw) { Fail "parent $into has no worktree to resolve in; open one for it (git worktree add) and integrate again" }
                 $op = Test-MidOperation $pw.Path
@@ -1848,8 +1986,8 @@ function Invoke-Integrate {
             continue
         }
 
-        # main merges in the main checkout; a trunk in its own worktree.
-        $at = $MainWt
+        # main merges where it is checked out (else through the sidecar, above); a trunk or local in its own worktree.
+        $at = if ($into -eq 'main') { (Get-WorktreeOf 'main').Path } else { $MainWt }
         if ($into -ne 'main') {
             $tw = $Worktrees | Where-Object { $_.Branch -eq $into } | Select-Object -First 1
             if (-not $tw) {
@@ -1881,19 +2019,23 @@ function Invoke-Integrate {
         Good "$b -> $into ($ff, $ahead commits)"
     }
 
+    $null = Update-Local
     if ($results | Where-Object { $_.Result -like 'landed*' }) {
         $null = G config 'skooma.lastgood' $lastGood
+        if ($localGood) { $null = G config 'skooma.lastgood-local' $localGood }
         $null = G -C $MainWt submodule update --init --recursive
     }
 
-    # Whatever landed must have reached main through its trunks; say so when it has not.
+    # Whatever landed must have reached main (local for private work) through its trunks; say so when it has not.
     foreach ($r in @($results | Where-Object { $_.Result -like 'landed*' })) {
-        if (-not (GitOk merge-base --is-ancestor $r.Branch main)) { Warn "$($r.Branch) landed in its trunk but is not in main yet" }
+        $end = if ((Test-IsPrivate $r.Branch) -and (Test-HasLocal)) { $LocalBranch } else { 'main' }
+        if (-not (GitOk merge-base --is-ancestor $r.Branch $end)) { Warn "$($r.Branch) landed in its trunk but is not in $end yet" }
     }
 
     Say ''
     $results | Format-Table -AutoSize | Out-String | Write-Host
     Info "main is now $(G rev-parse --short main)"
+    if (Test-HasLocal) { Info "$LocalBranch is now $(G rev-parse --short $LocalBranch)" }
     Install-Tooling -Quiet
     Info "if the build breaks:  git skooma undo   (back to $($lastGood.Substring(0,9)))"
     Say ''
@@ -1945,20 +2087,35 @@ function Invoke-Trunk {
 function Invoke-Undo {
     $lastGood = Cfg 'skooma.lastgood'
     if (-not $lastGood) { Fail 'no recorded last-known-good commit (nothing integrated yet)' }
-    $cur = G rev-parse main
-    if ($cur -eq $lastGood) { Info 'main is already at the last-known-good commit'; return }
-    $mainBranch = G -C $MainWt rev-parse --abbrev-ref HEAD
-    if ($mainBranch -ne 'main') { Fail "main checkout is on '$mainBranch', expected main" }
-    if (Test-Dirty $MainWt) { Fail 'main checkout has uncommitted changes' }
+    $localGood = Cfg 'skooma.lastgood-local'
+    $plan = @(@{ Branch = 'main'; Good = $lastGood })
+    if ($localGood -and (Test-HasLocal)) { $plan += @{ Branch = $LocalBranch; Good = $localGood } }
+    $plan = @($plan | Where-Object { (G rev-parse $_.Branch) -ne $_.Good })
+    if (-not $plan) { Info 'main and local are already at the last-known-good commits'; return }
+    foreach ($p in $plan) {
+        $w = Get-WorktreeOf $p.Branch
+        if ($w -and (Test-Dirty $w.Path)) { Fail "$($w.Path) has uncommitted changes" }
+        if ($w -and (Test-MidOperation $w.Path)) { Fail "$($w.Path) is mid-operation" }
+    }
 
     Say ''
-    Say "main  $($cur.Substring(0,9))  ->  $($lastGood.Substring(0,9))"
-    G -C $MainWt log --oneline "$lastGood..$cur" | Write-Host
-    Say ''
-    $null = GG -C $MainWt reset --hard $lastGood
-    if ($script:GitExit -ne 0) { Fail 'reset failed' }
-    $null = G -C $MainWt submodule update --init --recursive
-    Good 'main reset. The feature branches still have their commits; re-integrate when fixed.'
+    foreach ($p in $plan) {
+        $cur = G rev-parse $p.Branch
+        Say "$($p.Branch)  $($cur.Substring(0,9))  ->  $($p.Good.Substring(0,9))"
+        G log --oneline "$($p.Good)..$cur" | Write-Host
+        $w = Get-WorktreeOf $p.Branch
+        if ($w) {
+            $null = GG -C $w.Path reset --hard $p.Good
+            if ($script:GitExit -ne 0) { Fail "reset of $($p.Branch) failed" }
+            $null = G -C $w.Path submodule update --init --recursive
+        }
+        else {
+            $null = GG update-ref "refs/heads/$($p.Branch)" $p.Good $cur
+            if ($script:GitExit -ne 0) { Fail "reset of $($p.Branch) failed" }
+        }
+        Say ''
+    }
+    Good "$(($plan | ForEach-Object { $_.Branch }) -join ' and ') reset. The branches still have their commits; re-integrate when fixed."
     Say ''
 }
 
@@ -1970,18 +2127,44 @@ function Invoke-Undo {
 # Commits main has already reverted are dropped: this answers "is the instrumentation
 # still here", and the commit being in the history does not mean that it is. A cleanup
 # done by hand is not detected, but then the revert below just refuses and nothing breaks.
-function Get-StrandedSpikes { param([string]$branch)
+function Get-StrandedSpikes { param([string]$branch, [string]$in = 'main')
     $reverted = @{}
-    foreach ($m in [regex]::Matches((G log --format='%b' 'develop..main'), 'This reverts commit ([0-9a-f]{40})')) {
+    foreach ($m in [regex]::Matches((G log --format='%b' "develop..$in"), 'This reverts commit ([0-9a-f]{40})')) {
         $reverted[$m.Groups[1].Value] = $true
     }
     $found = @()
-    foreach ($line in ((G log --format='%H %h %s' --grep='DO NOT LAND' 'develop..main') -split "`n" | Where-Object { $_ })) {
+    foreach ($line in ((G log --format='%H %h %s' --grep='DO NOT LAND' "develop..$in") -split "`n" | Where-Object { $_ })) {
         $sha = ($line -split ' ', 2)[0]
         if ($reverted.ContainsKey($sha)) { continue }
         if (GitOk merge-base --is-ancestor $sha $branch) { $found += $line }
     }
     return , $found
+}
+
+# Revert $lines (Get-StrandedSpikes output, newest first) in the worktree at $at, which has
+# $into checked out; on a failure put it back and stop with $branch untouched.
+function Revert-Stranded { param([string[]]$lines, [string]$at, [string]$into, [string]$branch)
+    Info "reverting $($lines.Count) DO NOT LAND commit(s) from $into"
+    $before = G -C $at rev-parse HEAD
+    foreach ($s in $lines) {
+        $parts = $s -split ' ', 3
+        $out = GG -C $at revert --no-edit $parts[0]
+        if ($script:GitExit -ne 0) {
+            # A commit whose changes are already gone reverts to nothing, and git
+            # reports that as a failure. It is not one: there is nothing left to undo,
+            # which is the state we were trying to reach. --quit clears the sequencer
+            # without touching the reverts already made.
+            if ($out -match 'nothing to commit') {
+                $null = G -C $at revert --quit
+                Info "skipped $($parts[1]) (nothing left to revert)"
+                continue
+            }
+            $null = G -C $at revert --abort
+            $null = GG -C $at reset --hard $before
+            Fail "revert of $($parts[1]) failed; $into is back at $($before.Substring(0,9)) and $branch is untouched`n$out"
+        }
+        Good "reverted $($parts[1]) $($parts[2])"
+    }
 }
 
 # A branch is retirable once its content is already in its base - upstream merged the
@@ -2017,18 +2200,23 @@ function Invoke-Retire {
     # *satisfied* by it, because the content really is in the base. That is how a whole
     # probe spike once stayed in main after its branch was retired without complaint.
     # So look for the commits themselves, not for a diff.
+    # Spikes landed into main before local existed, and land into local since: look in both.
     $stranded = Get-StrandedSpikes $branch
-    if ($stranded) {
-        $mainBranch = G -C $MainWt rev-parse --abbrev-ref HEAD
-        if ($mainBranch -ne 'main') { Fail "$branch left DO NOT LAND commits in main, and the main checkout is on '$mainBranch'`n    put it back on main so retire can revert them" }
-        $mop = Test-MidOperation $MainWt
-        if ($mop)                      { Fail "main checkout is mid-$mop; finish or abort that first" }
-        if (Test-Dirty $MainWt)        { Fail "main checkout has uncommitted changes; commit or stash them first`n  (git -C $MainWt status)" }
+    $strandedLocal = if (Test-HasLocal) { Get-StrandedSpikes $branch $LocalBranch } else { @() }
+    $strandedAll = @($stranded) + @($strandedLocal | Where-Object { $stranded -notcontains $_ })
+    if ($strandedAll) {
+        foreach ($t in @('main', $LocalBranch)) {
+            $w = Get-WorktreeOf $t
+            if (-not $w) { continue }
+            $mop = Test-MidOperation $w.Path
+            if ($mop)               { Fail "$($w.Path) ($t) is mid-$mop; finish or abort that first" }
+            if (Test-Dirty $w.Path) { Fail "$($w.Path) ($t) has uncommitted changes; commit them first`n  (git -C $($w.Path) status)" }
+        }
         if (-not $force) {
             Say ''
-            Warn "$branch merged $($stranded.Count) DO NOT LAND commit(s) into main:"
+            Warn "$branch merged $($strandedAll.Count) DO NOT LAND commit(s) into main or $($LocalBranch):"
             Say ''
-            foreach ($s in $stranded) { Info (($s -split ' ', 2)[1]) }
+            foreach ($s in $strandedAll) { Info (($s -split ' ', 2)[1]) }
             Say ''
             Info 'deleting the branch does not remove those. to retire and revert them:'
             Info "  git skooma retire $($named[0]) --force"
@@ -2074,29 +2262,32 @@ function Invoke-Retire {
     # Revert before anything is deleted, so a conflict leaves the branch intact to retry
     # from. git log is newest-first, which is already the right order to revert in.
     if ($stranded) {
-        Info "reverting $($stranded.Count) DO NOT LAND commit(s) from main"
-        $before = G -C $MainWt rev-parse HEAD
-        foreach ($s in $stranded) {
-            $parts = $s -split ' ', 3
-            $out = GG -C $MainWt revert --no-edit $parts[0]
-            if ($script:GitExit -ne 0) {
-                # A commit whose changes are already gone reverts to nothing, and git
-                # reports that as a failure. It is not one: there is nothing left to undo,
-                # which is the state we were trying to reach. --quit clears the sequencer
-                # without touching the reverts already made.
-                if ($out -match 'nothing to commit') {
-                    $null = G -C $MainWt revert --quit
-                    Info "skipped $($parts[1]) (nothing left to revert)"
-                    continue
-                }
-                $null = G -C $MainWt revert --abort
-                $null = GG -C $MainWt reset --hard $before
-                Fail "revert of $($parts[1]) failed; main is back at $($before.Substring(0,9)) and $branch is untouched`n$out"
-            }
-            Good "reverted $($parts[1]) $($parts[2])"
+        # main reverts where it is checked out, or in the sync sidecar and then moves to it.
+        $mw = Get-WorktreeOf 'main'
+        $at = if ($mw) { $mw.Path } else { Initialize-SyncWorktree }
+        if (-not $mw) {
+            if (Test-MidOperation $at) { Fail "$at is mid-operation; finish it first" }
+            $null = G -C $at reset --quiet --hard main
         }
+        $before = G rev-parse main
+        $localBefore = if (Test-HasLocal) { G rev-parse $LocalBranch } else { '' }
+        Revert-Stranded $stranded $at 'main' $branch
+        if (-not $mw -and -not (Set-MainToSidecar)) { Fail "main could not take the reverts made in $at; finish there and retire again" }
         $null = G config 'skooma.lastgood' $before
+        if ($localBefore) { $null = G config 'skooma.lastgood-local' $localBefore }
+        if (-not (Update-Local)) { Fail "$LocalBranch could not take main's reverts; merge main into it and retire again" }
         Say ''
+    }
+    if (Test-HasLocal) {
+        # What is left in local once it has main's reverts: the spike's landings since local began.
+        $strandedLocal = Get-StrandedSpikes $branch $LocalBranch
+        if ($strandedLocal) {
+            $lw = Get-WorktreeOf $LocalBranch
+            if (-not $lw) { Fail "$branch left DO NOT LAND commits in $LocalBranch, which is checked out nowhere; check it out in the main checkout" }
+            if (-not $stranded) { $null = G config 'skooma.lastgood-local' (G rev-parse $LocalBranch) }
+            Revert-Stranded $strandedLocal $lw.Path $LocalBranch $branch
+            Say ''
+        }
     }
 
     if ($wt) {
@@ -2146,6 +2337,35 @@ function Invoke-Retire {
     Say ''
 }
 
+# --------------------------------------------------------------------- local
+
+# local is main plus the private work and spikes: the main checkout's branch and the F5
+# build. It is never pushed but to skooma.privatePushUrl, and nothing public merges it.
+function Invoke-Local {
+    if (Test-HasLocal) {
+        $c = Get-Counts 'main' $LocalBranch
+        $w = Get-WorktreeOf $LocalBranch
+        Say ''
+        Say "$LocalBranch  $(G rev-parse --short $LocalBranch)  ($($c.Ahead) ahead of main, $($c.Behind) behind)$(if ($w) { "  in $($w.Path)" } else { '  (checked out nowhere)' })"
+        Say ''
+        return
+    }
+    $mainBranch = G -C $MainWt rev-parse --abbrev-ref HEAD
+    if ($mainBranch -ne 'main') { Fail "main checkout is on '$mainBranch'; local starts from main there" }
+    $op = Test-MidOperation $MainWt
+    if ($op) { Fail "main checkout is mid-$op; finish or abort that first" }
+    if (Test-Dirty $MainWt) { Fail "main checkout has uncommitted changes; commit them first" }
+    $out = G branch $LocalBranch main
+    if ($script:GitExit -ne 0) { Fail "could not create ${LocalBranch}: $out" }
+    $null = G config "branch.$LocalBranch.description" 'main plus private work and spikes; the F5 build; never pushed but privately'
+    $out = G -C $MainWt checkout --quiet $LocalBranch
+    if ($script:GitExit -ne 0) { Fail "could not check out $LocalBranch in the main checkout: $out" }
+    Good "created $LocalBranch at $(G rev-parse --short main) and checked it out in $MainWt"
+    Info 'private-* branches and spikes land into it from now on; everything else still lands into main, which it follows.'
+    if (-not (Cfg 'skooma.privatePushUrl')) { Warn 'no skooma.privatePushUrl: local can be pushed nowhere (git skooma bootstrap sets the forgejo remote)' }
+    Say ''
+}
+
 # ------------------------------------------------------------------ bootstrap
 
 # Copy the tooling out of main's tree, so a dirty/mid-merge main cannot brick it; -Quiet installs only what changed.
@@ -2163,7 +2383,7 @@ function Install-Tooling { param([switch]$Quiet)
     # Hooks (sh, shared by every worktree via .git/hooks).
     $hookDst = Join-Path $CommonDir 'hooks'
     New-Item -ItemType Directory -Force -Path $hookDst | Out-Null
-    foreach ($h in 'reference-transaction', 'pre-commit', 'pre-merge-commit') {
+    foreach ($h in 'skooma-private.sh', 'reference-transaction', 'pre-commit', 'pre-merge-commit', 'pre-push') {
         $s = Join-Path $src "hooks\$h"
         if (-not (Test-Path $s)) { continue }
         $text = (Get-Content $s -Raw) -replace "`r`n", "`n"
@@ -2198,6 +2418,12 @@ function Invoke-Bootstrap {
     )
     foreach ($kv in $cfg) { $null = G config $kv[0] $kv[1] }
     Good 'git config set'
+    # The one place private work may be pushed (by URL, so renaming a remote opens nothing).
+    if (-not (Cfg 'skooma.privatePushUrl')) {
+        $fj = G remote get-url forgejo
+        if ($script:GitExit -eq 0 -and $fj) { $null = G config 'skooma.privatePushUrl' $fj; Good "private work may be pushed to $fj" }
+        else { Warn 'no skooma.privatePushUrl: private work can be pushed nowhere (git config skooma.privatePushUrl <url>)' }
+    }
 
     # 4. Shared exclude entries (untracked fork files must stay invisible in feature worktrees).
     $ex = Join-Path $CommonDir 'info\exclude'
@@ -2263,6 +2489,7 @@ switch ($Command.ToLowerInvariant()) {
     }
     'integrate' { Invoke-Integrate }
     'trunk'     { Invoke-Trunk }
+    'local'     { Invoke-Local }
     'undo'      { Invoke-Undo }
     'retire'    { Invoke-Retire }
     'park'      { Invoke-Park }

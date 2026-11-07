@@ -31,7 +31,7 @@ if [ -z "$class" ]; then
         case "$branch" in "$c"-*) class=$c ; break ;; esac
     done
 fi
-case "$class" in '' | glue | sidecar) exit 0 ;; esac
+case "$class" in '' | glue | sidecar | private | spike) exit 0 ;; esac
 
 staged=$(git diff --cached --name-only --diff-filter=ACMR)
 [ -n "$staged" ] || exit 0

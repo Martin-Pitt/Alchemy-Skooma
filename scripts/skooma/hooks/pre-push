@@ -1,0 +1,47 @@
+#!/bin/sh
+# Skooma: private work (local, private-*, spikes; see skooma-private.sh) goes only to the
+# remotes named by URL in skooma.privatePushUrl, never to GitHub or upstream: neither the
+# branches themselves nor a public branch that carries their commits.
+# Installed to .git/hooks by `git skooma bootstrap`.
+
+remote=$1
+url=$2
+. "$(git rev-parse --git-common-dir)/hooks/skooma-private.sh"
+
+for a in $(git config --get-all skooma.privatePushUrl 2>/dev/null); do
+    if [ "$url" = "$a" ]; then
+        cat >/dev/null
+        exit 0
+    fi
+done
+
+bad=
+while read -r lref lsha rref rsha; do
+    case "$lsha" in 0000000000000000000000000000000000000000) continue ;; esac
+    lb=${lref#refs/heads/}
+    rb=${rref#refs/heads/}
+    if skooma_is_private "$lb" || skooma_is_private "$rb"; then
+        bad="$bad
+    $lb -> $rb: a private branch"
+        continue
+    fi
+    # What the remote already has is not a leak, whatever it came from.
+    if leak=$(skooma_private_leak "$lsha" "$lb" "--remotes=$remote"); then
+        bad="$bad
+    $lb -> $rb: carries commits of $leak"
+    fi
+done
+
+if [ -n "$bad" ]; then
+    cat >&2 <<MSG
+
+  Refused: private work may not go to $remote ($url):
+$bad
+
+  Private branches go only to:  $(git config --get-all skooma.privatePushUrl 2>/dev/null | tr '\n' ' ')
+  A public branch that took a private one's commits must drop them first.
+
+MSG
+    exit 1
+fi
+exit 0

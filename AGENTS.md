@@ -9,19 +9,21 @@ Run `git skooma status` first if unsure. Branch roles:
 | Branch | Meaning |
 |---|---|
 | `develop` | Read-only mirror of upstream (`AlchemyViewer/Alchemy` `develop`, the PR base), moved only by `sync`. Never commit, merge, checkout or reset onto it. Older notes say `next` for it, and `develop` for what is now `main`. |
-| `main` | Integration branch + the human's F5 build, in the main checkout. Do not do feature work here. |
+| `main` | Integration branch of everything public; pushed to GitHub. Do not do feature work here. Once `local` exists nothing has it checked out, and `integrate`/`sync` move it through the sync sidecar. |
+| `local` | `main` plus the private work and spikes: the main checkout's branch and Nexii's F5 build. Follows `main` on every land. Never pushed but to the private remote (`skooma.privatePushUrl`, Forgejo), and nothing public merges it. Created once by `git skooma local`. |
 | `feature-<name>` | Your workspace, in `.worktrees/<name>`. Branched from `develop` (or a foundation it builds on); never from a trunk or `main`, which hold many PRs at once. The branch is the PR and holds the whole feature. |
 | trunk | Merge-only branch gathering an area's features before `main` (`combat`, `camera`, `render`, `ui`, …), at `.worktrees/trunk-<area>`. Never cut from or commit to one. Worktrees of the area land into it, and it lands into `main`. `git skooma trunk` lists them. A feature with follow-ups (`feature-combat/minimap`) is not a trunk. |
 | `fix-<name>`, `workaround-<name>`, … | The same kind of branch under a different classification chosen at `git skooma new`. Treat exactly like `feature-*`. |
 | `amend-<area>/<x>` | A follow-up to an existing feature. Lands into that feature, never a PR on its own. See Landing work. |
 | `foundation-<name>` | A shared base other features build on (`foundation-warp`: SKWarp under the camera and scrolling). Cut from `develop`; branches of any trunk may `git merge` it, and `check` accepts that. Lands into `main` and ships as its own PR first. |
-| `spike-<name>` | Throwaway instrumentation to answer one question. The only branch that never goes upstream. See below. |
+| `spike-<name>` | Throwaway instrumentation to answer one question. Never goes upstream; lands into `local`. See below. |
+| `private-<area>/<name>` | Work that stays ours (the worldmap survey and bot): a real long-lived branch with amends, never a PR, never on GitHub. Lands into `local`. The hooks refuse any public branch or push that carries its commits. |
 | `backup/<branch>` | A snapshot or a parked branch (`git skooma park`/`unpark`). Sync, check, integrate and retire skip it. |
 | `glue` | Fork-only files (scripts, hooks, CI, branding, this file). |
 
 ### The main checkout
 
-`D:\viewers\alchemy-skooma` on `main` is shared by several sessions and is Nexii's F5.
+`D:\viewers\alchemy-skooma` on `local` (on `main` until `local` exists) is shared by several sessions and is Nexii's F5.
 
 - **Never edit source there**, not even a quick fix to move later: `git skooma new <area>/<name>` before the first edit. Reading and grepping are fine.
 - The one exception is `doc/skooma/` docs (below): edited there and committed in the same step, without asking. Never leave `main` dirty; uncommitted work there breaks other sessions.
@@ -36,24 +38,30 @@ A `foundation-*` holds only what its name and its SKOOMA.md row own; a `feature-
 - Before landing, read `git diff --stat develop...<branch>` and ask of every file "whose job is this?". Anything belonging elsewhere is dropped or moved to the owning branch (or a new foundation), never kept for convenience.
 - Reviews check scope leaks as a standing item.
 
-### `DO NOT LAND` means never reaches `develop` — not never reaches `main`
+### `DO NOT LAND` means never reaches `develop` — it runs in `local`
 
 A spike exists to measure something, so its instrumentation has to run in a real
 build. Mark each such commit with a `DO NOT LAND:` subject prefix. Then:
 
-- It **may** be integrated into `main`, so it runs in the human's F5 build.
-- It **must never** reach `develop`. `git skooma check` makes a `DO NOT LAND` commit
-  fatal on any branch that goes upstream, and only a warning on `spike-*`.
+- It lands into `local` (into `main` only while there is no `local`), so it runs in the human's F5 build.
+- It **must never** reach `develop`, `main` or GitHub. `git skooma check` makes a `DO NOT LAND` commit
+  fatal on any branch that goes upstream, and only a warning on `spike-*` and `private-*`; the hooks
+  keep a spike's commits out of every public branch and push.
 - Retiring the branch is **not** the same as discarding the spike. `git skooma retire`
-  refuses while the branch's `DO NOT LAND` commits are still in `main`, and
-  `--force` reverts them out before deleting anything.
+  refuses while the branch's `DO NOT LAND` commits are still in `main` or `local`, and
+  `--force` reverts them out of both before deleting anything.
 
-Do not hand-delete spike code from `main` — let `retire --force` do it, so the
+Do not hand-delete spike code — let `retire --force` do it, so the
 revert is recorded and `git skooma undo` still works.
+
+Private work is checked by history, not name: a public branch that has merged a private or spike
+branch is refused at the ref move, at `check`/`integrate` and at push. `SKOOMA_ALLOW_PRIVATE=1`
+waives the ref hook; never use it on a public branch, since one contaminated public branch hides
+the same commits for every other.
 
 ## Feature branches are upstream pull requests in waiting
 
-Every commit must be acceptable to the Alchemy project as-is. Every feature and foundation is upstreamable by construction: never ask "upstream or fork-only?"; list it in `doc/skooma/UPSTREAM.md`.
+Every commit must be acceptable to the Alchemy project as-is. Every feature and foundation is upstreamable by construction: never ask "upstream or fork-only?"; list it in `doc/skooma/UPSTREAM.md`. Only what Nexii names private is a `private-*` branch.
 
 - Write upstream-style code in upstream's layout. `SK`/`sk` prefixes on your own files and `<SK:Nexii>` wrappers on injection sites into non-Skooma files are expected on every branch — Alchemy already carries Firestorm's `<FS:ND>` / `<FS:AR>`. Keep product/channel branding out.
 - Markers: `// <SK:Nexii> <one sentence naming the feature>` ... `// </SK:Nexii>`, or a trailing `// <SK:Nexii>` on a single line. Every edit to a non-Skooma file, marked or not, gets a row in `doc/skooma/INJECTIONS.md` once it lands.
