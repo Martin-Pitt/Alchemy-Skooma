@@ -1005,6 +1005,7 @@ if(AL_BUILD_VIEWER)
     skmapmode.cpp # <SK:Nexii> 3D world map
     skworldmapmath.cpp # <SK:Nexii> 3D world map
     skworldmaproads.cpp # <SK:Nexii> 3D world map
+    skworldmapsearch.cpp # <SK:Nexii> 3D world map
     skworldmapscene.cpp # <SK:Nexii> 3D world map
     skworldmapterrain.cpp # <SK:Nexii> 3D world map
     skworldmaptiles.cpp # <SK:Nexii> 3D world map
@@ -1894,6 +1895,7 @@ if(AL_BUILD_VIEWER)
     skmapmode.h # <SK:Nexii> 3D world map
     skworldmapmath.h # <SK:Nexii> 3D world map
     skworldmaproads.h # <SK:Nexii> 3D world map
+    skworldmapsearch.h # <SK:Nexii> 3D world map
     skworldmapscene.h # <SK:Nexii> 3D world map
     skworldmapterrain.h # <SK:Nexii> 3D world map
     skworldmaptiles.h # <SK:Nexii> 3D world map

@@ -25,6 +25,7 @@
 #include "llviewerprecompiledheaders.h"
 
 #include "skmapmode.h"
+#include "skworldmapsearch.h"
 
 #include "llagent.h"
 #include "llappviewer.h"
@@ -243,13 +244,29 @@ bool SKMapMode::open()
         root->sendChildToBack(overlay);
         mOverlay = overlay->getHandle();
     }
+    SKWorldMapSearch* search = new SKWorldMapSearch();
+    if (search->buildFromFile("panel_sk_world_map_search.xml"))
+    {
+        const LLRect world = gViewerWindow->getWorldViewRectScaled();
+        const LLRect rect = search->getRect();
+        search->setOrigin(world.getCenterX() - rect.getWidth() / 2, world.mBottom + 18);
+        root->addChild(search);
+        root->sendChildToBack(search);
+        mSearch = search->getHandle();
+    }
+    else
+    {
+        delete search;
+    }
     root->sendChildToBack(input);
     if (!on_top)
     {
-        input->setVisible(false);
-        if (overlay)
+        for (const LLHandle<LLView>& handle : { mInput, mOverlay, mSearch })
         {
-            overlay->setVisible(false);
+            if (LLView* view = handle.get())
+            {
+                view->setVisible(false);
+            }
         }
     }
 
@@ -261,8 +278,10 @@ void SKMapMode::removeViews()
 {
     deleteLater(mInput);
     deleteLater(mOverlay);
+    deleteLater(mSearch);
     mInput = LLHandle<LLView>();
     mOverlay = LLHandle<LLView>();
+    mSearch = LLHandle<LLView>();
     mPanning = false;
 }
 
@@ -296,7 +315,7 @@ void SKMapMode::onTopChanged(bool on_top)
         mMapPosition = gAgentCamera.getCameraPositionGlobal();
         mMapFocus = gAgentCamera.getFocusGlobal();
     }
-    for (const LLHandle<LLView>& handle : { mInput, mOverlay })
+    for (const LLHandle<LLView>& handle : { mInput, mOverlay, mSearch })
     {
         if (LLView* view = handle.get())
         {
@@ -318,7 +337,7 @@ void SKMapMode::onTopChanged(bool on_top)
 void SKMapMode::shutdown()
 {
     // No idle loop runs from here on, so the views go now rather than later.
-    for (LLHandle<LLView>* handle : { &mInput, &mOverlay })
+    for (LLHandle<LLView>* handle : { &mInput, &mOverlay, &mSearch })
     {
         if (LLView* view = handle->get())
         {
@@ -341,6 +360,11 @@ void SKMapMode::shutdown()
 
 void SKMapMode::recentre()
 {
+    flyTo(gAgent.getPositionGlobal());
+}
+
+void SKMapMode::flyTo(const LLVector3d& target)
+{
     if (!mOpen)
     {
         return;
@@ -351,9 +375,8 @@ void SKMapMode::recentre()
         LLViewerJoystick::getInstance()->toggleFlycam();
         LLViewerJoystick::getInstance()->setCameraNeedsUpdate(true); // the flycam's view no longer holds the camera
     }
-    const LLVector3d agent = gAgent.getPositionGlobal();
     const LLVector3d focus = gAgentCamera.getFocusGlobal();
-    const LLVector3d offset(agent.mdV[VX] - focus.mdV[VX], agent.mdV[VY] - focus.mdV[VY], 0.0);
+    const LLVector3d offset(target.mdV[VX] - focus.mdV[VX], target.mdV[VY] - focus.mdV[VY], 0.0);
     gAgentCamera.setFocusOnAvatar(false, false);
     gAgentCamera.setCameraPosAndFocusGlobal(gAgentCamera.getCameraPositionGlobal() + offset, focus + offset, LLUUID::null);
 }

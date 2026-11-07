@@ -29,6 +29,7 @@
 #include "v2math.h"
 #include "v3dmath.h"
 
+#include <string_view>
 #include <vector>
 
 /// Global frame throughout: x east, y north, z up, metres. A region is 256 m on a side. A map server
@@ -135,4 +136,8 @@ namespace skworldmap
 
     /// How many dots each cluster draws, nearest first: each at most `per_stack_cap`, all within `budget`.
     std::vector<S32> stackBudget(const std::vector<F64>& distances, const std::vector<S32>& counts, S32 per_stack_cap, S32 budget);
+
+    /// How well `name` matches a lower-case query whose letters it holds in order, spaces ignored: runs,
+    /// word starts and a prefix score higher, gaps and long names lower. Negative when it does not match.
+    F32 fuzzyScore(std::string_view query, std::string_view name);
 } // namespace skworldmap

@@ -258,4 +258,14 @@ namespace
         CHECK(std::fabs(d.magVec() - std::sqrt(10.0 * 1500.0)) < 1.0e-6);
         CHECK(std::fabs(std::atan2(d.mdV[VY], d.mdV[VX]) + 0.25 * 3.141592653589793) < 1.0e-9);
     }
+
+    // The region search: letters in order match, a prefix beats a scattered match, and missing letters do not.
+    TEST_CASE("skworldmapmath: The fuzzy region search ranks a prefix over scattered letters", "[skworldmapmath]")
+    {
+        CHECK(fuzzyScore("ahern", "Ahern") > fuzzyScore("ahern", "Abc Hidden Ern"));
+        CHECK(fuzzyScore("bay", "Bay City - Alley") > 0.f);
+        CHECK(fuzzyScore("bca", "Bay City - Alley") > 0.f);
+        CHECK(fuzzyScore("zz", "Bay City - Alley") < 0.f);
+        CHECK(fuzzyScore("", "Ahern") < 0.f);
+    }
 } // namespace

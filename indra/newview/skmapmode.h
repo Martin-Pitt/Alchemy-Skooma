@@ -81,6 +81,9 @@ public:
     /// Moves the camera and its focus across the map until the focus is over the agent.
     void recentre();
 
+    /// Slides the camera and its focus across the map until the focus is over `target`, as recentre does.
+    void flyTo(const LLVector3d& target);
+
     /// The wheel's zoom toward the ground under the cursor (SKWorldMapZoomToCursor); false when declined.
     bool zoomToCursor(F32 clicks);
 
@@ -126,6 +129,7 @@ private:
 
     LLHandle<LLView> mInput;
     LLHandle<LLView> mOverlay;
+    LLHandle<LLView> mSearch;       ///< SKWorldMapSearch, at the foot of the map
     SKWorldMapScene mScene;
     open_signal_t mOpenSignal;
 };

@@ -29,6 +29,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <numeric>
 #include <queue>
@@ -307,5 +308,48 @@ std::vector<S32> stackBudget(const std::vector<F64>& distances, const std::vecto
         left -= shown;
     }
     return out;
+}
+
+F32 fuzzyScore(std::string_view query, std::string_view name)
+{
+    const auto lower = [](char c) { return (char)std::tolower((unsigned char)c); };
+    F32 score = 0.f;
+    size_t j = 0;
+    S64 prev = -2;
+    bool any = false;
+    for (char q : query)
+    {
+        if (q == ' ')
+        {
+            continue;
+        }
+        while (j < name.size() && lower(name[j]) != q)
+        {
+            ++j;
+        }
+        if (j == name.size())
+        {
+            return -1.f;
+        }
+        const bool word_start = j == 0 || name[j - 1] == ' ' || name[j - 1] == '-' || name[j - 1] == '_';
+        const S64 gap = (S64)j - prev - 1;
+        score += 1.f + (gap == 0 ? 3.f : 0.f) + (word_start ? 2.f : 0.f) - 0.25f * (F32)llmin(gap, (S64)4);
+        prev = (S64)j++;
+        any = true;
+    }
+    if (!any)
+    {
+        return -1.f;
+    }
+    if (query.size() <= name.size())
+    {
+        bool prefix = true;
+        for (size_t k = 0; k < query.size() && prefix; ++k)
+        {
+            prefix = lower(name[k]) == query[k];
+        }
+        score += prefix ? 5.f : 0.f;
+    }
+    return score - 0.02f * (F32)name.size();
 }
 } // namespace skworldmap
