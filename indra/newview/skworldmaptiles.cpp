@@ -107,6 +107,19 @@ void SKWorldMapTiles::addDescendants(const TileKey& key, S32 depth, F64 now, std
 bool SKWorldMapTiles::resolve(const SelectedTile& tile, F64 now, std::vector<Draw>& out)
 {
     mWanted.push_back(tile);
+    for (S32 level : UNDERLAY_LEVELS)
+    {
+        if (level > tile.mKey.mLevel)
+        {
+            F32 uv[4];
+            const TileKey key = ancestor(tile.mKey, level - tile.mKey.mLevel, uv);
+            auto [it, fresh] = mUnderlay.try_emplace(key, tile.mDistance);
+            if (!fresh)
+            {
+                it->second = std::min(it->second, tile.mDistance);
+            }
+        }
+    }
     const size_t start = out.size();
     if (Entry* e = find(tile.mKey))
     {
@@ -167,8 +180,21 @@ void SKWorldMapTiles::update(F64 now)
         ++it;
     }
 
-    // Start the nearest wanted tiles first, up to the cap.
+    // Start the nearest wanted tiles first, up to the cap, the underlay ahead of them: coarsest level
+    // first, so the whole view has something before any of it has detail.
     std::sort(mWanted.begin(), mWanted.end(), [](const SelectedTile& a, const SelectedTile& b) { return a.mDistance < b.mDistance; });
+    std::vector<SelectedTile> underlay;
+    underlay.reserve(mUnderlay.size());
+    for (const auto& [key, distance] : mUnderlay)
+    {
+        SelectedTile& u = underlay.emplace_back();
+        u.mKey = key;
+        u.mDistance = distance;
+    }
+    std::sort(underlay.begin(), underlay.end(), [](const SelectedTile& a, const SelectedTile& b)
+              { return a.mKey.mLevel != b.mKey.mLevel ? a.mKey.mLevel > b.mKey.mLevel : a.mDistance < b.mDistance; });
+    mWanted.insert(mWanted.begin(), underlay.begin(), underlay.end());
+    mUnderlay.clear();
     for (const SelectedTile& t : mWanted)
     {
         Entry* e = find(t.mKey);
@@ -240,5 +266,6 @@ void SKWorldMapTiles::clear()
 {
     mTiles.clear();
     mWanted.clear();
+    mUnderlay.clear();
     mInFlight = 0;
 }

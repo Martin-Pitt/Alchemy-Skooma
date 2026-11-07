@@ -54,6 +54,10 @@ public:
     static constexpr S32 MAX_KEPT = 1536;           ///< tiles kept after they leave the view, least recently used dropped
     static constexpr F64 FETCH_TIMEOUT = 30.0;      ///< seconds before a fetch stops counting against the cap
     static constexpr S32 FALLBACK_LEVELS_DOWN = 3;  ///< how many finer levels may stand in for a tile still loading
+    /// Coarse levels fetched under every selected tile ahead of the tiles themselves, so a fresh view or a
+    /// turn shows a blurry map at once rather than an empty one: the coarsest everywhere, one step finer
+    /// for detail while the selected levels arrive.
+    static constexpr S32 UNDERLAY_LEVELS[] = { skworldmap::TILE_LEVELS, 5 };
 
     struct Draw
     {
@@ -99,5 +103,6 @@ private:
 
     std::map<skworldmap::TileKey, Entry> mTiles;
     std::vector<skworldmap::SelectedTile> mWanted;
+    std::map<skworldmap::TileKey, F64> mUnderlay;   ///< this frame's underlay tiles, by their nearest wanter's distance
     S32 mInFlight = 0;
 };
