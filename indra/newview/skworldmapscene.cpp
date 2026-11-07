@@ -281,6 +281,8 @@ void SKWorldMapScene::drawGround(const SKWorldMapFrame& frame, S32 width, S32 he
     gGL.getTextureSlot(0)->unbind();
     gUIProgram.unbind();
 
+    mRoads.draw(frame, width, height);
+
     popMatrices();
     mScene.flush();
 }
@@ -538,4 +540,5 @@ void SKWorldMapScene::shutdown()
 {
     release();
     mTiles.clear();
+    mRoads.release();
 }

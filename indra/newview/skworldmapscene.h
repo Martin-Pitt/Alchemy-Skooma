@@ -27,6 +27,7 @@
 #include "llrect.h"
 #include "llrendertarget.h"
 #include "skworldmapmath.h"
+#include "skworldmaproads.h"
 #include "skworldmaptiles.h"
 
 #include <vector>
@@ -77,6 +78,7 @@ private:
     LLRenderTarget mBlurA;
     LLRenderTarget mBlurB;
     SKWorldMapTiles mTiles;
+    SKWorldMapRoads mRoads;
     SKWorldMapSurfaceSource* mSurfaces = nullptr;
     std::vector<skworldmap::SelectedTile> mSelected;
     std::vector<SKWorldMapTiles::Draw> mDraws;    ///< this frame's ground draws, kept to reuse its storage
