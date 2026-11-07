@@ -118,7 +118,8 @@ constexpr F32 FADE_OPACITY_DELAY = 0.25f; // the part of a message's fade before
 constexpr F32 FADE_GREY_SPAN = 0.4f;      // the part of it over which its colour goes to grey
 constexpr F32 CHROME_FADE = 0.15f; // the hover backdrop's and border's ease, in seconds
 constexpr S32 EDGE_REACH = 6;      // how near the floater's edge the pointer shows the border
-constexpr F64 EDGE_REST = 0.08;    // and how long it rests there first
+constexpr F64 EDGE_REST = 0.08;
+constexpr S32 REVEAL_SLOP = 4; // how far the pointer may drift while resting on a card to reveal the log    // and how long it rests there first
 
 // The day a chat timestamp leads with, "year/month/day ...", as yyyymmdd; 0 when it carries none.
 S32 day_key(const std::string& stamp)
@@ -1224,13 +1225,15 @@ void SKFloaterLocalChat::onMouseEnter(S32 x, S32 y, MASK mask)
 void SKFloaterLocalChat::onMouseLeave(S32 x, S32 y, MASK mask)
 {
     mHovered = false;
+    mRevealed = false;
+    mRestSince = -1.0;
     mEdgeSince = -1.0;
     LLFloater::onMouseLeave(x, y, mask);
 }
 
 bool SKFloaterLocalChat::expanded() const
 {
-    return mHovered || mScroll > 0 || (mInput && mInput->getVisible()) || gFocusMgr.getMouseCapture() == this || (mScrollbar && mScrollbar->hasMouseCapture());
+    return mRevealed || mScroll > 0 || (mInput && mInput->getVisible()) || gFocusMgr.getMouseCapture() == this || (mScrollbar && mScrollbar->hasMouseCapture());
 }
 
 LLRect SKFloaterLocalChat::contentRect() const
@@ -1271,7 +1274,7 @@ void SKFloaterLocalChat::layoutBar()
     }
     const LLRect content = contentRect();
     const bool dragging = mScrollbar->hasMouseCapture();
-    const bool show = (mHovered || dragging) && barRange() > 0 && !isMinimized() && !gAgentCamera.cameraMouselook();
+    const bool show = (mRevealed || dragging) && barRange() > 0 && !isMinimized() && !gAgentCamera.cameraMouselook();
     mScrollbar->setVisible(show);
     if (!show)
     {
@@ -2202,12 +2205,18 @@ void SKFloaterLocalChat::draw()
 
     static LLCachedControl<S32> style(gSavedSettings, "SkoomaLocalChatStyle", STYLE_CARDS);
     const bool cards = style != STYLE_MINIMAL;
-    const bool full = expanded();
     const LLRect content = contentRect();
     const S32 view_height = content.getHeight();
     glideWheel();
     mScroll = llclamp(mScroll, 0, llmax(0, mContentHeight - view_height));
     const F64 now = LLFrameTimer::getTotalSeconds();
+    // Hovering alone shows nothing more: the log opens whole once the pointer has rested on a shown card.
+    static LLCachedControl<F32> reveal_rest(gSavedSettings, "SkoomaLocalChatRevealDelay", 0.35f);
+    if (!mRevealed && mRestSince >= 0.0 && now - mRestSince >= reveal_rest)
+    {
+        mRevealed = true;
+    }
+    const bool full = expanded();
     if (mWasExpanded && !full)
     {
         mCollapsedAt = now;
@@ -2940,6 +2949,21 @@ bool SKFloaterLocalChat::handleRightMouseUp(S32 x, S32 y, MASK mask)
 
 bool SKFloaterLocalChat::handleHover(S32 x, S32 y, MASK mask)
 {
+    // The rest that reveals the log: on a shown card, the pointer held within a few pixels; moving on starts it again.
+    if (!mRevealed)
+    {
+        const bool settled = mRestSince >= 0.0 && llabs(x - mRestX) <= REVEAL_SLOP && llabs(y - mRestY) <= REVEAL_SLOP;
+        if (!hitsContentAt(x, y))
+        {
+            mRestSince = -1.0;
+        }
+        else if (!settled)
+        {
+            mRestSince = LLFrameTimer::getTotalSeconds();
+            mRestX = x;
+            mRestY = y;
+        }
+    }
     const bool at_edge = !isLocked() && (x < EDGE_REACH || y < EDGE_REACH || x >= getRect().getWidth() - EDGE_REACH || y >= getRect().getHeight() - EDGE_REACH); // locked, no edge timer
     if (!at_edge)
     {
@@ -2985,6 +3009,8 @@ bool SKFloaterLocalChat::handleScrollWheel(S32 x, S32 y, LLScrollDelta delta)
     {
         return true;
     }
+    // Scrolling is intent enough: the log opens whole at once.
+    mRevealed = true;
     // Wheel up reads back through history, gliding there as the platform scrolls.
     const S32 view_h = contentRect().getHeight();
     if (!SKScrollDistance::enabled())

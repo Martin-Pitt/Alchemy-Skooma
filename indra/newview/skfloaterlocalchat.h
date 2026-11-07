@@ -273,6 +273,10 @@ private:
     TextPos mSelFocus;           // where it reaches now
     bool mSelecting = false;     // dragging one out
     bool mHovered = false;
+    bool mRevealed = false;      // the log shown whole: the pointer rested on a card, or the wheel turned; until the pointer leaves
+    F64 mRestSince = -1.0;       // when the pointer settled on a shown card, -1 while it is not on one
+    S32 mRestX = 0;              // where it settled
+    S32 mRestY = 0;
     bool mHiddenForConversations = false; // put away while Conversations shows nearby chat
     LLScrollbar* mScrollbar = nullptr; // an overlay bar over the content's right edge
     bool mBarSyncing = false;   // while layoutBar pushes the chat's position, the bar's callback ignores it
