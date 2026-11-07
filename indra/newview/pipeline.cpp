@@ -1569,6 +1569,8 @@ void LLPipeline::releaseAllGLResources()
         LLEnvironment::instance().releaseGLBuffers();
     }
 
+    mSurrounds.release(); // <SK:Nexii> Distant regions
+
     // Spans of gGL's query pool, whose queries go with the context.
     mTerrainPrimitives.release();
     mWaterPrimitives.release();
@@ -5218,6 +5220,16 @@ void LLPipeline::renderGeomDeferred(LLCamera& camera, bool do_occlusion)
         gGLLastMatrix = NULL;
         gGL.matrixMode(LLRender::MM_MODELVIEW);
         gGL.loadMatrix(LLViewerCamera::getCurrent().getModelview());
+
+        // <SK:Nexii> Distant regions: the ring after every opaque pool, before the stars and the water, in the main
+        // view alone, and only where the terrain is drawn from.
+        if (&camera == LLViewerCamera::getInstance() && !gCubeSnapshot && mRT == &mMainRT &&
+            hasRenderType(LLPipeline::RENDER_TYPE_TERRAIN) &&
+            ALFarPlane::groundDrawnFrom(camera.getOrigin().mV[VZ] - LLEnvironment::instance().getWaterHeight()))
+        {
+            mSurrounds.renderDeferred();
+        }
+        // </SK:Nexii>
 
         // The stars, the one layer of the sky the G-buffer takes, after every opaque pool, so the depth test spares
         // all they cover. No pool after the opaque ones draws into the G-buffer (glow, alpha and water draw after the

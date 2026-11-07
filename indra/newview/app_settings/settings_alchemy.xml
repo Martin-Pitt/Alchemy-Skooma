@@ -2531,6 +2531,28 @@
             <key>Value</key>
             <real>8</real>
         </map>
+        <key>SKRenderSurrounds</key>
+        <map>
+            <key>Comment</key>
+            <string>Distant regions: 0 draws nothing past the loaded regions, 1 draws the regions next to them from the terrain cache with their own look.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKRenderSurroundsNearCells</key>
+        <map>
+            <key>Comment</key>
+            <string>How many regions out from the loaded ones the distant regions draw as stand-ins from the terrain cache.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
         <key>SKTerrainCacheCapture</key>
         <map>
             <key>Comment</key>

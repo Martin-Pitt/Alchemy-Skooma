@@ -52,6 +52,7 @@
 #include "altransienttargetpool.h"
 #include "altransienttargets.h"
 #include "alwatersurface.h"
+#include "sksurroundsrenderer.h" // <SK:Nexii> Distant regions
 #include "altexture3d.h"
 #include "aluniformbuffer.h"
 #include "llrendertarget.h"
@@ -1278,6 +1279,8 @@ public:
 
     // The water's layout around the main camera and its map of cell heights, laid out at the start of each main frame.
     ALWaterSurface              mWaterSurface;
+
+    SKSurroundsRenderer         mSurrounds; // <SK:Nexii> Distant regions: the ring around the loaded regions
 
     // The sky: its bodies, textures, stars and environment cube, taken at the start of each main frame.
     ALSky                       mSky;
