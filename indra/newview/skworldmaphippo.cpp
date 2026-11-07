@@ -84,6 +84,7 @@ void SKWorldMapHippo::fetch(const LLUUID& mesh_id)
         return;
     }
 
+    LL_INFOS("WorldMap") << "Fetching the world map's hippo mesh " << mesh_id << LL_ENDL;
     mState = State::Fetching;
     mSelf = std::make_shared<SKWorldMapHippo*>(this);
     std::weak_ptr<SKWorldMapHippo*> self = mSelf;
@@ -107,6 +108,7 @@ void SKWorldMapHippo::fetch(const LLUUID& mesh_id)
         if (status && hippo->build(std::string(raw.begin(), raw.end())))
         {
             hippo->mState = State::Ready;
+            LL_INFOS("WorldMap") << "Loaded the world map's hippo mesh, " << hippo->mIndexCount / 3 << " triangles" << LL_ENDL;
             return;
         }
         LL_WARNS("WorldMap") << "Could not load the world map's hippo mesh: " << status.toString() << LL_ENDL;
@@ -218,9 +220,10 @@ void SKWorldMapHippo::draw(const LLVector3d& eye, const WorldDisc& disc)
             return;
         }
     }
-    else if (hiddenUnderDisc(eye, disc, centre - LLVector3d(extent.mdV[VX], extent.mdV[VY], 2.0 * extent.mdV[VZ]), centre))
+    else if (hiddenUnderDisc(eye, disc, centre - LLVector3d(extent.mdV[VX], extent.mdV[VY], 2.0 * extent.mdV[VZ]),
+                             centre + LLVector3d(extent.mdV[VX], extent.mdV[VY], 0.0)))
     {
-        // Before the mesh is in, a box twice its size, its top on the paw plane: fetched a little early, never late.
+        // Before the mesh is in, a box twice its size round the paw plane's middle: fetched a little early, never late.
         return;
     }
 

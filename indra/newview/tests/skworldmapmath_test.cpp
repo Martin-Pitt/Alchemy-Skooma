@@ -290,3 +290,24 @@ TEST_CASE("a box under the world disc shows only past its rim")
     // A box reaching past the rim shows even from straight above.
     CHECK_FALSE(hiddenUnderDisc(LLVector3d(1000.0, 1000.0, 2000.0), disc, lo, LLVector3d(1600.0, 1050.0, GROUND_Z - 1.0)));
 }
+
+TEST_CASE("the enclosing disc is the smallest round every point")
+{
+    // Two far points set the diameter; one inside changes nothing.
+    WorldDisc d = enclosingDisc({ { 0.0, 0.0 }, { 10.0, 0.0 }, { 5.0, 1.0 } });
+    CHECK(std::abs(d.mCentreX - 5.0) < 1e-9);
+    CHECK(std::abs(d.mCentreY) < 1e-9);
+    CHECK(std::abs(d.mRadius - 5.0) < 1e-9);
+
+    // An equilateral triangle takes its circumcircle.
+    const F64 h = std::sqrt(3.0) / 2.0;
+    d = enclosingDisc({ { 0.0, 0.0 }, { 1.0, 0.0 }, { 0.5, h } });
+    CHECK(std::abs(d.mRadius - 1.0 / std::sqrt(3.0)) < 1e-9);
+
+    // A square's corners and its middle: the circle through the four corners.
+    d = enclosingDisc({ { 0.0, 0.0 }, { 2.0, 0.0 }, { 0.0, 2.0 }, { 2.0, 2.0 }, { 1.0, 1.0 } });
+    CHECK(std::abs(d.mRadius - std::sqrt(2.0)) < 1e-9);
+    CHECK(std::abs(d.mCentreX - 1.0) < 1e-9);
+
+    CHECK(enclosingDisc({}).mRadius == 0.0);
+}

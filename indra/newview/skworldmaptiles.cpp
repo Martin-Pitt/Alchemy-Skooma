@@ -267,7 +267,7 @@ void SKWorldMapTiles::dropPriorities()
     }
 }
 
-void SKWorldMapTiles::cover(const TileKey& key, F64 bounds[4]) const
+void SKWorldMapTiles::cover(const TileKey& key, std::vector<std::pair<F64, F64>>& corners) const
 {
     bool refined = false;
     if (key.mLevel > 1)
@@ -286,7 +286,7 @@ void SKWorldMapTiles::cover(const TileKey& key, F64 bounds[4]) const
                 auto it = mKnown.find(child);
                 if (it == mKnown.end() || it->second)
                 {
-                    cover(child, bounds);
+                    cover(child, corners);
                 }
             }
         }
@@ -294,10 +294,10 @@ void SKWorldMapTiles::cover(const TileKey& key, F64 bounds[4]) const
     if (!refined)
     {
         const F64 x0 = key.mGridX * REGION_METRES, y0 = key.mGridY * REGION_METRES, side = key.sideMetres();
-        bounds[0] = std::min(bounds[0], x0);
-        bounds[1] = std::min(bounds[1], y0);
-        bounds[2] = std::max(bounds[2], x0 + side);
-        bounds[3] = std::max(bounds[3], y0 + side);
+        corners.emplace_back(x0, y0);
+        corners.emplace_back(x0 + side, y0);
+        corners.emplace_back(x0, y0 + side);
+        corners.emplace_back(x0 + side, y0 + side);
     }
 }
 
@@ -306,22 +306,19 @@ bool SKWorldMapTiles::occupiedDisc(WorldDisc& disc)
     if (mKnownChanged)
     {
         mKnownChanged = false;
-        F64 bounds[4] = { 1e30, 1e30, -1e30, -1e30 };
-        bool any = false;
+        std::vector<std::pair<F64, F64>> corners;
         for (const auto& [key, holds] : mKnown)
         {
             if (key.mLevel == TILE_LEVELS && holds)
             {
-                cover(key, bounds);
-                any = true;
+                cover(key, corners);
             }
         }
-        if (any)
+        if (!corners.empty())
         {
-            // Round the box's corners, so every region inside it is inside the disc.
-            mDisc.mCentreX = 0.5 * (bounds[0] + bounds[2]);
-            mDisc.mCentreY = 0.5 * (bounds[1] + bounds[3]);
-            mDisc.mRadius = 0.5 * std::hypot(bounds[2] - bounds[0], bounds[3] - bounds[1]) + EDGE_MARGIN_REGIONS * REGION_METRES;
+            // The smallest disc round every occupied tile's corners holds every region in them.
+            mDisc = enclosingDisc(std::move(corners));
+            mDisc.mRadius += EDGE_MARGIN_REGIONS * REGION_METRES;
             mHasDisc = true;
         }
     }

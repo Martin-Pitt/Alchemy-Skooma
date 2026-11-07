@@ -28,6 +28,9 @@
 #include "skworldmapmath.h"
 
 #include <algorithm>
+#include <random>
+
+#include <algorithm>
 #include <array>
 #include <cctype>
 #include <cmath>
@@ -352,6 +355,82 @@ F32 fuzzyScore(std::string_view query, std::string_view name)
     }
     return score - 0.02f * (F32)name.size();
 }
+namespace
+{
+    WorldDisc circleOf(const std::pair<F64, F64>& a, const std::pair<F64, F64>& b)
+    {
+        WorldDisc d;
+        d.mCentreX = 0.5 * (a.first + b.first);
+        d.mCentreY = 0.5 * (a.second + b.second);
+        d.mRadius = 0.5 * std::hypot(a.first - b.first, a.second - b.second);
+        return d;
+    }
+
+    WorldDisc circleOf(const std::pair<F64, F64>& a, const std::pair<F64, F64>& b, const std::pair<F64, F64>& c)
+    {
+        const F64 bx = b.first - a.first, by = b.second - a.second;
+        const F64 cx = c.first - a.first, cy = c.second - a.second;
+        const F64 d = 2.0 * (bx * cy - by * cx);
+        if (std::abs(d) < 1e-12)
+        {
+            // Collinear: the widest pair spans them.
+            const WorldDisc ab = circleOf(a, b), ac = circleOf(a, c), bc = circleOf(b, c);
+            return ab.mRadius >= ac.mRadius ? (ab.mRadius >= bc.mRadius ? ab : bc) : (ac.mRadius >= bc.mRadius ? ac : bc);
+        }
+        const F64 b2 = bx * bx + by * by, c2 = cx * cx + cy * cy;
+        WorldDisc w;
+        w.mCentreX = a.first + (cy * b2 - by * c2) / d;
+        w.mCentreY = a.second + (bx * c2 - cx * b2) / d;
+        w.mRadius = std::hypot(w.mCentreX - a.first, w.mCentreY - a.second);
+        return w;
+    }
+
+    bool holds(const WorldDisc& d, const std::pair<F64, F64>& p)
+    {
+        return std::hypot(p.first - d.mCentreX, p.second - d.mCentreY) <= d.mRadius * (1.0 + 1e-9) + 1e-6;
+    }
+}
+
+WorldDisc enclosingDisc(std::vector<std::pair<F64, F64>> points)
+{
+    WorldDisc d;
+    if (points.empty())
+    {
+        return d;
+    }
+    // Shuffled with a fixed seed: expected linear time, and the same disc for the same tiles every run.
+    std::mt19937 rng(0x5eed);
+    std::shuffle(points.begin(), points.end(), rng);
+    d.mCentreX = points[0].first;
+    d.mCentreY = points[0].second;
+    for (size_t i = 1; i < points.size(); ++i)
+    {
+        if (holds(d, points[i]))
+        {
+            continue;
+        }
+        d.mCentreX = points[i].first;
+        d.mCentreY = points[i].second;
+        d.mRadius = 0.0;
+        for (size_t j = 0; j < i; ++j)
+        {
+            if (holds(d, points[j]))
+            {
+                continue;
+            }
+            d = circleOf(points[i], points[j]);
+            for (size_t k = 0; k < j; ++k)
+            {
+                if (!holds(d, points[k]))
+                {
+                    d = circleOf(points[i], points[j], points[k]);
+                }
+            }
+        }
+    }
+    return d;
+}
+
 bool hiddenUnderDisc(const LLVector3d& eye, const WorldDisc& disc, const LLVector3d& box_min, const LLVector3d& box_max)
 {
     if (eye.mdV[VZ] <= disc.mZ || box_max.mdV[VZ] >= disc.mZ)

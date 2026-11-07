@@ -146,6 +146,9 @@ namespace skworldmap
         F64 mZ = GROUND_Z;
     };
 
+    /// The smallest disc holding every point (x, y in global metres), by Welzl's algorithm; empty for no points.
+    WorldDisc enclosingDisc(std::vector<std::pair<F64, F64>> points);
+
     /// True when a box below the disc is wholly covered by it from `eye`: every corner, projected from the eye
     /// onto the disc's plane, lands inside the disc. The disc is convex, so the box's whole shadow does too.
     bool hiddenUnderDisc(const LLVector3d& eye, const WorldDisc& disc, const LLVector3d& box_min, const LLVector3d& box_max);

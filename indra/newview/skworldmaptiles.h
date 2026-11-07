@@ -108,7 +108,7 @@ private:
     void addDescendants(const skworldmap::TileKey& key, S32 depth, F64 now, std::vector<Draw>& out);
     Entry* find(const skworldmap::TileKey& key);
 
-    void cover(const skworldmap::TileKey& key, F64 bounds[4]) const;
+    void cover(const skworldmap::TileKey& key, std::vector<std::pair<F64, F64>>& corners) const;
 
     std::map<skworldmap::TileKey, Entry> mTiles;
     std::map<skworldmap::TileKey, bool> mKnown;     ///< every tile settled this session: true when it holds regions
