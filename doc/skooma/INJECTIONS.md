@@ -308,6 +308,40 @@ Branch `foundation-world/rooms` (merge `734706e258`). Enclosure, spaces, flights
 
 ---
 
+## Render — overview capture
+
+Branch `foundation-render/overview-capture` (on `main` through `feature-combat/minimap`'s merge `c9c9840459`, landed 2026-11-07). An orthographic G-buffer render of the census over the terrain, as top-down region maps and as a view from a caller's camera. Consumers: the mini-map and the tactical overview (`feature-combat/minimap`). Ownership: `V:\Scratch\overview-reconcile\OWNERS.md`.
+
+### Files we own
+
+| File | Role |
+|---|---|
+| `indra/newview/skoverviewcapture.h` / `.cpp` | The engine: maps, camera view (`renderView`, `compositeView`), picks, demand |
+| `indra/newview/skoverviewcensus.*`, `skoverviewcover.*`, `skoverviewcuttable.*`, `skoverviewmovers.*`, `skoverviewplace.*` (was `skmapplan.*`), `skoverviewprobes.*`, `skoverviewprograms.h`, `skoverviewslots.*` | Census pages, cover verdicts, cut table, movers (`skoverview::MoverSource`), whereabouts, GPU probes, programs, slot pages |
+| `app_settings/shaders/class1/skooma/overview*.glsl` | Commands, geometry, resolve, composite, markers |
+| `indra/newview/tests/skoverview*_test.cpp`, `*_gl_test.cpp` | Unit and GL tests |
+
+### Injection sites
+
+| File | What | Why there |
+|---|---|---|
+| `indra/llrender/algpubuffer.*`, `altextureslot.*`, `llgl.*`, `llglslshader.*`, `llrender.*`, `llshadermgr.*`, `llvertexbuffer.*`, `tests/alrenderstate_gl_test.cpp` | `overview capture:` indirect multi-draws, `ALDrawElementsIndirectCommand`, buffer textures (`ALGPUBufferTexture`, `TT_BUFFER_TEXTURE`, `mMaxTextureBufferSize`), hashed uniform setters, per-face stencil ops, `readPixelsInto`, the reserved `SK_OVERVIEW_CUT_TABLE` / `SK_OVERVIEW_CUT_BLOCK` | llrender is the only GL path newview may take |
+| `indra/newview/llviewercamera.h` | `CAMERA_SK_OVERVIEW` (sizes `NUM_CAMERAS`: Rebuild `alchemy-bin` after it lands) | A non-world camera keeps the agent view's LOD |
+| `indra/newview/pipeline.h` / `.cpp` | `skRenderOverview`, `sSkOverviewCull` and the `markVisible` attachment skip, `SKOverviewCapture::cleanupGL()` in `releaseAllGLResources` | The pipeline's cull and passes; its GL goes with the pipeline's |
+| `indra/newview/llviewerdisplay.cpp` | `SKOverviewCapture::onFrame()` after the world, before the UI | Maps are captured only in world frames |
+| `indra/newview/llviewershadermgr.cpp` | `SKOverviewCapture::loadShaders` at the end of `loadShadersDeferred` | Built with the deferred programs |
+| `indra/newview/CMakeLists.txt` | Sources, headers, both test binaries | |
+
+### Unmarked additions
+
+- `settings_alchemy.xml` — 16 `SKOverview*` keys (`CensusRange`, `CutHeight`, `CutReleaseSeconds`, `DebugView`, `FarRefresh`, `ForceRecapture`, `MaxAbove`, `NeighbourRefresh`, `PageVertices`, `ProbeBudget`, `ProbeDump`, `ProbeQueries`, `QueueInterval`, `Refresh`, `Resolution`, `SurroundsRefresh`).
+
+### Its consumers' hooks (`feature-combat/minimap`)
+
+The tactical overview is `sktacticaloverview.{h,cpp}` since `17ca7224ee`; the hooks the minimap rows below give to `SKOverviewCapture` (`handleTacticalKey` in `llviewerinput.cpp`, `handleRightClick` in `llviewerwindow.cpp`, `tacticalShown` in `llvoavatar.cpp` and `skmodalview.cpp`) call `SKTacticalOverview` (`shown()` for `tacticalShown`), and `llviewerdisplay.cpp` gains a marked `SKTacticalOverview::onFrame()` beside the overview's. `SKMapPeople` is the overview's mover source and palette.
+
+---
+
 ## World — roads, pathfinding, ground autopilot, roads overlay
 
 Cut from `spike-road-parcels` on 2026-11-07: `foundation-world/roads` (on `foundation-world/air`), `foundation-world/pathfinding` (on roads), `foundation-world/ground-autopilot` (on pathfinding), `feature-world/roads-overlay` (on ground-autopilot). Library `indra/skroads`; the model asks the viewer through a host (`skroad::host`).
