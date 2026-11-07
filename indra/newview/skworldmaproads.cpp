@@ -65,6 +65,35 @@ namespace
 
     F32 scaleLog2(F32 x) { return std::log2(std::max(x, 1.0e-6f)); }
 
+    constexpr F32 MITER_LIMIT = 2.f;            ///< a sharper bend than this stretch is cut short rather than spiking out
+
+    F64 planeDistanceSquared(const LLVector3d& a, const LLVector3d& b)
+    {
+        const F64 dx = b.mdV[VX] - a.mdV[VX];
+        const F64 dy = b.mdV[VY] - a.mdV[VY];
+        return dx * dx + dy * dy;
+    }
+
+    /// The unit vector across a segment on the ground, to its left.
+    LLVector3 planeSide(const LLVector3d& a, const LLVector3d& b)
+    {
+        LLVector3 side(static_cast<F32>(-(b.mdV[VY] - a.mdV[VY])), static_cast<F32>(b.mdV[VX] - a.mdV[VX]), 0.f);
+        side.normVec();
+        return side;
+    }
+
+    /// Where two segments' sides meet at their shared point, scaled so both edges keep their width.
+    LLVector3 miter(const LLVector3& before, const LLVector3& after)
+    {
+        LLVector3 m = before + after;
+        if (m.normVec() < 1.0e-4f)
+        {
+            return after;   // a full turn back: no join to make
+        }
+        const F32 cosine = m * after;
+        return m * std::min(1.f / std::max(cosine, 1.0e-3f), MITER_LIMIT);
+    }
+
     /// One end of a segment as drawn: eye-relative position, its scale, and its weights.
     struct End
     {
@@ -143,6 +172,8 @@ SKWorldMapDatasetRoads::Regions SKWorldMapDatasetRoads::load(std::string dir)
     };
 
     simdjson::dom::parser parser;
+    std::vector<LLVector3d> points;
+    std::vector<LLVector3> sides;
     for (const auto& layer : layers)
     {
         const std::string path = dir + layer.mFile;
@@ -172,14 +203,13 @@ SKWorldMapDatasetRoads::Regions SKWorldMapDatasetRoads::load(std::string dir)
                 width = static_cast<F32>(w);
             }
 
-            bool have_prev = false;
-            LLVector3d prev;
+            // The way's points, without repeats and without anything flat in plan, then its sides.
+            points.clear();
             for (simdjson::dom::element c : coords)
             {
                 simdjson::dom::array xyz;
                 if (c.get_array().get(xyz) || xyz.size() < 2)
                 {
-                    have_prev = false;
                     continue;
                 }
                 LLVector3d p(0.0, 0.0, GROUND_Z);
@@ -191,35 +221,51 @@ SKWorldMapDatasetRoads::Regions SKWorldMapDatasetRoads::load(std::string dir)
                         p.mdV[i] = v;
                     }
                 }
-                if (have_prev && (p - prev).magVecSquared() > 1.0e-4)
+                if (points.empty() || planeDistanceSquared(points.back(), p) > 1.0e-4)
                 {
-                    const LLVector3d mid = (prev + p) * 0.5;
-                    if (mid.mdV[VX] >= 0.0 && mid.mdV[VY] >= 0.0)
+                    points.push_back(p);
+                }
+            }
+            if (points.size() < 2)
+            {
+                continue;
+            }
+            sides.resize(points.size() - 1);
+            for (size_t i = 0; i + 1 < points.size(); ++i)
+            {
+                sides[i] = planeSide(points[i], points[i + 1]);
+            }
+            for (size_t i = 0; i + 1 < points.size(); ++i)
+            {
+                const LLVector3d& a = points[i];
+                const LLVector3d& b = points[i + 1];
+                const LLVector3d mid = (a + b) * 0.5;
+                if (mid.mdV[VX] < 0.0 || mid.mdV[VY] < 0.0)
+                {
+                    continue;
+                }
+                const U32 gx = static_cast<U32>(mid.mdV[VX] / REGION_METRES);
+                const U32 gy = static_cast<U32>(mid.mdV[VY] / REGION_METRES);
+                RoadRegion& region = regions[to_region_handle(gx * 256, gy * 256)];
+                if (region.mSegments.empty())
+                {
+                    region.mMin = region.mMax = a;
+                }
+                for (const LLVector3d& q : { a, b })
+                {
+                    for (S32 k = 0; k < 3; ++k)
                     {
-                        const U32 gx = static_cast<U32>(mid.mdV[VX] / REGION_METRES);
-                        const U32 gy = static_cast<U32>(mid.mdV[VY] / REGION_METRES);
-                        RoadRegion& region = regions[to_region_handle(gx * 256, gy * 256)];
-                        if (region.mSegments.empty())
-                        {
-                            region.mMin = region.mMax = prev;
-                        }
-                        for (const LLVector3d& q : { prev, p })
-                        {
-                            for (S32 i = 0; i < 3; ++i)
-                            {
-                                region.mMin.mdV[i] = std::min(region.mMin.mdV[i], q.mdV[i]);
-                                region.mMax.mdV[i] = std::max(region.mMax.mdV[i], q.mdV[i]);
-                            }
-                        }
-                        RoadSegment& s = region.mSegments.emplace_back();
-                        s.mA = prev;
-                        s.mB = p;
-                        s.mWidth = width;
-                        s.mClass = layer.mClass;
+                        region.mMin.mdV[k] = std::min(region.mMin.mdV[k], q.mdV[k]);
+                        region.mMax.mdV[k] = std::max(region.mMax.mdV[k], q.mdV[k]);
                     }
                 }
-                prev = p;
-                have_prev = true;
+                RoadSegment& s = region.mSegments.emplace_back();
+                s.mA = a;
+                s.mB = b;
+                s.mSideA = i > 0 ? miter(sides[i - 1], sides[i]) : sides[i];
+                s.mSideB = i + 2 < points.size() ? miter(sides[i], sides[i + 1]) : sides[i];
+                s.mWidth = width;
+                s.mClass = layer.mClass;
             }
         }
     }
@@ -271,7 +317,7 @@ void SKWorldMapRoads::draw(const SKWorldMapFrame& frame, S32 width, S32 height)
     struct Drawn
     {
         End mA, mB;
-        LLVector3 mSide;    ///< unit, across the road on the ground
+        LLVector3 mSideA, mSideB;   ///< across the road on the ground at each end, mitred
         bool mPublicLook = true;
     };
     std::vector<Drawn> drawn;
@@ -332,17 +378,13 @@ void SKWorldMapRoads::draw(const SKWorldMapFrame& frame, S32 width, S32 height)
                 b = b + (a - b) * ((near_depth - db) / (da - db));
                 db = near_depth;
             }
-            LLVector3 side(static_cast<F32>(-(b.mdV[VY] - a.mdV[VY])), static_cast<F32>(b.mdV[VX] - a.mdV[VX]), 0.f);
-            if (side.normVec() < 1.0e-4f)
-            {
-                continue;
-            }
             // Candidates are unclassified; while they are all the data there is, they take the public look.
             const bool public_look = s.mClass != RoadClass::Private;
             Drawn& d = drawn.emplace_back();
             d.mA = make_end(a, da, s, public_look);
             d.mB = make_end(b, db, s, public_look);
-            d.mSide = side;
+            d.mSideA = s.mSideA;
+            d.mSideB = s.mSideB;
             d.mPublicLook = public_look;
         }
     });
@@ -366,20 +408,20 @@ void SKWorldMapRoads::draw(const SKWorldMapFrame& frame, S32 width, S32 height)
         const LLColor4& casing = d.mPublicLook ? PUBLIC_CASING : PRIVATE_FILL;
         for (F32 sign : { -1.f, 1.f })
         {
-            const LLVector3 a0 = d.mA.mPos + d.mSide * (sign * d.mA.mHalf);
-            const LLVector3 a1 = d.mA.mPos + d.mSide * (sign * (d.mA.mHalf + d.mA.mCasing));
-            const LLVector3 b0 = d.mB.mPos + d.mSide * (sign * d.mB.mHalf);
-            const LLVector3 b1 = d.mB.mPos + d.mSide * (sign * (d.mB.mHalf + d.mB.mCasing));
+            const LLVector3 a0 = d.mA.mPos + d.mSideA * (sign * d.mA.mHalf);
+            const LLVector3 a1 = d.mA.mPos + d.mSideA * (sign * (d.mA.mHalf + d.mA.mCasing));
+            const LLVector3 b0 = d.mB.mPos + d.mSideB * (sign * d.mB.mHalf);
+            const LLVector3 b1 = d.mB.mPos + d.mSideB * (sign * (d.mB.mHalf + d.mB.mCasing));
             quad(a0, a1, b0, b1, casing, d.mA.mCasingAlpha, d.mB.mCasingAlpha);
         }
     }
     for (const Drawn& d : drawn)
     {
         const LLColor4& fill = d.mPublicLook ? PUBLIC_FILL : PRIVATE_FILL;
-        const LLVector3 a0 = d.mA.mPos - d.mSide * d.mA.mHalf;
-        const LLVector3 a1 = d.mA.mPos + d.mSide * d.mA.mHalf;
-        const LLVector3 b0 = d.mB.mPos - d.mSide * d.mB.mHalf;
-        const LLVector3 b1 = d.mB.mPos + d.mSide * d.mB.mHalf;
+        const LLVector3 a0 = d.mA.mPos - d.mSideA * d.mA.mHalf;
+        const LLVector3 a1 = d.mA.mPos + d.mSideA * d.mA.mHalf;
+        const LLVector3 b0 = d.mB.mPos - d.mSideB * d.mB.mHalf;
+        const LLVector3 b1 = d.mB.mPos + d.mSideB * d.mB.mHalf;
         quad(a0, a1, b0, b1, fill, d.mA.mFillAlpha, d.mB.mFillAlpha);
     }
     gGL.end();

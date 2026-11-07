@@ -27,6 +27,7 @@
 
 #include "stdtypes.h"
 #include "v3dmath.h"
+#include "v3math.h"
 
 #include <functional>
 #include <future>
@@ -49,6 +50,7 @@ namespace skworldmap
     struct RoadSegment
     {
         LLVector3d mA, mB;          ///< global metres, each at its own height
+        LLVector3 mSideA, mSideB;   ///< across the road at each end, on the ground: unit, lengthened at a bend so the edges join
         F32 mWidth = 6.f;           ///< carriageway width in metres
         RoadClass mClass = RoadClass::Candidate;
     };
