@@ -188,6 +188,10 @@ private:
     /// How far a card has yet to fade: 1 while held, 0 once gone.
     F32 cardFade(const Card& card, F64 now) const;
     F32 cardAlpha(const Card& card, F64 now) const;
+    /// What a card is drawn at: its alpha, or faintly while the pointer is over the chat.
+    F32 shownAlpha(const Card& card, F64 now) const;
+    /// A card under the point, shown or, with ghosts, faded too.
+    bool cardAt(S32 x, S32 y, bool ghosts) const;
     F32 cardSaturation(const Card& card, F64 now) const;
     /// A colour at a card's alpha.
     LLColor4 faded(LLColor4 color, F32 alpha) const;
@@ -273,6 +277,7 @@ private:
     TextPos mSelFocus;           // where it reaches now
     bool mSelecting = false;     // dragging one out
     bool mHovered = false;
+    F32 mGhost = 0.f;            // faded cards' faint showing while hovered, 0 to 1, eased like the tint
     bool mRevealed = false;      // the log shown whole: the pointer rested on a card, or the wheel turned; until the pointer leaves
     F64 mRestSince = -1.0;       // when the pointer settled on a shown card, -1 while it is not on one
     S32 mRestX = 0;              // where it settled

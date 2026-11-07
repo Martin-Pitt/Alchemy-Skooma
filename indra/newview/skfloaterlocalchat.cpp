@@ -119,6 +119,7 @@ constexpr F32 FADE_GREY_SPAN = 0.4f;      // the part of it over which its colou
 constexpr F32 CHROME_FADE = 0.15f; // the hover backdrop's and border's ease, in seconds
 constexpr S32 EDGE_REACH = 6;      // how near the floater's edge the pointer shows the border
 constexpr F64 EDGE_REST = 0.08;
+constexpr F32 GHOST_ALPHA = 0.15f; // faded cards while the pointer is over the chat
 constexpr S32 REVEAL_SLOP = 4; // how far the pointer may drift while resting on a card to reveal the log    // and how long it rests there first
 
 // The day a chat timestamp leads with, "year/month/day ...", as yyyymmdd; 0 when it carries none.
@@ -1371,6 +1372,12 @@ F32 SKFloaterLocalChat::cardAlpha(const Card& card, F64 now) const
     return rest + (1.f - rest) * fade;
 }
 
+F32 SKFloaterLocalChat::shownAlpha(const Card& card, F64 now) const
+{
+    // While the pointer is over the chat, faded history shows faintly, as something to rest on; it takes no clicks.
+    return llmax(cardAlpha(card, now), GHOST_ALPHA * mGhost);
+}
+
 F32 SKFloaterLocalChat::cardSaturation(const Card& card, F64 now) const
 {
     // Grey within the first part of the fade, so a message reads as history before it dims.
@@ -1926,7 +1933,7 @@ void SKFloaterLocalChat::drawMessages(const LLRect& content, F64 now, bool full,
     for (S32 c = (S32)mCards.size() - 1; c >= 0; --c)
     {
         const Card& card = mCards[c];
-        const F32 alpha = full ? 1.f : cardAlpha(card, now);
+        const F32 alpha = full ? 1.f : shownAlpha(card, now);
         if (alpha <= 0.f)
         {
             break; // older cards arrived earlier, so they have faded too
@@ -2026,7 +2033,7 @@ void SKFloaterLocalChat::drawMaskedMessages(const LLRect& content, F64 now, bool
     for (S32 c = (S32)mCards.size() - 1; c >= 0; --c)
     {
         const Card& card = mCards[c];
-        const F32 alpha = full ? 1.f : cardAlpha(card, now);
+        const F32 alpha = full ? 1.f : shownAlpha(card, now);
         if (alpha <= 0.f)
         {
             break;
@@ -2246,6 +2253,7 @@ void SKFloaterLocalChat::draw()
     const bool chrome = opaque && !isLocked();
     mBackdrop = isLocked() ? 0.f : llclamp(mBackdrop + ((chrome && mHovered) ? chrome_dt : -chrome_dt) / CHROME_FADE, 0.f, 1.f);
     mBorder = isLocked() ? 0.f : llclamp(mBorder + ((chrome && edge_rest) ? chrome_dt : -chrome_dt) / CHROME_FADE, 0.f, 1.f);
+    mGhost = llclamp(mGhost + ((opaque && mHovered && !full) ? chrome_dt : -chrome_dt) / CHROME_FADE, 0.f, 1.f);
     if (mBackdrop > 0.f)
     {
         static const LLColor4 tint(16.f / 255.f, 16.f / 255.f, 20.f / 255.f, 61.f / 255.f);
@@ -2522,14 +2530,18 @@ bool SKFloaterLocalChat::hitsContentAt(S32 x, S32 y)
     {
         return true;
     }
+    return cardAt(x, y, false);
+}
 
+bool SKFloaterLocalChat::cardAt(S32 x, S32 y, bool ghosts) const
+{
     const LLRect content = contentRect();
     if (mLayoutDirty || !content.pointInRect(x, y))
     {
         return false;
     }
     const S32 base = content.mBottom - mScroll;
-    const bool full = expanded();
+    const bool full = expanded() || ghosts;
     const F64 now = LLFrameTimer::getTotalSeconds();
     for (const Row& row : mRows)
     {
@@ -2953,7 +2965,7 @@ bool SKFloaterLocalChat::handleHover(S32 x, S32 y, MASK mask)
     if (!mRevealed)
     {
         const bool settled = mRestSince >= 0.0 && llabs(x - mRestX) <= REVEAL_SLOP && llabs(y - mRestY) <= REVEAL_SLOP;
-        if (!hitsContentAt(x, y))
+        if (!hitsContentAt(x, y) && !(mGhost > 0.f && cardAt(x, y, true)))
         {
             mRestSince = -1.0;
         }
