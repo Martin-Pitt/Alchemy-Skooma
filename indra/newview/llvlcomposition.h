@@ -136,6 +136,13 @@ public:
         CORNER_COUNT = 4
     };
 
+    // <SK:Nexii> Distant regions compose their cached ground as generateHeights does.
+    // The composition value of lattice point (i, j) of a layer width points a side, scale metres apart, whose region
+    // starts at origin_global, for the ground's height there.
+    static F32 compositionValue(const LLVector3d& origin_global, S32 i, S32 j, F32 scale, F32 inv_width, F32 height,
+                                const F32 (&start_height)[CORNER_COUNT], const F32 (&height_range)[CORNER_COUNT]);
+    // </SK:Nexii>
+
     void setDetailAssetID(S32 asset, const LLUUID& id) override;
     F32 getStartHeight(S32 corner);
     F32 getHeightRange(S32 corner);
