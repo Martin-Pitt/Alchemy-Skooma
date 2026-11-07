@@ -6099,6 +6099,19 @@
             <key>Value</key>
             <string>pwm</string>
         </map>
+        <key>SKRoadAutopilotSteerActuator</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: how pwm steering turns the wanted yaw rate into keys. rhythm: taps from the tap rhythm table, 0.1 s apart. twomode: gentle turns by holds of N sim frames with releases the sim always sees, strong ones held until the car turns as fast as wanted, a one-frame counter-tap against overshoot.
+            </string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>String</string>
+            <key>Value</key>
+            <string>rhythm</string>
+        </map>
         <key>SKRoadAutopilotTestCourse</key>
         <map>
             <key>Comment</key>

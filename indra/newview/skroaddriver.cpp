@@ -1150,9 +1150,11 @@ namespace skroad::drive
         return want;
     }
 
-    std::pair<S32, S32> pwmSteer(const LLVector3d& pos, F64 yaw, F64 speed, F64 now, std::string& note)
+    // The outer loop both actuators share: the line's wanted yaw rate (deg/s, left +), the pull and the lane guard.
+    F64 pwmOuter(const LLVector3d& pos, F64 yaw, F64 speed, F64 now, F64& dt_out)
     {
         const F64 dt = sPwmPrevT < 0 ? 0.0 : std::min(0.1, now - sPwmPrevT);
+        dt_out = dt;
         sPwmPrevT = now;
         if (dt > 0)
         {
@@ -1188,6 +1190,13 @@ namespace skroad::drive
                 sLaneGuard = false;
             }
         }
+        return want;
+    }
+
+    std::pair<S32, S32> pwmSteer(const LLVector3d& pos, F64 yaw, F64 speed, F64 now, std::string& note)
+    {
+        F64 dt = 0;
+        const F64 want = pwmOuter(pos, yaw, speed, now, dt);
         // learn the taps' delivery: the turn made against the turn fired, once it has landed
         F64 fired = 0;
         for (const auto& [t, deg] : sPwmFired)
@@ -1270,6 +1279,127 @@ namespace skroad::drive
         snprintf(buf, sizeof(buf), "pwm %.1f/s %d k %.2f", want, h, sPwmK);
         note += note.empty() ? buf : std::string(", ") + buf;
         return { d, h };
+    }
+
+    // ---------------------------------------------------------------- the two-mode actuator (SKRoadAutopilotSteerActuator "twomode")
+
+    // The sim sees a release only if the key is up across a whole sim frame, and a release it sees starts the
+    // car's turn build-up again (the PWM study, 2026-11-07). Gentle: hold N sim frames, then a seen release, N from
+    // the vis sweep's steady rates (the same in gears 1 and 2: the car asks a yaw rate). Strong: hold until the
+    // turn passes the wanted, then a seen release. A one-frame counter-tap ends a turn running past the wanted.
+    struct SKTwoModeSteer
+    {
+        static constexpr F64 SIM_DT = 1.0 / 45;
+        static constexpr F64 RELEASE_S = 3.2 * SIM_DT;      // always seen by the sim
+        static constexpr F64 STRONG_DEG = 26.0, OVER_DEG = 8.0, MIN_DEG = 3.0;
+        static constexpr S32 VIS_N[] = { 1, 2, 3, 4, 6, 8, 12, 16, 24 };
+        static constexpr F64 VIS_DEG[] = { 9.4, 14.2, 14.8, 16.9, 19.0, 20.6, 23.2, 27.3, 30.5 };
+        enum Mode : S32 { QUIET, GENTLE, STRONG, RELEASE, COUNTER_WAIT, COUNTER };
+
+        S32 dir = 0, counter_dir = 0, hold_n = 0;
+        F64 until = 0, rest_until = -1, counter_at = -1;
+        bool counter_pending = false;
+        Mode mode = QUIET;
+
+        void reset() { *this = SKTwoModeSteer(); }
+
+        // The key this frame (+1 left, -1 right, 0 none) from the wanted and the car's yaw rate (deg/s, left +),
+        // at `t` with `frame_dt` the viewer's frame time (s): every time is held to whole viewer frames, rounded up.
+        S32 step(F64 want, F64 rate, F64 t, F64 frame_dt)
+        {
+            if (counter_pending)
+            {
+                if (t >= counter_at)
+                {
+                    counter_pending = false;
+                    rest_until = t + frame_dt + RELEASE_S;
+                    mode = COUNTER;
+                    return counter_dir;
+                }
+                mode = COUNTER_WAIT;
+                return 0;
+            }
+            if (dir != 0)
+            {
+                const bool strong = std::fabs(want) >= STRONG_DEG && want * dir > 0;
+                if (t < until || (strong && std::fabs(rate) < std::fabs(want)))
+                {
+                    if (t >= until)
+                    {
+                        mode = STRONG;
+                    }
+                    return dir;
+                }
+                dir = 0;
+                rest_until = t + RELEASE_S;
+                mode = RELEASE;
+                return 0;
+            }
+            if (t < rest_until)
+            {
+                mode = RELEASE;
+                return 0;
+            }
+            if (rate * (want >= 0 ? 1 : -1) > std::fabs(want) + OVER_DEG && std::fabs(rate) > OVER_DEG)
+            {
+                counter_dir = rate > 0 ? -1 : 1;
+                counter_at = t + 2 * frame_dt;
+                counter_pending = true;
+                mode = COUNTER_WAIT;
+                return 0;
+            }
+            if (std::fabs(want) < MIN_DEG)
+            {
+                mode = QUIET;
+                return 0;
+            }
+            const S32 d = want > 0 ? 1 : -1;
+            dir = d;
+            if (std::fabs(want) >= STRONG_DEG)
+            {
+                until = t;
+                hold_n = 0;
+                mode = STRONG;
+                return d;
+            }
+            hold_n = VIS_N[std::size(VIS_N) - 1];
+            for (size_t i = 0; i < std::size(VIS_N); ++i)
+            {
+                if (VIS_DEG[i] >= std::fabs(want))
+                {
+                    hold_n = VIS_N[i];
+                    break;
+                }
+            }
+            until = t + hold_n * SIM_DT;
+            mode = GENTLE;
+            return d;
+        }
+    };
+    SKTwoModeSteer sTwoMode;
+
+    // Each frame under the two-mode actuator: the key, and each change of mode in the drive log's note.
+    S32 twoModeSteer(const LLVector3d& pos, F64 yaw, F64 speed, F64 now, std::string& note)
+    {
+        F64 dt = 0;
+        const F64 want = std::clamp(pwmOuter(pos, yaw, speed, now, dt), -PWM_WANT_MAX_DEG, PWM_WANT_MAX_DEG);
+        const S32 was = sTwoMode.mode;
+        const S32 key = sTwoMode.step(want, sYawRate * 180 / PI, now, sFrameDt);
+        if (sTwoMode.mode != was || sTwoMode.mode == SKTwoModeSteer::COUNTER)
+        {
+            static const char* const NAMES[] = { "quiet", "gentle", "strong hold", "release", "counter wait", "counter" };
+            char buf[96];
+            if (sTwoMode.mode == SKTwoModeSteer::GENTLE)
+            {
+                snprintf(buf, sizeof(buf), "2m gentle %d want %.1f rate %.1f", sTwoMode.hold_n, want, sYawRate * 180 / PI);
+            }
+            else
+            {
+                snprintf(buf, sizeof(buf), "2m %s want %.1f rate %.1f", NAMES[sTwoMode.mode], want, sYawRate * 180 / PI);
+            }
+            note += note.empty() ? buf : std::string(", ") + buf;
+        }
+        return key;
     }
 
     F64 sLiftUntil = -100.0, sLiftNext = -100.0;     // a lift off W for a bend (bendLift): until, next allowed
@@ -5654,6 +5784,7 @@ void sk_road_driver::onSettingChanged(const LLSD& enabled)
         sThrottleLog.clear();
         sPwmPull = 0.0;
         sPwmK = 1.0;
+        sTwoMode.reset();
         sRecoverPhase = 0;
         sLadderRung = -1;
         sFrozenTried = false;
@@ -6327,8 +6458,27 @@ void sk_road_driver::beforeAgentUpdate()
     static LLCachedControl<bool> probe_on(gSavedSettings, "SKRoadAutopilotProbe", false);
     const bool probe = probe_on;
     const bool pwm = std::string(steer_mode_g) != "plan";
+    static LLCachedControl<std::string> actuator(gSavedSettings, "SKRoadAutopilotSteerActuator", "rhythm");
+    const bool twomode = pwm && std::string(actuator) == "twomode";
     // steering
-    if (sKey)
+    if (twomode)
+    {
+        // the two-mode actuator owns the key frame by frame: no tap is left to run out (sKey stays 0)
+        sKey = 0;
+        if (road && sPath.size() >= 2 && lineSeen() >= STEER_MIN_LINE_M && speed > 1.0)
+        {
+            if (const S32 d = twoModeSteer(pos, yaw, speed, now, note))
+            {
+                sLastSteer = now;
+                keys |= d > 0 ? AGENT_CONTROL_YAW_POS : AGENT_CONTROL_YAW_NEG;
+            }
+        }
+        else
+        {
+            sTwoMode.reset();
+        }
+    }
+    else if (sKey)
     {
         keys |= sKey > 0 ? AGENT_CONTROL_YAW_POS : AGENT_CONTROL_YAW_NEG;
     }
