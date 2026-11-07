@@ -48,6 +48,8 @@ namespace
 {
     // The map server's open water, so missing tiles read as sea rather than as holes.
     const LLColor4 SEA_COLOUR(0.114f, 0.278f, 0.373f, 1.f);
+    // Where raised terrain uncovers its own flat footprint: a dark grey, as the shaded side of the ground.
+    const LLColor4 FOOTPRINT_COLOUR(0.16f, 0.17f, 0.16f, 1.f);
 
     // The combat mini-map's people dots, so both maps read the same.
     const LLColor4 DOT_COLOUR(0x60 / 255.f, 0xdf / 255.f, 0x72 / 255.f, 1.f);
@@ -388,6 +390,26 @@ void SKWorldMapScene::drawTerrain(const SKWorldMapFrame& frame, S32 height)
         return dx * dx + dy * dy;
     };
     std::sort(order.begin(), order.end(), [&](auto a, auto b) { return centre_distance(a) > centre_distance(b); });
+
+    // Under each raised region its footprint on the flat plane is filled dark, so the strip a tilted view
+    // uncovers between the two reads as the terrain's shaded side rather than as sea.
+    gGL.getTextureSlot(0)->unbind();
+    gGL.color4fv(FOOTPRINT_COLOUR.mV);
+    const F32 ground_z = static_cast<F32>(GROUND_Z - frame.mEye.mdV[VZ]);
+    for (const SKWorldMapTerrain::Region* r : order)
+    {
+        const F32 xa = static_cast<F32>(r->mOrigin.mdV[VX] - frame.mEye.mdV[VX]);
+        const F32 ya = static_cast<F32>(r->mOrigin.mdV[VY] - frame.mEye.mdV[VY]);
+        const F32 xb = xa + static_cast<F32>(r->mWidth);
+        const F32 yb = ya + static_cast<F32>(r->mWidth);
+        gGL.begin(LLRender::TRIANGLE_STRIP);
+        gGL.vertex3f(xa, ya, ground_z);
+        gGL.vertex3f(xb, ya, ground_z);
+        gGL.vertex3f(xa, yb, ground_z);
+        gGL.vertex3f(xb, yb, ground_z);
+        gGL.end();
+    }
+    gGL.color4f(1.f, 1.f, 1.f, 1.f);
     for (const SKWorldMapTerrain::Region* rp : order)
     {
         const SKWorldMapTerrain::Region& r = *rp;
