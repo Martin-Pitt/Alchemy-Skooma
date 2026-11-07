@@ -50,6 +50,9 @@ namespace
     const LLColor4 SEA_COLOUR(0.114f, 0.278f, 0.373f, 1.f);
     // Where raised terrain uncovers its own flat footprint: a dark grey, as the shaded side of the ground.
     const LLColor4 FOOTPRINT_COLOUR(0.16f, 0.17f, 0.16f, 1.f);
+    // Water drawn over terrain below it: clear at the shore, at its most opaque this deep and deeper.
+    constexpr F32 WATER_OPAQUE_DEPTH = 4.f;
+    constexpr F32 WATER_MAX_ALPHA = 0.9f;
 
     // The combat mini-map's people dots, so both maps read the same.
     const LLColor4 DOT_COLOUR(0x60 / 255.f, 0xdf / 255.f, 0x72 / 255.f, 1.f);
@@ -442,6 +445,53 @@ void SKWorldMapScene::drawTerrain(const SKWorldMapFrame& frame, S32 height)
                   [&](S32 a, S32 b) { return std::abs(a + 0.5 - eye_outer) > std::abs(b + 0.5 - eye_outer); });
         // Each strip is cut where the eye is beside it, and both halves are drawn from their far end in.
         const S32 split = llclamp(static_cast<S32>(std::lround(eye_inner)), 0, M - 1);
+
+        // The water over a strip goes down right after the strip, so it keeps the same far-to-near order:
+        // clear at the shore, deepening to nearly opaque, and nothing where the land is above it.
+        const auto water_alpha = [&](S32 i, S32 j) {
+            const F32 depth = r.mWater - r.at(i * s, j * s);
+            return depth <= 0.f ? 0.f : WATER_MAX_ALPHA * llclamp(depth / WATER_OPAQUE_DEPTH, 0.f, 1.f);
+        };
+        const auto water_vertex = [&](S32 i, S32 j) {
+            gGL.color4f(SEA_COLOUR.mV[VRED], SEA_COLOUR.mV[VGREEN], SEA_COLOUR.mV[VBLUE], water_alpha(i, j));
+            gGL.vertex3f(static_cast<F32>(r.mOrigin.mdV[VX] + i * step - frame.mEye.mdV[VX]),
+                         static_cast<F32>(r.mOrigin.mdV[VY] + j * step - frame.mEye.mdV[VY]),
+                         static_cast<F32>(r.mWater - frame.mEye.mdV[VZ]));
+        };
+        const auto strip = [&](S32 o, S32 from, S32 to, S32 dir, bool water) {
+            gGL.begin(LLRender::TRIANGLE_STRIP);
+            for (S32 n = from;; n += dir)
+            {
+                for (S32 side : { o, o + 1 })
+                {
+                    const S32 i = strips_along_y ? side : n;
+                    const S32 j = strips_along_y ? n : side;
+                    water ? water_vertex(i, j) : vertex(i, j);
+                }
+                if (n == to)
+                {
+                    break;
+                }
+            }
+            gGL.end();
+        };
+        const auto wet = [&](S32 o, S32 from, S32 to, S32 dir) {
+            for (S32 n = from;; n += dir)
+            {
+                for (S32 side : { o, o + 1 })
+                {
+                    if (water_alpha(strips_along_y ? side : n, strips_along_y ? n : side) > 0.f)
+                    {
+                        return true;
+                    }
+                }
+                if (n == to)
+                {
+                    return false;
+                }
+            }
+        };
+
         for (S32 k = 0; k + 1 < M; ++k)
         {
             const S32 o = strips[k];
@@ -451,17 +501,17 @@ void SKWorldMapScene::drawTerrain(const SKWorldMapFrame& frame, S32 height)
                 {
                     continue;
                 }
-                gGL.begin(LLRender::TRIANGLE_STRIP);
-                for (S32 n = from;; n += dir)
+                strip(o, from, to, dir, false);
+                if (wet(o, from, to, dir))
                 {
-                    strips_along_y ? vertex(o, n) : vertex(n, o);
-                    strips_along_y ? vertex(o + 1, n) : vertex(n, o + 1);
-                    if (n == to)
-                    {
-                        break;
-                    }
+                    LLGLEnable blend(GL_BLEND);
+                    gGL.setSceneBlendType(LLRender::BT_ALPHA);
+                    gGL.getTextureSlot(0)->unbind();
+                    strip(o, from, to, dir, true);
+                    gGL.flush();
+                    gGL.color4f(1.f, 1.f, 1.f, 1.f);
+                    gGL.getTextureSlot(0)->bindSampled(best->mTexture, ALSamplers::AnisoClamp);
                 }
-                gGL.end();
             }
         }
     }

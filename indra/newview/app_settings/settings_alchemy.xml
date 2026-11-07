@@ -3333,7 +3333,7 @@
         <key>SKWorldMapTerrainPack</key>
         <map>
             <key>Comment</key>
-            <string>On the 3D world map, a packed terrain file (SKT1, made from a dataset release) giving heights to regions the viewer is not connected to. Empty leaves them flat.</string>
+            <string>On the 3D world map, a packed terrain file (SKT2, made from a dataset release) giving heights to regions the viewer is not connected to. Empty leaves them flat.</string>
             <key>Persist</key>
             <integer>1</integer>
             <key>Type</key>

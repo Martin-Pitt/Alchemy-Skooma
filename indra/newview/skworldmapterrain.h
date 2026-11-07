@@ -1,7 +1,7 @@
 /**
  * @file skworldmapterrain.h
  * @brief The 3D world map's ground heights: the terrain of the regions this viewer is connected to,
- *        sampled into a grid per region, with the water as its floor.
+ *        sampled into a grid per region, with each region's water height beside it.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Second Life Viewer Source Code
@@ -48,7 +48,8 @@ public:
     {
         LLVector3d mOrigin;         ///< south-west corner, global
         F64 mWidth = 256.0;         ///< metres on a side
-        std::vector<F32> mHeights;  ///< SAMPLES x SAMPLES, row 0 south, max(land, water)
+        std::vector<F32> mHeights;  ///< SAMPLES x SAMPLES, row 0 south, the land itself, under the water too
+        F32 mWater = 20.f;          ///< the water's height over the region
         F64 mBuilt = 0.0;
         const void* mRoads = nullptr; ///< the roads it was lowered under, so their arrival rebuilds it
         bool mLive = false;         ///< from a connected region's live terrain, rather than the pack
@@ -62,7 +63,8 @@ public:
 
     const std::unordered_map<U64, Region>& regions() const { return mRegions; }
 
-    /// The ground at a global point: the region's grid where there is one, else `fallback`.
+    /// The surface at a global point, land or water, whichever is higher: the region's grid where there is
+    /// one, else `fallback`.
     F64 groundAt(const LLVector3d& p, F64 fallback) const;
 
     void clear()
@@ -78,7 +80,12 @@ private:
     void loadPack(const std::string& path);
     void updatePack(const SKWorldMapRoadSource* roads, const std::unordered_set<U64>& live);
 
-    std::unordered_map<U64, std::vector<F32>> mPacked;  ///< SKWorldMapTerrainPack's regions, as read
+    struct Packed
+    {
+        F32 mWater = 20.f;
+        std::vector<F32> mHeights;
+    };
+    std::unordered_map<U64, Packed> mPacked;   ///< SKWorldMapTerrainPack's regions, as read
     std::string mPackPath;
 
     std::unordered_map<U64, Region> mRegions;

@@ -75,7 +75,8 @@ void SKWorldMapTerrain::update(F64 now, const SKWorldMapRoadSource* roads)
     r.mOrigin = stalest->getOriginGlobal();
     r.mWidth = stalest->getWidth();
     r.mHeights.resize(SAMPLES * SAMPLES);
-    const F32 water = stalest->getWaterHeight();
+    r.mWater = stalest->getWaterHeight();
+
     const LLSurface& land = stalest->getLand();
     const F32 step = static_cast<F32>(r.mWidth) / (SAMPLES - 1);
     for (S32 j = 0; j < SAMPLES; ++j)
@@ -85,7 +86,7 @@ void SKWorldMapTerrain::update(F64 now, const SKWorldMapRoadSource* roads)
             // Keep the last sample just inside, as the surface resolves its own edge.
             const F32 x = std::min(i * step, static_cast<F32>(r.mWidth) - 0.01f);
             const F32 y = std::min(j * step, static_cast<F32>(r.mWidth) - 0.01f);
-            r.mHeights[j * SAMPLES + i] = std::max(land.resolveHeightRegion(x, y), water);
+            r.mHeights[j * SAMPLES + i] = land.resolveHeightRegion(x, y);
         }
     }
     lowerUnderRoads(r, stalest->getHandle(), roads);
@@ -104,31 +105,33 @@ void SKWorldMapTerrain::loadPack(const std::string& path)
     {
         return;
     }
-    // The packer's format (V:\Scratch\worldmap\map\terrain-pack\pack.py): "SKT1", u32 count, u32 samples,
-    // then per region i32 gx, i32 gy and samples^2 f32 heights, row 0 south, little-endian.
+    // The packer's format (V:\Scratch\worldmap\map\terrain-pack\pack.py): "SKT2", u32 count, u32 samples,
+    // then per region i32 gx, i32 gy, f32 water and samples^2 f32 land heights, row 0 south, little-endian.
     llifstream in(path.c_str(), std::ios::binary);
     char magic[4] = {};
     U32 count = 0, samples = 0;
     in.read(magic, 4);
     in.read(reinterpret_cast<char*>(&count), 4);
     in.read(reinterpret_cast<char*>(&samples), 4);
-    if (!in || std::memcmp(magic, "SKT1", 4) != 0 || samples != SAMPLES)
+    if (!in || std::memcmp(magic, "SKT2", 4) != 0 || samples != SAMPLES)
     {
-        LL_WARNS("SKWorldMap") << "terrain pack " << path << " is not a " << SAMPLES << "-sample SKT1 file" << LL_ENDL;
+        LL_WARNS("SKWorldMap") << "terrain pack " << path << " is not a " << SAMPLES << "-sample SKT2 file" << LL_ENDL;
         return;
     }
     for (U32 k = 0; k < count; ++k)
     {
         S32 grid[2];
-        std::vector<F32> heights(SAMPLES * SAMPLES);
+        Packed packed;
+        packed.mHeights.resize(SAMPLES * SAMPLES);
         in.read(reinterpret_cast<char*>(grid), sizeof(grid));
-        in.read(reinterpret_cast<char*>(heights.data()), heights.size() * sizeof(F32));
+        in.read(reinterpret_cast<char*>(&packed.mWater), sizeof(F32));
+        in.read(reinterpret_cast<char*>(packed.mHeights.data()), packed.mHeights.size() * sizeof(F32));
         if (!in || grid[0] < 0 || grid[1] < 0)
         {
             LL_WARNS("SKWorldMap") << "terrain pack " << path << " ends after " << k << " of " << count << " regions" << LL_ENDL;
             break;
         }
-        mPacked[to_region_handle(static_cast<U32>(grid[0]) * 256, static_cast<U32>(grid[1]) * 256)] = std::move(heights);
+        mPacked[to_region_handle(static_cast<U32>(grid[0]) * 256, static_cast<U32>(grid[1]) * 256)] = std::move(packed);
     }
     LL_INFOS("SKWorldMap") << "terrain pack: " << mPacked.size() << " regions from " << path << LL_ENDL;
 }
@@ -144,7 +147,7 @@ void SKWorldMapTerrain::updatePack(const SKWorldMapRoadSource* roads, const std:
     // Packed regions are copied in, and lowered under their roads, a few a frame; again when roads arrive.
     constexpr S32 PER_FRAME = 32;
     S32 built = 0;
-    for (const auto& [handle, heights] : mPacked)
+    for (const auto& [handle, packed] : mPacked)
     {
         if (live.count(handle))
         {
@@ -161,7 +164,8 @@ void SKWorldMapTerrain::updatePack(const SKWorldMapRoadSource* roads, const std:
         from_region_handle(handle, &x, &y);
         r.mOrigin.setVec(x, y, 0.0);
         r.mWidth = 256.0;
-        r.mHeights = heights;
+        r.mHeights = packed.mHeights;
+        r.mWater = packed.mWater;
         r.mLive = false;
         lowerUnderRoads(r, handle, roads);
         r.mRoads = road_key;
@@ -242,7 +246,7 @@ F64 SKWorldMapTerrain::groundAt(const LLVector3d& p, F64 fallback) const
         {
             return false;
         }
-        out = interpolate(r, u, v);
+        out = std::max(interpolate(r, u, v), static_cast<F64>(r.mWater));
         return true;
     };
     F64 out = fallback;
