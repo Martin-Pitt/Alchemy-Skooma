@@ -6077,7 +6077,7 @@
         <map>
             <key>Comment</key>
             <string>
-                Spike: the throttle sweep (with the autopilot on; seated, stopped, in a flat open arena parcel): straight runs along the arena's diagonal from SKRoadAutopilotPwmSweepGear up through the gears: accel, coast, brake, short lifts, downshifts, and W duty cycles in the first gear, spinning in place at each corner. Logs logs/sk-road-thr-TIME.csv and -summary.csv; turns itself and the autopilot off when done. SKRoadAutopilotPwmSweepFamily "thr", where it exists, runs it too.
+                Spike: the throttle sweep (with the autopilot on; seated, stopped, in a flat open arena parcel): straight runs along the arena's diagonal from SKRoadAutopilotPwmSweepGear up through the gears: accel, coast, brake, short lifts, downshifts, W duty cycles in the first gear, and circles of 30, 20 and 12 m in the highest (yaw rate against v/r, slip), spinning in place at each corner. Logs logs/sk-road-thr-TIME.csv and -summary.csv; turns itself and the autopilot off when done. SKRoadAutopilotPwmSweepFamily "thr", where it exists, runs it too.
             </string>
             <key>Persist</key>
             <integer>0</integer>

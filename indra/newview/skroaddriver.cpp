@@ -3001,7 +3001,8 @@ namespace skroad::drive
     // last. Per gear: accel (W 6 s from a stop), coast (W up from top until 2 m/s or 4 s), brake (W up 2 sim
     // frames, then S until stopped, released if it starts reversing), lifts (W up 1, 3, 6, 12 sim frames at top),
     // and downshifts (coasting to the lower gear's top, at once, and with W held); duty (W N on, R off in sim
-    // frames, from half top) in the first gear only. Before each run the car stops at a corner and spins in
+    // frames, from half top) in the first gear only; last, circles of 30, 20 and 12 m (A held while the yaw rate is
+    // short of v / r, W held) in the highest gear, logging the rate got and wanted and the slip. Before each run the car stops at a corner and spins in
     // place onto the diagonal (a slow driven turn where a spin creeps); a run that meets the far corner is cut.
     // W and S are never held together. Per frame to logs/sk-road-thr-<time>.csv, per test to -summary.csv.
     constexpr F64 THR_SIM_FRAME_S = 1.0 / 45.0;
@@ -3011,7 +3012,9 @@ namespace skroad::drive
     constexpr F64 THR_CORNER_M = PWS_EDGE_M + 2.0, THR_CORNER_NEAR_M = 12.0;
     constexpr F64 THR_SPIN_DEG = 2.0, THR_SPIN_DRIFT_M = 1.5, THR_SPIN_MAX_S = 25.0;
     constexpr S32 THR_MAX_GEAR = 8;
-    const char* const THR_KIND[] = { "accel", "coast", "brake", "duty", "lift", "downshift" };
+    const char* const THR_KIND[] = { "accel", "coast", "brake", "duty", "lift", "downshift", "circle" };
+    constexpr S32 THR_CIRCLE_R[] = { 30, 20, 12 };
+    constexpr F64 THR_CIRCLE_S = 6.0;
 
     struct ThrTest
     {
@@ -3040,6 +3043,8 @@ namespace skroad::drive
         F64 t0 = 0, stepAt = 0, v0 = 0, vmin = 0, tmin = 0, tS = -1, tStop = -1, tBack = -1, wUpDist = 0, stopDist = 0;
         bool reversed = false, cut = false;
         std::vector<std::array<F64, 2>> s;     // t from t0, speed
+        std::vector<std::array<F64, 5>> circle; // t, speed, yaw rate and the one wanted (deg/s), slip (deg)
+        bool circles = false;
         std::map<S32, F64> top;
         F64 brakeDec = 4.0;
     };
@@ -3049,7 +3054,8 @@ namespace skroad::drive
     const char* const THR_COLS[] = { "test", "kind", "gear", "a", "b", "v0_mps", "steady_mps", "t63_s", "t90_s",
                                      "coast_decel", "brake_decel", "stop_dist_m", "stop_t_s", "reversed", "dip_mps",
                                      "recover_s", "lost_mps", "back_on_s", "need_m", "avail_m", "cut", "mean_fps",
-                                     "on_frames", "off_frames", "spin_drift_m", "spin_s", "spin_driven" };
+                                     "on_frames", "off_frames", "spin_drift_m", "spin_s", "spin_driven", "yaw_rate_deg", "want_rate_deg",
+                                     "slip_deg" };
 
     void thrRow(const std::string& id, const char* kind, S32 gear, const std::map<std::string, F64>& v)
     {
@@ -3239,6 +3245,27 @@ namespace skroad::drive
             v["recover_s"] = rec;
             v["on_frames"] = sThr.offFrames;    // the lift, in viewer frames
         }
+        else if (q.kind == 6)
+        {
+            // the circle's last THR_STEADY_S: speed, yaw rate got and wanted, slip
+            F64 sum[4] = {};
+            S32 n = 0;
+            for (const auto& c : sThr.circle)
+            {
+                if (c[0] >= end - THR_STEADY_S)
+                {
+                    for (S32 i = 0; i < 4; ++i) sum[i] += c[i + 1];
+                    ++n;
+                }
+            }
+            if (n)
+            {
+                v["steady_mps"] = sum[0] / n;
+                v["yaw_rate_deg"] = sum[1] / n;
+                v["want_rate_deg"] = sum[2] / n;
+                v["slip_deg"] = sum[3] / n;
+            }
+        }
         else
         {
             v["lost_mps"] = sThr.v0 - sThr.vmin;
@@ -3360,7 +3387,7 @@ namespace skroad::drive
             sThrLog.precision(10);
             const F64 diag = std::hypot(sThr.cx[1] - sThr.cx[0], sThr.cy[1] - sThr.cy[0]);
             sThrLog << "# vehicle " << sVehicle << ", gear " << sThr.g0 << ", diagonal " << diag << " m\n"
-                    << "epoch,t,frame,dt,keys,gear,speed,fwd_mps,yaw_deg,test,phase,step,remain_m\n";
+                    << "epoch,t,frame,dt,keys,gear,speed,fwd_mps,yaw_deg,test,phase,step,remain_m,yaw_rate_deg,slip_deg\n";
             sThrSummary.open((base + "-summary.csv").c_str(), std::ios::out);
             sThrSummary.precision(10);
             for (size_t i = 0; i < std::size(THR_COLS); ++i)
@@ -3382,6 +3409,8 @@ namespace skroad::drive
         const F64 fs = sThr.fsN && sThr.fsSum > 0 ? sThr.fsSum / sThr.fsN : 1.0 / 60.0;
         const F64 mx = px - sThr.lastX, my = py - sThr.lastY;
         const F64 fwd = dt > 0 ? (mx * std::cos(yaw) + my * std::sin(yaw)) / dt : 0.0;
+        // slip: the velocity's heading against the nose (+ the car moving left of where it points)
+        const F64 slip = speed > 1.0 && std::hypot(mx, my) > 1e-3 ? wrap(std::atan2(my, mx) - yaw) * 180 / PI : 0.0;
         sThr.dist += std::hypot(mx, my);
         sThr.wUpDist += std::hypot(mx, my);
         sThr.lastX = px;
@@ -3428,6 +3457,25 @@ namespace skroad::drive
             if (sThr.k >= sThr.tests.size() && !sThr.lastGear && sThr.tests.back().gear < THR_MAX_GEAR)
             {
                 thrAddGear(sThr.tests.back().gear + 1);
+            }
+            if (sThr.k >= sThr.tests.size() && !sThr.circles)
+            {
+                // last, circles in the highest gear that topped the one below it
+                sThr.circles = true;
+                S32 g = sThr.g0;
+                for (const auto& [gear, top] : sThr.top)
+                {
+                    if (gear > g && top > thrTop(gear - 1) + 0.3) g = gear;
+                }
+                for (S32 r : THR_CIRCLE_R)
+                {
+                    ThrTest t;
+                    t.kind = 6;
+                    t.gear = g;
+                    t.a = r;
+                    t.id = llformat("g%d circle r%d", g, r);
+                    sThr.tests.push_back(t);
+                }
             }
             enter(5);
             sThr.stillAt = -1.0;
@@ -3528,7 +3576,8 @@ namespace skroad::drive
             }
         }
         const bool running = sThr.phase == 3 || sThr.phase == 4;
-        if (running && q && remain < reserve)
+        const bool circling = sThr.phase == 4 && q && q->kind == 6;
+        if (running && q && (circling ? edge < PWS_EDGE_M : remain < reserve))
         {
             sThr.cut = true;
             LL_INFOS("SKRoadDriver") << "thr sweep: " << q->id << " cut at the corner after " << sThr.dist << " m of "
@@ -3582,6 +3631,7 @@ namespace skroad::drive
                 sThr.nOn = std::max(1, S32(std::ceil(q->a * THR_SIM_FRAME_S / fs - 1e-6)));
                 sThr.nOff = std::max(1, S32(std::ceil(q->b * THR_SIM_FRAME_S / fs - 1e-6)));
                 sThr.s.clear();
+                sThr.circle.clear();
             }
         }
         if (sThr.phase == 4 && q)
@@ -3663,6 +3713,16 @@ namespace skroad::drive
                         done = t - sThr.tBack >= THR_LIFT_AFTER_S;
                     }
                     break;
+                case 6:
+                {
+                    // circle left, W held: A held while the yaw rate is short of v / r, released past it
+                    const F64 want = speed / q->a * 180 / PI, got = sYawRate * 180 / PI;
+                    keys |= AGENT_CONTROL_AT_POS;
+                    if (got < want) keys |= AGENT_CONTROL_YAW_POS;
+                    sThr.circle.push_back({ t, speed, got, want, slip });
+                    done = t >= THR_CIRCLE_S;
+                    break;
+                }
                 default:
                 {
                     // downshift: 0 coast to the lower gear's top, 1 at once, 2 with W held
@@ -3722,7 +3782,7 @@ namespace skroad::drive
         const std::string id = q ? q->id : std::string();
         sThrLog << pwsEpoch() << ',' << now - sThr.startT << ',' << sThr.frame << ',' << dt << ',' << ks << ',' << sGear
                 << ',' << speed << ',' << fwd << ',' << yaw * 180 / PI << ',' << id << ',' << PHASES[sThr.phase] << ','
-                << sThr.step << ',' << remain << '\n';
+                << sThr.step << ',' << remain << ',' << sYawRate * 180 / PI << ',' << slip << '\n';
         tag("thr sweep " + id + " " + PHASES[sThr.phase]);
         return keys;
     }
