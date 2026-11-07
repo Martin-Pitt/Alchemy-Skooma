@@ -113,6 +113,7 @@
 #include "llvoavatarself.h"
 #include "skaircells.h" // <SK:Nexii> air cells overlay
 #include "skworldcensus.h" // <SK:Nexii> census overlay
+#include "skroaddriver.h" // <SK:Nexii> road autopilot overlay
 #include "llvocache.h"
 #include "llvotree.h"
 #include "llvovolume.h"
@@ -11282,6 +11283,7 @@ void LLPipeline::renderFinalize()
         SKAirCells::instance().renderDebug();
     }
     // </SK:Nexii>
+    sk_road_driver::renderDebug(); // <SK:Nexii> road autopilot overlay: what it sees and decides
 
     /*if (LLRenderTarget::sUseFBO && !gCubeSnapshot)
     { // copy depth buffer from mRT->screen to framebuffer

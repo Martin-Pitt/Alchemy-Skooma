@@ -652,6 +652,7 @@ if(AL_BUILD_VIEWER)
     skroadhost.cpp # <SK:Nexii> roads
     skroadkithost.cpp # <SK:Nexii> roads
     skroadland.cpp # <SK:Nexii> roads
+    skroadoverlay.cpp # <SK:Nexii> roads overlay
     skroadrecord.cpp # <SK:Nexii> ground autopilot
     skobjectfaces.cpp # <SK:Nexii> census
     skworldcensus.cpp # <SK:Nexii> census

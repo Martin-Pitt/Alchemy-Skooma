@@ -5904,6 +5904,19 @@
             <key>Value</key>
             <integer>1</integer>
         </map>
+        <key>SKRoadAutopilotOverlay</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: while the road autopilot drives, draw what it sees and decides in the world: road shapes in reach (faint), cross-sections across the road edge to edge (blue), the lane path it keeps, walked ahead (amber), the car predicted with no new tap (violet), a tap (red bar on that side), waiting for the road (red ring).
+            </string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
         <key>SKRoadAutopilotUseGears</key>
         <map>
             <key>Comment</key>
@@ -5929,6 +5942,19 @@
             <string>F32</string>
             <key>Value</key>
             <real>100.0</real>
+        </map>
+        <key>SKRoadAutopilotOverlayDetail</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: the road autopilot's overlay with its working detail (the road's pieces, segments, joins, cross-sections) rather than just the road's edges, centre and the line it drives.
+            </string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
         </map>
         <key>SKRoadAutopilotGoal</key>
         <map>
