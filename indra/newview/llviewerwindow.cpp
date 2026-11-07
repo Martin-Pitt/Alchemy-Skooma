@@ -3973,7 +3973,9 @@ void LLViewerWindow::updateUI()
     }
 
     // only update mouse hover set when UI is visible (since we shouldn't send hover events to invisible UI
-    if (gPipeline.hasRenderDebugFeatureMask(LLPipeline::RENDER_DEBUG_FEATURE_UI))
+    // <SK:Nexii> window mouse leave. With the cursor out of the window and nothing holding it, the set is empty, so the views it last hovered get onMouseLeave
+    if (gPipeline.hasRenderDebugFeatureMask(LLPipeline::RENDER_DEBUG_FEATURE_UI) && (mMouseInWindow || captor_view))
+    // </SK:Nexii>
     {
         // include all ancestors of captor_view as automatically having mouse
         if (captor_view)
