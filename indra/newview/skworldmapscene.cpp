@@ -38,6 +38,8 @@
 #include "pipeline.h"
 
 #include <algorithm>
+#include <array>
+#include <tuple>
 #include <cmath>
 
 using namespace skworldmap;
@@ -215,7 +217,8 @@ void SKWorldMapScene::render(const SKWorldMapFrame& frame, const LLRect& rect, F
     mSelected = selectTiles(view);
 
     pollAgents(frame, now);
-    mTerrain.update(now);
+    mRoads.updateSource();
+    mTerrain.update(now, mRoads.source());
 
     LLGLDepthTest depth(GL_FALSE, GL_FALSE);
     LLGLDisable cull(GL_CULL_FACE);
@@ -309,8 +312,25 @@ void SKWorldMapScene::drawTerrain(const SKWorldMapFrame& frame)
 {
     // Each region with heights is drawn again over its flat tile, as a grid at its heights, with the finest
     // texture this frame drew there. The flat tile under it never shows, as the grid covers its footprint.
+    LLVector3d forward, right, up;
+    viewBasis(frame.mYaw, frame.mPitch, forward, right, up);
+    std::vector<const SKWorldMapTerrain::Region*> order;
     for (const auto& [handle, r] : mTerrain.regions())
     {
+        if (!r.mHeights.empty())
+        {
+            order.push_back(&r);
+        }
+    }
+    const auto centre_distance = [&](const SKWorldMapTerrain::Region* r) {
+        const F64 dx = r->mOrigin.mdV[VX] + r->mWidth * 0.5 - frame.mEye.mdV[VX];
+        const F64 dy = r->mOrigin.mdV[VY] + r->mWidth * 0.5 - frame.mEye.mdV[VY];
+        return dx * dx + dy * dy;
+    };
+    std::sort(order.begin(), order.end(), [&](auto a, auto b) { return centre_distance(a) > centre_distance(b); });
+    for (const SKWorldMapTerrain::Region* rp : order)
+    {
+        const SKWorldMapTerrain::Region& r = *rp;
         const SKWorldMapTiles::Draw* best = nullptr;
         const F64 cx = r.mOrigin.mdV[VX] + r.mWidth * 0.5;
         const F64 cy = r.mOrigin.mdV[VY] + r.mWidth * 0.5;
@@ -341,23 +361,52 @@ void SKWorldMapScene::drawTerrain(const SKWorldMapFrame& frame)
         gGL.getTextureSlot(0)->bindSampled(best->mTexture, ALSamplers::AnisoClamp);
         constexpr S32 N = SKWorldMapTerrain::SAMPLES;
         const F64 step = r.mWidth / (N - 1);
-        for (S32 j = 0; j + 1 < N; ++j)
+        const auto vertex = [&](S32 i, S32 j) {
+            const F64 x = r.mOrigin.mdV[VX] + i * step;
+            const F64 y = r.mOrigin.mdV[VY] + j * step;
+            F32 u, v;
+            texcoord(x, y, u, v);
+            gGL.texCoord2f(u, v);
+            gGL.vertex3f(static_cast<F32>(x - frame.mEye.mdV[VX]), static_cast<F32>(y - frame.mEye.mdV[VY]),
+                         static_cast<F32>(r.at(i, j) - frame.mEye.mdV[VZ]));
+        };
+
+        // No depth buffer: a heightfield draws correctly far to near. Strips run across the view, the
+        // farthest first, and each strip's cells also go far to near, so nearer ground paints over farther.
+        const bool strips_along_y = std::abs(forward.mdV[VX]) >= std::abs(forward.mdV[VY]);
+        const F64 eye_i = (frame.mEye.mdV[VX] - r.mOrigin.mdV[VX]) / step;
+        const F64 eye_j = (frame.mEye.mdV[VY] - r.mOrigin.mdV[VY]) / step;
+        const F64 eye_outer = strips_along_y ? eye_i : eye_j;
+        const F64 eye_inner = strips_along_y ? eye_j : eye_i;
+        std::array<S32, N - 1> strips;
+        for (S32 k = 0; k + 1 < N; ++k)
         {
-            gGL.begin(LLRender::TRIANGLE_STRIP);
-            for (S32 i = 0; i < N; ++i)
+            strips[k] = k;
+        }
+        std::sort(strips.begin(), strips.end(),
+                  [&](S32 a, S32 b) { return std::abs(a + 0.5 - eye_outer) > std::abs(b + 0.5 - eye_outer); });
+        // Each strip is cut where the eye is beside it, and both halves are drawn from their far end in.
+        const S32 split = llclamp(static_cast<S32>(std::lround(eye_inner)), 0, N - 1);
+        for (S32 o : strips)
+        {
+            for (const auto& [from, to, dir] : { std::tuple{ 0, split, 1 }, std::tuple{ N - 1, split, -1 } })
             {
-                for (S32 row : { j + 1, j })
+                if (from == to)
                 {
-                    const F64 x = r.mOrigin.mdV[VX] + i * step;
-                    const F64 y = r.mOrigin.mdV[VY] + row * step;
-                    F32 u, v;
-                    texcoord(x, y, u, v);
-                    gGL.texCoord2f(u, v);
-                    gGL.vertex3f(static_cast<F32>(x - frame.mEye.mdV[VX]), static_cast<F32>(y - frame.mEye.mdV[VY]),
-                                 static_cast<F32>(r.at(i, row) - frame.mEye.mdV[VZ]));
+                    continue;
                 }
+                gGL.begin(LLRender::TRIANGLE_STRIP);
+                for (S32 n = from;; n += dir)
+                {
+                    strips_along_y ? vertex(o, n) : vertex(n, o);
+                    strips_along_y ? vertex(o + 1, n) : vertex(n, o + 1);
+                    if (n == to)
+                    {
+                        break;
+                    }
+                }
+                gGL.end();
             }
-            gGL.end();
         }
     }
 }

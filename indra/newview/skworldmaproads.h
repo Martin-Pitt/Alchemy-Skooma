@@ -84,6 +84,9 @@ public:
 
     /// Calls `fn` with every region that has roads, once its data is ready. Never blocks.
     virtual void forEachRegion(const std::function<void(U64 handle, const skworldmap::RoadRegion&)>& fn) = 0;
+
+    /// One region's roads, or null when it has none or they are not ready yet.
+    virtual const skworldmap::RoadRegion* region(U64 handle) const = 0;
 };
 
 /// The offline dataset's ways (schema 0.1.0: core, private and candidate `ways.geojson`), read once on
@@ -95,6 +98,10 @@ public:
     ~SKWorldMapDatasetRoads() override;
 
     void forEachRegion(const std::function<void(U64 handle, const skworldmap::RoadRegion&)>& fn) override;
+    const skworldmap::RoadRegion* region(U64 handle) const override;
+
+    /// Takes the regions once the worker has read them; never blocks.
+    void poll();
 
     const std::string& releaseDir() const { return mDir; }
 
@@ -114,8 +121,12 @@ public:
     void draw(const SKWorldMapFrame& frame, S32 width, S32 height);
     void release() { mSource.reset(); }
 
-private:
+    /// Where the roads come from this frame; null when none are set.
+    const SKWorldMapRoadSource* source() const { return mSource.get(); }
+
+    /// Reads the settings and starts or drops the source; called each frame before anything asks for roads.
     void updateSource();
 
+private:
     std::unique_ptr<SKWorldMapDatasetRoads> mSource;
 };

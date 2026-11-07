@@ -140,23 +140,7 @@ SKWorldMapDatasetRoads::~SKWorldMapDatasetRoads()
     }
 }
 
-void SKWorldMapDatasetRoads::forEachRegion(const std::function<void(U64, const RoadRegion&)>& fn)
-{
-    if (mLoading.valid() && mLoading.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
-    {
-        mRegions = mLoading.get();
-        size_t segments = 0;
-        for (const auto& [handle, region] : mRegions)
-        {
-            segments += region.mSegments.size();
-        }
-        LL_INFOS("SKWorldMap") << "roads: " << segments << " segments in " << mRegions.size() << " regions from " << mDir << LL_ENDL;
-    }
-    for (const auto& [handle, region] : mRegions)
-    {
-        fn(handle, region);
-    }
-}
+void SKWorldMapDatasetRoads::poll() { if (mLoading.valid() && mLoading.wait_for(std::chrono::seconds(0)) == std::future_status::ready) { mRegions = mLoading.get(); size_t segments = 0; for (const auto& [handle, region] : mRegions) { segments += region.mSegments.size(); } LL_INFOS("SKWorldMap") << "roads: " << segments << " segments in " << mRegions.size() << " regions from " << mDir << LL_ENDL; } }  void SKWorldMapDatasetRoads::forEachRegion(const std::function<void(U64, const RoadRegion&)>& fn) { for (const auto& [handle, region] : mRegions) { fn(handle, region); } }  const RoadRegion* SKWorldMapDatasetRoads::region(U64 handle) const { const auto it = mRegions.find(handle); return it == mRegions.end() ? nullptr : &it->second; }
 
 SKWorldMapDatasetRoads::Regions SKWorldMapDatasetRoads::load(std::string dir)
 {
@@ -287,6 +271,10 @@ void SKWorldMapRoads::updateSource()
     else if (!mSource || mSource->releaseDir() != dir)
     {
         mSource = std::make_unique<SKWorldMapDatasetRoads>(dir);
+    }
+    if (mSource)
+    {
+        mSource->poll();
     }
 }
 

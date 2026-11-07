@@ -31,6 +31,8 @@
 #include <unordered_map>
 #include <vector>
 
+class SKWorldMapRoadSource;
+
 /// Ground heights per region. Today only the connected regions have them, from their live terrain;
 /// the terrain cache will add the regions visited before and the dataset's behind the same lookups.
 class SKWorldMapTerrain
@@ -45,12 +47,14 @@ public:
         F64 mWidth = 256.0;         ///< metres on a side
         std::vector<F32> mHeights;  ///< SAMPLES x SAMPLES, row 0 south, max(land, water)
         F64 mBuilt = 0.0;
+        const void* mRoads = nullptr; ///< the roads it was lowered under, so their arrival rebuilds it
 
         F32 at(S32 i, S32 j) const { return mHeights[j * SAMPLES + i]; }
     };
 
     /// Samples the connected regions, at most one rebuild a frame, and forgets regions no longer connected.
-    void update(F64 now);
+    /// Ground under a road is lowered to just below it, so a road is never hidden by the 8 m grid.
+    void update(F64 now, const SKWorldMapRoadSource* roads);
 
     const std::unordered_map<U64, Region>& regions() const { return mRegions; }
 
@@ -60,5 +64,7 @@ public:
     void clear() { mRegions.clear(); }
 
 private:
+    static void lowerUnderRoads(Region& r, U64 handle, const SKWorldMapRoadSource* roads);
+
     std::unordered_map<U64, Region> mRegions;
 };
