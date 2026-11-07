@@ -1500,7 +1500,23 @@ const skroad::drive::VehicleProfile& skroad::drive::vehicleProfile()
         }
         if (!sCarKey.empty())
         {
-            LL_INFOS("SKRoadDriver") << "vehicle " << sCarKey << ": " << (sProfile.chat_gears ? "gears said in chat" : "no profile, no gears")
+            std::string why;
+            if (!p.isMap())
+            {
+                // a profile keyed by the same name and another creator is a creator mismatch
+                why = "name not in the profile file";
+                for (auto it = profiles.beginMap(); it != profiles.endMap(); ++it)
+                {
+                    if (it->first != sCarKey && carName(it->first) == carName(sCarKey))
+                    {
+                        why = "creator mismatch (the file has '" + it->first + "')";
+                        break;
+                    }
+                }
+            }
+            LL_INFOS("SKRoadDriver") << "vehicle " << sCarKey << ": "
+                                     << (sProfile.chat_gears ? "gears said in chat"
+                                         : why.empty() ? "profile without chat gears" : "no profile: " + why)
                                      << LL_ENDL;
         }
     }
@@ -5720,11 +5736,37 @@ void sk_road_driver::onSettingChanged(const LLSD& enabled)
     }
 }
 
-void sk_road_driver::noteChat(const LLUUID& from, const std::string& text)
+void sk_road_driver::noteChat(const LLUUID& from, const std::string& from_name, const std::string& text)
 {
-    if (!sOn || from.isNull() || from != sVehicle)
+    // the vehicle sat in: the driven one while on, else the seat's root, so a shift made before switching on counts
+    LLUUID seated = sVehicle;
+    if (!sOn)
+    {
+        const LLViewerObject* seat = isAgentAvatarValid() && gAgentAvatarp->isSitting()
+                                         ? dynamic_cast<const LLViewerObject*>(gAgentAvatarp->getParent())
+                                         : nullptr;
+        const LLViewerObject* car = seat ? seat->getRootEdit() : nullptr;
+        seated = car ? car->getID() : LLUUID::null;
+    }
+    if (from.isNull() || from != seated)
     {
         return;
+    }
+    // The chat names the car: when the simulator's properties reply has not, the profile is found by that name.
+    static LLUUID unnamed_logged;
+    if (sCarKey.empty() || sCarKeyFor != seated)
+    {
+        if (!from_name.empty())
+        {
+            sCarKeyFor = seated;
+            sCarKey = from_name;
+            LL_INFOS("SKRoadDriver") << "vehicle " << seated << ": named '" << from_name << "' by its chat" << LL_ENDL;
+        }
+        else if (unnamed_logged != seated)
+        {
+            unnamed_logged = seated;
+            LL_INFOS("SKRoadDriver") << "vehicle " << seated << ": no profile: no name yet" << LL_ENDL;
+        }
     }
     const VehicleProfile& car = vehicleProfile();
     if (!car.chat_gears)

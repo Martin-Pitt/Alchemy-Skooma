@@ -49,8 +49,9 @@ namespace sk_road_driver
     void beforeAgentUpdate();
 
     /// Called for each line of local chat: the vehicle being driven announcing its gear ("Gear 2",
-    /// "Reverse") is how the driver knows it.
-    void noteChat(const LLUUID& from, const std::string& text);
+    /// "Reverse") is how the driver knows it. from_name is the speaker's name, which for the vehicle is the
+    /// car's name: the profile is found by it when the simulator has not said the car's properties.
+    void noteChat(const LLUUID& from, const std::string& from_name, const std::string& text);
 
     /// Draws what the driver saw and decided last frame (SKRoadAutopilotOverlay): every road part in reach
     /// (faint; the walked ones brighter), the session's trail behind the car (grey),
