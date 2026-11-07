@@ -352,4 +352,26 @@ F32 fuzzyScore(std::string_view query, std::string_view name)
     }
     return score - 0.02f * (F32)name.size();
 }
+bool hiddenUnderDisc(const LLVector3d& eye, const WorldDisc& disc, const LLVector3d& box_min, const LLVector3d& box_max)
+{
+    if (eye.mdV[VZ] <= disc.mZ || box_max.mdV[VZ] >= disc.mZ)
+    {
+        return false;
+    }
+    const F64 r2 = disc.mRadius * disc.mRadius;
+    for (S32 i = 0; i < 8; ++i)
+    {
+        const LLVector3d c((i & 1) ? box_max.mdV[VX] : box_min.mdV[VX], (i & 2) ? box_max.mdV[VY] : box_min.mdV[VY],
+                           (i & 4) ? box_max.mdV[VZ] : box_min.mdV[VZ]);
+        const F64 t = (eye.mdV[VZ] - disc.mZ) / (eye.mdV[VZ] - c.mdV[VZ]);
+        const F64 dx = eye.mdV[VX] + (c.mdV[VX] - eye.mdV[VX]) * t - disc.mCentreX;
+        const F64 dy = eye.mdV[VY] + (c.mdV[VY] - eye.mdV[VY]) * t - disc.mCentreY;
+        if (dx * dx + dy * dy > r2)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
 } // namespace skworldmap

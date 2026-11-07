@@ -31,6 +31,7 @@
 #include "llrender.h"
 #include "llregionhandle.h"
 #include "llui.h"
+#include "llviewercontrol.h"
 #include "llviewershadermgr.h"
 #include "llviewertexture.h"
 #include "llworld.h"
@@ -48,6 +49,46 @@ namespace
 {
     // The map server's open water, so missing tiles read as sea rather than as holes.
     const LLColor4 SEA_COLOUR(0.114f, 0.278f, 0.373f, 1.f);
+    // Past the world's edge: space, and an icy rim where the sea spills off it.
+    const LLColor4 SPACE_COLOUR(0.01f, 0.015f, 0.04f, 1.f);
+    const LLColor4 RIM_COLOUR(0.78f, 0.86f, 0.96f, 1.f);
+    constexpr S32 EDGE_SEGMENTS = 256;
+    constexpr F64 RIM_FRACTION = 0.004;     ///< the rim's width, as a fraction of the disc's radius
+    constexpr F64 SPACE_REACH = 1.0e7;      ///< space is painted out to the far plane
+
+    /// The disc the sea ends at, from SKWorldMapEdgeCentre and SKWorldMapEdgeRadius (region coordinates);
+    /// a radius of zero leaves the sea endless.
+    WorldDisc worldDisc()
+    {
+        static LLCachedControl<LLVector3> centre(gSavedSettings, "SKWorldMapEdgeCentre", LLVector3(1080.f, 1080.f, 0.f));
+        static LLCachedControl<F32> radius(gSavedSettings, "SKWorldMapEdgeRadius", 260.f);
+        WorldDisc disc;
+        const LLVector3 c = centre;
+        disc.mCentreX = c.mV[VX] * REGION_METRES;
+        disc.mCentreY = c.mV[VY] * REGION_METRES;
+        disc.mRadius = std::max(0.f, (F32)radius) * REGION_METRES;
+        return disc;
+    }
+
+    /// A flat ring on the disc's plane from radius `inner` to `outer`, relative to the eye; an inner radius
+    /// of zero fills the disc.
+    void edgeRing(const WorldDisc& disc, const LLVector3d& eye, F64 inner, F64 outer, const LLColor4& colour)
+    {
+        const F32 cx = static_cast<F32>(disc.mCentreX - eye.mdV[VX]);
+        const F32 cy = static_cast<F32>(disc.mCentreY - eye.mdV[VY]);
+        const F32 z = static_cast<F32>(disc.mZ - eye.mdV[VZ]);
+        gGL.color4fv(colour.mV);
+        gGL.begin(LLRender::TRIANGLE_STRIP);
+        for (S32 i = 0; i <= EDGE_SEGMENTS; ++i)
+        {
+            const F64 a = F_TWO_PI * i / EDGE_SEGMENTS;
+            const F32 c = static_cast<F32>(std::cos(a));
+            const F32 sn = static_cast<F32>(std::sin(a));
+            gGL.vertex3f(cx + c * static_cast<F32>(outer), cy + sn * static_cast<F32>(outer), z);
+            gGL.vertex3f(cx + c * static_cast<F32>(inner), cy + sn * static_cast<F32>(inner), z);
+        }
+        gGL.end();
+    }
     // Where raised terrain uncovers its own flat footprint: a dark grey, as the shaded side of the ground.
     const LLColor4 FOOTPRINT_COLOUR(0.16f, 0.17f, 0.16f, 1.f);
     // Water drawn over terrain below it: clear at the shore, at its most opaque this deep and deeper.
@@ -244,8 +285,11 @@ void SKWorldMapScene::drawGround(const SKWorldMapFrame& frame, S32 width, S32 he
     const F64 height_above = std::max(frame.mEye.mdV[VZ] - std::max(GROUND_Z, mTerrain.groundAt(frame.mEye, GROUND_Z)), 1.0);
     const F32 z_near = static_cast<F32>(std::max(0.5, 0.25 * height_above));
 
+    const WorldDisc disc = worldDisc();
+    const LLColor4& clear_colour = disc.mRadius > 0.0 ? SPACE_COLOUR : SEA_COLOUR;
+
     mScene.bindTarget();
-    glClearColor(SEA_COLOUR.mV[VRED], SEA_COLOUR.mV[VGREEN], SEA_COLOUR.mV[VBLUE], 1.f);
+    glClearColor(clear_colour.mV[VRED], clear_colour.mV[VGREEN], clear_colour.mV[VBLUE], 1.f);
     mScene.clear(GL_COLOR_BUFFER_BIT);
     glClearColor(0.f, 0.f, 0.f, 0.f);
 
@@ -264,6 +308,11 @@ void SKWorldMapScene::drawGround(const SKWorldMapFrame& frame, S32 width, S32 he
     gGL.loadMatrix(LLMatrix4a::lookAt(eye, at, up));
 
     gUIProgram.bind();
+    if (disc.mRadius > 0.0)
+    {
+        gGL.getTextureSlot(0)->unbind();
+        edgeRing(disc, frame.mEye, 0.0, disc.mRadius, SEA_COLOUR);
+    }
     gGL.color4f(1.f, 1.f, 1.f, 1.f);
     mDraws.clear();
     for (const SelectedTile& tile : mSelected)
@@ -316,6 +365,18 @@ void SKWorldMapScene::drawGround(const SKWorldMapFrame& frame, S32 width, S32 he
     gUIProgram.unbind();
 
     mRoads.draw(frame, width, height);
+
+    if (disc.mRadius > 0.0)
+    {
+        // Tiles and roads past the rim are painted over: the world ends there.
+        gUIProgram.bind();
+        gGL.getTextureSlot(0)->unbind();
+        const F64 rim = disc.mRadius * RIM_FRACTION;
+        edgeRing(disc, frame.mEye, disc.mRadius + rim, SPACE_REACH, SPACE_COLOUR);
+        edgeRing(disc, frame.mEye, disc.mRadius - rim, disc.mRadius + rim, RIM_COLOUR);
+        gGL.flush();
+        gUIProgram.unbind();
+    }
 
     popMatrices();
     mScene.flush();

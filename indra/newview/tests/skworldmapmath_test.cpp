@@ -269,3 +269,24 @@ namespace
         CHECK(fuzzyScore("", "Ahern") < 0.f);
     }
 } // namespace
+
+TEST_CASE("a box under the world disc shows only past its rim")
+{
+    WorldDisc disc;
+    disc.mCentreX = 1000.0;
+    disc.mCentreY = 1000.0;
+    disc.mRadius = 500.0;
+    const LLVector3d lo(900.0, 950.0, GROUND_Z - 80.0);
+    const LLVector3d hi(1100.0, 1050.0, GROUND_Z - 1.0);
+
+    // Straight above the centre, the disc hides it.
+    CHECK(hiddenUnderDisc(LLVector3d(1000.0, 1000.0, 2000.0), disc, lo, hi));
+    // Low and far out past the rim, the ray to its underside passes outside the disc.
+    CHECK_FALSE(hiddenUnderDisc(LLVector3d(1700.0, 1000.0, GROUND_Z + 10.0), disc, lo, hi));
+    // From below the disc's plane nothing covers it.
+    CHECK_FALSE(hiddenUnderDisc(LLVector3d(1000.0, 1000.0, GROUND_Z - 200.0), disc, lo, hi));
+    // A box poking through the plane is never hidden.
+    CHECK_FALSE(hiddenUnderDisc(LLVector3d(1000.0, 1000.0, 2000.0), disc, lo, LLVector3d(1100.0, 1050.0, GROUND_Z + 1.0)));
+    // A box reaching past the rim shows even from straight above.
+    CHECK_FALSE(hiddenUnderDisc(LLVector3d(1000.0, 1000.0, 2000.0), disc, lo, LLVector3d(1600.0, 1050.0, GROUND_Z - 1.0)));
+}

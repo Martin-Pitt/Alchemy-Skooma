@@ -137,6 +137,19 @@ namespace skworldmap
     /// How many dots each cluster draws, nearest first: each at most `per_stack_cap`, all within `budget`.
     std::vector<S32> stackBudget(const std::vector<F64>& distances, const std::vector<S32>& counts, S32 per_stack_cap, S32 budget);
 
+    /// The world's edge: the sea stops at a disc on the ground plane, and what hangs beneath it is seen only past its rim.
+    struct WorldDisc
+    {
+        F64 mCentreX = 0.0;     ///< global metres
+        F64 mCentreY = 0.0;
+        F64 mRadius = 0.0;
+        F64 mZ = GROUND_Z;
+    };
+
+    /// True when a box below the disc is wholly covered by it from `eye`: every corner, projected from the eye
+    /// onto the disc's plane, lands inside the disc. The disc is convex, so the box's whole shadow does too.
+    bool hiddenUnderDisc(const LLVector3d& eye, const WorldDisc& disc, const LLVector3d& box_min, const LLVector3d& box_max);
+
     /// How well `name` matches a lower-case query whose letters it holds in order, spaces ignored: runs,
     /// word starts and a prefix score higher, gaps and long names lower. Negative when it does not match.
     F32 fuzzyScore(std::string_view query, std::string_view name);

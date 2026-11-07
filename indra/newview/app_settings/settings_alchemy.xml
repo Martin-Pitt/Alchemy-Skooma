@@ -3253,6 +3253,32 @@
             <key>Value</key>
             <integer>16</integer>
         </map>
+        <key>SKWorldMapEdgeCentre</key>
+        <map>
+            <key>Comment</key>
+            <string>Centre of the disc the 3D world map's sea ends at, in region coordinates (z unused)</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Vector3</string>
+            <key>Value</key>
+            <array>
+                <real>1080.0</real>
+                <real>1080.0</real>
+                <real>0.0</real>
+            </array>
+        </map>
+        <key>SKWorldMapEdgeRadius</key>
+        <map>
+            <key>Comment</key>
+            <string>Radius of the disc the 3D world map's sea ends at, in regions; 0 leaves the sea endless</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>260.0</real>
+        </map>
         <key>SKWorldMapFlycamMaxScale</key>
         <map>
             <key>Comment</key>
