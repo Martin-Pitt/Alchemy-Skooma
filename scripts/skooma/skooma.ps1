@@ -47,7 +47,8 @@ function Show-Help {
     Say '                      --base <branch>  --tests (configure a local tests tree)'
     Say '  new <area>/<x> --amend [--base <feature>]  amend-<area>/<x>: a follow-up that lands'
     Say '                      into an existing feature (default feature-<area>/<x>), never a PR alone'
-    Say '  sync                fetch upstream -> develop, every branch from its base, then main'
+    Say '  sync [name|.]       fetch upstream -> develop; with a name, that branch and its bases'
+    Say '                      only; without, every branch from its base, then main and local'
     Say '                      all  every active worktree (never the default)'
     Say '                      each synced branch takes develop''s submodule pointers'
     Say '  check [name|.]      validate a branch before it lands (--full: re-check merges main has)'
@@ -1506,7 +1507,7 @@ function Sync-SubmodulePointers { param([string]$path, [string]$branch)
     Info "  $branch now has develop's $($stale -join ', ')"
 }
 
-function Invoke-Sync { param([switch]$Quiet, [switch]$NextOnly)
+function Invoke-Sync { param([switch]$Quiet, [switch]$NextOnly, [string]$Only = '')
     # Every branch at once: each takes its base in its own worktree, where its conflicts are
     # resolved, and main takes develop last, so nothing is resolved twice.
     if (-not $Quiet) { Say '' ; Say 'Fetching upstream...' }
@@ -1566,9 +1567,16 @@ Either upstream rewrote history, or a commit was made on develop.
     # main then takes the resolved branches before develop, so the conflict is not met again there.
     $ordered = @()
     $inScope = @($byBranch.Keys | Where-Object { $_ -ne 'main' -and $_ -ne $SyncBranch -and (Get-Role $_) })
+    # sync <name>: that branch and the bases it is built on, no other branch, main or local.
+    if ($Only) {
+        $chain = @(); $x = $Only
+        while ($x -and $x -ne 'develop' -and $chain.Count -lt 16) { $chain += $x; $x = Get-Base $x }
+        $inScope = @($inScope | Where-Object { $chain -contains $_ })
+        if ($chain | Where-Object { $byBranch.Keys -notcontains $_ }) { Warn "not checked out, so not synced: $(($chain | Where-Object { $byBranch.Keys -notcontains $_ }) -join ', ')" }
+    }
     $ordered += Sort-ByDependency $inScope
     # main moves through the sync sidecar, so it syncs whether or not any worktree has it out.
-    $ordered += 'main'
+    if (-not $Only) { $ordered += 'main' }
 
     foreach ($branch in $ordered) {
         if ($branch -eq 'main') {
@@ -1816,8 +1824,10 @@ function Invoke-IntegrateContinue {
         return
     }
     Info "main is now $(G rev-parse --short main)"
+    if (Test-HasLocal) { Info "$LocalBranch is now $(G rev-parse --short $LocalBranch)" }
     Install-Tooling -Quiet
-    Info "if the build breaks:  git skooma undo   (back to $($st.LastGood.Substring(0,9)))"
+    $good = if ($st.PSObject.Properties["LastGood"] -and $st.LastGood) { $st.LastGood.Substring(0,9) } else { Cfg 'skooma.lastgood-local' }
+    if ($good) { Info "if the build breaks:  git skooma undo   (back to $($good.Substring(0,[Math]::Min(9,$good.Length))))" }
     Say ''
     Backup-Docs
 }
@@ -1979,6 +1989,8 @@ function Invoke-Integrate {
                     $null = G -C $pw.Path merge --abort
                     Fail "merging $b failed without conflicted files; aborted"
                 }
+                # local keeps its own last-good, so undo reaches past a resolved land into it.
+                if ($into -eq $LocalBranch) { $null = G config 'skooma.lastgood-local' (G rev-parse $LocalBranch) }
                 [IO.File]::WriteAllText($ResolveState, (@{ Branch = $b; Into = $into; Path = $pw.Path; Files = @($files) } | ConvertTo-Json))
                 Say ''
                 Warn "$b conflicts with $into; the merge is left in $($pw.Path)"
@@ -2434,6 +2446,19 @@ function Install-Tooling { param([switch]$Quiet)
         Good "scripts -> $dst"
     }
 
+    # The settings files merge by setting, not by line (merge-settings.py); info/attributes is shared by every worktree.
+    $driver = Join-Path $src 'merge-settings.py'
+    if (Test-Path $driver) {
+        Copy-Item $driver $dst -Force
+        $installedDriver = (Join-Path $dst 'merge-settings.py') -replace '\\', '/'
+        $null = G config merge.sksettings.name 'Skooma settings, merged by setting'
+        $null = G config merge.sksettings.driver "python -I ""$installedDriver"" %O %A %B %P"
+        $attr = Join-Path $CommonDir 'info\attributes'
+        $line = 'indra/newview/app_settings/settings*.xml merge=sksettings'
+        $have = if (Test-Path $attr) { Get-Content $attr } else { @() }
+        if ($have -notcontains $line) { Add-Content -Path $attr -Value $line; Good 'settings merge driver registered' }
+    }
+
     # Hooks (sh, shared by every worktree via .git/hooks).
     $hookDst = Join-Path $CommonDir 'hooks'
     New-Item -ItemType Directory -Force -Path $hookDst | Out-Null
@@ -2517,8 +2542,10 @@ switch ($Command.ToLowerInvariant()) {
     'wt-new'    { $script:Porcelain = $true; Invoke-New }
     'wt-setup'  { $p = if ($Rest) { $Rest[0] } else { $Here }; Invoke-WtSetup $p }
     'sync'      {
-        if ($Rest -and $Rest[0] -notlike '--*') { Warn "sync takes no name; it syncs every branch" }
-        Invoke-Sync
+        # sync <name|.>: that branch's chain; sync or sync all: every branch, then main and local.
+        $only = if ($Rest -and $Rest[0] -notlike '--*' -and $Rest[0] -ne 'all') { Resolve-Target $Rest[0] } else { '' }
+        if ($only -and (Test-IsAmend $only)) { Fail "$only is an amend: sync never merges into one" }
+        Invoke-Sync -Only $only
     }
     'check' {
         # `check` with no argument from a feature worktree checks that branch; from the
