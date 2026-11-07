@@ -3341,6 +3341,39 @@
             <key>Value</key>
             <string></string>
         </map>
+        <key>SKWorldMapTiltHardDegrees</key>
+        <map>
+            <key>Comment</key>
+            <string>On the 3D world map, the shallowest the camera may ever look, in degrees below the horizon.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>22.0</real>
+        </map>
+        <key>SKWorldMapTiltReturnRate</key>
+        <map>
+            <key>Comment</key>
+            <string>On the 3D world map, how quickly a camera tilted past the soft limit is drawn back to it, per second.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>4.0</real>
+        </map>
+        <key>SKWorldMapTiltSoftDegrees</key>
+        <map>
+            <key>Comment</key>
+            <string>On the 3D world map, the camera tilted shallower than this many degrees below the horizon is drawn back to it.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>35.0</real>
+        </map>
         <key>RenderAvatarShadowDetail</key>
         <map>
             <key>Comment</key>

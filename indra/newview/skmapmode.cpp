@@ -48,7 +48,7 @@ using namespace skworldmap;
 
 namespace
 {
-    constexpr F64 START_DISTANCE = 1500.0;
+    constexpr F64 START_DISTANCE = 3000.0;
     constexpr F64 START_ELEVATION = 50.0 * 3.141592653589793 / 180.0;
     constexpr F64 MIN_MAP_DISTANCE = 20.0;      ///< the closest the up and down actions bring the camera to its focus
     constexpr F64 MAX_MAP_DISTANCE = 200000.0;  ///< and the farthest, the grid's breadth
@@ -184,9 +184,12 @@ bool SKMapMode::open()
     }
     mOpen = true;
 
-    if (!mHasMapCamera)
+    // The first open of the session turns up and away from the world camera onto the map's start view
+    // (above the agent, looking north, the way maps are read); later opens go straight back to where
+    // the map was left.
+    const bool first_open = !mHasMapCamera;
+    if (first_open)
     {
-        // Above the agent, looking north, so the map opens the way maps are read.
         const F64 yaw = 0.5 * 3.141592653589793;
         mMapFocus = gAgent.getPositionGlobal();
         mMapFocus.mdV[VZ] = GROUND_Z;
@@ -199,8 +202,15 @@ bool SKMapMode::open()
     {
         gAgentCamera.setFocusOnAvatar(false, false);
         gAgentCamera.setCameraPosAndFocusGlobal(mMapPosition, mMapFocus, LLUUID::null);
-        // Turns up and away from the world camera onto the map's, rather than sliding across.
-        gAgentCamera.orbitCameraAnimation();
+        if (first_open)
+        {
+            gAgentCamera.orbitCameraAnimation();
+        }
+        else
+        {
+            gAgentCamera.stopCameraAnimation();
+            gAgentCamera.skipCameraSmoothing();
+        }
     }
 
     LLRootView* root = gViewerWindow->getRootView();
@@ -399,10 +409,55 @@ SKWorldMapFrame SKMapMode::frame() const
     return f;
 }
 
+void SKMapMode::limitTilt()
+{
+    // The camera may tilt toward the horizon only so far: past the soft limit it is drawn back to it,
+    // the more strongly the further past, and it never passes the hard limit. Angles are the view's
+    // elevation below the horizon, so a smaller one is a shallower look.
+    static LLCachedControl<F32> soft_deg(gSavedSettings, "SKWorldMapTiltSoftDegrees", 35.f);
+    static LLCachedControl<F32> hard_deg(gSavedSettings, "SKWorldMapTiltHardDegrees", 22.f);
+    static LLCachedControl<F32> return_rate(gSavedSettings, "SKWorldMapTiltReturnRate", 4.f);
+    if (mPanning || SKModalView::top() != this || gAgentCamera.getCameraAnimating() || LLViewerJoystick::getInstance()->getOverrideCamera())
+    {
+        return;
+    }
+    const F64 soft = llclamp((F64)soft_deg, 1.0, 89.0) * DEG_TO_RAD;
+    const F64 hard = llclamp((F64)hard_deg, 0.0, soft * RAD_TO_DEG) * DEG_TO_RAD;
+    const LLVector3d eye = gAgentCamera.getCameraPositionGlobal();
+    const LLVector3d focus = gAgentCamera.getFocusGlobal();
+    const LLVector3d to_focus = focus - eye;
+    const F64 distance = to_focus.magVec();
+    if (distance < 1.0e-3)
+    {
+        return;
+    }
+    const F64 elevation = std::asin(llclamp(-to_focus.mdV[VZ] / distance, -1.0, 1.0));
+    if (elevation >= soft)
+    {
+        return;
+    }
+    F64 target = elevation;
+    if (elevation < hard)
+    {
+        target = hard;
+    }
+    else
+    {
+        const F64 seconds = llmin((F64)gFrameDTClamped, 0.1);
+        target = elevation + (soft - elevation) * (1.0 - std::exp(-llmax((F64)return_rate, 0.0) * seconds));
+    }
+    const F64 yaw = std::atan2(to_focus.mdV[VY], to_focus.mdV[VX]);
+    const LLVector3d new_eye = focus - lookDirection(yaw, -target) * distance;
+    gAgentCamera.setFocusOnAvatar(false, false);
+    gAgentCamera.setCameraPosAndFocusGlobal(new_eye, focus, LLUUID::null);
+    gAgentCamera.skipCameraSmoothing();
+}
+
 void SKMapMode::render(const LLRect& world_rect_raw)
 {
     if (mOpen)
     {
+        limitTilt();
         mScene.render(frame(), world_rect_raw, LLTimer::getUptimeSeconds());
     }
 }

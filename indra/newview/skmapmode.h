@@ -103,6 +103,7 @@ public:
 private:
     SKWorldMapFrame frame() const;
     void removeViews();
+    void limitTilt();
 
     bool mOpen = false;
     bool mHasMapCamera = false;     ///< the map camera has been set once, so later opens resume it
