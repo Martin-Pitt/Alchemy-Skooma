@@ -29,6 +29,7 @@
 #include "skworldmapmath.h"
 #include "skworldmaphippo.h"
 #include "skworldmaproads.h"
+#include "skworldmapstars.h"
 #include "skworldmapterrain.h"
 #include "skworldmaptiles.h"
 
@@ -88,6 +89,7 @@ private:
     skworldmap::WorldDisc mShownDisc;           ///< the edge as drawn, easing toward the tiles' latest fit
     F64 mShownAt = 0.0;
     SKWorldMapRoads mRoads;
+    SKWorldMapStars mStars;
     SKWorldMapTerrain mTerrain;
     SKWorldMapSurfaceSource* mSurfaces = nullptr;
     std::vector<skworldmap::SelectedTile> mSelected;

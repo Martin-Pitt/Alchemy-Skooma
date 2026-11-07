@@ -321,6 +321,11 @@ void SKWorldMapScene::drawGround(const SKWorldMapFrame& frame, S32 width, S32 he
     up.load3(LLVector3(u).mV);
     gGL.loadMatrix(LLMatrix4a::lookAt(eye, at, up));
 
+    if (disc.mRadius > 0.0)
+    {
+        // Space's stars first: the sea, the tiles and the rim go over them, so they show only past the edge.
+        mStars.draw();
+    }
     gUIProgram.bind();
     if (disc.mRadius > 0.0)
     {
@@ -892,6 +897,7 @@ void SKWorldMapScene::drawAgents(const SKWorldMapFrame& frame, const LLRect& rec
 void SKWorldMapScene::release()
 {
     mHippo.release();
+    mStars.release();
     mScene.release();
     mBlurA.release();
     mBlurB.release();
