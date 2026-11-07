@@ -321,11 +321,6 @@ void SKWorldMapScene::drawGround(const SKWorldMapFrame& frame, S32 width, S32 he
     up.load3(LLVector3(u).mV);
     gGL.loadMatrix(LLMatrix4a::lookAt(eye, at, up));
 
-    if (disc.mRadius > 0.0)
-    {
-        // Space's stars first: the sea, the tiles and the rim go over them, so they show only past the edge.
-        mStars.draw();
-    }
     gUIProgram.bind();
     if (disc.mRadius > 0.0)
     {
@@ -404,6 +399,12 @@ void SKWorldMapScene::drawGround(const SKWorldMapFrame& frame, S32 width, S32 he
             gGL.setColorMask(true, true);
         }
         gUIProgram.unbind();
+
+        // The stars over the space painted past the rim, behind the disc's depth, so they show only past the edge.
+        {
+            LLGLDepthTest depth(GL_TRUE, GL_FALSE, GL_LEQUAL);
+            mStars.draw();
+        }
 
         mHippo.draw(frame.mEye, disc);
     }
