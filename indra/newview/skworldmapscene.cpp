@@ -230,7 +230,7 @@ bool SKWorldMapScene::allocateTargets(S32 width, S32 height)
     const U32 h = static_cast<U32>(height);
     if (mScene.getWidth() != w || mScene.getHeight() != h)
     {
-        if (!mScene.allocate(w, h, GL_RGBA8)
+        if (!mScene.allocate(w, h, GL_RGBA8, true)
             || !mBlurA.allocate(std::max(w / 2, 1u), std::max(h / 2, 1u), GL_RGBA8)
             || !mBlurB.allocate(std::max(w / 2, 1u), std::max(h / 2, 1u), GL_RGBA8))
         {
@@ -290,7 +290,7 @@ void SKWorldMapScene::drawGround(const SKWorldMapFrame& frame, S32 width, S32 he
 
     mScene.bindTarget();
     glClearColor(clear_colour.mV[VRED], clear_colour.mV[VGREEN], clear_colour.mV[VBLUE], 1.f);
-    mScene.clear(GL_COLOR_BUFFER_BIT);
+    mScene.clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glClearColor(0.f, 0.f, 0.f, 0.f);
 
     LLGLDisable blend(GL_BLEND);
@@ -375,7 +375,18 @@ void SKWorldMapScene::drawGround(const SKWorldMapFrame& frame, S32 width, S32 he
         edgeRing(disc, frame.mEye, disc.mRadius + rim, SPACE_REACH, SPACE_COLOUR);
         edgeRing(disc, frame.mEye, disc.mRadius - rim, disc.mRadius + rim, RIM_COLOUR);
         gGL.flush();
+
+        // The disc into depth alone, so it hides whatever hangs beneath it wherever the rim covers it.
+        {
+            LLGLDepthTest depth(GL_TRUE, GL_TRUE, GL_ALWAYS);
+            gGL.setColorMask(false, false);
+            edgeRing(disc, frame.mEye, 0.0, disc.mRadius + rim, SPACE_COLOUR);
+            gGL.flush();
+            gGL.setColorMask(true, true);
+        }
         gUIProgram.unbind();
+
+        mHippo.draw(frame.mEye, disc);
     }
 
     popMatrices();
@@ -866,6 +877,7 @@ void SKWorldMapScene::drawAgents(const SKWorldMapFrame& frame, const LLRect& rec
 
 void SKWorldMapScene::release()
 {
+    mHippo.release();
     mScene.release();
     mBlurA.release();
     mBlurB.release();

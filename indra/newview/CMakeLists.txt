@@ -1003,6 +1003,7 @@ if(AL_BUILD_VIEWER)
     skmodalviewmath.cpp # <SK:Nexii> modal view
     sktoolmappan.cpp # <SK:Nexii> modal view
     skmapmode.cpp # <SK:Nexii> 3D world map
+    skworldmaphippo.cpp # <SK:Nexii> 3D world map
     skworldmapmath.cpp # <SK:Nexii> 3D world map
     skworldmaproads.cpp # <SK:Nexii> 3D world map
     skworldmapsearch.cpp # <SK:Nexii> 3D world map
@@ -1893,6 +1894,7 @@ if(AL_BUILD_VIEWER)
     skmodalviewmath.h # <SK:Nexii> modal view
     sktoolmappan.h # <SK:Nexii> modal view
     skmapmode.h # <SK:Nexii> 3D world map
+    skworldmaphippo.h # <SK:Nexii> 3D world map
     skworldmapmath.h # <SK:Nexii> 3D world map
     skworldmaproads.h # <SK:Nexii> 3D world map
     skworldmapsearch.h # <SK:Nexii> 3D world map

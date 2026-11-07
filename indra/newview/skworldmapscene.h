@@ -27,6 +27,7 @@
 #include "llrect.h"
 #include "llrendertarget.h"
 #include "skworldmapmath.h"
+#include "skworldmaphippo.h"
 #include "skworldmaproads.h"
 #include "skworldmapterrain.h"
 #include "skworldmaptiles.h"
@@ -83,6 +84,7 @@ private:
     LLRenderTarget mBlurA;
     LLRenderTarget mBlurB;
     SKWorldMapTiles mTiles;
+    SKWorldMapHippo mHippo;
     SKWorldMapRoads mRoads;
     SKWorldMapTerrain mTerrain;
     SKWorldMapSurfaceSource* mSurfaces = nullptr;

@@ -3290,6 +3290,43 @@
             <key>Value</key>
             <real>60.0</real>
         </map>
+        <key>SKWorldMapHippoMesh</key>
+        <map>
+            <key>Comment</key>
+            <string>Mesh asset of what carries the world under the 3D world map's edge; null draws nothing</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>String</string>
+            <key>Value</key>
+            <string>4f914a48-21c0-8a27-0dfa-8aa07686f990</string>
+        </map>
+        <key>SKWorldMapHippoSize</key>
+        <map>
+            <key>Comment</key>
+            <string>Size of SKWorldMapHippoMesh as uploaded, in metres; the asset keeps only its unit box, so this restores its proportions</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Vector3</string>
+            <key>Value</key>
+            <array>
+                <real>58.37</real>
+                <real>25.08</real>
+                <real>37.60</real>
+            </array>
+        </map>
+        <key>SKWorldMapHippoTexture</key>
+        <map>
+            <key>Comment</key>
+            <string>Base colour texture of SKWorldMapHippoMesh, lit by ambient light alone</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>String</string>
+            <key>Value</key>
+            <string>c6d5425e-daaf-9998-a013-def53c145585</string>
+        </map>
         <key>SKWorldMapMoveSpeed</key>
         <map>
             <key>Comment</key>
