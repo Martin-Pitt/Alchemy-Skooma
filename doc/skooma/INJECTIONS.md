@@ -1850,3 +1850,13 @@ the record. Tools and the decision: `V:\Scratch\icon-weight\` (`DECISION.md`).
 | `skins/default/xui/{en,ja}/panel_preferences_chat_general.xml` | "Who can reach me" dropdowns; notification and sound panels moved out; old checkbox removed | unmarked |
 | `skins/default/xui/{en,ja}/panel_preferences_chat_notifications.xml` | New: the moved notification and sound panels | new file |
 | `skins/default/xui/{en,ja}/panel_preferences_chat_rejection.xml` | Ad-hoc dropdown removed (now on General) | XML comment (en) |
+
+## Window mouse leave
+
+Branch `feature-ui/window-mouse-leave`. No files of its own.
+
+### Injection sites
+
+| File | What | Why there |
+|---|---|---|
+| `indra/newview/llviewerwindow.cpp` | `updateUI` builds the hover set only while `mMouseInWindow` or a view has captured the mouse | The set is built from the last mouse position, which stays inside a view after the cursor leaves the window; empty, the usual set difference sends `onMouseLeave` to everything it last hovered. `handleMouseLeave` keeps `mMouseInWindow` true while something has capture, so drags keep theirs |
