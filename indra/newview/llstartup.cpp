@@ -262,6 +262,8 @@
 #include "llvoavatarself.h"
 #include "llweb.h"
 #include "llworld.h"
+#include "skterraincache.h" // <SK:Nexii>
+#include "skterraincapture.h" // <SK:Nexii>
 #include "llworldmapmessage.h"
 #include "llxfermanager.h"
 #include "pipeline.h"
@@ -1354,6 +1356,10 @@ bool idle_startup()
     if(STATE_LOGIN_AUTH_INIT == LLStartUp::getStartupState())
     {
         gDebugInfo["GridName"] = LLGridManager::getInstance()->getGridId();
+        // <SK:Nexii> The region terrain cache keeps a directory per grid and captures the live regions' ground.
+        SKTerrainCache::instance().setGrid(LLGridManager::getInstance()->getGridId());
+        SKTerrainCapture::instance().start();
+        // </SK:Nexii>
 
         // Update progress status and the display loop.
         auth_desc = LLTrans::getString("LoginInProgress");

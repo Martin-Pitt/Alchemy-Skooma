@@ -104,7 +104,7 @@ public:
     void setAccess (U32 accesscode) { mAccess = accesscode; }
     void setRegionFlags (U32 region_flags) { mRegionFlags = region_flags; }
     void setLandForSaleImage (LLUUID image_id);
-//  void setWaterHeight (F32 water_height) { mWaterHeight = water_height; }
+    void setWaterHeight (F32 water_height) { mWaterHeight = water_height; } // <SK:Nexii>
 
     // Accessors
     const std::string& getName() const { return mName; }
@@ -158,7 +158,7 @@ private:
     U32  mAccess;               // Down/up and maturity rating of the region
     U32 mRegionFlags;           // Tell us if the siminfo has been received (if non 0) and what kind of region it is (Sandbox, allow damage)
     // Currently not used but might prove useful one day so we comment out
-//  F32 mWaterHeight;           // Water height on the region (not actively used)
+    F32 mWaterHeight = 20.f;    // <SK:Nexii> Water height on the region, from the map
 
     // Handling the "land for sale / land for auction" overlay image
     LLUUID mMapImageID;                     // Image ID of the overlay image
