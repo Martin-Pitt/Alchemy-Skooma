@@ -351,6 +351,16 @@ void SKMapMode::recentre()
     gAgentCamera.setCameraPosAndFocusGlobal(gAgentCamera.getCameraPositionGlobal() + offset, focus + offset, LLUUID::null);
 }
 
+bool SKMapMode::pickGround(S32 x, S32 y, LLVector3d& ground) const
+{
+    // Alt-click focus. Logged, as it is rare, so a click that seems ignored shows whether it got here.
+    const bool hit = groundUnderCursor(x, y, ground);
+    LL_INFOS("WorldMap") << "map focus pick at " << x << "," << y << ": "
+                         << (hit ? llformat("ground %.1f, %.1f, %.1f", ground.mdV[VX], ground.mdV[VY], ground.mdV[VZ]) : std::string("no ground"))
+                         << LL_ENDL;
+    return hit;
+}
+
 bool SKMapMode::groundUnderCursor(S32 x, S32 y, LLVector3d& ground) const
 {
     // The map's surface where the cursor's ray first reaches it: terrain where the map has heights, the
@@ -479,7 +489,13 @@ void SKMapMode::limitTilt()
     const F64 elevation = std::asin(llclamp(-to_focus.mdV[VZ] / distance, -1.0, 1.0));
     if (elevation >= soft)
     {
+        mTiltAdjusting = false;
         return;
+    }
+    if (!mTiltAdjusting)
+    {
+        mTiltAdjusting = true;
+        LL_INFOS("WorldMap") << "map tilt limit engaged at " << elevation * RAD_TO_DEG << " degrees" << LL_ENDL;
     }
     F64 target = elevation;
     if (elevation < hard)

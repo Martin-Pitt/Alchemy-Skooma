@@ -64,7 +64,7 @@ public:
     void onTopChanged(bool on_top) override;
     void shutdownModal() override { shutdown(); }
     void renderModal(const LLRect& world_rect_raw) override { render(world_rect_raw); }
-    bool pickGround(S32 x, S32 y, LLVector3d& ground) const override { return groundUnderCursor(x, y, ground); }
+    bool pickGround(S32 x, S32 y, LLVector3d& ground) const override;
     /// The map's tile plane below `eye`: the flycam's speed is measured from it, and the view is about it
     /// while the flycam leaves the camera's focus behind.
     bool groundBelow(const LLVector3d& eye, LLVector3d& ground) const override;
@@ -104,6 +104,7 @@ private:
     SKWorldMapFrame frame() const;
     void removeViews();
     void limitTilt();
+    bool mTiltAdjusting = false;    ///< the tilt limit is moving the camera; logged as it starts
 
     bool mOpen = false;
     bool mHasMapCamera = false;     ///< the map camera has been set once, so later opens resume it
