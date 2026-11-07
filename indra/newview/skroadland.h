@@ -59,10 +59,21 @@ namespace skroad::land
     const EdgeMap& edgeMap(LLViewerRegion* region, F64 now);
 
     bool lindenLandAt(F64 x, F64 y);                // the parcel overlay's public land
+    struct ParcelRoad
+    {
+        Road road = Road::Unknown;                  // Linden road land by the overlay and the parcel's owner
+        bool named = false, destination = false;    // its name is in; it names a place (a station), not a road
+        std::string name;
+    };
+    ParcelRoad parcelRoadAt(F64 x, F64 y);
+    bool destinationName(const std::string& name);
     void watchBanLines();                           // keeps the ban lines the simulator sends, per region
     bool banLineAt(F64 x, F64 y);
     bool privateLandAt(F64 x, F64 y);               // not Linden land, not the agent's nor its group's
     const char* refusedAt(F64 x, F64 y, F64 z);     // a ban line, or private land off the road; null where allowed
+    // refusedAt's reason for land not Linden road's with SKRoadAutopilotPrivateRoads off ("<prefix><parcel> <owner class>"):
+    // a road end, turned round at
+    constexpr const char* PRIVATE_AHEAD = "private land ahead: ";
 
     // A parcel's box covers a global point (a metre's slack).
     bool parcelCovers(const LLParcel* p, LLViewerRegion* region, const LLVector3d& at);

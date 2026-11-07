@@ -25,6 +25,7 @@
 #include "llviewerprecompiledheaders.h"
 #include "skroadhost.h"
 #include "skroadmodel.h"
+#include "skroadland.h"
 #include "alobjectproperties.h"
 #include "llagent.h"
 #include "lldir.h"
@@ -562,6 +563,22 @@ namespace skroad::host
         LLViewerRegion* region = LLWorld::getInstance()->getRegionFromPosGlobal(at);
         const LLViewerParcelOverlay* overlay = region ? region->getParcelOverlay() : nullptr;
         return overlay ? S32(overlay->ownership(region->getPosRegionFromGlobal(at)) & PARCEL_COLOR_MASK) : -1;
+    }
+
+    S32 roadLandAt(F64 x, F64 y, std::string* name)
+    {
+        const land::ParcelRoad p = land::parcelRoadAt(x, y);
+        if (name)
+        {
+            *name = p.named ? p.name : std::string("(name not in)");
+        }
+        return p.destination ? 2 : p.road == land::Road::Linden ? 1 : p.road == land::Road::Other ? 0 : -1;
+    }
+
+    bool privateRoadsAllowed()
+    {
+        static LLCachedControl<bool> allowed(gSavedSettings, "SKRoadAutopilotPrivateRoads", false);
+        return allowed;
     }
 
 

@@ -108,6 +108,7 @@ namespace skroad::land
     struct ParcelAsk;
     std::map<std::pair<U64, U32>, std::unique_ptr<ParcelAsk>> sParcelAsks;     // (region handle, row << 16 | col)
     std::map<LLUUID, Road> sParcelRoad;                                         // by parcel id
+    std::map<LLUUID, std::string> sParcelName;                                  // by parcel id
 
     struct ParcelAsk : public LLRemoteParcelInfoObserver
     {
@@ -115,6 +116,7 @@ namespace skroad::land
         F64 asked = -1e9;
         Road road = Road::Unknown;
         LLUUID owner;
+        std::string name;           // the parcel's, once answered
         bool group_owned = false;
         F64 answered = -1.0;        // when its owner arrived (the owner's profile and name get 20 s to arrive)
         bool via_own_cap = false;   // after a failure through one cap, the other is asked: the agent region's, its own
@@ -124,9 +126,12 @@ namespace skroad::land
         void setParcelID(const LLUUID& id) override
         {
             parcel = id;
-            if (auto it = sParcelRoad.find(id); it != sParcelRoad.end() && it->second != Road::Unknown)
+            auto known_name = sParcelName.find(id);
+            if (auto it = sParcelRoad.find(id); it != sParcelRoad.end() && it->second != Road::Unknown && known_name != sParcelName.end())
             {
                 road = it->second;
+                name = known_name->second;
+                answered = LLTimer::getTotalSeconds();
                 return;
             }
             LLRemoteParcelInfoProcessor::getInstance()->addObserver(id, this);
@@ -137,6 +142,8 @@ namespace skroad::land
             LLRemoteParcelInfoProcessor::getInstance()->removeObserver(d.parcel_id, this);
             ++sEdgeAsks.answered;
             owner = d.owner_id;
+            name = d.name;
+            sParcelName[d.parcel_id] = d.name;
             // ParcelInfoReply's flags: 0x1 mature, 0x2 adult, 0x4 group owned (owner_id is then the group's id)
             group_owned = (d.flags & 0x4) != 0;
             answered = LLTimer::getTotalSeconds();
@@ -146,7 +153,7 @@ namespace skroad::land
                 sParcelRoad[d.parcel_id] = road;
             }
             // ids only, no names: an owner or group missed as a road's shows here
-            LL_INFOS("SKRoadDriver") << "edge parcel " << d.parcel_id << " in " << d.sim_name << " owner " << d.owner_id
+            LL_INFOS("SKRoadDriver") << "edge parcel " << d.parcel_id << " \"" << d.name << "\" in " << d.sim_name << " owner " << d.owner_id
                                      << (group_owned ? " (group)" : "") << llformat(" flags 0x%x", U32(d.flags))
                                      << (road == Road::Linden  ? ": Linden road"
                                          : road == Road::Other ? ": not Linden"
@@ -354,6 +361,83 @@ namespace skroad::land
         return overlay && (overlay->ownership(region->getPosRegionFromGlobal(at)) & PARCEL_COLOR_MASK) == PARCEL_PUBLIC;
     }
 
+    // A parcel named for a place people go to (a station, an airport, a park), not for the road: a destination, Linden's
+    // or a mole's as it may be (SLRR Melanthia Station's forecourt beside Route 5 Rez Zone, Nexii 2026-11-07).
+    bool destinationName(const std::string& raw)
+    {
+        std::string n = raw;
+        LLStringUtil::toLower(n);
+        auto word = [&n](const char* w)
+        {
+            const size_t len = strlen(w);
+            for (size_t at = n.find(w); at != std::string::npos; at = n.find(w, at + 1))
+            {
+                const bool l = at == 0 || !isalnum(U8(n[at - 1])), r = at + len >= n.size() || !isalnum(U8(n[at + len]));
+                if (l && r)
+                {
+                    return true;
+                }
+            }
+            return false;
+        };
+        for (const char* road : { "route", "road", "rd", "street", "highway", "hwy", "avenue", "ave", "rez zone", "protected land" })
+        {
+            if (word(road))
+            {
+                return false;
+            }
+        }
+        for (const char* place : { "station", "slrr", "airport", "airfield", "terminal", "harbor", "harbour", "port", "marina",
+                                   "park", "plaza", "infohub", "welcome area", "forecourt", "platform", "depot", "square" })
+        {
+            if (word(place))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // The road state of the parcel at a point: Linden road land (the overlay's public land, or a parcel whose owner,
+    // asked for as the edge map asks, is Governor Linden, LDPW, a Linden or a mole), and whether its name makes it
+    // a destination. The owner ask also brings the name; unknown until the overlay and the answer are in.
+    ParcelRoad parcelRoadAt(F64 x, F64 y)
+    {
+        ParcelRoad out;
+        const LLVector3d at(x, y, 0);
+        LLViewerRegion* region = LLWorld::getInstance()->getRegionFromPosGlobal(at);
+        const LLViewerParcelOverlay* overlay = region ? region->getParcelOverlay() : nullptr;
+        if (!overlay)
+        {
+            return out;
+        }
+        const LLVector3 local = region->getPosRegionFromGlobal(at);
+        const S32 n = S32(region->getWidth() / PARCEL_GRID_STEP_METERS);
+        S32 row = std::clamp(S32(local.mV[VY] / PARCEL_GRID_STEP_METERS), 0, n - 1);
+        S32 col = std::clamp(S32(local.mV[VX] / PARCEL_GRID_STEP_METERS), 0, n - 1);
+        // asked once per parcel, at its first cell (its label's), not once per cell the walk samples
+        const std::vector<S32>& labels = parcelLabels(region);
+        if (size_t(n) * n == labels.size() && labels[row * n + col] >= 0)
+        {
+            const size_t first = std::find(labels.begin(), labels.end(), labels[row * n + col]) - labels.begin();
+            row = S32(first) / n;
+            col = S32(first) % n;
+        }
+        out.road = edgeParcel(region, row, col, LLTimer::getTotalSeconds());
+        if ((overlay->ownership(local) & PARCEL_COLOR_MASK) == PARCEL_PUBLIC)
+        {
+            out.road = Road::Linden;
+        }
+        auto it = sParcelAsks.find({ region->getHandle(), (U32(row) << 16) | U32(col) });
+        if (it != sParcelAsks.end() && it->second->answered >= 0.0)
+        {
+            out.name = it->second->name;
+            out.named = true;
+            out.destination = destinationName(out.name);
+        }
+        return out;
+    }
+
 }
 
 namespace skroad::land
@@ -435,6 +519,23 @@ namespace skroad::land
         if (privateLandAt(x, y) && !roadTopAt(x, y, z, 1.5, 3.0, top))
         {
             return "private land off the road";
+        }
+        // Linden roads only (SKRoadAutopilotPrivateRoads off): a parcel known not to be Linden road land is refused
+        // even under the road's own pieces (a resident's road on their parcel)
+        static LLCachedControl<bool> private_roads(gSavedSettings, "SKRoadAutopilotPrivateRoads", false);
+        if (!private_roads)
+        {
+            const ParcelRoad p = parcelRoadAt(x, y);
+            if (p.road == Road::Other)
+            {
+                static std::string why;
+                const LLVector3d at(x, y, 0);
+                LLViewerRegion* region = LLWorld::getInstance()->getRegionFromPosGlobal(at);
+                const LLViewerParcelOverlay* overlay = region ? region->getParcelOverlay() : nullptr;
+                const S32 own = overlay ? S32(overlay->ownership(region->getPosRegionFromGlobal(at)) & PARCEL_COLOR_MASK) : -1;
+                why = std::string(PRIVATE_AHEAD) + (p.named ? "\"" + p.name + "\"" : std::string("(name not in)")) + " " + ownershipName(own);
+                return why.c_str();
+            }
         }
         return nullptr;
     }
