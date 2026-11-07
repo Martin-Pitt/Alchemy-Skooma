@@ -305,47 +305,7 @@ void SKWorldMapScene::drawGround(const SKWorldMapFrame& frame, S32 width, S32 he
         };
 
         gGL.getTextureSlot(0)->bindSampled(draw.mTexture, ALSamplers::AnisoClamp);
-        // Regions with heights draw at them in drawTerrain; a tilted view would show this flat copy beside
-        // them, so the tile is drawn only over its regions without heights, row by row in runs.
-        const S32 n = draw.mCover.regionsPerSide();
-        bool any_terrain = false;
-        for (const auto& [handle, r] : mTerrain.regions())
-        {
-            const S32 gx = static_cast<S32>(r.mOrigin.mdV[VX] / REGION_METRES) - draw.mCover.mGridX;
-            const S32 gy = static_cast<S32>(r.mOrigin.mdV[VY] / REGION_METRES) - draw.mCover.mGridY;
-            if (gx >= 0 && gy >= 0 && gx < n && gy < n)
-            {
-                any_terrain = true;
-                break;
-            }
-        }
-        if (!any_terrain)
-        {
-            flat(0.0, 0.0, 1.0, 1.0);
-            continue;
-        }
-        const auto has_terrain = [&](S32 i, S32 j) {
-            const U32 x = static_cast<U32>((draw.mCover.mGridX + i) * REGION_METRES);
-            const U32 y = static_cast<U32>((draw.mCover.mGridY + j) * REGION_METRES);
-            return mTerrain.regions().count(to_region_handle(x, y)) != 0;
-        };
-        for (S32 j = 0; j < n; ++j)
-        {
-            S32 run = -1;
-            for (S32 i = 0; i <= n; ++i)
-            {
-                const bool open = i < n && !has_terrain(i, j);
-                if (open && run < 0)
-                {
-                    run = i;
-                }
-                else if (!open && run >= 0)
-                {
-                    flat(static_cast<F64>(run) / n, static_cast<F64>(j) / n, static_cast<F64>(i) / n, static_cast<F64>(j + 1) / n);
-                    run = -1;
-                }
-            }
-        }
+        flat(0.0, 0.0, 1.0, 1.0);
     }
     drawTerrain(frame, height);
     gGL.flush();
@@ -391,8 +351,8 @@ void SKWorldMapScene::drawTerrain(const SKWorldMapFrame& frame, S32 height)
     };
     std::sort(order.begin(), order.end(), [&](auto a, auto b) { return centre_distance(a) > centre_distance(b); });
 
-    // Under each raised region its footprint on the flat plane is filled dark, so the strip a tilted view
-    // uncovers between the two reads as the terrain's shaded side rather than as sea.
+    // Each raised region's footprint on the flat plane is painted dark over its flat tile, so the tile is not
+    // seen twice: the strip a tilted view uncovers between the two reads as the terrain's shaded side.
     gGL.getTextureSlot(0)->unbind();
     gGL.color4fv(FOOTPRINT_COLOUR.mV);
     const F32 ground_z = static_cast<F32>(GROUND_Z - frame.mEye.mdV[VZ]);
