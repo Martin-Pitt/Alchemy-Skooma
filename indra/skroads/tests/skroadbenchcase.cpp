@@ -505,6 +505,16 @@ namespace skroad::host
     {
     }
 
+    S32 roadLandAt(F64 x, F64 y, std::string*)
+    {
+        return parcelOwnership(x, y) == 0 ? 1 : -1;      // PARCEL_PUBLIC; a case carries no parcel owners
+    }
+
+    bool privateRoadsAllowed()
+    {
+        return true;        // the cases were recorded before the rule: their branches stand
+    }
+
     S32 parcelOwnership(F64 x, F64 y)
     {
         if (!sCase)

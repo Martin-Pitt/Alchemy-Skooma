@@ -120,7 +120,7 @@ public:
     void onPhysicsFlagsFetchFailure(const LLUUID& object_id);
     void updatePhysicsShapeType(const LLUUID& object_id, S32 type);
     // <SK:Nexii> census: physics shape types by id, for parts the region has cached but not instantiated
-    void requestPhysicsShapeType(const LLUUID& object_id);
+    void requestPhysicsShapeType(const LLUUID& object_id, U64 region_handle);  // <SK:Nexii> census: a cached part, by its region
     bool knownPhysicsShapeType(const LLUUID& object_id, U8& type) const;
     void notePhysicsShapeType(const LLUUID& object_id, U8 type) { mKnownPhysicsShapeTypes[object_id] = type; }
     // </SK:Nexii>
@@ -239,6 +239,8 @@ protected:
     //set of objects that need to update their physics flags
     uuid_set_t   mStalePhysicsFlags;
     uuid_set_t   mPendingPhysicsFlags;
+    boost::unordered_map<LLUUID, U64> mStalePhysicsRegions; // <SK:Nexii> census: the region of a stale id with no object
+    bool mPhysicsFlagsLoopStarted = false; // <SK:Nexii> census
     boost::unordered_map<LLUUID, U8> mKnownPhysicsShapeTypes; // <SK:Nexii> census: every answer, kept for revival from the cache
 
     std::vector<LLDebugBeacon> mDebugBeacons;
