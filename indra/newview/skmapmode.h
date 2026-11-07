@@ -104,7 +104,10 @@ private:
     SKWorldMapFrame frame() const;
     void removeViews();
     void limitTilt();
+    void traceCamera();
     bool mTiltAdjusting = false;    ///< the tilt limit is moving the camera; logged as it starts
+    mutable F64 mTraceUntil = 0.0;  ///< after a focus pick, the camera is logged until this uptime
+    F64 mTraceNext = 0.0;
 
     bool mOpen = false;
     bool mHasMapCamera = false;     ///< the map camera has been set once, so later opens resume it

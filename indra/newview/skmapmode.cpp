@@ -355,6 +355,7 @@ bool SKMapMode::pickGround(S32 x, S32 y, LLVector3d& ground) const
 {
     // Alt-click focus. Logged, as it is rare, so a click that seems ignored shows whether it got here.
     const bool hit = groundUnderCursor(x, y, ground);
+    mTraceUntil = LLTimer::getUptimeSeconds() + 1.0;
     LL_INFOS("WorldMap") << "map focus pick at " << x << "," << y << ": "
                          << (hit ? llformat("ground %.1f, %.1f, %.1f", ground.mdV[VX], ground.mdV[VY], ground.mdV[VZ]) : std::string("no ground"))
                          << LL_ENDL;
@@ -514,10 +515,32 @@ void SKMapMode::limitTilt()
     gAgentCamera.skipCameraSmoothing();
 }
 
+void SKMapMode::traceCamera()
+{
+    // For a second after a focus pick, four lines of where the camera and its focus went, so a pick that
+    // seems ignored shows what took the focus back.
+    const F64 now = LLTimer::getUptimeSeconds();
+    if (now > mTraceUntil || now < mTraceNext)
+    {
+        return;
+    }
+    mTraceNext = now + 0.25;
+    const LLVector3d target = gAgentCamera.getFocusTargetGlobal();
+    const LLVector3d focus = gAgentCamera.getFocusGlobal();
+    const LLVector3d eye = gAgentCamera.getCameraPositionGlobal();
+    LL_INFOS("WorldMap") << "map camera: target " << llformat("%.1f, %.1f, %.1f", target.mdV[VX], target.mdV[VY], target.mdV[VZ])
+                         << " focus " << llformat("%.1f, %.1f, %.1f", focus.mdV[VX], focus.mdV[VY], focus.mdV[VZ])
+                         << " eye " << llformat("%.1f, %.1f, %.1f", eye.mdV[VX], eye.mdV[VY], eye.mdV[VZ])
+                         << " animating " << gAgentCamera.getCameraAnimating() << " on avatar " << gAgentCamera.getFocusOnAvatar()
+                         << " mode " << gAgentCamera.getCameraMode() << " top " << (SKModalView::top() == this)
+                         << " flycam " << LLViewerJoystick::getInstance()->getOverrideCamera() << LL_ENDL;
+}
+
 void SKMapMode::render(const LLRect& world_rect_raw)
 {
     if (mOpen)
     {
+        traceCamera();
         limitTilt();
         mScene.render(frame(), world_rect_raw, LLTimer::getUptimeSeconds());
     }
