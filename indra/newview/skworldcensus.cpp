@@ -1627,6 +1627,23 @@ void SKWorldCensus::gatherCached()
     }
 }
 
+bool SKWorldCensus::cachedPart(const LLUUID& part, SKCachedObject& object, SKCachedObject& root) const
+{
+    const auto it = mCachedParts.find(part);
+    if (it == mCachedParts.end())
+    {
+        return false;
+    }
+    const auto own = mDecoded.find(it->second.first), top = mDecoded.find(it->second.second);
+    if (own == mDecoded.end() || top == mDecoded.end() || !own->second.mOk || !top->second.mOk || own->second.mObject.mId != part)
+    {
+        return false;
+    }
+    object = own->second.mObject;
+    root = top->second.mObject;
+    return true;
+}
+
 const SKCachedObject* SKWorldCensus::decoded(U64 region, LLVOCacheEntry& entry)
 {
     CachedDecode& decode = mDecoded[placeholderId(region, entry.getLocalID())];
@@ -1658,6 +1675,9 @@ LLUUID SKWorldCensus::visitCached(const CachedPart& part)
     {
         return LLUUID::null;
     }
+
+    mCachedParts[object->mId] = { placeholderId(part.mRegion, part.mEntry->getLocalID()),
+                                  placeholderId(part.mRegion, root_entry->getLocalID()) };
 
     PartFacts facts;
     facts.mPart = object->mId;
@@ -1694,7 +1714,7 @@ LLUUID SKWorldCensus::visitCached(const CachedPart& part)
     facts.mShape.mPhysicsType = facts.mPhysicsUnknown ? (U8)LLViewerObject::PHYSICS_SHAPE_PRIM : type;
     if (facts.mPhysicsUnknown && object->mMesh)
     {
-        gObjectList.requestPhysicsShapeType(object->mId);
+        gObjectList.requestPhysicsShapeType(object->mId, part.mRegion);
     }
     visitPart(facts, nullptr);
     return object->mId;
@@ -2068,6 +2088,10 @@ void SKWorldCensus::adoptFinish(FinishJob& job)
         for (auto it = mDecoded.begin(); it != mDecoded.end();)
         {
             it = (now - it->second.mUsed > 60.f) ? mDecoded.erase(it) : std::next(it);
+        }
+        for (auto it = mCachedParts.begin(); it != mCachedParts.end();)
+        {
+            it = mDecoded.count(it->second.first) ? std::next(it) : mCachedParts.erase(it);
         }
         for (auto it = mUnknownSince.begin(); it != mUnknownSince.end();)
         {

@@ -29,6 +29,8 @@
 #include "lluuid.h"
 #include "llvolume.h"
 
+#include <vector>
+
 class LLVOCacheEntry;
 
 /// A cached ObjectUpdateCompressed body, taken apart as LLViewerObject and
@@ -49,6 +51,7 @@ struct SKCachedObject
     bool mSculpted = false;
     bool mMesh = false;
     bool mFlexible = false;
+    std::vector<U8> mTextureEntry;  ///< the TextureEntry field as cached, empty where the body ends before it
 };
 
 /// False when the entry holds no body, or one that is not a volume or does not read to its end of the volume
