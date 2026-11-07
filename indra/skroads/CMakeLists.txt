@@ -7,9 +7,12 @@
 
 add_library(skroads STATIC)
 
-target_sources(skroads PRIVATE skroadkits.cpp skroadmodel.cpp skroadsigns.cpp)
+target_sources(
+  skroads
+  PRIVATE skroadkits.cpp skroadmodel.cpp skroadroute.cpp skroadroutedata.cpp skroadroutefollow.cpp skroadsigns.cpp
+)
 
-target_sources(skroads PUBLIC FILE_SET HEADERS FILES skroadkits.h skroadmodel.h skroadsigns.h)
+target_sources(skroads PUBLIC FILE_SET HEADERS FILES skroadkits.h skroadmodel.h skroadroute.h skroadroutedata.h skroadroutefollow.h skroadsigns.h)
 
 target_link_libraries(skroads PRIVATE al::flags ll::simdjson PUBLIC skair skcensus llmath llcommon)
 
@@ -22,7 +25,7 @@ if(AL_BUILD_TESTS)
   al_add_test_binary(
     skroads_tests
     PROJECT skroads
-    SOURCES tests/skroadbench_test.cpp
+    SOURCES tests/skroadbench_test.cpp tests/skroadroute_test.cpp
     LIBRARIES skroads llcommon
     SUPPORT skroads_test_host
   )
