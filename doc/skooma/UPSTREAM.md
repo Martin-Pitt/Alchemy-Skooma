@@ -39,9 +39,14 @@ lands, is offered or is merged.
 | [`combat/lockout`](https://github.com/AlchemyViewer/Alchemy/pull/639) | Its own feature | Combat render lockout: in mouselook and 5 s after, see-through-wall debug views off and forced render state, restored after; only on damage-enabled land; removes mouselook IFF arrows and crosshair name/position text | `develop` | draft: AlchemyViewer/Alchemy#639 |
 | [`chat/contact-filters`](https://github.com/AlchemyViewer/Alchemy/pull/627) | Its own feature | Who can reach you per channel (IMs, calls, conferences incl. voice invites, group chat, group calls) as dropdowns on Chat > General, replacing the IM+call friends-only switch; chat notifications get their own tab | `develop` | open: AlchemyViewer/Alchemy#627 |
 | [`font/colrv1-stale-surface`](https://github.com/AlchemyViewer/Alchemy/pull/600) | Its own fix | Clear the per-thread COLRv1 raster paint before each glyph, so a glyph that failed mid-paint cannot leave a larger root surface for the next one to over-read | `develop` | merged upstream: AlchemyViewer/Alchemy#600 |
+| `world/roads` | World foundation | Road model on the census (pieces, lanes, joins, junctions, kits, signs) and the land it runs over; road bench tests | `develop` + `world/air` (+ `world/census`) | not yet |
+| `world/pathfinding` | World foundation | Route search with pluggable costs, route data, route following | `world/roads` | not yet |
+| `world/ground-autopilot` | World foundation | Drives a road vehicle along the model's lane; gears by user-supplied vehicle profile; recovery, region crossings, edge guard; seated picking no longer turns the avatar | `world/pathfinding` | not yet |
+| `world/roads-overlay` | Its own feature | Draws what the ground autopilot sees and decides | `world/ground-autopilot` | not yet |
+| `world/census` amends | Census | A cached part's texture entry and decoded body (`cachedPart`); physics-flag requests batched from a loop and sent to a cached part's own region | with `world/census` | with the census |
 
 Fork-only (not offered): the Atmo editor and keyframes UI, notecard and parcel transport,
-mini-map, and everything under `doc/skooma/` and `scripts/skooma/`.
+mini-map, the private worldmap survey and bot (`private-worldmap/*`), and everything under `doc/skooma/` and `scripts/skooma/`.
 
 ## Dependency graph
 
