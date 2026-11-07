@@ -4938,8 +4938,10 @@ namespace skroad::drive
             sView.jump = false;     // whatever lay past the cut
             // the line cut, the car held to the road short of it: a line that wandered off the road is no road end,
             // only the model's own end there is (the cut made one of every wander: dead ends and turns round)
-            const bool true_end = sView.road_end
-                                  && std::hypot(sView.road_end_x - q.x, sView.road_end_y - q.y) < REFUSE_TRUE_END_M;
+            // land not Linden road's (Linden roads only) is a road end wherever the line meets it: turned round at
+            const bool private_ahead = strncmp(why, PRIVATE_AHEAD, strlen(PRIVATE_AHEAD)) == 0;
+            const bool true_end = private_ahead
+                                  || (sView.road_end && std::hypot(sView.road_end_x - q.x, sView.road_end_y - q.y) < REFUSE_TRUE_END_M);
             sView.road_end = true_end;
             if (true_end)
             {
