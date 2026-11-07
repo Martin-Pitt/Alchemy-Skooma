@@ -352,6 +352,7 @@ Cut from `spike-road-parcels` on 2026-11-07: `foundation-world/roads` (on `found
 |---|---|---|
 | `indra/newview/skroadsurvey.h` / `.cpp`, `skroadkitsnaps.h` / `.cpp` | survey | Census recording, mesh keeps, sign survey, kit snapshots |
 | `indra/newview/skroadmission.h` / `.cpp`, `skroadbotapi.h` / `.cpp` | bot | The road mission and its local WebSocket API |
+| `indra/newview/skcachearchive.h` / `.cpp` | survey (`amend-survey/cache-archive`) | A never-evicting cold tier behind the asset, texture and object caches, for the road bot |
 
 ### Injection sites
 
@@ -361,10 +362,16 @@ Cut from `spike-road-parcels` on 2026-11-07: `foundation-world/roads` (on `found
 | `indra/newview/llviewercontrol.cpp` | Includes; `SKRoadSurvey` and `SKRoadMission` listeners | survey, bot |
 | `indra/newview/llnotificationmanager.cpp` | Include; `sk_road_mission::noteChat` in `onChat` (security warnings) | bot |
 | `indra/newview/pipeline.h` / `.cpp` | `LLPipeline::sSKKeepGroup` / `sSKKeepDrawable` and `skKeeps()`: while set, the world's passes (not probe captures) keep only those groups and drawables; what they turn away is still marked visible. Checked beside the cutout's in the group cull, `markVisible` and `stateSort` (`amend-survey/kitsnap-clear`) | survey: a kit snapshot shows the road set alone |
+| `indra/newview/pipeline.h` / `.cpp` | `LLPipeline::sSKAfterGBuffer`, called in the main view (`mRT == &mMainRT`, no cube snapshot) once the G-buffer is complete, before its lighting (`amend-survey/kitsnap-gbuffer`) | survey: the kit snapshot's repeat strip read from the G-buffer |
+| `indra/llrender/llrendertarget.h` / `.cpp` | `LLRenderTarget::readAttachment(attachment, x, y, w, h, format, type, data)` (`amend-survey/kitsnap-gbuffer`) | Reads one colour attachment back |
+| `indra/llfilesystem/llfilesystem.h` / `.cpp` | `LLFileSystem::sSKColdRead`; a hot miss reads the cold tier back in the constructor and `getExists`; `write` unlinks before truncating (`amend-survey/cache-archive`) | survey: the cache archive's read-through, and never truncating through its hard link |
+| `indra/newview/lltexturecache.cpp` | Include; `doRead` reads a miss from the cold tier (a lower discard there leaves the fetch going on), `doWrite` notes the write (`amend-survey/cache-archive`) | survey: cache archive |
+| `indra/newview/llvocache.cpp` | Include; `readFromCache` falls back to the cold tier on a miss (`amend-survey/cache-archive`) | survey: cache archive |
+| `indra/newview/llappviewer.cpp` | `sk_cache_archive::init()` with the caches, `sk_cache_archive::cleanup()` before they close (`amend-survey/cache-archive`) | survey: cache archive |
 
 ### Unmarked additions
 
-- `settings_alchemy.xml` — survey: `SKRoadSurvey{,Range}`, `SKRoadKitSnapshots`, `SKRoadSignSurvey`; bot: `SKRoadMission*`, `SKRoadBotApi{,Port}`.
+- `settings_alchemy.xml` — survey: `SKRoadSurvey{,Range}`, `SKRoadKitSnapshots`, `SKRoadSignSurvey`, `SKCacheArchiveDir`; bot: `SKRoadMission*`, `SKRoadBotApi{,Port}`.
 
 ---
 
