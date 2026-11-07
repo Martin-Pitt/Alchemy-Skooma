@@ -28,13 +28,16 @@
 #include "stdtypes.h"
 #include "v3dmath.h"
 
+#include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 class SKWorldMapRoadSource;
 
-/// Ground heights per region. Today only the connected regions have them, from their live terrain;
-/// the terrain cache will add the regions visited before and the dataset's behind the same lookups.
+/// Ground heights per region: the connected regions' live terrain, else a packed file of the dataset's
+/// (SKWorldMapTerrainPack, a debug setting until the terrain cache serves it);
+/// the terrain cache will replace the pack behind the same lookups.
 class SKWorldMapTerrain
 {
 public:
@@ -48,6 +51,7 @@ public:
         std::vector<F32> mHeights;  ///< SAMPLES x SAMPLES, row 0 south, max(land, water)
         F64 mBuilt = 0.0;
         const void* mRoads = nullptr; ///< the roads it was lowered under, so their arrival rebuilds it
+        bool mLive = false;         ///< from a connected region's live terrain, rather than the pack
 
         F32 at(S32 i, S32 j) const { return mHeights[j * SAMPLES + i]; }
     };
@@ -61,10 +65,21 @@ public:
     /// The ground at a global point: the region's grid where there is one, else `fallback`.
     F64 groundAt(const LLVector3d& p, F64 fallback) const;
 
-    void clear() { mRegions.clear(); }
+    void clear()
+    {
+        mRegions.clear();
+        mPacked.clear();
+        mPackPath.clear();
+    }
 
 private:
     static void lowerUnderRoads(Region& r, U64 handle, const SKWorldMapRoadSource* roads);
+    static F64 interpolate(const Region& r, F64 u, F64 v);
+    void loadPack(const std::string& path);
+    void updatePack(const SKWorldMapRoadSource* roads, const std::unordered_set<U64>& live);
+
+    std::unordered_map<U64, std::vector<F32>> mPacked;  ///< SKWorldMapTerrainPack's regions, as read
+    std::string mPackPath;
 
     std::unordered_map<U64, Region> mRegions;
 };

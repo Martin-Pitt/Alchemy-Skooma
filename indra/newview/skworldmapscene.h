@@ -71,7 +71,7 @@ public:
 private:
     bool allocateTargets(S32 width, S32 height);
     void drawGround(const SKWorldMapFrame& frame, S32 width, S32 height, F64 now);
-    void drawTerrain(const SKWorldMapFrame& frame);
+    void drawTerrain(const SKWorldMapFrame& frame, S32 height);
     void tiltShift(const SKWorldMapFrame& frame, const LLRect& rect);
     void pollAgents(const SKWorldMapFrame& frame, F64 now);
     void drawAgents(const SKWorldMapFrame& frame, const LLRect& rect);

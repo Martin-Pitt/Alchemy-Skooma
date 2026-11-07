@@ -297,7 +297,7 @@ void SKWorldMapScene::drawGround(const SKWorldMapFrame& frame, S32 width, S32 he
         gGL.vertex3f(xb, yb, z);
         gGL.end();
     }
-    drawTerrain(frame);
+    drawTerrain(frame, height);
     gGL.flush();
     gGL.getTextureSlot(0)->unbind();
     gUIProgram.unbind();
@@ -308,16 +308,28 @@ void SKWorldMapScene::drawGround(const SKWorldMapFrame& frame, S32 width, S32 he
     mScene.flush();
 }
 
-void SKWorldMapScene::drawTerrain(const SKWorldMapFrame& frame)
+void SKWorldMapScene::drawTerrain(const SKWorldMapFrame& frame, S32 height)
 {
     // Each region with heights is drawn again over its flat tile, as a grid at its heights, with the finest
     // texture this frame drew there. The flat tile under it never shows, as the grid covers its footprint.
     LLVector3d forward, right, up;
     viewBasis(frame.mYaw, frame.mPitch, forward, right, up);
+    const F64 focal = height * 0.5 / std::tan(frame.mFovY * 0.5);
     std::vector<const SKWorldMapTerrain::Region*> order;
     for (const auto& [handle, r] : mTerrain.regions())
     {
-        if (!r.mHeights.empty())
+        if (r.mHeights.empty())
+        {
+            continue;
+        }
+        // Skip a region wholly behind the eye.
+        bool ahead = false;
+        for (S32 c = 0; c < 4 && !ahead; ++c)
+        {
+            const LLVector3d corner(r.mOrigin.mdV[VX] + (c & 1 ? r.mWidth : 0.0), r.mOrigin.mdV[VY] + (c & 2 ? r.mWidth : 0.0), GROUND_Z);
+            ahead = (corner - frame.mEye) * forward > 0.0;
+        }
+        if (ahead)
         {
             order.push_back(&r);
         }
@@ -358,9 +370,22 @@ void SKWorldMapScene::drawTerrain(const SKWorldMapFrame& frame)
             v = static_cast<F32>(best->mUV[1] + (best->mUV[3] - best->mUV[1]) * fv);
         };
 
-        gGL.getTextureSlot(0)->bindSampled(best->mTexture, ALSamplers::AnisoClamp);
+        // Coarser where a cell would cover few pixels: every s-th sample, s a power of two dividing 32.
         constexpr S32 N = SKWorldMapTerrain::SAMPLES;
-        const F64 step = r.mWidth / (N - 1);
+        constexpr F64 MIN_CELL_PIXELS = 6.0;
+        const F64 near_x = llclamp(frame.mEye.mdV[VX], r.mOrigin.mdV[VX], r.mOrigin.mdV[VX] + r.mWidth);
+        const F64 near_y = llclamp(frame.mEye.mdV[VY], r.mOrigin.mdV[VY], r.mOrigin.mdV[VY] + r.mWidth);
+        const F64 nearest =
+            std::max(LLVector3d(near_x - frame.mEye.mdV[VX], near_y - frame.mEye.mdV[VY], GROUND_Z - frame.mEye.mdV[VZ]).magVec(), 1.0);
+        S32 s = 1;
+        while (s < N - 1 && (r.mWidth / (N - 1)) * s * focal / nearest < MIN_CELL_PIXELS)
+        {
+            s *= 2;
+        }
+        const S32 M = (N - 1) / s + 1;
+        const F64 step = r.mWidth / (M - 1);
+
+        gGL.getTextureSlot(0)->bindSampled(best->mTexture, ALSamplers::AnisoClamp);
         const auto vertex = [&](S32 i, S32 j) {
             const F64 x = r.mOrigin.mdV[VX] + i * step;
             const F64 y = r.mOrigin.mdV[VY] + j * step;
@@ -368,7 +393,7 @@ void SKWorldMapScene::drawTerrain(const SKWorldMapFrame& frame)
             texcoord(x, y, u, v);
             gGL.texCoord2f(u, v);
             gGL.vertex3f(static_cast<F32>(x - frame.mEye.mdV[VX]), static_cast<F32>(y - frame.mEye.mdV[VY]),
-                         static_cast<F32>(r.at(i, j) - frame.mEye.mdV[VZ]));
+                         static_cast<F32>(r.at(i * s, j * s) - frame.mEye.mdV[VZ]));
         };
 
         // No depth buffer: a heightfield draws correctly far to near. Strips run across the view, the
@@ -379,17 +404,18 @@ void SKWorldMapScene::drawTerrain(const SKWorldMapFrame& frame)
         const F64 eye_outer = strips_along_y ? eye_i : eye_j;
         const F64 eye_inner = strips_along_y ? eye_j : eye_i;
         std::array<S32, N - 1> strips;
-        for (S32 k = 0; k + 1 < N; ++k)
+        for (S32 k = 0; k + 1 < M; ++k)
         {
             strips[k] = k;
         }
-        std::sort(strips.begin(), strips.end(),
+        std::sort(strips.begin(), strips.begin() + (M - 1),
                   [&](S32 a, S32 b) { return std::abs(a + 0.5 - eye_outer) > std::abs(b + 0.5 - eye_outer); });
         // Each strip is cut where the eye is beside it, and both halves are drawn from their far end in.
-        const S32 split = llclamp(static_cast<S32>(std::lround(eye_inner)), 0, N - 1);
-        for (S32 o : strips)
+        const S32 split = llclamp(static_cast<S32>(std::lround(eye_inner)), 0, M - 1);
+        for (S32 k = 0; k + 1 < M; ++k)
         {
-            for (const auto& [from, to, dir] : { std::tuple{ 0, split, 1 }, std::tuple{ N - 1, split, -1 } })
+            const S32 o = strips[k];
+            for (const auto& [from, to, dir] : { std::tuple{ 0, split, 1 }, std::tuple{ M - 1, split, -1 } })
             {
                 if (from == to)
                 {

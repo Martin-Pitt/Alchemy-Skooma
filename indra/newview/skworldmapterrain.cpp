@@ -31,6 +31,10 @@
 #include "llworld.h"
 #include "skworldmaproads.h"
 #include "llregionhandle.h"
+#include "llviewercontrol.h"
+#include "llfile.h"
+
+#include <cstring>
 
 #include <algorithm>
 #include <cmath>
@@ -55,16 +59,19 @@ void SKWorldMapTerrain::update(F64 now, const SKWorldMapRoadSource* roads)
             stalest_built = built;
         }
     }
+    // A region no longer connected falls back to the pack, if the pack has it.
     for (auto it = mRegions.begin(); it != mRegions.end();)
     {
-        it = live.count(it->first) ? std::next(it) : mRegions.erase(it);
+        it = (it->second.mLive && !live.count(it->first)) ? mRegions.erase(it) : std::next(it);
     }
+    updatePack(roads, live);
     if (!stalest)
     {
         return;
     }
 
     Region& r = mRegions[stalest->getHandle()];
+    r.mLive = true;
     r.mOrigin = stalest->getOriginGlobal();
     r.mWidth = stalest->getWidth();
     r.mHeights.resize(SAMPLES * SAMPLES);
@@ -84,6 +91,85 @@ void SKWorldMapTerrain::update(F64 now, const SKWorldMapRoadSource* roads)
     lowerUnderRoads(r, stalest->getHandle(), roads);
     r.mRoads = roads ? static_cast<const void*>(roads->region(stalest->getHandle())) : nullptr;
     r.mBuilt = now;
+}
+
+void SKWorldMapTerrain::loadPack(const std::string& path)
+{
+    mPacked.clear();
+    for (auto it = mRegions.begin(); it != mRegions.end();)
+    {
+        it = it->second.mLive ? std::next(it) : mRegions.erase(it);
+    }
+    if (path.empty())
+    {
+        return;
+    }
+    // The packer's format (V:\Scratch\worldmap\map\terrain-pack\pack.py): "SKT1", u32 count, u32 samples,
+    // then per region i32 gx, i32 gy and samples^2 f32 heights, row 0 south, little-endian.
+    llifstream in(path.c_str(), std::ios::binary);
+    char magic[4] = {};
+    U32 count = 0, samples = 0;
+    in.read(magic, 4);
+    in.read(reinterpret_cast<char*>(&count), 4);
+    in.read(reinterpret_cast<char*>(&samples), 4);
+    if (!in || std::memcmp(magic, "SKT1", 4) != 0 || samples != SAMPLES)
+    {
+        LL_WARNS("SKWorldMap") << "terrain pack " << path << " is not a " << SAMPLES << "-sample SKT1 file" << LL_ENDL;
+        return;
+    }
+    for (U32 k = 0; k < count; ++k)
+    {
+        S32 grid[2];
+        std::vector<F32> heights(SAMPLES * SAMPLES);
+        in.read(reinterpret_cast<char*>(grid), sizeof(grid));
+        in.read(reinterpret_cast<char*>(heights.data()), heights.size() * sizeof(F32));
+        if (!in || grid[0] < 0 || grid[1] < 0)
+        {
+            LL_WARNS("SKWorldMap") << "terrain pack " << path << " ends after " << k << " of " << count << " regions" << LL_ENDL;
+            break;
+        }
+        mPacked[to_region_handle(static_cast<U32>(grid[0]) * 256, static_cast<U32>(grid[1]) * 256)] = std::move(heights);
+    }
+    LL_INFOS("SKWorldMap") << "terrain pack: " << mPacked.size() << " regions from " << path << LL_ENDL;
+}
+
+void SKWorldMapTerrain::updatePack(const SKWorldMapRoadSource* roads, const std::unordered_set<U64>& live)
+{
+    static LLCachedControl<std::string> pack_path(gSavedSettings, "SKWorldMapTerrainPack", "");
+    if (pack_path() != mPackPath)
+    {
+        mPackPath = pack_path();
+        loadPack(mPackPath);
+    }
+    // Packed regions are copied in, and lowered under their roads, a few a frame; again when roads arrive.
+    constexpr S32 PER_FRAME = 32;
+    S32 built = 0;
+    for (const auto& [handle, heights] : mPacked)
+    {
+        if (live.count(handle))
+        {
+            continue;
+        }
+        const void* road_key = roads ? static_cast<const void*>(roads->region(handle)) : nullptr;
+        const auto it = mRegions.find(handle);
+        if (it != mRegions.end() && it->second.mRoads == road_key)
+        {
+            continue;
+        }
+        Region& r = mRegions[handle];
+        U32 x, y;
+        from_region_handle(handle, &x, &y);
+        r.mOrigin.setVec(x, y, 0.0);
+        r.mWidth = 256.0;
+        r.mHeights = heights;
+        r.mLive = false;
+        lowerUnderRoads(r, handle, roads);
+        r.mRoads = road_key;
+        if (++built >= PER_FRAME)
+        {
+            break;
+        }
+    }
 }
 
 void SKWorldMapTerrain::lowerUnderRoads(Region& r, U64 handle, const SKWorldMapRoadSource* roads)
@@ -148,23 +234,47 @@ void SKWorldMapTerrain::lowerUnderRoads(Region& r, U64 handle, const SKWorldMapR
 
 F64 SKWorldMapTerrain::groundAt(const LLVector3d& p, F64 fallback) const
 {
-    for (const auto& [handle, r] : mRegions)
-    {
+    // The 256 m cell's own region first; only a larger live region can cover a point from another cell.
+    const auto sample = [&](const Region& r, F64& out) {
         const F64 u = (p.mdV[VX] - r.mOrigin.mdV[VX]) / r.mWidth;
         const F64 v = (p.mdV[VY] - r.mOrigin.mdV[VY]) / r.mWidth;
         if (u < 0.0 || v < 0.0 || u > 1.0 || v > 1.0 || r.mHeights.empty())
         {
-            continue;
+            return false;
         }
-        const F64 fx = u * (SAMPLES - 1);
-        const F64 fy = v * (SAMPLES - 1);
-        const S32 i = std::min(static_cast<S32>(fx), SAMPLES - 2);
-        const S32 j = std::min(static_cast<S32>(fy), SAMPLES - 2);
-        const F64 tx = fx - i;
-        const F64 ty = fy - j;
-        const F64 south = r.at(i, j) * (1.0 - tx) + r.at(i + 1, j) * tx;
-        const F64 north = r.at(i, j + 1) * (1.0 - tx) + r.at(i + 1, j + 1) * tx;
-        return south * (1.0 - ty) + north * ty;
+        out = interpolate(r, u, v);
+        return true;
+    };
+    F64 out = fallback;
+    if (p.mdV[VX] >= 0.0 && p.mdV[VY] >= 0.0)
+    {
+        const U32 x = static_cast<U32>(p.mdV[VX] / 256.0) * 256;
+        const U32 y = static_cast<U32>(p.mdV[VY] / 256.0) * 256;
+        const auto it = mRegions.find(to_region_handle(x, y));
+        if (it != mRegions.end() && sample(it->second, out))
+        {
+            return out;
+        }
+    }
+    for (const auto& [handle, r] : mRegions)
+    {
+        if (r.mLive && r.mWidth > 256.0 && sample(r, out))
+        {
+            return out;
+        }
     }
     return fallback;
+}
+
+F64 SKWorldMapTerrain::interpolate(const Region& r, F64 u, F64 v)
+{
+    const F64 fx = u * (SAMPLES - 1);
+    const F64 fy = v * (SAMPLES - 1);
+    const S32 i = std::min(static_cast<S32>(fx), SAMPLES - 2);
+    const S32 j = std::min(static_cast<S32>(fy), SAMPLES - 2);
+    const F64 tx = fx - i;
+    const F64 ty = fy - j;
+    const F64 south = r.at(i, j) * (1.0 - tx) + r.at(i + 1, j) * tx;
+    const F64 north = r.at(i, j + 1) * (1.0 - tx) + r.at(i + 1, j + 1) * tx;
+    return south * (1.0 - ty) + north * ty;
 }
