@@ -28,6 +28,7 @@
 #include "llrendertarget.h"
 #include "skworldmapmath.h"
 #include "skworldmaproads.h"
+#include "skworldmapterrain.h"
 #include "skworldmaptiles.h"
 
 #include <vector>
@@ -70,6 +71,7 @@ public:
 private:
     bool allocateTargets(S32 width, S32 height);
     void drawGround(const SKWorldMapFrame& frame, S32 width, S32 height, F64 now);
+    void drawTerrain(const SKWorldMapFrame& frame);
     void tiltShift(const SKWorldMapFrame& frame, const LLRect& rect);
     void pollAgents(const SKWorldMapFrame& frame, F64 now);
     void drawAgents(const SKWorldMapFrame& frame, const LLRect& rect);
@@ -79,6 +81,7 @@ private:
     LLRenderTarget mBlurB;
     SKWorldMapTiles mTiles;
     SKWorldMapRoads mRoads;
+    SKWorldMapTerrain mTerrain;
     SKWorldMapSurfaceSource* mSurfaces = nullptr;
     std::vector<skworldmap::SelectedTile> mSelected;
     std::vector<SKWorldMapTiles::Draw> mDraws;    ///< this frame's ground draws, kept to reuse its storage

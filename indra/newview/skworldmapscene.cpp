@@ -215,6 +215,7 @@ void SKWorldMapScene::render(const SKWorldMapFrame& frame, const LLRect& rect, F
     mSelected = selectTiles(view);
 
     pollAgents(frame, now);
+    mTerrain.update(now);
 
     LLGLDepthTest depth(GL_FALSE, GL_FALSE);
     LLGLDisable cull(GL_CULL_FACE);
@@ -232,7 +233,7 @@ void SKWorldMapScene::drawGround(const SKWorldMapFrame& frame, S32 width, S32 he
 {
     LLVector3d f, r, u;
     viewBasis(frame.mYaw, frame.mPitch, f, r, u);
-    const F64 height_above = std::max(frame.mEye.mdV[VZ] - GROUND_Z, 1.0);
+    const F64 height_above = std::max(frame.mEye.mdV[VZ] - std::max(GROUND_Z, mTerrain.groundAt(frame.mEye, GROUND_Z)), 1.0);
     const F32 z_near = static_cast<F32>(std::max(0.5, 0.25 * height_above));
 
     mScene.bindTarget();
@@ -293,6 +294,7 @@ void SKWorldMapScene::drawGround(const SKWorldMapFrame& frame, S32 width, S32 he
         gGL.vertex3f(xb, yb, z);
         gGL.end();
     }
+    drawTerrain(frame);
     gGL.flush();
     gGL.getTextureSlot(0)->unbind();
     gUIProgram.unbind();
@@ -301,6 +303,63 @@ void SKWorldMapScene::drawGround(const SKWorldMapFrame& frame, S32 width, S32 he
 
     popMatrices();
     mScene.flush();
+}
+
+void SKWorldMapScene::drawTerrain(const SKWorldMapFrame& frame)
+{
+    // Each region with heights is drawn again over its flat tile, as a grid at its heights, with the finest
+    // texture this frame drew there. The flat tile under it never shows, as the grid covers its footprint.
+    for (const auto& [handle, r] : mTerrain.regions())
+    {
+        const SKWorldMapTiles::Draw* best = nullptr;
+        const F64 cx = r.mOrigin.mdV[VX] + r.mWidth * 0.5;
+        const F64 cy = r.mOrigin.mdV[VY] + r.mWidth * 0.5;
+        for (const SKWorldMapTiles::Draw& d : mDraws)
+        {
+            const F64 x0 = d.mCover.mGridX * REGION_METRES;
+            const F64 y0 = d.mCover.mGridY * REGION_METRES;
+            const F64 side = d.mCover.sideMetres();
+            if (cx >= x0 && cx < x0 + side && cy >= y0 && cy < y0 + side && (!best || side < best->mCover.sideMetres()))
+            {
+                best = &d;
+            }
+        }
+        if (!best)
+        {
+            continue;
+        }
+        const F64 bx = best->mCover.mGridX * REGION_METRES;
+        const F64 by = best->mCover.mGridY * REGION_METRES;
+        const F64 side = best->mCover.sideMetres();
+        const auto texcoord = [&](F64 x, F64 y, F32& u, F32& v) {
+            const F64 fu = (x - bx) / side;
+            const F64 fv = (y - by) / side;
+            u = static_cast<F32>(best->mUV[0] + (best->mUV[2] - best->mUV[0]) * fu);
+            v = static_cast<F32>(best->mUV[1] + (best->mUV[3] - best->mUV[1]) * fv);
+        };
+
+        gGL.getTextureSlot(0)->bindSampled(best->mTexture, ALSamplers::AnisoClamp);
+        constexpr S32 N = SKWorldMapTerrain::SAMPLES;
+        const F64 step = r.mWidth / (N - 1);
+        for (S32 j = 0; j + 1 < N; ++j)
+        {
+            gGL.begin(LLRender::TRIANGLE_STRIP);
+            for (S32 i = 0; i < N; ++i)
+            {
+                for (S32 row : { j + 1, j })
+                {
+                    const F64 x = r.mOrigin.mdV[VX] + i * step;
+                    const F64 y = r.mOrigin.mdV[VY] + row * step;
+                    F32 u, v;
+                    texcoord(x, y, u, v);
+                    gGL.texCoord2f(u, v);
+                    gGL.vertex3f(static_cast<F32>(x - frame.mEye.mdV[VX]), static_cast<F32>(y - frame.mEye.mdV[VY]),
+                                 static_cast<F32>(r.at(i, row) - frame.mEye.mdV[VZ]));
+                }
+            }
+            gGL.end();
+        }
+    }
 }
 
 void SKWorldMapScene::tiltShift(const SKWorldMapFrame& frame, const LLRect& rect)
@@ -481,10 +540,10 @@ void SKWorldMapScene::drawAgents(const SKWorldMapFrame& frame, const LLRect& rec
         Cluster c{ x, y };
         c.mCount = count;
         LLVector3d ground = p;
-        ground.mdV[VZ] = GROUND_Z;
+        ground.mdV[VZ] = mTerrain.groundAt(p, GROUND_Z);
         F32 gx, gy;
         F64 gdepth;
-        if (p.mdV[VZ] > GROUND_Z + 2.0 && proj.project(ground, gx, gy, gdepth))
+        if (p.mdV[VZ] > ground.mdV[VZ] + 2.0 && proj.project(ground, gx, gy, gdepth))
         {
             c.mGroundX = gx;
             c.mGroundY = gy;
@@ -509,7 +568,7 @@ void SKWorldMapScene::drawAgents(const SKWorldMapFrame& frame, const LLRect& rec
         LLVector3d p = positions[i];
         if (p.mdV[VZ] >= COARSE_HEIGHT_UNKNOWN)
         {
-            p.mdV[VZ] = GROUND_Z;
+            p.mdV[VZ] = mTerrain.groundAt(p, GROUND_Z);
         }
         add(p, 1);
     }
@@ -526,7 +585,7 @@ void SKWorldMapScene::drawAgents(const SKWorldMapFrame& frame, const LLRect& rec
         for (const LLItemInfo& item : info->getAgentLocation())
         {
             LLVector3d p = item.getGlobalPosition();
-            p.mdV[VZ] = GROUND_Z;
+            p.mdV[VZ] = mTerrain.groundAt(p, GROUND_Z);
             add(p, item.getCount());
         }
     }
@@ -571,12 +630,12 @@ void SKWorldMapScene::drawAgents(const SKWorldMapFrame& frame, const LLRect& rec
     // You, in white, at your own height, wherever the camera is.
     const LLVector3d self = gAgent.getPositionGlobal();
     LLVector3d self_ground = self;
-    self_ground.mdV[VZ] = GROUND_Z;
+    self_ground.mdV[VZ] = mTerrain.groundAt(self, GROUND_Z);
     F32 sx, sy, gx, gy;
     F64 depth, gdepth;
     if (proj.project(self, sx, sy, depth))
     {
-        if (self.mdV[VZ] > GROUND_Z + 2.0 && proj.project(self_ground, gx, gy, gdepth))
+        if (self.mdV[VZ] > self_ground.mdV[VZ] + 2.0 && proj.project(self_ground, gx, gy, gdepth))
         {
             dropLine(sx, sy, gx, gy);
         }
@@ -604,4 +663,5 @@ void SKWorldMapScene::shutdown()
     release();
     mTiles.clear();
     mRoads.release();
+    mTerrain.clear();
 }
