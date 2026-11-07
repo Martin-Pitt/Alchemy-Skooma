@@ -1,7 +1,8 @@
 /**
  * @file skroadkithost.cpp
- * @brief Spike: the road model's kit questions (skroadmodel.h host::kitOf, kitLibraryPath) answered from the live
- * objects: a linkset's geometry signature as skroadkitsnaps.cpp reads it, without the root name.
+ * @brief Spike: the road model's kit questions (skroadmodel.h host::kitOf, measureKit) answered from the live
+ * objects: a linkset's geometry signature as skroadkitsnaps.cpp reads it, without the root name, and its kit measured
+ * from its prims on the General pool.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * $/LicenseInfo$
@@ -19,6 +20,7 @@
 #include "llviewerobject.h"
 #include "llviewerobjectlist.h"
 #include "llvolume.h"
+#include "workqueue.h"
 
 namespace
 {
@@ -80,10 +82,72 @@ namespace skroad::host
         return true;
     }
 
-    std::string kitLibraryPath()
+    bool measureKit(const LLUUID& root, U64 key)
     {
-        static LLCachedControl<std::string> path(gSavedSettings, "SKRoadKitLibrary", "");
-        return path;
+        LLViewerObject* ro = gObjectList.findObject(root);
+        if (!ro || !ro->isRoot())
+        {
+            return false;
+        }
+        auto shape = std::make_shared<KitShape>();
+        shape->root_rot = ro->getRotationRegion();
+        auto take = [&shape](LLViewerObject* o, bool root)
+        {
+            const LLVolume* volume = o->getVolume();
+            if (!volume)
+            {
+                return false;
+            }
+            KitShapePrim p;
+            p.scale = o->getScale();
+            p.pos = root ? LLVector3::zero : o->getPosition();
+            p.rot = root ? LLQuaternion::DEFAULT : o->getRotation();
+            if (o->getSculptParams())
+            {
+                // a sculpt's or a mesh's faces as they are drawn: there are no params to build them from
+                for (S32 f = 0; f < volume->getNumVolumeFaces(); ++f)
+                {
+                    const LLVolumeFace& face = volume->getVolumeFace(f);
+                    for (S32 i = 0; face.mPositions && i + 2 < face.mNumIndices; ++i)
+                    {
+                        const LLVector3 v(face.mPositions[face.mIndices[i]].getF32ptr());
+                        p.tris.push_back(LLVector3(v.mV[0] * p.scale.mV[0], v.mV[1] * p.scale.mV[1], v.mV[2] * p.scale.mV[2]) * p.rot + p.pos);
+                    }
+                    p.tris.resize(p.tris.size() / 3 * 3);
+                }
+                if (p.tris.empty())
+                {
+                    return false;               // not loaded yet
+                }
+            }
+            else
+            {
+                p.params = volume->getParams();
+            }
+            shape->prims.push_back(std::move(p));
+            return true;
+        };
+        if (!take(ro, true))
+        {
+            return false;
+        }
+        for (LLViewerObject* child : ro->getChildren())
+        {
+            if (child && !child->isAvatar() && !take(child, false))
+            {
+                return false;
+            }
+        }
+        LL::WorkQueue::ptr_t main_queue = LL::WorkQueue::getInstance("mainloop");
+        LL::WorkQueue::ptr_t general_queue = LL::WorkQueue::getInstance("General");
+        auto measure = [shape]()
+        {
+            auto kit = std::make_shared<Kit>();
+            return skroad::measureKit(*shape, *kit) ? kit : std::shared_ptr<Kit>();
+        };
+        return main_queue && general_queue
+               && main_queue->postTo(general_queue, measure,
+                                     [key](std::shared_ptr<Kit> kit) { skroad::kitMeasured(key, kit != nullptr, kit ? *kit : Kit()); });
     }
 
     std::string signLibraryPath()

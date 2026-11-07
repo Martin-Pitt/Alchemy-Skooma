@@ -5878,19 +5878,6 @@
             <key>Value</key>
             <integer>0</integer>
         </map>
-        <key>SKRoadKitLibrary</key>
-        <map>
-            <key>Comment</key>
-            <string>
-                Spike: a kit lane library (JSON, from the road-kit geometry study) the road autopilot takes each known road kit's drivable deck and lanes from, in place of its generic lane rule. Empty: none.
-            </string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>String</string>
-            <key>Value</key>
-            <string />
-        </map>
         <key>SKRoadSignLibrary</key>
         <map>
             <key>Comment</key>

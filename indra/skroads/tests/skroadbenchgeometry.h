@@ -26,6 +26,7 @@
 #define SK_ROADBENCHGEOMETRY_H
 
 #include "llsd.h"
+#include "llvolume.h"
 #include "skcensustypes.h"
 #include "v2math.h"
 #include "v3math.h"
@@ -54,6 +55,9 @@ namespace skroadbench
         bool solid = true;
         std::string why;                    // what is missing, where something is
     };
+
+    // A prim's volume params from a survey part record's "vp" array.
+    LLVolumeParams volumeParams(const LLSD& vp);
 
     // The viewer's asset cache: SK_ROADBENCH_CACHE, else %LOCALAPPDATA%\AlchemyNext\cache.
     std::string defaultCacheDir();

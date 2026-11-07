@@ -50,6 +50,8 @@ namespace skroadbench
             skroad::KitPrim prim;
             LLVector3d pos;
             LLQuaternion rot;
+            LLSD vp;                    // a prim's volume params; undefined for a mesh
+            LLVector3d origin;          // its record's region origin (a mesh's rebuilt faces are region-local)
         };
 
         LLVector3d vec3d(const LLSD& a)
@@ -217,9 +219,11 @@ namespace skroadbench
                         vp[k] = r["vp"][k].asReal();
                     }
                     kf.prim.shape = skroad::kitVolumeShape(vp);
+                    kf.vp = r["vp"];
                 }
                 kf.prim.scale = vec3(r["scale"]);
                 kf.pos = rec->mOrigin + LLVector3d(vec3(r["pos"]));
+                kf.origin = rec->mOrigin;
                 const LLSD& q = r["rot"];
                 kf.rot = LLQuaternion(F32(q[0].asReal()), F32(q[1].asReal()), F32(q[2].asReal()), F32(q[3].asReal()));
                 kit_frames[rec->mRoot].push_back(kf);
@@ -247,7 +251,36 @@ namespace skroadbench
                 f.prim.rot = f.rot * inv;
                 prims.push_back(f.prim);
             }
-            out.kits[root] = { skroad::kitHash(skroad::kitGeoSignature(prims)), rpos, rrot };
+            auto shape = std::make_shared<skroad::KitShape>();
+            shape->root_rot = rrot;
+            for (const KitFrame& f : frames)
+            {
+                skroad::KitShapePrim p;
+                p.scale = f.prim.scale;
+                p.pos = f.prim.pos;
+                p.rot = f.prim.rot;
+                if (f.vp.isArray())
+                {
+                    p.params = volumeParams(f.vp);
+                }
+                else if (auto g = out.geometry.find(f.part); g != out.geometry.end())
+                {
+                    for (const RebuiltFace& face : g->second->faces)
+                    {
+                        for (U32 i : face.indices)
+                        {
+                            p.tris.push_back(LLVector3(f.origin + LLVector3d(face.positions[i]) - rpos) * inv);
+                        }
+                    }
+                }
+                if (p.tris.empty() && !f.vp.isArray())
+                {
+                    shape.reset();      // a mesh not rebuilt: no shape to measure
+                    break;
+                }
+                shape->prims.push_back(std::move(p));
+            }
+            out.kits[root] = { skroad::kitHash(skroad::kitGeoSignature(prims)), rpos, rrot, shape };
         }
         for (const auto& [id, p] : llsd::inMap(sd["props"]))
         {
@@ -621,10 +654,21 @@ namespace skroad::host
         return true;
     }
 
-    std::string kitLibraryPath()
+    bool measureKit(const LLUUID& root, U64 key)
     {
-        const char* path = std::getenv("SK_ROADBENCH_KITS");
-        return path ? path : "";
+        if (!sCase)
+        {
+            return false;
+        }
+        auto it = sCase->kits.find(root);
+        if (it == sCase->kits.end() || !it->second.shape)
+        {
+            return false;
+        }
+        skroad::Kit kit;
+        const bool ok = skroad::measureKit(*it->second.shape, kit);
+        skroad::kitMeasured(key, ok, kit);
+        return true;
     }
 
     std::string signLibraryPath()

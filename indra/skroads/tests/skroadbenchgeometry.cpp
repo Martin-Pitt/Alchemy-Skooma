@@ -344,6 +344,11 @@ namespace skroadbench
         }
     }
 
+    LLVolumeParams volumeParams(const LLSD& vp)
+    {
+        return primParams(vp);
+    }
+
     std::string defaultCacheDir()
     {
         if (const char* dir = std::getenv("SK_ROADBENCH_CACHE"))

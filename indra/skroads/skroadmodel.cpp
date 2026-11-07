@@ -2098,8 +2098,10 @@ namespace skroad
     struct KitPlace
     {
         bool known = false;
-        U64 hash = 0;
+        U64 hash = 0, key = 0;                  // its signature's, and its kit's (kitKey: lying this way up)
         const Kit* kit = nullptr;
+        bool measuring = false;                 // its kit is being measured
+        LLQuaternion rot;                       // the root's rotation
         F64 px = 0, py = 0, pz = 0;             // the root's global position
         F64 acx = 1, acy = 0;                   // the kit's across axis in plan, unit
         F64 tried = -100.0;                     // when it was last asked, while not known
@@ -2112,30 +2114,16 @@ namespace skroad
         sKitPlaces.clear();
     }
 
-    const KitPlace& kitPlace(const LLUUID& root)
+    // Takes its kit once measured: a kit lying as a road (its across axis level), else none.
+    void placeKit(KitPlace& kp)
     {
-        KitPlace& kp = sKitPlaces[root];
-        if (kp.known || clockSeconds() - kp.tried < KIT_RETRY_S)
-        {
-            return kp;
-        }
-        kp.tried = clockSeconds();
-        LLVector3d pos;
-        LLQuaternion rot;
-        if (!host::kitOf(root, kp.hash, pos, rot))
-        {
-            return kp;
-        }
-        kp.known = true;
-        kp.px = pos.mdV[VX];
-        kp.py = pos.mdV[VY];
-        kp.pz = pos.mdV[VZ];
-        kp.kit = kitFor(kp.hash);
+        kp.kit = kitFor(kp.key);
+        kp.measuring = !kp.kit && kitAsked(kp.key) && !kitDone(kp.key);
         if (kp.kit)
         {
             LLVector3 a;
             a.mV[kp.kit->across] = 1.f;
-            a = a * rot;
+            a = a * kp.rot;
             const F64 L = std::hypot(a.mV[VX], a.mV[VY]);
             if (L < 0.7)
             {
@@ -2147,6 +2135,39 @@ namespace skroad
                 kp.acy = a.mV[VY] / L;
             }
         }
+    }
+
+    const KitPlace& kitPlace(const LLUUID& root)
+    {
+        KitPlace& kp = sKitPlaces[root];
+        if (kp.measuring)
+        {
+            placeKit(kp);
+        }
+        if (kp.known || clockSeconds() - kp.tried < KIT_RETRY_S)
+        {
+            return kp;
+        }
+        kp.tried = clockSeconds();
+        LLVector3d pos;
+        if (!host::kitOf(root, kp.hash, pos, kp.rot))
+        {
+            return kp;
+        }
+        kp.key = kitKey(kp.hash, kp.rot);
+        if (!kitAsked(kp.key))
+        {
+            if (!host::measureKit(root, kp.key))
+            {
+                return kp;                      // its shape is not all in yet: asked again later
+            }
+            kitAsk(kp.key);
+        }
+        kp.known = true;
+        kp.px = pos.mdV[VX];
+        kp.py = pos.mdV[VY];
+        kp.pz = pos.mdV[VZ];
+        placeKit(kp);
         return kp;
     }
 
@@ -2166,17 +2187,6 @@ namespace skroad
 
     bool applyKit(LanePoint& lp, F64 keep)
     {
-        static std::string path = "";
-        if (const std::string want = host::kitLibraryPath(); want != path)
-        {
-            path = want;
-            loadKitLibrary(path);
-            sKitPlaces.clear();
-        }
-        if (!kitLibraryOn())
-        {
-            return false;
-        }
         const F64 cx = (lp.left_x + lp.right_x) / 2, cy = (lp.left_y + lp.right_y) / 2;
         const LLUUID root = rootAt(cx, cy, lp.z);
         if (root.isNull())
@@ -2186,7 +2196,7 @@ namespace skroad
         const KitPlace& kp = kitPlace(root);
         if (!kp.kit || std::fabs(kp.acx * lp.ax + kp.acy * lp.ay) > 0.5)
         {
-            return false;                       // not a library kit, or crossed rather than driven along
+            return false;                       // not a measured kit, or crossed rather than driven along
         }
         const Kit& k = *kp.kit;
         const F64 s = (cx - kp.px) * kp.acx + (cy - kp.py) * kp.acy;
@@ -7027,13 +7037,10 @@ namespace skroad
         return false;
     }
 
-    // A linkset in the kit library: a road kit's piece.
+    // A linkset measured as a road kit lying as a road: a road kit's piece.
     bool kitRoad(const LLUUID& root)
     {
-        U64 hash = 0;
-        LLVector3d pos;
-        LLQuaternion rot;
-        return kitLibraryOn() && host::kitOf(root, hash, pos, rot) && kitFor(hash);
+        return kitPlace(root).kit != nullptr;
     }
 
     // A linkset laid as square flat tiles over an area wider than a road both ways (a forecourt's 10 m asphalt

@@ -116,7 +116,9 @@ namespace skroad
         // The linkset's kit hash (skroadkits.h kitGeoSignature) and its root's global pose; false until its
         // members are all known
         bool kitOf(const LLUUID& root, U64& hash, LLVector3d& pos, LLQuaternion& rot);
-        std::string kitLibraryPath();                    // SKRoadKitLibrary: empty, no library
+        // Measures the linkset's kit (skroadkits.h measureKit) from its live geometry, off the main thread where it
+        // can, and hands the result to kitMeasured(key) on the main thread; false where its shape is not all in yet
+        bool measureKit(const LLUUID& root, U64 key);
         std::string signLibraryPath();                   // SKRoadSignLibrary: empty, no library
         // Every face's texture and PBR base colour of the linkset; false until it is live
         bool signTextures(const LLUUID& root, std::vector<LLUUID>& out);
@@ -234,7 +236,7 @@ namespace skroad
     // road's centre line on a two-lane road (the car's half width and the margin, `keep` further): for placing a
     // car on the road from outside the walk (the drive mission).
     bool laneAt(F64 x, F64 y, F64 z, F64 hx, F64 hy, F64 keep, LanePoint& out);
-    // Where the road under a lane point is a kit of the kit library, its measured deck edges and lane centre in
+    // Where the road under a lane point is a measured road kit (skroadkits.h), its deck edges and lane centre in
     // place of the generic rule's (laneShift); the point is left as it was elsewhere.
     constexpr S8 LANE_RULE = 0, LANE_KIT = 1;
     bool applyKit(LanePoint& lp, F64 keep);
