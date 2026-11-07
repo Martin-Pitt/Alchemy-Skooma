@@ -64,6 +64,8 @@ function Show-Help {
     Say '  clean [name|--all]  delete a build tree to reclaim disk (never the main one)'
     Say '  local               create local (main + private work and spikes, the F5 build) and'
     Say '                      check it out in the main checkout; with local, say where it stands'
+    Say '  docs                copy doc/skooma commits made on local onto main (the post-commit'
+    Say '                      hook does this after each one; by hand, it catches up)'
     Say '  undo                reset main (and local) to the last-known-good commits'
     Say '  retire [name|.]     remove a worktree + branch whose work is already in its base'
     Say '                      --force  discard one that still carries work (prints the tip sha)'
@@ -2366,6 +2368,51 @@ function Invoke-Local {
     Say ''
 }
 
+# ---------------------------------------------------------------------- docs
+
+# The tracked doc/skooma docs are public and belong on main, but they are edited and committed in
+# the main checkout, on local. Each commit on local that changes only tracked doc/skooma files and
+# that main has no copy of is copied onto main through the sync sidecar, and local takes main back.
+# The post-commit hook runs this after every such commit; by hand it catches up whatever it missed.
+function Invoke-Docs {
+    if (-not (Test-HasLocal)) { Info 'no local: docs are committed on main directly'; return }
+    # A copy is known by its patch id: once local has taken main back, the copy lies behind the
+    # merge base, where git cherry no longer looks.
+    $patchIds = { param([string[]]$range)
+        $ids = @{}
+        $text = (& git log -p --no-merges --format='commit %H' @range -- doc/skooma | & git patch-id --stable) 2>$null
+        foreach ($l in @($text)) { if ($l) { $ids[($l -split ' ')[0]] = ($l -split ' ')[1] } }
+        return $ids
+    }
+    $onMain = & $patchIds @('develop..main')
+    $mine = & $patchIds @("main..$LocalBranch")
+    $have = @{}; foreach ($v in $onMain.Keys) { $have[$v] = $true }
+    $pending = @()
+    foreach ($sha in @((G rev-list --reverse --no-merges "main..$LocalBranch" -- doc/skooma) -split "`n" | Where-Object { $_ })) {
+        $files = @((G diff-tree --no-commit-id --name-only -r $sha) -split "`n" | Where-Object { $_ })
+        if (-not $files -or ($files | Where-Object { $_ -notlike 'doc/skooma/*' })) { continue }
+        $id = ($mine.GetEnumerator() | Where-Object { $_.Value -eq $sha } | Select-Object -First 1).Key
+        if ($id -and $have.ContainsKey($id)) { continue }
+        $pending += $sha
+    }
+    if (-not $pending) { return }
+    $path = Initialize-SyncWorktree
+    if (Test-MidOperation $path) { Warn "the sync worktree ($path) is busy; docs stay on local until: git skooma docs"; return }
+    if (Test-Dirty $path) { Warn "the sync worktree ($path) has changes; docs stay on local until: git skooma docs"; return }
+    $null = G -C $path reset --quiet --hard main
+    foreach ($sha in $pending) {
+        $out = GG -C $path cherry-pick --allow-empty $sha
+        if ($script:GitExit -ne 0) {
+            $null = G -C $path cherry-pick --abort
+            Warn "docs commit $($sha.Substring(0,9)) does not apply to main; left on local: $out"
+            return
+        }
+    }
+    if (-not (Set-MainToSidecar)) { Warn 'main could not take the docs; run git skooma docs again'; return }
+    Good "docs -> main ($($pending.Count) commit(s))"
+    $null = Update-Local
+}
+
 # ------------------------------------------------------------------ bootstrap
 
 # Copy the tooling out of main's tree, so a dirty/mid-merge main cannot brick it; -Quiet installs only what changed.
@@ -2383,7 +2430,7 @@ function Install-Tooling { param([switch]$Quiet)
     # Hooks (sh, shared by every worktree via .git/hooks).
     $hookDst = Join-Path $CommonDir 'hooks'
     New-Item -ItemType Directory -Force -Path $hookDst | Out-Null
-    foreach ($h in 'skooma-private.sh', 'reference-transaction', 'pre-commit', 'pre-merge-commit', 'pre-push') {
+    foreach ($h in 'skooma-private.sh', 'reference-transaction', 'pre-commit', 'pre-merge-commit', 'pre-push', 'post-commit') {
         $s = Join-Path $src "hooks\$h"
         if (-not (Test-Path $s)) { continue }
         $text = (Get-Content $s -Raw) -replace "`r`n", "`n"
@@ -2490,6 +2537,7 @@ switch ($Command.ToLowerInvariant()) {
     'integrate' { Invoke-Integrate }
     'trunk'     { Invoke-Trunk }
     'local'     { Invoke-Local }
+    'docs'      { Invoke-Docs }
     'undo'      { Invoke-Undo }
     'retire'    { Invoke-Retire }
     'park'      { Invoke-Park }

@@ -26,7 +26,7 @@ Run `git skooma status` first if unsure. Branch roles:
 `D:\viewers\alchemy-skooma` on `local` (on `main` until `local` exists) is shared by several sessions and is Nexii's F5.
 
 - **Never edit source there**, not even a quick fix to move later: `git skooma new <area>/<name>` before the first edit. Reading and grepping are fine.
-- The one exception is `doc/skooma/` docs (below): edited there and committed in the same step, without asking. Never leave `main` dirty; uncommitted work there breaks other sessions.
+- The one exception is `doc/skooma/` docs (below): edited there and committed in the same step, without asking, in a commit of docs alone. The tracked docs are public: the post-commit hook copies the commit onto `main` and `local` takes it back (`git skooma docs` catches up by hand); the gitignored `.*.md` notes stay local. Never leave the main checkout dirty; uncommitted work there breaks other sessions.
 - **Check it is idle first, in a command of its own**: `ls .git/MERGE_HEAD .git/CHERRY_PICK_HEAD .git/REVERT_HEAD`, unfiltered `git status --porcelain`, `git reflog <branch>`. Anything in progress or not yours → stop and ask. Never chain a check with `&&` into the change (that has committed onto the wrong branch and fast-forwarded `glue` over another session's work). Same for `glue` and trunks.
 - Fork-only files "vanishing" from the main checkout means a tool swapped a worktree's HEAD, not data loss: `git worktree list`, free the branch, reclaim it.
 

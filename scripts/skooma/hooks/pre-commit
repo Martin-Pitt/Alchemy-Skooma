@@ -21,6 +21,23 @@ main)
     # belong here — use a worktree so it stays upstreamable.
     exit 0
     ;;
+local)
+    # A docs commit here is copied onto main by the post-commit hook, so it must hold docs alone.
+    # A merge (local taking main or a private branch) is not one.
+    [ -f "$(git rev-parse --git-path MERGE_HEAD)" ] && exit 0
+    staged=$(git diff --cached --name-only)
+    if printf '%s\n' "$staged" | grep -q '^doc/skooma/' && printf '%s\n' "$staged" | grep -qv '^doc/skooma/'; then
+        cat >&2 <<MSG
+
+  Refused: a commit on local that changes doc/skooma must change nothing else,
+  so that it can go to main whole (the post-commit hook copies it there).
+  Commit the docs on their own.
+
+MSG
+        exit 1
+    fi
+    exit 0
+    ;;
 esac
 
 # Working branches (feature-, fix-, workaround-, amend-, foundation-, any custom class) are upstream pull
