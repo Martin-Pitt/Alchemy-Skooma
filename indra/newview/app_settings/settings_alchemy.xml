@@ -5878,6 +5878,71 @@
             <key>Value</key>
             <integer>0</integer>
         </map>
+        <key>SKRoadAutopilotArena</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: lay the road autopilot's test courses as closed tracks inside the parcel the car is on (a flat open one), centred and sized to fit: the same line every run and the car stays on the parcel. Off: laid out from where the car stands.
+            </string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKRoadAutopilotBench</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: run the road autopilot's handling benchmark on open flat land (a sandbox): the steering sweep in each gear up to SKRoadAutopilotMaxGear, then in each gear straight, circles of 60, 30 and 15 m, figure 8s of 30 and 15 m and two slaloms, a minute each. Every drive-log row is tagged with its test; bench_score.py scores them. Turns itself off at the end.
+            </string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKRoadAutopilotBenchFrom</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: the handling bench test to begin from (0: the first). Kept as the bench goes, so a bench stopped part way picks up where it left off; set back to 0 at its end.
+            </string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>S32</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKRoadAutopilotGoal</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: what the road autopilot does at a junction. explore: the branch leading most to road not yet driven (sk-road-driven.json, every road driven, by the autopilot or by hand), weighed against carrying the road on. carry: the road carried on (straightest, same surface). route: the planned route to SKRoadAutopilotRouteTo (explore where there is none).
+            </string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>String</string>
+            <key>Value</key>
+            <string>explore</string>
+        </map>
+        <key>SKRoadAutopilotJumps</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: the road autopilot drives a jump the road model finds (a ramp's lip with the road going on past a gap). Off: it stops short of the lip and asks the drive mission to place the car across, where at least 50 m of road goes on past the landing.
+            </string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
         <key>SKRoadAutopilotLaneOffset</key>
         <map>
             <key>Comment</key>
@@ -5904,19 +5969,6 @@
             <key>Value</key>
             <integer>1</integer>
         </map>
-        <key>SKRoadAutopilotUseGears</key>
-        <map>
-            <key>Comment</key>
-            <string>
-                Spike: drive as Nexii does, W held and the speed set by gear (up/down), knowing the gear from what the vehicle says in chat ("Gear 2", "Reverse"); never below Gear 1. Off: hold the speed by pulsing W.
-            </string>
-            <key>Persist</key>
-            <integer>0</integer>
-            <key>Type</key>
-            <string>Boolean</string>
-            <key>Value</key>
-            <integer>1</integer>
-        </map>
         <key>SKRoadAutopilotLookAhead</key>
         <map>
             <key>Comment</key>
@@ -5930,18 +5982,70 @@
             <key>Value</key>
             <real>100.0</real>
         </map>
-        <key>SKRoadAutopilotGoal</key>
+        <key>SKRoadAutopilotMaxGear</key>
         <map>
             <key>Comment</key>
             <string>
-                Spike: what the road autopilot does at a junction. explore: the branch leading most to road not yet driven (sk-road-driven.json, every road driven, by the autopilot or by hand), weighed against carrying the road on. carry: the road carried on (straightest, same surface). route: the planned route to SKRoadAutopilotRouteTo (explore where there is none).
+                Spike: the highest gear the road autopilot shifts into (it picks the gear from the bends ahead and each gear's measured top speed; 0: no limit).
             </string>
             <key>Persist</key>
             <integer>1</integer>
             <key>Type</key>
-            <string>String</string>
+            <string>S32</string>
             <key>Value</key>
-            <string>explore</string>
+            <integer>4</integer>
+        </map>
+        <key>SKRoadAutopilotProbe</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: while the road autopilot drives, mix in isolated test taps to measure the car's response: when the car is on the line, aligned and steady, one tap of each planned length in turn, alternating sides, left alone for 1.5 s; the autopilot steers it back to the line between them. Best on a long straight.
+            </string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKRoadAutopilotProbeLong</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: with SKRoadAutopilotProbe, probe long holds (0.5, 0.75, 1, 1.5, 2 s, alternating sides), each left alone for 2 s after release, to measure how a held key's turn builds and carries on. Use on a test course on open flat land.
+            </string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKRoadAutopilotPwmSweep</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: the PWM steering sweep (with the autopilot on; seated, stopped, in a flat open arena parcel): W held in SKRoadAutopilotPwmSweepGear, frame-exact A/D patterns (taps of 1-8 frames every 1-8 frames, holds, counter-taps), each to the left and the right with a rest between, steered back to the middle near the arena's edge. Logs logs/sk-road-sweep-TIME.csv and -summary.csv; turns itself and the autopilot off when done.
+            </string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKRoadAutopilotPwmSweepGear</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: the gear the PWM steering sweep (SKRoadAutopilotPwmSweep) holds.
+            </string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>S32</string>
+            <key>Value</key>
+            <integer>1</integer>
         </map>
         <key>SKRoadAutopilotRouteCost</key>
         <map>
@@ -5982,135 +6086,18 @@
             <key>Value</key>
             <string></string>
         </map>
-        <key>SKRoadAutopilotJumps</key>
+        <key>SKRoadAutopilotSpeed</key>
         <map>
             <key>Comment</key>
             <string>
-                Spike: the road autopilot drives a jump the road model finds (a ramp's lip with the road going on past a gap). Off: it stops short of the lip and asks the drive mission to place the car across, where at least 50 m of road goes on past the landing.
+                Spike: metres per second the road autopilot holds between region boundaries (6 across them).
             </string>
             <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>Boolean</string>
-            <key>Value</key>
             <integer>0</integer>
-        </map>
-        <key>SKRoadAutopilotMaxGear</key>
-        <map>
-            <key>Comment</key>
-            <string>
-                Spike: the highest gear the road autopilot shifts into (it picks the gear from the bends ahead and each gear's measured top speed; 0: no limit).
-            </string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>S32</string>
-            <key>Value</key>
-            <integer>4</integer>
-        </map>
-        <key>SKRoadAutopilotTurnRateMax</key>
-        <map>
-            <key>Comment</key>
-            <string>
-                The car's sustainable yaw rate for bends, in degrees a second: the road autopilot takes a bend of radius r at no more than this rate times r (twomode measured 70-85 deg/s).
-            </string>
-            <key>Persist</key>
-            <integer>1</integer>
             <key>Type</key>
             <string>F32</string>
             <key>Value</key>
-            <real>60</real>
-        </map>
-        <key>SKRoadAutopilotArena</key>
-        <map>
-            <key>Comment</key>
-            <string>
-                Spike: lay the road autopilot's test courses as closed tracks inside the parcel the car is on (a flat open one), centred and sized to fit: the same line every run and the car stays on the parcel. Off: laid out from where the car stands.
-            </string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>Boolean</string>
-            <key>Value</key>
-            <integer>1</integer>
-        </map>
-        <key>SKRoadAutopilotBenchFrom</key>
-        <map>
-            <key>Comment</key>
-            <string>
-                Spike: the handling bench test to begin from (0: the first). Kept as the bench goes, so a bench stopped part way picks up where it left off; set back to 0 at its end.
-            </string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>S32</string>
-            <key>Value</key>
-            <integer>0</integer>
-        </map>
-        <key>SKRoadAutopilotBench</key>
-        <map>
-            <key>Comment</key>
-            <string>
-                Spike: run the road autopilot's handling benchmark on open flat land (a sandbox): the steering sweep in each gear up to SKRoadAutopilotMaxGear, then in each gear straight, circles of 60, 30 and 15 m, figure 8s of 30 and 15 m and two slaloms, a minute each. Every drive-log row is tagged with its test; bench_score.py scores them. Turns itself off at the end.
-            </string>
-            <key>Persist</key>
-            <integer>0</integer>
-            <key>Type</key>
-            <string>Boolean</string>
-            <key>Value</key>
-            <integer>0</integer>
-        </map>
-        <key>SKRoadAutopilotPwmSweep</key>
-        <map>
-            <key>Comment</key>
-            <string>
-                Spike: the PWM steering sweep (with the autopilot on; seated, stopped, in a flat open arena parcel): W held in SKRoadAutopilotPwmSweepGear, frame-exact A/D patterns (taps of 1-8 frames every 1-8 frames, holds, counter-taps), each to the left and the right with a rest between, steered back to the middle near the arena's edge. Logs logs/sk-road-sweep-TIME.csv and -summary.csv; turns itself and the autopilot off when done.
-            </string>
-            <key>Persist</key>
-            <integer>0</integer>
-            <key>Type</key>
-            <string>Boolean</string>
-            <key>Value</key>
-            <integer>0</integer>
-        </map>
-        <key>SKRoadAutopilotPwmSweepGear</key>
-        <map>
-            <key>Comment</key>
-            <string>
-                Spike: the gear the PWM steering sweep (SKRoadAutopilotPwmSweep) holds.
-            </string>
-            <key>Persist</key>
-            <integer>0</integer>
-            <key>Type</key>
-            <string>S32</string>
-            <key>Value</key>
-            <integer>1</integer>
-        </map>
-        <key>SKRoadAutopilotThrSweep</key>
-        <map>
-            <key>Comment</key>
-            <string>
-                Spike: the throttle sweep (with the autopilot on; seated, stopped, in a flat open arena parcel): straight runs along the arena's diagonal from SKRoadAutopilotPwmSweepGear up through the gears: accel, coast, brake, short lifts, downshifts, W duty cycles in the first gear, and circles of 30, 20 and 12 m in the highest (yaw rate against v/r, slip), spinning in place at each corner. Logs logs/sk-road-thr-TIME.csv and -summary.csv; turns itself and the autopilot off when done. SKRoadAutopilotPwmSweepFamily "thr", where it exists, runs it too.
-            </string>
-            <key>Persist</key>
-            <integer>0</integer>
-            <key>Type</key>
-            <string>Boolean</string>
-            <key>Value</key>
-            <integer>0</integer>
-        </map>
-        <key>SKRoadAutopilotSweep</key>
-        <map>
-            <key>Comment</key>
-            <string>
-                Spike: a steering sweep on open flat land (a sandbox; no road needed), in this gear (0: off): W held, circles at fixed tap rhythms (a tap of 1-16 frames every 0.1 or 0.3 s, then the key held), each 5 s left, 3 s straight, 5 s right, 3 s straight, about 3 minutes a gear. Measures each rhythm's steady turn rate and the car's response times (fit_sweep.py).
-            </string>
-            <key>Persist</key>
-            <integer>0</integer>
-            <key>Type</key>
-            <string>S32</string>
-            <key>Value</key>
-            <integer>0</integer>
+            <real>8.0</real>
         </map>
         <key>SKRoadAutopilotSteer</key>
         <map>
@@ -6138,6 +6125,19 @@
             <key>Value</key>
             <string>twomode</string>
         </map>
+        <key>SKRoadAutopilotSweep</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: a steering sweep on open flat land (a sandbox; no road needed), in this gear (0: off): W held, circles at fixed tap rhythms (a tap of 1-16 frames every 0.1 or 0.3 s, then the key held), each 5 s left, 3 s straight, 5 s right, 3 s straight, about 3 minutes a gear. Measures each rhythm's steady turn rate and the car's response times (fit_sweep.py).
+            </string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>S32</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
         <key>SKRoadAutopilotTestCourse</key>
         <map>
             <key>Comment</key>
@@ -6151,11 +6151,11 @@
             <key>Value</key>
             <string />
         </map>
-        <key>SKRoadAutopilotProbeLong</key>
+        <key>SKRoadAutopilotThrSweep</key>
         <map>
             <key>Comment</key>
             <string>
-                Spike: with SKRoadAutopilotProbe, probe long holds (0.5, 0.75, 1, 1.5, 2 s, alternating sides), each left alone for 2 s after release, to measure how a held key's turn builds and carries on. Use on a test course on open flat land.
+                Spike: the throttle sweep (with the autopilot on; seated, stopped, in a flat open arena parcel): straight runs along the arena's diagonal from SKRoadAutopilotPwmSweepGear up through the gears: accel, coast, brake, short lifts, downshifts, W duty cycles in the first gear, and circles of 30, 20 and 12 m in the highest (yaw rate against v/r, slip), spinning in place at each corner. Logs logs/sk-road-thr-TIME.csv and -summary.csv; turns itself and the autopilot off when done. SKRoadAutopilotPwmSweepFamily "thr", where it exists, runs it too.
             </string>
             <key>Persist</key>
             <integer>0</integer>
@@ -6164,31 +6164,31 @@
             <key>Value</key>
             <integer>0</integer>
         </map>
-        <key>SKRoadAutopilotProbe</key>
+        <key>SKRoadAutopilotTurnRateMax</key>
         <map>
             <key>Comment</key>
             <string>
-                Spike: while the road autopilot drives, mix in isolated test taps to measure the car's response: when the car is on the line, aligned and steady, one tap of each planned length in turn, alternating sides, left alone for 1.5 s; the autopilot steers it back to the line between them. Best on a long straight.
+                The car's sustainable yaw rate for bends, in degrees a second: the road autopilot takes a bend of radius r at no more than this rate times r (twomode measured 70-85 deg/s).
             </string>
             <key>Persist</key>
-            <integer>0</integer>
-            <key>Type</key>
-            <string>Boolean</string>
-            <key>Value</key>
-            <integer>0</integer>
-        </map>
-        <key>SKRoadAutopilotSpeed</key>
-        <map>
-            <key>Comment</key>
-            <string>
-                Spike: metres per second the road autopilot holds between region boundaries (6 across them).
-            </string>
-            <key>Persist</key>
-            <integer>0</integer>
+            <integer>1</integer>
             <key>Type</key>
             <string>F32</string>
             <key>Value</key>
-            <real>8.0</real>
+            <real>60</real>
+        </map>
+        <key>SKRoadAutopilotUseGears</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: drive as Nexii does, W held and the speed set by gear (up/down), knowing the gear from what the vehicle says in chat ("Gear 2", "Reverse"); never below Gear 1. Off: hold the speed by pulsing W.
+            </string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
         </map>
         <key>SKRoadAutopilotPrivateRoads</key>
         <map>
