@@ -63,6 +63,7 @@ namespace skroad::land
     {
         Road road = Road::Unknown;                  // Linden road land by the overlay and the parcel's owner
         bool named = false, destination = false;    // its name is in; it names a place (a station), not a road
+        bool guessed = false;                       // not Linden only because its owner never answered
         std::string name;
     };
     ParcelRoad parcelRoadAt(F64 x, F64 y);

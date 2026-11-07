@@ -118,6 +118,7 @@ namespace skroad::land
         LLUUID owner;
         std::string name;           // the parcel's, once answered
         bool group_owned = false;
+        bool guessed = false;       // not Linden only because the owner's profile never answered: unknown to the walk
         F64 answered = -1.0;        // when its owner arrived (the owner's profile and name get 20 s to arrive)
         bool via_own_cap = false;   // after a failure through one cap, the other is asked: the agent region's, its own
         std::string region_name;
@@ -181,7 +182,10 @@ namespace skroad::land
             {
                 const S32 state = lindenOwnerState(owner);
                 road = state == 1 ? Road::Linden : (state == 0 || now - answered > 20.0) ? Road::Other : Road::Unknown;
+                guessed = state < 0 && road == Road::Other;
+                return;
             }
+            guessed = false;
         }
         void setErrorStatus(S32 status, const std::string& reason) override
         {
@@ -208,7 +212,7 @@ namespace skroad::land
         if (ask->answered >= 0.0 && ask->road != Road::Linden)
         {
             ask->classify(LLTimer::getTotalSeconds());     // its owner since learnt a Linden or a mole, or given up on
-            if (ask->road != Road::Unknown && ask->parcel.notNull())
+            if (ask->road != Road::Unknown && !ask->guessed && ask->parcel.notNull())
             {
                 sParcelRoad[ask->parcel] = ask->road;
             }
@@ -433,6 +437,7 @@ namespace skroad::land
         {
             out.name = it->second->name;
             out.named = true;
+            out.guessed = it->second->guessed && out.road == Road::Other;
             out.destination = destinationName(out.name);
         }
         return out;

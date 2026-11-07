@@ -572,7 +572,8 @@ namespace skroad::host
         {
             *name = p.named ? p.name : std::string("(name not in)");
         }
-        return p.destination ? 2 : p.road == land::Road::Linden ? 1 : p.road == land::Road::Other ? 0 : -1;
+        // an owner that never answered is unknown to the walk, not someone else's: the road walked goes on over it
+        return p.destination ? 2 : p.road == land::Road::Linden ? 1 : p.road == land::Road::Other && !p.guessed ? 0 : -1;
     }
 
     bool privateRoadsAllowed()

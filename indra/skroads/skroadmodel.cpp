@@ -400,11 +400,15 @@ namespace skroad
     {
         LLUUID root;
         F64 x, y, z0, z1;
+        F64 lx = 1, ly = 0;     // its linkset's long axis in plan: a rail's run, a sign panel's face (normal across it)
+        bool oriented = false;  // that axis is plain (the plan at least twice as long as wide), not a post
     };
     std::vector<SignCandidate> sSignCandidates;
     constexpr F64 END_SIGN_SIZE_M = 4.0;        // a sign's plan at most this across
     constexpr F64 END_SIGN_BESIDE_M = 6.0;      // and this far off the deck's edge, or on it
     constexpr F64 END_SIGN_Z_M = 3.0;           // standing within this of the deck's height
+    constexpr F64 END_SIGN_ACROSS_SIN = 0.5;    // a marker's long axis within 30 degrees of square to the road it ends
+    constexpr F64 END_SIGN_MARGIN_M = 1.5;      // and on that road's own width, this past its edges
 
     U64 mix(U64 h)
     {
@@ -1141,6 +1145,71 @@ namespace skroad
             if (!rec->mCollides && h >= 0.8)
             {
                 askLater(rec->mRoot);
+            }
+        }
+        // each candidate linkset's long axis in plan, from all its parts in the box: a rail laid along the road's edge
+        // is no end of that road, one laid across it is
+        if (!sSignCandidates.empty())
+        {
+            struct Moments { F64 n = 0, sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0; };
+            std::unordered_map<LLUUID, Moments> moments;
+            for (const SignCandidate& c : sSignCandidates)
+            {
+                moments.try_emplace(c.root);
+            }
+            for (const skworld::Record* rec : in_box)
+            {
+                auto it = moments.find(rec->mRoot);
+                if (it == moments.end())
+                {
+                    continue;
+                }
+                Moments& m = it->second;
+                auto add = [&m](F64 x, F64 y)
+                {
+                    m.n += 1;
+                    m.sx += x;
+                    m.sy += y;
+                    m.sxx += x * x;
+                    m.syy += y * y;
+                    m.sxy += x * y;
+                };
+                const F64 ox = rec->mOrigin.mdV[VX], oy = rec->mOrigin.mdV[VY];
+                if (rec->mShape == skworld::Shape::TRIANGLES && rec->mTriangles)
+                {
+                    for (const LLVector3& v : *rec->mTriangles)
+                    {
+                        add(ox + v.mV[VX], oy + v.mV[VY]);
+                    }
+                }
+                else
+                {
+                    for (S32 k = 0; k < 8; ++k)
+                    {
+                        LLVector3 v = rec->mCenter;
+                        for (S32 a = 0; a < 3; ++a)
+                        {
+                            v += rec->mAxes[a] * (rec->mHalf.mV[a] * ((k >> a) & 1 ? 1.f : -1.f));
+                        }
+                        add(ox + v.mV[VX], oy + v.mV[VY]);
+                    }
+                }
+            }
+            for (SignCandidate& c : sSignCandidates)
+            {
+                const Moments& m = moments[c.root];
+                if (m.n < 2)
+                {
+                    continue;
+                }
+                const F64 mx = m.sx / m.n, my = m.sy / m.n;
+                const F64 cxx = m.sxx / m.n - mx * mx, cyy = m.syy / m.n - my * my, cxy = m.sxy / m.n - mx * my;
+                const F64 half = 0.5 * (cxx + cyy), disc = std::sqrt(std::max(0.0, 0.25 * (cxx - cyy) * (cxx - cyy) + cxy * cxy));
+                const F64 big = half + disc, small = std::max(half - disc, 0.0);
+                const F64 ang = 0.5 * std::atan2(2.0 * cxy, cxx - cyy);
+                c.lx = std::cos(ang);
+                c.ly = std::sin(ang);
+                c.oriented = big > 4.0 * small;     // variance ratio 4: twice as long as wide
             }
         }
         sGathered.clear();
@@ -7022,6 +7091,54 @@ namespace skroad
         return false;
     }
 
+    // Road leading on out of a tiled area the walk enters at (x, y) along (dx, dy) from `from`: through the area's
+    // own tiles (linkset of `part`), a definite piece of another linkset at road width, ahead and on the line the
+    // walk came in along (a junction of square tiles between two roads), not a forecourt with no way on through.
+    constexpr F64 THROUGH_AREA_LANE_M = 6.0;    // the way out within this of the line the walk came in on
+    bool leadsOut(S32 part, S32 from, F64 x, F64 y, F64 dx, F64 dy)
+    {
+        const LLUUID& area = sParts[part]->root;
+        const LLUUID& came = sParts[from]->root;
+        std::array<S32, 32> todo;
+        std::array<S32, 32> seen;
+        S32 n_todo = 0, n_seen = 0;
+        todo[n_todo++] = part;
+        seen[n_seen++] = part;
+        while (n_todo > 0)
+        {
+            const S32 at = todo[--n_todo];
+            for (const Continuation& c : sConts[at])
+            {
+                const F64 ahead = (c.x - x) * dx + (c.y - y) * dy;
+                if (c.other == from || ahead < 2.0 || std::fabs((c.x - x) * dy - (c.y - y) * dx) > THROUGH_AREA_LANE_M)
+                {
+                    continue;
+                }
+                const PieceShapes& po = *sParts[c.other];
+                if (po.root == area)
+                {
+                    if (n_seen < S32(seen.size()) && std::find(seen.begin(), seen.begin() + n_seen, c.other) == seen.begin() + n_seen)
+                    {
+                        seen[n_seen++] = c.other;
+                        todo[n_todo++] = c.other;
+                    }
+                    continue;
+                }
+                if (po.root == came || !sPartDefinite[c.other] || openArea(po.root))
+                {
+                    continue;
+                }
+                F64 ax, ay, along, across;
+                partAxis(po, dx, dy, ax, ay, along, across);
+                if (across >= MIN_BRANCH_W && across < OPEN_W)
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     // Each refusal or allowance logged once per part and reason.
     std::unordered_set<std::string> sLandLogged;
     void logLand(const LLUUID& part, const std::string& what)
@@ -7057,6 +7174,11 @@ namespace skroad
         }
         if (!own_road && !strong && openArea(pn.root))
         {
+            if (leadsOut(part, from, x, y, dx, dy))
+            {
+                logLand(pn.part, "allowed: square tiles the road goes on through (a junction, not an open area)");
+                return nullptr;
+            }
             logLand(pn.part, "refused: an open area of square tiles, no road kit through it");
             return "open area";
         }
@@ -7708,6 +7830,28 @@ namespace skroad
                 const S32 kind = endSignByName(s.root);
                 if (kind >= 2 || (kind == 1 && std::hypot(gx, gy) < 1.0))
                 {
+                    // Nexii's rule (2026-11-07, Richfield and Japan Plaza): a marker ends only the road running into
+                    // it: on that road's own width ahead, and a rail or a sign's panel square to it; a road running
+                    // past it, the marker beside its edge, is not ended. Where a way on turns off before the marker
+                    // (the side road's end at a T), the marker says turn there, not a dead end.
+                    F64 rax, ray, ralong, racross;
+                    partAxis(pc, dx, dy, rax, ray, ralong, racross);
+                    const F64 lateral = std::fabs((s.x - pc.cx) * ray - (s.y - pc.cy) * rax);
+                    if (lateral > 0.5 * racross + END_SIGN_MARGIN_M || (s.oriented && std::fabs(s.lx * rax + s.ly * ray) > END_SIGN_ACROSS_SIN))
+                    {
+                        continue;
+                    }
+                    bool turns = false;
+                    for (const Continuation& c : sConts[cur])
+                    {
+                        const F64 at = (c.x - px) * dx + (c.y - py) * dy;
+                        turns |= (sPartDefinite[c.other] || sPartPending[c.other]) && visited[c.other] != walk && at > (first ? 0.5 : -2.0)
+                                 && at < along;
+                    }
+                    if (turns)
+                    {
+                        continue;
+                    }
                     best = along;
                     const host::Props* props = host::properties(s.root);
                     const Sign* sign = kind == 3 ? signByTexture(s.root) : nullptr;
