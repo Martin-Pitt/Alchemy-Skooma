@@ -30,7 +30,9 @@
 #include "llcorehttputil.h"
 #include "llcoros.h"
 #include "llframetimer.h"
+#include "llfetchedgltfmaterial.h"
 #include "llglslshader.h"
+#include "llgltfmateriallist.h"
 #include "llmodel.h"
 #include "llrender.h"
 #include "llvertexbuffer.h"
@@ -65,6 +67,7 @@ void SKWorldMapHippo::release()
     }
     mBuffer = nullptr;
     mTexture = nullptr;
+    mMaterial = nullptr;
     mIndexCount = 0;
     mState = State::Idle;
 }
@@ -171,6 +174,7 @@ void SKWorldMapHippo::draw(const LLVector3d& eye, const WorldDisc& disc)
 {
     static LLCachedControl<std::string> mesh_setting(gSavedSettings, "SKWorldMapHippoMesh", "");
     static LLCachedControl<std::string> texture_setting(gSavedSettings, "SKWorldMapHippoTexture", "");
+    static LLCachedControl<std::string> material_setting(gSavedSettings, "SKWorldMapHippoMaterial", "");
     static LLCachedControl<LLVector3> size_setting(gSavedSettings, "SKWorldMapHippoSize", LLVector3(58.37f, 25.08f, 37.60f));
 
     const LLUUID mesh_id(mesh_setting());
@@ -208,6 +212,18 @@ void SKWorldMapHippo::draw(const LLVector3d& eye, const WorldDisc& disc)
     if (mState != State::Ready || !mBuffer)
     {
         return;
+    }
+    // The material's base colour once it has loaded; the plain texture until then, or without one.
+    const LLUUID material_id(material_setting());
+    if (material_id.notNull() && mMaterial.isNull())
+    {
+        mMaterial = gGLTFMaterialList.getMaterial(material_id);
+    }
+    if (mMaterial.notNull() && mMaterial->isLoaded() && mMaterial->mBaseColorTexture.notNull()
+        && mTexture != mMaterial->mBaseColorTexture)
+    {
+        mTexture = mMaterial->mBaseColorTexture;
+        mTexture->setBoostLevel(LLGLTexture::BOOST_MAP_VISIBLE);
     }
     if (mTexture.isNull())
     {

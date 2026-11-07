@@ -3290,6 +3290,17 @@
             <key>Value</key>
             <real>60.0</real>
         </map>
+        <key>SKWorldMapHippoMaterial</key>
+        <map>
+            <key>Comment</key>
+            <string>glTF material asset of SKWorldMapHippoMesh; its base colour, lit by ambient light alone, replaces SKWorldMapHippoTexture once loaded</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>String</string>
+            <key>Value</key>
+            <string>1f3f211c-be52-d956-3e88-0e1908edc9b2</string>
+        </map>
         <key>SKWorldMapHippoMesh</key>
         <map>
             <key>Comment</key>

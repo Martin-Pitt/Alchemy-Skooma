@@ -31,6 +31,7 @@
 
 #include <memory>
 
+class LLFetchedGLTFMaterial;
 class LLVertexBuffer;
 class LLViewerFetchedTexture;
 
@@ -59,6 +60,7 @@ private:
     LLPointer<LLVertexBuffer> mBuffer;
     U32 mIndexCount = 0;
     LLPointer<LLViewerFetchedTexture> mTexture;
+    LLPointer<LLFetchedGLTFMaterial> mMaterial;  ///< its base colour, once loaded, takes the texture's place
     std::shared_ptr<SKWorldMapHippo*> mSelf;    ///< the fetch coroutine's way back, cleared when this goes
 };
 
