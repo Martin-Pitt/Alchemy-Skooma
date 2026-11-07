@@ -2211,7 +2211,7 @@ void SKFloaterLocalChat::draw()
     mScroll = llclamp(mScroll, 0, llmax(0, mContentHeight - view_height));
     const F64 now = LLFrameTimer::getTotalSeconds();
     // Hovering alone shows nothing more: the log opens whole once the pointer has rested on a shown card.
-    static LLCachedControl<F32> reveal_rest(gSavedSettings, "SkoomaLocalChatRevealDelay", 0.35f);
+    static LLCachedControl<F32> reveal_rest(gSavedSettings, "SkoomaLocalChatRevealDelay", 0.06f);
     if (!mRevealed && mRestSince >= 0.0 && now - mRestSince >= reveal_rest)
     {
         mRevealed = true;
