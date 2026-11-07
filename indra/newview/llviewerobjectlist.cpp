@@ -81,6 +81,7 @@
 #include "llvocache.h"
 #include "llcorehttputil.h"
 #include "llstartup.h"
+#include "lleventcoro.h" // <SK:Nexii> the physics flags loop
 #include "skworldcensus.h" // <SK:Nexii> census dirty set
 
 #include <algorithm>
@@ -1337,38 +1338,77 @@ void LLViewerObjectList::fetchObjectCostsCoro(std::string url)
 
 void LLViewerObjectList::fetchPhysicsFlags()
 {
-    // <SK:Nexii> Ask each object's own region rather than the agent's, which cannot answer for its neighbours (mini-map census).
-    std::map<LLViewerRegion*, LLSD> batches;
-    U32 batched = 0;
-    for (uuid_set_t::iterator it = mStalePhysicsFlags.begin(); it != mStalePhysicsFlags.end() && batched < MAX_CONCURRENT_PHYSICS_REQUESTS;)
+    // <SK:Nexii> Batched every third of a second from a fiber of its own: a request launched from here ran every
+    // ready coroutine inside this update, and the census marks a few ids stale every frame.
+    if (mPhysicsFlagsLoopStarted || mStalePhysicsFlags.empty())
     {
-        const LLUUID id = *it;
-        it = mStalePhysicsFlags.erase(it);
-        if (mPendingPhysicsFlags.count(id))
-        {
-            continue;
-        }
-        LLViewerObject* objectp = findObject(id);
-        LLViewerRegion* regionp = objectp ? objectp->getRegion() : nullptr;
-        if (!regionp)
-        {
-            continue;
-        }
-        if (regionp->getCapability("GetObjectPhysicsData").empty())
-        {
-            sPhysicsFlagsRefused.insert(id);
-            continue;
-        }
-        mPendingPhysicsFlags.insert(id);
-        LLSD& ids = batches[regionp];
-        ids.append(id);
-        ++batched;
+        return;
     }
-    for (auto& [regionp, ids] : batches)
+    mPhysicsFlagsLoopStarted = true;
+    LLCoros::instance().launch("LLViewerObjectList::physicsFlagsLoop", [this]()
     {
-        LLCoros::instance().launch("LLViewerObjectList::fetchPhisicsFlagsCoro",
-            boost::bind(&LLViewerObjectList::fetchPhisicsFlagsCoro, this, regionp->getCapability("GetObjectPhysicsData"), ids));
-    }
+        while (true)
+        {
+            llcoro::suspendUntilTimeout(0.33f);     // LLCoros::Stop ends it at shutdown
+            if (mStalePhysicsFlags.empty())
+            {
+                continue;
+            }
+            // Each id goes to its own region, which alone can answer for it: a live object's, else the region a
+            // cached part was found in. Regions are kept by handle and URL, since a launch below yields to frames
+            // that may remove one.
+            struct Batch
+            {
+                std::string url;
+                LLSD ids;
+            };
+            std::map<U64, Batch> batches;
+            for (uuid_set_t::iterator it = mStalePhysicsFlags.begin(); it != mStalePhysicsFlags.end();)
+            {
+                const LLUUID id = *it;
+                if (mPendingPhysicsFlags.count(id))
+                {
+                    ++it;       // asked again once the answer in flight is in
+                    continue;
+                }
+                LLViewerObject* objectp = findObject(id);
+                LLViewerRegion* regionp = objectp ? objectp->getRegion() : nullptr;
+                if (!regionp)
+                {
+                    const auto cached = mStalePhysicsRegions.find(id);
+                    regionp = cached != mStalePhysicsRegions.end() ? LLWorld::getInstance()->getRegionFromHandle(cached->second) : nullptr;
+                }
+                if (!regionp)
+                {
+                    mStalePhysicsRegions.erase(id);
+                    it = mStalePhysicsFlags.erase(it);      // its region is gone; asked again if it comes back
+                    continue;
+                }
+                const std::string url = regionp->getCapability("GetObjectPhysicsData");
+                if (url.empty())
+                {
+                    ++it;       // the region's capabilities are not in yet
+                    continue;
+                }
+                Batch& batch = batches[regionp->getHandle()];
+                if (batch.ids.size() >= MAX_CONCURRENT_PHYSICS_REQUESTS)
+                {
+                    ++it;
+                    continue;
+                }
+                batch.url = url;
+                batch.ids.append(id);
+                mPendingPhysicsFlags.insert(id);
+                mStalePhysicsRegions.erase(id);
+                it = mStalePhysicsFlags.erase(it);
+            }
+            for (auto& [handle, batch] : batches)
+            {
+                LLCoros::instance().launch("LLViewerObjectList::fetchPhisicsFlagsCoro",
+                    boost::bind(&LLViewerObjectList::fetchPhisicsFlagsCoro, this, batch.url, batch.ids));
+            }
+        }
+    });
     // </SK:Nexii>
 }
 
@@ -1812,11 +1852,12 @@ void LLViewerObjectList::updatePhysicsFlags(const LLViewerObject* object)
 }
 
 // <SK:Nexii> census: physics shape types by id, for parts the region has cached but not instantiated
-void LLViewerObjectList::requestPhysicsShapeType(const LLUUID& object_id)
+void LLViewerObjectList::requestPhysicsShapeType(const LLUUID& object_id, U64 region_handle)
 {
     if (object_id.notNull() && !mKnownPhysicsShapeTypes.count(object_id) && !mPendingPhysicsFlags.count(object_id))
     {
         mStalePhysicsFlags.insert(object_id);
+        mStalePhysicsRegions[object_id] = region_handle;
     }
 }
 
