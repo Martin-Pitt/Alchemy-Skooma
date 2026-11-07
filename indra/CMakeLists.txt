@@ -609,6 +609,7 @@ add_subdirectory(llwindow)
 add_subdirectory(llxml)
 add_subdirectory(llplugin)
 add_subdirectory(llui)
+add_subdirectory(skterrain) # <SK:Nexii> Region terrain cache
 add_subdirectory(viewer_components)
 
 if(AL_BUILD_ORACLE)
