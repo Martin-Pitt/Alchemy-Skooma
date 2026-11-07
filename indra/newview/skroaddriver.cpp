@@ -249,19 +249,33 @@ namespace skroad::drive
     }
 
     // The one place the driving keys go out. W and S together are the car's jump, so they never go in the same
-    // frame, whatever asked for both, and S follows W only from the frame after W was let go.
+    // frame, whatever asked for both, and S follows W only once W has been off for a simulator frame.
+    constexpr F64 W_OFF_BEFORE_S = 0.023;      // one simulator frame at 45 Hz
     U32 sLastSentKeys = 0;
+    F64 sLastWSent = -1.0;
+    bool sBothLogged = false;       // once a run
     void sendKeys(U32 keys, std::string& note)
     {
         constexpr U32 BOTH = AGENT_CONTROL_AT_POS | AGENT_CONTROL_AT_NEG;
+        const F64 t = LLTimer::getTotalSeconds();
         const bool asked_both = (keys & BOTH) == BOTH;
-        if (asked_both || ((keys & AGENT_CONTROL_AT_NEG) && (sLastSentKeys & AGENT_CONTROL_AT_POS)))
+        if (asked_both)
         {
-            keys &= asked_both ? ~BOTH : ~U32(AGENT_CONTROL_AT_NEG);
-            if (asked_both)
+            keys &= ~BOTH;
+            note += note.empty() ? "W+S suppressed" : ", W+S suppressed";
+            if (!sBothLogged)
             {
-                note += note.empty() ? "W+S suppressed" : ", W+S suppressed";
+                sBothLogged = true;
+                LL_WARNS("SKRoadDriver") << "W and S asked in one frame, both let go: " << note << LL_ENDL;
             }
+        }
+        else if ((keys & AGENT_CONTROL_AT_NEG) && sLastWSent >= 0.0 && t - sLastWSent < W_OFF_BEFORE_S)
+        {
+            keys &= ~U32(AGENT_CONTROL_AT_NEG);     // W was let go too recently: S waits
+        }
+        if (keys & AGENT_CONTROL_AT_POS)
+        {
+            sLastWSent = t;
         }
         sLastSentKeys = keys;
         gAgent.setControlFlags(keys);
@@ -5772,6 +5786,7 @@ void sk_road_driver::onSettingChanged(const LLSD& enabled)
         sPreviewing = false;
         sCourse.set = false;        // a test course is laid out from where the car is now
         sClock.reset();
+        sBothLogged = false;
         sFrame = 0;
         sTaps.clear();
         sKey = 0;
@@ -5979,6 +5994,7 @@ void sk_road_driver::beforeAgentUpdate()
             SKAirCells::instance().addDemand(AIR_DEMAND);
         }
         sClock.reset();
+        sBothLogged = false;
         sPath.clear();
         sDriveTex.clear();
         driveTexChanged();
