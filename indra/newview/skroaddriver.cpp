@@ -1402,13 +1402,11 @@ namespace skroad::drive
         return key;
     }
 
-    F64 sLiftUntil = -100.0, sLiftNext = -100.0;     // a lift off W for a bend (bendLift): until, next allowed
-
     // ---------------------------------------------------------------- the gears' top speeds
 
     // Each gear's top speed, measured while W is held: the speed once it has stopped rising (no more than
     // GEAR_FLAT_MPS2 over GEAR_FLAT_S), going nearly straight, on level road (the car rising or falling no more
-    // than GEAR_LEVEL_M over the window, so a run downhill does not read high) and not just after a lift. Kept
+    // than GEAR_LEVEL_M over the window, so a run downhill does not read high). Kept
     // per car in sk-road-car-gears.json (logs folder: {car: {gear: [m/s, ...]}}, the last GEAR_READINGS readings,
     // oldest first; a bare number, the file's old form, loads as one reading), the car being its name and creator
     // ("name @ creator"), the same for every rez of it; gear 0 while the car has not said its gear (it says it on
@@ -1741,7 +1739,7 @@ namespace skroad::drive
                 }
                 GearTops& mine = sGearTops[sCarKey];
                 mine = topsOf(readings);
-                // a reading taken through a shift or a lift can stand above the next gear's
+                // a reading taken through a shift can stand above the next gear's
                 for (auto it = mine.rbegin(); it != mine.rend(); ++it)
                 {
                     auto above = mine.find(it->first + 1);
@@ -1767,9 +1765,9 @@ namespace skroad::drive
     void measureGearTop(F64 speed, F64 now)
     {
         readGearTops();
-        if (sGearSpeedsGear != sGear || now < sLiftNext || std::fabs(sYawRate) * 180 / PI > 5.0 || speed < 1.0)
+        if (sGearSpeedsGear != sGear || std::fabs(sYawRate) * 180 / PI > 5.0 || speed < 1.0)
         {
-            sGearSpeeds.clear();        // a shift, a lift or a bend: begun again
+            sGearSpeeds.clear();        // a shift or a bend: begun again
             sGearSpeedsGear = sGear;
             return;
         }
@@ -1838,37 +1836,8 @@ namespace skroad::drive
         sGearSpeeds.clear();    // the next reading a full window later
     }
 
-    // ---------------------------------------------------------------- lifting off for a tight bend
-
-    // The car slows hard off W (about 10 m/s^2) and turns hard on a long hold, so a bend is taken as Nexii takes
-    // one: W let go for a moment (LIFT_S) and held again for at least LIFT_GAP_S (he held it about 75 % of the
-    // time round the lap's tight bends), only while the sharpest bend within the next LIFT_AHEAD_S asks a turn
-    // rate (speed / radius) past LIFT_RATE_DEG, short of what a long hold makes (40-70 deg/s).
-    constexpr F64 LIFT_RATE_DEG = 35.0;
-    constexpr F64 LIFT_AHEAD_S = 1.5;
-    constexpr F64 LIFT_S = 0.1;
-    constexpr F64 LIFT_GAP_S = 0.4;
-
-    // The sharpest turn (rad per metre) along the line over the next `reach` metres, from heading changes
-    // between its points.
-    F64 sharpestAhead(F64 reach)
-    {
-        F64 walked = 0, sharpest = 0;
-        for (size_t i = 0; i + 2 < sPath.size() && walked < reach; ++i)
-        {
-            const F64 h0 = std::atan2(sPath[i + 1].y - sPath[i].y, sPath[i + 1].x - sPath[i].x);
-            const F64 h1 = std::atan2(sPath[i + 2].y - sPath[i + 1].y, sPath[i + 2].x - sPath[i + 1].x);
-            const F64 len = std::hypot(sPath[i + 2].x - sPath[i].x, sPath[i + 2].y - sPath[i].y) / 2;
-            if (len > 0.5)
-            {
-                sharpest = std::max(sharpest, std::fabs(wrap(h1 - h0)) / len);
-            }
-            walked += std::hypot(sPath[i + 1].x - sPath[i].x, sPath[i + 1].y - sPath[i].y);
-        }
-        return sharpest;
-    }
-
-    // The same over chords of at least CURVE_BASE_M, for the gear: the line's points sit a metre or less apart,
+    // The sharpest turn (rad per metre) along the line over the next `reach` metres, over chords of at least
+    // CURVE_BASE_M: the line's points sit a metre or less apart,
     // and a few centimetres of jitter between them read on a straight as a bend Gear 2 could not take
     // (sk-road-autopilot.csv, 2026-11-07: a shift down and up again every second on straight road).
     constexpr F64 CURVE_BASE_M = 5.0;
@@ -1911,7 +1880,7 @@ namespace skroad::drive
 
     // The line's grade from its start (a few metres behind the car) over GRADE_AHEAD_M: its rise over its run; 0 on a
     // line shorter than GRADE_MIN_M. Up a slope of the road that goes on, W is kept (Nexii, Nangrim: "why brake while
-    // going up a slope? made it very hard to drive up it"): no lift for a bend, no slowing for a short line at a crest,
+    // going up a slope? made it very hard to drive up it"): no slowing for a short line at a crest,
     // and off an edge with no drop beside W is let go, never braked.
     constexpr F64 GRADE_AHEAD_M = 25.0, GRADE_MIN_M = 8.0, UPHILL_GRADE = 0.04;
     F64 gradeAhead()
@@ -2054,32 +2023,10 @@ namespace skroad::drive
         }
     }
 
-    bool bendLift(F64 speed, F64 now)
-    {
-        if (now < sLiftUntil)
-        {
-            return true;
-        }
-        if (now < sLiftNext || sPath.size() < 3 || speed < 8.0     // in Gear 1 (6.5 m/s) a lift only stalls it
-            || gradeAhead() > UPHILL_GRADE)                         // uphill a lift bleeds the speed the hill takes
-        {
-            return false;
-        }
-        const F64 sharpest = sharpestAhead(speed * LIFT_AHEAD_S);
-        if (speed * sharpest * 180 / PI <= LIFT_RATE_DEG)
-        {
-            return false;
-        }
-        sLiftUntil = now + LIFT_S;
-        sLiftNext = sLiftUntil + LIFT_GAP_S;
-        return true;
-    }
-
     // ---------------------------------------------------------------- picking the gear
 
     // The gear is the autopilot's: the highest whose top speed takes the sharpest bend within GEAR_AHEAD_S
-    // (at the gear's top) at no more than GEAR_RATE_DEG, a margin under the lift's, so the gear does the slowing
-    // and the lift is left for what the gear cannot. A gear whose top is not yet measured is tried once the one
+    // (at the gear's top) at no more than GEAR_RATE_DEG, so the gear does the slowing. A gear whose top is not yet measured is tried once the one
     // below it is measured and the road allows more; the gear is known from the car's own chat ("Gear 3",
     // noteChat), and while it is not, the first shift is down, which makes the car say it. Never into Reverse
     // (below Gear 1): from it, up. A shift up the car does not answer with a new gear is the top gear.
@@ -2099,7 +2046,7 @@ namespace skroad::drive
     F64 sUpClearSince = 0.0;
     F64 sEdgeDownShift = -100.0;                // the edge guard's last shift down: no shift up straight after
 
-    void pickGear(F64 speed, F64 now, bool road, U32& keys, std::string& note)
+    void pickGear(F64 speed, F64 now, bool road, bool crossing_near, U32& keys, std::string& note)
     {
         static LLCachedControl<S32> max_gear_c(gSavedSettings, "SKRoadAutopilotMaxGear", 4);
         const S32 max_gear = S32(max_gear_c) > 0 ? S32(max_gear_c) : 99;
@@ -2166,9 +2113,13 @@ namespace skroad::drive
             {
                 sShiftDir = -1;
             }
-            else if (sGear < std::min(sGearMax, max_gear) && here > 0 && now - sLastShift >= SHIFT_GAP_S
+            else if (crossing_near && sGear > 1 && speed > CROSSING_SPEED + 1.0)
+            {
+                sShiftDir = -1;     // a region crossing taken slow on W held, a gear down at a time
+            }
+            else if (!crossing_near && sGear < std::min(sGearMax, max_gear) && here > 0 && now - sLastShift >= SHIFT_GAP_S
                      && up_ok && now - sUpClearSince >= GEAR_UP_CLEAR_S && now - sEdgeDownShift >= GEAR_UP_CLEAR_S * 2
-                     && std::fabs(sLastErr) < GEAR_UP_ERR_M && now >= sLiftNext
+                     && std::fabs(sLastErr) < GEAR_UP_ERR_M
                      && lineSeen() >= std::max(SIGHT_MIN_M, (next > 0 ? next : here * 1.5) * SIGHT_LIFT_S))
             {
                 // and only with the road seen far enough for the next gear's speed: on a line of a few metres no
@@ -3070,7 +3021,7 @@ namespace skroad::drive
     // car's, the agent's region or the car object changing, until the new region sends the car's physics again
     // (its velocity changing, CROSS_FRESH_N updates, with the agent in the car's region). The car floats a
     // moment in the handover: the frozen, stuck, edge, drop, lost-road and line-stall checks all misread it
-    // (runs ended at region edges and corners), so in a crossing nothing is decided and W is held as it went in.
+    // (runs ended at region edges and corners), so in a crossing nothing is decided and W is held.
     constexpr F64 CROSS_AHEAD_M = 4.0, CROSS_AHEAD_S = 0.3, CROSS_AHEAD_GIVE_UP_S = 3.0, CROSS_STALL_S = 8.0,
                   CROSS_MIN_S = 0.25;
     constexpr S32 CROSS_FRESH_N = 5;
@@ -3079,7 +3030,6 @@ namespace skroad::drive
         bool on = false;
         bool changed = false;           // the region (or the car object) has changed since it began
         F64 began = 0.0, changed_at = 0.0;
-        U32 keys = 0;                   // what is held through it: W as it went in, nothing else
         S32 fresh = 0;                  // the car's physics updates seen since the change
         std::string from, to;
     };
@@ -5801,7 +5751,6 @@ void sk_road_driver::onSettingChanged(const LLSD& enabled)
         sRecoverTimes.clear();
         sPoseChangedAt = -1.0;
         sFrozenSaid = false;
-        sLiftUntil = sLiftNext = -100.0;
         sGearMax = 99;
         sJump = JumpRun();
         sGearBefore = 0;
@@ -6212,7 +6161,6 @@ void sk_road_driver::beforeAgentUpdate()
             sCross = Crossing();
             sCross.on = true;
             sCross.began = now;
-            sCross.keys = sLastSentKeys & AGENT_CONTROL_AT_POS;
             sCross.from = regionName(region_moved ? from_region : car_region);
             sCross.to = region_moved ? regionName(car_region) : "?";
             if (region_moved)
@@ -6284,10 +6232,10 @@ void sk_road_driver::beforeAgentUpdate()
             }
             else
             {
-                // held as it went in: W or nothing, no wheel, no brake
+                // W held (let go there, the car stalled in the handover), no wheel, no brake
                 sKey = 0;
                 std::string note = "crossing " + sCross.from + ">" + sCross.to;
-                sendKeys(sCross.keys, note);
+                sendKeys(AGENT_CONTROL_AT_POS, note);
                 sThrottle = (sLastSentKeys & AGENT_CONTROL_AT_POS) != 0;
                 sView.valid = true;
                 sView.car = pos;
@@ -6296,7 +6244,7 @@ void sk_road_driver::beforeAgentUpdate()
                 sView.waiting = false;
                 sLog << now << ',' << speed << ',' << yaw * 180 / PI << ',' << sYawRate * 180 / PI << ",0,"
                      << sLastErr << ',' << sPath.size() << ',' << (sPath.empty() ? 0.0 : sPath[0].road_w) << ','
-                     << (sPath.empty() ? 0 : sPath[0].lanes) << ',' << boundary << ",0," << std::hex << sCross.keys
+                     << (sPath.empty() ? 0 : sPath[0].lanes) << ',' << boundary << ",0," << std::hex << AGENT_CONTROL_AT_POS
                      << std::dec << ',' << sGain << ',' << sShift << ',' << sGear << ',' << note << '\n';
                 return;
             }
@@ -6458,7 +6406,7 @@ void sk_road_driver::beforeAgentUpdate()
     static LLCachedControl<bool> probe_on(gSavedSettings, "SKRoadAutopilotProbe", false);
     const bool probe = probe_on;
     const bool pwm = std::string(steer_mode_g) != "plan";
-    static LLCachedControl<std::string> actuator(gSavedSettings, "SKRoadAutopilotSteerActuator", "rhythm");
+    static LLCachedControl<std::string> actuator(gSavedSettings, "SKRoadAutopilotSteerActuator", "twomode");
     const bool twomode = pwm && std::string(actuator) == "twomode";
     // steering
     if (twomode)
@@ -6543,12 +6491,9 @@ void sk_road_driver::beforeAgentUpdate()
         }
     }
 
-    // speed: slower toward and just after a border; coast when too fast; gears as Nexii drives
+    // speed: W kept toward and just after a border, slowed there by the gear (pickGear); coast when too fast
     F32 target = cruise;
-    if (boundary < speed * CROSSING_SLOW_S || now - sLastCrossingT < 1.5)
-    {
-        target = std::min(target, CROSSING_SPEED);
-    }
+    const bool crossing_near = boundary < speed * CROSSING_SLOW_S || now - sLastCrossingT < 1.5;
     if (!road)
     {
         target = 0.f;
@@ -6582,19 +6527,18 @@ void sk_road_driver::beforeAgentUpdate()
     {
         // a cruise: W held on the road, the speed the gear's (pickGear chooses it from the bends ahead); no
         // target speed to throttle to, so no pulsing of W, which rocked the car and flashed its brake lights. Off
-        // the road it lets go and the car rolls to a stop. The one exception is a bend tighter than the car turns
-        // at its speed (bendLift), as Nexii takes one by hand: W let go a moment at a time.
-        pickGear(speed, now, road, keys, note);
+        // the road it lets go and the car rolls to a stop.
+        pickGear(speed, now, road, crossing_near, keys, note);
         // the lane guard lets W off only while it is moving the car back (below 3 m/s it never holds W back: set
         // once and never cleared at a standstill, it stopped the car for good)
-        if (road && !bendLift(speed, now) && !(sLaneGuard && speed > 3.0))
+        if (road && !(sLaneGuard && speed > 3.0))
         {
             keys |= AGENT_CONTROL_AT_POS;
             measureGearTop(speed, now);
         }
         else if (road)
         {
-            note += note.empty() ? "lift" : ", lift";
+            note += note.empty() ? "lane guard: W off" : ", lane guard: W off";
         }
         else if (speed > 0.5 && sTurnPhase == 0 && sRecoverPhase == 0)
         {
