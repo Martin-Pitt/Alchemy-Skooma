@@ -53,6 +53,8 @@ namespace
     const LLColor4 AMBIENT(0.8f, 0.85f, 1.f, 1.f);
 }
 
+SKWorldMapHippo::SKWorldMapHippo() = default;
+
 SKWorldMapHippo::~SKWorldMapHippo()
 {
     release();

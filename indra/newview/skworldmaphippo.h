@@ -40,6 +40,7 @@ class LLViewerFetchedTexture;
 class SKWorldMapHippo
 {
 public:
+    SKWorldMapHippo();
     ~SKWorldMapHippo();
 
     /// Draws it under the current projection, vertices relative to `eye`, depth-tested against what the caller
