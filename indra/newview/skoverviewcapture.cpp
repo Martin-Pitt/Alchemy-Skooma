@@ -1,7 +1,6 @@
 /**
  * @file skoverviewcapture.cpp
- * @brief The overview: the census as styled shapes over the terrain, for the mini-map's base and
- *        the tactical view.
+ * @brief The overview capture: the census as styled shapes over the terrain, as region maps and a camera view.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Second Life Viewer Source Code
@@ -27,58 +26,31 @@
 
 #include "skoverviewcapture.h"
 
-#include "llsmoothstep.h"
-
 #include "llagent.h"
-#include "llappviewer.h"
-#include "llcallbacklist.h"
-#include "llvoavatarself.h"
-#include "llagentcamera.h"
-#include "llviewerjoystick.h"
-#include "llworld.h"
-#include "sknetmap.h"
-#include "skmappeople.h"
-#include "skcensusavatarshape.h"
-#include "skmaplabels.h"
-#include "skmapmenu.h"
-#include "skoverviewprograms.h"
-#include "llrootview.h"
-#include "skpopuppanes.h"
-#include "llfocusmgr.h"
-#include "llkeyboard.h"
-#include "llviewerinput.h"
-#include "llviewerwindow.h"
-#include "llwindow.h"
-#include "llcharacter.h"
-#include "llfontgl.h"
-#include "llframetimer.h"
+#include "llbase64.h"
 #include "llgl.h"
 #include "llglslshader.h"
 #include "llrender.h"
 #include "llrendertarget.h"
+#include "llregionhandle.h"
+#include "llsurface.h"
 #include "lltimer.h"
 #include "llvertexbuffer.h"
 #include "llviewercamera.h"
 #include "llviewercontrol.h"
-#include "llregionhandle.h"
-#include "llsurface.h"
 #include "llviewerregion.h"
 #include "llviewershadermgr.h"
-#include "llvoavatar.h"
-#include "llhudnametag.h"
-#include "llviewerobjectlist.h"
+#include "llviewerwindow.h"
+#include "llvoavatarself.h"
+#include "llworld.h"
 #include "pipeline.h"
+#include "skoverviewprograms.h"
 #include "skrooms.h"
-#include "llbase64.h"
-#include "skmappalette.h"
 #include "skworldcensus.h"
-#include "llstartup.h"
-#include "lltool.h"
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
-#include <unordered_map>
 
 extern bool gCubeSnapshot;
 
@@ -87,65 +59,49 @@ namespace
     LLRenderTarget sCapture;      // depth, and a class code in R (skoverview::Code), an invisible face in B
     LLRenderTarget sCaptureNear;  // the same for the agent's neighbours, at half the resolution
     LLRenderTarget sCaptureFar;   // and for regions further off, at a quarter
-    LLRenderTarget sTacticalCapture;
-    LLRenderTarget sTacticalResolved;
-    LLRenderTarget sTacticalWork;   // the static capture copied, with the movers drawn over it
+    LLRenderTarget sViewCapture;
+    LLRenderTarget sViewResolved;
+    LLRenderTarget sViewWork;   // the static capture copied, with the movers drawn over it
     LLGLSLShader sResolve;
     LLGLSLShader sComposite;
     LLGLSLShader sGeom;       // the census: class code and the face's own normal
-    LLGLSLShader sGeomCut;    // the census with a cut height per vertex, for the tactical view
+    LLGLSLShader sGeomCut;    // the census with a cut height per vertex, for the camera view
     LLGLSLShader sGeomCutDissolve;  // the same with the see-through circles, the only permutation that discards
     LLGLSLShader sGeomCapLift;      // the cut census's section pass, the only permutation that writes depth
     LLGLSLShader sGeomCapLiftDissolve;
     LLGLSLShader sGeomId;           // the probes' id render: the linkset id, no cut, no discard, no depth write
-    LLGLSLShader sMarker;     // the tactical avatar markers, depth-tested by hand
+    LLGLSLShader sMarker;     // markers over the camera view, depth-tested by hand
     LLGLSLShader sCommands;   // the census pages' command lists, where the session computes
 
     const F32 CENSUS_RANGE_M = 128.f;
     const size_t SK_MAX_TERRITORY = 16;       // regions styled as inside, at most (the resolve's array)
     const size_t SK_MAX_DISSOLVE = 16;        // see-through circles, at most (overviewGeomF.glsl's array)
     const F32 AVATAR_HALF_HEIGHT_M = 0.9f;     // a coarse-only avatar's position over its feet, having no box from the sim
-    const F32 MARKER_HALO_PX = 1.5f;           // the dark ring that sets a flat marker off bright geometry
-    const F32 MARKER_GHOST_ALPHA = 0.3f;       // its silhouette where the census hides it
-    const F32 HEADING_TIP_PER_RADIUS = 1.f;    // the minimap's heading triangle (skmap::palette::HEADING_*_PX) over
-    const F32 HEADING_BASE_PER_RADIUS = 0.25f; // its 6 px dot, as fractions of the body's radius beyond it
-    const F32 HEADING_HALF_PER_RADIUS = 0.42f;
-    const F32 HEADING_THICK_PER_RADIUS = 0.3f; // and extruded this thick
-    const F32 TACTICAL_NEAR_M = 0.5f;
-    const F32 TACTICAL_MIN_M = 8.f;
-    const F32 TACTICAL_MAX_M = 4096.f;
-    const F32 BATTLEFIELD_MAX_M = 4096.f;
-    const F32 BATTLEFIELD_PITCH_DEG = 89.f;  // the untilted battlefield: short of straight down, so the camera keeps a heading to put north up
-    const F32 BATTLEFIELD_MARGIN = 1.05f;
-    const F32 FLAT_FADE_S = 0.15f;  // a marker's crossfade between its body and its zoomed-out flat marker
-    const size_t MAX_BADGES = 64;           // coded people badged on the tactical view at most, nearest first
-    const F32 BADGE_LIFT_PX = 2.f;          // a badge's gap above its marker's top
+    const F32 VIEW_NEAR_M = 0.5f;
+    const F32 VIEW_MIN_M = 8.f;
 
-    /// SKTacticalCameraMode: a fixed north-up view fitting the battlefield, or the orbit that follows the agent.
-    bool battlefieldCamera()
-    {
-        static LLCachedControl<U32> mode(gSavedSettings, "SKTacticalCameraMode", 0);
-        return mode == 0;
-    }
     const F64 MAPS_WANTED_S = 2.0;  // the region maps keep capturing this long after a map last drew them
     F64 sMapsWantedAt = -1.0;
+    F64 sViewWantedAt = -1.0;
+    bool sViewNoted = false;    // a view has been noted at all, so the frames below mean something
+    U32 sViewNotedFrame = 0;    // the frame a view was last noted in
+    U32 sViewNotedFrom = 0;     // the first frame of the run of frames it has been noted in, one after another
+    F32 sViewReachM = 0.f;
 
-    /// The mini-map's opt-in layers the region maps style (overviewResolveF.glsl's MASK_*); the tactical view ignores them.
-    U32 mapClassMask()
+    // Whether a camera view was noted this frame or the last: shown now, not merely within the census's linger.
+    bool view_shown_now()
     {
-        static LLCachedControl<bool> stairs(gSavedSettings, "SKMapLayerStairs", false);
-        static LLCachedControl<bool> doors(gSavedSettings, "SKMapLayerDoors", false);
-        static LLCachedControl<bool> ladders(gSavedSettings, "SKMapLayerLadders", false);
-        static LLCachedControl<bool> contours(gSavedSettings, "SKMapLayerContours", false);
-        return (stairs ? 1u : 0u) | (doors ? 2u : 0u) | (ladders ? 4u : 0u) | (contours ? 8u : 0u);
+        return sViewNoted && LLFrameTimer::getFrameCount() - sViewNotedFrame <= 1;
     }
+    skoverview::MapParams sMapParams;
+
     const F32 LEVEL_BELOW_M = 4.f;  // another region's map keeps the clusters reaching this far below the agent's floor
     const F32 LEVEL_ABOVE_M = 8.f;  // and this far above it
     const F32 ON_GROUND_M = 8.f;    // an agent's floor this close to the land is at ground level
 
-    void uniformColour(LLGLSLShader& prog, const LLStaticHashedString& name, const skmap::PaletteColour& c)
+    void uniformColour(LLGLSLShader& prog, const LLStaticHashedString& name, const LLColor3& c)
     {
-        prog.uniform3f(name, c.mR, c.mG, c.mB);
+        prog.uniform3f(name, c.mV[VRED], c.mV[VGREEN], c.mV[VBLUE]);
     }
 
     // The overview's own uniforms, looked up in each program's map once a bind rather than by string in GL: thirty
@@ -154,11 +110,11 @@ namespace
     const LLStaticHashedString SK_SLOT_COUNT("sk_slot_count");
     const LLStaticHashedString SK_LEVEL("sk_level");
     const LLStaticHashedString SK_PLANES("sk_planes");
-const LLStaticHashedString SK_PATCH_ON("sk_patch_on");
-const LLStaticHashedString SK_VIEW_PROJ("sk_view_proj");
-const LLStaticHashedString SK_OFFSET_AGENT("sk_offset_agent");
-const LLStaticHashedString SK_SIZE("sk_size");
-const LLStaticHashedString SK_PATCH("sk_patch");
+    const LLStaticHashedString SK_PATCH_ON("sk_patch_on");
+    const LLStaticHashedString SK_VIEW_PROJ("sk_view_proj");
+    const LLStaticHashedString SK_OFFSET_AGENT("sk_offset_agent");
+    const LLStaticHashedString SK_SIZE("sk_size");
+    const LLStaticHashedString SK_PATCH("sk_patch");
     const LLStaticHashedString SK_ZO("sk_zo");
     const LLStaticHashedString SK_FAR_DEPTH("sk_far_depth");
     const LLStaticHashedString SK_EYE("sk_eye");
@@ -185,7 +141,6 @@ const LLStaticHashedString SK_PATCH("sk_patch");
     const LLStaticHashedString SK_DISSOLVE("sk_dissolve");
     const LLStaticHashedString SK_DISSOLVE_FLOOR("sk_dissolve_floor");
     const LLStaticHashedString SK_VIEWPORT("sk_viewport");
-    const LLStaticHashedString SK_GHOST_ALPHA("sk_ghost_alpha");
     const LLStaticHashedString SK_TILT_PX("sk_tilt_px");
     const LLStaticHashedString SK_GROUND("sk_ground");
 
@@ -235,43 +190,6 @@ const LLStaticHashedString SK_PATCH("sk_patch");
         S32 mSaved[4] = { 0, 0, -1, -1 };
         bool mSet = false;
     };
-
-    const F64 PAN_MARGIN_M = 512.0;     // how far past the battlefield the view's focus may be dragged
-
-    /// The step a pan may take: zoom-to-cursor leaves the focus at whatever depth it picked, so the limit holds the
-    /// ground at the view's centre, on the agent's level, within the margin, and never pulls it back from outside.
-    LLVector3d clampedPanStep(const LLVector3d& eye, const LLVector3d& focus, const LLVector3d& step, const LLVector3d& lo,
-                              const LLVector3d& hi)
-    {
-        const LLVector3d dir = focus - eye;
-        LLVector3d centre = focus;
-        const F64 t = std::fabs(dir.mdV[VZ]) > 1.0e-6 ? (gAgent.getPositionGlobal().mdV[VZ] - eye.mdV[VZ]) / dir.mdV[VZ] : -1.0;
-        if (t > 0.0)
-        {
-            centre = eye + dir * t;
-        }
-        LLVector3d clamped = step;
-        for (S32 i = VX; i <= VY; ++i)
-        {
-            const F64 min_v = llmin(lo.mdV[i] - PAN_MARGIN_M, centre.mdV[i]);
-            const F64 max_v = llmax(hi.mdV[i] + PAN_MARGIN_M, centre.mdV[i]);
-            clamped.mdV[i] = llclamp(centre.mdV[i] + step.mdV[i], min_v, max_v) - centre.mdV[i];
-        }
-        return clamped;
-    }
-
-    /// Why a press or drag did not pan, with SKOverviewPanDebug, once a second at most.
-    void panTrace(const char* why)
-    {
-        static LLCachedControl<bool> debug(gSavedSettings, "SKOverviewPanDebug", false);
-        static F64 last = -1.0;
-        const F64 now = LLFrameTimer::getUptimeSeconds().value();
-        if (debug && now - last >= 1.0)
-        {
-            last = now;
-            LL_INFOS("SKOverviewPan") << why << LL_ENDL;
-        }
-    }
 
     /// The ray through a viewport pixel of a camera, agent space.
     bool cursorRay(const LLMatrix4a& view, const LLMatrix4a& proj, const S32 viewport[4], const LLVector2& at, LLVector3& from,
@@ -354,13 +272,12 @@ struct SKOverviewCapture::RegionMap
     U32 mRing = 0;            // 0 the agent's region, 1 a neighbour, more the further off
     bool mCut = false;        // whether it was taken through the agent's cut
     U64 mCutStamp = 0;        // the census cut it was taken with
-    bool mVoid = false;       // a square with no region in it near the agent's (SKMapVoidTiles)
+    bool mVoid = false;       // a square with no region in it near the agent's (MapParams::mVoidTiles)
     bool mValid = false;
 };
 
 SKOverviewCapture::SKOverviewCapture()
 {
-    SKModalView::instance().registerMode(this);
     // The overview's last look per record, in the census file's record order, so an offline reference can judge
     // invisible parts as the overview did: base64 of one byte a record, 255 for a part it never looked at.
     skworld::CensusSection seen;
@@ -388,24 +305,17 @@ SKOverviewCapture::~SKOverviewCapture()
     {
         SKWorldCensus::getInstance()->removeCensusSection("overview.seen");
     }
-    if (SKModalView::instanceExists())
-    {
-        SKModalView::getInstance()->unregisterMode(this);
-    }
 }
 
 void SKOverviewCapture::onFrame()
 {
-    updateCapsLockCapture();
-    syncTactical();
-    // The world census runs slowly only while the overview hides the world (census freshness matters little then),
-    // and back at its normal cadence the frame it closes.
-    if (SKWorldCensus::instanceExists())
+    // A view that closed without saying so, as on a teleport or a lost context, leaves the census at its usual pace.
+    if (!view_shown_now() && SKWorldCensus::instanceExists() && SKWorldCensus::instance().slowCadence())
     {
-        SKWorldCensus::instance().setSlowCadence(tacticalShown());
+        SKWorldCensus::instance().setSlowCadence(false);
     }
-    // The setting alone draws nothing: the census is kept only for maps or an open tactical overview.
-    if (!mapsWanted() && !tacticalShown())
+    // The census is kept only for maps or a camera view; the setting alone draws nothing.
+    if (!mapsWanted() && !viewWanted())
     {
         if (instanceExists())
         {
@@ -416,68 +326,14 @@ void SKOverviewCapture::onFrame()
     instance().frame();
 }
 
-void SKOverviewCapture::updateCapsLockCapture()
+// static
+void SKOverviewCapture::setWorldHidden(bool hidden)
 {
-    // Take Caps Lock from the OS only while the world has the keyboard and the tactical action sits on it bare, so
-    // chat and editors still type capitals with it.
-    static const std::string caps = LLKeyboard::stringFromAccelerator(MASK_NONE, KEY_CAPSLOCK);
-    static U32 frame = 0;
-    static bool bound = false;
-    if (frame++ % 30 == 0)
+    // The world census runs slowly only while the view hides the world (census freshness matters little then).
+    if (SKWorldCensus::instanceExists())
     {
-        const std::string keys = gViewerInput.getKeyBindingAsString("", "tactical_overview");
-        bound = false;
-        for (size_t at = 0; at <= keys.size();)
-        {
-            const size_t end = keys.find(" | ", at);
-            if (keys.substr(at, end == std::string::npos ? std::string::npos : end - at) == caps)
-            {
-                bound = true;
-                break;
-            }
-            if (end == std::string::npos)
-            {
-                break;
-            }
-            at = end + 3;
-        }
+        SKWorldCensus::instance().setSlowCadence(hidden);
     }
-    const bool want = bound && gFocusMgr.getAppHasFocus() && !gFocusMgr.getKeyboardFocus();
-    if (LLWindow* window = gViewerWindow ? gViewerWindow->getWindow() : nullptr)
-    {
-        window->skSetCapsLockCapture(want);
-    }
-}
-
-void SKOverviewCapture::handleTacticalKey(bool down)
-{
-    static F64 pressed_at = -1.0;
-    static U32 pressed_frame = 0;
-    static bool latched = false;
-    static bool closing = false;
-    static LLCachedControl<F32> tap_s(gSavedSettings, "SKTacticalTapSeconds", 0.35f);
-    const F64 now = LLFrameTimer::getTotalSeconds();
-    if (down)
-    {
-        pressed_at = now;
-        pressed_frame = LLFrameTimer::getFrameCount();
-        closing = latched;
-        latched = false;
-        gSavedSettings.setBOOL("SKTacticalOverview", !closing);
-        return;
-    }
-    if (closing || pressed_at < 0.0)
-    {
-        closing = false;
-        return;
-    }
-    // A release within a couple of frames is a tap however long they took: opening the view stalls a frame.
-    if (now - pressed_at < (F64)tap_s || LLFrameTimer::getFrameCount() - pressed_frame <= 2)
-    {
-        latched = true;
-        return;
-    }
-    gSavedSettings.setBOOL("SKTacticalOverview", false);
 }
 
 void SKOverviewCapture::cleanupGL()
@@ -490,9 +346,9 @@ void SKOverviewCapture::cleanupGL()
     sCapture.release();
     sCaptureNear.release();
     sCaptureFar.release();
-    sTacticalCapture.release();
-    sTacticalResolved.release();
-    sTacticalWork.release();
+    sViewCapture.release();
+    sViewResolved.release();
+    sViewWork.release();
 }
 
 void SKOverviewCapture::releaseGL()
@@ -500,16 +356,27 @@ void SKOverviewCapture::releaseGL()
     sCapture.release();
     sCaptureNear.release();
     sCaptureFar.release();
-    sTacticalCapture.release();
-    sTacticalResolved.release();
-    sTacticalWork.release();
+    sViewCapture.release();
+    sViewResolved.release();
+    sViewWork.release();
     mSpans.clear();
     mProbes.release();
     mCensus.release();
     mMaps.clear();
-    mTacticalKey.mValid = false;
+    mViewKey.mValid = false;
     mWorkValid = false;
     mGLFailed = false;
+    // The shown frame's depth went with the targets, and so did every read of it.
+    mSceneDepth = nullptr;
+    mPicksInFlight.clear();
+    mPick = PickSample();
+    mViewReady = false;
+    mViewPickable = false;
+}
+
+bool SKOverviewCapture::viewPickable() const
+{
+    return mViewPickable && LLFrameTimer::getFrameCount() - mViewFrame <= 1;
 }
 
 void SKOverviewCapture::updateDemand(bool wanted)
@@ -518,30 +385,13 @@ void SKOverviewCapture::updateDemand(bool wanted)
     {
         return;
     }
-    // The region maps want the census over the agent's neighbours as well; the tactical view only around it.
-    const bool maps = mapsWanted();
+    // The region maps want the census over the agent's neighbours as well; the camera view as far as it looks, in
+    // 64 m steps so a zoom does not restart the demand every frame.
     static LLCachedControl<F32> maps_range(gSavedSettings, "SKOverviewCensusRange", 384.f);
-    F32 range = maps ? llmax((F32)maps_range, CENSUS_RANGE_M) : CENSUS_RANGE_M;
-    // The tactical view shows the neighbours too: the census reaches as far as it looks, in 64 m steps so a zoom
-    // does not restart the demand every frame.
-    static LLCachedControl<bool> tactical(gSavedSettings, "SKTacticalOverview", false);
-    static LLCachedControl<F32> tactical_distance(gSavedSettings, "SKTacticalDistance", 60.f);
-    if (tactical)
+    F32 range = mapsWanted() ? llmax((F32)maps_range, CENSUS_RANGE_M) : CENSUS_RANGE_M;
+    if (viewWanted())
     {
-        // Open, the camera's own distance, which alt-cam and the wheel change.
-        const F32 distance = mTacticalOpen && mTacticalDistance > 0.f ? mTacticalDistance : (F32)tactical_distance;
-        F32 reach = llclamp(distance, TACTICAL_MIN_M, battlefieldCamera() ? BATTLEFIELD_MAX_M : TACTICAL_MAX_M) + CENSUS_RANGE_M;
-        LLVector3d lo, hi;
-        if (battlefieldCamera() && battlefieldBounds(lo, hi))
-        {
-            // Battlefield shows its area and no more: the census reaches the area's farthest corner, not the camera's
-            // height, which a tilt or a wide area takes to kilometres.
-            const LLVector3d agent = gAgent.getPositionGlobal();
-            const F64 dx = llmax(std::fabs(lo.mdV[VX] - agent.mdV[VX]), std::fabs(hi.mdV[VX] - agent.mdV[VX]));
-            const F64 dy = llmax(std::fabs(lo.mdV[VY] - agent.mdV[VY]), std::fabs(hi.mdV[VY] - agent.mdV[VY]));
-            reach = llmin(reach, (F32)std::sqrt(dx * dx + dy * dy));
-        }
-        range = llmax(range, std::ceil(reach / 64.f) * 64.f);
+        range = llmax(range, std::ceil(llmax(sViewReachM, CENSUS_RANGE_M) / 64.f) * 64.f);
     }
     if (wanted == mDemanding && (!wanted || range == mDemandRange))
     {
@@ -560,15 +410,61 @@ void SKOverviewCapture::updateDemand(bool wanted)
 }
 
 // static
-void SKOverviewCapture::noteMapsWanted()
+void SKOverviewCapture::noteMapsWanted(const skoverview::MapParams& params)
 {
     sMapsWantedAt = LLFrameTimer::getUptimeSeconds().value();
+    sMapParams = params;
 }
 
 // static
 bool SKOverviewCapture::mapsWanted()
 {
     return sMapsWantedAt >= 0.0 && LLFrameTimer::getUptimeSeconds().value() - sMapsWantedAt < MAPS_WANTED_S;
+}
+
+// static
+void SKOverviewCapture::noteViewWanted()
+{
+    sViewWantedAt = LLFrameTimer::getUptimeSeconds().value();
+    const U32 frame = LLFrameTimer::getFrameCount();
+    if (!sViewNoted || frame - sViewNotedFrame > 1)
+    {
+        sViewNotedFrom = frame;
+    }
+    sViewNotedFrame = frame;
+    sViewNoted = true;
+}
+
+// static
+bool SKOverviewCapture::viewWanted()
+{
+    return sViewWantedAt >= 0.0 && LLFrameTimer::getUptimeSeconds().value() - sViewWantedAt < MAPS_WANTED_S;
+}
+
+// static
+void SKOverviewCapture::setViewReach(F32 reach_m)
+{
+    sViewReachM = llmax(reach_m, 0.f);
+}
+
+// static
+skoverview::ViewShotParams skoverview::ViewShotParams::fromViewerCamera(const LLVector3d& centre)
+{
+    ViewShotParams params;
+    const LLViewerCamera* camera = LLViewerCamera::getInstance();
+    params.mEye = camera->getOrigin();
+    params.mAt = camera->getAtAxis();
+    params.mLeft = camera->getLeftAxis();
+    params.mUp = camera->getUpAxis();
+    params.mFov = camera->getView();
+    params.mDrawDistance = camera->getFar();
+    params.mCentre = centre;
+    std::copy(std::begin(gGLViewport), std::end(gGLViewport), params.mViewport);
+    const LLVector2 scale = gViewerWindow->getDisplayScale();
+    params.mCursor[0] = (S32)std::floor(gViewerWindow->getCurrentMouseX() * scale.mV[VX]);
+    params.mCursor[1] = (S32)std::floor(gViewerWindow->getCurrentMouseY() * scale.mV[VY]);
+    params.mPick = true;
+    return params;
 }
 
 std::vector<SKOverviewCapture::Tile> SKOverviewCapture::tiles() const
@@ -777,9 +673,9 @@ void SKOverviewCapture::readSpans()
         case SpanKind::Map:
             mStats.gpu_ms = ms;
             break;
-        case SpanKind::Tactical:
-            mStats.gpu_tactical_ms = ms;
-            mCost.mGpuTacticalMs += ms;
+        case SpanKind::View:
+            mStats.gpu_view_ms = ms;
+            mCost.mGpuViewMs += ms;
             break;
         case SpanKind::Patch:
             mStats.gpu_patch_ms = ms;
@@ -808,288 +704,20 @@ void SKOverviewCapture::cutHeights(const LLVector3d& at, F32 fallback_z, F32& fl
         feet = gAgentAvatarp->getPositionAgent().mV[VZ] - 0.5f * gAgentAvatarp->getScale().mV[VZ];
     }
     F32 floor = 0.f;
-    floor_z = skmap::plan::agentFloor(at, feet, floor) ? floor : feet;
+    floor_z = skoverview::place::agentFloor(at, feet, floor) ? floor : feet;
     cut_z = floor_z + (F32)cut;
-}
-
-namespace
-{
-    // The water surface over a global point, from its region (else the agent's); very low where there is none.
-    F32 waterAt(const LLVector3d& pos)
-    {
-        LLViewerRegion* region = LLWorld::getInstance()->getRegionFromPosGlobal(pos);
-        region = region ? region : gAgent.getRegion();
-        return region ? region->getWaterHeight() : -1.0e6f;
-    }
-}
-
-// static
-void SKOverviewCapture::syncTactical()
-{
-    // The setting is the switch, from the key, the menu or anywhere else; the modal view follows it.
-    static LLCachedControl<bool> tactical(gSavedSettings, "SKTacticalOverview", false);
-    static bool connected = false;
-    if (!connected)
-    {
-        // A change made while another mode covers the world, when no world frame runs onFrame.
-        connected = true;
-        gSavedSettings.getControl("SKTacticalOverview")->getSignal()->connect([](LLControlVariable*, const LLSD&, const LLSD&) { syncTactical(); });
-        // A new camera mode moves an open overview's camera at once.
-        auto replace = [](LLControlVariable*, const LLSD&, const LLSD&)
-        {
-            if (instanceExists() && instance().mTacticalOpen && SKModalView::top() == &instance())
-            {
-                instance().placeTacticalCamera(false);
-            }
-        };
-        gSavedSettings.getControl("SKTacticalCameraMode")->getSignal()->connect(replace);
-        gSavedSettings.getControl("SKTacticalBattlefieldNeighbours")->getSignal()->connect(replace);
-        auto tilt = [](LLControlVariable*, const LLSD&, const LLSD&)
-        {
-            if (battlefieldCamera() && instanceExists() && instance().mTacticalOpen && SKModalView::top() == &instance())
-            {
-                instance().placeBattlefieldCamera();
-            }
-        };
-        gSavedSettings.getControl("SKTacticalBattlefieldPitch")->getSignal()->connect(tilt);
-    }
-    if (tactical == (instanceExists() && instance().mTacticalOpen))
-    {
-        return;
-    }
-    if (tactical)
-    {
-        instance().openTactical();
-    }
-    else
-    {
-        instance().closeTactical();
-    }
-}
-
-void SKOverviewCapture::openTactical()
-{
-    const bool over_other_mode = SKModalView::worldCovered();
-    if (!SKModalView::instance().claim(this, SKModalView::PRIORITY_TACTICAL_OVERVIEW))
-    {
-        // Logged in, only RLVa holds the view shut: the switch goes off rather than open later by surprise.
-        if (LLStartUp::getStartupState() >= STATE_STARTED)
-        {
-            gSavedSettings.setBOOL("SKTacticalOverview", false);
-        }
-        return;
-    }
-    mTacticalOpen = true;
-    mTacticalKey.mValid = false;
-    if (SKModalView::top() == this)
-    {
-        placeTacticalCamera(over_other_mode);
-    }
-}
-
-void SKOverviewCapture::closeTactical()
-{
-    if (!mTacticalOpen)
-    {
-        return;
-    }
-    if (SKModalView::top() == this && !battlefieldCamera())
-    {
-        // The next open starts as far out as this one ended.
-        const F32 distance = (F32)(gAgentCamera.getCameraPositionGlobal() - gAgentCamera.getFocusGlobal()).magVec();
-        gSavedSettings.setF32("SKTacticalDistance", llclamp(distance, TACTICAL_MIN_M, TACTICAL_MAX_M));
-    }
-    mTacticalOpen = false;
-    mTacticalReady = false;
-    mTacticalPickable = false;
-    if (SKPopupPanes* popup = mPopup.get())
-    {
-        popup->closeAll();
-    }
-    // The last release puts the world camera back; a map under the overview takes its own back.
-    SKModalView::instance().release(this);
-}
-
-void SKOverviewCapture::closeModal()
-{
-    gSavedSettings.setBOOL("SKTacticalOverview", false);
-    closeTactical();
-}
-
-void SKOverviewCapture::onTopChanged(bool on_top)
-{
-    if (on_top && mTacticalOpen)
-    {
-        placeTacticalCamera(false);
-    }
-}
-
-void SKOverviewCapture::placeTacticalCamera(bool over_other_mode)
-{
-    if (battlefieldCamera())
-    {
-        placeBattlefieldCamera();
-        return;
-    }
-    static LLCachedControl<F32> distance_setting(gSavedSettings, "SKTacticalDistance", 60.f);
-    static LLCachedControl<F32> pitch_setting(gSavedSettings, "SKTacticalPitch", 55.f);
-    // Over the agent's floor when the camera follows it or another mode had moved it; else what alt-cam looked at.
-    LLVector3d focus;
-    tacticalCentre(focus);
-    if (over_other_mode || gAgentCamera.getFocusOnAvatar())
-    {
-        F32 floor_z, cut_z;
-        cutHeights(gAgent.getPositionGlobal(), gAgent.getPositionAgent().mV[VZ], floor_z, cut_z);
-        focus = gAgent.getPosGlobalFromAgent(LLVector3(gAgent.getPositionAgent().mV[VX], gAgent.getPositionAgent().mV[VY], floor_z));
-    }
-    LLVector3 heading = LLViewerCamera::getInstance()->getAtAxis();
-    heading.mV[VZ] = 0.f;
-    if (heading.normVec() < 1.0e-3f)
-    {
-        heading.setVec(1.f, 0.f, 0.f);
-    }
-    const F32 pitch = llclamp((F32)pitch_setting, 5.f, 89.5f) * DEG_TO_RAD;
-    const F32 distance = llclamp((F32)distance_setting, TACTICAL_MIN_M, TACTICAL_MAX_M);
-    const LLVector3d eye = focus - LLVector3d(heading * (distance * std::cos(pitch))) + LLVector3d(0.0, 0.0, distance * std::sin(pitch));
-    setTacticalCamera(eye, focus);
-}
-
-void SKOverviewCapture::setTacticalCamera(const LLVector3d& eye, const LLVector3d& focus)
-{
-    // Snapped, not eased, so the overview can be flicked on and off for bearings.
-    gAgentCamera.setFocusOnAvatar(false, false);
-    gAgentCamera.setCameraPosAndFocusGlobal(eye, focus, LLUUID::null);
-    gAgentCamera.stopCameraAnimation();
-    gAgentCamera.skipCameraSmoothing();
-}
-
-bool SKOverviewCapture::battlefieldBounds(LLVector3d& lo, LLVector3d& hi) const
-{
-    static LLCachedControl<bool> neighbours(gSavedSettings, "SKTacticalBattlefieldNeighbours", false);
-    LLViewerRegion* region = gAgent.getRegion();
-    if (!region)
-    {
-        return false;
-    }
-    // The agent's region, and with SKTacticalBattlefieldNeighbours the connected regions that touch it.
-    const LLVector3d origin = region->getOriginGlobal();
-    const F64 width = region->getWidth();
-    lo = origin;
-    hi = origin + LLVector3d(width, width, 0.0);
-    if (neighbours)
-    {
-        const LLVector3d own_lo = lo;
-        const LLVector3d own_hi = hi;
-        for (LLViewerRegion* other : LLWorld::getInstance()->getRegionList())
-        {
-            const LLVector3d o = other->getOriginGlobal();
-            const F64 w = other->getWidth();
-            if (other == region || o.mdV[VX] > own_hi.mdV[VX] || o.mdV[VX] + w < own_lo.mdV[VX] || o.mdV[VY] > own_hi.mdV[VY] ||
-                o.mdV[VY] + w < own_lo.mdV[VY])
-            {
-                continue;
-            }
-            lo.mdV[VX] = llmin(lo.mdV[VX], o.mdV[VX]);
-            lo.mdV[VY] = llmin(lo.mdV[VY], o.mdV[VY]);
-            hi.mdV[VX] = llmax(hi.mdV[VX], o.mdV[VX] + w);
-            hi.mdV[VY] = llmax(hi.mdV[VY], o.mdV[VY] + w);
-        }
-    }
-    return true;
-}
-
-void SKOverviewCapture::placeBattlefieldCamera()
-{
-    LLVector3d lo, hi;
-    if (!battlefieldBounds(lo, hi))
-    {
-        return;
-    }
-    F32 floor_z, cut_z;
-    cutHeights(gAgent.getPositionGlobal(), gAgent.getPositionAgent().mV[VZ], floor_z, cut_z);
-    const LLVector3d floor = gAgent.getPosGlobalFromAgent(LLVector3(0.f, 0.f, floor_z));
-    const LLVector3d focus((lo.mdV[VX] + hi.mdV[VX]) * 0.5, (lo.mdV[VY] + hi.mdV[VY]) * 0.5, floor.mdV[VZ]);
-    // North up, tilted to look north from the south; far enough that every corner of the area lies in the frustum,
-    // which a tilt turns into a trapezoid on the ground.
-    static LLCachedControl<F32> pitch_setting(gSavedSettings, "SKTacticalBattlefieldPitch", BATTLEFIELD_PITCH_DEG);
-    const LLViewerCamera* camera = LLViewerCamera::getInstance();
-    const LLRect world = gViewerWindow->getWorldViewRectRaw();
-    const F32 aspect = world.getHeight() > 0 ? (F32)world.getWidth() / (F32)world.getHeight() : camera->getAspect();
-    const F32 tan_half = std::tan(camera->getView() * 0.5f);
-    const F32 pitch = llclamp((F32)pitch_setting, 5.f, BATTLEFIELD_PITCH_DEG) * DEG_TO_RAD;
-    const LLVector3 forward(0.f, std::cos(pitch), -std::sin(pitch));
-    const LLVector3 up(0.f, std::sin(pitch), std::cos(pitch));
-    const F32 half_x = (F32)(hi.mdV[VX] - lo.mdV[VX]) * 0.5f * BATTLEFIELD_MARGIN;
-    const F32 half_y = (F32)(hi.mdV[VY] - lo.mdV[VY]) * 0.5f * BATTLEFIELD_MARGIN;
-    F32 fit = 0.f;
-    for (S32 corner = 0; corner < 4; ++corner)
-    {
-        // A corner a from the focus sits at depth a.forward + d before an eye d back along forward, so it fits once
-        // d covers its offsets across and up over the half-angle tangents.
-        const LLVector3 a((corner & 1) ? half_x : -half_x, (corner & 2) ? half_y : -half_y, 0.f);
-        const F32 depth = a * forward;
-        fit = llmax(fit, llmax(std::fabs(a.mV[VX]) / (tan_half * aspect), std::fabs(a * up) / tan_half) - depth);
-    }
-    const F32 distance = llclamp(fit, TACTICAL_MIN_M, BATTLEFIELD_MAX_M);
-    const LLVector3d north(0.0, 1.0, 0.0);
-    const LLVector3d eye = focus - north * (distance * std::cos(pitch)) + LLVector3d(0.0, 0.0, distance * std::sin(pitch));
-    setTacticalCamera(eye, focus);
-}
-
-void SKOverviewCapture::renderModal(const LLRect& world_rect_raw)
-{
-    // The display loop skips the world, and with it the overview's per-frame work: the maps, the census and the view.
-    updateCapsLockCapture();
-    if (mapsWanted() || mTacticalOpen)
-    {
-        frame();
-    }
-    composite();
-}
-
-bool SKOverviewCapture::pickGround(S32 x, S32 y, LLVector3d& ground) const
-{
-    const LLVector2 scale = gViewerWindow->getDisplayScale();
-    const LLVector2 at(x * scale.mV[VX] - mTacticalViewport[0], y * scale.mV[VY] - mTacticalViewport[1]);
-    return groundAt(at, ground);
-}
-
-bool SKOverviewCapture::groundBelow(const LLVector3d& eye, LLVector3d& ground) const
-{
-    ground.setVec(eye.mdV[VX], eye.mdV[VY], gAgent.getPositionGlobal().mdV[VZ]);
-    return true;
-}
-
-F64 SKOverviewCapture::flycamMaxScale() const
-{
-    static LLCachedControl<F32> max_scale(gSavedSettings, "SKTacticalFlycamMaxScale", 12.f);
-    return llmax((F64)max_scale, 1.0);
-}
-
-void SKOverviewCapture::tacticalCentre(LLVector3d& centre) const
-{
-    // Follow: the avatar. Alt-cam: the camera's focus target. Flycam: the surface under the camera.
-    if (LLViewerJoystick::getInstance()->getOverrideCamera())
-    {
-        const LLVector3 eye = LLViewerCamera::getInstance()->getOrigin();
-        centre = gAgent.getPosGlobalFromAgent(eye);
-        F32 ground = LLWorld::getInstance()->resolveLandHeightGlobal(centre);
-        LLVector4a start, end, hit;
-        start.load3(eye.mV);
-        end.set(eye.mV[VX], eye.mV[VY], llmin(ground, eye.mV[VZ]) - 1.f, 1.f);
-        S32 face = -1;
-        if (gPipeline.lineSegmentIntersectInWorld(start, end, false, false, true, false, &face, &hit))
-        {
-            ground = llmax(ground, hit.getF32ptr()[VZ]);
-        }
-        centre.mdV[VZ] = llmax(ground, waterAt(centre)); // over water the surface, not the seabed
-        return;
-    }
-    centre = gAgentCamera.getFocusOnAvatar() ? gAgent.getPositionGlobal() : gAgentCamera.getFocusTargetGlobal();
 }
 
 void SKOverviewCapture::frame()
 {
+    // Once a frame, whether onFrame or a caller that hides the world runs it.
+    const U32 frame_no = LLFrameTimer::getFrameCount();
+    if (mFrameRan && mFrameNo == frame_no)
+    {
+        return;
+    }
+    mFrameRan = true;
+    mFrameNo = frame_no;
     if (gCubeSnapshot || !LLPipeline::sRenderDeferred || !gPipeline.shadersLoaded() || !gAgent.getRegion())
     {
         LL_INFOS_ONCE("SKOverview") << "overview waits: cube snapshot " << gCubeSnapshot << ", deferred "
@@ -1100,8 +728,7 @@ void SKOverviewCapture::frame()
     LL_INFOS_ONCE("SKOverview") << "overview running" << LL_ENDL;
     updateDemand(true);
     readSpans();
-    static LLCachedControl<bool> tactical_on(gSavedSettings, "SKTacticalOverview", false);
-    if (mapsWanted() || (tactical_on && tacticalShown()))
+    if (mapsWanted() || viewWanted())
     {
         LL_PROFILE_ZONE_NAMED("sk overview census update");
         mCensus.update();
@@ -1109,12 +736,15 @@ void SKOverviewCapture::frame()
 
     if (mapsWanted())
     {
-        if (!tacticalShown())
+        // A view shown now works out the cut in its own render, which the maps then take: one that rendered last frame,
+        // or one just opened, whose render follows. Otherwise, a view that stopped rendering among them, they cut.
+        const bool view_cuts = view_shown_now() && (frame_no - mViewFrame <= 1 || sViewNotedFrom == frame_no);
+        if (!view_cuts)
         {
             // The cut's roofs, rooms and columns are GPU probes, so the maps run a probe frame of their own.
             static LLCachedControl<U32> probe_people(gSavedSettings, "SKOverviewProbeBudget", 8);
             mProbes.beginFrame(sGeomId, llmax((U32)probe_people, 1u));
-            updateCut();
+            updateCut(gAgent.getPositionGlobal(), sMapParams.mOccupants);
             mProbes.endFrame();
         }
         captureMaps(LLFrameTimer::getUptimeSeconds().value());
@@ -1122,10 +752,6 @@ void SKOverviewCapture::frame()
     else
     {
         mMaps.clear();
-    }
-    if (tactical_on && tacticalShown())
-    {
-        tactical();
     }
 }
 
@@ -1137,7 +763,7 @@ void SKOverviewCapture::resolve(LLRenderTarget& capture, LLRenderTarget& resolve
         LL_PROFILE_ZONE_NAMED_CATEGORY_PIPELINE("sk overview resolve");
         LL_PROFILE_GPU_ZONE("sk overview resolve");
         LLTimer timer;
-        // The tactical view's resolves are timed; the maps' fall inside their capture's span.
+        // The camera view's resolves are timed; the maps' fall inside their capture's span.
         ALQuerySpan span = shot.mTopDown ? ALQuerySpan() : gGL.queries().beginSpan();
         resolved.bindTarget();
         // The viewport stays whole with a rect: the resolve addresses its inputs by window pixel.
@@ -1174,11 +800,11 @@ void SKOverviewCapture::resolve(LLRenderTarget& capture, LLRenderTarget& resolve
         prog.uniform1f(SK_LEVEL_TOP, shot.mLevelTop);
         prog.uniform1f(SK_CUT, shot.mCut);
         prog.uniform1f(SK_WATER_Z, shot.mWater);
-        prog.uniform1f(SK_WATER_DEPTH, skmap::palette::WATER_DEPTH_M);
-        uniformColour(prog, SK_INVISIBLE, skmap::palette::DROP_EDGE);
+        prog.uniform1f(SK_WATER_DEPTH, mPalette.mWaterDepthM);
+        uniformColour(prog, SK_INVISIBLE, mPalette.mInvisible);
         static LLCachedControl<U32> debug_view(gSavedSettings, "SKOverviewDebugView", 0);
         prog.uniform1i(SK_DEBUG_VIEW, (GLint)(U32)debug_view);
-        prog.uniform1i(SK_CLASS_MASK, shot.mTopDown ? (GLint)mapClassMask() : -1);
+        prog.uniform1i(SK_CLASS_MASK, shot.mTopDown ? (GLint)sMapParams.mClassMask : -1);
         {
             // The territory: the regions styled as inside, at most SK_MAX_TERRITORY of them.
             std::vector<LLVector4> rects = shot.mTerritory.empty() ? std::vector<LLVector4>{ shot.mRegion } : shot.mTerritory;
@@ -1224,10 +850,10 @@ namespace
 void SKOverviewCapture::drawMovers(const Shot& shot)
 {
     LL_PROFILE_ZONE_SCOPED;
-    const S32 w = sTacticalWork.getWidth();
-    const S32 h = sTacticalWork.getHeight();
+    const S32 w = sViewWork.getWidth();
+    const S32 h = sViewWork.getHeight();
     ALQuerySpan span = gGL.queries().beginSpan();
-    sTacticalWork.bindTarget();
+    sViewWork.bindTarget();
     gGL.setViewport(0, 0, w, h);
     gGL.matrixMode(LLRender::MM_PROJECTION);
     gGL.pushMatrix();
@@ -1261,24 +887,24 @@ void SKOverviewCapture::drawMovers(const Shot& shot)
     gGL.matrixMode(LLRender::MM_MODELVIEW);
     gGL.popMatrix();
     gGLLastMatrix = NULL;
-    sTacticalWork.flush();
+    sViewWork.flush();
     endSpan(SpanKind::Movers, span);
 }
 
 bool SKOverviewCapture::ensureWork()
 {
-    const S32 w = sTacticalCapture.getWidth();
-    const S32 h = sTacticalCapture.getHeight();
-    if (sTacticalWork.isComplete() && (S32)sTacticalWork.getWidth() == w && (S32)sTacticalWork.getHeight() == h)
+    const S32 w = sViewCapture.getWidth();
+    const S32 h = sViewCapture.getHeight();
+    if (sViewWork.isComplete() && (S32)sViewWork.getWidth() == w && (S32)sViewWork.getHeight() == h)
     {
         return true;
     }
-    sTacticalWork.release();
+    sViewWork.release();
     mWorkValid = false;
-    if (!sTacticalWork.allocate(w, h, GL_RGBA8, true, true, ALTextureSlot::TT_TEXTURE, LLRenderTarget::MIPS_NONE,
+    if (!sViewWork.allocate(w, h, GL_RGBA8, true, true, ALTextureSlot::TT_TEXTURE, LLRenderTarget::MIPS_NONE,
                                 LLRenderTarget::DEPTH_FMT_32F))
     {
-        LL_WARNS_ONCE("SKOverview") << "tactical work target did not allocate" << LL_ENDL;
+        LL_WARNS_ONCE("SKOverview") << "camera view work target did not allocate" << LL_ENDL;
         return false;
     }
     return true;
@@ -1289,22 +915,22 @@ void SKOverviewCapture::updateWork(const Shot& shot, bool static_new, U64 patch_
     LL_PROFILE_ZONE_SCOPED;
     if (!ensureWork())
     {
-        mSceneDepth = &sTacticalCapture;
-        resolve(sTacticalCapture, sTacticalResolved, shot);
+        mSceneDepth = &sViewCapture;
+        resolve(sViewCapture, sViewResolved, shot);
         return;
     }
-    const S32 w = sTacticalWork.getWidth();
-    const S32 h = sTacticalWork.getHeight();
+    const S32 w = sViewWork.getWidth();
+    const S32 h = sViewWork.getHeight();
     const bool whole = static_new || !mWorkValid;
     LLGLDisable scissor(GL_SCISSOR_TEST); // a blit is scissored too
     if (whole)
     {
-        sTacticalWork.copyContents(sTacticalCapture, 0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+        sViewWork.copyContents(sViewCapture, 0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT, GL_NEAREST);
         mWorkValid = true;
         mPatchRect = LLRect();
         mMoverRect = LLRect();
     }
-    mSceneDepth = &sTacticalWork;
+    mSceneDepth = &sViewWork;
 
     const bool patch_moved = patch_key != mPatchKey;
     LLRect mover_rect;
@@ -1323,15 +949,15 @@ void SKOverviewCapture::updateWork(const Shot& shot, bool static_new, U64 patch_
     const bool redraw_patch = patch_rect.notEmpty() && (whole || patch_moved || (restore.notEmpty() && restore.overlaps(patch_rect)));
     if (!whole && restore.notEmpty())
     {
-        sTacticalWork.copyContents(sTacticalCapture, restore.mLeft, restore.mBottom, restore.mRight, restore.mTop, restore.mLeft,
+        sViewWork.copyContents(sViewCapture, restore.mLeft, restore.mBottom, restore.mRight, restore.mTop, restore.mLeft,
                                    restore.mBottom, restore.mRight, restore.mTop, GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT,
                                    GL_NEAREST);
     }
     if (redraw_patch)
     {
-        LL_PROFILE_ZONE_NAMED("sk tactical patch");
+        LL_PROFILE_ZONE_NAMED("sk overview view patch");
         ALQuerySpan span = gGL.queries().beginSpan();
-        render(sTacticalWork, sTacticalResolved, shot, false, &patch_rect);
+        render(sViewWork, sViewResolved, shot, false, &patch_rect);
         endSpan(SpanKind::Patch, span);
     }
     if (movers && mover_rect.notEmpty())
@@ -1340,17 +966,17 @@ void SKOverviewCapture::updateWork(const Shot& shot, bool static_new, U64 patch_
     }
     if (whole)
     {
-        resolve(sTacticalWork, sTacticalResolved, shot);
+        resolve(sViewWork, sViewResolved, shot);
     }
     else
     {
         LLRect dirty = rectUnion(restore, redraw_patch ? patch_rect : LLRect());
         if (dirty.notEmpty())
         {
-            LL_PROFILE_ZONE_NAMED("sk tactical dirty resolve");
+            LL_PROFILE_ZONE_NAMED("sk overview view dirty resolve");
             dirty.stretch(RESOLVE_REACH_PX);
             dirty.intersectWith(LLRect(0, h, w, 0));
-            resolve(sTacticalWork, sTacticalResolved, shot, &dirty);
+            resolve(sViewWork, sViewResolved, shot, &dirty);
         }
     }
     mPatchRect = patch_rect;
@@ -1528,7 +1154,7 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
                 // A build that landed since the last cut is drawn whole until applyCut writes its cuts.
                 cut_table.flush();
             }
-            // The tactical view cuts each part at its own height (SKOverviewCensus::applyCut); a map at the one plane.
+            // The camera view cuts each part at its own height (SKOverviewCensus::applyCut); a map at the one plane.
             // A table whose store could not be allocated has nothing to read, so its parts are drawn whole.
             const bool cuts = shot.mPartCuts && cut_table.publishedRows() > 0;
             // Circles bind the one permutation that discards; without them every pass keeps early depth.
@@ -1581,9 +1207,8 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
                 const GLsizei n = (GLsizei)llmin(shot.mDissolve.size(), (size_t)SK_MAX_DISSOLVE);
                 if (dissolve && n)
                 {
-                    static LLCachedControl<F32> soft(gSavedSettings, "SKTacticalDissolveSoftness", 0.25f);
                     prog.uniform1i(SK_DISSOLVE_COUNT, n);
-                    prog.uniform1f(SK_DISSOLVE_SOFT, llclamp((F32)soft, 0.f, 1.f));
+                    prog.uniform1f(SK_DISSOLVE_SOFT, shot.mDissolveSoft);
                     prog.uniform4fv(SK_DISSOLVE, n, shot.mDissolve.front().mV);
                     prog.uniform1fv(SK_DISSOLVE_FLOOR, n, shot.mDissolveFloor.data());
                 }
@@ -1765,7 +1390,7 @@ void SKOverviewCapture::captureMaps(F64 now)
 
     // The void tiles: the squares of the agent region's grid that no region covers, over the loaded regions' bounds
     // and one square past them, so the void between and around them is mapped and nothing beside a region is a hole.
-    static LLCachedControl<bool> void_tiles(gSavedSettings, "SKMapVoidTiles", true);
+    const bool void_tiles = sMapParams.mVoidTiles;
     const S32 VOID_RINGS_MAX = 8; // a 17 x 17 square at most, however far the regions reach
     std::vector<LLVector3d> voids;
     if (void_tiles)
@@ -1855,9 +1480,9 @@ void SKOverviewCapture::captureMaps(F64 now)
     };
 
     // A layer switched on or off restyles every map, nearest first.
-    if (mapClassMask() != mClassMask)
+    if (sMapParams.mClassMask != mClassMask)
     {
-        mClassMask = mapClassMask();
+        mClassMask = sMapParams.mClassMask;
         for (std::unique_ptr<RegionMap>& map : mMaps)
         {
             map->mLast = -1.0;
@@ -2014,7 +1639,7 @@ bool SKOverviewCapture::captureMap(RegionMap& map, LLViewerRegion* region, bool 
     shot.mFocus = LLVector3(centre.mV[VX], centre.mV[VY], floor_z);
     shot.mLevelTop = cut_z;
     shot.mWater = water;
-    // Styled as the tactical overview is: the void dimmed over its grid, the regions' outer edge glowing and the
+    // Styled as the camera view is: the void dimmed over its grid, the regions' outer edge glowing and the
     // borders between them dashed, the same in every map so the tiles meet.
     shot.mRegion = LLVector4(origin.mV[VX], origin.mV[VY], origin.mV[VX] + width, origin.mV[VY] + width);
     shot.mTerritory = territory();
@@ -2150,7 +1775,7 @@ bool SKOverviewCapture::outdoorsAt(const LLUUID& id, const LLVector3d& feet, F64
     }
     const SKWorldViewPtr world = SKRooms::instanceExists() ? SKRooms::instance().view() : nullptr;
     const SKWorldView::AirColumn* column = columnOf(world, id, feet, now);
-    const bool out = column && skmap::plan::outdoorsIn(*column, feet);
+    const bool out = column && skoverview::place::outdoorsIn(*column, feet);
     auto inserted = mOutdoors.emplace(id, Outdoors());
     Outdoors& held = inserted.first->second;
     held.mSeen = now;
@@ -2194,18 +1819,16 @@ const SKWorldView::AirColumn* SKOverviewCapture::columnOf(const SKWorldViewPtr& 
     return &held.mColumn;
 }
 
-void SKOverviewCapture::updateCut()
+void SKOverviewCapture::updateCut(const LLVector3d& centre, const std::vector<skoverview::Occupant>& occupants_in)
 {
     // Cut by building, for every view that draws the census: the agent's own at its level, and each other building
-    // in its region that holds someone the overview draws a marker for at its highest occupant's level; the rest,
-    // and other regions, whole. What stands between the tactical eye and someone is dissolved round them instead.
+    // in its region that holds an occupant at its highest occupant's level; the rest, and other regions, whole. What
+    // stands between the camera view's eye and someone is dissolved round them instead.
     F32 floor_z, cut_z;
     cutHeights(gAgent.getPositionGlobal(), gAgent.getPositionAgent().mV[VZ], floor_z, cut_z);
     static LLCachedControl<F32> cut_height(gSavedSettings, "SKOverviewCutHeight", 2.5f);
     std::vector<SKOverviewCensus::Occupant> occupants;
     const F64 now = LLFrameTimer::getUptimeSeconds().value();
-    LLVector3d centre;
-    tacticalCentre(centre);
     // The inputs, coarsely: the cut is worked out again only once the eye or someone has moved a little.
     U64 key = 1469598103934665603ull;
     auto mix = [&key](U64 v) { key = (key ^ v) * 1099511628211ull; };
@@ -2217,7 +1840,7 @@ void SKOverviewCapture::updateCut()
         }
     };
     auto addPerson = [&](const LLUUID& id, bool self, const LLVector3d& floor, const LLVector3d& feet, F32 cut,
-                         const skmap::plan::Whereabouts& where)
+                         const skoverview::place::Whereabouts& where)
     {
         SKOverviewCensus::Occupant o;
         o.mId = id;
@@ -2225,14 +1848,15 @@ void SKOverviewCapture::updateCut()
         o.mFloor = floor;
         o.mFeet = feet;
         o.mCut = cut;
-        if (where.mFound && (where.mIndoor || where.mBucket == skmap::plan::Bucket::SHELTERED) && where.mCeiling < 1e29f)
+        const bool enclosed = where.mFound && (where.mIndoor || where.mBucket == skoverview::place::Bucket::SHELTERED);
+        if (enclosed && where.mCeiling < 1e29f)
         {
             // Indoors the storey's own air bounds the cut: just under its ceiling, so the floor above is gone.
             o.mCut = where.mCeiling - 0.1f; // floor + 2.5 stands when the ceiling is unknown
         }
         o.mPriority = -(F32)dist_vec(feet, centre);
         o.mOutdoors = outdoorsAt(id, feet, now);
-        if (!o.mOutdoors && where.mFound && (where.mIndoor || where.mBucket == skmap::plan::Bucket::SHELTERED))
+        if (!o.mOutdoors && enclosed)
         {
             o.mRoom = roomAt(floor);
             o.mRoomCellM = skworld::RASTER_XY_M;
@@ -2252,26 +1876,25 @@ void SKOverviewCapture::updateCut()
     LLVector3d agent_feet = agent_floor; // the feet as they stand, which a hop lifts off the floor
     if (isAgentAvatarValid())
     {
-        agent_feet.mdV[VZ] = SKMapPeople::feetZ(gAgentAvatarp);
+        // Avatars stand upright, so the box's half height is all of it.
+        agent_feet.mdV[VZ] = gAgentAvatarp->getPositionGlobal().mdV[VZ] - 0.5 * (F64)gAgentAvatarp->getScale().mV[VZ];
     }
-    skmap::plan::Whereabouts agent_where;
+    skoverview::place::Whereabouts agent_where;
     const SKWorldViewPtr world = SKRooms::instanceExists() ? SKRooms::instance().view() : nullptr;
     if (const SKWorldView::AirColumn* column = columnOf(world, gAgent.getID(), agent_feet, now))
     {
-        agent_where = skmap::plan::whereabouts(*world, *column, agent_feet);
+        agent_where = skoverview::place::whereabouts(*column, agent_feet);
     }
     addPerson(gAgent.getID(), true, agent_floor, agent_feet, cut_z, agent_where);
-    for (const SKMapPeople::Person& p : SKMapPeople::instance().people())
+    for (const skoverview::Occupant& p : occupants_in)
     {
-        if (p.mVisibility == skmap::Visibility::HIDDEN || !p.mZKnown)
+        if (p.mHidden || !p.mZKnown || p.mId == gAgent.getID())
         {
             continue;
         }
-        LLVector3d floor = p.mPos;
-        floor.mdV[VZ] = p.mWhere.mFound ? (F64)p.mWhere.mFloor : p.mFeetZ;
-        LLVector3d feet = p.mPos;
-        feet.mdV[VZ] = p.mFeetZ;
-        addPerson(p.mId, false, floor, feet, (F32)floor.mdV[VZ] + (F32)cut_height, p.mWhere);
+        LLVector3d floor = p.mFeet;
+        floor.mdV[VZ] = p.mWhere.mFound ? (F64)p.mWhere.mFloor : p.mFeet.mdV[VZ];
+        addPerson(p.mId, false, floor, p.mFeet, (F32)floor.mdV[VZ] + (F32)cut_height, p.mWhere);
     }
     for (auto it = mOutdoors.begin(); it != mOutdoors.end();)
     {
@@ -2286,11 +1909,10 @@ void SKOverviewCapture::updateCut()
     mCensus.applyCut(gAgent.getRegion(), occupants, key, &mProbes);
 }
 
-U64 SKOverviewCapture::tacticalDissolve(Shot& shot, S32 w, S32 h, LLRect& rect)
+U64 SKOverviewCapture::viewDissolve(Shot& shot, const skoverview::ViewShotParams& params, S32 w, S32 h, LLRect& rect)
 {
     LL_PROFILE_ZONE_SCOPED;
-    static LLCachedControl<bool> enabled(gSavedSettings, "SKTacticalDissolve", true);
-    static LLCachedControl<F32> radius_scale(gSavedSettings, "SKTacticalDissolveRadius", 1.25f);
+    const skoverview::DissolveParams& dissolve = params.mDissolve;
     const F32 MIN_PX = 40.f;
     const F32 MAX_PX = 320.f;
     const F32 EASE_S = 0.2f;
@@ -2298,35 +1920,35 @@ U64 SKOverviewCapture::tacticalDissolve(Shot& shot, S32 w, S32 h, LLRect& rect)
     const F32 step = mDissolveTime < 0.0 ? 1.f : llclamp((F32)(now - mDissolveTime) / EASE_S, 0.f, 1.f);
     mDissolveTime = now;
 
-    // Who wants one: the agent, and everyone the overview marks.
+    // Who wants one: the agent, and every occupant shown.
     std::map<LLUUID, LLVector3> wanted;
-    if (enabled)
+    if (dissolve.mEnabled)
     {
         // Only close up, and only for someone in outdoor air: indoors the building's cut already shows them.
-        static LLCachedControl<F32> reach(gSavedSettings, "SKTacticalDissolveReach", 64.f);
-        const LLVector3 eye = gAgentCamera.getCameraPositionAgent();
-        const F64 seen_at = LLFrameTimer::getUptimeSeconds().value();
+        const LLVector3 eye = params.mEye;
         auto want = [&](const LLUUID& id, const LLVector3& feet)
         {
-            if (dist_vec(eye, feet + LLVector3(0.f, 0.f, 0.9f)) <= (F32)reach &&
-                outdoorsAt(id, gAgent.getPosGlobalFromAgent(feet), seen_at))
+            if (dist_vec(eye, feet + LLVector3(0.f, 0.f, 0.9f)) <= dissolve.mReach &&
+                outdoorsAt(id, gAgent.getPosGlobalFromAgent(feet), now))
             {
                 wanted[id] = feet;
             }
         };
-        // Anchored to the feet as they stand, as the markers are, never the floor under them.
+        // Anchored to the feet as they stand, as markers are, never the floor under them.
         LLVector3 self = gAgent.getPositionAgent();
-        self.mV[VZ] = isAgentAvatarValid() ? (F32)SKMapPeople::feetZ(gAgentAvatarp) : self.mV[VZ] - AVATAR_HALF_HEIGHT_M;
+        self.mV[VZ] = isAgentAvatarValid()
+                          ? self.mV[VZ] - 0.5f * gAgentAvatarp->getScale().mV[VZ]
+                          : self.mV[VZ] - AVATAR_HALF_HEIGHT_M;
         want(gAgent.getID(), self);
-        for (const SKMapPeople::Person& p : SKMapPeople::instance().people())
+        for (const skoverview::Occupant& p : params.mOccupants)
         {
-            if (p.mVisibility == skmap::Visibility::HIDDEN || !p.mZKnown)
+            if (p.mHidden || !p.mZKnown || p.mId == gAgent.getID())
             {
                 continue;
             }
-            LLVector3 floor = gAgent.getPosAgentFromGlobal(p.mPos);
-            floor.mV[VZ] = (F32)p.mFeetZ; // global z is agent z
-            want(p.mId, floor);
+            LLVector3 feet = gAgent.getPosAgentFromGlobal(p.mFeet);
+            feet.mV[VZ] = (F32)p.mFeet.mdV[VZ]; // global z is agent z
+            want(p.mId, feet);
         }
     }
     for (const auto& want : wanted)
@@ -2367,7 +1989,7 @@ U64 SKOverviewCapture::tacticalDissolve(Shot& shot, S32 w, S32 h, LLRect& rect)
         project(d.mFloor + LLVector3(0.f, 0.f, 1.8f), head_clip, unused);
         project(d.mFloor + LLVector3(0.f, 0.f, 0.9f), chest_clip, chest_eye);
         const F32 cw = chest_clip.getF32ptr()[3];
-        if (cw <= TACTICAL_NEAR_M || feet_clip.getF32ptr()[3] <= 0.f || head_clip.getF32ptr()[3] <= 0.f)
+        if (cw <= VIEW_NEAR_M || feet_clip.getF32ptr()[3] <= 0.f || head_clip.getF32ptr()[3] <= 0.f)
         {
             continue;
         }
@@ -2378,7 +2000,7 @@ U64 SKOverviewCapture::tacticalDissolve(Shot& shot, S32 w, S32 h, LLRect& rect)
         };
         const LLVector2 centre = window(chest_clip);
         const F32 tall = dist_vec(window(feet_clip), window(head_clip));
-        const F32 radius = llclamp(tall * (F32)radius_scale, MIN_PX, MAX_PX) * d.mAmount * d.mAmount * (3.f - 2.f * d.mAmount);
+        const F32 radius = llclamp(tall * dissolve.mRadius, MIN_PX, MAX_PX) * d.mAmount * d.mAmount * (3.f - 2.f * d.mAmount);
         if (radius < 1.f || centre.mV[VX] < -radius || centre.mV[VY] < -radius || centre.mV[VX] > w + radius ||
             centre.mV[VY] > h + radius)
         {
@@ -2396,6 +2018,7 @@ U64 SKOverviewCapture::tacticalDissolve(Shot& shot, S32 w, S32 h, LLRect& rect)
     rect = LLRect();
     U64 key = 1469598103934665603ull;
     auto mix = [&key](S64 v) { key = (key ^ (U64)v) * 1099511628211ull; };
+    shot.mDissolveSoft = llclamp(dissolve.mSoftness, 0.f, 1.f);
     for (const Circle& c : circles)
     {
         shot.mDissolve.push_back(c.mAt);
@@ -2416,42 +2039,41 @@ U64 SKOverviewCapture::tacticalDissolve(Shot& shot, S32 w, S32 h, LLRect& rect)
     }
     if (!circles.empty())
     {
-        static LLCachedControl<F32> soft(gSavedSettings, "SKTacticalDissolveSoftness", 0.25f);
-        mix(std::llround(llclamp((F32)soft, 0.f, 1.f) * 1000.f));
+        mix(std::llround(shot.mDissolveSoft * 1000.f));
     }
     return key;
 }
 
-void SKOverviewCapture::tactical()
+bool SKOverviewCapture::renderView(const skoverview::ViewShotParams& params)
 {
     LL_PROFILE_ZONE_SCOPED;
-    const S32 vx = gGLViewport[0], vy = gGLViewport[1], vw = gGLViewport[2], vh = gGLViewport[3];
+    mViewReady = false;
+    mViewPickable = false;
+    const S32 vx = params.mViewport[0], vy = params.mViewport[1], vw = params.mViewport[2], vh = params.mViewport[3];
     if (vw < 16 || vh < 16)
     {
-        LL_WARNS_ONCE("SKOverview") << "tactical overview skipped: world viewport " << vw << "x" << vh << LL_ENDL;
-        return;
+        LL_WARNS_ONCE("SKOverview") << "camera view skipped: viewport " << vw << "x" << vh << LL_ENDL;
+        return false;
     }
-    if (!ensureGL(sTacticalCapture, sTacticalResolved, vw, vh))
+    if (gCubeSnapshot || !LLPipeline::sRenderDeferred || !gPipeline.shadersLoaded() || !gAgent.getRegion())
     {
-        LL_WARNS_ONCE("SKOverview") << "tactical overview skipped: targets or shaders unavailable" << LL_ENDL;
-        return;
+        return false;
+    }
+    if (!ensureGL(sViewCapture, sViewResolved, vw, vh))
+    {
+        LL_WARNS_ONCE("SKOverview") << "camera view skipped: targets or shaders unavailable" << LL_ENDL;
+        return false;
     }
 
-    // The viewer's own camera, which alt-cam moves; the cut and the shading stay the avatar's.
+    // The caller's camera; the cut and the shading stay the avatar's.
     F32 floor_z, cut_z;
     cutHeights(gAgent.getPositionGlobal(), gAgent.getPositionAgent().mV[VZ], floor_z, cut_z);
-    const LLViewerCamera* camera = LLViewerCamera::getInstance();
-    const LLVector3 eye = camera->getOrigin();
-    const LLVector3 dir = camera->getAtAxis();
-    const LLVector3 left = camera->getLeftAxis();
-    const LLVector3 up = camera->getUpAxis();
-    LLVector3d centre = gAgentCamera.getFocusGlobal();
-    if (LLViewerJoystick::getInstance()->getOverrideCamera())
-    {
-        tacticalCentre(centre); // the flycam leaves the focus behind: the surface under it
-    }
-    const LLVector3 target = gAgent.getPosAgentFromGlobal(centre);
-    const F32 distance = llmax(dist_vec(eye, target), TACTICAL_MIN_M);
+    const LLVector3 eye = params.mEye;
+    const LLVector3 dir = params.mAt;
+    const LLVector3 left = params.mLeft;
+    const LLVector3 up = params.mUp;
+    const LLVector3 target = gAgent.getPosAgentFromGlobal(params.mCentre);
+    const F32 distance = llmax(dist_vec(eye, target), VIEW_MIN_M);
 
     Shot shot;
     LLVector4a eye4, dir4, up4;
@@ -2459,27 +2081,26 @@ void SKOverviewCapture::tactical()
     dir4.load3(dir.mV);
     up4.load3(up.mV);
     shot.mView = LLMatrix4a::lookDir(eye4, dir4, up4);
-    const F32 fov = camera->getView();
+    const F32 fov = params.mFov;
     const F32 aspect = (F32)vw / (F32)vh;
     // The cull reaches past the focus by the draw distance, so the surrounds stay whole however far out it zooms;
     // under reverse-Z the projection clips nothing far.
-    const F32 far_m = distance + llmax(camera->getFar(), 2.f * CENSUS_RANGE_M);
-    shot.mProj = al_perspective(fov, aspect, TACTICAL_NEAR_M,
-                                LLRender::sReverseZ ? std::numeric_limits<F32>::infinity() : far_m);
+    const F32 far_m = distance + llmax(params.mDrawDistance, 2.f * CENSUS_RANGE_M);
+    shot.mProj = al_perspective(fov, aspect, VIEW_NEAR_M, LLRender::sReverseZ ? std::numeric_limits<F32>::infinity() : far_m);
     shot.mEye = eye;
     shot.mCut = cut_z;
     // The fade follows the focus, but the height colours stay on the agent's floor, eased so a climb or teleport never flickers.
     const F64 now = LLFrameTimer::getUptimeSeconds().value();
-    if (mTacticalShadeTime < 0.0 || now - mTacticalShadeTime > 1.0)
+    if (mViewShadeTime < 0.0 || now - mViewShadeTime > 1.0)
     {
-        mTacticalShadeZ = floor_z;
+        mViewShadeZ = floor_z;
     }
     else
     {
-        mTacticalShadeZ += (floor_z - mTacticalShadeZ) * (F32)(1.0 - std::exp(-(now - mTacticalShadeTime) / 0.25));
+        mViewShadeZ += (floor_z - mViewShadeZ) * (F32)(1.0 - std::exp(-(now - mViewShadeTime) / 0.25));
     }
-    mTacticalShadeTime = now;
-    shot.mFocus = LLVector3(target.mV[VX], target.mV[VY], mTacticalShadeZ);
+    mViewShadeTime = now;
+    shot.mFocus = LLVector3(target.mV[VX], target.mV[VY], mViewShadeZ);
     shot.mPartCuts = true;
     shot.mLevelTop = cut_z;
     {
@@ -2492,10 +2113,10 @@ void SKOverviewCapture::tactical()
         shot.mTerritory = territory();
     }
     shot.mTopDown = false;
-    shot.mCull = *camera;
+    shot.mCull = *LLViewerCamera::getInstance();
     shot.mCull.setView(fov);
     shot.mCull.setAspect(aspect);
-    shot.mCull.setNear(TACTICAL_NEAR_M);
+    shot.mCull.setNear(VIEW_NEAR_M);
     shot.mCull.setFar(far_m);
     shot.mCull.setOrigin(eye);
     shot.mCull.setAxes(dir, left, up);
@@ -2507,42 +2128,42 @@ void SKOverviewCapture::tactical()
         // buffers, the region or the view's size. Otherwise last frame's image is composited again.
         const LLVector3 at_axis = dir;
         static LLCachedControl<bool> force(gSavedSettings, "SKOverviewForceRecapture", false);
-        static LLCachedControl<U32> tactical_debug_view(gSavedSettings, "SKOverviewDebugView", 0);
+        static LLCachedControl<U32> view_debug_view(gSavedSettings, "SKOverviewDebugView", 0);
         static LLCachedControl<U32> probe_people(gSavedSettings, "SKOverviewProbeBudget", 8);
         mProbes.beginFrame(sGeomId, llmax((U32)probe_people, 1u));
-        updateCut();
+        updateCut(params.mCentre, params.mOccupants);
         LLRect patch_rect;
-        const U64 dissolve_key = tacticalDissolve(shot, vw, vh, patch_rect);
-        const bool same = !force && mTacticalKey.mValid && (eye - mTacticalKey.mEye).magVecSquared() < 1e-4f &&
-                          at_axis * mTacticalKey.mDir > 0.999999f && fov == mTacticalKey.mFov && vw == mTacticalKey.mWidth &&
-                          vh == mTacticalKey.mHeight && std::fabs(cut_z - mTacticalKey.mCut) < 1e-3f &&
-                          mCensus.signature() == mTacticalKey.mCensus &&
-                          mCensus.cutStamp() == mTacticalKey.mCutStamp &&
-                          (gAgent.getRegion() ? gAgent.getRegion()->getHandle() : 0) == mTacticalKey.mRegionHandle &&
-                          (U32)tactical_debug_view == mTacticalKey.mDebugView;
+        const U64 dissolve_key = viewDissolve(shot, params, vw, vh, patch_rect);
+        const bool same = !force && mViewKey.mValid && (eye - mViewKey.mEye).magVecSquared() < 1e-4f &&
+                          at_axis * mViewKey.mDir > 0.999999f && fov == mViewKey.mFov && vw == mViewKey.mWidth &&
+                          vh == mViewKey.mHeight && std::fabs(cut_z - mViewKey.mCut) < 1e-3f &&
+                          mCensus.signature() == mViewKey.mCensus &&
+                          mCensus.cutStamp() == mViewKey.mCutStamp &&
+                          (gAgent.getRegion() ? gAgent.getRegion()->getHandle() : 0) == mViewKey.mRegionHandle &&
+                          (U32)view_debug_view == mViewKey.mDebugView;
         // The circles and the movers repair a copy of the static capture each frame; it is redone only on change.
         mMovers.setLoose(mCensus.restlessParts());
         const bool movers = mMovers.update();
         if (!same)
         {
-            LL_PROFILE_ZONE_NAMED("sk tactical render");
+            LL_PROFILE_ZONE_NAMED("sk overview view render");
             Shot scene = shot;
             scene.mDissolve.clear();
             scene.mDissolveFloor.clear();
             ALQuerySpan span = gGL.queries().beginSpan();
-            render(sTacticalCapture, sTacticalResolved, scene, false);
-            endSpan(SpanKind::Tactical, span);
-            mTacticalKey.mValid = true;
-            mTacticalKey.mEye = eye;
-            mTacticalKey.mDir = at_axis;
-            mTacticalKey.mFov = fov;
-            mTacticalKey.mWidth = vw;
-            mTacticalKey.mHeight = vh;
-            mTacticalKey.mCut = cut_z;
-            mTacticalKey.mCensus = mCensus.signature();
-            mTacticalKey.mCutStamp = mCensus.cutStamp();
-            mTacticalKey.mDebugView = tactical_debug_view;
-            mTacticalKey.mRegionHandle = gAgent.getRegion() ? gAgent.getRegion()->getHandle() : 0;
+            render(sViewCapture, sViewResolved, scene, false);
+            endSpan(SpanKind::View, span);
+            mViewKey.mValid = true;
+            mViewKey.mEye = eye;
+            mViewKey.mDir = at_axis;
+            mViewKey.mFov = fov;
+            mViewKey.mWidth = vw;
+            mViewKey.mHeight = vh;
+            mViewKey.mCut = cut_z;
+            mViewKey.mCensus = mCensus.signature();
+            mViewKey.mCutStamp = mCensus.cutStamp();
+            mViewKey.mDebugView = view_debug_view;
+            mViewKey.mRegionHandle = gAgent.getRegion() ? gAgent.getRegion()->getHandle() : 0;
             ++mCost.mRenders;
         }
         else
@@ -2552,74 +2173,25 @@ void SKOverviewCapture::tactical()
         updateWork(shot, !same, patch_rect.notEmpty() ? dissolve_key : 0, patch_rect, movers);
     }
 
-    mTacticalView = shot.mView;
-    mTacticalProj = shot.mProj;
-    mTacticalCentre = target;
-    mTacticalReach = distance + CENSUS_RANGE_M;
-    mTacticalDistance = distance;
-    mTacticalViewport[0] = vx;
-    mTacticalViewport[1] = vy;
-    mTacticalViewport[2] = vw;
-    mTacticalViewport[3] = vh;
-    updatePick();
+    mViewView = shot.mView;
+    mViewProj = shot.mProj;
+    mViewCentre = target;
+    mViewReach = distance + CENSUS_RANGE_M;
+    mViewViewport[0] = vx;
+    mViewViewport[1] = vy;
+    mViewViewport[2] = vw;
+    mViewViewport[3] = vh;
+    updatePick(params);
     mProbes.endFrame();
-    mTacticalReady = true;
-    mTacticalPickable = true;
-    LL_INFOS_ONCE("SKOverview") << "tactical overview rendered " << vw << "x" << vh << ", census tris " << mCensus.triangles()
+    mViewReady = true;
+    mViewPickable = true;
+    mViewFrame = LLFrameTimer::getFrameCount();
+    LL_INFOS_ONCE("SKOverview") << "camera view rendered " << vw << "x" << vh << ", census tris " << mCensus.triangles()
                                 << LL_ENDL;
-}
-
-
-bool SKOverviewCapture::tacticalShown()
-{
-    return instanceExists() && instance().mTacticalOpen && SKModalView::top() == &instance();
-}
-
-// static
-bool SKOverviewCapture::handleRightClick(S32 x, S32 y)
-{
-    return tacticalShown() && instance().rightClick(x, y);
-}
-
-bool SKOverviewCapture::rightClick(S32 x, S32 y)
-{
-    const LLVector2 scale = gViewerWindow->getDisplayScale();
-    const LLVector2 at(x * scale.mV[VX] - mTacticalViewport[0], y * scale.mV[VY] - mTacticalViewport[1]);
-    if (at.mV[VX] < 0.f || at.mV[VY] < 0.f || at.mV[VX] >= mTacticalViewport[2] || at.mV[VY] >= mTacticalViewport[3])
-    {
-        return false;
-    }
-    // The mini-map's pick: every marker within the tactical pick radius, nearest first.
-    const F32 radius = skmap::TACTICAL_PICK_PX * llmax(scale.mV[VX], scale.mV[VY]);
-    std::vector<std::pair<F32, LLUUID>> near_click;
-    for (const TacticalMark& mark : mTacticalMarks)
-    {
-        const F32 dist = dist_vec(mark.mAt, at);
-        if (dist <= radius)
-        {
-            near_click.emplace_back(dist, mark.mId);
-        }
-    }
-    std::sort(near_click.begin(), near_click.end());
-    std::vector<LLUUID> ids;
-    for (const auto& n : near_click)
-    {
-        ids.push_back(n.second);
-    }
-    LLVector3d world;
-    if (!groundAt(at, world))
-    {
-        world = gAgent.getPosGlobalFromAgent(mTacticalCentre);
-    }
-    if (SKPopupPanes* old = mPopup.get())
-    {
-        old->closeAll();
-    }
-    mPopup = SKMapMenu::open(gViewerWindow->getRootView(), x, y, world, SKMapMenu::freeze(ids));
     return true;
 }
 
-void SKOverviewCapture::updatePick()
+void SKOverviewCapture::updatePick(const skoverview::ViewShotParams& params)
 {
     // The texels read in earlier frames, oldest first: the newest that landed is the one a pick reads.
     for (auto it = mPicksInFlight.begin(); it != mPicksInFlight.end();)
@@ -2639,20 +2211,19 @@ void SKOverviewCapture::updatePick()
         it = mPicksInFlight.erase(it);
     }
     // This frame's: the shown frame's depth (the static capture, or the work target with the circles and the movers).
-    const LLVector2 scale = gViewerWindow->getDisplayScale();
-    const S32 x = (S32)std::floor(gViewerWindow->getCurrentMouseX() * scale.mV[VX] - mTacticalViewport[0]);
-    const S32 y = (S32)std::floor(gViewerWindow->getCurrentMouseY() * scale.mV[VY] - mTacticalViewport[1]);
-    if (!mSceneDepth || mPicksInFlight.size() >= 4 || !mProbes.readDepth(*mSceneDepth, x, y))
+    const S32 x = params.mCursor[0] - mViewViewport[0];
+    const S32 y = params.mCursor[1] - mViewViewport[1];
+    if (!params.mPick || !mSceneDepth || mPicksInFlight.size() >= 4 || !mProbes.readDepth(*mSceneDepth, x, y))
     {
         return;
     }
     PickSample sample;
     sample.mX = x;
     sample.mY = y;
-    sample.mView = mTacticalView;
-    sample.mProj = mTacticalProj;
-    sample.mViewport[2] = mTacticalViewport[2];
-    sample.mViewport[3] = mTacticalViewport[3];
+    sample.mView = mViewView;
+    sample.mProj = mViewProj;
+    sample.mViewport[2] = mViewViewport[2];
+    sample.mViewport[3] = mViewViewport[3];
     sample.mAgentOrigin = gAgent.getPosGlobalFromAgent(LLVector3::zero);
     sample.mFrame = mProbes.frame();
     sample.mValid = true;
@@ -2690,9 +2261,9 @@ bool SKOverviewCapture::groundAt(const LLVector2& at, LLVector3d& world) const
         }
     }
     ++mPicksByFallback;
-    // Otherwise the tactical camera's ray through the pixel: the terrain, then the agent's floor plane.
+    // Otherwise the view camera's ray through the pixel: the terrain, then the agent's floor plane.
     LLVector3 from, dir;
-    if (!cursorRay(mTacticalView, mTacticalProj, mTacticalViewport, at, from, dir))
+    if (!cursorRay(mViewView, mViewProj, mViewViewport, at, from, dir))
     {
         return false;
     }
@@ -2728,693 +2299,41 @@ bool SKOverviewCapture::groundAt(const LLVector2& at, LLVector3d& world) const
     return true;
 }
 
-bool SKOverviewCapture::beginPan(S32 x, S32 y)
+bool SKOverviewCapture::compositeView(const LLRect& rect, F32 tilt_px)
 {
-    // The composite clears mTacticalReady every frame, so a press between frames tests mTacticalPickable.
-    if (!tacticalShown() || !mTacticalPickable)
+    // Only this frame's render: an earlier one's camera and viewport may have been taken since.
+    if (mViewReady && mViewFrame != LLFrameTimer::getFrameCount())
     {
-        panTrace("press ignored: no tactical frame shown yet");
-        return false;
+        mViewReady = false;
     }
-    const LLVector2 scale = gViewerWindow->getDisplayScale();
-    const LLVector2 at(x * scale.mV[VX] - mTacticalViewport[0], y * scale.mV[VY] - mTacticalViewport[1]);
-    if (at.mV[VX] < 0.f || at.mV[VY] < 0.f || at.mV[VX] >= mTacticalViewport[2] || at.mV[VY] >= mTacticalViewport[3])
+    if (!mViewReady || !sComposite.mProgramObject || !sViewResolved.isComplete())
     {
-        panTrace("press ignored: outside the tactical viewport");
-        return false;
-    }
-    LLVector3 from, dir;
-    if (!cursorRay(mTacticalView, mTacticalProj, mTacticalViewport, at, from, dir) || dir.mV[VZ] > -1e-6f)
-    {
-        panTrace("press ignored: the cursor's ray does not point down");
-        return false;
-    }
-    LLVector3d grab_global;
-    if (!groundAt(at, grab_global))
-    {
-        panTrace("press ignored: no ground under the cursor");
-        return false;
-    }
-    mPan = Pan();
-    mPan.mActive = true;
-    mPan.mGrab = gAgent.getPosAgentFromGlobal(grab_global);
-    mPan.mView = mTacticalView;
-    mPan.mProj = mTacticalProj;
-    std::copy(std::begin(mTacticalViewport), std::end(mTacticalViewport), mPan.mViewport);
-    mPan.mEye = gAgentCamera.getCameraPositionGlobal();
-    mPan.mFocus = gAgentCamera.getFocusGlobal();
-    return true;
-}
-
-void SKOverviewCapture::pan(S32 x, S32 y)
-{
-    if (!mPan.mActive)
-    {
-        return;
-    }
-    // The camera only translates, so the press's ray through the cursor meets the grab's plane at Q and P - Q puts P
-    // back under the cursor; nothing is picked again while dragging.
-    const LLVector2 scale = gViewerWindow->getDisplayScale();
-    const LLVector2 at(x * scale.mV[VX] - mPan.mViewport[0], y * scale.mV[VY] - mPan.mViewport[1]);
-    LLVector3 from, dir, q;
-    if (!cursorRay(mPan.mView, mPan.mProj, mPan.mViewport, at, from, dir) || !rayPlane(from, dir, mPan.mGrab.mV[VZ], q))
-    {
-        panTrace("drag step skipped: the cursor's ray misses the grab's plane");
-        return;
-    }
-    LLVector3d step(mPan.mGrab.mV[VX] - q.mV[VX], mPan.mGrab.mV[VY] - q.mV[VY], 0.0);
-    LLVector3d lo, hi;
-    if (battlefieldBounds(lo, hi))
-    {
-        step = clampedPanStep(mPan.mEye, mPan.mFocus, step, lo, hi);
-    }
-    setTacticalCamera(mPan.mEye + step, mPan.mFocus + step);
-}
-
-// static
-void SKOverviewCapture::move(const skmodalview::Move& move)
-{
-    if (mPan.mActive || !tacticalShown())
-    {
-        return;
-    }
-    const LLViewerCamera* camera = LLViewerCamera::getInstance();
-    LLVector3 dir;
-    if (!skmodalview::groundDirection(camera->getAtAxis(), camera->getUpAxis(), move.mForward, move.mLeft, dir))
-    {
-        return;
-    }
-
-    // A fraction of the visible ground's width a second, so it feels the same at any zoom.
-    static LLCachedControl<F32> speed_setting(gSavedSettings, "SKTacticalKeyPanSpeed", 0.5f);
-    const LLVector3d eye = gAgentCamera.getCameraPositionGlobal();
-    const LLVector3d focus = gAgentCamera.getFocusGlobal();
-    const F32 distance = llmax((F32)(eye - focus).magVec(), 1.f);
-    const F32 ground_width = 2.f * distance * std::tan(camera->getView() * camera->getAspect() * 0.5f);
-    const F32 metres = ground_width * llmax((F32)speed_setting, 0.f) * (move.mFast ? 3.f : 1.f) * llmin(gFrameIntervalSeconds.value(), 0.1f);
-
-    LLVector3d step(dir * metres);
-    LLVector3d lo, hi;
-    if (battlefieldBounds(lo, hi))
-    {
-        step = clampedPanStep(eye, focus, step, lo, hi);
-    }
-    setTacticalCamera(eye + step, focus + step);
-}
-
-template <typename Project>
-void SKOverviewCapture::drawMarkers3D(const Project& project, S32 vw, S32 vh, std::vector<std::pair<size_t, LLVector2>>& drawn)
-{
-    LL_PROFILE_ZONE_NAMED("sk tactical markers 3d");
-    const std::vector<SKMapPeople::Person>& people = SKMapPeople::instance().people();
-    LLMatrix4a inverse_view;
-    inverse_view.setInverse(mTacticalView);
-    const LLVector3 eye(inverse_view.getF32ptr()[12], inverse_view.getF32ptr()[13], inverse_view.getF32ptr()[14]);
-    const LLVector3 light = LLVector3(-0.45f, 0.45f, 0.77f) / LLVector3(-0.45f, 0.45f, 0.77f).length();
-
-    struct Marker
-    {
-        LLVector3 mFloor;   // agent space, the avatar's feet
-        F32 mHeading = 0.f;
-        bool mHasHeading = false;
-        LLColor4 mColour;
-        size_t mPerson = (size_t)-1;
-        LLUUID mId;
-        bool mCoarse = false;   // known only from the region's coarse locations: no rotation, a coarse height
-        F32 mHeight = 0.f;      // the avatar's own height when known, else the default
-        F32 mRadius = 0.f;      // half the larger of its x and y size when known, else in proportion to the height
-        bool mHasShape = false; // drawn as its physics shape, from its agent size, pose and rotation
-        LLVector3 mCentre;      // agent space, the avatar's position: the shape's origin
-        LLQuaternion mRotation;
-        skcensus::AvatarPose mPose = skcensus::AvatarPose::STANDING;
-    };
-    // A loaded avatar's own size, as the sim has it: getScale() is the agent size from its object update (what
-    // llGetAgentSize reports), its box centred on the avatar's position, so its base is the floor the sim stands it
-    // on. The position is the object's, not the render position, which carries the hover offset. Sitting keeps the
-    // same size. Only when no size has come is the shape's body height used, on its pelvis-to-foot.
-    auto sized = [](Marker& m, const LLUUID& id)
-    {
-        LLViewerObject* object = gObjectList.findObject(id);
-        LLVOAvatar* avatar = object && object->isAvatar() ? static_cast<LLVOAvatar*>(object) : nullptr;
-        if (!avatar || avatar->isDead())
-        {
-            return;
-        }
-        const LLVector3 size = avatar->getScale();
-        const LLVector3 centre = avatar->getPositionAgent();
-        if (size.mV[VZ] > 0.1f)
-        {
-            m.mFloor = centre - LLVector3(0.f, 0.f, size.mV[VZ] * 0.5f);
-            m.mHeight = size.mV[VZ];
-            m.mRadius = llmax(size.mV[VX], size.mV[VY]) * 0.5f;
-            // The census's physics shape for its pose, about its position, turned as the sim has the avatar.
-            m.mHasShape = true;
-            m.mCentre = centre;
-            m.mRotation = avatar->isSelf() ? avatar->getRenderRotation() : avatar->skPredictedRotationRegion();
-            m.mPose = skcensus::avatarPose(avatar);
-        }
-        else if (avatar->mBodySize.mV[VZ] > 0.1f)
-        {
-            m.mFloor = avatar->getRenderPosition() - LLVector3(0.f, 0.f, avatar->getPelvisToFoot());
-            m.mHeight = avatar->mBodySize.mV[VZ];
-        }
-    };
-    std::vector<Marker> markers;
-    for (size_t i = 0; i < people.size(); ++i)
-    {
-        const SKMapPeople::Person& p = people[i];
-        Marker m;
-        // Tiers by what is known (SKMapPeople's own flags): the avatar object (live position and rotation), or only a
-        // coarse location, whose height may be the capped value, in which case it stands on the land under it.
-        m.mCoarse = !p.mLoaded;
-        LLVector3d where = p.mPos;
-        if (!p.mZKnown)
-        {
-            where.mdV[VZ] = LLWorld::getInstance()->resolveLandHeightGlobal(where) + AVATAR_HALF_HEIGHT_M;
-        }
-        m.mFloor = gAgent.getPosAgentFromGlobal(where) - LLVector3(0.f, 0.f, (F32)(p.mPos.mdV[VZ] - p.mFeetZ));
-        m.mHeading = p.mHeading;
-        m.mHasHeading = p.mHasHeading && !m.mCoarse;
-        const skmap::PaletteColour& coded = skmap::palette::DOT_COMBAT;
-        m.mColour = p.mVisibility == skmap::Visibility::DOT_CODED ? LLColor4(coded.mR, coded.mG, coded.mB, 1.f)
-                                                                  : LLColor4(p.mColour.mV[0], p.mColour.mV[1], p.mColour.mV[2], 1.f);
-        if (m.mCoarse)
-        {
-            m.mColour = LLColor4(m.mColour.mV[0] * 0.7f, m.mColour.mV[1] * 0.7f, m.mColour.mV[2] * 0.7f, 0.85f);
-        }
-        else
-        {
-            sized(m, p.mId);
-        }
-        m.mPerson = i;
-        m.mId = p.mId;
-        markers.push_back(m);
-    }
-    if (isAgentAvatarValid())
-    {
-        Marker m;
-        m.mFloor = gAgent.getPosAgentFromGlobal(LLVector3d(gAgent.getPositionGlobal().mdV[VX], gAgent.getPositionGlobal().mdV[VY], SKMapPeople::feetZ(gAgentAvatarp)));
-        sized(m, gAgent.getID());
-        const LLVector3 fwd = gAgent.getAtAxis();
-        m.mHeading = std::atan2(fwd.mV[VY], fwd.mV[VX]);
-        m.mHasHeading = true;
-        const skmap::PaletteColour& self = skmap::palette::SELF_DOT;
-        m.mColour = LLColor4(self.mR, self.mG, self.mB, 1.f);
-        markers.push_back(m);
-    }
-    if (markers.empty() || !sMarker.mProgramObject || !mSceneDepth || !mSceneDepth->isComplete())
-    {
-        return;
-    }
-
-    gGL.matrixMode(LLRender::MM_PROJECTION);
-    gGL.pushMatrix();
-    gGL.loadMatrix(mTacticalProj);
-    gGL.matrixMode(LLRender::MM_MODELVIEW);
-    gGL.pushMatrix();
-    gGL.loadMatrix(mTacticalView);
-    gGLLastMatrix = NULL;
-    LLGLDepthTest depth(GL_FALSE, GL_FALSE);
-    LLGLEnable blend(GL_BLEND);
-    gGL.setSceneBlendType(LLRender::BT_ALPHA);
-    LLGLDisable cull_face(GL_CULL_FACE);
-    sMarker.bind();
-    sMarker.bindDepthTexture(LLShaderMgr::DEFERRED_DEPTH, mSceneDepth);
-    sMarker.uniform4f(SK_VIEWPORT, (F32)mTacticalViewport[0], (F32)mTacticalViewport[1], (F32)vw, (F32)vh);
-    sMarker.uniform1f(SK_ZO, LLRender::sReverseZ ? 1.f : 0.f);
-    sMarker.uniform1f(SK_GHOST_ALPHA, MARKER_GHOST_ALPHA);
-
-    gGL.begin(LLRender::TRIANGLES);
-    // A triangle facing the camera, lit by the overview's key light; those facing away are left out (no depth buffer).
-    auto tri = [&](const LLVector3& a, const LLVector3& b, const LLVector3& c, const LLColor4& colour)
-    {
-        LLVector3 n = (b - a) % (c - a);
-        if (n.normVec() < 1e-8f)
-        {
-            return;
-        }
-        if (n * (eye - a) < 0.f)
-        {
-            return;
-        }
-        const F32 shade = 0.45f + 0.55f * llmax(n * light, 0.f);
-        gGL.color4f(colour.mV[0] * shade, colour.mV[1] * shade, colour.mV[2] * shade, colour.mV[3]);
-        gGL.vertex3fv(a.mV);
-        gGL.vertex3fv(b.mV);
-        gGL.vertex3fv(c.mV);
-    };
-    // Zoomed out past SKTacticalFlatMarkerPixelsPerMetre the bodies give way, crossfaded, to the mini-map's own flat
-    // markers at its constant pixel size, drawn over everything so they read as easily as on the mini-map.
-    static LLCachedControl<F32> swap_ppm(gSavedSettings, "SKTacticalFlatMarkerPixelsPerMetre", 10.f);
-    const F64 now = LLFrameTimer::getUptimeSeconds().value();
-    const F32 fade_step = mMarkerFadeTime < 0.0 ? 1.f : (F32)(now - mMarkerFadeTime) / FLAT_FADE_S;
-    mMarkerFadeTime = now;
-    std::map<LLUUID, F32> blends;
-    const LLVector3 sideways = LLViewerCamera::getInstance()->getLeftAxis();
-    auto faded = [](const LLColor4& c, F32 a) { return LLColor4(c.mV[0], c.mV[1], c.mV[2], c.mV[3] * a); };
-    struct Flat
-    {
-        size_t mPerson = (size_t)-1;   // none for the agent's own
-        LLVector2 mAt;
-        LLVector2 mAhead;
-        bool mHasAhead = false;
-    };
-    std::vector<Flat> flats;
-    // Where a point lands in the window, off it or not; false only behind the camera.
-    LLMatrix4a vp;
-    vp.setMul(mTacticalView, mTacticalProj);
-    auto screen = [&](const LLVector3& agent_pos, LLVector2& out) -> bool
-    {
-        LLVector4a p, clip;
-        p.set(agent_pos.mV[VX], agent_pos.mV[VY], agent_pos.mV[VZ], 1.f);
-        vp.transform4(p, clip);
-        const F32 w = clip.getF32ptr()[3];
-        if (w <= 1e-4f)
-        {
-            return false;
-        }
-        out.set((clip.getF32ptr()[0] / w * 0.5f + 0.5f) * vw, (clip.getF32ptr()[1] / w * 0.5f + 0.5f) * vh);
-        return true;
-    };
-    for (const Marker& m : markers)
-    {
-        // Kept while any of it, feet to head, is near the window, so feet just off its edge leave the body drawn.
-        LLVector2 at0, head;
-        if (!screen(m.mFloor, at0) || !screen(m.mFloor + LLVector3(0.f, 0.f, m.mHeight > 0.f ? m.mHeight : 2.f), head))
-        {
-            continue;
-        }
-        const F32 margin = 32.f;
-        if (llmax(at0.mV[VX], head.mV[VX]) < -margin || llmax(at0.mV[VY], head.mV[VY]) < -margin ||
-            llmin(at0.mV[VX], head.mV[VX]) > vw + margin || llmin(at0.mV[VY], head.mV[VY]) > vh + margin)
-        {
-            continue;
-        }
-        LLVector2 side;
-        const F32 ppm = screen(m.mFloor + sideways, side) ? (side - at0).length() : 0.f;
-        const bool has_body = m.mHasShape && !m.mCoarse;
-        // Hysteresis as well as the fade: a flat marker turns back into a body only a fifth past the threshold.
-        const auto known = mFlatBlend.find(m.mId);
-        F32 blend = known != mFlatBlend.end() ? known->second : (ppm < swap_ppm ? 1.f : 0.f);
-        const bool small = ppm < swap_ppm * (blend > 0.5f ? 1.2f : 1.f);
-        blend = has_body ? llclamp(blend + (small ? fade_step : -fade_step), 0.f, 1.f) : 1.f;
-        blends[m.mId] = blend;
-        LLVector3 top_c = m.mFloor;
-        if (has_body && blend < 1.f)
-        {
-            // The avatar's own physics shape, about its position, at true size.
-            const LLColor4 colour = faded(m.mColour, 1.f - blend);
-            const std::vector<LLVector3>& shape = skcensus::avatarShape(m.mPose, m.mHeight);
-            F32 top_z = -F32_MAX;
-            for (size_t v = 0; v + 2 < shape.size(); v += 3)
-            {
-                const LLVector3 a = m.mCentre + shape[v] * m.mRotation;
-                const LLVector3 b = m.mCentre + shape[v + 1] * m.mRotation;
-                const LLVector3 c = m.mCentre + shape[v + 2] * m.mRotation;
-                tri(a, b, c, colour);
-                top_z = llmax(top_z, llmax(a.mV[VZ], llmax(b.mV[VZ], c.mV[VZ])));
-            }
-            if (blend < 0.5f)
-            {
-                top_c = LLVector3(m.mCentre.mV[VX], m.mCentre.mV[VY], top_z);
-            }
-            if (m.mHasHeading)
-            {
-                // The minimap's heading wedge as a flat slab: a solid triangle just clear of the body, its top flush
-                // with the shape's, along the body's heading, in the minimap's proportions to the body's radius.
-                const LLVector3 ahead(std::cos(m.mHeading), std::sin(m.mHeading), 0.f);
-                const LLVector3 across(-ahead.mV[VY], ahead.mV[VX], 0.f);
-                const F32 body_r = m.mRadius;
-                const LLVector3 from(m.mCentre.mV[VX], m.mCentre.mV[VY], top_z - body_r * HEADING_THICK_PER_RADIUS * 0.5f);
-                const LLVector3 tip = from + ahead * (body_r * (1.f + HEADING_TIP_PER_RADIUS));
-                const LLVector3 base = from + ahead * (body_r * (1.f + HEADING_BASE_PER_RADIUS));
-                const LLVector3 l = base + across * (body_r * HEADING_HALF_PER_RADIUS);
-                const LLVector3 rr = base - across * (body_r * HEADING_HALF_PER_RADIUS);
-                const LLVector3 up(0.f, 0.f, body_r * HEADING_THICK_PER_RADIUS * 0.5f);
-                tri(tip + up, l + up, rr + up, colour);
-                tri(tip - up, rr - up, l - up, colour);
-                tri(tip - up, l - up, l + up, colour);
-                tri(tip - up, l + up, tip + up, colour);
-                tri(rr - up, tip - up, tip + up, colour);
-                tri(rr - up, tip + up, rr + up, colour);
-                tri(l - up, rr - up, rr + up, colour);
-                tri(l - up, rr + up, l + up, colour);
-            }
-        }
-        // Labels, hover, picks and menus take the projected top of the marker, or the flat marker's top edge.
-        LLVector2 top;
-        bool placed = false;
-        if (blend >= 0.5f)
-        {
-            Flat f;
-            f.mPerson = m.mPerson;
-            f.mAt = at0;
-            LLVector2 tip;
-            if (m.mHasHeading && screen(m.mFloor + LLVector3(std::cos(m.mHeading), std::sin(m.mHeading), 0.f), tip))
-            {
-                f.mAhead = tip - at0;
-                f.mHasAhead = f.mAhead.normVec() > 1e-4f;
-            }
-            flats.push_back(f);
-            const F32 radius = m.mPerson != (size_t)-1 ? skmapdraw::markerRadius(people[m.mPerson], skmap::FloorRelation::SAME)
-                                                       : skmap::palette::SELF_DOT_RADIUS_PX;
-            top = at0 + LLVector2(0.f, radius);
-            placed = true;
-        }
-        else
-        {
-            placed = project(top_c, top);
-        }
-        if (placed)
-        {
-            if (m.mPerson != (size_t)-1)
-            {
-                mTacticalMarks.push_back({ m.mId, top });
-                drawn.emplace_back(m.mPerson, top);
-            }
-        }
-    }
-    mFlatBlend.swap(blends);
-    gGL.end();
-    gGL.flush();
-    sMarker.unbindTexture(LLShaderMgr::DEFERRED_DEPTH);
-    sMarker.unbind();
-    gGL.matrixMode(LLRender::MM_PROJECTION);
-    gGL.popMatrix();
-    gGL.matrixMode(LLRender::MM_MODELVIEW);
-    gGL.popMatrix();
-    gGLLastMatrix = NULL;
-    // The 2D pass the caller resumes in, where the flat markers draw as the mini-map draws them.
-    gUIProgram.bind();
-    if (flats.empty())
-    {
-        return;
-    }
-    static LLCachedControl<U32> font_px(gSavedSettings, "SKMapMarkerFontPx", 8);
-    const F32 px = llclamp(static_cast<F32>(font_px), 8.f, 11.f);
-    auto radius_of = [&](const Flat& f)
-    {
-        return f.mPerson != (size_t)-1 ? skmapdraw::markerRadius(people[f.mPerson], skmap::FloorRelation::SAME)
-                                       : skmap::palette::SELF_DOT_RADIUS_PX;
-    };
-    for (const Flat& f : flats)
-    {
-        skmapdraw::shadow(f.mAt, radius_of(f));
-    }
-    gGL.getTextureSlot(0)->unbind();
-    gGL.begin(LLRender::TRIANGLES);
-    for (const Flat& f : flats)
-    {
-        const F32 radius = radius_of(f);
-        skmapdraw::colour(skmap::palette::CODE_INK);
-        skmapdraw::disc(f.mAt, radius + MARKER_HALO_PX);
-        if (f.mPerson != (size_t)-1)
-        {
-            skmapdraw::personMarker(people[f.mPerson], f.mAt, radius, f.mHasAhead ? &f.mAhead : nullptr,
-                                    skmap::FloorRelation::SAME, 0.f, px);
-            continue;
-        }
-        skmapdraw::colour(skmap::palette::SELF_DOT);
-        if (f.mHasAhead)
-        {
-            const LLVector2 across(-f.mAhead.mV[VY], f.mAhead.mV[VX]);
-            const LLVector2 base = f.mAt + f.mAhead * (radius + skmap::palette::HEADING_BASE_PX);
-            skmapdraw::triangle(f.mAt + f.mAhead * (radius + skmap::palette::HEADING_TIP_PX),
-                                base + across * skmap::palette::HEADING_HALF_PX, base - across * skmap::palette::HEADING_HALF_PX);
-        }
-        skmapdraw::disc(f.mAt, radius);
-    }
-    gGL.end();
-    for (const Flat& f : flats)
-    {
-        if (f.mPerson != (size_t)-1)
-        {
-            skmapdraw::personCode(people[f.mPerson], f.mAt, skmap::FloorRelation::SAME);
-        }
-    }
-}
-
-void SKOverviewCapture::composite()
-{
-    if (!mTacticalReady || !sComposite.mProgramObject || !sTacticalResolved.isComplete())
-    {
-        LL_WARNS_ONCE("SKOverview") << "tactical composite skipped: rendered " << mTacticalReady << ", shader "
-                                    << (sComposite.mProgramObject != 0) << ", target " << sTacticalResolved.isComplete()
+        LL_WARNS_ONCE("SKOverview") << "camera view composite skipped: rendered " << mViewReady << ", shader "
+                                    << (sComposite.mProgramObject != 0) << ", target " << sViewResolved.isComplete()
                                     << LL_ENDL;
-        return;
+        return false;
     }
-    mTacticalReady = false;
+    mViewReady = false;
     LL_PROFILE_ZONE_SCOPED;
-    static LLCachedControl<F32> tilt_setting(gSavedSettings, "SKTacticalTiltShift", 4.f);
-    const S32 vx = mTacticalViewport[0], vy = mTacticalViewport[1], vw = mTacticalViewport[2], vh = mTacticalViewport[3];
-    if (LLRenderTarget* bound = LLRenderTarget::getCurrentBoundTarget())
-    {
-        LL_WARNS_ONCE("SKOverview") << "tactical composite found a render target still bound after renderFinalize ("
-                                    << bound->getWidth() << "x" << bound->getHeight() << "); drawing into it" << LL_ENDL;
-    }
-    else
-    {
-        // With no target bound, the window's back buffer is already the one bound.
-        llassert(LLRenderTarget::sCurFBO == 0);
-    }
+    const S32 vx = rect.mLeft, vy = rect.mBottom, vw = rect.getWidth(), vh = rect.getHeight();
     LLGLDisable scissor(GL_SCISSOR_TEST);
     gGL.setColorMask(true, true);
     LLTimer composite_timer;
     {
-        LL_PROFILE_ZONE_NAMED("sk tactical composite");
+        LL_PROFILE_ZONE_NAMED("sk overview view composite");
         gGL.setViewport(vx, vy, vw, vh);
         LLGLDepthTest depth(GL_FALSE, GL_FALSE);
         LLGLDisable blend(GL_BLEND);
         LLGLDisable cull_face(GL_CULL_FACE);
         sComposite.bind();
-        sComposite.bindTexture(LLShaderMgr::DIFFUSE_MAP, &sTacticalResolved, ALSamplers::BilinearClamp);
+        sComposite.bindTexture(LLShaderMgr::DIFFUSE_MAP, &sViewResolved, ALSamplers::BilinearClamp);
         sComposite.uniform4f(SK_VIEWPORT, (F32)vx, (F32)vy, (F32)vw, (F32)vh);
-        sComposite.uniform1f(SK_TILT_PX, llmax((F32)tilt_setting, 0.f));
-        uniformColour(sComposite, SK_GROUND, skmap::palette::CODE_INK);
+        sComposite.uniform1f(SK_TILT_PX, llmax(tilt_px, 0.f));
+        uniformColour(sComposite, SK_GROUND, mPalette.mGround);
         gPipeline.mScreenTriangleVB->setBuffer();
         gPipeline.mScreenTriangleVB->drawArrays(LLRender::TRIANGLES, 0, 3);
         sComposite.unbindTexture(LLShaderMgr::DIFFUSE_MAP);
         sComposite.unbind();
-    }
-
-    {
-        // The mini-map's own markers and visibility rules (SKMapPeople, skmapdraw::personMarker), at a constant pixel
-        // size; headings are the avatars' facings laid on the ground and projected through the tilted camera.
-        LL_PROFILE_ZONE_NAMED("sk tactical markers");
-        LLMatrix4a vp;
-        vp.setMul(mTacticalView, mTacticalProj);
-        auto project = [&](const LLVector3& agent_pos, LLVector2& out) -> bool
-        {
-            LLVector4a p, clip;
-            p.set(agent_pos.mV[VX], agent_pos.mV[VY], agent_pos.mV[VZ], 1.f);
-            vp.transform4(p, clip);
-            const F32 w = clip.getF32ptr()[3];
-            if (w <= 1e-4f)
-            {
-                return false;
-            }
-            out.set((clip.getF32ptr()[0] / w * 0.5f + 0.5f) * vw, (clip.getF32ptr()[1] / w * 0.5f + 0.5f) * vh);
-            return out.mV[VX] > -32.f && out.mV[VY] > -32.f && out.mV[VX] < vw + 32.f && out.mV[VY] < vh + 32.f;
-        };
-        auto ground_ahead = [&](const LLVector3& agent_pos, const LLVector2& at, F32 heading, LLVector2& ahead) -> bool
-        {
-            LLVector2 tip;
-            if (!project(agent_pos + LLVector3(std::cos(heading), std::sin(heading), 0.f), tip))
-            {
-                return false;
-            }
-            ahead = tip - at;
-            return ahead.normVec() > 1e-4f;
-        };
-
-        gGL.setViewport(vx, vy, vw, vh);
-        gGL.matrixMode(LLRender::MM_PROJECTION);
-        gGL.pushMatrix();
-        gGL.loadIdentity();
-        gGL.ortho(0.f, (F32)vw, 0.f, (F32)vh, -1.f, 1.f);
-        gGL.matrixMode(LLRender::MM_MODELVIEW);
-        gGL.pushMatrix();
-        gGL.loadIdentity();
-        gGLLastMatrix = NULL;
-        LLGLDepthTest depth(GL_FALSE, GL_FALSE);
-        LLGLEnable blend(GL_BLEND);
-        gGL.setSceneBlendType(LLRender::BT_ALPHA);
-        gUIProgram.bind();
-        gGL.getTextureSlot(0)->unbind();
-
-        static LLCachedControl<U32> font_px(gSavedSettings, "SKMapMarkerFontPx", 8);
-        const F32 px = llclamp(static_cast<F32>(font_px), 8.f, 11.f);
-        const LLVector3d centre = gAgent.getPosGlobalFromAgent(mTacticalCentre);
-        const F64 reach = mTacticalReach;
-        SKMapPeople::instance().noteDrawn(centre - LLVector3d(reach, reach, reach), centre + LLVector3d(reach, reach, reach));
-        mTacticalMarks.clear();
-        std::vector<std::pair<size_t, LLVector2>> drawn;
-        drawMarkers3D(project, vw, vh, drawn);
-        gGL.flush();
-        {
-            // Only a mouselook LookAt is precise enough to draw here; a body's facing is the mini-map's rough hint.
-            auto clip_project = [&](const LLVector3& agent_pos, LLVector2& out) -> bool
-            {
-                LLVector4a p, clip;
-                p.set(agent_pos.mV[VX], agent_pos.mV[VY], agent_pos.mV[VZ], 1.f);
-                vp.transform4(p, clip);
-                const F32 w = clip.getF32ptr()[3];
-                if (w <= 1e-4f)
-                {
-                    return false;
-                }
-                out.set((clip.getF32ptr()[0] / w * 0.5f + 0.5f) * vw, (clip.getF32ptr()[1] / w * 0.5f + 0.5f) * vh);
-                return true;
-            };
-            gGL.begin(LLRender::TRIANGLES);
-            for (const auto& entry : SKMapPeople::instance().firingLines())
-            {
-                const SKMapPeople::FiringLine& line = entry.second;
-                LLVector2 a, b;
-                if (!line.mPrecise || !clip_project(gAgent.getPosAgentFromGlobal(line.mFrom), a) ||
-                    !clip_project(gAgent.getPosAgentFromGlobal(line.mTo), b))
-                {
-                    continue;
-                }
-                LLVector2 d = b - a;
-                if (d.normVec() < 1e-3f)
-                {
-                    continue;
-                }
-                // The mini-map's line, brighter at the shooter and fainter over its reach.
-                const F32 reach = static_cast<F32>(dist_vec(line.mFrom, line.mTo)) / skmap::palette::FIRING_REACH_M;
-                const LLColor4 near_c(1.f, 1.f, 1.f, skmap::palette::FIRING_ALPHA_NEAR);
-                const LLColor4 far_c(1.f, 1.f, 1.f,
-                                     lerp(skmap::palette::FIRING_ALPHA_NEAR, skmap::palette::FIRING_ALPHA_FAR, llclamp(reach, 0.f, 1.f)));
-                const LLVector2 n(-d.mV[VY] * 0.5f, d.mV[VX] * 0.5f);
-                gGL.color4fv(near_c.mV);
-                gGL.vertex2f((a - n).mV[VX], (a - n).mV[VY]);
-                gGL.color4fv(far_c.mV);
-                gGL.vertex2f((b - n).mV[VX], (b - n).mV[VY]);
-                gGL.vertex2f((b + n).mV[VX], (b + n).mV[VY]);
-                gGL.color4fv(near_c.mV);
-                gGL.vertex2f((a - n).mV[VX], (a - n).mV[VY]);
-                gGL.color4fv(far_c.mV);
-                gGL.vertex2f((b + n).mV[VX], (b + n).mV[VY]);
-                gGL.color4fv(near_c.mV);
-                gGL.vertex2f((a + n).mV[VX], (a + n).mV[VY]);
-            }
-            gGL.end();
-            gGL.flush();
-        }
-        {
-            // Projectiles over the markers, as on the mini-map: a streak the prim's length, fading to its tail.
-            std::map<LLUUID, LLColor4> shooters;
-            for (const SKMapPeople::Person& person : SKMapPeople::instance().people())
-            {
-                shooters[person.mId] = person.mColour;
-            }
-            const LLColor4 plain = LLColor4(skmap::palette::PROJECTILE.mR, skmap::palette::PROJECTILE.mG, skmap::palette::PROJECTILE.mB,
-                                            skmap::palette::PROJECTILE.mA);
-            gGL.begin(LLRender::TRIANGLES);
-            // Fast movers' recent path, faded from the head's opacity to clear at the oldest point.
-            static LLCachedControl<F32> trail_px(gSavedSettings, "SKMapProjectileMinWidthPx", 2.f);
-            const F64 now = LLFrameTimer::getUptimeSeconds().value();
-            for (const auto& entry : SKMapPeople::instance().fastTrails())
-            {
-                const SKMapPeople::FastTrail& trail = entry.second;
-                const auto& pts = trail.mPoints;
-                const F32 half = llmax(static_cast<F32>(trail_px), 0.5f) * 0.5f;
-                for (size_t i = 0; i + 1 < pts.size(); ++i)
-                {
-                    LLVector2 a, b;
-                    if (!project(gAgent.getPosAgentFromGlobal(pts[i].second), a) ||
-                        !project(gAgent.getPosAgentFromGlobal(pts[i + 1].second), b))
-                    {
-                        continue;
-                    }
-                    LLVector2 d = a - b;
-                    if (d.normVec() < 1e-4f)
-                    {
-                        continue;
-                    }
-                    const F32 life = llmax(trail.mLife, 1e-3f);
-                    const F32 alpha_a = trail.mAlpha * (1.f - llclamp(static_cast<F32>(now - pts[i].first) / life, 0.f, 1.f));
-                    const F32 alpha_b = trail.mAlpha * (1.f - llclamp(static_cast<F32>(now - pts[i + 1].first) / life, 0.f, 1.f));
-                    const LLVector2 n(-d.mV[VY] * half, d.mV[VX] * half);
-                    auto at = [&](const LLVector2& v, F32 alpha)
-                    {
-                        gGL.color4f(plain.mV[VRED], plain.mV[VGREEN], plain.mV[VBLUE], alpha);
-                        gGL.vertex2f(v.mV[VX], v.mV[VY]);
-                    };
-                    at(b - n, alpha_b);
-                    at(a - n, alpha_a);
-                    at(a + n, alpha_a);
-                    at(b - n, alpha_b);
-                    at(a + n, alpha_a);
-                    at(b + n, alpha_b);
-                }
-            }
-            for (const SKMapPeople::Projectile& p : SKMapPeople::instance().projectiles())
-            {
-                const LLVector3 head_agent = gAgent.getPosAgentFromGlobal(p.mPos);
-                LLVector2 head, back;
-                if (!project(head_agent, head) || !project(head_agent - p.mDir, back))
-                {
-                    continue;
-                }
-                LLVector2 dir = head - back;
-                const F32 ppm = dir.normVec();
-                if (ppm < 1e-4f)
-                {
-                    continue;
-                }
-                const auto found = p.mShooter.notNull() ? shooters.find(p.mShooter) : shooters.end();
-                const LLColor4& colour = found != shooters.end() ? found->second : plain;
-                if (!p.mBullet)
-                {
-                    LLVector3d box[8];
-                    p.corners(box);
-                    LLVector2 corners[8];
-                    bool seen = true;
-                    for (S32 k = 0; k < 8 && seen; ++k)
-                    {
-                        seen = project(gAgent.getPosAgentFromGlobal(box[k]), corners[k]);
-                    }
-                    if (seen)
-                    {
-                        skmapdraw::projectileFootprint(corners, dir, llmin(p.mSpeed * 0.15f, 6.f) * ppm, colour);
-                    }
-                    continue;
-                }
-                skmapdraw::projectile(head, dir, p.mLength * ppm, p.mWidth * ppm, colour);
-            }
-            gGL.end();
-            gGL.flush();
-        }
-        // Avatars shown large enough carry their in-world name tag, the one LLVOAvatar keeps, in place of the marker label.
-        static LLCachedControl<F32> tag_ppm(gSavedSettings, "SKTacticalNametagPixelsPerMetre", 8.f);
-        const std::vector<SKMapPeople::Person>& people = SKMapPeople::instance().people();
-        const LLVector3 across = LLViewerCamera::getInstance()->getLeftAxis();
-        std::vector<LLVOAvatar*> tagged(drawn.size(), nullptr);
-        for (size_t i = 0; i < drawn.size(); ++i)
-        {
-            if (drawn[i].first >= people.size())
-            {
-                continue;
-            }
-            LLViewerObject* obj = gObjectList.findObject(people[drawn[i].first].mId);
-            LLVOAvatar* av = obj && obj->isAvatar() && !obj->isDead() ? static_cast<LLVOAvatar*>(obj) : nullptr;
-            LLVector2 a, b;
-            if (av && av->mNameText.notNull() && project(av->getPositionAgent(), a) && project(av->getPositionAgent() + across, b)
-                && (a - b).length() >= tag_ppm)
-            {
-                tagged[i] = av;
-            }
-        }
-        drawTacticalLabels(drawn, tagged, vw, vh);
-        gGL.flush();
-        gUIProgram.unbind();
-        gGL.matrixMode(LLRender::MM_PROJECTION);
-        gGL.popMatrix();
-        gGL.matrixMode(LLRender::MM_MODELVIEW);
-        gGL.popMatrix();
-        gGLLastMatrix = NULL;
     }
     mCost.mCompositeMs += composite_timer.getElapsedTimeF32() * 1000.f;
     ++mCost.mFrames;
@@ -3427,204 +2346,25 @@ void SKOverviewCapture::composite()
         if (mCost.mSince > 0.0 && mCost.mFrames)
         {
             const F32 n = (F32)mCost.mFrames;
-            LL_INFOS("SKOverviewCost") << "tactical per frame over " << mCost.mFrames << " frames: capture "
-                                       << mCost.mCaptureMs / n << " ms, resolve " << mCost.mResolveMs / n << " ms, composite+markers "
+            LL_INFOS("SKOverviewCost") << "camera view per frame over " << mCost.mFrames << " frames: capture "
+                                       << mCost.mCaptureMs / n << " ms, resolve " << mCost.mResolveMs / n << " ms, composite "
                                        << mCost.mCompositeMs / n << " ms; rendered " << mCost.mRenders << ", reused " << mCost.mReuses
-                                       << "; gpu tactical " << mCost.mGpuTacticalMs / n << " ms, patch " << mCost.mGpuPatchMs / n
+                                       << "; gpu view " << mCost.mGpuViewMs / n << " ms, patch " << mCost.mGpuPatchMs / n
                                        << " ms, movers " << mCost.mGpuMoversMs / n << " ms, resolve " << mCost.mGpuResolveMs / n
-                                       << " ms; census "
-                                       << (census_slow ? "slow" : "normal") << ", scans " << census_scans << LL_ENDL;
+                                       << " ms; census " << (census_slow ? "slow" : "normal") << ", scans " << census_scans
+                                       << LL_ENDL;
         }
         mCost = Cost();
         mCost.mSince = now;
         mCost.mScansAtStart = scans_now;
     }
     gGL.setViewport(gGLViewport[0], gGLViewport[1], gGLViewport[2], gGLViewport[3]);
-    LL_INFOS_ONCE("SKOverview") << "tactical overview composited at " << vx << "," << vy << " " << vw << "x" << vh << LL_ENDL;
+    LL_INFOS_ONCE("SKOverview") << "camera view composited at " << vx << "," << vy << " " << vw << "x" << vh << LL_ENDL;
+    return true;
 }
 
-void SKOverviewCapture::drawTacticalLabels(const std::vector<std::pair<size_t, LLVector2>>& drawn,
-                                           const std::vector<LLVOAvatar*>& tagged, S32 vw, S32 vh)
+// static
+LLGLSLShader& SKOverviewCapture::markerProgram()
 {
-    static LLCachedControl<F32> enter(gSavedSettings, "SKMapHoverEnterPx", skmap::HOVER_ENTER_PX);
-    static LLCachedControl<F32> exit(gSavedSettings, "SKMapHoverExitPx", skmap::HOVER_EXIT_PX);
-    static LLCachedControl<U32> max_width(gSavedSettings, "SKMapNametagMaxWidth", 190);
-    LL_PROFILE_ZONE_NAMED("sk tactical labels");
-    // Labels work in UI pixels, as on the mini-map, so they keep its sizes under any display scale.
-    const LLVector2 scale(LLFontGL::sScaleX, LLFontGL::sScaleY);
-    const F32 ui_w = vw / scale.mV[VX], ui_h = vh / scale.mV[VY];
-    auto ui = [&](const LLVector2& px) { return LLVector2(px.mV[VX] / scale.mV[VX], px.mV[VY] / scale.mV[VY]); };
-    auto down = [&](const LLVector2& at) { return LLVector2(at.mV[VX], ui_h - at.mV[VY]); };
-    const std::vector<SKMapPeople::Person>& people = SKMapPeople::instance().people();
-
-    const LLFontGL::UIOrigin origin = LLFontGL::sCurOrigin;
-    const F32 depth = LLFontGL::sCurDepth, cur_sx = LLFontGL::sCurScaleX, cur_sy = LLFontGL::sCurScaleY;
-    LLFontGL::sCurOrigin.set(0.f, 0.f);
-    LLFontGL::sCurDepth = 0.f;
-    LLFontGL::sCurScaleX = LLFontGL::sCurScaleY = 1.f;
-    gGL.pushUIMatrix();
-    gGL.loadUIIdentity();
-    gGL.scaleUI(scale.mV[VX], scale.mV[VY], 1.f);
-
-    {
-        // Coded people carry the mini-map's badge, a fixed size over their marker's top whatever the zoom; nearest the
-        // camera first, a badge mostly covering one already placed is left out, and the nearest draws on top. A flat
-        // marker carries its code itself, so it takes no badge.
-        const LLVector3 camera = LLViewerCamera::getInstance()->getOrigin();
-        std::vector<std::pair<F32, size_t>> coded;
-        for (size_t i = 0; i < drawn.size(); ++i)
-        {
-            const size_t person = drawn[i].first;
-            if (person >= people.size())
-            {
-                continue;
-            }
-            const auto blend = mFlatBlend.find(people[person].mId);
-            const bool flat = blend != mFlatBlend.end() && blend->second >= 0.5f;
-            if (!flat && !tagged[i] && people[person].mVisibility == skmap::Visibility::DOT_CODED &&
-                !people[person].mCode.empty())
-            {
-                coded.emplace_back((gAgent.getPosAgentFromGlobal(people[person].mPos) - camera).lengthSquared(), i);
-            }
-        }
-        std::sort(coded.begin(), coded.end());
-        std::vector<std::pair<size_t, LLVector2>> badges;
-        std::vector<std::pair<LLVector2, F32>> placed;
-        for (const auto& [dist, i] : coded)
-        {
-            if (badges.size() >= MAX_BADGES)
-            {
-                break;
-            }
-            const SKMapPeople::Person& p = people[drawn[i].first];
-            const F32 radius = skmapdraw::markerRadius(p, skmap::FloorRelation::SAME);
-            const LLVector2 at = ui(drawn[i].second) + LLVector2(0.f, radius + BADGE_LIFT_PX);
-            bool covered = false;
-            for (const auto& [other, other_r] : placed)
-            {
-                covered = covered || (other - at).length() < llmax(radius, other_r);
-            }
-            if (!covered)
-            {
-                placed.emplace_back(at, radius);
-                badges.emplace_back(drawn[i].first, at);
-            }
-        }
-        for (auto it = badges.rbegin(); it != badges.rend(); ++it)
-        {
-            skmapdraw::personBadge(people[it->first], it->second);
-        }
-    }
-
-    // Who is under the pointer, by the mini-map's hover rules.
-    const LLVector2 pointer(static_cast<F32>(gViewerWindow->getCurrentMouseX()) - mTacticalViewport[0] / scale.mV[VX],
-                            static_cast<F32>(gViewerWindow->getCurrentMouseY()) - mTacticalViewport[1] / scale.mV[VY]);
-    mTacticalHover.notePointer(pointer);
-    const bool esc = gKeyboard && gKeyboard->getKeyDown(KEY_ESCAPE);
-    if (esc && !mTacticalEscDown && !mTacticalHover.empty())
-    {
-        mTacticalHover.suppress(pointer);
-    }
-    mTacticalEscDown = esc;
-    std::vector<skmap::HoverDot> dots;
-    for (size_t i = 0; i < drawn.size(); ++i)
-    {
-        if (drawn[i].first < people.size() && !tagged[i])
-        {
-            dots.push_back({ people[drawn[i].first].mId, ui(drawn[i].second) });
-        }
-    }
-    if (gFocusMgr.getMouseCapture() || mTacticalHover.suppressed())
-    {
-        mTacticalHover.clear();
-    }
-    else
-    {
-        mTacticalHover.update(dots, pointer, enter, exit);
-    }
-    if (mTacticalHover.empty())
-    {
-        mTacticalLabels.clear();
-        mTacticalTagTexts.clear();
-    }
-    else
-    {
-        auto same_floor = [](const LLUUID&) { return skmap::FloorRelation::SAME; };
-        mTacticalTagTexts = skmapdraw::tagTexts(mTacticalHover.members(), same_floor, skmapdraw::FloorLabels(),
-                                                skmap::tagMaxWidth(ui_w, static_cast<F32>(max_width)));
-        skmap::LabelLayout::Input in;
-        in.mPointer = down(pointer);
-        in.mWidth = ui_w;
-        in.mHeight = ui_h;
-        for (const skmapdraw::TagText& t : mTacticalTagTexts)
-        {
-            for (const skmap::HoverDot& d : dots)
-            {
-                if (d.mId == t.mId)
-                {
-                    in.mMembers.push_back({ t.mId, down(d.mPos), t.mWidth, t.mHeight });
-                    break;
-                }
-            }
-        }
-        for (const skmap::HoverDot& d : dots)
-        {
-            const LLVector2 p = down(d.mPos);
-            in.mObstacles.push_back({ p.mV[VX] - 5.0, p.mV[VY] - 5.0, 10.0, 10.0 });
-        }
-        mTacticalLabels.update(in, LLFrameTimer::getFrameDeltaTimeF32());
-    }
-
-    // Connectors, then the tags over them.
-    gGL.getTextureSlot(0)->unbind();
-    gGL.begin(LLRender::TRIANGLES);
-    skmapdraw::colour(skmap::palette::CONNECTOR);
-    for (const skmap::LabelLayout::Tag& tag : mTacticalLabels.tags())
-    {
-        for (const skmap::HoverDot& d : dots)
-        {
-            if (d.mId == tag.mId)
-            {
-                const LLVector2 end = skmap::LabelLayout::connectorEnd(tag, down(d.mPos));
-                skmapdraw::line(d.mPos, down(end), 1.f);
-                break;
-            }
-        }
-    }
-    gGL.end();
-    for (const skmap::LabelLayout::Tag& tag : mTacticalLabels.tags())
-    {
-        for (const skmapdraw::TagText& t : mTacticalTagTexts)
-        {
-            if (t.mId == tag.mId)
-            {
-                const S32 left = ll_round(static_cast<F32>(tag.mX)), top = ll_round(ui_h - static_cast<F32>(tag.mY));
-                skmapdraw::drawTag(LLRect(left, top, left + ll_round(static_cast<F32>(tag.mW)), top - ll_round(static_cast<F32>(tag.mH))), t);
-                break;
-            }
-        }
-    }
-
-    // The in-world tags, nearest the camera last so it draws on top, just above each marker's projected top.
-    std::vector<std::pair<F32, size_t>> order;
-    const LLVector3 eye = LLViewerCamera::getInstance()->getOrigin();
-    for (size_t i = 0; i < drawn.size(); ++i)
-    {
-        if (tagged[i])
-        {
-            order.emplace_back((tagged[i]->getPositionAgent() - eye).lengthSquared(), i);
-        }
-    }
-    std::sort(order.begin(), order.end(), [](const auto& l, const auto& r) { return l.first > r.first; });
-    for (const auto& [dist, i] : order)
-    {
-        const LLVector2 at = ui(drawn[i].second);
-        tagged[i]->mNameText->drawFlat(at.mV[VX], at.mV[VY] + 6.f);
-    }
-
-    gGL.popUIMatrix();
-    LLFontGL::sCurOrigin = origin;
-    LLFontGL::sCurDepth = depth;
-    LLFontGL::sCurScaleX = cur_sx;
-    LLFontGL::sCurScaleY = cur_sy;
+    return sMarker;
 }

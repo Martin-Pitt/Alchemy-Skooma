@@ -1,6 +1,6 @@
 /**
  * @file skoverviewmovers.cpp
- * @brief Moving objects and vehicles for the tactical overview, at their live pose.
+ * @brief Moving objects and vehicles for the overview's camera view, at their live pose.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Second Life Viewer Source Code
@@ -32,7 +32,6 @@
 #include "llvertexbuffer.h"
 #include "llviewerobjectlist.h"
 #include "llvovolume.h"
-#include "skmappolicy.h"
 #include "skphysicsshape.h"
 #include "skoverviewcensus.h"
 #include "skworldcensus.h"
@@ -41,27 +40,17 @@
 
 namespace
 {
-    // A root whose linkset someone sits on.
-    bool crewed(const LLViewerObject* root, bool& ally_aboard)
+    // The avatars seated on a root's linkset.
+    void crewOf(const LLViewerObject* root, std::vector<LLUUID>& crew)
     {
-        bool any = false;
-        ally_aboard = false;
+        crew.clear();
         for (const LLPointer<LLViewerObject>& child : root->getChildren())
         {
-            if (!child->isAvatar())
+            if (child->isAvatar())
             {
-                continue;
-            }
-            any = true;
-            for (const SKMapPeople::Person& p : SKMapPeople::instance().people())
-            {
-                if (p.mId == child->getID() && p.mAlly)
-                {
-                    ally_aboard = true;
-                }
+                crew.push_back(child->getID());
             }
         }
-        return any;
     }
 
     // Volume space to agent space, from the volume's own transform of the unit axes.
@@ -131,21 +120,21 @@ bool SKOverviewMovers::update()
         }
     }
 
-    // Vehicles: the mini-map's, then any moving linkset someone sits on or that sits on click.
+    // Vehicles: the source's, then any moving linkset someone sits on or that sits on click.
     mVehicles.clear();
-    std::set<LLUUID> vehicle_roots;
-    if (SKMapPeople::instanceExists())
+    if (mSource)
     {
-        for (const SKMapPeople::Vehicle& v : SKMapPeople::instance().vehicles())
-        {
-            mVehicles.push_back(v);
-            vehicle_roots.insert(v.mRoot);
-        }
+        mSource->vehicles(mVehicles);
     }
-    const bool combat = SKMapPeople::instanceExists() && SKMapPeople::instance().combat();
+    std::set<LLUUID> vehicle_roots;
+    for (const skoverview::Vehicle& v : mVehicles)
+    {
+        vehicle_roots.insert(v.mRoot);
+    }
 
     mParts.clear();
     std::set<LLUUID> live;
+    std::vector<LLUUID> crew;
     for (const LLUUID& id : mCandidates)
     {
         LLViewerObject* root = gObjectList.findObject(id);
@@ -153,18 +142,17 @@ bool SKOverviewMovers::update()
         {
             continue;
         }
-        bool ally_aboard = false;
-        const bool seated = crewed(root, ally_aboard);
-        if (seated || root->getClickAction() == CLICK_ACTION_SIT)
+        crewOf(root, crew);
+        if (!crew.empty() || root->getClickAction() == CLICK_ACTION_SIT)
         {
-            SKMapPeople::Vehicle v;
+            skoverview::Vehicle v;
             v.mRoot = id;
             v.mPos = root->getPositionGlobal();
             v.mRot = root->getRotation();
             v.mMin = root->getScale() * -0.5f;
             v.mMax = root->getScale() * 0.5f;
-            v.mLook = skmap::vehicleLook(combat, ally_aboard, seated);
-            if (v.mLook != skmap::VehicleLook::HIDDEN)
+            v.mLook = mSource ? mSource->lookOf(crew) : skoverview::VehicleLook::PLAIN;
+            if (v.mLook != skoverview::VehicleLook::HIDDEN)
             {
                 mVehicles.push_back(v);
             }
@@ -173,16 +161,16 @@ bool SKOverviewMovers::update()
         addParts(root, skoverview::CODE_MOVER, live);
     }
     // Vehicles draw the same way, in their look's colour.
-    for (const SKMapPeople::Vehicle& v : mVehicles)
+    for (const skoverview::Vehicle& v : mVehicles)
     {
         LLViewerObject* root = gObjectList.findObject(v.mRoot);
         if (!root || root->isDead())
         {
             continue;
         }
-        const U8 code = v.mLook == skmap::VehicleLook::ALLY      ? (U8)skoverview::CODE_VEH_ALLY
-                      : v.mLook == skmap::VehicleLook::NEUTRAL   ? (U8)skoverview::CODE_VEH_NEUTRAL
-                                                                 : (U8)skoverview::CODE_VEH_CIVIL;
+        const U8 code = v.mLook == skoverview::VehicleLook::PRIMARY   ? (U8)skoverview::CODE_VEH_PRIMARY
+                      : v.mLook == skoverview::VehicleLook::SECONDARY ? (U8)skoverview::CODE_VEH_SECONDARY
+                                                                      : (U8)skoverview::CODE_VEH_PLAIN;
         addParts(root, code, live);
     }
     // Parts the census found restless, each on its own: a door that keeps opening, not its whole building.

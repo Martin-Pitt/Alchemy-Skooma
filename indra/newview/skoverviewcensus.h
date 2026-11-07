@@ -70,9 +70,9 @@ namespace skoverview
         CODE_SECTION = 23,      ///< census: a solid the cut went through
         CODE_PLACEHOLDER = 24,  ///< census: a box the region's object cache knows of, not yet the object
         CODE_MOVER = 25,        ///< a physical or moving object at its live pose, drawn whole
-        CODE_VEH_CIVIL = 26,    ///< a vehicle at its live pose, the mini-map's civilian hull
-        CODE_VEH_ALLY = 27,     ///< an allied vehicle
-        CODE_VEH_NEUTRAL = 28,  ///< a vehicle neither civilian nor allied
+        CODE_VEH_PLAIN = 26,    ///< a vehicle at its live pose, in the movers' colour
+        CODE_VEH_PRIMARY = 27,  ///< a vehicle in the first hull colour a mover source may pick
+        CODE_VEH_SECONDARY = 28, ///< and in the second
     };
 
     /// Whether anyone sees a part's faces; UNKNOWN while its object, a face or an image is not loaded.
@@ -222,7 +222,7 @@ public:
         bool covers(S32 x, S32 y) const;
     };
 
-    /// Someone the tactical cut is taken for: the building whose parts' bounds hold their floor is cut at mCut.
+    /// Someone the view's cut is taken for: the building whose parts' bounds hold their floor is cut at mCut.
     struct Occupant
     {
         LLUUID mId;             ///< who, for the log
@@ -236,13 +236,13 @@ public:
         bool mOutdoors = false; ///< in outdoor air by the enclosure: no room or column is cut for them
         F32 mPriority = 0.f;    ///< among others sharing a building, the highest priority's storey is cut for
     };
-    /// Writes each linkset's cut height into the cut table for the tactical view, for the linksets in the given region:
+    /// Writes each linkset's cut height into the cut table for the camera view, for the linksets in the given region:
     /// - room: every linkset bounding an occupant's enclosed room (walls round its floor, floors above, the roof);
     /// - none for an occupant in outdoor air (on a roof, in the street);
     /// - column: with no room known, every linkset whose bounds hold their column and rise above it;
     /// - on a roof: a linkset someone stands on with none of it over them is cut no lower than their level, nor hidden,
     ///   unless the agent is under it; held a second after they leave it.
-    /// What hides someone from the tactical eye is not cut here: its shader dissolves it round them.
+    /// What hides someone from the view's eye is not cut here: its shader dissolves it round them.
     /// The agent's are cut at the agent's level, whoever else needs them; another's at the level of its
     /// occupant of highest mPriority. Every other part, there and elsewhere, is drawn whole. key says when the eye or the people moved:
     /// the same key and buffers do nothing. Publishes the table only when the result changed, and logs it then;
@@ -260,7 +260,7 @@ public:
     std::vector<LLUUID> restlessParts() const;
     /// Moves whenever the buffers are rebuilt.
     U64 signature() const { return mSignature; }
-    /// Every linkset's cut by its id, which each vertex carries in its weight channel; for the tactical view's draws.
+    /// Every linkset's cut by its id, which each vertex carries in its weight channel; for the camera view's draws.
     SKOverviewCutTable& cutTable() { return mCutTable; }
     void release();
 

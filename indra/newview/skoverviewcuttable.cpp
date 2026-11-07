@@ -1,6 +1,6 @@
 /**
  * @file skoverviewcuttable.cpp
- * @brief The tactical overview's per-linkset cut table.
+ * @brief The overview capture's per-linkset cut table.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Second Life Viewer Source Code
@@ -111,7 +111,7 @@ bool SKOverviewCutTable::flush()
     if (!useStorageBlock() && gGLManager.mMaxTextureBufferSize > 0 && texels > (size_t)gGLManager.mMaxTextureBufferSize)
     {
         LL_WARNS_ONCE("SKOverview") << "cut table of " << texels << " texels exceeds the buffer texture limit of "
-                                    << gGLManager.mMaxTextureBufferSize << "; the tactical view draws every linkset whole" << LL_ENDL;
+                                    << gGLManager.mMaxTextureBufferSize << "; the camera view draws every linkset whole" << LL_ENDL;
         mPublishedRows = 0;
         mPending = true;
         return false;

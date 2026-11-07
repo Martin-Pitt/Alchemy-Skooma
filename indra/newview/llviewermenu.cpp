@@ -141,7 +141,6 @@
 #include "pipeline.h"
 #include "skaircells.h" // <SK:Nexii> air cells menu
 #include "skrooms.h" // <SK:Nexii> rooms menu
-#include "skworldcensus.h" // <SK:Nexii> census export
 #include "skmodalview.h" // <SK:Nexii> modal view
 #include "llviewerjoystick.h"
 #include "llfloatercamera.h"
@@ -1372,19 +1371,6 @@ class SKCheckPhysicsShapes : public view_listener_t
 };
 // </SK:Nexii>
 
-// <SK:Nexii> census: the last snapshot and every layer's section to a file in the logs folder
-class SKExportWorldCensus : public view_listener_t
-{
-    bool handleEvent(const LLSD& userdata)
-    {
-        LLSD args;
-        args["MESSAGE"] = "World census: " + SKWorldCensus::instance().exportCensus();
-        LLNotificationsUtil::add("SystemMessageTip", args);
-        return true;
-    }
-};
-// </SK:Nexii>
-
 // <SK:Nexii> air cells: the air overlay's mode, picked like a radio group, and the status line as a tip
 class SKSetAirOverlay : public view_listener_t
 {
@@ -1416,7 +1402,7 @@ class SKShowAirStatus : public view_listener_t
 };
 // </SK:Nexii>
 
-// <SK:Nexii> rooms: the enclosure, spaces, room graph and wind passes' status
+// <SK:Nexii> rooms: the enclosure, spaces and room graph passes' status
 class SKShowRoomsStatus : public view_listener_t
 {
     bool handleEvent(const LLSD& userdata)
@@ -10891,7 +10877,6 @@ void initialize_menus()
     view_listener_t::addMenu(new LLAdvancedCheckInfoDisplay(), "Advanced.CheckInfoDisplay");
     view_listener_t::addMenu(new SKTogglePhysicsShapes(), "SK.TogglePhysicsShapes"); // <SK:Nexii> physics shape colourings
     view_listener_t::addMenu(new SKCheckPhysicsShapes(), "SK.CheckPhysicsShapes"); // <SK:Nexii> physics shape colourings
-    view_listener_t::addMenu(new SKExportWorldCensus(), "SK.ExportWorldCensus"); // <SK:Nexii> census export
     view_listener_t::addMenu(new SKSetAirOverlay(), "SK.SetAirOverlay"); // <SK:Nexii> air cells
     view_listener_t::addMenu(new SKCheckAirOverlay(), "SK.CheckAirOverlay"); // <SK:Nexii> air cells
     view_listener_t::addMenu(new SKShowAirStatus(), "SK.ShowAirStatus"); // <SK:Nexii> air cells

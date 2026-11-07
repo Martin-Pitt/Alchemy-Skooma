@@ -21,7 +21,7 @@
  * $/LicenseInfo$
  */
 
-// Tactical overview avatar markers: lit on the CPU, coloured per vertex.
+// Overview avatar markers: lit on the CPU, coloured per vertex.
 
 // Shared matrix stack + derived matrices, spliced from
 // class1/deferred/matricesBlock.glsl and bound at UB_MATRICES.

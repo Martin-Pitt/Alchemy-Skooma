@@ -207,11 +207,6 @@ public:
     /// The fraction of a metre the land is sampled at in an export, so a layer's terrain windows read it exactly.
     void setTerrainPhase(F32 phase) { mTerrainPhase = phase; }
 
-    /// The last snapshot, each region's land, and every registered section, to logs/sk-census-<UTC>.json
-    /// (skcensusio.h), for reading offline. Returns a line for the console with the counts, the size and the
-    /// full path, or why nothing was written.
-    std::string exportCensus() const;
-
 private:
     /// The clusters overlay: each cluster in its own colour, its parts tinted, a label over it.
     void renderClusters(const SKCensusSnapshot& snap, class SKWorldOverlayGeom& geom, const LLVector3d& camera, F64 reach);
@@ -252,6 +247,7 @@ private:
         F64 mMoverUntil = -1.f;     ///< it moves by habit until then
         F64 mLastSeen = 0.f;
         bool mKnown = false;
+        bool mMoving = false;       ///< what the last visit of a part of it returned
     };
 
     /// A part the region's object cache holds and has not instantiated, read
@@ -340,9 +336,8 @@ private:
                             const std::shared_ptr<const SKPhysicsHavokShape>& sim);
     /// Who is sitting on what, into the session history.
     void gatherCrew();
-    /// The feature rules over the finished scan's parts; the part kinds they
-    /// give are what the next scan records with.
-    void classify(SKCensusSnapshot& snap);
+    /// The roots the feature rules read, from live objects and the session history.
+    std::vector<skworld::FeatureRoot> featureRoots(const skworld::FeatureParams& params);
     /// A record into the pending snapshot, counted.
     void take(SKCensusSnapshot& snap, const skworld::RecordPtr& rec);
 
@@ -369,6 +364,9 @@ private:
     bool pending(LLViewerObject* object, const PartCache& cache) const;
     /// Whether a scan that did not visit the part would take it again.
     bool retakes(const LLUUID& id, const PartCache& cache) const;
+    /// SKCensusLogMissed: what a full sweep found changed in a part the dirty set missed.
+    void logMissed(LLViewerObject* object, const std::vector<skworld::RecordPtr>& before, bool before_cached,
+                   std::vector<skworld::RecordPtr>::const_iterator begin, std::vector<skworld::RecordPtr>::const_iterator end) const;
     /// Every part not visited this scan, from its cache, under the budget; false when out of time.
     bool retake(LLTimer& timer, F32 budget_ms);
     std::unordered_set<LLUUID> mDirty;
@@ -402,7 +400,6 @@ private:
     F64 mLastScanLog = 0.0;
     // Only one job in flight; no new scan until its snapshot is published or discarded.
     std::unique_ptr<LL::ThreadPool> mClusterWorkers;
-    std::future<std::shared_ptr<SKCensusSnapshot>> mClusterJob;
     std::vector<U64> mClusterRegions;
     bool mDiscardClusterJob = false;
     std::unordered_map<LLUUID, PartCache> mParts;
@@ -436,6 +433,21 @@ private:
     std::unordered_map<LLUUID, LeafTransform> mDoorways;
     /// This scan's sim transform of every leaf, kept until the scan finishes.
     std::unordered_map<LLUUID, LeafTransform> mLeafTransforms;
+    /// The finish's census state the worker holds while its job is in flight, returned with the snapshot.
+    struct FinishJob
+    {
+        std::shared_ptr<SKCensusSnapshot> mSnapshot;
+        skworld::FaceCoverCache mFaceCover;
+        skworld::LeafHistories mLeaves;
+        std::unordered_map<LLUUID, LeafTransform> mDoorways;
+        F64 mFinishedAt = 0.0;
+    };
+    /// Face cover, features, leaves and doors over the finished scan's parts; touches nothing but its arguments.
+    static void classifyJob(FinishJob& job, std::vector<skworld::FeaturePart>& parts, const std::vector<skworld::FeatureRoot>& roots,
+                            const skworld::FeatureParams& params, std::unordered_map<LLUUID, LeafTransform>& transforms);
+    /// What the worker's classify gives the next scan, and the caches' prune, as of when the scan finished.
+    void adoptFinish(FinishJob& job);
+    std::future<FinishJob> mClusterJob;
     /// Each door-shaped part's face cover, cast again only when it or its neighbours change.
     skworld::FaceCoverCache mFaceCover;
     std::map<std::string, F32> mDemands;

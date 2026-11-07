@@ -31,7 +31,7 @@
 #include <vector>
 
 class ALFrameFences;
-class ALTextureSlot; // <SK:Nexii> Overview cut table: ALGPUBufferTexture binds on a slot.
+class ALTextureSlot; // <SK:Nexii> overview capture: its cut table, an ALGPUBufferTexture, binds on a slot.
 
 // GL 4.3's minimum GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS, so every point here exists on every context that has
 // compute. LLRender keeps what each holds; the reserved storage blocks' fixed points all fall below it.
@@ -49,7 +49,7 @@ struct ALDrawArraysIndirectCommand
 };
 static_assert(sizeof(ALDrawArraysIndirectCommand) == 16, "GL's DrawArraysIndirectCommand is four uints");
 
-// <SK:Nexii> combat/minimap: what glDrawElementsIndirect reads, GL's DrawElementsIndirectCommand word for word.
+// <SK:Nexii> overview capture: what glDrawElementsIndirect reads, GL's DrawElementsIndirectCommand word for word.
 struct ALDrawElementsIndirectCommand
 {
     U32 mCount         = 0;
@@ -300,7 +300,7 @@ private:
     U32                mStalls       = 0;
 };
 
-// <SK:Nexii> Overview cut table: a buffer texture over a stream.
+// <SK:Nexii> overview capture: its cut table, a buffer texture over a stream.
 // A GL_TEXTURE_BUFFER over an ALGPUBuffer, owning the texture name. attach() binds it on the slot it is given, as
 // glTexBuffer acts on the active unit; the caller attaches again whenever the buffer was reallocated, by its own flag,
 // not the buffer's name, which GL may reuse. Non-copyable.

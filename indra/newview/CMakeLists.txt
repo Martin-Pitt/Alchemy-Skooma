@@ -654,6 +654,14 @@ if(AL_BUILD_VIEWER)
     skworldoverlay.cpp # <SK:Nexii> census
     skworldpalette.cpp # <SK:Nexii> census
     skworldtrace.cpp # <SK:Nexii> census
+    skoverviewcapture.cpp # <SK:Nexii> overview capture
+    skoverviewcensus.cpp # <SK:Nexii> overview capture
+    skoverviewcover.cpp # <SK:Nexii> overview capture
+    skoverviewcuttable.cpp # <SK:Nexii> overview capture
+    skoverviewmovers.cpp # <SK:Nexii> overview capture
+    skoverviewplace.cpp # <SK:Nexii> overview capture
+    skoverviewprobes.cpp # <SK:Nexii> overview capture
+    skoverviewslots.cpp # <SK:Nexii> overview capture
     llmeshrepository.cpp
     llmimetypes.cpp
     llmodelpreview.cpp
@@ -1558,6 +1566,15 @@ if(AL_BUILD_VIEWER)
     skworldoverlay.h # <SK:Nexii> census
     skworldpalette.h # <SK:Nexii> census
     skworldtrace.h # <SK:Nexii> census
+    skoverviewcapture.h # <SK:Nexii> overview capture
+    skoverviewcensus.h # <SK:Nexii> overview capture
+    skoverviewcover.h # <SK:Nexii> overview capture
+    skoverviewcuttable.h # <SK:Nexii> overview capture
+    skoverviewmovers.h # <SK:Nexii> overview capture
+    skoverviewplace.h # <SK:Nexii> overview capture
+    skoverviewprobes.h # <SK:Nexii> overview capture
+    skoverviewprograms.h # <SK:Nexii> overview capture
+    skoverviewslots.h # <SK:Nexii> overview capture
     llmeshrepository.h
     llmimetypes.h
     llmodelpreview.h
@@ -2732,13 +2749,13 @@ if(AL_BUILD_TESTS)
       tests/llvocache_test.cpp
       tests/lutcube_test.cpp
       tests/noise_test.cpp
-      tests/skmodalviewmath_test.cpp # <SK:Nexii> modal view
       tests/skmapmarkers_test.cpp # <SK:Nexii> mini-map markers
-      tests/skoverviewshaders_test.cpp # <SK:Nexii> combat/minimap: the overview's shader permutations
-      tests/skoverviewcuttable_test.cpp # <SK:Nexii> combat/minimap: the overview's cut table
-      tests/skoverviewslots_test.cpp # <SK:Nexii> combat/minimap: the overview's census pages
-      tests/skoverviewprobes_test.cpp # <SK:Nexii> combat/minimap: the tactical cut's probes
-      tests/skoverviewcover_test.cpp # <SK:Nexii> combat/minimap: the overview's cover verdicts
+      tests/skmodalviewmath_test.cpp # <SK:Nexii> modal view
+      tests/skoverviewcover_test.cpp # <SK:Nexii> overview capture: the cover verdicts
+      tests/skoverviewcuttable_test.cpp # <SK:Nexii> overview capture: the cut table
+      tests/skoverviewprobes_test.cpp # <SK:Nexii> overview capture: the view cut's probes
+      tests/skoverviewshaders_test.cpp # <SK:Nexii> overview capture: the shader permutations
+      tests/skoverviewslots_test.cpp # <SK:Nexii> overview capture: the census pages
     UNIT
       alagentlocationformat.cpp
       alapplinks.cpp
@@ -2816,13 +2833,13 @@ if(AL_BUILD_TESTS)
       llviewercontrollistener.cpp
       lutcube.cpp
       noise.cpp
-      skmodalviewmath.cpp # <SK:Nexii> modal view
-    LIBRARIES llui alscript ll::slua llxml ${test_libs}
       skmapmarkers.cpp # <SK:Nexii> mini-map markers
-      skoverviewcuttable.cpp # <SK:Nexii> combat/minimap: the overview's cut table
-      skoverviewprobes.cpp # <SK:Nexii> combat/minimap: the tactical cut's probes
-      skoverviewslots.cpp # <SK:Nexii> combat/minimap: the overview's census pages
-      skoverviewcover.cpp # <SK:Nexii> combat/minimap: the overview's cover verdicts
+      skmodalviewmath.cpp # <SK:Nexii> modal view
+      skoverviewcover.cpp # <SK:Nexii> overview capture: the cover verdicts
+      skoverviewcuttable.cpp # <SK:Nexii> overview capture: the cut table
+      skoverviewprobes.cpp # <SK:Nexii> overview capture: the view cut's probes
+      skoverviewslots.cpp # <SK:Nexii> overview capture: the census pages
+    # <SK:Nexii> overview capture: skcensus, for the cover verdicts' records
     LIBRARIES llui alscript ll::slua llxml skcensus ${test_libs}
     SUPPORT
       newview_test_fakes
@@ -2854,15 +2871,15 @@ if(AL_BUILD_TESTS)
       tests/luminance_gl_test.cpp
       tests/objectskinblock_gl_test.cpp
       tests/shadowutil_gl_test.cpp
-      tests/skoverviewshaders_gl_test.cpp # <SK:Nexii> combat/minimap: the overview's programs link
-      tests/skoverviewcuttable_gl_test.cpp # <SK:Nexii> combat/minimap: the overview's cut table on the GPU
-      tests/skoverviewslots_gl_test.cpp # <SK:Nexii> combat/minimap: the census command list on the GPU
-      tests/skoverviewprobes_gl_test.cpp # <SK:Nexii> combat/minimap: the tactical cut's probes on the GPU
+      tests/skoverviewcuttable_gl_test.cpp # <SK:Nexii> overview capture: the cut table on the GPU
+      tests/skoverviewprobes_gl_test.cpp # <SK:Nexii> overview capture: the view cut's probes on the GPU
+      tests/skoverviewshaders_gl_test.cpp # <SK:Nexii> overview capture: the programs link
+      tests/skoverviewslots_gl_test.cpp # <SK:Nexii> overview capture: the census command list on the GPU
     BENCH_SOURCES tests/alcasfold_bench.cpp tests/aldof_bench.cpp tests/alssrhistory_bench.cpp
     UNIT
-      skoverviewcuttable.cpp # <SK:Nexii> combat/minimap: the overview's cut table
-      skoverviewprobes.cpp # <SK:Nexii> combat/minimap: the tactical cut's probes
-      skoverviewslots.cpp # <SK:Nexii> combat/minimap: the overview's census pages
+      skoverviewcuttable.cpp # <SK:Nexii> overview capture: the cut table
+      skoverviewprobes.cpp # <SK:Nexii> overview capture: the view cut's probes
+      skoverviewslots.cpp # <SK:Nexii> overview capture: the census pages
     LIBRARIES llrender
     SUPPORT llrender_test_checks llcommon_test_checks
     INCLUDES ${INDRA_SOURCE_DIR}/llprimitive ${INDRA_SOURCE_DIR}/alrender

@@ -21,7 +21,7 @@
  * $/LicenseInfo$
  */
 
-// Tactical overview avatar markers, depth-tested by hand against the overview's own depth: where the census stands
+// Overview avatar markers, depth-tested by hand against the overview's own depth: where the census stands
 // in front of a marker it is drawn as a faint see-through silhouette, so walls hide people without losing them.
 
 out vec4 frag_color;

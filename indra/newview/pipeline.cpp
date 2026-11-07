@@ -115,6 +115,7 @@
 #include "skaircells.h" // <SK:Nexii> air cells overlay
 #include "skrooms.h" // <SK:Nexii> rooms overlay
 #include "skworldcensus.h" // <SK:Nexii> census overlay
+#include "skoverviewcapture.h" // <SK:Nexii> overview capture
 #include "llvocache.h"
 #include "llvotree.h"
 #include "llvovolume.h"
@@ -1588,6 +1589,10 @@ void LLPipeline::releaseAllGLResources()
     mWaterPrimitives.release();
     mWaterPatchPrimitives.release();
     mAttachmentSpans.clear();
+
+    // <SK:Nexii> overview capture: its targets, buffers and spans go with the context.
+    SKOverviewCapture::cleanupGL();
+    // </SK:Nexii>
 
     mGLResourcesLive = false;
 }
@@ -3958,7 +3963,7 @@ void LLPipeline::markVisible(LLDrawable *drawablep, LLCamera& camera)
             if (root && //  // this test may not be needed, see above
                     root->getVObj()->isAttachment())
             {
-                // <SK:Nexii> overview capture: attachments are part of the avatar, which markers replace.
+                // <SK:Nexii> overview capture: attachments are part of the avatar, which the overview never draws.
                 if (sSkOverviewCull)
                 {
                     return;
@@ -11302,7 +11307,7 @@ void LLPipeline::renderFinalize()
         SKAirCells::instance().renderDebug();
     }
     // </SK:Nexii>
-    // <SK:Nexii> rooms overlay: spaces, portals, wind and the air's space and indoor modes, under the world debug mask
+    // <SK:Nexii> rooms overlay: spaces, portals and the air's space and indoor modes, under the world debug mask
     if (!cutout && SKRooms::instanceExists())
     {
         SKRooms::instance().renderDebug();
@@ -15180,6 +15185,130 @@ namespace
         return frame;
     }
 }
+
+// <SK:Nexii> overview capture: the world under a cut plane, one class code a pass in R, invisible faces flagged in B.
+U32 LLPipeline::skRenderOverview(const LLMatrix4a& view, const LLMatrix4a& proj, LLCamera& camera, F32 cut_z,
+                                 const std::function<void()>& census)
+{
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_PIPELINE;
+    LL_PROFILE_GPU_ZONE("skRenderOverview");
+
+    struct Restore
+    {
+        LLCullResult* cull = sCull;
+        LLViewerCamera::eCameraID camera_id = LLViewerCamera::sCurCameraID;
+        LLCamera current = LLViewerCamera::getCurrent();
+        S32 occlusion = sUseOcclusion;
+        bool shadow = sShadowRender;
+        bool impostor = sImpostorRender;
+        ~Restore()
+        {
+            sImpostorRender = impostor;
+            sShadowRender = shadow;
+            sUseOcclusion = occlusion;
+            LLViewerCamera::setCurrent(current);
+            LLViewerCamera::sCurCameraID = camera_id;
+            sCull = cull;
+        }
+    } restore;
+
+    pushRenderTypeMask();
+    // Terrain is the only rendered layer: the census draws everything else, so the cull and sort see terrain alone.
+    andRenderTypeMask(RENDER_TYPE_TERRAIN, END_RENDER_TYPES);
+
+    // The overview's own camera id: a non-world camera never updates LOD, so parts keep the LOD the agent's own view
+    // chose, and its visibility leaves every other camera's alone.
+    LLViewerCamera::sCurCameraID = LLViewerCamera::CAMERA_SK_OVERVIEW;
+    sUseOcclusion = 0;
+    sShadowRender = true;
+    sImpostorRender = false;
+    LLViewerCamera::setCurrent(camera);
+
+    static LLCullResult result;
+    {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_PIPELINE("sk overview cull");
+        sSkOverviewCull = true;
+        updateCull(camera, result);
+        stateSort(camera, result);
+        sSkOverviewCull = false;
+    }
+
+    gGL.matrixMode(LLRender::MM_PROJECTION);
+    gGL.pushMatrix();
+    gGL.loadMatrix(proj);
+    gGL.matrixMode(LLRender::MM_MODELVIEW);
+    gGL.pushMatrix();
+    gGL.loadMatrix(view);
+    gGLLastMatrix = NULL;
+    gGL.getTextureSlot(0)->unbind();
+    LLVertexBuffer::unbind();
+
+    // The cut as an eye-space plane for the clip program: keep z <= cut_z.
+    // Built from the view's rotation and translation rather than a matrix product, whose transpose is easy to get wrong:
+    // in eye space n_e = R (0, 0, -1) and w = cut_z - n_e . t, so n_e . p_eye + w = cut_z - z_world.
+    LLVector4a down, normal_eye, origin_eye;
+    down.set(0.f, 0.f, -1.f, 0.f);
+    view.rotate(down, normal_eye);
+    LLVector4a zero;
+    zero.clear();
+    view.affineTransform(zero, origin_eye);
+    const F32 plane_w = cut_z - normal_eye.dot3(origin_eye).getF32();
+    LLVector4a clip_plane(normal_eye.getF32ptr()[0], normal_eye.getF32ptr()[1], normal_eye.getF32ptr()[2], plane_w);
+    // The census sets each part's class code itself; R starts at 0, no code.
+    auto bind_clip = [&]()
+    {
+        static const LLStaticHashedString sk_clip_plane("clip_plane");
+        gClipProgram.bind();
+        gClipProgram.uniform4fv(sk_clip_plane, 1, clip_plane.getF32ptr());
+        gGL.diffuseColor4f(0.f, 0.f, 1.f, 1.f);
+    };
+
+    // Double-sided: a plane seen from below still has a top.
+    LLGLDisable cull_face(GL_CULL_FACE);
+    U32 draws = 0;
+    {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_PIPELINE("sk overview terrain");
+        LLGLDepthTest depth(GL_TRUE, GL_TRUE, GL_LESS);
+        gGL.setColorMask(true, false, false, false);
+        // The terrain's shadow program writes white; the clear left R at 0, so white is code 255, read as terrain.
+        for (LLDrawPool* pool : mPools)
+        {
+            if (pool->getType() != LLDrawPool::POOL_TERRAIN || !hasRenderType(pool->getType()))
+            {
+                continue;
+            }
+            pool->prerender();
+            gGLLastMatrix = NULL;
+            gGL.loadMatrix(view);
+            for (S32 i = 0; i < pool->getNumShadowPasses(); ++i)
+            {
+                pool->beginShadowPass(i);
+                pool->renderShadow(i);
+                pool->endShadowPass(i);
+            }
+            ++draws;
+        }
+    }
+    if (census)
+    {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_PIPELINE("sk overview census");
+        gGL.setColorMask(true, false, false, false);
+        bind_clip();
+        census();
+        gGL.loadMatrix(view);
+        gGLLastMatrix = NULL;
+    }
+    gClipProgram.unbind();
+    gGL.setColorMask(true, true);
+    gGL.matrixMode(LLRender::MM_PROJECTION);
+    gGL.popMatrix();
+    gGL.matrixMode(LLRender::MM_MODELVIEW);
+    gGL.popMatrix();
+    gGLLastMatrix = NULL;
+    popRenderTypeMask();
+    return draws;
+}
+// </SK:Nexii>
 
 void LLPipeline::allocateImpostorTarget(LLVOAvatar& avatar)
 {

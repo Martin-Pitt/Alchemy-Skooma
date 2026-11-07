@@ -82,6 +82,7 @@
 #include "llviewerparcelmgr.h"
 #include "llviewerregion.h"
 #include "llviewershadermgr.h"
+#include "skoverviewcapture.h" // <SK:Nexii> overview capture
 #include "llviewertexturelist.h"
 #include "llviewerwindow.h"
 #include "llvoavatarself.h"
@@ -1273,7 +1274,7 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
         if (!for_snapshot)
         {
             SKOutlineCapture::onFrame(); // <SK:Nexii> outline capture: coverage renders after the world, before the UI
-            SKOverviewCapture::onFrame(); // <SK:Nexii> overview capture: the mini-map base from above, on its timer
+            SKOverviewCapture::onFrame(); // <SK:Nexii> overview capture: the region maps from above, after the world and before the UI
             render_ui();
             presented = gDisplaySwapBuffers;
             swap();

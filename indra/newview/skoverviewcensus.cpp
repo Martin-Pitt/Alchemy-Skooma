@@ -1363,7 +1363,7 @@ std::shared_ptr<SKOverviewCensus::Built> SKOverviewCensus::walkAndBuild(Job& job
     {
         it = it->second.mPass != job.mPass ? walk.mCoverCache.erase(it) : std::next(it);
     }
-    // Each linkset is a group, so the tactical cut can take a building's linksets and leave its neighbours whole: a
+    // Each linkset is a group, so the view's cut can take a building's linksets and leave its neighbours whole: a
     // cluster joins whatever touches, often a whole block. A level still keeps whole clusters, by the heights of the
     // cluster a linkset is in.
     std::unordered_map<const skworld::Record*, U32> cluster_of;
@@ -3607,7 +3607,7 @@ void SKOverviewCensus::applyCut(const LLViewerRegion* region, const std::vector<
             if (what != mCutLogged)
             {
                 mCutLogged = what;
-                LL_DEBUGS("SKOverview") << "tactical cut: " << (what.empty() ? std::string("nothing cut") : what) << LL_ENDL;
+                LL_DEBUGS("SKOverview") << "view cut: " << (what.empty() ? std::string("nothing cut") : what) << LL_ENDL;
             }
         }
         for (const auto& [id, e] : extents)
