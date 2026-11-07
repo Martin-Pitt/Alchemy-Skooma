@@ -5496,6 +5496,17 @@
             <key>Value</key>
             <real>2.0</real>
         </map>
+        <key>SkoomaLocalChatRevealDelay</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds the mouse must rest on a shown message of the game-style local chat before the whole log shows. Scrolling the chat shows it at once.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.35</real>
+        </map>
         <key>SkoomaLocalChatHoverGrace</key>
         <map>
             <key>Comment</key>
