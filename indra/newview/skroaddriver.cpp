@@ -2356,6 +2356,416 @@ namespace skroad::drive
         return keys;
     }
 
+    // ---------------------------------------------------------------- the PWM steering sweep (spike)
+
+    // SKRoadAutopilotPwmSweep on (with the autopilot; seated, stopped, in a flat open arena parcel): frame-exact
+    // steering patterns for the PWM study (V:\Scratch\road-pwm\PLAN.md), W held in SKRoadAutopilotPwmSweepGear.
+    // Each pattern runs to the left (A) and then to the right (D): its keys set and cleared on exact viewer frames
+    // (no MIN_GAP), then PWS_REST_S untouched. Families: "pwm" (a tap of T frames every T + G frames for
+    // PWS_PWM_S, T and G in PWS_FRAMES), "hold" (the key held PWS_HOLDS s), "ctr" (a tap of N frames, K frames
+    // off, M frames the other way). Within PWS_EDGE_M of the arena's edge or off its flat land, the pattern is cut
+    // and run again once the car has been steered back toward the middle. Per frame to
+    // logs/sk-road-sweep-<time>.csv, per pattern to sk-road-sweep-<time>-summary.csv; ends by itself
+    // ("pwm sweep done"), autopilot off.
+    constexpr S32 PWS_FRAMES[] = { 1, 2, 3, 4, 6, 8 };
+    constexpr F64 PWS_HOLDS[] = { 0.25, 0.5, 1.0 };
+    constexpr S32 PWS_CTR_N[] = { 4, 8, 16 }, PWS_CTR_M[] = { 1, 2 }, PWS_CTR_K[] = { 0, 1, 2 };
+    constexpr F64 PWS_PWM_S = 4.5;              // 1.5 s to build, 3 s steady
+    constexpr F64 PWS_STEADY_S = 1.5;           // steady rate: the mean over the pattern's last 1.5 s
+    constexpr F64 PWS_REST_S = 2.0, PWS_REST_SHORT_S = 3.0;    // untouched after (short patterns: their carry)
+    constexpr F64 PWS_EDGE_M = 10.0, PWS_START_EDGE_M = 20.0, PWS_FLAT_M = 0.5;
+
+    struct PwsPattern
+    {
+        S32 kind = 0;            // 0 pwm, 1 hold, 2 counter-tap
+        S32 a = 0, b = 0, c = 0; // pwm: tap, gap; ctr: N, M, K
+        F64 hold = 0.0;
+        std::string id;
+    };
+
+    struct PwsSample { F64 t, rate; };
+
+    struct PwsState
+    {
+        bool on = false;
+        std::vector<PwsPattern> patterns;
+        size_t k = 0;           // pattern index
+        S32 side = 0;           // 0 A (left), 1 D (right)
+        S32 phase = 0;          // 0 to gear, 1 home, 2 settle, 3 run, 4 rest, 5 done
+        F64 phaseAt = 0.0, startT = 0.0, shiftAt = -100.0;
+        S32 frame = 0, runFrame = 0;
+        bool ending = false;    // pwm: past PWS_PWM_S, finishing the tap under way
+        F64 keyUpAt = -1.0, firstKeyAt = -1.0;
+        std::vector<PwsSample> run, rest;
+        F64 fpsSum = 0.0;
+        S32 fpsN = 0;
+        F64 h0 = 0.0;           // the land height under the car where the sweep began
+        S32 family = -1;
+        F64 prevT = -1.0;
+    };
+    PwsState sPws;
+    llofstream sPwsLog, sPwsSummary;
+
+    std::vector<PwsPattern> pwsPatterns()
+    {
+        std::vector<PwsPattern> p;
+        for (S32 t : PWS_FRAMES)
+        {
+            for (S32 g : PWS_FRAMES)
+            {
+                PwsPattern q;
+                q.kind = 0;
+                q.a = t;
+                q.b = g;
+                q.id = llformat("pwm t%d g%d", t, g);
+                p.push_back(q);
+            }
+        }
+        for (F64 h : PWS_HOLDS)
+        {
+            PwsPattern q;
+            q.kind = 1;
+            q.hold = h;
+            q.id = llformat("hold %.2f", h);
+            p.push_back(q);
+        }
+        for (S32 n : PWS_CTR_N)
+        {
+            for (S32 m : PWS_CTR_M)
+            {
+                for (S32 kk : PWS_CTR_K)
+                {
+                    PwsPattern q;
+                    q.kind = 2;
+                    q.a = n;
+                    q.b = m;
+                    q.c = kk;
+                    q.id = llformat("ctr n%d m%d k%d", n, m, kk);
+                    p.push_back(q);
+                }
+            }
+        }
+        return p;
+    }
+
+    const char* const PWS_FAMILY[] = { "pwm", "hold", "counter-tap" };
+
+    // The pattern's key on run frame f (+1 its side's key, -1 the other, 0 none); done once it has ended.
+    S32 pwsKey(const PwsPattern& q, S32 f, F64 in, bool& ending, bool& done)
+    {
+        done = false;
+        if (q.kind == 0)
+        {
+            const S32 period = q.a + q.b, at = f % period;
+            if (in >= PWS_PWM_S && (at == 0 || at >= q.a))
+            {
+                ending = true;      // stop on a release, never part way through a tap
+            }
+            done = ending;
+            return !ending && at < q.a ? 1 : 0;
+        }
+        if (q.kind == 1)
+        {
+            done = in >= q.hold;
+            return done ? 0 : 1;
+        }
+        const S32 n = q.a, m = q.b, kk = q.c;
+        if (f < n) return 1;
+        if (f < n + kk) return 0;
+        if (f < n + kk + m) return -1;
+        done = true;
+        return 0;
+    }
+
+    std::string pwsStamp()
+    {
+        const std::time_t t = std::time(nullptr);
+        char buf[32];
+        std::strftime(buf, sizeof(buf), "%Y%m%d-%H%M%S", std::localtime(&t));
+        return buf;
+    }
+
+    F64 pwsEpoch()
+    {
+        return std::chrono::duration<F64>(std::chrono::system_clock::now().time_since_epoch()).count();
+    }
+
+    void pwsSummarise(const PwsPattern& q, S32 gear)
+    {
+        const char side = sPws.side == 0 ? 'A' : 'D';
+        const F64 sign = sPws.side == 0 ? 1.0 : -1.0;      // A turns left: yaw rate +
+        F64 steady = NAN, peak = 0.0;
+        const F64 run_end = sPws.run.empty() ? 0.0 : sPws.run.back().t;
+        if (run_end - sPws.firstKeyAt >= 2.0)
+        {
+            F64 sum = 0;
+            S32 n = 0;
+            for (const auto& s : sPws.run)
+            {
+                if (s.t >= run_end - PWS_STEADY_S)
+                {
+                    sum += s.rate * sign;
+                    ++n;
+                }
+            }
+            steady = n ? sum / n : NAN;
+        }
+        for (const auto& s : sPws.run)
+        {
+            peak = std::max(peak, s.rate * sign);
+        }
+        for (const auto& s : sPws.rest)
+        {
+            peak = std::max(peak, s.rate * sign);
+        }
+        const F64 ref = std::isnan(steady) ? peak : steady;
+        F64 rise = NAN;
+        for (const auto* part : { &sPws.run, &sPws.rest })
+        {
+            for (const auto& s : *part)
+            {
+                if (std::isnan(rise) && ref > 1.0 && s.rate * sign >= 0.9 * ref)
+                {
+                    rise = s.t - sPws.firstKeyAt;
+                }
+            }
+        }
+        // carry: deg turned (own side +) from the key up; settle: until |rate| stays under 2 deg/s or 10 % of the peak
+        F64 carry = 0.0, settle = 0.0, prev = sPws.keyUpAt;
+        const F64 quiet = std::max(2.0, 0.1 * std::fabs(peak));
+        for (const auto& s : sPws.rest)
+        {
+            carry += s.rate * sign * (s.t - prev);
+            prev = s.t;
+            if (std::fabs(s.rate) >= quiet)
+            {
+                settle = s.t - sPws.keyUpAt;
+            }
+        }
+        const F64 fps = sPws.fpsN && sPws.fpsSum > 0 ? sPws.fpsN / sPws.fpsSum : 0.0;
+        sPwsSummary << q.id << ' ' << side << ',' << q.id << ',' << side << ',' << steady << ',' << peak << ',' << rise
+                    << ',' << carry << ',' << settle << ',' << gear << ',' << fps << ',' << sPws.firstKeyAt << ','
+                    << sPws.keyUpAt << '\n';
+        sPwsSummary.flush();
+    }
+
+    void pwsStop(const std::string& why)
+    {
+        if (sPwsLog.is_open()) sPwsLog.close();
+        if (sPwsSummary.is_open()) sPwsSummary.close();
+        sPws.on = false;
+        say(why);
+    }
+
+    // Each frame while SKRoadAutopilotPwmSweep is on: the keys, and the frame's log row.
+    U32 pwmSweepKeys(F64 now, F64 speed, const LLVector3d& pos, F64 yaw, std::string& note)
+    {
+        static LLCachedControl<S32> gear_c(gSavedSettings, "SKRoadAutopilotPwmSweepGear", 1);
+        const S32 gear = std::max(1, S32(gear_c));
+        auto tag = [&](const std::string& t) { note += note.empty() ? t : ", " + t; };
+        if (!sPws.on)
+        {
+            if (speed > 0.5)
+            {
+                gSavedSettings.setBOOL("SKRoadAutopilotPwmSweep", false);
+                say("pwm sweep: stop the car first");
+                return 0;
+            }
+            sPws = PwsState();
+            sPws.on = true;
+            sPws.patterns = pwsPatterns();
+            sPws.startT = now;
+            sPws.phaseAt = now;
+            sPws.h0 = LLWorld::getInstance()->resolveLandHeightGlobal(LLVector3d(pos.mdV[VX], pos.mdV[VY], 0));
+            const std::string stamp = pwsStamp();
+            const std::string base = gDirUtilp->getExpandedFilename(LL_PATH_LOGS, "sk-road-sweep-" + stamp);
+            sPwsLog.open((base + ".csv").c_str(), std::ios::out);
+            sPwsLog.precision(10);
+            sPwsLog << "# vehicle " << sVehicle << ", gear " << gear << "\n"
+                    << "epoch,t,frame,dt,keys,yaw_deg,yaw_rate_deg,speed,pattern,side,phase\n";
+            sPwsSummary.open((base + "-summary.csv").c_str(), std::ios::out);
+            sPwsSummary.precision(10);
+            sPwsSummary << "pattern,id,side,steady_rate_deg,peak_rate_deg,rise90_s,carry_deg,settle_s,gear,mean_fps,"
+                           "key_down_t,key_up_t\n";
+            F64 x0, x1, y0, y1;
+            arenaBox(pos.mdV[VX], pos.mdV[VY], x0, x1, y0, y1);
+            say(llformat("pwm sweep: %d patterns a side in gear %d, %.0f x %.0f m; log sk-road-sweep-%s",
+                         S32(sPws.patterns.size()), gear, x1 - x0, y1 - y0, stamp.c_str()));
+        }
+        const F64 dt = sPws.prevT < 0 ? 0.0 : now - sPws.prevT;
+        sPws.prevT = now;
+        ++sPws.frame;
+        U32 keys = AGENT_CONTROL_AT_POS;
+        const PwsPattern* q = sPws.k < sPws.patterns.size() ? &sPws.patterns[sPws.k] : nullptr;
+        const S32 dir = sPws.side == 0 ? 1 : -1;
+
+        F64 x0, x1, y0, y1;
+        arenaBox(pos.mdV[VX], pos.mdV[VY], x0, x1, y0, y1);
+        const F64 edge = std::min({ pos.mdV[VX] - x0, x1 - pos.mdV[VX], pos.mdV[VY] - y0, y1 - pos.mdV[VY] });
+        const F64 land = LLWorld::getInstance()->resolveLandHeightGlobal(LLVector3d(pos.mdV[VX], pos.mdV[VY], 0));
+        const bool flat = std::fabs(land - sPws.h0) <= PWS_FLAT_M;
+        if (edge < -10.0)
+        {
+            pwsStop("pwm sweep: the car left the arena; sweep and autopilot off");
+            gSavedSettings.setBOOL("SKRoadAutopilotPwmSweep", false);
+            gSavedSettings.setBOOL("SKRoadAutopilot", false);
+            return 0;
+        }
+        auto enter = [&](S32 phase)
+        {
+            sPws.phase = phase;
+            sPws.phaseAt = now;
+        };
+
+        if (sPws.phase == 0)
+        {
+            // into the gear (W held), as the old sweep does
+            if (sGear == gear)
+            {
+                enter(1);
+            }
+            else
+            {
+                if (now - sPws.shiftAt > 1.0) sPws.shiftAt = now;
+                if (now - sPws.shiftAt < SHIFT_HOLD_S)
+                {
+                    keys |= shiftKey(sGear <= 0 ? (sGear < 0 ? 1 : -1) : (sGear < gear ? 1 : -1));
+                }
+            }
+        }
+        if (sPws.phase == 1)
+        {
+            // home: up to speed and pointed at the middle, room to the edge
+            const F64 cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+            const F64 err = wrap(std::atan2(cy - pos.mdV[VY], cx - pos.mdV[VX]) - yaw) * 180 / PI;
+            const bool room = edge >= PWS_START_EDGE_M || std::hypot(cx - pos.mdV[VX], cy - pos.mdV[VY]) < 10.0;
+            if (room && flat && std::fabs(err) < 30.0 && now - sPws.phaseAt > 2.0 && speed > 1.0)
+            {
+                enter(2);
+            }
+            else if (std::fabs(err) > 15.0)
+            {
+                keys |= err > 0 ? AGENT_CONTROL_YAW_POS : AGENT_CONTROL_YAW_NEG;
+            }
+        }
+        if (sPws.phase == 2 && now - sPws.phaseAt >= 1.5)
+        {
+            // settled straight: the run, from this frame
+            if (!q)
+            {
+                enter(5);
+            }
+            else
+            {
+                if (q->kind != sPws.family)
+                {
+                    if (sPws.family >= 0)
+                    {
+                        say(std::string("pwm sweep: end of ") + PWS_FAMILY[sPws.family] + llformat(" at %.3f", pwsEpoch()));
+                    }
+                    sPws.family = q->kind;
+                    say(std::string("pwm sweep: start of ") + PWS_FAMILY[q->kind] + llformat(" at %.3f", pwsEpoch()));
+                }
+                enter(3);
+                sPws.runFrame = 0;
+                sPws.ending = false;
+                sPws.run.clear();
+                sPws.rest.clear();
+                sPws.fpsSum = 0.0;
+                sPws.fpsN = 0;
+                sPws.firstKeyAt = now;
+                sPws.keyUpAt = -1.0;
+            }
+        }
+        if ((sPws.phase == 3 || sPws.phase == 4) && (edge < PWS_EDGE_M || !flat))
+        {
+            // too near the edge or off the flat: cut, home, the same pattern again
+            tag("pwm sweep: cut, home");
+            LL_INFOS("SKRoadDriver") << "pwm sweep: " << (q ? q->id : std::string()) << (dir > 0 ? " A" : " D")
+                                     << " cut at the edge" << LL_ENDL;
+            enter(1);
+        }
+        if (sPws.phase == 3 && q)
+        {
+            bool done = false;
+            const S32 key = pwsKey(*q, sPws.runFrame, now - sPws.phaseAt, sPws.ending, done);
+            ++sPws.runFrame;
+            if (key)
+            {
+                keys |= key * dir > 0 ? AGENT_CONTROL_YAW_POS : AGENT_CONTROL_YAW_NEG;
+            }
+            sPws.run.push_back({ now, sYawRate * 180 / PI });
+            if (dt > 0) { sPws.fpsSum += dt; ++sPws.fpsN; }
+            if (done)
+            {
+                sPws.keyUpAt = now;
+                enter(4);
+            }
+        }
+        else if (sPws.phase == 4 && q)
+        {
+            sPws.rest.push_back({ now, sYawRate * 180 / PI });
+            if (dt > 0) { sPws.fpsSum += dt; ++sPws.fpsN; }
+            if (now - sPws.phaseAt >= (q->kind == 0 ? PWS_REST_S : PWS_REST_SHORT_S))
+            {
+                pwsSummarise(*q, gear);
+                if (++sPws.side > 1)
+                {
+                    sPws.side = 0;
+                    ++sPws.k;
+                }
+                // straight on to the next while there is room; home otherwise
+                const PwsPattern* next = sPws.k < sPws.patterns.size() ? &sPws.patterns[sPws.k] : nullptr;
+                if (!next)
+                {
+                    enter(5);
+                }
+                else if (edge >= PWS_START_EDGE_M && flat)
+                {
+                    enter(2);
+                    sPws.phaseAt = now - 1.5;       // the rest was the settle
+                }
+                else
+                {
+                    enter(1);
+                }
+            }
+        }
+        if (sPws.phase == 5)
+        {
+            if (sPws.family >= 0)
+            {
+                say(std::string("pwm sweep: end of ") + PWS_FAMILY[sPws.family] + llformat(" at %.3f", pwsEpoch()));
+            }
+            pwsStop("pwm sweep done");
+            gSavedSettings.setBOOL("SKRoadAutopilotPwmSweep", false);
+            gSavedSettings.setBOOL("SKRoadAutopilot", false);
+            return 0;
+        }
+
+        static const char* const PHASES[] = { "gear", "home", "settle", "run", "rest", "done" };
+        std::string ks;
+        if (keys & AGENT_CONTROL_AT_POS) ks += 'W';
+        if (keys & AGENT_CONTROL_YAW_POS) ks += 'A';
+        if (keys & AGENT_CONTROL_YAW_NEG) ks += 'D';
+        if (keys & ~(AGENT_CONTROL_AT_POS | AGENT_CONTROL_YAW_POS | AGENT_CONTROL_YAW_NEG)) ks += 'S';    // a shift
+        sPwsLog << pwsEpoch() << ',' << now - sPws.startT << ',' << sPws.frame << ',' << dt << ',' << ks << ','
+                << yaw * 180 / PI << ',' << sYawRate * 180 / PI << ',' << speed << ',' << (q ? q->id : std::string())
+                << ',' << (dir > 0 ? 'A' : 'D') << ',' << PHASES[sPws.phase] << '\n';
+        tag("pwm sweep " + std::string(q ? q->id : "") + (dir > 0 ? " A " : " D ") + PHASES[sPws.phase]);
+        return keys;
+    }
+
+    bool pwmSweepOn()
+    {
+        static LLCachedControl<bool> on(gSavedSettings, "SKRoadAutopilotPwmSweep", false);
+        if (!on && sPws.on)
+        {
+            pwsStop("pwm sweep off");
+        }
+        return on;
+    }
+
     bool backClear(const LLVector3d& pos, F64 yaw, F64 speed);     // room behind, below
 
     // ---------------------------------------------------------------- getting unstuck
@@ -5758,7 +6168,7 @@ void sk_road_driver::beforeAgentUpdate()
     {
         static LLCachedControl<std::string> course_d(gSavedSettings, "SKRoadAutopilotTestCourse", "");
         static LLCachedControl<S32> sweep_d(gSavedSettings, "SKRoadAutopilotSweep", 0);
-        if (std::string(course_d).empty() && S32(sweep_d) == 0 && speed > 1.0)
+        if (std::string(course_d).empty() && S32(sweep_d) == 0 && !pwmSweepOn() && speed > 1.0)
         {
             noteDriven(pos, now);
         }
@@ -5770,7 +6180,7 @@ void sk_road_driver::beforeAgentUpdate()
     // arrive over seconds), and the wait for it to load (roadNotLoaded, up to ROAD_WAIT_S) decides instead; the
     // mission lost the road 50 m from a fresh rez this way
     // stopped first, on the road (braked below), never left rolling on past its edge onto someone's land
-    if (!road && sTurnPhase == 0 && now - sLastSeenRoad > LOST_S && now > LOST_S && S32(sweep_on) == 0 && !bench_on && !roadNotLoaded(pos, yaw)
+    if (!road && sTurnPhase == 0 && now - sLastSeenRoad > LOST_S && now > LOST_S && S32(sweep_on) == 0 && !pwmSweepOn() && !bench_on && !roadNotLoaded(pos, yaw)
         && (speed < 0.5 || now - sLastSeenRoad > LOST_S + LOST_BRAKE_S))
     {
         sendKeys(AGENT_CONTROL_AT_NEG, note);
@@ -5954,7 +6364,9 @@ void sk_road_driver::beforeAgentUpdate()
     }
     benchStep(now, note);
     static LLCachedControl<std::string> course_g(gSavedSettings, "SKRoadAutopilotTestCourse", "");
-    static LLCachedControl<S32> sweep_gear(gSavedSettings, "SKRoadAutopilotSweep", 0);
+    static LLCachedControl<S32> sweep_gear_c(gSavedSettings, "SKRoadAutopilotSweep", 0);
+    const bool pwm_sweep = pwmSweepOn();     // the PWM sweep stands in for the sweep below: no road, its own keys
+    const S32 sweep_gear = pwm_sweep ? std::max(1, S32(sweep_gear_c)) : S32(sweep_gear_c);
     const bool was_recovering = sRecoverPhase != 0;
     if (S32(sweep_gear) == 0 && sTurnPhase == 0 && recovering(keys, speed, now, pos, yaw, note))
     {
@@ -5967,6 +6379,10 @@ void sk_road_driver::beforeAgentUpdate()
         // driven the way the nose now points
         startTurnRound(false, pos, yaw, now,
                        was_recovering ? "unstuck facing back: turning round to carry on" : "facing back against the way travelled: turning round");
+    }
+    else if (pwm_sweep)
+    {
+        keys = pwmSweepKeys(now, speed, pos, yaw, note);
     }
     else if (S32(sweep_gear) > 0)
     {
