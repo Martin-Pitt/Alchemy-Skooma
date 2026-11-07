@@ -2946,6 +2946,8 @@ namespace skroad::drive
         return keys;
     }
 
+    bool thrSweepOn();      // the throttle sweep, below: it drives as the PWM sweep does
+
     bool pwmSweepOn()
     {
         static LLCachedControl<bool> on(gSavedSettings, "SKRoadAutopilotPwmSweep", false);
@@ -2953,7 +2955,801 @@ namespace skroad::drive
         {
             pwsStop("pwm sweep off");
         }
+        return on || thrSweepOn();
+    }
+
+    // ---------------------------------------------------------------- the throttle sweep (spike)
+
+    // SKRoadAutopilotThrSweep on, or SKRoadAutopilotPwmSweep with SKRoadAutopilotPwmSweepFamily "thr" where that
+    // setting exists (with the autopilot; seated, stopped, in a flat open arena parcel): straight-line throttle
+    // tests along the arena's diagonal, from SKRoadAutopilotPwmSweepGear up through the gears while each tops the
+    // last. Per gear: accel (W 6 s from a stop), coast (W up from top until 2 m/s or 4 s), brake (W up 2 sim
+    // frames, then S until stopped, released if it starts reversing), lifts (W up 1, 3, 6, 12 sim frames at top),
+    // and downshifts (coasting to the lower gear's top, at once, and with W held); duty (W N on, R off in sim
+    // frames, from half top) in the first gear only; last, circles of 30, 20 and 12 m (A held while the yaw rate is
+    // short of v / r, W held) in the highest gear, logging the rate got and wanted and the slip. Before each run the car stops at a corner and spins in
+    // place onto the diagonal (a slow driven turn where a spin creeps); a run that meets the far corner is cut.
+    // W and S are never held together. Per frame to logs/sk-road-thr-<time>.csv, per test to -summary.csv.
+    constexpr F64 THR_SIM_FRAME_S = 1.0 / 45.0;
+    constexpr S32 THR_DUTY_N[] = { 1, 2, 4, 8, 16 }, THR_DUTY_R[] = { 1, 3, 6 }, THR_LIFTS[] = { 1, 3, 6, 12 };
+    constexpr F64 THR_ACCEL_S = 6.0, THR_COAST_S = 4.0, THR_COAST_FLOOR = 2.0, THR_DUTY_S = 6.0;
+    constexpr F64 THR_LIFT_AFTER_S = 3.0, THR_SHIFT_AFTER_S = 4.0, THR_STEADY_S = 2.0;
+    constexpr F64 THR_CORNER_M = PWS_EDGE_M + 2.0, THR_CORNER_NEAR_M = 12.0;
+    constexpr F64 THR_SPIN_DEG = 2.0, THR_SPIN_DRIFT_M = 1.5, THR_SPIN_MAX_S = 25.0;
+    constexpr S32 THR_MAX_GEAR = 8;
+    const char* const THR_KIND[] = { "accel", "coast", "brake", "duty", "lift", "downshift", "circle" };
+    constexpr S32 THR_CIRCLE_R[] = { 30, 20, 12 };
+    constexpr F64 THR_CIRCLE_S = 6.0;
+
+    struct ThrTest
+    {
+        S32 kind = 0, gear = 1, a = 0, b = 0;
+        std::string id;
+    };
+
+    struct ThrState
+    {
+        bool on = false, lastGear = false;
+        std::vector<ThrTest> tests;
+        size_t k = 0;
+        S32 g0 = 1;
+        S32 phase = 0;          // 0 gear, 1 to a corner, 2 spin, 3 lead, 4 test, 5 stop, 6 done
+        F64 phaseAt = 0.0, startT = 0.0, prevT = -1.0, stillAt = -1.0;
+        S32 frame = 0;
+        F64 fsSum = 0.0;
+        S32 fsN = 0;
+        F64 cx[2] = {}, cy[2] = {};
+        S32 to = 0;             // the corner driven toward
+        bool spinning = false, spinDriven = false;
+        F64 spinX = 0, spinY = 0, spinAt = 0, spinDrift = 0;
+        F64 lastX = 0, lastY = 0, dist = 0, avail = 0;
+        F64 leadMax = 0, leadMaxAt = 0;
+        S32 step = 0, stepFrame = 0, nOn = 1, nOff = 1, onFrames = 0, offFrames = 0;
+        F64 t0 = 0, stepAt = 0, v0 = 0, vmin = 0, tmin = 0, tS = -1, tStop = -1, tBack = -1, wUpDist = 0, stopDist = 0;
+        bool reversed = false, cut = false;
+        std::vector<std::array<F64, 2>> s;     // t from t0, speed
+        std::vector<std::array<F64, 5>> circle; // t, speed, yaw rate and the one wanted (deg/s), slip (deg)
+        bool circles = false;
+        std::map<S32, F64> top;
+        F64 brakeDec = 4.0;
+    };
+    ThrState sThr;
+    llofstream sThrLog, sThrSummary;
+
+    const char* const THR_COLS[] = { "test", "kind", "gear", "a", "b", "v0_mps", "steady_mps", "t63_s", "t90_s",
+                                     "coast_decel", "brake_decel", "stop_dist_m", "stop_t_s", "reversed", "dip_mps",
+                                     "recover_s", "lost_mps", "back_on_s", "need_m", "avail_m", "cut", "mean_fps",
+                                     "on_frames", "off_frames", "spin_drift_m", "spin_s", "spin_driven", "yaw_rate_deg", "want_rate_deg",
+                                     "slip_deg" };
+
+    void thrRow(const std::string& id, const char* kind, S32 gear, const std::map<std::string, F64>& v)
+    {
+        sThrSummary << id << ',' << kind << ',' << gear;
+        for (size_t i = 3; i < std::size(THR_COLS); ++i)
+        {
+            sThrSummary << ',';
+            auto it = v.find(THR_COLS[i]);
+            if (it != v.end() && !std::isnan(it->second))
+            {
+                sThrSummary << it->second;
+            }
+        }
+        sThrSummary << '\n';
+        sThrSummary.flush();
+    }
+
+    void thrAddGear(S32 g)
+    {
+        auto add = [&](S32 kind, S32 a, S32 b, const std::string& id)
+        {
+            ThrTest t;
+            t.kind = kind;
+            t.gear = g;
+            t.a = a;
+            t.b = b;
+            t.id = llformat("g%d ", g) + id;
+            sThr.tests.push_back(t);
+        };
+        add(0, 0, 0, "accel");
+        add(1, 0, 0, "coast");
+        add(2, 0, 0, "brake");
+        for (S32 l : THR_LIFTS)
+        {
+            add(4, l, 0, llformat("lift %d", l));
+        }
+        if (g == sThr.g0)
+        {
+            for (S32 n : THR_DUTY_N)
+            {
+                for (S32 r : THR_DUTY_R)
+                {
+                    add(3, n, r, llformat("duty n%d r%d", n, r));
+                }
+            }
+        }
+        if (g > 1)
+        {
+            add(5, 0, 0, "downshift coasting");
+            add(5, 0, 1, "downshift at once");
+            add(5, 0, 2, "downshift W held");
+        }
+    }
+
+    // The lower gear's top: measured by this sweep, else the car's learnt one; 0 unknown.
+    F64 thrTop(S32 g)
+    {
+        auto it = sThr.top.find(g);
+        if (it != sThr.top.end())
+        {
+            return it->second;
+        }
+        auto car = sGearTops.find(sCarKey);
+        if (car != sGearTops.end())
+        {
+            auto t = car->second.find(g);
+            if (t != car->second.end())
+            {
+                return t->second;
+            }
+        }
+        return 0.0;
+    }
+
+    void thrStop(const std::string& why)
+    {
+        if (sThrLog.is_open()) sThrLog.close();
+        if (sThrSummary.is_open()) sThrSummary.close();
+        sThr.on = false;
+        say(why);
+    }
+
+    void thrSummarise(const ThrTest& q)
+    {
+        std::map<std::string, F64> v;
+        const F64 fps = sThr.fsN && sThr.fsSum > 0 ? sThr.fsN / sThr.fsSum : 0.0;
+        v["a"] = q.a;
+        v["b"] = q.b;
+        v["v0_mps"] = sThr.v0;
+        v["need_m"] = sThr.dist;
+        v["avail_m"] = sThr.avail;
+        v["cut"] = sThr.cut;
+        v["mean_fps"] = fps;
+        const auto& s = sThr.s;
+        const F64 end = s.empty() ? 0.0 : s.back()[0];
+        auto steady = [&]()
+        {
+            F64 sum = 0;
+            S32 n = 0;
+            for (const auto& x : s)
+            {
+                if (x[0] >= end - THR_STEADY_S)
+                {
+                    sum += x[1];
+                    ++n;
+                }
+            }
+            return n ? sum / n : F64(NAN);
+        };
+        if (q.kind == 0)
+        {
+            const F64 top = steady();
+            v["steady_mps"] = top;
+            F64 t63 = NAN, t90 = NAN;
+            for (const auto& x : s)
+            {
+                if (std::isnan(t63) && x[1] >= 0.63 * top) t63 = x[0];
+                if (std::isnan(t90) && x[1] >= 0.90 * top) t90 = x[0];
+            }
+            v["t63_s"] = t63;
+            v["t90_s"] = t90;
+            if (!sThr.cut && end >= THR_ACCEL_S - 0.1 && top > 0.5)
+            {
+                sThr.top[q.gear] = top;
+            }
+        }
+        else if (q.kind == 1)
+        {
+            if (!s.empty() && end > 0)
+            {
+                v["coast_decel"] = (s.front()[1] - s.back()[1]) / end;
+            }
+            // decel against speed, per 1 m/s bin
+            std::map<S32, std::array<F64, 2>> bins;
+            for (size_t i = 1; i < s.size(); ++i)
+            {
+                auto& b = bins[S32(std::floor((s[i][1] + s[i - 1][1]) / 2))];
+                b[0] += s[i - 1][1] - s[i][1];
+                b[1] += s[i][0] - s[i - 1][0];
+            }
+            for (const auto& [bin, b] : bins)
+            {
+                if (b[1] > 0)
+                {
+                    thrRow(q.id + llformat(" bin %d", bin), "coastbin", q.gear,
+                           { { "a", F64(bin) }, { "coast_decel", b[0] / b[1] }, { "cut", F64(sThr.cut) } });
+                }
+            }
+        }
+        else if (q.kind == 2)
+        {
+            if (sThr.tStop >= 0 && sThr.tS >= 0)
+            {
+                const F64 t = sThr.tStop - sThr.tS;
+                F64 vs = sThr.v0;
+                for (const auto& x : s)
+                {
+                    if (x[0] <= sThr.tS) vs = x[1];
+                }
+                v["stop_t_s"] = t;
+                v["brake_decel"] = t > 0 ? vs / t : NAN;
+                v["stop_dist_m"] = sThr.stopDist;
+                if (t > 0 && !sThr.cut)
+                {
+                    sThr.brakeDec = std::max(1.0, vs / t);
+                }
+            }
+            v["reversed"] = sThr.reversed;
+        }
+        else if (q.kind == 3)
+        {
+            v["steady_mps"] = steady();
+            v["on_frames"] = sThr.nOn;
+            v["off_frames"] = sThr.nOff;
+        }
+        else if (q.kind == 4)
+        {
+            v["dip_mps"] = sThr.v0 - sThr.vmin;
+            F64 rec = NAN;
+            for (const auto& x : s)
+            {
+                if (std::isnan(rec) && sThr.tBack >= 0 && x[0] > sThr.tBack && x[1] >= sThr.v0 - 0.1)
+                {
+                    rec = x[0] - sThr.tBack;
+                }
+            }
+            v["recover_s"] = rec;
+            v["on_frames"] = sThr.offFrames;    // the lift, in viewer frames
+        }
+        else if (q.kind == 6)
+        {
+            // the circle's last THR_STEADY_S: speed, yaw rate got and wanted, slip
+            F64 sum[4] = {};
+            S32 n = 0;
+            for (const auto& c : sThr.circle)
+            {
+                if (c[0] >= end - THR_STEADY_S)
+                {
+                    for (S32 i = 0; i < 4; ++i) sum[i] += c[i + 1];
+                    ++n;
+                }
+            }
+            if (n)
+            {
+                v["steady_mps"] = sum[0] / n;
+                v["yaw_rate_deg"] = sum[1] / n;
+                v["want_rate_deg"] = sum[2] / n;
+                v["slip_deg"] = sum[3] / n;
+            }
+        }
+        else
+        {
+            v["lost_mps"] = sThr.v0 - sThr.vmin;
+            v["back_on_s"] = sThr.tmin;         // W up (or the shift, held) to the speed's low: accelerating again
+            v["recover_s"] = sThr.tBack;        // W up to W held again
+            F64 rec = NAN;
+            for (const auto& x : s)
+            {
+                if (std::isnan(rec) && x[0] > sThr.tmin && x[1] >= sThr.v0 - 0.1)
+                {
+                    rec = x[0];
+                }
+            }
+            v["t90_s"] = rec;                   // back to the speed it left at
+        }
+        thrRow(q.id, THR_KIND[q.kind], q.gear, v);
+    }
+
+    // Stopped, A/D only, onto bearing; true once within THR_SPIN_DEG and still. Creeping past THR_SPIN_DRIFT_M,
+    // a slow driven turn instead (W in pulses, never with S).
+    bool thrSpin(F64 bearing, F64 now, F64 speed, const LLVector3d& pos, F64 yaw, U32& keys, const std::string& why)
+    {
+        if (!sThr.spinning)
+        {
+            sThr.spinning = true;
+            sThr.spinDriven = false;
+            sThr.spinX = pos.mdV[VX];
+            sThr.spinY = pos.mdV[VY];
+            sThr.spinAt = now;
+            sThr.spinDrift = 0.0;
+        }
+        sThr.spinDrift = std::max(sThr.spinDrift, std::hypot(pos.mdV[VX] - sThr.spinX, pos.mdV[VY] - sThr.spinY));
+        if (sThr.spinDrift > THR_SPIN_DRIFT_M && !sThr.spinDriven)
+        {
+            sThr.spinDriven = true;
+            LL_INFOS("SKRoadDriver") << "thr sweep: spin crept " << sThr.spinDrift << " m, driven turn" << LL_ENDL;
+        }
+        const F64 err = wrap(bearing - yaw) * 180 / PI;
+        const bool timed_out = now - sThr.spinAt > THR_SPIN_MAX_S;
+        if ((std::fabs(err) < THR_SPIN_DEG && std::fabs(sYawRate) * 180 / PI < 3.0 && speed < 0.5) || timed_out)
+        {
+            thrRow(why, "spin", sGear,
+                   { { "spin_drift_m", sThr.spinDrift }, { "spin_s", now - sThr.spinAt },
+                     { "spin_driven", F64(sThr.spinDriven) }, { "a", err } });
+            sThr.spinning = false;
+            return true;
+        }
+        if (speed > 0.5 && !sThr.spinDriven)
+        {
+            keys |= AGENT_CONTROL_AT_NEG;
+        }
+        if (std::fabs(err) >= THR_SPIN_DEG && (std::fabs(err) >= 12.0 || sThr.frame % 3 == 0))
+        {
+            keys |= err > 0 ? AGENT_CONTROL_YAW_POS : AGENT_CONTROL_YAW_NEG;
+            if (sThr.spinDriven && !(keys & AGENT_CONTROL_AT_NEG) && speed < 2.0 && sThr.frame % 4 == 0)
+            {
+                keys |= AGENT_CONTROL_AT_POS;
+            }
+        }
+        return false;
+    }
+
+    bool thrSweepOn()
+    {
+        static LLCachedControl<bool> thr(gSavedSettings, "SKRoadAutopilotThrSweep", false);
+        static LLCachedControl<bool> pwm(gSavedSettings, "SKRoadAutopilotPwmSweep", false);
+        bool on = thr;
+        if (!on && pwm && gSavedSettings.controlExists("SKRoadAutopilotPwmSweepFamily"))
+        {
+            on = gSavedSettings.getString("SKRoadAutopilotPwmSweepFamily") == "thr";
+        }
+        if (!on && sThr.on)
+        {
+            thrStop("thr sweep off");
+        }
         return on;
+    }
+
+    void thrOff(const std::string& why)
+    {
+        thrStop(why);
+        gSavedSettings.setBOOL("SKRoadAutopilotThrSweep", false);
+        gSavedSettings.setBOOL("SKRoadAutopilotPwmSweep", false);
+        gSavedSettings.setBOOL("SKRoadAutopilot", false);
+    }
+
+    // Each frame while the thr sweep is on: the keys, and the frame's log row.
+    U32 thrSweepKeys(F64 now, F64 speed, const LLVector3d& pos, F64 yaw, std::string& note)
+    {
+        auto tag = [&](const std::string& t) { note += note.empty() ? t : ", " + t; };
+        const F64 px = pos.mdV[VX], py = pos.mdV[VY];
+        F64 x0, x1, y0, y1;
+        if (!sThr.on)
+        {
+            if (speed > 0.5)
+            {
+                thrOff("thr sweep: stop the car first");
+                return 0;
+            }
+            static LLCachedControl<S32> gear_c(gSavedSettings, "SKRoadAutopilotPwmSweepGear", 1);
+            sThr = ThrState();
+            sThr.on = true;
+            sThr.g0 = std::max(1, S32(gear_c));
+            thrAddGear(sThr.g0);
+            sThr.startT = now;
+            sThr.phaseAt = now;
+            sThr.lastX = px;
+            sThr.lastY = py;
+            arenaBox(px, py, x0, x1, y0, y1);
+            sThr.cx[0] = x0 + THR_CORNER_M;
+            sThr.cy[0] = y0 + THR_CORNER_M;
+            sThr.cx[1] = x1 - THR_CORNER_M;
+            sThr.cy[1] = y1 - THR_CORNER_M;
+            sThr.to = std::hypot(sThr.cx[0] - px, sThr.cy[0] - py) <= std::hypot(sThr.cx[1] - px, sThr.cy[1] - py) ? 0 : 1;
+            sThr.phase = 5;
+            const std::string stamp = pwsStamp();
+            const std::string base = gDirUtilp->getExpandedFilename(LL_PATH_LOGS, "sk-road-thr-" + stamp);
+            sThrLog.open((base + ".csv").c_str(), std::ios::out);
+            sThrLog.precision(10);
+            const F64 diag = std::hypot(sThr.cx[1] - sThr.cx[0], sThr.cy[1] - sThr.cy[0]);
+            sThrLog << "# vehicle " << sVehicle << ", gear " << sThr.g0 << ", diagonal " << diag << " m\n"
+                    << "epoch,t,frame,dt,keys,gear,speed,fwd_mps,yaw_deg,test,phase,step,remain_m,yaw_rate_deg,slip_deg\n";
+            sThrSummary.open((base + "-summary.csv").c_str(), std::ios::out);
+            sThrSummary.precision(10);
+            for (size_t i = 0; i < std::size(THR_COLS); ++i)
+            {
+                sThrSummary << (i ? "," : "") << THR_COLS[i];
+            }
+            sThrSummary << '\n';
+            say(llformat("thr sweep: from gear %d, %.0f x %.0f m arena, %.0f m diagonal; log sk-road-thr-%s",
+                         sThr.g0, x1 - x0, y1 - y0, diag, stamp.c_str()));
+        }
+        const F64 dt = sThr.prevT < 0 ? 0.0 : now - sThr.prevT;
+        sThr.prevT = now;
+        ++sThr.frame;
+        if (dt > 0)
+        {
+            sThr.fsSum += dt;
+            ++sThr.fsN;
+        }
+        const F64 fs = sThr.fsN && sThr.fsSum > 0 ? sThr.fsSum / sThr.fsN : 1.0 / 60.0;
+        const F64 mx = px - sThr.lastX, my = py - sThr.lastY;
+        const F64 fwd = dt > 0 ? (mx * std::cos(yaw) + my * std::sin(yaw)) / dt : 0.0;
+        // slip: the velocity's heading against the nose (+ the car moving left of where it points)
+        const F64 slip = speed > 1.0 && std::hypot(mx, my) > 1e-3 ? wrap(std::atan2(my, mx) - yaw) * 180 / PI : 0.0;
+        sThr.dist += std::hypot(mx, my);
+        sThr.wUpDist += std::hypot(mx, my);
+        sThr.lastX = px;
+        sThr.lastY = py;
+
+        arenaBox(px, py, x0, x1, y0, y1);
+        const F64 edge = std::min({ px - x0, x1 - px, py - y0, y1 - py });
+        if (edge < -10.0)
+        {
+            thrOff("thr sweep: the car left the arena; sweep and autopilot off");
+            return 0;
+        }
+        const S32 to = sThr.to, from = 1 - to;
+        const F64 ux = sThr.cx[to] - sThr.cx[from], uy = sThr.cy[to] - sThr.cy[from];
+        const F64 ul = std::max(1.0, std::hypot(ux, uy));
+        const F64 remain = ((sThr.cx[to] - px) * ux + (sThr.cy[to] - py) * uy) / ul;
+        const F64 reserve = speed * speed / (2 * sThr.brakeDec) + 3.0 + 0.25 * speed;
+        const ThrTest* q = sThr.k < sThr.tests.size() ? &sThr.tests[sThr.k] : nullptr;
+        U32 keys = 0;
+        auto enter = [&](S32 phase)
+        {
+            sThr.phase = phase;
+            sThr.phaseAt = now;
+        };
+        auto endTest = [&]()
+        {
+            thrSummarise(*q);
+            if (q->kind == 0 && q->gear > sThr.g0)
+            {
+                // a gear that does not top the last (or was never reached): the gears end here
+                const F64 here = thrTop(q->gear), below = thrTop(q->gear - 1);
+                if (sGear != q->gear || here <= below + 0.3)
+                {
+                    sThr.tests.resize(sThr.k + 1);
+                    sThr.lastGear = true;
+                    say(llformat("thr sweep: gear %d does not top gear %d; last gear", q->gear, q->gear - 1));
+                }
+            }
+            if (q->kind == 0 && q->gear == sThr.g0 && sSweepGearSkipped)
+            {
+                sThr.lastGear = true;
+            }
+            ++sThr.k;
+            if (sThr.k >= sThr.tests.size() && !sThr.lastGear && sThr.tests.back().gear < THR_MAX_GEAR)
+            {
+                thrAddGear(sThr.tests.back().gear + 1);
+            }
+            if (sThr.k >= sThr.tests.size() && !sThr.circles)
+            {
+                // last, circles in the highest gear that topped the one below it
+                sThr.circles = true;
+                S32 g = sThr.g0;
+                for (const auto& [gear, top] : sThr.top)
+                {
+                    if (gear > g && top > thrTop(gear - 1) + 0.3) g = gear;
+                }
+                for (S32 r : THR_CIRCLE_R)
+                {
+                    ThrTest t;
+                    t.kind = 6;
+                    t.gear = g;
+                    t.a = r;
+                    t.id = llformat("g%d circle r%d", g, r);
+                    sThr.tests.push_back(t);
+                }
+            }
+            enter(5);
+            sThr.stillAt = -1.0;
+        };
+
+        if (sThr.phase == 5)
+        {
+            // stopping: S while it rolls forward, nothing once it rolls back
+            if (speed > 0.2 && fwd > -0.3)
+            {
+                keys |= AGENT_CONTROL_AT_NEG;
+            }
+            if (speed < 0.2)
+            {
+                if (sThr.stillAt < 0) sThr.stillAt = now;
+            }
+            else
+            {
+                sThr.stillAt = -1.0;
+            }
+            if (sThr.stillAt >= 0 && now - sThr.stillAt >= 0.3)
+            {
+                keys = 0;
+                if (!q)
+                {
+                    enter(6);
+                }
+                else if (sGear != q->gear && !sSweepGearSkipped)
+                {
+                    enter(0);
+                }
+                else if (std::hypot(sThr.cx[to] - px, sThr.cy[to] - py) > THR_CORNER_NEAR_M)
+                {
+                    enter(1);
+                }
+                else
+                {
+                    enter(2);
+                }
+            }
+        }
+        if (sThr.phase == 0 && q)
+        {
+            U32 gear_keys = 0;
+            if (sweepToGear(q->gear, now, speed, gear_keys, "thr sweep"))
+            {
+                enter(5);
+            }
+            else
+            {
+                keys = gear_keys;
+            }
+        }
+        if (sThr.phase == 1)
+        {
+            // to the corner: turned onto it in place, then driven slowly, stopped short by the brake's reach
+            const F64 dx = sThr.cx[to] - px, dy = sThr.cy[to] - py;
+            const F64 d = std::hypot(dx, dy), bearing = std::atan2(dy, dx);
+            const F64 err = wrap(bearing - yaw) * 180 / PI;
+            if (d < std::max(4.0, reserve))
+            {
+                enter(5);
+            }
+            else if (speed < 0.5 && std::fabs(err) > 10.0)
+            {
+                thrSpin(bearing, now, speed, pos, yaw, keys, "spin to corner");
+            }
+            else
+            {
+                sThr.spinning = false;
+                if (speed < 5.0 && std::fabs(err) < 30.0)
+                {
+                    keys |= AGENT_CONTROL_AT_POS;
+                }
+                if (std::fabs(err) > 3.0)
+                {
+                    keys |= err > 0 ? AGENT_CONTROL_YAW_POS : AGENT_CONTROL_YAW_NEG;
+                }
+            }
+        }
+        if (sThr.phase == 2 && q)
+        {
+            // at the corner: spun onto the diagonal to the other one, and the run begins
+            const F64 bearing = std::atan2(sThr.cy[from] - sThr.cy[to], sThr.cx[from] - sThr.cx[to]);
+            if (thrSpin(bearing, now, speed, pos, yaw, keys, "spin at corner"))
+            {
+                sThr.to = from;
+                const F64 rx = sThr.cx[from] - px, ry = sThr.cy[from] - py;
+                sThr.avail = std::hypot(rx, ry);
+                sThr.dist = 0.0;
+                sThr.cut = false;
+                sThr.leadMax = 0.0;
+                sThr.leadMaxAt = now;
+                sThr.s.clear();
+                enter(3);
+                keys = 0;
+                return keys;
+            }
+        }
+        const bool running = sThr.phase == 3 || sThr.phase == 4;
+        const bool circling = sThr.phase == 4 && q && q->kind == 6;
+        if (running && q && (circling ? edge < PWS_EDGE_M : remain < reserve))
+        {
+            sThr.cut = true;
+            LL_INFOS("SKRoadDriver") << "thr sweep: " << q->id << " cut at the corner after " << sThr.dist << " m of "
+                                     << sThr.avail << LL_ENDL;
+            tag("thr sweep: cut at the corner");
+            if (sThr.phase == 3)
+            {
+                sThr.v0 = speed;
+            }
+            endTest();
+        }
+        if (sThr.phase == 3 && q)
+        {
+            // lead: up to the test's start
+            bool go = false;
+            if (q->kind == 0)
+            {
+                go = true;
+            }
+            else if (q->kind == 3)
+            {
+                go = speed >= 0.5 * thrTop(q->gear) || now - sThr.phaseAt > 12.0;
+            }
+            else
+            {
+                if (speed > sThr.leadMax + 0.05)
+                {
+                    sThr.leadMax = speed;
+                    sThr.leadMaxAt = now;
+                }
+                go = (speed > 1.0 && now - sThr.leadMaxAt > 1.0) || now - sThr.phaseAt > 12.0;
+            }
+            if (!go)
+            {
+                keys |= AGENT_CONTROL_AT_POS;
+            }
+            else
+            {
+                enter(4);
+                sThr.t0 = now;
+                sThr.step = 0;
+                sThr.stepFrame = 0;
+                sThr.stepAt = now;
+                sThr.v0 = speed;
+                sThr.vmin = speed;
+                sThr.tmin = 0.0;
+                sThr.tS = sThr.tStop = sThr.tBack = -1.0;
+                sThr.reversed = false;
+                sThr.wUpDist = 0.0;
+                sThr.onFrames = sThr.offFrames = 0;
+                sThr.nOn = std::max(1, S32(std::ceil(q->a * THR_SIM_FRAME_S / fs - 1e-6)));
+                sThr.nOff = std::max(1, S32(std::ceil(q->b * THR_SIM_FRAME_S / fs - 1e-6)));
+                sThr.s.clear();
+                sThr.circle.clear();
+            }
+        }
+        if (sThr.phase == 4 && q)
+        {
+            const F64 t = now - sThr.t0;
+            sThr.s.push_back({ t, speed });
+            if (speed < sThr.vmin)
+            {
+                sThr.vmin = speed;
+                sThr.tmin = t;
+            }
+            auto nextStep = [&]()
+            {
+                ++sThr.step;
+                sThr.stepFrame = 0;
+                sThr.stepAt = now;
+            };
+            bool done = false;
+            switch (q->kind)
+            {
+                case 0:
+                    keys |= AGENT_CONTROL_AT_POS;
+                    done = t >= THR_ACCEL_S;
+                    break;
+                case 1:
+                    done = speed < THR_COAST_FLOOR || t >= THR_COAST_S;
+                    break;
+                case 2:
+                {
+                    const S32 lift = std::max(1, S32(std::ceil(2 * THR_SIM_FRAME_S / fs - 1e-6)));
+                    if (sThr.step == 0 && sThr.stepFrame >= lift)
+                    {
+                        nextStep();
+                        sThr.tS = t;
+                    }
+                    if (sThr.step == 1)
+                    {
+                        if (sThr.tStop < 0 && speed < 0.2)
+                        {
+                            sThr.tStop = t;
+                            sThr.stopDist = sThr.wUpDist;
+                            say(llformat("thr sweep: %s stopped after %.2f s of S", q->id.c_str(), t - sThr.tS));
+                        }
+                        if (sThr.tStop >= 0 && fwd < -0.3)
+                        {
+                            sThr.reversed = true;
+                            say("thr sweep: " + q->id + " began reversing; S released");
+                            done = true;
+                        }
+                        else
+                        {
+                            keys |= AGENT_CONTROL_AT_NEG;
+                        }
+                        done = done || (sThr.tStop >= 0 && t - sThr.tStop > 1.5) || t > 15.0;
+                    }
+                    break;
+                }
+                case 3:
+                {
+                    const bool w = sThr.stepFrame % (sThr.nOn + sThr.nOff) < sThr.nOn;
+                    if (w) keys |= AGENT_CONTROL_AT_POS;
+                    done = t >= THR_DUTY_S;
+                    break;
+                }
+                case 4:
+                    if (sThr.step == 0)
+                    {
+                        const S32 lift = std::max(1, S32(std::ceil(q->a * THR_SIM_FRAME_S / fs - 1e-6)));
+                        if (sThr.stepFrame >= lift)
+                        {
+                            sThr.offFrames = lift;
+                            nextStep();
+                            sThr.tBack = t;
+                        }
+                    }
+                    if (sThr.step == 1)
+                    {
+                        keys |= AGENT_CONTROL_AT_POS;
+                        done = t - sThr.tBack >= THR_LIFT_AFTER_S;
+                    }
+                    break;
+                case 6:
+                {
+                    // circle left, W held: A held while the yaw rate is short of v / r, released past it
+                    const F64 want = speed / q->a * 180 / PI, got = sYawRate * 180 / PI;
+                    keys |= AGENT_CONTROL_AT_POS;
+                    if (got < want) keys |= AGENT_CONTROL_YAW_POS;
+                    sThr.circle.push_back({ t, speed, got, want, slip });
+                    done = t >= THR_CIRCLE_S;
+                    break;
+                }
+                default:
+                {
+                    // downshift: 0 coast to the lower gear's top, 1 at once, 2 with W held
+                    const F64 lower = thrTop(q->gear - 1);
+                    if (sThr.step == 0 && (q->b != 0 || (lower > 0 && speed < lower) || t > 8.0))
+                    {
+                        nextStep();
+                    }
+                    if (sThr.step == 1)
+                    {
+                        keys |= shiftKey(-1);
+                        if (q->b == 2) keys |= AGENT_CONTROL_AT_POS;
+                        if (now - sThr.stepAt >= SHIFT_HOLD_S)
+                        {
+                            nextStep();
+                            sThr.tBack = q->b == 2 ? 0.0 : t;
+                        }
+                    }
+                    else if (sThr.step == 0 && q->b == 2)
+                    {
+                        keys |= AGENT_CONTROL_AT_POS;
+                    }
+                    if (sThr.step == 2)
+                    {
+                        keys |= AGENT_CONTROL_AT_POS;
+                        done = t - sThr.tBack >= THR_SHIFT_AFTER_S;
+                    }
+                    break;
+                }
+            }
+            ++sThr.stepFrame;
+            if (done)
+            {
+                keys &= ~AGENT_CONTROL_AT_POS;
+                endTest();
+            }
+        }
+        if (sThr.phase == 6)
+        {
+            thrOff("thr sweep done");
+            return 0;
+        }
+        if ((keys & AGENT_CONTROL_AT_POS) && (keys & AGENT_CONTROL_AT_NEG))
+        {
+            keys &= ~AGENT_CONTROL_AT_POS;      // never W and S together
+        }
+
+        static const char* const PHASES[] = { "gear", "corner", "spin", "lead", "test", "stop", "done" };
+        std::string ks;
+        if (keys & AGENT_CONTROL_AT_POS) ks += 'W';
+        if (keys & AGENT_CONTROL_AT_NEG) ks += 'S';
+        if (keys & AGENT_CONTROL_YAW_POS) ks += 'A';
+        if (keys & AGENT_CONTROL_YAW_NEG) ks += 'D';
+        if (keys & AGENT_CONTROL_UP_POS) ks += '^';
+        if (keys & AGENT_CONTROL_UP_NEG) ks += 'v';
+        q = sThr.k < sThr.tests.size() ? &sThr.tests[sThr.k] : nullptr;     // endTest may have grown the list
+        const std::string id = q ? q->id : std::string();
+        sThrLog << pwsEpoch() << ',' << now - sThr.startT << ',' << sThr.frame << ',' << dt << ',' << ks << ',' << sGear
+                << ',' << speed << ',' << fwd << ',' << yaw * 180 / PI << ',' << id << ',' << PHASES[sThr.phase] << ','
+                << sThr.step << ',' << remain << ',' << sYawRate * 180 / PI << ',' << slip << '\n';
+        tag("thr sweep " + id + " " + PHASES[sThr.phase]);
+        return keys;
     }
 
     bool backClear(const LLVector3d& pos, F64 yaw, F64 speed);     // room behind, below
@@ -6615,7 +7411,7 @@ void sk_road_driver::beforeAgentUpdate()
     }
     else if (pwm_sweep)
     {
-        keys = pwmSweepKeys(now, speed, pos, yaw, note);
+        keys = thrSweepOn() ? thrSweepKeys(now, speed, pos, yaw, note) : pwmSweepKeys(now, speed, pos, yaw, note);
     }
     else if (S32(sweep_gear) > 0)
     {
