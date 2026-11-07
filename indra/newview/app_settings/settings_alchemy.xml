@@ -5865,6 +5865,19 @@
             <key>Value</key>
             <string>All</string>
         </map>
+        <key>SKRoadAutopilotPrivateRoads</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: the autopilot may take private road linksets on residents' parcels (never driveways or yards). Off: Linden road land only (Governor Linden, LDPW, Lindens and moles); a way onto any other parcel is no branch, and the car stops short of it and turns round.
+            </string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
         <key>SKRoadKitLibrary</key>
         <map>
             <key>Comment</key>

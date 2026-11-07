@@ -106,6 +106,10 @@ namespace skroad
         void learnLdpw(const LLUUID& owner);             // an object's owner set it to LDPW: a member
         S32 parcelOwnership(F64 x, F64 y);               // the parcel overlay's ownership at a global point
                                                          // (PARCEL_PUBLIC, PARCEL_OWNED, ...), -1 unknown
+        // The parcel at a point: 1 Linden road land, 0 not Linden's, 2 a destination by its name (a station, an
+        // airport: never road, whoever owns it), -1 not known yet; its name where asked
+        S32 roadLandAt(F64 x, F64 y, std::string* name = nullptr);
+        bool privateRoadsAllowed();                      // SKRoadAutopilotPrivateRoads
         void learnTextures(PieceShapes& piece);          // its faces' textures and its top's, once its object is live
         bool meshPlacement(const skworld::Record& r, MeshPlacement& out);
         bool rootRotation(const LLUUID& root, LLQuaternion& rot);
@@ -260,6 +264,7 @@ namespace skroad
         S8 access = ROAD_UNKNOWN;               // its linkset's (linksetAccess)
         bool mouth = false;                     // a private road's mouth on a public road (its pieces overhanging it)
         bool side = false;                      // met level with the way in, to the side (a T's cross road)
+        bool land_unknown = false;              // its land's owner not known yet (no junction choice onto it)
         const LLUUID& id() const { return part.notNull() ? part : root; }
         const char* kind() const
         {
