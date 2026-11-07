@@ -56,6 +56,7 @@ namespace
     constexpr S32 EDGE_SEGMENTS = 256;
     constexpr F64 RIM_FRACTION = 0.004;     ///< the rim's width, as a fraction of the disc's radius
     constexpr F64 SPACE_REACH = 1.0e7;      ///< space is painted out to the far plane
+    constexpr F64 EDGE_EASE_SECONDS = 0.35;  ///< how quickly the shown disc closes on a new fit (time constant)
 
     /// A flat ring on the disc's plane from radius `inner` to `outer`, relative to the eye; an inner radius
     /// of zero fills the disc.
@@ -273,12 +274,26 @@ void SKWorldMapScene::drawGround(const SKWorldMapFrame& frame, S32 width, S32 he
     const F64 height_above = std::max(frame.mEye.mdV[VZ] - std::max(GROUND_Z, mTerrain.groundAt(frame.mEye, GROUND_Z)), 1.0);
     const F32 z_near = static_cast<F32>(std::max(0.5, 0.25 * height_above));
 
-    // The sea stays endless until the first coarse tiles say where the regions are.
-    WorldDisc disc;
-    if (!mTiles.occupiedDisc(disc))
+    // The sea stays endless until the first coarse tiles say where the regions are. After that each new fit
+    // is eased into, frame rate aside, so tiles arriving grow and tighten the disc rather than snap it.
+    WorldDisc fit;
+    if (!mTiles.occupiedDisc(fit))
     {
-        disc.mRadius = 0.0;
+        fit.mRadius = 0.0;
     }
+    if (mShownDisc.mRadius <= 0.0 || fit.mRadius <= 0.0)
+    {
+        mShownDisc = fit;
+    }
+    else
+    {
+        const F64 t = 1.0 - std::exp(-std::max(0.0, now - mShownAt) / EDGE_EASE_SECONDS);
+        mShownDisc.mCentreX += (fit.mCentreX - mShownDisc.mCentreX) * t;
+        mShownDisc.mCentreY += (fit.mCentreY - mShownDisc.mCentreY) * t;
+        mShownDisc.mRadius += (fit.mRadius - mShownDisc.mRadius) * t;
+    }
+    mShownAt = now;
+    const WorldDisc disc = mShownDisc;
     const LLColor4& clear_colour = disc.mRadius > 0.0 ? SPACE_COLOUR : SEA_COLOUR;
 
     mScene.bindTarget();

@@ -85,6 +85,8 @@ private:
     LLRenderTarget mBlurB;
     SKWorldMapTiles mTiles;
     SKWorldMapHippo mHippo;
+    skworldmap::WorldDisc mShownDisc;           ///< the edge as drawn, easing toward the tiles' latest fit
+    F64 mShownAt = 0.0;
     SKWorldMapRoads mRoads;
     SKWorldMapTerrain mTerrain;
     SKWorldMapSurfaceSource* mSurfaces = nullptr;
