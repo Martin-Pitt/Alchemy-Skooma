@@ -298,6 +298,7 @@ using namespace LL;
 #include "llviewernetwork.h"
 // define a self-registering event API object
 #include "llappviewerlistener.h"
+#include "skroaddriver.h" // <SK:Nexii>
 
 #ifdef LL_DISCORD
 #include "aldiscordmanager.h"
@@ -5672,6 +5673,7 @@ void LLAppViewer::idle()
             gAgent.autoPilot(&yaw);
         }
 
+        sk_road_driver::beforeAgentUpdate(); // <SK:Nexii> road autopilot: its keys for this frame
         send_agent_update(false);
 
         // After calling send_agent_update() in the mainloop we always clear

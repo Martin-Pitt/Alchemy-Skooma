@@ -648,9 +648,11 @@ if(AL_BUILD_VIEWER)
     skphysicsshape.cpp # <SK:Nexii> physics shapes
     skaircells.cpp # <SK:Nexii> air cells
     skairoverlay.cpp # <SK:Nexii> air cells
+    skroaddriver.cpp # <SK:Nexii> ground autopilot
     skroadhost.cpp # <SK:Nexii> roads
     skroadkithost.cpp # <SK:Nexii> roads
     skroadland.cpp # <SK:Nexii> roads
+    skroadrecord.cpp # <SK:Nexii> ground autopilot
     skobjectfaces.cpp # <SK:Nexii> census
     skworldcensus.cpp # <SK:Nexii> census
     skworldoverlay.cpp # <SK:Nexii> census
@@ -1546,6 +1548,9 @@ if(AL_BUILD_VIEWER)
     skmeshhavokshape.h # <SK:Nexii> physics_havok block
     skphysicsshape.h # <SK:Nexii> physics shapes
     skaircells.h # <SK:Nexii> air cells
+    skroaddriveinternal.h # <SK:Nexii> ground autopilot
+    skroaddriver.h # <SK:Nexii> ground autopilot
+    skroaddriverkernels.inc # <SK:Nexii> ground autopilot
     skroadhost.h # <SK:Nexii> roads
     skroadland.h # <SK:Nexii> roads
     skobjectfaces.h # <SK:Nexii> census

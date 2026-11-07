@@ -238,7 +238,8 @@ LLObjectSelectionHandle LLToolSelect::handleObjectSelection(const LLPickInfo& pi
             selection_dir.setVec(selection_center);
             selection_dir.mV[VZ] = 0.f;
             selection_dir.normVec();
-            if (!object->isAvatar() && gAgent.getAtAxis() * selection_dir < 0.6f)
+            if (!object->isAvatar() && gAgent.getAtAxis() * selection_dir < 0.6f
+                && !gAgentAvatarp->isSitting())  // <SK:Nexii> seated, the turn only steers the vehicle
             {
                 LLQuaternion target_rot;
                 target_rot.shortestArc(LLVector3::x_axis, selection_dir);
