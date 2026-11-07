@@ -49,6 +49,7 @@ namespace
 {
     constexpr F64 RETRY_SECONDS = 60.0;
     constexpr F64 LENGTH_OVER_DIAMETER = 1.25;     ///< head and tail reach past the rim
+    constexpr F32 TEXTURE_PIXELS = 2048.f * 2048.f; ///< asked for whole: it can fill the screen past the rim
     // Sky-blue ambient light, the only light it gets, so the shading painted into its texture carries the form.
     const LLColor4 AMBIENT(0.8f, 0.85f, 1.f, 1.f);
 }
@@ -248,14 +249,14 @@ void SKWorldMapHippo::draw(const LLVector3d& eye, const WorldDisc& disc)
         && mTexture != mMaterial->mBaseColorTexture)
     {
         mTexture = mMaterial->mBaseColorTexture;
-        mTexture->setBoostLevel(LLGLTexture::BOOST_MAP_VISIBLE);
+        mTexture->setBoostLevel(LLGLTexture::BOOST_UI);
     }
     if (mTexture.isNull())
     {
         const LLUUID texture_id(texture_setting());
         if (texture_id.notNull())
         {
-            mTexture = LLViewerTextureManager::getFetchedTexture(texture_id, FTT_DEFAULT, true, LLGLTexture::BOOST_MAP_VISIBLE);
+            mTexture = LLViewerTextureManager::getFetchedTexture(texture_id, FTT_DEFAULT, true, LLGLTexture::BOOST_UI);
         }
     }
 
@@ -270,6 +271,8 @@ void SKWorldMapHippo::draw(const LLVector3d& eye, const WorldDisc& disc)
     gUIProgram.bind();
     if (mTexture.notNull())
     {
+        // Nothing else asks for it at a size, and a texture no one sizes stays at its smallest decode.
+        mTexture->addTextureStats(TEXTURE_PIXELS);
         gGL.getTextureSlot(0)->bindSampled(mTexture.get(), ALSamplers::AnisoWrap);
     }
     else

@@ -298,7 +298,12 @@ void SKWorldMapScene::drawGround(const SKWorldMapFrame& frame, S32 width, S32 he
 
     mScene.bindTarget();
     glClearColor(clear_colour.mV[VRED], clear_colour.mV[VGREEN], clear_colour.mV[VBLUE], 1.f);
-    mScene.clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    {
+        // render() turned depth writes off, and a depth clear obeys the write mask: without this the depth
+        // buffer kept the last frame's disc and hippo, and the hippo tested against them.
+        LLGLDepthTest clear_depth(GL_TRUE, GL_TRUE, GL_ALWAYS);
+        mScene.clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    }
     glClearColor(0.f, 0.f, 0.f, 0.f);
 
     LLGLDisable blend(GL_BLEND);
