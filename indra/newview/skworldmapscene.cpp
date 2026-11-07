@@ -282,20 +282,68 @@ void SKWorldMapScene::drawGround(const SKWorldMapFrame& frame, S32 width, S32 he
         const F64 y0 = draw.mCover.mGridY * REGION_METRES - frame.mEye.mdV[VY];
         const F64 w = draw.mCover.sideMetres();
         const F32 z = static_cast<F32>(GROUND_Z - frame.mEye.mdV[VZ]);
-        const F32 xa = static_cast<F32>(x0), xb = static_cast<F32>(x0 + w);
-        const F32 ya = static_cast<F32>(y0), yb = static_cast<F32>(y0 + w);
+        // The part of the tile from fractions (fa, ga) to (fb, gb) of its side, flat at the ground plane.
+        const auto flat = [&](F64 fa, F64 ga, F64 fb, F64 gb) {
+            const F32 xa = static_cast<F32>(x0 + w * fa), xb = static_cast<F32>(x0 + w * fb);
+            const F32 ya = static_cast<F32>(y0 + w * ga), yb = static_cast<F32>(y0 + w * gb);
+            const F32 ua = static_cast<F32>(draw.mUV[0] + (draw.mUV[2] - draw.mUV[0]) * fa);
+            const F32 ub = static_cast<F32>(draw.mUV[0] + (draw.mUV[2] - draw.mUV[0]) * fb);
+            const F32 va = static_cast<F32>(draw.mUV[1] + (draw.mUV[3] - draw.mUV[1]) * ga);
+            const F32 vb = static_cast<F32>(draw.mUV[1] + (draw.mUV[3] - draw.mUV[1]) * gb);
+            gGL.begin(LLRender::TRIANGLE_STRIP);
+            gGL.texCoord2f(ua, va);
+            gGL.vertex3f(xa, ya, z);
+            gGL.texCoord2f(ub, va);
+            gGL.vertex3f(xb, ya, z);
+            gGL.texCoord2f(ua, vb);
+            gGL.vertex3f(xa, yb, z);
+            gGL.texCoord2f(ub, vb);
+            gGL.vertex3f(xb, yb, z);
+            gGL.end();
+        };
 
         gGL.getTextureSlot(0)->bindSampled(draw.mTexture, ALSamplers::AnisoClamp);
-        gGL.begin(LLRender::TRIANGLE_STRIP);
-        gGL.texCoord2f(draw.mUV[0], draw.mUV[1]);
-        gGL.vertex3f(xa, ya, z);
-        gGL.texCoord2f(draw.mUV[2], draw.mUV[1]);
-        gGL.vertex3f(xb, ya, z);
-        gGL.texCoord2f(draw.mUV[0], draw.mUV[3]);
-        gGL.vertex3f(xa, yb, z);
-        gGL.texCoord2f(draw.mUV[2], draw.mUV[3]);
-        gGL.vertex3f(xb, yb, z);
-        gGL.end();
+        // Regions with heights draw at them in drawTerrain; a tilted view would show this flat copy beside
+        // them, so the tile is drawn only over its regions without heights, row by row in runs.
+        const S32 n = draw.mCover.regionsPerSide();
+        bool any_terrain = false;
+        for (const auto& [handle, r] : mTerrain.regions())
+        {
+            const S32 gx = static_cast<S32>(r.mOrigin.mdV[VX] / REGION_METRES) - draw.mCover.mGridX;
+            const S32 gy = static_cast<S32>(r.mOrigin.mdV[VY] / REGION_METRES) - draw.mCover.mGridY;
+            if (gx >= 0 && gy >= 0 && gx < n && gy < n)
+            {
+                any_terrain = true;
+                break;
+            }
+        }
+        if (!any_terrain)
+        {
+            flat(0.0, 0.0, 1.0, 1.0);
+            continue;
+        }
+        const auto has_terrain = [&](S32 i, S32 j) {
+            const U32 x = static_cast<U32>((draw.mCover.mGridX + i) * REGION_METRES);
+            const U32 y = static_cast<U32>((draw.mCover.mGridY + j) * REGION_METRES);
+            return mTerrain.regions().count(to_region_handle(x, y)) != 0;
+        };
+        for (S32 j = 0; j < n; ++j)
+        {
+            S32 run = -1;
+            for (S32 i = 0; i <= n; ++i)
+            {
+                const bool open = i < n && !has_terrain(i, j);
+                if (open && run < 0)
+                {
+                    run = i;
+                }
+                else if (!open && run >= 0)
+                {
+                    flat(static_cast<F64>(run) / n, static_cast<F64>(j) / n, static_cast<F64>(i) / n, static_cast<F64>(j + 1) / n);
+                    run = -1;
+                }
+            }
+        }
     }
     drawTerrain(frame, height);
     gGL.flush();
