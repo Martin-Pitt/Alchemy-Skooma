@@ -1001,6 +1001,7 @@ if(AL_BUILD_VIEWER)
     rlvlocks.cpp
     rlvui.cpp
     skterraincache.cpp
+    skterraincapture.cpp
   )
 
   set(
@@ -1883,6 +1884,7 @@ if(AL_BUILD_VIEWER)
     rlvui.h
     roles_constants.h
     skterraincache.h
+    skterraincapture.h
   )
 
   # Discord rich presence, over the SDK from the private registry.

@@ -159,6 +159,7 @@ void SKTerrainCache::setGrid(const std::string& grid_id)
     mReading.clear();
     mBusy.clear();
     mPendingPuts.clear();
+    mMapWater.clear();
 
     const std::string root = gDirUtilp->getExpandedFilename(LL_PATH_CACHE, "terrain");
     mDir                   = root + gDirUtilp->getDirDelimiter() + LLDir::getScrubbedFileName(grid_id);
@@ -404,9 +405,32 @@ void SKTerrainCache::putLayer(U64 handle, ELayer layer, SKTerrainLayerSamples sa
 {
     if (mGrid.empty() || layer >= LAYER_COUNT || (!samples.empty() && samples.mHeightCm.size() != CELL_SAMPLES))
         return;
-    mPendingPuts[handle].push_back(PendingPut{ layer, std::move(samples), stamp, producer });
+    mPendingPuts[handle].push_back(PendingPut{ layer, std::move(samples), stamp, producer, {}, {} });
     if (!mBusy.count(handle))
         startPut(handle);
+}
+
+void SKTerrainCache::putCapture(U64 handle, ELayer layer, SKTerrainLayerSamples samples, F32 water, std::string sidecar,
+                                U64 stamp, const std::string& producer)
+{
+    if (mGrid.empty() || layer >= LAYER_COUNT || !std::isfinite(water) || (!samples.empty() && samples.mHeightCm.size() != CELL_SAMPLES))
+        return;
+    mPendingPuts[handle].push_back(PendingPut{ layer, std::move(samples), stamp, producer, water, std::move(sidecar) });
+    if (!mBusy.count(handle))
+        startPut(handle);
+}
+
+void SKTerrainCache::setMapWater(U64 handle, F32 water)
+{
+    if (std::isfinite(water))
+        mMapWater[handle] = water;
+}
+
+std::optional<F32> SKTerrainCache::mapWater(U64 handle) const
+{
+    if (auto it = mMapWater.find(handle); it != mMapWater.end())
+        return it->second;
+    return std::nullopt;
 }
 
 void SKTerrainCache::startPut(U64 handle)
@@ -425,7 +449,13 @@ void SKTerrainCache::startPut(U64 handle)
             base = kept.mRegion;
     const SKTerrainManifestRow* row      = mRowOf.count(handle) ? &mManifest.mRows[mRowOf[handle]] : nullptr;
     const bool                  on_disk  = row != nullptr;
-    const F32                   water    = row ? row->mWater : (mSeed.count(handle) ? mSeed[handle].mRow.mWater : 20.f);
+    F32 water = 20.f;
+    if (row)
+        water = row->mWater;
+    else if (mSeed.count(handle))
+        water = mSeed[handle].mRow.mWater;
+    else if (auto it = mMapWater.find(handle); it != mMapWater.end())
+        water = it->second;
     const std::string           path     = regionPath(handle);
     const U32                   generation = mGeneration;
 
@@ -455,6 +485,10 @@ void SKTerrainCache::startPut(U64 handle)
         S32 rebuilt = -1;
         for (PendingPut& p : puts)
         {
+            if (p.mWater)
+                cell.mWater = *p.mWater;
+            if (p.mSidecar)
+                cell.mSidecar = std::move(*p.mSidecar);
             cell.setLayer(p.mLayer, std::move(p.mSamples), p.mStamp);
             if (p.mLayer == LAYER_TERRAIN)
                 cell.mCaptureDate = std::max(cell.mCaptureDate, p.mStamp);

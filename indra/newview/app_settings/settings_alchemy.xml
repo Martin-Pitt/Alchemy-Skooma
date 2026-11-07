@@ -2531,6 +2531,28 @@
             <key>Value</key>
             <real>8</real>
         </map>
+        <key>SKTerrainCacheCapture</key>
+        <map>
+            <key>Comment</key>
+            <string>Copy the ground of the regions around the agent into the region terrain cache once it has arrived and stopped changing.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKTerrainCacheCaptureSettle</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds a region's ground must go unchanged before the terrain cache captures it.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>2</real>
+        </map>
         <key>SKTerrainCacheMaxMB</key>
         <map>
             <key>Comment</key>

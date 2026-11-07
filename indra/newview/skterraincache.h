@@ -33,6 +33,7 @@
 #include <boost/signals2.hpp>
 
 #include <memory>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -78,6 +79,14 @@ public:
     // again; the samples carry their own validity. Puts to one region are applied in order.
     void putLayer(U64 handle, SKTerrain::ELayer layer, SKTerrainLayerSamples samples, U64 stamp, const std::string& producer);
 
+    // As putLayer, setting the region's water and its terrain look with it, as a live capture does.
+    void putCapture(U64 handle, SKTerrain::ELayer layer, SKTerrainLayerSamples samples, F32 water, std::string sidecar,
+                    U64 stamp, const std::string& producer);
+
+    // The water the world map gives a region, kept for the regions the cache has no file of; it makes none.
+    void setMapWater(U64 handle, F32 water);
+    std::optional<F32> mapWater(U64 handle) const;
+
     // The region was seen live now; the last seen are the last to be evicted.
     void markSeen(U64 handle);
 
@@ -94,6 +103,8 @@ private:
         SKTerrainLayerSamples mSamples;
         U64                   mStamp;
         std::string           mProducer;
+        std::optional<F32>    mWater;
+        std::optional<std::string> mSidecar;
     };
     struct Kept
     {
@@ -137,6 +148,7 @@ private:
     std::unordered_set<U64>                               mReading;
     std::unordered_set<U64>                               mBusy; // a put is being applied
     std::unordered_map<U64, std::vector<PendingPut>>      mPendingPuts;
+    std::unordered_map<U64, F32>                          mMapWater;
 
     bool            mWriteScheduled = false;
     loaded_signal_t mLoadedSignal;
