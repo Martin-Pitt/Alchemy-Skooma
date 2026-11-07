@@ -1298,6 +1298,8 @@ namespace skroad::drive
     bool sGearTopsRead = false;
     std::string sCarKey;                            // sVehicle's car, empty while its name is not known
     LLUUID sCarKeyFor, sCarNameAsked;
+    F64 sCarNameAskedAt = -1.0;                     // when the name was last asked for sCarNameAsked
+    S32 sCarNameAsks = 0;                           // and how often
     struct GearSample { F64 when, speed, z; };
     std::deque<GearSample> sGearSpeeds;             // over GEAR_FLAT_S, held and straight
     S32 sGearSpeedsGear = -99;
@@ -1532,9 +1534,30 @@ namespace skroad::drive
             if (!p)
             {
                 LLViewerObject* o = sVehicle.notNull() ? gObjectList.findObject(sVehicle) : nullptr;
-                if (o && sCarNameAsked != sVehicle)
+                // asked again every CAR_NAME_ASK_S until it comes, a bounded number of times: one ask's reply can
+                // be lost (after a relaunch none reached the cache, and the car went without its gears all run)
+                constexpr F64 CAR_NAME_ASK_S = 1.5;
+                constexpr S32 CAR_NAME_ASKS = 20;
+                const F64 t = LLTimer::getTotalSeconds();
+                if (sCarNameAsked != sVehicle)
                 {
                     sCarNameAsked = sVehicle;
+                    sCarNameAsks = 0;
+                    sCarNameAskedAt = -1.0;
+                }
+                if (o && sCarNameAsks < CAR_NAME_ASKS && (sCarNameAskedAt < 0 || t - sCarNameAskedAt >= CAR_NAME_ASK_S))
+                {
+                    sCarNameAskedAt = t;
+                    if (++sCarNameAsks > 1)
+                    {
+                        LL_INFOS("SKRoadDriver") << "vehicle " << sVehicle << ": no name yet, asking again (" << sCarNameAsks
+                                                 << " of " << CAR_NAME_ASKS << ")" << LL_ENDL;
+                    }
+                    if (sCarNameAsks == CAR_NAME_ASKS)
+                    {
+                        LL_WARNS("SKRoadDriver") << "vehicle " << sVehicle << ": its name never came; driving without its profile"
+                                                 << LL_ENDL;
+                    }
                     LLSelectMgr::getInstance()->requestObjectPropertiesFamily(o);
                 }
             }
@@ -2198,7 +2221,6 @@ namespace skroad::drive
     constexpr S32 SWEEP_HOLDS[] = { 1, 2, 4, 8, 16 };
     constexpr F64 SWEEP_GAPS[] = { 0.1, 0.3 };
     F64 sSweepStart = -1.0;
-    F64 sSweepShiftAt = -100.0;
     constexpr F64 SWEEP_TRAIL_S = 30.0;
     std::deque<std::pair<LLVector3d, F64>> sSweepTrail;     // the car's own track, for the overlay
 
@@ -2227,24 +2249,83 @@ namespace skroad::drive
         return run;
     }
 
+    // A sweep getting into its gear: W is never held here (with no gear known the car would be driven blind, as it
+    // once was across a region border), and while it moves it brakes. Shifts only where the car says its gears in
+    // chat; where its profile says it has none, or no gear is heard within SWEEP_GEAR_WAIT_S, the gear step is
+    // skipped (logged) and the sweep drives in whatever gear the car is in. True once in gear or skipped.
+    constexpr F64 SWEEP_GEAR_WAIT_S = 15.0;
+    LLUUID sSweepGearFor;
+    S32 sSweepGearWant = 0;
+    F64 sSweepGearFrom = -1.0, sSweepGearShiftAt = -1.0;
+    bool sSweepGearSkipped = false;
+
+    bool sweepToGear(S32 gear, F64 now, F64 speed, U32& keys, const char* who)
+    {
+        keys = 0;
+        if (sSweepGearFor != sVehicle || sSweepGearWant != gear)
+        {
+            sSweepGearFor = sVehicle;
+            sSweepGearWant = gear;
+            sSweepGearFrom = -1.0;
+            sSweepGearSkipped = false;
+        }
+        if (sGear == gear || sSweepGearSkipped)
+        {
+            return true;
+        }
+        if (sSweepGearFrom < 0)
+        {
+            sSweepGearFrom = now;
+        }
+        const VehicleProfile& car = vehicleProfile();
+        const bool known = !sCarKey.empty();
+        if ((known && !car.chat_gears) || now - sSweepGearFrom > SWEEP_GEAR_WAIT_S)
+        {
+            sSweepGearSkipped = true;
+            const std::string why = known && !car.chat_gears ? "the car says no gears" : "no gear heard in "
+                                    + std::to_string(S32(SWEEP_GEAR_WAIT_S)) + " s";
+            LL_INFOS("SKRoadDriver") << who << ": gear " << gear << " skipped (" << why << ")" << LL_ENDL;
+            say(std::string(who) + ": gear step skipped, " + why);
+            return true;
+        }
+        if (speed > 0.5)
+        {
+            keys |= AGENT_CONTROL_AT_NEG;   // brake: nothing drives it while the gear is not known
+        }
+        else
+        {
+            if (now - sSweepGearShiftAt > 1.0)
+            {
+                sSweepGearShiftAt = now;
+            }
+            if (now - sSweepGearShiftAt < SHIFT_HOLD_S)
+            {
+                keys |= shiftKey(sGear <= 0 ? (sGear < 0 ? 1 : -1) : (sGear < gear ? 1 : -1));
+            }
+        }
+        return false;
+    }
+
     U32 sweepKeys(S32 gear, F64 now, F64 speed, const LLVector3d& pos, F64 yaw, std::string& note)
     {
         U32 keys = AGENT_CONTROL_AT_POS;
         auto tag = [&](const std::string& t) { note += note.empty() ? t : ", " + t; };
-        // into the gear first: down while it is not known (the car says it on a shift), never into Reverse
-        if (sGear != gear)
+        // into the gear first (sweepToGear: never W, never into Reverse); outside the arena, nothing at all
+        {
+            F64 ax0, ax1, ay0, ay1;
+            arenaBox(pos.mdV[VX], pos.mdV[VY], ax0, ax1, ay0, ay1);
+            if (pos.mdV[VX] < ax0 - 10 || pos.mdV[VX] > ax1 + 10 || pos.mdV[VY] < ay0 - 10 || pos.mdV[VY] > ay1 + 10)
+            {
+                tag("sweep: outside the arena, stopped");
+                return 0;
+            }
+        }
+        U32 gear_keys = 0;
+        if (!sweepToGear(gear, now, speed, gear_keys, "sweep"))
         {
             sSweepStart = -1.0;
-            if (now - sSweepShiftAt > 1.0)
-            {
-                sSweepShiftAt = now;
-            }
-            if (now - sSweepShiftAt < SHIFT_HOLD_S)
-            {
-                keys |= shiftKey(sGear <= 0 ? (sGear < 0 ? 1 : -1) : (sGear < gear ? 1 : -1));
-            }
             tag("sweep: to gear");
-            return keys;
+            return gear_keys;
         }
         if (sSweepStart < 0)
         {
@@ -2392,7 +2473,7 @@ namespace skroad::drive
         size_t k = 0;           // pattern index
         S32 side = 0;           // 0 A (left), 1 D (right)
         S32 phase = 0;          // 0 to gear, 1 home, 2 settle, 3 run, 4 rest, 5 done
-        F64 phaseAt = 0.0, startT = 0.0, shiftAt = -100.0;
+        F64 phaseAt = 0.0, startT = 0.0;
         S32 frame = 0, runFrame = 0;
         bool ending = false;    // pwm: past PWS_PWM_S, finishing the tap under way
         F64 keyUpAt = -1.0, firstKeyAt = -1.0;
@@ -2619,18 +2700,16 @@ namespace skroad::drive
 
         if (sPws.phase == 0)
         {
-            // into the gear (W held), as the old sweep does
-            if (sGear == gear)
+            // into the gear (sweepToGear: W never held, braking while it moves; skipped where the car has no
+            // chat gears or none is heard); the arena's edge was checked above
+            U32 gear_keys = 0;
+            if (sweepToGear(gear, now, speed, gear_keys, "pwm sweep"))
             {
                 enter(1);
             }
             else
             {
-                if (now - sPws.shiftAt > 1.0) sPws.shiftAt = now;
-                if (now - sPws.shiftAt < SHIFT_HOLD_S)
-                {
-                    keys |= shiftKey(sGear <= 0 ? (sGear < 0 ? 1 : -1) : (sGear < gear ? 1 : -1));
-                }
+                keys = gear_keys;
             }
         }
         if (sPws.phase == 1)
