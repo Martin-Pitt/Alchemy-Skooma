@@ -2531,6 +2531,28 @@
             <key>Value</key>
             <real>8</real>
         </map>
+        <key>SKTerrainCacheMaxMB</key>
+        <map>
+            <key>Comment</key>
+            <string>Disk the region terrain cache may take per grid, in megabytes; past it the regions seen longest ago are dropped, never the one the agent is in or those around it.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>2048</integer>
+        </map>
+        <key>SKTerrainCacheSeedDir</key>
+        <map>
+            <key>Comment</key>
+            <string>A terrain dataset release (its terrain/ and surface/ folders), read for regions the terrain cache does not hold. Never written. Empty for none.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>String</string>
+            <key>Value</key>
+            <string />
+        </map>
         <key>AlchemyRenderWaterGlintRoughness</key>
         <map>
             <key>Comment</key>

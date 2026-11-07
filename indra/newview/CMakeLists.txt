@@ -1000,6 +1000,7 @@ if(AL_BUILD_VIEWER)
     rlvinventory.cpp
     rlvlocks.cpp
     rlvui.cpp
+    skterraincache.cpp
   )
 
   set(
@@ -1881,6 +1882,7 @@ if(AL_BUILD_VIEWER)
     rlvmodifiers.h
     rlvui.h
     roles_constants.h
+    skterraincache.h
   )
 
   # Discord rich presence, over the SDK from the private registry.
@@ -2133,6 +2135,7 @@ if(AL_BUILD_VIEWER)
       llfilesystem
       llwindow
       llxml
+      skterrain # <SK:Nexii> Region terrain cache
       llmath
       llcorehttp
       llcommon
