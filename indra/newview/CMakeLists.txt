@@ -1941,7 +1941,6 @@ if(AL_BUILD_VIEWER)
   list(
     APPEND viewer_SOURCES
     skmapview.cpp
-    skmapplan.cpp
     skmaplabels.cpp
     skmapmarkers.cpp
     skmapallies.cpp
@@ -1960,18 +1959,11 @@ if(AL_BUILD_VIEWER)
     skmapallyresolver.cpp
     skfloatermapsettings.cpp
     skfloatertacticaloptions.cpp
-    skoverviewcapture.cpp
-    skoverviewcensus.cpp
-    skoverviewcover.cpp
-    skoverviewcuttable.cpp
-    skoverviewmovers.cpp
-    skoverviewprobes.cpp
-    skoverviewslots.cpp
+    sktacticaloverview.cpp
   )
   list(
     APPEND viewer_HEADERS
     skmapview.h
-    skmapplan.h
     skmappalette.h
     skmaplabels.h
     skmapmarkers.h
@@ -1985,20 +1977,13 @@ if(AL_BUILD_VIEWER)
     skmapscene.h
     skmaprecorder.h
     skpopuplayout.h
-    skoverviewcapture.h
-    skoverviewcensus.h
-    skoverviewcover.h
-    skoverviewcuttable.h
-    skoverviewmovers.h
-    skoverviewprobes.h
-    skoverviewprograms.h
-    skoverviewslots.h
     skpopuppanes.h
     skmapmenu.h
     skmapparcelfacts.h
     skmapallyresolver.h
     skfloatermapsettings.h
     skfloatertacticaloptions.h
+    sktacticaloverview.h
   )
   # </SK:Nexii>
 

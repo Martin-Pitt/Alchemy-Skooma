@@ -82,7 +82,6 @@
 #include "llviewerparcelmgr.h"
 #include "llviewerregion.h"
 #include "llviewershadermgr.h"
-#include "skoverviewcapture.h" // <SK:Nexii> overview capture
 #include "llviewertexturelist.h"
 #include "llviewerwindow.h"
 #include "llvoavatarself.h"
@@ -92,6 +91,7 @@
 #include "skmodalview.h" // <SK:Nexii> modal view
 #include "skoutlinecapture.h" // <SK:Nexii> outline capture
 #include "skoverviewcapture.h" // <SK:Nexii> overview capture
+#include "sktacticaloverview.h" // <SK:Nexii> tactical overview
 
 #include <filesystem>
 #include <iomanip>
@@ -1275,6 +1275,7 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
         {
             SKOutlineCapture::onFrame(); // <SK:Nexii> outline capture: coverage renders after the world, before the UI
             SKOverviewCapture::onFrame(); // <SK:Nexii> overview capture: the region maps from above, after the world and before the UI
+            SKTacticalOverview::onFrame(); // <SK:Nexii> tactical overview: its key and switch
             render_ui();
             presented = gDisplaySwapBuffers;
             swap();

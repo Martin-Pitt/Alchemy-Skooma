@@ -27,7 +27,7 @@
 #include "llviewerprecompiledheaders.h"
 
 #include "llviewerinput.h"
-#include "skoverviewcapture.h" // <SK:Nexii> tactical overview
+#include "sktacticaloverview.h" // <SK:Nexii> tactical overview
 #include "skmodalview.h" // <SK:Nexii> modal view
 
 #include "alchatbar.h"
@@ -503,7 +503,7 @@ bool sk_tactical_overview(EKeystate s)
 {
     if (KEYSTATE_DOWN == s || KEYSTATE_UP == s)
     {
-        SKOverviewCapture::handleTacticalKey(KEYSTATE_DOWN == s);
+        SKTacticalOverview::handleTacticalKey(KEYSTATE_DOWN == s);
     }
     return true;
 }
