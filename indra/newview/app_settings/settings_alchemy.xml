@@ -3374,6 +3374,17 @@
             <key>Value</key>
             <real>35.0</real>
         </map>
+        <key>SKWorldMapZoomToCursor</key>
+        <map>
+            <key>Comment</key>
+            <string>On the 3D world map, the mouse wheel zooms toward the ground under the cursor, keeping it there. Off, it zooms toward the camera's focus.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
         <key>RenderAvatarShadowDetail</key>
         <map>
             <key>Comment</key>

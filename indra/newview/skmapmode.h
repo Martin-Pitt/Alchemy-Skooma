@@ -81,6 +81,9 @@ public:
     /// Moves the camera and its focus across the map until the focus is over the agent.
     void recentre();
 
+    /// The wheel's zoom toward the ground under the cursor (SKWorldMapZoomToCursor); false when declined.
+    bool zoomToCursor(F32 clicks);
+
     /// Draws the map over the world view's rectangle (raw pixels).
     void render(const LLRect& world_rect_raw);
 

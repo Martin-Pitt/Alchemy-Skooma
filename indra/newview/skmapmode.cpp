@@ -62,6 +62,12 @@ namespace
 
         bool handleRightMouseDown(S32 x, S32 y, MASK mask) override { return true; }
         bool handleRightMouseUp(S32 x, S32 y, MASK mask) override { return true; }
+
+        /// The wheel zooms toward the map's ground under the cursor; declined, it reaches alt-cam's own zoom.
+        bool handleScrollWheel(S32 x, S32 y, LLScrollDelta delta) override
+        {
+            return SKMapMode::instance().zoomToCursor(delta.mPrecise) || LLView::handleScrollWheel(x, y, delta);
+        }
     };
 
     void deleteLater(const LLHandle<LLView>& handle)
@@ -350,6 +356,36 @@ void SKMapMode::recentre()
     const LLVector3d offset(agent.mdV[VX] - focus.mdV[VX], agent.mdV[VY] - focus.mdV[VY], 0.0);
     gAgentCamera.setFocusOnAvatar(false, false);
     gAgentCamera.setCameraPosAndFocusGlobal(gAgentCamera.getCameraPositionGlobal() + offset, focus + offset, LLUUID::null);
+}
+
+bool SKMapMode::zoomToCursor(F32 clicks)
+{
+    static LLCachedControl<bool> zoom_to_cursor(gSavedSettings, "SKWorldMapZoomToCursor", true);
+    if (!zoom_to_cursor || !mOpen || mPanning || clicks == 0.f || SKModalView::top() != this || SKModalView::flycamActive())
+    {
+        return false;
+    }
+    LLVector3d cursor;
+    if (!groundUnderCursor(gViewerWindow->getCurrentMouseX(), gViewerWindow->getCurrentMouseY(), cursor))
+    {
+        return false;
+    }
+    // Camera and focus scale about the ground under the cursor, so that point stays under it: in by a
+    // fourth root of two a click, as alt-cam's own zoom steps, out by the same.
+    const LLVector3d eye = gAgentCamera.getCameraPositionGlobal();
+    const LLVector3d focus = gAgentCamera.getFocusGlobal();
+    const F64 distance = (eye - focus).magVec();
+    if (distance <= 0.0)
+    {
+        return false;
+    }
+    F64 scale = std::pow(std::sqrt(F_SQRT2), static_cast<F64>(clicks));
+    scale = llclamp(scale, MIN_MAP_DISTANCE / distance, llmax(MAX_MAP_DISTANCE, distance) / distance);
+    gAgentCamera.setFocusOnAvatar(false, false);
+    gAgentCamera.setCameraPosAndFocusGlobal(cursor + (eye - cursor) * scale, cursor + (focus - cursor) * scale, LLUUID::null);
+    gAgentCamera.stopCameraAnimation();
+    gAgentCamera.skipCameraSmoothing();
+    return true;
 }
 
 bool SKMapMode::pickGround(S32 x, S32 y, LLVector3d& ground) const
