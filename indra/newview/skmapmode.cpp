@@ -205,6 +205,7 @@ bool SKMapMode::open()
         gAgentCamera.setCameraPosAndFocusGlobal(mMapPosition, mMapFocus, LLUUID::null);
         if (first_open)
         {
+            // The whole orbit up from the world camera, not a warp, so the move onto the map is seen.
             gAgentCamera.orbitCameraAnimation();
         }
         else
