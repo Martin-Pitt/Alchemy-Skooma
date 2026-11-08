@@ -270,7 +270,7 @@ bool SKMapMode::open()
         }
     }
 
-    LL_INFOS("WorldMap") << "map mode opened" << LL_ENDL;
+    LL_DEBUGS("WorldMap") << "map mode opened" << LL_ENDL;
     return true;
 }
 
@@ -301,7 +301,7 @@ void SKMapMode::close()
     mOpen = false;
     // The world camera goes back as it was when the last modal view closes.
     SKModalView::instance().release(this);
-    LL_INFOS("WorldMap") << "map mode closed" << LL_ENDL;
+    LL_DEBUGS("WorldMap") << "map mode closed" << LL_ENDL;
 }
 
 void SKMapMode::onTopChanged(bool on_top)
@@ -413,12 +413,12 @@ bool SKMapMode::zoomToCursor(F32 clicks)
 
 bool SKMapMode::pickGround(S32 x, S32 y, LLVector3d& ground) const
 {
-    // Alt-click focus. Logged, as it is rare, so a click that seems ignored shows whether it got here.
+    // Alt-click focus. Logged under WorldMap debug so a click that seems ignored shows whether it got here.
     const bool hit = groundUnderCursor(x, y, ground);
     mTraceUntil = LLTimer::getUptimeSeconds() + 1.0;
-    LL_INFOS("WorldMap") << "map focus pick at " << x << "," << y << ": "
-                         << (hit ? llformat("ground %.1f, %.1f, %.1f", ground.mdV[VX], ground.mdV[VY], ground.mdV[VZ]) : std::string("no ground"))
-                         << LL_ENDL;
+    LL_DEBUGS("WorldMap") << "map focus pick at " << x << "," << y << ": "
+                          << (hit ? llformat("ground %.1f, %.1f, %.1f", ground.mdV[VX], ground.mdV[VY], ground.mdV[VZ]) : std::string("no ground"))
+                          << LL_ENDL;
     return hit;
 }
 
@@ -556,7 +556,7 @@ void SKMapMode::limitTilt()
     if (!mTiltAdjusting)
     {
         mTiltAdjusting = true;
-        LL_INFOS("WorldMap") << "map tilt limit engaged at " << elevation * RAD_TO_DEG << " degrees" << LL_ENDL;
+        LL_DEBUGS("WorldMap") << "map tilt limit engaged at " << elevation * RAD_TO_DEG << " degrees" << LL_ENDL;
     }
     F64 target = elevation;
     if (elevation < hard)
@@ -588,12 +588,12 @@ void SKMapMode::traceCamera()
     const LLVector3d target = gAgentCamera.getFocusTargetGlobal();
     const LLVector3d focus = gAgentCamera.getFocusGlobal();
     const LLVector3d eye = gAgentCamera.getCameraPositionGlobal();
-    LL_INFOS("WorldMap") << "map camera: target " << llformat("%.1f, %.1f, %.1f", target.mdV[VX], target.mdV[VY], target.mdV[VZ])
-                         << " focus " << llformat("%.1f, %.1f, %.1f", focus.mdV[VX], focus.mdV[VY], focus.mdV[VZ])
-                         << " eye " << llformat("%.1f, %.1f, %.1f", eye.mdV[VX], eye.mdV[VY], eye.mdV[VZ])
-                         << " animating " << gAgentCamera.getCameraAnimating() << " on avatar " << gAgentCamera.getFocusOnAvatar()
-                         << " mode " << gAgentCamera.getCameraMode() << " top " << (SKModalView::top() == this)
-                         << " flycam " << LLViewerJoystick::getInstance()->getOverrideCamera() << LL_ENDL;
+    LL_DEBUGS("WorldMap") << "map camera: target " << llformat("%.1f, %.1f, %.1f", target.mdV[VX], target.mdV[VY], target.mdV[VZ])
+                          << " focus " << llformat("%.1f, %.1f, %.1f", focus.mdV[VX], focus.mdV[VY], focus.mdV[VZ])
+                          << " eye " << llformat("%.1f, %.1f, %.1f", eye.mdV[VX], eye.mdV[VY], eye.mdV[VZ])
+                          << " animating " << gAgentCamera.getCameraAnimating() << " on avatar " << gAgentCamera.getFocusOnAvatar()
+                          << " mode " << gAgentCamera.getCameraMode() << " top " << (SKModalView::top() == this)
+                          << " flycam " << LLViewerJoystick::getInstance()->getOverrideCamera() << LL_ENDL;
 }
 
 void SKMapMode::render(const LLRect& world_rect_raw)
