@@ -3253,6 +3253,39 @@
             <key>Value</key>
             <integer>16</integer>
         </map>
+        <key>SKWorldMapContinentNameFadeIn</key>
+        <map>
+            <key>Comment</key>
+            <string>On the 3D world map, the camera height above the ground at which continent names start to fade in, in metres.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>2500.0</real>
+        </map>
+        <key>SKWorldMapContinentNameFull</key>
+        <map>
+            <key>Comment</key>
+            <string>On the 3D world map, the camera height above the ground at which continent names are fully shown, in metres.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>4500.0</real>
+        </map>
+        <key>SKWorldMapContinentNames</key>
+        <map>
+            <key>Comment</key>
+            <string>On the 3D world map, show continent names when zoomed out far enough.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
         <key>SKWorldMapFlycamMaxScale</key>
         <map>
             <key>Comment</key>

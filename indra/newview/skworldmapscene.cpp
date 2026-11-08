@@ -84,6 +84,31 @@ namespace
     constexpr F32 WATER_OPAQUE_DEPTH = 4.f;
     constexpr F32 WATER_MAX_ALPHA = 0.9f;
 
+    /// The grid's continents, as grid-coordinate boxes (regions, inclusive) from the SL Geography wiki
+    /// (slgi.fandom.com, List Of Continents and each continent's page). Hand kept: edit when the grid changes.
+    struct Continent
+    {
+        const char* mName;
+        S32 mX0, mX1, mY0, mY1;
+    };
+    constexpr Continent CONTINENTS[] = {
+        { "Sansara", 982, 1038, 982, 1012 },
+        { "Heterocera", 991, 1031, 1012, 1036 },
+        { "Jeogeot", 1007, 1039, 897, 938 },
+        { "Bellisseria", 1040, 1100, 940, 1024 },
+        { "Satori", 1100, 1131, 1005, 1047 },
+        { "Nautilus", 1106, 1141, 1047, 1081 },
+        { "Blake Sea", 1134, 1153, 1041, 1060 },
+        { "Corsica", 1100, 1159, 1081, 1100 },
+        { "Gaeta 1", 1140, 1155, 1112, 1130 },
+        { "Gaeta 5", 1158, 1189, 1081, 1099 },
+        { "Sharp", 1158, 1179, 988, 1001 },
+        { "Zindra", 1797, 1821, 1179, 1202 },
+        { "Azure Islands", 1143, 1155, 1065, 1072 },
+        { "Eden", 459, 481, 1700, 1720 },
+        { "Luxory", 621, 632, 1033, 1050 },
+    };
+
     // The combat mini-map's people dots, so both maps read the same.
     const LLColor4 DOT_COLOUR(0x60 / 255.f, 0xdf / 255.f, 0x72 / 255.f, 1.f);
     const LLColor4 SELF_COLOUR(1.f, 1.f, 1.f, 1.f);
@@ -263,6 +288,7 @@ void SKWorldMapScene::render(const SKWorldMapFrame& frame, const LLRect& rect, F
     mTiles.update(now);
     tiltShift(frame, rect);
     drawRegionNames(frame, rect);
+    drawContinentNames(frame, rect);
     drawAgents(frame, rect);
 
     // Leave the viewport as the UI expects it.
@@ -1070,6 +1096,86 @@ void SKWorldMapScene::drawRegionNames(const SKWorldMapFrame& frame, const LLRect
         popMatrices();
     }
 
+    gGL.flush();
+    gUIProgram.unbind();
+    gGL.setColorMask(true, true);
+    LLFontGL::sCurOrigin = saved_origin;
+    LLFontGL::sCurDepth = saved_depth;
+}
+
+void SKWorldMapScene::drawContinentNames(const SKWorldMapFrame& frame, const LLRect& rect)
+{
+    // Large names over each continent's middle, fading in as the camera climbs past where region names thin out.
+    static LLCachedControl<bool> enabled(gSavedSettings, "SKWorldMapContinentNames", true);
+    static LLCachedControl<F32> fade_in(gSavedSettings, "SKWorldMapContinentNameFadeIn", 2500.f);
+    static LLCachedControl<F32> full(gSavedSettings, "SKWorldMapContinentNameFull", 4500.f);
+    if (!enabled)
+    {
+        return;
+    }
+    const F64 above = frame.mEye.mdV[VZ] - std::max(GROUND_Z, mTerrain.groundAt(frame.mEye, GROUND_Z));
+    const F64 hi = std::max(static_cast<F64>(full), 1.0);
+    const F64 lo = llclamp(static_cast<F64>(fade_in), 0.0, hi - 1.0);
+    const F32 alpha = static_cast<F32>(llclamp((above - lo) / (hi - lo), 0.0, 1.0));
+    if (alpha <= 0.f)
+    {
+        return;
+    }
+
+    const Projector proj(frame, rect.getWidth(), rect.getHeight());
+    const LLFontGL* font = LLFontGL::getFontSansSerifHuge();
+    struct Label
+    {
+        const char* mText;
+        F32 mX, mY;
+        F64 mDepth;
+    };
+    std::vector<Label> labels;
+    for (const Continent& c : CONTINENTS)
+    {
+        LLVector3d centre((c.mX0 + c.mX1 + 1) * 0.5 * REGION_METRES, (c.mY0 + c.mY1 + 1) * 0.5 * REGION_METRES, GROUND_Z);
+        centre.mdV[VZ] = std::max(GROUND_Z, mTerrain.groundAt(centre, GROUND_Z));
+        F32 x, y;
+        F64 depth;
+        if (proj.project(centre, x, y, depth) && x > -600.f && y > -60.f && x < rect.getWidth() + 600.f && y < rect.getHeight() + 60.f)
+        {
+            labels.push_back({ c.mName, x, y, depth });
+        }
+    }
+    if (labels.empty())
+    {
+        return;
+    }
+    std::sort(labels.begin(), labels.end(), [](const Label& a, const Label& b) { return a.mDepth < b.mDepth; });
+
+    const LLFontGL::UIOrigin saved_origin = LLFontGL::sCurOrigin;
+    const F32 saved_depth = LLFontGL::sCurDepth;
+    LLFontGL::sCurOrigin.set(0.f, 0.f);
+    LLFontGL::sCurDepth = 0.f;
+    glViewport(rect.mLeft, rect.mBottom, rect.getWidth(), rect.getHeight());
+    LLGLEnable blend(GL_BLEND);
+    gGL.setSceneBlendType(LLRender::BT_ALPHA);
+    gGL.setColorMask(true, false);
+    gUIProgram.bind();
+    pushOrtho(static_cast<F32>(rect.getWidth()), static_cast<F32>(rect.getHeight()));
+
+    const LLColor4 colour(1.f, 0.96f, 0.86f, 0.9f * alpha);
+    const F32 line = static_cast<F32>(font->getLineHeight()) * LLFontGL::sScaleY;
+    std::vector<LLRectf> placed;
+    for (const Label& l : labels)
+    {
+        const F32 w = font->getWidthF32(l.mText) * LLFontGL::sScaleX;
+        const LLRectf box(l.mX - w * 0.5f - 4.f, l.mY + line * 0.5f + 4.f, l.mX + w * 0.5f + 4.f, l.mY - line * 0.5f - 4.f);
+        if (std::any_of(placed.begin(), placed.end(), [&](const LLRectf& r) { return r.overlaps(box); }))
+        {
+            continue;
+        }
+        placed.push_back(box);
+        font->renderUTF8(l.mText, 0, l.mX / LLFontGL::sScaleX, l.mY / LLFontGL::sScaleY, colour, LLFontGL::HCENTER, LLFontGL::VCENTER,
+                         LLFontGL::NORMAL, LLFontGL::DROP_SHADOW_SOFT);
+    }
+
+    popMatrices();
     gGL.flush();
     gUIProgram.unbind();
     gGL.setColorMask(true, true);
