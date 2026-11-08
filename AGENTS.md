@@ -177,10 +177,10 @@ Use the installed CLI directly (no MCP setup or executable search required):
 `D:\viewers\libraries\tracy\official-0.14.1\tracy-capture.exe` (0.14.1).
 
 PowerShell recipe: use the requested duration, otherwise 30 seconds. Captures are named
-`V:\Scratch\tracy\<yyyy-MM-dd-HHmm>.tracy`, as the existing ones are.
+`V:\Scratch\tracy\captures\<yyyy-MM-dd-HHmm>.tracy`, as the existing ones are.
 
 ```powershell
-$captureDir = 'V:\Scratch\tracy'
+$captureDir = 'V:\Scratch\tracy\captures'
 $captureSeconds = 30
 $capturePort = 8086
 New-Item -ItemType Directory -Force -Path $captureDir | Out-Null
@@ -207,8 +207,7 @@ Get-Item -LiteralPath $captureFile | Select-Object FullName, Length, LastWriteTi
 - Analyze with `tracy-csvexport.exe` beside it (not on PATH): `-u -f "<zone>"` every event of a
   zone (split from the right, names hold commas), plain for per-zone stats, `-e` self time,
   `-m` messages. An unfiltered `-u` is ~180 M lines: stream and filter. Main thread is id 2;
-  start at `V:\Scratch\tracy\INDEX.md` (which script answers what, export names; method in
-  `AGENT.md` beside it). Unzoned self time is often a coroutine at a yield.
+  start at `V:\Scratch\tracy\INDEX.md`: `python V:\Scratch\tracy\tk\tk.py triage <HHMM>` first. Unzoned self time is often a coroutine at a yield.
 - If the viewer has already exited, a new live capture cannot recover the crash;
   inspect `%APPDATA%\AlchemyNext\logs\Alchemy.log` / `Alchemy.old` instead.
 - Optional MCP workflow and troubleshooting: `D:\viewers\alchemy-skooma\doc\skooma\.tracy-capture.md`.
