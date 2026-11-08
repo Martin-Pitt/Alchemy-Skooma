@@ -259,6 +259,20 @@ namespace
         CHECK(std::fabs(std::atan2(d.mdV[VY], d.mdV[VX]) + 0.25 * 3.141592653589793) < 1.0e-9);
     }
 
+    // Region names ride a squircle: on the axes it touches the edge, on the diagonal it nears the corner as p grows.
+    TEST_CASE("skworldmapmath: The region name squircle meets the edges and nears the corners", "[skworldmapmath]")
+    {
+        const LLVector2 east = squircleOffset(1.0, 0.0, 100.0, 4.0);
+        CHECK(std::fabs(east.mV[VX] - 100.f) < 1.0e-3f);
+        CHECK(std::fabs(east.mV[VY]) < 1.0e-3f);
+        const LLVector2 circle = squircleOffset(-1.0, -1.0, 100.0, 2.0);
+        CHECK(std::fabs(circle.length() - 100.f) < 1.0e-3f);
+        const LLVector2 square = squircleOffset(-1.0, -1.0, 100.0, 4.0);
+        CHECK(square.mV[VX] < -80.f);
+        CHECK(square.mV[VX] > -100.f);
+        CHECK(std::fabs(square.mV[VX] - square.mV[VY]) < 1.0e-3f);
+    }
+
     // The region search: letters in order match, a prefix beats a scattered match, and missing letters do not.
     TEST_CASE("skworldmapmath: The fuzzy region search ranks a prefix over scattered letters", "[skworldmapmath]")
     {

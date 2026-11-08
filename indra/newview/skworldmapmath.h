@@ -156,4 +156,8 @@ namespace skworldmap
     /// How well `name` matches a lower-case query whose letters it holds in order, spaces ignored: runs,
     /// word starts and a prefix score higher, gaps and long names lower. Negative when it does not match.
     F32 fuzzyScore(std::string_view query, std::string_view name);
+
+    /// The point on a squircle (|x|^p + |y|^p = half^p) in the ground direction (dx, dy), as an offset from
+    /// its centre: a circle at p = 2, nearer a square the higher p goes.
+    LLVector2 squircleOffset(F64 dx, F64 dy, F64 half, F64 exponent);
 } // namespace skworldmap

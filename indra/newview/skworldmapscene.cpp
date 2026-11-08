@@ -27,6 +27,7 @@
 #include "skworldmapscene.h"
 
 #include "llagent.h"
+#include "llfontgl.h"
 #include "llglslshader.h"
 #include "llrender.h"
 #include "llregionhandle.h"
@@ -261,6 +262,7 @@ void SKWorldMapScene::render(const SKWorldMapFrame& frame, const LLRect& rect, F
     drawGround(frame, width, height, now);
     mTiles.update(now);
     tiltShift(frame, rect);
+    drawRegionNames(frame, rect);
     drawAgents(frame, rect);
 
     // Leave the viewport as the UI expects it.
@@ -893,6 +895,181 @@ void SKWorldMapScene::drawAgents(const SKWorldMapFrame& frame, const LLRect& rec
     gUIProgram.unbind();
     gGL.setColorMask(true, true);
     popMatrices();
+}
+
+void SKWorldMapScene::drawRegionNames(const SKWorldMapFrame& frame, const LLRect& rect)
+{
+    // 0 off; 1 flat on the tile; 2 along the tile's edge, pitched to face the camera; 3 facing the camera, riding
+    // a squircle inside the region toward the screen's bottom left, as the 2D map puts names bottom left.
+    enum : U32 { NAMES_OFF, NAMES_FLAT, NAMES_PITCHED, NAMES_SQUIRCLE };
+    static LLCachedControl<U32> mode_setting(gSavedSettings, "SKWorldMapRegionNames", NAMES_SQUIRCLE);
+    static LLCachedControl<F32> inset(gSavedSettings, "SKWorldMapRegionNameInset", 12.f);
+    static LLCachedControl<F32> exponent(gSavedSettings, "SKWorldMapRegionNameSquircle", 4.f);
+    static LLCachedControl<F32> max_height(gSavedSettings, "SKWorldMapRegionNameMaxHeight", 3000.f);
+    static LLCachedControl<F32> world_size(gSavedSettings, "SKWorldMapRegionNameWorldSize", 12.f);
+    const U32 mode = mode_setting;
+    if (mode == NAMES_OFF || mode > NAMES_SQUIRCLE)
+    {
+        return;
+    }
+    const F64 above = frame.mEye.mdV[VZ] - std::max(GROUND_Z, mTerrain.groundAt(frame.mEye, GROUND_Z));
+    const F32 top = std::max(static_cast<F32>(max_height), 1.f);
+    const F32 fade = llclamp((top - static_cast<F32>(above)) / (0.3f * top), 0.f, 1.f);
+    if (fade <= 0.f)
+    {
+        return;
+    }
+
+    constexpr size_t MAX_NAMES = 256;
+    constexpr F64 LIFT = 1.0;
+    const F64 half = REGION_METRES * 0.5;
+    const F64 in = llclamp(static_cast<F64>(inset), 0.0, half);
+    const F64 reach = std::max(1500.0, 4.0 * above);
+    const Projector proj(frame, rect.getWidth(), rect.getHeight());
+    // The ground direction toward the screen's bottom left: back along the view, and left.
+    const F64 bl_x = -std::cos(frame.mYaw) - std::sin(frame.mYaw);
+    const F64 bl_y = -std::sin(frame.mYaw) + std::cos(frame.mYaw);
+
+    struct Name
+    {
+        const std::string* mText;
+        LLVector3d mAnchor;
+        F32 mX, mY;
+        F64 mDepth;
+    };
+    std::vector<Name> names;
+    for (const auto& [handle, info] : LLWorldMap::getInstance()->getRegionMap())
+    {
+        if (!info || info->getName().empty())
+        {
+            continue;
+        }
+        const LLVector3d origin = info->getGlobalOrigin();
+        const F64 cx = origin.mdV[VX] + half - frame.mEye.mdV[VX];
+        const F64 cy = origin.mdV[VY] + half - frame.mEye.mdV[VY];
+        if (cx * cx + cy * cy > reach * reach)
+        {
+            continue;
+        }
+        LLVector3d anchor;
+        if (mode == NAMES_SQUIRCLE)
+        {
+            const LLVector2 off = squircleOffset(bl_x, bl_y, half - in, exponent);
+            anchor.setVec(origin.mdV[VX] + half + off.mV[VX], origin.mdV[VY] + half + off.mV[VY], GROUND_Z);
+        }
+        else
+        {
+            anchor.setVec(origin.mdV[VX] + in, origin.mdV[VY] + in, GROUND_Z);
+        }
+        anchor.mdV[VZ] = std::max(GROUND_Z, mTerrain.groundAt(anchor, GROUND_Z)) + LIFT;
+        F32 x, y;
+        F64 depth;
+        if (!proj.project(anchor, x, y, depth) || x < -400.f || y < -40.f || x > rect.getWidth() + 40.f || y > rect.getHeight() + 40.f)
+        {
+            continue;
+        }
+        names.push_back({ &info->getName(), anchor, x, y, depth });
+    }
+    if (names.empty())
+    {
+        return;
+    }
+    std::sort(names.begin(), names.end(), [](const Name& a, const Name& b) { return a.mDepth < b.mDepth; });
+    if (names.size() > MAX_NAMES)
+    {
+        names.resize(MAX_NAMES);
+    }
+
+    const LLColor4 colour(1.f, 1.f, 1.f, 0.92f * fade);
+    const LLFontGL::UIOrigin saved_origin = LLFontGL::sCurOrigin;
+    const F32 saved_depth = LLFontGL::sCurDepth;
+    LLFontGL::sCurOrigin.set(0.f, 0.f);
+    LLFontGL::sCurDepth = 0.f;
+
+    glViewport(rect.mLeft, rect.mBottom, rect.getWidth(), rect.getHeight());
+    LLGLEnable blend(GL_BLEND);
+    gGL.setSceneBlendType(LLRender::BT_ALPHA);
+    gGL.setColorMask(true, false);
+    gUIProgram.bind();
+
+    if (mode == NAMES_SQUIRCLE)
+    {
+        // Screen sized, nearest first; a name that would overlap a nearer one is left out.
+        const LLFontGL* font = LLFontGL::getFontSansSerifSmall();
+        const F32 line = static_cast<F32>(font->getLineHeight()) * LLFontGL::sScaleY;
+        pushOrtho(static_cast<F32>(rect.getWidth()), static_cast<F32>(rect.getHeight()));
+        std::vector<LLRectf> placed;
+        placed.reserve(names.size());
+        for (const Name& n : names)
+        {
+            const F32 w = font->getWidthF32(*n.mText) * LLFontGL::sScaleX;
+            const LLRectf box(n.mX - 2.f, n.mY + line + 2.f, n.mX + w + 2.f, n.mY - 2.f);
+            if (std::any_of(placed.begin(), placed.end(), [&](const LLRectf& r) { return r.overlaps(box); }))
+            {
+                continue;
+            }
+            placed.push_back(box);
+            font->renderUTF8(*n.mText, 0, n.mX / LLFontGL::sScaleX, n.mY / LLFontGL::sScaleY, colour, LLFontGL::LEFT, LLFontGL::BOTTOM,
+                             LLFontGL::NORMAL, LLFontGL::DROP_SHADOW_SOFT);
+        }
+        popMatrices();
+    }
+    else
+    {
+        // In the world at a fixed size in metres, so names shrink with distance as the tiles do.
+        const F32 z_near = static_cast<F32>(std::max(0.5, 0.25 * std::max(above, 1.0)));
+        LLVector3d f, r, u;
+        viewBasis(frame.mYaw, frame.mPitch, f, r, u);
+        gGL.matrixMode(LLRender::MM_PROJECTION);
+        gGL.pushMatrix();
+        gGL.loadMatrix(al_perspective(static_cast<F32>(frame.mFovY), static_cast<F32>(rect.getWidth()) / rect.getHeight(), z_near,
+                                      LLRender::sReverseZ ? std::numeric_limits<F32>::infinity() : 1.0e7f));
+        gGL.matrixMode(LLRender::MM_MODELVIEW);
+        gGL.pushMatrix();
+        LLVector4a eye, at, up;
+        eye.clear();
+        at.load3(LLVector3(f).mV);
+        up.load3(LLVector3(u).mV);
+        gGL.loadMatrix(LLMatrix4a::lookAt(eye, at, up));
+
+        const LLFontGL* font = LLFontGL::getFontSansSerif();
+        const F32 scale = static_cast<F32>(world_size) / (static_cast<F32>(font->getLineHeight()) * LLFontGL::sScaleY);
+        for (const Name& n : names)
+        {
+            // The text runs east along the tile: flat it lies on the ground, pitched it turns about that edge to the camera.
+            const LLVector3 x_axis(1.f, 0.f, 0.f);
+            LLVector3 y_axis(0.f, 1.f, 0.f);
+            LLVector3 normal(0.f, 0.f, 1.f);
+            if (mode == NAMES_PITCHED)
+            {
+                const LLVector3d to_eye = frame.mEye - n.mAnchor;
+                normal.set(0.f, static_cast<F32>(to_eye.mdV[VY]), static_cast<F32>(to_eye.mdV[VZ]));
+                if (normal.normVec() <= 0.f)
+                {
+                    normal.set(0.f, 0.f, 1.f);
+                }
+                y_axis = normal % x_axis;
+            }
+            const LLVector3 rel(n.mAnchor - frame.mEye);
+            const F32 m[16] = {
+                x_axis.mV[VX] * scale, x_axis.mV[VY] * scale, x_axis.mV[VZ] * scale, 0.f,
+                y_axis.mV[VX] * scale, y_axis.mV[VY] * scale, y_axis.mV[VZ] * scale, 0.f,
+                normal.mV[VX] * scale, normal.mV[VY] * scale, normal.mV[VZ] * scale, 0.f,
+                rel.mV[VX], rel.mV[VY], rel.mV[VZ], 1.f,
+            };
+            gGL.pushMatrix();
+            gGL.multMatrix(m);
+            font->renderUTF8(*n.mText, 0, 0.f, 0.f, colour, LLFontGL::LEFT, LLFontGL::BOTTOM, LLFontGL::NORMAL, LLFontGL::DROP_SHADOW_SOFT);
+            gGL.popMatrix();
+        }
+        popMatrices();
+    }
+
+    gGL.flush();
+    gUIProgram.unbind();
+    gGL.setColorMask(true, true);
+    LLFontGL::sCurOrigin = saved_origin;
+    LLFontGL::sCurDepth = saved_depth;
 }
 
 void SKWorldMapScene::release()

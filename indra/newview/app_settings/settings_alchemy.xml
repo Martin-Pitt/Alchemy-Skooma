@@ -3323,6 +3323,61 @@
             <key>Value</key>
             <real>0.5</real>
         </map>
+        <key>SKWorldMapRegionNameInset</key>
+        <map>
+            <key>Comment</key>
+            <string>On the 3D world map, how far in from the region edge a region name sits, in metres.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>12.0</real>
+        </map>
+        <key>SKWorldMapRegionNameMaxHeight</key>
+        <map>
+            <key>Comment</key>
+            <string>On the 3D world map, the camera height above the ground at which region names have faded out, in metres.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>3000.0</real>
+        </map>
+        <key>SKWorldMapRegionNameSquircle</key>
+        <map>
+            <key>Comment</key>
+            <string>On the 3D world map, the exponent of the squircle facing names ride inside their region: 2 is a circle, higher nears a square.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>4.0</real>
+        </map>
+        <key>SKWorldMapRegionNameWorldSize</key>
+        <map>
+            <key>Comment</key>
+            <string>On the 3D world map, the height of a region name in metres where it is drawn in the world (SKWorldMapRegionNames 1 and 2).</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>12.0</real>
+        </map>
+        <key>SKWorldMapRegionNames</key>
+        <map>
+            <key>Comment</key>
+            <string>On the 3D world map, how region names are drawn: 0 off, 1 flat on the tile at its south west corner, 2 at that corner pitched about the tile edge to face the camera, 3 facing the camera on a squircle inside the region toward the bottom left of the screen.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>3</integer>
+        </map>
         <key>SKWorldMapRoadBlendOctaves</key>
         <map>
             <key>Comment</key>

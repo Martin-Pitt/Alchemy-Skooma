@@ -80,6 +80,7 @@ private:
     void tiltShift(const SKWorldMapFrame& frame, const LLRect& rect);
     void pollAgents(const SKWorldMapFrame& frame, F64 now);
     void drawAgents(const SKWorldMapFrame& frame, const LLRect& rect);
+    void drawRegionNames(const SKWorldMapFrame& frame, const LLRect& rect);
 
     LLRenderTarget mScene;
     LLRenderTarget mBlurA;

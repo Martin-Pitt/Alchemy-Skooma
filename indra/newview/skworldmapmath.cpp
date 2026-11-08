@@ -313,6 +313,20 @@ std::vector<S32> stackBudget(const std::vector<F64>& distances, const std::vecto
     return out;
 }
 
+LLVector2 squircleOffset(F64 dx, F64 dy, F64 half, F64 exponent)
+{
+    const F64 len = std::sqrt(dx * dx + dy * dy);
+    if (len <= 0.0 || half <= 0.0)
+    {
+        return LLVector2(0.f, 0.f);
+    }
+    const F64 c = dx / len;
+    const F64 s = dy / len;
+    const F64 p = std::max(exponent, 1.0);
+    const F64 r = half / std::pow(std::pow(std::fabs(c), p) + std::pow(std::fabs(s), p), 1.0 / p);
+    return LLVector2(static_cast<F32>(c * r), static_cast<F32>(s * r));
+}
+
 F32 fuzzyScore(std::string_view query, std::string_view name)
 {
     const auto lower = [](char c) { return (char)std::tolower((unsigned char)c); };
