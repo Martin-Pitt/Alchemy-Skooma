@@ -1363,6 +1363,9 @@ void LLViewerObjectList::fetchPhysicsFlags()
                 LLSD ids;
             };
             std::map<U64, Batch> batches;
+            // A region's capability is looked up once a round: asking per id, before its caps were in, logged a
+            // warning per id and held the main fiber for a second on a few thousand cached parts.
+            std::map<U64, std::optional<std::string>> urls;
             for (uuid_set_t::iterator it = mStalePhysicsFlags.begin(); it != mStalePhysicsFlags.end();)
             {
                 const LLUUID id = *it;
@@ -1384,10 +1387,22 @@ void LLViewerObjectList::fetchPhysicsFlags()
                     it = mStalePhysicsFlags.erase(it);      // its region is gone; asked again if it comes back
                     continue;
                 }
-                const std::string url = regionp->getCapability("GetObjectPhysicsData");
-                if (url.empty())
+                auto [found, added] = urls.try_emplace(regionp->getHandle());
+                if (added && regionp->capabilitiesReceived())
+                {
+                    found->second = regionp->getCapability("GetObjectPhysicsData");
+                }
+                if (!found->second)
                 {
                     ++it;       // the region's capabilities are not in yet
+                    continue;
+                }
+                const std::string& url = *found->second;
+                if (url.empty())
+                {
+                    sPhysicsFlagsRefused.insert(id);        // the region cannot answer
+                    mStalePhysicsRegions.erase(id);
+                    it = mStalePhysicsFlags.erase(it);
                     continue;
                 }
                 Batch& batch = batches[regionp->getHandle()];
@@ -1854,7 +1869,8 @@ void LLViewerObjectList::updatePhysicsFlags(const LLViewerObject* object)
 // <SK:Nexii> census: physics shape types by id, for parts the region has cached but not instantiated
 void LLViewerObjectList::requestPhysicsShapeType(const LLUUID& object_id, U64 region_handle)
 {
-    if (object_id.notNull() && !mKnownPhysicsShapeTypes.count(object_id) && !mPendingPhysicsFlags.count(object_id))
+    if (object_id.notNull() && !mKnownPhysicsShapeTypes.count(object_id) && !mPendingPhysicsFlags.count(object_id) &&
+        !sPhysicsFlagsRefused.count(object_id))
     {
         mStalePhysicsFlags.insert(object_id);
         mStalePhysicsRegions[object_id] = region_handle;
