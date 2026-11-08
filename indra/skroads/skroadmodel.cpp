@@ -3689,6 +3689,10 @@ namespace skroad
     constexpr F64 JOIN_MIN_WAY_M = 2.0;         // a way on shares at least this much edge (a car's width or so)  // sharper is back the way we came
     constexpr F64 SAME_BRANCH_DEG = 20.0;       // ways on closer in direction are one branch
     constexpr F64 MIN_BRANCH_W = 3.0;           // narrower linksets are not a road on (a sign, a post)
+    // A turn off the way (TURN_NARROW_DEG or more) is onto a part the car fits with LANE_MARGIN_M either side: a
+    // cobbled footpath (Leafminer) or a driveway (Shetlon) 3-4 m across is no road to turn onto.
+    constexpr F64 TURN_NARROW_DEG = 45.0;
+    F64 turnMinBranchW() { return 2 * (sCarHalfW + LANE_MARGIN_M); }
     constexpr F64 LONE_PIECE_M = 12.0;          // a side piece shorter than this, meeting nothing further, is no branch
     constexpr F64 MAX_BRANCH_DZ = 1.5;          // nor ones higher or lower than a car drives onto
 
@@ -7969,6 +7973,11 @@ namespace skroad
                     ++why_strip;
                     return;       // a strip, a catseye
                 }
+                if (bacross < turnMinBranchW() && std::fabs(std::atan2(dx * bdy - dy * bdx, bdx * dx + bdy * dy)) * 180 / PI >= TURN_NARROW_DEG)
+                {
+                    ++why_strip;
+                    return;       // a turn onto a footpath or a driveway: no lane the car fits
+                }
                 if (!side_pass && !partSquare(pn) && std::fabs(bdx * dx + bdy * dy) < 0.5)
                 {
                     // a long part lying along the way, entered across its side wherever the meeting lies: laid on
@@ -8362,6 +8371,7 @@ namespace skroad
                         partAxis(pn, bdx, bdy, bax, bay, balong, bacross);
                         const F64 turn = std::atan2(dx * bdy - dy * bdx, bdx * dx + bdy * dy) * 180 / PI;
                         if (bacross < MIN_BRANCH_W || std::fabs(turn) > MAX_BRANCH_TURN_DEG
+                            || (bacross < turnMinBranchW() && std::fabs(turn) >= TURN_NARROW_DEG)
                             || (!branches.empty() && std::fabs(turn) >= std::fabs(branches[0].turn_deg)))
                         {
                             continue;
