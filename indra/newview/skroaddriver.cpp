@@ -2025,18 +2025,24 @@ namespace skroad::drive
     }
 
     // Said once a junction, on the way to it: its kind, ways and choice, the speed and the turning speed.
-    F64 sJunctionSaidX = 1e18, sJunctionSaidY = 1e18;
+    // Every junction said since the trail was last forgotten, so two in reach do not take turns each frame.
+    std::vector<std::pair<F64, F64>> sJunctionsSaid;
     void noteJunctionApproach(const LLVector3d& pos, F64 speed, F64 allow, F64 dirx, F64 diry)
     {
         for (const Junction& jn : sView.junctions)
         {
             const F64 at = (jn.x - pos.mdV[VX]) * dirx + (jn.y - pos.mdV[VY]) * diry;
-            if (at < 0 || at > std::max(40.0, speed * 4) || std::hypot(jn.x - sJunctionSaidX, jn.y - sJunctionSaidY) < 15.0)
+            if (at < 0 || at > std::max(40.0, speed * 4)
+                || std::any_of(sJunctionsSaid.begin(), sJunctionsSaid.end(),
+                               [&jn](const std::pair<F64, F64>& said) { return std::hypot(jn.x - said.first, jn.y - said.second) < 15.0; }))
             {
                 continue;
             }
-            sJunctionSaidX = jn.x;
-            sJunctionSaidY = jn.y;
+            if (sJunctionsSaid.size() >= 64)
+            {
+                sJunctionsSaid.erase(sJunctionsSaid.begin());
+            }
+            sJunctionsSaid.emplace_back(jn.x, jn.y);
             const bool straight_on = std::any_of(jn.branches.begin(), jn.branches.end(), [](const Branch& b) { return std::fabs(b.turn_deg) < 30.0; });
             std::string ways;
             for (const Branch& b : jn.branches)
@@ -2410,7 +2416,7 @@ namespace skroad::drive
             sSweepGearSkipped = true;
             const std::string why = known && !car.chat_gears ? "the car says no gears" : "no gear heard in "
                                     + std::to_string(S32(SWEEP_GEAR_WAIT_S)) + " s";
-            LL_INFOS("SKRoadDriver") << who << ": gear " << gear << " skipped (" << why << ")" << LL_ENDL;
+            LL_DEBUGS("SKRoadDriver") << who << ": gear " << gear << " skipped (" << why << ")" << LL_ENDL;
             say(std::string(who) + ": gear step skipped, " + why);
             return true;
         }
@@ -2886,7 +2892,7 @@ namespace skroad::drive
         {
             // too near the edge or off the flat: cut, home, the same pattern again
             tag("pwm sweep: cut, home");
-            LL_INFOS("SKRoadDriver") << "pwm sweep: " << (q ? q->id : std::string()) << (dir > 0 ? " A" : " D")
+            LL_DEBUGS("SKRoadDriver") << "pwm sweep: " << (q ? q->id : std::string()) << (dir > 0 ? " A" : " D")
                                      << " cut at the edge" << LL_ENDL;
             enter(1);
         }
@@ -3281,7 +3287,7 @@ namespace skroad::drive
         if (sThr.spinDrift > THR_SPIN_DRIFT_M && !sThr.spinDriven)
         {
             sThr.spinDriven = true;
-            LL_INFOS("SKRoadDriver") << "thr sweep: spin crept " << sThr.spinDrift << " m, driven turn" << LL_ENDL;
+            LL_DEBUGS("SKRoadDriver") << "thr sweep: spin crept " << sThr.spinDrift << " m, driven turn" << LL_ENDL;
         }
         const F64 err = wrap(bearing - yaw) * 180 / PI;
         const bool timed_out = now - sThr.spinAt > THR_SPIN_MAX_S;
@@ -3560,7 +3566,7 @@ namespace skroad::drive
         if (running && q && (circling ? edge < PWS_EDGE_M : remain < reserve))
         {
             sThr.cut = true;
-            LL_INFOS("SKRoadDriver") << "thr sweep: " << q->id << " cut at the corner after " << sThr.dist << " m of "
+            LL_DEBUGS("SKRoadDriver") << "thr sweep: " << q->id << " cut at the corner after " << sThr.dist << " m of "
                                      << sThr.avail << LL_ENDL;
             tag("thr sweep: cut at the corner");
             if (sThr.phase == 3)
@@ -3850,6 +3856,7 @@ namespace skroad::drive
     // (runs ended at region edges and corners), so in a crossing nothing is decided and W is held.
     constexpr F64 CROSS_AHEAD_M = 4.0, CROSS_AHEAD_S = 0.3, CROSS_AHEAD_GIVE_UP_S = 3.0, CROSS_STALL_S = 8.0,
                   CROSS_MIN_S = 0.25;
+    constexpr F64 CROSS_SLOW_S = 3.0;    // a crossing that took longer is logged; the quicker ones only at debug
     constexpr S32 CROSS_FRESH_N = 5;
     struct Crossing
     {
@@ -4265,7 +4272,7 @@ namespace skroad::drive
     // One recovery step ended (or was given up): which, and the heading before and after, in the log.
     void logRecoverStep(const char* how, F64 yaw, const LLVector3d& pos)
     {
-        LL_INFOS("SKRoadDriver") << "recovery " << sRecoverStep << " " << how << ": heading "
+        LL_DEBUGS("SKRoadDriver") << "recovery " << sRecoverStep << " " << how << ": heading "
                                  << S32(std::lround(sRecoverYaw0 * 180 / PI)) << " -> " << S32(std::lround(yaw * 180 / PI))
                                  << " deg, aim " << S32(std::lround(recoverAim(pos, yaw) * 180 / PI)) << " deg" << LL_ENDL;
     }
@@ -4304,7 +4311,7 @@ namespace skroad::drive
         sRecoverCheckErr = std::fabs(err) * 180 / PI;
         sRecoverAbort = false;
         sRecoverFlips = 0;
-        LL_INFOS("SKRoadDriver") << "back off: heading " << S32(std::lround(yaw * 180 / PI)) << " deg, lane "
+        LL_DEBUGS("SKRoadDriver") << "back off: heading " << S32(std::lround(yaw * 180 / PI)) << " deg, lane "
                                  << S32(std::lround(aim * 180 / PI)) << " deg (" << S32(std::lround(err * 180 / PI))
                                  << " off), steering the nose " << (err > 0 ? "left" : "right") << " while backing with "
                                  << (sRecoverKey > 0 ? "A" : "D") << LL_ENDL;
@@ -4341,7 +4348,7 @@ namespace skroad::drive
         }
         sKerbBias = std::clamp(sKerbBias + (across > 0 ? -KERB_BIAS_M : KERB_BIAS_M), -KERB_BIAS_MAX_M, KERB_BIAS_MAX_M);
         sKerbBiasUntil = sTrailCount + U64(KERB_BIAS_RUN_M / TRAIL_STEP_M);
-        LL_INFOS("SKRoadDriver") << "stuck " << std::fabs(across) << " m " << (across > 0 ? "right" : "left")
+        LL_DEBUGS("SKRoadDriver") << "stuck " << std::fabs(across) << " m " << (across > 0 ? "right" : "left")
                                  << " of the road's middle: lane line moved " << sKerbBias << " m for " << KERB_BIAS_RUN_M
                                  << " m" << LL_ENDL;
     }
@@ -4374,7 +4381,7 @@ namespace skroad::drive
         const F64 aim = recoverAim(pos, yaw);
         const F64 aim_err = wrap(aim - yaw);
         const F64 off_deg = std::fabs(aim_err) * 180 / PI;
-        LL_INFOS("SKRoadDriver") << "stuck (" << why << ") at " << placeText(pos) << ": rung " << sLadderRung << " here, "
+        LL_DEBUGS("SKRoadDriver") << "stuck (" << why << ") at " << placeText(pos) << ": rung " << sLadderRung << " here, "
                                  << sRecoverTimes.size() << " in " << S32(LADDER_MAX_WINDOW_S) << " s; heading "
                                  << S32(std::lround(yaw * 180 / PI)) << " deg, aim " << S32(std::lround(aim * 180 / PI))
                                  << " deg (" << S32(std::lround(off_deg)) << " off)" << LL_ENDL;
@@ -4412,7 +4419,7 @@ namespace skroad::drive
         sRecoverPhase = 0;
         sRecoverStep = "three-point turn";
         const bool facing_way = std::fabs(wrap(travelYaw() - yaw)) * 180 / PI < RECOVER_FLIP_DEG;
-        LL_INFOS("SKRoadDriver") << "recovery three-point turn: heading " << S32(std::lround(yaw * 180 / PI)) << " deg"
+        LL_DEBUGS("SKRoadDriver") << "recovery three-point turn: heading " << S32(std::lround(yaw * 180 / PI)) << " deg"
                                  << (facing_way ? ", already along the way travelled: back the way it came" : "") << LL_ENDL;
         startTurnRound(facing_way, pos, yaw, now, std::string(why) + " again here: turning round");
         return false;
@@ -4547,7 +4554,7 @@ namespace skroad::drive
                         verdict = "growing after the swap, stop backing";
                     }
                 }
-                LL_INFOS("SKRoadDriver") << "back off check: yaw " << S32(std::lround(yaw * 180 / PI)) << " deg, rate "
+                LL_DEBUGS("SKRoadDriver") << "back off check: yaw " << S32(std::lround(yaw * 180 / PI)) << " deg, rate "
                                          << S32(std::lround(sYawRate * 180 / PI)) << " deg/s, error "
                                          << S32(std::lround(aim_err * 180 / PI)) << " deg (was "
                                          << S32(std::lround(sRecoverCheckErr)) << " off), speed " << speed << ", key "
@@ -4581,13 +4588,13 @@ namespace skroad::drive
             sRecoverPhase = 0;
             sStuckSince = -1.0;
             sStuckTrail.clear();
-            LL_INFOS("SKRoadDriver") << "back off over in gear " << sGear << ": "
+            LL_DEBUGS("SKRoadDriver") << "back off over in gear " << sGear << ": "
                                      << S32(std::lround(std::fabs(aim_err) * 180 / PI)) << " deg off the lane ("
                                      << (std::fabs(aim_err) * 180 / PI > REORIENT_DEG ? "turning on the spot" : "driving on")
                                      << ")" << LL_ENDL;
             if (std::fabs(aim_err) * 180 / PI > REORIENT_DEG)
             {
-                LL_INFOS("SKRoadDriver") << "backed off still " << S32(std::lround(std::fabs(aim_err) * 180 / PI))
+                LL_DEBUGS("SKRoadDriver") << "backed off still " << S32(std::lround(std::fabs(aim_err) * 180 / PI))
                                          << " deg off the lane: turning on the spot first" << LL_ENDL;
                 beginSpin(now, yaw, aim_err, false);
                 tag("stuck: re-orienting");
@@ -4623,7 +4630,7 @@ namespace skroad::drive
                     {
                         sSpinFlipped = true;
                         sSpinKey = -sSpinKey;
-                        LL_INFOS("SKRoadDriver") << "turn on the spot: not turning, the other key" << LL_ENDL;
+                        LL_DEBUGS("SKRoadDriver") << "turn on the spot: not turning, the other key" << LL_ENDL;
                     }
                     else
                     {
@@ -4765,9 +4772,10 @@ namespace skroad::drive
     {
         if (!sTrail.empty())
         {
-            LL_INFOS("SKRoadDriver") << "trail forgotten (" << why << ")" << LL_ENDL;
+            LL_DEBUGS("SKRoadDriver") << "trail forgotten (" << why << ")" << LL_ENDL;
         }
         sTrail.clear();
+        sJunctionsSaid.clear();
         sTrailTurnCount = sTrailCount;
         sTravelSet = false;
     }
@@ -5055,7 +5063,7 @@ namespace skroad::drive
         {
             const F64 moved = std::hypot(pos.mdV[VX] - sTurnFrom.mdV[VX], pos.mdV[VY] - sTurnFrom.mdV[VY]);
             const F64 err = std::fabs(wrap(travelYaw() - sTurnYaw)) * 180 / PI;
-            LL_INFOS("SKRoadDriver") << "turn round leg " << turnPhaseName(sTurnPhase) << " -> " << turnPhaseName(phase)
+            LL_DEBUGS("SKRoadDriver") << "turn round leg " << turnPhaseName(sTurnPhase) << " -> " << turnPhaseName(phase)
                                      << ": " << (outcome.empty() ? std::string("ended") : outcome) << ", moved " << moved
                                      << " m in " << (now - sTurnAt) << " s, off the way " << sTurnLegErr0 << " -> " << err
                                      << " deg" << LL_ENDL;
@@ -5149,7 +5157,7 @@ namespace skroad::drive
         sStuckTrail.clear();
         sKey = 0;
         sPath.clear();          // walked fresh along the way travelled
-        LL_INFOS("SKRoadDriver") << "turn round " << how << " at " << placeText(pos) << " after " << (now - sTurnStarted) << " s"
+        LL_DEBUGS("SKRoadDriver") << "turn round " << how << " at " << placeText(pos) << " after " << (now - sTurnStarted) << " s"
                                  << LL_ENDL;
     }
 
@@ -5195,7 +5203,7 @@ namespace skroad::drive
         // to turning on the spot, the key first the shorter way round to the way wanted
         auto toSpin = [&](const std::string& why)
         {
-            LL_INFOS("SKRoadDriver") << "turn round: " << why << ": turning on the spot" << LL_ENDL;
+            LL_DEBUGS("SKRoadDriver") << "turn round: " << why << ": turning on the spot" << LL_ENDL;
             sSpinKey = err > 0 ? 1 : -1;
             sSpinFlipped = false;
             sSpinTapNext = now;
@@ -5238,7 +5246,7 @@ namespace skroad::drive
         {
             if (off_deg < TURN_DONE_DEG)
             {
-                LL_INFOS("SKRoadDriver") << "turn round leg on the spot: faced the way, off " << off_deg << " deg" << LL_ENDL;
+                LL_DEBUGS("SKRoadDriver") << "turn round leg on the spot: faced the way, off " << off_deg << " deg" << LL_ENDL;
                 endTurnRound(pos, now, "done on the spot");
                 return false;
             }
@@ -5253,7 +5261,7 @@ namespace skroad::drive
                     {
                         sSpinFlipped = true;
                         sSpinKey = -sSpinKey;
-                        LL_INFOS("SKRoadDriver") << "turn round on the spot: not turning, the other key" << LL_ENDL;
+                        LL_DEBUGS("SKRoadDriver") << "turn round on the spot: not turning, the other key" << LL_ENDL;
                     }
                     else if (!sTurnSpinBacked && backClear(pos, yaw, 0.0))
                     {
@@ -5683,7 +5691,7 @@ namespace skroad::drive
         }
         if (to_land < -JUMP_PAST_LAND_M || (sJump.left_at >= 0 && now - sJump.left_at > JUMP_AIR_MAX_S))
         {
-            LL_INFOS("SKRoadDriver") << "jump done at " << placeText(pos) << LL_ENDL;
+            LL_DEBUGS("SKRoadDriver") << "jump done at " << placeText(pos) << LL_ENDL;
             sJump = JumpRun();
             return false;
         }
@@ -5734,7 +5742,7 @@ namespace skroad::drive
             if (sJump.left_at < 0)
             {
                 sJump.left_at = now;
-                LL_INFOS("SKRoadDriver") << "jump: off the lip at " << speed << " m/s in gear " << sGear << LL_ENDL;
+                LL_DEBUGS("SKRoadDriver") << "jump: off the lip at " << speed << " m/s in gear " << sGear << LL_ENDL;
             }
             keys = AGENT_CONTROL_AT_POS;
             sKey = 0;
@@ -5925,7 +5933,7 @@ namespace skroad::drive
             sView.source += " (cut: " + std::string(why) + ")";
             if (now - last_refused > REFUSE_EVENT_GAP_S)
             {
-                LL_INFOS("SKRoadDriver") << "line refused at " << placeText(LLVector3d(q.x, q.y, q.z)) << ": " << why << LL_ENDL;
+                LL_DEBUGS("SKRoadDriver") << "line refused at " << placeText(LLVector3d(q.x, q.y, q.z)) << ": " << why << LL_ENDL;
                 fireEvent("refused_private", LLSD().with("why", why).with("point", llsd::array(q.x, q.y, q.z)), pos);
             }
             last_refused = now;
@@ -6656,7 +6664,7 @@ namespace skroad::drive
         const std::string state = sOvertake == 1 ? "overtake" : sOvertake == 2 ? "return" : follow ? "follow" : "";
         if (state != sTrafficState)
         {
-            LL_INFOS("SKRoadDriver") << "traffic: " << (state.empty() ? "clear" : state) << LL_ENDL;
+            LL_DEBUGS("SKRoadDriver") << "traffic: " << (state.empty() ? "clear" : state) << LL_ENDL;
             sTrafficState = state;
         }
     }
@@ -6771,7 +6779,7 @@ void sk_road_driver::onSettingChanged(const LLSD& enabled)
         sLog << "# run (predictive); t,speed,yaw_deg,yaw_rate_deg,dist_deg,err_m,path_n,road_w,lanes,boundary_m,"
                 "target,keys,gain,shift,gear,note\n";
         sLog << "# vehicle " << sVehicle << "\n";
-        LL_INFOS("SKRoadDriver") << "vehicle half width " << sCarHalfW << " m" << LL_ENDL;
+        sLog << "# half width " << sCarHalfW << "\n";
         say("on. Any movement key takes over.");
     }
     else if (!enabled.asBoolean() && sOn)
@@ -6797,19 +6805,13 @@ void sk_road_driver::noteChat(const LLUUID& from, const std::string& from_name, 
         return;
     }
     // The chat names the car: when the simulator's properties reply has not, the profile is found by that name.
-    static LLUUID unnamed_logged;
     if (sCarKey.empty() || sCarKeyFor != seated)
     {
         if (!from_name.empty())
         {
             sCarKeyFor = seated;
             sCarKey = from_name;
-            LL_INFOS("SKRoadDriver") << "vehicle " << seated << ": named '" << from_name << "' by its chat" << LL_ENDL;
-        }
-        else if (unnamed_logged != seated)
-        {
-            unnamed_logged = seated;
-            LL_INFOS("SKRoadDriver") << "vehicle " << seated << ": no profile: no name yet" << LL_ENDL;
+            LL_DEBUGS("SKRoadDriver") << "vehicle " << seated << ": named '" << from_name << "' by its chat" << LL_ENDL;
         }
     }
     const VehicleProfile& car = vehicleProfile();
@@ -6829,7 +6831,7 @@ void sk_road_driver::noteChat(const LLUUID& from, const std::string& from_name, 
             sGear = gear;
         }
     }
-    LL_INFOS("SKRoadDriver") << "vehicle says '" << text << "': gear " << sGear << LL_ENDL;
+    LL_DEBUGS("SKRoadDriver") << "vehicle says '" << text << "': gear " << sGear << LL_ENDL;
 }
 
 namespace skroad::drive
@@ -7133,7 +7135,7 @@ void sk_road_driver::beforeAgentUpdate()
                 sCross.changed = true;
                 sCross.changed_at = now;
             }
-            LL_INFOS("SKRoadDriver") << "crossing from " << sCross.from << (region_moved ? " to " + sCross.to : " (ahead)")
+            LL_DEBUGS("SKRoadDriver") << "crossing from " << sCross.from << (region_moved ? " to " + sCross.to : " (ahead)")
                                      << " at " << placeText(pos) << ", " << to_edge << " m to the edge" << LL_ENDL;
         }
         else if (sCross.on && region_moved)
@@ -7143,7 +7145,7 @@ void sk_road_driver::beforeAgentUpdate()
             sCross.changed_at = now;
             sCross.fresh = 0;
             sCross.to = regionName(car_region);
-            LL_INFOS("SKRoadDriver") << "crossing: into " << sCross.to << " (agent in " << regionName(agent_region)
+            LL_DEBUGS("SKRoadDriver") << "crossing: into " << sCross.to << " (agent in " << regionName(agent_region)
                                      << ")" << LL_ENDL;
         }
         if (sCross.on)
@@ -7166,9 +7168,18 @@ void sk_road_driver::beforeAgentUpdate()
                 }
                 if (sCross.fresh >= CROSS_FRESH_N && now - sCross.changed_at >= CROSS_MIN_S)
                 {
-                    LL_INFOS("SKRoadDriver") << "crossing from " << sCross.from << " to " << sCross.to << " done in "
-                                             << (now - sCross.began) << " s (" << (now - sCross.changed_at)
-                                             << " s from the change)" << LL_ENDL;
+                    if (now - sCross.began > CROSS_SLOW_S)
+                    {
+                        LL_INFOS("SKRoadDriver") << "slow crossing from " << sCross.from << " to " << sCross.to << " done in "
+                                                 << (now - sCross.began) << " s (" << (now - sCross.changed_at)
+                                                 << " s from the change)" << LL_ENDL;
+                    }
+                    else
+                    {
+                        LL_DEBUGS("SKRoadDriver") << "crossing from " << sCross.from << " to " << sCross.to << " done in "
+                                                  << (now - sCross.began) << " s (" << (now - sCross.changed_at)
+                                                  << " s from the change)" << LL_ENDL;
+                    }
                     ended = true;
                 }
                 else if (now - sCross.changed_at > CROSS_STALL_S)
@@ -7307,12 +7318,24 @@ void sk_road_driver::beforeAgentUpdate()
             watchBanLines();
             vetLine(pos, now);
         }
+        // the refusal is logged on its edges only: it can hold for minutes, the walk run again every frame
+        static F64 trail_refused_since = -1.0;
         if (!preview && std::string(course).empty() && lineBackOverTrail(sPath))
         {
             // back the way it came, over the trail: the line had before stands
-            LL_INFOS("SKRoadDriver") << "line refused: it ran back over the trail at " << placeText(pos) << LL_ENDL;
+            if (trail_refused_since < 0.0)
+            {
+                LL_INFOS("SKRoadDriver") << "line refused: it ran back over the trail at " << placeText(pos) << LL_ENDL;
+                trail_refused_since = now;
+            }
             sPath = std::move(before);
             sView.source = "refused (back over the trail)";
+        }
+        else if (trail_refused_since >= 0.0)
+        {
+            LL_INFOS("SKRoadDriver") << "line no longer refused as back over the trail, after "
+                                     << llformat("%.1f", now - trail_refused_since) << " s at " << placeText(pos) << LL_ENDL;
+            trail_refused_since = -1.0;
         }
         if (!preview && std::string(course).empty())
         {
@@ -7636,7 +7659,7 @@ void sk_road_driver::beforeAgentUpdate()
         if (edge && sEdgeSince < 0)
         {
             sEdgeSince = now;
-            LL_INFOS("SKRoad") << "edge: " << (off_edge ? (sDropSide ? "off the road ahead, drop beside" : "off the road ahead")
+            LL_INFOS("SKRoadDriver") << "edge: " << (off_edge ? (sDropSide ? "off the road ahead, drop beside" : "off the road ahead")
                                                        : (sRefusedWhy ? sRefusedWhy : "refused"))
                                << (refused ? " at " + std::to_string(sRefusedAtM) + " m" : std::string())
                                << ", speed " << speed << ", line " << lineSeen() << " m" << LL_ENDL;
