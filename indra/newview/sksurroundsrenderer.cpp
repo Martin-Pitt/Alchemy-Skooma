@@ -1,7 +1,7 @@
 /**
  * @file sksurroundsrenderer.cpp
  * @brief The distant regions drawn into the G-buffer: the ring of regions next to the loaded ones, from the terrain
- * cache, through the live terrain's programs and with each region's own look.
+ * cache, through the live terrain's programs and with each region's own look, and the far bands beyond with map tiles.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Alchemy Viewer Source Code
@@ -58,6 +58,18 @@ namespace
     constexpr S32 PATCHES_PER_EDGE = CELL_METRES / PATCH_METRES;
     constexpr U32 PATCH_CORNERS   = 4;
     constexpr S32 BUILDS_PER_FRAME = 1;
+    constexpr S32 FAR_BUILDS_PER_FRAME = 2;
+    constexpr S32 FAR_CHECKS_PER_FRAME = 16;
+    constexpr S32 FAR_PATCHES = SKSurrounds::FAR_PATCHES_PER_EDGE;
+    constexpr U32 TILE_KEEP_FRAMES = 600;
+    constexpr S32 MAP_LEVELS = 8; // the map server's coarsest level
+    constexpr F32 NO_HEIGHT = -1.0e30f; // below surroundsTC's SK_SURROUNDS_NO_HEIGHT: the patch is discarded
+
+    S32 floorDiv(S32 a, S32 b) { return a >= 0 ? a / b : -((-a + b - 1) / b); }
+
+    U64 tileKey(S32 level, S32 x, S32 y) { return ((U64)(U32)level << 48) | ((U64)((U32)x & 0xffffff) << 24) | (U64)((U32)y & 0xffffff); }
+
+    U64 nodeKey(const SKSurrounds::Node& node) { return tileKey(node.mLevel, node.mX, node.mY); }
 
     LLVector3d originGlobal(S32 x, S32 y) { return LLVector3d((F64)x * CELL_METRES, (F64)y * CELL_METRES, 0.0); }
 
@@ -91,6 +103,12 @@ SKSurroundsRenderer::~SKSurroundsRenderer() = default;
 void SKSurroundsRenderer::release()
 {
     mCells.clear();
+    mFar.clear();
+    mTiles.clear();
+    for (LLPointer<LLVertexBuffer>& patches : mFarPatches)
+    {
+        patches = nullptr;
+    }
     mPatches = nullptr;
     mAlphaRamp = nullptr;
     mHeightStaging = {};
@@ -102,7 +120,7 @@ void SKSurroundsRenderer::renderDeferred()
     static LLCachedControl<U32> surrounds(gSavedSettings, "SKRenderSurrounds", 1);
     if (surrounds == 0)
     {
-        if (!mCells.empty() || mPatches.notNull())
+        if (!mCells.empty() || !mFar.empty() || !mTiles.empty() || mPatches.notNull())
         {
             release();
         }
@@ -118,8 +136,20 @@ void SKSurroundsRenderer::renderDeferred()
         {
             LL_PROFILE_GPU_ZONE("surrounds");
             draw();
+            drawRingTiles();
         }
     }
+    // Past the ring only an infinite projection reaches; a finite one ends inside it.
+    if (ALFarPlane::isInfinite(LLViewerCamera::getInstance()->getProjectionFar()))
+    {
+        LL_PROFILE_ZONE_NAMED("surrounds far draw");
+        {
+            LL_PROFILE_GPU_ZONE("surrounds far");
+            drawFar();
+        }
+    }
+    // Tiles nothing has asked for a while are let go.
+    std::erase_if(mTiles, [this](const auto& entry) { return mFrame - entry.second.mSeen > TILE_KEEP_FRAMES; });
 }
 
 void SKSurroundsRenderer::select()
@@ -138,6 +168,7 @@ void SKSurroundsRenderer::select()
     if (mLive.empty())
     {
         mCells.clear();
+        mFar.clear();
         return;
     }
 
@@ -166,6 +197,7 @@ void SKSurroundsRenderer::select()
             it = mCells.end() - 1;
         }
         (*it)->mSeen = mFrame;
+        std::copy(std::begin(node.mNeighbour), std::end(node.mNeighbour), (*it)->mNeighbour);
     }
     // What left the ring lets its maps and its look go.
     std::erase_if(mCells, [this](const std::unique_ptr<Cell>& c) { return c->mSeen != mFrame; });
@@ -185,6 +217,11 @@ void SKSurroundsRenderer::select()
         const LLVector3 origin_agent = gAgent.getPosAgentFromGlobal(originGlobal(cell->mX, cell->mY));
         cell->mModel.setIdentity();
         cell->mModel.setTranslation(origin_agent);
+    }
+
+    {
+        LL_PROFILE_ZONE_NAMED("surrounds far select");
+        selectFar(mSelection.nodes());
     }
 }
 
@@ -257,13 +294,29 @@ bool SKSurroundsRenderer::build(Cell& cell)
     cell.mHeight = nullptr;
     cell.mComposition = nullptr;
     cell.mLook.reset();
+    cell.mHasHeights = false;
     const SKTerrainPyramid* own = terrainOf(cell.mRegion);
-    if (!own || !parseLook(cell))
+    if (!own)
     {
         return false;
     }
     cell.mMinZ = own->mMin;
     cell.mMaxZ = own->mMax;
+
+    ALTerrainSurfaceMaps::fill(mHeightStaging, GRIDS_PER_EDGE, 1,
+                               [&](S32 gx, S32 gy, F32* texel) { texel[0] = heightAt(cell, *own, gx, gy); });
+    {
+        LL_PROFILE_ZONE_NAMED("surrounds upload");
+        upload(cell.mHeight, GL_R32F, GL_RED, 1, mHeightStaging);
+        gGL.getTextureSlot(0)->unbind();
+    }
+    cell.mHasHeights = true;
+    // Without a look the map tile draws the cell.
+    if (!parseLook(cell))
+    {
+        cell.mLook.reset();
+        return false;
+    }
 
     LLSD look;
     {
@@ -283,8 +336,6 @@ bool SKSurroundsRenderer::build(Cell& cell)
     }
 
     const LLVector3d origin = originGlobal(cell.mX, cell.mY);
-    ALTerrainSurfaceMaps::fill(mHeightStaging, GRIDS_PER_EDGE, 1,
-                               [&](S32 gx, S32 gy, F32* texel) { texel[0] = heightAt(cell, *own, gx, gy); });
     // The composition is only sampled inside the region, as the live maps have it, so its apron repeats the edge.
     const F32 inv_width = 1.f / (F32)CELL_METRES;
     ALTerrainSurfaceMaps::fill(mCompositionStaging, GRIDS_PER_EDGE, 2,
@@ -298,7 +349,6 @@ bool SKSurroundsRenderer::build(Cell& cell)
                                });
     {
         LL_PROFILE_ZONE_NAMED("surrounds upload");
-        upload(cell.mHeight, GL_R32F, GL_RED, 1, mHeightStaging);
         upload(cell.mComposition, GL_RG16F, GL_RG, 2, mCompositionStaging);
         gGL.getTextureSlot(0)->unbind();
     }
@@ -349,16 +399,19 @@ void SKSurroundsRenderer::draw()
     for (const std::unique_ptr<Cell>& cellp : mCells)
     {
         Cell& cell = *cellp;
+        cell.mLookReady = false;
         if (!cell.mDrawable)
         {
             continue;
         }
-        // Not ready is not drawn, but asked for again: the call boosts what the look still fetches.
+        // Not ready is not drawn, but asked for again: the call boosts what the look still fetches. The map tile
+        // stands in meanwhile.
         const bool ready = cell.mPBR ? cell.mLook->makeMaterialsReady(true, true) : cell.mLook->makeTexturesReady(true, true);
         if (!ready)
         {
             continue;
         }
+        cell.mLookReady = true;
         const LLVector3 origin_agent = gAgent.getPosAgentFromGlobal(originGlobal(cell.mX, cell.mY));
         const F32 half = 0.5f * CELL_METRES;
         const LLVector4a center(origin_agent.mV[VX] + half, origin_agent.mV[VY] + half, 0.5f * (cell.mMinZ + cell.mMaxZ));
@@ -414,4 +467,482 @@ void SKSurroundsRenderer::draw()
     LLVertexBuffer::unbind();
     gGLLastMatrix = nullptr;
     gGL.loadMatrix(camera.getModelview());
+}
+
+void SKSurroundsRenderer::selectFar(const std::vector<SKSurrounds::Node>& nodes)
+{
+    for (const SKSurrounds::Node& node : nodes)
+    {
+        if (node.mBand != SKSurrounds::Band::Far)
+        {
+            continue;
+        }
+        const U64 key = nodeKey(node);
+        auto it = std::find_if(mFar.begin(), mFar.end(), [key](const std::unique_ptr<FarNode>& n) { return nodeKey(n->mNode) == key; });
+        if (it == mFar.end())
+        {
+            mFar.push_back(std::make_unique<FarNode>());
+            it = mFar.end() - 1;
+        }
+        (*it)->mNode = node; // the neighbours' levels move with the selection
+        (*it)->mSeen = mFrame;
+    }
+    std::erase_if(mFar, [this](const std::unique_ptr<FarNode>& n) { return n->mSeen != mFrame; });
+    if (mFar.empty())
+    {
+        return;
+    }
+
+    // A node is built again once a region under it or beside it changes in the cache: its signature, taken in turns.
+    // A node not yet signed is checked before the round goes on.
+    S32 checks = 0;
+    for (const std::unique_ptr<FarNode>& node : mFar)
+    {
+        if (!node->mSigned && checks < FAR_CHECKS_PER_FRAME)
+        {
+            ++checks;
+            node->mSignature = farSignature(*node);
+            node->mSigned = true;
+            node->mDirty = true;
+        }
+    }
+    for (S32 round = 0; checks < FAR_CHECKS_PER_FRAME && round < (S32)mFar.size(); ++checks, ++round)
+    {
+        FarNode& node = *mFar[mFarCheck++ % mFar.size()];
+        const size_t signature = farSignature(node);
+        if (signature != node.mSignature)
+        {
+            node.mSignature = signature;
+            node.mDirty = true;
+        }
+    }
+
+    S32 builds = 0;
+    for (const std::unique_ptr<FarNode>& node : mFar)
+    {
+        if (builds >= FAR_BUILDS_PER_FRAME)
+        {
+            break;
+        }
+        if (node->mSigned && node->mDirty)
+        {
+            ++builds;
+            LL_PROFILE_ZONE_NAMED("surrounds far build");
+            buildFar(*node);
+            node->mDirty = false;
+        }
+    }
+}
+
+size_t SKSurroundsRenderer::farSignature(const FarNode& node_far)
+{
+    // The regions under the node and the ring around it, whose edge feeds its buffer row; asking also starts their reads.
+    SKTerrainCache& cache = SKTerrainCache::instance();
+    const S32 n = node_far.mNode.sizeCells();
+    size_t signature = 0;
+    for (S32 y = -1; y <= n; ++y)
+    {
+        for (S32 x = -1; x <= n; ++x)
+        {
+            const U64 handle = SKTerrain::handleFromGrid((U32)(node_far.mNode.mX + x), (U32)(node_far.mNode.mY + y));
+            const size_t region = (size_t)cache.get(handle).get();
+            signature = (signature * 1099511628211ull) ^ region;
+        }
+    }
+    return signature;
+}
+
+void SKSurroundsRenderer::buildFar(FarNode& node_far)
+{
+    const S32 level = node_far.mNode.mLevel;
+    const S32 n = node_far.mNode.sizeCells();
+    const S32 step = 1 << level;                 // metres per grid
+    const S32 per_region = CELL_METRES >> level; // grids a region gives at this level
+    const S32 table_w = n + 2;
+
+    struct Source
+    {
+        const SKTerrainPyramid::Level* mTerrain = nullptr;
+        const SKTerrainPyramid::Level* mSurface = nullptr;
+    };
+    std::vector<Source> sources((size_t)table_w * table_w);
+    SKTerrainCache& cache = SKTerrainCache::instance();
+    std::vector<SKTerrainCache::region_ptr> held; // keeps what the table points into for the build
+    held.reserve(sources.size());
+    node_far.mMinZ = std::numeric_limits<F32>::max();
+    node_far.mMaxZ = -std::numeric_limits<F32>::max();
+    bool any = false;
+    for (S32 y = -1; y <= n; ++y)
+    {
+        for (S32 x = -1; x <= n; ++x)
+        {
+            SKTerrainCache::region_ptr region = cache.get(SKTerrain::handleFromGrid((U32)(node_far.mNode.mX + x), (U32)(node_far.mNode.mY + y)));
+            const SKTerrainPyramid* terrain = region ? region->mPyramids[SKTerrain::LAYER_TERRAIN].get() : nullptr;
+            if (!terrain || !terrain->hasData() || terrain->mLevels[level].mSize != (U32)per_region)
+            {
+                continue;
+            }
+            Source& source = sources[(size_t)(y + 1) * table_w + (x + 1)];
+            source.mTerrain = &terrain->mLevels[level];
+            const SKTerrainPyramid* surface = region->mPyramids[SKTerrain::LAYER_SURFACE].get();
+            const bool has_surface = surface && surface->hasData() && surface->mLevels[level].mSize == (U32)per_region;
+            if (has_surface)
+            {
+                source.mSurface = &surface->mLevels[level];
+            }
+            if (x >= 0 && y >= 0 && x < n && y < n)
+            {
+                any = true;
+                node_far.mMinZ = llmin(node_far.mMinZ, terrain->mMin);
+                node_far.mMaxZ = llmax(node_far.mMaxZ, has_surface ? llmax(terrain->mMax, surface->mMax) : terrain->mMax);
+            }
+            held.push_back(std::move(region));
+        }
+    }
+    node_far.mHeight = nullptr;
+    node_far.mMask = 0;
+    if (!any)
+    {
+        return; // nothing cached under it: flat masked tiles are 8c
+    }
+
+    // The node's grid in grids from its corner. A region's lattice 0 is its west neighbour's buffer column, so where that
+    // region is missing the neighbour's last sample repeats, as an unconnected live surface's buffer does.
+    const auto sample = [&](S32 gx, S32 gy) -> F32
+    {
+        const S32 mx = gx * step;
+        const S32 my = gy * step;
+        const S32 rx = floorDiv(mx, CELL_METRES);
+        const S32 ry = floorDiv(my, CELL_METRES);
+        const S32 lx = (mx - rx * CELL_METRES) / step;
+        const S32 ly = (my - ry * CELL_METRES) / step;
+        for (S32 attempt = 0; attempt < 4; ++attempt)
+        {
+            const S32 dx = (attempt & 1) ? 1 : 0;
+            const S32 dy = (attempt & 2) ? 1 : 0;
+            if ((dx && lx != 0) || (dy && ly != 0))
+            {
+                continue;
+            }
+            const S32 tx = rx - dx + 1;
+            const S32 ty = ry - dy + 1;
+            if (tx < 0 || ty < 0 || tx >= table_w || ty >= table_w)
+            {
+                continue;
+            }
+            const Source& source = sources[(size_t)ty * table_w + tx];
+            if (!source.mTerrain)
+            {
+                continue;
+            }
+            const size_t i = (size_t)(dy ? per_region - 1 : ly) * per_region + (dx ? per_region - 1 : lx);
+            F32 h = source.mTerrain->mHeight[i];
+            // The surface where it is known, never below the ground.
+            if (source.mSurface && source.mSurface->mValid[i])
+            {
+                h = llmax(h, source.mSurface->mHeight[i]);
+            }
+            return h;
+        }
+        return NO_HEIGHT;
+    };
+    ALTerrainSurfaceMaps::fill(mHeightStaging, GRIDS_PER_EDGE, 1, [&](S32 gx, S32 gy, F32* texel) { texel[0] = sample(gx, gy); });
+
+    // The apron outside the node takes the nearest grid point inside it where it has no height of its own.
+    const S32 apron = ALTerrainSurfaceMaps::APRON;
+    const S32 size = GRIDS_PER_EDGE + 2 * apron;
+    const auto at = [&](S32 gx, S32 gy) -> F32& { return mHeightStaging[(size_t)(gy + apron) * size + (gx + apron)]; };
+    for (S32 gy = -apron; gy < GRIDS_PER_EDGE + apron; ++gy)
+    {
+        for (S32 gx = -apron; gx < GRIDS_PER_EDGE + apron; ++gx)
+        {
+            const bool inside = gx >= 0 && gy >= 0 && gx < GRIDS_PER_EDGE && gy < GRIDS_PER_EDGE;
+            if (!inside && at(gx, gy) == NO_HEIGHT)
+            {
+                at(gx, gy) = at(llclamp(gx, 0, GRIDS_PER_EDGE - 1), llclamp(gy, 0, GRIDS_PER_EDGE - 1));
+            }
+        }
+    }
+
+    // A patch is drawn only where every grid point it spans has a height.
+    const S32 grids_per_patch = CELL_METRES / FAR_PATCHES;
+    for (S32 py = 0; py < FAR_PATCHES; ++py)
+    {
+        for (S32 px = 0; px < FAR_PATCHES; ++px)
+        {
+            bool whole = true;
+            for (S32 gy = py * grids_per_patch; whole && gy <= (py + 1) * grids_per_patch; ++gy)
+            {
+                for (S32 gx = px * grids_per_patch; gx <= (px + 1) * grids_per_patch; ++gx)
+                {
+                    if (at(gx, gy) == NO_HEIGHT)
+                    {
+                        whole = false;
+                        break;
+                    }
+                }
+            }
+            if (whole)
+            {
+                node_far.mMask |= 1ull << (py * FAR_PATCHES + px);
+            }
+        }
+    }
+    if (node_far.mMask == 0)
+    {
+        return;
+    }
+    {
+        LL_PROFILE_ZONE_NAMED("surrounds far upload");
+        upload(node_far.mHeight, GL_R32F, GL_RED, 1, mHeightStaging);
+        gGL.getTextureSlot(0)->unbind();
+    }
+}
+
+LLViewerFetchedTexture* SKSurroundsRenderer::tile(S32 level, S32 x, S32 y)
+{
+    if (level > MAP_LEVELS)
+    {
+        return nullptr;
+    }
+    Tile& entry = mTiles[tileKey(level, x, y)];
+    if (entry.mTexture.isNull())
+    {
+        // The map's own URL, as LLWorldMipmap::loadObjectsTile builds it, so the map floater's fetch is the same texture.
+        static LLCachedControl<std::string> map_server(gSavedSettings, "CurrentMapServerURL", "");
+        const std::string url = (std::string)map_server + llformat("map-%d-%d-%d-objects.jpg", level, x, y);
+        entry.mTexture = LLViewerTextureManager::getFetchedTextureFromUrl(url, FTT_MAP_TILE, true, LLGLTexture::BOOST_NONE,
+                                                                          LLViewerTexture::LOD_TEXTURE);
+    }
+    entry.mSeen = mFrame;
+    if (entry.mTexture.notNull())
+    {
+        entry.mTexture->setBoostLevel(LLGLTexture::BOOST_MAP);
+    }
+    return entry.mTexture.get();
+}
+
+LLViewerFetchedTexture* SKSurroundsRenderer::tileFor(const SKSurrounds::Node& node, F32 uv[4])
+{
+    const auto ready = [](LLViewerFetchedTexture* tex) { return tex && !tex->isMissingAsset() && tex->getDiscardLevel() >= 0; };
+
+    const SKSurrounds::MapTile own = SKSurrounds::mapTile(node);
+    LLViewerFetchedTexture* tex = tile(own.mLevel, own.mX, own.mY);
+    // The parent is asked for too, so it is there while the next split's tiles load.
+    const S32 parent_level = own.mLevel + 1;
+    const S32 span = 1 << (parent_level - 1);
+    const S32 parent_x = floorDiv(node.mX, span) * span;
+    const S32 parent_y = floorDiv(node.mY, span) * span;
+    LLViewerFetchedTexture* parent = tile(parent_level, parent_x, parent_y);
+    if (ready(tex))
+    {
+        uv[0] = uv[1] = 1.f;
+        uv[2] = uv[3] = 0.f;
+        return tex;
+    }
+    if (ready(parent))
+    {
+        const F32 inv = 1.f / (F32)span;
+        uv[0] = uv[1] = (F32)node.sizeCells() * inv;
+        uv[2] = (F32)(node.mX - parent_x) * inv;
+        uv[3] = (F32)(node.mY - parent_y) * inv;
+        return parent;
+    }
+    return nullptr;
+}
+
+void SKSurroundsRenderer::drawTiled(LLGLSLShader* shader, LLImageGL* height, LLViewerFetchedTexture* tile, const F32 uv[4],
+                                    const S32 edges[4], U64 mask, F32 coarse_ratio, const LLVector3& origin_agent, F32 grid_scale,
+                                    F32 width, LLVertexBuffer* patches, U32 corners)
+{
+    const S32 height_slot = shader->enableTexture(LLShaderMgr::TERRAIN_HEIGHT_MAP);
+    if (height_slot >= 0)
+    {
+        gGL.getTextureSlot(height_slot)->bindSampled(height, ALSamplers::PointClamp);
+    }
+    shader->bindTexture(LLShaderMgr::DIFFUSE_MAP, tile, ALSamplers::BilinearClamp);
+    LLDrawPoolTerrain::bindSurfaceUniforms(shader, origin_agent, grid_scale, width);
+    shader->uniform4fv(LLShaderMgr::SK_SURROUNDS_TILE, 1, uv);
+    shader->uniform4iv(LLShaderMgr::SK_SURROUNDS_EDGES, 1, edges);
+    const GLuint mask_words[4] = { (GLuint)(mask & 0xffffffffull), (GLuint)(mask >> 32), 0u, 0u };
+    shader->uniform4uiv(LLShaderMgr::SK_SURROUNDS_MASK, 1, mask_words);
+    const F32 params[4] = { coarse_ratio, 0.f, 0.f, 0.f };
+    shader->uniform4fv(LLShaderMgr::SK_SURROUNDS_PARAMS, 1, params);
+    patches->setBuffer();
+    patches->drawArrays(LLRender::PATCHES, 0, corners);
+    shader->disableTexture(LLShaderMgr::TERRAIN_HEIGHT_MAP);
+    shader->unbindTexture(LLShaderMgr::DIFFUSE_MAP);
+}
+
+void SKSurroundsRenderer::drawRingTiles()
+{
+    if (mCells.empty() || mPatches.isNull())
+    {
+        return;
+    }
+    LLGLSLShader* shader = nullptr;
+    LLViewerCamera& camera = *LLViewerCamera::getInstance();
+    for (const std::unique_ptr<Cell>& cellp : mCells)
+    {
+        Cell& cell = *cellp;
+        if (!cell.mHasHeights || cell.mLookReady)
+        {
+            continue;
+        }
+        const LLVector3 origin_agent = gAgent.getPosAgentFromGlobal(originGlobal(cell.mX, cell.mY));
+        const F32 half = 0.5f * CELL_METRES;
+        const LLVector4a center(origin_agent.mV[VX] + half, origin_agent.mV[VY] + half, 0.5f * (cell.mMinZ + cell.mMaxZ));
+        const LLVector4a extent(half, half, 0.5f * (cell.mMaxZ - cell.mMinZ) + 1.f);
+        if (!camera.AABBInFrustumNoFarClip(center, extent))
+        {
+            continue;
+        }
+        SKSurrounds::Node node;
+        node.mX = cell.mX;
+        node.mY = cell.mY;
+        node.mLevel = SKSurrounds::LEVEL_SPECIAL;
+        node.mBand = SKSurrounds::Band::Ring;
+        F32 uv[4];
+        LLViewerFetchedTexture* tex = tileFor(node, uv);
+        if (!tex)
+        {
+            continue;
+        }
+        if (!shader)
+        {
+            shader = &gSKSurroundsRingProgram;
+            shader->bind();
+            // A program that did not build binds the stand-in, which has no tessellation stages to take a patch.
+            if (!shader->isComplete())
+            {
+                shader->unbind();
+                return;
+            }
+            gGL.setPatchVertices(PATCH_CORNERS);
+        }
+        // A ring cell is the fine half where a far node of level 0 meets it, and never meets a coarser one.
+        S32 edges[SKSurrounds::SIDE_COUNT];
+        for (S32 s = 0; s < SKSurrounds::SIDE_COUNT; ++s)
+        {
+            edges[s] = cell.mNeighbour[s] == 0 ? 1 : 0;
+        }
+        LLRenderPass::applyModelMatrix(&cell.mModel);
+        drawTiled(shader, cell.mHeight.get(), tex, uv, edges, ~0ull, 1.f, origin_agent, 1.f, (F32)CELL_METRES, mPatches,
+                  PATCHES_PER_EDGE * PATCHES_PER_EDGE * PATCH_CORNERS);
+    }
+    if (shader)
+    {
+        shader->unbind();
+        LLVertexBuffer::unbind();
+        gGLLastMatrix = nullptr;
+        gGL.loadMatrix(camera.getModelview());
+    }
+}
+
+void SKSurroundsRenderer::drawFar()
+{
+    if (mFar.empty())
+    {
+        return;
+    }
+    LLGLSLShader* shader = &gSKSurroundsFarProgram;
+    LLViewerCamera& camera = *LLViewerCamera::getInstance();
+    const bool pinned = gPipeline.shaderInputs().mLocal.mTerrainTessPinned;
+    bool bound = false;
+    for (const std::unique_ptr<FarNode>& node_farp : mFar)
+    {
+        FarNode& node_far = *node_farp;
+        if (node_far.mMask == 0 || node_far.mHeight.isNull())
+        {
+            continue;
+        }
+        const SKSurrounds::Node& node = node_far.mNode;
+        const F32 metres = (F32)node.sizeMetres();
+        const LLVector3 origin_agent = gAgent.getPosAgentFromGlobal(originGlobal(node.mX, node.mY));
+        const F32 half = 0.5f * metres;
+        const LLVector4a center(origin_agent.mV[VX] + half, origin_agent.mV[VY] + half, 0.5f * (node_far.mMinZ + node_far.mMaxZ));
+        const LLVector4a extent(half, half, 0.5f * (node_far.mMaxZ - node_far.mMinZ) + 1.f);
+        if (!camera.AABBInFrustumNoFarClip(center, extent))
+        {
+            continue;
+        }
+        F32 uv[4];
+        LLViewerFetchedTexture* tex = tileFor(node, uv);
+        if (!tex)
+        {
+            continue;
+        }
+
+        LLPointer<LLVertexBuffer>& patches = mFarPatches[node.mLevel];
+        if (patches.isNull())
+        {
+            // The node's 8x8 patches in its own metres, row by row, so a patch's index is its bit in the mask.
+            patches = new LLVertexBuffer(LLVertexBuffer::MAP_VERTEX);
+            if (!patches->allocateBuffer(FAR_PATCHES * FAR_PATCHES * PATCH_CORNERS, 0))
+            {
+                patches = nullptr;
+                continue;
+            }
+            LLStrider<LLVector3> vert;
+            patches->getVertexStrider(vert);
+            const F32 edge = metres / FAR_PATCHES;
+            for (S32 y = 0; y < FAR_PATCHES; ++y)
+            {
+                for (S32 x = 0; x < FAR_PATCHES; ++x)
+                {
+                    const F32 x0 = x * edge, y0 = y * edge;
+                    const F32 x1 = x0 + edge, y1 = y0 + edge;
+                    *vert++ = LLVector3(x0, y0, 0.f);
+                    *vert++ = LLVector3(x1, y0, 0.f);
+                    *vert++ = LLVector3(x1, y1, 0.f);
+                    *vert++ = LLVector3(x0, y1, 0.f);
+                }
+            }
+            patches->unmapBuffer();
+        }
+
+        if (!bound)
+        {
+            shader->bind();
+            if (!shader->isComplete())
+            {
+                shader->unbind();
+                return;
+            }
+            gGL.setPatchVertices(PATCH_CORNERS);
+            bound = true;
+        }
+
+        // Per side: the same size, the fine half of a coarser neighbour's edge, or the coarse side of a finer one,
+        // whose fine half is fractional odd where it is a ring cell at the live spacing.
+        S32 edges[SKSurrounds::SIDE_COUNT];
+        for (S32 s = 0; s < SKSurrounds::SIDE_COUNT; ++s)
+        {
+            const S8 neighbour = node.mNeighbour[s];
+            if (neighbour == SKSurrounds::NO_NEIGHBOUR || neighbour == node.mLevel)
+            {
+                edges[s] = 0;
+            }
+            else if (neighbour > node.mLevel)
+            {
+                edges[s] = 1;
+            }
+            else
+            {
+                edges[s] = (neighbour == SKSurrounds::LEVEL_SPECIAL && !pinned) ? 3 : 2;
+            }
+        }
+        node_far.mModel.setIdentity();
+        node_far.mModel.setTranslation(origin_agent);
+        LLRenderPass::applyModelMatrix(&node_far.mModel);
+        drawTiled(shader, node_far.mHeight.get(), tex, uv, edges, node_far.mMask, 2.f, origin_agent, (F32)(1 << node.mLevel), metres,
+                  patches, FAR_PATCHES * FAR_PATCHES * PATCH_CORNERS);
+    }
+    if (bound)
+    {
+        shader->unbind();
+        LLVertexBuffer::unbind();
+        gGLLastMatrix = nullptr;
+        gGL.loadMatrix(camera.getModelview());
+    }
 }
