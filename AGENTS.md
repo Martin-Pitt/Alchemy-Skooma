@@ -207,7 +207,8 @@ Get-Item -LiteralPath $captureFile | Select-Object FullName, Length, LastWriteTi
 - Analyze with `tracy-csvexport.exe` beside it (not on PATH): `-u -f "<zone>"` every event of a
   zone (split from the right, names hold commas), plain for per-zone stats, `-e` self time,
   `-m` messages. An unfiltered `-u` is ~180 M lines: stream and filter. Main thread is id 2;
-  scripts in `V:\Scratch\tracy`. Unzoned self time is often a coroutine at a yield.
+  start at `V:\Scratch\tracy\INDEX.md` (which script answers what, export names; method in
+  `AGENT.md` beside it). Unzoned self time is often a coroutine at a yield.
 - If the viewer has already exited, a new live capture cannot recover the crash;
   inspect `%APPDATA%\AlchemyNext\logs\Alchemy.log` / `Alchemy.old` instead.
 - Optional MCP workflow and troubleshooting: `D:\viewers\alchemy-skooma\doc\skooma\.tracy-capture.md`.
