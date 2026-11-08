@@ -51,7 +51,6 @@ private:
         std::string mName;
         LLVector3d  mCentre;
         F32         mScore;
-        F64         mDistance;
     };
 
     void onKeystroke();

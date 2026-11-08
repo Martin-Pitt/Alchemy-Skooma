@@ -27,7 +27,6 @@
 
 #include "skworldmapsearch.h"
 
-#include "llagentcamera.h"
 #include "lllineeditor.h"
 #include "llscrolllistctrl.h"
 #include "llframetimer.h"
@@ -104,7 +103,6 @@ void SKWorldMapSearch::refilter()
     mHits.clear();
     if (!mQuery.empty())
     {
-        const LLVector3d focus = gAgentCamera.getFocusGlobal();
         for (const auto& [handle, info] : regions)
         {
             if (!info || info->getName().empty())
@@ -117,12 +115,10 @@ void SKWorldMapSearch::refilter()
                 continue;
             }
             const LLVector3d centre = info->getGlobalOrigin() + LLVector3d(128.0, 128.0, 0.0);
-            const F64 dx = centre.mdV[VX] - focus.mdV[VX];
-            const F64 dy = centre.mdV[VY] - focus.mdV[VY];
-            mHits.push_back({ info->getName(), centre, score, std::sqrt(dx * dx + dy * dy) });
+            mHits.push_back({ info->getName(), centre, score });
         }
         std::sort(mHits.begin(), mHits.end(), [](const Hit& a, const Hit& b)
-                  { return a.mScore != b.mScore ? a.mScore > b.mScore : a.mDistance < b.mDistance; });
+                  { return a.mScore != b.mScore ? a.mScore > b.mScore : a.mName < b.mName; });
         if (mHits.size() > MAX_HITS)
         {
             mHits.resize(MAX_HITS);
@@ -145,8 +141,6 @@ void SKWorldMapSearch::showHits()
         LLSD row;
         row["columns"][0]["column"] = "name";
         row["columns"][0]["value"] = it->mName;
-        row["columns"][1]["column"] = "distance";
-        row["columns"][1]["value"] = llformat("%.1f regions", it->mDistance / 256.0);
         mResults->addElement(row);
     }
     LLRect rect = mResults->getRect();
