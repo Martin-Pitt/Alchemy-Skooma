@@ -148,6 +148,11 @@ namespace skroad::drive
     constexpr F64 TAU_NOISE = 0.4, TAU_KICK = 0.25, KICK_WINDOW = 1.0, KICK_SIZE = 30.0;
     constexpr F64 LOST_S = 8.0;                 // no road this long: give up
     constexpr F64 LOST_BRAKE_S = 6.0;           // and braking to a stop on the road no longer than this past it
+    // The model marks the road seen whenever its walk finds one, a line the driver then refuses (back over the trail)
+    // included: lost the road counts from the last line the driver kept, and no kept line for NO_LINE_STUCK_S, a
+    // road still loading or not, ends the run as stuck (Satellite: refused lines for 8 min after a turn round).
+    constexpr F64 NO_LINE_STUCK_S = 45.0;
+    F64 sLineKeptAt = 0.0;
     // online fit (openpilot's torqued / lagd)
     constexpr F64 GAIN_SANITY = 0.3;
     constexpr S32 DELAY_MIN = -6, DELAY_MAX = 6;           // frames
@@ -3805,6 +3810,7 @@ namespace skroad::drive
     // give up (creeping a few metres between stucks, never the same spot).
     constexpr F64 LADDER_SPOT_M = 10.0, LADDER_FORGET_S = 120.0, LADDER_MAX_WINDOW_S = 120.0;
     constexpr S32 LADDER_TOP = 3, LADDER_MAX_N = 8;
+    constexpr F64 RECOVER_FLIP_DEG = 25.0;     // stuck again facing within this of the way travelled: turned back
     LLVector3d sLadderAt;
     F64 sLadderLast = -1e9;
     S32 sLadderRung = -1;
@@ -4247,6 +4253,7 @@ namespace skroad::drive
     }
 
     void startTurnRound(bool flip, const LLVector3d& pos, F64 yaw, F64 now, const std::string& why);     // below
+    F64 travelYaw();     // below
     std::string placeText(const LLVector3d& pos);
 
     // One recovery step ended (or was given up): which, and the heading before and after, in the log.
@@ -4351,11 +4358,15 @@ namespace skroad::drive
             beginBackOff(now, pos, yaw);
             return true;
         }
-        // backed off here already and stuck again: turned round three-point to the way travelled
+        // backed off here already and stuck again: turned round three-point to the way travelled, or, already facing
+        // it, back the way it came: the way on is blocked (Satellite, a market stall in the lane: a turn round "not
+        // needed" left the car facing it, every line refused as back over the trail)
         sRecoverPhase = 0;
         sRecoverStep = "three-point turn";
-        LL_INFOS("SKRoadDriver") << "recovery three-point turn: heading " << S32(std::lround(yaw * 180 / PI)) << " deg" << LL_ENDL;
-        startTurnRound(false, pos, yaw, now, std::string(why) + " again here: turning round");
+        const bool facing_way = std::fabs(wrap(travelYaw() - yaw)) * 180 / PI < RECOVER_FLIP_DEG;
+        LL_INFOS("SKRoadDriver") << "recovery three-point turn: heading " << S32(std::lround(yaw * 180 / PI)) << " deg"
+                                 << (facing_way ? ", already along the way travelled: back the way it came" : "") << LL_ENDL;
+        startTurnRound(facing_way, pos, yaw, now, std::string(why) + " again here: turning round");
         return false;
     }
 
@@ -6587,6 +6598,7 @@ void sk_road_driver::onSettingChanged(const LLSD& enabled)
         sDriven.clear();
         sHaveLastLine = false;
         sLastSeenRoad = 0.0;
+        sLineKeptAt = 0.0;
         sPrevYawT = -1.0;
         sYawRate = 0.0;
         sMeas.clear();
@@ -7038,6 +7050,7 @@ void sk_road_driver::beforeAgentUpdate()
                 sCross.on = false;
                 // what counted time through the handover starts again
                 sLastSeenRoad = std::max(sLastSeenRoad, now);
+                sLineKeptAt = std::max(sLineKeptAt, now);
                 sStuckSince = -1.0;
                 sStuckTrail.clear();
                 if (!sCrossStalledIn)
@@ -7166,6 +7179,10 @@ void sk_road_driver::beforeAgentUpdate()
         }
     }
     const bool road = !sPath.empty();
+    if (road || sLineKeptAt <= 0.0)
+    {
+        sLineKeptAt = now;
+    }
     noteLineWay(now);
     if (!preview)
     {
@@ -7198,8 +7215,15 @@ void sk_road_driver::beforeAgentUpdate()
     // arrive over seconds), and the wait for it to load (roadNotLoaded, up to ROAD_WAIT_S) decides instead; the
     // mission lost the road 50 m from a fresh rez this way
     // stopped first, on the road (braked below), never left rolling on past its edge onto someone's land
-    if (!road && sTurnPhase == 0 && now - sLastSeenRoad > LOST_S && now > LOST_S && S32(sweep_on) == 0 && !pwmSweepOn() && !bench_on && !roadNotLoaded(pos, yaw)
-        && (speed < 0.5 || now - sLastSeenRoad > LOST_S + LOST_BRAKE_S))
+    if (!road && sTurnPhase == 0 && sRecoverPhase == 0 && now - sLineKeptAt > NO_LINE_STUCK_S && S32(sweep_on) == 0
+        && !pwmSweepOn() && !bench_on)
+    {
+        sendKeys(AGENT_CONTROL_AT_NEG, note);
+        stop("stuck: no road to follow here in " + std::to_string(S32(NO_LINE_STUCK_S)) + " s, stopping");
+        return;
+    }
+    if (!road && sTurnPhase == 0 && now - sLineKeptAt > LOST_S && now > LOST_S && S32(sweep_on) == 0 && !pwmSweepOn() && !bench_on && !roadNotLoaded(pos, yaw)
+        && (speed < 0.5 || now - sLineKeptAt > LOST_S + LOST_BRAKE_S))
     {
         sendKeys(AGENT_CONTROL_AT_NEG, note);
         stop("lost the road, stopping");
