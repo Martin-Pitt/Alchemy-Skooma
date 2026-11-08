@@ -6337,6 +6337,93 @@ namespace skroad::drive
         return best;
     }
 
+    // A line's nearest stretch to a point: across it (+ right) and its way there; false for no line.
+    bool acrossLine(const std::vector<LanePoint>& line, F64 x, F64 y, F64& lat, F64& wx, F64& wy)
+    {
+        F64 best = 1e18;
+        for (size_t i = 0; i + 1 < line.size(); ++i)
+        {
+            const LanePoint& a = line[i];
+            const LanePoint& b = line[i + 1];
+            const F64 sx = b.x - a.x, sy = b.y - a.y, L = std::max(1e-6, std::hypot(sx, sy));
+            const F64 f = std::clamp(((x - a.x) * sx + (y - a.y) * sy) / (L * L), 0.0, 1.0);
+            const F64 dx = x - (a.x + f * sx), dy = y - (a.y + f * sy);
+            const F64 d2 = dx * dx + dy * dy;
+            if (d2 < best)
+            {
+                best = d2;
+                lat = (sy * dx - sx * dy) / L;
+                wx = sx / L;
+                wy = sy / L;
+            }
+        }
+        return best < 1e17;
+    }
+
+    // The line steered by moves sideways at the car no faster than LINE_SLEW_MPS: a fresh line laid a little to one
+    // side of the last (a kit piece's lane beside a plain piece's, 0.6 m; a width measured either side of two
+    // lanes; an edge found on one frame and not the next) is shifted back onto it at the car, the shift let go at
+    // that rate and faded out from LINE_SLEW_NEAR_M to LINE_SLEW_FAR_M ahead, so the steering follows a line that
+    // moves rather than jumps. A step past LINE_SLEW_MAX_M (the model's own lane-jump hold decides those) or a way
+    // turned past LINE_SLEW_DEG (a junction's turn) is taken at once. The overlay is given the line as laid.
+    constexpr F64 LINE_SLEW_MPS = 0.6, LINE_SLEW_MAX_M = 2.5, LINE_SLEW_DEG = 20.0;
+    constexpr F64 LINE_SLEW_NEAR_M = 10.0, LINE_SLEW_FAR_M = 40.0;
+    std::vector<LanePoint> sSteerLine;     // last frame's line as steered by
+    std::vector<LanePoint> sLaidLine;      // this read's line as the model laid it, for the overlay
+    F64 sLineShift = 0.0, sLineShiftAt = -1.0;
+
+    void slewLine(const LLVector3d& pos, F64 now)
+    {
+        const F64 x = pos.mdV[VX], y = pos.mdV[VY];
+        F64 lat_new, nx, ny, lat_old, ox, oy;
+        const F64 dt = sLineShiftAt < 0 ? 0.0 : std::max(0.0, now - sLineShiftAt);
+        sLineShiftAt = now;
+        sLaidLine.clear();
+        if (sPath.size() < 2 || sSteerLine.size() < 2 || sTurnPhase != 0 || sRecoverPhase != 0
+            || !acrossLine(sPath, x, y, lat_new, nx, ny) || !acrossLine(sSteerLine, x, y, lat_old, ox, oy)
+            || nx * ox + ny * oy < std::cos(LINE_SLEW_DEG * PI / 180))
+        {
+            sLineShift = 0.0;
+            sSteerLine = sPath;
+            return;
+        }
+        // the car lat_new right of the laid line, lat_old of the last: shifted by lat_new - lat_old it is where it was
+        F64 shift = lat_new - lat_old;
+        if (std::fabs(shift) > LINE_SLEW_MAX_M)
+        {
+            shift = 0.0;
+        }
+        const F64 let_go = LINE_SLEW_MPS * dt;
+        shift = shift > 0 ? std::max(0.0, shift - let_go) : std::min(0.0, shift + let_go);
+        sLineShift = shift;
+        if (std::fabs(shift) > 0.01)
+        {
+            sLaidLine = sPath;
+            F64 s_car = 0, lat, run = 0;
+            size_t seg = 0;
+            placeOnPath(x, y, s_car, lat, seg);
+            for (size_t i = 0; i < sPath.size(); ++i)
+            {
+                if (i > 0)
+                {
+                    run += std::hypot(sPath[i].x - sPath[i - 1].x, sPath[i].y - sPath[i - 1].y);
+                }
+                const F64 ahead = run - s_car;
+                const F64 w = std::clamp((LINE_SLEW_FAR_M - ahead) / (LINE_SLEW_FAR_M - LINE_SLEW_NEAR_M), 0.0, 1.0);
+                LanePoint& q = sPath[i];
+                q.x += q.ay * shift * w;      // + right: (ay, -ax)
+                q.y -= q.ax * shift * w;
+            }
+        }
+        sSteerLine = sPath;
+    }
+
+    // The line for the overlay: as the model laid it, before slewLine moved it.
+    const std::vector<LanePoint>& lineForView()
+    {
+        return !sLaidLine.empty() && sLaidLine.size() == sPath.size() && !sPathFromStore ? sLaidLine : roadForView();
+    }
+
     // Each vehicle about the car on the road, placed along and across sPath, the line the car keeps.
     std::vector<Vehicle> seeTraffic(const LLViewerObject* car, const LLVector3d& pos, F64 now)
     {
@@ -7227,6 +7314,10 @@ void sk_road_driver::beforeAgentUpdate()
             sPath = std::move(before);
             sView.source = "refused (back over the trail)";
         }
+        if (!preview && std::string(course).empty())
+        {
+            slewLine(pos, now);
+        }
     }
     const bool road = !sPath.empty();
     if (road || sLineKeptAt <= 0.0)
@@ -7244,7 +7335,7 @@ void sk_road_driver::beforeAgentUpdate()
         sView.valid = true;     // the road's pieces and segments are drawn, path or none
         sView.car = pos;
         sView.yaw = yaw;
-        sView.path = roadForView();
+        sView.path = lineForView();
         sView.tapping = 0;
         sView.waiting = false;
         return;
@@ -7755,7 +7846,7 @@ void sk_road_driver::beforeAgentUpdate()
     sView.valid = true;
     sView.car = pos;
     sView.yaw = yaw;
-    sView.path = roadForView();
+    sView.path = lineForView();
     sView.tapping = (keys & AGENT_CONTROL_YAW_POS) ? 1 : (keys & AGENT_CONTROL_YAW_NEG) ? -1 : 0;
     sView.waiting = !road;
     if (S32(sweep_gear) > 0)
