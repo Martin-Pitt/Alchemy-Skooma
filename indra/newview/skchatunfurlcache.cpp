@@ -479,7 +479,7 @@ void SKChatUnfurlCache::requestPage(const SKChatEmbedPtr& embed)
                 }
                 else
                 {
-                    LL_WARNS("SKChatUnfurl") << "no preview from " << url << ": " << raw.size() << " bytes without a title" << LL_ENDL;
+                    LL_DEBUGS("SKChatUnfurl") << "no preview from " << url << ": " << raw.size() << " bytes without a title" << LL_ENDL;
                 }
                 ++*gen;
                 return;
@@ -500,7 +500,7 @@ void SKChatUnfurlCache::requestPage(const SKChatEmbedPtr& embed)
         }
         if (embed->mState == SKChatEmbed::FAILED)
         {
-            LL_WARNS("SKChatUnfurl") << "no preview from " << url << ": " << status.toString() << " (" << code << "), " << raw.size() << " bytes" << LL_ENDL;
+            LL_DEBUGS("SKChatUnfurl") << "no preview from " << url << ": " << status.toString() << " (" << code << "), " << raw.size() << " bytes" << LL_ENDL;
         }
         ++*gen;
     });
