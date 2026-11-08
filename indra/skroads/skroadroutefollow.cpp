@@ -188,8 +188,8 @@ int pickBranch(double x, double y, const std::vector<double>& bearings)
     }
     else
     {
-        LL_INFOS("SKRoadDriver") << "route: junction at " << S32(x) << "," << S32(y) << ": the branch bearing "
-                                 << S32(bearings[best]) << " (plan " << S32(want) << ")" << LL_ENDL;
+        LL_DEBUGS("SKRoadDriver") << "route: junction at " << S32(x) << "," << S32(y) << ": the branch bearing "
+                                  << S32(bearings[best]) << " (plan " << S32(want) << ")" << LL_ENDL;
     }
     return best;
 }
