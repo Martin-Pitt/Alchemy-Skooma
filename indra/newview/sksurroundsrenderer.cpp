@@ -91,6 +91,8 @@ namespace
     {
         const S32 size = GRIDS_PER_EDGE + 2 * ALTerrainSurfaceMaps::APRON;
         image = new LLImageGL(size, size, components, /*usemipmaps=*/false);
+        // Float data has no alpha to analyse, and asking would warn on every upload.
+        image->setNeedsAlphaAndPickMask(false);
         image->setExplicitFormat(internal_format, primary_format, GL_FLOAT);
         image->createGLTexture(0, reinterpret_cast<const U8*>(data.data()));
     }
