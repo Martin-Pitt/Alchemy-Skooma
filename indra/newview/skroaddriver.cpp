@@ -194,6 +194,12 @@ namespace skroad::drive
     // overlay draws it, and a fresh line laid back over it is refused unless the driver turned round on purpose.
     std::deque<TrailPoint> sTrail;          // TrailPoint: skroaddriveinternal.h
     U64 sTrailCount = 0;                        // trail points ever added: sTrail[i] is number sTrailCount - size + i
+    // Pinned against something beside the lane (a low kerb, a deck's edge, a rail: read as road by the model), the
+    // lane line is moved KERB_BIAS_M away from the side of the road the car stood on for the next KERB_BIAS_RUN_M
+    // driven, as a driver keeps off a kerb once hit (Cisseps and Stout: backed off and drove into the same kerb).
+    constexpr F64 KERB_BIAS_M = 1.0, KERB_BIAS_MAX_M = 2.0, KERB_BIAS_RUN_M = 60.0;
+    F64 sKerbBias = 0.0;                        // + right, as SKRoadAutopilotLaneOffset
+    U64 sKerbBiasUntil = 0;                     // while sTrailCount is under this
     U64 sTrailTurnCount = 0;                    // the first point since the last deliberate turn (or start)
     constexpr F64 TRAIL_MAX_M = 5000.0, TRAIL_OFF_FORGET_S = 300.0, TRAIL_JUMP_M = 60.0;
     F64 sTrailOffAt = -1.0;                     // wall clock: when the driver last went off
@@ -4304,6 +4310,47 @@ namespace skroad::drive
                                  << (sRecoverKey > 0 ? "A" : "D") << LL_ENDL;
     }
 
+    // The car stuck off the middle of the road: the lane line kept away from that side for a while (sKerbBias).
+    void noteKerbHit(const LLVector3d& pos)
+    {
+        if (sPath.size() < 2)
+        {
+            return;
+        }
+        size_t at = 0;
+        F64 best = 1e18;
+        for (size_t i = 0; i < sPath.size(); ++i)
+        {
+            const F64 d = (sPath[i].x - pos.mdV[VX]) * (sPath[i].x - pos.mdV[VX]) + (sPath[i].y - pos.mdV[VY]) * (sPath[i].y - pos.mdV[VY]);
+            if (d < best)
+            {
+                best = d;
+                at = i;
+            }
+        }
+        const LanePoint& q = sPath[at];
+        const F64 mx = (q.left_x + q.right_x) / 2, my = (q.left_y + q.right_y) / 2;
+        const F64 across = (pos.mdV[VX] - mx) * q.ay - (pos.mdV[VY] - my) * q.ax;     // + right of the middle
+        if (q.road_w >= OPEN_W || std::fabs(across) < 0.3)
+        {
+            return;
+        }
+        if (sTrailCount >= sKerbBiasUntil)
+        {
+            sKerbBias = 0.0;
+        }
+        sKerbBias = std::clamp(sKerbBias + (across > 0 ? -KERB_BIAS_M : KERB_BIAS_M), -KERB_BIAS_MAX_M, KERB_BIAS_MAX_M);
+        sKerbBiasUntil = sTrailCount + U64(KERB_BIAS_RUN_M / TRAIL_STEP_M);
+        LL_INFOS("SKRoadDriver") << "stuck " << std::fabs(across) << " m " << (across > 0 ? "right" : "left")
+                                 << " of the road's middle: lane line moved " << sKerbBias << " m for " << KERB_BIAS_RUN_M
+                                 << " m" << LL_ENDL;
+    }
+
+    F64 kerbBias()
+    {
+        return sTrailCount < sKerbBiasUntil ? sKerbBias : 0.0;
+    }
+
     // Stuck (or frozen) here: the next rung of the ladder for this spot. False if it gave up (the autopilot off) or
     // handed the car to the three-point turn.
     bool beginRecovery(const char* why, F64 now, const LLVector3d& pos, F64 yaw)
@@ -4344,6 +4391,7 @@ namespace skroad::drive
         sRecoverStarted = now;
         sStuckSince = -1.0;
         sStuckTrail.clear();
+        noteKerbHit(pos);
         if (sLadderRung == 0 && off_deg > SPIN_MIN_DEG)
         {
             // stopped facing well off the road (the kerb, across a junction, past a bend): turned to face along the
@@ -6599,6 +6647,8 @@ void sk_road_driver::onSettingChanged(const LLSD& enabled)
         sHaveLastLine = false;
         sLastSeenRoad = 0.0;
         sLineKeptAt = 0.0;
+        sKerbBias = 0.0;
+        sKerbBiasUntil = 0;
         sPrevYawT = -1.0;
         sYawRate = 0.0;
         sMeas.clear();
@@ -7161,7 +7211,7 @@ void sk_road_driver::beforeAgentUpdate()
         // keep + sKeepExtra: the left lane's line while passing (traffic)
         // walked along the way travelled, not the nose: after a recovery the nose may point anywhere
         std::vector<LanePoint> before = sPath;
-        if (readRoad(pos, wx, wy, speed, keep + (sOn ? sKeepExtra : 0.0), now, course))
+        if (readRoad(pos, wx, wy, speed, keep + (sOn ? sKeepExtra + kerbBias() : 0.0), now, course))
         {
             sPathFrame = sFrame;
         }
