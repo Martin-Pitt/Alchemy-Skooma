@@ -4686,8 +4686,16 @@ void LLMeshPhysicsShapeHandler::processData(LLCore::BufferArray * /* body */, S3
 void SKMeshPhysicsHavokHandler::processFailure(LLCore::HttpStatus status)
 {
     const bool absent = status == LLCore::HttpStatus(HTTP_NOT_FOUND);
-    LL_WARNS(LOG_MESH) << "Error fetching physics_havok for mesh " << mMeshID << ": " << status.toString() << " ("
-                       << status.toTerseString() << ")" << LL_ENDL;
+    // A 404 is the normal answer for a mesh with no havok block; only the other failures are faults.
+    if (absent)
+    {
+        LL_DEBUGS(LOG_MESH) << "No physics_havok for mesh " << mMeshID << LL_ENDL;
+    }
+    else
+    {
+        LL_WARNS(LOG_MESH) << "Error fetching physics_havok for mesh " << mMeshID << ": " << status.toString() << " ("
+                           << status.toTerseString() << ")" << LL_ENDL;
+    }
     gMeshRepo.mThread->physicsHavokFailed(mMeshID,
                                           absent ? SKPhysicsHavokResult::ABSENT : SKPhysicsHavokResult::TRANSIENT);
 }
