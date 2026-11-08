@@ -2040,6 +2040,14 @@ namespace skroad
     constexpr F64 LANE_MARGIN_M = 0.5;
     F64 sCarHalfW = 1.47;
     F64 laneShift(F64 keep) { return sCarHalfW + LANE_MARGIN_M + keep; }
+    // On a road of `width`, no further from the centre than leaves the car LANE_MARGIN_M inside the edge: with two
+    // lanes from TWO_LANES_M (6 m), a road under 7.9 m put the 2.9 m car's side over that margin or onto the kerb,
+    // and a width hovering at TWO_LANES_M moved the line 2 m sideways between frames.
+    F64 laneShiftIn(F64 width, F64 keep)
+    {
+        const F64 room = std::max(0.0, width / 2 - sCarHalfW - LANE_MARGIN_M);
+        return std::clamp(laneShift(keep), -room, room);
+    }
 
     // The right lane at a point: centre, direction, widths. Two lanes from TWO_LANES_M, the right lane's
     // middle a quarter of the width right of centre; `keep` moves the point right of the lane's middle on
@@ -2075,7 +2083,7 @@ namespace skroad
             ay = -ay;
         }
         const S32 lanes = width >= TWO_LANES_M ? 2 : 1;
-        const F64 shift = lanes == 2 ? laneShift(keep) : 0.0;
+        const F64 shift = lanes == 2 ? laneShiftIn(width, keep) : 0.0;
         const F64 lrx = ay, lry = -ax;          // right of travel along the road
         out.x = cx + lrx * shift;
         out.y = cy + lry * shift;
@@ -4331,7 +4339,7 @@ namespace skroad
                 cy = line[i].y;
             }
             const S32 lanes = (!line[i].half && w >= TWO_LANES_M) ? 2 : 1;
-            const F64 shift = lanes == 2 ? laneShift(keep) : 0.0;
+            const F64 shift = lanes == 2 ? laneShiftIn(w, keep) : 0.0;
             LanePoint lp;
             lp.x = cx + uy * shift;
             lp.y = cy - ux * shift;
@@ -5633,7 +5641,7 @@ namespace skroad
         for (size_t i = 0; i < n; ++i)
         {
             lanes[i] = fw[i] >= TWO_LANES_M ? 2 : 1;
-            const F64 shift = lanes[i] == 2 ? laneShift(keep) : 0.0;
+            const F64 shift = lanes[i] == 2 ? laneShiftIn(fw[i], keep) : 0.0;
             px[i] = cx[i] + out[i].ay * shift;
             py[i] = cy[i] - out[i].ax * shift;
         }
@@ -5907,7 +5915,7 @@ namespace skroad
                 ++sView.width_fallbacks;
             }
             const S32 lanes = w >= TWO_LANES_M ? 2 : 1;
-            const F64 shift = lanes == 2 ? laneShift(keep) : 0.0;
+            const F64 shift = lanes == 2 ? laneShiftIn(w, keep) : 0.0;
             LanePoint lp;
             lp.x = cx + uy * shift;
             lp.y = cy - ux * shift;
@@ -8828,7 +8836,7 @@ namespace skroad
                 s_in = (px - sg.cx) * sax + (py - sg.cy) * say;
                 s_out = (sax == sg.ax) ? sg.hi : -sg.lo;
                 const S32 lanes = sg.width >= TWO_LANES_M ? 2 : 1;
-                const F64 shift = lanes == 2 ? laneShift(keep) : 0.0;
+                const F64 shift = lanes == 2 ? laneShiftIn(sg.width, keep) : 0.0;
                 const F64 rx = say, ry = -sax;
                 for (F64 s_ = std::max(s_in, sax == sg.ax ? sg.lo : -sg.hi); s_ <= s_out + 1e-6; s_ += PATH_STEP)
                 {
