@@ -989,7 +989,21 @@ void SKWorldCensus::continueScan(F32 budget_ms)
         mSweepRegions = mScan.mRegions;
         if (mScanMissed)
         {
-            LL_WARNS("SKCensus") << "census full sweep found " << mScanMissed << " parts the dirty set missed" << LL_ENDL;
+            // The dirty set must never miss a part, but while it does, one line a minute with the sums.
+            static F64 next_report = 0.0;
+            static U32 missed_sweeps = 0;
+            static U64 missed_parts = 0;
+            ++missed_sweeps;
+            missed_parts += mScanMissed;
+            const F64 now = LLFrameTimer::getTotalSeconds();
+            if (now >= next_report)
+            {
+                LL_WARNS("SKCensus") << "census full sweeps found parts the dirty set missed: " << missed_parts << " parts in "
+                                     << missed_sweeps << " sweeps" << LL_ENDL;
+                next_report = now + 60.0;
+                missed_sweeps = 0;
+                missed_parts = 0;
+            }
         }
     }
     finishScan();
