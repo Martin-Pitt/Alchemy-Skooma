@@ -6785,11 +6785,21 @@ namespace skroad
         }
         sRoadPath = r.dense;
         std::string fold_why;
+        // said when its reason changes: a fold that persists is found again on every walk
+        static std::string fold_said;
         if (storeFolds(r.dense, fold_why))
         {
             // shown as it is this once (the overlay draws the model), dropped and walked afresh from the car next
-            LL_INFOS("SKRoadDriver") << "road store: holds two roads (" << fold_why << "): dropped" << LL_ENDL;
+            if (fold_why != fold_said)
+            {
+                LL_INFOS("SKRoadDriver") << "road store: holds two roads (" << fold_why << "): dropped" << LL_ENDL;
+                fold_said = fold_why;
+            }
             sStoreFolded = true;
+        }
+        else
+        {
+            fold_said.clear();
         }
         const size_t first = firstAhead(r.dense, x, y, r.car_i > 2 ? r.car_i - 2 : 0);
         sStoreOutFirst = std::min(first, r.dense.size());
@@ -7346,9 +7356,26 @@ namespace skroad
         if (at < 0)
         {
             sView.route = sCommitted.empty() ? "seeded" : "seeded afresh: " + (reseed.empty() ? std::string("off the route") : reseed);
+            // a reseed for the reason last said is counted, not said again, for ROUTE_SAY_GAP_S
+            static std::string route_said;
+            static F64 route_said_at = -1e9;
+            static S32 route_unsaid = 0;
+            constexpr F64 ROUTE_SAY_GAP_S = 10.0;
             if (!sCommitted.empty())
             {
-                LL_INFOS("SKRoadDriver") << "road route " << sView.route << LL_ENDL;
+                if (sView.route != route_said || now - route_said_at > ROUTE_SAY_GAP_S)
+                {
+                    LL_INFOS("SKRoadDriver") << "road route " << sView.route
+                                             << (route_unsaid > 0 ? llformat(" (%d more reseeds since the last line)", route_unsaid) : std::string())
+                                             << LL_ENDL;
+                    route_said = sView.route;
+                    route_said_at = now;
+                    route_unsaid = 0;
+                }
+                else
+                {
+                    ++route_unsaid;
+                }
             }
             sCommitted.clear();
             sOffRouteSince = -1;
@@ -7397,7 +7424,7 @@ namespace skroad
                 if (!why.empty())
                 {
                     store_why = why;
-                    LL_INFOS("SKRoadDriver") << "road store: " << why
+                    LL_DEBUGS("SKRoad") << "road store: " << why
                                              << (k_hit < 0 ? std::string("- nothing ahead re-laid")
                                                            : llformat("- re-laid from step %d of %d (part %s, %.0f m ahead of the car)", k_hit,
                                                                       S32(sStored.steps.size()), sStored.steps[k_hit].part.asString().substr(0, 8).c_str(),
