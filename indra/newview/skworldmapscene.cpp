@@ -905,7 +905,8 @@ void SKWorldMapScene::drawRegionNames(const SKWorldMapFrame& frame, const LLRect
     static LLCachedControl<U32> mode_setting(gSavedSettings, "SKWorldMapRegionNames", NAMES_SQUIRCLE);
     static LLCachedControl<F32> inset(gSavedSettings, "SKWorldMapRegionNameInset", 12.f);
     static LLCachedControl<F32> exponent(gSavedSettings, "SKWorldMapRegionNameSquircle", 4.f);
-    static LLCachedControl<F32> max_height(gSavedSettings, "SKWorldMapRegionNameMaxHeight", 3000.f);
+    static LLCachedControl<F32> fade_start(gSavedSettings, "SKWorldMapRegionNameFadeStart", 2000.f);
+    static LLCachedControl<F32> fade_end(gSavedSettings, "SKWorldMapRegionNameFadeEnd", 3500.f);
     static LLCachedControl<F32> world_size(gSavedSettings, "SKWorldMapRegionNameWorldSize", 12.f);
     const U32 mode = mode_setting;
     if (mode == NAMES_OFF || mode > NAMES_SQUIRCLE)
@@ -913,18 +914,14 @@ void SKWorldMapScene::drawRegionNames(const SKWorldMapFrame& frame, const LLRect
         return;
     }
     const F64 above = frame.mEye.mdV[VZ] - std::max(GROUND_Z, mTerrain.groundAt(frame.mEye, GROUND_Z));
-    const F32 top = std::max(static_cast<F32>(max_height), 1.f);
-    const F32 fade = llclamp((top - static_cast<F32>(above)) / (0.3f * top), 0.f, 1.f);
-    if (fade <= 0.f)
-    {
-        return;
-    }
+    // Each name fades with its distance from the camera, so zooming out thins them from the horizon in.
+    const F64 end = std::max(static_cast<F64>(fade_end), 1.0);
+    const F64 start = llclamp(static_cast<F64>(fade_start), 0.0, end - 1.0);
 
     constexpr size_t MAX_NAMES = 256;
     constexpr F64 LIFT = 1.0;
     const F64 half = REGION_METRES * 0.5;
     const F64 in = llclamp(static_cast<F64>(inset), 0.0, half);
-    const F64 reach = std::max(1500.0, 4.0 * above);
     const Projector proj(frame, rect.getWidth(), rect.getHeight());
     // The ground direction toward the screen's bottom left: back along the view, and left.
     const F64 bl_x = -std::cos(frame.mYaw) - std::sin(frame.mYaw);
@@ -936,6 +933,7 @@ void SKWorldMapScene::drawRegionNames(const SKWorldMapFrame& frame, const LLRect
         LLVector3d mAnchor;
         F32 mX, mY;
         F64 mDepth;
+        F32 mAlpha;
     };
     std::vector<Name> names;
     for (const auto& [handle, info] : LLWorldMap::getInstance()->getRegionMap())
@@ -947,7 +945,7 @@ void SKWorldMapScene::drawRegionNames(const SKWorldMapFrame& frame, const LLRect
         const LLVector3d origin = info->getGlobalOrigin();
         const F64 cx = origin.mdV[VX] + half - frame.mEye.mdV[VX];
         const F64 cy = origin.mdV[VY] + half - frame.mEye.mdV[VY];
-        if (cx * cx + cy * cy > reach * reach)
+        if (cx * cx + cy * cy > end * end)
         {
             continue;
         }
@@ -962,13 +960,19 @@ void SKWorldMapScene::drawRegionNames(const SKWorldMapFrame& frame, const LLRect
             anchor.setVec(origin.mdV[VX] + in, origin.mdV[VY] + in, GROUND_Z);
         }
         anchor.mdV[VZ] = std::max(GROUND_Z, mTerrain.groundAt(anchor, GROUND_Z)) + LIFT;
+        const F64 distance = (anchor - frame.mEye).magVec();
+        if (distance >= end)
+        {
+            continue;
+        }
+        const F32 alpha = static_cast<F32>(llclamp((end - distance) / (end - start), 0.0, 1.0));
         F32 x, y;
         F64 depth;
         if (!proj.project(anchor, x, y, depth) || x < -400.f || y < -40.f || x > rect.getWidth() + 40.f || y > rect.getHeight() + 40.f)
         {
             continue;
         }
-        names.push_back({ &info->getName(), anchor, x, y, depth });
+        names.push_back({ &info->getName(), anchor, x, y, depth, alpha });
     }
     if (names.empty())
     {
@@ -980,7 +984,6 @@ void SKWorldMapScene::drawRegionNames(const SKWorldMapFrame& frame, const LLRect
         names.resize(MAX_NAMES);
     }
 
-    const LLColor4 colour(1.f, 1.f, 1.f, 0.92f * fade);
     const LLFontGL::UIOrigin saved_origin = LLFontGL::sCurOrigin;
     const F32 saved_depth = LLFontGL::sCurDepth;
     LLFontGL::sCurOrigin.set(0.f, 0.f);
@@ -1009,6 +1012,7 @@ void SKWorldMapScene::drawRegionNames(const SKWorldMapFrame& frame, const LLRect
                 continue;
             }
             placed.push_back(box);
+            const LLColor4 colour(1.f, 1.f, 1.f, 0.92f * n.mAlpha);
             font->renderUTF8(*n.mText, 0, n.mX / LLFontGL::sScaleX, n.mY / LLFontGL::sScaleY, colour, LLFontGL::LEFT, LLFontGL::BOTTOM,
                              LLFontGL::NORMAL, LLFontGL::DROP_SHADOW_SOFT);
         }
@@ -1057,6 +1061,7 @@ void SKWorldMapScene::drawRegionNames(const SKWorldMapFrame& frame, const LLRect
                 normal.mV[VX] * scale, normal.mV[VY] * scale, normal.mV[VZ] * scale, 0.f,
                 rel.mV[VX], rel.mV[VY], rel.mV[VZ], 1.f,
             };
+            const LLColor4 colour(1.f, 1.f, 1.f, 0.92f * n.mAlpha);
             gGL.pushMatrix();
             gGL.multMatrix(m);
             font->renderUTF8(*n.mText, 0, 0.f, 0.f, colour, LLFontGL::LEFT, LLFontGL::BOTTOM, LLFontGL::NORMAL, LLFontGL::DROP_SHADOW_SOFT);
