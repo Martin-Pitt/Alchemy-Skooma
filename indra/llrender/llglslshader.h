@@ -547,6 +547,12 @@ public:
 
     U32 mLightHash;
 
+    // <SK:Nexii> UI saturation
+    // Uploads LLRender's UI saturation if it moved since this program last took it. Called on bind and when it changes.
+    void applyUIColorAdjust();
+    U32 mUIColorAdjustHash = 0xFFFFFFFF;
+    // </SK:Nexii>
+
     GLuint mProgramObject;
 #if LL_DEBUG || LL_RELEASE_WITH_DEBUG_INFO
     struct attr_name

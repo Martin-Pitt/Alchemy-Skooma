@@ -613,6 +613,7 @@ public:
 
         // End Alchemy Effects Stack
         TEXT_SHADOW_MODE,                   //  "textShadowMode"
+        UI_SATURATION,                      //  "uiSaturation"  1 draws the UI unchanged, 0 luminance only // <SK:Nexii>
 
 
         SH_PARTIAL,                         //  "shPartial"  (row partial sums of the probe SH projection)
