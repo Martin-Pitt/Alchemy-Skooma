@@ -41,6 +41,9 @@
 #include "lldir.h"
 #include "llaudiodecodemgr.h"
 #include "llassetstorage.h"
+#include "llsdserialize.h" // <SK:Nexii> loudness normalization
+#include "workqueue.h"      // <SK:Nexii> loudness normalization
+#include <optional>         // <SK:Nexii> loudness normalization
 
 
 // necessary for grabbing sounds from sim (implemented in viewer)
@@ -112,6 +115,16 @@ void LLAudioEngine::setDefaults()
 
     for (U32 i = 0; i < LLAudioEngine::AUDIO_TYPE_COUNT; i++)
         mSecondaryGain[i] = 1.0f;
+
+    // <SK:Nexii> loudness normalization -- off until the viewer pushes the
+    // settings down, so nothing is trimmed before the target is known.
+    mLoudnessNormalize = false;
+    mLoudnessTargetLUFS = SK_LUFS_TARGET_DEFAULT;
+    mLoudnessStrength = SK_LUFS_STRENGTH_DEFAULT;
+    mLoudnessBoost = false;
+    mLoudnessIndexDirty = false;
+    mLoudnessUnsaved = 0;
+    // </SK:Nexii>
 }
 
 
@@ -123,6 +136,10 @@ bool LLAudioEngine::init(void* userdata, const std::string &app_title)
 
     allocateListener();
 
+    // <SK:Nexii> loudness normalization
+    loadLoudnessIndex();
+    // </SK:Nexii>
+
     LL_INFOS("AudioEngine") << "LLAudioEngine::init() AudioEngine successfully initialized" << LL_ENDL;
 
     return true;
@@ -131,6 +148,10 @@ bool LLAudioEngine::init(void* userdata, const std::string &app_title)
 
 void LLAudioEngine::shutdown()
 {
+    // <SK:Nexii> loudness normalization -- persist before mAllData goes away.
+    saveLoudnessIndex();
+    // </SK:Nexii>
+
     // Clean up wind source
     cleanupWind();
 
@@ -778,6 +799,231 @@ F32 LLAudioEngine::getSecondaryGain(S32 type)
 {
     return mSecondaryGain[type];
 }
+
+
+// <SK:Nexii> loudness normalization
+
+// Index of measurements, so a cached sound is measured once ever rather than
+// once per session. Asset UUIDs are immutable in SL, so an entry stays correct
+// even if the decoded .dsf it was taken from has since been evicted.
+static const std::string SK_LOUDNESS_INDEX_FILE = "sound_loudness.llsd";
+
+// Stop adding to the index rather than letting it grow without bound. Measuring
+// again is cheap; the entries are only an optimisation.
+static const size_t SK_LOUDNESS_INDEX_MAX = 50000;
+
+// The meter's scheme; an index written under any other is discarded at load.
+static const S32 SK_LOUDNESS_INDEX_VERSION = 2;
+
+// Write the index every this many new measurements, so a crash loses few.
+static const U32 SK_LOUDNESS_INDEX_SAVE_EVERY = 64;
+
+void LLAudioEngine::setLoudnessNormalization(bool enabled, F32 target_lufs, F32 strength, bool boost)
+{
+    if (mLoudnessNormalize == enabled && is_approx_equal(mLoudnessTargetLUFS, target_lufs) &&
+        is_approx_equal(mLoudnessStrength, strength) && mLoudnessBoost == boost)
+    {
+        return;
+    }
+
+    const bool turned_on = enabled && !mLoudnessNormalize;
+    mLoudnessNormalize = enabled;
+    mLoudnessTargetLUFS = target_lufs;
+    mLoudnessStrength = strength;
+    mLoudnessBoost = boost;
+
+    // Re-derive every known trim. Sources read the trim through their current
+    // data every tick, so this takes effect without touching any channel.
+    for (auto& entry : mAllData)
+    {
+        LLAudioData* adp = entry.second;
+        if (!adp)
+        {
+            continue;
+        }
+        adp->refreshLoudnessGain(enabled, target_lufs, strength, boost);
+        if (turned_on && adp->hasDecodedData() && !adp->hasLoudnessMeasurement())
+        {
+            scheduleLoudnessMeasure(adp);
+        }
+    }
+}
+
+void LLAudioEngine::scheduleLoudnessMeasure(LLAudioData* adp)
+{
+    // Measured whether or not normalization is on, so turning it on finds the trims ready.
+    if (!adp || adp->getID().isNull())
+    {
+        return;
+    }
+    if (adp->hasLoudnessMeasurement() || adp->isLoudnessMeasurePending())
+    {
+        return;
+    }
+
+    const LLUUID id = adp->getID();
+
+    // Measured in an earlier session?
+    auto found = mLoudnessIndex.find(id);
+    if (found != mLoudnessIndex.end())
+    {
+        adp->setLoudnessMeasurement(found->second.lufs, found->second.peak);
+        return;
+    }
+
+    LL::WorkQueue::ptr_t main_queue = LL::WorkQueue::getInstance("mainloop");
+    LL::WorkQueue::ptr_t general_queue = LL::WorkQueue::getInstance("General");
+    if (!main_queue || !general_queue)
+    {
+        return;
+    }
+
+    const std::string wav_path = gDirUtilp->getExpandedFilename(LL_PATH_CACHE, id.asString()) + ".dsf";
+    adp->setLoudnessMeasurePending(true);
+
+    // The sound is already audible at this point. Measure off the main loop and
+    // apply the result when it arrives rather than stalling the first play.
+    main_queue->postTo(
+        general_queue,
+        [wav_path]() -> std::optional<LoudnessEntry>
+        {
+            F32 lufs = SK_LUFS_SILENCE;
+            F32 peak = 0.f;
+            if (!sk_lufs_measure_wav_file(wav_path, lufs, peak))
+            {
+                return std::nullopt;
+            }
+            return LoudnessEntry{ lufs, peak };
+        },
+        [id](std::optional<LoudnessEntry> measured)
+        {
+            if (!gAudiop)
+            {
+                return;
+            }
+            auto iter = gAudiop->mAllData.find(id);
+            if (iter == gAudiop->mAllData.end() || !iter->second)
+            {
+                return;
+            }
+
+            iter->second->setLoudnessMeasurePending(false);
+            if (!measured)
+            {
+                return; // unreadable; leave it playing untrimmed
+            }
+
+            // A silent reading is kept too, so the clip is not queued again on every load.
+            iter->second->setLoudnessMeasurement(measured->lufs, measured->peak);
+        });
+}
+
+void LLAudioEngine::recordLoudnessMeasurement(const LLUUID& id, F32 lufs, F32 peak)
+{
+    if (id.isNull() || mLoudnessIndex.size() >= SK_LOUDNESS_INDEX_MAX)
+    {
+        return;
+    }
+    if (mLoudnessIndex.insert({ id, LoudnessEntry{ llmax(lufs, SK_LUFS_SILENCE), peak } }).second)
+    {
+        mLoudnessIndexDirty = true;
+        if (++mLoudnessUnsaved >= SK_LOUDNESS_INDEX_SAVE_EVERY)
+        {
+            saveLoudnessIndex();
+        }
+    }
+}
+
+void LLAudioEngine::loadLoudnessIndex()
+{
+    mLoudnessIndex.clear();
+    mLoudnessIndexDirty = false;
+    mLoudnessUnsaved = 0;
+
+    const std::string path = gDirUtilp->getExpandedFilename(LL_PATH_CACHE, SK_LOUDNESS_INDEX_FILE);
+    llifstream file(path.c_str());
+    if (!file.is_open())
+    {
+        return;
+    }
+
+    LLSD data;
+    if (LLSDSerialize::fromNotation(data, file, LLSDSerialize::SIZE_UNLIMITED) == LLSDParser::PARSE_FAILURE ||
+        !data.isMap())
+    {
+        LL_WARNS("AudioEngine") << "Discarding unreadable sound loudness index" << LL_ENDL;
+        return;
+    }
+
+    // Every scheme change alters every stored value, so another version is dropped whole.
+    if (!data.has("version") || data["version"].asInteger() != SK_LOUDNESS_INDEX_VERSION || !data["entries"].isMap())
+    {
+        LL_INFOS("AudioEngine") << "Discarding sound loudness index from another version" << LL_ENDL;
+        mLoudnessIndexDirty = true;
+        return;
+    }
+
+    const LLSD& entries = data["entries"];
+    for (LLSD::map_const_iterator iter = entries.beginMap(), end = entries.endMap();
+         iter != end && mLoudnessIndex.size() < SK_LOUDNESS_INDEX_MAX; ++iter)
+    {
+        // [loudness, peak]; a loudness of SK_LUFS_SILENCE marks a clip measured silent.
+        LLUUID id;
+        if (LLUUID::parseUUID(iter->first, &id) && id.notNull() &&
+            iter->second.isArray() && iter->second.size() == 2)
+        {
+            mLoudnessIndex[id] = LoudnessEntry{ llmax((F32)iter->second[0].asReal(), SK_LUFS_SILENCE),
+                                                (F32)iter->second[1].asReal() };
+        }
+    }
+
+    LL_DEBUGS("AudioEngine") << "Loaded " << mLoudnessIndex.size() << " sound loudness measurements" << LL_ENDL;
+}
+
+void LLAudioEngine::saveLoudnessIndex()
+{
+    if (!mLoudnessIndexDirty)
+    {
+        return;
+    }
+
+    LLSD entries = LLSD::emptyMap();
+    for (const auto& entry : mLoudnessIndex)
+    {
+        LLSD pair = LLSD::emptyArray();
+        pair.append((LLSD::Real)entry.second.lufs);
+        pair.append((LLSD::Real)entry.second.peak);
+        entries[entry.first.asString()] = pair;
+    }
+    LLSD data = LLSD::emptyMap();
+    data["version"] = SK_LOUDNESS_INDEX_VERSION;
+    data["entries"] = entries;
+
+    // Written beside the index and renamed over it, so a crash mid-write leaves the old one whole.
+    const std::string path = gDirUtilp->getExpandedFilename(LL_PATH_CACHE, SK_LOUDNESS_INDEX_FILE);
+    const std::string temp_path = path + ".tmp";
+    {
+        llofstream file(temp_path.c_str());
+        if (!file.is_open())
+        {
+            LL_WARNS("AudioEngine") << "Unable to write sound loudness index to " << temp_path << LL_ENDL;
+            return;
+        }
+        LLSDSerialize::toNotation(data, file);
+        if (!file.good())
+        {
+            LL_WARNS("AudioEngine") << "Failed writing sound loudness index to " << temp_path << LL_ENDL;
+            return;
+        }
+    }
+    if (LLFile::rename(temp_path, path) != 0)
+    {
+        return;
+    }
+    mLoudnessIndexDirty = false;
+    mLoudnessUnsaved = 0;
+}
+// </SK:Nexii>
 
 F32 LLAudioEngine::getInternetStreamGain()
 {
@@ -1500,7 +1746,11 @@ LLAudioSource::LLAudioSource(const LLUUID& id, const LLUUID& owner_id, const F32
     mCurrentDatap(NULL),
     mQueuedDatap(NULL),
     mSourceID(source_id),
-    mIsTrigger(is_trigger)
+    mIsTrigger(is_trigger),
+    // <SK:Nexii> loudness normalization
+    mLoudnessGain(1.f),
+    mLoudnessDatap(NULL)
+    // </SK:Nexii>
 {
     mLogID.generate();
 }
@@ -1533,12 +1783,46 @@ void LLAudioSource::setChannel(LLAudioChannel *channelp)
 }
 
 
+// <SK:Nexii> loudness normalization -- the trim slews in dB, so a cut eases
+// in as gently as a boost, and a frame hitch cannot turn the slew into a step.
+static const F32 SK_LOUDNESS_SLEW_DB_PER_SEC = 20.f;
+static const F32 SK_LOUDNESS_SLEW_MAX_DT = 0.05f;
+
 void LLAudioSource::update()
 {
     if(mCorrupted)
     {
         return ; //no need to update
     }
+
+    // <SK:Nexii> loudness normalization -- resolve the per-asset trim.
+    //
+    // Ramping is only correct for a trim that changes *under* a sound that is
+    // already audible, which is the cache-hit case: the sound starts untrimmed
+    // and the measurement lands behind it. Before the source holds a channel
+    // there is nothing to click, and ramping up from unity there would give
+    // every sound the very artefact the ramp exists to avoid -- a moment at
+    // the wrong level before settling. So snap until we are playing.
+    {
+        const F32 target = mCurrentDatap ? mCurrentDatap->getLoudnessGain() : 1.f;
+        if (!mChannelp || mCurrentDatap != mLoudnessDatap)
+        {
+            mLoudnessGain = target;
+            mLoudnessDatap = mCurrentDatap;
+        }
+        else if (!is_approx_equal(mLoudnessGain, target) && mLoudnessGain > 0.f && target > 0.f)
+        {
+            const F32 dt = llclamp(LLFrameTimer::getFrameDeltaTimeF32(), 0.f, SK_LOUDNESS_SLEW_MAX_DT);
+            const F32 max_step_db = SK_LOUDNESS_SLEW_DB_PER_SEC * dt;
+            const F32 delta_db = 20.f * log10f(target / mLoudnessGain);
+            mLoudnessGain *= powf(10.f, llclamp(delta_db, -max_step_db, max_step_db) / 20.f);
+        }
+        else
+        {
+            mLoudnessGain = target;
+        }
+    }
+    // </SK:Nexii>
 
     // Prune preload entries that have finished one way or the other.
     // hasPendingPreloads() already filters by hasDecodedData /
@@ -2050,6 +2334,13 @@ LLAudioData::LLAudioData(const LLUUID &uuid) :
     mHasDecodedData(false),
     mHasCompletedDecode(false),
     mHasDecodeFailed(false),
+    // <SK:Nexii> loudness normalization
+    mLoudnessLUFS(SK_LUFS_SILENCE),
+    mLoudnessPeak(0.f),
+    mLoudnessGain(1.f),
+    mLoudnessMeasured(false),
+    mLoudnessMeasurePending(false),
+    // </SK:Nexii>
     mHasWAVLoadFailed(false)
 {
     if (uuid.isNull())
@@ -2078,6 +2369,39 @@ LLAudioData::LLAudioData(const LLUUID &uuid) :
 }
 
 //return false when the audio file is corrupted.
+// <SK:Nexii> loudness normalization
+void LLAudioData::setLoudnessMeasurement(F32 lufs, F32 peak)
+{
+    mLoudnessLUFS = llmax(lufs, SK_LUFS_SILENCE);
+    mLoudnessPeak = peak;
+    mLoudnessMeasured = true;
+    if (gAudiop)
+    {
+        gAudiop->recordLoudnessMeasurement(mID, lufs, peak);
+        refreshLoudnessGain(gAudiop->isLoudnessNormalizationEnabled(),
+                            gAudiop->getLoudnessTargetLUFS(),
+                            gAudiop->getLoudnessStrength(),
+                            gAudiop->isLoudnessBoostEnabled());
+    }
+}
+
+void LLAudioData::refreshLoudnessGain(bool enabled, F32 target_lufs, F32 strength, bool boost)
+{
+    // Unmeasured assets stay at unity so they play at their natural level
+    // rather than waiting on a measurement.
+    mLoudnessGain = (enabled && hasLoudnessMeasurement())
+        ? sk_lufs_gain_for_target(mLoudnessLUFS, target_lufs, strength, mLoudnessPeak)
+        : 1.f;
+
+    // K-weighting discounts sub-bass, so a boost can drag a quiet rumble up far
+    // past how loud it already sounds.
+    if (!boost)
+    {
+        mLoudnessGain = llmin(mLoudnessGain, 1.f);
+    }
+}
+// </SK:Nexii>
+
 bool LLAudioData::load()
 {
     // For now, just assume we're going to use one buffer per audiodata.
@@ -2113,6 +2437,13 @@ bool LLAudioData::load()
 
     std::string wav_path = gDirUtilp->getExpandedFilename(LL_PATH_CACHE, mID.asString()) + ".dsf";
     mHasWAVLoadFailed = !mBufferp->loadWAV(wav_path);
+    // <SK:Nexii> loudness normalization -- cache hits arrive with no
+    // measurement; queue one without holding up playback.
+    if (!mHasWAVLoadFailed)
+    {
+        gAudiop->scheduleLoudnessMeasure(this);
+    }
+    // </SK:Nexii>
     if (mHasWAVLoadFailed)
     {
         // Hrm.  Right now, let's unset the buffer, since it's empty.

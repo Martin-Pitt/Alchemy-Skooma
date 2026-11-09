@@ -459,6 +459,15 @@ void audio_update_volume(bool force_update)
         gAudiop->setSecondaryGain(LLAudioEngine::AUDIO_TYPE_AMBIENT,
                                   mute_ambient() ? 0.f : al_ambient());
 
+        // <SK:Nexii> loudness normalization -- pushed every tick rather than
+        // through a listener; the setter early-outs when nothing changed.
+        static LLCachedControl<bool> loudness_normalize(gSavedSettings, "SKSoundLoudnessNormalize");
+        static LLCachedControl<F32> loudness_target(gSavedSettings, "SKSoundLoudnessTargetLUFS");
+        static LLCachedControl<F32> loudness_strength(gSavedSettings, "SKSoundLoudnessStrength");
+        static LLCachedControl<bool> loudness_boost(gSavedSettings, "SKSoundLoudnessBoost");
+        gAudiop->setLoudnessNormalization(loudness_normalize(), loudness_target(), loudness_strength(), loudness_boost());
+        // </SK:Nexii>
+
         // Streaming Music
 
         if (!progress_view_visible && LLViewerAudio::getInstance()->getForcedTeleportFade())
