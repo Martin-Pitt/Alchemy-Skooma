@@ -200,7 +200,7 @@ bool SKModalView::claim(SKModalMode* mode, S32 priority)
     mClaims.claim(mode, priority);
     notifyTopChange(before, mode);
     updateCoveredFloaters();
-    LL_INFOS("ModalView") << mode->getModalName() << " covers the world" << LL_ENDL;
+    LL_DEBUGS("ModalView") << mode->getModalName() << " covers the world" << LL_ENDL;
     return true;
 }
 
@@ -213,7 +213,7 @@ void SKModalView::release(SKModalMode* mode)
     }
     notifyTopChange(before, mode);
     updateCoveredFloaters();
-    LL_INFOS("ModalView") << mode->getModalName() << " released the world" << LL_ENDL;
+    LL_DEBUGS("ModalView") << mode->getModalName() << " released the world" << LL_ENDL;
     if (mClaims.empty() && !LLApp::isExiting()) // a mode torn down on exit leaves the camera alone
     {
         restoreWorldCamera();
