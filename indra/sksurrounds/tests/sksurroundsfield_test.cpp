@@ -35,6 +35,14 @@ namespace
 {
     using namespace SKSurrounds;
 
+    // Optimised builds may contract and reassociate (/fp:fast, -ffp-contract=fast), and arm64 fuses where x64
+    // does not, so a level may land one ULP from the oracle's; the levels are positive, so their bits order as they do.
+    bool withinUlp(F32 got, U32 want)
+    {
+        const S64 d = static_cast<S64>(std::bit_cast<U32>(got)) - static_cast<S64>(want);
+        return d >= -1 && d <= 1;
+    }
+
     struct FixtureCamera
     {
         F64 mX, mY, mZ;
@@ -170,7 +178,7 @@ namespace
         }
     }
 
-    TEST_CASE("sksurroundsfield: shared edges' levels are the oracle's bit for bit", "[sksurroundsfield]")
+    TEST_CASE("sksurroundsfield: shared edges' levels are the oracle's within an ULP", "[sksurroundsfield]")
     {
         for (const FixtureEdge& e : FIXTURE_EDGES)
         {
@@ -178,8 +186,8 @@ namespace
             CAPTURE(e.mCamera, e.mAX, e.mAY, e.mBX, e.mBY, e.mFine.mKind, e.mCoarse.mKind);
             const F32 lf = sideLevel(c, e.mFine, e.mAX, e.mAY, e.mZA, e.mBX, e.mBY, e.mZB);
             const F32 lc = sideLevel(c, e.mCoarse, e.mAX, e.mAY, e.mZA, e.mBX, e.mBY, e.mZB);
-            CHECK(std::bit_cast<U32>(lf) == e.mFineLevel);
-            CHECK(std::bit_cast<U32>(lc) == e.mCoarseLevel);
+            CHECK(withinUlp(lf, e.mFineLevel));
+            CHECK(withinUlp(lc, e.mCoarseLevel));
             if (e.mFineHalf)
             {
                 const S32 m = fineHalfLevel(lc, e.mFine.mKind != 2);
@@ -194,7 +202,7 @@ namespace
         const F32 a[3] = { 0, 0, 20 }, b[3] = { 16, 0, 20 };
         const F32 away[3] = { 8, 100, 20 }, onEdge[3] = { 8, 0, 20 };
         const F32 want   = (16.f * 48.f) / 100.f;
-        CHECK(std::bit_cast<U32>(edgeLevel(a, b, away, 48.f)) == std::bit_cast<U32>(want));
+        CHECK(withinUlp(edgeLevel(a, b, away, 48.f), std::bit_cast<U32>(want)));
         CHECK(edgeLevel(a, b, onEdge, 48.f) == 64.f);
         CHECK(edgeLevel(a, b, onEdge, 0.f) == 16.f);
 
