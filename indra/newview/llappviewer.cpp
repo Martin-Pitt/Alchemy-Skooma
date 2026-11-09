@@ -90,6 +90,7 @@
 #include "llavataractions.h"
 #include "llmutelist.h"
 #include "llviewerhelp.h"
+#include "llscrollcontainer.h" // <SK:Nexii> Thin scrollbars
 #include "lluicolortable.h"
 #include "llurldispatcher.h"
 #include "llurlhistory.h"
@@ -1000,6 +1001,8 @@ bool LLAppViewer::init()
 
     // Let code in llui access the viewer help floater
     LLUI::getInstance()->mHelpImpl = LLViewerHelp::getInstance();
+
+    LLScrollContainer::sThinScrollbarsEverywhere = gSavedSettings.getBOOL("SkoomaScrollbarThinEverywhere"); // <SK:Nexii> Thin scrollbars
 
     LL_INFOS("InitInfo") << "UI initialization is done." << LL_ENDL ;
 
