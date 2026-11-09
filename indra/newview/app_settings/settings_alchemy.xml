@@ -3345,6 +3345,61 @@
             <key>Value</key>
             <string>c6d5425e-daaf-9998-a013-def53c145585</string>
         </map>
+        <key>SKWorldMapHubFadeEnd</key>
+        <map>
+            <key>Comment</key>
+            <string>On the 3D world map, the distance in metres at which freight hub icons have faded out.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>8000.0</real>
+        </map>
+        <key>SKWorldMapHubFadeStart</key>
+        <map>
+            <key>Comment</key>
+            <string>On the 3D world map, the distance in metres at which freight hub icons begin to fade.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>4000.0</real>
+        </map>
+        <key>SKWorldMapHubs</key>
+        <map>
+            <key>Comment</key>
+            <string>On the 3D world map, show freight hubs: an icon over each hub region for every way of travel it serves, sized by the largest craft it takes.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKWorldMapHubsRefreshDays</key>
+        <map>
+            <key>Comment</key>
+            <string>How many days the 3D world map keeps its downloaded freight hub list before fetching it again (at least 1).</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>7.0</real>
+        </map>
+        <key>SKWorldMapHubsURL</key>
+        <map>
+            <key>Comment</key>
+            <string>The page the 3D world map reads its freight hub list from: an HTML table with Region, Hub Name and Air, Heli, Water, Seaplane, Road, Rail, Space columns. Empty fetches nothing.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>String</string>
+            <key>Value</key>
+            <string>https://sl-gtfo.com/hub.php</string>
+        </map>
         <key>SKWorldMapMoveSpeed</key>
         <map>
             <key>Comment</key>

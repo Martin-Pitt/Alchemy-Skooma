@@ -28,6 +28,7 @@
 #include "llrendertarget.h"
 #include "skworldmapmath.h"
 #include "skworldmaphippo.h"
+#include "skworldmaphubs.h"
 #include "skworldmaproads.h"
 #include "skworldmapstars.h"
 #include "skworldmapterrain.h"
@@ -81,6 +82,7 @@ private:
     void pollAgents(const SKWorldMapFrame& frame, F64 now);
     void drawAgents(const SKWorldMapFrame& frame, const LLRect& rect);
     void drawRegionNames(const SKWorldMapFrame& frame, const LLRect& rect);
+    void drawHubs(const SKWorldMapFrame& frame, const LLRect& rect);
     void drawContinentNames(const SKWorldMapFrame& frame, const LLRect& rect);
 
     LLRenderTarget mScene;
@@ -88,6 +90,7 @@ private:
     LLRenderTarget mBlurB;
     SKWorldMapTiles mTiles;
     SKWorldMapHippo mHippo;
+    SKWorldMapHubs mHubs;
     skworldmap::WorldDisc mShownDisc;           ///< the edge as drawn, easing toward the tiles' latest fit
     F64 mShownAt = 0.0;
     SKWorldMapRoads mRoads;

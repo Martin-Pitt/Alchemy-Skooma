@@ -281,6 +281,7 @@ void SKWorldMapScene::render(const SKWorldMapFrame& frame, const LLRect& rect, F
     pollAgents(frame, now);
     mRoads.updateSource();
     mTerrain.update(now, mRoads.source());
+    mHubs.update(now);
 
     LLGLDepthTest depth(GL_FALSE, GL_FALSE);
     LLGLDisable cull(GL_CULL_FACE);
@@ -289,6 +290,7 @@ void SKWorldMapScene::render(const SKWorldMapFrame& frame, const LLRect& rect, F
     mTiles.update(now);
     tiltShift(frame, rect);
     drawRegionNames(frame, rect);
+    drawHubs(frame, rect);
     drawContinentNames(frame, rect);
     drawAgents(frame, rect);
 
@@ -1097,6 +1099,175 @@ void SKWorldMapScene::drawRegionNames(const SKWorldMapFrame& frame, const LLRect
         popMatrices();
     }
 
+    gGL.flush();
+    gUIProgram.unbind();
+    gGL.setColorMask(true, true);
+    LLFontGL::sCurOrigin = saved_origin;
+    LLFontGL::sCurDepth = saved_depth;
+}
+
+void SKWorldMapScene::drawHubs(const SKWorldMapFrame& frame, const LLRect& rect)
+{
+    // A row of service glyphs over each hub region's middle, each as big as the largest craft it takes, and the
+    // hub's name under it once near enough for region names. Nearest first; a row overlapping a nearer one is left out.
+    static LLCachedControl<bool> enabled(gSavedSettings, "SKWorldMapHubs", true);
+    static LLCachedControl<F32> fade_start(gSavedSettings, "SKWorldMapHubFadeStart", 4000.f);
+    static LLCachedControl<F32> fade_end(gSavedSettings, "SKWorldMapHubFadeEnd", 8000.f);
+    static LLCachedControl<F32> name_fade_start(gSavedSettings, "SKWorldMapRegionNameFadeStart", 2000.f);
+    static LLCachedControl<F32> name_fade_end(gSavedSettings, "SKWorldMapRegionNameFadeEnd", 3500.f);
+    if (!enabled)
+    {
+        return;
+    }
+    const std::vector<SKWorldMapHubs::Placed>& placed = mHubs.placed();
+    if (placed.empty())
+    {
+        return;
+    }
+    const F64 end = std::max(static_cast<F64>(fade_end), 1.0);
+    const F64 start = llclamp(static_cast<F64>(fade_start), 0.0, end - 1.0);
+    const F64 name_end = std::max(static_cast<F64>(name_fade_end), 1.0);
+    const F64 name_start = llclamp(static_cast<F64>(name_fade_start), 0.0, name_end - 1.0);
+
+    constexpr size_t MAX_HUBS = 256;
+    constexpr F64 LIFT = 1.0;
+    const F64 half = REGION_METRES * 0.5;
+    const Projector proj(frame, rect.getWidth(), rect.getHeight());
+    struct Row
+    {
+        U32 mHub;
+        F32 mX, mY;
+        F64 mDepth;
+        F32 mAlpha, mNameAlpha;
+    };
+    std::vector<Row> rows;
+    for (const SKWorldMapHubs::Placed& p : placed)
+    {
+        const LLVector3d origin = from_region_handle(p.mHandle);
+        LLVector3d centre(origin.mdV[VX] + half, origin.mdV[VY] + half, GROUND_Z);
+        const F64 dx = centre.mdV[VX] - frame.mEye.mdV[VX];
+        const F64 dy = centre.mdV[VY] - frame.mEye.mdV[VY];
+        if (dx * dx + dy * dy > end * end)
+        {
+            continue;
+        }
+        centre.mdV[VZ] = std::max(GROUND_Z, mTerrain.groundAt(centre, GROUND_Z)) + LIFT;
+        const F64 distance = (centre - frame.mEye).magVec();
+        if (distance >= end)
+        {
+            continue;
+        }
+        F32 x, y;
+        F64 depth;
+        if (!proj.project(centre, x, y, depth) || x < -200.f || y < -60.f || x > rect.getWidth() + 200.f || y > rect.getHeight() + 60.f)
+        {
+            continue;
+        }
+        const F32 alpha = static_cast<F32>(llclamp((end - distance) / (end - start), 0.0, 1.0));
+        const F32 name_alpha = static_cast<F32>(llclamp((name_end - distance) / (name_end - name_start), 0.0, 1.0));
+        rows.push_back({ p.mHub, x, y, depth, alpha, name_alpha });
+    }
+    if (rows.empty())
+    {
+        return;
+    }
+    std::sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) { return a.mDepth < b.mDepth; });
+    if (rows.size() > MAX_HUBS)
+    {
+        rows.resize(MAX_HUBS);
+    }
+
+    // Air, heli, ship, seaplane, truck, steam train, rocket; a drop zone, which serves none of them, is a parachute.
+    static const std::string GLYPHS[skworldmap::HUB_SERVICES] = {
+        "\xE2\x9C\x88\xEF\xB8\x8F", "\xF0\x9F\x9A\x81", "\xF0\x9F\x9A\xA2", "\xF0\x9F\x9B\xA9\xEF\xB8\x8F",
+        "\xF0\x9F\x9A\x9A", "\xF0\x9F\x9A\x82", "\xF0\x9F\x9A\x80",
+    };
+    static const std::string DROP_ZONE = "\xF0\x9F\xAA\x82";
+    auto fontFor = [](skworldmap::HubSize size) -> const LLFontGL*
+    {
+        switch (size)
+        {
+            case skworldmap::HubSize::Large: return LLFontGL::getFontEmojiHuge();
+            case skworldmap::HubSize::Medium: return LLFontGL::getFontEmojiLarge();
+            default: return LLFontGL::getFontEmojiMedium();
+        }
+    };
+    struct Glyph
+    {
+        const std::string* mText;
+        const LLFontGL* mFont;
+        F32 mWidth;
+    };
+    constexpr F32 GAP = 2.f;
+    const LLFontGL* name_font = LLFontGL::getFontSansSerifSmall();
+    const F32 name_line = static_cast<F32>(name_font->getLineHeight()) * LLFontGL::sScaleY;
+
+    const LLFontGL::UIOrigin saved_origin = LLFontGL::sCurOrigin;
+    const F32 saved_depth = LLFontGL::sCurDepth;
+    LLFontGL::sCurOrigin.set(0.f, 0.f);
+    LLFontGL::sCurDepth = 0.f;
+    glViewport(rect.mLeft, rect.mBottom, rect.getWidth(), rect.getHeight());
+    LLGLEnable blend(GL_BLEND);
+    gGL.setSceneBlendType(LLRender::BT_ALPHA);
+    gGL.setColorMask(true, false);
+    gUIProgram.bind();
+    pushOrtho(static_cast<F32>(rect.getWidth()), static_cast<F32>(rect.getHeight()));
+
+    const std::vector<skworldmap::Hub>& hubs = mHubs.table().hubs();
+    std::vector<LLRectf> taken;
+    std::array<Glyph, skworldmap::HUB_SERVICES> glyphs;
+    for (const Row& r : rows)
+    {
+        const skworldmap::Hub& hub = hubs[r.mHub];
+        size_t count = 0;
+        F32 width = 0.f, height = 0.f;
+        auto add = [&](const std::string& text, skworldmap::HubSize size)
+        {
+            const LLFontGL* font = fontFor(size);
+            const F32 w = font->getWidthF32(text) * LLFontGL::sScaleX;
+            glyphs[count++] = { &text, font, w };
+            width += w + (count > 1 ? GAP : 0.f);
+            height = std::max(height, static_cast<F32>(font->getLineHeight()) * LLFontGL::sScaleY);
+        };
+        for (size_t s = 0; s < skworldmap::HUB_SERVICES; ++s)
+        {
+            if (hub.mSizes[s] != skworldmap::HubSize::None)
+            {
+                add(GLYPHS[s], hub.mSizes[s]);
+            }
+        }
+        if (count == 0)
+        {
+            add(DROP_ZONE, skworldmap::HubSize::Small);
+        }
+        const bool named = r.mNameAlpha > 0.f && !hub.mName.empty();
+        const F32 name_w = named ? name_font->getWidthF32(hub.mName) * LLFontGL::sScaleX : 0.f;
+        const F32 box_w = std::max(width, name_w);
+        const LLRectf box(r.mX - box_w * 0.5f - 2.f, r.mY + height * 0.5f + 2.f, r.mX + box_w * 0.5f + 2.f,
+                          r.mY - height * 0.5f - (named ? name_line : 0.f) - 2.f);
+        if (std::any_of(taken.begin(), taken.end(), [&](const LLRectf& t) { return t.overlaps(box); }))
+        {
+            continue;
+        }
+        taken.push_back(box);
+
+        const LLColor4 colour(1.f, 1.f, 1.f, r.mAlpha);
+        F32 x = r.mX - width * 0.5f;
+        for (size_t g = 0; g < count; ++g)
+        {
+            glyphs[g].mFont->renderUTF8(*glyphs[g].mText, 0, x / LLFontGL::sScaleX, r.mY / LLFontGL::sScaleY, colour, LLFontGL::LEFT,
+                                        LLFontGL::VCENTER, LLFontGL::NORMAL, LLFontGL::DROP_SHADOW_SOFT);
+            x += glyphs[g].mWidth + GAP;
+        }
+        if (named)
+        {
+            const LLColor4 name_colour(1.f, 0.9f, 0.6f, 0.92f * std::min(r.mAlpha, r.mNameAlpha));
+            name_font->renderUTF8(hub.mName, 0, r.mX / LLFontGL::sScaleX, (r.mY - height * 0.5f) / LLFontGL::sScaleY, name_colour,
+                                  LLFontGL::HCENTER, LLFontGL::TOP, LLFontGL::NORMAL, LLFontGL::DROP_SHADOW_SOFT);
+        }
+    }
+
+    popMatrices();
     gGL.flush();
     gUIProgram.unbind();
     gGL.setColorMask(true, true);

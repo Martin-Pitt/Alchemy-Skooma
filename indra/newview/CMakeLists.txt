@@ -1004,6 +1004,8 @@ if(AL_BUILD_VIEWER)
     sktoolmappan.cpp # <SK:Nexii> modal view
     skmapmode.cpp # <SK:Nexii> 3D world map
     skworldmaphippo.cpp # <SK:Nexii> 3D world map
+    skworldmaphubs.cpp # <SK:Nexii> 3D world map
+    skworldmaphubtable.cpp # <SK:Nexii> 3D world map
     skworldmapmath.cpp # <SK:Nexii> 3D world map
     skworldmaproads.cpp # <SK:Nexii> 3D world map
     skworldmapsearch.cpp # <SK:Nexii> 3D world map
@@ -1896,6 +1898,8 @@ if(AL_BUILD_VIEWER)
     sktoolmappan.h # <SK:Nexii> modal view
     skmapmode.h # <SK:Nexii> 3D world map
     skworldmaphippo.h # <SK:Nexii> 3D world map
+    skworldmaphubs.h # <SK:Nexii> 3D world map
+    skworldmaphubtable.h # <SK:Nexii> 3D world map
     skworldmapmath.h # <SK:Nexii> 3D world map
     skworldmaproads.h # <SK:Nexii> 3D world map
     skworldmapsearch.h # <SK:Nexii> 3D world map
@@ -2632,6 +2636,7 @@ if(AL_BUILD_TESTS)
       tests/lutcube_test.cpp
       tests/noise_test.cpp
       tests/skmodalviewmath_test.cpp # <SK:Nexii> modal view
+      tests/skworldmaphubtable_test.cpp # <SK:Nexii> 3D world map
       tests/skworldmapmath_test.cpp # <SK:Nexii> 3D world map
     UNIT
       alagentlocationformat.cpp
@@ -2710,6 +2715,7 @@ if(AL_BUILD_TESTS)
       lutcube.cpp
       noise.cpp
       skmodalviewmath.cpp # <SK:Nexii> modal view
+      skworldmaphubtable.cpp # <SK:Nexii> 3D world map
       skworldmapmath.cpp # <SK:Nexii> 3D world map
     LIBRARIES llui alscript ll::slua llxml ${test_libs}
     SUPPORT
