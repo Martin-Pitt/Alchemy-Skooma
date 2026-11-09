@@ -83,6 +83,16 @@
                   height="500"
                   name="DebugView"
                   width="1024"/>
+      <!-- <SK:Nexii> legend foundation: in-viewport legends -->
+      <panel follows="all"
+             left="0"
+             top="0"
+             mouse_opaque="false"
+             height="500"
+             name="sk_viz_hud"
+             filename="panel_sk_viz_hud.xml"
+             width="1024"/>
+      <!-- </SK:Nexii> -->
       <floater_view follows="all"
                     height="500"
                     left="0"

@@ -720,6 +720,9 @@ with the same filename but different name
 
   <texture name="Shop" file_name="icons/Shop.png" preload="false" />
 
+  <!-- <SK:Nexii> legend foundation: hatch for state rows -->
+  <texture name="SkDataVizHatch" file_name="widgets/SkDataVizHatch.png" preload="true" />
+
   <texture name="SkipBackward_Off" file_name="icons/SkipBackward_Off.png" preload="false" />
   <texture name="SkipForward_Off" file_name="icons/SkipForward_Off.png" preload="false" />
 
