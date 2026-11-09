@@ -58,6 +58,13 @@ vec4 sampleReflectionProbesDebug(vec3 pos)
     return vec4(0, 0, 0, 0);
 }
 
+// <SK:Nexii> Probe volume display: nothing to show without probes.
+vec4 skProbePulseDebug(vec3 pos, vec3 norm)
+{
+    return vec4(0);
+}
+// </SK:Nexii>
+
 void sampleReflectionProbesLegacy(inout vec3 ambenv, inout vec3 glossenv, inout vec3 legacyenv,
         vec2 tc, vec3 pos, vec3 norm, float glossiness, float envIntensity, bool transparent, vec3 amblit_linear)
 {

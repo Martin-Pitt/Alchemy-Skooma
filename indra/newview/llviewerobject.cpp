@@ -57,6 +57,7 @@
 
 #include "alassetblocklist.h"
 #include "albakeproxies.h"
+#include "skworldcensus.h" // <SK:Nexii> census dirty set
 #include "alobjectmotion.h"
 #include "alobjectupdate.h"
 #include "llaudiosourcevo.h"
@@ -2218,6 +2219,12 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
                             LL_WARNS() << "Attempting to recover from parenting cycle!" << LL_ENDL;
                             LL_WARNS() << "Killing " << sent_parentp->getID() << " and " << getID() << LL_ENDL;
                             LL_WARNS() << "Adding to cache miss list" << LL_ENDL;
+                            // <SK:Nexii> census dirty set: the linkset this leaves loses it with no removeChild.
+                            if (SKWorldCensus::instanceExists())
+                            {
+                                SKWorldCensus::getInstance()->noteObjectUpdate(cur_parentp);
+                            }
+                            // </SK:Nexii>
                             setParent(NULL);
                             sent_parentp->setParent(NULL);
                             getRegion()->addCacheMissFull(getLocalID());
@@ -7404,6 +7411,7 @@ bool LLViewerObject::setFlagsWithoutUpdate(U32 flags, bool state)
 void LLViewerObject::setPhysicsShapeType(U8 type)
 {
     mPhysicsShapeUnknown = false;
+    gObjectList.notePhysicsShapeType(mID, type); // <SK:Nexii> census: an edit reaches the type kept for the cached part
     if (type != mPhysicsShapeType)
     {
     mPhysicsShapeType = type;

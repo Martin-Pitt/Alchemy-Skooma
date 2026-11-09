@@ -31,6 +31,9 @@ vec4 getPositionWithDepth(vec2 pos_screen, float depth);
 float getDepth(vec2 pos_screen);
 
 vec4 sampleReflectionProbesDebug(vec3 pos);
+vec4 skProbePulseDebug(vec3 pos, vec3 norm); // <SK:Nexii> Probe volume display
+vec4 getNorm(vec2 screenpos); // <SK:Nexii> Probe volume display
+bool isFarDepth(float d); // <SK:Nexii> Probe volume display
 
 void main()
 {
@@ -38,5 +41,11 @@ void main()
     float depth        = getDepth(tc.xy);
     vec4  pos          = getPositionWithDepth(tc, depth);
 
-    frag_color = max(sampleReflectionProbesDebug(pos.xyz), vec4(0));
+    // <SK:Nexii> Probe volume display: every probe as a frozen scanner pulse on surfaces, nothing in mid-air.
+    if (isFarDepth(depth))
+    {
+        discard;
+    }
+    frag_color = max(skProbePulseDebug(pos.xyz, normalize(getNorm(tc).xyz)), vec4(0));
+    // </SK:Nexii>
 }

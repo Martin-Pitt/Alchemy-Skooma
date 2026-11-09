@@ -1463,6 +1463,28 @@ void LLMeshRepoThread::loadMeshPhysicsHavok(const LLUUID& mesh_id)
 }
 // </SK:Nexii>
 
+// <SK:Nexii> census: a header with no LOD asked for
+// Mutex:  acquires mPendingMutex, mMutex
+void LLMeshRepoThread::loadMeshHeader(const LLVolumeParams& mesh_params)
+{
+    const LLUUID& mesh_id = mesh_params.getSculptID();
+    if (hasHeader(mesh_id))
+    {
+        return;
+    }
+    // An empty pending entry, so a LOD asked for meanwhile joins this request as it would its own.
+    LLMutexLock lock(mPendingMutex);
+    if (mPendingLOD.find(mesh_id) != mPendingLOD.end())
+    {
+        return;
+    }
+    auto& array = mPendingLOD[mesh_id];
+    std::fill(array.begin(), array.end(), 0);
+    LLMutexLock queue_lock(mMutex);
+    mHeaderReqQ.push(HeaderRequest(mesh_params));
+}
+// </SK:Nexii>
+
 void LLMeshRepoThread::lockAndLoadMeshLOD(const LLVolumeParams& mesh_params, S32 lod)
 {
     if (!LLAppViewer::isExiting())
@@ -2881,6 +2903,16 @@ bool LLMeshRepoThread::decompositionReceived(const LLUUID& mesh_id, U8* data, S3
     {
         auto d = std::make_unique<LLModel::Decomposition>(decomp);
         d->mMeshID = mesh_id;
+
+        // <SK:Nexii> physics shapes: the sim keeps analyzed hulls in their stored domain but fits the bounding hull to the object's box
+        if (decomp.has("BoundingVerts") && decomp.has("Min"))
+        {
+            LLSD bounding;
+            bounding["BoundingVerts"] = decomp["BoundingVerts"];
+            d->mBaseHull = LLModel::Decomposition(bounding).mBaseHull;
+        }
+        // </SK:Nexii>
+
         {
             LLMutexLock lock(mLoadedMutex);
             mDecompositionQ.push_back(std::move(d));
@@ -2963,7 +2995,8 @@ LLMeshUploadThread::LLMeshUploadThread(LLMeshUploadThread::instance_list_t& data
                                        bool upload_skin, bool upload_joints, bool lock_scale_if_joint_position,
                                        const std::string & upload_url, LLUUID destination_folder_id, bool do_upload,
                                        LLHandle<LLWholeModelFeeObserver> fee_observer,
-                                       LLHandle<LLWholeModelUploadObserver> upload_observer)
+                                       LLHandle<LLWholeModelUploadObserver> upload_observer,
+                                       const position_offsets_t& position_offsets) // <SK:Nexii> Mesh uploader pivot
   : LLThread("mesh upload"),
     LLCore::HttpHandler(),
     mDiscarded(false),
@@ -2979,6 +3012,7 @@ LLMeshUploadThread::LLMeshUploadThread(LLMeshUploadThread::instance_list_t& data
     mUploadSkin = upload_skin;
     mUploadJoints = upload_joints;
     mLockScaleIfJointPosition = lock_scale_if_joint_position;
+    mPositionOffsets = position_offsets; // <SK:Nexii> Mesh uploader pivot
     mMutex = new LLMutex();
     mPendingUploads = 0;
     mFinished = false;
@@ -3089,6 +3123,14 @@ LLSD llsd_from_file(std::string filename)
     return result;
 }
 
+// <SK:Nexii> Mesh uploader pivot
+LLVector3 LLMeshUploadThread::getPositionOffset(const LLModel* model) const
+{
+    auto it = mPositionOffsets.find(model);
+    return it != mPositionOffsets.end() ? it->second : LLVector3::zero;
+}
+// </SK:Nexii>
+
 void LLMeshUploadThread::packModelIntance(
     LLModel* model,
     LLMeshUploadThread::instance_list_t& instance_list,
@@ -3143,7 +3185,8 @@ void LLMeshUploadThread::packModelIntance(
             mLockScaleIfJointPosition,
             LLModel::WRITE_BINARY,
             false,
-            data.mBaseModel->mSubmodelID);
+            data.mBaseModel->mSubmodelID,
+            getPositionOffset(data.mBaseModel)); // <SK:Nexii> Mesh uploader pivot
 
         data.mAssetData = ostr.str();
         std::string str = ostr.str();
@@ -3171,6 +3214,9 @@ void LLMeshUploadThread::packModelIntance(
         LLQuaternion rot;
         LLMatrix4 transformation = instance.mTransform;
         decomposeMeshMatrix(transformation, pos, rot, scale);
+        // <SK:Nexii> Mesh uploader pivot: the prim stands on its pivot, so the mesh stays where it was placed
+        pos = (-getPositionOffset(data.mBaseModel)) * transformation + mOrigin;
+        // </SK:Nexii>
         instance_entry["position"] = ll_sd_from_vector3(pos);
         instance_entry["rotation"] = ll_sd_from_quaternion(rot);
         instance_entry["scale"] = ll_sd_from_vector3(scale);
@@ -4676,8 +4722,16 @@ void LLMeshPhysicsShapeHandler::processData(LLCore::BufferArray * /* body */, S3
 void SKMeshPhysicsHavokHandler::processFailure(LLCore::HttpStatus status)
 {
     const bool absent = status == LLCore::HttpStatus(HTTP_NOT_FOUND);
-    LL_WARNS(LOG_MESH) << "Error fetching physics_havok for mesh " << mMeshID << ": " << status.toString() << " ("
-                       << status.toTerseString() << ")" << LL_ENDL;
+    // A 404 is the normal answer for a mesh with no havok block; only the other failures are faults.
+    if (absent)
+    {
+        LL_DEBUGS(LOG_MESH) << "No physics_havok for mesh " << mMeshID << LL_ENDL;
+    }
+    else
+    {
+        LL_WARNS(LOG_MESH) << "Error fetching physics_havok for mesh " << mMeshID << ": " << status.toString() << " ("
+                           << status.toTerseString() << ")" << LL_ENDL;
+    }
     gMeshRepo.mThread->physicsHavokFailed(mMeshID,
                                           absent ? SKPhysicsHavokResult::ABSENT : SKPhysicsHavokResult::TRANSIENT);
 }
@@ -4977,7 +5031,7 @@ S32 LLMeshRepository::loadMesh(LLVOVolume* vobj, const LLVolumeParams& mesh_para
     }
 
     // Local mesh: serve the decoded geometry directly from the registry instead
-    // of issuing an asset fetch. The same geometry is served for every LOD.
+    // of issuing an asset fetch. Each LOD gets the file's own model for it, or the High one. // <SK:Nexii> Local mesh LODs
     // Local mesh: decide locality by registry membership, not by whether a decoded
     // volume happens to exist right now. A local-only world id must never fall through
     // to the simulator-backed fetch below -- not even during the brief window of a
@@ -4985,7 +5039,7 @@ S32 LLMeshRepository::loadMesh(LLVOVolume* vobj, const LLVolumeParams& mesh_para
     if (LLLocalMeshMgr::instanceExists() &&
         LLLocalMeshMgr::getInstance()->isLocal(mesh_params.getSculptID()))
     {
-        LLVolume* local_volume = LLLocalMeshMgr::getInstance()->getVolumeForWorldID(mesh_params.getSculptID());
+        LLVolume* local_volume = LLLocalMeshMgr::getInstance()->getVolumeForWorldID(mesh_params.getSculptID(), new_lod); // <SK:Nexii> Local mesh LODs: the file's own model for this LOD
         if (local_volume)
         {
             LLVolume* sys_volume = LLPrimitive::getVolumeManager()->refVolume(mesh_params, new_lod);
@@ -5784,6 +5838,18 @@ void LLMeshRepository::fetchPhysicsShape(const LLUUID& mesh_id)
     }
 }
 
+// <SK:Nexii> census: the header of a mesh no object has asked a LOD of
+void LLMeshRepository::fetchMeshHeader(const LLVolumeParams& mesh_params)
+{
+    const LLUUID& mesh_id = mesh_params.getSculptID();
+    if (mesh_id.isNull() || hasHeader(mesh_id) || (LLLocalMeshMgr::instanceExists() && LLLocalMeshMgr::getInstance()->isLocal(mesh_id)))
+    {
+        return;
+    }
+    mThread->loadMeshHeader(mesh_params);
+}
+// </SK:Nexii>
+
 // <SK:Nexii> physics_havok block
 std::shared_ptr<const SKPhysicsHavokShape> LLMeshRepository::getPhysicsHavok(const LLUUID& mesh_id)
 {
@@ -5807,7 +5873,7 @@ LLModel::Decomposition* LLMeshRepository::getDecomposition(const LLUUID& mesh_id
     // forever, retrying).
     if (LLLocalMeshMgr::instanceExists() && LLLocalMeshMgr::getInstance()->isLocal(mesh_id))
     {
-        return ret;
+        return LLLocalMeshMgr::getInstance()->getDecompositionForWorldID(mesh_id); // <SK:Nexii> Local mesh LODs: the file's physics model
     }
 
     if (mesh_id.notNull())
@@ -5861,7 +5927,7 @@ bool LLMeshRepository::hasPhysicsShape(const LLUUID& mesh_id)
     // decomposition fetch below).
     if (LLLocalMeshMgr::instanceExists() && LLLocalMeshMgr::getInstance()->isLocal(mesh_id))
     {
-        return false;
+        return LLLocalMeshMgr::getInstance()->getDecompositionForWorldID(mesh_id) != nullptr; // <SK:Nexii> Local mesh LODs: the file's physics model
     }
 
     if (const LLMeshHeader* header = mHeaderCache.findValid(mesh_id))
@@ -5942,11 +6008,13 @@ void LLMeshRepository::uploadModel(std::vector<LLModelInstance>& data, const std
                                    LLVector3& scale, bool upload_textures,
                                    bool upload_skin, bool upload_joints, bool lock_scale_if_joint_position,
                                    std::string upload_url, const LLUUID& destination_folder_id, bool do_upload,
-                                   LLHandle<LLWholeModelFeeObserver> fee_observer, LLHandle<LLWholeModelUploadObserver> upload_observer)
+                                   LLHandle<LLWholeModelFeeObserver> fee_observer, LLHandle<LLWholeModelUploadObserver> upload_observer,
+                                   const LLMeshUploadThread::position_offsets_t& position_offsets) // <SK:Nexii> Mesh uploader pivot
 {
     LLMeshUploadThread* thread = new LLMeshUploadThread(data, lod_sources, scale, upload_textures,
                                                         upload_skin, upload_joints, lock_scale_if_joint_position,
-                                                        upload_url, destination_folder_id, do_upload, fee_observer, upload_observer);
+                                                        upload_url, destination_folder_id, do_upload, fee_observer, upload_observer,
+                                                        position_offsets); // <SK:Nexii> Mesh uploader pivot
     mUploadWaitList.push_back(thread);
 }
 
@@ -6905,6 +6973,104 @@ void LLPhysicsDecomp::Request::setStatusMessage(const std::string& msg)
     mStatusMessage = msg;
 }
 
+// <SK:Nexii> physics shapes: fan a flat hull QuickHull leaves empty
+static void fan_flat_hull(const std::vector<LLVector3>& points, LLModel::PhysicsMesh& out)
+{
+    // QuickHull builds nothing for a hull with no volume: every point
+    // coplanar. Such a hull is still the physics shape the sim collides
+    // with -- an analyzed physics model is often only its surfaces --
+    // so fan it from its own points rather than leaving the physics
+    // shape overlay with nothing to draw.
+    //
+    // The asset stores a hull as a point cloud, not a boundary, so put
+    // the points in order around the plane first: fanning them as
+    // stored crosses itself and leaves triangular holes.
+    if (points.size() >= 3)
+    {
+        // The plane: the widest pair gives an edge in it, the point
+        // farthest from that line gives the normal.
+        size_t first = 0;
+        size_t second = 1;
+        F32 widest = 0.f;
+        for (size_t a = 0; a < points.size(); ++a)
+        {
+            for (size_t b = a + 1; b < points.size(); ++b)
+            {
+                F32 distance = (points[b] - points[a]).magVecSquared();
+                if (distance > widest)
+                {
+                    widest = distance;
+                    first = a;
+                    second = b;
+                }
+            }
+        }
+
+        LLVector3 u = points[second] - points[first];
+        LLVector3 normal;
+        widest = 0.f;
+        for (const LLVector3& p : points)
+        {
+            LLVector3 n = u % (p - points[first]);
+            F32 area = n.magVecSquared();
+            if (area > widest)
+            {
+                widest = area;
+                normal = n;
+            }
+        }
+
+        if (widest > 0.f)
+        {
+            normal.normalize();
+            u.normalize();
+            const LLVector3 v = normal % u;
+
+            LLVector3 centre;
+            for (const LLVector3& p : points)
+            {
+                centre += p;
+            }
+            centre /= static_cast<F32>(points.size());
+
+            // Angle around the centre. atan2, not a half-plane and a
+            // cross product: a rectangle's opposite corners are
+            // antipodal, and a cross product of zero there is not a
+            // strict weak ordering, so the sort can leave them crossed.
+            std::vector<size_t> order(points.size());
+            for (size_t j = 0; j < order.size(); ++j)
+            {
+                order[j] = j;
+            }
+            std::sort(order.begin(), order.end(), [&](size_t a, size_t b)
+            {
+                const LLVector3 da = points[a] - centre;
+                const LLVector3 db = points[b] - centre;
+                return atan2f(da * v, da * u) < atan2f(db * v, db * u);
+            });
+
+            for (size_t j = 1; j + 1 < order.size(); ++j)
+            {
+                const LLVector3& v0 = points[order[0]];
+                const LLVector3& v1 = points[order[j]];
+                const LLVector3& v2 = points[order[j + 1]];
+
+                LLVector3 n = (v1 - v0) % (v2 - v0);
+                n.normalize();
+
+                out.mPositions.push_back(v0);
+                out.mPositions.push_back(v1);
+                out.mPositions.push_back(v2);
+
+                out.mNormals.push_back(n);
+                out.mNormals.push_back(n);
+                out.mNormals.push_back(n);
+            }
+        }
+    }
+}
+// </SK:Nexii>
+
 void LLMeshRepository::buildPhysicsMesh(LLModel::Decomposition& decomp)
 {
     decomp.mMesh.resize(decomp.mHull.size());
@@ -6926,6 +7092,12 @@ void LLMeshRepository::buildPhysicsMesh(LLModel::Decomposition& decomp)
         {
             get_vertex_buffer_from_mesh(mesh, decomp.mMesh[i]);
         }
+        // <SK:Nexii> physics shapes: fan a flat hull QuickHull leaves empty
+        else
+        {
+            fan_flat_hull(decomp.mHull[i], decomp.mMesh[i]);
+        }
+        // </SK:Nexii>
     }
 
     if (!decomp.mBaseHull.empty() && decomp.mBaseHullMesh.empty())
@@ -6945,6 +7117,12 @@ void LLMeshRepository::buildPhysicsMesh(LLModel::Decomposition& decomp)
         {
             get_vertex_buffer_from_mesh(mesh, decomp.mBaseHullMesh);
         }
+        // <SK:Nexii> physics shapes: a flat base hull, a wall's or a floor's, is fanned as a decomposition hull is
+        else
+        {
+            fan_flat_hull(decomp.mBaseHull, decomp.mBaseHullMesh);
+        }
+        // </SK:Nexii>
     }
 }
 

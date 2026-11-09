@@ -4,6 +4,7 @@
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Second Life Viewer Source Code
+ * Copyright (C) 2026, Martin "Nexii" Pitt <martin.r.pitt@gmail.com>
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -14,6 +15,10 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  * $/LicenseInfo$
  */
 
@@ -68,6 +73,21 @@ SKPhysicsHavokResult skBuildPhysicsHavokShape(const U8* mesh, size_t mesh_size, 
 // Main thread: draws the simulator's triangles of a mesh with a MOPP under the current matrix.
 // False while they are absent or the mesh has no MOPP, for the caller to draw as before.
 bool skRenderPhysicsHavok(const LLUUID& mesh_id, const LLColor4& color);
+
+// Where a drawn physics shape comes from, for the overlay's Types colouring.
+enum class SKPhysicsShapeSource
+{
+    SIMULATOR,    // the simulator's collision triangles (physics_havok MOPP)
+    PHYSICS_MESH, // the uploaded physics mesh
+    HULLS,        // the convex decomposition's hulls
+    MESH_HULL,    // a mesh's single convex hull
+    PRIM_HULL,    // a prim's convex hull
+    PRIM_MESH,    // a prim's own shape
+    PRIMITIVE,    // a box, sphere or cylinder
+};
+
+// The colour to draw a shape from source with: cost_color unless SKPhysicsShapeTypes is on, then the source's own.
+LLColor4 skPhysicsShapeColor(SKPhysicsShapeSource source, const LLColor4& cost_color, bool wireframe);
 
 // Main thread only, like the rest of LLMeshRepository's maps: shapes by mesh.
 // A mesh being fetched is never evicted and never asked for twice; only finished entries count

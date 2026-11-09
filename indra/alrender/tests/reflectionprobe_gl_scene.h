@@ -511,26 +511,52 @@ vec3 tapIrradianceMap(vec3 pos, vec3 dir, out float w, out float dw, vec3 c, int
     return col;
 }
 
+// <SK:Nexii> Cluster probes: the tiers as reflectionProbeF.glsl's skProbeTier and skProbeMix take them, the default
+// probe below a cluster's fill, below the automatic probes, below the manual ones, each mixed over the last by its
+// distance weight.
+int listedProbeTier(int i)
+{
+    if (i == 0)
+    {
+        return 3;
+    }
+    int p = clamp(abs(refIndex[i].w), 0, 1);
+    return p == 0 && (floatBitsToUint(refParams[i].w) & 0x10000000u) != 0u ? 2 : p;
+}
+
+vec3 listedProbeMix(vec3 col[4], float wsum[4], float dwsum[4])
+{
+    vec3 ret = vec3(0);
+    bool any = false;
+    const int order[4] = int[4](3, 2, 0, 1);
+    for (int k = 0; k < 4; ++k)
+    {
+        int t = order[k];
+        if ((t == 1 || sample_automatic) && wsum[t] > 0.0)
+        {
+            vec3 c = col[t] * (1.0/wsum[t]);
+            ret = any ? mix(ret, c, min(dwsum[t], 1.0)) : c;
+            any = true;
+        }
+    }
+    return ret;
+}
+// </SK:Nexii>
+
 vec3 sampleProbes(vec3 pos, vec3 dir, float lod)
 {
-    float wsum[2];
-    wsum[0] = 0;
-    wsum[1] = 0;
-
-    float dwsum[2];
-    dwsum[0] = 0;
-    dwsum[1] = 0;
-
-    vec3 col[2];
-    col[0] = vec3(0);
-    col[1] = vec3(0);
+    // <SK:Nexii> Cluster probes: the four tiers reflectionProbeF.glsl's skProbeMix mixes.
+    float wsum[4] = float[4](0.0, 0.0, 0.0, 0.0);
+    float dwsum[4] = float[4](0.0, 0.0, 0.0, 0.0);
+    vec3 col[4] = vec3[4](vec3(0), vec3(0), vec3(0), vec3(0));
+    // </SK:Nexii>
 
     for (int idx = 0; idx < probeInfluences; ++idx)
     {
         int i = probeIndex[idx];
-        int p = clamp(abs(refIndex[i].w), 0, 1);
+        int p = listedProbeTier(i); // <SK:Nexii> Cluster probes
 
-        if (p == 0 && !sample_automatic)
+        if (p != 1 && !sample_automatic) // <SK:Nexii> Cluster probes
         {
             continue;
         }
@@ -548,45 +574,23 @@ vec3 sampleProbes(vec3 pos, vec3 dir, float lod)
         }
     }
 
-    if (sample_automatic && wsum[0] > 0.0)
-    {
-        col[0] *= 1.0/wsum[0];
-        if (wsum[1] > 0.0)
-        {
-            col[1] *= 1.0/wsum[1];
-            col[1] = mix(col[0], col[1], min(dwsum[1], 1.0));
-            col[0] = vec3(0);
-        }
-    }
-    else if (wsum[1] > 0.0)
-    {
-        col[1] *= 1.0/wsum[1];
-        col[0] = vec3(0);
-    }
-
-    return col[1]+col[0];
+    return listedProbeMix(col, wsum, dwsum); // <SK:Nexii> Cluster probes
 }
 
 vec3 sampleProbeAmbient(vec3 pos, vec3 dir, vec3 amblit)
 {
-    float wsum[2];
-    wsum[0] = 0;
-    wsum[1] = 0;
-
-    float dwsum[2];
-    dwsum[0] = 0;
-    dwsum[1] = 0;
-
-    vec3 col[2];
-    col[0] = vec3(0);
-    col[1] = vec3(0);
+    // <SK:Nexii> Cluster probes: the four tiers reflectionProbeF.glsl's skProbeMix mixes.
+    float wsum[4] = float[4](0.0, 0.0, 0.0, 0.0);
+    float dwsum[4] = float[4](0.0, 0.0, 0.0, 0.0);
+    vec3 col[4] = vec3[4](vec3(0), vec3(0), vec3(0), vec3(0));
+    // </SK:Nexii>
 
     for (int idx = 0; idx < probeInfluences; ++idx)
     {
         int i = probeIndex[idx];
-        int p = clamp(abs(refIndex[i].w), 0, 1);
+        int p = listedProbeTier(i); // <SK:Nexii> Cluster probes
 
-        if (p == 0 && !sample_automatic)
+        if (p != 1 && !sample_automatic) // <SK:Nexii> Cluster probes
         {
             continue;
         }
@@ -603,23 +607,7 @@ vec3 sampleProbeAmbient(vec3 pos, vec3 dir, vec3 amblit)
         }
     }
 
-    if (sample_automatic && wsum[0] > 0.0)
-    {
-        col[0] *= 1.0/wsum[0];
-        if (wsum[1] > 0.0)
-        {
-            col[1] *= 1.0/wsum[1];
-            col[1] = mix(col[0], col[1], min(dwsum[1], 1.0));
-            col[0] = vec3(0);
-        }
-    }
-    else if (wsum[1] > 0.0)
-    {
-        col[1] *= 1.0/wsum[1];
-        col[0] = vec3(0);
-    }
-
-    return col[1]+col[0];
+    return listedProbeMix(col, wsum, dwsum); // <SK:Nexii> Cluster probes
 }
 
 void doProbeSample(inout vec3 ambenv, inout vec3 glossenv,

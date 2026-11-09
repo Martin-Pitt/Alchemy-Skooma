@@ -718,6 +718,7 @@ public:
     void loadMeshDecomposition(const LLUUID& mesh_id);
     void loadMeshPhysicsShape(const LLUUID& mesh_id);
     void loadMeshPhysicsHavok(const LLUUID& mesh_id); // <SK:Nexii> physics_havok block
+    void loadMeshHeader(const LLVolumeParams& mesh_params); // <SK:Nexii> census: a header with no LOD asked for
 
     //send request for skin info, returns true if header info exists
     //  (should hold onto mesh_id and try again later if header info does not exist)
@@ -840,6 +841,11 @@ public:
     bool            mUploadSkin;
     bool            mUploadJoints;
     bool            mLockScaleIfJointPosition;
+    // <SK:Nexii> Mesh uploader pivot: added to each base model's stored domains
+    typedef boost::unordered_map<const LLModel*, LLVector3> position_offsets_t;
+    position_offsets_t mPositionOffsets;
+    LLVector3       getPositionOffset(const LLModel* model) const;
+    // </SK:Nexii>
     volatile bool   mDiscarded;
 
     LLHost          mHost;
@@ -854,7 +860,8 @@ public:
                        const LLUUID destination_folder_id = LLUUID::null,
                        bool do_upload = true,
                        LLHandle<LLWholeModelFeeObserver> fee_observer = (LLHandle<LLWholeModelFeeObserver>()),
-                       LLHandle<LLWholeModelUploadObserver> upload_observer = (LLHandle<LLWholeModelUploadObserver>()));
+                       LLHandle<LLWholeModelUploadObserver> upload_observer = (LLHandle<LLWholeModelUploadObserver>()),
+                       const position_offsets_t& position_offsets = position_offsets_t()); // <SK:Nexii> Mesh uploader pivot
     ~LLMeshUploadThread();
 
     bool finished() const { return mFinished; }
@@ -1031,6 +1038,16 @@ public:
     LLModel::Decomposition* getDecomposition(const LLUUID& mesh_id);
     void fetchPhysicsShape(const LLUUID& mesh_id);
     bool hasPhysicsShape(const LLUUID& mesh_id);
+    // <SK:Nexii> census: the header of a mesh no object has asked a LOD of, for a part the region has only cached
+    void fetchMeshHeader(const LLVolumeParams& mesh_params);
+    // </SK:Nexii>
+    // <SK:Nexii> physics shapes (skphysicsshape.cpp): the asset's physics mesh block size, 0 when it has none and -1 until its header is in
+    S32 physicsMeshSize(const LLUUID& mesh_id) const
+    {
+        const LLMeshHeader* header = mHeaderCache.findValid(mesh_id);
+        return header ? header->mPhysicsMeshSize : -1;
+    }
+    // </SK:Nexii>
     bool hasSkinInfo(const LLUUID& mesh_id);
     bool hasHeader(const LLUUID& mesh_id) const;
 
@@ -1052,7 +1069,8 @@ public:
                      const LLUUID& destination_folder_id = LLUUID::null,
                      bool do_upload = true,
                      LLHandle<LLWholeModelFeeObserver> fee_observer= (LLHandle<LLWholeModelFeeObserver>()),
-                     LLHandle<LLWholeModelUploadObserver> upload_observer = (LLHandle<LLWholeModelUploadObserver>()));
+                     LLHandle<LLWholeModelUploadObserver> upload_observer = (LLHandle<LLWholeModelUploadObserver>()),
+                     const LLMeshUploadThread::position_offsets_t& position_offsets = LLMeshUploadThread::position_offsets_t()); // <SK:Nexii> Mesh uploader pivot
 
     S32 getMeshSize(const LLUUID& mesh_id, S32 lod) const;
 
