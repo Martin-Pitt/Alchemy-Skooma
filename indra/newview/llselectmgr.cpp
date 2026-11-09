@@ -6324,7 +6324,13 @@ void LLSelectMgr::processObjectProperties(LLMessageSystem* msg, void** user_data
             bool save_textures = !node->mValid;
             if (node->mInventorySerial != inv_serial && node->getObject())
             {
-                node->getObject()->dirtyInventory();
+                // <SK:Nexii> Keep a prim's inventory when a new select node first hears its serial
+                // A new node starts at 0, so only a serial the loaded inventory lacks dirties it.
+                if (node->getObject()->getInventorySerial() != inv_serial)
+                {
+                    node->getObject()->dirtyInventory();
+                }
+                // </SK:Nexii>
 
                 // Even if this isn't object's first udpate, inventory changed
                 // and some of the applied textures might have been in inventory
