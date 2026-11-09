@@ -1,0 +1,14 @@
+#!/bin/sh
+# Skooma: a commit on local that changes only tracked doc/skooma files is public and belongs on
+# main; `git skooma docs` copies it there and local takes main back.  Installed to .git/hooks by
+# `git skooma bootstrap`.
+
+[ "$(git symbolic-ref --quiet --short HEAD 2>/dev/null)" = local ] || exit 0
+# a merge (local taking main) is not a docs commit
+git rev-parse --quiet --verify HEAD^2 >/dev/null 2>&1 && exit 0
+files=$(git diff-tree --no-commit-id --name-only -r HEAD)
+[ -n "$files" ] || exit 0
+printf '%s\n' "$files" | grep -qv '^doc/skooma/' && exit 0
+
+pwsh -NoProfile -File "$(git rev-parse --path-format=absolute --git-common-dir)/skooma/skooma.ps1" docs
+exit 0
