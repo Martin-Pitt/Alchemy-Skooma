@@ -277,7 +277,7 @@ private:
     void fetchObjectCostsCoro(std::string url);
 
     static void reportPhysicsFlagFailure(LLSD &obejectList);
-    void fetchPhisicsFlagsCoro(std::string url);
+    void fetchPhisicsFlagsCoro(std::string url, LLSD idList); // <SK:Nexii> Batch per region (mini-map census).
 
 };
 

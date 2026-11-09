@@ -118,6 +118,10 @@ public:
     /// The highest land under a box's plan corners and middle, -1e9 with no world.
     static F32 landUnder(const LLVector3d& min, const LLVector3d& max);
 
+    /// The decoded cache entries of a part the census last found in a region's object cache with no object of its
+    /// own, and of its linkset's root (the same for a root); false when none is held.
+    bool cachedPart(const LLUUID& part, SKCachedObject& object, SKCachedObject& root) const;
+
     /// Once per frame after objects have moved. Does nothing unless the
     /// census is enabled and something wants it (a demand, or the overlay).
     void update();
@@ -405,6 +409,8 @@ private:
     std::unordered_map<LLUUID, PartCache> mParts;
     /// Cached bodies by region and local id.
     std::unordered_map<LLUUID, CachedDecode> mDecoded;
+    /// A cached part's id to the keys of its own and its root's bodies in mDecoded.
+    std::unordered_map<LLUUID, std::pair<LLUUID, LLUUID>> mCachedParts;
     /// When each part was first visited with its physics shape type unknown; the session's wait for it, for the log.
     std::unordered_map<LLUUID, F64> mUnknownSince;
     U32 mKnownAfterCount = 0;

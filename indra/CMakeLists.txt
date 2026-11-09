@@ -15,7 +15,7 @@ set(
 )
 
 # Set our base channel
-set(AL_CHANNEL "Alchemy Test" CACHE STRING "Viewer Channel Name")
+set(AL_CHANNEL "Alchemy Skooma" CACHE STRING "Viewer Channel Name") # <SK:Nexii> Skooma channel branding
 
 # Default deploy grid
 set(AL_GRID agni CACHE STRING "Target Grid")
@@ -240,7 +240,7 @@ set(AL_SENTRY_DSN "" CACHE STRING "The DSN of the Sentry project crash reports g
 # Default Tracy profiling on for test builds, but off for all others
 set(BUILDING_TEST_CHANNEL OFF)
 string(TOLOWER "${AL_CHANNEL}" channel_lower)
-if(channel_lower MATCHES "^alchemy test")
+if(channel_lower MATCHES "^alchemy (test|skooma)") # <SK:Nexii> Skooma channel keeps Tracy available
   set(BUILDING_TEST_CHANNEL ON)
 endif()
 cmake_dependent_option(
@@ -253,6 +253,11 @@ cmake_dependent_option(
 option(AL_ENABLE_TRACY_ON_DEMAND "Use on-demand Tracy profiling." ON)
 option(AL_ENABLE_TRACY_LOCAL_ONLY "Disallow remote Tracy profiling." ON)
 option(AL_ENABLE_TRACY_GPU "Use Tracy GPU profiling" OFF)
+option(
+  AL_ENABLE_TRACY_MEMORY
+  "Report every allocation to Tracy (multiplies capture size; a stalled profiler then backs up in the viewer)"
+  OFF
+)
 option(AL_BUILD_TRACY_GUI "Enable building Tracy profiler GUI" OFF)
 
 # Debug logging stays available in Release builds of the Test channel only.
@@ -603,6 +608,7 @@ add_subdirectory(llprimitive)
 add_subdirectory(llrender)
 add_subdirectory(skcensus) # <SK:Nexii> census
 add_subdirectory(skair) # <SK:Nexii> air cells
+add_subdirectory(skroads) # <SK:Nexii> roads
 add_subdirectory(skrooms) # <SK:Nexii> rooms and spaces
 add_subdirectory(skprobes) # <SK:Nexii> room probe placement
 add_subdirectory(llfilesystem)
@@ -613,6 +619,8 @@ add_subdirectory(llwindow)
 add_subdirectory(llxml)
 add_subdirectory(llplugin)
 add_subdirectory(llui)
+add_subdirectory(skterrain) # <SK:Nexii> Region terrain cache
+add_subdirectory(sksurrounds) # <SK:Nexii> Distant regions
 add_subdirectory(viewer_components)
 
 if(AL_BUILD_ORACLE)

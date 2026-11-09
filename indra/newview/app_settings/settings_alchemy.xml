@@ -6186,6 +6186,318 @@
             <key>Value</key>
             <string>All</string>
         </map>
+        <key>SKRoadAutopilot</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: while on and seated in a vehicle on a lane-strip road, drives it in the right lane with the keys a person would press. Any movement key takes over and turns it off. Logs to sk-road-autopilot.csv.
+            </string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKRoadAutopilotLaneOffset</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: metres the road autopilot keeps further right (negative: toward the centre line) of its lane's line on two-lane roads, which lies the car's half width and 0.5 m right of the road's centre line. A single-lane road is driven down its middle.
+            </string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.0</real>
+        </map>
+        <key>SKRoadAutopilotLearn</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: let the road autopilot learn the vehicle's turn per tap and its delay while it drives (within 30 % of the Police Interceptor's fit), kept for the same vehicle.
+            </string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKRoadAutopilotOverlay</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: while the road autopilot drives, draw what it sees and decides in the world: road shapes in reach (faint), cross-sections across the road edge to edge (blue), the lane path it keeps, walked ahead (amber), the car predicted with no new tap (violet), a tap (red bar on that side), waiting for the road (red ring).
+            </string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKRoadAutopilotUseGears</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: drive as Nexii does, W held and the speed set by gear (up/down), knowing the gear from what the vehicle says in chat ("Gear 2", "Reverse"); never below Gear 1. Off: hold the speed by pulsing W.
+            </string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKRoadAutopilotLookAhead</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: metres of road the autopilot lays out ahead at the least (overlay and junctions); faster, it looks as far as 2.7 s of travel. 10 to 200; road pieces are read 15 m further.
+            </string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>100.0</real>
+        </map>
+        <key>SKRoadAutopilotOverlayDetail</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: the road autopilot's overlay with its working detail (the road's pieces, segments, joins, cross-sections) rather than just the road's edges, centre and the line it drives.
+            </string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKRoadAutopilotGoal</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: what the road autopilot does at a junction. explore: the branch leading most to road not yet driven (sk-road-driven.json, every road driven, by the autopilot or by hand), weighed against carrying the road on. carry: the road carried on (straightest, same surface). route: the planned route to SKRoadAutopilotRouteTo (explore where there is none).
+            </string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>String</string>
+            <key>Value</key>
+            <string>explore</string>
+        </map>
+        <key>SKRoadAutopilotRouteCost</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: what the route goal weighs a route by. shortest: length, a candidate road x1.3 and a private one x1.5. fastest: seconds at a measured or assumed speed per kind of road, with junctions and turns.
+            </string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>String</string>
+            <key>Value</key>
+            <string>shortest</string>
+        </map>
+        <key>SKRoadAutopilotRouteDataset</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: the road dataset release folder (nodes.geojson, core/private/candidates ways) the route goal plans over.
+            </string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>String</string>
+            <key>Value</key>
+            <string>V:/Scratch/worldmap/dataset/release/0.1.0-sample</string>
+        </map>
+        <key>SKRoadAutopilotRouteTo</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: the route goal's target, "x,y" in global metres; empty for none.
+            </string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>String</string>
+            <key>Value</key>
+            <string></string>
+        </map>
+        <key>SKRoadAutopilotJumps</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: the road autopilot drives a jump the road model finds (a ramp's lip with the road going on past a gap). Off: it stops short of the lip and asks the drive mission to place the car across, where at least 50 m of road goes on past the landing.
+            </string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKRoadAutopilotMaxGear</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: the highest gear the road autopilot shifts into (it picks the gear from the bends ahead and each gear's measured top speed; 0: no limit).
+            </string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>S32</string>
+            <key>Value</key>
+            <integer>4</integer>
+        </map>
+        <key>SKRoadAutopilotArena</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: lay the road autopilot's test courses as closed tracks inside the parcel the car is on (a flat open one), centred and sized to fit: the same line every run and the car stays on the parcel. Off: laid out from where the car stands.
+            </string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKRoadAutopilotBenchFrom</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: the handling bench test to begin from (0: the first). Kept as the bench goes, so a bench stopped part way picks up where it left off; set back to 0 at its end.
+            </string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>S32</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKRoadAutopilotBench</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: run the road autopilot's handling benchmark on open flat land (a sandbox): the steering sweep in each gear up to SKRoadAutopilotMaxGear, then in each gear straight, circles of 60, 30 and 15 m, figure 8s of 30 and 15 m and two slaloms, a minute each. Every drive-log row is tagged with its test; bench_score.py scores them. Turns itself off at the end.
+            </string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKRoadAutopilotSweep</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: a steering sweep on open flat land (a sandbox; no road needed), in this gear (0: off): W held, circles at fixed tap rhythms (a tap of 1-16 frames every 0.1 or 0.3 s, then the key held), each 5 s left, 3 s straight, 5 s right, 3 s straight, about 3 minutes a gear. Measures each rhythm's steady turn rate and the car's response times (fit_sweep.py).
+            </string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>S32</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKRoadAutopilotSteer</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: how the road autopilot steers. pwm: each frame, the turn rate the line ahead wants, met by a rhythm of taps (short taps far apart in a gentle bend, long ones close together in a tight one). plan: the tap planner, rolling the car forward and choosing between tap plans.
+            </string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>String</string>
+            <key>Value</key>
+            <string>pwm</string>
+        </map>
+        <key>SKRoadAutopilotTestCourse</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: drive a synthetic test course instead of the road, laid out from where the car stands when it is set or the autopilot starts: straight, slalom (or slalom_4_40: amplitude and wavelength, m), circle (or circle20: radius, m) or figure8 (or figure8_15: each loop's radius) (empty: the road), or lap: the line recorded on a real road in sk-road-course.json (logs folder). For tuning the controller.
+            </string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>String</string>
+            <key>Value</key>
+            <string />
+        </map>
+        <key>SKRoadAutopilotProbeLong</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: with SKRoadAutopilotProbe, probe long holds (0.5, 0.75, 1, 1.5, 2 s, alternating sides), each left alone for 2 s after release, to measure how a held key's turn builds and carries on. Use on a test course on open flat land.
+            </string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKRoadAutopilotProbe</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: while the road autopilot drives, mix in isolated test taps to measure the car's response: when the car is on the line, aligned and steady, one tap of each planned length in turn, alternating sides, left alone for 1.5 s; the autopilot steers it back to the line between them. Best on a long straight.
+            </string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKRoadAutopilotSpeed</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: metres per second the road autopilot holds between region boundaries (6 across them).
+            </string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>8.0</real>
+        </map>
+        <key>SKRoadKitLibrary</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: a kit lane library (JSON, from the road-kit geometry study) the road autopilot takes each known road kit's drivable deck and lanes from, in place of its generic lane rule. Empty: none.
+            </string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>String</string>
+            <key>Value</key>
+            <string />
+        </map>
+        <key>SKRoadSignLibrary</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: a road sign library (JSON keyed by texture id, from V:\Scratch\worldmap\signs) the road autopilot reads signs beside the road by: road closed or road ends ends the road at the sign; a speed limit or warning is offered to the driver. Empty: none.
+            </string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>String</string>
+            <key>Value</key>
+            <string />
+        </map>
         <key>ShowAdvancedHoverTips</key>
         <map>
             <key>Comment</key>

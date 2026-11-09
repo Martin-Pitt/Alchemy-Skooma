@@ -91,6 +91,7 @@
 #include "llvisualeffect.h"
 #include "rlvactions.h"
 #include "rlvcommon.h"
+#include "skroaddriver.h" // <SK:Nexii>
 // [/RLVa:KB]
 
 #if LL_DARWIN && LL_SDL_WINDOW
@@ -1201,6 +1202,7 @@ void settings_setup_listeners()
 // [/RLVa:KB]
     setting_setup_signal_listener(gSavedSettings, "AlchemyHudTextFadeDistance", LLHUDText::onFadeSettingsChanged);
     setting_setup_signal_listener(gSavedSettings, "AlchemyHudTextFadeRange", LLHUDText::onFadeSettingsChanged);
+    setting_setup_signal_listener(gSavedSettings, "SKRoadAutopilot", sk_road_driver::onSettingChanged); // <SK:Nexii>
 }
 
 #if TEST_CACHED_CONTROL
