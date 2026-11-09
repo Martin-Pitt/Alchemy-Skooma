@@ -27,6 +27,7 @@
 #include "sksurroundsfield.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include <bit>
 #include <cstring>
@@ -35,12 +36,13 @@ namespace
 {
     using namespace SKSurrounds;
 
-    // Optimised builds may contract and reassociate (/fp:fast, -ffp-contract=fast), and arm64 fuses where x64
-    // does not, so a level may land one ULP from the oracle's; the levels are positive, so their bits order as they do.
-    bool withinUlp(F32 got, U32 want)
+    // Optimised builds may contract and reassociate (/fp:fast, -ffp-contract=fast), so the levels land a few ULPs
+    // from the oracle's on every compiler (2 at most on MSVC x64, 2026-11-09).
+    constexpr uint64_t LEVEL_ULPS = 4;
+
+    auto nearLevel(U32 want)
     {
-        const S64 d = static_cast<S64>(std::bit_cast<U32>(got)) - static_cast<S64>(want);
-        return d >= -1 && d <= 1;
+        return Catch::Matchers::WithinULP(std::bit_cast<F32>(want), LEVEL_ULPS);
     }
 
     struct FixtureCamera
@@ -178,7 +180,7 @@ namespace
         }
     }
 
-    TEST_CASE("sksurroundsfield: shared edges' levels are the oracle's within an ULP", "[sksurroundsfield]")
+    TEST_CASE("sksurroundsfield: shared edges' levels are the oracle's within a few ULPs", "[sksurroundsfield]")
     {
         for (const FixtureEdge& e : FIXTURE_EDGES)
         {
@@ -186,8 +188,8 @@ namespace
             CAPTURE(e.mCamera, e.mAX, e.mAY, e.mBX, e.mBY, e.mFine.mKind, e.mCoarse.mKind);
             const F32 lf = sideLevel(c, e.mFine, e.mAX, e.mAY, e.mZA, e.mBX, e.mBY, e.mZB);
             const F32 lc = sideLevel(c, e.mCoarse, e.mAX, e.mAY, e.mZA, e.mBX, e.mBY, e.mZB);
-            CHECK(withinUlp(lf, e.mFineLevel));
-            CHECK(withinUlp(lc, e.mCoarseLevel));
+            CHECK_THAT(lf, nearLevel(e.mFineLevel));
+            CHECK_THAT(lc, nearLevel(e.mCoarseLevel));
             if (e.mFineHalf)
             {
                 const S32 m = fineHalfLevel(lc, e.mFine.mKind != 2);
@@ -202,7 +204,7 @@ namespace
         const F32 a[3] = { 0, 0, 20 }, b[3] = { 16, 0, 20 };
         const F32 away[3] = { 8, 100, 20 }, onEdge[3] = { 8, 0, 20 };
         const F32 want   = (16.f * 48.f) / 100.f;
-        CHECK(withinUlp(edgeLevel(a, b, away, 48.f), std::bit_cast<U32>(want)));
+        CHECK_THAT(edgeLevel(a, b, away, 48.f), nearLevel(std::bit_cast<U32>(want)));
         CHECK(edgeLevel(a, b, onEdge, 48.f) == 64.f);
         CHECK(edgeLevel(a, b, onEdge, 0.f) == 16.f);
 
