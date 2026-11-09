@@ -1027,6 +1027,34 @@ void LLAudioChannelFMODSTUDIO::playSynced(LLAudioChannel *channelp)
     play();
 }
 
+// <SK:Nexii> Audio preview control: seek and position through Channel::setPosition in milliseconds.
+bool LLAudioChannelFMODSTUDIO::seek(F32 seconds)
+{
+    auto* buffer = static_cast<LLAudioBufferFMODSTUDIO*>(mCurrentBufferp);
+    if (!mChannelp || !buffer || !buffer->getSound())
+    {
+        return false;
+    }
+    unsigned int length_ms = 0;
+    if (Check_FMOD_Error(buffer->getSound()->getLength(&length_ms, FMOD_TIMEUNIT_MS), "FMOD::Sound::getLength") || length_ms == 0)
+    {
+        return false;
+    }
+    const unsigned int target_ms = llmin((unsigned int)llround(llmax(0.f, seconds) * 1000.f), length_ms - 1);
+    return !Check_FMOD_Error(mChannelp->setPosition(target_ms, FMOD_TIMEUNIT_MS), "FMOD::Channel::setPosition");
+}
+
+F32 LLAudioChannelFMODSTUDIO::getPlayPosition()
+{
+    unsigned int position_ms = 0;
+    if (!mChannelp || Check_FMOD_Error(mChannelp->getPosition(&position_ms, FMOD_TIMEUNIT_MS), "FMOD::Channel::getPosition"))
+    {
+        return -1.f;
+    }
+    return (F32)position_ms / 1000.f;
+}
+// </SK:Nexii>
+
 
 bool LLAudioChannelFMODSTUDIO::isPlaying()
 {

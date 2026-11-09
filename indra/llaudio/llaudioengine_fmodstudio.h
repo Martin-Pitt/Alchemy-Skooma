@@ -90,6 +90,7 @@ public:
     // init() succeeds — reverb is always available on FMOD, no
     // extension check needed.
     bool supportsReverb() const override { return mReverbActive; }
+    bool canSeek() const override { return true; } // <SK:Nexii> Audio preview control
     void setReverbPreset(const std::string& preset_name) override;
     void setReverbSendScale(float scale) override;
     std::string getReverbSendScaleSettingName() const override
@@ -171,6 +172,11 @@ protected:
     bool updateBuffer() override;
     void update3DPosition() override;
     void updateLoop() override;
+
+    // <SK:Nexii> Audio preview control
+    bool seek(F32 seconds) override;
+    F32 getPlayPosition() override;
+    // </SK:Nexii>
 
     void set3DMode(bool use3d);
 protected:

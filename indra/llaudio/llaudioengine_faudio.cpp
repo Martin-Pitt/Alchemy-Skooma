@@ -1621,6 +1621,14 @@ void LLAudioChannelFAudio::playSynced(LLAudioChannel* master)
     // Flush whatever's queued and re-submit the same buffer starting at the
     // computed offset. PlayBegin can't be changed on a buffer already in the
     // voice's queue, so this requires the flush.
+    // <SK:Nexii> Audio preview control: the position counts from this resubmission.
+    {
+        FAudioVoiceState own_state{};
+        FAudioSourceVoice_GetState(mVoice, &own_state, 0);
+        mPositionSkipFrames = own_state.SamplesPlayed;
+        mPositionBaseFrames = play_begin;
+    }
+    // </SK:Nexii>
     FAudioSourceVoice_Stop(mVoice, 0, FAUDIO_COMMIT_NOW);
     FAudioSourceVoice_FlushSourceBuffers(mVoice);
 
@@ -1688,6 +1696,53 @@ bool LLAudioChannelFAudio::isPlaying()
     return mVoice && mStarted && !mFinished.load(std::memory_order_relaxed);
 }
 
+// <SK:Nexii> Audio preview control: a queued buffer's PlayBegin is fixed, so a seek rebuilds the voice at the new frame.
+bool LLAudioChannelFAudio::seek(F32 seconds)
+{
+    auto* buf = static_cast<LLAudioBufferFAudio*>(mCurrentBufferp);
+    if (!mVoice || !mCurrentSourcep || !buf || mFormat.nSamplesPerSec == 0 || mFormat.nBlockAlign == 0)
+    {
+        return false;
+    }
+    const uint32_t buf_frames = buf->getFAudioBuffer().AudioBytes / mFormat.nBlockAlign;
+    if (buf_frames == 0)
+    {
+        return false;
+    }
+    const F64 target = (F64)llmax(0.f, seconds) * mFormat.nSamplesPerSec;
+    const uint32_t frame = (uint32_t)llmin(target, (F64)(buf_frames - 1));
+
+    if (mCurrentSourcep->isForcedPriority())
+        destroyVoice();
+    else
+        retireVoice();
+    mResumeFrames = frame;
+    mResumePending = true;
+    return updateBuffer();
+}
+
+F32 LLAudioChannelFAudio::getPlayPosition()
+{
+    auto* buf = static_cast<LLAudioBufferFAudio*>(mCurrentBufferp);
+    if (!mVoice || !mStarted || !buf || mFormat.nSamplesPerSec == 0 || mFormat.nBlockAlign == 0)
+    {
+        return -1.f;
+    }
+    const uint32_t buf_frames = buf->getFAudioBuffer().AudioBytes / mFormat.nBlockAlign;
+    if (buf_frames == 0)
+    {
+        return -1.f;
+    }
+    FAudioVoiceState state{};
+    FAudioSourceVoice_GetState(mVoice, &state, 0);
+    // Frames still in the silent pre-roll count as the start.
+    const uint64_t played = state.SamplesPlayed > mPositionSkipFrames ? state.SamplesPlayed - mPositionSkipFrames : 0;
+    uint64_t frame = mPositionBaseFrames + played;
+    frame = mLooping ? frame % buf_frames : llmin(frame, (uint64_t)buf_frames);
+    return (F32)((F64)frame / mFormat.nSamplesPerSec);
+}
+// </SK:Nexii>
+
 bool LLAudioChannelFAudio::updateBuffer()
 {
     if (!mCurrentSourcep) return false;
@@ -1752,6 +1807,8 @@ bool LLAudioChannelFAudio::updateBuffer()
             mResumePending = false;
             mResumeFrames = 0;
         }
+        mPositionBaseFrames = fbuf.PlayBegin; // <SK:Nexii> Audio preview control
+        mPositionSkipFrames = 0;              // <SK:Nexii> Audio preview control
 
         FAudioSourceVoice_FlushSourceBuffers(mVoice);
         mFinished = false;
@@ -1803,6 +1860,10 @@ bool LLAudioChannelFAudio::updateBuffer()
                            << std::hex << prehr << std::dec
                            << " — continuing without pre-roll (will click)"
                            << LL_ENDL;
+            }
+            else if (mFormat.nBlockAlign) // <SK:Nexii> Audio preview control
+            {
+                mPositionSkipFrames = preroll.AudioBytes / mFormat.nBlockAlign; // <SK:Nexii> Audio preview control
             }
         }
 
