@@ -105,6 +105,7 @@
 // [/RLVa:KB]
 #include "llglheaders.h"
 #include "llinventoryobserver.h"
+#include "skoutlinecapture.h" // <SK:Nexii> outline capture
 #include "lllocalmesh.h"
 #include "llscripteditorws.h"
 
@@ -6470,6 +6471,8 @@ void LLSelectMgr::processObjectPropertiesFamily(LLMessageSystem* msg, void** use
 
     std::string desc;
     msg->getStringFast(_PREHASH_ObjectData, _PREHASH_Description, desc);
+
+    SKOutlineCapture::onObjectName(id, name); // <SK:Nexii> outline capture: names tie worn parts to their vehicle
 
     // the reporter widget askes the server for info about picked objects
     if (request_flags & COMPLAINT_REPORT_REQUEST )

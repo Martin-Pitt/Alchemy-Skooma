@@ -161,6 +161,8 @@ LLGLSLShader            gDeferredNonIndexedDiffuseAlphaMaskNoColorProgram;
 LLGLSLShader            gDeferredBumpProgram;
 LLGLSLShader            gDeferredBumpAlphaMaskProgram;
 LLGLSLShader            gDeferredTerrainProgram;
+LLGLSLShader            gSKSurroundsFarProgram;  // <SK:Nexii> Distant regions
+LLGLSLShader            gSKSurroundsRingProgram; // <SK:Nexii> Distant regions
 LLGLSLShader            gDeferredTreeProgram;
 LLGLSLShader            gDeferredTreeShadowProgram;
 LLGLSLShader            gDeferredAvatarProgram;
@@ -1323,6 +1325,8 @@ void LLViewerShaderMgr::loadShadersDeferred()
         gDeferredBumpAlphaMaskProgram.unload();
         gDeferredImpostorProgram.unload();
         gDeferredTerrainProgram.unload();
+        gSKSurroundsFarProgram.unload();  // <SK:Nexii> Distant regions
+        gSKSurroundsRingProgram.unload(); // <SK:Nexii> Distant regions
         gDeferredLightProgram.unload();
         for (U32 i = 0; i < LL_DEFERRED_MULTI_LIGHT_COUNT; ++i)
         {
@@ -2772,6 +2776,30 @@ void LLViewerShaderMgr::loadShadersDeferred()
         gDeferredTerrainProgram.mShaderLevel = mShaderLevel[SHADER_DEFERRED];
         built(gDeferredTerrainProgram.createShader(mirror_variant()), gDeferredTerrainProgram);
     }
+
+    // <SK:Nexii> Distant regions: the map-tiled patches of the far nodes (equal spacing) and of the ring cells whose
+    // look is not drawn (the live spacing), unlit.
+    for (LLGLSLShader* shader : { &gSKSurroundsFarProgram, &gSKSurroundsRingProgram })
+    {
+        const bool ring = shader == &gSKSurroundsRingProgram;
+        shader->mName = ring ? "Surrounds Ring Tile Shader" : "Surrounds Far Shader";
+        shader->mFeatures.hasTessellatedTerrain = true;
+        shader->mShaderFiles.clear();
+        shader->mShaderFiles.push_back(make_pair("deferred/terrainPatchV.glsl", GL_VERTEX_SHADER));
+        shader->mShaderFiles.push_back(make_pair("skooma/surroundsTC.glsl", GL_TESS_CONTROL_SHADER));
+        shader->mShaderFiles.push_back(make_pair("skooma/surroundsTE.glsl", GL_TESS_EVALUATION_SHADER));
+        shader->mShaderFiles.push_back(make_pair("skooma/surroundsF.glsl", GL_FRAGMENT_SHADER));
+        shader->clearPermutations();
+        if (ring)
+        {
+            shader->addPermutation("SK_SURROUNDS_RING", "1");
+        }
+        add_common_permutations(shader);
+        add_terrain_tess_permutations(shader, mInputs.mLocal.mTerrainTessPinned);
+        shader->mShaderLevel = mShaderLevel[SHADER_DEFERRED];
+        built(shader->createShader(), *shader);
+    }
+    // </SK:Nexii>
 
     {
         gDeferredAvatarProgram.mName = "Deferred Avatar Shader";

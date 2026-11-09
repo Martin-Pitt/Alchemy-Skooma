@@ -1888,6 +1888,12 @@ void LLShaderMgr::initAttribsAndUniforms()
     mReservedUniforms.push_back("terrain_smoothing");
     mReservedUniforms.push_back("parcel_overlay");
     mReservedUniforms.push_back("show_parcel_owners");
+    // <SK:Nexii> Distant regions' map-tiled patches
+    mReservedUniforms.push_back("sk_surrounds_tile");
+    mReservedUniforms.push_back("sk_surrounds_edges");
+    mReservedUniforms.push_back("sk_surrounds_mask");
+    mReservedUniforms.push_back("sk_surrounds_params");
+    // </SK:Nexii>
 
     mReservedUniforms.push_back("detail_0_base_color");
     mReservedUniforms.push_back("detail_1_base_color");

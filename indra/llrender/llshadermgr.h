@@ -306,6 +306,12 @@ public:
         TERRAIN_SMOOTHING,                  //  "terrain_smoothing"
         TERRAIN_PARCEL_OVERLAY,             //  "parcel_overlay"
         TERRAIN_SHOW_PARCEL_OWNERS,         //  "show_parcel_owners"
+        // <SK:Nexii> Distant regions' map-tiled patches
+        SK_SURROUNDS_TILE,                  //  "sk_surrounds_tile"
+        SK_SURROUNDS_EDGES,                 //  "sk_surrounds_edges"
+        SK_SURROUNDS_MASK,                  //  "sk_surrounds_mask"
+        SK_SURROUNDS_PARAMS,                //  "sk_surrounds_params"
+        // </SK:Nexii>
 
         TERRAIN_DETAIL0_BASE_COLOR,                //  "detail_0_base_color" (GLTF)
         TERRAIN_DETAIL1_BASE_COLOR,                //  "detail_1_base_color" (GLTF)

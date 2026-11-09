@@ -29,7 +29,10 @@
 
 #include "lldrawpool.h"
 
+#include <functional> // <SK:Nexii>
+
 class LLGLSLShader;
+class LLTerrainMaterials; // <SK:Nexii>
 
 class LLDrawPoolTerrain : public LLFacePool
 {
@@ -70,6 +73,19 @@ public:
     static F32 sDetailScale; // textures per meter
     static F32 sPBRDetailScale; // textures per meter
     static F32 sLODFactor; // RenderTerrainLODFactor squared; scales the tessellation density
+
+    // <SK:Nexii> Distant regions draw through the live terrain's uniforms and looks.
+    // The tessellation and placement uniforms bindSurface sets, for a surface whose south-west corner is at
+    // region_origin_agent.
+    static void bindSurfaceUniforms(LLGLSLShader* shader, const LLVector3& region_origin_agent, F32 meters_per_grid,
+                                    F32 region_width);
+    // A look's detail textures or materials bound around draw, for a surface whose corner is at origin_global.
+    static void renderLookTextures(LLGLSLShader* shader, LLTerrainMaterials& look, const LLVector3d& origin_global,
+                                   LLViewerTexture* alpha_ramp, const std::function<void()>& draw);
+    static void renderLookPBR(LLGLSLShader* shader, LLTerrainMaterials& look, U32 paint_type, LLViewerTexture* paint_map,
+                              const LLVector3d& origin_global, LLViewerTexture* alpha_ramp,
+                              const std::function<void()>& draw);
+    // </SK:Nexii>
 
 protected:
     void boostTerrainDetailTextures();

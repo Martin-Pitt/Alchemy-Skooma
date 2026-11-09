@@ -652,7 +652,7 @@ namespace
     // The checks
 
     // Whether the face can be read at all: its counts and indices.
-    bool checkLayout(const LLVolumeFace& face, S32 index, Report& report, const std::string& where, bool active)
+    bool checkLayout(const LLVolumeFace& face, S32 index, bool sculpt, Report& report, const std::string& where, bool active)
     {
         auto fail = [&](std::string what)
         {
@@ -1613,7 +1613,7 @@ namespace
         {
             LLVolumeFace& face = volume.getVolumeFace(i);
             const std::string where = fmt::format("{}: {}", name, faceName(face));
-            if (!checkLayout(face, i, report, where, how.checks & Checks::Layout))
+            if (!checkLayout(face, i, isSculpt(volume), report, where, how.checks & Checks::Layout))
             {
                 continue;
             }

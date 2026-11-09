@@ -493,6 +493,27 @@ bool LLVLComposition::generateHeights(const F32 x, const F32 y,
 
     LLVector3d origin_global = from_region_handle(mSurfacep->getRegion()->getHandle());
 
+    const F32 inv_width = 1.f/mWidth;
+
+    // OK, for now, just have the composition value equal the height at the point.
+    for (S32 j = y_begin; j < y_end; j++)
+    {
+        for (S32 i = x_begin; i < x_end; i++)
+        {
+            // <SK:Nexii> Distant regions compose their cached ground as generateHeights does.
+            LLVector3 location(i*mScale, j*mScale, 0.f);
+            const F32 height = mSurfacep->resolveHeightRegion(location);
+            *(mDatap + i + j*mWidth) = compositionValue(origin_global, i, j, mScale, inv_width, height, mStartHeight, mHeightRange);
+        }
+    }
+    return true;
+}
+
+// static
+F32 LLVLComposition::compositionValue(const LLVector3d& origin_global, S32 i, S32 j, F32 scale, F32 inv_width, F32 height_in,
+                                      const F32 (&mStartHeight)[CORNER_COUNT], const F32 (&mHeightRange)[CORNER_COUNT])
+{
+    // </SK:Nexii>
     // For perlin noise generation...
     const F32 slope_squared = 1.5f*1.5f;
     const F32 xyScale = 4.9215f; //0.93284f;
@@ -503,14 +524,6 @@ bool LLVLComposition::generateHeights(const F32 x, const F32 y,
 
     const F32 xyScaleInv = (1.f / xyScale);
     const F32 zScaleInv = (1.f / zScale);
-
-    const F32 inv_width = 1.f/mWidth;
-
-    // OK, for now, just have the composition value equal the height at the point.
-    for (S32 j = y_begin; j < y_end; j++)
-    {
-        for (S32 i = x_begin; i < x_end; i++)
-        {
 
             F32 vec[3];
             F32 vec1[3];
@@ -528,9 +541,9 @@ bool LLVLComposition::generateHeights(const F32 x, const F32 y,
                                         mHeightRange[NORTHEAST],
                                         i*inv_width, j*inv_width); // These will be bilinearly interpolated
 
-            LLVector3 location(i*mScale, j*mScale, 0.f);
+            LLVector3 location(i*scale, j*scale, 0.f);
 
-            F32 height = mSurfacep->resolveHeightRegion(location) + z_offset;
+            F32 height = height_in + z_offset;
 
             // Step 0: Measure the exact height at this texel
             vec[0] = (F32)(origin_global.mdV[VX]+location.mV[VX])*xyScaleInv;   //  Adjust to non-integer lattice
@@ -551,10 +564,7 @@ bool LLVLComposition::generateHeights(const F32 x, const F32 y,
 
             scaled_noisy_height = llmax(0.f, scaled_noisy_height);
             scaled_noisy_height = llmin(3.f, scaled_noisy_height);
-            *(mDatap + i + j*mWidth) = scaled_noisy_height;
-        }
-    }
-    return true;
+            return scaled_noisy_height; // <SK:Nexii>
 }
 
 LLTerrainMaterials gLocalTerrainMaterials;

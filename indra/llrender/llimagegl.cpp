@@ -47,6 +47,7 @@
 #include "llframetimer.h"
 #include <atomic>
 #include <chrono>
+#include <mutex> // <SK:Nexii>
 #include <bit>
 #include <boost/unordered_map.hpp>
 
@@ -133,7 +134,9 @@ void LLImageGL::touchContents()
 
 
 // texture memory accounting (for macOS)
-static LLMutex sTexMemMutex;
+// <SK:Nexii> A plain mutex, as the profile coroutines retag a texture through set_tex_class and no hold yields.
+static std::mutex sTexMemMutex;
+// </SK:Nexii>
 namespace
 {
     struct TextureAlloc
@@ -160,7 +163,7 @@ U64 LLImageGLMemory::alloc_tex_image(U32 width, U32 height, U32 intformat, U32 c
     const U64 size = (U64)LLImageGL::dataFormatVRAMBytes(intformat, width, height, levels) * count;
 
     {
-        LLMutexLock lock(&sTexMemMutex);
+        std::lock_guard lock(sTexMemMutex); // <SK:Nexii>
 
         // it is a precondition that no existing allocation exists for this texture, nor a deleted one GL has yet to free
         llassert(sTextureAllocs.find(texName) == sTextureAllocs.end());
@@ -174,7 +177,7 @@ U64 LLImageGLMemory::alloc_tex_image(U32 width, U32 height, U32 intformat, U32 c
 // track texture free on given texName
 void LLImageGLMemory::free_tex_image(U32 texName)
 {
-    LLMutexLock lock(&sTexMemMutex);
+    std::lock_guard lock(sTexMemMutex); // <SK:Nexii>
     auto iter = sTextureAllocs.find(texName);
     // sometimes a texName will be "freed" before allocated (e.g. the first allocation on a given texName); a deleted one
     // stays until the ring frees its name
@@ -192,7 +195,7 @@ void LLImageGLMemory::free_tex_image(U32 texName)
 void LLImageGLMemory::set_tex_class(U32 texName, EClass cls)
 {
     llassert(cls < NUM_CLASSES);
-    LLMutexLock lock(&sTexMemMutex);
+    std::lock_guard lock(sTexMemMutex); // <SK:Nexii>
     auto iter = sTextureAllocs.find(texName);
     if (iter != sTextureAllocs.end() && !iter->second.mDeleted && iter->second.mClass != cls)
     {
@@ -216,7 +219,7 @@ void LLImageGLMemory::free_tex_images(U32 count, const U32* texNames)
 // ring frees them (forget_tex_images).
 static void retire_tex_images(U32 count, const U32* texNames)
 {
-    LLMutexLock lock(&sTexMemMutex);
+    std::lock_guard lock(sTexMemMutex); // <SK:Nexii>
     for (U32 i = 0; i < count; ++i)
     {
         auto iter = sTextureAllocs.find(texNames[i]);
@@ -234,7 +237,7 @@ static void retire_tex_images(U32 count, const U32* texNames)
 // The names the deferred-delete ring frees: GL may hand them out again from here on.
 static void forget_tex_images(U32 count, const U32* texNames)
 {
-    LLMutexLock lock(&sTexMemMutex);
+    std::lock_guard lock(sTexMemMutex); // <SK:Nexii>
     for (U32 i = 0; i < count; ++i)
     {
         auto iter = sTextureAllocs.find(texNames[i]);
@@ -3257,7 +3260,7 @@ void LLImageGL::applySwizzleForDeprecatedFormat(ALTextureSlot::eTextureType type
     // identify the format they originally asked for and let this routine
     // pick the matching mask. Keeps GL_TEXTURE_SWIZZLE_RGBA and the
     // mask-component constants out of the call sites.
-    LLGLint mask[4];
+    U32 mask[4]; // <SK:Nexii> outline capture: set through setSwizzle
     switch (original_format)
     {
     case GL_ALPHA:
@@ -3275,8 +3278,16 @@ void LLImageGL::applySwizzleForDeprecatedFormat(ALTextureSlot::eTextureType type
     default:
         return;  // not a format we re-express via swizzle
     }
+    setSwizzle(type, mask[0], mask[1], mask[2], mask[3]); // <SK:Nexii> outline capture: one swizzle setter
+}
+
+// <SK:Nexii> outline capture: a swizzle for any texture, not only the deprecated formats
+void LLImageGL::setSwizzle(ALTextureSlot::eTextureType type, U32 r, U32 g, U32 b, U32 a)
+{
+    const LLGLint mask[4] = { (LLGLint)r, (LLGLint)g, (LLGLint)b, (LLGLint)a };
     glTexParameteriv(ALTextureSlot::getInternalType(type), GL_TEXTURE_SWIZZLE_RGBA, mask);
 }
+// </SK:Nexii>
 
 // The format of an image without an explicit one, from its component count. Worked out
 // once a count: beginUpload does it on the main thread before an upload is posted, so the

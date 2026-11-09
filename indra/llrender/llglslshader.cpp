@@ -2937,7 +2937,7 @@ void LLGLSLShader::uniform1i(const LLStaticHashedString& uniform, GLint v)
         glUniform1i(location, v);
     }
 }
-// <SK:Nexii> Hashed setters for Skooma programs whose uniform names are not reserved; each uploads as its index twin does.
+// <SK:Nexii> overview capture: hashed setters for programs whose uniform names are not reserved; each uploads as its index twin does.
 void LLGLSLShader::uniform1f(const LLStaticHashedString& uniform, GLfloat v)
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_SHADER;

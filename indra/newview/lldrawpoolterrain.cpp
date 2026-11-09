@@ -155,13 +155,28 @@ void LLDrawPoolTerrain::bindSurface(LLGLSLShader* shader)
     maps.ensureUploaded();
     maps.bind(shader->enableTexture(LLShaderMgr::TERRAIN_HEIGHT_MAP),
               shader->enableTexture(LLShaderMgr::TERRAIN_COMPOSITION_MAP));
+    // <SK:Nexii> Distant regions draw through the live terrain's uniforms and looks.
+    bindSurfaceUniforms(shader, regionp->getOriginAgent(), land.getMetersPerGrid(), regionp->getWidth());
+}
 
+// static
+void LLDrawPoolTerrain::bindSurfaceUniforms(LLGLSLShader* shader, const LLVector3& region_origin_agent,
+                                            F32 meters_per_grid, F32 region_width)
+{
+    // </SK:Nexii>
     // Levels come from the distance to this camera in every pass, so where
     // nothing else holds them the shadow pass places the same vertices the lit
     // pass does. During a cube snapshot the singleton is the probe; that
     // tessellates around the probe, which is what a probe wants.
-    const LLVector3& camera_origin = LLViewerCamera::getInstance()->getOrigin();
-    const LLVector3 origin = camera_origin - regionp->getOriginAgent();
+    // <SK:Nexii> Snapped to 1/256 m, the origin minus any region's 256 m corner is exact in float, so regions
+    // sharing an edge give the shader the same numbers and pick the same level for it.
+    LLVector3 camera_origin = LLViewerCamera::getInstance()->getOrigin();
+    for (F32& c : camera_origin.mV)
+    {
+        c = std::round(c * 256.f) / 256.f;
+    }
+    // </SK:Nexii>
+    const LLVector3 origin = camera_origin - region_origin_agent; // <SK:Nexii>
     shader->uniform3fv(LLShaderMgr::TERRAIN_TESS_ORIGIN, 1, origin.mV);
     const TessLevels levels = tess_levels();
     const F32        density = levels.mDensity;
@@ -191,9 +206,9 @@ void LLDrawPoolTerrain::bindSurface(LLGLSLShader* shader)
     {
         shader->uniform2f(LLShaderMgr::TERRAIN_TESS_RASTER, 0.f, 0.f);
     }
-    shader->uniform1f(LLShaderMgr::TERRAIN_GRID_SCALE, land.getMetersPerGrid());
+    shader->uniform1f(LLShaderMgr::TERRAIN_GRID_SCALE, meters_per_grid); // <SK:Nexii>
     shader->uniform1i(LLShaderMgr::TERRAIN_SMOOTHING, LLSurface::isSmoothing() ? 1 : 0);
-    shader->uniform1f(LLShaderMgr::REGION_SCALE, regionp->getWidth());
+    shader->uniform1f(LLShaderMgr::REGION_SCALE, region_width); // <SK:Nexii>
 
     // The sharpness of the triplanar weights the detail of either lit program blends through (pbrterrainUtilF.glsl);
     // the shadow program has none.
@@ -424,7 +439,19 @@ void LLDrawPoolTerrain::renderFullShaderTextures()
 {
     // Hack! Get the region that this draw pool is rendering from!
     LLViewerRegion *regionp = mDrawFace[0]->getDrawable()->getVObj()->getRegion();
-    LLVLComposition *compp = regionp->getComposition();
+    // <SK:Nexii> Distant regions draw through the live terrain's uniforms and looks.
+    renderLookTextures(sShader, *regionp->getComposition(), regionp->getOriginGlobal(), m2DAlphaRampImagep,
+                       [this]() { drawLoop(); });
+}
+
+// static
+void LLDrawPoolTerrain::renderLookTextures(LLGLSLShader* look_shader, LLTerrainMaterials& look,
+                                           const LLVector3d& region_origin_global, LLViewerTexture* alpha_ramp_image,
+                                           const std::function<void()>& draw)
+{
+    LLTerrainMaterials* compp = &look;
+    LLGLSLShader* sShader = look_shader;
+    // </SK:Nexii>
 // [SL:KB] - Patch: Render-TextureToggle (Catznip-4.0)
     LLViewerTexture *detail_texture0p = (LLPipeline::sRenderTextures) ? compp->mDetailTextures[0] : LLViewerFetchedTexture::sDefaultDiffuseImagep;
     LLViewerTexture *detail_texture1p = (LLPipeline::sRenderTextures) ? compp->mDetailTextures[1] : LLViewerFetchedTexture::sDefaultDiffuseImagep;
@@ -440,7 +467,6 @@ void LLDrawPoolTerrain::renderFullShaderTextures()
     // so the phase of this region's origin within a tile is added back. It has
     // to be this pool's region: a 256 m region is not a whole number of 12 m
     // tiles, so the agent's region's phase seams every neighbour.
-    LLVector3d region_origin_global = regionp->getOriginGlobal();
     F32 offset_x = (F32)fmod(region_origin_global.mdV[VX], 1.0/(F64)sDetailScale)*sDetailScale;
     F32 offset_y = (F32)fmod(region_origin_global.mdV[VY], 1.0/(F64)sDetailScale)*sDetailScale;
 
@@ -495,10 +521,10 @@ void LLDrawPoolTerrain::renderFullShaderTextures()
     // Alpha Ramp
     //
     S32 alpha_ramp = sShader->enableTexture(LLViewerShaderMgr::TERRAIN_ALPHARAMP);
-    gGL.getTextureSlot(alpha_ramp)->bindSampled(m2DAlphaRampImagep, ALSamplers::AnisoClamp);
+    gGL.getTextureSlot(alpha_ramp)->bindSampled(alpha_ramp_image, ALSamplers::AnisoClamp); // <SK:Nexii>
 
     // GL_BLEND disabled by default
-    drawLoop();
+    draw(); // <SK:Nexii>
 
     // Disable multitexture
     sShader->disableTexture(LLViewerShaderMgr::TERRAIN_ALPHARAMP);
@@ -527,7 +553,22 @@ void LLDrawPoolTerrain::renderFullShaderPBR(bool use_local_materials)
     // Hack! Get the region that this draw pool is rendering from!
     LLViewerRegion *regionp = mDrawFace[0]->getDrawable()->getVObj()->getRegion();
     LLVLComposition *compp = regionp->getComposition();
-    LLPointer<LLFetchedGLTFMaterial> (*fetched_materials)[LLVLComposition::ASSET_COUNT] = &compp->mDetailRenderMaterials;
+    // <SK:Nexii> Distant regions draw through the live terrain's uniforms and looks.
+    LLTerrainMaterials& look = use_local_materials ? gLocalTerrainMaterials : *compp;
+    U32 paint_type = use_local_materials ? gLocalTerrainMaterials.getPaintType() : compp->getPaintType();
+    LLViewerTexture* paint_map = use_local_materials ? gLocalTerrainMaterials.getPaintMap() : compp->getPaintMap();
+    renderLookPBR(sShader, look, paint_type, paint_map, regionp->getOriginGlobal(), m2DAlphaRampImagep,
+                  [this]() { drawLoop(); });
+}
+
+// static
+void LLDrawPoolTerrain::renderLookPBR(LLGLSLShader* look_shader, LLTerrainMaterials& look, U32 paint_type,
+                                      LLViewerTexture* tex_paint_map, const LLVector3d& origin,
+                                      LLViewerTexture* alpha_ramp_image, const std::function<void()>& draw)
+{
+    LLGLSLShader* sShader = look_shader;
+    LLPointer<LLFetchedGLTFMaterial> (*fetched_materials)[LLVLComposition::ASSET_COUNT] = &look.mDetailRenderMaterials;
+    // </SK:Nexii>
 
     constexpr U32 terrain_material_count = LLVLComposition::ASSET_COUNT;
 #ifdef SHOW_ASSERT
@@ -535,11 +576,6 @@ void LLDrawPoolTerrain::renderFullShaderPBR(bool use_local_materials)
     llassert(shader_material_count == terrain_material_count);
 #endif
 
-    if (use_local_materials)
-    {
-        // Override region terrain with the global local override terrain
-        fetched_materials = &gLocalTerrainMaterials.mDetailRenderMaterials;
-    }
     const LLGLTFMaterial* materials[terrain_material_count];
     for (U32 i = 0; i < terrain_material_count; ++i)
     {
@@ -547,7 +583,6 @@ void LLDrawPoolTerrain::renderFullShaderPBR(bool use_local_materials)
         if (!materials[i]) { materials[i] = &LLGLTFMaterial::sDefault; }
     }
 
-    U32 paint_type = use_local_materials ? gLocalTerrainMaterials.getPaintType() : compp->getPaintType();
     paint_type = llclamp(paint_type, 0, TERRAIN_PAINT_TYPE_COUNT - 1);
 
     S32 detail_basecolor[terrain_material_count];
@@ -682,7 +717,6 @@ void LLDrawPoolTerrain::renderFullShaderPBR(bool use_local_materials)
         // A material's uv in the world less its uv in this region: its map of the region's origin, the offset
         // cancelling. The x and y slices are (sx y, z) and (-sy x, z) for the side that does not turn them, and height
         // is the same in every region, so theirs are the map's first column times the origin's y and its x.
-        const LLVector3d& origin = regionp->getOriginGlobal();
         F64 delta[terrain_material_count * 3][2];
         for (U32 i = 0; i < terrain_material_count; ++i)
         {
@@ -717,12 +751,11 @@ void LLDrawPoolTerrain::renderFullShaderPBR(bool use_local_materials)
     if (paint_type == TERRAIN_PAINT_TYPE_HEIGHTMAP_WITH_NOISE)
     {
         alpha_ramp = sShader->enableTexture(LLViewerShaderMgr::TERRAIN_ALPHARAMP);
-        gGL.getTextureSlot(alpha_ramp)->bindSampled(m2DAlphaRampImagep, ALSamplers::AnisoClamp);
+        gGL.getTextureSlot(alpha_ramp)->bindSampled(alpha_ramp_image, ALSamplers::AnisoClamp); // <SK:Nexii>
     }
     else if (paint_type == TERRAIN_PAINT_TYPE_PBR_PAINTMAP)
     {
         paint_map = sShader->enableTexture(LLViewerShaderMgr::TERRAIN_PAINTMAP);
-        LLViewerTexture* tex_paint_map = use_local_materials ? gLocalTerrainMaterials.getPaintMap() : compp->getPaintMap();
         // If no paintmap is available, fall back to rendering just material slot 1 (by binding the appropriate image)
         if (!tex_paint_map) { tex_paint_map = LLViewerTexture::sBlackImagep.get(); }
         // This is a paint map for four materials, but we save a channel by
@@ -771,7 +804,7 @@ void LLDrawPoolTerrain::renderFullShaderPBR(bool use_local_materials)
     shader->uniform4f(LLShaderMgr::TERRAIN_MINIMUM_ALPHAS, minimum_alphas[0], minimum_alphas[1], minimum_alphas[2], minimum_alphas[3]);
 
     // GL_BLEND disabled by default
-    drawLoop();
+    draw(); // <SK:Nexii>
 
     // Disable multitexture
 

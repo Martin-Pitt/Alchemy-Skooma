@@ -27,6 +27,18 @@
          function="Floater.Toggle"
          parameter="inventory" />
       </menu_item_check>
+      <!-- <SK:Nexii> Inventory Explorer -->
+      <menu_item_check
+       label="Inventory Explorer..."
+       name="SKInventoryExplorer">
+        <menu_item_check.on_check
+         function="Floater.Visible"
+         parameter="sk_inventory_explorer" />
+        <menu_item_check.on_click
+         function="Floater.Toggle"
+         parameter="sk_inventory_explorer" />
+      </menu_item_check>
+      <!-- </SK:Nexii> -->
       <menu_item_call
        label="New Inventory Window"
        name="NewInventoryWindow"
@@ -799,6 +811,17 @@
              function="Floater.Toggle"
              parameter="world_map" />
         </menu_item_check>
+        <!-- <SK:Nexii> 3D world map -->
+        <menu_item_check
+         label="3D world map"
+         name="World Map 3D"
+         shortcut="control|alt|M">
+            <menu_item_check.on_check
+             function="WorldMap3D.IsOpen" />
+            <menu_item_check.on_click
+             function="WorldMap3D.Toggle" />
+        </menu_item_check>
+        <!-- </SK:Nexii> -->
             <menu_item_check
          label="Mini-map"
          name="Mini-Map"
@@ -1343,6 +1366,56 @@ function="World.EnvPreset"
 -->    
     
     </menu>
+    <!-- <SK:Nexii> Combat menu: combat features and their options -->
+    <menu
+     create_jump_keys="true"
+     label="Combat"
+     name="Combat"
+     tear_off="true"
+     visible="true">
+      <menu_item_check
+       label="Over-the-Shoulder Mouselook"
+       name="ots_enabled">
+        <menu_item_check.on_check
+         control="SKOTSEnabled" />
+        <menu_item_check.on_click
+         function="ToggleControl"
+         parameter="SKOTSEnabled" />
+      </menu_item_check>
+      <menu_item_call
+       label="Over-the-Shoulder Options..."
+       name="ots_options">
+        <menu_item_call.on_click
+         function="Floater.ToggleOrBringToFront"
+         parameter="sk_ots_options" />
+      </menu_item_call>
+      <menu_item_separator />
+      <menu_item_check
+       label="Tactical Overview"
+       name="SK Tactical Overview">
+        <menu_item_check.on_check
+         function="CheckControl"
+         parameter="SKTacticalOverview" />
+        <menu_item_check.on_click
+         function="ToggleControl"
+         parameter="SKTacticalOverview" />
+      </menu_item_check>
+      <menu_item_call
+       label="Tactical Overview Options..."
+       name="sk_tactical_options">
+        <menu_item_call.on_click
+         function="Floater.ToggleOrBringToFront"
+         parameter="sk_tactical_options" />
+      </menu_item_call>
+      <menu_item_call
+       label="Mini-map Options..."
+       name="sk_map_settings">
+        <menu_item_call.on_click
+         function="Floater.ToggleOrBringToFront"
+         parameter="sk_map_settings" />
+      </menu_item_call>
+    </menu>
+    <!-- </SK:Nexii> -->
     <menu
      create_jump_keys="true"
      label="Build"
@@ -3735,6 +3808,21 @@ function="World.EnvPreset"
          label="Render Tests"
          name="Render Tests"
          tear_off="true">
+            <!-- <SK:Nexii> outline capture: the atlas and per-capture stats, behind SKOutlineCaptureDebug -->
+            <menu_item_check
+             label="Outline Capture Runtime"
+             name="SK Outline Capture Runtime">
+                <menu_item_check.on_check
+                 function="Floater.Visible"
+                 parameter="sk_outline_capture" />
+                <menu_item_check.on_click
+                 function="Floater.Toggle"
+                 parameter="sk_outline_capture" />
+                <menu_item_check.on_visible
+                 function="CheckControl"
+                 parameter="SKOutlineCaptureDebug" />
+            </menu_item_check>
+            <!-- </SK:Nexii> -->
             <menu_item_check
              label="Camera Offset"
              name="Camera Offset">
@@ -3782,6 +3870,14 @@ function="World.EnvPreset"
             <menu_item_call.on_click
              function="Advanced.ClickHDRIPreview" />
           </menu_item_call>
+          <!-- <SK:Nexii> render/probe-shot -->
+          <menu_item_call
+           label="Export Probe Shot"
+           name="Export Probe Shot">
+            <menu_item_call.on_click
+             function="Advanced.ExportProbeShot" />
+          </menu_item_call>
+          <!-- </SK:Nexii> -->
           <!-- <SK:Nexii> legend foundation -->
           <menu_item_call
            label="Legend Demo"
