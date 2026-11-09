@@ -89,6 +89,7 @@ target_sources(
         m3math.h
         m4math.h
         raytrace.h
+        skwarpprofile.h
         skcolorscale.h # <SK:Nexii> legend foundation
         v2math.h
         v3color.h
@@ -149,6 +150,7 @@ if(AL_BUILD_TESTS)
       tests/llvolume_test.cpp
       tests/m3math_test.cpp
       tests/mathmisc_test.cpp
+      tests/skwarpprofile_test.cpp
       tests/skcolorscale_test.cpp # <SK:Nexii> legend foundation
       tests/v2math_test.cpp
       tests/v3color_test.cpp

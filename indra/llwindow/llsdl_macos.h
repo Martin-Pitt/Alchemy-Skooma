@@ -35,3 +35,19 @@ void ll_sdl_macos_strip_default_close_shortcut();
 // Make the given SDL window key again after a native file dialog closes.
 struct SDL_Window;
 void ll_sdl_macos_make_window_key_deferred(struct SDL_Window* window);
+
+// <SK:Nexii> smooth scroll
+// What AppKit said about the last scroll-wheel event, which SDL's wheel event drops.
+struct LLSDLMacScroll
+{
+    bool mPrecise = false;  // hasPreciseScrollingDeltas: the deltas are points, not lines
+    float mDeltaX = 0.f;    // scrollingDeltaX, natural scrolling applied
+    float mDeltaY = 0.f;    // scrollingDeltaY
+    unsigned char mPhase = 0; // an LLScrollDelta::EPhase
+};
+
+// Watch the app's scroll-wheel events, stashing each for the SDL wheel event it becomes.
+void ll_sdl_macos_watch_scroll();
+// Takes the oldest stashed event, if one is waiting.
+bool ll_sdl_macos_take_scroll(LLSDLMacScroll& out);
+// </SK:Nexii>

@@ -210,6 +210,8 @@ target_sources(
     code/alsyntaxgrammar.cpp
     code/alsyntaxhighlighter.cpp
     widgets/altabstrip.cpp
+    widgets/skscrollanimator.cpp
+    widgets/skscrolldistance.cpp
     text/altextcarets.cpp
     diff/altextdiff.cpp
     text/altextdocument.cpp
@@ -470,6 +472,9 @@ target_sources(
         code/alsyntaxgrammar.h
         code/alsyntaxhighlighter.h
         widgets/altabstrip.h
+        widgets/skscrollanimator.h
+        widgets/skscrolldistance.h
+        widgets/skscrollsnap.h
         text/altextcarets.h
         diff/altextdiff.h
         text/altextdocument.h
@@ -721,6 +726,7 @@ if(AL_BUILD_TESTS)
       tests/llspinctrl_test.cpp
       tests/llstatbar_test.cpp
       tests/lltabcontainer_test.cpp
+      tests/skellipsisparams_test.cpp # <SK:Nexii> text ellipsis foundation
       tests/lltextparser_test.cpp
       tests/lluistring_test.cpp
       tests/llurlentry_test.cpp
@@ -728,6 +734,8 @@ if(AL_BUILD_TESTS)
       tests/llurlregistry_test.cpp
       tests/llview_test.cpp
       tests/llxuiparser_test.cpp
+      tests/skscrollanimator_test.cpp
+      tests/skscrollsnap_test.cpp
       tests/sklegendview_test.cpp # <SK:Nexii> legend foundation
       tests/skticks_test.cpp # <SK:Nexii> legend foundation
       tests/skvizkey_test.cpp # <SK:Nexii> legend foundation

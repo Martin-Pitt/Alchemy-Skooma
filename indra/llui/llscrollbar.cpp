@@ -41,6 +41,8 @@
 #include "llcontrol.h"
 #include "llrender.h"
 #include "lluictrlfactory.h"
+#include "skscrolldistance.h" // <SK:Nexii> smooth scroll
+#include "skscrollsnap.h" // <SK:Nexii> smooth scroll: lists scroll whole items
 #include "lluicolortable.h" // <SK:Nexii> Overlay scroll bar
 #include "llframetimer.h" // <SK:Nexii> Overlay scroll bar
 #include "skscrollbaroverlay.h" // <SK:Nexii> Overlay scroll bar
@@ -66,7 +68,15 @@ LLScrollbar::Params::Params()
     right_button("right_button"),
     bg_visible("bg_visible", false),
     overlay("overlay", false), // <SK:Nexii> Overlay scroll bar
-    bg_color("bg_color", LLColor4::black)
+    smooth_scroll("smooth_scroll", true), // <SK:Nexii> smooth scroll
+    thin("thin", false), // <SK:Nexii> Thin scrollbars
+    bg_color("bg_color", LLColor4::black),
+    // <SK:Nexii> Thin scrollbars
+    thin_track_color("thin_track_color"),
+    thin_thumb_color("thin_thumb_color"),
+    thin_thumb_hover_color("thin_thumb_hover_color"),
+    thin_thumb_pressed_color("thin_thumb_pressed_color")
+    // </SK:Nexii>
 {}
 
 LLScrollbar::LLScrollbar(const Params & p)
@@ -91,8 +101,25 @@ LLScrollbar::LLScrollbar(const Params & p)
         mThickness(p.thickness.isProvided() ? p.thickness : LLUI::getInstance()->mSettingGroups["config"]->getS32("UIScrollbarSize")),
         mBGVisible(p.bg_visible),
         mBGColor(p.bg_color),
-        mOverlay(p.overlay) // <SK:Nexii> Overlay scroll bar
+        mOverlay(p.overlay), // <SK:Nexii> Overlay scroll bar
+        mThin(p.thin) // <SK:Nexii> Thin scrollbars
 {
+    mWheelLine = (F32)llmax(mStepSize, 1); // <SK:Nexii> smooth scroll: a wheel line is a step unless the owner says
+    mSmoothScroll = p.smooth_scroll; // <SK:Nexii> smooth scroll
+    // <SK:Nexii> Thin scrollbars: skin colours unless the params give their own.
+    if (mThin)
+    {
+        LLUIColorTable& colors = LLUIColorTable::instance();
+        mThinTrackColor = p.thin_track_color.isProvided() ? p.thin_track_color() : colors.getColor("ScrollbarThinTrackColor");
+        mThinThumbColor = p.thin_thumb_color.isProvided() ? p.thin_thumb_color() : colors.getColor("ScrollbarThinThumbColor");
+        mThinThumbHoverColor = p.thin_thumb_hover_color.isProvided() ? p.thin_thumb_hover_color() : colors.getColor("ScrollbarThinThumbHoverColor");
+        mThinThumbPressedColor = p.thin_thumb_pressed_color.isProvided() ? p.thin_thumb_pressed_color() : colors.getColor("ScrollbarThinThumbPressedColor");
+        if (!p.thickness.isProvided())
+        {
+            mThickness = THIN_THICKNESS;
+        }
+    }
+    // </SK:Nexii>
     updateThumbRect();
 
     // Page up and page down buttons
@@ -109,7 +136,7 @@ LLScrollbar::LLScrollbar(const Params & p)
         line_up_rect.setOriginAndSize( 0, 0, mThickness, mThickness );
         line_down_rect.setOriginAndSize( getRect().getWidth() - mThickness, 0, mThickness, mThickness );
     }
-    // <SK:Nexii> Overlay scroll bar: arrows are hidden, their rects zero so the thumb has the whole length.
+    // <SK:Nexii> Overlay scroll bar: arrows are hidden, their rects zero so the thumb has the whole length (overlay wins over thin).
     if (mOverlay)
     {
         line_up_rect = LLRect();
@@ -167,6 +194,22 @@ void LLScrollbar::setDocParams( S32 size, S32 pos )
 bool LLScrollbar::setDocPos(S32 pos, bool update_thumb)
 {
     pos = llclamp(pos, 0, getDocPosMax());
+    // <SK:Nexii> smooth scroll
+    // A position from anywhere but the wheel's own glide ends the glide; the same position only reclamps it.
+    if (!mApplyingWheel)
+    {
+        if (pos != mDocPos)
+        {
+            mWheelAnimator.jumpTo((F32)pos);
+            mDocPosF = (F32)pos;
+        }
+        else
+        {
+            mWheelAnimator.clamp(0.f, (F32)getDocPosMax());
+            mDocPosF = llclamp(mDocPosF, 0.f, (F32)getDocPosMax());
+        }
+    }
+    // </SK:Nexii>
     if (pos != mDocPos)
     {
         mDocPos = pos;
@@ -427,58 +470,105 @@ bool LLScrollbar::handleHover(S32 x, S32 y, MASK mask)
 } // end handleHover
 
 
-// Accumulate fractional line movement from the precise (sub-notch) scroll
-// delta and apply whole lines as the accumulator crosses an integer, carrying
-// the remainder. mDocPos is integer "lines", so this residue is what lets
-// high-resolution wheels and touchpads scroll smoothly instead of dropping
-// everything below one whole notch. A whole notch (precise == 1) moves
-// mStepSize lines exactly as before.
-bool LLScrollbar::scrollByWheel(F32 precise)
+// <SK:Nexii> smooth scroll
+// A wheel glides the position onto its target by the distance the OS asks for; a precise device moves it at once.
+// Parked at the end it is scrolling toward, the gesture goes on to a parent scroller, as it always did.
+bool LLScrollbar::scrollByWheel(const LLScrollDelta& delta)
 {
-    mScrollWheelResidue += precise * (F32)mStepSize;
-    S32 lines = lltrunc(mScrollWheelResidue);
-    mScrollWheelResidue -= (F32)lines;
-    if (changeLine(lines, true))
+    if (!SKScrollDistance::enabled())
     {
-        return true; // moved at least one whole line
-    }
-    // No whole line crossed yet (sub-notch precise scroll). Still report the
-    // gesture as handled so it isn't forwarded to a parent scroller, which would
-    // otherwise advance on the same high-resolution / touchpad gesture (a
-    // visible double-scroll in nested non-opaque scroll areas). The one
-    // exception is being parked at the boundary in the scroll direction: there
-    // the legacy behavior was to let the event chain to the parent, so preserve
-    // that.
-    if (precise > 0.f)
-    {
-        if (mDocPos < getDocPosMax())
+        // Upstream: whole lines from the precise delta, the residue carried, the gesture handed on only at the end.
+        mScrollWheelResidue += delta.mPrecise * (F32)mStepSize;
+        S32 lines = lltrunc(mScrollWheelResidue);
+        mScrollWheelResidue -= (F32)lines;
+        if (changeLine(lines, true))
         {
             return true;
         }
-        mScrollWheelResidue = 0.f; // forwarding to parent; don't keep partial progress
-        return false;
-    }
-    if (precise < 0.f)
-    {
-        if (mDocPos > 0)
+        if (delta.mPrecise > 0.f)
         {
-            return true;
+            if (mDocPos < getDocPosMax())
+            {
+                return true;
+            }
+            mScrollWheelResidue = 0.f;
+            return false;
         }
-        mScrollWheelResidue = 0.f; // forwarding to parent; don't keep partial progress
+        if (delta.mPrecise < 0.f)
+        {
+            if (mDocPos > 0)
+            {
+                return true;
+            }
+            mScrollWheelResidue = 0.f;
+            return false;
+        }
         return false;
     }
-    return false;
+    const F32 max = (F32)getDocPosMax();
+    if (!mWheelAnimator.isAnimating() && llround(mWheelAnimator.position()) != mDocPos)
+    {
+        mWheelAnimator.jumpTo((F32)mDocPos);
+    }
+    const F32 target = mWheelAnimator.target();
+    F32 units;
+    if (mWheelSnapsItems && !delta.mIsPrecise && !delta.mPage)
+    {
+        // Whole items per notch, the view's edge snapped onto an item's.
+        const S32 items = ll_round(SKScrollSnap::itemsPerNotch(mWheelUnit) * fabsf(delta.mPrecise));
+        units = SKScrollSnap::target(target, (F32)mPageSize, max, llmax(items, 1), delta.mPrecise > 0.f) - target;
+    }
+    else
+    {
+        units = SKScrollDistance::pixels(delta, mWheelLine, (F32)mPageSize * mWheelUnit) / mWheelUnit;
+    }
+    if (units == 0.f || (units > 0.f && target >= max) || (units < 0.f && target <= 0.f))
+    {
+        return false;
+    }
+    SKScrollAnimator::Config config = SKScrollDistance::config();
+    config.mSmooth = config.mSmooth && mSmoothScroll;
+    mWheelAnimator.addDelta(units, delta.mIsPrecise, SKScrollDistance::now(), 0.f, max, config);
+    tickWheel();
+    return true;
+}
+
+void LLScrollbar::setWheelUnits(F32 unit_pixels, F32 line_pixels)
+{
+    mWheelUnit = llmax(unit_pixels, 1.f);
+    mWheelLine = llmax(line_pixels, 1.f);
+}
+
+void LLScrollbar::tickWheel()
+{
+    if (!SKScrollDistance::enabled())
+    {
+        // Switched off mid-glide: stop where the position is.
+        mWheelAnimator.jumpTo((F32)mDocPos);
+        mDocPosF = (F32)mDocPos;
+        return;
+    }
+    if (!mWheelAnimator.isAnimating() && mDocPosF == mWheelAnimator.position())
+    {
+        return;
+    }
+    mWheelAnimator.clamp(0.f, (F32)getDocPosMax());
+    mDocPosF = mWheelAnimator.tick(SKScrollDistance::now());
+    mApplyingWheel = true;
+    setDocPos((S32)llround(mDocPosF));
+    mApplyingWheel = false;
 }
 
 bool LLScrollbar::handleScrollWheel(S32 x, S32 y, LLScrollDelta delta)
 {
-    return scrollByWheel(delta.mPrecise);
+    return scrollByWheel(delta);
 }
 
 bool LLScrollbar::handleScrollHWheel(S32 x, S32 y, LLScrollDelta delta)
 {
-    return (LLScrollbar::HORIZONTAL == mOrientation) ? scrollByWheel(delta.mPrecise) : false;
+    return (LLScrollbar::HORIZONTAL == mOrientation) ? scrollByWheel(delta) : false;
 }
+// </SK:Nexii>
 
 bool LLScrollbar::handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop,
                                     EDragAndDropType cargo_type, void *cargo_data, EAcceptance *accept, std::string &tooltip_msg)
@@ -553,11 +643,20 @@ void LLScrollbar::reshape(S32 width, S32 height, bool called_from_parent)
 void LLScrollbar::draw()
 {
     if (!getRect().isValid()) return;
+    tickWheel(); // <SK:Nexii> smooth scroll
 
     // <SK:Nexii> Overlay scroll bar
     if (mOverlay)
     {
         drawOverlay();
+        return;
+    }
+    // </SK:Nexii>
+
+    // <SK:Nexii> Thin scrollbars
+    if (mThin)
+    {
+        drawThin();
         return;
     }
     // </SK:Nexii>
@@ -721,11 +820,13 @@ void LLScrollbar::pageDown(S32 overlap)
 
 void LLScrollbar::onLineUpBtnPressed( const LLSD& data )
 {
+    if (mThin) { scrollByWheel(LLScrollDelta(0, -0.5f)); return; } // <SK:Nexii> Thin scrollbars: half a wheel notch, gliding as the wheel does
     changeLine( -mStepSize, true );
 }
 
 void LLScrollbar::onLineDownBtnPressed( const LLSD& data )
 {
+    if (mThin) { scrollByWheel(LLScrollDelta(0, 0.5f)); return; } // <SK:Nexii> Thin scrollbars: half a wheel notch, gliding as the wheel does
     changeLine( mStepSize, true );
 }
 
@@ -925,5 +1026,102 @@ void LLScrollbar::drawOverlay()
             }
         }
     }
+}
+// </SK:Nexii>
+
+// <SK:Nexii> Thin scrollbars: Chrome's thin bar, a pill thumb and two arrows, anti-aliased by coverage tables.
+namespace
+{
+    // Coverage of the thumb's ends, from the end inwards, across its 6 px.
+    constexpr F32 THIN_CAP[3][6] = {
+        { 0.f,  .57f, .98f, .98f, .57f, 0.f  },
+        { .57f, 1.f,  1.f,  1.f,  1.f,  .57f },
+        { .98f, 1.f,  1.f,  1.f,  1.f,  .98f },
+    };
+    // Coverage of an arrow, rows 2-7 from the bar's end, across the 8 px inside the track's margin.
+    constexpr F32 THIN_ARROW[6][8] = {
+        { 0.f, 0.f,  0.f,  .09f, .09f, 0.f,  0.f,  0.f },
+        { 0.f, 0.f,  .09f, .93f, .93f, .09f, 0.f,  0.f },
+        { 0.f, 0.f,  .72f, 1.f,  1.f,  .72f, 0.f,  0.f },
+        { 0.f, .48f, 1.f,  1.f,  1.f,  1.f,  .48f, 0.f },
+        { 0.f, 1.f,  1.f,  1.f,  1.f,  1.f,  1.f,  0.f },
+        { 0.f, .17f, .22f, .22f, .22f, .22f, .17f, 0.f },
+    };
+}
+
+void LLScrollbar::drawThin()
+{
+    gl_rect_2d(getLocalRect(), mThinTrackColor.get(), true);
+
+    const bool vertical = mOrientation == VERTICAL;
+    const S32 width = getRect().getWidth();
+    const S32 height = getRect().getHeight();
+    const S32 length = vertical ? height : width;
+    // Spans in bar coordinates: along from the top (left) end, across from the left (top) side.
+    auto span = [&](S32 a0, S32 a1, S32 c0, S32 c1, const LLColor4& color)
+    {
+        if (vertical)
+            gl_rect_2d(c0, height - a0, c1, height - a1, color, true);
+        else
+            gl_rect_2d(a0, height - c0, a1, height - c1, color, true);
+    };
+    auto pixel = [&](S32 a, S32 c, LLColor4 color, F32 coverage)
+    {
+        if (coverage <= 0.f) return;
+        color.mV[VALPHA] *= coverage;
+        span(a, a + 1, c, c + 1, color);
+    };
+
+    S32 mouse_x, mouse_y;
+    LLUI::getInstance()->getMousePositionLocal(this, &mouse_x, &mouse_y);
+    LLMouseHandler* captor = gFocusMgr.getMouseCapture();
+    auto shade = [&](bool pressed, bool hovered)
+    {
+        return pressed ? mThinThumbPressedColor.get() : hovered ? mThinThumbHoverColor.get() : mThinThumbColor.get();
+    };
+
+    // Arrows, pointing outward, when the bar has room for both.
+    const S32 across = vertical ? width : height;
+    if (length >= 2 * across && across >= 10)
+    {
+        const S32 c0 = (across - 8) / 2;
+        for (LLButton* btn : { mLineUpBtn, mLineDownBtn })
+        {
+            const bool far_end = btn == mLineDownBtn;
+            const LLColor4 color = shade(captor == btn, !captor && getEnabled() && btn->getRect().pointInRect(mouse_x, mouse_y));
+            for (S32 r = 0; r < 6; ++r)
+            {
+                const S32 a = far_end ? length - 1 - (r + 2) : r + 2;
+                for (S32 c = 0; c < 8; ++c)
+                {
+                    pixel(a, c0 + c, color, THIN_ARROW[r][c]);
+                }
+            }
+        }
+    }
+
+    if (mDocSize <= mPageSize)
+    {
+        return;
+    }
+
+    const LLColor4 color = shade(captor == this, !captor && getEnabled() && mThumbRect.pointInRect(mouse_x, mouse_y));
+    const S32 a0 = vertical ? height - mThumbRect.mTop : mThumbRect.mLeft;
+    const S32 a1 = vertical ? height - mThumbRect.mBottom : mThumbRect.mRight;
+    const S32 c0 = (across - 6) / 2;
+    if (a1 - a0 < 6)
+    {
+        span(a0, a1, c0, c0 + 6, color);
+        return;
+    }
+    for (S32 r = 0; r < 3; ++r)
+    {
+        for (S32 c = 0; c < 6; ++c)
+        {
+            pixel(a0 + r, c0 + c, color, THIN_CAP[r][c]);
+            pixel(a1 - 1 - r, c0 + c, color, THIN_CAP[r][c]);
+        }
+    }
+    span(a0 + 3, a1 - 3, c0, c0 + 6, color);
 }
 // </SK:Nexii>

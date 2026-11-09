@@ -31,6 +31,7 @@
 #include "lluictrl.h"
 #include "v4color.h"
 #include "llbutton.h"
+#include "skscrollanimator.h" // <SK:Nexii> smooth scroll
 
 //
 // Classes
@@ -61,10 +62,19 @@ public:
 
         Optional<bool>                  bg_visible;
         Optional<bool>                  overlay; // <SK:Nexii> Overlay scroll bar: thin fading thumb over the content; a dwell expands it to a track with arrows
+        Optional<bool>                  smooth_scroll; // <SK:Nexii> smooth scroll: false moves the wheel's distance at once
+        Optional<bool>                  thin; // <SK:Nexii> Thin scrollbars: a narrow track, a pill thumb and drawn arrows
 
         Optional<LLUIColor>             track_color,
                                         thumb_color,
                                         bg_color;
+
+        // <SK:Nexii> Thin scrollbars
+        Optional<LLUIColor>             thin_track_color,
+                                        thin_thumb_color,
+                                        thin_thumb_hover_color,
+                                        thin_thumb_pressed_color;
+        // </SK:Nexii>
 
         Optional<LLButton::Params>      up_button;
         Optional<LLButton::Params>      down_button;
@@ -133,16 +143,38 @@ public:
     S32                 getThickness() const { return mThickness; }
     void                setThickness(S32 thickness);
 
+    // <SK:Nexii> smooth scroll
+    // The wheel glides the position; getDocPos() is where it rounds to, getDocPosF() where it is.
+    F32                 getDocPosF() const { return mDocPosF; }
+    // Pixels per doc unit (1 where the doc is in pixels, a row's height where it is in rows), and per wheel line.
+    void                setWheelUnits(F32 unit_pixels, F32 line_pixels);
+    // Doc units are whole items (rows): a notch brings in whole items, Explorer style.
+    void                setWheelSnapsItems(bool snaps) { mWheelSnapsItems = snaps; }
+    // Advances the wheel's glide to now; its owner calls this every frame it draws.
+    void                tickWheel();
+    bool                isWheelGliding() const { return mWheelAnimator.isAnimating(); }
+    void                setSmoothScroll(bool smooth) { mSmoothScroll = smooth; } // <SK:Nexii> smooth scroll
+    bool                scrollByWheel(const LLScrollDelta& delta);
+    // <SK:Nexii> Thin scrollbars
+    static constexpr S32 THIN_THICKNESS = 10;
+    bool                isThin() const { return mThin; }
+    // </SK:Nexii>
+
 private:
     void                updateThumbRect();
     bool                changeLine(S32 delta, bool update_thumb );
-    bool                scrollByWheel(F32 precise); // precise sub-notch wheel delta -> whole lines + residue
-    // <SK:Nexii> Overlay scroll bar
-    S32                 arrowLength() const { return mOverlay && !mOverlayExpanded ? 0 : mThickness; }
+    // <SK:Nexii> Overlay scroll bar and thin scrollbars: an overlay bar has arrows only expanded (overlay wins);
+    // a thin bar's arrow square is followed by a 2 px gap
+    S32                 arrowLength() const
+    {
+        if (mOverlay) return mOverlayExpanded ? mThickness : 0;
+        return mThin ? mThickness + 2 : mThickness;
+    }
     void                overlaySetExpanded(bool expanded);
     F32                 overlayAlpha(F64 now) const;
     void                overlayTouch();
     void                drawOverlay();
+    void                drawThin(); // <SK:Nexii> Thin scrollbars
     // </SK:Nexii>
 
     callback_t          mChangeCallback;
@@ -153,6 +185,15 @@ private:
     S32                 mPageSize;      // Maximum number of lines that can be seen at one time.
     S32                 mStepSize;
     F32                 mScrollWheelResidue = 0.f; // carries sub-line precise scroll between events
+    // <SK:Nexii> smooth scroll
+    SKScrollAnimator    mWheelAnimator;
+    bool                mSmoothScroll = true; // <SK:Nexii> smooth scroll
+    F32                 mDocPosF = 0.f;
+    F32                 mWheelUnit = 1.f;
+    F32                 mWheelLine = 1.f;
+    bool                mWheelSnapsItems = false;
+    bool                mApplyingWheel = false;
+    // </SK:Nexii>
     bool                mDocChanged;
 
     LLRect              mThumbRect;
@@ -190,6 +231,12 @@ private:
     F64                 mOverlayShownAt = -1000.0;
     F64                 mOverlayActiveAt = -1000.0;
     U32                 mOverlayDrawnFrame = 0;
+    // <SK:Nexii> Thin scrollbars
+    bool                mThin = false;
+    LLUIColor           mThinTrackColor;
+    LLUIColor           mThinThumbColor;
+    LLUIColor           mThinThumbHoverColor;
+    LLUIColor           mThinThumbPressedColor;
     // </SK:Nexii>
 };
 

@@ -66,11 +66,14 @@ static ScrollContainerRegistry::Register<LLScrollingPanelList> r1("scrolling_pan
 static ScrollContainerRegistry::Register<LLContainerView> r2("container_view");
 static ScrollContainerRegistry::Register<LLPanel> r3("panel", &LLPanel::fromXML);
 
+bool LLScrollContainer::sThinScrollbarsEverywhere = false; // <SK:Nexii> Thin scrollbars
+
 LLScrollContainer::Params::Params()
 :   is_opaque("opaque"),
     bg_color("color"),
     border_visible("border_visible"),
     hide_scrollbar("hide_scrollbar"),
+    smooth_scroll("smooth_scroll", true), // <SK:Nexii> smooth scroll
     ignore_arrow_keys("ignore_arrow_keys"),
     min_auto_scroll_rate("min_auto_scroll_rate", 100),
     max_auto_scroll_rate("max_auto_scroll_rate", 1000),
@@ -78,6 +81,7 @@ LLScrollContainer::Params::Params()
     reserve_scroll_corner("reserve_scroll_corner", false),
     keep_scroll_pos("keep_scroll_pos", false),
     overlay_scrollbars("overlay_scrollbars", false), // <SK:Nexii> Overlay scroll bar
+    thin_scrollbars("thin_scrollbars", false), // <SK:Nexii> Thin scrollbars
     size("size", -1)
 {}
 
@@ -104,6 +108,13 @@ LLScrollContainer::LLScrollContainer(const LLScrollContainer::Params& p)
         LLControlGroup* config = LLUI::getInstance()->mSettingGroups["config"];
         mOverlayScrollbars = p.overlay_scrollbars
             || (config && config->controlExists("SkoomaScrollbarOverlayEverywhere") && config->getBOOL("SkoomaScrollbarOverlayEverywhere"));
+    }
+    // </SK:Nexii>
+    // <SK:Nexii> Thin scrollbars: per container, or everywhere; the gutter is only the thin width.
+    mThinScrollbars = p.thin_scrollbars || sThinScrollbarsEverywhere;
+    if (mThinScrollbars && mSize < 0)
+    {
+        mSize = LLScrollbar::THIN_THICKNESS;
     }
     // </SK:Nexii>
     mStoredDocPos[VERTICAL] = 0;
@@ -138,6 +149,9 @@ LLScrollContainer::LLScrollContainer(const LLScrollContainer::Params& p)
     sbparams.visible(false);
     sbparams.change_callback(p.scroll_callback);
     sbparams.overlay(mOverlayScrollbars); // <SK:Nexii> Overlay scroll bar
+    sbparams.smooth_scroll(p.smooth_scroll); // <SK:Nexii> smooth scroll
+    sbparams.thin(mThinScrollbars); // <SK:Nexii> Thin scrollbars
+    if (mThinScrollbars) sbparams.thickness(scrollbar_size); // <SK:Nexii> Thin scrollbars
     mScrollbar[VERTICAL] = LLUICtrlFactory::create<LLScrollbar> (sbparams);
     LLView::addChild( mScrollbar[VERTICAL] );
 
@@ -155,7 +169,13 @@ LLScrollContainer::LLScrollContainer(const LLScrollContainer::Params& p)
     sbparams.follows.flags(FOLLOWS_LEFT | FOLLOWS_RIGHT | FOLLOWS_BOTTOM);
     sbparams.change_callback(p.scroll_callback);
     sbparams.overlay(mOverlayScrollbars); // <SK:Nexii> Overlay scroll bar
+    sbparams.smooth_scroll(p.smooth_scroll); // <SK:Nexii> smooth scroll
     mScrollbar[HORIZONTAL] = LLUICtrlFactory::create<LLScrollbar> (sbparams);
+    // <SK:Nexii> smooth scroll
+    // Content in pixels, with no lines of its own until its owner gives it some: Chrome's.
+    mScrollbar[VERTICAL]->setWheelUnits(1.f, LLScrollDelta::PIXELS_PER_LINE);
+    mScrollbar[HORIZONTAL]->setWheelUnits(1.f, LLScrollDelta::PIXELS_PER_LINE);
+    // </SK:Nexii>
     LLView::addChild( mScrollbar[HORIZONTAL] );
 }
 
@@ -540,6 +560,10 @@ void LLScrollContainer::draw()
         // of the rectangle.
         if( mScrolledView )
         {
+            // <SK:Nexii> smooth scroll
+            mScrollbar[VERTICAL]->tickWheel();
+            mScrollbar[HORIZONTAL]->tickWheel();
+            // </SK:Nexii>
             updateScroll();
 
             // Draw the scrolled area.
@@ -858,6 +882,7 @@ S32 LLScrollContainer::getBorderWidth() const
 
 void LLScrollContainer::setSize(S32 size)
 {
+    if (mThinScrollbars && size < 0) size = LLScrollbar::THIN_THICKNESS; // <SK:Nexii> Thin scrollbars
     mSize = size;
     mScrollbar[VERTICAL]->setThickness(size);
     mScrollbar[HORIZONTAL]->setThickness(size);
