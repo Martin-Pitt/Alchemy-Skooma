@@ -3367,6 +3367,17 @@
             <key>Value</key>
             <real>4000.0</real>
         </map>
+        <key>SKWorldMapHubPlaces</key>
+        <map>
+            <key>Comment</key>
+            <string>A file of where freight hubs stand in their regions, one tab-separated line each: region name, x, y and optionally z in region metres ('#' starts a comment). Read again when it changes. A hub not in it stands at its region's middle. Empty = none.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>String</string>
+            <key>Value</key>
+            <string />
+        </map>
         <key>SKWorldMapHubs</key>
         <map>
             <key>Comment</key>

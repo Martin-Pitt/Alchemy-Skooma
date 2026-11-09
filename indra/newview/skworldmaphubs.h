@@ -37,7 +37,8 @@ public:
     struct Placed
     {
         U64 mHandle;
-        U32 mHub;       ///< into table().hubs()
+        U32 mHub;           ///< into table().hubs()
+        F32 mX, mY;         ///< where in the region the hub stands, in metres: its place, else the middle
     };
 
     ~SKWorldMapHubs();
@@ -54,8 +55,13 @@ private:
     void loadCache();
     void fetch(const std::string& url, F64 now);
     void adopt(skworldmap::HubTable table);
+    void updatePlaces(F64 now);
 
     skworldmap::HubTable mTable;
+    skworldmap::HubPlaces mPlaces;
+    std::string mPlacesPath;            ///< the file mPlaces was read from
+    S64 mPlacesWritten = -1;            ///< its modification time then; -1 for no file
+    F64 mPlacesCheckAt = 0.0;           ///< frame time to look at the file again
     std::vector<Placed> mPlaced;
     size_t mPlacedRegions = 0;          ///< the world map's region count when mPlaced was made
     bool mPlacedStale = true;

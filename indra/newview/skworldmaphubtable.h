@@ -88,4 +88,26 @@ namespace skworldmap
         std::vector<Hub> mHubs;
         std::vector<std::pair<std::string, U32>> mIndex;   ///< lower-cased region name, hub; sorted
     };
+
+    /// Where in its region a hub stands, in region metres; z is 0 where not known.
+    struct HubPlace
+    {
+        F32 mX = 0.f, mY = 0.f, mZ = 0.f;
+    };
+
+    /// Hub places by region, read from tab-separated lines of region, x, y and an optional z; a line starting
+    /// with '#' is a comment. A region without a place stands at its middle.
+    class HubPlaces
+    {
+    public:
+        static HubPlaces parse(std::string_view tsv);
+
+        size_t size() const { return mPlaces.size(); }
+
+        /// The place of the hub in a region, matched in any case, or null.
+        const HubPlace* find(std::string_view region) const;
+
+    private:
+        std::vector<std::pair<std::string, HubPlace>> mPlaces;  ///< lower-cased region name; sorted
+    };
 } // namespace skworldmap
