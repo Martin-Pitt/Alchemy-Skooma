@@ -86,6 +86,17 @@ namespace skroadbench
         F64 keep = 0.0;             // SKRoadAutopilotLaneOffset
         F32 look_ahead = 100.f;     // SKRoadAutopilotLookAhead
         F64 car_half_w = 1.47;
+        // Streamed: the parts arrive as the world streams in, nearest the car first, rather than all at the start,
+        // and each linkset's properties some seconds after its first part, so the model settles as it does live.
+        struct Stream
+        {
+            bool on = false;
+            F64 radius = 128;           // a part arrives once the car is this near its box
+            F64 rate = 400;             // parts a second at most
+            F64 props_lo = 1, props_hi = 10;    // a linkset's properties this long after its first part
+            F64 props_never = 0;        // the share of linksets whose properties never come
+            U32 seed = 1;
+        } stream;
     };
 
     // From the case's LLSD (the extractor's JSON): false with a reason where it is not one.
@@ -108,6 +119,8 @@ namespace skroadbench
         F64 jump[4] = {};       // the lip's x, y and the landing's x, y
         std::vector<skroad::Junction> junctions;
         std::vector<LLUUID> chain;
+        size_t arrived = 0;         // parts the census holds (all of them unless streamed)
+        size_t props_known = 0;     // linksets whose properties have come
     };
 
     // Plays every pose through the model, one step every step_s between them, handing `each` what it read.

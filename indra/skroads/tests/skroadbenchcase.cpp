@@ -44,6 +44,106 @@ namespace skroadbench
     {
         const Case* sCase = nullptr;
 
+        // A streamed case's world as it has come so far: the census scan the model reads, and when each linkset's
+        // properties come (negative: never).
+        struct StreamSnap
+        {
+            std::vector<skworld::RecordPtr> records, added;
+            skroad::CensusView view{ 0, records, added, none(), none() };
+            static const std::vector<skworld::RecordPtr>& none()
+            {
+                static const std::vector<skworld::RecordPtr> empty;
+                return empty;
+            }
+        };
+        struct StreamState
+        {
+            std::vector<U8> in;                         // by record: arrived
+            std::vector<skworld::RecordPtr> arrived;
+            std::shared_ptr<const skroad::CensusView> view;
+            U64 stamp = 0;
+            std::unordered_map<LLUUID, F64> props_at;
+            std::unordered_set<LLUUID> props_told;
+            std::function<void(const LLUUID&)> watch;
+            F64 now = 0;
+        } sStream;
+
+        // A number in [0, 1) from a linkset and the case's seed, so a run streams the same way every time.
+        F64 streamDraw(const LLUUID& id, U32 seed, U32 salt)
+        {
+            U64 h = std::hash<LLUUID>{}(id) ^ (U64(seed) * 0x9E3779B97F4A7C15ULL) ^ (U64(salt) << 32);
+            h ^= h >> 33;
+            h *= 0xFF51AFD7ED558CCDULL;
+            h ^= h >> 33;
+            return F64(h >> 11) / F64(1ULL << 53);
+        }
+
+        F64 boxDistance(const skworld::Record& r, const LLVector3d& p)
+        {
+            F64 d2 = 0;
+            for (S32 k = 0; k < 2; ++k)
+            {
+                const F64 v = p.mdV[k] < r.mMin.mdV[k] ? r.mMin.mdV[k] - p.mdV[k] : p.mdV[k] > r.mMax.mdV[k] ? p.mdV[k] - r.mMax.mdV[k] : 0.0;
+                d2 += v * v;
+            }
+            return std::sqrt(d2);
+        }
+
+        // One step of the stream at case time `now` with the car at `car`: the nearest parts in radius arrive, as
+        // many as the rate lets, and the properties due by now are told to the model.
+        void streamStep(const Case& c, F64 now, const LLVector3d& car)
+        {
+            StreamState& s = sStream;
+            s.now = now;
+            std::vector<std::pair<F64, size_t>> due;
+            for (size_t i = 0; i < c.records.size(); ++i)
+            {
+                if (!s.in[i] && c.records[i])
+                {
+                    const F64 d = boxDistance(*c.records[i], car);
+                    if (d <= c.stream.radius)
+                    {
+                        due.push_back({ d, i });
+                    }
+                }
+            }
+            const size_t take = std::min(due.size(), size_t(std::max(1.0, c.stream.rate * c.step_s)));
+            std::partial_sort(due.begin(), due.begin() + take, due.end());
+            if (take > 0)
+            {
+                auto snap = std::make_shared<StreamSnap>();
+                for (size_t k = 0; k < take; ++k)
+                {
+                    const skworld::RecordPtr& rec = c.records[due[k].second];
+                    s.in[due[k].second] = 1;
+                    s.arrived.push_back(rec);
+                    snap->added.push_back(rec);
+                    if (!s.props_at.count(rec->mRoot))
+                    {
+                        const bool never = streamDraw(rec->mRoot, c.stream.seed, 1) < c.stream.props_never;
+                        const F64 delay = c.stream.props_lo + (c.stream.props_hi - c.stream.props_lo) * streamDraw(rec->mRoot, c.stream.seed, 2);
+                        s.props_at[rec->mRoot] = never ? -1.0 : now + delay;
+                    }
+                }
+                snap->records = s.arrived;
+                snap->view.mStamp = ++s.stamp;
+                s.view = std::shared_ptr<const skroad::CensusView>(snap, &snap->view);
+            }
+            for (const auto& [root, at] : s.props_at)
+            {
+                if (at >= 0 && at <= now && s.props_told.insert(root).second && s.watch)
+                {
+                    s.watch(root);
+                }
+            }
+        }
+
+        bool streamPropsKnown(const LLUUID& root)
+        {
+            auto it = sStream.props_at.find(root);
+            return it != sStream.props_at.end() && it->second >= 0 && it->second <= sStream.now;
+        }
+
         struct KitFrame                 // a part's frame as recorded, for its linkset's kit signature
         {
             LLUUID part;                // null: the part's frame is not recorded
@@ -343,6 +443,18 @@ namespace skroadbench
         if (s.has("look_ahead")) out.look_ahead = F32(s["look_ahead"].asReal());
         if (s.has("car_half_w")) out.car_half_w = s["car_half_w"].asReal();
         if (s.has("step_s")) out.step_s = s["step_s"].asReal();
+        if (sd.has("stream"))
+        {
+            const LLSD& st = sd["stream"];
+            Case::Stream& o = out.stream;
+            o.on = true;
+            if (st.has("radius")) o.radius = st["radius"].asReal();
+            if (st.has("rate")) o.rate = st["rate"].asReal();
+            if (st.has("props_lo")) o.props_lo = st["props_lo"].asReal();
+            if (st.has("props_hi")) o.props_hi = st["props_hi"].asReal();
+            if (st.has("props_never")) o.props_never = st["props_never"].asReal();
+            if (st.has("seed")) o.seed = U32(st["seed"].asInteger());
+        }
         if (out.poses.empty())
         {
             why = "no poses";
@@ -380,6 +492,12 @@ namespace skroadbench
     {
         using namespace skroad;
         useCase(&c);
+        {
+            auto watch = std::move(sStream.watch);
+            sStream = StreamState();
+            sStream.watch = std::move(watch);
+            sStream.in.assign(c.records.size(), 0);
+        }
         // a case starts as a fresh drive: nothing of the last case's pieces, line, route or surface carried into it
         forgetRoad();
         // the model's timers made before the first step read the real clock: the case's time starts after it
@@ -417,6 +535,17 @@ namespace skroadbench
             sCarHalfW = c.car_half_w;
             const F64 hx = std::cos(s.pose.yaw), hy = std::sin(s.pose.yaw);
             const LLVector3d& pos = s.pose.car;
+            if (c.stream.on)
+            {
+                streamStep(c, t - t0, pos);
+                s.arrived = sStream.arrived.size();
+                s.props_known = sStream.props_told.size();
+            }
+            else
+            {
+                s.arrived = c.records.size();
+                s.props_known = c.props.size();
+            }
             const auto started = std::chrono::steady_clock::now();
             refreshShapes(pos);
             noteDriveSurface(pos.mdV[VX], pos.mdV[VY], pos.mdV[VZ], now < 1.0);
@@ -445,6 +574,7 @@ namespace skroadbench
         out.precision(10);
         out << "{\"t\":" << s.t << ",\"car\":[" << s.pose.car.mdV[VX] << "," << s.pose.car.mdV[VY] << "," << s.pose.car.mdV[VZ]
             << "],\"yaw\":" << s.pose.yaw * 180.0 / F_PI << ",\"speed\":" << s.pose.speed << ",\"laid\":" << (s.laid ? "true" : "false")
+            << ",\"arrived\":" << s.arrived << ",\"props_known\":" << s.props_known
             << ",\"ms\":" << s.ms << ",\"walk_ms\":" << s.walk_ms << ",\"source\":" << LlsdToJson(LLSD(s.source)) << ",\"walk_end\":" << LlsdToJson(LLSD(s.walk_end));
         if (s.jumped)
         {
@@ -501,6 +631,10 @@ namespace skroad::host
         {
             return nullptr;
         }
+        if (sCase->stream.on)
+        {
+            return skroadbench::sStream.view;   // null until the first part arrives
+        }
         if (sCase != last)
         {
             last = sCase;
@@ -515,6 +649,10 @@ namespace skroad::host
         {
             return nullptr;
         }
+        if (sCase->stream.on && !skroadbench::streamPropsKnown(root))
+        {
+            return nullptr;
+        }
         auto it = sCase->props.find(root);
         return it != sCase->props.end() ? &it->second : nullptr;
     }
@@ -524,9 +662,10 @@ namespace skroad::host
         return properties(root) != nullptr;
     }
 
-    bool watchProperties(std::function<void(const LLUUID&)>)
+    bool watchProperties(std::function<void(const LLUUID&)> changed)
     {
-        return true;        // a case's properties never change
+        skroadbench::sStream.watch = std::move(changed);   // told as a streamed case's properties come
+        return true;
     }
 
     bool lindenOwner(const LLUUID& owner)
