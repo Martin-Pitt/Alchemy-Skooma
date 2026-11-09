@@ -160,7 +160,14 @@ void LLDrawPoolTerrain::bindSurface(LLGLSLShader* shader)
     // nothing else holds them the shadow pass places the same vertices the lit
     // pass does. During a cube snapshot the singleton is the probe; that
     // tessellates around the probe, which is what a probe wants.
-    const LLVector3& camera_origin = LLViewerCamera::getInstance()->getOrigin();
+    // <SK:Nexii> Snapped to 1/256 m, the origin minus any region's 256 m corner is exact in float, so regions
+    // sharing an edge give the shader the same numbers and pick the same level for it.
+    LLVector3 camera_origin = LLViewerCamera::getInstance()->getOrigin();
+    for (F32& c : camera_origin.mV)
+    {
+        c = std::round(c * 256.f) / 256.f;
+    }
+    // </SK:Nexii>
     const LLVector3 origin = camera_origin - regionp->getOriginAgent();
     shader->uniform3fv(LLShaderMgr::TERRAIN_TESS_ORIGIN, 1, origin.mV);
     const TessLevels levels = tess_levels();
