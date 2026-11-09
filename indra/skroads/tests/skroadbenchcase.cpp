@@ -506,6 +506,7 @@ namespace skroadbench
         const F64 t1 = c.poses.back().t;
         size_t seg = 0;
         bool first = true;
+        std::unordered_map<LLUUID, std::string> last_states;    // each part's state at the last step
         for (F64 t = t0; t <= t1 + 1e-6; t += c.step_s)
         {
             while (seg + 2 < c.poses.size() && c.poses[seg + 1].t <= t)
@@ -563,6 +564,45 @@ namespace skroadbench
             s.jump[3] = sView.land_y;
             s.junctions = sView.junctions;
             s.chain = sChainRoots;
+            {
+                static std::vector<PartState> now_states;
+                partStates(now_states);
+                std::unordered_map<LLUUID, std::string> seen;
+                for (const PartState& p : now_states)
+                {
+                    std::string k(1, p.named > 0 ? 'r' : p.named == 0 ? 'n' : 'u');
+                    for (auto [on, ch] : { std::pair{ p.definite, 'D' }, { p.pending, 'P' }, { p.carried, 'C' }, { p.doubtful, 'd' },
+                                           { p.plaza, 'Z' }, { p.walkable, 'W' } })
+                    {
+                        if (on)
+                        {
+                            k += ch;
+                        }
+                    }
+                    seen[p.part] = k;
+                }
+                for (const auto& [part, k] : seen)
+                {
+                    auto [it, fresh] = last_states.try_emplace(part, k);
+                    if (fresh || it->second != k)
+                    {
+                        it->second = k;
+                        s.states.push_back({ part, k });
+                    }
+                }
+                for (auto it = last_states.begin(); it != last_states.end();)
+                {
+                    if (!seen.count(it->first))
+                    {
+                        s.states.push_back({ it->first, "-" });
+                        it = last_states.erase(it);
+                    }
+                    else
+                    {
+                        ++it;
+                    }
+                }
+            }
             each(s);
         }
         setClock(-1.0);
@@ -607,6 +647,11 @@ namespace skroadbench
                     << ",\"access\":\"" << skroad::accessName(b.access) << "\",\"mouth\":" << (b.mouth ? "true" : "false") << "}";
             }
             out << "]}";
+        }
+        out << "],\"states\":[";
+        for (size_t i = 0; i < s.states.size(); ++i)
+        {
+            out << (i ? "," : "") << "[\"" << s.states[i].first << "\",\"" << s.states[i].second << "\"]";
         }
         out << "],\"chain\":[";
         for (size_t i = 0; i < s.chain.size(); ++i)

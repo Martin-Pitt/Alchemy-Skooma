@@ -121,6 +121,10 @@ namespace skroadbench
         std::vector<LLUUID> chain;
         size_t arrived = 0;         // parts the census holds (all of them unless streamed)
         size_t props_known = 0;     // linksets whose properties have come
+        // the parts whose state (skroad::PartState) changed at this step, each with its new state as letters: the
+        // name verdict (r road, n not, u unknown), then D definite, P pending, C carried, d doubtful, Z plaza,
+        // W walkable; "-" where the part is gathered no more
+        std::vector<std::pair<LLUUID, std::string>> states;
     };
 
     // Plays every pose through the model, one step every step_s between them, handing `each` what it read.

@@ -5386,6 +5386,38 @@ namespace skroad
     }
 
     // The pairs of roads in reach (indices in sActiveRoots, the lower first) whose parts meet (sConts).
+    void partStates(std::vector<PartState>& out)
+    {
+        out.clear();
+        for (const Gathered& g : sGathered)
+        {
+            const bool definite = definiteOf(g);
+            const bool pending = !definite && g.named != 0 && !host::hasProperties(g.root);
+            const bool plaza = sPlazaRoots.count(g.root) != 0;
+            auto add = [&](const PieceShapes* p, bool doubtful)
+            {
+                PartState& s = out.emplace_back();
+                s.part = p->part;
+                s.root = g.root;
+                s.named = S8(g.named);
+                s.definite = definite;
+                s.pending = pending;
+                s.carried = g.carried && !doubtful;
+                s.doubtful = doubtful;
+                s.plaza = plaza;
+                s.walkable = sPartIndex.count(p) != 0;
+            };
+            for (const PieceShapes* p : g.pieces)
+            {
+                add(p, false);
+            }
+            for (const PieceShapes* p : g.doubtful)
+            {
+                add(p, true);
+            }
+        }
+    }
+
     void rootPairsFromParts(std::vector<U64>& out)
     {
         const S32 n = S32(sActiveRoots.size());

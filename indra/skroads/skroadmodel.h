@@ -514,6 +514,16 @@ namespace skroad
     extern std::vector<PieceShapes*> sParts;
     extern std::vector<std::vector<Continuation>> sConts;
     extern std::vector<S32> sWalkParts;
+    // What the model made of each part it gathered, for the bench and logs: its linkset's name verdict (roadVerdict:
+    // 1 road, 0 not, -1 unknown), whether it is road outright, still waiting on its properties, carried on by road,
+    // held doubtful, its linkset taken for a plaza, and whether the walk may go on it (one of sParts).
+    struct PartState
+    {
+        LLUUID part, root;
+        S8 named = -1;
+        bool definite = false, pending = false, carried = false, doubtful = false, plaza = false, walkable = false;
+    };
+    void partStates(std::vector<PartState>& out);
     F64 lineSeen();
     bool readRoad(const LLVector3d& pos, F64 hx, F64 hy, F64 speed, F64 keep, F64 now, const std::string& course);
     void noteLineWay(F64 now);
