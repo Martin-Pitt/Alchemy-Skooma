@@ -141,6 +141,12 @@ public:
     void onPrimInventoryChanged(const LLUUID& object_id, const LLUUID& prim_id);
     void onObjectPropertyChanged(const LLUUID& prim_id, const std::string& name, const std::string& desc, S16 inventory_serial = -1);
     void onObjectPermissionsReceived(const LLUUID& prim_id, const LLUUID& owner_id, U32 owner_mask, U32 next_owner_mask);
+
+    // <SK:Nexii> Refetch a published prim's inventory another path dropped
+    // Fetches a prim's inventory again where another path let go of it
+    // (a select node's first properties reply dirties it); true while one is on the way.
+    bool refetchDroppedInventory(LLViewerObject* prim);
+    // </SK:Nexii>
     void onLinksetChildAdded(const LLUUID& root_id, LLViewerObject* child);
     void onLinksetChildRemoved(const LLUUID& root_id, const LLUUID& child_id);
     void buildAndSendPublish(const LLUUID& object_id);
