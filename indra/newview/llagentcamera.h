@@ -203,6 +203,7 @@ public:
     void            setAnimationDuration(F32 seconds);
     void            startCameraAnimation();
     void            stopCameraAnimation();
+    void            orbitCameraAnimation(); // <SK:Nexii> 3D world map: the running animation turns and backs away rather than sliding
     void            skipCameraSmoothing(); // <SK:Nexii> modal view: a pan moves the camera rigidly
     void            snapCameraToTarget(); // <SK:Nexii> camera warp: ends any animation or smoothing, as a teleport arrives
     void            startCameraWarp(const SKCameraWarp::Profile& profile); // <SK:Nexii> camera warp: restarts the animation as a warp (skcamerawarp.h)
@@ -216,6 +217,7 @@ private:
     bool            mCameraAnimating;                   // Camera is transitioning from one mode to another
     LLVector3d      mAnimationCameraStartGlobal;        // Camera start position, global coords
     LLVector3d      mAnimationFocusStartGlobal;         // Camera focus point, global coords
+    bool            mCameraOrbiting = false;            // <SK:Nexii> 3D world map: the animation orbits (skworldmap::orbitCamera)
 
     //--------------------------------------------------------------------
     // Focus

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+<panel
+ background_visible="false"
+ follows="top|right"
+ height="36"
+ layout="topleft"
+ mouse_opaque="false"
+ name="sk_world_map"
+ width="36">
+    <button
+     follows="top|right"
+     height="24"
+     image_overlay="map_avatar_16.tga"
+     scale_image="true"
+     layout="topleft"
+     left="4"
+     name="recentre_btn"
+     tool_tip="Center map on my avatar&apos;s location"
+     top="8"
+     width="24" />
+</panel>
