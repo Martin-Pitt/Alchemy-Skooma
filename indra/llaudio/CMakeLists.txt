@@ -4,14 +4,27 @@ add_library(llaudio STATIC)
 
 target_sources(
   llaudio
-  PRIVATE llaudioengine.cpp lllistener.cpp llaudiodecodemgr.cpp llvorbisencode.cpp llwavfile.cpp
+  PRIVATE
+    llaudioengine.cpp
+    lllistener.cpp
+    llaudiodecodemgr.cpp
+    llvorbisencode.cpp
+    llwavfile.cpp
+    sklufs.cpp
 )
 
 target_sources(
   llaudio
   PUBLIC
     FILE_SET HEADERS
-      FILES llaudioengine.h lllistener.h llaudiodecodemgr.h llvorbisencode.h llwavfile.h llwindgen.h
+      FILES
+        llaudioengine.h
+        lllistener.h
+        llaudiodecodemgr.h
+        llvorbisencode.h
+        llwavfile.h
+        llwindgen.h
+        sklufs.h
 )
 
 target_link_libraries(
@@ -47,5 +60,15 @@ if(AL_USE_FAUDIO)
     llaudio
     PRIVATE llaudioengine_faudio.cpp lllistener_faudio.cpp
     PUBLIC FILE_SET HEADERS FILES llaudioengine_faudio.h lllistener_faudio.h
+  )
+endif()
+
+# Add tests
+if(AL_BUILD_TESTS)
+  al_add_test_binary(
+    llaudio_tests
+    PROJECT llaudio
+    SOURCES tests/sklufs_test.cpp
+    LIBRARIES llaudio llcommon
   )
 endif()
