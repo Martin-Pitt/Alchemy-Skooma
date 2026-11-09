@@ -22,8 +22,9 @@ Grouped by area. The trunk a group's branches land through is named in its headi
 
 | Feature | Branch | What it does | Index | Credit |
 |---|---|---|---|---|
-| **Flat prim sides** | `feature-render/prim-split` (landed, parked as `backup/`) | Untwisted box and prism prims are drawn as flat quads, two triangles a side, without the old edge splits that only served per-vertex lighting (a box goes from 108 to 12 triangles at the highest LOD). Twisted prims keep the splits, and a LOD change that builds the same mesh skips the rebuild. Develop > Render > Render Tests > Legacy Prim Edge Splits brings the splits back for comparison | [INJECTIONS.md](INJECTIONS.md) | Nexii |
 | **Squeeze** *(planned)* | — | Textures stay BC7-compressed in VRAM, about a quarter of the memory, encoded in the background. A from-scratch rewrite of Soapstorm's Squeeze, using the same encoder: Basis Universal's `bc7f`, vendored unmodified (Apache 2.0) | — | Nexii |
+
+Dropped 2026-11-09: **Flat prim sides** (`feature-render/prim-split`) and the vertical draw reach it was built on. Upstream builds untwisted flat prims without the edge splits itself (`profile_split`, and `bf1cee1f79`'s LOD invariance), so both left `main` when it was rebuilt.
 
 ### Atmosphere
 
@@ -67,7 +68,7 @@ Grouped by area. The trunk a group's branches land through is named in its headi
 | **Object motion updates** | `feature-object-motion-updates` | Two fixes to how moving objects follow their updates. Clamped velocity recovery: velocities the terse update clamps to ±128 m/s (bullets, fast vehicles) are recovered, so they no longer snap back along their path (`SKMotionRecoverClampedVelocity`). Smooth update corrections: a moving object's position error at each update is bled out over a fraction of a second instead of snapping; large jumps still snap (`SKMotionSmoothCorrections`). Both under Develop > Network | [MOTION.md](MOTION.md) | Nexii |
 | **Ghosted object cleanup** | `workaround-ghosted-physical-objects` | Temporary physical objects (bullets, thrown objects) that the viewer strands at a region border or that stop without being told to are hidden at once, sound included, then the region is asked whether they still exist; one still there a second later comes back. Judged by distance (speed × silence ≥ 5 m), not time, and never while the circuit is stalled. A workaround until the simulator sends their kills reliably | [INJECTIONS.md](INJECTIONS.md) | Nexii |
 
-### Roads and driving
+### Roads and driving (trunk `world`; the private branches land into `local`)
 
 | Feature | Branch | What it does | Index | Credit |
 |---|---|---|---|---|
@@ -75,7 +76,7 @@ Grouped by area. The trunk a group's branches land through is named in its headi
 | **Worldmap survey** (private) | `private-worldmap/survey` | Records the census, meshes, road signs and kit snapshots of the regions driven through, with a never-evicting cache archive, for the offline worldmap dataset. Never upstream or on GitHub | [INJECTIONS.md](INJECTIONS.md) | Nexii |
 | **Worldmap bot** (private) | `private-worldmap/bot` | Drives the grid's roads by itself: rez spots, the car, targets and exploring, teleports, hazards, security and human checks; a local WebSocket API for its tooling. Never upstream or on GitHub | [INJECTIONS.md](INJECTIONS.md) | Nexii |
 
-### Audio
+### Audio (trunk `audio`)
 
 | Feature | Branch | What it does | Index | Credit |
 |---|---|---|---|---|
@@ -142,7 +143,7 @@ The world foundations stack in processing order, each built on the one before an
 
 ## Fixes
 
-Small `fix-*` branches cut from `develop`, each a PR in waiting.
+Small `fix-*` branches cut from `develop`, each a PR in waiting. Those of an area land through its trunk: `fix-render/*` and the normals debug mask through `render`, `fix-scripteditor/*` through `scripteditor`, `fix-world/*` through `world`.
 
 | Fix | What it fixes | Status |
 |---|---|---|
@@ -158,7 +159,7 @@ Small `fix-*` branches cut from `develop`, each a PR in waiting.
 | Doc | For |
 |---|---|
 | [DEVELOPING.md](DEVELOPING.md) | Humans: setup, branches, daily loop |
-| [WORKFLOW.md](WORKFLOW.md) | Terse reference: `develop` (upstream) / `main` / `feature-*`, `git skooma` commands |
+| [WORKFLOW.md](WORKFLOW.md) | Terse reference: `develop` (upstream) / `main` / `local` / trunks / `docs` / `feature-*`, `git skooma` commands |
 | [UPSTREAM.md](UPSTREAM.md) | Parts that can go to Alchemy on their own, and what each depends on |
 | [INJECTIONS.md](INJECTIONS.md) | Every `<SK:Nexii>` edit to upstream files, grouped by feature |
 | [UI-LAYOUT.md](UI-LAYOUT.md) | XUI layout rules for floaters and panels |

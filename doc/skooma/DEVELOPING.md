@@ -50,19 +50,19 @@ submodules with the main checkout, and makes
 `V:\Scratch\atmo-keyframes\` for benchmarks and captures. Run with no arguments and it
 asks for the name and description.
 
-**Areas with a trunk.** Big features ship as one branch, the *trunk*: `feature-navmesh`
-for `nav/*`, `feature-atmo-magic` for `atmo/*`, `feature-combat/minimap` for
-`combat/minimap*`. A new branch in an area is cut from its trunk and lands back into it:
+**Areas with a trunk.** An area's branches gather in a merge-only *trunk* before `main`:
+`accessibility`, `audio`, `camera`, `combat`, `render`, `scripteditor`, `ui` and `world`.
+A new branch in an area is still cut from `develop`, never from its trunk, and lands into it:
 
 ```sh
-git skooma new nav/stair-fix          # base feature-navmesh, lands into feature-navmesh
+git skooma new render/foo             # base develop, lands into the render trunk
 git skooma trunk                      # list areas and their trunks
-git skooma trunk render feature-render # add one
-git skooma trunk --join nav/walls     # make an existing branch land into its trunk
+git skooma trunk audio audio          # add one (prefix, trunk branch)
+git skooma trunk --join render/bar    # make an existing branch land into its trunk
 ```
 
-`integrate` merges the area branch into the trunk, then the trunk into `main`, so F5
-sees it either way. The trunk is the PR.
+`integrate` merges the area branch into the trunk, then the trunk into `main`, and
+`local` (the F5 build) takes `main`. Each branch, not the trunk, is the PR.
 
 **Sub-features** build on other features rather than on `develop`:
 
