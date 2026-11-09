@@ -81,6 +81,7 @@
 #include "llvocache.h"
 #include "llcorehttputil.h"
 #include "llstartup.h"
+#include "lleventcoro.h" // <SK:Nexii> the physics flags loop
 
 #include <algorithm>
 #include <iterator>
@@ -1319,26 +1320,45 @@ void LLViewerObjectList::fetchObjectCostsCoro(std::string url)
 void LLViewerObjectList::fetchPhysicsFlags()
 {
     // issue http request for stale object physics flags
-    if (!mStalePhysicsFlags.empty())
+    // <SK:Nexii> one request every third of a second, carrying what has gone stale meanwhile: the census asks for
+    // meshes' types a few a frame, and a request a frame (a coroutine launched each) cost 12 ms a frame.
+    // Launched from a fiber of its own that wakes where the frame yields to the coroutines (df suspend), never from
+    // here: LLCoros::launch enters the new fiber at once (launch::dispatch) and the main fiber goes to the back of
+    // the ready queue, so every coroutine ready at that moment ran inside this update -- 57 ms on each frame that
+    // sent a request (2026-11-07-0831), none of it in a zone of its own.
+    static bool started = false;
+    if (!started && !mStalePhysicsFlags.empty())
     {
-        LLViewerRegion* regionp = gAgent.getRegion();
-
-        if (regionp)
+        started = true;
+        LLCoros::instance().launch("LLViewerObjectList::physicsFlagsLoop", [this]()
         {
-            std::string url = regionp->getCapability("GetObjectPhysicsData");
-
-            if (!url.empty())
+            while (true)
             {
-                LLCoros::instance().launch("LLViewerObjectList::fetchPhisicsFlagsCoro",
-                    boost::bind(&LLViewerObjectList::fetchPhisicsFlagsCoro, this, url));
+                llcoro::suspendUntilTimeout(0.33f);     // LLCoros::Stop ends it at shutdown
+                if (mStalePhysicsFlags.empty())
+                {
+                    continue;
+                }
+                LLViewerRegion* regionp = gAgent.getRegion();
+                if (!regionp)
+                {
+                    continue;
+                }
+                std::string url = regionp->getCapability("GetObjectPhysicsData");
+                if (!url.empty())
+                {
+                    LLCoros::instance().launch("LLViewerObjectList::fetchPhisicsFlagsCoro",
+                        boost::bind(&LLViewerObjectList::fetchPhisicsFlagsCoro, this, url));
+                }
+                else
+                {
+                    mStalePhysicsFlags.clear();
+                    mPendingPhysicsFlags.clear();
+                }
             }
-            else
-            {
-                mStalePhysicsFlags.clear();
-                mPendingPhysicsFlags.clear();
-            }
-        }
+        });
     }
+    // </SK:Nexii>
 }
 
 /*static*/
@@ -1390,6 +1410,7 @@ void LLViewerObjectList::fetchPhisicsFlagsCoro(std::string url)
     postData["object_ids"] = idList;
 
     LLSD result = httpAdapter->postAndSuspend(httpRequest, url, postData);
+    LL_PROFILE_ZONE_NAMED_CATEGORY_NETWORK("vol - physics flags reply"); // <SK:Nexii>
 
     LLSD httpResults = result[LLCoreHttpUtil::HttpCoroutineAdapter::HTTP_RESULTS];
     LLCore::HttpStatus status = LLCoreHttpUtil::HttpCoroutineAdapter::getStatusFromLLSD(httpResults);
