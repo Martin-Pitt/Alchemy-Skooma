@@ -1011,6 +1011,12 @@ void LLToolBar::updateLayoutAsNeeded()
     mButtonPanel->setVisible(has_buttons);
     mButtonPanel->setMouseOpaque(has_buttons);
 
+    // <SK:Nexii> Losing the last button resizes the panel inside a centering
+    // stack that need not change shape, so say where the buttons are directly
+    // rather than waiting for a reshape that may never come.
+    mCenterPanel->setHasButtons(has_buttons);
+    mCenterPanel->reportShape();
+
     // don't clear flag until after we've resized ourselves, to avoid laying out every frame
     mNeedsLayout = false;
 }
@@ -1462,12 +1468,26 @@ std::string LLToolBarButton::getToolTip() const
 void LLToolBar::LLCenterLayoutPanel::handleReshape(const LLRect& rect, bool by_user)
 {
     LLLayoutPanel::handleReshape(rect, by_user);
+    reportShape();
+}
 
-    if (mReshapeCallback != nullptr)
+// <SK:Nexii> Where this panel's buttons are, for whoever has to keep clear of
+// them. A toolbar holding none is nowhere: this panel is built the full size of
+// the toolbar and only shrinks once it has laid buttons out, so an empty one
+// that never reshaped would otherwise report the whole strip as occupied.
+void LLToolBar::LLCenterLayoutPanel::reportShape() const
+{
+    if (mReshapeCallback == nullptr)
     {
-        LLRect r;
+        return;
+    }
+
+    LLRect r;
+    if (mHasButtons && mButtonPanel && gFloaterView)
+    {
         localRectToOtherView(mButtonPanel->getRect(), &r, gFloaterView);
         r.stretch(FLOATER_MIN_VISIBLE_PIXELS);
-        mReshapeCallback(mLocationId, r);
     }
+    mReshapeCallback(mLocationId, r);
 }
+// </SK:Nexii>

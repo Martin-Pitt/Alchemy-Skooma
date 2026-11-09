@@ -277,7 +277,7 @@ namespace
         ll_test::SettingsScope settings;
         settings.keep(config->getControl(setting).get());
         TestStudio* window = studio(setting);
-        window->setCanMinimize(true);
+        window->setCanCollapse(true); // <SK:Nexii> Floaters collapse to a screen edge instead of minimizing
         const LLRect whole = window->getRect();
         window->setMinimized(true);
         CHECK(window->isMinimized());
