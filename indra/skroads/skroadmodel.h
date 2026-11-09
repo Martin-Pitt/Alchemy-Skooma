@@ -176,8 +176,9 @@ namespace skroad
 
     struct PieceShapes
     {
-        U64 id = 0;                     // its key in sShapeCache: root, part, signature
-        U64 signature = 0;
+        U64 id = 0;                     // its key in sShapeCache: the part alone, whatever its shape or linkset
+        U64 version = 0;                // its shape and linkset, exactly: what a cache built from it is keyed on
+        U64 signature = 0;              // the census's, when the shape was last made: a hint to look again
         LLUUID root;
         LLUUID part;
         std::vector<Shape> shapes;
