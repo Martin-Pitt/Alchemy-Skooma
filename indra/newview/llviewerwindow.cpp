@@ -83,6 +83,7 @@
 #include "lltimer.h"
 #include "lltooltip.h"
 #include "skhover.h" // <SK:Nexii> hover context
+#include "skfloaterlocalchat.h" // <SK:Nexii> Modern local chat
 #include "llmediaentry.h"
 #include "llurldispatcher.h"
 #include "raytrace.h"
@@ -3506,6 +3507,13 @@ bool LLViewerWindow::handleKey(KEY key, MASK mask)
         letter_keys_Focus_chat_bar && !gAgentCamera.cameraMouselook() &&
         !keyboard_focus && key < 0x80 && (mask == MASK_NONE || mask == MASK_SHIFT) )
     {
+        // <SK:Nexii> Modern local chat takes letter keys that start chat.
+        if (SKFloaterLocalChat::shouldTakeChat())
+        {
+            SKFloaterLocalChat::startChat(nullptr);
+            return true;
+        }
+        // </SK:Nexii>
         if (!ALChatBar::shouldUseChatBar())
         {
             // Initialize nearby chat if it's missing
@@ -3983,7 +3991,9 @@ void LLViewerWindow::updateUI()
     }
 
     // only update mouse hover set when UI is visible (since we shouldn't send hover events to invisible UI
-    if (gPipeline.hasRenderDebugFeatureMask(LLPipeline::RENDER_DEBUG_FEATURE_UI))
+    // <SK:Nexii> window mouse leave. With the cursor out of the window and nothing holding it, the set is empty, so the views it last hovered get onMouseLeave
+    if (gPipeline.hasRenderDebugFeatureMask(LLPipeline::RENDER_DEBUG_FEATURE_UI) && (mMouseInWindow || captor_view))
+    // </SK:Nexii>
     {
         // include all ancestors of captor_view as automatically having mouse
         if (captor_view)

@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+<context_menu
+ layout="topleft"
+ name="Group By">
+    <menu_item_check
+     label="None"
+     layout="topleft"
+     name="group_none">
+        <menu_item_check.on_click
+         function="SKInvExplorer.Option"
+         parameter="group:none" />
+        <menu_item_check.on_check
+         function="SKInvExplorer.OptionCheck"
+         parameter="group:none" />
+    </menu_item_check>
+    <menu_item_check
+     label="Type"
+     layout="topleft"
+     name="group_type">
+        <menu_item_check.on_click
+         function="SKInvExplorer.Option"
+         parameter="group:type" />
+        <menu_item_check.on_check
+         function="SKInvExplorer.OptionCheck"
+         parameter="group:type" />
+    </menu_item_check>
+    <menu_item_check
+     label="Date Acquired"
+     layout="topleft"
+     name="group_date">
+        <menu_item_check.on_click
+         function="SKInvExplorer.Option"
+         parameter="group:date" />
+        <menu_item_check.on_check
+         function="SKInvExplorer.OptionCheck"
+         parameter="group:date" />
+    </menu_item_check>
+    <menu_item_check
+     label="Brand"
+     layout="topleft"
+     name="group_brand">
+        <menu_item_check.on_click
+         function="SKInvExplorer.Option"
+         parameter="group:brand" />
+        <menu_item_check.on_check
+         function="SKInvExplorer.OptionCheck"
+         parameter="group:brand" />
+    </menu_item_check>
+    <menu_item_check
+     label="Permissions"
+     layout="topleft"
+     name="group_perms">
+        <menu_item_check.on_click
+         function="SKInvExplorer.Option"
+         parameter="group:perms" />
+        <menu_item_check.on_check
+         function="SKInvExplorer.OptionCheck"
+         parameter="group:perms" />
+    </menu_item_check>
+    <menu_item_check
+     label="Worn"
+     layout="topleft"
+     name="group_worn">
+        <menu_item_check.on_click
+         function="SKInvExplorer.Option"
+         parameter="group:worn" />
+        <menu_item_check.on_check
+         function="SKInvExplorer.OptionCheck"
+         parameter="group:worn" />
+    </menu_item_check>
+    <menu_item_check
+     label="Creator"
+     layout="topleft"
+     name="group_creator">
+        <menu_item_check.on_click
+         function="SKInvExplorer.Option"
+         parameter="group:creator" />
+        <menu_item_check.on_check
+         function="SKInvExplorer.OptionCheck"
+         parameter="group:creator" />
+    </menu_item_check>
+</context_menu>

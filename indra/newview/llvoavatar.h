@@ -1180,6 +1180,7 @@ public:
     void            clearChat();
     void            startTyping() { mTyping = true; mTypingTimer.reset(); }
     void            stopTyping() { mTyping = false; }
+    bool            isTyping() const { return mTyping; } // <SK:Nexii> the local chat's typing line reads what the name tag shows
 private:
     bool            mVisibleChat = false;
 

@@ -236,6 +236,7 @@ LLLineEditor::LLLineEditor(const LLLineEditor::Params& p)
     if (mSpellCheck)
     {
         LLSpellChecker::setSettingsChangeCallback(boost::bind(&LLLineEditor::onSpellCheckSettingsChange, this));
+        LLSpellChecker::setWordsCheckedCallback(boost::bind(&LLLineEditor::onSpellCheckSettingsChange, this));   // <SK:Nexii>
     }
     mSpellCheckTimer.reset();
 

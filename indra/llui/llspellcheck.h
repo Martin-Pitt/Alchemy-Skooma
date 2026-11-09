@@ -81,6 +81,11 @@ protected:
 public:
     typedef boost::signals2::signal<void()> settings_change_signal_t;
     static boost::signals2::connection setSettingsChangeCallback(const settings_change_signal_t::slot_type& cb);
+    // <SK:Nexii> Run the Windows Spell Checking API on a worker thread so a stalled spelling service cannot freeze the viewer
+    // Fired by update() when words the engine checked in the background have come in.
+    static boost::signals2::connection setWordsCheckedCallback(const settings_change_signal_t::slot_type& cb);
+    void update();   // once a frame
+    // </SK:Nexii>
 
 protected:
     std::unique_ptr<LLSpellCheckEngine> mEngine;        // active platform backend
@@ -91,6 +96,7 @@ protected:
     LLSD mDictMap;
 
     static settings_change_signal_t sSettingsChangeSignal;
+    static settings_change_signal_t sWordsCheckedSignal;   // <SK:Nexii>
 };
 
 #endif // LLSPELLCHECK_H

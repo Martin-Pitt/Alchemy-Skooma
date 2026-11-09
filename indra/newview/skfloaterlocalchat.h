@@ -1,0 +1,347 @@
+/**
+ * @file skfloaterlocalchat.h
+ * @brief Game-style nearby chat: messages over the world that fade, with the input shown only while chatting.
+ *
+ * $LicenseInfo:firstyear=2026&license=viewerlgpl$
+ * Second Life Viewer Source Code
+ * Copyright (C) 2026, Martin "Nexii" Pitt <martin.r.pitt@gmail.com>
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation;
+ * version 2.1 of the License only.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * $/LicenseInfo$
+ */
+
+#ifndef SK_FLOATERLOCALCHAT_H
+#define SK_FLOATERLOCALCHAT_H
+
+#include "llfloater.h"
+#include "lleditmenuhandler.h"
+#include "llchat.h"
+#include "llfontgl.h"
+#include "llavatarpropertiesprocessor.h"
+#include "llpointer.h"
+#include "skoutlinecapture.h"
+#include "llrendertarget.h"
+#include "skchatunfurlcache.h"
+#include "skscrollanimator.h"
+
+#include <deque>
+
+class SKEmojiComplete;
+class LLButton;
+class LLChatEntry;
+class LLFontGL;
+class LLMenuButton;
+class LLScrollbar;
+class LLViewerFetchedTexture;
+
+class SKFloaterLocalChat final : public LLFloater, public LLAvatarPropertiesObserver, public LLEditMenuHandler
+{
+public:
+    AL_VIEW_TYPE(SKFloaterLocalChat, LLFloater);
+
+    SKFloaterLocalChat(const LLSD& key);
+    ~SKFloaterLocalChat() override;
+
+    /// Whether this floater replaces the nearby toasts and chat bar (SkoomaLocalChatModern).
+    static bool modernEnabled();
+    /// Whether the chat steps aside while Conversations is up (`SkoomaLocalChatHideForConversations`).
+    static bool hidesForConversations();
+    /// Whether starting chat opens this floater: modern chat is on and Conversations is not up to take it.
+    static bool shouldTakeChat();
+    /// Takes a nearby chat message as the toasts would have.
+    static void addChat(const LLChat& chat, const LLSD& args);
+    /// Shows the input with the cursor at the end, starting it with line when given.
+    static void startChat(const char* line);
+    static void stopChat();
+    /// The text being typed, empty when the floater does not exist.
+    static std::string currentChat();
+
+    bool postBuild() override;
+    void draw() override;
+    void reshape(S32 width, S32 height, bool called_from_parent = true) override;
+    bool applyRectControl() override;
+    /// Collapsed, the chat's bar carries the unread count and the typing line.
+    void setMinimized(bool minimize) override;
+    /// Locked, only what the chat draws takes the mouse: shown messages, the pill, the input, the typing line, the scroll bar and the buttons.
+    bool hitsContentAt(S32 x, S32 y) override;
+    bool handleKeyHere(KEY key, MASK mask) override;
+    bool handleMouseDown(S32 x, S32 y, MASK mask) override;
+    bool handleRightMouseDown(S32 x, S32 y, MASK mask) override;
+    bool handleRightMouseUp(S32 x, S32 y, MASK mask) override;
+    bool handleMouseUp(S32 x, S32 y, MASK mask) override;
+    bool handleDoubleClick(S32 x, S32 y, MASK mask) override;
+    /// Selected message text goes to the clipboard through the Edit menu's copy.
+    LLView* asView() override { return this; }
+    void copy() override;
+    bool canCopy() const override;
+    void deselect() override;
+    bool canDeselect() const override;
+    bool handleHover(S32 x, S32 y, MASK mask) override;
+    void glideWheel();
+    bool scrolledUp() const;  // up from the newest message, or gliding there
+    bool handleScrollWheel(S32 x, S32 y, LLScrollDelta delta) override;
+    void onMouseEnter(S32 x, S32 y, MASK mask) override;
+    void onMouseLeave(S32 x, S32 y, MASK mask) override;
+    void onFocusLost() override;
+    void processProperties(void* data, EAvatarProcessorType type) override;
+
+private:
+    enum EStyle : S32 { STYLE_CARDS = 0, STYLE_MINIMAL = 1 };
+
+    struct Link
+    {
+        S32 mBegin = 0; // bytes into the body
+        S32 mEnd = 0;   // exclusive
+        std::string mUrl;
+        bool mQuery = false; // a web link's query, drawn grey as chat history does
+    };
+
+    struct Message
+    {
+        std::string mBody;  // what is drawn; may start with the speaker's name
+        std::string mName;  // the card header
+        std::string mSenderUrl;
+        LLUUID mFromID;
+        LLColor4 mTextColor;
+        LLColor4 mNameColor;
+        S32 mNameLen = 0;   // bytes of the name at the start of mBody, 0 for none
+        EChatSourceType mSource = CHAT_SOURCE_SYSTEM;
+        bool mEmote = false;
+        S8 mVoice = 0;      // 1 shouted, -1 whispered, drawn larger or smaller rather than prefixed
+        F64 mArrival = 0.0;
+        F32 mHoldExtra = 0.f; // seconds held past the fade delay, for its words and the messages before it
+        std::string mTime;  // the timestamp after the name
+        S32 mNameWidth = 0; // measured at layout
+        S32 mTimeWidth = 0; // the timestamp and its gap, 0 for none
+        std::vector<Link> mLinks;
+        std::vector<U8> mStyle; // a markdown style a byte of mBody, empty for plain text
+        SKChatEmbedPtr mEmbed; // the preview of the first link that has one
+        S32 mEmbedWidth = 0;   // measured at layout
+        S32 mDay = 0;          // yyyymmdd in the timestamps' time base, 0 when unknown
+        bool mHistory = false; // loaded from the chat log rather than heard this session
+        std::string mDayLabel; // the day divider above it, made at layout when needed
+        S32 mDayWidth = 0;     // measured at layout
+    };
+
+    struct Row
+    {
+        S32 mMessage = 0;   // -1 for a card header, DIVIDER_ROW for a day divider
+        S32 mCard = 0;
+        S32 mBegin = 0;
+        S32 mLength = 0;
+        S32 mPadTop = 0;
+        S32 mPadBottom = 0;
+        S32 mGap = 0;       // space below the row, outside its card
+        S32 mBottom = 0;    // from the bottom of the content
+        bool mEmbed = false; // the message's link preview rather than a line of it
+        bool mQuote = false; // a line of a block quote, drawn indented behind a bar
+        F32 mScale = 1.f;    // its font against the chat font: a heading's, a shout's or a whisper's
+        S32 height() const;
+    };
+
+    struct Card
+    {
+        S32 mFirstMessage = 0;
+        S32 mLastMessage = 0;
+        S32 mFirstRow = 0;
+        S32 mLastRow = 0;
+        S32 mWidth = 0;     // the bubble, shrink-wrapped to its widest line
+        S32 mIconWidth = 0; // the speaker's icon, 0 for none
+        S32 mTextX = 0;     // where the text column starts, from the content's left
+        bool mDivider = false; // a day divider, fading with the message after it
+    };
+    static constexpr S32 DIVIDER_ROW = -2;
+
+    void backfill(bool skip_last);
+    /// day is the message's yyyymmdd when the caller knows it better than its timestamp does, else 0.
+    void appendChat(const LLChat& chat, const LLSD& args, F64 arrival, S32 day = 0);
+    /// Discord's subset of markdown: takes the markers out of the body and keeps the styles they asked for.
+    static void applyMarkdown(Message& msg);
+    /// How much longer than the fade delay a message stays, from its words and the hold of the one before it.
+    void holdForReading(Message& msg) const;
+    void showInput(bool show);
+    void sendChat(EChatType type);
+    void invalidateLayout() { mLayoutDirty = true; }
+    S32 inputHeight() const;
+    void onInputResized();
+    void layout();
+    void layoutCog();
+    LLRect contentRect() const;
+    S32 barRange() const;
+    /// The bar counts down from the top of history while mScroll counts up from the newest message.
+    S32 barPos() const;
+    /// Places the scroll bar at the content's right and gives it the chat's size and position.
+    void layoutBar();
+    bool expanded() const;
+    /// How far a card has yet to fade: 1 while held, 0 once gone.
+    F32 cardFade(const Card& card, F64 now) const;
+    F32 cardAlpha(const Card& card, F64 now) const;
+    /// What a card is drawn at: its alpha, or faintly while the pointer is over the chat.
+    F32 shownAlpha(const Card& card, F64 now) const;
+    /// A card under the point, shown or, with ghosts, faded too.
+    bool cardAt(S32 x, S32 y, bool ghosts) const;
+    F32 cardSaturation(const Card& card, F64 now) const;
+    /// A colour at a card's alpha.
+    LLColor4 faded(LLColor4 color, F32 alpha) const;
+    S32 lineHeight(const Row& row) const;
+    /// The font a line of a message draws in, the chat font at the row's scale.
+    static LLFontGL* rowFont(const Row& row);
+    /// The url under a point in the floater, empty when none.
+    std::string urlAt(S32 x, S32 y) const;
+    /// A place in a message's text: its index and a byte of its body.
+    struct TextPos
+    {
+        S32 mMessage = -1;
+        S32 mByte = 0;
+        bool operator<(const TextPos& o) const { return mMessage != o.mMessage ? mMessage < o.mMessage : mByte < o.mByte; }
+        bool operator==(const TextPos& o) const = default;
+    };
+    /// The text position under a point, false off message text; clamp takes the row's ends beside it.
+    bool textPosAt(S32 x, S32 y, bool clamp, TextPos& pos) const;
+    /// textPosAt for starting a selection: anywhere in a bubble takes its nearest text.
+    bool selectionPosAt(S32 x, S32 y, TextPos& pos) const;
+    bool hasSelection() const { return mSelAnchor.mMessage >= 0 && !(mSelAnchor == mSelFocus); }
+    /// The selected bytes of one message, false when none of it is selected.
+    bool selectedRange(S32 message, S32& begin, S32& end) const;
+    std::string selectedText() const;
+    /// Where a message's selection starts, -1 for its header or leading time, 0 when unselected.
+    S32 selectedFrom(S32 message) const;
+    /// Whether the message shows a header or a leading time a selection can take.
+    bool hasHeader(S32 message) const;
+    void clearSelection();
+    /// The visible cards in UI units, unclipped and unmasked.
+    void drawMessages(const LLRect& content, F64 now, bool full, bool cards);
+    /// The visible cards, faded out at the edges through mMask when any reach into the edge bands.
+    void drawMaskedMessages(const LLRect& content, F64 now, bool full, bool cards);
+    void drawTime(const Message& msg, F32 x, S32 y, F32 alpha, LLFontGL::ShadowType shadow) const;
+    void drawHeaderSelection(const Card& card, S32 x, S32 y, F32 alpha) const;
+    void drawRowSelection(const Row& row, S32 x, S32 y, F32 alpha) const;
+    void drawRowText(const Row& row, S32 x, S32 y, F32 alpha, LLFontGL::ShadowType shadow) const;
+    /// An object speaker's side-view glyph, null until the capture has one.
+    const SKOutlineLayer* objectGlyph(const LLUUID& speaker, F64 now);
+    /// An icon's width at the card icon height: an object's glyph keeps its aspect, everything else is square.
+    S32 iconWidth(const Message& first, F64 now);
+    void drawObjectIcon(const Message& first, S32 left, S32 top, S32 width, const LLColor4& color, F64 now);
+    U64 iconStamp(const Message& first) const;
+    void drawAvatarIcon(const Message& first, S32 left, S32 top, const LLColor4& color);
+    void drawDivider(const Card& card, const LLRect& content, S32 base, F32 alpha, LLFontGL::ShadowType shadow) const;
+    void drawEmbed(const Message& msg, S32 x, S32 y, F32 alpha) const;
+    /// Starts the lookups of the previews in a card about to be drawn.
+    void requestEmbeds(const Card& card);
+    /// Polls who nearby is typing, a few times a second, and remakes the label when that changes.
+    void updateTyping(F64 now);
+    void makeTypingLabel(S32 group);
+    /// Dots and names from x to right, the out-of-range part falling back to a count, then an ellipsis.
+    void drawTyping(F64 now, S32 x, S32 y, S32 right) const;
+    /// What the typing line takes untruncated.
+    S32 typingWidth() const;
+    bool anyoneTyping() const { return !mTypingLabel[0].empty() || !mTypingLabel[1].empty(); }
+    void updateCollapsedStatus();
+    static void onIdle(void* data);
+    void onStyleMenu(const LLSD& param);
+    bool onStyleCheck(const LLSD& param) const;
+
+    LLChatEntry* mInput = nullptr;
+    LLMenuButton* mCog = nullptr;
+    LLButton* mEmojiButton = nullptr;
+    SKEmojiComplete* mEmojiComplete = nullptr;
+    U32 mEmojiClosedFrame = 0;  // the frame the picker last closed, to tell a toggle-off click
+    boost::signals2::connection mEmojiCloseConnection;
+    std::deque<Message> mMessages;
+    std::vector<Card> mCards;
+    std::vector<Row> mRows;
+    S32 mContentHeight = 0;
+    S32 mScroll = 0;            // pixels scrolled up from the newest message
+    SKScrollAnimator mWheelGlide; // the wheel's smooth scroll, which mScroll follows rounded
+    S32 mPendingMessages = 0;   // appended since the last layout
+    S32 mUnseen = 0;            // arrived while scrolled up
+    S32 mPillCount = -1;        // the count mPillLabel was made for
+    std::string mPillLabel;
+    LLRect mPillRect;           // empty while the jump pill is hidden
+    S32 mLayoutWidth = -1;
+    S32 mLayoutStyle = -1;
+    bool mLayoutDirty = true;
+    TextPos mSelAnchor;          // where a selection began
+    TextPos mSelFocus;           // where it reaches now
+    bool mSelecting = false;     // dragging one out
+    bool mHovered = false;
+    F32 mGhost = 0.f;            // faded cards' faint showing while hovered, 0 to 1, eased like the tint
+    bool mRevealed = false;      // the log shown whole: the pointer rested on a card, or the wheel turned; until the pointer leaves
+    F64 mRestSince = -1.0;       // when the pointer settled on a shown card, -1 while it is not on one
+    S32 mRestX = 0;              // where it settled
+    S32 mRestY = 0;
+    bool mHiddenForConversations = false; // put away while Conversations shows nearby chat
+    LLScrollbar* mScrollbar = nullptr; // an overlay bar over the content's right edge
+    bool mBarSyncing = false;   // while layoutBar pushes the chat's position, the bar's callback ignores it
+    F32 mBackdrop = 0.f;        // the hover tint, 0 to 1, eased in and out
+    F32 mBorder = 0.f;          // the edge border, likewise
+    F64 mEdgeSince = -1.0;      // when the pointer reached the floater's edge, -1 while it is elsewhere
+    F64 mChromeDrawnAt = 0.0;
+    S32 mCollapsedUnread = 0;   // arrived since the chat was collapsed
+    bool mWasExpanded = false;
+    F64 mCollapsedAt = -1.0e9; // when the log last stopped being shown whole
+    boost::signals2::connection mFontConnection;
+
+    // An object speaker's linkset root and the base layer of its glyph, looked at a few times a second.
+    struct ObjectGlyph
+    {
+        F64 mChecked = -1.0e9;
+        bool mShown = false;
+        SKOutlineLayer mLayer;
+    };
+    std::unordered_map<LLUUID, ObjectGlyph> mObjectGlyphs;
+
+    // A person's profile picture, through the icon id cache the other chats share.
+    struct AvatarPicture
+    {
+        LLPointer<LLViewerFetchedTexture> mTexture;
+        bool mAsked = false;     // the cache or the properties processor has been asked
+        bool mObserving = false; // waiting on a properties reply
+    };
+    std::unordered_map<LLUUID, AvatarPicture> mAvatarPictures;
+    struct MaskKey
+    {
+        U32 mWidth = 0;
+        U32 mHeight = 0;
+        S32 mScroll = -1;
+        U32 mLayout = 0;
+        U64 mFades = 0;
+        U64 mIcons = 0;
+        bool mCards = false;
+        bool operator==(const MaskKey&) const = default;
+    };
+    LLRenderTarget mMask;       // the messages, premultiplied, for the scroll mask
+    MaskKey mMaskKey;           // what mMask holds
+    U32 mLayoutGeneration = 0;  // counts layouts, so mMask knows the rows moved
+    struct Typer
+    {
+        LLUUID mID;
+        S32 mMetres = 0;   // 0 within chat range, else the whole metres beyond it
+        S32 mDistance = 0; // whole metres away, for the bracketed form
+        F64 mTypedAt = 0.0; // last seen typing, for the out-of-range grace
+        bool operator==(const Typer& o) const { return mID == o.mID && mMetres == o.mMetres && mDistance == o.mDistance; }
+        bool operator<(const Typer& o) const { return mID < o.mID; }
+    };
+    std::vector<Typer> mTyping[2];    // within chat range and just beyond it, sorted
+    std::vector<Typer> mTypingScratch[2];
+    std::string mTypingLabel[2];
+    std::string mTypingFarCount;      // the out-of-range part as a count, for when the line is short
+    F64 mTypingPollAt = 0.0;
+    bool mTypingNamed[2] = { true, true }; // every name in the label had resolved
+    SKChatUnfurlCache mUnfurl;
+    U32 mUnfurlGeneration = 0;  // the cache's generation the layout was made for
+};
+
+#endif // SK_FLOATERLOCALCHAT_H

@@ -55,6 +55,7 @@
 // [RLVa:KB] - Checked: RLVa-2.0.0
 #include "rlvactions.h"
 #include "rlvcommon.h"
+#include "skfloaterlocalchat.h" // <SK:Nexii> Modern local chat
 // [/RLVa:KB]
 
 //add LLFloaterIMNearbyChatHandler to LLNotificationsUI namespace
@@ -825,6 +826,14 @@ void LLFloaterIMNearbyChatHandler::processChat(const LLChat& chat_msg,
 
     // Send event on to LLEventStream
     sChatWatcher->post(chat);
+
+    // <SK:Nexii> Modern local chat takes the message in place of the toasts.
+    if (SKFloaterLocalChat::modernEnabled())
+    {
+        SKFloaterLocalChat::addChat(chat_msg, args);
+        return;
+    }
+    // </SK:Nexii>
 
     if((  ( chat_msg.mSourceType == CHAT_SOURCE_AGENT
             && gSavedSettings.getBOOL("UseChatBubbles") )

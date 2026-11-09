@@ -1,0 +1,3305 @@
+/**
+ * @file skfloaterlocalchat.cpp
+ * @brief Game-style nearby chat: messages over the world that fade, with the input shown only while chatting.
+ *
+ * $LicenseInfo:firstyear=2026&license=viewerlgpl$
+ * Second Life Viewer Source Code
+ * Copyright (C) 2026, Martin "Nexii" Pitt <martin.r.pitt@gmail.com>
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation;
+ * version 2.1 of the License only.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * $/LicenseInfo$
+ */
+
+#include "llviewerprecompiledheaders.h"
+
+#include "skfloaterlocalchat.h"
+
+#include "llcallbacklist.h"
+#include "llclipboard.h"
+
+#include "llautoreplace.h"
+#include "llbutton.h"
+#include "llchatentry.h"
+#include "llemojihelper.h"
+#include "skemojicomplete.h"
+#include "skscrollanimator.h"
+#include "skscrolldistance.h"
+#include "lldbstrings.h"
+#include "lldraghandle.h"
+#include "llfloaterreg.h"
+#include "llfocusmgr.h"
+#include "llframetimer.h"
+#include "lllocalcliprect.h"
+#include "llmenubutton.h"
+#include "llscrollbar.h"
+#include "llrender2dutils.h"
+#include "llrendertarget.h"
+#include "llslurl.h"
+#include "lltrans.h"
+#include "lluicolortable.h"
+#include "lluiimage.h"
+#include "llurlaction.h"
+#include "llurlmatch.h"
+#include "llurlregistry.h"
+#include "llwindow.h"
+
+#include "alavatargroups.h"
+#include "alchatbar.h"
+#include "llagent.h"
+#include "alchattimestamp.h"
+#include "llagentcamera.h"
+#include "llavatariconctrl.h"
+#include "llavatarnamecache.h"
+#include "llfloaterimcontainer.h"
+#include "llfloaterimnearbychat.h"
+#include "lllogchat.h"
+#include "llviewerchat.h"
+#include "llviewerobject.h"
+#include "llviewerobjectlist.h"
+#include "llviewertexture.h"
+#include "llspeakers.h"
+#include "llviewercontrol.h"
+#include "llviewertexture.h"
+#include "llviewerregion.h"
+#include "llviewerwindow.h"
+#include "llvoavatar.h"
+#include "llanimationstates.h"
+
+namespace
+{
+constexpr size_t MAX_MESSAGES = 300;
+constexpr S32 MAX_CARD_MESSAGES = 8;
+constexpr F64 CARD_JOIN_SECONDS = 60.0;
+constexpr S32 PAD_X = 8;
+constexpr S32 PAD_Y = 5;
+constexpr S32 CARD_PAD_X = 10; // a card's sides
+constexpr S32 CARD_PAD_Y = 6;  // above the name line and below the last line
+constexpr S32 NAME_GAP = 2;    // between the name line and the text
+constexpr S32 CARD_GAP = 4;
+constexpr S32 MINIMAL_GAP = 2;
+constexpr S32 ICON_PX = 28;        // card icon height; avatars are this wide, objects up to ICON_MAX_ASPECT times
+constexpr S32 ICON_MAX_ASPECT = 4;
+constexpr S32 DISC_GAP = 6;
+constexpr F64 GLYPH_CHECK_SECONDS = 0.5; // how often an object speaker's glyph is looked up
+constexpr S32 INPUT_HEIGHT = 24;
+constexpr S32 INPUT_GAP = 4;
+constexpr S32 TYPING_LINE = 14;
+constexpr S32 TYPING_HEIGHT = TYPING_LINE; // the typing line, kept between the messages and the input
+constexpr F64 TYPING_POLL = 0.25;
+constexpr S32 INSET = 8; // inside the backdrop's border
+constexpr F32 EDGE_FADE = 24.f; // the scroll mask at the top, and at the bottom while scrolled
+constexpr F32 CARD_ALPHA = 0.6f;
+constexpr S32 TIME_GAP = 10;    // between a card's name and its timestamp
+constexpr S32 LEAD_TIME_GAP = 6; // between a minimal line's leading timestamp and the name
+constexpr F32 TIME_ALPHA = 0.45f;
+constexpr S32 EMBED_MAX_WIDTH = 360;
+constexpr S32 EMBED_MIN_WIDTH = 120;
+constexpr S32 EMBED_PAD = 6;
+constexpr S32 EMBED_GAP = 4;    // between the text and its preview
+constexpr S32 EMBED_ACCENT = 3; // the bar in the speaker's colour
+constexpr S32 EMBED_LINE_GAP = 2;
+constexpr S32 DIVIDER_PAD = 8;    // above and below a day divider
+constexpr S32 DIVIDER_GAP = 8;    // between a day divider's lines and its label
+constexpr F32 DIVIDER_ALPHA = 0.45f;
+constexpr F32 DIVIDER_LINE_ALPHA = 0.15f;
+constexpr F32 FADE_OPACITY_DELAY = 0.25f; // the part of a message's fade before its opacity starts to go
+constexpr F32 FADE_GREY_SPAN = 0.4f;      // the part of it over which its colour goes to grey
+constexpr F32 CHROME_FADE = 0.15f; // the hover backdrop's and border's ease, in seconds
+constexpr S32 EDGE_REACH = 6;      // how near the floater's edge the pointer shows the border
+constexpr F64 EDGE_REST = 0.08;
+constexpr F32 GHOST_ALPHA = 0.15f; // faded cards while the pointer is over the chat
+constexpr S32 REVEAL_SLOP = 4; // how far the pointer may drift while resting on a card to reveal the log    // and how long it rests there first
+
+// The day a chat timestamp leads with, "year/month/day ...", as yyyymmdd; 0 when it carries none.
+S32 day_key(const std::string& stamp)
+{
+    S32 year = 0, month = 0, day = 0;
+    if (sscanf(stamp.c_str(), "%d/%d/%d", &year, &month, &day) != 3 || year < 1970 || month < 1 || month > 12 || day < 1 || day > 31)
+    {
+        return 0;
+    }
+    return year * 10000 + month * 100 + day;
+}
+
+S32 utf8_lead_len(char c)
+{
+    const U8 b = (U8)c;
+    return b < 0x80 ? 1 : (b >> 5) == 0x6 ? 2 : (b >> 4) == 0xE ? 3 : (b >> 3) == 0x1E ? 4 : 1;
+}
+
+LLFontGL* name_font()
+{
+    return LLFontGL::getFontSansSerifSmall();
+}
+
+LLFontGL* time_font()
+{
+    return LLFontGL::getFontSansSerifSmall();
+}
+
+// The width a bold run draws at: the bold face's, plus the synthesized bold's second pass.
+S32 bold_width(const LLFontGL* font, std::string_view text)
+{
+    return text.empty() ? 0 : font->faceFor(LLFontGL::BOLD)->getWidth(text) + 1;
+}
+
+// Markdown styles a byte of a message can carry: the font's own bits, then what the chat draws itself.
+constexpr U8 MD_FONT = LLFontGL::BOLD | LLFontGL::ITALIC | LLFontGL::UNDERLINE;
+constexpr U8 MD_STRIKE = 0x08;
+constexpr U8 MD_CODE = 0x10;
+constexpr U8 MD_QUOTE = 0x20;
+constexpr U8 MD_HEADING = 0xC0; // a heading's level, 1 to 3
+constexpr S32 MD_HEADING_SHIFT = 6;
+constexpr S32 CODE_PAD = 2;     // either side of an inline code run, inside its background
+constexpr S32 QUOTE_INDENT = 12; // a quoted line's text, past its bar
+constexpr S32 QUOTE_BAR = 3;
+
+U8 style_at(const std::vector<U8>& style, S32 pos)
+{
+    return pos >= 0 && pos < (S32)style.size() ? style[pos] : 0;
+}
+
+// A line's size against the chat font: a heading's level, then how loud it was said.
+F32 line_scale(U8 style, S32 voice)
+{
+    static constexpr F32 headings[4] = { 1.f, 1.5f, 1.25f, 1.f };
+    const F32 voiced = voice > 0 ? 1.2f : voice < 0 ? 0.85f : 1.f;
+    return headings[(style & MD_HEADING) >> MD_HEADING_SHIFT] * voiced;
+}
+
+// Where the run of one style that starts at pos ends, at most end.
+S32 style_run(const std::vector<U8>& style, S32 pos, S32 end)
+{
+    if (style.empty())
+    {
+        return end;
+    }
+    const U8 at = style_at(style, pos);
+    while (++pos < end && style_at(style, pos) == at)
+    {
+    }
+    return pos;
+}
+
+// How wide a stretch of a body draws, each run in its own face.
+F32 styled_width(const LLFontGL* font, std::string_view body, const std::vector<U8>& style, S32 begin, S32 len)
+{
+    if (style.empty())
+    {
+        return font->getWidthF32Bytes(body, begin, len);
+    }
+    F32 width = 0.f;
+    const S32 end = begin + len;
+    for (S32 pos = begin; pos < end;)
+    {
+        const S32 run = style_run(style, pos, end);
+        const U8 at = style_at(style, pos);
+        width += font->faceFor(at & MD_FONT)->getWidthF32Bytes(body, pos, run - pos);
+        width += (at & LLFontGL::BOLD) ? 1.f : 0.f; // the synthesized bold's second pass, as bold_width counts it
+        width += (at & MD_CODE) ? 2.f * CODE_PAD : 0.f;
+        pos = run;
+    }
+    return width;
+}
+
+// The byte, from begin, nearest a pixel offset into a styled stretch.
+S32 styled_byte_at(const LLFontGL* font, std::string_view body, const std::vector<U8>& style, S32 begin, S32 len, F32 offset, bool round)
+{
+    if (style.empty())
+    {
+        return font->byteFromPixelOffset(body, begin, offset, F32_MAX, len, round);
+    }
+    const S32 end = begin + len;
+    for (S32 pos = begin; pos < end;)
+    {
+        const S32 run = style_run(style, pos, end);
+        const U8 at = style_at(style, pos);
+        const F32 width = styled_width(font, body, style, pos, run - pos);
+        if (offset < width)
+        {
+            const F32 pad = (at & MD_CODE) ? (F32)CODE_PAD : 0.f;
+            return pos - begin + font->faceFor(at & MD_FONT)->byteFromPixelOffset(body, pos, llmax(0.f, offset - pad), F32_MAX, run - pos, round);
+        }
+        offset -= width;
+        pos = run;
+    }
+    return len;
+}
+
+// Set while the messages draw into the mask's target.
+bool sDrawingMask = false;
+
+// Into the mask, alpha has to accumulate as coverage. The fonts reset the blend to BT_ALPHA, which squares a shape's
+// alpha in the target, so every shape drawn after text asks for this again.
+void shape_blend()
+{
+    if (sDrawingMask)
+    {
+        gGL.blendFunc(LLRender::BF_SOURCE_ALPHA, LLRender::BF_ONE_MINUS_SOURCE_ALPHA, LLRender::BF_ONE, LLRender::BF_ONE_MINUS_SOURCE_ALPHA);
+    }
+}
+
+LLFontGL* embed_font()
+{
+    return LLFontGL::getFontSansSerifSmall();
+}
+
+S32 embed_height()
+{
+    return 2 * embed_font()->getLineHeight() + EMBED_LINE_GAP + 2 * EMBED_PAD;
+}
+
+// GitHub's own colours for a state.
+LLColor4 github_state_color(SKChatUnfurl::EGitHubState state)
+{
+    using SKChatUnfurl::EGitHubState;
+    switch (state)
+    {
+    case EGitHubState::OPEN: return LLColor4(0.137f, 0.525f, 0.212f, 1.f);      // #238636
+    case EGitHubState::MERGED:
+    case EGitHubState::COMPLETED: return LLColor4(0.537f, 0.341f, 0.898f, 1.f); // #8957e5
+    case EGitHubState::CLOSED: return LLColor4(0.855f, 0.212f, 0.200f, 1.f);    // #da3633
+    default: return LLColor4(0.431f, 0.463f, 0.506f, 1.f);                      // #6e7681, draft and not planned
+    }
+}
+
+constexpr S32 EMBED_PILL_PAD = 5;
+
+// The state pill's width with its gap, 0 for none.
+S32 embed_pill_width(const SKChatEmbed& embed)
+{
+    const std::string_view label = SKChatUnfurl::gitHubStateLabel(embed.mGitHubState);
+    return label.empty() ? 0 : bold_width(embed_font(), label) + 2 * EMBED_PILL_PAD + EMBED_PAD;
+}
+
+S32 embed_thumb()
+{
+    return embed_height() - 2 * EMBED_PAD;
+}
+
+bool unfurl_enabled()
+{
+    static LLCachedControl<bool> unfurl(gSavedSettings, "SkoomaLocalChatUnfurl", true);
+    return unfurl;
+}
+
+bool embed_shown(const SKChatEmbedPtr& embed)
+{
+    return embed && embed->mState == SKChatEmbed::READY && !embed->mTitle.empty() && unfurl_enabled();
+}
+} // namespace
+
+S32 SKFloaterLocalChat::Row::height() const
+{
+    // Padding and gap only; the line itself depends on the font, see lineHeight().
+    return mPadTop + mPadBottom + mGap;
+}
+
+SKFloaterLocalChat::SKFloaterLocalChat(const LLSD& key)
+    : LLFloater(key)
+{
+    mCommitCallbackRegistrar.add("SKLocalChat.Style", [this](LLUICtrl*, const LLSD& param) { onStyleMenu(param); });
+    mEnableCallbackRegistrar.add("SKLocalChat.CheckStyle", [this](LLUICtrl*, const LLSD& param) { return onStyleCheck(param); });
+}
+
+SKFloaterLocalChat::~SKFloaterLocalChat()
+{
+    gIdleCallbacks.deleteFunction(onIdle, this);
+    mFontConnection.disconnect();
+    mEmojiCloseConnection.disconnect();
+    if (LLAvatarPropertiesProcessor::instanceExists())
+    {
+        for (const auto& [id, picture] : mAvatarPictures)
+        {
+            if (picture.mObserving)
+            {
+                LLAvatarPropertiesProcessor::getInstance()->removeObserver(id, this);
+            }
+        }
+    }
+    mMask.release();
+}
+
+// static
+bool SKFloaterLocalChat::modernEnabled()
+{
+    static LLCachedControl<bool> modern(gSavedSettings, "SkoomaLocalChatModern", true);
+    return modern;
+}
+
+// static
+bool SKFloaterLocalChat::hidesForConversations()
+{
+    static LLCachedControl<bool> hide(gSavedSettings, "SkoomaLocalChatHideForConversations", false);
+    return hide;
+}
+
+// static
+bool SKFloaterLocalChat::shouldTakeChat()
+{
+    if (!modernEnabled())
+    {
+        return false;
+    }
+    if (!hidesForConversations())
+    {
+        return true;
+    }
+    // As the chat bar: while Conversations is up, starting chat selects its nearby conversation instead.
+    LLFloaterIMContainer* conversations = LLFloaterIMContainer::findInstance();
+    return !conversations || !conversations->getVisible() || conversations->isMinimized();
+}
+
+// static
+void SKFloaterLocalChat::addChat(const LLChat& chat, const LLSD& args)
+{
+    SKFloaterLocalChat* self = LLFloaterReg::findTypedInstance<SKFloaterLocalChat>("sk_local_chat");
+    if (!self)
+    {
+        self = LLFloaterReg::getTypedInstance<SKFloaterLocalChat>("sk_local_chat");
+        if (!self)
+        {
+            return;
+        }
+        // The archive already holds this message; take it from here instead, with its args.
+        self->backfill(true);
+    }
+    self->appendChat(chat, args, LLFrameTimer::getTotalSeconds());
+    // Put away for Conversations, the chat stays hidden; reopening it would sound and flicker on every line.
+    if (!self->getVisible() && !self->mHiddenForConversations && shouldTakeChat())
+    {
+        LLFloaterReg::showInstance("sk_local_chat", LLSD(), false);
+    }
+}
+
+// static
+void SKFloaterLocalChat::startChat(const char* line)
+{
+    SKFloaterLocalChat* self = LLFloaterReg::findTypedInstance<SKFloaterLocalChat>("sk_local_chat");
+    if (!self)
+    {
+        self = LLFloaterReg::getTypedInstance<SKFloaterLocalChat>("sk_local_chat");
+        if (!self)
+        {
+            return;
+        }
+        self->backfill(false);
+    }
+    if (!self->getVisible())
+    {
+        LLFloaterReg::showInstance("sk_local_chat", LLSD(), false);
+    }
+    if (self->isMinimized())
+    {
+        self->setMinimized(false);
+    }
+    self->showInput(true);
+    if (line)
+    {
+        self->mInput->setText(LLStringExplicit(line));
+    }
+    // Always at the end, so a stray WASD does not overwrite what was typed.
+    self->mInput->endOfDoc();
+}
+
+// static
+void SKFloaterLocalChat::stopChat()
+{
+    if (SKFloaterLocalChat* self = LLFloaterReg::findTypedInstance<SKFloaterLocalChat>("sk_local_chat"))
+    {
+        self->showInput(false);
+    }
+    gAgent.stopTyping();
+}
+
+// static
+std::string SKFloaterLocalChat::currentChat()
+{
+    SKFloaterLocalChat* self = LLFloaterReg::findTypedInstance<SKFloaterLocalChat>("sk_local_chat");
+    return self && self->mInput ? self->mInput->getText() : LLStringUtil::null;
+}
+
+// static
+void SKFloaterLocalChat::onIdle(void* data)
+{
+    // Conversations carries nearby chat, so the chat steps aside while it is up and comes back after.
+    SKFloaterLocalChat* self = static_cast<SKFloaterLocalChat*>(data);
+    LLFloaterIMContainer* conversations = LLFloaterIMContainer::findInstance();
+    const bool conversations_up = hidesForConversations() && conversations && conversations->getVisible() && !conversations->isMinimized();
+    if (conversations_up && self->getVisible())
+    {
+        if (self->mInput && self->mInput->getVisible())
+        {
+            self->stopChat();
+        }
+        self->mHiddenForConversations = true;
+        self->setVisible(false);
+    }
+    else if (!conversations_up && self->mHiddenForConversations)
+    {
+        self->mHiddenForConversations = false;
+        self->setVisible(true);
+    }
+}
+
+constexpr S32 BAR_STRIP = 12; // the scroll bar's strip, in from the right edge
+
+bool SKFloaterLocalChat::postBuild()
+{
+    gIdleCallbacks.addFunction(onIdle, this);
+    mInput = getChild<LLChatEntry>("sk_local_chat_input");
+    mInput->setAutoreplaceCallback(boost::bind(&LLAutoReplace::autoreplaceCallback, LLAutoReplace::getInstance(), _1, _2, _3, _4, _5));
+    mInput->setKeystrokeCallback([this](LLTextEditor*) { ALChatBar::handleInputKeystroke(mInput, [this]() { sendChat(CHAT_TYPE_NORMAL); }); });
+    mInput->setFocusLostCallback([](LLFocusableElement*) { gAgent.stopTyping(); });
+    mInput->setCommitOnFocusLost(false);
+    mInput->setPassDelete(true);
+    mInput->setShowChatMentionPicker(true);
+    mInput->setShowEmojiHelper(true);
+    mInput->enableSingleLineMode(false); // wraps and grows to expand_lines_count, upward from its bottom
+    mInput->setTextExpandedCallback([this](LLUICtrl*, const LLSD&) { onInputResized(); });
+    mInput->setMaxTextLength(DB_CHAT_MSG_STR_LEN * 5);
+    mInput->setFont(LLViewerChat::getChatFont());
+    ALChatBar::applyChannelLabel(mInput, gSavedSettings.getS32("AlchemyNearbyChatChannel"));
+    mInput->setVisible(false);
+    mEmojiComplete = SKEmojiComplete::attach(mInput); // completes :shortcodes in place of the picker's popup
+
+    // The emoji picker as the conversation window has it; the toggle state follows the picker.
+    mEmojiButton = getChild<LLButton>("sk_local_chat_emoji");
+    mEmojiButton->setClickedCallback([this](LLUICtrl*, const LLSD&)
+    {
+        mInput->hideEmojiHelper();
+        if (!mEmojiButton->getToggleState())
+        {
+            mInput->setFocus(true);
+            mInput->showEmojiHelper();
+        }
+        mEmojiButton->setToggleState(!mEmojiButton->getToggleState());
+    });
+    mEmojiButton->setMouseDownCallback([this](LLUICtrl*, const LLSD&)
+    {
+        // The press itself closed the picker; keep the state so the click does not reopen it.
+        if (mEmojiClosedFrame == LLFrameTimer::getFrameCount())
+        {
+            mEmojiButton->setToggleState(true);
+        }
+    });
+    mEmojiCloseConnection = LLEmojiHelper::instance().setCloseCallback([this](LLUICtrl*, const LLSD&)
+    {
+        if (mEmojiButton->getToggleState())
+        {
+            mEmojiButton->setToggleState(false);
+            mEmojiClosedFrame = LLFrameTimer::getFrameCount();
+        }
+    });
+
+    mCog = getChild<LLMenuButton>("sk_local_chat_cog");
+    mCog->setVisible(false);
+
+    mFontConnection = LLViewerChat::setFontChangedCallback([this](LLFontGL* font)
+    {
+        mInput->setFont(font);
+        invalidateLayout();
+    });
+
+    LLScrollbar::Params bar;
+    bar.name("sk_local_chat_scrollbar");
+    bar.rect(LLRect(0, 1, BAR_STRIP, 0));
+    bar.orientation(LLScrollbar::VERTICAL);
+    bar.doc_size(0);
+    bar.doc_pos(0);
+    bar.page_size(0);
+    bar.thickness(BAR_STRIP);
+    bar.overlay(true);
+    bar.visible(false);
+    bar.tab_stop(false);
+    bar.change_callback([this](S32 pos, LLScrollbar*)
+    {
+        if (mBarSyncing)
+        {
+            return;
+        }
+        // The bar moved the chat: the wheel's glide gives way to it.
+        const S32 range = llmax(0, barRange());
+        mScroll = llclamp(range - pos, 0, range);
+        mWheelGlide.jumpTo((F32)mScroll);
+    });
+    mScrollbar = LLUICtrlFactory::create<LLScrollbar>(bar);
+    addChild(mScrollbar);
+    // Behind every other child, so the cog and buttons keep their clicks, yet above the drag handle.
+    sendChildToBack(mScrollbar);
+    sendChildToBack(getDragHandle());
+    layoutCog();
+    gFloaterView->adjustToFitScreen(this, false);
+    return true;
+}
+
+void SKFloaterLocalChat::backfill(bool skip_last)
+{
+    LLFloaterIMNearbyChat* nearby = LLFloaterReg::findTypedInstance<LLFloaterIMNearbyChat>("nearby_chat");
+    if (!nearby)
+    {
+        return;
+    }
+    const std::vector<LLChat>& archive = nearby->getMessageArchive();
+    size_t count = archive.size();
+    if (skip_last && count > 0)
+    {
+        --count;
+    }
+
+    // The archive's history lines carry the log's time as shown, which drops today's date and may never have had one;
+    // the log's own datetime keeps whatever date it was written with, so take the days from there.
+    std::vector<S32> days(count, 0);
+    size_t history_end = 0;
+    while (history_end < count && archive[history_end].mChatStyle == CHAT_STYLE_HISTORY)
+    {
+        ++history_end;
+    }
+    if (history_end > 0)
+    {
+        std::list<LLSD> log;
+        LLLogChat::loadChatHistory("chat", log);
+        // Both end with the last line loaded; walk back matching by text, as the archive may hold only the latest.
+        auto it = log.rbegin();
+        for (size_t i = history_end; i-- > 0 && it != log.rend();)
+        {
+            while (it != log.rend() && (*it)[LL_IM_TEXT].asString() != archive[i].mText)
+            {
+                ++it;
+            }
+            if (it != log.rend())
+            {
+                days[i] = day_key((*it)[LL_IM_DATE_TIME].asString());
+                ++it;
+            }
+        }
+    }
+
+    for (size_t i = count > MAX_MESSAGES ? count - MAX_MESSAGES : 0; i < count; ++i)
+    {
+        // Arrival 0 leaves history faded until the chat is opened.
+        appendChat(archive[i], LLSD(), 0.0, days[i]);
+    }
+}
+
+void SKFloaterLocalChat::appendChat(const LLChat& chat, const LLSD& args, F64 arrival, S32 day)
+{
+    if (chat.mText.empty())
+    {
+        return;
+    }
+
+    Message msg;
+    msg.mFromID = chat.mFromID;
+    msg.mSource = chat.mSourceType;
+    msg.mArrival = arrival;
+    static LLCachedControl<bool> show_seconds(gSavedSettings, "AlchemyIMShowSeconds", false);
+    msg.mTime = ALChatTimestamp::format(chat.mTimeStr.empty() ? LLLogChat::timestamp2LogString(0, false, true) : chat.mTimeStr, show_seconds);
+    // The day in the timestamps' own time base; a line that truly has none takes the last known day.
+    msg.mHistory = chat.mChatStyle == CHAT_STYLE_HISTORY;
+    msg.mDay = day != 0 ? day : day_key(chat.mTimeStr);
+    if (msg.mDay == 0 && !msg.mHistory)
+    {
+        msg.mDay = day_key(LLLogChat::timestamp2LogString(0, true, false)); // heard now, so today
+    }
+    if (msg.mDay == 0 && !mMessages.empty())
+    {
+        msg.mDay = mMessages.back().mDay;
+    }
+
+    LLUIColor text_color = LLUIColorTable::instance().getColor("White");
+    F32 alpha = 1.f;
+    LLViewerChat::getChatColor(chat, text_color, alpha);
+    msg.mTextColor = text_color.get();
+    msg.mTextColor.mV[VALPHA] *= alpha;
+    msg.mNameColor = LLUIColorTable::instance().getColor("ChatHeaderDisplayNameColor").get();
+    LLColor4 irc_name;
+    if (ALAvatarGroups::instance().getChatNameColor(chat, irc_name))
+    {
+        msg.mNameColor = irc_name;
+    }
+    if (msg.mHistory)
+    {
+        // As the conversation log: lines from an earlier session are greyed out.
+        msg.mTextColor.setVec(LLColor4::grey.mV[VRED], LLColor4::grey.mV[VGREEN], LLColor4::grey.mV[VBLUE], msg.mTextColor.mV[VALPHA]);
+        msg.mNameColor = LLColor4::grey;
+    }
+
+    const bool named = !chat.mFromName.empty() && chat.mSourceType != CHAT_SOURCE_SYSTEM;
+    if (named && !chat.mRlvNamesFiltered)
+    {
+        if (chat.mSourceType == CHAT_SOURCE_AGENT && chat.mFromID.notNull())
+        {
+            msg.mSenderUrl = LLSLURL("agent", chat.mFromID, "inspect").getSLURLString();
+        }
+        else if (chat.mSourceType == CHAT_SOURCE_OBJECT)
+        {
+            msg.mSenderUrl = LLViewerChat::getSenderSLURL(chat, args);
+        }
+    }
+
+    // As chat history: an IRC-style emote runs on from the name, shout and whisper carry their own verb.
+    std::string text = chat.mText;
+    msg.mEmote = chat.mChatStyle == CHAT_STYLE_IRC;
+    if (msg.mEmote && text.size() >= 3)
+    {
+        text = text.substr(3);
+    }
+    static LLCachedControl<S32> style(gSavedSettings, "SkoomaLocalChatStyle", STYLE_CARDS);
+    static LLCachedControl<bool> voices(gSavedSettings, "SkoomaLocalChatVoiceSizes", true);
+    static const std::string shout = LLTrans::getString("shout");
+    static const std::string whisper = LLTrans::getString("whisper");
+    const bool shouted = chat.mChatType == CHAT_TYPE_SHOUT || text.compare(0, shout.length(), shout) == 0;
+    const bool whispered = chat.mChatType == CHAT_TYPE_WHISPER || text.compare(0, whisper.length(), whisper) == 0;
+    if (voices && !msg.mEmote && (shouted || whispered))
+    {
+        // Said louder or quieter: drawn larger or smaller, so the verb goes.
+        const std::string& verb = shouted ? shout : whisper;
+        if (text.compare(0, verb.length(), verb) == 0)
+        {
+            text.erase(0, llmin(text.size(), text.find_first_not_of(' ', verb.length())));
+            msg.mVoice = shouted ? 1 : -1;
+        }
+    }
+    if (named)
+    {
+        msg.mName = chat.mFromName;
+        if (msg.mEmote || style == STYLE_MINIMAL)
+        {
+            std::string delimiter = ": ";
+            if (msg.mEmote || (msg.mVoice == 0 && (shouted || whispered)))
+            {
+                delimiter = msg.mEmote ? "" : " ";
+            }
+            msg.mBody = chat.mFromName + delimiter;
+            msg.mNameLen = (S32)chat.mFromName.size();
+        }
+    }
+    msg.mBody += text;
+
+    // Links, shown by their labels.
+    std::string out;
+    out.reserve(msg.mBody.size());
+    const S32 name_len = msg.mNameLen;
+    out.append(msg.mBody, 0, name_len);
+    std::string rest = msg.mBody.substr(name_len);
+    LLUrlMatch match;
+    while (!rest.empty() && LLUrlRegistry::instance().findUrl(rest, match))
+    {
+        out.append(rest, 0, match.getStart());
+        std::string label = match.getLabel();
+        if (label.empty())
+        {
+            label = rest.substr(match.getStart(), match.getEnd() - match.getStart() + 1);
+        }
+        Link link;
+        link.mBegin = (S32)out.size();
+        out += label;
+        link.mEnd = (S32)out.size();
+        link.mUrl = match.getUrl();
+        // As chat history: a web link's query follows its label, in grey.
+        const std::string query = match.getQuery();
+        if (!query.empty())
+        {
+            Link tail = link;
+            tail.mBegin = link.mEnd;
+            out += query;
+            tail.mEnd = (S32)out.size();
+            tail.mQuery = true;
+            msg.mLinks.push_back(std::move(link));
+            msg.mLinks.push_back(std::move(tail));
+        }
+        else
+        {
+            msg.mLinks.push_back(std::move(link));
+        }
+        rest.erase(0, match.getEnd() + 1);
+    }
+    out += rest;
+    msg.mBody = std::move(out);
+    applyMarkdown(msg);
+    if (msg.mEmote)
+    {
+        // An emote reads as narration: italic after the name, the speech in its quotes upright.
+        const std::string& body = msg.mBody;
+        msg.mStyle.resize(body.size(), 0);
+        bool speech = false;
+        for (S32 k = msg.mNameLen; k < (S32)body.size(); ++k)
+        {
+            const bool open = body[k] == '"' || body.compare(k, 3, "\xE2\x80\x9C") == 0;
+            const bool close = body[k] == '"' || body.compare(k, 3, "\xE2\x80\x9D") == 0;
+            if (speech ? close : open)
+            {
+                const S32 len = body[k] == '"' ? 1 : 3;
+                speech = !speech;
+                k += len - 1;
+                continue;
+            }
+            if (!speech)
+            {
+                msg.mStyle[k] |= LLFontGL::ITALIC;
+            }
+        }
+    }
+    if (msg.mVoice != 0)
+    {
+        // A shout bold, a whisper italic and dimmed, besides their sizes.
+        msg.mStyle.resize(msg.mBody.size(), 0);
+        for (S32 k = msg.mNameLen; k < (S32)msg.mBody.size(); ++k)
+        {
+            msg.mStyle[k] |= msg.mVoice > 0 ? LLFontGL::BOLD : LLFontGL::ITALIC;
+        }
+        if (msg.mVoice < 0)
+        {
+            msg.mTextColor.mV[VALPHA] *= 0.7f;
+        }
+    }
+
+    // One preview a message, for its first link that has one; nothing is looked up until it is drawn.
+    if (unfurl_enabled())
+    {
+        for (const Link& link : msg.mLinks)
+        {
+            if (!link.mQuery && (msg.mEmbed = mUnfurl.find(link.mUrl)))
+            {
+                break;
+            }
+        }
+    }
+
+    if (arrival > 0.0)
+    {
+        holdForReading(msg);
+    }
+    mMessages.push_back(std::move(msg));
+    ++mPendingMessages;
+    if (arrival > 0.0 && isMinimized())
+    {
+        ++mCollapsedUnread;
+        updateCollapsedStatus();
+    }
+    if (scrolledUp())
+    {
+        ++mUnseen;
+    }
+    while (mMessages.size() > MAX_MESSAGES)
+    {
+        mMessages.pop_front();
+        if (mSelAnchor.mMessage >= 0 && (--mSelAnchor.mMessage < 0 || --mSelFocus.mMessage < 0))
+        {
+            clearSelection(); // the selection began or ended in a message now gone
+        }
+    }
+    invalidateLayout();
+}
+
+void SKFloaterLocalChat::applyMarkdown(Message& msg)
+{
+    std::string& body = msg.mBody;
+    const S32 n = (S32)body.size();
+    const S32 from = msg.mNameLen;
+    if (body.find_first_of("*_~`>#-\\", from) == std::string::npos)
+    {
+        return;
+    }
+    std::vector<U8> style(n, 0);
+    std::vector<U8> kept(n, 1);   // 0 for a marker taken out
+    std::vector<U8> fixed(n, 0);  // a link, code or an escaped character, which nothing restyles
+    std::vector<U8> bullet(n, 0); // a list's dash, drawn as a bullet
+    for (const Link& link : msg.mLinks)
+    {
+        std::fill(fixed.begin() + link.mBegin, fixed.begin() + link.mEnd, 1);
+    }
+    auto drop = [&](S32 at, S32 count) { std::fill(kept.begin() + at, kept.begin() + llmin(n, at + count), 0); };
+
+    // Lines: code fences, quotes, headings and lists. A minimal line's first line follows the name and takes none.
+    bool fence = false;
+    bool quote_rest = false;
+    for (S32 line = from; line < n;)
+    {
+        size_t found = body.find('\n', line);
+        const S32 eol = found == std::string::npos ? n : (S32)found;
+        const S32 next = eol < n ? eol + 1 : n;
+        // Markers are read past leading spaces, which a list keeps for its nesting.
+        S32 i = line;
+        while (i < eol && body[i] == ' ')
+        {
+            ++i;
+        }
+        const S32 indent = i - line;
+        // A fence line is a run of three or more backticks alone, or with a language word after it.
+        S32 ticks = 0;
+        while (i + ticks < eol && body[i + ticks] == '`')
+        {
+            ++ticks;
+        }
+        const bool fence_line = ticks >= 3 && !fixed[i] && body.find_first_of(" `", i + ticks) >= (size_t)eol;
+        if (fence_line)
+        {
+            fence = !fence; // a fence line opens or closes a code block and is not shown
+            drop(line, next - line);
+            line = next;
+            continue;
+        }
+        if (fence)
+        {
+            for (S32 k = line; k < next; ++k)
+            {
+                style[k] |= MD_CODE;
+                fixed[k] = 1;
+            }
+            line = next;
+            continue;
+        }
+        if (line > 0 || from == 0)
+        {
+            bool quoted = quote_rest;
+            if (!quoted && body.compare(i, 4, ">>> ") == 0)
+            {
+                quote_rest = quoted = true; // the rest of the message
+                drop(line, indent + 4);
+                i += 4;
+            }
+            else if (!quoted && body.compare(i, 2, "> ") == 0)
+            {
+                quoted = true;
+                drop(line, indent + 2);
+                i += 2;
+            }
+            if (quoted)
+            {
+                for (S32 k = line; k < next; ++k)
+                {
+                    style[k] |= MD_QUOTE;
+                }
+            }
+            S32 hashes = 0;
+            while (hashes < 3 && i + hashes < eol && body[i + hashes] == '#')
+            {
+                ++hashes;
+            }
+            if (hashes > 0 && i + hashes + 1 < eol && body[i + hashes] == ' ')
+            {
+                drop(line, i - line + hashes + 1); // a heading, drawn bold and larger
+                for (S32 k = i + hashes + 1; k < eol; ++k)
+                {
+                    style[k] |= LLFontGL::BOLD | (U8)(hashes << MD_HEADING_SHIFT);
+                }
+            }
+            else if (i + 2 < eol && (body[i] == '-' || body[i] == '*') && body[i + 1] == ' ')
+            {
+                bullet[i] = 1;
+                fixed[i] = 1;
+            }
+        }
+        line = next;
+    }
+
+    auto free_at = [&](S32 k) { return k >= from && k < n && kept[k] && !fixed[k]; };
+    auto is_word = [](char c) { return LLStringOps::isAlnum(c); };
+
+    // A backslash shows the punctuation after it as it is.
+    for (S32 i = from; i + 1 < n; ++i)
+    {
+        if (body[i] == '\\' && free_at(i) && free_at(i + 1) && LLStringOps::isPunct(body[i + 1]))
+        {
+            kept[i] = 0;
+            fixed[i + 1] = 1;
+            ++i;
+        }
+    }
+
+    // Inline pairs.
+    auto pairs = [&](std::string_view mark, U8 flag, bool code, bool tight, bool word_bound)
+    {
+        const S32 len = (S32)mark.size();
+        auto marker_at = [&](S32 k)
+        {
+            if (k < from || k + len > n || body.compare(k, len, mark) != 0)
+            {
+                return false;
+            }
+            for (S32 j = k; j < k + len; ++j)
+            {
+                if (!free_at(j))
+                {
+                    return false;
+                }
+            }
+            return true;
+        };
+        for (S32 i = from; i + 2 * len < n + 1; ++i)
+        {
+            if (!marker_at(i) || (word_bound && i > 0 && is_word(body[i - 1])) || (tight && (i + len >= n || body[i + len] == ' ')))
+            {
+                continue;
+            }
+            for (S32 j = i + len + 1; j + len <= n; ++j)
+            {
+                if (!marker_at(j) || (tight && body[j - 1] == ' ') || (word_bound && j + len < n && is_word(body[j + len])))
+                {
+                    continue;
+                }
+                drop(i, len);
+                drop(j, len);
+                for (S32 k = i + len; k < j; ++k)
+                {
+                    style[k] |= flag;
+                    if (code)
+                    {
+                        fixed[k] = 1;
+                    }
+                }
+                i = j + len - 1;
+                break;
+            }
+        }
+    };
+    // Code first, so nothing inside it is read as a marker: a run of backticks closes at the next run as long, across lines.
+    for (S32 i = from; i < n; ++i)
+    {
+        auto run_at = [&](S32 k)
+        {
+            S32 len = 0;
+            while (k + len < n && body[k + len] == '`' && free_at(k + len))
+            {
+                ++len;
+            }
+            return len;
+        };
+        const S32 len = body[i] == '`' ? run_at(i) : 0;
+        if (len == 0)
+        {
+            continue;
+        }
+        S32 j = i + len;
+        while (j < n)
+        {
+            const S32 other = body[j] == '`' ? run_at(j) : 0;
+            if (other == 0)
+            {
+                ++j;
+                continue;
+            }
+            if (other == len)
+            {
+                break;
+            }
+            j += other;
+        }
+        if (j < n && j > i + len)
+        {
+            drop(i, len);
+            drop(j, len);
+            for (S32 k = i + len; k < j; ++k)
+            {
+                style[k] |= MD_CODE;
+                fixed[k] = 1;
+            }
+            i = j + len - 1;
+        }
+        else
+        {
+            i += len - 1;
+        }
+    }
+    pairs("**", LLFontGL::BOLD, false, false, false);
+    pairs("__", LLFontGL::UNDERLINE, false, false, false);
+    pairs("~~", MD_STRIKE, false, false, false);
+    pairs("*", LLFontGL::ITALIC, false, true, false);
+    pairs("_", LLFontGL::ITALIC, false, true, true);
+
+    // What is left, with the links moved to where their bytes went.
+    std::string out;
+    std::vector<U8> out_style;
+    std::vector<S32> moved(n + 1, 0);
+    out.reserve(n);
+    out_style.reserve(n);
+    bool styled = false;
+    for (S32 i = 0; i < n; ++i)
+    {
+        moved[i] = (S32)out.size();
+        if (!kept[i])
+        {
+            continue;
+        }
+        if (bullet[i])
+        {
+            out += "\xE2\x80\xA2";
+            out_style.insert(out_style.end(), 3, style[i]);
+        }
+        else
+        {
+            out += body[i];
+            out_style.push_back(style[i]);
+        }
+        styled |= style[i] != 0;
+    }
+    moved[n] = (S32)out.size();
+    if (out.size() == body.size() && !styled)
+    {
+        return; // nothing was markdown
+    }
+    for (Link& link : msg.mLinks)
+    {
+        link.mBegin = moved[link.mBegin];
+        link.mEnd = moved[link.mEnd];
+    }
+    body = std::move(out);
+    if (styled)
+    {
+        msg.mStyle = std::move(out_style);
+    }
+}
+
+void SKFloaterLocalChat::showInput(bool show)
+{
+    if (!mInput)
+    {
+        return;
+    }
+    mInput->setVisible(show);
+    mEmojiButton->setVisible(show);
+    onInputResized();
+    if (!show)
+    {
+        mInput->hideEmojiHelper();
+    }
+    if (show)
+    {
+        setFocus(true);
+        mInput->setFocus(true);
+    }
+    else
+    {
+        mInput->setFocus(false);
+        mScroll = 0;
+    }
+}
+
+void SKFloaterLocalChat::sendChat(EChatType type)
+{
+    ALChatBar::sendChatText(mInput, type);
+    gAgent.stopTyping();
+    if (gSavedSettings.getBOOL("CloseChatBarOnReturn"))
+    {
+        stopChat();
+    }
+}
+
+bool SKFloaterLocalChat::handleKeyHere(KEY key, MASK mask)
+{
+    if (hasSelection() && mask == MASK_CONTROL && (key == 'C' || key == KEY_INSERT))
+    {
+        copy();
+        return true;
+    }
+    if (mInput && mInput->getVisible())
+    {
+        // The chat bar's modifiers: ctrl shouts, ctrl+shift whispers, alt speaks out of character.
+        if (KEY_RETURN == key)
+        {
+            if (mask == (MASK_CONTROL | MASK_SHIFT))
+            {
+                sendChat(CHAT_TYPE_WHISPER);
+                return true;
+            }
+            if (mask == MASK_CONTROL)
+            {
+                sendChat(CHAT_TYPE_SHOUT);
+                return true;
+            }
+            if (mask == MASK_ALT)
+            {
+                sendChat(CHAT_TYPE_OOC);
+                return true;
+            }
+            if (mask == MASK_NONE)
+            {
+                sendChat(CHAT_TYPE_NORMAL);
+                return true;
+            }
+        }
+        else if (KEY_ESCAPE == key)
+        {
+            stopChat();
+            return true;
+        }
+    }
+    return LLFloater::handleKeyHere(key, mask);
+}
+
+void SKFloaterLocalChat::onFocusLost()
+{
+    // The emoji picker takes focus while it is open; the chat stays open for its pick.
+    if (mInput && mInput->getVisible() && !LLEmojiHelper::instance().isActive(mInput))
+    {
+        stopChat();
+    }
+    LLFloater::onFocusLost();
+}
+
+bool SKFloaterLocalChat::applyRectControl()
+{
+    if (LLFloater::applyRectControl())
+    {
+        return true;
+    }
+    // First open: an MMO-sized box at the bottom left, above the toolbar.
+    constexpr S32 DEFAULT_W = 640;
+    constexpr S32 DEFAULT_H = 560;
+    constexpr S32 MARGIN = 10;
+    const LLRect snap = gFloaterView->getSnapRect();
+    reshape(DEFAULT_W, DEFAULT_H);
+    setOrigin(snap.mLeft + MARGIN, snap.mBottom + MARGIN);
+    storeRectControl();
+    return true;
+}
+
+static const std::string TYPING_SEPARATOR = "  \xC2\xB7  ";
+
+void SKFloaterLocalChat::setMinimized(bool minimize)
+{
+    if (minimize == isMinimized())
+    {
+        return;
+    }
+    if (minimize && mInput && mInput->getVisible())
+    {
+        stopChat();
+    }
+    mCollapsedUnread = 0;
+    updateCollapsedStatus();
+    LLFloater::setMinimized(minimize);
+}
+
+void SKFloaterLocalChat::updateCollapsedStatus()
+{
+    // The unread count and who is typing, in the bar every collapsed floater draws.
+    const std::string& typing = !mTypingLabel[0].empty() ? mTypingLabel[0] : mTypingLabel[1];
+    setCollapsedStatus(mCollapsedUnread, typing);
+}
+
+void SKFloaterLocalChat::reshape(S32 width, S32 height, bool called_from_parent)
+{
+    LLFloater::reshape(width, height, called_from_parent);
+    layoutCog();
+}
+
+void SKFloaterLocalChat::layoutCog()
+{
+    if (!mCog)
+    {
+        return;
+    }
+    // In the title buttons' row, left of them all, at their size.
+    static LLUICachedControl<S32> close_box_size("UIFloaterCloseBoxSize", 0);
+    static LLUICachedControl<S32> close_box_from_top("UICloseBoxFromTop", 0);
+    const LLRect buttons = getDragHandle() ? getDragHandle()->getButtonsRect() : LLRect();
+    const S32 right = buttons.isEmpty() ? getRect().getWidth() - LLPANEL_BORDER_WIDTH : buttons.mLeft - 1;
+    const S32 top = getRect().getHeight() - close_box_from_top;
+    const LLRect rect(right - close_box_size, top, right, top - close_box_size);
+    if (rect != mCog->getRect())
+    {
+        mCog->setRect(rect);
+    }
+}
+
+void SKFloaterLocalChat::onMouseEnter(S32 x, S32 y, MASK mask)
+{
+    mHovered = true;
+    LLFloater::onMouseEnter(x, y, mask);
+}
+
+void SKFloaterLocalChat::onMouseLeave(S32 x, S32 y, MASK mask)
+{
+    mHovered = false;
+    mRevealed = false;
+    mRestSince = -1.0;
+    mEdgeSince = -1.0;
+    LLFloater::onMouseLeave(x, y, mask);
+}
+
+bool SKFloaterLocalChat::expanded() const
+{
+    return mRevealed || mScroll > 0 || (mInput && mInput->getVisible()) || gFocusMgr.getMouseCapture() == this || (mScrollbar && mScrollbar->hasMouseCapture());
+}
+
+LLRect SKFloaterLocalChat::contentRect() const
+{
+    // The input's row and the typing line are always kept, so the messages do not jump when either shows.
+    return LLRect(INSET, getRect().getHeight() - INSET, getRect().getWidth() - INSET, inputHeight() + INPUT_GAP + TYPING_HEIGHT + INSET);
+}
+
+S32 SKFloaterLocalChat::inputHeight() const
+{
+    // A hidden input keeps one line's row, so a draft left in it does not hold the messages up.
+    return mInput && mInput->getVisible() ? llmax(INPUT_HEIGHT, mInput->getRect().getHeight()) : INPUT_HEIGHT;
+}
+
+void SKFloaterLocalChat::onInputResized()
+{
+    // mScroll counts up from the newest message, so the bottom of the view stays where it was.
+    mScroll = llclamp(mScroll, 0, llmax(0, barRange()));
+    invalidateLayout();
+}
+
+S32 SKFloaterLocalChat::barRange() const
+{
+    return mContentHeight - contentRect().getHeight();
+}
+
+S32 SKFloaterLocalChat::barPos() const
+{
+    const S32 range = llmax(0, barRange());
+    return llmax(0, range - llclamp(mScroll, 0, range));
+}
+
+void SKFloaterLocalChat::layoutBar()
+{
+    if (!mScrollbar)
+    {
+        return;
+    }
+    const LLRect content = contentRect();
+    const bool dragging = mScrollbar->hasMouseCapture();
+    const bool show = (mRevealed || dragging) && barRange() > 0 && !isMinimized() && !gAgentCamera.cameraMouselook();
+    mScrollbar->setVisible(show);
+    if (!show)
+    {
+        return;
+    }
+    // Below the title buttons' row, which the cog shares, so the two never overlap.
+    static LLUICachedControl<S32> close_box_size("UIFloaterCloseBoxSize", 0);
+    static LLUICachedControl<S32> close_box_from_top("UICloseBoxFromTop", 0);
+    const S32 top = llmin(content.mTop, getRect().getHeight() - close_box_from_top - close_box_size - 2);
+    mScrollbar->setShape(LLRect(getRect().getWidth() - BAR_STRIP, top, getRect().getWidth(), content.mBottom));
+    mBarSyncing = true;
+    mScrollbar->setDocSize(mContentHeight);
+    mScrollbar->setPageSize(content.getHeight());
+    mScrollbar->setDocPos(barPos());
+    mBarSyncing = false;
+}
+
+S32 SKFloaterLocalChat::lineHeight(const Row& row) const
+{
+    if (row.mEmbed)
+    {
+        return embed_height();
+    }
+    return row.mMessage < 0 ? name_font()->getLineHeight() + 1 : rowFont(row)->getLineHeight();
+}
+
+// static
+LLFontGL* SKFloaterLocalChat::rowFont(const Row& row)
+{
+    LLFontGL* font = LLViewerChat::getChatFont();
+    if (row.mScale == 1.f)
+    {
+        return font;
+    }
+    const LLFontDescriptor& desc = font->getFontDesc();
+    const F32 points = LLFontGL::pointsOf(desc.getName(), desc.getSize());
+    LLFontGL* scaled = points > 0.f ? LLFontGL::getFontAtPoints(desc.getName(), points * row.mScale, LLFontGL::NORMAL) : nullptr;
+    return scaled ? scaled : font;
+}
+
+void SKFloaterLocalChat::holdForReading(Message& msg) const
+{
+    static LLCachedControl<F32> delay(gSavedSettings, "SkoomaLocalChatFadeDelay", 8.f);
+    static LLCachedControl<F32> per_word(gSavedSettings, "SkoomaLocalChatReadPerWord", 0.25f);
+    static LLCachedControl<F32> read_max(gSavedSettings, "SkoomaLocalChatReadMax", 30.f);
+    static LLCachedControl<F32> read_min(gSavedSettings, "SkoomaLocalChatReadAfter", 2.f);
+    S32 words = 0;
+    bool in_word = false;
+    for (size_t k = msg.mNameLen; k < msg.mBody.size(); ++k)
+    {
+        const bool space = isspace((U8)msg.mBody[k]) != 0;
+        words += !space && !in_word;
+        in_word = !space;
+    }
+    const F32 read = llclamp(words * (F32)per_word, 0.f, (F32)read_max);
+    // Never gone before a message above it: it outlasts the last one by the time it takes to read.
+    F64 until = msg.mArrival + delay + read;
+    if (!mMessages.empty() && mMessages.back().mArrival > 0.0)
+    {
+        const Message& prev = mMessages.back();
+        until = llmax(until, prev.mArrival + delay + prev.mHoldExtra + llmax(read, (F32)read_min));
+    }
+    msg.mHoldExtra = (F32)(until - msg.mArrival - delay);
+}
+
+F32 SKFloaterLocalChat::cardFade(const Card& card, F64 now) const
+{
+    static LLCachedControl<F32> delay(gSavedSettings, "SkoomaLocalChatFadeDelay", 8.f);
+    static LLCachedControl<F32> fade(gSavedSettings, "SkoomaLocalChatFadeTime", 2.f);
+    static LLCachedControl<F32> grace(gSavedSettings, "SkoomaLocalChatHoverGrace", 5.f);
+    static LLCachedControl<bool> fades(gSavedSettings, "SkoomaLocalChatFade", true);
+    if (!fades)
+    {
+        return 1.f;
+    }
+    auto fading = [&](F64 age, F32 hold)
+    {
+        if (age <= hold)
+        {
+            return 1.f;
+        }
+        return fade <= 0.f ? 0.f : llclamp(1.f - (F32)((age - hold) / fade), 0.f, 1.f);
+    };
+    // After the log was shown whole it stays whole for the grace, then fades as one, as MMO chat does.
+    return llmax(fading(now - mMessages[card.mLastMessage].mArrival, delay + mMessages[card.mLastMessage].mHoldExtra), fading(now - mCollapsedAt, grace));
+}
+
+F32 SKFloaterLocalChat::cardAlpha(const Card& card, F64 now) const
+{
+    static LLCachedControl<F32> floor(gSavedSettings, "SkoomaLocalChatFadeFloor", 0.f);
+    const F32 rest = llclamp((F32)floor, 0.f, 1.f);
+    // The colour goes first: opacity holds for the first quarter of the fade, then fades over the rest.
+    const F32 fade = llclamp(cardFade(card, now) / (1.f - FADE_OPACITY_DELAY), 0.f, 1.f);
+    return rest + (1.f - rest) * fade;
+}
+
+F32 SKFloaterLocalChat::shownAlpha(const Card& card, F64 now) const
+{
+    // While the pointer is over the chat, faded history shows faintly, as something to rest on; it takes no clicks.
+    return llmax(cardAlpha(card, now), GHOST_ALPHA * mGhost);
+}
+
+F32 SKFloaterLocalChat::cardSaturation(const Card& card, F64 now) const
+{
+    // Grey within the first part of the fade, so a message reads as history before it dims.
+    return llclamp(1.f - (1.f - cardFade(card, now)) / FADE_GREY_SPAN, 0.f, 1.f);
+}
+
+LLColor4 SKFloaterLocalChat::faded(LLColor4 color, F32 alpha) const
+{
+    color.mV[VALPHA] *= alpha;
+    return color;
+}
+
+void SKFloaterLocalChat::layout()
+{
+    static LLCachedControl<S32> style(gSavedSettings, "SkoomaLocalChatStyle", STYLE_CARDS);
+    const bool cards = style != STYLE_MINIMAL;
+    const S32 width = contentRect().getWidth();
+    // A preview that arrived, or the setting turned, lays the messages out again.
+    const U32 unfurl_generation = mUnfurl.generation() * 2 + (unfurl_enabled() ? 1 : 0);
+    if (!mLayoutDirty && width == mLayoutWidth && style == mLayoutStyle && unfurl_generation == mUnfurlGeneration)
+    {
+        return;
+    }
+    mUnfurlGeneration = unfurl_generation;
+    ++mLayoutGeneration;
+    if (mLayoutStyle >= 0 && style != mLayoutStyle)
+    {
+        // The minimal style folds the name into the body, so the messages are made again.
+        mLayoutStyle = style;
+        clearSelection();
+        std::deque<Message> old;
+        old.swap(mMessages);
+        for (Message& msg : old)
+        {
+            if (!msg.mName.empty() && !msg.mEmote)
+            {
+                // Strip or add the "Name: " lead the style puts on the body.
+                if (msg.mNameLen > 0)
+                {
+                    const size_t lead = msg.mBody.find_first_not_of(": ", msg.mNameLen);
+                    const S32 cut = (S32)(lead == std::string::npos ? msg.mBody.size() : lead);
+                    msg.mBody.erase(0, cut);
+                    for (Link& link : msg.mLinks)
+                    {
+                        link.mBegin -= cut;
+                        link.mEnd -= cut;
+                    }
+                    msg.mNameLen = 0;
+                }
+                if (!cards)
+                {
+                    const std::string lead = msg.mName + ": ";
+                    msg.mBody.insert(0, lead);
+                    for (Link& link : msg.mLinks)
+                    {
+                        link.mBegin += (S32)lead.size();
+                        link.mEnd += (S32)lead.size();
+                    }
+                    msg.mNameLen = (S32)msg.mName.size();
+                }
+            }
+            mMessages.push_back(std::move(msg));
+        }
+    }
+    mLayoutDirty = false;
+    mLayoutWidth = width;
+    mLayoutStyle = style;
+    mRows.clear();
+    mCards.clear();
+
+    LLFontGL* font = LLViewerChat::getChatFont();
+    const F64 now = LLFrameTimer::getTotalSeconds();
+    const S32 pad_x = cards ? CARD_PAD_X : PAD_X;
+    F32 wrap = (F32)llmax(16, width - 2 * pad_x);
+    // How much wider a minimal line's bold name draws than the regular face measures it.
+    auto bold_extra = [](const LLFontGL* font, const Message& msg)
+    {
+        const std::string_view name = std::string_view(msg.mBody).substr(0, msg.mNameLen);
+        return llmax(0, bold_width(font, name) - font->getWidth(name));
+    };
+
+    for (S32 m = 0; m < (S32)mMessages.size(); ++m)
+    {
+        Message& msg = mMessages[m];
+        msg.mNameWidth = bold_width(name_font(), msg.mName);
+        // A card's emote is one line of its own, its name leading and no time.
+        const bool emote_line = cards && msg.mEmote;
+        msg.mTimeWidth = msg.mName.empty() || msg.mTime.empty() || emote_line ? 0 : time_font()->getWidth(msg.mTime) + (cards ? TIME_GAP : LEAD_TIME_GAP);
+        // Cards gather one speaker's run of messages; a minimal line stands alone.
+        // A new day, or the step from the log's history to what was heard this session.
+        const bool new_day = m > 0 && msg.mDay != 0 && ((mMessages[m - 1].mDay != 0 && msg.mDay != mMessages[m - 1].mDay) || (mMessages[m - 1].mHistory && !msg.mHistory));
+        bool join = false;
+        if (cards && !new_day && !mCards.empty() && !msg.mName.empty())
+        {
+            const Card& last = mCards.back();
+            const Message& prev = mMessages[last.mLastMessage];
+            join = !emote_line && !prev.mEmote && prev.mFromID == msg.mFromID && prev.mSource == msg.mSource && !prev.mName.empty() &&
+                   msg.mArrival - prev.mArrival < CARD_JOIN_SECONDS && last.mLastMessage - last.mFirstMessage + 1 < MAX_CARD_MESSAGES;
+        }
+        if (join)
+        {
+            mRows.back().mPadBottom = 0;
+            mRows.back().mGap = 0;
+            mCards.back().mLastMessage = m;
+        }
+        else
+        {
+            if (new_day)
+            {
+                // Its own card, so it breaks the grouping and fades with the message after it.
+                if (msg.mDayLabel.empty())
+                {
+                    static const std::vector<std::string> months = []
+                    {
+                        std::vector<std::string> names;
+                        LLStringUtil::getTokens(LLTrans::getString("dateTimeMonthNames"), names, ":");
+                        return names;
+                    }();
+                    const S32 month = msg.mDay / 100 % 100;
+                    LLStringUtil::format_map_t args;
+                    args["[MONTH]"] = month <= (S32)months.size() ? months[month - 1] : llformat("%d", month);
+                    args["[DAY]"] = llformat("%d", msg.mDay % 100);
+                    args["[YEAR]"] = llformat("%d", msg.mDay / 10000);
+                    msg.mDayLabel = getString("day_divider", args);
+                }
+                msg.mDayWidth = bold_width(name_font(), msg.mDayLabel);
+                Card divider;
+                divider.mFirstMessage = divider.mLastMessage = m;
+                divider.mFirstRow = divider.mLastRow = (S32)mRows.size();
+                divider.mDivider = true;
+                mCards.push_back(divider);
+                Row row;
+                row.mMessage = DIVIDER_ROW;
+                row.mCard = (S32)mCards.size() - 1;
+                row.mPadTop = llmax(0, DIVIDER_PAD - (cards ? CARD_GAP : MINIMAL_GAP));
+                row.mPadBottom = DIVIDER_PAD;
+                mRows.push_back(row);
+            }
+            Card card;
+            card.mFirstMessage = card.mLastMessage = m;
+            card.mFirstRow = (S32)mRows.size();
+            card.mIconWidth = cards && !msg.mName.empty() ? iconWidth(msg, now) : 0;
+            card.mTextX = cards ? pad_x + llmax(card.mIconWidth, ICON_PX) + DISC_GAP : pad_x;
+            wrap = (F32)llmax(16, width - card.mTextX - pad_x);
+            mCards.push_back(card);
+            if (cards && !msg.mName.empty() && !emote_line)
+            {
+                Row header;
+                header.mMessage = -1;
+                header.mCard = (S32)mCards.size() - 1;
+                header.mPadTop = CARD_PAD_Y;
+                header.mPadBottom = NAME_GAP;
+                mRows.push_back(header);
+            }
+        }
+
+        const std::string_view body(msg.mBody);
+        const S32 total = (S32)body.size();
+        S32 pos = 0;
+        bool first = true;
+        while (pos < total || first)
+        {
+            S32 line_end = total;
+            const size_t nl = body.find('\n', pos);
+            if (nl != std::string_view::npos)
+            {
+                line_end = (S32)nl;
+            }
+            // A minimal line's timestamp sits in its first row, before the name.
+            const bool quoted = (style_at(msg.mStyle, pos) & MD_QUOTE) != 0;
+            Row row;
+            row.mScale = line_scale(style_at(msg.mStyle, pos), msg.mVoice);
+            const LLFontGL* font = rowFont(row);
+            F32 row_wrap = pos == 0 && msg.mNameLen > 0 ? llmax(16.f, wrap - (F32)(msg.mTimeWidth + bold_extra(font, msg))) : wrap;
+            if (quoted)
+            {
+                row_wrap = llmax(16.f, row_wrap - (F32)QUOTE_INDENT);
+            }
+            S32 count = font->maxDrawableBytes(body.substr(pos), row_wrap, line_end - pos, LLFontGL::WORD_BOUNDARY_IF_POSSIBLE);
+            if (count <= 0 && pos < line_end)
+            {
+                count = llmin(utf8_lead_len(body[pos]), line_end - pos);
+            }
+            // The plain face measured it; styled runs may draw wider, so give back words until it fits.
+            while (!msg.mStyle.empty() && count > 1 && styled_width(font, body, msg.mStyle, pos, count) > row_wrap)
+            {
+                const size_t space = body.rfind(' ', (size_t)(pos + count - 2));
+                if (space != std::string_view::npos && (S32)space >= pos)
+                {
+                    count = (S32)space - pos + 1;
+                }
+                else
+                {
+                    --count;
+                    while (count > 1 && ((unsigned char)body[pos + count] & 0xC0) == 0x80)
+                    {
+                        --count;
+                    }
+                }
+            }
+            row.mMessage = m;
+            row.mCard = (S32)mCards.size() - 1;
+            row.mBegin = pos;
+            row.mLength = count;
+            row.mQuote = quoted;
+            if (first && !join && !(cards && !msg.mName.empty() && !emote_line))
+            {
+                row.mPadTop = cards ? CARD_PAD_Y : 0;
+            }
+            mRows.push_back(row);
+            const S32 before = pos;
+            pos += count;
+            if (pos == line_end && line_end < total)
+            {
+                ++pos; // the newline
+            }
+            first = false;
+            if (pos == before)
+            {
+                break; // nothing taken, so nothing more to lay out; a blank line still takes its newline
+            }
+        }
+        if (embed_shown(msg.mEmbed))
+        {
+            const SKChatEmbed& embed = *msg.mEmbed;
+            const S32 text_w = llmax(embed_pill_width(embed) + embed_font()->getWidth(embed.mTitle) + 2, embed_font()->getWidth(embed.mDescription));
+            const S32 thumb = embed.mImage.notNull() ? embed_thumb() + EMBED_PAD : 0;
+            const S32 room = llmax(16, llmin(EMBED_MAX_WIDTH, width - mCards.back().mTextX - pad_x));
+            msg.mEmbedWidth = llclamp(EMBED_ACCENT + 2 * EMBED_PAD + text_w + thumb, llmin(EMBED_MIN_WIDTH, room), room);
+            Row row;
+            row.mMessage = m;
+            row.mCard = (S32)mCards.size() - 1;
+            row.mEmbed = true;
+            row.mPadTop = EMBED_GAP;
+            mRows.push_back(row);
+        }
+        mRows.back().mPadBottom = cards ? CARD_PAD_Y : 0;
+        mRows.back().mGap = cards ? CARD_GAP : MINIMAL_GAP;
+        mCards.back().mLastRow = (S32)mRows.size() - 1;
+    }
+
+    // Each bubble as wide as its name or widest line, wrapping only past the floater's width.
+    for (Card& card : mCards)
+    {
+        if (card.mDivider)
+        {
+            card.mWidth = width;
+            continue;
+        }
+        S32 widest = 0;
+        for (S32 r = card.mFirstRow; r <= card.mLastRow; ++r)
+        {
+            const Row& row = mRows[r];
+            if (row.mMessage < 0)
+            {
+                const Message& first = mMessages[mCards[row.mCard].mFirstMessage];
+                widest = llmax(widest, first.mNameWidth + first.mTimeWidth);
+            }
+            else if (row.mEmbed)
+            {
+                widest = llmax(widest, mMessages[row.mMessage].mEmbedWidth);
+            }
+            else
+            {
+                const Message& msg = mMessages[row.mMessage];
+                const LLFontGL* font = rowFont(row);
+                S32 lead = row.mBegin == 0 && msg.mNameLen > 0 ? msg.mTimeWidth + bold_extra(font, msg) : 0;
+                lead += row.mQuote ? QUOTE_INDENT : 0;
+                widest = llmax(widest, (S32)ceilf(styled_width(font, msg.mBody, msg.mStyle, row.mBegin, row.mLength)) + lead);
+            }
+        }
+        card.mWidth = llmin(width, card.mTextX + widest + pad_x);
+
+        // Tall enough for its icon.
+        if (card.mIconWidth > 0)
+        {
+            S32 height = -mRows[card.mLastRow].mGap;
+            for (S32 r = card.mFirstRow; r <= card.mLastRow; ++r)
+            {
+                height += mRows[r].height() + lineHeight(mRows[r]);
+            }
+            mRows[card.mLastRow].mPadBottom += llmax(0, ICON_PX + 2 * CARD_PAD_Y + 1 - height);
+        }
+    }
+
+    // Offsets from the bottom, newest first.
+    S32 y = 0;
+    for (S32 r = (S32)mRows.size() - 1; r >= 0; --r)
+    {
+        mRows[r].mBottom = y;
+        y += mRows[r].height() + lineHeight(mRows[r]);
+    }
+    mContentHeight = y;
+
+    // While scrolled up, what arrived grows the content below the view; scroll by as much so the view holds still.
+    const S32 first_new = (S32)mMessages.size() - mPendingMessages;
+    mPendingMessages = 0;
+    if (scrolledUp() && first_new > 0)
+    {
+        for (S32 r = 1; r < (S32)mRows.size(); ++r)
+        {
+            const Row& row = mRows[r];
+            const S32 msg = row.mMessage >= 0 ? row.mMessage : mCards[row.mCard].mFirstMessage;
+            if (msg >= first_new)
+            {
+                mScroll += mRows[r - 1].mBottom;
+                mWheelGlide.jumpTo((F32)mScroll);
+                break;
+            }
+        }
+    }
+}
+
+void SKFloaterLocalChat::drawTime(const Message& msg, F32 x, S32 y, F32 alpha, LLFontGL::ShadowType shadow) const
+{
+    const LLColor4 color = faded(msg.mNameColor, TIME_ALPHA * alpha);
+    time_font()->renderUTF8(msg.mTime, 0, x, (F32)y, color, LLFontGL::LEFT, LLFontGL::BOTTOM, LLFontGL::NORMAL, shadow);
+}
+
+S32 SKFloaterLocalChat::selectedFrom(S32 message) const
+{
+    S32 begin = 0;
+    S32 end = 0;
+    return selectedRange(message, begin, end) ? begin : 0;
+}
+
+void SKFloaterLocalChat::drawHeaderSelection(const Card& card, S32 x, S32 y, F32 alpha) const
+{
+    S32 begin = 0;
+    S32 end = 0;
+    if (!selectedRange(card.mFirstMessage, begin, end) || begin >= 0)
+    {
+        return;
+    }
+    const Message& first = mMessages[card.mFirstMessage];
+    static LLUIColor select_color = LLUIColorTable::instance().getColor("EmphasisColor");
+    gGL.getTextureSlot(0)->unbind();
+    shape_blend();
+    gl_rect_2d(x, y + name_font()->getLineHeight(), x + first.mNameWidth + first.mTimeWidth, y, select_color.get() % (0.5f * alpha));
+}
+
+void SKFloaterLocalChat::drawRowSelection(const Row& row, S32 x, S32 y, F32 alpha) const
+{
+    S32 begin = 0;
+    S32 end = 0;
+    if (!selectedRange(row.mMessage, begin, end))
+    {
+        return;
+    }
+    begin = llmax(begin, row.mBegin);
+    end = llmin(end, row.mBegin + row.mLength);
+    if (begin >= end)
+    {
+        return;
+    }
+    const Message& msg = mMessages[row.mMessage];
+    const LLFontGL* font = rowFont(row);
+    F32 left = (F32)x;
+    // A minimal line's leading time is highlighted too when the selection takes it.
+    if (!(row.mBegin == 0 && msg.mNameLen > 0 && selectedFrom(row.mMessage) < 0))
+    {
+        if (row.mBegin == 0 && msg.mNameLen > 0)
+        {
+            left += (F32)msg.mTimeWidth;
+        }
+        left += styled_width(font, msg.mBody, msg.mStyle, row.mBegin, begin - row.mBegin);
+    }
+    const F32 right = left + styled_width(font, msg.mBody, msg.mStyle, begin, end - begin);
+    static LLUIColor select_color = LLUIColorTable::instance().getColor("EmphasisColor");
+    gGL.getTextureSlot(0)->unbind();
+    shape_blend();
+    gl_rect_2d(ll_round(left), y + lineHeight(row), ll_round(right), y, select_color.get() % (0.5f * alpha));
+}
+
+void SKFloaterLocalChat::drawRowText(const Row& row, S32 x, S32 y, F32 alpha, LLFontGL::ShadowType shadow) const
+{
+    const Message& msg = mMessages[row.mMessage];
+    static LLUIColor link_color = LLUIColorTable::instance().getColor("HTMLLinkColor");
+    LLFontGL* font = rowFont(row);
+    const std::string_view body(msg.mBody);
+    const S32 end = row.mBegin + row.mLength;
+    F32 pen = (F32)x;
+    S32 pos = row.mBegin;
+    if (pos == 0 && msg.mNameLen > 0 && msg.mTimeWidth > 0)
+    {
+        drawTime(msg, pen, y, alpha, shadow);
+        pen += (F32)msg.mTimeWidth;
+    }
+    while (pos < end)
+    {
+        // The run up to the next change of colour: the name, a link, or plain text.
+        LLColor4 color = msg.mTextColor;
+        S32 run_end = end;
+        U8 style = LLFontGL::NORMAL;
+        if (pos < msg.mNameLen)
+        {
+            color = msg.mNameColor;
+            run_end = llmin(end, msg.mNameLen);
+            style = LLFontGL::BOLD;
+        }
+        else
+        {
+            for (const Link& link : msg.mLinks)
+            {
+                if (pos >= link.mBegin && pos < link.mEnd)
+                {
+                    color = link.mQuery ? LLColor4::grey : link_color.get();
+                    run_end = llmin(end, link.mEnd);
+                    style = LLFontGL::UNDERLINE;
+                    break;
+                }
+                if (link.mBegin > pos && link.mBegin < run_end)
+                {
+                    run_end = link.mBegin;
+                }
+            }
+        }
+        U8 md = 0;
+        if (pos >= msg.mNameLen)
+        {
+            md = style_at(msg.mStyle, pos);
+            run_end = llmin(run_end, style_run(msg.mStyle, pos, run_end));
+            style |= md & MD_FONT;
+        }
+        color = faded(color, alpha);
+        if (md & MD_CODE)
+        {
+            // Inline code on a darker ground, as Discord's.
+            const F32 width = styled_width(font, body, msg.mStyle, pos, run_end - pos);
+            gGL.getTextureSlot(0)->unbind();
+            shape_blend();
+            gl_rect_2d(ll_round(pen), y + lineHeight(row), ll_round(pen + width), y - 1, LLColor4(0.f, 0.f, 0.f, 0.35f * alpha));
+            pen += (F32)CODE_PAD;
+        }
+        const F32 start = pen;
+        F32 right = pen;
+        font->renderUTF8(body, pos, pen, (F32)y, color, LLFontGL::LEFT, LLFontGL::BOTTOM, style, shadow, run_end - pos, S32_MAX, &right);
+        if (md & MD_STRIKE)
+        {
+            gGL.getTextureSlot(0)->unbind();
+            shape_blend();
+            const S32 strike_y = y + ll_round((F32)font->getLineHeight() * 0.45f);
+            gl_rect_2d(ll_round(start), strike_y + 1, ll_round(right), strike_y, color);
+        }
+        pen = right + ((md & MD_CODE) ? (F32)CODE_PAD : 0.f);
+        pos = run_end;
+    }
+}
+
+void SKFloaterLocalChat::drawDivider(const Card& card, const LLRect& content, S32 base, F32 alpha, LLFontGL::ShadowType shadow) const
+{
+    // As Discord's: a faint line across the width, broken by the date in the middle.
+    const Row& row = mRows[card.mFirstRow];
+    const Message& msg = mMessages[card.mFirstMessage];
+    const S32 y = base + row.mBottom + row.mGap + row.mPadBottom;
+    const S32 mid = content.mLeft + content.getWidth() / 2;
+    const S32 line_y = y + name_font()->getLineHeight() / 2;
+    const S32 half = msg.mDayWidth / 2 + DIVIDER_GAP;
+    static LLUIColor white = LLUIColorTable::instance().getColor("White");
+    gGL.getTextureSlot(0)->unbind();
+    shape_blend();
+    const LLColor4 line = white.get() % (DIVIDER_LINE_ALPHA * alpha);
+    if (mid - half > content.mLeft + PAD_X)
+    {
+        gl_rect_2d(content.mLeft + PAD_X, line_y + 1, mid - half, line_y, line);
+        gl_rect_2d(mid + half, line_y + 1, content.mRight - PAD_X, line_y, line);
+    }
+    name_font()->renderUTF8(msg.mDayLabel, 0, (F32)mid, (F32)y, white.get() % (DIVIDER_ALPHA * alpha), LLFontGL::HCENTER, LLFontGL::BOTTOM,
+                            LLFontGL::BOLD, shadow);
+}
+
+void SKFloaterLocalChat::requestEmbeds(const Card& card)
+{
+    if (!unfurl_enabled())
+    {
+        return;
+    }
+    for (S32 m = card.mFirstMessage; m <= card.mLastMessage; ++m)
+    {
+        const SKChatEmbedPtr& embed = mMessages[m].mEmbed;
+        if (embed && embed->mState == SKChatEmbed::IDLE)
+        {
+            mUnfurl.request(embed);
+        }
+    }
+}
+
+void SKFloaterLocalChat::drawEmbed(const Message& msg, S32 x, S32 y, F32 alpha) const
+{
+    static LLUIImagePtr card_image = LLUI::getUIImage("Rounded_Square");
+    static LLUIColor card_color = LLUIColorTable::instance().getColor("Black");
+    static LLUIColor title_color = LLUIColorTable::instance().getColor("White");
+    const SKChatEmbed& embed = *msg.mEmbed;
+    const S32 w = msg.mEmbedWidth;
+    const S32 h = embed_height();
+    shape_blend();
+    card_image->draw(x, y, w, h, card_color.get() % (0.45f * alpha));
+
+    gGL.getTextureSlot(0)->unbind();
+    const bool has_state = embed.mGitHubState != SKChatUnfurl::EGitHubState::NONE;
+    LLColor4 accent = has_state ? github_state_color(embed.mGitHubState) : msg.mNameColor;
+    accent = faded(accent, alpha);
+    gl_rect_2d(x + 1, y + h - 3, x + 1 + EMBED_ACCENT, y + 3, accent);
+
+    S32 right = x + w - EMBED_PAD;
+    if (embed.mImage.notNull())
+    {
+        const S32 thumb = embed_thumb();
+        right -= thumb;
+        embed.mImage->addTextureStats((F32)(thumb * thumb));
+        if (embed.mImage->hasGLTexture())
+        {
+            gl_draw_scaled_image(right, y + EMBED_PAD, thumb, thumb, embed.mImage, LLColor4(1.f, 1.f, 1.f, alpha));
+        }
+        right -= EMBED_PAD;
+    }
+
+    LLFontGL* font = embed_font();
+    const S32 left = x + EMBED_ACCENT + EMBED_PAD;
+    const S32 max_px = llmax(0, right - left);
+    const S32 line = font->getLineHeight();
+    const S32 title_y = y + EMBED_PAD + line + EMBED_LINE_GAP;
+    LLColor4 title = title_color.get();
+    title.mV[VALPHA] *= alpha;
+    S32 title_x = left;
+    if (const S32 pill = has_state ? llmin(embed_pill_width(embed), max_px) : 0; pill > 0)
+    {
+        // A GitHub state reads as its pill, white on the state's colour.
+        shape_blend();
+        static LLUIImagePtr pill_image = LLUI::getUIImage("Rounded_Square");
+        pill_image->draw(left, title_y - 1, pill - EMBED_PAD, line + 2, accent);
+        font->renderUTF8(std::string(SKChatUnfurl::gitHubStateLabel(embed.mGitHubState)), 0, (F32)(left + EMBED_PILL_PAD), (F32)title_y, title,
+                         LLFontGL::LEFT, LLFontGL::BOTTOM, LLFontGL::BOLD, LLFontGL::NO_SHADOW, S32_MAX, pill - EMBED_PAD - EMBED_PILL_PAD);
+        title_x += pill;
+    }
+    font->renderUTF8(embed.mTitle, 0, (F32)title_x, (F32)title_y, title, LLFontGL::LEFT, LLFontGL::BOTTOM,
+                     LLFontGL::BOLD, LLFontGL::NO_SHADOW, S32_MAX, llmax(0, right - title_x), nullptr, true);
+    if (!embed.mDescription.empty())
+    {
+        LLColor4 desc = title;
+        desc.mV[VALPHA] *= 0.7f;
+        font->renderUTF8(embed.mDescription, 0, (F32)left, (F32)(y + EMBED_PAD), desc, LLFontGL::LEFT, LLFontGL::BOTTOM,
+                         LLFontGL::NORMAL, LLFontGL::NO_SHADOW, S32_MAX, max_px, nullptr, true);
+    }
+}
+
+void SKFloaterLocalChat::drawMessages(const LLRect& content, F64 now, bool full, bool cards)
+{
+    static LLUIImagePtr card_image = LLUI::getUIImage("Rounded_Square");
+    static LLUIColor card_color = LLUIColorTable::instance().getColor("Black");
+    const LLFontGL::ShadowType shadow = cards ? LLFontGL::NO_SHADOW : LLFontGL::DROP_SHADOW_SOFT;
+    const S32 base = content.mBottom - mScroll;
+    for (S32 c = (S32)mCards.size() - 1; c >= 0; --c)
+    {
+        const Card& card = mCards[c];
+        const F32 alpha = full ? 1.f : shownAlpha(card, now);
+        if (alpha <= 0.f)
+        {
+            break; // older cards arrived earlier, so they have faded too
+        }
+        // Faded history reads as grey, the cue that it is no longer live: everything the card draws, pictures included.
+        ALUISaturation grey(full ? 1.f : cardSaturation(card, now));
+        const Row& top_row = mRows[card.mFirstRow];
+        const Row& bottom_row = mRows[card.mLastRow];
+        const S32 card_bottom = base + bottom_row.mBottom + bottom_row.mGap;
+        const S32 card_top = base + top_row.mBottom + top_row.height() + lineHeight(top_row);
+        if (card_top < content.mBottom)
+        {
+            continue;
+        }
+        if (card_bottom > content.mTop)
+        {
+            break;
+        }
+        if (card.mDivider)
+        {
+            drawDivider(card, content, base, alpha, shadow);
+            continue;
+        }
+
+        const Message& first = mMessages[card.mFirstMessage];
+        const S32 text_x = content.mLeft + card.mTextX;
+        if (cards)
+        {
+            shape_blend();
+            card_image->draw(content.mLeft, card_bottom, card.mWidth, card_top - card_bottom, card_color.get() % (CARD_ALPHA * alpha));
+            if (!first.mName.empty())
+            {
+                // Round for people, square for objects.
+                gGL.getTextureSlot(0)->unbind();
+                const S32 disc_top = card_top - CARD_PAD_Y - 1;
+                const LLColor4 disc = faded(first.mNameColor, alpha);
+                if (first.mSource == CHAT_SOURCE_OBJECT)
+                {
+                    drawObjectIcon(first, content.mLeft + CARD_PAD_X, disc_top, card.mIconWidth, disc, now);
+                }
+                else
+                {
+                    drawAvatarIcon(first, content.mLeft + CARD_PAD_X, disc_top, disc);
+                }
+            }
+        }
+
+        for (S32 r = card.mFirstRow; r <= card.mLastRow; ++r)
+        {
+            const Row& row = mRows[r];
+            const S32 y = base + row.mBottom + row.mGap + row.mPadBottom;
+            if (y > content.mTop || y + lineHeight(row) < content.mBottom)
+            {
+                continue;
+            }
+            if (row.mMessage < 0)
+            {
+                drawHeaderSelection(card, text_x, y, alpha);
+                const LLColor4 color = faded(first.mNameColor, alpha);
+                name_font()->renderUTF8(first.mName, 0, (F32)text_x, (F32)y, color, LLFontGL::LEFT, LLFontGL::BOTTOM, LLFontGL::BOLD, LLFontGL::NO_SHADOW);
+                if (first.mTimeWidth > 0)
+                {
+                    drawTime(first, (F32)(text_x + first.mNameWidth + TIME_GAP), y, alpha, LLFontGL::NO_SHADOW);
+                }
+            }
+            else if (row.mEmbed)
+            {
+                drawEmbed(mMessages[row.mMessage], text_x, y, alpha);
+            }
+            else
+            {
+                if (row.mQuote)
+                {
+                    static LLUIColor quote_color = LLUIColorTable::instance().getColor("White");
+                    gGL.getTextureSlot(0)->unbind();
+                    shape_blend();
+                    gl_rect_2d(text_x, y + lineHeight(row), text_x + QUOTE_BAR, y, quote_color.get() % (0.35f * alpha));
+                }
+                const S32 row_x = text_x + (row.mQuote ? QUOTE_INDENT : 0);
+                drawRowSelection(row, row_x, y, alpha);
+                drawRowText(row, row_x, y, alpha, shadow);
+            }
+        }
+    }
+}
+
+void SKFloaterLocalChat::drawMaskedMessages(const LLRect& content, F64 now, bool full, bool cards)
+{
+    // What the frame shows: the visible cards' fades, and whether any of them reaches into an edge band.
+    const S32 base = content.mBottom - mScroll;
+    const bool scrolled = mScroll > 0;
+    const S32 top_band = content.mTop - (S32)EDGE_FADE;
+    const S32 bottom_band = content.mBottom + (S32)EDGE_FADE;
+    bool in_band = false;
+    U64 fades = 1469598103934665603ULL;
+    U64 icons = 1469598103934665603ULL; // the icons as last drawn, so a picture or glyph arriving redraws the mask
+    for (S32 c = (S32)mCards.size() - 1; c >= 0; --c)
+    {
+        const Card& card = mCards[c];
+        const F32 alpha = full ? 1.f : shownAlpha(card, now);
+        if (alpha <= 0.f)
+        {
+            break;
+        }
+        const Row& top_row = mRows[card.mFirstRow];
+        const Row& bottom_row = mRows[card.mLastRow];
+        const S32 card_bottom = base + bottom_row.mBottom + bottom_row.mGap;
+        const S32 card_top = base + top_row.mBottom + top_row.height() + lineHeight(top_row);
+        if (card_top < content.mBottom)
+        {
+            continue;
+        }
+        if (card_bottom > content.mTop)
+        {
+            break;
+        }
+        in_band |= card_top > top_band || (scrolled && card_bottom < bottom_band);
+        fades = (fades ^ (U64)(c * 256 + ll_round(alpha * 255.f))) * 1099511628211ULL;
+        // The greying follows the fade, which moves under a constant alpha when the fade's floor is 1.
+        fades = (fades ^ (U64)ll_round((full ? 1.f : cardSaturation(card, now)) * 255.f)) * 1099511628211ULL;
+        if (card.mDivider)
+        {
+            continue;
+        }
+        icons = (icons ^ iconStamp(mMessages[card.mFirstMessage])) * 1099511628211ULL;
+        requestEmbeds(card);
+        for (S32 m = card.mFirstMessage; m <= card.mLastMessage; ++m)
+        {
+            // A preview's picture arriving changes what the mask holds.
+            const SKChatEmbedPtr& embed = mMessages[m].mEmbed;
+            if (embed && embed->mImage.notNull())
+            {
+                fades = (fades ^ (U64)(embed->mImage->hasGLTexture() ? 64 + embed->mImage->getDiscardLevel() : 63)) * 1099511628211ULL;
+            }
+        }
+    }
+
+    if (hasSelection())
+    {
+        fades = (fades ^ ((U64)mSelAnchor.mMessage << 40 ^ (U64)mSelAnchor.mByte << 20 ^ (U64)mSelFocus.mByte)) * 1099511628211ULL;
+        fades = (fades ^ (U64)mSelFocus.mMessage) * 1099511628211ULL;
+    }
+
+    static LLCachedControl<bool> mask_edges(gSavedSettings, "SkoomaLocalChatMask", true);
+    if (!in_band || !mask_edges)
+    {
+        LLLocalClipRect clip(content);
+        drawMessages(content, now, full, cards);
+        return;
+    }
+
+    // A mask as CSS draws one: the messages go to a target of their own, laid over the world through a gradient.
+    const LLVector3 scale = gGL.getUIScale();
+    const U32 width = (U32)llmax(1, ll_round(content.getWidth() * scale.mV[VX]));
+    const U32 height = (U32)llmax(1, ll_round(content.getHeight() * scale.mV[VY]));
+    const MaskKey key{ width, height, mScroll, mLayoutGeneration, fades, icons, cards };
+    if (mMask.getWidth() != width || mMask.getHeight() != height)
+    {
+        mMask.release();
+        mMaskKey = MaskKey();
+        if (!mMask.allocate(width, height, GL_RGBA8))
+        {
+            mMask.release();
+            LLLocalClipRect clip(content);
+            drawMessages(content, now, full, cards);
+            return;
+        }
+    }
+    if (!(key == mMaskKey))
+    {
+        mMaskKey = key;
+        LLGLDisable scissor(GL_SCISSOR_TEST);
+        mMask.bindTarget();
+        // The UI may draw with alpha writes off; the mask needs the coverage the shapes leave in alpha.
+        bool color_mask[4];
+        gGL.getColorMask(color_mask);
+        gGL.setColorMask(true, true);
+        const LLColor4 clear_color = gGL.getClearColor();
+        gGL.setClearColor(LLColor4::transparent);
+        mMask.clear(GL_COLOR_BUFFER_BIT);
+        gGL.setClearColor(clear_color);
+        gGL.matrixMode(LLRender::MM_PROJECTION);
+        gGL.pushMatrix();
+        gGL.loadIdentity();
+        gGL.ortho(0.f, (F32)width, 0.f, (F32)height, -1.f, 1.f);
+        gGL.matrixMode(LLRender::MM_MODELVIEW);
+        gGL.pushMatrix();
+        gGL.loadIdentity();
+        LLUI::pushMatrix();
+        LLUI::loadIdentity();
+        gGL.scaleUI(scale.mV[VX], scale.mV[VY], 1.f);
+        LLUI::translate((F32)-content.mLeft, (F32)-content.mBottom);
+        // Premultiplied: colour blends over, alpha accumulates as coverage.
+        sDrawingMask = true;
+        shape_blend();
+        drawMessages(content, now, full, cards);
+        gGL.flush();
+        sDrawingMask = false;
+        gGL.setSceneBlendType(LLRender::BT_ALPHA);
+        LLUI::popMatrix();
+        gGL.matrixMode(LLRender::MM_PROJECTION);
+        gGL.popMatrix();
+        gGL.matrixMode(LLRender::MM_MODELVIEW);
+        gGL.popMatrix();
+        gGL.setColorMask(color_mask[0], color_mask[1], color_mask[2], color_mask[3]);
+        mMask.flush();
+    }
+
+    // Three bands: fading in under the top edge, whole, and fading out over the bottom one while scrolled.
+    const F32 l = (F32)content.mLeft;
+    const F32 r = (F32)content.mRight;
+    const F32 b = (F32)content.mBottom;
+    const F32 t = (F32)content.mTop;
+    const F32 fade = llmin(EDGE_FADE, 0.5f * (t - b));
+    const F32 ys[4] = { b, scrolled ? b + fade : b, t - fade, t };
+    const F32 as[4] = { scrolled ? 0.f : 1.f, 1.f, 1.f, 0.f };
+    LLLocalClipRect clip(content);
+    gGL.getTextureSlot(0)->bind(&mMask);
+    gGL.blendFunc(LLRender::BF_ONE, LLRender::BF_ONE_MINUS_SOURCE_ALPHA);
+    gGL.begin(LLRender::TRIANGLES);
+    for (S32 i = 0; i < 3; ++i)
+    {
+        const F32 y0 = ys[i], y1 = ys[i + 1];
+        if (y1 <= y0)
+        {
+            continue;
+        }
+        const F32 v0 = (y0 - b) / (t - b), v1 = (y1 - b) / (t - b);
+        const F32 a0 = as[i], a1 = as[i + 1];
+        gGL.color4f(a0, a0, a0, a0); gGL.texCoord2f(0.f, v0); gGL.vertex2f(l, y0);
+        gGL.color4f(a0, a0, a0, a0); gGL.texCoord2f(1.f, v0); gGL.vertex2f(r, y0);
+        gGL.color4f(a1, a1, a1, a1); gGL.texCoord2f(1.f, v1); gGL.vertex2f(r, y1);
+        gGL.color4f(a0, a0, a0, a0); gGL.texCoord2f(0.f, v0); gGL.vertex2f(l, y0);
+        gGL.color4f(a1, a1, a1, a1); gGL.texCoord2f(1.f, v1); gGL.vertex2f(r, y1);
+        gGL.color4f(a1, a1, a1, a1); gGL.texCoord2f(0.f, v1); gGL.vertex2f(l, y1);
+    }
+    gGL.end();
+    gGL.flush();
+    gGL.getTextureSlot(0)->unbind();
+    gGL.setSceneBlendType(LLRender::BT_ALPHA);
+}
+
+void SKFloaterLocalChat::draw()
+{
+    if (!modernEnabled())
+    {
+        closeFloater();
+        return;
+    }
+    if (mEmojiComplete)
+    {
+        mEmojiComplete->update();
+    }
+
+    // In mouselook the chat must not take the mouse from the world, and locked only its content takes it (hitsContentAt).
+    const bool opaque = !gAgentCamera.cameraMouselook();
+    setMouseOpaque(opaque && !isLocked());
+    getDragHandle()->setMouseOpaque(opaque && !isLocked());
+
+    if (isMinimized())
+    {
+        const F64 now = LLFrameTimer::getTotalSeconds();
+        updateTyping(now);
+        updateCollapsedStatus();
+
+        if (mCog)
+        {
+            mCog->setVisible(false);
+        }
+        LLFloater::draw();
+        return;
+    }
+
+    mUnfurl.update();
+    layout();
+
+    static LLCachedControl<S32> style(gSavedSettings, "SkoomaLocalChatStyle", STYLE_CARDS);
+    const bool cards = style != STYLE_MINIMAL;
+    const LLRect content = contentRect();
+    const S32 view_height = content.getHeight();
+    glideWheel();
+    mScroll = llclamp(mScroll, 0, llmax(0, mContentHeight - view_height));
+    const F64 now = LLFrameTimer::getTotalSeconds();
+    // Hovering alone shows nothing more: the log opens whole once the pointer has rested on a shown card.
+    static LLCachedControl<F32> reveal_rest(gSavedSettings, "SkoomaLocalChatRevealDelay", 0.06f);
+    if (!mRevealed && mRestSince >= 0.0 && now - mRestSince >= reveal_rest)
+    {
+        mRevealed = true;
+    }
+    const bool full = expanded();
+    if (mWasExpanded && !full)
+    {
+        mCollapsedAt = now;
+    }
+    mWasExpanded = full;
+
+    // The cog and the title buttons show together, while the chat is hovered or focused.
+    const bool buttons_shown = (mHovered || hasFocus()) && opaque;
+    layoutCog(); // the lock and collapse buttons come and go with the floater's state
+    if (mCog)
+    {
+        mCog->setVisible(buttons_shown);
+    }
+    for (EFloaterButton button : { BUTTON_COLLAPSE, BUTTON_LOCK })
+    {
+        if (mButtons[button])
+        {
+            mButtons[button]->setVisible(buttons_shown);
+        }
+    }
+
+    // The only chrome, the mini-map's faint tint, eased in and out; its border shows only while the pointer rests on an edge.
+    const F32 chrome_dt = (F32)llclamp(now - mChromeDrawnAt, 0.0, 0.1);
+    mChromeDrawnAt = now;
+    const bool edge_rest = mEdgeSince >= 0.0 && now - mEdgeSince >= EDGE_REST;
+    // Locked, the chat is part of the world view: no backdrop, no edge border.
+    const bool chrome = opaque && !isLocked();
+    mBackdrop = isLocked() ? 0.f : llclamp(mBackdrop + ((chrome && mHovered) ? chrome_dt : -chrome_dt) / CHROME_FADE, 0.f, 1.f);
+    mBorder = isLocked() ? 0.f : llclamp(mBorder + ((chrome && edge_rest) ? chrome_dt : -chrome_dt) / CHROME_FADE, 0.f, 1.f);
+    mGhost = llclamp(mGhost + ((opaque && mHovered && !full) ? chrome_dt : -chrome_dt) / CHROME_FADE, 0.f, 1.f);
+    if (mBackdrop > 0.f)
+    {
+        static const LLColor4 tint(16.f / 255.f, 16.f / 255.f, 20.f / 255.f, 61.f / 255.f);
+        const F32 ease = mBackdrop * mBackdrop * (3.f - 2.f * mBackdrop);
+        gl_rect_2d(0, getRect().getHeight(), getRect().getWidth(), 0, tint % (tint.mV[VALPHA] * ease), true);
+    }
+    if (mBorder > 0.f)
+    {
+        static const LLColor4 border(197.f / 255.f, 205.f / 255.f, 211.f / 255.f, 122.f / 255.f);
+        const F32 ease = mBorder * mBorder * (3.f - 2.f * mBorder);
+        gl_rect_2d(0, getRect().getHeight(), getRect().getWidth(), 0, border % (border.mV[VALPHA] * ease), false);
+    }
+
+    if (!mRows.empty())
+    {
+        drawMaskedMessages(content, now, full, cards);
+    }
+
+    updateTyping(now);
+    if (opaque && (!mTypingLabel[0].empty() || !mTypingLabel[1].empty()))
+    {
+        drawTyping(now, INSET + PAD_X, INSET + inputHeight() + INPUT_GAP + 1, getRect().getWidth() - INSET);
+    }
+
+    // Jump to present: once scrolled up by more than a view, or from any distance once something new arrived.
+    if (!scrolledUp())
+    {
+        mUnseen = 0;
+    }
+    mPillRect = LLRect();
+    if (mScroll > view_height || mUnseen > 0)
+    {
+        if (mPillCount != mUnseen)
+        {
+            mPillCount = mUnseen;
+            if (mUnseen > 0)
+            {
+                LLStringUtil::format_map_t args;
+                args["[COUNT]"] = llformat("%d", mUnseen);
+                mPillLabel = getString("new_messages", args);
+            }
+            else
+            {
+                mPillLabel = getString("jump_to_present");
+            }
+        }
+        LLFontGL* font = LLFontGL::getFontSansSerifSmall();
+        const S32 w = font->getWidth(mPillLabel) + 2 * PAD_X + 4;
+        const S32 h = font->getLineHeight() + 2 * PAD_Y;
+        const S32 left = (getRect().getWidth() - w) / 2;
+        const S32 bottom = content.mBottom + 2;
+        mPillRect.setOriginAndSize(left, bottom, w, h);
+        static LLUIImagePtr pill_image = LLUI::getUIImage("Rounded_Square");
+        static LLUIColor pill_color = LLUIColorTable::instance().getColor("Black");
+        static LLUIColor pill_text = LLUIColorTable::instance().getColor("White");
+        pill_image->draw(mPillRect, pill_color.get() % 0.8f);
+        font->renderUTF8(mPillLabel, 0, (F32)(left + w / 2), (F32)(bottom + PAD_Y), pill_text.get(), LLFontGL::HCENTER, LLFontGL::BOTTOM, LLFontGL::NORMAL, LLFontGL::NO_SHADOW);
+    }
+
+    layoutBar();
+
+    LLFloater::draw();
+}
+
+void SKFloaterLocalChat::updateTyping(F64 now)
+{
+    if (now < mTypingPollAt)
+    {
+        return;
+    }
+    mTypingPollAt = now + TYPING_POLL;
+
+    mTypingScratch[0].clear();
+    mTypingScratch[1].clear();
+    static LLCachedControl<bool> typing_enabled(gSavedSettings, "SkoomaLocalChatTyping", true);
+    const LLViewerRegion* region = gAgent.getRegion();
+    if (typing_enabled && region)
+    {
+        // Say range, and half again beyond it for those typing just out of earshot.
+        const F64 range = (F64)region->getChatRange();
+        const F64 reach = range * 1.5;
+        const LLVector3d self_pos = gAgent.getPositionGlobal();
+        static LLCachedControl<F32> grace(gSavedSettings, "SkoomaLocalChatTypingGrace", 2.f);
+        for (LLCharacter* character : LLCharacter::sInstances)
+        {
+            LLVOAvatar* avatar = static_cast<LLVOAvatar*>(character);
+            if (avatar->isDead() || avatar->isSelf() || avatar->isControlAvatar())
+            {
+                continue;
+            }
+            // The simulator's start/stop typing chat, as the name tag shows it, which arrives even from those who turned the
+            // typing animation off; the speaker list drops it for anyone it does not list yet.
+            const bool typing = avatar->isTyping() || avatar->mSignaledAnimations.find(ANIM_AGENT_TYPE) != avatar->mSignaledAnimations.end();
+            const F64 dist = dist_vec(avatar->getPositionGlobal(), self_pos);
+            if (dist <= range)
+            {
+                if (typing)
+                {
+                    mTypingScratch[0].push_back({ avatar->getID(), 0, 0, now });
+                }
+            }
+            else if (dist <= reach)
+            {
+                // Out of earshot they stay listed a while after stopping, having likely just said something we will not hear.
+                F64 typed_at = typing ? now : -1.0;
+                if (!typing)
+                {
+                    for (const Typer& prev : mTyping[1])
+                    {
+                        if (prev.mID == avatar->getID() && now - prev.mTypedAt <= (F64)grace)
+                        {
+                            typed_at = prev.mTypedAt;
+                            break;
+                        }
+                    }
+                }
+                if (typed_at >= 0.0)
+                {
+                    mTypingScratch[1].push_back({ avatar->getID(), llmax(1, (S32)ceil(dist - range)), (S32)ll_round((F32)dist), typed_at });
+                }
+            }
+        }
+    }
+
+    for (S32 g = 0; g < 2; ++g)
+    {
+        std::sort(mTypingScratch[g].begin(), mTypingScratch[g].end());
+        const bool changed = mTypingScratch[g] != mTyping[g] || !mTypingNamed[g];
+        mTyping[g].swap(mTypingScratch[g]);
+        if (changed)
+        {
+            makeTypingLabel(g);
+        }
+    }
+}
+
+void SKFloaterLocalChat::makeTypingLabel(S32 group)
+{
+    const std::vector<Typer>& typers = mTyping[group];
+    std::string& label = mTypingLabel[group];
+    mTypingNamed[group] = true;
+    label.clear();
+    if (group == 1)
+    {
+        mTypingFarCount.clear();
+        if (!typers.empty())
+        {
+            LLStringUtil::format_map_t count_args;
+            count_args["[COUNT]"] = llformat("%d", (S32)typers.size());
+            mTypingFarCount = getString(typers.size() == 1 ? "typing_far_count_one" : "typing_far_count", count_args);
+        }
+    }
+    if (typers.empty())
+    {
+        return;
+    }
+    const char* prefix = group == 0 ? "typing_" : "typing_far_";
+    if (typers.size() > 2)
+    {
+        label = getString(std::string(prefix) + "many");
+        return;
+    }
+    LLStringUtil::format_map_t args;
+    for (size_t i = 0; i < typers.size(); ++i)
+    {
+        LLAvatarName av_name;
+        std::string name;
+        if (LLAvatarNameCache::get(typers[i].mID, &av_name))
+        {
+            name = av_name.getDisplayName();
+        }
+        else
+        {
+            mTypingNamed[group] = false;
+            name = getString("typing_someone");
+        }
+        args[i == 0 ? "[NAME]" : "[NAME2]"] = name;
+        args[i == 0 ? "[DIST]" : "[DIST2]"] = llformat("%d", typers.size() == 1 ? typers[i].mMetres : typers[i].mDistance);
+    }
+    label = getString(std::string(prefix) + (typers.size() == 1 ? "one" : "two"), args);
+}
+
+S32 SKFloaterLocalChat::typingWidth() const
+{
+    LLFontGL* font = LLFontGL::getFontSansSerifSmall();
+    S32 width = 3 * (3 + 2) + 4; // the dots and the gap after them
+    if (!mTypingLabel[0].empty())
+    {
+        width += font->getWidth(mTypingLabel[0]);
+        if (!mTypingLabel[1].empty())
+        {
+            width += font->getWidth(TYPING_SEPARATOR);
+        }
+    }
+    if (!mTypingLabel[1].empty())
+    {
+        width += font->getWidth(mTypingLabel[1]);
+    }
+    return width;
+}
+
+void SKFloaterLocalChat::drawTyping(F64 now, S32 x0, S32 y, S32 right) const
+{
+    static LLUIColor color = LLUIColorTable::instance().getColor("White");
+    static LLUIColor far_color = LLUIColorTable::instance().getColor("Yellow");
+    LLFontGL* font = LLFontGL::getFontSansSerifSmall();
+    const bool has_near = !mTypingLabel[0].empty();
+    const LLColor4 base = has_near ? color.get() : far_color.get();
+    const F32 dim = has_near ? 1.f : 0.75f;
+
+    // Three dots rising in turn, as Discord's do.
+    constexpr S32 DOT = 3;
+    constexpr S32 DOT_GAP = 2;
+    const F32 phase = (F32)fmod(now, 1.2) / 1.2f;
+    S32 x = x0;
+    for (S32 i = 0; i < 3; ++i)
+    {
+        const F32 t = phase - i * 0.15f;
+        const F32 bump = (t > 0.f && t < 0.3f) ? sinf(t / 0.3f * F_PI) : 0.f;
+        const S32 lift = ll_round(bump * 2.f);
+        gl_rect_2d(x, y + 6 + DOT + lift, x + DOT, y + 6 + lift, base % ((0.4f + 0.5f * bump) * dim), true);
+        x += DOT + DOT_GAP;
+    }
+    F32 text_x = (F32)(x + 4);
+
+    // The in-range part is never cut; the out-of-range part after it falls back to a count, then an ellipsis.
+    const LLColor4 far_text = far_color.get() % 0.45f;
+    if (has_near)
+    {
+        // Cut only when the line has no room at all, as in a collapsed bar at the screen's edge.
+        const S32 near_room = llmax(right - ll_round(text_x), 0);
+        font->renderUTF8(mTypingLabel[0], 0, text_x, (F32)y, color.get() % 0.6f, LLFontGL::LEFT, LLFontGL::BOTTOM, LLFontGL::NORMAL, LLFontGL::DROP_SHADOW_SOFT, S32_MAX, near_room, &text_x, true);
+        if (mTypingLabel[1].empty())
+        {
+            return;
+        }
+        font->renderUTF8(TYPING_SEPARATOR, 0, text_x, (F32)y, color.get() % 0.4f, LLFontGL::LEFT, LLFontGL::BOTTOM, LLFontGL::NORMAL, LLFontGL::DROP_SHADOW_SOFT, S32_MAX, S32_MAX, &text_x);
+        const S32 room = right - ll_round(text_x);
+        const std::string& far_label = font->getWidth(mTypingLabel[1]) <= room ? mTypingLabel[1] : mTypingFarCount;
+        if (room > 0)
+        {
+            font->renderUTF8(far_label, 0, text_x, (F32)y, far_text, LLFontGL::LEFT, LLFontGL::BOTTOM, LLFontGL::NORMAL, LLFontGL::DROP_SHADOW_SOFT, S32_MAX, room, nullptr, true);
+        }
+        return;
+    }
+    const S32 room = right - ll_round(text_x);
+    const std::string& far_label = font->getWidth(mTypingLabel[1]) <= room ? mTypingLabel[1] : mTypingFarCount;
+    font->renderUTF8(far_label, 0, text_x, (F32)y, far_text, LLFontGL::LEFT, LLFontGL::BOTTOM, LLFontGL::NORMAL, LLFontGL::DROP_SHADOW_SOFT, S32_MAX, llmax(room, 0), nullptr, true);
+}
+
+bool SKFloaterLocalChat::hitsContentAt(S32 x, S32 y)
+{
+    if (isMinimized())
+    {
+        return true; // the collapsed bar is all header
+    }
+    auto hits_view = [x, y](const LLView* view)
+    {
+        return view && view->getVisible() && view->getRect().pointInRect(x, y);
+    };
+    if (hits_view(mCog) || hits_view(mInput) || hits_view(mEmojiButton) || hits_view(mEmojiComplete) || mPillRect.pointInRect(x, y) || (mScrollbar && mScrollbar->getVisible() && mScrollbar->getRect().pointInRect(x, y)))
+    {
+        return true;
+    }
+    for (const LLButton* button : mButtons)
+    {
+        if (hits_view(button))
+        {
+            return true;
+        }
+    }
+    const S32 typing_y = INSET + inputHeight() + INPUT_GAP;
+    if (anyoneTyping() && y >= typing_y && y < typing_y + TYPING_LINE && x >= INSET && x < getRect().getWidth() - INSET)
+    {
+        return true;
+    }
+    return cardAt(x, y, false);
+}
+
+bool SKFloaterLocalChat::cardAt(S32 x, S32 y, bool ghosts) const
+{
+    const LLRect content = contentRect();
+    if (mLayoutDirty || !content.pointInRect(x, y))
+    {
+        return false;
+    }
+    const S32 base = content.mBottom - mScroll;
+    const bool full = expanded() || ghosts;
+    const F64 now = LLFrameTimer::getTotalSeconds();
+    for (const Row& row : mRows)
+    {
+        const S32 y0 = base + row.mBottom + row.mGap;
+        if (y < y0 || y >= y0 + row.mPadBottom + lineHeight(row) + row.mPadTop)
+        {
+            continue;
+        }
+        const Card& card = mCards[row.mCard];
+        const S32 right = content.mLeft + (card.mWidth > 0 ? card.mWidth : content.getWidth());
+        return x < right && (full || cardAlpha(card, now) > 0.f);
+    }
+    return false;
+}
+
+std::string SKFloaterLocalChat::urlAt(S32 x, S32 y) const
+{
+    if (mLayoutDirty || !contentRect().pointInRect(x, y))
+    {
+        return std::string();
+    }
+    const S32 base = contentRect().mBottom - mScroll;
+    const bool full = expanded();
+    const F64 now = LLFrameTimer::getTotalSeconds();
+    for (const Row& row : mRows)
+    {
+        const S32 y0 = base + row.mBottom + row.mGap + row.mPadBottom;
+        if (y < y0 || y >= y0 + lineHeight(row))
+        {
+            continue;
+        }
+        const Card& card = mCards[row.mCard];
+        const S32 text_x = contentRect().mLeft + card.mTextX;
+        if (!full && cardAlpha(card, now) <= 0.f)
+        {
+            return std::string();
+        }
+        if (row.mMessage == DIVIDER_ROW)
+        {
+            return std::string();
+        }
+        if (row.mMessage < 0)
+        {
+            const Message& first = mMessages[card.mFirstMessage];
+            return x < text_x + first.mNameWidth ? first.mSenderUrl : std::string();
+        }
+        if (row.mEmbed)
+        {
+            const Message& msg = mMessages[row.mMessage];
+            return msg.mEmbed && x >= text_x && x < text_x + msg.mEmbedWidth ? msg.mEmbed->mUrl : std::string();
+        }
+        const Message& msg = mMessages[row.mMessage];
+        const S32 row_x = text_x + (row.mQuote ? QUOTE_INDENT : 0);
+        if (x < row_x)
+        {
+            return std::string();
+        }
+        F32 offset = (F32)(x - row_x);
+        if (row.mBegin == 0 && msg.mNameLen > 0)
+        {
+            // A minimal line's timestamp leads its first row and pushes the rest along.
+            offset -= (F32)msg.mTimeWidth;
+        }
+        if (offset < 0.f)
+        {
+            return std::string();
+        }
+        const S32 at = row.mBegin + styled_byte_at(rowFont(row), msg.mBody, msg.mStyle, row.mBegin, row.mLength, offset, false);
+        if (at >= row.mBegin + row.mLength)
+        {
+            return std::string();
+        }
+        if (at < msg.mNameLen)
+        {
+            return msg.mSenderUrl;
+        }
+        for (const Link& link : msg.mLinks)
+        {
+            if (at >= link.mBegin && at < link.mEnd)
+            {
+                return link.mUrl;
+            }
+        }
+        return std::string();
+    }
+    return std::string();
+}
+
+bool SKFloaterLocalChat::textPosAt(S32 x, S32 y, bool clamp, TextPos& pos) const
+{
+    if (mLayoutDirty)
+    {
+        return false;
+    }
+    const LLRect content = contentRect();
+    const S32 base = content.mBottom - mScroll;
+    const bool full = expanded();
+    const F64 now = LLFrameTimer::getTotalSeconds();
+    const Row* hit = nullptr;
+    S32 hit_y = 0;
+    S32 nearest = S32_MAX;
+    for (const Row& row : mRows)
+    {
+        if (row.mMessage == DIVIDER_ROW || row.mEmbed || (!full && cardAlpha(mCards[row.mCard], now) <= 0.f))
+        {
+            continue;
+        }
+        const S32 y0 = base + row.mBottom + row.mGap + row.mPadBottom;
+        const S32 y1 = y0 + lineHeight(row);
+        if (y1 < content.mBottom || y0 > content.mTop)
+        {
+            continue;
+        }
+        // Dragging past the rows, the nearest one takes the point.
+        const S32 distance = y < y0 ? y0 - y : (y >= y1 ? y - y1 + 1 : 0);
+        if (distance < nearest && (distance == 0 || clamp))
+        {
+            nearest = distance;
+            hit = &row;
+            hit_y = y0;
+        }
+    }
+    if (!hit)
+    {
+        return false;
+    }
+    const Row& row = *hit;
+    const S32 text_x = content.mLeft + mCards[row.mCard].mTextX;
+    if (row.mMessage < 0)
+    {
+        // A card's header selects whole: its name and its time.
+        const Message& first = mMessages[mCards[row.mCard].mFirstMessage];
+        if (!clamp && (x < text_x || x > text_x + first.mNameWidth + first.mTimeWidth))
+        {
+            return false;
+        }
+        pos.mMessage = mCards[row.mCard].mFirstMessage;
+        pos.mByte = -1;
+        return true;
+    }
+    const Message& msg = mMessages[row.mMessage];
+    F32 offset = (F32)(x - text_x - (row.mQuote ? QUOTE_INDENT : 0));
+    if (row.mBegin == 0 && msg.mNameLen > 0)
+    {
+        offset -= (F32)msg.mTimeWidth;
+        if (offset < 0.f && offset >= -(F32)msg.mTimeWidth && msg.mTimeWidth > 0 && y >= hit_y && y < hit_y + lineHeight(row))
+        {
+            // On a minimal line's leading time.
+            pos.mMessage = row.mMessage;
+            pos.mByte = -1;
+            return true;
+        }
+    }
+    const LLFontGL* font = rowFont(row);
+    if (!clamp && (offset < 0.f || offset > styled_width(font, msg.mBody, msg.mStyle, row.mBegin, row.mLength)))
+    {
+        return false; // beside the text, not on it
+    }
+    if (y < hit_y)
+    {
+        offset = F32_MAX; // below the row's text, its end
+    }
+    else if (y >= hit_y + lineHeight(row))
+    {
+        offset = 0.f; // above it, its start
+    }
+    pos.mMessage = row.mMessage;
+    pos.mByte = row.mBegin + styled_byte_at(font, msg.mBody, msg.mStyle, row.mBegin, row.mLength, llmax(offset, 0.f), true);
+    return true;
+}
+
+bool SKFloaterLocalChat::selectionPosAt(S32 x, S32 y, TextPos& pos) const
+{
+    // Anywhere in a bubble starts a selection, at the text nearest the point.
+    if (mLayoutDirty || !contentRect().pointInRect(x, y))
+    {
+        return false;
+    }
+    const LLRect content = contentRect();
+    const S32 base = content.mBottom - mScroll;
+    const bool full = expanded();
+    const F64 now = LLFrameTimer::getTotalSeconds();
+    for (const Card& card : mCards)
+    {
+        if (card.mDivider || (!full && cardAlpha(card, now) <= 0.f))
+        {
+            continue;
+        }
+        const Row& top_row = mRows[card.mFirstRow];
+        const Row& bottom_row = mRows[card.mLastRow];
+        const S32 card_bottom = base + bottom_row.mBottom + bottom_row.mGap;
+        const S32 card_top = base + top_row.mBottom + top_row.height() + lineHeight(top_row);
+        if (x >= content.mLeft && x < content.mLeft + card.mWidth && y >= card_bottom && y < card_top)
+        {
+            return textPosAt(x, y, true, pos);
+        }
+    }
+    return textPosAt(x, y, false, pos);
+}
+
+bool SKFloaterLocalChat::selectedRange(S32 message, S32& begin, S32& end) const
+{
+    if (!hasSelection())
+    {
+        return false;
+    }
+    const TextPos& first = mSelFocus < mSelAnchor ? mSelFocus : mSelAnchor;
+    const TextPos& last = mSelFocus < mSelAnchor ? mSelAnchor : mSelFocus;
+    if (message < first.mMessage || message > last.mMessage)
+    {
+        return false;
+    }
+    begin = message == first.mMessage ? first.mByte : (hasHeader(message) ? -1 : 0);
+    end = message == last.mMessage ? last.mByte : (S32)mMessages[message].mBody.size();
+    return begin < end;
+}
+
+bool SKFloaterLocalChat::hasHeader(S32 message) const
+{
+    const Message& msg = mMessages[message];
+    if (msg.mNameLen > 0)
+    {
+        return msg.mTimeWidth > 0; // a minimal line leads with its time
+    }
+    if (msg.mName.empty())
+    {
+        return false;
+    }
+    for (const Card& card : mCards)
+    {
+        if (!card.mDivider && card.mFirstMessage == message)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::string SKFloaterLocalChat::selectedText() const
+{
+    std::string text;
+    if (!hasSelection())
+    {
+        return text;
+    }
+    const S32 first = llmin(mSelAnchor.mMessage, mSelFocus.mMessage);
+    const S32 last = llmax(mSelAnchor.mMessage, mSelFocus.mMessage);
+    for (S32 m = first; m <= last && m < (S32)mMessages.size(); ++m)
+    {
+        S32 begin = 0;
+        S32 end = 0;
+        if (!text.empty())
+        {
+            text += '\n';
+        }
+        if (selectedRange(m, begin, end))
+        {
+            const Message& msg = mMessages[m];
+            if (begin < 0)
+            {
+                if (msg.mNameLen > 0)
+                {
+                    text += msg.mTime + " "; // minimal: the time leads the line
+                }
+                else
+                {
+                    text += msg.mName;
+                    if (!msg.mTime.empty())
+                    {
+                        text += "  \xE2\x80\x94 " + msg.mTime;
+                    }
+                    text += '\n';
+                }
+                begin = 0;
+            }
+            text.append(msg.mBody, begin, end - begin);
+        }
+    }
+    return text;
+}
+
+void SKFloaterLocalChat::clearSelection()
+{
+    mSelAnchor = TextPos();
+    mSelFocus = TextPos();
+    mSelecting = false;
+    if (gEditMenuHandler == this)
+    {
+        gEditMenuHandler = nullptr;
+    }
+}
+
+void SKFloaterLocalChat::copy()
+{
+    const std::string text = selectedText();
+    if (!text.empty())
+    {
+        LLClipboard::instance().copyToClipboard(text, 0, (S32)text.size());
+    }
+}
+
+bool SKFloaterLocalChat::canCopy() const
+{
+    return hasSelection();
+}
+
+void SKFloaterLocalChat::deselect()
+{
+    clearSelection();
+}
+
+bool SKFloaterLocalChat::canDeselect() const
+{
+    return hasSelection();
+}
+
+bool SKFloaterLocalChat::handleMouseDown(S32 x, S32 y, MASK mask)
+{
+    if (isMinimized())
+    {
+        return LLFloater::handleMouseDown(x, y, mask);
+    }
+    // The drag handle lies under everything; any other child takes its own clicks.
+    LLView* child = childFromPoint(x, y);
+    if (mPillRect.pointInRect(x, y))
+    {
+        mScroll = 0;
+        mUnseen = 0;
+        mPillRect = LLRect();
+        return true;
+    }
+    if (!child || child == getDragHandle())
+    {
+        const std::string url = urlAt(x, y);
+        if (!url.empty())
+        {
+            LLUrlAction::clickAction(url, true);
+            return true;
+        }
+        TextPos pos;
+        if (selectionPosAt(x, y, pos))
+        {
+            if ((mask & MASK_SHIFT) && mSelAnchor.mMessage >= 0)
+            {
+                mSelFocus = pos; // shift extends what is selected
+            }
+            else
+            {
+                mSelAnchor = pos;
+                mSelFocus = pos;
+            }
+            mSelecting = true;
+            gFocusMgr.setMouseCapture(this);
+            gEditMenuHandler = this;
+            return true;
+        }
+    }
+    clearSelection();
+    return LLFloater::handleMouseDown(x, y, mask);
+}
+
+bool SKFloaterLocalChat::handleMouseUp(S32 x, S32 y, MASK mask)
+{
+    if (mSelecting)
+    {
+        mSelecting = false;
+        if (hasMouseCapture())
+        {
+            gFocusMgr.setMouseCapture(nullptr);
+        }
+        if (!hasSelection())
+        {
+            clearSelection(); // a click without a drag selects nothing
+        }
+        return true;
+    }
+    return LLFloater::handleMouseUp(x, y, mask);
+}
+
+bool SKFloaterLocalChat::handleDoubleClick(S32 x, S32 y, MASK mask)
+{
+    TextPos pos;
+    if (!isMinimized() && urlAt(x, y).empty() && textPosAt(x, y, false, pos))
+    {
+        // The word under the point, as far as the spaces either side.
+        const std::string& body = mMessages[pos.mMessage].mBody;
+        auto is_space = [](char c) { return c == ' ' || c == '\n' || c == '\t'; };
+        S32 begin = llclamp(pos.mByte, 0, (S32)body.size());
+        S32 end = begin;
+        while (begin > 0 && !is_space(body[begin - 1]))
+        {
+            --begin;
+        }
+        while (end < (S32)body.size() && !is_space(body[end]))
+        {
+            ++end;
+        }
+        mSelAnchor = { pos.mMessage, begin };
+        mSelFocus = { pos.mMessage, end };
+        mSelecting = false;
+        gEditMenuHandler = this;
+        return true;
+    }
+    return LLFloater::handleDoubleClick(x, y, mask);
+}
+
+// A right click on the chat's content is the chat's, so it never reaches the object behind a card.
+bool SKFloaterLocalChat::handleRightMouseDown(S32 x, S32 y, MASK mask)
+{
+    return LLFloater::handleRightMouseDown(x, y, mask) || (!isMinimized() && hitsContentAt(x, y));
+}
+
+bool SKFloaterLocalChat::handleRightMouseUp(S32 x, S32 y, MASK mask)
+{
+    return LLFloater::handleRightMouseUp(x, y, mask) || (!isMinimized() && hitsContentAt(x, y));
+}
+
+bool SKFloaterLocalChat::handleHover(S32 x, S32 y, MASK mask)
+{
+    // The rest that reveals the log: on a shown card, the pointer held within a few pixels; moving on starts it again.
+    if (!mRevealed)
+    {
+        const bool settled = mRestSince >= 0.0 && llabs(x - mRestX) <= REVEAL_SLOP && llabs(y - mRestY) <= REVEAL_SLOP;
+        if (!hitsContentAt(x, y) && !(mGhost > 0.f && cardAt(x, y, true)))
+        {
+            mRestSince = -1.0;
+        }
+        else if (!settled)
+        {
+            mRestSince = LLFrameTimer::getTotalSeconds();
+            mRestX = x;
+            mRestY = y;
+        }
+    }
+    const bool at_edge = !isLocked() && (x < EDGE_REACH || y < EDGE_REACH || x >= getRect().getWidth() - EDGE_REACH || y >= getRect().getHeight() - EDGE_REACH); // locked, no edge timer
+    if (!at_edge)
+    {
+        mEdgeSince = -1.0;
+    }
+    else if (mEdgeSince < 0.0)
+    {
+        mEdgeSince = LLFrameTimer::getTotalSeconds();
+    }
+    if (mSelecting && hasMouseCapture())
+    {
+        TextPos pos;
+        if (textPosAt(x, y, true, pos))
+        {
+            mSelFocus = pos;
+        }
+        getWindow()->setCursor(UI_CURSOR_IBEAM);
+        return true;
+    }
+    if (!hasMouseCapture() && (mPillRect.pointInRect(x, y) || !urlAt(x, y).empty()))
+    {
+        getWindow()->setCursor(UI_CURSOR_HAND);
+        LLFloater::handleHover(x, y, mask);
+        getWindow()->setCursor(UI_CURSOR_HAND);
+        return true;
+    }
+    TextPos pos;
+    if (!hasMouseCapture() && !isMinimized() && textPosAt(x, y, false, pos))
+    {
+        // Over selectable text, the text cursor, as a browser shows.
+        LLFloater::handleHover(x, y, mask);
+        getWindow()->setCursor(UI_CURSOR_IBEAM);
+        return true;
+    }
+    return LLFloater::handleHover(x, y, mask);
+}
+
+bool SKFloaterLocalChat::handleScrollWheel(S32 x, S32 y, LLScrollDelta delta)
+{
+    // LLFloater::handleScrollWheel always claims the wheel, so only a child that scrolls may take it first; the bar never does.
+    const bool on_bar = mScrollbar && mScrollbar->getVisible() && mScrollbar->getRect().pointInRect(x, y);
+    if (!on_bar && childrenHandleScrollWheel(x, y, delta))
+    {
+        return true;
+    }
+    // Scrolling is intent enough: the log opens whole at once.
+    mRevealed = true;
+    // Wheel up reads back through history, gliding there as the platform scrolls.
+    const S32 view_h = contentRect().getHeight();
+    if (!SKScrollDistance::enabled())
+    {
+        // As upstream's text: three of its lines a click, at once.
+        mScroll = llclamp(mScroll - delta.mClicks * 3 * LLViewerChat::getChatFont()->getLineHeight(), 0, llmax(0, barRange()));
+        mWheelGlide.jumpTo((F32)mScroll);
+        return true;
+    }
+    const F32 line = SKScrollDistance::DEFAULT_LINE;
+    if (ll_round(mWheelGlide.position()) != mScroll)
+    {
+        mWheelGlide.jumpTo((F32)mScroll);
+    }
+    mWheelGlide.addDelta(-SKScrollDistance::pixels(delta, line, (F32)view_h), delta.mIsPrecise, SKScrollDistance::now(), 0.f,
+                         (F32)llmax(0, mContentHeight - view_h), SKScrollDistance::config());
+    // A precise device or unsmoothed wheel moves the glide at once without animating it, so follow it here.
+    mScroll = llclamp(ll_round(mWheelGlide.tick(SKScrollDistance::now())), 0, llmax(0, barRange()));
+    return true;
+}
+
+void SKFloaterLocalChat::glideWheel()
+{
+    if (ll_round(mWheelGlide.position()) != mScroll)
+    {
+        // Something else scrolled the chat (arrivals, the bar, jump to present): the glide gives way.
+        mWheelGlide.jumpTo((F32)mScroll);
+        return;
+    }
+    if (mWheelGlide.isAnimating())
+    {
+        mScroll = llclamp(ll_round(mWheelGlide.tick(SKScrollDistance::now())), 0, llmax(0, barRange()));
+    }
+}
+
+bool SKFloaterLocalChat::scrolledUp() const
+{
+    return mScroll > 0 || (mWheelGlide.isAnimating() && mWheelGlide.target() > 0.f);
+}
+
+namespace
+{
+// Whether an avatar sits on the root or one of its prims, as the outline capture finds a vehicle's crew.
+bool hasSeatedAvatar(const LLViewerObject* root)
+{
+    for (const LLViewerObject* child : root->getChildren())
+    {
+        if (!child)
+        {
+            continue;
+        }
+        if (child->isAvatar())
+        {
+            return true;
+        }
+        for (const LLViewerObject* sitter : child->getChildren())
+        {
+            if (sitter && sitter->isAvatar())
+            {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+} // namespace
+
+const SKOutlineLayer* SKFloaterLocalChat::objectGlyph(const LLUUID& speaker, F64 now)
+{
+    if (speaker.isNull())
+    {
+        return nullptr;
+    }
+    if (mObjectGlyphs.size() > MAX_MESSAGES)
+    {
+        mObjectGlyphs.clear(); // more speakers than the log holds; the shown ones are looked up again
+    }
+    ObjectGlyph& g = mObjectGlyphs[speaker];
+    // Asking keeps the capture alive while its cards are drawn; once they fade it expires on its own.
+    if (now - g.mChecked > GLYPH_CHECK_SECONDS)
+    {
+        g.mChecked = now;
+        g.mShown = false;
+        LLViewerObject* obj = gObjectList.findObject(speaker);
+        LLViewerObject* root = obj && !obj->isDead() ? obj->getRootEdit() : nullptr;
+        if (root && !root->isAvatar())
+        {
+            // A vehicle (someone seated on it) reads best from above, anything else from the side.
+            const SKOutlinePolicy::View view = hasSeatedAvatar(root) ? SKOutlinePolicy::View::PLAN : SKOutlinePolicy::View::SIDE;
+            const SKOutlineGlyph* glyph = SKOutlineCapture::glyphFor(root->getID(), view);
+            if (glyph && !glyph->layers.empty() && glyph->layers[0].texture)
+            {
+                g.mLayer = glyph->layers[0];
+                g.mShown = true;
+            }
+        }
+    }
+    return g.mShown ? &g.mLayer : nullptr;
+}
+
+S32 SKFloaterLocalChat::iconWidth(const Message& first, F64 now)
+{
+    if (first.mSource != CHAT_SOURCE_OBJECT)
+    {
+        return ICON_PX;
+    }
+    S32 width = ICON_PX;
+    if (const SKOutlineLayer* layer = objectGlyph(first.mFromID, now))
+    {
+        const F32 w = layer->x1 - layer->x0;
+        const F32 h = layer->y1 - layer->y0;
+        if (w > 0.f && h > 0.f)
+        {
+            width = llclamp((S32)std::lround((F32)ICON_PX * w / h), ICON_PX, ICON_PX * ICON_MAX_ASPECT);
+        }
+    }
+    return width;
+}
+
+void SKFloaterLocalChat::drawObjectIcon(const Message& first, S32 left, S32 top, S32 width, const LLColor4& color, F64 now)
+{
+    // A glyph that came, went or changed shape since the card was laid out: lay out again next frame.
+    if (iconWidth(first, now) != width)
+    {
+        invalidateLayout();
+    }
+    const SKOutlineLayer* layer = objectGlyph(first.mFromID, now);
+    const F32 w = layer ? layer->x1 - layer->x0 : 0.f;
+    const F32 h = layer ? layer->y1 - layer->y0 : 0.f;
+    if (w <= 0.f || h <= 0.f)
+    {
+        gl_rect_2d(left, top, left + ICON_PX, top - ICON_PX, color);
+        return;
+    }
+
+    // The silhouette alone in the speaker's colour, fitted to the card's icon size with its aspect kept.
+    const S32 box = llmax(width, ICON_PX);
+    const F32 scale = llmin((F32)box / w, (F32)ICON_PX / h);
+    const F32 gw = w * scale;
+    const F32 gh = h * scale;
+    const F32 x0 = (F32)left + ((F32)box - gw) * 0.5f;
+    const F32 y0 = (F32)(top - ICON_PX) + ((F32)ICON_PX - gh) * 0.5f;
+    gGL.getTextureSlot(0)->bindManual(ALTextureSlot::TT_TEXTURE, layer->texture);
+    gGL.color4fv(color.mV);
+    gGL.begin(LLRender::TRIANGLE_STRIP);
+    gGL.texCoord2f(layer->u0, layer->v0);
+    gGL.vertex2f(x0, y0);
+    gGL.texCoord2f(layer->u1, layer->v0);
+    gGL.vertex2f(x0 + gw, y0);
+    gGL.texCoord2f(layer->u0, layer->v1);
+    gGL.vertex2f(x0, y0 + gh);
+    gGL.texCoord2f(layer->u1, layer->v1);
+    gGL.vertex2f(x0 + gw, y0 + gh);
+    gGL.end();
+    gGL.getTextureSlot(0)->unbind();
+}
+
+U64 SKFloaterLocalChat::iconStamp(const Message& first) const
+{
+    U64 stamp = 0;
+    if (first.mSource == CHAT_SOURCE_OBJECT)
+    {
+        const auto it = mObjectGlyphs.find(first.mFromID);
+        if (it != mObjectGlyphs.end() && it->second.mShown)
+        {
+            const SKOutlineLayer& layer = it->second.mLayer;
+            stamp = (U64)layer.texture << 32 ^ (U64)std::hash<F32>()(layer.u0) ^ (U64)std::hash<F32>()(layer.v0) << 7 ^
+                    (U64)std::hash<F32>()(layer.u1) << 13 ^ (U64)std::hash<F32>()(layer.v1) << 19 ^ 1;
+        }
+    }
+    else
+    {
+        const auto it = mAvatarPictures.find(first.mFromID);
+        if (it != mAvatarPictures.end() && it->second.mTexture && it->second.mTexture->hasGLTexture())
+        {
+            stamp = (U64)(uintptr_t)it->second.mTexture.get() ^ (U64)(it->second.mTexture->getDiscardLevel() + 2) << 56;
+        }
+    }
+    return stamp;
+}
+
+void SKFloaterLocalChat::drawAvatarIcon(const Message& first, S32 left, S32 top, const LLColor4& color)
+{
+    const F32 cx = (F32)left + ICON_PX * 0.5f;
+    const F32 cy = (F32)top - ICON_PX * 0.5f;
+    const F32 radius = ICON_PX * 0.5f;
+    LLViewerFetchedTexture* tex = nullptr;
+    if (first.mSource == CHAT_SOURCE_AGENT && first.mFromID.notNull())
+    {
+        AvatarPicture& picture = mAvatarPictures[first.mFromID];
+        if (!picture.mAsked)
+        {
+            // As LLAvatarIconCtrl does: the shared icon id cache first, a legacy properties request otherwise.
+            picture.mAsked = true;
+            const LLUUID* icon = LLAvatarIconIDCache::getInstance()->get(first.mFromID);
+            if (icon && icon->notNull())
+            {
+                picture.mTexture = LLViewerTextureManager::getFetchedTexture(*icon, FTT_DEFAULT, true, LLGLTexture::BOOST_ICON);
+            }
+            else if (!icon)
+            {
+                LLAvatarPropertiesProcessor* app = LLAvatarPropertiesProcessor::getInstance();
+                app->addObserver(first.mFromID, this);
+                app->sendAvatarLegacyPropertiesRequest(first.mFromID);
+                picture.mObserving = true;
+            }
+        }
+        tex = picture.mTexture.get();
+    }
+    if (tex)
+    {
+        tex->addTextureStats((F32)(ICON_PX * ICON_PX * 4));
+    }
+    if (!tex || !tex->hasGLTexture())
+    {
+        gGL.color4fv(color.mV);
+        gl_circle_2d(cx, cy, radius, 16, true);
+        return;
+    }
+
+    // The picture clipped to a circle.
+    gGL.getTextureSlot(0)->bindSampled(tex, ALSamplers::BilinearClamp);
+    const F32 tint = first.mHistory ? 0.5f : 1.f; // dimmed with the greyed-out history
+    gGL.color4f(tint, tint, tint, color.mV[VALPHA]);
+    constexpr S32 STEPS = 20;
+    const F32 inner = radius;
+    gGL.begin(LLRender::TRIANGLE_FAN);
+    gGL.texCoord2f(0.5f, 0.5f);
+    gGL.vertex2f(cx, cy);
+    for (S32 i = 0; i <= STEPS; ++i)
+    {
+        const F32 a = F_TWO_PI * (F32)i / (F32)STEPS;
+        const F32 c = cosf(a);
+        const F32 sn = sinf(a);
+        gGL.texCoord2f(0.5f + 0.5f * c, 0.5f + 0.5f * sn);
+        gGL.vertex2f(cx + inner * c, cy + inner * sn);
+    }
+    gGL.end();
+    gGL.getTextureSlot(0)->unbind();
+}
+
+void SKFloaterLocalChat::processProperties(void* data, EAvatarProcessorType type)
+{
+    LLUUID avatar_id, image_id;
+    if (type == APT_PROPERTIES_LEGACY && data)
+    {
+        const LLAvatarLegacyData* avatar = static_cast<const LLAvatarLegacyData*>(data);
+        avatar_id = avatar->avatar_id;
+        image_id = avatar->image_id;
+    }
+    else if (type == APT_PROPERTIES && data)
+    {
+        const LLAvatarData* avatar = static_cast<const LLAvatarData*>(data);
+        avatar_id = avatar->avatar_id;
+        image_id = avatar->image_id;
+    }
+    const auto it = mAvatarPictures.find(avatar_id);
+    if (avatar_id.isNull() || it == mAvatarPictures.end())
+    {
+        return;
+    }
+    LLAvatarIconIDCache::getInstance()->add(avatar_id, image_id);
+    LLAvatarPropertiesProcessor::getInstance()->removeObserver(avatar_id, this);
+    it->second.mObserving = false;
+    if (image_id.notNull())
+    {
+        it->second.mTexture = LLViewerTextureManager::getFetchedTexture(image_id, FTT_DEFAULT, true, LLGLTexture::BOOST_ICON);
+    }
+}
+
+void SKFloaterLocalChat::onStyleMenu(const LLSD& param)
+{
+    gSavedSettings.setS32("SkoomaLocalChatStyle", param.asString() == "minimal" ? STYLE_MINIMAL : STYLE_CARDS);
+}
+
+bool SKFloaterLocalChat::onStyleCheck(const LLSD& param) const
+{
+    static LLCachedControl<S32> style(gSavedSettings, "SkoomaLocalChatStyle", STYLE_CARDS);
+    return (param.asString() == "minimal") == (style == STYLE_MINIMAL);
+}

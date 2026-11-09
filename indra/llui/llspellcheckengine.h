@@ -56,6 +56,12 @@ public:
     // handled by LLSpellChecker, not here.
     virtual bool checkWord(const std::string& word) const = 0;
 
+    // <SK:Nexii> Run the Windows Spell Checking API on a worker thread so a stalled spelling service cannot freeze the viewer
+    // An engine that checks in the background passes a word it has not checked yet; this is true,
+    // once, when words it passed that way have since been checked, so their text can be checked again.
+    virtual bool takeCheckedWords() { return false; }
+    // </SK:Nexii>
+
     // Fill 'suggestions' with replacement candidates for a misspelled word; returns the count.
     virtual S32 getSuggestions(const std::string& word, std::vector<std::string>& suggestions) const = 0;
 

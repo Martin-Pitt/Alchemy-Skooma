@@ -4860,6 +4860,12 @@ void LLAppViewer::requestQuit()
     pingMainloopTimeout("Main:qFloaters");
     // Attempt to close all floaters that might be
     // editing things.
+    // <SK:Nexii> Reopen IMs: remember the chats open at logout, before closing their floaters ends them.
+    if (gIMMgr)
+    {
+        gIMMgr->saveOpenSessions();
+    }
+    // </SK:Nexii>
     if (gFloaterView)
     {
         // application is quitting
@@ -5573,6 +5579,13 @@ void LLAppViewer::idle()
     {
         LLWebsocketMgr::instance().update();
     }
+
+    // <SK:Nexii> Run the Windows Spell Checking API on a worker thread so a stalled spelling service cannot freeze the viewer
+    if (LLSpellChecker::instanceExists())
+    {
+        LLSpellChecker::instance().update();
+    }
+    // </SK:Nexii>
 
     LLGLTFMaterialList::flushUpdates();
 

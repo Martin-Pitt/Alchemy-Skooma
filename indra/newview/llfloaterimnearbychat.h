@@ -75,6 +75,7 @@ public:
 
     std::string getCurrentChat();
     S32 getMessageArchiveLength() { return static_cast<S32>(mMessageArchive.size()); }
+    const std::vector<LLChat>& getMessageArchive() const { return mMessageArchive; } // <SK:Nexii> Modern local chat backfill
 
     bool handleKeyHere( KEY key, MASK mask ) override;
 

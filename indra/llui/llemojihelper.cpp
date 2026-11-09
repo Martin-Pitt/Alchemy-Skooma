@@ -214,7 +214,13 @@ void LLEmojiHelper::setHostCtrl(LLUICtrl* hostctrl_p)
 
         if (!mHelperHandle.isDead())
         {
-            mHelperHandle.get()->closeFloater();
+            // <SK:Nexii> Emoji helper: it opens silently, so it closes silently too, else each keystroke of a shortcode plays a close.
+            LLFloater* helper = mHelperHandle.get();
+            const U8 sound_flags = helper->getSoundFlags();
+            helper->setSoundFlags(LLView::SILENT);
+            helper->closeFloater();
+            helper->setSoundFlags(sound_flags);
+            // </SK:Nexii>
         }
 
         if (hostctrl_p)

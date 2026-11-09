@@ -1446,7 +1446,7 @@ void LLTextEditor::tryToShowEmojiHelper()
 
     S32 shortCodePos;
     const std::string& text = getText();
-    if (LLEmojiHelper::isCursorInEmojiCode(text, mCursorPos, &shortCodePos))
+    if (mShowEmojiShortcodeHelper && LLEmojiHelper::isCursorInEmojiCode(text, mCursorPos, &shortCodePos)) // <SK:Nexii> Emoji autocomplete
     {
         const LLRect cursorRect(getLocalRectFromDocIndex(shortCodePos));
         const std::string part(text.substr(shortCodePos, mCursorPos - shortCodePos));
@@ -2092,6 +2092,13 @@ void LLTextEditor::unindentLineBeforeCloseBrace()
 bool LLTextEditor::handleKeyHere(KEY key, MASK mask )
 {
     bool    handled = false;
+
+    // <SK:Nexii> Emoji autocomplete: an open list takes its keys before the editor moves or sends.
+    if (mKeyInterceptor && mKeyInterceptor(key, mask))
+    {
+        return true;
+    }
+    // </SK:Nexii>
 
     // Special case for TAB.  If want to move to next field, report
     // not handled and let the parent take care of field movement.
