@@ -339,19 +339,26 @@ bool skPhysicsMeshTooSmallForTriangles(const SKPhysicsShapeInput& in)
 
 bool skPhysicsMeshTooSmallForTriangles(LLVOVolume* volume)
 {
-    // The server charges every such mesh a hull's cost, triangles or not.
     const LLVector3 scale = volume->getScale();
     return volume->isMesh() && llmin(scale[VX], scale[VY], scale[VZ]) < SHAPE_BUILDER_USER_MESH_CONVEXIFICATION_SIZE;
 }
 
 std::shared_ptr<const SKPhysicsHavokShape> skPhysicsShapeSimTriangles(LLVOVolume* volume)
 {
-    if (!volume || !volume->isMesh() || !volume->getVolume() || volume->getPhysicsShapeType() != LLViewerObject::PHYSICS_SHAPE_PRIM
-        || skPhysicsMeshTooSmallForTriangles(volume))
+    if (!volume)
     {
         return nullptr;
     }
-    const LLUUID& mesh_id = volume->getVolume()->getParams().getSculptID();
+    return skPhysicsShapeSimTriangles(skPhysicsShapeInput(volume));
+}
+
+std::shared_ptr<const SKPhysicsHavokShape> skPhysicsShapeSimTriangles(const SKPhysicsShapeInput& in)
+{
+    if (!in.mMesh || !in.mParams || in.mPhysicsType != LLViewerObject::PHYSICS_SHAPE_PRIM || skPhysicsMeshTooSmallForTriangles(in))
+    {
+        return nullptr;
+    }
+    const LLUUID& mesh_id = in.mParams->getSculptID();
     // Only where the physics mesh is the shape: with hulls, which the sim
     // collides with then is still open, so those keep the hull path.
     const LLModel::Decomposition* decomp = gMeshRepo.getDecomposition(mesh_id);
@@ -413,7 +420,7 @@ bool skPhysicsShapeGeometry(const SKPhysicsShapeInput& in, const SKPhysicsShape&
                 {
                     return false;   // header on its way: which shape it collides as is unknown
                 }
-                if (physics_mesh > 0 && !skPhysicsMeshTooSmallForTriangles(volume))
+                if (physics_mesh > 0 && !skPhysicsMeshTooSmallForTriangles(in))
                 {
                     gMeshRepo.fetchPhysicsShape(params.getSculptID());
                     // What the simulator built from the physics mesh is what it collides with.
@@ -601,39 +608,42 @@ bool skCensusRenderGeometry(const SKPhysicsShapeInput& in, SKShapeGeometry& out)
     out.mShape = SKShapeKind::TRIANGLES;
     out.mProvenance = SKShapeProvenance::RENDER;
     out.mSolid = false;
-    if (!volume->getVolume())
+    if (!in.mParams)
     {
         return false;
     }
-    const LLVolumeParams& params = volume->getVolume()->getParams();
+    const LLVolumeParams& params = *in.mParams;
     const S32 top = LLVolumeLODGroup::NUM_LODS - 1;
     LLVolume* v = LLPrimitive::sVolumeManager->refVolume(params, top);
     if (!v)
     {
         return false;
     }
-    if (volume->isMesh())
+    if (in.mMesh)
     {
         // The top LOD, asked for once and shared by every object of the mesh: until it arrives nothing stands in.
         if (!v->isMeshAssetLoaded())
         {
-            gMeshRepo.loadMesh(volume, params, top);
+            if (in.mObject)
+            {
+                gMeshRepo.loadMesh(in.mObject, params, top);
+            }
         }
         else
         {
             appendFaces(v, out.mTriangles);
         }
     }
-    else if (volume->isSculpted())
+    else if (in.mSculpted)
     {
         // The shared top-detail sculpt is shaped only once something draws it at that detail; the loaded one meanwhile.
         if (v->getSculptLevel() == 0)
         {
             appendFaces(v, out.mTriangles);
         }
-        else if (volume->getVolume()->getSculptLevel() == 0)
+        else if (in.mVolume && in.mVolume->getSculptLevel() == 0)
         {
-            appendFaces(volume->getVolume(), out.mTriangles);
+            appendFaces(in.mVolume, out.mTriangles);
         }
     }
     else

@@ -140,10 +140,10 @@
 #include "llworld.h"
 #include "llworldmap.h"
 #include "pipeline.h"
-#include "skaircells.h" // <SK:Nexii> air cells menu
-#include "skrooms.h" // <SK:Nexii> rooms menu
 #include "skmodalview.h" // <SK:Nexii> modal view
 #include "skmapmode.h" // <SK:Nexii> 3D world map
+#include "skaircells.h" // <SK:Nexii> air cells menu
+#include "skrooms.h" // <SK:Nexii> rooms menu
 #include "llviewerjoystick.h"
 #include "llfloatercamera.h"
 #include "lluilistener.h"

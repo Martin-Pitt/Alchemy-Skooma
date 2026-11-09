@@ -295,7 +295,7 @@ void SKWorldMapScene::render(const SKWorldMapFrame& frame, const LLRect& rect, F
     drawAgents(frame, rect);
 
     // Leave the viewport as the UI expects it.
-    glViewport(gGLViewport[0], gGLViewport[1], gGLViewport[2], gGLViewport[3]);
+    gGL.setViewport(gGLViewport[0], gGLViewport[1], gGLViewport[2], gGLViewport[3]);
 }
 
 void SKWorldMapScene::drawGround(const SKWorldMapFrame& frame, S32 width, S32 height, F64 now)
@@ -328,14 +328,15 @@ void SKWorldMapScene::drawGround(const SKWorldMapFrame& frame, S32 width, S32 he
     const LLColor4& clear_colour = disc.mRadius > 0.0 ? SPACE_COLOUR : SEA_COLOUR;
 
     mScene.bindTarget();
-    glClearColor(clear_colour.mV[VRED], clear_colour.mV[VGREEN], clear_colour.mV[VBLUE], 1.f);
+    const LLColor4 saved_clear = gGL.getClearColor();
+    gGL.setClearColor(LLColor4(clear_colour.mV[VRED], clear_colour.mV[VGREEN], clear_colour.mV[VBLUE], 1.f));
     {
         // render() turned depth writes off, and a depth clear obeys the write mask: without this the depth
         // buffer kept the last frame's disc and hippo, and the hippo tested against them.
         LLGLDepthTest clear_depth(GL_TRUE, GL_TRUE, GL_ALWAYS);
         mScene.clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     }
-    glClearColor(0.f, 0.f, 0.f, 0.f);
+    gGL.setClearColor(saved_clear);
 
     LLGLDisable blend(GL_BLEND);
 
@@ -699,7 +700,7 @@ void SKWorldMapScene::tiltShift(const SKWorldMapFrame& frame, const LLRect& rect
     // Looking straight down there is no near and far to tell apart, so the effect fades out.
     const F32 strength = BLUR_STRENGTH * llclamp(2.f * static_cast<F32>(std::cos(frame.mPitch)), 0.f, 1.f);
 
-    glViewport(rect.mLeft, rect.mBottom, rect.getWidth(), rect.getHeight());
+    gGL.setViewport(rect.mLeft, rect.mBottom, rect.getWidth(), rect.getHeight());
     pushOrtho(1.f, 1.f);
     gGL.setColorMask(true, false);
     gUIProgram.bind();
@@ -869,7 +870,7 @@ void SKWorldMapScene::drawAgents(const SKWorldMapFrame& frame, const LLRect& rec
     }
     const std::vector<S32> shown = stackBudget(distances, counts, DOTS_PER_STACK, DOT_BUDGET);
 
-    glViewport(rect.mLeft, rect.mBottom, rect.getWidth(), rect.getHeight());
+    gGL.setViewport(rect.mLeft, rect.mBottom, rect.getWidth(), rect.getHeight());
     pushOrtho(static_cast<F32>(rect.getWidth()), static_cast<F32>(rect.getHeight()));
     LLGLEnable blend(GL_BLEND);
     gGL.setSceneBlendType(LLRender::BT_ALPHA);
