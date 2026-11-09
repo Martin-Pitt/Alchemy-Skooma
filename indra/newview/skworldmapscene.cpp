@@ -99,6 +99,7 @@ namespace
         { "Satori", 1100, 1131, 1005, 1047 },
         { "Nautilus", 1106, 1141, 1047, 1081 },
         { "Blake Sea", 1134, 1153, 1041, 1060 },
+        { "Playa del Sol", 1132, 1152, 1015, 1040 }, // Estimated: east of Satori, south of Blake Sea.
         { "Corsica", 1100, 1159, 1081, 1100 },
         { "Gaeta 1", 1140, 1155, 1112, 1130 },
         { "Gaeta 5", 1158, 1189, 1081, 1099 },
