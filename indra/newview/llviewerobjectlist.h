@@ -45,7 +45,7 @@
 #include "llcoros.h"
 
 class LLCamera;
-class LLNetMap;
+//class LLNetMap; // <SK:Nexii> SKNetMap retired the classic mini-map
 class LLDebugBeacon;
 class LLVOCacheEntry;
 
@@ -135,7 +135,7 @@ public:
 
     bool hasMapObjectInRegion(LLViewerRegion* regionp) ;
     void clearAllMapObjectsInRegion(LLViewerRegion* regionp) ;
-    void renderObjectsForMap(LLNetMap &netmap);
+    // <SK:Nexii> renderObjectsForMap removed with the classic mini-map
     void renderObjectBounds(const LLVector3 &center);
 
     void addDebugBeacon(const LLVector3 &pos_agent, const std::string &string,
@@ -164,6 +164,7 @@ public:
     // Dead objects still in the list, waiting for cleanDeadObjects.
     inline S32 getNumDeadObjects() const { return (S32) mObjects.queued(); }
     inline S32 getNumActiveObjects() { return (S32) mActiveObjects.size(); }
+    const std::vector<LLPointer<LLViewerObject>>& getActiveObjects() const { return mActiveObjects; } // <SK:Nexii> SKMapPeople finds projectiles on the active list
 
     void addToMap(LLViewerObject *objectp);
     void removeFromMap(LLViewerObject *objectp);
@@ -222,6 +223,7 @@ public:
 
     S32 mNumUnknownUpdates;
     S32 mNumDeadObjectUpdates;
+    const std::vector<LLPointer<LLViewerObject>>& getMapObjects() const { return mMapObjects; } // <SK:Nexii> SKNetMap reads the map objects for its fallback layer
 protected:
     ALObjectOrphans mOrphans;   // Each by the parent's LocalID/ip,port
     S32 mNumAvatars;

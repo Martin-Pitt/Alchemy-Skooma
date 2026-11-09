@@ -788,62 +788,7 @@ void LLViewerParcelOverlay::renderPropertyLines()
     gGL.popMatrix();
 }
 
-// Draw half of a single cell (no fill) in a grid drawn from left to right and from bottom to top
-void grid_2d_part_lines(const F32 left, const F32 top, const F32 right, const F32 bottom, bool has_left, bool has_bottom)
-{
-    gGL.begin(LLRender::LINES);
-
-    if (has_left)
-    {
-        gGL.vertex2f(left, bottom);
-        gGL.vertex2f(left, top);
-    }
-    if (has_bottom)
-    {
-        gGL.vertex2f(left, bottom);
-        gGL.vertex2f(right, bottom);
-    }
-
-    gGL.end();
-}
-
-void LLViewerParcelOverlay::renderPropertyLinesOnMinimap(F32 scale_pixels_per_meter, const F32* parcel_outline_color)
-{
-    static LLCachedControl<bool> show(gSavedSettings, "MiniMapShowPropertyLines");
-
-    if (!mOwnership || !show)
-    {
-        return;
-    }
-
-    LLVector3 origin_agent     = mRegion->getOriginAgent();
-    LLVector3 rel_region_pos   = origin_agent - gAgentCamera.getCameraPositionAgent();
-    F32       region_left      = rel_region_pos.mV[VX] * scale_pixels_per_meter;
-    F32       region_bottom    = rel_region_pos.mV[VY] * scale_pixels_per_meter;
-    F32       map_parcel_width = PARCEL_GRID_STEP_METERS * scale_pixels_per_meter;
-    const S32 GRIDS_PER_EDGE   = mParcelGridsPerEdge;
-
-    gGL.getTextureSlot(0)->unbind();
-    gGL.setLineWidth(1.0f);
-    gGL.color4fv(parcel_outline_color);
-    for (S32 i = 0; i <= GRIDS_PER_EDGE; i++)
-    {
-        const F32 bottom = region_bottom + (i * map_parcel_width);
-        const F32 top    = bottom + map_parcel_width;
-        for (S32 j = 0; j <= GRIDS_PER_EDGE; j++)
-        {
-            const F32  left               = region_left + (j * map_parcel_width);
-            const F32  right              = left + map_parcel_width;
-            const bool is_region_boundary = i == GRIDS_PER_EDGE || j == GRIDS_PER_EDGE;
-            const U8   overlay            = is_region_boundary ? 0 : mOwnership[(i * GRIDS_PER_EDGE) + j];
-            // The property line vertices are three-dimensional, but here we only care about the x and y coordinates, as we are drawing on a
-            // 2D map
-            const bool has_left   = i != GRIDS_PER_EDGE && (j == GRIDS_PER_EDGE || (overlay & PARCEL_WEST_LINE));
-            const bool has_bottom = j != GRIDS_PER_EDGE && (i == GRIDS_PER_EDGE || (overlay & PARCEL_SOUTH_LINE));
-            grid_2d_part_lines(left, top, right, bottom, has_left, has_bottom);
-        }
-    }
-}
+// <SK:Nexii> renderPropertyLinesOnMinimap removed: SKNetMap draws parcels itself (skmapparcels.cpp)
 
 boost::signals2::connection LLViewerParcelOverlay::setUpdateCallback(const update_signal_t::slot_type& cb)
 {

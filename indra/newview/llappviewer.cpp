@@ -216,6 +216,7 @@
 #include "lltracker.h"
 #include "llviewerparcelmgr.h"
 #include "llworldmapview.h"
+#include "skmodalview.h" // <SK:Nexii> modal view
 
 #include "lldebugview.h"
 #include "llconsole.h"
@@ -227,6 +228,7 @@
 
 #include "llworld.h"
 #include "skaircells.h" // <SK:Nexii> air cells tick
+#include "skmaprecorder.h" // <SK:Nexii> mini-map recorder tick
 #include "skrooms.h" // <SK:Nexii> rooms tick
 #include "skworldcensus.h" // <SK:Nexii> census tick
 #include "llhudeffecttrail.h"
@@ -1602,7 +1604,7 @@ bool LLAppViewer::doFrame()
                     pingMainloopTimeout("Main:Snapshot");
                     // Probes are captured only while the world is drawn: a hidden or minimized window shows none of
                     // them, so their captures would be GPU work for nothing.
-                    if (!display_window_hidden())
+                    if (!display_window_hidden() && !SKModalView::worldCovered()) // <SK:Nexii> modal view: no probe faces (each a full scene render) under a modal view
                     {
                         gPipeline.mReflectionMapManager.update();
                     }
@@ -1959,6 +1961,13 @@ bool LLAppViewer::cleanup()
     {
         LLWorldMap::getInstance()->reset(); // release any images
     }
+
+    // <SK:Nexii> modal view: its modes' views and targets go while the texture list and GL are still up.
+    if (SKModalView::instanceExists())
+    {
+        SKModalView::getInstance()->shutdown();
+    }
+    // </SK:Nexii>
 
     LLCalc::cleanUp();
 
@@ -5934,6 +5943,7 @@ void LLAppViewer::idle()
         LL_PROFILE_ZONE_NAMED_CATEGORY_APP("world update");
         gPipeline.updateMove();
     }
+    SKMapRecorder::onFrame(); // <SK:Nexii> mini-map recorder: takes the world layers' trace lines while recording
     // <SK:Nexii> census: scans after objects moved, the layers above follow it
     SKWorldCensus::instance().update();
     // </SK:Nexii>

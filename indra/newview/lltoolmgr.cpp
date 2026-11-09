@@ -51,6 +51,7 @@
 #include "lltoolselectland.h"
 #include "lltoolobjpicker.h"
 #include "lltoolpipette.h"
+#include "sktoolmappan.h" // <SK:Nexii> Modal map views' pan tool
 #include "llagent.h"
 #include "llagentcamera.h"
 #include "llviewercontrol.h"
@@ -281,6 +282,7 @@ LLTool* LLToolMgr::getCurrentTool()
 
         // use override tool if available otherwise drop back to base tool
         cur_tool = mOverrideTool ? mOverrideTool : mBaseTool;
+        cur_tool = SKToolMapPan::substitute(cur_tool); // <SK:Nexii> Modal map views: a plain left drag pans them.
     }
 
     LLTool* prev_tool = mSelectedTool;

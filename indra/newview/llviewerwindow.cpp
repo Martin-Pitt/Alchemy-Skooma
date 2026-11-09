@@ -26,6 +26,8 @@
 
 #include "llviewerprecompiledheaders.h"
 #include "llviewerwindow.h"
+#include "sktacticaloverview.h" // <SK:Nexii> tactical overview
+#include "skmodalview.h" // <SK:Nexii> modal view
 
 
 // system library includes
@@ -114,7 +116,8 @@
 #include "llfloatercamera.h"
 #include "llfloaterland.h"
 #include "llfloaterinspect.h"
-#include "llfloatermap.h"
+//#include "llfloatermap.h" // <SK:Nexii> SKNetMap retired the classic mini-map floater
+#include "skmapml.h" // <SK:Nexii> The Mouselook map
 #include "llfloaternamedesc.h"
 #include "llfloaterpreference.h"
 #include "llfloatersnapshot.h"
@@ -1188,6 +1191,13 @@ bool LLViewerWindow::handleAnyMouseClick(LLWindow *window, LLCoordGL pos, MASK m
                 LL_INFOS() << buttonname << " Mouse " << buttonstatestr << " not handled by view" << LL_ENDL;
             }
     }
+
+    // <SK:Nexii> Tactical overview: world right-clicks open the mini-map's menus on it.
+    if (down && clicktype == CLICK_RIGHT && !gDisconnected && SKTacticalOverview::handleRightClick(x, y))
+    {
+        return true;
+    }
+    // </SK:Nexii>
 
     // Do not allow tool manager to handle mouseclicks if we have disconnected
     if(!gDisconnected && LLToolMgr::getInstance()->getCurrentTool()->handleAnyMouseClick( x, y, mask, clicktype, down ) )
@@ -2771,6 +2781,7 @@ void LLViewerWindow::shutdownGL()
     stop_glerror();
 
     LLWorldMapView::cleanupTextures();
+    SKMapML::cleanup(); // <SK:Nexii> The Mouselook map's GL objects
 
     LLViewerTextureManager::cleanup() ;
     SUBSYSTEM_CLEANUP(LLImageGL) ;
@@ -3103,6 +3114,13 @@ void LLViewerWindow::draw()
             gGL.scalef(zoom_factor, zoom_factor, 1.f);
             LLUI::getScaleFactor() *= zoom_factor;
         }
+
+        // <SK:Nexii> The Mouselook map, under the crosshair and mouselook text; not in tiled snapshots
+        if (zoom_factor <= 1.f)
+        {
+            SKMapML::draw();
+        }
+        // </SK:Nexii>
 
         // Draw tool specific overlay on world
         LLToolMgr::getInstance()->getCurrentTool()->draw();
@@ -5571,7 +5589,7 @@ bool LLViewerWindow::rawSnapshot(LLImageRaw *raw, S32 image_width, S32 image_hei
     bool keep_window_aspect, bool is_texture, bool show_ui, bool show_hud, bool do_rebuild, bool no_post, bool show_balance, LLSnapshotModel::ESnapshotLayerType type, S32 max_size,
     const ALSnapshotCutout* cutout, bool* cutout_drawn)
 {
-    if (!raw)
+    if (!raw || SKModalView::worldCovered()) // <SK:Nexii> modal view: the world is not drawn while covered
     {
         return false;
     }
@@ -6076,6 +6094,10 @@ bool LLViewerWindow::rawSnapshot(LLImageRaw *raw, S32 image_width, S32 image_hei
 bool LLViewerWindow::simpleSnapshot(LLImageRaw* raw, S32 image_width, S32 image_height, const int num_render_passes)
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_APP;
+    if (SKModalView::worldCovered()) // <SK:Nexii> modal view: the world is not drawn while covered
+    {
+        return false;
+    }
     gDisplaySwapBuffers = false;
 
     gGL.clear(GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT); // stencil buffer is deprecated | GL_STENCIL_BUFFER_BIT);
@@ -6354,70 +6376,24 @@ void LLViewerWindow::destroyWindow()
 void LLViewerWindow::drawMouselookInstructions()
 {
     static LLCachedControl<bool> draw_mouselook_instructions(gSavedSettings, "AlchemyMouselookInstructions", true);
-    static LLCachedControl<bool> draw_mouselook_position(gSavedSettings, "AlchemyMouselookPosition", true);
-    if (draw_mouselook_position || draw_mouselook_instructions)
+    // <SK:Nexii/> Position and health overlay removed for combat
+    if (draw_mouselook_instructions)
     {
-        // Draw information for mouselook (pos, health)
         const LLFontGL* font = LLFontGL::getFontSansSerifBig();
 
-        if (draw_mouselook_position)
-        {
-            //to be at top of viewer
-            const S32 INSTRUCTIONS_TOP_PAD = getWorldViewRectScaled().mTop - 15;
-            const S32 text_pos_start = getWorldViewRectScaled().getCenterX() - 150;
-            const LLVector3& vec = gAgent.getPositionAgent();
+        // Draw instructions for mouselook ("Press ESC to return to World View" partially transparent at the bottom of the screen.)
+        static const std::string instructions = LLTrans::getString("LeaveMouselook");
 
-            font->renderUTF8(
-                llformat("X: %.2f", vec.mV[VX]), 0,
-                text_pos_start,
-                INSTRUCTIONS_TOP_PAD,
-                LLColor4(1.0f, 0.5f, 0.5f, 0.5f),
-                LLFontGL::HCENTER, LLFontGL::TOP,
-                LLFontGL::BOLD, LLFontGL::DROP_SHADOW_SOFT);
-            font->renderUTF8(
-                llformat("Y: %.2f", vec.mV[VY]), 0,
-                text_pos_start + 100,
-                INSTRUCTIONS_TOP_PAD,
-                LLColor4(0.5f, 1.0f, 0.5f, 0.5f),
-                LLFontGL::HCENTER, LLFontGL::TOP,
-                LLFontGL::BOLD, LLFontGL::DROP_SHADOW_SOFT);
-            font->renderUTF8(
-                llformat("Z: %.2f", vec.mV[VZ]), 0,
-                text_pos_start + 200,
-                INSTRUCTIONS_TOP_PAD,
-                LLColor4(0.5f, 0.5f, 1.0f, 0.5f),
-                LLFontGL::HCENTER, LLFontGL::TOP,
-                LLFontGL::BOLD, LLFontGL::DROP_SHADOW_SOFT);
-            LLViewerParcelMgr* vpm = LLViewerParcelMgr::getInstance();
-            const bool allow_damage = vpm->allowAgentDamage(gAgent.getRegion(), vpm->getAgentParcel());
-            if (allow_damage)
-            {
-                font->renderUTF8(
-                    llformat("HP: %d%%", gAgent.getHealth()), 0,
-                    text_pos_start + 300,
-                    INSTRUCTIONS_TOP_PAD,
-                    LLColor4(1.0f, 1.0f, 1.0f, 0.5f),
-                    LLFontGL::HCENTER, LLFontGL::TOP,
-                    LLFontGL::BOLD, LLFontGL::DROP_SHADOW_SOFT);
-            }
-        }
+        //to be on top of Bottom bar when it is opened
+        const S32 INSTRUCTIONS_BOTTOM_PAD = 50;
 
-        if (draw_mouselook_instructions)
-        {
-            // Draw instructions for mouselook ("Press ESC to return to World View" partially transparent at the bottom of the screen.)
-            static const std::string instructions = LLTrans::getString("LeaveMouselook");
-
-            //to be on top of Bottom bar when it is opened
-            const S32 INSTRUCTIONS_BOTTOM_PAD = 50;
-
-            font->renderUTF8(
-                instructions, 0,
-                getWorldViewRectScaled().getCenterX(),
-                getWorldViewRectScaled().mBottom + INSTRUCTIONS_BOTTOM_PAD,
-                LLColor4(1.0f, 1.0f, 1.0f, 0.5f),
-                LLFontGL::HCENTER, LLFontGL::TOP,
-                LLFontGL::BOLD, LLFontGL::DROP_SHADOW);
-        }
+        font->renderUTF8(
+            instructions, 0,
+            getWorldViewRectScaled().getCenterX(),
+            getWorldViewRectScaled().mBottom + INSTRUCTIONS_BOTTOM_PAD,
+            LLColor4(1.0f, 1.0f, 1.0f, 0.5f),
+            LLFontGL::HCENTER, LLFontGL::TOP,
+            LLFontGL::BOLD, LLFontGL::DROP_SHADOW);
     }
 }
 
@@ -6624,6 +6600,8 @@ void LLViewerWindow::stopGL()
         // Pause texture decode threads (will get unpaused during main loop)
         LLAppViewer::getTextureCache()->pause();
         LLAppViewer::getTextureFetch()->pause();
+
+        SKMapML::cleanup(); // <SK:Nexii> The Mouselook map's GL objects
 
         LLManipTranslate::destroyGL() ;
         stop_glerror();

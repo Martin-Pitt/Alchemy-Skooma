@@ -93,14 +93,7 @@
          function="CheckControl"
          parameter="NearbyListShowIcons" />
     </menu_item_check>
-    <menu_item_check name ="view_map" label="View Map">
-        <menu_item_check.on_check
-         function="CheckControl"
-         parameter="NearbyListShowMap" />
-        <menu_item_check.on_click
-         function="ToggleControl"
-         parameter="NearbyListShowMap" />
-    </menu_item_check>
+    <!-- <SK:Nexii> SKNetMap retired the classic mini-map; the View Map toggle is gone -->
     <menu_item_check name="view_usernames" label="Hide usernames">
         <menu_item_check.on_click
          function="People.Nearby.ViewSort.Action"

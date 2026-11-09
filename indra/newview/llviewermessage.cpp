@@ -27,6 +27,7 @@
 #include "llviewerprecompiledheaders.h"
 #include "llviewermessage.h"
 #include "skroaddriver.h" // <SK:Nexii> road autopilot
+#include "skmodalview.h" // <SK:Nexii> modal view
 
 #include "alscriptstudio.h"
 #include "alscripttypes.h"
@@ -116,6 +117,7 @@
 #include "llviewerwindow.h"
 #include "llvlmanager.h"
 #include "llvoavatarself.h"
+#include "skotscamera.h" // <SK:Nexii> Over-the-shoulder view
 #include "llvovolume.h"
 #include "llworld.h"
 #include "pipeline.h"
@@ -128,6 +130,7 @@
 #include "llpanelplaceprofile.h"
 #include "llviewerregion.h"
 #include "llfloaterregionrestarting.h"
+#include "skinventoryexplorermenu.h" // <SK:Nexii> Inventory Explorer
 // [RLVa:KB] - Checked: 2010-03-09 (RLVa-1.2.0a)
 #include "rlvactions.h"
 #include "rlvhandler.h"
@@ -1093,6 +1096,9 @@ protected:
                 }
             }
 
+            // <SK:Nexii> Inventory Explorer: what it created is shown there, not in the Inventory floater
+            was_moved = was_moved || SKInventoryExplorerActions::claimCreated(item_uuid);
+            // </SK:Nexii>
             if (was_moved)
             {
                 it = added.erase(it);
@@ -2613,7 +2619,7 @@ void process_chat_from_simulator(LLMessageSystem *msg, void **user_data)
         msg->getStringFast(_PREHASH_ChatData, _PREHASH_Message, mesg);
         // Preserve tabs from scripts by expanding them to spaces before any sanitization/formatting.
         LLStringUtil::replaceTabsWithSpaces(mesg, 4);
-        sk_road_driver::noteChat(from_id, mesg); // <SK:Nexii> road autopilot: the vehicle announcing its gear
+        sk_road_driver::noteChat(from_id, from_name, mesg); // <SK:Nexii> road autopilot: the vehicle announcing its gear
 
 // [RLVa:KB] - Checked: 2010-04-23 (RLVa-1.2.0f) | Modified: RLVa-1.2.0f
         if ( (rlv_handler_t::isEnabled()) && (CHAT_TYPE_START != chat.mChatType) && (CHAT_TYPE_STOP != chat.mChatType) )
@@ -3370,6 +3376,7 @@ void process_agent_movement_complete(LLMessageSystem* msg, void**)
         // Force the camera back onto the agent, don't animate.
         gAgentCamera.setFocusOnAvatar(true, false);
         gAgentCamera.slamLookAt(look_at);
+        gAgentCamera.snapCameraToTarget(); // <SK:Nexii> camera warp: a teleport cuts to the arrival
         gAgentCamera.updateCamera();
 
         LL_INFOS("Teleport") << "Agent movement complete, setting state to TELEPORT_START_ARRIVAL" << LL_ENDL;
@@ -3587,8 +3594,20 @@ void send_agent_update(bool force_send, bool send_reliable)
 
     LLVector3 camera_pos_agent = gAgentCamera.getCameraPositionAgent(); // local to avatar's region
     LLVector3 camera_at = LLViewerCamera::getInstance()->getAtAxis();
+    // <SK:Nexii> modal view: the sim keeps the world camera while a modal view moves the viewer's.
+    LLVector3 camera_left = LLViewerCamera::getInstance()->getLeftAxis();
+    LLVector3 camera_up = LLViewerCamera::getInstance()->getUpAxis();
+    SKModalView::worldCameraForUpdate(camera_pos_agent, camera_at, camera_left, camera_up);
+    // </SK:Nexii>
     LLQuaternion body_rotation = gAgent.getFrameAgent().getQuaternion();
     LLQuaternion head_rotation = gAgent.getHeadRotation();
+    // <SK:Nexii> Over-the-shoulder view reports the eye aimed at the crosshair and turns the head the same way; the body
+    // is left alone, since the region moves the avatar along it; a modal view keeps the world camera instead
+    if (!SKModalView::worldCovered() && SKOTSCamera::reportedCamera(camera_pos_agent, camera_at, camera_left, camera_up))
+    {
+        SKOTSCamera::convergeHead(camera_at, head_rotation);
+    }
+    // </SK:Nexii>
     U8 render_state = gAgent.getRenderState();
 
     U8 flags = AU_FLAGS_NONE;
@@ -3711,14 +3730,18 @@ void send_agent_update(bool force_send, bool send_reliable)
 
     msg->addVector3Fast(_PREHASH_CameraCenter, camera_pos_agent);
     msg->addVector3Fast(_PREHASH_CameraAtAxis, camera_at);
-    msg->addVector3Fast(_PREHASH_CameraLeftAxis, LLViewerCamera::getInstance()->getLeftAxis());
-    msg->addVector3Fast(_PREHASH_CameraUpAxis, LLViewerCamera::getInstance()->getUpAxis());
+    msg->addVector3Fast(_PREHASH_CameraLeftAxis, camera_left); // <SK:Nexii> modal view, Over-the-shoulder view
+    msg->addVector3Fast(_PREHASH_CameraUpAxis, camera_up); // <SK:Nexii> modal view, Over-the-shoulder view
 
+    // <SK:Nexii> tactical overview: a wider Far while it steers the interest list
+    F32 interest_far = gAgentCamera.mDrawDistance;
+    SKModalView::tacticalInterestFar(interest_far);
+    // </SK:Nexii>
     static LLCachedControl<bool> limit_draw_distance(gSavedSettings, "ALLimitDrawDistance", false);
     if (limit_draw_distance)
     {
         static F32 last_draw_disatance_step     = 1024;
-        F32        memory_limited_draw_distance = gAgentCamera.mDrawDistance;
+        F32        memory_limited_draw_distance = interest_far; // <SK:Nexii>
         const F32  mem_factor                   = LLMemory::getSystemMemoryBudgetFactor();
         if (mem_factor > 1.f)
         {
@@ -3758,7 +3781,7 @@ void send_agent_update(bool force_send, bool send_reliable)
     }
     else
     {
-        msg->addF32Fast(_PREHASH_Far, gAgentCamera.mDrawDistance);
+        msg->addF32Fast(_PREHASH_Far, interest_far); // <SK:Nexii>
     }
 
     msg->addU32Fast(_PREHASH_ControlFlags, control_flags);
@@ -6615,6 +6638,7 @@ void process_teleport_local(LLMessageSystem *msg,void**)
     if ( !(gAgent.getTeleportKeepsLookAt() && LLViewerJoystick::getInstance()->getOverrideCamera()) )
     {
         gAgentCamera.resetView(true, true);
+        gAgentCamera.snapCameraToTarget(); // <SK:Nexii> camera warp: a teleport cuts to the arrival
     }
 
     // send camera update to new region
