@@ -24,8 +24,8 @@
 
 #include "skterrainmanifest.h"
 
-#include <cinttypes>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <sstream>
 
@@ -55,6 +55,17 @@ namespace
         std::istringstream in(text);
         in >> out;
         return !in.fail() && in.eof();
+    }
+
+    // strtof reads back exactly what %.9g wrote; a stream's float parse is inlined into this file and
+    // compiled with its fast-math flags, which libc++ rounds off by an ULP or two.
+    bool number(const std::string& text, F32& out)
+    {
+        if (text.empty())
+            return false;
+        char* end = nullptr;
+        out       = strtof(text.c_str(), &end);
+        return end && *end == 0;
     }
 
     bool hex(const std::string& text, U64& out)
@@ -102,12 +113,14 @@ std::string SKTerrainManifest::format() const
     char        buf[512];
     for (const SKTerrainManifestRow& r : mRows)
     {
-        snprintf(buf, sizeof(buf), "%" PRIx64 "\t%u\t%u\t%u\t%u\t%.9g\t%.9g\t%.9g\t%.9g\t%.9g\t%" PRIu64 "\t%" PRIu64 "\t",
-                 r.mHandle, r.mCells, r.mLayers, r.mRevision[0], r.mRevision[1], r.mMin[0], r.mMax[0], r.mMin[1],
-                 r.mMax[1], r.mWater, r.mCaptureDate, r.mLastSeen);
+        // U64 is unsigned long long on every platform, which PRIu64 is not on Linux.
+        snprintf(buf, sizeof(buf), "%llx\t%u\t%u\t%u\t%u\t%.9g\t%.9g\t%.9g\t%.9g\t%.9g\t%llu\t%llu\t",
+                 static_cast<unsigned long long>(r.mHandle), r.mCells, r.mLayers, r.mRevision[0], r.mRevision[1], r.mMin[0],
+                 r.mMax[0], r.mMin[1], r.mMax[1], r.mWater, static_cast<unsigned long long>(r.mCaptureDate),
+                 static_cast<unsigned long long>(r.mLastSeen));
         out += buf;
         out += clean(r.mSource);
-        snprintf(buf, sizeof(buf), "\t%" PRIu64 "\t%08x\n", r.mFileSize, r.mChecksum);
+        snprintf(buf, sizeof(buf), "\t%llu\t%08x\n", static_cast<unsigned long long>(r.mFileSize), r.mChecksum);
         out += buf;
     }
     return out;
