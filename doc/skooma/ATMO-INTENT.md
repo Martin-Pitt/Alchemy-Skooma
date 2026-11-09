@@ -1,6 +1,0 @@
-# Atmo Magic
-
-
-
-
-
