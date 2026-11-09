@@ -718,14 +718,28 @@ void SKOverviewCapture::frame()
     }
     mFrameRan = true;
     mFrameNo = frame_no;
-    if (gCubeSnapshot || !LLPipeline::sRenderDeferred || !gPipeline.shadersLoaded() || !gAgent.getRegion())
+    // Logged when the reason it waits, or that it runs, changes; 0 is running.
+    static U32 logged_waits = ~0u;
+    const U32 waits = (gCubeSnapshot ? 1u : 0u) | (!LLPipeline::sRenderDeferred ? 2u : 0u) | (!gPipeline.shadersLoaded() ? 4u : 0u)
+                      | (!gAgent.getRegion() ? 8u : 0u);
+    if (waits != logged_waits)
     {
-        LL_INFOS_ONCE("SKOverview") << "overview waits: cube snapshot " << gCubeSnapshot << ", deferred "
-                                    << LLPipeline::sRenderDeferred << ", shaders " << gPipeline.shadersLoaded() << ", region "
-                                    << (gAgent.getRegion() != nullptr) << LL_ENDL;
+        logged_waits = waits;
+        if (waits)
+        {
+            LL_INFOS("SKOverview") << "overview waits: cube snapshot " << gCubeSnapshot << ", deferred "
+                                   << LLPipeline::sRenderDeferred << ", shaders " << gPipeline.shadersLoaded() << ", region "
+                                   << (gAgent.getRegion() != nullptr) << LL_ENDL;
+        }
+        else
+        {
+            LL_INFOS("SKOverview") << "overview running" << LL_ENDL;
+        }
+    }
+    if (waits)
+    {
         return;
     }
-    LL_INFOS_ONCE("SKOverview") << "overview running" << LL_ENDL;
     updateDemand(true);
     readSpans();
     if (mapsWanted() || viewWanted())
@@ -2050,19 +2064,25 @@ bool SKOverviewCapture::renderView(const skoverview::ViewShotParams& params)
     mViewReady = false;
     mViewPickable = false;
     const S32 vx = params.mViewport[0], vy = params.mViewport[1], vw = params.mViewport[2], vh = params.mViewport[3];
+    // A collapsed pane is not a fault: logged as it collapses.
+    static bool tiny_logged = false;
     if (vw < 16 || vh < 16)
     {
-        LL_WARNS_ONCE("SKOverview") << "camera view skipped: viewport " << vw << "x" << vh << LL_ENDL;
+        if (!tiny_logged)
+        {
+            tiny_logged = true;
+            LL_DEBUGS("SKOverview") << "camera view skipped: viewport " << vw << "x" << vh << LL_ENDL;
+        }
         return false;
     }
+    tiny_logged = false;
     if (gCubeSnapshot || !LLPipeline::sRenderDeferred || !gPipeline.shadersLoaded() || !gAgent.getRegion())
     {
         return false;
     }
     if (!ensureGL(sViewCapture, sViewResolved, vw, vh))
     {
-        LL_WARNS_ONCE("SKOverview") << "camera view skipped: targets or shaders unavailable" << LL_ENDL;
-        return false;
+        return false; // ensureGL has said why.
     }
 
     // The caller's camera; the cut and the shading stay the avatar's.
@@ -2186,8 +2206,12 @@ bool SKOverviewCapture::renderView(const skoverview::ViewShotParams& params)
     mViewReady = true;
     mViewPickable = true;
     mViewFrame = LLFrameTimer::getFrameCount();
-    LL_INFOS_ONCE("SKOverview") << "camera view rendered " << vw << "x" << vh << ", census tris " << mCensus.triangles()
-                                << LL_ENDL;
+    static bool rendered_logged = false;
+    if (!rendered_logged)
+    {
+        rendered_logged = true;
+        LL_INFOS("SKOverview") << "camera view rendered " << vw << "x" << vh << ", census tris " << mCensus.triangles() << LL_ENDL;
+    }
     return true;
 }
 
@@ -2306,11 +2330,24 @@ bool SKOverviewCapture::compositeView(const LLRect& rect, F32 tilt_px)
     {
         mViewReady = false;
     }
-    if (!mViewReady || !sComposite.mProgramObject || !sViewResolved.isComplete())
+    // Logged when the reason it skips changes.
+    static U32 logged_skip = 0;
+    const U32 skip = (!mViewReady ? 1u : 0u) | (!sComposite.mProgramObject ? 2u : 0u) | (!sViewResolved.isComplete() ? 4u : 0u);
+    if (skip != logged_skip)
     {
-        LL_WARNS_ONCE("SKOverview") << "camera view composite skipped: rendered " << mViewReady << ", shader "
-                                    << (sComposite.mProgramObject != 0) << ", target " << sViewResolved.isComplete()
-                                    << LL_ENDL;
+        logged_skip = skip;
+        if (skip & ~1u)
+        {
+            LL_WARNS("SKOverview") << "camera view composite skipped: rendered " << mViewReady << ", shader "
+                                   << (sComposite.mProgramObject != 0) << ", target " << sViewResolved.isComplete() << LL_ENDL;
+        }
+        else if (skip)
+        {
+            LL_DEBUGS("SKOverview") << "camera view composite skipped: not rendered this frame" << LL_ENDL;
+        }
+    }
+    if (skip)
+    {
         return false;
     }
     mViewReady = false;
@@ -2346,7 +2383,7 @@ bool SKOverviewCapture::compositeView(const LLRect& rect, F32 tilt_px)
         if (mCost.mSince > 0.0 && mCost.mFrames)
         {
             const F32 n = (F32)mCost.mFrames;
-            LL_INFOS("SKOverviewCost") << "camera view per frame over " << mCost.mFrames << " frames: capture "
+            LL_DEBUGS("SKOverviewCost") << "camera view per frame over " << mCost.mFrames << " frames: capture "
                                        << mCost.mCaptureMs / n << " ms, resolve " << mCost.mResolveMs / n << " ms, composite "
                                        << mCost.mCompositeMs / n << " ms; rendered " << mCost.mRenders << ", reused " << mCost.mReuses
                                        << "; gpu view " << mCost.mGpuViewMs / n << " ms, patch " << mCost.mGpuPatchMs / n
@@ -2359,7 +2396,12 @@ bool SKOverviewCapture::compositeView(const LLRect& rect, F32 tilt_px)
         mCost.mScansAtStart = scans_now;
     }
     gGL.setViewport(gGLViewport[0], gGLViewport[1], gGLViewport[2], gGLViewport[3]);
-    LL_INFOS_ONCE("SKOverview") << "camera view composited at " << vx << "," << vy << " " << vw << "x" << vh << LL_ENDL;
+    static bool composited_logged = false;
+    if (!composited_logged)
+    {
+        composited_logged = true;
+        LL_INFOS("SKOverview") << "camera view composited at " << vx << "," << vy << " " << vw << "x" << vh << LL_ENDL;
+    }
     return true;
 }
 
