@@ -118,6 +118,7 @@ namespace skroad::land
         LLUUID owner;
         std::string name;           // the parcel's, once answered
         bool group_owned = false;
+        bool guessed = false;       // not Linden only because the owner's profile never answered: unknown to the walk
         F64 answered = -1.0;        // when its owner arrived (the owner's profile and name get 20 s to arrive)
         bool via_own_cap = false;   // after a failure through one cap, the other is asked: the agent region's, its own
         std::string region_name;
@@ -152,8 +153,12 @@ namespace skroad::land
             {
                 sParcelRoad[d.parcel_id] = road;
             }
-            // ids only, no names: an owner or group missed as a road's shows here
-            LL_INFOS("SKRoadDriver") << "edge parcel " << d.parcel_id << " \"" << d.name << "\" in " << d.sim_name << " owner " << d.owner_id
+            // ids only, no names: an owner or group missed as a road's shows here; the Linden answers only in the counts
+            if (road == Road::Linden)
+            {
+                return;
+            }
+            LL_DEBUGS("SKRoad") << "edge parcel " << d.parcel_id << " \"" << d.name << "\" in " << d.sim_name << " owner " << d.owner_id
                                      << (group_owned ? " (group)" : "") << llformat(" flags 0x%x", U32(d.flags))
                                      << (road == Road::Linden  ? ": Linden road"
                                          : road == Road::Other ? ": not Linden"
@@ -181,7 +186,10 @@ namespace skroad::land
             {
                 const S32 state = lindenOwnerState(owner);
                 road = state == 1 ? Road::Linden : (state == 0 || now - answered > 20.0) ? Road::Other : Road::Unknown;
+                guessed = state < 0 && road == Road::Other;
+                return;
             }
+            guessed = false;
         }
         void setErrorStatus(S32 status, const std::string& reason) override
         {
@@ -208,7 +216,7 @@ namespace skroad::land
         if (ask->answered >= 0.0 && ask->road != Road::Linden)
         {
             ask->classify(LLTimer::getTotalSeconds());     // its owner since learnt a Linden or a mole, or given up on
-            if (ask->road != Road::Unknown && ask->parcel.notNull())
+            if (ask->road != Road::Unknown && !ask->guessed && ask->parcel.notNull())
             {
                 sParcelRoad[ask->parcel] = ask->road;
             }
@@ -216,8 +224,10 @@ namespace skroad::land
         if (ask->road == Road::Unknown && ask->answered < 0.0 && now - ask->asked > 30.0)
         {
             LLViewerRegion* agent_region = gAgent.getRegion();
-            const std::string agent_url = agent_region ? agent_region->getCapability("RemoteParcelRequest") : std::string();
-            const std::string own_url = region->getCapability("RemoteParcelRequest");
+            // a region's caps are asked for only once they have arrived: before, each ask is a WARN and an empty url
+            const std::string agent_url = agent_region && agent_region->capabilitiesReceived()
+                                              ? agent_region->getCapability("RemoteParcelRequest") : std::string();
+            const std::string own_url = region->capabilitiesReceived() ? region->getCapability("RemoteParcelRequest") : std::string();
             const std::string& url = (ask->via_own_cap && !own_url.empty()) || agent_url.empty() ? own_url : agent_url;
             if (!url.empty())
             {
@@ -307,6 +317,7 @@ namespace skroad::land
         const LLVector3d o = region->getOriginGlobal();
         const F64 w = region->getWidth();
         std::string counts;
+        S32 unknown_all = 0;
         for (S32 e = 0; e < 4; ++e)
         {
             // the neighbour across this edge, and the line of cells on each side
@@ -336,8 +347,14 @@ namespace skroad::land
             }
             static const char* names[4] = { "south", "east", "north", "west" };
             counts += llformat("%s %d safe/%d unsafe (%d unknown); ", names[e], safe, EDGE_CELLS - safe, unknown);
+            unknown_all += unknown;
         }
-        if (!same || counts != sEdges.counts)
+        // said once the map is complete, and when it changes after: while parcels are still answering, at debug
+        if ((!same || counts != sEdges.counts) && unknown_all > 0)
+        {
+            LL_DEBUGS("SKRoad") << "edge map of " << region->getName() << " (answers coming): " << counts << LL_ENDL;
+        }
+        else if (!same || counts != sEdges.counts)
         {
             LL_INFOS("SKRoadDriver") << "edge map of " << region->getName() << ": " << counts
                                      << llformat("parcel asks %d, answered %d, failed %d", sEdgeAsks.asked,
@@ -433,6 +450,7 @@ namespace skroad::land
         {
             out.name = it->second->name;
             out.named = true;
+            out.guessed = it->second->guessed && out.road == Road::Other;
             out.destination = destinationName(out.name);
         }
         return out;
@@ -473,7 +491,7 @@ namespace skroad::land
             {
                 held[i] |= bits[i];
             }
-            LL_INFOS("SKRoadDriver") << "ban lines in " << region->getName() << LL_ENDL;
+            LL_DEBUGS("SKRoad") << "ban lines in " << region->getName() << LL_ENDL;
         });
     }
 

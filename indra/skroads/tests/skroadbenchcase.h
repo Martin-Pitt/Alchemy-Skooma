@@ -67,6 +67,7 @@ namespace skroadbench
             U64 hash = 0;
             LLVector3d pos;
             LLQuaternion rot;
+            std::shared_ptr<const skroad::KitShape> shape;      // its geometry, null where a mesh was not rebuilt
         };
         std::unordered_map<LLUUID, KitOf> kits;
         std::unordered_map<LLUUID, LLSD> faces;                        // a part's faces' surfaces (survey "faces")

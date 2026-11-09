@@ -400,11 +400,15 @@ namespace skroad
     {
         LLUUID root;
         F64 x, y, z0, z1;
+        F64 lx = 1, ly = 0;     // its linkset's long axis in plan: a rail's run, a sign panel's face (normal across it)
+        bool oriented = false;  // that axis is plain (the plan at least twice as long as wide), not a post
     };
     std::vector<SignCandidate> sSignCandidates;
     constexpr F64 END_SIGN_SIZE_M = 4.0;        // a sign's plan at most this across
     constexpr F64 END_SIGN_BESIDE_M = 6.0;      // and this far off the deck's edge, or on it
     constexpr F64 END_SIGN_Z_M = 3.0;           // standing within this of the deck's height
+    constexpr F64 END_SIGN_ACROSS_SIN = 0.5;    // a marker's long axis within 30 degrees of square to the road it ends
+    constexpr F64 END_SIGN_MARGIN_M = 1.5;      // and on that road's own width, this past its edges
 
     U64 mix(U64 h)
     {
@@ -1141,6 +1145,71 @@ namespace skroad
             if (!rec->mCollides && h >= 0.8)
             {
                 askLater(rec->mRoot);
+            }
+        }
+        // each candidate linkset's long axis in plan, from all its parts in the box: a rail laid along the road's edge
+        // is no end of that road, one laid across it is
+        if (!sSignCandidates.empty())
+        {
+            struct Moments { F64 n = 0, sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0; };
+            std::unordered_map<LLUUID, Moments> moments;
+            for (const SignCandidate& c : sSignCandidates)
+            {
+                moments.try_emplace(c.root);
+            }
+            for (const skworld::Record* rec : in_box)
+            {
+                auto it = moments.find(rec->mRoot);
+                if (it == moments.end())
+                {
+                    continue;
+                }
+                Moments& m = it->second;
+                auto add = [&m](F64 x, F64 y)
+                {
+                    m.n += 1;
+                    m.sx += x;
+                    m.sy += y;
+                    m.sxx += x * x;
+                    m.syy += y * y;
+                    m.sxy += x * y;
+                };
+                const F64 ox = rec->mOrigin.mdV[VX], oy = rec->mOrigin.mdV[VY];
+                if (rec->mShape == skworld::Shape::TRIANGLES && rec->mTriangles)
+                {
+                    for (const LLVector3& v : *rec->mTriangles)
+                    {
+                        add(ox + v.mV[VX], oy + v.mV[VY]);
+                    }
+                }
+                else
+                {
+                    for (S32 k = 0; k < 8; ++k)
+                    {
+                        LLVector3 v = rec->mCenter;
+                        for (S32 a = 0; a < 3; ++a)
+                        {
+                            v += rec->mAxes[a] * (rec->mHalf.mV[a] * ((k >> a) & 1 ? 1.f : -1.f));
+                        }
+                        add(ox + v.mV[VX], oy + v.mV[VY]);
+                    }
+                }
+            }
+            for (SignCandidate& c : sSignCandidates)
+            {
+                const Moments& m = moments[c.root];
+                if (m.n < 2)
+                {
+                    continue;
+                }
+                const F64 mx = m.sx / m.n, my = m.sy / m.n;
+                const F64 cxx = m.sxx / m.n - mx * mx, cyy = m.syy / m.n - my * my, cxy = m.sxy / m.n - mx * my;
+                const F64 half = 0.5 * (cxx + cyy), disc = std::sqrt(std::max(0.0, 0.25 * (cxx - cyy) * (cxx - cyy) + cxy * cxy));
+                const F64 big = half + disc, small = std::max(half - disc, 0.0);
+                const F64 ang = 0.5 * std::atan2(2.0 * cxy, cxx - cyy);
+                c.lx = std::cos(ang);
+                c.ly = std::sin(ang);
+                c.oriented = big > 4.0 * small;     // variance ratio 4: twice as long as wide
             }
         }
         sGathered.clear();
@@ -1971,6 +2040,14 @@ namespace skroad
     constexpr F64 LANE_MARGIN_M = 0.5;
     F64 sCarHalfW = 1.47;
     F64 laneShift(F64 keep) { return sCarHalfW + LANE_MARGIN_M + keep; }
+    // On a road of `width`, no further from the centre than leaves the car LANE_MARGIN_M inside the edge: with two
+    // lanes from TWO_LANES_M (6 m), a road under 7.9 m put the 2.9 m car's side over that margin or onto the kerb,
+    // and a width hovering at TWO_LANES_M moved the line 2 m sideways between frames.
+    F64 laneShiftIn(F64 width, F64 keep)
+    {
+        const F64 room = std::max(0.0, width / 2 - sCarHalfW - LANE_MARGIN_M);
+        return std::clamp(laneShift(keep), -room, room);
+    }
 
     // The right lane at a point: centre, direction, widths. Two lanes from TWO_LANES_M, the right lane's
     // middle a quarter of the width right of centre; `keep` moves the point right of the lane's middle on
@@ -2006,7 +2083,7 @@ namespace skroad
             ay = -ay;
         }
         const S32 lanes = width >= TWO_LANES_M ? 2 : 1;
-        const F64 shift = lanes == 2 ? laneShift(keep) : 0.0;
+        const F64 shift = lanes == 2 ? laneShiftIn(width, keep) : 0.0;
         const F64 lrx = ay, lry = -ax;          // right of travel along the road
         out.x = cx + lrx * shift;
         out.y = cy + lry * shift;
@@ -2029,8 +2106,10 @@ namespace skroad
     struct KitPlace
     {
         bool known = false;
-        U64 hash = 0;
+        U64 hash = 0, key = 0;                  // its signature's, and its kit's (kitKey: lying this way up)
         const Kit* kit = nullptr;
+        bool measuring = false;                 // its kit is being measured
+        LLQuaternion rot;                       // the root's rotation
         F64 px = 0, py = 0, pz = 0;             // the root's global position
         F64 acx = 1, acy = 0;                   // the kit's across axis in plan, unit
         F64 tried = -100.0;                     // when it was last asked, while not known
@@ -2043,30 +2122,16 @@ namespace skroad
         sKitPlaces.clear();
     }
 
-    const KitPlace& kitPlace(const LLUUID& root)
+    // Takes its kit once measured: a kit lying as a road (its across axis level), else none.
+    void placeKit(KitPlace& kp)
     {
-        KitPlace& kp = sKitPlaces[root];
-        if (kp.known || clockSeconds() - kp.tried < KIT_RETRY_S)
-        {
-            return kp;
-        }
-        kp.tried = clockSeconds();
-        LLVector3d pos;
-        LLQuaternion rot;
-        if (!host::kitOf(root, kp.hash, pos, rot))
-        {
-            return kp;
-        }
-        kp.known = true;
-        kp.px = pos.mdV[VX];
-        kp.py = pos.mdV[VY];
-        kp.pz = pos.mdV[VZ];
-        kp.kit = kitFor(kp.hash);
+        kp.kit = kitFor(kp.key);
+        kp.measuring = !kp.kit && kitAsked(kp.key) && !kitDone(kp.key);
         if (kp.kit)
         {
             LLVector3 a;
             a.mV[kp.kit->across] = 1.f;
-            a = a * rot;
+            a = a * kp.rot;
             const F64 L = std::hypot(a.mV[VX], a.mV[VY]);
             if (L < 0.7)
             {
@@ -2078,6 +2143,39 @@ namespace skroad
                 kp.acy = a.mV[VY] / L;
             }
         }
+    }
+
+    const KitPlace& kitPlace(const LLUUID& root)
+    {
+        KitPlace& kp = sKitPlaces[root];
+        if (kp.measuring)
+        {
+            placeKit(kp);
+        }
+        if (kp.known || clockSeconds() - kp.tried < KIT_RETRY_S)
+        {
+            return kp;
+        }
+        kp.tried = clockSeconds();
+        LLVector3d pos;
+        if (!host::kitOf(root, kp.hash, pos, kp.rot))
+        {
+            return kp;
+        }
+        kp.key = kitKey(kp.hash, kp.rot);
+        if (!kitAsked(kp.key))
+        {
+            if (!host::measureKit(root, kp.key))
+            {
+                return kp;                      // its shape is not all in yet: asked again later
+            }
+            kitAsk(kp.key);
+        }
+        kp.known = true;
+        kp.px = pos.mdV[VX];
+        kp.py = pos.mdV[VY];
+        kp.pz = pos.mdV[VZ];
+        placeKit(kp);
         return kp;
     }
 
@@ -2097,17 +2195,6 @@ namespace skroad
 
     bool applyKit(LanePoint& lp, F64 keep)
     {
-        static std::string path = "";
-        if (const std::string want = host::kitLibraryPath(); want != path)
-        {
-            path = want;
-            loadKitLibrary(path);
-            sKitPlaces.clear();
-        }
-        if (!kitLibraryOn())
-        {
-            return false;
-        }
         const F64 cx = (lp.left_x + lp.right_x) / 2, cy = (lp.left_y + lp.right_y) / 2;
         const LLUUID root = rootAt(cx, cy, lp.z);
         if (root.isNull())
@@ -2117,7 +2204,7 @@ namespace skroad
         const KitPlace& kp = kitPlace(root);
         if (!kp.kit || std::fabs(kp.acx * lp.ax + kp.acy * lp.ay) > 0.5)
         {
-            return false;                       // not a library kit, or crossed rather than driven along
+            return false;                       // not a measured kit, or crossed rather than driven along
         }
         const Kit& k = *kp.kit;
         const F64 s = (cx - kp.px) * kp.acx + (cy - kp.py) * kp.acy;
@@ -3602,6 +3689,10 @@ namespace skroad
     constexpr F64 JOIN_MIN_WAY_M = 2.0;         // a way on shares at least this much edge (a car's width or so)  // sharper is back the way we came
     constexpr F64 SAME_BRANCH_DEG = 20.0;       // ways on closer in direction are one branch
     constexpr F64 MIN_BRANCH_W = 3.0;           // narrower linksets are not a road on (a sign, a post)
+    // A turn off the way (TURN_NARROW_DEG or more) is onto a part the car fits with LANE_MARGIN_M either side: a
+    // cobbled footpath (Leafminer) or a driveway (Shetlon) 3-4 m across is no road to turn onto.
+    constexpr F64 TURN_NARROW_DEG = 45.0;
+    F64 turnMinBranchW() { return 2 * (sCarHalfW + LANE_MARGIN_M); }
     constexpr F64 LONE_PIECE_M = 12.0;          // a side piece shorter than this, meeting nothing further, is no branch
     constexpr F64 MAX_BRANCH_DZ = 1.5;          // nor ones higher or lower than a car drives onto
 
@@ -4252,7 +4343,7 @@ namespace skroad
                 cy = line[i].y;
             }
             const S32 lanes = (!line[i].half && w >= TWO_LANES_M) ? 2 : 1;
-            const F64 shift = lanes == 2 ? laneShift(keep) : 0.0;
+            const F64 shift = lanes == 2 ? laneShiftIn(w, keep) : 0.0;
             LanePoint lp;
             lp.x = cx + uy * shift;
             lp.y = cy - ux * shift;
@@ -5554,7 +5645,7 @@ namespace skroad
         for (size_t i = 0; i < n; ++i)
         {
             lanes[i] = fw[i] >= TWO_LANES_M ? 2 : 1;
-            const F64 shift = lanes[i] == 2 ? laneShift(keep) : 0.0;
+            const F64 shift = lanes[i] == 2 ? laneShiftIn(fw[i], keep) : 0.0;
             px[i] = cx[i] + out[i].ay * shift;
             py[i] = cy[i] - out[i].ax * shift;
         }
@@ -5828,7 +5919,7 @@ namespace skroad
                 ++sView.width_fallbacks;
             }
             const S32 lanes = w >= TWO_LANES_M ? 2 : 1;
-            const F64 shift = lanes == 2 ? laneShift(keep) : 0.0;
+            const F64 shift = lanes == 2 ? laneShiftIn(w, keep) : 0.0;
             LanePoint lp;
             lp.x = cx + uy * shift;
             lp.y = cy - ux * shift;
@@ -6694,11 +6785,21 @@ namespace skroad
         }
         sRoadPath = r.dense;
         std::string fold_why;
+        // said when its reason changes: a fold that persists is found again on every walk
+        static std::string fold_said;
         if (storeFolds(r.dense, fold_why))
         {
             // shown as it is this once (the overlay draws the model), dropped and walked afresh from the car next
-            LL_INFOS("SKRoadDriver") << "road store: holds two roads (" << fold_why << "): dropped" << LL_ENDL;
+            if (fold_why != fold_said)
+            {
+                LL_INFOS("SKRoadDriver") << "road store: holds two roads (" << fold_why << "): dropped" << LL_ENDL;
+                fold_said = fold_why;
+            }
             sStoreFolded = true;
+        }
+        else
+        {
+            fold_said.clear();
         }
         const size_t first = firstAhead(r.dense, x, y, r.car_i > 2 ? r.car_i - 2 : 0);
         sStoreOutFirst = std::min(first, r.dense.size());
@@ -6958,13 +7059,10 @@ namespace skroad
         return false;
     }
 
-    // A linkset in the kit library: a road kit's piece.
+    // A linkset measured as a road kit lying as a road: a road kit's piece.
     bool kitRoad(const LLUUID& root)
     {
-        U64 hash = 0;
-        LLVector3d pos;
-        LLQuaternion rot;
-        return kitLibraryOn() && host::kitOf(root, hash, pos, rot) && kitFor(hash);
+        return kitPlace(root).kit != nullptr;
     }
 
     // A linkset laid as square flat tiles over an area wider than a road both ways (a forecourt's 10 m asphalt
@@ -7022,6 +7120,54 @@ namespace skroad
         return false;
     }
 
+    // Road leading on out of a tiled area the walk enters at (x, y) along (dx, dy) from `from`: through the area's
+    // own tiles (linkset of `part`), a definite piece of another linkset at road width, ahead and on the line the
+    // walk came in along (a junction of square tiles between two roads), not a forecourt with no way on through.
+    constexpr F64 THROUGH_AREA_LANE_M = 6.0;    // the way out within this of the line the walk came in on
+    bool leadsOut(S32 part, S32 from, F64 x, F64 y, F64 dx, F64 dy)
+    {
+        const LLUUID& area = sParts[part]->root;
+        const LLUUID& came = sParts[from]->root;
+        std::array<S32, 32> todo;
+        std::array<S32, 32> seen;
+        S32 n_todo = 0, n_seen = 0;
+        todo[n_todo++] = part;
+        seen[n_seen++] = part;
+        while (n_todo > 0)
+        {
+            const S32 at = todo[--n_todo];
+            for (const Continuation& c : sConts[at])
+            {
+                const F64 ahead = (c.x - x) * dx + (c.y - y) * dy;
+                if (c.other == from || ahead < 2.0 || std::fabs((c.x - x) * dy - (c.y - y) * dx) > THROUGH_AREA_LANE_M)
+                {
+                    continue;
+                }
+                const PieceShapes& po = *sParts[c.other];
+                if (po.root == area)
+                {
+                    if (n_seen < S32(seen.size()) && std::find(seen.begin(), seen.begin() + n_seen, c.other) == seen.begin() + n_seen)
+                    {
+                        seen[n_seen++] = c.other;
+                        todo[n_todo++] = c.other;
+                    }
+                    continue;
+                }
+                if (po.root == came || !sPartDefinite[c.other] || openArea(po.root))
+                {
+                    continue;
+                }
+                F64 ax, ay, along, across;
+                partAxis(po, dx, dy, ax, ay, along, across);
+                if (across >= MIN_BRANCH_W && across < OPEN_W)
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     // Each refusal or allowance logged once per part and reason.
     std::unordered_set<std::string> sLandLogged;
     void logLand(const LLUUID& part, const std::string& what)
@@ -7057,6 +7203,11 @@ namespace skroad
         }
         if (!own_road && !strong && openArea(pn.root))
         {
+            if (leadsOut(part, from, x, y, dx, dy))
+            {
+                logLand(pn.part, "allowed: square tiles the road goes on through (a junction, not an open area)");
+                return nullptr;
+            }
             logLand(pn.part, "refused: an open area of square tiles, no road kit through it");
             return "open area";
         }
@@ -7205,9 +7356,26 @@ namespace skroad
         if (at < 0)
         {
             sView.route = sCommitted.empty() ? "seeded" : "seeded afresh: " + (reseed.empty() ? std::string("off the route") : reseed);
+            // a reseed for the reason last said is counted, not said again, for ROUTE_SAY_GAP_S
+            static std::string route_said;
+            static F64 route_said_at = -1e9;
+            static S32 route_unsaid = 0;
+            constexpr F64 ROUTE_SAY_GAP_S = 10.0;
             if (!sCommitted.empty())
             {
-                LL_INFOS("SKRoadDriver") << "road route " << sView.route << LL_ENDL;
+                if (sView.route != route_said || now - route_said_at > ROUTE_SAY_GAP_S)
+                {
+                    LL_INFOS("SKRoadDriver") << "road route " << sView.route
+                                             << (route_unsaid > 0 ? llformat(" (%d more reseeds since the last line)", route_unsaid) : std::string())
+                                             << LL_ENDL;
+                    route_said = sView.route;
+                    route_said_at = now;
+                    route_unsaid = 0;
+                }
+                else
+                {
+                    ++route_unsaid;
+                }
             }
             sCommitted.clear();
             sOffRouteSince = -1;
@@ -7256,7 +7424,7 @@ namespace skroad
                 if (!why.empty())
                 {
                     store_why = why;
-                    LL_INFOS("SKRoadDriver") << "road store: " << why
+                    LL_DEBUGS("SKRoad") << "road store: " << why
                                              << (k_hit < 0 ? std::string("- nothing ahead re-laid")
                                                            : llformat("- re-laid from step %d of %d (part %s, %.0f m ahead of the car)", k_hit,
                                                                       S32(sStored.steps.size()), sStored.steps[k_hit].part.asString().substr(0, 8).c_str(),
@@ -7708,6 +7876,28 @@ namespace skroad
                 const S32 kind = endSignByName(s.root);
                 if (kind >= 2 || (kind == 1 && std::hypot(gx, gy) < 1.0))
                 {
+                    // Nexii's rule (2026-11-07, Richfield and Japan Plaza): a marker ends only the road running into
+                    // it: on that road's own width ahead, and a rail or a sign's panel square to it; a road running
+                    // past it, the marker beside its edge, is not ended. Where a way on turns off before the marker
+                    // (the side road's end at a T), the marker says turn there, not a dead end.
+                    F64 rax, ray, ralong, racross;
+                    partAxis(pc, dx, dy, rax, ray, ralong, racross);
+                    const F64 lateral = std::fabs((s.x - pc.cx) * ray - (s.y - pc.cy) * rax);
+                    if (lateral > 0.5 * racross + END_SIGN_MARGIN_M || (s.oriented && std::fabs(s.lx * rax + s.ly * ray) > END_SIGN_ACROSS_SIN))
+                    {
+                        continue;
+                    }
+                    bool turns = false;
+                    for (const Continuation& c : sConts[cur])
+                    {
+                        const F64 at = (c.x - px) * dx + (c.y - py) * dy;
+                        turns |= (sPartDefinite[c.other] || sPartPending[c.other]) && visited[c.other] != walk && at > (first ? 0.5 : -2.0)
+                                 && at < along;
+                    }
+                    if (turns)
+                    {
+                        continue;
+                    }
                     best = along;
                     const host::Props* props = host::properties(s.root);
                     const Sign* sign = kind == 3 ? signByTexture(s.root) : nullptr;
@@ -7809,6 +7999,11 @@ namespace skroad
                 {
                     ++why_strip;
                     return;       // a strip, a catseye
+                }
+                if (bacross < turnMinBranchW() && std::fabs(std::atan2(dx * bdy - dy * bdx, bdx * dx + bdy * dy)) * 180 / PI >= TURN_NARROW_DEG)
+                {
+                    ++why_strip;
+                    return;       // a turn onto a footpath or a driveway: no lane the car fits
                 }
                 if (!side_pass && !partSquare(pn) && std::fabs(bdx * dx + bdy * dy) < 0.5)
                 {
@@ -8130,6 +8325,30 @@ namespace skroad
                     branches.swap(kept);
                 }
             }
+            // Overlapping pieces can expose both the next piece and its successor as exits.
+            if (branches.size() > 1)
+            {
+                std::vector<Branch> kept;
+                for (const Branch& b : branches)
+                {
+                    bool successor = false;
+                    for (const Branch& o : branches)
+                    {
+                        if (o.seg == b.seg || o.seg < 0 || b.seg < 0 || o.dx * b.dx + o.dy * b.dy <= 0)
+                            continue;
+                        for (const Continuation& c : sConts[o.seg])
+                        {
+                            if (c.other == b.seg && (c.x - o.x) * o.dx + (c.y - o.y) * o.dy > 0.5
+                                && (c.x - b.x) * b.dx + (c.y - b.y) * b.dy < 0)
+                                successor = true;
+                        }
+                    }
+                    if (!successor)
+                        kept.push_back(b);
+                }
+                if (!kept.empty())
+                    branches.swap(kept);
+            }
             if (branches.empty())
             {
                 // this half meets nothing on, while the road's other half alongside does: on a bend the next
@@ -8179,6 +8398,7 @@ namespace skroad
                         partAxis(pn, bdx, bdy, bax, bay, balong, bacross);
                         const F64 turn = std::atan2(dx * bdy - dy * bdx, bdx * dx + bdy * dy) * 180 / PI;
                         if (bacross < MIN_BRANCH_W || std::fabs(turn) > MAX_BRANCH_TURN_DEG
+                            || (bacross < turnMinBranchW() && std::fabs(turn) >= TURN_NARROW_DEG)
                             || (!branches.empty() && std::fabs(turn) >= std::fabs(branches[0].turn_deg)))
                         {
                             continue;
@@ -8653,7 +8873,7 @@ namespace skroad
                 s_in = (px - sg.cx) * sax + (py - sg.cy) * say;
                 s_out = (sax == sg.ax) ? sg.hi : -sg.lo;
                 const S32 lanes = sg.width >= TWO_LANES_M ? 2 : 1;
-                const F64 shift = lanes == 2 ? laneShift(keep) : 0.0;
+                const F64 shift = lanes == 2 ? laneShiftIn(sg.width, keep) : 0.0;
                 const F64 rx = say, ry = -sax;
                 for (F64 s_ = std::max(s_in, sax == sg.ax ? sg.lo : -sg.hi); s_ <= s_out + 1e-6; s_ += PATH_STEP)
                 {
