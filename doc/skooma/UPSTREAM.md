@@ -21,7 +21,7 @@ lands, is offered or is merged.
 | `atmo/clouds` | Atmo Magic | Cloud density model and puff renderer | `atmo/sky` | see spec |
 | `atmo/weather` | Atmo Magic | Weather cube, wind, precipitation | `atmo/clouds` | yes |
 | `atmo/water` | Atmo Magic | Water renderer | `atmo/weather` | ask Rye first |
-| `render/prim-split` | Its own feature | Untwisted flat-sided prims without the legacy edge splits; Render Tests A/B toggle; geometry-equivalence test | `render` | yes |
+| `render/prim-split` | Its own feature | Untwisted flat-sided prims without the legacy edge splits | — | no; dropped 2026-11-09, upstream's `profile_split` and LOD invariance (`bf1cee1f79`) do it |
 | `fix-llcommon/queuedthread-wake-race` | Its own fix | `llqueuedthread_test` checks a woken request's turns only while its 250 ms fallback is not yet due (failed on stalled macOS CI) | `develop` | yes |
 | [`fix-scripteditor/publish-coro-mutex`](https://github.com/AlchemyViewer/Alchemy/pull/606) | Its own fix | Script editor server safe under its async handlers' coroutines: no `LLMutex` on their paths (Explore in IDE and `object.request` aborts), `object.item.create` no longer spins the main thread, subscribe and server-release races | `develop` | merged upstream: AlchemyViewer/Alchemy#606 |
 | `fix-scripteditor/published-inventory-refetch` | Its own fix | A published prim whose inventory another path dropped is fetched again; a save that misses while it loads gets a retryable error, not "Item not found" |
@@ -55,7 +55,6 @@ develop
 ├── sky/seeded
 ├── sky/layers ──────────┬─► sky/farlayer
 ├── render/farplane      │   (merged upstream)
-├── render/prim-split
 ├── audio/loudness-normalization
 └── atmo/registry
     └── atmo/provider

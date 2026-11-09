@@ -1408,17 +1408,7 @@ Unmarked: `AlchemyMouselookIFF`, `AlchemyMouselookIFFMarkers`, `AlchemyMouselook
 
 ## Prim edge splits
 
-Branch `feature-render/prim-split`. Upstream's `profile_split` took over dropping the splits at the develop sync `ab3b18133a`; the legacy toggle, its listener, `regenPrims` and `llvolumesplit_test` were dropped after it (main `cc94ed261a`). What is left is LOD sharing between details that build the same prim.
-
-### Injection sites
-
-| File | What | Why there |
-|---|---|---|
-| `indra/llmath/llvolume.h` / `.cpp` | `getProfileSplit` (follows `profile_split`), `isSameMesh` (compares path and profile at two details, redoing the hole-touches-wall split as `generate()` does) | LOD equivalence matches what `generate()` builds |
-| `indra/llmath/llvolumemgr.h` / `.cpp` | `LLVolumeLODGroup::getCanonicalLOD` (cached `mCanonicalLOD`) | Per-shape LOD cache lives in the group |
-| `indra/newview/llvovolume.cpp` | `calcLOD` returns no change between LODs with the same canonical LOD | Skips rebuilds that change nothing |
-| `indra/llmath/llvolume.cpp` | End of `createSide`: a sculpt's degenerate (pinched) triangles dropped from the indices (unmarked; `fix-sculpt-degenerate`, merge `3f39170197`) | Each rasterised as a stripe across the region |
-| `indra/llmath/tests/llvolume_test.cpp` | New TUT test for the above (unprefixed, unmarked), registered in a marked guard in `llmath/CMakeLists.txt` | Build |
+Dropped 2026-11-09; no injection is left. Branch `feature-render/prim-split` (gone), with `feature-render/vertical-reach` under it. Upstream's `profile_split` took over dropping the splits at the develop sync `ab3b18133a`, and its LOD invariance (`bf1cee1f79`) does the LOD sharing that was left, so both branches left `main` when it was rebuilt from the public branches (main `ebaacd9a41` removed the last of it from `llvolume.cpp`). The sculpt pinch fix that sat in this section (`feature-render/sculpt-pinch`) is upstream as `1994334c9c`; its one remaining difference is the unmarked `checkLayout(..., bool sculpt, ...)` parameter in `indra/llmath/tests/llvolume_test.cpp`.
 
 ---
 
