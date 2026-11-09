@@ -329,15 +329,27 @@ void SKWorldMapRoads::draw(const SKWorldMapFrame& frame, S32 width, S32 height)
     };
 
     mSource->forEachRegion([&](U64, const RoadRegion& region) {
-        // Skip a region wholly behind the eye.
-        bool ahead = false;
-        for (S32 i = 0; i < 8 && !ahead; ++i)
+        // Skip a region whose bounds lie wholly outside one side of the view: behind the eye, or past the
+        // left, right, top or bottom of the screen (widened a little for the roads' minimum width).
+        constexpr F64 SLACK = 1.05;
+        const F64 tan_y = std::tan(frame.mFovY * 0.5) * SLACK;
+        const F64 tan_x = tan_y * width / std::max(height, 1);
+        bool behind = true, left = true, right_out = true, below = true, above = true;
+        for (S32 i = 0; i < 8; ++i)
         {
             const LLVector3d corner(i & 1 ? region.mMax.mdV[VX] : region.mMin.mdV[VX], i & 2 ? region.mMax.mdV[VY] : region.mMin.mdV[VY],
                                     i & 4 ? region.mMax.mdV[VZ] : region.mMin.mdV[VZ]);
-            ahead = (corner - frame.mEye) * forward > near_depth;
+            const LLVector3d rel = corner - frame.mEye;
+            const F64 d = rel * forward;
+            const F64 x = rel * right;
+            const F64 y = rel * up;
+            behind = behind && d <= near_depth;
+            left = left && x < -tan_x * d;
+            right_out = right_out && x > tan_x * d;
+            below = below && y < -tan_y * d;
+            above = above && y > tan_y * d;
         }
-        if (!ahead)
+        if (behind || left || right_out || below || above)
         {
             return;
         }
