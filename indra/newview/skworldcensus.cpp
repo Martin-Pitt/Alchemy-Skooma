@@ -1714,7 +1714,7 @@ LLUUID SKWorldCensus::visitCached(const CachedPart& part)
     facts.mShape.mPhysicsType = facts.mPhysicsUnknown ? (U8)LLViewerObject::PHYSICS_SHAPE_PRIM : type;
     if (facts.mPhysicsUnknown && object->mMesh)
     {
-        gObjectList.requestPhysicsShapeType(object->mId);
+        gObjectList.requestPhysicsShapeType(object->mId, part.mRegion);
     }
     visitPart(facts, nullptr);
     return object->mId;

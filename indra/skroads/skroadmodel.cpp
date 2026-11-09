@@ -6926,8 +6926,170 @@ namespace skroad
         r.keep = keep;
     }
 
+    // ---------------------------------------------------------------- where the walk may go on to
+
+    // Nexii's rules (2026-11-07, Melanthia: the line turned off Route 5 through an arch onto SLRR Melanthia Station's
+    // forecourt, mole-built asphalt tiles on the station's own parcel): the walk goes on, and a junction offers a
+    // branch, only onto road. A pavement, a plaza or a forecourt is not road, Linden's or not; a parcel named for a
+    // place (a station, an airport) is a destination, entered only along a road leading through it; and without
+    // SKRoadAutopilotPrivateRoads the car keeps to Linden road land. Refused, the parcel line is a road end.
+    constexpr F64 OPEN_AREA_M = 20.0;           // a linkset of square tiles this wide both ways is an area, not a road
+    constexpr S32 OPEN_AREA_TILES = 3;
+
+    bool pedestrianName(const std::string& raw)
+    {
+        std::string n = raw;
+        LLStringUtil::toLower(n);
+        for (const char* road : { "road", "street", "route", "highway", "avenue" })
+        {
+            if (n.find(road) != std::string::npos)
+            {
+                return false;
+            }
+        }
+        for (const char* walk : { "pavement", "sidewalk", "footpath", "walkway", "plaza", "forecourt", "platform", "station",
+                                  "pedestrian", "path" })
+        {
+            if (n.find(walk) != std::string::npos)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // A linkset in the kit library: a road kit's piece.
+    bool kitRoad(const LLUUID& root)
+    {
+        U64 hash = 0;
+        LLVector3d pos;
+        LLQuaternion rot;
+        return kitLibraryOn() && host::kitOf(root, hash, pos, rot) && kitFor(hash);
+    }
+
+    // A linkset laid as square flat tiles over an area wider than a road both ways (a forecourt's 10 m asphalt
+    // squares), or one big square slab: its tiles have no axis to walk along. Worked once per linkset per walk.
+    std::unordered_map<LLUUID, bool> sOpenAreas;
+    bool openArea(const LLUUID& root)
+    {
+        if (auto it = sOpenAreas.find(root); it != sOpenAreas.end())
+        {
+            return it->second;
+        }
+        S32 tiles = 0, others = 0;
+        F64 x0 = 1e18, y0 = 1e18, x1 = -1e18, y1 = -1e18;
+        for (const PieceShapes* p : sParts)
+        {
+            if (p->root != root)
+            {
+                continue;
+            }
+            F64 ax, ay, along, across;
+            partAxis(*p, 1, 0, ax, ay, along, across);
+            (partSquare(*p) ? tiles : others) += 1;
+            const F64 h = 0.5 * std::max(along, across);
+            x0 = std::min(x0, p->cx - h);
+            x1 = std::max(x1, p->cx + h);
+            y0 = std::min(y0, p->cy - h);
+            y1 = std::max(y1, p->cy + h);
+        }
+        bool open = false;
+        if (tiles + others > 0)
+        {
+            const bool wide = x1 - x0 >= OPEN_AREA_M && y1 - y0 >= OPEN_AREA_M;
+            open = wide && (tiles >= OPEN_AREA_TILES || (tiles == 1 && others == 0)) && tiles >= 2 * others;
+        }
+        sOpenAreas[root] = open;
+        return open;
+    }
+
+    // Road going on out of `part` past (x, y) along (dx, dy): a definite piece of road width ahead, not `from`.
+    bool leadsOn(S32 part, S32 from, F64 x, F64 y, F64 dx, F64 dy)
+    {
+        for (const Continuation& c : sConts[part])
+        {
+            if (c.other == from || !sPartDefinite[c.other] || (c.x - x) * dx + (c.y - y) * dy < 2.0)
+            {
+                continue;
+            }
+            F64 ax, ay, along, across;
+            partAxis(*sParts[c.other], dx, dy, ax, ay, along, across);
+            if (across >= MIN_BRANCH_W && across < OPEN_W)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Each refusal or allowance logged once per part and reason.
+    std::unordered_set<std::string> sLandLogged;
+    void logLand(const LLUUID& part, const std::string& what)
+    {
+        if (sLandLogged.size() > 4096)
+        {
+            sLandLogged.clear();
+        }
+        if (sLandLogged.insert(part.asString() + what).second)
+        {
+            LL_INFOS("SKRoadDriver") << "walk onto " << part << ": " << what << LL_ENDL;
+        }
+    }
+
+    // Why the walk may not go on from `from` onto `part`, entered at (x, y) along (dx, dy); null where it may.
+    // `unknown` is set where the land's owner is not in yet (no choice at a junction onto it; a sole way on stands).
+    const char* landRefuses(S32 from, S32 part, F64 x, F64 y, F64 dx, F64 dy, bool& unknown)
+    {
+        unknown = false;
+        const PieceShapes& pn = *sParts[part];
+        const PieceShapes& pc = *sParts[from];
+        const bool own_road = pn.root == pc.root || std::find(sChainRoots.begin(), sChainRoots.end(), pn.root) != sChainRoots.end();
+        F64 ax, ay, along, across;
+        partAxis(pn, dx, dy, ax, ay, along, across);
+        // the strong signal: road outright, of a road kit or the road already walked, at road width, leading on
+        const bool kit = kitRoad(pn.root);
+        const bool strong = sPartDefinite[part] && (kit || own_road) && across < OPEN_W && leadsOn(part, from, x, y, dx, dy);
+        const host::Props* props = host::properties(pn.root);
+        if (props && !kit && pedestrianName(props->mName))
+        {
+            logLand(pn.part, "refused: pavement by its name \"" + props->mName + "\"");
+            return "pavement";
+        }
+        if (!own_road && !strong && openArea(pn.root))
+        {
+            logLand(pn.part, "refused: an open area of square tiles, no road kit through it");
+            return "open area";
+        }
+        const bool private_ok = host::privateRoadsAllowed();
+        for (F64 d : { 2.0, 6.0 })
+        {
+            std::string name;
+            const S32 state = host::roadLandAt(x + dx * d, y + dy * d, &name);
+            if (state == 2)
+            {
+                if (!strong)
+                {
+                    logLand(pn.part, "refused: destination parcel \"" + name + "\" (no road kit leading through)");
+                    return "destination parcel";
+                }
+                logLand(pn.part, "allowed into destination parcel \"" + name + "\": " + (kit ? "a road kit" : "the road walked") + " leading on");
+            }
+            else if (state == 0 && !private_ok)
+            {
+                logLand(pn.part, "refused: not Linden road land, parcel \"" + name + "\"");
+                return "not Linden land";
+            }
+            else if (state < 0 && !private_ok)
+            {
+                unknown = true;
+            }
+        }
+        return nullptr;
+    }
+
     std::vector<LanePoint> boxWalk(F64 x, F64 y, F64 z, F64 hx, F64 hy, F64 v, F64 keep)
     {
+        sOpenAreas.clear();
         LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sk road - boxWalk");
         forgetPassedCommit(x, y);
         sWalkParts.clear();
@@ -7598,7 +7760,7 @@ namespace skroad
             }
             const PieceShapes& pc = *sParts[cur];
             std::vector<Branch> ways;
-            S32 why_visited = 0, why_not_road = 0, why_behind = 0, why_beside = 0, why_strip = 0, why_turn = 0, why_ground = 0;
+            S32 why_visited = 0, why_not_road = 0, why_behind = 0, why_beside = 0, why_strip = 0, why_turn = 0, why_ground = 0, why_land = 0;
             const bool on_surface = ofSurface(*sParts[cur]);
             std::vector<S32> halves;        // the road's other half alongside (the beside meetings)
             // the meetings beside, tried again as ways on where only stubs lead on (a T: the road ends at a cross road
@@ -7669,11 +7831,18 @@ namespace skroad
                     ++why_ground;
                     return;       // past the road's end: ground
                 }
+                bool land_unknown = false;
+                if (landRefuses(cur, c.other, c.x, c.y, bdx, bdy, land_unknown))
+                {
+                    ++why_land;
+                    return;       // a pavement, an open area, a destination or land not Linden's: no way on
+                }
                 if (sPartPending[c.other] && sAskFirstSet.insert(pn.root).second)
                 {
                     sAskFirst.push_back(pn.root);   // the road ahead, its name not here yet: asked first
                 }
                 Branch b;
+                b.land_unknown = land_unknown;
                 b.seg = c.other;
                 b.root = pn.root;
                 b.part = pn.part;
@@ -7886,6 +8055,26 @@ namespace skroad
                     branches.swap(kept);
                 }
             }
+            if (branches.size() > 1 && !host::privateRoadsAllowed())
+            {
+                // a choice is made only onto land known to be Linden road: one whose owner is not in yet is not offered
+                std::vector<Branch> kept;
+                for (const Branch& br : branches)
+                {
+                    if (!br.land_unknown)
+                    {
+                        kept.push_back(br);
+                    }
+                    else
+                    {
+                        logLand(br.id(), "not offered at a junction: the land's owner not known yet");
+                    }
+                }
+                if (!kept.empty())
+                {
+                    branches.swap(kept);
+                }
+            }
             if (branches.size() > 1 && sPartDefinite[cur])
             {
                 // a turn off a road is offered only onto road: a piece only road-shaped (a car park, a driveway, a
@@ -7980,6 +8169,12 @@ namespace skroad
                                 bdy = ay;
                             }
                         }
+                        bool land_unknown = false;
+                        if (landRefuses(cur, c2.other, c2.x, c2.y, bdx, bdy, land_unknown))
+                        {
+                            ++why_land;
+                            continue;
+                        }
                         F64 bax, bay, balong, bacross;
                         partAxis(pn, bdx, bdy, bax, bay, balong, bacross);
                         const F64 turn = std::atan2(dx * bdy - dy * bdx, bdx * dx + bdy * dy) * 180 / PI;
@@ -8031,7 +8226,12 @@ namespace skroad
                 // a ramp: the lip above the run-up to it (a seam between level pieces is no jump)
                 const S32 land = partHeightAt(pc, lipx - 0.5 * jdx, lipy - 0.5 * jdy, lipz) && lipz - surfaceAt(runx, runy, lipz) >= JUMP_RAMP_M
                                      ? jumpLanding(cur, visited, walk, lipx, lipy, lipz, jdx, jdy, lx, ly, lz) : -1;
-                if (land >= 0 && std::hypot(lx - lipx, ly - lipy) >= JUMP_GAP_M)
+                bool land_unknown = false;
+                if (land >= 0 && landRefuses(cur, land, lx, ly, jdx, jdy, land_unknown))
+                {
+                    ++why_land;
+                }
+                else if (land >= 0 && std::hypot(lx - lipx, ly - lipy) >= JUMP_GAP_M)
                 {
                     sView.jump = true;
                     jump_step = walked.size() - 1;
@@ -8086,12 +8286,26 @@ namespace skroad
                 // why it ends here, for the view log: the part, where, and what its meetings were turned away for
                 // the road's end: ground was all there was ahead (see leadsToSurface), beside the road's own other
                 // half and strips (a way too sharp could be the road doubling back: no end)
-                const bool at_end = why_ground > 0 && why_turn == 0;
+                // or a way on was refused (a pavement, an open area, a destination, land not Linden's)
+                // or nothing to walk at all ahead (no meeting but ground that is not road): a road end, unless the
+                // part's far side is at a region edge, where the next region's pieces may not be in yet
+                const F64 far_m = farSide(pc, px, py, dx, dy);
+                const F64 ex = std::fmod(px + far_m * dx, 256.0), ey = std::fmod(py + far_m * dy, 256.0);
+                const bool at_edge = ex < 8.0 || ex > 248.0 || ey < 8.0 || ey > 248.0;
+                const bool nothing = why_visited == 0 && why_behind == 0 && why_beside == 0 && why_strip == 0 && why_turn == 0
+                                     && why_ground == 0 && why_land == 0;
+                const bool at_end = (why_ground > 0 && why_turn == 0) || why_land > 0 || (nothing && !at_edge);
+                if (why_land > 0 || nothing)
+                {
+                    logLand(pc.part, why_land > 0 ? "line ends: every way on refused (road end)"
+                                     : at_edge  ? "line ends at a region edge: nothing to walk yet (waiting for its pieces)"
+                                                : "line ends: nothing to walk ahead (road end)");
+                }
                 stuck = !at_end && at >= 0;
                 sView.walk_end = llformat("%spart %s at %.1f,%.1f after %.0f m: meetings %d (visited %d, not road %d, behind %d, beside %d, "
-                                          "strip %d, too sharp %d, ground %d)", at_end ? WALK_END_ROAD_END : "",
+                                          "strip %d, too sharp %d, ground %d, refused land %d)", at_end ? WALK_END_ROAD_END : "",
                                           pc.part.asString().substr(0, 8).c_str(), px, py, travelled, S32(sConts[cur].size()), why_visited,
-                                          why_not_road, why_behind, why_beside, why_strip, why_turn, why_ground);
+                                          why_not_road, why_behind, why_beside, why_strip, why_turn, why_ground, why_land);
                 // the road ends here (or its next part has not come yet): on to the part's far side
                 const F64 through = farSide(pc, px, py, dx, dy);
                 line.push_back({ px + through * dx, py + through * dy, cur, cur });

@@ -148,6 +148,11 @@ namespace skroad::drive
     constexpr F64 TAU_NOISE = 0.4, TAU_KICK = 0.25, KICK_WINDOW = 1.0, KICK_SIZE = 30.0;
     constexpr F64 LOST_S = 8.0;                 // no road this long: give up
     constexpr F64 LOST_BRAKE_S = 6.0;           // and braking to a stop on the road no longer than this past it
+    // The model marks the road seen whenever its walk finds one, a line the driver then refuses (back over the trail)
+    // included: lost the road counts from the last line the driver kept, and no kept line for NO_LINE_STUCK_S, a
+    // road still loading or not, ends the run as stuck (Satellite: refused lines for 8 min after a turn round).
+    constexpr F64 NO_LINE_STUCK_S = 45.0;
+    F64 sLineKeptAt = 0.0;
     // online fit (openpilot's torqued / lagd)
     constexpr F64 GAIN_SANITY = 0.3;
     constexpr S32 DELAY_MIN = -6, DELAY_MAX = 6;           // frames
@@ -189,6 +194,12 @@ namespace skroad::drive
     // overlay draws it, and a fresh line laid back over it is refused unless the driver turned round on purpose.
     std::deque<TrailPoint> sTrail;          // TrailPoint: skroaddriveinternal.h
     U64 sTrailCount = 0;                        // trail points ever added: sTrail[i] is number sTrailCount - size + i
+    // Pinned against something beside the lane (a low kerb, a deck's edge, a rail: read as road by the model), the
+    // lane line is moved KERB_BIAS_M away from the side of the road the car stood on for the next KERB_BIAS_RUN_M
+    // driven, as a driver keeps off a kerb once hit (Cisseps and Stout: backed off and drove into the same kerb).
+    constexpr F64 KERB_BIAS_M = 1.0, KERB_BIAS_MAX_M = 2.0, KERB_BIAS_RUN_M = 60.0;
+    F64 sKerbBias = 0.0;                        // + right, as SKRoadAutopilotLaneOffset
+    U64 sKerbBiasUntil = 0;                     // while sTrailCount is under this
     U64 sTrailTurnCount = 0;                    // the first point since the last deliberate turn (or start)
     constexpr F64 TRAIL_MAX_M = 5000.0, TRAIL_OFF_FORGET_S = 300.0, TRAIL_JUMP_M = 60.0;
     F64 sTrailOffAt = -1.0;                     // wall clock: when the driver last went off
@@ -249,19 +260,33 @@ namespace skroad::drive
     }
 
     // The one place the driving keys go out. W and S together are the car's jump, so they never go in the same
-    // frame, whatever asked for both, and S follows W only from the frame after W was let go.
+    // frame, whatever asked for both, and S follows W only once W has been off for a simulator frame.
+    constexpr F64 W_OFF_BEFORE_S = 0.023;      // one simulator frame at 45 Hz
     U32 sLastSentKeys = 0;
+    F64 sLastWSent = -1.0;
+    bool sBothLogged = false;       // once a run
     void sendKeys(U32 keys, std::string& note)
     {
         constexpr U32 BOTH = AGENT_CONTROL_AT_POS | AGENT_CONTROL_AT_NEG;
+        const F64 t = LLTimer::getTotalSeconds();
         const bool asked_both = (keys & BOTH) == BOTH;
-        if (asked_both || ((keys & AGENT_CONTROL_AT_NEG) && (sLastSentKeys & AGENT_CONTROL_AT_POS)))
+        if (asked_both)
         {
-            keys &= asked_both ? ~BOTH : ~U32(AGENT_CONTROL_AT_NEG);
-            if (asked_both)
+            keys &= ~BOTH;
+            note += note.empty() ? "W+S suppressed" : ", W+S suppressed";
+            if (!sBothLogged)
             {
-                note += note.empty() ? "W+S suppressed" : ", W+S suppressed";
+                sBothLogged = true;
+                LL_WARNS("SKRoadDriver") << "W and S asked in one frame, both let go: " << note << LL_ENDL;
             }
+        }
+        else if ((keys & AGENT_CONTROL_AT_NEG) && sLastWSent >= 0.0 && t - sLastWSent < W_OFF_BEFORE_S)
+        {
+            keys &= ~U32(AGENT_CONTROL_AT_NEG);     // W was let go too recently: S waits
+        }
+        if (keys & AGENT_CONTROL_AT_POS)
+        {
+            sLastWSent = t;
         }
         sLastSentKeys = keys;
         gAgent.setControlFlags(keys);
@@ -1150,9 +1175,11 @@ namespace skroad::drive
         return want;
     }
 
-    std::pair<S32, S32> pwmSteer(const LLVector3d& pos, F64 yaw, F64 speed, F64 now, std::string& note)
+    // The outer loop both actuators share: the line's wanted yaw rate (deg/s, left +), the pull and the lane guard.
+    F64 pwmOuter(const LLVector3d& pos, F64 yaw, F64 speed, F64 now, F64& dt_out)
     {
         const F64 dt = sPwmPrevT < 0 ? 0.0 : std::min(0.1, now - sPwmPrevT);
+        dt_out = dt;
         sPwmPrevT = now;
         if (dt > 0)
         {
@@ -1188,6 +1215,13 @@ namespace skroad::drive
                 sLaneGuard = false;
             }
         }
+        return want;
+    }
+
+    std::pair<S32, S32> pwmSteer(const LLVector3d& pos, F64 yaw, F64 speed, F64 now, std::string& note)
+    {
+        F64 dt = 0;
+        const F64 want = pwmOuter(pos, yaw, speed, now, dt);
         // learn the taps' delivery: the turn made against the turn fired, once it has landed
         F64 fired = 0;
         for (const auto& [t, deg] : sPwmFired)
@@ -1272,13 +1306,132 @@ namespace skroad::drive
         return { d, h };
     }
 
-    F64 sLiftUntil = -100.0, sLiftNext = -100.0;     // a lift off W for a bend (bendLift): until, next allowed
+    // ---------------------------------------------------------------- the two-mode actuator (SKRoadAutopilotSteerActuator "twomode")
+
+    // The sim sees a release only if the key is up across a whole sim frame, and a release it sees starts the
+    // car's turn build-up again (the PWM study, 2026-11-07). Gentle: hold N sim frames, then a seen release, N from
+    // the vis sweep's steady rates (the same in gears 1 and 2: the car asks a yaw rate). Strong: hold until the
+    // turn passes the wanted, then a seen release. A one-frame counter-tap ends a turn running past the wanted.
+    struct SKTwoModeSteer
+    {
+        static constexpr F64 SIM_DT = 1.0 / 45;
+        static constexpr F64 RELEASE_S = 3.2 * SIM_DT;      // always seen by the sim
+        static constexpr F64 STRONG_DEG = 26.0, OVER_DEG = 8.0, MIN_DEG = 3.0;
+        static constexpr S32 VIS_N[] = { 1, 2, 3, 4, 6, 8, 12, 16, 24 };
+        static constexpr F64 VIS_DEG[] = { 9.4, 14.2, 14.8, 16.9, 19.0, 20.6, 23.2, 27.3, 30.5 };
+        enum Mode : S32 { QUIET, GENTLE, STRONG, RELEASE, COUNTER_WAIT, COUNTER };
+
+        S32 dir = 0, counter_dir = 0, hold_n = 0;
+        F64 until = 0, rest_until = -1, counter_at = -1;
+        bool counter_pending = false;
+        Mode mode = QUIET;
+
+        void reset() { *this = SKTwoModeSteer(); }
+
+        // The key this frame (+1 left, -1 right, 0 none) from the wanted and the car's yaw rate (deg/s, left +),
+        // at `t` with `frame_dt` the viewer's frame time (s): every time is held to whole viewer frames, rounded up.
+        S32 step(F64 want, F64 rate, F64 t, F64 frame_dt)
+        {
+            if (counter_pending)
+            {
+                if (t >= counter_at)
+                {
+                    counter_pending = false;
+                    rest_until = t + frame_dt + RELEASE_S;
+                    mode = COUNTER;
+                    return counter_dir;
+                }
+                mode = COUNTER_WAIT;
+                return 0;
+            }
+            if (dir != 0)
+            {
+                const bool strong = std::fabs(want) >= STRONG_DEG && want * dir > 0;
+                if (t < until || (strong && std::fabs(rate) < std::fabs(want)))
+                {
+                    if (t >= until)
+                    {
+                        mode = STRONG;
+                    }
+                    return dir;
+                }
+                dir = 0;
+                rest_until = t + RELEASE_S;
+                mode = RELEASE;
+                return 0;
+            }
+            if (t < rest_until)
+            {
+                mode = RELEASE;
+                return 0;
+            }
+            if (rate * (want >= 0 ? 1 : -1) > std::fabs(want) + OVER_DEG && std::fabs(rate) > OVER_DEG)
+            {
+                counter_dir = rate > 0 ? -1 : 1;
+                counter_at = t + 2 * frame_dt;
+                counter_pending = true;
+                mode = COUNTER_WAIT;
+                return 0;
+            }
+            if (std::fabs(want) < MIN_DEG)
+            {
+                mode = QUIET;
+                return 0;
+            }
+            const S32 d = want > 0 ? 1 : -1;
+            dir = d;
+            if (std::fabs(want) >= STRONG_DEG)
+            {
+                until = t;
+                hold_n = 0;
+                mode = STRONG;
+                return d;
+            }
+            hold_n = VIS_N[std::size(VIS_N) - 1];
+            for (size_t i = 0; i < std::size(VIS_N); ++i)
+            {
+                if (VIS_DEG[i] >= std::fabs(want))
+                {
+                    hold_n = VIS_N[i];
+                    break;
+                }
+            }
+            until = t + hold_n * SIM_DT;
+            mode = GENTLE;
+            return d;
+        }
+    };
+    SKTwoModeSteer sTwoMode;
+
+    // Each frame under the two-mode actuator: the key, and each change of mode in the drive log's note.
+    S32 twoModeSteer(const LLVector3d& pos, F64 yaw, F64 speed, F64 now, std::string& note)
+    {
+        F64 dt = 0;
+        const F64 want = std::clamp(pwmOuter(pos, yaw, speed, now, dt), -PWM_WANT_MAX_DEG, PWM_WANT_MAX_DEG);
+        const S32 was = sTwoMode.mode;
+        const S32 key = sTwoMode.step(want, sYawRate * 180 / PI, now, sFrameDt);
+        if (sTwoMode.mode != was || sTwoMode.mode == SKTwoModeSteer::COUNTER)
+        {
+            static const char* const NAMES[] = { "quiet", "gentle", "strong hold", "release", "counter wait", "counter" };
+            char buf[96];
+            if (sTwoMode.mode == SKTwoModeSteer::GENTLE)
+            {
+                snprintf(buf, sizeof(buf), "2m gentle %d want %.1f rate %.1f", sTwoMode.hold_n, want, sYawRate * 180 / PI);
+            }
+            else
+            {
+                snprintf(buf, sizeof(buf), "2m %s want %.1f rate %.1f", NAMES[sTwoMode.mode], want, sYawRate * 180 / PI);
+            }
+            note += note.empty() ? buf : std::string(", ") + buf;
+        }
+        return key;
+    }
 
     // ---------------------------------------------------------------- the gears' top speeds
 
     // Each gear's top speed, measured while W is held: the speed once it has stopped rising (no more than
     // GEAR_FLAT_MPS2 over GEAR_FLAT_S), going nearly straight, on level road (the car rising or falling no more
-    // than GEAR_LEVEL_M over the window, so a run downhill does not read high) and not just after a lift. Kept
+    // than GEAR_LEVEL_M over the window, so a run downhill does not read high). Kept
     // per car in sk-road-car-gears.json (logs folder: {car: {gear: [m/s, ...]}}, the last GEAR_READINGS readings,
     // oldest first; a bare number, the file's old form, loads as one reading), the car being its name and creator
     // ("name @ creator"), the same for every rez of it; gear 0 while the car has not said its gear (it says it on
@@ -1298,6 +1451,8 @@ namespace skroad::drive
     bool sGearTopsRead = false;
     std::string sCarKey;                            // sVehicle's car, empty while its name is not known
     LLUUID sCarKeyFor, sCarNameAsked;
+    F64 sCarNameAskedAt = -1.0;                     // when the name was last asked for sCarNameAsked
+    S32 sCarNameAsks = 0;                           // and how often
     struct GearSample { F64 when, speed, z; };
     std::deque<GearSample> sGearSpeeds;             // over GEAR_FLAT_S, held and straight
     S32 sGearSpeedsGear = -99;
@@ -1498,7 +1653,23 @@ const skroad::drive::VehicleProfile& skroad::drive::vehicleProfile()
         }
         if (!sCarKey.empty())
         {
-            LL_INFOS("SKRoadDriver") << "vehicle " << sCarKey << ": " << (sProfile.chat_gears ? "gears said in chat" : "no profile, no gears")
+            std::string why;
+            if (!p.isMap())
+            {
+                // a profile keyed by the same name and another creator is a creator mismatch
+                why = "name not in the profile file";
+                for (auto it = profiles.beginMap(); it != profiles.endMap(); ++it)
+                {
+                    if (it->first != sCarKey && carName(it->first) == carName(sCarKey))
+                    {
+                        why = "creator mismatch (the file has '" + it->first + "')";
+                        break;
+                    }
+                }
+            }
+            LL_INFOS("SKRoadDriver") << "vehicle " << sCarKey << ": "
+                                     << (sProfile.chat_gears ? "gears said in chat"
+                                         : why.empty() ? "profile without chat gears" : "no profile: " + why)
                                      << LL_ENDL;
         }
     }
@@ -1532,9 +1703,30 @@ namespace skroad::drive
             if (!p)
             {
                 LLViewerObject* o = sVehicle.notNull() ? gObjectList.findObject(sVehicle) : nullptr;
-                if (o && sCarNameAsked != sVehicle)
+                // asked again every CAR_NAME_ASK_S until it comes, a bounded number of times: one ask's reply can
+                // be lost (after a relaunch none reached the cache, and the car went without its gears all run)
+                constexpr F64 CAR_NAME_ASK_S = 1.5;
+                constexpr S32 CAR_NAME_ASKS = 20;
+                const F64 t = LLTimer::getTotalSeconds();
+                if (sCarNameAsked != sVehicle)
                 {
                     sCarNameAsked = sVehicle;
+                    sCarNameAsks = 0;
+                    sCarNameAskedAt = -1.0;
+                }
+                if (o && sCarNameAsks < CAR_NAME_ASKS && (sCarNameAskedAt < 0 || t - sCarNameAskedAt >= CAR_NAME_ASK_S))
+                {
+                    sCarNameAskedAt = t;
+                    if (++sCarNameAsks > 1)
+                    {
+                        LL_INFOS("SKRoadDriver") << "vehicle " << sVehicle << ": no name yet, asking again (" << sCarNameAsks
+                                                 << " of " << CAR_NAME_ASKS << ")" << LL_ENDL;
+                    }
+                    if (sCarNameAsks == CAR_NAME_ASKS)
+                    {
+                        LL_WARNS("SKRoadDriver") << "vehicle " << sVehicle << ": its name never came; driving without its profile"
+                                                 << LL_ENDL;
+                    }
                     LLSelectMgr::getInstance()->requestObjectPropertiesFamily(o);
                 }
             }
@@ -1572,7 +1764,7 @@ namespace skroad::drive
                 }
                 GearTops& mine = sGearTops[sCarKey];
                 mine = topsOf(readings);
-                // a reading taken through a shift or a lift can stand above the next gear's
+                // a reading taken through a shift can stand above the next gear's
                 for (auto it = mine.rbegin(); it != mine.rend(); ++it)
                 {
                     auto above = mine.find(it->first + 1);
@@ -1598,9 +1790,9 @@ namespace skroad::drive
     void measureGearTop(F64 speed, F64 now)
     {
         readGearTops();
-        if (sGearSpeedsGear != sGear || now < sLiftNext || std::fabs(sYawRate) * 180 / PI > 5.0 || speed < 1.0)
+        if (sGearSpeedsGear != sGear || std::fabs(sYawRate) * 180 / PI > 5.0 || speed < 1.0)
         {
-            sGearSpeeds.clear();        // a shift, a lift or a bend: begun again
+            sGearSpeeds.clear();        // a shift or a bend: begun again
             sGearSpeedsGear = sGear;
             return;
         }
@@ -1669,37 +1861,8 @@ namespace skroad::drive
         sGearSpeeds.clear();    // the next reading a full window later
     }
 
-    // ---------------------------------------------------------------- lifting off for a tight bend
-
-    // The car slows hard off W (about 10 m/s^2) and turns hard on a long hold, so a bend is taken as Nexii takes
-    // one: W let go for a moment (LIFT_S) and held again for at least LIFT_GAP_S (he held it about 75 % of the
-    // time round the lap's tight bends), only while the sharpest bend within the next LIFT_AHEAD_S asks a turn
-    // rate (speed / radius) past LIFT_RATE_DEG, short of what a long hold makes (40-70 deg/s).
-    constexpr F64 LIFT_RATE_DEG = 35.0;
-    constexpr F64 LIFT_AHEAD_S = 1.5;
-    constexpr F64 LIFT_S = 0.1;
-    constexpr F64 LIFT_GAP_S = 0.4;
-
-    // The sharpest turn (rad per metre) along the line over the next `reach` metres, from heading changes
-    // between its points.
-    F64 sharpestAhead(F64 reach)
-    {
-        F64 walked = 0, sharpest = 0;
-        for (size_t i = 0; i + 2 < sPath.size() && walked < reach; ++i)
-        {
-            const F64 h0 = std::atan2(sPath[i + 1].y - sPath[i].y, sPath[i + 1].x - sPath[i].x);
-            const F64 h1 = std::atan2(sPath[i + 2].y - sPath[i + 1].y, sPath[i + 2].x - sPath[i + 1].x);
-            const F64 len = std::hypot(sPath[i + 2].x - sPath[i].x, sPath[i + 2].y - sPath[i].y) / 2;
-            if (len > 0.5)
-            {
-                sharpest = std::max(sharpest, std::fabs(wrap(h1 - h0)) / len);
-            }
-            walked += std::hypot(sPath[i + 1].x - sPath[i].x, sPath[i + 1].y - sPath[i].y);
-        }
-        return sharpest;
-    }
-
-    // The same over chords of at least CURVE_BASE_M, for the gear: the line's points sit a metre or less apart,
+    // The sharpest turn (rad per metre) along the line over the next `reach` metres, over chords of at least
+    // CURVE_BASE_M: the line's points sit a metre or less apart,
     // and a few centimetres of jitter between them read on a straight as a bend Gear 2 could not take
     // (sk-road-autopilot.csv, 2026-11-07: a shift down and up again every second on straight road).
     constexpr F64 CURVE_BASE_M = 5.0;
@@ -1742,7 +1905,7 @@ namespace skroad::drive
 
     // The line's grade from its start (a few metres behind the car) over GRADE_AHEAD_M: its rise over its run; 0 on a
     // line shorter than GRADE_MIN_M. Up a slope of the road that goes on, W is kept (Nexii, Nangrim: "why brake while
-    // going up a slope? made it very hard to drive up it"): no lift for a bend, no slowing for a short line at a crest,
+    // going up a slope? made it very hard to drive up it"): no slowing for a short line at a crest,
     // and off an edge with no drop beside W is let go, never braked.
     constexpr F64 GRADE_AHEAD_M = 25.0, GRADE_MIN_M = 8.0, UPHILL_GRADE = 0.04;
     F64 gradeAhead()
@@ -1779,15 +1942,18 @@ namespace skroad::drive
     }
 
     // The speed the line allows now for the turns ahead, a junction's above all: at each point the speed that takes
-    // its bend at TURN_LAT_ACCEL (v = sqrt(a r)), plus what braking at TURN_PLAN_DECEL gains on the way there after
-    // the throttle's lag. Only bends tighter than TURN_R_MAX_M count; the gears handle the road's own curves. At a
+    // its bend at the car's sustainable yaw rate (v = rate r, SKRoadAutopilotTurnRateMax), plus what braking at
+    // TURN_PLAN_DECEL gains on the way there after the throttle's lag. Only bends that allow less than the target
+    // speed count, so a bend the car takes as it is neither slows nor logs. At a
     // T a resident comes down to a turning speed before the mouth (Nexii: a side road's car shot straight across
     // a main road into a wall with the line already turned onto it).
-    constexpr F64 TURN_LAT_ACCEL = 2.5, TURN_PLAN_DECEL = 4.0, TURN_R_MAX_M = 30.0, TURN_BASE_M = 3.0;
+    constexpr F64 TURN_PLAN_DECEL = 4.0, TURN_BASE_M = 3.0;
     constexpr F64 JUNCTION_TURN_MPS = 5.0;      // through a junction's turn, whatever its line's radius reads
     F64 sTurnAllowR = 0, sTurnAllowAt = 0;      // the bend that set the allowance: its radius and distance
-    F64 turnAllowance(const LLVector3d& pos, F64 speed, F64 dirx, F64 diry)
+    F64 turnAllowance(const LLVector3d& pos, F64 speed, F64 target, F64 dirx, F64 diry)
     {
+        static LLCachedControl<F32> turn_rate_c(gSavedSettings, "SKRoadAutopilotTurnRateMax", 60.f);
+        const F64 turn_rate = std::max(1.0, F64(turn_rate_c)) * PI / 180;
         const size_t n = sPath.size();
         F64 allow = 1e9;
         sTurnAllowR = 0;
@@ -1835,9 +2001,10 @@ namespace skroad::drive
                 const F64 h0 = std::atan2(sPath[j].y - sPath[i].y, sPath[j].x - sPath[i].x);
                 const F64 h1 = std::atan2(sPath[k].y - sPath[j].y, sPath[k].x - sPath[j].x);
                 const F64 curv = std::fabs(wrap(h1 - h0)) / std::max(1e-3, (arc[k] - arc[i]) / 2);
-                if (curv * TURN_R_MAX_M > 1.0)
+                const F64 v_turn = turn_rate / std::max(1e-6, curv);
+                if (v_turn < target)
                 {
-                    limit(std::sqrt(TURN_LAT_ACCEL / curv), at, 1.0 / curv);
+                    limit(v_turn, at, 1.0 / std::max(1e-6, curv));
                 }
             }
         }
@@ -1858,18 +2025,24 @@ namespace skroad::drive
     }
 
     // Said once a junction, on the way to it: its kind, ways and choice, the speed and the turning speed.
-    F64 sJunctionSaidX = 1e18, sJunctionSaidY = 1e18;
+    // Every junction said since the trail was last forgotten, so two in reach do not take turns each frame.
+    std::vector<std::pair<F64, F64>> sJunctionsSaid;
     void noteJunctionApproach(const LLVector3d& pos, F64 speed, F64 allow, F64 dirx, F64 diry)
     {
         for (const Junction& jn : sView.junctions)
         {
             const F64 at = (jn.x - pos.mdV[VX]) * dirx + (jn.y - pos.mdV[VY]) * diry;
-            if (at < 0 || at > std::max(40.0, speed * 4) || std::hypot(jn.x - sJunctionSaidX, jn.y - sJunctionSaidY) < 15.0)
+            if (at < 0 || at > std::max(40.0, speed * 4)
+                || std::any_of(sJunctionsSaid.begin(), sJunctionsSaid.end(),
+                               [&jn](const std::pair<F64, F64>& said) { return std::hypot(jn.x - said.first, jn.y - said.second) < 15.0; }))
             {
                 continue;
             }
-            sJunctionSaidX = jn.x;
-            sJunctionSaidY = jn.y;
+            if (sJunctionsSaid.size() >= 64)
+            {
+                sJunctionsSaid.erase(sJunctionsSaid.begin());
+            }
+            sJunctionsSaid.emplace_back(jn.x, jn.y);
             const bool straight_on = std::any_of(jn.branches.begin(), jn.branches.end(), [](const Branch& b) { return std::fabs(b.turn_deg) < 30.0; });
             std::string ways;
             for (const Branch& b : jn.branches)
@@ -1885,32 +2058,10 @@ namespace skroad::drive
         }
     }
 
-    bool bendLift(F64 speed, F64 now)
-    {
-        if (now < sLiftUntil)
-        {
-            return true;
-        }
-        if (now < sLiftNext || sPath.size() < 3 || speed < 8.0     // in Gear 1 (6.5 m/s) a lift only stalls it
-            || gradeAhead() > UPHILL_GRADE)                         // uphill a lift bleeds the speed the hill takes
-        {
-            return false;
-        }
-        const F64 sharpest = sharpestAhead(speed * LIFT_AHEAD_S);
-        if (speed * sharpest * 180 / PI <= LIFT_RATE_DEG)
-        {
-            return false;
-        }
-        sLiftUntil = now + LIFT_S;
-        sLiftNext = sLiftUntil + LIFT_GAP_S;
-        return true;
-    }
-
     // ---------------------------------------------------------------- picking the gear
 
     // The gear is the autopilot's: the highest whose top speed takes the sharpest bend within GEAR_AHEAD_S
-    // (at the gear's top) at no more than GEAR_RATE_DEG, a margin under the lift's, so the gear does the slowing
-    // and the lift is left for what the gear cannot. A gear whose top is not yet measured is tried once the one
+    // (at the gear's top) at no more than GEAR_RATE_DEG, so the gear does the slowing. A gear whose top is not yet measured is tried once the one
     // below it is measured and the road allows more; the gear is known from the car's own chat ("Gear 3",
     // noteChat), and while it is not, the first shift is down, which makes the car say it. Never into Reverse
     // (below Gear 1): from it, up. A shift up the car does not answer with a new gear is the top gear.
@@ -1930,7 +2081,7 @@ namespace skroad::drive
     F64 sUpClearSince = 0.0;
     F64 sEdgeDownShift = -100.0;                // the edge guard's last shift down: no shift up straight after
 
-    void pickGear(F64 speed, F64 now, bool road, U32& keys, std::string& note)
+    void pickGear(F64 speed, F64 now, bool road, bool crossing_near, U32& keys, std::string& note)
     {
         static LLCachedControl<S32> max_gear_c(gSavedSettings, "SKRoadAutopilotMaxGear", 4);
         const S32 max_gear = S32(max_gear_c) > 0 ? S32(max_gear_c) : 99;
@@ -1997,9 +2148,13 @@ namespace skroad::drive
             {
                 sShiftDir = -1;
             }
-            else if (sGear < std::min(sGearMax, max_gear) && here > 0 && now - sLastShift >= SHIFT_GAP_S
+            else if (crossing_near && sGear > 1 && speed > CROSSING_SPEED + 1.0)
+            {
+                sShiftDir = -1;     // a region crossing taken slow on W held, a gear down at a time
+            }
+            else if (!crossing_near && sGear < std::min(sGearMax, max_gear) && here > 0 && now - sLastShift >= SHIFT_GAP_S
                      && up_ok && now - sUpClearSince >= GEAR_UP_CLEAR_S && now - sEdgeDownShift >= GEAR_UP_CLEAR_S * 2
-                     && std::fabs(sLastErr) < GEAR_UP_ERR_M && now >= sLiftNext
+                     && std::fabs(sLastErr) < GEAR_UP_ERR_M
                      && lineSeen() >= std::max(SIGHT_MIN_M, (next > 0 ? next : here * 1.5) * SIGHT_LIFT_S))
             {
                 // and only with the road seen far enough for the next gear's speed: on a line of a few metres no
@@ -2198,7 +2353,6 @@ namespace skroad::drive
     constexpr S32 SWEEP_HOLDS[] = { 1, 2, 4, 8, 16 };
     constexpr F64 SWEEP_GAPS[] = { 0.1, 0.3 };
     F64 sSweepStart = -1.0;
-    F64 sSweepShiftAt = -100.0;
     constexpr F64 SWEEP_TRAIL_S = 30.0;
     std::deque<std::pair<LLVector3d, F64>> sSweepTrail;     // the car's own track, for the overlay
 
@@ -2227,24 +2381,83 @@ namespace skroad::drive
         return run;
     }
 
+    // A sweep getting into its gear: W is never held here (with no gear known the car would be driven blind, as it
+    // once was across a region border), and while it moves it brakes. Shifts only where the car says its gears in
+    // chat; where its profile says it has none, or no gear is heard within SWEEP_GEAR_WAIT_S, the gear step is
+    // skipped (logged) and the sweep drives in whatever gear the car is in. True once in gear or skipped.
+    constexpr F64 SWEEP_GEAR_WAIT_S = 15.0;
+    LLUUID sSweepGearFor;
+    S32 sSweepGearWant = 0;
+    F64 sSweepGearFrom = -1.0, sSweepGearShiftAt = -1.0;
+    bool sSweepGearSkipped = false;
+
+    bool sweepToGear(S32 gear, F64 now, F64 speed, U32& keys, const char* who)
+    {
+        keys = 0;
+        if (sSweepGearFor != sVehicle || sSweepGearWant != gear)
+        {
+            sSweepGearFor = sVehicle;
+            sSweepGearWant = gear;
+            sSweepGearFrom = -1.0;
+            sSweepGearSkipped = false;
+        }
+        if (sGear == gear || sSweepGearSkipped)
+        {
+            return true;
+        }
+        if (sSweepGearFrom < 0)
+        {
+            sSweepGearFrom = now;
+        }
+        const VehicleProfile& car = vehicleProfile();
+        const bool known = !sCarKey.empty();
+        if ((known && !car.chat_gears) || now - sSweepGearFrom > SWEEP_GEAR_WAIT_S)
+        {
+            sSweepGearSkipped = true;
+            const std::string why = known && !car.chat_gears ? "the car says no gears" : "no gear heard in "
+                                    + std::to_string(S32(SWEEP_GEAR_WAIT_S)) + " s";
+            LL_DEBUGS("SKRoadDriver") << who << ": gear " << gear << " skipped (" << why << ")" << LL_ENDL;
+            say(std::string(who) + ": gear step skipped, " + why);
+            return true;
+        }
+        if (speed > 0.5)
+        {
+            keys |= AGENT_CONTROL_AT_NEG;   // brake: nothing drives it while the gear is not known
+        }
+        else
+        {
+            if (now - sSweepGearShiftAt > 1.0)
+            {
+                sSweepGearShiftAt = now;
+            }
+            if (now - sSweepGearShiftAt < SHIFT_HOLD_S)
+            {
+                keys |= shiftKey(sGear <= 0 ? (sGear < 0 ? 1 : -1) : (sGear < gear ? 1 : -1));
+            }
+        }
+        return false;
+    }
+
     U32 sweepKeys(S32 gear, F64 now, F64 speed, const LLVector3d& pos, F64 yaw, std::string& note)
     {
         U32 keys = AGENT_CONTROL_AT_POS;
         auto tag = [&](const std::string& t) { note += note.empty() ? t : ", " + t; };
-        // into the gear first: down while it is not known (the car says it on a shift), never into Reverse
-        if (sGear != gear)
+        // into the gear first (sweepToGear: never W, never into Reverse); outside the arena, nothing at all
+        {
+            F64 ax0, ax1, ay0, ay1;
+            arenaBox(pos.mdV[VX], pos.mdV[VY], ax0, ax1, ay0, ay1);
+            if (pos.mdV[VX] < ax0 - 10 || pos.mdV[VX] > ax1 + 10 || pos.mdV[VY] < ay0 - 10 || pos.mdV[VY] > ay1 + 10)
+            {
+                tag("sweep: outside the arena, stopped");
+                return 0;
+            }
+        }
+        U32 gear_keys = 0;
+        if (!sweepToGear(gear, now, speed, gear_keys, "sweep"))
         {
             sSweepStart = -1.0;
-            if (now - sSweepShiftAt > 1.0)
-            {
-                sSweepShiftAt = now;
-            }
-            if (now - sSweepShiftAt < SHIFT_HOLD_S)
-            {
-                keys |= shiftKey(sGear <= 0 ? (sGear < 0 ? 1 : -1) : (sGear < gear ? 1 : -1));
-            }
             tag("sweep: to gear");
-            return keys;
+            return gear_keys;
         }
         if (sSweepStart < 0)
         {
@@ -2356,6 +2569,1210 @@ namespace skroad::drive
         return keys;
     }
 
+    // ---------------------------------------------------------------- the PWM steering sweep (spike)
+
+    // SKRoadAutopilotPwmSweep on (with the autopilot; seated, stopped, in a flat open arena parcel): frame-exact
+    // steering patterns for the PWM study (V:\Scratch\road-pwm\PLAN.md), W held in SKRoadAutopilotPwmSweepGear.
+    // Each pattern runs to the left (A) and then to the right (D): its keys set and cleared on exact viewer frames
+    // (no MIN_GAP), then PWS_REST_S untouched. Families: "pwm" (a tap of T frames every T + G frames for
+    // PWS_PWM_S, T and G in PWS_FRAMES), "hold" (the key held PWS_HOLDS s), "ctr" (a tap of N frames, K frames
+    // off, M frames the other way). Within PWS_EDGE_M of the arena's edge or off its flat land, the pattern is cut
+    // and run again once the car has been steered back toward the middle. Per frame to
+    // logs/sk-road-sweep-<time>.csv, per pattern to sk-road-sweep-<time>-summary.csv; ends by itself
+    // ("pwm sweep done"), autopilot off.
+    constexpr S32 PWS_FRAMES[] = { 1, 2, 3, 4, 6, 8 };
+    constexpr F64 PWS_HOLDS[] = { 0.25, 0.5, 1.0 };
+    constexpr S32 PWS_CTR_N[] = { 4, 8, 16 }, PWS_CTR_M[] = { 1, 2 }, PWS_CTR_K[] = { 0, 1, 2 };
+    constexpr F64 PWS_PWM_S = 4.5;              // 1.5 s to build, 3 s steady
+    constexpr F64 PWS_STEADY_S = 1.5;           // steady rate: the mean over the pattern's last 1.5 s
+    constexpr F64 PWS_REST_S = 2.0, PWS_REST_SHORT_S = 3.0;    // untouched after (short patterns: their carry)
+    constexpr F64 PWS_EDGE_M = 10.0, PWS_START_EDGE_M = 20.0, PWS_FLAT_M = 0.5;
+
+    struct PwsPattern
+    {
+        S32 kind = 0;            // 0 pwm, 1 hold, 2 counter-tap
+        S32 a = 0, b = 0, c = 0; // pwm: tap, gap; ctr: N, M, K
+        F64 hold = 0.0;
+        std::string id;
+    };
+
+    struct PwsSample { F64 t, rate; };
+
+    struct PwsState
+    {
+        bool on = false;
+        std::vector<PwsPattern> patterns;
+        size_t k = 0;           // pattern index
+        S32 side = 0;           // 0 A (left), 1 D (right)
+        S32 phase = 0;          // 0 to gear, 1 home, 2 settle, 3 run, 4 rest, 5 done
+        F64 phaseAt = 0.0, startT = 0.0;
+        S32 frame = 0, runFrame = 0;
+        bool ending = false;    // pwm: past PWS_PWM_S, finishing the tap under way
+        F64 keyUpAt = -1.0, firstKeyAt = -1.0;
+        std::vector<PwsSample> run, rest;
+        F64 fpsSum = 0.0;
+        S32 fpsN = 0;
+        F64 h0 = 0.0;           // the land height under the car where the sweep began
+        S32 family = -1;
+        F64 prevT = -1.0;
+    };
+    PwsState sPws;
+    llofstream sPwsLog, sPwsSummary;
+
+    std::vector<PwsPattern> pwsPatterns()
+    {
+        std::vector<PwsPattern> p;
+        for (S32 t : PWS_FRAMES)
+        {
+            for (S32 g : PWS_FRAMES)
+            {
+                PwsPattern q;
+                q.kind = 0;
+                q.a = t;
+                q.b = g;
+                q.id = llformat("pwm t%d g%d", t, g);
+                p.push_back(q);
+            }
+        }
+        for (F64 h : PWS_HOLDS)
+        {
+            PwsPattern q;
+            q.kind = 1;
+            q.hold = h;
+            q.id = llformat("hold %.2f", h);
+            p.push_back(q);
+        }
+        for (S32 n : PWS_CTR_N)
+        {
+            for (S32 m : PWS_CTR_M)
+            {
+                for (S32 kk : PWS_CTR_K)
+                {
+                    PwsPattern q;
+                    q.kind = 2;
+                    q.a = n;
+                    q.b = m;
+                    q.c = kk;
+                    q.id = llformat("ctr n%d m%d k%d", n, m, kk);
+                    p.push_back(q);
+                }
+            }
+        }
+        return p;
+    }
+
+    const char* const PWS_FAMILY[] = { "pwm", "hold", "counter-tap" };
+
+    // The pattern's key on run frame f (+1 its side's key, -1 the other, 0 none); done once it has ended.
+    S32 pwsKey(const PwsPattern& q, S32 f, F64 in, bool& ending, bool& done)
+    {
+        done = false;
+        if (q.kind == 0)
+        {
+            const S32 period = q.a + q.b, at = f % period;
+            if (in >= PWS_PWM_S && (at == 0 || at >= q.a))
+            {
+                ending = true;      // stop on a release, never part way through a tap
+            }
+            done = ending;
+            return !ending && at < q.a ? 1 : 0;
+        }
+        if (q.kind == 1)
+        {
+            done = in >= q.hold;
+            return done ? 0 : 1;
+        }
+        const S32 n = q.a, m = q.b, kk = q.c;
+        if (f < n) return 1;
+        if (f < n + kk) return 0;
+        if (f < n + kk + m) return -1;
+        done = true;
+        return 0;
+    }
+
+    std::string pwsStamp()
+    {
+        const std::time_t t = std::time(nullptr);
+        char buf[32];
+        std::strftime(buf, sizeof(buf), "%Y%m%d-%H%M%S", std::localtime(&t));
+        return buf;
+    }
+
+    F64 pwsEpoch()
+    {
+        return std::chrono::duration<F64>(std::chrono::system_clock::now().time_since_epoch()).count();
+    }
+
+    void pwsSummarise(const PwsPattern& q, S32 gear)
+    {
+        const char side = sPws.side == 0 ? 'A' : 'D';
+        const F64 sign = sPws.side == 0 ? 1.0 : -1.0;      // A turns left: yaw rate +
+        F64 steady = NAN, peak = 0.0;
+        const F64 run_end = sPws.run.empty() ? 0.0 : sPws.run.back().t;
+        if (run_end - sPws.firstKeyAt >= 2.0)
+        {
+            F64 sum = 0;
+            S32 n = 0;
+            for (const auto& s : sPws.run)
+            {
+                if (s.t >= run_end - PWS_STEADY_S)
+                {
+                    sum += s.rate * sign;
+                    ++n;
+                }
+            }
+            steady = n ? sum / n : NAN;
+        }
+        for (const auto& s : sPws.run)
+        {
+            peak = std::max(peak, s.rate * sign);
+        }
+        for (const auto& s : sPws.rest)
+        {
+            peak = std::max(peak, s.rate * sign);
+        }
+        const F64 ref = std::isnan(steady) ? peak : steady;
+        F64 rise = NAN;
+        for (const auto* part : { &sPws.run, &sPws.rest })
+        {
+            for (const auto& s : *part)
+            {
+                if (std::isnan(rise) && ref > 1.0 && s.rate * sign >= 0.9 * ref)
+                {
+                    rise = s.t - sPws.firstKeyAt;
+                }
+            }
+        }
+        // carry: deg turned (own side +) from the key up; settle: until |rate| stays under 2 deg/s or 10 % of the peak
+        F64 carry = 0.0, settle = 0.0, prev = sPws.keyUpAt;
+        const F64 quiet = std::max(2.0, 0.1 * std::fabs(peak));
+        for (const auto& s : sPws.rest)
+        {
+            carry += s.rate * sign * (s.t - prev);
+            prev = s.t;
+            if (std::fabs(s.rate) >= quiet)
+            {
+                settle = s.t - sPws.keyUpAt;
+            }
+        }
+        const F64 fps = sPws.fpsN && sPws.fpsSum > 0 ? sPws.fpsN / sPws.fpsSum : 0.0;
+        sPwsSummary << q.id << ' ' << side << ',' << q.id << ',' << side << ',' << steady << ',' << peak << ',' << rise
+                    << ',' << carry << ',' << settle << ',' << gear << ',' << fps << ',' << sPws.firstKeyAt << ','
+                    << sPws.keyUpAt << '\n';
+        sPwsSummary.flush();
+    }
+
+    void pwsStop(const std::string& why)
+    {
+        if (sPwsLog.is_open()) sPwsLog.close();
+        if (sPwsSummary.is_open()) sPwsSummary.close();
+        sPws.on = false;
+        say(why);
+    }
+
+    // Each frame while SKRoadAutopilotPwmSweep is on: the keys, and the frame's log row.
+    U32 pwmSweepKeys(F64 now, F64 speed, const LLVector3d& pos, F64 yaw, std::string& note)
+    {
+        static LLCachedControl<S32> gear_c(gSavedSettings, "SKRoadAutopilotPwmSweepGear", 1);
+        const S32 gear = std::max(1, S32(gear_c));
+        auto tag = [&](const std::string& t) { note += note.empty() ? t : ", " + t; };
+        if (!sPws.on)
+        {
+            if (speed > 0.5)
+            {
+                gSavedSettings.setBOOL("SKRoadAutopilotPwmSweep", false);
+                say("pwm sweep: stop the car first");
+                return 0;
+            }
+            sPws = PwsState();
+            sPws.on = true;
+            sPws.patterns = pwsPatterns();
+            sPws.startT = now;
+            sPws.phaseAt = now;
+            sPws.h0 = LLWorld::getInstance()->resolveLandHeightGlobal(LLVector3d(pos.mdV[VX], pos.mdV[VY], 0));
+            const std::string stamp = pwsStamp();
+            const std::string base = gDirUtilp->getExpandedFilename(LL_PATH_LOGS, "sk-road-sweep-" + stamp);
+            sPwsLog.open((base + ".csv").c_str(), std::ios::out);
+            sPwsLog.precision(10);
+            sPwsLog << "# vehicle " << sVehicle << ", gear " << gear << "\n"
+                    << "epoch,t,frame,dt,keys,yaw_deg,yaw_rate_deg,speed,pattern,side,phase\n";
+            sPwsSummary.open((base + "-summary.csv").c_str(), std::ios::out);
+            sPwsSummary.precision(10);
+            sPwsSummary << "pattern,id,side,steady_rate_deg,peak_rate_deg,rise90_s,carry_deg,settle_s,gear,mean_fps,"
+                           "key_down_t,key_up_t\n";
+            F64 x0, x1, y0, y1;
+            arenaBox(pos.mdV[VX], pos.mdV[VY], x0, x1, y0, y1);
+            say(llformat("pwm sweep: %d patterns a side in gear %d, %.0f x %.0f m; log sk-road-sweep-%s",
+                         S32(sPws.patterns.size()), gear, x1 - x0, y1 - y0, stamp.c_str()));
+        }
+        const F64 dt = sPws.prevT < 0 ? 0.0 : now - sPws.prevT;
+        sPws.prevT = now;
+        ++sPws.frame;
+        U32 keys = AGENT_CONTROL_AT_POS;
+        const PwsPattern* q = sPws.k < sPws.patterns.size() ? &sPws.patterns[sPws.k] : nullptr;
+        const S32 dir = sPws.side == 0 ? 1 : -1;
+
+        F64 x0, x1, y0, y1;
+        arenaBox(pos.mdV[VX], pos.mdV[VY], x0, x1, y0, y1);
+        const F64 edge = std::min({ pos.mdV[VX] - x0, x1 - pos.mdV[VX], pos.mdV[VY] - y0, y1 - pos.mdV[VY] });
+        const F64 land = LLWorld::getInstance()->resolveLandHeightGlobal(LLVector3d(pos.mdV[VX], pos.mdV[VY], 0));
+        const bool flat = std::fabs(land - sPws.h0) <= PWS_FLAT_M;
+        if (edge < -10.0)
+        {
+            pwsStop("pwm sweep: the car left the arena; sweep and autopilot off");
+            gSavedSettings.setBOOL("SKRoadAutopilotPwmSweep", false);
+            gSavedSettings.setBOOL("SKRoadAutopilot", false);
+            return 0;
+        }
+        auto enter = [&](S32 phase)
+        {
+            sPws.phase = phase;
+            sPws.phaseAt = now;
+        };
+
+        if (sPws.phase == 0)
+        {
+            // into the gear (sweepToGear: W never held, braking while it moves; skipped where the car has no
+            // chat gears or none is heard); the arena's edge was checked above
+            U32 gear_keys = 0;
+            if (sweepToGear(gear, now, speed, gear_keys, "pwm sweep"))
+            {
+                enter(1);
+            }
+            else
+            {
+                keys = gear_keys;
+            }
+        }
+        if (sPws.phase == 1)
+        {
+            // home: up to speed and pointed at the middle, room to the edge
+            const F64 cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+            const F64 err = wrap(std::atan2(cy - pos.mdV[VY], cx - pos.mdV[VX]) - yaw) * 180 / PI;
+            const bool room = edge >= PWS_START_EDGE_M || std::hypot(cx - pos.mdV[VX], cy - pos.mdV[VY]) < 10.0;
+            if (room && flat && std::fabs(err) < 30.0 && now - sPws.phaseAt > 2.0 && speed > 1.0)
+            {
+                enter(2);
+            }
+            else if (std::fabs(err) > 15.0)
+            {
+                keys |= err > 0 ? AGENT_CONTROL_YAW_POS : AGENT_CONTROL_YAW_NEG;
+            }
+        }
+        if (sPws.phase == 2 && now - sPws.phaseAt >= 1.5)
+        {
+            // settled straight: the run, from this frame
+            if (!q)
+            {
+                enter(5);
+            }
+            else
+            {
+                if (q->kind != sPws.family)
+                {
+                    if (sPws.family >= 0)
+                    {
+                        say(std::string("pwm sweep: end of ") + PWS_FAMILY[sPws.family] + llformat(" at %.3f", pwsEpoch()));
+                    }
+                    sPws.family = q->kind;
+                    say(std::string("pwm sweep: start of ") + PWS_FAMILY[q->kind] + llformat(" at %.3f", pwsEpoch()));
+                }
+                enter(3);
+                sPws.runFrame = 0;
+                sPws.ending = false;
+                sPws.run.clear();
+                sPws.rest.clear();
+                sPws.fpsSum = 0.0;
+                sPws.fpsN = 0;
+                sPws.firstKeyAt = now;
+                sPws.keyUpAt = -1.0;
+            }
+        }
+        if ((sPws.phase == 3 || sPws.phase == 4) && (edge < PWS_EDGE_M || !flat))
+        {
+            // too near the edge or off the flat: cut, home, the same pattern again
+            tag("pwm sweep: cut, home");
+            LL_DEBUGS("SKRoadDriver") << "pwm sweep: " << (q ? q->id : std::string()) << (dir > 0 ? " A" : " D")
+                                     << " cut at the edge" << LL_ENDL;
+            enter(1);
+        }
+        if (sPws.phase == 3 && q)
+        {
+            bool done = false;
+            const S32 key = pwsKey(*q, sPws.runFrame, now - sPws.phaseAt, sPws.ending, done);
+            ++sPws.runFrame;
+            if (key)
+            {
+                keys |= key * dir > 0 ? AGENT_CONTROL_YAW_POS : AGENT_CONTROL_YAW_NEG;
+            }
+            sPws.run.push_back({ now, sYawRate * 180 / PI });
+            if (dt > 0) { sPws.fpsSum += dt; ++sPws.fpsN; }
+            if (done)
+            {
+                sPws.keyUpAt = now;
+                enter(4);
+            }
+        }
+        else if (sPws.phase == 4 && q)
+        {
+            sPws.rest.push_back({ now, sYawRate * 180 / PI });
+            if (dt > 0) { sPws.fpsSum += dt; ++sPws.fpsN; }
+            if (now - sPws.phaseAt >= (q->kind == 0 ? PWS_REST_S : PWS_REST_SHORT_S))
+            {
+                pwsSummarise(*q, gear);
+                if (++sPws.side > 1)
+                {
+                    sPws.side = 0;
+                    ++sPws.k;
+                }
+                // straight on to the next while there is room; home otherwise
+                const PwsPattern* next = sPws.k < sPws.patterns.size() ? &sPws.patterns[sPws.k] : nullptr;
+                if (!next)
+                {
+                    enter(5);
+                }
+                else if (edge >= PWS_START_EDGE_M && flat)
+                {
+                    enter(2);
+                    sPws.phaseAt = now - 1.5;       // the rest was the settle
+                }
+                else
+                {
+                    enter(1);
+                }
+            }
+        }
+        if (sPws.phase == 5)
+        {
+            if (sPws.family >= 0)
+            {
+                say(std::string("pwm sweep: end of ") + PWS_FAMILY[sPws.family] + llformat(" at %.3f", pwsEpoch()));
+            }
+            pwsStop("pwm sweep done");
+            gSavedSettings.setBOOL("SKRoadAutopilotPwmSweep", false);
+            gSavedSettings.setBOOL("SKRoadAutopilot", false);
+            return 0;
+        }
+
+        static const char* const PHASES[] = { "gear", "home", "settle", "run", "rest", "done" };
+        std::string ks;
+        if (keys & AGENT_CONTROL_AT_POS) ks += 'W';
+        if (keys & AGENT_CONTROL_YAW_POS) ks += 'A';
+        if (keys & AGENT_CONTROL_YAW_NEG) ks += 'D';
+        if (keys & ~(AGENT_CONTROL_AT_POS | AGENT_CONTROL_YAW_POS | AGENT_CONTROL_YAW_NEG)) ks += 'S';    // a shift
+        sPwsLog << pwsEpoch() << ',' << now - sPws.startT << ',' << sPws.frame << ',' << dt << ',' << ks << ','
+                << yaw * 180 / PI << ',' << sYawRate * 180 / PI << ',' << speed << ',' << (q ? q->id : std::string())
+                << ',' << (dir > 0 ? 'A' : 'D') << ',' << PHASES[sPws.phase] << '\n';
+        tag("pwm sweep " + std::string(q ? q->id : "") + (dir > 0 ? " A " : " D ") + PHASES[sPws.phase]);
+        return keys;
+    }
+
+    bool thrSweepOn();      // the throttle sweep, below: it drives as the PWM sweep does
+
+    bool pwmSweepOn()
+    {
+        static LLCachedControl<bool> on(gSavedSettings, "SKRoadAutopilotPwmSweep", false);
+        if (!on && sPws.on)
+        {
+            pwsStop("pwm sweep off");
+        }
+        return on || thrSweepOn();
+    }
+
+    // ---------------------------------------------------------------- the throttle sweep (spike)
+
+    // SKRoadAutopilotThrSweep on, or SKRoadAutopilotPwmSweep with SKRoadAutopilotPwmSweepFamily "thr" where that
+    // setting exists (with the autopilot; seated, stopped, in a flat open arena parcel): straight-line throttle
+    // tests along the arena's diagonal, from SKRoadAutopilotPwmSweepGear up through the gears while each tops the
+    // last. Per gear: accel (W 6 s from a stop), coast (W up from top until 2 m/s or 4 s), brake (W up 2 sim
+    // frames, then S until stopped, released if it starts reversing), lifts (W up 1, 3, 6, 12 sim frames at top),
+    // and downshifts (coasting to the lower gear's top, at once, and with W held); duty (W N on, R off in sim
+    // frames, from half top) in the first gear only; last, circles of 30, 20 and 12 m (A held while the yaw rate is
+    // short of v / r, W held) in the highest gear, logging the rate got and wanted and the slip. Before each run the car stops at a corner and spins in
+    // place onto the diagonal (a slow driven turn where a spin creeps); a run that meets the far corner is cut.
+    // W and S are never held together. Per frame to logs/sk-road-thr-<time>.csv, per test to -summary.csv.
+    constexpr F64 THR_SIM_FRAME_S = 1.0 / 45.0;
+    constexpr S32 THR_DUTY_N[] = { 1, 2, 4, 8, 16 }, THR_DUTY_R[] = { 1, 3, 6 }, THR_LIFTS[] = { 1, 3, 6, 12 };
+    constexpr F64 THR_ACCEL_S = 6.0, THR_COAST_S = 4.0, THR_COAST_FLOOR = 2.0, THR_DUTY_S = 6.0;
+    constexpr F64 THR_LIFT_AFTER_S = 3.0, THR_SHIFT_AFTER_S = 4.0, THR_STEADY_S = 2.0;
+    constexpr F64 THR_CORNER_M = PWS_EDGE_M + 2.0, THR_CORNER_NEAR_M = 12.0;
+    constexpr F64 THR_SPIN_DEG = 2.0, THR_SPIN_DRIFT_M = 1.5, THR_SPIN_MAX_S = 25.0;
+    constexpr S32 THR_MAX_GEAR = 8;
+    const char* const THR_KIND[] = { "accel", "coast", "brake", "duty", "lift", "downshift", "circle" };
+    constexpr S32 THR_CIRCLE_R[] = { 30, 20, 12 };
+    constexpr F64 THR_CIRCLE_S = 6.0;
+
+    struct ThrTest
+    {
+        S32 kind = 0, gear = 1, a = 0, b = 0;
+        std::string id;
+    };
+
+    struct ThrState
+    {
+        bool on = false, lastGear = false;
+        std::vector<ThrTest> tests;
+        size_t k = 0;
+        S32 g0 = 1;
+        S32 phase = 0;          // 0 gear, 1 to a corner, 2 spin, 3 lead, 4 test, 5 stop, 6 done
+        F64 phaseAt = 0.0, startT = 0.0, prevT = -1.0, stillAt = -1.0;
+        S32 frame = 0;
+        F64 fsSum = 0.0;
+        S32 fsN = 0;
+        F64 cx[2] = {}, cy[2] = {};
+        S32 to = 0;             // the corner driven toward
+        bool spinning = false, spinDriven = false;
+        F64 spinX = 0, spinY = 0, spinAt = 0, spinDrift = 0;
+        F64 lastX = 0, lastY = 0, dist = 0, avail = 0;
+        F64 leadMax = 0, leadMaxAt = 0;
+        S32 step = 0, stepFrame = 0, nOn = 1, nOff = 1, onFrames = 0, offFrames = 0;
+        F64 t0 = 0, stepAt = 0, v0 = 0, vmin = 0, tmin = 0, tS = -1, tStop = -1, tBack = -1, wUpDist = 0, stopDist = 0;
+        bool reversed = false, cut = false;
+        std::vector<std::array<F64, 2>> s;     // t from t0, speed
+        std::vector<std::array<F64, 5>> circle; // t, speed, yaw rate and the one wanted (deg/s), slip (deg)
+        bool circles = false;
+        std::map<S32, F64> top;
+        F64 brakeDec = 4.0;
+    };
+    ThrState sThr;
+    llofstream sThrLog, sThrSummary;
+
+    const char* const THR_COLS[] = { "test", "kind", "gear", "a", "b", "v0_mps", "steady_mps", "t63_s", "t90_s",
+                                     "coast_decel", "brake_decel", "stop_dist_m", "stop_t_s", "reversed", "dip_mps",
+                                     "recover_s", "lost_mps", "back_on_s", "need_m", "avail_m", "cut", "mean_fps",
+                                     "on_frames", "off_frames", "spin_drift_m", "spin_s", "spin_driven", "yaw_rate_deg", "want_rate_deg",
+                                     "slip_deg" };
+
+    void thrRow(const std::string& id, const char* kind, S32 gear, const std::map<std::string, F64>& v)
+    {
+        sThrSummary << id << ',' << kind << ',' << gear;
+        for (size_t i = 3; i < std::size(THR_COLS); ++i)
+        {
+            sThrSummary << ',';
+            auto it = v.find(THR_COLS[i]);
+            if (it != v.end() && !std::isnan(it->second))
+            {
+                sThrSummary << it->second;
+            }
+        }
+        sThrSummary << '\n';
+        sThrSummary.flush();
+    }
+
+    void thrAddGear(S32 g)
+    {
+        auto add = [&](S32 kind, S32 a, S32 b, const std::string& id)
+        {
+            ThrTest t;
+            t.kind = kind;
+            t.gear = g;
+            t.a = a;
+            t.b = b;
+            t.id = llformat("g%d ", g) + id;
+            sThr.tests.push_back(t);
+        };
+        add(0, 0, 0, "accel");
+        add(1, 0, 0, "coast");
+        add(2, 0, 0, "brake");
+        for (S32 l : THR_LIFTS)
+        {
+            add(4, l, 0, llformat("lift %d", l));
+        }
+        if (g == sThr.g0)
+        {
+            for (S32 n : THR_DUTY_N)
+            {
+                for (S32 r : THR_DUTY_R)
+                {
+                    add(3, n, r, llformat("duty n%d r%d", n, r));
+                }
+            }
+        }
+        if (g > 1)
+        {
+            add(5, 0, 0, "downshift coasting");
+            add(5, 0, 1, "downshift at once");
+            add(5, 0, 2, "downshift W held");
+        }
+    }
+
+    // The lower gear's top: measured by this sweep, else the car's learnt one; 0 unknown.
+    F64 thrTop(S32 g)
+    {
+        auto it = sThr.top.find(g);
+        if (it != sThr.top.end())
+        {
+            return it->second;
+        }
+        auto car = sGearTops.find(sCarKey);
+        if (car != sGearTops.end())
+        {
+            auto t = car->second.find(g);
+            if (t != car->second.end())
+            {
+                return t->second;
+            }
+        }
+        return 0.0;
+    }
+
+    void thrStop(const std::string& why)
+    {
+        if (sThrLog.is_open()) sThrLog.close();
+        if (sThrSummary.is_open()) sThrSummary.close();
+        sThr.on = false;
+        say(why);
+    }
+
+    void thrSummarise(const ThrTest& q)
+    {
+        std::map<std::string, F64> v;
+        const F64 fps = sThr.fsN && sThr.fsSum > 0 ? sThr.fsN / sThr.fsSum : 0.0;
+        v["a"] = q.a;
+        v["b"] = q.b;
+        v["v0_mps"] = sThr.v0;
+        v["need_m"] = sThr.dist;
+        v["avail_m"] = sThr.avail;
+        v["cut"] = sThr.cut;
+        v["mean_fps"] = fps;
+        const auto& s = sThr.s;
+        const F64 end = s.empty() ? 0.0 : s.back()[0];
+        auto steady = [&]()
+        {
+            F64 sum = 0;
+            S32 n = 0;
+            for (const auto& x : s)
+            {
+                if (x[0] >= end - THR_STEADY_S)
+                {
+                    sum += x[1];
+                    ++n;
+                }
+            }
+            return n ? sum / n : F64(NAN);
+        };
+        if (q.kind == 0)
+        {
+            const F64 top = steady();
+            v["steady_mps"] = top;
+            F64 t63 = NAN, t90 = NAN;
+            for (const auto& x : s)
+            {
+                if (std::isnan(t63) && x[1] >= 0.63 * top) t63 = x[0];
+                if (std::isnan(t90) && x[1] >= 0.90 * top) t90 = x[0];
+            }
+            v["t63_s"] = t63;
+            v["t90_s"] = t90;
+            if (!sThr.cut && end >= THR_ACCEL_S - 0.1 && top > 0.5)
+            {
+                sThr.top[q.gear] = top;
+            }
+        }
+        else if (q.kind == 1)
+        {
+            if (!s.empty() && end > 0)
+            {
+                v["coast_decel"] = (s.front()[1] - s.back()[1]) / end;
+            }
+            // decel against speed, per 1 m/s bin
+            std::map<S32, std::array<F64, 2>> bins;
+            for (size_t i = 1; i < s.size(); ++i)
+            {
+                auto& b = bins[S32(std::floor((s[i][1] + s[i - 1][1]) / 2))];
+                b[0] += s[i - 1][1] - s[i][1];
+                b[1] += s[i][0] - s[i - 1][0];
+            }
+            for (const auto& [bin, b] : bins)
+            {
+                if (b[1] > 0)
+                {
+                    thrRow(q.id + llformat(" bin %d", bin), "coastbin", q.gear,
+                           { { "a", F64(bin) }, { "coast_decel", b[0] / b[1] }, { "cut", F64(sThr.cut) } });
+                }
+            }
+        }
+        else if (q.kind == 2)
+        {
+            if (sThr.tStop >= 0 && sThr.tS >= 0)
+            {
+                const F64 t = sThr.tStop - sThr.tS;
+                F64 vs = sThr.v0;
+                for (const auto& x : s)
+                {
+                    if (x[0] <= sThr.tS) vs = x[1];
+                }
+                v["stop_t_s"] = t;
+                v["brake_decel"] = t > 0 ? vs / t : NAN;
+                v["stop_dist_m"] = sThr.stopDist;
+                if (t > 0 && !sThr.cut)
+                {
+                    sThr.brakeDec = std::max(1.0, vs / t);
+                }
+            }
+            v["reversed"] = sThr.reversed;
+        }
+        else if (q.kind == 3)
+        {
+            v["steady_mps"] = steady();
+            v["on_frames"] = sThr.nOn;
+            v["off_frames"] = sThr.nOff;
+        }
+        else if (q.kind == 4)
+        {
+            v["dip_mps"] = sThr.v0 - sThr.vmin;
+            F64 rec = NAN;
+            for (const auto& x : s)
+            {
+                if (std::isnan(rec) && sThr.tBack >= 0 && x[0] > sThr.tBack && x[1] >= sThr.v0 - 0.1)
+                {
+                    rec = x[0] - sThr.tBack;
+                }
+            }
+            v["recover_s"] = rec;
+            v["on_frames"] = sThr.offFrames;    // the lift, in viewer frames
+        }
+        else if (q.kind == 6)
+        {
+            // the circle's last THR_STEADY_S: speed, yaw rate got and wanted, slip
+            F64 sum[4] = {};
+            S32 n = 0;
+            for (const auto& c : sThr.circle)
+            {
+                if (c[0] >= end - THR_STEADY_S)
+                {
+                    for (S32 i = 0; i < 4; ++i) sum[i] += c[i + 1];
+                    ++n;
+                }
+            }
+            if (n)
+            {
+                v["steady_mps"] = sum[0] / n;
+                v["yaw_rate_deg"] = sum[1] / n;
+                v["want_rate_deg"] = sum[2] / n;
+                v["slip_deg"] = sum[3] / n;
+            }
+        }
+        else
+        {
+            v["lost_mps"] = sThr.v0 - sThr.vmin;
+            v["back_on_s"] = sThr.tmin;         // W up (or the shift, held) to the speed's low: accelerating again
+            v["recover_s"] = sThr.tBack;        // W up to W held again
+            F64 rec = NAN;
+            for (const auto& x : s)
+            {
+                if (std::isnan(rec) && x[0] > sThr.tmin && x[1] >= sThr.v0 - 0.1)
+                {
+                    rec = x[0];
+                }
+            }
+            v["t90_s"] = rec;                   // back to the speed it left at
+        }
+        thrRow(q.id, THR_KIND[q.kind], q.gear, v);
+    }
+
+    // Stopped, A/D only, onto bearing; true once within THR_SPIN_DEG and still. Creeping past THR_SPIN_DRIFT_M,
+    // a slow driven turn instead (W in pulses, never with S).
+    bool thrSpin(F64 bearing, F64 now, F64 speed, const LLVector3d& pos, F64 yaw, U32& keys, const std::string& why)
+    {
+        if (!sThr.spinning)
+        {
+            sThr.spinning = true;
+            sThr.spinDriven = false;
+            sThr.spinX = pos.mdV[VX];
+            sThr.spinY = pos.mdV[VY];
+            sThr.spinAt = now;
+            sThr.spinDrift = 0.0;
+        }
+        sThr.spinDrift = std::max(sThr.spinDrift, std::hypot(pos.mdV[VX] - sThr.spinX, pos.mdV[VY] - sThr.spinY));
+        if (sThr.spinDrift > THR_SPIN_DRIFT_M && !sThr.spinDriven)
+        {
+            sThr.spinDriven = true;
+            LL_DEBUGS("SKRoadDriver") << "thr sweep: spin crept " << sThr.spinDrift << " m, driven turn" << LL_ENDL;
+        }
+        const F64 err = wrap(bearing - yaw) * 180 / PI;
+        const bool timed_out = now - sThr.spinAt > THR_SPIN_MAX_S;
+        if ((std::fabs(err) < THR_SPIN_DEG && std::fabs(sYawRate) * 180 / PI < 3.0 && speed < 0.5) || timed_out)
+        {
+            thrRow(why, "spin", sGear,
+                   { { "spin_drift_m", sThr.spinDrift }, { "spin_s", now - sThr.spinAt },
+                     { "spin_driven", F64(sThr.spinDriven) }, { "a", err } });
+            sThr.spinning = false;
+            return true;
+        }
+        if (speed > 0.5 && !sThr.spinDriven)
+        {
+            keys |= AGENT_CONTROL_AT_NEG;
+        }
+        if (std::fabs(err) >= THR_SPIN_DEG && (std::fabs(err) >= 12.0 || sThr.frame % 3 == 0))
+        {
+            keys |= err > 0 ? AGENT_CONTROL_YAW_POS : AGENT_CONTROL_YAW_NEG;
+            if (sThr.spinDriven && !(keys & AGENT_CONTROL_AT_NEG) && speed < 2.0 && sThr.frame % 4 == 0)
+            {
+                keys |= AGENT_CONTROL_AT_POS;
+            }
+        }
+        return false;
+    }
+
+    bool thrSweepOn()
+    {
+        static LLCachedControl<bool> thr(gSavedSettings, "SKRoadAutopilotThrSweep", false);
+        static LLCachedControl<bool> pwm(gSavedSettings, "SKRoadAutopilotPwmSweep", false);
+        bool on = thr;
+        if (!on && pwm && gSavedSettings.controlExists("SKRoadAutopilotPwmSweepFamily"))
+        {
+            on = gSavedSettings.getString("SKRoadAutopilotPwmSweepFamily") == "thr";
+        }
+        if (!on && sThr.on)
+        {
+            thrStop("thr sweep off");
+        }
+        return on;
+    }
+
+    void thrOff(const std::string& why)
+    {
+        thrStop(why);
+        gSavedSettings.setBOOL("SKRoadAutopilotThrSweep", false);
+        gSavedSettings.setBOOL("SKRoadAutopilotPwmSweep", false);
+        gSavedSettings.setBOOL("SKRoadAutopilot", false);
+    }
+
+    // Each frame while the thr sweep is on: the keys, and the frame's log row.
+    U32 thrSweepKeys(F64 now, F64 speed, const LLVector3d& pos, F64 yaw, std::string& note)
+    {
+        auto tag = [&](const std::string& t) { note += note.empty() ? t : ", " + t; };
+        const F64 px = pos.mdV[VX], py = pos.mdV[VY];
+        F64 x0, x1, y0, y1;
+        if (!sThr.on)
+        {
+            if (speed > 0.5)
+            {
+                thrOff("thr sweep: stop the car first");
+                return 0;
+            }
+            static LLCachedControl<S32> gear_c(gSavedSettings, "SKRoadAutopilotPwmSweepGear", 1);
+            sThr = ThrState();
+            sThr.on = true;
+            sThr.g0 = std::max(1, S32(gear_c));
+            thrAddGear(sThr.g0);
+            sThr.startT = now;
+            sThr.phaseAt = now;
+            sThr.lastX = px;
+            sThr.lastY = py;
+            arenaBox(px, py, x0, x1, y0, y1);
+            sThr.cx[0] = x0 + THR_CORNER_M;
+            sThr.cy[0] = y0 + THR_CORNER_M;
+            sThr.cx[1] = x1 - THR_CORNER_M;
+            sThr.cy[1] = y1 - THR_CORNER_M;
+            sThr.to = std::hypot(sThr.cx[0] - px, sThr.cy[0] - py) <= std::hypot(sThr.cx[1] - px, sThr.cy[1] - py) ? 0 : 1;
+            sThr.phase = 5;
+            const std::string stamp = pwsStamp();
+            const std::string base = gDirUtilp->getExpandedFilename(LL_PATH_LOGS, "sk-road-thr-" + stamp);
+            sThrLog.open((base + ".csv").c_str(), std::ios::out);
+            sThrLog.precision(10);
+            const F64 diag = std::hypot(sThr.cx[1] - sThr.cx[0], sThr.cy[1] - sThr.cy[0]);
+            sThrLog << "# vehicle " << sVehicle << ", gear " << sThr.g0 << ", diagonal " << diag << " m\n"
+                    << "epoch,t,frame,dt,keys,gear,speed,fwd_mps,yaw_deg,test,phase,step,remain_m,yaw_rate_deg,slip_deg\n";
+            sThrSummary.open((base + "-summary.csv").c_str(), std::ios::out);
+            sThrSummary.precision(10);
+            for (size_t i = 0; i < std::size(THR_COLS); ++i)
+            {
+                sThrSummary << (i ? "," : "") << THR_COLS[i];
+            }
+            sThrSummary << '\n';
+            say(llformat("thr sweep: from gear %d, %.0f x %.0f m arena, %.0f m diagonal; log sk-road-thr-%s",
+                         sThr.g0, x1 - x0, y1 - y0, diag, stamp.c_str()));
+        }
+        const F64 dt = sThr.prevT < 0 ? 0.0 : now - sThr.prevT;
+        sThr.prevT = now;
+        ++sThr.frame;
+        if (dt > 0)
+        {
+            sThr.fsSum += dt;
+            ++sThr.fsN;
+        }
+        const F64 fs = sThr.fsN && sThr.fsSum > 0 ? sThr.fsSum / sThr.fsN : 1.0 / 60.0;
+        const F64 mx = px - sThr.lastX, my = py - sThr.lastY;
+        const F64 fwd = dt > 0 ? (mx * std::cos(yaw) + my * std::sin(yaw)) / dt : 0.0;
+        // slip: the velocity's heading against the nose (+ the car moving left of where it points)
+        const F64 slip = speed > 1.0 && std::hypot(mx, my) > 1e-3 ? wrap(std::atan2(my, mx) - yaw) * 180 / PI : 0.0;
+        sThr.dist += std::hypot(mx, my);
+        sThr.wUpDist += std::hypot(mx, my);
+        sThr.lastX = px;
+        sThr.lastY = py;
+
+        arenaBox(px, py, x0, x1, y0, y1);
+        const F64 edge = std::min({ px - x0, x1 - px, py - y0, y1 - py });
+        if (edge < -10.0)
+        {
+            thrOff("thr sweep: the car left the arena; sweep and autopilot off");
+            return 0;
+        }
+        const S32 to = sThr.to, from = 1 - to;
+        const F64 ux = sThr.cx[to] - sThr.cx[from], uy = sThr.cy[to] - sThr.cy[from];
+        const F64 ul = std::max(1.0, std::hypot(ux, uy));
+        const F64 remain = ((sThr.cx[to] - px) * ux + (sThr.cy[to] - py) * uy) / ul;
+        const F64 reserve = speed * speed / (2 * sThr.brakeDec) + 3.0 + 0.25 * speed;
+        const ThrTest* q = sThr.k < sThr.tests.size() ? &sThr.tests[sThr.k] : nullptr;
+        U32 keys = 0;
+        auto enter = [&](S32 phase)
+        {
+            sThr.phase = phase;
+            sThr.phaseAt = now;
+        };
+        auto endTest = [&]()
+        {
+            thrSummarise(*q);
+            if (q->kind == 0 && q->gear > sThr.g0)
+            {
+                // a gear that does not top the last (or was never reached): the gears end here
+                const F64 here = thrTop(q->gear), below = thrTop(q->gear - 1);
+                if (sGear != q->gear || here <= below + 0.3)
+                {
+                    sThr.tests.resize(sThr.k + 1);
+                    sThr.lastGear = true;
+                    say(llformat("thr sweep: gear %d does not top gear %d; last gear", q->gear, q->gear - 1));
+                }
+            }
+            if (q->kind == 0 && q->gear == sThr.g0 && sSweepGearSkipped)
+            {
+                sThr.lastGear = true;
+            }
+            ++sThr.k;
+            if (sThr.k >= sThr.tests.size() && !sThr.lastGear && sThr.tests.back().gear < THR_MAX_GEAR)
+            {
+                thrAddGear(sThr.tests.back().gear + 1);
+            }
+            if (sThr.k >= sThr.tests.size() && !sThr.circles)
+            {
+                // last, circles in the highest gear that topped the one below it
+                sThr.circles = true;
+                S32 g = sThr.g0;
+                for (const auto& [gear, top] : sThr.top)
+                {
+                    if (gear > g && top > thrTop(gear - 1) + 0.3) g = gear;
+                }
+                for (S32 r : THR_CIRCLE_R)
+                {
+                    ThrTest t;
+                    t.kind = 6;
+                    t.gear = g;
+                    t.a = r;
+                    t.id = llformat("g%d circle r%d", g, r);
+                    sThr.tests.push_back(t);
+                }
+            }
+            enter(5);
+            sThr.stillAt = -1.0;
+        };
+
+        if (sThr.phase == 5)
+        {
+            // stopping: S while it rolls forward, nothing once it rolls back
+            if (speed > 0.2 && fwd > -0.3)
+            {
+                keys |= AGENT_CONTROL_AT_NEG;
+            }
+            if (speed < 0.2)
+            {
+                if (sThr.stillAt < 0) sThr.stillAt = now;
+            }
+            else
+            {
+                sThr.stillAt = -1.0;
+            }
+            if (sThr.stillAt >= 0 && now - sThr.stillAt >= 0.3)
+            {
+                keys = 0;
+                if (!q)
+                {
+                    enter(6);
+                }
+                else if (sGear != q->gear && !sSweepGearSkipped)
+                {
+                    enter(0);
+                }
+                else if (std::hypot(sThr.cx[to] - px, sThr.cy[to] - py) > THR_CORNER_NEAR_M)
+                {
+                    enter(1);
+                }
+                else
+                {
+                    enter(2);
+                }
+            }
+        }
+        if (sThr.phase == 0 && q)
+        {
+            U32 gear_keys = 0;
+            if (sweepToGear(q->gear, now, speed, gear_keys, "thr sweep"))
+            {
+                enter(5);
+            }
+            else
+            {
+                keys = gear_keys;
+            }
+        }
+        if (sThr.phase == 1)
+        {
+            // to the corner: turned onto it in place, then driven slowly, stopped short by the brake's reach
+            const F64 dx = sThr.cx[to] - px, dy = sThr.cy[to] - py;
+            const F64 d = std::hypot(dx, dy), bearing = std::atan2(dy, dx);
+            const F64 err = wrap(bearing - yaw) * 180 / PI;
+            if (d < std::max(4.0, reserve))
+            {
+                enter(5);
+            }
+            else if (speed < 0.5 && std::fabs(err) > 10.0)
+            {
+                thrSpin(bearing, now, speed, pos, yaw, keys, "spin to corner");
+            }
+            else
+            {
+                sThr.spinning = false;
+                if (speed < 5.0 && std::fabs(err) < 30.0)
+                {
+                    keys |= AGENT_CONTROL_AT_POS;
+                }
+                if (std::fabs(err) > 3.0)
+                {
+                    keys |= err > 0 ? AGENT_CONTROL_YAW_POS : AGENT_CONTROL_YAW_NEG;
+                }
+            }
+        }
+        if (sThr.phase == 2 && q)
+        {
+            // at the corner: spun onto the diagonal to the other one, and the run begins
+            const F64 bearing = std::atan2(sThr.cy[from] - sThr.cy[to], sThr.cx[from] - sThr.cx[to]);
+            if (thrSpin(bearing, now, speed, pos, yaw, keys, "spin at corner"))
+            {
+                sThr.to = from;
+                const F64 rx = sThr.cx[from] - px, ry = sThr.cy[from] - py;
+                sThr.avail = std::hypot(rx, ry);
+                sThr.dist = 0.0;
+                sThr.cut = false;
+                sThr.leadMax = 0.0;
+                sThr.leadMaxAt = now;
+                sThr.s.clear();
+                enter(3);
+                keys = 0;
+                return keys;
+            }
+        }
+        const bool running = sThr.phase == 3 || sThr.phase == 4;
+        const bool circling = sThr.phase == 4 && q && q->kind == 6;
+        if (running && q && (circling ? edge < PWS_EDGE_M : remain < reserve))
+        {
+            sThr.cut = true;
+            LL_DEBUGS("SKRoadDriver") << "thr sweep: " << q->id << " cut at the corner after " << sThr.dist << " m of "
+                                     << sThr.avail << LL_ENDL;
+            tag("thr sweep: cut at the corner");
+            if (sThr.phase == 3)
+            {
+                sThr.v0 = speed;
+            }
+            endTest();
+        }
+        if (sThr.phase == 3 && q)
+        {
+            // lead: up to the test's start
+            bool go = false;
+            if (q->kind == 0)
+            {
+                go = true;
+            }
+            else if (q->kind == 3)
+            {
+                go = speed >= 0.5 * thrTop(q->gear) || now - sThr.phaseAt > 12.0;
+            }
+            else
+            {
+                if (speed > sThr.leadMax + 0.05)
+                {
+                    sThr.leadMax = speed;
+                    sThr.leadMaxAt = now;
+                }
+                go = (speed > 1.0 && now - sThr.leadMaxAt > 1.0) || now - sThr.phaseAt > 12.0;
+            }
+            if (!go)
+            {
+                keys |= AGENT_CONTROL_AT_POS;
+            }
+            else
+            {
+                enter(4);
+                sThr.t0 = now;
+                sThr.step = 0;
+                sThr.stepFrame = 0;
+                sThr.stepAt = now;
+                sThr.v0 = speed;
+                sThr.vmin = speed;
+                sThr.tmin = 0.0;
+                sThr.tS = sThr.tStop = sThr.tBack = -1.0;
+                sThr.reversed = false;
+                sThr.wUpDist = 0.0;
+                sThr.onFrames = sThr.offFrames = 0;
+                sThr.nOn = std::max(1, S32(std::ceil(q->a * THR_SIM_FRAME_S / fs - 1e-6)));
+                sThr.nOff = std::max(1, S32(std::ceil(q->b * THR_SIM_FRAME_S / fs - 1e-6)));
+                sThr.s.clear();
+                sThr.circle.clear();
+            }
+        }
+        if (sThr.phase == 4 && q)
+        {
+            const F64 t = now - sThr.t0;
+            sThr.s.push_back({ t, speed });
+            if (speed < sThr.vmin)
+            {
+                sThr.vmin = speed;
+                sThr.tmin = t;
+            }
+            auto nextStep = [&]()
+            {
+                ++sThr.step;
+                sThr.stepFrame = 0;
+                sThr.stepAt = now;
+            };
+            bool done = false;
+            switch (q->kind)
+            {
+                case 0:
+                    keys |= AGENT_CONTROL_AT_POS;
+                    done = t >= THR_ACCEL_S;
+                    break;
+                case 1:
+                    done = speed < THR_COAST_FLOOR || t >= THR_COAST_S;
+                    break;
+                case 2:
+                {
+                    const S32 lift = std::max(1, S32(std::ceil(2 * THR_SIM_FRAME_S / fs - 1e-6)));
+                    if (sThr.step == 0 && sThr.stepFrame >= lift)
+                    {
+                        nextStep();
+                        sThr.tS = t;
+                    }
+                    if (sThr.step == 1)
+                    {
+                        if (sThr.tStop < 0 && speed < 0.2)
+                        {
+                            sThr.tStop = t;
+                            sThr.stopDist = sThr.wUpDist;
+                            say(llformat("thr sweep: %s stopped after %.2f s of S", q->id.c_str(), t - sThr.tS));
+                        }
+                        if (sThr.tStop >= 0 && fwd < -0.3)
+                        {
+                            sThr.reversed = true;
+                            say("thr sweep: " + q->id + " began reversing; S released");
+                            done = true;
+                        }
+                        else
+                        {
+                            keys |= AGENT_CONTROL_AT_NEG;
+                        }
+                        done = done || (sThr.tStop >= 0 && t - sThr.tStop > 1.5) || t > 15.0;
+                    }
+                    break;
+                }
+                case 3:
+                {
+                    const bool w = sThr.stepFrame % (sThr.nOn + sThr.nOff) < sThr.nOn;
+                    if (w) keys |= AGENT_CONTROL_AT_POS;
+                    done = t >= THR_DUTY_S;
+                    break;
+                }
+                case 4:
+                    if (sThr.step == 0)
+                    {
+                        const S32 lift = std::max(1, S32(std::ceil(q->a * THR_SIM_FRAME_S / fs - 1e-6)));
+                        if (sThr.stepFrame >= lift)
+                        {
+                            sThr.offFrames = lift;
+                            nextStep();
+                            sThr.tBack = t;
+                        }
+                    }
+                    if (sThr.step == 1)
+                    {
+                        keys |= AGENT_CONTROL_AT_POS;
+                        done = t - sThr.tBack >= THR_LIFT_AFTER_S;
+                    }
+                    break;
+                case 6:
+                {
+                    // circle left, W held: A held while the yaw rate is short of v / r, released past it
+                    const F64 want = speed / q->a * 180 / PI, got = sYawRate * 180 / PI;
+                    keys |= AGENT_CONTROL_AT_POS;
+                    if (got < want) keys |= AGENT_CONTROL_YAW_POS;
+                    sThr.circle.push_back({ t, speed, got, want, slip });
+                    done = t >= THR_CIRCLE_S;
+                    break;
+                }
+                default:
+                {
+                    // downshift: 0 coast to the lower gear's top, 1 at once, 2 with W held
+                    const F64 lower = thrTop(q->gear - 1);
+                    if (sThr.step == 0 && (q->b != 0 || (lower > 0 && speed < lower) || t > 8.0))
+                    {
+                        nextStep();
+                    }
+                    if (sThr.step == 1)
+                    {
+                        keys |= shiftKey(-1);
+                        if (q->b == 2) keys |= AGENT_CONTROL_AT_POS;
+                        if (now - sThr.stepAt >= SHIFT_HOLD_S)
+                        {
+                            nextStep();
+                            sThr.tBack = q->b == 2 ? 0.0 : t;
+                        }
+                    }
+                    else if (sThr.step == 0 && q->b == 2)
+                    {
+                        keys |= AGENT_CONTROL_AT_POS;
+                    }
+                    if (sThr.step == 2)
+                    {
+                        keys |= AGENT_CONTROL_AT_POS;
+                        done = t - sThr.tBack >= THR_SHIFT_AFTER_S;
+                    }
+                    break;
+                }
+            }
+            ++sThr.stepFrame;
+            if (done)
+            {
+                keys &= ~AGENT_CONTROL_AT_POS;
+                endTest();
+            }
+        }
+        if (sThr.phase == 6)
+        {
+            thrOff("thr sweep done");
+            return 0;
+        }
+        if ((keys & AGENT_CONTROL_AT_POS) && (keys & AGENT_CONTROL_AT_NEG))
+        {
+            keys &= ~AGENT_CONTROL_AT_POS;      // never W and S together
+        }
+
+        static const char* const PHASES[] = { "gear", "corner", "spin", "lead", "test", "stop", "done" };
+        std::string ks;
+        if (keys & AGENT_CONTROL_AT_POS) ks += 'W';
+        if (keys & AGENT_CONTROL_AT_NEG) ks += 'S';
+        if (keys & AGENT_CONTROL_YAW_POS) ks += 'A';
+        if (keys & AGENT_CONTROL_YAW_NEG) ks += 'D';
+        if (keys & AGENT_CONTROL_UP_POS) ks += '^';
+        if (keys & AGENT_CONTROL_UP_NEG) ks += 'v';
+        q = sThr.k < sThr.tests.size() ? &sThr.tests[sThr.k] : nullptr;     // endTest may have grown the list
+        const std::string id = q ? q->id : std::string();
+        sThrLog << pwsEpoch() << ',' << now - sThr.startT << ',' << sThr.frame << ',' << dt << ',' << ks << ',' << sGear
+                << ',' << speed << ',' << fwd << ',' << yaw * 180 / PI << ',' << id << ',' << PHASES[sThr.phase] << ','
+                << sThr.step << ',' << remain << ',' << sYawRate * 180 / PI << ',' << slip << '\n';
+        tag("thr sweep " + id + " " + PHASES[sThr.phase]);
+        return keys;
+    }
+
     bool backClear(const LLVector3d& pos, F64 yaw, F64 speed);     // room behind, below
 
     // ---------------------------------------------------------------- getting unstuck
@@ -2405,6 +3822,7 @@ namespace skroad::drive
     // give up (creeping a few metres between stucks, never the same spot).
     constexpr F64 LADDER_SPOT_M = 10.0, LADDER_FORGET_S = 120.0, LADDER_MAX_WINDOW_S = 120.0;
     constexpr S32 LADDER_TOP = 3, LADDER_MAX_N = 8;
+    constexpr F64 RECOVER_FLIP_DEG = 25.0;     // stuck again facing within this of the way travelled: turned back
     LLVector3d sLadderAt;
     F64 sLadderLast = -1e9;
     S32 sLadderRung = -1;
@@ -2435,16 +3853,16 @@ namespace skroad::drive
     // car's, the agent's region or the car object changing, until the new region sends the car's physics again
     // (its velocity changing, CROSS_FRESH_N updates, with the agent in the car's region). The car floats a
     // moment in the handover: the frozen, stuck, edge, drop, lost-road and line-stall checks all misread it
-    // (runs ended at region edges and corners), so in a crossing nothing is decided and W is held as it went in.
+    // (runs ended at region edges and corners), so in a crossing nothing is decided and W is held.
     constexpr F64 CROSS_AHEAD_M = 4.0, CROSS_AHEAD_S = 0.3, CROSS_AHEAD_GIVE_UP_S = 3.0, CROSS_STALL_S = 8.0,
                   CROSS_MIN_S = 0.25;
+    constexpr F64 CROSS_SLOW_S = 3.0;    // a crossing that took longer is logged; the quicker ones only at debug
     constexpr S32 CROSS_FRESH_N = 5;
     struct Crossing
     {
         bool on = false;
         bool changed = false;           // the region (or the car object) has changed since it began
         F64 began = 0.0, changed_at = 0.0;
-        U32 keys = 0;                   // what is held through it: W as it went in, nothing else
         S32 fresh = 0;                  // the car's physics updates seen since the change
         std::string from, to;
     };
@@ -2848,12 +4266,13 @@ namespace skroad::drive
     }
 
     void startTurnRound(bool flip, const LLVector3d& pos, F64 yaw, F64 now, const std::string& why);     // below
+    F64 travelYaw();     // below
     std::string placeText(const LLVector3d& pos);
 
     // One recovery step ended (or was given up): which, and the heading before and after, in the log.
     void logRecoverStep(const char* how, F64 yaw, const LLVector3d& pos)
     {
-        LL_INFOS("SKRoadDriver") << "recovery " << sRecoverStep << " " << how << ": heading "
+        LL_DEBUGS("SKRoadDriver") << "recovery " << sRecoverStep << " " << how << ": heading "
                                  << S32(std::lround(sRecoverYaw0 * 180 / PI)) << " -> " << S32(std::lround(yaw * 180 / PI))
                                  << " deg, aim " << S32(std::lround(recoverAim(pos, yaw) * 180 / PI)) << " deg" << LL_ENDL;
     }
@@ -2892,10 +4311,51 @@ namespace skroad::drive
         sRecoverCheckErr = std::fabs(err) * 180 / PI;
         sRecoverAbort = false;
         sRecoverFlips = 0;
-        LL_INFOS("SKRoadDriver") << "back off: heading " << S32(std::lround(yaw * 180 / PI)) << " deg, lane "
+        LL_DEBUGS("SKRoadDriver") << "back off: heading " << S32(std::lround(yaw * 180 / PI)) << " deg, lane "
                                  << S32(std::lround(aim * 180 / PI)) << " deg (" << S32(std::lround(err * 180 / PI))
                                  << " off), steering the nose " << (err > 0 ? "left" : "right") << " while backing with "
                                  << (sRecoverKey > 0 ? "A" : "D") << LL_ENDL;
+    }
+
+    // The car stuck off the middle of the road: the lane line kept away from that side for a while (sKerbBias).
+    void noteKerbHit(const LLVector3d& pos)
+    {
+        if (sPath.size() < 2)
+        {
+            return;
+        }
+        size_t at = 0;
+        F64 best = 1e18;
+        for (size_t i = 0; i < sPath.size(); ++i)
+        {
+            const F64 d = (sPath[i].x - pos.mdV[VX]) * (sPath[i].x - pos.mdV[VX]) + (sPath[i].y - pos.mdV[VY]) * (sPath[i].y - pos.mdV[VY]);
+            if (d < best)
+            {
+                best = d;
+                at = i;
+            }
+        }
+        const LanePoint& q = sPath[at];
+        const F64 mx = (q.left_x + q.right_x) / 2, my = (q.left_y + q.right_y) / 2;
+        const F64 across = (pos.mdV[VX] - mx) * q.ay - (pos.mdV[VY] - my) * q.ax;     // + right of the middle
+        if (q.road_w >= OPEN_W || std::fabs(across) < 0.3)
+        {
+            return;
+        }
+        if (sTrailCount >= sKerbBiasUntil)
+        {
+            sKerbBias = 0.0;
+        }
+        sKerbBias = std::clamp(sKerbBias + (across > 0 ? -KERB_BIAS_M : KERB_BIAS_M), -KERB_BIAS_MAX_M, KERB_BIAS_MAX_M);
+        sKerbBiasUntil = sTrailCount + U64(KERB_BIAS_RUN_M / TRAIL_STEP_M);
+        LL_DEBUGS("SKRoadDriver") << "stuck " << std::fabs(across) << " m " << (across > 0 ? "right" : "left")
+                                 << " of the road's middle: lane line moved " << sKerbBias << " m for " << KERB_BIAS_RUN_M
+                                 << " m" << LL_ENDL;
+    }
+
+    F64 kerbBias()
+    {
+        return sTrailCount < sKerbBiasUntil ? sKerbBias : 0.0;
     }
 
     // Stuck (or frozen) here: the next rung of the ladder for this spot. False if it gave up (the autopilot off) or
@@ -2921,7 +4381,7 @@ namespace skroad::drive
         const F64 aim = recoverAim(pos, yaw);
         const F64 aim_err = wrap(aim - yaw);
         const F64 off_deg = std::fabs(aim_err) * 180 / PI;
-        LL_INFOS("SKRoadDriver") << "stuck (" << why << ") at " << placeText(pos) << ": rung " << sLadderRung << " here, "
+        LL_DEBUGS("SKRoadDriver") << "stuck (" << why << ") at " << placeText(pos) << ": rung " << sLadderRung << " here, "
                                  << sRecoverTimes.size() << " in " << S32(LADDER_MAX_WINDOW_S) << " s; heading "
                                  << S32(std::lround(yaw * 180 / PI)) << " deg, aim " << S32(std::lround(aim * 180 / PI))
                                  << " deg (" << S32(std::lround(off_deg)) << " off)" << LL_ENDL;
@@ -2938,6 +4398,7 @@ namespace skroad::drive
         sRecoverStarted = now;
         sStuckSince = -1.0;
         sStuckTrail.clear();
+        noteKerbHit(pos);
         if (sLadderRung == 0 && off_deg > SPIN_MIN_DEG)
         {
             // stopped facing well off the road (the kerb, across a junction, past a bend): turned to face along the
@@ -2952,11 +4413,15 @@ namespace skroad::drive
             beginBackOff(now, pos, yaw);
             return true;
         }
-        // backed off here already and stuck again: turned round three-point to the way travelled
+        // backed off here already and stuck again: turned round three-point to the way travelled, or, already facing
+        // it, back the way it came: the way on is blocked (Satellite, a market stall in the lane: a turn round "not
+        // needed" left the car facing it, every line refused as back over the trail)
         sRecoverPhase = 0;
         sRecoverStep = "three-point turn";
-        LL_INFOS("SKRoadDriver") << "recovery three-point turn: heading " << S32(std::lround(yaw * 180 / PI)) << " deg" << LL_ENDL;
-        startTurnRound(false, pos, yaw, now, std::string(why) + " again here: turning round");
+        const bool facing_way = std::fabs(wrap(travelYaw() - yaw)) * 180 / PI < RECOVER_FLIP_DEG;
+        LL_DEBUGS("SKRoadDriver") << "recovery three-point turn: heading " << S32(std::lround(yaw * 180 / PI)) << " deg"
+                                 << (facing_way ? ", already along the way travelled: back the way it came" : "") << LL_ENDL;
+        startTurnRound(facing_way, pos, yaw, now, std::string(why) + " again here: turning round");
         return false;
     }
 
@@ -3089,7 +4554,7 @@ namespace skroad::drive
                         verdict = "growing after the swap, stop backing";
                     }
                 }
-                LL_INFOS("SKRoadDriver") << "back off check: yaw " << S32(std::lround(yaw * 180 / PI)) << " deg, rate "
+                LL_DEBUGS("SKRoadDriver") << "back off check: yaw " << S32(std::lround(yaw * 180 / PI)) << " deg, rate "
                                          << S32(std::lround(sYawRate * 180 / PI)) << " deg/s, error "
                                          << S32(std::lround(aim_err * 180 / PI)) << " deg (was "
                                          << S32(std::lround(sRecoverCheckErr)) << " off), speed " << speed << ", key "
@@ -3123,13 +4588,13 @@ namespace skroad::drive
             sRecoverPhase = 0;
             sStuckSince = -1.0;
             sStuckTrail.clear();
-            LL_INFOS("SKRoadDriver") << "back off over in gear " << sGear << ": "
+            LL_DEBUGS("SKRoadDriver") << "back off over in gear " << sGear << ": "
                                      << S32(std::lround(std::fabs(aim_err) * 180 / PI)) << " deg off the lane ("
                                      << (std::fabs(aim_err) * 180 / PI > REORIENT_DEG ? "turning on the spot" : "driving on")
                                      << ")" << LL_ENDL;
             if (std::fabs(aim_err) * 180 / PI > REORIENT_DEG)
             {
-                LL_INFOS("SKRoadDriver") << "backed off still " << S32(std::lround(std::fabs(aim_err) * 180 / PI))
+                LL_DEBUGS("SKRoadDriver") << "backed off still " << S32(std::lround(std::fabs(aim_err) * 180 / PI))
                                          << " deg off the lane: turning on the spot first" << LL_ENDL;
                 beginSpin(now, yaw, aim_err, false);
                 tag("stuck: re-orienting");
@@ -3165,7 +4630,7 @@ namespace skroad::drive
                     {
                         sSpinFlipped = true;
                         sSpinKey = -sSpinKey;
-                        LL_INFOS("SKRoadDriver") << "turn on the spot: not turning, the other key" << LL_ENDL;
+                        LL_DEBUGS("SKRoadDriver") << "turn on the spot: not turning, the other key" << LL_ENDL;
                     }
                     else
                     {
@@ -3307,9 +4772,10 @@ namespace skroad::drive
     {
         if (!sTrail.empty())
         {
-            LL_INFOS("SKRoadDriver") << "trail forgotten (" << why << ")" << LL_ENDL;
+            LL_DEBUGS("SKRoadDriver") << "trail forgotten (" << why << ")" << LL_ENDL;
         }
         sTrail.clear();
+        sJunctionsSaid.clear();
         sTrailTurnCount = sTrailCount;
         sTravelSet = false;
     }
@@ -3597,7 +5063,7 @@ namespace skroad::drive
         {
             const F64 moved = std::hypot(pos.mdV[VX] - sTurnFrom.mdV[VX], pos.mdV[VY] - sTurnFrom.mdV[VY]);
             const F64 err = std::fabs(wrap(travelYaw() - sTurnYaw)) * 180 / PI;
-            LL_INFOS("SKRoadDriver") << "turn round leg " << turnPhaseName(sTurnPhase) << " -> " << turnPhaseName(phase)
+            LL_DEBUGS("SKRoadDriver") << "turn round leg " << turnPhaseName(sTurnPhase) << " -> " << turnPhaseName(phase)
                                      << ": " << (outcome.empty() ? std::string("ended") : outcome) << ", moved " << moved
                                      << " m in " << (now - sTurnAt) << " s, off the way " << sTurnLegErr0 << " -> " << err
                                      << " deg" << LL_ENDL;
@@ -3691,7 +5157,7 @@ namespace skroad::drive
         sStuckTrail.clear();
         sKey = 0;
         sPath.clear();          // walked fresh along the way travelled
-        LL_INFOS("SKRoadDriver") << "turn round " << how << " at " << placeText(pos) << " after " << (now - sTurnStarted) << " s"
+        LL_DEBUGS("SKRoadDriver") << "turn round " << how << " at " << placeText(pos) << " after " << (now - sTurnStarted) << " s"
                                  << LL_ENDL;
     }
 
@@ -3737,7 +5203,7 @@ namespace skroad::drive
         // to turning on the spot, the key first the shorter way round to the way wanted
         auto toSpin = [&](const std::string& why)
         {
-            LL_INFOS("SKRoadDriver") << "turn round: " << why << ": turning on the spot" << LL_ENDL;
+            LL_DEBUGS("SKRoadDriver") << "turn round: " << why << ": turning on the spot" << LL_ENDL;
             sSpinKey = err > 0 ? 1 : -1;
             sSpinFlipped = false;
             sSpinTapNext = now;
@@ -3780,7 +5246,7 @@ namespace skroad::drive
         {
             if (off_deg < TURN_DONE_DEG)
             {
-                LL_INFOS("SKRoadDriver") << "turn round leg on the spot: faced the way, off " << off_deg << " deg" << LL_ENDL;
+                LL_DEBUGS("SKRoadDriver") << "turn round leg on the spot: faced the way, off " << off_deg << " deg" << LL_ENDL;
                 endTurnRound(pos, now, "done on the spot");
                 return false;
             }
@@ -3795,7 +5261,7 @@ namespace skroad::drive
                     {
                         sSpinFlipped = true;
                         sSpinKey = -sSpinKey;
-                        LL_INFOS("SKRoadDriver") << "turn round on the spot: not turning, the other key" << LL_ENDL;
+                        LL_DEBUGS("SKRoadDriver") << "turn round on the spot: not turning, the other key" << LL_ENDL;
                     }
                     else if (!sTurnSpinBacked && backClear(pos, yaw, 0.0))
                     {
@@ -4225,7 +5691,7 @@ namespace skroad::drive
         }
         if (to_land < -JUMP_PAST_LAND_M || (sJump.left_at >= 0 && now - sJump.left_at > JUMP_AIR_MAX_S))
         {
-            LL_INFOS("SKRoadDriver") << "jump done at " << placeText(pos) << LL_ENDL;
+            LL_DEBUGS("SKRoadDriver") << "jump done at " << placeText(pos) << LL_ENDL;
             sJump = JumpRun();
             return false;
         }
@@ -4276,7 +5742,7 @@ namespace skroad::drive
             if (sJump.left_at < 0)
             {
                 sJump.left_at = now;
-                LL_INFOS("SKRoadDriver") << "jump: off the lip at " << speed << " m/s in gear " << sGear << LL_ENDL;
+                LL_DEBUGS("SKRoadDriver") << "jump: off the lip at " << speed << " m/s in gear " << sGear << LL_ENDL;
             }
             keys = AGENT_CONTROL_AT_POS;
             sKey = 0;
@@ -4449,8 +5915,10 @@ namespace skroad::drive
             sView.jump = false;     // whatever lay past the cut
             // the line cut, the car held to the road short of it: a line that wandered off the road is no road end,
             // only the model's own end there is (the cut made one of every wander: dead ends and turns round)
-            const bool true_end = sView.road_end
-                                  && std::hypot(sView.road_end_x - q.x, sView.road_end_y - q.y) < REFUSE_TRUE_END_M;
+            // land not Linden road's (Linden roads only) is a road end wherever the line meets it: turned round at
+            const bool private_ahead = strncmp(why, PRIVATE_AHEAD, strlen(PRIVATE_AHEAD)) == 0;
+            const bool true_end = private_ahead
+                                  || (sView.road_end && std::hypot(sView.road_end_x - q.x, sView.road_end_y - q.y) < REFUSE_TRUE_END_M);
             sView.road_end = true_end;
             if (true_end)
             {
@@ -4465,7 +5933,7 @@ namespace skroad::drive
             sView.source += " (cut: " + std::string(why) + ")";
             if (now - last_refused > REFUSE_EVENT_GAP_S)
             {
-                LL_INFOS("SKRoadDriver") << "line refused at " << placeText(LLVector3d(q.x, q.y, q.z)) << ": " << why << LL_ENDL;
+                LL_DEBUGS("SKRoadDriver") << "line refused at " << placeText(LLVector3d(q.x, q.y, q.z)) << ": " << why << LL_ENDL;
                 fireEvent("refused_private", LLSD().with("why", why).with("point", llsd::array(q.x, q.y, q.z)), pos);
             }
             last_refused = now;
@@ -4877,6 +6345,93 @@ namespace skroad::drive
         return best;
     }
 
+    // A line's nearest stretch to a point: across it (+ right) and its way there; false for no line.
+    bool acrossLine(const std::vector<LanePoint>& line, F64 x, F64 y, F64& lat, F64& wx, F64& wy)
+    {
+        F64 best = 1e18;
+        for (size_t i = 0; i + 1 < line.size(); ++i)
+        {
+            const LanePoint& a = line[i];
+            const LanePoint& b = line[i + 1];
+            const F64 sx = b.x - a.x, sy = b.y - a.y, L = std::max(1e-6, std::hypot(sx, sy));
+            const F64 f = std::clamp(((x - a.x) * sx + (y - a.y) * sy) / (L * L), 0.0, 1.0);
+            const F64 dx = x - (a.x + f * sx), dy = y - (a.y + f * sy);
+            const F64 d2 = dx * dx + dy * dy;
+            if (d2 < best)
+            {
+                best = d2;
+                lat = (sy * dx - sx * dy) / L;
+                wx = sx / L;
+                wy = sy / L;
+            }
+        }
+        return best < 1e17;
+    }
+
+    // The line steered by moves sideways at the car no faster than LINE_SLEW_MPS: a fresh line laid a little to one
+    // side of the last (a kit piece's lane beside a plain piece's, 0.6 m; a width measured either side of two
+    // lanes; an edge found on one frame and not the next) is shifted back onto it at the car, the shift let go at
+    // that rate and faded out from LINE_SLEW_NEAR_M to LINE_SLEW_FAR_M ahead, so the steering follows a line that
+    // moves rather than jumps. A step past LINE_SLEW_MAX_M (the model's own lane-jump hold decides those) or a way
+    // turned past LINE_SLEW_DEG (a junction's turn) is taken at once. The overlay is given the line as laid.
+    constexpr F64 LINE_SLEW_MPS = 0.6, LINE_SLEW_MAX_M = 2.5, LINE_SLEW_DEG = 20.0;
+    constexpr F64 LINE_SLEW_NEAR_M = 10.0, LINE_SLEW_FAR_M = 40.0;
+    std::vector<LanePoint> sSteerLine;     // last frame's line as steered by
+    std::vector<LanePoint> sLaidLine;      // this read's line as the model laid it, for the overlay
+    F64 sLineShift = 0.0, sLineShiftAt = -1.0;
+
+    void slewLine(const LLVector3d& pos, F64 now)
+    {
+        const F64 x = pos.mdV[VX], y = pos.mdV[VY];
+        F64 lat_new, nx, ny, lat_old, ox, oy;
+        const F64 dt = sLineShiftAt < 0 ? 0.0 : std::max(0.0, now - sLineShiftAt);
+        sLineShiftAt = now;
+        sLaidLine.clear();
+        if (sPath.size() < 2 || sSteerLine.size() < 2 || sTurnPhase != 0 || sRecoverPhase != 0
+            || !acrossLine(sPath, x, y, lat_new, nx, ny) || !acrossLine(sSteerLine, x, y, lat_old, ox, oy)
+            || nx * ox + ny * oy < std::cos(LINE_SLEW_DEG * PI / 180))
+        {
+            sLineShift = 0.0;
+            sSteerLine = sPath;
+            return;
+        }
+        // the car lat_new right of the laid line, lat_old of the last: shifted by lat_new - lat_old it is where it was
+        F64 shift = lat_new - lat_old;
+        if (std::fabs(shift) > LINE_SLEW_MAX_M)
+        {
+            shift = 0.0;
+        }
+        const F64 let_go = LINE_SLEW_MPS * dt;
+        shift = shift > 0 ? std::max(0.0, shift - let_go) : std::min(0.0, shift + let_go);
+        sLineShift = shift;
+        if (std::fabs(shift) > 0.01)
+        {
+            sLaidLine = sPath;
+            F64 s_car = 0, lat, run = 0;
+            size_t seg = 0;
+            placeOnPath(x, y, s_car, lat, seg);
+            for (size_t i = 0; i < sPath.size(); ++i)
+            {
+                if (i > 0)
+                {
+                    run += std::hypot(sPath[i].x - sPath[i - 1].x, sPath[i].y - sPath[i - 1].y);
+                }
+                const F64 ahead = run - s_car;
+                const F64 w = std::clamp((LINE_SLEW_FAR_M - ahead) / (LINE_SLEW_FAR_M - LINE_SLEW_NEAR_M), 0.0, 1.0);
+                LanePoint& q = sPath[i];
+                q.x += q.ay * shift * w;      // + right: (ay, -ax)
+                q.y -= q.ax * shift * w;
+            }
+        }
+        sSteerLine = sPath;
+    }
+
+    // The line for the overlay: as the model laid it, before slewLine moved it.
+    const std::vector<LanePoint>& lineForView()
+    {
+        return !sLaidLine.empty() && sLaidLine.size() == sPath.size() && !sPathFromStore ? sLaidLine : roadForView();
+    }
+
     // Each vehicle about the car on the road, placed along and across sPath, the line the car keeps.
     std::vector<Vehicle> seeTraffic(const LLViewerObject* car, const LLVector3d& pos, F64 now)
     {
@@ -5109,7 +6664,7 @@ namespace skroad::drive
         const std::string state = sOvertake == 1 ? "overtake" : sOvertake == 2 ? "return" : follow ? "follow" : "";
         if (state != sTrafficState)
         {
-            LL_INFOS("SKRoadDriver") << "traffic: " << (state.empty() ? "clear" : state) << LL_ENDL;
+            LL_DEBUGS("SKRoadDriver") << "traffic: " << (state.empty() ? "clear" : state) << LL_ENDL;
             sTrafficState = state;
         }
     }
@@ -5135,6 +6690,7 @@ void sk_road_driver::onSettingChanged(const LLSD& enabled)
         sPreviewing = false;
         sCourse.set = false;        // a test course is laid out from where the car is now
         sClock.reset();
+        sBothLogged = false;
         sFrame = 0;
         sTaps.clear();
         sKey = 0;
@@ -5147,6 +6703,7 @@ void sk_road_driver::onSettingChanged(const LLSD& enabled)
         sThrottleLog.clear();
         sPwmPull = 0.0;
         sPwmK = 1.0;
+        sTwoMode.reset();
         sRecoverPhase = 0;
         sLadderRung = -1;
         sFrozenTried = false;
@@ -5163,7 +6720,6 @@ void sk_road_driver::onSettingChanged(const LLSD& enabled)
         sRecoverTimes.clear();
         sPoseChangedAt = -1.0;
         sFrozenSaid = false;
-        sLiftUntil = sLiftNext = -100.0;
         sGearMax = 99;
         sJump = JumpRun();
         sGearBefore = 0;
@@ -5185,6 +6741,9 @@ void sk_road_driver::onSettingChanged(const LLSD& enabled)
         sDriven.clear();
         sHaveLastLine = false;
         sLastSeenRoad = 0.0;
+        sLineKeptAt = 0.0;
+        sKerbBias = 0.0;
+        sKerbBiasUntil = 0;
         sPrevYawT = -1.0;
         sYawRate = 0.0;
         sMeas.clear();
@@ -5220,7 +6779,7 @@ void sk_road_driver::onSettingChanged(const LLSD& enabled)
         sLog << "# run (predictive); t,speed,yaw_deg,yaw_rate_deg,dist_deg,err_m,path_n,road_w,lanes,boundary_m,"
                 "target,keys,gain,shift,gear,note\n";
         sLog << "# vehicle " << sVehicle << "\n";
-        LL_INFOS("SKRoadDriver") << "vehicle half width " << sCarHalfW << " m" << LL_ENDL;
+        sLog << "# half width " << sCarHalfW << "\n";
         say("on. Any movement key takes over.");
     }
     else if (!enabled.asBoolean() && sOn)
@@ -5229,11 +6788,31 @@ void sk_road_driver::onSettingChanged(const LLSD& enabled)
     }
 }
 
-void sk_road_driver::noteChat(const LLUUID& from, const std::string& text)
+void sk_road_driver::noteChat(const LLUUID& from, const std::string& from_name, const std::string& text)
 {
-    if (!sOn || from.isNull() || from != sVehicle)
+    // the vehicle sat in: the driven one while on, else the seat's root, so a shift made before switching on counts
+    LLUUID seated = sVehicle;
+    if (!sOn)
+    {
+        const LLViewerObject* seat = isAgentAvatarValid() && gAgentAvatarp->isSitting()
+                                         ? dynamic_cast<const LLViewerObject*>(gAgentAvatarp->getParent())
+                                         : nullptr;
+        const LLViewerObject* car = seat ? seat->getRootEdit() : nullptr;
+        seated = car ? car->getID() : LLUUID::null;
+    }
+    if (from.isNull() || from != seated)
     {
         return;
+    }
+    // The chat names the car: when the simulator's properties reply has not, the profile is found by that name.
+    if (sCarKey.empty() || sCarKeyFor != seated)
+    {
+        if (!from_name.empty())
+        {
+            sCarKeyFor = seated;
+            sCarKey = from_name;
+            LL_DEBUGS("SKRoadDriver") << "vehicle " << seated << ": named '" << from_name << "' by its chat" << LL_ENDL;
+        }
     }
     const VehicleProfile& car = vehicleProfile();
     if (!car.chat_gears)
@@ -5252,7 +6831,7 @@ void sk_road_driver::noteChat(const LLUUID& from, const std::string& text)
             sGear = gear;
         }
     }
-    LL_INFOS("SKRoadDriver") << "vehicle says '" << text << "': gear " << sGear << LL_ENDL;
+    LL_DEBUGS("SKRoadDriver") << "vehicle says '" << text << "': gear " << sGear << LL_ENDL;
 }
 
 namespace skroad::drive
@@ -5315,6 +6894,7 @@ void sk_road_driver::beforeAgentUpdate()
             SKAirCells::instance().addDemand(AIR_DEMAND);
         }
         sClock.reset();
+        sBothLogged = false;
         sPath.clear();
         sDriveTex.clear();
         driveTexChanged();
@@ -5548,7 +7128,6 @@ void sk_road_driver::beforeAgentUpdate()
             sCross = Crossing();
             sCross.on = true;
             sCross.began = now;
-            sCross.keys = sLastSentKeys & AGENT_CONTROL_AT_POS;
             sCross.from = regionName(region_moved ? from_region : car_region);
             sCross.to = region_moved ? regionName(car_region) : "?";
             if (region_moved)
@@ -5556,7 +7135,7 @@ void sk_road_driver::beforeAgentUpdate()
                 sCross.changed = true;
                 sCross.changed_at = now;
             }
-            LL_INFOS("SKRoadDriver") << "crossing from " << sCross.from << (region_moved ? " to " + sCross.to : " (ahead)")
+            LL_DEBUGS("SKRoadDriver") << "crossing from " << sCross.from << (region_moved ? " to " + sCross.to : " (ahead)")
                                      << " at " << placeText(pos) << ", " << to_edge << " m to the edge" << LL_ENDL;
         }
         else if (sCross.on && region_moved)
@@ -5566,7 +7145,7 @@ void sk_road_driver::beforeAgentUpdate()
             sCross.changed_at = now;
             sCross.fresh = 0;
             sCross.to = regionName(car_region);
-            LL_INFOS("SKRoadDriver") << "crossing: into " << sCross.to << " (agent in " << regionName(agent_region)
+            LL_DEBUGS("SKRoadDriver") << "crossing: into " << sCross.to << " (agent in " << regionName(agent_region)
                                      << ")" << LL_ENDL;
         }
         if (sCross.on)
@@ -5589,9 +7168,18 @@ void sk_road_driver::beforeAgentUpdate()
                 }
                 if (sCross.fresh >= CROSS_FRESH_N && now - sCross.changed_at >= CROSS_MIN_S)
                 {
-                    LL_INFOS("SKRoadDriver") << "crossing from " << sCross.from << " to " << sCross.to << " done in "
-                                             << (now - sCross.began) << " s (" << (now - sCross.changed_at)
-                                             << " s from the change)" << LL_ENDL;
+                    if (now - sCross.began > CROSS_SLOW_S)
+                    {
+                        LL_INFOS("SKRoadDriver") << "slow crossing from " << sCross.from << " to " << sCross.to << " done in "
+                                                 << (now - sCross.began) << " s (" << (now - sCross.changed_at)
+                                                 << " s from the change)" << LL_ENDL;
+                    }
+                    else
+                    {
+                        LL_DEBUGS("SKRoadDriver") << "crossing from " << sCross.from << " to " << sCross.to << " done in "
+                                                  << (now - sCross.began) << " s (" << (now - sCross.changed_at)
+                                                  << " s from the change)" << LL_ENDL;
+                    }
                     ended = true;
                 }
                 else if (now - sCross.changed_at > CROSS_STALL_S)
@@ -5610,6 +7198,7 @@ void sk_road_driver::beforeAgentUpdate()
                 sCross.on = false;
                 // what counted time through the handover starts again
                 sLastSeenRoad = std::max(sLastSeenRoad, now);
+                sLineKeptAt = std::max(sLineKeptAt, now);
                 sStuckSince = -1.0;
                 sStuckTrail.clear();
                 if (!sCrossStalledIn)
@@ -5620,10 +7209,10 @@ void sk_road_driver::beforeAgentUpdate()
             }
             else
             {
-                // held as it went in: W or nothing, no wheel, no brake
+                // W held (let go there, the car stalled in the handover), no wheel, no brake
                 sKey = 0;
                 std::string note = "crossing " + sCross.from + ">" + sCross.to;
-                sendKeys(sCross.keys, note);
+                sendKeys(AGENT_CONTROL_AT_POS, note);
                 sThrottle = (sLastSentKeys & AGENT_CONTROL_AT_POS) != 0;
                 sView.valid = true;
                 sView.car = pos;
@@ -5632,7 +7221,7 @@ void sk_road_driver::beforeAgentUpdate()
                 sView.waiting = false;
                 sLog << now << ',' << speed << ',' << yaw * 180 / PI << ',' << sYawRate * 180 / PI << ",0,"
                      << sLastErr << ',' << sPath.size() << ',' << (sPath.empty() ? 0.0 : sPath[0].road_w) << ','
-                     << (sPath.empty() ? 0 : sPath[0].lanes) << ',' << boundary << ",0," << std::hex << sCross.keys
+                     << (sPath.empty() ? 0 : sPath[0].lanes) << ',' << boundary << ",0," << std::hex << AGENT_CONTROL_AT_POS
                      << std::dec << ',' << sGain << ',' << sShift << ',' << sGear << ',' << note << '\n';
                 return;
             }
@@ -5720,7 +7309,7 @@ void sk_road_driver::beforeAgentUpdate()
         // keep + sKeepExtra: the left lane's line while passing (traffic)
         // walked along the way travelled, not the nose: after a recovery the nose may point anywhere
         std::vector<LanePoint> before = sPath;
-        if (readRoad(pos, wx, wy, speed, keep + (sOn ? sKeepExtra : 0.0), now, course))
+        if (readRoad(pos, wx, wy, speed, keep + (sOn ? sKeepExtra + kerbBias() : 0.0), now, course))
         {
             sPathFrame = sFrame;
         }
@@ -5729,15 +7318,35 @@ void sk_road_driver::beforeAgentUpdate()
             watchBanLines();
             vetLine(pos, now);
         }
+        // the refusal is logged on its edges only: it can hold for minutes, the walk run again every frame
+        static F64 trail_refused_since = -1.0;
         if (!preview && std::string(course).empty() && lineBackOverTrail(sPath))
         {
             // back the way it came, over the trail: the line had before stands
-            LL_INFOS("SKRoadDriver") << "line refused: it ran back over the trail at " << placeText(pos) << LL_ENDL;
+            if (trail_refused_since < 0.0)
+            {
+                LL_INFOS("SKRoadDriver") << "line refused: it ran back over the trail at " << placeText(pos) << LL_ENDL;
+                trail_refused_since = now;
+            }
             sPath = std::move(before);
             sView.source = "refused (back over the trail)";
         }
+        else if (trail_refused_since >= 0.0)
+        {
+            LL_INFOS("SKRoadDriver") << "line no longer refused as back over the trail, after "
+                                     << llformat("%.1f", now - trail_refused_since) << " s at " << placeText(pos) << LL_ENDL;
+            trail_refused_since = -1.0;
+        }
+        if (!preview && std::string(course).empty())
+        {
+            slewLine(pos, now);
+        }
     }
     const bool road = !sPath.empty();
+    if (road || sLineKeptAt <= 0.0)
+    {
+        sLineKeptAt = now;
+    }
     noteLineWay(now);
     if (!preview)
     {
@@ -5749,7 +7358,7 @@ void sk_road_driver::beforeAgentUpdate()
         sView.valid = true;     // the road's pieces and segments are drawn, path or none
         sView.car = pos;
         sView.yaw = yaw;
-        sView.path = roadForView();
+        sView.path = lineForView();
         sView.tapping = 0;
         sView.waiting = false;
         return;
@@ -5758,7 +7367,7 @@ void sk_road_driver::beforeAgentUpdate()
     {
         static LLCachedControl<std::string> course_d(gSavedSettings, "SKRoadAutopilotTestCourse", "");
         static LLCachedControl<S32> sweep_d(gSavedSettings, "SKRoadAutopilotSweep", 0);
-        if (std::string(course_d).empty() && S32(sweep_d) == 0 && speed > 1.0)
+        if (std::string(course_d).empty() && S32(sweep_d) == 0 && !pwmSweepOn() && speed > 1.0)
         {
             noteDriven(pos, now);
         }
@@ -5770,8 +7379,15 @@ void sk_road_driver::beforeAgentUpdate()
     // arrive over seconds), and the wait for it to load (roadNotLoaded, up to ROAD_WAIT_S) decides instead; the
     // mission lost the road 50 m from a fresh rez this way
     // stopped first, on the road (braked below), never left rolling on past its edge onto someone's land
-    if (!road && sTurnPhase == 0 && now - sLastSeenRoad > LOST_S && now > LOST_S && S32(sweep_on) == 0 && !bench_on && !roadNotLoaded(pos, yaw)
-        && (speed < 0.5 || now - sLastSeenRoad > LOST_S + LOST_BRAKE_S))
+    if (!road && sTurnPhase == 0 && sRecoverPhase == 0 && now - sLineKeptAt > NO_LINE_STUCK_S && S32(sweep_on) == 0
+        && !pwmSweepOn() && !bench_on)
+    {
+        sendKeys(AGENT_CONTROL_AT_NEG, note);
+        stop("stuck: no road to follow here in " + std::to_string(S32(NO_LINE_STUCK_S)) + " s, stopping");
+        return;
+    }
+    if (!road && sTurnPhase == 0 && now - sLineKeptAt > LOST_S && now > LOST_S && S32(sweep_on) == 0 && !pwmSweepOn() && !bench_on && !roadNotLoaded(pos, yaw)
+        && (speed < 0.5 || now - sLineKeptAt > LOST_S + LOST_BRAKE_S))
     {
         sendKeys(AGENT_CONTROL_AT_NEG, note);
         stop("lost the road, stopping");
@@ -5794,8 +7410,27 @@ void sk_road_driver::beforeAgentUpdate()
     static LLCachedControl<bool> probe_on(gSavedSettings, "SKRoadAutopilotProbe", false);
     const bool probe = probe_on;
     const bool pwm = std::string(steer_mode_g) != "plan";
+    static LLCachedControl<std::string> actuator(gSavedSettings, "SKRoadAutopilotSteerActuator", "twomode");
+    const bool twomode = pwm && std::string(actuator) == "twomode";
     // steering
-    if (sKey)
+    if (twomode)
+    {
+        // the two-mode actuator owns the key frame by frame: no tap is left to run out (sKey stays 0)
+        sKey = 0;
+        if (road && sPath.size() >= 2 && lineSeen() >= STEER_MIN_LINE_M && speed > 1.0)
+        {
+            if (const S32 d = twoModeSteer(pos, yaw, speed, now, note))
+            {
+                sLastSteer = now;
+                keys |= d > 0 ? AGENT_CONTROL_YAW_POS : AGENT_CONTROL_YAW_NEG;
+            }
+        }
+        else
+        {
+            sTwoMode.reset();
+        }
+    }
+    else if (sKey)
     {
         keys |= sKey > 0 ? AGENT_CONTROL_YAW_POS : AGENT_CONTROL_YAW_NEG;
     }
@@ -5860,12 +7495,9 @@ void sk_road_driver::beforeAgentUpdate()
         }
     }
 
-    // speed: slower toward and just after a border; coast when too fast; gears as Nexii drives
+    // speed: W kept toward and just after a border, slowed there by the gear (pickGear); coast when too fast
     F32 target = cruise;
-    if (boundary < speed * CROSSING_SLOW_S || now - sLastCrossingT < 1.5)
-    {
-        target = std::min(target, CROSSING_SPEED);
-    }
+    const bool crossing_near = boundary < speed * CROSSING_SLOW_S || now - sLastCrossingT < 1.5;
     if (!road)
     {
         target = 0.f;
@@ -5899,19 +7531,18 @@ void sk_road_driver::beforeAgentUpdate()
     {
         // a cruise: W held on the road, the speed the gear's (pickGear chooses it from the bends ahead); no
         // target speed to throttle to, so no pulsing of W, which rocked the car and flashed its brake lights. Off
-        // the road it lets go and the car rolls to a stop. The one exception is a bend tighter than the car turns
-        // at its speed (bendLift), as Nexii takes one by hand: W let go a moment at a time.
-        pickGear(speed, now, road, keys, note);
+        // the road it lets go and the car rolls to a stop.
+        pickGear(speed, now, road, crossing_near, keys, note);
         // the lane guard lets W off only while it is moving the car back (below 3 m/s it never holds W back: set
         // once and never cleared at a standstill, it stopped the car for good)
-        if (road && !bendLift(speed, now) && !(sLaneGuard && speed > 3.0))
+        if (road && !(sLaneGuard && speed > 3.0))
         {
             keys |= AGENT_CONTROL_AT_POS;
             measureGearTop(speed, now);
         }
         else if (road)
         {
-            note += note.empty() ? "lift" : ", lift";
+            note += note.empty() ? "lane guard: W off" : ", lane guard: W off";
         }
         else if (speed > 0.5 && sTurnPhase == 0 && sRecoverPhase == 0)
         {
@@ -5938,7 +7569,7 @@ void sk_road_driver::beforeAgentUpdate()
     {
         // the turns ahead (a junction's first): W let go above the speed they allow, braked well above it while no
         // turn key is held (braking while turning turns this car the other way)
-        const F64 allow = turnAllowance(pos, speed, sTravelX, sTravelY);
+        const F64 allow = turnAllowance(pos, speed, target, sTravelX, sTravelY);
         noteJunctionApproach(pos, speed, allow, sTravelX, sTravelY);
         if (speed > allow)
         {
@@ -5954,7 +7585,9 @@ void sk_road_driver::beforeAgentUpdate()
     }
     benchStep(now, note);
     static LLCachedControl<std::string> course_g(gSavedSettings, "SKRoadAutopilotTestCourse", "");
-    static LLCachedControl<S32> sweep_gear(gSavedSettings, "SKRoadAutopilotSweep", 0);
+    static LLCachedControl<S32> sweep_gear_c(gSavedSettings, "SKRoadAutopilotSweep", 0);
+    const bool pwm_sweep = pwmSweepOn();     // the PWM sweep stands in for the sweep below: no road, its own keys
+    const S32 sweep_gear = pwm_sweep ? std::max(1, S32(sweep_gear_c)) : S32(sweep_gear_c);
     const bool was_recovering = sRecoverPhase != 0;
     if (S32(sweep_gear) == 0 && sTurnPhase == 0 && recovering(keys, speed, now, pos, yaw, note))
     {
@@ -5967,6 +7600,10 @@ void sk_road_driver::beforeAgentUpdate()
         // driven the way the nose now points
         startTurnRound(false, pos, yaw, now,
                        was_recovering ? "unstuck facing back: turning round to carry on" : "facing back against the way travelled: turning round");
+    }
+    else if (pwm_sweep)
+    {
+        keys = thrSweepOn() ? thrSweepKeys(now, speed, pos, yaw, note) : pwmSweepKeys(now, speed, pos, yaw, note);
     }
     else if (S32(sweep_gear) > 0)
     {
@@ -6022,7 +7659,7 @@ void sk_road_driver::beforeAgentUpdate()
         if (edge && sEdgeSince < 0)
         {
             sEdgeSince = now;
-            LL_INFOS("SKRoad") << "edge: " << (off_edge ? (sDropSide ? "off the road ahead, drop beside" : "off the road ahead")
+            LL_INFOS("SKRoadDriver") << "edge: " << (off_edge ? (sDropSide ? "off the road ahead, drop beside" : "off the road ahead")
                                                        : (sRefusedWhy ? sRefusedWhy : "refused"))
                                << (refused ? " at " + std::to_string(sRefusedAtM) + " m" : std::string())
                                << ", speed " << speed << ", line " << lineSeen() << " m" << LL_ENDL;
@@ -6232,7 +7869,7 @@ void sk_road_driver::beforeAgentUpdate()
     sView.valid = true;
     sView.car = pos;
     sView.yaw = yaw;
-    sView.path = roadForView();
+    sView.path = lineForView();
     sView.tapping = (keys & AGENT_CONTROL_YAW_POS) ? 1 : (keys & AGENT_CONTROL_YAW_NEG) ? -1 : 0;
     sView.waiting = !road;
     if (S32(sweep_gear) > 0)
