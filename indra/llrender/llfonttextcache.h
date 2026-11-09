@@ -197,7 +197,7 @@ public:
         LLFontGL::ShadowType shadow = LLFontGL::NO_SHADOW,
         S32 max_bytes = S32_MAX, S32 max_pixels = S32_MAX,
         F32* right_x = NULL,
-        bool use_ellipses = false,
+        LLFontGL::Ellipsis ellipsis = {}, // <SK:Nexii>
         bool use_color = true);
 
     S32 renderBytes(const LLFontGL* fontp,
@@ -210,7 +210,7 @@ public:
         LLFontGL::ShadowType shadow = LLFontGL::NO_SHADOW,
         S32 max_bytes = S32_MAX,
         F32* right_x = NULL,
-        bool use_ellipses = false,
+        LLFontGL::Ellipsis ellipsis = {}, // <SK:Nexii>
         bool use_color = true);
 
     S32 renderBytes(const LLFontGL* fontp,
@@ -223,7 +223,7 @@ public:
         LLFontGL::ShadowType shadow = LLFontGL::NO_SHADOW,
         S32 max_bytes = S32_MAX, S32 max_pixels = S32_MAX,
         F32* right_x = NULL,
-        bool use_ellipses = false,
+        LLFontGL::Ellipsis ellipsis = {}, // <SK:Nexii>
         bool use_color = true);
 
     // Width, from the same cache and behind the same key. Extracting it from a
@@ -309,7 +309,7 @@ private:
          LLFontGL::ShadowType shadow,
          S32 max_bytes, S32 max_pixels,
          F32* right_x,
-         bool use_ellipses,
+         LLFontGL::Ellipsis ellipsis, // <SK:Nexii>
          bool use_color);
 
     void genBuffers(const LLFontGL* fontp,
@@ -322,7 +322,7 @@ private:
         LLFontGL::ShadowType shadow,
          S32 max_bytes, S32 max_pixels,
          F32* right_x,
-         bool use_ellipses,
+         LLFontGL::Ellipsis ellipsis, // <SK:Nexii>
          bool use_color);
 
     void renderBuffers();
@@ -374,7 +374,7 @@ private:
     LLFontGL::VAlign mLastValign = LLFontGL::BASELINE;
     U8 mLastStyle = LLFontGL::NORMAL;
     LLFontGL::ShadowType mLastShadow = LLFontGL::NO_SHADOW;
-    bool mLastUseEllipses = false;
+    LLFontGL::Ellipsis mLastEllipsis; // <SK:Nexii>
     bool mLastUseColor = true;
     F32 mLastRightX = 0.f;
 

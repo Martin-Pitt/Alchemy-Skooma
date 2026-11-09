@@ -95,6 +95,7 @@ public:
          * Tab label ellipses
          */
         Optional<bool>                      use_ellipses;
+        Optional<LLFontGL::EEllipsisMode>   ellipsis; // <SK:Nexii> where tab labels' ellipsis goes; wins over use_ellipses
 
         /**
          * Use LLCustomButtonIconCtrl or LLButton in LLTabTuple
@@ -347,7 +348,7 @@ private:
     bool                            mEnableTabsFlashing;
     LLUIColor                       mTabsFlashingColor;
     S32                             mTabIconCtrlPad;
-    bool                            mUseTabEllipses;
+    LLFontGL::Ellipsis              mTabEllipsis; // <SK:Nexii>
     LLFrameTimer                    mMouseDownTimer;
 
     bool mUseTabOffset;

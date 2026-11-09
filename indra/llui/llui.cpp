@@ -757,5 +757,15 @@ namespace LLInitParam
         declare("hard", LLFontGL::DROP_SHADOW);
         declare("soft", LLFontGL::DROP_SHADOW_SOFT);
     }
+
+    // <SK:Nexii> XUI's names for where an ellipsis goes.
+    void TypeValues<LLFontGL::EEllipsisMode>::declareValues()
+    {
+        declare("none", LLFontGL::ELLIPSIS_NONE);
+        declare("end", LLFontGL::ELLIPSIS_END);
+        declare("middle", LLFontGL::ELLIPSIS_MIDDLE);
+        declare("start", LLFontGL::ELLIPSIS_START);
+    }
+    // </SK:Nexii>
 }
 

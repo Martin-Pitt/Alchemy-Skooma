@@ -297,6 +297,7 @@ LLScrollListText::LLScrollListText(const LLScrollListCell::Params& p)
     mColor(p.color),
     mUseColor(p.color.isProvided()),
     mFontAlignment(p.font_halign),
+    mEllipsis(p.ellipsis()), // <SK:Nexii>
     mVisible(p.visible),
     mHighlightCount( 0 ),
     mHighlightOffset( 0 )
@@ -508,7 +509,7 @@ void LLScrollListText::draw(const LLColor4& color, const LLColor4& highlight_col
                        string_bytes,
                        getTextWidth(),
                        &right_x,
-                       true);
+                       mEllipsis); // <SK:Nexii>
 }
 
 //

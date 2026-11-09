@@ -46,6 +46,7 @@
 #include "lldir.h"
 #include "llstring.h"
 #include "llshadermgr.h"
+#include "sktextellipsis.h" // <SK:Nexii>
 
 // Third party library includes
 #include <boost/tokenizer.hpp>
@@ -392,18 +393,18 @@ static void origin_from_rect(const LLRectf& rect, LLFontGL::VAlign valign, F32& 
 }
 
 S32 LLFontGL::renderBytes(std::string_view utf8text, S32 begin_offset, const LLRect& rect, const LLColor4 &color, HAlign halign, VAlign valign, U8 style,
-    ShadowType shadow, S32 max_bytes, F32* right_x, bool use_ellipses, bool use_color) const
+    ShadowType shadow, S32 max_bytes, F32* right_x, Ellipsis ellipsis, bool use_color) const // <SK:Nexii>
 {
     LLRectf rect_float((F32)rect.mLeft, (F32)rect.mTop, (F32)rect.mRight, (F32)rect.mBottom);
-    return renderBytes(utf8text, begin_offset, rect_float, color, halign, valign, style, shadow, max_bytes, right_x, use_ellipses, use_color);
+    return renderBytes(utf8text, begin_offset, rect_float, color, halign, valign, style, shadow, max_bytes, right_x, ellipsis, use_color); // <SK:Nexii>
 }
 
 S32 LLFontGL::renderBytes(std::string_view utf8text, S32 begin_offset, const LLRectf& rect, const LLColor4 &color, HAlign halign, VAlign valign, U8 style,
-                          ShadowType shadow, S32 max_bytes, F32* right_x, bool use_ellipses, bool use_color) const
+                          ShadowType shadow, S32 max_bytes, F32* right_x, Ellipsis ellipsis, bool use_color) const // <SK:Nexii>
 {
     F32 x, y;
     origin_from_rect(rect, valign, x, y);
-    return renderBytes(utf8text, begin_offset, x, y, color, halign, valign, style, shadow, max_bytes, (S32)rect.getWidth(), right_x, use_ellipses, use_color);
+    return renderBytes(utf8text, begin_offset, x, y, color, halign, valign, style, shadow, max_bytes, (S32)rect.getWidth(), right_x, ellipsis, use_color); // <SK:Nexii>
 }
 
 
@@ -452,7 +453,7 @@ void ALTextTransform::end()
 
 
 S32 LLFontGL::renderBytes(std::string_view utf8text, S32 begin_offset, F32 x, F32 y, const LLColor4 &color, HAlign halign, VAlign valign, U8 style,
-                          ShadowType shadow, S32 max_bytes, S32 max_pixels, F32* right_x, bool use_ellipses, bool use_color, pass_boundary_cb_t on_pass_boundary) const
+                          ShadowType shadow, S32 max_bytes, S32 max_pixels, F32* right_x, Ellipsis ellipsis, bool use_color, pass_boundary_cb_t on_pass_boundary) const // <SK:Nexii>
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_UI;
 
@@ -476,11 +477,28 @@ S32 LLFontGL::renderBytes(std::string_view utf8text, S32 begin_offset, F32 x, F3
     if (const LLFontGL* face = faceFor(style); face != this)
     {
         return face->renderBytes(utf8text, begin_offset, x, y, color, halign, valign, style, shadow,
-                                 max_bytes, max_pixels, right_x, use_ellipses, use_color,
+                                 max_bytes, max_pixels, right_x, ellipsis, use_color, // <SK:Nexii>
                                  std::move(on_pass_boundary));
     }
 
     S32 scaled_max_pixels = max_pixels == S32_MAX ? S32_MAX : llceil((F32)max_pixels * sScaleX);
+
+    // <SK:Nexii> A middle or start cut draws the shortened string as one run, before any transform is set up.
+    if ((ellipsis.mode == ELLIPSIS_MIDDLE || ellipsis.mode == ELLIPSIS_START) && max_pixels != S32_MAX)
+    {
+        const S32 rest = (S32)utf8text.length() - begin_offset;
+        const S32 slice_bytes = max_bytes == -1 ? rest : llclamp(max_bytes, 0, rest);
+        static thread_local std::string shortened;
+        const SKTextEllipsis::Cut cut = SKTextEllipsis::shorten(*this, utf8text.substr((size_t)begin_offset, (size_t)slice_bytes),
+                                                                (F32)max_pixels, ellipsis.mode, shortened);
+        if (cut.shortened)
+        {
+            renderBytes(shortened, 0, x, y, color, halign, valign, style, shadow, S32_MAX, max_pixels, right_x,
+                        ELLIPSIS_NONE, use_color, std::move(on_pass_boundary));
+            return cut.drawnBytes();
+        }
+    }
+    // </SK:Nexii>
 
     // determine which style flags need to be added programmatically by stripping off the
     // style bits that are drawn by the underlying Freetype font
@@ -583,7 +601,7 @@ S32 LLFontGL::renderBytes(std::string_view utf8text, S32 begin_offset, F32 x, F3
     // shape-cache lookup, so three calls on the worst-case path is real
     // measurement work paid for nothing.
     const bool needs_string_width = (halign == RIGHT) || (halign == HCENTER)
-                                  || (style_to_add & UNDERLINE) || use_ellipses;
+                                  || (style_to_add & UNDERLINE) || ellipsis.mode == ELLIPSIS_END; // <SK:Nexii>
 
     // The slice is shaped here rather than further down, so the width comes
     // out of the glyphs this draw is about to lay down instead of a second
@@ -663,7 +681,7 @@ S32 LLFontGL::renderBytes(std::string_view utf8text, S32 begin_offset, F32 x, F3
     }
 
     bool draw_ellipses = false;
-    if (use_ellipses)
+    if (ellipsis.mode == ELLIPSIS_END) // <SK:Nexii>
     {
         // Use the hoisted string_width — it was computed with `length`
         // (clamped against max_chars), which is what we actually render,
@@ -1143,9 +1161,9 @@ S32 LLFontGL::renderBytes(std::string_view utf8text, S32 begin_offset, F32 x, F3
     return chars_drawn;
 }
 
-S32 LLFontGL::renderUTF8(std::string_view text, S32 begin_offset, F32 x, F32 y, const LLColor4 &color, HAlign halign, VAlign valign, U8 style, ShadowType shadow, S32 max_bytes, S32 max_pixels, F32* right_x, bool use_ellipses, bool use_color) const
+S32 LLFontGL::renderUTF8(std::string_view text, S32 begin_offset, F32 x, F32 y, const LLColor4 &color, HAlign halign, VAlign valign, U8 style, ShadowType shadow, S32 max_bytes, S32 max_pixels, F32* right_x, Ellipsis ellipsis, bool use_color) const // <SK:Nexii>
 {
-    return renderBytes(text, begin_offset, x, y, color, halign, valign, style, shadow, max_bytes, max_pixels, right_x, use_ellipses, use_color);
+    return renderBytes(text, begin_offset, x, y, color, halign, valign, style, shadow, max_bytes, max_pixels, right_x, ellipsis, use_color); // <SK:Nexii>
 }
 
 S32 LLFontGL::renderUTF8(std::string_view text, S32 begin_offset, S32 x, S32 y, const LLColor4 &color) const

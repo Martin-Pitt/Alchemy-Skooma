@@ -228,6 +228,7 @@ LLTabContainer::Params::Params()
     tabs_flashing_color("tabs_flashing_color"),
     tab_icon_ctrl_pad("tab_icon_ctrl_pad", 0),
     use_ellipses("use_ellipses"),
+    ellipsis("ellipsis"), // <SK:Nexii>
     use_tab_offset("use_tab_offset", false),
     fill_width("fill_width", false)
 {}
@@ -267,7 +268,7 @@ LLTabContainer::LLTabContainer(const LLTabContainer::Params& p)
     mTabIconCtrlPad(p.tab_icon_ctrl_pad),
     mEnableTabsFlashing(p.enable_tabs_flashing),
     mTabsFlashingColor(p.tabs_flashing_color),
-    mUseTabEllipses(p.use_ellipses),
+    mTabEllipsis(p.ellipsis.isProvided() ? LLFontGL::Ellipsis(p.ellipsis()) : LLFontGL::Ellipsis(p.use_ellipses())), // <SK:Nexii>
     mUseTabOffset(p.use_tab_offset),
     mFillWidth(p.fill_width)
 {
@@ -1394,7 +1395,7 @@ bool LLTabContainer::setTab(S32 which)
         {
             LLTabTuple* tuple = *iter;
             bool is_selected = ( tuple == selected_tuple );
-            tuple->mButton->setUseEllipses(mUseTabEllipses);
+            tuple->mButton->setEllipsis(mTabEllipsis); // <SK:Nexii>
             tuple->mButton->setHAlign(mFontHalign);
             tuple->mButton->setToggleState( is_selected );
             // RN: this limits tab-stops to active button only, which would require arrow keys to switch tabs

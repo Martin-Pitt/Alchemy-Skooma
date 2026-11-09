@@ -77,6 +77,7 @@ public:
         Optional<bool>          label_shadow;
         Optional<bool>          auto_resize;
         Optional<bool>          use_ellipses;
+        Optional<LLFontGL::EEllipsisMode> ellipsis; // <SK:Nexii> where the ellipsis goes; wins over use_ellipses
         Optional<bool>          use_font_color;
 
         // images
@@ -187,6 +188,10 @@ public:
     void            setUnselectedLabelColor(const LLUIColor& c);
     void            setSelectedLabelColor(const LLUIColor& c);
     void            setUseEllipses(bool use_ellipses);
+    // <SK:Nexii> Where the label's ellipsis goes.
+    void            setEllipsis(LLFontGL::Ellipsis ellipsis) { mEllipsis = ellipsis; }
+    LLFontGL::Ellipsis getEllipsis() const { return mEllipsis; }
+    // </SK:Nexii>
     void            setUseFontColor(bool use_font_color);
 
 
@@ -362,7 +367,7 @@ protected:
 
     bool                        mDropShadowedText;
     bool                        mAutoResize;
-    bool                        mUseEllipses;
+    LLFontGL::Ellipsis          mEllipsis; // <SK:Nexii>
     bool                        mUseFontColor;
     bool                        mFlashing;
 
