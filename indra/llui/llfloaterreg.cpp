@@ -490,6 +490,22 @@ std::string LLFloaterReg::getDockStateControlName(const std::string& name)
     return res;
 }
 
+// <SK:Nexii> Floater lock
+//static
+std::string LLFloaterReg::declareLockControl(const std::string& name)
+{
+    std::string controlname = std::string("floater_lock_") + name;
+    LLStringUtil::replaceChar(controlname, ' ', '_');
+    if (!LLFloater::getControlGroup()->controlExists(controlname))
+    {
+        LLFloater::getControlGroup()->declareBOOL(controlname, false,
+                                                  llformat("Window lock state for %s", name.c_str()),
+                                                  LLControlVariable::PERSIST_NONDFT);
+    }
+    return controlname;
+}
+// </SK:Nexii>
+
 // <SK:Nexii> Collapse is restored at login, alongside visibility
 //static
 std::string LLFloaterReg::declareCollapseStateControl(const std::string& name)
