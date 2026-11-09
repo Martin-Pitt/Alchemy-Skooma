@@ -258,7 +258,17 @@ void LLGLTFMaterialList::applyOverrideMessage(LLMessageSystem* msg, const std::s
     else
     {
         // a region's circuit can still deliver an override after the region was removed
-        LL_WARNS("GLTF") << "Dropping GLTF material override from unknown region " << host << LL_ENDL;
+        // <SK:Nexii> One warning per host: a teleporting session drops thousands of these, and they are benign.
+        static std::unordered_set<LLHost, LLHostHash> warned_hosts;
+        if (warned_hosts.insert(host).second)
+        {
+            LL_WARNS("GLTF") << "Dropping GLTF material overrides from unknown region " << host << "; further drops from it are logged at debug level" << LL_ENDL;
+        }
+        else
+        {
+            LL_DEBUGS("GLTF") << "Dropping GLTF material override from unknown region " << host << LL_ENDL;
+        }
+        // </SK:Nexii>
     }
 }
 
