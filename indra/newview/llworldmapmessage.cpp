@@ -30,6 +30,7 @@
 #include "message.h"
 
 #include "llworldmap.h"
+#include "skterraincache.h" // <SK:Nexii>
 #include "llagent.h"
 #include "llfloaterworldmap.h"
 
@@ -183,7 +184,7 @@ void LLWorldMapMessage::processMapBlockReply(LLMessageSystem* msg, void**)
         std::string name;
         U8 accesscode;
         U32 region_flags;
-//      U8 water_height;
+        U8 water_height; // <SK:Nexii>
 //      U8 agents;
         LLUUID image_id;
         msg->getU16Fast(_PREHASH_Data, _PREHASH_X, x_regions, block);
@@ -191,7 +192,7 @@ void LLWorldMapMessage::processMapBlockReply(LLMessageSystem* msg, void**)
         msg->getStringFast(_PREHASH_Data, _PREHASH_Name, name, block);
         msg->getU8Fast(_PREHASH_Data, _PREHASH_Access, accesscode, block);
         msg->getU32Fast(_PREHASH_Data, _PREHASH_RegionFlags, region_flags, block);
-//      msg->getU8Fast(_PREHASH_Data, _PREHASH_WaterHeight, water_height, block);
+        msg->getU8Fast(_PREHASH_Data, _PREHASH_WaterHeight, water_height, block); // <SK:Nexii>
 //      msg->getU8Fast(_PREHASH_Data, _PREHASH_Agents, agents, block);
         msg->getUUIDFast(_PREHASH_Data, _PREHASH_MapImageID, image_id, block);
 
@@ -206,6 +207,13 @@ void LLWorldMapMessage::processMapBlockReply(LLMessageSystem* msg, void**)
             {
                 found_null_sim = true;
             }
+            // <SK:Nexii> The map's water height, for the regions the terrain cache has no ground of.
+            else if (LLSimInfo* info = LLWorldMap::getInstance()->simInfoFromHandle(to_region_handle(x_world, y_world)))
+            {
+                info->setWaterHeight((F32)water_height);
+                SKTerrainCache::instance().setMapWater(info->getHandle(), (F32)water_height);
+            }
+            // </SK:Nexii>
 
             // If we hit a valid tracking location, do what needs to be done app level wise
             if (LLWorldMap::getInstance()->isTrackingValidLocation())

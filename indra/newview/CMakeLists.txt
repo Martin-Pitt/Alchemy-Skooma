@@ -839,6 +839,9 @@ if(AL_BUILD_VIEWER)
     llstylemap.cpp
     llsurface.cpp
     llsurfacepatch.cpp
+    skterraincache.cpp # <SK:Nexii> Region terrain cache
+    skterraincapture.cpp # <SK:Nexii> Region terrain cache
+    sksurroundsrenderer.cpp # <SK:Nexii> Distant regions
     llsyntaxid.cpp
     llsyswellitem.cpp
     llsyswellwindow.cpp
@@ -1715,6 +1718,9 @@ if(AL_BUILD_VIEWER)
     llstylemap.h
     llsurface.h
     llsurfacepatch.h
+    skterraincache.h # <SK:Nexii> Region terrain cache
+    skterraincapture.h # <SK:Nexii> Region terrain cache
+    sksurroundsrenderer.h # <SK:Nexii> Distant regions
     llsyntaxid.h
     llsyswellitem.h
     llsyswellwindow.h
@@ -2138,6 +2144,8 @@ if(AL_BUILD_VIEWER)
       llfilesystem
       llwindow
       llxml
+      skterrain # <SK:Nexii> Region terrain cache
+      sksurrounds # <SK:Nexii> Distant regions
       llmath
       llcorehttp
       llcommon

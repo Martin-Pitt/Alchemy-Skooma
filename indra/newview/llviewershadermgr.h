@@ -220,6 +220,8 @@ extern LLGLSLShader         gDeferredNonIndexedDiffuseAlphaMaskNoColorProgram;
 extern LLGLSLShader         gDeferredBumpProgram;
 extern LLGLSLShader         gDeferredBumpAlphaMaskProgram; // the bump faces that can discard
 extern LLGLSLShader         gDeferredTerrainProgram;
+extern LLGLSLShader         gSKSurroundsFarProgram;  // <SK:Nexii> Distant regions
+extern LLGLSLShader         gSKSurroundsRingProgram; // <SK:Nexii> Distant regions
 extern LLGLSLShader         gDeferredTreeProgram;
 extern LLGLSLShader         gDeferredTreeShadowProgram;
 extern LLGLSLShader         gDeferredLightProgram;
