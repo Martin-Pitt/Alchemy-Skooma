@@ -12,7 +12,7 @@ Run `git skooma status` first if unsure. Branch roles:
 | `main` | Integration branch of everything public; pushed to GitHub. Do not do feature work here. Once `local` exists nothing has it checked out, and `integrate`/`sync` move it through the sync sidecar. |
 | `local` | `main` plus the private work and spikes: the main checkout's branch and Nexii's F5 build. Follows `main` on every land. Never pushed but to the private remote (`skooma.privatePushUrl`, Forgejo), and nothing public merges it. Created once by `git skooma local`. |
 | `feature-<name>` | Your workspace, in `.worktrees/<name>`. Branched from `develop` (or a foundation it builds on); never from a trunk or `main`, which hold many PRs at once. The branch is the PR and holds the whole feature. |
-| trunk | Merge-only branch gathering an area's features before `main` (`combat`, `camera`, `render`, `ui`, …), at `.worktrees/trunk-<area>`. Never cut from or commit to one. Worktrees of the area land into it, and it lands into `main`. `git skooma trunk` lists them. A feature with follow-ups (`feature-combat/minimap`) is not a trunk. |
+| trunk | Merge-only branch gathering an area's features before `main` (`accessibility`, `audio`, `camera`, `combat`, `render`, `scripteditor`, `ui`, `world`), at `.worktrees/trunk-<area>`. Never cut from or commit to one. Worktrees of the area land into it, and it lands into `main`. `git skooma trunk` lists them. A feature with follow-ups (`feature-combat/minimap`) is not a trunk. |
 | `fix-<name>`, `workaround-<name>`, … | The same kind of branch under a different classification chosen at `git skooma new`. Treat exactly like `feature-*`. |
 | `amend-<area>/<x>` | A follow-up to an existing feature. Lands into that feature, never a PR on its own. See Landing work. |
 | `foundation-<name>` | A shared base other features build on (`foundation-warp`: SKWarp under the camera and scrolling). Cut from `develop`; branches of any trunk may `git merge` it, and `check` accepts that. Lands into `main` and ships as its own PR first. |
@@ -20,13 +20,14 @@ Run `git skooma status` first if unsure. Branch roles:
 | `private-<area>/<name>` | Work that stays ours (the worldmap survey and bot): a real long-lived branch with amends, never a PR, never on GitHub. Lands into `local`. The hooks refuse any public branch or push that carries its commits. |
 | `backup/<branch>` | A snapshot or a parked branch (`git skooma park`/`unpark`). Sync, check, integrate and retire skip it. |
 | `glue` | Fork-only files (scripts, hooks, CI, branding, this file). |
+| `docs` | `doc/skooma/`, the tracked design notes, cut from `develop` and landing into `main`. Filled by the post-commit hook from docs commits made in the main checkout; never a PR. |
 
 ### The main checkout
 
 `D:\viewers\alchemy-skooma` on `local` (on `main` until `local` exists) is shared by several sessions and is Nexii's F5.
 
 - **Never edit source there**, not even a quick fix to move later: `git skooma new <area>/<name>` before the first edit. Reading and grepping are fine.
-- The one exception is `doc/skooma/` docs (below): edited there and committed in the same step, without asking, in a commit of docs alone. The tracked docs are public: the post-commit hook copies the commit onto `main` and `local` takes it back (`git skooma docs` catches up by hand); the gitignored `.*.md` notes stay local. Never leave the main checkout dirty; uncommitted work there breaks other sessions.
+- The one exception is `doc/skooma/` docs (below): edited there and committed in the same step, without asking, in a commit of docs alone. The tracked docs are public: the post-commit hook copies the commit onto `docs`, lands `docs` into `main`, and `local` takes it back (`git skooma docs` catches up by hand); the gitignored `.*.md` notes stay local. Never leave the main checkout dirty; uncommitted work there breaks other sessions.
 - **Check it is idle first, in a command of its own**: `ls .git/MERGE_HEAD .git/CHERRY_PICK_HEAD .git/REVERT_HEAD`, unfiltered `git status --porcelain`, `git reflog <branch>`. Anything in progress or not yours → stop and ask. Never chain a check with `&&` into the change (that has committed onto the wrong branch and fast-forwarded `glue` over another session's work). Same for `glue` and trunks.
 - Fork-only files "vanishing" from the main checkout means a tool swapped a worktree's HEAD, not data loss: `git worktree list`, free the branch, reclaim it.
 
@@ -67,7 +68,7 @@ Every commit must be acceptable to the Alchemy project as-is. Every feature and 
 - Markers: `// <SK:Nexii> <one sentence naming the feature>` ... `// </SK:Nexii>`, or a trailing `// <SK:Nexii>` on a single line. Every edit to a non-Skooma file, marked or not, gets a row in `doc/skooma/INJECTIONS.md` once it lands.
 - New settings go in `settings_alchemy.xml` with an `SK` prefix (`SKCensus*`).
 - Comments are sparse and intentional, usually one sentence.
-- Never touch `AGENTS.md`, `CLAUDE.local.md`, `doc/skooma/`, `scripts/skooma/`, `.githooks/`, `.claude/`, `.worktrees/`, `vs2026-os/`. If a change needs one of those, say so — it belongs on `glue`, except `doc/skooma/` docs, which are edited on `main` in the main checkout and committed at once, never left uncommitted.
+- Never touch `AGENTS.md`, `CLAUDE.local.md`, `doc/skooma/`, `scripts/skooma/`, `.githooks/`, `.claude/`, `.worktrees/`, `vs2026-os/`. If a change needs one of those, say so — it belongs on `glue`, except `doc/skooma/` docs, which live on `docs`, are edited in the main checkout and committed at once, never left uncommitted.
 - Each feature is its own upstreamable PR, so merge nothing into it recklessly. Take upstream by `git merge develop`, in your own worktree. Merge another feature or a foundation (`git merge foundation-<name>`) only when your feature depends on it, and say so in the merge commit's message. Never merge `main` or a trunk into a branch. Never rebase; only `pr/<name>` copies are rebased.
 - Small logical commits; imperative subject (`Fix crash when pasting into text editor`); body explains why. Squash WIP before landing.
 - `Co-Authored-By:` trailers are fine (upstream uses them). No `Generated with` lines.

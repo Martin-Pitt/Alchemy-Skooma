@@ -65,8 +65,9 @@ function Show-Help {
     Say '  clean [name|--all]  delete a build tree to reclaim disk (never the main one)'
     Say '  local               create local (main + private work and spikes, the F5 build) and'
     Say '                      check it out in the main checkout; with local, say where it stands'
-    Say '  docs                copy doc/skooma commits made on local onto main (the post-commit'
-    Say '                      hook does this after each one; by hand, it catches up)'
+    Say '  docs                copy doc/skooma commits made on local onto the docs branch and land'
+    Say '                      it into main (the post-commit hook does this after each one; by hand,'
+    Say '                      it catches up)'
     Say '  undo                reset main (and local) to the last-known-good commits'
     Say '  retire [name|.]     remove a worktree + branch whose work is already in its base'
     Say '                      --force  discard one that still carries work (prints the tip sha)'
@@ -174,6 +175,8 @@ function Test-Forbidden { param([string]$path)
 # and the hooks keep its commits out of every public branch (hooks/skooma-private.sh).
 $BuiltinClasses = @('feature', 'fix', 'workaround', 'spike', 'amend', 'foundation', 'private')
 $LocalBranch = 'local'
+# doc/skooma lives on its own branch, which lands into main like any other (see Invoke-Docs).
+$DocsBranch = 'docs'
 
 # Whether everything merge parent $p brings beyond $base and develop comes from foundations.
 function Test-FromFoundation { param([string]$p, [string]$base)
@@ -2389,12 +2392,14 @@ function Invoke-Local {
 
 # ---------------------------------------------------------------------- docs
 
-# The tracked doc/skooma docs are public and belong on main, but they are edited and committed in
-# the main checkout, on local. Each commit on local that changes only tracked doc/skooma files and
-# that main has no copy of is copied onto main through the sync sidecar, and local takes main back.
-# The post-commit hook runs this after every such commit; by hand it catches up whatever it missed.
+# The tracked doc/skooma docs are public and live on the docs branch, but they are edited and
+# committed in the main checkout, on local. Each commit on local that changes only tracked doc/skooma
+# files and that docs has no copy of is copied onto docs through the sync sidecar, docs is merged into
+# main, and local takes main back. The post-commit hook runs this after every such commit; by hand it
+# catches up whatever it missed.
 function Invoke-Docs {
-    if (-not (Test-HasLocal)) { Info 'no local: docs are committed on main directly'; return }
+    if (-not (Test-HasLocal)) { Info "no local: docs are committed on $DocsBranch directly"; return }
+    if (-not (GitOk show-ref --verify --quiet "refs/heads/$DocsBranch")) { Warn "no $DocsBranch branch; docs stay on local"; return }
     # A copy is known by its patch id: once local has taken main back, the copy lies behind the
     # merge base, where git cherry no longer looks.
     $patchIds = { param([string[]]$range)
@@ -2403,11 +2408,11 @@ function Invoke-Docs {
         foreach ($l in @($text)) { if ($l) { $ids[($l -split ' ')[0]] = ($l -split ' ')[1] } }
         return $ids
     }
-    $onMain = & $patchIds @('develop..main')
-    $mine = & $patchIds @("main..$LocalBranch")
-    $have = @{}; foreach ($v in $onMain.Keys) { $have[$v] = $true }
+    $onDocs = & $patchIds @("develop..$DocsBranch")
+    $mine = & $patchIds @("$DocsBranch..$LocalBranch")
+    $have = @{}; foreach ($v in $onDocs.Keys) { $have[$v] = $true }
     $pending = @()
-    foreach ($sha in @((G rev-list --reverse --no-merges "main..$LocalBranch" -- doc/skooma) -split "`n" | Where-Object { $_ })) {
+    foreach ($sha in @((G rev-list --reverse --no-merges "$DocsBranch..$LocalBranch" -- doc/skooma) -split "`n" | Where-Object { $_ })) {
         $files = @((G diff-tree --no-commit-id --name-only -r $sha) -split "`n" | Where-Object { $_ })
         if (-not $files -or ($files | Where-Object { $_ -notlike 'doc/skooma/*' })) { continue }
         $id = ($mine.GetEnumerator() | Where-Object { $_.Value -eq $sha } | Select-Object -First 1).Key
@@ -2418,17 +2423,28 @@ function Invoke-Docs {
     $path = Initialize-SyncWorktree
     if (Test-MidOperation $path) { Warn "the sync worktree ($path) is busy; docs stay on local until: git skooma docs"; return }
     if (Test-Dirty $path) { Warn "the sync worktree ($path) has changes; docs stay on local until: git skooma docs"; return }
-    $null = G -C $path reset --quiet --hard main
+    # The copies go onto docs, then docs lands into main like any other branch.
+    $null = G -C $path reset --quiet --hard $DocsBranch
     foreach ($sha in $pending) {
         $out = GG -C $path cherry-pick --allow-empty $sha
         if ($script:GitExit -ne 0) {
             $null = G -C $path cherry-pick --abort
-            Warn "docs commit $($sha.Substring(0,9)) does not apply to main; left on local: $out"
+            $null = G -C $path reset --quiet --hard main
+            Warn "docs commit $($sha.Substring(0,9)) does not apply to $DocsBranch; left on local: $out"
             return
         }
     }
+    $out = GG update-ref "refs/heads/$DocsBranch" (G -C $path rev-parse HEAD) (G rev-parse $DocsBranch)
+    if ($script:GitExit -ne 0) { $null = G -C $path reset --quiet --hard main; Warn "could not move ${DocsBranch}: $out"; return }
+    $null = G -C $path reset --quiet --hard main
+    $out = GG -C $path merge --no-edit $DocsBranch
+    if ($script:GitExit -ne 0) {
+        $null = G -C $path merge --abort
+        Warn "main could not take ${DocsBranch}: $out; run git skooma integrate $DocsBranch"
+        return
+    }
     if (-not (Set-MainToSidecar)) { Warn 'main could not take the docs; run git skooma docs again'; return }
-    Good "docs -> main ($($pending.Count) commit(s))"
+    Good "docs -> $DocsBranch -> main ($($pending.Count) commit(s))"
     $null = Update-Local
 }
 
