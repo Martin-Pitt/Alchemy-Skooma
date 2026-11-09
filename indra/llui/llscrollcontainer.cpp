@@ -43,6 +43,7 @@
 #include "lluictrlfactory.h"
 #include "llpanel.h"
 #include "llfontgl.h"
+#include "llcontrol.h" // <SK:Nexii> Overlay scroll bar
 
 ///----------------------------------------------------------------------------
 /// Local function declarations, constants, enums, and typedefs
@@ -76,6 +77,7 @@ LLScrollContainer::Params::Params()
     max_auto_scroll_zone("max_auto_scroll_zone", 16),
     reserve_scroll_corner("reserve_scroll_corner", false),
     keep_scroll_pos("keep_scroll_pos", false),
+    overlay_scrollbars("overlay_scrollbars", false), // <SK:Nexii> Overlay scroll bar
     size("size", -1)
 {}
 
@@ -97,6 +99,13 @@ LLScrollContainer::LLScrollContainer(const LLScrollContainer::Params& p)
     mKeepScrollPos(p.keep_scroll_pos),
     mSize(p.size)
 {
+    // <SK:Nexii> Overlay scroll bar: per container, or everywhere by setting.
+    {
+        LLControlGroup* config = LLUI::getInstance()->mSettingGroups["config"];
+        mOverlayScrollbars = p.overlay_scrollbars
+            || (config && config->controlExists("SkoomaScrollbarOverlayEverywhere") && config->getBOOL("SkoomaScrollbarOverlayEverywhere"));
+    }
+    // </SK:Nexii>
     mStoredDocPos[VERTICAL] = 0;
     mStoredDocPos[HORIZONTAL] = 0;
 
@@ -128,6 +137,7 @@ LLScrollContainer::LLScrollContainer(const LLScrollContainer::Params& p)
     sbparams.follows.flags(FOLLOWS_RIGHT | FOLLOWS_TOP | FOLLOWS_BOTTOM);
     sbparams.visible(false);
     sbparams.change_callback(p.scroll_callback);
+    sbparams.overlay(mOverlayScrollbars); // <SK:Nexii> Overlay scroll bar
     mScrollbar[VERTICAL] = LLUICtrlFactory::create<LLScrollbar> (sbparams);
     LLView::addChild( mScrollbar[VERTICAL] );
 
@@ -144,6 +154,7 @@ LLScrollContainer::LLScrollContainer(const LLScrollContainer::Params& p)
     sbparams.visible(false);
     sbparams.follows.flags(FOLLOWS_LEFT | FOLLOWS_RIGHT | FOLLOWS_BOTTOM);
     sbparams.change_callback(p.scroll_callback);
+    sbparams.overlay(mOverlayScrollbars); // <SK:Nexii> Overlay scroll bar
     mScrollbar[HORIZONTAL] = LLUICtrlFactory::create<LLScrollbar> (sbparams);
     LLView::addChild( mScrollbar[HORIZONTAL] );
 }
@@ -451,6 +462,7 @@ void LLScrollContainer::calcVisibleSize( S32 *visible_width, S32 *visible_height
 
     S32 border_width = getBorderWidth();
     *visible_width = getRect().getWidth() - 2 * border_width;
+    if (mOverlayScrollbars) scrollbar_size = 0; // <SK:Nexii> Overlay scroll bar: no gutter
     *visible_height = getRect().getHeight() - 2 * border_width;
 
     *show_v_scrollbar = false;
@@ -538,6 +550,7 @@ void LLScrollContainer::draw()
                 bool show_h_scrollbar = false;
                 calcVisibleSize( &visible_width, &visible_height, &show_h_scrollbar, &show_v_scrollbar );
 
+                if (mOverlayScrollbars) scrollbar_size = 0; // <SK:Nexii> Overlay scroll bar: no gutter
                 LLLocalClipRect clip(LLRect(mInnerRect.mLeft,
                         mInnerRect.mBottom + (show_h_scrollbar ? scrollbar_size : 0) + visible_height,
                         mInnerRect.mRight - (show_v_scrollbar ? scrollbar_size: 0),
@@ -751,7 +764,7 @@ LLRect LLScrollContainer::getContentWindowRect()
     calcVisibleSize( &visible_width, &visible_height, &show_h_scrollbar, &show_v_scrollbar );
     S32 border_width = getBorderWidth();
     scroller_view_rect.setOriginAndSize(border_width,
-                                        show_h_scrollbar ? mScrollbar[HORIZONTAL]->getRect().mTop : border_width,
+                                        show_h_scrollbar && !mOverlayScrollbars ? mScrollbar[HORIZONTAL]->getRect().mTop : border_width, // <SK:Nexii> Overlay scroll bar
                                         visible_width,
                                         visible_height);
     return scroller_view_rect;
