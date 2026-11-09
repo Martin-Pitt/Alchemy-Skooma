@@ -3,8 +3,8 @@
  * @brief A move that speeds up, cuts out its cruise, and brakes onto the target.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
- * Alchemy Viewer Source Code
- * Copyright (C) 2026, Alchemy Viewer Project.
+ * Second Life Viewer Source Code
+ * Copyright (C) 2026, Martin "Nexii" Pitt <martin.r.pitt@gmail.com>
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
