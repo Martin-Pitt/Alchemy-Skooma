@@ -28,6 +28,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cmath>
+
 namespace
 {
     using namespace SKTerrain;
@@ -63,8 +65,10 @@ namespace
         CHECK(r.hasLayer(LAYER_TERRAIN));
         CHECK_FALSE(r.hasLayer(LAYER_SURFACE));
         CHECK(r.mRevision[LAYER_TERRAIN] == 1);
-        CHECK(r.mMin[LAYER_TERRAIN] == 23.45f);
-        CHECK(r.mMax[LAYER_TERRAIN] == 23.45f);
+        // The cell keeps whole centimetres, so its range is 2345 cm as an F32, an ULP under 23.45f; the row carries it exactly.
+        CHECK(r.mMin[LAYER_TERRAIN] == header.mInfo[LAYER_TERRAIN].mMin);
+        CHECK(r.mMax[LAYER_TERRAIN] == header.mInfo[LAYER_TERRAIN].mMax);
+        CHECK(std::abs(r.mMin[LAYER_TERRAIN] - 23.45f) < 0.005f);
         CHECK(r.mWater == 21.5f);
         CHECK(r.mCaptureDate == 1793900000);
         CHECK(r.mLastSeen == 1793900100);
