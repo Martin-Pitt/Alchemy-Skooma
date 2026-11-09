@@ -1109,8 +1109,9 @@ void SKWorldMapScene::drawRegionNames(const SKWorldMapFrame& frame, const LLRect
 
 void SKWorldMapScene::drawHubs(const SKWorldMapFrame& frame, const LLRect& rect)
 {
-    // A row of service glyphs over each hub region's middle, each as big as the largest craft it takes, and the
-    // hub's name under it once near enough for region names. Nearest first; a row overlapping a nearer one is left out.
+    // A row of service glyphs over each hub, at its place in its region or the middle, each as big as the largest craft
+    // it takes, and the hub's name under it once near enough for region names. Nearest first; a row overlapping a
+    // nearer one is left out.
     static LLCachedControl<bool> enabled(gSavedSettings, "SKWorldMapHubs", true);
     static LLCachedControl<F32> fade_start(gSavedSettings, "SKWorldMapHubFadeStart", 4000.f);
     static LLCachedControl<F32> fade_end(gSavedSettings, "SKWorldMapHubFadeEnd", 8000.f);
@@ -1132,7 +1133,6 @@ void SKWorldMapScene::drawHubs(const SKWorldMapFrame& frame, const LLRect& rect)
 
     constexpr size_t MAX_HUBS = 256;
     constexpr F64 LIFT = 1.0;
-    const F64 half = REGION_METRES * 0.5;
     const Projector proj(frame, rect.getWidth(), rect.getHeight());
     struct Row
     {
@@ -1145,7 +1145,7 @@ void SKWorldMapScene::drawHubs(const SKWorldMapFrame& frame, const LLRect& rect)
     for (const SKWorldMapHubs::Placed& p : placed)
     {
         const LLVector3d origin = from_region_handle(p.mHandle);
-        LLVector3d centre(origin.mdV[VX] + half, origin.mdV[VY] + half, GROUND_Z);
+        LLVector3d centre(origin.mdV[VX] + p.mX, origin.mdV[VY] + p.mY, GROUND_Z);
         const F64 dx = centre.mdV[VX] - frame.mEye.mdV[VX];
         const F64 dy = centre.mdV[VY] - frame.mEye.mdV[VY];
         if (dx * dx + dy * dy > end * end)

@@ -123,6 +123,42 @@ TEST_CASE("skworldmaphubtable: a region listed twice keeps its first row")
     CHECK(table.find("Dup")->mName == "First");
 }
 
+TEST_CASE("skworldmaphubtable: hub places are read by region, in any case")
+{
+    constexpr std::string_view tsv = "# region\tx\ty\tz\r\n"
+                                     "Beatrice\t99.0\t227.0\t35.5\r\n"
+                                     "Oxal\t18\t238\n"
+                                     "\n"
+                                     "Blake Sea - Half Hitch\t106\t142\t\n";
+    const HubPlaces places = HubPlaces::parse(tsv);
+    CHECK(places.size() == 3);
+    const HubPlace* beatrice = places.find("BEATRICE");
+    REQUIRE(beatrice != nullptr);
+    CHECK(beatrice->mX == 99.f);
+    CHECK(beatrice->mY == 227.f);
+    CHECK(beatrice->mZ == 35.5f);
+    REQUIRE(places.find("oxal") != nullptr);
+    CHECK(places.find("oxal")->mZ == 0.f);
+    REQUIRE(places.find("Blake Sea - Half Hitch") != nullptr);
+    CHECK(places.find("Blake Sea - Half Hitch")->mX == 106.f);
+    CHECK(places.find("Nowhere") == nullptr);
+}
+
+TEST_CASE("skworldmaphubtable: hub place lines it cannot read are skipped")
+{
+    constexpr std::string_view tsv = "Short\t1\n"
+                                     "Words\tleft\tright\n"
+                                     "Trailing\t12x\t4\n"
+                                     "\t5\t6\n"
+                                     "Twice\t1\t2\n"
+                                     "twice\t3\t4\n";
+    const HubPlaces places = HubPlaces::parse(tsv);
+    CHECK(places.size() == 1);
+    REQUIRE(places.find("Twice") != nullptr);
+    CHECK(places.find("Twice")->mX == 1.f);
+    CHECK(HubPlaces::parse("").size() == 0);
+}
+
 TEST_CASE("skworldmaphubtable: numeric entities decode to UTF-8")
 {
     constexpr std::string_view page = R"(<table><tr><th>Region</th><th>Hub Name</th></tr>

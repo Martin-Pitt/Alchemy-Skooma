@@ -27,6 +27,8 @@
 #include "skworldmaphubtable.h"
 
 #include <algorithm>
+#include <cmath>
+#include <cstdlib>
 
 namespace skworldmap
 {
@@ -305,5 +307,71 @@ namespace skworldmap
         const std::string key = lowered(region);
         auto it = std::lower_bound(mIndex.begin(), mIndex.end(), key, [](const auto& e, const std::string& k) { return e.first < k; });
         return it != mIndex.end() && it->first == key ? &mHubs[it->second] : nullptr;
+    }
+
+    HubPlaces HubPlaces::parse(std::string_view tsv)
+    {
+        HubPlaces places;
+        auto number = [](std::string_view field, F32& out)
+        {
+            const std::string s(field);
+            char* end = nullptr;
+            const F32 v = std::strtof(s.c_str(), &end);
+            if (s.empty() || end != s.c_str() + s.size() || !std::isfinite(v))
+            {
+                return false;
+            }
+            out = v;
+            return true;
+        };
+        size_t pos = 0;
+        while (pos < tsv.size())
+        {
+            size_t eol = tsv.find('\n', pos);
+            if (eol == std::string_view::npos)
+            {
+                eol = tsv.size();
+            }
+            std::string_view line = tsv.substr(pos, eol - pos);
+            pos = eol + 1;
+            if (!line.empty() && line.back() == '\r')
+            {
+                line.remove_suffix(1);
+            }
+            if (line.empty() || line.front() == '#')
+            {
+                continue;
+            }
+            std::vector<std::string_view> fields;
+            for (size_t start = 0;;)
+            {
+                const size_t tab = line.find('\t', start);
+                fields.push_back(line.substr(start, tab == std::string_view::npos ? std::string_view::npos : tab - start));
+                if (tab == std::string_view::npos)
+                {
+                    break;
+                }
+                start = tab + 1;
+            }
+            HubPlace place;
+            if (fields.size() < 3 || fields[0].empty() || !number(fields[1], place.mX) || !number(fields[2], place.mY) ||
+                (fields.size() > 3 && !fields[3].empty() && !number(fields[3], place.mZ)))
+            {
+                continue;
+            }
+            places.mPlaces.emplace_back(lowered(fields[0]), place);
+        }
+        // A region given twice keeps its first place.
+        std::stable_sort(places.mPlaces.begin(), places.mPlaces.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+        places.mPlaces.erase(std::unique(places.mPlaces.begin(), places.mPlaces.end(), [](const auto& a, const auto& b) { return a.first == b.first; }),
+                             places.mPlaces.end());
+        return places;
+    }
+
+    const HubPlace* HubPlaces::find(std::string_view region) const
+    {
+        const std::string key = lowered(region);
+        auto it = std::lower_bound(mPlaces.begin(), mPlaces.end(), key, [](const auto& e, const std::string& k) { return e.first < k; });
+        return it != mPlaces.end() && it->first == key ? &it->second : nullptr;
     }
 } // namespace skworldmap

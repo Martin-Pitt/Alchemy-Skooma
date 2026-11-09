@@ -37,6 +37,7 @@ namespace
 {
     constexpr F64 RETRY_SECONDS = 3600.0;     // a failed fetch waits this long, so a site that is down is asked once an hour
     constexpr F64 DAY_SECONDS = 86400.0;
+    constexpr F64 PLACES_CHECK_SECONDS = 30.0;  // how often the places file is looked at for changes
     const char* const CACHE_FILE = "sk_worldmap_hubs.html";
 
     std::string cachePath()
@@ -66,6 +67,7 @@ void SKWorldMapHubs::update(F64 now)
     {
         loadCache();
     }
+    updatePlaces(now);
     const std::string source = url();
     if (mFetching || source.empty() || now < mRetryAt)
     {
@@ -156,6 +158,32 @@ void SKWorldMapHubs::adopt(skworldmap::HubTable table)
     mPlacedStale = true;
 }
 
+void SKWorldMapHubs::updatePlaces(F64 now)
+{
+    // Read again whenever the file changes, so places worked out while the map is open show at once.
+    static LLCachedControl<std::string> places_path(gSavedSettings, "SKWorldMapHubPlaces", "");
+    const std::string path = places_path();
+    if (path == mPlacesPath && now < mPlacesCheckAt)
+    {
+        return;
+    }
+    mPlacesCheckAt = now + PLACES_CHECK_SECONDS;
+    llstat status;
+    const S64 written = !path.empty() && LLFile::stat(path, &status) == 0 ? static_cast<S64>(status.st_mtime) : -1;
+    if (path == mPlacesPath && written == mPlacesWritten)
+    {
+        return;
+    }
+    mPlacesPath = path;
+    mPlacesWritten = written;
+    mPlaces = written >= 0 ? skworldmap::HubPlaces::parse(LLFile::getContents(path)) : skworldmap::HubPlaces();
+    mPlacedStale = true;
+    if (!path.empty())
+    {
+        LL_INFOS("WorldMap") << "Read " << mPlaces.size() << " hub places from " << path << LL_ENDL;
+    }
+}
+
 const std::vector<SKWorldMapHubs::Placed>& SKWorldMapHubs::placed()
 {
     // The world map only ever adds regions, so its count moving is when names may have arrived.
@@ -178,7 +206,9 @@ const std::vector<SKWorldMapHubs::Placed>& SKWorldMapHubs::placed()
         {
             if (const skworldmap::Hub* hub = mTable.find(info->getName()))
             {
-                mPlaced.push_back({ handle, static_cast<U32>(hub - first) });
+                const F32 middle = REGION_WIDTH_METERS * 0.5f;
+                const skworldmap::HubPlace* place = mPlaces.find(info->getName());
+                mPlaced.push_back({ handle, static_cast<U32>(hub - first), place ? place->mX : middle, place ? place->mY : middle });
             }
         }
     }
