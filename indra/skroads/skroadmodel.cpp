@@ -39,6 +39,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstring>
 #include <deque>
 #include <iterator>
 #include <map>
@@ -154,7 +155,8 @@ namespace skroad
     constexpr F64 KEPT_AGREE_M = 1.5;           // a fresh line within this of the kept one at its end joins it
     Timer sSinceDriveTex;
 
-    std::unordered_map<U64, PieceShapes> sShapeCache;   // by (part, signature)
+    std::unordered_map<U64, PieceShapes> sShapeCache;   // by part
+    std::deque<std::pair<F64, std::vector<Shape>>> sRetiredShapes;  // a changed part's old faces, while pointed at
     std::vector<const Shape*> sShapes;                   // in reach
     std::unordered_map<U64, std::vector<S32>> sHash;      // 16 m cells -> indices into sShapes
     constexpr F64 HASH_M = 16.0;
@@ -943,6 +945,31 @@ namespace skroad
         topOf(ps, r);
         return ps;
     }
+    // A piece's shape and linkset, exactly: any change to a corner, however small, is a change.
+    U64 pieceVersion(const PieceShapes& ps)
+    {
+        U64 h = mix(std::hash<LLUUID>{}(ps.root));
+        auto add = [&h](F64 v) { U64 b; std::memcpy(&b, &v, sizeof b); h = mix(h ^ b); };
+        for (const Shape& s : ps.shapes)
+        {
+            for (S32 k = 0; k < s.n; ++k)
+            {
+                add(s.x[k]);
+                add(s.y[k]);
+                add(s.zv[k]);
+            }
+        }
+        for (const TopEdge& e : ps.top)
+        {
+            add(e.x0); add(e.y0); add(e.z0); add(e.x1); add(e.y1); add(e.z1);
+        }
+        return h;
+    }
+    // What a cache built from a piece is keyed on: the piece and its version.
+    U64 pieceKey(const PieceShapes& ps)
+    {
+        return ps.id ^ mix(ps.version);
+    }
     PieceShapes makeFaces(const skworld::Record& r)
     {
         PieceShapes ps;
@@ -1235,18 +1262,33 @@ namespace skroad
                 {
                     continue;       // a named thing that is not road (a car park, a floor, a roof)
                 }
-                const U64 id = (U64(std::hash<LLUUID>{}(rec->mPart)) * 0x9E3779B97F4A7C15ULL) ^ rec->mSignature
-                               ^ mix(std::hash<LLUUID>{}(rec->mRoot));
+                // the part is the piece; its shape and linkset are what it carries, made again when the census's
+                // signature moves and kept where they came out the same (the signature moves without the shape)
+                const U64 id = mix(std::hash<LLUUID>{}(rec->mPart));
                 auto [it, fresh] = sShapeCache.try_emplace(id);
                 PieceShapes& piece = it->second;
-                if (fresh)
+                if (fresh || piece.signature != rec->mSignature || piece.root != rec->mRoot)
                 {
-                    piece = makeShapes(*rec);
-                    piece.id = id;
-                    for (Shape& sh : piece.shapes)
+                    PieceShapes made = makeShapes(*rec);
+                    made.id = id;
+                    made.version = pieceVersion(made);
+                    if (fresh || made.version != piece.version)
                     {
-                        sh.piece = &piece;
+                        if (!fresh)
+                        {
+                            sRetiredShapes.emplace_back(now, std::move(piece.shapes));
+                            made.textures = std::move(piece.textures);
+                            made.textures_known = piece.textures_known;
+                            made.top_tex = piece.top_tex;
+                            made.top_known = piece.top_known;
+                        }
+                        piece = std::move(made);
+                        for (Shape& sh : piece.shapes)
+                        {
+                            sh.piece = &piece;
+                        }
                     }
+                    piece.signature = rec->mSignature;
                 }
                 piece.used = now;
                 host::learnTextures(piece);
@@ -3329,6 +3371,10 @@ namespace skroad
         {
             it = now - it->second.used > CACHE_KEEP_S ? sShapeCache.erase(it) : std::next(it);
         }
+        while (!sRetiredShapes.empty() && now - sRetiredShapes.front().first > CACHE_KEEP_S)
+        {
+            sRetiredShapes.pop_front();
+        }
     }
 
     // The segments in reach and their joins, from the linksets gathered: each linkset's segment worked out only
@@ -3354,7 +3400,7 @@ namespace skroad
             for (PieceShapes* p : g.pieces)
             {
                 p->used = now;      // in use: kept (evictCaches)
-                g.key += mix(p->id ^ (p->textures_known ? 0x9E3779B97F4A7C15ULL : 0) ^ (pieceMatches(*p) ? 0xC2B2AE3D27D4EB4FULL : 0));
+                g.key += mix(pieceKey(*p) ^ (p->textures_known ? 0x9E3779B97F4A7C15ULL : 0) ^ (pieceMatches(*p) ? 0xC2B2AE3D27D4EB4FULL : 0));
             }
             const bool props = host::hasProperties(g.root);
             print += mix(g.key ^ (U64(std::hash<LLUUID>{}(g.root)) * 0x9E3779B97F4A7C15ULL) ^ U64(g.named + 2) ^ (props ? 8 : 0));
@@ -3400,7 +3446,7 @@ namespace skroad
                 r.shape_key = frameKey(g.root);
                 for (const PieceShapes* pc : g.pieces)
                 {
-                    r.shape_key += mix(pc->id);
+                    r.shape_key += mix(pieceKey(*pc));
                 }
                 computeSegment(r);
             }
@@ -3457,7 +3503,7 @@ namespace skroad
                 U64 pk = U64(std::hash<LLUUID>{}(r->root));
                 for (const PieceShapes* pc : r->pieces)
                 {
-                    pk += mix(pc->id);
+                    pk += mix(pieceKey(*pc));
                 }
                 set_key = mix(set_key ^ pk);
             }
@@ -4415,7 +4461,7 @@ namespace skroad
     };
     struct PartPair
     {
-        U64 a = 0, b = 0;                       // the two parts' ids, the lower first
+        U64 a = 0, b = 0;                       // the two parts' keys (pieceKey), the lower id's first
         std::vector<Meet> meets;
         F64 used = 0;
     };
@@ -4538,13 +4584,13 @@ namespace skroad
 
     const PartPair& partPair(const PieceShapes& a, const PieceShapes& b, F64 now)
     {
-        const U64 id = mix(a.id) ^ (b.id * 0x9E3779B97F4A7C15ULL);
-        PartPair& p = sPartPairs[id];
-        if (p.a != a.id || p.b != b.id)
+        const U64 ka = pieceKey(a), kb = pieceKey(b);
+        PartPair& p = sPartPairs[mix(a.id) ^ (b.id * 0x9E3779B97F4A7C15ULL)];
+        if (p.a != ka || p.b != kb)
         {
             LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sk road - partPair");
-            p.a = a.id;
-            p.b = b.id;
+            p.a = ka;
+            p.b = kb;
             p.meets.clear();
             for (S32 ia = 0; ia < S32(a.top.size()); ++ia)
             {
@@ -4769,7 +4815,7 @@ namespace skroad
     }
     void graphPart(const PieceShapes& p, bool definite, F64 t)
     {
-        const U64 key = p.id ^ (definite ? 0x5851F42D4C957F2DULL : 0) ^ (p.top_known ? std::hash<LLUUID>{}(p.top_tex) : 0);
+        const U64 key = pieceKey(p) ^ (definite ? 0x5851F42D4C957F2DULL : 0) ^ (p.top_known ? std::hash<LLUUID>{}(p.top_tex) : 0);
         if (sGraphParts.count(key) || !graphOpen())
         {
             return;
@@ -4798,7 +4844,7 @@ namespace skroad
     }
     template <typename Meets> void graphMeet(const PieceShapes& a, const PieceShapes& b, const Meets& meets, F64 t)
     {
-        const U64 key = a.id * 0x9E3779B97F4A7C15ULL ^ b.id;
+        const U64 key = pieceKey(a) * 0x9E3779B97F4A7C15ULL ^ pieceKey(b);
         if (sGraphMeets.count(key) || !graphOpen())
         {
             return;
@@ -5189,7 +5235,7 @@ namespace skroad
                 const bool pending = !definite && !host::hasProperties(g.root);
                 for (const PieceShapes* pc : g.pieces)
                 {
-                    key = mix(key ^ pc->id ^ U64(reinterpret_cast<uintptr_t>(pc)) ^ (pc->top.empty() ? 8 : 0));
+                    key = mix(key ^ pieceKey(*pc) ^ U64(reinterpret_cast<uintptr_t>(pc)) ^ (pc->top.empty() ? 8 : 0));
                     if (!pc->top.empty())
                     {
                         verdicts.push_back({ U8(definite), U8(pending) });
@@ -6518,7 +6564,7 @@ namespace skroad
 
     U64 partState(const PieceShapes& p, U8 definite, U8 pending)
     {
-        return mix(p.id ^ (U64(definite) << 1) ^ (U64(pending) << 2) ^ (p.textures_known ? 8 : 0)
+        return mix(pieceKey(p) ^ (U64(definite) << 1) ^ (U64(pending) << 2) ^ (p.textures_known ? 8 : 0)
                    ^ (p.top_known ? U64(std::hash<LLUUID>()(p.top_tex)) << 4 : 0));
     }
     U64 signsKey()
