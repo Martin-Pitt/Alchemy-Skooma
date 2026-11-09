@@ -643,6 +643,22 @@ if(AL_BUILD_VIEWER)
     llmediactrl.cpp
     llmediadataclient.cpp
     llmenuoptionpathfindingrebakenavmesh.cpp
+    skcachedobject.cpp # <SK:Nexii> census
+    skmeshhavokshape.cpp # <SK:Nexii> physics_havok block
+    skphysicsshape.cpp # <SK:Nexii> physics shapes
+    skaircells.cpp # <SK:Nexii> air cells
+    skairoverlay.cpp # <SK:Nexii> air cells
+    skroaddriver.cpp # <SK:Nexii> ground autopilot
+    skroadhost.cpp # <SK:Nexii> roads
+    skroadkithost.cpp # <SK:Nexii> roads
+    skroadland.cpp # <SK:Nexii> roads
+    skroadoverlay.cpp # <SK:Nexii> roads overlay
+    skroadrecord.cpp # <SK:Nexii> ground autopilot
+    skobjectfaces.cpp # <SK:Nexii> census
+    skworldcensus.cpp # <SK:Nexii> census
+    skworldoverlay.cpp # <SK:Nexii> census
+    skworldpalette.cpp # <SK:Nexii> census
+    skworldtrace.cpp # <SK:Nexii> census
     llmeshrepository.cpp
     llmimetypes.cpp
     llmodelpreview.cpp
@@ -1529,6 +1545,20 @@ if(AL_BUILD_VIEWER)
     llmediactrl.h
     llmediadataclient.h
     llmenuoptionpathfindingrebakenavmesh.h
+    skcachedobject.h # <SK:Nexii> census
+    skmeshhavokshape.h # <SK:Nexii> physics_havok block
+    skphysicsshape.h # <SK:Nexii> physics shapes
+    skaircells.h # <SK:Nexii> air cells
+    skroaddriveinternal.h # <SK:Nexii> ground autopilot
+    skroaddriver.h # <SK:Nexii> ground autopilot
+    skroaddriverkernels.inc # <SK:Nexii> ground autopilot
+    skroadhost.h # <SK:Nexii> roads
+    skroadland.h # <SK:Nexii> roads
+    skobjectfaces.h # <SK:Nexii> census
+    skworldcensus.h # <SK:Nexii> census
+    skworldoverlay.h # <SK:Nexii> census
+    skworldpalette.h # <SK:Nexii> census
+    skworldtrace.h # <SK:Nexii> census
     llmeshrepository.h
     llmimetypes.h
     llmodelpreview.h
@@ -2129,6 +2159,9 @@ if(AL_BUILD_VIEWER)
       llplugin
       llprimitive
       llrender
+      skair # <SK:Nexii> air cells
+      skcensus # <SK:Nexii> census
+      skroads # <SK:Nexii> roads
       llui
       llfilesystem
       llwindow

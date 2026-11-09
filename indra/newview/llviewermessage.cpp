@@ -26,6 +26,7 @@
 
 #include "llviewerprecompiledheaders.h"
 #include "llviewermessage.h"
+#include "skroaddriver.h" // <SK:Nexii> road autopilot
 
 #include "alscriptstudio.h"
 #include "alscripttypes.h"
@@ -2612,6 +2613,7 @@ void process_chat_from_simulator(LLMessageSystem *msg, void **user_data)
         msg->getStringFast(_PREHASH_ChatData, _PREHASH_Message, mesg);
         // Preserve tabs from scripts by expanding them to spaces before any sanitization/formatting.
         LLStringUtil::replaceTabsWithSpaces(mesg, 4);
+        sk_road_driver::noteChat(from_id, mesg); // <SK:Nexii> road autopilot: the vehicle announcing its gear
 
 // [RLVa:KB] - Checked: 2010-04-23 (RLVa-1.2.0f) | Modified: RLVa-1.2.0f
         if ( (rlv_handler_t::isEnabled()) && (CHAT_TYPE_START != chat.mChatType) && (CHAT_TYPE_STOP != chat.mChatType) )

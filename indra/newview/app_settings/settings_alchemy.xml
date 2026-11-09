@@ -2586,6 +2586,490 @@
             <key>Value</key>
             <integer>1</integer>
         </map>
+        <key>SKAirAgentRadius</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres around the agent within which tiles build their detail air, wherever the camera is.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>30.0</real>
+        </map>
+        <key>SKAirAlways</key>
+        <map>
+            <key>Comment</key>
+            <string>Build the air cells whenever they are enabled, not only while an overlay or a consumer asks for them.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKAirBudgetMB</key>
+        <map>
+            <key>Comment</key>
+            <string>Megabytes of detail air kept in memory. Past it, the tiles the camera has been least near keep only their solid tops, never within 1.5 times SKAirRadius.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>512</integer>
+        </map>
+        <key>SKAirBuildsInFlight</key>
+        <map>
+            <key>Comment</key>
+            <string>Air tile builds allowed on the workers at once. 0 = the pool's width.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>S32</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKAirBuildsPerFrame</key>
+        <map>
+            <key>Comment</key>
+            <string>Air tile builds launched per frame at most.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>S32</string>
+            <key>Value</key>
+            <integer>4</integer>
+        </map>
+        <key>SKAirCell</key>
+        <map>
+            <key>Comment</key>
+            <string>The air raster's cell in metres, horizontal and vertical.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.125</real>
+        </map>
+        <key>SKAirCellsEnabled</key>
+        <map>
+            <key>Comment</key>
+            <string>Build the air cells from the census around the agent and the camera.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKAirClimb</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres of step the air still treats as connected floor.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.75</real>
+        </map>
+        <key>SKAirGroundedMargin</key>
+        <map>
+            <key>Comment</key>
+            <string>How far above the land a structure may sit and still be built with its region rather than as a mesh of its own, in metres.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>5.0</real>
+        </map>
+        <key>SKAirLog</key>
+        <map>
+            <key>Comment</key>
+            <string>Log the air cells' statistics every few seconds.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKAirMinGap</key>
+        <map>
+            <key>Comment</key>
+            <string>Closed gaps of the air lower than this, in metres, are folded into the solid around them: slivers between stacked prims are not air anything moves through.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.5</real>
+        </map>
+        <key>SKAirOverlay</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw the air under World overlays: 0 off, 1 quadtree leaves by level, 2 gaps by flags with ceilings and the walls and steps between them, 5 clearance, 6 the walls' true faces from the face offsets. 3, 4 and 7 are the rooms layer's.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKAirOverlayBudget</key>
+        <map>
+            <key>Comment</key>
+            <string>Vertices the air overlay may draw; tiles go nearest the camera first, and the stats line counts the tiles cut.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>1000000</integer>
+        </map>
+        <key>SKAirOverlayFaces</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw the air's wall faces under World overlays: the vertical surfaces weather paints and drains, at their full height.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKAirOverlayRunoff</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw the air's ledges and the run-off down them under World overlays.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKAirOverlaySky</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw the solid tops the sky map holds, one per metre cell, under World overlays.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKAirOverlayUpdates</key>
+        <map>
+            <key>Comment</key>
+            <string>Blip each air tile build while World overlays are on, coloured by why it was built.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKAirRadius</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres around the camera within which tiles build their detail air. Tiles further out read coarse air.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>300.0</real>
+        </map>
+        <key>SKAirRequestHoldSeconds</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds a box a consumer asked detail air for (SKAirCells::requestAir) keeps it, after the last ask.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>20.0</real>
+        </map>
+        <key>SKAirRunoffMax</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres water may fall from a ledge and still be traced to where it lands.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>24.0</real>
+        </map>
+        <key>SKAirSlope</key>
+        <map>
+            <key>Comment</key>
+            <string>Degrees of slope an avatar still stands on, for the air's AVATAR_FLOOR. Avatars in Second Life climb far steeper ground than a navmesh usually allows.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>74.0</real>
+        </map>
+        <key>SKAirTerrainBudgetMS</key>
+        <map>
+            <key>Comment</key>
+            <string>Milliseconds a frame may spend sampling the land under air tiles.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>1.0</real>
+        </map>
+        <key>SKAirWallMinHeight</key>
+        <map>
+            <key>Comment</key>
+            <string>How tall a vertical surface must be to count as a wall face, in metres. Below this it is the terracing a slope leaves in the raster.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.5</real>
+        </map>
+        <key>SKAirWalls</key>
+        <map>
+            <key>Comment</key>
+            <string>Read wall faces, ledges and run-off off the air raster as tiles are built.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKAirWholeCluster</key>
+        <map>
+            <key>Comment</key>
+            <string>Every tile under the cluster the agent stands in builds detail air, however far from the camera, so the building it is in is whole.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKAirWorkerThreads</key>
+        <map>
+            <key>Comment</key>
+            <string>Threads the air tile builds run on. 0 = one per core, less two.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>S32</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKCensusAlways</key>
+        <map>
+            <key>Comment</key>
+            <string>Run the world census even when nothing consumes it (the overlay or a consumer runs it otherwise).</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKCensusBudgetMS</key>
+        <map>
+            <key>Comment</key>
+            <string>Milliseconds per frame the world census may spend scanning objects.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>3.0</real>
+        </map>
+        <key>SKCensusClusterGap</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres two objects may be apart and still belong to one census cluster.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.5</real>
+        </map>
+        <key>SKCensusEnabled</key>
+        <map>
+            <key>Comment</key>
+            <string>Scan the objects around the agent into the world census the air cells, rooms, mini-map and probes read.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKCensusLog</key>
+        <map>
+            <key>Comment</key>
+            <string>Log the world census statistics every few seconds.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKCensusLogMissed</key>
+        <map>
+            <key>Comment</key>
+            <string>Log each part a full census sweep found changed that the dirty set missed, with what differed.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKCensusMinShape</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres: a part smaller than this along every axis is never a census record.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.3</real>
+        </map>
+        <key>SKCensusObjectCache</key>
+        <map>
+            <key>Comment</key>
+            <string>Take objects the region has cached but not drawn into the census, as boxes.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKCensusRange</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres from the agent the world census covers.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>512.0</real>
+        </map>
+        <key>SKCensusRoleRequestSeconds</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds between requests for the region's pathfinding roles.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>60.0</real>
+        </map>
+        <key>SKCensusSettleSeconds</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds a mover (one seen moving in repeated or sustained bursts) must stay still before the census treats it as landscape; a one-off move is landscape at once.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>4.0</real>
+        </map>
+        <key>SKCensusSurroundReach</key>
+        <map>
+            <key>Comment</key>
+            <string>How far outside every connected region a thing must reach before the census treats it as a sim surround, in metres.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>8.0</real>
+        </map>
+        <key>SKCensusVoidMargin</key>
+        <map>
+            <key>Comment</key>
+            <string>How far past a region's edge the census will follow what hangs off it, in metres.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>256.0</real>
+        </map>
+        <key>SKWorldOverlayCensus</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw the census shapes and their structures in the census overlay.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKWorldOverlayClusters</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw each census cluster in its own colour, its parts tinted and a label over it, in the census overlay.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKWorldOverlayFeatures</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw the doors, ladders, elevator shafts and vehicles the census has recognised.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKWorldOverlayRange</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres from the camera the census overlay draws, falling away over its last fifth.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>96.0</real>
+        </map>
+        <key>SKPhysicsShapeTypes</key>
+        <map>
+            <key>Comment</key>
+            <string>Render Metadata's physics shapes are coloured by where each shape comes from (the simulator's triangles, the physics mesh, hulls, the prim) instead of by physics cost.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
         <key>AlchemyRenderWaterHextile</key>
         <map>
             <key>Comment</key>
@@ -5380,6 +5864,318 @@
             <string>String</string>
             <key>Value</key>
             <string>All</string>
+        </map>
+        <key>SKRoadAutopilot</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: while on and seated in a vehicle on a lane-strip road, drives it in the right lane with the keys a person would press. Any movement key takes over and turns it off. Logs to sk-road-autopilot.csv.
+            </string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKRoadAutopilotLaneOffset</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: metres the road autopilot keeps further right (negative: toward the centre line) of its lane's line on two-lane roads, which lies the car's half width and 0.5 m right of the road's centre line. A single-lane road is driven down its middle.
+            </string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.0</real>
+        </map>
+        <key>SKRoadAutopilotLearn</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: let the road autopilot learn the vehicle's turn per tap and its delay while it drives (within 30 % of the Police Interceptor's fit), kept for the same vehicle.
+            </string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKRoadAutopilotOverlay</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: while the road autopilot drives, draw what it sees and decides in the world: road shapes in reach (faint), cross-sections across the road edge to edge (blue), the lane path it keeps, walked ahead (amber), the car predicted with no new tap (violet), a tap (red bar on that side), waiting for the road (red ring).
+            </string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKRoadAutopilotUseGears</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: drive as Nexii does, W held and the speed set by gear (up/down), knowing the gear from what the vehicle says in chat ("Gear 2", "Reverse"); never below Gear 1. Off: hold the speed by pulsing W.
+            </string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKRoadAutopilotLookAhead</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: metres of road the autopilot lays out ahead at the least (overlay and junctions); faster, it looks as far as 2.7 s of travel. 10 to 200; road pieces are read 15 m further.
+            </string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>100.0</real>
+        </map>
+        <key>SKRoadAutopilotOverlayDetail</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: the road autopilot's overlay with its working detail (the road's pieces, segments, joins, cross-sections) rather than just the road's edges, centre and the line it drives.
+            </string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKRoadAutopilotGoal</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: what the road autopilot does at a junction. explore: the branch leading most to road not yet driven (sk-road-driven.json, every road driven, by the autopilot or by hand), weighed against carrying the road on. carry: the road carried on (straightest, same surface). route: the planned route to SKRoadAutopilotRouteTo (explore where there is none).
+            </string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>String</string>
+            <key>Value</key>
+            <string>explore</string>
+        </map>
+        <key>SKRoadAutopilotRouteCost</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: what the route goal weighs a route by. shortest: length, a candidate road x1.3 and a private one x1.5. fastest: seconds at a measured or assumed speed per kind of road, with junctions and turns.
+            </string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>String</string>
+            <key>Value</key>
+            <string>shortest</string>
+        </map>
+        <key>SKRoadAutopilotRouteDataset</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: the road dataset release folder (nodes.geojson, core/private/candidates ways) the route goal plans over.
+            </string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>String</string>
+            <key>Value</key>
+            <string>V:/Scratch/worldmap/dataset/release/0.1.0-sample</string>
+        </map>
+        <key>SKRoadAutopilotRouteTo</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: the route goal's target, "x,y" in global metres; empty for none.
+            </string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>String</string>
+            <key>Value</key>
+            <string></string>
+        </map>
+        <key>SKRoadAutopilotJumps</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: the road autopilot drives a jump the road model finds (a ramp's lip with the road going on past a gap). Off: it stops short of the lip and asks the drive mission to place the car across, where at least 50 m of road goes on past the landing.
+            </string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKRoadAutopilotMaxGear</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: the highest gear the road autopilot shifts into (it picks the gear from the bends ahead and each gear's measured top speed; 0: no limit).
+            </string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>S32</string>
+            <key>Value</key>
+            <integer>4</integer>
+        </map>
+        <key>SKRoadAutopilotArena</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: lay the road autopilot's test courses as closed tracks inside the parcel the car is on (a flat open one), centred and sized to fit: the same line every run and the car stays on the parcel. Off: laid out from where the car stands.
+            </string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKRoadAutopilotBenchFrom</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: the handling bench test to begin from (0: the first). Kept as the bench goes, so a bench stopped part way picks up where it left off; set back to 0 at its end.
+            </string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>S32</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKRoadAutopilotBench</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: run the road autopilot's handling benchmark on open flat land (a sandbox): the steering sweep in each gear up to SKRoadAutopilotMaxGear, then in each gear straight, circles of 60, 30 and 15 m, figure 8s of 30 and 15 m and two slaloms, a minute each. Every drive-log row is tagged with its test; bench_score.py scores them. Turns itself off at the end.
+            </string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKRoadAutopilotSweep</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: a steering sweep on open flat land (a sandbox; no road needed), in this gear (0: off): W held, circles at fixed tap rhythms (a tap of 1-16 frames every 0.1 or 0.3 s, then the key held), each 5 s left, 3 s straight, 5 s right, 3 s straight, about 3 minutes a gear. Measures each rhythm's steady turn rate and the car's response times (fit_sweep.py).
+            </string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>S32</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKRoadAutopilotSteer</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: how the road autopilot steers. pwm: each frame, the turn rate the line ahead wants, met by a rhythm of taps (short taps far apart in a gentle bend, long ones close together in a tight one). plan: the tap planner, rolling the car forward and choosing between tap plans.
+            </string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>String</string>
+            <key>Value</key>
+            <string>pwm</string>
+        </map>
+        <key>SKRoadAutopilotTestCourse</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: drive a synthetic test course instead of the road, laid out from where the car stands when it is set or the autopilot starts: straight, slalom (or slalom_4_40: amplitude and wavelength, m), circle (or circle20: radius, m) or figure8 (or figure8_15: each loop's radius) (empty: the road), or lap: the line recorded on a real road in sk-road-course.json (logs folder). For tuning the controller.
+            </string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>String</string>
+            <key>Value</key>
+            <string />
+        </map>
+        <key>SKRoadAutopilotProbeLong</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: with SKRoadAutopilotProbe, probe long holds (0.5, 0.75, 1, 1.5, 2 s, alternating sides), each left alone for 2 s after release, to measure how a held key's turn builds and carries on. Use on a test course on open flat land.
+            </string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKRoadAutopilotProbe</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: while the road autopilot drives, mix in isolated test taps to measure the car's response: when the car is on the line, aligned and steady, one tap of each planned length in turn, alternating sides, left alone for 1.5 s; the autopilot steers it back to the line between them. Best on a long straight.
+            </string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKRoadAutopilotSpeed</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: metres per second the road autopilot holds between region boundaries (6 across them).
+            </string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>8.0</real>
+        </map>
+        <key>SKRoadKitLibrary</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: a kit lane library (JSON, from the road-kit geometry study) the road autopilot takes each known road kit's drivable deck and lanes from, in place of its generic lane rule. Empty: none.
+            </string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>String</string>
+            <key>Value</key>
+            <string />
+        </map>
+        <key>SKRoadSignLibrary</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Spike: a road sign library (JSON keyed by texture id, from V:\Scratch\worldmap\signs) the road autopilot reads signs beside the road by: road closed or road ends ends the road at the sign; a speed limit or warning is offered to the driver. Empty: none.
+            </string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>String</string>
+            <key>Value</key>
+            <string />
         </map>
         <key>ShowAdvancedHoverTips</key>
         <map>

@@ -225,6 +225,8 @@
 #include "llsdserialize.h"
 
 #include "llworld.h"
+#include "skaircells.h" // <SK:Nexii> air cells tick
+#include "skworldcensus.h" // <SK:Nexii> census tick
 #include "llhudeffecttrail.h"
 #include "llslurl.h"
 #include "llurlregistry.h"
@@ -296,6 +298,7 @@ using namespace LL;
 #include "llviewernetwork.h"
 // define a self-registering event API object
 #include "llappviewerlistener.h"
+#include "skroaddriver.h" // <SK:Nexii>
 
 #ifdef LL_DISCORD
 #include "aldiscordmanager.h"
@@ -2026,6 +2029,11 @@ bool LLAppViewer::cleanup()
     LL_INFOS() << "Cleaning up Objects" << LL_ENDL;
 
     LLViewerObject::cleanupVOClasses();
+
+    // <SK:Nexii> census, air cells: release any held viewer objects before the avatar appearance dictionary below goes away; the layers over the census go first
+    SKAirCells::deleteSingleton();
+    SKWorldCensus::deleteSingleton();
+    // </SK:Nexii>
 
     SUBSYSTEM_CLEANUP(LLAvatarAppearance);
 
@@ -5665,6 +5673,7 @@ void LLAppViewer::idle()
             gAgent.autoPilot(&yaw);
         }
 
+        sk_road_driver::beforeAgentUpdate(); // <SK:Nexii> road autopilot: its keys for this frame
         send_agent_update(false);
 
         // After calling send_agent_update() in the mainloop we always clear
@@ -5920,6 +5929,10 @@ void LLAppViewer::idle()
         LL_PROFILE_ZONE_NAMED_CATEGORY_APP("world update");
         gPipeline.updateMove();
     }
+    // <SK:Nexii> census: scans after objects moved, the layers above follow it
+    SKWorldCensus::instance().update();
+    // </SK:Nexii>
+    SKAirCells::instance().update(); // <SK:Nexii> air cells: tiles follow the census
 
     LLWorld::getInstance()->updateParticles();
 

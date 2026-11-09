@@ -111,6 +111,9 @@
 #include "llviewerregion.h" // for audio debugging.
 #include "llviewerwindow.h" // For getSpinAxis
 #include "llvoavatarself.h"
+#include "skaircells.h" // <SK:Nexii> air cells overlay
+#include "skworldcensus.h" // <SK:Nexii> census overlay
+#include "skroaddriver.h" // <SK:Nexii> road autopilot overlay
 #include "llvocache.h"
 #include "llvotree.h"
 #include "llvovolume.h"
@@ -11268,6 +11271,19 @@ void LLPipeline::renderFinalize()
     {
         renderPhysicsDisplay();
     }
+    // <SK:Nexii> census overlay: record, cluster and feature boxes, each layer behind its own setting
+    if (!cutout && SKWorldCensus::instanceExists())
+    {
+        SKWorldCensus::instance().renderDebug();
+    }
+    // </SK:Nexii>
+    // <SK:Nexii> air cells overlay: the air, wall faces, run-off and sky map, under the world debug mask
+    if (!cutout && SKAirCells::instanceExists())
+    {
+        SKAirCells::instance().renderDebug();
+    }
+    // </SK:Nexii>
+    sk_road_driver::renderDebug(); // <SK:Nexii> road autopilot overlay: what it sees and decides
 
     /*if (LLRenderTarget::sUseFBO && !gCubeSnapshot)
     { // copy depth buffer from mRT->screen to framebuffer
