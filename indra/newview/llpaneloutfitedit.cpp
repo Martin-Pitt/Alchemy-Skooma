@@ -1210,7 +1210,7 @@ bool LLPanelOutfitEdit::handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop,
         *accept = ACCEPT_NO;
     }
 
-    if (drop)
+    if (drop && *accept == ACCEPT_YES_MULTI) // <SK:Nexii> Drag feedback: link only what the hover accepted
     {
         LLInventoryItem* item = static_cast<LLInventoryItem*>(cargo_data);
 

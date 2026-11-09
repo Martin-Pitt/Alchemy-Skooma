@@ -40,6 +40,7 @@
 #include "llpanel.h"
 #include "lltrans.h"
 #include "llwindow.h"
+#include "skdragfeedback.h" // <SK:Nexii> Drag feedback
 
 ///----------------------------------------------------------------------------
 /// Class LLFolderViewItem
@@ -865,10 +866,23 @@ bool LLFolderViewItem::handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop,
     bool handled = false;
     bool accepted = getViewModelItem()->dragOrDrop(mask,drop,cargo_type,cargo_data, tooltip_msg);
         handled = accepted;
+        // <SK:Nexii> Drag feedback: a target locked against the drag handles it but refuses it
+        if (accepted && LLDragFeedback::blocked())
+        {
+            *accept = ACCEPT_NO_LOCKED;
+        }
+        else
+        // </SK:Nexii>
         if (accepted)
         {
             mDragAndDropTarget = true;
             *accept = ACCEPT_YES_MULTI;
+            // <SK:Nexii> Drag feedback
+            if (!drop)
+            {
+                LLDragFeedback::mark(this, getLocalRect(), EDragMark::Accept);
+            }
+            // </SK:Nexii>
         }
         else
         {
@@ -1071,6 +1085,18 @@ void LLFolderViewItem::drawHighlight(bool showContent, bool hasKeyboardFocus,
     //--------------------------------------------------------------------------------//
     // Draw DragNDrop highlight
     //
+    // <SK:Nexii> Drag feedback: the row marked as accepting or refusing, under its text
+    if (LLDragFeedback::shown())
+    {
+        const EDragMark kind = LLDragFeedback::markFor(this);
+        if (kind != EDragMark::None)
+        {
+            LLDragFeedback::drawTargetMark(LLRect(FOCUS_LEFT, focus_top, getRect().getWidth() - 2, focus_bottom), kind);
+        }
+        mDragAndDropTarget = false;
+    }
+    else
+    // </SK:Nexii>
     if (mDragAndDropTarget)
     {
         gGL.getTextureSlot(0)->unbind();
@@ -2421,6 +2447,12 @@ bool LLFolderViewFolder::handleDragAndDropFromChild(MASK mask,
     {
         *accept = ACCEPT_NO;
     }
+    // <SK:Nexii> Drag feedback
+    if (!drop)
+    {
+        LLDragFeedback::mark(this, getLocalRect(), LLDragFeedback::markKind(accepted, tooltip_msg));
+    }
+    // </SK:Nexii>
 
     // drag and drop to child item, so clear pending auto-opens
     getRoot()->autoOpenTest(NULL);
@@ -2517,6 +2549,12 @@ bool LLFolderViewFolder::handleDragAndDropToThisFolder(MASK mask,
     {
         *accept = ACCEPT_NO;
     }
+    // <SK:Nexii> Drag feedback
+    if (!drop)
+    {
+        LLDragFeedback::mark(this, getLocalRect(), LLDragFeedback::markKind(accepted, tooltip_msg));
+    }
+    // </SK:Nexii>
 
     if (!drop && accepted)
     {

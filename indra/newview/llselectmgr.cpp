@@ -56,6 +56,7 @@
 #include "alselectionoutline.h"
 #include "llagent.h"
 #include "llagentcamera.h"
+#include "skdragverdict.h" // <SK:Nexii> Drag feedback
 #include "llattachmentsmgr.h"
 #include "llviewerwindow.h"
 #include "lldrawable.h"
@@ -6735,6 +6736,12 @@ void LLSelectMgr::addOutlines(ALSelectionOutline& outline, bool for_hud, U32 par
             {
                 continue;
             }
+            // <SK:Nexii> Drag feedback: a drop's face mark is not lost under the selection's outline
+            if (SKDragVerdict::marksObject(objectp))
+            {
+                continue;
+            }
+            // </SK:Nexii>
 
             LLColor4 colour;
             bool show_hidden = sRenderHiddenSelections;
@@ -6853,6 +6860,7 @@ void LLSelectMgr::renderSilhouettes(bool for_hud)
     if (!for_hud)
     {
         ALHoverGlow::instance().addTo(outline);
+        SKDragVerdict::addWorldMark(outline); // <SK:Nexii> Drag feedback: the world target a drop would land on
     }
     outline.render(view);
 }

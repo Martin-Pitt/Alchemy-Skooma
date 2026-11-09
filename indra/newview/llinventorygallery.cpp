@@ -54,6 +54,7 @@
 #include "llviewermessage.h"
 #include "llviewerobjectlist.h"
 #include "llvoavatarself.h"
+#include "skdragfeedback.h" // <SK:Nexii> Drag feedback
 
 static LLPanelInjector<LLInventoryGallery> t_inventory_gallery("inventory_gallery");
 
@@ -379,6 +380,15 @@ void LLInventoryGallery::draw()
             handleModifiedFilter();
         }
     }
+    // <SK:Nexii> Drag feedback: the open folder's space, outlined over its tiles
+    LLRect mark_rect;
+    const EDragMark mark = LLDragFeedback::markFor(this, &mark_rect);
+    if (mark != EDragMark::None && LLDragFeedback::shown())
+    {
+        mark_rect.stretch(-1);
+        LLDragFeedback::drawTargetMark(mark_rect, mark, false);
+    }
+    // </SK:Nexii>
 }
 
 void LLInventoryGallery::onVisibilityChange(bool new_visibility)
@@ -2637,6 +2647,13 @@ bool LLInventoryGallery::handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop,
     if (!handled || (*accept == ACCEPT_NO))
     {
         handled = baseHandleDragAndDrop(mFolderID, drop, cargo_type, cargo_data, accept, tooltip_msg);
+        // <SK:Nexii> Drag feedback: the open folder's own space is the target
+        if (!drop)
+        {
+            LLDragFeedback::unmark();
+            LLDragFeedback::mark(this, getLocalRect(), LLDragFeedback::markKind(*accept >= ACCEPT_YES_COPY_SINGLE, tooltip_msg));
+        }
+        // </SK:Nexii>
     }
 
     return handled;
@@ -2947,6 +2964,14 @@ void LLInventoryGalleryItem::draw()
         border.mRight = border.mRight + 1;
         border.mTop = border.mTop + 1;
         gl_rect_2d(border, border_color, false);
+        // <SK:Nexii> Drag feedback
+        LLRect mark_rect;
+        const EDragMark mark = LLDragFeedback::markFor(this, &mark_rect);
+        if (mark != EDragMark::None && LLDragFeedback::shown())
+        {
+            LLDragFeedback::drawTargetMark(mark_rect, mark);
+        }
+        // </SK:Nexii>
     }
 }
 
@@ -3081,7 +3106,14 @@ bool LLInventoryGalleryItem::handleDragAndDrop(S32 x, S32 y, MASK mask, bool dro
     {
         return false;
     }
-    return mGallery->baseHandleDragAndDrop(mUUID, drop, cargo_type, cargo_data, accept, tooltip_msg);
+    // <SK:Nexii> Drag feedback: the folder tile marked, never a dragged folder's own
+    const bool handled = mGallery->baseHandleDragAndDrop(mUUID, drop, cargo_type, cargo_data, accept, tooltip_msg);
+    if (!drop && !LLDragFeedback::isCargo(mUUID))
+    {
+        LLDragFeedback::mark(this, mThumbnailCtrl->getRect(), LLDragFeedback::markKind(*accept >= ACCEPT_YES_COPY_SINGLE, tooltip_msg));
+    }
+    return handled;
+    // </SK:Nexii>
 }
 
 bool LLInventoryGalleryItem::handleKeyHere(KEY key, MASK mask)
